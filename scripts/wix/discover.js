@@ -22,6 +22,8 @@ if (!wixUrl) {
 }
 const uaArg = args.indexOf('--user-agent');
 const userAgent = uaArg !== -1 ? args[uaArg + 1] : null;
+const cdpPortArg = args.indexOf('--cdp-port');
+const cdpPort = cdpPortArg !== -1 ? parseInt(args[cdpPortArg + 1]) : null;
 
 const base = new URL(wixUrl).origin + new URL(wixUrl).pathname.replace(/\/$/, '');
 mkdirSync('output', { recursive: true });
@@ -75,11 +77,18 @@ async function extractNav(page) {
 
 async function main() {
   console.log(`Discovering: ${wixUrl}`);
-  const browser = await chromium.launch();
-  const context = await browser.newContext({
-    ...(userAgent ? { userAgent } : {}),
-  });
-  const page = await context.newPage();
+  let browser, context, page;
+  if (cdpPort) {
+    browser = await chromium.connectOverCDP(`http://127.0.0.1:${cdpPort}`);
+    context = browser.contexts()[0] || await browser.newContext();
+    page = await context.newPage();
+  } else {
+    browser = await chromium.launch();
+    context = await browser.newContext({
+      ...(userAgent ? { userAgent } : {}),
+    });
+    page = await context.newPage();
+  }
 
   // Fetch sitemap
   console.log('Fetching sitemap...');

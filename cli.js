@@ -274,20 +274,91 @@ function detectPlatform(url) {
   return 'unknown';
 }
 
-// ─── Check for running CDP ───────────────────────────────────
+// ─── CDP management ─────────────────────────────────────────
+
+const CDP_PORTS = [9222, 9223, 9224, 9229, 9221];
 
 async function findRunningCDP() {
-  // Check common CDP ports
-  const ports = [9222, 9229, 9221];
-  for (const port of ports) {
+  for (const port of CDP_PORTS) {
     try {
       const res = await fetch(`http://127.0.0.1:${port}/json/version`, { signal: AbortSignal.timeout(500) });
       if (res.ok) {
         const data = await res.json();
-        return { port, browser: data.Browser || 'unknown' };
+        return { port, browser: data.Browser || 'unknown', userAgent: data['User-Agent'] || null };
       }
     } catch {}
   }
+  return null;
+}
+
+function findFreePort() {
+  for (const port of CDP_PORTS) {
+    try {
+      execSync(`lsof -i :${port} -sTCP:LISTEN`, { stdio: 'ignore' });
+      // Port is in use, skip
+    } catch {
+      return port; // lsof failed = port is free
+    }
+  }
+  return 9225; // Fallback
+}
+
+// Launch a browser with CDP enabled so we get the user's real cookies and session.
+// Returns { port, process, userAgent } or null on failure.
+async function launchBrowserWithCDP(browser) {
+  if (!browser.exe) return null;
+
+  const port = findFreePort();
+  const plat = IS_MAC ? 'mac' : 'linux';
+
+  // Chromium-based browsers need a non-default user-data-dir to accept --remote-debugging-port
+  // if they're already running. We symlink to the real profile to keep cookies.
+  const profileDir = browser.profilePath;
+  const cdpDir = join(HOME, '.data-liberation', 'cdp-profile', browser.name.toLowerCase().replace(/\s+/g, '-'));
+  mkdirSync(cdpDir, { recursive: true });
+
+  // Symlink the real profile's Default directory and Local State (for cookie decryption keys)
+  if (profileDir) {
+    const defaultProfile = join(profileDir, 'Default');
+    const localState = join(profileDir, 'Local State');
+    const cdpDefault = join(cdpDir, 'Default');
+    const cdpLocalState = join(cdpDir, 'Local State');
+
+    if (existsSync(defaultProfile) && !existsSync(cdpDefault)) {
+      try { execSync(`ln -s "${defaultProfile}" "${cdpDefault}"`, { stdio: 'ignore' }); } catch {}
+    }
+    if (existsSync(localState) && !existsSync(cdpLocalState)) {
+      try { execSync(`ln -s "${localState}" "${cdpLocalState}"`, { stdio: 'ignore' }); } catch {}
+    }
+  }
+
+  log(`  Launching ${browser.name} with remote debugging on port ${port}...`);
+
+  const child = spawn(browser.exe, [
+    `--remote-debugging-port=${port}`,
+    '--remote-debugging-address=127.0.0.1',
+    `--remote-allow-origins=http://127.0.0.1:${port}`,
+    `--user-data-dir=${cdpDir}`,
+    '--restore-last-session',
+  ], {
+    stdio: 'ignore',
+    detached: true,
+  });
+  child.unref();
+
+  // Wait for CDP to become available
+  for (let i = 0; i < 30; i++) {
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/json/version`, { signal: AbortSignal.timeout(500) });
+      if (res.ok) {
+        const data = await res.json();
+        return { port, browser: data.Browser || browser.name, userAgent: data['User-Agent'] || null, pid: child.pid };
+      }
+    } catch {}
+    await new Promise(r => setTimeout(r, 1000));
+  }
+
+  warn(`  ${browser.name} launched but CDP not responding after 30s`);
   return null;
 }
 
@@ -324,7 +395,7 @@ async function main() {
   }
 
   // Check for already-running CDP
-  const runningCDP = await findRunningCDP();
+  let runningCDP = await findRunningCDP();
   if (runningCDP) {
     ok(`Found running CDP on port ${runningCDP.port}: ${runningCDP.browser}`);
   }
@@ -418,11 +489,23 @@ async function main() {
   }
   ok(`Using ${selectedBrowser.name} for extraction`);
 
-  // Get the real user agent from the selected browser
-  let userAgent = null;
-  if (runningCDP) {
-    userAgent = await getBrowserUserAgentViaCDP(runningCDP.port);
+  // Ensure we have a CDP connection to the user's real browser (with cookies/session)
+  if (!runningCDP) {
+    log('');
+    info('No browser with remote debugging detected.');
+    info(`Launching ${selectedBrowser.name} with CDP enabled...`);
+    log(`  ${DIM}(This uses your real browser profile so your login sessions carry over)${RESET}`);
+    runningCDP = await launchBrowserWithCDP(selectedBrowser);
+    if (runningCDP) {
+      ok(`${selectedBrowser.name} ready on port ${runningCDP.port}`);
+    } else {
+      warn('Could not launch browser with CDP. Falling back to Playwright (no cookies).');
+      log(`  ${DIM}You can manually launch your browser with: "${selectedBrowser.exe}" --remote-debugging-port=9222${RESET}`);
+    }
   }
+
+  // Get the real user agent from the CDP connection (matches the actual browser)
+  let userAgent = runningCDP?.userAgent || null;
   if (!userAgent) {
     userAgent = getBrowserUserAgent(selectedBrowser);
   }
@@ -432,6 +515,9 @@ async function main() {
     warn('Could not detect user agent — Playwright will use its default');
   }
 
+  // Pass the CDP port to extraction scripts so they connect to the real browser
+  const cdpPort = runningCDP?.port || null;
+
   // ── Step 4: Run discovery ──
 
   heading('Step 1: Discovering Site Content');
@@ -440,7 +526,8 @@ async function main() {
   mkdirSync('output', { recursive: true });
 
   const uaArgs = userAgent ? ['--user-agent', userAgent] : [];
-  const discoverResult = await runScript(`scripts/${activePlatform}/discover.js`, [siteUrl, ...uaArgs]);
+  const cdpArgs = cdpPort ? ['--cdp-port', String(cdpPort)] : [];
+  const discoverResult = await runScript(`scripts/${activePlatform}/discover.js`, [siteUrl, ...uaArgs, ...cdpArgs]);
   if (discoverResult.code !== 0) {
     fail('Discovery failed. See output above.');
     const retry = await ask('Try again? (y/n)');
@@ -476,7 +563,8 @@ async function main() {
   const extractResult = await runScript(`scripts/${activePlatform}/extract.js`, [
     siteUrl,
     '--url-list', 'output/inventory.json',
-    ...uaArgs
+    ...uaArgs,
+    ...cdpArgs
   ]);
 
   if (extractResult.code !== 0) {

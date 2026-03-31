@@ -43,6 +43,8 @@ const urlListArg = args.indexOf('--url-list');
 const urlListFile = urlListArg !== -1 ? args[urlListArg + 1] : null;
 const uaArg = args.indexOf('--user-agent');
 const userAgent = uaArg !== -1 ? args[uaArg + 1] : null;
+const cdpPortArg = args.indexOf('--cdp-port');
+const cdpPort = cdpPortArg !== -1 ? parseInt(args[cdpPortArg + 1]) : null;
 
 mkdirSync('output/pages', { recursive: true });
 mkdirSync('output/media', { recursive: true });
@@ -187,12 +189,25 @@ async function getUrls(page) {
 
 async function main() {
   console.log(`Extracting: ${wixUrl}`);
-  const browser = await chromium.launch();
-  const context = await browser.newContext({
-    ...(userAgent ? { userAgent } : {}),
-  });
-  const page = await context.newPage();
-  if (userAgent) {
+
+  let browser, context, page;
+  if (cdpPort) {
+    // Connect to the user's real browser — gets their cookies, session, and correct UA
+    console.log(`Connecting to browser on CDP port ${cdpPort}...`);
+    browser = await chromium.connectOverCDP(`http://127.0.0.1:${cdpPort}`);
+    context = browser.contexts()[0] || await browser.newContext();
+    page = await context.newPage();
+    console.log('Connected to user browser (cookies and login sessions available)');
+  } else {
+    // Fallback: launch a standalone Playwright browser (no cookies)
+    console.log('No CDP port — launching standalone browser (no login sessions)');
+    browser = await chromium.launch();
+    context = await browser.newContext({
+      ...(userAgent ? { userAgent } : {}),
+    });
+    page = await context.newPage();
+  }
+  if (userAgent && !cdpPort) {
     console.log(`User agent: ${userAgent.slice(0, 70)}...`);
   }
 
