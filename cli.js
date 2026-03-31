@@ -229,6 +229,40 @@ function checkCookies(cookiePath, domain) {
   }
 }
 
+// ─── User agent detection ────────────────────────────────────
+
+// Get the real user agent from a running CDP instance (best — gives the real non-headless UA)
+async function getBrowserUserAgentViaCDP(port) {
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/json/version`, {
+      signal: AbortSignal.timeout(1000)
+    });
+    if (res.ok) {
+      const data = await res.json();
+      return data['User-Agent'] || null;
+    }
+  } catch {}
+  return null;
+}
+
+// Fallback: construct the UA from the browser's version string
+// (avoids launching headless which leaks "HeadlessChrome" in the UA)
+function getBrowserUserAgent(browser) {
+  if (!browser.exe) return null;
+  try {
+    const version = execSync(`"${browser.exe}" --version 2>/dev/null`, {
+      encoding: 'utf8', timeout: 5000
+    }).trim();
+    // e.g. "Google Chrome 146.0.7680.164" or "Brave Browser 146.1.88.136"
+    const match = version.match(/(\d+\.\d+\.\d+\.\d+)/);
+    if (match) {
+      // Construct a standard Chrome UA with the correct version
+      return `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${match[1]} Safari/537.36`;
+    }
+  } catch {}
+  return null;
+}
+
 // ─── Platform detection ──────────────────────────────────────
 
 function detectPlatform(url) {
@@ -384,6 +418,20 @@ async function main() {
   }
   ok(`Using ${selectedBrowser.name} for extraction`);
 
+  // Get the real user agent from the selected browser
+  let userAgent = null;
+  if (runningCDP) {
+    userAgent = await getBrowserUserAgentViaCDP(runningCDP.port);
+  }
+  if (!userAgent) {
+    userAgent = getBrowserUserAgent(selectedBrowser);
+  }
+  if (userAgent) {
+    ok(`Matched user agent: ${DIM}${userAgent.slice(0, 60)}...${RESET}`);
+  } else {
+    warn('Could not detect user agent — Playwright will use its default');
+  }
+
   // ── Step 4: Run discovery ──
 
   heading('Step 1: Discovering Site Content');
@@ -391,7 +439,8 @@ async function main() {
 
   mkdirSync('output', { recursive: true });
 
-  const discoverResult = await runScript(`scripts/${activePlatform}/discover.js`, [siteUrl]);
+  const uaArgs = userAgent ? ['--user-agent', userAgent] : [];
+  const discoverResult = await runScript(`scripts/${activePlatform}/discover.js`, [siteUrl, ...uaArgs]);
   if (discoverResult.code !== 0) {
     fail('Discovery failed. See output above.');
     const retry = await ask('Try again? (y/n)');
@@ -426,7 +475,8 @@ async function main() {
 
   const extractResult = await runScript(`scripts/${activePlatform}/extract.js`, [
     siteUrl,
-    '--url-list', 'output/inventory.json'
+    '--url-list', 'output/inventory.json',
+    ...uaArgs
   ]);
 
   if (extractResult.code !== 0) {

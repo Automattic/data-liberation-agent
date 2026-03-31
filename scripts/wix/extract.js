@@ -41,6 +41,8 @@ const limitArg = args.indexOf('--limit');
 const limit = limitArg !== -1 ? parseInt(args[limitArg + 1]) : Infinity;
 const urlListArg = args.indexOf('--url-list');
 const urlListFile = urlListArg !== -1 ? args[urlListArg + 1] : null;
+const uaArg = args.indexOf('--user-agent');
+const userAgent = uaArg !== -1 ? args[uaArg + 1] : null;
 
 mkdirSync('output/pages', { recursive: true });
 mkdirSync('output/media', { recursive: true });
@@ -186,12 +188,13 @@ async function getUrls(page) {
 async function main() {
   console.log(`Extracting: ${wixUrl}`);
   const browser = await chromium.launch();
-  const page = await browser.newPage();
-
-  // Set a realistic user agent
-  await page.setExtraHTTPHeaders({
-    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
+  const context = await browser.newContext({
+    ...(userAgent ? { userAgent } : {}),
   });
+  const page = await context.newPage();
+  if (userAgent) {
+    console.log(`User agent: ${userAgent.slice(0, 70)}...`);
+  }
 
   const urls = (await getUrls(page)).slice(0, limit);
   console.log(`Processing ${urls.length} URLs...\n`);

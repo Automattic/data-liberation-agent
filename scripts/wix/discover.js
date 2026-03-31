@@ -14,11 +14,14 @@
 import { chromium } from 'playwright';
 import { writeFileSync, mkdirSync } from 'fs';
 
-const wixUrl = process.argv[2];
+const args = process.argv.slice(2);
+const wixUrl = args.find(a => a.startsWith('http'));
 if (!wixUrl) {
   console.error('Usage: node scripts/discover.js <wix-url>');
   process.exit(1);
 }
+const uaArg = args.indexOf('--user-agent');
+const userAgent = uaArg !== -1 ? args[uaArg + 1] : null;
 
 const base = new URL(wixUrl).origin + new URL(wixUrl).pathname.replace(/\/$/, '');
 mkdirSync('output', { recursive: true });
@@ -73,7 +76,10 @@ async function extractNav(page) {
 async function main() {
   console.log(`Discovering: ${wixUrl}`);
   const browser = await chromium.launch();
-  const page = await browser.newPage();
+  const context = await browser.newContext({
+    ...(userAgent ? { userAgent } : {}),
+  });
+  const page = await context.newPage();
 
   // Fetch sitemap
   console.log('Fetching sitemap...');
