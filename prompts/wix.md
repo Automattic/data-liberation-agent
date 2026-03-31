@@ -1,4 +1,4 @@
-# Migration Prompt
+# Wix to WordPress.com Migration Prompt
 
 Copy everything below this line and paste it into your AI assistant (Claude, ChatGPT, Gemini, etc.).
 
@@ -6,7 +6,7 @@ Copy everything below this line and paste it into your AI assistant (Claude, Cha
 
 I want to migrate my website from Wix to WordPress.com. My Wix site URL is: **[PASTE YOUR WIX URL HERE]**
 
-I have (or will create) a WordPress.com account. Please help me migrate using the playbook at https://github.com/[REPO]/wix-escape — read AGENTS.md first for full instructions.
+I have (or will create) a WordPress.com account. Please help me migrate using the playbook at https://github.com/m/data-liberation-agent — read AGENTS.md first for full instructions.
 
 Here's what I need you to do:
 
@@ -22,7 +22,7 @@ Here's what I need you to do:
 
 For each page and blog post:
 - **Don't try to scrape the rendered HTML** — instead, use one of these approaches (in order of preference):
-  1. Run `node scripts/extract.js [WIX URL]` from the wix-escape repo if you have terminal access
+  1. Run `node scripts/wix/extract.js [WIX URL]` from the data-liberation-agent repo if you have terminal access
   2. If you have the Chrome DevTools MCP connected, intercept Wix's internal API calls as each page loads — these return clean JSON with the real content
   3. Use `page.evaluate()` to extract window globals (`window.__WIX_DATA__`, JSON-LD script tags)
   4. If all else fails, ask me to open the page and copy the text

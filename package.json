@@ -1,5 +1,5 @@
 {
-  "name": "wix-escape",
+  "name": "data-liberation-agent",
   "version": "0.1.0",
   "description": "AI-assisted migration from Wix to WordPress.com",
   "type": "module",

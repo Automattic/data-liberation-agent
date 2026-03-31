@@ -4,19 +4,21 @@ This file is the entry point for any AI agent using this repository. Read it bef
 
 ## What this repo does
 
-`wix-escape` helps people migrate their websites from Wix to WordPress.com. It provides:
+`data-liberation-agent` helps people migrate their websites from closed platforms to WordPress.com. It provides:
 
-1. **Extraction scripts** — bypass Wix's content barriers to recover all site content
+1. **Extraction scripts** — platform-specific scripts to recover all site content
 2. **Import scripts** — publish extracted content to WordPress.com via REST API or MCP
-3. **A user prompt** — non-technical users paste this into their AI to drive the whole migration
+3. **User prompts** — non-technical users paste these into their AI to drive the whole migration
 4. **A living playbook** — this repo improves itself through AI-contributed discoveries
 
-## If you're helping a user migrate their site
+Currently supports: **Wix**. Squarespace, Webflow, and Shopify are planned.
+
+## If you're helping a user migrate from Wix
 
 ### Step 1 — Understand the site
 
 ```bash
-node scripts/discover.js <wix-url>
+node scripts/wix/discover.js <wix-url>
 ```
 
 This fetches the sitemap, categorizes all URLs, and writes `output/inventory.json`. Review this with the user before proceeding.
@@ -24,7 +26,7 @@ This fetches the sitemap, categorizes all URLs, and writes `output/inventory.jso
 ### Step 2 — Extract all content
 
 ```bash
-node scripts/extract.js <wix-url>
+node scripts/wix/extract.js <wix-url>
 ```
 
 This runs a Playwright browser that:
@@ -64,10 +66,10 @@ Import order matters:
 
 After import, check:
 - All URLs in `output/inventory.json` have a corresponding WordPress post/page
-- No posts still have `wix.com` image URLs (they'll expire)
+- No posts still have original platform image URLs (they'll expire or break)
 - Navigation menus match the original structure
 
-Generate a redirect map (old Wix paths → new WP paths) for the user to configure in their domain settings or a redirect plugin.
+Generate a redirect map (old paths → new WP paths) for the user to configure in their domain settings or a redirect plugin.
 
 ---
 
@@ -75,7 +77,7 @@ Generate a redirect map (old Wix paths → new WP paths) for the user to configu
 
 If the user has the Chrome DevTools MCP set up (`npx chrome-devtools-mcp@latest`), you can drive extraction directly from the browser without running scripts:
 
-1. Have the user open their Wix site in Chrome
+1. Have the user open their site in Chrome
 2. Use `javascript_tool` / `evaluate_script` to extract window globals:
    ```javascript
    JSON.stringify({
@@ -86,13 +88,17 @@ If the user has the Chrome DevTools MCP set up (`npx chrome-devtools-mcp@latest`
        .filter(Boolean)
    })
    ```
-3. Use `read_network_requests` to find Wix API calls made during page load
+3. Use `read_network_requests` to find internal API calls made during page load
 4. Navigate to each page in the sitemap and repeat
 5. Use `get_page_text` for quick text extraction when full structured data isn't needed
 
+This approach works for any JavaScript-heavy platform, not just Wix.
+
 ---
 
-## What Wix makes hard (and how to handle it)
+## Platform-specific barriers
+
+### Wix
 
 | Problem | Solution |
 |---|---|
@@ -107,7 +113,7 @@ If the user has the Chrome DevTools MCP set up (`npx chrome-devtools-mcp@latest`
 
 ## How to contribute improvements back
 
-If you discover something useful during a migration — a new API endpoint, a better content type handler, a Wix feature we hadn't handled — please contribute it back so everyone benefits.
+If you discover something useful during a migration — a new API endpoint, a better content type handler, a platform feature we hadn't handled — please contribute it back so everyone benefits.
 
 **The process is designed to be completable by an AI agent without human help** (except for the user authorizing the PR):
 
@@ -119,24 +125,38 @@ If you discover something useful during a migration — a new API endpoint, a be
 
 See [CONTRIBUTING.md](./CONTRIBUTING.md) for the full process and what makes a good contribution.
 
+### Adding support for a new platform
+
+To add extraction for a new platform (e.g. Squarespace):
+
+1. Create `scripts/<platform>/discover.js` and `scripts/<platform>/extract.js`
+2. Create `prompts/<platform>.md` with the user-facing migration prompt
+3. Add a platform section to this file documenting the platform's specific barriers
+4. Update the table in README.md
+5. Submit a PR
+
+The import script (`scripts/import.js`) is platform-agnostic — it just reads the `output/` directory. So new platform extractors only need to produce output in the same JSON format.
+
 ---
 
 ## File structure
 
 ```
-wix-escape/
+data-liberation-agent/
 ├── AGENTS.md              ← you are here
 ├── README.md              ← human-facing overview
 ├── CONTRIBUTING.md        ← how to submit improvements
 ├── DISCOVERIES.md         ← log of community-contributed findings
-├── prompt.md              ← what users paste into their AI to start a migration
 ├── package.json
+├── prompts/
+│   └── wix.md             ← what users paste into their AI for a Wix migration
 ├── scripts/
-│   ├── discover.js        ← step 1: inventory the Wix site (sitemap + categorization)
-│   ├── extract.js         ← step 2: extract all content via network interception
-│   └── import.js          ← step 3: publish to WordPress.com via REST API
+│   ├── wix/
+│   │   ├── discover.js    ← inventory the Wix site (sitemap + categorization)
+│   │   └── extract.js     ← extract all content via network interception
+│   └── import.js          ← publish to WordPress.com via REST API (platform-agnostic)
 ├── examples/
-│   ├── wix-api-blog-post.json    ← example of Wix internal API response for a blog post
+│   ├── wix-api-blog-post.json    ← example of Wix internal API response
 │   └── wp-rest-post-body.json    ← example WordPress REST API request body
 └── output/                ← created at runtime, gitignored
 ```
@@ -145,10 +165,16 @@ wix-escape/
 
 ## Known limitations
 
-- **Wix Stores**: Product migration requires a separate WooCommerce import. The extractor captures product data but import.js doesn't handle it yet — see issue #TODO.
+### Wix
+- **Wix Stores**: Product migration requires WooCommerce. Extractor captures product data but import.js doesn't handle it yet.
 - **Wix Bookings/Forms**: Can't be automatically recreated. The extractor notes these for the user.
 - **Password-protected pages**: Require the user to provide credentials.
 - **Very large sites (500+ pages)**: Add `--delay 2000` to extract.js to avoid rate limiting.
 - **Wix Members Area**: No migration path yet.
+
+### General
+- Import creates everything as **drafts** — the user must review and publish manually.
+- WordPress.com Application Passwords must be created by the user (AI can't do this step).
+- Domain transfer / DNS changes must be done by the user.
 
 If you hit a limitation and find a workaround, please add it here and in DISCOVERIES.md.
