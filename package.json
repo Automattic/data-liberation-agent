@@ -4,6 +4,7 @@
   "description": "AI-assisted migration from Wix to WordPress.com",
   "type": "module",
   "scripts": {
+    "postinstall": "npx playwright install chromium",
     "discover": "node scripts/discover.js",
     "extract": "node scripts/extract.js",
     "import": "node scripts/import.js"
