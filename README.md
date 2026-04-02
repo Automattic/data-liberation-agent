@@ -21,23 +21,56 @@ This repo gives people a prompt they can paste into any AI assistant (Claude, Ch
 | Webflow | Planned | — |
 | Shopify (blog/pages) | Planned | — |
 
-## Quick start (Wix)
+## Quick start — Claude plugin (recommended)
+
+Add this as an MCP server and Claude handles the migration conversationally.
+
+**Claude Desktop** — add to your `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "data-liberation": {
+      "command": "node",
+      "args": ["/path/to/data-liberation-agent/mcp-server.js"]
+    }
+  }
+}
+```
+
+**Claude Code:**
 
 ```bash
-# 1. Install dependencies
-npm install
+claude mcp add data-liberation -- node /path/to/data-liberation-agent/mcp-server.js
+```
 
-# 2. Discover all content on your Wix site
+Then just tell Claude: *"Migrate my Wix site: https://yoursite.wixsite.com/sitename"*
+
+### Setup
+
+```bash
+git clone https://github.com/m/data-liberation-agent.git
+cd data-liberation-agent
+npm install
+npx playwright install chromium
+```
+
+## Manual CLI usage
+
+You can also run the scripts directly:
+
+```bash
+# 1. Discover all content on your Wix site
 node scripts/wix/discover.js https://yoursite.wixsite.com/sitename
 
-# 3. Extract all content (intercepts Wix's internal API calls)
+# 2. Extract all content (intercepts Wix's internal API calls)
 node scripts/wix/extract.js https://yoursite.wixsite.com/sitename
 
-# 4. Import to WordPress.com
+# 3. Import to WordPress.com
 node scripts/import.js --site your-wp-site --token YOUR_APP_PASSWORD
 ```
 
-Or skip all of that and **paste the prompt into your AI assistant** — it will handle everything.
+Or **paste the prompt from [`prompts/wix.md`](./prompts/wix.md) into any AI assistant** — it will handle everything.
 
 ## For AI agents
 
