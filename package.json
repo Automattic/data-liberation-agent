@@ -9,6 +9,7 @@
     "import": "node scripts/import.js"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "playwright": "^1.44.0"
   },
   "engines": {
