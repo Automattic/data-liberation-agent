@@ -8,17 +8,19 @@
  * Usage:
  *   node scripts/import.js --site mysite.wordpress.com --token APP_PASSWORD
  *   node scripts/import.js --site mysite.wordpress.com --token APP_PASSWORD --dry-run
+ *   node scripts/import.js --site mysite.com --user admin --token APP_PASSWORD --self-hosted
  *
  * Options:
- *   --site <domain>    WordPress.com site domain (e.g. mysite.wordpress.com)
- *   --token <token>    Application password from wordpress.com/me/security/application-passwords
+ *   --site <domain>    WordPress site domain (e.g. mysite.wordpress.com)
+ *   --token <token>    Application password
+ *   --user <username>  WordPress username (required for --self-hosted, default: "wix-escape" for WP.com)
+ *   --self-hosted      Use direct WP REST API instead of WordPress.com proxy
  *   --dry-run          Show what would be imported without actually doing it
  *   --only <type>      Only import 'media', 'pages', or 'posts'
  *
  * Getting your application password:
- *   1. Go to wordpress.com/me/security/application-passwords
- *   2. Create a new application password named "wix-escape"
- *   3. Copy the password and pass it as --token
+ *   WordPress.com: wordpress.com/me/security/application-passwords
+ *   Self-hosted/Atomic: WP Admin > Users > Profile > Application Passwords
  */
 
 import { readFileSync, readdirSync, existsSync } from 'fs';
@@ -33,17 +35,28 @@ function getArg(name) {
 
 const site = getArg('--site');
 const token = getArg('--token');
+const user = getArg('--user');
+const selfHosted = args.includes('--self-hosted');
 const dryRun = args.includes('--dry-run');
 const only = getArg('--only');
 
 if (!site || !token) {
   console.error('Usage: node scripts/import.js --site <wordpress-site> --token <app-password>');
-  console.error('  Get your app password at: wordpress.com/me/security/application-passwords');
+  console.error('  WordPress.com:  node scripts/import.js --site mysite.wordpress.com --token APP_PASSWORD');
+  console.error('  Self-hosted:    node scripts/import.js --site mysite.com --user admin --token APP_PASSWORD --self-hosted');
   process.exit(1);
 }
 
-const apiBase = `https://public-api.wordpress.com/wp/v2/sites/${site}`;
-const authHeader = `Basic ${Buffer.from(`wix-escape:${token}`).toString('base64')}`;
+if (selfHosted && !user) {
+  console.error('--self-hosted requires --user <username>');
+  process.exit(1);
+}
+
+const apiBase = selfHosted
+  ? `https://${site}/wp-json/wp/v2`
+  : `https://public-api.wordpress.com/wp/v2/sites/${site}`;
+const authUser = user || 'wix-escape';
+const authHeader = `Basic ${Buffer.from(`${authUser}:${token}`).toString('base64')}`;
 
 async function wpRequest(method, endpoint, body, isFormData = false) {
   const headers = { Authorization: authHeader };
@@ -81,6 +94,9 @@ function buildContentFromAccessibility(nodes) {
 
 // Extract the best available content from a page JSON file
 function extractContent(pageData) {
+  // Platform-specific content field (e.g. Substack stores HTML directly)
+  if (pageData.content?.html) return pageData.content.html;
+
   // Priority: Wix blog API response > JSON-LD > accessibility tree
   for (const call of pageData.apiCalls || []) {
     // Blog post body is typically in post.content or post.richContent
@@ -119,16 +135,20 @@ async function uploadMedia(filePath, filename) {
     return { id: 0, source_url: `https://example.com/wp-content/uploads/${filename}` };
   }
 
-  const FormData = (await import('node:buffer')).default;
-  // Use fetch with FormData
-  const formData = new globalThis.FormData();
   const fileBuffer = readFileSync(filePath);
-  const blob = new Blob([fileBuffer]);
-  formData.append('file', blob, filename);
+  const ext = filename.split('.').pop().toLowerCase();
+  const mimeTypes = {
+    jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png',
+    gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml',
+  };
 
   const res = await fetch(`${apiBase}/media`, {
     method: 'POST',
-    headers: { Authorization: authHeader, 'Content-Disposition': `attachment; filename="${filename}"` },
+    headers: {
+      Authorization: authHeader,
+      'Content-Disposition': `attachment; filename="${filename}"`,
+      'Content-Type': mimeTypes[ext] || 'application/octet-stream',
+    },
     body: fileBuffer,
   });
 
@@ -159,14 +179,50 @@ async function importMedia() {
   return mediaMap;
 }
 
+// Replace image URLs in content with uploaded WordPress media URLs
+function replaceImageUrls(content, mediaMap) {
+  let result = content;
+
+  // First pass: replace full CDN wrapper URLs (must run before filename replacement)
+  // CDN format: https://substackcdn.com/image/fetch/<params>/https%3A%2F%2Fsubstack-post-media.../<filename>
+  result = result.replace(
+    /https:\/\/substackcdn\.com\/image\/fetch\/[^"'\s>]+/g,
+    (cdnUrl) => {
+      for (const [filename, wpUrl] of Object.entries(mediaMap)) {
+        if (cdnUrl.includes(filename) || cdnUrl.includes(encodeURIComponent(filename))) {
+          return wpUrl;
+        }
+      }
+      return cdnUrl;
+    }
+  );
+
+  // Second pass: replace direct S3 URLs
+  result = result.replace(
+    /https:\/\/substack-post-media\.s3\.amazonaws\.com\/[^"'\s>]+/g,
+    (s3Url) => {
+      for (const [filename, wpUrl] of Object.entries(mediaMap)) {
+        if (s3Url.includes(filename)) {
+          return wpUrl;
+        }
+      }
+      return s3Url;
+    }
+  );
+
+  // Third pass: replace remaining bare filenames (Wix-style and other platforms)
+  for (const [filename, wpUrl] of Object.entries(mediaMap)) {
+    result = result.replaceAll(filename, wpUrl);
+  }
+
+  return result;
+}
+
 async function importPage(pageData, mediaMap) {
   const meta = extractMeta(pageData);
   let content = extractContent(pageData);
 
-  // Replace any Wix image URLs in content with uploaded WP URLs
-  for (const [filename, wpUrl] of Object.entries(mediaMap)) {
-    content = content.replaceAll(filename, wpUrl);
-  }
+  content = replaceImageUrls(content, mediaMap);
 
   const body = {
     title: meta.title,
@@ -188,9 +244,7 @@ async function importPost(pageData, mediaMap) {
   const meta = extractMeta(pageData);
   let content = extractContent(pageData);
 
-  for (const [filename, wpUrl] of Object.entries(mediaMap)) {
-    content = content.replaceAll(filename, wpUrl);
-  }
+  content = replaceImageUrls(content, mediaMap);
 
   const body = {
     title: meta.title,
@@ -264,7 +318,8 @@ async function main() {
   // Step 3: Import posts
   const posts = pageFiles.filter(f => {
     const slug = f.replace('.json', '');
-    return typeMap[slug] === 'blog-post';
+    const type = typeMap[slug];
+    return type === 'blog-post' || type === 'post' || type === 'paid-post' || type === 'podcast' || type === 'thread' || type === 'video';
   });
 
   if (!only || only === 'posts') {
