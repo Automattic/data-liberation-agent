@@ -11,7 +11,7 @@ This file is the entry point for any AI agent using this repository. Read it bef
 3. **User prompts** — non-technical users paste these into their AI to drive the whole migration
 4. **A living playbook** — this repo improves itself through AI-contributed discoveries
 
-Currently supports: **Wix**. Squarespace, Webflow, and Shopify are planned.
+Currently supports: **Wix** and **Instagram**. Squarespace, Webflow, and Shopify are planned.
 
 ## If you're helping a user migrate from Wix
 
@@ -96,7 +96,67 @@ This approach works for any JavaScript-heavy platform, not just Wix.
 
 ---
 
+## If you're helping a user migrate from Instagram
+
+Instagram requires an authenticated browser session — there's no public API or sitemap to crawl. The user must be logged in to Instagram in a Chromium browser with CDP enabled.
+
+### Step 1 — Launch browser with CDP
+
+The user needs Chrome running with remote debugging. Help them:
+```bash
+# Kill any existing Chrome processes, then relaunch with CDP
+pkill -9 -f "Google Chrome"
+sleep 3
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+  --remote-debugging-port=9222 \
+  --user-data-dir="$HOME/.data-liberation/cdp-profile/chrome" \
+  --restore-last-session
+```
+
+The `--user-data-dir` with symlinks to the real profile preserves login sessions. See the CDP discovery in DISCOVERIES.md for details.
+
+### Step 2 — Discover all posts
+
+```bash
+node scripts/instagram/discover.js USERNAME --cdp-port 9222
+```
+
+This scrolls the profile and intercepts GraphQL responses to build a complete post inventory. Use `--delay 3000` for large profiles to avoid rate limiting.
+
+### Step 3 — Extract content and media
+
+```bash
+node scripts/instagram/extract.js USERNAME --cdp-port 9222
+```
+
+For each post, this navigates to the individual post URL, captures metadata, and downloads full-resolution images. For carousel posts, it uses `?img_index=N` to access each slide directly.
+
+**Important**: Instagram CDN URLs expire. Download media immediately after extraction.
+
+### Step 4 — Import to WordPress.com
+
+Same as Wix — use `scripts/import.js`. Instagram posts become WordPress posts with:
+- Images as `wp:image` blocks
+- Captions as `wp:paragraph` blocks with linked @mentions and #hashtags
+- Original date preserved
+- Instagram URL and shortcode stored as post meta
+
+For a custom post type: `--post-type photo`
+
+---
+
 ## Platform-specific barriers
+
+### Instagram
+
+| Problem | Solution |
+|---|---|
+| No public API or data export | Intercept GraphQL responses via CDP browser session |
+| Authentication required | Connect to user's logged-in browser via `--cdp-port` |
+| Carousel slides lazy-load | Use `?img_index=N` URL parameter to load each slide directly |
+| CDN image URLs expire | Download media immediately during extraction |
+| Rate limiting on scroll | Add `--delay 3000` for profiles with 200+ posts |
+| Two API response formats | Handle both `edge_owner_to_timeline_media` and `xdt_api__v1__feed` shapes |
 
 ### Wix
 
@@ -149,11 +209,15 @@ data-liberation-agent/
 ├── DISCOVERIES.md         ← log of community-contributed findings
 ├── package.json
 ├── prompts/
-│   └── wix.md             ← what users paste into their AI for a Wix migration
+│   ├── wix.md             ← what users paste into their AI for a Wix migration
+│   └── instagram.md       ← what users paste into their AI for an Instagram migration
 ├── scripts/
 │   ├── wix/
 │   │   ├── discover.js    ← inventory the Wix site (sitemap + categorization)
 │   │   └── extract.js     ← extract all content via network interception
+│   ├── instagram/
+│   │   ├── discover.js    ← inventory an Instagram profile via GraphQL interception
+│   │   └── extract.js     ← extract posts, carousel slides, and media
 │   └── import.js          ← publish to WordPress.com via REST API (platform-agnostic)
 ├── examples/
 │   ├── wix-api-blog-post.json    ← example of Wix internal API response
@@ -171,6 +235,13 @@ data-liberation-agent/
 - **Password-protected pages**: Require the user to provide credentials.
 - **Very large sites (500+ pages)**: Add `--delay 2000` to extract.js to avoid rate limiting.
 - **Wix Members Area**: No migration path yet.
+
+### Instagram
+- **Stories and Reels**: Not yet supported — different GraphQL queries and video handling required.
+- **Comments**: Post comment text is not extracted (only comment counts). Could be added via per-post GraphQL queries.
+- **Video downloads**: Video URLs are captured in metadata but video file downloads may fail for longer videos due to CDN token expiry.
+- **Private profiles**: Only works for the user's own profile or profiles they follow.
+- **Very large profiles (1000+ posts)**: May hit rate limiting. Use `--delay 4000` or higher.
 
 ### General
 - Import creates everything as **drafts** — the user must review and publish manually.

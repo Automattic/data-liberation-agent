@@ -1,16 +1,17 @@
 # Contributing
 
-This repo improves through real-world migration experience. Every migration surfaces new Wix behaviors, better extraction techniques, and edge cases. This document explains how to contribute those findings back — and is written so that an AI agent can follow it without human assistance.
+This repo improves through real-world migration experience. Every migration surfaces new platform behaviors, better extraction techniques, and edge cases. This document explains how to contribute those findings back — and is written so that an AI agent can follow it without human assistance.
 
 ## What to contribute
 
 **Good contributions:**
-- New Wix API endpoints discovered during network interception
-- Better handling for content types we didn't cover (e.g. Wix Events, Wix Video)
-- Fixes for scripts that broke because Wix changed something
-- Better WordPress block mappings for Wix layout elements
-- Discoveries about Wix window globals or page data structures
+- New API endpoints or data sources discovered during network interception
+- Better handling for content types we didn't cover (e.g. Wix Events, Instagram Reels)
+- Fixes for scripts that broke because a platform changed something
+- Better WordPress block mappings for extracted content
+- Discoveries about platform window globals, GraphQL schemas, or page data structures
 - Extraction improvements (faster, more complete, fewer failures)
+- New platform support (see AGENTS.md for the expected file structure)
 
 **Not what this repo is for:**
 - General WordPress development help
