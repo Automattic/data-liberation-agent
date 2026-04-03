@@ -32,18 +32,26 @@ if (!username) {
   process.exit(1);
 }
 
-const cdpPortArg = args.indexOf('--cdp-port');
-const cdpPort = cdpPortArg !== -1 ? parseInt(args[cdpPortArg + 1]) : null;
+function parseIntArg(name, fallback) {
+  const idx = args.indexOf(name);
+  if (idx === -1) return fallback;
+  const val = parseInt(args[idx + 1], 10);
+  if (!Number.isFinite(val)) {
+    console.error(`Error: ${name} requires a numeric value.`);
+    process.exit(1);
+  }
+  return val;
+}
+
+const cdpPort = parseIntArg('--cdp-port', null);
 if (!cdpPort) {
   console.error('Error: --cdp-port is required. Instagram needs an authenticated browser session.');
   console.error('Launch Chrome with: google-chrome --remote-debugging-port=9222');
   process.exit(1);
 }
 
-const limitArg = args.indexOf('--limit');
-const limit = limitArg !== -1 ? parseInt(args[limitArg + 1]) : Infinity;
-const delayArg = args.indexOf('--delay');
-const scrollDelay = delayArg !== -1 ? parseInt(args[delayArg + 1]) : 2000;
+const limit = parseIntArg('--limit', Infinity);
+const scrollDelay = parseIntArg('--delay', 2000);
 
 mkdirSync('output', { recursive: true });
 
@@ -203,17 +211,16 @@ async function main() {
   const profileUrl = `https://www.instagram.com/${username}/`;
   console.log(`\nNavigating to ${profileUrl}`);
   try {
-    await page.goto(profileUrl, { waitUntil: 'networkidle', timeout: 60000 });
+    await page.goto(profileUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    // Wait for the profile content to appear (response interceptor captures GraphQL data)
+    await sleep(3000);
   } catch (e) {
-    // networkidle can be flaky — if we already captured posts from the response
-    // interceptor, we're fine
     if (posts.size > 0) {
       console.log(`  Navigation timeout, but ${posts.size} posts already captured — continuing`);
     } else {
-      // Try again with just domcontentloaded
-      console.log('  Retrying with relaxed wait...');
-      await page.goto(profileUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
-      await sleep(5000); // Give time for XHR requests to complete
+      console.error(`  Navigation failed: ${e.message}`);
+      await browser.disconnect();
+      process.exit(1);
     }
   }
 
@@ -236,12 +243,10 @@ async function main() {
   const windowData = await page.evaluate(() => {
     const result = {};
 
-    // Instagram sometimes injects data into the page
-    for (const key of Object.keys(window)) {
-      if (key.startsWith('__additional') || key.startsWith('__NEXT') || key === '_sharedData') {
-        try {
-          result[key] = JSON.parse(JSON.stringify(window[key]));
-        } catch {}
+    // Check specific known globals (avoid enumerating all of window)
+    for (const key of ['__additionalDataLoaded', '__NEXT_DATA__', '_sharedData']) {
+      if (window[key]) {
+        try { result[key] = window[key]; } catch {}
       }
     }
 
@@ -285,17 +290,23 @@ async function main() {
   let scrollAttempts = 0;
   let lastPostCount = posts.size;
   let noNewPostsStreak = 0;
+  let currentDelay = scrollDelay;
 
   while (posts.size < limit && scrollAttempts < 100) {
+    const scrollStart = Date.now();
     await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
-    await sleep(scrollDelay);
+    await sleep(currentDelay);
     scrollAttempts++;
 
     if (posts.size === lastPostCount) {
       noNewPostsStreak++;
+      // Back off when we're not getting new posts — Instagram may be throttling
+      currentDelay = Math.min(currentDelay * 1.5, scrollDelay * 4);
       if (noNewPostsStreak >= 4) break;
     } else {
       noNewPostsStreak = 0;
+      // New posts arrived — ease back toward base delay
+      currentDelay = Math.max(scrollDelay, currentDelay * 0.8);
       lastPostCount = posts.size;
       console.log(`  Scroll ${scrollAttempts}: ${posts.size} posts`);
     }
@@ -433,6 +444,7 @@ async function main() {
   }
 
   await page.close();
+  await browser.disconnect();
 
   // Build inventory
   const allPosts = [...posts.values()].sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));

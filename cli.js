@@ -463,7 +463,7 @@ async function main() {
       { label: 'Webflow', value: 'webflow' },
       { label: 'Other / not sure', value: 'unknown' },
     ]);
-    // Use first choice as default if detection fails
+    detectedPlatform = platChoice.value;
   }
 
   const activePlatform = detectedPlatform !== 'unknown' ? detectedPlatform : 'wix';
@@ -527,7 +527,8 @@ async function main() {
 
   mkdirSync('output', { recursive: true });
 
-  const uaArgs = userAgent ? ['--user-agent', userAgent] : [];
+  // Instagram uses the browser's own UA via CDP — user-agent flag is only for Wix/other platforms
+  const uaArgs = (userAgent && activePlatform !== 'instagram') ? ['--user-agent', userAgent] : [];
   const cdpArgs = cdpPort ? ['--cdp-port', String(cdpPort)] : [];
 
   // Instagram uses a username, not a site URL

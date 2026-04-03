@@ -36,17 +36,25 @@ if (!username) {
   process.exit(1);
 }
 
-const cdpPortArg = args.indexOf('--cdp-port');
-const cdpPort = cdpPortArg !== -1 ? parseInt(args[cdpPortArg + 1]) : null;
+function parseIntArg(name, fallback) {
+  const idx = args.indexOf(name);
+  if (idx === -1) return fallback;
+  const val = parseInt(args[idx + 1], 10);
+  if (!Number.isFinite(val)) {
+    console.error(`Error: ${name} requires a numeric value.`);
+    process.exit(1);
+  }
+  return val;
+}
+
+const cdpPort = parseIntArg('--cdp-port', null);
 if (!cdpPort) {
   console.error('Error: --cdp-port is required.');
   process.exit(1);
 }
 
-const delayArg = args.indexOf('--delay');
-const delay = delayArg !== -1 ? parseInt(args[delayArg + 1]) : 1500;
-const limitArg = args.indexOf('--limit');
-const limit = limitArg !== -1 ? parseInt(args[limitArg + 1]) : Infinity;
+const delay = parseIntArg('--delay', 1500);
+const limit = parseIntArg('--limit', Infinity);
 const skipMedia = args.includes('--skip-media');
 const urlListArg = args.indexOf('--url-list');
 const urlListFile = urlListArg !== -1 ? args[urlListArg + 1] : 'output/inventory.json';
@@ -58,29 +66,44 @@ function sleep(ms) {
   return new Promise(r => setTimeout(r, ms));
 }
 
-function downloadFile(url, destPath) {
+function downloadFile(url, destPath, redirectsLeft = 5) {
   return new Promise((resolve, reject) => {
-    const proto = url.startsWith('https') ? https : http;
+    if (redirectsLeft <= 0) return reject(new Error('Too many redirects'));
+    if (!url.startsWith('https://')) return reject(new Error(`Refused non-HTTPS URL: ${url}`));
+
     const file = createWriteStream(destPath);
-    proto.get(url, { headers: { 'User-Agent': 'Mozilla/5.0' } }, res => {
-      if (res.statusCode === 301 || res.statusCode === 302) {
+    file.on('error', reject);
+
+    const req = https.get(url, { headers: { 'User-Agent': 'Mozilla/5.0' }, timeout: 30000 }, res => {
+      if ([301, 302, 303, 307, 308].includes(res.statusCode)) {
+        res.resume(); // consume response to free socket
         file.close();
-        return downloadFile(res.headers.location, destPath).then(resolve).catch(reject);
+        const location = res.headers.location;
+        if (!location?.startsWith('https://')) return reject(new Error(`Redirect to non-HTTPS: ${location}`));
+        return downloadFile(location, destPath, redirectsLeft - 1).then(resolve).catch(reject);
       }
       if (res.statusCode !== 200) {
+        res.resume();
         file.close();
         return reject(new Error(`HTTP ${res.statusCode}`));
       }
       res.pipe(file);
       file.on('finish', () => file.close(resolve));
-    }).on('error', reject);
+    });
+    req.on('error', reject);
+    req.on('timeout', () => { req.destroy(); reject(new Error('Download timeout')); });
   });
+}
+
+// Sanitize shortcode for safe use as filename
+function safeShortcode(sc) {
+  return sc.replace(/[^a-zA-Z0-9_-]/g, '');
 }
 
 // Generate a sane filename from an Instagram CDN URL
 function mediaFilename(url, shortcode, index) {
   const ext = url.match(/\.(jpg|jpeg|png|webp|mp4|mov)/i)?.[1] || 'jpg';
-  return `${shortcode}_${index}.${ext.toLowerCase()}`;
+  return `${safeShortcode(shortcode)}_${index}.${ext.toLowerCase()}`;
 }
 
 async function extractPostData(page, shortcode, isCarousel = false, carouselCount = 10) {
@@ -104,7 +127,9 @@ async function extractPostData(page, shortcode, isCarousel = false, carouselCoun
   page.on('response', responseHandler);
 
   try {
-    await page.goto(postUrl, { waitUntil: 'networkidle', timeout: 30000 });
+    await page.goto(postUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    // Wait for the main post image or GraphQL response to land
+    await page.waitForSelector('article img[src*="cdninstagram.com"]', { timeout: 10000 }).catch(() => {});
   } catch (e) {
     console.error(`  Navigation failed: ${e.message}`);
   }
@@ -122,12 +147,10 @@ async function extractPostData(page, shortcode, isCarousel = false, carouselCoun
       try { return JSON.parse(s.textContent); } catch { return null; }
     }).filter(Boolean);
 
-    // Try to extract from __additionalDataLoaded or similar globals
-    for (const key of Object.keys(window)) {
-      if (key.includes('additional') || key.includes('__NEXT') || key === '_sharedData') {
-        try {
-          result[key] = JSON.parse(JSON.stringify(window[key]));
-        } catch {}
+    // Check specific known globals (avoid enumerating all of window)
+    for (const key of ['__additionalDataLoaded', '__NEXT_DATA__', '_sharedData']) {
+      if (window[key]) {
+        try { result[key] = window[key]; } catch {}
       }
     }
 
@@ -251,8 +274,10 @@ function buildPostOutput(shortcode, inventoryPost, postDetail, globals, carousel
         slug: postDetail.location.slug || null,
         lat: postDetail.location.lat || null,
         lng: postDetail.location.lng || null,
-        address: postDetail.location.address_json
-          ? JSON.parse(postDetail.location.address_json) : null,
+        address: (() => {
+          try { return postDetail.location.address_json ? JSON.parse(postDetail.location.address_json) : null; }
+          catch { return null; }
+        })(),
       };
     }
 
@@ -388,24 +413,20 @@ async function main() {
         page, shortcode, isCarousel, inventoryPost.carouselCount
       );
       const output = buildPostOutput(shortcode, inventoryPost, postDetail, captured.globals, carouselSlides);
+      const safeCode = safeShortcode(shortcode);
 
-      writeFileSync(`output/pages/${shortcode}.json`, JSON.stringify(output, null, 2));
-
-      // Queue media for download
+      // Queue media for download and set local file paths before writing
       for (let j = 0; j < output.media.length; j++) {
         const item = output.media[j];
-        // Prefer video URL for videos, display URL for photos
         const downloadUrl = item.videoUrl || item.displayUrl;
         if (downloadUrl) {
           const filename = mediaFilename(downloadUrl, shortcode, j);
           allMediaUrls.push({ url: downloadUrl, filename });
-          // Store the local filename in the output for the import step
           item.localFile = `output/media/${filename}`;
         }
       }
 
-      // Re-write with local file paths
-      writeFileSync(`output/pages/${shortcode}.json`, JSON.stringify(output, null, 2));
+      writeFileSync(`output/pages/${safeCode}.json`, JSON.stringify(output, null, 2));
 
       log.processed.push({ url: output.sourceUrl, shortcode });
       console.log(`  Media items: ${output.media.length}, Tags: ${output.tags.length}`);
@@ -418,22 +439,31 @@ async function main() {
   }
 
   await page.close();
+  await browser.disconnect();
 
-  // Download all media
+  // Download all media (parallel with concurrency limit)
   if (!skipMedia && allMediaUrls.length > 0) {
-    console.log(`\nDownloading ${allMediaUrls.length} media files...`);
-    // Instagram CDN URLs expire — download promptly
-    for (const { url, filename } of allMediaUrls) {
-      const dest = `output/media/${filename}`;
-      try {
-        await downloadFile(url, dest);
-        log.mediaDownloaded.push({ url, file: dest });
-        process.stdout.write('.');
-      } catch (e) {
-        log.failed.push({ url, error: `Media download: ${e.message}` });
-        process.stdout.write('x');
+    const CONCURRENCY = 8;
+    console.log(`\nDownloading ${allMediaUrls.length} media files (${CONCURRENCY} concurrent)...`);
+    let idx = 0;
+
+    async function downloadWorker() {
+      while (idx < allMediaUrls.length) {
+        const i = idx++;
+        const { url, filename } = allMediaUrls[i];
+        const dest = `output/media/${filename}`;
+        try {
+          await downloadFile(url, dest);
+          log.mediaDownloaded.push({ url, file: dest });
+          process.stdout.write('.');
+        } catch (e) {
+          log.failed.push({ url, error: `Media download: ${e.message}` });
+          process.stdout.write('x');
+        }
       }
     }
+
+    await Promise.all(Array.from({ length: CONCURRENCY }, () => downloadWorker()));
     console.log('');
   } else if (skipMedia) {
     console.log('\nSkipping media download (--skip-media)');
