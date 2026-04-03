@@ -6,6 +6,37 @@ AI agents: when you contribute an improvement, add an entry here. See [CONTRIBUT
 
 ---
 
+## 2026-04-02 — Substack public API for content extraction
+
+**Found by:** Claude + human contributor (Joe Boydston, Newspack team)
+**During:** Adding Substack as a new migration platform
+**Type:** API endpoint | new platform
+
+### What I found
+
+Substack has undocumented but publicly accessible API endpoints that return rich JSON for any publication without authentication:
+
+- `/api/v1/archive?sort=new&limit=50&offset=0` — paginated list of all posts with metadata
+- `/api/v1/posts/<slug>` — full post data including `body_html`, cover image, subtitle, audience tier, word count, reactions, and author bylines
+
+Images are served through a CDN wrapper at `substackcdn.com/image/fetch/w_XXXX,.../https://substack-post-media.s3.amazonaws.com/...`. The original full-resolution URL is embedded in the CDN path after the transform parameters.
+
+### How it works
+
+The discover script paginates through `/api/v1/archive` to build a complete inventory. The extract script then fetches each post individually via `/api/v1/posts/<slug>` for rich metadata and full HTML body. For paid posts (where the API only returns free preview content), the extractor can merge in full HTML from Substack's official CSV export via `--csv-export`.
+
+No browser or authentication needed — this runs entirely via `fetch()`.
+
+### Why it's better than the previous approach
+
+Unlike Wix (which requires Playwright to intercept internal API calls during page load), Substack's public API means:
+- No browser dependency — extraction is fast and lightweight
+- Clean, structured JSON with semantic fields
+- Dual-source strategy (API + CSV) ensures complete content including paid posts
+- Rate limiting is lenient with 500ms delays between requests
+
+---
+
 ## 2026-03-31 — Wix Dashboard API reverse engineering via CDP
 
 **Found by:** Claude + human contributor (live probing against Brave browser)

@@ -17,9 +17,29 @@ This repo gives people a prompt they can paste into any AI assistant (Claude, Ch
 | Platform | Status | Prompt |
 |---|---|---|
 | **Wix** | Ready | [`prompts/wix.md`](./prompts/wix.md) |
+| **Substack** | Ready | [`prompts/substack.md`](./prompts/substack.md) |
 | Squarespace | Planned | — |
 | Webflow | Planned | — |
 | Shopify (blog/pages) | Planned | — |
+
+## Quick start (Substack)
+
+```bash
+# 1. Install dependencies
+npm install
+
+# 2. Discover all content on your Substack
+node scripts/substack/discover.js https://yourpub.substack.com
+
+# 3. Extract all content (uses Substack's public API)
+node scripts/substack/extract.js https://yourpub.substack.com
+
+# 4. For paid posts, export from Substack first, then:
+node scripts/substack/extract.js https://yourpub.substack.com --csv-export posts.csv
+
+# 5. Import to WordPress.com
+node scripts/import.js --site your-wp-site --token YOUR_APP_PASSWORD
+```
 
 ## Quick start (Wix)
 
@@ -57,6 +77,16 @@ This means the playbook gets smarter with every migration.
 - [x] Migration prompt for non-technical users
 - [ ] Wix Stores / WooCommerce migration
 - [ ] Wix Bookings migration
+
+### Substack
+- [x] Public API extraction (free content)
+- [x] CSV export support (paid content)
+- [x] Image CDN URL unwrapping
+- [x] WordPress.com REST API import
+- [x] Migration prompt for non-technical users
+- [ ] Podcast episode audio migration
+- [ ] Subscriber list import
+- [ ] Paid subscription migration (Stripe)
 
 ### General
 - [x] WordPress.com REST API import script

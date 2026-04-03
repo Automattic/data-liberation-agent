@@ -1,7 +1,7 @@
 {
   "name": "data-liberation-agent",
   "version": "0.1.0",
-  "description": "AI-assisted migration from Wix to WordPress.com",
+  "description": "AI-assisted migration from closed platforms to WordPress.com",
   "type": "module",
   "scripts": {
     "discover": "node scripts/discover.js",
