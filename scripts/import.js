@@ -35,6 +35,7 @@ const site = getArg('--site');
 const token = getArg('--token');
 const dryRun = args.includes('--dry-run');
 const only = getArg('--only');
+const postType = getArg('--post-type'); // e.g. 'photo' for a custom post type
 
 if (!site || !token) {
   console.error('Usage: node scripts/import.js --site <wordpress-site> --token <app-password>');
@@ -81,6 +82,11 @@ function buildContentFromAccessibility(nodes) {
 
 // Extract the best available content from a page JSON file
 function extractContent(pageData) {
+  // Instagram posts — caption is the content, images are media attachments
+  if (pageData.platform === 'instagram' || pageData.shortcode) {
+    return buildInstagramContent(pageData);
+  }
+
   // Priority: Wix blog API response > JSON-LD > accessibility tree
   for (const call of pageData.apiCalls || []) {
     // Blog post body is typically in post.content or post.richContent
@@ -98,7 +104,51 @@ function extractContent(pageData) {
   return buildContentFromAccessibility(pageData.accessibility);
 }
 
+// Build WordPress block content from an Instagram post
+function buildInstagramContent(pageData) {
+  const blocks = [];
+
+  // Add images/video as WordPress blocks
+  for (const item of pageData.media || []) {
+    const src = item.localFile || item.displayUrl;
+    if (!src) continue;
+
+    if (item.type === 'video' && item.videoUrl) {
+      blocks.push(`<!-- wp:video -->\n<figure class="wp-block-video"><video controls src="${item.videoUrl}"></video></figure>\n<!-- /wp:video -->`);
+    } else {
+      const alt = item.accessibilityCaption || pageData.caption?.slice(0, 125) || '';
+      blocks.push(`<!-- wp:image -->\n<figure class="wp-block-image"><img src="${src}" alt="${alt.replace(/"/g, '&quot;')}"/></figure>\n<!-- /wp:image -->`);
+    }
+  }
+
+  // Caption as a paragraph
+  if (pageData.caption) {
+    // Convert @mentions and #hashtags to links
+    let caption = pageData.caption
+      .replace(/@(\w+)/g, '<a href="https://www.instagram.com/$1/">@$1</a>')
+      .replace(/#(\w+)/g, '<a href="https://www.instagram.com/explore/tags/$1/">#$1</a>');
+    blocks.push(`<!-- wp:paragraph -->\n<p>${caption}</p>\n<!-- /wp:paragraph -->`);
+  }
+
+  return blocks.join('\n\n');
+}
+
 function extractMeta(pageData) {
+  // Instagram posts
+  if (pageData.platform === 'instagram' || pageData.shortcode) {
+    const caption = pageData.caption || '';
+    // Title: first line of caption, or first 60 chars, or shortcode
+    const title = caption.split('\n')[0]?.slice(0, 80) || `Instagram ${pageData.shortcode}`;
+    return {
+      title,
+      description: caption.slice(0, 300),
+      featuredImageUrl: pageData.media?.[0]?.displayUrl || null,
+      publishDate: pageData.date || null,
+      modifiedDate: null,
+      slug: `ig-${pageData.shortcode}`,
+    };
+  }
+
   const meta = pageData.globals?.meta || {};
   const jsonLd = pageData.globals?.jsonLd || [];
   const article = jsonLd.find(j => ['Article', 'BlogPosting', 'WebPage'].includes(j['@type']));
@@ -184,7 +234,7 @@ async function importPage(pageData, mediaMap) {
   return wpRequest('POST', '/pages', body);
 }
 
-async function importPost(pageData, mediaMap) {
+async function importPost(pageData, mediaMap, endpoint = '/posts') {
   const meta = extractMeta(pageData);
   let content = extractContent(pageData);
 
@@ -202,12 +252,23 @@ async function importPost(pageData, mediaMap) {
     modified: meta.modifiedDate || undefined,
   };
 
+  // Add Instagram-specific metadata as post meta
+  if (pageData.shortcode) {
+    body.meta = {
+      instagram_shortcode: pageData.shortcode,
+      instagram_url: pageData.sourceUrl || `https://www.instagram.com/p/${pageData.shortcode}/`,
+    };
+    if (pageData.location?.name) {
+      body.meta.instagram_location = pageData.location.name;
+    }
+  }
+
   if (dryRun) {
     console.log(`  [dry-run] Would create post: ${meta.title} (${meta.slug})`);
     return { id: 0, link: '#' };
   }
 
-  return wpRequest('POST', '/posts', body);
+  return wpRequest('POST', endpoint, body);
 }
 
 async function main() {
@@ -221,13 +282,25 @@ async function main() {
   const pageFiles = readdirSync('output/pages').filter(f => f.endsWith('.json'));
   console.log(`Found ${pageFiles.length} extracted pages`);
 
+  // Detect if this is an Instagram import
+  let isInstagram = false;
+  if (existsSync('output/inventory.json')) {
+    const inventory = JSON.parse(readFileSync('output/inventory.json', 'utf8'));
+    isInstagram = inventory.platform === 'instagram';
+  }
+
   // Determine content type from inventory if available
   let typeMap = {};
   if (existsSync('output/inventory.json')) {
     const inventory = JSON.parse(readFileSync('output/inventory.json', 'utf8'));
     for (const item of inventory.urls) {
-      const slug = new URL(item.url).pathname.replace(/^\//, '').replace(/\//g, '--') || 'homepage';
-      typeMap[slug] = item.type;
+      if (isInstagram) {
+        // Instagram uses shortcodes as filenames
+        typeMap[item.shortcode] = item.type || 'photo';
+      } else {
+        const slug = new URL(item.url).pathname.replace(/^\//, '').replace(/\//g, '--') || 'homepage';
+        typeMap[slug] = item.type;
+      }
     }
   }
 
@@ -239,46 +312,64 @@ async function main() {
     mediaMap = await importMedia();
   }
 
-  // Step 2: Import pages
-  const pages = pageFiles.filter(f => {
-    const slug = f.replace('.json', '');
-    return !typeMap[slug] || typeMap[slug] === 'page' || typeMap[slug] === 'homepage';
-  });
-
-  if (!only || only === 'pages') {
-    console.log(`\nImporting ${pages.length} pages...`);
-    for (const file of pages) {
+  // Instagram: all items are posts (not pages)
+  if (isInstagram) {
+    const endpoint = postType ? `/${postType}` : '/posts';
+    console.log(`\nImporting ${pageFiles.length} Instagram posts${postType ? ` as "${postType}"` : ''}...`);
+    for (const file of pageFiles) {
       const pageData = JSON.parse(readFileSync(`output/pages/${file}`, 'utf8'));
-      const slug = file.replace('.json', '');
-      process.stdout.write(`  ${slug}... `);
+      const shortcode = file.replace('.json', '');
+      process.stdout.write(`  ${shortcode}... `);
       try {
-        const result = await importPage(pageData, mediaMap);
+        const result = await importPost(pageData, mediaMap, endpoint);
         console.log(`✓ ${result.link}`);
         if (pageData.sourceUrl) urlMap.push({ old: pageData.sourceUrl, new: result.link });
       } catch (e) {
         console.log(`✗ ${e.message}`);
       }
     }
-  }
+  } else {
+    // Step 2: Import pages
+    const pages = pageFiles.filter(f => {
+      const slug = f.replace('.json', '');
+      return !typeMap[slug] || typeMap[slug] === 'page' || typeMap[slug] === 'homepage';
+    });
 
-  // Step 3: Import posts
-  const posts = pageFiles.filter(f => {
-    const slug = f.replace('.json', '');
-    return typeMap[slug] === 'blog-post';
-  });
+    if (!only || only === 'pages') {
+      console.log(`\nImporting ${pages.length} pages...`);
+      for (const file of pages) {
+        const pageData = JSON.parse(readFileSync(`output/pages/${file}`, 'utf8'));
+        const slug = file.replace('.json', '');
+        process.stdout.write(`  ${slug}... `);
+        try {
+          const result = await importPage(pageData, mediaMap);
+          console.log(`✓ ${result.link}`);
+          if (pageData.sourceUrl) urlMap.push({ old: pageData.sourceUrl, new: result.link });
+        } catch (e) {
+          console.log(`✗ ${e.message}`);
+        }
+      }
+    }
 
-  if (!only || only === 'posts') {
-    console.log(`\nImporting ${posts.length} blog posts...`);
-    for (const file of posts) {
-      const pageData = JSON.parse(readFileSync(`output/pages/${file}`, 'utf8'));
-      const slug = file.replace('.json', '');
-      process.stdout.write(`  ${slug}... `);
-      try {
-        const result = await importPost(pageData, mediaMap);
-        console.log(`✓ ${result.link}`);
-        if (pageData.sourceUrl) urlMap.push({ old: pageData.sourceUrl, new: result.link });
-      } catch (e) {
-        console.log(`✗ ${e.message}`);
+    // Step 3: Import posts
+    const posts = pageFiles.filter(f => {
+      const slug = f.replace('.json', '');
+      return typeMap[slug] === 'blog-post';
+    });
+
+    if (!only || only === 'posts') {
+      console.log(`\nImporting ${posts.length} blog posts...`);
+      for (const file of posts) {
+        const pageData = JSON.parse(readFileSync(`output/pages/${file}`, 'utf8'));
+        const slug = file.replace('.json', '');
+        process.stdout.write(`  ${slug}... `);
+        try {
+          const result = await importPost(pageData, mediaMap);
+          console.log(`✓ ${result.link}`);
+          if (pageData.sourceUrl) urlMap.push({ old: pageData.sourceUrl, new: result.link });
+        } catch (e) {
+          console.log(`✗ ${e.message}`);
+        }
       }
     }
   }

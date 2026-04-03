@@ -267,6 +267,7 @@ function getBrowserUserAgent(browser) {
 
 function detectPlatform(url) {
   const lower = url.toLowerCase();
+  if (lower.includes('instagram.com')) return 'instagram';
   if (lower.includes('wix.com') || lower.includes('wixsite.com')) return 'wix';
   if (lower.includes('squarespace.com')) return 'squarespace';
   if (lower.includes('webflow.io') || lower.includes('webflow.com')) return 'webflow';
@@ -405,6 +406,7 @@ async function main() {
   heading('Login Detection');
 
   const platforms = [
+    { name: 'Instagram', domain: '.instagram.com' },
     { name: 'Wix', domain: '.wix.com' },
     { name: 'Squarespace', domain: '.squarespace.com' },
     { name: 'Webflow', domain: '.webflow.com' },
@@ -455,6 +457,7 @@ async function main() {
     ok(`Detected platform: ${BOLD}${detectedPlatform}${RESET}`);
   } else {
     const platChoice = await askChoice('Which platform is this site on?', [
+      { label: 'Instagram', value: 'instagram' },
       { label: 'Wix', value: 'wix' },
       { label: 'Squarespace', value: 'squarespace' },
       { label: 'Webflow', value: 'webflow' },
@@ -521,13 +524,30 @@ async function main() {
   // ── Step 4: Run discovery ──
 
   heading('Step 1: Discovering Site Content');
-  log(`Scanning ${siteUrl} for all pages, posts, and media...\n`);
 
   mkdirSync('output', { recursive: true });
 
   const uaArgs = userAgent ? ['--user-agent', userAgent] : [];
   const cdpArgs = cdpPort ? ['--cdp-port', String(cdpPort)] : [];
-  const discoverResult = await runScript(`scripts/${activePlatform}/discover.js`, [siteUrl, ...uaArgs, ...cdpArgs]);
+
+  // Instagram uses a username, not a site URL
+  let discoverTarget = siteUrl;
+  if (activePlatform === 'instagram') {
+    // Extract username from URL or use as-is
+    const igMatch = siteUrl.match(/instagram\.com\/([^/?]+)/);
+    discoverTarget = igMatch ? igMatch[1] : siteUrl.replace(/^https?:\/\//, '').replace(/\/$/, '');
+    log(`Discovering posts for @${discoverTarget}...\n`);
+    if (!cdpPort) {
+      fail('Instagram requires a CDP connection to an authenticated browser.');
+      fail('Launch Chrome with: google-chrome --remote-debugging-port=9222');
+      rl.close();
+      return;
+    }
+  } else {
+    log(`Scanning ${siteUrl} for all pages, posts, and media...\n`);
+  }
+
+  const discoverResult = await runScript(`scripts/${activePlatform}/discover.js`, [discoverTarget, ...uaArgs, ...cdpArgs]);
   if (discoverResult.code !== 0) {
     fail('Discovery failed. See output above.');
     const retry = await ask('Try again? (y/n)');
@@ -558,10 +578,10 @@ async function main() {
   // ── Step 5: Extract content ──
 
   heading('Step 2: Extracting Content');
-  log(`Extracting all pages, posts, and media from ${siteUrl}...\n`);
+  log(`Extracting all content from ${activePlatform === 'instagram' ? '@' + discoverTarget : siteUrl}...\n`);
 
   const extractResult = await runScript(`scripts/${activePlatform}/extract.js`, [
-    siteUrl,
+    activePlatform === 'instagram' ? discoverTarget : siteUrl,
     '--url-list', 'output/inventory.json',
     ...uaArgs,
     ...cdpArgs
