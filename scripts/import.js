@@ -179,18 +179,31 @@ function extractContent(pageData) {
 // Build WordPress block content from an Instagram post
 function buildInstagramContent(pageData) {
   const blocks = [];
+  const media = pageData.media || [];
+  const imageMedia = media.filter(m => m.type !== 'video' || !m.videoUrl);
+  const videoMedia = media.filter(m => m.type === 'video' && m.videoUrl);
 
-  // Add images/video as WordPress blocks
-  for (const item of pageData.media || []) {
+  // Use a gallery block for carousels (multiple images), single image block otherwise
+  if (imageMedia.length > 1) {
+    const galleryImages = imageMedia.map(item => {
+      const src = item.localFile || item.displayUrl;
+      if (!src) return '';
+      const alt = item.accessibilityCaption || '';
+      return `<!-- wp:image -->\n<figure class="wp-block-image"><img src="${src}" alt="${alt.replace(/"/g, '&quot;')}"/></figure>\n<!-- /wp:image -->`;
+    }).filter(Boolean);
+    blocks.push(`<!-- wp:gallery {"linkTo":"none"} -->\n<figure class="wp-block-gallery has-nested-images columns-default is-cropped">\n${galleryImages.join('\n')}\n</figure>\n<!-- /wp:gallery -->`);
+  } else if (imageMedia.length === 1) {
+    const item = imageMedia[0];
     const src = item.localFile || item.displayUrl;
-    if (!src) continue;
-
-    if (item.type === 'video' && item.videoUrl) {
-      blocks.push(`<!-- wp:video -->\n<figure class="wp-block-video"><video controls src="${item.videoUrl}"></video></figure>\n<!-- /wp:video -->`);
-    } else {
+    if (src) {
       const alt = item.accessibilityCaption || pageData.caption?.slice(0, 125) || '';
       blocks.push(`<!-- wp:image -->\n<figure class="wp-block-image"><img src="${src}" alt="${alt.replace(/"/g, '&quot;')}"/></figure>\n<!-- /wp:image -->`);
     }
+  }
+
+  // Videos as separate blocks (can't go in gallery)
+  for (const item of videoMedia) {
+    blocks.push(`<!-- wp:video -->\n<figure class="wp-block-video"><video controls src="${item.videoUrl}"></video></figure>\n<!-- /wp:video -->`);
   }
 
   // Caption as a paragraph

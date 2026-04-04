@@ -193,72 +193,50 @@ async function extractPostData(page, shortcode, isCarousel = false, carouselCoun
     // Navigate to each slide directly and grab the main post image.
     const expectedSlides = carouselCount || 10;
 
-    const getMainPostImage = async () => {
-      return page.evaluate(() => {
-        // Carousel slides are <img> elements inside <li> containers.
-        // The currently visible slide's <li> is positioned near the
-        // viewport center; preloaded adjacent slides are offset.
-        const viewportCenter = window.innerWidth / 2;
-        let bestImg = null;
-        let bestDist = Infinity;
+    // Strategy: navigate to each ?img_index=N, collect ALL <li> images
+    // from every page load, then deduplicate by Instagram media ID
+    // (the numeric prefix in the CDN URL). Instagram keeps 3 <li> elements
+    // in the DOM (previous, current, next), so we see overlap between
+    // adjacent slides — deduplication handles this cleanly.
+    const seenMediaIds = new Set();
 
-        const allImgs = document.querySelectorAll('li img');
-        for (const img of allImgs) {
+    const getAllSlideImages = async () => {
+      return page.evaluate(() => {
+        const results = [];
+        for (const img of document.querySelectorAll('li img')) {
           const src = img.src || '';
           if (!src.includes('cdninstagram.com/v/t51.')) continue;
           if (img.alt?.includes('User avatar')) continue;
           const rect = img.getBoundingClientRect();
           if (rect.width < 300) continue;
-
-          // The current slide's image center is closest to viewport center
-          const imgCenter = rect.left + rect.width / 2;
-          const dist = Math.abs(imgCenter - viewportCenter);
-          if (dist < bestDist) {
-            bestDist = dist;
-            bestImg = src;
-          }
+          // Extract the Instagram media ID (unique per photo)
+          const idMatch = src.match(/\/(\d{5,})_/);
+          results.push({ src, mediaId: idMatch?.[1] || null });
         }
-
-        // Fallback: if no <li> images found, try any large CDN image
-        if (!bestImg) {
-          let bestSize = 0;
-          for (const img of document.querySelectorAll('img')) {
-            const src = img.src || '';
-            if (!src.includes('cdninstagram.com/v/t51.')) continue;
-            if (img.alt?.includes('User avatar')) continue;
-            const rect = img.getBoundingClientRect();
-            if (rect.width < 400) continue;
-            const size = rect.width * rect.height;
-            if (size > bestSize) { bestSize = size; bestImg = src; }
-          }
-        }
-
-        // Also check for video on this slide
+        // Also check for video
         const video = document.querySelector('li video[src], li video source, video[src], video source');
         const videoUrl = video?.src || video?.querySelector?.('source')?.src || null;
-        return { imageUrl: bestImg, videoUrl };
+        if (videoUrl) results.push({ src: null, videoUrl, mediaId: 'video_' + Date.now() });
+        return results;
       });
     };
 
     for (let slideIdx = 1; slideIdx <= expectedSlides; slideIdx++) {
       try {
         const slideUrl = `https://www.instagram.com/p/${shortcode}/?img_index=${slideIdx}`;
-        await page.goto(slideUrl, { waitUntil: 'networkidle', timeout: 30000 }).catch(() => {});
+        await page.goto(slideUrl, { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
+        await page.waitForSelector('li img[src*="cdninstagram.com"]', { timeout: 8000 }).catch(() => {});
         await sleep(800);
 
-        const { imageUrl, videoUrl } = await getMainPostImage();
-        if (imageUrl || videoUrl) {
-          // Check for duplicates (means we've gone past the last slide)
-          const isDupe = carouselSlides.some(s => s.displayUrl === imageUrl && imageUrl);
-          if (isDupe) break;
-
+        const images = await getAllSlideImages();
+        for (const img of images) {
+          if (!img.mediaId || seenMediaIds.has(img.mediaId)) continue;
+          seenMediaIds.add(img.mediaId);
           carouselSlides.push({
-            type: videoUrl ? 'video' : 'photo',
-            displayUrl: imageUrl,
-            videoUrl: videoUrl,
+            type: img.videoUrl ? 'video' : 'photo',
+            displayUrl: img.src || null,
+            videoUrl: img.videoUrl || null,
           });
-        } else {
-          break; // No image found = past the end
         }
       } catch {
         break;
@@ -465,7 +443,10 @@ async function main() {
   }
 
   await page.close();
-  await browser.disconnect();
+  // Disconnect from the CDP session without closing the user's browser
+  if (typeof browser.disconnect === 'function') {
+    await browser.disconnect();
+  }
 
   // Download all media (parallel with concurrency limit)
   if (!skipMedia && allMediaUrls.length > 0) {
