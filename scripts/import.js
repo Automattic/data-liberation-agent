@@ -202,6 +202,12 @@ function buildInstagramContent(pageData) {
     blocks.push(`<!-- wp:paragraph -->\n<p>${caption}</p>\n<!-- /wp:paragraph -->`);
   }
 
+  // Link to original Instagram post
+  if (pageData.shortcode) {
+    const igUrl = `https://www.instagram.com/p/${pageData.shortcode}/`;
+    blocks.push(`<!-- wp:paragraph {"className":"instagram-source","fontSize":"small"} -->\n<p class="instagram-source has-small-font-size">Originally posted on <a href="${igUrl}">Instagram</a></p>\n<!-- /wp:paragraph -->`);
+  }
+
   return blocks.join('\n\n');
 }
 
@@ -267,12 +273,12 @@ async function importMedia() {
   const files = readdirSync('output/media');
   console.log(`\nUploading ${files.length} media files...`);
 
-  const mediaMap = {}; // original filename → WP media URL
+  const mediaMap = {}; // original filename → { url, id }
   for (const file of files) {
     process.stdout.write(`  ${file}... `);
     try {
       const result = await uploadMedia(`output/media/${file}`, file);
-      mediaMap[file] = result.source_url;
+      mediaMap[file] = { url: result.source_url, id: result.id };
       console.log(`✓ ${result.source_url}`);
     } catch (e) {
       console.log(`✗ ${e.message}`);
@@ -285,8 +291,9 @@ async function importPage(pageData, mediaMap) {
   const meta = extractMeta(pageData);
   let content = extractContent(pageData);
 
-  for (const [filename, wpUrl] of Object.entries(mediaMap)) {
-    content = content.replaceAll(filename, wpUrl);
+  for (const [filename, media] of Object.entries(mediaMap)) {
+    const url = typeof media === 'string' ? media : media.url;
+    content = content.replaceAll(filename, url);
   }
 
   if (dryRun) {
@@ -314,8 +321,10 @@ async function importPost(pageData, mediaMap) {
   const meta = extractMeta(pageData);
   let content = extractContent(pageData);
 
-  for (const [filename, wpUrl] of Object.entries(mediaMap)) {
-    content = content.replaceAll(filename, wpUrl);
+  // Replace local file paths with uploaded WordPress URLs
+  for (const [filename, media] of Object.entries(mediaMap)) {
+    const url = typeof media === 'string' ? media : media.url;
+    content = content.replaceAll(filename, url);
   }
 
   if (dryRun) {
@@ -333,6 +342,14 @@ async function importPost(pageData, mediaMap) {
     postDate = `${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,'0')}-${String(d.getUTCDate()).padStart(2,'0')} ${String(d.getUTCHours()).padStart(2,'0')}:${String(d.getUTCMinutes()).padStart(2,'0')}:${String(d.getUTCSeconds()).padStart(2,'0')}`;
   }
 
+  // Find featured image: first media item's WordPress media ID
+  let featuredImageId;
+  if (pageData.media?.[0]?.localFile) {
+    const firstMediaFile = basename(pageData.media[0].localFile);
+    const mediaEntry = mediaMap[firstMediaFile];
+    if (mediaEntry?.id) featuredImageId = mediaEntry.id;
+  }
+
   const postData = {
     post_type: postType || 'post',
     post_status: 'publish',
@@ -341,6 +358,7 @@ async function importPost(pageData, mediaMap) {
     post_excerpt: meta.description,
     wp_slug: meta.slug,
     post_date: postDate,
+    post_thumbnail: featuredImageId || undefined,
   };
 
   const id = await xmlRpcCall('wp.newPost', [blogId, user, token, postData]);

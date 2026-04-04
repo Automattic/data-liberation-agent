@@ -195,22 +195,48 @@ async function extractPostData(page, shortcode, isCarousel = false, carouselCoun
 
     const getMainPostImage = async () => {
       return page.evaluate(() => {
-        const allImgs = document.querySelectorAll('img');
-        let best = null;
-        let bestSize = 0;
+        // Carousel slides are <img> elements inside <li> containers.
+        // The currently visible slide's <li> is positioned near the
+        // viewport center; preloaded adjacent slides are offset.
+        const viewportCenter = window.innerWidth / 2;
+        let bestImg = null;
+        let bestDist = Infinity;
+
+        const allImgs = document.querySelectorAll('li img');
         for (const img of allImgs) {
           const src = img.src || '';
           if (!src.includes('cdninstagram.com/v/t51.')) continue;
           if (img.alt?.includes('User avatar')) continue;
           const rect = img.getBoundingClientRect();
-          if (rect.width < 400) continue;
-          const size = rect.width * rect.height;
-          if (size > bestSize) { bestSize = size; best = src; }
+          if (rect.width < 300) continue;
+
+          // The current slide's image center is closest to viewport center
+          const imgCenter = rect.left + rect.width / 2;
+          const dist = Math.abs(imgCenter - viewportCenter);
+          if (dist < bestDist) {
+            bestDist = dist;
+            bestImg = src;
+          }
         }
+
+        // Fallback: if no <li> images found, try any large CDN image
+        if (!bestImg) {
+          let bestSize = 0;
+          for (const img of document.querySelectorAll('img')) {
+            const src = img.src || '';
+            if (!src.includes('cdninstagram.com/v/t51.')) continue;
+            if (img.alt?.includes('User avatar')) continue;
+            const rect = img.getBoundingClientRect();
+            if (rect.width < 400) continue;
+            const size = rect.width * rect.height;
+            if (size > bestSize) { bestSize = size; bestImg = src; }
+          }
+        }
+
         // Also check for video on this slide
-        const video = document.querySelector('video[src], video source');
+        const video = document.querySelector('li video[src], li video source, video[src], video source');
         const videoUrl = video?.src || video?.querySelector?.('source')?.src || null;
-        return { imageUrl: best, videoUrl };
+        return { imageUrl: bestImg, videoUrl };
       });
     };
 
