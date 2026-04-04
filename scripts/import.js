@@ -2,27 +2,30 @@
 /**
  * import.js — Step 3: Import extracted content to WordPress.com
  *
- * Reads output/ from extract.js and publishes to WordPress.com via REST API.
- * Import order: media → pages → posts → menus
+ * Reads output/ from extract.js and publishes to WordPress.com via XML-RPC.
+ * Import order: media → pages → posts
+ *
+ * Uses XML-RPC (wp.uploadFile, wp.newPost) because WordPress.com's REST API
+ * does not support write operations with application passwords.
  *
  * Usage:
- *   node scripts/import.js --site mysite.wordpress.com --token APP_PASSWORD
- *   node scripts/import.js --site mysite.wordpress.com --token APP_PASSWORD --dry-run
+ *   node scripts/import.js --site mysite.wordpress.com --user your-wpcom-user --token APP_PASSWORD
+ *   node scripts/import.js --site mysite.wordpress.com --user your-wpcom-user --token APP_PASSWORD --dry-run
  *
  * Options:
  *   --site <domain>    WordPress.com site domain (e.g. mysite.wordpress.com)
+ *   --user <name>      WordPress.com username that owns the application password
  *   --token <token>    Application password from wordpress.com/me/security/application-passwords
  *   --dry-run          Show what would be imported without actually doing it
  *   --only <type>      Only import 'media', 'pages', or 'posts'
  *
  * Getting your application password:
  *   1. Go to wordpress.com/me/security/application-passwords
- *   2. Create a new application password named "wix-escape"
+ *   2. Create a new application password
  *   3. Copy the password and pass it as --token
  */
 
 import { readFileSync, readdirSync, existsSync } from 'fs';
-import { createReadStream } from 'fs';
 import { basename } from 'path';
 
 const args = process.argv.slice(2);
@@ -33,33 +36,102 @@ function getArg(name) {
 
 const site = getArg('--site');
 const token = getArg('--token');
+const user = getArg('--user');
 const dryRun = args.includes('--dry-run');
 const only = getArg('--only');
 const postType = getArg('--post-type'); // e.g. 'photo' for a custom post type
 
-if (!site || !token) {
-  console.error('Usage: node scripts/import.js --site <wordpress-site> --token <app-password>');
+if (!site || !token || !user) {
+  console.error('Usage: node scripts/import.js --site <wordpress-site> --user <wp-username> --token <app-password>');
   console.error('  Get your app password at: wordpress.com/me/security/application-passwords');
   process.exit(1);
 }
 
-const apiBase = `https://public-api.wordpress.com/wp/v2/sites/${site}`;
-const authHeader = `Basic ${Buffer.from(`wix-escape:${token}`).toString('base64')}`;
+const xmlRpcUrl = `https://${site}/xmlrpc.php`;
+const restApiBase = `https://public-api.wordpress.com/rest/v1.1/sites/${site}`;
 
-async function wpRequest(method, endpoint, body, isFormData = false) {
-  const headers = { Authorization: authHeader };
-  if (!isFormData) headers['Content-Type'] = 'application/json';
+// ─── XML-RPC helpers ────────────────────────────────────────
 
-  const options = { method, headers };
-  if (body) options.body = isFormData ? body : JSON.stringify(body);
+function escapeXml(value) {
+  return String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&apos;');
+}
 
-  const res = await fetch(`${apiBase}${endpoint}`, options);
-  const data = await res.json().catch(() => ({}));
-
-  if (!res.ok) {
-    throw new Error(`${method} ${endpoint} → ${res.status}: ${data.message || JSON.stringify(data)}`);
+function xmlValue(value) {
+  if (value == null) return '<nil/>';
+  if (Buffer.isBuffer(value)) return `<base64>${value.toString('base64')}</base64>`;
+  if (value instanceof Date) {
+    // XML-RPC dateTime.iso8601 must NOT include timezone suffix
+    const iso = value.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, '');
+    return `<dateTime.iso8601>${iso}</dateTime.iso8601>`;
   }
-  return data;
+  if (typeof value === 'boolean') return `<boolean>${value ? 1 : 0}</boolean>`;
+  if (typeof value === 'number') return Number.isInteger(value) ? `<int>${value}</int>` : `<double>${value}</double>`;
+  if (Array.isArray(value)) {
+    return `<array><data>${value.map(item => `<value>${xmlValue(item)}</value>`).join('')}</data></array>`;
+  }
+  if (typeof value === 'object') {
+    return `<struct>${Object.entries(value)
+      .filter(([, item]) => item !== undefined)
+      .map(([key, item]) => `<member><name>${escapeXml(key)}</name><value>${xmlValue(item)}</value></member>`)
+      .join('')}</struct>`;
+  }
+  return `<string>${escapeXml(value)}</string>`;
+}
+
+function parseXmlRpcResponse(xml) {
+  const faultMatch = xml.match(/<fault>[\s\S]*?<name>faultString<\/name>\s*<value><string>([\s\S]*?)<\/string><\/value>[\s\S]*?<\/fault>/);
+  if (faultMatch) throw new Error(faultMatch[1]);
+
+  const struct = {};
+  const namedStringRegex = /<name>([^<]+)<\/name>\s*<value><string>([\s\S]*?)<\/string><\/value>/g;
+  const namedIntRegex = /<name>([^<]+)<\/name>\s*<value><(?:int|i4)>([\s\S]*?)<\/(?:int|i4)><\/value>/g;
+  let member;
+  while ((member = namedStringRegex.exec(xml))) struct[member[1]] = member[2];
+  while ((member = namedIntRegex.exec(xml))) struct[member[1]] = Number(member[2]);
+  if (Object.keys(struct).length) return struct;
+
+  const stringMatch = xml.match(/<string>([\s\S]*?)<\/string>/);
+  if (stringMatch) return stringMatch[1];
+  const intMatch = xml.match(/<(?:int|i4)>([\s\S]*?)<\/(?:int|i4)>/);
+  if (intMatch) return Number(intMatch[1]);
+
+  return null;
+}
+
+async function xmlRpcCall(methodName, params) {
+  const body = `<?xml version="1.0"?><methodCall><methodName>${methodName}</methodName><params>${params
+    .map(param => `<param><value>${xmlValue(param)}</value></param>`)
+    .join('')}</params></methodCall>`;
+
+  const res = await fetch(xmlRpcUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/xml' },
+    body,
+  });
+  const text = await res.text();
+  if (!res.ok) throw new Error(`${methodName} → ${res.status}: ${text}`);
+  return parseXmlRpcResponse(text);
+}
+
+let cachedBlogId = null;
+async function getBlogId() {
+  if (cachedBlogId) return cachedBlogId;
+  const res = await fetch(restApiBase);
+  const data = await res.json().catch(() => ({}));
+  if (!data.ID) throw new Error(`Could not determine site ID for ${site}`);
+  cachedBlogId = data.ID;
+  return cachedBlogId;
+}
+
+function guessMimeType(filename) {
+  const ext = filename.split('.').pop().toLowerCase();
+  const types = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp', mp4: 'video/mp4', mov: 'video/quicktime' };
+  return types[ext] || 'application/octet-stream';
 }
 
 // Extract clean text content from accessibility tree nodes
@@ -169,24 +241,24 @@ async function uploadMedia(filePath, filename) {
     return { id: 0, source_url: `https://example.com/wp-content/uploads/${filename}` };
   }
 
-  const FormData = (await import('node:buffer')).default;
-  // Use fetch with FormData
-  const formData = new globalThis.FormData();
   const fileBuffer = readFileSync(filePath);
-  const blob = new Blob([fileBuffer]);
-  formData.append('file', blob, filename);
+  const blogId = await getBlogId();
+  const result = await xmlRpcCall('wp.uploadFile', [
+    blogId,
+    user,
+    token,
+    {
+      name: filename,
+      type: guessMimeType(filename),
+      bits: fileBuffer,
+      overwrite: true,
+    },
+  ]);
 
-  const res = await fetch(`${apiBase}/media`, {
-    method: 'POST',
-    headers: { Authorization: authHeader, 'Content-Disposition': `attachment; filename="${filename}"` },
-    body: fileBuffer,
-  });
-
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(`Media upload failed: ${err.message || res.status}`);
-  }
-  return res.json();
+  return {
+    id: result.id || 0,
+    source_url: result.url,
+  };
 }
 
 async function importMedia() {
@@ -213,28 +285,32 @@ async function importPage(pageData, mediaMap) {
   const meta = extractMeta(pageData);
   let content = extractContent(pageData);
 
-  // Replace any Wix image URLs in content with uploaded WP URLs
   for (const [filename, wpUrl] of Object.entries(mediaMap)) {
     content = content.replaceAll(filename, wpUrl);
   }
-
-  const body = {
-    title: meta.title,
-    content,
-    excerpt: meta.description,
-    slug: meta.slug,
-    status: 'draft', // Start as draft — user publishes manually after review
-  };
 
   if (dryRun) {
     console.log(`  [dry-run] Would create page: ${meta.title} (${meta.slug})`);
     return { id: 0, link: '#' };
   }
 
-  return wpRequest('POST', '/pages', body);
+  const blogId = await getBlogId();
+  const id = await xmlRpcCall('wp.newPost', [
+    blogId, user, token,
+    {
+      post_type: 'page',
+      post_status: 'draft',
+      post_title: meta.title,
+      post_content: content,
+      post_excerpt: meta.description,
+      wp_slug: meta.slug,
+    },
+  ]);
+
+  return { id, link: `https://${site}/wp-admin/post.php?post=${id}&action=edit` };
 }
 
-async function importPost(pageData, mediaMap, endpoint = '/posts') {
+async function importPost(pageData, mediaMap) {
   const meta = extractMeta(pageData);
   let content = extractContent(pageData);
 
@@ -242,33 +318,34 @@ async function importPost(pageData, mediaMap, endpoint = '/posts') {
     content = content.replaceAll(filename, wpUrl);
   }
 
-  const body = {
-    title: meta.title,
-    content,
-    excerpt: meta.description,
-    slug: meta.slug,
-    status: 'draft',
-    date: meta.publishDate || undefined,
-    modified: meta.modifiedDate || undefined,
-  };
-
-  // Add Instagram-specific metadata as post meta
-  if (pageData.shortcode) {
-    body.meta = {
-      instagram_shortcode: pageData.shortcode,
-      instagram_url: pageData.sourceUrl || `https://www.instagram.com/p/${pageData.shortcode}/`,
-    };
-    if (pageData.location?.name) {
-      body.meta.instagram_location = pageData.location.name;
-    }
-  }
-
   if (dryRun) {
     console.log(`  [dry-run] Would create post: ${meta.title} (${meta.slug})`);
     return { id: 0, link: '#' };
   }
 
-  return wpRequest('POST', endpoint, body);
+  const blogId = await getBlogId();
+
+  // Format date as "YYYY-MM-DD HH:MM:SS" string — WordPress.com ignores
+  // dateTime.iso8601 typed values but parses string dates correctly
+  let postDate;
+  if (meta.publishDate) {
+    const d = new Date(meta.publishDate);
+    postDate = `${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,'0')}-${String(d.getUTCDate()).padStart(2,'0')} ${String(d.getUTCHours()).padStart(2,'0')}:${String(d.getUTCMinutes()).padStart(2,'0')}:${String(d.getUTCSeconds()).padStart(2,'0')}`;
+  }
+
+  const postData = {
+    post_type: postType || 'post',
+    post_status: 'publish',
+    post_title: meta.title,
+    post_content: content,
+    post_excerpt: meta.description,
+    wp_slug: meta.slug,
+    post_date: postDate,
+  };
+
+  const id = await xmlRpcCall('wp.newPost', [blogId, user, token, postData]);
+
+  return { id, link: `https://${site}/wp-admin/post.php?post=${id}&action=edit` };
 }
 
 async function main() {
@@ -314,14 +391,13 @@ async function main() {
 
   // Instagram: all items are posts (not pages)
   if (isInstagram) {
-    const endpoint = postType ? `/${postType}` : '/posts';
     console.log(`\nImporting ${pageFiles.length} Instagram posts${postType ? ` as "${postType}"` : ''}...`);
     for (const file of pageFiles) {
       const pageData = JSON.parse(readFileSync(`output/pages/${file}`, 'utf8'));
       const shortcode = file.replace('.json', '');
       process.stdout.write(`  ${shortcode}... `);
       try {
-        const result = await importPost(pageData, mediaMap, endpoint);
+        const result = await importPost(pageData, mediaMap);
         console.log(`✓ ${result.link}`);
         if (pageData.sourceUrl) urlMap.push({ old: pageData.sourceUrl, new: result.link });
       } catch (e) {
