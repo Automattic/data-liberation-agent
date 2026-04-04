@@ -11,7 +11,7 @@ This file is the entry point for any AI agent using this repository. Read it bef
 3. **User prompts** — non-technical users paste these into their AI to drive the whole migration
 4. **A living playbook** — this repo improves itself through AI-contributed discoveries
 
-Currently supports: **Wix**. Squarespace, Webflow, and Shopify are planned.
+Currently supports: **Wix** and **Squarespace**. Webflow and Shopify are planned.
 
 ## If you're helping a user migrate from Wix
 
@@ -73,6 +73,69 @@ Generate a redirect map (old paths → new WP paths) for the user to configure i
 
 ---
 
+## If you're helping a user migrate from Squarespace
+
+### Step 1 — Understand the site
+
+Help the user launch Chrome with remote debugging and log in to their Squarespace admin:
+
+```bash
+google-chrome --remote-debugging-port=9222
+```
+
+Then run discovery against the admin session:
+
+```bash
+node scripts/squarespace/discover.js <squarespace-url> --cdp-port 9222 --cdp-admin
+```
+
+This connects to the logged-in browser via CDP, intercepts admin API responses and `__NEXT_DATA__` hydration state, and merges admin metadata (drafts, unlisted pages, page IDs) with public URL inventory. Output goes to `output/inventory.json`. Review this with the user before proceeding.
+
+### Step 2 — Extract all content
+
+```bash
+node scripts/squarespace/extract.js <squarespace-url> \
+  --inventory output/inventory.json --cdp-port 9222 --cdp-admin
+```
+
+This runs a Playwright browser that:
+- Navigates to each page in the admin, intercepting API calls (`/api/catalog-preview/`, `/api/content/`, etc.)
+- Extracts `__NEXT_DATA__` hydration state for structured section data
+- Falls back to public DOM extraction if admin data is sparse for a given page
+- Extracts sections (headings, text, images, HTML blocks) from admin JSON
+- Downloads all media from Squarespace's CDN
+
+Output goes to `output/` as structured JSON files, one per page/post, plus `output/media/` for downloaded images and `output/extraction-log.json` for media URL mappings.
+
+### Step 3 — Import to WordPress.com
+
+The user needs:
+- A WordPress.com account ($4/mo Personal plan)
+- An Application Password from: `https://wordpress.com/me/security/application-passwords`
+- Their site's URL (e.g. `mysite.wordpress.com`)
+- Their WordPress.com username
+
+```bash
+node scripts/squarespace/import.js --site <wordpress-site> --username <wpcom-user> --token <app-password>
+```
+
+Import order matters:
+1. Media (images) first — you need the new URLs before creating posts
+2. Pages (with correct parent/child hierarchy)
+3. Posts (with categories, tags, featured images)
+4. Products are logged but skipped (WooCommerce out of scope)
+
+### Step 4 — Verify
+
+After import, check:
+- All URLs in `output/inventory.json` have a corresponding WordPress post/page
+- No posts still have Squarespace CDN image URLs (they'll expire or break)
+- Navigation menus match the original structure
+
+Generate a redirect map (old paths → new WP paths) for the user to configure in their domain settings or a redirect plugin.
+
+---
+
 ## Using Claude in Chrome MCP
 
 If the user has the Chrome DevTools MCP set up (`npx chrome-devtools-mcp@latest`), you can drive extraction directly from the browser without running scripts:
@@ -108,6 +171,17 @@ This approach works for any JavaScript-heavy platform, not just Wix.
 | JavaScript-rendered content | Use Playwright with `waitUntil: 'networkidle'` |
 | Anti-bot blocking | Use real browser via Playwright (not fetch/curl); add delays |
 | Dynamic pages (CMS collections) | Query Wix's `/_api/wix-data-server/` endpoints directly |
+
+### Squarespace
+
+| Problem | Solution |
+|---|---|
+| No structured export (only basic XML) | Intercept admin API calls via CDP for structured JSON |
+| Draft/unlisted pages invisible publicly | Admin CDP extraction discovers all content including drafts |
+| JavaScript-rendered content | Admin API + `__NEXT_DATA__` hydration gives structured data without parsing rendered HTML |
+| Images are CDN URLs | Download immediately from `squarespace-cdn.com`; rewrite URLs at import time |
+| Admin UI noise in extracted content | Smart fallback heuristics filter admin shell text, sidebar artifacts |
+| Products/commerce | Extract metadata but skip import (WooCommerce out of scope) |
 
 ---
 
@@ -149,12 +223,17 @@ data-liberation-agent/
 ├── DISCOVERIES.md         ← log of community-contributed findings
 ├── package.json
 ├── prompts/
-│   └── wix.md             ← what users paste into their AI for a Wix migration
+│   ├── wix.md             ← what users paste into their AI for a Wix migration
+│   └── squarespace.md     ← what users paste into their AI for a Squarespace migration
 ├── scripts/
 │   ├── wix/
 │   │   ├── discover.js    ← inventory the Wix site (sitemap + categorization)
 │   │   └── extract.js     ← extract all content via network interception
-│   └── import.js          ← publish to WordPress.com via REST API (platform-agnostic)
+│   ├── squarespace/
+│   │   ├── discover.js    ← inventory via admin CDP or public JSON API
+│   │   ├── extract.js     ← extract content via admin API interception + DOM fallback
+│   │   └── import.js      ← publish to WordPress.com via REST API
+│   └── import.js          ← publish to WordPress.com via REST API (Wix)
 ├── examples/
 │   ├── wix-api-blog-post.json    ← example of Wix internal API response
 │   └── wp-rest-post-body.json    ← example WordPress REST API request body
@@ -171,6 +250,12 @@ data-liberation-agent/
 - **Password-protected pages**: Require the user to provide credentials.
 - **Very large sites (500+ pages)**: Add `--delay 2000` to extract.js to avoid rate limiting.
 - **Wix Members Area**: No migration path yet.
+
+### Squarespace
+- **Products/Commerce**: Extracted but skipped at import time.
+- **Admin extraction requires CDP**: User must launch Chrome with `--remote-debugging-port` and log in to Squarespace.
+- **Password-protected pages**: Admin extraction may fail without credentials.
+- **Content is HTML, not blocks**: Imported as custom HTML. Block conversion is planned but not yet implemented.
 
 ### General
 - Import creates everything as **drafts** — the user must review and publish manually.

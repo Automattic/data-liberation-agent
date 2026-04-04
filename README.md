@@ -17,7 +17,7 @@ This repo gives people a prompt they can paste into any AI assistant (Claude, Ch
 | Platform | Status | Prompt |
 |---|---|---|
 | **Wix** | Ready | [`prompts/wix.md`](./prompts/wix.md) |
-| Squarespace | Planned | — |
+| **Squarespace** | Ready | [`prompts/squarespace.md`](./prompts/squarespace.md) |
 | Webflow | Planned | — |
 | Shopify (blog/pages) | Planned | — |
 
@@ -34,7 +34,26 @@ node scripts/wix/discover.js https://yoursite.wixsite.com/sitename
 node scripts/wix/extract.js https://yoursite.wixsite.com/sitename
 
 # 4. Import to WordPress.com
-node scripts/import.js --site your-wp-site --token YOUR_APP_PASSWORD
+node scripts/import.js --site your-wp-site --username your-user --token YOUR_APP_PASSWORD
+```
+
+## Quick start (Squarespace)
+
+```bash
+# 1. Install dependencies
+npm install
+
+# 2. Discover all content on your Squarespace site
+node scripts/squarespace/discover.js https://yoursite.squarespace.com \
+  --cdp-port 9222 --cdp-admin
+
+# 3. Extract all content (intercepts Squarespace's admin API calls)
+node scripts/squarespace/extract.js https://yoursite.squarespace.com \
+  --inventory output/inventory.json --cdp-port 9222 --cdp-admin
+
+# 4. Import to WordPress.com
+node scripts/squarespace/import.js --site your-wp-site \
+  --username your-user --token YOUR_APP_PASSWORD
 ```
 
 Or skip all of that and **paste the prompt into your AI assistant** — it will handle everything.
@@ -58,11 +77,18 @@ This means the playbook gets smarter with every migration.
 - [ ] Wix Stores / WooCommerce migration
 - [ ] Wix Bookings migration
 
+### Squarespace
+- [x] Admin extraction via Chrome DevTools Protocol (CDP)
+- [x] Section-based content extraction (headings, text, images)
+- [x] Media download and URL rewriting
+- [x] WordPress.com XML-RPC import
+- [ ] Block conversion (`core/paragraph`, `core/image`, etc.)
+- [ ] Product/commerce migration
+
 ### General
 - [x] WordPress.com REST API import script
 - [ ] WordPress Studio local-first workflow
 - [ ] Automated redirect generation
-- [ ] Squarespace extractor
 - [ ] Webflow extractor
 
 ## Related

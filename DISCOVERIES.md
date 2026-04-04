@@ -6,6 +6,40 @@ AI agents: when you contribute an improvement, add an entry here. See [CONTRIBUT
 
 ---
 
+## 2026-04-02 — Squarespace admin extraction via CDP
+
+**Found by:** Claude + human contributor (live testing against a Squarespace site)
+**During:** Building the Squarespace extraction pipeline
+**Type:** API endpoint | architecture
+
+### What I found
+
+Connected to a logged-in Chrome session via CDP and intercepted Squarespace's admin API calls and `__NEXT_DATA__` hydration state. Key findings:
+
+**Admin API endpoints discovered:**
+- `/api/catalog-preview/` — page catalog with IDs, URLs, visibility status
+- `/api/content/` — page content with structured sections
+- `/config/pages` — page configuration and navigation structure
+
+**`__NEXT_DATA__` hydration:** Squarespace's admin uses Next.js. The `window.__NEXT_DATA__` object contains page props with structured content, descriptions, and metadata that aren't available through the public API.
+
+**Public `?format=json` API:** Squarespace exposes a no-auth JSON API by appending `?format=json` to any public URL. Returns collection metadata, item counts, tags, categories, and content. Useful as a fallback but lacks draft/unlisted pages and admin-only metadata.
+
+### How it works
+
+The extraction pipeline uses a three-tier fallback chain:
+1. **Admin API interception** — CDP captures JSON responses from admin navigation, filtered to only include data relevant to the target page (excludes `/api/context/`, `/api/billing/`, user profile data)
+2. **Admin `__NEXT_DATA__` hydration** — extracts structured page data from Next.js hydration state
+3. **Public DOM extraction** — falls back to parsing the published page's DOM via the accessibility tree
+
+Smart fallback heuristics trigger the public fallback when admin extraction produces <80 chars of content, <=1 section, or contains admin UI artifacts.
+
+### Why it's better than the previous approach
+
+The public `?format=json` API misses draft pages, unlisted content, and structured section data. Admin extraction via CDP captures everything the site owner can see, with the browser handling authentication automatically.
+
+---
+
 ## 2026-03-31 — Wix Dashboard API reverse engineering via CDP
 
 **Found by:** Claude + human contributor (live probing against Brave browser)
