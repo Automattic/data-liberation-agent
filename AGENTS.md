@@ -136,6 +136,83 @@ Generate a redirect map (old paths → new WP paths) for the user to configure i
 
 ---
 
+## If you're helping a user migrate from Shopify
+
+### Step 0 — Launch browser with remote debugging
+
+The Shopify extractor uses your logged-in admin session — no API keys needed. Help the user open Chrome with remote debugging:
+
+```bash
+# Linux / Windows (WSL)
+google-chrome --remote-debugging-port=9222
+# macOS
+/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --remote-debugging-port=9222
+```
+
+Then navigate to `https://{store}.myshopify.com/admin` and log in.
+
+### Step 1 — Inventory the store
+
+```bash
+node scripts/shopify/discover.js {store}.myshopify.com --cdp-port 9222
+```
+
+This connects to the logged-in browser via CDP, navigates to `/admin/products`, `/admin/pages`, and `/admin/blog_posts`, intercepts internal GraphQL responses from `/admin/internal/web/graphql/core`, and writes `output/inventory.json`. Review with the user before proceeding.
+
+If item counts are all zero, check `output/inventory.json → _rawCaptures` to inspect the actual response shapes captured. The `extractItems()` function may need field name adjustments — document findings in DISCOVERIES.md.
+
+### Step 2 — Extract all content
+
+```bash
+node scripts/shopify/extract.js {store}.myshopify.com \
+  --inventory output/inventory.json --cdp-port 9222
+```
+
+This navigates to each item's admin detail URL, captures the richer GraphQL detail response, normalizes it to the standard `output/pages/{slug}.json` format, and downloads media to `output/media/`. If items show sparse content, check `output/pages/{id}-raw.json` for the actual GraphQL node shape.
+
+### Step 3 — Import blog posts and pages to WordPress.com
+
+The user needs a WordPress.com Application Password from `https://wordpress.com/me/security/application-passwords`.
+
+```bash
+node scripts/import.js --site <wordpress-site> --username <wpcom-user> --token <app-password>
+```
+
+### Step 4 — Import products to WooCommerce
+
+The user needs WooCommerce Consumer Key + Secret from **WooCommerce → Settings → Advanced → REST API** (Read/Write permissions).
+
+```bash
+node scripts/shopify/import-products.js \
+  --site <wordpress-site> --username <wpcom-user> --token <app-password> \
+  --wc-key ck_xxxx --wc-secret cs_xxxx
+```
+
+This uploads product images to the WP media library, creates product categories from Shopify `productType`, then creates simple or variable WooCommerce products with all variants.
+
+### Step 5 — Verify
+
+After import:
+- All URLs in `output/inventory.json` should have a corresponding WordPress post/page/product
+- No content should still reference Shopify CDN image URLs
+- Generate redirect map for the user to configure at their domain
+
+---
+
+### Shopify platform barriers
+
+| Problem | Solution |
+|---------|----------|
+| No API keys / private app needed | CDP intercepts the admin dashboard's own GraphQL calls using browser session cookies |
+| Internal GraphQL schema undocumented | Navigate admin pages and capture whatever the dashboard sends; inspect `_rawCaptures` to confirm field names |
+| CSRF token | Not needed — `page.on('response')` captures responses passively; no request injection required |
+| Shopify CDN image URLs | Download immediately; don't store the URL alone |
+| Products have variants / options | Captured in GraphQL detail response; `import-products.js` creates variable products with variations |
+| Draft / unpublished content | Admin session has full access; the public Storefront API does not |
+| WooCommerce product import | Requires WC Consumer Key + Secret (separate from WP App Password); generate at WooCommerce → Settings → Advanced → REST API |
+
+---
+
 ## Using Claude in Chrome MCP
 
 If the user has the Chrome DevTools MCP set up (`npx chrome-devtools-mcp@latest`), you can drive extraction directly from the browser without running scripts:
