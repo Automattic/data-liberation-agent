@@ -19,7 +19,7 @@ This repo gives people a prompt they can paste into any AI assistant (Claude, Ch
 | **Wix** | Ready | [`prompts/wix.md`](./prompts/wix.md) |
 | **Squarespace** | Ready | [`prompts/squarespace.md`](./prompts/squarespace.md) |
 | Webflow | Planned | — |
-| Shopify (blog/pages) | Planned | — |
+| **Shopify** (blog/pages/products) | Ready | [`prompts/shopify.md`](./prompts/shopify.md) |
 
 ## Quick start (Wix)
 
@@ -56,6 +56,31 @@ node scripts/squarespace/import.js --site your-wp-site \
   --username your-user --token YOUR_APP_PASSWORD
 ```
 
+## Quick start (Shopify)
+
+```bash
+# 1. Install dependencies
+npm install
+
+# 2. Launch Chrome with remote debugging and log into your Shopify admin
+/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --remote-debugging-port=9222
+
+# 3. Inventory all products, pages, and blog posts (no API keys needed)
+node scripts/shopify/discover.js yourstore.myshopify.com --cdp-port 9222
+
+# 4. Extract all content (intercepts Shopify's internal GraphQL API)
+node scripts/shopify/extract.js yourstore.myshopify.com \
+  --inventory output/inventory.json --cdp-port 9222
+
+# 5a. Import blog posts and pages to WordPress.com
+node scripts/import.js --site your-wp-site --username your-user --token YOUR_APP_PASSWORD
+
+# 5b. Import products to WooCommerce (requires WC Consumer Key + Secret)
+node scripts/shopify/import-products.js \
+  --site your-wp-site --username your-user --token YOUR_APP_PASSWORD \
+  --wc-key ck_xxxx --wc-secret cs_xxxx
+```
+
 Or skip all of that and **paste the prompt into your AI assistant** — it will handle everything.
 
 ## For AI agents
@@ -84,6 +109,14 @@ This means the playbook gets smarter with every migration.
 - [x] WordPress.com XML-RPC import
 - [ ] Block conversion (`core/paragraph`, `core/image`, etc.)
 - [ ] Product/commerce migration
+
+### Shopify
+- [x] Admin extraction via Chrome DevTools Protocol (CDP) — no API keys
+- [x] Products, pages, blog posts
+- [x] Media download and URL rewriting
+- [x] WooCommerce product import (simple + variable products, variants, SKUs, stock, categories)
+- [ ] Metafields extraction
+- [ ] Block conversion (`core/paragraph`, `core/image`, etc.)
 
 ### General
 - [x] WordPress.com REST API import script
