@@ -52,15 +52,14 @@ Generate an Application Password at wordpress.com/me/security/application-passwo
 ## Step 5: Publish blog posts and pages
 
 ```bash
-node scripts/import.js --site [MY-SITE].wordpress.com \
+node scripts/shopify/import.js --site [MY-SITE].wordpress.com \
   --username [MY-USERNAME] --token [APP-PASSWORD]
 ```
 
-In this order:
-1. Upload all images to the WordPress media library
-2. Create all pages with correct slugs
-3. Create all blog posts with correct dates, categories, tags, and featured images
-4. Generate a redirect map (`output/redirect-map.json`)
+This:
+1. Uploads all images to the WordPress media library
+2. Creates all pages as drafts
+3. Creates all blog posts as drafts with correct dates and featured images
 
 ## Step 5b: Publish products to WooCommerce
 

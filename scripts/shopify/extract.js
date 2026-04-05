@@ -91,12 +91,13 @@ function extractImages(node) {
   const images = [];
   const add = (url) => { if (url && !images.includes(url)) images.push(url); };
 
-  // Product / blog featured image
+  // Product / blog featured image (blog posts use image.src, products use featuredImage.url)
   add(node.featuredImage?.url);
-  add(node.image?.url);
+  add(node.image?.url ?? node.image?.src);
 
-  // Product images connection
+  // Product images connection (public API uses images.edges; admin API uses media.nodes)
   for (const edge of node.images?.edges ?? []) add(edge?.node?.url ?? edge?.node?.src);
+  for (const m of node._mediaNodes ?? []) add(m.preview?.image?.url ?? m.originalSource?.url);
 
   // Inline images from HTML body
   const html = node.bodyHtml ?? node.body ?? node.descriptionHtml ?? '';
@@ -114,15 +115,38 @@ function normalizeContent(captures, item) {
   for (const { data } of captures) {
     const root = data?.data;
     if (!root || typeof root !== 'object') continue;
-    for (const key of Object.keys(root)) {
-      const node = root[key];
-      if (!node || typeof node !== 'object' || Array.isArray(node)) continue;
+
+    // Collect candidates: top-level values AND one level deeper
+    // This handles both top-level product nodes and nested onlineStore.page / onlineStore.article
+    const candidates = [];
+    for (const val of Object.values(root)) {
+      if (!val || typeof val !== 'object' || Array.isArray(val)) continue;
+      candidates.push(val);
+      for (const nested of Object.values(val)) {
+        if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
+          candidates.push(nested);
+        }
+      }
+    }
+
+    for (const node of candidates) {
       const score = scoreNode(node);
       if (score > bestScore) { bestScore = score; best = node; }
     }
   }
 
   if (!best) return null;
+
+  // Augment product nodes with data from dedicated operations that fire separately:
+  // ProductMedia → media.nodes (image CDN URLs)
+  // AdminProductDetailsVariants → variants.nodes (price, sku, selectedOptions)
+  for (const { data } of captures) {
+    const root = data?.data;
+    if (!root?.product) continue;
+    const p = root.product;
+    if (p.media?.nodes?.length)    best._mediaNodes   = p.media.nodes;
+    if (p.variants?.nodes?.length) best._variantNodes = p.variants.nodes;
+  }
 
   const content = best.bodyHtml ?? best.body ?? best.descriptionHtml ?? '';
   return {

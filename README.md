@@ -73,7 +73,7 @@ node scripts/shopify/extract.js yourstore.myshopify.com \
   --inventory output/inventory.json --cdp-port 9222
 
 # 5a. Import blog posts and pages to WordPress.com
-node scripts/import.js --site your-wp-site --username your-user --token YOUR_APP_PASSWORD
+node scripts/shopify/import.js --site your-wp-site --username your-user --token YOUR_APP_PASSWORD
 
 # 5b. Import products to WooCommerce (requires WC Consumer Key + Secret)
 node scripts/shopify/import-products.js \

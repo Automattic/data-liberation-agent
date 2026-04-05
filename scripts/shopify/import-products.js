@@ -11,7 +11,7 @@
 //
 // WooCommerce credentials: WooCommerce → Settings → Advanced → REST API (Read/Write)
 
-import { readdirSync, readFileSync } from 'fs';
+import { readdirSync, readFileSync, existsSync } from 'fs';
 import { parseArgs } from 'util';
 import { basename } from 'path';
 
@@ -45,6 +45,15 @@ const siteBase = site.startsWith('http') ? site : `https://${site}`;
 const wpAuth   = 'Basic ' + Buffer.from(`${username}:${token}`).toString('base64');
 const wcAuth   = 'Basic ' + Buffer.from(`${wcKey}:${wcSecret}`).toString('base64');
 
+// Build CDN URL → local file path map from extraction log
+const cdnToLocal = {};
+if (existsSync('output/extraction-log.json')) {
+  const log = JSON.parse(readFileSync('output/extraction-log.json', 'utf8'));
+  for (const entry of log) {
+    if (entry.original && entry.local) cdnToLocal[entry.original] = entry.local;
+  }
+}
+
 async function wcPost(path, body) {
   const res = await fetch(`${siteBase}${path}`, {
     method:  'POST',
@@ -59,17 +68,46 @@ async function wcPost(path, body) {
   return res.json();
 }
 
-async function uploadImage(localPath) {
+async function findOrUploadImage(cdnUrl) {
   try {
-    const fileData = readFileSync(localPath);
-    const filename = basename(localPath);
-    const ext  = localPath.split('.').pop().toLowerCase();
+    // Resolve CDN URL to local file (downloaded during extraction), or fetch directly
+    const localPath = cdnToLocal[cdnUrl];
+    let fileData, filename;
+
+    if (localPath && existsSync(localPath)) {
+      fileData = readFileSync(localPath);
+      filename = basename(localPath);
+    } else {
+      // Not cached locally — download from CDN now
+      const fetchRes = await fetch(cdnUrl, { signal: AbortSignal.timeout(30000) });
+      if (!fetchRes.ok) return null;
+      const buf = await fetchRes.arrayBuffer();
+      fileData = Buffer.from(buf);
+      filename = basename(new URL(cdnUrl).pathname).split('?')[0] || 'image.jpg';
+    }
+
+    // Check if this file was already uploaded to WordPress (e.g. by import.js)
+    // Search by slug, which WP derives from the filename without extension
+    const slug = filename.replace(/\.[^.]+$/, '');
+    const searchRes = await fetch(
+      `${siteBase}/wp-json/wp/v2/media?slug=${encodeURIComponent(slug)}&per_page=1`,
+      { headers: { Authorization: wpAuth }, signal: AbortSignal.timeout(15000) }
+    );
+    if (searchRes.ok) {
+      const existing = await searchRes.json();
+      if (existing[0]?.id) {
+        return { id: existing[0].id, url: existing[0].source_url };
+      }
+    }
+
+    // Not found — upload fresh
+    const ext  = filename.split('.').pop().toLowerCase();
     const mime = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp' }[ext] ?? 'image/jpeg';
 
     const res = await fetch(`${siteBase}/wp-json/wp/v2/media`, {
       method:  'POST',
       headers: {
-        Authorization:        wpAuth,
+        Authorization:         wpAuth,
         'Content-Disposition': `attachment; filename="${filename}"`,
         'Content-Type':        mime,
       },
@@ -114,12 +152,9 @@ function mapStatus(shopifyStatus) {
 }
 
 function isVariable(raw) {
-  return (
-    Array.isArray(raw?.options) &&
-    raw.options.length > 0 &&
-    Array.isArray(raw?.variants?.edges) &&
-    raw.variants.edges.length > 1
-  );
+  // Admin API stores variants under _variantNodes (nodes) not variants.edges
+  const variantCount = raw?._variantNodes?.length ?? raw?.variants?.edges?.length ?? 0;
+  return Array.isArray(raw?.options) && raw.options.length > 0 && variantCount > 1;
 }
 
 function buildAttributes(raw) {
@@ -127,11 +162,17 @@ function buildAttributes(raw) {
     name:      opt.name,
     visible:   true,
     variation: true,
-    options:   opt.values ?? [],
+    // Admin API may use optionValues[].name instead of values[]
+    options:   opt.values ?? (opt.optionValues ?? []).map(v => v.name),
   }));
 }
 
-function buildVariation(variantNode) {
+function buildVariation(variantNode, productOptions) {
+  // Admin API nests selected option value under optionValue.name; correlate with product options by position
+  const attributes = (variantNode.selectedOptions ?? []).map((o, i) => ({
+    attribute: productOptions?.[i]?.name ?? `option${i + 1}`,
+    option:    o.optionValue?.name ?? o.value ?? o.name ?? '',
+  }));
   return {
     regular_price:  variantNode.price          ?? '0',
     sale_price:     variantNode.compareAtPrice ?? '',
@@ -139,21 +180,19 @@ function buildVariation(variantNode) {
     stock_quantity: variantNode.inventoryQuantity ?? null,
     manage_stock:   variantNode.inventoryQuantity != null,
     status:         'publish',
-    attributes: (variantNode.selectedOptions ?? []).map(o => ({
-      attribute: o.name,
-      option:    o.value,
-    })),
+    attributes,
   };
 }
 
 async function importProduct(item, categoryCache) {
   const raw = item._raw ?? {};
 
-  // Upload images to WP media library
+  // Upload images to WP media library (item.images contains original Shopify CDN URLs)
   const wcImages = [];
-  for (const localPath of item.images ?? []) {
-    const uploaded = await uploadImage(localPath);
-    if (uploaded) wcImages.push({ id: uploaded.id, src: uploaded.url });
+  for (const cdnUrl of item.images ?? []) {
+    const uploaded = await findOrUploadImage(cdnUrl);
+    if (uploaded) wcImages.push({ id: uploaded.id });
+    else console.warn(`    ⚠ Could not upload image: ${cdnUrl.slice(0, 80)}`);
   }
 
   // Resolve product type category
@@ -165,7 +204,8 @@ async function importProduct(item, categoryCache) {
 
   const tags     = (raw.tags ?? []).map(t => ({ name: t }));
   const variable = isVariable(raw);
-  const variants = (raw.variants?.edges ?? []).map(e => e?.node ?? e);
+  // Admin API stores variants under _variantNodes; fall back to variants.edges for compatibility
+  const variants = raw._variantNodes ?? (raw.variants?.edges ?? []).map(e => e?.node ?? e);
   const first    = variants[0] ?? {};
 
   const productBody = {
@@ -190,7 +230,7 @@ async function importProduct(item, categoryCache) {
 
   if (variable) {
     for (const variantNode of variants) {
-      await wcPost(`/wp-json/wc/v3/products/${created.id}/variations`, buildVariation(variantNode));
+      await wcPost(`/wp-json/wc/v3/products/${created.id}/variations`, buildVariation(variantNode, raw.options));
     }
     console.log(`    + ${variants.length} variation(s)`);
   }

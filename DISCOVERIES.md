@@ -26,15 +26,35 @@ The operation name is both in the URL path and as an `operationName` query param
 
 **Confirmed operations and data paths from live testing:**
 
-| Admin URL | Operation | Response path to edges |
-|-----------|-----------|----------------------|
+#### Inventory (list views)
+
+| Admin URL | Operation | Response path |
+|-----------|-----------|---------------|
 | `/admin/products` | `ProductIndex` | `data.filteredProducts.edges` |
 | `/admin/pages` | `PageList` | `data.onlineStore.pages.edges` |
 | `/admin/articles` | `ArticleList` | `data.onlineStore.articles.edges` |
 
 > **Note:** Blog posts use `/admin/articles` (not `/admin/blogs` or `/admin/blog_posts`). `/admin/blogs` fires `BlogList` which returns blog containers (e.g. "News"), not individual articles.
 
-> **Note:** `ProductIndex` response does NOT have a top-level `products` field — products are under `filteredProducts`. Other top-level keys (`atLeastOneProduct`, `shop`, `onlineStore`, `markets`, etc.) are metadata and should be ignored.
+> **Note:** `ProductIndex` response does NOT have a top-level `products` field — products are under `filteredProducts`.
+
+#### Detail views (per-item extraction)
+
+Navigating to an individual item's admin URL fires multiple operations. The useful ones:
+
+| Item type | Operation | Key data |
+|-----------|-----------|----------|
+| Product | `AdminProductDetails` | `data.product` — `title`, `handle`, `descriptionHtml`, `seo`, `options`, `status` |
+| Product | `ProductMedia` | `data.product.media.nodes[]` — image URLs at `.preview.image.url` |
+| Product | `AdminProductDetailsVariants` | `data.product.variants.nodes[]` — `price`, `sku`, `inventoryQuantity`, `selectedOptions` |
+| Page | `PageDetails` | `data.onlineStore.page` — `title`, `body`, `handle`, `seo`, `isPublished` |
+| Blog post | `ArticleDetails` | `data.onlineStore.article` — `title`, `body`, `handle`, `seo`, `image`, `tags`, `author`, `summary` |
+
+**Important:** Product detail operations use **`nodes`** not `edges` for connections (variants, media). This is different from the list-view operations which use `edges`.
+
+**Blog post images** are at `article.image.src` (not `.url`). The `image` field is `null` when no featured image is set.
+
+**Product `selectedOptions`** nest the value under `optionValue.name` rather than a direct `name`/`value` — e.g. `selectedOptions[i].optionValue.name`. Correlate with `product.options[i].name` by position to get the attribute name.
 
 **Shell/nav operations to ignore:** `Frame`, `RequestDetails`, `Betas`, `CriticalAppData`, `CoreExperiment`, `AdminNotifications`, `NavHeader`, `AppInstallationsContextProvider`
 

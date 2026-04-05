@@ -157,7 +157,7 @@ Then navigate to `https://{store}.myshopify.com/admin` and log in.
 node scripts/shopify/discover.js {store}.myshopify.com --cdp-port 9222
 ```
 
-This connects to the logged-in browser via CDP, navigates to `/admin/products`, `/admin/pages`, and `/admin/blog_posts`, intercepts internal GraphQL responses from `/admin/internal/web/graphql/core`, and writes `output/inventory.json`. Review with the user before proceeding.
+This connects to the logged-in browser via CDP, navigates to `/admin/products`, `/admin/pages`, and `/admin/articles`, intercepts internal GraphQL responses from `admin.shopify.com/api/operations/`, and writes `output/inventory.json`. Review with the user before proceeding.
 
 If item counts are all zero, check `output/inventory.json → _rawCaptures` to inspect the actual response shapes captured. The `extractItems()` function may need field name adjustments — document findings in DISCOVERIES.md.
 
@@ -175,7 +175,7 @@ This navigates to each item's admin detail URL, captures the richer GraphQL deta
 The user needs a WordPress.com Application Password from `https://wordpress.com/me/security/application-passwords`.
 
 ```bash
-node scripts/import.js --site <wordpress-site> --username <wpcom-user> --token <app-password>
+node scripts/shopify/import.js --site <wordpress-site> --username <wpcom-user> --token <app-password>
 ```
 
 ### Step 4 — Import products to WooCommerce
