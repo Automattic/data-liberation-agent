@@ -30,7 +30,7 @@ function sleep(ms) {
   return new Promise(r => setTimeout(r, ms));
 }
 
-async function interceptSection(page, url, label) {
+async function interceptSection(page, url, label, operationName) {
   const captured = [];
 
   const handler = async (response) => {
@@ -39,6 +39,8 @@ async function interceptSection(page, url, label) {
     if (!ct.includes('application/json')) return;
     if (debug) console.log(`  [debug] JSON response: ${respUrl}`);
     if (!respUrl.includes('admin.shopify.com/api/operations/')) return;
+    // Only capture the specific operation we care about for this section
+    if (operationName && !respUrl.includes(`/${operationName}/`)) return;
     try {
       const data = await response.json();
       if (data?.data) captured.push({ url: respUrl, data });
@@ -59,42 +61,49 @@ async function interceptSection(page, url, label) {
   return captured;
 }
 
-function extractItems(captures, type) {
-  const seen  = new Set();
-  const items = [];
+// Known data paths per operation name — confirmed via live testing
+const OPERATION_EDGES = {
+  ProductIndex: (data) => data?.filteredProducts?.edges,
+  PageList:     (data) => data?.onlineStore?.pages?.edges,
+  ArticleList:  (data) => data?.onlineStore?.articles?.edges,
+};
 
-  for (const { data } of captures) {
+function extractItems(captures, type, operationName) {
+  const seen     = new Set();
+  const items    = [];
+  const getEdges = OPERATION_EDGES[operationName];
+
+  for (const { data, url } of captures) {
     const root = data?.data;
-    if (!root || typeof root !== 'object') continue;
-
-    // Walk all top-level fields — Shopify uses various keys (products, productList, etc.)
-    for (const key of Object.keys(root)) {
-      const field = root[key];
-      if (!field || typeof field !== 'object') continue;
-
-      // Handle both edges/nodes (GraphQL connections) and plain arrays
-      const edges =
-        field?.edges ??
-        (Array.isArray(field) ? field.map(n => ({ node: n })) : null);
-
-      if (!Array.isArray(edges)) continue;
-
-      for (const edge of edges) {
-        const node = edge?.node ?? edge;
-        if (!node?.id || seen.has(node.id)) continue;
-        seen.add(node.id);
-
-        const numericId = node.id.toString().split('/').pop();
-        items.push({
-          id:          node.id,
-          type,
-          title:       node.title ?? node.name ?? '(untitled)',
-          handle:      node.handle ?? null,
-          adminUrl:    buildAdminUrl(type, numericId),
-          publishedAt: node.publishedAt ?? node.createdAt ?? null,
-          status:      node.status ?? null,
-        });
+    if (!root) continue;
+    // If we have a known path, use it. Otherwise try to match by operationName in URL.
+    let edges = getEdges ? getEdges(root) : null;
+    if (!edges && !operationName) {
+      // Unknown operation — try all top-level connection fields
+      for (const val of Object.values(root)) {
+        if (val?.edges && Array.isArray(val.edges) && val.edges[0]?.node?.id) {
+          edges = val.edges;
+          break;
+        }
       }
+    }
+    if (!Array.isArray(edges)) continue;
+
+    for (const edge of edges) {
+      const node = edge?.node ?? edge;
+      if (!node?.id || seen.has(node.id)) continue;
+      seen.add(node.id);
+
+      const numericId = node.id.toString().split('/').pop();
+      items.push({
+        id:          node.id,
+        type,
+        title:       node.title ?? node.name ?? '(untitled)',
+        handle:      node.handle ?? null,
+        adminUrl:    buildAdminUrl(type, numericId),
+        publishedAt: node.publishedAt ?? node.createdAt ?? null,
+        status:      node.status ?? null,
+      });
     }
   }
 
@@ -105,7 +114,7 @@ function buildAdminUrl(type, numericId) {
   const paths = {
     product:   `${adminBase}/products/${numericId}`,
     page:      `${adminBase}/pages/${numericId}`,
-    blog_post: `${adminBase}/blog_posts/${numericId}`,
+    blog_post: `${adminBase}/articles/${numericId}`,
   };
   return paths[type] ?? `${adminBase}/${type}s/${numericId}`;
 }
@@ -118,15 +127,15 @@ async function main() {
 
   console.log(`Inventorying ${adminBase}...`);
 
-  const productCaptures = await interceptSection(page, `${adminBase}/products`,   'products');
-  const pageCaptures    = await interceptSection(page, `${adminBase}/pages`,       'pages');
-  const blogCaptures    = await interceptSection(page, `${adminBase}/blogs`,  'blog posts');
+  const productCaptures = await interceptSection(page, `${adminBase}/products`, 'products',   'ProductIndex');
+  const pageCaptures    = await interceptSection(page, `${adminBase}/pages`,    'pages',      'PageList');
+  const blogCaptures    = await interceptSection(page, `${adminBase}/articles`, 'blog posts', 'ArticleList');
 
   await browser.close();
 
-  const products  = extractItems(productCaptures, 'product');
-  const pages     = extractItems(pageCaptures,    'page');
-  const blogPosts = extractItems(blogCaptures,    'blog_post');
+  const products  = extractItems(productCaptures, 'product',   'ProductIndex');
+  const pages     = extractItems(pageCaptures,    'page',      'PageList');
+  const blogPosts = extractItems(blogCaptures,    'blog_post', 'ArticleList');
 
   const inventory = {
     source:       storeDomain,
