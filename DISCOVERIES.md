@@ -24,19 +24,19 @@ The operation name is both in the URL path and as an `operationName` query param
 
 > **Note:** Older research (HackerOne reports pre-2024) referenced `{store}.myshopify.com/admin/internal/web/graphql/core` — this endpoint no longer applies. Shopify migrated to `admin.shopify.com` and the new endpoint pattern above is what fires in practice.
 
-**Key operations observed during live testing:**
-- `ProductIndex` — product listing (fires on `/admin/products`)
-- `PageList` — page listing (fires on `/admin/pages`)
-- `Frame`, `RequestDetails`, `CriticalAppData` — shell/nav (ignore these)
+**Confirmed operations and data paths from live testing:**
 
-**Admin URLs that trigger content GraphQL calls:**
-- `{store}.myshopify.com/admin/products` → redirects to `admin.shopify.com`, fires `ProductIndex`
-- `{store}.myshopify.com/admin/pages` → fires `PageList`
-- `{store}.myshopify.com/admin/blogs` → fires blog listing operation
-- `{store}.myshopify.com/admin/products/{id}` → fires product detail operation
-- `{store}.myshopify.com/admin/pages/{id}` → fires page detail operation
+| Admin URL | Operation | Response path to edges |
+|-----------|-----------|----------------------|
+| `/admin/products` | `ProductIndex` | `data.filteredProducts.edges` |
+| `/admin/pages` | `PageList` | `data.onlineStore.pages.edges` |
+| `/admin/articles` | `ArticleList` | `data.onlineStore.articles.edges` |
 
-> **Note:** Blog posts are under `/admin/blogs` not `/admin/blog_posts`.
+> **Note:** Blog posts use `/admin/articles` (not `/admin/blogs` or `/admin/blog_posts`). `/admin/blogs` fires `BlogList` which returns blog containers (e.g. "News"), not individual articles.
+
+> **Note:** `ProductIndex` response does NOT have a top-level `products` field — products are under `filteredProducts`. Other top-level keys (`atLeastOneProduct`, `shop`, `onlineStore`, `markets`, etc.) are metadata and should be ignored.
+
+**Shell/nav operations to ignore:** `Frame`, `RequestDetails`, `Betas`, `CriticalAppData`, `CoreExperiment`, `AdminNotifications`, `NavHeader`, `AppInstallationsContextProvider`
 
 ### How it works
 
