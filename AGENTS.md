@@ -11,7 +11,7 @@ This file is the entry point for any AI agent using this repository. Read it bef
 3. **User prompts** — non-technical users paste these into their AI to drive the whole migration
 4. **A living playbook** — this repo improves itself through AI-contributed discoveries
 
-Currently supports: **Wix** and **Squarespace**. Webflow and Shopify are planned.
+Currently supports: **Wix**, **Squarespace**, and **Instagram**. Webflow and Shopify are planned.
 
 ## If you're helping a user migrate from Wix
 
@@ -136,6 +136,47 @@ Generate a redirect map (old paths → new WP paths) for the user to configure i
 
 ---
 
+## If you're helping a user migrate from Instagram
+
+Instagram requires an authenticated browser session — there's no public API or sitemap to crawl.
+
+### Step 1 — Launch browser with CDP
+
+```bash
+pkill -9 -f "Google Chrome"
+sleep 3
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+  --remote-debugging-port=9222 \
+  --user-data-dir="$HOME/.data-liberation/cdp-profile/chrome" \
+  --restore-last-session
+```
+
+### Step 2 — Discover all posts
+
+```bash
+node scripts/instagram/discover.js USERNAME --cdp-port 9222
+```
+
+Scrolls the profile and intercepts GraphQL responses to build a complete post inventory. Use `--delay 3000` for large profiles.
+
+### Step 3 — Extract content and media
+
+```bash
+node scripts/instagram/extract.js USERNAME --cdp-port 9222
+```
+
+For each post, navigates to the individual post URL, captures metadata, and downloads full-resolution images. For carousel posts, uses `?img_index=N` to access each slide directly.
+
+### Step 4 — Import to WordPress.com
+
+```bash
+node scripts/instagram/import.js --site <wordpress-site> --user <wpcom-user> --token <app-password>
+```
+
+Creates published posts with correct dates, featured images, gallery blocks for carousels, and source links back to Instagram.
+
+---
+
 ## Using Claude in Chrome MCP
 
 If the user has the Chrome DevTools MCP set up (`npx chrome-devtools-mcp@latest`), you can drive extraction directly from the browser without running scripts:
@@ -183,6 +224,17 @@ This approach works for any JavaScript-heavy platform, not just Wix.
 | Admin UI noise in extracted content | Smart fallback heuristics filter admin shell text, sidebar artifacts |
 | Products/commerce | Extract metadata but skip import (WooCommerce out of scope) |
 
+### Instagram
+
+| Problem | Solution |
+|---|---|
+| No public API or data export | Intercept GraphQL responses via CDP browser session |
+| Authentication required | Connect to user's logged-in browser via `--cdp-port` |
+| Carousel slides lazy-load | Use `?img_index=N` URL parameter to load each slide directly |
+| CDN image URLs expire | Download media immediately during extraction |
+| Rate limiting on scroll | Add `--delay 3000` for profiles with 200+ posts |
+| Two API response formats | Handle both `edge_owner_to_timeline_media` and `xdt_api__v1__feed` shapes |
+
 ---
 
 ## How to contribute improvements back
@@ -224,7 +276,8 @@ data-liberation-agent/
 ├── package.json
 ├── prompts/
 │   ├── wix.md             ← what users paste into their AI for a Wix migration
-│   └── squarespace.md     ← what users paste into their AI for a Squarespace migration
+│   ├── squarespace.md     ← what users paste into their AI for a Squarespace migration
+│   └── instagram.md       ← what users paste into their AI for an Instagram migration
 ├── scripts/
 │   ├── wix/
 │   │   ├── discover.js    ← inventory the Wix site (sitemap + categorization)
@@ -232,7 +285,11 @@ data-liberation-agent/
 │   ├── squarespace/
 │   │   ├── discover.js    ← inventory via admin CDP or public JSON API
 │   │   ├── extract.js     ← extract content via admin API interception + DOM fallback
-│   │   └── import.js      ← publish to WordPress.com via REST API
+│   │   └── import.js      ← publish to WordPress.com via XML-RPC
+│   ├── instagram/
+│   │   ├── discover.js    ← inventory an Instagram profile via GraphQL interception
+│   │   ├── extract.js     ← extract posts, carousel slides, and media
+│   │   └── import.js      ← publish to WordPress.com via XML-RPC
 │   └── import.js          ← publish to WordPress.com via REST API (Wix)
 ├── examples/
 │   ├── wix-api-blog-post.json    ← example of Wix internal API response
@@ -256,6 +313,12 @@ data-liberation-agent/
 - **Admin extraction requires CDP**: User must launch Chrome with `--remote-debugging-port` and log in to Squarespace.
 - **Password-protected pages**: Admin extraction may fail without credentials.
 - **Content is HTML, not blocks**: Imported as custom HTML. Block conversion is planned but not yet implemented.
+
+### Instagram
+- **Stories and Reels**: Not yet supported — different GraphQL queries and video handling required.
+- **Comments**: Post comment text is not extracted (only comment counts).
+- **Private profiles**: Only works for the user's own profile or profiles they follow.
+- **Very large profiles (1000+ posts)**: May hit rate limiting. Use `--delay 4000` or higher.
 
 ### General
 - Import creates everything as **drafts** — the user must review and publish manually.

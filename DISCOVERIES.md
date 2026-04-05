@@ -6,6 +6,34 @@ AI agents: when you contribute an improvement, add an entry here. See [CONTRIBUT
 
 ---
 
+## 2026-04-03 — Instagram data extraction via CDP and GraphQL interception
+
+**Found by:** Claude + human contributor (live testing against a real 308-post Instagram profile)
+**During:** Building Instagram support for the data-liberation-agent
+**Type:** API endpoint | content type | architecture
+
+### What I found
+
+Instagram is a React app that communicates via GraphQL queries to `https://www.instagram.com/graphql/query/`. By connecting to an authenticated browser via CDP and intercepting responses during profile scroll, we capture structured JSON for every post. Key discoveries:
+
+1. **Carousel slide direct access via `?img_index=N`**: Individual carousel slides can be loaded by appending `?img_index=1`, `?img_index=2`, etc. to the post URL. This is significantly more reliable than clicking through carousel arrows in the DOM.
+
+2. **Carousel DOM has 3 `<li>` elements**: Instagram keeps previous, current, and next slides in the DOM simultaneously. Deduplication by Instagram media ID (the numeric prefix in CDN URLs like `/12345_67890.jpg`) is required to avoid capturing the same image from adjacent preloaded slides.
+
+3. **Scroll-based pagination is more reliable than direct GraphQL**: Making direct `fetch()` calls to the GraphQL endpoint triggers rate limiting. Scrolling the profile with 2-3 second delays lets Instagram's own IntersectionObserver trigger pagination naturally.
+
+4. **WordPress.com REST API doesn't support writes with app passwords**: Returns 401 for POST operations. XML-RPC (`wp.uploadFile`, `wp.newPost`) works correctly. The `post_date` must be sent as a `<string>` in `"YYYY-MM-DD HH:MM:SS"` format — WordPress ignores `<dateTime.iso8601>` typed values.
+
+### How it works
+
+Three-step pipeline: discover (scroll + intercept GraphQL) → extract (visit each post, use `?img_index=N` for carousels, download media) → import (XML-RPC `wp.uploadFile` for media, `wp.newPost` with `post_thumbnail` for featured images and gallery blocks for carousels).
+
+### Why it's better than the previous approach
+
+Instagram's built-in data export takes days, provides lower-resolution images, and has no location data. The CDP approach captures everything in real-time at full resolution with complete metadata.
+
+---
+
 ## 2026-04-02 — Squarespace admin extraction via CDP
 
 **Found by:** Claude + human contributor (live testing against a Squarespace site)

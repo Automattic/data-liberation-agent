@@ -18,6 +18,7 @@ This repo gives people a prompt they can paste into any AI assistant (Claude, Ch
 |---|---|---|
 | **Wix** | Ready | [`prompts/wix.md`](./prompts/wix.md) |
 | **Squarespace** | Ready | [`prompts/squarespace.md`](./prompts/squarespace.md) |
+| **Instagram** | Ready | [`prompts/instagram.md`](./prompts/instagram.md) |
 | Webflow | Planned | — |
 | Shopify (blog/pages) | Planned | — |
 
@@ -56,6 +57,26 @@ node scripts/squarespace/import.js --site your-wp-site \
   --username your-user --token YOUR_APP_PASSWORD
 ```
 
+## Quick start (Instagram)
+
+```bash
+# 1. Install dependencies
+npm install
+
+# 2. Launch Chrome with remote debugging (Instagram requires an authenticated session)
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+  --remote-debugging-port=9222 --user-data-dir="$HOME/.data-liberation/cdp-profile/chrome"
+
+# 3. Log into Instagram in the browser, then discover all posts
+node scripts/instagram/discover.js YOUR_USERNAME --cdp-port 9222
+
+# 4. Extract content and download all media
+node scripts/instagram/extract.js YOUR_USERNAME --cdp-port 9222
+
+# 5. Import to WordPress.com
+node scripts/instagram/import.js --site your-wp-site --user your-user --token YOUR_APP_PASSWORD
+```
+
 Or skip all of that and **paste the prompt into your AI assistant** — it will handle everything.
 
 ## For AI agents
@@ -84,6 +105,16 @@ This means the playbook gets smarter with every migration.
 - [x] WordPress.com XML-RPC import
 - [ ] Block conversion (`core/paragraph`, `core/image`, etc.)
 - [ ] Product/commerce migration
+
+### Instagram
+- [x] Profile discovery via GraphQL interception
+- [x] Post extraction with full metadata (captions, dates, locations, hashtags)
+- [x] Carousel slide extraction via `?img_index=N`
+- [x] Gallery block output for carousel posts
+- [x] Media download (photos and videos)
+- [x] WordPress.com XML-RPC import with featured images
+- [ ] Stories and Reels extraction
+- [ ] Comment extraction
 
 ### General
 - [x] WordPress.com REST API import script
