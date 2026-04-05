@@ -6,6 +6,54 @@ AI agents: when you contribute an improvement, add an entry here. See [CONTRIBUT
 
 ---
 
+## 2026-04-05 — Shopify admin internal GraphQL API via CDP
+
+**Found by:** Claude + human contributor (HackerOne corpus analysis + architecture research)
+**During:** Planning Shopify extraction pipeline
+**Type:** API endpoint | architecture
+
+### What I found
+
+The Shopify admin dashboard does NOT use the public Admin API (`/admin/api/{version}/graphql.json`) for its own browser requests. Instead it uses an undocumented internal GraphQL endpoint:
+
+```
+POST https://{store}.myshopify.com/admin/internal/web/graphql/core?operation=<OperationName>
+```
+
+The operation name appears as a query parameter (e.g. `?operation=ProductsList`, `?operation=PageStaff`). This endpoint is authenticated via session cookies — no API key or OAuth token required.
+
+**Auth cookies** (extracted from the user's logged-in browser session via CDP):
+- `_secure_admin_session_id` — main admin session (12 weeks)
+- `_identity_session` — identity auth (2 years)
+- `_secure_admin_session_id_csrf` — CSRF token (paired with session)
+
+GraphQL introspection is enabled on this endpoint (confirmed HackerOne #2886723, marked "intended behavior"), meaning you can enumerate the full schema once connected with a valid session.
+
+**Admin URLs that trigger content GraphQL calls:**
+- `/admin/products` — product listing
+- `/admin/pages` — page listing
+- `/admin/blog_posts` — blog post listing
+- `/admin/products/{id}` — product detail
+- `/admin/pages/{id}` — page detail
+- `/admin/blog_posts/{id}` — blog post detail
+
+### How it works
+
+Connect to the user's logged-in Chrome via `chromium.connectOverCDP()`. Use `page.on('response', handler)` to intercept all JSON responses from URLs containing `/admin/internal/web/graphql/core`. Navigate to each admin section — the dashboard's own React app triggers the GraphQL calls automatically. No manual query construction needed for discovery.
+
+For extraction, navigate to each item's admin detail page. The detail view fires a richer GraphQL query that includes `bodyHtml`, `seo`, `images`, and variant data.
+
+### Why it's better than the API key approach
+
+Most Shopify migration tools (including the WooCommerce plugin) require creating a private app, configuring OAuth scopes, and managing tokens. The CDP approach:
+- Zero setup — user just logs into their normal browser
+- No Shopify developer account or private app required
+- Draft and unpublished content is accessible (unlike the public Storefront API)
+- Session cookies valid for weeks — no token refresh logic needed
+- User-agent matches the real browser, avoiding bot detection
+
+---
+
 ## 2026-04-02 — Squarespace admin extraction via CDP
 
 **Found by:** Claude + human contributor (live testing against a Squarespace site)
