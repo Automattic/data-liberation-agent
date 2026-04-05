@@ -55,7 +55,7 @@ async function extractItemCaptures(page, adminUrl) {
     const respUrl = response.url();
     const ct = response.headers()['content-type'] || '';
     if (!ct.includes('application/json')) return;
-    if (!respUrl.includes('/admin/internal/web/graphql/core')) return;
+    if (!respUrl.includes('admin.shopify.com/api/operations/')) return;
     try {
       const data = await response.json();
       if (data?.data) captured.push({ url: respUrl, data });

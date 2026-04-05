@@ -12,6 +12,7 @@ const { positionals, values } = parseArgs({
   allowPositionals: true,
   options: {
     'cdp-port': { type: 'string', default: '9222' },
+    'debug':    { type: 'boolean', default: false },
   },
 });
 
@@ -21,7 +22,8 @@ if (!storeDomain) {
   process.exit(1);
 }
 
-const cdpPort  = values['cdp-port'];
+const cdpPort   = values['cdp-port'];
+const debug     = values['debug'];
 const adminBase = `https://${storeDomain}/admin`;
 
 function sleep(ms) {
@@ -35,7 +37,8 @@ async function interceptSection(page, url, label) {
     const respUrl = response.url();
     const ct = response.headers()['content-type'] || '';
     if (!ct.includes('application/json')) return;
-    if (!respUrl.includes('/admin/internal/web/graphql/core')) return;
+    if (debug) console.log(`  [debug] JSON response: ${respUrl}`);
+    if (!respUrl.includes('admin.shopify.com/api/operations/')) return;
     try {
       const data = await response.json();
       if (data?.data) captured.push({ url: respUrl, data });
@@ -117,7 +120,7 @@ async function main() {
 
   const productCaptures = await interceptSection(page, `${adminBase}/products`,   'products');
   const pageCaptures    = await interceptSection(page, `${adminBase}/pages`,       'pages');
-  const blogCaptures    = await interceptSection(page, `${adminBase}/blog_posts`,  'blog posts');
+  const blogCaptures    = await interceptSection(page, `${adminBase}/blogs`,  'blog posts');
 
   await browser.close();
 

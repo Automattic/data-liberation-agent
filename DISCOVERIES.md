@@ -14,34 +14,33 @@ AI agents: when you contribute an improvement, add an entry here. See [CONTRIBUT
 
 ### What I found
 
-The Shopify admin dashboard does NOT use the public Admin API (`/admin/api/{version}/graphql.json`) for its own browser requests. Instead it uses an undocumented internal GraphQL endpoint:
+The Shopify admin dashboard does NOT use the public Admin API (`/admin/api/{version}/graphql.json`) for its own browser requests. Shopify has migrated their admin to `admin.shopify.com` and the actual internal GraphQL endpoint pattern is:
 
 ```
-POST https://{store}.myshopify.com/admin/internal/web/graphql/core?operation=<OperationName>
+https://admin.shopify.com/api/operations/{hash}/{OperationName}/shopify/{shopAlias}
 ```
 
-The operation name appears as a query parameter (e.g. `?operation=ProductsList`, `?operation=PageStaff`). This endpoint is authenticated via session cookies — no API key or OAuth token required.
+The operation name is both in the URL path and as an `operationName` query parameter. The `shopAlias` is a short internal identifier (e.g. `pz4bf6-qe`), not the `.myshopify.com` subdomain. This endpoint is authenticated via session cookies — no API key or OAuth token required.
 
-**Auth cookies** (extracted from the user's logged-in browser session via CDP):
-- `_secure_admin_session_id` — main admin session (12 weeks)
-- `_identity_session` — identity auth (2 years)
-- `_secure_admin_session_id_csrf` — CSRF token (paired with session)
+> **Note:** Older research (HackerOne reports pre-2024) referenced `{store}.myshopify.com/admin/internal/web/graphql/core` — this endpoint no longer applies. Shopify migrated to `admin.shopify.com` and the new endpoint pattern above is what fires in practice.
 
-GraphQL introspection is enabled on this endpoint (confirmed HackerOne #2886723, marked "intended behavior"), meaning you can enumerate the full schema once connected with a valid session.
+**Key operations observed during live testing:**
+- `ProductIndex` — product listing (fires on `/admin/products`)
+- `PageList` — page listing (fires on `/admin/pages`)
+- `Frame`, `RequestDetails`, `CriticalAppData` — shell/nav (ignore these)
 
 **Admin URLs that trigger content GraphQL calls:**
-- `/admin/products` — product listing
-- `/admin/pages` — page listing
-- `/admin/blog_posts` — blog post listing
-- `/admin/products/{id}` — product detail
-- `/admin/pages/{id}` — page detail
-- `/admin/blog_posts/{id}` — blog post detail
+- `{store}.myshopify.com/admin/products` → redirects to `admin.shopify.com`, fires `ProductIndex`
+- `{store}.myshopify.com/admin/pages` → fires `PageList`
+- `{store}.myshopify.com/admin/blogs` → fires blog listing operation
+- `{store}.myshopify.com/admin/products/{id}` → fires product detail operation
+- `{store}.myshopify.com/admin/pages/{id}` → fires page detail operation
+
+> **Note:** Blog posts are under `/admin/blogs` not `/admin/blog_posts`.
 
 ### How it works
 
-Connect to the user's logged-in Chrome via `chromium.connectOverCDP()`. Use `page.on('response', handler)` to intercept all JSON responses from URLs containing `/admin/internal/web/graphql/core`. Navigate to each admin section — the dashboard's own React app triggers the GraphQL calls automatically. No manual query construction needed for discovery.
-
-For extraction, navigate to each item's admin detail page. The detail view fires a richer GraphQL query that includes `bodyHtml`, `seo`, `images`, and variant data.
+Connect to the user's logged-in browser (Chrome or Brave) via `chromium.connectOverCDP()`. Use `page.on('response', handler)` to intercept all JSON responses from URLs containing `admin.shopify.com/api/operations/`. Navigate to each admin section — the dashboard's React app triggers GraphQL calls automatically. Filter by `operationName` in the URL to target specific content types.
 
 ### Why it's better than the API key approach
 
@@ -50,7 +49,7 @@ Most Shopify migration tools (including the WooCommerce plugin) require creating
 - No Shopify developer account or private app required
 - Draft and unpublished content is accessible (unlike the public Storefront API)
 - Session cookies valid for weeks — no token refresh logic needed
-- User-agent matches the real browser, avoiding bot detection
+- Works with Brave browser when Chrome remote debugging has profile conflicts
 
 ---
 
