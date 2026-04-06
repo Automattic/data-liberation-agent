@@ -40,6 +40,11 @@ describe('classifyUrl', () => {
   it('classifies blog paths as post', () => {
     expect(classifyUrl('https://example.com/blog/my-post')).toBe('post');
     expect(classifyUrl('https://example.com/post/my-post')).toBe('post');
+    expect(classifyUrl('https://example.com/blog')).toBe('post');
+    expect(classifyUrl('https://example.com/news/breaking-story')).toBe('post');
+    expect(classifyUrl('https://example.com/article/feature')).toBe('post');
+    expect(classifyUrl('https://example.com/blogs/news/my-article')).toBe('post');
+    expect(classifyUrl('https://example.com/blog-1/post/my-post')).toBe('post');
   });
 
   it('classifies product paths', () => {

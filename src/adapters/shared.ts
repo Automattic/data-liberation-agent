@@ -386,9 +386,18 @@ export async function runExtractionLoop(opts: ExtractionLoopOpts): Promise<{
         }
       }
 
-      // Determine type: structured data > inventory > URL pattern
+      // Determine type: adapter signal > inventory > JSON-LD > URL pattern
       const invEntry = inventoryUrls.find((u) => u.url === url);
-      const urlType = pageData.detectedType || invEntry?.type || classifyUrl(url);
+      let urlType = pageData.detectedType || invEntry?.type || classifyUrl(url);
+
+      // If still classified as a page, check JSON-LD for blog post signals
+      if (urlType === 'page' || urlType === 'homepage') {
+        const blogLdTypes = /["']@type["']\s*:\s*["'](BlogPosting|NewsArticle|Article|SocialMediaPosting)["']/i;
+        if (blogLdTypes.test(pageData.content)) {
+          urlType = 'post';
+        }
+      }
+
       const isPost = urlType === 'post' || urlType === 'blog-post';
       const isProduct = urlType === 'product';
 

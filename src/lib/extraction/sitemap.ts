@@ -20,7 +20,11 @@ export function classifyUrl(url: string): UrlType {
   }
 
   if (path === '/' || path === '') return 'homepage';
-  if (/\/(blog|post|posts|article|articles)\//.test(path)) return 'post';
+  // Match /blog/<slug>, /post/<slug>, /blogs/<handle>/<slug>, etc.
+  // Also match Wix patterns like /blog-1/post/<slug>
+  if (/\/(blog|post|posts|article|articles|news|journal)(\/|$)/.test(path)) return 'post';
+  if (/\/blogs\/[^/]+\/[^/]+/.test(path)) return 'post'; // Shopify /blogs/<blog>/<article>
+  if (/\/blog-\d+\/post\//.test(path)) return 'post'; // Wix /blog-1/post/<slug>
   if (/\/(products?|store|shop)\//.test(path)) return 'product';
   if (/\/(gallery|portfolio)/.test(path)) return 'gallery';
   if (/\/(event|events)/.test(path)) return 'event';
