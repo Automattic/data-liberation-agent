@@ -398,7 +398,9 @@ export async function runExtractionLoop(opts: ExtractionLoopOpts): Promise<{
         }
       }
 
-      if (isPost) {
+      if (isProduct && csvBuilder) {
+        // Products are handled via WooCommerce CSV — don't also add as pages
+      } else if (isPost) {
         wxr.addPost({
           title: pageData.title,
           slug: pageData.slug,
@@ -428,19 +430,21 @@ export async function runExtractionLoop(opts: ExtractionLoopOpts): Promise<{
         pagesExtracted++;
       }
 
-      // Flush the page/post item to WXR immediately
-      if (wxr.isStreaming) {
-        wxr.flushItem(wxr.items[wxr.items.length - 1]);
-      }
-
-      // Add redirect from original path to slug
-      try {
-        const originalPath = new URL(url).pathname;
-        if (originalPath && originalPath !== '/' && originalPath !== `/${pageData.slug}`) {
-          wxr.addRedirect({ from: originalPath, to: `/${pageData.slug}` });
+      // Flush the page/post item to WXR immediately (skip for products — they're CSV-only)
+      if (!(isProduct && csvBuilder)) {
+        if (wxr.isStreaming) {
+          wxr.flushItem(wxr.items[wxr.items.length - 1]);
         }
-      } catch {
-        // URL parsing failed
+
+        // Add redirect from original path to slug
+        try {
+          const originalPath = new URL(url).pathname;
+          if (originalPath && originalPath !== '/' && originalPath !== `/${pageData.slug}`) {
+            wxr.addRedirect({ from: originalPath, to: `/${pageData.slug}` });
+          }
+        } catch {
+          // URL parsing failed
+        }
       }
 
       const durationMs = Date.now() - startMs;
