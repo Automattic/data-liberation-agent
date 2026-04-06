@@ -1,0 +1,59 @@
+import { describe, it, expect, vi } from 'vitest';
+import { parseSitemapXml, classifyUrl } from '../src/lib/extraction/sitemap.js';
+
+describe('parseSitemapXml', () => {
+  it('extracts URLs from a standard sitemap', () => {
+    const xml = `<?xml version="1.0"?>
+    <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+      <url><loc>https://example.com/</loc></url>
+      <url><loc>https://example.com/about</loc></url>
+      <url><loc>https://example.com/blog/post-1</loc></url>
+    </urlset>`;
+    const urls = parseSitemapXml(xml);
+    expect(urls).toEqual([
+      'https://example.com/',
+      'https://example.com/about',
+      'https://example.com/blog/post-1',
+    ]);
+  });
+
+  it('extracts sub-sitemap URLs from a sitemap index', () => {
+    const xml = `<?xml version="1.0"?>
+    <sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+      <sitemap><loc>https://example.com/sitemap-pages.xml</loc></sitemap>
+      <sitemap><loc>https://example.com/sitemap-posts.xml</loc></sitemap>
+    </sitemapindex>`;
+    const urls = parseSitemapXml(xml);
+    expect(urls).toEqual([
+      'https://example.com/sitemap-pages.xml',
+      'https://example.com/sitemap-posts.xml',
+    ]);
+  });
+
+  it('returns empty array for invalid XML', () => {
+    const urls = parseSitemapXml('not xml at all');
+    expect(urls).toEqual([]);
+  });
+});
+
+describe('classifyUrl', () => {
+  it('classifies blog paths as post', () => {
+    expect(classifyUrl('https://example.com/blog/my-post')).toBe('post');
+    expect(classifyUrl('https://example.com/post/my-post')).toBe('post');
+  });
+
+  it('classifies product paths', () => {
+    expect(classifyUrl('https://example.com/product/widget')).toBe('product');
+    expect(classifyUrl('https://example.com/store/item')).toBe('product');
+  });
+
+  it('classifies root as homepage', () => {
+    expect(classifyUrl('https://example.com/')).toBe('homepage');
+    expect(classifyUrl('https://example.com')).toBe('homepage');
+  });
+
+  it('classifies unknown paths as page', () => {
+    expect(classifyUrl('https://example.com/about')).toBe('page');
+    expect(classifyUrl('https://example.com/contact')).toBe('page');
+  });
+});
