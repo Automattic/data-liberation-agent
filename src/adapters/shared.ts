@@ -336,37 +336,53 @@ export async function runExtractionLoop(opts: ExtractionLoopOpts): Promise<{
     try {
       const pageData = await extractPage(url);
 
-      // Download media for this page immediately
+      // Download media for this page concurrently (up to 6 at a time)
       let featuredMediaId: number | undefined;
       if (!dryRun && mediaDir) {
+        const MEDIA_CONCURRENCY = 6;
+
+        // Filter to new URLs and mark them as seen immediately to prevent
+        // duplicates from other pages queueing the same URL
+        const newMediaUrls: string[] = [];
         for (const mediaUrl of pageData.mediaUrls) {
           if (downloadedMediaUrls.has(mediaUrl)) continue;
           downloadedMediaUrls.add(mediaUrl);
+          newMediaUrls.push(mediaUrl);
+        }
 
-          const result = await downloadMedia(mediaUrl, mediaDir, seenMediaNames, seenMediaHashes);
-          if (!result.error && result.localPath) {
-            // If a byte-identical file was already added to the WXR, reuse its ID
-            const existingId = mediaPathToId.get(result.localPath);
-            if (existingId) {
-              if (!featuredMediaId) featuredMediaId = existingId;
-            } else {
-              const mediaId = wxr.addMedia({
-                url: mediaUrl,
-                localPath: result.localPath,
-                title: result.filename || '',
-              });
-              mediaPathToId.set(result.localPath, mediaId);
-              if (wxr.isStreaming) {
-                wxr.flushItem(wxr.items[wxr.items.length - 1]);
+        // Download in batches of MEDIA_CONCURRENCY
+        for (let batch = 0; batch < newMediaUrls.length; batch += MEDIA_CONCURRENCY) {
+          const chunk = newMediaUrls.slice(batch, batch + MEDIA_CONCURRENCY);
+          const results = await Promise.all(
+            chunk.map((mediaUrl) => downloadMedia(mediaUrl, mediaDir, seenMediaNames, seenMediaHashes)
+              .then((r) => ({ mediaUrl, ...r })))
+          );
+
+          // Process results sequentially — WXR builder and log are not concurrent-safe
+          for (const result of results) {
+            if (!result.error && result.localPath) {
+              const existingId = mediaPathToId.get(result.localPath);
+              if (existingId) {
+                if (!featuredMediaId) featuredMediaId = existingId;
+              } else {
+                const mediaId = wxr.addMedia({
+                  url: result.mediaUrl,
+                  localPath: result.localPath,
+                  title: result.filename || '',
+                });
+                mediaPathToId.set(result.localPath, mediaId);
+                if (wxr.isStreaming) {
+                  wxr.flushItem(wxr.items[wxr.items.length - 1]);
+                }
+                if (!featuredMediaId) featuredMediaId = mediaId;
               }
-              if (!featuredMediaId) featuredMediaId = mediaId;
             }
+            log.logMedia({
+              url: result.mediaUrl,
+              localPath: result.localPath,
+              error: result.error,
+            });
           }
-          log.logMedia({
-            url: mediaUrl,
-            localPath: result.localPath,
-            error: result.error,
-          });
         }
       }
 
