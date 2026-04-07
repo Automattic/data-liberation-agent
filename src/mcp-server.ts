@@ -164,15 +164,16 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: 'liberate_setup',
-      description: 'Validate WordPress connection: check site reachability, REST API, and authentication. Returns guidance if anything fails.',
+      description: 'Set up the target WordPress site for import. In WP-CLI mode (WordPress Studio), returns instructions to select or create a site — no credentials needed. In REST API mode, validates site reachability, REST API, and authentication.',
       inputSchema: {
         type: 'object' as const,
         properties: {
           site: { type: 'string', description: 'WordPress site domain (e.g. mysite.com or localhost:8881)' },
           username: { type: 'string', description: 'WordPress username' },
           token: { type: 'string', description: 'WordPress application password' },
+          useWpCli: { type: 'boolean', description: 'Use WP-CLI mode (WordPress Studio). No credentials needed — returns instructions to select or create a local site via site_list/site_create/site_start tools.' },
         },
-        required: ['site', 'username', 'token'],
+        required: [],
       },
     },
     {
@@ -404,6 +405,30 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     case 'liberate_setup': {
+      // WP-CLI mode: return instructions to select/create a local site
+      if (typedArgs.useWpCli) {
+        return textResult({
+          mode: 'wp-cli',
+          instructions: [
+            `## WordPress Studio Setup`,
+            ``,
+            `No credentials needed — use Studio tools to prepare the target site:`,
+            ``,
+            `1. **Select or create a site:**`,
+            `   - Call \`site_list\` to show existing local sites`,
+            `   - Ask the user which site to import into, or offer to create a new one`,
+            `   - To create: call \`site_create\` with a name`,
+            ``,
+            `2. **Start the site:**`,
+            `   - Call \`site_start\` if the site is not already running`,
+            `   - The site must be running for WP-CLI commands to work`,
+            ``,
+            `Once the site is running, proceed to \`liberate_import\` with \`useWpCli: true\`.`,
+          ].join('\n'),
+        });
+      }
+
+      // REST API mode: validate connection
       const { validateWpConnection } = await import('./lib/setup/wp-setup.js');
       const report = await validateWpConnection({
         site: typedArgs.site as string,

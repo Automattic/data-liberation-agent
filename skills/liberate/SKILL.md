@@ -20,9 +20,12 @@ Help the user extract their content from a closed web platform.
 5. Call `liberate_extract` with an appropriate outputDir
 6. Call `liberate_verify` on the outputDir to check the extraction quality — report stale CDN URLs, failed pages, failed media, and quality scores
 7. If there are failures, offer to retry specific URLs or investigate
-8. When the user is ready to import:
-   - If `wp_cli` tool is available (e.g. WordPress Studio): call `liberate_import` with `useWpCli: true` — it will return WP-CLI commands for you to execute via `wp_cli`
-   - Otherwise: call `liberate_setup` first to validate the WordPress connection, then call `liberate_import` with REST API credentials
+8. When the user is ready to import, call `liberate_setup` first:
+   - If `wp_cli` tool is available (e.g. WordPress Studio): call `liberate_setup` with `useWpCli: true` — it will guide you to select or create a local site. No credentials needed.
+   - Otherwise: call `liberate_setup` with site/username/token to validate the REST API connection
+9. Import the content by calling `liberate_import`:
+   - If `wp_cli` is available: pass `useWpCli: true` — it will return WP-CLI commands for you to execute via `wp_cli`
+   - Otherwise: pass the REST API credentials
 
 ## Resuming
 
