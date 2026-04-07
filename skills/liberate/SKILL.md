@@ -59,7 +59,30 @@ After extraction completes, always run `liberate_verify` on the output directory
 
 Show the user the verification report and flag anything that needs attention before importing.
 
-## WordPress Import
+## WordPress Import — Studio Environment
+
+If `site_create`, `site_list`, and `wp_cli` tools are available, you are running inside WordPress Studio. Use Studio's local infrastructure instead of REST API for imports:
+
+1. Ask the user which site to import into, or offer to create a new one
+   - To create: call `site_create`, then `site_start`
+   - To use existing: call `site_list`, confirm with user, then `site_start` if not running
+2. When calling `liberate_extract`, use a temp output directory: `/tmp/studio-migrations/<site-slug>/`
+3. After extraction and verification, copy files into the site for import:
+   - Copy the WXR file and media directory from the extraction output into the site's `wp-content/imports/` directory (PHP-WASM can only access files within the site directory)
+4. Install the WordPress Importer and import:
+   - `wp_cli`: `plugin install wordpress-importer --activate`
+   - `wp_cli`: `import /wordpress/wp-content/imports/output.wxr --authors=create` (or `--authors=skip` based on user preference)
+   - Note: use `/wordpress/` prefix — that's the WASM mount point for the site directory
+5. If `products.csv` exists in the extraction output:
+   - `wp_cli`: `plugin install woocommerce --activate`
+   - Copy `products.csv` to `wp-content/imports/` if not already there
+   - `wp_cli`: `wc product_csv import /wordpress/wp-content/imports/products.csv`
+6. Cleanup after successful import:
+   - Remove the site's `wp-content/imports/` directory
+   - Remove the extraction output directory (`/tmp/studio-migrations/<site-slug>/`)
+7. **Skip `liberate_setup` and `liberate_import`** — they use REST API and are not needed in Studio
+
+## WordPress Import — Standard Environment (no Studio)
 
 Before importing, validate the WordPress connection with `liberate_setup`:
 - Checks site reachability, REST API availability, and authentication
