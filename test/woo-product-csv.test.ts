@@ -86,33 +86,33 @@ describe('WooProductCsvBuilder', () => {
     const csv = buildAndRead(builder);
     const rows = parseRows(csv);
 
-    // Check headers
-    expect(rows[0]).toContain('ID');
-    expect(rows[0]).toContain('Type');
-    expect(rows[0]).toContain('SKU');
-    expect(rows[0]).toContain('Name');
-    expect(rows[0]).toContain('Published');
-    expect(rows[0]).toContain('Regular price');
-    expect(rows[0]).toContain('Categories');
-    expect(rows[0]).toContain('Tags');
-    expect(rows[0]).toContain('Images');
+    // Check headers use WooCommerce internal field names
+    expect(rows[0]).toContain('id');
+    expect(rows[0]).toContain('type');
+    expect(rows[0]).toContain('sku');
+    expect(rows[0]).toContain('name');
+    expect(rows[0]).toContain('published');
+    expect(rows[0]).toContain('regular_price');
+    expect(rows[0]).toContain('category_ids');
+    expect(rows[0]).toContain('tag_ids');
+    expect(rows[0]).toContain('images');
 
     // Check data row
     const dataRow = rows[1];
     const headerRow = rows[0];
     const idx = (name: string) => headerRow.indexOf(name);
 
-    expect(dataRow[idx('ID')]).toBe('');
-    expect(dataRow[idx('Type')]).toBe('simple');
-    expect(dataRow[idx('SKU')]).toBe('BLUE-TEE-001');
-    expect(dataRow[idx('Name')]).toBe('Blue T-Shirt');
-    expect(dataRow[idx('Published')]).toBe('1');
-    expect(dataRow[idx('Regular price')]).toBe('29.99');
-    expect(dataRow[idx('Categories')]).toBe('Clothing');
-    expect(dataRow[idx('Tags')]).toBe('summer | blue');
-    expect(dataRow[idx('Images')]).toBe('https://example.com/blue-tee.jpg');
-    expect(dataRow[idx('In stock?')]).toBe('1');
-    expect(dataRow[idx('Stock')]).toBe('50');
+    expect(dataRow[idx('id')]).toBe('');
+    expect(dataRow[idx('type')]).toBe('simple');
+    expect(dataRow[idx('sku')]).toBe('BLUE-TEE-001');
+    expect(dataRow[idx('name')]).toBe('Blue T-Shirt');
+    expect(dataRow[idx('published')]).toBe('1');
+    expect(dataRow[idx('regular_price')]).toBe('29.99');
+    expect(dataRow[idx('category_ids')]).toBe('Clothing');
+    expect(dataRow[idx('tag_ids')]).toBe('summer | blue');
+    expect(dataRow[idx('images')]).toBe('https://example.com/blue-tee.jpg');
+    expect(dataRow[idx('stock_status')]).toBe('instock');
+    expect(dataRow[idx('stock_quantity')]).toBe('50');
   });
 
   it('serializes variable products with attributes', () => {
@@ -132,25 +132,25 @@ describe('WooProductCsvBuilder', () => {
     const rows = parseRows(csv);
 
     const headerRow = rows[0];
-    expect(headerRow).toContain('Attribute 1 name');
-    expect(headerRow).toContain('Attribute 1 value(s)');
-    expect(headerRow).toContain('Attribute 1 visible');
-    expect(headerRow).toContain('Attribute 1 global');
-    expect(headerRow).toContain('Attribute 2 name');
-    expect(headerRow).toContain('Attribute 2 value(s)');
+    expect(headerRow).toContain('attributes:name1');
+    expect(headerRow).toContain('attributes:value1');
+    expect(headerRow).toContain('attributes:visible1');
+    expect(headerRow).toContain('attributes:taxonomy1');
+    expect(headerRow).toContain('attributes:name2');
+    expect(headerRow).toContain('attributes:value2');
 
     const dataRow = rows[1];
     const idx = (name: string) => headerRow.indexOf(name);
 
-    expect(dataRow[idx('Type')]).toBe('variable');
-    expect(dataRow[idx('Attribute 1 name')]).toBe('Size');
-    expect(dataRow[idx('Attribute 1 value(s)')]).toBe('S, M, L');
-    expect(dataRow[idx('Attribute 1 visible')]).toBe('1');
-    expect(dataRow[idx('Attribute 1 global')]).toBe('1');
-    expect(dataRow[idx('Attribute 2 name')]).toBe('Color');
-    expect(dataRow[idx('Attribute 2 value(s)')]).toBe('Red, Blue');
-    expect(dataRow[idx('Attribute 2 visible')]).toBe('1');
-    expect(dataRow[idx('Attribute 2 global')]).toBe('0');
+    expect(dataRow[idx('type')]).toBe('variable');
+    expect(dataRow[idx('attributes:name1')]).toBe('Size');
+    expect(dataRow[idx('attributes:value1')]).toBe('S, M, L');
+    expect(dataRow[idx('attributes:visible1')]).toBe('1');
+    expect(dataRow[idx('attributes:taxonomy1')]).toBe('1');
+    expect(dataRow[idx('attributes:name2')]).toBe('Color');
+    expect(dataRow[idx('attributes:value2')]).toBe('Red, Blue');
+    expect(dataRow[idx('attributes:visible2')]).toBe('1');
+    expect(dataRow[idx('attributes:taxonomy2')]).toBe('0');
   });
 
   it('handles categories with hierarchy', () => {
@@ -166,7 +166,7 @@ describe('WooProductCsvBuilder', () => {
     const dataRow = rows[1];
     const idx = (name: string) => headerRow.indexOf(name);
 
-    expect(dataRow[idx('Categories')]).toBe('Clothing | Clothing > T-Shirts');
+    expect(dataRow[idx('category_ids')]).toBe('Clothing | Clothing > T-Shirts');
   });
 
   it('handles multiple images', () => {
@@ -186,7 +186,7 @@ describe('WooProductCsvBuilder', () => {
     const dataRow = rows[1];
     const idx = (name: string) => headerRow.indexOf(name);
 
-    expect(dataRow[idx('Images')]).toBe(
+    expect(dataRow[idx('images')]).toBe(
       'https://example.com/main.jpg, https://example.com/side.jpg, https://example.com/back.jpg'
     );
   });
@@ -220,23 +220,23 @@ describe('WooProductCsvBuilder', () => {
     const dataRow = rows[1];
     const idx = (name: string) => headerRow.indexOf(name);
 
-    expect(dataRow[idx('Name')]).toBe('Minimal Product');
-    expect(dataRow[idx('SKU')]).toBe('');
-    expect(dataRow[idx('Description')]).toBe('');
-    expect(dataRow[idx('Short description')]).toBe('');
-    expect(dataRow[idx('Regular price')]).toBe('');
-    expect(dataRow[idx('Sale price')]).toBe('');
-    expect(dataRow[idx('Categories')]).toBe('');
-    expect(dataRow[idx('Tags')]).toBe('');
-    expect(dataRow[idx('Images')]).toBe('');
-    expect(dataRow[idx('Weight (lbs)')]).toBe('');
-    expect(dataRow[idx('In stock?')]).toBe('');
-    expect(dataRow[idx('Stock')]).toBe('');
-    expect(dataRow[idx('Parent')]).toBe('');
+    expect(dataRow[idx('name')]).toBe('Minimal Product');
+    expect(dataRow[idx('sku')]).toBe('');
+    expect(dataRow[idx('description')]).toBe('');
+    expect(dataRow[idx('short_description')]).toBe('');
+    expect(dataRow[idx('regular_price')]).toBe('');
+    expect(dataRow[idx('sale_price')]).toBe('');
+    expect(dataRow[idx('category_ids')]).toBe('');
+    expect(dataRow[idx('tag_ids')]).toBe('');
+    expect(dataRow[idx('images')]).toBe('');
+    expect(dataRow[idx('weight')]).toBe('');
+    expect(dataRow[idx('stock_status')]).toBe('');
+    expect(dataRow[idx('stock_quantity')]).toBe('');
+    expect(dataRow[idx('parent_id')]).toBe('');
     // Type defaults to simple
-    expect(dataRow[idx('Type')]).toBe('simple');
+    expect(dataRow[idx('type')]).toBe('simple');
     // Published defaults to 1
-    expect(dataRow[idx('Published')]).toBe('1');
+    expect(dataRow[idx('published')]).toBe('1');
   });
 
   it('handles draft (unpublished) products', () => {
@@ -252,7 +252,7 @@ describe('WooProductCsvBuilder', () => {
     const dataRow = rows[1];
     const idx = (name: string) => headerRow.indexOf(name);
 
-    expect(dataRow[idx('Published')]).toBe('0');
+    expect(dataRow[idx('published')]).toBe('0');
   });
 
   it('handles product variations with parentSku', () => {
@@ -281,10 +281,10 @@ describe('WooProductCsvBuilder', () => {
     const idx = (name: string) => headerRow.indexOf(name);
 
     // Parent row
-    expect(rows[1][idx('Parent')]).toBe('');
+    expect(rows[1][idx('parent_id')]).toBe('');
     // Variation row
-    expect(rows[2][idx('Parent')]).toBe('SHIRT-001');
-    expect(rows[2][idx('SKU')]).toBe('SHIRT-001-S');
+    expect(rows[2][idx('parent_id')]).toBe('SHIRT-001');
+    expect(rows[2][idx('sku')]).toBe('SHIRT-001-S');
   });
 
   it('serializes multiple products', () => {
@@ -321,10 +321,28 @@ describe('WooProductCsvBuilder', () => {
     const csv = readFileSync(csvPath, 'utf8');
     const rows = parseRows(csv);
     expect(rows).toHaveLength(3); // header + 2 products
-    expect(rows[1][3]).toBe('Streamed A'); // Name column
+    expect(rows[1][3]).toBe('Streamed A'); // name column
     expect(rows[2][3]).toBe('Streamed B');
     // Should have attribute columns from product B
-    expect(csv).toContain('Attribute 1 name');
+    expect(csv).toContain('attributes:name1');
     expect(csv).toContain('Color');
   });
+
+  it('uses instock/outofstock for stock_status', () => {
+    const builder = new WooProductCsvBuilder();
+    builder.addProduct({ name: 'In Stock', inStock: true });
+    builder.addProduct({ name: 'Out of Stock', inStock: false });
+
+    const csv = buildAndRead(builder);
+    const rows = parseRows(csv);
+    const headerRow = rows[0];
+    const idx = (name: string) => headerRow.indexOf(name);
+
+    expect(dataRow(rows, 1, idx('stock_status'))).toBe('instock');
+    expect(dataRow(rows, 2, idx('stock_status'))).toBe('outofstock');
+  });
 });
+
+function dataRow(rows: string[][], rowIdx: number, colIdx: number): string {
+  return rows[rowIdx][colIdx];
+}

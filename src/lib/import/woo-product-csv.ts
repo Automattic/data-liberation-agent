@@ -64,35 +64,35 @@ export class WooProductCsvBuilder {
    */
   private buildHeaders(): string[] {
     const headers = [
-      'ID',
-      'Type',
-      'SKU',
-      'Name',
-      'Published',
-      'Short description',
-      'Description',
-      'Regular price',
-      'Sale price',
-      'Categories',
-      'Tags',
-      'Images',
-      'Weight (lbs)',
-      'Length (in)',
-      'Width (in)',
-      'Height (in)',
-      'In stock?',
-      'Stock',
+      'id',
+      'type',
+      'sku',
+      'name',
+      'published',
+      'short_description',
+      'description',
+      'regular_price',
+      'sale_price',
+      'category_ids',
+      'tag_ids',
+      'images',
+      'weight',
+      'length',
+      'width',
+      'height',
+      'stock_status',
+      'stock_quantity',
     ];
 
     const attrCount = this.maxAttributes();
     for (let i = 1; i <= attrCount; i++) {
-      headers.push(`Attribute ${i} name`);
-      headers.push(`Attribute ${i} value(s)`);
-      headers.push(`Attribute ${i} visible`);
-      headers.push(`Attribute ${i} global`);
+      headers.push(`attributes:name${i}`);
+      headers.push(`attributes:value${i}`);
+      headers.push(`attributes:visible${i}`);
+      headers.push(`attributes:taxonomy${i}`);
     }
 
-    headers.push('Parent');
+    headers.push('parent_id');
 
     return headers;
   }
@@ -118,7 +118,7 @@ export class WooProductCsvBuilder {
       product.length || '',
       product.width || '',
       product.height || '',
-      product.inStock === false ? '0' : product.inStock === true ? '1' : '',
+      product.inStock === false ? 'outofstock' : product.inStock === true ? 'instock' : '',
       product.stock != null ? String(product.stock) : '',
     ];
 
