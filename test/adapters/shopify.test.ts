@@ -125,13 +125,13 @@ describe('Shopify WXR integration', () => {
 
     // Verify blog post content
     expect(xml).toContain('<title>How to Choose the Best Coffee Beans</title>');
-    expect(xml).toContain('<![CDATA[post]]>');
+    expect(xml).toContain('<wp:post_type>post</wp:post_type>');
     expect(xml).toContain('Choosing the right coffee beans');
     expect(xml).toContain('Origins Matter');
 
     // Verify page
     expect(xml).toContain('<title>About</title>');
-    expect(xml).toContain('<![CDATA[page]]>');
+    expect(xml).toContain('<wp:post_type>page</wp:post_type>');
 
     // Verify tags
     expect(xml).toContain('coffee');
@@ -139,11 +139,11 @@ describe('Shopify WXR integration', () => {
     expect(xml).toContain('beans');
 
     // Verify media
-    expect(xml).toContain('<![CDATA[attachment]]>');
+    expect(xml).toContain('<wp:post_type>attachment</wp:post_type>');
     expect(xml).toContain('cdn.shopify.com');
 
     // Verify nav menu items
-    expect(xml).toContain('<![CDATA[nav_menu_item]]>');
+    expect(xml).toContain('<wp:post_type>nav_menu_item</wp:post_type>');
 
     // Verify redirect map
     const redirectPath = join(tempDir, 'redirect-map.json');

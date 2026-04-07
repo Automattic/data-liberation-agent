@@ -155,22 +155,22 @@ describe('Webflow WXR integration', () => {
 
     // Verify blog post content
     expect(xml).toContain('<title>10 Tips for Better Web Design</title>');
-    expect(xml).toContain('<![CDATA[post]]>');
+    expect(xml).toContain('<wp:post_type>post</wp:post_type>');
     expect(xml).toContain('Web design is both an art and a science');
 
     // Verify page
     expect(xml).toContain('<title>About</title>');
-    expect(xml).toContain('<![CDATA[page]]>');
+    expect(xml).toContain('<wp:post_type>page</wp:post_type>');
 
     // Verify SEO meta
     expect(xml).toContain('<wp:meta_key>_seo_title</wp:meta_key>');
 
     // Verify media
-    expect(xml).toContain('<![CDATA[attachment]]>');
+    expect(xml).toContain('<wp:post_type>attachment</wp:post_type>');
     expect(xml).toContain('cdn.prod.website-files.com');
 
     // Verify nav menu items
-    expect(xml).toContain('<![CDATA[nav_menu_item]]>');
+    expect(xml).toContain('<wp:post_type>nav_menu_item</wp:post_type>');
 
     // Verify redirect map
     const redirectPath = join(tempDir, 'redirect-map.json');

@@ -163,11 +163,9 @@ describe('WxrBuilder.serialize', () => {
     expect(xml).toContain('<wp:tag_name>');
     expect(xml).toContain('<![CDATA[Featured]]>');
     expect(xml).toContain('<title>Hello World</title>');
-    expect(xml).toContain('<wp:post_type>');
-    expect(xml).toContain('<![CDATA[post]]>');
+    expect(xml).toContain('<wp:post_type>post</wp:post_type>');
     expect(xml).toContain('<![CDATA[<p>First post</p>]]>');
-    expect(xml).toContain('<wp:post_name>');
-    expect(xml).toContain('<![CDATA[hello-world]]>');
+    expect(xml).toContain('<wp:post_name>hello-world</wp:post_name>');
   });
 
   it('writes SEO custom fields as post meta', () => {
@@ -236,8 +234,7 @@ describe('WxrBuilder.serialize', () => {
     wxr.serialize(wxrPath);
     const xml = readFileSync(wxrPath, 'utf8');
 
-    expect(xml).toContain('<wp:post_type>');
-    expect(xml).toContain('<![CDATA[attachment]]>');
+    expect(xml).toContain('<wp:post_type>attachment</wp:post_type>');
     expect(xml).toContain('<wp:attachment_url>');
     expect(xml).toContain('<![CDATA[https://cdn.example.com/photo.jpg]]>');
   });
@@ -269,14 +266,11 @@ describe('WxrBuilder.serialize', () => {
     expect(xml).toContain('<![CDATA[admin]]>');
     expect(xml).toContain('isPermaLink="false"');
     expect(xml).toContain('<description></description>');
-    expect(xml).toContain('<wp:post_date>');
-    expect(xml).toContain('<![CDATA[2026-01-15 10:00:00]]>');
+    expect(xml).toContain('<wp:post_date>2026-01-15 10:00:00</wp:post_date>');
     expect(xml).toContain('<wp:post_date_gmt>');
-    expect(xml).toContain('<wp:comment_status>');
-    expect(xml).toContain('<![CDATA[closed]]>');
+    expect(xml).toContain('<wp:comment_status>closed</wp:comment_status>');
     expect(xml).toContain('<wp:ping_status>');
-    expect(xml).toContain('<wp:post_password>');
-    expect(xml).toContain('<![CDATA[]]>');
+    expect(xml).toContain('<wp:post_password></wp:post_password>');
     expect(xml).toContain('<wp:is_sticky>0</wp:is_sticky>');
   });
 
@@ -288,8 +282,7 @@ describe('WxrBuilder.serialize', () => {
     const xml = readFileSync(wxrPath, 'utf8');
 
     // Attachments should also have post_name, post_parent, menu_order
-    expect(xml).toContain('<wp:post_type>');
-    expect(xml).toContain('<![CDATA[attachment]]>');
+    expect(xml).toContain('<wp:post_type>attachment</wp:post_type>');
     expect(xml).toContain('<wp:post_parent>0</wp:post_parent>');
     expect(xml).toContain('<wp:menu_order>0</wp:menu_order>');
   });
@@ -350,14 +343,11 @@ describe('WxrBuilder comments in serialize', () => {
     expect(xml).toContain('<wp:comment>');
     expect(xml).toContain('<wp:comment_author>');
     expect(xml).toContain('<![CDATA[Jane]]>');
-    expect(xml).toContain('<wp:comment_author_email>');
-    expect(xml).toContain('<![CDATA[jane@example.com]]>');
+    expect(xml).toContain('<wp:comment_author_email>jane@example.com</wp:comment_author_email>');
     expect(xml).toContain('<wp:comment_content>');
     expect(xml).toContain('<![CDATA[Nice post!]]>');
-    expect(xml).toContain('<wp:comment_approved>');
-    expect(xml).toContain('<![CDATA[1]]>');
-    expect(xml).toContain('<wp:comment_type>');
-    expect(xml).toContain('<![CDATA[comment]]>');
+    expect(xml).toContain('<wp:comment_approved>1</wp:comment_approved>');
+    expect(xml).toContain('<wp:comment_type>comment</wp:comment_type>');
   });
 
   it('threads comments with parent references', () => {
@@ -490,9 +480,9 @@ describe('WxrBuilder streaming', () => {
 
     // Both should produce valid WXR with same content (pubDate will differ slightly)
     expect(streamXml).toContain('<title>Test</title>');
-    expect(streamXml).toContain('<![CDATA[post]]>');
-    expect(streamXml).toContain('<![CDATA[page]]>');
-    expect(streamXml).toContain('<![CDATA[attachment]]>');
+    expect(streamXml).toContain('<wp:post_type>post</wp:post_type>');
+    expect(streamXml).toContain('<wp:post_type>page</wp:post_type>');
+    expect(streamXml).toContain('<wp:post_type>attachment</wp:post_type>');
     expect(streamXml).toContain('</channel>');
     expect(streamXml).toContain('</rss>');
 
