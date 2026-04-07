@@ -241,6 +241,20 @@ function safeCdata(str: string): string {
   return str.replace(/]]>/g, ']]]]><![CDATA[>');
 }
 
+/**
+ * Collapse whitespace that fast-xml-parser inserts around CDATA sections.
+ *
+ * fast-xml-parser with format:true produces:
+ *   <tag>\n    <![CDATA[value]]>\n  </tag>
+ *
+ * WordPress's importer reads the text content including that whitespace,
+ * which corrupts values. This collapses it to:
+ *   <tag><![CDATA[value]]></tag>
+ */
+function collapseCdataWhitespace(xml: string): string {
+  return xml.replace(/>\s*(<!\[CDATA\[[\s\S]*?\]\]>)\s*</g, '>$1<');
+}
+
 /** Wrap a value for XMLBuilder CDATA output with ]]> escaping. */
 function cd(value: string): { __cdata: string } {
   return { __cdata: safeCdata(value) };
@@ -518,7 +532,7 @@ export class WxrBuilder {
         },
       },
     };
-    let xml = xmlBuilder.build(obj) as string;
+    let xml = collapseCdataWhitespace(xmlBuilder.build(obj) as string);
     // Strip closing tags — items and taxonomies are appended after
     xml = xml.replace(/\s*<\/channel>\s*\n?\s*<\/rss>\s*$/, '');
     return xml;
@@ -579,7 +593,7 @@ export class WxrBuilder {
       fragments.push(xmlBuilder.build({ 'wp:term': termObj }));
     }
 
-    return fragments.join('');
+    return collapseCdataWhitespace(fragments.join(''));
   }
 
   private _serializeItem(item: WxrItem): string {
@@ -674,7 +688,7 @@ export class WxrBuilder {
       }));
     }
 
-    return xmlBuilder.build({ item: obj }) as string;
+    return collapseCdataWhitespace(xmlBuilder.build({ item: obj }) as string);
   }
 
   /** Append a wp:postmeta entry to an item object. */
