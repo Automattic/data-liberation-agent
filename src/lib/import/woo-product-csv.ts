@@ -98,17 +98,26 @@ export class WooProductCsvBuilder {
   }
 
   /**
+   * Collapse newlines in a string value so CSV fields don't contain raw line breaks.
+   * HTML content is unaffected visually since newlines are whitespace in HTML.
+   */
+  private static collapseNewlines(value: string): string {
+    return value.replace(/\r?\n/g, ' ');
+  }
+
+  /**
    * Build a CSV row for a single product.
    */
   private buildRow(product: WooProduct, attrCount: number): string[] {
+    const c = WooProductCsvBuilder.collapseNewlines;
     const row: string[] = [
       '', // ID — empty for new products
       product.type || 'simple',
       product.sku || '',
-      product.name,
+      c(product.name),
       product.published === false ? '0' : '1',
-      product.shortDescription || '',
-      product.description || '',
+      c(product.shortDescription || ''),
+      c(product.description || ''),
       product.regularPrice || '',
       product.salePrice || '',
       product.categories ? product.categories.join(' | ') : '',
@@ -149,7 +158,7 @@ export class WooProductCsvBuilder {
     const attrCount = this.maxAttributes();
 
     const data = this.products.map(p => this.buildRow(p, attrCount));
-    const csv = Papa.unparse({ fields: headers, data }, { newline: '\n' });
+    const csv = Papa.unparse({ fields: headers, data }, { newline: '\r\n' });
     writeFileSync(outputPath, csv, 'utf8');
   }
 

@@ -24,7 +24,7 @@ describe('WooProductCsvBuilder', () => {
   function parseRows(csv: string): string[][] {
     // Simple CSV parser that handles quoted fields
     const rows: string[][] = [];
-    const lines = csv.split('\n');
+    const lines = csv.split(/\r?\n/);
     for (const line of lines) {
       if (!line) continue;
       const fields: string[] = [];
@@ -204,8 +204,8 @@ describe('WooProductCsvBuilder', () => {
     // The name should be quoted with escaped double-quotes
     expect(csv).toContain('"Product with ""quotes"""');
 
-    // The description should be quoted (contains commas, quotes, newlines)
-    expect(csv).toContain('"<p>Has commas, ""quotes"", and\nnewlines</p>"');
+    // Newlines in content are collapsed to spaces for RFC 4180 compliance
+    expect(csv).toContain('"<p>Has commas, ""quotes"", and newlines</p>"');
   });
 
   it('writes empty string for missing optional fields', () => {

@@ -140,8 +140,9 @@ export function shopifyProductToWoo(product: ShopifyProductJson): { parent: WooP
   const parent: WooProduct = {
     name: product.title,
     type: isVariable ? 'variable' : 'simple',
-    // Variable products don't carry a SKU at the parent level — SKUs live on variations
-    sku: isVariable ? '' : (firstVariant?.sku || ''),
+    // Variable products need a SKU so variations can reference them via parent_id.
+    // Use the product handle as a stable identifier if no explicit SKU exists.
+    sku: isVariable ? (product.handle || product.title.toLowerCase().replace(/[^a-z0-9]+/g, '-')) : (firstVariant?.sku || ''),
     published: true,
     description: product.body_html || '',
     regularPrice: isVariable ? '' : (firstVariant?.price || ''),
