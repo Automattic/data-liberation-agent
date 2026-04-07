@@ -20,12 +20,9 @@ Help the user extract their content from a closed web platform.
 5. Call `liberate_extract` with an appropriate outputDir
 6. Call `liberate_verify` on the outputDir to check the extraction quality — report stale CDN URLs, failed pages, failed media, and quality scores
 7. If there are failures, offer to retry specific URLs or investigate
-8. When the user is ready to import, call `liberate_setup` first:
-   - If `wp_cli` tool is available (e.g. WordPress Studio): call `liberate_setup` with `useWpCli: true` — it will guide you to select or create a local site. No credentials needed.
-   - Otherwise: call `liberate_setup` with site/username/token to validate the REST API connection
-9. Import the content by calling `liberate_import`:
-   - If `wp_cli` is available: pass `useWpCli: true` — it will return WP-CLI commands for you to execute via `wp_cli`
-   - Otherwise: pass the REST API credentials
+8. When the user is ready to import:
+   - If the environment provides its own import mechanism (e.g. `import-liberated-data` skill, or `wp_cli` tool): call `liberate_setup` with `delegate: true`, then call `liberate_import` with `delegate: true` to get a structured import manifest. Hand off to the environment's import skill/tool.
+   - Otherwise: call `liberate_setup` with site/username/token to validate the REST API connection, then call `liberate_import` with REST API credentials
 
 ## Resuming
 
@@ -66,9 +63,9 @@ Show the user the verification report and flag anything that needs attention bef
 
 ## WordPress Import
 
-When `wp_cli` tool is available (e.g. WordPress Studio), call `liberate_import` with `useWpCli: true`. The tool will return step-by-step WP-CLI commands — execute them using `wp_cli`. This handles file copying, plugin installation, WXR import, product import, and cleanup automatically.
+If the environment provides an import skill (e.g. `import-liberated-data` in WordPress Studio), use `delegate: true` with both `liberate_setup` and `liberate_import`. The setup call returns requirements, the import call returns a structured manifest with file paths. Hand off to the environment's import skill to execute the actual import.
 
-When `wp_cli` is NOT available, validate the WordPress connection with `liberate_setup` first:
+If no environment import skill is available, use the built-in REST API import. Validate the WordPress connection with `liberate_setup` first:
 - Checks site reachability, REST API availability, and authentication
 - Returns step-by-step guidance if anything fails (e.g. how to create an Application Password)
 - Once setup passes, ask the user about author handling before calling `liberate_import`

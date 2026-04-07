@@ -164,21 +164,21 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: 'liberate_setup',
-      description: 'Set up the target WordPress site for import. In WP-CLI mode (WordPress Studio), returns instructions to select or create a site — no credentials needed. In REST API mode, validates site reachability, REST API, and authentication.',
+      description: 'Validate WordPress connection: check site reachability, REST API, and authentication. Returns guidance if anything fails. Pass delegate: true to skip validation and receive a structured manifest describing what the import target needs — useful when the calling environment handles site setup itself.',
       inputSchema: {
         type: 'object' as const,
         properties: {
           site: { type: 'string', description: 'WordPress site domain (e.g. mysite.com or localhost:8881)' },
           username: { type: 'string', description: 'WordPress username' },
           token: { type: 'string', description: 'WordPress application password' },
-          useWpCli: { type: 'boolean', description: 'Use WP-CLI mode (WordPress Studio). No credentials needed — returns instructions to select or create a local site via site_list/site_create/site_start tools.' },
+          delegate: { type: 'boolean', description: 'Skip validation and return a setup manifest for the calling environment to handle. Use when the environment has its own site management (e.g. local dev tools).' },
         },
         required: [],
       },
     },
     {
       name: 'liberate_import',
-      description: 'Import a WXR file into a WordPress site. Supports REST API import or WP-CLI mode (for WordPress Studio and other local environments with wp-cli access).',
+      description: 'Import a WXR file into a WordPress site. Pass delegate: true to skip REST import and receive a structured import manifest — useful when the calling environment handles imports itself (e.g. local dev tools with direct database/CLI access).',
       inputSchema: {
         type: 'object' as const,
         properties: {
@@ -194,7 +194,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           importAuthors: { type: 'boolean', description: 'Create WordPress users for each author in the WXR (default: false — all content owned by authenticated user)' },
           woocommerceKey: { type: 'string', description: 'WooCommerce consumer key for product import' },
           woocommerceSecret: { type: 'string', description: 'WooCommerce consumer secret for product import' },
-          useWpCli: { type: 'boolean', description: 'Return WP-CLI import instructions instead of importing via REST API. Use this when wp_cli tool is available (e.g. WordPress Studio). The response will contain step-by-step wp_cli commands to execute.' },
+          delegate: { type: 'boolean', description: 'Skip REST import and return a structured import manifest for the calling environment to handle.' },
         },
         required: ['wxrFile'],
       },
@@ -405,26 +405,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     case 'liberate_setup': {
-      // WP-CLI mode: return instructions to select/create a local site
-      if (typedArgs.useWpCli) {
+      // Delegate mode: return a manifest for the calling environment
+      if (typedArgs.delegate) {
         return textResult({
-          mode: 'wp-cli',
-          instructions: [
-            `## WordPress Studio Setup`,
-            ``,
-            `No credentials needed — use Studio tools to prepare the target site:`,
-            ``,
-            `1. **Select or create a site:**`,
-            `   - Call \`site_list\` to show existing local sites`,
-            `   - Ask the user which site to import into, or offer to create a new one`,
-            `   - To create: call \`site_create\` with a name`,
-            ``,
-            `2. **Start the site:**`,
-            `   - Call \`site_start\` if the site is not already running`,
-            `   - The site must be running for WP-CLI commands to work`,
-            ``,
-            `Once the site is running, proceed to \`liberate_import\` with \`useWpCli: true\`.`,
-          ].join('\n'),
+          mode: 'delegate',
+          manifest: {
+            description: 'A running WordPress site is needed to receive the imported content.',
+            requirements: [
+              'A WordPress site must be available and running',
+              'The site should have the WordPress Importer plugin installed and activated',
+              'If products will be imported, WooCommerce should be installed and activated',
+            ],
+          },
         });
       }
 
@@ -441,57 +433,25 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     case 'liberate_import': {
       const wxrFile = typedArgs.wxrFile as string;
 
-      // WP-CLI mode: return instructions for the agent to execute via wp_cli tool
-      if (typedArgs.useWpCli) {
+      // Delegate mode: return a structured import manifest
+      if (typedArgs.delegate) {
         const outputDir = join(wxrFile, '..');
-        const authorsFlag = (typedArgs.importAuthors as boolean) ? '--authors=create' : '--authors=skip';
-
-        // Check if products.csv exists alongside the WXR
         const { existsSync } = await import('fs');
+        const mediaDir = join(outputDir, 'media');
         const productsCsvPath = join(outputDir, 'products.csv');
-        const hasProducts = existsSync(productsCsvPath);
+        const redirectMapPath = join(outputDir, 'redirect-map.json');
 
-        const steps: string[] = [
-          `## WP-CLI Import Instructions`,
-          ``,
-          `The WXR file and associated media need to be copied into the site directory before importing,`,
-          `because the WordPress runtime (PHP-WASM) can only access files mounted within the site path.`,
-          ``,
-          `### Step 1: Copy files into the site`,
-          `Copy the following into the site's \`wp-content/imports/\` directory:`,
-          `- WXR file: \`${wxrFile}\``,
-          `- Media directory: \`${join(outputDir, 'media')}\` (if it exists)`,
-          hasProducts ? `- Products CSV: \`${productsCsvPath}\`` : '',
-          ``,
-          `### Step 2: Install WordPress Importer and import`,
-          `Run these wp_cli commands on the target site:`,
-          `\`\`\``,
-          `plugin install wordpress-importer --activate`,
-          `import /wordpress/wp-content/imports/${wxrFile.split('/').pop()} ${authorsFlag}`,
-          `\`\`\``,
-          `Note: Use the \`/wordpress/\` prefix — that's the mount point for the site directory in the WordPress runtime.`,
-        ];
-
-        if (hasProducts) {
-          steps.push(
-            ``,
-            `### Step 3: Import products`,
-            `\`\`\``,
-            `plugin install woocommerce --activate`,
-            `wc product_csv import /wordpress/wp-content/imports/products.csv --allow-root`,
-            `\`\`\``,
-          );
-        }
-
-        steps.push(
-          ``,
-          `### Cleanup`,
-          `After successful import, remove:`,
-          `- The site's \`wp-content/imports/\` directory`,
-          `- The extraction output directory: \`${outputDir}\``,
-        );
-
-        return textResult({ mode: 'wp-cli', instructions: steps.filter(Boolean).join('\n') });
+        return textResult({
+          mode: 'delegate',
+          manifest: {
+            wxrFile,
+            outputDir,
+            mediaDir: existsSync(mediaDir) ? mediaDir : null,
+            productsCsv: existsSync(productsCsvPath) ? productsCsvPath : null,
+            redirectMap: existsSync(redirectMapPath) ? redirectMapPath : null,
+            importAuthors: (typedArgs.importAuthors as boolean) ?? false,
+          },
+        });
       }
 
       // REST API mode: import directly
