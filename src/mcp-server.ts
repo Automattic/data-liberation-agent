@@ -177,7 +177,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: 'liberate_import',
-      description: 'Import a WXR file into a WordPress site via the REST API',
+      description: 'Import a WXR file into a WordPress site. Supports REST API import or WP-CLI mode (for WordPress Studio and other local environments with wp-cli access).',
       inputSchema: {
         type: 'object' as const,
         properties: {
@@ -193,8 +193,9 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           importAuthors: { type: 'boolean', description: 'Create WordPress users for each author in the WXR (default: false — all content owned by authenticated user)' },
           woocommerceKey: { type: 'string', description: 'WooCommerce consumer key for product import' },
           woocommerceSecret: { type: 'string', description: 'WooCommerce consumer secret for product import' },
+          useWpCli: { type: 'boolean', description: 'Return WP-CLI import instructions instead of importing via REST API. Use this when wp_cli tool is available (e.g. WordPress Studio). The response will contain step-by-step wp_cli commands to execute.' },
         },
-        required: ['wxrFile', 'site', 'username', 'token'],
+        required: ['wxrFile'],
       },
     },
   ],
@@ -413,12 +414,68 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     case 'liberate_import': {
+      const wxrFile = typedArgs.wxrFile as string;
+
+      // WP-CLI mode: return instructions for the agent to execute via wp_cli tool
+      if (typedArgs.useWpCli) {
+        const outputDir = join(wxrFile, '..');
+        const authorsFlag = (typedArgs.importAuthors as boolean) ? '--authors=create' : '--authors=skip';
+
+        // Check if products.csv exists alongside the WXR
+        const { existsSync } = await import('fs');
+        const productsCsvPath = join(outputDir, 'products.csv');
+        const hasProducts = existsSync(productsCsvPath);
+
+        const steps: string[] = [
+          `## WP-CLI Import Instructions`,
+          ``,
+          `The WXR file and associated media need to be copied into the site directory before importing,`,
+          `because the WordPress runtime (PHP-WASM) can only access files mounted within the site path.`,
+          ``,
+          `### Step 1: Copy files into the site`,
+          `Copy the following into the site's \`wp-content/imports/\` directory:`,
+          `- WXR file: \`${wxrFile}\``,
+          `- Media directory: \`${join(outputDir, 'media')}\` (if it exists)`,
+          hasProducts ? `- Products CSV: \`${productsCsvPath}\`` : '',
+          ``,
+          `### Step 2: Install WordPress Importer and import`,
+          `Run these wp_cli commands on the target site:`,
+          `\`\`\``,
+          `plugin install wordpress-importer --activate`,
+          `import /wordpress/wp-content/imports/${wxrFile.split('/').pop()} ${authorsFlag}`,
+          `\`\`\``,
+          `Note: Use the \`/wordpress/\` prefix — that's the mount point for the site directory in the WordPress runtime.`,
+        ];
+
+        if (hasProducts) {
+          steps.push(
+            ``,
+            `### Step 3: Import products`,
+            `\`\`\``,
+            `plugin install woocommerce --activate`,
+            `wc product_csv import /wordpress/wp-content/imports/products.csv --allow-root`,
+            `\`\`\``,
+          );
+        }
+
+        steps.push(
+          ``,
+          `### Cleanup`,
+          `After successful import, remove:`,
+          `- The site's \`wp-content/imports/\` directory`,
+          `- The extraction output directory: \`${outputDir}\``,
+        );
+
+        return textResult({ mode: 'wp-cli', instructions: steps.filter(Boolean).join('\n') });
+      }
+
+      // REST API mode: import directly
       try {
         const { importToWordPress } = await import('./lib/import/wp-importer.js');
         const { resolveSiteUrl } = await import('./lib/import/resolve-site-url.js');
         const resolvedSite = await resolveSiteUrl(typedArgs.site as string);
         const importResult = await importToWordPress({
-          wxrFile: typedArgs.wxrFile as string,
+          wxrFile,
           site: resolvedSite,
           username: typedArgs.username as string,
           token: typedArgs.token as string,

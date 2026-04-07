@@ -20,7 +20,9 @@ Help the user extract their content from a closed web platform.
 5. Call `liberate_extract` with an appropriate outputDir
 6. Call `liberate_verify` on the outputDir to check the extraction quality — report stale CDN URLs, failed pages, failed media, and quality scores
 7. If there are failures, offer to retry specific URLs or investigate
-8. When the user is ready to import, call `liberate_setup` first to validate their WordPress connection before running `liberate_import`
+8. When the user is ready to import:
+   - If `wp_cli` tool is available (e.g. WordPress Studio): call `liberate_import` with `useWpCli: true` — it will return WP-CLI commands for you to execute via `wp_cli`
+   - Otherwise: call `liberate_setup` first to validate the WordPress connection, then call `liberate_import` with REST API credentials
 
 ## Resuming
 
@@ -59,32 +61,11 @@ After extraction completes, always run `liberate_verify` on the output directory
 
 Show the user the verification report and flag anything that needs attention before importing.
 
-## WordPress Import — Studio Environment
+## WordPress Import
 
-If `site_create`, `site_list`, and `wp_cli` tools are available, you are running inside WordPress Studio. Use Studio's local infrastructure instead of REST API for imports:
+When `wp_cli` tool is available (e.g. WordPress Studio), call `liberate_import` with `useWpCli: true`. The tool will return step-by-step WP-CLI commands — execute them using `wp_cli`. This handles file copying, plugin installation, WXR import, product import, and cleanup automatically.
 
-1. Ask the user which site to import into, or offer to create a new one
-   - To create: call `site_create`, then `site_start`
-   - To use existing: call `site_list`, confirm with user, then `site_start` if not running
-2. When calling `liberate_extract`, use a temp output directory: `/tmp/studio-migrations/<site-slug>/`
-3. After extraction and verification, copy files into the site for import:
-   - Copy the WXR file and media directory from the extraction output into the site's `wp-content/imports/` directory (PHP-WASM can only access files within the site directory)
-4. Install the WordPress Importer and import:
-   - `wp_cli`: `plugin install wordpress-importer --activate`
-   - `wp_cli`: `import /wordpress/wp-content/imports/output.wxr --authors=create` (or `--authors=skip` based on user preference)
-   - Note: use `/wordpress/` prefix — that's the WASM mount point for the site directory
-5. If `products.csv` exists in the extraction output:
-   - `wp_cli`: `plugin install woocommerce --activate`
-   - Copy `products.csv` to `wp-content/imports/` if not already there
-   - `wp_cli`: `wc product_csv import /wordpress/wp-content/imports/products.csv`
-6. Cleanup after successful import:
-   - Remove the site's `wp-content/imports/` directory
-   - Remove the extraction output directory (`/tmp/studio-migrations/<site-slug>/`)
-7. **Skip `liberate_setup` and `liberate_import`** — they use REST API and are not needed in Studio
-
-## WordPress Import — Standard Environment (no Studio)
-
-Before importing, validate the WordPress connection with `liberate_setup`:
+When `wp_cli` is NOT available, validate the WordPress connection with `liberate_setup` first:
 - Checks site reachability, REST API availability, and authentication
 - Returns step-by-step guidance if anything fails (e.g. how to create an Application Password)
 - Once setup passes, ask the user about author handling before calling `liberate_import`
