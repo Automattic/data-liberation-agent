@@ -707,6 +707,7 @@ export const shopifyAdapter: PlatformAdapter = {
       resume: !!shopifyOpts.resume,
       verbose: shopifyOpts.verbose,
       server: context.server,
+      csvBuilder,
       extractPage: async (url: string) => {
         // Tier 1: Try JSON API — append .json to URL
         let title = '';

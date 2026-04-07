@@ -264,13 +264,14 @@ describe('shopifyProductToWoo', () => {
     const { parent, variations } = shopifyProductToWoo(fixture.product);
 
     expect(parent.type).toBe('variable');
+    expect(parent.sku).toBe('gothic-silver-ring');
     expect(parent.regularPrice).toBe('');
     expect(variations).toHaveLength(3);
 
     // Small variant — has compare_at_price
     const small = variations.find((v) => v.sku === 'GSR-S');
     expect(small?.type).toBe('variation');
-    expect(small?.parentSku).toBe('');
+    expect(small?.parentSku).toBe('gothic-silver-ring');
     expect(small?.regularPrice).toBe('59.99');
     expect(small?.salePrice).toBe('49.99');
     expect(small?.stock).toBe(10);
