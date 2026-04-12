@@ -1,16 +1,17 @@
 # Contributing
 
-This repo improves through real-world migration experience. Every migration surfaces new Wix behaviors, better extraction techniques, and edge cases. This document explains how to contribute those findings back — and is written so that an AI agent can follow it without human assistance.
+This repo improves through real-world migration experience. Every migration surfaces new platform behaviors, better extraction techniques, and edge cases. This document explains how to contribute those findings back — and is written so that an AI agent can follow it without human assistance.
 
 ## What to contribute
 
 **Good contributions:**
-- New Wix API endpoints discovered during network interception
-- Better handling for content types we didn't cover (e.g. Wix Events, Wix Video)
-- Fixes for scripts that broke because Wix changed something
-- Better WordPress block mappings for Wix layout elements
-- Discoveries about Wix window globals or page data structures
+- New API endpoints or data sources discovered during extraction
+- Better handling for content types we didn't cover (e.g. events, video, galleries)
+- Fixes for adapters that broke because a platform changed something
+- Better WordPress block mappings for platform layout elements
 - Extraction improvements (faster, more complete, fewer failures)
+- New platform adapters (see the `/adapt` skill)
+- Product extraction improvements (better variant handling, missing fields)
 
 **Not what this repo is for:**
 - General WordPress development help
@@ -29,16 +30,24 @@ git checkout -b improvement/short-description-of-what-you-found
 ```
 
 Branch naming: `improvement/` prefix, then a short kebab-case description of the finding.
-Examples: `improvement/wix-blog-v2-api`, `improvement/gallery-block-mapping`, `improvement/handle-dynamic-pages`
+Examples: `improvement/squarespace-gallery-extraction`, `improvement/shopify-variant-images`, `improvement/handle-dynamic-pages`
 
 ### 2. Make your change
 
 Edit the relevant file. Keep changes focused — one discovery per PR.
 
-If you're fixing a script, test it:
+Test your change:
 ```bash
 npm install
-node scripts/discover.js https://example.wixsite.com/test  # use a real Wix site
+
+# Run the test suite
+npx vitest run
+
+# Test against a real site (dry run)
+npx tsx src/cli.ts <site-url> --dry-run --verbose
+
+# Verify extraction output
+npx tsx src/cli.ts verify ./output/<site-dir>
 ```
 
 If you can't test against a real site, note that in the PR and explain what you observed.
@@ -51,8 +60,8 @@ This is required. Add a new entry at the top of [DISCOVERIES.md](./DISCOVERIES.m
 ## YYYY-MM-DD — Short title
 
 **Found by:** [AI assistant name or "human contributor"]
-**During:** [brief context — e.g. "migrating a 200-post Wix blog"]
-**Type:** [API endpoint | window global | content type | bug fix | performance]
+**During:** [brief context — e.g. "migrating a 200-post Squarespace blog"]
+**Type:** [API endpoint | content type | bug fix | performance | platform quirk]
 
 ### What I found
 [1-3 sentences describing the discovery]
@@ -78,8 +87,8 @@ gh pr create --title "discovery: short description" --body "$(cat <<'EOF'
 [Context — what migration, what problem you were solving]
 
 ## Tested against
-- [ ] Real Wix site (describe it briefly, no PII)
-- [ ] Script runs without errors
+- [ ] Real site (describe it briefly, no PII)
+- [ ] Tests pass (`npx vitest run`)
 - [ ] Output looks correct
 
 ## Discovery log entry added to DISCOVERIES.md
@@ -96,11 +105,31 @@ A maintainer (human or AI with repo access) will review the PR. If the discovery
 
 ## Code style
 
-- Node.js scripts, no TypeScript needed
+- TypeScript for all source code in `src/`
+- Ink (React for CLI) for terminal UI components in `src/ui/`
 - Async/await, not callbacks
-- `console.error()` for errors, `console.log()` for progress, write structured output to files
-- Self-contained where possible — minimize dependencies
+- Vitest for testing
 - Comments only where the logic isn't obvious
+
+## Project structure
+
+```
+src/
+  adapters/       Platform-specific extraction (wix.ts, squarespace.ts, webflow.ts, shopify.ts, shared.ts)
+  lib/
+    extraction/   WXR builder, sitemap, media, detection, extraction log
+    import/       WordPress REST API importer, WooCommerce CSV
+    features/     Platform feature detection
+    setup/        WordPress connection validation
+    verification/ Post-extraction verification
+  ui/             Ink CLI components (discover, inspect, verify, setup, import)
+  mcp-server.ts   MCP server with 8 tools
+  cli.ts          CLI entry point
+  types.ts        PlatformAdapter interface
+skills/           AI skill definitions (liberate, qa, diagnose, adapt)
+commands/         AI command definitions (inspect, import, verify, setup)
+scripts/          Legacy standalone scripts (Wix, Squarespace)
+```
 
 ## Questions
 
