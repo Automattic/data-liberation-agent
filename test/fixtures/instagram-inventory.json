@@ -1,0 +1,61 @@
+{
+  "platform": "instagram",
+  "username": "mountaincoffee",
+  "profile": {
+    "id": "12345",
+    "username": "mountaincoffee",
+    "fullName": "Mountain Coffee Roasters",
+    "biography": "Single-origin coffee from Colombia",
+    "profilePicUrl": "https://scontent.cdninstagram.com/profile.jpg",
+    "postCount": 3,
+    "followerCount": 1500,
+    "followingCount": 200,
+    "isPrivate": false,
+    "isVerified": false
+  },
+  "discoveredAt": "2026-04-12T00:00:00.000Z",
+  "counts": { "photo": 1, "video": 1, "carousel": 1 },
+  "urls": [
+    { "url": "https://www.instagram.com/p/CABC123/", "type": "photo", "id": "1", "shortcode": "CABC123" },
+    { "url": "https://www.instagram.com/p/CDEF456/", "type": "carousel", "id": "2", "shortcode": "CDEF456" },
+    { "url": "https://www.instagram.com/p/CGHI789/", "type": "video", "id": "3", "shortcode": "CGHI789" }
+  ],
+  "posts": [
+    {
+      "id": "1",
+      "shortcode": "CABC123",
+      "type": "photo",
+      "timestamp": 1700000000,
+      "date": "2023-11-14T22:13:20.000Z",
+      "caption": "Morning pour over ☕\nNothing like a fresh cup. #coffee #pourover @baristadaily",
+      "displayUrl": "https://scontent.cdninstagram.com/v/t51.2885-15/photo1_1080.jpg",
+      "isVideo": false,
+      "videoUrl": null,
+      "accessibilityCaption": "A white ceramic dripper over a glass carafe.",
+      "url": "https://www.instagram.com/p/CABC123/"
+    },
+    {
+      "id": "2",
+      "shortcode": "CDEF456",
+      "type": "carousel",
+      "timestamp": 1700100000,
+      "date": "2023-11-16T01:00:00.000Z",
+      "caption": "New beans just dropped 🫘 #colombia #singleorigin",
+      "displayUrl": "https://scontent.cdninstagram.com/v/t51.2885-15/photo2a_1080.jpg",
+      "carouselCount": 3,
+      "url": "https://www.instagram.com/p/CDEF456/"
+    },
+    {
+      "id": "3",
+      "shortcode": "CGHI789",
+      "type": "video",
+      "timestamp": 1700200000,
+      "date": "2023-11-17T04:46:40.000Z",
+      "caption": "Roasting day timelapse",
+      "displayUrl": "https://scontent.cdninstagram.com/v/t51.2885-15/video3_thumb.jpg",
+      "isVideo": true,
+      "videoUrl": "https://scontent.cdninstagram.com/v/t51.2885-15/video3.mp4",
+      "url": "https://www.instagram.com/p/CGHI789/"
+    }
+  ]
+}

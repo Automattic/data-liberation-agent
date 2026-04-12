@@ -2,7 +2,7 @@
 
 ## Overview
 
-`data-liberation-agent` extracts content from closed web platforms (Wix, Squarespace, Webflow, Shopify) and produces WordPress-compatible WXR files. All four platform adapters are implemented.
+`data-liberation-agent` extracts content from closed web platforms (Wix, Squarespace, Webflow, Shopify, Instagram) and produces WordPress-compatible WXR files. All five platform adapters are implemented.
 
 Three entry points — MCP server (11 tools), CLI (`src/cli.ts`), and Claude Code plugin (`claude plugin add .`) — all share `src/lib/` and `src/adapters/`. The plugin just wraps the MCP server.
 
@@ -23,3 +23,4 @@ Adapters produce structured content and call into `WxrBuilder`, `ExtractionLog`,
 - `classifyUrl` types: `homepage`, `post`, `product`, `gallery`, `event`, `page` (no `category`/`author`/`other`)
 - Media filename collision handling uses numeric suffixes (`-2`, `-3`), not hashes
 - `detect-platform` uses domain-level URL patterns and HTTP fingerprinting (headers + HTML markers) — no path-based detection
+- Instagram adapter requires `cdpPort` for both `discover` and `extract` — Instagram has no public sitemap or unauthenticated API. Discover scrolls the profile and intercepts GraphQL responses; extract visits each post via `?img_index=N` for carousel slide capture.

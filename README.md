@@ -20,8 +20,9 @@ This tool extracts all content from closed platforms — posts, pages, media, na
 | **Squarespace** | Ready | [`prompts/squarespace.md`](./prompts/squarespace.md) |
 | **Webflow** | Ready | [`prompts/webflow.md`](./prompts/webflow.md) |
 | **Shopify** (blog/pages/products) | Ready | [`prompts/shopify.md`](./prompts/shopify.md) |
+| **Instagram** (posts, carousels, videos) | Ready | [`prompts/instagram.md`](./prompts/instagram.md) |
 
-All four platforms have MCP adapters with full extraction support including products (exported as WooCommerce-compatible CSV).
+All five platforms have MCP adapters with full extraction support. Wix/Squarespace/Webflow/Shopify export products as WooCommerce-compatible CSV; Instagram exports posts as a WXR with `wp:image` / `wp:gallery` / `wp:video` blocks and hashtag-derived tags.
 
 ## AI tool integration
 

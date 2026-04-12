@@ -31,6 +31,7 @@ const URL_PATTERNS: UrlPattern[] = [
   { pattern: /squarespace\.com/i, platform: 'squarespace' },
   { pattern: /webflow\.io|webflow\.com/i, platform: 'webflow' },
   { pattern: /myshopify\.com|shopify\.com/i, platform: 'shopify' },
+  { pattern: /(^|[/.])instagram\.com/i, platform: 'instagram' },
 ];
 
 const HTTP_SIGNALS: HttpSignal[] = [

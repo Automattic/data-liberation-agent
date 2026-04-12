@@ -1,77 +1,86 @@
-# Instagram to WordPress.com Migration Prompt
+# Instagram to WordPress Migration Prompt
 
 Copy everything below this line and paste it into your AI assistant (Claude, ChatGPT, Gemini, etc.).
 
 ---
 
-I want to migrate my Instagram photos and posts to WordPress.com. My Instagram username is: **[PASTE YOUR USERNAME HERE]**
+I want to migrate my Instagram posts to WordPress. My Instagram username (or profile URL) is: **[PASTE YOUR USERNAME OR PROFILE URL HERE]**
 
-I have (or will create) a WordPress.com account. Please help me migrate using the playbook at https://github.com/Automattic/data-liberation-agent — read AGENTS.md first for full instructions.
+I have (or will create) a WordPress site. Please help me migrate using the playbook at https://github.com/Automattic/data-liberation-agent — read AGENTS.md first for full instructions.
 
-**Important**: Instagram requires an authenticated browser session. I'll need to have Chrome (or another Chromium browser) open and logged into Instagram before we start.
+**Important**: Instagram has no public sitemap and no unauthenticated API. The Instagram adapter requires an authenticated browser session connected via Chrome DevTools Protocol (CDP). I'll need Chrome (or another Chromium browser) launched with `--remote-debugging-port` and logged into Instagram **before** we run discovery or extraction.
 
-Here's what I need you to do:
-
-## Step 1: Set up browser access
-
-Help me launch Chrome with remote debugging enabled so the migration scripts can connect:
-
-1. Quit Chrome completely
-2. Relaunch with: `"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --remote-debugging-port=9222 --user-data-dir="$HOME/.data-liberation/cdp-profile/chrome" --restore-last-session`
-3. Log into Instagram in the browser window that opens
-4. Confirm the connection works
-
-## Step 2: Discover all my posts
+## Step 1: Inspect
 
 ```bash
-node scripts/instagram/discover.js MY_USERNAME --cdp-port 9222
+npm run inspect -- https://www.instagram.com/[MY-USERNAME]/
 ```
 
-This connects to my browser, navigates to my profile, and intercepts Instagram's internal GraphQL API responses as it scrolls through all my posts. It captures:
-- Post metadata (captions, dates, locations, hashtags, tagged users)
-- Post types (photos, videos, carousels with slide counts)
-- Image and video URLs
-- Profile information
+This confirms the platform is detected as Instagram and shows what the adapter expects.
 
-Show me the inventory summary and wait for my approval before proceeding.
-
-**If it stalls or gets rate limited**: Add `--delay 3000` for a gentler pace.
-
-## Step 3: Extract full content and download media
+## Step 2: Launch Chrome with remote debugging and log in to Instagram
 
 ```bash
-node scripts/instagram/extract.js MY_USERNAME --cdp-port 9222
+# macOS:
+/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome \
+  --remote-debugging-port=9222 \
+  --user-data-dir="$HOME/.data-liberation/cdp-profile/chrome" \
+  --restore-last-session
+
+# Linux:
+google-chrome --remote-debugging-port=9222
+
+# Windows:
+"C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222
 ```
 
-This visits each post individually to get:
-- Full-resolution images (not thumbnails)
-- All carousel slides (uses `?img_index=N` to access each slide directly)
-- Video URLs
-- Tagged users, location details, accessibility captions
+In that Chrome window, navigate to `https://www.instagram.com/` and log in. Confirm I'm logged in before continuing.
 
-All media is downloaded locally — Instagram CDN URLs expire, so this must happen promptly after discovery.
-
-## Step 4: Import to WordPress.com
+## Step 3: Discover all my posts
 
 ```bash
-node scripts/import.js --site my-wp-site.wordpress.com --token MY_APP_PASSWORD
+npm run liberate -- https://www.instagram.com/[MY-USERNAME]/ --output ./output --cdp-port 9222 --verbose --discover-only
 ```
 
-This creates WordPress posts from the extracted data:
-- Each Instagram post becomes a WordPress post (as draft)
-- Images uploaded to the media library
-- Captions become post content with @mentions and #hashtags linked
-- Original post date preserved
-- Instagram shortcode and URL stored as post meta
+The Instagram adapter will:
+- Open a new tab in the connected Chrome window and navigate to my profile
+- Scroll the profile, intercepting Instagram's GraphQL responses to capture post metadata (captions, dates, locations, hashtags, photo/video/carousel type, slide counts)
+- Build an inventory at `output/inventory.json`
 
-**For a custom post type** (e.g. a "photo" CPT): add `--post-type photo`
+**If it stalls or gets rate limited**, add `--delay 3000` for a gentler scroll cadence.
+
+Show me the inventory summary (counts by type, total post count, profile metadata) and wait for my approval before extracting.
+
+## Step 4: Extract content and download media
+
+```bash
+npm run liberate -- https://www.instagram.com/[MY-USERNAME]/ --output ./output --cdp-port 9222 --verbose
+```
+
+For each post the adapter will:
+- Visit the post URL in the connected browser
+- Capture full-resolution images from the intercepted media API responses
+- For carousels, walk `?img_index=N` for every slide and dedupe by Instagram media ID
+- Download all images and videos locally (Instagram CDN URLs expire — this must happen promptly after discovery)
+- Build a `wp:image` block for photos, `wp:video` for videos, and `wp:gallery` for carousels
+- Convert hashtags to WordPress tags and `@mentions` / `#hashtags` in captions to links
+- Append a "View on Instagram" source link to each post
+
+If extraction is interrupted, resume with `--resume`.
 
 ## Step 5: Verify
 
-When done:
-- Show me how many posts were imported vs. discovered
-- Flag any posts with missing images or import errors
-- Check that carousel posts have all their slides
-- List the date range covered (oldest → newest)
+```bash
+npm run verify -- ./output
+```
+
+Show me the verification report and flag any posts with missing media or failed extractions.
+
+## Step 6: Import to WordPress
+
+```bash
+npm run setup -- --site [MY-WORDPRESS-SITE] --username [MY-USERNAME] --token [APP-PASSWORD]
+npm run import -- ./output --site [MY-WORDPRESS-SITE] --username [MY-USERNAME] --token [APP-PASSWORD]
+```
 
 Work methodically — do one step at a time, show me progress, and wait for my go-ahead before moving to the next step.
