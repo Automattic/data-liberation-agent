@@ -1,17 +1,43 @@
 {
-  "name": "data-liberation-agent",
+  "name": "data-liberation",
   "version": "0.1.0",
-  "description": "AI-assisted migration from Wix to WordPress.com",
+  "description": "Extract content from closed web platforms into WordPress-compatible WXR files",
   "type": "module",
+  "bin": {
+    "data-liberation": "./dist/cli.js"
+  },
   "scripts": {
     "discover": "node scripts/discover.js",
     "extract": "node scripts/extract.js",
-    "import": "node scripts/import.js"
-  },
-  "dependencies": {
-    "playwright": "^1.44.0"
+    "import": "node scripts/import.js",
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "mcp": "tsx src/mcp-server.ts",
+    "inspect": "tsx src/cli.ts inspect",
+    "qa": "tsx src/cli.ts qa",
+    "verify": "tsx src/cli.ts verify",
+    "setup": "tsx src/cli.ts setup",
+    "liberate": "tsx src/cli.ts"
   },
   "engines": {
     "node": ">=18"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.27.0",
+    "@types/papaparse": "^5.5.2",
+    "cheerio": "^1.2.0",
+    "fast-xml-parser": "^5.5.10",
+    "ink": "^6.8.0",
+    "ink-spinner": "^5.0.0",
+    "papaparse": "^5.5.3",
+    "playwright": "^1.44.0",
+    "react": "^19.2.4"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.14",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
   }
 }
