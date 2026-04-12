@@ -328,6 +328,63 @@ describe('WooProductCsvBuilder', () => {
     expect(csv).toContain('Color');
   });
 
+  it('emits fixed meta columns for SEO title/desc and cost of goods', () => {
+    const builder = new WooProductCsvBuilder();
+    builder.addProduct({
+      name: 'Widget',
+      seoTitle: 'Best Widget Ever',
+      seoDescription: 'The finest widget available',
+      costOfGoods: '4.25',
+    });
+
+    const csv = buildAndRead(builder);
+    const rows = parseRows(csv);
+    const idx = (name: string) => rows[0].indexOf(name);
+
+    expect(idx('meta:_yoast_wpseo_title')).toBeGreaterThan(-1);
+    expect(idx('meta:_yoast_wpseo_metadesc')).toBeGreaterThan(-1);
+    expect(idx('meta:_wc_cog_cost')).toBeGreaterThan(-1);
+    expect(dataRow(rows, 1, idx('meta:_yoast_wpseo_title'))).toBe('Best Widget Ever');
+    expect(dataRow(rows, 1, idx('meta:_yoast_wpseo_metadesc'))).toBe('The finest widget available');
+    expect(dataRow(rows, 1, idx('meta:_wc_cog_cost'))).toBe('4.25');
+  });
+
+  it('fixed meta columns are always present even when empty', () => {
+    const builder = new WooProductCsvBuilder();
+    builder.addProduct({ name: 'Bare' });
+    const csv = buildAndRead(builder);
+    expect(csv).toContain('meta:_yoast_wpseo_title');
+    expect(csv).toContain('meta:_yoast_wpseo_metadesc');
+    expect(csv).toContain('meta:_wc_cog_cost');
+  });
+
+  it('emits columns for adapter-supplied custom meta keys', () => {
+    const builder = new WooProductCsvBuilder();
+    builder.addProduct({ name: 'A', meta: { _custom_field: 'alpha' } });
+    builder.addProduct({ name: 'B', meta: { _custom_field: 'beta', _other: 'gamma' } });
+    const csv = buildAndRead(builder);
+    const rows = parseRows(csv);
+    const idx = (name: string) => rows[0].indexOf(name);
+
+    expect(idx('meta:_custom_field')).toBeGreaterThan(-1);
+    expect(idx('meta:_other')).toBeGreaterThan(-1);
+    expect(dataRow(rows, 1, idx('meta:_custom_field'))).toBe('alpha');
+    expect(dataRow(rows, 2, idx('meta:_other'))).toBe('gamma');
+  });
+
+  it('first-class fields take precedence over meta[] for the same key', () => {
+    const builder = new WooProductCsvBuilder();
+    builder.addProduct({
+      name: 'Widget',
+      seoTitle: 'From field',
+      meta: { _yoast_wpseo_title: 'From meta' },
+    });
+    const csv = buildAndRead(builder);
+    const rows = parseRows(csv);
+    const idx = (name: string) => rows[0].indexOf(name);
+    expect(dataRow(rows, 1, idx('meta:_yoast_wpseo_title'))).toBe('From field');
+  });
+
   it('uses instock/outofstock for stock_status', () => {
     const builder = new WooProductCsvBuilder();
     builder.addProduct({ name: 'In Stock', inStock: true });
