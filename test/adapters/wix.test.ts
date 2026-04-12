@@ -96,20 +96,20 @@ describe('Wix adapter WXR integration', () => {
 
     // Verify blog post
     expect(xml).toContain('<title>Hello World</title>');
-    expect(xml).toContain('<![CDATA[post]]>');
+    expect(xml).toContain('<wp:post_type>post</wp:post_type>');
     expect(xml).toContain('first blog post');
 
     // Verify pages
     expect(xml).toContain('<title>Welcome to Test Site</title>');
     expect(xml).toContain('<title>About Us</title>');
-    expect(xml).toContain('<![CDATA[page]]>');
+    expect(xml).toContain('<wp:post_type>page</wp:post_type>');
 
     // Verify SEO meta
     expect(xml).toContain('<wp:meta_key>_seo_title</wp:meta_key>');
     expect(xml).toContain('Hello World - Test Site');
 
     // Verify nav menu items
-    expect(xml).toContain('<![CDATA[nav_menu_item]]>');
+    expect(xml).toContain('<wp:post_type>nav_menu_item</wp:post_type>');
 
     // Verify redirect map
     const redirectPath = join(tempDir, 'redirect-map.json');
@@ -147,7 +147,7 @@ describe('Wix adapter WXR integration', () => {
     wxr.serialize(wxrPath);
     const xml = readFileSync(wxrPath, 'utf8');
 
-    expect(xml).toContain('<![CDATA[attachment]]>');
+    expect(xml).toContain('<wp:post_type>attachment</wp:post_type>');
     expect(xml).toContain('wixstatic.com/media/blog-hero.jpg');
     expect(xml).toContain('<wp:meta_key>_thumbnail_id</wp:meta_key>');
   });

@@ -164,20 +164,21 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: 'liberate_setup',
-      description: 'Validate WordPress connection: check site reachability, REST API, and authentication. Returns guidance if anything fails.',
+      description: 'Validate WordPress connection: check site reachability, REST API, and authentication. Returns guidance if anything fails. Pass delegate: true to skip validation and receive a structured manifest describing what the import target needs — useful when the calling environment handles site setup itself.',
       inputSchema: {
         type: 'object' as const,
         properties: {
           site: { type: 'string', description: 'WordPress site domain (e.g. mysite.com or localhost:8881)' },
           username: { type: 'string', description: 'WordPress username' },
           token: { type: 'string', description: 'WordPress application password' },
+          delegate: { type: 'boolean', description: 'Skip validation and return a setup manifest for the calling environment to handle. Use when the environment has its own site management (e.g. local dev tools).' },
         },
-        required: ['site', 'username', 'token'],
+        required: [],
       },
     },
     {
       name: 'liberate_import',
-      description: 'Import a WXR file into a WordPress site via the REST API',
+      description: 'Import a WXR file into a WordPress site. Pass delegate: true to skip REST import and receive a structured import manifest — useful when the calling environment handles imports itself (e.g. local dev tools with direct database/CLI access).',
       inputSchema: {
         type: 'object' as const,
         properties: {
@@ -193,8 +194,9 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           importAuthors: { type: 'boolean', description: 'Create WordPress users for each author in the WXR (default: false — all content owned by authenticated user)' },
           woocommerceKey: { type: 'string', description: 'WooCommerce consumer key for product import' },
           woocommerceSecret: { type: 'string', description: 'WooCommerce consumer secret for product import' },
+          delegate: { type: 'boolean', description: 'Skip REST import and return a structured import manifest for the calling environment to handle.' },
         },
-        required: ['wxrFile', 'site', 'username', 'token'],
+        required: ['wxrFile'],
       },
     },
   ],
@@ -403,6 +405,22 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     case 'liberate_setup': {
+      // Delegate mode: return a manifest for the calling environment
+      if (typedArgs.delegate) {
+        return textResult({
+          mode: 'delegate',
+          manifest: {
+            description: 'A running WordPress site is needed to receive the imported content.',
+            requirements: [
+              'A WordPress site must be available and running',
+              'The site should have the WordPress Importer plugin installed and activated',
+              'If products will be imported, WooCommerce should be installed and activated',
+            ],
+          },
+        });
+      }
+
+      // REST API mode: validate connection
       const { validateWpConnection } = await import('./lib/setup/wp-setup.js');
       const report = await validateWpConnection({
         site: typedArgs.site as string,
@@ -413,12 +431,36 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     case 'liberate_import': {
+      const wxrFile = typedArgs.wxrFile as string;
+
+      // Delegate mode: return a structured import manifest
+      if (typedArgs.delegate) {
+        const outputDir = join(wxrFile, '..');
+        const { existsSync } = await import('fs');
+        const mediaDir = join(outputDir, 'media');
+        const productsCsvPath = join(outputDir, 'products.csv');
+        const redirectMapPath = join(outputDir, 'redirect-map.json');
+
+        return textResult({
+          mode: 'delegate',
+          manifest: {
+            wxrFile,
+            outputDir,
+            mediaDir: existsSync(mediaDir) ? mediaDir : null,
+            productsCsv: existsSync(productsCsvPath) ? productsCsvPath : null,
+            redirectMap: existsSync(redirectMapPath) ? redirectMapPath : null,
+            importAuthors: (typedArgs.importAuthors as boolean) ?? false,
+          },
+        });
+      }
+
+      // REST API mode: import directly
       try {
         const { importToWordPress } = await import('./lib/import/wp-importer.js');
         const { resolveSiteUrl } = await import('./lib/import/resolve-site-url.js');
         const resolvedSite = await resolveSiteUrl(typedArgs.site as string);
         const importResult = await importToWordPress({
-          wxrFile: typedArgs.wxrFile as string,
+          wxrFile,
           site: resolvedSite,
           username: typedArgs.username as string,
           token: typedArgs.token as string,

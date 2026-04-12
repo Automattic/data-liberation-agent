@@ -241,6 +241,20 @@ function safeCdata(str: string): string {
   return str.replace(/]]>/g, ']]]]><![CDATA[>');
 }
 
+/**
+ * Collapse whitespace that fast-xml-parser inserts around CDATA sections.
+ *
+ * fast-xml-parser with format:true produces:
+ *   <tag>\n    <![CDATA[value]]>\n  </tag>
+ *
+ * WordPress's importer reads the text content including that whitespace,
+ * which corrupts values. This collapses it to:
+ *   <tag><![CDATA[value]]></tag>
+ */
+function collapseCdataWhitespace(xml: string): string {
+  return xml.replace(/>\s*(<!\[CDATA\[[\s\S]*?\]\]>)\s*</g, '>$1<');
+}
+
 /** Wrap a value for XMLBuilder CDATA output with ]]> escaping. */
 function cd(value: string): { __cdata: string } {
   return { __cdata: safeCdata(value) };
@@ -518,7 +532,7 @@ export class WxrBuilder {
         },
       },
     };
-    let xml = xmlBuilder.build(obj) as string;
+    let xml = collapseCdataWhitespace(xmlBuilder.build(obj) as string);
     // Strip closing tags — items and taxonomies are appended after
     xml = xml.replace(/\s*<\/channel>\s*\n?\s*<\/rss>\s*$/, '');
     return xml;
@@ -579,7 +593,7 @@ export class WxrBuilder {
       fragments.push(xmlBuilder.build({ 'wp:term': termObj }));
     }
 
-    return fragments.join('');
+    return collapseCdataWhitespace(fragments.join(''));
   }
 
   private _serializeItem(item: WxrItem): string {
@@ -601,16 +615,16 @@ export class WxrBuilder {
       'content:encoded': cd(content),
       'excerpt:encoded': cd(excerpt),
       'wp:post_id': item.id,
-      'wp:post_date': cd(formatWpDate(date)),
-      'wp:post_date_gmt': cd(formatWpDate(date)),
-      'wp:comment_status': cd('closed'),
-      'wp:ping_status': cd('closed'),
-      'wp:post_name': cd(slug),
-      'wp:status': cd('draft'),
+      'wp:post_date': formatWpDate(date),
+      'wp:post_date_gmt': formatWpDate(date),
+      'wp:comment_status': 'closed',
+      'wp:ping_status': 'closed',
+      'wp:post_name': slug,
+      'wp:status': 'draft',
       'wp:post_parent': parent,
       'wp:menu_order': menuOrder,
-      'wp:post_type': cd(item.type),
-      'wp:post_password': cd(''),
+      'wp:post_type': item.type,
+      'wp:post_password': '',
       'wp:is_sticky': 0,
     };
 
@@ -661,20 +675,20 @@ export class WxrBuilder {
       obj['wp:comment'] = itemComments.map((comment) => ({
         'wp:comment_id': comment.id,
         'wp:comment_author': cd(comment.author),
-        'wp:comment_author_email': cd(comment.authorEmail),
+        'wp:comment_author_email': comment.authorEmail,
         'wp:comment_author_url': comment.authorUrl,
-        'wp:comment_author_IP': cd(comment.authorIp),
-        'wp:comment_date': cd(formatWpDate(comment.date)),
-        'wp:comment_date_gmt': cd(formatWpDate(comment.date)),
+        'wp:comment_author_IP': comment.authorIp,
+        'wp:comment_date': formatWpDate(comment.date),
+        'wp:comment_date_gmt': formatWpDate(comment.date),
         'wp:comment_content': cd(comment.content),
-        'wp:comment_approved': cd(comment.approved),
-        'wp:comment_type': cd(comment.type),
+        'wp:comment_approved': comment.approved,
+        'wp:comment_type': comment.type,
         'wp:comment_parent': comment.parent,
         'wp:comment_user_id': comment.userId,
       }));
     }
 
-    return xmlBuilder.build({ item: obj }) as string;
+    return collapseCdataWhitespace(xmlBuilder.build({ item: obj }) as string);
   }
 
   /** Append a wp:postmeta entry to an item object. */

@@ -125,13 +125,13 @@ describe('Shopify WXR integration', () => {
 
     // Verify blog post content
     expect(xml).toContain('<title>How to Choose the Best Coffee Beans</title>');
-    expect(xml).toContain('<![CDATA[post]]>');
+    expect(xml).toContain('<wp:post_type>post</wp:post_type>');
     expect(xml).toContain('Choosing the right coffee beans');
     expect(xml).toContain('Origins Matter');
 
     // Verify page
     expect(xml).toContain('<title>About</title>');
-    expect(xml).toContain('<![CDATA[page]]>');
+    expect(xml).toContain('<wp:post_type>page</wp:post_type>');
 
     // Verify tags
     expect(xml).toContain('coffee');
@@ -139,11 +139,11 @@ describe('Shopify WXR integration', () => {
     expect(xml).toContain('beans');
 
     // Verify media
-    expect(xml).toContain('<![CDATA[attachment]]>');
+    expect(xml).toContain('<wp:post_type>attachment</wp:post_type>');
     expect(xml).toContain('cdn.shopify.com');
 
     // Verify nav menu items
-    expect(xml).toContain('<![CDATA[nav_menu_item]]>');
+    expect(xml).toContain('<wp:post_type>nav_menu_item</wp:post_type>');
 
     // Verify redirect map
     const redirectPath = join(tempDir, 'redirect-map.json');
@@ -264,13 +264,14 @@ describe('shopifyProductToWoo', () => {
     const { parent, variations } = shopifyProductToWoo(fixture.product);
 
     expect(parent.type).toBe('variable');
+    expect(parent.sku).toBe('gothic-silver-ring');
     expect(parent.regularPrice).toBe('');
     expect(variations).toHaveLength(3);
 
     // Small variant — has compare_at_price
     const small = variations.find((v) => v.sku === 'GSR-S');
     expect(small?.type).toBe('variation');
-    expect(small?.parentSku).toBe('');
+    expect(small?.parentSku).toBe('gothic-silver-ring');
     expect(small?.regularPrice).toBe('59.99');
     expect(small?.salePrice).toBe('49.99');
     expect(small?.stock).toBe(10);

@@ -724,6 +724,7 @@ export const wixAdapter: PlatformAdapter = {
         resume: !!wixOpts.resume,
         verbose: wixOpts.verbose,
         server: context.server,
+        csvBuilder,
         extractPage: async (url: string) => {
           const pageData = await extractWixPage(page, url);
 
