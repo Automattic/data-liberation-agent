@@ -1,0 +1,525 @@
+import React, { useState, useEffect } from 'react';
+import { render, useApp, Box, Text } from 'ink';
+import Spinner from 'ink-spinner';
+import { createInterface } from 'readline';
+import { Header } from './header.js';
+import { platformColor, confidenceBadge, pluralize } from './format.js';
+import { detect, type FullDetectionResult } from '../lib/extraction/detect-platform.js';
+import { fetchSitemap, classifyUrl } from '../lib/extraction/sitemap.js';
+import { WxrBuilder } from '../lib/extraction/wxr-builder.js';
+import { ExtractionLog } from '../lib/extraction/extraction-log.js';
+import { wixAdapter, type Inventory } from '../adapters/wix.js';
+import { squarespaceAdapter } from '../adapters/squarespace.js';
+import { webflowAdapter } from '../adapters/webflow.js';
+import { shopifyAdapter } from '../adapters/shopify.js';
+import { mkdirSync, existsSync, writeFileSync, readFileSync } from 'fs';
+import { join, dirname } from 'path';
+
+function siteOutputDir(baseDir: string, url: string): string {
+  let host: string;
+  try {
+    const parsed = new URL(url.includes('://') ? url : `https://${url}`);
+    host = parsed.hostname + parsed.pathname;
+  } catch {
+    host = url;
+  }
+  const sanitized = host
+    .toLowerCase()
+    .replace(/\/$/, '')
+    .replace(/[^a-z0-9.-]/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '');
+  return join(baseDir, sanitized);
+}
+
+export interface LiberateProps {
+  url: string;
+  outputDir: string;
+  dryRun: boolean;
+  resume: boolean;
+  delay: number;
+  verbose: boolean;
+  token: string | null;
+  cdpPort: number | null;
+  nonInteractive: boolean;
+}
+
+type Phase =
+  | 'detecting'
+  | 'discovering'
+  | 'discovered'
+  | 'extracting'
+  | 'done'
+  | 'error';
+
+interface ExtractionProgress {
+  current: number;
+  total: number;
+  currentUrl: string;
+}
+
+interface ExtractionResult {
+  pagesExtracted: number;
+  postsExtracted: number;
+  mediaDownloaded: number;
+  productsExtracted: number;
+  failed: number;
+  wxrPath: string | null;
+}
+
+const adapters = [wixAdapter, squarespaceAdapter, webflowAdapter, shopifyAdapter];
+
+function findAdapter(platform: string) {
+  return adapters.find((a) => a.id === platform) || null;
+}
+
+
+function Liberate(props: LiberateProps & { onComplete?: (wxrPath: string | null) => void }) {
+  const { url, outputDir, dryRun, resume, delay, verbose, token, cdpPort, onComplete } = props;
+  const app = useApp();
+  const [phase, setPhase] = useState<Phase>('detecting');
+  const [detection, setDetection] = useState<FullDetectionResult | null>(null);
+  const [inventory, setInventory] = useState<Inventory | null>(null);
+  const [counts, setCounts] = useState<Record<string, number>>({});
+  const [progress, setProgress] = useState<ExtractionProgress>({ current: 0, total: 0, currentUrl: '' });
+  const [result, setResult] = useState<ExtractionResult | null>(null);
+  const [actualOutputDir, setActualOutputDir] = useState<string>(outputDir);
+  const [error, setError] = useState<string>('');
+
+  useEffect(() => {
+    (async () => {
+      try {
+        // If resuming and extraction already completed, skip straight to import prompt
+        if (resume) {
+          const siteDir = siteOutputDir(outputDir, url);
+          const completePath = join(siteDir, '.discovery-complete');
+          if (existsSync(completePath)) {
+            const wxrPath = join(siteDir, 'output.wxr');
+            const { readWxr } = await import('../lib/extraction/wxr-reader.js');
+            const wxrData = readWxr(wxrPath);
+            setActualOutputDir(siteDir);
+            const jsonlPath = join(siteDir, 'products.jsonl');
+            const productCount = existsSync(jsonlPath)
+              ? readFileSync(jsonlPath, 'utf8').split('\n').filter(Boolean).length
+              : 0;
+            setResult({
+              pagesExtracted: wxrData.items.filter((i) => i.type === 'page').length,
+              postsExtracted: wxrData.items.filter((i) => i.type === 'post').length,
+              mediaDownloaded: wxrData.items.filter((i) => i.type === 'attachment').length,
+              productsExtracted: productCount,
+              failed: 0,
+              wxrPath,
+            });
+            setPhase('done');
+            return;
+          }
+        }
+
+        // Phase 1: Detect
+        const det = await detect(url);
+        setDetection(det);
+
+        // Find adapter
+        const adapter = adapters.find((a) => a.id === det.platform);
+
+        if (!adapter) {
+          // No adapter — fall back to sitemap-only discovery
+          setPhase('discovering');
+          const found = await fetchSitemap(url);
+          const c: Record<string, number> = {};
+          for (const u of found) {
+            c[classifyUrl(u)] = (c[classifyUrl(u)] || 0) + 1;
+          }
+          setCounts(c);
+          setPhase('discovered');
+          setError(
+            det.platform === 'unknown'
+              ? 'Unknown platform — no adapter available'
+              : `No adapter for ${det.platform} yet`
+          );
+          return;
+        }
+
+        // Phase 2: Discover via adapter
+        setPhase('discovering');
+        const opts = {
+          cdpPort: cdpPort ?? undefined,
+          token: token ?? undefined,
+          delay,
+          verbose,
+        };
+        const inv = await adapter.discover(url, opts) as Inventory;
+        setInventory(inv);
+        setCounts(inv.counts);
+
+        // Phase 3: Extract
+        setPhase('extracting');
+        const siteDir = siteOutputDir(outputDir, url);
+        setActualOutputDir(siteDir);
+        mkdirSync(siteDir, { recursive: true });
+        const log = new ExtractionLog(siteDir);
+        if (!log.acquireLock()) {
+          setError('Extraction already in progress in this directory.');
+          setPhase('error');
+          return;
+        }
+
+        try {
+          const wxr = new WxrBuilder({
+            title: inv.siteMeta?.title || 'Imported Site',
+            url,
+            description: inv.siteMeta?.tagline || '',
+            language: inv.siteMeta?.language || 'en-US',
+          });
+
+          // Set up a fake server context that captures progress for the UI
+          const total = dryRun ? Math.min(3, inv.urls.length) : inv.urls.length;
+          setProgress({ current: 0, total, currentUrl: '' });
+          let progressCount = 0;
+
+          const fakeServer = {
+            sendLoggingMessage: (msg: { level: string; data: string }) => {
+              const match = msg.data.match(/^\[(\d+)\/(\d+)\]\s+(.*)/);
+              if (match) {
+                progressCount++;
+                setProgress({
+                  current: parseInt(match[1], 10),
+                  total: parseInt(match[2], 10),
+                  currentUrl: match[3],
+                });
+              }
+            },
+          };
+
+          const wxrPath = join(siteDir, 'output.wxr');
+          if (!dryRun && !resume) {
+            wxr.openStream(wxrPath);
+          }
+
+          const extractResult = await adapter.extract(inv, wxr, {
+            ...opts,
+            resume,
+            dryRun,
+            outputDir: siteDir,
+          }, {
+            log,
+            server: fakeServer as any,
+          });
+
+          if (!dryRun && !resume) {
+            wxr.closeStream();
+          } else if (!dryRun && resume && wxr.items.length > 0) {
+            wxr.serialize(wxrPath);
+          }
+
+          const summary = log.getSummary();
+          if (!dryRun) {
+            writeFileSync(join(siteDir, '.discovery-complete'), new Date().toISOString(), 'utf8');
+            const { readWxr } = await import('../lib/extraction/wxr-reader.js');
+            const wxrData = readWxr(wxrPath);
+            setResult({
+              pagesExtracted: wxrData.items.filter((i) => i.type === 'page').length,
+              postsExtracted: wxrData.items.filter((i) => i.type === 'post').length,
+              mediaDownloaded: wxrData.items.filter((i) => i.type === 'attachment').length,
+              productsExtracted: (extractResult as any)?.productsExtracted ?? 0,
+              failed: summary.failed.length,
+              wxrPath,
+            });
+          } else {
+            setResult({
+              pagesExtracted: wxr.items.filter((i) => i.type === 'page').length,
+              postsExtracted: wxr.items.filter((i) => i.type === 'post').length,
+              mediaDownloaded: wxr.items.filter((i) => i.type === 'attachment').length,
+              productsExtracted: (extractResult as any)?.productsExtracted ?? 0,
+              failed: summary.failed.length,
+              wxrPath: null,
+            });
+          }
+          setPhase('done');
+        } finally {
+          log.releaseLock();
+        }
+      } catch (err) {
+        setError((err as Error).message);
+        setPhase('error');
+      }
+    })();
+  }, [url]);
+
+  // Exit after rendering the final state so the caller can proceed
+  useEffect(() => {
+    if (phase === 'done' || phase === 'error' || phase === 'discovered') {
+      const timer = setTimeout(() => {
+        onComplete?.(result?.wxrPath ?? null);
+        app.exit();
+      }, 100);
+      return () => clearTimeout(timer);
+    }
+  }, [phase]);
+
+  return (
+    <Box flexDirection="column" paddingX={1} paddingY={1}>
+      <Header subtitle={url} />
+
+      {/* Detection */}
+      <Box>
+        {phase === 'detecting' ? (
+          <>
+            <Text color="yellow"><Spinner type="dots" /></Text>
+            <Text> Detecting platform...</Text>
+          </>
+        ) : detection ? (
+          <>
+            <Text color="green">✓</Text>
+            <Text> Platform: </Text>
+            <Text bold color={platformColor(detection.platform)}>
+              {detection.platform === 'unknown' ? 'Unknown' : detection.platform}
+            </Text>
+            <Text dimColor> {confidenceBadge(detection.confidence)} {detection.confidence}</Text>
+            {detection.signals.length > 0 && (
+              <Text dimColor> ({detection.signals[0]})</Text>
+            )}
+          </>
+        ) : null}
+      </Box>
+
+      {/* Discovery */}
+      {phase !== 'detecting' && (
+        <Box>
+          {phase === 'discovering' ? (
+            <>
+              <Text color="yellow"><Spinner type="dots" /></Text>
+              <Text> Discovering content...</Text>
+            </>
+          ) : Object.keys(counts).length > 0 ? (
+            <>
+              <Text color="green">✓</Text>
+              <Text> Found </Text>
+              <Text bold>{Object.values(counts).reduce((a, b) => a + b, 0)}</Text>
+              <Text> URLs</Text>
+            </>
+          ) : null}
+        </Box>
+      )}
+
+      {/* Content breakdown */}
+      {Object.keys(counts).length > 0 && phase !== 'discovering' && (
+        <Box flexDirection="column" marginTop={1} marginLeft={2}>
+          {Object.entries(counts)
+            .sort(([, a], [, b]) => b - a)
+            .map(([type, count]) => (
+              <Box key={type}>
+                <Text dimColor>{String(count).padStart(4)} </Text>
+                <Text>{pluralize(type, count)}</Text>
+              </Box>
+            ))}
+        </Box>
+      )}
+
+      {/* Extraction progress */}
+      {phase === 'extracting' && (
+        <Box marginTop={1}>
+          <Text color="yellow"><Spinner type="dots" /></Text>
+          <Text> Extracting </Text>
+          <Text bold>{progress.current}</Text>
+          <Text>/{progress.total}</Text>
+          {progress.currentUrl && (
+            <Text dimColor> {progress.currentUrl.length > 50 ? '...' + progress.currentUrl.slice(-47) : progress.currentUrl}</Text>
+          )}
+        </Box>
+      )}
+
+      {/* Results */}
+      {phase === 'done' && result && (
+        <Box flexDirection="column" marginTop={1}>
+          <Box>
+            <Text color="green">✓</Text>
+            <Text> Extraction complete{dryRun ? ' (dry run)' : ''}</Text>
+          </Box>
+          <Box flexDirection="column" marginLeft={2} marginTop={1}>
+            <Text><Text dimColor>{String(result.pagesExtracted).padStart(4)} </Text>pages</Text>
+            <Text><Text dimColor>{String(result.postsExtracted).padStart(4)} </Text>posts</Text>
+            <Text><Text dimColor>{String(result.mediaDownloaded).padStart(4)} </Text>media files</Text>
+            {result.productsExtracted > 0 && (
+              <Text><Text dimColor>{String(result.productsExtracted).padStart(4)} </Text>products</Text>
+            )}
+            {result.failed > 0 && (
+              <Text color="red"><Text dimColor>{String(result.failed).padStart(4)} </Text>failed</Text>
+            )}
+          </Box>
+          {result.wxrPath && (
+            <Box marginTop={1}>
+              <Text dimColor>WXR: {result.wxrPath}</Text>
+            </Box>
+          )}
+          <Box marginTop={0}>
+            <Text dimColor>Output: {actualOutputDir}</Text>
+          </Box>
+        </Box>
+      )}
+
+      {/* Import prompt handled by runDiscover after component exits */}
+
+      {/* No adapter — discovery-only result */}
+      {phase === 'discovered' && (
+        <Box flexDirection="column" marginTop={1}>
+          <Text color="yellow">! {error}</Text>
+          <Text dimColor>Supported: Wix, Squarespace, Webflow, Shopify.</Text>
+        </Box>
+      )}
+
+      {/* Unknown platform warning */}
+      {phase === 'done' && detection?.platform === 'unknown' && (
+        <Box marginTop={1}>
+          <Text color="yellow">! Supported platforms: Wix, Squarespace, Webflow, Shopify</Text>
+        </Box>
+      )}
+
+      {/* Error */}
+      {phase === 'error' && (
+        <Box marginTop={1}>
+          <Text color="red">Error: {error}</Text>
+        </Box>
+      )}
+    </Box>
+  );
+}
+
+function ask(question: string): Promise<string> {
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  return new Promise((resolve) => {
+    rl.question(question, (answer: string) => {
+      rl.close();
+      resolve(answer.trim());
+    });
+  });
+}
+
+export function runDiscover(url: string, opts: Partial<LiberateProps> = {}): void {
+  let wxrPath: string | null = null;
+
+  const props: LiberateProps = {
+    url,
+    outputDir: opts.outputDir || './output',
+    dryRun: opts.dryRun || false,
+    resume: opts.resume || false,
+    delay: opts.delay || 500,
+    verbose: opts.verbose || false,
+    token: opts.token || null,
+    cdpPort: opts.cdpPort || null,
+    nonInteractive: opts.nonInteractive || false,
+  };
+  const { waitUntilExit } = render(
+    <Liberate {...props} onComplete={(path) => { wxrPath = path; }} />,
+  );
+  waitUntilExit()
+    .then(async () => {
+      if (!wxrPath || props.nonInteractive) return;
+      const answer = await ask('\nReady to import to WordPress? (y/N) ');
+      if (answer.toLowerCase() !== 'y') {
+        const outputDir = dirname(wxrPath);
+        const productsCsv = join(outputDir, 'products.csv');
+        const hasProducts = existsSync(productsCsv);
+
+        console.log('\n  You can import manually using WP-CLI:\n');
+        console.log(`  # Import with original authors (creates WordPress users):`);
+        console.log(`  wp import ${wxrPath} --authors=create\n`);
+        console.log(`  # Or assign all content to yourself:`);
+        console.log(`  wp import ${wxrPath} --authors=skip`);
+
+        if (hasProducts) {
+          console.log('\n  Products were also extracted. To import them:');
+          console.log('  1. Install and activate WooCommerce on your WordPress site');
+          console.log('  2. Install the WooCommerce CSV Import plugin (included with WooCommerce)');
+          console.log(`  3. Go to WooCommerce > Products > Import and upload: ${productsCsv}`);
+          console.log('     Or via WP-CLI:');
+          console.log(`  wp wc product_csv_import run ${productsCsv}`);
+        }
+
+        console.log('');
+        return;
+      }
+
+      const hasSite = await ask('Do you already have a WordPress site? (y/N) ');
+      if (hasSite.toLowerCase() !== 'y') {
+        console.log('\n  To import, you need a WordPress site. Here\'s how to get started:\n');
+        console.log('  1. Create a WordPress site (wordpress.com, self-hosted, or WordPress Studio for local development)');
+        console.log('  2. Create an Application Password at WordPress Admin > Users > Profile > Application Passwords');
+        console.log('     (WordPress.com: wordpress.com/me/security/application-passwords)');
+        console.log('  3. Save the generated token\n');
+        console.log('  Once you have your site, username, and application password, continue below.\n');
+      }
+
+      const site = await ask('WordPress site domain (e.g. mysite.com or localhost:8881): ');
+      if (!site) { console.log('Skipping import.'); return; }
+
+      const username = await ask('WordPress username: ');
+      if (!username) { console.log('Skipping import.'); return; }
+
+      let token = process.env.WP_APP_PASSWORD || '';
+      if (!token) {
+        token = await ask('Application password (or set WP_APP_PASSWORD): ');
+      } else {
+        console.log('Using WP_APP_PASSWORD from environment.');
+      }
+      if (!token) { console.log('Skipping import.'); return; }
+
+      // Validate the connection before importing
+      console.log('\nValidating WordPress connection...');
+      const { validateWpConnection } = await import('../lib/setup/wp-setup.js');
+      const report = await validateWpConnection({ site, username, token });
+
+      if (!report.authenticated) {
+        console.log('');
+        for (const err of report.errors) console.log(`  ✗ ${err}`);
+        if (report.guidance.length > 0) {
+          console.log('\n  How to fix:');
+          for (const g of report.guidance) console.log(`    - ${g}`);
+        }
+        console.log('');
+        const retry = await ask('Try again with different credentials? (y/N) ');
+        if (retry.toLowerCase() !== 'y') { console.log('Skipping import.'); return; }
+
+        const site2 = await ask('WordPress site domain: ');
+        const username2 = await ask('WordPress username: ');
+        const token2 = await ask('Application password: ');
+        if (!site2 || !username2 || !token2) { console.log('Skipping import.'); return; }
+
+        const report2 = await validateWpConnection({ site: site2, username: username2, token: token2 });
+        if (!report2.authenticated) {
+          for (const err of report2.errors) console.log(`  ✗ ${err}`);
+          console.log('\nImport aborted. Run `data-liberation setup` to troubleshoot.');
+          return;
+        }
+        console.log(`  ✓ Connected to ${report2.siteName || site2} as ${report2.userName}`);
+
+        const authorsAnswer2 = await ask('Import original authors as WordPress users? If no, all content will be owned by you. (y/N) ');
+
+        const { runImport } = await import('./import.js');
+        runImport({ wxrFile: wxrPath, site: site2, username: username2, token: token2, dryRun: false, delay: 500, verbose: false, only: null, importAuthors: authorsAnswer2.toLowerCase() === 'y' });
+        return;
+      }
+
+      console.log(`  ✓ Connected to ${report.siteName || site} as ${report.userName}\n`);
+
+      const authorsAnswer = await ask('Import original authors as WordPress users? If no, all content will be owned by you. (y/N) ');
+      const importAuthors = authorsAnswer.toLowerCase() === 'y';
+
+      const { runImport } = await import('./import.js');
+      runImport({
+        wxrFile: wxrPath,
+        site: report.siteUrl || site,
+        username,
+        token,
+        dryRun: false,
+        delay: 500,
+        verbose: false,
+        only: null,
+        importAuthors,
+      });
+    })
+    .catch((err: unknown) => {
+      console.error(err);
+      process.exit(1);
+    });
+}
