@@ -28,13 +28,33 @@ Show me the full inspection results and wait for my approval before proceeding.
 
 ## Step 2: Extract all content
 
-Run the full extraction:
+Ask the AI about which of the two extraction tiers is right for you:
+
+**Tier 1 — Public extraction (no credentials needed)**
 
 ```bash
 npm run liberate -- [SHOPIFY URL] --output ./output --verbose
 ```
 
-This will:
+Uses Shopify's public JSON API (`/pages.json`, `/blogs.json`, `/products.json`) plus HTML fallback. Works on any public Shopify store without any login or token. Gets you the basics: pages, blog posts, products with prices and variants, images, categories, and tags.
+
+**Tier 2 — Admin API extraction (richer product data)**
+
+If you have admin access to your store, this gets you significantly more product detail: proper sale pricing, real stock policy, cost of goods, variant-level images, collection categories, and SEO metafields.
+
+To enable it, create a custom app in Shopify Admin:
+1. Go to **Settings → Apps and sales channels → Develop apps → Create an app**.
+2. Name it anything (e.g. "Data Liberation").
+3. Under **Configuration → Admin API access scopes**, enable: `read_products`, `read_inventory`, `read_content`, `read_online_store_pages`, and `read_online_store_navigation`.
+4. Click **Install app** to generate an Admin API access token — copy it immediately, Shopify only shows it once.
+5. Pass the token when running extraction:
+   ```bash
+   npm run liberate -- [SHOPIFY URL] --output ./output --admin-token shpat_xxx --verbose
+   ```
+
+You do **not** need to tell the tool your `myshopify.com` subdomain — it auto-detects that from your storefront HTML, even if you use a custom domain.
+
+**Either tier will:**
 - Use Shopify's public JSON API (`/pages.json`, `/blogs.json`, `/products.json`) for structured content when available
 - Fall back to appending `.json` to individual page URLs for article/page data
 - Fall back to HTML extraction if JSON API is unavailable

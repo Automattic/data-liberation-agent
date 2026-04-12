@@ -30,10 +30,12 @@ After extraction completes, the CLI prompts:
 | `--output <dir>` | Output directory | `./output` |
 | `--dry-run` | Extract 2-3 pages and report without writing WXR | off |
 | `--resume` | Resume a previous extraction, skipping already-processed URLs | off |
-| `--token <token>` | API token for platforms requiring auth (Webflow, Shopify) | `LIBERATION_TOKEN` env var |
+| `--token <token>` | API token for platforms requiring auth (e.g. Webflow) | `LIBERATION_TOKEN` env var |
 | `--delay <ms>` | Delay between requests | 500 |
 | `--verbose` | Detailed per-page extraction logging | off |
 | `--cdp-port <port>` | Chrome DevTools Protocol port for browser-based extraction | none |
+| `--admin-token <tok>` | **Shopify only** — Admin API access token. Unlocks GraphQL product extraction with richer fields (sale pricing, stock policy, cost of goods, variant media, collections, SEO metafields). Falls back to public JSON API on failure. | `SHOPIFY_ADMIN_TOKEN` env var |
+| `--shop-domain <host>` | **Shopify only** — `*.myshopify.com` hostname used for Admin API calls. Usually auto-detected from the storefront HTML during discovery; only pass manually if detection fails. | auto-detected |
 | `--non-interactive` | Skip the post-extraction import prompt | off |
 
 **Output directory structure:**
@@ -43,13 +45,22 @@ output/<site-hostname>/
   output.wxr              WordPress eXtended RSS file
   media/                  Downloaded images and attachments
   redirect-map.json       Old paths -> new WordPress slugs
-  extraction-log.jsonl    Per-URL extraction log
+  extraction-log.jsonl    Per-URL extraction log (atomic URL dedupe)
+  session.json            Pipeline stage, captured CLI opts, progress, pagination cursors
+  media-stubs.json        Per-asset download status (retry cap + user-ignored URLs)
   products.csv            WooCommerce product CSV (if e-commerce detected)
   products.jsonl          Raw product data stream
   .discovery-complete     Marker file (extraction finished successfully)
 ```
 
-**Resume:** When `--resume` is used, the CLI reads `extraction-log.jsonl` to skip already-processed URLs and rebuilds the media dedup hash map from existing files. Progress counters reflect the full total (e.g. `[21/50]` not `[1/30]`).
+**Resume state is split across four files:**
+
+- `extraction-log.jsonl` — append-only per-URL log; `--resume` skips any URL that already has a `processed` entry.
+- `session.json` — higher-level state: stage (`discovering` → `extracting` → `finalizing` → `complete`), the original CLI opts, per-entity `{discovered, extracted, failed}` counts, and adapter pagination cursors. Crash-safe via atomic rename; a corrupt file is preserved as `session.json.corrupt.<ts>` rather than deleted.
+- `media-stubs.json` — status per media URL (`awaiting` / `success` / `error` / `ignored`) with an attempt counter. After 3 consecutive failures the URL is treated as permanently broken and resume runs skip it. The `ignored` status is terminal; adapters or a future CLI can mark URLs to skip forever.
+- `products.jsonl` — streaming JSONL of mapped WooCommerce products; on `--resume` the file is appended to rather than truncated so mid-catalog crashes don't re-emit duplicates.
+
+**Resume:** When `--resume` is used, the CLI reads `extraction-log.jsonl` to skip already-processed URLs and rebuilds the media dedup hash map from existing files. `session.json` is loaded to restore stage and cursors. Progress counters reflect the full total (e.g. `[21/50]` not `[1/30]`). A `.liberation-lock` file prevents concurrent `data-liberation` runs against the same output directory — if the lock is present and the holding PID is still alive, a second run refuses to start.
 
 ### inspect
 

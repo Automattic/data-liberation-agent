@@ -108,9 +108,53 @@ The admin session gives the adapter access to:
 
 Extraction uses Playwright (headless browser) to intercept Wix's internal API calls and extract window globals. This is slower but captures content that isn't available via HTTP alone. Large sites may take several minutes.
 
-### Webflow / Shopify
+### Webflow
 
-These platforms require an API token. Ask the user for their token and pass it via `--token` (CLI) or the `token` parameter (MCP).
+Webflow requires a Webflow API token. Ask the user for their token and pass it via `--token` (CLI) or the `token` parameter (MCP).
+
+### Shopify
+
+Shopify has **two extraction tiers**. Always offer the richer one first and fall back only if the user can't produce an Admin API token.
+
+**Tier 1 — Public JSON API (no credentials)**
+
+Works for any public Shopify storefront. Pulls pages, blog posts, and products via the public `/pages.json`, `/blogs.json`, and `/products.json` endpoints plus HTML fallback for theme-rendered content. No token needed. Product data is limited to what the public API exposes — you lose compareAtPrice sale semantics, real stock policy, cost of goods, variant images, and collections.
+
+**Tier 2 — Admin GraphQL (richer product data)**
+
+When the user has admin access to their store, offer to use Shopify's Admin GraphQL API. This yields:
+- `compareAtPrice` → proper sale/regular price mapping on simple + variable products
+- `inventoryPolicy` + `inventoryItem.tracked` → real stock status (oversell-aware)
+- `inventoryItem.unitCost` → cost of goods written to `meta:_wc_cog_cost`
+- `inventoryItem.measurement.weight` → unit-normalized weight (kg)
+- Variant-level images
+- Collections → WooCommerce categories
+- SEO metafields (`meta:_yoast_wpseo_title` / `_yoast_wpseo_metadesc`)
+- Cursor-based pagination with mid-run resume
+
+**Guide the user through admin setup:**
+
+1. Direct them to Shopify Admin → **Settings → Apps and sales channels → Develop apps**.
+2. Create a new custom app (name it "Data Liberation" or similar).
+3. Under **Configuration → Admin API access scopes**, enable at minimum:
+   - `read_products` (required)
+   - `read_inventory` (for cost-of-goods + stock)
+   - `read_online_store_pages` / `read_online_store_navigation` (for pages)
+   - `read_content` (for blog articles)
+4. Click **Install app** to generate the Admin API access token — copy it immediately, Shopify only shows it once.
+5. Pass the token as `adminToken` (MCP) or via the adapter opts. **You do not need to ask the user for the shop domain** — `liberate_discover` auto-detects the `*.myshopify.com` hostname from the storefront HTML (`Shopify.shop` JS global) and stores it as `inventory.shopDomain`, even for sites served on custom domains.
+
+**When to use which tier:**
+- User has a Shopify login and some admin comfort → **prompt for Tier 2** and walk them through the custom app flow above
+- User just wants "get my stuff out" and doesn't want to touch admin → **Tier 1 is fine** but tell them upfront what they'll lose (sale pricing, cost of goods, richer categories)
+- User has a custom storefront domain (e.g. `shop.brand.com`) → Tier 2 still works because of auto-detection; do NOT ask them for the myshopify.com subdomain manually unless the detector failed
+
+**If `liberate_discover` did not populate `inventory.shopDomain`** (rare — the site may be behind Cloudflare or heavy bot protection that blocks HTML fetch), ask the user directly:
+"I couldn't auto-detect the myshopify.com subdomain. Can you paste the URL you see when you log into your Shopify admin? It looks like `https://admin.shopify.com/store/<name>` — the `<name>` is what I need."
+
+Pass the admin-resolved value as `shopDomain` alongside `adminToken`.
+
+**GraphQL failures fall back to Tier 1 automatically** — if the token is wrong or the scopes are insufficient, the adapter logs a warning and continues with the public JSON path, so the user's extraction still produces output.
 
 ## General notes
 
