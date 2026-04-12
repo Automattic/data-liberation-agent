@@ -89,9 +89,11 @@ export function parseInstagramUsername(input: string): string {
       const first = u.pathname.replace(/^\//, '').split('/')[0];
       return first || '';
     }
-    return trimmed;
+    // Bare input (not an Instagram URL): take the first path segment so
+    // `foo/bar` cannot smuggle a path into a navigation URL.
+    return trimmed.split('/')[0];
   } catch {
-    return trimmed;
+    return trimmed.split('/')[0];
   }
 }
 

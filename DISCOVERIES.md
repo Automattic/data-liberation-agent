@@ -26,7 +26,7 @@ Instagram is a React app that communicates via GraphQL queries to `https://www.i
 
 ### How it works
 
-Three-step pipeline: discover (scroll + intercept GraphQL) → extract (visit each post, use `?img_index=N` for carousels, download media) → import (XML-RPC `wp.uploadFile` for media, `wp.newPost` with `post_thumbnail` for featured images and gallery blocks for carousels).
+Implemented in `src/adapters/instagram.ts`: `discover()` scrolls the profile and intercepts GraphQL responses to build a post inventory; `extract()` visits each post (walking `?img_index=N` for carousel slides, deduped by Instagram media ID), downloads media via the shared `downloadMedia` helper, and emits `wp:image` / `wp:video` / `wp:gallery` Gutenberg blocks into the WXR. Hashtags become WordPress tags; `@mentions` and `#hashtags` in captions are linkified. The WXR is then imported via the generic WP importer in `src/lib/import/`.
 
 ### Why it's better than the previous approach
 
