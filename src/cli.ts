@@ -30,13 +30,16 @@ if (args[0] === 'mcp') {
     data-liberation --version          Show version
 
   Extract options:
-    --output <dir>    Output directory (default: ./output)
-    --dry-run         Extract 2-3 pages and report without writing WXR
-    --resume          Resume a previous extraction
-    --token <token>   API token for platforms requiring auth
-    --delay <ms>      Delay between requests (default: 500)
-    --verbose         Detailed extraction logging
-    --non-interactive Skip the post-extraction import prompt
+    --output <dir>       Output directory (default: ./output)
+    --dry-run            Extract 2-3 pages and report without writing WXR
+    --resume             Resume a previous extraction
+    --token <token>      API token for platforms requiring auth (Webflow)
+    --delay <ms>         Delay between requests (default: 500)
+    --verbose            Detailed extraction logging
+    --non-interactive    Skip the post-extraction import prompt
+    --admin-token <tok>  Shopify Admin API token — enables richer product extraction
+                         via GraphQL (compareAtPrice, unitCost, inventoryPolicy, etc.)
+    --shop-domain <host> Shopify myshopify.com hostname — usually auto-detected
 
   Import options:
     --site <domain>       WordPress site domain
@@ -49,8 +52,9 @@ if (args[0] === 'mcp') {
     --import-authors      Create WordPress users for authors (default: all content owned by you)
 
   Environment:
-    LIBERATION_TOKEN  API token (alternative to --token flag for extraction)
-    WP_APP_PASSWORD   WordPress application password (alternative to --token for import)
+    LIBERATION_TOKEN     API token (alternative to --token flag for extraction)
+    SHOPIFY_ADMIN_TOKEN  Shopify Admin API token (alternative to --admin-token)
+    WP_APP_PASSWORD      WordPress application password (alternative to --token for import)
 `);
 } else if (args[0] === 'inspect') {
   const url = args[1];
@@ -140,8 +144,10 @@ if (args[0] === 'mcp') {
   const delay = Number.isNaN(rawDelay) ? 500 : rawDelay;
   const token = getArg('--token') || process.env.LIBERATION_TOKEN || null;
   const cdpPort = getArg('--cdp-port') ? parseInt(getArg('--cdp-port')!, 10) : null;
+  const adminToken = getArg('--admin-token') || process.env.SHOPIFY_ADMIN_TOKEN || null;
+  const shopDomain = getArg('--shop-domain') || null;
   const nonInteractive = args.includes('--non-interactive');
 
   const { runDiscover } = await import('./ui/discover.js');
-  runDiscover(url, { outputDir, dryRun, resume, verbose, delay, token, cdpPort, nonInteractive });
+  runDiscover(url, { outputDir, dryRun, resume, verbose, delay, token, cdpPort, adminToken, shopDomain, nonInteractive });
 }
