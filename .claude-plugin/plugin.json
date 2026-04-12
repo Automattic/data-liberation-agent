@@ -1,0 +1,26 @@
+{
+  "name": "data-liberation",
+  "description": "Extract content from closed web platforms (Wix, Squarespace, Webflow, Shopify) into WordPress-compatible WXR files. Inspect, extract, QA, and import to WordPress.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Automattic"
+  },
+  "homepage": "https://github.com/Automattic/data-liberation-agent",
+  "repository": "https://github.com/Automattic/data-liberation-agent",
+  "license": "GPL-2.0-or-later",
+  "keywords": [
+    "wordpress",
+    "migration",
+    "wix",
+    "squarespace",
+    "webflow",
+    "shopify",
+    "wxr",
+    "content-extraction",
+    "data-liberation"
+  ],
+  "mcp": {
+    "command": "npx",
+    "args": ["tsx", "src/mcp-server.ts"]
+  }
+}

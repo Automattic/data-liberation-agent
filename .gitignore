@@ -2,5 +2,9 @@ output/
 node_modules/
 .DS_Store
 *.log
-output/
-*.db
+dist/
+qa-screenshots/
+.claude/
+.liberation-lock
+.playwright-mcp/
+.superpowers/
