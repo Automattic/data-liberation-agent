@@ -64,51 +64,60 @@ export class WooProductCsvBuilder {
    */
   private buildHeaders(): string[] {
     const headers = [
-      'ID',
-      'Type',
-      'SKU',
-      'Name',
-      'Published',
-      'Short description',
-      'Description',
-      'Regular price',
-      'Sale price',
-      'Categories',
-      'Tags',
-      'Images',
-      'Weight (lbs)',
-      'Length (in)',
-      'Width (in)',
-      'Height (in)',
-      'In stock?',
-      'Stock',
+      'id',
+      'type',
+      'sku',
+      'name',
+      'published',
+      'short_description',
+      'description',
+      'regular_price',
+      'sale_price',
+      'category_ids',
+      'tag_ids',
+      'images',
+      'weight',
+      'length',
+      'width',
+      'height',
+      'stock_status',
+      'stock_quantity',
     ];
 
     const attrCount = this.maxAttributes();
     for (let i = 1; i <= attrCount; i++) {
-      headers.push(`Attribute ${i} name`);
-      headers.push(`Attribute ${i} value(s)`);
-      headers.push(`Attribute ${i} visible`);
-      headers.push(`Attribute ${i} global`);
+      headers.push(`attributes:name${i}`);
+      headers.push(`attributes:value${i}`);
+      headers.push(`attributes:visible${i}`);
+      headers.push(`attributes:taxonomy${i}`);
     }
 
-    headers.push('Parent');
+    headers.push('parent_id');
 
     return headers;
+  }
+
+  /**
+   * Collapse newlines in a string value so CSV fields don't contain raw line breaks.
+   * HTML content is unaffected visually since newlines are whitespace in HTML.
+   */
+  private static collapseNewlines(value: string): string {
+    return value.replace(/\r?\n/g, ' ');
   }
 
   /**
    * Build a CSV row for a single product.
    */
   private buildRow(product: WooProduct, attrCount: number): string[] {
+    const c = WooProductCsvBuilder.collapseNewlines;
     const row: string[] = [
       '', // ID — empty for new products
       product.type || 'simple',
       product.sku || '',
-      product.name,
+      c(product.name),
       product.published === false ? '0' : '1',
-      product.shortDescription || '',
-      product.description || '',
+      c(product.shortDescription || ''),
+      c(product.description || ''),
       product.regularPrice || '',
       product.salePrice || '',
       product.categories ? product.categories.join(' | ') : '',
@@ -118,7 +127,7 @@ export class WooProductCsvBuilder {
       product.length || '',
       product.width || '',
       product.height || '',
-      product.inStock === false ? '0' : product.inStock === true ? '1' : '',
+      product.inStock === false ? 'outofstock' : product.inStock === true ? 'instock' : '',
       product.stock != null ? String(product.stock) : '',
     ];
 
@@ -149,7 +158,7 @@ export class WooProductCsvBuilder {
     const attrCount = this.maxAttributes();
 
     const data = this.products.map(p => this.buildRow(p, attrCount));
-    const csv = Papa.unparse({ fields: headers, data }, { newline: '\n' });
+    const csv = Papa.unparse({ fields: headers, data }, { newline: '\r\n' });
     writeFileSync(outputPath, csv, 'utf8');
   }
 
