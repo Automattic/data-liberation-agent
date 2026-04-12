@@ -116,12 +116,12 @@ describe('Squarespace adapter WXR integration', () => {
 
     // Verify blog post content
     expect(xml).toContain('<title>The Art of Pour Over Coffee</title>');
-    expect(xml).toContain('<![CDATA[post]]>');
+    expect(xml).toContain('<wp:post_type>post</wp:post_type>');
     expect(xml).toContain('Pour over coffee');
 
     // Verify page
     expect(xml).toContain('<title>About</title>');
-    expect(xml).toContain('<![CDATA[page]]>');
+    expect(xml).toContain('<wp:post_type>page</wp:post_type>');
 
     // Verify SEO meta
     expect(xml).toContain('<wp:meta_key>_seo_title</wp:meta_key>');
@@ -132,11 +132,11 @@ describe('Squarespace adapter WXR integration', () => {
     expect(xml).toContain('brewing');
 
     // Verify media
-    expect(xml).toContain('<![CDATA[attachment]]>');
+    expect(xml).toContain('<wp:post_type>attachment</wp:post_type>');
     expect(xml).toContain('squarespace-cdn.com');
 
     // Verify nav menu items
-    expect(xml).toContain('<![CDATA[nav_menu_item]]>');
+    expect(xml).toContain('<wp:post_type>nav_menu_item</wp:post_type>');
 
     // Verify redirect map
     const redirectPath = join(tempDir, 'redirect-map.json');

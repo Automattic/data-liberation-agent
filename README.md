@@ -1,14 +1,14 @@
 # data-liberation-agent
 
-**AI-assisted migration from closed platforms to WordPress.com** — a living playbook that improves itself through community AI contributions.
+Extract content from closed web platforms into WordPress-compatible WXR files.
 
 ## The problem
 
-Closed platforms make it deliberately hard to leave. Wix has no HTML export and caps RSS at 20 posts. Squarespace locks your design. Proprietary builders trap your content behind JavaScript rendering and limited APIs.
+Closed platforms make it deliberately hard to leave. Wix has no HTML export and caps RSS at 20 posts. Squarespace locks your design. JavaScript-rendered content and limited APIs trap your site data.
 
 ## The solution
 
-This repo gives people a prompt they can paste into any AI assistant (Claude, ChatGPT, Gemini, etc.) to orchestrate their own migration to WordPress.com. The AI runs the provided scripts to extract content, then publishes it via MCP or REST API.
+This tool extracts all content from closed platforms — posts, pages, media, navigation, redirects, products — and produces a standard WordPress WXR file ready to import.
 
 **Why WordPress.com**: The $4/mo Personal plan now supports plugins and themes. [WordPress.com MCP integration](https://wordpress.com/blog/2026/03/20/ai-agent-manage-content/) gives AI agents direct write access.
 
@@ -18,81 +18,102 @@ This repo gives people a prompt they can paste into any AI assistant (Claude, Ch
 |---|---|---|
 | **Wix** | Ready | [`prompts/wix.md`](./prompts/wix.md) |
 | **Squarespace** | Ready | [`prompts/squarespace.md`](./prompts/squarespace.md) |
-| Webflow | Planned | — |
-| Shopify (blog/pages) | Planned | — |
+| **Webflow** | Ready | [`prompts/webflow.md`](./prompts/webflow.md) |
+| **Shopify** (blog/pages/products) | Ready | [`prompts/shopify.md`](./prompts/shopify.md) |
 
-## Quick start (Wix)
+All four platforms have MCP adapters with full extraction support including products (exported as WooCommerce-compatible CSV).
+
+## AI tool integration
+
+### Claude Code
+
+**As a marketplace & plugin from GitHub**
 
 ```bash
-# 1. Install dependencies
-npm install
+# Install from GitHub
+claude plugin marketplace add Automattic/data-liberation-agent
+cluade plugin install data-liberation
 
-# 2. Discover all content on your Wix site
-node scripts/wix/discover.js https://yoursite.wixsite.com/sitename
-
-# 3. Extract all content (intercepts Wix's internal API calls)
-node scripts/wix/extract.js https://yoursite.wixsite.com/sitename
-
-# 4. Import to WordPress.com
-node scripts/import.js --site your-wp-site --username your-user --token YOUR_APP_PASSWORD
+# Use from the git checkout
+cd data-liberation-agent
+claude --add-plugin .
 ```
 
-## Quick start (Squarespace)
+This installs the MCP server and skills directly.
+
+### Gemini CLI
 
 ```bash
-# 1. Install dependencies
+# Use from the git checkout
+cd data-liberation-agent
+gemini extension link .
+```
+
+### Codex
+
+```bash
+cd data-liberation-agent
+codex
+```
+
+The `.codex-plugin/plugin.json` and `.mcp.json` register the MCP server and skills automatically.
+
+### Any MCP client
+
+```bash
+npx tsx src/mcp-server.ts
+
+# or
+
+npm run mcp
+```
+
+Stdio transport. Exposes 11 tools: `liberate_detect`, `liberate_discover`, `liberate_inspect`, `liberate_extract`, `liberate_status`, `liberate_qa`, `liberate_map_apis`, `liberate_probe`, `liberate_verify`, `liberate_setup`, and `liberate_import`.
+
+## Quick start
+
+```bash
+# 1. Install
 npm install
 
-# 2. Discover all content on your Squarespace site
-node scripts/squarespace/discover.js https://yoursite.squarespace.com \
-  --cdp-port 9222 --cdp-admin
+# 2. Extract a site (works for any supported platform)
+npm run liberate -- https://yoursite.com
 
-# 3. Extract all content (intercepts Squarespace's admin API calls)
-node scripts/squarespace/extract.js https://yoursite.squarespace.com \
-  --inventory output/inventory.json --cdp-port 9222 --cdp-admin
+# 3. Or just the inspection
+npm run inspect -- https://yoursite.com
 
-# 4. Import to WordPress.com
-node scripts/squarespace/import.js --site your-wp-site \
-  --username your-user --token YOUR_APP_PASSWORD
+# 4. Verify extraction quality
+npm run verify -- ./output/yoursite.com
+
+# 5. Validate WordPress connection
+npm run setup -- --site your-wp-site.wordpress.com --username you --token YOUR_APP_PASSWORD
+
+# 6. Import to WordPress
+npm run liberate -- import ./output/yoursite.com/output.wxr --site your-wp-site --username you --token YOUR_APP_PASSWORD
 ```
 
 Or skip all of that and **paste the prompt into your AI assistant** — it will handle everything.
 
-## For AI agents
+## Output
 
-See **[AGENTS.md](./AGENTS.md)** — this file explains how to use this repo, how to run the scripts, and how to submit improvements back.
+A successful extraction produces in `/output/<site>/`:
 
-## How improvements work
+- `output/<site>/`
+   - `output.wxr` — WordPress eXtended RSS file, ready to import via WordPress Admin > Tools > Import
+   - `media/` — downloaded images and attachments with local paths rewritten in the WXR
+   - `redirect-map.json` — old platform paths mapped to new WordPress slugs
+   - `extraction-log.jsonl` — per-URL extraction log for debugging or resuming
+   - `products.csv` — WooCommerce-compatible product CSV (if the site has e-commerce)
+   - `products.jsonl` — raw product data streamed during extraction
 
-When an AI agent discovers something new during a real migration — a new API endpoint, a better extraction technique, a content type we hadn't handled — it submits a PR following the process in [CONTRIBUTING.md](./CONTRIBUTING.md) and logs the discovery in [DISCOVERIES.md](./DISCOVERIES.md).
+## Additional documentation
 
-This means the playbook gets smarter with every migration.
-
-## Status
-
-### Wix
-- [x] Core extraction scripts (network interception, window globals, accessibility tree)
-- [x] WordPress.com REST API import
-- [x] Migration prompt for non-technical users
-- [ ] Wix Stores / WooCommerce migration
-- [ ] Wix Bookings migration
-
-### Squarespace
-- [x] Admin extraction via Chrome DevTools Protocol (CDP)
-- [x] Section-based content extraction (headings, text, images)
-- [x] Media download and URL rewriting
-- [x] WordPress.com XML-RPC import
-- [ ] Block conversion (`core/paragraph`, `core/image`, etc.)
-- [ ] Product/commerce migration
-
-### General
-- [x] WordPress.com REST API import script
-- [ ] WordPress Studio local-first workflow
-- [ ] Automated redirect generation
-- [ ] Webflow extractor
+* [CLI commands](/docs/cli.md)
+* [AI agent commands](/docs/commands.md)
+* [AI skills](/docs/skills.md)
+* [MCP server tools](/docs/mcp.md)
 
 ## Related
 
 - [WordPress Data Liberation project](https://wordpress.org/data-liberation/) — the official effort
 - [WordPress.com MCP](https://wordpress.com/blog/2026/03/20/ai-agent-manage-content/) — AI agent write access to WordPress.com
-- [WordPress Studio](https://github.com/Automattic/studio) — local WordPress desktop app
