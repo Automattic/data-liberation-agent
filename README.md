@@ -32,7 +32,7 @@ All four platforms have MCP adapters with full extraction support including prod
 ```bash
 # Install from GitHub
 claude plugin marketplace add Automattic/data-liberation-agent
-cluade plugin install data-liberation
+claude plugin install data-liberation
 
 # Use from the git checkout
 cd data-liberation-agent
