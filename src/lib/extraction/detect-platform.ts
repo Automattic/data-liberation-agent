@@ -31,6 +31,7 @@ const URL_PATTERNS: UrlPattern[] = [
   { pattern: /squarespace\.com/i, platform: 'squarespace' },
   { pattern: /webflow\.io|webflow\.com/i, platform: 'webflow' },
   { pattern: /myshopify\.com|shopify\.com/i, platform: 'shopify' },
+  { pattern: /weebly\.com/i, platform: 'weebly' },
 ];
 
 const HTTP_SIGNALS: HttpSignal[] = [
@@ -49,6 +50,8 @@ const SOURCE_SIGNALS: SourceSignal[] = [
   { pattern: /static\.squarespace\.com/i, platform: 'squarespace', signal: 'static.squarespace.com in page source' },
   { pattern: /data-wf-domain/i, platform: 'webflow', signal: 'data-wf-domain attribute in page source' },
   { pattern: /_shopify_s|_shopify_y|Shopify\.theme/i, platform: 'shopify', signal: 'Shopify markers in page source' },
+  { pattern: /editmysite\.com/i, platform: 'weebly', signal: 'editmysite.com CDN in page source' },
+  { pattern: /wsite-menu-item|wsite-content|_W\.configDomain\s*=\s*["'].*weebly/i, platform: 'weebly', signal: 'Weebly markers in page source' },
 ];
 
 export function detectFromUrl(url: string): string | null {

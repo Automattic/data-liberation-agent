@@ -6,6 +6,45 @@ AI agents: when you contribute an improvement, add an entry here. See [CONTRIBUT
 
 ---
 
+## 2026-04-13 — Weebly platform adapter
+
+**Found by:** Claude + human contributor
+**During:** Adding Weebly as a new supported platform
+**Type:** platform adapter
+
+### What I found
+
+Weebly sites use a consistent HTML structure across all sites with reliable fingerprints for detection. Key findings from analyzing multiple live Weebly sites:
+
+**Detection signals:**
+- URL pattern: `weebly.com` subdomains
+- CDN: All Weebly sites load assets from `editmysite.com` (cdn1/cdn2)
+- HTML markers: `wsite-` class prefix on all structural elements, `_W.configDomain` JS variable referencing `weebly.com`
+
+**Content structure:**
+- Main content container: `#wsite-content`
+- Navigation: `li.wsite-menu-item-wrap > a.wsite-menu-item` with flyout submenus in `.wsite-menu-wrap`
+- Blog posts: Minimal semantic markup — titles in `<h2>` with anchor links, dates as plain text in MM/DD/YYYY format, categories linked via `/blog/category/slug`
+- Products: `.wsite-product` with commerce backed by Square (Weebly's parent company)
+- No JSON-LD or structured data on any tested sites
+
+**Sitemaps:** Standard XML sitemaps available at `/sitemap.xml` with pages, blog posts, products, and category pages.
+
+### How it works
+
+The adapter follows the same fetch-and-scrape pattern as the Webflow adapter:
+1. `detect()` matches `weebly.com` in the URL
+2. `discover()` fetches the homepage HTML + sitemap, extracts navigation from the `wsite-menu` structure, and classifies URLs (with special handling for `/blog/` paths as posts)
+3. `extract()` uses `runExtractionLoop()` with a Weebly-specific `extractPage` function that pulls content from `#wsite-content`, media from `editmysite.com`/`weeblycloud.com` CDN URLs, and blog metadata from category links and date text
+
+Platform detection in `detect-platform.ts` uses two source signals: `editmysite.com` in page source (high confidence) and `wsite-` class markers or `_W.configDomain` variable (medium confidence). Custom domain sites without `weebly.com` in the URL are detected via these HTTP fingerprints.
+
+### Why it's better than the previous approach
+
+Weebly was not previously supported. This adds the fifth platform adapter, covering another significant website builder with a large install base of small business sites.
+
+---
+
 ## 2026-04-02 — Squarespace admin extraction via CDP
 
 **Found by:** Claude + human contributor (live testing against a Squarespace site)
