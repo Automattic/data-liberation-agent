@@ -12,6 +12,7 @@ import { wixAdapter, type Inventory } from '../adapters/wix.js';
 import { squarespaceAdapter } from '../adapters/squarespace.js';
 import { webflowAdapter } from '../adapters/webflow.js';
 import { shopifyAdapter } from '../adapters/shopify.js';
+import { godaddyWmAdapter } from '../adapters/godaddy-wm.js';
 import { mkdirSync, existsSync, writeFileSync, readFileSync } from 'fs';
 import { join, dirname } from 'path';
 
@@ -67,7 +68,7 @@ interface ExtractionResult {
   wxrPath: string | null;
 }
 
-const adapters = [wixAdapter, squarespaceAdapter, webflowAdapter, shopifyAdapter];
+const adapters = [wixAdapter, squarespaceAdapter, webflowAdapter, shopifyAdapter, godaddyWmAdapter];
 
 function findAdapter(platform: string) {
   return adapters.find((a) => a.id === platform) || null;

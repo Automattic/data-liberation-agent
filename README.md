@@ -20,8 +20,9 @@ This tool extracts all content from closed platforms — posts, pages, media, na
 | **Squarespace** | Ready | [`prompts/squarespace.md`](./prompts/squarespace.md) |
 | **Webflow** | Ready | [`prompts/webflow.md`](./prompts/webflow.md) |
 | **Shopify** (blog/pages/products) | Ready | [`prompts/shopify.md`](./prompts/shopify.md) |
+| **GoDaddy Websites & Marketing** (pages/blog) | Ready | [`prompts/godaddy-wm.md`](./prompts/godaddy-wm.md) |
 
-All four platforms have MCP adapters with full extraction support including products (exported as WooCommerce-compatible CSV).
+All platforms have MCP adapters with extraction support. Wix, Squarespace, Webflow, and Shopify additionally extract products as WooCommerce-compatible CSV. GoDaddy Websites & Marketing is pages + blog only in v1; GoDaddy Online Store (OLS) product support is planned for v1.1.
 
 ## AI tool integration
 

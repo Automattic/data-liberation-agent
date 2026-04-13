@@ -252,6 +252,7 @@ function parsePageItem(item: Record<string, unknown>): PageItem {
     date: wpDateToIso(wpDate),
     parent: numOf(item['wp:post_parent']),
     menuOrder: numOf(item['wp:menu_order']),
+    author: str(item['dc:creator']),
     seoTitle: meta.get('_seo_title') || '',
     seoDescription: meta.get('_seo_description') || '',
     sourceUrl: meta.get('_source_url') || '',
