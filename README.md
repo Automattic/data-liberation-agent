@@ -21,8 +21,9 @@ This tool extracts all content from closed platforms — posts, pages, media, na
 | **Webflow** | Ready | [`prompts/webflow.md`](./prompts/webflow.md) |
 | **Shopify** (blog/pages/products) | Ready | [`prompts/shopify.md`](./prompts/shopify.md) |
 | **Weebly** (blog/pages/products) | Ready | — |
+| **Hostinger Website Builder** (blog/pages/products) | Ready | — |
 
-All five platforms have MCP adapters with full extraction support including products (exported as WooCommerce-compatible CSV).
+All six platforms have MCP adapters with full extraction support including products (exported as WooCommerce-compatible CSV).
 
 ## AI tool integration
 
