@@ -208,17 +208,20 @@ function extractWeeblyDate(html: string): string {
     if (!isNaN(parsed.getTime())) return parsed.toISOString();
   }
 
-  // Weebly blog date as plain text in MM/DD/YYYY format near post title
+  // <time> element — prefer semantic markup before falling back to text scraping
+  const timeElement = html.match(/<time[^>]+datetime=["']([^"']+)["']/i)?.[1];
+  if (timeElement) return timeElement;
+
+  // Weebly blog date as plain text in MM/DD/YYYY format. Scope the search to
+  // the #wsite-content container so we don't pick up stray dates from footer
+  // copyright lines, testimonials, or chrome.
+  const contentScope = extractBySelector(html, /<div[^>]*\sid=["']wsite-content["'][^>]*>/i) || html;
   const datePattern = /(\d{1,2}\/\d{1,2}\/\d{4})/;
-  const dateMatch = html.match(datePattern);
+  const dateMatch = contentScope.match(datePattern);
   if (dateMatch?.[1]) {
     const parsed = new Date(dateMatch[1]);
     if (!isNaN(parsed.getTime())) return parsed.toISOString();
   }
-
-  // <time> element fallback
-  const timeElement = html.match(/<time[^>]+datetime=["']([^"']+)["']/i)?.[1];
-  if (timeElement) return timeElement;
 
   return '';
 }
@@ -260,8 +263,10 @@ function resolveRelativeUrls(html: string, baseUrl: string): string {
     return html;
   }
 
-  // Resolve src="/..." and href="/..." to absolute URLs
-  return html.replace(/(src|href)=["'](\/[^"']+)["']/gi, (_match, attr, path) => {
+  // Resolve src="/..." and href="/..." to absolute URLs.
+  // The (?!\/) guard skips protocol-relative URLs like src="//cdn.example.com/...",
+  // which would otherwise be mangled into "https://site.com//cdn.example.com/...".
+  return html.replace(/(src|href)=["'](\/(?!\/)[^"']+)["']/gi, (_match, attr, path) => {
     return `${attr}="${origin}${path}"`;
   });
 }
