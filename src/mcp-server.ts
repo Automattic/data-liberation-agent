@@ -18,7 +18,8 @@ import { wixAdapter } from './adapters/wix.js';
 import { squarespaceAdapter } from './adapters/squarespace.js';
 import { webflowAdapter } from './adapters/webflow.js';
 import { shopifyAdapter } from './adapters/shopify.js';
-const adapters: PlatformAdapter[] = [wixAdapter, squarespaceAdapter, webflowAdapter, shopifyAdapter];
+import { hubspotAdapter } from './adapters/hubspot.js';
+const adapters: PlatformAdapter[] = [wixAdapter, squarespaceAdapter, webflowAdapter, shopifyAdapter, hubspotAdapter];
 
 function findAdapter(platform: string): PlatformAdapter | null {
   return adapters.find((a) => a.id === platform) || null;

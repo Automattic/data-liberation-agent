@@ -49,6 +49,7 @@ const SOURCE_SIGNALS: SourceSignal[] = [
   { pattern: /static\.squarespace\.com/i, platform: 'squarespace', signal: 'static.squarespace.com in page source' },
   { pattern: /data-wf-domain/i, platform: 'webflow', signal: 'data-wf-domain attribute in page source' },
   { pattern: /_shopify_s|_shopify_y|Shopify\.theme/i, platform: 'shopify', signal: 'Shopify markers in page source' },
+  { pattern: /<meta[^>]+name=["']generator["'][^>]+content=["']HubSpot["']/i, platform: 'hubspot', signal: 'HubSpot generator meta tag' },
 ];
 
 export function detectFromUrl(url: string): string | null {
