@@ -71,8 +71,8 @@ function extractByClass(html: string, className: string, tag = 'div'): string {
 }
 
 /**
- * Get the body element's class attribute. HubSpot tags the body with classes
- * that identify the content type (e.g. `hs-blog-post`, `hs-site-page`).
+ * Get the body element's class attribute. HubSpot default themes tag the body
+ * with classes that identify the content type (e.g. `hs-blog-post`).
  */
 function getBodyClass(html: string): string {
   const match = html.match(/<body[^>]*\bclass=["']([^"']*)["']/i);
@@ -80,11 +80,16 @@ function getBodyClass(html: string): string {
 }
 
 /**
- * Check if this page is a HubSpot blog post based on body class.
- * HubSpot sets `hs-blog-post` on <body> for blog post pages.
+ * Check if this page is a HubSpot blog post.
+ *
+ * HubSpot's default theme puts `hs-blog-post` on the <body> tag. Custom
+ * themes often move it to a `.body-wrapper` div instead. Matching the token
+ * anywhere in the HTML is safer than checking only the body tag.
  */
 function isHubSpotBlogPost(html: string): boolean {
-  return /\bhs-blog-post\b/.test(getBodyClass(html));
+  // Match `hs-blog-post` only inside class attributes to avoid false positives
+  // on arbitrary text (e.g. a URL or comment mentioning the phrase).
+  return /class=["'][^"']*\bhs-blog-post\b/.test(html);
 }
 
 /**
@@ -126,13 +131,11 @@ function stripHubSpotWidgets(html: string): string {
  * 3. Fallback to `<main>` or stripped `<body>`
  */
 function extractContent(html: string): string {
-  const isPost = isHubSpotBlogPost(html);
-
-  if (isPost) {
-    // Blog posts have a clean `.post-body` container
-    const postBody = extractByClass(html, 'post-body');
-    if (postBody) return stripHubSpotWidgets(postBody);
-  }
+  // Try .post-body first regardless of body class — some HubSpot sites use
+  // custom themes that strip the `hs-blog-post` body class while still
+  // rendering blog content in a .post-body container.
+  const postBody = extractByClass(html, 'post-body');
+  if (postBody) return stripHubSpotWidgets(postBody);
 
   // Regular pages: .body-container wraps all content, then strip chrome
   const bodyContainer = extractByClass(html, 'body-container');
@@ -177,19 +180,46 @@ function extractHeading(html: string): string {
 /**
  * Extract publication date from a HubSpot blog post.
  *
- * HubSpot renders dates in multiple places:
- * 1. <meta property="article:published_time" content="...">
- * 2. <time datetime="..."> element (sometimes)
- * 3. Byline text like "by Jason Bullard, on Dec 6, 2024 6:57:40 PM"
+ * HubSpot renders dates in multiple places; we try the most reliable first:
+ * 1. JSON-LD `datePublished` (most reliable, present on most HubSpot sites
+ *    including custom themes that strip other markers)
+ * 2. <meta property="article:published_time" content="...">
+ * 3. <time datetime="..."> element
+ * 4. Byline text like "by Author, on Dec 6, 2024 6:57:40 PM" (default theme)
  */
 function extractHubSpotDate(html: string): string {
+  // Strategy 1: JSON-LD datePublished. Look inside application/ld+json blocks
+  // rather than across the whole HTML (avoids picking up unrelated date strings).
+  const ldPattern = /<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
+  let ldMatch;
+  while ((ldMatch = ldPattern.exec(html)) !== null) {
+    try {
+      const parsed = JSON.parse(ldMatch[1].trim());
+      const blocks = Array.isArray(parsed) ? parsed : [parsed];
+      for (const b of blocks) {
+        if (!b || typeof b !== 'object') continue;
+        const type = (b as Record<string, unknown>)['@type'];
+        const isArticle =
+          type === 'BlogPosting' || type === 'Article' || type === 'NewsArticle' ||
+          (Array.isArray(type) && type.some((t) => t === 'BlogPosting' || t === 'Article' || t === 'NewsArticle'));
+        if (!isArticle) continue;
+        const datePublished = (b as Record<string, unknown>).datePublished;
+        if (typeof datePublished === 'string' && datePublished) {
+          return datePublished;
+        }
+      }
+    } catch { /* ignore malformed JSON-LD */ }
+  }
+
+  // Strategy 2: article:published_time meta tag
   const articleDate = extractMeta(html, 'article:published_time');
   if (articleDate) return articleDate;
 
+  // Strategy 3: <time datetime="...">
   const timeElement = html.match(/<time[^>]+datetime=["']([^"']+)["']/i)?.[1];
   if (timeElement) return timeElement;
 
-  // Byline pattern: "on Dec 6, 2024 6:57:40 PM"
+  // Strategy 4: Byline pattern "on Dec 6, 2024 6:57:40 PM"
   const bylineDate = html.match(/\bon\s+([A-Z][a-z]{2,}\s+\d{1,2},\s+\d{4}(?:\s+\d{1,2}:\d{2}(?::\d{2})?\s*[AP]M)?)/);
   if (bylineDate?.[1]) {
     const parsed = new Date(bylineDate[1]);
@@ -202,12 +232,34 @@ function extractHubSpotDate(html: string): string {
 /**
  * Extract author name from HubSpot blog post.
  *
- * HubSpot blog posts link to the author via /author/name paths.
- * Falls back to the `<meta name="author">` tag.
+ * Tries (in order):
+ * 1. Default-theme /author/{slug} link text
+ * 2. JSON-LD BlogPosting `author.name` (works on custom themes)
+ * 3. <meta name="author"> tag
  */
 function extractHubSpotAuthor(html: string): string | undefined {
   const authorLink = html.match(/<a[^>]+href=["'][^"']*\/author\/[^"']+["'][^>]*>([^<]+)<\/a>/i);
   if (authorLink?.[1]) return authorLink[1].replace(/<[^>]*>/g, '').trim();
+
+  // JSON-LD BlogPosting author
+  const ldPattern = /<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
+  let ldMatch;
+  while ((ldMatch = ldPattern.exec(html)) !== null) {
+    try {
+      const parsed = JSON.parse(ldMatch[1].trim());
+      const blocks = Array.isArray(parsed) ? parsed : [parsed];
+      for (const b of blocks) {
+        if (!b || typeof b !== 'object') continue;
+        const author = (b as Record<string, unknown>).author;
+        if (author && typeof author === 'object') {
+          const first = Array.isArray(author) ? author[0] : author;
+          if (first && typeof first === 'object' && typeof (first as { name?: unknown }).name === 'string') {
+            return (first as { name: string }).name;
+          }
+        }
+      }
+    } catch { /* ignore malformed JSON-LD */ }
+  }
 
   const metaAuthor = extractMeta(html, 'author');
   return metaAuthor || undefined;
@@ -453,8 +505,11 @@ export const hubspotAdapter: PlatformAdapter = {
         }
         const html = await resp.text();
 
-        // Type detection from body class: hs-blog-post is authoritative
-        const isPost = isHubSpotBlogPost(html);
+        // `hs-blog-post` class (on <body> or the .body-wrapper div) is the
+        // authoritative HubSpot signal. Fall back to URL-based heuristic for
+        // sites with heavily customized templates that don't emit it.
+        const isPost = isHubSpotBlogPost(html)
+          || /\/(blog|news|insights|articles|resources|updates)\//.test(url);
 
         // Title: prefer h1, then og:title, then <title>
         const title = extractHeading(html) || slugify(url);
@@ -508,8 +563,12 @@ export const hubspotAdapter: PlatformAdapter = {
           categories: [],
           tags,
           author,
-          // Override URL-based classification with body-class signal
-          detectedType: isPost ? 'post' : 'page',
+          // If body class confirms a blog post, signal 'post'. Otherwise leave
+          // undefined so the shared loop falls back to inventory/URL classification
+          // — some HubSpot sites use custom themes that strip the default
+          // hs-blog-post body class, so absence of that class does NOT prove
+          // a page isn't a blog post.
+          detectedType: isPost ? 'post' : undefined,
         };
       },
     });
