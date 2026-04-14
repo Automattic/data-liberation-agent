@@ -42,6 +42,7 @@ const HTTP_SIGNALS: HttpSignal[] = [
   { header: 'x-wf-region', platform: 'webflow', signal: 'x-wf-region header (Webflow infrastructure)' },
   { header: 'x-shopid', platform: 'shopify', signal: 'X-ShopId header' },
   { header: 'powered-by', value: 'shopify', platform: 'shopify', signal: 'Powered-by: Shopify header' },
+  { header: 'x-host', value: 'weebly.net', platform: 'weebly', signal: 'X-Host: *.weebly.net header (Weebly backend)' },
 ];
 
 const SOURCE_SIGNALS: SourceSignal[] = [
