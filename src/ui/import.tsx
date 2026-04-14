@@ -26,6 +26,10 @@ interface StageProgress {
 
 const STAGES = ['categories', 'tags', 'terms', 'media', 'pages', 'posts', 'comments', 'menus', 'products', 'variations'] as const;
 
+// Stages that appear in the final ImportResult. `variations` is reported via
+// progress callback only — Woo variations roll up under the `products` stage.
+const RESULT_STAGES = ['categories', 'tags', 'terms', 'media', 'pages', 'posts', 'comments', 'menus', 'products'] as const;
+
 function stageColor(current: number, total: number): string {
   if (total === 0) return 'gray';
   if (current === total) return 'green';
@@ -123,9 +127,9 @@ function Import(props: ImportProps) {
             <Text> Import complete{dryRun ? ' (dry run)' : ''}</Text>
           </Box>
           <Box flexDirection="column" marginLeft={2} marginTop={1}>
-            {STAGES.map((stage) => {
+            {RESULT_STAGES.map((stage) => {
               const s = result[stage];
-              if (s.total === 0) return null;
+              if (!s || s.total === 0) return null;
               return (
                 <Box key={stage}>
                   <Text>
