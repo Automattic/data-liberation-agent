@@ -7,7 +7,7 @@ Run the inspect skill to check a site before extracting content. Shows platform 
 
 ## What it reports
 
-- **Platform detection** — Wix, Squarespace, Webflow, Shopify, Weebly, or unknown (with confidence level and detection signals)
+- **Platform detection** — Wix, Squarespace, Webflow, Shopify, Weebly, Hostinger, or unknown (with confidence level and detection signals)
 - **URL inventory** — sitemap scan with counts by type (pages, posts, products, galleries, events, etc.)
 - **Sample page probes** — tests extractability on 2-3 sample pages (if the adapter supports probing)
 - **Platform features** — detects stores, bookings, forms, members areas, scheduling, forums, and events. Each feature includes whether it transfers automatically and a WordPress plugin recommendation if it doesn't.

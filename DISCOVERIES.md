@@ -6,6 +6,56 @@ AI agents: when you contribute an improvement, add an entry here. See [CONTRIBUT
 
 ---
 
+## 2026-04-13 — Hostinger Website Builder platform adapter
+
+**Found by:** Claude + human contributor
+**During:** Adding Hostinger Website Builder as a new supported platform (fastest-growing proprietary builder per w3techs: +103.9% YoY)
+**Type:** platform adapter
+
+### What I found
+
+Hostinger Website Builder (formerly Zyro) is built on Astro and serves images from a dedicated CDN. Sites run on custom domains only — there's no `hostinger.com` subdomain pattern to key detection off of.
+
+**Detection signals:**
+- `zyrosite.com` references in page source (strongest signal — every Hostinger site loads images from `assets.zyrosite.com` via Cloudflare Image Resize)
+- `<meta name="generator" content="Hostinger Website Builder">` tag (reliable fallback for sites with no inline images)
+- `astro-island` / `astro-slot` custom elements confirm the Astro-based build but aren't needed for detection
+
+**Content structure:**
+- Content rendered as a series of `<section class="block ...">` elements with chrome (sticky bars, headers, footers) using distinguishing modifier classes (`block-sticky-bar`, `block-header`, `block--footer`, `block-blog-header`)
+- Generic `class="block"` sections contain real content; modifier-class sections are site chrome
+- `<main>` wraps ALL page sections including chrome, so main-based extraction pulls in site furniture — must extract by section classes instead
+- Blog posts include rich JSON-LD `Article` schema with `headline`, `datePublished`, `articleSection` (categories), and `author.name`
+- Product pages include JSON-LD `Product` schema and render the product block with `class="block-product-wrapper"`
+- Blog templates render the post title as `<h1 class="block-blog-header__title">` inside the content — must be stripped to avoid duplicate titles when WordPress renders `post_title`
+- Images served from `assets.zyrosite.com/cdn-cgi/image/format=auto,w=N,h=N,fit=crop/SITE_ID/hash.png` — the `/cdn-cgi/image/PARAMS/` prefix is a Cloudflare Image Resize transformation; stripping it yields the original asset URL
+- CSS class names are hashed/obfuscated (e.g. `globalClass_2ebe`) — not useful as targeting selectors
+
+**Sitemaps:** Standard XML sitemaps at `/sitemap.xml` with pages, blog posts, and category landing pages.
+
+**Blog URL convention:** `/blog-post1`, `/blog-post2`, ... (sequential numeric slugs) — used for blog post classification.
+
+### How it works
+
+The adapter follows the established fetch-and-scrape pattern:
+1. `detect()` is URL-less — relies on HTTP fingerprinting via `zyrosite.com` source signal and generator meta tag in `detect-platform.ts`
+2. `discover()` fetches the homepage + sitemap, extracts site metadata from OG tags and `<html lang>`, classifies URLs (with `/blog-post*` and `/blog/*` treated as posts)
+3. `extract()` uses `runExtractionLoop()` with a Hostinger-specific `extractPage` that:
+   - Parses JSON-LD for Article metadata (headline, date, author, categories) and Product data
+   - Extracts content by collecting non-chrome `<section class="block">` blocks
+   - Strips the embedded `<h1>` title to prevent duplication with `post_title`
+   - Resolves relative `src`/`href` attributes to absolute URLs so WordPress can match attachments during import
+   - Signals product pages via `detectedType: 'product'` so they route to `products.csv` instead of being imported as pages
+4. A per-URL `productCache` lets the adapter pre-extract WooProduct data from JSON-LD (which lives in `<head>`, outside our extracted content) and hand it to the shared loop's `extractProduct` callback
+
+Content extraction uses `<section class="block">` blocks as the primary strategy with `<article>`, `<main>` (chrome-stripped), and `<body>` fallbacks. Media URLs are normalized by stripping the Cloudflare Image Resize prefix so byte-identical images aren't downloaded multiple times with different resize parameters.
+
+### Why it's better than the previous approach
+
+Hostinger Website Builder was not previously supported. This adds coverage for the fastest-growing proprietary website builder per w3techs data (+103.9% YoY, +2.16 daily sites gained), making it a high-value migration target for users who chose Hostinger's free/cheap tier and want to move to WordPress. Tested end-to-end against 5 live sites (content blog, multi-language villa site, AI marketing site, small bakery, commerce-enabled affiliate site) with pages, posts, products, and media all importing into WordPress correctly.
+
+---
+
 ## 2026-04-13 — Weebly platform adapter
 
 **Found by:** Claude + human contributor
