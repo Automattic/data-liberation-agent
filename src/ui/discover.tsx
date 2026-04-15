@@ -12,6 +12,8 @@ import { wixAdapter, type Inventory } from '../adapters/wix.js';
 import { squarespaceAdapter } from '../adapters/squarespace.js';
 import { webflowAdapter } from '../adapters/webflow.js';
 import { shopifyAdapter } from '../adapters/shopify.js';
+import { weeblyAdapter } from '../adapters/weebly.js';
+import { hostingerAdapter } from '../adapters/hostinger.js';
 import { hubspotAdapter } from '../adapters/hubspot.js';
 import { mkdirSync, existsSync, writeFileSync, readFileSync } from 'fs';
 import { join, dirname } from 'path';
@@ -68,7 +70,7 @@ interface ExtractionResult {
   wxrPath: string | null;
 }
 
-const adapters = [wixAdapter, squarespaceAdapter, webflowAdapter, shopifyAdapter, hubspotAdapter];
+const adapters = [wixAdapter, squarespaceAdapter, webflowAdapter, shopifyAdapter, weeblyAdapter, hostingerAdapter, hubspotAdapter];
 
 function findAdapter(platform: string) {
   return adapters.find((a) => a.id === platform) || null;
@@ -365,14 +367,14 @@ function Liberate(props: LiberateProps & { onComplete?: (wxrPath: string | null)
       {phase === 'discovered' && (
         <Box flexDirection="column" marginTop={1}>
           <Text color="yellow">! {error}</Text>
-          <Text dimColor>Supported: Wix, Squarespace, Webflow, Shopify, HubSpot.</Text>
+          <Text dimColor>Supported: Wix, Squarespace, Webflow, Shopify, Weebly, Hostinger, HubSpot.</Text>
         </Box>
       )}
 
       {/* Unknown platform warning */}
       {phase === 'done' && detection?.platform === 'unknown' && (
         <Box marginTop={1}>
-          <Text color="yellow">! Supported platforms: Wix, Squarespace, Webflow, Shopify, HubSpot</Text>
+          <Text color="yellow">! Supported platforms: Wix, Squarespace, Webflow, Shopify, Weebly, Hostinger, HubSpot</Text>
         </Box>
       )}
 

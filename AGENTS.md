@@ -2,7 +2,7 @@
 
 ## Overview
 
-`data-liberation-agent` extracts content from closed web platforms (Wix, Squarespace, Webflow, Shopify) and produces WordPress-compatible WXR files. All four platform adapters are implemented.
+`data-liberation-agent` extracts content from closed web platforms (Wix, Squarespace, Webflow, Shopify, Weebly, Hostinger) and produces WordPress-compatible WXR files. All six platform adapters are implemented.
 
 Three entry points — MCP server (11 tools), CLI (`src/cli.ts`), and Claude Code plugin (`claude plugin add .`) — all share `src/lib/` and `src/adapters/`. The plugin just wraps the MCP server.
 

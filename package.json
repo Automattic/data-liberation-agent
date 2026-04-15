@@ -18,7 +18,8 @@
     "qa": "tsx src/cli.ts qa",
     "verify": "tsx src/cli.ts verify",
     "setup": "tsx src/cli.ts setup",
-    "liberate": "tsx src/cli.ts"
+    "liberate": "tsx src/cli.ts",
+    "postinstall": "playwright install chromium"
   },
   "engines": {
     "node": ">=18"
