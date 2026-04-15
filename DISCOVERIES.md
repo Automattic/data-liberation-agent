@@ -6,6 +6,66 @@ AI agents: when you contribute an improvement, add an entry here. See [CONTRIBUT
 
 ---
 
+## 2026-04-13 — HubSpot CMS platform adapter
+
+**Found by:** Claude + human contributor
+**During:** Adding HubSpot CMS as a new supported platform
+**Type:** platform adapter
+
+### What I found
+
+HubSpot CMS Hub powers a wide range of sites from SMB marketing pages to enterprise content hubs. Sites run on custom domains and use a well-structured class naming convention that makes detection and extraction straightforward once you know the patterns.
+
+**Detection signals:**
+- `<meta name="generator" content="HubSpot">` is the only reliable signal. Many non-HubSpot sites embed HubSpot marketing scripts (CTAs, forms, tracking), so `hubspot.com`, `hs-scripts.com`, and `hsforms.net` references in page source are NOT sufficient. For example, eplan.co.za has all the HubSpot scripts but its generator tag says TYPO3 — it's a TYPO3 site using HubSpot for marketing.
+
+**Content structure:**
+- `<body>` class identifies content type:
+  - `hs-blog-post` on blog post pages (authoritative — used for classification)
+  - `hs-site-page page` on regular pages
+- Blog post content: `div.post-body` (clean article body)
+- Regular pages: `div.body-container` (strip nav/header/footer)
+- Content modules wrap in `div.hs_cos_wrapper` with `_type_rich_text`, `_type_form`, `_type_cta`, etc.
+- Marketing widgets to strip during extraction: `.hs-cta-wrapper`, `.hs-cta-node`, `hs_cos_wrapper_type_form`, `hs_cos_wrapper_type_blog_comments`, AddThis social widgets
+- Blog titles render as `<h1>` inside content — strip to avoid duplication with `post_title`
+- Navigation: `.hs-menu-wrapper` with `.hs-menu-item`, `.hs-menu-depth-*`
+
+**Blog post metadata:**
+- Date: byline text "by Author, on Dec 6, 2024 6:57:40 PM" (parsed by adapter), plus `article:published_time` meta tag fallback
+- Author: `<a href="/*/author/{name}">{display name}</a>`
+- Topics (tags): `<a href="/*/topic/{slug}">{display name}</a>` in post footer
+
+**Media hosts:**
+- `/hubfs/*` paths on the site itself (HubSpot's file manager)
+- `hubspotusercontent-*.net` CDN (regional, e.g. `-na1`, `-eu1`)
+- `fs1.hubspotusercontent-*.net` for files
+
+**Sitemaps:** Standard `/sitemap.xml`, auto-generated, comprehensive. Includes image sitemap extensions with alt text.
+
+### How it works
+
+The adapter follows the established fetch-and-scrape pattern:
+1. `detect()` is URL-less — relies on the Hubspot generator meta tag in `detect-platform.ts`
+2. `discover()` fetches the homepage + sitemap, extracts site metadata from OG tags and `<html lang>`, classifies URLs (with common HubSpot blog paths like `/blog/`, `/news/`, `/insights/` treated as posts — individual pages are reclassified at extract time via body class)
+3. `extract()` uses `runExtractionLoop()` with a HubSpot-specific `extractPage` that:
+   - Reads the `<body>` class to classify post vs page (overrides URL-based classification via `detectedType`)
+   - Extracts blog content from `.post-body`, page content from `.body-container` with chrome stripped
+   - Strips HubSpot marketing widgets (CTAs, forms, comments, AddThis) from content
+   - Parses date from byline text when `article:published_time` isn't present
+   - Extracts author from `/author/` link text, topics (tags) from `/topic/` link text
+   - Strips the embedded `<h1>` title to prevent duplication with `post_title`
+   - Resolves relative URLs so WordPress can match attachment URLs during import
+
+### Known limitations
+
+Tags are extracted from topic links and returned as post tags, but they don't currently land as WordPress taxonomy terms on import. The WXR builder writes the taxonomy section at `openStream()` time, before posts are extracted, so late-registered `<wp:tag>` entries aren't persisted in streaming mode. This is a shared-code gap affecting all adapters that pass tag slugs directly through `addPost`. Topics still appear as inline linked text in imported post content.
+
+### Why it's better than the previous approach
+
+HubSpot CMS was not previously supported. Adds coverage for a widely-deployed CMS used by large enterprises (Avast, FlightAware, Wattpad, HubSpot itself) and many mid-market companies. Tested end-to-end against eflexsystems.com (156 URLs: 32 pages, 124 posts, 930 media references) and maus.com (185 URLs). The 124 blog posts imported into WordPress with correct titles, dates, authors, and clean content bodies; title duplication avoided.
+
+---
+
 ## 2026-04-13 — Hostinger Website Builder platform adapter
 
 **Found by:** Claude + human contributor

@@ -55,6 +55,7 @@ const SOURCE_SIGNALS: SourceSignal[] = [
   { pattern: /wsite-menu-item|wsite-content|_W\.configDomain\s*=\s*["'].*weebly/i, platform: 'weebly', signal: 'Weebly markers in page source' },
   { pattern: /zyrosite\.com/i, platform: 'hostinger', signal: 'zyrosite.com CDN in page source (Hostinger Website Builder)' },
   { pattern: /<meta[^>]+name=["']generator["'][^>]+content=["']Hostinger[^"']*["']/i, platform: 'hostinger', signal: 'Hostinger generator meta tag' },
+  { pattern: /<meta[^>]+name=["']generator["'][^>]+content=["']HubSpot["']/i, platform: 'hubspot', signal: 'HubSpot generator meta tag' },
 ];
 
 export function detectFromUrl(url: string): string | null {

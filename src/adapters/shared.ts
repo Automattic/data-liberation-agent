@@ -12,7 +12,12 @@ import type { WooProductCsvBuilder, WooProduct } from '../lib/import/woo-product
 
 function stripNonContentTags(html: string): string {
   const $ = cheerio.load(html, null, false);
+  // Remove whole subtrees we never want in post content.
   $('script, style, form').remove();
+  // Strip inline style attributes — source sites typically emit absolute
+  // pixel sizes, fonts, and colors that fight the WordPress theme. WP block
+  // editor and theme CSS handle presentation once the content is imported.
+  $('[style]').removeAttr('style');
   return $.html();
 }
 
