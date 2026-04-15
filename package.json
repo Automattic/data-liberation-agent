@@ -9,7 +9,7 @@
   "scripts": {
     "discover": "node scripts/discover.js",
     "extract": "node scripts/extract.js",
-    "import": "node scripts/import.js",
+    "import": "tsx src/cli.ts import",
     "build": "tsc",
     "test": "vitest run",
     "test:watch": "vitest",
