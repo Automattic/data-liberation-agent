@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import { readFileSync } from 'fs';
 import { detectFromUrl, detectFromHttp } from '../src/lib/extraction/detect-platform.js';
 
 describe('detectFromUrl (heuristics)', () => {
@@ -71,5 +72,28 @@ describe('detectFromHttp (fingerprinting)', () => {
     const result = await detectFromHttp('https://example.com');
     expect(result.platform).toBe('unknown');
     expect(result.confidence).toBe('low');
+  });
+
+  it('detects GoDaddy Websites & Marketing from generator meta in page source', async () => {
+    const html = readFileSync('test/fixtures/godaddy-wm-blog-post.html', 'utf8');
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      headers: new Map(),
+      text: () => Promise.resolve(html),
+    });
+    const result = await detectFromHttp('https://cruisewarehouse.com');
+    expect(result.platform).toBe('godaddy-wm');
+    expect(result.signals.some((s) => /generator meta|isteam/i.test(s))).toBe(true);
+  });
+
+  it('detects GoDaddy Websites & Marketing from X-SiteId header', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      headers: new Map([['x-siteid', 'us-west-2']]),
+      text: () => Promise.resolve('<html></html>'),
+    });
+    const result = await detectFromHttp('https://skywaydiner.com');
+    expect(result.platform).toBe('godaddy-wm');
+    expect(result.confidence).toBe('high');
   });
 });

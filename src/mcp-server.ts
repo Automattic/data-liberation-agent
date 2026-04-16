@@ -19,7 +19,11 @@ import { squarespaceAdapter } from './adapters/squarespace.js';
 import { webflowAdapter } from './adapters/webflow.js';
 import { shopifyAdapter } from './adapters/shopify.js';
 import { instagramAdapter } from './adapters/instagram.js';
-const adapters: PlatformAdapter[] = [wixAdapter, squarespaceAdapter, webflowAdapter, shopifyAdapter, instagramAdapter];
+import { weeblyAdapter } from './adapters/weebly.js';
+import { hostingerAdapter } from './adapters/hostinger.js';
+import { hubspotAdapter } from './adapters/hubspot.js';
+import { godaddyWmAdapter } from './adapters/godaddy-wm.js';
+const adapters: PlatformAdapter[] = [wixAdapter, squarespaceAdapter, webflowAdapter, shopifyAdapter, instagramAdapter, weeblyAdapter, hostingerAdapter, hubspotAdapter, godaddyWmAdapter];
 
 function findAdapter(platform: string): PlatformAdapter | null {
   return adapters.find((a) => a.id === platform) || null;
@@ -89,11 +93,14 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         properties: {
           url: { type: 'string', description: 'The URL of the website to extract' },
           outputDir: { type: 'string', description: 'Directory to write WXR, media, and logs' },
-          token: { type: 'string', description: 'API token for platforms requiring auth' },
+          token: { type: 'string', description: 'API token for platforms requiring auth (e.g. Webflow)' },
           cdpPort: { type: 'number', description: 'CDP port for browser-based extraction' },
+          adminToken: { type: 'string', description: 'Shopify Admin API access token. When set, products are fetched via the Shopify Admin GraphQL API for richer data (compareAtPrice, inventoryPolicy, unitCost, collections, SEO metafields, variant images). Falls back to the public JSON API on failure.' },
+          shopDomain: { type: 'string', description: 'Shopify *.myshopify.com hostname. Usually auto-detected by liberate_discover from the storefront HTML; only pass explicitly if detection failed (e.g. Cloudflare-protected site).' },
           delay: { type: 'number', description: 'Delay between requests in ms (default: 500)' },
           resume: { type: 'boolean', description: 'Resume a previous extraction' },
           dryRun: { type: 'boolean', description: 'Extract 2-3 pages and report without writing WXR' },
+          limit: { type: 'number', description: 'Cap extraction to the first N URLs and write a real WXR for them' },
           verbose: { type: 'boolean', description: 'Enable detailed per-page logging' },
         },
         required: ['url', 'outputDir'],
@@ -301,9 +308,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const opts = {
           token: typedArgs.token,
           cdpPort: typedArgs.cdpPort,
+          adminToken: typedArgs.adminToken,
+          shopDomain: typedArgs.shopDomain,
           delay: typedArgs.delay,
           resume: typedArgs.resume,
           dryRun: typedArgs.dryRun,
+          limit: typedArgs.limit,
           verbose: typedArgs.verbose,
           outputDir,
         };

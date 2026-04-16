@@ -172,6 +172,21 @@ export async function importToWordPress(opts: ImportOptions): Promise<ImportResu
     return opts.only === stage;
   }
 
+  // Resolve the authenticated user — used as the default/fallback author for
+  // all imported content so nothing ends up unowned. When importAuthors is
+  // false, every post/page is assigned to this user. When importAuthors is
+  // true, this is the fallback for any source author that fails to map to a
+  // WP user.
+  let defaultAuthorId: number | undefined;
+  if (!dryRun) {
+    try {
+      const me = await client.getCurrentUser();
+      defaultAuthorId = me.id;
+    } catch {
+      // Non-fatal — posts will fall back to whatever WP assigns.
+    }
+  }
+
   // ID maps
   const mediaIdMap = new Map<number, number>();
   const mediaUrlMap = new Map<string, string>();
@@ -393,42 +408,6 @@ export async function importToWordPress(opts: ImportOptions): Promise<ImportResu
     return result;
   }
 
-  // --- 5. Pages ---
-  if (shouldRun('pages')) {
-    const sorted = topoSortById(pageItems);
-    result.pages.total = sorted.length;
-    for (let i = 0; i < sorted.length; i++) {
-      const page = sorted[i];
-      progress?.('pages', i + 1, sorted.length, page.slug);
-      if (dryRun) continue;
-      if (createdKeys.has(`pages:${page.slug}`)) { result.pages.created++; continue; }
-      try {
-        const parentWpId = page.parent ? pageIdMap.get(page.parent) : undefined;
-        const content = rewriteMediaUrls(page.content);
-        const res = await client.createPage({
-          title: page.title,
-          slug: page.slug,
-          content,
-          excerpt: page.excerpt || undefined,
-          date: page.date || undefined,
-          parent: parentWpId,
-          menuOrder: page.menuOrder || undefined,
-          status: 'draft',
-        });
-        pageIdMap.set(page.id, res.id);
-        result.pages.created++;
-        if (res.url) {
-          result.redirectMap.push({ from: `/${page.slug}`, to: res.url });
-        }
-        logEntry(logPath, { type: 'created', stage: 'pages', slug: page.slug, wxrId: page.id, wpId: res.id });
-        if (delay > 0) await new Promise(r => setTimeout(r, delay));
-      } catch (err) {
-        result.pages.failed++;
-        logEntry(logPath, { type: 'failed', stage: 'pages', slug: page.slug, error: String(err) });
-      }
-    }
-  }
-
   // --- Author mapping ---
   const authorIdMap = new Map<string, number>();
   if (opts.importAuthors && wxr.authors.length > 0 && !dryRun) {
@@ -461,6 +440,46 @@ export async function importToWordPress(opts: ImportOptions): Promise<ImportResu
     }
   }
 
+  // --- 5. Pages ---
+  if (shouldRun('pages')) {
+    const sorted = topoSortById(pageItems);
+    result.pages.total = sorted.length;
+    for (let i = 0; i < sorted.length; i++) {
+      const page = sorted[i];
+      progress?.('pages', i + 1, sorted.length, page.slug);
+      if (dryRun) continue;
+      if (createdKeys.has(`pages:${page.slug}`)) { result.pages.created++; continue; }
+      try {
+        const parentWpId = page.parent ? pageIdMap.get(page.parent) : undefined;
+        const content = rewriteMediaUrls(page.content);
+        const pageAuthorId =
+          (opts.importAuthors && page.author ? authorIdMap.get(page.author) : undefined)
+          ?? defaultAuthorId;
+        const res = await client.createPage({
+          title: page.title,
+          slug: page.slug,
+          content,
+          excerpt: page.excerpt || undefined,
+          date: page.date || undefined,
+          parent: parentWpId,
+          menuOrder: page.menuOrder || undefined,
+          author: pageAuthorId,
+          status: 'draft',
+        });
+        pageIdMap.set(page.id, res.id);
+        result.pages.created++;
+        if (res.url) {
+          result.redirectMap.push({ from: `/${page.slug}`, to: res.url });
+        }
+        logEntry(logPath, { type: 'created', stage: 'pages', slug: page.slug, wxrId: page.id, wpId: res.id });
+        if (delay > 0) await new Promise(r => setTimeout(r, delay));
+      } catch (err) {
+        result.pages.failed++;
+        logEntry(logPath, { type: 'failed', stage: 'pages', slug: page.slug, error: String(err) });
+      }
+    }
+  }
+
   // --- 6. Posts ---
   if (shouldRun('posts')) {
     result.posts.total = postItems.length;
@@ -481,7 +500,9 @@ export async function importToWordPress(opts: ImportOptions): Promise<ImportResu
           ? mediaIdMap.get(post.featuredMediaId)
           : undefined;
 
-        const authorWpId = post.author ? authorIdMap.get(post.author) : undefined;
+        const authorWpId =
+          (opts.importAuthors && post.author ? authorIdMap.get(post.author) : undefined)
+          ?? defaultAuthorId;
 
         const res = await client.createPost({
           title: post.title,

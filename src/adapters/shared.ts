@@ -1,9 +1,11 @@
 import * as cheerio from 'cheerio';
 import type { WxrBuilder } from '../lib/extraction/wxr-builder.js';
 import type { ExtractionLog } from '../lib/extraction/extraction-log.js';
+import type { ImportSession } from '../lib/extraction/import-session.js';
 import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { classifyUrl } from '../lib/extraction/sitemap.js';
 import { downloadMedia } from '../lib/extraction/media.js';
+import { MediaStubStore } from '../lib/extraction/media-stubs.js';
 import type { WooProductCsvBuilder, WooProduct } from '../lib/import/woo-product-csv.js';
 
 // ---------------------------------------------------------------------------
@@ -12,7 +14,12 @@ import type { WooProductCsvBuilder, WooProduct } from '../lib/import/woo-product
 
 function stripNonContentTags(html: string): string {
   const $ = cheerio.load(html, null, false);
+  // Remove whole subtrees we never want in post content.
   $('script, style, form').remove();
+  // Strip inline style attributes — source sites typically emit absolute
+  // pixel sizes, fonts, and colors that fight the WordPress theme. WP block
+  // editor and theme CSS handle presentation once the content is imported.
+  $('[style]').removeAttr('style');
   return $.html();
 }
 
@@ -223,9 +230,18 @@ export interface ExtractionLoopOpts {
   verbose?: boolean;
   server?: Server;
   csvBuilder?: WooProductCsvBuilder;
+  /** Optional higher-level resume state; counters & stage are updated automatically */
+  session?: ImportSession;
   extractPage: (url: string) => Promise<ExtractedPage>;
   /** Optional platform-specific product extractor — called before the generic JSON-LD fallback */
   extractProduct?: (url: string, html: string) => WooProduct | null;
+  /**
+   * Cap the number of URLs to process. Useful for sampling a real extraction
+   * (with full WXR output) without committing to the entire site. When unset,
+   * processes all URLs in the inventory. Takes precedence over dryRun's
+   * implicit 3-URL cap.
+   */
+  limit?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -251,9 +267,22 @@ export async function runExtractionLoop(opts: ExtractionLoopOpts): Promise<{
     verbose,
     server,
     csvBuilder,
+    session,
     extractPage,
     extractProduct,
+    limit,
   } = opts;
+
+  // Seed discovered counts from the inventory so the session reflects
+  // what the adapter found before extraction began.
+  if (session) {
+    const discoveredByType: Record<string, number> = {};
+    for (const u of inventoryUrls) {
+      discoveredByType[u.type] = (discoveredByType[u.type] || 0) + 1;
+    }
+    session.setDiscovered(discoveredByType);
+    session.setStage('extracting');
+  }
 
   const mediaDir = outputDir ? `${outputDir}/media` : null;
 
@@ -264,6 +293,7 @@ export async function runExtractionLoop(opts: ExtractionLoopOpts): Promise<{
     const { rmSync, writeFileSync } = await import('fs');
     try { rmSync(`${outputDir}/media`, { recursive: true, force: true }); } catch { /* ignore */ }
     try { rmSync(`${outputDir}/redirect-map.json`, { force: true }); } catch { /* ignore */ }
+    try { rmSync(`${outputDir}/media-stubs.json`, { force: true }); } catch { /* ignore */ }
     try { writeFileSync(log.logPath, ''); } catch { /* ignore */ }
   }
 
@@ -275,6 +305,9 @@ export async function runExtractionLoop(opts: ExtractionLoopOpts): Promise<{
   const seenMediaNames = new Map<string, number>();
   const seenMediaHashes = new Map<string, string>();
   const downloadedMediaUrls = new Set<string>();
+  // Per-asset status survives across runs: permanent failures stop retrying,
+  // user-marked `ignored` URLs are skipped forever.
+  const mediaStubs = outputDir ? MediaStubStore.load(outputDir) : null;
   /** Map from local file path to WXR media ID — used to deduplicate byte-identical files */
   const mediaPathToId = new Map<string, number>();
 
@@ -303,8 +336,11 @@ export async function runExtractionLoop(opts: ExtractionLoopOpts): Promise<{
     alreadyProcessed = processed.size;
     urls = urls.filter((u) => !processed.has(u));
   }
-  if (dryRun) {
-    urls = urls.slice(0, 3);
+  // Apply URL cap. Explicit `limit` wins over dryRun's implicit 3-URL cap so
+  // a `--limit N` (with or without --dry-run) processes exactly N URLs.
+  const effectiveLimit = limit ?? (dryRun ? 3 : undefined);
+  if (effectiveLimit !== undefined && effectiveLimit >= 0) {
+    urls = urls.slice(0, effectiveLimit);
   }
 
   if (urls.length === 0) {
@@ -331,7 +367,7 @@ export async function runExtractionLoop(opts: ExtractionLoopOpts): Promise<{
     const url = urls[i];
     const startMs = Date.now();
 
-    sendLog(`[${alreadyProcessed + i + 1}/${totalUrls}] Extracting: ${url}`);
+    sendLog(`[${alreadyProcessed + i + 1}/${alreadyProcessed + urls.length}] Extracting: ${url}`);
 
     try {
       const pageData = await extractPage(url);
@@ -346,6 +382,32 @@ export async function runExtractionLoop(opts: ExtractionLoopOpts): Promise<{
         const newMediaUrls: string[] = [];
         for (const mediaUrl of pageData.mediaUrls) {
           if (downloadedMediaUrls.has(mediaUrl)) continue;
+          // Respect persistent stub state: skip permanently-failed / ignored
+          // URLs so resume runs don't burn cycles retrying them.
+          if (mediaStubs && !mediaStubs.shouldAttempt(mediaUrl)) {
+            downloadedMediaUrls.add(mediaUrl);
+            const prior = mediaStubs.get(mediaUrl);
+            if (prior?.status === 'success' && prior.localPath) {
+              // Reuse the existing file. If this run's WXR doesn't yet have a
+              // media item for this path, register it now — otherwise resume
+              // runs would emit WXR without any <wp:attachment> entries for
+              // media downloaded on prior runs.
+              let mediaId = mediaPathToId.get(prior.localPath);
+              if (!mediaId) {
+                mediaId = wxr.addMedia({
+                  url: mediaUrl,
+                  localPath: prior.localPath,
+                  title: prior.localPath.split('/').pop() || '',
+                });
+                mediaPathToId.set(prior.localPath, mediaId);
+                if (wxr.isStreaming) {
+                  wxr.flushItem(wxr.items[wxr.items.length - 1]);
+                }
+              }
+              if (!featuredMediaId) featuredMediaId = mediaId;
+            }
+            continue;
+          }
           downloadedMediaUrls.add(mediaUrl);
           newMediaUrls.push(mediaUrl);
         }
@@ -382,6 +444,13 @@ export async function runExtractionLoop(opts: ExtractionLoopOpts): Promise<{
               localPath: result.localPath,
               error: result.error,
             });
+            if (mediaStubs) {
+              if (result.error) {
+                mediaStubs.markFailure(result.mediaUrl, result.error);
+              } else if (result.localPath) {
+                mediaStubs.markSuccess(result.mediaUrl, result.localPath);
+              }
+            }
           }
         }
       }
@@ -480,6 +549,15 @@ export async function runExtractionLoop(opts: ExtractionLoopOpts): Promise<{
         qualityScore: pageData.qualityScore,
       });
 
+      if (session) {
+        const bumpType = isProduct ? 'product' : isPost ? 'post' : 'page';
+        session.bumpProgress(bumpType, 'extracted');
+        if ((i + 1) % 10 === 0) {
+          session.save();
+          mediaStubs?.flush();
+        }
+      }
+
       if (verbose) {
         sendLog(
           `  media: ${pageData.mediaUrls.length}, quality: ${pageData.qualityScore}, ${durationMs}ms`
@@ -490,6 +568,15 @@ export async function runExtractionLoop(opts: ExtractionLoopOpts): Promise<{
       const errorMsg = err instanceof Error ? err.message : String(err);
       log.logFailed({ url, error: errorMsg });
       sendLog(`  FAILED: ${errorMsg}`);
+
+      if (session) {
+        const invEntry = inventoryUrls.find((u) => u.url === url);
+        const failType = invEntry?.type || classifyUrl(url);
+        const bumpType = failType === 'product' ? 'product' : (failType === 'post' || failType === 'blog-post') ? 'post' : 'page';
+        session.bumpProgress(bumpType, 'failed');
+        // Failures are rare — persist each one so resume reports are accurate
+        session.save();
+      }
     }
 
     // Delay between pages (skip after last)
@@ -511,6 +598,11 @@ export async function runExtractionLoop(opts: ExtractionLoopOpts): Promise<{
       wxr.flushItem(wxr.items[wxr.items.length - 1]);
     }
   }
+
+  if (session) {
+    session.setStage('finalizing');
+  }
+  mediaStubs?.flush();
 
   return {
     pagesExtracted,

@@ -19,6 +19,7 @@ export interface SquarespaceAdapterOpts extends Record<string, unknown> {
   dryRun?: boolean;
   verbose?: boolean;
   outputDir?: string;
+  limit?: number;
 }
 
 export interface SquarespaceInventory {
@@ -709,6 +710,7 @@ export const squarespaceAdapter: PlatformAdapter = {
         dryRun: !!sqOpts.dryRun,
         resume: !!sqOpts.resume,
         verbose: sqOpts.verbose,
+        limit: sqOpts.limit,
         server: context.server,
         csvBuilder,
         extractPage: async (url: string) => {

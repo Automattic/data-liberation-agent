@@ -1,6 +1,12 @@
 import type { PlatformAdapter } from '../types.js';
 import type { WxrBuilder } from '../lib/extraction/wxr-builder.js';
 import type { ExtractionLog } from '../lib/extraction/extraction-log.js';
+import { ImportSession } from '../lib/extraction/import-session.js';
+import {
+  ShopifyGraphqlClient,
+  fetchAllProducts,
+  type ShopifyGqlProduct,
+} from '../lib/extraction/shopify-graphql.js';
 import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { fetchSitemap, classifyUrl } from '../lib/extraction/sitemap.js';
 import { slugify, runExtractionLoop, extractMeta, extractTitle, extractHeading, extractNavLinks, IMAGE_EXTENSIONS } from './shared.js';
@@ -19,6 +25,11 @@ export interface ShopifyAdapterOpts extends Record<string, unknown> {
   verbose?: boolean;
   outputDir?: string;
   cdpPort?: number;
+  /** Shopify shop domain, e.g. `my-store.myshopify.com` — required for GraphQL */
+  shopDomain?: string;
+  /** Shopify Admin API access token. When present, products are fetched via GraphQL. */
+  adminToken?: string;
+  limit?: number;
 }
 
 export interface ShopifyInventory {
@@ -33,6 +44,35 @@ export interface ShopifyInventory {
   counts: Record<string, number>;
   urls: InventoryUrl[];
   jsonApiAvailable: boolean;
+  /**
+   * The `*.myshopify.com` hostname, auto-detected from storefront HTML.
+   * Populated even when the site is served on a custom domain — every
+   * Shopify storefront exposes this via a `Shopify.shop = "..."` global.
+   * Used for Admin GraphQL calls when `adminToken` is supplied.
+   */
+  shopDomain?: string;
+}
+
+/**
+ * Extract the myshopify.com hostname from storefront HTML. Every Shopify
+ * storefront sets `Shopify.shop = "name.myshopify.com"` as a global — it
+ * powers the Shopify JS runtime, so it's reliably present on every page.
+ * Falls back to matching the CDN pattern and `shop_id`/`shop_url` hints.
+ */
+export function extractShopDomain(html: string): string | undefined {
+  // Most reliable: the Shopify JS runtime global
+  const shopGlobal = html.match(/Shopify\.shop\s*=\s*["']([^"']+\.myshopify\.com)["']/i);
+  if (shopGlobal?.[1]) return shopGlobal[1];
+
+  // Analytics bootstrap (trekkie) carries the same value
+  const trekkie = html.match(/shopId["']?\s*[:,]\s*\d+[^}]*shop["']?\s*[:,]\s*["']([^"']+\.myshopify\.com)["']/i);
+  if (trekkie?.[1]) return trekkie[1];
+
+  // Monorail "shop" payload
+  const monorail = html.match(/"shop"\s*:\s*"([^"]+\.myshopify\.com)"/i);
+  if (monorail?.[1]) return monorail[1];
+
+  return undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -109,6 +149,27 @@ export interface ShopifyProductJson {
 }
 
 /**
+ * Normalize a Shopify weight+unit pair to kilograms. Shopify variant objects
+ * expose `weight` in the unit named by `weight_unit` — to feed WooCommerce a
+ * single consistent unit we convert everything to kg. Returns undefined for
+ * zero/missing weights so we don't emit `"0"` rows.
+ */
+export function normalizeWeightToKg(weight: number | undefined, unit: string | undefined): string | undefined {
+  if (weight == null || weight === 0) return undefined;
+  const u = (unit || 'kg').toLowerCase();
+  let kg: number;
+  switch (u) {
+    case 'kg': kg = weight; break;
+    case 'g':  kg = weight / 1000; break;
+    case 'lb': kg = weight * 0.453592; break;
+    case 'oz': kg = weight * 0.0283495; break;
+    default:   kg = weight; // unknown unit — pass through
+  }
+  // Trim to 4 decimals, drop trailing zeros
+  return Number(kg.toFixed(4)).toString();
+}
+
+/**
  * Convert a Shopify product JSON payload into a WooProduct parent + variation rows.
  */
 export function shopifyProductToWoo(product: ShopifyProductJson): { parent: WooProduct; variations: WooProduct[] } {
@@ -137,6 +198,18 @@ export function shopifyProductToWoo(product: ShopifyProductJson): { parent: WooP
     : [];
   const categories = product.product_type ? [product.product_type] : [];
 
+  // Simple-product sale price: when compareAtPrice > price, Shopify treats
+  // the compareAtPrice as the original and price as the current (sale) price.
+  // Mirror this in WooCommerce so discounts survive the import. Guard both
+  // values through Number.isFinite so empty-string prices can't false-positive.
+  const jsonPriceNum = firstVariant?.price ? Number(firstVariant.price) : NaN;
+  const jsonCompareNum = firstVariant?.compare_at_price ? Number(firstVariant.compare_at_price) : NaN;
+  const simpleHasSale =
+    !isVariable &&
+    Number.isFinite(jsonPriceNum) &&
+    Number.isFinite(jsonCompareNum) &&
+    jsonCompareNum > jsonPriceNum;
+
   const parent: WooProduct = {
     name: product.title,
     type: isVariable ? 'variable' : 'simple',
@@ -145,7 +218,10 @@ export function shopifyProductToWoo(product: ShopifyProductJson): { parent: WooP
     sku: isVariable ? (product.handle || product.title.toLowerCase().replace(/[^a-z0-9]+/g, '-')) : (firstVariant?.sku || ''),
     published: true,
     description: product.body_html || '',
-    regularPrice: isVariable ? '' : (firstVariant?.price || ''),
+    regularPrice: isVariable
+      ? ''
+      : (simpleHasSale ? String(firstVariant!.compare_at_price) : (firstVariant?.price || '')),
+    salePrice: simpleHasSale ? (firstVariant?.price || undefined) : undefined,
     categories,
     tags,
     images,
@@ -162,9 +238,8 @@ export function shopifyProductToWoo(product: ShopifyProductJson): { parent: WooP
     }));
   }
 
-  if (firstVariant?.weight) {
-    parent.weight = String(firstVariant.weight);
-  }
+  const parentWeight = normalizeWeightToKg(firstVariant?.weight, firstVariant?.weight_unit);
+  if (parentWeight) parent.weight = parentWeight;
 
   // Build image lookup: image ID → src, and variant ID → image src
   const imageById = new Map<number, string>();
@@ -206,9 +281,8 @@ export function shopifyProductToWoo(product: ShopifyProductJson): { parent: WooP
         ...(variantImage ? { images: [variantImage] } : {}),
       };
 
-      if (variant.weight) {
-        variation.weight = String(variant.weight);
-      }
+      const variationWeight = normalizeWeightToKg(variant.weight, variant.weight_unit);
+      if (variationWeight) variation.weight = variationWeight;
 
       // Single-value attributes for this variant
       const variantAttributes: WooProduct['attributes'] = [];
@@ -224,6 +298,201 @@ export function shopifyProductToWoo(product: ShopifyProductJson): { parent: WooP
       if (variantAttributes.length > 0) {
         variation.attributes = variantAttributes;
       }
+
+      variations.push(variation);
+    }
+  }
+
+  return { parent, variations };
+}
+
+// Narrow stockable-variant shape shared by `computeStock` — defined before
+// the mapper that uses it so readers can trace types top-down.
+type ShopifyGqlVariantLike = {
+  inventoryPolicy: 'DENY' | 'CONTINUE';
+  inventoryQuantity: number | null;
+  inventoryItem?: { tracked: boolean } | null | undefined;
+};
+
+/**
+ * Map a Shopify GraphQL product node to WooProduct parent + variations.
+ *
+ * Exploits data the public JSON API does not expose:
+ *   - compareAtPrice → sale-price semantics (on simple AND variable products)
+ *   - inventoryPolicy + inventoryItem.tracked → real stock status
+ *   - inventoryItem.unitCost → cost-of-goods meta
+ *   - inventoryItem.measurement.weight → normalized kg weight
+ *   - collections → category hierarchy candidates
+ *   - metafields namespace:global + seo{} → SEO title/description
+ *   - variant media → per-variation image
+ */
+export function shopifyGraphqlProductToWoo(
+  product: ShopifyGqlProduct,
+): { parent: WooProduct; variations: WooProduct[] } {
+  const variantEdges = product.variants?.edges || [];
+  const variants = variantEdges.map((e) => e.node);
+  const options = product.options || [];
+
+  const isVariable =
+    variants.length > 1 || (options.length > 0 && options[0]?.name !== 'Title');
+
+  // Collect images: featured + media edges + inline body HTML
+  const imageSet = new Set<string>();
+  if (product.featuredMedia?.image?.url) imageSet.add(product.featuredMedia.image.url);
+  for (const m of product.media?.edges || []) {
+    if (m.node.image?.url) imageSet.add(m.node.image.url);
+  }
+  const inlineImgRegex = /src="(https?:\/\/[^"']+\.(jpg|jpeg|png|gif|webp)[^"']*)"/gi;
+  let inlineMatch: RegExpExecArray | null;
+  while ((inlineMatch = inlineImgRegex.exec(product.descriptionHtml || '')) !== null) {
+    imageSet.add(inlineMatch[1]);
+  }
+  const images = [...imageSet];
+
+  const firstVariant = variants[0];
+  const tags = product.tags || [];
+
+  // Category mapping: prefer collection titles (with product_type as fallback)
+  // for richer taxonomy. Collections become flat categories — WooCommerce
+  // doesn't have a native concept of Shopify collection hierarchy.
+  const categorySet = new Set<string>();
+  for (const edge of product.collections?.edges || []) {
+    if (edge.node.title) categorySet.add(edge.node.title);
+  }
+  if (categorySet.size === 0 && product.productType) {
+    categorySet.add(product.productType);
+  }
+  const categories = [...categorySet];
+
+  // Real stock status: tracked + policy + quantity
+  const computeStock = (v: ShopifyGqlVariantLike): { inStock: boolean; stock?: number } => {
+    const tracked = v.inventoryItem?.tracked;
+    const policy = v.inventoryPolicy;
+    const qty = v.inventoryQuantity;
+    // Untracked variants are always in stock in Shopify's model
+    if (!tracked) return { inStock: true };
+    // Tracked: depend on qty and oversell policy
+    if (qty == null) return { inStock: true, stock: undefined };
+    if (qty > 0) return { inStock: true, stock: qty };
+    // qty <= 0 and tracked
+    return { inStock: policy === 'CONTINUE', stock: qty };
+  };
+
+  const firstStock = firstVariant ? computeStock(firstVariant) : { inStock: true };
+
+  // Only treat as a sale when BOTH prices are non-empty positive numbers.
+  // Guards against empty-string price coercing to 0 (would spuriously mark
+  // a free product as discounted).
+  const priceNum = firstVariant?.price ? Number(firstVariant.price) : NaN;
+  const compareNum = firstVariant?.compareAtPrice ? Number(firstVariant.compareAtPrice) : NaN;
+  const simpleHasSale =
+    !isVariable &&
+    Number.isFinite(priceNum) &&
+    Number.isFinite(compareNum) &&
+    compareNum > priceNum;
+
+  const parent: WooProduct = {
+    name: product.title,
+    type: isVariable ? 'variable' : 'simple',
+    sku: isVariable
+      ? (product.handle || product.title.toLowerCase().replace(/[^a-z0-9]+/g, '-'))
+      : (firstVariant?.sku || ''),
+    published: product.status === 'ACTIVE',
+    description: product.descriptionHtml || '',
+    regularPrice: isVariable
+      ? ''
+      : (simpleHasSale ? String(firstVariant!.compareAtPrice) : (firstVariant?.price || '')),
+    salePrice: simpleHasSale ? (firstVariant?.price || undefined) : undefined,
+    categories,
+    tags,
+    images,
+    inStock: firstStock.inStock,
+    stock: firstStock.stock,
+  };
+
+  // SEO: prefer product.seo, fall back to global metafields for title/description.
+  // Shopify has been known to return metafields: null on stores without any —
+  // optional-chain all the way to find() so we don't crash on empty shops.
+  const seoTitle = product.seo?.title
+    || product.metafields?.edges?.find((e) => e.node.key === 'title_tag')?.node.value
+    || '';
+  const seoDesc = product.seo?.description
+    || product.metafields?.edges?.find((e) => e.node.key === 'description_tag')?.node.value
+    || '';
+  if (seoTitle) parent.seoTitle = seoTitle;
+  if (seoDesc) parent.seoDescription = seoDesc;
+
+  // Cost of goods from Shopify's unitCost — only set when we have a numeric
+  // amount, since Woo's CSV importer treats the meta column as a price-typed
+  // field. Currency code is dropped (Woo uses a single store-wide currency).
+  const firstCost = firstVariant?.inventoryItem?.unitCost?.amount;
+  if (firstCost && Number.isFinite(Number(firstCost))) {
+    parent.costOfGoods = firstCost;
+  }
+
+  if (options.length > 0) {
+    parent.attributes = options.map((opt) => ({
+      name: opt.name,
+      values: opt.values,
+      visible: true,
+      global: false,
+    }));
+  }
+
+  const parentWeightKg = normalizeWeightToKg(
+    firstVariant?.inventoryItem?.measurement?.weight?.value,
+    firstVariant?.inventoryItem?.measurement?.weight?.unit,
+  );
+  if (parentWeightKg) parent.weight = parentWeightKg;
+
+  const variations: WooProduct[] = [];
+  if (isVariable) {
+    for (const variant of variants) {
+      const vPriceNum = variant.price ? Number(variant.price) : NaN;
+      const vCompareNum = variant.compareAtPrice ? Number(variant.compareAtPrice) : NaN;
+      const hasSale =
+        Number.isFinite(vPriceNum) &&
+        Number.isFinite(vCompareNum) &&
+        vCompareNum > vPriceNum;
+
+      const variantImage = variant.media?.edges?.[0]?.node?.image?.url;
+      const variantStock = computeStock(variant);
+
+      const variation: WooProduct = {
+        name: product.title,
+        type: 'variation',
+        sku: variant.sku || '',
+        parentSku: parent.sku,
+        published: true,
+        description: '',
+        regularPrice: hasSale ? String(variant.compareAtPrice) : variant.price || '',
+        salePrice: hasSale ? variant.price || undefined : undefined,
+        inStock: variantStock.inStock,
+        stock: variantStock.stock,
+        ...(variantImage ? { images: [variantImage] } : {}),
+      };
+
+      const variationWeight = normalizeWeightToKg(
+        variant.inventoryItem?.measurement?.weight?.value,
+        variant.inventoryItem?.measurement?.weight?.unit,
+      );
+      if (variationWeight) variation.weight = variationWeight;
+
+      const variantCost = variant.inventoryItem?.unitCost?.amount;
+      if (variantCost && Number.isFinite(Number(variantCost))) {
+        variation.costOfGoods = variantCost;
+      }
+
+      const variantAttributes: WooProduct['attributes'] = [];
+      for (const selected of variant.selectedOptions || []) {
+        variantAttributes.push({
+          name: selected.name,
+          values: [selected.value],
+          visible: true,
+          global: false,
+        });
+      }
+      if (variantAttributes.length > 0) variation.attributes = variantAttributes;
 
       variations.push(variation);
     }
@@ -636,9 +905,21 @@ export const shopifyAdapter: PlatformAdapter = {
       counts['homepage'] = 1;
     }
 
+    // Auto-detect the *.myshopify.com admin hostname from the storefront
+    // HTML. Works regardless of whether the site is served on a custom
+    // domain, so callers can supply `adminToken` without also computing
+    // `shopDomain` themselves. Falls back to the URL hostname only when
+    // the URL already points at myshopify.com.
+    let shopDomain = extractShopDomain(homepageHtml);
+    if (!shopDomain) {
+      const host = new URL(normalized).hostname;
+      if (host.endsWith('.myshopify.com')) shopDomain = host;
+    }
+
     return {
       siteUrl: url,
       discoveredAt: new Date().toISOString(),
+      shopDomain,
       siteMeta: {
         title: siteTitle,
         tagline: siteTagline,
@@ -667,11 +948,98 @@ export const shopifyAdapter: PlatformAdapter = {
     const delayMs = shopifyOpts.delay != null ? shopifyOpts.delay : 300;
     const outputDir = shopifyOpts.outputDir || '';
 
+    // Higher-level resume state (stage, args, per-entity progress, cursors).
+    // Lives alongside extraction-log.jsonl; session.json captures original
+    // args so a future `resume` run doesn't need them re-passed.
+    const session = outputDir
+      ? ImportSession.loadOrCreate(outputDir, 'shopify', shopifyOpts, { resume: !!shopifyOpts.resume })
+      : undefined;
+
     // Product CSV builder — streams products as JSONL, builds CSV at the end
     const csvBuilder = new WooProductCsvBuilder();
     let hasProducts = false;
     if (outputDir && !shopifyOpts.dryRun) {
-      csvBuilder.openStream(outputDir);
+      csvBuilder.openStream(outputDir, { resume: !!shopifyOpts.resume });
+    }
+
+    // GraphQL fast-path: when an Admin API token is available, fetch all
+    // products up-front via GraphQL. This gives us compareAtPrice, unitCost,
+    // inventoryPolicy, tracked, variant media, collections, and SEO
+    // metafields — data the public JSON API doesn't expose. We then strip
+    // product URLs from the inventory so the URL loop doesn't reprocess them.
+    const graphqlProductHandles = new Set<string>();
+    if (shopifyOpts.adminToken && !shopifyOpts.dryRun) {
+      // Resolve the admin hostname. Shopify Admin API only accepts the
+      // myshopify.com subdomain; custom storefront domains (e.g.
+      // shop.brand.com) will silently fail authentication. Preference:
+      //   1. explicit shopDomain opt (user override)
+      //   2. inventory.shopDomain auto-detected during discover()
+      //   3. siteUrl hostname (only if it's already *.myshopify.com)
+      let shopDomain = shopifyOpts.shopDomain || inv.shopDomain;
+      if (!shopDomain) {
+        const derived = new URL(
+          inv.siteUrl.includes('://') ? inv.siteUrl : `https://${inv.siteUrl}`
+        ).hostname;
+        if (derived.endsWith('.myshopify.com')) {
+          shopDomain = derived;
+        } else {
+          throw new Error(
+            `Shopify GraphQL requires a *.myshopify.com host, but auto-detection ` +
+            `failed and siteUrl "${derived}" is a custom domain. Pass --shop-domain ` +
+            `explicitly, or re-run discover() to refresh inventory.shopDomain.`
+          );
+        }
+      } else if (!shopDomain.endsWith('.myshopify.com')) {
+        throw new Error(`shopDomain "${shopDomain}" must end in .myshopify.com`);
+      }
+      // Resume-idempotency: remember which handles we've already emitted
+      // to the CSV across runs. Without this, a crash mid-pagination means
+      // the next resume replays all prior pages as duplicate CSV rows.
+      const emittedHandles: string[] = session?.getCursor<string[]>('shopify:products:emittedHandles') ?? [];
+      for (const h of emittedHandles) graphqlProductHandles.add(h);
+
+      try {
+        const client = new ShopifyGraphqlClient({ shopDomain, accessToken: shopifyOpts.adminToken });
+        await fetchAllProducts(client, {
+          session,
+          onBatch: (batch: ShopifyGqlProduct[]) => {
+            for (const node of batch) {
+              if (node.handle && graphqlProductHandles.has(node.handle)) continue;
+              const { parent, variations } = shopifyGraphqlProductToWoo(node);
+              csvBuilder.addProduct(parent);
+              for (const v of variations) csvBuilder.addProduct(v);
+              hasProducts = true;
+              if (node.handle) graphqlProductHandles.add(node.handle);
+              if (session) session.bumpProgress('product', 'extracted');
+            }
+            if (session) {
+              // Persist the running set so a crash doesn't re-emit.
+              session.setCursor('shopify:products:emittedHandles', [...graphqlProductHandles]);
+              session.save();
+            }
+          },
+        });
+        // Successful completion — clear the emitted-handles cursor so a
+        // subsequent fresh run doesn't inherit stale state.
+        if (session) session.setCursor('shopify:products:emittedHandles', null);
+      } catch (err) {
+        // GraphQL path failed — fall back to JSON API via the URL loop below.
+        const msg = err instanceof Error ? err.message : String(err);
+        context.server?.sendLoggingMessage?.({
+          level: 'warning',
+          data: `Shopify GraphQL fetch failed, falling back to JSON API: ${msg}`,
+        });
+      }
+    }
+
+    // Strip products already handled by GraphQL so the URL loop doesn't
+    // reprocess them. We mutate the inventory in-place for this run.
+    if (graphqlProductHandles.size > 0) {
+      inv.urls = inv.urls.filter((u) => {
+        if (u.type !== 'product') return true;
+        const handle = u.url.match(/\/products\/([^/?#]+)/)?.[1];
+        return !handle || !graphqlProductHandles.has(handle);
+      });
     }
 
     // Build a set of product URLs for quick lookup
@@ -706,8 +1074,10 @@ export const shopifyAdapter: PlatformAdapter = {
       dryRun: !!shopifyOpts.dryRun,
       resume: !!shopifyOpts.resume,
       verbose: shopifyOpts.verbose,
+      limit: shopifyOpts.limit,
       server: context.server,
       csvBuilder,
+      session,
       extractPage: async (url: string) => {
         // Tier 1: Try JSON API — append .json to URL
         let title = '';
@@ -917,7 +1287,17 @@ export const shopifyAdapter: PlatformAdapter = {
       }
     }
 
+    if (session) session.complete();
     return result;
+    } catch (err) {
+      // Swallow any secondary error from persisting the failure state so the
+      // original exception reaches the caller unmasked.
+      if (session) {
+        try {
+          session.setStage('error', err instanceof Error ? err.message : String(err));
+        } catch { /* disk full, etc. — don't shadow the real error */ }
+      }
+      throw err;
     } finally {
       if (browserSession) await (browserSession as { close: () => Promise<void> }).close();
     }

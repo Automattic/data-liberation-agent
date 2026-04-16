@@ -1,6 +1,6 @@
 ---
 name: liberate
-description: Extract content from a closed web platform (Wix, Squarespace, Webflow, Shopify) into a WordPress-compatible WXR file
+description: Extract content from a closed web platform (Wix, Squarespace, Webflow, Shopify, GoDaddy Websites & Marketing) into a WordPress-compatible WXR file
 ---
 
 # Liberate a website
@@ -108,9 +108,70 @@ The admin session gives the adapter access to:
 
 Extraction uses Playwright (headless browser) to intercept Wix's internal API calls and extract window globals. This is slower but captures content that isn't available via HTTP alone. Large sites may take several minutes.
 
-### Webflow / Shopify
+### Webflow
 
-These platforms require an API token. Ask the user for their token and pass it via `--token` (CLI) or the `token` parameter (MCP).
+Webflow requires a Webflow API token. Ask the user for their token and pass it via `--token` (CLI) or the `token` parameter (MCP).
+
+### Shopify
+
+Shopify has **two extraction tiers**. Always offer the richer one first and fall back only if the user can't produce an Admin API token.
+
+**Tier 1 — Public JSON API (no credentials)**
+
+Works for any public Shopify storefront. Pulls pages, blog posts, and products via the public `/pages.json`, `/blogs.json`, and `/products.json` endpoints plus HTML fallback for theme-rendered content. No token needed. Product data is limited to what the public API exposes — you lose compareAtPrice sale semantics, real stock policy, cost of goods, variant images, and collections.
+
+**Tier 2 — Admin GraphQL (richer product data)**
+
+When the user has admin access to their store, offer to use Shopify's Admin GraphQL API. This yields:
+- `compareAtPrice` → proper sale/regular price mapping on simple + variable products
+- `inventoryPolicy` + `inventoryItem.tracked` → real stock status (oversell-aware)
+- `inventoryItem.unitCost` → cost of goods written to `meta:_wc_cog_cost`
+- `inventoryItem.measurement.weight` → unit-normalized weight (kg)
+- Variant-level images
+- Collections → WooCommerce categories
+- SEO metafields (`meta:_yoast_wpseo_title` / `_yoast_wpseo_metadesc`)
+- Cursor-based pagination with mid-run resume
+
+**Guide the user through admin setup:**
+
+1. Direct them to Shopify Admin → **Settings → Apps and sales channels → Develop apps**.
+2. Create a new custom app (name it "Data Liberation" or similar).
+3. Under **Configuration → Admin API access scopes**, enable at minimum:
+   - `read_products` (required)
+   - `read_inventory` (for cost-of-goods + stock)
+   - `read_online_store_pages` / `read_online_store_navigation` (for pages)
+   - `read_content` (for blog articles)
+4. Click **Install app** to generate the Admin API access token — copy it immediately, Shopify only shows it once.
+5. Pass the token as `adminToken` (MCP) or via the adapter opts. **You do not need to ask the user for the shop domain** — `liberate_discover` auto-detects the `*.myshopify.com` hostname from the storefront HTML (`Shopify.shop` JS global) and stores it as `inventory.shopDomain`, even for sites served on custom domains.
+
+**When to use which tier:**
+- User has a Shopify login and some admin comfort → **prompt for Tier 2** and walk them through the custom app flow above
+- User just wants "get my stuff out" and doesn't want to touch admin → **Tier 1 is fine** but tell them upfront what they'll lose (sale pricing, cost of goods, richer categories)
+- User has a custom storefront domain (e.g. `shop.brand.com`) → Tier 2 still works because of auto-detection; do NOT ask them for the myshopify.com subdomain manually unless the detector failed
+
+**If `liberate_discover` did not populate `inventory.shopDomain`** (rare — the site may be behind Cloudflare or heavy bot protection that blocks HTML fetch), ask the user directly:
+"I couldn't auto-detect the myshopify.com subdomain. Can you paste the URL you see when you log into your Shopify admin? It looks like `https://admin.shopify.com/store/<name>` — the `<name>` is what I need."
+
+Pass the admin-resolved value as `shopDomain` alongside `adminToken`.
+
+**GraphQL failures fall back to Tier 1 automatically** — if the token is wrong or the scopes are insufficient, the adapter logs a warning and continues with the public JSON path, so the user's extraction still produces output.
+
+### GoDaddy Websites & Marketing
+
+Public-crawl adapter for GoDaddy's **legacy** Websites & Marketing platform (also called "Go Daddy Website Builder" in page sources). Not to be confused with the newer Airo AI Builder.
+
+GoDaddy offers **no data export** from W+M — this adapter rescues content by crawling the public site. Detection looks for the `Go Daddy Website Builder` generator meta tag, the `img1.wsimg.com/isteam/` CDN pattern, and the `X-SiteId` header.
+
+Discovery fetches the three standard W+M sub-sitemaps individually so blog posts can be tagged precisely (W+M's `/news,-updates/f/<slug>` URL shape doesn't match the generic classifier):
+- `sitemap.website.xml` — pages
+- `sitemap.blog.xml` — blog posts
+- `sitemap.ols.xml` — products (**v1.1**, not yet implemented)
+
+**Blog post bodies are hydrated client-side from a `window._BLOG_DATA` JSON blob.** The adapter parses this blob and converts the Draft.js ContentState (`post.fullContent`) into HTML — preserving paragraphs, headings, lists, blockquotes, code blocks, links, and images. Title, publish date, categories, and featured image are also pulled from `_BLOG_DATA` rather than HTML meta tags (higher fidelity).
+
+Pages use DOM-based extraction: strip `HEADER_SECTION`, `FOOTER_*`, cookie banners, and the first-section title/image widgets (`*_SECTION_TITLE_RENDERED`, `*_IMAGE_RENDERED0`) which would otherwise duplicate the `<wp:post_title>` and media attachment.
+
+**v1 limitations:** No GoDaddy Online Store (OLS) product extraction yet — sites with a store are flagged, but products need a real store URL for testing before v1.1 ships.
 
 ## General notes
 

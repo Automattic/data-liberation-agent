@@ -18,7 +18,7 @@ Detect the platform of a website.
 |-----------|----------|-------------|
 | `url` | yes | The URL of the website to detect |
 
-Returns: `platform` (wix, squarespace, webflow, shopify, instagram, or unknown), `confidence` (high/medium/low), `signals` (what was detected).
+Returns: `platform` (wix, squarespace, webflow, shopify, instagram, weebly, hostinger, hubspot, godaddy-wm, or unknown), `confidence` (high/medium/low), `signals` (what was detected).
 
 ### liberate_discover
 
@@ -31,7 +31,7 @@ Inventory a website: fetch sitemap, categorize URLs, extract navigation structur
 | `cdpPort` | no | CDP port for browser-based extraction |
 | `verbose` | no | Enable detailed logging |
 
-Returns: `siteUrl`, `siteMeta` (title, tagline, language), `navigation` (nav links), `counts` (URLs by type), `urls` (full URL list with types), `platformFeatures` (detected features with transfer status and WP plugin recommendations).
+Returns: `siteUrl`, `siteMeta` (title, tagline, language), `navigation` (nav links), `counts` (URLs by type), `urls` (full URL list with types), `platformFeatures` (detected features with transfer status and WP plugin recommendations). Shopify sites additionally return `shopDomain` — the `*.myshopify.com` hostname auto-detected from the storefront HTML, which `liberate_extract` will use if an `adminToken` is provided.
 
 ### liberate_inspect
 
@@ -59,8 +59,15 @@ Extract all content from a website. Produces a WXR file, media directory, redire
 | `resume` | no | Resume a previous extraction (skip already-processed URLs) |
 | `dryRun` | no | Extract 2-3 pages and report without writing WXR |
 | `verbose` | no | Enable detailed per-page logging |
+| `shopDomain` | no | **Shopify only** — the `*.myshopify.com` hostname used for Admin API calls. Usually unnecessary: `liberate_discover` auto-detects it from the storefront HTML (the `Shopify.shop` JS global) and stores it as `inventory.shopDomain`, so `liberate_extract` picks it up automatically even when the site is served on a custom domain. Only pass explicitly if auto-detection failed (e.g. Cloudflare-protected storefront). |
+| `adminToken` | no | **Shopify only** — Admin API access token. When present, products are fetched via the Admin GraphQL API (2025-04) instead of the public JSON API, yielding richer data: `compareAtPrice` sale semantics, `inventoryItem.tracked` + `inventoryPolicy` stock status, `unitCost` cost-of-goods, collections as categories, `measurement.weight` unit normalization, and global SEO metafields. |
 
 Returns: `wxrPath`, `redirectMapPath`, `outputDir`, `summary` (counts, quality scores), `failures` (URLs and errors), `wxrValidation`.
+
+**Resume semantics:** when `resume: true`, three state files are consulted:
+- `extraction-log.jsonl` — skips URLs with a `processed` entry
+- `session.json` — restores pipeline stage, original opts, and adapter pagination cursors (Shopify GraphQL resumes mid-catalog via persisted `endCursor` + emitted-handle set)
+- `media-stubs.json` — permanently-failed and user-ignored media URLs are skipped
 
 ### liberate_status
 

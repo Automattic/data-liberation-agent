@@ -21,8 +21,11 @@ This tool extracts all content from closed platforms — posts, pages, media, na
 | **Webflow** | Ready | [`prompts/webflow.md`](./prompts/webflow.md) |
 | **Shopify** (blog/pages/products) | Ready | [`prompts/shopify.md`](./prompts/shopify.md) |
 | **Instagram** (posts, carousels, videos) | Ready | [`prompts/instagram.md`](./prompts/instagram.md) |
+| **Weebly** (blog/pages/products) | Ready | — |
+| **Hostinger Website Builder** (blog/pages/products) | Ready | — |
+| **GoDaddy Websites & Marketing** (pages/blog) | Ready | [`prompts/godaddy-wm.md`](./prompts/godaddy-wm.md) |
 
-All five platforms have MCP adapters with full extraction support. Wix/Squarespace/Webflow/Shopify export products as WooCommerce-compatible CSV; Instagram exports posts as a WXR with `wp:image` / `wp:gallery` / `wp:video` blocks and hashtag-derived tags.
+All nine platforms have MCP adapters with full extraction support. Wix/Squarespace/Webflow/Shopify/Weebly/Hostinger/HubSpot export products as WooCommerce-compatible CSV; Instagram exports posts as a WXR with `wp:image` / `wp:gallery` / `wp:video` blocks and hashtag-derived tags. GoDaddy Websites & Marketing is pages + blog only in v1; GoDaddy Online Store (OLS) product support is planned for v1.1.
 
 ## AI tool integration
 
@@ -33,7 +36,7 @@ All five platforms have MCP adapters with full extraction support. Wix/Squarespa
 ```bash
 # Install from GitHub
 claude plugin marketplace add Automattic/data-liberation-agent
-cluade plugin install data-liberation
+claude plugin install data-liberation
 
 # Use from the git checkout
 cd data-liberation-agent
@@ -103,7 +106,9 @@ A successful extraction produces in `/output/<site>/`:
    - `output.wxr` — WordPress eXtended RSS file, ready to import via WordPress Admin > Tools > Import
    - `media/` — downloaded images and attachments with local paths rewritten in the WXR
    - `redirect-map.json` — old platform paths mapped to new WordPress slugs
-   - `extraction-log.jsonl` — per-URL extraction log for debugging or resuming
+   - `extraction-log.jsonl` — per-URL extraction log (atomic dedupe for `--resume`)
+   - `session.json` — pipeline stage, captured CLI opts, per-entity progress counters, and adapter pagination cursors
+   - `media-stubs.json` — per-asset download status so permanently-broken URLs stop retrying across resume runs
    - `products.csv` — WooCommerce-compatible product CSV (if the site has e-commerce)
    - `products.jsonl` — raw product data streamed during extraction
 
