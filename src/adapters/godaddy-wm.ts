@@ -24,6 +24,7 @@ export interface GoDaddyWmAdapterOpts extends Record<string, unknown> {
   dryRun?: boolean;
   verbose?: boolean;
   outputDir?: string;
+  limit?: number;
 }
 
 export interface GoDaddyWmInventory {
@@ -611,6 +612,7 @@ export const godaddyWmAdapter: PlatformAdapter = {
       dryRun: !!wmOpts.dryRun,
       resume: !!wmOpts.resume,
       verbose: wmOpts.verbose,
+      limit: wmOpts.limit,
       server: context.server,
       extractPage: async (url: string) => {
         let html = '';

@@ -81,6 +81,155 @@ For a real user-uploaded image: without transform → 45KB / 602×345; with `rs=
 
 ---
 
+## 2026-04-13 — HubSpot CMS platform adapter
+
+**Found by:** Claude + human contributor
+**During:** Adding HubSpot CMS as a new supported platform
+**Type:** platform adapter
+
+### What I found
+
+HubSpot CMS Hub powers a wide range of sites from SMB marketing pages to enterprise content hubs. Sites run on custom domains and use a well-structured class naming convention that makes detection and extraction straightforward once you know the patterns.
+
+**Detection signals:**
+- `<meta name="generator" content="HubSpot">` is the only reliable signal. Many non-HubSpot sites embed HubSpot marketing scripts (CTAs, forms, tracking), so `hubspot.com`, `hs-scripts.com`, and `hsforms.net` references in page source are NOT sufficient. For example, eplan.co.za has all the HubSpot scripts but its generator tag says TYPO3 — it's a TYPO3 site using HubSpot for marketing.
+
+**Content structure:**
+- `<body>` class identifies content type:
+  - `hs-blog-post` on blog post pages (authoritative — used for classification)
+  - `hs-site-page page` on regular pages
+- Blog post content: `div.post-body` (clean article body)
+- Regular pages: `div.body-container` (strip nav/header/footer)
+- Content modules wrap in `div.hs_cos_wrapper` with `_type_rich_text`, `_type_form`, `_type_cta`, etc.
+- Marketing widgets to strip during extraction: `.hs-cta-wrapper`, `.hs-cta-node`, `hs_cos_wrapper_type_form`, `hs_cos_wrapper_type_blog_comments`, AddThis social widgets
+- Blog titles render as `<h1>` inside content — strip to avoid duplication with `post_title`
+- Navigation: `.hs-menu-wrapper` with `.hs-menu-item`, `.hs-menu-depth-*`
+
+**Blog post metadata:**
+- Date: byline text "by Author, on Dec 6, 2024 6:57:40 PM" (parsed by adapter), plus `article:published_time` meta tag fallback
+- Author: `<a href="/*/author/{name}">{display name}</a>`
+- Topics (tags): `<a href="/*/topic/{slug}">{display name}</a>` in post footer
+
+**Media hosts:**
+- `/hubfs/*` paths on the site itself (HubSpot's file manager)
+- `hubspotusercontent-*.net` CDN (regional, e.g. `-na1`, `-eu1`)
+- `fs1.hubspotusercontent-*.net` for files
+
+**Sitemaps:** Standard `/sitemap.xml`, auto-generated, comprehensive. Includes image sitemap extensions with alt text.
+
+### How it works
+
+The adapter follows the established fetch-and-scrape pattern:
+1. `detect()` is URL-less — relies on the Hubspot generator meta tag in `detect-platform.ts`
+2. `discover()` fetches the homepage + sitemap, extracts site metadata from OG tags and `<html lang>`, classifies URLs (with common HubSpot blog paths like `/blog/`, `/news/`, `/insights/` treated as posts — individual pages are reclassified at extract time via body class)
+3. `extract()` uses `runExtractionLoop()` with a HubSpot-specific `extractPage` that:
+   - Reads the `<body>` class to classify post vs page (overrides URL-based classification via `detectedType`)
+   - Extracts blog content from `.post-body`, page content from `.body-container` with chrome stripped
+   - Strips HubSpot marketing widgets (CTAs, forms, comments, AddThis) from content
+   - Parses date from byline text when `article:published_time` isn't present
+   - Extracts author from `/author/` link text, topics (tags) from `/topic/` link text
+   - Strips the embedded `<h1>` title to prevent duplication with `post_title`
+   - Resolves relative URLs so WordPress can match attachment URLs during import
+
+### Known limitations
+
+Tags are extracted from topic links and returned as post tags, but they don't currently land as WordPress taxonomy terms on import. The WXR builder writes the taxonomy section at `openStream()` time, before posts are extracted, so late-registered `<wp:tag>` entries aren't persisted in streaming mode. This is a shared-code gap affecting all adapters that pass tag slugs directly through `addPost`. Topics still appear as inline linked text in imported post content.
+
+### Why it's better than the previous approach
+
+HubSpot CMS was not previously supported. Adds coverage for a widely-deployed CMS used by large enterprises (Avast, FlightAware, Wattpad, HubSpot itself) and many mid-market companies. Tested end-to-end against eflexsystems.com (156 URLs: 32 pages, 124 posts, 930 media references) and maus.com (185 URLs). The 124 blog posts imported into WordPress with correct titles, dates, authors, and clean content bodies; title duplication avoided.
+
+---
+
+## 2026-04-13 — Hostinger Website Builder platform adapter
+
+**Found by:** Claude + human contributor
+**During:** Adding Hostinger Website Builder as a new supported platform (fastest-growing proprietary builder per w3techs: +103.9% YoY)
+**Type:** platform adapter
+
+### What I found
+
+Hostinger Website Builder (formerly Zyro) is built on Astro and serves images from a dedicated CDN. Sites run on custom domains only — there's no `hostinger.com` subdomain pattern to key detection off of.
+
+**Detection signals:**
+- `zyrosite.com` references in page source (strongest signal — every Hostinger site loads images from `assets.zyrosite.com` via Cloudflare Image Resize)
+- `<meta name="generator" content="Hostinger Website Builder">` tag (reliable fallback for sites with no inline images)
+- `astro-island` / `astro-slot` custom elements confirm the Astro-based build but aren't needed for detection
+
+**Content structure:**
+- Content rendered as a series of `<section class="block ...">` elements with chrome (sticky bars, headers, footers) using distinguishing modifier classes (`block-sticky-bar`, `block-header`, `block--footer`, `block-blog-header`)
+- Generic `class="block"` sections contain real content; modifier-class sections are site chrome
+- `<main>` wraps ALL page sections including chrome, so main-based extraction pulls in site furniture — must extract by section classes instead
+- Blog posts include rich JSON-LD `Article` schema with `headline`, `datePublished`, `articleSection` (categories), and `author.name`
+- Product pages include JSON-LD `Product` schema and render the product block with `class="block-product-wrapper"`
+- Blog templates render the post title as `<h1 class="block-blog-header__title">` inside the content — must be stripped to avoid duplicate titles when WordPress renders `post_title`
+- Images served from `assets.zyrosite.com/cdn-cgi/image/format=auto,w=N,h=N,fit=crop/SITE_ID/hash.png` — the `/cdn-cgi/image/PARAMS/` prefix is a Cloudflare Image Resize transformation; stripping it yields the original asset URL
+- CSS class names are hashed/obfuscated (e.g. `globalClass_2ebe`) — not useful as targeting selectors
+
+**Sitemaps:** Standard XML sitemaps at `/sitemap.xml` with pages, blog posts, and category landing pages.
+
+**Blog URL convention:** `/blog-post1`, `/blog-post2`, ... (sequential numeric slugs) — used for blog post classification.
+
+### How it works
+
+The adapter follows the established fetch-and-scrape pattern:
+1. `detect()` is URL-less — relies on HTTP fingerprinting via `zyrosite.com` source signal and generator meta tag in `detect-platform.ts`
+2. `discover()` fetches the homepage + sitemap, extracts site metadata from OG tags and `<html lang>`, classifies URLs (with `/blog-post*` and `/blog/*` treated as posts)
+3. `extract()` uses `runExtractionLoop()` with a Hostinger-specific `extractPage` that:
+   - Parses JSON-LD for Article metadata (headline, date, author, categories) and Product data
+   - Extracts content by collecting non-chrome `<section class="block">` blocks
+   - Strips the embedded `<h1>` title to prevent duplication with `post_title`
+   - Resolves relative `src`/`href` attributes to absolute URLs so WordPress can match attachments during import
+   - Signals product pages via `detectedType: 'product'` so they route to `products.csv` instead of being imported as pages
+4. A per-URL `productCache` lets the adapter pre-extract WooProduct data from JSON-LD (which lives in `<head>`, outside our extracted content) and hand it to the shared loop's `extractProduct` callback
+
+Content extraction uses `<section class="block">` blocks as the primary strategy with `<article>`, `<main>` (chrome-stripped), and `<body>` fallbacks. Media URLs are normalized by stripping the Cloudflare Image Resize prefix so byte-identical images aren't downloaded multiple times with different resize parameters.
+
+### Why it's better than the previous approach
+
+Hostinger Website Builder was not previously supported. This adds coverage for the fastest-growing proprietary website builder per w3techs data (+103.9% YoY, +2.16 daily sites gained), making it a high-value migration target for users who chose Hostinger's free/cheap tier and want to move to WordPress. Tested end-to-end against 5 live sites (content blog, multi-language villa site, AI marketing site, small bakery, commerce-enabled affiliate site) with pages, posts, products, and media all importing into WordPress correctly.
+
+---
+
+## 2026-04-13 — Weebly platform adapter
+
+**Found by:** Claude + human contributor
+**During:** Adding Weebly as a new supported platform
+**Type:** platform adapter
+
+### What I found
+
+Weebly sites use a consistent HTML structure across all sites with reliable fingerprints for detection. Key findings from analyzing multiple live Weebly sites:
+
+**Detection signals:**
+- URL pattern: `weebly.com` subdomains
+- CDN: All Weebly sites load assets from `editmysite.com` (cdn1/cdn2)
+- HTML markers: `wsite-` class prefix on all structural elements, `_W.configDomain` JS variable referencing `weebly.com`
+
+**Content structure:**
+- Main content container: `#wsite-content`
+- Navigation: `li.wsite-menu-item-wrap > a.wsite-menu-item` with flyout submenus in `.wsite-menu-wrap`
+- Blog posts: Minimal semantic markup — titles in `<h2>` with anchor links, dates as plain text in MM/DD/YYYY format, categories linked via `/blog/category/slug`
+- Products: `.wsite-product` with commerce backed by Square (Weebly's parent company)
+- No JSON-LD or structured data on any tested sites
+
+**Sitemaps:** Standard XML sitemaps available at `/sitemap.xml` with pages, blog posts, products, and category pages.
+
+### How it works
+
+The adapter follows the same fetch-and-scrape pattern as the Webflow adapter:
+1. `detect()` matches `weebly.com` in the URL
+2. `discover()` fetches the homepage HTML + sitemap, extracts navigation from the `wsite-menu` structure, and classifies URLs (with special handling for `/blog/` paths as posts)
+3. `extract()` uses `runExtractionLoop()` with a Weebly-specific `extractPage` function that pulls content from `#wsite-content`, media from `editmysite.com`/`weeblycloud.com` CDN URLs, and blog metadata from category links and date text
+
+Platform detection in `detect-platform.ts` uses two source signals: `editmysite.com` in page source (high confidence) and `wsite-` class markers or `_W.configDomain` variable (medium confidence). Custom domain sites without `weebly.com` in the URL are detected via these HTTP fingerprints.
+
+### Why it's better than the previous approach
+
+Weebly was not previously supported. This adds the fifth platform adapter, covering another significant website builder with a large install base of small business sites.
+
+---
+
 ## 2026-04-02 — Squarespace admin extraction via CDP
 
 **Found by:** Claude + human contributor (live testing against a Squarespace site)

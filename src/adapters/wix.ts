@@ -29,6 +29,7 @@ export interface WixAdapterOpts extends Record<string, unknown> {
   dryRun?: boolean;
   verbose?: boolean;
   outputDir?: string;
+  limit?: number;
 }
 
 export interface Inventory {
@@ -723,6 +724,7 @@ export const wixAdapter: PlatformAdapter = {
         dryRun: !!wixOpts.dryRun,
         resume: !!wixOpts.resume,
         verbose: wixOpts.verbose,
+        limit: wixOpts.limit,
         server: context.server,
         csvBuilder,
         extractPage: async (url: string) => {

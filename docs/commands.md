@@ -7,7 +7,7 @@ Command definitions live in `commands/<name>.md`.
 ## /inspect
 
 Inspect a website before extraction. Reports:
-- Platform detection (Wix, Squarespace, Webflow, Shopify, GoDaddy Websites & Marketing) with confidence level
+- Platform detection (Wix, Squarespace, Webflow, Shopify, Weebly, Hostinger, HubSpot, GoDaddy Websites & Marketing) with confidence level
 - URL inventory from sitemap with counts by type (pages, posts, products, galleries, events)
 - Sample page probes to test extractability
 - Platform feature flags (stores, bookings, forms, members, scheduling, forums, events) with transfer status and WordPress plugin recommendations
