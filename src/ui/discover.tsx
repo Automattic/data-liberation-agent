@@ -45,6 +45,8 @@ export interface LiberateProps {
   verbose: boolean;
   token: string | null;
   cdpPort: number | null;
+  adminToken: string | null;
+  shopDomain: string | null;
   nonInteractive: boolean;
   /** Cap extraction at the first N URLs (writes a real WXR for those N). */
   limit: number | null;
@@ -81,7 +83,7 @@ function findAdapter(platform: string) {
 
 
 function Liberate(props: LiberateProps & { onComplete?: (wxrPath: string | null) => void }) {
-  const { url, outputDir, dryRun, resume, delay, verbose, token, cdpPort, limit, onComplete } = props;
+  const { url, outputDir, dryRun, resume, delay, verbose, token, cdpPort, adminToken, shopDomain, limit, onComplete } = props;
   const app = useApp();
   const [phase, setPhase] = useState<Phase>('detecting');
   const [detection, setDetection] = useState<FullDetectionResult | null>(null);
@@ -151,6 +153,8 @@ function Liberate(props: LiberateProps & { onComplete?: (wxrPath: string | null)
         const opts = {
           cdpPort: cdpPort ?? undefined,
           token: token ?? undefined,
+          adminToken: adminToken ?? undefined,
+          shopDomain: shopDomain ?? undefined,
           delay,
           verbose,
           limit: limit ?? undefined,
@@ -417,6 +421,8 @@ export function runDiscover(url: string, opts: Partial<LiberateProps> = {}): voi
     verbose: opts.verbose || false,
     token: opts.token || null,
     cdpPort: opts.cdpPort || null,
+    adminToken: opts.adminToken || null,
+    shopDomain: opts.shopDomain || null,
     nonInteractive: opts.nonInteractive || false,
     limit: opts.limit ?? null,
   };

@@ -105,7 +105,9 @@ A successful extraction produces in `/output/<site>/`:
    - `output.wxr` — WordPress eXtended RSS file, ready to import via WordPress Admin > Tools > Import
    - `media/` — downloaded images and attachments with local paths rewritten in the WXR
    - `redirect-map.json` — old platform paths mapped to new WordPress slugs
-   - `extraction-log.jsonl` — per-URL extraction log for debugging or resuming
+   - `extraction-log.jsonl` — per-URL extraction log (atomic dedupe for `--resume`)
+   - `session.json` — pipeline stage, captured CLI opts, per-entity progress counters, and adapter pagination cursors
+   - `media-stubs.json` — per-asset download status so permanently-broken URLs stop retrying across resume runs
    - `products.csv` — WooCommerce-compatible product CSV (if the site has e-commerce)
    - `products.jsonl` — raw product data streamed during extraction
 

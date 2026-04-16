@@ -92,8 +92,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         properties: {
           url: { type: 'string', description: 'The URL of the website to extract' },
           outputDir: { type: 'string', description: 'Directory to write WXR, media, and logs' },
-          token: { type: 'string', description: 'API token for platforms requiring auth' },
+          token: { type: 'string', description: 'API token for platforms requiring auth (e.g. Webflow)' },
           cdpPort: { type: 'number', description: 'CDP port for browser-based extraction' },
+          adminToken: { type: 'string', description: 'Shopify Admin API access token. When set, products are fetched via the Shopify Admin GraphQL API for richer data (compareAtPrice, inventoryPolicy, unitCost, collections, SEO metafields, variant images). Falls back to the public JSON API on failure.' },
+          shopDomain: { type: 'string', description: 'Shopify *.myshopify.com hostname. Usually auto-detected by liberate_discover from the storefront HTML; only pass explicitly if detection failed (e.g. Cloudflare-protected site).' },
           delay: { type: 'number', description: 'Delay between requests in ms (default: 500)' },
           resume: { type: 'boolean', description: 'Resume a previous extraction' },
           dryRun: { type: 'boolean', description: 'Extract 2-3 pages and report without writing WXR' },
@@ -305,6 +307,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const opts = {
           token: typedArgs.token,
           cdpPort: typedArgs.cdpPort,
+          adminToken: typedArgs.adminToken,
+          shopDomain: typedArgs.shopDomain,
           delay: typedArgs.delay,
           resume: typedArgs.resume,
           dryRun: typedArgs.dryRun,
