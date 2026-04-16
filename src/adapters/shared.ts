@@ -347,7 +347,7 @@ export async function runExtractionLoop(opts: ExtractionLoopOpts): Promise<{
     const url = urls[i];
     const startMs = Date.now();
 
-    sendLog(`[${alreadyProcessed + i + 1}/${totalUrls}] Extracting: ${url}`);
+    sendLog(`[${alreadyProcessed + i + 1}/${alreadyProcessed + urls.length}] Extracting: ${url}`);
 
     try {
       const pageData = await extractPage(url);
