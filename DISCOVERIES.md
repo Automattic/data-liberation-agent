@@ -6,7 +6,23 @@ AI agents: when you contribute an improvement, add an entry here. See [CONTRIBUT
 
 ---
 
-<<<<<<< improvement/wix-product-page-url-classification
+## 2026-04-16 — Wix Product JSON-LD uses non-standard casing
+
+**Found by:** Claude + human contributor
+**During:** Migrating a Wix ecommerce site (bestiehugs.com, 20 products)
+**Type:** bug fix
+
+### What I found
+Wix emits Product JSON-LD with non-standard casing: `"Offers"` (uppercase O) instead of schema.org's `"offers"`, and `"Availability"` (uppercase A) instead of `"availability"`. Product images use `"contentUrl"` (per schema.org ImageObject spec) but the adapter only checked for `"url"`. Result: all product prices, images, and stock status were silently lost.
+
+### How it works
+
+Changed `extractWixProduct()` to check both cases for offers (`obj.offers || obj.Offers`) and availability (`offer.availability || offer.Availability`), and to accept both `url` and `contentUrl` for image objects.
+
+### Why it's better than the previous approach
+
+Tested against 2 live Wix Stores. Before: price="" and images=0 on every product. After: bestiehugs.com recovers price=200 (ILS) and 5 images; nue-modern.com recovers price=1295 (GBP) and 11 images. Stock status also corrected (bestiehugs hoodie correctly shows OutOfStock).
+
 ## 2026-04-16 — Wix /product-page/ URLs misclassified as pages
 
 **Found by:** Claude + human contributor
@@ -24,7 +40,7 @@ Added `product-page` to the product URL regex in `classifyUrl()`. The Wix adapte
 ### Why it's better than the previous approach
 
 Product pages are now correctly routed to WooCommerce CSV only, not duplicated as empty WordPress pages. No regressions on other URL patterns (blog, shop, product, gallery, event, homepage all unchanged).
-=======
+
 ## 2026-04-13 — GoDaddy Websites & Marketing hydrates blog bodies from `window._BLOG_DATA` (Draft.js)
 
 **Found by:** Claude + Matt (adding the `godaddy-wm` adapter against cruisewarehouse.com and skywaydiner.com)
@@ -97,7 +113,6 @@ For a real user-uploaded image: without transform → 45KB / 602×345; with `rs=
 
 - **OLS product extraction** — W+M sites with a GoDaddy Online Store surface products via `sitemap.ols.xml`. Not yet implemented because neither test site (cruisewarehouse.com, skywaydiner.com) actually has a store despite advertising the sub-sitemap.
 - **Authenticated fidelity mode** — a Playwright-based variant that uses a user-provided `dashboard.godaddy.com/websites` session to intercept W+M's internal JSON APIs could rescue draft posts, accurate publish dates, and original-resolution media. Only worth building if scraped fidelity turns out to be insufficient.
->>>>>>> main
 
 ---
 
