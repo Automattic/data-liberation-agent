@@ -115,7 +115,7 @@ A maintainer (human or AI with repo access) will review the PR. If the discovery
 
 ```
 src/
-  adapters/       Platform-specific extraction (wix.ts, squarespace.ts, webflow.ts, shopify.ts, godaddy-wm.ts, shared.ts)
+  adapters/       Platform-specific extraction (wix.ts, squarespace.ts, webflow.ts, shopify.ts, instagram.ts, godaddy-wm.ts, shared.ts)
   lib/
     extraction/   WXR builder, sitemap, media, detection, extraction log
     import/       WordPress REST API importer, WooCommerce CSV

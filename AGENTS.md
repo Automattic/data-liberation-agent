@@ -2,7 +2,7 @@
 
 ## Overview
 
-`data-liberation-agent` extracts content from closed web platforms (Wix, Squarespace, Webflow, Shopify, Weebly, Hostinger, HubSpot, GoDaddy Websites & Marketing) and produces WordPress-compatible WXR files. All eight platform adapters are implemented.
+`data-liberation-agent` extracts content from closed web platforms (Wix, Squarespace, Webflow, Shopify, Instagram, Weebly, Hostinger, HubSpot, GoDaddy Websites & Marketing) and produces WordPress-compatible WXR files. All nine platform adapters are implemented.
 
 Three entry points — MCP server (11 tools), CLI (`src/cli.ts`), and Claude Code plugin (`claude plugin add .`) — all share `src/lib/` and `src/adapters/`. The plugin just wraps the MCP server.
 
@@ -44,6 +44,7 @@ When `adminToken` is present, `shopifyAdapter.extract` fetches products via the 
 - `classifyUrl` types: `homepage`, `post`, `product`, `gallery`, `event`, `page` (no `category`/`author`/`other`)
 - Media filename collision handling uses numeric suffixes (`-2`, `-3`), not hashes
 - `detect-platform` uses domain-level URL patterns and HTTP fingerprinting (headers + HTML markers) — no path-based detection
+- Instagram adapter requires `cdpPort` for both `discover` and `extract` — Instagram has no public sitemap or unauthenticated API. Discover scrolls the profile and intercepts GraphQL responses; extract visits each post via `?img_index=N` for carousel slide capture.
 - Shopify variant weights are normalized to kilograms regardless of source unit (`kg`, `g`, `lb`, `oz`) via `normalizeWeightToKg`
 - Shopify simple-product sale price uses `compareAtPrice > price` semantics — when set, `compareAtPrice` becomes `regularPrice` and `price` becomes `salePrice`
 - `WooProduct` has first-class `seoTitle`, `seoDescription`, `costOfGoods` fields plus an open `meta` record; the CSV builder emits `meta:_yoast_wpseo_title`, `meta:_yoast_wpseo_metadesc`, `meta:_wc_cog_cost` columns always, plus `meta:<key>` columns for any custom keys

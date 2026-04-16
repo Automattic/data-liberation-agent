@@ -19,6 +19,11 @@ describe('detectFromUrl (heuristics)', () => {
     expect(detectFromUrl('https://mystore.myshopify.com')).toBe('shopify');
   });
 
+  it('detects instagram.com', () => {
+    expect(detectFromUrl('https://www.instagram.com/foo/')).toBe('instagram');
+    expect(detectFromUrl('https://instagram.com/foo')).toBe('instagram');
+  });
+
   it('returns null for custom domains', () => {
     expect(detectFromUrl('https://www.mybusiness.com')).toBeNull();
   });

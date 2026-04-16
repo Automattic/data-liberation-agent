@@ -18,11 +18,12 @@ import { wixAdapter } from './adapters/wix.js';
 import { squarespaceAdapter } from './adapters/squarespace.js';
 import { webflowAdapter } from './adapters/webflow.js';
 import { shopifyAdapter } from './adapters/shopify.js';
+import { instagramAdapter } from './adapters/instagram.js';
 import { weeblyAdapter } from './adapters/weebly.js';
 import { hostingerAdapter } from './adapters/hostinger.js';
 import { hubspotAdapter } from './adapters/hubspot.js';
 import { godaddyWmAdapter } from './adapters/godaddy-wm.js';
-const adapters: PlatformAdapter[] = [wixAdapter, squarespaceAdapter, webflowAdapter, shopifyAdapter, weeblyAdapter, hostingerAdapter, hubspotAdapter, godaddyWmAdapter];
+const adapters: PlatformAdapter[] = [wixAdapter, squarespaceAdapter, webflowAdapter, shopifyAdapter, instagramAdapter, weeblyAdapter, hostingerAdapter, hubspotAdapter, godaddyWmAdapter];
 
 function findAdapter(platform: string): PlatformAdapter | null {
   return adapters.find((a) => a.id === platform) || null;
