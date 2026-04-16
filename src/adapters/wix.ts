@@ -185,10 +185,20 @@ function deriveContent(pageData: {
   meta: PageMeta;
 }): { content: string; qualityScore: 'high' | 'medium' | 'low' } {
   // 1. Try API calls — walk the JSON tree for HTML content fields
+  // Skip non-content API endpoints (tag manager, access tokens) whose responses
+  // contain <script> blocks in fields named "content"/"html" that match
+  // findHtmlContent but produce empty strings after script/style stripping.
   for (const call of pageData.apiCalls) {
     const htmlContent = findHtmlContent(call.data);
     if (htmlContent && htmlContent.length > 50) {
-      return { content: htmlContent, qualityScore: 'high' };
+      // Verify the match has real text content after stripping script/style tags
+      const stripped = htmlContent
+        .replace(/<script[\s\S]*?<\/script>/gi, '')
+        .replace(/<style[\s\S]*?<\/style>/gi, '')
+        .trim();
+      if (stripped.length > 50 && /<[a-z][\s\S]*>/i.test(stripped)) {
+        return { content: htmlContent, qualityScore: 'high' };
+      }
     }
   }
 
