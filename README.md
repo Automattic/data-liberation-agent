@@ -20,8 +20,11 @@ This tool extracts all content from closed platforms — posts, pages, media, na
 | **Squarespace** | Ready | [`prompts/squarespace.md`](./prompts/squarespace.md) |
 | **Webflow** | Ready | [`prompts/webflow.md`](./prompts/webflow.md) |
 | **Shopify** (blog/pages/products) | Ready | [`prompts/shopify.md`](./prompts/shopify.md) |
+| **Weebly** (blog/pages/products) | Ready | — |
+| **Hostinger Website Builder** (blog/pages/products) | Ready | — |
+| **GoDaddy Websites & Marketing** (pages/blog) | Ready | [`prompts/godaddy-wm.md`](./prompts/godaddy-wm.md) |
 
-All four platforms have MCP adapters with full extraction support including products (exported as WooCommerce-compatible CSV).
+All eight platforms have MCP adapters with full extraction support including products (exported as WooCommerce-compatible CSV). GoDaddy Websites & Marketing is pages + blog only in v1; GoDaddy Online Store (OLS) product support is planned for v1.1.
 
 ## AI tool integration
 
@@ -32,7 +35,7 @@ All four platforms have MCP adapters with full extraction support including prod
 ```bash
 # Install from GitHub
 claude plugin marketplace add Automattic/data-liberation-agent
-cluade plugin install data-liberation
+claude plugin install data-liberation
 
 # Use from the git checkout
 cd data-liberation-agent

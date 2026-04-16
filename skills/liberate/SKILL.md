@@ -1,6 +1,6 @@
 ---
 name: liberate
-description: Extract content from a closed web platform (Wix, Squarespace, Webflow, Shopify) into a WordPress-compatible WXR file
+description: Extract content from a closed web platform (Wix, Squarespace, Webflow, Shopify, GoDaddy Websites & Marketing) into a WordPress-compatible WXR file
 ---
 
 # Liberate a website
@@ -155,6 +155,23 @@ When the user has admin access to their store, offer to use Shopify's Admin Grap
 Pass the admin-resolved value as `shopDomain` alongside `adminToken`.
 
 **GraphQL failures fall back to Tier 1 automatically** — if the token is wrong or the scopes are insufficient, the adapter logs a warning and continues with the public JSON path, so the user's extraction still produces output.
+
+### GoDaddy Websites & Marketing
+
+Public-crawl adapter for GoDaddy's **legacy** Websites & Marketing platform (also called "Go Daddy Website Builder" in page sources). Not to be confused with the newer Airo AI Builder.
+
+GoDaddy offers **no data export** from W+M — this adapter rescues content by crawling the public site. Detection looks for the `Go Daddy Website Builder` generator meta tag, the `img1.wsimg.com/isteam/` CDN pattern, and the `X-SiteId` header.
+
+Discovery fetches the three standard W+M sub-sitemaps individually so blog posts can be tagged precisely (W+M's `/news,-updates/f/<slug>` URL shape doesn't match the generic classifier):
+- `sitemap.website.xml` — pages
+- `sitemap.blog.xml` — blog posts
+- `sitemap.ols.xml` — products (**v1.1**, not yet implemented)
+
+**Blog post bodies are hydrated client-side from a `window._BLOG_DATA` JSON blob.** The adapter parses this blob and converts the Draft.js ContentState (`post.fullContent`) into HTML — preserving paragraphs, headings, lists, blockquotes, code blocks, links, and images. Title, publish date, categories, and featured image are also pulled from `_BLOG_DATA` rather than HTML meta tags (higher fidelity).
+
+Pages use DOM-based extraction: strip `HEADER_SECTION`, `FOOTER_*`, cookie banners, and the first-section title/image widgets (`*_SECTION_TITLE_RENDERED`, `*_IMAGE_RENDERED0`) which would otherwise duplicate the `<wp:post_title>` and media attachment.
+
+**v1 limitations:** No GoDaddy Online Store (OLS) product extraction yet — sites with a store are flagged, but products need a real store URL for testing before v1.1 ships.
 
 ## General notes
 

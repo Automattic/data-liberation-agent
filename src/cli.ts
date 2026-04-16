@@ -32,6 +32,7 @@ if (args[0] === 'mcp') {
   Extract options:
     --output <dir>       Output directory (default: ./output)
     --dry-run            Extract 2-3 pages and report without writing WXR
+    --limit <N>          Cap extraction to the first N URLs (writes a real WXR)
     --resume             Resume a previous extraction
     --token <token>      API token for platforms requiring auth (Webflow)
     --delay <ms>         Delay between requests (default: 500)
@@ -142,6 +143,8 @@ if (args[0] === 'mcp') {
   const verbose = args.includes('--verbose');
   const rawDelay = getArg('--delay') ? parseInt(getArg('--delay')!, 10) : 500;
   const delay = Number.isNaN(rawDelay) ? 500 : rawDelay;
+  const rawLimit = getArg('--limit') ? parseInt(getArg('--limit')!, 10) : null;
+  const limit = rawLimit !== null && !Number.isNaN(rawLimit) ? rawLimit : null;
   const token = getArg('--token') || process.env.LIBERATION_TOKEN || null;
   const cdpPort = getArg('--cdp-port') ? parseInt(getArg('--cdp-port')!, 10) : null;
   const adminToken = getArg('--admin-token') || process.env.SHOPIFY_ADMIN_TOKEN || null;
@@ -149,5 +152,5 @@ if (args[0] === 'mcp') {
   const nonInteractive = args.includes('--non-interactive');
 
   const { runDiscover } = await import('./ui/discover.js');
-  runDiscover(url, { outputDir, dryRun, resume, verbose, delay, token, cdpPort, adminToken, shopDomain, nonInteractive });
+  runDiscover(url, { outputDir, dryRun, resume, verbose, delay, limit, token, cdpPort, adminToken, shopDomain, nonInteractive });
 }
