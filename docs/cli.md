@@ -87,7 +87,7 @@ data-liberation verify <output-dir>
 
 Post-extraction health check. Scans the output directory and reports:
 - WXR file presence and item counts (pages, posts, media attachments)
-- Stale CDN URLs still embedded in content (Wix, Squarespace, Shopify, Webflow CDN domains)
+- Stale CDN URLs still embedded in content (Wix, Squarespace, Shopify, Webflow, GoDaddy `img1.wsimg.com` CDN domains)
 - Failed page extractions and failed media downloads from the extraction log
 - Quality score breakdown (high/medium/low)
 - Media files on disk vs media attachments in the WXR

@@ -96,7 +96,7 @@ Products were expected but `products.csv` is missing, empty, or has wrong data.
 
 4. **Deep browser probe (if the user has Chrome with CDP running):**
    Call `liberate_probe` with the CDP port and site URL. This connects to the browser and reports:
-   - **Window globals** — platform-specific data objects (Wix: `__WIX_DATA__`, Squarespace: `__NEXT_DATA__`, Shopify: `Shopify.*`)
+   - **Window globals** — platform-specific data objects (Wix: `__WIX_DATA__`, Squarespace: `__NEXT_DATA__`, Shopify: `Shopify.*`, GoDaddy W+M: `_BLOG_DATA`)
    - **Cookies** — names, domains, flags (helps diagnose auth/session issues)
    - **localStorage** — cached config and state
    - **Performance API network entries** — what API calls the page made (useful when extraction misses data)
@@ -138,6 +138,7 @@ Products were expected but `products.csv` is missing, empty, or has wrong data.
    - Squarespace: `?format=json` API or admin API via CDP
    - Webflow: `.w-richtext` containers
    - Shopify: `article` or `.rte` containers
+   - GoDaddy W+M: blog posts parse `window._BLOG_DATA` and convert Draft.js `post.fullContent` to HTML; pages strip `HEADER_SECTION` / `FOOTER_*` / section-title / hero-image widgets from the DOM
 
    If the site uses a non-standard template, the selector may miss the content.
 

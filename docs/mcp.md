@@ -18,7 +18,7 @@ Detect the platform of a website.
 |-----------|----------|-------------|
 | `url` | yes | The URL of the website to detect |
 
-Returns: `platform` (wix, squarespace, webflow, shopify, or unknown), `confidence` (high/medium/low), `signals` (what was detected).
+Returns: `platform` (wix, squarespace, webflow, shopify, godaddy-wm, or unknown), `confidence` (high/medium/low), `signals` (what was detected).
 
 ### liberate_discover
 
