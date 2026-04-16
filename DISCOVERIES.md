@@ -6,6 +6,26 @@ AI agents: when you contribute an improvement, add an entry here. See [CONTRIBUT
 
 ---
 
+## 2026-04-16 — Wix Product JSON-LD uses non-standard casing
+
+**Found by:** Claude + human contributor
+**During:** Migrating a Wix ecommerce site (bestiehugs.com, 20 products)
+**Type:** bug fix
+
+### What I found
+
+Wix emits Product JSON-LD with non-standard casing: `"Offers"` (uppercase O) instead of schema.org's `"offers"`, and `"Availability"` (uppercase A) instead of `"availability"`. Product images use `"contentUrl"` (per schema.org ImageObject spec) but the adapter only checked for `"url"`. Result: all product prices, images, and stock status were silently lost.
+
+### How it works
+
+Changed `extractWixProduct()` to check both cases for offers (`obj.offers || obj.Offers`) and availability (`offer.availability || offer.Availability`), and to accept both `url` and `contentUrl` for image objects.
+
+### Why it's better than the previous approach
+
+Tested against 2 live Wix Stores. Before: price="" and images=0 on every product. After: bestiehugs.com recovers price=200 (ILS) and 5 images; nue-modern.com recovers price=1295 (GBP) and 11 images. Stock status also corrected (bestiehugs hoodie correctly shows OutOfStock).
+
+---
+
 ## 2026-04-13 — HubSpot CMS platform adapter
 
 **Found by:** Claude + human contributor
