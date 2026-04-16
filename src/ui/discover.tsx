@@ -15,6 +15,7 @@ import { shopifyAdapter } from '../adapters/shopify.js';
 import { weeblyAdapter } from '../adapters/weebly.js';
 import { hostingerAdapter } from '../adapters/hostinger.js';
 import { hubspotAdapter } from '../adapters/hubspot.js';
+import { godaddyWmAdapter } from '../adapters/godaddy-wm.js';
 import { mkdirSync, existsSync, writeFileSync, readFileSync } from 'fs';
 import { join, dirname } from 'path';
 
@@ -72,7 +73,7 @@ interface ExtractionResult {
   wxrPath: string | null;
 }
 
-const adapters = [wixAdapter, squarespaceAdapter, webflowAdapter, shopifyAdapter, weeblyAdapter, hostingerAdapter, hubspotAdapter];
+const adapters = [wixAdapter, squarespaceAdapter, webflowAdapter, shopifyAdapter, weeblyAdapter, hostingerAdapter, hubspotAdapter, godaddyWmAdapter];
 
 function findAdapter(platform: string) {
   return adapters.find((a) => a.id === platform) || null;

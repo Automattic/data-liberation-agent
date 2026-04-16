@@ -89,6 +89,7 @@ export interface PageInput {
   date?: string;
   parent?: number;
   menuOrder?: number;
+  author?: string;
   seoTitle?: string;
   seoDescription?: string;
   sourceUrl?: string;
@@ -104,6 +105,7 @@ export interface PageItem {
   date: string;
   parent: number;
   menuOrder: number;
+  author: string;
   seoTitle: string;
   seoDescription: string;
   sourceUrl: string;
@@ -379,6 +381,7 @@ export class WxrBuilder {
       date: page.date || '',
       parent: page.parent || 0,
       menuOrder: page.menuOrder || 0,
+      author: page.author || '',
       seoTitle: page.seoTitle || '',
       seoDescription: page.seoDescription || '',
       sourceUrl: page.sourceUrl || '',
@@ -601,7 +604,7 @@ export class WxrBuilder {
     const date = (item.type === 'post' || item.type === 'page') ? item.date : '';
     const content = (item.type === 'post' || item.type === 'page') ? item.content : '';
     const excerpt = (item.type === 'post' || item.type === 'page') ? item.excerpt : '';
-    const author = (item.type === 'post') ? item.author : '';
+    const author = (item.type === 'post' || item.type === 'page') ? (item.author || '') : '';
     const parent = (item.type === 'page') ? item.parent : ((item.type === 'nav_menu_item') ? item.parent : 0);
     const menuOrder = (item.type === 'page') ? item.menuOrder : ((item.type === 'nav_menu_item') ? item.menuOrder : 0);
 
