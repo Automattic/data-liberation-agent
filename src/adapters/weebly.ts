@@ -494,6 +494,7 @@ export const weeblyAdapter: PlatformAdapter = {
       dryRun: !!wbOpts.dryRun,
       resume: !!wbOpts.resume,
       verbose: wbOpts.verbose,
+      limit: wbOpts.limit,
       server: context.server,
       csvBuilder,
       extractPage: async (url: string) => {

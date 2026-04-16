@@ -655,6 +655,7 @@ export const hubspotAdapter: PlatformAdapter = {
       dryRun: !!hsOpts.dryRun,
       resume: !!hsOpts.resume,
       verbose: hsOpts.verbose,
+      limit: hsOpts.limit,
       server: context.server,
       csvBuilder,
       extractPage: async (url: string) => {

@@ -96,6 +96,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           delay: { type: 'number', description: 'Delay between requests in ms (default: 500)' },
           resume: { type: 'boolean', description: 'Resume a previous extraction' },
           dryRun: { type: 'boolean', description: 'Extract 2-3 pages and report without writing WXR' },
+          limit: { type: 'number', description: 'Cap extraction to the first N URLs and write a real WXR for them' },
           verbose: { type: 'boolean', description: 'Enable detailed per-page logging' },
         },
         required: ['url', 'outputDir'],
@@ -306,6 +307,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           delay: typedArgs.delay,
           resume: typedArgs.resume,
           dryRun: typedArgs.dryRun,
+          limit: typedArgs.limit,
           verbose: typedArgs.verbose,
           outputDir,
         };

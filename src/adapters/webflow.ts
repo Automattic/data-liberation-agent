@@ -17,6 +17,7 @@ export interface WebflowAdapterOpts extends Record<string, unknown> {
   dryRun?: boolean;
   verbose?: boolean;
   outputDir?: string;
+  limit?: number;
 }
 
 export interface WebflowInventory {
@@ -242,6 +243,7 @@ export const webflowAdapter: PlatformAdapter = {
       dryRun: !!wfOpts.dryRun,
       resume: !!wfOpts.resume,
       verbose: wfOpts.verbose,
+      limit: wfOpts.limit,
       server: context.server,
       csvBuilder,
       extractPage: async (url: string) => {

@@ -45,6 +45,8 @@ export interface LiberateProps {
   token: string | null;
   cdpPort: number | null;
   nonInteractive: boolean;
+  /** Cap extraction at the first N URLs (writes a real WXR for those N). */
+  limit: number | null;
 }
 
 type Phase =
@@ -78,7 +80,7 @@ function findAdapter(platform: string) {
 
 
 function Liberate(props: LiberateProps & { onComplete?: (wxrPath: string | null) => void }) {
-  const { url, outputDir, dryRun, resume, delay, verbose, token, cdpPort, onComplete } = props;
+  const { url, outputDir, dryRun, resume, delay, verbose, token, cdpPort, limit, onComplete } = props;
   const app = useApp();
   const [phase, setPhase] = useState<Phase>('detecting');
   const [detection, setDetection] = useState<FullDetectionResult | null>(null);
@@ -150,6 +152,7 @@ function Liberate(props: LiberateProps & { onComplete?: (wxrPath: string | null)
           token: token ?? undefined,
           delay,
           verbose,
+          limit: limit ?? undefined,
         };
         const inv = await adapter.discover(url, opts) as Inventory;
         setInventory(inv);
@@ -175,8 +178,11 @@ function Liberate(props: LiberateProps & { onComplete?: (wxrPath: string | null)
             language: inv.siteMeta?.language || 'en-US',
           });
 
-          // Set up a fake server context that captures progress for the UI
-          const total = dryRun ? Math.min(3, inv.urls.length) : inv.urls.length;
+          // Set up a fake server context that captures progress for the UI.
+          // Effective cap mirrors shared.ts: explicit `limit` wins over
+          // dryRun's implicit 3-URL cap; otherwise process all inventory URLs.
+          const cap = limit ?? (dryRun ? 3 : inv.urls.length);
+          const total = Math.min(cap, inv.urls.length);
           setProgress({ current: 0, total, currentUrl: '' });
           let progressCount = 0;
 
@@ -411,6 +417,7 @@ export function runDiscover(url: string, opts: Partial<LiberateProps> = {}): voi
     token: opts.token || null,
     cdpPort: opts.cdpPort || null,
     nonInteractive: opts.nonInteractive || false,
+    limit: opts.limit ?? null,
   };
   const { waitUntilExit } = render(
     <Liberate {...props} onComplete={(path) => { wxrPath = path; }} />,

@@ -19,6 +19,7 @@ export interface ShopifyAdapterOpts extends Record<string, unknown> {
   verbose?: boolean;
   outputDir?: string;
   cdpPort?: number;
+  limit?: number;
 }
 
 export interface ShopifyInventory {
@@ -706,6 +707,7 @@ export const shopifyAdapter: PlatformAdapter = {
       dryRun: !!shopifyOpts.dryRun,
       resume: !!shopifyOpts.resume,
       verbose: shopifyOpts.verbose,
+      limit: shopifyOpts.limit,
       server: context.server,
       csvBuilder,
       extractPage: async (url: string) => {

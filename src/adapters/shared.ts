@@ -231,6 +231,13 @@ export interface ExtractionLoopOpts {
   extractPage: (url: string) => Promise<ExtractedPage>;
   /** Optional platform-specific product extractor — called before the generic JSON-LD fallback */
   extractProduct?: (url: string, html: string) => WooProduct | null;
+  /**
+   * Cap the number of URLs to process. Useful for sampling a real extraction
+   * (with full WXR output) without committing to the entire site. When unset,
+   * processes all URLs in the inventory. Takes precedence over dryRun's
+   * implicit 3-URL cap.
+   */
+  limit?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -258,6 +265,7 @@ export async function runExtractionLoop(opts: ExtractionLoopOpts): Promise<{
     csvBuilder,
     extractPage,
     extractProduct,
+    limit,
   } = opts;
 
   const mediaDir = outputDir ? `${outputDir}/media` : null;
@@ -308,8 +316,11 @@ export async function runExtractionLoop(opts: ExtractionLoopOpts): Promise<{
     alreadyProcessed = processed.size;
     urls = urls.filter((u) => !processed.has(u));
   }
-  if (dryRun) {
-    urls = urls.slice(0, 3);
+  // Apply URL cap. Explicit `limit` wins over dryRun's implicit 3-URL cap so
+  // a `--limit N` (with or without --dry-run) processes exactly N URLs.
+  const effectiveLimit = limit ?? (dryRun ? 3 : undefined);
+  if (effectiveLimit !== undefined && effectiveLimit >= 0) {
+    urls = urls.slice(0, effectiveLimit);
   }
 
   if (urls.length === 0) {
@@ -336,7 +347,7 @@ export async function runExtractionLoop(opts: ExtractionLoopOpts): Promise<{
     const url = urls[i];
     const startMs = Date.now();
 
-    sendLog(`[${alreadyProcessed + i + 1}/${totalUrls}] Extracting: ${url}`);
+    sendLog(`[${alreadyProcessed + i + 1}/${alreadyProcessed + urls.length}] Extracting: ${url}`);
 
     try {
       const pageData = await extractPage(url);
