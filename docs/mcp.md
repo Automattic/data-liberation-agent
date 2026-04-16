@@ -18,7 +18,7 @@ Detect the platform of a website.
 |-----------|----------|-------------|
 | `url` | yes | The URL of the website to detect |
 
-Returns: `platform` (wix, squarespace, webflow, shopify, godaddy-wm, or unknown), `confidence` (high/medium/low), `signals` (what was detected).
+Returns: `platform` (godaddy-wm, hostinger, hubspot, shopify, squarespace, webflow, weebly, wix, or unknown), `confidence` (high/medium/low), `signals` (what was detected).
 
 ### liberate_discover
 
@@ -103,7 +103,7 @@ Probe a browser page via CDP for extraction-relevant data. Requires a running Ch
 | `cdpPort` | yes | Chrome DevTools Protocol port (e.g. 9222) |
 | `url` | no | Only probe pages on this domain (probes all tabs if omitted) |
 
-Returns an array of probe results (one per matching browser tab), each containing: `globals` (window objects with platform prefixes), `jsonLd` (structured data), `cookies` (names/domains/flags, not values), `localStorage` (key names/sizes/previews), `networkEntries` (API calls from Performance API), `identity` (platform-specific IDs — Wix metaSiteId, Squarespace websiteId, Shopify shop name).
+Returns an array of probe results (one per matching browser tab), each containing: `globals` (window objects with platform prefixes), `jsonLd` (structured data), `cookies` (names/domains/flags, not values), `localStorage` (key names/sizes/previews), `networkEntries` (API calls from Performance API), `identity` (platform-specific IDs — Shopify shop name, Squarespace websiteId, Wix metaSiteId).
 
 ## Post-extraction
 

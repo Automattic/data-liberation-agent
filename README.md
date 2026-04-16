@@ -16,13 +16,14 @@ This tool extracts all content from closed platforms — posts, pages, media, na
 
 | Platform | Status | Prompt |
 |---|---|---|
-| **Wix** | Ready | [`prompts/wix.md`](./prompts/wix.md) |
+| **GoDaddy Websites & Marketing** (pages/blog) | Ready | [`prompts/godaddy-wm.md`](./prompts/godaddy-wm.md) |
+| **Hostinger Website Builder** (blog/pages/products) | Ready | — |
+| **HubSpot** | Ready | — |
+| **Shopify** (blog/pages/products) | Ready | [`prompts/shopify.md`](./prompts/shopify.md) |
 | **Squarespace** | Ready | [`prompts/squarespace.md`](./prompts/squarespace.md) |
 | **Webflow** | Ready | [`prompts/webflow.md`](./prompts/webflow.md) |
-| **Shopify** (blog/pages/products) | Ready | [`prompts/shopify.md`](./prompts/shopify.md) |
 | **Weebly** (blog/pages/products) | Ready | — |
-| **Hostinger Website Builder** (blog/pages/products) | Ready | — |
-| **GoDaddy Websites & Marketing** (pages/blog) | Ready | [`prompts/godaddy-wm.md`](./prompts/godaddy-wm.md) |
+| **Wix** | Ready | [`prompts/wix.md`](./prompts/wix.md) |
 
 All eight platforms have MCP adapters with full extraction support including products (exported as WooCommerce-compatible CSV). GoDaddy Websites & Marketing is pages + blog only in v1; GoDaddy Online Store (OLS) product support is planned for v1.1.
 

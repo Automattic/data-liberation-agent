@@ -115,7 +115,7 @@ A maintainer (human or AI with repo access) will review the PR. If the discovery
 
 ```
 src/
-  adapters/       Platform-specific extraction (wix.ts, squarespace.ts, webflow.ts, shopify.ts, godaddy-wm.ts, shared.ts)
+  adapters/       Platform-specific extraction (godaddy-wm.ts, hostinger.ts, hubspot.ts, shared.ts, shopify.ts, squarespace.ts, webflow.ts, weebly.ts, wix.ts)
   lib/
     extraction/   WXR builder, sitemap, media, detection, extraction log
     import/       WordPress REST API importer, WooCommerce CSV
@@ -128,7 +128,7 @@ src/
   types.ts        PlatformAdapter interface
 skills/           AI skill definitions (liberate, qa, diagnose, adapt)
 commands/         AI command definitions (inspect, import, verify, setup)
-scripts/          Legacy standalone scripts (Wix, Squarespace)
+scripts/          Legacy standalone scripts (Squarespace, Wix)
 ```
 
 ## Questions

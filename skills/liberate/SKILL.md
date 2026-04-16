@@ -1,6 +1,6 @@
 ---
 name: liberate
-description: Extract content from a closed web platform (Wix, Squarespace, Webflow, Shopify, GoDaddy Websites & Marketing) into a WordPress-compatible WXR file
+description: Extract content from a closed web platform (GoDaddy Websites & Marketing, Hostinger, HubSpot, Shopify, Squarespace, Webflow, Weebly, Wix) into a WordPress-compatible WXR file
 ---
 
 # Liberate a website
@@ -53,7 +53,7 @@ If you encounter something notable during extraction — a new API endpoint, a p
 ## Verification
 
 After extraction completes, always run `liberate_verify` on the output directory. This checks:
-- Stale CDN URLs still embedded in content (Wix, Squarespace, Shopify, Webflow CDN domains)
+- Stale CDN URLs still embedded in content (Shopify, Squarespace, Webflow, Wix CDN domains)
 - Failed page extractions and failed media downloads
 - Quality score breakdown (high/medium/low)
 - Media files on disk vs media attachments in the WXR

@@ -13,16 +13,16 @@ import { WxrBuilder } from './lib/extraction/wxr-builder.js';
 import { mkdirSync } from 'fs';
 import { join } from 'path';
 
-// Static adapter imports — add new adapters here
-import { wixAdapter } from './adapters/wix.js';
-import { squarespaceAdapter } from './adapters/squarespace.js';
-import { webflowAdapter } from './adapters/webflow.js';
-import { shopifyAdapter } from './adapters/shopify.js';
-import { weeblyAdapter } from './adapters/weebly.js';
+// Static adapter imports — add new adapters here (alphabetical)
+import { godaddyWmAdapter } from './adapters/godaddy-wm.js';
 import { hostingerAdapter } from './adapters/hostinger.js';
 import { hubspotAdapter } from './adapters/hubspot.js';
-import { godaddyWmAdapter } from './adapters/godaddy-wm.js';
-const adapters: PlatformAdapter[] = [wixAdapter, squarespaceAdapter, webflowAdapter, shopifyAdapter, weeblyAdapter, hostingerAdapter, hubspotAdapter, godaddyWmAdapter];
+import { shopifyAdapter } from './adapters/shopify.js';
+import { squarespaceAdapter } from './adapters/squarespace.js';
+import { webflowAdapter } from './adapters/webflow.js';
+import { weeblyAdapter } from './adapters/weebly.js';
+import { wixAdapter } from './adapters/wix.js';
+const adapters: PlatformAdapter[] = [godaddyWmAdapter, hostingerAdapter, hubspotAdapter, shopifyAdapter, squarespaceAdapter, webflowAdapter, weeblyAdapter, wixAdapter];
 
 function findAdapter(platform: string): PlatformAdapter | null {
   return adapters.find((a) => a.id === platform) || null;
@@ -48,7 +48,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
     {
       name: 'liberate_detect',
-      description: 'Detect the platform of a website (Wix, Squarespace, Webflow, Shopify, or unknown)',
+      description: 'Detect the platform of a website (GoDaddy Websites & Marketing, Hostinger, HubSpot, Shopify, Squarespace, Webflow, Weebly, Wix, or unknown)',
       inputSchema: {
         type: 'object' as const,
         properties: {

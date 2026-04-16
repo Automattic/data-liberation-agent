@@ -469,7 +469,7 @@ async function main() {
   if (!existsSync(`scripts/${activePlatform}`)) {
     warn(`No extraction scripts for ${activePlatform} yet.`);
     log(`\n  Currently supported: Wix`);
-    log(`  Squarespace, Webflow, Shopify coming soon.`);
+    log(`  Shopify, Squarespace, Webflow coming soon.`);
     log(`\n  Want to help? See CONTRIBUTING.md for how to add a new platform.\n`);
     rl.close();
     return;
