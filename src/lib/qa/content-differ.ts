@@ -33,43 +33,43 @@ export function diffContent(origin: ContentModel, wxr: ContentModel, postTitle?:
     ? origin.headings.filter((h) => !(h.level === 1 && normalize(h.text) === normalize(postTitle)))
     : origin.headings;
 
-  // Headings: check that WXR headings exist in the origin (containment direction)
-  const originHeadingSet = new Set(originHeadings.map((h) => `${h.level}:${normalize(h.text)}`));
-  const missingHeadings = wxr.headings.filter(
-    (wh) => !originHeadingSet.has(`${wh.level}:${normalize(wh.text)}`),
+  // Headings: find origin headings missing from WXR (coverage direction)
+  const wxrHeadingSet = new Set(wxr.headings.map((h) => `${h.level}:${normalize(h.text)}`));
+  const missingHeadings = originHeadings.filter(
+    (oh) => !wxrHeadingSet.has(`${oh.level}:${normalize(oh.text)}`),
   );
 
-  // Images: check that WXR images exist in the origin (containment direction)
-  const originFilenames = new Set(origin.images.map((img) => extractFilename(img.src)));
-  const missingImages = wxr.images.filter(
-    (img) => !originFilenames.has(extractFilename(img.src)),
+  // Images: find origin images missing from WXR (coverage direction)
+  const wxrFilenames = new Set(wxr.images.map((img) => extractFilename(img.src)));
+  const missingImages = origin.images.filter(
+    (img) => !wxrFilenames.has(extractFilename(img.src)),
   );
 
-  // Links: check that WXR links exist in the origin (containment direction)
-  const originHrefs = new Set(origin.links.map((l) => l.href));
-  const missingLinks = wxr.links.filter((l) => !originHrefs.has(l.href));
+  // Links: find origin links missing from WXR (coverage direction)
+  const wxrHrefs = new Set(wxr.links.map((l) => l.href));
+  const missingLinks = origin.links.filter((l) => !wxrHrefs.has(l.href));
 
   const headingsMatch = {
     origin: originHeadings.length,
     wxr: wxr.headings.length,
-    missing: missingHeadings.length, // WXR headings NOT found in origin
+    missing: missingHeadings.length, // origin headings NOT found in WXR
   };
   const imagesMatch = {
     origin: origin.images.length,
     wxr: wxr.images.length,
-    missing: missingImages.length, // WXR images NOT found in origin
+    missing: missingImages.length, // origin images NOT found in WXR
   };
   const linksMatch = {
     origin: origin.links.length,
     wxr: wxr.links.length,
-    missing: missingLinks.length, // WXR links NOT found in origin
+    missing: missingLinks.length, // origin links NOT found in WXR
   };
 
   // Grade: weighted score — text 50%, headings 20%, images 20%, links 10%
-  // Scores measure containment: what fraction of WXR content is verified in origin
-  const headingsScore = wxr.headings.length === 0 ? 1 : 1 - missingHeadings.length / wxr.headings.length;
-  const imagesScore = wxr.images.length === 0 ? 1 : 1 - missingImages.length / wxr.images.length;
-  const linksScore = wxr.links.length === 0 ? 1 : 1 - missingLinks.length / wxr.links.length;
+  // Scores measure coverage: what fraction of origin elements were extracted
+  const headingsScore = originHeadings.length === 0 ? 1 : 1 - missingHeadings.length / originHeadings.length;
+  const imagesScore = origin.images.length === 0 ? 1 : 1 - missingImages.length / origin.images.length;
+  const linksScore = origin.links.length === 0 ? 1 : 1 - missingLinks.length / origin.links.length;
 
   const overall = isEmpty
     ? 1
