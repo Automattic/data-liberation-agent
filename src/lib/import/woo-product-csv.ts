@@ -32,7 +32,23 @@ export interface WooProduct {
     global?: boolean;
   }>;
   parentSku?: string;
+  /** SEO title — emitted as `meta:_yoast_wpseo_title` */
+  seoTitle?: string;
+  /** SEO description — emitted as `meta:_yoast_wpseo_metadesc` */
+  seoDescription?: string;
+  /** Cost of goods sold — emitted as `meta:_wc_cog_cost` (WooCommerce COGS plugin) */
+  costOfGoods?: string;
+  /** Arbitrary custom post meta — each key becomes a `meta:<key>` column */
+  meta?: Record<string, string>;
 }
+
+// WooCommerce post-meta keys for the three first-class SEO/cost fields.
+// These columns are always present in the output (even when empty) so that
+// the CSV shape is stable across runs and predictable for import tooling.
+const META_KEY_SEO_TITLE = '_yoast_wpseo_title';
+const META_KEY_SEO_DESC = '_yoast_wpseo_metadesc';
+const META_KEY_COGS = '_wc_cog_cost';
+const FIXED_META_KEYS = [META_KEY_SEO_TITLE, META_KEY_SEO_DESC, META_KEY_COGS] as const;
 
 
 export class WooProductCsvBuilder {
@@ -60,9 +76,25 @@ export class WooProductCsvBuilder {
   }
 
   /**
+   * Collect the union of custom `meta` keys across all products, excluding
+   * the three fixed first-class keys (which always get a column regardless).
+   */
+  private customMetaKeys(): string[] {
+    const keys = new Set<string>();
+    for (const p of this.products) {
+      if (!p.meta) continue;
+      for (const k of Object.keys(p.meta)) {
+        if ((FIXED_META_KEYS as readonly string[]).includes(k)) continue;
+        keys.add(k);
+      }
+    }
+    return [...keys].sort();
+  }
+
+  /**
    * Build the header row.
    */
-  private buildHeaders(): string[] {
+  private buildHeaders(customMetaKeys: string[]): string[] {
     const headers = [
       'id',
       'type',
@@ -94,6 +126,15 @@ export class WooProductCsvBuilder {
 
     headers.push('parent_id');
 
+    // First-class meta columns — always present for a stable shape.
+    for (const key of FIXED_META_KEYS) {
+      headers.push(`meta:${key}`);
+    }
+    // Adapter-supplied custom meta keys.
+    for (const key of customMetaKeys) {
+      headers.push(`meta:${key}`);
+    }
+
     return headers;
   }
 
@@ -106,9 +147,21 @@ export class WooProductCsvBuilder {
   }
 
   /**
+   * Resolve the value for a given meta key on a product. The three fixed
+   * keys read from their first-class fields first, then fall through to
+   * `product.meta`. Custom keys read only from `product.meta`.
+   */
+  private static metaValue(product: WooProduct, key: string): string {
+    if (key === META_KEY_SEO_TITLE && product.seoTitle) return product.seoTitle;
+    if (key === META_KEY_SEO_DESC && product.seoDescription) return product.seoDescription;
+    if (key === META_KEY_COGS && product.costOfGoods) return product.costOfGoods;
+    return product.meta?.[key] || '';
+  }
+
+  /**
    * Build a CSV row for a single product.
    */
-  private buildRow(product: WooProduct, attrCount: number): string[] {
+  private buildRow(product: WooProduct, attrCount: number, customMetaKeys: string[]): string[] {
     const c = WooProductCsvBuilder.collapseNewlines;
     const row: string[] = [
       '', // ID — empty for new products
@@ -145,6 +198,13 @@ export class WooProductCsvBuilder {
 
     row.push(product.parentSku || '');
 
+    for (const key of FIXED_META_KEYS) {
+      row.push(c(WooProductCsvBuilder.metaValue(product, key)));
+    }
+    for (const key of customMetaKeys) {
+      row.push(c(WooProductCsvBuilder.metaValue(product, key)));
+    }
+
     return row;
   }
 
@@ -154,10 +214,11 @@ export class WooProductCsvBuilder {
   serialize(outputPath: string): void {
     mkdirSync(dirname(outputPath), { recursive: true });
 
-    const headers = this.buildHeaders();
+    const customMetaKeys = this.customMetaKeys();
+    const headers = this.buildHeaders(customMetaKeys);
     const attrCount = this.maxAttributes();
 
-    const data = this.products.map(p => this.buildRow(p, attrCount));
+    const data = this.products.map(p => this.buildRow(p, attrCount, customMetaKeys));
     const csv = Papa.unparse({ fields: headers, data }, { newline: '\r\n' });
     writeFileSync(outputPath, csv, 'utf8');
   }
@@ -176,14 +237,18 @@ export class WooProductCsvBuilder {
 
   /**
    * Begin streaming mode. Products are appended as JSONL lines.
+   * Pass `{ resume: true }` to append to an existing file instead of
+   * truncating — required for adapters that persist cross-run state
+   * (e.g. Shopify GraphQL product handles) in the extraction session.
    */
-  openStream(outputDir: string): void {
+  openStream(outputDir: string, { resume = false }: { resume?: boolean } = {}): void {
     mkdirSync(outputDir, { recursive: true });
     this._streamDir = outputDir;
     this._jsonlPath = join(outputDir, 'products.jsonl');
     this._streaming = true;
-    // Clear any existing JSONL from a previous run
-    writeFileSync(this._jsonlPath, '', 'utf8');
+    if (!resume) {
+      writeFileSync(this._jsonlPath, '', 'utf8');
+    }
   }
 
   /**

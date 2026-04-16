@@ -8,7 +8,7 @@ Run the verify command after extraction to check the output before importing.
 ## What it checks
 
 - **WXR integrity** — file exists, item counts (pages, posts, media attachments)
-- **Stale CDN URLs** — platform CDN domains (Wix, Squarespace, Shopify, Webflow) still embedded in content that may break after the source site changes
+- **Stale CDN URLs** — platform CDN domains (Wix, Squarespace, Shopify, Webflow, GoDaddy `img1.wsimg.com`) still embedded in content that may break after the source site changes
 - **Failed extractions** — pages that errored during extraction
 - **Failed media** — images that couldn't be downloaded
 - **Quality scores** — breakdown of high/medium/low quality pages

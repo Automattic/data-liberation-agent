@@ -43,6 +43,7 @@ const HTTP_SIGNALS: HttpSignal[] = [
   { header: 'x-shopid', platform: 'shopify', signal: 'X-ShopId header' },
   { header: 'powered-by', value: 'shopify', platform: 'shopify', signal: 'Powered-by: Shopify header' },
   { header: 'x-host', value: 'weebly.net', platform: 'weebly', signal: 'X-Host: *.weebly.net header (Weebly backend)' },
+  { header: 'x-siteid', platform: 'godaddy-wm', signal: 'X-SiteId header (GoDaddy DPS)' },
 ];
 
 const SOURCE_SIGNALS: SourceSignal[] = [
@@ -56,6 +57,8 @@ const SOURCE_SIGNALS: SourceSignal[] = [
   { pattern: /zyrosite\.com/i, platform: 'hostinger', signal: 'zyrosite.com CDN in page source (Hostinger Website Builder)' },
   { pattern: /<meta[^>]+name=["']generator["'][^>]+content=["']Hostinger[^"']*["']/i, platform: 'hostinger', signal: 'Hostinger generator meta tag' },
   { pattern: /<meta[^>]+name=["']generator["'][^>]+content=["']HubSpot["']/i, platform: 'hubspot', signal: 'HubSpot generator meta tag' },
+  { pattern: /Go Daddy Website Builder|Starfield Technologies/i, platform: 'godaddy-wm', signal: 'GoDaddy Website Builder generator meta in page source' },
+  { pattern: /img1\.wsimg\.com\/isteam/i, platform: 'godaddy-wm', signal: 'img1.wsimg.com/isteam CDN reference in page source' },
 ];
 
 export function detectFromUrl(url: string): string | null {

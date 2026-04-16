@@ -43,6 +43,14 @@ export class WpRestClient {
     return new WpRestClient({ ...options, site: resolvedSite });
   }
 
+  async getCurrentUser(): Promise<{ id: number; slug: string; name: string }> {
+    const data = await this.request(`${this.baseUrl}/users/me?context=edit`, {
+      method: 'GET',
+      headers: { 'Authorization': this.authHeader },
+    });
+    return data as { id: number; slug: string; name: string };
+  }
+
   async listUsers(): Promise<Array<{ id: number; slug: string; name: string }>> {
     const data = await this.request(`${this.baseUrl}/users?per_page=100`, {
       method: 'GET',
@@ -86,7 +94,7 @@ export class WpRestClient {
 
   async createPage(input: {
     title: string; content: string; slug: string; excerpt?: string;
-    date?: string; parent?: number; menuOrder?: number; status: string;
+    date?: string; parent?: number; menuOrder?: number; author?: number; status: string;
   }): Promise<{ id: number; url: string }> {
     const body: Record<string, unknown> = { ...input };
     if (input.menuOrder !== undefined) {
