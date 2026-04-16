@@ -96,7 +96,7 @@ Products were expected but `products.csv` is missing, empty, or has wrong data.
 
 4. **Deep browser probe (if the user has Chrome with CDP running):**
    Call `liberate_probe` with the CDP port and site URL. This connects to the browser and reports:
-   - **Window globals** — platform-specific data objects (Wix: `__WIX_DATA__`, Squarespace: `__NEXT_DATA__`, Shopify: `Shopify.*`, GoDaddy W+M: `_BLOG_DATA`)
+   - **Window globals** — platform-specific data objects (GoDaddy W+M: `_BLOG_DATA`, Shopify: `Shopify.*`, Squarespace: `__NEXT_DATA__`, Wix: `__WIX_DATA__`)
    - **Cookies** — names, domains, flags (helps diagnose auth/session issues)
    - **localStorage** — cached config and state
    - **Performance API network entries** — what API calls the page made (useful when extraction misses data)

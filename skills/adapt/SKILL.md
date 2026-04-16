@@ -29,8 +29,8 @@ Understand how the target platform works before writing any code.
 
 Figure out how to identify sites on this platform. Check:
 
-1. **URL patterns** — does the domain contain platform-specific strings? (e.g. `.wixsite.com`, `.squarespace.com`, `.webflow.io`)
-2. **HTTP headers** — fetch the site and look for platform-specific response headers (e.g. `X-Wix-Request-Id`, `X-Squarespace-Version`)
+1. **URL patterns** — does the domain contain platform-specific strings? (e.g. `.squarespace.com`, `.webflow.io`, `.wixsite.com`)
+2. **HTTP headers** — fetch the site and look for platform-specific response headers (e.g. `X-Squarespace-Version`, `X-Wix-Request-Id`)
 3. **HTML markers** — look for platform-specific tags, classes, scripts, or meta tags in the page source
 4. **DNS** — check CNAME records that point to platform infrastructure
 

@@ -8,14 +8,14 @@ import { detect, type FullDetectionResult } from '../lib/extraction/detect-platf
 import { fetchSitemap, classifyUrl } from '../lib/extraction/sitemap.js';
 import { WxrBuilder } from '../lib/extraction/wxr-builder.js';
 import { ExtractionLog } from '../lib/extraction/extraction-log.js';
-import { wixAdapter, type Inventory } from '../adapters/wix.js';
-import { squarespaceAdapter } from '../adapters/squarespace.js';
-import { webflowAdapter } from '../adapters/webflow.js';
-import { shopifyAdapter } from '../adapters/shopify.js';
-import { weeblyAdapter } from '../adapters/weebly.js';
+import { godaddyWmAdapter } from '../adapters/godaddy-wm.js';
 import { hostingerAdapter } from '../adapters/hostinger.js';
 import { hubspotAdapter } from '../adapters/hubspot.js';
-import { godaddyWmAdapter } from '../adapters/godaddy-wm.js';
+import { shopifyAdapter } from '../adapters/shopify.js';
+import { squarespaceAdapter } from '../adapters/squarespace.js';
+import { webflowAdapter } from '../adapters/webflow.js';
+import { weeblyAdapter } from '../adapters/weebly.js';
+import { wixAdapter, type Inventory } from '../adapters/wix.js';
 import { mkdirSync, existsSync, writeFileSync, readFileSync } from 'fs';
 import { join, dirname } from 'path';
 
@@ -75,7 +75,7 @@ interface ExtractionResult {
   wxrPath: string | null;
 }
 
-const adapters = [wixAdapter, squarespaceAdapter, webflowAdapter, shopifyAdapter, weeblyAdapter, hostingerAdapter, hubspotAdapter, godaddyWmAdapter];
+const adapters = [godaddyWmAdapter, hostingerAdapter, hubspotAdapter, shopifyAdapter, squarespaceAdapter, webflowAdapter, weeblyAdapter, wixAdapter];
 
 function findAdapter(platform: string) {
   return adapters.find((a) => a.id === platform) || null;
@@ -378,14 +378,14 @@ function Liberate(props: LiberateProps & { onComplete?: (wxrPath: string | null)
       {phase === 'discovered' && (
         <Box flexDirection="column" marginTop={1}>
           <Text color="yellow">! {error}</Text>
-          <Text dimColor>Supported: Wix, Squarespace, Webflow, Shopify, Weebly, Hostinger, HubSpot.</Text>
+          <Text dimColor>Supported: GoDaddy Websites & Marketing, Hostinger, HubSpot, Shopify, Squarespace, Webflow, Weebly, Wix.</Text>
         </Box>
       )}
 
       {/* Unknown platform warning */}
       {phase === 'done' && detection?.platform === 'unknown' && (
         <Box marginTop={1}>
-          <Text color="yellow">! Supported platforms: Wix, Squarespace, Webflow, Shopify, Weebly, Hostinger, HubSpot</Text>
+          <Text color="yellow">! Supported platforms: GoDaddy Websites & Marketing, Hostinger, HubSpot, Shopify, Squarespace, Webflow, Weebly, Wix</Text>
         </Box>
       )}
 

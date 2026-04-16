@@ -1,6 +1,6 @@
 {
   "name": "data-liberation",
-  "description": "Extract content from closed web platforms (Wix, Squarespace, Webflow, Shopify) into WordPress-compatible WXR files. Inspect, extract, QA, and import to WordPress.",
+  "description": "Extract content from closed web platforms (GoDaddy Websites & Marketing, Hostinger, HubSpot, Shopify, Squarespace, Webflow, Weebly, Wix) into WordPress-compatible WXR files. Inspect, extract, QA, and import to WordPress.",
   "version": "0.1.0",
   "author": {
     "name": "Automattic"
