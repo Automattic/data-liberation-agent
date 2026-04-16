@@ -1,6 +1,7 @@
 import { readFileSync, existsSync, appendFileSync } from 'fs';
-import { dirname, join, basename } from 'path';
+import { dirname, join, basename, extname } from 'path';
 import { readWxr } from '../extraction/wxr-reader.js';
+import { deriveFilenameFromUrl, extensionFromContentType } from '../extraction/media.js';
 import { WpRestClient } from './wp-rest-client.js';
 import { WooCommerceClient } from './woo-rest-client.js';
 import { readProductsCsv } from './woo-csv-reader.js';
@@ -114,30 +115,36 @@ function topoSortById<T extends { id: number; parent: number }>(items: T[]): T[]
  * Checks localPath first, then media/ subdirectory by filename,
  * then falls back to downloading from the source URL.
  */
-async function resolveMediaFile(media: MediaItem, mediaDir: string): Promise<Buffer | null> {
+async function resolveMediaFile(media: MediaItem, mediaDir: string): Promise<{ buffer: Buffer; contentType?: string } | null> {
   // Try localPath first
   if (media.localPath && existsSync(media.localPath)) {
-    return readFileSync(media.localPath);
+    return { buffer: readFileSync(media.localPath) };
   }
 
-  // Try media/ subdirectory by filename from URL
-  let filename: string;
+  // Try media/ subdirectory by filename from URL.
+  // Use deriveFilenameFromUrl to handle CDN URLs with transform suffixes
+  // (e.g. GoDaddy W+M's /:/rs=w:4000,cg:true) the same way downloadMedia does.
+  let urlObj: URL;
   try {
-    filename = basename(new URL(media.url).pathname);
+    urlObj = new URL(media.url);
   } catch {
     return null; // Invalid URL — can't resolve
   }
-  const mediaSubdir = join(mediaDir, 'media', filename);
-  if (existsSync(mediaSubdir)) {
-    return readFileSync(mediaSubdir);
+  const filename = deriveFilenameFromUrl(urlObj);
+  if (filename) {
+    const mediaSubdir = join(mediaDir, 'media', filename);
+    if (existsSync(mediaSubdir)) {
+      return { buffer: readFileSync(mediaSubdir) };
+    }
   }
 
   // Fall back to downloading from source URL
   try {
     const response = await fetch(media.url);
     if (!response.ok) return null;
+    const contentType = response.headers.get('content-type') || undefined;
     const arrayBuffer = await response.arrayBuffer();
-    return Buffer.from(arrayBuffer);
+    return { buffer: Buffer.from(arrayBuffer), contentType };
   } catch {
     return null;
   }
@@ -367,8 +374,8 @@ export async function importToWordPress(opts: ImportOptions): Promise<ImportResu
       if (dryRun) continue;
       if (createdKeys.has(`media:${media.id}`)) { result.media.created++; continue; }
 
-      const fileBuffer = await resolveMediaFile(media, mediaDir);
-      if (!fileBuffer) {
+      const resolved = await resolveMediaFile(media, mediaDir);
+      if (!resolved) {
         // No local file and download from source URL failed
         result.media.failed++;
         logEntry(logPath, { type: 'failed', stage: 'media', id: media.id, error: 'File not found locally' });
@@ -378,11 +385,23 @@ export async function importToWordPress(opts: ImportOptions): Promise<ImportResu
       try {
         let uploadFilename: string;
         try {
-          uploadFilename = basename(new URL(media.url).pathname);
+          uploadFilename = deriveFilenameFromUrl(new URL(media.url));
         } catch {
           uploadFilename = media.slug || 'file';
         }
-        const res = await client.createMedia(fileBuffer, uploadFilename, {
+        // Ensure the filename has an extension WordPress can recognize.
+        // Files from CDNs (e.g. GoDaddy's /getty/<numeric-id>) may lack one.
+        if (!extname(uploadFilename)) {
+          const ext = resolved.contentType
+            ? extensionFromContentType(resolved.contentType)
+            : '';
+          if (ext) {
+            uploadFilename = `${uploadFilename}${ext}`;
+          } else {
+            uploadFilename = `${uploadFilename}.jpg`;
+          }
+        }
+        const res = await client.createMedia(resolved.buffer, uploadFilename, {
           altText: media.altText,
           caption: media.caption,
           title: media.title,

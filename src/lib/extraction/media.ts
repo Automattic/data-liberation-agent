@@ -52,7 +52,7 @@ export function resolveMediaPath(filename: string, outputDir: string): string {
 // *before* `/:/`, not after. basename(pathname) returns the transform spec
 // which is useless as a filename. Detect the marker and use the preceding
 // segment instead.
-function deriveFilenameFromUrl(urlObj: URL): string {
+export function deriveFilenameFromUrl(urlObj: URL): string {
   const path = urlObj.pathname;
   const marker = path.indexOf('/:/');
   const effectivePath = marker >= 0 ? path.slice(0, marker) : path;
@@ -61,7 +61,7 @@ function deriveFilenameFromUrl(urlObj: URL): string {
 
 // Map common image content-types to file extensions. Used when the URL
 // provides no extension (e.g. `/isteam/getty/<numeric-id>`).
-function extensionFromContentType(contentType: string): string {
+export function extensionFromContentType(contentType: string): string {
   const ct = contentType.toLowerCase().split(';')[0].trim();
   switch (ct) {
     case 'image/jpeg': case 'image/jpg': return '.jpg';
