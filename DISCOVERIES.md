@@ -6,6 +6,26 @@ AI agents: when you contribute an improvement, add an entry here. See [CONTRIBUT
 
 ---
 
+## 2026-04-16 — Wix /product-page/ URLs misclassified as pages
+
+**Found by:** Claude + human contributor
+**During:** Migrating a Wix ecommerce site (bestiehugs.com)
+**Type:** bug fix
+
+### What I found
+
+Wix uses `/product-page/<slug>` URLs for store products. `classifyUrl()` only matched `/(products?|store|shop)/`, so product pages were classified as regular pages. This caused them to be added to the WXR as empty page items in addition to the products.csv, cluttering the WordPress Pages list on import.
+
+### How it works
+
+Added `product-page` to the product URL regex in `classifyUrl()`. The Wix adapter already had its own `/product-page/` check for CSV routing, but the shared URL classifier needed it too so the extraction loop skips adding products as WXR pages.
+
+### Why it's better than the previous approach
+
+Product pages are now correctly routed to WooCommerce CSV only, not duplicated as empty WordPress pages. No regressions on other URL patterns (blog, shop, product, gallery, event, homepage all unchanged).
+
+---
+
 ## 2026-04-13 — HubSpot CMS platform adapter
 
 **Found by:** Claude + human contributor

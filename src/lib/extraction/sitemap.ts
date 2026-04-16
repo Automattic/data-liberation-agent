@@ -25,7 +25,7 @@ export function classifyUrl(url: string): UrlType {
   if (/\/(blog|post|posts|article|articles|news|journal)(\/|$)/.test(path)) return 'post';
   if (/\/blogs\/[^/]+\/[^/]+/.test(path)) return 'post'; // Shopify /blogs/<blog>/<article>
   if (/\/blog-\d+\/post\//.test(path)) return 'post'; // Wix /blog-1/post/<slug>
-  if (/\/(products?|store|shop)\//.test(path)) return 'product';
+  if (/\/(products?|product-page|store|shop)\//.test(path)) return 'product';
   if (/\/(gallery|portfolio)/.test(path)) return 'gallery';
   if (/\/(event|events)/.test(path)) return 'event';
   return 'page';
