@@ -589,27 +589,57 @@ export const wixAdapter: PlatformAdapter = {
     })();
 
     const sitemapUrls: string[] = [];
+    const sitemapFailures: Array<{ url: string; reason: string }> = [];
 
     async function fetchSitemapPw(sitemapUrl: string, depth = 0): Promise<void> {
       if (depth > 3) return;
-      try {
-        const resp = await p.goto(sitemapUrl, { timeout: 15000 });
-        if (!resp || !resp.ok()) return;
-        const text = await p.content();
-        const locs = parseSitemapXml(text);
-        for (const loc of locs) {
-          if (loc.endsWith('.xml')) {
-            await fetchSitemapPw(loc, depth + 1);
-          } else {
-            sitemapUrls.push(loc);
+
+      // Retry with exponential backoff — Wix CDN occasionally returns
+      // transient errors or times out under parallel load. A silent failure
+      // here turns into a zero-content WXR because children like
+      // pages-sitemap.xml / blog-posts-sitemap.xml are never reached.
+      const RETRIES = 3;
+      let lastErr: string | null = null;
+      for (let attempt = 1; attempt <= RETRIES; attempt++) {
+        try {
+          const resp = await p.goto(sitemapUrl, { timeout: 15000 });
+          if (!resp || !resp.ok()) {
+            lastErr = resp ? `HTTP ${resp.ok() ? 'ok=false' : 'status-not-ok'}` : 'no response';
+            if (attempt < RETRIES) {
+              await new Promise((r) => setTimeout(r, 500 * attempt));
+              continue;
+            }
+            console.warn(`[wix:discover] sitemap fetch failed after ${RETRIES} attempts: ${sitemapUrl} (${lastErr})`);
+            sitemapFailures.push({ url: sitemapUrl, reason: lastErr });
+            return;
           }
+          const text = await p.content();
+          const locs = parseSitemapXml(text);
+          for (const loc of locs) {
+            if (loc.endsWith('.xml')) {
+              await fetchSitemapPw(loc, depth + 1);
+            } else {
+              sitemapUrls.push(loc);
+            }
+          }
+          return;
+        } catch (err) {
+          lastErr = err instanceof Error ? err.message : String(err);
+          if (attempt < RETRIES) {
+            await new Promise((r) => setTimeout(r, 500 * attempt));
+            continue;
+          }
+          console.warn(`[wix:discover] sitemap fetch failed after ${RETRIES} attempts: ${sitemapUrl} (${lastErr})`);
+          sitemapFailures.push({ url: sitemapUrl, reason: lastErr });
         }
-      } catch {
-        // sitemap fetch failed
       }
     }
 
     await fetchSitemapPw(`${baseUrl}/sitemap.xml`);
+
+    if (sitemapFailures.length > 0) {
+      console.warn(`[wix:discover] ${sitemapFailures.length} sitemap fetch(es) failed — inventory may be incomplete`);
+    }
 
     // 2. If sitemap is empty, crawl homepage for same-origin links
     let allUrls = sitemapUrls;
