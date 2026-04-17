@@ -1,4 +1,4 @@
-import { createWriteStream, mkdirSync, readFileSync, unlinkSync } from 'fs';
+import { createWriteStream, mkdirSync, readFileSync, statSync, unlinkSync } from 'fs';
 import { createHash } from 'crypto';
 import { basename, extname, join, resolve } from 'path';
 import { pipeline } from 'stream/promises';
@@ -8,6 +8,7 @@ export interface DownloadResult {
   localPath: string | null;
   filename: string | null;
   error: string | null;
+  bytes: number;
 }
 
 export function safeFilename(filename: string, seenNames: Map<string, number>): string {
@@ -116,13 +117,14 @@ export async function downloadMedia(
       if (existing) {
         // Duplicate — remove the new file and return the existing path
         try { unlinkSync(destPath); } catch { /* ignore */ }
-        return { url, localPath: existing, filename: basename(existing), error: null };
+        return { url, localPath: existing, filename: basename(existing), error: null, bytes: 0 };
       }
       seenHashes.set(hash, destPath);
     }
 
-    return { url, localPath: destPath, filename, error: null };
+    const bytes = statSync(destPath).size;
+    return { url, localPath: destPath, filename, error: null, bytes };
   } catch (err) {
-    return { url, localPath: null, filename: null, error: (err as Error).message };
+    return { url, localPath: null, filename: null, error: (err as Error).message, bytes: 0 };
   }
 }
