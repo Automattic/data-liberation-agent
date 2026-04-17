@@ -6,6 +6,33 @@ AI agents: when you contribute an improvement, add an entry here. See [CONTRIBUT
 
 ---
 
+## 2026-04-17 — Wix blog URL classification: `/single-post/` and bare `/blog` listings
+
+**Found by:** Claude + human contributor
+**During:** Testing the Wix adapter against a range of live Wix sites
+**Type:** bug fix
+
+### What I found
+
+Two separate URL-classification bugs in `classifyUrl()` in `src/lib/extraction/sitemap.ts`:
+
+1. **Older Wix Blog format** uses `/single-post/<slug>` URLs (distinct from newer `/post/<slug>` or `/blog-1/post/<slug>` patterns the classifier already matched). One sizeable Wix blog encountered during testing had ~1000 blog posts at `/single-post/*` URLs; every single one was written to the WXR as `wp:post_type=page` — the whole blog archive landed in WordPress as pages.
+
+2. **Bare `/blog`, `/news`, `/articles`** were classified as `post` because the regex `/\/(blog|post|posts|...)(\/|$)/` allowed end-of-string after the keyword. These URLs are the blog *listing* pages, not individual posts. They got written to WXR as authorless "posts" with titles like "Our blog" — polluting the post archive. Seen on multiple tested sites where the `/blog` URL was listed in both `pages-sitemap.xml` and `blog-categories-sitemap.xml`.
+
+### How it works
+
+Two changes to the classifier regex:
+
+- Added `if (/\/single-post\//.test(path)) return 'post';` for the older Wix Blog URL pattern.
+- Changed the main blog-keyword regex from `(\/|$)` to `\/[^/]` — require a non-slash character after the keyword's trailing slash. This means `/blog/my-post` still matches (post), but bare `/blog` and `/blog/` now fall through to the `page` default (listing page).
+
+### Why it's better than the previous approach
+
+Tested on the affected sites: blog archives now classify correctly (individual posts as `post`, bare `/blog` as `page`). The existing `classifies blog paths as post` test was updated to remove the now-wrong `/blog → post` expectation, and two unit tests were added covering both new patterns.
+
+---
+
 ## 2026-04-16 — Wix Product JSON-LD uses non-standard casing
 
 **Found by:** Claude + human contributor
