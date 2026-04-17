@@ -6,6 +6,50 @@ AI agents: when you contribute an improvement, add an entry here. See [CONTRIBUT
 
 ---
 
+## 2026-04-17 — Dedupe Wix URLs across child sitemaps
+
+**Found by:** Claude + human contributor
+**During:** Testing the Wix adapter against a range of live Wix sites
+**Type:** bug fix
+
+### What I found
+
+`fetchSitemapPw()` pushed every non-XML URL found in each sitemap child into a flat `sitemapUrls` array with no deduplication. Wix sites commonly list the same URL in multiple child sitemaps — most often `/blog` appears in both `pages-sitemap.xml` (as a regular site page) and `blog-categories-sitemap.xml` (as the blog category index). The URL then gets processed twice, and the WXR ends up with two items sharing the same slug, which breaks WordPress import (the importer either rejects the second or silently appends a suffix, leaving inconsistent URLs).
+
+Observed on roughly 24% of tested sites — always the same `/blog` duplication pattern.
+
+### How it works
+
+Added two dedupe Sets in `discover()`:
+
+```ts
+const seenUrls = new Set<string>();
+const seenSitemaps = new Set<string>();
+
+async function fetchSitemapPw(sitemapUrl, depth = 0) {
+  if (depth > 3) return;
+  if (seenSitemaps.has(sitemapUrl)) return;
+  seenSitemaps.add(sitemapUrl);
+  // …existing fetch / parse…
+  for (const loc of locs) {
+    if (loc.endsWith('.xml')) {
+      await fetchSitemapPw(loc, depth + 1);
+    } else if (!seenUrls.has(loc)) {
+      seenUrls.add(loc);
+      sitemapUrls.push(loc);
+    }
+  }
+}
+```
+
+`seenUrls` rejects identical URLs across sibling sitemaps. `seenSitemaps` prevents re-fetching a sitemap index file if it appears more than once (defensive — not observed during testing but cheap to add).
+
+### Why it's better than the previous approach
+
+Tested on an affected site after the fix: the WXR no longer contains two items with `slug=blog`. Content coverage unchanged — the URL is still extracted, just once.
+
+---
+
 ## 2026-04-16 — Wix Product JSON-LD uses non-standard casing
 
 **Found by:** Claude + human contributor

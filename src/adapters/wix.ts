@@ -589,9 +589,18 @@ export const wixAdapter: PlatformAdapter = {
     })();
 
     const sitemapUrls: string[] = [];
+    // Dedupe across child sitemaps — Wix sites commonly list the same URL in
+    // multiple children (e.g. `/blog` appears in both pages-sitemap.xml and
+    // blog-categories-sitemap.xml), and a naive crawl writes duplicates into
+    // the WXR. `seenSitemaps` also prevents re-fetching a sitemap index file
+    // if it appears more than once.
+    const seenUrls = new Set<string>();
+    const seenSitemaps = new Set<string>();
 
     async function fetchSitemapPw(sitemapUrl: string, depth = 0): Promise<void> {
       if (depth > 3) return;
+      if (seenSitemaps.has(sitemapUrl)) return;
+      seenSitemaps.add(sitemapUrl);
       try {
         const resp = await p.goto(sitemapUrl, { timeout: 15000 });
         if (!resp || !resp.ok()) return;
@@ -600,7 +609,8 @@ export const wixAdapter: PlatformAdapter = {
         for (const loc of locs) {
           if (loc.endsWith('.xml')) {
             await fetchSitemapPw(loc, depth + 1);
-          } else {
+          } else if (!seenUrls.has(loc)) {
+            seenUrls.add(loc);
             sitemapUrls.push(loc);
           }
         }
