@@ -184,11 +184,26 @@ function deriveContent(pageData: {
   accessibility: Array<{ role: string; name: string }> | null;
   meta: PageMeta;
 }): { content: string; qualityScore: 'high' | 'medium' | 'low' } {
-  // 1. Try API calls — walk the JSON tree for HTML content fields
+  // 1. Try API calls — walk the JSON tree for HTML content fields.
+  // Skip non-content API endpoints (tag manager, access tokens, module preload
+  // manifests, etc.) whose responses contain HTML fragments in fields named
+  // "content"/"html" that are not real page body content. Require the
+  // stripped HTML to contain body-level tags (p, headings, lists, images, etc.),
+  // not just <link>/<meta>/<script>/<style>.
   for (const call of pageData.apiCalls) {
     const htmlContent = findHtmlContent(call.data);
     if (htmlContent && htmlContent.length > 50) {
-      return { content: htmlContent, qualityScore: 'high' };
+      const stripped = htmlContent
+        .replace(/<script[\s\S]*?<\/script>/gi, '')
+        .replace(/<style[\s\S]*?<\/style>/gi, '')
+        .replace(/<noscript[\s\S]*?<\/noscript>/gi, '')
+        .replace(/<link\b[^>]*\/?>/gi, '')
+        .replace(/<meta\b[^>]*\/?>/gi, '')
+        .trim();
+      const hasBodyContent = /<(p|h[1-6]|ul|ol|li|div|section|article|img|figure|blockquote|table)\b/i.test(stripped);
+      if (stripped.length > 50 && hasBodyContent) {
+        return { content: htmlContent, qualityScore: 'high' };
+      }
     }
   }
 
