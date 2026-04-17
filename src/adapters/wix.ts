@@ -197,18 +197,39 @@ function deriveContent(pageData: {
     return { content: pageData.renderedContent, qualityScore: 'high' };
   }
 
-  // 3. Try JSON-LD
+  // 3. Try JSON-LD. Only accept `description` from content-level types
+  // (Article, BlogPosting, Product, Event, Recipe, etc.) — NOT from site-level
+  // types like Organization, LocalBusiness, FurnitureStore, Restaurant,
+  // WebSite, or Corporation. Wix ecommerce category pages include a site-level
+  // Organization/FurnitureStore block whose description is a generic site
+  // tagline that gets duplicated across every page.
+  const CONTENT_LD_TYPES = new Set([
+    'Article', 'BlogPosting', 'NewsArticle', 'SocialMediaPosting',
+    'Product', 'ItemPage', 'Event', 'Recipe', 'Course', 'Book', 'Movie',
+  ]);
   for (const ld of pageData.jsonLd) {
     const obj = ld as Record<string, unknown>;
+    // articleBody is inherently content-level, always safe to accept
     if (typeof obj.articleBody === 'string' && obj.articleBody.length > 50) {
       return { content: `<p>${obj.articleBody}</p>`, qualityScore: 'medium' };
     }
-    if (typeof obj.description === 'string' && obj.description.length > 50) {
+    const atType = obj['@type'];
+    const isContentType = typeof atType === 'string' && CONTENT_LD_TYPES.has(atType);
+    if (isContentType && typeof obj.description === 'string' && obj.description.length > 50) {
       return { content: `<p>${obj.description}</p>`, qualityScore: 'medium' };
     }
   }
 
-  // 4. Accessibility tree fallback
+  // 4. Page-specific meta/og:description — for pages where real content is
+  // JS-rendered (Wix category archives, product grids) and we have no better
+  // source. og:description is per-page and written by the site owner, so it's
+  // meaningfully distinct from the site-level boilerplate handled in step 3.
+  const ogDesc = pageData.meta.ogDescription || pageData.meta.description || '';
+  if (ogDesc.length > 50) {
+    return { content: `<p>${ogDesc}</p>`, qualityScore: 'medium' };
+  }
+
+  // 5. Accessibility tree fallback
   if (pageData.accessibility && pageData.accessibility.length > 0) {
     const parts: string[] = [];
     for (const node of pageData.accessibility) {
@@ -223,7 +244,7 @@ function deriveContent(pageData: {
     }
   }
 
-  // 5. Nothing found
+  // 6. Nothing found
   return { content: '', qualityScore: 'low' };
 }
 
