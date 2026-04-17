@@ -164,3 +164,25 @@ Import a WXR file into a WordPress site via the REST API.
 | `woocommerceSecret` | no | WooCommerce consumer secret for product import |
 
 Returns: per-stage results (media, categories, tags, pages, posts, comments, menus, products) with total/created/failed counts, plus `redirectMap`.
+
+### `liberate_preview`
+
+Start a detached WordPress Playground instance that serves a completed extraction.
+
+**Arguments:**
+- `outputDir` (string, required) — path to the extraction output directory.
+- `open` (boolean, optional) — open the URL in the default browser after readiness.
+- `port` (number, optional) — override the auto-picked port (9400–9499).
+
+**Returns:** `{ status: "ready" | "failed", url?, pid?, port?, warnings?, error? }`.
+
+A second call on the same `outputDir` stops the prior preview and starts a new one. Warnings are extracted from `ERROR|WARN|Fatal` lines in `<outputDir>/playground/preview.log`.
+
+### `liberate_preview_stop`
+
+Stop a running preview.
+
+**Arguments:**
+- `outputDir` (string, required) — path to the extraction output directory.
+
+**Returns:** `{ status: "stopped" | "not-running" }`.

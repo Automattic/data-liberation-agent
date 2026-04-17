@@ -196,3 +196,20 @@ data-liberation import ./output.wxr --site myblog.wordpress.com --username admin
 # 3. Extract:
 data-liberation https://www.example.squarespace.com --cdp-port 9222
 ```
+
+### `liberate preview <outputDir>`
+
+Preview a completed extraction in a local WordPress Playground.
+
+**Flags:**
+- `--open` — open the preview URL in the default browser once ready.
+- `--port <n>` — override the auto-picked port (default: first free in 9400–9499).
+- `--non-interactive` — skip the post-preview import nudge; exit quietly when Playground stops.
+
+**Artifacts written to `<outputDir>/playground/`:**
+- `blueprint.json` — the Playground blueprint used for this run (regenerated each start).
+- `preview.pid` — JSON record while the preview is running.
+- `preview.log` — captured subprocess output; truncated on each start.
+- `.lock` — lockfile while start/stop is in flight.
+
+**Lifecycle:** Foreground blocking in CLI mode. Ctrl+C stops Playground and prints an import-command nudge. A second `preview` invocation on the same outputDir stops the prior process before starting.
