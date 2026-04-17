@@ -9,7 +9,7 @@ AI agents: when you contribute an improvement, add an entry here. See [CONTRIBUT
 ## 2026-04-16 — Wix Product JSON-LD uses non-standard casing
 
 **Found by:** Claude + human contributor
-**During:** Migrating a Wix ecommerce site (bestiehugs.com, 20 products)
+**During:** Migrating a Wix ecommerce site (20 products)
 **Type:** bug fix
 
 ### What I found
@@ -21,12 +21,12 @@ Changed `extractWixProduct()` to check both cases for offers (`obj.offers || obj
 
 ### Why it's better than the previous approach
 
-Tested against 2 live Wix Stores. Before: price="" and images=0 on every product. After: bestiehugs.com recovers price=200 (ILS) and 5 images; nue-modern.com recovers price=1295 (GBP) and 11 images. Stock status also corrected (bestiehugs hoodie correctly shows OutOfStock).
+Tested against 2 live Wix Stores. Before: price="" and images=0 on every product. After: site recovers price=200 (ILS) and 5 images; site recovers price=1295 (GBP) and 11 images. Stock status also corrected (hoodie correctly shows OutOfStock).
 
 ## 2026-04-16 — Wix /product-page/ URLs misclassified as pages
 
 **Found by:** Claude + human contributor
-**During:** Migrating a Wix ecommerce site (bestiehugs.com)
+**During:** Migrating a Wix ecommerce site 
 **Type:** bug fix
 
 ### What I found
