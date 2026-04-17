@@ -6,6 +6,50 @@ AI agents: when you contribute an improvement, add an entry here. See [CONTRIBUT
 
 ---
 
+## 2026-04-17 — Structured JSON-LD blog-post detection in runExtractionLoop
+
+**Found by:** Claude + human contributor
+**During:** Testing the Wix adapter against a range of live Wix sites
+**Type:** bug fix
+
+### What I found
+
+`runExtractionLoop()` in `src/adapters/shared.ts` had a type-promotion fallback: if `classifyUrl()` returned `page` or `homepage`, it would re-check via a regex `/@type.*BlogPosting|NewsArticle|Article|SocialMediaPosting/` run across the full `pageData.content` string. Any occurrence anywhere in the HTML promoted the item to `post`.
+
+The problem: blog *listing* pages (`/blog--categories--X`, `/blog`) commonly embed `BlogPosting` JSON-LD cards for each post they display in their index. The regex happily matched those embedded cards and promoted the listing page to `post` — producing authorless "posts" in the WXR whose content was a list of links to other posts. Observed on multiple tested sites: one jewellery ecommerce site had 6 of 15 "posts" misclassified; an interior-design blog had 11 of 96; a furniture store had 2 of 7.
+
+### How it works
+
+Replaced the raw-content regex with a structured check using `pageData.jsonLd` (the array of already-parsed JSON-LD objects the adapter returned):
+
+```ts
+const BLOG_TYPES = new Set(['BlogPosting', 'NewsArticle', 'Article', 'SocialMediaPosting']);
+const isRealBlogPost = Array.isArray(pageData.jsonLd) && pageData.jsonLd.some((ld) => {
+  if (!ld || typeof ld !== 'object') return false;
+  const obj = ld as Record<string, unknown>;
+  const atType = obj['@type'];
+  if (typeof atType !== 'string' || !BLOG_TYPES.has(atType)) return false;
+  const mep = obj.mainEntityOfPage;
+  if (mep && typeof mep === 'object') {
+    const mepRec = mep as Record<string, unknown>;
+    const mepUrl = typeof mepRec.url === 'string' ? mepRec.url :
+                   typeof mepRec['@id'] === 'string' ? mepRec['@id'] as string : null;
+    if (mepUrl && mepUrl !== url) return false;
+  }
+  return true;
+});
+```
+
+Two tightenings: (1) `@type` must be at the top level of a JSON-LD object, not anywhere in the raw HTML; (2) when `mainEntityOfPage` is present, its URL must match the current page URL — so embedded-card JSON-LD (whose `mainEntityOfPage` points to *other* posts) can't promote the current page.
+
+Also added `jsonLd?: unknown[]` to the `ExtractedPage` interface and piped `pageData.jsonLd` through the Wix adapter's `extractPage` callback so the shared loop has the parsed objects available.
+
+### Why it's better than the previous approach
+
+Tested on a food-blog site alongside the sibling URL-classifier fix that stops bare `/blog` from classifying as `post`: the `/blog` listing page is now correctly a `page` with its listing content, and no longer promoted to a post by its embedded BlogPosting cards for indexed posts.
+
+---
+
 ## 2026-04-16 — Wix Product JSON-LD uses non-standard casing
 
 **Found by:** Claude + human contributor
