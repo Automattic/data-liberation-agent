@@ -230,6 +230,26 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: ['outputDir'],
       },
     },
+    {
+      name: 'liberate_screenshot',
+      description: 'Capture full-page + scrolled screenshots (desktop + mobile) and rendered HTML for every URL on a site. Writes to <outputDir>/screenshots/ and <outputDir>/html/, plus palette.json and typography.json via site-analysis. Reuses sitemap discovery or accepts explicit urls[].',
+      inputSchema: {
+        type: 'object' as const,
+        properties: {
+          url: { type: 'string', description: 'Site URL (used for sitemap discovery and same-origin enforcement)' },
+          outputDir: { type: 'string', description: 'Output directory' },
+          urls: { type: 'array', items: { type: 'string' }, description: 'Explicit URL list (skips sitemap fetch; all must share origin with `url` if both provided)' },
+          types: { type: 'array', items: { type: 'string' }, description: 'Filter by URL type: page, post, product, homepage, gallery, event' },
+          limit: { type: 'number', description: 'Cap to first N URLs' },
+          concurrency: { type: 'number', description: 'Parallel URL captures (default 3, max 10)' },
+          browserRestartEvery: { type: 'number', description: 'Close and relaunch browser every N URLs (default 100)' },
+          cdpPort: { type: 'number', description: 'Connect to existing Chrome via CDP' },
+          force: { type: 'boolean', description: 'Re-capture even if output files already exist' },
+          verbose: { type: 'boolean', description: 'Per-URL progress logging' },
+        },
+        required: ['url', 'outputDir'],
+      },
+    },
   ],
 }));
 
@@ -595,6 +615,39 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const { stopPreview } = await import('./lib/preview/playground-server.js');
       const result = await stopPreview({ outputDir: typedArgs.outputDir as string });
       return textResult(result);
+    }
+
+    case 'liberate_screenshot': {
+      const url = typedArgs.url as string;
+      const outputDir = typedArgs.outputDir as string;
+      const log = new ExtractionLog(outputDir);
+      if (!log.acquireLock()) {
+        return errorResult('Another liberation workflow is already running in this outputDir.');
+      }
+      try {
+        mkdirSync(outputDir, { recursive: true });
+        let urls: string[] = Array.isArray(typedArgs.urls) ? (typedArgs.urls as string[]) : [];
+        if (urls.length === 0) {
+          urls = await fetchSitemap(url);
+        }
+        const { captureScreenshots } = await import('./lib/screenshot/screenshotter.js');
+        const result = await captureScreenshots({
+          urls,
+          outputDir,
+          primaryUrl: url,
+          types: typedArgs.types as import('./lib/extraction/sitemap.js').UrlType[] | undefined,
+          limit: typedArgs.limit as number | undefined,
+          concurrency: typedArgs.concurrency as number | undefined,
+          browserRestartEvery: typedArgs.browserRestartEvery as number | undefined,
+          cdpPort: typedArgs.cdpPort as number | undefined,
+          force: typedArgs.force as boolean | undefined,
+          verbose: typedArgs.verbose as boolean | undefined,
+          server,
+        });
+        return textResult(result);
+      } finally {
+        log.releaseLock();
+      }
     }
 
     default:
