@@ -7,7 +7,7 @@ Command definitions live in `commands/<name>.md`.
 ## /inspect
 
 Inspect a website before extraction. Reports:
-- Platform detection (Wix, Squarespace, Webflow, Shopify, Weebly, Hostinger) with confidence level
+- Platform detection (GoDaddy Websites & Marketing, Hostinger, HubSpot, Shopify, Squarespace, Webflow, Weebly, Wix) with confidence level
 - URL inventory from sitemap with counts by type (pages, posts, products, galleries, events)
 - Sample page probes to test extractability
 - Platform feature flags (stores, bookings, forms, members, scheduling, forums, events) with transfer status and WordPress plugin recommendations
@@ -30,7 +30,7 @@ MCP tool: `liberate_qa` | CLI: `data-liberation qa <wxr-file> [--fix]`
 
 Verify a completed extraction before importing. Checks:
 - WXR file integrity and item counts (pages, posts, media)
-- Stale CDN URLs still in content (Wix, Squarespace, Shopify, Webflow domains)
+- Stale CDN URLs still in content (GoDaddy `img1.wsimg.com`, Shopify, Squarespace, Webflow, Wix domains)
 - Failed page extractions and failed media downloads
 - Quality score breakdown (high/medium/low)
 - Media files on disk vs attachments in the WXR

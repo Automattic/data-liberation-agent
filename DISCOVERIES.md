@@ -13,7 +13,6 @@ AI agents: when you contribute an improvement, add an entry here. See [CONTRIBUT
 **Type:** bug fix
 
 ### What I found
-
 Wix's Tag Manager API (`/_api/tag-manager/api/v1/tags/sites/...`) returns a field named `content` containing analytics `<script>` blocks. `deriveContent()` matches this first (key="content", >50 chars, contains "<"), returns qualityScore "high", and never consults the rendered DOM — which has the real page content in `[data-testid="richTextElement"]` elements. After `stripNonContentTags()` removes the script, the WXR gets empty `content:encoded`.
 
 ### How it works
@@ -23,6 +22,142 @@ Added a post-match validation step: after `findHtmlContent()` returns a match fr
 ### Why it's better than the previous approach
 
 Tested against 7 live Wix sites. 5 of 7 had tag-manager responses that triggered this bug, producing completely empty page content. After the fix, all 5 extract real content (424–5684 chars) from the rendered DOM. The 2 unaffected sites remain unchanged.
+
+
+## 2026-04-17 — Wix blog URL classification: `/single-post/` and bare `/blog` listings
+
+**Found by:** Claude + human contributor
+**During:** Testing the Wix adapter against a range of live Wix sites
+**Type:** bug fix
+
+### What I found
+
+Two separate URL-classification bugs in `classifyUrl()` in `src/lib/extraction/sitemap.ts`:
+
+1. **Older Wix Blog format** uses `/single-post/<slug>` URLs (distinct from newer `/post/<slug>` or `/blog-1/post/<slug>` patterns the classifier already matched). One sizeable Wix blog encountered during testing had ~1000 blog posts at `/single-post/*` URLs; every single one was written to the WXR as `wp:post_type=page` — the whole blog archive landed in WordPress as pages.
+
+2. **Bare `/blog`, `/news`, `/articles`** were classified as `post` because the regex `/\/(blog|post|posts|...)(\/|$)/` allowed end-of-string after the keyword. These URLs are the blog *listing* pages, not individual posts. They got written to WXR as authorless "posts" with titles like "Our blog" — polluting the post archive. Seen on multiple tested sites where the `/blog` URL was listed in both `pages-sitemap.xml` and `blog-categories-sitemap.xml`.
+
+### How it works
+
+Two changes to the classifier regex:
+
+- Added `if (/\/single-post\//.test(path)) return 'post';` for the older Wix Blog URL pattern.
+- Changed the main blog-keyword regex from `(\/|$)` to `\/[^/]` — require a non-slash character after the keyword's trailing slash. This means `/blog/my-post` still matches (post), but bare `/blog` and `/blog/` now fall through to the `page` default (listing page).
+
+### Why it's better than the previous approach
+
+Tested on the affected sites: blog archives now classify correctly (individual posts as `post`, bare `/blog` as `page`). The existing `classifies blog paths as post` test was updated to remove the now-wrong `/blog → post` expectation, and two unit tests were added covering both new patterns.
+
+---
+
+## 2026-04-16 — Wix Product JSON-LD uses non-standard casing
+
+**Found by:** Claude + human contributor
+**During:** Migrating a Wix ecommerce site (20 products)
+**Type:** bug fix
+
+### What I found
+Wix emits Product JSON-LD with non-standard casing: `"Offers"` (uppercase O) instead of schema.org's `"offers"`, and `"Availability"` (uppercase A) instead of `"availability"`. Product images use `"contentUrl"` (per schema.org ImageObject spec) but the adapter only checked for `"url"`. Result: all product prices, images, and stock status were silently lost.
+
+### How it works
+
+Changed `extractWixProduct()` to check both cases for offers (`obj.offers || obj.Offers`) and availability (`offer.availability || offer.Availability`), and to accept both `url` and `contentUrl` for image objects.
+
+### Why it's better than the previous approach
+
+Tested against 2 live Wix Stores. Before: price="" and images=0 on every product. After: site recovers price=200 (ILS) and 5 images; site recovers price=1295 (GBP) and 11 images. Stock status also corrected (hoodie correctly shows OutOfStock).
+
+## 2026-04-16 — Wix /product-page/ URLs misclassified as pages
+
+**Found by:** Claude + human contributor
+**During:** Migrating a Wix ecommerce site 
+**Type:** bug fix
+
+### What I found
+
+Wix uses `/product-page/<slug>` URLs for store products. `classifyUrl()` only matched `/(products?|store|shop)/`, so product pages were classified as regular pages. This caused them to be added to the WXR as empty page items in addition to the products.csv, cluttering the WordPress Pages list on import.
+
+### How it works
+
+Added `product-page` to the product URL regex in `classifyUrl()`. The Wix adapter already had its own `/product-page/` check for CSV routing, but the shared URL classifier needed it too so the extraction loop skips adding products as WXR pages.
+
+### Why it's better than the previous approach
+
+Product pages are now correctly routed to WooCommerce CSV only, not duplicated as empty WordPress pages. No regressions on other URL patterns (blog, shop, product, gallery, event, homepage all unchanged).
+
+## 2026-04-13 — GoDaddy Websites & Marketing hydrates blog bodies from `window._BLOG_DATA` (Draft.js)
+
+**Found by:** Claude + Matt (adding the `godaddy-wm` adapter against cruisewarehouse.com and skywaydiner.com)
+**During:** Building the GoDaddy W+M adapter for lonestardomains' 300-post blog migration
+**Type:** platform architecture | content format
+
+### What I found
+
+GoDaddy's legacy Websites & Marketing platform (aka "Go Daddy Website Builder", the pre-Airo builder) renders blog post **pages** as static HTML, but the post body itself is **not** in the rendered DOM. Meta tags (`og:*`, `<title>`), navigation chrome, and header/footer are server-rendered normally — but the actual post content lives inside a `window._BLOG_DATA={...}` JSON blob embedded in a `<script>` tag near the end of the document, and hydrates client-side.
+
+The blob shape:
+
+```js
+window._BLOG_DATA = {
+  head: { title, meta: [{type, key, value}, ...] },
+  post: {
+    blogId, postId,
+    title, slug,
+    date, publishedDate,
+    content,          // truncated plain-text excerpt (~200 chars, ends in "...")
+    fullContent,      // JSON-encoded Draft.js ContentState — THE REAL POST BODY
+    featuredImage,    // full-resolution img1.wsimg.com URL
+    categories: ["Category A", ...],
+    hideCommenting, featureFlags, socialSharing
+  }
+}
+```
+
+`post.fullContent` is a **Draft.js** ContentState (`{blocks: [...], entityMap: {...}}`). Blocks use the standard Draft.js types: `unstyled`, `header-one` through `header-six`, `unordered-list-item`, `ordered-list-item`, `blockquote`, `code-block`, and `atomic` (used for images via an `IMAGE` entity). Inline styles (`BOLD`, `ITALIC`, `UNDERLINE`, `STRIKETHROUGH`, `CODE`) and entity ranges (`LINK`, `IMAGE`) are standard Draft.js.
+
+**Pages** (non-blog-post URLs) behave differently — they're fully server-rendered into the DOM, no JSON blob. Section titles and hero images are tagged with stable `data-aid` attributes like `ABOUT_SECTION_TITLE_RENDERED` and `ABOUT_IMAGE_RENDERED0`, so page extraction can strip them reliably.
+
+### How the adapter uses this
+
+The `godaddy-wm` adapter detects `_BLOG_DATA` at the start of `extractPage`. If present, it:
+
+1. Parses the JSON blob
+2. Parses `post.fullContent` as Draft.js ContentState
+3. Drops the first block if it's an atomic image matching `post.featuredImage` (otherwise the body would lead with the same image that's already captured via mediaUrls)
+4. Converts blocks to HTML: `unstyled` → `<p>`, `header-N` → `<h1..6>`, list items wrapped in `<ul>`/`<ol>`, atomic IMAGEs → `<figure><img/></figure>`, plus inline style and LINK entity application
+5. Uses `post.title`, `post.publishedDate`, `post.categories`, and `post.featuredImage` as the canonical source of truth (all higher-fidelity than scraping HTML meta tags)
+
+See `src/adapters/godaddy-wm.ts` — `draftToHtml()`, `parseBlogData()`, and the blog-post branch of `extractPage`.
+
+### Gotchas
+
+- **`post.content` is a truncated excerpt**, not the real body. It's the first ~200 characters of `fullContent` with a trailing `...`. Don't use it as post content — use `fullContent` and convert. Do use a cleaned version of `content` as the excerpt / `seoDescription`.
+- **The first Draft.js block is almost always an atomic image of the featured image.** If you also add `post.featuredImage` to `mediaUrls` (you should, for attachment tracking), dedupe by dropping the Draft.js block.
+- **`classifyUrl` doesn't recognize W+M's blog URL shape.** Blog posts live at `/<section-slug>/f/<post-slug>` (e.g. `/news%2C-updates-and-reviews/f/do-people-steal-your-towel`). That path doesn't match the generic `/blog/`, `/post/`, `/news/` regex. The adapter works around this by fetching `sitemap.blog.xml` and `sitemap.website.xml` individually in `discoverWmUrls` and tagging URLs by source sitemap rather than relying on `classifyUrl`.
+- **The sitemap index always lists `sitemap.ols.xml`** (GoDaddy Online Store) even on sites without a store. Don't trust the index — fetch the sub-sitemap and check for a 404.
+- **Detection fingerprints:** `<meta name="generator" content="...Go Daddy Website Builder...">` in page source is the strongest signal. Also `img1.wsimg.com/isteam/` CDN pattern in source and `X-SiteId` / `dps_site_id` cookie from GoDaddy's DPS infrastructure. Custom domains mean URL-based detection is useless.
+
+### Media fidelity: the isteam CDN URL upgrade trick
+
+W+M's `img1.wsimg.com/isteam` CDN encodes image transforms directly in the URL path after a `/:/` segment marker — e.g. `/isteam/ip/<uuid>/<filename>.jpg/:/rs=w:370,cg:true,m`. The `rs=` specifies resize, `cr=` crop, `cg:true` preserves aspect. Extracting images straight from the live DOM gives you whatever small variant was rendered on the page (usually 370–1200px wide).
+
+**Stripping the `/:/<transforms>` suffix does NOT give you the original.** `https://img1.wsimg.com/isteam/ip/<uuid>/<filename>.jpg` returns a default ~600px thumbnail. The CDN has no "no transform = original" mode.
+
+**What works:** append `/:/rs=w:4000,cg:true`. The CDN caps at 3840px wide (more specifically, 3840×3840 for square-cropped stock images, 3840×<aspect-preserved-height> for user-uploaded images). Requesting larger widths still returns 3840. Dropping `cg:true` caps at 1732. Without any transform you get ~600px. So `rs=w:4000,cg:true` is the universal "give me the biggest thing you've got" form.
+
+For a real user-uploaded image: without transform → 45KB / 602×345; with `rs=w:4000,cg:true` → 500KB / 3840×2201. ~10× the file size, ~6× the linear resolution.
+
+**Two places this must be applied consistently** — the WP importer rewrites media URLs via exact string match, so the `<img src>` that ends up in post/page body HTML must equal the URL stored on the media attachment. Rewrite at *both* the adapter's `mediaUrls` collection *and* wherever body HTML is generated (Draft.js atomic block renderer + cheerio `img[src]`/`source` rewriter for pages).
+
+**Responsive `srcset` is unsalvageable by parsing.** W+M emits `<picture><source srcset="...1x, ...2x, ...3x"><img src>...</picture>` where the URLs inside `srcset` contain their own commas (from crop params like `cr=t:12.53%25,l:0%25,w:100%25,h:74.93%25`). A naive comma-split corrupts the URLs. Rather than write a URL-aware srcset parser, the adapter **drops `srcset` and `data-srcsetlazy` entirely** and promotes the lazy URL into `src`. WordPress regenerates its own srcset from the uploaded media on import, so nothing is lost — the body still displays at the right size, it just lets WP control the variants.
+
+**The shared media downloader also needed a fix.** It derives the local filename via `basename(urlObj.pathname)` — fine for ordinary URLs, but broken for URLs with `/:/` transforms because the last path segment becomes the transform spec itself (e.g. a file literally named `rs=w:4000,cg:true`). `src/lib/extraction/media.ts` now looks for the `/:/` marker and uses the segment before it as the filename source, falling back to a content-type-derived extension when the derived name has none (e.g. `/isteam/getty/1142417322` → filename `1142417322.jpg`).
+
+### v1.1 follow-ups
+
+- **OLS product extraction** — W+M sites with a GoDaddy Online Store surface products via `sitemap.ols.xml`. Not yet implemented because neither test site (cruisewarehouse.com, skywaydiner.com) actually has a store despite advertising the sub-sitemap.
+- **Authenticated fidelity mode** — a Playwright-based variant that uses a user-provided `dashboard.godaddy.com/websites` session to intercept W+M's internal JSON APIs could rescue draft posts, accurate publish dates, and original-resolution media. Only worth building if scraped fidelity turns out to be insufficient.
 
 ---
 

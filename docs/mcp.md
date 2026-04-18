@@ -18,7 +18,7 @@ Detect the platform of a website.
 |-----------|----------|-------------|
 | `url` | yes | The URL of the website to detect |
 
-Returns: `platform` (wix, squarespace, webflow, shopify, or unknown), `confidence` (high/medium/low), `signals` (what was detected).
+Returns: `platform` (godaddy-wm, hostinger, hubspot, shopify, squarespace, webflow, weebly, wix, or unknown), `confidence` (high/medium/low), `signals` (what was detected).
 
 ### liberate_discover
 
@@ -31,7 +31,7 @@ Inventory a website: fetch sitemap, categorize URLs, extract navigation structur
 | `cdpPort` | no | CDP port for browser-based extraction |
 | `verbose` | no | Enable detailed logging |
 
-Returns: `siteUrl`, `siteMeta` (title, tagline, language), `navigation` (nav links), `counts` (URLs by type), `urls` (full URL list with types), `platformFeatures` (detected features with transfer status and WP plugin recommendations).
+Returns: `siteUrl`, `siteMeta` (title, tagline, language), `navigation` (nav links), `counts` (URLs by type), `urls` (full URL list with types), `platformFeatures` (detected features with transfer status and WP plugin recommendations). Shopify sites additionally return `shopDomain` — the `*.myshopify.com` hostname auto-detected from the storefront HTML, which `liberate_extract` will use if an `adminToken` is provided.
 
 ### liberate_inspect
 
@@ -59,8 +59,15 @@ Extract all content from a website. Produces a WXR file, media directory, redire
 | `resume` | no | Resume a previous extraction (skip already-processed URLs) |
 | `dryRun` | no | Extract 2-3 pages and report without writing WXR |
 | `verbose` | no | Enable detailed per-page logging |
+| `shopDomain` | no | **Shopify only** — the `*.myshopify.com` hostname used for Admin API calls. Usually unnecessary: `liberate_discover` auto-detects it from the storefront HTML (the `Shopify.shop` JS global) and stores it as `inventory.shopDomain`, so `liberate_extract` picks it up automatically even when the site is served on a custom domain. Only pass explicitly if auto-detection failed (e.g. Cloudflare-protected storefront). |
+| `adminToken` | no | **Shopify only** — Admin API access token. When present, products are fetched via the Admin GraphQL API (2025-04) instead of the public JSON API, yielding richer data: `compareAtPrice` sale semantics, `inventoryItem.tracked` + `inventoryPolicy` stock status, `unitCost` cost-of-goods, collections as categories, `measurement.weight` unit normalization, and global SEO metafields. |
 
 Returns: `wxrPath`, `redirectMapPath`, `outputDir`, `summary` (counts, quality scores), `failures` (URLs and errors), `wxrValidation`.
+
+**Resume semantics:** when `resume: true`, three state files are consulted:
+- `extraction-log.jsonl` — skips URLs with a `processed` entry
+- `session.json` — restores pipeline stage, original opts, and adapter pagination cursors (Shopify GraphQL resumes mid-catalog via persisted `endCursor` + emitted-handle set)
+- `media-stubs.json` — permanently-failed and user-ignored media URLs are skipped
 
 ### liberate_status
 
@@ -96,7 +103,7 @@ Probe a browser page via CDP for extraction-relevant data. Requires a running Ch
 | `cdpPort` | yes | Chrome DevTools Protocol port (e.g. 9222) |
 | `url` | no | Only probe pages on this domain (probes all tabs if omitted) |
 
-Returns an array of probe results (one per matching browser tab), each containing: `globals` (window objects with platform prefixes), `jsonLd` (structured data), `cookies` (names/domains/flags, not values), `localStorage` (key names/sizes/previews), `networkEntries` (API calls from Performance API), `identity` (platform-specific IDs — Wix metaSiteId, Squarespace websiteId, Shopify shop name).
+Returns an array of probe results (one per matching browser tab), each containing: `globals` (window objects with platform prefixes), `jsonLd` (structured data), `cookies` (names/domains/flags, not values), `localStorage` (key names/sizes/previews), `networkEntries` (API calls from Performance API), `identity` (platform-specific IDs — Shopify shop name, Squarespace websiteId, Wix metaSiteId).
 
 ## Post-extraction
 
@@ -157,3 +164,28 @@ Import a WXR file into a WordPress site via the REST API.
 | `woocommerceSecret` | no | WooCommerce consumer secret for product import |
 
 Returns: per-stage results (media, categories, tags, pages, posts, comments, menus, products) with total/created/failed counts, plus `redirectMap`.
+
+### `liberate_preview`
+
+Start a local WordPress site serving a completed extraction. Uses
+Automattic Studio (persistent, real WP) when the `studio` CLI is on
+PATH; falls back to a detached WordPress Playground (ephemeral WASM)
+otherwise.
+
+**Arguments:**
+- `outputDir` (string, required) — path to the extraction output directory.
+- `open` (boolean, optional) — focus the Studio app (Studio path) or open the URL in the default browser (Playground path).
+- `port` (number, optional) — Playground-only. Override the auto-picked port (9400–9499). Ignored on the Studio path.
+
+**Returns:** `{ status: "ready" | "failed", url?, pid?, port?, warnings?, error?, source?, siteName? }`. `source` is `"studio"` or `"playground"`. `siteName` is set on the Studio path (e.g. `example-com-2`).
+
+On the Playground path, a second call on the same `outputDir` stops the prior preview and starts a new one. On the Studio path, each call creates a fresh Studio site with a collision-incremented name; old sites persist until you remove them with `studio site remove`. Warnings (Playground only) are extracted from `ERROR|WARN|Fatal` lines in `<outputDir>/playground/preview.log`.
+
+### `liberate_preview_stop`
+
+Stop a running preview.
+
+**Arguments:**
+- `outputDir` (string, required) — path to the extraction output directory.
+
+**Returns:** `{ status: "stopped" | "not-running" }`.

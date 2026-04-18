@@ -13,15 +13,16 @@ import { WxrBuilder } from './lib/extraction/wxr-builder.js';
 import { mkdirSync } from 'fs';
 import { join } from 'path';
 
-// Static adapter imports — add new adapters here
-import { wixAdapter } from './adapters/wix.js';
-import { squarespaceAdapter } from './adapters/squarespace.js';
-import { webflowAdapter } from './adapters/webflow.js';
-import { shopifyAdapter } from './adapters/shopify.js';
-import { weeblyAdapter } from './adapters/weebly.js';
+// Static adapter imports — add new adapters here (alphabetical)
+import { godaddyWmAdapter } from './adapters/godaddy-wm.js';
 import { hostingerAdapter } from './adapters/hostinger.js';
 import { hubspotAdapter } from './adapters/hubspot.js';
-const adapters: PlatformAdapter[] = [wixAdapter, squarespaceAdapter, webflowAdapter, shopifyAdapter, weeblyAdapter, hostingerAdapter, hubspotAdapter];
+import { shopifyAdapter } from './adapters/shopify.js';
+import { squarespaceAdapter } from './adapters/squarespace.js';
+import { webflowAdapter } from './adapters/webflow.js';
+import { weeblyAdapter } from './adapters/weebly.js';
+import { wixAdapter } from './adapters/wix.js';
+const adapters: PlatformAdapter[] = [godaddyWmAdapter, hostingerAdapter, hubspotAdapter, shopifyAdapter, squarespaceAdapter, webflowAdapter, weeblyAdapter, wixAdapter];
 
 function findAdapter(platform: string): PlatformAdapter | null {
   return adapters.find((a) => a.id === platform) || null;
@@ -47,7 +48,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
     {
       name: 'liberate_detect',
-      description: 'Detect the platform of a website (Wix, Squarespace, Webflow, Shopify, or unknown)',
+      description: 'Detect the platform of a website (GoDaddy Websites & Marketing, Hostinger, HubSpot, Shopify, Squarespace, Webflow, Weebly, Wix, or unknown)',
       inputSchema: {
         type: 'object' as const,
         properties: {
@@ -91,8 +92,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         properties: {
           url: { type: 'string', description: 'The URL of the website to extract' },
           outputDir: { type: 'string', description: 'Directory to write WXR, media, and logs' },
-          token: { type: 'string', description: 'API token for platforms requiring auth' },
+          token: { type: 'string', description: 'API token for platforms requiring auth (e.g. Webflow)' },
           cdpPort: { type: 'number', description: 'CDP port for browser-based extraction' },
+          adminToken: { type: 'string', description: 'Shopify Admin API access token. When set, products are fetched via the Shopify Admin GraphQL API for richer data (compareAtPrice, inventoryPolicy, unitCost, collections, SEO metafields, variant images). Falls back to the public JSON API on failure.' },
+          shopDomain: { type: 'string', description: 'Shopify *.myshopify.com hostname. Usually auto-detected by liberate_discover from the storefront HTML; only pass explicitly if detection failed (e.g. Cloudflare-protected site).' },
           delay: { type: 'number', description: 'Delay between requests in ms (default: 500)' },
           resume: { type: 'boolean', description: 'Resume a previous extraction' },
           dryRun: { type: 'boolean', description: 'Extract 2-3 pages and report without writing WXR' },
@@ -203,6 +206,30 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: ['wxrFile'],
       },
     },
+    {
+      name: 'liberate_preview',
+      description: 'Spawn a local WordPress Playground preview of an extraction output. Returns { url, pid, port, status, warnings }. Kills any existing preview on the same outputDir before starting.',
+      inputSchema: {
+        type: 'object' as const,
+        properties: {
+          outputDir: { type: 'string', description: 'Path to the extraction output directory (contains output.wxr).' },
+          open: { type: 'boolean', description: 'If true, open the URL in the default browser after readiness.' },
+          port: { type: 'number', description: 'Override the auto-picked port (default range: 9400-9499).' },
+        },
+        required: ['outputDir'],
+      },
+    },
+    {
+      name: 'liberate_preview_stop',
+      description: 'Stop a running Playground preview by outputDir.',
+      inputSchema: {
+        type: 'object' as const,
+        properties: {
+          outputDir: { type: 'string', description: 'Path to the extraction output directory.' },
+        },
+        required: ['outputDir'],
+      },
+    },
   ],
 }));
 
@@ -304,6 +331,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const opts = {
           token: typedArgs.token,
           cdpPort: typedArgs.cdpPort,
+          adminToken: typedArgs.adminToken,
+          shopDomain: typedArgs.shopDomain,
           delay: typedArgs.delay,
           resume: typedArgs.resume,
           dryRun: typedArgs.dryRun,
@@ -506,6 +535,66 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         elapsedMs: null,
         estimatedRemainingMs: null,
       });
+    }
+
+    case 'liberate_preview': {
+      const { startPreview } = await import('./lib/preview/playground-server.js');
+      const result = await startPreview({
+        outputDir: typedArgs.outputDir as string,
+        open: typedArgs.open as boolean | undefined,
+        port: typedArgs.port as number | undefined,
+        detached: true,
+      });
+      if (result.status === 'ready' && typedArgs.open && result.url) {
+        const { spawn, execFileSync } = await import('node:child_process');
+        const openBrowser = () => {
+          const cmd = process.platform === 'darwin' ? 'open'
+            : process.platform === 'win32' ? 'start'
+            : 'xdg-open';
+          try {
+            spawn(cmd, [`${result.url}/wp-admin/`], { detached: true, stdio: 'ignore' }).unref();
+          } catch { /* best-effort */ }
+        };
+        const openStudioApp = (): boolean => {
+          try {
+            if (process.platform === 'darwin') {
+              spawn('open', ['-a', 'Studio'], { detached: true, stdio: 'ignore' }).unref();
+              return true;
+            }
+            if (process.platform === 'win32') {
+              spawn('cmd', ['/c', 'start', '', 'Studio'], { detached: true, stdio: 'ignore' }).unref();
+              return true;
+            }
+            if (process.platform === 'linux') {
+              const customCmd = process.env.STUDIO_APP_CMD;
+              if (customCmd) {
+                spawn('sh', ['-c', customCmd], { detached: true, stdio: 'ignore' }).unref();
+                return true;
+              }
+              for (const bin of ['Studio', 'studio-app', 'wp-studio']) {
+                try {
+                  execFileSync('which', [bin], { stdio: 'ignore', timeout: 1000 });
+                  spawn(bin, [], { detached: true, stdio: 'ignore' }).unref();
+                  return true;
+                } catch { /* try next */ }
+              }
+            }
+            return false;
+          } catch { return false; }
+        };
+        if (result.source === 'studio' && openStudioApp()) {
+          /* launched Studio app */
+        } else {
+          openBrowser();
+        }
+      }
+      return textResult(result);
+    }
+
+    case 'liberate_preview_stop': {
+      const { stopPreview } = await import('./lib/preview/playground-server.js');
+      const result = await stopPreview({ outputDir: typedArgs.outputDir as string });
+      return textResult(result);
     }
 
     default:

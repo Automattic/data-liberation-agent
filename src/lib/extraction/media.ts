@@ -1,4 +1,4 @@
-import { createWriteStream, mkdirSync, readFileSync, unlinkSync } from 'fs';
+import { createWriteStream, mkdirSync, readFileSync, statSync, unlinkSync } from 'fs';
 import { createHash } from 'crypto';
 import { basename, extname, join, resolve } from 'path';
 import { pipeline } from 'stream/promises';
@@ -8,6 +8,7 @@ export interface DownloadResult {
   localPath: string | null;
   filename: string | null;
   error: string | null;
+  bytes: number;
 }
 
 export function safeFilename(filename: string, seenNames: Map<string, number>): string {
@@ -46,6 +47,37 @@ export function resolveMediaPath(filename: string, outputDir: string): string {
   return resolved;
 }
 
+// Some CDNs encode image transforms directly in the URL path after a `/:/`
+// segment marker (e.g. GoDaddy W+M's img1.wsimg.com: `/isteam/ip/<uuid>/
+// <filename>.jpg/:/rs=w:4000,cg:true`). The real filename lives in the segment
+// *before* `/:/`, not after. basename(pathname) returns the transform spec
+// which is useless as a filename. Detect the marker and use the preceding
+// segment instead.
+export function deriveFilenameFromUrl(urlObj: URL): string {
+  const path = urlObj.pathname;
+  const marker = path.indexOf('/:/');
+  const effectivePath = marker >= 0 ? path.slice(0, marker) : path;
+  return basename(effectivePath);
+}
+
+// Map common image content-types to file extensions. Used when the URL
+// provides no extension (e.g. `/isteam/getty/<numeric-id>`).
+export function extensionFromContentType(contentType: string): string {
+  const ct = contentType.toLowerCase().split(';')[0].trim();
+  switch (ct) {
+    case 'image/jpeg': case 'image/jpg': return '.jpg';
+    case 'image/png': return '.png';
+    case 'image/gif': return '.gif';
+    case 'image/webp': return '.webp';
+    case 'image/avif': return '.avif';
+    case 'image/svg+xml': return '.svg';
+    case 'image/bmp': return '.bmp';
+    case 'image/tiff': return '.tiff';
+    case 'image/x-icon': case 'image/vnd.microsoft.icon': return '.ico';
+    default: return '';
+  }
+}
+
 export async function downloadMedia(
   url: string,
   outputDir: string,
@@ -54,9 +86,7 @@ export async function downloadMedia(
 ): Promise<DownloadResult> {
   try {
     const urlObj = new URL(url);
-    const rawFilename = basename(urlObj.pathname) || `image-${Date.now()}.jpg`;
-    const filename = safeFilename(rawFilename, seenNames);
-    const destPath = resolveMediaPath(filename, outputDir);
+    let rawFilename = deriveFilenameFromUrl(urlObj) || `image-${Date.now()}.jpg`;
 
     mkdirSync(outputDir, { recursive: true });
 
@@ -64,6 +94,18 @@ export async function downloadMedia(
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`);
     }
+
+    // If the derived filename has no extension, add one from the response
+    // content-type. Skipped entirely for URLs that already carried a real
+    // filename like `follow_guidelines.jpg`.
+    if (!extname(rawFilename)) {
+      const ct = response.headers.get('content-type') || '';
+      const ext = extensionFromContentType(ct);
+      if (ext) rawFilename = `${rawFilename}${ext}`;
+    }
+
+    const filename = safeFilename(rawFilename, seenNames);
+    const destPath = resolveMediaPath(filename, outputDir);
 
     const fileStream = createWriteStream(destPath);
     await pipeline(response.body as unknown as NodeJS.ReadableStream, fileStream);
@@ -75,13 +117,14 @@ export async function downloadMedia(
       if (existing) {
         // Duplicate — remove the new file and return the existing path
         try { unlinkSync(destPath); } catch { /* ignore */ }
-        return { url, localPath: existing, filename: basename(existing), error: null };
+        return { url, localPath: existing, filename: basename(existing), error: null, bytes: 0 };
       }
       seenHashes.set(hash, destPath);
     }
 
-    return { url, localPath: destPath, filename, error: null };
+    const bytes = statSync(destPath).size;
+    return { url, localPath: destPath, filename, error: null, bytes };
   } catch (err) {
-    return { url, localPath: null, filename: null, error: (err as Error).message };
+    return { url, localPath: null, filename: null, error: (err as Error).message, bytes: 0 };
   }
 }

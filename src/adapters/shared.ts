@@ -1,10 +1,14 @@
 import * as cheerio from 'cheerio';
 import type { WxrBuilder } from '../lib/extraction/wxr-builder.js';
 import type { ExtractionLog } from '../lib/extraction/extraction-log.js';
+import type { ImportSession } from '../lib/extraction/import-session.js';
 import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { classifyUrl } from '../lib/extraction/sitemap.js';
 import { downloadMedia } from '../lib/extraction/media.js';
+import { MediaStubStore } from '../lib/extraction/media-stubs.js';
 import type { WooProductCsvBuilder, WooProduct } from '../lib/import/woo-product-csv.js';
+import { AdaptiveTuner, TUNER_DEFAULTS } from '../lib/extraction/adaptive-tuner.js';
+import type { AdaptiveTunerConfig, TunerState } from '../lib/extraction/adaptive-tuner.js';
 
 // ---------------------------------------------------------------------------
 // Strip non-content tags from HTML
@@ -228,6 +232,8 @@ export interface ExtractionLoopOpts {
   verbose?: boolean;
   server?: Server;
   csvBuilder?: WooProductCsvBuilder;
+  /** Optional higher-level resume state; counters & stage are updated automatically */
+  session?: ImportSession;
   extractPage: (url: string) => Promise<ExtractedPage>;
   /** Optional platform-specific product extractor — called before the generic JSON-LD fallback */
   extractProduct?: (url: string, html: string) => WooProduct | null;
@@ -238,6 +244,8 @@ export interface ExtractionLoopOpts {
    * implicit 3-URL cap.
    */
   limit?: number;
+  /** Optional per-adapter tuner configuration overrides */
+  tunerConfig?: AdaptiveTunerConfig;
 }
 
 // ---------------------------------------------------------------------------
@@ -263,10 +271,26 @@ export async function runExtractionLoop(opts: ExtractionLoopOpts): Promise<{
     verbose,
     server,
     csvBuilder,
+    session,
     extractPage,
     extractProduct,
     limit,
+    tunerConfig,
   } = opts;
+
+  // Seed discovered counts from the inventory so the session reflects
+  // what the adapter found before extraction began.
+  if (session) {
+    const discoveredByType: Record<string, number> = {};
+    for (const u of inventoryUrls) {
+      discoveredByType[u.type] = (discoveredByType[u.type] || 0) + 1;
+    }
+    session.setDiscovered(discoveredByType);
+    session.setStage('extracting');
+  }
+
+  const savedTunerState = session?.getCursor<TunerState>('adaptive-tuner');
+  const tuner = new AdaptiveTuner({ pageDelayStart: delay, config: tunerConfig }, savedTunerState);
 
   const mediaDir = outputDir ? `${outputDir}/media` : null;
 
@@ -277,6 +301,7 @@ export async function runExtractionLoop(opts: ExtractionLoopOpts): Promise<{
     const { rmSync, writeFileSync } = await import('fs');
     try { rmSync(`${outputDir}/media`, { recursive: true, force: true }); } catch { /* ignore */ }
     try { rmSync(`${outputDir}/redirect-map.json`, { force: true }); } catch { /* ignore */ }
+    try { rmSync(`${outputDir}/media-stubs.json`, { force: true }); } catch { /* ignore */ }
     try { writeFileSync(log.logPath, ''); } catch { /* ignore */ }
   }
 
@@ -288,6 +313,9 @@ export async function runExtractionLoop(opts: ExtractionLoopOpts): Promise<{
   const seenMediaNames = new Map<string, number>();
   const seenMediaHashes = new Map<string, string>();
   const downloadedMediaUrls = new Set<string>();
+  // Per-asset status survives across runs: permanent failures stop retrying,
+  // user-marked `ignored` URLs are skipped forever.
+  const mediaStubs = outputDir ? MediaStubStore.load(outputDir) : null;
   /** Map from local file path to WXR media ID — used to deduplicate byte-identical files */
   const mediaPathToId = new Map<string, number>();
 
@@ -343,36 +371,157 @@ export async function runExtractionLoop(opts: ExtractionLoopOpts): Promise<{
     }
   };
 
-  for (let i = 0; i < urls.length; i++) {
-    const url = urls[i];
-    const startMs = Date.now();
+  interface FetchResult {
+    url: string;
+    pageData: ExtractedPage | null;
+    elapsedMs: number;
+    error: string | null;
+  }
 
-    sendLog(`[${alreadyProcessed + i + 1}/${alreadyProcessed + urls.length}] Extracting: ${url}`);
+  let cursor = 0;
+  while (cursor < urls.length) {
+    const batchSize = tuner.getPageConcurrency();
+    const batch = urls.slice(cursor, cursor + batchSize);
 
-    try {
-      const pageData = await extractPage(url);
+    // Phase 1: Log what we're about to fetch
+    for (let j = 0; j < batch.length; j++) {
+      sendLog(`[${alreadyProcessed + cursor + j + 1}/${alreadyProcessed + urls.length}] Extracting: ${batch[j]}`);
+    }
 
-      // Download media for this page concurrently (up to 6 at a time)
+    // Phase 2: Concurrent page fetches
+    const fetchResults: FetchResult[] = await Promise.all(
+      batch.map(async (url): Promise<FetchResult> => {
+        const pageStart = Date.now();
+        try {
+          const pageData = await extractPage(url);
+          return { url, pageData, elapsedMs: Date.now() - pageStart, error: null };
+        } catch (err) {
+          return { url, pageData: null, elapsedMs: Date.now() - pageStart, error: err instanceof Error ? err.message : String(err) };
+        }
+      })
+    );
+
+    // Phase 3: Feed timing to tuner — treat batch errors as a single
+    // compound event to avoid multiplicative backoff (N errors in one
+    // batch would otherwise multiply the delay by 2^N).
+    const batchHasErrors = fetchResults.some((r) => r.error);
+    if (batchHasErrors) {
+      tuner.recordPageError();
+      if (verbose) {
+        const errorCount = fetchResults.filter((r) => r.error).length;
+        sendLog(`  [tuner] page delay: → ${tuner.getPageDelay()}ms (error backoff — ${errorCount}/${fetchResults.length} failed)`);
+      }
+    }
+    for (const result of fetchResults) {
+      if (!result.error) {
+        const pageElapsed = result.elapsedMs / 1000;
+        const pageDecision = tuner.recordPageResult({ elapsed: pageElapsed });
+        if (verbose && tuner.lastDebug) {
+          const d = tuner.lastDebug;
+          sendLog(`  [tuner:debug] page: elapsed=${d.elapsed.toFixed(2)}s throughput=${d.throughput.toFixed(2)} ema=${d.ema?.toFixed(2) ?? 'null'} ratio=${d.ratio?.toFixed(2) ?? 'n/a'} → ${d.decision}`);
+        }
+        if (verbose && (pageDecision === 'increase' || pageDecision === 'decrease')) {
+          sendLog(`  [tuner] page delay: → ${tuner.getPageDelay()}ms (${pageDecision})`);
+        }
+      }
+    }
+
+    // Phase 4: Process each page sequentially (media, WXR, logging)
+    for (let j = 0; j < fetchResults.length; j++) {
+      const { url, pageData, error: fetchError } = fetchResults[j];
+      const i = cursor + j; // running index for checkpoints
+      const startMs = Date.now();
+
+      if (fetchError || !pageData) {
+        failed++;
+        const errorMsg = fetchError || 'Unknown error';
+        log.logFailed({ url, error: errorMsg });
+        sendLog(`  FAILED: ${errorMsg}`);
+
+        if (session) {
+          const invEntry = inventoryUrls.find((u) => u.url === url);
+          const failType = invEntry?.type || classifyUrl(url);
+          const bumpType = failType === 'product' ? 'product' : (failType === 'post' || failType === 'blog-post') ? 'post' : 'page';
+          session.bumpProgress(bumpType, 'failed');
+          session.save();
+        }
+        continue;
+      }
+
+      // Download media for this page concurrently
       let featuredMediaId: number | undefined;
       if (!dryRun && mediaDir) {
-        const MEDIA_CONCURRENCY = 6;
+        const mediaConcurrency = tuner.getMediaConcurrency();
 
         // Filter to new URLs and mark them as seen immediately to prevent
         // duplicates from other pages queueing the same URL
         const newMediaUrls: string[] = [];
         for (const mediaUrl of pageData.mediaUrls) {
           if (downloadedMediaUrls.has(mediaUrl)) continue;
+          // Respect persistent stub state: skip permanently-failed / ignored
+          // URLs so resume runs don't burn cycles retrying them.
+          if (mediaStubs && !mediaStubs.shouldAttempt(mediaUrl)) {
+            downloadedMediaUrls.add(mediaUrl);
+            const prior = mediaStubs.get(mediaUrl);
+            if (prior?.status === 'success' && prior.localPath) {
+              // Reuse the existing file. If this run's WXR doesn't yet have a
+              // media item for this path, register it now — otherwise resume
+              // runs would emit WXR without any <wp:attachment> entries for
+              // media downloaded on prior runs.
+              let mediaId = mediaPathToId.get(prior.localPath);
+              if (!mediaId) {
+                mediaId = wxr.addMedia({
+                  url: mediaUrl,
+                  localPath: prior.localPath,
+                  title: prior.localPath.split('/').pop() || '',
+                });
+                mediaPathToId.set(prior.localPath, mediaId);
+                if (wxr.isStreaming) {
+                  wxr.flushItem(wxr.items[wxr.items.length - 1]);
+                }
+              }
+              if (!featuredMediaId) featuredMediaId = mediaId;
+            }
+            continue;
+          }
           downloadedMediaUrls.add(mediaUrl);
           newMediaUrls.push(mediaUrl);
         }
 
-        // Download in batches of MEDIA_CONCURRENCY
-        for (let batch = 0; batch < newMediaUrls.length; batch += MEDIA_CONCURRENCY) {
-          const chunk = newMediaUrls.slice(batch, batch + MEDIA_CONCURRENCY);
+        // Download media in batches
+        for (let mBatch = 0; mBatch < newMediaUrls.length; mBatch += mediaConcurrency) {
+          const chunk = newMediaUrls.slice(mBatch, mBatch + mediaConcurrency);
+          const mediaBatchStart = Date.now();
           const results = await Promise.all(
             chunk.map((mediaUrl) => downloadMedia(mediaUrl, mediaDir, seenMediaNames, seenMediaHashes)
               .then((r) => ({ mediaUrl, ...r })))
           );
+          const mediaBatchElapsed = (Date.now() - mediaBatchStart) / 1000;
+          // Exclude deduped files (bytes=0, no error) from throughput — they
+          // resolve instantly from the hash cache and would skew the EMA.
+          const mediaBatchBytes = results.reduce((sum, r) => sum + (r.bytes ?? 0), 0);
+          const mediaBatchErrors = results.filter((r) => r.error).length;
+          const mediaBatchActualDownloads = results.filter((r) => !r.error && (r.bytes ?? 0) > 0).length;
+          if (
+            mediaBatchErrors >= TUNER_DEFAULTS.mediaErrorMinCount &&
+            mediaBatchErrors > chunk.length * TUNER_DEFAULTS.mediaErrorRatio
+          ) {
+            tuner.recordMediaError();
+            if (verbose) {
+              sendLog(`  [tuner] media concurrency: → ${tuner.getMediaConcurrency()} (error — ${mediaBatchErrors}/${chunk.length} failed)`);
+            }
+          } else if (mediaBatchActualDownloads > 0) {
+            // Only feed throughput when real downloads occurred — skip
+            // all-dedup batches to avoid skewing the EMA with instant results.
+            const mediaDecision = tuner.recordMediaResult({ elapsed: mediaBatchElapsed, bytesDownloaded: mediaBatchBytes });
+            if (verbose && tuner.lastDebug) {
+              const d = tuner.lastDebug;
+              sendLog(`  [tuner:debug] media: elapsed=${d.elapsed.toFixed(2)}s bytes=${d.workDone} throughput=${d.throughput.toFixed(0)} ema=${d.ema?.toFixed(0) ?? 'null'} ratio=${d.ratio?.toFixed(2) ?? 'n/a'} → ${d.decision}`);
+            }
+            if (verbose && (mediaDecision === 'increase' || mediaDecision === 'decrease')) {
+              sendLog(`  [tuner] media concurrency: → ${tuner.getMediaConcurrency()} (${mediaDecision})`);
+            }
+          }
 
           // Process results sequentially — WXR builder and log are not concurrent-safe
           for (const result of results) {
@@ -398,6 +547,13 @@ export async function runExtractionLoop(opts: ExtractionLoopOpts): Promise<{
               localPath: result.localPath,
               error: result.error,
             });
+            if (mediaStubs) {
+              if (result.error) {
+                mediaStubs.markFailure(result.mediaUrl, result.error);
+              } else if (result.localPath) {
+                mediaStubs.markSuccess(result.mediaUrl, result.localPath);
+              }
+            }
           }
         }
       }
@@ -496,22 +652,37 @@ export async function runExtractionLoop(opts: ExtractionLoopOpts): Promise<{
         qualityScore: pageData.qualityScore,
       });
 
+      if (session) {
+        const bumpType = isProduct ? 'product' : isPost ? 'post' : 'page';
+        session.bumpProgress(bumpType, 'extracted');
+        if ((i + 1) % 10 === 0) {
+          session.setCursor('adaptive-tuner', tuner.getState());
+          session.save();
+          mediaStubs?.flush();
+        }
+      }
+
       if (verbose) {
         sendLog(
           `  media: ${pageData.mediaUrls.length}, quality: ${pageData.qualityScore}, ${durationMs}ms`
         );
       }
-    } catch (err) {
-      failed++;
-      const errorMsg = err instanceof Error ? err.message : String(err);
-      log.logFailed({ url, error: errorMsg });
-      sendLog(`  FAILED: ${errorMsg}`);
     }
 
-    // Delay between pages (skip after last)
-    if (i < urls.length - 1 && delay > 0) {
-      await sleep(delay);
+    // Persist tuner state after each batch so short runs and crashes
+    // don't lose learned pacing. The every-10-items checkpoint inside
+    // Phase 4 covers long runs; this covers the tail.
+    if (session) {
+      session.setCursor('adaptive-tuner', tuner.getState());
     }
+
+    // Delay once per batch (skip after last batch)
+    const currentDelay = tuner.getPageDelay();
+    if (cursor + batch.length < urls.length && currentDelay > 0) {
+      await sleep(currentDelay);
+    }
+
+    cursor += batch.length;
   }
 
   // Add navigation as menu items
@@ -527,6 +698,13 @@ export async function runExtractionLoop(opts: ExtractionLoopOpts): Promise<{
       wxr.flushItem(wxr.items[wxr.items.length - 1]);
     }
   }
+
+  if (session) {
+    session.setStage('finalizing');
+  }
+  mediaStubs?.flush();
+
+  sendLog(`[tuner] Final state: page delay=${tuner.getPageDelay()}ms, media concurrency=${tuner.getMediaConcurrency()}`);
 
   return {
     pagesExtracted,

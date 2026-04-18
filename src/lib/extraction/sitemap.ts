@@ -21,11 +21,14 @@ export function classifyUrl(url: string): UrlType {
 
   if (path === '/' || path === '') return 'homepage';
   // Match /blog/<slug>, /post/<slug>, /blogs/<handle>/<slug>, etc.
-  // Also match Wix patterns like /blog-1/post/<slug>
-  if (/\/(blog|post|posts|article|articles|news|journal)(\/|$)/.test(path)) return 'post';
+  // Also match Wix patterns like /blog-1/post/<slug> and older Wix /single-post/<slug>.
+  // Require a slug segment after the keyword — bare `/blog` is a listing page,
+  // not a blog post, so it should fall through to the `page` default.
+  if (/\/(blog|post|posts|article|articles|news|journal)\/[^/]/.test(path)) return 'post';
   if (/\/blogs\/[^/]+\/[^/]+/.test(path)) return 'post'; // Shopify /blogs/<blog>/<article>
   if (/\/blog-\d+\/post\//.test(path)) return 'post'; // Wix /blog-1/post/<slug>
-  if (/\/(products?|store|shop)\//.test(path)) return 'product';
+  if (/\/single-post\//.test(path)) return 'post'; // Older Wix Blog URL pattern
+  if (/\/(products?|product-page|store|shop)\//.test(path)) return 'product';
   if (/\/(gallery|portfolio)/.test(path)) return 'gallery';
   if (/\/(event|events)/.test(path)) return 'event';
   return 'page';

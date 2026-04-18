@@ -507,7 +507,9 @@ function extractWixProduct(pageData: PageData): WooProduct | null {
   for (const ld of pageData.jsonLd) {
     const obj = ld as Record<string, unknown>;
     if (obj['@type'] === 'Product' && typeof obj.name === 'string') {
-      const offers = Array.isArray(obj.offers) ? obj.offers : obj.offers ? [obj.offers as Record<string, unknown>] : [];
+      // Wix emits "Offers" (uppercase) while schema.org uses "offers" (lowercase)
+      const rawOffers = obj.offers || obj.Offers;
+      const offers = Array.isArray(rawOffers) ? rawOffers : rawOffers ? [rawOffers as Record<string, unknown>] : [];
       const offer = (offers[0] || {}) as Record<string, unknown>;
       const price = offer.price ? String(offer.price) : '';
       const images: string[] = [];
@@ -515,19 +517,23 @@ function extractWixProduct(pageData: PageData): WooProduct | null {
       else if (Array.isArray(obj.image)) {
         for (const img of obj.image) {
           if (typeof img === 'string') images.push(img);
-          else if (typeof img === 'object' && img && typeof (img as Record<string, unknown>).url === 'string') {
-            images.push((img as Record<string, unknown>).url as string);
+          else if (typeof img === 'object' && img) {
+            // Wix uses schema.org "contentUrl" for ImageObject; also check "url"
+            const imgUrl = (img as Record<string, unknown>).url || (img as Record<string, unknown>).contentUrl;
+            if (typeof imgUrl === 'string') images.push(imgUrl);
           }
         }
       }
+      // Wix emits "Availability" (uppercase)
+      const availability = offer.availability || offer.Availability;
       return {
         name: obj.name,
         description: typeof obj.description === 'string' ? obj.description : '',
         regularPrice: price,
         sku: typeof obj.sku === 'string' ? obj.sku : '',
         images,
-        inStock: typeof offer.availability === 'string'
-          ? offer.availability.includes('InStock')
+        inStock: typeof availability === 'string'
+          ? (availability as string).includes('InStock')
           : true,
       };
     }

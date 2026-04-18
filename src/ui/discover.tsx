@@ -8,15 +8,17 @@ import { detect, type FullDetectionResult } from '../lib/extraction/detect-platf
 import { fetchSitemap, classifyUrl } from '../lib/extraction/sitemap.js';
 import { WxrBuilder } from '../lib/extraction/wxr-builder.js';
 import { ExtractionLog } from '../lib/extraction/extraction-log.js';
-import { wixAdapter, type Inventory } from '../adapters/wix.js';
-import { squarespaceAdapter } from '../adapters/squarespace.js';
-import { webflowAdapter } from '../adapters/webflow.js';
-import { shopifyAdapter } from '../adapters/shopify.js';
-import { weeblyAdapter } from '../adapters/weebly.js';
+import { godaddyWmAdapter } from '../adapters/godaddy-wm.js';
 import { hostingerAdapter } from '../adapters/hostinger.js';
 import { hubspotAdapter } from '../adapters/hubspot.js';
+import { shopifyAdapter } from '../adapters/shopify.js';
+import { squarespaceAdapter } from '../adapters/squarespace.js';
+import { webflowAdapter } from '../adapters/webflow.js';
+import { weeblyAdapter } from '../adapters/weebly.js';
+import { wixAdapter, type Inventory } from '../adapters/wix.js';
 import { mkdirSync, existsSync, writeFileSync, readFileSync } from 'fs';
 import { join, dirname } from 'path';
+import { autoPreview } from './preview.js';
 
 function siteOutputDir(baseDir: string, url: string): string {
   let host: string;
@@ -44,6 +46,8 @@ export interface LiberateProps {
   verbose: boolean;
   token: string | null;
   cdpPort: number | null;
+  adminToken: string | null;
+  shopDomain: string | null;
   nonInteractive: boolean;
   /** Cap extraction at the first N URLs (writes a real WXR for those N). */
   limit: number | null;
@@ -72,7 +76,7 @@ interface ExtractionResult {
   wxrPath: string | null;
 }
 
-const adapters = [wixAdapter, squarespaceAdapter, webflowAdapter, shopifyAdapter, weeblyAdapter, hostingerAdapter, hubspotAdapter];
+const adapters = [godaddyWmAdapter, hostingerAdapter, hubspotAdapter, shopifyAdapter, squarespaceAdapter, webflowAdapter, weeblyAdapter, wixAdapter];
 
 function findAdapter(platform: string) {
   return adapters.find((a) => a.id === platform) || null;
@@ -80,7 +84,7 @@ function findAdapter(platform: string) {
 
 
 function Liberate(props: LiberateProps & { onComplete?: (wxrPath: string | null) => void }) {
-  const { url, outputDir, dryRun, resume, delay, verbose, token, cdpPort, limit, onComplete } = props;
+  const { url, outputDir, dryRun, resume, delay, verbose, token, cdpPort, adminToken, shopDomain, limit, onComplete } = props;
   const app = useApp();
   const [phase, setPhase] = useState<Phase>('detecting');
   const [detection, setDetection] = useState<FullDetectionResult | null>(null);
@@ -150,6 +154,8 @@ function Liberate(props: LiberateProps & { onComplete?: (wxrPath: string | null)
         const opts = {
           cdpPort: cdpPort ?? undefined,
           token: token ?? undefined,
+          adminToken: adminToken ?? undefined,
+          shopDomain: shopDomain ?? undefined,
           delay,
           verbose,
           limit: limit ?? undefined,
@@ -373,14 +379,14 @@ function Liberate(props: LiberateProps & { onComplete?: (wxrPath: string | null)
       {phase === 'discovered' && (
         <Box flexDirection="column" marginTop={1}>
           <Text color="yellow">! {error}</Text>
-          <Text dimColor>Supported: Wix, Squarespace, Webflow, Shopify, Weebly, Hostinger, HubSpot.</Text>
+          <Text dimColor>Supported: GoDaddy Websites & Marketing, Hostinger, HubSpot, Shopify, Squarespace, Webflow, Weebly, Wix.</Text>
         </Box>
       )}
 
       {/* Unknown platform warning */}
       {phase === 'done' && detection?.platform === 'unknown' && (
         <Box marginTop={1}>
-          <Text color="yellow">! Supported platforms: Wix, Squarespace, Webflow, Shopify, Weebly, Hostinger, HubSpot</Text>
+          <Text color="yellow">! Supported platforms: GoDaddy Websites & Marketing, Hostinger, HubSpot, Shopify, Squarespace, Webflow, Weebly, Wix</Text>
         </Box>
       )}
 
@@ -416,6 +422,8 @@ export function runDiscover(url: string, opts: Partial<LiberateProps> = {}): voi
     verbose: opts.verbose || false,
     token: opts.token || null,
     cdpPort: opts.cdpPort || null,
+    adminToken: opts.adminToken || null,
+    shopDomain: opts.shopDomain || null,
     nonInteractive: opts.nonInteractive || false,
     limit: opts.limit ?? null,
   };
@@ -424,28 +432,22 @@ export function runDiscover(url: string, opts: Partial<LiberateProps> = {}): voi
   );
   waitUntilExit()
     .then(async () => {
-      if (!wxrPath || props.nonInteractive) return;
+      if (!wxrPath) return;
+      // Post-extract: always boot a local site (Studio if installed, else
+      // Playground) so the user can verify content before importing anywhere
+      // real. autoPreview honors nonInteractive internally — it still boots
+      // the site but skips browser/app auto-open so scripts get a URL.
+      const outputDir = dirname(wxrPath);
+      await autoPreview(outputDir, { nonInteractive: props.nonInteractive });
+      if (props.nonInteractive) return;
       const answer = await ask('\nReady to import to WordPress? (y/N) ');
       if (answer.toLowerCase() !== 'y') {
-        const outputDir = dirname(wxrPath);
-        const productsCsv = join(outputDir, 'products.csv');
-        const hasProducts = existsSync(productsCsv);
-
-        console.log('\n  You can import manually using WP-CLI:\n');
-        console.log(`  # Import with original authors (creates WordPress users):`);
-        console.log(`  wp import ${wxrPath} --authors=create\n`);
-        console.log(`  # Or assign all content to yourself:`);
-        console.log(`  wp import ${wxrPath} --authors=skip`);
-
-        if (hasProducts) {
-          console.log('\n  Products were also extracted. To import them:');
-          console.log('  1. Install and activate WooCommerce on your WordPress site');
-          console.log('  2. Install the WooCommerce CSV Import plugin (included with WooCommerce)');
-          console.log(`  3. Go to WooCommerce > Products > Import and upload: ${productsCsv}`);
-          console.log('     Or via WP-CLI:');
-          console.log(`  wp wc product_csv_import run ${productsCsv}`);
-        }
-
+        console.log('\n  Import to WordPress later with:\n');
+        console.log(`  npm run liberate -- import ${wxrPath} \\`);
+        console.log('    --site <your-site.com> --username <user> --token <app-password>');
+        console.log('');
+        console.log('  (Use --import-authors to create WordPress users for each author,');
+        console.log('   or omit to assign all content to the authenticated user.)');
         console.log('');
         return;
       }

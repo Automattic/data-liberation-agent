@@ -394,7 +394,7 @@ export const hostingerAdapter: PlatformAdapter = {
       dryRun: !!hoOpts.dryRun,
       resume: !!hoOpts.resume,
       verbose: hoOpts.verbose,
-      limit: hoOpts.limit,
+      limit: hoOpts.limit as number | undefined,
       server: context.server,
       csvBuilder,
       extractPage: async (url: string) => {
