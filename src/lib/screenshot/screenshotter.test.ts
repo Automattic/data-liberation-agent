@@ -21,7 +21,7 @@ vi.mock('../../adapters/shared.js', async (importOriginal) => {
 import { captureScreenshots } from './screenshotter.js';
 import * as shared from '../../adapters/shared.js';
 
-interface MockContext { newPage: () => Promise<unknown>; close: () => Promise<void> }
+interface MockContext { newPage: () => Promise<unknown>; addInitScript: (script: unknown) => Promise<void>; close: () => Promise<void> }
 interface MockBrowser { newContext: (opts?: unknown) => Promise<MockContext>; close: () => Promise<void> }
 
 function makeGoodPage(gotoStatus = 200) {
@@ -41,6 +41,7 @@ function makeMockBrowser(pageFactory = () => makeGoodPage()): MockBrowser {
   return {
     newContext: vi.fn().mockImplementation(() => Promise.resolve({
       newPage: vi.fn().mockResolvedValue(pageFactory()),
+      addInitScript: vi.fn().mockResolvedValue(undefined),
       close: vi.fn().mockResolvedValue(undefined),
     } as MockContext)),
     close: vi.fn().mockResolvedValue(undefined),
