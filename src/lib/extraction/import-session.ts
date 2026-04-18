@@ -2,14 +2,29 @@ import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, unlinkS
 import { join, dirname } from 'path';
 
 /**
- * Pipeline stage. Adapters are free to set any of these; `initial` is the
- * default when a session is freshly created.
+ * Pipeline stage.
+ *
+ *   initial ──▶ discovering ──▶ extracting ──▶ downloading-media ──┐
+ *                                                                   │
+ *                            ┌──────────────────────────────────────┘
+ *                            │
+ *                            ▼
+ *       (if --screenshots:) screenshotting ──▶ stamping-metadata ──┐
+ *                                                                   │
+ *                            ┌──────────────────────────────────────┘
+ *                            │
+ *                            ▼
+ *                       finalizing ──▶ complete
+ *
+ *   error can be set from any stage.
  */
 export type ImportStage =
   | 'initial'
   | 'discovering'
   | 'extracting'
   | 'downloading-media'
+  | 'screenshotting'
+  | 'stamping-metadata'
   | 'finalizing'
   | 'complete'
   | 'error';
