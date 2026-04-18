@@ -184,25 +184,32 @@ async function capturePerViewport(args: CapturePerViewportArgs): Promise<void> {
   // --- scrolled screenshot --------------------------------------------------
   if (plan.captureScrolled) {
     try {
-      await page.evaluate((vh: number) => window.scrollTo(0, vh * 1.5), viewport.height);
-      const buf = await withScreenshotTimeout(
-        page.screenshot({
-          fullPage: false,
-          type: 'png',
-          clip: {
-            x: 0,
-            y: viewport.height * 1.5,
-            width: viewport.width,
-            height: viewport.height,
-          },
-        }),
-        screenshotTimeoutMs,
-      );
-      mkdirSync(dirname(plan.paths.scrolled), { recursive: true });
-      writeFileSync(plan.paths.scrolled, buf);
-      const rel = `screenshots/${viewport.id}/${slug}.scrolled.png`;
-      if (isDesktop) entry.desktopScrolled = rel;
-      else entry.mobileScrolled = rel;
+      const docHeight = await page.evaluate(() => document.documentElement.scrollHeight);
+      const scrollY = viewport.height * 1.5;
+      if (docHeight < scrollY + viewport.height) {
+        // Page is shorter than scroll-offset + viewport. No distinct scrolled
+        // state to capture. Skip silently (not a failure).
+      } else {
+        await page.evaluate((y: number) => window.scrollTo(0, y), scrollY);
+        const buf = await withScreenshotTimeout(
+          page.screenshot({
+            fullPage: false,
+            type: 'png',
+            clip: {
+              x: 0,
+              y: scrollY,
+              width: viewport.width,
+              height: viewport.height,
+            },
+          }),
+          screenshotTimeoutMs,
+        );
+        mkdirSync(dirname(plan.paths.scrolled), { recursive: true });
+        writeFileSync(plan.paths.scrolled, buf);
+        const rel = `screenshots/${viewport.id}/${slug}.scrolled.png`;
+        if (isDesktop) entry.desktopScrolled = rel;
+        else entry.mobileScrolled = rel;
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       failures.push({

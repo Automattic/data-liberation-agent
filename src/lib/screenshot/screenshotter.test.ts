@@ -134,6 +134,42 @@ describe('captureScreenshots', () => {
     }
   });
 
+  it('skips scrolled capture on pages too short for the scroll offset', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ss-'));
+    try {
+      // Mock: scrollHeight is 500 (less than desktop viewport 900 * 1.5 = 1350, plus 900 for the clip)
+      const shortPage = () => {
+        const p = makeGoodPage();
+        p.evaluate = vi.fn().mockImplementation(async (fn: unknown) => {
+          const s = String(fn);
+          if (s.includes('scrollHeight')) return 500;
+          // site-analysis evaluate
+          return { palette: [], typography: {}, metadata: { title: '', metaDescription: '', openGraph: {}, jsonLdTypes: [], htmlBytes: 0 } };
+        });
+        return p;
+      };
+      (shared.connectBrowser as ReturnType<typeof vi.fn>).mockResolvedValue(makeMockBrowser(shortPage));
+      const result = await captureScreenshots({
+        urls: ['https://example.com/short'],
+        outputDir: dir,
+        concurrency: 1,
+        settleMs: 0,
+      });
+      // Capture should succeed overall — fullpage captured, scrolled skipped silently.
+      expect(result.captured).toBe(1);
+      expect(result.failed).toBe(0);
+      expect(existsSync(join(dir, 'screenshots', 'desktop', 'short.png'))).toBe(true);
+      // Scrolled file should NOT exist
+      expect(existsSync(join(dir, 'screenshots', 'desktop', 'short.scrolled.png'))).toBe(false);
+      // Manifest entry should have desktop but not desktopScrolled
+      const manifest = JSON.parse(readFileSync(join(dir, 'screenshots', 'manifest.json'), 'utf8'));
+      expect(manifest.entries['https://example.com/short'].desktop).toBeDefined();
+      expect(manifest.entries['https://example.com/short'].desktopScrolled).toBeUndefined();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('records a failure entry when goto returns 4xx', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'ss-'));
     try {
