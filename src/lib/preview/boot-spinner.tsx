@@ -1,20 +1,31 @@
 import React, { useEffect, useState } from 'react';
 import { Box, Text } from 'ink';
 import Spinner from 'ink-spinner';
+import type { PreviewSource } from './types.js';
 
 export interface BootSpinnerProps {
   done?: boolean;
   url?: string;
   error?: string;
+  /** Which preview backend is being booted — drives the elapsed-time labels. */
+  source?: PreviewSource;
 }
 
-function phaseLabel(elapsedMs: number): string {
+function phaseLabel(source: PreviewSource | undefined, elapsedMs: number): string {
+  // Studio: WP is bundled with the app, so nothing is "downloaded"; the slow
+  // part is `studio site create` provisioning a fresh site, then `wp import`.
+  if (source === 'studio') {
+    if (elapsedMs < 15_000) return 'Creating Studio site…';
+    return 'Importing content…';
+  }
+  // Playground: first-run fetches WP into the WASM runtime, then boots, then
+  // runs the blueprint imports.
   if (elapsedMs < 10_000) return 'Downloading WordPress…';
   if (elapsedMs < 25_000) return 'Starting WordPress…';
   return 'Importing content…';
 }
 
-export function BootSpinner({ done, url, error }: BootSpinnerProps) {
+export function BootSpinner({ done, url, error, source }: BootSpinnerProps) {
   const [elapsed, setElapsed] = useState(0);
   useEffect(() => {
     if (done || error) return;
@@ -43,7 +54,7 @@ export function BootSpinner({ done, url, error }: BootSpinnerProps) {
       <Text color="cyan">
         <Spinner type="dots" />
       </Text>
-      <Text> {phaseLabel(elapsed)}</Text>
+      <Text> {phaseLabel(source, elapsed)}</Text>
     </Box>
   );
 }

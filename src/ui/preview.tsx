@@ -1,10 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { render, useApp, Box, Text } from 'ink';
 import { spawn as spawnProc, execFileSync } from 'node:child_process';
-import { createInterface } from 'node:readline';
 import { BootSpinner } from '../lib/preview/boot-spinner.js';
 import { startPreview, stopPreview } from '../lib/preview/playground-server.js';
-import type { PreviewPhase, StartPreviewResult } from '../lib/preview/types.js';
+import { isStudioAvailable } from '../lib/preview/studio.js';
+import type { PreviewPhase, PreviewSource, StartPreviewResult } from '../lib/preview/types.js';
 
 interface RunOpts {
   outputDir: string;
@@ -82,6 +82,7 @@ const PreviewApp: React.FC<RunOpts> = ({ outputDir, open, port }) => {
   const [error, setError] = useState<string | undefined>();
   const [warnings, setWarnings] = useState<string[]>([]);
   const [, setPhase] = useState<PreviewPhase>('download');
+  const [source] = useState<PreviewSource>(() => isStudioAvailable() ? 'studio' : 'playground');
 
   useEffect(() => {
     let cancelled = false;
@@ -121,7 +122,7 @@ const PreviewApp: React.FC<RunOpts> = ({ outputDir, open, port }) => {
 
   return (
     <Box flexDirection="column">
-      <BootSpinner done={status === 'ready'} url={url} error={error} />
+      <BootSpinner done={status === 'ready'} url={url} error={error} source={source} />
       {status === 'ready' && warnings.length > 0 && (
         <Box flexDirection="column" marginTop={1}>
           <Text color="yellow">⚠ {warnings.length} warning(s) from Playground log:</Text>
@@ -181,6 +182,7 @@ const InlinePreviewApp: React.FC<{
   const [error, setError] = useState<string | undefined>();
   const [warnings, setWarnings] = useState<string[]>([]);
   const [, setPhase] = useState<PreviewPhase>('download');
+  const [source] = useState<PreviewSource>(() => isStudioAvailable() ? 'studio' : 'playground');
 
   useEffect(() => {
     (async () => {
@@ -205,7 +207,7 @@ const InlinePreviewApp: React.FC<{
 
   return (
     <Box flexDirection="column">
-      <BootSpinner done={status === 'ready'} url={url} error={error} />
+      <BootSpinner done={status === 'ready'} url={url} error={error} source={source} />
       {status === 'ready' && warnings.length > 0 && (
         <Box flexDirection="column" marginTop={1}>
           <Text color="yellow">⚠ {warnings.length} warning(s) from Playground log:</Text>
@@ -260,44 +262,33 @@ export async function startInlinePreview(opts: RunOpts): Promise<StartPreviewRes
 }
 
 /**
- * Post-extract prompt: asks "Preview in Playground now?" and acts accordingly.
- * - Y: starts Playground inline (detached) and waits for readiness, then returns true.
- * - N: prints a short "Preview locally: ..." reminder and returns false.
- * No-op when non-interactive or non-TTY.
+ * Post-extract auto-preview: unconditionally spins up a local site (Studio
+ * when the CLI is installed, Playground otherwise). In interactive mode we
+ * also auto-launch Studio / the browser; in non-interactive mode we just
+ * print the URL so scripts can capture it. `startInlinePreview` already
+ * falls back to a plain startPreview when there's no TTY.
  */
-export async function maybePromptAndPreview(
+export async function autoPreview(
   outputDir: string,
   opts: { nonInteractive?: boolean } = {},
 ): Promise<boolean> {
-  if (opts.nonInteractive) return false;
-  if (!process.stdout.isTTY || !process.stdin.isTTY) return false;
-
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  const answer: string = await new Promise((resolve) => {
-    rl.question('\n? Preview in a local site? [Y/n] ', (a) => {
-      rl.close();
-      resolve(a.trim().toLowerCase());
-    });
+  const interactive = !opts.nonInteractive && process.stdout.isTTY;
+  const result = await startInlinePreview({
+    outputDir,
+    open: interactive,
+    nonInteractive: opts.nonInteractive,
   });
-
-  if (answer === '' || answer === 'y' || answer === 'yes') {
-    const result = await startInlinePreview({ outputDir, open: true });
-    if (result.status !== 'ready') {
-      console.error(`[preview] failed: ${result.error ?? 'unknown error'}`);
-      return false;
-    }
-    console.log('');
-    if (result.source === 'studio') {
-      console.log(`Studio site "${result.siteName}" ready at ${result.url}`);
-      console.log(`Manage it: studio site list | studio site stop ${result.siteName}`);
-    } else {
-      console.log(`Playground running at ${result.url}${result.pid ? ` (PID ${result.pid})` : ''}`);
-      console.log(`Stop it later with: kill ${result.pid ?? '<pid>'}`);
-    }
-    return true;
+  if (result.status !== 'ready') {
+    console.error(`[preview] failed: ${result.error ?? 'unknown error'}`);
+    return false;
   }
-
   console.log('');
-  console.log(`Preview later with: npm run liberate -- preview ${outputDir} [--open]`);
-  return false;
+  if (result.source === 'studio') {
+    console.log(`Studio site "${result.siteName}" ready at ${result.url}`);
+    console.log(`Manage it: studio site list | studio site stop ${result.siteName}`);
+  } else {
+    console.log(`Playground running at ${result.url}${result.pid ? ` (PID ${result.pid})` : ''}`);
+    console.log(`Stop it later with: kill ${result.pid ?? '<pid>'}`);
+  }
+  return true;
 }

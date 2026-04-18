@@ -18,7 +18,7 @@ import { weeblyAdapter } from '../adapters/weebly.js';
 import { wixAdapter, type Inventory } from '../adapters/wix.js';
 import { mkdirSync, existsSync, writeFileSync, readFileSync } from 'fs';
 import { join, dirname } from 'path';
-import { maybePromptAndPreview } from './preview.js';
+import { autoPreview } from './preview.js';
 
 function siteOutputDir(baseDir: string, url: string): string {
   let host: string;
@@ -433,9 +433,10 @@ export function runDiscover(url: string, opts: Partial<LiberateProps> = {}): voi
   waitUntilExit()
     .then(async () => {
       if (!wxrPath || props.nonInteractive) return;
-      // Post-extract: optionally run preview (it prints its own reminder on decline).
+      // Post-extract: always boot a local site (Studio if installed, else
+      // Playground) so the user can verify content before importing anywhere real.
       const outputDir = dirname(wxrPath);
-      await maybePromptAndPreview(outputDir, { nonInteractive: props.nonInteractive });
+      await autoPreview(outputDir, { nonInteractive: props.nonInteractive });
       const answer = await ask('\nReady to import to WordPress? (y/N) ');
       if (answer.toLowerCase() !== 'y') {
         console.log('\n  Import to WordPress later with:\n');

@@ -35,23 +35,25 @@ export function isStudioAvailable(): boolean {
 }
 
 /**
- * Sanitize an outputDir basename into a safe Studio site name, suffixed with a
- * timestamp so re-runs never collide (per user preference: fresh site each run,
- * keep old ones).
+ * Sanitize an outputDir basename (a domain-derived slug) into a Studio site
+ * name. If the slug already matches an existing site, append `-2`, `-3`, etc.
+ * until it's unique. Callers pass the current `studio site list` output so we
+ * don't clobber user sites.
  */
-export function makeStudioSiteName(outputDir: string): string {
-  const slug = basename(resolve(outputDir))
+export function makeStudioSiteName(outputDir: string, existingNames: string[] = []): string {
+  const base = basename(resolve(outputDir))
     .toLowerCase()
     .replace(/[^a-z0-9-]/g, '-')
     .replace(/-+/g, '-')
     .replace(/^-|-$/g, '')
-    .slice(0, 40);
-  const d = new Date();
-  const pad = (n: number) => String(n).padStart(2, '0');
-  const stamp =
-    `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}` +
-    `-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
-  return `liberation-${slug || 'site'}-${stamp}`;
+    .slice(0, 60) || 'site';
+  const taken = new Set(existingNames);
+  if (!taken.has(base)) return base;
+  for (let i = 2; i < 1000; i++) {
+    const candidate = `${base}-${i}`;
+    if (!taken.has(candidate)) return candidate;
+  }
+  return `${base}-${Date.now()}`;
 }
 
 function defaultStudioRoot(): string {
@@ -133,7 +135,15 @@ export interface StartStudioOpts {
  */
 export async function startStudioPreview(opts: StartStudioOpts): Promise<StartPreviewResult> {
   const blueprintPath = persistBlueprint(opts.outputDir, 'studio');
-  const name = makeStudioSiteName(opts.outputDir);
+  let existingNames: string[] = [];
+  try {
+    const sites = await listStudioSites();
+    existingNames = sites.map((s) => s.name);
+  } catch {
+    // If we can't list sites, proceed with the base slug — `studio site create`
+    // will error on true collision and we'll surface that to the user.
+  }
+  const name = makeStudioSiteName(opts.outputDir, existingNames);
   const sitePath = join(defaultStudioRoot(), name);
   const absOutput = resolve(opts.outputDir);
   const hasProducts = existsSync(join(absOutput, 'products.csv'));
