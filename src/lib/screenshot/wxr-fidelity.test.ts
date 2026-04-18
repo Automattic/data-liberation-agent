@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { readFileSync, mkdtempSync } from 'fs';
+import { readFileSync, mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { XMLParser } from 'fast-xml-parser';
@@ -11,9 +11,14 @@ import { WxrBuilder } from '../extraction/wxr-builder.js';
  * This test guards that round-trip. If it fails, do NOT ship Tier 2 stamping
  * until either WxrBuilder is enhanced to emit the missing elements, OR
  * stamping switches to direct XML mutation (see design spec E1C).
+ *
+ * This complements the per-field round-trips in test/wxr-reader.test.ts by
+ * asserting that a full read-modify-serialize cycle produces structurally
+ * identical output — which is the path Tier 2 stamping will use to inject
+ * _liberation_* postmeta.
  */
 describe('WxrReader → WxrBuilder round-trip fidelity', () => {
-  it('preserves site metadata, authors, categories, tags, pages, posts, attachments, comments, redirects, postmeta', () => {
+  it('preserves site metadata, authors, taxonomies, pages, posts, attachments, and redirects through round-trip', () => {
     const dir = mkdtempSync(join(tmpdir(), 'wxr-fidelity-'));
 
     // Build a non-trivial WXR by using WxrBuilder (the only way to produce a
@@ -70,19 +75,78 @@ describe('WxrReader → WxrBuilder round-trip fidelity', () => {
       description: data.site.description,
       language: data.site.language,
     });
-    for (const a of data.authors) rebuilt.addAuthor({ login: a.login, email: a.email, displayName: a.displayName, firstName: a.firstName, lastName: a.lastName });
-    for (const c of data.categories) rebuilt.addCategory({ slug: c.slug, name: c.name, parent: c.parent, description: c.description });
-    for (const t of data.tags) rebuilt.addTag({ slug: t.slug, name: t.name, description: t.description });
+    for (const a of data.authors) {
+      rebuilt.addAuthor({
+        login: a.login,
+        email: a.email,
+        displayName: a.displayName,
+        firstName: a.firstName,
+        lastName: a.lastName,
+      });
+    }
+    for (const c of data.categories) {
+      rebuilt.addCategory({
+        slug: c.slug,
+        name: c.name,
+        parent: c.parent,
+        description: c.description,
+      });
+    }
+    for (const t of data.tags) {
+      rebuilt.addTag({
+        slug: t.slug,
+        name: t.name,
+        description: t.description,
+      });
+    }
     for (const it of data.items) {
       if (it.type === 'attachment') {
-        rebuilt.addMedia({ url: it.url, localPath: it.localPath, title: it.title, slug: it.slug, altText: it.altText, caption: it.caption });
+        rebuilt.addMedia({
+          url: it.url,
+          localPath: it.localPath,
+          title: it.title,
+          slug: it.slug,
+          altText: it.altText,
+          caption: it.caption,
+        });
       } else if (it.type === 'page') {
-        rebuilt.addPage({ title: it.title, slug: it.slug, content: it.content, excerpt: it.excerpt, date: it.date, parent: it.parent, menuOrder: it.menuOrder, author: it.author, seoTitle: it.seoTitle, seoDescription: it.seoDescription, sourceUrl: it.sourceUrl });
+        rebuilt.addPage({
+          title: it.title,
+          slug: it.slug,
+          content: it.content,
+          excerpt: it.excerpt,
+          date: it.date,
+          parent: it.parent,
+          menuOrder: it.menuOrder,
+          author: it.author,
+          seoTitle: it.seoTitle,
+          seoDescription: it.seoDescription,
+          sourceUrl: it.sourceUrl,
+        });
       } else if (it.type === 'post') {
-        rebuilt.addPost({ title: it.title, slug: it.slug, content: it.content, excerpt: it.excerpt, date: it.date, categories: it.categories, tags: it.tags, featuredMediaId: it.featuredMediaId, author: it.author, seoTitle: it.seoTitle, seoDescription: it.seoDescription, sourceUrl: it.sourceUrl, customTerms: it.customTerms });
+        rebuilt.addPost({
+          title: it.title,
+          slug: it.slug,
+          content: it.content,
+          excerpt: it.excerpt,
+          date: it.date,
+          categories: it.categories,
+          tags: it.tags,
+          featuredMediaId: it.featuredMediaId,
+          author: it.author,
+          seoTitle: it.seoTitle,
+          seoDescription: it.seoDescription,
+          sourceUrl: it.sourceUrl,
+          customTerms: it.customTerms,
+        });
       }
     }
-    for (const r of data.redirects) rebuilt.addRedirect({ from: r.from, to: r.to });
+    for (const r of data.redirects) {
+      rebuilt.addRedirect({
+        from: r.from,
+        to: r.to,
+      });
+    }
 
     const wxr2Path = join(dir, 'rebuilt.wxr');
     rebuilt.serialize(wxr2Path);
@@ -99,12 +163,9 @@ describe('WxrReader → WxrBuilder round-trip fidelity', () => {
     const parsed1 = parser.parse(wxr1);
     const parsed2 = parser.parse(wxr2);
     expect(parsed2).toEqual(parsed1);
+
+    rmSync(dir, { recursive: true, force: true });
   });
 
-  it('preserves custom post meta keys added via future stamping work', () => {
-    // This test is a forward-looking guard. Once Task 2 lands (custom postmeta on
-    // addPage/addPost), we update this test to feed a custom-meta value through and
-    // confirm it round-trips.
-    expect(true).toBe(true);
-  });
+  it.todo('preserves custom post meta keys added via future stamping work');
 });
