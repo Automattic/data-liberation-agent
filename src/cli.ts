@@ -27,6 +27,7 @@ if (args[0] === 'mcp') {
     data-liberation verify <output-dir>  Verify extraction results
     data-liberation setup                Validate WordPress connection
     data-liberation preview <outputDir>  Preview extraction in WordPress Playground
+    data-liberation screenshot <url>   Capture screenshots of every URL
     data-liberation mcp                Start MCP server (stdio transport)
     data-liberation --version          Show version
 
@@ -57,6 +58,18 @@ if (args[0] === 'mcp') {
     --open               Open the preview URL in the default browser
     --port <n>           Override the auto-picked port (9400-9499)
     --non-interactive    Skip the post-preview import nudge
+
+  Screenshot options:
+    --output <dir>         Output directory (default: ./output/<hostname>)
+    --types <list>         Comma-separated: page,post,product,homepage,gallery,event
+    --limit <N>            Cap to first N URLs
+    --concurrency <N>      Parallel captures (default 3, max 10)
+    --browser-restart-every <N>  Close+relaunch browser every N URLs (default 100)
+    --cdp-port <n>         Connect to existing Chrome via CDP
+    --force                Re-capture even if files already exist
+    --urls-file <path>     Read URLs from file (one per line)
+    --non-interactive      Skip preflight prompt
+    --verbose              Per-URL progress
 
   Environment:
     LIBERATION_TOKEN     API token (alternative to --token flag for extraction)
@@ -117,6 +130,44 @@ if (args[0] === 'mcp') {
 
   const { runCliPreview } = await import('./ui/preview.js');
   await runCliPreview({ outputDir, open, port, nonInteractive });
+
+} else if (args[0] === 'screenshot') {
+  const url = args[1];
+  if (!url || url.startsWith('-')) {
+    console.error('Error: URL required. Usage: data-liberation screenshot <url> [options]');
+    process.exit(1);
+  }
+  let output: string;
+  const outputArg = getArg('--output');
+  if (outputArg) {
+    output = outputArg;
+  } else {
+    try {
+      output = `./output/${new URL(url).hostname}`;
+    } catch {
+      console.error(`Error: invalid URL: ${url}`);
+      process.exit(1);
+    }
+  }
+  const typesArg = getArg('--types');
+  const types = typesArg ? typesArg.split(',').map((t) => t.trim()) : undefined;
+  const limitArg = getArg('--limit');
+  const limit = limitArg ? Number(limitArg) : undefined;
+  const concurrencyArg = getArg('--concurrency');
+  const concurrency = concurrencyArg ? Number(concurrencyArg) : undefined;
+  const restartArg = getArg('--browser-restart-every');
+  const browserRestartEvery = restartArg ? Number(restartArg) : undefined;
+  const cdpPortArg = getArg('--cdp-port');
+  const cdpPort = cdpPortArg ? Number(cdpPortArg) : undefined;
+  const force = args.includes('--force');
+  const verbose = args.includes('--verbose');
+  const urlsFile = getArg('--urls-file');
+  const nonInteractive = args.includes('--non-interactive') || !process.stdout.isTTY;
+
+  const { runScreenshotCli } = await import('./ui/screenshot-runner.js');
+  await runScreenshotCli({
+    url, output: output!, types, limit, concurrency, browserRestartEvery, cdpPort, force, verbose, urlsFile, nonInteractive,
+  });
 
 } else if (args[0] === 'import') {
   const wxrFile = args[1];
