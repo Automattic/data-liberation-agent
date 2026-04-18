@@ -89,6 +89,11 @@ export class ManifestQueue {
     return p;
   }
 
+  /** Lookup an existing entry by URL (used to reuse slug on resume). */
+  getEntry(url: string): ManifestEntry | undefined {
+    return this.manifest.entries[url];
+  }
+
   /** Claim a slug through the serialization chain. */
   claimSlug(base: string): Promise<string> {
     let result: string = base;
