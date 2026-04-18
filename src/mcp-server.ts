@@ -101,6 +101,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           dryRun: { type: 'boolean', description: 'Extract 2-3 pages and report without writing WXR' },
           limit: { type: 'number', description: 'Cap extraction to the first N URLs and write a real WXR for them' },
           verbose: { type: 'boolean', description: 'Enable detailed per-page logging' },
+          screenshots: { type: 'boolean', description: 'After extract completes, capture screenshots (desktop + mobile) for every processed URL and stamp screenshot paths onto WXR/CSV via postmeta' },
         },
         required: ['url', 'outputDir'],
       },
@@ -378,6 +379,26 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           wxr.serialize(wxrPath);
         }
 
+        // --- Optional screenshot + Tier 2 stamping ---
+        let screenshotResult: import('./lib/screenshot/types.js').ScreenshotResult | undefined;
+        if (typedArgs.screenshots && !typedArgs.dryRun) {
+          const { ImportSession } = await import('./lib/extraction/import-session.js');
+          const session = ImportSession.loadOrCreate(outputDir, detection.platform, opts, { resume: !!typedArgs.resume });
+          session.setStage('screenshotting');
+          const processedUrls = Array.from(log.getProcessedUrls());
+          const { captureScreenshots } = await import('./lib/screenshot/screenshotter.js');
+          screenshotResult = await captureScreenshots({
+            urls: processedUrls,
+            outputDir,
+            primaryUrl: typedArgs.url as string,
+            server,
+          });
+          session.setStage('stamping-metadata');
+          const { stampJoinMetadata } = await import('./lib/screenshot/stamp-join-metadata.js');
+          await stampJoinMetadata({ outputDir });
+          session.setStage('finalizing');
+        }
+
         const summary = log.getSummary();
         const validation = typedArgs.dryRun ? { valid: true, warnings: [] } : wxr.validate();
 
@@ -411,6 +432,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           })),
           wxrValidation: validation,
           dryRun: !!typedArgs.dryRun,
+          ...(screenshotResult ? { screenshots: screenshotResult } : {}),
         });
       } finally {
         log.releaseLock();
