@@ -199,17 +199,12 @@ async function capturePerViewport(args: CapturePerViewportArgs): Promise<void> {
         // state to capture. Skip silently (not a failure).
       } else {
         await page.evaluate((y: number) => window.scrollTo(0, y), scrollY);
+        // Plain viewport-sized screenshot of the now-scrolled page.
+        // fullPage:false captures the current viewport — no clip needed.
+        // (A clip would have to be inside the 0..viewport.height image, not at
+        // the page's absolute scroll position.)
         const buf = await withScreenshotTimeout(
-          page.screenshot({
-            fullPage: false,
-            type: 'png',
-            clip: {
-              x: 0,
-              y: scrollY,
-              width: viewport.width,
-              height: viewport.height,
-            },
-          }),
+          page.screenshot({ fullPage: false, type: 'png' }),
           screenshotTimeoutMs,
         );
         mkdirSync(dirname(plan.paths.scrolled), { recursive: true });
@@ -280,7 +275,13 @@ export async function captureScreenshots(opts: ScreenshotOpts): Promise<Screensh
   }
 
   // --- same-origin ---------------------------------------------------------
-  enforceSameOrigin(opts.primaryUrl ?? null, urls);
+  // Normalize `primaryUrl` to include a protocol — callers sometimes pass
+  // the bare hostname the user typed (e.g. `maus.com`), matching the
+  // forgiving convention in fetchSitemap.
+  const primaryRef = opts.primaryUrl
+    ? (opts.primaryUrl.includes('://') ? opts.primaryUrl : `https://${opts.primaryUrl}`)
+    : null;
+  enforceSameOrigin(primaryRef, urls);
 
   // --- output layout -------------------------------------------------------
   mkdirSync(join(opts.outputDir, 'screenshots', 'desktop'), { recursive: true });
@@ -332,6 +333,15 @@ export async function captureScreenshots(opts: ScreenshotOpts): Promise<Screensh
           viewport: { width: viewport.width, height: viewport.height },
           ignoreHTTPSErrors: true,
         });
+        // tsx/esbuild's keepNames transform wraps named const arrows with
+        // `__name(fn, 'name')` calls; that helper doesn't exist in the browser
+        // context. Polyfill as a no-op so our evaluate() closures can run.
+        // String-form init script bypasses tsx transformation entirely.
+        await context.addInitScript(`
+          if (typeof globalThis.__name === 'undefined') {
+            globalThis.__name = function (fn) { return fn; };
+          }
+        `);
         const page = await context.newPage();
         await capturePerViewport({
           page,
