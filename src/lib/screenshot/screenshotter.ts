@@ -256,7 +256,7 @@ export async function captureScreenshots(opts: ScreenshotOpts): Promise<Screensh
   validateOutputDir(opts.outputDir);
 
   const viewports = opts.viewports ?? DEFAULT_VIEWPORTS;
-  const rawConcurrency = opts.concurrency ?? 3;
+  const rawConcurrency = opts.concurrency ?? 6;
   const concurrency = Math.max(1, Math.min(10, rawConcurrency));
   const browserRestartEvery = opts.browserRestartEvery ?? 100;
   const screenshotTimeoutMs = opts.screenshotTimeoutMs ?? 30_000;

@@ -37,10 +37,11 @@ Standalone:
 data-liberation screenshot https://example.com --output ./output/example.com
 ```
 
-As part of extract — automatically joins screenshot paths onto WXR/CSV via postmeta:
+Screenshots run automatically at the end of `data-liberation <url>` extracts — their paths are stamped onto WXR pages/posts as `_liberation_*` postmeta and onto products as `meta:_liberation_*` CSV columns. Pass `--no-screenshots` to skip them:
 
 ```bash
-data-liberation https://example.com --output ./output/example.com --screenshots
+data-liberation https://example.com --output ./output/example.com
+data-liberation https://example.com --output ./output/example.com --no-screenshots   # skip
 ```
 
 Output lives at `output/<site>/screenshots/{desktop,mobile}/<slug>.png` (fullpage + `.scrolled.png` variants) and `output/<site>/html/<slug>.html`. See `output/<site>/screenshots/manifest.json` for the URL → files join table.
@@ -48,7 +49,7 @@ Output lives at `output/<site>/screenshots/{desktop,mobile}/<slug>.png` (fullpag
 Options:
 - `--limit N` — cap to first N URLs
 - `--types page,post,product` — filter by URL type
-- `--concurrency N` — parallel captures (default 3, max 10)
+- `--concurrency N` — parallel captures (default 6, max 10)
 - `--browser-restart-every N` — restart Chromium every N URLs (default 100)
 - `--cdp-port <n>` — connect to existing Chrome session (for authenticated sites)
 - `--force` — re-capture even if output files already exist

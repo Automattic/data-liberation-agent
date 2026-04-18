@@ -17,7 +17,7 @@ export interface ScreenshotOpts {
   outputDir: string;
   primaryUrl?: string;               // reference for same-origin enforcement
   viewports?: Viewport[];
-  concurrency?: number;              // default: 3
+  concurrency?: number;              // default: 6
   browserRestartEvery?: number;      // default: 100
   cdpPort?: number;
   force?: boolean;
