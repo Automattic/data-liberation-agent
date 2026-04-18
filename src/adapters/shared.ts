@@ -116,6 +116,26 @@ export async function getPlaywright(): Promise<typeof import('playwright')> {
   }
 }
 
+type PwBrowserRaw = Awaited<ReturnType<(typeof import('playwright'))['chromium']['launch']>>;
+
+export interface ConnectBrowserOpts {
+  cdpPort?: number;
+  headed?: boolean;
+}
+
+/**
+ * Open a Playwright browser — CDP if cdpPort is set, otherwise a fresh headless
+ * Chromium. Caller owns context/page creation and cleanup. Use launchBrowser()
+ * instead if you just want a page to scrape one-off.
+ */
+export async function connectBrowser(opts: ConnectBrowserOpts): Promise<PwBrowserRaw> {
+  const pw = await getPlaywright();
+  if (opts.cdpPort) {
+    return await pw.chromium.connectOverCDP(`http://127.0.0.1:${opts.cdpPort}`);
+  }
+  return await pw.chromium.launch({ headless: !opts.headed });
+}
+
 export async function launchBrowser(opts: { cdpPort?: number; headed?: boolean }): Promise<{
   browser: PwBrowser;
   page: unknown;
