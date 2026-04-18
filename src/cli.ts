@@ -43,6 +43,8 @@ if (args[0] === 'mcp') {
     --admin-token <tok>  Shopify Admin API token — enables richer product extraction
                          via GraphQL (compareAtPrice, unitCost, inventoryPolicy, etc.)
     --shop-domain <host> Shopify myshopify.com hostname — usually auto-detected
+    --screenshots        Capture screenshots of every extracted URL after extract completes
+                         (stamps screenshot paths onto WXR/CSV postmeta)
 
   Import options:
     --site <domain>       WordPress site domain
@@ -221,7 +223,8 @@ if (args[0] === 'mcp') {
   const adminToken = getArg('--admin-token') || process.env.SHOPIFY_ADMIN_TOKEN || null;
   const shopDomain = getArg('--shop-domain') || null;
   const nonInteractive = args.includes('--non-interactive');
+  const screenshots = args.includes('--screenshots');
 
   const { runDiscover } = await import('./ui/discover.js');
-  runDiscover(url, { outputDir, dryRun, resume, verbose, delay, limit, token, cdpPort, adminToken, shopDomain, nonInteractive });
+  runDiscover(url, { outputDir, dryRun, resume, verbose, delay, limit, token, cdpPort, adminToken, shopDomain, nonInteractive, screenshots });
 }

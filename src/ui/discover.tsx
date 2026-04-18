@@ -51,6 +51,8 @@ export interface LiberateProps {
   nonInteractive: boolean;
   /** Cap extraction at the first N URLs (writes a real WXR for those N). */
   limit: number | null;
+  /** Capture screenshots post-extract and stamp into WXR/CSV postmeta. */
+  screenshots: boolean;
 }
 
 type Phase =
@@ -58,8 +60,16 @@ type Phase =
   | 'discovering'
   | 'discovered'
   | 'extracting'
+  | 'screenshotting'
+  | 'stamping'
   | 'done'
   | 'error';
+
+interface ScreenshotSummary {
+  captured: number;
+  skipped: number;
+  failed: number;
+}
 
 interface ExtractionProgress {
   current: number;
@@ -84,7 +94,7 @@ function findAdapter(platform: string) {
 
 
 function Liberate(props: LiberateProps & { onComplete?: (wxrPath: string | null) => void }) {
-  const { url, outputDir, dryRun, resume, delay, verbose, token, cdpPort, adminToken, shopDomain, limit, onComplete } = props;
+  const { url, outputDir, dryRun, resume, delay, verbose, token, cdpPort, adminToken, shopDomain, limit, screenshots, onComplete } = props;
   const app = useApp();
   const [phase, setPhase] = useState<Phase>('detecting');
   const [detection, setDetection] = useState<FullDetectionResult | null>(null);
@@ -94,6 +104,7 @@ function Liberate(props: LiberateProps & { onComplete?: (wxrPath: string | null)
   const [result, setResult] = useState<ExtractionResult | null>(null);
   const [actualOutputDir, setActualOutputDir] = useState<string>(outputDir);
   const [error, setError] = useState<string>('');
+  const [screenshotSummary, setScreenshotSummary] = useState<ScreenshotSummary | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -227,6 +238,31 @@ function Liberate(props: LiberateProps & { onComplete?: (wxrPath: string | null)
             wxr.serialize(wxrPath);
           }
 
+          // Optional screenshot + Tier 2 stamping — mirrors the MCP path.
+          if (screenshots && !dryRun) {
+            const { ImportSession } = await import('../lib/extraction/import-session.js');
+            const session = ImportSession.loadOrCreate(siteDir, det.platform, opts, { resume });
+            session.setStage('screenshotting');
+            setPhase('screenshotting');
+            const processedUrls = Array.from(log.getProcessedUrls());
+            const { captureScreenshots } = await import('../lib/screenshot/screenshotter.js');
+            const shotResult = await captureScreenshots({
+              urls: processedUrls,
+              outputDir: siteDir,
+              primaryUrl: url,
+            });
+            setScreenshotSummary({
+              captured: shotResult.captured,
+              skipped: shotResult.skipped,
+              failed: shotResult.failed,
+            });
+            session.setStage('stamping-metadata');
+            setPhase('stamping');
+            const { stampJoinMetadata } = await import('../lib/screenshot/stamp-join-metadata.js');
+            await stampJoinMetadata({ outputDir: siteDir });
+            session.setStage('finalizing');
+          }
+
           const summary = log.getSummary();
           if (!dryRun) {
             writeFileSync(join(siteDir, '.discovery-complete'), new Date().toISOString(), 'utf8');
@@ -344,6 +380,22 @@ function Liberate(props: LiberateProps & { onComplete?: (wxrPath: string | null)
         </Box>
       )}
 
+      {/* Screenshotting */}
+      {phase === 'screenshotting' && (
+        <Box marginTop={1}>
+          <Text color="yellow"><Spinner type="dots" /></Text>
+          <Text> Capturing screenshots...</Text>
+        </Box>
+      )}
+
+      {/* Stamping metadata */}
+      {phase === 'stamping' && (
+        <Box marginTop={1}>
+          <Text color="yellow"><Spinner type="dots" /></Text>
+          <Text> Stamping screenshot metadata...</Text>
+        </Box>
+      )}
+
       {/* Results */}
       {phase === 'done' && result && (
         <Box flexDirection="column" marginTop={1}>
@@ -362,6 +414,20 @@ function Liberate(props: LiberateProps & { onComplete?: (wxrPath: string | null)
               <Text color="red"><Text dimColor>{String(result.failed).padStart(4)} </Text>failed</Text>
             )}
           </Box>
+          {screenshotSummary && (
+            <Box marginTop={1}>
+              <Text color="green">✓</Text>
+              <Text> Screenshots: </Text>
+              <Text bold>{screenshotSummary.captured}</Text>
+              <Text dimColor> captured</Text>
+              {screenshotSummary.skipped > 0 && (
+                <Text dimColor>, {screenshotSummary.skipped} skipped</Text>
+              )}
+              {screenshotSummary.failed > 0 && (
+                <Text color="red">, {screenshotSummary.failed} failed</Text>
+              )}
+            </Box>
+          )}
           {result.wxrPath && (
             <Box marginTop={1}>
               <Text dimColor>WXR: {result.wxrPath}</Text>
@@ -426,6 +492,7 @@ export function runDiscover(url: string, opts: Partial<LiberateProps> = {}): voi
     shopDomain: opts.shopDomain || null,
     nonInteractive: opts.nonInteractive || false,
     limit: opts.limit ?? null,
+    screenshots: opts.screenshots || false,
   };
   const { waitUntilExit } = render(
     <Liberate {...props} onComplete={(path) => { wxrPath = path; }} />,
