@@ -37,6 +37,7 @@ After extraction completes, the CLI prompts:
 | `--admin-token <tok>` | **Shopify only** — Admin API access token. Unlocks GraphQL product extraction with richer fields (sale pricing, stock policy, cost of goods, variant media, collections, SEO metafields). Falls back to public JSON API on failure. | `SHOPIFY_ADMIN_TOKEN` env var |
 | `--shop-domain <host>` | **Shopify only** — `*.myshopify.com` hostname used for Admin API calls. Usually auto-detected from the storefront HTML during discovery; only pass manually if detection fails. | auto-detected |
 | `--non-interactive` | Skip the post-extraction import prompt | off |
+| `--screenshots` | After extraction, capture desktop + mobile screenshots (fullpage and scrolled-state) plus rendered HTML for every URL, and stamp the paths onto WXR pages/posts as `_liberation_*` postmeta and onto products as `meta:_liberation_*` CSV columns. See the `screenshot` subcommand below for the underlying flags. | off |
 
 **Output directory structure:**
 
@@ -218,3 +219,64 @@ Auto-runs after every `liberate <url>` extraction; the standalone
 - `.lock` — lockfile while start/stop is in flight.
 
 **Lifecycle:** Foreground blocking in CLI mode. Ctrl+C stops Playground and prints an import-command nudge. A second `preview` invocation on the same outputDir stops the prior process before starting.
+
+### screenshot
+
+```bash
+data-liberation screenshot <url> [options]
+```
+
+Capture full-page + scrolled-state screenshots (desktop 1440×900 + mobile 390×844) plus rendered HTML for every URL on a site. Runs independently from extraction — useful for pre-liberation analysis or downstream design-system synthesis. Also produces a site-analysis file (palette, typography, metadata) sampled from representative pages.
+
+**Options:**
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--output <dir>` | Output directory | `./output/<hostname>` |
+| `--types <list>` | Comma-separated URL types to capture: `page`, `post`, `product`, `homepage`, `gallery`, `event` | all |
+| `--limit <N>` | Cap to first N URLs | no cap |
+| `--concurrency <N>` | Parallel captures | 3 (max 10) |
+| `--browser-restart-every <N>` | Close + relaunch the browser every N URLs (memory bound) | 100 |
+| `--cdp-port <n>` | Connect to an existing Chrome session via CDP — use for authenticated sites | none |
+| `--force` | Re-capture even if output files already exist | off |
+| `--urls-file <path>` | Read URLs from a file (one per line), bypassing sitemap discovery | none |
+| `--non-interactive` | Skip the >500-URL preflight confirmation prompt | off |
+| `--verbose` | Per-URL progress logging | off |
+
+**Output layout:**
+
+```
+output/<site-hostname>/
+  screenshots/
+    manifest.json                       URL → files join table
+    desktop/
+      <slug>.png                        full-page desktop capture
+      <slug>.scrolled.png               post-scroll viewport capture (long pages only)
+    mobile/
+      <slug>.png                        full-page mobile capture
+      <slug>.scrolled.png               post-scroll viewport capture (long pages only)
+  html/
+    <slug>.html                         rendered HTML (post-hydration)
+  site-analysis.json                    palette + typography + metadata summary
+```
+
+Scrolled-state screenshots are silently skipped on short pages (where `scrollHeight < viewport.height * 2.5`).
+
+Same-origin enforcement: every URL must share origin with the `url` argument (or with the first entry of `--urls-file` if no bare URL is given). Mismatches throw `SameOriginViolation` and halt the run.
+
+**Preflight:** For sites with >500 URLs and no `--limit`, the CLI prints an estimated time + disk usage and prompts `Continue? [y/N]`. Skip with `--non-interactive`, or set `--limit N` to sidestep the prompt entirely.
+
+**Example — authenticated Webflow site via CDP:**
+
+```bash
+# 1. Launch Chrome with CDP and log in:
+google-chrome --remote-debugging-port=9222
+# 2. Capture:
+data-liberation screenshot https://staging.example.com --cdp-port 9222 --types page,post --concurrency 5
+```
+
+### `--screenshots` (on the default extract command)
+
+Passing `--screenshots` to `data-liberation <url>` runs screenshot capture automatically after the extraction phase finishes. Captured file paths are then stamped onto the WXR as `_liberation_screenshot_desktop`, `_liberation_screenshot_mobile`, `_liberation_screenshot_desktop_scrolled`, `_liberation_screenshot_mobile_scrolled`, and `_liberation_html` postmeta (pages/posts), and onto `products.csv` as matching `meta:_liberation_*` columns (products).
+
+This adds two `ImportSession` stages — `screenshotting` and `stamping-metadata` — after the normal extraction pipeline. Both stages are resumable via `--resume`. The stamping step rewrites `output.wxr` and `products.jsonl` via tmp + atomic rename and is idempotent across re-runs.

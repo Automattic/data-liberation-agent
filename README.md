@@ -27,6 +27,33 @@ This tool extracts all content from closed platforms — posts, pages, media, na
 
 All eight platforms have MCP adapters with full extraction support including products (exported as WooCommerce-compatible CSV). GoDaddy Websites & Marketing is pages + blog only in v1; GoDaddy Online Store (OLS) product support is planned for v1.1.
 
+## Screenshots
+
+Capture full-page + scrolled-state screenshots (desktop 1440×900 + mobile 390×844) plus rendered HTML and site-analysis metadata (palette, typography) for every URL on a site. Useful for pre-liberation analysis and feeding AI design-system tools.
+
+Standalone:
+
+```bash
+data-liberation screenshot https://example.com --output ./output/example.com
+```
+
+As part of extract — automatically joins screenshot paths onto WXR/CSV via postmeta:
+
+```bash
+data-liberation https://example.com --output ./output/example.com --screenshots
+```
+
+Output lives at `output/<site>/screenshots/{desktop,mobile}/<slug>.png` (fullpage + `.scrolled.png` variants) and `output/<site>/html/<slug>.html`. See `output/<site>/screenshots/manifest.json` for the URL → files join table.
+
+Options:
+- `--limit N` — cap to first N URLs
+- `--types page,post,product` — filter by URL type
+- `--concurrency N` — parallel captures (default 3, max 10)
+- `--browser-restart-every N` — restart Chromium every N URLs (default 100)
+- `--cdp-port <n>` — connect to existing Chrome session (for authenticated sites)
+- `--force` — re-capture even if output files already exist
+- `--urls-file <path>` — read URLs from a file instead of fetching the sitemap
+
 ## AI tool integration
 
 ### Claude Code
