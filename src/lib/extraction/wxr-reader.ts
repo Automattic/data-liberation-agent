@@ -199,6 +199,31 @@ function getPostmeta(item: Record<string, unknown>): Map<string, string> {
   return map;
 }
 
+/**
+ * Postmeta keys that WxrBuilder emits via dedicated PageItem/PostItem fields.
+ * Anything outside this set is surfaced as customPostmeta for round-trip fidelity.
+ */
+const KNOWN_POSTMETA_KEYS = new Set([
+  '_thumbnail_id',
+  '_seo_title',
+  '_seo_description',
+  '_source_url',
+  '_menu_item_url',
+  '_menu_item_type',
+  '_menu_slug',
+  '_wp_attachment_image_alt',
+]);
+
+function getCustomPostmeta(meta: Map<string, string>): Record<string, string> {
+  const custom: Record<string, string> = {};
+  for (const [key, value] of meta) {
+    if (!KNOWN_POSTMETA_KEYS.has(key)) {
+      custom[key] = value;
+    }
+  }
+  return custom;
+}
+
 function getItemCategories(item: Record<string, unknown>): {
   categories: string[];
   tags: string[];
@@ -256,6 +281,7 @@ function parsePageItem(item: Record<string, unknown>): PageItem {
     seoTitle: meta.get('_seo_title') || '',
     seoDescription: meta.get('_seo_description') || '',
     sourceUrl: meta.get('_source_url') || '',
+    customPostmeta: getCustomPostmeta(meta),
   };
 }
 
@@ -280,6 +306,7 @@ function parsePostItem(item: Record<string, unknown>): PostItem {
     seoDescription: meta.get('_seo_description') || '',
     sourceUrl: meta.get('_source_url') || '',
     customTerms,
+    customPostmeta: getCustomPostmeta(meta),
   };
 }
 

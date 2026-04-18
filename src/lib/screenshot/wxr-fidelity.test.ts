@@ -167,5 +167,30 @@ describe('WxrReader → WxrBuilder round-trip fidelity', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it.todo('preserves custom post meta keys added via future stamping work');
+  it('round-trips pages/posts with customPostmeta', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'wxr-custom-meta-'));
+    const b = new WxrBuilder({ title: 'x', url: 'https://x.example', description: '', language: 'en-US' });
+    b.addPage({
+      title: 'About', slug: 'about',
+      sourceUrl: 'https://x.example/about/',
+      customPostmeta: {
+        '_liberation_screenshot_desktop': 'screenshots/desktop/about.png',
+        '_liberation_html': 'html/about.html',
+      },
+    });
+    const p = join(dir, 'out.wxr');
+    b.serialize(p);
+    const xml = readFileSync(p, 'utf8');
+    expect(xml).toContain('_liberation_screenshot_desktop');
+    expect(xml).toContain('screenshots/desktop/about.png');
+    expect(xml).toContain('_liberation_html');
+
+    // Also: read back and assert customPostmeta populated
+    const data = readWxr(p);
+    const page = data.items.find((i) => i.type === 'page');
+    expect(page?.customPostmeta?._liberation_screenshot_desktop).toBe('screenshots/desktop/about.png');
+    expect(page?.customPostmeta?._liberation_html).toBe('html/about.html');
+
+    rmSync(dir, { recursive: true, force: true });
+  });
 });
