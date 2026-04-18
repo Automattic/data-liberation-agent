@@ -525,6 +525,7 @@ function extractWixProduct(pageData: PageData): WooProduct | null {
         inStock: typeof availability === 'string'
           ? (availability as string).includes('InStock')
           : true,
+        sourceUrl: pageData.sourceUrl,
       };
     }
   }
@@ -553,6 +554,7 @@ function extractWixProduct(pageData: PageData): WooProduct | null {
         inStock: (product.stock as Record<string, unknown> | undefined)?.inventoryStatus
           ? (product.stock as Record<string, unknown>).inventoryStatus !== 'OUT_OF_STOCK'
           : undefined,
+        sourceUrl: pageData.sourceUrl,
       };
     }
   }

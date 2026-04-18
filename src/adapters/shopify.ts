@@ -171,8 +171,15 @@ export function normalizeWeightToKg(weight: number | undefined, unit: string | u
 
 /**
  * Convert a Shopify product JSON payload into a WooProduct parent + variation rows.
+ *
+ * `sourceUrl` is stamped on the parent so the import pipeline can link the
+ * WooCommerce product back to its Shopify storefront URL. Variations inherit
+ * the parent's page on the storefront, so they don't get their own sourceUrl.
  */
-export function shopifyProductToWoo(product: ShopifyProductJson): { parent: WooProduct; variations: WooProduct[] } {
+export function shopifyProductToWoo(
+  product: ShopifyProductJson,
+  sourceUrl?: string,
+): { parent: WooProduct; variations: WooProduct[] } {
   const variants = product.variants || [];
   const options = product.options || [];
 
@@ -227,6 +234,7 @@ export function shopifyProductToWoo(product: ShopifyProductJson): { parent: WooP
     images,
     inStock: firstVariant?.available !== false,
     stock: firstVariant?.inventory_quantity != null ? firstVariant.inventory_quantity : undefined,
+    sourceUrl,
   };
 
   if (options.length > 0) {
@@ -328,6 +336,7 @@ type ShopifyGqlVariantLike = {
  */
 export function shopifyGraphqlProductToWoo(
   product: ShopifyGqlProduct,
+  sourceUrl?: string,
 ): { parent: WooProduct; variations: WooProduct[] } {
   const variantEdges = product.variants?.edges || [];
   const variants = variantEdges.map((e) => e.node);
@@ -408,6 +417,7 @@ export function shopifyGraphqlProductToWoo(
     images,
     inStock: firstStock.inStock,
     stock: firstStock.stock,
+    sourceUrl,
   };
 
   // SEO: prefer product.seo, fall back to global metafields for title/description.
@@ -504,7 +514,7 @@ export function shopifyGraphqlProductToWoo(
 /**
  * Extract product data from page HTML via JSON-LD or embedded product JSON.
  */
-function extractProductFromHtml(html: string): WooProduct | null {
+function extractProductFromHtml(html: string, sourceUrl: string): WooProduct | null {
   // Try JSON-LD Product schema
   const ldMatches = html.match(/<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi) || [];
   for (const block of ldMatches) {
@@ -529,6 +539,7 @@ function extractProductFromHtml(html: string): WooProduct | null {
           sku: ld.sku || '',
           images,
           inStock: offers[0]?.availability?.includes('InStock') ?? true,
+          sourceUrl,
         };
       }
     } catch {
@@ -542,7 +553,7 @@ function extractProductFromHtml(html: string): WooProduct | null {
     try {
       const pData = JSON.parse(productJsonMatch[1]);
       if (pData.title) {
-        return shopifyProductToWoo(pData as ShopifyProductJson).parent;
+        return shopifyProductToWoo(pData as ShopifyProductJson, sourceUrl).parent;
       }
     } catch {
       // invalid JSON
@@ -998,6 +1009,19 @@ export const shopifyAdapter: PlatformAdapter = {
       const emittedHandles: string[] = session?.getCursor<string[]>('shopify:products:emittedHandles') ?? [];
       for (const h of emittedHandles) graphqlProductHandles.add(h);
 
+      // Compute the storefront origin for sourceUrl on emitted products.
+      // Prefer inv.siteUrl (user-facing, possibly a custom domain) so the
+      // stamped URL matches what the JSON-API URL-loop path would emit.
+      // Fall back to the admin myshopify.com host if parsing fails.
+      let storefrontOrigin: string;
+      try {
+        storefrontOrigin = new URL(
+          inv.siteUrl.includes('://') ? inv.siteUrl : `https://${inv.siteUrl}`
+        ).origin;
+      } catch {
+        storefrontOrigin = `https://${shopDomain}`;
+      }
+
       try {
         const client = new ShopifyGraphqlClient({ shopDomain, accessToken: shopifyOpts.adminToken });
         await fetchAllProducts(client, {
@@ -1005,7 +1029,10 @@ export const shopifyAdapter: PlatformAdapter = {
           onBatch: (batch: ShopifyGqlProduct[]) => {
             for (const node of batch) {
               if (node.handle && graphqlProductHandles.has(node.handle)) continue;
-              const { parent, variations } = shopifyGraphqlProductToWoo(node);
+              const productSourceUrl = node.handle
+                ? `${storefrontOrigin}/products/${node.handle}`
+                : undefined;
+              const { parent, variations } = shopifyGraphqlProductToWoo(node, productSourceUrl);
               csvBuilder.addProduct(parent);
               for (const v of variations) csvBuilder.addProduct(v);
               hasProducts = true;
@@ -1107,7 +1134,7 @@ export const shopifyAdapter: PlatformAdapter = {
             if (product?.title) {
               // Product JSON found — add to CSV builder for WooCommerce export
               detectedType = 'product';
-              const { parent, variations } = shopifyProductToWoo(product);
+              const { parent, variations } = shopifyProductToWoo(product, url);
               csvBuilder.addProduct(parent);
               for (const variation of variations) {
                 csvBuilder.addProduct(variation);
@@ -1204,7 +1231,7 @@ export const shopifyAdapter: PlatformAdapter = {
             // Try to extract product data from HTML structured data (JSON-LD, microdata)
             // Skip if we already handled the product via JSON API
             if (!productHandled) {
-              const wooProduct = extractProductFromHtml(html);
+              const wooProduct = extractProductFromHtml(html, url);
               if (wooProduct) {
                 detectedType = 'product';
                 csvBuilder.addProduct(wooProduct);
