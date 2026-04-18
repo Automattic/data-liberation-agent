@@ -4,7 +4,6 @@ export interface PreviewPidRecord {
   pid: number;
   port: number;
   startedAt: string;
-  instanceId: string;
 }
 
 export interface StartPreviewOpts {

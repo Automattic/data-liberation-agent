@@ -1,12 +1,10 @@
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type { PreviewPidRecord } from './types.js';
-import { openSync } from 'node:fs';
+import { closeSync, openSync } from 'node:fs';
 import { spawn } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
 import { acquireLock } from './lockfile.js';
 import { pickFreePort, DEFAULT_PORT_RANGE } from './port-picker.js';
-import { verifyInstance } from './instance-verify.js';
 import { persistBlueprint, VFS_MOUNT_DIR, IMPORT_COMPLETE_MARKER } from './blueprint-builder.js';
 import { isStudioAvailable, startStudioPreview } from './studio.js';
 import type { PreviewPhase, StartPreviewOpts, StartPreviewResult } from './types.js';
@@ -48,8 +46,7 @@ export function readPidFile(outputDir: string): PreviewPidRecord | null {
     if (
       typeof parsed.pid !== 'number' ||
       typeof parsed.port !== 'number' ||
-      typeof parsed.startedAt !== 'string' ||
-      typeof parsed.instanceId !== 'string'
+      typeof parsed.startedAt !== 'string'
     ) {
       try { unlinkSync(p); } catch { /* already gone */ }
       return null;
@@ -88,11 +85,9 @@ const READY_TIMEOUT_MS = 60_000;
 const PROBE_INTERVAL_MS = 500;
 
 type ProbeFn = (port: number) => Promise<boolean>;
-type VerifyFn = (port: number, instanceId: string) => Promise<boolean>;
 
 interface InternalOpts extends StartPreviewOpts {
   _probeFn?: ProbeFn;
-  _verifyFn?: VerifyFn;
   _spawn?: typeof spawn;
   _isPidAlive?: (pid: number) => boolean;
   _noStudio?: boolean;
@@ -140,7 +135,6 @@ function validateOutputDir(outputDir: string): void {
 }
 
 export async function startPreview(opts: InternalOpts): Promise<StartPreviewResult> {
-  const verifyFn = opts._verifyFn ?? verifyInstance;
   const spawnFn = opts._spawn ?? spawn;
   const onPhase: (p: PreviewPhase) => void = opts.onPhase ?? (() => {});
   const detached = opts.detached ?? false;
@@ -151,26 +145,28 @@ export async function startPreview(opts: InternalOpts): Promise<StartPreviewResu
     return { status: 'failed', error: (err as Error).message };
   }
 
-  // Prefer Studio when its CLI is installed — gives the user a persistent,
-  // real WordPress site instead of an ephemeral WASM Playground. The same
-  // blueprint is used for both paths. `opts._noStudio` lets tests force the
-  // Playground branch without mocking the `studio` binary.
-  if (!opts._noStudio && isStudioAvailable()) {
-    onPhase('download');
-    onPhase('spawn');
-    onPhase('probe');
-    onPhase('import');
-    const result = await startStudioPreview({ outputDir: opts.outputDir });
-    return { ...result, source: 'studio' };
-  }
-
+  // The lockfile serializes both Studio and Playground paths per outputDir.
+  // Two concurrent starts would otherwise race: Studio into same-named site
+  // creation; Playground into conflicting PID files and port picks.
   ensurePlaygroundDir(opts.outputDir);
   const release = await acquireLock(lockFilePath(opts.outputDir), { timeoutMs: 10_000 });
 
   try {
-    await reconcileExistingPid(opts.outputDir, verifyFn, opts._isPidAlive);
+    // Prefer Studio when its CLI is installed — gives the user a persistent,
+    // real WordPress site instead of an ephemeral WASM Playground. The same
+    // blueprint is used for both paths. `opts._noStudio` lets tests force the
+    // Playground branch without mocking the `studio` binary.
+    if (!opts._noStudio && isStudioAvailable()) {
+      onPhase('download');
+      onPhase('spawn');
+      onPhase('probe');
+      onPhase('import');
+      const result = await startStudioPreview({ outputDir: opts.outputDir });
+      return { ...result, source: 'studio' };
+    }
+
+    await reconcileExistingPid(opts.outputDir, opts._isPidAlive);
     const port = opts.port ?? (await pickFreePort(DEFAULT_PORT_RANGE));
-    const instanceId = randomUUID();
     const blueprintPath = persistBlueprint(opts.outputDir);
     const probeFn = opts._probeFn ?? makeCompletionProbe(opts.outputDir);
     clearImportCompleteMarker(opts.outputDir);
@@ -180,7 +176,9 @@ export async function startPreview(opts: InternalOpts): Promise<StartPreviewResu
 
     // Always pipe stdio to preview.log (regardless of detached/foreground). The
     // log-tail probe needs the file, and CLI mode doesn't need Playground's raw
-    // output — the Ink spinner is the UI.
+    // output — the Ink spinner is the UI. The fd is dup'd into the child by
+    // spawn(); close the parent copy so the fd doesn't leak across repeated
+    // preview cycles in a long-running MCP process.
     const logFd = openSync(logFilePath(opts.outputDir), 'w');
     const stdioConfig: any = ['ignore', logFd, logFd];
     const absOutputDir = resolve(opts.outputDir);
@@ -197,18 +195,17 @@ export async function startPreview(opts: InternalOpts): Promise<StartPreviewResu
         `--mount-before-install=${mountArg}`,
       ],
       {
-        env: { ...process.env, DLA_PREVIEW_INSTANCE: instanceId },
         stdio: stdioConfig,
         detached,
       },
     );
+    try { closeSync(logFd); } catch { /* already closed */ }
     if (detached) child.unref();
 
     writePidFile(opts.outputDir, {
       pid: child.pid ?? -1,
       port,
       startedAt: new Date().toISOString(),
-      instanceId,
     });
 
     onPhase('probe');
@@ -220,8 +217,6 @@ export async function startPreview(opts: InternalOpts): Promise<StartPreviewResu
     }
 
     onPhase('import');
-    // Instance verification is best-effort — only proves this *was* our process on this port.
-    await verifyFn(port, instanceId);
 
     const warnings = extractWarnings(logFilePath(opts.outputDir));
     return {
@@ -241,7 +236,6 @@ const STALE_WARN_MS = 24 * 60 * 60 * 1000;
 
 async function reconcileExistingPid(
   outputDir: string,
-  _verifyFn: VerifyFn,
   isAliveFn: ((pid: number) => boolean) | undefined,
 ): Promise<void> {
   const existing = readPidFile(outputDir);
@@ -302,19 +296,33 @@ export async function stopPreview(
   const rec = readPidFile(opts.outputDir);
   if (!rec) return { status: 'not-running' };
 
-  const alive = (opts._isPidAlive ?? isPidAlive)(rec.pid);
+  const aliveFn = opts._isPidAlive ?? isPidAlive;
+  const alive = aliveFn(rec.pid);
   if (!alive) {
     deletePidFile(opts.outputDir);
     return { status: 'stopped' };
   }
 
-  try { process.kill(rec.pid, 'SIGTERM'); } catch { /* already gone */ }
+  // Probe signal-ability: if SIGTERM fails with EPERM, the PID is foreign —
+  // don't spin polling isPidAlive (which returns true for EPERM) waiting for
+  // a signal we can't deliver. Drop the stale/foreign PID file and report.
+  try {
+    process.kill(rec.pid, 'SIGTERM');
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'EPERM') {
+      console.error(`[preview] cannot signal PID ${rec.pid} (EPERM) — leaving process alone, clearing PID file`);
+      deletePidFile(opts.outputDir);
+      return { status: 'stopped' };
+    }
+    // ESRCH etc. — already gone, fall through to cleanup.
+  }
   const killDeadline = Date.now() + 5000;
   while (Date.now() < killDeadline) {
-    if (!(opts._isPidAlive ?? isPidAlive)(rec.pid)) break;
+    if (!aliveFn(rec.pid)) break;
     await new Promise((r) => setTimeout(r, 100));
   }
-  if ((opts._isPidAlive ?? isPidAlive)(rec.pid)) {
+  if (aliveFn(rec.pid)) {
     try { process.kill(rec.pid, 'SIGKILL'); } catch { /* already gone */ }
   }
   deletePidFile(opts.outputDir);

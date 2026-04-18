@@ -432,11 +432,14 @@ export function runDiscover(url: string, opts: Partial<LiberateProps> = {}): voi
   );
   waitUntilExit()
     .then(async () => {
-      if (!wxrPath || props.nonInteractive) return;
+      if (!wxrPath) return;
       // Post-extract: always boot a local site (Studio if installed, else
-      // Playground) so the user can verify content before importing anywhere real.
+      // Playground) so the user can verify content before importing anywhere
+      // real. autoPreview honors nonInteractive internally — it still boots
+      // the site but skips browser/app auto-open so scripts get a URL.
       const outputDir = dirname(wxrPath);
       await autoPreview(outputDir, { nonInteractive: props.nonInteractive });
+      if (props.nonInteractive) return;
       const answer = await ask('\nReady to import to WordPress? (y/N) ');
       if (answer.toLowerCase() !== 'y') {
         console.log('\n  Import to WordPress later with:\n');

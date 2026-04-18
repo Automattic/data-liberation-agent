@@ -79,6 +79,25 @@ async function studioWp(sitePath: string, args: string[]): Promise<string> {
 }
 
 /**
+ * Best-effort cleanup for a Studio site that `startStudioPreview` created but
+ * then failed to finish setting up (staging, wp import, etc.). We'd rather
+ * leak disk than leave half-imported sites cluttering `studio site list`.
+ * `studio site remove` prompts interactively without --yes.
+ */
+async function removeStudioSite(name: string): Promise<void> {
+  try {
+    await execFileAsync('studio', ['site', 'remove', '--name', name, '--yes'], {
+      timeout: 60_000,
+      maxBuffer: 10 * 1024 * 1024,
+    });
+  } catch {
+    // Removal itself failed — log once and give up; the user can clean
+    // manually via `studio site remove`.
+    console.error(`[preview] could not auto-remove orphaned Studio site "${name}"; remove manually with: studio site remove --name ${name} --yes`);
+  }
+}
+
+/**
  * Stage the extraction artifacts inside the Studio site so WP-CLI imports can
  * resolve them as normal uploads (WXR attachment URLs reference these paths).
  */
@@ -169,44 +188,23 @@ export async function startStudioPreview(opts: StartStudioOpts): Promise<StartPr
     };
   }
 
-  let staged: ReturnType<typeof stageArtifacts>;
+  // From here on, the site exists. Any failure should trigger cleanup so
+  // repeated failed runs don't pile up orphaned sites in `studio site list`.
   try {
-    staged = stageArtifacts(opts.outputDir, sitePath);
-  } catch (err) {
-    return {
-      status: 'failed',
-      error: `staging files into Studio site failed: ${(err as Error).message}`,
-    };
-  }
-
-  try {
+    const staged = stageArtifacts(opts.outputDir, sitePath);
     await studioWp(sitePath, ['import', staged.wxrRelPath, '--authors=skip']);
-  } catch (err) {
-    return {
-      status: 'failed',
-      error: `wp import failed in Studio site: ${(err as Error).message}`,
-    };
-  }
 
-  if (hasProducts && staged.productsCsvRelPath) {
-    try {
+    if (hasProducts && staged.productsCsvRelPath) {
       await studioWp(sitePath, [
         'wc', 'product_importer', 'import', staged.productsCsvRelPath,
         '--user=admin',
       ]);
-    } catch (err) {
-      return {
-        status: 'failed',
-        error: `wp wc product_importer failed in Studio site: ${(err as Error).message}`,
-      };
     }
-  }
 
-  try {
     const sites = await listStudioSites();
     const site = sites.find((s) => s.name === name);
     if (!site) {
-      return { status: 'failed', error: `Studio site "${name}" not found after creation` };
+      throw new Error(`Studio site "${name}" not found after creation`);
     }
     return {
       status: 'ready',
@@ -217,9 +215,10 @@ export async function startStudioPreview(opts: StartStudioOpts): Promise<StartPr
       siteName: site.name,
     };
   } catch (err) {
+    await removeStudioSite(name);
     return {
       status: 'failed',
-      error: `studio site list failed: ${(err as Error).message}`,
+      error: `Studio preview setup failed (site removed): ${(err as Error).message}`,
     };
   }
 }

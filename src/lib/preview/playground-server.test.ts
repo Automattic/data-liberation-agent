@@ -26,7 +26,7 @@ afterEach(() => {
 describe('pid file helpers', () => {
   it('writes and reads a valid PID record (and creates the playground/ dir)', () => {
     const dir = mkDir();
-    const rec = { pid: 42, port: 9400, startedAt: '2026-04-16T12:00:00Z', instanceId: 'abc' };
+    const rec = { pid: 42, port: 9400, startedAt: '2026-04-16T12:00:00Z' };
     writePidFile(dir, rec);
     expect(existsSync(pidFilePath(dir))).toBe(true);
     expect(readPidFile(dir)).toEqual(rec);
@@ -92,7 +92,6 @@ describe('startPreview — happy path', () => {
         return fake as any;
       }) as any,
       _probeFn: async () => true,
-      _verifyFn: async () => true,
       _noStudio: true,
     } as any);
 
@@ -118,7 +117,6 @@ describe('startPreview — happy path', () => {
       onPhase: (p: string) => phases.push(p),
       _spawn: (() => fake as any) as any,
       _probeFn: async () => true,
-      _verifyFn: async () => true,
       _noStudio: true,
     } as any);
 
@@ -146,7 +144,6 @@ describe('startPreview — stale/alive PID handling', () => {
       pid: 2_147_483_646,
       port: 9400,
       startedAt: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
-      instanceId: 'old-id',
     });
 
     const fake = makeFakeChild({ pid: 99999 });
@@ -155,7 +152,6 @@ describe('startPreview — stale/alive PID handling', () => {
       outputDir: dir,
       _spawn: (() => fake as any) as any,
       _probeFn: async () => true,
-      _verifyFn: async () => true,
       _noStudio: true,
     } as any);
 
@@ -173,7 +169,6 @@ describe('startPreview — stale/alive PID handling', () => {
       pid: process.pid,
       port: 9401,
       startedAt: new Date().toISOString(),
-      instanceId: 'old-id',
     });
 
     const killSpy = vi.spyOn(process, 'kill').mockImplementation(((_pid: number, sig: string) => {
@@ -192,7 +187,6 @@ describe('startPreview — stale/alive PID handling', () => {
       outputDir: dir,
       _spawn: (() => fake as any) as any,
       _probeFn: async () => true,
-      _verifyFn: async () => true,
       _noStudio: true,
     } as any);
 
@@ -208,12 +202,10 @@ describe('startPreview — stale/alive PID handling', () => {
     writeFileSync(join(dir, 'output.wxr'), '<rss></rss>');
     mkdirSync(join(dir, 'media'));
     ensurePlaygroundDir(dir);
-    const oldId = 'shared-uuid';
     writePidFile(dir, {
       pid: process.pid,
       port: 9402,
       startedAt: new Date().toISOString(),
-      instanceId: oldId,
     });
 
     const killed: Array<[number, string]> = [];
@@ -233,7 +225,6 @@ describe('startPreview — stale/alive PID handling', () => {
       outputDir: dir,
       _spawn: (() => fake as any) as any,
       _probeFn: async () => true,
-      _verifyFn: async (_port: number, id: string) => id === oldId,
       _noStudio: true,
       _isPidAlive: (pid: number) => {
         // First call (reconcile): alive. After SIGTERM: dead.
@@ -255,12 +246,10 @@ describe('startPreview — stale/alive PID handling', () => {
     writeFileSync(join(dir, 'output.wxr'), '<rss></rss>');
     mkdirSync(join(dir, 'media'));
     ensurePlaygroundDir(dir);
-    const oldId = 'stale-uuid';
     writePidFile(dir, {
       pid: process.pid,
       port: 9403,
       startedAt: new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString(),
-      instanceId: oldId,
     });
 
     const warnSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -272,7 +261,6 @@ describe('startPreview — stale/alive PID handling', () => {
       outputDir: dir,
       _spawn: (() => fake as any) as any,
       _probeFn: async () => true,
-      _verifyFn: async () => true,
       _noStudio: true,
       _isPidAlive: (pid: number) => {
         if (pid === process.pid) {
@@ -301,7 +289,7 @@ describe('stopPreview', () => {
     const { stopPreview } = await import('./playground-server.js');
     const dir = mkDir();
     ensurePlaygroundDir(dir);
-    writePidFile(dir, { pid: 2_147_483_646, port: 9400, startedAt: new Date().toISOString(), instanceId: 'x' });
+    writePidFile(dir, { pid: 2_147_483_646, port: 9400, startedAt: new Date().toISOString() });
     deletePidFile(dir);
     const r = await stopPreview({ outputDir: dir });
     expect(r.status).toBe('not-running');
@@ -311,7 +299,7 @@ describe('stopPreview', () => {
     const { stopPreview } = await import('./playground-server.js');
     const dir = mkDir();
     ensurePlaygroundDir(dir);
-    writePidFile(dir, { pid: process.pid, port: 9400, startedAt: new Date().toISOString(), instanceId: 'x' });
+    writePidFile(dir, { pid: process.pid, port: 9400, startedAt: new Date().toISOString() });
 
     const killSpy = vi.spyOn(process, 'kill').mockReturnValue(true as any);
     let aliveCalls = 0;
@@ -357,7 +345,6 @@ describe('warnings tail', () => {
       outputDir: dir,
       _spawn: fakeSpawn as any,
       _probeFn: async () => true,
-      _verifyFn: async () => true,
       _noStudio: true,
     } as any);
 
@@ -389,8 +376,7 @@ describe('startPreview — concurrency', () => {
         outputDir: dir,
         _spawn: fakeSpawn,
         _probeFn: async () => true,
-        _verifyFn: async () => true,
-      _noStudio: true,
+        _noStudio: true,
       } as any),
     );
     const results = await Promise.all(calls);

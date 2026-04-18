@@ -80,10 +80,12 @@ Stdio transport. Exposes 11 tools: `liberate_detect`, `liberate_discover`, `libe
 # 1. Install
 npm install
 
-# 2. Extract a site (works for any supported platform)
+# 2. Extract a site (works for any supported platform). A local preview site
+#    boots automatically after extraction — Automattic Studio if installed,
+#    WordPress Playground otherwise.
 npm run liberate -- https://yoursite.com
 
-# 3. Preview locally in WordPress Playground (optional but recommended)
+# 3. Re-open the preview later (same Studio/Playground selection as above)
 npm run liberate -- preview ./output/yoursite.com --open
 
 # 4. Or just the inspection
@@ -129,12 +131,14 @@ A successful extraction produces in `/output/<site>/`:
 
 ## Troubleshooting the preview
 
-**"No free port in 9400–9499"** — another process is holding the range. Pass `--port <n>` to override, or stop the conflict.
+**Picking between Studio and Playground** — the preview uses [Automattic Studio](https://developer.wordpress.com/studio/) when the `studio` CLI is on PATH (install the app — the CLI ships with it), and falls back to WordPress Playground otherwise. Studio sites are persistent and named after the output directory's domain slug (`example-com`, `example-com-2` on collision). Playground sites are ephemeral per-run.
+
+**"No free port in 9400–9499"** (Playground only) — another process is holding the range. Pass `--port <n>` to override, or stop the conflict.
 
 **"Playground failed to boot"** — the readiness probe didn't see HTTP within 60s. Check `<outputDir>/playground/preview.log` for the subprocess output. Common causes: slow network on first run (WASM download), wrong Node version (requires Node 18+).
 
-**"ECONNREFUSED" when browsing the URL** — the Playground subprocess died after startup. Run `liberate_preview_stop <outputDir>` (or delete `<outputDir>/playground/preview.pid`), then re-run `preview`.
+**"ECONNREFUSED" when browsing the URL** (Playground only) — the Playground subprocess died after startup. Run `liberate_preview_stop <outputDir>` (or delete `<outputDir>/playground/preview.pid`), then re-run `preview`.
 
-**"stale preview running for >24h"** — the tool auto-cleans PID files older than a day. This is informational; it will restart cleanly.
+**"stale preview running for >24h"** (Playground only) — the tool auto-cleans PID files older than a day. This is informational; it will restart cleanly.
 
-**Preview is not a secure environment.** The Playground auto-logs in with `admin`/`password` and binds to `127.0.0.1`. Do not paste secrets into it.
+**Preview is not a secure environment.** Both paths auto-log in as `admin`/`password` and bind to `127.0.0.1` (Playground) or `localhost:<port>` (Studio). Do not paste secrets into it.

@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { acquireLock, LockTimeoutError } from './lockfile.js';
@@ -47,5 +47,34 @@ describe('acquireLock', () => {
       LockTimeoutError,
     );
     release1();
+  });
+
+  it('steals a stale lock whose holder PID is no longer alive', async () => {
+    const dir = mkTempDir();
+    const lockPath = join(dir, '.lock');
+    // Simulate a crashed prior holder: lock file exists with a known-dead PID.
+    writeFileSync(
+      lockPath,
+      JSON.stringify({ pid: 2_147_483_646, startedAt: new Date().toISOString() }),
+    );
+    const release = await acquireLock(lockPath, {
+      timeoutMs: 200,
+      pollMs: 20,
+      isPidAlive: () => false,
+    });
+    expect(existsSync(lockPath)).toBe(true);
+    release();
+  });
+
+  it('does not steal a lock held by a live foreign PID', async () => {
+    const dir = mkTempDir();
+    const lockPath = join(dir, '.lock');
+    writeFileSync(
+      lockPath,
+      JSON.stringify({ pid: 2_147_483_646, startedAt: new Date().toISOString() }),
+    );
+    await expect(
+      acquireLock(lockPath, { timeoutMs: 150, pollMs: 20, isPidAlive: () => true }),
+    ).rejects.toBeInstanceOf(LockTimeoutError);
   });
 });

@@ -167,16 +167,19 @@ Returns: per-stage results (media, categories, tags, pages, posts, comments, men
 
 ### `liberate_preview`
 
-Start a detached WordPress Playground instance that serves a completed extraction.
+Start a local WordPress site serving a completed extraction. Uses
+Automattic Studio (persistent, real WP) when the `studio` CLI is on
+PATH; falls back to a detached WordPress Playground (ephemeral WASM)
+otherwise.
 
 **Arguments:**
 - `outputDir` (string, required) — path to the extraction output directory.
-- `open` (boolean, optional) — open the URL in the default browser after readiness.
-- `port` (number, optional) — override the auto-picked port (9400–9499).
+- `open` (boolean, optional) — focus the Studio app (Studio path) or open the URL in the default browser (Playground path).
+- `port` (number, optional) — Playground-only. Override the auto-picked port (9400–9499). Ignored on the Studio path.
 
-**Returns:** `{ status: "ready" | "failed", url?, pid?, port?, warnings?, error? }`.
+**Returns:** `{ status: "ready" | "failed", url?, pid?, port?, warnings?, error?, source?, siteName? }`. `source` is `"studio"` or `"playground"`. `siteName` is set on the Studio path (e.g. `example-com-2`).
 
-A second call on the same `outputDir` stops the prior preview and starts a new one. Warnings are extracted from `ERROR|WARN|Fatal` lines in `<outputDir>/playground/preview.log`.
+On the Playground path, a second call on the same `outputDir` stops the prior preview and starts a new one. On the Studio path, each call creates a fresh Studio site with a collision-incremented name; old sites persist until you remove them with `studio site remove`. Warnings (Playground only) are extracted from `ERROR|WARN|Fatal` lines in `<outputDir>/playground/preview.log`.
 
 ### `liberate_preview_stop`
 
