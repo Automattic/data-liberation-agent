@@ -53,6 +53,8 @@ export interface LiberateProps {
   limit: number | null;
   /** Capture screenshots post-extract and stamp into WXR/CSV postmeta. */
   screenshots: boolean;
+  /** Concurrency for the screenshot capture loop. Default 3. */
+  screenshotsConcurrency?: number;
 }
 
 type Phase =
@@ -94,7 +96,7 @@ function findAdapter(platform: string) {
 
 
 function Liberate(props: LiberateProps & { onComplete?: (wxrPath: string | null) => void }) {
-  const { url, outputDir, dryRun, resume, delay, verbose, token, cdpPort, adminToken, shopDomain, limit, screenshots, onComplete } = props;
+  const { url, outputDir, dryRun, resume, delay, verbose, token, cdpPort, adminToken, shopDomain, limit, screenshots, screenshotsConcurrency, onComplete } = props;
   const app = useApp();
   const [phase, setPhase] = useState<Phase>('detecting');
   const [detection, setDetection] = useState<FullDetectionResult | null>(null);
@@ -253,6 +255,7 @@ function Liberate(props: LiberateProps & { onComplete?: (wxrPath: string | null)
               urls: processedUrls,
               outputDir: siteDir,
               primaryUrl: url,
+              concurrency: screenshotsConcurrency,
             });
             setScreenshotSummary({
               captured: shotResult.captured,
@@ -496,6 +499,7 @@ export function runDiscover(url: string, opts: Partial<LiberateProps> = {}): voi
     nonInteractive: opts.nonInteractive || false,
     limit: opts.limit ?? null,
     screenshots: opts.screenshots || false,
+    screenshotsConcurrency: opts.screenshotsConcurrency,
   };
   const { waitUntilExit } = render(
     <Liberate {...props} onComplete={(path) => { wxrPath = path; }} />,

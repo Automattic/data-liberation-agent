@@ -43,7 +43,8 @@ if (args[0] === 'mcp') {
     --admin-token <tok>  Shopify Admin API token — enables richer product extraction
                          via GraphQL (compareAtPrice, unitCost, inventoryPolicy, etc.)
     --shop-domain <host> Shopify myshopify.com hostname — usually auto-detected
-    --screenshots        Capture screenshots of every extracted URL after extract completes
+    --screenshots                  Capture screenshots of every extracted URL after extract completes
+    --screenshots-concurrency <N>  Parallel screenshot captures (default 3, max 10)
                          (stamps screenshot paths onto WXR/CSV postmeta)
 
   Import options:
@@ -224,7 +225,9 @@ if (args[0] === 'mcp') {
   const shopDomain = getArg('--shop-domain') || null;
   const nonInteractive = args.includes('--non-interactive');
   const screenshots = args.includes('--screenshots');
+  const rawSsConcurrency = getArg('--screenshots-concurrency') ? parseInt(getArg('--screenshots-concurrency')!, 10) : null;
+  const screenshotsConcurrency = rawSsConcurrency !== null && !Number.isNaN(rawSsConcurrency) ? rawSsConcurrency : undefined;
 
   const { runDiscover } = await import('./ui/discover.js');
-  runDiscover(url, { outputDir, dryRun, resume, verbose, delay, limit, token, cdpPort, adminToken, shopDomain, nonInteractive, screenshots });
+  runDiscover(url, { outputDir, dryRun, resume, verbose, delay, limit, token, cdpPort, adminToken, shopDomain, nonInteractive, screenshots, screenshotsConcurrency });
 }
