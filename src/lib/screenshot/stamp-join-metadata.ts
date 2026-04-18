@@ -31,19 +31,12 @@
 // reading them out of WxrData and pushing them back into the new builder.
 // If WxrReader grows support for additional item types, update the rebuild
 // loop below.
-import { existsSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, renameSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { readWxr } from '../extraction/wxr-reader.js';
 import { WxrBuilder } from '../extraction/wxr-builder.js';
 import type { WooProduct } from '../import/woo-product-csv.js';
-
-const META_KEYS = {
-  desktop: '_liberation_screenshot_desktop',
-  desktopScrolled: '_liberation_screenshot_desktop_scrolled',
-  mobile: '_liberation_screenshot_mobile',
-  mobileScrolled: '_liberation_screenshot_mobile_scrolled',
-  html: '_liberation_html',
-} as const;
+import { LIBERATION_META_KEYS as META_KEYS } from './meta-keys.js';
 
 interface ManifestEntry {
   slug: string;
@@ -71,8 +64,13 @@ function metaForEntry(e: ManifestEntry): Record<string, string> {
 
 function writeAtomic(path: string, content: string): void {
   const tmp = path + '.tmp';
-  writeFileSync(tmp, content);
-  renameSync(tmp, path);
+  try {
+    writeFileSync(tmp, content);
+    renameSync(tmp, path);
+  } catch (err) {
+    try { unlinkSync(tmp); } catch { /* ignore */ }
+    throw err;
+  }
 }
 
 export async function stampJoinMetadata(args: { outputDir: string }): Promise<void> {
@@ -207,8 +205,13 @@ export async function stampJoinMetadata(args: { outputDir: string }): Promise<vo
 
     // Serialize to a tmp path, then atomically rename into place.
     const tmp = wxrPath + '.tmp';
-    rebuilt.serialize(tmp);
-    renameSync(tmp, wxrPath);
+    try {
+      rebuilt.serialize(tmp);
+      renameSync(tmp, wxrPath);
+    } catch (err) {
+      try { unlinkSync(tmp); } catch { /* ignore */ }
+      throw err;
+    }
   }
 
   // --- products.jsonl ---
