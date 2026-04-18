@@ -18,6 +18,7 @@ import { weeblyAdapter } from '../adapters/weebly.js';
 import { wixAdapter, type Inventory } from '../adapters/wix.js';
 import { mkdirSync, existsSync, writeFileSync, readFileSync } from 'fs';
 import { join, dirname } from 'path';
+import { autoPreview } from './preview.js';
 
 function siteOutputDir(baseDir: string, url: string): string {
   let host: string;
@@ -431,28 +432,22 @@ export function runDiscover(url: string, opts: Partial<LiberateProps> = {}): voi
   );
   waitUntilExit()
     .then(async () => {
-      if (!wxrPath || props.nonInteractive) return;
+      if (!wxrPath) return;
+      // Post-extract: always boot a local site (Studio if installed, else
+      // Playground) so the user can verify content before importing anywhere
+      // real. autoPreview honors nonInteractive internally — it still boots
+      // the site but skips browser/app auto-open so scripts get a URL.
+      const outputDir = dirname(wxrPath);
+      await autoPreview(outputDir, { nonInteractive: props.nonInteractive });
+      if (props.nonInteractive) return;
       const answer = await ask('\nReady to import to WordPress? (y/N) ');
       if (answer.toLowerCase() !== 'y') {
-        const outputDir = dirname(wxrPath);
-        const productsCsv = join(outputDir, 'products.csv');
-        const hasProducts = existsSync(productsCsv);
-
-        console.log('\n  You can import manually using WP-CLI:\n');
-        console.log(`  # Import with original authors (creates WordPress users):`);
-        console.log(`  wp import ${wxrPath} --authors=create\n`);
-        console.log(`  # Or assign all content to yourself:`);
-        console.log(`  wp import ${wxrPath} --authors=skip`);
-
-        if (hasProducts) {
-          console.log('\n  Products were also extracted. To import them:');
-          console.log('  1. Install and activate WooCommerce on your WordPress site');
-          console.log('  2. Install the WooCommerce CSV Import plugin (included with WooCommerce)');
-          console.log(`  3. Go to WooCommerce > Products > Import and upload: ${productsCsv}`);
-          console.log('     Or via WP-CLI:');
-          console.log(`  wp wc product_csv_import run ${productsCsv}`);
-        }
-
+        console.log('\n  Import to WordPress later with:\n');
+        console.log(`  npm run liberate -- import ${wxrPath} \\`);
+        console.log('    --site <your-site.com> --username <user> --token <app-password>');
+        console.log('');
+        console.log('  (Use --import-authors to create WordPress users for each author,');
+        console.log('   or omit to assign all content to the authenticated user.)');
         console.log('');
         return;
       }

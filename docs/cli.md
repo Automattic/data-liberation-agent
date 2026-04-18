@@ -196,3 +196,25 @@ data-liberation import ./output.wxr --site myblog.wordpress.com --username admin
 # 3. Extract:
 data-liberation https://www.example.squarespace.com --cdp-port 9222
 ```
+
+### `liberate preview <outputDir>`
+
+Preview a completed extraction in a local WordPress site. Uses Automattic
+Studio when the `studio` CLI is on PATH (a persistent site named after
+the output directory's domain slug — `example-com`, `example-com-2`,
+etc.); falls back to WordPress Playground (ephemeral WASM) otherwise.
+Auto-runs after every `liberate <url>` extraction; the standalone
+`preview` subcommand is for re-opening a prior extraction.
+
+**Flags:**
+- `--open` — focus the Studio app (Studio path) or open the preview URL in the default browser (Playground path).
+- `--port <n>` — Playground-only. Override the auto-picked port (default: first free in 9400–9499). Ignored on the Studio path.
+- `--non-interactive` — skip the post-preview import nudge; still boots the site and prints the URL for scripts to capture.
+
+**Artifacts written to `<outputDir>/playground/`** (Playground path only; the Studio path stages files into the Studio site's `wp-content/uploads/liberation/` instead):
+- `blueprint.json` / `blueprint.studio.json` — the blueprint used for this run (regenerated each start).
+- `preview.pid` — JSON record while Playground is running.
+- `preview.log` — captured subprocess output; truncated on each start.
+- `.lock` — lockfile while start/stop is in flight.
+
+**Lifecycle:** Foreground blocking in CLI mode. Ctrl+C stops Playground and prints an import-command nudge. A second `preview` invocation on the same outputDir stops the prior process before starting.
