@@ -78,7 +78,18 @@ export async function stampJoinMetadata(args: { outputDir: string }): Promise<vo
   if (!existsSync(manifestPath)) {
     throw new Error(`Manifest not found: ${manifestPath}`);
   }
-  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as ManifestFile;
+  const raw: unknown = JSON.parse(readFileSync(manifestPath, 'utf8'));
+  if (!raw || typeof raw !== 'object') {
+    throw new Error(`Invalid manifest at ${manifestPath}: expected an object`);
+  }
+  const candidate = raw as Partial<ManifestFile>;
+  if (candidate.version !== 1) {
+    throw new Error(`Invalid manifest at ${manifestPath}: expected version 1, got ${String(candidate.version)}`);
+  }
+  if (!candidate.entries || typeof candidate.entries !== 'object') {
+    throw new Error(`Invalid manifest at ${manifestPath}: entries missing or wrong shape`);
+  }
+  const manifest = candidate as ManifestFile;
   const byUrl = manifest.entries;
 
   // --- WXR ---

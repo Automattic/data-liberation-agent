@@ -383,7 +383,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         let screenshotResult: import('./lib/screenshot/types.js').ScreenshotResult | undefined;
         if (typedArgs.screenshots && !typedArgs.dryRun) {
           const { ImportSession } = await import('./lib/extraction/import-session.js');
-          const session = ImportSession.loadOrCreate(outputDir, detection.platform, opts, { resume: !!typedArgs.resume });
+          // resume:true — we're continuing the same run the adapter just ran,
+          // not starting a new one. Preserves the session.json the adapter
+          // persisted (cursors, counters) so `liberate_status` reflects state.
+          const session = ImportSession.loadOrCreate(outputDir, detection.platform, opts, { resume: true });
           session.setStage('screenshotting');
           const processedUrls = Array.from(log.getProcessedUrls());
           const { captureScreenshots } = await import('./lib/screenshot/screenshotter.js');
@@ -642,12 +645,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     case 'liberate_screenshot': {
       const url = typedArgs.url as string;
       const outputDir = typedArgs.outputDir as string;
+      // mkdirSync BEFORE acquireLock — lockfile write needs the directory to exist.
+      mkdirSync(outputDir, { recursive: true });
       const log = new ExtractionLog(outputDir);
       if (!log.acquireLock()) {
         return errorResult('Another liberation workflow is already running in this outputDir.');
       }
       try {
-        mkdirSync(outputDir, { recursive: true });
         let urls: string[] = Array.isArray(typedArgs.urls) ? (typedArgs.urls as string[]) : [];
         if (urls.length === 0) {
           urls = await fetchSitemap(url);

@@ -241,7 +241,10 @@ function Liberate(props: LiberateProps & { onComplete?: (wxrPath: string | null)
           // Optional screenshot + Tier 2 stamping — mirrors the MCP path.
           if (screenshots && !dryRun) {
             const { ImportSession } = await import('../lib/extraction/import-session.js');
-            const session = ImportSession.loadOrCreate(siteDir, det.platform, opts, { resume });
+            // resume:true — we're continuing the same run the adapter just ran,
+            // not starting a new one. Preserves the session.json the adapter
+            // persisted so post-run status reflects actual extraction state.
+            const session = ImportSession.loadOrCreate(siteDir, det.platform, opts, { resume: true });
             session.setStage('screenshotting');
             setPhase('screenshotting');
             const processedUrls = Array.from(log.getProcessedUrls());

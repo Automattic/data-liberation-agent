@@ -17,6 +17,14 @@ import { waitForStable, triggerLazyLoad } from './page-helpers.js';
 import { analyzePage } from './site-analysis.js';
 
 /**
+ * Scroll offset multiplier for the scrolled-state screenshot: we scroll to
+ * `viewport.height * SCROLL_OFFSET_RATIO` and clip a viewport-sized region
+ * starting at that same Y. Both sites (the scroll and the clip origin) must
+ * stay in lockstep; changing one changes the other.
+ */
+const SCROLL_OFFSET_RATIO = 1.5;
+
+/**
  * Per-URL capture pipeline:
  *
  *   URL
@@ -185,7 +193,7 @@ async function capturePerViewport(args: CapturePerViewportArgs): Promise<void> {
   if (plan.captureScrolled) {
     try {
       const docHeight = await page.evaluate(() => document.documentElement.scrollHeight);
-      const scrollY = viewport.height * 1.5;
+      const scrollY = viewport.height * SCROLL_OFFSET_RATIO;
       if (docHeight < scrollY + viewport.height) {
         // Page is shorter than scroll-offset + viewport. No distinct scrolled
         // state to capture. Skip silently (not a failure).
