@@ -6,6 +6,24 @@ AI agents: when you contribute an improvement, add an entry here. See [CONTRIBUT
 
 ---
 
+## 2026-04-16 — Wix Tag Manager poisons content extraction
+
+**Found by:** Claude + human contributor
+**During:** Migrating a 45-page Wix ecommerce site (bestiehugs.com)
+**Type:** bug fix
+
+### What I found
+Wix's Tag Manager API (`/_api/tag-manager/api/v1/tags/sites/...`) returns a field named `content` containing analytics `<script>` blocks. `deriveContent()` matches this first (key="content", >50 chars, contains "<"), returns qualityScore "high", and never consults the rendered DOM — which has the real page content in `[data-testid="richTextElement"]` elements. After `stripNonContentTags()` removes the script, the WXR gets empty `content:encoded`.
+
+### How it works
+
+Added a post-match validation step: after `findHtmlContent()` returns a match from an API call, strip `<script>` and `<style>` tags and verify >50 chars of real HTML remain. If not, skip and continue to the next content source (rendered DOM, JSON-LD, accessibility tree).
+
+### Why it's better than the previous approach
+
+Tested against 7 live Wix sites. 5 of 7 had tag-manager responses that triggered this bug, producing completely empty page content. After the fix, all 5 extract real content (424–5684 chars) from the rendered DOM. The 2 unaffected sites remain unchanged.
+
+
 ## 2026-04-17 — Wix blog URL classification: `/single-post/` and bare `/blog` listings
 
 **Found by:** Claude + human contributor
