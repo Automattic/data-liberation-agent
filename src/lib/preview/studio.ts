@@ -11,6 +11,12 @@ import type { StartPreviewResult } from './types.js';
 const execFileAsync = promisify(execFile);
 
 const UPLOADS_SUBDIR = 'wp-content/uploads/liberation';
+/**
+ * Scripts live OUTSIDE wp-content/uploads to rule out any Studio-side
+ * special handling of the uploads dir. A dotfile-prefixed dir at the site
+ * root is out of the way of WordPress itself and unambiguously ours.
+ */
+const SCRIPTS_SUBDIR = '.dla-scripts';
 
 /** Absolute path to the vendored product-importer PHP script. */
 const PRODUCT_IMPORT_SCRIPT = resolve(
@@ -127,14 +133,17 @@ async function removeStudioSite(sitePath: string): Promise<void> {
 }
 
 /**
- * Stage extraction artifacts (media files, the WXR, products.csv) AND the
- * vendored PHP importer scripts inside the Studio site's wp-content/uploads/
- * liberation/ directory. The scripts must live under the site path because
- * Studio's wp-cli runtime can't read arbitrary host paths — `wp eval-file
- * /Users/.../import-wxr.php` errors out with "does not exist" even when the
- * file is present on the host.
+ * Stage extraction artifacts (media, WXR, products.csv) plus our vendored
+ * PHP importer scripts into the Studio site directory. Scripts MUST live
+ * under the site path because Studio's wp-cli runtime rejects host paths
+ * — `wp eval-file /Users/.../import-wxr.php` errors with "does not exist".
+ * Data artifacts go under wp-content/uploads/liberation/; scripts go under
+ * .dla-scripts/ at the site root (separate from uploads so Studio can't
+ * apply any upload-dir-specific handling to them).
+ *
+ * Exported for unit-test access. Not part of the public API.
  */
-function stageArtifacts(outputDir: string, sitePath: string): {
+export function stageArtifacts(outputDir: string, sitePath: string): {
   wxrRelPath: string | null;
   productsCsvRelPath: string | null;
   wxrScriptRelPath: string;
@@ -169,13 +178,21 @@ function stageArtifacts(outputDir: string, sitePath: string): {
   }
 
   // Vendored PHP scripts. Studio's wp-cli can't eval-file host paths, so copy
-  // them under the site dir. They're idempotent / overwrite-safe across reruns.
-  const scriptsDir = join(stageDir, 'scripts');
+  // them under the site dir. Placed at the site root (not under uploads) so
+  // Studio can't special-case them. Idempotent / overwrite-safe across reruns.
+  const scriptsDir = join(sitePath, SCRIPTS_SUBDIR);
   mkdirSync(scriptsDir, { recursive: true });
-  copyFileSync(WXR_IMPORT_SCRIPT, join(scriptsDir, 'import-wxr.php'));
-  copyFileSync(PRODUCT_IMPORT_SCRIPT, join(scriptsDir, 'import-products.php'));
-  const wxrScriptRelPath = `${UPLOADS_SUBDIR}/scripts/import-wxr.php`;
-  const productScriptRelPath = `${UPLOADS_SUBDIR}/scripts/import-products.php`;
+  const wxrScriptDest = join(scriptsDir, 'import-wxr.php');
+  const productScriptDest = join(scriptsDir, 'import-products.php');
+  copyFileSync(WXR_IMPORT_SCRIPT, wxrScriptDest);
+  copyFileSync(PRODUCT_IMPORT_SCRIPT, productScriptDest);
+  if (!existsSync(wxrScriptDest) || !existsSync(productScriptDest)) {
+    throw new Error(
+      `stageArtifacts: copied scripts are not at expected paths (${wxrScriptDest}, ${productScriptDest})`,
+    );
+  }
+  const wxrScriptRelPath = `${SCRIPTS_SUBDIR}/import-wxr.php`;
+  const productScriptRelPath = `${SCRIPTS_SUBDIR}/import-products.php`;
 
   return {
     wxrRelPath,
@@ -232,20 +249,19 @@ export async function startStudioPreview(opts: StartStudioOpts): Promise<StartPr
   const absOutput = resolve(opts.outputDir);
   const hasProducts = existsSync(join(absOutput, 'products.csv'));
 
-  // If a directory exists at sitePath but the daemon has no matching site,
-  // it's an orphan from a prior failed run. Studio reuses the dir silently
-  // (skips "Creating site directory…") and then WP server crashes during
-  // blueprint apply because SQLite/plugins/etc. collide with the reused
-  // state. Clean it up before `site create` so we get a fresh install.
-  //
-  // Only delete dirs under the standard Studio root — never touch a user
-  // directory that Studio actively owns.
+  // Clean exactly the sitePath we're about to create — and ONLY that path —
+  // if it exists on disk with no matching daemon record. That's the orphan
+  // signature from a prior failed run: Studio reuses the dir silently (skips
+  // "Creating site directory…"), then WP crashes during blueprint apply
+  // because SQLite/plugins/etc. collide with the reused state. Gated on the
+  // path living under Studio's root so we never touch a user directory.
+  const resolvedSitePath = resolve(sitePath);
   if (
-    existsSync(sitePath) &&
-    !existingPaths.has(resolve(sitePath)) &&
-    resolve(sitePath).startsWith(resolve(defaultStudioRoot()) + '/')
+    existsSync(resolvedSitePath) &&
+    !existingPaths.has(resolvedSitePath) &&
+    resolvedSitePath.startsWith(resolve(defaultStudioRoot()) + '/')
   ) {
-    rmSync(sitePath, { recursive: true, force: true });
+    rmSync(resolvedSitePath, { recursive: true, force: true });
   }
 
   try {
