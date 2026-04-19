@@ -45,7 +45,7 @@ if (args[0] === 'mcp') {
     --shop-domain <host> Shopify myshopify.com hostname — usually auto-detected
     --no-screenshots               Skip screenshots (default: screenshots are captured after extract)
     --screenshots-concurrency <N>  Parallel screenshot captures (default 6, max 10)
-                         (stamps screenshot paths onto WXR/CSV postmeta)
+                         (writes output/<site>/screenshots/ with a manifest.json keyed by URL)
 
   Import options:
     --site <domain>       WordPress site domain

@@ -51,7 +51,7 @@ export interface LiberateProps {
   nonInteractive: boolean;
   /** Cap extraction at the first N URLs (writes a real WXR for those N). */
   limit: number | null;
-  /** Capture screenshots post-extract and stamp into WXR/CSV postmeta. */
+  /** Capture screenshots post-extract. Results go to output/<site>/screenshots/. */
   screenshots: boolean;
   /** Concurrency for the screenshot capture loop. Default 3. */
   screenshotsConcurrency?: number;
@@ -63,7 +63,6 @@ type Phase =
   | 'discovered'
   | 'extracting'
   | 'screenshotting'
-  | 'stamping'
   | 'done'
   | 'error';
 
@@ -240,7 +239,10 @@ function Liberate(props: LiberateProps & { onComplete?: (wxrPath: string | null)
             wxr.serialize(wxrPath);
           }
 
-          // Optional screenshot + Tier 2 stamping — mirrors the MCP path.
+          // Optional screenshot capture — mirrors the MCP path. Results land
+          // in siteDir/screenshots/ with a manifest.json keyed by URL; any
+          // cross-referencing against output.wxr / products.jsonl happens on
+          // the filesystem (no WordPress-side injection).
           if (screenshots && !dryRun) {
             const { ImportSession } = await import('../lib/extraction/import-session.js');
             // resume:true — we're continuing the same run the adapter just ran,
@@ -262,10 +264,6 @@ function Liberate(props: LiberateProps & { onComplete?: (wxrPath: string | null)
               skipped: shotResult.skipped,
               failed: shotResult.failed,
             });
-            session.setStage('stamping-metadata');
-            setPhase('stamping');
-            const { stampJoinMetadata } = await import('../lib/screenshot/stamp-join-metadata.js');
-            await stampJoinMetadata({ outputDir: siteDir });
             session.setStage('finalizing');
           }
 
@@ -391,14 +389,6 @@ function Liberate(props: LiberateProps & { onComplete?: (wxrPath: string | null)
         <Box marginTop={1}>
           <Text color="yellow"><Spinner type="dots" /></Text>
           <Text> Capturing screenshots...</Text>
-        </Box>
-      )}
-
-      {/* Stamping metadata */}
-      {phase === 'stamping' && (
-        <Box marginTop={1}>
-          <Text color="yellow"><Spinner type="dots" /></Text>
-          <Text> Stamping screenshot metadata...</Text>
         </Box>
       )}
 

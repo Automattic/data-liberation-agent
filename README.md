@@ -37,7 +37,7 @@ Standalone:
 data-liberation screenshot https://example.com --output ./output/example.com
 ```
 
-Screenshots run automatically at the end of `data-liberation <url>` extracts — their paths are stamped onto WXR pages/posts as `_liberation_*` postmeta and onto products as `meta:_liberation_*` CSV columns. Pass `--no-screenshots` to skip them:
+Screenshots run automatically at the end of `data-liberation <url>` extracts. Results land under `output/<site>/screenshots/` alongside a `manifest.json` keyed by URL — the join back to `output.wxr` and `products.jsonl` happens on the filesystem, not via WordPress postmeta. Pass `--no-screenshots` to skip them:
 
 ```bash
 data-liberation https://example.com --output ./output/example.com

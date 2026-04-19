@@ -61,7 +61,7 @@ Extract all content from a website. Produces a WXR file, media directory, redire
 | `verbose` | no | Enable detailed per-page logging |
 | `shopDomain` | no | **Shopify only** — the `*.myshopify.com` hostname used for Admin API calls. Usually unnecessary: `liberate_discover` auto-detects it from the storefront HTML (the `Shopify.shop` JS global) and stores it as `inventory.shopDomain`, so `liberate_extract` picks it up automatically even when the site is served on a custom domain. Only pass explicitly if auto-detection failed (e.g. Cloudflare-protected storefront). |
 | `adminToken` | no | **Shopify only** — Admin API access token. When present, products are fetched via the Admin GraphQL API (2025-04) instead of the public JSON API, yielding richer data: `compareAtPrice` sale semantics, `inventoryItem.tracked` + `inventoryPolicy` stock status, `unitCost` cost-of-goods, collections as categories, `measurement.weight` unit normalization, and global SEO metafields. |
-| `screenshots` | no | When `true`, runs the screenshot capture loop after extraction and stamps `_liberation_screenshot_desktop`, `_liberation_screenshot_mobile`, `_liberation_screenshot_desktop_scrolled`, `_liberation_screenshot_mobile_scrolled`, and `_liberation_html` postmeta onto WXR pages/posts, plus matching `meta:_liberation_*` columns onto `products.csv`. Adds two new `ImportSession` stages (`screenshotting` → `stamping-metadata`) that are also resumable. |
+| `screenshots` | no | When `true`, runs the screenshot capture loop after extraction. Results land under `output/<site>/screenshots/` with a `manifest.json` keyed by URL; no postmeta or CSV columns are written — any cross-reference against the WXR / products CSV happens on the filesystem. Adds one `ImportSession` stage (`screenshotting`) that is resumable. |
 
 Returns: `wxrPath`, `redirectMapPath`, `outputDir`, `summary` (counts, quality scores), `failures` (URLs and errors), `wxrValidation`.
 
@@ -128,7 +128,7 @@ Scrolled-state screenshots are silently skipped on pages shorter than ~2.5 viewp
 }
 ```
 
-For stamping screenshot paths onto an existing WXR / products CSV, use `liberate_extract` with `screenshots: true` (runs the capture loop and Tier-2 metadata stamping in a single call) rather than invoking this tool directly.
+To capture screenshots as part of a full extract run (rather than invoking this tool directly), use `liberate_extract` with `screenshots: true`. The manifest and source URLs on extracted content are enough to correlate screenshots with WXR items or CSV product rows on the filesystem.
 
 ## Debugging & Reconnaissance
 

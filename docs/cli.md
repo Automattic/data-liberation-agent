@@ -37,7 +37,7 @@ After extraction completes, the CLI prompts:
 | `--admin-token <tok>` | **Shopify only** — Admin API access token. Unlocks GraphQL product extraction with richer fields (sale pricing, stock policy, cost of goods, variant media, collections, SEO metafields). Falls back to public JSON API on failure. | `SHOPIFY_ADMIN_TOKEN` env var |
 | `--shop-domain <host>` | **Shopify only** — `*.myshopify.com` hostname used for Admin API calls. Usually auto-detected from the storefront HTML during discovery; only pass manually if detection fails. | auto-detected |
 | `--non-interactive` | Skip the post-extraction import prompt | off |
-| `--no-screenshots` | Skip screenshots. Screenshots run by default — capturing desktop + mobile fullpage and scrolled-state screenshots plus rendered HTML for every URL, and stamping the paths onto WXR pages/posts as `_liberation_*` postmeta and onto products as `meta:_liberation_*` CSV columns. See the `screenshot` subcommand below for the underlying flags. | on (use `--no-screenshots` to opt out) |
+| `--no-screenshots` | Skip screenshots. Screenshots run by default — capturing desktop + mobile fullpage and scrolled-state screenshots plus rendered HTML for every URL. Results go to `output/<site>/screenshots/` with a `manifest.json` keyed by URL; any cross-reference against `output.wxr` / `products.jsonl` happens on the filesystem. See the `screenshot` subcommand below for the underlying flags. | on (use `--no-screenshots` to opt out) |
 | `--screenshots-concurrency <N>` | Parallel screenshot captures when screenshots are enabled. | 6 |
 
 **Output directory structure:**
@@ -278,8 +278,8 @@ data-liberation screenshot https://staging.example.com --cdp-port 9222 --types p
 
 ### Screenshots on the default extract command
 
-`data-liberation <url>` runs screenshot capture by default after the extraction phase finishes. Captured file paths are then stamped onto the WXR as `_liberation_screenshot_desktop`, `_liberation_screenshot_mobile`, `_liberation_screenshot_desktop_scrolled`, `_liberation_screenshot_mobile_scrolled`, and `_liberation_html` postmeta (pages/posts), and onto `products.csv` as matching `meta:_liberation_*` columns (products).
+`data-liberation <url>` runs screenshot capture by default after the extraction phase finishes. Captured files are written under `output/<site>/screenshots/{desktop,mobile}/<slug>.png` (plus `.scrolled.png` variants) and `output/<site>/html/<slug>.html`, with a `manifest.json` at `output/<site>/screenshots/manifest.json` that maps every captured URL to its file paths. The WXR and products CSV are not touched — cross-referencing screenshots with extracted content happens on the filesystem via the manifest.
 
-Pass `--no-screenshots` to skip the screenshot + stamping phases entirely. Pass `--screenshots-concurrency N` to tune parallelism (default 6, max 10).
+Pass `--no-screenshots` to skip screenshot capture entirely. Pass `--screenshots-concurrency N` to tune parallelism (default 6, max 10).
 
-This adds two `ImportSession` stages — `screenshotting` and `stamping-metadata` — after the normal extraction pipeline. Both stages are resumable via `--resume`. The stamping step rewrites `output.wxr` and `products.jsonl` via tmp + atomic rename and is idempotent across re-runs.
+This adds one `ImportSession` stage — `screenshotting` — after the normal extraction pipeline, and it's resumable via `--resume`.

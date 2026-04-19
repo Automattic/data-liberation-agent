@@ -101,7 +101,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           dryRun: { type: 'boolean', description: 'Extract 2-3 pages and report without writing WXR' },
           limit: { type: 'number', description: 'Cap extraction to the first N URLs and write a real WXR for them' },
           verbose: { type: 'boolean', description: 'Enable detailed per-page logging' },
-          screenshots: { type: 'boolean', description: 'After extract completes, capture screenshots (desktop + mobile) for every processed URL and stamp screenshot paths onto WXR/CSV via postmeta' },
+          screenshots: { type: 'boolean', description: 'After extract completes, capture screenshots (desktop + mobile) for every processed URL. Results are written to output/<site>/screenshots/ with a manifest.json keyed by URL.' },
         },
         required: ['url', 'outputDir'],
       },
@@ -379,7 +379,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           wxr.serialize(wxrPath);
         }
 
-        // --- Optional screenshot + Tier 2 stamping ---
+        // --- Optional screenshot capture ---
+        // The manifest at output/<site>/screenshots/manifest.json is keyed by
+        // URL; filesystem-level joins against output.wxr / products.jsonl happen
+        // out-of-band (no WordPress-side postmeta injection).
         let screenshotResult: import('./lib/screenshot/types.js').ScreenshotResult | undefined;
         if (typedArgs.screenshots && !typedArgs.dryRun) {
           const { ImportSession } = await import('./lib/extraction/import-session.js');
@@ -396,9 +399,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             primaryUrl: typedArgs.url as string,
             server,
           });
-          session.setStage('stamping-metadata');
-          const { stampJoinMetadata } = await import('./lib/screenshot/stamp-join-metadata.js');
-          await stampJoinMetadata({ outputDir });
           session.setStage('finalizing');
         }
 

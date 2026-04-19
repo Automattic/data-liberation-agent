@@ -38,7 +38,7 @@ export interface WooProduct {
   seoDescription?: string;
   /** Cost of goods sold — emitted as `meta:_wc_cog_cost` (WooCommerce COGS plugin) */
   costOfGoods?: string;
-  /** Source URL of the product on the origin site. Used by Tier 2 stamping to join screenshots. */
+  /** Source URL of the product on the origin site. Used to cross-reference screenshots against the manifest. */
   sourceUrl?: string;
   /** Arbitrary custom post meta — each key becomes a `meta:<key>` column */
   meta?: Record<string, string>;

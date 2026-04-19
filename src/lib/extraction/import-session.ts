@@ -9,9 +9,9 @@ import { join, dirname } from 'path';
  *                            ┌──────────────────────────────────────┘
  *                            │
  *                            ▼
- *       (if --screenshots:) screenshotting ──▶ stamping-metadata ──┐
- *                                                                   │
- *                            ┌──────────────────────────────────────┘
+ *       (if --screenshots:) screenshotting ──┐
+ *                                             │
+ *                            ┌────────────────┘
  *                            │
  *                            ▼
  *                       finalizing ──▶ complete
@@ -24,7 +24,6 @@ export type ImportStage =
   | 'extracting'
   | 'downloading-media'
   | 'screenshotting'
-  | 'stamping-metadata'
   | 'finalizing'
   | 'complete'
   | 'error';

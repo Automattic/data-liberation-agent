@@ -5,14 +5,12 @@ import { join } from 'node:path';
 import { ImportSession } from './import-session.js';
 
 describe('ImportSession new stages', () => {
-  it('accepts the new screenshotting and stamping-metadata stages', () => {
+  it('accepts the new screenshotting stage', () => {
     const dir = mkdtempSync(join(tmpdir(), 'session-'));
     try {
       const s = ImportSession.loadOrCreate(dir, 'test', {});
       s.setStage('screenshotting');
       expect(s.stage).toBe('screenshotting');
-      s.setStage('stamping-metadata');
-      expect(s.stage).toBe('stamping-metadata');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

@@ -93,7 +93,6 @@ export interface PageInput {
   seoTitle?: string;
   seoDescription?: string;
   sourceUrl?: string;
-  customPostmeta?: Record<string, string>;
 }
 
 export interface PageItem {
@@ -110,7 +109,6 @@ export interface PageItem {
   seoTitle: string;
   seoDescription: string;
   sourceUrl: string;
-  customPostmeta: Record<string, string>;
 }
 
 export interface PostInput {
@@ -127,7 +125,6 @@ export interface PostInput {
   seoDescription?: string;
   sourceUrl?: string;
   customTerms?: Array<{ taxonomy: string; slug: string }>;
-  customPostmeta?: Record<string, string>;
 }
 
 export interface PostItem {
@@ -146,7 +143,6 @@ export interface PostItem {
   seoDescription: string;
   sourceUrl: string;
   customTerms: Array<{ taxonomy: string; slug: string }>;
-  customPostmeta: Record<string, string>;
 }
 
 export interface MenuItemInput {
@@ -389,7 +385,6 @@ export class WxrBuilder {
       seoTitle: page.seoTitle || '',
       seoDescription: page.seoDescription || '',
       sourceUrl: page.sourceUrl || '',
-      customPostmeta: page.customPostmeta ?? {},
     });
     return id;
   }
@@ -412,7 +407,6 @@ export class WxrBuilder {
       seoDescription: post.seoDescription || '',
       sourceUrl: post.sourceUrl || '',
       customTerms: post.customTerms || [],
-      customPostmeta: post.customPostmeta ?? {},
     });
     return id;
   }
@@ -663,10 +657,6 @@ export class WxrBuilder {
       if (item.seoTitle) this._addPostmeta(obj, '_seo_title', item.seoTitle);
       if (item.seoDescription) this._addPostmeta(obj, '_seo_description', item.seoDescription);
       if (item.sourceUrl) this._addPostmeta(obj, '_source_url', item.sourceUrl);
-
-      for (const [k, v] of Object.entries(item.customPostmeta || {})) {
-        this._addPostmeta(obj, k, v);
-      }
     }
 
     if (item.type === 'attachment') {
