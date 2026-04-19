@@ -18,6 +18,20 @@ const UPLOADS_SUBDIR = 'wp-content/uploads/liberation';
  */
 const SCRIPTS_SUBDIR = '.dla-scripts';
 
+/**
+ * Studio mounts the host site directory at VFS path `/wordpress` (see
+ * wordpress-server-child.mjs in the Studio bundle: `mounts: [{ hostPath:
+ * config.sitePath, vfsPath: "/wordpress" }, ...]`). Any path we pass to
+ * `studio wp eval-file`, or that gets consumed by PHP running inside the
+ * site, must use the VFS prefix — host paths resolve to "does not exist".
+ */
+const STUDIO_VFS_ROOT = '/wordpress';
+
+/** Translate a site-relative path into the VFS path PHP sees inside Studio. */
+export function toVfsPath(siteRelativePath: string): string {
+  return `${STUDIO_VFS_ROOT}/${siteRelativePath.replace(/^\/+/, '')}`;
+}
+
 /** Absolute path to the vendored product-importer PHP script. */
 const PRODUCT_IMPORT_SCRIPT = resolve(
   dirname(fileURLToPath(import.meta.url)),
@@ -295,8 +309,14 @@ export async function startStudioPreview(opts: StartStudioOpts): Promise<StartPr
     const staged = stageArtifacts(opts.outputDir, sitePath);
 
     if (staged.wxrRelPath) {
-      const wxrAbsPath = join(sitePath, staged.wxrRelPath);
-      const mediaDir = join(sitePath, UPLOADS_SUBDIR);
+      // File paths for the rewrite step are host paths (Node writes locally).
+      const wxrHostPath = join(sitePath, staged.wxrRelPath);
+      // Paths passed to `studio wp` must be VFS paths — Studio mounts the
+      // site dir at /wordpress inside PHP.
+      const wxrVfsPath = toVfsPath(staged.wxrRelPath);
+      const wxrScriptVfsPath = toVfsPath(staged.wxrScriptRelPath);
+      const sourceDirVfsPath = toVfsPath(UPLOADS_SUBDIR);
+
       // Studio's bundled wp-cli lacks `wp import --source-dir` (newer flag),
       // so we drive the import from our own PHP script which installs a
       // `pre_http_request` filter to basename-match attachment URLs against
@@ -307,19 +327,18 @@ export async function startStudioPreview(opts: StartStudioOpts): Promise<StartPr
       // unconditionally (it only does DNS lookups for named hosts) and the
       // PHP script whitelists it via http_request_host_is_external.
       const mediaMap = buildMediaUrlMap(opts.outputDir);
-      rewriteWxrAttachmentUrls(wxrAbsPath, mediaMap, 'http://127.0.0.1');
-      const wxrScriptAbs = join(sitePath, staged.wxrScriptRelPath);
+      rewriteWxrAttachmentUrls(wxrHostPath, mediaMap, 'http://127.0.0.1');
       await studioWp(sitePath, [
-        'eval-file', wxrScriptAbs, wxrAbsPath, mediaDir,
+        'eval-file', wxrScriptVfsPath, wxrVfsPath, sourceDirVfsPath,
       ]);
     }
 
     if (hasProducts && staged.productsCsvRelPath) {
-      const csvAbsPath = join(sitePath, staged.productsCsvRelPath);
-      const productScriptAbs = join(sitePath, staged.productScriptRelPath);
+      const csvVfsPath = toVfsPath(staged.productsCsvRelPath);
+      const productScriptVfsPath = toVfsPath(staged.productScriptRelPath);
       try {
         await studioWp(sitePath, [
-          'eval-file', productScriptAbs, csvAbsPath, '--user=admin',
+          'eval-file', productScriptVfsPath, csvVfsPath, '--user=admin',
         ]);
       } catch (err) {
         // Content is already in; losing the whole site over products is too
