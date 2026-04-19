@@ -5,6 +5,7 @@ import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { cpSync, existsSync, mkdirSync, copyFileSync } from 'node:fs';
 import { persistBlueprint } from './blueprint-builder.js';
+import { buildMediaUrlMap, rewriteWxrAttachmentUrls } from './media-url-map.js';
 import type { StartPreviewResult } from './types.js';
 
 const execFileAsync = promisify(execFile);
@@ -114,12 +115,13 @@ async function removeStudioSite(sitePath: string): Promise<void> {
 }
 
 /**
- * Stage extraction artifacts that the blueprint can't inline (media files +
- * products.csv) inside the Studio site's wp-content/uploads/liberation/. The
- * WXR itself is inlined into the blueprint as a LiteralReference — see
- * blueprint-builder.ts for why (bypasses Studio's WP-CLI IPC 120s timeout).
+ * Stage extraction artifacts that the blueprint can't inline (media files,
+ * products.csv, and the WXR itself) inside the Studio site's wp-content/
+ * uploads/liberation/. The WXR is imported out-of-band via `wp import` after
+ * site creation — see startStudioPreview for why.
  */
 function stageArtifacts(outputDir: string, sitePath: string): {
+  wxrRelPath: string | null;
   productsCsvRelPath: string | null;
   hasMedia: boolean;
 } {
@@ -134,6 +136,14 @@ function stageArtifacts(outputDir: string, sitePath: string): {
     hasMedia = true;
   }
 
+  const wxrSrc = join(absOutput, 'output.wxr');
+  let wxrRelPath: string | null = null;
+  if (existsSync(wxrSrc)) {
+    const wxrDest = join(stageDir, 'output.wxr');
+    copyFileSync(wxrSrc, wxrDest);
+    wxrRelPath = `${UPLOADS_SUBDIR}/output.wxr`;
+  }
+
   const productsSrc = join(absOutput, 'products.csv');
   let productsCsvRelPath: string | null = null;
   if (existsSync(productsSrc)) {
@@ -143,6 +153,7 @@ function stageArtifacts(outputDir: string, sitePath: string): {
   }
 
   return {
+    wxrRelPath,
     productsCsvRelPath,
     hasMedia,
   };
@@ -154,15 +165,20 @@ export interface StartStudioOpts {
 
 /**
  * Full-fidelity Studio preview:
- *   1. Create a site with a blueprint that pre-installs wordpress-importer +
- *      WooCommerce (if products.csv exists) AND inlines the WXR via importWxr
- *      so posts/pages/media import during `studio site create`.
- *   2. Copy media + products.csv into the site's wp-content/uploads/liberation/
- *      directory so attachment URLs resolve and the CSV is reachable from PHP.
- *   3. Run the vendored import-products.php via `wp eval-file` — WC core has
+ *   1. Create a site with a blueprint that only pre-installs wordpress-importer
+ *      + WooCommerce (if products.csv exists). We intentionally do NOT inline
+ *      the WXR via `importWxr` — that step hardcodes FETCH_ATTACHMENTS=true,
+ *      and fetching 100s of attachments from the origin CDN easily blows
+ *      Studio's 120s `start-server` silence timeout.
+ *   2. Stage media, the WXR, and products.csv into wp-content/uploads/liberation/.
+ *   3. Rewrite `<wp:attachment_url>` entries in the staged WXR to point at
+ *      `http://localhost:<port>/wp-content/uploads/liberation/<filename>` so
+ *      WP_Import fetches from the local WP instance (fast) instead of the CDN.
+ *   4. Run `wp import` with `--fetch-attachments` — localhost fetches fit
+ *      inside the wp-cli-command IPC window.
+ *   5. Run the vendored import-products.php via `wp eval-file` — WC core has
  *      no CLI CSV-import subcommand, so we invoke WC_Product_CSV_Importer
- *      directly. Failures here are non-fatal (the site + content are already
- *      live; user can re-run the importer or import via admin UI).
+ *      directly. Product-import failures are non-fatal.
  *
  * Studio's `site create` blocks until the blueprint finishes, and studioWp
  * calls block until WP-CLI returns — so when we resolve, the full import is
@@ -205,15 +221,32 @@ export async function startStudioPreview(opts: StartStudioOpts): Promise<StartPr
     };
   }
 
-  // From here on, the site exists and has its WXR content imported. Infra
-  // failures (listing sites, staging artifacts) trigger cleanup; product-CSV
-  // failures are demoted to warnings so we don't nuke a working preview.
+  // From here on, the site exists (with plugins installed by the blueprint)
+  // but NO content is imported yet. Stage artifacts, then run `wp import`.
+  // Infra failures (staging, site lookup) trigger cleanup; content-import
+  // failures bubble up the same way. Product-CSV failure is demoted to a
+  // warning since losing the whole site over products is too destructive.
   const warnings: string[] = [];
   try {
-    // WXR import happened DURING site creation via the blueprint's importWxr
-    // step — see blueprint-builder.ts. We only stage media + products.csv for
-    // the out-of-band WooCommerce product import below.
     const staged = stageArtifacts(opts.outputDir, sitePath);
+
+    // Look up the freshly-assigned port so we can rewrite WXR URLs to hit
+    // local WP instead of the origin CDN.
+    const sitesBefore = await listStudioSites();
+    const site = sitesBefore.find((s) => s.name === name);
+    if (!site) {
+      throw new Error(`Studio site "${name}" not found after creation`);
+    }
+
+    if (staged.wxrRelPath) {
+      const wxrAbsPath = join(sitePath, staged.wxrRelPath);
+      const mediaMap = buildMediaUrlMap(opts.outputDir);
+      const localBase = `${site.url}/${UPLOADS_SUBDIR}`;
+      rewriteWxrAttachmentUrls(wxrAbsPath, mediaMap, localBase);
+      await studioWp(sitePath, [
+        'import', wxrAbsPath, '--authors=skip', '--fetch-attachments',
+      ]);
+    }
 
     if (hasProducts && staged.productsCsvRelPath) {
       const csvAbsPath = join(sitePath, staged.productsCsvRelPath);
@@ -229,11 +262,6 @@ export async function startStudioPreview(opts: StartStudioOpts): Promise<StartPr
       }
     }
 
-    const sites = await listStudioSites();
-    const site = sites.find((s) => s.name === name);
-    if (!site) {
-      throw new Error(`Studio site "${name}" not found after creation`);
-    }
     return {
       status: 'ready',
       url: site.url,

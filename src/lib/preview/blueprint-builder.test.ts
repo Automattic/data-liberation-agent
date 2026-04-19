@@ -94,34 +94,20 @@ describe('buildBlueprint', () => {
   });
 
   describe('studio mode', () => {
-    it('inlines the WXR via a literal resource (bypasses WP-CLI IPC)', () => {
+    it('installs wordpress-importer but does not inline the WXR (imported out-of-band)', () => {
       const dir = mkDir();
-      const wxrContent = '<?xml version="1.0"?><rss><channel><item><title>Hello</title></item></channel></rss>';
-      writeFileSync(join(dir, 'output.wxr'), wxrContent);
+      writeFileSync(join(dir, 'output.wxr'), '<?xml version="1.0"?><rss/>');
 
       const bp = buildBlueprint({ outputDir: dir, mode: 'studio' });
 
-      const importWxr = bp.steps.find((s) => s.step === 'importWxr') as any;
-      expect(importWxr).toBeDefined();
-      expect(importWxr.file.resource).toBe('literal');
-      expect(importWxr.file.name).toBe('output.wxr');
-      expect(importWxr.file.contents).toBe(wxrContent);
-    });
-
-    it('installs wordpress-importer before importWxr', () => {
-      const dir = mkDir();
-      writeFileSync(join(dir, 'output.wxr'), '<rss/>');
-
-      const bp = buildBlueprint({ outputDir: dir, mode: 'studio' });
-      const steps = bp.steps.map((s) => s.step);
-      const importerIdx = bp.steps.findIndex(
+      expect(bp.steps.find((s) => s.step === 'importWxr')).toBeUndefined();
+      const hasImporter = bp.steps.some(
         (s) => s.step === 'installPlugin' && (s as any).pluginData?.slug === 'wordpress-importer',
       );
-      const importWxrIdx = steps.indexOf('importWxr');
-      expect(importerIdx).toBeLessThan(importWxrIdx);
+      expect(hasImporter).toBe(true);
     });
 
-    it('installs WooCommerce when products.csv exists but skips inline importer for it', () => {
+    it('installs WooCommerce when products.csv exists, no wp-cli step', () => {
       const dir = mkDir();
       writeFileSync(join(dir, 'output.wxr'), '<rss/>');
       writeFileSync(join(dir, 'products.csv'), 'name\nfoo');
@@ -132,15 +118,9 @@ describe('buildBlueprint', () => {
       );
       const hasWpCli = bp.steps.some((s) => s.step === 'wp-cli');
       expect(hasWoo).toBe(true);
-      // Studio blueprint does NOT contain wp-cli steps — product CSV import
-      // happens out-of-band via `studio wp` in startStudioPreview.
+      // Studio blueprint does NOT contain wp-cli steps — WXR and product CSV
+      // imports both happen out-of-band via `studio wp` in startStudioPreview.
       expect(hasWpCli).toBe(false);
-    });
-
-    it('omits importWxr when the WXR is missing', () => {
-      const dir = mkDir();
-      const bp = buildBlueprint({ outputDir: dir, mode: 'studio' });
-      expect(bp.steps.find((s) => s.step === 'importWxr')).toBeUndefined();
     });
 
     it('persistBlueprint writes blueprint.studio.json in studio mode', () => {
@@ -150,7 +130,11 @@ describe('buildBlueprint', () => {
       expect(p).toBe(join(dir, 'playground', 'blueprint.studio.json'));
       expect(existsSync(p)).toBe(true);
       const parsed = JSON.parse(readFileSync(p, 'utf8'));
-      expect(parsed.steps.find((s: { step: string }) => s.step === 'importWxr')).toBeDefined();
+      const hasImporter = parsed.steps.some(
+        (s: { step: string; pluginData?: { slug: string } }) =>
+          s.step === 'installPlugin' && s.pluginData?.slug === 'wordpress-importer',
+      );
+      expect(hasImporter).toBe(true);
     });
   });
 });

@@ -46,27 +46,21 @@ export function buildBlueprint({ outputDir, mode = 'playground' }: BuildBlueprin
   const steps: BlueprintStep[] = [];
 
   if (mode === 'studio') {
-    // Studio bundles @wp-playground/blueprints as its site-creation blueprint
-    // runner. The blueprint's importWxr step runs DURING site creation — NOT
-    // through Studio's WP-CLI IPC bridge (which has a 120s no-activity limit
-    // that large imports trip). Embed the WXR as a LITERAL reference so the
-    // blueprint is self-contained and doesn't depend on staged files existing
-    // at blueprint-resolution time.
+    // Studio's blueprint runs INSIDE the `start-server` IPC window (120s
+    // no-activity). Playground's `importWxr` step hardcodes FETCH_ATTACHMENTS
+    // = true, so for sites with many media items it blows the window fetching
+    // from the origin CDN.
+    //
+    // Instead we only install plugins in the blueprint and stage the WXR +
+    // media files post-create. startStudioPreview then rewrites the WXR's
+    // attachment URLs to `http://localhost:<port>/wp-content/uploads/liberation/<filename>`
+    // (served by the local WP) and invokes `wp import --fetch-attachments`
+    // out-of-band — localhost fetches are fast so we comfortably stay inside
+    // the wp-cli-command IPC window too.
     steps.push({
       step: 'installPlugin',
       pluginData: { resource: 'wordpress.org/plugins', slug: 'wordpress-importer' },
     });
-    const wxrPath = join(abs, 'output.wxr');
-    if (existsSync(wxrPath)) {
-      steps.push({
-        step: 'importWxr',
-        file: {
-          resource: 'literal',
-          name: 'output.wxr',
-          contents: readFileSync(wxrPath, 'utf8'),
-        },
-      });
-    }
     if (hasProducts) {
       steps.push({
         step: 'installPlugin',
@@ -74,8 +68,7 @@ export function buildBlueprint({ outputDir, mode = 'playground' }: BuildBlueprin
       });
       // Product CSV import happens out-of-band via `wp eval-file` in
       // startStudioPreview — WC core has no CLI CSV-import subcommand, and the
-      // blueprint schema has no native wc_product_importer step. Products CSVs
-      // are typically small (tens of products), so the IPC window is fine.
+      // blueprint schema has no native wc_product_importer step.
     }
   } else {
     steps.push({
