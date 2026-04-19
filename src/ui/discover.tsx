@@ -17,8 +17,8 @@ import { webflowAdapter } from '../adapters/webflow.js';
 import { weeblyAdapter } from '../adapters/weebly.js';
 import { wixAdapter, type Inventory } from '../adapters/wix.js';
 import { mkdirSync, existsSync, writeFileSync, readFileSync } from 'fs';
-import { join, dirname } from 'path';
-import { autoPreview } from './preview.js';
+import { join } from 'path';
+// TEMPORARY: preview temporarily disabled — autoPreview import removed. See fix/skip-preview-temporarily.
 
 function siteOutputDir(baseDir: string, url: string): string {
   let host: string;
@@ -433,12 +433,11 @@ export function runDiscover(url: string, opts: Partial<LiberateProps> = {}): voi
   waitUntilExit()
     .then(async () => {
       if (!wxrPath) return;
-      // Post-extract: always boot a local site (Studio if installed, else
-      // Playground) so the user can verify content before importing anywhere
-      // real. autoPreview honors nonInteractive internally — it still boots
-      // the site but skips browser/app auto-open so scripts get a URL.
-      const outputDir = dirname(wxrPath);
-      await autoPreview(outputDir, { nonInteractive: props.nonInteractive });
+      // TEMPORARY: preview temporarily disabled (see fix/skip-preview-temporarily).
+      // Restore by reverting this commit; the original block was:
+      //   const outputDir = dirname(wxrPath);
+      //   await autoPreview(outputDir, { nonInteractive: props.nonInteractive });
+      console.log(`\n  Preview skipped (temporarily disabled). WXR at: ${wxrPath}`);
       if (props.nonInteractive) return;
       const answer = await ask('\nReady to import to WordPress? (y/N) ');
       if (answer.toLowerCase() !== 'y') {
