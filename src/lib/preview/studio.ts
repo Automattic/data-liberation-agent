@@ -98,19 +98,18 @@ async function removeStudioSite(name: string): Promise<void> {
 }
 
 /**
- * Stage the extraction artifacts inside the Studio site so WP-CLI imports can
- * resolve them as normal uploads (WXR attachment URLs reference these paths).
+ * Stage extraction artifacts that the blueprint can't inline (media files +
+ * products.csv) inside the Studio site's wp-content/uploads/liberation/. The
+ * WXR itself is inlined into the blueprint as a LiteralReference — see
+ * blueprint-builder.ts for why (bypasses Studio's WP-CLI IPC 120s timeout).
  */
 function stageArtifacts(outputDir: string, sitePath: string): {
-  wxrRelPath: string;
   productsCsvRelPath: string | null;
   hasMedia: boolean;
 } {
   const absOutput = resolve(outputDir);
   const stageDir = join(sitePath, UPLOADS_SUBDIR);
   mkdirSync(stageDir, { recursive: true });
-
-  copyFileSync(join(absOutput, 'output.wxr'), join(stageDir, 'output.wxr'));
 
   const mediaSrc = join(absOutput, 'media');
   let hasMedia = false;
@@ -128,7 +127,6 @@ function stageArtifacts(outputDir: string, sitePath: string): {
   }
 
   return {
-    wxrRelPath: `${UPLOADS_SUBDIR}/output.wxr`,
     productsCsvRelPath,
     hasMedia,
   };
@@ -191,8 +189,10 @@ export async function startStudioPreview(opts: StartStudioOpts): Promise<StartPr
   // From here on, the site exists. Any failure should trigger cleanup so
   // repeated failed runs don't pile up orphaned sites in `studio site list`.
   try {
+    // WXR import happened DURING site creation via the blueprint's importWxr
+    // step — see blueprint-builder.ts. We only stage media + products.csv for
+    // the out-of-band WooCommerce product import below.
     const staged = stageArtifacts(opts.outputDir, sitePath);
-    await studioWp(sitePath, ['import', staged.wxrRelPath, '--authors=skip']);
 
     if (hasProducts && staged.productsCsvRelPath) {
       await studioWp(sitePath, [

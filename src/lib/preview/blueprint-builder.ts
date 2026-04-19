@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
 export type BlueprintMode = 'playground' | 'studio';
@@ -35,21 +35,36 @@ export function buildBlueprint({ outputDir, mode = 'playground' }: BuildBlueprin
   const steps: BlueprintStep[] = [];
 
   if (mode === 'studio') {
-    // Studio has no --mount equivalent. We create the site with just the
-    // plugins pre-installed (wordpress-importer for WXR, WooCommerce if the
-    // extraction has products). The actual imports happen out-of-band via
-    // `studio wp` after files are copied into the site's uploads dir — see
-    // startStudioPreview. landingPage and importWxr are deliberately left out
-    // because Studio rejects or can't resolve them without a mount.
+    // Studio bundles @wp-playground/blueprints as its site-creation blueprint
+    // runner. The blueprint's importWxr step runs DURING site creation — NOT
+    // through Studio's WP-CLI IPC bridge (which has a 120s no-activity limit
+    // that large imports trip). Embed the WXR as a LITERAL reference so the
+    // blueprint is self-contained and doesn't depend on staged files existing
+    // at blueprint-resolution time.
     steps.push({
       step: 'installPlugin',
       pluginData: { resource: 'wordpress.org/plugins', slug: 'wordpress-importer' },
     });
+    const wxrPath = join(abs, 'output.wxr');
+    if (existsSync(wxrPath)) {
+      steps.push({
+        step: 'importWxr',
+        file: {
+          resource: 'literal',
+          name: 'output.wxr',
+          contents: readFileSync(wxrPath, 'utf8'),
+        },
+      });
+    }
     if (hasProducts) {
       steps.push({
         step: 'installPlugin',
         pluginData: { resource: 'wordpress.org/plugins', slug: 'woocommerce' },
       });
+      // Product CSV import still happens out-of-band via `studio wp wc
+      // product_importer` in startStudioPreview — the blueprint schema has no
+      // native wc_product_importer step. Products CSVs are typically small
+      // (tens of products), so the 120s IPC window is not an issue.
     }
   } else {
     steps.push({
