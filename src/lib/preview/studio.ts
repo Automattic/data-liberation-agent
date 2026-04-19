@@ -19,6 +19,18 @@ const PRODUCT_IMPORT_SCRIPT = resolve(
   'import-products.php',
 );
 
+/**
+ * Absolute path to the vendored WXR-importer PHP script. Installs a
+ * `pre_http_request` filter that short-circuits attachment HTTP fetches by
+ * basename-match against the source dir, then runs WP_Import::import().
+ * Needed because Studio's bundled wp-cli predates `wp import --source-dir`.
+ */
+const WXR_IMPORT_SCRIPT = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  'scripts',
+  'import-wxr.php',
+);
+
 export interface StudioSite {
   id: string;
   name: string;
@@ -115,14 +127,18 @@ async function removeStudioSite(sitePath: string): Promise<void> {
 }
 
 /**
- * Stage extraction artifacts that the blueprint can't inline (media files,
- * products.csv, and the WXR itself) inside the Studio site's wp-content/
- * uploads/liberation/. The WXR is imported out-of-band via `wp import` after
- * site creation — see startStudioPreview for why.
+ * Stage extraction artifacts (media files, the WXR, products.csv) AND the
+ * vendored PHP importer scripts inside the Studio site's wp-content/uploads/
+ * liberation/ directory. The scripts must live under the site path because
+ * Studio's wp-cli runtime can't read arbitrary host paths — `wp eval-file
+ * /Users/.../import-wxr.php` errors out with "does not exist" even when the
+ * file is present on the host.
  */
 function stageArtifacts(outputDir: string, sitePath: string): {
   wxrRelPath: string | null;
   productsCsvRelPath: string | null;
+  wxrScriptRelPath: string;
+  productScriptRelPath: string;
   hasMedia: boolean;
 } {
   const absOutput = resolve(outputDir);
@@ -152,9 +168,20 @@ function stageArtifacts(outputDir: string, sitePath: string): {
     productsCsvRelPath = `${UPLOADS_SUBDIR}/products.csv`;
   }
 
+  // Vendored PHP scripts. Studio's wp-cli can't eval-file host paths, so copy
+  // them under the site dir. They're idempotent / overwrite-safe across reruns.
+  const scriptsDir = join(stageDir, 'scripts');
+  mkdirSync(scriptsDir, { recursive: true });
+  copyFileSync(WXR_IMPORT_SCRIPT, join(scriptsDir, 'import-wxr.php'));
+  copyFileSync(PRODUCT_IMPORT_SCRIPT, join(scriptsDir, 'import-products.php'));
+  const wxrScriptRelPath = `${UPLOADS_SUBDIR}/scripts/import-wxr.php`;
+  const productScriptRelPath = `${UPLOADS_SUBDIR}/scripts/import-products.php`;
+
   return {
     wxrRelPath,
     productsCsvRelPath,
+    wxrScriptRelPath,
+    productScriptRelPath,
     hasMedia,
   };
 }
@@ -174,10 +201,12 @@ export interface StartStudioOpts {
  *   3. Rewrite `<wp:attachment_url>` entries so their basename matches the
  *      staged filename — collision suffixes (`foo-2.jpg`) would otherwise
  *      mismatch the original URL's basename.
- *   4. Run `wp import --source-dir=<staged-media-dir>`. The import command
- *      installs a `pre_http_request` filter that short-circuits attachment
- *      fetches by basename-matching against the source dir — no HTTP, no
- *      CDN round-trips, no deadlock with Studio's SinglePHPInstanceManager.
+ *   4. Run the vendored `import-wxr.php` via `wp eval-file`. It installs a
+ *      `pre_http_request` filter that basename-matches attachment URLs
+ *      against the staged source dir and short-circuits the fetch — no HTTP,
+ *      no CDN round-trips, no deadlock with Studio's SinglePHPInstanceManager.
+ *      (Studio's bundled wp-cli predates `wp import --source-dir`, so we
+ *      replicate that behavior ourselves.)
  *   5. Run the vendored import-products.php via `wp eval-file` — WC core has
  *      no CLI CSV-import subcommand, so we invoke WC_Product_CSV_Importer
  *      directly. Product-import failures are non-fatal.
@@ -235,26 +264,29 @@ export async function startStudioPreview(opts: StartStudioOpts): Promise<StartPr
     if (staged.wxrRelPath) {
       const wxrAbsPath = join(sitePath, staged.wxrRelPath);
       const mediaDir = join(sitePath, UPLOADS_SUBDIR);
-      // `wp import --source-dir=<dir>` adds a `pre_http_request` filter that
-      // matches attachment URLs by basename against files in the dir and
-      // short-circuits the HTTP fetch when a match is found. Our collision
-      // handling (`foo.jpg`, `foo-2.jpg`) can produce staged filenames that
-      // differ from the original URL's basename — rewrite those URLs so the
-      // basename matches the staged file. Host doesn't matter (fetch is
-      // short-circuited); use a sentinel so fallback fetches fail loudly
-      // instead of quietly hitting the origin.
+      // Studio's bundled wp-cli lacks `wp import --source-dir` (newer flag),
+      // so we drive the import from our own PHP script which installs a
+      // `pre_http_request` filter to basename-match attachment URLs against
+      // the local staged dir. Collision-suffixed filenames (`foo-2.jpg`)
+      // would mismatch the origin URL's basename — rewrite those URLs so
+      // basename matches the staged file. 127.0.0.1 is chosen as the
+      // rewrite host because wp_http_validate_url accepts numeric IPs
+      // unconditionally (it only does DNS lookups for named hosts) and the
+      // PHP script whitelists it via http_request_host_is_external.
       const mediaMap = buildMediaUrlMap(opts.outputDir);
-      rewriteWxrAttachmentUrls(wxrAbsPath, mediaMap, 'http://dla-local');
+      rewriteWxrAttachmentUrls(wxrAbsPath, mediaMap, 'http://127.0.0.1');
+      const wxrScriptAbs = join(sitePath, staged.wxrScriptRelPath);
       await studioWp(sitePath, [
-        'import', wxrAbsPath, '--authors=skip', `--source-dir=${mediaDir}`,
+        'eval-file', wxrScriptAbs, wxrAbsPath, mediaDir,
       ]);
     }
 
     if (hasProducts && staged.productsCsvRelPath) {
       const csvAbsPath = join(sitePath, staged.productsCsvRelPath);
+      const productScriptAbs = join(sitePath, staged.productScriptRelPath);
       try {
         await studioWp(sitePath, [
-          'eval-file', PRODUCT_IMPORT_SCRIPT, csvAbsPath, '--user=admin',
+          'eval-file', productScriptAbs, csvAbsPath, '--user=admin',
         ]);
       } catch (err) {
         // Content is already in; losing the whole site over products is too
