@@ -1,5 +1,6 @@
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 export type BlueprintMode = 'playground' | 'studio';
 
@@ -23,6 +24,16 @@ export interface Blueprint {
 export const VFS_MOUNT_DIR = '/wordpress/wp-content/uploads/liberation';
 export const IMPORT_COMPLETE_MARKER = '.import-complete';
 
+/** Absolute path to the vendored product-importer PHP script on the host. */
+const PRODUCT_IMPORT_SCRIPT_HOST = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  'scripts',
+  'import-products.php',
+);
+
+/** Where the script lands inside Playground's VFS before wp-cli eval-files it. */
+const PRODUCT_IMPORT_SCRIPT_VFS = `${VFS_MOUNT_DIR}/import-products.php`;
+
 export interface BuildBlueprintOpts {
   outputDir: string;
   mode?: BlueprintMode;
@@ -35,12 +46,17 @@ export function buildBlueprint({ outputDir, mode = 'playground' }: BuildBlueprin
   const steps: BlueprintStep[] = [];
 
   if (mode === 'studio') {
-    // Studio has no --mount equivalent. We create the site with just the
-    // plugins pre-installed (wordpress-importer for WXR, WooCommerce if the
-    // extraction has products). The actual imports happen out-of-band via
-    // `studio wp` after files are copied into the site's uploads dir — see
-    // startStudioPreview. landingPage and importWxr are deliberately left out
-    // because Studio rejects or can't resolve them without a mount.
+    // Studio's blueprint runs INSIDE the `start-server` IPC window (120s
+    // no-activity). Playground's `importWxr` step hardcodes FETCH_ATTACHMENTS
+    // = true, so for sites with many media items it blows the window fetching
+    // from the origin CDN.
+    //
+    // Instead we only install plugins in the blueprint and stage the WXR +
+    // media files post-create. startStudioPreview then rewrites the WXR's
+    // attachment URLs to `http://localhost:<port>/wp-content/uploads/liberation/<filename>`
+    // (served by the local WP) and invokes `wp import --fetch-attachments`
+    // out-of-band — localhost fetches are fast so we comfortably stay inside
+    // the wp-cli-command IPC window too.
     steps.push({
       step: 'installPlugin',
       pluginData: { resource: 'wordpress.org/plugins', slug: 'wordpress-importer' },
@@ -50,6 +66,9 @@ export function buildBlueprint({ outputDir, mode = 'playground' }: BuildBlueprin
         step: 'installPlugin',
         pluginData: { resource: 'wordpress.org/plugins', slug: 'woocommerce' },
       });
+      // Product CSV import happens out-of-band via `wp eval-file` in
+      // startStudioPreview — WC core has no CLI CSV-import subcommand, and the
+      // blueprint schema has no native wc_product_importer step.
     }
   } else {
     steps.push({
@@ -61,9 +80,17 @@ export function buildBlueprint({ outputDir, mode = 'playground' }: BuildBlueprin
         step: 'installPlugin',
         pluginData: { resource: 'wordpress.org/plugins', slug: 'woocommerce' },
       });
+      // WC core has no CLI CSV-import subcommand, so we writeFile our vendored
+      // import-products.php into the mount dir and invoke it via wp eval-file
+      // with the CSV path as a positional arg.
+      steps.push({
+        step: 'writeFile',
+        path: PRODUCT_IMPORT_SCRIPT_VFS,
+        data: readFileSync(PRODUCT_IMPORT_SCRIPT_HOST, 'utf8'),
+      });
       steps.push({
         step: 'wp-cli',
-        command: `wp wc product_importer import ${VFS_MOUNT_DIR}/products.csv --user=admin`,
+        command: `wp eval-file ${PRODUCT_IMPORT_SCRIPT_VFS} ${VFS_MOUNT_DIR}/products.csv --user=admin`,
       });
     }
     // Playground-only: sentinel the host filesystem via the mount so the

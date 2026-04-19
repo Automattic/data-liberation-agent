@@ -155,7 +155,8 @@ export async function startPreview(opts: InternalOpts): Promise<StartPreviewResu
     // Prefer Studio when its CLI is installed — gives the user a persistent,
     // real WordPress site instead of an ephemeral WASM Playground. The same
     // blueprint is used for both paths. `opts._noStudio` lets tests force the
-    // Playground branch without mocking the `studio` binary.
+    // Playground branch without mocking the `studio` binary. Large WXRs are
+    // handled via import chunking inside startStudioPreview — see studio.ts.
     if (!opts._noStudio && isStudioAvailable()) {
       onPhase('download');
       onPhase('spawn');
