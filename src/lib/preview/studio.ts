@@ -3,7 +3,7 @@ import { promisify } from 'node:util';
 import { resolve, basename, join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { cpSync, existsSync, mkdirSync, copyFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, copyFileSync, rmSync } from 'node:fs';
 import { persistBlueprint } from './blueprint-builder.js';
 import { buildMediaUrlMap, rewriteWxrAttachmentUrls } from './media-url-map.js';
 import type { StartPreviewResult } from './types.js';
@@ -218,18 +218,35 @@ export interface StartStudioOpts {
  */
 export async function startStudioPreview(opts: StartStudioOpts): Promise<StartPreviewResult> {
   const blueprintPath = persistBlueprint(opts.outputDir, 'studio');
-  let existingNames: string[] = [];
+  let existingSites: StudioSite[] = [];
   try {
-    const sites = await listStudioSites();
-    existingNames = sites.map((s) => s.name);
+    existingSites = await listStudioSites();
   } catch {
     // If we can't list sites, proceed with the base slug — `studio site create`
     // will error on true collision and we'll surface that to the user.
   }
+  const existingNames = existingSites.map((s) => s.name);
+  const existingPaths = new Set(existingSites.map((s) => resolve(s.path)));
   const name = makeStudioSiteName(opts.outputDir, existingNames);
   const sitePath = join(defaultStudioRoot(), name);
   const absOutput = resolve(opts.outputDir);
   const hasProducts = existsSync(join(absOutput, 'products.csv'));
+
+  // If a directory exists at sitePath but the daemon has no matching site,
+  // it's an orphan from a prior failed run. Studio reuses the dir silently
+  // (skips "Creating site directory…") and then WP server crashes during
+  // blueprint apply because SQLite/plugins/etc. collide with the reused
+  // state. Clean it up before `site create` so we get a fresh install.
+  //
+  // Only delete dirs under the standard Studio root — never touch a user
+  // directory that Studio actively owns.
+  if (
+    existsSync(sitePath) &&
+    !existingPaths.has(resolve(sitePath)) &&
+    resolve(sitePath).startsWith(resolve(defaultStudioRoot()) + '/')
+  ) {
+    rmSync(sitePath, { recursive: true, force: true });
+  }
 
   try {
     await execFileAsync(
