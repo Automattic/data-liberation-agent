@@ -6,7 +6,6 @@ import { fileURLToPath } from 'node:url';
 import { cpSync, existsSync, mkdirSync, copyFileSync } from 'node:fs';
 import { persistBlueprint } from './blueprint-builder.js';
 import { buildMediaUrlMap, rewriteWxrAttachmentUrls } from './media-url-map.js';
-import { startStaticFileServer } from './static-file-server.js';
 import type { StartPreviewResult } from './types.js';
 
 const execFileAsync = promisify(execFile);
@@ -172,11 +171,13 @@ export interface StartStudioOpts {
  *      and fetching 100s of attachments from the origin CDN easily blows
  *      Studio's 120s `start-server` silence timeout.
  *   2. Stage media, the WXR, and products.csv into wp-content/uploads/liberation/.
- *   3. Rewrite `<wp:attachment_url>` entries in the staged WXR to point at
- *      `http://localhost:<port>/wp-content/uploads/liberation/<filename>` so
- *      WP_Import fetches from the local WP instance (fast) instead of the CDN.
- *   4. Run `wp import` with `--fetch-attachments` — localhost fetches fit
- *      inside the wp-cli-command IPC window.
+ *   3. Rewrite `<wp:attachment_url>` entries so their basename matches the
+ *      staged filename — collision suffixes (`foo-2.jpg`) would otherwise
+ *      mismatch the original URL's basename.
+ *   4. Run `wp import --source-dir=<staged-media-dir>`. The import command
+ *      installs a `pre_http_request` filter that short-circuits attachment
+ *      fetches by basename-matching against the source dir — no HTTP, no
+ *      CDN round-trips, no deadlock with Studio's SinglePHPInstanceManager.
  *   5. Run the vendored import-products.php via `wp eval-file` — WC core has
  *      no CLI CSV-import subcommand, so we invoke WC_Product_CSV_Importer
  *      directly. Product-import failures are non-fatal.
@@ -231,32 +232,22 @@ export async function startStudioPreview(opts: StartStudioOpts): Promise<StartPr
   try {
     const staged = stageArtifacts(opts.outputDir, sitePath);
 
-    // Look up the freshly-assigned port so we can rewrite WXR URLs to hit
-    // local WP instead of the origin CDN.
-    const sitesBefore = await listStudioSites();
-    const site = sitesBefore.find((s) => s.name === name);
-    if (!site) {
-      throw new Error(`Studio site "${name}" not found after creation`);
-    }
-
     if (staged.wxrRelPath) {
       const wxrAbsPath = join(sitePath, staged.wxrRelPath);
-      // Studio's SinglePHPInstanceManager means we can't have WP_Import fetch
-      // from Studio's own WP server during `wp import` — the wp-cli PHP holds
-      // the only slot. Serve the staged media from a separate Node HTTP server
-      // on an ephemeral port; PHP's outbound curl reaches it without touching
-      // the Studio PHP pool.
-      const mediaServer = await startStaticFileServer(join(sitePath, UPLOADS_SUBDIR));
-      try {
-        const mediaMap = buildMediaUrlMap(opts.outputDir);
-        const localBase = `http://127.0.0.1:${mediaServer.port}`;
-        rewriteWxrAttachmentUrls(wxrAbsPath, mediaMap, localBase);
-        await studioWp(sitePath, [
-          'import', wxrAbsPath, '--authors=skip', '--fetch-attachments',
-        ]);
-      } finally {
-        await mediaServer.close();
-      }
+      const mediaDir = join(sitePath, UPLOADS_SUBDIR);
+      // `wp import --source-dir=<dir>` adds a `pre_http_request` filter that
+      // matches attachment URLs by basename against files in the dir and
+      // short-circuits the HTTP fetch when a match is found. Our collision
+      // handling (`foo.jpg`, `foo-2.jpg`) can produce staged filenames that
+      // differ from the original URL's basename — rewrite those URLs so the
+      // basename matches the staged file. Host doesn't matter (fetch is
+      // short-circuited); use a sentinel so fallback fetches fail loudly
+      // instead of quietly hitting the origin.
+      const mediaMap = buildMediaUrlMap(opts.outputDir);
+      rewriteWxrAttachmentUrls(wxrAbsPath, mediaMap, 'http://dla-local');
+      await studioWp(sitePath, [
+        'import', wxrAbsPath, '--authors=skip', `--source-dir=${mediaDir}`,
+      ]);
     }
 
     if (hasProducts && staged.productsCsvRelPath) {
@@ -273,6 +264,11 @@ export async function startStudioPreview(opts: StartStudioOpts): Promise<StartPr
       }
     }
 
+    const sites = await listStudioSites();
+    const site = sites.find((s) => s.name === name);
+    if (!site) {
+      throw new Error(`Studio site "${name}" not found after creation`);
+    }
     return {
       status: 'ready',
       url: site.url,
