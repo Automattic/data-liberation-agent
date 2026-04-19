@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { cpSync, existsSync, mkdirSync, copyFileSync } from 'node:fs';
 import { persistBlueprint } from './blueprint-builder.js';
 import { buildMediaUrlMap, rewriteWxrAttachmentUrls } from './media-url-map.js';
+import { startStaticFileServer } from './static-file-server.js';
 import type { StartPreviewResult } from './types.js';
 
 const execFileAsync = promisify(execFile);
@@ -240,12 +241,22 @@ export async function startStudioPreview(opts: StartStudioOpts): Promise<StartPr
 
     if (staged.wxrRelPath) {
       const wxrAbsPath = join(sitePath, staged.wxrRelPath);
-      const mediaMap = buildMediaUrlMap(opts.outputDir);
-      const localBase = `${site.url}/${UPLOADS_SUBDIR}`;
-      rewriteWxrAttachmentUrls(wxrAbsPath, mediaMap, localBase);
-      await studioWp(sitePath, [
-        'import', wxrAbsPath, '--authors=skip', '--fetch-attachments',
-      ]);
+      // Studio's SinglePHPInstanceManager means we can't have WP_Import fetch
+      // from Studio's own WP server during `wp import` — the wp-cli PHP holds
+      // the only slot. Serve the staged media from a separate Node HTTP server
+      // on an ephemeral port; PHP's outbound curl reaches it without touching
+      // the Studio PHP pool.
+      const mediaServer = await startStaticFileServer(join(sitePath, UPLOADS_SUBDIR));
+      try {
+        const mediaMap = buildMediaUrlMap(opts.outputDir);
+        const localBase = `http://127.0.0.1:${mediaServer.port}`;
+        rewriteWxrAttachmentUrls(wxrAbsPath, mediaMap, localBase);
+        await studioWp(sitePath, [
+          'import', wxrAbsPath, '--authors=skip', '--fetch-attachments',
+        ]);
+      } finally {
+        await mediaServer.close();
+      }
     }
 
     if (hasProducts && staged.productsCsvRelPath) {
