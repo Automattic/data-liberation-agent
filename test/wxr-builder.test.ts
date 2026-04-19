@@ -220,6 +220,22 @@ describe('WxrBuilder.serialize', () => {
     expect(xml.length).toBeGreaterThan(0);
   });
 
+  it('never emits 0000-00-00 dates on any item type', () => {
+    // Regression: empty post dates caused WP's WXR importer to route
+    // attachment uploads into wp-content/uploads/0000/00/, which broke
+    // Studio site creation with ENOTEMPTY during blueprint cleanup.
+    const wxr = new WxrBuilder({ title: 'Site', url: 'https://example.com' });
+    wxr.addMedia({ url: 'https://cdn.example.com/photo.jpg', title: 'Dateless' });
+    wxr.addPage({ title: 'Dateless Page', slug: 'dateless-page' });
+    wxr.addPost({ title: 'Dateless Post', slug: 'dateless-post' });
+
+    const wxrPath = join(tempDir, 'output.wxr');
+    wxr.serialize(wxrPath);
+    const xml = readFileSync(wxrPath, 'utf8');
+
+    expect(xml).not.toContain('0000-00-00');
+  });
+
   it('includes media attachments with alt text', () => {
     const wxr = new WxrBuilder({ title: 'Site', url: 'https://example.com' });
     wxr.addMedia({
