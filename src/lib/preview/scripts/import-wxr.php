@@ -39,15 +39,37 @@ if ( ! is_readable( $source_dir ) ) {
 define( 'WP_LOAD_IMPORTERS', true );
 require_once ABSPATH . 'wp-admin/includes/admin.php';
 
+// Loading wordpress-importer is trickier than it looks. WP-CLI auto-loads
+// active plugins at bootstrap — BEFORE our script runs. The plugin's entry
+// point early-returns unless WP_LOAD_IMPORTERS is defined, so at that first
+// load WP_Import does NOT get defined, but the file path IS cached in the
+// require_once registry. Our subsequent `require_once` is a no-op and the
+// class stays undefined.
+//
+// Workaround: `include` (not require_once) the source file directly — this
+// bypasses the once-registry and re-executes the body now that we've defined
+// WP_LOAD_IMPORTERS. Target the inner `src/wordpress-importer.php` because
+// the outer `wordpress-importer.php` git-loader is also in the once-cache,
+// so going through it would no-op again.
 if ( ! class_exists( 'WP_Import' ) ) {
-	$plugin_file = WP_PLUGIN_DIR . '/wordpress-importer/wordpress-importer.php';
-	if ( ! file_exists( $plugin_file ) ) {
-		WP_CLI::error( 'wordpress-importer plugin is not installed.' );
+	$candidates = array(
+		WP_PLUGIN_DIR . '/wordpress-importer/src/wordpress-importer.php',
+		WP_PLUGIN_DIR . '/wordpress-importer/wordpress-importer.php',
+	);
+	$loaded = false;
+	foreach ( $candidates as $candidate ) {
+		if ( file_exists( $candidate ) ) {
+			include $candidate;
+			$loaded = true;
+			break;
+		}
 	}
-	require_once $plugin_file;
+	if ( ! $loaded ) {
+		WP_CLI::error( 'wordpress-importer plugin files not found under ' . WP_PLUGIN_DIR );
+	}
 }
 if ( ! class_exists( 'WP_Import' ) ) {
-	WP_CLI::error( 'WP_Import class not available after loading the plugin.' );
+	WP_CLI::error( 'WP_Import class still not defined after re-including the plugin. Plugin layout may have changed — check wordpress-importer source.' );
 }
 
 $hits   = 0;
