@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 export type BlueprintMode = 'playground' | 'studio';
 
@@ -22,6 +23,16 @@ export interface Blueprint {
 
 export const VFS_MOUNT_DIR = '/wordpress/wp-content/uploads/liberation';
 export const IMPORT_COMPLETE_MARKER = '.import-complete';
+
+/** Absolute path to the vendored product-importer PHP script on the host. */
+const PRODUCT_IMPORT_SCRIPT_HOST = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  'scripts',
+  'import-products.php',
+);
+
+/** Where the script lands inside Playground's VFS before wp-cli eval-files it. */
+const PRODUCT_IMPORT_SCRIPT_VFS = `${VFS_MOUNT_DIR}/import-products.php`;
 
 export interface BuildBlueprintOpts {
   outputDir: string;
@@ -61,10 +72,10 @@ export function buildBlueprint({ outputDir, mode = 'playground' }: BuildBlueprin
         step: 'installPlugin',
         pluginData: { resource: 'wordpress.org/plugins', slug: 'woocommerce' },
       });
-      // Product CSV import still happens out-of-band via `studio wp wc
-      // product_importer` in startStudioPreview — the blueprint schema has no
-      // native wc_product_importer step. Products CSVs are typically small
-      // (tens of products), so the 120s IPC window is not an issue.
+      // Product CSV import happens out-of-band via `wp eval-file` in
+      // startStudioPreview — WC core has no CLI CSV-import subcommand, and the
+      // blueprint schema has no native wc_product_importer step. Products CSVs
+      // are typically small (tens of products), so the IPC window is fine.
     }
   } else {
     steps.push({
@@ -76,9 +87,17 @@ export function buildBlueprint({ outputDir, mode = 'playground' }: BuildBlueprin
         step: 'installPlugin',
         pluginData: { resource: 'wordpress.org/plugins', slug: 'woocommerce' },
       });
+      // WC core has no CLI CSV-import subcommand, so we writeFile our vendored
+      // import-products.php into the mount dir and invoke it via wp eval-file
+      // with the CSV path as a positional arg.
+      steps.push({
+        step: 'writeFile',
+        path: PRODUCT_IMPORT_SCRIPT_VFS,
+        data: readFileSync(PRODUCT_IMPORT_SCRIPT_HOST, 'utf8'),
+      });
       steps.push({
         step: 'wp-cli',
-        command: `wp wc product_importer import ${VFS_MOUNT_DIR}/products.csv --user=admin`,
+        command: `wp eval-file ${PRODUCT_IMPORT_SCRIPT_VFS} ${VFS_MOUNT_DIR}/products.csv --user=admin`,
       });
     }
     // Playground-only: sentinel the host filesystem via the mount so the

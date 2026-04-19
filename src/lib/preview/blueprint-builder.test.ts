@@ -40,7 +40,7 @@ describe('buildBlueprint', () => {
     expect(importWxr.file.path).toBe('/wordpress/wp-content/uploads/liberation/output.wxr');
   });
 
-  it('includes WooCommerce install + wp-cli import when products.csv exists', () => {
+  it('includes WooCommerce install + writeFile import-products.php + wp-cli eval-file when products.csv exists', () => {
     const dir = mkDir();
     writeFileSync(join(dir, 'output.wxr'), '<rss></rss>');
     writeFileSync(join(dir, 'products.csv'), 'name\nfoo');
@@ -53,8 +53,15 @@ describe('buildBlueprint', () => {
     );
     expect(install).toBeDefined();
 
+    const writeScript = bp.steps.find(
+      (s) => s.step === 'writeFile' && (s as any).path?.endsWith('/import-products.php'),
+    ) as any;
+    expect(writeScript).toBeDefined();
+    expect(writeScript.data).toContain('WC_Product_CSV_Importer');
+
     const wpcli = bp.steps.find((s) => s.step === 'wp-cli') as any;
-    expect(wpcli.command).toContain('wp wc product_importer import');
+    expect(wpcli.command).toContain('wp eval-file');
+    expect(wpcli.command).toContain('/wordpress/wp-content/uploads/liberation/import-products.php');
     expect(wpcli.command).toContain('/wordpress/wp-content/uploads/liberation/products.csv');
   });
 

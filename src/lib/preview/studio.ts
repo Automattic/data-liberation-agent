@@ -1,7 +1,8 @@
 import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
-import { resolve, basename, join } from 'node:path';
+import { resolve, basename, join, dirname } from 'node:path';
 import { homedir } from 'node:os';
+import { fileURLToPath } from 'node:url';
 import { cpSync, existsSync, mkdirSync, copyFileSync } from 'node:fs';
 import { persistBlueprint } from './blueprint-builder.js';
 import type { StartPreviewResult } from './types.js';
@@ -9,6 +10,13 @@ import type { StartPreviewResult } from './types.js';
 const execFileAsync = promisify(execFile);
 
 const UPLOADS_SUBDIR = 'wp-content/uploads/liberation';
+
+/** Absolute path to the vendored product-importer PHP script. */
+const PRODUCT_IMPORT_SCRIPT = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  'scripts',
+  'import-products.php',
+);
 
 export interface StudioSite {
   id: string;
@@ -82,18 +90,26 @@ async function studioWp(sitePath: string, args: string[]): Promise<string> {
  * Best-effort cleanup for a Studio site that `startStudioPreview` created but
  * then failed to finish setting up (staging, wp import, etc.). We'd rather
  * leak disk than leave half-imported sites cluttering `studio site list`.
- * `studio site remove` prompts interactively without --yes.
+ * Studio's `site delete` prompts interactively — we send 'y\n' on stdin.
+ * Identified by `--path` (the CLI has no --name) so callers pass the on-disk
+ * site path, not the site's display name.
  */
-async function removeStudioSite(name: string): Promise<void> {
+async function removeStudioSite(sitePath: string): Promise<void> {
   try {
-    await execFileAsync('studio', ['site', 'remove', '--name', name, '--yes'], {
-      timeout: 60_000,
-      maxBuffer: 10 * 1024 * 1024,
+    const child = execFile(
+      'studio',
+      ['site', 'delete', '--path', sitePath],
+      { timeout: 60_000, maxBuffer: 10 * 1024 * 1024 },
+    );
+    child.stdin?.end('y\n');
+    await new Promise<void>((resolve, reject) => {
+      child.on('exit', (code) => (code === 0 ? resolve() : reject(new Error(`studio site delete exited with ${code}`))));
+      child.on('error', reject);
     });
   } catch {
     // Removal itself failed — log once and give up; the user can clean
-    // manually via `studio site remove`.
-    console.error(`[preview] could not auto-remove orphaned Studio site "${name}"; remove manually with: studio site remove --name ${name} --yes`);
+    // manually via `studio site delete`.
+    console.error(`[preview] could not auto-remove orphaned Studio site at "${sitePath}"; remove manually with: studio site delete --path ${sitePath}`);
   }
 }
 
@@ -138,12 +154,15 @@ export interface StartStudioOpts {
 
 /**
  * Full-fidelity Studio preview:
- *   1. Create a site with a minimal blueprint (plugins pre-installed:
- *      wordpress-importer, and WooCommerce if products.csv exists).
- *   2. Copy the WXR, media, and products.csv into the site's wp-content/
- *      uploads/liberation/ directory so attachment URLs resolve.
- *   3. Run `studio wp import` to bring in posts + pages + media.
- *   4. Run `studio wp wc product_importer import` for WooCommerce products.
+ *   1. Create a site with a blueprint that pre-installs wordpress-importer +
+ *      WooCommerce (if products.csv exists) AND inlines the WXR via importWxr
+ *      so posts/pages/media import during `studio site create`.
+ *   2. Copy media + products.csv into the site's wp-content/uploads/liberation/
+ *      directory so attachment URLs resolve and the CSV is reachable from PHP.
+ *   3. Run the vendored import-products.php via `wp eval-file` — WC core has
+ *      no CLI CSV-import subcommand, so we invoke WC_Product_CSV_Importer
+ *      directly. Failures here are non-fatal (the site + content are already
+ *      live; user can re-run the importer or import via admin UI).
  *
  * Studio's `site create` blocks until the blueprint finishes, and studioWp
  * calls block until WP-CLI returns — so when we resolve, the full import is
@@ -186,8 +205,10 @@ export async function startStudioPreview(opts: StartStudioOpts): Promise<StartPr
     };
   }
 
-  // From here on, the site exists. Any failure should trigger cleanup so
-  // repeated failed runs don't pile up orphaned sites in `studio site list`.
+  // From here on, the site exists and has its WXR content imported. Infra
+  // failures (listing sites, staging artifacts) trigger cleanup; product-CSV
+  // failures are demoted to warnings so we don't nuke a working preview.
+  const warnings: string[] = [];
   try {
     // WXR import happened DURING site creation via the blueprint's importWxr
     // step — see blueprint-builder.ts. We only stage media + products.csv for
@@ -195,10 +216,17 @@ export async function startStudioPreview(opts: StartStudioOpts): Promise<StartPr
     const staged = stageArtifacts(opts.outputDir, sitePath);
 
     if (hasProducts && staged.productsCsvRelPath) {
-      await studioWp(sitePath, [
-        'wc', 'product_importer', 'import', staged.productsCsvRelPath,
-        '--user=admin',
-      ]);
+      const csvAbsPath = join(sitePath, staged.productsCsvRelPath);
+      try {
+        await studioWp(sitePath, [
+          'eval-file', PRODUCT_IMPORT_SCRIPT, csvAbsPath, '--user=admin',
+        ]);
+      } catch (err) {
+        // Content is already in; losing the whole site over products is too
+        // destructive. Surface as a warning so the user can retry the import
+        // via `wp eval-file` or the admin UI.
+        warnings.push(`Product import failed: ${(err as Error).message.trim()}`);
+      }
     }
 
     const sites = await listStudioSites();
@@ -210,12 +238,12 @@ export async function startStudioPreview(opts: StartStudioOpts): Promise<StartPr
       status: 'ready',
       url: site.url,
       port: site.port,
-      warnings: [],
+      warnings,
       source: 'studio',
       siteName: site.name,
     };
   } catch (err) {
-    await removeStudioSite(name);
+    await removeStudioSite(sitePath);
     return {
       status: 'failed',
       error: `Studio preview setup failed (site removed): ${(err as Error).message}`,
