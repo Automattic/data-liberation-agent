@@ -328,7 +328,13 @@ export async function startStudioPreview(opts: StartStudioOpts): Promise<StartPr
       // PHP script whitelists it via http_request_host_is_external.
       const mediaMap = buildMediaUrlMap(opts.outputDir);
       rewriteWxrAttachmentUrls(wxrHostPath, mediaMap, 'http://127.0.0.1');
+      // --skip-plugins=wordpress-importer prevents WP-CLI's bootstrap from
+      // loading the plugin (its entry-point function is declared outside the
+      // WP_LOAD_IMPORTERS guard, so a subsequent re-include would fatal on
+      // `Cannot redeclare`). Our script loads it fresh with WP_LOAD_IMPORTERS
+      // already set.
       await studioWp(sitePath, [
+        '--skip-plugins=wordpress-importer',
         'eval-file', wxrScriptVfsPath, wxrVfsPath, sourceDirVfsPath,
       ]);
     }
