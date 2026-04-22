@@ -6,6 +6,37 @@ AI agents: when you contribute an improvement, add an entry here. See [CONTRIBUT
 
 ---
 
+## 2026-04-22 — EmDash CMS detection and extraction
+
+**Found by:** Claude + Paul Maiorana
+**During:** Adding an adapter for Cloudflare's EmDash CMS (launched 2026-04-01)
+**Type:** platform adapter + platform quirk
+
+### What I found
+
+Three findings from reverse-engineering five production EmDash sites:
+
+1. **`/_emdash/admin` HTTP probe is the only universally-reliable detection signal.** EmDash doesn't emit a `<meta name="generator">` tag, Cloudflare Workers strips the distinctive `Server-Timing` header in production, and themes can strip every HTML source marker. But the `/_emdash/admin` route exists on every EmDash install and returns `302` to `/_emdash/admin/login` — verified across sites with default, customized, and fully-custom themes.
+2. **Sitemap can be empty even when content exists.** On a DashHost-hosted site with 173 imported WordPress posts, `/sitemap.xml` returned an empty `<urlset>` while `/posts` correctly listed all 173. Suspected sitemap-regen lag in DashHost's free tier or in EmDash itself. The adapter falls back to `/posts` archive crawl.
+3. **Default Blog theme's `/posts` archive does not paginate.** `templates/blog/src/pages/posts/index.astro` calls `getEmDashCollection("posts")` and renders all entries on one page. Sites with thousands of posts will return a single large HTML response — acceptable for v1, but a future adapter update may need pagination handling if that scale materializes.
+
+### How it works
+
+A new `PathProbe` signal type in `src/lib/extraction/detect-platform.ts` performs an HTTP HEAD against a platform-specific path and matches on response status + optional Location-header substring. EmDash's entry: `{ path: '/_emdash/admin', expectedStatus: [302, 401], locationContains: '/_emdash/admin/login' }`. Plus source-pattern signals for `<emdash-live-search>`, `class="emdash-*"`, `class="ec-comment-form"`, and `/_emdash/api/` in attribute context.
+
+Content extraction uses a layered cascade: `.article-content` (EmDash default theme) → `.post-body`/`.entry-content`/`.post-content` (WP-influenced custom themes) → `<article>` → `<main>` → `<body>`, with widgets (sidebars, comment form, related-posts, live-search) stripped regardless of container.
+
+### Why it's better than the previous approach
+
+First EmDash adapter in the project. No previous approach to compare against.
+
+Validation:
+- yurulog.liberogic.jp: 20 Japanese-language posts extracted with local media references preserved
+- pmaioranatest.dashhost.cc: 173 WP-imported posts discovered via `/posts` fallback (sitemap empty), external WP image URLs passed through
+- cedarrapidswebdesign.com and plugdash.dev: detection verified, discovery returns cleanly (no blog content to extract)
+
+---
+
 ## 2026-04-16 — Wix Tag Manager poisons content extraction
 
 **Found by:** Claude + human contributor
