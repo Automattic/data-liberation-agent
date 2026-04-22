@@ -204,4 +204,28 @@ describe('PATH_PROBES infrastructure', () => {
     const result = await detectFromHttp('https://example.com');
     expect(result.platform).toBe('unknown');  // Status matched but Location didn't
   });
+
+  it('does NOT match when Location header is missing entirely', async () => {
+    PATH_PROBES.push({
+      path: '/_test/admin',
+      expectedStatus: [302],
+      locationContains: '/_test/admin/login',
+      platform: 'testplatform',
+      signal: '/_test/admin probe with location check',
+    });
+
+    global.fetch = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        headers: new Map(),
+        text: () => Promise.resolve('<html></html>'),
+      })
+      .mockResolvedValueOnce({
+        status: 302,
+        headers: new Map(),  // No Location header
+      });
+
+    const result = await detectFromHttp('https://example.com');
+    expect(result.platform).toBe('unknown');
+  });
 });
