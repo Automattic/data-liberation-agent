@@ -130,6 +130,117 @@ export function extractEmDashContent(html: string): string {
   return '';
 }
 
+// ---------------------------------------------------------------------------
+// Metadata extraction helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse all JSON-LD blocks in the page, flattening @graph wrappers and
+ * stripping CDATA markers. Returns the flat list of JSON-LD objects.
+ * Mirrors hubspot.ts:parseJsonLdBlocks pattern.
+ */
+function parseJsonLdBlocks($: CheerioRoot): Record<string, unknown>[] {
+  const out: Record<string, unknown>[] = [];
+  $('script[type="application/ld+json"]').each((_, el) => {
+    const raw = $(el)
+      .text()
+      .trim()
+      .replace(/^<!\[CDATA\[/i, '')
+      .replace(/\]\]>$/, '')
+      .trim();
+    if (!raw) return;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return;
+    }
+    const items = Array.isArray(parsed) ? parsed : [parsed];
+    for (const item of items) {
+      if (!item || typeof item !== 'object') continue;
+      const obj = item as Record<string, unknown>;
+      const graph = obj['@graph'];
+      if (Array.isArray(graph)) {
+        for (const node of graph) {
+          if (node && typeof node === 'object') out.push(node as Record<string, unknown>);
+        }
+      } else {
+        out.push(obj);
+      }
+    }
+  });
+  return out;
+}
+
+function isArticleLd(block: Record<string, unknown>): boolean {
+  const type = block['@type'];
+  const match = (t: unknown) => t === 'BlogPosting' || t === 'Article' || t === 'NewsArticle';
+  return match(type) || (Array.isArray(type) && type.some(match));
+}
+
+export interface EmDashPageMetadata {
+  title: string;
+  excerpt: string;
+  date: string;
+  modifiedDate: string;
+}
+
+export function extractEmDashMetadata(html: string): EmDashPageMetadata {
+  const $ = cheerio.load(html);
+
+  // Title: article-title → h1 → og:title → <title>
+  const articleTitle = $('h1.article-title').first().text().trim();
+  const title =
+    articleTitle ||
+    extractMeta(html, 'og:title') ||
+    $('h1').first().text().trim() ||
+    extractTitle(html);
+
+  // Excerpt: p.article-excerpt → og:description → <meta name="description">
+  const articleExcerpt = $('p.article-excerpt').first().text().trim();
+  const excerpt =
+    articleExcerpt ||
+    extractMeta(html, 'og:description') ||
+    extractMeta(html, 'description') ||
+    '';
+
+  // Date: article:published_time → JSON-LD datePublished → <time datetime>
+  let date = extractMeta(html, 'article:published_time');
+  if (!date) {
+    for (const block of parseJsonLdBlocks($)) {
+      if (!isArticleLd(block)) continue;
+      const dp = block.datePublished;
+      if (typeof dp === 'string' && dp) {
+        date = dp;
+        break;
+      }
+    }
+  }
+  if (!date) {
+    const timeAttr = $('time[datetime]').first().attr('datetime');
+    if (timeAttr) date = timeAttr;
+  }
+
+  // Modified date: article:modified_time → JSON-LD dateModified
+  let modifiedDate = extractMeta(html, 'article:modified_time');
+  if (!modifiedDate) {
+    for (const block of parseJsonLdBlocks($)) {
+      if (!isArticleLd(block)) continue;
+      const dm = block.dateModified;
+      if (typeof dm === 'string' && dm) {
+        modifiedDate = dm;
+        break;
+      }
+    }
+  }
+
+  return { title, excerpt, date: date ?? '', modifiedDate: modifiedDate ?? '' };
+}
+
+// ---------------------------------------------------------------------------
+// Media / URL helpers
+// ---------------------------------------------------------------------------
+
 // Paths EmDash serves locally from the media library.
 const LOCAL_MEDIA_PREFIX = '/_emdash/api/media/file/';
 

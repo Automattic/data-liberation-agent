@@ -121,7 +121,8 @@ describe('emdashAdapter.discover', () => {
   });
 });
 
-import { extractEmDashContent } from '../../src/adapters/emdash.js';  // new named export
+import { extractEmDashContent } from '../../src/adapters/emdash.js';
+import { extractEmDashMetadata } from '../../src/adapters/emdash.js';
 
 describe('extractEmDashContent', () => {
   it('extracts from <div class="article-content"> (default theme)', () => {
@@ -196,5 +197,56 @@ describe('extractEmDashContent', () => {
     expect(result).not.toContain('Related post link');
     expect(result).not.toContain('Widget noise');
     expect(result).not.toContain('emdash-live-search');
+  });
+});
+
+describe('extractEmDashMetadata', () => {
+  it('extracts title from h1.article-title, excerpt from p.article-excerpt', () => {
+    const html = `
+      <html><body>
+        <article class="article">
+          <h1 class="article-title">The Real Title</h1>
+          <p class="article-excerpt">The real excerpt.</p>
+        </article>
+      </body></html>
+    `;
+    const meta = extractEmDashMetadata(html);
+    expect(meta.title).toBe('The Real Title');
+    expect(meta.excerpt).toBe('The real excerpt.');
+  });
+
+  it('falls back to og:title then <title>', () => {
+    const html = `
+      <html><head>
+        <title>Fallback Title</title>
+        <meta property="og:title" content="OG Title">
+      </head><body></body></html>
+    `;
+    const meta = extractEmDashMetadata(html);
+    expect(meta.title).toBe('OG Title');
+  });
+
+  it('extracts date from article:published_time meta', () => {
+    const html = `
+      <html><head>
+        <meta property="article:published_time" content="2026-03-02T15:00:00.000Z">
+        <meta property="article:modified_time" content="2026-03-05T09:00:00.000Z">
+      </head><body></body></html>
+    `;
+    const meta = extractEmDashMetadata(html);
+    expect(meta.date).toBe('2026-03-02T15:00:00.000Z');
+    expect(meta.modifiedDate).toBe('2026-03-05T09:00:00.000Z');
+  });
+
+  it('falls back to JSON-LD datePublished when meta tag missing', () => {
+    const html = `
+      <html><head>
+        <script type="application/ld+json">
+        {"@context":"https://schema.org","@type":"BlogPosting","datePublished":"2026-04-22T00:00:00Z"}
+        </script>
+      </head><body></body></html>
+    `;
+    const meta = extractEmDashMetadata(html);
+    expect(meta.date).toBe('2026-04-22T00:00:00Z');
   });
 });
