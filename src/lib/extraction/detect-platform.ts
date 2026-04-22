@@ -140,6 +140,10 @@ export async function detectFromHttp(url: string): Promise<DetectionResult> {
             redirect: 'manual',
           });
           if (!probe.expectedStatus.includes(probeResp.status)) continue;
+          if (probe.locationContains) {
+            const loc = probeResp.headers.get('location') || '';
+            if (!loc.includes(probe.locationContains)) continue;
+          }
           platform = probe.platform;
           confidence = 'high';
           signals.push(probe.signal);
