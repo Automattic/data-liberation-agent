@@ -9,6 +9,7 @@ import { fetchSitemap, classifyUrl } from '../lib/extraction/sitemap.js';
 import { WxrBuilder } from '../lib/extraction/wxr-builder.js';
 import { ExtractionLog } from '../lib/extraction/extraction-log.js';
 import { godaddyWmAdapter } from '../adapters/godaddy-wm.js';
+import { emdashAdapter } from '../adapters/emdash.js';
 import { hostingerAdapter } from '../adapters/hostinger.js';
 import { hubspotAdapter } from '../adapters/hubspot.js';
 import { shopifyAdapter } from '../adapters/shopify.js';
@@ -76,7 +77,7 @@ interface ExtractionResult {
   wxrPath: string | null;
 }
 
-const adapters = [godaddyWmAdapter, hostingerAdapter, hubspotAdapter, shopifyAdapter, squarespaceAdapter, webflowAdapter, weeblyAdapter, wixAdapter];
+const adapters = [godaddyWmAdapter, emdashAdapter, hostingerAdapter, hubspotAdapter, shopifyAdapter, squarespaceAdapter, webflowAdapter, weeblyAdapter, wixAdapter];
 
 function findAdapter(platform: string) {
   return adapters.find((a) => a.id === platform) || null;
