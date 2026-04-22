@@ -301,6 +301,7 @@ describe('extractEmDashAuthors', () => {
 });
 
 import { extractEmDashTaxonomy } from '../../src/adapters/emdash.js';
+import { extractEmDashMediaUrls, resolveRelativeUrls, stripDuplicateTitle } from '../../src/adapters/emdash.js';
 
 describe('extractEmDashTaxonomy', () => {
   it('extracts tags from /tag/{slug} links', () => {
@@ -340,5 +341,87 @@ describe('extractEmDashTaxonomy', () => {
       </body></html>
     `;
     expect(extractEmDashTaxonomy(html).tags.length).toBe(1);
+  });
+});
+
+describe('extractEmDashMediaUrls', () => {
+  it('recognizes /_emdash/api/media/file/{ULID} as image regardless of extension', () => {
+    const html = `
+      <html><body>
+        <img src="/_emdash/api/media/file/01ABC123">
+        <img src="/_emdash/api/media/file/01DEF456.png">
+      </body></html>
+    `;
+    const urls = extractEmDashMediaUrls(html, 'https://example.com');
+    expect(urls).toContain('https://example.com/_emdash/api/media/file/01ABC123');
+    expect(urls).toContain('https://example.com/_emdash/api/media/file/01DEF456.png');
+  });
+
+  it('passes through external CDN URLs (Unsplash, R2, WP)', () => {
+    const html = `
+      <html><body>
+        <img src="https://images.unsplash.com/photo-123?w=1200">
+        <img src="https://cdn.example.com/pic.jpg">
+      </body></html>
+    `;
+    const urls = extractEmDashMediaUrls(html, 'https://example.com');
+    expect(urls).toContain('https://images.unsplash.com/photo-123?w=1200');
+    expect(urls).toContain('https://cdn.example.com/pic.jpg');
+  });
+
+  it('filters out non-image CDN URLs by extension', () => {
+    const html = `
+      <html><body>
+        <img src="https://cdn.example.com/script.js">
+        <img src="https://cdn.example.com/font.woff2">
+      </body></html>
+    `;
+    expect(extractEmDashMediaUrls(html, 'https://example.com')).toEqual([]);
+  });
+
+  it('includes og:image', () => {
+    const html = `<html><head><meta property="og:image" content="/_emdash/api/media/file/01XYZ.jpg"></head></html>`;
+    const urls = extractEmDashMediaUrls(html, 'https://example.com');
+    expect(urls).toContain('https://example.com/_emdash/api/media/file/01XYZ.jpg');
+  });
+});
+
+describe('resolveRelativeUrls', () => {
+  it('resolves relative src and href to absolute', () => {
+    const html = '<img src="/_emdash/api/media/file/01ABC"><a href="/pages/about">About</a>';
+    const out = resolveRelativeUrls(html, 'https://example.com');
+    expect(out).toContain('src="https://example.com/_emdash/api/media/file/01ABC"');
+    expect(out).toContain('href="https://example.com/pages/about"');
+  });
+
+  it('leaves absolute URLs untouched', () => {
+    const html = '<img src="https://cdn.example.com/pic.jpg">';
+    const out = resolveRelativeUrls(html, 'https://mysite.com');
+    expect(out).toContain('src="https://cdn.example.com/pic.jpg"');
+  });
+
+  it('strips srcset and sizes attributes from img and source tags', () => {
+    const html = '<img src="/foo.jpg" srcset="/foo-1x.jpg 1x, /foo-2x.jpg 2x" sizes="100vw">';
+    const out = resolveRelativeUrls(html, 'https://example.com');
+    expect(out).not.toContain('srcset');
+    expect(out).not.toContain('sizes');
+    expect(out).toContain('src="https://example.com/foo.jpg"');
+  });
+});
+
+describe('stripDuplicateTitle', () => {
+  it('strips the first h1 when it matches the post title', () => {
+    const html = '<div><h1>My Title</h1><p>Body</p></div>';
+    expect(stripDuplicateTitle(html, 'My Title')).not.toContain('<h1>My Title</h1>');
+  });
+
+  it('leaves h1 when it does not match the title', () => {
+    const html = '<div><h1>Different Heading</h1><p>Body</p></div>';
+    expect(stripDuplicateTitle(html, 'Post Title')).toContain('<h1>Different Heading</h1>');
+  });
+
+  it('matches case-insensitively with normalized whitespace', () => {
+    const html = '<div><h1>  MY   TITLE  </h1><p>Body</p></div>';
+    expect(stripDuplicateTitle(html, 'my title')).not.toContain('MY   TITLE');
   });
 });

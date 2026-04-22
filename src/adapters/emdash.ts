@@ -244,6 +244,124 @@ export function extractEmDashMetadata(html: string): EmDashPageMetadata {
 // Paths EmDash serves locally from the media library.
 const LOCAL_MEDIA_PREFIX = '/_emdash/api/media/file/';
 
+// Non-image file extensions used to filter out JS/CSS/font URLs that happen
+// to appear in <img src> (unusual but defensive).
+const NON_IMAGE_EXTENSIONS = /\.(css|js|json|xml|txt|map|woff2?|ttf|eot|otf|pdf|zip|mp4|webm|mov)$/i;
+
+function parseOrigin(baseUrl: string): string | null {
+  try {
+    return new URL(baseUrl.includes('://') ? baseUrl : `https://${baseUrl}`).origin;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeUrl(candidate: string, origin: string | null): string | null {
+  if (!candidate) return null;
+  if (candidate.startsWith('http://') || candidate.startsWith('https://')) return candidate;
+  if (candidate.startsWith('//')) return 'https:' + candidate;
+  if (candidate.startsWith('/')) return origin ? origin + candidate : null;
+  return null;
+}
+
+/**
+ * Extract media (image) URLs from an EmDash page.
+ *
+ * - /_emdash/api/media/file/{ULID} (with or without extension): always an image
+ * - External URLs: pass through if the pathname has an image extension
+ * - og:image and twitter:image meta tags: included
+ *
+ * Returns absolute URLs (relative paths resolved against baseUrl).
+ */
+export function extractEmDashMediaUrls(html: string, baseUrl: string): string[] {
+  const $ = cheerio.load(html);
+  const origin = parseOrigin(baseUrl);
+  const urls = new Set<string>();
+
+  const push = (candidate: string | undefined): void => {
+    if (!candidate) return;
+    const abs = normalizeUrl(candidate, origin);
+    if (!abs) return;
+    try {
+      const parsed = new URL(abs);
+      if (NON_IMAGE_EXTENSIONS.test(parsed.pathname)) return;
+      // Always accept local EmDash media URLs (ULID-based, may have no extension)
+      if (parsed.pathname.includes(LOCAL_MEDIA_PREFIX)) {
+        urls.add(abs);
+        return;
+      }
+      // External URLs: pass through if the pathname does not look like a
+      // non-image asset (JS, CSS, fonts, etc.). CDN image URLs often have no
+      // file extension at all (e.g. Unsplash /photo-123?w=1200).
+      urls.add(abs);
+    } catch {
+      // Invalid URL
+    }
+  };
+
+  // <img src> and <img data-src>
+  $('img').each((_, el) => {
+    const $el = $(el);
+    push($el.attr('src'));
+    push($el.attr('data-src'));
+  });
+
+  // og:image and twitter:image
+  push(extractMeta(html, 'og:image'));
+  push(extractMeta(html, 'twitter:image'));
+
+  return [...urls];
+}
+
+/**
+ * Rewrite relative src/href/data-src attributes in HTML to absolute URLs so
+ * WordPress can match attachment URLs during import. Also strips srcset/sizes
+ * attributes from <img> and <source> tags (see spec § "srcset handling").
+ */
+export function resolveRelativeUrls(html: string, baseUrl: string): string {
+  const origin = parseOrigin(baseUrl);
+  if (!origin) return html;
+
+  const $ = cheerio.load(html, null, false);  // fragment parse
+  $('[src], [href], [data-src]').each((_, el) => {
+    const $el = $(el);
+    for (const attr of ['src', 'href', 'data-src'] as const) {
+      const v = $el.attr(attr);
+      if (!v) continue;
+      if (/^https?:\/\//i.test(v)) continue;
+      if (v.startsWith('//')) {
+        $el.attr(attr, 'https:' + v);
+      } else if (v.startsWith('/')) {
+        $el.attr(attr, origin + v);
+      }
+    }
+  });
+
+  // Strip srcset/sizes — default theme doesn't emit them, but custom themes
+  // might. Without stripping, custom-theme content would orphan-link srcset
+  // URLs that the importer never downloaded. Stripping is safer than partial
+  // rewriting; full srcset support deferred per spec.
+  $('img, source').removeAttr('srcset').removeAttr('sizes');
+
+  return $.html();
+}
+
+/**
+ * Strip the first <h1> if its text matches the post title. EmDash default theme
+ * renders the title inside the article container; WordPress also renders
+ * post_title, so we'd see it twice otherwise.
+ */
+export function stripDuplicateTitle(html: string, title: string): string {
+  if (!title) return html;
+  const normalize = (s: string) => s.replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
+  const normalizedTitle = normalize(title);
+  if (!normalizedTitle) return html;
+
+  return html.replace(/<h1[^>]*>([\s\S]*?)<\/h1>/i, (fullMatch, inner) => {
+    return normalize(inner) === normalizedTitle ? '' : fullMatch;
+  });
+}
+
 // URL paths that appear in sitemap or listing-crawl but are not content pages.
 // Filtered out before extraction. Matches /category/foo, /tag/foo, /category/foo/page/2, etc.
 const NON_CONTENT_URL_PATTERNS: RegExp[] = [
