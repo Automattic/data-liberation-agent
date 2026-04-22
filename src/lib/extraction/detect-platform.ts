@@ -57,6 +57,7 @@ const URL_PATTERNS: UrlPattern[] = [
   { pattern: /webflow\.io|webflow\.com/i, platform: 'webflow' },
   { pattern: /myshopify\.com|shopify\.com/i, platform: 'shopify' },
   { pattern: /weebly\.com/i, platform: 'weebly' },
+  { pattern: /\.dashhost\.cc/i, platform: 'emdash' },
 ];
 
 const HTTP_SIGNALS: HttpSignal[] = [
@@ -84,6 +85,10 @@ const SOURCE_SIGNALS: SourceSignal[] = [
   { pattern: /<meta[^>]+name=["']generator["'][^>]+content=["']HubSpot["']/i, platform: 'hubspot', signal: 'HubSpot generator meta tag' },
   { pattern: /Go Daddy Website Builder|Starfield Technologies/i, platform: 'godaddy-wm', signal: 'GoDaddy Website Builder generator meta in page source' },
   { pattern: /img1\.wsimg\.com\/isteam/i, platform: 'godaddy-wm', signal: 'img1.wsimg.com/isteam CDN reference in page source' },
+  { pattern: /<emdash-live-search/i, platform: 'emdash', signal: 'emdash-live-search custom element' },
+  { pattern: /(href|src|data-[a-z-]+)=["'][^"']*\/_emdash\/api\//i, platform: 'emdash', signal: '/_emdash/api/ namespace reference in attribute' },
+  { pattern: /class=["'][^"']*\bemdash-/i, platform: 'emdash', signal: 'emdash-* CSS class prefix' },
+  { pattern: /class=["'][^"']*\bec-comment-form\b/i, platform: 'emdash', signal: 'ec-comment-form class (EmDash comment form)' },
 ];
 
 /**
@@ -96,7 +101,13 @@ const SOURCE_SIGNALS: SourceSignal[] = [
  * platform-specific probes here at module load time, not at runtime.
  */
 export const PATH_PROBES: PathProbe[] = [
-  // PR 2 adds the EmDash entry. Keeping this PR pure-infrastructure.
+  {
+    path: '/_emdash/admin',
+    expectedStatus: [302, 401],
+    locationContains: '/_emdash/admin/login',
+    platform: 'emdash',
+    signal: 'EmDash admin path returns 302 to login',
+  },
 ];
 
 export function detectFromUrl(url: string): string | null {
