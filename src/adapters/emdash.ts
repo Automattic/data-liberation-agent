@@ -589,11 +589,85 @@ export const emdashAdapter: PlatformAdapter = {
   },
 
   async extract(
-    _inventory: unknown,
-    _wxr: WxrBuilder,
-    _opts: Record<string, unknown>,
-    _context: { log: ExtractionLog; server: Server }
-  ): Promise<unknown> {
-    throw new Error('Not implemented');
+    inventory: unknown,
+    wxr: WxrBuilder,
+    opts: Record<string, unknown>,
+    context: { log: ExtractionLog; server: Server }
+  ): Promise<{
+    pagesExtracted: number;
+    postsExtracted: number;
+    productsExtracted: number;
+    failed: number;
+    mediaCollected: number;
+  }> {
+    const inv = inventory as EmDashInventory;
+    const emOpts = opts as EmDashAdapterOpts;
+    const delayMs = emOpts.delay ?? 300;
+    const outputDir = emOpts.outputDir || '';
+
+    const result = await runExtractionLoop({
+      urls: inv.urls,
+      navigation: inv.navigation,
+      wxr,
+      log: context.log,
+      outputDir,
+      delay: delayMs,
+      dryRun: !!emOpts.dryRun,
+      resume: !!emOpts.resume,
+      verbose: emOpts.verbose,
+      limit: emOpts.limit,
+      server: context.server,
+      extractPage: async (url: string) => {
+        const resp = await fetch(url, {
+          signal: AbortSignal.timeout(15000),
+          headers: { 'User-Agent': 'Mozilla/5.0 (compatible; DataLiberation/1.0)' },
+        });
+        if (!resp.ok) {
+          await resp.body?.cancel();
+          throw new Error(`HTTP ${resp.status} ${resp.statusText}`);
+        }
+        let html = await resp.text();
+        if (html.length > MAX_HTML_BYTES) {
+          html = html.slice(0, MAX_HTML_BYTES);
+        }
+
+        const meta = extractEmDashMetadata(html);
+        const title = meta.title || slugify(url);
+        const taxonomy = extractEmDashTaxonomy(html);
+        const authors = extractEmDashAuthors(html);
+
+        const rawContent = extractEmDashContent(html);
+        const deduped = stripDuplicateTitle(rawContent, title);
+        const content = resolveRelativeUrls(deduped, url);
+
+        const mediaUrls = extractEmDashMediaUrls(html, url);
+
+        const textOnly = content.replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
+        let qualityScore: 'high' | 'medium' | 'low' = 'low';
+        if (textOnly.length > 200) qualityScore = 'high';
+        else if (textOnly.length > 50) qualityScore = 'medium';
+
+        return {
+          title,
+          slug: slugify(url),
+          content,
+          excerpt: meta.excerpt,
+          date: meta.date,
+          seoTitle: extractMeta(html, 'og:title') || extractTitle(html) || title,
+          seoDescription: extractMeta(html, 'og:description') || meta.excerpt,
+          mediaUrls,
+          qualityScore,
+          categories: taxonomy.categories,
+          tags: taxonomy.tags,
+          // runExtractionLoop's ExtractedPage supports a single `author` field.
+          // For multi-author posts, take the first as primary; other authors
+          // are lost until WxrBuilder gains multi-author per-post support.
+          // Acceptable trade-off for v1.
+          author: authors[0],
+        };
+      },
+    });
+
+    return result;
   },
 };
