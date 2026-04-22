@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { readFileSync } from 'fs';
 import { detectFromUrl, detectFromHttp, PATH_PROBES } from '../src/lib/extraction/detect-platform.js';
 
@@ -94,6 +94,10 @@ describe('detectFromHttp (fingerprinting)', () => {
 });
 
 describe('PATH_PROBES infrastructure', () => {
+  afterEach(() => {
+    PATH_PROBES.length = 0;
+  });
+
   it('exports PATH_PROBES as an array', () => {
     expect(Array.isArray(PATH_PROBES)).toBe(true);
   });
@@ -128,9 +132,6 @@ describe('PATH_PROBES infrastructure', () => {
     expect(result.platform).toBe('testplatform');
     expect(result.confidence).toBe('high');
     expect(result.signals).toContain('/_test/admin probe');
-
-    // Cleanup: remove injected probe so other tests aren't affected
-    PATH_PROBES.length = 0;
   });
 
   it('does NOT match when probe returns wrong status', async () => {
@@ -154,7 +155,5 @@ describe('PATH_PROBES infrastructure', () => {
 
     const result = await detectFromHttp('https://example.com');
     expect(result.platform).toBe('unknown');
-
-    PATH_PROBES.length = 0;
   });
 });
