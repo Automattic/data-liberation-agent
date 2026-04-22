@@ -380,14 +380,14 @@ function Liberate(props: LiberateProps & { onComplete?: (wxrPath: string | null)
       {phase === 'discovered' && (
         <Box flexDirection="column" marginTop={1}>
           <Text color="yellow">! {error}</Text>
-          <Text dimColor>Supported: GoDaddy Websites & Marketing, Hostinger, HubSpot, Shopify, Squarespace, Webflow, Weebly, Wix.</Text>
+          <Text dimColor>Supported: EmDash, GoDaddy Websites & Marketing, Hostinger, HubSpot, Shopify, Squarespace, Webflow, Weebly, Wix.</Text>
         </Box>
       )}
 
       {/* Unknown platform warning */}
       {phase === 'done' && detection?.platform === 'unknown' && (
         <Box marginTop={1}>
-          <Text color="yellow">! Supported platforms: GoDaddy Websites & Marketing, Hostinger, HubSpot, Shopify, Squarespace, Webflow, Weebly, Wix</Text>
+          <Text color="yellow">! Supported platforms: EmDash, GoDaddy Websites & Marketing, Hostinger, HubSpot, Shopify, Squarespace, Webflow, Weebly, Wix</Text>
         </Box>
       )}
 

@@ -166,6 +166,10 @@ export async function detectFromHttp(url: string): Promise<DetectionResult> {
             method: 'HEAD',
             signal: AbortSignal.timeout(10000),
             redirect: 'manual',
+            // Match the homepage fetch's UA. Some Cloudflare configs (e.g.
+            // DashHost-hosted EmDash sites) time out HEAD requests that
+            // arrive with Node.js / undici's default bot-ish User-Agent.
+            headers: { 'User-Agent': 'Mozilla/5.0 (compatible; DataLiberation/1.0)' },
           });
           if (!probe.expectedStatus.includes(probeResp.status)) continue;
           if (probe.locationContains) {
