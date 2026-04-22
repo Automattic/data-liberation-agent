@@ -16,6 +16,31 @@ interface SourceSignal {
   signal: string;
 }
 
+/**
+ * Active path-probe signal — issues an HTTP HEAD request to a platform-specific
+ * path and matches on the response status (and optionally the Location header).
+ *
+ * Use for platforms that expose a stable admin or API path that can be detected
+ * even when the homepage HTML has been heavily themed and emits no source markers.
+ * Probes only fire when URL_PATTERNS, HTTP_SIGNALS, and SOURCE_SIGNALS all fail
+ * to identify the platform — they pay an extra HTTP round-trip, so they're a
+ * fallback, not a primary detection mechanism.
+ */
+interface PathProbe {
+  /** Path relative to site root, e.g. "/_emdash/admin" */
+  path: string;
+  /** Status codes that indicate a match (e.g. [302, 401]) */
+  expectedStatus: number[];
+  /**
+   * Optional substring that must appear in the response Location header.
+   * Tightens probe against false-positives from wildcard redirects on
+   * non-platform sites that happen to return the same status code.
+   */
+  locationContains?: string;
+  platform: string;
+  signal: string;
+}
+
 export interface DetectionResult {
   platform: string;
   confidence: 'high' | 'medium' | 'low';
@@ -59,6 +84,10 @@ const SOURCE_SIGNALS: SourceSignal[] = [
   { pattern: /<meta[^>]+name=["']generator["'][^>]+content=["']HubSpot["']/i, platform: 'hubspot', signal: 'HubSpot generator meta tag' },
   { pattern: /Go Daddy Website Builder|Starfield Technologies/i, platform: 'godaddy-wm', signal: 'GoDaddy Website Builder generator meta in page source' },
   { pattern: /img1\.wsimg\.com\/isteam/i, platform: 'godaddy-wm', signal: 'img1.wsimg.com/isteam CDN reference in page source' },
+];
+
+export const PATH_PROBES: PathProbe[] = [
+  // PR 2 adds the EmDash entry. Keeping this PR pure-infrastructure.
 ];
 
 export function detectFromUrl(url: string): string | null {

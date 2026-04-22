@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { readFileSync } from 'fs';
-import { detectFromUrl, detectFromHttp } from '../src/lib/extraction/detect-platform.js';
+import { detectFromUrl, detectFromHttp, PATH_PROBES } from '../src/lib/extraction/detect-platform.js';
 
 describe('detectFromUrl (heuristics)', () => {
   it('detects wixsite.com', () => {
@@ -90,5 +90,15 @@ describe('detectFromHttp (fingerprinting)', () => {
     const result = await detectFromHttp('https://skywaydiner.com');
     expect(result.platform).toBe('godaddy-wm');
     expect(result.confidence).toBe('high');
+  });
+});
+
+describe('PATH_PROBES infrastructure', () => {
+  it('exports PATH_PROBES as an array', () => {
+    expect(Array.isArray(PATH_PROBES)).toBe(true);
+  });
+
+  it('PATH_PROBES is empty (no consumers in this PR)', () => {
+    expect(PATH_PROBES).toEqual([]);
   });
 });
