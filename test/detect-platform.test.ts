@@ -228,4 +228,47 @@ describe('PATH_PROBES infrastructure', () => {
     const result = await detectFromHttp('https://example.com');
     expect(result.platform).toBe('unknown');
   });
+
+  it('skips probes when SOURCE_SIGNALS already identified the platform', async () => {
+    PATH_PROBES.push({
+      path: '/_test/admin',
+      expectedStatus: [302],
+      platform: 'testplatform',
+      signal: '/_test/admin probe',
+    });
+
+    const fetchMock = vi.fn().mockResolvedValueOnce({
+      ok: true,
+      headers: new Map(),
+      // HTML matches Wix SOURCE_SIGNAL (wixstatic.com). Wix wins on tier 3,
+      // so the probe should never fire.
+      text: () => Promise.resolve('<html><img src="https://static.wixstatic.com/media/x.jpg"></html>'),
+    });
+    global.fetch = fetchMock;
+
+    const result = await detectFromHttp('https://example.com');
+    expect(result.platform).toBe('wix');
+    // Critical: only ONE fetch call (the homepage). Probe never fired.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips probes when HTTP_SIGNALS already identified the platform', async () => {
+    PATH_PROBES.push({
+      path: '/_test/admin',
+      expectedStatus: [302],
+      platform: 'testplatform',
+      signal: '/_test/admin probe',
+    });
+
+    const fetchMock = vi.fn().mockResolvedValueOnce({
+      ok: true,
+      headers: new Map([['x-wix-request-id', 'abc123']]),  // HTTP_SIGNAL match
+      text: () => Promise.resolve('<html></html>'),
+    });
+    global.fetch = fetchMock;
+
+    const result = await detectFromHttp('https://example.com');
+    expect(result.platform).toBe('wix');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
 });
