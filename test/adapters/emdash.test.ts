@@ -299,3 +299,46 @@ describe('extractEmDashAuthors', () => {
     expect(extractEmDashAuthors('<html></html>')).toEqual([]);
   });
 });
+
+import { extractEmDashTaxonomy } from '../../src/adapters/emdash.js';
+
+describe('extractEmDashTaxonomy', () => {
+  it('extracts tags from /tag/{slug} links', () => {
+    const html = `
+      <html><body>
+        <div class="meta-tags">
+          <a href="/tag/opinion" class="meta-tag">Opinion</a>
+          <a href="/tag/webdev" class="meta-tag">Web Development</a>
+        </div>
+      </body></html>
+    `;
+    const tax = extractEmDashTaxonomy(html);
+    expect(tax.tags).toEqual(['Opinion', 'Web Development']);
+    expect(tax.categories).toEqual([]);
+  });
+
+  it('extracts categories from /category/{slug} links', () => {
+    const html = `
+      <html><body>
+        <ul class="widget-categories">
+          <li><a href="/category/design" class="widget-categories__link">Design</a></li>
+          <li><a href="/category/development" class="widget-categories__link">Development</a></li>
+        </ul>
+      </body></html>
+    `;
+    const tax = extractEmDashTaxonomy(html);
+    expect(tax.categories).toEqual(['Design', 'Development']);
+    expect(tax.tags).toEqual([]);
+  });
+
+  it('deduplicates by normalized slug (case-insensitive)', () => {
+    const html = `
+      <html><body>
+        <a href="/tag/foo">Foo</a>
+        <a href="/tag/foo">foo</a>
+        <a href="/tag/FOO">FOO</a>
+      </body></html>
+    `;
+    expect(extractEmDashTaxonomy(html).tags.length).toBe(1);
+  });
+});

@@ -331,6 +331,45 @@ export function extractEmDashAuthors(html: string): string[] {
   return [];
 }
 
+export interface EmDashTaxonomy {
+  categories: string[];
+  tags: string[];
+}
+
+/**
+ * Extract categories (from /category/{slug} links) and tags (from /tag/{slug}
+ * links) anywhere on the page. Deduplicates case-insensitively. Returns
+ * display-name text, not slugs.
+ */
+export function extractEmDashTaxonomy(html: string): EmDashTaxonomy {
+  const $ = cheerio.load(html);
+  const tagSet = new Map<string, string>();  // slug (lowercased) → display name
+  const catSet = new Map<string, string>();
+
+  $('a[href]').each((_, el) => {
+    const href = $(el).attr('href') || '';
+    const text = $(el).text().replace(/\s+/g, ' ').trim();
+    if (!text) return;
+
+    const tagMatch = href.match(/\/tag\/([^/?#]+)/);
+    if (tagMatch) {
+      const slug = tagMatch[1].toLowerCase();
+      if (!tagSet.has(slug)) tagSet.set(slug, text);
+      return;
+    }
+    const catMatch = href.match(/\/category\/([^/?#]+)/);
+    if (catMatch) {
+      const slug = catMatch[1].toLowerCase();
+      if (!catSet.has(slug)) catSet.set(slug, text);
+    }
+  });
+
+  return {
+    categories: [...catSet.values()],
+    tags: [...tagSet.values()],
+  };
+}
+
 export const emdashAdapter: PlatformAdapter = {
   id: 'emdash',
 
