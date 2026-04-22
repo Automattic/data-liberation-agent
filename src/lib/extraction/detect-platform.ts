@@ -86,6 +86,15 @@ const SOURCE_SIGNALS: SourceSignal[] = [
   { pattern: /img1\.wsimg\.com\/isteam/i, platform: 'godaddy-wm', signal: 'img1.wsimg.com/isteam CDN reference in page source' },
 ];
 
+/**
+ * Registry of path probes. Iterated by the probe tier in `detectFromHttp`
+ * when URL/header/source-pattern detection all return 'unknown'.
+ *
+ * **Exported only for test injection.** Tests may push probe entries via
+ * `PATH_PROBES.push(...)` and clean up via `PATH_PROBES.length = 0` (typically
+ * in an `afterEach` hook). Production code must NOT mutate this array — define
+ * platform-specific probes here at module load time, not at runtime.
+ */
 export const PATH_PROBES: PathProbe[] = [
   // PR 2 adds the EmDash entry. Keeping this PR pure-infrastructure.
 ];
@@ -120,7 +129,13 @@ export async function detectFromHttp(url: string): Promise<DetectionResult> {
     }
 
     if (platform === 'unknown') {
-      const html = await response.text();
+      let html = '';
+      try {
+        html = await response.text();
+      } catch {
+        // Body read failed (truncation, encoding, mid-stream network error).
+        // Fall through to source-pattern (no matches) and probe tier.
+      }
       for (const sig of SOURCE_SIGNALS) {
         if (sig.pattern.test(html)) {
           platform = sig.platform;
@@ -133,7 +148,9 @@ export async function detectFromHttp(url: string): Promise<DetectionResult> {
     if (platform === 'unknown') {
       for (const probe of PATH_PROBES) {
         try {
-          const probeUrl = new URL(probe.path, normalized).toString();
+          const probeUrlObj = new URL(probe.path, normalized);
+          if (probeUrlObj.origin !== new URL(normalized).origin) continue;
+          const probeUrl = probeUrlObj.toString();
           const probeResp = await fetch(probeUrl, {
             method: 'HEAD',
             signal: AbortSignal.timeout(10000),

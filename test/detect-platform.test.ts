@@ -271,4 +271,51 @@ describe('PATH_PROBES infrastructure', () => {
     expect(result.platform).toBe('wix');
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
+
+  it('skips probe when path resolves to a different origin', async () => {
+    PATH_PROBES.push({
+      path: '//attacker.example/admin',  // Protocol-relative — would resolve to attacker.example
+      expectedStatus: [302],
+      platform: 'testplatform',
+      signal: '/_test/admin probe',
+    });
+
+    const fetchMock = vi.fn().mockResolvedValueOnce({
+      ok: true,
+      headers: new Map(),
+      text: () => Promise.resolve('<html></html>'),
+    });
+    global.fetch = fetchMock;
+
+    const result = await detectFromHttp('https://example.com');
+    expect(result.platform).toBe('unknown');
+    // Critical: only ONE fetch call (the homepage). Cross-origin probe never fired.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('still runs probe tier when homepage body read throws', async () => {
+    PATH_PROBES.push({
+      path: '/_test/admin',
+      expectedStatus: [302],
+      platform: 'testplatform',
+      signal: '/_test/admin probe',
+    });
+
+    global.fetch = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        headers: new Map(),
+        // Body read throws (e.g. truncated stream)
+        text: () => Promise.reject(new Error('truncated')),
+      })
+      .mockResolvedValueOnce({
+        status: 302,
+        headers: new Map([['location', 'https://example.com/_test/admin/login']]),
+      });
+
+    const result = await detectFromHttp('https://example.com');
+    // Probe tier runs despite body read failure, identifies platform
+    expect(result.platform).toBe('testplatform');
+    expect(result.confidence).toBe('high');
+  });
 });
