@@ -48,6 +48,88 @@ export interface EmDashInventory {
 // Upper bound on HTML size we process — matches HubSpot precedent.
 const MAX_HTML_BYTES = 5 * 1024 * 1024;
 
+// ---------------------------------------------------------------------------
+// Content extraction helpers
+// ---------------------------------------------------------------------------
+
+type CheerioRoot = ReturnType<typeof cheerio.load>;
+
+const WIDGET_SELECTORS = [
+  'aside',
+  'section.more-posts',
+  'emdash-live-search',
+  'form[data-ec-comment-form]',
+  'section.ec-comments',
+  'div.widget-area',
+  'div.widget',
+  '#emdash-playground-toolbar',
+].join(', ');
+
+function stripWidgets($container: ReturnType<CheerioRoot>): void {
+  $container.find(WIDGET_SELECTORS).remove();
+}
+
+/**
+ * Extract content body from an EmDash page. Layered cascade:
+ * 1. .article-content (EmDash default theme — clean post/page body)
+ * 2. .post-body / .entry-content / .post-content (common WP-influenced themes)
+ * 3. <article> (any custom theme using semantic HTML5)
+ * 4. <main> with nav/header/footer stripped
+ * 5. <body> with chrome stripped (last resort)
+ *
+ * Widgets (sidebars, comments, related posts, live search, playground toolbar)
+ * are stripped regardless of which container matched.
+ */
+export function extractEmDashContent(html: string): string {
+  const $ = cheerio.load(html);
+
+  // Tier 1: EmDash default theme
+  const articleContent = $('.article-content').first();
+  if (articleContent.length) {
+    stripWidgets(articleContent);
+    const out = articleContent.html();
+    if (out && out.trim()) return out.trim();
+  }
+
+  // Tier 2: common WP-influenced theme classes
+  for (const sel of ['.post-body', '.entry-content', '.post-content']) {
+    const el = $(sel).first();
+    if (el.length) {
+      stripWidgets(el);
+      const out = el.html();
+      if (out && out.trim()) return out.trim();
+    }
+  }
+
+  // Tier 3: semantic <article>
+  const article = $('article').first();
+  if (article.length) {
+    stripWidgets(article);
+    const out = article.html();
+    if (out && out.trim()) return out.trim();
+  }
+
+  // Tier 4: <main> with chrome stripped
+  const main = $('main').first();
+  if (main.length) {
+    main.find('nav, header, footer').remove();
+    stripWidgets(main);
+    const out = main.html();
+    if (out && out.trim()) return out.trim();
+  }
+
+  // Tier 5: <body> with chrome stripped
+  const body = $('body').first();
+  if (body.length) {
+    body.find('nav, header, footer').remove();
+    stripWidgets(body);
+    const out = body.html();
+    if (out && out.trim()) return out.trim();
+  }
+
+  return '';
+}
+
 // Paths EmDash serves locally from the media library.
 const LOCAL_MEDIA_PREFIX = '/_emdash/api/media/file/';
 

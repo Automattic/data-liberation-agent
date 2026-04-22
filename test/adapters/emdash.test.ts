@@ -120,3 +120,81 @@ describe('emdashAdapter.discover', () => {
     expect(paths.some((p) => p.startsWith('/_emdash/'))).toBe(false);
   });
 });
+
+import { extractEmDashContent } from '../../src/adapters/emdash.js';  // new named export
+
+describe('extractEmDashContent', () => {
+  it('extracts from <div class="article-content"> (default theme)', () => {
+    const html = `
+      <html><body>
+        <article class="article">
+          <header class="article-header">
+            <h1 class="article-title">Hello</h1>
+          </header>
+          <div class="article-content">
+            <p>Post body paragraph one.</p>
+            <p>Post body paragraph two.</p>
+          </div>
+          <aside class="article-sidebar">Sidebar noise</aside>
+        </article>
+      </body></html>
+    `;
+    const result = extractEmDashContent(html);
+    expect(result).toContain('Post body paragraph one');
+    expect(result).toContain('Post body paragraph two');
+    expect(result).not.toContain('Sidebar noise');
+  });
+
+  it('falls back to <article> when article-content is missing', () => {
+    const html = `
+      <html><body>
+        <article>
+          <h1>Custom Theme Post</h1>
+          <p>Body text.</p>
+        </article>
+      </body></html>
+    `;
+    const result = extractEmDashContent(html);
+    expect(result).toContain('Body text');
+    expect(result).toContain('Custom Theme Post');
+  });
+
+  it('falls back to <main> with chrome stripped', () => {
+    const html = `
+      <html><body>
+        <nav>Nav links</nav>
+        <main>
+          <p>Main content.</p>
+          <footer>Inner footer</footer>
+        </main>
+        <footer>Global footer</footer>
+      </body></html>
+    `;
+    const result = extractEmDashContent(html);
+    expect(result).toContain('Main content');
+    expect(result).not.toContain('Nav links');
+    expect(result).not.toContain('Global footer');
+  });
+
+  it('strips widgets, comments, and related-posts section regardless of container', () => {
+    const html = `
+      <html><body>
+        <div class="article-content">
+          <p>Real content.</p>
+          <emdash-live-search></emdash-live-search>
+          <section class="ec-comments">Old comment</section>
+          <form data-ec-comment-form>Comment form</form>
+          <section class="more-posts">Related post link</section>
+          <div class="widget-area"><div class="widget">Widget noise</div></div>
+        </div>
+      </body></html>
+    `;
+    const result = extractEmDashContent(html);
+    expect(result).toContain('Real content');
+    expect(result).not.toContain('Old comment');
+    expect(result).not.toContain('Comment form');
+    expect(result).not.toContain('Related post link');
+    expect(result).not.toContain('Widget noise');
+    expect(result).not.toContain('emdash-live-search');
+  });
+});
