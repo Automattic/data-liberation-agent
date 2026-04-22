@@ -101,4 +101,60 @@ describe('PATH_PROBES infrastructure', () => {
   it('PATH_PROBES is empty (no consumers in this PR)', () => {
     expect(PATH_PROBES).toEqual([]);
   });
+
+  it('matches a path probe when source signals fail (status only)', async () => {
+    // Inject a test probe by mutating PATH_PROBES (vitest tests share module state)
+    PATH_PROBES.push({
+      path: '/_test/admin',
+      expectedStatus: [302, 401],
+      platform: 'testplatform',
+      signal: '/_test/admin probe',
+    });
+
+    // Mock chain: first fetch (homepage) returns generic HTML (forces probe),
+    // second fetch (probe HEAD) returns 302.
+    global.fetch = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        headers: new Map(),
+        text: () => Promise.resolve('<html><body>Generic</body></html>'),
+      })
+      .mockResolvedValueOnce({
+        status: 302,
+        headers: new Map([['location', 'https://example.com/_test/admin/login']]),
+      });
+
+    const result = await detectFromHttp('https://example.com');
+    expect(result.platform).toBe('testplatform');
+    expect(result.confidence).toBe('high');
+    expect(result.signals).toContain('/_test/admin probe');
+
+    // Cleanup: remove injected probe so other tests aren't affected
+    PATH_PROBES.length = 0;
+  });
+
+  it('does NOT match when probe returns wrong status', async () => {
+    PATH_PROBES.push({
+      path: '/_test/admin',
+      expectedStatus: [302, 401],
+      platform: 'testplatform',
+      signal: '/_test/admin probe',
+    });
+
+    global.fetch = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        headers: new Map(),
+        text: () => Promise.resolve('<html></html>'),
+      })
+      .mockResolvedValueOnce({
+        status: 404,  // Wrong status
+        headers: new Map(),
+      });
+
+    const result = await detectFromHttp('https://example.com');
+    expect(result.platform).toBe('unknown');
+
+    PATH_PROBES.length = 0;
+  });
 });

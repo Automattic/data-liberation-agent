@@ -129,6 +129,26 @@ export async function detectFromHttp(url: string): Promise<DetectionResult> {
         }
       }
     }
+
+    if (platform === 'unknown') {
+      for (const probe of PATH_PROBES) {
+        try {
+          const probeUrl = new URL(probe.path, normalized).toString();
+          const probeResp = await fetch(probeUrl, {
+            method: 'HEAD',
+            signal: AbortSignal.timeout(10000),
+            redirect: 'manual',
+          });
+          if (!probe.expectedStatus.includes(probeResp.status)) continue;
+          platform = probe.platform;
+          confidence = 'high';
+          signals.push(probe.signal);
+          break;
+        } catch {
+          // Probe fetch failed (network error, timeout, etc.) — try next probe.
+        }
+      }
+    }
   } catch {
     // Network error — return unknown
   }
