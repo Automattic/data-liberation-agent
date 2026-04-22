@@ -292,6 +292,45 @@ async function fetchPostsListing(baseUrl: string): Promise<string[]> {
   }
 }
 
+/**
+ * Extract author display names. Priority:
+ * 1. JSON-LD BlogPosting author (single object or array)
+ * 2. .byline-name elements (default theme multi-author support)
+ * 3. <meta name="author">
+ */
+export function extractEmDashAuthors(html: string): string[] {
+  const $ = cheerio.load(html);
+
+  // 1. JSON-LD
+  for (const block of parseJsonLdBlocks($)) {
+    if (!isArticleLd(block)) continue;
+    const author = block.author;
+    if (!author) continue;
+    const list = Array.isArray(author) ? author : [author];
+    const names: string[] = [];
+    for (const a of list) {
+      if (a && typeof a === 'object' && typeof (a as { name?: unknown }).name === 'string') {
+        names.push((a as { name: string }).name.trim());
+      }
+    }
+    if (names.length) return names;
+  }
+
+  // 2. .byline-name (default theme — supports multi-author)
+  const bylineNames: string[] = [];
+  $('.byline-name, .post-byline-name, .featured-byline-name').each((_, el) => {
+    const name = $(el).text().trim();
+    if (name && !bylineNames.includes(name)) bylineNames.push(name);
+  });
+  if (bylineNames.length) return bylineNames;
+
+  // 3. <meta name="author">
+  const metaAuthor = extractMeta(html, 'author');
+  if (metaAuthor) return [metaAuthor];
+
+  return [];
+}
+
 export const emdashAdapter: PlatformAdapter = {
   id: 'emdash',
 

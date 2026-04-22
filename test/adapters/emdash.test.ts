@@ -123,6 +123,7 @@ describe('emdashAdapter.discover', () => {
 
 import { extractEmDashContent } from '../../src/adapters/emdash.js';
 import { extractEmDashMetadata } from '../../src/adapters/emdash.js';
+import { extractEmDashAuthors } from '../../src/adapters/emdash.js';
 
 describe('extractEmDashContent', () => {
   it('extracts from <div class="article-content"> (default theme)', () => {
@@ -248,5 +249,53 @@ describe('extractEmDashMetadata', () => {
     `;
     const meta = extractEmDashMetadata(html);
     expect(meta.date).toBe('2026-04-22T00:00:00Z');
+  });
+});
+
+describe('extractEmDashAuthors', () => {
+  it('extracts single author from JSON-LD', () => {
+    const html = `
+      <html><head>
+        <script type="application/ld+json">
+        {"@type":"BlogPosting","author":{"@type":"Person","name":"Jane Doe"}}
+        </script>
+      </head></html>
+    `;
+    expect(extractEmDashAuthors(html)).toEqual(['Jane Doe']);
+  });
+
+  it('extracts multiple authors from JSON-LD array', () => {
+    const html = `
+      <html><head>
+        <script type="application/ld+json">
+        {"@type":"BlogPosting","author":[
+          {"@type":"Person","name":"Alice"},
+          {"@type":"Person","name":"Bob"}
+        ]}
+        </script>
+      </head></html>
+    `;
+    expect(extractEmDashAuthors(html)).toEqual(['Alice', 'Bob']);
+  });
+
+  it('falls back to <span class="byline-name"> for multi-author default theme', () => {
+    const html = `
+      <html><body>
+        <div class="bylines">
+          <div class="byline"><span class="byline-name">EmDash Editorial</span></div>
+          <div class="byline"><span class="byline-name">Guest Contributor</span></div>
+        </div>
+      </body></html>
+    `;
+    expect(extractEmDashAuthors(html)).toEqual(['EmDash Editorial', 'Guest Contributor']);
+  });
+
+  it('falls back to <meta name="author"> as last resort', () => {
+    const html = `<html><head><meta name="author" content="Matt TK Taylor"></head></html>`;
+    expect(extractEmDashAuthors(html)).toEqual(['Matt TK Taylor']);
+  });
+
+  it('returns empty array when no author found', () => {
+    expect(extractEmDashAuthors('<html></html>')).toEqual([]);
   });
 });
