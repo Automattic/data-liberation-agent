@@ -51,6 +51,8 @@ export interface FullDetectionResult extends DetectionResult {
   url: string;
 }
 
+const USER_AGENT = 'Mozilla/5.0 (compatible; DataLiberation/1.0)';
+
 const URL_PATTERNS: UrlPattern[] = [
   { pattern: /wixsite\.com|wix\.com/i, platform: 'wix' },
   { pattern: /squarespace\.com/i, platform: 'squarespace' },
@@ -128,6 +130,7 @@ export async function detectFromHttp(url: string): Promise<DetectionResult> {
     const response = await fetch(normalized, {
       signal: AbortSignal.timeout(10000),
       redirect: 'follow',
+      headers: { 'User-Agent': USER_AGENT },
     });
 
     for (const sig of HTTP_SIGNALS) {
@@ -169,7 +172,7 @@ export async function detectFromHttp(url: string): Promise<DetectionResult> {
             // Match the homepage fetch's UA. Some Cloudflare configs (e.g.
             // DashHost-hosted EmDash sites) time out HEAD requests that
             // arrive with Node.js / undici's default bot-ish User-Agent.
-            headers: { 'User-Agent': 'Mozilla/5.0 (compatible; DataLiberation/1.0)' },
+            headers: { 'User-Agent': USER_AGENT },
           });
           if (!probe.expectedStatus.includes(probeResp.status)) continue;
           if (probe.locationContains) {

@@ -9,9 +9,7 @@ import {
   runExtractionLoop,
   extractMeta,
   extractTitle,
-  extractHeading,
   extractNavLinks,
-  IMAGE_EXTENSIONS,
 } from './shared.js';
 import type { InventoryUrl, NavLink } from './shared.js';
 
@@ -134,6 +132,9 @@ export function extractEmDashContent(html: string): string {
 // Metadata extraction helpers
 // ---------------------------------------------------------------------------
 
+// TODO: Extract parseJsonLdBlocks + isArticleLd to ./shared.ts when a third
+// adapter needs them. Currently duplicated between emdash.ts and hubspot.ts —
+// keep them byte-identical or update both together.
 /**
  * Parse all JSON-LD blocks in the page, flattening @graph wrappers and
  * stripping CDATA markers. Returns the flat list of JSON-LD objects.
@@ -244,6 +245,15 @@ export function extractEmDashMetadata(html: string): EmDashPageMetadata {
 // Paths EmDash serves locally from the media library.
 const LOCAL_MEDIA_PREFIX = '/_emdash/api/media/file/';
 
+// External CDN media handling: we filter by NON-image extensions (blacklist)
+// rather than requiring known image extensions (whitelist). EmDash sites
+// commonly hotlink Unsplash, Cloudflare Images, R2, etc. — many of these
+// CDNs serve images at extensionless URLs (e.g.
+// `https://images.unsplash.com/photo-123?w=1200`), which a whitelist would
+// reject. The blacklist accepts anything in <img src> unless it's a known
+// JS/CSS/font/document extension. Local /_emdash/api/media/file/{ULID} URLs
+// (also often extensionless) bypass this filter via an explicit prefix
+// check in extractEmDashMediaUrls.
 // Non-image file extensions used to filter out JS/CSS/font URLs that happen
 // to appear in <img src> (unusual but defensive).
 const NON_IMAGE_EXTENSIONS = /\.(css|js|json|xml|txt|map|woff2?|ttf|eot|otf|pdf|zip|mp4|webm|mov)$/i;

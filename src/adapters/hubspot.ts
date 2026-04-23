@@ -198,6 +198,9 @@ function extractContent($: CheerioRoot): string {
 // JSON-LD
 // ---------------------------------------------------------------------------
 
+// TODO: Extract parseJsonLdBlocks + isArticleLd to ./shared.ts when a third
+// adapter needs them. Currently duplicated between emdash.ts and hubspot.ts —
+// keep them byte-identical or update both together.
 /**
  * Parse all JSON-LD blocks in the page, flattening `@graph` wrappers and
  * stripping CDATA markers. Returns the flat list of JSON-LD objects.
