@@ -43,11 +43,12 @@ function Inspect({ url, token }: InspectProps) {
         setCounts(c);
 
         // Phase 3: Probe sample pages (if adapter supports it)
+        const { emdashAdapter } = await import('../adapters/emdash.js');
         const { shopifyAdapter } = await import('../adapters/shopify.js');
         const { squarespaceAdapter } = await import('../adapters/squarespace.js');
         const { webflowAdapter } = await import('../adapters/webflow.js');
         const { wixAdapter } = await import('../adapters/wix.js');
-        const allAdapters = [shopifyAdapter, squarespaceAdapter, webflowAdapter, wixAdapter];
+        const allAdapters = [emdashAdapter, shopifyAdapter, squarespaceAdapter, webflowAdapter, wixAdapter];
         const adapter = allAdapters.find(a => a.id === det.platform);
 
         if (adapter && typeof adapter.probe === 'function' && urls.length > 0) {

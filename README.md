@@ -16,6 +16,7 @@ This tool extracts all content from closed platforms — posts, pages, media, na
 
 | Platform | Status | Prompt |
 |---|---|---|
+| **EmDash** (Cloudflare CMS — blog/pages) | Ready | — |
 | **GoDaddy Websites & Marketing** (pages/blog) | Ready | [`prompts/godaddy-wm.md`](./prompts/godaddy-wm.md) |
 | **Hostinger Website Builder** (blog/pages/products) | Ready | — |
 | **HubSpot** | Ready | — |
@@ -25,7 +26,7 @@ This tool extracts all content from closed platforms — posts, pages, media, na
 | **Weebly** (blog/pages/products) | Ready | — |
 | **Wix** | Ready | [`prompts/wix.md`](./prompts/wix.md) |
 
-All eight platforms have MCP adapters with full extraction support including products (exported as WooCommerce-compatible CSV). GoDaddy Websites & Marketing is pages + blog only in v1; GoDaddy Online Store (OLS) product support is planned for v1.1.
+All nine platforms have MCP adapters with full extraction support including products (exported as WooCommerce-compatible CSV). GoDaddy Websites & Marketing is pages + blog only in v1; GoDaddy Online Store (OLS) product support is planned for v1.1.
 
 ## AI tool integration
 

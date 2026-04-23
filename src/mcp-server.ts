@@ -15,6 +15,7 @@ import { join } from 'path';
 
 // Static adapter imports — add new adapters here (alphabetical)
 import { godaddyWmAdapter } from './adapters/godaddy-wm.js';
+import { emdashAdapter } from './adapters/emdash.js';
 import { hostingerAdapter } from './adapters/hostinger.js';
 import { hubspotAdapter } from './adapters/hubspot.js';
 import { shopifyAdapter } from './adapters/shopify.js';
@@ -22,7 +23,7 @@ import { squarespaceAdapter } from './adapters/squarespace.js';
 import { webflowAdapter } from './adapters/webflow.js';
 import { weeblyAdapter } from './adapters/weebly.js';
 import { wixAdapter } from './adapters/wix.js';
-const adapters: PlatformAdapter[] = [godaddyWmAdapter, hostingerAdapter, hubspotAdapter, shopifyAdapter, squarespaceAdapter, webflowAdapter, weeblyAdapter, wixAdapter];
+const adapters: PlatformAdapter[] = [godaddyWmAdapter, emdashAdapter, hostingerAdapter, hubspotAdapter, shopifyAdapter, squarespaceAdapter, webflowAdapter, weeblyAdapter, wixAdapter];
 
 function findAdapter(platform: string): PlatformAdapter | null {
   return adapters.find((a) => a.id === platform) || null;

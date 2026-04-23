@@ -37,6 +37,7 @@ Figure out how to identify sites on this platform. Check:
 Add detection signals to `src/lib/extraction/detect-platform.ts`:
 - URL patterns go in `URL_PATTERNS`
 - HTTP/HTML signals go in `detectFromHttp()`
+- **Path probes** (added 2026-04-22 with EmDash adapter): if your platform exposes a stable admin or API path, add a `PathProbe` entry to `PATH_PROBES` in `src/lib/extraction/detect-platform.ts`. The probe issues an HTTP HEAD with `redirect: 'manual'` and matches on response status + optional Location-header substring — useful for platforms whose themes can strip all HTML markers but expose a fixed admin route (e.g. `/_emdash/admin` returning 302 to `/_emdash/admin/login`).
 
 ### 1b. Content Discovery
 
