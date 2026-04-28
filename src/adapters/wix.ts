@@ -71,6 +71,10 @@ export interface PageData {
   mediaUrls: string[];
   content: string;
   qualityScore: 'high' | 'medium' | 'low';
+  // Raw page HTML, kept for DOM-selector fallbacks (e.g. Wix product
+  // pages expose stable [data-hook] attributes that survive even when
+  // JSON-LD is malformed and the products API call wasn't captured).
+  pageHtml?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -491,6 +495,7 @@ async function extractWixPage(
     mediaUrls,
     content,
     qualityScore,
+    pageHtml,
   };
 }
 
@@ -563,6 +568,43 @@ function extractWixProduct(pageData: PageData): WooProduct | null {
         inStock: (product.stock as Record<string, unknown> | undefined)?.inventoryStatus
           ? (product.stock as Record<string, unknown>).inventoryStatus !== 'OUT_OF_STOCK'
           : undefined,
+      };
+    }
+  }
+
+  // 3. DOM fallback — Wix product pages tag elements with stable
+  //    [data-hook] attributes that survive even when JSON-LD is missing
+  //    or malformed AND the products API call wasn't captured. This is
+  //    the worst-case path that still yields a usable product record.
+  if (pageData.pageHtml) {
+    const html = pageData.pageHtml;
+    const pickByHook = (hook: string): string => {
+      const re = new RegExp(
+        `data-hook=["']${hook}["'][^>]*>([\\s\\S]*?)</`,
+        'i'
+      );
+      const m = html.match(re);
+      return m?.[1]?.replace(/<[^>]+>/g, '').trim() || '';
+    };
+    const name = pickByHook('product-title');
+    if (name) {
+      // [data-hook="formatted-primary-price"] is the clean value.
+      // [data-hook="product-price"] wraps a screen-reader "Price" prefix.
+      const price = pickByHook('formatted-primary-price').replace(/[^0-9.,]/g, '');
+      const description = pickByHook('product-description');
+      const imgRe = /data-hook=["'](?:main-media-image-wrapper|thumbnail-image)["'][^>]*>[\s\S]*?<img[^>]+src=["']([^"']+)["']/gi;
+      const images: string[] = [];
+      let match: RegExpExecArray | null;
+      while ((match = imgRe.exec(html)) !== null) {
+        if (!images.includes(match[1])) images.push(match[1]);
+      }
+      return {
+        name,
+        description,
+        regularPrice: price,
+        sku: '',
+        images,
+        inStock: true,
       };
     }
   }
