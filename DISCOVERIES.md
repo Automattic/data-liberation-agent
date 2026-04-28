@@ -44,6 +44,79 @@ only.
 Before: WordPress imports landed with site titles like
 "Home | Gilded Carat Main". After: clean "Gilded Carat".
 
+## 2026-04-28 — Wix product pages expose stable `data-hook` selectors
+
+**Found by:** Claude + human contributor
+**During:** Migrating Wix Stores sites where JSON-LD was malformed or
+missing AND the products API call hadn't been captured during navigation
+**Type:** platform quirk | content type
+
+### What I found
+Wix product pages tag key elements with `data-hook="..."` attributes
+that have been stable across every Wix Stores site we've tested. When
+JSON-LD is missing or malformed *and* the products API call hasn't
+been captured, the rendered DOM is still extractable via these hooks —
+no need to give up on the product.
+
+| Element | Selector |
+|---|---|
+| Product title | `[data-hook="product-title"]` |
+| Product price (clean) | `[data-hook="formatted-primary-price"]` |
+| Product price (wrapper, includes SR "Price") | `[data-hook="product-price"]` |
+| Product gallery root | `[data-hook="product-gallery-root"]` |
+| Main product image | `[data-hook="main-media-image-wrapper"] img` |
+| Thumbnail images | `[data-hook="thumbnail-image"] img` |
+| Product description | `[data-hook="product-description"]` |
+| Product options | `[data-hook="product-options"]` |
+
+The `[data-hook="product-price"]` wrapper contains a screen-reader span
+(`[data-hook="sr-formatted-primary-price"]`) with the literal word
+"Price" — use `[data-hook="formatted-primary-price"]` for the clean
+value.
+
+### How it works
+Added a third fallback path in `extractWixProduct()` after the
+JSON-LD and captured-API paths. When both upstream paths fail, parse
+the rendered HTML using the hooks above. Required adding an optional
+`pageHtml` field to `PageData` so the raw HTML (already captured for
+media-URL extraction) is available to the product extractor.
+
+### Why it's better than the previous approach
+Before: `extractWixProduct()` returned `null` whenever JSON-LD was
+missing AND the product API call wasn't captured (e.g. cached
+navigation, slow hydration, throttled requests). After: name, price,
+description, and gallery images recover from the rendered DOM —
+typically the worst-case path that still yields a usable product
+record.
+
+
+## 2026-04-28 — Wix's `networkidle` never resolves; use `domcontentloaded` + delay
+
+**Found by:** Claude + human contributor
+**During:** Building a Wix → WordPress.com migration tool against ~12 live Wix sites
+**Type:** platform quirk | bug fix
+
+### What I found
+Using `page.goto(url, { waitUntil: 'networkidle' })` against Wix sites
+times out on roughly half of product pages. Wix's analytics, chat
+widgets, and tracking pixels keep firing requests indefinitely, so the
+network never goes idle inside the 30s budget.
+
+### How it works
+Switch the wait strategy from `networkidle` to `domcontentloaded` and
+add a fixed `await p.waitForTimeout(4000)` afterwards. The 4s delay
+covers Wix's client-side hydration of lazy content (Thunderbolt
+rendering engine). Applied at all three navigation sites in the Wix
+adapter (page extraction, homepage crawl fallback, navigation
+extraction).
+
+### Why it's better than the previous approach
+Validated empirically across multiple live Wix sites: with
+`networkidle`, ~50% of product pages timed out and emitted partial or
+empty extractions. With `domcontentloaded` + 4s delay, the same pages
+extract reliably and the 30s budget is no longer exhausted by
+background telemetry.
+
 
 ## 2026-04-16 — Wix Tag Manager poisons content extraction
 

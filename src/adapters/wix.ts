@@ -71,6 +71,10 @@ export interface PageData {
   mediaUrls: string[];
   content: string;
   qualityScore: 'high' | 'medium' | 'low';
+  // Raw page HTML, kept for DOM-selector fallbacks (e.g. Wix product
+  // pages expose stable [data-hook] attributes that survive even when
+  // JSON-LD is malformed and the products API call wasn't captured).
+  pageHtml?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -290,7 +294,13 @@ async function extractWixPage(
   p.on('response', responseHandler);
 
   try {
-    await p.goto(url, { waitUntil: 'networkidle', timeout: 30000 });
+    // Wix's analytics, chat widgets, and tracking pixels keep firing
+    // requests indefinitely, so `networkidle` never resolves on many
+    // pages — especially product pages — and the 30s budget is
+    // exhausted by background telemetry. `domcontentloaded` + a short
+    // fixed delay catches Wix's lazy hydration without hanging.
+    await p.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await p.waitForTimeout(4000);
   } catch {
     // Navigation may timeout on heavy Wix pages
   }
@@ -491,6 +501,7 @@ async function extractWixPage(
     mediaUrls,
     content,
     qualityScore,
+    pageHtml,
   };
 }
 
@@ -567,6 +578,43 @@ function extractWixProduct(pageData: PageData): WooProduct | null {
     }
   }
 
+  // 3. DOM fallback — Wix product pages tag elements with stable
+  //    [data-hook] attributes that survive even when JSON-LD is missing
+  //    or malformed AND the products API call wasn't captured. This is
+  //    the worst-case path that still yields a usable product record.
+  if (pageData.pageHtml) {
+    const html = pageData.pageHtml;
+    const pickByHook = (hook: string): string => {
+      const re = new RegExp(
+        `data-hook=["']${hook}["'][^>]*>([\\s\\S]*?)</`,
+        'i'
+      );
+      const m = html.match(re);
+      return m?.[1]?.replace(/<[^>]+>/g, '').trim() || '';
+    };
+    const name = pickByHook('product-title');
+    if (name) {
+      // [data-hook="formatted-primary-price"] is the clean value.
+      // [data-hook="product-price"] wraps a screen-reader "Price" prefix.
+      const price = pickByHook('formatted-primary-price').replace(/[^0-9.,]/g, '');
+      const description = pickByHook('product-description');
+      const imgRe = /data-hook=["'](?:main-media-image-wrapper|thumbnail-image)["'][^>]*>[\s\S]*?<img[^>]+src=["']([^"']+)["']/gi;
+      const images: string[] = [];
+      let match: RegExpExecArray | null;
+      while ((match = imgRe.exec(html)) !== null) {
+        if (!images.includes(match[1])) images.push(match[1]);
+      }
+      return {
+        name,
+        description,
+        regularPrice: price,
+        sku: '',
+        images,
+        inStock: true,
+      };
+    }
+  }
+
   return null;
 }
 
@@ -625,7 +673,11 @@ export const wixAdapter: PlatformAdapter = {
     let allUrls = sitemapUrls;
     if (allUrls.length === 0) {
       try {
-        await p.goto(url, { waitUntil: 'networkidle', timeout: 30000 });
+        // See comment at the page-extraction goto above — Wix's
+        // background telemetry prevents `networkidle` from ever
+        // resolving.
+        await p.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+        await p.waitForTimeout(4000);
         const origin = new URL(url).origin;
         allUrls = (await p.evaluate((orig: unknown) => {
           const o = orig as string;
@@ -645,7 +697,12 @@ export const wixAdapter: PlatformAdapter = {
     // 3. Extract navigation from homepage
     let navigation: NavLink[] = [];
     try {
-      await p.goto(url, { waitUntil: 'networkidle', timeout: 30000 }).catch(() => {});
+      // See comment at the page-extraction goto above for why we
+      // avoid `networkidle` on Wix sites.
+      await p
+        .goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 })
+        .catch(() => {});
+      await p.waitForTimeout(4000);
       navigation = (await p.evaluate(() => {
         const navLinks: Array<{ text: string; href: string }> = [];
         document
