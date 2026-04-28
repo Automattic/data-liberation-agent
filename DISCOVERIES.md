@@ -6,6 +6,44 @@ AI agents: when you contribute an improvement, add an entry here. See [CONTRIBUT
 
 ---
 
+## 2026-04-28 — Wix appends " Main" to every site name
+
+**Found by:** Claude + human contributor
+**During:** Migrating multiple Wix sites; noticed every WordPress import
+ended up with a site title like "My Studio Main"
+**Type:** platform quirk
+
+### What I found
+Wix's editor appends a literal " Main" suffix to every site's name. It
+shows up in two places:
+
+- `<meta property="og:site_name">` content ends in " Main" (e.g.
+  "Gilded Carat Main")
+- `document.title` follows the pattern `Page Title | Site Name Main`
+
+The suffix is a Wix internal label (probably the default page-set
+name, "Main"). It is never part of the agency's actual site name.
+
+### How it works
+At the homepage `siteTitle` extraction site in `discover()`, take the
+substring after the last ` | ` and strip a trailing ` Main`:
+
+```js
+const t = document.title;
+const pipeIdx = t.lastIndexOf(' | ');
+const sitePart = pipeIdx > 0 ? t.slice(pipeIdx + 3).trim() : t;
+return sitePart.replace(/ Main$/, '').trim();
+```
+
+The per-page title stripping in `runExtractionLoop` (slice everything
+after ` | `) already handles per-page titles correctly — the trailing
+" Main" suffix goes with the site-name half. The bug was site-level
+only.
+
+### Why it's better than the previous approach
+Before: WordPress imports landed with site titles like
+"Home | Gilded Carat Main". After: clean "Gilded Carat".
+
 ## 2026-04-28 — Wix product pages expose stable `data-hook` selectors
 
 **Found by:** Claude + human contributor
