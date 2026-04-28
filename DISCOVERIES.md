@@ -6,6 +6,34 @@ AI agents: when you contribute an improvement, add an entry here. See [CONTRIBUT
 
 ---
 
+## 2026-04-28 — Wix's `networkidle` never resolves; use `domcontentloaded` + delay
+
+**Found by:** Claude + human contributor
+**During:** Building a Wix → WordPress.com migration tool against ~12 live Wix sites
+**Type:** platform quirk | bug fix
+
+### What I found
+Using `page.goto(url, { waitUntil: 'networkidle' })` against Wix sites
+times out on roughly half of product pages. Wix's analytics, chat
+widgets, and tracking pixels keep firing requests indefinitely, so the
+network never goes idle inside the 30s budget.
+
+### How it works
+Switch the wait strategy from `networkidle` to `domcontentloaded` and
+add a fixed `await p.waitForTimeout(4000)` afterwards. The 4s delay
+covers Wix's client-side hydration of lazy content (Thunderbolt
+rendering engine). Applied at all three navigation sites in the Wix
+adapter (page extraction, homepage crawl fallback, navigation
+extraction).
+
+### Why it's better than the previous approach
+Validated empirically across multiple live Wix sites: with
+`networkidle`, ~50% of product pages timed out and emitted partial or
+empty extractions. With `domcontentloaded` + 4s delay, the same pages
+extract reliably and the 30s budget is no longer exhausted by
+background telemetry.
+
+
 ## 2026-04-16 — Wix Tag Manager poisons content extraction
 
 **Found by:** Claude + human contributor

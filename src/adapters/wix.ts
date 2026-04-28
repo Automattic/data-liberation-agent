@@ -290,7 +290,13 @@ async function extractWixPage(
   p.on('response', responseHandler);
 
   try {
-    await p.goto(url, { waitUntil: 'networkidle', timeout: 30000 });
+    // Wix's analytics, chat widgets, and tracking pixels keep firing
+    // requests indefinitely, so `networkidle` never resolves on many
+    // pages — especially product pages — and the 30s budget is
+    // exhausted by background telemetry. `domcontentloaded` + a short
+    // fixed delay catches Wix's lazy hydration without hanging.
+    await p.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await p.waitForTimeout(4000);
   } catch {
     // Navigation may timeout on heavy Wix pages
   }
@@ -625,7 +631,11 @@ export const wixAdapter: PlatformAdapter = {
     let allUrls = sitemapUrls;
     if (allUrls.length === 0) {
       try {
-        await p.goto(url, { waitUntil: 'networkidle', timeout: 30000 });
+        // See comment at the page-extraction goto above — Wix's
+        // background telemetry prevents `networkidle` from ever
+        // resolving.
+        await p.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+        await p.waitForTimeout(4000);
         const origin = new URL(url).origin;
         allUrls = (await p.evaluate((orig: unknown) => {
           const o = orig as string;
@@ -645,7 +655,12 @@ export const wixAdapter: PlatformAdapter = {
     // 3. Extract navigation from homepage
     let navigation: NavLink[] = [];
     try {
-      await p.goto(url, { waitUntil: 'networkidle', timeout: 30000 }).catch(() => {});
+      // See comment at the page-extraction goto above for why we
+      // avoid `networkidle` on Wix sites.
+      await p
+        .goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 })
+        .catch(() => {});
+      await p.waitForTimeout(4000);
       navigation = (await p.evaluate(() => {
         const navLinks: Array<{ text: string; href: string }> = [];
         document
