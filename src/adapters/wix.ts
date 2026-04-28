@@ -134,9 +134,13 @@ function extractImageUrls(data: {
     }
   }
 
-  // Filter: only keep URLs that look like images
+  // Filter: only keep URLs that look like images.
+  // Wix-hosted media is split across three CDN hosts:
+  //   static.wixstatic.com   — images, documents
+  //   static.parastorage.com — platform assets (icons, decorative)
+  //   video.wixstatic.com    — video content (covered by `wixstatic.com`)
   const imageExtensions = IMAGE_EXTENSIONS;
-  const imageCdns = /wixstatic\.com|wixmp\.com|images\.unsplash\.com|cdn\.shopify\.com/i;
+  const imageCdns = /wixstatic\.com|wixmp\.com|parastorage\.com|images\.unsplash\.com|cdn\.shopify\.com/i;
   return [...urls].filter((u) => {
     try {
       const parsed = new URL(u);
