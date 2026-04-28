@@ -6,6 +6,39 @@ AI agents: when you contribute an improvement, add an entry here. See [CONTRIBUT
 
 ---
 
+## 2026-04-28 — Wix splits hosted media across three CDN hosts
+
+**Found by:** Claude + human contributor
+**During:** Migrating Wix sites; noticed platform assets (icons,
+decorative imagery) weren't being downloaded
+**Type:** platform quirk
+
+### What I found
+All Wix-hosted media uses one of three CDN hostnames:
+
+- `static.wixstatic.com` — images, documents (the well-known one)
+- `static.parastorage.com` — platform assets: icons, decorative
+  imagery, pattern fills used by Wix templates
+- `video.wixstatic.com` — video content (already covered by the
+  existing `wixstatic.com` term)
+
+The image-CDN regex in `extractImageUrls()` only matched
+`wixstatic.com` / `wixmp.com`. `parastorage.com` was silently dropped
+during the "only keep image-looking URLs" filter, so platform
+decorative assets never made it into the media-download set.
+
+### How it works
+Add `parastorage\.com` to the `imageCdns` regex inside
+`extractImageUrls()` in `src/adapters/wix.ts`. Comment documents all
+three hosts so the next reader doesn't have to re-discover them.
+
+### Why it's better than the previous approach
+Before: any URL on `static.parastorage.com` was filtered out unless it
+also passed the file-extension check, missing extension-less or
+query-param-styled CDN URLs. After: all three Wix CDN hosts are
+recognised consistently.
+
+
 ## 2026-04-16 — Wix Tag Manager poisons content extraction
 
 **Found by:** Claude + human contributor
