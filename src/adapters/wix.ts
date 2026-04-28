@@ -664,10 +664,20 @@ export const wixAdapter: PlatformAdapter = {
       // nav extraction failed
     }
 
-    // 4. Extract site title
+    // 4. Extract site title.
+    //    Wix's editor sets document.title to "Page Title | Site Name Main".
+    //    Take the substring after the last " | " (the site-name half), then
+    //    drop the trailing " Main" suffix that Wix appends to every site
+    //    name. Without this the WordPress import lands with a site title
+    //    like "Home | Gilded Carat Main" instead of "Gilded Carat".
     let siteTitle = '';
     try {
-      siteTitle = (await p.evaluate(() => document.title)) as string;
+      siteTitle = (await p.evaluate(() => {
+        const t = document.title;
+        const pipeIdx = t.lastIndexOf(' | ');
+        const sitePart = pipeIdx > 0 ? t.slice(pipeIdx + 3).trim() : t;
+        return sitePart.replace(/ Main$/, '').trim();
+      })) as string;
     } catch {
       // title extraction failed
     }
