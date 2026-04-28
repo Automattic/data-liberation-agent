@@ -6,6 +6,52 @@ AI agents: when you contribute an improvement, add an entry here. See [CONTRIBUT
 
 ---
 
+## 2026-04-28 — Wix product pages expose stable `data-hook` selectors
+
+**Found by:** Claude + human contributor
+**During:** Migrating Wix Stores sites where JSON-LD was malformed or
+missing AND the products API call hadn't been captured during navigation
+**Type:** platform quirk | content type
+
+### What I found
+Wix product pages tag key elements with `data-hook="..."` attributes
+that have been stable across every Wix Stores site we've tested. When
+JSON-LD is missing or malformed *and* the products API call hasn't
+been captured, the rendered DOM is still extractable via these hooks —
+no need to give up on the product.
+
+| Element | Selector |
+|---|---|
+| Product title | `[data-hook="product-title"]` |
+| Product price (clean) | `[data-hook="formatted-primary-price"]` |
+| Product price (wrapper, includes SR "Price") | `[data-hook="product-price"]` |
+| Product gallery root | `[data-hook="product-gallery-root"]` |
+| Main product image | `[data-hook="main-media-image-wrapper"] img` |
+| Thumbnail images | `[data-hook="thumbnail-image"] img` |
+| Product description | `[data-hook="product-description"]` |
+| Product options | `[data-hook="product-options"]` |
+
+The `[data-hook="product-price"]` wrapper contains a screen-reader span
+(`[data-hook="sr-formatted-primary-price"]`) with the literal word
+"Price" — use `[data-hook="formatted-primary-price"]` for the clean
+value.
+
+### How it works
+Added a third fallback path in `extractWixProduct()` after the
+JSON-LD and captured-API paths. When both upstream paths fail, parse
+the rendered HTML using the hooks above. Required adding an optional
+`pageHtml` field to `PageData` so the raw HTML (already captured for
+media-URL extraction) is available to the product extractor.
+
+### Why it's better than the previous approach
+Before: `extractWixProduct()` returned `null` whenever JSON-LD was
+missing AND the product API call wasn't captured (e.g. cached
+navigation, slow hydration, throttled requests). After: name, price,
+description, and gallery images recover from the rendered DOM —
+typically the worst-case path that still yields a usable product
+record.
+
+
 ## 2026-04-28 — Wix's `networkidle` never resolves; use `domcontentloaded` + delay
 
 **Found by:** Claude + human contributor
