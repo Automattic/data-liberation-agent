@@ -17,7 +17,7 @@ If any step fails, the report includes specific guidance:
 
 - **Unreachable site** — check URL format, site accessibility, WordPress.com vs self-hosted
 - **REST API unavailable** — check for security plugins blocking the API, verify it's actually a WordPress site
-- **Auth failure** — how to create an Application Password (WordPress Admin > Users > Profile, or wordpress.com/me/security/application-passwords), common mistakes (using account password instead of app password, using email instead of username)
+- **Auth failure** — how to create an Application Password (WordPress Admin > Users > Profile). On WordPress.com / wpcomstaging.com hosts, the password MUST come from the site's own wp-admin — wordpress.com/me/security/application-passwords issues account-level passwords that only work for the public-api.wordpress.com namespace. Common mistakes: using account password instead of app password, using email instead of username, using account-level WP.com app password against site-native /wp-json/wp/v2/.
 
 ## Usage
 
