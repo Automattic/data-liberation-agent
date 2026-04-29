@@ -259,6 +259,7 @@ async function extractWixPage(
     goto(url: string, opts: Record<string, unknown>): Promise<unknown>;
     evaluate(fn: () => unknown): Promise<unknown>;
     content(): Promise<string>;
+    waitForTimeout(ms: number): Promise<void>;
     context(): {
       newCDPSession(page: unknown): Promise<{
         send(method: string, params: Record<string, unknown>): Promise<unknown>;
@@ -642,6 +643,7 @@ export const wixAdapter: PlatformAdapter = {
       goto(url: string, opts?: Record<string, unknown>): Promise<{ ok(): boolean } | null>;
       content(): Promise<string>;
       evaluate(fn: (...args: unknown[]) => unknown, ...args: unknown[]): Promise<unknown>;
+      waitForTimeout(ms: number): Promise<void>;
     };
 
     // 1. Fetch sitemap via Playwright
