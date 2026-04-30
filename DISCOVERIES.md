@@ -6,6 +6,52 @@ AI agents: when you contribute an improvement, add an entry here. See [CONTRIBUT
 
 ---
 
+## 2026-04-30 — `--resume` overwrites the existing WXR with only newly-extracted items
+
+**Found by:** Claude + James
+**During:** Migrating https://www.corneliusholmes.com/ — first run extracted 16 pages, the resume run for 2 remaining failures left only those 2 pages in the final WXR
+**Type:** extraction infrastructure bug
+
+### What I found
+The `liberate_extract` MCP handler in `src/mcp-server.ts` constructs a fresh `WxrBuilder` on every invocation and calls `wxr.serialize(wxrPath)` at the end, which `writeFileSync`s the WXR (overwriting whatever's there). The `runExtractionLoop` correctly filters URLs already in `extraction-log.jsonl` on `--resume`, so the in-memory builder ends each resume run with *only the newly-extracted items*. Serialize then atomically replaces the prior multi-item WXR with whatever was extracted this run.
+
+Concretely on the test site:
+- Run 1 (fresh): extracted 16 pages → `output.wxr` contains 16 pages.
+- Run 2 (`--resume`, retrying 2 previously-failed URLs): builder sees 2 new pages → `output.wxr` rewritten with 2 pages, the prior 16 destroyed.
+
+This makes resume worse than useless — it actively damages the prior output. The user thought they were extending the extraction; they were truncating it.
+
+### How it works
+On resume, rehydrate the `WxrBuilder` from the existing `output.wxr` *before* calling `adapter.extract`. The repo already has `readWxr` (`src/lib/extraction/wxr-reader.ts`) which produces typed `WxrItem[]` / `Author[]` / etc. matching the builder's public fields. Direct field assignment + reseed `_nextId` past the max existing ID.
+
+`nav_menu_item`s are dropped on load because the extraction loop regenerates them deterministically from the current inventory's navigation each run; keeping the prior ones would produce duplicates.
+
+```ts
+if (typedArgs.resume && existsSync(wxrPath)) {
+  try {
+    const prior = readWxr(wxrPath);
+    wxr.authors = prior.authors;
+    wxr.categories = prior.categories;
+    wxr.tags = prior.tags;
+    wxr.terms = prior.terms;
+    wxr.comments = prior.comments;
+    wxr.redirects = prior.redirects;
+    wxr.items = prior.items.filter((i) => i.type !== 'nav_menu_item');
+
+    let maxId = 0;
+    for (const it of wxr.items) maxId = Math.max(maxId, it.id);
+    // ...same for authors/categories/tags/terms/comments
+    wxr._nextId = maxId + 1;
+  } catch {
+    // Corrupt prior WXR: fall through and treat as a fresh run.
+  }
+}
+```
+
+### Why it's better than the previous approach
+Before: `--resume` was destructive — every resume run shrank the WXR to whatever was extracted in that single invocation, even though the underlying log correctly recorded all prior URLs as processed. Users who hit per-page failures and re-ran lost the bulk of their extraction silently.
+After: resume is genuinely incremental — prior items survive, only new URLs are added, the WXR grows monotonically until extraction is complete.
+
 ## 2026-04-28 — Wix splits hosted media across three CDN hosts
 
 **Found by:** Claude + human contributor
