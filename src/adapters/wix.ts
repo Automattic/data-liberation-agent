@@ -673,6 +673,18 @@ export const wixAdapter: PlatformAdapter = {
 
     await fetchSitemapPw(`${baseUrl}/sitemap.xml`);
 
+    // Wix's sitemap index typically only references pages-sitemap.xml,
+    // even when blog/store/forum content exists. Probe the well-known
+    // sub-sitemap paths so blog posts and storefront items don't get
+    // silently dropped.
+    for (const subSitemap of [
+      'blog-posts-sitemap.xml',
+      'store-products-sitemap.xml',
+      'forum-posts-sitemap.xml',
+    ]) {
+      await fetchSitemapPw(`${baseUrl}/${subSitemap}`);
+    }
+
     // 2. If sitemap is empty, crawl homepage for same-origin links
     let allUrls = sitemapUrls;
     if (allUrls.length === 0) {
