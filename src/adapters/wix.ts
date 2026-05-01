@@ -75,6 +75,14 @@ export interface PageData {
   // pages expose stable [data-hook] attributes that survive even when
   // JSON-LD is malformed and the products API call wasn't captured).
   pageHtml?: string;
+  // Classification when DLA can identify the page as a Wix-platform widget
+  // shell rather than a general-purpose page. Currently set only to
+  // "blog_archive" when the Wix typed-blog feed widget is detected (the
+  // listing page that shows multiple posts as cards). Absent when there's
+  // no strong signal — consumers should treat absence as "general page"
+  // and not infer extra meaning. Open enum so future widget classifications
+  // (product listings, forums, bookings) don't require breaking consumers.
+  pageType?: 'blog_archive' | string;
 }
 
 // ---------------------------------------------------------------------------
@@ -435,6 +443,23 @@ async function extractWixPage(
     // DOM extraction failed
   }
 
+  // Wix typed-blog feed pages (the post-listing page rendered by the Wix
+  // Blog widget) carry a stable [data-hook="feed-page-root"] container
+  // at the top of the feed. Verified across two independent Wix sites
+  // that diverge on theme; absent on regular pages and on custom-styled
+  // pages that look archive-like but don't use the typed-blog widget.
+  // High-precision signal — false negatives acceptable (sites not using
+  // the widget go untagged), false positives unlikely.
+  let pageType: string | null = null;
+  try {
+    const isBlogArchive = (await p.evaluate(
+      () => !!document.querySelector('[data-hook="feed-page-root"]')
+    )) as boolean;
+    if (isBlogArchive) pageType = 'blog_archive';
+  } catch {
+    // detection failed; leave pageType unset
+  }
+
   let accessibility: Array<{ role: string; name: string; description?: string }> | null =
     null;
   try {
@@ -506,6 +531,7 @@ async function extractWixPage(
     content,
     qualityScore,
     pageHtml,
+    ...(pageType ? { pageType } : {}),
   };
 }
 
