@@ -325,6 +325,35 @@ On final failure the URL + reason is logged via `console.warn` and appended to a
 Tested on a small Wix business site with a dry run (clean discovery, no retries needed). The previous silent-failure behavior turned transient network blips or CDN rate-limits into silent data loss; now the same blips are retried and — if persistent — surfaced as visible warnings.
 
 
+
+## 2026-04-17 — Site-level JSON-LD leaks into Wix category-page content
+
+**Found by:** Claude + human contributor
+**During:** Testing the Wix adapter against a range of live Wix sites
+**Type:** bug fix
+
+### What I found
+
+`deriveContent()` step 3 accepted `description` from *any* JSON-LD object on the page. Wix ecommerce templates commonly include a site-level JSON-LD block — `@type: "FurnitureStore"`, `"Organization"`, `"LocalBusiness"`, `"Restaurant"`, etc. — whose `description` field is a generic store tagline written once by the site owner. Every page that falls through to step 3 (Wix category archives whose product grids are JS-rendered, for example) ends up with the same site-wide tagline as its body content.
+
+Observed on a tested furniture-store site: 49 of 58 pages (84%) had the identical 266-character site-tagline as `<content:encoded>` — because each `/category/…` page has no static content (the product grid is rendered client-side) so derivation fell through API → DOM → and grabbed the `FurnitureStore` JSON-LD description. When imported to WordPress, the category pages are indistinguishable.
+
+### How it works
+
+Two changes to `deriveContent()`:
+
+1. **`@type` allow-list for JSON-LD description**: introduced `CONTENT_LD_TYPES = {Article, BlogPosting, NewsArticle, SocialMediaPosting, Product, ItemPage, Event, Recipe, Course, Book, Movie}`. The JSON-LD `description` fallback now only accepts a match whose top-level `@type` is in the allow-list. `articleBody` remains universally accepted (it's inherently content-level).
+
+2. **`og:description` fallback** (new step 4): when steps 1–3 fail, use `pageData.meta.ogDescription || pageData.meta.description` if ≥ 50 chars. `og:description` is per-page (written by the site owner for sharing), so pages that share the old site-level fallback now carry their own per-page description instead.
+
+The accessibility-tree fallback moves from step 4 to step 5; empty from 5 to 6.
+
+### Why it's better than the previous approach
+
+Tested on two category pages from the affected site: both now derive content from `og:description` instead of the shared `FurnitureStore` block, so the category pages produce distinct content rather than identical boilerplate.
+
+---
+
 ## 2026-04-17 — Wix API responses leak `<link>`/`<meta>` tags as page content
 
 **Found by:** Claude + human contributor
