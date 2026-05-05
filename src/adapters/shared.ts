@@ -218,6 +218,8 @@ export interface ExtractedPage {
   author?: string;
   /** Override URL-based type classification (e.g. from structured data / JSON-LD) */
   detectedType?: 'product' | 'post' | 'page';
+  /** Parsed JSON-LD objects from the page. Used by the fallback type detector. */
+  jsonLd?: unknown[];
 }
 
 export interface ExtractionLoopOpts {
@@ -562,12 +564,28 @@ export async function runExtractionLoop(opts: ExtractionLoopOpts): Promise<{
       const invEntry = inventoryUrls.find((u) => u.url === url);
       let urlType = pageData.detectedType || invEntry?.type || classifyUrl(url);
 
-      // If still classified as a page, check JSON-LD for blog post signals
+      // If still classified as a page, check top-level JSON-LD for blog post
+      // signals. We require a proper top-level @type of BlogPosting/Article
+      // AND (when present) mainEntityOfPage matching the current URL. This
+      // avoids promoting blog listing pages that embed BlogPosting cards for
+      // each post they display.
       if (urlType === 'page' || urlType === 'homepage') {
-        const blogLdTypes = /["']@type["']\s*:\s*["'](BlogPosting|NewsArticle|Article|SocialMediaPosting)["']/i;
-        if (blogLdTypes.test(pageData.content)) {
-          urlType = 'post';
-        }
+        const BLOG_TYPES = new Set(['BlogPosting', 'NewsArticle', 'Article', 'SocialMediaPosting']);
+        const isRealBlogPost = Array.isArray(pageData.jsonLd) && pageData.jsonLd.some((ld) => {
+          if (!ld || typeof ld !== 'object') return false;
+          const obj = ld as Record<string, unknown>;
+          const atType = obj['@type'];
+          if (typeof atType !== 'string' || !BLOG_TYPES.has(atType)) return false;
+          const mep = obj.mainEntityOfPage;
+          if (mep && typeof mep === 'object') {
+            const mepRec = mep as Record<string, unknown>;
+            const mepUrl = typeof mepRec.url === 'string' ? mepRec.url :
+                           typeof mepRec['@id'] === 'string' ? mepRec['@id'] as string : null;
+            if (mepUrl && mepUrl !== url) return false;
+          }
+          return true;
+        });
+        if (isRealBlogPost) urlType = 'post';
       }
 
       const isPost = urlType === 'post' || urlType === 'blog-post';

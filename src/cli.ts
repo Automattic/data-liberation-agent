@@ -26,6 +26,7 @@ if (args[0] === 'mcp') {
     data-liberation qa <wxr-file>        Compare WXR against source site
     data-liberation verify <output-dir>  Verify extraction results
     data-liberation setup                Validate WordPress connection
+    data-liberation preview <outputDir>  Preview extraction in WordPress Playground
     data-liberation mcp                Start MCP server (stdio transport)
     data-liberation --version          Show version
 
@@ -51,6 +52,11 @@ if (args[0] === 'mcp') {
     --verbose             Detailed logging
     --only <type>         Only import specific type (categories, tags, media, pages, posts, comments, menus)
     --import-authors      Create WordPress users for authors (default: all content owned by you)
+
+  Preview options:
+    --open               Open the preview URL in the default browser
+    --port <n>           Override the auto-picked port (9400-9499)
+    --non-interactive    Skip the post-preview import nudge
 
   Environment:
     LIBERATION_TOKEN     API token (alternative to --token flag for extraction)
@@ -97,6 +103,20 @@ if (args[0] === 'mcp') {
 
   const { runSetup } = await import('./ui/setup.js');
   runSetup({ site: site ?? undefined, username: username ?? undefined, token: token ?? undefined });
+
+} else if (args[0] === 'preview') {
+  const outputDir = args[1];
+  if (!outputDir || outputDir.startsWith('-')) {
+    console.error('Error: outputDir required. Usage: data-liberation preview <outputDir> [--open] [--port <n>] [--non-interactive]');
+    process.exit(1);
+  }
+  const open = args.includes('--open');
+  const portArg = getArg('--port');
+  const port = portArg ? Number(portArg) : undefined;
+  const nonInteractive = args.includes('--non-interactive') || !process.stdout.isTTY;
+
+  const { runCliPreview } = await import('./ui/preview.js');
+  await runCliPreview({ outputDir, open, port, nonInteractive });
 
 } else if (args[0] === 'import') {
   const wxrFile = args[1];

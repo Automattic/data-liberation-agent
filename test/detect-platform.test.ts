@@ -1,6 +1,6 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { readFileSync } from 'fs';
-import { detectFromUrl, detectFromHttp } from '../src/lib/extraction/detect-platform.js';
+import { detectFromUrl, detectFromHttp, PATH_PROBES } from '../src/lib/extraction/detect-platform.js';
 
 describe('detectFromUrl (heuristics)', () => {
   it('detects wixsite.com', () => {
@@ -89,6 +89,233 @@ describe('detectFromHttp (fingerprinting)', () => {
     });
     const result = await detectFromHttp('https://skywaydiner.com');
     expect(result.platform).toBe('godaddy-wm');
+    expect(result.confidence).toBe('high');
+  });
+});
+
+describe('PATH_PROBES infrastructure', () => {
+  afterEach(() => {
+    PATH_PROBES.length = 0;
+  });
+
+  it('exports PATH_PROBES as an array', () => {
+    expect(Array.isArray(PATH_PROBES)).toBe(true);
+  });
+
+  it('PATH_PROBES is empty (no consumers in this PR)', () => {
+    expect(PATH_PROBES).toEqual([]);
+  });
+
+  it('matches a path probe when source signals fail (status only)', async () => {
+    // Inject a test probe by mutating PATH_PROBES (vitest tests share module state)
+    PATH_PROBES.push({
+      path: '/_test/admin',
+      expectedStatus: [302, 401],
+      platform: 'testplatform',
+      signal: '/_test/admin probe',
+    });
+
+    // Mock chain: first fetch (homepage) returns generic HTML (forces probe),
+    // second fetch (probe HEAD) returns 302.
+    global.fetch = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        headers: new Map(),
+        text: () => Promise.resolve('<html><body>Generic</body></html>'),
+      })
+      .mockResolvedValueOnce({
+        status: 302,
+        headers: new Map([['location', 'https://example.com/_test/admin/login']]),
+      });
+
+    const result = await detectFromHttp('https://example.com');
+    expect(result.platform).toBe('testplatform');
+    expect(result.confidence).toBe('high');
+    expect(result.signals).toContain('/_test/admin probe');
+  });
+
+  it('does NOT match when probe returns wrong status', async () => {
+    PATH_PROBES.push({
+      path: '/_test/admin',
+      expectedStatus: [302, 401],
+      platform: 'testplatform',
+      signal: '/_test/admin probe',
+    });
+
+    global.fetch = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        headers: new Map(),
+        text: () => Promise.resolve('<html></html>'),
+      })
+      .mockResolvedValueOnce({
+        status: 404,  // Wrong status
+        headers: new Map(),
+      });
+
+    const result = await detectFromHttp('https://example.com');
+    expect(result.platform).toBe('unknown');
+  });
+
+  it('matches when Location header contains expected substring', async () => {
+    PATH_PROBES.push({
+      path: '/_test/admin',
+      expectedStatus: [302],
+      locationContains: '/_test/admin/login',
+      platform: 'testplatform',
+      signal: '/_test/admin probe with location check',
+    });
+
+    global.fetch = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        headers: new Map(),
+        text: () => Promise.resolve('<html></html>'),
+      })
+      .mockResolvedValueOnce({
+        status: 302,
+        headers: new Map([['location', 'https://example.com/_test/admin/login?redirect=%2F_test%2Fadmin']]),
+      });
+
+    const result = await detectFromHttp('https://example.com');
+    expect(result.platform).toBe('testplatform');
+  });
+
+  it('does NOT match when Location header lacks expected substring', async () => {
+    PATH_PROBES.push({
+      path: '/_test/admin',
+      expectedStatus: [302],
+      locationContains: '/_test/admin/login',
+      platform: 'testplatform',
+      signal: '/_test/admin probe with location check',
+    });
+
+    global.fetch = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        headers: new Map(),
+        text: () => Promise.resolve('<html></html>'),
+      })
+      .mockResolvedValueOnce({
+        status: 302,
+        headers: new Map([['location', 'https://example.com/somewhere-else']]),  // Wrong location
+      });
+
+    const result = await detectFromHttp('https://example.com');
+    expect(result.platform).toBe('unknown');  // Status matched but Location didn't
+  });
+
+  it('does NOT match when Location header is missing entirely', async () => {
+    PATH_PROBES.push({
+      path: '/_test/admin',
+      expectedStatus: [302],
+      locationContains: '/_test/admin/login',
+      platform: 'testplatform',
+      signal: '/_test/admin probe with location check',
+    });
+
+    global.fetch = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        headers: new Map(),
+        text: () => Promise.resolve('<html></html>'),
+      })
+      .mockResolvedValueOnce({
+        status: 302,
+        headers: new Map(),  // No Location header
+      });
+
+    const result = await detectFromHttp('https://example.com');
+    expect(result.platform).toBe('unknown');
+  });
+
+  it('skips probes when SOURCE_SIGNALS already identified the platform', async () => {
+    PATH_PROBES.push({
+      path: '/_test/admin',
+      expectedStatus: [302],
+      platform: 'testplatform',
+      signal: '/_test/admin probe',
+    });
+
+    const fetchMock = vi.fn().mockResolvedValueOnce({
+      ok: true,
+      headers: new Map(),
+      // HTML matches Wix SOURCE_SIGNAL (wixstatic.com). Wix wins on tier 3,
+      // so the probe should never fire.
+      text: () => Promise.resolve('<html><img src="https://static.wixstatic.com/media/x.jpg"></html>'),
+    });
+    global.fetch = fetchMock;
+
+    const result = await detectFromHttp('https://example.com');
+    expect(result.platform).toBe('wix');
+    // Critical: only ONE fetch call (the homepage). Probe never fired.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips probes when HTTP_SIGNALS already identified the platform', async () => {
+    PATH_PROBES.push({
+      path: '/_test/admin',
+      expectedStatus: [302],
+      platform: 'testplatform',
+      signal: '/_test/admin probe',
+    });
+
+    const fetchMock = vi.fn().mockResolvedValueOnce({
+      ok: true,
+      headers: new Map([['x-wix-request-id', 'abc123']]),  // HTTP_SIGNAL match
+      text: () => Promise.resolve('<html></html>'),
+    });
+    global.fetch = fetchMock;
+
+    const result = await detectFromHttp('https://example.com');
+    expect(result.platform).toBe('wix');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips probe when path resolves to a different origin', async () => {
+    PATH_PROBES.push({
+      path: '//attacker.example/admin',  // Protocol-relative — would resolve to attacker.example
+      expectedStatus: [302],
+      platform: 'testplatform',
+      signal: '/_test/admin probe',
+    });
+
+    const fetchMock = vi.fn().mockResolvedValueOnce({
+      ok: true,
+      headers: new Map(),
+      text: () => Promise.resolve('<html></html>'),
+    });
+    global.fetch = fetchMock;
+
+    const result = await detectFromHttp('https://example.com');
+    expect(result.platform).toBe('unknown');
+    // Critical: only ONE fetch call (the homepage). Cross-origin probe never fired.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('still runs probe tier when homepage body read throws', async () => {
+    PATH_PROBES.push({
+      path: '/_test/admin',
+      expectedStatus: [302],
+      platform: 'testplatform',
+      signal: '/_test/admin probe',
+    });
+
+    global.fetch = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        headers: new Map(),
+        // Body read throws (e.g. truncated stream)
+        text: () => Promise.reject(new Error('truncated')),
+      })
+      .mockResolvedValueOnce({
+        status: 302,
+        headers: new Map([['location', 'https://example.com/_test/admin/login']]),
+      });
+
+    const result = await detectFromHttp('https://example.com');
+    // Probe tier runs despite body read failure, identifies platform
+    expect(result.platform).toBe('testplatform');
     expect(result.confidence).toBe('high');
   });
 });

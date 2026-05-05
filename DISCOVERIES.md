@@ -6,6 +6,195 @@ AI agents: when you contribute an improvement, add an entry here. See [CONTRIBUT
 
 ---
 
+## 2026-04-30 — `--resume` overwrites the existing WXR with only newly-extracted items
+
+**Found by:** Claude + James
+**During:** Migrating https://www.corneliusholmes.com/ — first run extracted 16 pages, the resume run for 2 remaining failures left only those 2 pages in the final WXR
+**Type:** extraction infrastructure bug
+
+### What I found
+The `liberate_extract` MCP handler in `src/mcp-server.ts` constructs a fresh `WxrBuilder` on every invocation and calls `wxr.serialize(wxrPath)` at the end, which `writeFileSync`s the WXR (overwriting whatever's there). The `runExtractionLoop` correctly filters URLs already in `extraction-log.jsonl` on `--resume`, so the in-memory builder ends each resume run with *only the newly-extracted items*. Serialize then atomically replaces the prior multi-item WXR with whatever was extracted this run.
+
+Concretely on the test site:
+- Run 1 (fresh): extracted 16 pages → `output.wxr` contains 16 pages.
+- Run 2 (`--resume`, retrying 2 previously-failed URLs): builder sees 2 new pages → `output.wxr` rewritten with 2 pages, the prior 16 destroyed.
+
+This makes resume worse than useless — it actively damages the prior output. The user thought they were extending the extraction; they were truncating it.
+
+### How it works
+On resume, rehydrate the `WxrBuilder` from the existing `output.wxr` *before* calling `adapter.extract`. The repo already has `readWxr` (`src/lib/extraction/wxr-reader.ts`) which produces typed `WxrItem[]` / `Author[]` / etc. matching the builder's public fields. Direct field assignment + reseed `_nextId` past the max existing ID.
+
+`nav_menu_item`s are dropped on load because the extraction loop regenerates them deterministically from the current inventory's navigation each run; keeping the prior ones would produce duplicates.
+
+```ts
+if (typedArgs.resume && existsSync(wxrPath)) {
+  try {
+    const prior = readWxr(wxrPath);
+    wxr.authors = prior.authors;
+    wxr.categories = prior.categories;
+    wxr.tags = prior.tags;
+    wxr.terms = prior.terms;
+    wxr.comments = prior.comments;
+    wxr.redirects = prior.redirects;
+    wxr.items = prior.items.filter((i) => i.type !== 'nav_menu_item');
+
+    let maxId = 0;
+    for (const it of wxr.items) maxId = Math.max(maxId, it.id);
+    // ...same for authors/categories/tags/terms/comments
+    wxr._nextId = maxId + 1;
+  } catch {
+    // Corrupt prior WXR: fall through and treat as a fresh run.
+  }
+}
+```
+
+### Why it's better than the previous approach
+Before: `--resume` was destructive — every resume run shrank the WXR to whatever was extracted in that single invocation, even though the underlying log correctly recorded all prior URLs as processed. Users who hit per-page failures and re-ran lost the bulk of their extraction silently.
+After: resume is genuinely incremental — prior items survive, only new URLs are added, the WXR grows monotonically until extraction is complete.
+
+## 2026-04-28 — Wix splits hosted media across three CDN hosts
+
+**Found by:** Claude + human contributor
+**During:** Migrating Wix sites; noticed platform assets (icons,
+decorative imagery) weren't being downloaded
+**Type:** platform quirk
+
+### What I found
+All Wix-hosted media uses one of three CDN hostnames:
+
+- `static.wixstatic.com` — images, documents (the well-known one)
+- `static.parastorage.com` — platform assets: icons, decorative
+  imagery, pattern fills used by Wix templates
+- `video.wixstatic.com` — video content (already covered by the
+  existing `wixstatic.com` term)
+
+The image-CDN regex in `extractImageUrls()` only matched
+`wixstatic.com` / `wixmp.com`. `parastorage.com` was silently dropped
+during the "only keep image-looking URLs" filter, so platform
+decorative assets never made it into the media-download set.
+
+### How it works
+Add `parastorage\.com` to the `imageCdns` regex inside
+`extractImageUrls()` in `src/adapters/wix.ts`. Comment documents all
+three hosts so the next reader doesn't have to re-discover them.
+
+### Why it's better than the previous approach
+Before: any URL on `static.parastorage.com` was filtered out unless it
+also passed the file-extension check, missing extension-less or
+query-param-styled CDN URLs. After: all three Wix CDN hosts are
+recognised consistently.
+
+## 2026-04-28 — Wix appends " Main" to every site name
+
+**Found by:** Claude + human contributor
+**During:** Migrating multiple Wix sites; noticed every WordPress import
+ended up with a site title like "My Studio Main"
+**Type:** platform quirk
+
+### What I found
+Wix's editor appends a literal " Main" suffix to every site's name. It
+shows up in two places:
+
+- `<meta property="og:site_name">` content ends in " Main" (e.g.
+  "Gilded Carat Main")
+- `document.title` follows the pattern `Page Title | Site Name Main`
+
+The suffix is a Wix internal label (probably the default page-set
+name, "Main"). It is never part of the agency's actual site name.
+
+### How it works
+At the homepage `siteTitle` extraction site in `discover()`, take the
+substring after the last ` | ` and strip a trailing ` Main`:
+
+```js
+const t = document.title;
+const pipeIdx = t.lastIndexOf(' | ');
+const sitePart = pipeIdx > 0 ? t.slice(pipeIdx + 3).trim() : t;
+return sitePart.replace(/ Main$/, '').trim();
+```
+
+The per-page title stripping in `runExtractionLoop` (slice everything
+after ` | `) already handles per-page titles correctly — the trailing
+" Main" suffix goes with the site-name half. The bug was site-level
+only.
+
+### Why it's better than the previous approach
+Before: WordPress imports landed with site titles like
+"Home | Gilded Carat Main". After: clean "Gilded Carat".
+
+## 2026-04-28 — Wix product pages expose stable `data-hook` selectors
+
+**Found by:** Claude + human contributor
+**During:** Migrating Wix Stores sites where JSON-LD was malformed or
+missing AND the products API call hadn't been captured during navigation
+**Type:** platform quirk | content type
+
+### What I found
+Wix product pages tag key elements with `data-hook="..."` attributes
+that have been stable across every Wix Stores site we've tested. When
+JSON-LD is missing or malformed *and* the products API call hasn't
+been captured, the rendered DOM is still extractable via these hooks —
+no need to give up on the product.
+
+| Element | Selector |
+|---|---|
+| Product title | `[data-hook="product-title"]` |
+| Product price (clean) | `[data-hook="formatted-primary-price"]` |
+| Product price (wrapper, includes SR "Price") | `[data-hook="product-price"]` |
+| Product gallery root | `[data-hook="product-gallery-root"]` |
+| Main product image | `[data-hook="main-media-image-wrapper"] img` |
+| Thumbnail images | `[data-hook="thumbnail-image"] img` |
+| Product description | `[data-hook="product-description"]` |
+| Product options | `[data-hook="product-options"]` |
+
+The `[data-hook="product-price"]` wrapper contains a screen-reader span
+(`[data-hook="sr-formatted-primary-price"]`) with the literal word
+"Price" — use `[data-hook="formatted-primary-price"]` for the clean
+value.
+
+### How it works
+Added a third fallback path in `extractWixProduct()` after the
+JSON-LD and captured-API paths. When both upstream paths fail, parse
+the rendered HTML using the hooks above. Required adding an optional
+`pageHtml` field to `PageData` so the raw HTML (already captured for
+media-URL extraction) is available to the product extractor.
+
+### Why it's better than the previous approach
+Before: `extractWixProduct()` returned `null` whenever JSON-LD was
+missing AND the product API call wasn't captured (e.g. cached
+navigation, slow hydration, throttled requests). After: name, price,
+description, and gallery images recover from the rendered DOM —
+typically the worst-case path that still yields a usable product
+record.
+
+
+## 2026-04-28 — Wix's `networkidle` never resolves; use `domcontentloaded` + delay
+
+**Found by:** Claude + human contributor
+**During:** Building a Wix → WordPress.com migration tool against ~12 live Wix sites
+**Type:** platform quirk | bug fix
+
+### What I found
+Using `page.goto(url, { waitUntil: 'networkidle' })` against Wix sites
+times out on roughly half of product pages. Wix's analytics, chat
+widgets, and tracking pixels keep firing requests indefinitely, so the
+network never goes idle inside the 30s budget.
+
+### How it works
+Switch the wait strategy from `networkidle` to `domcontentloaded` and
+add a fixed `await p.waitForTimeout(4000)` afterwards. The 4s delay
+covers Wix's client-side hydration of lazy content (Thunderbolt
+rendering engine). Applied at all three navigation sites in the Wix
+adapter (page extraction, homepage crawl fallback, navigation
+extraction).
+
+### Why it's better than the previous approach
+Validated empirically across multiple live Wix sites: with
+`networkidle`, ~50% of product pages timed out and emitted partial or
+empty extractions. With `domcontentloaded` + 4s delay, the same pages
+extract reliably and the 30s budget is no longer exhausted by
+background telemetry.
+
 ## 2026-04-17 — Dedupe Wix URLs across child sitemaps
 
 **Found by:** Claude + human contributor
@@ -49,6 +238,137 @@ async function fetchSitemapPw(sitemapUrl, depth = 0) {
 Tested on an affected site after the fix: the WXR no longer contains two items with `slug=blog`. Content coverage unchanged — the URL is still extracted, just once.
 
 ---
+
+## 2026-04-17 — Dedupe Wix URLs across child sitemaps
+
+**Found by:** Claude + human contributor
+**During:** Testing the Wix adapter against a range of live Wix sites
+**Type:** bug fix
+
+### What I found
+
+`runExtractionLoop()` in `src/adapters/shared.ts` had a type-promotion fallback: if `classifyUrl()` returned `page` or `homepage`, it would re-check via a regex `/@type.*BlogPosting|NewsArticle|Article|SocialMediaPosting/` run across the full `pageData.content` string. Any occurrence anywhere in the HTML promoted the item to `post`.
+
+The problem: blog *listing* pages (`/blog--categories--X`, `/blog`) commonly embed `BlogPosting` JSON-LD cards for each post they display in their index. The regex happily matched those embedded cards and promoted the listing page to `post` — producing authorless "posts" in the WXR whose content was a list of links to other posts. Observed on multiple tested sites: one jewellery ecommerce site had 6 of 15 "posts" misclassified; an interior-design blog had 11 of 96; a furniture store had 2 of 7.
+
+### How it works
+
+Replaced the raw-content regex with a structured check using `pageData.jsonLd` (the array of already-parsed JSON-LD objects the adapter returned):
+
+```ts
+const BLOG_TYPES = new Set(['BlogPosting', 'NewsArticle', 'Article', 'SocialMediaPosting']);
+const isRealBlogPost = Array.isArray(pageData.jsonLd) && pageData.jsonLd.some((ld) => {
+  if (!ld || typeof ld !== 'object') return false;
+  const obj = ld as Record<string, unknown>;
+  const atType = obj['@type'];
+  if (typeof atType !== 'string' || !BLOG_TYPES.has(atType)) return false;
+  const mep = obj.mainEntityOfPage;
+  if (mep && typeof mep === 'object') {
+    const mepRec = mep as Record<string, unknown>;
+    const mepUrl = typeof mepRec.url === 'string' ? mepRec.url :
+                   typeof mepRec['@id'] === 'string' ? mepRec['@id'] as string : null;
+    if (mepUrl && mepUrl !== url) return false;
+  }
+  return true;
+});
+```
+
+Two tightenings: (1) `@type` must be at the top level of a JSON-LD object, not anywhere in the raw HTML; (2) when `mainEntityOfPage` is present, its URL must match the current page URL — so embedded-card JSON-LD (whose `mainEntityOfPage` points to *other* posts) can't promote the current page.
+
+Also added `jsonLd?: unknown[]` to the `ExtractedPage` interface and piped `pageData.jsonLd` through the Wix adapter's `extractPage` callback so the shared loop has the parsed objects available.
+
+### Why it's better than the previous approach
+
+Tested on a food-blog site alongside the sibling URL-classifier fix that stops bare `/blog` from classifying as `post`: the `/blog` listing page is now correctly a `page` with its listing content, and no longer promoted to a post by its embedded BlogPosting cards for indexed posts.
+
+## 2026-04-17 — Wix sitemap discovery silently loses child sitemaps under CDN pressure
+
+**Found by:** Claude + human contributor
+**During:** Testing the Wix adapter against multiple live sites in parallel
+**Type:** bug fix
+
+### What I found
+
+`fetchSitemapPw()` in the Wix adapter's `discover()` wrapped `p.goto(sitemapUrl)` in `try { … } catch { /* sitemap fetch failed */ }` with a silent early-return on `!resp.ok()`. When Playwright timed out or the Wix CDN returned a transient error on a child sitemap (e.g. `pages-sitemap.xml`, `blog-posts-sitemap.xml`), the failure was swallowed — no log, no retry, no end-of-discovery warning. The extraction proceeded with whatever URLs happened to arrive before the failure, producing a WXR with (often) zero real pages.
+
+Observed on roughly 20% of sites during parallel-worker testing: several produced zero-content WXRs outright (media downloaded, pages empty), while others had `pages-sitemap.xml` children silently skipped while other sitemaps (store-products, blog-posts) went through.
+
+Re-running the affected sites sequentially (outside the parallel run) extracted them cleanly — confirming the failures were transient, not deterministic, and the old code gave the user no way to know they'd lost data.
+
+### How it works
+
+Wrapped the `p.goto` call in an up-to-3-attempt retry loop with exponential backoff (500ms × attempt number):
+
+```ts
+const RETRIES = 3;
+for (let attempt = 1; attempt <= RETRIES; attempt++) {
+  try {
+    const resp = await p.goto(sitemapUrl, { timeout: 15000 });
+    if (!resp || !resp.ok()) {
+      lastErr = resp ? 'HTTP status-not-ok' : 'no response';
+      if (attempt < RETRIES) { await sleep(500 * attempt); continue; }
+      console.warn(`[wix:discover] sitemap fetch failed after ${RETRIES} attempts: ${sitemapUrl} (${lastErr})`);
+      sitemapFailures.push({ url: sitemapUrl, reason: lastErr });
+      return;
+    }
+    // …parse and recurse as before, then `return` on success
+  } catch (err) {
+    // …same retry pattern on thrown errors
+  }
+}
+```
+
+On final failure the URL + reason is logged via `console.warn` and appended to a `sitemapFailures` array. After the recursive discovery completes, an end-of-phase summary warns if any fetches failed — so the operator sees that inventory may be incomplete rather than silently getting partial data.
+
+### Why it's better than the previous approach
+
+Tested on a small Wix business site with a dry run (clean discovery, no retries needed). The previous silent-failure behavior turned transient network blips or CDN rate-limits into silent data loss; now the same blips are retried and — if persistent — surfaced as visible warnings.
+
+
+## 2026-04-17 — Wix blog URL classification: `/single-post/` and bare `/blog` listings
+
+**Found by:** Claude + human contributor
+**During:** Testing the Wix adapter against a range of live Wix sites
+**Type:** bug fix
+
+### What I found
+
+Two separate URL-classification bugs in `classifyUrl()` in `src/lib/extraction/sitemap.ts`:
+
+1. **Older Wix Blog format** uses `/single-post/<slug>` URLs (distinct from newer `/post/<slug>` or `/blog-1/post/<slug>` patterns the classifier already matched). One sizeable Wix blog encountered during testing had ~1000 blog posts at `/single-post/*` URLs; every single one was written to the WXR as `wp:post_type=page` — the whole blog archive landed in WordPress as pages.
+
+2. **Bare `/blog`, `/news`, `/articles`** were classified as `post` because the regex `/\/(blog|post|posts|...)(\/|$)/` allowed end-of-string after the keyword. These URLs are the blog *listing* pages, not individual posts. They got written to WXR as authorless "posts" with titles like "Our blog" — polluting the post archive. Seen on multiple tested sites where the `/blog` URL was listed in both `pages-sitemap.xml` and `blog-categories-sitemap.xml`.
+
+### How it works
+
+Two changes to the classifier regex:
+
+- Added `if (/\/single-post\//.test(path)) return 'post';` for the older Wix Blog URL pattern.
+- Changed the main blog-keyword regex from `(\/|$)` to `\/[^/]` — require a non-slash character after the keyword's trailing slash. This means `/blog/my-post` still matches (post), but bare `/blog` and `/blog/` now fall through to the `page` default (listing page).
+
+### Why it's better than the previous approach
+
+Tested on the affected sites: blog archives now classify correctly (individual posts as `post`, bare `/blog` as `page`). The existing `classifies blog paths as post` test was updated to remove the now-wrong `/blog → post` expectation, and two unit tests were added covering both new patterns.
+
+---
+
+## 2026-04-16 — Wix Tag Manager poisons content extraction
+
+**Found by:** Claude + human contributor
+**During:** Migrating a 45-page Wix ecommerce site (bestiehugs.com)
+**Type:** bug fix
+
+### What I found
+Wix's Tag Manager API (`/_api/tag-manager/api/v1/tags/sites/...`) returns a field named `content` containing analytics `<script>` blocks. `deriveContent()` matches this first (key="content", >50 chars, contains "<"), returns qualityScore "high", and never consults the rendered DOM — which has the real page content in `[data-testid="richTextElement"]` elements. After `stripNonContentTags()` removes the script, the WXR gets empty `content:encoded`.
+
+### How it works
+
+Added a post-match validation step: after `findHtmlContent()` returns a match from an API call, strip `<script>` and `<style>` tags and verify >50 chars of real HTML remain. If not, skip and continue to the next content source (rendered DOM, JSON-LD, accessibility tree).
+
+### Why it's better than the previous approach
+
+Tested against 7 live Wix sites. 5 of 7 had tag-manager responses that triggered this bug, producing completely empty page content. After the fix, all 5 extract real content (424–5684 chars) from the rendered DOM. The 2 unaffected sites remain unchanged.
+
 
 ## 2026-04-16 — Wix Product JSON-LD uses non-standard casing
 
