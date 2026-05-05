@@ -99,12 +99,29 @@ export async function validateWpConnection(input: WpSetupInput): Promise<WpSetup
   }
 
   if (!report.authenticated) {
-    report.guidance.push(
-      'Create an Application Password at: WordPress Admin > Users > Profile > Application Passwords',
-      'For WordPress.com: go to wordpress.com/me/security/application-passwords',
-      'The token should be the Application Password (with spaces), not your account password',
-      'Username should be your WordPress login username, not your email',
-    );
+    const host = (() => {
+      try { return new URL(baseUrl).hostname.toLowerCase(); } catch { return ''; }
+    })();
+    const isWpcomHost =
+      host.endsWith('.wpcomstaging.com') ||
+      host.endsWith('.wordpress.com') ||
+      host === 'wordpress.com';
+
+    if (isWpcomHost) {
+      report.guidance.push(
+        'This is a WordPress.com-hosted site. WordPress.com has TWO kinds of application passwords — only the site-specific one works for /wp-json/wp/v2/ Basic Auth:',
+        `  → Generate one at ${baseUrl}/wp-admin/profile.php (Users > Profile > Application Passwords)`,
+        'Account-level app passwords from wordpress.com/me/security/application-passwords only authenticate against the public-api.wordpress.com namespace (OAuth-style); they will 401 against the site-native REST API.',
+        'The token should be the Application Password (with spaces), not your account password',
+        'Username should be your WordPress.com login username, not your email',
+      );
+    } else {
+      report.guidance.push(
+        'Create an Application Password at: WordPress Admin > Users > Profile > Application Passwords',
+        'The token should be the Application Password (with spaces), not your account password',
+        'Username should be your WordPress login username, not your email',
+      );
+    }
   }
 
   return report;
