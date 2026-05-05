@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { render, useApp, Box, Text } from 'ink';
 import Spinner from 'ink-spinner';
+import { dirname } from 'node:path';
 import { Header } from './header.js';
 import { importToWordPress, type ImportResult } from '../lib/import/wp-importer.js';
 
@@ -163,8 +164,16 @@ function Import(props: ImportProps) {
 
 export function runImport(opts: ImportProps): void {
   const { waitUntilExit } = render(<Import {...opts} />);
-  waitUntilExit().catch((err: unknown) => {
-    console.error(err);
-    process.exit(1);
-  });
+  waitUntilExit()
+    .then(() => {
+      if (opts.dryRun) return;
+      const outputDir = dirname(opts.wxrFile);
+      console.log('');
+      console.log(`🔗 View your site: https://${opts.site}/`);
+      console.log(`   Compare with preview: npm run liberate -- preview ${outputDir}`);
+    })
+    .catch((err: unknown) => {
+      console.error(err);
+      process.exit(1);
+    });
 }
