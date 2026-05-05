@@ -457,7 +457,7 @@ export function runDiscover(url: string, opts: Partial<LiberateProps> = {}): voi
         console.log('\n  To import, you need a WordPress site. Here\'s how to get started:\n');
         console.log('  1. Create a WordPress site (wordpress.com, self-hosted, or WordPress Studio for local development)');
         console.log('  2. Create an Application Password at WordPress Admin > Users > Profile > Application Passwords');
-        console.log('     (WordPress.com: wordpress.com/me/security/application-passwords)');
+        console.log('     (WordPress.com / wpcomstaging.com sites: generate it from the site\'s own wp-admin, NOT wordpress.com/me/security)');
         console.log('  3. Save the generated token\n');
         console.log('  Once you have your site, username, and application password, continue below.\n');
       }

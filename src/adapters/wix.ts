@@ -71,6 +71,25 @@ export interface PageData {
   mediaUrls: string[];
   content: string;
   qualityScore: 'high' | 'medium' | 'low';
+  // Raw page HTML, kept for DOM-selector fallbacks (e.g. Wix product
+  // pages expose stable [data-hook] attributes that survive even when
+  // JSON-LD is malformed and the products API call wasn't captured).
+  pageHtml?: string;
+  // Classification when DLA can identify the page as a Wix-platform widget
+  // shell rather than a general-purpose page. Currently set only to
+  // "blog_archive" when the Wix typed-blog feed widget is detected (the
+  // listing page that shows multiple posts as cards). Absent when there's
+  // no strong signal — consumers should treat absence as "general page"
+  // and not infer extra meaning. Open enum so future widget classifications
+  // (product listings, forums, bookings) don't require breaking consumers.
+  pageType?: 'blog_archive' | string;
+  // Author-set cover image for blog posts, recovered from the page's
+  // BlogPosting JSON-LD (a Wix-platform standard regardless of theme).
+  // Set only on Article/BlogPosting/NewsArticle pages where JSON-LD
+  // exposes an `image` field; absent otherwise. Lets consumers wire the
+  // post's hero image to a featured-image field without having to parse
+  // it out of body content (or invent inference from leading <img> tags).
+  featuredImage?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -130,9 +149,13 @@ function extractImageUrls(data: {
     }
   }
 
-  // Filter: only keep URLs that look like images
+  // Filter: only keep URLs that look like images.
+  // Wix-hosted media is split across three CDN hosts:
+  //   static.wixstatic.com   — images, documents
+  //   static.parastorage.com — platform assets (icons, decorative)
+  //   video.wixstatic.com    — video content (covered by `wixstatic.com`)
   const imageExtensions = IMAGE_EXTENSIONS;
-  const imageCdns = /wixstatic\.com|wixmp\.com|images\.unsplash\.com|cdn\.shopify\.com/i;
+  const imageCdns = /wixstatic\.com|wixmp\.com|parastorage\.com|images\.unsplash\.com|cdn\.shopify\.com/i;
   return [...urls].filter((u) => {
     try {
       const parsed = new URL(u);
@@ -141,6 +164,50 @@ function extractImageUrls(data: {
       return false;
     }
   });
+}
+
+/**
+ * Extract a blog post's featured image from BlogPosting JSON-LD. Returns
+ * the URL of the first matching image (schema.org-defined as the post's
+ * primary image) or null if no BlogPosting/Article JSON-LD is present.
+ *
+ * Handles all three image-field shapes the schema allows:
+ *   - string                                       → URL directly
+ *   - { @type: 'ImageObject', url: '...' }         → nested url property
+ *   - [ImageObject, ImageObject, ...]              → first item's URL
+ *
+ * Verified across two independent Wix Blog themes that diverge on DOM
+ * markup but both emit BlogPosting JSON-LD with image populated. Source-
+ * level (server-rendered) so detection doesn't depend on JS hydration.
+ */
+function extractFeaturedImageFromJsonLd(jsonLd: unknown[]): string | null {
+  for (const ld of jsonLd) {
+    const obj = ld as Record<string, unknown>;
+    const type = obj['@type'];
+    const isPostType =
+      type === 'BlogPosting' ||
+      type === 'Article' ||
+      type === 'NewsArticle' ||
+      (Array.isArray(type) && type.some((t) => t === 'BlogPosting' || t === 'Article' || t === 'NewsArticle'));
+    if (!isPostType) continue;
+
+    const image = obj.image;
+    if (typeof image === 'string') return image;
+    if (image && typeof image === 'object' && !Array.isArray(image)) {
+      const url = (image as Record<string, unknown>).url;
+      if (typeof url === 'string') return url;
+    }
+    if (Array.isArray(image)) {
+      for (const item of image) {
+        if (typeof item === 'string') return item;
+        if (item && typeof item === 'object') {
+          const url = (item as Record<string, unknown>).url;
+          if (typeof url === 'string') return url;
+        }
+      }
+    }
+  }
+  return null;
 }
 
 /** Walk a JSON value tree looking for HTML content in known field names. */
@@ -195,6 +262,9 @@ function deriveContent(pageData: {
       const stripped = htmlContent
         .replace(/<script[\s\S]*?<\/script>/gi, '')
         .replace(/<style[\s\S]*?<\/style>/gi, '')
+        .replace(/<noscript[\s\S]*?<\/noscript>/gi, '')
+        .replace(/<link\b[^>]*\/?>/gi, '')
+        .replace(/<meta\b[^>]*\/?>/gi, '')
         .trim();
       if (stripped.length > 50 && /<[a-z][\s\S]*>/i.test(stripped)) {
         return { content: htmlContent, qualityScore: 'high' };
@@ -207,18 +277,39 @@ function deriveContent(pageData: {
     return { content: pageData.renderedContent, qualityScore: 'high' };
   }
 
-  // 3. Try JSON-LD
+  // 3. Try JSON-LD. Only accept `description` from content-level types
+  // (Article, BlogPosting, Product, Event, Recipe, etc.) — NOT from site-level
+  // types like Organization, LocalBusiness, FurnitureStore, Restaurant,
+  // WebSite, or Corporation. Wix ecommerce category pages include a site-level
+  // Organization/FurnitureStore block whose description is a generic site
+  // tagline that gets duplicated across every page.
+  const CONTENT_LD_TYPES = new Set([
+    'Article', 'BlogPosting', 'NewsArticle', 'SocialMediaPosting',
+    'Product', 'ItemPage', 'Event', 'Recipe', 'Course', 'Book', 'Movie',
+  ]);
   for (const ld of pageData.jsonLd) {
     const obj = ld as Record<string, unknown>;
+    // articleBody is inherently content-level, always safe to accept
     if (typeof obj.articleBody === 'string' && obj.articleBody.length > 50) {
       return { content: `<p>${obj.articleBody}</p>`, qualityScore: 'medium' };
     }
-    if (typeof obj.description === 'string' && obj.description.length > 50) {
+    const atType = obj['@type'];
+    const isContentType = typeof atType === 'string' && CONTENT_LD_TYPES.has(atType);
+    if (isContentType && typeof obj.description === 'string' && obj.description.length > 50) {
       return { content: `<p>${obj.description}</p>`, qualityScore: 'medium' };
     }
   }
 
-  // 4. Accessibility tree fallback
+  // 4. Page-specific meta/og:description — for pages where real content is
+  // JS-rendered (Wix category archives, product grids) and we have no better
+  // source. og:description is per-page and written by the site owner, so it's
+  // meaningfully distinct from the site-level boilerplate handled in step 3.
+  const ogDesc = pageData.meta.ogDescription || pageData.meta.description || '';
+  if (ogDesc.length > 50) {
+    return { content: `<p>${ogDesc}</p>`, qualityScore: 'medium' };
+  }
+
+  // 5. Accessibility tree fallback
   if (pageData.accessibility && pageData.accessibility.length > 0) {
     const parts: string[] = [];
     for (const node of pageData.accessibility) {
@@ -233,7 +324,7 @@ function deriveContent(pageData: {
     }
   }
 
-  // 5. Nothing found
+  // 6. Nothing found
   return { content: '', qualityScore: 'low' };
 }
 
@@ -251,6 +342,7 @@ async function extractWixPage(
     goto(url: string, opts: Record<string, unknown>): Promise<unknown>;
     evaluate(fn: () => unknown): Promise<unknown>;
     content(): Promise<string>;
+    waitForTimeout(ms: number): Promise<void>;
     context(): {
       newCDPSession(page: unknown): Promise<{
         send(method: string, params: Record<string, unknown>): Promise<unknown>;
@@ -290,7 +382,13 @@ async function extractWixPage(
   p.on('response', responseHandler);
 
   try {
-    await p.goto(url, { waitUntil: 'networkidle', timeout: 30000 });
+    // Wix's analytics, chat widgets, and tracking pixels keep firing
+    // requests indefinitely, so `networkidle` never resolves on many
+    // pages — especially product pages — and the 30s budget is
+    // exhausted by background telemetry. `domcontentloaded` + a short
+    // fixed delay catches Wix's lazy hydration without hanging.
+    await p.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await p.waitForTimeout(4000);
   } catch {
     // Navigation may timeout on heavy Wix pages
   }
@@ -421,6 +519,23 @@ async function extractWixPage(
     // DOM extraction failed
   }
 
+  // Wix typed-blog feed pages (the post-listing page rendered by the Wix
+  // Blog widget) carry a stable [data-hook="feed-page-root"] container
+  // at the top of the feed. Verified across two independent Wix sites
+  // that diverge on theme; absent on regular pages and on custom-styled
+  // pages that look archive-like but don't use the typed-blog widget.
+  // High-precision signal — false negatives acceptable (sites not using
+  // the widget go untagged), false positives unlikely.
+  let pageType: string | null = null;
+  try {
+    const isBlogArchive = (await p.evaluate(
+      () => !!document.querySelector('[data-hook="feed-page-root"]')
+    )) as boolean;
+    if (isBlogArchive) pageType = 'blog_archive';
+  } catch {
+    // detection failed; leave pageType unset
+  }
+
   let accessibility: Array<{ role: string; name: string; description?: string }> | null =
     null;
   try {
@@ -479,6 +594,10 @@ async function extractWixPage(
     meta: browserData.meta,
   });
 
+  // Recover the post's author-set cover image from BlogPosting JSON-LD.
+  // Set only when the page is actually a post; absent on regular pages.
+  const featuredImage = extractFeaturedImageFromJsonLd(browserData.jsonLd);
+
   return {
     sourceUrl: url,
     slug: slugify(url),
@@ -491,6 +610,9 @@ async function extractWixPage(
     mediaUrls,
     content,
     qualityScore,
+    pageHtml,
+    ...(pageType ? { pageType } : {}),
+    ...(featuredImage ? { featuredImage } : {}),
   };
 }
 
@@ -567,6 +689,43 @@ function extractWixProduct(pageData: PageData): WooProduct | null {
     }
   }
 
+  // 3. DOM fallback — Wix product pages tag elements with stable
+  //    [data-hook] attributes that survive even when JSON-LD is missing
+  //    or malformed AND the products API call wasn't captured. This is
+  //    the worst-case path that still yields a usable product record.
+  if (pageData.pageHtml) {
+    const html = pageData.pageHtml;
+    const pickByHook = (hook: string): string => {
+      const re = new RegExp(
+        `data-hook=["']${hook}["'][^>]*>([\\s\\S]*?)</`,
+        'i'
+      );
+      const m = html.match(re);
+      return m?.[1]?.replace(/<[^>]+>/g, '').trim() || '';
+    };
+    const name = pickByHook('product-title');
+    if (name) {
+      // [data-hook="formatted-primary-price"] is the clean value.
+      // [data-hook="product-price"] wraps a screen-reader "Price" prefix.
+      const price = pickByHook('formatted-primary-price').replace(/[^0-9.,]/g, '');
+      const description = pickByHook('product-description');
+      const imgRe = /data-hook=["'](?:main-media-image-wrapper|thumbnail-image)["'][^>]*>[\s\S]*?<img[^>]+src=["']([^"']+)["']/gi;
+      const images: string[] = [];
+      let match: RegExpExecArray | null;
+      while ((match = imgRe.exec(html)) !== null) {
+        if (!images.includes(match[1])) images.push(match[1]);
+      }
+      return {
+        name,
+        description,
+        regularPrice: price,
+        sku: '',
+        images,
+        inStock: true,
+      };
+    }
+  }
+
   return null;
 }
 
@@ -590,6 +749,7 @@ export const wixAdapter: PlatformAdapter = {
       goto(url: string, opts?: Record<string, unknown>): Promise<{ ok(): boolean } | null>;
       content(): Promise<string>;
       evaluate(fn: (...args: unknown[]) => unknown, ...args: unknown[]): Promise<unknown>;
+      waitForTimeout(ms: number): Promise<void>;
     };
 
     // 1. Fetch sitemap via Playwright
@@ -600,32 +760,89 @@ export const wixAdapter: PlatformAdapter = {
 
     const sitemapUrls: string[] = [];
 
+    // Dedupe across child sitemaps — Wix sites commonly list the same URL in
+    // multiple children (e.g. `/blog` appears in both pages-sitemap.xml and
+    // blog-categories-sitemap.xml), and a naive crawl writes duplicates into
+    // the WXR. `seenSitemaps` also prevents re-fetching a sitemap index file
+    // if it appears more than once.
+    const seenUrls = new Set<string>();
+    const seenSitemaps = new Set<string>();
+    const sitemapFailures: Array<{ url: string; reason: string }> = [];
+
     async function fetchSitemapPw(sitemapUrl: string, depth = 0): Promise<void> {
       if (depth > 3) return;
-      try {
-        const resp = await p.goto(sitemapUrl, { timeout: 15000 });
-        if (!resp || !resp.ok()) return;
-        const text = await p.content();
-        const locs = parseSitemapXml(text);
-        for (const loc of locs) {
-          if (loc.endsWith('.xml')) {
-            await fetchSitemapPw(loc, depth + 1);
-          } else {
-            sitemapUrls.push(loc);
+      if (seenSitemaps.has(sitemapUrl)) return;
+      seenSitemaps.add(sitemapUrl);
+
+      // Retry with exponential backoff — Wix CDN occasionally returns
+      // transient errors or times out under parallel load. A silent failure
+      // here turns into a zero-content WXR because children like
+      // pages-sitemap.xml / blog-posts-sitemap.xml are never reached.
+      const RETRIES = 3;
+      let lastErr: string | null = null;
+      for (let attempt = 1; attempt <= RETRIES; attempt++) {
+        try {
+          const resp = await p.goto(sitemapUrl, { timeout: 15000 });
+          if (!resp || !resp.ok()) {
+            lastErr = resp ? `HTTP ${resp.ok() ? 'ok=false' : 'status-not-ok'}` : 'no response';
+            if (attempt < RETRIES) {
+              await new Promise((r) => setTimeout(r, 500 * attempt));
+              continue;
+            }
+            console.warn(`[wix:discover] sitemap fetch failed after ${RETRIES} attempts: ${sitemapUrl} (${lastErr})`);
+            sitemapFailures.push({ url: sitemapUrl, reason: lastErr });
+            return;
           }
+          const text = await p.content();
+          const locs = parseSitemapXml(text);
+          for (const loc of locs) {
+            if (loc.endsWith('.xml')) {
+              await fetchSitemapPw(loc, depth + 1);
+            } else if (!seenUrls.has(loc)) {
+              seenUrls.add(loc);
+              sitemapUrls.push(loc);
+            }
+          }
+          return;
+        } catch (err) {
+          lastErr = err instanceof Error ? err.message : String(err);
+          if (attempt < RETRIES) {
+            await new Promise((r) => setTimeout(r, 500 * attempt));
+            continue;
+          }
+          console.warn(`[wix:discover] sitemap fetch failed after ${RETRIES} attempts: ${sitemapUrl} (${lastErr})`);
+          sitemapFailures.push({ url: sitemapUrl, reason: lastErr });
         }
-      } catch {
-        // sitemap fetch failed
       }
     }
 
     await fetchSitemapPw(`${baseUrl}/sitemap.xml`);
 
+    if (sitemapFailures.length > 0) {
+      console.warn(`[wix:discover] ${sitemapFailures.length} sitemap fetch(es) failed — inventory may be incomplete`);
+    }
+
+    // Wix's sitemap index typically only references pages-sitemap.xml,
+    // even when blog/store/forum content exists. Probe the well-known
+    // sub-sitemap paths so blog posts and storefront items don't get
+    // silently dropped.
+    for (const subSitemap of [
+      'blog-posts-sitemap.xml',
+      'store-products-sitemap.xml',
+      'forum-posts-sitemap.xml',
+    ]) {
+      await fetchSitemapPw(`${baseUrl}/${subSitemap}`);
+    }
+
     // 2. If sitemap is empty, crawl homepage for same-origin links
     let allUrls = sitemapUrls;
     if (allUrls.length === 0) {
       try {
-        await p.goto(url, { waitUntil: 'networkidle', timeout: 30000 });
+        // See comment at the page-extraction goto above — Wix's
+        // background telemetry prevents `networkidle` from ever
+        // resolving.
+        await p.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+        await p.waitForTimeout(4000);
         const origin = new URL(url).origin;
         allUrls = (await p.evaluate((orig: unknown) => {
           const o = orig as string;
@@ -645,7 +862,12 @@ export const wixAdapter: PlatformAdapter = {
     // 3. Extract navigation from homepage
     let navigation: NavLink[] = [];
     try {
-      await p.goto(url, { waitUntil: 'networkidle', timeout: 30000 }).catch(() => {});
+      // See comment at the page-extraction goto above for why we
+      // avoid `networkidle` on Wix sites.
+      await p
+        .goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 })
+        .catch(() => {});
+      await p.waitForTimeout(4000);
       navigation = (await p.evaluate(() => {
         const navLinks: Array<{ text: string; href: string }> = [];
         document
@@ -664,10 +886,20 @@ export const wixAdapter: PlatformAdapter = {
       // nav extraction failed
     }
 
-    // 4. Extract site title
+    // 4. Extract site title.
+    //    Wix's editor sets document.title to "Page Title | Site Name Main".
+    //    Take the substring after the last " | " (the site-name half), then
+    //    drop the trailing " Main" suffix that Wix appends to every site
+    //    name. Without this the WordPress import lands with a site title
+    //    like "Home | Gilded Carat Main" instead of "Gilded Carat".
     let siteTitle = '';
     try {
-      siteTitle = (await p.evaluate(() => document.title)) as string;
+      siteTitle = (await p.evaluate(() => {
+        const t = document.title;
+        const pipeIdx = t.lastIndexOf(' | ');
+        const sitePart = pipeIdx > 0 ? t.slice(pipeIdx + 3).trim() : t;
+        return sitePart.replace(/ Main$/, '').trim();
+      })) as string;
     } catch {
       // title extraction failed
     }
@@ -787,6 +1019,7 @@ export const wixAdapter: PlatformAdapter = {
             mediaUrls: pageData.mediaUrls,
             qualityScore: pageData.qualityScore,
             author,
+            jsonLd: pageData.jsonLd,
           };
         },
       });
