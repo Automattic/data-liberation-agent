@@ -52,6 +52,43 @@ if (typedArgs.resume && existsSync(wxrPath)) {
 Before: `--resume` was destructive — every resume run shrank the WXR to whatever was extracted in that single invocation, even though the underlying log correctly recorded all prior URLs as processed. Users who hit per-page failures and re-ran lost the bulk of their extraction silently.
 After: resume is genuinely incremental — prior items survive, only new URLs are added, the WXR grows monotonically until extraction is complete.
 
+
+## 2026-04-28 — Wix authenticated content endpoints — catalogue
+
+**Found by:** Claude + human contributor
+**During:** Mapping Wix's authenticated traffic during a parallel Wix
+migration project; needed a reference for the *content* endpoints (vs.
+the dashboard infrastructure endpoints already documented)
+**Type:** API endpoint | content type
+
+### What I found
+The 2026-03-31 *Wix Dashboard API reverse engineering via CDP* entry
+covers auth (cookie + XSRF + per-app JWT), window globals, and the
+infrastructure endpoints a Wix dashboard hits at load (account,
+premium-status, feature-flag, alerts, etc.). What it does not
+catalogue is the ten *content* endpoints a logged-in editor or
+dashboard hits to read the data the public renderer doesn't expose:
+CMS Data Collections including drafts, contacts, members, full-variant
+products, form submissions, bookings, blog drafts with Ricos
+`richContent` source, full-resolution media originals, and hidden /
+password-protected pages.
+
+### How it works
+Added a new reference doc at `docs/wix-content-endpoints.md` listing
+the ten endpoints with URL, response shape, what public scraping
+misses, and per-endpoint gotchas (e.g. CMS items needing
+`SANDBOX_PREFERRED` + `includeDraftItems: true` for drafts; signed
+media URLs expiring in ~10 minutes; Stores `manageVariants` true/false
+branching; three distinct forms-product variants). Linked from
+`README.md`.
+
+### Why it's better than the previous approach
+Today's adapter relies entirely on rendered HTML + JSON-LD +
+opportunistic API capture from public navigation. The reference doc
+gives future contributors a baseline of "here's what exists behind
+auth, here's what each endpoint returns, here are the traps" — so
+subsequent authenticated-mode work doesn't restart from scratch.
+
 ## 2026-04-28 — Wix splits hosted media across three CDN hosts
 
 **Found by:** Claude + human contributor

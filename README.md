@@ -123,6 +123,7 @@ A successful extraction produces in `/output/<site>/`:
 * [AI agent commands](/docs/commands.md)
 * [AI skills](/docs/skills.md)
 * [MCP server tools](/docs/mcp.md)
+* [Wix authenticated content endpoints](/docs/wix-content-endpoints.md) — reference of the ten load-bearing content endpoints behind Wix's editor / dashboard auth
 
 ## Related
 
