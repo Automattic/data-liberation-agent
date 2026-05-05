@@ -100,7 +100,7 @@ Then validate the WordPress connection:
 npm run setup -- --site [MY-WORDPRESS-SITE] --username [MY-USERNAME] --token [APP-PASSWORD]
 ```
 
-This checks site reachability, REST API availability, and authentication. If anything fails, it shows step-by-step guidance (how to create an Application Password at WordPress Admin > Users > Profile > Application Passwords (or wordpress.com/me/security/application-passwords for WordPress.com sites)).
+This checks site reachability, REST API availability, and authentication. If anything fails, it shows step-by-step guidance (how to create an Application Password at WordPress Admin > Users > Profile > Application Passwords). Note: on WordPress.com and wpcomstaging.com sites, the password must be generated from the site's own wp-admin, not from wordpress.com/me/security/application-passwords (account-level passwords only work for the WordPress.com public API).
 
 ## Step 5: Import everything
 

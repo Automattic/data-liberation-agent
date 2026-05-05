@@ -80,19 +80,24 @@ Stdio transport. Exposes 11 tools: `liberate_detect`, `liberate_discover`, `libe
 # 1. Install
 npm install
 
-# 2. Extract a site (works for any supported platform)
+# 2. Extract a site (works for any supported platform). A local preview site
+#    boots automatically after extraction — Automattic Studio if installed,
+#    WordPress Playground otherwise.
 npm run liberate -- https://yoursite.com
 
-# 3. Or just the inspection
+# 3. Re-open the preview later (same Studio/Playground selection as above)
+npm run liberate -- preview ./output/yoursite.com --open
+
+# 4. Or just the inspection
 npm run inspect -- https://yoursite.com
 
-# 4. Verify extraction quality
+# 5. Verify extraction quality
 npm run verify -- ./output/yoursite.com
 
-# 5. Validate WordPress connection
+# 6. Validate WordPress connection
 npm run setup -- --site your-wp-site.wordpress.com --username you --token YOUR_APP_PASSWORD
 
-# 6. Import to WordPress
+# 7. Import to WordPress
 npm run liberate -- import ./output/yoursite.com/output.wxr --site your-wp-site --username you --token YOUR_APP_PASSWORD
 ```
 
@@ -123,3 +128,17 @@ A successful extraction produces in `/output/<site>/`:
 
 - [WordPress Data Liberation project](https://wordpress.org/data-liberation/) — the official effort
 - [WordPress.com MCP](https://wordpress.com/blog/2026/03/20/ai-agent-manage-content/) — AI agent write access to WordPress.com
+
+## Troubleshooting the preview
+
+**Picking between Studio and Playground** — the preview uses [Automattic Studio](https://developer.wordpress.com/studio/) when the `studio` CLI is on PATH (install the app — the CLI ships with it), and falls back to WordPress Playground otherwise. Studio sites are persistent and named after the output directory's domain slug (`example-com`, `example-com-2` on collision). Playground sites are ephemeral per-run.
+
+**"No free port in 9400–9499"** (Playground only) — another process is holding the range. Pass `--port <n>` to override, or stop the conflict.
+
+**"Playground failed to boot"** — the readiness probe didn't see HTTP within 60s. Check `<outputDir>/playground/preview.log` for the subprocess output. Common causes: slow network on first run (WASM download), wrong Node version (requires Node 18+).
+
+**"ECONNREFUSED" when browsing the URL** (Playground only) — the Playground subprocess died after startup. Run `liberate_preview_stop <outputDir>` (or delete `<outputDir>/playground/preview.pid`), then re-run `preview`.
+
+**"stale preview running for >24h"** (Playground only) — the tool auto-cleans PID files older than a day. This is informational; it will restart cleanly.
+
+**Preview is not a secure environment.** Both paths auto-log in as `admin`/`password` and bind to `127.0.0.1` (Playground) or `localhost:<port>` (Studio). Do not paste secrets into it.

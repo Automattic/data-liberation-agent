@@ -27,6 +27,7 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.27.0",
     "@types/papaparse": "^5.5.2",
+    "@wp-playground/cli": "^3.1.20",
     "cheerio": "^1.2.0",
     "fast-xml-parser": "^5.5.10",
     "ink": "^6.8.0",
