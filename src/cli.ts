@@ -27,6 +27,8 @@ if (args[0] === 'mcp') {
     data-liberation verify <output-dir>  Verify extraction results
     data-liberation setup                Validate WordPress connection
     data-liberation preview <outputDir>  Preview extraction in WordPress Playground
+    data-liberation screenshot <url>   Capture screenshots of every URL
+    data-liberation design-foundation <outputDir>  Build/validate design-foundation.json (agent fallback)
     data-liberation mcp                Start MCP server (stdio transport)
     data-liberation --version          Show version
 
@@ -42,6 +44,17 @@ if (args[0] === 'mcp') {
     --admin-token <tok>  Shopify Admin API token — enables richer product extraction
                          via GraphQL (compareAtPrice, unitCost, inventoryPolicy, etc.)
     --shop-domain <host> Shopify myshopify.com hostname — usually auto-detected
+    --no-screenshots               Skip screenshots (default: screenshots are captured after extract)
+    --screenshots-concurrency <N>  Parallel screenshot captures (default 6, max 10)
+                         (writes output/<site>/screenshots/ with a manifest.json keyed by URL)
+
+  Streaming options (default behavior):
+    --no-watch           Run the legacy batch pipeline instead of the streaming watch loop
+    --agent <name>       Agent CLI to invoke for AI judgments (claude / codex / gemini / ...)
+    --no-agent           Run deterministic-only — no AI invocations, judgmentNeeded markers
+                         accumulate in <outputDir>/<site>/watch.log for later resolution
+    --reset              Wipe streaming state (replicate-state.json + block-transform-log.jsonl
+                         + playground-site/) before starting
 
   Import options:
     --site <domain>       WordPress site domain
@@ -58,10 +71,29 @@ if (args[0] === 'mcp') {
     --port <n>           Override the auto-picked port (9400-9499)
     --non-interactive    Skip the post-preview import nudge
 
+  Screenshot options:
+    --output <dir>         Output directory (default: ./output/<hostname>)
+    --types <list>         Comma-separated: page,post,product,homepage,gallery,event
+    --limit <N>            Cap to first N URLs
+    --concurrency <N>      Parallel captures (default 6, max 10)
+    --browser-restart-every <N>  Close+relaunch browser every N URLs (default 100)
+    --cdp-port <n>         Connect to existing Chrome via CDP
+    --force                Re-capture even if files already exist
+    --urls-file <path>     Read URLs from file (one per line)
+    --non-interactive      Skip preflight prompt
+    --verbose              Per-URL progress
+
+  Design-foundation options (non-agent fallback; happy path is agent-driven via MCP):
+    --origin <url>       Origin URL stored in the foundation (default: unknown)
+    --validate           Validate design-foundation.json against the schema + skillTodos
+    --render-md          Regenerate design-foundation.md from design-foundation.json
+    --force              Overwrite existing design-foundation.json
+
   Environment:
     LIBERATION_TOKEN     API token (alternative to --token flag for extraction)
     SHOPIFY_ADMIN_TOKEN  Shopify Admin API token (alternative to --admin-token)
     WP_APP_PASSWORD      WordPress application password (alternative to --token for import)
+    DLA_AGENT_CLI        Default agent CLI for streaming (--agent overrides; "none"/"off"/"skip" = NO_AGENT)
 `);
 } else if (args[0] === 'inspect') {
   const url = args[1];
@@ -118,6 +150,59 @@ if (args[0] === 'mcp') {
   const { runCliPreview } = await import('./ui/preview.js');
   await runCliPreview({ outputDir, open, port, nonInteractive });
 
+} else if (args[0] === 'screenshot') {
+  const url = args[1];
+  if (!url || url.startsWith('-')) {
+    console.error('Error: URL required. Usage: data-liberation screenshot <url> [options]');
+    process.exit(1);
+  }
+  let output: string;
+  const outputArg = getArg('--output');
+  if (outputArg) {
+    output = outputArg;
+  } else {
+    try {
+      output = `./output/${new URL(url).hostname}`;
+    } catch {
+      console.error(`Error: invalid URL: ${url}`);
+      process.exit(1);
+    }
+  }
+  const typesArg = getArg('--types');
+  const types = typesArg ? typesArg.split(',').map((t) => t.trim()) : undefined;
+  const limitArg = getArg('--limit');
+  const limit = limitArg ? Number(limitArg) : undefined;
+  const concurrencyArg = getArg('--concurrency');
+  const concurrency = concurrencyArg ? Number(concurrencyArg) : undefined;
+  const restartArg = getArg('--browser-restart-every');
+  const browserRestartEvery = restartArg ? Number(restartArg) : undefined;
+  const cdpPortArg = getArg('--cdp-port');
+  const cdpPort = cdpPortArg ? Number(cdpPortArg) : undefined;
+  const force = args.includes('--force');
+  const verbose = args.includes('--verbose');
+  const urlsFile = getArg('--urls-file');
+  const nonInteractive = args.includes('--non-interactive') || !process.stdout.isTTY;
+
+  const { runScreenshotCli } = await import('./ui/screenshot-runner.js');
+  await runScreenshotCli({
+    url, output: output!, types, limit, concurrency, browserRestartEvery, cdpPort, force, verbose, urlsFile, nonInteractive,
+  });
+
+} else if (args[0] === 'design-foundation') {
+  const outputDir = args[1];
+  if (!outputDir || outputDir.startsWith('-')) {
+    console.error('Error: outputDir required. Usage: data-liberation design-foundation <outputDir> [--validate] [--render-md] [--force]');
+    process.exit(1);
+  }
+  const validate = args.includes('--validate');
+  const renderMd = args.includes('--render-md');
+  const force = args.includes('--force');
+  const verbose = args.includes('--verbose');
+  const origin = getArg('--origin') ?? undefined;
+
+  const { runDesignFoundationCliFromArgs } = await import('./ui/design-foundation-runner.js');
+  await runDesignFoundationCliFromArgs({ outputDir, origin, validate, renderMd, force, verbose });
+
 } else if (args[0] === 'import') {
   const wxrFile = args[1];
   if (!wxrFile || wxrFile.startsWith('-')) {
@@ -170,7 +255,44 @@ if (args[0] === 'mcp') {
   const adminToken = getArg('--admin-token') || process.env.SHOPIFY_ADMIN_TOKEN || null;
   const shopDomain = getArg('--shop-domain') || null;
   const nonInteractive = args.includes('--non-interactive');
+  // Screenshots are on by default. Pass --no-screenshots to skip them.
+  const screenshots = !args.includes('--no-screenshots');
+  const rawSsConcurrency = getArg('--screenshots-concurrency') ? parseInt(getArg('--screenshots-concurrency')!, 10) : null;
+  const screenshotsConcurrency = rawSsConcurrency !== null && !Number.isNaN(rawSsConcurrency) ? rawSsConcurrency : undefined;
 
-  const { runDiscover } = await import('./ui/discover.js');
-  runDiscover(url, { outputDir, dryRun, resume, verbose, delay, limit, token, cdpPort, adminToken, shopDomain, nonInteractive });
+  // Streaming flags.
+  const noWatch = args.includes('--no-watch');
+  const reset = args.includes('--reset');
+  const noAgent = args.includes('--no-agent');
+  const agentArg = getArg('--agent');
+
+  if (!noWatch) {
+    // Streaming path (default). Resolves agent from --agent | DLA_AGENT_CLI |
+    // TUI prompt | NO_AGENT fallback. Deterministic-only when no agent is set.
+    const { renderWatch } = await import('./ui/watch.js');
+    const { NO_AGENT } = await import('./cli/agent-invoker.js');
+    const agent = noAgent
+      ? NO_AGENT
+      : (agentArg ?? null);
+    const result = await renderWatch({
+      url,
+      outputDir,
+      agent,
+      reset,
+      resume,
+      verbose,
+      delay,
+      limit,
+      token,
+      cdpPort,
+      adminToken,
+      shopDomain,
+      nonInteractive,
+    });
+    process.exit(result.ok ? 0 : 1);
+  } else {
+    // Legacy batch path. Pre-streaming behavior: discover → extract → screenshot.
+    const { runDiscover } = await import('./ui/discover.js');
+    runDiscover(url, { outputDir, dryRun, resume, verbose, delay, limit, token, cdpPort, adminToken, shopDomain, nonInteractive, screenshots, screenshotsConcurrency });
+  }
 }

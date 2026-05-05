@@ -9,6 +9,23 @@ export interface MediaStub {
   localPath?: string;
   error?: string;
   updatedAt: string;
+  /**
+   * Post ID of the WP attachment registered for this media URL by
+   * `installMediaForUrl` in the streaming pipeline. Presence makes media
+   * install idempotent: subsequent calls skip URLs that already have an
+   * attachment in the running site.
+   */
+  wpPostId?: number;
+  /**
+   * Local upload URL the WP attachment is served from (e.g.
+   * `http://localhost:8882/wp-content/uploads/2026/04/hero.jpg`). Persisted
+   * here so the streaming pipeline's `flushPendingImports` can rebuild the
+   * source→local URL rewrite map from MediaStubStore on every flush —
+   * without it, already-installed stubs (whose post id has been set) get
+   * skipped by `installMediaForUrl` and their mapping is lost on resume
+   * runs, leaving `post_content` referencing remote CDN URLs.
+   */
+  localUrl?: string;
 }
 
 interface StoreData {
@@ -109,6 +126,45 @@ export class MediaStubStore {
   /** Flush any pending mutations to disk. Call at checkpoint boundaries. */
   flush(): void {
     if (this.dirty) this.save();
+  }
+
+  /**
+   * Record the WP attachment post ID for a successfully-installed media URL.
+   * Persists immediately because subsequent calls rely on it for idempotency:
+   * losing this between install and a follow-up call would re-insert the
+   * attachment as a duplicate.
+   */
+  recordWpPostId(url: string, postId: number): void {
+    const prev = this.data.stubs[url];
+    if (!prev) return;
+    this.data.stubs[url] = {
+      ...prev,
+      wpPostId: postId,
+      updatedAt: new Date().toISOString(),
+    };
+    this.save();
+  }
+
+  /**
+   * Record the local upload URL for an installed attachment. Used together
+   * with `recordWpPostId` after the install-media.php script returns. Persists
+   * immediately so resume runs can rebuild the source→local rewrite map
+   * without re-running the PHP script.
+   */
+  recordLocalUrl(url: string, localUrl: string): void {
+    const prev = this.data.stubs[url];
+    if (!prev) return;
+    this.data.stubs[url] = {
+      ...prev,
+      localUrl,
+      updatedAt: new Date().toISOString(),
+    };
+    this.save();
+  }
+
+  /** Iterate all stub entries. Returned tuples are [sourceUrl, stub]. */
+  list(): Array<[string, MediaStub]> {
+    return Object.entries(this.data.stubs);
   }
 
   /** Snapshot of counts by status — for progress reporting. */

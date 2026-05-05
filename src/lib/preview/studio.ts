@@ -6,7 +6,13 @@ import { fileURLToPath } from 'node:url';
 import { cpSync, existsSync, mkdirSync, copyFileSync, rmSync } from 'node:fs';
 import { persistBlueprint } from './blueprint-builder.js';
 import { buildMediaUrlMap, rewriteWxrAttachmentUrls } from './media-url-map.js';
-import type { StartPreviewResult } from './types.js';
+import { writeReplicaFilesToHost, validateReplicaInputs } from './replica-install.js';
+import {
+  readSiteMetaFromWxr,
+  wpOptionUpdatesForSiteMeta,
+  type SourceSiteMeta,
+} from './site-options.js';
+import type { ReplicaFile, ReplicaBlockPlugin, StartPreviewResult } from './types.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -119,6 +125,24 @@ async function studioWp(sitePath: string, args: string[]): Promise<string> {
   return stdout;
 }
 
+type StudioWpRunner = (sitePath: string, args: string[]) => Promise<string>;
+
+export async function updateStudioSiteOptions(
+  sitePath: string,
+  siteMeta: SourceSiteMeta | null | undefined,
+  runWp: StudioWpRunner = studioWp,
+): Promise<string[]> {
+  const warnings: string[] = [];
+  for (const [optionName, optionValue] of wpOptionUpdatesForSiteMeta(siteMeta)) {
+    try {
+      await runWp(sitePath, ['option', 'update', optionName, optionValue]);
+    } catch (err) {
+      warnings.push(`Site option "${optionName}" update failed: ${(err as Error).message.trim()}`);
+    }
+  }
+  return warnings;
+}
+
 /**
  * Best-effort cleanup for a Studio site that `startStudioPreview` created but
  * then failed to finish setting up (staging, wp import, etc.). We'd rather
@@ -219,6 +243,9 @@ export function stageArtifacts(outputDir: string, sitePath: string): {
 
 export interface StartStudioOpts {
   outputDir: string;
+  themeFiles?: ReplicaFile[];
+  blockPlugins?: ReplicaBlockPlugin[];
+  themeSlug?: string;
 }
 
 /**
@@ -248,6 +275,9 @@ export interface StartStudioOpts {
  * WordPress import.
  */
 export async function startStudioPreview(opts: StartStudioOpts): Promise<StartPreviewResult> {
+  // Validate replica inputs up front — fail fast before creating a site.
+  validateReplicaInputs(opts.themeFiles, opts.blockPlugins, opts.themeSlug);
+
   const blueprintPath = persistBlueprint(opts.outputDir, 'studio');
   let existingSites: StudioSite[] = [];
   try {
@@ -351,6 +381,47 @@ export async function startStudioPreview(opts: StartStudioOpts): Promise<StartPr
         // destructive. Surface as a warning so the user can retry the import
         // via `wp eval-file` or the admin UI.
         warnings.push(`Product import failed: ${(err as Error).message.trim()}`);
+      }
+    }
+
+    warnings.push(...await updateStudioSiteOptions(sitePath, readSiteMetaFromWxr(opts.outputDir)));
+
+    // Replica theme + block plugin install. Happens after content import so
+    // wp-cli activate sees a fully-imported environment. Files are written
+    // directly to the host filesystem under <sitePath>/wordpress; activation
+    // is via `studio wp` CLI. Failures here are NOT fatal to the imported
+    // content — surface as warnings and let the caller decide.
+    if (
+      (opts.themeFiles && opts.themeFiles.length > 0) ||
+      (opts.blockPlugins && opts.blockPlugins.length > 0)
+    ) {
+      const wpRoot = join(sitePath, 'wordpress');
+      try {
+        const written = writeReplicaFilesToHost({
+          wpRoot,
+          themeSlug: opts.themeSlug,
+          themeFiles: opts.themeFiles,
+          blockPlugins: opts.blockPlugins,
+        });
+        for (const slug of written.pluginSlugs) {
+          try {
+            await studioWp(sitePath, ['plugin', 'activate', slug]);
+          } catch (err) {
+            warnings.push(`Plugin activate "${slug}" failed: ${(err as Error).message.trim()}`);
+          }
+        }
+        if (opts.themeFiles && opts.themeFiles.length > 0 && opts.themeSlug) {
+          try {
+            await studioWp(sitePath, ['theme', 'activate', opts.themeSlug]);
+          } catch (err) {
+            warnings.push(`Theme activate "${opts.themeSlug}" failed: ${(err as Error).message.trim()}`);
+          }
+        }
+      } catch (err) {
+        // Bubble up — file-write failures usually mean the site path is
+        // wrong, the slug is invalid, or someone tried path traversal. None
+        // are recoverable mid-flow.
+        throw new Error(`Replica install failed: ${(err as Error).message}`);
       }
     }
 

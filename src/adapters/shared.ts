@@ -1,5 +1,5 @@
 import * as cheerio from 'cheerio';
-import type { WxrBuilder } from '../lib/extraction/wxr-builder.js';
+import type { WxrBuilder, WxrItem } from '../lib/extraction/wxr-builder.js';
 import type { ExtractionLog } from '../lib/extraction/extraction-log.js';
 import type { ImportSession } from '../lib/extraction/import-session.js';
 import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
@@ -116,6 +116,26 @@ export async function getPlaywright(): Promise<typeof import('playwright')> {
   }
 }
 
+type PwBrowserRaw = Awaited<ReturnType<(typeof import('playwright'))['chromium']['launch']>>;
+
+export interface ConnectBrowserOpts {
+  cdpPort?: number;
+  headed?: boolean;
+}
+
+/**
+ * Open a Playwright browser — CDP if cdpPort is set, otherwise a fresh headless
+ * Chromium. Caller owns context/page creation and cleanup. Use launchBrowser()
+ * instead if you just want a page to scrape one-off.
+ */
+export async function connectBrowser(opts: ConnectBrowserOpts): Promise<PwBrowserRaw> {
+  const pw = await getPlaywright();
+  if (opts.cdpPort) {
+    return await pw.chromium.connectOverCDP(`http://127.0.0.1:${opts.cdpPort}`);
+  }
+  return await pw.chromium.launch({ headless: !opts.headed });
+}
+
 export async function launchBrowser(opts: { cdpPort?: number; headed?: boolean }): Promise<{
   browser: PwBrowser;
   page: unknown;
@@ -151,7 +171,7 @@ export async function launchBrowser(opts: { cdpPort?: number; headed?: boolean }
 // Generic product detection from HTML (JSON-LD Product schema)
 // ---------------------------------------------------------------------------
 
-export function extractProductFromHtml(html: string): WooProduct | null {
+export function extractProductFromHtml(html: string, sourceUrl: string): WooProduct | null {
   const $ = cheerio.load(html);
   const ldBlocks: string[] = [];
   $('script[type="application/ld+json"]').each((_, el) => {
@@ -179,6 +199,7 @@ export function extractProductFromHtml(html: string): WooProduct | null {
           sku: ld.sku || '',
           images,
           inStock: offers[0]?.availability?.includes('InStock') ?? true,
+          sourceUrl,
         };
       }
     } catch {
@@ -222,6 +243,14 @@ export interface ExtractedPage {
   jsonLd?: unknown[];
 }
 
+export interface PageExtractedEvent {
+  url: string;
+  slug: string;
+  type: 'product' | 'post' | 'page' | 'homepage' | 'gallery' | 'event';
+  items: WxrItem[];
+  mediaUrls: string[];
+}
+
 export interface ExtractionLoopOpts {
   urls: InventoryUrl[];
   navigation: NavLink[];
@@ -239,6 +268,12 @@ export interface ExtractionLoopOpts {
   extractPage: (url: string) => Promise<ExtractedPage>;
   /** Optional platform-specific product extractor — called before the generic JSON-LD fallback */
   extractProduct?: (url: string, html: string) => WooProduct | null;
+  /**
+   * Optional streaming callback fired after one URL has been fetched,
+   * media-downloaded, and added to WXR/products. Used by watch mode to
+   * update the running preview without re-entering adapters one URL at a time.
+   */
+  onPageExtracted?: (event: PageExtractedEvent) => void | Promise<void>;
   /**
    * Cap the number of URLs to process. Useful for sampling a real extraction
    * (with full WXR output) without committing to the entire site. When unset,
@@ -276,6 +311,7 @@ export async function runExtractionLoop(opts: ExtractionLoopOpts): Promise<{
     session,
     extractPage,
     extractProduct,
+    onPageExtracted,
     limit,
     tunerConfig,
   } = opts;
@@ -433,6 +469,7 @@ export async function runExtractionLoop(opts: ExtractionLoopOpts): Promise<{
       const { url, pageData, error: fetchError } = fetchResults[j];
       const i = cursor + j; // running index for checkpoints
       const startMs = Date.now();
+      const itemCountBefore = wxr.items.length;
 
       if (fetchError || !pageData) {
         failed++;
@@ -594,7 +631,7 @@ export async function runExtractionLoop(opts: ExtractionLoopOpts): Promise<{
       // Product detection — try platform-specific extractor, then generic JSON-LD
       if (isProduct && csvBuilder && !dryRun) {
         const product = extractProduct?.(url, pageData.content)
-          ?? extractProductFromHtml(pageData.content);
+          ?? extractProductFromHtml(pageData.content, url);
         if (product) {
           csvBuilder.addProduct(product);
           productsExtracted++;
@@ -684,6 +721,23 @@ export async function runExtractionLoop(opts: ExtractionLoopOpts): Promise<{
         sendLog(
           `  media: ${pageData.mediaUrls.length}, quality: ${pageData.qualityScore}, ${durationMs}ms`
         );
+      }
+
+      if (onPageExtracted) {
+        // Streaming consumers install media from MediaStubStore, so make the
+        // just-downloaded media visible on disk before firing the callback.
+        mediaStubs?.flush();
+        try {
+          await onPageExtracted({
+            url,
+            slug: pageData.slug,
+            type: urlType as PageExtractedEvent['type'],
+            items: wxr.items.slice(itemCountBefore),
+            mediaUrls: pageData.mediaUrls,
+          });
+        } catch (err) {
+          sendLog(`  [warn] onPageExtracted failed for ${url}: ${(err as Error).message}`);
+        }
       }
     }
 

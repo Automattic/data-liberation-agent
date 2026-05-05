@@ -10,6 +10,9 @@ import {
   isPidAlive,
   ensurePlaygroundDir,
   logFilePath,
+  isPlaygroundPersisted,
+  playgroundSitePath,
+  playgroundWpContentPath,
 } from './playground-server.js';
 
 let tempDirs: string[] = [];
@@ -21,6 +24,27 @@ function mkDir() {
 afterEach(() => {
   tempDirs.forEach((d) => rmSync(d, { recursive: true, force: true }));
   tempDirs = [];
+});
+
+describe('persistence helpers', () => {
+  it('playgroundSitePath / playgroundWpContentPath produce the per-project locations', () => {
+    const dir = mkDir();
+    expect(playgroundSitePath(dir)).toBe(join(dir, 'playground-site'));
+    expect(playgroundWpContentPath(dir)).toBe(join(dir, 'playground-site', 'wp-content'));
+  });
+
+  it('isPlaygroundPersisted is false on a fresh outputDir', () => {
+    const dir = mkDir();
+    expect(isPlaygroundPersisted(dir)).toBe(false);
+  });
+
+  it('isPlaygroundPersisted is true once the SQLite marker file exists', () => {
+    const dir = mkDir();
+    const sqlitePath = join(playgroundWpContentPath(dir), 'database', '.ht.sqlite');
+    mkdirSync(join(playgroundWpContentPath(dir), 'database'), { recursive: true });
+    writeFileSync(sqlitePath, 'fakeSqlite');
+    expect(isPlaygroundPersisted(dir)).toBe(true);
+  });
 });
 
 describe('pid file helpers', () => {
@@ -101,6 +125,15 @@ describe('startPreview — happy path', () => {
     expect(existsSync(pidFilePath(dir))).toBe(true);
     expect(existsSync(join(dir, 'playground', 'blueprint.json'))).toBe(true);
     expect(spawnCalls.length).toBe(1);
+
+    // Confirm persistence wiring: install-from-existing-files-if-needed +
+    // wp-content mount + the existing liberation mount.
+    const argv = spawnCalls[0][1] as string[];
+    expect(argv).toContain('--wordpress-install-mode=install-from-existing-files-if-needed');
+    const mounts = argv.filter((a) => a.startsWith('--mount-before-install='));
+    expect(mounts.length).toBe(2);
+    expect(mounts.some((m) => m.includes(':/wordpress/wp-content') && m.includes('playground-site/wp-content'))).toBe(true);
+    expect(mounts.some((m) => m.includes('/wordpress/wp-content/uploads/liberation'))).toBe(true);
   });
 
   it('invokes onPhase callback during phases', async () => {

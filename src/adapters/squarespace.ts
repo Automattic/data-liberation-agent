@@ -316,6 +316,7 @@ async function extractSquarespaceProduct(url: string): Promise<WooProduct | null
     images,
     categories: item.categories || [],
     tags: item.tags || [],
+    sourceUrl: url,
   };
 
   // Build option names for attributes
@@ -713,6 +714,7 @@ export const squarespaceAdapter: PlatformAdapter = {
         limit: sqOpts.limit,
         server: context.server,
         csvBuilder,
+        onPageExtracted: sqOpts.onPageExtracted as never,
         extractPage: async (url: string) => {
           const json = await fetchSqsJson(url);
 

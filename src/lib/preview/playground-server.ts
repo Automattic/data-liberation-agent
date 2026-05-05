@@ -13,6 +13,39 @@ export function playgroundDir(outputDir: string): string {
   return join(resolve(outputDir), 'playground');
 }
 
+/**
+ * Per-project on-disk WP install location. Mounted into Playground's VFS at
+ * `/wordpress/wp-content` so the SQLite DB + themes + plugins + uploads
+ * survive across `liberate_preview` start/stop cycles.
+ *
+ * Layout:
+ *   <outputDir>/playground-site/
+ *     wp-content/
+ *       database/.ht.sqlite       — SQLite DB (posts, options, etc)
+ *       themes/<slug>-replica/    — replica theme (overwritten on each run)
+ *       plugins/                  — installed plugins (woocommerce, etc)
+ *       uploads/                  — media uploads imported from extraction
+ */
+export function playgroundSitePath(outputDir: string): string {
+  return join(resolve(outputDir), 'playground-site');
+}
+
+export function playgroundWpContentPath(outputDir: string): string {
+  return join(playgroundSitePath(outputDir), 'wp-content');
+}
+
+/**
+ * The SQLite DB file shipped by the WordPress SQLite integration plugin.
+ * Its presence on disk is the marker that this Playground site has been
+ * booted at least once and has imported content. Used to skip importWxr +
+ * products import on subsequent starts.
+ */
+const SQLITE_MARKER_REL = 'wp-content/database/.ht.sqlite';
+
+export function isPlaygroundPersisted(outputDir: string): boolean {
+  return existsSync(join(playgroundSitePath(outputDir), SQLITE_MARKER_REL));
+}
+
 export function pidFilePath(outputDir: string): string {
   return join(playgroundDir(outputDir), 'preview.pid');
 }
@@ -124,12 +157,12 @@ function clearImportCompleteMarker(outputDir: string): void {
   }
 }
 
-function validateOutputDir(outputDir: string): void {
+function validateOutputDir(outputDir: string, opts: { allowEmptyWxr?: boolean } = {}): void {
   const wxr = join(resolve(outputDir), 'output.wxr');
   if (!existsSync(resolve(outputDir))) {
     throw new Error(`outputDir not found: ${outputDir}`);
   }
-  if (!existsSync(wxr)) {
+  if (!existsSync(wxr) && !opts.allowEmptyWxr) {
     throw new Error(`No output.wxr in outputDir — run \`liberate <url>\` first: ${wxr}`);
   }
 }
@@ -140,9 +173,20 @@ export async function startPreview(opts: InternalOpts): Promise<StartPreviewResu
   const detached = opts.detached ?? false;
 
   try {
-    validateOutputDir(opts.outputDir);
+    validateOutputDir(opts.outputDir, { allowEmptyWxr: opts.allowEmptyWxr });
   } catch (err) {
     return { status: 'failed', error: (err as Error).message };
+  }
+
+  // forceReimport: nuke the persistent SQLite so the import-when-empty branch
+  // re-runs against the current WXR. Used by the streaming watch loop on its
+  // post-extraction call to import content into a site that was started with
+  // an empty stub WXR.
+  if (opts.forceReimport) {
+    const sqlitePath = join(playgroundWpContentPath(opts.outputDir), 'database', '.ht.sqlite');
+    if (existsSync(sqlitePath)) {
+      try { unlinkSync(sqlitePath); } catch { /* ignore */ }
+    }
   }
 
   // The lockfile serializes both Studio and Playground paths per outputDir.
@@ -162,13 +206,32 @@ export async function startPreview(opts: InternalOpts): Promise<StartPreviewResu
       onPhase('spawn');
       onPhase('probe');
       onPhase('import');
-      const result = await startStudioPreview({ outputDir: opts.outputDir });
+      const result = await startStudioPreview({
+        outputDir: opts.outputDir,
+        themeFiles: opts.themeFiles,
+        blockPlugins: opts.blockPlugins,
+        themeSlug: opts.themeSlug,
+      });
       return { ...result, source: 'studio' };
     }
 
     await reconcileExistingPid(opts.outputDir, opts._isPidAlive);
     const port = opts.port ?? (await pickFreePort(DEFAULT_PORT_RANGE));
-    const blueprintPath = persistBlueprint(opts.outputDir);
+
+    // Pre-create the persistent wp-content dir so Playground can mount it
+    // before WP installs. First boot: dir is empty, WP populates it (SQLite,
+    // themes, plugins). Subsequent boots: wp-content already on disk, skip
+    // importWxr + products import.
+    const wpContentHostPath = playgroundWpContentPath(opts.outputDir);
+    mkdirSync(wpContentHostPath, { recursive: true });
+    const persisted = isPlaygroundPersisted(opts.outputDir);
+
+    const blueprintPath = persistBlueprint(opts.outputDir, 'playground', {
+      themeFiles: opts.themeFiles,
+      blockPlugins: opts.blockPlugins,
+      themeSlug: opts.themeSlug,
+      persisted,
+    });
     const probeFn = opts._probeFn ?? makeCompletionProbe(opts.outputDir);
     clearImportCompleteMarker(opts.outputDir);
 
@@ -183,7 +246,8 @@ export async function startPreview(opts: InternalOpts): Promise<StartPreviewResu
     const logFd = openSync(logFilePath(opts.outputDir), 'w');
     const stdioConfig: any = ['ignore', logFd, logFd];
     const absOutputDir = resolve(opts.outputDir);
-    const mountArg = `${absOutputDir}:${VFS_MOUNT_DIR}`;
+    const liberationMount = `${absOutputDir}:${VFS_MOUNT_DIR}`;
+    const wpContentMount = `${wpContentHostPath}:/wordpress/wp-content`;
     const child = spawnFn(
       'npx',
       [
@@ -193,7 +257,13 @@ export async function startPreview(opts: InternalOpts): Promise<StartPreviewResu
         blueprintPath,
         '--port',
         String(port),
-        `--mount-before-install=${mountArg}`,
+        // install-from-existing-files-if-needed lets Playground reuse the
+        // mounted wp-content (SQLite + themes + plugins) on subsequent boots
+        // rather than re-running WP install. Detection is automatic — empty
+        // wp-content triggers a fresh install; populated dir is reused.
+        '--wordpress-install-mode=install-from-existing-files-if-needed',
+        `--mount-before-install=${wpContentMount}`,
+        `--mount-before-install=${liberationMount}`,
       ],
       {
         stdio: stdioConfig,

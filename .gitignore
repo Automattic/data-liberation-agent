@@ -1,4 +1,5 @@
 output/
+skills/replicate-workspace/
 node_modules/
 .DS_Store
 *.log
@@ -10,4 +11,8 @@ qa-screenshots/
 .playwright-mcp/
 .superpowers/
 .worktrees/
+.tmp-test/
 TODOS.md
+
+# Streaming compose-then-install scratch dir
+.tmp-compose/

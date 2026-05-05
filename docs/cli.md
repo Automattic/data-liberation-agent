@@ -37,6 +37,8 @@ After extraction completes, the CLI prompts:
 | `--admin-token <tok>` | **Shopify only** — Admin API access token. Unlocks GraphQL product extraction with richer fields (sale pricing, stock policy, cost of goods, variant media, collections, SEO metafields). Falls back to public JSON API on failure. | `SHOPIFY_ADMIN_TOKEN` env var |
 | `--shop-domain <host>` | **Shopify only** — `*.myshopify.com` hostname used for Admin API calls. Usually auto-detected from the storefront HTML during discovery; only pass manually if detection fails. | auto-detected |
 | `--non-interactive` | Skip the post-extraction import prompt | off |
+| `--no-screenshots` | Skip screenshots. Screenshots run by default — capturing desktop + mobile fullpage and scrolled-state screenshots plus rendered HTML for every URL. Results go to `output/<site>/screenshots/` with a `manifest.json` keyed by URL; any cross-reference against `output.wxr` / `products.jsonl` happens on the filesystem. See the `screenshot` subcommand below for the underlying flags. | on (use `--no-screenshots` to opt out) |
+| `--screenshots-concurrency <N>` | Parallel screenshot captures when screenshots are enabled. | 6 |
 
 **Output directory structure:**
 
@@ -218,3 +220,70 @@ Auto-runs after every `liberate <url>` extraction; the standalone
 - `.lock` — lockfile while start/stop is in flight.
 
 **Lifecycle:** Foreground blocking in CLI mode. Ctrl+C stops Playground and prints an import-command nudge. A second `preview` invocation on the same outputDir stops the prior process before starting.
+
+### screenshot
+
+```bash
+data-liberation screenshot <url> [options]
+```
+
+Capture full-page + scrolled-state screenshots (desktop 1440×900 + mobile 390×844) plus rendered HTML for every URL on a site. Runs independently from extraction — useful for pre-liberation analysis or downstream design-system synthesis. Also produces three per-site aggregated design-token files (`palette.json`, `typography.json`, `breakpoints.json`) sampled from every captured URL.
+
+**Options:**
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--output <dir>` | Output directory | `./output/<hostname>` |
+| `--types <list>` | Comma-separated URL types to capture: `page`, `post`, `product`, `homepage`, `gallery`, `event` | all |
+| `--limit <N>` | Cap to first N URLs | no cap |
+| `--concurrency <N>` | Parallel captures | 3 (max 10) |
+| `--browser-restart-every <N>` | Close + relaunch the browser every N URLs (memory bound) | 100 |
+| `--cdp-port <n>` | Connect to an existing Chrome session via CDP — use for authenticated sites | none |
+| `--force` | Re-capture even if output files already exist | off |
+| `--urls-file <path>` | Read URLs from a file (one per line), bypassing sitemap discovery | none |
+| `--non-interactive` | Skip the >500-URL preflight confirmation prompt | off |
+| `--verbose` | Per-URL progress logging | off |
+
+**Output layout:**
+
+```
+output/<site-hostname>/
+  screenshots/
+    manifest.json                       URL → files join table
+    desktop/
+      <slug>.png                        full-page desktop capture
+      <slug>.scrolled.png               post-scroll viewport capture (long pages only)
+    mobile/
+      <slug>.png                        full-page mobile capture
+      <slug>.scrolled.png               post-scroll viewport capture (long pages only)
+  html/
+    <slug>.html                         rendered HTML (post-hydration)
+  palette.json                          dominant colors, ranked by urls-desc (top 24)
+  typography.json                       font metrics per selector (h1/h2/h3/body/button),
+                                          deduplicated tuples ranked by urls-desc
+  breakpoints.json                      union of @media min-width / max-width integer px
+                                          values from same-origin stylesheets
+```
+
+Scrolled-state screenshots are silently skipped on short pages (where `scrollHeight < viewport.height * 2.5`).
+
+Same-origin enforcement: every URL must share origin with the `url` argument (or with the first entry of `--urls-file` if no bare URL is given). Mismatches throw `SameOriginViolation` and halt the run.
+
+**Preflight:** For sites with >500 URLs and no `--limit`, the CLI prints an estimated time + disk usage and prompts `Continue? [y/N]`. Skip with `--non-interactive`, or set `--limit N` to sidestep the prompt entirely.
+
+**Example — authenticated Webflow site via CDP:**
+
+```bash
+# 1. Launch Chrome with CDP and log in:
+google-chrome --remote-debugging-port=9222
+# 2. Capture:
+data-liberation screenshot https://staging.example.com --cdp-port 9222 --types page,post --concurrency 5
+```
+
+### Screenshots on the default extract command
+
+`data-liberation <url>` runs screenshot capture by default after the extraction phase finishes. Captured files are written under `output/<site>/screenshots/{desktop,mobile}/<slug>.png` (plus `.scrolled.png` variants) and `output/<site>/html/<slug>.html`, with a `manifest.json` at `output/<site>/screenshots/manifest.json` that maps every captured URL to its file paths. The WXR and products CSV are not touched — cross-referencing screenshots with extracted content happens on the filesystem via the manifest.
+
+Pass `--no-screenshots` to skip screenshot capture entirely. Pass `--screenshots-concurrency N` to tune parallelism (default 6, max 10).
+
+This adds one `ImportSession` stage — `screenshotting` — after the normal extraction pipeline, and it's resumable via `--resume`.

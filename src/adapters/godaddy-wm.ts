@@ -614,6 +614,7 @@ export const godaddyWmAdapter: PlatformAdapter = {
       verbose: wmOpts.verbose,
       limit: wmOpts.limit,
       server: context.server,
+      onPageExtracted: wmOpts.onPageExtracted as never,
       extractPage: async (url: string) => {
         let html = '';
         try {

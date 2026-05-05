@@ -246,6 +246,7 @@ export const webflowAdapter: PlatformAdapter = {
       limit: wfOpts.limit,
       server: context.server,
       csvBuilder,
+      onPageExtracted: wfOpts.onPageExtracted as never,
       extractPage: async (url: string) => {
         // Fetch the page HTML
         let html = '';

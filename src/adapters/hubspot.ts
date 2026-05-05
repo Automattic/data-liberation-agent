@@ -658,6 +658,7 @@ export const hubspotAdapter: PlatformAdapter = {
       limit: hsOpts.limit as number | undefined,
       server: context.server,
       csvBuilder,
+      onPageExtracted: hsOpts.onPageExtracted as never,
       extractPage: async (url: string) => {
         const resp = await fetch(url, {
           signal: AbortSignal.timeout(15000),

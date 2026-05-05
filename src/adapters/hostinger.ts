@@ -74,7 +74,7 @@ function findJsonLdByType(blocks: Array<Record<string, unknown>>, typePattern: R
 /**
  * Convert a JSON-LD Product block into a WooProduct for CSV output.
  */
-function jsonLdToWooProduct(ld: Record<string, unknown>): WooProduct | null {
+function jsonLdToWooProduct(ld: Record<string, unknown>, sourceUrl: string): WooProduct | null {
   const name = typeof ld.name === 'string' ? ld.name : '';
   if (!name) return null;
 
@@ -107,6 +107,7 @@ function jsonLdToWooProduct(ld: Record<string, unknown>): WooProduct | null {
     sku: typeof ld.sku === 'string' ? ld.sku : '',
     images,
     inStock: availability ? /InStock/i.test(availability) : true,
+    sourceUrl,
   };
 }
 
@@ -397,6 +398,7 @@ export const hostingerAdapter: PlatformAdapter = {
       limit: hoOpts.limit as number | undefined,
       server: context.server,
       csvBuilder,
+      onPageExtracted: hoOpts.onPageExtracted as never,
       extractPage: async (url: string) => {
         // Fetch the page HTML, throwing on non-200 so the loop logs the failure.
         const resp = await fetch(url, {
@@ -424,7 +426,7 @@ export const hostingerAdapter: PlatformAdapter = {
         // The callback only receives pageData.content (stripped of <head>),
         // so we extract from the full HTML here where JSON-LD is still available.
         if (isProduct && product) {
-          const wooProduct = jsonLdToWooProduct(product);
+          const wooProduct = jsonLdToWooProduct(product, url);
           if (wooProduct) productCache.set(url, wooProduct);
         }
 
