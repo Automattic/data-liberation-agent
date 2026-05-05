@@ -325,6 +325,32 @@ On final failure the URL + reason is logged via `console.warn` and appended to a
 Tested on a small Wix business site with a dry run (clean discovery, no retries needed). The previous silent-failure behavior turned transient network blips or CDN rate-limits into silent data loss; now the same blips are retried and — if persistent — surfaced as visible warnings.
 
 
+## 2026-04-17 — Wix API responses leak `<link>`/`<meta>` tags as page content
+
+**Found by:** Claude + human contributor
+**During:** Testing the Wix adapter against a range of live Wix sites
+**Type:** bug fix
+
+### What I found
+
+`deriveContent()` in the Wix adapter tries API-call responses first, using `findHtmlContent()` to walk JSON bodies for keys named `html`/`richText`/`body`/`content`/`text`/`plainText` containing HTML-like strings. The existing validator (after the earlier tag-manager fix) strips `<script>` and `<style>` tags before accepting, but this still admits HTML fragments whose only "content" is `<link>` or `<meta>` elements — e.g. a module-preload manifest's body field populated with a pile of `<link rel="modulepreload" href="…chunk.js">` elements, or a Mapbox widget's bootstrap fragment containing just a single `<link href="…mapbox-gl.css" rel="stylesheet">`.
+
+Observed on two tested sites where every single page (100% — an art portfolio's 28 pages and a glass-studio site's 15 pages) was written to the WXR with these head-fragment leaks as the full `<content:encoded>` body — making the imported WordPress pages completely unusable.
+
+### How it works
+
+Extended the post-match validator:
+1. Strip `<link>`, `<meta>`, and `<noscript>` tags in addition to `<script>` and `<style>`.
+2. Require the stripped remainder to contain at least one body-level tag from a fixed list (`p`, `h1-h6`, `ul`, `ol`, `li`, `div`, `section`, `article`, `img`, `figure`, `blockquote`, `table`). A "high-quality" content source must look like a page body, not a head or metadata fragment.
+
+If either check fails the adapter falls through to the next source in the derivation chain (rendered DOM, JSON-LD, accessibility tree) — so pages that previously got nothing-but-junk now pull real body content from the DOM instead.
+
+### Why it's better than the previous approach
+
+Tested on both affected sites. All pages now carry real body content from the rendered DOM (headings, paragraphs, images) instead of head-only `<link>` fragments. Builds on the earlier tag-manager validator by extending the strip list to `<link>`/`<meta>` and requiring body-level tags.
+
+---
+
 ## 2026-04-17 — Wix blog URL classification: `/single-post/` and bare `/blog` listings
 
 **Found by:** Claude + human contributor

@@ -262,6 +262,9 @@ function deriveContent(pageData: {
       const stripped = htmlContent
         .replace(/<script[\s\S]*?<\/script>/gi, '')
         .replace(/<style[\s\S]*?<\/style>/gi, '')
+        .replace(/<noscript[\s\S]*?<\/noscript>/gi, '')
+        .replace(/<link\b[^>]*\/?>/gi, '')
+        .replace(/<meta\b[^>]*\/?>/gi, '')
         .trim();
       if (stripped.length > 50 && /<[a-z][\s\S]*>/i.test(stripped)) {
         return { content: htmlContent, qualityScore: 'high' };
