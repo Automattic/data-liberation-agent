@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { mkdtempSync, rmSync } from 'fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { WxrBuilder } from '../src/lib/extraction/wxr-builder.js';
@@ -309,9 +309,31 @@ describe('WXR Reader — round-trip', () => {
   });
 
   it('handles zero dates as empty string', () => {
-    const data = buildAndRead((wxr) => {
-      wxr.addPost({ title: 'No Date', slug: 'no-date' });
-    });
+    // Externally-produced WXR files (e.g. from legacy exports) may contain
+    // literal 0000-00-00 post dates. The reader must normalize those to '',
+    // not pass them through as broken ISO strings. The builder itself no
+    // longer produces zero dates — see test/wxr-builder.test.ts for that —
+    // so we craft the WXR directly here.
+    tmpDir = mkdtempSync(join(tmpdir(), 'wxr-reader-'));
+    const wxrPath = join(tmpDir, 'zero-date.xml');
+    writeFileSync(wxrPath, `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:excerpt="http://wordpress.org/export/1.2/excerpt/" xmlns:content="http://purl.org/rss/1.0/modules/content/" xmlns:wfw="http://wellformedweb.org/CommentAPI/" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:wp="http://wordpress.org/export/1.2/">
+  <channel>
+    <title>Zero Date Site</title>
+    <link>https://example.com</link>
+    <wp:wxr_version>1.2</wp:wxr_version>
+    <wp:base_site_url>https://example.com</wp:base_site_url>
+    <item>
+      <title>No Date</title>
+      <wp:post_id>1</wp:post_id>
+      <wp:post_date>0000-00-00 00:00:00</wp:post_date>
+      <wp:post_date_gmt>0000-00-00 00:00:00</wp:post_date_gmt>
+      <wp:post_name>no-date</wp:post_name>
+      <wp:post_type>post</wp:post_type>
+    </item>
+  </channel>
+</rss>`);
+    const data = readWxr(wxrPath);
     const post = data.items.find((i) => i.type === 'post') as import('../src/lib/extraction/wxr-builder.js').PostItem;
     expect(post.date).toBe('');
   });

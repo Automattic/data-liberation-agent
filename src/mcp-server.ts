@@ -10,7 +10,8 @@ import { detect } from './lib/extraction/detect-platform.js';
 import { fetchSitemap, classifyUrl } from './lib/extraction/sitemap.js';
 import { ExtractionLog } from './lib/extraction/extraction-log.js';
 import { WxrBuilder } from './lib/extraction/wxr-builder.js';
-import { mkdirSync } from 'fs';
+import { readWxr } from './lib/extraction/wxr-reader.js';
+import { existsSync, mkdirSync } from 'fs';
 import { join } from 'path';
 
 // Static adapter imports — add new adapters here (alphabetical)
@@ -206,6 +207,30 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: ['wxrFile'],
       },
     },
+    {
+      name: 'liberate_preview',
+      description: 'Spawn a local WordPress Playground preview of an extraction output. Returns { url, pid, port, status, warnings }. Kills any existing preview on the same outputDir before starting.',
+      inputSchema: {
+        type: 'object' as const,
+        properties: {
+          outputDir: { type: 'string', description: 'Path to the extraction output directory (contains output.wxr).' },
+          open: { type: 'boolean', description: 'If true, open the URL in the default browser after readiness.' },
+          port: { type: 'number', description: 'Override the auto-picked port (default range: 9400-9499).' },
+        },
+        required: ['outputDir'],
+      },
+    },
+    {
+      name: 'liberate_preview_stop',
+      description: 'Stop a running Playground preview by outputDir.',
+      inputSchema: {
+        type: 'object' as const,
+        properties: {
+          outputDir: { type: 'string', description: 'Path to the extraction output directory.' },
+        },
+        required: ['outputDir'],
+      },
+    },
   ],
 }));
 
@@ -327,9 +352,39 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           language: inventory.siteMeta?.language || 'en-US',
         });
 
+        const wxrPath = join(outputDir, 'output.wxr');
+
+        // On resume, rehydrate the builder from any existing WXR so that
+        // serialize() at the end of this run preserves prior items
+        // instead of overwriting them with only the newly-extracted ones.
+        // nav_menu_items are dropped — the extraction loop regenerates
+        // them deterministically from the current inventory each run.
+        if (typedArgs.resume && existsSync(wxrPath)) {
+          try {
+            const prior = readWxr(wxrPath);
+            wxr.authors = prior.authors;
+            wxr.categories = prior.categories;
+            wxr.tags = prior.tags;
+            wxr.terms = prior.terms;
+            wxr.comments = prior.comments;
+            wxr.redirects = prior.redirects;
+            wxr.items = prior.items.filter((i) => i.type !== 'nav_menu_item');
+
+            let maxId = 0;
+            for (const it of wxr.items) maxId = Math.max(maxId, it.id);
+            for (const a of wxr.authors) maxId = Math.max(maxId, a.id);
+            for (const c of wxr.categories) maxId = Math.max(maxId, c.id);
+            for (const t of wxr.tags) maxId = Math.max(maxId, t.id);
+            for (const t of wxr.terms) maxId = Math.max(maxId, t.id);
+            for (const c of wxr.comments) maxId = Math.max(maxId, c.id);
+            wxr._nextId = maxId + 1;
+          } catch {
+            // Corrupt prior WXR: fall through and treat as a fresh run.
+          }
+        }
+
         await adapter.extract(inventory, wxr, opts, { log, server });
 
-        const wxrPath = join(outputDir, 'output.wxr');
         if (!typedArgs.dryRun && wxr.items.length > 0) {
           wxr.serialize(wxrPath);
         }
@@ -511,6 +566,66 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         elapsedMs: null,
         estimatedRemainingMs: null,
       });
+    }
+
+    case 'liberate_preview': {
+      const { startPreview } = await import('./lib/preview/playground-server.js');
+      const result = await startPreview({
+        outputDir: typedArgs.outputDir as string,
+        open: typedArgs.open as boolean | undefined,
+        port: typedArgs.port as number | undefined,
+        detached: true,
+      });
+      if (result.status === 'ready' && typedArgs.open && result.url) {
+        const { spawn, execFileSync } = await import('node:child_process');
+        const openBrowser = () => {
+          const cmd = process.platform === 'darwin' ? 'open'
+            : process.platform === 'win32' ? 'start'
+            : 'xdg-open';
+          try {
+            spawn(cmd, [`${result.url}/wp-admin/`], { detached: true, stdio: 'ignore' }).unref();
+          } catch { /* best-effort */ }
+        };
+        const openStudioApp = (): boolean => {
+          try {
+            if (process.platform === 'darwin') {
+              spawn('open', ['-a', 'Studio'], { detached: true, stdio: 'ignore' }).unref();
+              return true;
+            }
+            if (process.platform === 'win32') {
+              spawn('cmd', ['/c', 'start', '', 'Studio'], { detached: true, stdio: 'ignore' }).unref();
+              return true;
+            }
+            if (process.platform === 'linux') {
+              const customCmd = process.env.STUDIO_APP_CMD;
+              if (customCmd) {
+                spawn('sh', ['-c', customCmd], { detached: true, stdio: 'ignore' }).unref();
+                return true;
+              }
+              for (const bin of ['Studio', 'studio-app', 'wp-studio']) {
+                try {
+                  execFileSync('which', [bin], { stdio: 'ignore', timeout: 1000 });
+                  spawn(bin, [], { detached: true, stdio: 'ignore' }).unref();
+                  return true;
+                } catch { /* try next */ }
+              }
+            }
+            return false;
+          } catch { return false; }
+        };
+        if (result.source === 'studio' && openStudioApp()) {
+          /* launched Studio app */
+        } else {
+          openBrowser();
+        }
+      }
+      return textResult(result);
+    }
+
+    case 'liberate_preview_stop': {
+      const { stopPreview } = await import('./lib/preview/playground-server.js');
+      const result = await stopPreview({ outputDir: typedArgs.outputDir as string });
+      return textResult(result);
     }
 
     default:
