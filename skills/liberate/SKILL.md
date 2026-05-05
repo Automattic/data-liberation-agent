@@ -77,7 +77,7 @@ If no environment import skill is available, use the built-in REST API import. V
 
 If the user doesn't have a WordPress site yet, guide them:
 1. Create a WordPress site (wordpress.com, self-hosted, or WordPress Studio for local development)
-2. Generate an Application Password (WordPress Admin > Users > Profile > Application Passwords, or wordpress.com/me/security/application-passwords for WordPress.com)
+2. Generate an Application Password (WordPress Admin > Users > Profile > Application Passwords). On WordPress.com / wpcomstaging.com sites, generate it from the site's own wp-admin — the account-level one at wordpress.com/me/security/application-passwords only works for the WordPress.com public API, not the site-native /wp-json/wp/v2/ endpoint we use.
 3. Run `liberate_setup` to validate the connection
 
 ## Platform-specific notes

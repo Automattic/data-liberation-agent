@@ -290,6 +290,14 @@ export class WxrBuilder {
   terms: Term[];
   private _streamPath: string | null = null;
   private _streaming = false;
+  /**
+   * Fallback ISO date used for any item (attachments, nav menu items, or
+   * pages/posts whose adapter didn't populate a date) that would otherwise
+   * serialize as `0000-00-00 00:00:00`. A zero date causes WordPress's WXR
+   * importer to route attachment uploads into `wp-content/uploads/0000/00/`,
+   * which breaks Playground/Studio blueprint application.
+   */
+  private readonly _fallbackDate: string = new Date().toISOString();
 
   get isStreaming(): boolean {
     return this._streaming;
@@ -601,7 +609,8 @@ export class WxrBuilder {
 
   private _serializeItem(item: WxrItem): string {
     const slug = item.slug || '';
-    const date = (item.type === 'post' || item.type === 'page') ? item.date : '';
+    const originalDate = (item.type === 'post' || item.type === 'page') ? item.date : '';
+    const date = originalDate || this._fallbackDate;
     const content = (item.type === 'post' || item.type === 'page') ? item.content : '';
     const excerpt = (item.type === 'post' || item.type === 'page') ? item.excerpt : '';
     const author = (item.type === 'post' || item.type === 'page') ? (item.author || '') : '';
