@@ -6,6 +6,7 @@ AI agents: when you contribute an improvement, add an entry here. See [CONTRIBUT
 
 ---
 
+
 ## 2026-04-30 — `--resume` overwrites the existing WXR with only newly-extracted items
 
 **Found by:** Claude + James
@@ -236,6 +237,49 @@ Also added `jsonLd?: unknown[]` to the `ExtractedPage` interface and piped `page
 ### Why it's better than the previous approach
 
 Tested on a food-blog site alongside the sibling URL-classifier fix that stops bare `/blog` from classifying as `post`: the `/blog` listing page is now correctly a `page` with its listing content, and no longer promoted to a post by its embedded BlogPosting cards for indexed posts.
+
+## 2026-04-17 — Wix sitemap discovery silently loses child sitemaps under CDN pressure
+
+**Found by:** Claude + human contributor
+**During:** Testing the Wix adapter against multiple live sites in parallel
+**Type:** bug fix
+
+### What I found
+
+`fetchSitemapPw()` in the Wix adapter's `discover()` wrapped `p.goto(sitemapUrl)` in `try { … } catch { /* sitemap fetch failed */ }` with a silent early-return on `!resp.ok()`. When Playwright timed out or the Wix CDN returned a transient error on a child sitemap (e.g. `pages-sitemap.xml`, `blog-posts-sitemap.xml`), the failure was swallowed — no log, no retry, no end-of-discovery warning. The extraction proceeded with whatever URLs happened to arrive before the failure, producing a WXR with (often) zero real pages.
+
+Observed on roughly 20% of sites during parallel-worker testing: several produced zero-content WXRs outright (media downloaded, pages empty), while others had `pages-sitemap.xml` children silently skipped while other sitemaps (store-products, blog-posts) went through.
+
+Re-running the affected sites sequentially (outside the parallel run) extracted them cleanly — confirming the failures were transient, not deterministic, and the old code gave the user no way to know they'd lost data.
+
+### How it works
+
+Wrapped the `p.goto` call in an up-to-3-attempt retry loop with exponential backoff (500ms × attempt number):
+
+```ts
+const RETRIES = 3;
+for (let attempt = 1; attempt <= RETRIES; attempt++) {
+  try {
+    const resp = await p.goto(sitemapUrl, { timeout: 15000 });
+    if (!resp || !resp.ok()) {
+      lastErr = resp ? 'HTTP status-not-ok' : 'no response';
+      if (attempt < RETRIES) { await sleep(500 * attempt); continue; }
+      console.warn(`[wix:discover] sitemap fetch failed after ${RETRIES} attempts: ${sitemapUrl} (${lastErr})`);
+      sitemapFailures.push({ url: sitemapUrl, reason: lastErr });
+      return;
+    }
+    // …parse and recurse as before, then `return` on success
+  } catch (err) {
+    // …same retry pattern on thrown errors
+  }
+}
+```
+
+On final failure the URL + reason is logged via `console.warn` and appended to a `sitemapFailures` array. After the recursive discovery completes, an end-of-phase summary warns if any fetches failed — so the operator sees that inventory may be incomplete rather than silently getting partial data.
+
+### Why it's better than the previous approach
+
+Tested on a small Wix business site with a dry run (clean discovery, no retries needed). The previous silent-failure behavior turned transient network blips or CDN rate-limits into silent data loss; now the same blips are retried and — if persistent — surfaced as visible warnings.
 
 
 ## 2026-04-17 — Wix blog URL classification: `/single-post/` and bare `/blog` listings
