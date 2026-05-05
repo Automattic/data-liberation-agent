@@ -195,23 +195,47 @@ empty extractions. With `domcontentloaded` + 4s delay, the same pages
 extract reliably and the 30s budget is no longer exhausted by
 background telemetry.
 
-
-## 2026-04-16 — Wix Tag Manager poisons content extraction
+## 2026-04-17 — Structured JSON-LD blog-post detection in runExtractionLoop
 
 **Found by:** Claude + human contributor
-**During:** Migrating a 45-page Wix ecommerce site (bestiehugs.com)
+**During:** Testing the Wix adapter against a range of live Wix sites
 **Type:** bug fix
 
 ### What I found
-Wix's Tag Manager API (`/_api/tag-manager/api/v1/tags/sites/...`) returns a field named `content` containing analytics `<script>` blocks. `deriveContent()` matches this first (key="content", >50 chars, contains "<"), returns qualityScore "high", and never consults the rendered DOM — which has the real page content in `[data-testid="richTextElement"]` elements. After `stripNonContentTags()` removes the script, the WXR gets empty `content:encoded`.
+
+`runExtractionLoop()` in `src/adapters/shared.ts` had a type-promotion fallback: if `classifyUrl()` returned `page` or `homepage`, it would re-check via a regex `/@type.*BlogPosting|NewsArticle|Article|SocialMediaPosting/` run across the full `pageData.content` string. Any occurrence anywhere in the HTML promoted the item to `post`.
+
+The problem: blog *listing* pages (`/blog--categories--X`, `/blog`) commonly embed `BlogPosting` JSON-LD cards for each post they display in their index. The regex happily matched those embedded cards and promoted the listing page to `post` — producing authorless "posts" in the WXR whose content was a list of links to other posts. Observed on multiple tested sites: one jewellery ecommerce site had 6 of 15 "posts" misclassified; an interior-design blog had 11 of 96; a furniture store had 2 of 7.
 
 ### How it works
 
-Added a post-match validation step: after `findHtmlContent()` returns a match from an API call, strip `<script>` and `<style>` tags and verify >50 chars of real HTML remain. If not, skip and continue to the next content source (rendered DOM, JSON-LD, accessibility tree).
+Replaced the raw-content regex with a structured check using `pageData.jsonLd` (the array of already-parsed JSON-LD objects the adapter returned):
+
+```ts
+const BLOG_TYPES = new Set(['BlogPosting', 'NewsArticle', 'Article', 'SocialMediaPosting']);
+const isRealBlogPost = Array.isArray(pageData.jsonLd) && pageData.jsonLd.some((ld) => {
+  if (!ld || typeof ld !== 'object') return false;
+  const obj = ld as Record<string, unknown>;
+  const atType = obj['@type'];
+  if (typeof atType !== 'string' || !BLOG_TYPES.has(atType)) return false;
+  const mep = obj.mainEntityOfPage;
+  if (mep && typeof mep === 'object') {
+    const mepRec = mep as Record<string, unknown>;
+    const mepUrl = typeof mepRec.url === 'string' ? mepRec.url :
+                   typeof mepRec['@id'] === 'string' ? mepRec['@id'] as string : null;
+    if (mepUrl && mepUrl !== url) return false;
+  }
+  return true;
+});
+```
+
+Two tightenings: (1) `@type` must be at the top level of a JSON-LD object, not anywhere in the raw HTML; (2) when `mainEntityOfPage` is present, its URL must match the current page URL — so embedded-card JSON-LD (whose `mainEntityOfPage` points to *other* posts) can't promote the current page.
+
+Also added `jsonLd?: unknown[]` to the `ExtractedPage` interface and piped `pageData.jsonLd` through the Wix adapter's `extractPage` callback so the shared loop has the parsed objects available.
 
 ### Why it's better than the previous approach
 
-Tested against 7 live Wix sites. 5 of 7 had tag-manager responses that triggered this bug, producing completely empty page content. After the fix, all 5 extract real content (424–5684 chars) from the rendered DOM. The 2 unaffected sites remain unchanged.
+Tested on a food-blog site alongside the sibling URL-classifier fix that stops bare `/blog` from classifying as `post`: the `/blog` listing page is now correctly a `page` with its listing content, and no longer promoted to a post by its embedded BlogPosting cards for indexed posts.
 
 
 ## 2026-04-17 — Wix blog URL classification: `/single-post/` and bare `/blog` listings
@@ -240,6 +264,24 @@ Two changes to the classifier regex:
 Tested on the affected sites: blog archives now classify correctly (individual posts as `post`, bare `/blog` as `page`). The existing `classifies blog paths as post` test was updated to remove the now-wrong `/blog → post` expectation, and two unit tests were added covering both new patterns.
 
 ---
+
+## 2026-04-16 — Wix Tag Manager poisons content extraction
+
+**Found by:** Claude + human contributor
+**During:** Migrating a 45-page Wix ecommerce site (bestiehugs.com)
+**Type:** bug fix
+
+### What I found
+Wix's Tag Manager API (`/_api/tag-manager/api/v1/tags/sites/...`) returns a field named `content` containing analytics `<script>` blocks. `deriveContent()` matches this first (key="content", >50 chars, contains "<"), returns qualityScore "high", and never consults the rendered DOM — which has the real page content in `[data-testid="richTextElement"]` elements. After `stripNonContentTags()` removes the script, the WXR gets empty `content:encoded`.
+
+### How it works
+
+Added a post-match validation step: after `findHtmlContent()` returns a match from an API call, strip `<script>` and `<style>` tags and verify >50 chars of real HTML remain. If not, skip and continue to the next content source (rendered DOM, JSON-LD, accessibility tree).
+
+### Why it's better than the previous approach
+
+Tested against 7 live Wix sites. 5 of 7 had tag-manager responses that triggered this bug, producing completely empty page content. After the fix, all 5 extract real content (424–5684 chars) from the rendered DOM. The 2 unaffected sites remain unchanged.
+
 
 ## 2026-04-16 — Wix Product JSON-LD uses non-standard casing
 

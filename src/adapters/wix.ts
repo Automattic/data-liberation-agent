@@ -954,6 +954,7 @@ export const wixAdapter: PlatformAdapter = {
             mediaUrls: pageData.mediaUrls,
             qualityScore: pageData.qualityScore,
             author,
+            jsonLd: pageData.jsonLd,
           };
         },
       });
