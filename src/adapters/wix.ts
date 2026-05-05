@@ -83,6 +83,13 @@ export interface PageData {
   // and not infer extra meaning. Open enum so future widget classifications
   // (product listings, forums, bookings) don't require breaking consumers.
   pageType?: 'blog_archive' | string;
+  // Author-set cover image for blog posts, recovered from the page's
+  // BlogPosting JSON-LD (a Wix-platform standard regardless of theme).
+  // Set only on Article/BlogPosting/NewsArticle pages where JSON-LD
+  // exposes an `image` field; absent otherwise. Lets consumers wire the
+  // post's hero image to a featured-image field without having to parse
+  // it out of body content (or invent inference from leading <img> tags).
+  featuredImage?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -157,6 +164,50 @@ function extractImageUrls(data: {
       return false;
     }
   });
+}
+
+/**
+ * Extract a blog post's featured image from BlogPosting JSON-LD. Returns
+ * the URL of the first matching image (schema.org-defined as the post's
+ * primary image) or null if no BlogPosting/Article JSON-LD is present.
+ *
+ * Handles all three image-field shapes the schema allows:
+ *   - string                                       → URL directly
+ *   - { @type: 'ImageObject', url: '...' }         → nested url property
+ *   - [ImageObject, ImageObject, ...]              → first item's URL
+ *
+ * Verified across two independent Wix Blog themes that diverge on DOM
+ * markup but both emit BlogPosting JSON-LD with image populated. Source-
+ * level (server-rendered) so detection doesn't depend on JS hydration.
+ */
+function extractFeaturedImageFromJsonLd(jsonLd: unknown[]): string | null {
+  for (const ld of jsonLd) {
+    const obj = ld as Record<string, unknown>;
+    const type = obj['@type'];
+    const isPostType =
+      type === 'BlogPosting' ||
+      type === 'Article' ||
+      type === 'NewsArticle' ||
+      (Array.isArray(type) && type.some((t) => t === 'BlogPosting' || t === 'Article' || t === 'NewsArticle'));
+    if (!isPostType) continue;
+
+    const image = obj.image;
+    if (typeof image === 'string') return image;
+    if (image && typeof image === 'object' && !Array.isArray(image)) {
+      const url = (image as Record<string, unknown>).url;
+      if (typeof url === 'string') return url;
+    }
+    if (Array.isArray(image)) {
+      for (const item of image) {
+        if (typeof item === 'string') return item;
+        if (item && typeof item === 'object') {
+          const url = (item as Record<string, unknown>).url;
+          if (typeof url === 'string') return url;
+        }
+      }
+    }
+  }
+  return null;
 }
 
 /** Walk a JSON value tree looking for HTML content in known field names. */
@@ -518,6 +569,10 @@ async function extractWixPage(
     meta: browserData.meta,
   });
 
+  // Recover the post's author-set cover image from BlogPosting JSON-LD.
+  // Set only when the page is actually a post; absent on regular pages.
+  const featuredImage = extractFeaturedImageFromJsonLd(browserData.jsonLd);
+
   return {
     sourceUrl: url,
     slug: slugify(url),
@@ -532,6 +587,7 @@ async function extractWixPage(
     qualityScore,
     pageHtml,
     ...(pageType ? { pageType } : {}),
+    ...(featuredImage ? { featuredImage } : {}),
   };
 }
 
