@@ -116,6 +116,26 @@ export async function getPlaywright(): Promise<typeof import('playwright')> {
   }
 }
 
+type PwBrowserRaw = Awaited<ReturnType<(typeof import('playwright'))['chromium']['launch']>>;
+
+export interface ConnectBrowserOpts {
+  cdpPort?: number;
+  headed?: boolean;
+}
+
+/**
+ * Open a Playwright browser — CDP if cdpPort is set, otherwise a fresh headless
+ * Chromium. Caller owns context/page creation and cleanup. Use launchBrowser()
+ * instead if you just want a page to scrape one-off.
+ */
+export async function connectBrowser(opts: ConnectBrowserOpts): Promise<PwBrowserRaw> {
+  const pw = await getPlaywright();
+  if (opts.cdpPort) {
+    return await pw.chromium.connectOverCDP(`http://127.0.0.1:${opts.cdpPort}`);
+  }
+  return await pw.chromium.launch({ headless: !opts.headed });
+}
+
 export async function launchBrowser(opts: { cdpPort?: number; headed?: boolean }): Promise<{
   browser: PwBrowser;
   page: unknown;
@@ -151,7 +171,7 @@ export async function launchBrowser(opts: { cdpPort?: number; headed?: boolean }
 // Generic product detection from HTML (JSON-LD Product schema)
 // ---------------------------------------------------------------------------
 
-export function extractProductFromHtml(html: string): WooProduct | null {
+export function extractProductFromHtml(html: string, sourceUrl: string): WooProduct | null {
   const $ = cheerio.load(html);
   const ldBlocks: string[] = [];
   $('script[type="application/ld+json"]').each((_, el) => {
@@ -179,6 +199,7 @@ export function extractProductFromHtml(html: string): WooProduct | null {
           sku: ld.sku || '',
           images,
           inStock: offers[0]?.availability?.includes('InStock') ?? true,
+          sourceUrl,
         };
       }
     } catch {
@@ -594,7 +615,7 @@ export async function runExtractionLoop(opts: ExtractionLoopOpts): Promise<{
       // Product detection — try platform-specific extractor, then generic JSON-LD
       if (isProduct && csvBuilder && !dryRun) {
         const product = extractProduct?.(url, pageData.content)
-          ?? extractProductFromHtml(pageData.content);
+          ?? extractProductFromHtml(pageData.content, url);
         if (product) {
           csvBuilder.addProduct(product);
           productsExtracted++;

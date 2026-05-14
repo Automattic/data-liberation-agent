@@ -1,6 +1,6 @@
 # MCP Tools
 
-The data-liberation-agent MCP server exposes 11 tools via stdio transport. Start it with:
+The data-liberation-agent MCP server exposes 12 tools via stdio transport. Start it with:
 
 ```bash
 npx tsx src/mcp-server.ts
@@ -61,6 +61,7 @@ Extract all content from a website. Produces a WXR file, media directory, redire
 | `verbose` | no | Enable detailed per-page logging |
 | `shopDomain` | no | **Shopify only** — the `*.myshopify.com` hostname used for Admin API calls. Usually unnecessary: `liberate_discover` auto-detects it from the storefront HTML (the `Shopify.shop` JS global) and stores it as `inventory.shopDomain`, so `liberate_extract` picks it up automatically even when the site is served on a custom domain. Only pass explicitly if auto-detection failed (e.g. Cloudflare-protected storefront). |
 | `adminToken` | no | **Shopify only** — Admin API access token. When present, products are fetched via the Admin GraphQL API (2025-04) instead of the public JSON API, yielding richer data: `compareAtPrice` sale semantics, `inventoryItem.tracked` + `inventoryPolicy` stock status, `unitCost` cost-of-goods, collections as categories, `measurement.weight` unit normalization, and global SEO metafields. |
+| `screenshots` | no | When `true`, runs the screenshot capture loop after extraction. Results land under `output/<site>/screenshots/` with a `manifest.json` keyed by URL; no postmeta or CSV columns are written — any cross-reference against the WXR / products CSV happens on the filesystem. Adds one `ImportSession` stage (`screenshotting`) that is resumable. |
 
 Returns: `wxrPath`, `redirectMapPath`, `outputDir`, `summary` (counts, quality scores), `failures` (URLs and errors), `wxrValidation`.
 
@@ -78,6 +79,56 @@ Check progress of a running or completed extraction.
 | `outputDir` | yes | The output directory of the extraction |
 
 Returns: `running` (boolean), `processed`, `failed` counts.
+
+## Screenshots
+
+### liberate_screenshot
+
+Capture full-page + scrolled-state screenshots (desktop 1440×900 + mobile 390×844) plus rendered HTML for every URL on a site. Runs independently from extraction — useful for pre-liberation analysis or feeding downstream AI design-system tools. Also produces a site-analysis summary (palette, typography, metadata) sampled from representative pages.
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `url` | yes (unless `urls` is set) | The site URL. Used for sitemap discovery and as the same-origin anchor for all captures. |
+| `urls` | no | Explicit list of URLs to capture, bypassing sitemap discovery. Every URL must share origin with `url` (or with `urls[0]` if no `url` is given). |
+| `outputDir` | yes | Directory to write `screenshots/`, `html/`, `manifest.json`, and `site-analysis.json`. |
+| `types` | no | Array of URL types to filter by: `page`, `post`, `product`, `homepage`, `gallery`, `event`. Defaults to all. Ignored when `urls` is passed. |
+| `limit` | no | Cap to first N URLs after filtering. |
+| `concurrency` | no | Parallel captures. Default 3, max 10. |
+| `browserRestartEvery` | no | Close + relaunch Chromium every N URLs to bound memory. Default 100. Restarts happen at batch boundaries, never mid-batch. |
+| `cdpPort` | no | Connect to an existing Chrome session via CDP (for authenticated sites). |
+| `force` | no | Re-capture even if output files already exist. Default false. |
+
+**Returns:** `outputDir`, `manifestPath`, `siteAnalysisPath`, `captured` (count), `skipped` (count), `failed` (array of `{ url, error }`), `stage` (`screenshotting` → `complete`).
+
+**Output layout:**
+
+```
+<outputDir>/
+  screenshots/
+    manifest.json                       URL → files join table
+    desktop/<slug>.png                  full-page desktop
+    desktop/<slug>.scrolled.png         post-scroll viewport (long pages only)
+    mobile/<slug>.png                   full-page mobile
+    mobile/<slug>.scrolled.png          post-scroll viewport (long pages only)
+  html/<slug>.html                      rendered HTML post-hydration
+  site-analysis.json                    palette + typography + metadata
+```
+
+Scrolled-state screenshots are silently skipped on pages shorter than ~2.5 viewports — they don't have a distinct scrolled state worth capturing.
+
+**Example:**
+
+```json
+{
+  "url": "https://example.com",
+  "outputDir": "./output/example.com",
+  "types": ["page", "post"],
+  "concurrency": 5,
+  "browserRestartEvery": 50
+}
+```
+
+To capture screenshots as part of a full extract run (rather than invoking this tool directly), use `liberate_extract` with `screenshots: true`. The manifest and source URLs on extracted content are enough to correlate screenshots with WXR items or CSV product rows on the filesystem.
 
 ## Debugging & Reconnaissance
 

@@ -316,6 +316,7 @@ async function extractSquarespaceProduct(url: string): Promise<WooProduct | null
     images,
     categories: item.categories || [],
     tags: item.tags || [],
+    sourceUrl: url,
   };
 
   // Build option names for attributes

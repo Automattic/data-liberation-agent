@@ -10,4 +10,5 @@ qa-screenshots/
 .playwright-mcp/
 .superpowers/
 .worktrees/
+.tmp-test/
 TODOS.md

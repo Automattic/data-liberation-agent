@@ -377,6 +377,7 @@ function extractWeeblyProduct(_url: string, html: string): WooProduct | null {
     // as part of the page chrome even for products that are in stock, so we can't
     // reliably detect stock status from the static HTML alone.
     inStock: true,
+    sourceUrl: _url,
   };
 }
 
