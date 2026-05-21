@@ -31,6 +31,7 @@ import { rewriteMediaUrls } from '../lib/streaming/media-url-rewrite.js';
 import { BlockFixerClient } from '../lib/streaming/block-fixer-client.js';
 import { appendTransform, type BlockTransformEntry } from '../lib/streaming/block-transform-log.js';
 import { countBlocks } from '../lib/streaming/block-markup-validate.js';
+import { designSidecarPath } from '../lib/screenshot/design-capture-runner.js';
 import { createHash } from 'node:crypto';
 import { createInterface } from 'node:readline';
 import { detect } from '../lib/extraction/detect-platform.js';
@@ -1498,6 +1499,31 @@ async function flushPendingImports(opts: {
     let contentOverride: string | undefined;
     let composedAs: 'blocks' | 'raw-html' = 'raw-html';
 
+    // Design-fragment sidecar: highest precedence content source. Written
+    // deterministically by captureDesignForUrl during the screenshot/capture
+    // pass — independent of agent availability or foundation readiness. When
+    // present it becomes contentOverride so the existing media-URL rewrite
+    // (prepareInstallContentWithMediaUrls) swaps source <img> URLs to local
+    // upload URLs exactly as it does for the composed sidecar path.
+    const designSidecar = designSidecarPath(outDir, entry.slug);
+    if (fileExists(designSidecar)) {
+      try {
+        const fragment = readFileSync(designSidecar, 'utf8');
+        if (fragment.trim().length > 0) {
+          appendWatchLog(outDir, {
+            event: 'design-sidecar-used',
+            url: entry.url,
+            slug: entry.slug,
+            bytes: fragment.length,
+          });
+          contentOverride = fragment;
+          composedAs = 'raw-html';
+        }
+      } catch {
+        // Unreadable sidecar → fall through to composed / heuristic / agent paths.
+      }
+    }
+
     if (composeAvailable && foundationReady) {
       const sidecarPath = join(outDir, 'composed', `${entry.slug}.blocks.html`);
 
@@ -1507,7 +1533,9 @@ async function flushPendingImports(opts: {
       // saves 50-70 minutes of compose cost. Force a re-compose by
       // deleting `composed/<slug>.blocks.html` or running with --reset
       // (watch-state-reset.ts already lists `composed/` as a target).
-      if (fileExists(sidecarPath)) {
+      // Skip when the design sidecar already populated contentOverride —
+      // the design fragment takes precedence over all compose paths.
+      if (!contentOverride && fileExists(sidecarPath)) {
         try {
           const cached = readFileSync(sidecarPath, 'utf8');
           if (cached.trim().length > 0) {
