@@ -78,4 +78,51 @@ describe('compareScreenshotDirs', () => {
     const result = await compareScreenshotDirs({ originDir: origin, replicaDir: replica });
     expect(result.results[0].desktop.height).toBe(500); // min(500, 700, 900)
   });
+
+  it('throws an explicit error when a manifest is missing', async () => {
+    await expect(compareScreenshotDirs({ originDir: join(TMP, 'nope'), replicaDir: join(TMP, 'nope2') }))
+      .rejects.toThrow(/manifest missing/);
+  });
+
+  it('reports missing-replica when a pathname is absent from the replica', async () => {
+    const origin = join(TMP, 'origin');
+    const replica = join(TMP, 'replica');
+    buildDir(origin, 'https://origin.test/only-origin', 'oo', { w: 1440, h: 900, color: [1, 2, 3, 255] });
+    mkdirSync(replica, { recursive: true });
+    writeFileSync(join(replica, 'manifest.json'), JSON.stringify({ version: 1, entries: {} }));
+    const result = await compareScreenshotDirs({ originDir: origin, replicaDir: replica });
+    expect(result.results[0].desktop.status).toBe('missing-replica');
+    expect(result.results[0].desktop.score).toBeNull();
+  });
+
+  it('reports decode-error for a corrupt PNG instead of crashing', async () => {
+    const origin = join(TMP, 'origin');
+    const replica = join(TMP, 'replica');
+    buildDir(origin, 'https://origin.test/c', 'c', { w: 1440, h: 900, color: [1, 2, 3, 255] });
+    buildDir(replica, 'http://localhost:8881/c', 'c', { w: 1440, h: 900, color: [1, 2, 3, 255] });
+    writeFileSync(join(replica, 'desktop', 'c.png'), 'not a png');   // corrupt one side
+    const result = await compareScreenshotDirs({ originDir: origin, replicaDir: replica });
+    expect(result.results[0].desktop.status).toBe('decode-error');
+    expect(result.results[0].mobile.status).toBe('ok'); // other viewport unaffected
+  });
+
+  it('reports missing-replica when the replica PNG file is absent', async () => {
+    const origin = join(TMP, 'origin');
+    const replica = join(TMP, 'replica');
+    buildDir(origin, 'https://origin.test/m', 'm', { w: 1440, h: 900, color: [1, 2, 3, 255] });
+    buildDir(replica, 'http://localhost:8881/m', 'm', { w: 1440, h: 900, color: [1, 2, 3, 255] });
+    rmSync(join(replica, 'desktop', 'm.png'));
+    const result = await compareScreenshotDirs({ originDir: origin, replicaDir: replica });
+    expect(result.results[0].desktop.status).toBe('missing-replica');
+  });
+
+  it('reports missing-origin when the origin PNG file is absent', async () => {
+    const origin = join(TMP, 'origin');
+    const replica = join(TMP, 'replica');
+    buildDir(origin, 'https://origin.test/mo', 'mo', { w: 1440, h: 900, color: [1, 2, 3, 255] });
+    buildDir(replica, 'http://localhost:8881/mo', 'mo', { w: 1440, h: 900, color: [1, 2, 3, 255] });
+    rmSync(join(origin, 'desktop', 'mo.png'));
+    const result = await compareScreenshotDirs({ originDir: origin, replicaDir: replica });
+    expect(result.results[0].desktop.status).toBe('missing-origin');
+  });
 });

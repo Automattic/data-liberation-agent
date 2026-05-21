@@ -103,10 +103,19 @@ export async function compareScreenshotDirs(opts: CompareOpts): Promise<Comparis
       const dim = VIEWPORT_DIMS[vp];
       const oPath = join(opts.originDir, vp, `${o.slug}.png`);
       const rPath = join(opts.replicaDir, vp, `${r.slug}.png`);
-      const oImg = PNG.sync.read(readFileSync(oPath));
-      const rImg = PNG.sync.read(readFileSync(rPath));
+      if (!existsSync(oPath)) { result[vp] = { status: 'missing-origin', score: null }; continue; }
+      if (!existsSync(rPath)) { result[vp] = { status: 'missing-replica', score: null }; continue; }
+      let oImg: PNG, rImg: PNG;
+      try {
+        oImg = PNG.sync.read(readFileSync(oPath));
+        rImg = PNG.sync.read(readFileSync(rPath));
+      } catch {
+        result[vp] = { status: 'decode-error', score: null };
+        continue;
+      }
       const w = Math.min(oImg.width, rImg.width, dim.w);
       const h = Math.min(oImg.height, rImg.height, dim.h);
+      if (w <= 0 || h <= 0) { result[vp] = { status: 'dim-mismatch', score: null }; continue; }
       const oCrop = new PNG({ width: w, height: h });
       const rCrop = new PNG({ width: w, height: h });
       PNG.bitblt(oImg, oCrop, 0, 0, w, h, 0, 0);
