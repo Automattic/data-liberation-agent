@@ -129,4 +129,78 @@ describe('buildBlockHeader', () => {
     // No backgroundImage field → no background-image in inline style
     expect(markup).not.toContain('background-image:');
   });
+
+  // ── brandDark fallback tests ────────────────────────────────────────────────
+
+  it('uses brandDark as header background when source bg is transparent', () => {
+    const transparentNav: ExtractedNav = {
+      ...SAMPLE_NAV,
+      style: { ...SAMPLE_NAV.style, background: 'transparent', textColor: 'rgb(0, 0, 0)' },
+    };
+    const markup = buildBlockHeader(transparentNav, { brandDark: '#175236' });
+    expect(markup).toContain('background-color:#175236');
+    // The outer group style should also reference the brand color
+    expect(markup).toContain('#175236');
+  });
+
+  it('forces nav and CTA text to white (#ffffff) when brandDark is dark (luminance < 0.5)', () => {
+    const transparentNav: ExtractedNav = {
+      ...SAMPLE_NAV,
+      style: { ...SAMPLE_NAV.style, background: 'transparent', textColor: 'rgb(0, 0, 0)' },
+    };
+    const markup = buildBlockHeader(transparentNav, { brandDark: '#175236' });
+    // #175236 dark green → white text
+    expect(markup).toContain('"text":"#ffffff"');
+  });
+
+  it('forces nav text to dark (#111111) when brandDark is light', () => {
+    const transparentNav: ExtractedNav = {
+      ...SAMPLE_NAV,
+      style: { ...SAMPLE_NAV.style, background: 'transparent', textColor: 'rgb(255, 255, 255)' },
+    };
+    const markup = buildBlockHeader(transparentNav, { brandDark: '#d4f0e8' });
+    // Very light color → dark text
+    expect(markup).toContain('"text":"#111111"');
+  });
+
+  it('uses rgba(0,0,0,0) as transparent and applies brandDark', () => {
+    const transparentNav: ExtractedNav = {
+      ...SAMPLE_NAV,
+      style: { ...SAMPLE_NAV.style, background: 'rgba(0,0,0,0)', textColor: 'rgb(0, 0, 0)' },
+    };
+    const markup = buildBlockHeader(transparentNav, { brandDark: '#175236' });
+    expect(markup).toContain('#175236');
+    expect(markup).not.toContain('rgba(0,0,0,0)');
+  });
+
+  it('does NOT override opaque extracted background with brandDark', () => {
+    // SAMPLE_NAV has background: 'rgb(20, 20, 20)' — opaque, not transparent
+    const markup = buildBlockHeader(SAMPLE_NAV, { brandDark: '#175236' });
+    // Original opaque background must still appear
+    expect(markup).toContain('rgb(20, 20, 20)');
+    // brandDark should NOT replace it
+    expect(markup).not.toContain('background-color:#175236');
+  });
+
+  it('overrides extracted text color with white for an opaque dark background', () => {
+    // SAMPLE_NAV already has dark bg (20,20,20) with white text — confirm white is used
+    const markup = buildBlockHeader(SAMPLE_NAV);
+    // rgb(20,20,20) is dark → text should be #ffffff (computed) or existing white
+    expect(markup).toContain('"text":"#ffffff"');
+  });
+
+  it('does not use brandDark when backgroundImage is present (gradient takes over)', () => {
+    const bgImageNav: ExtractedNav = {
+      ...SAMPLE_NAV,
+      style: {
+        ...SAMPLE_NAV.style,
+        background: 'transparent',
+        backgroundImage: 'linear-gradient(90deg, #003 0%, #300 100%)',
+      },
+    };
+    const markup = buildBlockHeader(bgImageNav, { brandDark: '#175236' });
+    // backgroundImage path — background stays transparent, brand color not injected
+    expect(markup).toContain('background-image:linear-gradient(90deg, #003 0%, #300 100%)');
+    expect(markup).not.toContain('background-color:#175236');
+  });
 });

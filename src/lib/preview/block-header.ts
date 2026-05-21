@@ -46,10 +46,17 @@
  */
 
 import type { ExtractedNav } from '../screenshot/nav-extract.js';
+import { relativeLuminance, contrastTextColor } from './brand-color.js';
 
 export interface BlockHeaderOpts {
   /** Local (uploaded) URL for the logo image, overrides nav.logoSrc when set. */
   logoLocalUrl?: string;
+  /**
+   * Site's brand-dark color (hex, e.g. "#175236") derived from palette.json.
+   * Used as header background fallback when the extracted background is
+   * transparent / indeterminate.  Text color is computed by contrast.
+   */
+  brandDark?: string;
 }
 
 /**
@@ -60,13 +67,61 @@ export interface BlockHeaderOpts {
  *   - Passing to `do_blocks()` in the classic theme PHP template.
  */
 export function buildBlockHeader(nav: ExtractedNav, opts: BlockHeaderOpts = {}): string {
-  const bg = nav.style.background || 'var(--wp--preset--color--base)';
+  const rawBg = nav.style.background;
   const bgImage = nav.style.backgroundImage;
-  const textColor = nav.style.textColor || 'var(--wp--preset--color--contrast)';
   const fontFamily = nav.style.fontFamily
     ? `"${nav.style.fontFamily}"`
     : 'var(--wp--preset--font-family--body)';
   const logoUrl = opts.logoLocalUrl ?? nav.logoSrc;
+
+  // ── Determine effective background ────────────────────────────────────────
+  // Priority:
+  //   1. Extracted background is opaque (alpha > 0, not transparent keyword).
+  //   2. backgroundImage present (gradient / image) → keep transparent bg, use image.
+  //   3. brandDark fallback when bg is transparent/indeterminate.
+  //   4. WP preset variable (last resort).
+  const isTransparent = isTransparentBg(rawBg);
+  let effectiveBg: string;
+  let appliedFallback = false;
+
+  if (!isTransparent) {
+    // Opaque extracted color — use it directly.
+    effectiveBg = rawBg || 'var(--wp--preset--color--base)';
+  } else if (bgImage) {
+    // Background image/gradient path — keep transparent bg, image takes over.
+    effectiveBg = rawBg || 'transparent';
+  } else if (opts.brandDark) {
+    // Transparent header + brand-dark palette color available → use brand color.
+    effectiveBg = opts.brandDark;
+    appliedFallback = true;
+  } else {
+    effectiveBg = rawBg || 'var(--wp--preset--color--base)';
+  }
+
+  // ── Determine effective text color ────────────────────────────────────────
+  // When we applied a fallback background (brandDark), or when the extracted
+  // background is opaque, compute contrast-safe text color from the effective bg.
+  // This overrides the (unreliable) extracted textColor in both cases.
+  let textColor: string;
+  if (appliedFallback) {
+    // brandDark is always a hex value → contrast helper works directly.
+    textColor = contrastTextColor(effectiveBg);
+  } else if (!isTransparent && !bgImage) {
+    // Opaque extracted bg — check contrast; override if extracted text would
+    // be illegible.  Parse the extracted textColor luminance vs. bg luminance.
+    const bgLum = parseCssColorLuminance(effectiveBg);
+    const extractedText = nav.style.textColor || null;
+    if (bgLum !== null) {
+      textColor = bgLum < 0.5 ? '#ffffff' : '#111111';
+    } else {
+      textColor = extractedText || 'var(--wp--preset--color--contrast)';
+    }
+  } else {
+    // backgroundImage or fallback WP var — use extracted textColor as-is.
+    textColor = nav.style.textColor || 'var(--wp--preset--color--contrast)';
+  }
+
+  const bg = effectiveBg;
 
   // ── Logo / site title block ────────────────────────────────────────────────
   const logoBlock = buildLogoBlock(logoUrl, nav.logoAlt, nav.siteTitle, textColor);
@@ -199,4 +254,49 @@ function esc(s: string): string {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+// ── Color utilities (internal) ───────────────────────────────────────────────
+
+/**
+ * Return true when the CSS background value is transparent / indeterminate:
+ *   - falsy / empty string
+ *   - the keyword "transparent"
+ *   - rgba(…,0) / rgba(0,0,0,0) — zero-alpha
+ */
+function isTransparentBg(bg: string | null | undefined): boolean {
+  if (!bg) return true;
+  const v = bg.trim().toLowerCase();
+  if (v === 'transparent') return true;
+  // rgba(r,g,b,0) or rgba(r,g,b,0.0) — match alpha component at the end
+  const rgbaMatch = /rgba\s*\([^)]+,\s*([\d.]+)\s*\)/.exec(v);
+  if (rgbaMatch) {
+    return parseFloat(rgbaMatch[1]) === 0;
+  }
+  return false;
+}
+
+/**
+ * Attempt to parse a CSS color value and return its relative luminance.
+ * Handles:
+ *   - #rrggbb hex (delegates to relativeLuminance from brand-color)
+ *   - rgb(r, g, b) / rgba(r, g, b, a)
+ * Returns null when the input can't be parsed (CSS variable, keyword, etc.).
+ */
+function parseCssColorLuminance(css: string): number | null {
+  const s = css.trim();
+  // #rrggbb hex — use the shared relativeLuminance helper
+  if (/^#[0-9a-f]{6}$/i.test(s)) {
+    return relativeLuminance(s);
+  }
+  // rgb(r, g, b) or rgba(r, g, b, a)
+  const m = /rgba?\s*\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)(?:\s*,\s*[\d.]+)?\s*\)/i.exec(s);
+  if (m) {
+    const r = parseFloat(m[1]) / 255;
+    const g = parseFloat(m[2]) / 255;
+    const b = parseFloat(m[3]) / 255;
+    const lin = (c: number) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
+    return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
+  }
+  return null;
 }

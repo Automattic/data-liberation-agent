@@ -12,11 +12,15 @@
 //   captureDesign (per-URL) → CssAggregator / JsAggregator (run-level)
 //     → assembleDesignTheme (run-end) → writeReplicaFilesToHost → activate
 //
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { buildBlankTheme } from './blank-theme.js';
 import { buildBlockHeader } from './block-header.js';
+import { pickBrandDark } from './brand-color.js';
 import { rewriteMediaUrls } from '../streaming/media-url-rewrite.js';
 import type { ReplicaFile } from './types.js';
 import type { ExtractedNav } from '../screenshot/nav-extract.js';
+import type { PaletteFile } from '../screenshot/aggregator.js';
 
 export interface AssembleDesignThemeOpts {
   outputDir: string;
@@ -65,6 +69,23 @@ export function assembleDesignTheme(opts: AssembleDesignThemeOpts): ReplicaFile[
     ? rewriteMediaUrls(opts.cssText, opts.mediaUrlMap)
     : opts.cssText;
 
+  // ── Read palette.json and pick brand-dark color ───────────────────────────
+  // Guard: missing / corrupt file → null (no fallback applied).
+  let brandDark: string | undefined;
+  try {
+    const palettePath = join(opts.outputDir, 'palette.json');
+    if (existsSync(palettePath)) {
+      const raw = readFileSync(palettePath, 'utf8');
+      const palette = JSON.parse(raw) as PaletteFile;
+      if (Array.isArray(palette?.colors)) {
+        brandDark = pickBrandDark(palette.colors) ?? undefined;
+      }
+    }
+  } catch {
+    // Corrupt or unreadable palette — degrade gracefully.
+    brandDark = undefined;
+  }
+
   // Build the WP block header markup from nav data.
   // The logo URL is rewritten to its local upload URL when available.
   let headerBlockMarkup: string | undefined;
@@ -72,7 +93,7 @@ export function assembleDesignTheme(opts: AssembleDesignThemeOpts): ReplicaFile[
     // Rewrite nav.logoSrc to the local URL if available in the mediaUrlMap.
     const logoLocalUrl = opts.logoLocalUrl
       ?? (opts.nav.logoSrc ? (opts.mediaUrlMap.get(opts.nav.logoSrc) ?? undefined) : undefined);
-    headerBlockMarkup = buildBlockHeader(opts.nav, { logoLocalUrl });
+    headerBlockMarkup = buildBlockHeader(opts.nav, { logoLocalUrl, brandDark });
   }
 
   const files = buildBlankTheme({
