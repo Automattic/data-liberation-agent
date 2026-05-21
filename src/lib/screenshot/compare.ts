@@ -12,9 +12,9 @@
 //                     join on pathname
 //        desktop/<slug>.png   desktop/<slug>.png
 //        └─ crop top WxH ─┐ ┌─ crop top WxH
-//                      pixelmatch → diffPixels → score → diff PNG
+//                      pixelmatch → diffPixels → score → diff PNG → comparison.json
 //
-import { existsSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, mkdirSync, writeFileSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
 import { PNG } from 'pngjs';
 import pixelmatch from 'pixelmatch';
@@ -88,6 +88,9 @@ export async function compareScreenshotDirs(opts: CompareOpts): Promise<Comparis
   const origin = byPathname(loadManifest(opts.originDir));
   const replica = byPathname(loadManifest(opts.replicaDir));
 
+  const diffDir = opts.diffOutputDir ?? join(opts.replicaDir, 'diff');
+  let diffDirReady = false;
+
   const results: ComparisonResult[] = [];
   for (const [pathname, o] of origin) {
     const r = replica.get(pathname);
@@ -123,9 +126,17 @@ export async function compareScreenshotDirs(opts: CompareOpts): Promise<Comparis
       const diff = new PNG({ width: w, height: h });
       const diffPixels = pixelmatch(oCrop.data, rCrop.data, diff.data, w, h, { threshold: 0.1, includeAA: false });
       const total = w * h;
-      result[vp] = { status: 'ok', score: 1 - diffPixels / total, width: w, height: h, diffPixels, totalPixels: total };
+      if (!diffDirReady) { mkdirSync(diffDir, { recursive: true }); diffDirReady = true; }
+      const diffPath = join(diffDir, `${r.slug}.${vp}.diff.png`);
+      writeFileSync(diffPath, PNG.sync.write(diff));
+      result[vp] = { status: 'ok', score: 1 - diffPixels / total, diffPath, width: w, height: h, diffPixels, totalPixels: total };
     }
     results.push(result);
   }
-  return { version: 1, comparedAt: new Date().toISOString(), results };
+  const out: ComparisonFile = { version: 1, comparedAt: new Date().toISOString(), results };
+  const comparisonPath = join(opts.replicaDir, 'comparison.json');
+  const comparisonTmp = comparisonPath + '.tmp';
+  writeFileSync(comparisonTmp, JSON.stringify(out, null, 2));
+  renameSync(comparisonTmp, comparisonPath);
+  return out;
 }

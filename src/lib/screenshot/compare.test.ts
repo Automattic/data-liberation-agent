@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { PNG } from 'pngjs';
 import { compareScreenshotDirs } from './compare.js';
@@ -124,5 +124,20 @@ describe('compareScreenshotDirs', () => {
     rmSync(join(origin, 'desktop', 'mo.png'));
     const result = await compareScreenshotDirs({ originDir: origin, replicaDir: replica });
     expect(result.results[0].desktop.status).toBe('missing-origin');
+  });
+
+  it('writes a diff PNG and comparison.json', async () => {
+    const origin = join(TMP, 'origin');
+    const replica = join(TMP, 'replica');
+    buildDir(origin, 'https://origin.test/d', 'd', { w: 1440, h: 900, color: [0, 0, 0, 255] });
+    buildDir(replica, 'http://localhost:8881/d', 'd', { w: 1440, h: 900, color: [255, 255, 255, 255] });
+    const result = await compareScreenshotDirs({ originDir: origin, replicaDir: replica });
+    const d = result.results[0].desktop;
+    expect(d.diffPath).toBeDefined();
+    expect(existsSync(d.diffPath!)).toBe(true);
+    expect(existsSync(join(replica, 'comparison.json'))).toBe(true);
+    const onDisk = JSON.parse(readFileSync(join(replica, 'comparison.json'), 'utf8'));
+    expect(onDisk.version).toBe(1);
+    expect(onDisk.results[0].desktop.score).toBeCloseTo(d.score!, 5);
   });
 });
