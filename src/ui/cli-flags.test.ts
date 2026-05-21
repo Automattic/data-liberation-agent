@@ -14,7 +14,8 @@ function parseExtractFlags(args: string[]): {
   captureDesign: boolean;
   includeScripts: boolean;
 } {
-  const captureDesign = args.includes('--html-first');
+  // html-first is the DEFAULT; --no-html-first opts out to the legacy recompose path.
+  const captureDesign = !args.includes('--no-html-first');
   const includeScripts = args.includes('--include-scripts');
   return { captureDesign, includeScripts };
 }
@@ -22,39 +23,36 @@ function parseExtractFlags(args: string[]): {
 // ---------------------------------------------------------------------------
 // CLI flag → WatchOpts plumbing
 // ---------------------------------------------------------------------------
-describe('CLI flag parsing: --html-first and --include-scripts', () => {
-  it('parses --html-first → captureDesign: true', () => {
+describe('CLI flag parsing: html-first default + --include-scripts', () => {
+  it('defaults to html-first (captureDesign: true) with no flags', () => {
     const { captureDesign, includeScripts } = parseExtractFlags([
       'https://example.com',
-      '--html-first',
     ]);
     expect(captureDesign).toBe(true);
     expect(includeScripts).toBe(false);
   });
 
-  it('parses --include-scripts → includeScripts: true', () => {
+  it('--no-html-first opts out → captureDesign: false', () => {
+    const { captureDesign } = parseExtractFlags([
+      'https://example.com',
+      '--no-html-first',
+    ]);
+    expect(captureDesign).toBe(false);
+  });
+
+  it('--include-scripts → includeScripts: true (html-first still the default)', () => {
     const { captureDesign, includeScripts } = parseExtractFlags([
       'https://example.com',
-      '--html-first',
       '--include-scripts',
     ]);
     expect(captureDesign).toBe(true);
     expect(includeScripts).toBe(true);
   });
 
-  it('defaults both to false when neither flag is present', () => {
+  it('--no-html-first + --include-scripts → captureDesign false, includeScripts true (JS is then a no-op)', () => {
     const { captureDesign, includeScripts } = parseExtractFlags([
       'https://example.com',
-    ]);
-    expect(captureDesign).toBe(false);
-    expect(includeScripts).toBe(false);
-  });
-
-  it('--include-scripts without --html-first is still parsed (semantically a no-op)', () => {
-    // The flag is accepted even without --html-first; it just has no effect
-    // because captureDesign=false means no JsAggregator is created.
-    const { captureDesign, includeScripts } = parseExtractFlags([
-      'https://example.com',
+      '--no-html-first',
       '--include-scripts',
     ]);
     expect(captureDesign).toBe(false);
