@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 // src/cli.ts
+import { join } from 'node:path';
 
 const args = process.argv.slice(2);
 
@@ -187,6 +188,21 @@ if (args[0] === 'mcp') {
   await runScreenshotCli({
     url, output: output!, types, limit, concurrency, browserRestartEvery, cdpPort, force, verbose, urlsFile, nonInteractive,
   });
+
+} else if (args[0] === 'compare') {
+  // TODO: expose --viewports / --diff-output-dir flags (the MCP handler already supports them).
+  const originDir = args[1];
+  const replicaDir = args[2];
+  if (!originDir || !replicaDir || originDir.startsWith('-')) {
+    console.error('Error: usage: data-liberation compare <originScreenshotsDir> <replicaScreenshotsDir>');
+    process.exit(1);
+  }
+  const { compareScreenshotDirs } = await import('./lib/screenshot/compare.js');
+  const result = await compareScreenshotDirs({ originDir, replicaDir });
+  for (const r of result.results) {
+    console.log(`${r.pathname}  desktop=${r.desktop.score?.toFixed(3) ?? r.desktop.status}  mobile=${r.mobile.score?.toFixed(3) ?? r.mobile.status}`);
+  }
+  console.log(`\nWrote ${join(replicaDir, 'comparison.json')}`);
 
 } else if (args[0] === 'design-foundation') {
   const outputDir = args[1];

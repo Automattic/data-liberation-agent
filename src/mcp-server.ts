@@ -39,6 +39,7 @@ import { designFoundationValidateHandler } from './mcp-server/handlers/design-fo
 import { designFoundationSaveHandler } from './mcp-server/handlers/design-foundation-save.js';
 import { replicateInventoryHandler } from './mcp-server/handlers/replicate-inventory.js';
 import { replicateVerifyHandler } from './mcp-server/handlers/replicate-verify.js';
+import { compareHandler } from './mcp-server/handlers/compare.js';
 
 // Static adapter imports — add new adapters here (alphabetical)
 import { godaddyWmAdapter } from './adapters/godaddy-wm.js';
@@ -538,11 +539,27 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: ['outputDir', 'replicaBaseUrl', 'urls'],
       },
     },
+    {
+      name: 'liberate_compare',
+      description:
+        'Pixel-parity scorer (fixed viewport). Joins an origin screenshots dir to a replica screenshots dir by URL pathname, crops both full-page PNGs to the top 1440×900 / 390×844 region, and returns per-pathname desktop/mobile similarity scores (1 − diffPixels/total). Writes comparison.json + diff PNGs into the replica dir. Both dirs must have the standard layout: manifest.json + desktop/<slug>.png + mobile/<slug>.png.',
+      inputSchema: {
+        type: 'object' as const,
+        properties: {
+          originDir: { type: 'string', description: 'Origin screenshots dir (manifest.json + desktop/ mobile/).' },
+          replicaDir: { type: 'string', description: 'Replica screenshots dir, same layout. comparison.json + diff/ are written here.' },
+          viewports: { type: 'array', items: { type: 'string', enum: ['desktop', 'mobile'] }, description: 'Viewports to score. Default: both.' },
+          diffOutputDir: { type: 'string', description: 'Where to write diff PNGs. Default: <replicaDir>/diff.' },
+        },
+        required: ['originDir', 'replicaDir'],
+      },
+    },
   ],
 }));
 
 /** Tool name → handler module. */
 const handlers: Record<string, Handler> = {
+  liberate_compare: compareHandler,
   liberate_design_foundation_save: designFoundationSaveHandler,
   liberate_design_foundation_scaffold: designFoundationScaffoldHandler,
   liberate_design_foundation_validate: designFoundationValidateHandler,
