@@ -53,4 +53,29 @@ describe('compareScreenshotDirs', () => {
     const result = await compareScreenshotDirs({ originDir: origin, replicaDir: replica });
     expect(result.results[0].desktop.score).toBeLessThan(0.01);
   });
+
+  it('crops to the shorter common region when origin and replica heights differ', async () => {
+    const origin = join(TMP, 'origin');
+    const replica = join(TMP, 'replica');
+    // full-page heights differ (3000 vs 1200) but top 900 is identical color
+    buildDir(origin, 'https://origin.test/p', 'p', { w: 1440, h: 3000, color: [5, 5, 5, 255] });
+    buildDir(replica, 'http://localhost:8881/p', 'p', { w: 1440, h: 1200, color: [5, 5, 5, 255] });
+
+    const result = await compareScreenshotDirs({ originDir: origin, replicaDir: replica });
+    const d = result.results[0].desktop;
+    expect(d.status).toBe('ok');
+    expect(d.width).toBe(1440);
+    expect(d.height).toBe(900);      // min(3000, 1200, 900)
+    expect(d.score).toBe(1);
+  });
+
+  it('crops to min height when both pages are shorter than the viewport', async () => {
+    const origin = join(TMP, 'origin');
+    const replica = join(TMP, 'replica');
+    buildDir(origin, 'https://origin.test/short', 's', { w: 1440, h: 500, color: [9, 9, 9, 255] });
+    buildDir(replica, 'http://localhost:8881/short', 's', { w: 1440, h: 700, color: [9, 9, 9, 255] });
+
+    const result = await compareScreenshotDirs({ originDir: origin, replicaDir: replica });
+    expect(result.results[0].desktop.height).toBe(500); // min(500, 700, 900)
+  });
 });
