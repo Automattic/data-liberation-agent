@@ -23,6 +23,10 @@ export interface AssembleDesignThemeOpts {
   mediaUrlMap: Map<string, string>;     // source URL → local upload URL
   headLinks: string[];                  // CDN/cross-origin <link>s to re-link
   themeSlug?: string;                   // default 'dla-replica'
+  /** Sanitized site header HTML to bake into the blank theme. */
+  headerHtml?: string;
+  /** Sanitized site footer HTML to bake into the blank theme. */
+  footerHtml?: string;
 }
 
 /**
@@ -42,7 +46,7 @@ export function assembleDesignTheme(opts: AssembleDesignThemeOpts): ReplicaFile[
     ? rewriteMediaUrls(opts.cssText, opts.mediaUrlMap)
     : opts.cssText;
 
-  const files = buildBlankTheme({ themeSlug, hasJs, headLinks: opts.headLinks });
+  const files = buildBlankTheme({ themeSlug, hasJs, headLinks: opts.headLinks, headerHtml: opts.headerHtml, footerHtml: opts.footerHtml });
   files.push({ relativePath: 'site.css', content: siteCss });
   if (hasJs) {
     files.push({ relativePath: 'site.js', content: opts.jsText! });

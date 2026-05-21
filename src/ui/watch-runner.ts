@@ -2138,6 +2138,8 @@ export async function runWatch(opts: WatchOpts): Promise<{ ok: boolean; duration
     let designCaptureCssMediaUrls: string[] | undefined;
     let designCaptureHeadLinks: string[] | undefined;
     let designCaptureSiteJsText: string | undefined;
+    let designCaptureHeaderHtml: string | undefined;
+    let designCaptureFooterHtml: string | undefined;
 
     const wakeWorker = (): void => {
       if (wakeStreamingWorker) {
@@ -2438,6 +2440,8 @@ export async function runWatch(opts: WatchOpts): Promise<{ ok: boolean; duration
             designCaptureCssMediaUrls = result.cssMediaUrls ?? [];
             designCaptureHeadLinks = result.headLinks ?? [];
             designCaptureSiteJsText = result.siteJsText;
+            designCaptureHeaderHtml = result.headerHtml;
+            designCaptureFooterHtml = result.footerHtml;
           }
           appendWatchLog(outDir, {
             event: 'screenshots-captured',
@@ -2669,6 +2673,8 @@ export async function runWatch(opts: WatchOpts): Promise<{ ok: boolean; duration
           mediaUrlMap: designMediaUrlMap,
           headLinks: designCaptureHeadLinks ?? [],
           themeSlug: designThemeSlug,
+          headerHtml: designCaptureHeaderHtml,
+          footerHtml: designCaptureFooterHtml,
         });
 
         writeReplicaFilesToHost({ wpRoot, themeSlug: designThemeSlug, themeFiles });
@@ -2711,6 +2717,8 @@ export async function runWatch(opts: WatchOpts): Promise<{ ok: boolean; duration
           cssMediaUrls: (designCaptureCssMediaUrls ?? []).length,
           headLinksCount: (designCaptureHeadLinks ?? []).length,
           jsBytes: designCaptureSiteJsText ? designCaptureSiteJsText.length : 0,
+          headerHtmlBytes: designCaptureHeaderHtml ? designCaptureHeaderHtml.length : 0,
+          footerHtmlBytes: designCaptureFooterHtml ? designCaptureFooterHtml.length : 0,
           warnings,
         });
       } catch (err) {

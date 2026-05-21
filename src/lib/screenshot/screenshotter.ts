@@ -106,6 +106,8 @@ interface DesignCaptureContext {
   cssMediaUrls: Set<string>;
   baseUrl: string;
   includeScripts: boolean;
+  /** Run-level accumulator: first non-null sanitized header/footer wins. */
+  chromeAccum: { headerHtml: string | null; footerHtml: string | null };
 }
 
 interface CapturePerViewportArgs {
@@ -279,6 +281,7 @@ async function capturePerViewport(args: CapturePerViewportArgs): Promise<void> {
         cssAgg: designCtx.cssAgg,
         jsAgg: designCtx.jsAgg,
         headLinks: designCtx.headLinks,
+        chromeAccum: designCtx.chromeAccum,
       });
       if (designResult) {
         for (const u of designResult.cssMediaUrls) designCtx.cssMediaUrls.add(u);
@@ -389,8 +392,9 @@ export async function captureScreenshots(opts: ScreenshotOpts): Promise<Screensh
   if (opts.captureDesign) {
     cssAgg.init(opts.outputDir);
   }
+  const chromeAccum = { headerHtml: null as string | null, footerHtml: null as string | null };
   const designCtx: DesignCaptureContext | undefined = opts.captureDesign
-    ? { cssAgg, jsAgg, headLinks, cssMediaUrls, baseUrl, includeScripts }
+    ? { cssAgg, jsAgg, headLinks, cssMediaUrls, baseUrl, includeScripts, chromeAccum }
     : undefined;
 
   // --- browser -----------------------------------------------------------
@@ -570,5 +574,7 @@ export async function captureScreenshots(opts: ScreenshotOpts): Promise<Screensh
     cssMediaUrls: designCtx ? [...designCtx.cssMediaUrls] : undefined,
     headLinks: designCtx ? [...designCtx.headLinks] : undefined,
     siteJsText,
+    headerHtml: designCtx?.chromeAccum.headerHtml ?? undefined,
+    footerHtml: designCtx?.chromeAccum.footerHtml ?? undefined,
   };
 }

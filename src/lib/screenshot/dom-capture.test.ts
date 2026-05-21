@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { chromium, type Browser } from 'playwright';
-import { collectBodyFragment, collectStylesheets, collectHeadLinks, collectScripts } from './dom-capture.js';
+import { collectBodyFragment, collectStylesheets, collectHeadLinks, collectScripts, collectBodyAndChrome } from './dom-capture.js';
 
 const FIXTURE = `<!DOCTYPE html><html><head>
   <style>.hero{color:red}</style>
@@ -46,6 +46,47 @@ describe('dom-capture', () => {
     const scripts = await collectScripts(page);
     expect(scripts.some((s) => s.src && s.src.includes('src.test/app.js'))).toBe(true);
     expect(scripts.some((s) => s.inline && s.inline.includes('__x'))).toBe(true);
+    await page.close();
+  });
+});
+
+const CHROME_FIXTURE = `<!DOCTYPE html><html><head></head><body>
+  <header><nav><a href="/">Home</a><a href="/about">About</a></nav></header>
+  <main><h1>Content</h1><p>Body text</p></main>
+  <footer><p>foot &copy; 2025</p></footer>
+</body></html>`;
+
+describe('collectBodyAndChrome', () => {
+  it('extracts header + footer and removes them from the body fragment', async () => {
+    const page = await browser.newPage();
+    await page.setContent(CHROME_FIXTURE);
+    const { bodyFragmentHtml, headerHtml, footerHtml } = await collectBodyAndChrome(page);
+
+    // Header was detected and contains nav link text
+    expect(headerHtml).not.toBeNull();
+    expect(headerHtml).toContain('Home');
+
+    // Footer was detected and contains footer text
+    expect(footerHtml).not.toBeNull();
+    expect(footerHtml).toContain('foot');
+
+    // Chrome elements were removed from the body fragment
+    expect(bodyFragmentHtml).not.toContain('Home');
+    expect(bodyFragmentHtml).not.toContain('foot');
+
+    // Main content is still present
+    expect(bodyFragmentHtml).toContain('Content');
+    await page.close();
+  });
+
+  it('returns null chrome when no header/footer elements exist', async () => {
+    const page = await browser.newPage();
+    await page.setContent('<!DOCTYPE html><html><body><main><p>Only content</p></main></body></html>');
+    const { bodyFragmentHtml, headerHtml, footerHtml } = await collectBodyAndChrome(page);
+    // No semantic header/footer — chrome should be null (heuristic requires score > 2)
+    expect(headerHtml).toBeNull();
+    expect(footerHtml).toBeNull();
+    expect(bodyFragmentHtml).toContain('Only content');
     await page.close();
   });
 });

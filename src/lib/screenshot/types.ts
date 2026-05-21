@@ -88,4 +88,16 @@ export interface ScreenshotResult {
    * includeScripts=false or no first-party scripts were found.
    */
   siteJsText?: string;
+  /**
+   * Sanitized site header HTML extracted from the first captured page that
+   * yielded a detectable header element. Undefined when captureDesign=false or
+   * no header was detected across any captured page.
+   */
+  headerHtml?: string;
+  /**
+   * Sanitized site footer HTML extracted from the first captured page that
+   * yielded a detectable footer element. Undefined when captureDesign=false or
+   * no footer was detected across any captured page.
+   */
+  footerHtml?: string;
 }

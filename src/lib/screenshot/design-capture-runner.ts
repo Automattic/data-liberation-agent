@@ -8,6 +8,7 @@ import { isFirstParty } from './first-party.js';
 import { isAllowlistedCdn, type ScriptInput } from './js-aggregator.js';
 import type { CssAggregator } from './css-aggregator.js';
 import type { JsAggregator } from './js-aggregator.js';
+import { sanitizeSourceHtml } from '../streaming/html-sanitize.js';
 
 const CDN_FONT_HOSTS = ['fonts.gstatic.com', 'fonts.googleapis.com', 'use.typekit.net'];
 
@@ -26,6 +27,15 @@ export interface DesignCaptureRunOpts {
   cssAgg: CssAggregator;
   jsAgg?: JsAggregator;           // present iff includeScripts
   headLinks: Set<string>;         // run-level accumulator of CDN/cross-origin <link> hrefs
+  /**
+   * Run-level accumulators for site chrome. First non-null value detected
+   * across all captured pages wins and is stored for the blank-theme build.
+   * Pass null cells so callers can use a simple `{ current: null }` box.
+   */
+  chromeAccum?: {
+    headerHtml: string | null;
+    footerHtml: string | null;
+  };
   fetchScript?: (url: string) => Promise<string | null>; // injectable for tests; defaults to global fetch
 }
 
@@ -49,6 +59,15 @@ export async function captureDesignForUrl(opts: DesignCaptureRunOpts): Promise<{
   await opts.cssAgg.add(opts.slug, scopeCss(cap.css, opts.slug, false));
   // head links → run-level set (theme re-links them)
   for (const l of cap.headLinks) opts.headLinks.add(l);
+  // Chrome accumulators: first non-null sanitized value across the run wins.
+  if (opts.chromeAccum) {
+    if (opts.chromeAccum.headerHtml === null && cap.headerHtml) {
+      opts.chromeAccum.headerHtml = sanitizeSourceHtml(cap.headerHtml);
+    }
+    if (opts.chromeAccum.footerHtml === null && cap.footerHtml) {
+      opts.chromeAccum.footerHtml = sanitizeSourceHtml(cap.footerHtml);
+    }
+  }
   // scripts → aggregator (fetch external first-party/allowlisted bodies; inline already have content)
   if (opts.includeScripts && opts.jsAgg) {
     const fetcher = opts.fetchScript ?? (async (u: string) => {

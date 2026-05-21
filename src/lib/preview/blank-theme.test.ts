@@ -26,10 +26,49 @@ describe('buildBlankTheme', () => {
     expect(withJs).toContain('cdn.jsdelivr.net');
   });
 
-  it('index.php renders the_content with no header/footer chrome', () => {
+  it('index.php renders the_content with no get_header/get_footer/sidebar calls', () => {
     const idx = buildBlankTheme({ themeSlug: 'dla-replica', hasJs: false, headLinks: [] }).find((f) => f.relativePath === 'index.php')!.content;
     expect(idx).toContain('the_content()');
     expect(idx).not.toMatch(/get_header|get_footer|get_sidebar/);
+  });
+
+  it('index.php includes header/footer chrome wrappers when HTML is provided', () => {
+    const files = buildBlankTheme({
+      themeSlug: 'dla-replica',
+      hasJs: false,
+      headLinks: [],
+      headerHtml: '<nav><a href="/">Home</a></nav>',
+      footerHtml: '<p>Footer text &copy; 2025</p>',
+    });
+    const idx = files.find((f) => f.relativePath === 'index.php')!.content;
+    expect(idx).toContain('<header class="dla-site-header">');
+    expect(idx).toContain('<nav><a href="/">Home</a></nav>');
+    expect(idx).toContain('<footer class="dla-site-footer">');
+    expect(idx).toContain('<p>Footer text &copy; 2025</p>');
+    expect(idx).toContain('.dla-site-header,.dla-site-footer{position:relative;width:100%;}');
+    expect(idx).toContain('<main>');
+    expect(idx).toContain('the_content()');
+  });
+
+  it('index.php omits chrome wrappers when no header/footer HTML is provided', () => {
+    const files = buildBlankTheme({ themeSlug: 'dla-replica', hasJs: false, headLinks: [] });
+    const idx = files.find((f) => f.relativePath === 'index.php')!.content;
+    expect(idx).not.toContain('dla-site-header');
+    expect(idx).not.toContain('dla-site-footer');
+    expect(idx).not.toContain('.dla-site-header');
+    expect(idx).toContain('the_content()');
+  });
+
+  it('index.php emits only header wrapper when only headerHtml provided', () => {
+    const files = buildBlankTheme({
+      themeSlug: 'dla-replica',
+      hasJs: false,
+      headLinks: [],
+      headerHtml: '<nav>Nav only</nav>',
+    });
+    const idx = files.find((f) => f.relativePath === 'index.php')!.content;
+    expect(idx).toContain('<header class="dla-site-header">');
+    expect(idx).not.toContain('<footer class="dla-site-footer">');
   });
 
   it('style.css has a valid theme header', () => {
