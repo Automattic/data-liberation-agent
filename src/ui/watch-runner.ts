@@ -21,6 +21,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { buildThemeScaffold } from '../lib/replicate/theme-scaffold.js';
+import { assembleDesignTheme } from '../lib/preview/assemble-design-theme.js';
 import { extractThemeChromeFromHtml, type ThemeChromeEvidence } from '../lib/replicate/source-chrome.js';
 import { writeReplicaFilesToHost } from '../lib/preview/replica-install.js';
 import { heuristicBlocks } from '../lib/streaming/heuristic-blocks.js';
@@ -172,6 +173,18 @@ export interface WatchOpts {
   shopDomain: string | null;
   /** Skip TUI prompts (CI / piped stdin). When agent is unset, use NO_AGENT. */
   nonInteractive: boolean;
+  /**
+   * When true, activates html-first design capture mode:
+   *   - captureDesign is passed to captureScreenshots so CSS/JS aggregates and
+   *     design sidecars are written during the screenshot pass.
+   *   - At run-end, assembleDesignTheme builds the blank-theme bundle (site.css
+   *     + site.js if scripts were captured) and installs + activates it against
+   *     the running Studio site.
+   *   - The recompose path (foundation-rev, theme-piece, archetype-template
+   *     judgments and per-URL compose-page-blocks agent invocations) is gated
+   *     off so the blank theme and design sidecars are not overwritten.
+   */
+  captureDesign?: boolean;
   /** Caller-supplied event callbacks. The TUI plugs into these to render. */
   events?: WatchEvents;
 }
@@ -1100,6 +1113,21 @@ export function shouldDeferFoundationJudgment(judgment: JudgmentNeeded, outDir: 
   return judgment.kind === 'foundation-rev' && !readCurrentFoundationInputsDigest(outDir);
 }
 
+/**
+ * Returns true for judgment kinds that belong to the replica/recompose path —
+ * design-foundations, theme-piece generation, and archetype-template generation.
+ * When html-first design capture is active, these must NOT run: the blank theme
+ * + design sidecars replace the replica-theme path. Running both would let two
+ * themes compete and cause compose to fight the design fragment.
+ */
+export function isRecomposeJudgment(judgment: JudgmentNeeded): boolean {
+  return (
+    judgment.kind === 'foundation-rev' ||
+    judgment.kind === 'theme-piece' ||
+    judgment.kind === 'archetype-template'
+  );
+}
+
 function readHandledThemePieces(outDir: string): Set<string> {
   if (existsSync(join(outDir, BASE_THEME_REPLICATED_FILENAME))) {
     return new Set(THEME_PIECES);
@@ -1441,9 +1469,19 @@ async function flushPendingImports(opts: {
    *  (re-serialize via createBlock, flatten nested <p>) before insert.
    *  Pass null to skip — markup goes to install unchanged. */
   blockFixer: BlockFixerClient | null;
+  /**
+   * When true (html-first design capture mode), skip the agent
+   * compose-page-blocks path entirely. Design sidecars already carry the
+   * wrapped fragment as contentOverride; the heuristic / raw-html fallback
+   * still runs if no sidecar is present. This prevents compose from
+   * fighting the design fragment or installing block markup on top of it.
+   */
+  designCaptureActive?: boolean;
 }): Promise<{ imported: number; held: number }> {
   const { buffer, outDir, studioSitePath, agent, events, mediaUrlMap, blockFixer } = opts;
-  const composeAvailable = !isNoAgent(agent);
+  // In html-first mode the compose path is gated off: design sidecars are the
+  // canonical content source, and the blank theme replaces compose+replicate.
+  const composeAvailable = !isNoAgent(agent) && !opts.designCaptureActive;
   const foundationReady = existsSync(join(outDir, 'design-foundation.json'));
   const pending = buffer.listPending();
 
@@ -2075,6 +2113,11 @@ export async function runWatch(opts: WatchOpts): Promise<{ ok: boolean; duration
     let studioDrainRequested = false;
     let siteOptionsApplied = false;
     let extractedHere = 0;
+    // Populated by the screenshot promise when captureDesign=true and
+    // captureScreenshots returns a siteCssPath. Used at run-end to assemble +
+    // install the blank design theme.
+    let designCaptureSiteCssPath: string | undefined;
+    let designCaptureCssMediaUrls: string[] | undefined;
 
     const wakeWorker = (): void => {
       if (wakeStreamingWorker) {
@@ -2234,6 +2277,7 @@ export async function runWatch(opts: WatchOpts): Promise<{ ok: boolean; duration
         events,
         mediaUrlMap,
         blockFixer,
+        designCaptureActive: opts.captureDesign ?? false,
       });
       if (flush.imported > 0 || flush.held > 0) {
         appendWatchLog(outDir, {
@@ -2275,6 +2319,20 @@ export async function runWatch(opts: WatchOpts): Promise<{ ok: boolean; duration
       if (interleaved.length > 0) {
         const readyJudgments: JudgmentNeeded[] = [];
         for (const judgment of interleaved) {
+          // html-first gate: skip the recompose path (foundation-rev /
+          // theme-piece / archetype-template) when design capture is active.
+          // The blank theme + design sidecars replace the replica-theme path;
+          // running both would let two themes compete and cause compose to
+          // fight the design fragment.
+          if (opts.captureDesign && isRecomposeJudgment(judgment)) {
+            appendWatchLog(outDir, {
+              event: 'judgment-skipped',
+              judgment,
+              reason: 'html-first-design-capture-active',
+            });
+            judgmentsSkipped += 1;
+            continue;
+          }
           if (shouldDeferFoundationJudgment(judgment, outDir)) {
             deferredFoundationJudgments.push(judgment);
             appendWatchLog(outDir, {
@@ -2339,18 +2397,24 @@ export async function runWatch(opts: WatchOpts): Promise<{ ok: boolean; duration
             outputDir: outDir,
             concurrency: 6,
             server: fakeServer as never,
+            captureDesign: opts.captureDesign ?? false,
             onProgress: (current, total, url) => {
               events.onScreenshotProgress?.(current, total, url);
               screenshotDoneUrls.add(url);
               enqueueReadyIfPossible(url);
             },
           });
+          if (result.siteCssPath) {
+            designCaptureSiteCssPath = result.siteCssPath;
+            designCaptureCssMediaUrls = result.cssMediaUrls ?? [];
+          }
           appendWatchLog(outDir, {
             event: 'screenshots-captured',
             captured: result.captured,
             failed: result.failed,
             skipped: result.skipped,
             durationMs: result.durationMs,
+            ...(result.siteCssPath ? { designCssPath: result.siteCssPath } : {}),
           });
         } catch (err) {
           events.onAdapterLog?.(`screenshot capture failed: ${(err as Error).message}`);
@@ -2404,6 +2468,9 @@ export async function runWatch(opts: WatchOpts): Promise<{ ok: boolean; duration
     events.onPhase?.('tick-drain');
     let finalThemePieceAttempted = false;
     const maybePrependFinalThemePieces = (list: JudgmentNeeded[]): JudgmentNeeded[] => {
+      // html-first gate: do not inject theme-piece judgments when design
+      // capture is active — the blank theme assembly handles styling.
+      if (opts.captureDesign) return list;
       if (finalThemePieceAttempted) return list;
       const next = maybePrependThemePieceJudgments(list, outDir, agent);
       if (next.some((j) => j.kind === 'theme-piece')) {
@@ -2411,14 +2478,32 @@ export async function runWatch(opts: WatchOpts): Promise<{ ok: boolean; duration
       }
       return next;
     };
-    judgments = maybePrependThemePieceJudgments(
-      ensureFinalFoundationJudgment(
-        [...deferredFoundationJudgments, ...(await scheduler.drain())],
-        outDir,
-      ),
-      outDir,
-      agent,
-    );
+    // html-first gate: filter recompose judgments before queueing.
+    const filterForDesignMode = (list: JudgmentNeeded[]): JudgmentNeeded[] => {
+      if (!opts.captureDesign) return list;
+      const filtered = list.filter((j) => !isRecomposeJudgment(j));
+      const skippedCount = list.length - filtered.length;
+      if (skippedCount > 0) {
+        appendWatchLog(outDir, {
+          event: 'recompose-judgments-gated',
+          count: skippedCount,
+          reason: 'html-first-design-capture-active',
+        });
+        judgmentsSkipped += skippedCount;
+      }
+      return filtered;
+    };
+    const rawFinalJudgments = opts.captureDesign
+      ? [...deferredFoundationJudgments, ...(await scheduler.drain())]
+      : maybePrependThemePieceJudgments(
+          ensureFinalFoundationJudgment(
+            [...deferredFoundationJudgments, ...(await scheduler.drain())],
+            outDir,
+          ),
+          outDir,
+          agent,
+        );
+    judgments = filterForDesignMode(rawFinalJudgments);
     deferredFoundationJudgments.length = 0;
     events.onJudgmentsReady?.(judgments);
     appendWatchLog(outDir, { event: 'tick-drained', judgmentCount: judgments.length });
@@ -2455,6 +2540,69 @@ export async function runWatch(opts: WatchOpts): Promise<{ ok: boolean; duration
     if (studioSitePath) {
       requestStudioDrain();
       await drainStudioWork();
+    }
+
+    // html-first design theme assembly (run-end).
+    // When captureDesign mode produced a site.css aggregate, assemble the
+    // blank-theme bundle and install + activate it against the running Studio
+    // site. This replaces the replica-theme scaffold for html-first runs:
+    // the blank theme carries site.css (and site.js when --include-scripts is
+    // active) and re-links CDN fonts/fonts instead of a block-theme scaffold.
+    if (opts.captureDesign && designCaptureSiteCssPath && studioSitePath) {
+      try {
+        const wpRoot = studioWpRoot(studioSitePath);
+        if (!wpRoot) {
+          throw new Error(`could not locate wp-content under Studio site path: ${studioSitePath}`);
+        }
+        const { readFileSync: readSiteCss } = await import('node:fs');
+        const cssText = readSiteCss(designCaptureSiteCssPath, 'utf8');
+
+        // Collect run-level headLinks from the design/<slug>.headlinks.json
+        // files written by captureDesignForUrl, if present — or fall back to
+        // an empty list (fonts will still load from CDN via the source HTML).
+        // headLinks are stored in the run-level cssMediaUrls set; for now we
+        // pass the accumulated cssMediaUrls as the mediaUrlMap for CSS rewrites.
+        const designMediaUrlMap = new Map<string, string>();
+        for (const [sourceUrl, localUrl] of mediaUrlMap.entries()) {
+          if (localUrl) designMediaUrlMap.set(sourceUrl, localUrl);
+        }
+
+        const designThemeSlug = 'dla-replica';
+        const themeFiles = assembleDesignTheme({
+          outputDir: outDir,
+          cssText,
+          jsText: undefined,  // site.js from JsAggregator is a Task 12 addition
+          mediaUrlMap: designMediaUrlMap,
+          headLinks: [],       // headLinks are accumulated in designCtx; not yet threaded through ScreenshotResult (Task 12)
+          themeSlug: designThemeSlug,
+        });
+
+        writeReplicaFilesToHost({ wpRoot, themeSlug: designThemeSlug, themeFiles });
+
+        const warnings: string[] = [];
+        try {
+          const { stdout: _activateOut } = await execFileAsync(
+            'studio',
+            ['wp', '--path', studioSitePath, 'theme', 'activate', designThemeSlug],
+            { timeout: 60_000, maxBuffer: 10 * 1024 * 1024 },
+          );
+        } catch (err) {
+          warnings.push(`Theme activate "${designThemeSlug}" failed: ${(err as Error).message.trim()}`);
+        }
+
+        appendWatchLog(outDir, {
+          event: 'design-theme-installed',
+          themeSlug: designThemeSlug,
+          cssBytes: cssText.length,
+          cssMediaUrls: (designCaptureCssMediaUrls ?? []).length,
+          warnings,
+        });
+      } catch (err) {
+        appendWatchLog(outDir, {
+          event: 'design-theme-install-failed',
+          error: (err as Error).message,
+        });
+      }
     }
   } finally {
     log.releaseLock();
