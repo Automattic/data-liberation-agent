@@ -538,12 +538,26 @@ export async function captureScreenshots(opts: ScreenshotOpts): Promise<Screensh
         sendLog(server, `[warn] design cssAgg serialize failed: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
+    // Serialize design JS aggregate when includeScripts=true and content was collected
+    if (designCtx && designCtx.jsAgg) {
+      const jsText = designCtx.jsAgg.toString().trim();
+      if (jsText) {
+        try {
+          writeFileSync(join(opts.outputDir, 'site.js'), jsText, 'utf8');
+        } catch (err) {
+          sendLog(server, `[warn] design jsAgg serialize failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+    }
     try { await browser.close(); } catch { /* best-effort */ }
   }
 
   const siteCssPath = designCtx && designCtx.cssAgg.toString().trim()
     ? join(opts.outputDir, 'site.css')
     : undefined;
+
+  const siteJsTextRaw = designCtx?.jsAgg?.toString().trim();
+  const siteJsText = siteJsTextRaw || undefined;
 
   return {
     captured,
@@ -554,5 +568,7 @@ export async function captureScreenshots(opts: ScreenshotOpts): Promise<Screensh
     manifestPath,
     siteCssPath,
     cssMediaUrls: designCtx ? [...designCtx.cssMediaUrls] : undefined,
+    headLinks: designCtx ? [...designCtx.headLinks] : undefined,
+    siteJsText,
   };
 }

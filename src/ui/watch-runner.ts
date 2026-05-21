@@ -185,6 +185,11 @@ export interface WatchOpts {
    *     off so the blank theme and design sidecars are not overwritten.
    */
   captureDesign?: boolean;
+  /**
+   * When true, carry the source's first-party JavaScript into the JS aggregate
+   * (site.js). Only meaningful when captureDesign=true. Default: false.
+   */
+  includeScripts?: boolean;
   /** Caller-supplied event callbacks. The TUI plugs into these to render. */
   events?: WatchEvents;
 }
@@ -2118,6 +2123,8 @@ export async function runWatch(opts: WatchOpts): Promise<{ ok: boolean; duration
     // install the blank design theme.
     let designCaptureSiteCssPath: string | undefined;
     let designCaptureCssMediaUrls: string[] | undefined;
+    let designCaptureHeadLinks: string[] | undefined;
+    let designCaptureSiteJsText: string | undefined;
 
     const wakeWorker = (): void => {
       if (wakeStreamingWorker) {
@@ -2398,6 +2405,7 @@ export async function runWatch(opts: WatchOpts): Promise<{ ok: boolean; duration
             concurrency: 6,
             server: fakeServer as never,
             captureDesign: opts.captureDesign ?? false,
+            includeScripts: opts.includeScripts ?? false,
             onProgress: (current, total, url) => {
               events.onScreenshotProgress?.(current, total, url);
               screenshotDoneUrls.add(url);
@@ -2407,6 +2415,8 @@ export async function runWatch(opts: WatchOpts): Promise<{ ok: boolean; duration
           if (result.siteCssPath) {
             designCaptureSiteCssPath = result.siteCssPath;
             designCaptureCssMediaUrls = result.cssMediaUrls ?? [];
+            designCaptureHeadLinks = result.headLinks ?? [];
+            designCaptureSiteJsText = result.siteJsText;
           }
           appendWatchLog(outDir, {
             event: 'screenshots-captured',
@@ -2557,11 +2567,6 @@ export async function runWatch(opts: WatchOpts): Promise<{ ok: boolean; duration
         const { readFileSync: readSiteCss } = await import('node:fs');
         const cssText = readSiteCss(designCaptureSiteCssPath, 'utf8');
 
-        // Collect run-level headLinks from the design/<slug>.headlinks.json
-        // files written by captureDesignForUrl, if present — or fall back to
-        // an empty list (fonts will still load from CDN via the source HTML).
-        // headLinks are stored in the run-level cssMediaUrls set; for now we
-        // pass the accumulated cssMediaUrls as the mediaUrlMap for CSS rewrites.
         const designMediaUrlMap = new Map<string, string>();
         for (const [sourceUrl, localUrl] of mediaUrlMap.entries()) {
           if (localUrl) designMediaUrlMap.set(sourceUrl, localUrl);
@@ -2571,9 +2576,9 @@ export async function runWatch(opts: WatchOpts): Promise<{ ok: boolean; duration
         const themeFiles = assembleDesignTheme({
           outputDir: outDir,
           cssText,
-          jsText: undefined,  // site.js from JsAggregator is a Task 12 addition
+          jsText: designCaptureSiteJsText,
           mediaUrlMap: designMediaUrlMap,
-          headLinks: [],       // headLinks are accumulated in designCtx; not yet threaded through ScreenshotResult (Task 12)
+          headLinks: designCaptureHeadLinks ?? [],
           themeSlug: designThemeSlug,
         });
 
@@ -2595,6 +2600,8 @@ export async function runWatch(opts: WatchOpts): Promise<{ ok: boolean; duration
           themeSlug: designThemeSlug,
           cssBytes: cssText.length,
           cssMediaUrls: (designCaptureCssMediaUrls ?? []).length,
+          headLinksCount: (designCaptureHeadLinks ?? []).length,
+          jsBytes: designCaptureSiteJsText ? designCaptureSiteJsText.length : 0,
           warnings,
         });
       } catch (err) {

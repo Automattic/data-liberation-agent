@@ -130,6 +130,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           limit: { type: 'number', description: 'Cap extraction to the first N URLs and write a real WXR for them' },
           verbose: { type: 'boolean', description: 'Enable detailed per-page logging' },
           screenshots: { type: 'boolean', description: 'After extract completes, capture screenshots (desktop + mobile) for every processed URL. Results are written to output/<site>/screenshots/ with a manifest.json keyed by URL.' },
+          includeScripts: { type: 'boolean', description: 'Carry the source\'s first-party JavaScript into site.js during design capture. Only meaningful when html-first design capture is active (captureDesign=true). Default: false. Use only for sites you own or trust.' },
         },
         required: ['url', 'outputDir'],
       },

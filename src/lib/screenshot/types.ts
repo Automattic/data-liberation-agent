@@ -76,4 +76,16 @@ export interface ScreenshotResult {
   siteCssPath?: string;
   /** CSS media URLs discovered across all captured page/post CSS. */
   cssMediaUrls?: string[];
+  /**
+   * Deduplicated <link> hrefs collected from all captured page <head> elements
+   * during design capture (fonts, preconnects, etc.). Empty array when
+   * captureDesign=false.
+   */
+  headLinks?: string[];
+  /**
+   * Aggregated first-party JS text from JsAggregator.toString() when
+   * includeScripts=true and at least one script was collected. Undefined when
+   * includeScripts=false or no first-party scripts were found.
+   */
+  siteJsText?: string;
 }

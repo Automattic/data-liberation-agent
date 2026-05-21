@@ -48,6 +48,11 @@ if (args[0] === 'mcp') {
     --no-screenshots               Skip screenshots (default: screenshots are captured after extract)
     --screenshots-concurrency <N>  Parallel screenshot captures (default 6, max 10)
                          (writes output/<site>/screenshots/ with a manifest.json keyed by URL)
+    --html-first                   Activate html-first design capture: accumulates site.css + design sidecars
+                         during the screenshot pass and assembles a blank-theme bundle at run-end.
+                         (long-term plan: default after T13 E2E gate passes; opt-in flag for now)
+    --include-scripts              Carry the source's first-party JavaScript into site.js.
+                         Only meaningful with --html-first. Use only for sites you own or trust.
 
   Streaming options (default behavior):
     --no-watch           Run the legacy batch pipeline instead of the streaming watch loop
@@ -286,6 +291,13 @@ if (args[0] === 'mcp') {
   const screenshots = !args.includes('--no-screenshots');
   const rawSsConcurrency = getArg('--screenshots-concurrency') ? parseInt(getArg('--screenshots-concurrency')!, 10) : null;
   const screenshotsConcurrency = rawSsConcurrency !== null && !Number.isNaN(rawSsConcurrency) ? rawSsConcurrency : undefined;
+  // html-first design capture (opt-in). Long-term plan: flip to default after
+  // the T13 E2E gate passes; ship as a flag until that gate is green.
+  const captureDesign = args.includes('--html-first');
+  const includeScripts = args.includes('--include-scripts');
+  if (includeScripts) {
+    process.stderr.write('[design] --include-scripts: carrying the source\'s FIRST-PARTY JavaScript. Use only for sites you own or trust.\n');
+  }
 
   // Streaming flags.
   const noWatch = args.includes('--no-watch');
@@ -315,6 +327,8 @@ if (args[0] === 'mcp') {
       adminToken,
       shopDomain,
       nonInteractive,
+      captureDesign,
+      includeScripts,
     });
     process.exit(result.ok ? 0 : 1);
   } else {
