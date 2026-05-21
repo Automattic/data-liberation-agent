@@ -39,11 +39,19 @@
  *
  * Style
  * ─────
- * - background: getComputedStyle of the header. When transparent, walks the
- *   nearest opaque ancestor up to <body> (depth ≤ 5).
- * - textColor: getComputedStyle.color of a representative nav link (first <a>
- *   that has non-empty trimmed text inside the detected nav scope).
- * - fontFamily: same representative link; trimmed to the first family name.
+ * - background: Effective header background. Scans the header element itself
+ *   then all descendants that span ≥60% width / ≥50% height of the header box
+ *   (catches Wix bgLayers/colorUnderlay). First opaque background-color wins.
+ *   If an element has background-image instead (gradient/image), the image value
+ *   is emitted as `backgroundImage` with `background` set to 'transparent'.
+ *   Falls back to walking ancestors (depth ≤ 5) when no painted descendant found.
+ * - backgroundImage: Populated when the effective background is a CSS gradient
+ *   or image (background-image, not a solid color). Consumers should apply this
+ *   as a CSS background-image on the header container.
+ * - textColor: getComputedStyle.color of the deepest text-leaf element inside
+ *   the representative nav link (the painted label <div>, not the outer <a>).
+ *   Falls back to the <a> then the header element.
+ * - fontFamily: same label element; trimmed to the first family name.
  * - ctaBackground / ctaTextColor: from the CTA element when present.
  * - height: header.getBoundingClientRect().height.
  *
@@ -64,6 +72,12 @@ export interface ExtractedNav {
   style: {
     /** Header background-color (rgba string). May be 'transparent' or 'rgba(0,0,0,0)' when indeterminate. */
     background: string;
+    /**
+     * Header background-image value when the effective background is an image/gradient
+     * rather than a solid color (e.g. Wix bgLayers with a gradient or image overlay).
+     * When set, takes precedence over `background` for visual rendering.
+     */
+    backgroundImage?: string;
     /** Color of a representative nav link. */
     textColor: string;
     /** CTA background-color, or null. */
@@ -194,28 +208,71 @@ export function extractNav(headerEl: Element): ExtractedNav {
   }
 
   // ── Style ─────────────────────────────────────────────────────────────────
-  // Background: walk up from header to find first opaque ancestor.
-  const getBackground = (): string => {
+  // Background: scan the header element AND descendants that span roughly the
+  // full header box (width ≥ ~60% of header width AND height ≥ ~50% of header
+  // height). This catches Wix's colorUnderlay/bgLayers descendants that carry
+  // the dark background-color. Falls back to walking ancestors (original logic).
+  const getBackground = (): { background: string; backgroundImage?: string } => {
     const TRANSPARENT = ['transparent', 'rgba(0, 0, 0, 0)'];
-    let el: Element | null = headerEl;
+    const headerRect = (headerEl as HTMLElement).getBoundingClientRect();
+    const minW = headerRect.width * 0.6;
+    const minH = headerRect.height * 0.5;
+
+    // Candidates: header itself first, then all descendants in DOM order.
+    const candidates: Element[] = [headerEl, ...Array.from(headerEl.querySelectorAll('*'))];
+
+    for (const el of candidates) {
+      const rect = (el as HTMLElement).getBoundingClientRect();
+      // For the header itself (depth=0) skip size check; for descendants require span.
+      const isHeader = el === headerEl;
+      const spansHeader = isHeader || (rect.width >= minW && rect.height >= minH);
+      if (!spansHeader) continue;
+
+      const cs = getComputedStyle(el as HTMLElement);
+      const bg = cs.backgroundColor;
+      if (bg && !TRANSPARENT.includes(bg)) return { background: bg };
+
+      const bgImage = cs.backgroundImage;
+      if (bgImage && bgImage !== 'none') return { background: 'transparent', backgroundImage: bgImage };
+    }
+
+    // Fallback: walk up ancestors (original logic).
+    let el: Element | null = headerEl.parentElement;
     for (let depth = 0; depth <= 5 && el; depth++) {
       const bg = getComputedStyle(el as HTMLElement).backgroundColor;
-      if (bg && !TRANSPARENT.includes(bg)) return bg;
+      if (bg && !TRANSPARENT.includes(bg)) return { background: bg };
       el = el.parentElement;
     }
-    return getComputedStyle(headerEl as HTMLElement).backgroundColor;
+    return { background: getComputedStyle(headerEl as HTMLElement).backgroundColor };
+  };
+
+  // Find the deepest element that directly contains a menu item's visible text
+  // (no child elements, i.e. a text-only leaf). This is the actual painted label
+  // element — e.g. the <div class="label"> inside a Wix <a> — which carries the
+  // correct text color and font.
+  const findLabelElement = (anchorEl: HTMLAnchorElement): Element => {
+    // Walk descendants in DOM order, find leaves (no children) with non-empty text.
+    const leaves = Array.from(anchorEl.querySelectorAll('*')).filter((el) =>
+      el.children.length === 0 && (el.textContent?.trim() ?? '') !== ''
+    );
+    // Return the last one (innermost label) if found, else the anchor itself.
+    return leaves[leaves.length - 1] ?? anchorEl;
   };
 
   // Representative link for text/font extraction
-  const repLink = (navEl.querySelector('a') as HTMLAnchorElement | null) ?? (headerEl.querySelector('a') as HTMLAnchorElement | null);
-  const repCs = repLink ? getComputedStyle(repLink) : getComputedStyle(headerEl as HTMLElement);
+  const repAnchor = (navEl.querySelector('a') as HTMLAnchorElement | null) ?? (headerEl.querySelector('a') as HTMLAnchorElement | null);
+  // Use the deepest label element inside the anchor for color/font, not the <a> itself.
+  const repLabelEl = repAnchor ? findLabelElement(repAnchor) : null;
+  const repCs = repLabelEl
+    ? getComputedStyle(repLabelEl as HTMLElement)
+    : (repAnchor ? getComputedStyle(repAnchor) : getComputedStyle(headerEl as HTMLElement));
 
   const textColor = repCs.color || '#000000';
   const rawFamily = repCs.fontFamily || '';
   // Trim to first family: e.g. '"Open Sans", sans-serif' → 'Open Sans'
   const fontFamily = rawFamily.split(',')[0].trim().replace(/^["']|["']$/g, '');
 
-  const background = getBackground();
+  const { background, backgroundImage } = getBackground();
   const height = (headerEl as HTMLElement).getBoundingClientRect().height;
 
   let ctaBackground: string | null = null;
@@ -229,13 +286,23 @@ export function extractNav(headerEl: Element): ExtractedNav {
     ctaTextColor = ctaCs.color || null;
   }
 
+  const styleResult: ExtractedNav['style'] = {
+    background,
+    textColor,
+    ctaBackground,
+    ctaTextColor,
+    fontFamily,
+    height,
+  };
+  if (backgroundImage) styleResult.backgroundImage = backgroundImage;
+
   return {
     logoSrc,
     logoAlt,
     siteTitle: siteTitle || null,
     items,
     cta,
-    style: { background, textColor, ctaBackground, ctaTextColor, fontFamily, height },
+    style: styleResult,
   };
 }
 

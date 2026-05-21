@@ -61,6 +61,7 @@ export interface BlockHeaderOpts {
  */
 export function buildBlockHeader(nav: ExtractedNav, opts: BlockHeaderOpts = {}): string {
   const bg = nav.style.background || 'var(--wp--preset--color--base)';
+  const bgImage = nav.style.backgroundImage;
   const textColor = nav.style.textColor || 'var(--wp--preset--color--contrast)';
   const fontFamily = nav.style.fontFamily
     ? `"${nav.style.fontFamily}"`
@@ -82,7 +83,7 @@ export function buildBlockHeader(nav: ExtractedNav, opts: BlockHeaderOpts = {}):
 <!-- /wp:group -->`;
 
   // ── Outer header group (full-width flex, space-between) ───────────────────
-  const outerStyle = JSON.stringify({
+  const outerStyle: Record<string, unknown> = {
     color: { background: bg },
     spacing: {
       padding: {
@@ -92,10 +93,25 @@ export function buildBlockHeader(nav: ExtractedNav, opts: BlockHeaderOpts = {}):
         right: '1.5rem',
       },
     },
-  });
+  };
 
-  return `<!-- wp:group {"tagName":"header","align":"full","style":${outerStyle},"layout":{"type":"flex","flexWrap":"nowrap","justifyContent":"space-between","verticalAlignment":"center"}} -->
-<header class="wp-block-group alignfull" style="background-color:${bg};padding-top:0.75rem;padding-right:1.5rem;padding-bottom:0.75rem;padding-left:1.5rem">${logoBlock}${rightGroup}</header>
+  // Build the inline style string for the <header> element.
+  // When backgroundImage is present, apply it alongside background-color so
+  // the gradient/image is painted and a fallback color is still declared.
+  const inlineStyles: string[] = [
+    `background-color:${bg}`,
+    `padding-top:0.75rem`,
+    `padding-right:1.5rem`,
+    `padding-bottom:0.75rem`,
+    `padding-left:1.5rem`,
+  ];
+  if (bgImage) {
+    inlineStyles.splice(1, 0, `background-image:${bgImage}`);
+  }
+  const inlineStyle = inlineStyles.join(';');
+
+  return `<!-- wp:group {"tagName":"header","align":"full","style":${JSON.stringify(outerStyle)},"layout":{"type":"flex","flexWrap":"nowrap","justifyContent":"space-between","verticalAlignment":"center"}} -->
+<header class="wp-block-group alignfull" style="${inlineStyle}">${logoBlock}${rightGroup}</header>
 <!-- /wp:group -->`;
 }
 

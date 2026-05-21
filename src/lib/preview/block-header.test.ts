@@ -107,4 +107,26 @@ describe('buildBlockHeader', () => {
     // The CTA colors from nav.style should be in the button markup
     expect(markup).toContain('rgb(0, 100, 200)');
   });
+
+  it('applies background-image inline style when style.backgroundImage is present', () => {
+    const navWithBgImage: ExtractedNav = {
+      ...SAMPLE_NAV,
+      style: {
+        ...SAMPLE_NAV.style,
+        background: 'transparent',
+        backgroundImage: 'linear-gradient(90deg, rgb(10, 10, 80) 0%, rgb(80, 10, 80) 100%)',
+      },
+    };
+    const markup = buildBlockHeader(navWithBgImage);
+    // backgroundImage must be in the inline style of the <header> element
+    expect(markup).toContain('background-image:linear-gradient(90deg, rgb(10, 10, 80) 0%, rgb(80, 10, 80) 100%)');
+    // background-color should also still be present (fallback)
+    expect(markup).toContain('background-color:transparent');
+  });
+
+  it('does NOT emit background-image style when style.backgroundImage is absent', () => {
+    const markup = buildBlockHeader(SAMPLE_NAV);
+    // No backgroundImage field → no background-image in inline style
+    expect(markup).not.toContain('background-image:');
+  });
 });

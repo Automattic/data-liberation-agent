@@ -29,6 +29,59 @@ const FIXTURE_HEADER = `<!DOCTYPE html><html><head>
   <footer><p>&copy; 2025 Acme Corp</p></footer>
 </body></html>`;
 
+// Fixture: Wix-style nested DOM — header has transparent background, the dark
+// background lives on a full-size descendant div (colorUnderlay), and nav item
+// text color + font live on a label <div> INSIDE the <a>, not the <a> itself.
+const FIXTURE_WIX_NESTED = `<!DOCTYPE html><html><head>
+  <style>
+    body { margin: 0; }
+    header { display: flex; position: relative; width: 100%; height: 70px; background: rgba(0,0,0,0); align-items: center; }
+    .bg-layers { position: absolute; inset: 0; width: 100%; height: 100%; }
+    .color-underlay { width: 100%; height: 100%; background-color: rgb(25, 25, 35); }
+    .nav-container { display: flex; gap: 16px; position: relative; z-index: 1; align-items: center; padding: 0 24px; width: 100%; }
+    .nav-container a { color: rgba(0,0,0,0); text-decoration: none; font-family: serif; }
+    .menu-item-label { color: rgb(255, 255, 255); font-family: Georgia, serif; }
+    img.logo { height: 40px; }
+  </style>
+</head><body>
+  <header>
+    <div class="bg-layers">
+      <div data-testid="colorUnderlay" class="color-underlay"></div>
+    </div>
+    <div class="nav-container">
+      <img class="logo" src="https://example.com/wix-logo.png" alt="Wix Site">
+      <nav>
+        <a href="/home"><div class="menu-item-label" style="color: rgb(255, 255, 255); font-family: Georgia, serif;">HOME</div></a>
+        <a href="/about"><div class="menu-item-label" style="color: rgb(255, 255, 255); font-family: Georgia, serif;">ABOUT</div></a>
+        <a href="/contact"><div class="menu-item-label" style="color: rgb(255, 255, 255); font-family: Georgia, serif;">CONTACT</div></a>
+      </nav>
+    </div>
+  </header>
+  <main><p>Content goes here with some text to fill the page properly.</p></main>
+  <footer><p>Footer</p></footer>
+</body></html>`;
+
+// Fixture: header whose effective background is a CSS gradient (background-image),
+// not a solid color — tests the backgroundImage extraction path.
+const FIXTURE_GRADIENT_BG = `<!DOCTYPE html><html><head>
+  <style>
+    body { margin: 0; }
+    header { display: flex; width: 100%; height: 64px; background: rgba(0,0,0,0); align-items: center; padding: 0 24px; }
+    .header-bg { position: absolute; inset: 0; width: 100%; height: 100%; background-image: linear-gradient(90deg, rgb(10, 10, 80) 0%, rgb(80, 10, 80) 100%); background-color: rgba(0,0,0,0); }
+    nav a { color: rgb(255,255,255); font-family: Arial, sans-serif; }
+  </style>
+</head><body>
+  <header style="position:relative">
+    <div class="header-bg"></div>
+    <nav style="position:relative;z-index:1">
+      <a href="/home">Home</a>
+      <a href="/about">About</a>
+    </nav>
+  </header>
+  <main><p>Content here.</p></main>
+  <footer><p>ft</p></footer>
+</body></html>`;
+
 // Fixture: header with no logo (site title only), no explicit CTA
 const FIXTURE_NO_LOGO = `<!DOCTYPE html><html><head>
   <style>
@@ -179,6 +232,33 @@ describe('extractNav (browser fixture)', () => {
     } finally {
       await page.close();
     }
+  });
+
+  it('extracts effective background from Wix-style nested colorUnderlay descendant (NOT transparent header)', async () => {
+    const nav = await runExtractNav(FIXTURE_WIX_NESTED);
+    expect(nav).not.toBeNull();
+    // The dark background lives on .color-underlay, NOT the header itself.
+    // Extraction must NOT return transparent — it must find rgb(25, 25, 35).
+    expect(nav!.style.background).toMatch(/rgb\(25,\s*25,\s*35\)/);
+    expect(nav!.style.background).not.toMatch(/rgba\(0,\s*0,\s*0,\s*0\)/);
+    expect(nav!.style.background).not.toBe('transparent');
+  });
+
+  it('extracts text color + fontFamily from deepest label element inside <a> (not the <a> itself)', async () => {
+    const nav = await runExtractNav(FIXTURE_WIX_NESTED);
+    expect(nav).not.toBeNull();
+    // The <a> itself has transparent color; the <div class="menu-item-label"> has white.
+    expect(nav!.style.textColor).toMatch(/rgb\(255,\s*255,\s*255\)/);
+    // Font is Georgia on the label div, not the generic serif on the <a>.
+    expect(nav!.style.fontFamily.toLowerCase()).toContain('georgia');
+  });
+
+  it('extracts background-image when effective background is a gradient, not a solid color', async () => {
+    const nav = await runExtractNav(FIXTURE_GRADIENT_BG);
+    expect(nav).not.toBeNull();
+    // Should capture background-image (gradient) not fall through to transparent.
+    expect(nav!.style.backgroundImage).toBeDefined();
+    expect(nav!.style.backgroundImage).toMatch(/linear-gradient/i);
   });
 });
 
