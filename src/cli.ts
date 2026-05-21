@@ -204,6 +204,17 @@ if (args[0] === 'mcp') {
   }
   console.log(`\nWrote ${join(replicaDir, 'comparison.json')}`);
 
+} else if (args[0] === 'freeze-spike') {
+  const originUrl = getArg('--origin-url');
+  const replicaBaseUrl = getArg('--replica-base-url');
+  const output = getArg('--output');
+  if (!originUrl || !replicaBaseUrl || !output) {
+    console.error('Error: usage: data-liberation freeze-spike --origin-url <url> --replica-base-url <url> --output <dir>');
+    process.exit(1);
+  }
+  const { runFreezeSpike } = await import('./ui/spike-runner.js');
+  await runFreezeSpike({ originUrl, replicaBaseUrl, outputDir: output });
+
 } else if (args[0] === 'design-foundation') {
   const outputDir = args[1];
   if (!outputDir || outputDir.startsWith('-')) {
