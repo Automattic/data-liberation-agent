@@ -53,11 +53,30 @@ export function resolveMediaPath(filename: string, outputDir: string): string {
 // *before* `/:/`, not after. basename(pathname) returns the transform spec
 // which is useless as a filename. Detect the marker and use the preceding
 // segment instead.
+// Make a derived filename safe for the download→WP-upload→serve→rewrite chain.
+// Spaces and %-encoding (common in Wix CDN paths like `logo%20white.png`) break
+// the served path and the source→local rewrite match, so slugify the base
+// (decode first, then spaces/unsafe chars → '-') while preserving the extension.
+export function sanitizeMediaFilename(name: string): string {
+  if (!name) return name;
+  let decoded = name;
+  try { decoded = decodeURIComponent(name); } catch { /* malformed escape — keep raw */ }
+  const ext = extname(decoded);
+  const base = ext ? decoded.slice(0, -ext.length) : decoded;
+  const safeBase = base
+    .normalize('NFKD')
+    .replace(/[^a-zA-Z0-9._-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^[-.]+|[-.]+$/g, '') || 'image';
+  const safeExt = ext.replace(/[^a-zA-Z0-9.]/g, '');
+  return `${safeBase}${safeExt}`;
+}
+
 export function deriveFilenameFromUrl(urlObj: URL): string {
   const path = urlObj.pathname;
   const marker = path.indexOf('/:/');
   const effectivePath = marker >= 0 ? path.slice(0, marker) : path;
-  return basename(effectivePath);
+  return sanitizeMediaFilename(basename(effectivePath));
 }
 
 // Map common image content-types to file extensions. Used when the URL
