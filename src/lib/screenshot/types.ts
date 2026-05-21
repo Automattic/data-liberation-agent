@@ -100,4 +100,12 @@ export interface ScreenshotResult {
    * no footer was detected across any captured page.
    */
   footerHtml?: string;
+  /**
+   * Responsive chrome CSS generated from dual-viewport (desktop + mobile) baked
+   * layout maps. Uses `@media (min-width: 768px)` for desktop rules and
+   * `@media (max-width: 767px)` for mobile rules keyed on `.dla-fx-N` marker
+   * classes. Undefined when captureDesign=false, no chrome was detected, or only
+   * desktop layout was available (falls back to desktop-only rules).
+   */
+  chromeCssText?: string;
 }

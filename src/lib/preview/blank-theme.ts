@@ -16,10 +16,16 @@ export interface BlankThemeOpts {
   headerHtml?: string;
   /** Sanitized site footer HTML to emit as a real theme chrome element. */
   footerHtml?: string;
+  /**
+   * Responsive chrome CSS (from generateChromeCss dual-viewport bake).
+   * When present, chrome.css is written as a theme file and enqueued after
+   * site.css so its @media rules override site.css for the chrome markers.
+   */
+  hasChromeCss?: boolean;
 }
 
 export function buildBlankTheme(opts: BlankThemeOpts): ReplicaFile[] {
-  const { themeSlug, hasJs, headLinks, headerHtml, footerHtml } = opts;
+  const { themeSlug, hasJs, headLinks, headerHtml, footerHtml, hasChromeCss } = opts;
 
   const styleCss = `/*
 Theme Name: DLA Replica (${themeSlug})
@@ -44,6 +50,12 @@ add_action('send_headers', function () {
 });`
     : '';
 
+  // chrome.css is enqueued AFTER site.css (depends on it) so its @media rules
+  // override any responsive rules in site.css for .dla-fx-N marker selectors.
+  const chromeCssEnqueue = hasChromeCss
+    ? `  wp_enqueue_style('dla-chrome', get_stylesheet_directory_uri() . '/chrome.css', array('dla-site'), null);`
+    : '';
+
   const functionsPhp = `<?php
 // The carried fragment is raw HTML — prevent WordPress content filters from
 // mangling it. wpautop inserts stray <p> tags; wptexturize alters quotes/dashes.
@@ -52,6 +64,7 @@ remove_filter('the_content', 'wptexturize');
 
 add_action('wp_enqueue_scripts', function () {
   wp_enqueue_style('dla-site', get_stylesheet_directory_uri() . '/site.css', array(), null);
+${chromeCssEnqueue}
 ${fontEnqueues}
 ${jsEnqueue}
 });

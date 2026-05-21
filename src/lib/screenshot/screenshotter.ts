@@ -20,6 +20,8 @@ import { SiteAnalysisAggregator } from './aggregator.js';
 import { CssAggregator } from './css-aggregator.js';
 import { JsAggregator } from './js-aggregator.js';
 import { captureDesignForUrl } from './design-capture-runner.js';
+import { collectMobileChromeLayout } from './dom-capture.js';
+import { generateChromeCss, type BakedLayoutMap } from './fixups.js';
 
 /**
  * Scroll offset multiplier for the scrolled-state screenshot: we scroll to
@@ -107,7 +109,14 @@ interface DesignCaptureContext {
   baseUrl: string;
   includeScripts: boolean;
   /** Run-level accumulator: first non-null sanitized header/footer wins. */
-  chromeAccum: { headerHtml: string | null; footerHtml: string | null };
+  chromeAccum: {
+    headerHtml: string | null;
+    footerHtml: string | null;
+    /** Desktop baked layout map (marker → props). Set on first successful chrome capture. */
+    desktopLayoutMap: BakedLayoutMap | null;
+    /** Mobile baked layout map (marker → props). Collected during the mobile viewport pass. */
+    mobileLayoutMap: BakedLayoutMap | null;
+  };
 }
 
 interface CapturePerViewportArgs {
@@ -299,6 +308,28 @@ async function capturePerViewport(args: CapturePerViewportArgs): Promise<void> {
       console.error(`[design] unexpected error for ${url}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
+
+  // --- mobile-only chrome layout collection (dual-viewport bake) ------------
+  // Collect the mobile computed layout for the chrome using the marker classes
+  // assigned during the desktop pass. Only runs once — after the desktop pass
+  // has established the chromeAccum with a desktopLayoutMap AND the mobile
+  // layout hasn't been collected yet.
+  //
+  // Limitation: if Wix (or similar) renders a different chrome DOM at mobile
+  // (hamburger menu), collectMobileChromeLayout returns null (no markers found)
+  // and mobileLayoutMap stays null. generateChromeCss then emits desktop-only
+  // rules. The static hamburger is not interactive — known limitation.
+  if (!isDesktop && designCtx && designCtx.chromeAccum.desktopLayoutMap !== null && designCtx.chromeAccum.mobileLayoutMap === null) {
+    try {
+      const mobileMap = await collectMobileChromeLayout(page);
+      if (mobileMap && Object.keys(mobileMap).length > 0) {
+        designCtx.chromeAccum.mobileLayoutMap = mobileMap;
+      }
+    } catch (err) {
+      // Non-fatal — mobile chrome layout collection failure degrades to desktop-only CSS.
+      console.error(`[design] mobile chrome layout collection failed for ${url}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
 }
 
 function selectRepresentativeAnalysisUrl(urls: string[]): string | null {
@@ -398,7 +429,12 @@ export async function captureScreenshots(opts: ScreenshotOpts): Promise<Screensh
   if (opts.captureDesign) {
     cssAgg.init(opts.outputDir);
   }
-  const chromeAccum = { headerHtml: null as string | null, footerHtml: null as string | null };
+  const chromeAccum = {
+    headerHtml: null as string | null,
+    footerHtml: null as string | null,
+    desktopLayoutMap: null as BakedLayoutMap | null,
+    mobileLayoutMap: null as BakedLayoutMap | null,
+  };
   const designCtx: DesignCaptureContext | undefined = opts.captureDesign
     ? { cssAgg, jsAgg, headLinks, cssMediaUrls, baseUrl, includeScripts, chromeAccum }
     : undefined;
@@ -569,6 +605,27 @@ export async function captureScreenshots(opts: ScreenshotOpts): Promise<Screensh
   const siteJsTextRaw = designCtx?.jsAgg?.toString().trim();
   const siteJsText = siteJsTextRaw || undefined;
 
+  // --- generate responsive chrome.css from dual-viewport layout maps ----------
+  // Emit @media min-width:768px (desktop) + @media max-width:767px (mobile)
+  // rules keyed on .dla-fx-N marker classes. Gracefully degrades to desktop-only
+  // when mobile layout was not collected (different DOM, mobile capture failed,
+  // or captureDesign=false).
+  let chromeCssText: string | undefined;
+  if (designCtx?.chromeAccum.desktopLayoutMap) {
+    const css = generateChromeCss(
+      designCtx.chromeAccum.desktopLayoutMap,
+      designCtx.chromeAccum.mobileLayoutMap ?? undefined,
+    );
+    if (css.trim()) {
+      chromeCssText = css;
+      try {
+        writeFileSync(join(opts.outputDir, 'chrome.css'), css, 'utf8');
+      } catch (err) {
+        sendLog(server, `[warn] chrome.css write failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+  }
+
   return {
     captured,
     skipped,
@@ -582,5 +639,6 @@ export async function captureScreenshots(opts: ScreenshotOpts): Promise<Screensh
     siteJsText,
     headerHtml: designCtx?.chromeAccum.headerHtml ?? undefined,
     footerHtml: designCtx?.chromeAccum.footerHtml ?? undefined,
+    chromeCssText,
   };
 }

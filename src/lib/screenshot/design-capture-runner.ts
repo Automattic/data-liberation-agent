@@ -9,6 +9,7 @@ import { isAllowlistedCdn, type ScriptInput } from './js-aggregator.js';
 import type { CssAggregator } from './css-aggregator.js';
 import type { JsAggregator } from './js-aggregator.js';
 import { sanitizeSourceHtml } from '../streaming/html-sanitize.js';
+import type { BakedLayoutMap } from './fixups.js';
 
 const CDN_FONT_HOSTS = ['fonts.gstatic.com', 'fonts.googleapis.com', 'use.typekit.net'];
 
@@ -31,10 +32,16 @@ export interface DesignCaptureRunOpts {
    * Run-level accumulators for site chrome. First non-null value detected
    * across all captured pages wins and is stored for the blank-theme build.
    * Pass null cells so callers can use a simple `{ current: null }` box.
+   *
+   * Extended for dual-viewport: also accumulates the desktop layout map
+   * (marker → computed props) so it can be paired with the mobile map
+   * collected during the mobile pass to generate responsive chrome.css.
    */
   chromeAccum?: {
     headerHtml: string | null;
     footerHtml: string | null;
+    /** Desktop baked layout map (marker → props). Set on first successful chrome capture. */
+    desktopLayoutMap: BakedLayoutMap | null;
   };
   fetchScript?: (url: string) => Promise<string | null>; // injectable for tests; defaults to global fetch
 }
@@ -71,6 +78,10 @@ export async function captureDesignForUrl(opts: DesignCaptureRunOpts): Promise<{
     }
     if (opts.chromeAccum.footerHtml === null && cap.footerHtml) {
       opts.chromeAccum.footerHtml = sanitizeSourceHtml(cap.footerHtml);
+    }
+    // Accumulate desktop layout map (first non-null wins, same as html).
+    if (opts.chromeAccum.desktopLayoutMap === null && cap.desktopLayoutMap) {
+      opts.chromeAccum.desktopLayoutMap = cap.desktopLayoutMap;
     }
   }
   // scripts → aggregator (fetch external first-party/allowlisted bodies; inline already have content)

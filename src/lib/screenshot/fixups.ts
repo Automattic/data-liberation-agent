@@ -26,6 +26,19 @@
  * `applyChromeFixups` is the high-level convenience that composes both
  * fixups in the correct order (de-pin → bake). It is separately exported so
  * other callers can use it without importing the registry.
+ *
+ * Dual-viewport responsive chrome bake
+ * -------------------------------------
+ * The marker-keyed approach replaces the old single-viewport inline bake:
+ *
+ *   1. `assignChromeMarkers(root)` — depth-first traversal, assigns stable
+ *      `dla-fx-N` classes to every element under root. DOM-order stable.
+ *   2. `collectBakedLayout(root)` — returns a { [marker]: { prop: value } }
+ *      map. De-pins fixed/sticky → static in the returned values. No inline
+ *      style mutation (unlike the old bakeComputedLayout).
+ *   3. `generateChromeCss(desktopMap, mobileMap)` — emits `@media` blocks:
+ *      `min-width:768px` for desktop props and `max-width:767px` for mobile.
+ *      Mobile block only contains props that DIFFER from desktop (lean output).
  */
 
 // ---------------------------------------------------------------------------
@@ -235,6 +248,231 @@ export function applyChromeFixups(root: Element): void {
 }
 
 // ---------------------------------------------------------------------------
+// 4. assignChromeMarkers — assign stable dla-fx-N marker classes (DOM order)
+// ---------------------------------------------------------------------------
+
+/**
+ * Assign a stable `dla-fx-<n>` class to every element under `root`
+ * (depth-first DOM order, including root itself). The same element gets the
+ * same marker at BOTH viewport captures as long as the chrome DOM structure is
+ * identical at both widths.
+ *
+ * The marker prefix is deliberately unique (`dla-fx-`) to avoid collisions with
+ * source-site classes. The counter starts at 0 (root = dla-fx-0).
+ *
+ * NOTE: Designed to run INSIDE the browser. Do NOT call in Node process code.
+ *
+ * Limitation — Wix mobile hamburger: Wix (and similar JS-heavy platforms) may
+ * render a completely different chrome DOM at mobile viewport (hamburger menu
+ * replaces the desktop nav). When the mobile chrome DOM differs from desktop
+ * (different element count / structure), we fall back gracefully: the HTML
+ * carries the desktop markers, and `collectBakedLayout` is called independently
+ * at each viewport. The `generateChromeCss` function then emits rules only for
+ * markers found in each map. Markers present at only one viewport get that
+ * viewport's rule only. The mobile hamburger is JS-interactive and will not open
+ * in the static replica — this is a known limitation, documented here.
+ */
+export function assignChromeMarkers(root: Element): string[] {
+  const markers: string[] = [];
+  const all = [root, ...Array.from(root.querySelectorAll('*'))];
+  for (let i = 0; i < all.length; i++) {
+    const cls = `dla-fx-${i}`;
+    (all[i] as HTMLElement).classList.add(cls);
+    markers.push(cls);
+  }
+  return markers;
+}
+
+// ---------------------------------------------------------------------------
+// 5. collectBakedLayout — collect per-marker computed layout (no mutation)
+// ---------------------------------------------------------------------------
+
+/** Layout props map returned by collectBakedLayout. */
+export type BakedLayoutMap = Record<string, Record<string, string>>;
+
+/**
+ * For `root` and every descendant that carries a `dla-fx-N` marker class,
+ * collect the curated LAYOUT_PROPS computed values into a map keyed on the
+ * marker class name.
+ *
+ * De-pins fixed/sticky: if computed `position` is `fixed` or `sticky`, the
+ * returned value is `static` (same semantics as `bakeComputedLayout`, but
+ * applied to the returned map rather than inline styles — the HTML is NOT
+ * mutated).
+ *
+ * Returns `{}` when no markers are found (graceful degradation).
+ *
+ * NOTE: Designed to run INSIDE the browser. Do NOT call in Node process code.
+ */
+export function collectBakedLayout(root: Element): BakedLayoutMap {
+  const props = [
+    'display',
+    'position',
+    'top',
+    'right',
+    'bottom',
+    'left',
+    'width',
+    'height',
+    'min-width',
+    'min-height',
+    'max-width',
+    'max-height',
+    'margin-top',
+    'margin-right',
+    'margin-bottom',
+    'margin-left',
+    'padding-top',
+    'padding-right',
+    'padding-bottom',
+    'padding-left',
+    'box-sizing',
+    'float',
+    'clear',
+    'flex-grow',
+    'flex-shrink',
+    'flex-basis',
+    'flex-direction',
+    'flex-wrap',
+    'justify-content',
+    'align-items',
+    'align-self',
+    'gap',
+    'grid-template-columns',
+    'grid-template-rows',
+    'grid-column',
+    'grid-row',
+    'transform',
+    'transform-origin',
+    'overflow-x',
+    'overflow-y',
+    'z-index',
+    'text-align',
+    'vertical-align',
+    'white-space',
+    'font-size',
+    'font-weight',
+    'line-height',
+    'color',
+    'visibility',
+    'opacity',
+  ];
+  const result: BakedLayoutMap = {};
+  const all = [root, ...Array.from(root.querySelectorAll('*'))];
+  for (const el of all) {
+    // Find which dla-fx-N class this element carries
+    let marker: string | undefined;
+    for (const cls of Array.from((el as HTMLElement).classList)) {
+      if (cls.startsWith('dla-fx-')) { marker = cls; break; }
+    }
+    if (!marker) continue;
+    const cs = getComputedStyle(el as HTMLElement);
+    const entry: Record<string, string> = {};
+    for (const prop of props) {
+      let value = cs.getPropertyValue(prop);
+      if (!value) continue;
+      // De-pin: never record fixed/sticky — map static instead.
+      if (prop === 'position' && (value === 'fixed' || value === 'sticky')) {
+        value = 'static';
+        // Also clear offset props so the static element flows correctly.
+        entry['top'] = 'auto';
+        entry['left'] = 'auto';
+        entry['transform'] = 'none';
+      }
+      entry[prop] = value;
+    }
+    result[marker] = entry;
+  }
+  return result;
+}
+
+// ---------------------------------------------------------------------------
+// 6. generateChromeCss — emit responsive media-query CSS from dual maps
+// ---------------------------------------------------------------------------
+
+/**
+ * Breakpoint used for desktop/mobile split. Desktop rules apply at ≥768px;
+ * mobile rules apply at <768px (max-width: 767px).
+ */
+const CHROME_BREAKPOINT_PX = 768;
+
+/**
+ * Given a desktop layout map and an optional mobile layout map (both from
+ * `collectBakedLayout`), emit responsive CSS using `@media` blocks keyed on
+ * `.dla-fx-N` selectors.
+ *
+ * Strategy:
+ *   - Desktop block: `@media (min-width: 768px) { .dla-fx-N { … } }` for every
+ *     marker in the desktop map.
+ *   - Mobile block: `@media (max-width: 767px) { .dla-fx-N { … } }` — only
+ *     emitted when the mobile value DIFFERS from the desktop value for that
+ *     prop, keeping the output lean. Markers only present in the mobile map
+ *     (different DOM) still get emitted — see limitation note in
+ *     `assignChromeMarkers`.
+ *   - Uses `!important` on desktop rules so they win over any responsive rules
+ *     in site.css (which may include the source platform's own media queries
+ *     that the baked layout needs to override at desktop widths).
+ *   - Mobile rules do NOT use `!important` so site.css responsive rules at
+ *     mobile widths can still apply where the baked value matches.
+ *
+ * When `mobileMap` is undefined or empty, emits desktop-only rules (graceful
+ * degradation — current behavior preserved).
+ */
+export function generateChromeCss(
+  desktopMap: BakedLayoutMap,
+  mobileMap?: BakedLayoutMap,
+): string {
+  const lines: string[] = [];
+
+  // --- desktop block --------------------------------------------------------
+  for (const [marker, props] of Object.entries(desktopMap)) {
+    const declarations = Object.entries(props)
+      .map(([prop, value]) => `    ${prop}: ${value} !important;`)
+      .join('\n');
+    if (!declarations) continue;
+    lines.push(
+      `@media (min-width: ${CHROME_BREAKPOINT_PX}px) {`,
+      `  .${marker} {`,
+      declarations,
+      `  }`,
+      `}`,
+    );
+  }
+
+  // --- mobile block ---------------------------------------------------------
+  if (mobileMap && Object.keys(mobileMap).length > 0) {
+    // Collect ALL markers from both maps to handle different-DOM case.
+    const allMobileMarkers = new Set([
+      ...Object.keys(mobileMap),
+    ]);
+
+    for (const marker of allMobileMarkers) {
+      const mobileProps = mobileMap[marker] ?? {};
+      const desktopProps = desktopMap[marker] ?? {};
+
+      // Only emit mobile props that differ from desktop (or are mobile-only).
+      const diffEntries = Object.entries(mobileProps).filter(
+        ([prop, value]) => desktopProps[prop] !== value,
+      );
+      if (diffEntries.length === 0) continue;
+
+      const declarations = diffEntries
+        .map(([prop, value]) => `    ${prop}: ${value};`)
+        .join('\n');
+      lines.push(
+        `@media (max-width: ${CHROME_BREAKPOINT_PX - 1}px) {`,
+        `  .${marker} {`,
+        declarations,
+        `  }`,
+        `}`,
+      );
+    }
+  }
+
+  return lines.join('\n');
+}
+
+// ---------------------------------------------------------------------------
 // Source strings for browser injection
 // ---------------------------------------------------------------------------
 
@@ -248,6 +486,15 @@ export const CHROME_FIXUP_SOURCE = {
   depinFixedSticky: depinFixedSticky.toString(),
   bakeComputedLayout: bakeComputedLayout.toString(),
   applyChromeFixups: applyChromeFixups.toString(),
+} as const;
+
+/**
+ * Source strings for the marker-based dual-viewport approach.
+ * Used by dom-capture.ts for browser injection.
+ */
+export const CHROME_MARKER_SOURCE = {
+  assignChromeMarkers: assignChromeMarkers.toString(),
+  collectBakedLayout: collectBakedLayout.toString(),
 } as const;
 
 /**
@@ -291,6 +538,25 @@ const _factorySrc = `(function() {
 
 export const CHROME_FIXUP_FACTORY_SOURCE: { factorySrc: string } = {
   factorySrc: _factorySrc,
+};
+
+// Build the marker factory source embedding assignChromeMarkers + collectBakedLayout.
+const _markerSrc = assignChromeMarkers.toString();
+const _collectSrc = collectBakedLayout.toString();
+
+/**
+ * Self-contained factory for the marker-based dual-viewport chrome capture.
+ * Evaluated in the browser via `new Function('return (' + factorySrc + ')')()`.
+ * Returns an object `{ assignChromeMarkers, collectBakedLayout }`.
+ */
+const _markerFactorySrc = `(function() {
+  var assignChromeMarkers = (${_markerSrc});
+  var collectBakedLayout = (${_collectSrc});
+  return { assignChromeMarkers: assignChromeMarkers, collectBakedLayout: collectBakedLayout };
+})`;
+
+export const CHROME_MARKER_FACTORY_SOURCE: { factorySrc: string } = {
+  factorySrc: _markerFactorySrc,
 };
 
 // Re-export the property list so tests can verify the exact set.

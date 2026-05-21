@@ -18,9 +18,12 @@ import {
   BAKED_PROPS,
   CHROME_FIXUP_FACTORY_SOURCE,
   CHROME_FIXUP_SOURCE,
+  CHROME_MARKER_FACTORY_SOURCE,
   depinFixedSticky,
   bakeComputedLayout,
   applyChromeFixups,
+  generateChromeCss,
+  type BakedLayoutMap,
 } from './fixups.js';
 
 let browser: Browser;
@@ -252,5 +255,251 @@ describe('depinFixedSticky standalone (CHROME_FIXUP_SOURCE, Playwright fixture)'
     } finally {
       await page.close();
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// assignChromeMarkers + collectBakedLayout — via CHROME_MARKER_FACTORY_SOURCE
+// ---------------------------------------------------------------------------
+
+describe('assignChromeMarkers (via marker factory, Playwright fixture)', () => {
+  it('assigns dla-fx-0 to root and dla-fx-N to each descendant in DOM order', async () => {
+    const page = await browser.newPage();
+    await page.setContent(FIXTURE);
+    try {
+      const { factorySrc } = CHROME_MARKER_FACTORY_SOURCE;
+      const result = await page.evaluate(({ factorySrc }: { factorySrc: string }) => {
+        const { assignChromeMarkers } = new Function('return (' + factorySrc + ')')()() as {
+          assignChromeMarkers: (root: Element) => string[];
+          collectBakedLayout: (root: Element) => Record<string, Record<string, string>>;
+        };
+        const container = document.getElementById('container') as HTMLElement;
+        const markers = assignChromeMarkers(container);
+        // Return class list of each element in DOM order to verify marker assignment
+        const all = [container, ...Array.from(container.querySelectorAll('*'))];
+        const classesByOrder = all.map((el) =>
+          Array.from((el as HTMLElement).classList).filter((c) => c.startsWith('dla-fx-'))
+        );
+        return { markers, classesByOrder };
+      }, { factorySrc });
+
+      // Root gets dla-fx-0
+      expect(result.markers[0]).toBe('dla-fx-0');
+      // Children get sequential markers
+      expect(result.markers[1]).toBe('dla-fx-1');
+      expect(result.markers[2]).toBe('dla-fx-2');
+      // Each element should have exactly one dla-fx marker class
+      for (const classes of result.classesByOrder) {
+        expect(classes.length).toBe(1);
+        expect(classes[0]).toMatch(/^dla-fx-\d+$/);
+      }
+    } finally {
+      await page.close();
+    }
+  });
+
+  it('markers are stable: same element gets same dla-fx-N in DOM order', async () => {
+    const page = await browser.newPage();
+    await page.setContent(FIXTURE);
+    try {
+      const { factorySrc } = CHROME_MARKER_FACTORY_SOURCE;
+      const result = await page.evaluate(({ factorySrc }: { factorySrc: string }) => {
+        const { assignChromeMarkers } = new Function('return (' + factorySrc + ')')()() as {
+          assignChromeMarkers: (root: Element) => string[];
+          collectBakedLayout: (root: Element) => Record<string, Record<string, string>>;
+        };
+        const container = document.getElementById('container') as HTMLElement;
+        const markers = assignChromeMarkers(container);
+        // Verify that fixed-child is the 2nd element (index 1) in DOM order
+        const fixedChild = document.getElementById('fixed-child') as HTMLElement;
+        const fixedChildMarker = Array.from(fixedChild.classList).find((c) => c.startsWith('dla-fx-'));
+        return { markers, fixedChildMarker };
+      }, { factorySrc });
+
+      // fixed-child is the first child of container → should be dla-fx-1
+      expect(result.fixedChildMarker).toBe('dla-fx-1');
+      expect(result.markers[1]).toBe('dla-fx-1');
+    } finally {
+      await page.close();
+    }
+  });
+});
+
+describe('collectBakedLayout (via marker factory, Playwright fixture)', () => {
+  it('returns a marker→props map with layout values for each marked element', async () => {
+    const page = await browser.newPage();
+    await page.setContent(FIXTURE);
+    try {
+      const { factorySrc } = CHROME_MARKER_FACTORY_SOURCE;
+      const layoutMap = await page.evaluate(({ factorySrc }: { factorySrc: string }) => {
+        const { assignChromeMarkers, collectBakedLayout } = new Function('return (' + factorySrc + ')')()() as {
+          assignChromeMarkers: (root: Element) => string[];
+          collectBakedLayout: (root: Element) => Record<string, Record<string, string>>;
+        };
+        const container = document.getElementById('container') as HTMLElement;
+        assignChromeMarkers(container);
+        return collectBakedLayout(container);
+      }, { factorySrc });
+
+      // Container (dla-fx-0) should have display, width, height
+      expect(layoutMap['dla-fx-0']).toBeDefined();
+      expect(layoutMap['dla-fx-0']['display']).toBeTruthy();
+      expect(layoutMap['dla-fx-0']['width']).toBeTruthy();
+      expect(layoutMap['dla-fx-0']['height']).toBeTruthy();
+
+      // Some markers should exist for children
+      expect(Object.keys(layoutMap).length).toBeGreaterThan(1);
+    } finally {
+      await page.close();
+    }
+  });
+
+  it('de-pins fixed/sticky → static in the returned map (no inline style mutation)', async () => {
+    const page = await browser.newPage();
+    await page.setContent(FIXTURE);
+    try {
+      const { factorySrc } = CHROME_MARKER_FACTORY_SOURCE;
+      const result = await page.evaluate(({ factorySrc }: { factorySrc: string }) => {
+        const { assignChromeMarkers, collectBakedLayout } = new Function('return (' + factorySrc + ')')()() as {
+          assignChromeMarkers: (root: Element) => string[];
+          collectBakedLayout: (root: Element) => Record<string, Record<string, string>>;
+        };
+        const container = document.getElementById('container') as HTMLElement;
+        assignChromeMarkers(container);
+        const layoutMap = collectBakedLayout(container);
+        // Get the marker for fixed-child (should be dla-fx-1)
+        const fixedChild = document.getElementById('fixed-child') as HTMLElement;
+        const marker = Array.from(fixedChild.classList).find((c) => c.startsWith('dla-fx-'));
+        // Check the computed style is still "fixed" (inline style NOT mutated)
+        const computedPos = getComputedStyle(fixedChild).position;
+        // Return both the map value and the live computed style
+        return {
+          mapPosition: marker ? (layoutMap[marker]?.['position'] ?? null) : null,
+          marker,
+          liveComputedPosition: computedPos,
+        };
+      }, { factorySrc });
+
+      // Map should say static (de-pinned in the map)
+      expect(result.mapPosition).toBe('static');
+      // The live computed style should still be fixed (no inline mutation)
+      expect(result.liveComputedPosition).toBe('fixed');
+    } finally {
+      await page.close();
+    }
+  });
+
+  it('returns {} when no dla-fx markers are present on any element', async () => {
+    const page = await browser.newPage();
+    await page.setContent(FIXTURE);
+    try {
+      const { factorySrc } = CHROME_MARKER_FACTORY_SOURCE;
+      const layoutMap = await page.evaluate(({ factorySrc }: { factorySrc: string }) => {
+        const { collectBakedLayout } = new Function('return (' + factorySrc + ')')()() as {
+          assignChromeMarkers: (root: Element) => string[];
+          collectBakedLayout: (root: Element) => Record<string, Record<string, string>>;
+        };
+        // Don't assign markers first — collectBakedLayout should return {}
+        const container = document.getElementById('container') as HTMLElement;
+        return collectBakedLayout(container);
+      }, { factorySrc });
+
+      expect(Object.keys(layoutMap).length).toBe(0);
+    } finally {
+      await page.close();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// generateChromeCss — Node-side (pure function, no browser needed)
+// ---------------------------------------------------------------------------
+
+describe('generateChromeCss (Node-side)', () => {
+  it('emits @media (min-width: 768px) desktop rules for each marker', () => {
+    const desktopMap: BakedLayoutMap = {
+      'dla-fx-0': { display: 'flex', width: '1440px', height: '80px' },
+      'dla-fx-1': { display: 'block', position: 'static' },
+    };
+    const css = generateChromeCss(desktopMap);
+    expect(css).toContain('@media (min-width: 768px)');
+    expect(css).toContain('.dla-fx-0');
+    expect(css).toContain('.dla-fx-1');
+    expect(css).toContain('display: flex !important');
+    expect(css).toContain('width: 1440px !important');
+    expect(css).toContain('height: 80px !important');
+  });
+
+  it('emits @media (max-width: 767px) mobile rules with only differing props', () => {
+    const desktopMap: BakedLayoutMap = {
+      'dla-fx-0': { display: 'flex', width: '1440px', height: '80px' },
+    };
+    const mobileMap: BakedLayoutMap = {
+      'dla-fx-0': { display: 'flex', width: '390px', height: '56px' },
+    };
+    const css = generateChromeCss(desktopMap, mobileMap);
+
+    // Mobile block should exist
+    expect(css).toContain('@media (max-width: 767px)');
+    // Mobile block should have width and height (they differ)
+    expect(css).toContain('width: 390px');
+    expect(css).toContain('height: 56px');
+    // Mobile block should NOT have display (it's the same: flex)
+    // Extract the max-width block
+    const mobileBlock = css.split('@media (max-width: 767px)')[1] ?? '';
+    expect(mobileBlock).not.toContain('display: flex');
+  });
+
+  it('mobile block omitted when mobile values are identical to desktop', () => {
+    const desktopMap: BakedLayoutMap = {
+      'dla-fx-0': { display: 'flex', width: '1440px' },
+    };
+    const mobileMap: BakedLayoutMap = {
+      'dla-fx-0': { display: 'flex', width: '1440px' },
+    };
+    const css = generateChromeCss(desktopMap, mobileMap);
+    expect(css).toContain('@media (min-width: 768px)');
+    expect(css).not.toContain('@media (max-width: 767px)');
+  });
+
+  it('desktop-only output when mobileMap is undefined', () => {
+    const desktopMap: BakedLayoutMap = {
+      'dla-fx-0': { display: 'flex', width: '1440px' },
+    };
+    const css = generateChromeCss(desktopMap, undefined);
+    expect(css).toContain('@media (min-width: 768px)');
+    expect(css).not.toContain('@media (max-width:');
+  });
+
+  it('desktop-only output when mobileMap is empty', () => {
+    const desktopMap: BakedLayoutMap = {
+      'dla-fx-0': { display: 'flex' },
+    };
+    const css = generateChromeCss(desktopMap, {});
+    expect(css).toContain('@media (min-width: 768px)');
+    expect(css).not.toContain('@media (max-width:');
+  });
+
+  it('mobile-only markers (different DOM) still get mobile rules emitted', () => {
+    const desktopMap: BakedLayoutMap = {
+      'dla-fx-0': { display: 'flex' },
+    };
+    // Mobile DOM has different elements (e.g. hamburger) — only new markers
+    const mobileMap: BakedLayoutMap = {
+      'dla-fx-0': { display: 'flex' },
+      'dla-fx-99': { display: 'block', width: '100%' },
+    };
+    const css = generateChromeCss(desktopMap, mobileMap);
+    // dla-fx-99 is mobile-only, should appear in mobile block
+    expect(css).toContain('.dla-fx-99');
+    expect(css).toContain('@media (max-width: 767px)');
+    // dla-fx-0 has same display value, should NOT appear in mobile block
+    const mobileBlock = css.split('@media (max-width: 767px)')[1] ?? '';
+    expect(mobileBlock).not.toContain('.dla-fx-0');
+  });
+
+  it('returns empty string for empty desktop map', () => {
+    const css = generateChromeCss({}, {});
+    expect(css.trim()).toBe('');
   });
 });

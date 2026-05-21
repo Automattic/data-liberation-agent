@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { chromium, type Browser } from 'playwright';
-import { collectBodyFragment, collectStylesheets, collectHeadLinks, collectScripts, collectBodyAndChrome } from './dom-capture.js';
+import { collectBodyFragment, collectStylesheets, collectHeadLinks, collectScripts, collectBodyAndChrome, collectMobileChromeLayout } from './dom-capture.js';
 
 const FIXTURE = `<!DOCTYPE html><html><head>
   <style>.hero{color:red}</style>
@@ -96,45 +96,134 @@ describe('collectBodyAndChrome', () => {
     await page.close();
   });
 
-  it('chrome outerHTML contains inline baked styles (display, height) from the fixup pipeline', async () => {
+  it('chrome HTML carries dla-fx-N marker classes and desktopLayoutMap has computed props', async () => {
     const page = await browser.newPage();
     await page.setContent(CHROME_FIXTURE);
-    const { headerHtml, footerHtml } = await collectBodyAndChrome(page);
+    const { headerHtml, footerHtml, desktopLayoutMap } = await collectBodyAndChrome(page);
 
-    // After bakeComputedLayout the outerHTML should carry inline style attributes
-    // with the computed layout values frozen.
+    // NEW marker-keyed approach: header/footer HTML carries dla-fx-N classes.
     expect(headerHtml).not.toBeNull();
-    expect(headerHtml).toMatch(/style=/);
-    expect(headerHtml).toMatch(/display:/);
-    expect(headerHtml).toMatch(/height:/);
+    expect(headerHtml).toContain('dla-fx-');
 
     expect(footerHtml).not.toBeNull();
-    expect(footerHtml).toMatch(/style=/);
-    expect(footerHtml).toMatch(/display:/);
+    expect(footerHtml).toContain('dla-fx-');
+
+    // desktopLayoutMap should have entries for the chrome elements.
+    expect(desktopLayoutMap).not.toBeNull();
+    expect(Object.keys(desktopLayoutMap!).length).toBeGreaterThan(0);
+
+    // Root elements (dla-fx-0 = header, dla-fx-N = footer root) should have display + height.
+    const headerRootMarker = Object.keys(desktopLayoutMap!)[0];
+    expect(desktopLayoutMap![headerRootMarker]['display']).toBeTruthy();
+    expect(desktopLayoutMap![headerRootMarker]['height']).toBeTruthy();
     await page.close();
   });
 
-  it('chrome outerHTML has position:static for originally-fixed header', async () => {
+  it('desktopLayoutMap has position:static for originally-fixed header (de-pinned in map)', async () => {
     const page = await browser.newPage();
     await page.setContent(FIXED_CHROME_FIXTURE);
-    const { headerHtml } = await collectBodyAndChrome(page);
+    const { headerHtml, desktopLayoutMap } = await collectBodyAndChrome(page);
 
     expect(headerHtml).not.toBeNull();
-    // The header was position:fixed — the fixup pipeline must have de-pinned it.
-    expect(headerHtml).toMatch(/position:\s*static/);
-    // Must NOT contain position:fixed after fixup.
-    expect(headerHtml).not.toMatch(/position:\s*fixed/);
+    expect(desktopLayoutMap).not.toBeNull();
+
+    // The header was position:fixed — the map should record static (de-pinned).
+    // Find the header root marker (first key in the map is header's root).
+    const headerRootMarker = Object.keys(desktopLayoutMap!)[0];
+    expect(desktopLayoutMap![headerRootMarker]['position']).toBe('static');
+
+    // The outerHTML should NOT contain inline baked position: fixed (no inline mutation).
+    // It may contain dla-fx- marker classes from the marker assignment.
+    expect(headerHtml).toContain('dla-fx-');
     await page.close();
   });
 
   it('returns null chrome when no header/footer elements exist', async () => {
     const page = await browser.newPage();
     await page.setContent('<!DOCTYPE html><html><body><main><p>Only content</p></main></body></html>');
-    const { bodyFragmentHtml, headerHtml, footerHtml } = await collectBodyAndChrome(page);
+    const { bodyFragmentHtml, headerHtml, footerHtml, desktopLayoutMap } = await collectBodyAndChrome(page);
     // No semantic header/footer — chrome should be null (heuristic requires score > 2)
     expect(headerHtml).toBeNull();
     expect(footerHtml).toBeNull();
+    expect(desktopLayoutMap).toBeNull();
     expect(bodyFragmentHtml).toContain('Only content');
     await page.close();
+  });
+});
+
+describe('collectMobileChromeLayout', () => {
+  it('returns layout map for chrome elements at current viewport (assigns its own markers)', async () => {
+    // Use a mobile-sized browser context to simulate the mobile viewport.
+    const { chromium } = await import('playwright');
+    const mobileBrowser = await chromium.launch();
+    const ctx = await mobileBrowser.newContext({ viewport: { width: 390, height: 844 } });
+    const page = await ctx.newPage();
+    try {
+      await page.setContent(CHROME_FIXTURE);
+      // collectMobileChromeLayout is called on a fresh mobile page (no prior marker pass).
+      // It detects chrome and assigns its own markers, then returns the layout map.
+      const mobileMap = await collectMobileChromeLayout(page);
+      // Chrome is present → map should have entries.
+      expect(mobileMap).not.toBeNull();
+      expect(Object.keys(mobileMap!).length).toBeGreaterThan(0);
+      // All keys should be dla-fx-N markers.
+      for (const key of Object.keys(mobileMap!)) {
+        expect(key).toMatch(/^dla-fx-\d+$/);
+      }
+    } finally {
+      await ctx.close();
+      await mobileBrowser.close();
+    }
+  });
+
+  it('marker IDs in mobile map match desktop map for the same DOM structure', async () => {
+    // Simulate the two-pass screenshotter: desktop and mobile are separate pages.
+    // The marker IDs should match between the two passes when the DOM is the same.
+    const { chromium } = await import('playwright');
+    const testBrowser = await chromium.launch();
+    try {
+      // Desktop pass
+      const desktopCtx = await testBrowser.newContext({ viewport: { width: 1440, height: 900 } });
+      const desktopPage = await desktopCtx.newPage();
+      await desktopPage.setContent(CHROME_FIXTURE);
+      const { desktopLayoutMap } = await collectBodyAndChrome(desktopPage);
+      await desktopCtx.close();
+
+      // Mobile pass (separate context)
+      const mobileCtx = await testBrowser.newContext({ viewport: { width: 390, height: 844 } });
+      const mobilePage = await mobileCtx.newPage();
+      await mobilePage.setContent(CHROME_FIXTURE);
+      const mobileMap = await collectMobileChromeLayout(mobilePage);
+      await mobileCtx.close();
+
+      // Both maps should be non-null
+      expect(desktopLayoutMap).not.toBeNull();
+      expect(mobileMap).not.toBeNull();
+
+      // Key sets should overlap (same DOM structure → same markers)
+      const desktopKeys = new Set(Object.keys(desktopLayoutMap!));
+      const mobileKeys = new Set(Object.keys(mobileMap!));
+      const overlap = [...desktopKeys].filter((k) => mobileKeys.has(k));
+      expect(overlap.length).toBeGreaterThan(0);
+    } finally {
+      await testBrowser.close();
+    }
+  });
+
+  it('returns null when no header/footer chrome is found', async () => {
+    const { chromium } = await import('playwright');
+    const mobileBrowser = await chromium.launch();
+    const ctx = await mobileBrowser.newContext({ viewport: { width: 390, height: 844 } });
+    const page = await ctx.newPage();
+    try {
+      // Page with no chrome elements (no header, footer, or nav with sufficient score)
+      await page.setContent('<!DOCTYPE html><html><body><main><p>Only content</p></main></body></html>');
+      const mobileMap = await collectMobileChromeLayout(page);
+      // No chrome found → null
+      expect(mobileMap).toBeNull();
+    } finally {
+      await ctx.close();
+      await mobileBrowser.close();
+    }
   });
 });

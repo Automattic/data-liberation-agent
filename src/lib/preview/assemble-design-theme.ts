@@ -27,6 +27,13 @@ export interface AssembleDesignThemeOpts {
   headerHtml?: string;
   /** Sanitized site footer HTML to bake into the blank theme. */
   footerHtml?: string;
+  /**
+   * Responsive chrome CSS from generateChromeCss (dual-viewport bake).
+   * When present, emitted as chrome.css alongside site.css and enqueued
+   * after it in functions.php. Uses @media breakpoints at 768px to apply
+   * desktop/mobile .dla-fx-N rules that override site.css responsive rules.
+   */
+  chromeCssText?: string;
 }
 
 /**
@@ -39,6 +46,7 @@ export interface AssembleDesignThemeOpts {
 export function assembleDesignTheme(opts: AssembleDesignThemeOpts): ReplicaFile[] {
   const themeSlug = opts.themeSlug ?? 'dla-replica';
   const hasJs = !!(opts.jsText && opts.jsText.trim());
+  const hasChromeCss = !!(opts.chromeCssText && opts.chromeCssText.trim());
 
   // Rewrite CSS url() refs to local uploads (the second rewrite surface —
   // first is per-URL markup rewrites in flushPendingImports).
@@ -46,8 +54,11 @@ export function assembleDesignTheme(opts: AssembleDesignThemeOpts): ReplicaFile[
     ? rewriteMediaUrls(opts.cssText, opts.mediaUrlMap)
     : opts.cssText;
 
-  const files = buildBlankTheme({ themeSlug, hasJs, headLinks: opts.headLinks, headerHtml: opts.headerHtml, footerHtml: opts.footerHtml });
+  const files = buildBlankTheme({ themeSlug, hasJs, headLinks: opts.headLinks, headerHtml: opts.headerHtml, footerHtml: opts.footerHtml, hasChromeCss });
   files.push({ relativePath: 'site.css', content: siteCss });
+  if (hasChromeCss) {
+    files.push({ relativePath: 'chrome.css', content: opts.chromeCssText! });
+  }
   if (hasJs) {
     files.push({ relativePath: 'site.js', content: opts.jsText! });
   }

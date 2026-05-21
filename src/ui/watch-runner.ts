@@ -2140,6 +2140,7 @@ export async function runWatch(opts: WatchOpts): Promise<{ ok: boolean; duration
     let designCaptureSiteJsText: string | undefined;
     let designCaptureHeaderHtml: string | undefined;
     let designCaptureFooterHtml: string | undefined;
+    let designCaptureChromeCssText: string | undefined;
 
     const wakeWorker = (): void => {
       if (wakeStreamingWorker) {
@@ -2442,6 +2443,7 @@ export async function runWatch(opts: WatchOpts): Promise<{ ok: boolean; duration
             designCaptureSiteJsText = result.siteJsText;
             designCaptureHeaderHtml = result.headerHtml;
             designCaptureFooterHtml = result.footerHtml;
+            designCaptureChromeCssText = result.chromeCssText;
           }
           appendWatchLog(outDir, {
             event: 'screenshots-captured',
@@ -2675,6 +2677,7 @@ export async function runWatch(opts: WatchOpts): Promise<{ ok: boolean; duration
           themeSlug: designThemeSlug,
           headerHtml: designCaptureHeaderHtml,
           footerHtml: designCaptureFooterHtml,
+          chromeCssText: designCaptureChromeCssText,
         });
 
         writeReplicaFilesToHost({ wpRoot, themeSlug: designThemeSlug, themeFiles });
@@ -2719,6 +2722,7 @@ export async function runWatch(opts: WatchOpts): Promise<{ ok: boolean; duration
           jsBytes: designCaptureSiteJsText ? designCaptureSiteJsText.length : 0,
           headerHtmlBytes: designCaptureHeaderHtml ? designCaptureHeaderHtml.length : 0,
           footerHtmlBytes: designCaptureFooterHtml ? designCaptureFooterHtml.length : 0,
+          chromeCssBytes: designCaptureChromeCssText ? designCaptureChromeCssText.length : 0,
           warnings,
         });
       } catch (err) {
