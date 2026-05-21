@@ -20,7 +20,7 @@ export interface DesignCaptureRunOpts {
   page: Page;
   url: string;
   slug: string;
-  archetype: string;              // only 'page'|'post' are captured
+  archetype: string;              // design-captured for content archetypes (homepage/page/post/gallery/event); 'product' stays structured
   outputDir: string;
   baseUrl: string;
   includeScripts: boolean;
@@ -39,10 +39,15 @@ export interface DesignCaptureRunOpts {
   fetchScript?: (url: string) => Promise<string | null>; // injectable for tests; defaults to global fetch
 }
 
+// Content archetypes carry the html-first design; products keep the structured
+// WooCommerce import (eng-review Q1). homepage/gallery/event are content pages —
+// the homepage especially MUST be captured (it's the most important page).
+const DESIGN_CAPTURE_ARCHETYPES = new Set(['homepage', 'page', 'post', 'gallery', 'event']);
+
 /** Returns the source media URLs found in this page's CSS (for media discovery),
- *  or null when design wasn't captured (non page/post, or capture failed → caller falls back). */
+ *  or null when design wasn't captured (non-content archetype, or capture failed → caller falls back). */
 export async function captureDesignForUrl(opts: DesignCaptureRunOpts): Promise<{ cssMediaUrls: string[] } | null> {
-  if (opts.archetype !== 'page' && opts.archetype !== 'post') return null;
+  if (!DESIGN_CAPTURE_ARCHETYPES.has(opts.archetype)) return null;
   let cap;
   try {
     cap = await captureDesign(opts.page, opts.baseUrl, { includeScripts: opts.includeScripts });

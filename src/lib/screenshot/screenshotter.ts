@@ -270,10 +270,16 @@ async function capturePerViewport(args: CapturePerViewportArgs): Promise<void> {
   // --- desktop-only design capture (page/post archetypes only) ---------------
   if (isDesktop && designCtx) {
     try {
+      // The design sidecar slug MUST match the WXR item slug used by adapters
+      // (item.slug = slugify(url)) so flushPendingImports can find the sidecar
+      // by entry.slug. The manifest `slug` may have a collision suffix (-2, -3)
+      // when multiple URLs share the same base, so we derive the design sidecar
+      // slug directly from the URL — same derivation the adapters use.
+      const designSlug = slugify(url);
       const designResult = await captureDesignForUrl({
         page,
         url,
-        slug,
+        slug: designSlug,
         archetype,
         outputDir,
         baseUrl: designCtx.baseUrl,

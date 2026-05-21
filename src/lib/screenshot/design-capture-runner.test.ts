@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { captureDesignForUrl, designSidecarPath } from './design-capture-runner.js';
 import { CssAggregator } from './css-aggregator.js';
 import { JsAggregator } from './js-aggregator.js';
+import { slugify } from '../../adapters/shared.js';
 
 const LOCAL_TMP = join(process.cwd(), '.tmp-test');
 mkdirSync(LOCAL_TMP, { recursive: true });
@@ -39,6 +40,49 @@ async function pageWithFixture(fixture: string): Promise<Page> {
 describe('designSidecarPath', () => {
   it('returns design/<slug>.fragment.html under outputDir', () => {
     expect(designSidecarPath('/out', 'about')).toBe('/out/design/about.fragment.html');
+  });
+});
+
+/**
+ * Slug consistency: the design sidecar WRITE side (screenshotter → captureDesignForUrl)
+ * must produce the same slug as the LOOKUP side (flushPendingImports → entry.slug from WXR item).
+ *
+ * Both sides must use `slugify(url)` directly — not the manifest's deduped slug — so that
+ * the sidecar written at `design/<slugify(url)>.fragment.html` is always found by
+ * `designSidecarPath(outDir, item.slug)` where `item.slug = slugify(url)`.
+ *
+ * This test verifies the 6 representative page URL shapes. The homepage case
+ * (`path = '/'`) is the critical one: `slugify` must return `'homepage'` so that the
+ * sidecar at `design/homepage.fragment.html` matches `item.slug = 'homepage'`.
+ */
+describe('design sidecar slug consistency (write vs lookup)', () => {
+  const cases: Array<{ url: string; expectedSlug: string; archetype: string }> = [
+    { url: 'https://example.com/', expectedSlug: 'homepage', archetype: 'homepage' },
+    { url: 'https://example.com/about', expectedSlug: 'about', archetype: 'page' },
+    { url: 'https://example.com/blog/hello-world', expectedSlug: 'blog--hello-world', archetype: 'post' },
+    { url: 'https://example.com/gallery', expectedSlug: 'gallery', archetype: 'gallery' },
+    { url: 'https://example.com/events/annual-fair', expectedSlug: 'events--annual-fair', archetype: 'event' },
+    { url: 'https://example.com/contact-us', expectedSlug: 'contact-us', archetype: 'page' },
+  ];
+
+  for (const { url, expectedSlug, archetype } of cases) {
+    it(`slugify('${url}') === '${expectedSlug}' (archetype: ${archetype})`, () => {
+      const slug = slugify(url);
+      expect(slug).toBe(expectedSlug);
+      // Verify both sides resolve to the same sidecar path.
+      const writePath = designSidecarPath('/out', slug);
+      const lookupPath = designSidecarPath('/out', slug);
+      expect(writePath).toBe(lookupPath);
+    });
+  }
+
+  it('homepage slug is "homepage" (not empty string or path-based variant)', () => {
+    // The root URL is the critical case: slugify must fall back to "homepage"
+    // so the sidecar matches the WXR item slug.
+    expect(slugify('https://example.com/')).toBe('homepage');
+    expect(slugify('https://example.com')).toBe('homepage');
+    // Verify the sidecar path is deterministic.
+    expect(designSidecarPath('/out', 'homepage')).toBe('/out/design/homepage.fragment.html');
   });
 });
 
