@@ -17,6 +17,9 @@ import { ManifestQueue, type ManifestEntry, type FailureEntry } from './manifest
 import { waitForStable, triggerLazyLoad } from './page-helpers.js';
 import { analyzePage } from './site-analysis.js';
 import { SiteAnalysisAggregator } from './aggregator.js';
+import { CssAggregator } from './css-aggregator.js';
+import { JsAggregator } from './js-aggregator.js';
+import { captureDesignForUrl } from './design-capture-runner.js';
 
 /**
  * Scroll offset multiplier for the scrolled-state screenshot: we scroll to
@@ -96,12 +99,22 @@ function sendLog(server: Server | undefined, message: string): void {
   }
 }
 
+interface DesignCaptureContext {
+  cssAgg: CssAggregator;
+  jsAgg?: JsAggregator;
+  headLinks: Set<string>;
+  cssMediaUrls: Set<string>;
+  baseUrl: string;
+  includeScripts: boolean;
+}
+
 interface CapturePerViewportArgs {
   page: Page;
   viewport: Viewport;
   plan: ArtifactPlan;
   url: string;
   slug: string;
+  archetype: string;
   settleMs: number;
   screenshotTimeoutMs: number;
   evaluateTimeoutMs: number;
@@ -109,13 +122,16 @@ interface CapturePerViewportArgs {
   entry: ManifestEntry;
   aggregator: SiteAnalysisAggregator;
   shouldAnalyze: boolean;
+  designCtx?: DesignCaptureContext;  // present when design capture is enabled
+  outputDir: string;
 }
 
 async function capturePerViewport(args: CapturePerViewportArgs): Promise<void> {
   const {
-    page, viewport, plan, url, slug,
+    page, viewport, plan, url, slug, archetype,
     settleMs, screenshotTimeoutMs, evaluateTimeoutMs,
     failures, entry, aggregator, shouldAnalyze,
+    designCtx, outputDir,
   } = args;
   const now = () => new Date().toISOString();
   const isDesktop = viewport.id === 'desktop';
@@ -248,6 +264,32 @@ async function capturePerViewport(args: CapturePerViewportArgs): Promise<void> {
       });
     }
   }
+
+  // --- desktop-only design capture (page/post archetypes only) ---------------
+  if (isDesktop && designCtx) {
+    try {
+      const designResult = await captureDesignForUrl({
+        page,
+        url,
+        slug,
+        archetype,
+        outputDir,
+        baseUrl: designCtx.baseUrl,
+        includeScripts: designCtx.includeScripts,
+        cssAgg: designCtx.cssAgg,
+        jsAgg: designCtx.jsAgg,
+        headLinks: designCtx.headLinks,
+      });
+      if (designResult) {
+        for (const u of designResult.cssMediaUrls) designCtx.cssMediaUrls.add(u);
+      }
+    } catch (err) {
+      // Non-fatal — design capture failure does not fail the screenshot run
+      // (captureDesignForUrl already catches + logs internally; this guard
+      // catches any unexpected throw from the orchestration layer itself)
+      console.error(`[design] unexpected error for ${url}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
 }
 
 function selectRepresentativeAnalysisUrl(urls: string[]): string | null {
@@ -329,6 +371,28 @@ export async function captureScreenshots(opts: ScreenshotOpts): Promise<Screensh
   const aggregator = new SiteAnalysisAggregator();
   const aggregateAlreadyFresh = !force && hasSingleUrlAggregate(opts.outputDir);
 
+  // --- design capture aggregators (run-level) --------------------------------
+  // Constructed once per run; populated during the per-URL capture pass.
+  // Only active when opts.captureDesign is true.
+  const includeScripts = opts.includeScripts ?? false;
+  // Derive a stable base URL from the URL list for first-party checks.
+  // Fall back to a bare origin of the first URL if primaryUrl isn't provided.
+  const baseUrl = opts.primaryUrl
+    ? (opts.primaryUrl.includes('://') ? opts.primaryUrl : `https://${opts.primaryUrl}`)
+    : (() => {
+        try { const u = new URL(urls[0] ?? 'https://localhost'); return `${u.protocol}//${u.host}`; } catch { return 'https://localhost'; }
+      })();
+  const cssAgg = new CssAggregator();
+  const jsAgg = includeScripts ? new JsAggregator(baseUrl) : undefined;
+  const headLinks = new Set<string>();
+  const cssMediaUrls = new Set<string>();
+  if (opts.captureDesign) {
+    cssAgg.init(opts.outputDir);
+  }
+  const designCtx: DesignCaptureContext | undefined = opts.captureDesign
+    ? { cssAgg, jsAgg, headLinks, cssMediaUrls, baseUrl, includeScripts }
+    : undefined;
+
   // --- browser -----------------------------------------------------------
   let browser: Browser = await connectBrowser({ cdpPort: opts.cdpPort }) as unknown as Browser;
   let browserRestarts = 0;
@@ -402,6 +466,7 @@ export async function captureScreenshots(opts: ScreenshotOpts): Promise<Screensh
           plan: vpPlan,
           url,
           slug,
+          archetype: classifyUrl(url),
           settleMs,
           screenshotTimeoutMs,
           evaluateTimeoutMs,
@@ -409,6 +474,8 @@ export async function captureScreenshots(opts: ScreenshotOpts): Promise<Screensh
           entry,
           aggregator,
           shouldAnalyze: shouldAnalyzeUrl,
+          designCtx,
+          outputDir: opts.outputDir,
         });
       } catch (err) {
         urlFailures.push({
@@ -465,8 +532,18 @@ export async function captureScreenshots(opts: ScreenshotOpts): Promise<Screensh
         sendLog(server, `[warn] aggregator serialize failed: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
+    // Serialize design CSS aggregate if any pages/posts were captured
+    if (designCtx && designCtx.cssAgg.toString().trim()) {
+      try { designCtx.cssAgg.serialize(opts.outputDir); } catch (err) {
+        sendLog(server, `[warn] design cssAgg serialize failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
     try { await browser.close(); } catch { /* best-effort */ }
   }
+
+  const siteCssPath = designCtx && designCtx.cssAgg.toString().trim()
+    ? join(opts.outputDir, 'site.css')
+    : undefined;
 
   return {
     captured,
@@ -475,5 +552,7 @@ export async function captureScreenshots(opts: ScreenshotOpts): Promise<Screensh
     browserRestarts,
     durationMs: Date.now() - startTime,
     manifestPath,
+    siteCssPath,
+    cssMediaUrls: designCtx ? [...designCtx.cssMediaUrls] : undefined,
   };
 }

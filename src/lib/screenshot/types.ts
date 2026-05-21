@@ -45,6 +45,18 @@ export interface ScreenshotOpts {
   server?: Server;
   verbose?: boolean;
   /**
+   * Capture design fragment + CSS/JS aggregates for page/post archetypes.
+   * Default: false. When true, writes design/<slug>.fragment.html and
+   * accumulates site.css (and site.js when includeScripts=true) in outputDir.
+   */
+  captureDesign?: boolean;
+  /**
+   * Include first-party and allowlisted-CDN scripts in the JS aggregate.
+   * Only effective when captureDesign=true. Default: false.
+   * Full flag plumbing is Task 12; for now this opts into script capture.
+   */
+  includeScripts?: boolean;
+  /**
    * Per-URL progress callback. Fired after each URL finishes (success,
    * fail, or skip). `current` is the count of completed URLs (1-indexed),
    * `total` is the total to capture. Used by the watch TUI so the
@@ -60,4 +72,8 @@ export interface ScreenshotResult {
   browserRestarts: number;
   durationMs: number;
   manifestPath: string;
+  /** Absolute path to site.css when captureDesign=true and at least one page/post was captured. */
+  siteCssPath?: string;
+  /** CSS media URLs discovered across all captured page/post CSS. */
+  cssMediaUrls?: string[];
 }
