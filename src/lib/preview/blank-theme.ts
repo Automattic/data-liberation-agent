@@ -41,6 +41,11 @@ add_action('send_headers', function () {
     : '';
 
   const functionsPhp = `<?php
+// The carried fragment is raw HTML — prevent WordPress content filters from
+// mangling it. wpautop inserts stray <p> tags; wptexturize alters quotes/dashes.
+remove_filter('the_content', 'wpautop');
+remove_filter('the_content', 'wptexturize');
+
 add_action('wp_enqueue_scripts', function () {
   wp_enqueue_style('dla-site', get_stylesheet_directory_uri() . '/site.css', array(), null);
 ${fontEnqueues}

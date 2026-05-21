@@ -77,7 +77,7 @@ if (!existsSync(originManifest)) {
   console.log('[design-e2e] Origin screenshots not found. Run the following command to');
   console.log('[design-e2e] produce origin screenshots AND build the html-first replica:');
   console.log('');
-  console.log(`    data-liberation ${originUrl}${includeScriptsFlag} --output ${join(outDir, 'origin')}`);
+  console.log(`    data-liberation ${originUrl} --html-first${includeScriptsFlag} --output ${join(outDir, 'origin')}`);
   console.log('');
   console.log('[design-e2e] That command will:');
   console.log('  1. Screenshot every page of the origin site (into origin/screenshots/)');

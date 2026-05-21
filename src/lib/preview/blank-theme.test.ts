@@ -15,6 +15,9 @@ describe('buildBlankTheme', () => {
     expect(fns).toContain('fonts.googleapis.com');
     expect(fns).not.toContain('site.js');
     expect(fns).not.toContain('Content-Security-Policy');
+    // wpautop / wptexturize must be removed so carried raw HTML is not mangled
+    expect(fns).toContain("remove_filter('the_content', 'wpautop')");
+    expect(fns).toContain("remove_filter('the_content', 'wptexturize')");
 
     const withJs = buildBlankTheme({ themeSlug: 'dla-replica', hasJs: true, headLinks: [] }).find((f) => f.relativePath === 'functions.php')!.content;
     expect(withJs).toContain('site.js');

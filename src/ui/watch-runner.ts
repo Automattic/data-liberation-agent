@@ -2567,6 +2567,74 @@ export async function runWatch(opts: WatchOpts): Promise<{ ok: boolean; duration
         const { readFileSync: readSiteCss } = await import('node:fs');
         const cssText = readSiteCss(designCaptureSiteCssPath, 'utf8');
 
+        // Upload CSS url() media (background images, fonts found in site.css) into
+        // the WP media library so assembleDesignTheme can rewrite those URLs to
+        // local ones. These URLs were never downloaded by the adapter path, so we
+        // download them here, register them in MediaStubStore, and then call the
+        // same installMediaForUrl helper used for per-URL <img> media.
+        if (designCaptureCssMediaUrls && designCaptureCssMediaUrls.length > 0) {
+          try {
+            const { downloadMedia } = await import('../lib/extraction/media.js');
+            const { MediaStubStore } = await import('../lib/extraction/media-stubs.js');
+            const { join: joinPath } = await import('node:path');
+            const mediaDir = joinPath(outDir, 'media');
+            const { mkdirSync: mkdirSyncFn } = await import('node:fs');
+            mkdirSyncFn(mediaDir, { recursive: true });
+
+            const stubs = MediaStubStore.load(outDir);
+            const seenNames = new Map<string, number>();
+            let cssMediaDownloaded = 0;
+            let cssMediaErrors = 0;
+
+            for (const cssUrl of designCaptureCssMediaUrls) {
+              if (!stubs.shouldAttempt(cssUrl)) continue;
+              try {
+                const result = await downloadMedia(cssUrl, mediaDir, seenNames);
+                if (result.localPath) {
+                  stubs.markSuccess(cssUrl, result.localPath);
+                  cssMediaDownloaded += 1;
+                } else {
+                  stubs.markFailure(cssUrl, result.error ?? 'unknown');
+                  cssMediaErrors += 1;
+                }
+              } catch (dlErr) {
+                stubs.markFailure(cssUrl, (dlErr as Error).message);
+                cssMediaErrors += 1;
+              }
+            }
+            stubs.flush();
+
+            // Now install the newly downloaded CSS media into WP and merge into mediaUrlMap.
+            const { installMediaForUrl } = await import('../lib/streaming/media-install.js');
+            const cssMediaInstallResult = await installMediaForUrl({
+              outputDir: outDir,
+              url: opts.url,
+              wpRoot,
+              useStudioCli: true,
+            });
+            let cssMediaInstalled = 0;
+            for (const entry of cssMediaInstallResult.installed ?? []) {
+              if (entry.sourceUrl && entry.localUrl) {
+                mediaUrlMap.set(entry.sourceUrl, entry.localUrl);
+                cssMediaInstalled += 1;
+              }
+            }
+            appendWatchLog(outDir, {
+              event: 'css-media-installed',
+              total: designCaptureCssMediaUrls.length,
+              downloaded: cssMediaDownloaded,
+              downloadErrors: cssMediaErrors,
+              installed: cssMediaInstalled,
+              installErrors: cssMediaInstallResult.errors.length,
+            });
+          } catch (cssMediaErr) {
+            appendWatchLog(outDir, {
+              event: 'css-media-install-failed',
+              error: (cssMediaErr as Error).message,
+            });
+          }
+        }
+
         const designMediaUrlMap = new Map<string, string>();
         for (const [sourceUrl, localUrl] of mediaUrlMap.entries()) {
           if (localUrl) designMediaUrlMap.set(sourceUrl, localUrl);
