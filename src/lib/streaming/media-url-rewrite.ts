@@ -132,11 +132,20 @@ function collectMediaCandidates(input: string): string[] {
     let m: RegExpExecArray | null;
     while ((m = re.exec(input)) !== null) {
       const value = m[1];
-      // srcset can contain multiple URLs — split on comma + whitespace.
+      // srcset can contain multiple URLs — extract via URL_LIKE so that Wix
+      // transform URLs (which embed commas in their parameter segments, e.g.
+      // `/v1/fill/w_680,h_510,q_90,enc_avif,quality_auto/`) are captured
+      // whole rather than split at each comma.  A naïve value.split(',') slices
+      // those URLs mid-parameter, producing truncated keys like
+      // `https://…/media/<HASH>~mv2.png/v1/fill/w_943` that match the alias
+      // index (same asset-id prefix) and are then a substring of the real
+      // transform URL — so the regex-replace swaps just the prefix, leaving the
+      // transform tail appended to the local path (the "mangle").
       if (re.source.includes('srcset')) {
-        for (const part of value.split(',')) {
-          const url = part.trim().split(/\s+/)[0];
-          if (url) candidates.push(url);
+        let urlMatch: RegExpExecArray | null;
+        const urlRe = new RegExp(URL_LIKE.source, 'g');
+        while ((urlMatch = urlRe.exec(value)) !== null) {
+          candidates.push(urlMatch[0]);
         }
       } else {
         candidates.push(value);

@@ -85,6 +85,37 @@ describe('rewriteMediaUrls', () => {
     const out = rewriteMediaUrls(html, map);
     expect(out).toContain('href="http://l/file.pdf"');
   });
+
+  it('rewrites Wix transform URLs in srcset without mangling (commas in transform params)', () => {
+    // Wix gallery srcset: the transform URL contains commas inside the parameter
+    // segment (/v1/fill/w_680,h_510,q_90,enc_avif,quality_auto/).  A naïve
+    // split-on-comma parser produces a truncated key like
+    // https://…/media/<HASH>~mv2.png/v1/fill/w_943 which is a substring of the
+    // full transform URL.  The regex-replace then only replaces the prefix,
+    // appending the transform tail to the local path — the "mangle".
+    const hash = '53bc4c_c32b1032bb294fc993285aa77002c515';
+    const base = `https://static.wixstatic.com/media/${hash}~mv2.png`;
+    // The map key is the variant that was actually downloaded (v1/fit/w_943,h_707)
+    const mapKey = `${base}/v1/fit/w_943,h_707,q_90,enc_avif,quality_auto/${hash}~mv2.png`;
+    const localUrl = `http://localhost:8884/wp-content/uploads/2026/05/${hash}-mv2.png`;
+    const map = new Map([[mapKey, localUrl]]);
+
+    // The gallery HTML uses a different size variant (v1/fill/w_943,h_707)
+    const fillUrl1x = `${base}/v1/fill/w_680,h_510,q_90,enc_avif,quality_auto/${hash}~mv2.png`;
+    const fillUrl2x = `${base}/v1/fill/w_943,h_707,q_90,enc_avif,quality_auto/${hash}~mv2.png`;
+    const html = `<picture><source srcset="${fillUrl1x} 1x, ${fillUrl2x} 2x" type="image/png"><img src="${fillUrl2x}"></picture>`;
+
+    const out = rewriteMediaUrls(html, map);
+
+    // Every occurrence of the source domain must be replaced
+    expect(out).not.toContain('static.wixstatic.com');
+    // Local URL must appear and must NOT have transform-tail garbage appended
+    expect(out).not.toContain(`${localUrl},`);
+    expect(out).not.toContain(`${localUrl}/`);
+    // srcset and img src should both point cleanly to the local file
+    expect(out).toContain(`srcset="${localUrl} 1x, ${localUrl} 2x"`);
+    expect(out).toContain(`src="${localUrl}"`);
+  });
 });
 
 describe('toLocalUrlMapping', () => {
