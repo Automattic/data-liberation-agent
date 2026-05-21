@@ -3,6 +3,7 @@ import type { WxrBuilder } from '../lib/extraction/wxr-builder.js';
 import type { ExtractionLog } from '../lib/extraction/extraction-log.js';
 import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { classifyUrl, parseSitemapXml } from '../lib/extraction/sitemap.js';
+import { ensureUrlScheme } from '../lib/url.js';
 import {
   slugify,
   launchBrowser,
@@ -744,6 +745,10 @@ export const wixAdapter: PlatformAdapter = {
 
   async discover(url: string, opts: Record<string, unknown>): Promise<Inventory> {
     const wixOpts = opts as WixAdapterOpts;
+    // Normalize scheme-less input (e.g. "www.example.com") so the new URL()
+    // calls below don't throw "Invalid URL" — matches the guard that
+    // hubspot/weebly/hostinger already have at the top of their discover().
+    url = ensureUrlScheme(url);
     const { browser, page, close } = await launchBrowser({ cdpPort: wixOpts.cdpPort });
 
     try {
@@ -771,10 +776,25 @@ export const wixAdapter: PlatformAdapter = {
     const seenSitemaps = new Set<string>();
     const sitemapFailures: Array<{ url: string; reason: string }> = [];
 
-    async function fetchSitemapPw(sitemapUrl: string, depth = 0): Promise<void> {
+    async function fetchSitemapPw(sitemapUrl: string, depth = 0, speculative = false): Promise<void> {
       if (depth > 3) return;
       if (seenSitemaps.has(sitemapUrl)) return;
       seenSitemaps.add(sitemapUrl);
+
+      // Record a final fetch failure. Speculative sub-sitemap probes
+      // (blog/store/forum) that simply aren't present on this site are an
+      // expected miss, not a failure — stay quiet unless --verbose, and don't
+      // count them toward the "inventory may be incomplete" warning.
+      const fail = (reason: string): void => {
+        if (speculative) {
+          if (wixOpts.verbose) {
+            console.warn(`[wix:discover] optional sub-sitemap not present: ${sitemapUrl} (${reason})`);
+          }
+          return;
+        }
+        console.warn(`[wix:discover] sitemap fetch failed after ${RETRIES} attempts: ${sitemapUrl} (${reason})`);
+        sitemapFailures.push({ url: sitemapUrl, reason });
+      };
 
       // Retry with exponential backoff — Wix CDN occasionally returns
       // transient errors or times out under parallel load. A silent failure
@@ -791,8 +811,7 @@ export const wixAdapter: PlatformAdapter = {
               await new Promise((r) => setTimeout(r, 500 * attempt));
               continue;
             }
-            console.warn(`[wix:discover] sitemap fetch failed after ${RETRIES} attempts: ${sitemapUrl} (${lastErr})`);
-            sitemapFailures.push({ url: sitemapUrl, reason: lastErr });
+            fail(lastErr ?? 'unknown');
             return;
           }
           const text = await p.content();
@@ -812,8 +831,7 @@ export const wixAdapter: PlatformAdapter = {
             await new Promise((r) => setTimeout(r, 500 * attempt));
             continue;
           }
-          console.warn(`[wix:discover] sitemap fetch failed after ${RETRIES} attempts: ${sitemapUrl} (${lastErr})`);
-          sitemapFailures.push({ url: sitemapUrl, reason: lastErr });
+          fail(lastErr ?? 'unknown');
         }
       }
     }
@@ -833,7 +851,7 @@ export const wixAdapter: PlatformAdapter = {
       'store-products-sitemap.xml',
       'forum-posts-sitemap.xml',
     ]) {
-      await fetchSitemapPw(`${baseUrl}/${subSitemap}`);
+      await fetchSitemapPw(`${baseUrl}/${subSitemap}`, 0, true);
     }
 
     // 2. If sitemap is empty, crawl homepage for same-origin links
