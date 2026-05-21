@@ -1482,6 +1482,12 @@ async function flushPendingImports(opts: {
    * fighting the design fragment or installing block markup on top of it.
    */
   designCaptureActive?: boolean;
+  /**
+   * Optional callback fired after each successful post install. Receives
+   * the entry archetype and the WordPress post ID assigned by install-post.php.
+   * Used by the caller to capture the homepage post ID for front-page wiring.
+   */
+  onPostInstalled?: (archetype: string, postId: number) => void;
 }): Promise<{ imported: number; held: number }> {
   const { buffer, outDir, studioSitePath, agent, events, mediaUrlMap, blockFixer } = opts;
   // In html-first mode the compose path is gated off: design sidecars are the
@@ -1840,6 +1846,9 @@ async function flushPendingImports(opts: {
       action: result?.action ?? 'error',
       composedAs,
     });
+    if (result?.postId != null && opts.onPostInstalled) {
+      opts.onPostInstalled(entry.archetype, result.postId);
+    }
     return { entry, status: 'imported' };
   };
 
@@ -2020,6 +2029,10 @@ export async function runWatch(opts: WatchOpts): Promise<{ ok: boolean; duration
   let processedUrls = 0;
   let judgmentsHandled = 0;
   let judgmentsSkipped = 0;
+  // Homepage post ID captured during per-URL installs (html-first mode).
+  // Set when an installed entry's archetype is 'homepage' and installPost
+  // returns a valid post_id. Used at run-end to wire WP's static front page.
+  let homepagePostId: number | null = null;
   const scheduler = createTickScheduler({ outputDir: outDir });
   const pendingImports = new PendingImportsBuffer(outDir);
   // Run-wide source URL → local upload URL map. Populated by per-URL
@@ -2236,7 +2249,10 @@ export async function runWatch(opts: WatchOpts): Promise<{ ok: boolean; duration
 
       const themePiecesPending = hasPendingThemePieces(outDir, !isNoAgent(agent));
 
-      if (existsSync(join(outDir, 'design-foundation.json')) && !themePiecesPending) {
+      // Skip the recompose scaffold-theme install in html-first mode — the blank
+      // theme assembled at run-end is the only theme. (Also guards against a stale
+      // design-foundation.json from a prior recompose run triggering it.)
+      if (!opts.captureDesign && existsSync(join(outDir, 'design-foundation.json')) && !themePiecesPending) {
         try {
           const r = await installScaffoldIfNeeded({
             outDir,
@@ -2285,6 +2301,11 @@ export async function runWatch(opts: WatchOpts): Promise<{ ok: boolean; duration
         mediaUrlMap,
         blockFixer,
         designCaptureActive: opts.captureDesign ?? false,
+        onPostInstalled: (archetype, postId) => {
+          if (archetype === 'homepage' && homepagePostId === null) {
+            homepagePostId = postId;
+          }
+        },
       });
       if (flush.imported > 0 || flush.held > 0) {
         appendWatchLog(outDir, {
@@ -2661,6 +2682,26 @@ export async function runWatch(opts: WatchOpts): Promise<{ ok: boolean; duration
           );
         } catch (err) {
           warnings.push(`Theme activate "${designThemeSlug}" failed: ${(err as Error).message.trim()}`);
+        }
+
+        // Wire the imported homepage as WP's static front page so the site
+        // root serves the replica homepage instead of WP's default blog roll.
+        if (homepagePostId !== null) {
+          try {
+            await execFileAsync(
+              'studio',
+              ['wp', '--path', studioSitePath, 'option', 'update', 'show_on_front', 'page'],
+              { timeout: 30_000, maxBuffer: 1 * 1024 * 1024 },
+            );
+            await execFileAsync(
+              'studio',
+              ['wp', '--path', studioSitePath, 'option', 'update', 'page_on_front', String(homepagePostId)],
+              { timeout: 30_000, maxBuffer: 1 * 1024 * 1024 },
+            );
+            appendWatchLog(outDir, { event: 'design-front-page-set', postId: homepagePostId });
+          } catch (fpErr) {
+            warnings.push(`Front-page set failed (post ${homepagePostId}): ${(fpErr as Error).message.trim()}`);
+          }
         }
 
         appendWatchLog(outDir, {
