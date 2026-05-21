@@ -15,7 +15,7 @@
 //   Bundle:    node_modules/single-file-cli/lib/single-file-bundle.js
 //   Export:    `script` (string) — IIFE that sets `var singlefile` on window
 //   Injection: page.addScriptTag({ content: script }) — NOT a file path
-//   Global:    window.singlefile  (not globalThis.singlefile)
+//   Global:    window.singlefile (accessible as globalThis.singlefile inside page.evaluate)
 //   Method:    window.singlefile.getPageData(options) → Promise<{ content: string, ... }>
 //   Reference: single-file-cli/lib/single-file-script.js line 141:
 //              window.singlefile.getPageData(options).then(data => {...})

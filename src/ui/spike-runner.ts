@@ -15,6 +15,7 @@ import { join } from 'node:path';
 import { chromium } from 'playwright';
 import { freezePage } from '../lib/screenshot/freeze.js';
 import { compareScreenshotDirs } from '../lib/screenshot/compare.js';
+import { DEFAULT_VIEWPORTS } from '../lib/screenshot/types.js';
 
 export interface SpikeOpts {
   originUrl: string;
@@ -45,10 +46,11 @@ export async function runFreezeSpike(opts: SpikeOpts): Promise<void> {
 
   // Freeze the origin page (idempotent — safe to re-run).
   const sfBundle = await loadSingleFileBundle();
+  const desktop = DEFAULT_VIEWPORTS.find((v) => v.id === 'desktop') ?? { width: 1440, height: 900 };
   const browser = await chromium.launch();
   let via = '', kb = 0;
   try {
-    const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+    const page = await browser.newPage({ viewport: { width: desktop.width, height: desktop.height } });
     await page.goto(opts.originUrl, { waitUntil: 'domcontentloaded' });
     await page.waitForTimeout(2000); // settle (mirrors screenshotter)
     const frozen = await freezePage(page, sfBundle);

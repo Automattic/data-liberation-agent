@@ -193,7 +193,7 @@ if (args[0] === 'mcp') {
   // TODO: expose --viewports / --diff-output-dir flags (the MCP handler already supports them).
   const originDir = args[1];
   const replicaDir = args[2];
-  if (!originDir || !replicaDir || originDir.startsWith('-')) {
+  if (!originDir || !replicaDir || originDir.startsWith('-') || replicaDir.startsWith('-')) {
     console.error('Error: usage: data-liberation compare <originScreenshotsDir> <replicaScreenshotsDir>');
     process.exit(1);
   }
