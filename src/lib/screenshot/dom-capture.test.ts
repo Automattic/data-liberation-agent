@@ -50,7 +50,24 @@ describe('dom-capture', () => {
   });
 });
 
-const CHROME_FIXTURE = `<!DOCTYPE html><html><head></head><body>
+const CHROME_FIXTURE = `<!DOCTYPE html><html><head>
+  <style>
+    header { display: flex; width: 100%; height: 60px; background: #333; }
+    footer { display: block; width: 100%; height: 40px; background: #222; }
+  </style>
+</head><body style="margin:0">
+  <header><nav><a href="/">Home</a><a href="/about">About</a></nav></header>
+  <main><h1>Content</h1><p>Body text</p></main>
+  <footer><p>foot &copy; 2025</p></footer>
+</body></html>`;
+
+// A fixture with a position:fixed header to verify de-pin behaviour.
+const FIXED_CHROME_FIXTURE = `<!DOCTYPE html><html><head>
+  <style>
+    header { position: fixed; top: 0; left: 0; width: 100%; height: 60px; background: #333; }
+    footer { display: block; width: 100%; height: 40px; background: #222; }
+  </style>
+</head><body style="margin:0;padding-top:60px">
   <header><nav><a href="/">Home</a><a href="/about">About</a></nav></header>
   <main><h1>Content</h1><p>Body text</p></main>
   <footer><p>foot &copy; 2025</p></footer>
@@ -76,6 +93,37 @@ describe('collectBodyAndChrome', () => {
 
     // Main content is still present
     expect(bodyFragmentHtml).toContain('Content');
+    await page.close();
+  });
+
+  it('chrome outerHTML contains inline baked styles (display, height) from the fixup pipeline', async () => {
+    const page = await browser.newPage();
+    await page.setContent(CHROME_FIXTURE);
+    const { headerHtml, footerHtml } = await collectBodyAndChrome(page);
+
+    // After bakeComputedLayout the outerHTML should carry inline style attributes
+    // with the computed layout values frozen.
+    expect(headerHtml).not.toBeNull();
+    expect(headerHtml).toMatch(/style=/);
+    expect(headerHtml).toMatch(/display:/);
+    expect(headerHtml).toMatch(/height:/);
+
+    expect(footerHtml).not.toBeNull();
+    expect(footerHtml).toMatch(/style=/);
+    expect(footerHtml).toMatch(/display:/);
+    await page.close();
+  });
+
+  it('chrome outerHTML has position:static for originally-fixed header', async () => {
+    const page = await browser.newPage();
+    await page.setContent(FIXED_CHROME_FIXTURE);
+    const { headerHtml } = await collectBodyAndChrome(page);
+
+    expect(headerHtml).not.toBeNull();
+    // The header was position:fixed — the fixup pipeline must have de-pinned it.
+    expect(headerHtml).toMatch(/position:\s*static/);
+    // Must NOT contain position:fixed after fixup.
+    expect(headerHtml).not.toMatch(/position:\s*fixed/);
     await page.close();
   });
 
