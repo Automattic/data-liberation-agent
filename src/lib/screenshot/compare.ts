@@ -15,7 +15,7 @@
 //                      pixelmatch → diffPixels → score → diff PNG → comparison.json
 //
 import { existsSync, readFileSync, mkdirSync, writeFileSync, renameSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { PNG } from 'pngjs';
 import pixelmatch from 'pixelmatch';
 import { type ViewportId } from './output-layout.js';
@@ -83,13 +83,61 @@ function byPathname(m: ManifestFileLite): Map<string, { url: string; slug: strin
   return out;
 }
 
+/**
+ * Score a single viewport pair: decode two PNGs, crop both to the common
+ * top-viewport region, run pixelmatch, and return a ViewportScore.
+ *
+ * @param originPngPath  - Absolute (or resolvable) path to the origin PNG.
+ * @param replicaPngPath - Absolute (or resolvable) path to the replica PNG.
+ * @param viewport       - Which viewport dimensions to use as the crop ceiling.
+ * @param diffPath       - Optional path to write a diff PNG. Parent dir is
+ *   created with mkdirSync({recursive:true}) when the file is written.
+ */
+export function scoreViewportPair(
+  originPngPath: string,
+  replicaPngPath: string,
+  viewport: ViewportId,
+  diffPath?: string,
+): ViewportScore {
+  if (!existsSync(originPngPath)) return { status: 'missing-origin', score: null };
+  if (!existsSync(replicaPngPath)) return { status: 'missing-replica', score: null };
+
+  const dim = VIEWPORT_DIMS[viewport];
+  let oImg: PNG, rImg: PNG;
+  try {
+    oImg = PNG.sync.read(readFileSync(originPngPath));
+    rImg = PNG.sync.read(readFileSync(replicaPngPath));
+  } catch {
+    return { status: 'decode-error', score: null };
+  }
+
+  const w = Math.min(oImg.width, rImg.width, dim.w);
+  const h = Math.min(oImg.height, rImg.height, dim.h);
+  if (w <= 0 || h <= 0) return { status: 'dim-mismatch', score: null };
+
+  const oCrop = new PNG({ width: w, height: h });
+  const rCrop = new PNG({ width: w, height: h });
+  PNG.bitblt(oImg, oCrop, 0, 0, w, h, 0, 0);
+  PNG.bitblt(rImg, rCrop, 0, 0, w, h, 0, 0);
+  const diff = new PNG({ width: w, height: h });
+  const diffPixels = pixelmatch(oCrop.data, rCrop.data, diff.data, w, h, { threshold: 0.1, includeAA: false });
+  const total = w * h;
+  const score = 1 - diffPixels / total;
+
+  if (diffPath !== undefined) {
+    mkdirSync(dirname(diffPath), { recursive: true });
+    writeFileSync(diffPath, PNG.sync.write(diff));
+  }
+
+  return { status: 'ok', score, diffPath, width: w, height: h, diffPixels, totalPixels: total };
+}
+
 export async function compareScreenshotDirs(opts: CompareOpts): Promise<ComparisonFile> {
   const viewports = opts.viewports ?? (['desktop', 'mobile'] as ViewportId[]);
   const origin = byPathname(loadManifest(opts.originDir));
   const replica = byPathname(loadManifest(opts.replicaDir));
 
   const diffDir = opts.diffOutputDir ?? join(opts.replicaDir, 'diff');
-  let diffDirReady = false;
 
   const results: ComparisonResult[] = [];
   for (const [pathname, o] of origin) {
@@ -103,33 +151,10 @@ export async function compareScreenshotDirs(opts: CompareOpts): Promise<Comparis
     };
     for (const vp of viewports) {
       if (!r) { result[vp] = { status: 'missing-replica', score: null }; continue; }
-      const dim = VIEWPORT_DIMS[vp];
       const oPath = join(opts.originDir, vp, `${o.slug}.png`);
       const rPath = join(opts.replicaDir, vp, `${r.slug}.png`);
-      if (!existsSync(oPath)) { result[vp] = { status: 'missing-origin', score: null }; continue; }
-      if (!existsSync(rPath)) { result[vp] = { status: 'missing-replica', score: null }; continue; }
-      let oImg: PNG, rImg: PNG;
-      try {
-        oImg = PNG.sync.read(readFileSync(oPath));
-        rImg = PNG.sync.read(readFileSync(rPath));
-      } catch {
-        result[vp] = { status: 'decode-error', score: null };
-        continue;
-      }
-      const w = Math.min(oImg.width, rImg.width, dim.w);
-      const h = Math.min(oImg.height, rImg.height, dim.h);
-      if (w <= 0 || h <= 0) { result[vp] = { status: 'dim-mismatch', score: null }; continue; }
-      const oCrop = new PNG({ width: w, height: h });
-      const rCrop = new PNG({ width: w, height: h });
-      PNG.bitblt(oImg, oCrop, 0, 0, w, h, 0, 0);
-      PNG.bitblt(rImg, rCrop, 0, 0, w, h, 0, 0);
-      const diff = new PNG({ width: w, height: h });
-      const diffPixels = pixelmatch(oCrop.data, rCrop.data, diff.data, w, h, { threshold: 0.1, includeAA: false });
-      const total = w * h;
-      if (!diffDirReady) { mkdirSync(diffDir, { recursive: true }); diffDirReady = true; }
       const diffPath = join(diffDir, `${r.slug}.${vp}.diff.png`);
-      writeFileSync(diffPath, PNG.sync.write(diff));
-      result[vp] = { status: 'ok', score: 1 - diffPixels / total, diffPath, width: w, height: h, diffPixels, totalPixels: total };
+      result[vp] = scoreViewportPair(oPath, rPath, vp, diffPath);
     }
     results.push(result);
   }

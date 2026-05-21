@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { PNG } from 'pngjs';
-import { compareScreenshotDirs } from './compare.js';
+import { compareScreenshotDirs, scoreViewportPair } from './compare.js';
 
 const TMP = join(process.cwd(), '.tmp-test', 'compare');
 
@@ -23,6 +23,29 @@ function buildDir(dir: string, url: string, slug: string, png: { w: number; h: n
   writeFileSync(join(dir, 'manifest.json'), JSON.stringify({ version: 1, entries: { [url]: { slug, capturedAt: '2026-05-20T00:00:00Z' } } }, null, 2));
   for (const vp of ['desktop', 'mobile']) writeSolidPng(join(dir, vp, `${slug}.png`), png.w, png.h, png.color);
 }
+
+describe('scoreViewportPair', () => {
+  beforeEach(() => rmSync(TMP, { recursive: true, force: true }));
+  afterEach(() => rmSync(TMP, { recursive: true, force: true }));
+
+  it('returns status:ok score:1 for two identical solid PNGs', () => {
+    const oPath = join(TMP, 'a', 'origin.png');
+    const rPath = join(TMP, 'a', 'replica.png');
+    writeSolidPng(oPath, 1440, 900, [42, 42, 42, 255]);
+    writeSolidPng(rPath, 1440, 900, [42, 42, 42, 255]);
+    const result = scoreViewportPair(oPath, rPath, 'desktop');
+    expect(result.status).toBe('ok');
+    expect(result.score).toBe(1);
+  });
+
+  it('returns status:missing-origin when the origin path does not exist', () => {
+    const rPath = join(TMP, 'b', 'replica.png');
+    writeSolidPng(rPath, 390, 844, [1, 2, 3, 255]);
+    const result = scoreViewportPair(join(TMP, 'b', 'no-origin.png'), rPath, 'mobile');
+    expect(result.status).toBe('missing-origin');
+    expect(result.score).toBeNull();
+  });
+});
 
 describe('compareScreenshotDirs', () => {
   beforeEach(() => rmSync(TMP, { recursive: true, force: true }));
