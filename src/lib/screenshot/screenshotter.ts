@@ -22,6 +22,7 @@ import { JsAggregator } from './js-aggregator.js';
 import { captureDesignForUrl } from './design-capture-runner.js';
 import { collectMobileChromeLayout } from './dom-capture.js';
 import { generateChromeCss, type BakedLayoutMap } from './fixups.js';
+import type { ExtractedNav } from './nav-extract.js';
 
 /**
  * Scroll offset multiplier for the scrolled-state screenshot: we scroll to
@@ -108,9 +109,10 @@ interface DesignCaptureContext {
   cssMediaUrls: Set<string>;
   baseUrl: string;
   includeScripts: boolean;
-  /** Run-level accumulator: first non-null sanitized header/footer wins. */
+  /** Run-level accumulator: first non-null value wins. */
   chromeAccum: {
-    headerHtml: string | null;
+    /** Structured nav data extracted from the header (replaces headerHtml). */
+    nav: ExtractedNav | null;
     footerHtml: string | null;
     /** Desktop baked layout map (marker → props). Set on first successful chrome capture. */
     desktopLayoutMap: BakedLayoutMap | null;
@@ -430,7 +432,7 @@ export async function captureScreenshots(opts: ScreenshotOpts): Promise<Screensh
     cssAgg.init(opts.outputDir);
   }
   const chromeAccum = {
-    headerHtml: null as string | null,
+    nav: null as ExtractedNav | null,
     footerHtml: null as string | null,
     desktopLayoutMap: null as BakedLayoutMap | null,
     mobileLayoutMap: null as BakedLayoutMap | null,
@@ -637,7 +639,7 @@ export async function captureScreenshots(opts: ScreenshotOpts): Promise<Screensh
     cssMediaUrls: designCtx ? [...designCtx.cssMediaUrls] : undefined,
     headLinks: designCtx ? [...designCtx.headLinks] : undefined,
     siteJsText,
-    headerHtml: designCtx?.chromeAccum.headerHtml ?? undefined,
+    nav: designCtx?.chromeAccum.nav ?? undefined,
     footerHtml: designCtx?.chromeAccum.footerHtml ?? undefined,
     chromeCssText,
   };

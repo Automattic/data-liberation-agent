@@ -10,6 +10,7 @@ import type { CssAggregator } from './css-aggregator.js';
 import type { JsAggregator } from './js-aggregator.js';
 import { sanitizeSourceHtml } from '../streaming/html-sanitize.js';
 import type { BakedLayoutMap } from './fixups.js';
+import type { ExtractedNav } from './nav-extract.js';
 
 const CDN_FONT_HOSTS = ['fonts.gstatic.com', 'fonts.googleapis.com', 'use.typekit.net'];
 
@@ -36,9 +37,13 @@ export interface DesignCaptureRunOpts {
    * Extended for dual-viewport: also accumulates the desktop layout map
    * (marker → computed props) so it can be paired with the mobile map
    * collected during the mobile pass to generate responsive chrome.css.
+   *
+   * nav replaces headerHtml: structured nav data used to generate a native
+   * WP Navigation block header. Footer bake is unchanged.
    */
   chromeAccum?: {
-    headerHtml: string | null;
+    /** Structured nav data (replaces headerHtml). First non-null wins. */
+    nav: ExtractedNav | null;
     footerHtml: string | null;
     /** Desktop baked layout map (marker → props). Set on first successful chrome capture. */
     desktopLayoutMap: BakedLayoutMap | null;
@@ -71,15 +76,17 @@ export async function captureDesignForUrl(opts: DesignCaptureRunOpts): Promise<{
   await opts.cssAgg.add(opts.slug, scopeCss(cap.css, opts.slug, false));
   // head links → run-level set (theme re-links them)
   for (const l of cap.headLinks) opts.headLinks.add(l);
-  // Chrome accumulators: first non-null sanitized value across the run wins.
+  // Chrome accumulators: first non-null value across the run wins.
+  // nav replaces headerHtml — it is a plain data object (no HTML sanitization needed).
+  // Footer still uses the bake path (sanitized HTML).
   if (opts.chromeAccum) {
-    if (opts.chromeAccum.headerHtml === null && cap.headerHtml) {
-      opts.chromeAccum.headerHtml = sanitizeSourceHtml(cap.headerHtml);
+    if (opts.chromeAccum.nav === null && cap.nav) {
+      opts.chromeAccum.nav = cap.nav;
     }
     if (opts.chromeAccum.footerHtml === null && cap.footerHtml) {
       opts.chromeAccum.footerHtml = sanitizeSourceHtml(cap.footerHtml);
     }
-    // Accumulate desktop layout map (first non-null wins, same as html).
+    // Accumulate desktop layout map (first non-null wins, same as nav).
     if (opts.chromeAccum.desktopLayoutMap === null && cap.desktopLayoutMap) {
       opts.chromeAccum.desktopLayoutMap = cap.desktopLayoutMap;
     }
@@ -99,5 +106,13 @@ export async function captureDesignForUrl(opts: DesignCaptureRunOpts): Promise<{
     }
     await opts.jsAgg.add(opts.slug, inputs);
   }
-  return { cssMediaUrls: extractCssMediaUrls(cap.css, CDN_FONT_HOSTS) };
+  // Include the logo URL in the media discovery set so it flows through
+  // the same download + upload pipeline as CSS background images.
+  // The rewritten local URL is then available in assembleDesignTheme via
+  // mediaUrlMap.get(nav.logoSrc).
+  const cssMediaUrls = extractCssMediaUrls(cap.css, CDN_FONT_HOSTS);
+  if (cap.nav?.logoSrc && !cssMediaUrls.includes(cap.nav.logoSrc)) {
+    cssMediaUrls.push(cap.nav.logoSrc);
+  }
+  return { cssMediaUrls };
 }

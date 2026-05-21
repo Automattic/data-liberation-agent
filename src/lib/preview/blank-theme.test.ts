@@ -32,42 +32,55 @@ describe('buildBlankTheme', () => {
     expect(idx).not.toMatch(/get_header|get_footer|get_sidebar/);
   });
 
-  it('index.php includes header/footer chrome wrappers when HTML is provided', () => {
+  it('index.php renders block header via do_blocks() when headerBlockMarkup is provided', () => {
+    const BLOCK_MARKUP = '<!-- wp:navigation {"overlayMenu":"mobile"} --><!-- /wp:navigation -->';
     const files = buildBlankTheme({
       themeSlug: 'dla-replica',
       hasJs: false,
       headLinks: [],
-      headerHtml: '<nav><a href="/">Home</a></nav>',
+      headerBlockMarkup: BLOCK_MARKUP,
       footerHtml: '<p>Footer text &copy; 2025</p>',
     });
     const idx = files.find((f) => f.relativePath === 'index.php')!.content;
-    expect(idx).toContain('<header class="dla-site-header">');
-    expect(idx).toContain('<nav><a href="/">Home</a></nav>');
+
+    // Block header is rendered via do_blocks(), NOT a baked <header> element
+    expect(idx).toContain('do_blocks');
+    expect(idx).toContain('parts/header.html');
+    // Old baked header class must NOT appear
+    expect(idx).not.toContain('dla-site-header');
+
+    // Footer still baked as usual
     expect(idx).toContain('<footer class="dla-site-footer">');
     expect(idx).toContain('<p>Footer text &copy; 2025</p>');
-    expect(idx).toContain('.dla-site-header,.dla-site-footer{position:relative;width:100%;}');
     expect(idx).toContain('<main>');
     expect(idx).toContain('the_content()');
+
+    // parts/header.html written with block markup
+    const headerPart = files.find((f) => f.relativePath === 'parts/header.html');
+    expect(headerPart).toBeDefined();
+    expect(headerPart!.content).toContain('wp:navigation');
   });
 
-  it('index.php omits chrome wrappers when no header/footer HTML is provided', () => {
+  it('index.php omits chrome when no header markup or footer HTML provided', () => {
     const files = buildBlankTheme({ themeSlug: 'dla-replica', hasJs: false, headLinks: [] });
     const idx = files.find((f) => f.relativePath === 'index.php')!.content;
     expect(idx).not.toContain('dla-site-header');
     expect(idx).not.toContain('dla-site-footer');
-    expect(idx).not.toContain('.dla-site-header');
+    expect(idx).not.toContain('do_blocks');
     expect(idx).toContain('the_content()');
+    // No parts/header.html when no block markup provided
+    expect(files.find((f) => f.relativePath === 'parts/header.html')).toBeUndefined();
   });
 
-  it('index.php emits only header wrapper when only headerHtml provided', () => {
+  it('index.php emits only block header when only headerBlockMarkup provided (no footer)', () => {
     const files = buildBlankTheme({
       themeSlug: 'dla-replica',
       hasJs: false,
       headLinks: [],
-      headerHtml: '<nav>Nav only</nav>',
+      headerBlockMarkup: '<!-- wp:navigation /-->',
     });
     const idx = files.find((f) => f.relativePath === 'index.php')!.content;
-    expect(idx).toContain('<header class="dla-site-header">');
+    expect(idx).toContain('do_blocks');
     expect(idx).not.toContain('<footer class="dla-site-footer">');
   });
 

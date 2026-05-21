@@ -74,16 +74,17 @@ const FIXED_CHROME_FIXTURE = `<!DOCTYPE html><html><head>
 </body></html>`;
 
 describe('collectBodyAndChrome', () => {
-  it('extracts header + footer and removes them from the body fragment', async () => {
+  it('extracts nav (header) + footer and removes them from the body fragment', async () => {
     const page = await browser.newPage();
     await page.setContent(CHROME_FIXTURE);
-    const { bodyFragmentHtml, headerHtml, footerHtml } = await collectBodyAndChrome(page);
+    const { bodyFragmentHtml, nav, footerHtml } = await collectBodyAndChrome(page);
 
-    // Header was detected and contains nav link text
-    expect(headerHtml).not.toBeNull();
-    expect(headerHtml).toContain('Home');
+    // Header was detected — nav data extracted (not baked HTML)
+    expect(nav).not.toBeNull();
+    // Nav items from the fixture: Home, About
+    expect(nav!.items.some((item) => item.label === 'Home')).toBe(true);
 
-    // Footer was detected and contains footer text
+    // Footer was detected and contains footer text (still baked)
     expect(footerHtml).not.toBeNull();
     expect(footerHtml).toContain('foot');
 
@@ -96,15 +97,16 @@ describe('collectBodyAndChrome', () => {
     await page.close();
   });
 
-  it('chrome HTML carries dla-fx-N marker classes and desktopLayoutMap has computed props', async () => {
+  it('footer HTML carries dla-fx-N marker classes and desktopLayoutMap has computed props', async () => {
     const page = await browser.newPage();
     await page.setContent(CHROME_FIXTURE);
-    const { headerHtml, footerHtml, desktopLayoutMap } = await collectBodyAndChrome(page);
+    const { nav, footerHtml, desktopLayoutMap } = await collectBodyAndChrome(page);
 
-    // NEW marker-keyed approach: header/footer HTML carries dla-fx-N classes.
-    expect(headerHtml).not.toBeNull();
-    expect(headerHtml).toContain('dla-fx-');
+    // nav is extracted data (no marker classes needed in nav object)
+    expect(nav).not.toBeNull();
+    expect(nav!.items.length).toBeGreaterThan(0);
 
+    // Footer HTML still carries dla-fx-N classes (footer still uses bake path)
     expect(footerHtml).not.toBeNull();
     expect(footerHtml).toContain('dla-fx-');
 
@@ -112,7 +114,7 @@ describe('collectBodyAndChrome', () => {
     expect(desktopLayoutMap).not.toBeNull();
     expect(Object.keys(desktopLayoutMap!).length).toBeGreaterThan(0);
 
-    // Root elements (dla-fx-0 = header, dla-fx-N = footer root) should have display + height.
+    // Root elements (dla-fx-0 = header root, later keys = footer) should have display + height.
     const headerRootMarker = Object.keys(desktopLayoutMap!)[0];
     expect(desktopLayoutMap![headerRootMarker]['display']).toBeTruthy();
     expect(desktopLayoutMap![headerRootMarker]['height']).toBeTruthy();
@@ -122,28 +124,25 @@ describe('collectBodyAndChrome', () => {
   it('desktopLayoutMap has position:static for originally-fixed header (de-pinned in map)', async () => {
     const page = await browser.newPage();
     await page.setContent(FIXED_CHROME_FIXTURE);
-    const { headerHtml, desktopLayoutMap } = await collectBodyAndChrome(page);
+    const { nav, desktopLayoutMap } = await collectBodyAndChrome(page);
 
-    expect(headerHtml).not.toBeNull();
+    // nav is extracted (header detected even when fixed)
+    expect(nav).not.toBeNull();
     expect(desktopLayoutMap).not.toBeNull();
 
     // The header was position:fixed — the map should record static (de-pinned).
     // Find the header root marker (first key in the map is header's root).
     const headerRootMarker = Object.keys(desktopLayoutMap!)[0];
     expect(desktopLayoutMap![headerRootMarker]['position']).toBe('static');
-
-    // The outerHTML should NOT contain inline baked position: fixed (no inline mutation).
-    // It may contain dla-fx- marker classes from the marker assignment.
-    expect(headerHtml).toContain('dla-fx-');
     await page.close();
   });
 
-  it('returns null chrome when no header/footer elements exist', async () => {
+  it('returns null nav + chrome when no header/footer elements exist', async () => {
     const page = await browser.newPage();
     await page.setContent('<!DOCTYPE html><html><body><main><p>Only content</p></main></body></html>');
-    const { bodyFragmentHtml, headerHtml, footerHtml, desktopLayoutMap } = await collectBodyAndChrome(page);
+    const { bodyFragmentHtml, nav, footerHtml, desktopLayoutMap } = await collectBodyAndChrome(page);
     // No semantic header/footer — chrome should be null (heuristic requires score > 2)
-    expect(headerHtml).toBeNull();
+    expect(nav).toBeNull();
     expect(footerHtml).toBeNull();
     expect(desktopLayoutMap).toBeNull();
     expect(bodyFragmentHtml).toContain('Only content');

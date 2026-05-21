@@ -13,8 +13,10 @@
 //     → assembleDesignTheme (run-end) → writeReplicaFilesToHost → activate
 //
 import { buildBlankTheme } from './blank-theme.js';
+import { buildBlockHeader } from './block-header.js';
 import { rewriteMediaUrls } from '../streaming/media-url-rewrite.js';
 import type { ReplicaFile } from './types.js';
+import type { ExtractedNav } from '../screenshot/nav-extract.js';
 
 export interface AssembleDesignThemeOpts {
   outputDir: string;
@@ -23,8 +25,17 @@ export interface AssembleDesignThemeOpts {
   mediaUrlMap: Map<string, string>;     // source URL → local upload URL
   headLinks: string[];                  // CDN/cross-origin <link>s to re-link
   themeSlug?: string;                   // default 'dla-replica'
-  /** Sanitized site header HTML to bake into the blank theme. */
-  headerHtml?: string;
+  /**
+   * Structured nav data captured from the source header.
+   * Used to generate a native WP Navigation block header with a responsive
+   * hamburger via do_blocks(). Replaces the old headerHtml field.
+   */
+  nav?: ExtractedNav;
+  /**
+   * Local (uploaded) URL for the logo image, derived from nav.logoSrc after
+   * media pipeline rewrite. When present, overrides nav.logoSrc in the block.
+   */
+  logoLocalUrl?: string;
   /** Sanitized site footer HTML to bake into the blank theme. */
   footerHtml?: string;
   /**
@@ -40,8 +51,8 @@ export interface AssembleDesignThemeOpts {
  * Assemble the blank design theme for html-first mode.
  *
  * Returns the ReplicaFile[] for the blank theme (style.css, functions.php,
- * index.php, page.php, singular.php) plus the run-level site.css
- * (media-URL-rewritten) and, when jsText is non-empty, site.js.
+ * index.php, page.php, singular.php, parts/header.html) plus the run-level
+ * site.css (media-URL-rewritten) and, when jsText is non-empty, site.js.
  */
 export function assembleDesignTheme(opts: AssembleDesignThemeOpts): ReplicaFile[] {
   const themeSlug = opts.themeSlug ?? 'dla-replica';
@@ -54,7 +65,24 @@ export function assembleDesignTheme(opts: AssembleDesignThemeOpts): ReplicaFile[
     ? rewriteMediaUrls(opts.cssText, opts.mediaUrlMap)
     : opts.cssText;
 
-  const files = buildBlankTheme({ themeSlug, hasJs, headLinks: opts.headLinks, headerHtml: opts.headerHtml, footerHtml: opts.footerHtml, hasChromeCss });
+  // Build the WP block header markup from nav data.
+  // The logo URL is rewritten to its local upload URL when available.
+  let headerBlockMarkup: string | undefined;
+  if (opts.nav) {
+    // Rewrite nav.logoSrc to the local URL if available in the mediaUrlMap.
+    const logoLocalUrl = opts.logoLocalUrl
+      ?? (opts.nav.logoSrc ? (opts.mediaUrlMap.get(opts.nav.logoSrc) ?? undefined) : undefined);
+    headerBlockMarkup = buildBlockHeader(opts.nav, { logoLocalUrl });
+  }
+
+  const files = buildBlankTheme({
+    themeSlug,
+    hasJs,
+    headLinks: opts.headLinks,
+    headerBlockMarkup,
+    footerHtml: opts.footerHtml,
+    hasChromeCss,
+  });
   files.push({ relativePath: 'site.css', content: siteCss });
   if (hasChromeCss) {
     files.push({ relativePath: 'chrome.css', content: opts.chromeCssText! });

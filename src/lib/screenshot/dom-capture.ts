@@ -1,6 +1,7 @@
 // src/lib/screenshot/dom-capture.ts
 import type { Page } from 'playwright';
 import { CHROME_FIXUP_FACTORY_SOURCE, CHROME_MARKER_FACTORY_SOURCE, type BakedLayoutMap } from './fixups.js';
+import { NAV_EXTRACT_FACTORY_SOURCE, type ExtractedNav } from './nav-extract.js';
 
 /** Inner HTML of <body>, image src/srcset preserved (no inlining). */
 export async function collectBodyFragment(page: Page): Promise<string> {
@@ -9,7 +10,12 @@ export async function collectBodyFragment(page: Page): Promise<string> {
 
 export interface BodyAndChrome {
   bodyFragmentHtml: string;
-  headerHtml: string | null;
+  /**
+   * Structured nav data extracted from the site header (logo, items, CTA,
+   * style tokens). Replaces the old headerHtml bake. null when no header was
+   * detected or nav extraction failed.
+   */
+  nav: ExtractedNav | null;
   footerHtml: string | null;
   /** Desktop baked layout map (marker → props). Populated by the new marker-keyed path. */
   desktopLayoutMap: BakedLayoutMap | null;
@@ -43,14 +49,16 @@ export interface BodyAndChrome {
  * so `fixups.ts` remains the single source of truth.
  */
 export async function collectBodyAndChrome(page: Page): Promise<BodyAndChrome> {
-  // Inject the marker factory (assignChromeMarkers + collectBakedLayout).
+  // Inject the marker factory (assignChromeMarkers + collectBakedLayout)
+  // and the nav-extract factory (extractNav).
   // The old applier factory is kept as a fallback import but not used in the
   // primary chrome path — marker-based approach replaces inline baking.
   const { factorySrc } = CHROME_FIXUP_FACTORY_SOURCE;
   const markerFactorySrc = CHROME_MARKER_FACTORY_SOURCE.factorySrc;
+  const navFactorySrc = NAV_EXTRACT_FACTORY_SOURCE.factorySrc;
 
   return page.evaluate(
-    ({ factorySrc, markerFactorySrc }: { factorySrc: string; markerFactorySrc: string }): BodyAndChrome => {
+    ({ factorySrc, markerFactorySrc, navFactorySrc }: { factorySrc: string; markerFactorySrc: string; navFactorySrc: string }): BodyAndChrome => {
       // Reconstruct the marker helpers from the self-contained factory.
       // eslint-disable-next-line no-new-func
       const markerHelpers = new Function('return (' + markerFactorySrc + ')')()() as {
@@ -58,6 +66,13 @@ export async function collectBodyAndChrome(page: Page): Promise<BodyAndChrome> {
         collectBakedLayout: (root: Element) => Record<string, Record<string, string>>;
       };
       const { collectBakedLayout } = markerHelpers;
+
+      // Reconstruct the nav extraction helper.
+      // eslint-disable-next-line no-new-func
+      const navHelpers = new Function('return (' + navFactorySrc + ')')()() as {
+        extractNav: (headerEl: Element) => import('./nav-extract.js').ExtractedNav;
+      };
+      const { extractNav } = navHelpers;
 
       // The old factory is available for potential future use. Not needed here —
       // depin is now folded into collectBakedLayout's return values.
@@ -104,15 +119,24 @@ export async function collectBodyAndChrome(page: Page): Promise<BodyAndChrome> {
         }
       };
 
-      let headerHtml: string | null = null;
+      // Nav is extracted from the header BEFORE marker assignment so
+      // getComputedStyle sees the clean DOM. Footer still uses the bake path.
+      let nav: import('./nav-extract.js').ExtractedNav | null = null;
       let footerHtml: string | null = null;
       let desktopLayoutMap: Record<string, Record<string, string>> = {};
 
       if (header) {
+        // Extract structured nav data BEFORE modifying the header DOM.
+        try {
+          nav = extractNav(header);
+        } catch {
+          nav = null;
+        }
+        // Assign markers for chrome.css generation (footer still needs layout map).
         assignMarkersGlobal(header);
         const headerMap = collectBakedLayout(header);
         Object.assign(desktopLayoutMap, headerMap);
-        headerHtml = (header as HTMLElement).outerHTML;
+        // NOTE: We do NOT capture headerHtml. The nav data replaces it.
       }
 
       if (footer) {
@@ -132,12 +156,12 @@ export async function collectBodyAndChrome(page: Page): Promise<BodyAndChrome> {
 
       return {
         bodyFragmentHtml: document.body.innerHTML,
-        headerHtml,
+        nav,
         footerHtml,
         desktopLayoutMap: Object.keys(desktopLayoutMap).length > 0 ? desktopLayoutMap : null,
       };
     },
-    { factorySrc, markerFactorySrc },
+    { factorySrc, markerFactorySrc, navFactorySrc },
   );
 }
 

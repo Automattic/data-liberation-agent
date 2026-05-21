@@ -1,5 +1,6 @@
 import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import type { UrlType } from '../extraction/sitemap.js';
+import type { ExtractedNav } from './nav-extract.js';
 
 export interface Viewport {
   id: 'desktop' | 'mobile';
@@ -89,11 +90,12 @@ export interface ScreenshotResult {
    */
   siteJsText?: string;
   /**
-   * Sanitized site header HTML extracted from the first captured page that
-   * yielded a detectable header element. Undefined when captureDesign=false or
-   * no header was detected across any captured page.
+   * Structured nav data extracted from the first captured page that yielded a
+   * detectable header element. Replaces the old headerHtml field. Used to
+   * generate a native WP Navigation block header (responsive hamburger).
+   * Undefined when captureDesign=false or no header was detected.
    */
-  headerHtml?: string;
+  nav?: ExtractedNav;
   /**
    * Sanitized site footer HTML extracted from the first captured page that
    * yielded a detectable footer element. Undefined when captureDesign=false or

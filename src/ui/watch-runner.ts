@@ -33,6 +33,7 @@ import { BlockFixerClient } from '../lib/streaming/block-fixer-client.js';
 import { appendTransform, type BlockTransformEntry } from '../lib/streaming/block-transform-log.js';
 import { countBlocks } from '../lib/streaming/block-markup-validate.js';
 import { designSidecarPath } from '../lib/screenshot/design-capture-runner.js';
+import type { ExtractedNav } from '../lib/screenshot/nav-extract.js';
 import { createHash } from 'node:crypto';
 import { createInterface } from 'node:readline';
 import { detect } from '../lib/extraction/detect-platform.js';
@@ -2138,7 +2139,7 @@ export async function runWatch(opts: WatchOpts): Promise<{ ok: boolean; duration
     let designCaptureCssMediaUrls: string[] | undefined;
     let designCaptureHeadLinks: string[] | undefined;
     let designCaptureSiteJsText: string | undefined;
-    let designCaptureHeaderHtml: string | undefined;
+    let designCaptureNav: ExtractedNav | undefined;
     let designCaptureFooterHtml: string | undefined;
     let designCaptureChromeCssText: string | undefined;
 
@@ -2441,7 +2442,7 @@ export async function runWatch(opts: WatchOpts): Promise<{ ok: boolean; duration
             designCaptureCssMediaUrls = result.cssMediaUrls ?? [];
             designCaptureHeadLinks = result.headLinks ?? [];
             designCaptureSiteJsText = result.siteJsText;
-            designCaptureHeaderHtml = result.headerHtml;
+            designCaptureNav = result.nav;
             designCaptureFooterHtml = result.footerHtml;
             designCaptureChromeCssText = result.chromeCssText;
           }
@@ -2675,7 +2676,7 @@ export async function runWatch(opts: WatchOpts): Promise<{ ok: boolean; duration
           mediaUrlMap: designMediaUrlMap,
           headLinks: designCaptureHeadLinks ?? [],
           themeSlug: designThemeSlug,
-          headerHtml: designCaptureHeaderHtml,
+          nav: designCaptureNav,
           footerHtml: designCaptureFooterHtml,
           chromeCssText: designCaptureChromeCssText,
         });
@@ -2720,7 +2721,7 @@ export async function runWatch(opts: WatchOpts): Promise<{ ok: boolean; duration
           cssMediaUrls: (designCaptureCssMediaUrls ?? []).length,
           headLinksCount: (designCaptureHeadLinks ?? []).length,
           jsBytes: designCaptureSiteJsText ? designCaptureSiteJsText.length : 0,
-          headerHtmlBytes: designCaptureHeaderHtml ? designCaptureHeaderHtml.length : 0,
+          navItemCount: designCaptureNav ? designCaptureNav.items.length : 0,
           footerHtmlBytes: designCaptureFooterHtml ? designCaptureFooterHtml.length : 0,
           chromeCssBytes: designCaptureChromeCssText ? designCaptureChromeCssText.length : 0,
           warnings,
