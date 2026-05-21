@@ -33,11 +33,15 @@
     "ink": "^6.8.0",
     "ink-spinner": "^5.0.0",
     "papaparse": "^5.5.3",
+    "pixelmatch": "^5.3.0",
     "playwright": "^1.44.0",
+    "pngjs": "^7.0.0",
     "react": "^19.2.4",
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@types/pixelmatch": "^5.2.6",
+    "@types/pngjs": "^6.0.5",
     "@types/react": "^19.2.14",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0",
