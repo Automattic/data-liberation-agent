@@ -40,6 +40,11 @@ import { designFoundationSaveHandler } from './mcp-server/handlers/design-founda
 import { replicateInventoryHandler } from './mcp-server/handlers/replicate-inventory.js';
 import { replicateVerifyHandler } from './mcp-server/handlers/replicate-verify.js';
 import { compareHandler } from './mcp-server/handlers/compare.js';
+import { clusterPagesHandler } from './mcp-server/handlers/cluster-pages.js';
+import { sectionExtractHandler } from './mcp-server/handlers/section-extract.js';
+import { composeInstantiateHandler } from './mcp-server/handlers/compose-instantiate.js';
+import { validateArtifactsHandler } from './mcp-server/handlers/validate-artifacts.js';
+import { NEW_TOOL_SCHEMAS } from './mcp-server/handlers/tool-schemas.js';
 
 // Static adapter imports — add new adapters here (alphabetical)
 import { godaddyWmAdapter } from './adapters/godaddy-wm.js';
@@ -555,6 +560,9 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: ['originDir', 'replicaDir'],
       },
     },
+    ...(JSON.parse(JSON.stringify(
+      Object.entries(NEW_TOOL_SCHEMAS).map(([name, def]) => ({ name, ...def })),
+    )) as Array<{ name: string; description: string; inputSchema: { type: 'object'; [k: string]: unknown } }>),
   ],
 }));
 
@@ -587,6 +595,10 @@ const handlers: Record<string, Handler> = {
   liberate_setup: setupHandler,
   liberate_status: statusHandler,
   liberate_verify: verifyHandler,
+  liberate_cluster_pages: clusterPagesHandler,
+  liberate_section_extract: sectionExtractHandler,
+  liberate_compose_instantiate: composeInstantiateHandler,
+  liberate_validate_artifacts: validateArtifactsHandler,
 };
 
 function makeContext(): HandlerContext {
