@@ -103,6 +103,50 @@ const FIXTURE_NO_LOGO = `<!DOCTYPE html><html><head>
   <footer><p>Footer here</p></footer>
 </body></html>`;
 
+// Fixture: Wix-style header with explicit typography tokens (letter-spacing,
+// text-transform, font-size) on nav labels, and a "CALL US" CTA button
+// that is NOT in the nav menu — mirrors the real-world Wix StylableButton pattern.
+const FIXTURE_TYPOGRAPHY_AND_CTA = `<!DOCTYPE html><html><head>
+  <style>
+    body { margin: 0; }
+    header { display: flex; position: relative; width: 100%; height: 70px;
+             background: rgb(23, 82, 54); align-items: center; padding: 0 24px; }
+    nav { display: flex; gap: 20px; }
+    nav a { text-decoration: none; }
+    .menu-label {
+      color: rgb(255, 255, 255);
+      font-family: 'Helvetica Neue', sans-serif;
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 2.6px;
+      text-transform: uppercase;
+    }
+    .call-us-btn {
+      background: rgb(23, 82, 54);
+      color: rgb(255, 255, 255);
+      border: 2px solid rgb(255, 255, 255);
+      border-radius: 4px;
+      padding: 8px 16px;
+      text-decoration: none;
+      font-size: 13px;
+    }
+    img { height: 40px; }
+  </style>
+</head><body>
+  <header>
+    <img src="https://example.com/logo.png" alt="Brand">
+    <nav>
+      <a href="/home"><div class="menu-label">HOME</div></a>
+      <a href="/about"><div class="menu-label">ABOUT</div></a>
+      <a href="/services"><div class="menu-label">SERVICES</div></a>
+      <a href="/contact"><div class="menu-label">CONTACT</div></a>
+    </nav>
+    <a href="/call-us" class="call-us-btn">CALL US</a>
+  </header>
+  <main><p>Content here.</p></main>
+  <footer><p>Footer</p></footer>
+</body></html>`;
+
 let browser: Browser;
 beforeAll(async () => { browser = await chromium.launch(); });
 afterAll(async () => { await browser.close(); });
@@ -259,6 +303,41 @@ describe('extractNav (browser fixture)', () => {
     // Should capture background-image (gradient) not fall through to transparent.
     expect(nav!.style.backgroundImage).toBeDefined();
     expect(nav!.style.backgroundImage).toMatch(/linear-gradient/i);
+  });
+
+  it('captures fontSize, letterSpacing, textTransform from representative nav label element', async () => {
+    const nav = await runExtractNav(FIXTURE_TYPOGRAPHY_AND_CTA);
+    expect(nav).not.toBeNull();
+    // fontSize should be captured from the .menu-label div (13px)
+    expect(nav!.style.fontSize).toBeDefined();
+    expect(nav!.style.fontSize).toMatch(/13px/);
+    // letterSpacing should be captured (2.6px — non-zero/non-normal)
+    expect(nav!.style.letterSpacing).toBeDefined();
+    expect(nav!.style.letterSpacing).toBeTruthy();
+    // textTransform should be 'uppercase'
+    expect(nav!.style.textTransform).toBe('uppercase');
+  });
+
+  it('detects "CALL US" CTA button that is NOT in nav menu items', async () => {
+    const nav = await runExtractNav(FIXTURE_TYPOGRAPHY_AND_CTA);
+    expect(nav).not.toBeNull();
+    // CTA should be populated with the "CALL US" link
+    expect(nav!.cta).not.toBeNull();
+    expect(nav!.cta!.label).toBe('CALL US');
+    expect(nav!.cta!.href).toBe('/call-us');
+    // CTA should NOT appear in nav items
+    expect(nav!.items.every((item) => item.label !== 'CALL US')).toBe(true);
+    // Nav items should include the real menu items
+    expect(nav!.items.some((i) => i.label === 'HOME')).toBe(true);
+  });
+
+  it('captures bg and color on the cta object', async () => {
+    const nav = await runExtractNav(FIXTURE_TYPOGRAPHY_AND_CTA);
+    expect(nav).not.toBeNull();
+    expect(nav!.cta).not.toBeNull();
+    // The CTA has a background (border-radius > 0 makes it qualify)
+    // and color should be white
+    expect(nav!.cta!.color).toMatch(/rgb\(255,\s*255,\s*255\)/);
   });
 });
 

@@ -181,7 +181,16 @@ export function buildBlockHeader(nav: ExtractedNav, opts: BlockHeaderOpts = {}):
   }
   const inlineStyle = inlineStyles.join(';');
 
-  return `<!-- wp:group {"tagName":"header","align":"full","style":${JSON.stringify(outerStyle)},"layout":{"type":"flex","flexWrap":"nowrap","justifyContent":"space-between","verticalAlignment":"center"}} -->
+  // ── High-specificity style block to override leaked site.css ─────────────
+  // The theme enqueues the source site's CSS (e.g. Wix site.css) which contains
+  // global `a` / text rules that cascade into our generated header even though
+  // the header is OUTSIDE the .dla-replica content wrapper.  We defeat this by
+  // emitting a scoped <style> block with !important rules that enforce the
+  // captured typography and color tokens on every nav link rendered by the
+  // wp:navigation block.
+  const navOverrideStyle = buildNavOverrideStyle(textColor, nav.style, resolvedCta);
+
+  return `${navOverrideStyle}<!-- wp:group {"tagName":"header","align":"full","style":${JSON.stringify(outerStyle)},"layout":{"type":"flex","flexWrap":"nowrap","justifyContent":"space-between","verticalAlignment":"center"}} -->
 <header class="wp-block-group alignfull" style="${inlineStyle}">${logoBlock}${rightGroup}</header>
 <!-- /wp:group -->`;
 }
@@ -241,12 +250,63 @@ ${links}
 <!-- /wp:navigation -->`;
 }
 
+/**
+ * Emit a <style> block with high-specificity !important rules scoped to the
+ * generated header.  This defeats global CSS from the source site's stylesheet
+ * (e.g. Wix's site.css) which the theme enqueues and which can override the
+ * header's intended nav typography and color.
+ *
+ * The rules target the WP Navigation block selectors used at runtime so the
+ * override is precise and doesn't bleed outside the header.
+ */
+function buildNavOverrideStyle(
+  textColor: string,
+  style: ExtractedNav['style'],
+  cta: { label: string; href: string; bg?: string; color?: string } | null,
+): string {
+  const fontFamily = style.fontFamily ? `"${style.fontFamily}"` : null;
+  const rules: string[] = [];
+
+  // Build the nav-link rule.
+  const navProps: string[] = [];
+  navProps.push(`color:${textColor} !important`);
+  if (style.fontSize) navProps.push(`font-size:${style.fontSize} !important`);
+  if (style.fontWeight) navProps.push(`font-weight:${style.fontWeight} !important`);
+  if (style.letterSpacing) navProps.push(`letter-spacing:${style.letterSpacing} !important`);
+  if (style.textTransform) navProps.push(`text-transform:${style.textTransform} !important`);
+  if (fontFamily) navProps.push(`font-family:${fontFamily} !important`);
+
+  if (navProps.length > 0) {
+    const decls = navProps.join(';');
+    rules.push(
+      `header.wp-block-group .wp-block-navigation a,\nheader.wp-block-group .wp-block-navigation .wp-block-navigation-item__content { ${decls}; }`,
+    );
+  }
+
+  // Build the CTA button rule when a CTA is present.
+  if (cta) {
+    const ctaBg = cta.bg ?? style.ctaBackground ?? null;
+    const ctaColor = cta.color ?? style.ctaTextColor ?? null;
+    const ctaProps: string[] = [];
+    if (ctaBg) ctaProps.push(`background-color:${ctaBg} !important`, `background:${ctaBg} !important`);
+    if (ctaColor) ctaProps.push(`color:${ctaColor} !important`);
+    if (ctaProps.length > 0) {
+      rules.push(
+        `header.wp-block-group .wp-block-button__link { ${ctaProps.join(';')}; }`,
+      );
+    }
+  }
+
+  if (rules.length === 0) return '';
+  return `<style>\n${rules.join('\n')}\n</style>\n`;
+}
+
 function buildCtaBlock(
-  cta: { label: string; href: string },
+  cta: { label: string; href: string; bg?: string; color?: string },
   style: ExtractedNav['style'],
 ): string {
-  const bg = style.ctaBackground ?? style.textColor ?? '#000000';
-  const color = style.ctaTextColor ?? style.background ?? '#ffffff';
+  const bg = cta.bg ?? style.ctaBackground ?? style.textColor ?? '#000000';
+  const color = cta.color ?? style.ctaTextColor ?? style.background ?? '#ffffff';
   const btnAttrs = JSON.stringify({
     url: cta.href,
     text: cta.label,

@@ -67,8 +67,11 @@ export interface ExtractedNav {
   siteTitle: string | null;
   /** Top-level nav links; deduped, capped at 8, no pure anchors. */
   items: { label: string; href: string }[];
-  /** A button-styled link (bg / border-radius / class hint), or null. */
-  cta: { label: string; href: string } | null;
+  /**
+   * A button-styled link (bg / border-radius / class hint), or null.
+   * Includes bg and text color when available.
+   */
+  cta: { label: string; href: string; bg?: string; color?: string } | null;
   style: {
     /** Header background-color (rgba string). May be 'transparent' or 'rgba(0,0,0,0)' when indeterminate. */
     background: string;
@@ -86,6 +89,14 @@ export interface ExtractedNav {
     ctaTextColor: string | null;
     /** First font-family in the computed stack for nav links. */
     fontFamily: string;
+    /** Computed font-size of a representative nav link (e.g. "13px"). */
+    fontSize?: string;
+    /** Computed font-weight of a representative nav link (e.g. "400"). */
+    fontWeight?: string;
+    /** Computed letter-spacing of a representative nav link (e.g. "2.6px"). */
+    letterSpacing?: string;
+    /** Computed text-transform of a representative nav link (e.g. "uppercase"). */
+    textTransform?: string;
     /** Header element height in px. */
     height: number;
   };
@@ -136,19 +147,62 @@ export function extractNav(headerEl: Element): ExtractedNav {
   const allHeaderAnchorEls = Array.from(headerEl.querySelectorAll('a')).filter(isValidAnchor) as HTMLAnchorElement[];
 
   // ── CTA detection ─────────────────────────────────────────────────────────
-  // Scan ALL header links for button-like appearance. Last qualifying link wins
-  // (CTAs usually appear at the end — "Contact Us", "Get Started", etc).
-  const isCtaLike = (a: HTMLAnchorElement): boolean => {
-    const cs = getComputedStyle(a);
+  // Scan ALL header <a>/<button>/[role=button] elements.
+  // A candidate must:
+  //   1. Have short trimmed text (≤ 18 chars, 1–3 words).
+  //   2. NOT be one of the nav menu labels already collected.
+  //   3. Look button-like: non-transparent bg OR borderRadius > 0 OR
+  //      class/role hint (button|btn|cta).
+  // Best candidate = last qualifying element in document order (CTAs tend to
+  // appear at the end of the header — "CALL US", "Get Started", etc.).
+  // Null is fine when nothing qualifies (don't crash).
+
+  // Collect ALL interactive elements in the header (a, button, [role=button]).
+  const allInteractive = Array.from(
+    headerEl.querySelectorAll('a, button, [role="button"]')
+  ).filter((el) => {
+    // Must have visible non-empty text.
+    const label = el.textContent?.trim() ?? '';
+    if (!label) return false;
+    // For <a> elements, must have a meaningful href (not just an anchor or JS void).
+    if (el.tagName === 'A') {
+      const href = (el as HTMLAnchorElement).getAttribute('href');
+      if (!href || href === '#' || href.startsWith('javascript:')) return false;
+    }
+    return true;
+  }) as Array<HTMLAnchorElement | HTMLButtonElement>;
+
+  // Build set of nav item labels for exclusion check (filled after nav items
+  // are collected below — we defer CTA selection to after items are built).
+  // For now collect the raw nav anchor labels.
+  const navItemLabels = new Set(
+    navAnchorEls.map((a) => (a.textContent?.trim() ?? '').toLowerCase())
+  );
+
+  const isCtaLike = (el: HTMLAnchorElement | HTMLButtonElement): boolean => {
+    const label = (el.textContent?.trim() ?? '');
+    // Must be short: ≤ 18 chars AND 1–3 words.
+    if (label.length > 18) return false;
+    const wordCount = label.split(/\s+/).filter(Boolean).length;
+    if (wordCount < 1 || wordCount > 3) return false;
+    // Must NOT already be a nav menu item.
+    if (navItemLabels.has(label.toLowerCase())) return false;
+    // Must look button-like.
+    const cs = getComputedStyle(el);
     const bg = cs.backgroundColor;
     const isOpaque = bg && bg !== 'transparent' && bg !== 'rgba(0, 0, 0, 0)';
     const hasBorderRadius = parseFloat(cs.borderRadius) > 0;
-    const classHint = /button|btn|cta/i.test(a.className + ' ' + (a.id ?? '') + ' ' + (a.parentElement?.className ?? ''));
+    const classHint = /button|btn|cta/i.test(
+      el.className + ' ' + (el.id ?? '') + ' ' +
+      (el.parentElement?.className ?? '') + ' ' +
+      (el.getAttribute('role') ?? '')
+    );
     return !!(isOpaque || hasBorderRadius || classHint);
   };
-  let ctaEl: HTMLAnchorElement | null = null;
-  for (const a of allHeaderAnchorEls) {
-    if (isCtaLike(a)) ctaEl = a;
+
+  let ctaEl: HTMLAnchorElement | HTMLButtonElement | null = null;
+  for (const el of allInteractive) {
+    if (isCtaLike(el)) ctaEl = el;
   }
 
   // ── Nav items ─────────────────────────────────────────────────────────────
@@ -183,14 +237,24 @@ export function extractNav(headerEl: Element): ExtractedNav {
   // If all anchors were CTA and no items remain, put CTA back into items.
   if (items.length === 0 && ctaEl) {
     const label = (ctaEl.textContent ?? '').trim();
-    const href = ctaEl.getAttribute('href') ?? '';
+    const href = (ctaEl as HTMLAnchorElement).getAttribute('href') ?? '';
     items.push({ label, href });
     ctaEl = null; // no items → no CTA split makes sense
   }
 
-  const cta = ctaEl
-    ? { label: (ctaEl.textContent ?? '').trim(), href: ctaEl.getAttribute('href') ?? '' }
-    : null;
+  // Build CTA with captured bg/text colors.
+  let cta: ExtractedNav['cta'] = null;
+  if (ctaEl) {
+    const ctaLabel = (ctaEl.textContent ?? '').trim();
+    const ctaHref = (ctaEl as HTMLAnchorElement).getAttribute('href') ?? '';
+    const ctaCs = getComputedStyle(ctaEl);
+    const ctaBgRaw = ctaCs.backgroundColor;
+    const ctaBg = (ctaBgRaw && ctaBgRaw !== 'transparent' && ctaBgRaw !== 'rgba(0, 0, 0, 0)')
+      ? ctaBgRaw
+      : undefined;
+    const ctaColor = ctaCs.color || undefined;
+    cta = { label: ctaLabel, href: ctaHref, ...(ctaBg && { bg: ctaBg }), ...(ctaColor && { color: ctaColor }) };
+  }
 
   // ── Site title fallback ───────────────────────────────────────────────────
   let siteTitle: string | null = null;
@@ -272,19 +336,23 @@ export function extractNav(headerEl: Element): ExtractedNav {
   // Trim to first family: e.g. '"Open Sans", sans-serif' → 'Open Sans'
   const fontFamily = rawFamily.split(',')[0].trim().replace(/^["']|["']$/g, '');
 
+  // Additional typography tokens from the representative label element.
+  const fontSize = repCs.fontSize || undefined;
+  const fontWeight = repCs.fontWeight || undefined;
+  const letterSpacing = (repCs.letterSpacing && repCs.letterSpacing !== 'normal' && repCs.letterSpacing !== '0px')
+    ? repCs.letterSpacing
+    : undefined;
+  const textTransform = (repCs.textTransform && repCs.textTransform !== 'none')
+    ? repCs.textTransform
+    : undefined;
+
   const { background, backgroundImage } = getBackground();
   const height = (headerEl as HTMLElement).getBoundingClientRect().height;
 
-  let ctaBackground: string | null = null;
-  let ctaTextColor: string | null = null;
-  if (ctaEl) {
-    const ctaCs = getComputedStyle(ctaEl);
-    const bg = ctaCs.backgroundColor;
-    if (bg && bg !== 'transparent' && bg !== 'rgba(0, 0, 0, 0)') {
-      ctaBackground = bg;
-    }
-    ctaTextColor = ctaCs.color || null;
-  }
+  // CTA colors: prefer already-computed cta.bg/cta.color; fall back to direct
+  // getComputedStyle on ctaEl for ctaBackground/ctaTextColor style fields.
+  const ctaBackground: string | null = cta?.bg ?? null;
+  const ctaTextColor: string | null = cta?.color ?? null;
 
   const styleResult: ExtractedNav['style'] = {
     background,
@@ -295,6 +363,10 @@ export function extractNav(headerEl: Element): ExtractedNav {
     height,
   };
   if (backgroundImage) styleResult.backgroundImage = backgroundImage;
+  if (fontSize) styleResult.fontSize = fontSize;
+  if (fontWeight) styleResult.fontWeight = fontWeight;
+  if (letterSpacing) styleResult.letterSpacing = letterSpacing;
+  if (textTransform) styleResult.textTransform = textTransform;
 
   return {
     logoSrc,
