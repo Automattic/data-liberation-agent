@@ -77,12 +77,20 @@ export async function captureDesignForUrl(opts: DesignCaptureRunOpts): Promise<{
   await opts.cssAgg.add(opts.slug, scopeCss(cap.css, opts.slug, false));
   // head links → run-level set (theme re-links them)
   for (const l of cap.headLinks) opts.headLinks.add(l);
-  // Chrome accumulators: first non-null value across the run wins.
-  // nav replaces headerHtml — it is a plain data object (no HTML sanitization needed).
+  // Chrome accumulators: homepage nav WINS (overwrite any prior capture); other
+  // archetypes only fill an empty slot (first-non-null).  This ensures the nav
+  // treatment is derived from the homepage — the most representative adaptive state —
+  // not from a random inner page that may show a different scroll/variant color.
   // Footer still uses the bake path (sanitized HTML).
   if (opts.chromeAccum) {
-    if (opts.chromeAccum.nav === null && cap.nav) {
-      opts.chromeAccum.nav = cap.nav;
+    if (cap.nav) {
+      if (opts.archetype === 'homepage') {
+        // Homepage always wins — overwrite whatever was captured before.
+        opts.chromeAccum.nav = cap.nav;
+      } else if (opts.chromeAccum.nav === null) {
+        // Non-homepage: fill empty slot only.
+        opts.chromeAccum.nav = cap.nav;
+      }
     }
     if (opts.chromeAccum.footerHtml === null && cap.footerHtml) {
       opts.chromeAccum.footerHtml = sanitizeSourceHtml(cap.footerHtml);

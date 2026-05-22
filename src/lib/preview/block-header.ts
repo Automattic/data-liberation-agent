@@ -83,25 +83,41 @@ export function buildBlockHeader(nav: ExtractedNav, opts: BlockHeaderOpts = {}):
     : 'var(--wp--preset--font-family--body)';
   const logoUrl = opts.logoLocalUrl ?? nav.logoSrc;
 
-  // ── Determine effective background ────────────────────────────────────────
-  // The header is ALWAYS rendered as a transparent overlay over the hero/content.
-  // The source nav background (and brandDark) are intentionally NOT used to fill
-  // the header group background — this matches the source's transparent header that
-  // sits over the (blue) hero, making the green CTA button visible against the hero
-  // rather than invisible against a matching green header bg.
-  //
-  // brandDark is still used as the CTA button background color (see buildCtaBlock).
+  // ── Determine effective background and overlay mode ───────────────────────
+  // isOverlay: true when the source header overlays content (position fixed/absolute/sticky)
+  //   OR when the extracted background is transparent (and no opaque bg was found).
+  // When isOverlay → transparent overlay positioned over the hero (position:absolute).
+  // When !isOverlay → normal-flow solid header with the extracted background color.
   //
   // backgroundImage (gradient/image) is preserved on the outer group when present
   // (rare — some sources bake a gradient into the header bar itself).
   const isTransparent = isTransparentBg(rawBg);
-  const bg = 'transparent';
+  const isOverlayMode = (nav.style.isOverlay ?? false) || isTransparent;
+  // Effective background for the header element:
+  //   - overlay mode → always transparent (hero shows through behind nav)
+  //   - solid mode → extracted bg, or brandDark fallback, or #ffffff last resort
+  const bg = isOverlayMode
+    ? 'transparent'
+    : (rawBg || opts.brandDark || '#ffffff');
 
-  // Nav text is always white when the header is transparent — the source pattern
-  // is white text over a hero image.  If an explicit light textColor was extracted
-  // we preserve it; otherwise we default to white for legibility over dark heroes.
-  // (White text over a light hero is low-contrast — same behavior as the source.)
-  const textColor = '#ffffff';
+  // ── Determine effective nav text color ────────────────────────────────────
+  // Use the extracted textColor from the source. If it is missing or transparent,
+  // fall back to a contrast color computed against the effective background.
+  const extractedTextColor = nav.style.textColor;
+  const textColorIsUsable = extractedTextColor && !isTransparentBg(extractedTextColor);
+  let textColor: string;
+  if (textColorIsUsable) {
+    textColor = extractedTextColor;
+  } else {
+    // Compute contrast against effective background for legibility.
+    // bgForContrast may be a CSS rgb/rgba string, so use parseCssColorLuminance
+    // (which handles both hex and rgb()) and fall back to contrastTextColor for hex.
+    const bgForContrast = isOverlayMode ? (opts.brandDark ?? '#000000') : bg;
+    const lum = parseCssColorLuminance(bgForContrast);
+    textColor = lum !== null
+      ? (lum < 0.5 ? '#ffffff' : '#111111')
+      : contrastTextColor(bgForContrast);
+  }
 
   // ── Logo / site title block ────────────────────────────────────────────────
   const logoBlock = buildLogoBlock(logoUrl, nav.logoAlt, nav.siteTitle, textColor);
@@ -161,10 +177,10 @@ export function buildBlockHeader(nav: ExtractedNav, opts: BlockHeaderOpts = {}):
   // emitting a scoped <style> block with !important rules that enforce the
   // captured typography and color tokens on every nav link rendered by the
   // wp:navigation block.
-  // Pass brandDark as ctaBrandColor so the CTA button gets the green fill even
+  // Pass brandDark as ctaBrandColor so the CTA button gets the fallback fill
   // when no explicit cta.bg is captured (e.g. source uses a CSS class, not inline).
   const ctaBrandColor = opts.brandDark ?? null;
-  const navOverrideStyle = buildNavOverrideStyle(textColor, nav.style, resolvedCta, ctaBrandColor);
+  const navOverrideStyle = buildNavOverrideStyle(textColor, nav.style, resolvedCta, ctaBrandColor, isOverlayMode, bg);
 
   return `${navOverrideStyle}<!-- wp:group {"tagName":"header","align":"full","style":${JSON.stringify(outerStyle)},"layout":{"type":"flex","flexWrap":"nowrap","justifyContent":"space-between","verticalAlignment":"center"}} -->
 <header class="wp-block-group alignfull" style="${inlineStyle}">${logoBlock}${rightGroup}</header>
@@ -236,11 +252,13 @@ ${links}
  * The rules target the WP Navigation block selectors used at runtime so the
  * override is precise and doesn't bleed outside the header.
  *
- * Key overlay rules:
+ * Key overlay rules (when isOverlayMode):
  *   - header.wp-block-group is positioned absolute over the hero (position:absolute,
  *     top:0, left:0, right:0, z-index:1000) with a transparent background so the
- *     hero's color/image shows through — this is why the green CTA pops (hero is
- *     blue, not green) and matches the source's transparent-overlay nav pattern.
+ *     hero's color/image shows through.
+ * Solid-header rules (when !isOverlayMode):
+ *   - header.wp-block-group gets the extracted background color (!important) and
+ *     normal (static) position — no overlay.
  *   - Nav container gets a wide flex gap (2.25rem) so items are evenly spaced.
  */
 function buildNavOverrideStyle(
@@ -248,17 +266,26 @@ function buildNavOverrideStyle(
   style: ExtractedNav['style'],
   cta: { label: string; href: string; bg?: string; color?: string } | null,
   ctaBrandColor: string | null,
+  isOverlayMode: boolean,
+  effectiveBg: string,
 ): string {
   const fontFamily = style.fontFamily ? `"${style.fontFamily}"` : null;
   const rules: string[] = [];
 
-  // ── Transparent absolute overlay on the header group ─────────────────────
-  // Position the header over the first content section (the hero) so the hero
-  // background bleeds through behind the nav — matching the source's behavior
-  // where the header is "transparent over the blue hero".
-  rules.push(
-    `header.wp-block-group{ position:absolute !important; top:0; left:0; right:0; z-index:1000; background:transparent !important; background-color:transparent !important; }`,
-  );
+  // ── Overlay vs solid header positioning ───────────────────────────────────
+  if (isOverlayMode) {
+    // Position the header over the first content section (the hero) so the hero
+    // background bleeds through behind the nav.
+    rules.push(
+      `header.wp-block-group{ position:absolute !important; top:0; left:0; right:0; z-index:1000; background:transparent !important; background-color:transparent !important; }`,
+    );
+  } else {
+    // Solid header: enforce the extracted background color and static position
+    // so leaked site.css cannot push it out of normal flow.
+    rules.push(
+      `header.wp-block-group{ position:static !important; background:${effectiveBg} !important; background-color:${effectiveBg} !important; }`,
+    );
+  }
 
   // ── Wide inter-item spacing on the navigation container ──────────────────
   // The source nav links are evenly spaced with large gaps; reinforce via CSS

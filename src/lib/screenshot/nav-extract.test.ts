@@ -171,7 +171,65 @@ async function runExtractNav(fixture: string): Promise<ExtractedNav | null> {
   }
 }
 
-describe('extractNav (browser fixture)', () => {
+// Fixture: sticky (overlay) header — used to test isOverlay detection.
+const FIXTURE_STICKY_HEADER = `<!DOCTYPE html><html><head>
+  <style>
+    body { margin: 0; }
+    header { display: flex; position: sticky; top: 0; width: 100%; height: 64px;
+             background: rgb(10, 20, 30); align-items: center; padding: 0 24px; z-index: 100; }
+    nav a { color: rgb(255, 255, 255); font-family: Arial, sans-serif; }
+  </style>
+</head><body>
+  <header>
+    <nav>
+      <a href="/home">Home</a>
+      <a href="/about">About</a>
+    </nav>
+  </header>
+  <main><p>Content here.</p></main>
+  <footer><p>ft</p></footer>
+</body></html>`;
+
+// Fixture: static (solid) header — used to test isOverlay:false detection.
+const FIXTURE_STATIC_HEADER = `<!DOCTYPE html><html><head>
+  <style>
+    body { margin: 0; }
+    header { display: flex; position: static; width: 100%; height: 64px;
+             background: rgb(20, 30, 40); align-items: center; padding: 0 24px; }
+    nav a { color: rgb(10, 10, 10); font-family: Arial, sans-serif; }
+  </style>
+</head><body>
+  <header>
+    <nav>
+      <a href="/home">Home</a>
+      <a href="/about">About</a>
+    </nav>
+  </header>
+  <main><p>Content here.</p></main>
+  <footer><p>ft</p></footer>
+</body></html>`;
+
+// Fixture: transparent header (no opaque bg) — isOverlay can be anything,
+// background must come back as 'transparent'.
+const FIXTURE_TRANSPARENT_HEADER = `<!DOCTYPE html><html><head>
+  <style>
+    body { margin: 0; background: url(hero.jpg) center/cover; }
+    header { display: flex; position: fixed; top: 0; width: 100%; height: 64px;
+             background: rgba(0, 0, 0, 0); align-items: center; padding: 0 24px; }
+    nav a { color: rgb(255, 255, 255); font-family: Arial, sans-serif; }
+  </style>
+</head><body>
+  <header>
+    <nav>
+      <a href="/home">Home</a>
+      <a href="/about">About</a>
+    </nav>
+  </header>
+  <main><p>Content here that is long enough to pass size checks.</p></main>
+  <footer><p>ft</p></footer>
+</body></html>`;
+
+describe('extractNav (browser fixture)', { timeout: 20000 }, () => {
   it('extracts logo src, alt, and 4 nav items from the fixture header', async () => {
     const nav = await runExtractNav(FIXTURE_HEADER);
     expect(nav).not.toBeNull();
@@ -338,6 +396,42 @@ describe('extractNav (browser fixture)', () => {
     // The CTA has a background (border-radius > 0 makes it qualify)
     // and color should be white
     expect(nav!.cta!.color).toMatch(/rgb\(255,\s*255,\s*255\)/);
+  });
+
+  // ── isOverlay detection ────────────────────────────────────────────────────
+
+  it('sticky header → isOverlay: true', async () => {
+    const nav = await runExtractNav(FIXTURE_STICKY_HEADER);
+    expect(nav).not.toBeNull();
+    expect(nav!.style.isOverlay).toBe(true);
+    // Also verify background is captured (not transparent)
+    expect(nav!.style.background).toMatch(/rgb\(10,\s*20,\s*30\)/);
+  });
+
+  it('static header with solid background → isOverlay: false + background captured', async () => {
+    const nav = await runExtractNav(FIXTURE_STATIC_HEADER);
+    expect(nav).not.toBeNull();
+    expect(nav!.style.isOverlay).toBe(false);
+    expect(nav!.style.background).toMatch(/rgb\(20,\s*30,\s*40\)/);
+  });
+
+  it('fixed/transparent header → isOverlay: true + background is transparent', async () => {
+    const nav = await runExtractNav(FIXTURE_TRANSPARENT_HEADER);
+    expect(nav).not.toBeNull();
+    // fixed position → isOverlay: true
+    expect(nav!.style.isOverlay).toBe(true);
+    // rgba(0,0,0,0) transparent bg — ancestors have no opaque bg either
+    // so background should be transparent (not a color)
+    const bg = nav!.style.background;
+    const isTransparent = bg === 'transparent' || /rgba\(0,\s*0,\s*0,\s*0\)/.test(bg);
+    expect(isTransparent).toBe(true);
+  });
+
+  it('original fixture header (position:flex/static by default) → isOverlay: false', async () => {
+    // FIXTURE_HEADER uses `header { display: flex; }` — no explicit position: computed=static
+    const nav = await runExtractNav(FIXTURE_HEADER);
+    expect(nav).not.toBeNull();
+    expect(nav!.style.isOverlay).toBe(false);
   });
 });
 

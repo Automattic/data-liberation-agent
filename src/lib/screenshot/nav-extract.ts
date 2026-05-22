@@ -81,6 +81,12 @@ export interface ExtractedNav {
      * When set, takes precedence over `background` for visual rendering.
      */
     backgroundImage?: string;
+    /**
+     * True when the source header overlays content (computed position is fixed,
+     * absolute, or sticky). False for a normal-flow (static/relative) header.
+     * Drives the overlay-vs-solid branch in buildBlockHeader.
+     */
+    isOverlay: boolean;
     /** Color of a representative nav link. */
     textColor: string;
     /** CTA background-color, or null. */
@@ -349,6 +355,13 @@ export function extractNav(headerEl: Element): ExtractedNav {
   const { background, backgroundImage } = getBackground();
   const height = (headerEl as HTMLElement).getBoundingClientRect().height;
 
+  // ── isOverlay ─────────────────────────────────────────────────────────────
+  // True when the header's computed position is fixed, absolute, or sticky —
+  // i.e. it overlays content rather than sitting in normal flow.
+  // Wix headers are typically sticky/fixed; plain-flow site headers are static.
+  const headerPosition = getComputedStyle(headerEl as HTMLElement).position;
+  const isOverlay = headerPosition === 'fixed' || headerPosition === 'absolute' || headerPosition === 'sticky';
+
   // CTA colors: prefer already-computed cta.bg/cta.color; fall back to direct
   // getComputedStyle on ctaEl for ctaBackground/ctaTextColor style fields.
   const ctaBackground: string | null = cta?.bg ?? null;
@@ -356,6 +369,7 @@ export function extractNav(headerEl: Element): ExtractedNav {
 
   const styleResult: ExtractedNav['style'] = {
     background,
+    isOverlay,
     textColor,
     ctaBackground,
     ctaTextColor,
