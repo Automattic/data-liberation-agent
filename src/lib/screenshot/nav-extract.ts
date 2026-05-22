@@ -69,9 +69,9 @@ export interface ExtractedNav {
   items: { label: string; href: string }[];
   /**
    * A button-styled link (bg / border-radius / class hint), or null.
-   * Includes bg and text color when available.
+   * Includes bg, text color, and border-radius when available.
    */
-  cta: { label: string; href: string; bg?: string; color?: string } | null;
+  cta: { label: string; href: string; bg?: string; color?: string; borderRadius?: string } | null;
   style: {
     /** Header background-color (rgba string). May be 'transparent' or 'rgba(0,0,0,0)' when indeterminate. */
     background: string;
@@ -259,7 +259,19 @@ export function extractNav(headerEl: Element): ExtractedNav {
       ? ctaBgRaw
       : undefined;
     const ctaColor = ctaCs.color || undefined;
-    cta = { label: ctaLabel, href: ctaHref, ...(ctaBg && { bg: ctaBg }), ...(ctaColor && { color: ctaColor }) };
+    // Capture the computed border-radius so block-header can use the real value.
+    // Only include when it differs from a pill/zero — normalize "0px" to absent.
+    const ctaBorderRadiusRaw = ctaCs.borderRadius;
+    const ctaBorderRadius = (ctaBorderRadiusRaw && ctaBorderRadiusRaw !== '0px')
+      ? ctaBorderRadiusRaw
+      : undefined;
+    cta = {
+      label: ctaLabel,
+      href: ctaHref,
+      ...(ctaBg && { bg: ctaBg }),
+      ...(ctaColor && { color: ctaColor }),
+      ...(ctaBorderRadius && { borderRadius: ctaBorderRadius }),
+    };
   }
 
   // ── Site title fallback ───────────────────────────────────────────────────

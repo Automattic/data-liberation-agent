@@ -101,22 +101,35 @@ export function buildBlockHeader(nav: ExtractedNav, opts: BlockHeaderOpts = {}):
     : (rawBg || opts.brandDark || '#ffffff');
 
   // ── Determine effective nav text color ────────────────────────────────────
-  // Use the extracted textColor from the source. If it is missing or transparent,
-  // fall back to a contrast color computed against the effective background.
-  const extractedTextColor = nav.style.textColor;
-  const textColorIsUsable = extractedTextColor && !isTransparentBg(extractedTextColor);
+  // The extracted textColor is UNRELIABLE for overlay headers: platforms like Wix
+  // set it via JS at runtime (white over the dark hero) but extraction may capture
+  // the pre-JS default (black). To ensure legibility:
+  //
+  //   • Overlay mode → always #ffffff. The overlay header sits over a hero image
+  //     or dark section, so light text is the correct and universal choice. We do
+  //     NOT use the extracted color here.
+  //   • Solid mode → use the extracted textColor when it is non-transparent and
+  //     present; otherwise compute contrast against the solid background.
+  //
+  // High-specificity !important keeps site.css from overriding.
   let textColor: string;
-  if (textColorIsUsable) {
-    textColor = extractedTextColor;
+  if (isOverlayMode) {
+    // Overlay: always light — extracted color is not reliable for overlay headers.
+    textColor = '#ffffff';
   } else {
-    // Compute contrast against effective background for legibility.
-    // bgForContrast may be a CSS rgb/rgba string, so use parseCssColorLuminance
-    // (which handles both hex and rgb()) and fall back to contrastTextColor for hex.
-    const bgForContrast = isOverlayMode ? (opts.brandDark ?? '#000000') : bg;
-    const lum = parseCssColorLuminance(bgForContrast);
-    textColor = lum !== null
-      ? (lum < 0.5 ? '#ffffff' : '#111111')
-      : contrastTextColor(bgForContrast);
+    // Solid: prefer extracted color (was set by the page's own CSS, not runtime JS).
+    const extractedTextColor = nav.style.textColor;
+    const textColorIsUsable = extractedTextColor && !isTransparentBg(extractedTextColor);
+    if (textColorIsUsable) {
+      textColor = extractedTextColor;
+    } else {
+      // Compute contrast against effective background for legibility.
+      // bg may be a CSS rgb/rgba string, so use parseCssColorLuminance.
+      const lum = parseCssColorLuminance(bg);
+      textColor = lum !== null
+        ? (lum < 0.5 ? '#ffffff' : '#111111')
+        : contrastTextColor(bg);
+    }
   }
 
   // ── Logo / site title block ────────────────────────────────────────────────
@@ -264,7 +277,7 @@ ${links}
 function buildNavOverrideStyle(
   textColor: string,
   style: ExtractedNav['style'],
-  cta: { label: string; href: string; bg?: string; color?: string } | null,
+  cta: { label: string; href: string; bg?: string; color?: string; borderRadius?: string } | null,
   ctaBrandColor: string | null,
   isOverlayMode: boolean,
   effectiveBg: string,
@@ -299,7 +312,9 @@ function buildNavOverrideStyle(
   navProps.push(`color:${textColor} !important`);
   if (style.fontSize) navProps.push(`font-size:${style.fontSize} !important`);
   if (style.fontWeight) navProps.push(`font-weight:${style.fontWeight} !important`);
-  if (style.letterSpacing) navProps.push(`letter-spacing:${style.letterSpacing} !important`);
+  // Apply captured letter-spacing; fall back to a small default (0.1em) so nav
+  // labels get light tracking even when not explicitly set by the source.
+  navProps.push(`letter-spacing:${style.letterSpacing ?? '0.1em'} !important`);
   if (style.textTransform) navProps.push(`text-transform:${style.textTransform} !important`);
   if (fontFamily) navProps.push(`font-family:${fontFamily} !important`);
 
@@ -310,22 +325,24 @@ function buildNavOverrideStyle(
     );
   }
 
-  // ── CTA button: green pill with white text ────────────────────────────────
-  // The CTA button gets a visible green background (brandDark / extracted ctaBg)
-  // with white text and a pill border-radius.  It contrasts against the (blue)
-  // hero behind the transparent header — unlike a solid green header where the
-  // green button would be invisible.
+  // ── CTA button: brand-colored button with real padding ───────────────────
+  // The CTA button gets a visible branded background (extracted ctaBg or brandDark)
+  // with the extracted or default text color and proper sizing.
+  // border-radius: use captured source value when available, else a sane 8px
+  // rounded default. Do NOT default to pill (9999px) — that's a specific style.
   if (cta) {
     // Prefer explicit cta.bg, then style.ctaBackground, then brandDark fallback.
     const ctaBg = cta.bg ?? style.ctaBackground ?? ctaBrandColor ?? null;
     // Prefer explicit cta.color, then style.ctaTextColor; default white for contrast.
     const ctaColor = cta.color ?? style.ctaTextColor ?? '#ffffff';
+    // Use captured border-radius; fall back to 8px rounded (NOT pill).
+    const ctaRadius = cta.borderRadius ?? '8px';
     const ctaProps: string[] = [];
     if (ctaBg) ctaProps.push(`background-color:${ctaBg} !important`, `background:${ctaBg} !important`);
     ctaProps.push(`color:${ctaColor} !important`);
-    // Pill shape for the CTA — matches the source's rounded "CALL US" button.
-    ctaProps.push(`border-radius:9999px !important`);
-    ctaProps.push(`padding-left:1.5rem !important`, `padding-right:1.5rem !important`);
+    ctaProps.push(`border-radius:${ctaRadius} !important`);
+    // Real button padding so the CTA is appropriately sized (not just an icon).
+    ctaProps.push(`padding:0.85em 1.75em !important`);
     rules.push(
       `header.wp-block-group .wp-block-button__link { ${ctaProps.join(';')}; }`,
     );
@@ -336,18 +353,20 @@ function buildNavOverrideStyle(
 }
 
 function buildCtaBlock(
-  cta: { label: string; href: string; bg?: string; color?: string },
+  cta: { label: string; href: string; bg?: string; color?: string; borderRadius?: string },
   style: ExtractedNav['style'],
   ctaBrandColor?: string | null,
 ): string {
   // CTA background: prefer explicit cta.bg, then style.ctaBackground, then brandDark.
   // Default to black only as last resort.
   const bg = cta.bg ?? style.ctaBackground ?? ctaBrandColor ?? style.textColor ?? '#000000';
-  // CTA text: prefer explicit, then extracted; always default to white for contrast
-  // (the CTA sits over the transparent header which shows the hero behind it).
+  // CTA text: prefer explicit, then extracted; keep extracted color (e.g. black) —
+  // do not force white, as some brand CTAs have dark text on a light button.
   const color = cta.color ?? style.ctaTextColor ?? '#ffffff';
-  // Pill border-radius to match source's rounded "CALL US" button style.
-  const borderRadius = '9999px';
+  // Border-radius: prefer captured value from the source element, else use a
+  // sane rounded default (8px). Do NOT default to a pill (9999px) — pill radius
+  // is a specific style choice and should only come from the source.
+  const borderRadius = cta.borderRadius ?? '8px';
   const btnAttrs = JSON.stringify({
     url: cta.href,
     text: cta.label,

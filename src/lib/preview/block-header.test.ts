@@ -171,10 +171,12 @@ describe('buildBlockHeader', () => {
     expect(markup).toContain('background-color:transparent !important');
   });
 
-  it('overlay nav uses the extracted text color (rgb(255,255,255))', () => {
+  it('overlay nav uses #ffffff for nav text (contrast rule, not unreliable extracted color)', () => {
+    // Overlay mode always forces #ffffff — extracted textColor is ignored because
+    // Wix/similar platforms set nav color via JS at runtime and extraction is unreliable.
     const markup = buildBlockHeader(OVERLAY_NAV);
-    expect(markup).toContain('color:rgb(255, 255, 255) !important');
-    expect(markup).toContain('"text":"rgb(255, 255, 255)"');
+    expect(markup).toContain('color:#ffffff !important');
+    expect(markup).toContain('"text":"#ffffff"');
   });
 
   it('solid nav (isOverlay:false, opaque bg) → solid background, NO position:absolute overlay', () => {
@@ -429,22 +431,33 @@ describe('buildBlockHeader', () => {
     expect(markup).toContain('.wp-block-navigation{');
   });
 
-  it('overlay nav: extracted text color used in nav links (white)', () => {
+  it('overlay nav: nav links get #ffffff (contrast rule for overlay, not extracted color)', () => {
+    // Overlay headers always get #ffffff nav text regardless of extracted color.
     const markup = buildBlockHeader(OVERLAY_NAV);
-    // Extracted textColor is rgb(255,255,255) → emitted as-is
-    expect(markup).toContain('color:rgb(255, 255, 255) !important');
-    expect(markup).toContain('"text":"rgb(255, 255, 255)"');
+    expect(markup).toContain('color:#ffffff !important');
+    expect(markup).toContain('"text":"#ffffff"');
   });
 
-  it('CTA button has pill border-radius (9999px) in both block attrs and inline style', () => {
+  it('CTA button has 8px border-radius (sane default) in both block attrs and inline style', () => {
+    // Default radius is 8px rounded, not 9999px pill — pill is a specific source style choice.
     const markup = buildBlockHeader(OVERLAY_NAV);
-    expect(markup).toContain('"radius":"9999px"');
-    expect(markup).toContain('border-radius:9999px');
+    expect(markup).toContain('"radius":"8px"');
+    expect(markup).toContain('border-radius:8px');
   });
 
-  it('CTA button override rule includes border-radius:9999px !important', () => {
+  it('CTA button override rule includes border-radius:8px !important (default)', () => {
     const markup = buildBlockHeader(OVERLAY_NAV);
-    expect(markup).toContain('border-radius:9999px !important');
+    expect(markup).toContain('border-radius:8px !important');
+  });
+
+  it('CTA button uses captured borderRadius when present in cta fixture', () => {
+    const navWithCtaRadius: ExtractedNav = {
+      ...OVERLAY_NAV,
+      cta: { label: 'CALL US', href: '/call-us', bg: 'rgb(23, 82, 54)', color: '#000000', borderRadius: '10px' },
+    };
+    const markup = buildBlockHeader(navWithCtaRadius);
+    expect(markup).toContain('"radius":"10px"');
+    expect(markup).toContain('border-radius:10px !important');
   });
 
   it('CTA button override has white text (#ffffff) by default when no explicit color', () => {
