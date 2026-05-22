@@ -8,13 +8,14 @@ export function wrapFragment(fragmentHtml: string, slug: string, bodyClasses: st
 
 /**
  * Wrap the mobile body fragment for viewport-toggled rendering.
- * The `dla-content-mobile` class is used by the toggle CSS to show/hide
- * this block based on the viewport width.
+ * The `dla-content-mobile` outer div is the clipping/height-reserving shell;
+ * `dla-content-mobile-inner` is the element that receives the CSS transform
+ * scaling the fixed-width mobile canvas down to the viewport width.
  */
 export function wrapMobileFragment(fragmentHtml: string, slug: string, bodyClasses: string[]): string {
   const safe = sanitizeSourceHtml(fragmentHtml);
   const cls = ['dla-replica', 'dla-content-mobile', `dla-page-${slug}`, ...bodyClasses].join(' ');
-  return `<div class="${cls}">\n${safe}\n</div>`;
+  return `<div class="${cls}">\n<div class="dla-content-mobile-inner">\n${safe}\n</div>\n</div>`;
 }
 
 // Rewrite top-level `body`/`html` selector tokens to `.dla-replica`; optionally

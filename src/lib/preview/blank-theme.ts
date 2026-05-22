@@ -47,10 +47,16 @@ export interface BlankThemeOpts {
    * site.css so its @media rules override site.css for the chrome markers.
    */
   hasChromeCss?: boolean;
+  /**
+   * Whether design capture is active (nav/dual-viewport fragments present).
+   * When true, the mobile scale CSS and fit script are emitted so the fixed-
+   * width mobile canvas is scaled down to the viewport width on mobile devices.
+   */
+  hasDesignCapture?: boolean;
 }
 
 export function buildBlankTheme(opts: BlankThemeOpts): ReplicaFile[] {
-  const { themeSlug, hasJs, headLinks, headerBlockMarkup, footerHtml, hasChromeCss } = opts;
+  const { themeSlug, hasJs, headLinks, headerBlockMarkup, footerHtml, hasChromeCss, hasDesignCapture } = opts;
 
   const styleCss = `/*
 Theme Name: DLA Replica (${themeSlug})
@@ -91,6 +97,46 @@ add_action('send_headers', function () {
 @media (min-width: 769px){ .dla-content-mobile{display:none !important} }
 `;
 
+  // Mobile scale CSS: clip the outer shell and set the transform origin on the inner
+  // canvas. Applied only at ≤768px (desktop clears the transform via the fit script).
+  // The fit script below sets the actual scale() transform at runtime so we don't
+  // hardcode any canvas width here.
+  const mobileScaleCss = `
+@media (max-width: 768px){
+  .dla-content-mobile{ overflow: hidden; }
+  .dla-content-mobile-inner{ transform-origin: top left; }
+}
+`;
+
+  // Fit script: measures the mobile inner canvas's natural scrollWidth at runtime
+  // (robust to any source canvas size — no hardcoded 980px) and scales it to fill
+  // the viewport width. Sets outer height to the scaled height so the page flow
+  // is correct (CSS transform doesn't affect layout). Clears the transform above
+  // 768px (desktop fragment shows instead). Runs on DOMContentLoaded, load, and
+  // resize. This is a first-party layout helper — NOT tracking/analytics.
+  const mobileScaleScript = `(function(){
+  function fit(){
+    var outer=document.querySelector('.dla-content-mobile');
+    var inner=document.querySelector('.dla-content-mobile-inner');
+    if(!outer||!inner) return;
+    if(window.innerWidth>768){ inner.style.transform=''; inner.style.width=''; outer.style.height=''; return; }
+    inner.style.transform='none'; inner.style.width='';
+    var natural=inner.scrollWidth||980;
+    var s=window.innerWidth/natural;
+    inner.style.width=natural+'px';
+    inner.style.transform='scale('+s+')';
+    outer.style.height=(inner.scrollHeight*s)+'px';
+  }
+  if(document.readyState!=='loading') fit(); else document.addEventListener('DOMContentLoaded',fit);
+  window.addEventListener('resize',fit);
+  window.addEventListener('load',fit);
+})();`;
+
+  const designCaptureInline = hasDesignCapture
+    ? `  wp_add_inline_style('dla-site', ${phpString(mobileScaleCss)});
+  wp_add_inline_script('dla-site', ${phpString(mobileScaleScript)});`
+    : '';
+
   const functionsPhp = `<?php
 // The carried fragment is raw HTML — prevent WordPress content filters from
 // mangling it. wpautop inserts stray <p> tags; wptexturize alters quotes/dashes.
@@ -104,6 +150,7 @@ ${fontEnqueues}
 ${jsEnqueue}
   // Dual-viewport toggle: show desktop body fragment ≥769px, mobile ≤768px.
   wp_add_inline_style('dla-site', ${phpString(toggleCss)});
+${designCaptureInline}
 });
 add_action('after_setup_theme', function () {
   add_editor_style('site.css');

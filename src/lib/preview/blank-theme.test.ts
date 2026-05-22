@@ -100,4 +100,38 @@ describe('buildBlankTheme', () => {
     expect(fns).toContain('min-width: 769px');
     expect(fns).toContain('display:none !important');
   });
+
+  it('functions.php does NOT emit scale CSS or fit script when hasDesignCapture is absent', () => {
+    const fns = buildBlankTheme({ themeSlug: 'dla-replica', hasJs: false, headLinks: [] }).find((f) => f.relativePath === 'functions.php')!.content;
+    expect(fns).not.toContain('dla-content-mobile-inner');
+    expect(fns).not.toContain('scrollWidth');
+    expect(fns).not.toContain("transform='scale'");
+  });
+
+  it('functions.php emits scale CSS and fit script when hasDesignCapture is true', () => {
+    const fns = buildBlankTheme({
+      themeSlug: 'dla-replica',
+      hasJs: false,
+      headLinks: [],
+      headerBlockMarkup: '<!-- wp:navigation /-->',
+      hasDesignCapture: true,
+    }).find((f) => f.relativePath === 'functions.php')!.content;
+
+    // Scale CSS: clip outer, set transform-origin on inner
+    expect(fns).toContain('dla-content-mobile-inner');
+    expect(fns).toContain('transform-origin: top left');
+    expect(fns).toContain('.dla-content-mobile{ overflow: hidden; }');
+
+    // Fit script emitted via wp_add_inline_script
+    expect(fns).toContain('wp_add_inline_script');
+    expect(fns).toContain('scrollWidth');
+    // Single quotes are escaped by phpString() when embedded in PHP string literals
+    expect(fns).toContain("transform=\\'scale(\\'+s+\\')");
+    // 768 breakpoint present in the script
+    expect(fns).toContain('innerWidth>768');
+    // Natural width measured from scrollWidth, not hardcoded
+    expect(fns).toContain('inner.scrollWidth||980');
+    // Height reservation for correct page flow
+    expect(fns).toContain('inner.scrollHeight*s');
+  });
 });

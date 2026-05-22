@@ -16,15 +16,22 @@ describe('wrapFragment', () => {
 });
 
 describe('wrapMobileFragment', () => {
-  it('wraps in .dla-replica .dla-content-mobile .dla-page-<slug> + body classes and sanitizes', () => {
+  it('wraps in .dla-content-mobile > .dla-content-mobile-inner with outer classes and sanitizes', () => {
     const out = wrapMobileFragment('<h1>mobile</h1><script>bad()</script>', 'about', ['dark']);
     expect(out).toMatch(/^<div class="dla-replica dla-content-mobile dla-page-about dark">/);
+    expect(out).toContain('<div class="dla-content-mobile-inner">');
     expect(out).toContain('<h1>mobile</h1>');
     expect(out).not.toContain('<script>');
   });
-  it('handles empty body classes', () => {
+  it('handles empty body classes and nests inner wrapper', () => {
     const out = wrapMobileFragment('<p>m</p>', 'home', []);
     expect(out).toMatch(/^<div class="dla-replica dla-content-mobile dla-page-home">/);
+    expect(out).toContain('<div class="dla-content-mobile-inner">');
+  });
+  it('inner wrapper is a direct child of the outer wrapper', () => {
+    const out = wrapMobileFragment('<p>content</p>', 'home', []);
+    // The outer div's closing > is immediately followed by newline + inner div
+    expect(out).toContain('dla-page-home">\n<div class="dla-content-mobile-inner">');
   });
 });
 

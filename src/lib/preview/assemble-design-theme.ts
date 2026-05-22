@@ -103,6 +103,12 @@ export function assembleDesignTheme(opts: AssembleDesignThemeOpts): ReplicaFile[
     headerBlockMarkup = buildBlockHeader(opts.nav, { logoLocalUrl, brandDark, siteUrl: opts.siteUrl });
   }
 
+  // hasDesignCapture: true when the dual-viewport mobile canvas was captured
+  // (nav is present, indicating the design pipeline ran). Gates the mobile
+  // scale CSS and fit script that shrink the fixed-width mobile canvas to fit
+  // the viewport width.
+  const hasDesignCapture = !!(opts.nav || headerBlockMarkup);
+
   const files = buildBlankTheme({
     themeSlug,
     hasJs,
@@ -110,6 +116,7 @@ export function assembleDesignTheme(opts: AssembleDesignThemeOpts): ReplicaFile[
     headerBlockMarkup,
     footerHtml: opts.footerHtml,
     hasChromeCss,
+    hasDesignCapture,
   });
   files.push({ relativePath: 'site.css', content: siteCss });
   if (hasChromeCss) {
