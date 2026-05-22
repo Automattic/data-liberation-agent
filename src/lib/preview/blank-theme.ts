@@ -81,6 +81,16 @@ add_action('send_headers', function () {
     ? `  wp_enqueue_style('dla-chrome', get_stylesheet_directory_uri() . '/chrome.css', array('dla-site'), null);`
     : '';
 
+  // Viewport-toggle CSS: show the desktop body fragment at ≥769px, mobile at ≤768px.
+  // Both .dla-content-desktop and .dla-content-mobile divs are always present in the
+  // post content when both viewport captures succeeded. The toggle hides the inactive
+  // one. This is inlined in functions.php (not a separate file) because it is a fixed
+  // rule that never varies per-site and is always needed when design capture is active.
+  const toggleCss = `
+@media (max-width: 768px){ .dla-content-desktop{display:none !important} }
+@media (min-width: 769px){ .dla-content-mobile{display:none !important} }
+`;
+
   const functionsPhp = `<?php
 // The carried fragment is raw HTML — prevent WordPress content filters from
 // mangling it. wpautop inserts stray <p> tags; wptexturize alters quotes/dashes.
@@ -92,6 +102,8 @@ add_action('wp_enqueue_scripts', function () {
 ${chromeCssEnqueue}
 ${fontEnqueues}
 ${jsEnqueue}
+  // Dual-viewport toggle: show desktop body fragment ≥769px, mobile ≤768px.
+  wp_add_inline_style('dla-site', ${phpString(toggleCss)});
 });
 add_action('after_setup_theme', function () {
   add_editor_style('site.css');

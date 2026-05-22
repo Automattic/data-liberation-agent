@@ -1,8 +1,8 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { Page } from 'playwright';
-import { captureDesign } from './capture-design.js';
-import { wrapFragment, scopeCss } from './design-transform.js';
+import { captureDesign, collectBodyFragmentOnly } from './capture-design.js';
+import { wrapFragment, wrapMobileFragment, scopeCss } from './design-transform.js';
 import { extractCssMediaUrls } from './css-url-media.js';
 import { isFirstParty } from './first-party.js';
 import { isAllowlistedCdn, type ScriptInput } from './js-aggregator.js';
@@ -14,8 +14,9 @@ import type { ExtractedNav } from './nav-extract.js';
 
 const CDN_FONT_HOSTS = ['fonts.gstatic.com', 'fonts.googleapis.com', 'use.typekit.net'];
 
-export function designSidecarPath(outputDir: string, slug: string): string {
-  return join(outputDir, 'design', `${slug}.fragment.html`);
+export function designSidecarPath(outputDir: string, slug: string, opts?: { mobile?: boolean }): string {
+  const suffix = opts?.mobile ? '.mobile.fragment.html' : '.fragment.html';
+  return join(outputDir, 'design', `${slug}${suffix}`);
 }
 
 export interface DesignCaptureRunOpts {
@@ -115,4 +116,58 @@ export async function captureDesignForUrl(opts: DesignCaptureRunOpts): Promise<{
     cssMediaUrls.push(cap.nav.logoSrc);
   }
   return { cssMediaUrls };
+}
+
+export interface MobileBodyCaptureOpts {
+  page: Page;
+  /** slug derived from the URL (same slugify(url) convention as the desktop sidecar) */
+  slug: string;
+  outputDir: string;
+  /** CSS aggregator — mobile pass collects stylesheets to merge with desktop CSS.
+   * Desktop-captured same-origin stylesheets already include @media blocks for all
+   * viewports (cssRules include media blocks regardless of viewport width), so the
+   * desktop pass covers mobile rules. The mobile stylesheet merge is a safety net for
+   * platforms that load viewport-specific stylesheets dynamically. The CssAggregator
+   * dedupes by SHA-256 hash, so identical content added twice results in one entry. */
+  cssAgg: CssAggregator;
+}
+
+/**
+ * Capture the body fragment at the MOBILE viewport (chrome removed) and write
+ * the mobile sidecar `design/<slug>.mobile.fragment.html`.
+ *
+ * Only the body fragment is captured — the chrome removal logic (header/footer
+ * detection + safeRemove) is applied via `collectBodyFragmentOnly`, which reuses
+ * the same heuristic as `collectBodyAndChrome` but skips the nav/footer extraction
+ * and layout-map collection. The mobile sidecar is body-only; the generated block
+ * header and baked footer are shared across viewports in the theme template.
+ *
+ * CSS safety net: stylesheets are also collected at mobile and merged into the
+ * aggregator. Because same-origin CSS captured at desktop already includes all
+ * @media blocks (cssRules are viewport-independent), this is mostly a safety net
+ * for platforms that load mobile-specific stylesheets via JS. Deduplication is
+ * handled by CssAggregator (hash-keyed map).
+ *
+ * Returns true when the sidecar was written successfully, false on failure (non-fatal).
+ */
+export async function captureMobileBodyFragment(opts: MobileBodyCaptureOpts): Promise<boolean> {
+  try {
+    const { bodyFragmentHtml, bodyClasses, css } = await collectBodyFragmentOnly(opts.page);
+    if (!bodyFragmentHtml || bodyFragmentHtml.trim().length < 64) {
+      // Suspiciously short — page likely didn't render at mobile. Skip silently.
+      return false;
+    }
+    const wrapped = wrapMobileFragment(bodyFragmentHtml, opts.slug, bodyClasses);
+    const sidecar = designSidecarPath(opts.outputDir, opts.slug, { mobile: true });
+    mkdirSync(dirname(sidecar), { recursive: true });
+    writeFileSync(sidecar, wrapped);
+    // CSS safety net: merge mobile-viewport stylesheets (deduped by aggregator)
+    if (css.trim()) {
+      await opts.cssAgg.add(`${opts.slug}:mobile`, scopeCss(css, opts.slug, false));
+    }
+    return true;
+  } catch (err) {
+    console.error(`[design] mobile body capture failed for slug "${opts.slug}": ${(err as Error).message}`);
+    return false;
+  }
 }

@@ -38,8 +38,18 @@ async function pageWithFixture(fixture: string): Promise<Page> {
 }
 
 describe('designSidecarPath', () => {
-  it('returns design/<slug>.fragment.html under outputDir', () => {
+  it('returns design/<slug>.fragment.html under outputDir (desktop default)', () => {
     expect(designSidecarPath('/out', 'about')).toBe('/out/design/about.fragment.html');
+  });
+  it('returns design/<slug>.mobile.fragment.html when mobile:true', () => {
+    expect(designSidecarPath('/out', 'about', { mobile: true })).toBe('/out/design/about.mobile.fragment.html');
+  });
+  it('desktop and mobile sidecar paths differ only in the filename suffix', () => {
+    const desktop = designSidecarPath('/out', 'homepage');
+    const mobile = designSidecarPath('/out', 'homepage', { mobile: true });
+    expect(desktop).toBe('/out/design/homepage.fragment.html');
+    expect(mobile).toBe('/out/design/homepage.mobile.fragment.html');
+    expect(desktop).not.toBe(mobile);
   });
 });
 
@@ -147,8 +157,9 @@ describe('captureDesignForUrl', () => {
         expect(existsSync(sidecar)).toBe(true);
         const { readFileSync } = await import('node:fs');
         const content = readFileSync(sidecar, 'utf8');
-        // Should be wrapped in dla-replica div
+        // Should be wrapped in dla-replica div with desktop viewport class
         expect(content).toContain('dla-replica');
+        expect(content).toContain('dla-content-desktop');
         expect(content).toContain('dla-page-about');
         // Should NOT contain inline scripts or onclick handlers (sanitized)
         expect(content).not.toContain('<script');

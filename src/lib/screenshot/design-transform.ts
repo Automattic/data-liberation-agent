@@ -2,7 +2,18 @@ import { sanitizeSourceHtml } from '../streaming/html-sanitize.js';
 
 export function wrapFragment(fragmentHtml: string, slug: string, bodyClasses: string[]): string {
   const safe = sanitizeSourceHtml(fragmentHtml);
-  const cls = ['dla-replica', `dla-page-${slug}`, ...bodyClasses].join(' ');
+  const cls = ['dla-replica', 'dla-content-desktop', `dla-page-${slug}`, ...bodyClasses].join(' ');
+  return `<div class="${cls}">\n${safe}\n</div>`;
+}
+
+/**
+ * Wrap the mobile body fragment for viewport-toggled rendering.
+ * The `dla-content-mobile` class is used by the toggle CSS to show/hide
+ * this block based on the viewport width.
+ */
+export function wrapMobileFragment(fragmentHtml: string, slug: string, bodyClasses: string[]): string {
+  const safe = sanitizeSourceHtml(fragmentHtml);
+  const cls = ['dla-replica', 'dla-content-mobile', `dla-page-${slug}`, ...bodyClasses].join(' ');
   return `<div class="${cls}">\n${safe}\n</div>`;
 }
 

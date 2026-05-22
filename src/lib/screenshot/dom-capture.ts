@@ -265,6 +265,57 @@ export async function collectMobileChromeLayout(page: Page): Promise<BakedLayout
   );
 }
 
+/**
+ * Mobile-only body fragment capture: detect and remove the site chrome
+ * (header + footer) from the body using the same heuristic as
+ * `collectBodyAndChrome`, but WITHOUT the nav extraction, footer bake, or
+ * layout-map collection. Returns the chrome-stripped `document.body.innerHTML`.
+ *
+ * This is the body-capture half of `collectBodyAndChrome`, extracted for use
+ * in the mobile viewport pass where we only need the page body fragment.
+ * Chrome (generated block header + baked footer) is shared and rendered once
+ * from the desktop pass data; we only need the distinct mobile body content.
+ */
+export async function collectBodyFragmentMobileOnly(page: Page): Promise<string> {
+  return page.evaluate(() => {
+    const vw = window.innerWidth || 390;
+    const docH = document.documentElement.scrollHeight;
+
+    const pick = (atTop: boolean): Element | null => {
+      let best: Element | null = null;
+      let bestScore = 2;
+      for (const el of document.querySelectorAll('div,section,header,footer,nav')) {
+        const cs = getComputedStyle(el);
+        const r = el.getBoundingClientRect();
+        if (r.width < vw * 0.6 || r.height < 24 || r.height > 400) continue;
+        const fixedish = cs.position === 'fixed' || cs.position === 'sticky';
+        const hasNav = !!el.querySelector('nav, a, [role="navigation"]');
+        const nearTop = r.top <= 80;
+        const nearBottom = r.bottom >= docH - 160;
+        let s = 0;
+        if (fixedish) s += 2;
+        if (hasNav) s += 2;
+        if (atTop && nearTop) s += 3;
+        if (!atTop && nearBottom) s += 3;
+        if (s > bestScore) { bestScore = s; best = el; }
+      }
+      return best;
+    };
+
+    const header = document.querySelector('header, [role="banner"]') || pick(true);
+    const footer = document.querySelector('footer, [role="contentinfo"]') || pick(false);
+
+    // Only remove chrome elements when they are disjoint.
+    const safeRemove = (el: Element | null, other: Element | null): void => {
+      if (el && !(other && (el.contains(other) || other.contains(el)))) el.remove();
+    };
+    safeRemove(header, footer);
+    safeRemove(footer, header);
+
+    return document.body.innerHTML;
+  });
+}
+
 /** Concatenated cssText of all SAME-ORIGIN stylesheets. Cross-origin sheets
  *  throw on .cssRules and are skipped (their <link> is captured separately). */
 export async function collectStylesheets(page: Page): Promise<string> {

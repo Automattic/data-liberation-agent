@@ -33,6 +33,7 @@ import { BlockFixerClient } from '../lib/streaming/block-fixer-client.js';
 import { appendTransform, type BlockTransformEntry } from '../lib/streaming/block-transform-log.js';
 import { countBlocks } from '../lib/streaming/block-markup-validate.js';
 import { designSidecarPath } from '../lib/screenshot/design-capture-runner.js';
+// Note: designSidecarPath(outDir, slug, { mobile: true }) returns the mobile sidecar path.
 import type { ExtractedNav } from '../lib/screenshot/nav-extract.js';
 import { createHash } from 'node:crypto';
 import { createInterface } from 'node:readline';
@@ -1550,23 +1551,47 @@ async function flushPendingImports(opts: {
     let composedAs: 'blocks' | 'raw-html' = 'raw-html';
 
     // Design-fragment sidecar: highest precedence content source. Written
-    // deterministically by captureDesignForUrl during the screenshot/capture
-    // pass — independent of agent availability or foundation readiness. When
-    // present it becomes contentOverride so the existing media-URL rewrite
-    // (prepareInstallContentWithMediaUrls) swaps source <img> URLs to local
-    // upload URLs exactly as it does for the composed sidecar path.
+    // deterministically by captureDesignForUrl (desktop) and captureMobileBodyFragment
+    // (mobile) during the screenshot/capture pass — independent of agent availability
+    // or foundation readiness.
+    //
+    // Dual-viewport toggle: when BOTH the desktop and mobile sidecars exist, build a
+    // responsive contentOverride with `.dla-content-desktop` + `.dla-content-mobile`
+    // wrappers (already applied by wrapFragment / wrapMobileFragment). The toggle CSS
+    // (emitted by buildBlankTheme) shows the desktop block at ≥769px and the mobile
+    // block at ≤768px. When only the desktop sidecar exists (mobile capture failed or
+    // not yet run), fall back to the desktop fragment alone.
+    //
+    // Media URL rewrite covers both fragments — the existing mediaUrlMap keys by source
+    // URL so the same image referenced in both fragments is rewritten once and deduped
+    // by the map lookup. No extra de-duplication step needed.
     const designSidecar = designSidecarPath(outDir, entry.slug);
+    const designSidecarMobile = designSidecarPath(outDir, entry.slug, { mobile: true });
     if (fileExists(designSidecar)) {
       try {
-        const fragment = readFileSync(designSidecar, 'utf8');
-        if (fragment.trim().length > 0) {
+        const desktopFragment = readFileSync(designSidecar, 'utf8');
+        if (desktopFragment.trim().length > 0) {
+          let combined = desktopFragment;
+          // If the mobile sidecar also exists, concatenate for responsive toggle.
+          if (fileExists(designSidecarMobile)) {
+            try {
+              const mobileFragment = readFileSync(designSidecarMobile, 'utf8');
+              if (mobileFragment.trim().length > 0) {
+                combined = desktopFragment + '\n' + mobileFragment;
+              }
+            } catch {
+              // Mobile sidecar unreadable → fall back to desktop-only.
+            }
+          }
           appendWatchLog(outDir, {
             event: 'design-sidecar-used',
             url: entry.url,
             slug: entry.slug,
-            bytes: fragment.length,
+            bytes: combined.length,
+            hasDesktop: true,
+            hasMobile: combined !== desktopFragment,
           });
-          contentOverride = fragment;
+          contentOverride = combined;
           composedAs = 'raw-html';
         }
       } catch {

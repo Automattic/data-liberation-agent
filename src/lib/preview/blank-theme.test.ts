@@ -88,4 +88,16 @@ describe('buildBlankTheme', () => {
     const style = buildBlankTheme({ themeSlug: 'dla-replica', hasJs: false, headLinks: [] }).find((f) => f.relativePath === 'style.css')!.content;
     expect(style).toMatch(/Theme Name:/);
   });
+
+  it('functions.php emits dual-viewport toggle CSS via wp_add_inline_style', () => {
+    const fns = buildBlankTheme({ themeSlug: 'dla-replica', hasJs: false, headLinks: [] }).find((f) => f.relativePath === 'functions.php')!.content;
+    // Toggle rules must be present via wp_add_inline_style
+    expect(fns).toContain('wp_add_inline_style');
+    expect(fns).toContain('dla-content-desktop');
+    expect(fns).toContain('dla-content-mobile');
+    // Desktop hidden at ≤768px, mobile hidden at ≥769px
+    expect(fns).toContain('max-width: 768px');
+    expect(fns).toContain('min-width: 769px');
+    expect(fns).toContain('display:none !important');
+  });
 });

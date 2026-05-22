@@ -19,7 +19,7 @@ import { analyzePage } from './site-analysis.js';
 import { SiteAnalysisAggregator } from './aggregator.js';
 import { CssAggregator } from './css-aggregator.js';
 import { JsAggregator } from './js-aggregator.js';
-import { captureDesignForUrl } from './design-capture-runner.js';
+import { captureDesignForUrl, captureMobileBodyFragment } from './design-capture-runner.js';
 import { collectMobileChromeLayout } from './dom-capture.js';
 import { generateChromeCss, type BakedLayoutMap } from './fixups.js';
 import type { ExtractedNav } from './nav-extract.js';
@@ -330,6 +330,38 @@ async function capturePerViewport(args: CapturePerViewportArgs): Promise<void> {
     } catch (err) {
       // Non-fatal — mobile chrome layout collection failure degrades to desktop-only CSS.
       console.error(`[design] mobile chrome layout collection failed for ${url}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  // --- mobile-only body fragment capture (dual-viewport page content) --------
+  // Capture the chrome-stripped body fragment at the mobile viewport and write
+  // design/<slug>.mobile.fragment.html. This is the counterpart to the desktop
+  // sidecar written by captureDesignForUrl during the desktop pass. Both sidecars
+  // are consumed by flushPendingImports to build the viewport-toggle contentOverride.
+  //
+  // Only run when:
+  //   - this is the mobile viewport pass
+  //   - design capture is active (designCtx present)
+  //   - the archetype is a design-captured content type (same gate as desktop)
+  //
+  // The check against `archetype` uses the same DESIGN_CAPTURE_ARCHETYPES set logic.
+  // We re-derive the slug the same way the desktop pass does: slugify(url).
+  if (!isDesktop && designCtx) {
+    const DESIGN_CAPTURE_ARCHETYPES = new Set(['homepage', 'page', 'post', 'gallery', 'event']);
+    if (DESIGN_CAPTURE_ARCHETYPES.has(archetype)) {
+      try {
+        const designSlug = (await import('../../adapters/shared.js')).slugify(url);
+        await captureMobileBodyFragment({
+          page,
+          slug: designSlug,
+          outputDir,
+          cssAgg: designCtx.cssAgg,
+        });
+      } catch (err) {
+        // Non-fatal — mobile body capture failure means only desktop fragment is available.
+        // flushPendingImports falls back to desktop-only wrapping.
+        console.error(`[design] mobile body fragment capture failed for ${url}: ${err instanceof Error ? err.message : String(err)}`);
+      }
     }
   }
 }

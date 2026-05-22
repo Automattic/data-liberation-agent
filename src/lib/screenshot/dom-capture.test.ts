@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { chromium, type Browser } from 'playwright';
-import { collectBodyFragment, collectStylesheets, collectHeadLinks, collectScripts, collectBodyAndChrome, collectMobileChromeLayout } from './dom-capture.js';
+import { collectBodyFragment, collectStylesheets, collectHeadLinks, collectScripts, collectBodyAndChrome, collectBodyFragmentMobileOnly, collectMobileChromeLayout } from './dom-capture.js';
 
 const FIXTURE = `<!DOCTYPE html><html><head>
   <style>.hero{color:red}</style>
@@ -146,6 +146,38 @@ describe('collectBodyAndChrome', () => {
     expect(footerHtml).toBeNull();
     expect(desktopLayoutMap).toBeNull();
     expect(bodyFragmentHtml).toContain('Only content');
+    await page.close();
+  });
+});
+
+describe('collectBodyFragmentMobileOnly', () => {
+  it('returns chrome-removed body fragment without nav/footer content', async () => {
+    const page = await browser.newPage();
+    await page.setContent(CHROME_FIXTURE);
+    const fragment = await collectBodyFragmentMobileOnly(page);
+    // Header chrome (nav links) removed
+    expect(fragment).not.toContain('Home');
+    expect(fragment).not.toContain('About');
+    // Footer chrome removed
+    expect(fragment).not.toContain('foot');
+    // Main content preserved
+    expect(fragment).toContain('Content');
+    await page.close();
+  });
+
+  it('does not include <body> tag in the result', async () => {
+    const page = await browser.newPage();
+    await page.setContent(CHROME_FIXTURE);
+    const fragment = await collectBodyFragmentMobileOnly(page);
+    expect(fragment).not.toContain('<body');
+    await page.close();
+  });
+
+  it('returns body content unchanged when no chrome elements are present', async () => {
+    const page = await browser.newPage();
+    await page.setContent('<!DOCTYPE html><html><body><main><p>Only content</p></main></body></html>');
+    const fragment = await collectBodyFragmentMobileOnly(page);
+    expect(fragment).toContain('Only content');
     await page.close();
   });
 });
