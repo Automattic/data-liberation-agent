@@ -108,6 +108,18 @@ describe('buildBlankTheme', () => {
     expect(fns).not.toContain("transform='scale'");
   });
 
+  it('functions.php emits content-top spacing reset so absolute header overlays the hero', () => {
+    const fns = buildBlankTheme({ themeSlug: 'dla-replica', hasJs: false, headLinks: [] }).find((f) => f.relativePath === 'functions.php')!.content;
+    // The absolute-positioned header must overlay the first content section (hero) at top:0.
+    // A margin/padding-top reset on the main content wrapper is required so the page
+    // starts at the very top with no theme spacing pushing content below the header.
+    expect(fns).toContain('margin-top:0 !important');
+    expect(fns).toContain('padding-top:0 !important');
+    // The rule must target the content wrapper selectors.
+    expect(fns).toContain('wp-site-blocks');
+    expect(fns).toContain('dla-replica');
+  });
+
   it('functions.php emits scale CSS and fit script when hasDesignCapture is true', () => {
     const fns = buildBlankTheme({
       themeSlug: 'dla-replica',

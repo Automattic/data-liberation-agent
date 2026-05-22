@@ -84,53 +84,24 @@ export function buildBlockHeader(nav: ExtractedNav, opts: BlockHeaderOpts = {}):
   const logoUrl = opts.logoLocalUrl ?? nav.logoSrc;
 
   // ── Determine effective background ────────────────────────────────────────
-  // Priority:
-  //   1. Extracted background is opaque (alpha > 0, not transparent keyword).
-  //   2. backgroundImage present (gradient / image) → keep transparent bg, use image.
-  //   3. brandDark fallback when bg is transparent/indeterminate.
-  //   4. WP preset variable (last resort).
+  // The header is ALWAYS rendered as a transparent overlay over the hero/content.
+  // The source nav background (and brandDark) are intentionally NOT used to fill
+  // the header group background — this matches the source's transparent header that
+  // sits over the (blue) hero, making the green CTA button visible against the hero
+  // rather than invisible against a matching green header bg.
+  //
+  // brandDark is still used as the CTA button background color (see buildCtaBlock).
+  //
+  // backgroundImage (gradient/image) is preserved on the outer group when present
+  // (rare — some sources bake a gradient into the header bar itself).
   const isTransparent = isTransparentBg(rawBg);
-  let effectiveBg: string;
-  let appliedFallback = false;
+  const bg = 'transparent';
 
-  if (!isTransparent) {
-    // Opaque extracted color — use it directly.
-    effectiveBg = rawBg || 'var(--wp--preset--color--base)';
-  } else if (bgImage) {
-    // Background image/gradient path — keep transparent bg, image takes over.
-    effectiveBg = rawBg || 'transparent';
-  } else if (opts.brandDark) {
-    // Transparent header + brand-dark palette color available → use brand color.
-    effectiveBg = opts.brandDark;
-    appliedFallback = true;
-  } else {
-    effectiveBg = rawBg || 'var(--wp--preset--color--base)';
-  }
-
-  // ── Determine effective text color ────────────────────────────────────────
-  // When we applied a fallback background (brandDark), or when the extracted
-  // background is opaque, compute contrast-safe text color from the effective bg.
-  // This overrides the (unreliable) extracted textColor in both cases.
-  let textColor: string;
-  if (appliedFallback) {
-    // brandDark is always a hex value → contrast helper works directly.
-    textColor = contrastTextColor(effectiveBg);
-  } else if (!isTransparent && !bgImage) {
-    // Opaque extracted bg — check contrast; override if extracted text would
-    // be illegible.  Parse the extracted textColor luminance vs. bg luminance.
-    const bgLum = parseCssColorLuminance(effectiveBg);
-    const extractedText = nav.style.textColor || null;
-    if (bgLum !== null) {
-      textColor = bgLum < 0.5 ? '#ffffff' : '#111111';
-    } else {
-      textColor = extractedText || 'var(--wp--preset--color--contrast)';
-    }
-  } else {
-    // backgroundImage or fallback WP var — use extracted textColor as-is.
-    textColor = nav.style.textColor || 'var(--wp--preset--color--contrast)';
-  }
-
-  const bg = effectiveBg;
+  // Nav text is always white when the header is transparent — the source pattern
+  // is white text over a hero image.  If an explicit light textColor was extracted
+  // we preserve it; otherwise we default to white for legibility over dark heroes.
+  // (White text over a light hero is low-contrast — same behavior as the source.)
+  const textColor = '#ffffff';
 
   // ── Logo / site title block ────────────────────────────────────────────────
   const logoBlock = buildLogoBlock(logoUrl, nav.logoAlt, nav.siteTitle, textColor);
@@ -146,7 +117,7 @@ export function buildBlockHeader(nav: ExtractedNav, opts: BlockHeaderOpts = {}):
         href: opts.siteUrl && ctaHref ? resolveNavHref(ctaHref, opts.siteUrl) : (ctaHref ?? ''),
       }
     : null;
-  const ctaBlock = resolvedCta ? buildCtaBlock(resolvedCta, nav.style) : '';
+  const ctaBlock = resolvedCta ? buildCtaBlock(resolvedCta, nav.style, opts.brandDark) : '';
 
   // ── Right-side group (nav + optional CTA) ─────────────────────────────────
   const rightGroup = `<!-- wp:group {"layout":{"type":"flex","flexWrap":"nowrap","justifyContent":"right","verticalAlignment":"center"},"style":{"spacing":{"blockGap":"1rem"}}} -->
@@ -154,6 +125,8 @@ export function buildBlockHeader(nav: ExtractedNav, opts: BlockHeaderOpts = {}):
 <!-- /wp:group -->`;
 
   // ── Outer header group (full-width flex, space-between) ───────────────────
+  // Background is always transparent — the header overlays the hero via
+  // position:absolute in the navOverrideStyle block below.
   const outerStyle: Record<string, unknown> = {
     color: { background: bg },
     spacing: {
@@ -168,7 +141,7 @@ export function buildBlockHeader(nav: ExtractedNav, opts: BlockHeaderOpts = {}):
 
   // Build the inline style string for the <header> element.
   // When backgroundImage is present, apply it alongside background-color so
-  // the gradient/image is painted and a fallback color is still declared.
+  // the gradient/image is painted; header bg itself stays transparent.
   const inlineStyles: string[] = [
     `background-color:${bg}`,
     `padding-top:0.75rem`,
@@ -188,7 +161,10 @@ export function buildBlockHeader(nav: ExtractedNav, opts: BlockHeaderOpts = {}):
   // emitting a scoped <style> block with !important rules that enforce the
   // captured typography and color tokens on every nav link rendered by the
   // wp:navigation block.
-  const navOverrideStyle = buildNavOverrideStyle(textColor, nav.style, resolvedCta);
+  // Pass brandDark as ctaBrandColor so the CTA button gets the green fill even
+  // when no explicit cta.bg is captured (e.g. source uses a CSS class, not inline).
+  const ctaBrandColor = opts.brandDark ?? null;
+  const navOverrideStyle = buildNavOverrideStyle(textColor, nav.style, resolvedCta, ctaBrandColor);
 
   return `${navOverrideStyle}<!-- wp:group {"tagName":"header","align":"full","style":${JSON.stringify(outerStyle)},"layout":{"type":"flex","flexWrap":"nowrap","justifyContent":"space-between","verticalAlignment":"center"}} -->
 <header class="wp-block-group alignfull" style="${inlineStyle}">${logoBlock}${rightGroup}</header>
@@ -235,7 +211,8 @@ function buildNavigationBlock(
     style: {
       typography: { fontFamily },
       color: { text: textColor },
-      spacing: { blockGap: '1.5rem' },
+      // Wide inter-item gap matches source's evenly spaced nav (2.25rem ≈ 36px).
+      spacing: { blockGap: '2.25rem' },
     },
   };
 
@@ -258,16 +235,39 @@ ${links}
  *
  * The rules target the WP Navigation block selectors used at runtime so the
  * override is precise and doesn't bleed outside the header.
+ *
+ * Key overlay rules:
+ *   - header.wp-block-group is positioned absolute over the hero (position:absolute,
+ *     top:0, left:0, right:0, z-index:1000) with a transparent background so the
+ *     hero's color/image shows through — this is why the green CTA pops (hero is
+ *     blue, not green) and matches the source's transparent-overlay nav pattern.
+ *   - Nav container gets a wide flex gap (2.25rem) so items are evenly spaced.
  */
 function buildNavOverrideStyle(
   textColor: string,
   style: ExtractedNav['style'],
   cta: { label: string; href: string; bg?: string; color?: string } | null,
+  ctaBrandColor: string | null,
 ): string {
   const fontFamily = style.fontFamily ? `"${style.fontFamily}"` : null;
   const rules: string[] = [];
 
-  // Build the nav-link rule.
+  // ── Transparent absolute overlay on the header group ─────────────────────
+  // Position the header over the first content section (the hero) so the hero
+  // background bleeds through behind the nav — matching the source's behavior
+  // where the header is "transparent over the blue hero".
+  rules.push(
+    `header.wp-block-group{ position:absolute !important; top:0; left:0; right:0; z-index:1000; background:transparent !important; background-color:transparent !important; }`,
+  );
+
+  // ── Wide inter-item spacing on the navigation container ──────────────────
+  // The source nav links are evenly spaced with large gaps; reinforce via CSS
+  // in addition to the blockGap block attribute so cascaded CSS can't override.
+  rules.push(
+    `header.wp-block-group .wp-block-navigation__container,\nheader.wp-block-group .wp-block-navigation{ gap:2.25rem !important; }`,
+  );
+
+  // ── Nav link typography + color ──────────────────────────────────────────
   const navProps: string[] = [];
   navProps.push(`color:${textColor} !important`);
   if (style.fontSize) navProps.push(`font-size:${style.fontSize} !important`);
@@ -283,18 +283,25 @@ function buildNavOverrideStyle(
     );
   }
 
-  // Build the CTA button rule when a CTA is present.
+  // ── CTA button: green pill with white text ────────────────────────────────
+  // The CTA button gets a visible green background (brandDark / extracted ctaBg)
+  // with white text and a pill border-radius.  It contrasts against the (blue)
+  // hero behind the transparent header — unlike a solid green header where the
+  // green button would be invisible.
   if (cta) {
-    const ctaBg = cta.bg ?? style.ctaBackground ?? null;
-    const ctaColor = cta.color ?? style.ctaTextColor ?? null;
+    // Prefer explicit cta.bg, then style.ctaBackground, then brandDark fallback.
+    const ctaBg = cta.bg ?? style.ctaBackground ?? ctaBrandColor ?? null;
+    // Prefer explicit cta.color, then style.ctaTextColor; default white for contrast.
+    const ctaColor = cta.color ?? style.ctaTextColor ?? '#ffffff';
     const ctaProps: string[] = [];
     if (ctaBg) ctaProps.push(`background-color:${ctaBg} !important`, `background:${ctaBg} !important`);
-    if (ctaColor) ctaProps.push(`color:${ctaColor} !important`);
-    if (ctaProps.length > 0) {
-      rules.push(
-        `header.wp-block-group .wp-block-button__link { ${ctaProps.join(';')}; }`,
-      );
-    }
+    ctaProps.push(`color:${ctaColor} !important`);
+    // Pill shape for the CTA — matches the source's rounded "CALL US" button.
+    ctaProps.push(`border-radius:9999px !important`);
+    ctaProps.push(`padding-left:1.5rem !important`, `padding-right:1.5rem !important`);
+    rules.push(
+      `header.wp-block-group .wp-block-button__link { ${ctaProps.join(';')}; }`,
+    );
   }
 
   if (rules.length === 0) return '';
@@ -304,21 +311,28 @@ function buildNavOverrideStyle(
 function buildCtaBlock(
   cta: { label: string; href: string; bg?: string; color?: string },
   style: ExtractedNav['style'],
+  ctaBrandColor?: string | null,
 ): string {
-  const bg = cta.bg ?? style.ctaBackground ?? style.textColor ?? '#000000';
-  const color = cta.color ?? style.ctaTextColor ?? style.background ?? '#ffffff';
+  // CTA background: prefer explicit cta.bg, then style.ctaBackground, then brandDark.
+  // Default to black only as last resort.
+  const bg = cta.bg ?? style.ctaBackground ?? ctaBrandColor ?? style.textColor ?? '#000000';
+  // CTA text: prefer explicit, then extracted; always default to white for contrast
+  // (the CTA sits over the transparent header which shows the hero behind it).
+  const color = cta.color ?? style.ctaTextColor ?? '#ffffff';
+  // Pill border-radius to match source's rounded "CALL US" button style.
+  const borderRadius = '9999px';
   const btnAttrs = JSON.stringify({
     url: cta.href,
     text: cta.label,
     style: {
       color: { background: bg, text: color },
-      border: { radius: '4px' },
+      border: { radius: borderRadius },
     },
     className: 'is-style-fill',
   });
   return `<!-- wp:buttons -->
 <div class="wp-block-buttons"><!-- wp:button ${btnAttrs} -->
-<div class="wp-block-button is-style-fill"><a class="wp-block-button__link wp-element-button" href="${esc(cta.href)}" style="background-color:${bg};color:${color};border-radius:4px">${esc(cta.label)}</a></div>
+<div class="wp-block-button is-style-fill"><a class="wp-block-button__link wp-element-button" href="${esc(cta.href)}" style="background-color:${bg};color:${color};border-radius:${borderRadius}">${esc(cta.label)}</a></div>
 <!-- /wp:button --></div>
 <!-- /wp:buttons -->`;
 }

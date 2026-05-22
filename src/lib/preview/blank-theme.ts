@@ -92,9 +92,15 @@ add_action('send_headers', function () {
   // post content when both viewport captures succeeded. The toggle hides the inactive
   // one. This is inlined in functions.php (not a separate file) because it is a fixed
   // rule that never varies per-site and is always needed when design capture is active.
+  //
+  // Content-top reset: the absolute-positioned header overlays the first content
+  // section (the hero) so the page starts at top:0 — no theme margin/padding must
+  // push the content down before the header covers it.  The <main> reset also
+  // removes any block-start margin WP themes add to the content wrapper.
   const toggleCss = `
 @media (max-width: 768px){ .dla-content-desktop{display:none !important} }
 @media (min-width: 769px){ .dla-content-mobile{display:none !important} }
+body .wp-site-blocks > main, body > main, main.wp-block-group, .dla-replica:first-child{ margin-top:0 !important; padding-top:0 !important; }
 `;
 
   // Mobile scale CSS: clip the outer shell and set the transform origin on the inner

@@ -49,10 +49,12 @@ describe('buildBlockHeader', () => {
     expect(markup).toContain('wp:buttons');
   });
 
-  it('uses the background color from nav.style in the outer group inline style', () => {
+  it('header group always uses transparent background (overlay mode)', () => {
     const markup = buildBlockHeader(SAMPLE_NAV);
-    // The background color should appear in inline style or block attributes
-    expect(markup).toContain('rgb(20, 20, 20)');
+    // The header is always transparent — it overlays the hero section.
+    // The source nav.style.background (rgb(20, 20, 20)) must NOT be used as the header fill.
+    expect(markup).toContain('background-color:transparent');
+    expect(markup).not.toContain('background-color:rgb(20, 20, 20)');
   });
 
   it('emits wp:image with logo src and alt when logo is present', () => {
@@ -132,15 +134,22 @@ describe('buildBlockHeader', () => {
 
   // ── brandDark fallback tests ────────────────────────────────────────────────
 
-  it('uses brandDark as header background when source bg is transparent', () => {
+  it('brandDark feeds the CTA button color (NOT the header background) when source bg is transparent', () => {
     const transparentNav: ExtractedNav = {
       ...SAMPLE_NAV,
-      style: { ...SAMPLE_NAV.style, background: 'transparent', textColor: 'rgb(0, 0, 0)' },
+      // Remove explicit ctaBackground so brandDark is the CTA color source.
+      style: { ...SAMPLE_NAV.style, background: 'transparent', textColor: 'rgb(0, 0, 0)', ctaBackground: null },
+      cta: { label: 'CALL US', href: '/call-us' },
     };
     const markup = buildBlockHeader(transparentNav, { brandDark: '#175236' });
-    expect(markup).toContain('background-color:#175236');
-    // The outer group style should also reference the brand color
-    expect(markup).toContain('#175236');
+    // Header element's inline style must be transparent — brandDark must NOT be the header bg.
+    expect(markup).toContain('background-color:transparent');
+    // The only `background-color:#175236` occurrences should be in the CTA button
+    // (both the !important override rule and the button's own inline style) — NOT on the header.
+    // Verify the !important rule is present for the CTA.
+    expect(markup).toContain('background-color:#175236 !important');
+    // Verify the header element itself uses transparent (the inline style on <header>).
+    expect(markup).toContain('<header class="wp-block-group alignfull" style="background-color:transparent');
   });
 
   it('forces nav and CTA text to white (#ffffff) when brandDark is dark (luminance < 0.5)', () => {
@@ -153,33 +162,40 @@ describe('buildBlockHeader', () => {
     expect(markup).toContain('"text":"#ffffff"');
   });
 
-  it('forces nav text to dark (#111111) when brandDark is light', () => {
+  it('nav text is always white (#ffffff) for transparent overlay header (regardless of brandDark lightness)', () => {
     const transparentNav: ExtractedNav = {
       ...SAMPLE_NAV,
       style: { ...SAMPLE_NAV.style, background: 'transparent', textColor: 'rgb(255, 255, 255)' },
     };
+    // Even a very light brandDark — transparent header always uses white nav text.
     const markup = buildBlockHeader(transparentNav, { brandDark: '#d4f0e8' });
-    // Very light color → dark text
-    expect(markup).toContain('"text":"#111111"');
+    expect(markup).toContain('"text":"#ffffff"');
+    expect(markup).not.toContain('"text":"#111111"');
   });
 
-  it('uses rgba(0,0,0,0) as transparent and applies brandDark', () => {
+  it('treats rgba(0,0,0,0) as transparent; header stays transparent and brandDark goes to CTA', () => {
     const transparentNav: ExtractedNav = {
       ...SAMPLE_NAV,
-      style: { ...SAMPLE_NAV.style, background: 'rgba(0,0,0,0)', textColor: 'rgb(0, 0, 0)' },
+      style: { ...SAMPLE_NAV.style, background: 'rgba(0,0,0,0)', textColor: 'rgb(0, 0, 0)', ctaBackground: null },
+      cta: { label: 'CALL US', href: '/call-us' },
     };
     const markup = buildBlockHeader(transparentNav, { brandDark: '#175236' });
-    expect(markup).toContain('#175236');
+    // Header must always be transparent, not rgba(0,0,0,0)
+    expect(markup).toContain('background-color:transparent');
     expect(markup).not.toContain('rgba(0,0,0,0)');
+    // brandDark still appears — as the CTA button background
+    expect(markup).toContain('#175236');
   });
 
-  it('does NOT override opaque extracted background with brandDark', () => {
-    // SAMPLE_NAV has background: 'rgb(20, 20, 20)' — opaque, not transparent
+  it('header stays transparent even when source had an opaque background; brandDark does NOT fill the header', () => {
+    // SAMPLE_NAV has background: 'rgb(20, 20, 20)' — opaque, but we always use transparent overlay.
     const markup = buildBlockHeader(SAMPLE_NAV, { brandDark: '#175236' });
-    // Original opaque background must still appear
-    expect(markup).toContain('rgb(20, 20, 20)');
-    // brandDark should NOT replace it
-    expect(markup).not.toContain('background-color:#175236');
+    // The header must always be transparent — the opaque source bg is intentionally dropped.
+    expect(markup).toContain('background-color:transparent');
+    // brandDark must NOT appear as the header background-color (no `!important` on the element).
+    // SAMPLE_NAV has style.ctaBackground='rgb(0, 100, 200)' which takes priority over brandDark for the CTA,
+    // so #175236 should not appear in the output at all for SAMPLE_NAV.
+    expect(markup).not.toContain('#175236');
   });
 
   it('overrides extracted text color with white for an opaque dark background', () => {
@@ -337,5 +353,83 @@ describe('buildBlockHeader', () => {
     expect(markup).toContain('<style>');
     expect(markup).toContain('color:');
     expect(markup).toContain('!important');
+  });
+
+  // ── Transparent overlay header tests ─────────────────────────────────────
+
+  it('emits position:absolute + z-index:1000 on header.wp-block-group (overlay rule)', () => {
+    const markup = buildBlockHeader(SAMPLE_NAV);
+    // The style override must include the absolute overlay positioning rule.
+    expect(markup).toContain('position:absolute !important');
+    expect(markup).toContain('top:0');
+    expect(markup).toContain('left:0');
+    expect(markup).toContain('right:0');
+    expect(markup).toContain('z-index:1000');
+  });
+
+  it('emits background:transparent !important on header group (overlay forces transparent)', () => {
+    const markup = buildBlockHeader(SAMPLE_NAV);
+    // The !important transparent rule is what ensures site.css cannot make the header solid.
+    expect(markup).toContain('background:transparent !important');
+    expect(markup).toContain('background-color:transparent !important');
+  });
+
+  it('emits wide nav gap (2.25rem) on navigation container via !important style rule', () => {
+    const markup = buildBlockHeader(SAMPLE_NAV);
+    // Both the block attribute (blockGap) and the !important CSS rule must use 2.25rem.
+    expect(markup).toContain('"blockGap":"2.25rem"');
+    expect(markup).toContain('gap:2.25rem !important');
+    // The gap rule must target the WP navigation container selectors.
+    expect(markup).toContain('.wp-block-navigation__container');
+    expect(markup).toContain('.wp-block-navigation{');
+  });
+
+  it('nav text color is always white (#ffffff) in the transparent overlay header', () => {
+    const markup = buildBlockHeader(SAMPLE_NAV);
+    // Nav link color override must be white.
+    expect(markup).toContain('color:#ffffff !important');
+    // Block attribute for nav text color must also be white.
+    expect(markup).toContain('"text":"#ffffff"');
+  });
+
+  it('CTA button has pill border-radius (9999px) in both block attrs and inline style', () => {
+    const markup = buildBlockHeader(SAMPLE_NAV);
+    // wp:button block attribute for border radius must be 9999px.
+    expect(markup).toContain('"radius":"9999px"');
+    // The rendered <a> element inline style must also have border-radius:9999px.
+    expect(markup).toContain('border-radius:9999px');
+  });
+
+  it('CTA button override rule includes border-radius:9999px !important', () => {
+    const markup = buildBlockHeader(SAMPLE_NAV);
+    // The !important rule for the CTA button must set the pill border-radius.
+    expect(markup).toContain('border-radius:9999px !important');
+  });
+
+  it('CTA button override has white text (#ffffff) by default for contrast over hero', () => {
+    const navNoCta: ExtractedNav = {
+      ...SAMPLE_NAV,
+      // No explicit cta.color, no ctaTextColor — should default to white.
+      style: { ...SAMPLE_NAV.style, ctaTextColor: null },
+      cta: { label: 'CALL US', href: '/call-us' },
+    };
+    const markup = buildBlockHeader(navNoCta);
+    // CTA text must default to white when no explicit color is set.
+    expect(markup).toContain('color:#ffffff !important');
+  });
+
+  it('brandDark is NOT used as header background but IS used as CTA color when no ctaBackground', () => {
+    const navForCta: ExtractedNav = {
+      ...SAMPLE_NAV,
+      style: { ...SAMPLE_NAV.style, ctaBackground: null },
+      cta: { label: 'CALL US', href: '/call-us' },
+    };
+    const markup = buildBlockHeader(navForCta, { brandDark: '#175236' });
+    // Header element must be transparent.
+    expect(markup).toContain('<header class="wp-block-group alignfull" style="background-color:transparent');
+    // brandDark must appear as CTA button background.
+    expect(markup).toContain('background-color:#175236');
+    // CTA !important override must include brandDark.
+    expect(markup).toContain('background-color:#175236 !important');
   });
 });
