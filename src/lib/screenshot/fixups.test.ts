@@ -19,10 +19,12 @@ import {
   CHROME_FIXUP_FACTORY_SOURCE,
   CHROME_FIXUP_SOURCE,
   CHROME_MARKER_FACTORY_SOURCE,
+  COVER_IMAGE_FIXUP_FACTORY_SOURCE,
   depinFixedSticky,
   bakeComputedLayout,
   applyChromeFixups,
   generateChromeCss,
+  stripCoverImageDimensions,
   type BakedLayoutMap,
 } from './fixups.js';
 
@@ -501,5 +503,103 @@ describe('generateChromeCss (Node-side)', () => {
   it('returns empty string for empty desktop map', () => {
     const css = generateChromeCss({}, {});
     expect(css.trim()).toBe('');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// stripCoverImageDimensions — Wix cover-image inline dimension fixup
+// ---------------------------------------------------------------------------
+
+/**
+ * Fixture: one cover image (object-fit:cover with explicit inline w/h + HTML
+ * attrs) and one non-cover image (plain w/h only). After the fixup:
+ *   - The cover image: NO inline width/height, NO width/height attrs, but
+ *     object-fit and object-position are preserved.
+ *   - The non-cover image: completely unchanged.
+ */
+const COVER_FIXTURE = `<!DOCTYPE html><html><head>
+  <style>
+    #cover-img { object-fit: cover; object-position: 50% 50%; }
+    #plain-img { display: block; }
+  </style>
+</head><body>
+  <img id="cover-img"
+       style="object-fit:cover;object-position:50% 50%;width:480px;height:320px"
+       width="480" height="320"
+       src="https://example.com/hero.jpg">
+  <img id="plain-img"
+       style="width:100px;height:100px"
+       width="100" height="100"
+       src="https://example.com/thumb.jpg">
+</body></html>`;
+
+describe('stripCoverImageDimensions (via factory, Playwright fixture)', () => {
+  it('is a named function', () => {
+    expect(typeof stripCoverImageDimensions).toBe('function');
+    expect(stripCoverImageDimensions.name).toBe('stripCoverImageDimensions');
+  });
+
+  it('COVER_IMAGE_FIXUP_FACTORY_SOURCE.factorySrc is a non-empty self-contained string', () => {
+    expect(typeof COVER_IMAGE_FIXUP_FACTORY_SOURCE.factorySrc).toBe('string');
+    expect(COVER_IMAGE_FIXUP_FACTORY_SOURCE.factorySrc.length).toBeGreaterThan(100);
+    expect(COVER_IMAGE_FIXUP_FACTORY_SOURCE.factorySrc).toContain('stripCoverImageDimensions');
+    expect(COVER_IMAGE_FIXUP_FACTORY_SOURCE.factorySrc).toContain('objectFit');
+  });
+
+  it('removes inline width/height from a cover image, preserves object-fit/object-position', async () => {
+    const page = await browser.newPage();
+    await page.setContent(COVER_FIXTURE);
+    try {
+      const { factorySrc } = COVER_IMAGE_FIXUP_FACTORY_SOURCE;
+      const result = await page.evaluate(({ factorySrc }: { factorySrc: string }) => {
+        const strip = new Function('return (' + factorySrc + ')')()() as (root: Element) => void;
+        strip(document.body);
+        const img = document.getElementById('cover-img') as HTMLImageElement;
+        return {
+          inlineStyle: img.getAttribute('style') ?? '',
+          widthAttr: img.getAttribute('width'),
+          heightAttr: img.getAttribute('height'),
+        };
+      }, { factorySrc });
+
+      // Inline width/height must be gone
+      expect(result.inlineStyle).not.toMatch(/\bwidth\s*:/);
+      expect(result.inlineStyle).not.toMatch(/\bheight\s*:/);
+      // HTML attributes must be gone
+      expect(result.widthAttr).toBeNull();
+      expect(result.heightAttr).toBeNull();
+      // object-fit and object-position must be preserved
+      expect(result.inlineStyle).toMatch(/object-fit\s*:\s*cover/);
+      expect(result.inlineStyle).toMatch(/object-position\s*:/);
+    } finally {
+      await page.close();
+    }
+  });
+
+  it('leaves a non-cover image completely unchanged', async () => {
+    const page = await browser.newPage();
+    await page.setContent(COVER_FIXTURE);
+    try {
+      const { factorySrc } = COVER_IMAGE_FIXUP_FACTORY_SOURCE;
+      const result = await page.evaluate(({ factorySrc }: { factorySrc: string }) => {
+        const strip = new Function('return (' + factorySrc + ')')()() as (root: Element) => void;
+        strip(document.body);
+        const img = document.getElementById('plain-img') as HTMLImageElement;
+        return {
+          inlineStyle: img.getAttribute('style') ?? '',
+          widthAttr: img.getAttribute('width'),
+          heightAttr: img.getAttribute('height'),
+        };
+      }, { factorySrc });
+
+      // The plain image's inline style must still have width and height
+      expect(result.inlineStyle).toMatch(/width\s*:\s*100px/);
+      expect(result.inlineStyle).toMatch(/height\s*:\s*100px/);
+      // HTML attributes must still be present
+      expect(result.widthAttr).toBe('100');
+      expect(result.heightAttr).toBe('100');
+    } finally {
+      await page.close();
+    }
   });
 });

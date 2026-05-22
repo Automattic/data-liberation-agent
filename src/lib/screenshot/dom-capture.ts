@@ -1,6 +1,6 @@
 // src/lib/screenshot/dom-capture.ts
 import type { Page } from 'playwright';
-import { CHROME_FIXUP_FACTORY_SOURCE, CHROME_MARKER_FACTORY_SOURCE, type BakedLayoutMap } from './fixups.js';
+import { CHROME_FIXUP_FACTORY_SOURCE, CHROME_MARKER_FACTORY_SOURCE, COVER_IMAGE_FIXUP_FACTORY_SOURCE, type BakedLayoutMap } from './fixups.js';
 import { NAV_EXTRACT_FACTORY_SOURCE, type ExtractedNav } from './nav-extract.js';
 
 /** Inner HTML of <body>, image src/srcset preserved (no inlining). */
@@ -56,9 +56,10 @@ export async function collectBodyAndChrome(page: Page): Promise<BodyAndChrome> {
   const { factorySrc } = CHROME_FIXUP_FACTORY_SOURCE;
   const markerFactorySrc = CHROME_MARKER_FACTORY_SOURCE.factorySrc;
   const navFactorySrc = NAV_EXTRACT_FACTORY_SOURCE.factorySrc;
+  const coverFactorySrc = COVER_IMAGE_FIXUP_FACTORY_SOURCE.factorySrc;
 
   return page.evaluate(
-    ({ factorySrc, markerFactorySrc, navFactorySrc }: { factorySrc: string; markerFactorySrc: string; navFactorySrc: string }): BodyAndChrome => {
+    ({ factorySrc, markerFactorySrc, navFactorySrc, coverFactorySrc }: { factorySrc: string; markerFactorySrc: string; navFactorySrc: string; coverFactorySrc: string }): BodyAndChrome => {
       // Reconstruct the marker helpers from the self-contained factory.
       // eslint-disable-next-line no-new-func
       const markerHelpers = new Function('return (' + markerFactorySrc + ')')()() as {
@@ -78,6 +79,10 @@ export async function collectBodyAndChrome(page: Page): Promise<BodyAndChrome> {
       // depin is now folded into collectBakedLayout's return values.
       // eslint-disable-next-line no-new-func
       void new Function('return (' + factorySrc + ')')();
+
+      // Reconstruct the cover-image fixup from the self-contained factory.
+      // eslint-disable-next-line no-new-func
+      const stripCoverImageDimensions = new Function('return (' + coverFactorySrc + ')')()() as (root: Element) => void;
 
       const vw = window.innerWidth || 1440;
       const docH = document.documentElement.scrollHeight;
@@ -154,6 +159,11 @@ export async function collectBodyAndChrome(page: Page): Promise<BodyAndChrome> {
       safeRemove(header, footer);
       safeRemove(footer, header);
 
+      // Strip inline width/height from object-fit:cover images (Wix JS-sizes them
+      // at runtime; without JS the fixed px dimensions prevent images from filling
+      // their containers).
+      stripCoverImageDimensions(document.body);
+
       return {
         bodyFragmentHtml: document.body.innerHTML,
         nav,
@@ -161,7 +171,7 @@ export async function collectBodyAndChrome(page: Page): Promise<BodyAndChrome> {
         desktopLayoutMap: Object.keys(desktopLayoutMap).length > 0 ? desktopLayoutMap : null,
       };
     },
-    { factorySrc, markerFactorySrc, navFactorySrc },
+    { factorySrc, markerFactorySrc, navFactorySrc, coverFactorySrc },
   );
 }
 
@@ -277,7 +287,8 @@ export async function collectMobileChromeLayout(page: Page): Promise<BakedLayout
  * from the desktop pass data; we only need the distinct mobile body content.
  */
 export async function collectBodyFragmentMobileOnly(page: Page): Promise<string> {
-  return page.evaluate(() => {
+  const coverFactorySrc = COVER_IMAGE_FIXUP_FACTORY_SOURCE.factorySrc;
+  return page.evaluate(({ coverFactorySrc }: { coverFactorySrc: string }) => {
     const vw = window.innerWidth || 390;
     const docH = document.documentElement.scrollHeight;
 
@@ -312,8 +323,13 @@ export async function collectBodyFragmentMobileOnly(page: Page): Promise<string>
     safeRemove(header, footer);
     safeRemove(footer, header);
 
+    // Strip inline width/height from object-fit:cover images before serialising.
+    // eslint-disable-next-line no-new-func
+    const stripCoverImageDimensions = new Function('return (' + coverFactorySrc + ')')()() as (root: Element) => void;
+    stripCoverImageDimensions(document.body);
+
     return document.body.innerHTML;
-  });
+  }, { coverFactorySrc });
 }
 
 /** Concatenated cssText of all SAME-ORIGIN stylesheets. Cross-origin sheets

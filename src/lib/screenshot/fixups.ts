@@ -559,5 +559,62 @@ export const CHROME_MARKER_FACTORY_SOURCE: { factorySrc: string } = {
   factorySrc: _markerFactorySrc,
 };
 
+// ---------------------------------------------------------------------------
+// 7. stripCoverImageDimensions — remove inline width/height from cover images
+// ---------------------------------------------------------------------------
+
+/**
+ * For every `<img>` within `root` whose computed `object-fit` is `cover`:
+ *   - Remove `width` and `height` from the element's inline `style` (preserving
+ *     all other inline style properties such as `object-fit` and `object-position`).
+ *   - Remove the legacy HTML `width` and `height` attributes if present.
+ *
+ * Rationale: Wix (and similar platforms) use JavaScript at runtime to size
+ * images. The captured static HTML contains `<img>` elements with
+ * `object-fit: cover` AND explicit inline `width`/`height` px values set by
+ * that JS. Without Wix's JS running, those fixed dimensions prevent the image
+ * from filling its container. Removing them lets the container/CSS control
+ * the size, which is the correct behaviour for `object-fit: cover` images.
+ *
+ * Images NOT rendered with `object-fit: cover` are left completely untouched.
+ *
+ * NOTE: Designed to run INSIDE the browser via `page.evaluate`. Do NOT call
+ * in Node process code directly.
+ */
+export function stripCoverImageDimensions(root: Element): void {
+  const imgs = Array.from(root.querySelectorAll('img'));
+  for (const img of imgs) {
+    if (getComputedStyle(img).objectFit === 'cover') {
+      img.style.removeProperty('width');
+      img.style.removeProperty('height');
+      img.removeAttribute('width');
+      img.removeAttribute('height');
+    }
+  }
+}
+
+// Build the cover-image fixup factory source so it is self-contained for
+// browser injection (mirrors CHROME_FIXUP_FACTORY_SOURCE / CHROME_MARKER_FACTORY_SOURCE).
+const _coverSrc = stripCoverImageDimensions.toString();
+
+/**
+ * Self-contained factory source for `stripCoverImageDimensions`.
+ *
+ * Usage in page.evaluate:
+ *   const { factorySrc } = COVER_IMAGE_FIXUP_FACTORY_SOURCE;
+ *   await page.evaluate(({ factorySrc }) => {
+ *     const stripCoverImageDimensions = new Function('return (' + factorySrc + ')')()();
+ *     stripCoverImageDimensions(document.body);
+ *   }, { factorySrc });
+ */
+const _coverFactorySrc = `(function() {
+  var stripCoverImageDimensions = (${_coverSrc});
+  return stripCoverImageDimensions;
+})`;
+
+export const COVER_IMAGE_FIXUP_FACTORY_SOURCE: { factorySrc: string } = {
+  factorySrc: _coverFactorySrc,
+};
+
 // Re-export the property list so tests can verify the exact set.
 export { BAKED_PROPS };
