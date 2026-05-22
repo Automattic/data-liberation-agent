@@ -49,6 +49,13 @@ export interface AssembleDesignThemeOpts {
    * desktop/mobile .dla-fx-N rules that override site.css responsive rules.
    */
   chromeCssText?: string;
+  /**
+   * Base URL of the source site (e.g. "https://www.swiftlumber.com").
+   * When present, nav hrefs in the block header are rewritten to local
+   * WordPress page paths (e.g. "/about-us/"), with the homepage becoming
+   * "/" and external links left unchanged.
+   */
+  siteUrl?: string;
 }
 
 /**
@@ -93,7 +100,7 @@ export function assembleDesignTheme(opts: AssembleDesignThemeOpts): ReplicaFile[
     // Rewrite nav.logoSrc to the local URL if available in the mediaUrlMap.
     const logoLocalUrl = opts.logoLocalUrl
       ?? (opts.nav.logoSrc ? (opts.mediaUrlMap.get(opts.nav.logoSrc) ?? undefined) : undefined);
-    headerBlockMarkup = buildBlockHeader(opts.nav, { logoLocalUrl, brandDark });
+    headerBlockMarkup = buildBlockHeader(opts.nav, { logoLocalUrl, brandDark, siteUrl: opts.siteUrl });
   }
 
   const files = buildBlankTheme({

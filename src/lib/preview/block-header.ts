@@ -47,6 +47,7 @@
 
 import type { ExtractedNav } from '../screenshot/nav-extract.js';
 import { relativeLuminance, contrastTextColor } from './brand-color.js';
+import { resolveNavHref } from './nav-href.js';
 
 export interface BlockHeaderOpts {
   /** Local (uploaded) URL for the logo image, overrides nav.logoSrc when set. */
@@ -57,6 +58,14 @@ export interface BlockHeaderOpts {
    * transparent / indeterminate.  Text color is computed by contrast.
    */
   brandDark?: string;
+  /**
+   * Base URL of the source site (e.g. "https://www.swiftlumber.com").
+   * When present, same-site nav hrefs are rewritten to local WordPress page
+   * paths (e.g. "/about-us/") and the homepage href becomes "/".
+   * External hrefs (different registrable domain) are left unchanged.
+   * When absent, all hrefs are emitted as-is (back-compat).
+   */
+  siteUrl?: string;
 }
 
 /**
@@ -127,10 +136,17 @@ export function buildBlockHeader(nav: ExtractedNav, opts: BlockHeaderOpts = {}):
   const logoBlock = buildLogoBlock(logoUrl, nav.logoAlt, nav.siteTitle, textColor);
 
   // ── Navigation block ───────────────────────────────────────────────────────
-  const navBlock = buildNavigationBlock(nav, textColor, fontFamily);
+  const navBlock = buildNavigationBlock(nav, textColor, fontFamily, opts.siteUrl);
 
   // ── CTA block (optional) ───────────────────────────────────────────────────
-  const ctaBlock = nav.cta ? buildCtaBlock(nav.cta, nav.style) : '';
+  const ctaHref = nav.cta?.href;
+  const resolvedCta = nav.cta
+    ? {
+        ...nav.cta,
+        href: opts.siteUrl && ctaHref ? resolveNavHref(ctaHref, opts.siteUrl) : (ctaHref ?? ''),
+      }
+    : null;
+  const ctaBlock = resolvedCta ? buildCtaBlock(resolvedCta, nav.style) : '';
 
   // ── Right-side group (nav + optional CTA) ─────────────────────────────────
   const rightGroup = `<!-- wp:group {"layout":{"type":"flex","flexWrap":"nowrap","justifyContent":"right","verticalAlignment":"center"},"style":{"spacing":{"blockGap":"1rem"}}} -->
@@ -198,6 +214,7 @@ function buildNavigationBlock(
   nav: ExtractedNav,
   textColor: string,
   fontFamily: string,
+  siteUrl?: string,
 ): string {
   const navAttrs: Record<string, unknown> = {
     overlayMenu: 'mobile',
@@ -214,11 +231,10 @@ function buildNavigationBlock(
   };
 
   const links = nav.items.map((item) => {
-    const attrs = JSON.stringify({ label: item.label, url: item.href });
+    const resolvedHref = siteUrl ? resolveNavHref(item.href, siteUrl) : item.href;
+    const attrs = JSON.stringify({ label: item.label, url: resolvedHref });
     return `<!-- wp:navigation-link ${attrs} /-->`;
   }).join('\n');
-
-  // TODO: map nav item hrefs to local page slugs (currently using source hrefs)
 
   return `<!-- wp:navigation ${JSON.stringify(navAttrs)} -->
 ${links}

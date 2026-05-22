@@ -203,4 +203,51 @@ describe('buildBlockHeader', () => {
     expect(markup).toContain('background-image:linear-gradient(90deg, #003 0%, #300 100%)');
     expect(markup).not.toContain('background-color:#175236');
   });
+
+  // ── siteUrl nav href rewriting ──────────────────────────────────────────────
+
+  const SITE_URL = 'https://www.swiftlumber.com';
+
+  const SITE_NAV: ExtractedNav = {
+    ...SAMPLE_NAV,
+    items: [
+      { label: 'Home', href: 'https://www.swiftlumber.com/' },
+      { label: 'About', href: 'https://www.swiftlumber.com/about-us' },
+      { label: 'Projects', href: 'https://www.swiftlumber.com/projects' },
+      { label: 'Jobs', href: 'https://workforcenow.adp.com/careers/swiftlumber' },
+    ],
+    cta: { label: 'Contact', href: 'https://www.swiftlumber.com/contact-us' },
+  };
+
+  it('rewrites same-site nav hrefs to local paths when siteUrl is set', () => {
+    const markup = buildBlockHeader(SITE_NAV, { siteUrl: SITE_URL });
+    // Home maps to "/"
+    expect(markup).toContain('"url":"/"');
+    // /about-us maps to /about-us/
+    expect(markup).toContain('"url":"/about-us/"');
+    // /projects maps to /projects/
+    expect(markup).toContain('"url":"/projects/"');
+  });
+
+  it('preserves external links unchanged when siteUrl is set', () => {
+    const markup = buildBlockHeader(SITE_NAV, { siteUrl: SITE_URL });
+    // ADP external URL must pass through unchanged
+    expect(markup).toContain('workforcenow.adp.com');
+  });
+
+  it('rewrites CTA href to local path when siteUrl is set', () => {
+    const markup = buildBlockHeader(SITE_NAV, { siteUrl: SITE_URL });
+    // CTA /contact-us → /contact-us/
+    expect(markup).toContain('/contact-us/');
+    // Source URL must NOT appear
+    expect(markup).not.toContain('https://www.swiftlumber.com/contact-us');
+  });
+
+  it('does not rewrite hrefs when siteUrl is absent (back-compat)', () => {
+    const markup = buildBlockHeader(SITE_NAV);
+    // Source URLs must be emitted as-is
+    expect(markup).toContain('https://www.swiftlumber.com/about-us');
+    expect(markup).toContain('https://www.swiftlumber.com/projects');
+    expect(markup).toContain('https://www.swiftlumber.com/contact-us');
+  });
 });

@@ -2679,6 +2679,7 @@ export async function runWatch(opts: WatchOpts): Promise<{ ok: boolean; duration
           nav: designCaptureNav,
           footerHtml: designCaptureFooterHtml,
           chromeCssText: designCaptureChromeCssText,
+          siteUrl: opts.url,
         });
 
         writeReplicaFilesToHost({ wpRoot, themeSlug: designThemeSlug, themeFiles });
