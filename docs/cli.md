@@ -1,5 +1,7 @@
 # CLI Reference
 
+> **Headless / extraction path.** The CLI handles detection, extraction, screenshots, and import — the deterministic stages of the pipeline. The full design and replica flow (extraction + block-theme reconstruction → local preview URL) runs via the `/liberate` skill inside an AI agent (Claude Code, Codex). See [AI skills](./skills.md) and the [README](../README.md) for the agent-first getting-started path.
+
 The `data-liberation` CLI extracts content from closed web platforms and imports it into WordPress.
 
 ```bash

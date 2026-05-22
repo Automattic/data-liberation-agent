@@ -1,6 +1,7 @@
 ---
 name: testing-php
 description: Guidelines for running PHP linting to catch syntax errors
+disable-model-invocation: true
 ---
 
 ## When to use me

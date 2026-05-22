@@ -1,6 +1,7 @@
 ---
 name: testing-js
 description: Guidelines for checking JavaScript files for syntax errors
+disable-model-invocation: true
 ---
 
 ## When to use me

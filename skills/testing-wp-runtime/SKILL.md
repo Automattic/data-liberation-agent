@@ -1,6 +1,7 @@
 ---
 name: testing-wp-runtime
 description: Guidelines for running wp-now to validate WordPress plugins and themes at runtime
+disable-model-invocation: true
 ---
 
 ## When to use me

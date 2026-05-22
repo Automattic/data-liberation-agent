@@ -1,6 +1,7 @@
 ---
 name: editing-blocks
 description: Guidelines for modifying existing WordPress blocks — load this before editing block files
+disable-model-invocation: true
 ---
 
 ## When to use me

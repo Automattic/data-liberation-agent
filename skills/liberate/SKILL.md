@@ -1,54 +1,215 @@
 ---
 name: liberate
-description: Extract content from a closed web platform (GoDaddy Websites & Marketing, Hostinger, HubSpot, Shopify, Squarespace, Webflow, Weebly, Wix) into a WordPress-compatible WXR file
+description: Extract content from a closed web platform and reconstruct it as a responsive, editable WordPress block theme — detect → discover → extract → capture → design → install → QA → run-report.json
 ---
 
 # Liberate a website
 
-Help the user extract their content from a closed web platform.
+The single front-door, root orchestrator for the whole migration pipeline. One shared agent context runs extraction through design — no subprocess spawning, no context fragmentation. Deterministic stages are MCP tool calls; judgment stages are inline sub-skill invocations; only the per-cluster section builders fan out to parallel subagents.
 
-## Workflow
+**Headless extraction-only (CI/batch):** `data-liberation <url>` runs steps 1–5 without the design phase. The design phase is agent-only via this skill.
 
-1. Ask for the URL of the site to liberate (if not already provided)
-2. Call `liberate_detect` to identify the platform
-3. Call `liberate_discover` to inventory the site — show the counts and **platform features** to the user
-   - Discovery now returns `platformFeatures` — flags for stores, bookings, forms, members areas, scheduling, forums, and events
-   - Tell the user which features were detected and whether they transfer automatically
-   - Features marked `transferable: true` (like stores) are handled during extraction
-   - Features marked `transferable: false` include a `wpRecommendation` with a suggested WordPress plugin
-4. Confirm with the user before proceeding
-5. Call `liberate_extract` with an appropriate outputDir
-6. Call `liberate_verify` on the outputDir to check the extraction quality — report stale CDN URLs, failed pages, failed media, and quality scores
-7. If there are failures, offer to retry specific URLs or investigate
-8. When the user is ready to import:
-   - If the environment provides its own import mechanism (e.g. `import-liberated-data` skill, or `wp_cli` tool): call `liberate_setup` with `delegate: true`, then call `liberate_import` with `delegate: true` to get a structured import manifest. Hand off to the environment's import skill/tool.
-   - Otherwise: call `liberate_setup` with site/username/token to validate the REST API connection, then call `liberate_import` with REST API credentials
+---
+
+## Pipeline overview
+
+```
+/liberate <url>   ── root orchestrator, shared context ─────────────────────────
+│
+│  EXTRACTION  (deterministic — existing MCP tools)
+├─ 1  detect → discover            platform · sitemap · features · archetype inventory
+├─ 2  extract                      pages/posts/products content + media refs
+├─ 3  media: dedup + upload        → uploaded WP-library URLs (reused everywhere downstream)
+├─ 4  capture                      desktop+mobile screenshots · palette/typography/breakpoints · html/<slug>.html
+├─ 5  products → products.csv      WooCommerce import format
+│
+│  [ CONFIRM: show inventory + scope/cost/time estimate — wait for operator go-ahead ]
+│
+│  DESIGN  (replicate sub-orchestrator, invoked inline — shared context)
+├─ 6  design-foundations   [SKILL] → design-foundation.json + design.md (frozen site-wide brief)
+├─ 7  creating-themes      [SKILL] → theme.json · parts skeleton · base templates · style.css · self-hosted fonts
+├─ 8  page clustering      [tool]  → cluster-map.json (pages grouped by layout signature; 1 representative each)
+├─ 9  section extraction   [tool]  → specs/<rep>/section-<n>-<type>.md (computed styles · interaction model · media URLs · brightness · motion)
+├─ 10 BUILD (fan-out)      [SKILL × K subagents]  generating-patterns: one builder per cluster representative
+│                                   → layout skeletons as strings (concurrency-capped ~4–6; checkpointed by cluster-group)
+├─ 11 assemble        [tool+SKILL] deterministic compose-instantiate per non-representative page
+│                                   → compose-page-blocks SKILL for misfits only · dynamic block-header → templates + parts + post_content
+├─ 12 validate-artifacts   [gate]  escaping (esc_*) · injection allowlist · provenance (text ⊆ spec) · drift · no remote URLs · no placeholders
+├─ 13 install + import     [tool]  clean Studio site on full re-run · theme + WXR + products.csv · set front page
+└─ 14 visual-QA loop       [SKILL] design-qa: replica desktop+mobile · responsive@390 (HARD gate) + qualitative · A/B/C · fix via editing-themes · ≤3 iters → run-report.json
+```
+
+The whole run is bounded by a **budget guard** (`checkBudget` in `src/lib/replicate/budget-guard.ts`) — configurable subagent/cluster/elapsed ceiling → pause-and-ask. The final deliverable is `run-report.json` + the replica URL (`buildRunReport` in `src/lib/replicate/run-report.ts`).
+
+---
+
+## Step-by-step workflow
+
+### Step 1 — Detect & discover
+
+1. Ask for the URL if not already provided.
+2. Call `liberate_detect` to identify the platform.
+3. Call `liberate_discover` to inventory the site. Show the counts and **platform features** to the operator.
+   - `platformFeatures` flags: stores, bookings, forms, members areas, scheduling, forums, events.
+   - Features marked `transferable: true` (e.g. stores) are handled during extraction.
+   - Features marked `transferable: false` include a `wpRecommendation` (suggested WP plugin).
+   - Narrate: "Detected Wix · 47 pages · 3 archetypes · 12 products · store (WooCommerce) · forms (WPForms recommended)."
+
+### Step 2 — Extract
+
+Call `liberate_extract` with an appropriate `outputDir`. Narrate per-URL progress.
+
+**0 pages:** "No extractable pages found at `<url>`. The site may be behind auth or bot-protection — try CDP/admin extraction (`/diagnose`)." Stop.
+
+### Step 3 — Media dedup + upload
+
+Media references are deduped and uploaded to the WP media library. Uploaded URLs are the canonical media references used everywhere downstream (specs, templates, `post_content`).
+
+### Step 4 — Capture
+
+Runs automatically during or after extract: desktop+mobile screenshots, `palette.json` / `typography.json` / `breakpoints.json`, and `html/<slug>.html` per URL. Clustering in step 8 runs off the already-saved `html/<slug>.html` — no re-navigation.
+
+Default concurrency: 6. Configure via `--screenshots-concurrency N` or `--concurrency N`.
+
+### Step 5 — Products → CSV
+
+If products were extracted, compile `products.jsonl` → `products.csv` (WooCommerce import format). Report: "Also extracted N products → products.csv."
+
+### Confirmation checkpoint
+
+After discovery (step 1), pause and show:
+- Inventory: pages · estimated clusters · products
+- Estimated scope, cost, and time
+- Ask to proceed before the long design phase
+
+This mirrors the existing `liberate` confirm step and complements the mid-run budget guard.
+
+### Step 6 — Design foundations
+
+Invoke `design-foundations` inline (shared context). Reads tokens, scaffold, representative HTML, and screenshots → emits `design-foundation.json` + `design.md` (frozen brief — only QA iteration 3 may amend, which invalidates the theme and all built clusters and re-enters this step).
+
+### Step 7 — Create theme
+
+Invoke `creating-themes` inline. Reads `design-foundation.json` + `design.md` → emits `theme.json`, `style.css`, `functions.php`, parts skeleton, base templates, self-hosted fonts. Header/footer come from the existing dynamic block-header + captured footer spec.
+
+### Step 8 — Page clustering
+
+Call `liberate_cluster_pages`. Computes layout signatures off the saved `html/<slug>.html` (ordered section-type sequence + structural attrs). Pages with identical signatures join one cluster. The representative is the cluster member with the richest structure. Emits `cluster-map.json`.
+
+**Content model:**
+- **Pages** (homepage + content pages) → section-by-section reconstruction (steps 8–11) into reusable layout.
+- **Posts** → `single.html` + blog/archive template + Query Loop. Imported post content renders through the template.
+- **Products** → `single-product.html` + `archive-product.html` + WooCommerce. No per-product reconstruction.
+
+### Step 9 — Section extraction
+
+Call `liberate_section_extract` on each cluster representative. Full detail: `specs/<rep>/section-<n>-<type>.md` (computed styles, interaction model, uploaded media URLs, brightness, motion, divider/gradient flags). Browser-based; runs only on representatives.
+
+**Per-cluster readiness check before dispatch:** rep specs complete (interaction model set, computed styles present, media local-pathed, brightness recorded). Incomplete → fix spec, don't dispatch.
+
+### Step 10 — Build (fan-out)
+
+Fan out one `generating-patterns` builder subagent per cluster representative (concurrency-capped ~4–6). Builders:
+- Receive shared artifacts **by path** (`design.md`, theme slug, token snapshot, media URL map, their specs). Read-only on shared artifacts.
+- Return a **structured JSON envelope**: `{ patterns: [{ slug, php }], sitewideFlags: [...], notes: [...] }`. A malformed return is a builder failure — never silent corruption.
+- Emit **layout skeletons** (section-mapping templates with content slots), not finished per-page markup. Sitewide-shared sections (header, footer, CTA band) are promoted to registered WP patterns / template parts.
+
+**Checkpointing by cluster-group:** the design phase processes clusters in groups with a compaction/handoff between groups (state in `session.json` + a short design-state summary) to bound orchestrator context. Crash mid-build resumes at the next unbuilt cluster (write-then-mark).
+
+**On Codex/Gemini:** step 10 runs sequentially (no fan-out). All other steps are identical.
+
+**Builder subagent failure:** retry once → fall back to sequential for that cluster → persist subagent input + returned markup to `theme/debug/cluster-<n>.json`, log to `theme/notes.md`.
+
+### Step 11 — Assemble
+
+For each non-representative page, call `liberate_compose_instantiate` (deterministic): fills the cluster's layout skeleton with that page's captured content + uploaded media → `post_content`. Building cost scales with **K clusters, not N pages**.
+
+Invoke `compose-page-blocks` skill **only** for misfits (unmatched slots, extra/missing sections — those that don't cleanly map). A post-compose sanity check (all slots filled, section count matches the cluster signature) fails loud — never ships empty/broken sections silently.
+
+### Step 12 — Validate artifacts (gate)
+
+Call `liberate_validate_artifacts` (ports `validate-artifacts.js`, hardened). This is the **security trust boundary** and must pass before install:
+
+- **Escaping:** asserts `esc_html` / `esc_attr` / `esc_url` on all source-derived text.
+- **Injection allowlist:** rejects raw `<?php` / `<script>` / `on*=` handlers (PHP injection + stored XSS defense, including builder prompt-injection via source content).
+- **Provenance:** emitted text ⊆ spec captured text (flags invented prose, never ships it silently).
+- **Drift:** spec↔pattern consistency.
+- **No remote URLs, no unresolved `{{placeholders}}`, block-comment-only markup.**
+
+Gate fail → fix source, rerun — never install a failing theme. Log to `run-report.json`.
+
+### Step 13 — Install + import
+
+Clean Studio site on full re-run (or wipe replica content); resume keeps the existing site. Install theme, import WXR + `products.csv`, set front page. Returns replica URL.
+
+### Step 14 — Visual QA loop
+
+Invoke `design-qa` inline. Captures replica desktop+mobile screenshots, compares against source screenshots.
+
+**Gates (in order):**
+1. **Responsiveness** (HARD): no horizontal overflow + sections reflow at 390px (automated Playwright check). Must pass to ship.
+2. **Qualitative:** vision review across ≤3 iterations per archetype representative — classify A/B/C, emit fix directives, invoke `editing-themes` / `editing-blocks` / `creating-blocks` to resolve. Pixel-diff is a signal, **not** the gate.
+
+After ≤3 iterations (or on gate failure), emit `run-report.json` + replica URL. Iteration 3 `design.md` amendment invalidates theme + all built clusters and re-enters step 6.
+
+---
+
+## Operator interaction states
+
+| Stage | State | Response |
+|---|---|---|
+| extraction | 0 pages | Stop + "No extractable pages found at `<url>`. Try CDP/admin extraction (`/diagnose`)." |
+| extraction | adapter fail | Log + pointer to `/diagnose` |
+| design | no page archetype | Templates-only run (posts + products render through base templates; no page reconstruction) |
+| design | gate fail | Don't install — report to `run-report.json` with problem + cause + fix |
+| design | some clusters failed | Built-with-gaps — list gaps in `run-report.json`; install what passed |
+| budget guard | ceiling hit | "Built N clusters / dispatched M subagents (~est. $X, Y min). Continue · stop and report what's done · raise the ceiling?" |
+
+Progress is the agent's own narration — no Ink TUI in agent mode. The headless extraction CLI keeps its existing Ink surfaces (`discover.tsx`, `screenshot.tsx`).
+
+---
+
+## `run-report.json` — verdict-first
+
+Read top-down to answer "is this good?":
+
+1. `verdict` — overall ✓ / ⚠ / ✗ + per-archetype.
+2. `summary` — clusters built/failed · pages composed/misfit · responsive pass/fail · provenance flags · fallback/low-confidence pages · est. cost/usage.
+3. `details[]` — per-cluster + per-page status, gate results, QA notes, known gaps.
+
+---
 
 ## Resuming
 
-If the user asks to resume a previous extraction (e.g. "resume", "continue where I left off", "it crashed"):
+If the user asks to resume (e.g. "resume", "continue", "it crashed"):
 
-1. Ask for the URL (if not provided) — the outputDir is derived from the URL
-2. Call `liberate_extract` with `resume: true` — this skips already-processed URLs
-3. If the extraction was already complete (`.discovery-complete` exists), skip straight to reporting results and offer to import
+1. Ask for the URL if not provided — `outputDir` is derived from it.
+2. Call `liberate_extract` with `resume: true` for extraction; `session.json` tracks design stage + per-cluster build status so the design phase resumes at the next unbuilt cluster.
+3. If extraction was already complete (`.discovery-complete` exists), skip straight to reporting and offer to import or re-run design.
 
-The `resume` flag causes the extraction to:
-- Skip platform detection and discovery if a completed WXR already exists
-- Skip URLs that were already successfully processed (tracked in `extraction-log.jsonl`)
-- Rebuild media dedup hashes from existing files to avoid re-downloading
+The `resume` flag causes extraction to:
+- Skip platform detection/discovery if a completed WXR already exists
+- Skip URLs already successfully processed (tracked in `extraction-log.jsonl`)
+- Rebuild media dedup hashes from existing files
 - Append to the existing WXR rather than starting fresh
 
-## Products
+---
 
-Any platform may have e-commerce products. When products are detected during extraction:
+## Output-quality contract
 
-- Products are streamed to `products.jsonl` during extraction, then compiled into `products.csv` (WooCommerce import format) alongside the WXR
-- Report the product count to the user: "Also extracted N products → products.csv"
-- The CSV is ready for WooCommerce import via Products → Import in WP admin
+- A source section matching **no** catalog interaction-model maps to a **faithful generic** (`columns`/`group`) and is **flagged** in the run-report — never silently forced into a wrong-specific template.
+- Capture-health fallback pages (hero+gallery) and misfit pages routed to `compose-page-blocks` are labeled **low-confidence / fallback** in the run-report.
+- **Alt text:** carry the source's alt verbatim. Images with missing/empty alt are **flagged in run-report** for human fill — never AI-generated (provenance rule).
+- **Contrast:** the brightness rule guarantees legibility. The validate-artifacts gate **warns** on sub-WCAG-AA (4.5:1) text in the run-report. It does not hard-fail or auto-adjust — the source itself may fail AA, and faithfulness wins.
+- **Copyright:** third-party sites get the `style.css` "Benchmark reference only — not for publication." header.
+
+---
 
 ## Discoveries
 
-If you encounter something notable during extraction — a new API endpoint, a platform quirk, a workaround for blocked content, a better extraction technique — add an entry to `DISCOVERIES.md` at the top of the repo. Follow the format in the existing entries. This is how the tool gets smarter over time.
+If you encounter something notable during extraction — a new API endpoint, a platform quirk, a workaround for blocked content, a better extraction technique — add an entry to `DISCOVERIES.md` at the top of the repo.
+
+---
 
 ## Verification
 
@@ -59,26 +220,9 @@ After extraction completes, always run `liberate_verify` on the output directory
 - Media files on disk vs media attachments in the WXR
 - Redirect map completeness
 
-Show the user the verification report and flag anything that needs attention before importing.
+Report the verification results and flag anything that needs attention before importing.
 
-## WordPress Import
-
-If the environment provides an import skill (e.g. `import-liberated-data` in WordPress Studio), use `delegate: true` with both `liberate_setup` and `liberate_import`. The setup call returns requirements, the import call returns a structured manifest with file paths. Hand off to the environment's import skill to execute the actual import.
-
-If no environment import skill is available, use the built-in REST API import. Validate the WordPress connection with `liberate_setup` first:
-- Checks site reachability, REST API availability, and authentication
-- Returns step-by-step guidance if anything fails (e.g. how to create an Application Password)
-- Once setup passes, ask the user about author handling before calling `liberate_import`
-
-**Ask the user about authors:**
-- "Would you like to import the original content authors as WordPress users, or assign all content to your account?"
-- If they want authors: pass `importAuthors: true` to `liberate_import` — this creates WordPress user accounts for each author found in the WXR and assigns posts to them
-- If they want everything under their account: pass `importAuthors: false` (default) — all content is owned by the authenticated user
-
-If the user doesn't have a WordPress site yet, guide them:
-1. Create a WordPress site (wordpress.com, self-hosted, or WordPress Studio for local development)
-2. Generate an Application Password (WordPress Admin > Users > Profile > Application Passwords). On WordPress.com / wpcomstaging.com sites, generate it from the site's own wp-admin — the account-level one at wordpress.com/me/security/application-passwords only works for the WordPress.com public API, not the site-native /wp-json/wp/v2/ endpoint we use.
-3. Run `liberate_setup` to validate the connection
+---
 
 ## Platform-specific notes
 
@@ -93,8 +237,8 @@ Squarespace sites benefit significantly from **admin extraction via CDP**. Witho
    google-chrome --remote-debugging-port=9222
    ```
    (On macOS: `/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --remote-debugging-port=9222`)
-2. In that Chrome window, navigate to their Squarespace site and **log in to admin**
-3. Once logged in, run extraction with `--cdp-port 9222` (CLI) or `cdpPort: 9222` (MCP)
+2. In that Chrome window, navigate to their Squarespace site and **log in to admin**.
+3. Once logged in, run extraction with `--cdp-port 9222` (CLI) or `cdpPort: 9222` (MCP).
 
 The admin session gives the adapter access to:
 - Squarespace's admin API responses (richer metadata, structured content)
@@ -173,8 +317,12 @@ Pages use DOM-based extraction: strip `HEADER_SECTION`, `FOOTER_*`, cookie banne
 
 **v1 limitations:** No GoDaddy Online Store (OLS) product extraction yet — sites with a store are flagged, but products need a real store URL for testing before v1.1 ships.
 
+---
+
 ## General notes
 
-- The extraction produces a WXR file (WordPress import format) + a media directory + a redirect map
-- If the site has products, a `products.csv` (WooCommerce format) and `products.jsonl` are also produced
-- All content is imported as drafts — the user reviews and publishes manually
+- The extraction produces a WXR file (WordPress import format) + a media directory + a redirect map.
+- If the site has products, a `products.csv` (WooCommerce format) and `products.jsonl` are also produced.
+- All content is imported as drafts — the user reviews and publishes manually.
+- The WordPress import step supports `importAuthors: true` to create WP user accounts per author, or `importAuthors: false` (default) to assign all content to the authenticated user. Ask before importing.
+- If no environment import skill is available, validate the WordPress connection with `liberate_setup` first, then call `liberate_import` with REST API credentials. If the environment provides an import skill (e.g. `import-liberated-data`), use `delegate: true` with both `liberate_setup` and `liberate_import`.

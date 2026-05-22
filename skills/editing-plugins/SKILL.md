@@ -1,6 +1,7 @@
 ---
 name: editing-plugins
 description: Guidelines for modifying existing WordPress plugins — load this before editing plugin files
+disable-model-invocation: true
 ---
 
 ## When to use me

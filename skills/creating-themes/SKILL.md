@@ -1,6 +1,7 @@
 ---
 name: creating-themes
 description: Guidelines for creating new WordPress block themes from scratch — load this before generating theme files
+disable-model-invocation: true
 ---
 
 ## When to use me

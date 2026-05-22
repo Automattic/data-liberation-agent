@@ -1,6 +1,7 @@
 ---
 name: creating-plugins
 description: Guidelines for creating new WordPress plugins from scratch — load this before generating plugin files
+disable-model-invocation: true
 ---
 
 ## When to use me

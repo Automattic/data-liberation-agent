@@ -1,6 +1,7 @@
 ---
 name: generating-patterns
 description: Guidelines and examples for generating WordPress block patterns — load this when creating patterns for themes
+disable-model-invocation: true
 ---
 
 ## When to use me
@@ -193,3 +194,23 @@ Not every site needs the same patterns. Adapt the set to the context:
 - **Agency / Studio**: Hero with reel or case study, services grid, case study cards, team, contact
 - **Blog / Magazine**: Hero with featured post, category grid, newsletter signup, recent posts
 - **E-commerce**: Hero with product showcase, category grid, bestsellers, testimonials, promo banner
+
+## Return envelope (orchestrator-internal)
+
+When invoked as a builder subagent by the `/liberate` or `/replicate` orchestrator, you MUST return your output as a structured JSON envelope — not free-form prose:
+
+```json
+{
+  "patterns": [
+    { "slug": "theme-slug/hero-split", "php": "<?php\n/**\n * Title: Hero Split\n * ...\n */\n?>\n<!-- wp:group ... -->" }
+  ],
+  "sitewideFlags": [],
+  "notes": []
+}
+```
+
+- `patterns` — array of objects with `slug` (the pattern's registered slug, matching the file header) and `php` (the full pattern file contents as a string, including the PHP comment header).
+- `sitewideFlags` — optional array of strings naming sitewide concerns (e.g. `"commercial-font-reckless"`, `"missing-mobile-hero-image"`).
+- `notes` — optional array of strings with builder observations or deferred items.
+
+Section markup comes from the `references/section-mapping.md` catalog. All source-derived text must be escaped (`esc_html` / `esc_attr` / `esc_url`) and must pass `liberate_validate_artifacts` (escaping + provenance). A malformed or partial return — missing `patterns`, wrong types, raw `<?php` injection outside the pattern header — is treated as a builder failure and triggers a retry or sequential fallback. Never return partial results silently.

@@ -1,6 +1,7 @@
 ---
 name: compose-page-blocks
 description: Compose a single liberated page's WordPress block-editor markup from its rendered HTML and screenshot. Inputs are a sanitized HTML file, a desktop screenshot, the design-foundation tokens, the URL's archetype (page/post/product/etc.), and the source URL. Output is a string of valid block markup that round-trips through parse_blocks, uses theme tokens (no inlined hex colors), and contains only text drawn from the source HTML. Call per-page during the streaming watch loop after extraction has produced HTML+screenshot for that URL. Use when a freshly-imported page needs `post_content` upgraded from raw HTML into block-editor markup so the replica theme's tokens, gradients, and patterns actually render.
+disable-model-invocation: true
 allowed-tools:
   - Read
   - Write

@@ -1,6 +1,7 @@
 ---
 name: generating-images
 description: Image generation markup patterns — load this when generating content that includes images
+disable-model-invocation: true
 ---
 
 ## When to use me

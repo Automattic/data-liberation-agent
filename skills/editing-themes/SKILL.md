@@ -1,6 +1,7 @@
 ---
 name: editing-themes
 description: Guidelines for modifying existing WordPress block themes — load this before editing theme files
+disable-model-invocation: true
 ---
 
 ## When to use me

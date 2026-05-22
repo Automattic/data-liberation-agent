@@ -1,6 +1,7 @@
 ---
 name: creating-blocks
 description: Templates and guidelines for creating new WordPress blocks from scratch — load this before generating block files
+disable-model-invocation: true
 ---
 
 ## When to use me
