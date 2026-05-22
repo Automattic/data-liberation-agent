@@ -132,9 +132,15 @@ add_action('send_headers', function () {
   window.addEventListener('load',fit);
 })();`;
 
+  // The fit script attaches to its OWN registered+enqueued (src-less) handle, NOT
+  // 'dla-site' — the 'dla-site' SCRIPT handle is only enqueued when first-party JS
+  // is carried (hasJs), so attaching there silently drops the script on most runs.
+  // A dedicated footer handle always prints the inline fit script.
   const designCaptureInline = hasDesignCapture
     ? `  wp_add_inline_style('dla-site', ${phpString(mobileScaleCss)});
-  wp_add_inline_script('dla-site', ${phpString(mobileScaleScript)});`
+  wp_register_script('dla-mobile-fit', false, array(), null, true);
+  wp_enqueue_script('dla-mobile-fit');
+  wp_add_inline_script('dla-mobile-fit', ${phpString(mobileScaleScript)});`
     : '';
 
   const functionsPhp = `<?php
