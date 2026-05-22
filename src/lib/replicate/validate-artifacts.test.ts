@@ -88,3 +88,45 @@ describe('validateArtifacts — provenance', () => {
     expect(r.ok).toBe(true);
   });
 });
+
+describe('validateArtifacts — security evasions (regression)', () => {
+  const withPhp = (php: string): ArtifactInput => ({
+    patterns: [{ slug: 'site/section-1', php, spec: { interactionModel: 'cta', expectedText: [], expectedAssets: [] } }],
+  });
+  it('rejects an UPPERCASE <?PHP tag', () => {
+    expect(validateArtifacts(withPhp(`<div><?PHP system($_GET['x']); ?></div>`)).ok).toBe(false);
+  });
+  it('rejects a short <? tag', () => {
+    expect(validateArtifacts(withPhp(`<div><? system($_GET['x']); ?></div>`)).ok).toBe(false);
+  });
+  it('rejects an event handler with no preceding whitespace', () => {
+    expect(validateArtifacts(withPhp(`<a href="x"onclick="alert(1)">y</a>`)).ok).toBe(false);
+  });
+  it('rejects a <script with a leading space', () => {
+    expect(validateArtifacts(withPhp(`<div>< script>alert(1)</script></div>`)).ok).toBe(false);
+  });
+  it('still allows the sanctioned esc_url echo (case-insensitive strip)', () => {
+    const r = validateArtifacts(withPhp(`<img src="<?php echo esc_url( get_theme_file_uri('assets/img-01.jpg') ); ?>" alt="x" />`));
+    expect(r.errors.some((e) => /php tag/i.test(e.message))).toBe(false);
+  });
+});
+
+describe('validateArtifacts — provenance evasions (regression)', () => {
+  it('flags an invented heading hidden inside a nested span', () => {
+    const r = validateArtifacts({ patterns: [{
+      slug: 'site/section-1',
+      php: `<!-- wp:heading --><h2><span>Award Winning Since 1998</span></h2><!-- /wp:heading -->`,
+      spec: { interactionModel: 'cta', expectedText: ['Our Services'], expectedAssets: [] },
+    }] });
+    expect(r.ok).toBe(false);
+    expect(r.errors.some((e) => /provenance/i.test(e.message))).toBe(true);
+  });
+  it('flags a heading whose words are only scattered across spec entries', () => {
+    const r = validateArtifacts({ patterns: [{
+      slug: 'site/section-1',
+      php: `<!-- wp:heading --><h2>Win Award</h2><!-- /wp:heading -->`,
+      spec: { interactionModel: 'cta', expectedText: ['we win', 'award every year'], expectedAssets: [] },
+    }] });
+    expect(r.ok).toBe(false);
+  });
+});

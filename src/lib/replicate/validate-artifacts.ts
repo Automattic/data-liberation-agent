@@ -24,7 +24,7 @@ function normalizeText(v: string): string {
 }
 /** Visible text content of block markup, stripped of wp comments + php + tags. */
 function visibleText(php: string): string {
-  return normalizeText(php.replace(/<!--[\s\S]*?-->/g, ' ').replace(/<\?php[\s\S]*?\?>/g, ' '));
+  return normalizeText(php.replace(/<!--[\s\S]*?-->/g, ' ').replace(/<\?[\s\S]*?\?>/g, ' '));
 }
 
 export interface PatternSpec {
@@ -47,7 +47,7 @@ export function validateArtifacts(input: ArtifactInput): ValidationReport {
     const fail = (message: string) => errors.push({ slug: p.slug, message });
 
     // --- drift ---
-    if (/\{\{[A-Z0-9_ -]+\}\}/.test(p.php)) {
+    if (/\{\{[\w -]+\}\}/.test(p.php)) {
       fail('unresolved template placeholder remains in generated pattern');
     }
     if (/<img[^>]+https?:\/\//i.test(p.php) || /url\(\s*['"]?https?:\/\//i.test(p.php)) {
@@ -63,32 +63,36 @@ export function validateArtifacts(input: ArtifactInput): ValidationReport {
     }
 
     // --- security: injection / XSS trust boundary ---
-    // The ONLY permitted PHP is the sanctioned theme-asset echo. Anything else
-    // is treated as injection (defends builder prompt-injection via source text).
-    const SANCTIONED_PHP = /<\?php\s+echo\s+esc_url\(\s*get_theme_file_uri\(\s*'[^']+'\s*\)\s*\);\s*\?>/g;
+    // The ONLY permitted PHP is the sanctioned theme-asset echo (any case). Any
+    // residual PHP open tag — <?php, <?PHP, <?= or the short <? — is injection.
+    const SANCTIONED_PHP = /<\?php\s+echo\s+esc_url\(\s*get_theme_file_uri\(\s*'[^']+'\s*\)\s*\);\s*\?>/gi;
     const residualPhp = p.php.replace(SANCTIONED_PHP, '');
-    if (/<\?php|<\?=/.test(residualPhp)) {
+    if (/<\?/.test(residualPhp)) {
       fail('raw PHP tag in markup (only esc_url(get_theme_file_uri()) is allowed)');
     }
-    if (/<script[\s>]/i.test(p.php)) {
+    if (/<\s*script/i.test(p.php)) {
       fail('raw <script> tag in markup (not allowed)');
     }
-    if (/\son[a-z]+\s*=/i.test(p.php)) {
+    if (/[\s"'/]on[a-z]+\s*=/i.test(p.php)) {
       fail('inline event handler attribute (on*=) in markup (not allowed)');
     }
 
     // --- provenance: emitted text must be a subset of spec.expectedText ---
     const allowed = normalizeText(p.spec.expectedText.join(' '));
+    const allowedEntries = p.spec.expectedText.map((t) => normalizeText(t));
     const emitted = visibleText(p.php);
     for (const word of emitted.split(' ').filter((w) => w.length > 3)) {
       if (!allowed.includes(word)) {
         warnings.push({ slug: p.slug, message: `possible non-source content: "${word}"` });
       }
     }
-    for (const heading of p.php.matchAll(/<h[1-6][^>]*>([^<]+)<\/h[1-6]>/gi)) {
+    // Heading inner-HTML is normalized (tags stripped) so nested <span>/<a> can't
+    // hide invented copy; each heading must be contained in a SINGLE spec entry,
+    // not merely scattered across the joined blob.
+    for (const heading of p.php.matchAll(/<h[1-6][^>]*>([\s\S]*?)<\/h[1-6]>/gi)) {
       const h = normalizeText(heading[1]);
-      if (h && !allowed.includes(h)) {
-        fail(`heading "${heading[1].trim()}" not found in source spec (provenance)`);
+      if (h && !allowedEntries.some((e) => e.includes(h))) {
+        fail(`heading "${h}" not found in source spec (provenance)`);
       }
     }
   }
