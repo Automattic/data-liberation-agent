@@ -292,27 +292,51 @@ function contentChildren($: CheerioAPI, el: DomElement): DomElement[] {
  * when no multi-child root is found (preserving prior behavior for
  * genuinely-flat pages).
  */
+// A page is treated as having "good semantic structure" when its content
+// landmark wraps at least this many top-level semantic <section>/<article>
+// children. Wix/Squarespace export real <section> tags as their layout
+// primitive; page builders (Shopify/Replo, Shogun) emit ZERO. The presence of
+// genuine semantic sections is the discriminator between the two clustering
+// strategies — see expandContentSections.
+const SEMANTIC_STRUCTURE_MIN = 2;
+
 function expandContentSections($: CheerioAPI, landmark: DomElement): DomElement[] {
-  // If the landmark contains semantic sub-sections, those ARE the section
-  // rows. (The top-level landmark walk skips them because <main> is their
-  // ancestor landmark, so without this they'd be invisible and the whole
-  // <main> would classify as one `static` blob.)
+  // Collect top-level semantic <section>/<article> descendants (not ones nested
+  // inside another semantic section), preserving document order.
   const semantic = $(landmark).find('section, article').toArray() as DomElement[];
-  if (semantic.length > 0) {
-    // Keep only top-level semantic sections (not ones nested inside another
-    // semantic section), preserving document order.
-    const topLevel = semantic.filter((el) => {
-      let a = el.parent;
-      while (a && a !== landmark && a.type === 'tag') {
-        const t = (a as DomElement).tagName?.toLowerCase() ?? '';
-        if (t === 'section' || t === 'article') return false;
-        a = a.parent;
-      }
-      return true;
-    });
-    return topLevel.length > 0 ? topLevel : [landmark];
+  const topLevelSemantic = semantic.filter((el) => {
+    let a = el.parent;
+    while (a && a !== landmark && a.type === 'tag') {
+      const t = (a as DomElement).tagName?.toLowerCase() ?? '';
+      if (t === 'section' || t === 'article') return false;
+      a = a.parent;
+    }
+    return true;
+  });
+
+  // GOOD SEMANTIC STRUCTURE (Wix/Squarespace): the page already uses real
+  // <section> tags as its layout primitive. Expanding each one into its own
+  // signature row over-fragments clustering — section count and order vary per
+  // page, so every page gets a unique key (swiftlumber regressed 7 pages -> 6
+  // clusters this way). Treat the whole content landmark as ONE coarse section
+  // (the pre-page-builder-unwrap behavior), which clusters siblings together
+  // (~2 clusters for a small Wix site). Div-soup builders have ZERO semantic
+  // sections and fall through to the unwrap path below.
+  if (topLevelSemantic.length >= SEMANTIC_STRUCTURE_MIN) {
+    return [landmark];
+  }
+  // Exactly one semantic section under <main> is still "good enough" structure
+  // (a single-section content page) — keep it coarse rather than unwrapping the
+  // div soup inside it.
+  if (topLevelSemantic.length === 1) {
+    return [landmark];
   }
 
+  // DIV-SOUP PAGE BUILDER (Shopify/Replo): no semantic <section> tags at all —
+  // the real sections are children of a deep style-less content root. Descend
+  // through single-child wrapper chains until we reach the multi-child root and
+  // treat those children as the page's sections, so the homepage (many real
+  // sections) differentiates from products/posts.
   let node: DomElement = landmark;
   // Descend through single-wrapper chains (max depth guards against runaway).
   for (let depth = 0; depth < 12; depth++) {

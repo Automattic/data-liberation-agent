@@ -52,13 +52,42 @@ describe('extractSignature', () => {
     expect(sig.sections.map((s) => s.type)).toContain('gallery');
   });
 
-  it('does not expand a <main> that already contains semantic <section> children', () => {
+  it('keeps a <main> with good semantic <section> structure COARSE (one section)', () => {
+    // Wix/Squarespace export real <section> tags as the layout primitive.
+    // Expanding each <section> into its own signature row over-fragments
+    // clustering (section count/order vary per page → every page unique). We
+    // treat the whole content landmark as ONE coarse section so sibling pages
+    // cluster together — see SEMANTIC_STRUCTURE_MIN.
     const html = `<!doctype html><html><body><main>
       <section><h1>A</h1><a class="button">x</a></section>
       <section><p>plain</p></section>
     </main></body></html>`;
     const sig = extractSignature('https://x/', html, html.length);
-    expect(sig.sections.map((s) => s.type)).toEqual(['cover-with-headline', 'static']);
+    expect(sig.sections.length).toBe(1);
+  });
+
+  it('clusters Wix-style semantic-section pages coarsely (regression: swiftlumber over-split)', () => {
+    // Two pages with DIFFERENT semantic-<section> counts must still produce the
+    // SAME signature so they cluster together. The per-section-row expansion
+    // regressed this (7 pages -> 6 clusters); coarse landmark classification
+    // restores ~2-cluster behavior for genuine semantic markup.
+    const six = `<body><main>
+      <section><h1>Hero</h1><a class="button">x</a></section>
+      <section><p>a</p></section><section><p>b</p></section>
+      <section><p>c</p></section><section><p>d</p></section>
+      <section><p>e</p></section>
+    </main></body>`;
+    const four = `<body><main>
+      <section><h1>Hero</h1><a class="button">x</a></section>
+      <section><p>a</p></section><section><p>b</p></section>
+      <section><p>c</p></section>
+    </main></body>`;
+    const a = extractSignature('https://x/six', six, six.length);
+    const b = extractSignature('https://x/four', four, four.length);
+    expect(a.sections.length).toBe(1);
+    expect(b.sections.length).toBe(1);
+    // Same coarse signature → same cluster.
+    expect(a.sections.map((s) => s.type)).toEqual(b.sections.map((s) => s.type));
   });
 
   it('builder pages with different section counts produce different signatures (clustering works)', () => {
