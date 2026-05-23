@@ -6,6 +6,46 @@ AI agents: when you contribute an improvement, add an entry here. See [CONTRIBUT
 
 ---
 
+## 2026-05-22 — `liberate_extract_one` clobbered the WXR (same bug as the 2026-04-30 resume fix, second site of)
+
+**Found by:** Claude + Matt
+**During:** Migrating https://www.swiftlumber.com/ — first full extract produced 6 pages; retrying the single failed `/projects` URL via `liberate_extract_one` left the WXR with only that one (failed) page, destroying the other 6.
+**Type:** extraction infrastructure bug
+
+### What I found
+The 2026-04-30 fix only patched the resume path of `liberate_extract` (`handlers/extract.ts`). `handlers/extract-one.ts` — the agent-first single-URL tool — has the *same* shape: it constructs a fresh `WxrBuilder`, extracts one URL into it, and calls `wxr.serialize(wxrPath)`, atomically overwriting whatever multi-page WXR was already there. Its own comment even flagged the limitation ("v1 extract-one writes a per-call WXR that the watch CLI is expected to merge if needed"), but when the tool is driven directly (not through the watch CLI's shared in-memory builder), nothing merges — so every `extract_one` against an existing extraction truncates it to one item.
+
+### How it's fixed
+Extracted the rehydrate-before-serialize logic into a shared helper `src/lib/extraction/wxr-rehydrate.ts` (`rehydrateBuilderFromWxr(wxr, wxrPath)`): reads the prior WXR, copies authors/categories/tags/terms/comments/redirects + non-`nav_menu_item` items onto the fresh builder, and reseeds `_nextId` past the largest retained id. `nav_menu_items` are dropped because the extraction loop regenerates them deterministically each run. Missing prior WXR → no-op; corrupt prior WXR → treated as a fresh start (builder untouched).
+
+- `extract.ts` now calls the helper on `args.resume` (replacing its inline block).
+- `extract-one.ts` calls it unconditionally — every `extract_one` is an append to an existing extraction.
+
+Covered by `wxr-rehydrate.test.ts` (merge/nav-drop/id-reseed, missing-file no-op, corrupt-file no-op) and `extract-one.test.ts` (prior pages survive a single-URL append). The latter reproduces the swiftlumber data loss: red before the fix (only `['new']` survived), green after (`['about','contact','home','new']`).
+
+### Why it matters
+`extract_one` is the agent-first streaming primitive — the orchestrator calls it repeatedly, once per URL. Pre-fix, any multi-call agent run kept only the *last* URL's item in the WXR. The bug was masked in the watch CLI (shared builder via `processOneUrl`) but active for every direct MCP/agent caller.
+
+---
+
+## 2026-05-22 — Wix Pro Gallery pages fail extraction with "Execution context was destroyed"
+
+**Found by:** Claude + Matt
+**During:** Migrating https://www.swiftlumber.com/ — the `/projects` page (a "GALLERY" nav item) failed both in the full extract and on single-URL retry, identically: `page.evaluate: Execution context was destroyed, most likely because of a navigation`.
+**Type:** Wix adapter limitation
+
+### What I found
+`/projects` returns HTTP 200 (no server redirect) and is a Wix **Pro Gallery** page — `pro-gallery` appears ~876× in the served HTML, with `ProGallery` widgets and inline `window.location` / `location.href` handlers. During hydration the gallery fires a client-side navigation (route/lightbox state), which invalidates the JS execution context just as the adapter's in-page `page.evaluate` extraction script runs. Result: deterministic failure, no HTML capture, no screenshot, no content for that page. All other pages on the site extracted at high quality.
+
+### Not yet fixed — candidate approaches
+- Capture the gallery's data from the embedded warmup/`pageData` JSON in the served HTML (already fetchable via plain GET) instead of evaluating in the live page, OR
+- Settle the page before evaluating: `waitForLoadState('networkidle')` + a short post-hydration delay, and/or re-try `page.evaluate` once on "Execution context was destroyed", OR
+- Pin the route (block in-page `history.pushState`/`location` writes during evaluation).
+
+Workaround for now: flag the page as a known gap; the gallery images themselves are largely already captured as media. Tracked as adapter work (`/adapt` / `/diagnose`), not an inline pipeline fix.
+
+---
+
 ## 2026-04-30 — `--resume` overwrites the existing WXR with only newly-extracted items
 
 **Found by:** Claude + James

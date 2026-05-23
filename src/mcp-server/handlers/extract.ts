@@ -1,9 +1,9 @@
-import { existsSync, mkdirSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { detect } from '../../lib/extraction/detect-platform.js';
 import { ExtractionLog } from '../../lib/extraction/extraction-log.js';
 import { WxrBuilder } from '../../lib/extraction/wxr-builder.js';
-import { readWxr } from '../../lib/extraction/wxr-reader.js';
+import { rehydrateBuilderFromWxr } from '../../lib/extraction/wxr-rehydrate.js';
 import type { Handler } from '../handler-types.js';
 
 export const extractHandler: Handler = async (args, ctx) => {
@@ -52,29 +52,8 @@ export const extractHandler: Handler = async (args, ctx) => {
 
     // On resume, rehydrate the builder from any existing WXR so serialize()
     // preserves prior items instead of writing only the newly extracted ones.
-    // nav_menu_items are regenerated deterministically from current inventory.
-    if (args.resume && existsSync(wxrPath)) {
-      try {
-        const prior = readWxr(wxrPath);
-        wxr.authors = prior.authors;
-        wxr.categories = prior.categories;
-        wxr.tags = prior.tags;
-        wxr.terms = prior.terms;
-        wxr.comments = prior.comments;
-        wxr.redirects = prior.redirects;
-        wxr.items = prior.items.filter((item) => item.type !== 'nav_menu_item');
-
-        let maxId = 0;
-        for (const item of wxr.items) maxId = Math.max(maxId, item.id);
-        for (const author of wxr.authors) maxId = Math.max(maxId, author.id);
-        for (const category of wxr.categories) maxId = Math.max(maxId, category.id);
-        for (const tag of wxr.tags) maxId = Math.max(maxId, tag.id);
-        for (const term of wxr.terms) maxId = Math.max(maxId, term.id);
-        for (const comment of wxr.comments) maxId = Math.max(maxId, comment.id);
-        wxr._nextId = maxId + 1;
-      } catch {
-        // Corrupt prior WXR: fall through and treat this as a fresh run.
-      }
+    if (args.resume) {
+      rehydrateBuilderFromWxr(wxr, wxrPath);
     }
 
     await adapter.extract(inventory, wxr, opts, { log, server: ctx.server });

@@ -1,8 +1,9 @@
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { detect } from '../../lib/extraction/detect-platform.js';
 import { ExtractionLog } from '../../lib/extraction/extraction-log.js';
 import { WxrBuilder } from '../../lib/extraction/wxr-builder.js';
+import { rehydrateBuilderFromWxr } from '../../lib/extraction/wxr-rehydrate.js';
 import { ImportSession } from '../../lib/extraction/import-session.js';
 import { classifyUrl } from '../../lib/extraction/sitemap.js';
 import type { Handler } from '../handler-types.js';
@@ -72,6 +73,13 @@ export const extractOneHandler: Handler = async (args, ctx) => {
     });
 
     const wxrPath = join(outputDir, 'output.wxr');
+
+    // extract-one always appends a single URL to an existing extraction, so
+    // rehydrate the builder from any prior WXR before serialize() — otherwise we
+    // write only this URL's item and silently truncate the rest (DISCOVERIES.md
+    // 2026-04-30). nav_menu_items are regenerated from the current inventory.
+    rehydrateBuilderFromWxr(wxr, wxrPath);
+
     const session = ImportSession.loadOrCreate(outputDir, detection.platform, adapterOpts, { resume: true });
 
     // Narrowed inventory: just this one URL. Adapter's extract() runs the
