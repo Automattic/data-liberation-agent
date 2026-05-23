@@ -616,6 +616,13 @@ export class WxrBuilder {
     const author = (item.type === 'post' || item.type === 'page') ? (item.author || '') : '';
     const parent = (item.type === 'page') ? item.parent : ((item.type === 'nav_menu_item') ? item.parent : 0);
     const menuOrder = (item.type === 'page') ? item.menuOrder : ((item.type === 'nav_menu_item') ? item.menuOrder : 0);
+    // Per-type post status. Extracted pages/posts were LIVE on the source, so
+    // they must import as `publish` — importing them as `draft` left every
+    // imported page returning 404 on the front end (dead nav targets).
+    // Attachments use WP's `inherit` convention; nav menu items are `publish`.
+    const status =
+      item.type === 'attachment' ? 'inherit'
+      : 'publish';
 
     const obj: Record<string, unknown> = {
       title: item.title,
@@ -632,7 +639,7 @@ export class WxrBuilder {
       'wp:comment_status': 'closed',
       'wp:ping_status': 'closed',
       'wp:post_name': slug,
-      'wp:status': 'draft',
+      'wp:status': status,
       'wp:post_parent': parent,
       'wp:menu_order': menuOrder,
       'wp:post_type': item.type,
