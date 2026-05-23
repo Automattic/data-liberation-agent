@@ -116,6 +116,56 @@ License URI: https://www.gnu.org/licenses/gpl-2.0.html
 Text Domain: ${args.themeSlug}
 Tags: block-theme, full-site-editing
 */
+
+/*
+ * Responsive-content guard. Imported page/post content (carried from the
+ * source platform — Shopify/Replo, Wix, Squarespace, etc.) frequently ships its
+ * OWN inline <style> with high-specificity rules that pin media to fixed pixel
+ * widths (e.g. Replo's .r-* classes sizing <picture>/<img> at 820px). Those
+ * overflow the viewport on mobile and break the 390px responsiveness gate.
+ *
+ * We clamp replaced/embedded content to the container width. !important is
+ * required to win against the carried inline stylesheet's specificity — this is
+ * lossless (the asset just scales down to fit) and does not change desktop
+ * layout, where the container is already wider than the media.
+ */
+.wp-block-post-content img,
+.wp-block-post-content picture,
+.wp-block-post-content picture img,
+.wp-block-post-content video,
+.wp-block-post-content iframe,
+.wp-block-post-content embed,
+.wp-block-post-content object,
+.wp-block-post-content svg,
+.wp-block-post-content table,
+.entry-content img,
+.entry-content picture,
+.entry-content picture img,
+.entry-content video,
+.entry-content iframe,
+.entry-content embed,
+.entry-content object,
+.entry-content svg,
+.entry-content table {
+	max-width: 100% !important;
+	height: auto !important;
+}
+
+.wp-block-post-content picture,
+.entry-content picture {
+	display: block !important;
+}
+
+/* Final-resort clamp: the imported content tree must never establish a
+ * scroll-width wider than the viewport on small screens. Applied only to the
+ * migrated content container so it can't affect the reconstructed theme
+ * layout (header/footer/patterns). */
+@media (max-width: 781px) {
+	.wp-block-post-content,
+	.entry-content {
+		overflow-x: clip;
+	}
+}
 `;
 }
 
@@ -303,6 +353,24 @@ if (!function_exists('${slugToPhp(args.themeSlug)}_setup')) {
     }
 }
 add_action('after_setup_theme', '${slugToPhp(args.themeSlug)}_setup');
+
+/**
+ * Enqueue the theme stylesheet on the front end. Block themes do NOT load the
+ * root style.css automatically (unlike classic themes — for block themes
+ * style.css is only the theme header), so any rules it carries (e.g. the
+ * responsive-content guard that clamps imported media on mobile) are dead
+ * unless explicitly enqueued. Versioned by file mtime for cache-busting.
+ */
+add_action('wp_enqueue_scripts', function () {
+    $style_path = get_stylesheet_directory() . '/style.css';
+    $version = file_exists($style_path) ? (string) filemtime($style_path) : '0.1.0';
+    wp_enqueue_style(
+        '${args.themeSlug}-style',
+        get_stylesheet_uri(),
+        array(),
+        $version
+    );
+});
 
 /**
  * Register theme-embedded custom blocks. Each block lives at

@@ -64,6 +64,14 @@ describe('buildThemeScaffold', () => {
     expect(styleCss).toContain('Text Domain: getsnooz-com-replica');
   });
 
+  it('style.css clamps imported content media to the container width (responsive guard)', () => {
+    const files = buildThemeScaffold({ foundation: FOUNDATION_FIXTURE, themeSlug: 'getsnooz-com-replica' });
+    const styleCss = files.find((f) => f.relativePath === 'style.css')!.content;
+    // Carried Shopify/Replo content has fixed-px media that overflows at 390px.
+    expect(styleCss).toContain('.wp-block-post-content img');
+    expect(styleCss).toContain('max-width: 100%');
+  });
+
   it('theme.json is valid JSON with version 3 and the expected palette slugs', () => {
     const files = buildThemeScaffold({ foundation: FOUNDATION_FIXTURE, themeSlug: 'getsnooz-com-replica' });
     const themeJsonRaw = files.find((f) => f.relativePath === 'theme.json')!.content;
@@ -140,6 +148,14 @@ describe('buildThemeScaffold', () => {
     expect(fnPhp).toContain('register_block_type');
     expect(fnPhp).toContain("glob(get_theme_file_path('blocks/*/build')");
     expect(fnPhp).toContain('after_setup_theme');
+  });
+
+  it('functions.php enqueues style.css on the front end (block themes do not auto-load it)', () => {
+    const files = buildThemeScaffold({ foundation: FOUNDATION_FIXTURE, themeSlug: 'getsnooz-com-replica' });
+    const fnPhp = files.find((f) => f.relativePath === 'functions.php')!.content;
+    expect(fnPhp).toContain('wp_enqueue_scripts');
+    expect(fnPhp).toContain('wp_enqueue_style');
+    expect(fnPhp).toContain('get_stylesheet_uri()');
   });
 
   it('templates/index.html is a thin shell wrapping post-content with header+footer parts', () => {
