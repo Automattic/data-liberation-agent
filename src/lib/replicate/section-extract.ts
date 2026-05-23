@@ -35,6 +35,7 @@ import type { CheerioAPI } from 'cheerio';
 import type { Element as DomElement } from 'domhandler';
 import type { Page } from 'playwright';
 import type { PageSignature, SectionSignature } from './page-signature.js';
+import { extractReviewsFromHtml, type ExtractedReview } from './review-extract.js';
 import { getPlaywright, slugify } from '../../adapters/shared.js';
 import { waitForStable, triggerLazyLoad, withEvaluateTimeout } from '../screenshot/page-helpers.js';
 import { enforceSameOrigin } from '../screenshot/same-origin.js';
@@ -618,6 +619,15 @@ export interface SectionSpec {
   dividerAbove: { color: string; thickness: number } | null;
   dividerBelow: { color: string; thickness: number } | null;
   layout: SectionSpecLayout;
+  /**
+   * Source-VERBATIM customer reviews captured from this section's served HTML
+   * (Replo/page-builder review carousels render every slide inline; see
+   * review-extract.ts). Present only on review-grid sections. When a review
+   * band is detected but this is empty/undefined, the pattern builder MUST use
+   * the missing-content fallback (sized placeholders + run-report flag) — it
+   * must NEVER synthesize review prose.
+   */
+  reviews?: ExtractedReview[];
 }
 
 // ---------------------------------------------------------------------------
@@ -651,6 +661,8 @@ interface RawSection {
   dividerAbove: { color: string; thickness: number } | null;
   dividerBelow: { color: string; thickness: number } | null;
   layout: SectionSpecLayout;
+  /** Serialized outerHTML of the section (capped) — input to review-extract. */
+  sectionHtml?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -1472,6 +1484,18 @@ export async function extractFull(
           gap: gapVal,
         };
 
+        // Serialized section markup — handed back to Node so the deterministic
+        // review extractor (review-extract.ts) can pull source-verbatim review
+        // text without a second browser pass. Capped so a huge section doesn't
+        // bloat the evaluate payload; reviews live near the top of their band.
+        let sectionHtml = '';
+        try {
+          sectionHtml = (el as HTMLElement).outerHTML || '';
+        } catch {
+          sectionHtml = '';
+        }
+        if (sectionHtml.length > 600_000) sectionHtml = sectionHtml.slice(0, 600_000);
+
         return {
           features,
           headings,
@@ -1485,6 +1509,7 @@ export async function extractFull(
           dividerBelow: dBelow ? { color: dBelow.color, thickness: dBelow.height } : null,
           layout,
           motionAnimatedElements: animatedElements,
+          sectionHtml,
         };
       };
 
@@ -1504,9 +1529,31 @@ export async function extractFull(
   // Classify back in Node (same code as the unit tests) and assemble specs.
   return raw.map((r, i) => {
     const rr = r as unknown as RawSection & { motionAnimatedElements: number };
+    let interactionModel = classifySection(rr.features);
+
+    // Deterministic review capture: pull source-verbatim reviews from the
+    // section's served markup. The extractor is pure and self-gating — it only
+    // returns a review when a unit carries BOTH a star run AND a quote-marked
+    // testimonial — so it's safe to run on every section (a hero/product band
+    // yields []). This rescues Replo review carousels the geometry classifier
+    // missed: their slides nest too deep to read as repeated children, so the
+    // band classifies as 'static', yet the real reviews sit inline in the HTML.
+    // When reviews ARE found we promote the model so downstream builds the grid
+    // VERBATIM. When a band looks like reviews but NONE are captured, the model
+    // stays put and the builder uses the missing-content fallback — we NEVER
+    // synthesize quotes.
+    let reviews: ExtractedReview[] | undefined;
+    if (rr.sectionHtml) {
+      const found = extractReviewsFromHtml(rr.sectionHtml);
+      if (found.length > 0) {
+        reviews = found;
+        interactionModel = 'review-grid';
+      }
+    }
+
     return {
       sectionIndex: i,
-      interactionModel: classifySection(rr.features),
+      interactionModel,
       top: rr.features.top,
       height: rr.features.height,
       headings: rr.headings,
@@ -1538,6 +1585,7 @@ export async function extractFull(
       dividerAbove: rr.dividerAbove,
       dividerBelow: rr.dividerBelow,
       layout: rr.layout,
+      ...(reviews ? { reviews } : {}),
     };
   });
 }
