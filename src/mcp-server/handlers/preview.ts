@@ -11,6 +11,7 @@ export const previewHandler: Handler = async (args, ctx) => {
     themeFiles: args.themeFiles as import('../../lib/preview/types.js').ReplicaFile[] | undefined,
     blockPlugins: args.blockPlugins as import('../../lib/preview/types.js').ReplicaBlockPlugin[] | undefined,
     themeSlug: args.themeSlug as string | undefined,
+    siteName: args.siteName as string | undefined,
   });
   if (result.status === 'ready' && args.open && result.url) {
     const openBrowser = () => {

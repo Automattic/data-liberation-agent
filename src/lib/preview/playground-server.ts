@@ -211,6 +211,7 @@ export async function startPreview(opts: InternalOpts): Promise<StartPreviewResu
         themeFiles: opts.themeFiles,
         blockPlugins: opts.blockPlugins,
         themeSlug: opts.themeSlug,
+        siteName: opts.siteName,
       });
       return { ...result, source: 'studio' };
     }

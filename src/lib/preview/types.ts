@@ -60,6 +60,14 @@ export interface StartPreviewOpts {
    * the populated content into a site that was started empty.
    */
   forceReimport?: boolean;
+  /**
+   * Explicit Studio site name. When omitted, the name is derived from the
+   * outputDir basename (e.g. `output/getsnooz.com` → `getsnooz-com`). Pass this
+   * to honor the replica naming convention `<siteSlug>-replica` independent of
+   * the output directory. Still uniqued against existing sites. Ignored by the
+   * Playground path (which has no named sites).
+   */
+  siteName?: string;
 }
 
 export type PreviewSource = 'studio' | 'playground';

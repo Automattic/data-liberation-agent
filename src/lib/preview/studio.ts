@@ -87,8 +87,13 @@ export function isStudioAvailable(): boolean {
  * until it's unique. Callers pass the current `studio site list` output so we
  * don't clobber user sites.
  */
-export function makeStudioSiteName(outputDir: string, existingNames: string[] = []): string {
-  const base = basename(resolve(outputDir))
+export function makeStudioSiteName(
+  outputDir: string,
+  existingNames: string[] = [],
+  explicitName?: string,
+): string {
+  const raw = explicitName && explicitName.trim() ? explicitName : basename(resolve(outputDir));
+  const base = raw
     .toLowerCase()
     .replace(/[^a-z0-9-]/g, '-')
     .replace(/-+/g, '-')
@@ -246,6 +251,12 @@ export interface StartStudioOpts {
   themeFiles?: ReplicaFile[];
   blockPlugins?: ReplicaBlockPlugin[];
   themeSlug?: string;
+  /**
+   * Explicit Studio site name (sanitized + uniqued). When omitted, derived
+   * from the outputDir basename. Lets the replica install path name the site
+   * `<siteSlug>-replica` independent of the output directory.
+   */
+  siteName?: string;
 }
 
 /**
@@ -288,7 +299,7 @@ export async function startStudioPreview(opts: StartStudioOpts): Promise<StartPr
   }
   const existingNames = existingSites.map((s) => s.name);
   const existingPaths = new Set(existingSites.map((s) => resolve(s.path)));
-  const name = makeStudioSiteName(opts.outputDir, existingNames);
+  const name = makeStudioSiteName(opts.outputDir, existingNames, opts.siteName);
   const sitePath = join(defaultStudioRoot(), name);
   const absOutput = resolve(opts.outputDir);
   const hasProducts = existsSync(join(absOutput, 'products.csv'));
