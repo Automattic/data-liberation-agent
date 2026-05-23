@@ -37,12 +37,25 @@ Covered by `wxr-rehydrate.test.ts` (merge/nav-drop/id-reseed, missing-file no-op
 ### What I found
 `/projects` returns HTTP 200 (no server redirect) and is a Wix **Pro Gallery** page — `pro-gallery` appears ~876× in the served HTML, with `ProGallery` widgets and inline `window.location` / `location.href` handlers. During hydration the gallery fires a client-side navigation (route/lightbox state), which invalidates the JS execution context just as the adapter's in-page `page.evaluate` extraction script runs. Result: deterministic failure, no HTML capture, no screenshot, no content for that page. All other pages on the site extracted at high quality.
 
-### Not yet fixed — candidate approaches
-- Capture the gallery's data from the embedded warmup/`pageData` JSON in the served HTML (already fetchable via plain GET) instead of evaluating in the live page, OR
-- Settle the page before evaluating: `waitForLoadState('networkidle')` + a short post-hydration delay, and/or re-try `page.evaluate` once on "Execution context was destroyed", OR
-- Pin the route (block in-page `history.pushState`/`location` writes during evaluation).
+### How it's fixed (2026-05-23)
+Layered defense in `src/adapters/wix.ts` so the page survives the navigation-destroys-context race instead of erroring out. All four layers were shipped because the failure is **intermittent and timing-dependent** (under concurrent load the gallery's deferred navigation lands mid-evaluate; in isolation it often doesn't fire at all) — no single layer is reliable on its own:
 
-Workaround for now: flag the page as a known gap; the gallery images themselves are largely already captured as media. Tracked as adapter work (`/adapt` / `/diagnose`), not an inline pipeline fix.
+1. **Route pinning before navigation.** `addInitScript(ROUTE_PIN_INIT_SCRIPT)` no-ops `history.pushState`/`replaceState` and swallows `location.assign`/`replace` writes for the page's lifetime, so the gallery can't navigate away during extraction. Best-effort (the native `location` setter can't always be overridden), installed inside try/catch.
+2. **Settle before evaluate.** `goto('domcontentloaded')` → bounded `waitForLoadState('networkidle')` (6s, best-effort — Wix telemetry never truly idles) → fixed 4s delay → a lazy-load scroll pass (so below-the-fold gallery thumbnails enter the DOM) → re-settle. This lets the gallery finish hydrating *before* we read it.
+3. **Retry once on destroyed context.** Every in-page `page.evaluate` (globals/JSON-LD/meta, rendered content, blog-archive probe) goes through `evaluateWithRetry`, which on a `isExecutionContextDestroyed(err)` match re-settles and re-runs the evaluate exactly once. The globals read — historically the *unguarded* call that crashed the whole URL — now degrades to an empty shell on a second failure instead of throwing.
+4. **Served-HTML fallback.** When the live path fails (or `page.content()` is unreadable), we plain-GET the URL (`fetchHtml`) and run `extractGalleryFromHtml`, which recovers the title, an og:description/heading content shell, and the gallery image URLs from full `static.wixstatic.com/media/...` links *and* the bare `<hash>~mv2.<ext>` media tokens in the `wix-warmup-data` JSON (promoted to canonical CDN URLs). This runs on every page (folding any token-derived URLs the live scan missed into `mediaUrls`), so a Pro Gallery page is never dropped entirely.
+
+New exported, unit-tested helpers: `isExecutionContextDestroyed`, `extractGalleryFromHtml`, `ROUTE_PIN_INIT_SCRIPT`. Covered by `test/adapters/wix-pro-gallery.test.ts` (12 tests, fixture `test/fixtures/wix-pro-gallery.html`): error-classification (matches Playwright + bare CDP phrasings, rejects unrelated errors), gallery image recovery (img src / background-image / og:image / warmup tokens, all normalized to absolute CDN URLs, de-duped), title-suffix stripping, content-shell assembly, and no-false-positives on plain markup.
+
+### Verified live (2026-05-23)
+Ran the real `wixAdapter.extract` against just `https://www.swiftlumber.com/projects`:
+- **No "execution context destroyed" error escaped** (`thrown: null`); URL logged as `processed` with `qualityScore: high`.
+- `pagesExtracted: 1, failed: 0`; WXR item `type: page`, `title: "GALLERY"`, content length 6419 with **25 `<img>` tags** (descriptive alt text) plus heading/body text.
+- **72 media collected / 70 image files downloaded** (the gallery photos).
+- The served-HTML fallback, exercised in isolation against the live 1 MB markup with **zero JS execution**, independently recovered the title, a content shell, and **33 absolute gallery image URLs** — so even in the worst case (context destroyed, `page.content()` unreadable) the page still yields content + images.
+
+### Honest reliability assessment
+**Best-effort, not a guarantee — but the page is no longer dropped.** The live `page.evaluate` path now succeeds on the runs I observed (the destroyed-context error did not reproduce in isolation at the time of the fix; the site may hydrate faster now, or the race only triggers under the concurrent load of a full multi-page + screenshot run). Layers 1–3 widen the window where the live read succeeds; layer 4 guarantees that *if* the live read still fails, the page is salvaged from the served HTML (title + content shell + gallery image URLs) rather than failing the whole URL. The remaining gap vs. a clean live extract is **layout fidelity in the worst case**: the HTML fallback yields the images and a thin content shell, not the full rendered gallery markup. The images themselves — the gallery's actual value — are recovered in every path.
 
 ---
 

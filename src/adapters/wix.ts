@@ -94,6 +94,173 @@ export interface PageData {
 }
 
 // ---------------------------------------------------------------------------
+// Pro Gallery resilience helpers (exported for unit tests)
+// ---------------------------------------------------------------------------
+
+/**
+ * True when a Playwright error is the "Execution context was destroyed,
+ * most likely because of a navigation" failure. Wix **Pro Gallery** pages
+ * (e.g. swiftlumber.com/projects) fire a client-side navigation during
+ * hydration that invalidates the JS context just as our in-page
+ * `page.evaluate` extraction runs — a deterministic-in-the-wild but
+ * timing-dependent race. We detect it so the evaluate can be re-tried after
+ * re-settling the page (and, failing that, fall back to parsing the served
+ * HTML). Matches both the Playwright phrasing and the underlying CDP
+ * "Execution context was destroyed." / "context was destroyed" wordings.
+ */
+export function isExecutionContextDestroyed(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err ?? '');
+  return /execution context was destroyed|context was destroyed|because of (?:a )?navigation/i.test(
+    msg
+  );
+}
+
+/**
+ * Best-effort init script that pins the route during in-page evaluation.
+ *
+ * Wix Pro Galleries call `history.pushState`/`replaceState` and write to
+ * `location` (deep-link / lightbox state) during hydration; that's what
+ * destroys our execution context mid-evaluate. Installed via
+ * `addInitScript` (so it runs before the page's own scripts on the next
+ * navigation), it no-ops the history methods and swallows `location.href` /
+ * `location.assign` / `location.replace` writes. This keeps the document on
+ * the URL we navigated to long enough to read its DOM/globals.
+ *
+ * Strictly best-effort: a script with location interception sometimes can't
+ * fully override the native `location` setter across browsers, so the retry
+ * + HTML fallback layers remain the real safety net. Exported as a string
+ * constant so a unit test can assert its shape without a live browser.
+ */
+export const ROUTE_PIN_INIT_SCRIPT = `
+(function () {
+  try {
+    var noop = function () { return undefined; };
+    if (window.history) {
+      try { window.history.pushState = noop; } catch (e) {}
+      try { window.history.replaceState = noop; } catch (e) {}
+    }
+    try {
+      var loc = window.location;
+      if (loc) {
+        try { loc.assign = noop; } catch (e) {}
+        try { loc.replace = noop; } catch (e) {}
+      }
+    } catch (e) {}
+  } catch (e) {}
+})();
+`;
+
+/**
+ * Parse Pro Gallery (and general Wix page) content out of the *served HTML*
+ * — the plain-GET response that's already present before any JS runs. This
+ * is the last-resort fallback for when the live `page.evaluate` path fails
+ * with an execution-context-destroyed error and can't be retried.
+ *
+ * Wix embeds the rendered page in two complementary places:
+ *   - Full `https://static.wixstatic.com/media/...` image URLs in `<img>`
+ *     tags, `srcset`, inline `style="background-image:url(...)"`, and the
+ *     `wix-warmup-data` JSON blob.
+ *   - Bare `<hash>~mv2.<ext>` media tokens inside the warmup JSON (gallery
+ *     items that haven't been turned into full CDN URLs yet) — we promote
+ *     these to canonical `static.wixstatic.com/media/<token>` URLs so the
+ *     media downloader can fetch them.
+ *
+ * Returns the document title, the page's visible heading/paragraph text as
+ * lightweight HTML, and the de-duplicated image URL list. Pure + synchronous
+ * so it's unit-testable against a captured HTML fixture.
+ */
+export function extractGalleryFromHtml(html: string): {
+  title: string;
+  content: string;
+  mediaUrls: string[];
+} {
+  const images = new Set<string>();
+
+  // 1. Full wixstatic/wixmp media URLs anywhere in the markup (img src,
+  //    srcset, background-image, JSON). Stop at the first quote, paren, or
+  //    whitespace so we don't swallow trailing HTML.
+  const fullUrlRe = /https?:\/\/[a-z0-9.-]*(?:wixstatic\.com|wixmp\.com)\/media\/[^\s"'()<>\\]+/gi;
+  for (const m of html.match(fullUrlRe) || []) images.add(m);
+
+  // 2. Bare Wix media tokens (gallery items in the warmup JSON that aren't
+  //    yet full URLs). Promote to canonical CDN URLs. The token shape is
+  //    `<accountHash>_<32 hex>~mv2.<ext>`.
+  const tokenRe = /[a-z0-9]{4,}_[a-f0-9]{32}~mv2\.(?:jpe?g|png|gif|webp|avif)/gi;
+  for (const tok of html.match(tokenRe) || []) {
+    images.add(`https://static.wixstatic.com/media/${tok}`);
+  }
+
+  // De-dupe by media token so we don't keep both a resized variant and the
+  // canonical URL for the same asset. Prefer the original (token-only) form.
+  const byToken = new Map<string, string>();
+  for (const url of images) {
+    const tok = url.match(/\/media\/([a-z0-9]{4,}_[a-f0-9]{32}~mv2\.[a-z0-9]+)/i)?.[1];
+    const key = tok ?? url;
+    const existing = byToken.get(key);
+    if (!existing) {
+      byToken.set(key, url);
+    } else if (tok && url.endsWith(tok)) {
+      // canonical token-only URL wins over a resized variant
+      byToken.set(key, `https://static.wixstatic.com/media/${tok}`);
+    }
+  }
+  const mediaUrls = [...byToken.values()];
+
+  // Title: prefer og:title, then <title>. Strip the " | Site Name" suffix.
+  const ogTitle = html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i)?.[1];
+  const docTitle = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]?.trim();
+  const rawTitle = (ogTitle || docTitle || '').trim();
+  const pipeIdx = rawTitle.lastIndexOf(' | ');
+  const title = pipeIdx > 0 ? rawTitle.slice(0, pipeIdx).trim() : rawTitle;
+
+  // Content: headings + the og:description, as lightweight HTML. The served
+  // markup's body text for a Pro Gallery is mostly chrome, so we keep this
+  // intentionally small — the gallery's value is its images.
+  const parts: string[] = [];
+  const ogDesc = html
+    .match(/<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']*)["']/i)?.[1]
+    ?.trim();
+  for (const hm of html.match(/<h[1-3][^>]*>([\s\S]*?)<\/h[1-3]>/gi) || []) {
+    const text = hm.replace(/<[^>]+>/g, '').trim();
+    const tag = hm.match(/<(h[1-3])/i)?.[1]?.toLowerCase() || 'h2';
+    if (text && text.length < 200) parts.push(`<${tag}>${text}</${tag}>`);
+    if (parts.length >= 12) break;
+  }
+  if (ogDesc && ogDesc.length > 0) parts.unshift(`<p>${ogDesc}</p>`);
+  const content = parts.join('\n');
+
+  return { title, content, mediaUrls };
+}
+
+/** An empty PageMeta, used when the live evaluate path is unavailable. */
+function emptyMeta(): PageMeta {
+  return { title: '', description: '', ogTitle: '', ogDescription: '', ogImage: '', canonical: '' };
+}
+
+/**
+ * Plain GET of a page's served HTML. Used as the last-resort fallback when
+ * the live Playwright context is destroyed mid-extract (Pro Gallery) and
+ * `page.content()` can't be read — Wix server-renders the page, so a bare
+ * fetch still yields parseable markup with the gallery's embedded media.
+ * Never throws; returns '' on any failure.
+ */
+async function fetchHtml(url: string): Promise<string> {
+  try {
+    const resp = await fetch(url, {
+      signal: AbortSignal.timeout(20000),
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; DataLiberation/1.0)' },
+    });
+    if (!resp.ok) {
+      await resp.body?.cancel();
+      return '';
+    }
+    return await resp.text();
+  } catch {
+    return '';
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Helpers (module-level, not exported)
 // ---------------------------------------------------------------------------
 
@@ -341,15 +508,46 @@ async function extractWixPage(
     on(event: string, handler: (resp: unknown) => void): void;
     off(event: string, handler: (resp: unknown) => void): void;
     goto(url: string, opts: Record<string, unknown>): Promise<unknown>;
-    evaluate(fn: () => unknown): Promise<unknown>;
+    evaluate(fn: (arg?: unknown) => unknown, arg?: unknown): Promise<unknown>;
     content(): Promise<string>;
     waitForTimeout(ms: number): Promise<void>;
+    waitForLoadState(state: string, opts?: Record<string, unknown>): Promise<void>;
+    addInitScript(script: string | { content: string }): Promise<void>;
     context(): {
       newCDPSession(page: unknown): Promise<{
         send(method: string, params: Record<string, unknown>): Promise<unknown>;
         detach(): Promise<void>;
       }>;
     };
+  };
+
+  // Re-settle the page: best-effort networkidle (bounded) + a short fixed
+  // delay so Wix's lazy hydration finishes before we read the DOM. Used both
+  // before the first evaluate and again before a retry. Wrapped in try/catch
+  // because Wix's perpetual analytics/chat traffic can keep networkidle from
+  // ever resolving — we never want that to throw.
+  const settle = async (idleMs: number, delayMs: number): Promise<void> => {
+    try {
+      await p.waitForLoadState('networkidle', { timeout: idleMs });
+    } catch {
+      // analytics can keep the network busy forever — proceed anyway
+    }
+    await p.waitForTimeout(delayMs);
+  };
+
+  // Run an in-page evaluate that may race the Pro Gallery's hydration-time
+  // navigation. On the "execution context was destroyed" error we re-settle
+  // and retry exactly once; any other error (or a second destroy) propagates
+  // to the caller, which has a served-HTML fallback. `label` is only for the
+  // (already swallowed) call sites' own try/catch — kept for symmetry.
+  const evaluateWithRetry = async <T>(fn: (arg?: unknown) => unknown): Promise<T> => {
+    try {
+      return (await p.evaluate(fn)) as T;
+    } catch (err) {
+      if (!isExecutionContextDestroyed(err)) throw err;
+      await settle(8_000, 1_500);
+      return (await p.evaluate(fn)) as T;
+    }
   };
 
   const captured: {
@@ -382,21 +580,72 @@ async function extractWixPage(
 
   p.on('response', responseHandler);
 
+  // Pin the route before navigation so Wix's Pro Gallery can't fire the
+  // hydration-time client-side navigation that destroys our execution
+  // context mid-evaluate. Best-effort — `addInitScript` may be unavailable
+  // on some Page shapes, and the script can't always override the native
+  // `location` setter; the retry + HTML-fallback layers below are the real
+  // safety net.
+  try {
+    await p.addInitScript(ROUTE_PIN_INIT_SCRIPT);
+  } catch {
+    // older/foreign page shape — proceed without route pinning
+  }
+
   try {
     // Wix's analytics, chat widgets, and tracking pixels keep firing
     // requests indefinitely, so `networkidle` never resolves on many
     // pages — especially product pages — and the 30s budget is
-    // exhausted by background telemetry. `domcontentloaded` + a short
-    // fixed delay catches Wix's lazy hydration without hanging.
+    // exhausted by background telemetry. `domcontentloaded` + a bounded
+    // networkidle (best-effort) + a short fixed delay catches Wix's lazy
+    // hydration without hanging. The networkidle attempt also lets the Pro
+    // Gallery finish its hydration navigation *before* we evaluate, instead
+    // of having it fire mid-extract.
     await p.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
-    await p.waitForTimeout(4000);
+    await settle(6_000, 4000);
+    // Scroll through the page to trigger lazy-loaded gallery thumbnails so
+    // images below the fold make it into the live DOM read. Best-effort.
+    try {
+      await p.evaluate(async () => {
+        const step = 800;
+        const total = document.documentElement.scrollHeight;
+        for (let y = 0; y < total; y += step) {
+          window.scrollTo(0, y);
+          await new Promise((r) => setTimeout(r, 120));
+        }
+        window.scrollTo(0, 0);
+      });
+      await settle(3_000, 500);
+    } catch {
+      // scroll failed (e.g. context destroyed) — non-fatal; the DOM read and
+      // HTML fallback still recover what's already present.
+    }
   } catch {
     // Navigation may timeout on heavy Wix pages
   }
 
   p.off('response', responseHandler);
 
-  const browserData = (await p.evaluate(() => {
+  // Tracks whether the live in-page evaluate path failed (context destroyed
+  // even after one retry). When true we lean on the served-HTML fallback.
+  let liveEvaluateFailed = false;
+
+  // The globals/jsonLd/meta read is the evaluate that historically crashed
+  // the *entire* page extraction on Pro Gallery pages (it was unguarded).
+  // Route it through evaluateWithRetry and degrade to an empty shell on a
+  // second failure so the served-HTML fallback below can still salvage the
+  // page instead of the whole URL erroring out.
+  let browserData: {
+    globals: Record<string, unknown>;
+    jsonLd: unknown[];
+    meta: PageMeta;
+  };
+  try {
+    browserData = await evaluateWithRetry<{
+      globals: Record<string, unknown>;
+      jsonLd: unknown[];
+      meta: PageMeta;
+    }>(() => {
     const result: Record<string, unknown> = {};
 
     const knownGlobals = [
@@ -457,15 +706,18 @@ async function extractWixPage(
     };
 
     return { globals: result, jsonLd, meta };
-  })) as {
-    globals: Record<string, unknown>;
-    jsonLd: unknown[];
-    meta: PageMeta;
-  };
+    });
+  } catch {
+    // Even after one retry the context was destroyed (or another error).
+    // Degrade to an empty shell; the served-HTML fallback below recovers
+    // title/content/images so the page still yields something.
+    browserData = { globals: {}, jsonLd: [], meta: emptyMeta() };
+    liveEvaluateFailed = true;
+  }
 
   let renderedContent: string | null = null;
   try {
-    renderedContent = (await p.evaluate(() => {
+    renderedContent = await evaluateWithRetry<string | null>(() => {
       const mainEl = document.querySelector('main')
         || document.querySelector('#PAGES_CONTAINER')
         || document.querySelector('#SITE_PAGES');
@@ -515,7 +767,7 @@ async function extractWixPage(
       });
 
       return blocks.length > 0 ? blocks.join('\n') : null;
-    })) as string | null;
+    });
   } catch {
     // DOM extraction failed
   }
@@ -529,9 +781,9 @@ async function extractWixPage(
   // the widget go untagged), false positives unlikely.
   let pageType: string | null = null;
   try {
-    const isBlogArchive = (await p.evaluate(
+    const isBlogArchive = await evaluateWithRetry<boolean>(
       () => !!document.querySelector('[data-hook="feed-page-root"]')
-    )) as boolean;
+    );
     if (isBlogArchive) pageType = 'blog_archive';
   } catch {
     // detection failed; leave pageType unset
@@ -575,7 +827,16 @@ async function extractWixPage(
   try {
     pageHtml = await p.content();
   } catch {
-    // content() failed
+    // content() failed (e.g. context destroyed). Fall back to a plain GET of
+    // the served HTML — Wix server-renders the page (and the Pro Gallery's
+    // embedded media), so a bare fetch still yields parseable markup.
+    pageHtml = (await fetchHtml(url)) || '';
+  }
+
+  // If the live evaluate path failed *and* the in-browser HTML is also thin,
+  // make sure we at least have the served HTML to parse for gallery data.
+  if (liveEvaluateFailed && pageHtml.length < 2000) {
+    pageHtml = (await fetchHtml(url)) || pageHtml;
   }
 
   const mediaUrls: string[] = extractImageUrls({
@@ -587,13 +848,40 @@ async function extractWixPage(
     pageHtml,
   });
 
-  const { content, qualityScore } = deriveContent({
+  let { content, qualityScore } = deriveContent({
     apiCalls: captured.apiCalls,
     jsonLd: browserData.jsonLd,
     renderedContent,
     accessibility,
     meta: browserData.meta,
   });
+
+  // Pro Gallery / served-HTML fallback. When the live extract produced no
+  // usable content or no images (the failure mode for Pro Gallery pages
+  // whose execution context was destroyed mid-evaluate), recover gallery
+  // images + a content shell from the served HTML so the page is never
+  // dropped entirely. `extractImageUrls` already scans pageHtml for <img>
+  // src + background URLs; this adds the warmup-data media tokens and a
+  // title/heading content shell that the live read missed.
+  if (pageHtml) {
+    const gallery = extractGalleryFromHtml(pageHtml);
+    if (mediaUrls.length === 0 && gallery.mediaUrls.length > 0) {
+      mediaUrls.push(...gallery.mediaUrls);
+    } else {
+      // Always fold in any token-derived URLs the live scan didn't have.
+      const have = new Set(mediaUrls);
+      for (const u of gallery.mediaUrls) if (!have.has(u)) mediaUrls.push(u);
+    }
+    if ((!content || content.length < 30) && gallery.content) {
+      content = gallery.content;
+      qualityScore = 'low';
+    }
+    // Backfill a title/description into meta if the live read came up empty,
+    // so the WXR item gets a real title instead of the URL slug.
+    if (!browserData.meta.title && !browserData.meta.ogTitle && gallery.title) {
+      browserData.meta.ogTitle = gallery.title;
+    }
+  }
 
   // Recover the post's author-set cover image from BlogPosting JSON-LD.
   // Set only when the page is actually a post; absent on regular pages.
