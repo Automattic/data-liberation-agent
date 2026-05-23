@@ -86,9 +86,21 @@ Text Domain: theme-slug
 - Use style variations to offer different design options
 - Add custom block styles when needed to extend core blocks
 
-## Google Fonts
+## Fonts — self-host the source's real typefaces
 
-ALWAYS use `enqueue_block_assets` hook (not `wp_enqueue_scripts`) to ensure fonts load in BOTH the front-end AND block editor:
+When replicating a liberated site, **self-host the source's fonts** rather than substituting a Google Font or leaving a system fallback. The deterministic scaffold (`liberate_theme_scaffold`) already does this: it parses `@font-face` rules from the captured HTML/CSS, downloads the referenced font files into `assets/fonts/`, emits `@font-face` rules in `style.css`, and registers the family in `theme.json` `settings.typography.fontFamilies` with a `fontFace[]` (each entry's `src` is `file:./assets/fonts/<file>`). This is generic — capture whatever the source loads (e.g. Larsseit from a Shopify CDN), not a hardcoded family. Heading (display) and body families bind to the captured fonts; the display family is rebound to the real typeface even when the foundation recorded an open *substitute*. NEVER ship headings/body in a system fallback when the source font is self-hostable. Sanitize bogus captured line-heights (`0` / `0px`) to a sane default (e.g. `1.2`).
+
+## Header (replica) — source logo + primary nav, NEVER page-list
+
+Build the site header from the SOURCE header, not WordPress's page list:
+
+- **Logo:** the source's real logo image (a `core/image` / site-logo of the header `<img>`/SVG), not `wp:site-title` text and not a product image.
+- **Nav:** explicit `wp:navigation-link`s for the source's **top-level primary menu only**. NEVER use `wp:page-list` — it auto-lists every published WP page (Sample Page, Checkout, account, etc.) as junk. Drop mega-menu sub-links, the mobile-drawer duplicate, and social/account/cart/search affordances.
+- **Announcement bar:** preserve the source's top announcement/utility bar when present.
+
+## Google Fonts (fallback only — prefer self-hosting source fonts above)
+
+When a font is genuinely not self-hostable, use `enqueue_block_assets` hook (not `wp_enqueue_scripts`) to ensure fonts load in BOTH the front-end AND block editor:
 
 ```php
 function theme_fonts() {

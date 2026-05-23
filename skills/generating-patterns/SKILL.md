@@ -72,6 +72,16 @@ Recommended baseline (adapt per site type):
 6. **FAQ** — address common objections
 7. **Final CTA** — closing section with a clear conversion action
 
+## Header patterns (replica): source logo + nav, NEVER page-list
+
+If a pattern reconstructs the site header (or a header part), it MUST mirror the SOURCE header:
+
+- Use the source's real **logo image** (`core/image` / `core/site-logo`), not `core/site-title` text and not a product image.
+- Use explicit `core/navigation-link`s for the source's **top-level primary menu only** (label + href). NEVER use `core/page-list` — it dumps every published WP page (Sample Page, Checkout, account, recall pages) as junk that does not reflect the source's menu.
+- Drop mega-menu sub-links, the mobile-drawer duplicate, and social/account/cart/search affordances.
+- Preserve the source's top **announcement/utility bar** when present.
+- Apply the site's **self-hosted source fonts** (e.g. the heading typeface), not a system fallback — see the scaffold's font-capture (`@font-face` → `assets/fonts/` → `theme.json` fontFamilies).
+
 ## CTA Guidelines
 
 - Every landing page must have at least two CTA patterns: one in the hero, one as a closing section

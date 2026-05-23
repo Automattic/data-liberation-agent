@@ -4,6 +4,15 @@
 
 The `core/navigation` block renders site navigation in header template parts. It supports responsive overlay (hamburger menu) behavior natively via the WordPress Interactivity API — no custom JavaScript is needed.
 
+### Replica headers: source nav + logo, NEVER page-list
+
+When reconstructing a header for a liberated site, the navigation MUST mirror the SOURCE site's header — not WordPress's content:
+
+- **Use explicit `core/navigation-link`s** for the source's top-level primary menu items (label + href). Map to local pages where they exist; keep external destinations as-is.
+- **NEVER use `core/page-list` inside the header nav.** `page-list` auto-renders every published WP page — on an imported site that means junk like "Sample Page", "Checkout", "My account", "delete-account", recall-notice pages, and other non-nav pages. It does not reflect the source's actual menu.
+- **Use `core/image` / `core/site-logo` for the brand** with the source's real logo image — not `core/site-title` text, and not a product image. Fall back to `core/site-title` only when the source header has no logo image.
+- Drop mega-menu sub-links, the mobile-drawer duplicate menu, and social/account/cart/search icons from the primary nav.
+
 ## Key attributes
 
 | Attribute | Type | Default | Description |

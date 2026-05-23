@@ -143,7 +143,15 @@ Checkpoint by cluster-group with a compaction/handoff between groups (full state
 
 **For misfit pages:** invoke `compose-page-blocks` with the page's HTML/content + cluster layout skeleton + tokens + media map + archetype.
 
-**Header/footer:** use the existing dynamic block-header (logo, nav→local pages, CTA, overlay-vs-solid treatment). Build the footer from the cluster representative's footer spec. Write both to `theme/parts/header.html` and `theme/parts/footer.html`.
+**Header/footer:** reconstruct the header from the SOURCE header — never from WordPress's page list. The deterministic `liberate_theme_scaffold` handler does this for you: it reads the captured `html/homepage.html`, extracts the real **logo image** + the **primary top-level nav** (label + href) via `extractThemeChromeFromHtml`, infers light/dark header tone, and emits explicit `wp:navigation-link`s + a `core/image` logo. Requirements for any header you build or refine:
+
+- **Logo:** use the source's real logo image (`<header>`'s logo `<img>`/SVG — NOT a product image, NOT `wp:site-title` text). Fall back to `wp:site-title` only when no logo image exists.
+- **Nav:** explicit `wp:navigation-link`s for the source's **top-level primary menu only** (e.g. Shopify `nav.header__inline-menu` top-level items). NEVER use `wp:page-list` — it dumps every published WP page (Sample Page, Checkout, account, recall notices) as junk. Drop mega-menu sub-links, the mobile-drawer duplicate, and social/account/cart/search affordances. Map nav items to local pages where they exist; keep external destinations (e.g. Support→Zendesk) as-is.
+- **Announcement bar:** preserve the source's top announcement/utility bar when present.
+
+Build the footer from the cluster representative's footer spec. Write both to `theme/parts/header.html` and `theme/parts/footer.html`.
+
+**Self-host source fonts:** `liberate_theme_scaffold` parses `@font-face` rules from the captured HTML/CSS, downloads the referenced font files into the theme `assets/fonts/`, emits matching `@font-face` rules into `style.css`, and binds the captured family in `theme.json` `settings.typography.fontFamilies` (with `fontFace[]`). This is generic — it captures whatever the source self-hosts (e.g. getsnooz.com loads **Larsseit** from the Shopify CDN), not a hardcoded list. The display/heading family is rebound to the real captured typeface even when `design-foundation.json` recorded an open *substitute* (e.g. "Poppins, sans-serif" → corrected back to self-hosted Larsseit). Never leave headings/body in a system fallback when the source's font is self-hostable. Bogus captured line-heights (`0` / `0px`) are sanitized to a sane default.
 
 **Posts:** render through `templates/single.html` + blog/archive template + Query Loop. No per-post section reconstruction.
 
