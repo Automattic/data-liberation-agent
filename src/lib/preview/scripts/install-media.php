@@ -174,13 +174,29 @@ foreach ( $entries as $entry ) {
 	);
 }
 
-// Use a unique sentinel so the parent process can isolate our JSON in
-// stdout even if WP echoes notices during the run.
-echo "DLA_INSTALL_MEDIA_JSON_BEGIN\n";
-echo wp_json_encode(
+$response_json = wp_json_encode(
 	array(
 		'results' => $results,
 		'errors'  => $errors,
 	)
 );
+
+// Write the full response to a sidecar file next to the payload. Studio's
+// `wp eval-file` caps captured stdout at 64KB, so large responses (hundreds of
+// attachments — common on Shopify CDN-heavy sites) get truncated mid-JSON and
+// the parent can't parse them. The sidecar file is read directly off the host
+// filesystem (Studio mounts the site dir), bypassing the stdout cap entirely.
+$result_path = $payload_path . '.result.json';
+$wrote_file  = false !== file_put_contents( $result_path, $response_json );
+
+// Use a unique sentinel so the parent process can isolate our JSON in
+// stdout even if WP echoes notices during the run. When the sidecar file was
+// written, emit only a tiny pointer (always well under 64KB); otherwise fall
+// back to inline JSON for backward compatibility with small payloads.
+echo "DLA_INSTALL_MEDIA_JSON_BEGIN\n";
+if ( $wrote_file ) {
+	echo wp_json_encode( array( 'resultFile' => $result_path ) );
+} else {
+	echo $response_json;
+}
 echo "\nDLA_INSTALL_MEDIA_JSON_END\n";

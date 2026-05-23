@@ -325,6 +325,75 @@ describe('installMediaForUrl', () => {
     }
   });
 
+  it('reads the response from the sidecar result file (bypasses Studio 64KB stdout cap)', async () => {
+    // The script writes its full JSON to `<payload>.result.json` and emits only
+    // a tiny `{resultFile}` pointer to stdout. Simulate that: the mock locates
+    // the staged payload, writes the sidecar, and returns the pointer block.
+    const { outputDir, wpRoot } = setup({
+      stubs: [{ url: 'https://cdn/big.jpg', filename: 'big.jpg' }],
+    });
+    try {
+      const sitePath = join(outputDir, 'site');
+      const payloadsDir = join(sitePath, '.dla-scripts', 'payloads');
+      const exec = vi.fn().mockImplementation(async () => {
+        // Find the payload the real code just staged.
+        const { readdirSync } = await import('node:fs');
+        const payloadFile = readdirSync(payloadsDir).find((f) => f.endsWith('.json') && !f.endsWith('.result.json'));
+        const payloadHostPath = join(payloadsDir, payloadFile!);
+        const fullResponse = JSON.stringify({
+          results: [{ sourceUrl: 'https://cdn/big.jpg', filename: 'big.jpg', postId: 99, reused: false, localUrl: 'http://wp/uploads/2026/05/big.jpg' }],
+          errors: [],
+        });
+        writeFileSync(`${payloadHostPath}.result.json`, fullResponse);
+        // stdout carries ONLY the small pointer between the sentinels.
+        return {
+          stdout: `noise\nDLA_INSTALL_MEDIA_JSON_BEGIN\n${JSON.stringify({ resultFile: `/wordpress/.dla-scripts/payloads/${payloadFile}.result.json` })}\nDLA_INSTALL_MEDIA_JSON_END\nmore noise\n`,
+          stderr: '',
+        };
+      });
+
+      const result = await installMediaForUrl({
+        outputDir,
+        url: 'https://example.com/page',
+        wpRoot,
+        useStudioCli: true,
+        _execFile: exec,
+      });
+
+      expect(result.errors).toEqual([]);
+      expect(result.installed).toHaveLength(1);
+      expect(result.installed[0]).toMatchObject({ sourceUrl: 'https://cdn/big.jpg', postId: 99 });
+      const store = MediaStubStore.load(outputDir);
+      expect(store.get('https://cdn/big.jpg')?.wpPostId).toBe(99);
+    } finally {
+      rmSync(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  it('returns errors when the sidecar result file is missing/unreadable', async () => {
+    const { outputDir, wpRoot } = setup({
+      stubs: [{ url: 'https://cdn/a.jpg', filename: 'a.jpg' }],
+    });
+    try {
+      // Pointer references a sidecar that was never written.
+      const exec = vi.fn().mockResolvedValue({
+        stdout: `DLA_INSTALL_MEDIA_JSON_BEGIN\n${JSON.stringify({ resultFile: '/wordpress/.dla-scripts/payloads/nonexistent.json.result.json' })}\nDLA_INSTALL_MEDIA_JSON_END\n`,
+        stderr: '',
+      });
+      const result = await installMediaForUrl({
+        outputDir,
+        url: 'https://example.com/page',
+        wpRoot,
+        useStudioCli: true,
+        _execFile: exec,
+      });
+      expect(result.errors.length).toBeGreaterThan(0);
+      expect(result.errors[0].error).toMatch(/no parseable JSON/);
+    } finally {
+      rmSync(outputDir, { recursive: true, force: true });
+    }
+  });
+
   it('registers attachments through wp-playground-cli run-blueprint when Studio is unavailable', async () => {
     const { outputDir, wpRoot } = setup({
       stubs: [{ url: 'https://cdn/a.jpg', filename: 'a.jpg' }],

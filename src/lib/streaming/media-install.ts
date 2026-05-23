@@ -198,10 +198,10 @@ export async function installMediaForUrl(opts: MediaInstallOpts): Promise<MediaI
 
   // 3. Stage payload + invoke wp eval-file.
   const useStudio = opts.useStudioCli !== false;
-  let stdout: string;
+  let scriptOut: { stdout: string; resultHostPath: string };
   if (!useStudio) {
     try {
-      stdout = await installViaPlayground(opts, installedFiles.map((p) => p.entry));
+      scriptOut = await installViaPlayground(opts, installedFiles.map((p) => p.entry));
     } catch (err) {
       for (const item of installedFiles) {
         result.errors.push({
@@ -213,7 +213,7 @@ export async function installMediaForUrl(opts: MediaInstallOpts): Promise<MediaI
     }
   } else {
     try {
-      stdout = await installViaStudio(opts, installedFiles.map((p) => p.entry));
+      scriptOut = await installViaStudio(opts, installedFiles.map((p) => p.entry));
     } catch (err) {
       // The shell-level failure means none of the entries got registered.
       // Each pending entry surfaces as an error so the caller can retry.
@@ -228,7 +228,7 @@ export async function installMediaForUrl(opts: MediaInstallOpts): Promise<MediaI
   }
 
   // 4. Parse the script's response and reconcile with the stub store.
-  const parsed = parsePhpResponse(stdout);
+  const parsed = parsePhpResponse(scriptOut.stdout, scriptOut.resultHostPath);
   if (!parsed) {
     for (const item of installedFiles) {
       result.errors.push({
@@ -263,7 +263,7 @@ export async function installMediaForUrl(opts: MediaInstallOpts): Promise<MediaI
   return result;
 }
 
-async function installViaStudio(opts: MediaInstallOpts, entries: PayloadEntry[]): Promise<string> {
+async function installViaStudio(opts: MediaInstallOpts, entries: PayloadEntry[]): Promise<{ stdout: string; resultHostPath: string }> {
   // The PHP script must be readable inside Studio's VFS. Studio mounts the
   // *site* directory at /wordpress. Studio sites exist in two layouts:
   //   - flat:   <site>/wp-content
@@ -292,7 +292,10 @@ async function installViaStudio(opts: MediaInstallOpts, entries: PayloadEntry[])
     'wp', '--path', sitePath,
     'eval-file', scriptVfsPath, payloadVfsPath,
   ]);
-  return out.stdout;
+  // The script writes its full response to `<payload>.result.json` on the host
+  // FS (Studio mounts the site dir), so we can read it directly and bypass the
+  // 64KB stdout cap.
+  return { stdout: out.stdout, resultHostPath: `${payloadHostPath}.result.json` };
 }
 
 function studioSitePathForWpRoot(wpRoot: string): string {
@@ -303,7 +306,7 @@ function studioSitePathForWpRoot(wpRoot: string): string {
   return resolved;
 }
 
-async function installViaPlayground(opts: MediaInstallOpts, entries: PayloadEntry[]): Promise<string> {
+async function installViaPlayground(opts: MediaInstallOpts, entries: PayloadEntry[]): Promise<{ stdout: string; resultHostPath: string }> {
   const wpRoot = resolve(opts.wpRoot);
   const wpContentHost = join(wpRoot, 'wp-content');
   const scriptsDir = join(wpContentHost, 'uploads', 'liberation', '.dla-scripts');
@@ -340,6 +343,7 @@ async function installViaPlayground(opts: MediaInstallOpts, entries: PayloadEntr
   };
   writeFileSync(blueprintPath, JSON.stringify(blueprint, null, 2), 'utf8');
 
+  const payloadHostPath = join(scriptsDir, `${stamp}.json`);
   const exec = opts._execFile ?? defaultExec;
   const out = await exec('npx', [
     'wp-playground-cli',
@@ -350,7 +354,7 @@ async function installViaPlayground(opts: MediaInstallOpts, entries: PayloadEntr
     `--mount-before-install=${wpContentHost}:/wordpress/wp-content`,
     '--verbosity=quiet',
   ]);
-  return out.stdout;
+  return { stdout: out.stdout, resultHostPath: `${payloadHostPath}.result.json` };
 }
 
 function defaultExec(file: string, args: readonly string[]): Promise<{ stdout: string; stderr: string }> {
@@ -370,16 +374,43 @@ function formatExecError(err: unknown): string {
  * Extract the JSON payload between the script's BEGIN/END sentinels. Returns
  * null when the sentinels are missing or the body fails to parse — the caller
  * surfaces a generic error in either case.
+ *
+ * Two body shapes are supported:
+ *   1. A `{ resultFile: "<path>" }` pointer — the script wrote the full
+ *      response to a sidecar file (default; bypasses Studio's 64KB stdout cap).
+ *      We read that file off the host FS. `resultHostPath` is the host path the
+ *      caller knows; we prefer it over the (VFS) path the script reports so the
+ *      read works regardless of mount mapping.
+ *   2. Inline JSON (backward-compatible fallback for small payloads or when the
+ *      sidecar write failed).
  */
-function parsePhpResponse(stdout: string): PhpResponse | null {
+function parsePhpResponse(stdout: string, resultHostPath?: string): PhpResponse | null {
   const begin = 'DLA_INSTALL_MEDIA_JSON_BEGIN';
   const end = 'DLA_INSTALL_MEDIA_JSON_END';
   const start = stdout.indexOf(begin);
   const stop = stdout.indexOf(end);
   if (start < 0 || stop < 0 || stop <= start) return null;
   const body = stdout.slice(start + begin.length, stop).trim();
+
+  let raw = body;
   try {
-    const parsed = JSON.parse(body) as PhpResponse;
+    const maybePointer = JSON.parse(body) as { resultFile?: string };
+    if (maybePointer && typeof maybePointer.resultFile === 'string') {
+      // Prefer the host path the caller computed; fall back to the path the
+      // script reported (only valid when host FS === reported path).
+      const path = resultHostPath ?? maybePointer.resultFile;
+      try {
+        raw = readFileSync(path, 'utf8');
+      } catch {
+        return null;
+      }
+    }
+  } catch {
+    // Not JSON at all → fall through; the parse below will fail and return null.
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as PhpResponse;
     if (!parsed || !Array.isArray(parsed.results) || !Array.isArray(parsed.errors)) {
       return null;
     }
