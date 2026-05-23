@@ -695,34 +695,85 @@ function extractShopifyContent(html: string): string {
   return '';
 }
 
+// Non-image asset extensions we always reject (scripts, fonts, docs, video).
+const NON_IMAGE_ASSET_EXTENSIONS = /\.(css|js|mjs|json|xml|txt|map|woff2?|ttf|eot|otf|pdf|zip|mp4|webm|mov|m4v)(?:$|[?#])/i;
+
+// Tracking / analytics hosts that emit 1x1 pixel "images" we never want as media.
+const TRACKING_HOST = /(google-analytics|googletagmanager|facebook\.com\/tr|doubleclick|hotjar|segment\.|cdn\.shopify\.com\/shopifycloud\/(?:web-pixels|consent))/i;
+
 /**
- * Extract media URLs from content. Looks for cdn.shopify.com image URLs.
+ * Extract media URLs referenced by a page's HTML — regardless of host.
+ *
+ * Page builders layered on top of Shopify (Replo via `assets.replocdn.com`,
+ * Shogun, PageFly, etc.) serve their hero/lifestyle/app imagery from their own
+ * CDN, and those URLs frequently carry NO file extension — the path is a bare
+ * UUID (`/projects/<uuid>/<uuid>?width=820`). The previous implementation only
+ * collected `cdn.shopify.com` URLs and then required an image *extension* in the
+ * pathname, so every extension-less builder URL was dropped (getsnooz: 0 of 19
+ * pages' Replo images captured). The hero/app/lifestyle photography was absent
+ * and the pattern builder substituted unrelated product photos.
+ *
+ * Strategy: collect every image *reference* in the markup — `<img src>`,
+ * `srcset`/`data-srcset` (incl. `<source>`), common lazy-load attrs
+ * (`data-src`/`data-lazy-src`/`data-original`), and CSS `background-image:
+ * url(...)`. Keep the explicit Shopify-CDN sweep too (covers JSON/inline data
+ * not in a tag). Then filter: reject non-image asset extensions and known
+ * tracking/pixel hosts, but ACCEPT extension-less URLs — those are downloaded
+ * via `downloadMedia`, which derives the real extension from the response
+ * `content-type`. This makes capture content-driven, not host-hardcoded.
  */
-function extractShopifyMediaUrls(html: string): string[] {
+export function extractShopifyMediaUrls(html: string): string[] {
   const urls = new Set<string>();
 
-  // Shopify CDN URLs
-  const cdnPattern = /https?:\/\/cdn\.shopify\.com\/s\/files\/[^\s"'<>)]+/g;
-  const cdnMatches = html.match(cdnPattern) || [];
-  for (const m of cdnMatches) urls.add(m);
+  const addAbs = (raw: string | undefined): void => {
+    if (!raw) return;
+    const v = raw.trim();
+    // Only absolute http(s) URLs — relative refs are handled elsewhere and
+    // protocol-relative would need a base we don't have here.
+    if (/^https?:\/\//i.test(v)) urls.add(v);
+  };
 
-  // Standard <img> tags
-  const imgSrcMatches = html.match(/<img[^>]+src=["']([^"']+)["']/gi) || [];
-  for (const match of imgSrcMatches) {
-    const src = match.match(/src=["']([^"']+)["']/i);
-    if (src?.[1] && src[1].startsWith('http')) {
-      urls.add(src[1]);
+  // Shopify CDN URLs anywhere in the markup (covers inline JSON / data blobs).
+  for (const m of html.match(/https?:\/\/cdn\.shopify\.com\/s\/files\/[^\s"'<>)]+/g) || []) {
+    addAbs(m);
+  }
+
+  // <img>/<source> tags — src plus lazy-load and srcset variants.
+  for (const tag of html.match(/<(?:img|source)\b[^>]*>/gi) || []) {
+    // Direct/eager + lazy single-URL attributes.
+    for (const attr of ['src', 'data-src', 'data-lazy-src', 'data-original', 'data-image']) {
+      const m = tag.match(new RegExp(`\\b${attr}=["']([^"']+)["']`, 'i'));
+      addAbs(m?.[1]);
+    }
+    // srcset / data-srcset: comma-separated "url descriptor" pairs.
+    for (const attr of ['srcset', 'data-srcset']) {
+      const m = tag.match(new RegExp(`\\b${attr}=["']([^"']+)["']`, 'i'));
+      if (m?.[1]) {
+        for (const entry of m[1].split(',')) {
+          addAbs(entry.trim().split(/\s+/)[0]);
+        }
+      }
     }
   }
 
-  // Filter to actual image URLs
-  const imageExtensions = IMAGE_EXTENSIONS;
-  const nonImageExtensions = /\.(css|js|json|xml|txt|map|woff2?|ttf|eot|pdf)$/i;
+  // CSS background-image: url(...) in inline styles and <style> blocks.
+  for (const m of html.matchAll(/background(?:-image)?\s*:\s*[^;"']*url\((['"]?)([^)'"]+)\1\)/gi)) {
+    addAbs(m[2]);
+  }
+
   return [...urls].filter((u) => {
     try {
       const parsed = new URL(u);
-      if (nonImageExtensions.test(parsed.pathname)) return false;
-      return imageExtensions.test(parsed.pathname);
+      if (TRACKING_HOST.test(parsed.host) || TRACKING_HOST.test(u)) return false;
+      if (NON_IMAGE_ASSET_EXTENSIONS.test(parsed.pathname)) return false;
+      // A real image extension is sufficient on its own.
+      if (IMAGE_EXTENSIONS.test(parsed.pathname)) return true;
+      // Extension-less path: accept it. Page-builder CDNs (Replo, Shogun) and
+      // image-resizing proxies serve images without an extension; downloadMedia
+      // adds the correct one from the response content-type. The reference came
+      // from an <img>/srcset/background-image slot, so it is image-intended.
+      // (Anything that turns out to be non-image is dropped at download time.)
+      return true;
     } catch {
       return false;
     }

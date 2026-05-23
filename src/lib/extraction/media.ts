@@ -117,10 +117,21 @@ export async function downloadMedia(
     // If the derived filename has no extension, add one from the response
     // content-type. Skipped entirely for URLs that already carried a real
     // filename like `follow_guidelines.jpg`.
+    //
+    // Extension-less URLs are how page-builder CDNs (Replo's
+    // assets.replocdn.com, Shogun, image-resizing proxies) serve images — the
+    // path is a bare id with the format negotiated via content-type. We accept
+    // those, but REJECT an extension-less response whose content-type is NOT an
+    // image so a stray HTML/redirect page can't land in the media library as
+    // junk bytes. (URLs that already carry a real image extension are trusted.)
     if (!extname(rawFilename)) {
       const ct = response.headers.get('content-type') || '';
       const ext = extensionFromContentType(ct);
-      if (ext) rawFilename = `${rawFilename}${ext}`;
+      if (!ext) {
+        await response.body?.cancel();
+        throw new Error(`non-image content-type "${ct || 'unknown'}" for extension-less URL`);
+      }
+      rawFilename = `${rawFilename}${ext}`;
     }
 
     const filename = safeFilename(rawFilename, seenNames);

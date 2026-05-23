@@ -1,5 +1,22 @@
-import { describe, it, expect } from 'vitest';
-import { sanitizeMediaFilename, deriveFilenameFromUrl } from './media.js';
+import { describe, it, expect, afterEach, vi } from 'vitest';
+import { mkdtempSync, rmSync, existsSync } from 'fs';
+import { join } from 'path';
+import { sanitizeMediaFilename, deriveFilenameFromUrl, downloadMedia } from './media.js';
+import { Readable } from 'stream';
+
+// Build a minimal fetch Response stub that downloadMedia can stream from.
+function stubResponse(contentType: string, body = 'fake-image-bytes'): Response {
+  const stream = Readable.from([Buffer.from(body)]) as Readable & { cancel?: () => Promise<void> };
+  // Real fetch bodies expose a WHATWG ReadableStream with cancel(); the guard
+  // calls response.body?.cancel() before bailing on a non-image content-type.
+  stream.cancel = async () => { stream.destroy(); };
+  return {
+    ok: true,
+    status: 200,
+    headers: { get: (h: string) => (h.toLowerCase() === 'content-type' ? contentType : null) },
+    body: stream as unknown as ReadableStream,
+  } as unknown as Response;
+}
 
 describe('sanitizeMediaFilename', () => {
   it('slugifies spaces and %-encoding, preserves extension', () => {
@@ -27,5 +44,35 @@ describe('deriveFilenameFromUrl', () => {
   it('truncates at the Wix /:/ transform marker', () => {
     const u = new URL('https://static.wixstatic.com/media/abc.jpg/:/cr=t:0/file.jpg');
     expect(deriveFilenameFromUrl(u)).toBe('abc.jpg');
+  });
+});
+
+describe('downloadMedia — extension-less page-builder CDN URLs', () => {
+  let tmp: string;
+  const realFetch = global.fetch;
+  afterEach(() => {
+    global.fetch = realFetch;
+    if (tmp && existsSync(tmp)) rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it('derives the extension from content-type for an extension-less URL (Replo)', async () => {
+    tmp = mkdtempSync(join(process.cwd(), '.tmp-test-media-'));
+    global.fetch = vi.fn(async () => stubResponse('image/png')) as unknown as typeof fetch;
+    const res = await downloadMedia(
+      'https://assets.replocdn.com/projects/p/4ad58ef3-8bf7-4614-b56e-d08d197fd0e9?width=820',
+      tmp,
+      new Map(),
+    );
+    expect(res.error).toBeNull();
+    expect(res.filename).toMatch(/\.png$/);
+    expect(res.bytes).toBeGreaterThan(0);
+  });
+
+  it('rejects an extension-less URL whose content-type is NOT an image', async () => {
+    tmp = mkdtempSync(join(process.cwd(), '.tmp-test-media-'));
+    global.fetch = vi.fn(async () => stubResponse('text/html', '<html>nope</html>')) as unknown as typeof fetch;
+    const res = await downloadMedia('https://assets.replocdn.com/projects/p/redirect', tmp, new Map());
+    expect(res.localPath).toBeNull();
+    expect(res.error).toMatch(/non-image content-type/);
   });
 });
