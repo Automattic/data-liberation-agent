@@ -278,8 +278,21 @@ function toRFC822(isoDate: string): string {
   return `${days[d.getUTCDay()]}, ${pad(d.getUTCDate())} ${months[d.getUTCMonth()]} ${d.getUTCFullYear()} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())} +0000`;
 }
 
+/** Optional WxrBuilder configuration. */
+export interface WxrBuilderOpts {
+  /**
+   * Status for extracted pages/posts. Default `'draft'` — honors the documented
+   * "all content imported as drafts; the user reviews and publishes manually"
+   * convention for the WXR a user imports into their production WordPress. The
+   * replica/preview flow passes `'publish'` so its nav targets resolve.
+   * Attachments always use WP's `'inherit'` convention regardless.
+   */
+  contentStatus?: 'draft' | 'publish';
+}
+
 export class WxrBuilder {
   siteMeta: SiteMeta;
+  contentStatus: 'draft' | 'publish';
   _nextId: number;
   authors: Author[];
   categories: Category[];
@@ -303,7 +316,8 @@ export class WxrBuilder {
     return this._streaming;
   }
 
-  constructor(siteMeta: SiteMetaInput) {
+  constructor(siteMeta: SiteMetaInput, opts: WxrBuilderOpts = {}) {
+    this.contentStatus = opts.contentStatus ?? 'draft';
     this.siteMeta = {
       title: siteMeta.title || 'Untitled',
       url: (siteMeta.url || '').replace(/\/+$/, ''),
@@ -616,13 +630,14 @@ export class WxrBuilder {
     const author = (item.type === 'post' || item.type === 'page') ? (item.author || '') : '';
     const parent = (item.type === 'page') ? item.parent : ((item.type === 'nav_menu_item') ? item.parent : 0);
     const menuOrder = (item.type === 'page') ? item.menuOrder : ((item.type === 'nav_menu_item') ? item.menuOrder : 0);
-    // Per-type post status. Extracted pages/posts were LIVE on the source, so
-    // they must import as `publish` — importing them as `draft` left every
-    // imported page returning 404 on the front end (dead nav targets).
-    // Attachments use WP's `inherit` convention; nav menu items are `publish`.
+    // Per-type post status. Attachments use WP's `inherit` convention; pages/
+    // posts/nav use `contentStatus` — default 'draft' per the documented
+    // "import as drafts; the user reviews and publishes manually" convention,
+    // which the replica/preview flow overrides to 'publish' so its imported nav
+    // targets resolve instead of 404ing.
     const status =
       item.type === 'attachment' ? 'inherit'
-      : 'publish';
+      : this.contentStatus;
 
     const obj: Record<string, unknown> = {
       title: item.title,

@@ -46,7 +46,7 @@ export const extractHandler: Handler = async (args, ctx) => {
       url: args.url as string,
       description: inventory.siteMeta?.tagline || '',
       language: inventory.siteMeta?.language || 'en-US',
-    });
+    }, { contentStatus: args.contentStatus === 'publish' ? 'publish' : 'draft' });
 
     const wxrPath = join(outputDir, 'output.wxr');
 

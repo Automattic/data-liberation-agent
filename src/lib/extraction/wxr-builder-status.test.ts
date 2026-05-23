@@ -1,16 +1,16 @@
 import { describe, it, expect } from 'vitest';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { WxrBuilder } from './wxr-builder.js';
+import { WxrBuilder, type WxrBuilderOpts } from './wxr-builder.js';
 
 const SITE = 'https://example.com';
 const TMP = join(process.cwd(), '.tmp-test');
 mkdirSync(TMP, { recursive: true });
 
-function buildXml(): string {
+function buildXml(opts?: WxrBuilderOpts): string {
   const dir = mkdtempSync(join(TMP, 'wxr-status-'));
   try {
-    const w = new WxrBuilder({ title: 'Example', url: SITE, language: 'en-US' });
+    const w = new WxrBuilder({ title: 'Example', url: SITE, language: 'en-US' }, opts);
     w.addPage({ title: 'About', slug: 'about', content: '<p>a</p>', sourceUrl: `${SITE}/about` });
     w.addPost({ title: 'Hello', slug: 'hello', content: '<p>h</p>', sourceUrl: `${SITE}/hello` });
     w.addMedia({ title: 'Img', slug: 'img', url: `${SITE}/img.jpg`, altText: '', caption: '' });
@@ -23,23 +23,29 @@ function buildXml(): string {
   }
 }
 
+function statusNear(xml: string, postType: string): string | null {
+  const idx = xml.indexOf(`<wp:post_type>${postType}</wp:post_type>`);
+  if (idx === -1) return null;
+  const m = xml.slice(idx - 700, idx + 60).match(/<wp:status>([^<]+)<\/wp:status>/g);
+  return m ? m[m.length - 1] : null;
+}
+
 describe('WxrBuilder post status', () => {
-  it('emits no draft pages/posts (was hardcoded draft → 404 nav targets)', () => {
+  it('DEFAULTS pages/posts to draft (documented "import as drafts" convention)', () => {
     const xml = buildXml();
-    const draftCount = (xml.match(/<wp:status>draft<\/wp:status>/g) || []).length;
-    expect(draftCount).toBe(0);
+    expect(statusNear(xml, 'page')).toContain('draft');
+    expect(statusNear(xml, 'post')).toContain('draft');
   });
 
-  it('publishes pages; attachments use WP inherit convention', () => {
-    const xml = buildXml();
-    const pageIdx = xml.indexOf('<wp:post_type>page</wp:post_type>');
-    expect(pageIdx).toBeGreaterThan(-1);
-    expect(xml.slice(pageIdx - 700, pageIdx + 60)).toContain('<wp:status>publish</wp:status>');
+  it('attachments always use WP inherit convention (regardless of contentStatus)', () => {
+    expect(statusNear(buildXml(), 'attachment')).toContain('inherit');
+    expect(statusNear(buildXml({ contentStatus: 'publish' }), 'attachment')).toContain('inherit');
+  });
 
-    const attIdx = xml.indexOf('<wp:post_type>attachment</wp:post_type>');
-    expect(attIdx).toBeGreaterThan(-1);
-    expect(xml.slice(attIdx - 700, attIdx + 60)).toContain('<wp:status>inherit</wp:status>');
-
-    expect(xml).toContain('<wp:status>publish</wp:status>');
+  it('publishes pages/posts when contentStatus="publish" (replica/preview flow)', () => {
+    const xml = buildXml({ contentStatus: 'publish' });
+    expect(statusNear(xml, 'page')).toContain('publish');
+    expect(statusNear(xml, 'post')).toContain('publish');
+    expect(xml).not.toContain('<wp:status>draft</wp:status>');
   });
 });

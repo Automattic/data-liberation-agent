@@ -323,6 +323,6 @@ Pages use DOM-based extraction: strip `HEADER_SECTION`, `FOOTER_*`, cookie banne
 
 - The extraction produces a WXR file (WordPress import format) + a media directory + a redirect map.
 - If the site has products, a `products.csv` (WooCommerce format) and `products.jsonl` are also produced.
-- All content is imported as drafts — the user reviews and publishes manually.
+- All content is imported as **drafts by default** — the user reviews and publishes manually (the WXR a user imports into their production WordPress). This is `liberate_extract`'s `contentStatus` default (`'draft'`). **When building a replica/preview** (the design phase — a Studio/Playground replica whose nav must resolve), pass `contentStatus: 'publish'` to `liberate_extract`/`liberate_extract_one` so imported pages/posts are live instead of 404ing. Attachments always use WP's `inherit` regardless.
 - The WordPress import step supports `importAuthors: true` to create WP user accounts per author, or `importAuthors: false` (default) to assign all content to the authenticated user. Ask before importing.
 - If no environment import skill is available, validate the WordPress connection with `liberate_setup` first, then call `liberate_import` with REST API credentials. If the environment provides an import skill (e.g. `import-liberated-data`), use `delegate: true` with both `liberate_setup` and `liberate_import`.

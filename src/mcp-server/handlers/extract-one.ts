@@ -70,7 +70,7 @@ export const extractOneHandler: Handler = async (args, ctx) => {
       url: siteUrl,
       description: inventory.siteMeta?.tagline || '',
       language: inventory.siteMeta?.language || 'en-US',
-    });
+    }, { contentStatus: args.contentStatus === 'publish' ? 'publish' : 'draft' });
 
     const wxrPath = join(outputDir, 'output.wxr');
 
