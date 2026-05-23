@@ -266,6 +266,80 @@ export function classifySection(f: SectionFeatures): InteractionModel {
 // extractSignature — CHEAP structural path (cheerio, no browser).
 // ---------------------------------------------------------------------------
 
+/** Element children of a node, skipping non-rendering tags (script/style/etc.). */
+function contentChildren($: CheerioAPI, el: DomElement): DomElement[] {
+  const skip = new Set(['script', 'style', 'template', 'noscript', 'link', 'meta', 'br']);
+  return $(el)
+    .children()
+    .toArray()
+    .filter((c) => c.type === 'tag' && !skip.has(c.tagName.toLowerCase())) as DomElement[];
+}
+
+/**
+ * Expand a content landmark (typically `<main>`) into its real section rows
+ * when the page has no semantic `<section>`/`<article>` children.
+ *
+ * Page builders (Shopify/Replo, Wix, Squarespace) emit no semantic section
+ * tags — the whole page body lives under `<main>` inside one or more
+ * style-less wrapper `<div>`s, with the actual page sections as sibling
+ * children of a single deep "content root". The landmark-only signature then
+ * collapses every such page to a single `static` section, so the homepage
+ * clusters with products and blog posts (all signatures look identical).
+ *
+ * Strategy: descend through single-child wrapper divs (unwrapping the builder
+ * chrome) until we reach a node with multiple content children, and treat
+ * those children as the page's sections. Falls back to the landmark itself
+ * when no multi-child root is found (preserving prior behavior for
+ * genuinely-flat pages).
+ */
+function expandContentSections($: CheerioAPI, landmark: DomElement): DomElement[] {
+  // If the landmark contains semantic sub-sections, those ARE the section
+  // rows. (The top-level landmark walk skips them because <main> is their
+  // ancestor landmark, so without this they'd be invisible and the whole
+  // <main> would classify as one `static` blob.)
+  const semantic = $(landmark).find('section, article').toArray() as DomElement[];
+  if (semantic.length > 0) {
+    // Keep only top-level semantic sections (not ones nested inside another
+    // semantic section), preserving document order.
+    const topLevel = semantic.filter((el) => {
+      let a = el.parent;
+      while (a && a !== landmark && a.type === 'tag') {
+        const t = (a as DomElement).tagName?.toLowerCase() ?? '';
+        if (t === 'section' || t === 'article') return false;
+        a = a.parent;
+      }
+      return true;
+    });
+    return topLevel.length > 0 ? topLevel : [landmark];
+  }
+
+  let node: DomElement = landmark;
+  // Descend through single-wrapper chains (max depth guards against runaway).
+  for (let depth = 0; depth < 12; depth++) {
+    const kids = contentChildren($, node);
+    if (kids.length === 0) break;
+    if (kids.length === 1) {
+      node = kids[0];
+      continue;
+    }
+    // Multiple children → this is the content root. Each child is a section
+    // candidate. Filter out trailing empties (no text and no media).
+    const sections = kids.filter((k) => {
+      const $k = $(k);
+      return $k.text().trim().length > 0 || $k.find('img,svg,picture,video').length > 0;
+    });
+    if (sections.length >= 2) return sections;
+    // A single meaningful child masquerading as multi (e.g. one section + a
+    // tracking pixel div) — keep descending into the meaningful one.
+    if (sections.length === 1) {
+      node = sections[0];
+      continue;
+    }
+    break;
+  }
+  return [landmark];
+}
+
 function classifyLandmark($: CheerioAPI, el: DomElement): SectionSignature {
   const $el = $(el);
 
@@ -336,7 +410,22 @@ export function extractSignature(url: string, html: string, htmlBytes: number): 
     return { url, htmlBytes, sections: [{ type: 'static' }] };
   }
 
-  const sections: SectionSignature[] = landmarks.map((el) => classifyLandmark($, el));
+  // Expand content landmarks (<main>, <article>) into their real section rows.
+  // Page builders (Shopify/Replo, Wix, Squarespace) emit no semantic <section>
+  // tags, so the whole body collapses under one <main> landmark. Without this,
+  // every builder page yields a near-identical thin signature and clusters
+  // incorrectly (homepage lumped with products/posts). header/footer/nav stay
+  // as single landmarks — only the content blob is expanded.
+  const sections: SectionSignature[] = [];
+  for (const el of landmarks) {
+    const tag = el.tagName?.toLowerCase() ?? '';
+    if (tag === 'main' || tag === 'article') {
+      const rows = expandContentSections($, el);
+      for (const row of rows) sections.push(classifyLandmark($, row));
+    } else {
+      sections.push(classifyLandmark($, el));
+    }
+  }
   return { url, htmlBytes, sections };
 }
 

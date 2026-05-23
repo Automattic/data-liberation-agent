@@ -27,6 +27,54 @@ describe('extractSignature', () => {
     const sig = extractSignature('https://x/', '<body><p>hi</p></body>', 1);
     expect(sig.sections.length).toBeGreaterThanOrEqual(1);
   });
+
+  it('expands a page-builder <main> (no semantic <section>) into its real section rows', () => {
+    // Mirrors Shopify/Replo: the whole body lives under <main> inside one or
+    // more style-less wrapper divs, with the actual sections as sibling
+    // children of a deep content root. Without expansion the page collapses to
+    // a single `static` section and clusters with every other builder page.
+    const builderHtml = `<!doctype html><html><body>
+      <main>
+        <div class="wrapper"><div class="content-root">
+          <div class="hero"><h1>Sleep essentials</h1><a class="button">Shop now</a></div>
+          <div class="features"><p>Free shipping. Free returns.</p></div>
+          <div class="story"><h2>How it works</h2><a class="btn">Learn more</a></div>
+          <div class="gallery"><img src="a.jpg"><img src="b.jpg"><img src="c.jpg"><img src="d.jpg"></div>
+          <div class="cta"><h2>Get better sleep</h2><a class="button">Try it</a></div>
+        </div></div>
+      </main>
+    </body></html>`;
+    const sig = extractSignature('https://x/', builderHtml, builderHtml.length);
+    // 5 real sections, not a single collapsed `static`.
+    expect(sig.sections.length).toBe(5);
+    expect(sig.sections[0].type).toBe('cover-with-headline');
+    expect(sig.sections.map((s) => s.type)).toContain('gallery');
+  });
+
+  it('does not expand a <main> that already contains semantic <section> children', () => {
+    const html = `<!doctype html><html><body><main>
+      <section><h1>A</h1><a class="button">x</a></section>
+      <section><p>plain</p></section>
+    </main></body></html>`;
+    const sig = extractSignature('https://x/', html, html.length);
+    expect(sig.sections.map((s) => s.type)).toEqual(['cover-with-headline', 'static']);
+  });
+
+  it('builder pages with different section counts produce different signatures (clustering works)', () => {
+    const rich = `<body><main><div><div>
+      <div><h1>Hero</h1><a class="button">go</a></div>
+      <div><p>feature a</p></div>
+      <div><p>feature b</p></div>
+      <div><h2>cta</h2><a class="btn">go</a></div>
+    </div></div></main></body>`;
+    const thin = `<body><main><div><div>
+      <div><h1>Hero</h1><a class="button">go</a></div>
+      <div><p>just one block</p></div>
+    </div></div></main></body>`;
+    const a = extractSignature('https://x/rich', rich, rich.length);
+    const b = extractSignature('https://x/thin', thin, thin.length);
+    expect(a.sections.length).not.toBe(b.sections.length);
+  });
 });
 
 // ---------------------------------------------------------------------------
