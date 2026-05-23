@@ -19,6 +19,7 @@
 // the running preview URL when available so returned localUrl values match
 // the browser-visible site.
 //
+import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type { Handler } from '../handler-types.js';
 import { installMediaForUrl, type MediaInstallResult } from '../../lib/streaming/media-install.js';
@@ -51,14 +52,24 @@ function parseTarget(raw: unknown): Target | string {
 }
 
 /**
- * Resolve the WP install root from a target. Studio mounts the site path at
- * VFS /wordpress; the on-disk WP install lives at `<sitePath>/wordpress`.
- * Playground persists wp-content directly at `<sitePath>/wp-content`, which
- * means the install root is `sitePath` itself.
+ * Resolve the WP install root from a target by probing the on-disk layout —
+ * mirrors the detection in install-theme.ts. Studio sites exist in two shapes:
+ *   - flat:   <sitePath>/wp-content          (current Studio versions)
+ *   - nested: <sitePath>/wordpress/wp-content (older layouts)
+ * Hardcoding `<sitePath>/wordpress` (the previous behavior) wrote uploads into
+ * a phantom `wordpress/` subdir on flat sites, so attachments never appeared in
+ * the running library. Probe instead. Playground persists wp-content directly
+ * at `<sitePath>/wp-content`, so the install root is `sitePath` itself.
  */
-function wpRootFor(target: Target): string {
-  if (target.kind === 'studio') return join(resolve(target.sitePath), 'wordpress');
-  return resolve(target.sitePath);
+export function wpRootFor(target: Target): string {
+  const sitePath = resolve(target.sitePath);
+  if (target.kind === 'playground') return sitePath;
+  if (existsSync(join(sitePath, 'wp-content'))) return sitePath;
+  const nested = join(sitePath, 'wordpress');
+  if (existsSync(join(nested, 'wp-content'))) return nested;
+  // Neither layout found; fall back to flat (sitePath) and let the installer
+  // surface a concrete copy/eval error rather than silently using a wrong dir.
+  return sitePath;
 }
 
 export const mediaInstallHandler: Handler = async (args, ctx) => {
