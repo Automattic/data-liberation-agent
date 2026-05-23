@@ -27,6 +27,21 @@ describe('validateArtifacts — drift', () => {
     expect(r.ok).toBe(false);
     expect(r.errors.some((e) => /remote/i.test(e.message))).toBe(true);
   });
+  it('accepts a WP media-library image URL (migrated content image, not a leak)', () => {
+    const input = base();
+    input.patterns[0].php = `<!-- wp:image {"id":42} --><figure class="wp-block-image"><img src="http://localhost:8882/wp-content/uploads/2026/05/lumber.jpg" alt="Stacked lumber" class="wp-image-42"/></figure><!-- /wp:image -->`;
+    input.patterns[0].spec.interactionModel = 'gallery';
+    input.patterns[0].spec.expectedText = ['Stacked lumber'];
+    const r = validateArtifacts(input);
+    expect(r.errors.some((e) => /remote/i.test(e.message))).toBe(false);
+  });
+  it('still rejects a remote CDN image even when a media-library image is also present', () => {
+    const input = base();
+    input.patterns[0].php = `<img src="http://localhost:8882/wp-content/uploads/2026/05/a.jpg" /><img src="https://static.wixstatic.com/media/x~mv2.png" />`;
+    input.patterns[0].spec.interactionModel = 'gallery';
+    const r = validateArtifacts(input);
+    expect(r.errors.some((e) => /remote/i.test(e.message))).toBe(true);
+  });
   it('rejects a non-WordPress HTML comment', () => {
     const input = base();
     input.patterns[0].php = `<!-- TODO fix this --><!-- wp:paragraph --><p>x</p><!-- /wp:paragraph -->`;

@@ -50,8 +50,19 @@ export function validateArtifacts(input: ArtifactInput): ValidationReport {
     if (/\{\{[\w -]+\}\}/.test(p.php)) {
       fail('unresolved template placeholder remains in generated pattern');
     }
-    if (/<img[^>]+https?:\/\//i.test(p.php) || /url\(\s*['"]?https?:\/\//i.test(p.php)) {
-      fail('remote image URL found; route assets through get_theme_file_uri()');
+    // Remote-asset check. The concern is un-migrated CDN URLs (wixstatic,
+    // cdn.shopify, squarespace, etc.) leaking into output. A WordPress
+    // media-library URL (`.../wp-content/uploads/...`) is the *migrated* form
+    // for content images stored in post_content — not a leak — so it's exempt.
+    // Theme-pattern chrome still routes through get_theme_file_uri(); content
+    // images legitimately reference the uploaded media library by URL.
+    const isMediaLibraryUrl = (u: string): boolean => /\/wp-content\/uploads\//i.test(u);
+    const imgRemote = [...p.php.matchAll(/<img\b[^>]*?\bsrc=["']?(https?:\/\/[^"'\s>]+)/gi)]
+      .some((m) => !isMediaLibraryUrl(m[1]));
+    const cssRemote = [...p.php.matchAll(/url\(\s*['"]?(https?:\/\/[^)'"]+)/gi)]
+      .some((m) => !isMediaLibraryUrl(m[1]));
+    if (imgRemote || cssRemote) {
+      fail('remote image URL found; route theme assets through get_theme_file_uri() and content images through the WP media library');
     }
     for (const comment of p.php.matchAll(/<!--([\s\S]*?)-->/g)) {
       const body = comment[1].trim();
