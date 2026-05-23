@@ -58,6 +58,17 @@ export type InteractionModel =
   | 'blog-card-grid'
   | 'project-card-grid'
   | 'price-list'
+  // Repeated storefront product cards: each card has an image + title + PRICE
+  // (and usually an Add-to-Cart CTA). Distinct from project-card-grid (no
+  // price) and price-list (no per-card image). Common on Shopify/Replo
+  // "shop our products" / "Sleep essentials" rows.
+  | 'product-card-row'
+  // Repeated review/testimonial columns, each with a star rating + a quote +
+  // an attribution (name). Distinct from the single-quote `testimonial`.
+  | 'review-grid'
+  // App-download block: a heading + copy beside app-store / google-play badge
+  // images (and often a phone/app screenshot).
+  | 'app-download'
   | 'color-block-grid'
   | 'marquee-strip'
   | 'horizontal-showcase'
@@ -81,6 +92,10 @@ export interface SectionChildFeature {
   minFontSizePx: number;
   /** Does any own-text node contain a currency symbol? (price-list marker) */
   hasCurrency: boolean;
+  /** Does this card carry a star rating (glyphs/SVGs/aria/text)? (review-grid marker) */
+  hasStarRating?: boolean;
+  /** Does this card carry a quote / cite / review attribution? (review-grid marker) */
+  hasQuote?: boolean;
 }
 
 export interface SectionFeatures {
@@ -122,6 +137,17 @@ export interface SectionFeatures {
   motionSignals: string[];
   /** Average image aspect (w/h) across foreground images, or 0. */
   avgImageAspect: number;
+  /**
+   * Section carries a star-rating signal — repeated star glyphs/SVGs, a
+   * `★`/`⭐` run, an `out of 5`/`N reviews` text pattern, or rating-class
+   * markup. Drives review-grid detection (Replo/Okendo/Junip review widgets).
+   */
+  hasStarRating?: boolean;
+  /**
+   * Section references an app-store / google-play badge image (download block).
+   * Detected from image alt/src/filename matching store-badge markers.
+   */
+  hasStoreBadge?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -147,6 +173,41 @@ export function classifySection(f: SectionFeatures): InteractionModel {
   const hasCarousel = f.motionSignals.includes('carousel-like');
   if (hasMarquee && f.imageCount + f.svgCount >= 2 && f.textLength < 400) {
     return 'marquee-strip';
+  }
+
+  // --- review-grid ---------------------------------------------------------
+  // 2+ repeated review columns, each with a star rating AND a quote/attribution.
+  // Distinct from the single-quote `testimonial` (one block). Tested before
+  // product-card-row and the card grids so a star+quote column isn't swallowed.
+  const reviewCards = cards.filter((c) => c.hasStarRating && (c.hasQuote || c.paragraphCount >= 1));
+  if (
+    (reviewCards.length >= 2 && reviewCards.length >= cardCount - 1) ||
+    // Section-level signal when the grid host isn't split into per-card units
+    // (some review widgets render a flat list): star rating + quote + short-ish.
+    (f.hasStarRating && f.hasQuote && f.imageCount <= cardCount + 1)
+  ) {
+    return 'review-grid';
+  }
+
+  // --- product-card-row ----------------------------------------------------
+  // 2+ repeated storefront cards, each with an IMAGE + a title + a PRICE. The
+  // Add-to-Cart CTA is common but not required (some cards link the whole tile).
+  // Distinct from price-list (those have no per-card image) and project-card-
+  // grid (no price). Tested before project/blog grids so the price semantics win.
+  const productCards = cards.filter(
+    (c) => c.imageCount >= 1 && c.hasCurrency && c.headingCount + c.paragraphCount >= 1,
+  );
+  if (productCards.length >= 2 && productCards.length >= cardCount - 1) {
+    return 'product-card-row';
+  }
+
+  // --- app-download --------------------------------------------------------
+  // A download block: app-store / google-play badge image(s) plus a heading.
+  // The badges arrive as small <img>s with store-badge alt/src markers; the
+  // section pairs them with an app screenshot + copy (media-text-like) but the
+  // badge presence is the discriminator.
+  if (f.hasStoreBadge && f.headingCount >= 1) {
+    return 'app-download';
   }
 
   // --- price-list ----------------------------------------------------------
@@ -998,6 +1059,54 @@ export async function extractFull(
       // ====== per-section feature build ===================================
       const HEADING_TAGS = /^h[1-6]$/;
       const CURRENCY = /[$€£¥]/;
+      // Star-rating markers: glyphs, an "out of 5" / "N reviews" text pattern,
+      // and rating-class markup (Okendo/Junip/Yotpo/Stamped widgets render these
+      // client-side, so the live extractFull walk sees them even when the saved
+      // HTML doesn't). Used to tell a review-grid from a generic columns block.
+      const STAR_GLYPH = /[★⭐✰✪]/;
+      const RATING_TEXT = /\b(out of 5|[0-5](?:\.\d)?\s*\/\s*5|\d+\s*reviews?)\b/i;
+      const RATING_CLASS = /(star-?rating|rating-?stars|review-?stars|okendo|yotpo|junip|stamped|loox|judgeme|judge\.me|\bstars?\b)/i;
+      const elHasStarRating = (root: Element): boolean => {
+        const text = (root.textContent || '');
+        if (STAR_GLYPH.test(text)) return true;
+        if (RATING_TEXT.test(text)) return true;
+        const nodes = [root, ...Array.from(root.querySelectorAll('*'))];
+        for (const n of nodes) {
+          const cls = typeof (n as HTMLElement).className === 'string' ? (n as HTMLElement).className : '';
+          const al = n.getAttribute('aria-label') || '';
+          const lbl = n.getAttribute('data-rating') || n.getAttribute('data-score') || '';
+          if (RATING_CLASS.test(cls) || RATING_CLASS.test(al) || /star|rating/i.test(al) || lbl) return true;
+        }
+        // Star-row shape: a parent with 4-6 same-size small (<=28px) SVG/img
+        // children laid out in a horizontal run is almost always a star rating
+        // even when the widget gives the elements no semantic markers (Replo's
+        // anonymous SVG-path stars). Look for such a tight uniform run.
+        const containers = nodes.filter((n) => {
+          const kids = Array.from(n.children).filter(isVisible);
+          return kids.length >= 4 && kids.length <= 6;
+        });
+        for (const c of containers) {
+          const kids = Array.from(c.children).filter(isVisible);
+          const allSmall = kids.every((k) => {
+            const tag = k.tagName.toLowerCase();
+            if (tag !== 'svg' && tag !== 'img' && tag !== 'i' && tag !== 'span') return false;
+            const kr = k.getBoundingClientRect();
+            const side = Math.max(kr.width, kr.height);
+            return side > 0 && side <= 28 && Math.abs(kr.width - kr.height) <= 8;
+          });
+          const tags = new Set(kids.map((k) => k.tagName));
+          if (allSmall && tags.size === 1) return true;
+        }
+        return false;
+      };
+      // Quote-shaped text: a sentence wrapped in typographic or straight quotes,
+      // long enough to be a real testimonial (Replo review carousels use no
+      // <blockquote>). Distinguishes a testimonial band from generic prose.
+      const QUOTE_TEXT = /[“"][^“”"]{40,}[”"]/;
+      // App-store / google-play badge image markers (download blocks).
+      const STORE_BADGE = /(app[-_ ]?store|appstore|google[-_ ]?play|googleplay|download[-_ ]on[-_ ]the|get[-_ ]it[-_ ]on|play[-_ ]?store|badge[-_]?(?:ios|android|apple|google))/i;
+      const isStoreBadge = (img: { src?: string; alt?: string }): boolean =>
+        STORE_BADGE.test(img.alt || '') || STORE_BADGE.test(img.src || '');
       const viewportH = window.innerHeight;
 
       const buildSection = (entry: { band: number; el: Element }, index: number) => {
@@ -1056,7 +1165,10 @@ export async function extractFull(
               d.tagName === 'BLOCKQUOTE' ||
               d.tagName === 'CITE' ||
               d.getAttribute('role') === 'quote',
-          );
+          ) ||
+          // Page-builder review carousels render quotes as plain text wrapped in
+          // typographic quotes (no <blockquote>) — recognize that shape too.
+          QUOTE_TEXT.test(el.textContent || '');
 
         // foreground images
         const fgImages = imgEls
@@ -1177,21 +1289,44 @@ export async function extractFull(
           .slice(0, 12);
 
         // repeated direct-child units (cards / columns / rows)
-        // Use the tightest content wrapper's direct children as the unit grid.
+        // Use the tightest content wrapper whose direct children form a UNIFORM
+        // repeated set (a card row / column grid) as the unit grid. Page
+        // builders (Replo/Shopify) nest a single product's parts under their own
+        // wrapper, so "most children" alone picks the wrong level (one product's
+        // image+title+price+CTA looks like a 4-card grid). Prefer hosts whose
+        // children share a tag and each carry their own image — the hallmark of
+        // a real product/card row — and lay out horizontally (flex-row/grid).
         const gridHost = (() => {
-          // Prefer a descendant whose direct children are ≥3 similarly-sized blocks.
           const candidates = [el, ...descendants].filter((d) => {
             const kids = Array.from(d.children).filter(isVisible);
-            return kids.length >= 2;
+            return kids.length >= 2 && kids.length <= 12;
           });
           let best: Element | null = null;
-          let bestKids = 0;
+          let bestScore = -1;
           for (const c of candidates) {
             const kids = Array.from(c.children).filter(isVisible);
-            // require kids to occupy a horizontal row OR be a uniform stack
-            if (kids.length > bestKids && kids.length <= 12) {
+            const tags = new Set(kids.map((k) => k.tagName));
+            const uniformTag = tags.size === 1;
+            // Fraction of children that contain at least one image (card-like).
+            const withImg = kids.filter((k) => k.querySelector('img')).length / kids.length;
+            const hcs = getComputedStyle(c);
+            const horiz =
+              (hcs.display === 'flex' && hcs.flexDirection !== 'column') ||
+              hcs.display === 'grid' ||
+              hcs.display === 'inline-grid';
+            // Score: reward uniformity, per-child imagery, horizontal layout, and
+            // a moderate count (real card rows are 2-6 wide). The raw child count
+            // is only a weak tiebreaker so a deep one-product wrapper can't win.
+            const countFit = kids.length >= 2 && kids.length <= 6 ? 1 : 0.3;
+            const score =
+              (uniformTag ? 2 : 0) +
+              withImg * 3 +
+              (horiz ? 1.5 : 0) +
+              countFit +
+              kids.length * 0.05;
+            if (score > bestScore) {
               best = c;
-              bestKids = kids.length;
+              bestScore = score;
             }
           }
           return best;
@@ -1205,6 +1340,7 @@ export async function extractFull(
           let buttonCount = 0;
           let minFontSizePx = Infinity;
           let hasCurrency = false;
+          let hasQuote = false;
           for (const k of kidDesc) {
             const tag = k.tagName.toLowerCase();
             const kcs = getComputedStyle(k);
@@ -1219,6 +1355,15 @@ export async function extractFull(
             if (tag === 'button' || (tag === 'a' && (k.getAttribute('role') === 'button' || /\bbtn\b|\bbutton\b/.test(typeof k.className === 'string' ? k.className.toLowerCase() : '')))) buttonCount++;
             if (ownText.length > 0 && size > 0 && size < minFontSizePx) minFontSizePx = size;
             if (CURRENCY.test(ownText)) hasCurrency = true;
+            if (tag === 'blockquote' || tag === 'cite' || k.getAttribute('role') === 'quote') hasQuote = true;
+          }
+          // Fallback: prices/quotes are often deeper than a single element's own
+          // text node (Replo wraps `$99.99` in nested spans). Check the card's
+          // full subtree text once — but as a price-shaped token, not a stray $
+          // in legal copy.
+          if (!hasCurrency) {
+            const cardText = (child.textContent || '');
+            if (/[$€£¥]\s?\d/.test(cardText)) hasCurrency = true;
           }
           return {
             headingCount,
@@ -1227,6 +1372,8 @@ export async function extractFull(
             buttonCount,
             minFontSizePx: Number.isFinite(minFontSizePx) ? minFontSizePx : 0,
             hasCurrency,
+            hasStarRating: elHasStarRating(child),
+            hasQuote,
           };
         });
 
@@ -1313,6 +1460,8 @@ export async function extractFull(
           repeatedChildren,
           motionSignals,
           avgImageAspect,
+          hasStarRating: elHasStarRating(el),
+          hasStoreBadge: allImages.some((im) => isStoreBadge(im)),
         };
 
         const layout: SectionSpecLayout = {

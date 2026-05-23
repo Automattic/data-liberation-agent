@@ -150,6 +150,8 @@ function card(over: Partial<SectionChildFeature> = {}): SectionChildFeature {
     buttonCount: 0,
     minFontSizePx: 16,
     hasCurrency: false,
+    hasStarRating: false,
+    hasQuote: false,
     ...over,
   };
 }
@@ -233,6 +235,65 @@ describe('classifySection', () => {
       ],
     });
     expect(classifySection(f)).toBe('price-list');
+  });
+
+  it('classifies repeated image+title+price storefront cards as product-card-row', () => {
+    const f = feat({
+      imageCount: 3,
+      headingCount: 3,
+      textLength: 300,
+      repeatedChildren: [
+        card({ imageCount: 1, headingCount: 1, hasCurrency: true, buttonCount: 1 }),
+        card({ imageCount: 1, headingCount: 1, hasCurrency: true, buttonCount: 1 }),
+        card({ imageCount: 1, headingCount: 1, hasCurrency: true, buttonCount: 1 }),
+      ],
+    });
+    expect(classifySection(f)).toBe('product-card-row');
+  });
+
+  it('does NOT call a titled image grid WITHOUT prices a product-card-row', () => {
+    const f = feat({
+      imageCount: 3,
+      headingCount: 3,
+      textLength: 200,
+      repeatedChildren: [
+        card({ imageCount: 1, headingCount: 1 }),
+        card({ imageCount: 1, headingCount: 1 }),
+        card({ imageCount: 1, headingCount: 1 }),
+      ],
+    });
+    expect(classifySection(f)).toBe('project-card-grid');
+  });
+
+  it('classifies repeated star-rating + quote columns as review-grid', () => {
+    const f = feat({
+      headingCount: 3,
+      paragraphCount: 3,
+      textLength: 500,
+      hasStarRating: true,
+      repeatedChildren: [
+        card({ hasStarRating: true, hasQuote: true, paragraphCount: 1, headingCount: 1 }),
+        card({ hasStarRating: true, hasQuote: true, paragraphCount: 1, headingCount: 1 }),
+        card({ hasStarRating: true, hasQuote: true, paragraphCount: 1, headingCount: 1 }),
+      ],
+    });
+    expect(classifySection(f)).toBe('review-grid');
+  });
+
+  it('classifies a flat star-rating + quote review widget as review-grid', () => {
+    const f = feat({ hasStarRating: true, hasQuote: true, imageCount: 1, textLength: 400 });
+    expect(classifySection(f)).toBe('review-grid');
+  });
+
+  it('classifies a heading + store-badge block as app-download', () => {
+    const f = feat({
+      headingCount: 1,
+      paragraphCount: 1,
+      imageCount: 3,
+      textLength: 200,
+      hasStoreBadge: true,
+    });
+    expect(classifySection(f)).toBe('app-download');
   });
 
   it('classifies a 4+ image low-text section as gallery', () => {

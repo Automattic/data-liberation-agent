@@ -11,7 +11,8 @@
 export const ALLOWED_INTERACTION_MODELS = new Set([
   'static', 'gallery', 'media-text', 'columns', 'cover-with-headline',
   'animated-cover', 'logo-strip', 'testimonial', 'cta', 'blog-card-grid',
-  'project-card-grid', 'price-list', 'color-block-grid', 'marquee-strip',
+  'project-card-grid', 'price-list', 'product-card-row', 'review-grid',
+  'app-download', 'color-block-grid', 'marquee-strip',
   'horizontal-showcase', 'footer', 'nav',
 ]);
 
