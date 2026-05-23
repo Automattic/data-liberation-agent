@@ -112,6 +112,28 @@ function defaultStudioRoot(): string {
   return process.env.STUDIO_SITES_DIR || join(homedir(), 'Studio');
 }
 
+/**
+ * Resolve the on-disk WP root for a Studio site by probing its layout.
+ *
+ * Studio sites exist in two shapes:
+ *   - flat:   <sitePath>/wp-content          (current Studio versions)
+ *   - nested: <sitePath>/wordpress/wp-content (older layouts)
+ *
+ * Hardcoding `<sitePath>/wordpress` (the prior behavior in the theme-write
+ * step) wrote the replica theme into a phantom `wordpress/wp-content/themes/`
+ * dir on flat sites, so `wp theme activate` could not find it ("theme could not
+ * be found"). Probe instead — mirrors media-install.wpRootFor and the
+ * install-theme handler. Falls back to flat so a concrete error surfaces rather
+ * than silently writing to the wrong place.
+ */
+export function resolveStudioWpRoot(sitePath: string): string {
+  const resolved = resolve(sitePath);
+  if (existsSync(join(resolved, 'wp-content'))) return resolved;
+  const nested = join(resolved, 'wordpress');
+  if (existsSync(join(nested, 'wp-content'))) return nested;
+  return resolved;
+}
+
 async function listStudioSites(): Promise<StudioSite[]> {
   const { stdout } = await execFileAsync('studio', ['site', 'list', '--format', 'json'], {
     timeout: 15_000,
@@ -399,14 +421,14 @@ export async function startStudioPreview(opts: StartStudioOpts): Promise<StartPr
 
     // Replica theme + block plugin install. Happens after content import so
     // wp-cli activate sees a fully-imported environment. Files are written
-    // directly to the host filesystem under <sitePath>/wordpress; activation
+    // directly to the host filesystem under the probed WP root; activation
     // is via `studio wp` CLI. Failures here are NOT fatal to the imported
     // content — surface as warnings and let the caller decide.
     if (
       (opts.themeFiles && opts.themeFiles.length > 0) ||
       (opts.blockPlugins && opts.blockPlugins.length > 0)
     ) {
-      const wpRoot = join(sitePath, 'wordpress');
+      const wpRoot = resolveStudioWpRoot(sitePath);
       try {
         const written = writeReplicaFilesToHost({
           wpRoot,
