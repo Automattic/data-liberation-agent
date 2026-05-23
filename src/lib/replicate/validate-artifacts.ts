@@ -63,12 +63,18 @@ export function validateArtifacts(input: ArtifactInput): ValidationReport {
     }
 
     // --- security: injection / XSS trust boundary ---
-    // The ONLY permitted PHP is the sanctioned theme-asset echo (any case). Any
-    // residual PHP open tag — <?php, <?PHP, <?= or the short <? — is injection.
+    // Two PHP forms are sanctioned; ANY other residual open tag — <?php, <?PHP,
+    // <?= or the short <? — is treated as injection:
+    //   1. the theme-asset echo `<?php echo esc_url( get_theme_file_uri('...') ); ?>` (any case)
+    //   2. the WP pattern-file header: a block containing ONLY a /** ... */
+    //      doc-comment (Title/Slug/Categories) — required for registration,
+    //      executes nothing. The non-greedy `*/\s*\?>` anchor means code after the
+    //      comment (e.g. `<?php /** */ system(); ?>`) is NOT stripped → still flagged.
     const SANCTIONED_PHP = /<\?php\s+echo\s+esc_url\(\s*get_theme_file_uri\(\s*'[^']+'\s*\)\s*\);\s*\?>/gi;
-    const residualPhp = p.php.replace(SANCTIONED_PHP, '');
+    const SANCTIONED_HEADER = /<\?php\s*\/\*\*[\s\S]*?\*\/\s*\?>/g;
+    const residualPhp = p.php.replace(SANCTIONED_PHP, '').replace(SANCTIONED_HEADER, '');
     if (/<\?/.test(residualPhp)) {
-      fail('raw PHP tag in markup (only esc_url(get_theme_file_uri()) is allowed)');
+      fail('raw PHP tag in markup (only the pattern-header doc-comment and esc_url(get_theme_file_uri()) are allowed)');
     }
     if (/<\s*script/i.test(p.php)) {
       fail('raw <script> tag in markup (not allowed)');

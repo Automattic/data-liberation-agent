@@ -130,3 +130,23 @@ describe('validateArtifacts — provenance evasions (regression)', () => {
     expect(r.ok).toBe(false);
   });
 });
+
+describe('validateArtifacts — pattern-file header (regression: real builder output)', () => {
+  it('allows the standard WP pattern-file PHP doc-comment header', () => {
+    const php = `<?php\n/**\n * Title: Hero\n * Slug: site/section-0\n * Categories: featured\n */\n?>\n<!-- wp:heading --><h2>Our Services</h2><!-- /wp:heading -->`;
+    const r = validateArtifacts({ patterns: [{
+      slug: 'site/section-0', php,
+      spec: { interactionModel: 'cover-with-headline', expectedText: ['Our Services'], expectedAssets: [] },
+    }] });
+    expect(r.ok).toBe(true);
+  });
+  it('still rejects executable PHP after a doc-comment in the header block', () => {
+    const php = `<?php /** Title: x */ system($_GET['x']); ?>\n<!-- wp:paragraph --><p>hi</p><!-- /wp:paragraph -->`;
+    const r = validateArtifacts({ patterns: [{
+      slug: 'site/section-0', php,
+      spec: { interactionModel: 'cta', expectedText: [], expectedAssets: [] },
+    }] });
+    expect(r.ok).toBe(false);
+    expect(r.errors.some((e) => /php tag/i.test(e.message))).toBe(true);
+  });
+});
