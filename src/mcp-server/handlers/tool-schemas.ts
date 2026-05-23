@@ -18,6 +18,8 @@ export const NEW_TOOL_SCHEMAS = {
       properties: {
         url: { type: 'string' }, html: { type: 'string' },
         detail: { type: 'string', enum: ['signature', 'full'] },
+        mediaMap: { type: 'object', description: 'detail=full only: {sourceCdnUrl: uploadedWpUrl} rewrite map' },
+        cdpPort: { type: 'number', description: 'detail=full only: connect to an existing Chromium over CDP instead of launching' },
       },
       required: ['url', 'detail'],
     },

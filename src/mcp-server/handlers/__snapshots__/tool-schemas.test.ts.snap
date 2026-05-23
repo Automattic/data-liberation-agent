@@ -39,6 +39,10 @@ exports[`new tool contracts > locks the agent-facing tool surface (update the sn
     "description": "Extract a page signature (off saved HTML) or full computed-style section specs (representatives).",
     "inputSchema": {
       "properties": {
+        "cdpPort": {
+          "description": "detail=full only: connect to an existing Chromium over CDP instead of launching",
+          "type": "number",
+        },
         "detail": {
           "enum": [
             "signature",
@@ -48,6 +52,10 @@ exports[`new tool contracts > locks the agent-facing tool surface (update the sn
         },
         "html": {
           "type": "string",
+        },
+        "mediaMap": {
+          "description": "detail=full only: {sourceCdnUrl: uploadedWpUrl} rewrite map",
+          "type": "object",
         },
         "url": {
           "type": "string",
