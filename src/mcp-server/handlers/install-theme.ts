@@ -147,6 +147,17 @@ export const installThemeHandler: Handler = async (args, ctx) => {
     } catch (err) {
       warnings.push(`Theme activate "${themeSlug}" failed: ${(err as Error).message.trim()}`);
     }
+    // Flush caches so freshly-written block patterns + templates render
+    // immediately. Block themes cache `patterns/*.php` registration and
+    // template resolution; without a flush the just-installed front-page /
+    // patterns can render as the stale (empty) version until WP next clears
+    // its cache. Best-effort — never fatal to a successful install.
+    try {
+      await studioWp(studioSitePath, ['transient', 'delete', '--all']);
+    } catch { /* best-effort */ }
+    try {
+      await studioWp(studioSitePath, ['cache', 'flush']);
+    } catch { /* best-effort */ }
   }
 
   return ctx.textResult({
