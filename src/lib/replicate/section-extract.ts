@@ -662,7 +662,33 @@ function deriveMotionClass(signals: string[]): SectionSpecMotion['motionClass'] 
  * matching since the same asset appears at many sizes. Falls back to the source
  * URL untouched when no match.
  */
-function rewriteThroughMediaMap(src: string, mediaMap: Record<string, string>): string {
+/** filename portion of a URL, query string + fragment stripped. */
+function urlBasename(u: string): string {
+  const noQuery = u.replace(/[?#].*$/, '');
+  const last = noQuery.split('/').filter(Boolean).pop() ?? '';
+  return last.toLowerCase();
+}
+
+/**
+ * Cache of basename → localUrl indexes, keyed by mediaMap identity. Building the
+ * index once per extraction (rather than per image) keeps rewrite O(1) per call.
+ */
+const basenameIndexCache = new WeakMap<Record<string, string>, Map<string, string>>();
+function basenameIndexFor(mediaMap: Record<string, string>): Map<string, string> {
+  let idx = basenameIndexCache.get(mediaMap);
+  if (!idx) {
+    idx = new Map<string, string>();
+    for (const [key, val] of Object.entries(mediaMap)) {
+      const b = urlBasename(key);
+      // First write wins — captured order is stable and deterministic.
+      if (b && !idx.has(b)) idx.set(b, val);
+    }
+    basenameIndexCache.set(mediaMap, idx);
+  }
+  return idx;
+}
+
+export function rewriteThroughMediaMap(src: string, mediaMap: Record<string, string>): string {
   if (mediaMap[src]) return mediaMap[src];
   const stripped = src.replace(/([?&])(w|h|q|quality|fit|crop)_[^&]+/g, '$1');
   if (mediaMap[stripped]) return mediaMap[stripped];
@@ -670,6 +696,18 @@ function rewriteThroughMediaMap(src: string, mediaMap: Record<string, string>): 
   for (const [key, val] of Object.entries(mediaMap)) {
     const k = key.replace(/([?&])(w|h|q|quality|fit|crop)_[^&]+/g, '$1');
     if (k === stripped) return val;
+  }
+  // Basename fallback. Shopify CDN serves the same asset at many sizes via
+  // `?v=...&width=...` query strings (and `assets.replocdn.com` adds `?width=`),
+  // so the captured media-stub key and the in-page src rarely match exactly.
+  // The image bytes are identical regardless of the size param, so matching on
+  // filename recovers the WP-library URL — consistent with media-install.php's
+  // basename matching and the WXR attachment-URL rewrite. Without this, Shopify
+  // images leak through as remote CDN URLs and validate-artifacts rejects them.
+  const b = urlBasename(src);
+  if (b) {
+    const hit = basenameIndexFor(mediaMap).get(b);
+    if (hit) return hit;
   }
   return src;
 }

@@ -4,6 +4,7 @@ import {
   classifySection,
   filterIconCandidate,
   isIconFontFamily,
+  rewriteThroughMediaMap,
   MAX_SVG_MARKUP_BYTES,
   MIN_ICON_PX,
   MAX_ICON_PX,
@@ -274,6 +275,35 @@ describe('classifySection', () => {
 // ---------------------------------------------------------------------------
 // isIconFontFamily — pure font-family icon-font detector.
 // ---------------------------------------------------------------------------
+
+describe('rewriteThroughMediaMap', () => {
+  const wp = 'http://localhost:8884/wp-content/uploads/2026/05/snooz.jpg';
+  const map = {
+    'https://cdn.shopify.com/s/files/1/1378/8621/files/snooz.jpg?v=1680713593': wp,
+  };
+
+  it('returns the exact-match WP URL', () => {
+    expect(
+      rewriteThroughMediaMap('https://cdn.shopify.com/s/files/1/1378/8621/files/snooz.jpg?v=1680713593', map),
+    ).toBe(wp);
+  });
+
+  it('matches Shopify CDN images by basename when query params differ (the validate-gate leak)', () => {
+    // Same asset, different size/version query → must still resolve to WP URL.
+    expect(
+      rewriteThroughMediaMap('https://cdn.shopify.com/s/files/1/1378/8621/files/snooz.jpg?v=9999&width=1800', map),
+    ).toBe(wp);
+  });
+
+  it('matches a different CDN host (replocdn-style) by basename', () => {
+    expect(rewriteThroughMediaMap('https://assets.replocdn.com/projects/x/snooz.jpg?width=820', map)).toBe(wp);
+  });
+
+  it('leaves genuinely-unmatched URLs untouched (so validate can still flag real leaks)', () => {
+    const other = 'https://cdn.shopify.com/s/files/1/other-image.png?v=1';
+    expect(rewriteThroughMediaMap(other, map)).toBe(other);
+  });
+});
 
 describe('isIconFontFamily', () => {
   it('detects known icon fonts (case-insensitive, in a font stack)', () => {
