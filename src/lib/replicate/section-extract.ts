@@ -357,6 +357,41 @@ export interface SectionSpecImage {
   height: number;
 }
 
+// ---------------------------------------------------------------------------
+// Inline icon graphics — check / building / location-pin glyphs that arrive as
+// inline <svg> (not <img>) or as icon-font glyphs (Font Awesome / Material /
+// Wix's `wix-icon` fonts). The image walk above only collects <img>/background,
+// so these were silently dropped. We capture them per-section here.
+//
+// How the BUILDER must consume these (no-wp:html-respecting approach):
+//   `wp:html` (Custom HTML block) is banned project-wide — see
+//   src/lib/wordpress/block-policy.ts. So we CANNOT emit an inline <svg> in
+//   block markup. The cleanest legal path:
+//     1. The orchestrator writes each captured inline SVG's bytes to a theme
+//        asset: assets/icon-NN.svg.  (That's why `svgMarkup` carries the raw
+//        bytes back out of the browser — extractFull surfaces them so the
+//        orchestrator can persist them; nothing here writes to disk.)
+//     2. The icon is referenced from block markup as an `wp:image` whose `src`
+//        resolves via `get_theme_file_uri( 'assets/icon-NN.svg' )` (a theme
+//        function call rendered server-side / by a small pattern), NOT inlined.
+//   Icon-font glyphs (`kind:'glyph'`) carry the glyph char + the font-family so
+//   the builder can re-create them with the same icon font enqueued in the
+//   theme, or fall back to a Unicode/dashicon equivalent — again, no raw HTML.
+// ---------------------------------------------------------------------------
+
+export interface SectionSpecIcon {
+  kind: 'svg' | 'glyph';
+  /** Serialized <svg> outerHTML (kind:'svg' only). Capped; absent if oversized. */
+  markup?: string;
+  /** The glyph character (kind:'glyph' only). */
+  glyph?: string;
+  /** computed font-family of the glyph element (kind:'glyph' only). */
+  fontFamily?: string;
+  /** Rendered box, px. */
+  width: number;
+  height: number;
+}
+
 export interface SectionSpecMotion {
   /** Coarse motion class for the spec's "Motion profile". */
   motionClass:
@@ -394,6 +429,8 @@ export interface SectionSpec {
   headings: string[];
   buttonLabels: string[];
   images: SectionSpecImage[];
+  /** Inline SVG / icon-font glyphs in the section's Y-band (icons above cards). */
+  icons: SectionSpecIcon[];
   /** 0-255 luma of the section base background (0.299R + 0.587G + 0.114B). */
   backgroundBrightness: number;
   /** Wrapper background color (rgb/rgba string as computed). */
@@ -417,18 +454,104 @@ export interface SectionSpec {
 // classifySection runs back in Node so it's the same code the unit tests cover.
 // ---------------------------------------------------------------------------
 
+/** A raw icon candidate as the browser walk collects it (pre-filter). */
+interface RawIconCandidate {
+  kind: 'svg' | 'glyph';
+  markup?: string;
+  glyph?: string;
+  fontFamily?: string;
+  width: number;
+  height: number;
+}
+
 /** Raw per-section payload returned from the browser, before classification. */
 interface RawSection {
   features: SectionFeatures;
   headings: string[];
   buttonLabels: string[];
   images: Array<{ src: string; alt: string; kind: 'img' | 'background'; w: number; h: number }>;
+  iconCandidates: RawIconCandidate[];
   backgroundColor: string;
   gradient: string | null;
   gradientSource: SectionSpec['gradientSource'];
   dividerAbove: { color: string; thickness: number } | null;
   dividerBelow: { color: string; thickness: number } | null;
   layout: SectionSpecLayout;
+}
+
+// ---------------------------------------------------------------------------
+// Icon capture tunables + a PURE size/markup filter (unit-tested below). These
+// live in Node so the browser walk just collects raw candidates; the policy of
+// what counts as a usable icon is exercised without a browser.
+// ---------------------------------------------------------------------------
+
+/** Max serialized inline-SVG size we keep. Bigger = an illustration, not a glyph. */
+export const MAX_SVG_MARKUP_BYTES = 8 * 1024; // 8KB
+/** Smallest rendered side (px) we'll treat as a real icon (skip 1px tracking pixels). */
+export const MIN_ICON_PX = 8;
+/** Largest rendered side (px) we'll treat as an icon glyph (bigger = hero art). */
+export const MAX_ICON_PX = 256;
+
+/** Substrings that mark a computed font-family as an icon font (lowercased match). */
+export const ICON_FONT_HINTS = [
+  'fontawesome',
+  'font awesome',
+  'material icons',
+  'material symbols',
+  'glyphicon',
+  'dashicons',
+  'ionicons',
+  'feather',
+  'wix-icon',
+  'wix madefor icons',
+  'icomoon',
+  'eicons',
+  'elementor icons',
+];
+
+/** True when a computed font-family string names a known icon font. */
+export function isIconFontFamily(fontFamily: string | null | undefined): boolean {
+  if (!fontFamily) return false;
+  const f = fontFamily.toLowerCase();
+  return ICON_FONT_HINTS.some((hint) => f.includes(hint));
+}
+
+/**
+ * PURE icon filter. Given a raw candidate (already shaped by the DOM walk),
+ * decide whether to keep it and normalize it into a SectionSpecIcon — or return
+ * null to drop it. Rules:
+ *   - reject if the rendered box is outside [MIN_ICON_PX, MAX_ICON_PX] on its
+ *     smaller side (1px trackers / hero illustrations are not icons),
+ *   - for svg: drop the (oversized) markup but only if it exceeds the cap —
+ *     the icon is still kept as a sized placeholder so the layout slot survives,
+ *   - for glyph: require a single non-whitespace glyph char.
+ */
+export function filterIconCandidate(c: {
+  kind: 'svg' | 'glyph';
+  markup?: string;
+  glyph?: string;
+  fontFamily?: string;
+  width: number;
+  height: number;
+}): SectionSpecIcon | null {
+  const w = Math.round(c.width);
+  const h = Math.round(c.height);
+  const minSide = Math.min(w, h);
+  const maxSide = Math.max(w, h);
+  if (minSide < MIN_ICON_PX || maxSide > MAX_ICON_PX) return null;
+
+  if (c.kind === 'svg') {
+    const markup = typeof c.markup === 'string' ? c.markup : '';
+    if (!markup) return null;
+    // Over the cap → keep the slot (sized) but drop the heavy markup.
+    const keptMarkup = markup.length <= MAX_SVG_MARKUP_BYTES ? markup : undefined;
+    return { kind: 'svg', markup: keptMarkup, width: w, height: h };
+  }
+
+  // glyph
+  const glyph = (c.glyph ?? '').trim();
+  if (glyph.length === 0 || glyph.length > 4) return null; // single icon-font codepoint (may be surrogate pair)
+  return { kind: 'glyph', glyph, fontFamily: c.fontFamily, width: w, height: h };
 }
 
 /** Derive a coarse motion class from the raw signals (spec "Motion profile"). */
@@ -824,6 +947,79 @@ export async function extractFull(
           allImages.push(im);
         }
 
+        // ---- inline icon graphics (svg + icon-font glyphs) ------------------
+        // The image walk above only collects <img>/background. Icons that arrive
+        // as inline <svg> or as an icon-font glyph (small element whose computed
+        // font-family is a known icon font) are captured here. Policy/filtering
+        // happens in Node (filterIconCandidate); the walk just gathers candidates.
+        const ICON_FONT_RE =
+          /fontawesome|font awesome|material icons|material symbols|glyphicon|dashicons|ionicons|feather|wix-icon|wix madefor icons|icomoon|eicons|elementor icons/;
+        const iconCandidates: Array<{
+          kind: 'svg' | 'glyph';
+          markup?: string;
+          glyph?: string;
+          fontFamily?: string;
+          width: number;
+          height: number;
+        }> = [];
+        const iconSeen = new Set<string>();
+        for (const d of descendants) {
+          const tag = d.tagName.toLowerCase();
+          // Skip svgs that live inside an <a>/<button> that's already a CTA? No —
+          // an icon next to a card heading is exactly what we want; keep them all.
+          if (tag === 'svg') {
+            // Skip svgs nested inside another svg (we serialize the outermost only).
+            if (d.parentElement && d.parentElement.closest('svg')) continue;
+            const ir = d.getBoundingClientRect();
+            let markup = '';
+            try {
+              markup = d.outerHTML || '';
+            } catch {
+              markup = '';
+            }
+            // de-dupe identical glyphs (same markup repeated across cards is fine
+            // to keep — they're distinct slots — so key on markup+rounded-top).
+            const key = `svg:${Math.round(ir.top + window.scrollY)}:${markup.length}`;
+            if (iconSeen.has(key)) continue;
+            iconSeen.add(key);
+            iconCandidates.push({
+              kind: 'svg',
+              markup,
+              width: Math.round(ir.width),
+              height: Math.round(ir.height),
+            });
+            continue;
+          }
+          // icon-font glyph: an element whose computed font-family is an icon font
+          // AND which renders a single short glyph (no real prose). Catches
+          // <i class="fa fa-check"></i> (glyph via ::before) and <span> glyphs.
+          const dcs = getComputedStyle(d);
+          const fam = (dcs.fontFamily || '').toLowerCase();
+          if (!ICON_FONT_RE.test(fam)) continue;
+          // Pull the glyph: own text first, else the ::before content (icon fonts
+          // typically inject the codepoint via ::before).
+          const ownText = (d.textContent || '').trim();
+          let glyph = ownText;
+          if (!glyph) {
+            const before = getComputedStyle(d, '::before').content;
+            if (before && before !== 'none' && before !== 'normal') {
+              glyph = before.replace(/^["']|["']$/g, '');
+            }
+          }
+          if (!glyph) continue;
+          const ir = d.getBoundingClientRect();
+          const key = `glyph:${Math.round(ir.top + window.scrollY)}:${glyph}`;
+          if (iconSeen.has(key)) continue;
+          iconSeen.add(key);
+          iconCandidates.push({
+            kind: 'glyph',
+            glyph,
+            fontFamily: dcs.fontFamily || '',
+            width: Math.round(ir.width),
+            height: Math.round(ir.height),
+          });
+        }
+
         const buttonLabels = buttonEls
           .map((b) => (b.textContent || '').trim().slice(0, 100))
           .filter(Boolean)
@@ -981,6 +1177,7 @@ export async function extractFull(
           headings,
           buttonLabels,
           images: allImages.slice(0, 36),
+          iconCandidates: iconCandidates.slice(0, 48),
           backgroundColor: baseColor && !isTransparent(baseColor) ? baseColor : 'rgb(255, 255, 255)',
           gradient,
           gradientSource: gradientSource as RawSectionGradientSource,
@@ -1022,6 +1219,13 @@ export async function extractFull(
         width: im.w,
         height: im.h,
       })),
+      // Filter/normalize icon candidates in Node (pure, unit-tested). Inline SVGs
+      // keep their raw bytes in `markup` so the orchestrator can write them to
+      // assets/icon-NN.svg and reference via get_theme_file_uri in an wp:image
+      // (wp:html is banned — see SectionSpecIcon doc + block-policy.ts).
+      icons: (rr.iconCandidates ?? [])
+        .map((c) => filterIconCandidate(c))
+        .filter((i): i is SectionSpecIcon => i !== null),
       backgroundBrightness: rr.features.backgroundBrightness,
       backgroundColor: rr.backgroundColor,
       gradient: rr.gradient,

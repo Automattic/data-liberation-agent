@@ -1,5 +1,13 @@
 import { describe, it, expect } from 'vitest';
-import { extractSignature, classifySection } from './section-extract.js';
+import {
+  extractSignature,
+  classifySection,
+  filterIconCandidate,
+  isIconFontFamily,
+  MAX_SVG_MARKUP_BYTES,
+  MIN_ICON_PX,
+  MAX_ICON_PX,
+} from './section-extract.js';
 import type { SectionFeatures, SectionChildFeature } from './section-extract.js';
 
 const HTML = `<!doctype html><html><body>
@@ -212,5 +220,115 @@ describe('classifySection', () => {
   it('does NOT classify a plain paragraph wall as a richer model', () => {
     const f = feat({ textLength: 1200, paragraphCount: 4 });
     expect(classifySection(f)).toBe('static');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// isIconFontFamily — pure font-family icon-font detector.
+// ---------------------------------------------------------------------------
+
+describe('isIconFontFamily', () => {
+  it('detects known icon fonts (case-insensitive, in a font stack)', () => {
+    expect(isIconFontFamily('FontAwesome')).toBe(true);
+    expect(isIconFontFamily('"Font Awesome 6 Free", sans-serif')).toBe(true);
+    expect(isIconFontFamily('Material Icons')).toBe(true);
+    expect(isIconFontFamily('dashicons')).toBe(true);
+    expect(isIconFontFamily('Wix-Icon, Arial')).toBe(true);
+  });
+
+  it('rejects ordinary text fonts and empty input', () => {
+    expect(isIconFontFamily('Helvetica, Arial, sans-serif')).toBe(false);
+    expect(isIconFontFamily('Georgia')).toBe(false);
+    expect(isIconFontFamily('')).toBe(false);
+    expect(isIconFontFamily(null)).toBe(false);
+    expect(isIconFontFamily(undefined)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// filterIconCandidate — pure icon size/markup filter (the policy extractFull
+// applies in Node over the raw candidates collected by the DOM walk).
+// ---------------------------------------------------------------------------
+
+describe('filterIconCandidate', () => {
+  it('keeps a small inline svg and preserves its markup', () => {
+    const out = filterIconCandidate({
+      kind: 'svg',
+      markup: '<svg viewBox="0 0 24 24"><path d="M0 0h24"/></svg>',
+      width: 32,
+      height: 32,
+    });
+    expect(out).not.toBeNull();
+    expect(out!.kind).toBe('svg');
+    expect(out!.markup).toContain('<svg');
+    expect(out!.width).toBe(32);
+    expect(out!.height).toBe(32);
+  });
+
+  it('rejects a tracking-pixel-sized svg (below MIN_ICON_PX)', () => {
+    expect(
+      filterIconCandidate({ kind: 'svg', markup: '<svg></svg>', width: MIN_ICON_PX - 1, height: 4 }),
+    ).toBeNull();
+  });
+
+  it('rejects a hero-illustration-sized svg (above MAX_ICON_PX)', () => {
+    expect(
+      filterIconCandidate({
+        kind: 'svg',
+        markup: '<svg></svg>',
+        width: MAX_ICON_PX + 50,
+        height: MAX_ICON_PX + 50,
+      }),
+    ).toBeNull();
+  });
+
+  it('keeps the slot but drops oversized svg markup (over the byte cap)', () => {
+    const huge = `<svg>${'x'.repeat(MAX_SVG_MARKUP_BYTES + 1)}</svg>`;
+    const out = filterIconCandidate({ kind: 'svg', markup: huge, width: 40, height: 40 });
+    expect(out).not.toBeNull();
+    expect(out!.kind).toBe('svg');
+    expect(out!.markup).toBeUndefined(); // heavy markup dropped, slot kept
+    expect(out!.width).toBe(40);
+  });
+
+  it('rejects an svg candidate with no markup', () => {
+    expect(filterIconCandidate({ kind: 'svg', markup: '', width: 32, height: 32 })).toBeNull();
+  });
+
+  it('keeps a single-glyph icon-font candidate with its font-family', () => {
+    const out = filterIconCandidate({
+      kind: 'glyph',
+      glyph: '', // fa-check
+      fontFamily: 'Font Awesome 6 Free',
+      width: 24,
+      height: 24,
+    });
+    expect(out).not.toBeNull();
+    expect(out!.kind).toBe('glyph');
+    expect(out!.glyph).toBe('');
+    expect(out!.fontFamily).toBe('Font Awesome 6 Free');
+  });
+
+  it('rejects a glyph candidate that is actually a run of text', () => {
+    expect(
+      filterIconCandidate({ kind: 'glyph', glyph: 'Read more', fontFamily: 'icomoon', width: 20, height: 20 }),
+    ).toBeNull();
+  });
+
+  it('rejects an empty glyph', () => {
+    expect(
+      filterIconCandidate({ kind: 'glyph', glyph: '   ', fontFamily: 'icomoon', width: 20, height: 20 }),
+    ).toBeNull();
+  });
+
+  it('uses the smaller side for the min check and larger side for the max check', () => {
+    // tall-but-thin: minSide too small → reject
+    expect(
+      filterIconCandidate({ kind: 'svg', markup: '<svg></svg>', width: 4, height: 200 }),
+    ).toBeNull();
+    // within bounds on both sides → keep
+    expect(
+      filterIconCandidate({ kind: 'svg', markup: '<svg></svg>', width: 16, height: 48 }),
+    ).not.toBeNull();
   });
 });
