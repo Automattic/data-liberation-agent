@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { ExtractionLog } from '../lib/extraction/extraction-log.js';
 import { WxrBuilder } from '../lib/extraction/wxr-builder.js';
-import { connectBrowser, runExtractionLoop, type ExtractedPage } from './shared.js';
+import { connectBrowser, runExtractionLoop, stratifiedUrlSlice, type ExtractedPage } from './shared.js';
 
 const FIXTURE_TMP = join(process.cwd(), '.tmp-test');
 mkdirSync(FIXTURE_TMP, { recursive: true });
@@ -31,6 +31,71 @@ function makePage(url: string, overrides: Partial<ExtractedPage> = {}): Extracte
     ...overrides,
   };
 }
+
+describe('stratifiedUrlSlice', () => {
+  function u(type: string, n: number) {
+    return { url: `https://x.com/${type}/${n}`, type };
+  }
+
+  it('returns everything when limit >= length', () => {
+    const urls = [u('page', 1), u('product', 1)];
+    expect(stratifiedUrlSlice(urls, 5)).toEqual(urls);
+    expect(stratifiedUrlSlice(urls, 2)).toEqual(urls);
+  });
+
+  it('returns empty for limit 0 or negative', () => {
+    expect(stratifiedUrlSlice([u('page', 1)], 0)).toEqual([]);
+    expect(stratifiedUrlSlice([u('page', 1)], -1)).toEqual([]);
+  });
+
+  it('includes products even when pages sort first (the Shopify-store bug)', () => {
+    // Mirrors the inventory ordering that broke the limited getsnooz run:
+    // all /pages/* before any /products/*.
+    const urls = [
+      ...Array.from({ length: 30 }, (_, i) => u('page', i)),
+      ...Array.from({ length: 20 }, (_, i) => u('product', i)),
+    ];
+    const sliced = stratifiedUrlSlice(urls, 20);
+    expect(sliced).toHaveLength(20);
+    const types = sliced.map((s) => s.type);
+    expect(types).toContain('product');
+    expect(types).toContain('page');
+    // Round-robin gives roughly even representation across the two types.
+    const productCount = types.filter((t) => t === 'product').length;
+    expect(productCount).toBeGreaterThanOrEqual(8);
+  });
+
+  it('always puts the homepage first', () => {
+    const urls = [
+      u('page', 1),
+      u('page', 2),
+      { url: 'https://x.com/', type: 'homepage' },
+      u('product', 1),
+    ];
+    const sliced = stratifiedUrlSlice(urls, 2);
+    expect(sliced[0].type).toBe('homepage');
+    expect(sliced).toHaveLength(2);
+  });
+
+  it('preserves relative order within a type bucket', () => {
+    const urls = [
+      u('product', 1),
+      u('product', 2),
+      u('product', 3),
+      u('page', 1),
+      u('page', 2),
+    ];
+    const sliced = stratifiedUrlSlice(urls, 4);
+    const products = sliced.filter((s) => s.type === 'product').map((s) => s.url);
+    // whatever subset is taken, it must be a prefix of the original product order
+    expect(products).toEqual(['https://x.com/product/1', 'https://x.com/product/2'].slice(0, products.length));
+  });
+
+  it('returns exactly min(limit, length) entries', () => {
+    const urls = [u('page', 1), u('product', 1), u('post', 1), u('product', 2)];
+    expect(stratifiedUrlSlice(urls, 3)).toHaveLength(3);
+  });
+});
 
 describe('runExtractionLoop streaming callback', () => {
   it('emits each extracted URL with the WXR items created for that URL', async () => {

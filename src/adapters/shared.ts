@@ -218,6 +218,73 @@ export interface InventoryUrl {
   type: string;
 }
 
+/**
+ * Cap a typed URL list to `limit` entries while keeping the sample
+ * *representative* across content types.
+ *
+ * A naive `urls.slice(0, limit)` follows sitemap/inventory order, which on
+ * multi-type sites (notably Shopify stores, where `/pages/*` sort before
+ * `/products/*`) can exhaust the cap on a single type and silently drop
+ * products entirely. A limited extraction of a *store* that contains zero
+ * products is not a useful sample.
+ *
+ * Strategy:
+ *   1. The homepage (if present) is always included first.
+ *   2. The remaining slots are filled round-robin across the type buckets,
+ *      in each type's first-appearance order, so every content type that
+ *      exists gets proportional representation.
+ *   3. Relative order within a type is preserved.
+ *
+ * Returns exactly `min(limit, urls.length)` entries.
+ */
+export function stratifiedUrlSlice<T extends { type: string }>(urls: T[], limit: number): T[] {
+  if (limit < 0) return [];
+  if (urls.length <= limit) return urls.slice();
+  if (limit === 0) return [];
+
+  // Bucket by type, preserving first-appearance order of both types and members.
+  const buckets = new Map<string, T[]>();
+  for (const u of urls) {
+    const bucket = buckets.get(u.type);
+    if (bucket) bucket.push(u);
+    else buckets.set(u.type, [u]);
+  }
+
+  const result: T[] = [];
+  const taken = new Set<T>();
+
+  // 1. Homepage(s) first — the source's primary page anchors the design.
+  const homepageBucket = buckets.get('homepage');
+  if (homepageBucket) {
+    for (const u of homepageBucket) {
+      if (result.length >= limit) break;
+      result.push(u);
+      taken.add(u);
+    }
+    buckets.delete('homepage');
+  }
+
+  // 2. Round-robin across remaining type buckets until the limit is hit.
+  const cursors = new Map<string, number>();
+  for (const type of buckets.keys()) cursors.set(type, 0);
+  let progressed = true;
+  while (result.length < limit && progressed) {
+    progressed = false;
+    for (const [type, bucket] of buckets) {
+      if (result.length >= limit) break;
+      const idx = cursors.get(type)!;
+      if (idx < bucket.length) {
+        result.push(bucket[idx]);
+        taken.add(bucket[idx]);
+        cursors.set(type, idx + 1);
+        progressed = true;
+      }
+    }
+  }
+
+  return result;
+}
+
 export interface NavLink {
   text: string;
   href: string;
@@ -375,19 +442,23 @@ export async function runExtractionLoop(opts: ExtractionLoopOpts): Promise<{
 
   // Determine which URLs to process
   const totalUrls = inventoryUrls.length;
-  let urls = inventoryUrls.map((u) => u.url);
+  let typedUrls = inventoryUrls.slice();
   let alreadyProcessed = 0;
   if (resume) {
     const processed = log.getProcessedUrls();
     alreadyProcessed = processed.size;
-    urls = urls.filter((u) => !processed.has(u));
+    typedUrls = typedUrls.filter((u) => !processed.has(u.url));
   }
   // Apply URL cap. Explicit `limit` wins over dryRun's implicit 3-URL cap so
   // a `--limit N` (with or without --dry-run) processes exactly N URLs.
+  // The cap is *stratified* across content types (see stratifiedUrlSlice) so a
+  // limited extraction of a multi-type site (e.g. a Shopify store) still
+  // includes products/posts rather than exhausting the budget on `/pages/*`.
   const effectiveLimit = limit ?? (dryRun ? 3 : undefined);
   if (effectiveLimit !== undefined && effectiveLimit >= 0) {
-    urls = urls.slice(0, effectiveLimit);
+    typedUrls = stratifiedUrlSlice(typedUrls, effectiveLimit);
   }
+  let urls = typedUrls.map((u) => u.url);
 
   if (urls.length === 0) {
     return { pagesExtracted: 0, postsExtracted: 0, productsExtracted: 0, failed: 0, mediaCollected: 0 };
