@@ -654,12 +654,22 @@ Repeated **customer-review columns**, each with a **star rating**, a quote, and 
 
 **Classification heuristic (step 3):** 2+ repeated columns, each carrying a star rating (★ glyphs, an "out of 5" / "N reviews" text, a rating-class/widget marker, or a tight uniform row of 4-6 small SVG/img stars) **and** quote-shaped text. A flat (un-columned) widget with a star rating + a quote still maps here.
 
-**Placeholders:** `{{HEADING}}` (e.g. "Why people love sleeping with SNOOZ"), `{{REVIEWS}}` (array of `{ rating, quote, attribution }`, `rating` = integer 1-5), `{{COLUMNS}}` (usually 3), `{{BG_COLOR_SLUG}}`.
+**Placeholders:** `{{HEADING}}` (e.g. "Why people love sleeping with SNOOZ"), `{{REVIEWS}}` (array of `{ rating, quote, attribution, category? }`, `rating` = integer 1-5), `{{COLUMNS}}` (usually 3), `{{BG_COLOR_SLUG}}`.
 
-**Faithfulness rules:**
-- Render the rating as the literal star count from the source (default 5 if the widget showed "5 stars"). Use the `★`/`☆` glyph run so it survives without a JS widget — `★★★★★` for 5.
-- Keep the quote verbatim and the attribution (name, "Verified Buyer", location) exactly as captured.
-- If the source is a carousel, render the visible reviews as a static grid (mobile-safe); note the carousel in the spec's Motion profile — do not ship a JS slider.
+**⛔ NEVER synthesize, paraphrase, or invent review text. This is the cardinal rule of this template.** Review/testimonial quotes, author names, and category labels MUST be source-captured verbatim or left as a clearly-marked placeholder. Do NOT write plausible-sounding quotes, do NOT invent "Jess T. — Verified Buyer" attributions, do NOT lightly reword a captured quote. A fabricated testimonial is a fidelity lie *and* a trust/legal problem (it puts invented words in a real customer's mouth). This is the exact mistake an earlier getsnooz build made: it assumed the reviews were JS-only, invented three quotes, and bypassed the provenance gate. The reviews were in the captured HTML the whole time.
+
+**Where the real reviews live (check IN THIS ORDER before ever concluding they're unreachable):**
+1. **The `{{REVIEWS}}` array in the spec.** The deterministic extractor (`src/lib/replicate/review-extract.ts`, wired into `liberate_section_extract`) parses the served HTML and emits `spec.reviews` with verbatim `quote` + `category` + `stars` + `author`. **If `spec.reviews` is present, USE IT VERBATIM and stop here** — the sourcing is already done and provenance-clean.
+2. **Inline in the captured `html/<slug>.html`.** Page-builder review carousels (Replo, and similar) render *every slide* — quote + star run + byline — directly into the served markup; only the animation is JS. So "the reviews are a JS widget" is usually FALSE. Grep the captured HTML for a review quote fragment, `data-replo-carousel`, `★`, `out of 5`, or the widget container; the slides are right there. Re-run `liberate_section_extract` (or `extractReviewsFromHtml`) on the saved HTML.
+3. **Embedded JSON in the served HTML** — `schema.org` `Review` / `aggregateRating`, an `__INITIAL_STATE__` / warmup blob, or a `<script type="application/json">`.
+4. **The review widget's data endpoint, fetched via plain GET** — Okendo/Junip/Yotpo/Stamped/Loox/Redo widgets expose a JSON API keyed by shop + product/widget id. Mirror the Wix Pro Gallery `extractGalleryFromHtml` pattern in `src/adapters/wix.ts` — a GET + parse, no headless browser.
+
+**Only if 1-4 all genuinely fail** does a review band become missing-content. Then use the **missing-content fallback** (below): render the grid structure with placeholdered slots (`[review text not captured]`) and flag it in `run-report.json`. Never paper over the gap with invented prose.
+
+**Faithfulness rules (when reviews ARE captured):**
+- Render the rating as the literal star count from the source (default 5 ONLY if the widget explicitly showed "5 stars"; never guess a rating to fill a slot). Use the `★`/`☆` glyph run so it survives without a JS widget — `★★★★★` for 5.
+- Keep the quote **verbatim** (including its surrounding quote marks and any nested-bolded opening sentence) and the attribution (name, "Verified Buyer", location) and the category label (e.g. "TRAVEL", "TINNITUS") **exactly** as captured. Every emitted review string must pass the `liberate_validate_artifacts` provenance check (text ⊆ captured source) — and you must NOT bypass that gate.
+- If the source is a carousel, render the captured reviews as a static grid (mobile-safe); note the carousel in the spec's Motion profile — do not ship a JS slider. Render all captured reviews (wrap into multiple `wp:columns` rows if there are more than ~4).
 
 ```html
 <!-- wp:group {"align":"full","backgroundColor":"{{BG_COLOR_SLUG}}","style":{"spacing":{"padding":{"top":"var:preset|spacing|80","bottom":"var:preset|spacing|80","left":"var:preset|spacing|70","right":"var:preset|spacing|70"},"blockGap":"var:preset|spacing|60"}},"layout":{"type":"constrained","wideSize":"1280px"}} -->
@@ -817,6 +827,26 @@ The pipeline now captures page-builder CDN imagery (Replo `assets.replocdn.com`,
 
 ---
 
+## Missing-content fallback (review / testimonial text could not be captured)
+
+Reviews and testimonials are the highest-risk place for fabrication, because invented prose *reads* plausible. The rule is absolute: **review/testimonial text must be source-captured verbatim or placeholdered — NEVER synthesized.** First exhaust every sourcing path in the `review-grid` template above (`spec.reviews` → inline HTML carousel → embedded JSON → widget GET API). Only if all of them genuinely fail — no review text is reachable in any static or plain-GET form — do you use this fallback. When that happens, you MUST:
+
+1. **Render the section structure with clearly-placeholdered review slots.** Keep the heading and the grid shape (so the section reflows and responsive@390 still passes), but put an explicit, obviously-not-real marker in each slot — `[review text not captured]` for the quote and `[author not captured]` for the attribution. Do NOT write a realistic-sounding quote or a plausible name. The placeholder must be visibly a placeholder.
+
+```html
+<!-- wp:column {"className":"clone-review clone-review--missing"} -->
+<div class="wp-block-column clone-review clone-review--missing">
+  <!-- wp:paragraph {"align":"center","textColor":"text-muted","fontSize":"small"} --><p class="has-text-align-center has-text-muted-color has-text-color has-small-font-size" style="opacity:0.6">[review text not captured]</p><!-- /wp:paragraph -->
+</div>
+<!-- /wp:column -->
+```
+
+2. **Flag it in the run-report.** Add a provenance flag to `run-report.json` `details` (a `reviewProvenance` record or a `details.provenanceFlags` entry) and bump `summary.provenanceFlags`, naming the section and why capture failed — e.g. `"homepage review band: reviews are rendered only by the <widget> JS API which requires auth; no static/GET source found — placeholdered, not synthesized"`. A non-zero `provenanceFlags` count makes the run a `warn`, not a silent pass.
+
+3. **NEVER synthesize, paraphrase, or "fill in" review prose.** Do not invent quotes, authors, ratings, or categories to make the band look complete. A fabricated testimonial puts words in a real (or imagined) customer's mouth — it is a fidelity lie and a trust/legal problem. An honest placeholder + flag is the correct output; the fix belongs upstream in capture/sourcing, not in invented copy. This rule is what the earlier getsnooz build violated.
+
+---
+
 ## What NOT to do
 
 - **Do not emit a pattern without real content from the spec file.** If `{{HEADING}}` is missing in the spec, stop and re-read the section spec to find what heading text was captured. Do not write "Your headline here" or "Placeholder heading" as a fallback.
@@ -825,3 +855,4 @@ The pipeline now captures page-builder CDN imagery (Replo `assets.replocdn.com`,
 - **Do not reuse one template for every section.** The spec file's `Interaction model` dictates the template. A logo strip is not a columns block. A media-text is not a gallery. A product-card row (image + title + **price**) is not a generic `columns` block — use `product-card-row`.
 - **Do not re-derive the header or footer.** Reference our existing dynamic block-header and footer template parts.
 - **Do not substitute an unrelated image for a missing one.** If a referenced source image (hero, product, app screenshot, badge) wasn't captured, emit a sized placeholder and flag it (see *Missing-media fallback*). A confident wrong image is worse than an honest gap.
+- **Do not synthesize, paraphrase, or invent review / testimonial text — EVER.** Quotes, author names, ratings, and category labels in a `review-grid` (or single `testimonial`) MUST be source-captured verbatim (`spec.reviews` → inline carousel HTML → embedded JSON → widget GET API) or rendered as a clearly-marked placeholder + run-report flag (see *Missing-content fallback*). Do not write plausible-sounding reviews to fill the band, and do not bypass the provenance gate. This is the cardinal rule — fabricated testimonials are the worst kind of fidelity lie.
