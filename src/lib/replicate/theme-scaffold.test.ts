@@ -198,6 +198,29 @@ describe('buildThemeScaffold', () => {
     expect(header).not.toContain('wp:page-list');
   });
 
+  it('parts/header.html defaults to a LIGHT header (white bg, dark text)', () => {
+    const files = buildThemeScaffold({
+      foundation: FOUNDATION_FIXTURE,
+      themeSlug: 'site-replica',
+      sourceChrome: { header: { logoUrl: 'http://x/logo.png', logoAlt: 'L', links: [{ label: 'Shop', href: '/shop', external: false }] } },
+    });
+    const header = files.find((f) => f.relativePath === 'parts/header.html')!.content;
+    expect(header).toContain('"backgroundColor":"surface-base"');
+    expect(header).toContain('"textColor":"text-default"');
+    expect(header).not.toContain('"backgroundColor":"surface-inverse"');
+  });
+
+  it('parts/header.html honors a DARK header tone when the source header is dark', () => {
+    const files = buildThemeScaffold({
+      foundation: FOUNDATION_FIXTURE,
+      themeSlug: 'site-replica',
+      sourceChrome: { header: { logoUrl: 'http://x/logo.png', logoAlt: 'L', tone: 'dark', links: [{ label: 'Shop', href: '/shop', external: false }] } },
+    });
+    const header = files.find((f) => f.relativePath === 'parts/header.html')!.content;
+    expect(header).toContain('"backgroundColor":"surface-inverse"');
+    expect(header).toContain('"textColor":"text-inverse"');
+  });
+
   it('parts/footer.html uses source footer text and links when provided', () => {
     const files = buildThemeScaffold({
       foundation: FOUNDATION_FIXTURE,
@@ -223,5 +246,97 @@ describe('buildThemeScaffold', () => {
     const footer = files.find((f) => f.relativePath === 'parts/footer.html')!.content;
     expect(footer).toContain('A &amp; B &lt;Co&gt;');
     expect(footer).not.toContain('<Co>');
+  });
+
+  describe('self-hosted fonts (capturedFonts)', () => {
+    const LARSSEIT = [
+      { family: 'Larsseit', src: 'x', format: 'woff', weight: '400', style: 'normal', localPath: 'assets/fonts/Larsseit-Regular.woff' },
+      { family: 'Larsseit', src: 'y', format: 'woff', weight: '700', style: 'normal', localPath: 'assets/fonts/Larsseit-Bold.woff' },
+    ];
+
+    it('appends @font-face rules with local asset paths to style.css', () => {
+      const files = buildThemeScaffold({ foundation: FOUNDATION_FIXTURE, themeSlug: 'site-replica', capturedFonts: LARSSEIT });
+      const css = files.find((f) => f.relativePath === 'style.css')!.content;
+      expect(css).toContain('@font-face');
+      expect(css).toContain("font-family: 'Larsseit'");
+      expect(css).toContain("url('assets/fonts/Larsseit-Regular.woff')");
+      expect(css).toContain("url('assets/fonts/Larsseit-Bold.woff')");
+    });
+
+    it('rebinds the display family to the captured family with a fontFace[]', () => {
+      const files = buildThemeScaffold({ foundation: FOUNDATION_FIXTURE, themeSlug: 'site-replica', capturedFonts: LARSSEIT });
+      const themeJson = JSON.parse(files.find((f) => f.relativePath === 'theme.json')!.content);
+      const display = themeJson.settings.typography.fontFamilies.find((e: { slug: string }) => e.slug === 'display');
+      expect(display.fontFamily).toBe('Larsseit, sans-serif');
+      expect(display.fontFace).toHaveLength(2);
+      expect(display.fontFace[0].src[0]).toContain('assets/fonts/Larsseit-Regular.woff');
+    });
+
+    it('binds headings to the display family and sanitizes a bogus 0px line-height', () => {
+      const files = buildThemeScaffold({
+        foundation: FOUNDATION_FIXTURE,
+        themeSlug: 'site-replica',
+        capturedFonts: LARSSEIT,
+        headingLineHeights: { h1: '0px', h2: '1.3' },
+      });
+      const themeJson = JSON.parse(files.find((f) => f.relativePath === 'theme.json')!.content);
+      const h1 = themeJson.styles.elements.h1.typography;
+      expect(h1.fontFamily).toBe('var(--wp--preset--font-family--display)');
+      expect(h1.lineHeight).toBe('1.2'); // 0px sanitized
+      expect(themeJson.styles.elements.h2.typography.lineHeight).toBe('1.3'); // valid kept
+    });
+
+    it('rebinds a SUBSTITUTED display family back to the captured heading font', () => {
+      // Foundation substituted Poppins for the headings; typography.json observed
+      // the real heading family as Larsseit, which we captured + self-host.
+      const substituted = {
+        ...FOUNDATION_FIXTURE,
+        typography: { families: { body: { value: 'quasimoda, sans-serif' }, display: { value: 'Poppins, sans-serif' } } },
+      };
+      const files = buildThemeScaffold({
+        foundation: substituted,
+        themeSlug: 'site-replica',
+        capturedFonts: LARSSEIT,
+        headingFamily: 'Larsseit, sans-serif',
+        bodyFamily: 'quasimoda, sans-serif',
+      });
+      const themeJson = JSON.parse(files.find((f) => f.relativePath === 'theme.json')!.content);
+      const display = themeJson.settings.typography.fontFamilies.find((e: { slug: string }) => e.slug === 'display');
+      expect(display.fontFamily).toBe('Larsseit, sans-serif');
+      expect(display.fontFace).toHaveLength(2);
+      // Body stays quasimoda (not captured / self-hostable).
+      const body = themeJson.settings.typography.fontFamilies.find((e: { slug: string }) => e.slug === 'body');
+      expect(body.fontFamily).toBe('quasimoda, sans-serif');
+    });
+
+    it('consolidates per-weight Larsseit aliases into one display family', () => {
+      const aliased = [
+        { family: 'Larsseit', src: 'a', format: 'woff', weight: '400', style: 'normal', localPath: 'assets/fonts/Larsseit-Regular.woff' },
+        { family: 'Larsseit Bold', src: 'b', format: 'woff', weight: '700', style: 'normal', localPath: 'assets/fonts/Larsseit-Bold.woff' },
+        { family: 'Larsseit-Bold', src: 'c', format: 'woff', weight: '700', style: 'normal', localPath: 'assets/fonts/Larsseit-Bold-dup.woff' },
+      ];
+      const files = buildThemeScaffold({
+        foundation: { ...FOUNDATION_FIXTURE, typography: { families: { body: { value: 'quasimoda, sans-serif' }, display: { value: 'Poppins, sans-serif' } } } },
+        themeSlug: 'site-replica',
+        capturedFonts: aliased,
+        headingFamily: 'Larsseit, sans-serif',
+      });
+      const themeJson = JSON.parse(files.find((f) => f.relativePath === 'theme.json')!.content);
+      const fams = themeJson.settings.typography.fontFamilies.map((e: { slug: string }) => e.slug);
+      // No separate larsseit-bold / larsseit-regular families.
+      expect(fams).not.toContain('larsseit-bold');
+      expect(fams).not.toContain('larsseit-regular');
+      const display = themeJson.settings.typography.fontFamilies.find((e: { slug: string }) => e.slug === 'display');
+      expect(display.fontFamily).toBe('Larsseit, sans-serif');
+      expect(display.fontFace).toHaveLength(2); // 400 + 700, dedup of the 700 alias
+    });
+
+    it('emits no @font-face and no heading element styles when no fonts captured', () => {
+      const files = buildThemeScaffold({ foundation: FOUNDATION_FIXTURE, themeSlug: 'site-replica' });
+      const css = files.find((f) => f.relativePath === 'style.css')!.content;
+      // The display family still exists (from foundation), so heading elements bind,
+      // but no @font-face rules are emitted without captured fonts.
+      expect(css).not.toContain('@font-face');
+    });
   });
 });
