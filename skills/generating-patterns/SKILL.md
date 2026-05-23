@@ -9,6 +9,21 @@ disable-model-invocation: true
 Use this skill when generating block patterns for a theme.
 Load this skill alongside `creating-themes` or `editing-themes` when patterns are part of the work.
 
+## Page-builder content (Shopify/Replo, Wix, Squarespace, Shogun)
+
+Page-builder storefronts emit **div-soup** markup (no semantic `<section>` tags) and rich, repeated components that are easy to flatten into generic `static`/`columns` blocks. Don't. The section spec's `Interaction model` carries the real shape — honor it and pick the matching template in `references/section-mapping.md`:
+
+- **product-card-row** — repeated cards with image + title + **price** (+ Add-to-Cart). The price is the discriminator vs. `project-card-grid`/`columns`. Keep prices verbatim; link to the local product page or WooCommerce.
+- **review-grid** — repeated star-rating + quote + name columns (Okendo/Junip/Yotpo/Replo carousels). Render the rating as a literal `★` glyph run so it survives without a JS widget; keep quotes and attributions verbatim. A source carousel becomes a static, mobile-safe grid.
+- **app-download** — heading + copy beside app-store / Google Play **badge images**. Reuse the captured trademark badges as linked images; never redraw them as text buttons.
+- **cover-with-headline (email-capture variant)** — a hero whose CTA is an email signup form ("Get 10% Off" + field + submit). Render a visual `core/search` input+button (forms have no backend in the replica) and stub the real integration in the framework-widget table.
+
+The extractor now captures page-builder CDN imagery (Replo `assets.replocdn.com`, Shogun, image proxies) regardless of host or file extension. The faithful imagery is in the media library — use it. Do not fall back to unrelated product photos for hero/lifestyle/app slots.
+
+## Missing-media fallback (do NOT fabricate substitutes)
+
+If a section spec references an image that could not be captured (cross-origin, 403/expired CDN, rejected content-type), emit a **sized placeholder** that preserves the layout slot, **flag it** in `run-report.json` (`details.provenanceFlags` + bump `summary.provenanceFlags`), and **never** substitute an unrelated image as if it were the source. A confident wrong image hides the extraction failure and produces a plausible-but-wrong replica — the exact mistake behind the first getsnooz build. See *Missing-media fallback* in `references/section-mapping.md` for the placeholder markup and flag format.
+
 ## Pattern Generation Rules
 
 - Place pattern files in the `patterns/` directory

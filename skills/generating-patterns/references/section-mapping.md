@@ -597,6 +597,176 @@ Emit one `core/cover` per tile inside a `core/columns`:
 
 ---
 
+### `product-card-row`
+
+A row of N **storefront product cards**, each with a product image, a title, a **price**, and usually an Add-to-Cart / Shop CTA. Common on Shopify/Replo "shop our products" / "Sleep essentials" rows. Use this instead of `project-card-grid` (no price) or `price-list` (no per-card image) whenever the spec's interaction model is `product-card-row`.
+
+**Classification heuristic (step 3):** 2+ adjacent uniform cards, each with one `<img>`, a title, and a money-shaped string (`$99`, `£59`, …). An Add-to-Cart button is common but not required. The price is the discriminator — a titled image grid *without* prices is `project-card-grid`.
+
+**Placeholders:** `{{HEADING}}` (section headline, e.g. "Sleep essentials"), `{{CARDS}}` (array of `{ image_path, image_alt, title, price, cta_label, href }`), `{{COLUMNS}}` (cards per row, usually 2-4).
+
+**Faithfulness rules:**
+- Keep the **price verbatim** from the source (currency symbol + amount). Do not invent or round. If the source showed a compare-at / sale price, render both (regular struck-through, then sale) — mirror what the screenshot shows.
+- The CTA label is the source's ("Add to Cart", "Shop SNOOZ Original →"). Link `href` to the local product page when one was extracted, else `#`.
+- Prefer linking the WP-library product attachment already uploaded by the pipeline; only fall back to a theme asset path when the image is theme-shipped.
+
+```html
+<!-- wp:group {"align":"full","style":{"spacing":{"padding":{"top":"var:preset|spacing|80","bottom":"var:preset|spacing|80","left":"var:preset|spacing|70","right":"var:preset|spacing|70"},"blockGap":"var:preset|spacing|60"}},"layout":{"type":"constrained","wideSize":"1280px"}} -->
+<div class="wp-block-group alignfull" style="padding-top:var(--wp--preset--spacing--80);padding-right:var(--wp--preset--spacing--70);padding-bottom:var(--wp--preset--spacing--80);padding-left:var(--wp--preset--spacing--70)">
+  <!-- IF {{HEADING}} -->
+  <!-- wp:heading {"textAlign":"center","level":2,"fontSize":"xx-large"} --><h2 class="wp-block-heading has-text-align-center has-xx-large-font-size">{{HEADING}}</h2><!-- /wp:heading -->
+  <!-- END IF -->
+  <!-- wp:columns {"align":"wide","className":"clone-product-row"} -->
+  <div class="wp-block-columns alignwide clone-product-row">
+    <!-- FOREACH card in {{CARDS}}: -->
+    <!-- wp:column {"className":"clone-product-card"} -->
+    <div class="wp-block-column clone-product-card">
+      <!-- wp:image {"sizeSlug":"large","linkDestination":"custom","style":{"border":{"radius":"8px"}}} -->
+      <figure class="wp-block-image size-large has-custom-border"><a href="{{card.href}}"><img src="{{card.image_path}}" alt="{{card.image_alt}}" style="border-radius:8px" /></a></figure>
+      <!-- /wp:image -->
+      <!-- wp:heading {"level":3,"fontSize":"medium"} --><h3 class="wp-block-heading has-medium-font-size"><a href="{{card.href}}">{{card.title}}</a></h3><!-- /wp:heading -->
+      <!-- wp:paragraph {"fontSize":"large","style":{"typography":{"fontWeight":"600"}}} --><p class="has-large-font-size" style="font-weight:600">{{card.price}}</p><!-- /wp:paragraph -->
+      <!-- IF {{card.cta_label}} -->
+      <!-- wp:buttons -->
+      <div class="wp-block-buttons">
+        <!-- wp:button {"style":{"border":{"radius":"999px"}}} -->
+        <div class="wp-block-button"><a class="wp-block-button__link wp-element-button" href="{{card.href}}" style="border-radius:999px">{{card.cta_label}}</a></div>
+        <!-- /wp:button -->
+      </div>
+      <!-- /wp:buttons -->
+      <!-- END IF -->
+    </div>
+    <!-- /wp:column -->
+    <!-- END FOREACH -->
+  </div>
+  <!-- /wp:columns -->
+</div>
+<!-- /wp:group -->
+```
+
+`{{card.image_path}}` is the uploaded WP-library URL (preferred) or a `<?php echo esc_url( get_theme_file_uri('assets/img-XX.ext') ); ?>` theme path. Never curl a CDN URL at render time. If a card's image could not be captured, follow the **missing-media fallback** rule (below) — emit a sized placeholder + a provenance flag, do NOT substitute an unrelated product photo.
+
+---
+
+### `review-grid`
+
+Repeated **customer-review columns**, each with a **star rating**, a quote, and an attribution (name / location). Distinct from the single-quote `testimonial` (one block). Page builders (Replo) and review widgets (Okendo/Junip/Yotpo/Stamped/Loox) render these — often as a carousel — frequently with no `<blockquote>` and anonymous-path star SVGs.
+
+**Classification heuristic (step 3):** 2+ repeated columns, each carrying a star rating (★ glyphs, an "out of 5" / "N reviews" text, a rating-class/widget marker, or a tight uniform row of 4-6 small SVG/img stars) **and** quote-shaped text. A flat (un-columned) widget with a star rating + a quote still maps here.
+
+**Placeholders:** `{{HEADING}}` (e.g. "Why people love sleeping with SNOOZ"), `{{REVIEWS}}` (array of `{ rating, quote, attribution }`, `rating` = integer 1-5), `{{COLUMNS}}` (usually 3), `{{BG_COLOR_SLUG}}`.
+
+**Faithfulness rules:**
+- Render the rating as the literal star count from the source (default 5 if the widget showed "5 stars"). Use the `★`/`☆` glyph run so it survives without a JS widget — `★★★★★` for 5.
+- Keep the quote verbatim and the attribution (name, "Verified Buyer", location) exactly as captured.
+- If the source is a carousel, render the visible reviews as a static grid (mobile-safe); note the carousel in the spec's Motion profile — do not ship a JS slider.
+
+```html
+<!-- wp:group {"align":"full","backgroundColor":"{{BG_COLOR_SLUG}}","style":{"spacing":{"padding":{"top":"var:preset|spacing|80","bottom":"var:preset|spacing|80","left":"var:preset|spacing|70","right":"var:preset|spacing|70"},"blockGap":"var:preset|spacing|60"}},"layout":{"type":"constrained","wideSize":"1280px"}} -->
+<div class="wp-block-group alignfull has-{{BG_COLOR_SLUG}}-background-color has-background" style="padding-top:var(--wp--preset--spacing--80);padding-right:var(--wp--preset--spacing--70);padding-bottom:var(--wp--preset--spacing--80);padding-left:var(--wp--preset--spacing--70)">
+  <!-- IF {{HEADING}} -->
+  <!-- wp:heading {"textAlign":"center","level":2,"fontSize":"xx-large"} --><h2 class="wp-block-heading has-text-align-center has-xx-large-font-size">{{HEADING}}</h2><!-- /wp:heading -->
+  <!-- END IF -->
+  <!-- wp:columns {"align":"wide"} -->
+  <div class="wp-block-columns alignwide">
+    <!-- FOREACH review in {{REVIEWS}}: -->
+    <!-- wp:column {"className":"clone-review"} -->
+    <div class="wp-block-column clone-review">
+      <!-- wp:paragraph {"className":"clone-review__stars","fontSize":"medium","style":{"typography":{"letterSpacing":"2px"}}} --><p class="clone-review__stars has-medium-font-size" style="letter-spacing:2px;color:#f5a623">{{review.stars_glyphs}}</p><!-- /wp:paragraph -->
+      <!-- wp:paragraph --><p>{{review.quote}}</p><!-- /wp:paragraph -->
+      <!-- wp:paragraph {"fontSize":"small","style":{"typography":{"fontWeight":"600"}}} --><p class="has-small-font-size" style="font-weight:600">{{review.attribution}}</p><!-- /wp:paragraph -->
+    </div>
+    <!-- /wp:column -->
+    <!-- END FOREACH -->
+  </div>
+  <!-- /wp:columns -->
+</div>
+<!-- /wp:group -->
+```
+
+`{{review.stars_glyphs}}` = `rating` filled stars + `(5 - rating)` empty (e.g. rating 5 → `★★★★★`, rating 4 → `★★★★☆`). The inline `color:#f5a623` (amber) is the conventional star color; swap to the source's star color if the screenshot shows a different hue.
+
+---
+
+### `app-download`
+
+An **app-download block**: a heading + copy beside an app screenshot, with **app-store / google-play badge images** as the CTA. Common as a "Get the app" / "Smarter sleep starts here" section on D2C storefronts.
+
+**Classification heuristic (step 3):** a section heading plus one or more store-badge images (alt/src/filename matching `app store`, `google play`, `download on the`, `get it on`, `play store`), usually paired with a phone/app screenshot.
+
+**Placeholders:** `{{HEADING}}`, `{{BODY}}`, `{{APP_SHOT_PATH}}` (app screenshot, optional), `{{APP_SHOT_ALT}}`, `{{BADGES}}` (array of `{ image_path, image_alt, href }`, e.g. App Store + Google Play), `{{BG_COLOR_SLUG}}`, `{{MEDIA_POSITION}}` (`left`/`right`).
+
+**Faithfulness rules:**
+- Keep the official store badges as **images** linking to the source's store URLs (`href`). The badges are trademarked artwork — capture and reuse them; do not redraw as text buttons.
+- If a badge image could not be captured, follow the **missing-media fallback** rule below (sized placeholder + flag) rather than substituting a generic button.
+
+```html
+<!-- wp:group {"align":"full","backgroundColor":"{{BG_COLOR_SLUG}}","style":{"spacing":{"padding":{"top":"var:preset|spacing|80","bottom":"var:preset|spacing|80","left":"var:preset|spacing|70","right":"var:preset|spacing|70"}}},"layout":{"type":"constrained","wideSize":"1280px"}} -->
+<div class="wp-block-group alignfull has-{{BG_COLOR_SLUG}}-background-color has-background" style="padding-top:var(--wp--preset--spacing--80);padding-right:var(--wp--preset--spacing--70);padding-bottom:var(--wp--preset--spacing--80);padding-left:var(--wp--preset--spacing--70)">
+  <!-- wp:columns {"verticalAlignment":"center","align":"wide"} -->
+  <div class="wp-block-columns alignwide are-vertically-aligned-center">
+    <!-- COLUMN A (text) — emit FIRST when {{MEDIA_POSITION}} is right, else SECOND -->
+    <!-- wp:column {"verticalAlignment":"center"} -->
+    <div class="wp-block-column is-vertically-aligned-center">
+      <!-- wp:heading {"level":2,"fontSize":"xx-large"} --><h2 class="wp-block-heading has-xx-large-font-size">{{HEADING}}</h2><!-- /wp:heading -->
+      <!-- wp:paragraph {"fontSize":"medium"} --><p class="has-medium-font-size">{{BODY}}</p><!-- /wp:paragraph -->
+      <!-- wp:buttons {"layout":{"type":"flex"}} -->
+      <div class="wp-block-buttons">
+        <!-- FOREACH badge in {{BADGES}}: -->
+        <!-- wp:image {"width":"160px","sizeSlug":"medium","linkDestination":"custom","className":"clone-store-badge"} -->
+        <figure class="wp-block-image size-medium is-resized clone-store-badge"><a href="{{badge.href}}"><img src="{{badge.image_path}}" alt="{{badge.image_alt}}" style="width:160px" /></a></figure>
+        <!-- /wp:image -->
+        <!-- END FOREACH -->
+      </div>
+      <!-- /wp:buttons -->
+    </div>
+    <!-- /wp:column -->
+    <!-- COLUMN B (app screenshot) -->
+    <!-- IF {{APP_SHOT_PATH}} -->
+    <!-- wp:column {"verticalAlignment":"center"} -->
+    <div class="wp-block-column is-vertically-aligned-center">
+      <!-- wp:image {"sizeSlug":"large","align":"center"} -->
+      <figure class="wp-block-image aligncenter size-large"><img src="{{APP_SHOT_PATH}}" alt="{{APP_SHOT_ALT}}" /></figure>
+      <!-- /wp:image -->
+    </div>
+    <!-- /wp:column -->
+    <!-- END IF -->
+  </div>
+  <!-- /wp:columns -->
+</div>
+<!-- /wp:group -->
+```
+
+The store-badge `core/image` blocks live inside `core/buttons` only for horizontal flex layout convenience; if that produces invalid nesting in your WP version, wrap them in a `core/group` with `"layout":{"type":"flex"}` instead. Badges sit side-by-side on desktop and stack on mobile.
+
+---
+
+### `cover-with-headline` — email-capture variant
+
+A hero whose CTA is an **email-capture form** ("Get 10% Off" + email field + submit) rather than a link button. Use the base `cover-with-headline` template, but replace the `core/buttons` block with an email form. We do **not** ship a working form backend in the replica, so render a faithful **visual** form (input + button) and stub the submission with an explicit comment.
+
+**Extra placeholders (on top of `cover-with-headline`):** `{{FORM_HEADING}}` (e.g. "Get 10% Off"), `{{INPUT_PLACEHOLDER}}` (e.g. "Enter your email"), `{{SUBMIT_LABEL}}` (e.g. "Sign Up").
+
+Replace the `<!-- wp:buttons ... -->` region of the chosen `cover-with-headline` variant with:
+
+```html
+<!-- wp:group {"className":"clone-email-capture","layout":{"type":"flex","flexWrap":"wrap","justifyContent":"center"}} -->
+<div class="wp-block-group clone-email-capture">
+  <!-- IF {{FORM_HEADING}} -->
+  <!-- wp:paragraph {"align":"center","fontSize":"medium","style":{"typography":{"fontWeight":"600"}}} --><p class="has-text-align-center has-medium-font-size" style="font-weight:600">{{FORM_HEADING}}</p><!-- /wp:paragraph -->
+  <!-- END IF -->
+  <!-- The replica ships no form backend — visual fidelity only. wp:html is
+       banned project-wide, so use core/search: it renders an input + adjacent
+       submit button without any custom HTML. -->
+  <!-- wp:search {"label":"","showLabel":false,"placeholder":"{{INPUT_PLACEHOLDER}}","buttonText":"{{SUBMIT_LABEL}}","buttonPosition":"button-outside","style":{"border":{"radius":"999px"}}} /-->
+</div>
+<!-- /wp:group -->
+```
+
+`core/search` is the closest core block that renders an input + adjacent submit button without custom HTML (which is banned — see `block-policy.ts`). It is non-functional as a signup form but is pixel-faithful to a rounded email-capture field. Note the real integration (Klaviyo / Mailchimp / etc.) in the spec's framework-widget stub table so a human can wire it up.
+
+---
+
 ## Framework-specific widgets → stub with explicit comment
 
 For each of these, emit an **explicit HTML comment** in the generated pattern rather than silently dropping the feature. A human reading the theme later must know what was removed. Add rows here as new frameworks are encountered; the existing rows cover the frameworks seen so far.
@@ -614,10 +784,36 @@ For each of these, emit an **explicit HTML comment** in the generated pattern ra
 | Webflow Ecommerce block | stub + WooCommerce note | `<!-- Webflow Ecommerce block removed — install WooCommerce and replace with product blocks -->` |
 | Cargo gallery widget | keep image list, drop effects | `<!-- Cargo gallery effects dropped — images preserved in core/gallery -->` |
 | Shopify embed (buy button, product card) | stub + WooCommerce note | `<!-- Shopify embed removed — install WooCommerce or use the Shopify Buy Button WP plugin -->` |
+| Replo Add-to-Cart / dynamic price | `product-card-row` template; cart wired to WooCommerce | `<!-- Replo Add-to-Cart removed — link to the WooCommerce product page or wire a Woo add-to-cart -->` |
+| Shopify/Replo review widget (Okendo/Junip/Yotpo/Stamped/Loox) | `review-grid` template with captured reviews | `<!-- Review widget reduced to a static review-grid — install a WP reviews plugin to make it dynamic -->` |
+| Email-capture / signup form (Klaviyo, Mailchimp, Privy) | `cover-with-headline` email-capture variant (visual only) | `<!-- Email signup form is visual-only — wire up Klaviyo/Mailchimp/Newsletter plugin -->` |
+| App-store / Google Play download badges | `app-download` template; badges as linked images | `<!-- App-download badges link to the source app-store URLs -->` |
 | Marquee / scrolling text strip | `marquee-strip` when simple; static paragraph otherwise | `<!-- Marquee reduced to static strip — complex source timing not reproduced -->` |
 | Parallax background | static bg image; simple fixed attachment only when spec approves | `<!-- Parallax reduced — static bg retained -->` |
 | Lottie / complex scroll-triggered animations | static poster or placeholder | `<!-- Animation reduced — source framework timeline not reproduced -->` |
 | Video background on cover | `core/cover` with poster image | `<!-- Video background reduced to poster image -->` |
+
+---
+
+## Missing-media fallback (referenced image could not be captured)
+
+A section spec may reference an image (hero photo, product shot, app screenshot, store badge) that the extractor **failed to capture** — a cross-origin asset, a 403/expired CDN URL, a content-type the downloader rejected, or a lazy asset that never loaded. When the spec marks an image slot as missing (no local path / WP-library URL), you MUST:
+
+1. **Emit a sized placeholder** that preserves the layout slot's dimensions, so the section reflows the same as the source and responsive@390 still passes. Use a neutral `core/group` (or `core/image` with the placeholder) at the captured width/height ratio:
+
+```html
+<!-- wp:group {"className":"clone-missing-media","style":{"color":{"background":"#e9e9ee"},"dimensions":{"minHeight":"{{SLOT_HEIGHT}}px"}},"layout":{"type":"constrained"}} -->
+<div class="wp-block-group clone-missing-media has-background" style="background-color:#e9e9ee;min-height:{{SLOT_HEIGHT}}px" aria-label="Image unavailable: {{IMAGE_ALT}}">
+  <!-- wp:paragraph {"align":"center","fontSize":"small","textColor":"contrast"} --><p class="has-text-align-center has-small-font-size has-contrast-color has-text-color" style="opacity:0.5">Image unavailable</p><!-- /wp:paragraph -->
+</div>
+<!-- /wp:group -->
+```
+
+2. **Flag it in the run-report.** Add a provenance flag to `run-report.json` `details.provenanceFlags` (and bump `summary.provenanceFlags`) naming the section, the slot, and the source URL that failed — e.g. `"homepage section 2 (hero): source image https://assets.replocdn.com/... could not be captured — placeholder emitted"`. The gate counts these; a non-zero count is a `warn`, not a silent pass.
+
+3. **NEVER silently substitute an unrelated image as if it were the source.** Do not drop in a product photo, a stock image, or another section's asset to fill a missing hero/lifestyle/app slot. A faithful gap (placeholder + flag) is correct; a confident wrong image is a fidelity lie that hides the extraction failure. This is the exact mistake that produced the first getsnooz replica — the Replo hero/app imagery wasn't captured, so stand-in product photos were dropped in and the result looked plausible but wrong. If the image matters to the section's identity (hero, product card, app screenshot), the placeholder + flag is the honest output; the fix belongs upstream in capture, not in fabricated substitution.
+
+The pipeline now captures page-builder CDN imagery (Replo `assets.replocdn.com`, etc.) regardless of host or file extension, so genuine misses should be rare — but when one happens, surface it, don't paper over it.
 
 ---
 
@@ -626,5 +822,6 @@ For each of these, emit an **explicit HTML comment** in the generated pattern ra
 - **Do not emit a pattern without real content from the spec file.** If `{{HEADING}}` is missing in the spec, stop and re-read the section spec to find what heading text was captured. Do not write "Your headline here" or "Placeholder heading" as a fallback.
 - **Do not use `core/cover` on light-background sections.** Use the `core/group` variant. The brightness rule above is not optional.
 - **Do not inline CDN URLs or curl remote assets.** Always `get_theme_file_uri('assets/img-XX.ext')` for theme-shipped assets. For media already uploaded to the WP library, use the uploaded WP URL directly. The pipeline handles media upload; patterns must not fetch from CDNs.
-- **Do not reuse one template for every section.** The spec file's `Interaction model` dictates the template. A logo strip is not a columns block. A media-text is not a gallery.
+- **Do not reuse one template for every section.** The spec file's `Interaction model` dictates the template. A logo strip is not a columns block. A media-text is not a gallery. A product-card row (image + title + **price**) is not a generic `columns` block — use `product-card-row`.
 - **Do not re-derive the header or footer.** Reference our existing dynamic block-header and footer template parts.
+- **Do not substitute an unrelated image for a missing one.** If a referenced source image (hero, product, app screenshot, badge) wasn't captured, emit a sized placeholder and flag it (see *Missing-media fallback*). A confident wrong image is worse than an honest gap.

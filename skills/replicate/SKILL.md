@@ -110,6 +110,10 @@ Spec files are the contract between extraction and pattern generation. Each spec
 
 **Per-cluster readiness check:** before dispatching a builder, verify each spec has: interaction model set, computed styles present, media local-pathed (no CDN URLs), brightness recorded. Incomplete spec → fix it, don't dispatch.
 
+**Page-builder sections (Shopify/Replo, Shogun):** these stores have rich repeated components — `product-card-row` (image + title + price), `review-grid` (star rating + quote + name), `app-download` (store-badge images), and email-capture heroes. `liberate_section_extract detail:"full"` now classifies these as their own interaction models; the builder maps each to the matching `references/section-mapping.md` template. Don't let a product/review row collapse to generic `static`/`columns`.
+
+**Missing-media:** if a spec's image slot has no local/WP-library URL (capture failed), the builder must emit a sized placeholder and add a `details.provenanceFlags` entry — NOT substitute an unrelated photo. A non-zero provenance count is a `warn`, not a silent pass. The extractor now captures page-builder CDN imagery (Replo `assets.replocdn.com`, etc.) regardless of host/extension, so genuine misses should be rare.
+
 Sitewide-shared sections (header, footer, a recurring CTA band that appears identically across clusters) are identified here and built once — deduplicated before builder dispatch.
 
 ### Step 4 — Build (fan-out)
