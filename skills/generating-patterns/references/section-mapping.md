@@ -99,6 +99,16 @@ If a future Site Editor user changes a block's styling, inline attributes persis
 
 ## Template catalog
 
+### ⛔ Every text placeholder is filled SOURCE-VERBATIM — never paraphrased
+
+Across **every** template below, the text placeholders — `{{HEADING}}`, `{{SUBHEADING}}`, `{{BODY}}`, `{{LABEL}}`, `{{BUTTON_LABEL}}`, `{{column.heading}}`, `{{column.body}}`, `{{card.title}}`, `{{review.quote}}`, etc. — are filled with the source's **captured text, reproduced verbatim**, from the section spec:
+
+- `{{HEADING}}` / `{{SUBHEADING}}` / `{{LABEL}}` / `{{BUTTON_LABEL}}` ← `spec.headings`, `spec.buttonLabels`.
+- `{{BODY}}` and any paragraph/list text ← `spec.bodyText` (every captured `<p>`/`<li>`, verbatim). If the exact line for a slot isn't in `spec.bodyText`, re-read the captured `html/<slug>.html` and pull it; if the source has no such text, omit the slot or use the missing-content placeholder. **Never write your own body copy.**
+- `{{review.*}}` ← `spec.reviews` (see `review-grid`).
+
+Only mechanical renderings may differ from the raw source: HTML-entity encoding, whitespace collapse, and typographic-glyph folding (smart quotes ↔ straight, en/em dash ↔ hyphen, ellipsis ↔ `...`). A reworded `{{BODY}}` **HARD-FAILS** `liberate_validate_artifacts` (body copy must be substantially contained in `spec.expectedText` ∪ `spec.bodyText`) — it is a gate error, not a warning, and must not be bypassed. This is the cardinal rule of the generating-patterns skill; see its SKILL.md.
+
 Each template below takes placeholder variables and emits valid WP block markup. After filling placeholders, wrap the result in the pattern file header:
 
 ```php
@@ -827,9 +837,13 @@ The pipeline now captures page-builder CDN imagery (Replo `assets.replocdn.com`,
 
 ---
 
-## Missing-content fallback (review / testimonial text could not be captured)
+## Missing-content fallback (text could not be captured — body copy, reviews, headings)
 
-Reviews and testimonials are the highest-risk place for fabrication, because invented prose *reads* plausible. The rule is absolute: **review/testimonial text must be source-captured verbatim or placeholdered — NEVER synthesized.** First exhaust every sourcing path in the `review-grid` template above (`spec.reviews` → inline HTML carousel → embedded JSON → widget GET API). Only if all of them genuinely fail — no review text is reachable in any static or plain-GET form — do you use this fallback. When that happens, you MUST:
+All visible copy is the highest-risk place for fabrication, because invented prose *reads* plausible. The rule is absolute: **all text — headings, body copy, labels, and most acutely review/testimonial text — must be source-captured verbatim or placeholdered, NEVER synthesized or paraphrased.**
+
+**Body copy / headings:** the captured text is in `spec.bodyText` (paragraphs/list items) and `spec.headings`. If a template's `{{BODY}}`/`{{HEADING}}` slot has no matching captured line, re-read the section's `html/<slug>.html` and pull the real text. If the source genuinely has no text for that slot, either omit the slot (when the layout allows) or emit a clearly-marked `[copy not captured]` placeholder + a `run-report.json` provenance flag — never write your own line to fill it. A reworded paragraph hard-fails `liberate_validate_artifacts`; an honest placeholder + flag passes as a `warn`.
+
+**Reviews / testimonials:** first exhaust every sourcing path in the `review-grid` template above (`spec.reviews` → inline HTML carousel → embedded JSON → widget GET API). Only if all of them genuinely fail — no review text is reachable in any static or plain-GET form — do you use the review fallback below. When that happens, you MUST:
 
 1. **Render the section structure with clearly-placeholdered review slots.** Keep the heading and the grid shape (so the section reflows and responsive@390 still passes), but put an explicit, obviously-not-real marker in each slot — `[review text not captured]` for the quote and `[author not captured]` for the attribution. Do NOT write a realistic-sounding quote or a plausible name. The placeholder must be visibly a placeholder.
 
@@ -850,6 +864,7 @@ Reviews and testimonials are the highest-risk place for fabrication, because inv
 ## What NOT to do
 
 - **Do not emit a pattern without real content from the spec file.** If `{{HEADING}}` is missing in the spec, stop and re-read the section spec to find what heading text was captured. Do not write "Your headline here" or "Placeholder heading" as a fallback.
+- **Do not paraphrase, reword, or invent ANY copy — headings, subheads, body paragraphs, list items, labels, or CTAs.** All emitted text is source-verbatim (`spec.headings` / `spec.bodyText` / `spec.buttonLabels` / `spec.reviews`) or a clearly-marked placeholder + run-report flag. Reworded `{{BODY}}` HARD-FAILS `liberate_validate_artifacts` (it is a gate error, not a warning). This is the cardinal rule — see the SKILL.md and the catalog header above. An earlier getsnooz build invented section body copy ("Real fan-powered sound — no loops…") while the real source line ("Recordings loop. Speakers hiss. SNOOZ's natural and seamless sound…") sat in the captured HTML.
 - **Do not use `core/cover` on light-background sections.** Use the `core/group` variant. The brightness rule above is not optional.
 - **Do not inline CDN URLs or curl remote assets.** Always `get_theme_file_uri('assets/img-XX.ext')` for theme-shipped assets. For media already uploaded to the WP library, use the uploaded WP URL directly. The pipeline handles media upload; patterns must not fetch from CDNs.
 - **Do not reuse one template for every section.** The spec file's `Interaction model` dictates the template. A logo strip is not a columns block. A media-text is not a gallery. A product-card row (image + title + **price**) is not a generic `columns` block — use `product-card-row`.

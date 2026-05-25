@@ -20,11 +20,24 @@ Page-builder storefronts emit **div-soup** markup (no semantic `<section>` tags)
 
 The extractor now captures page-builder CDN imagery (Replo `assets.replocdn.com`, Shogun, image proxies) regardless of host or file extension. The faithful imagery is in the media library — use it. Do not fall back to unrelated product photos for hero/lifestyle/app slots.
 
+## ⛔ Cardinal rule: ALL emitted copy is source-verbatim or placeholdered — NEVER paraphrased
+
+**Every word of visible text a pattern emits — headings, subheads, body paragraphs, list items, button/label text, review quotes — MUST be the source's captured text, reproduced verbatim, OR a clearly-marked missing-content placeholder + run-report flag. Never synthesize, paraphrase, reword, "tighten," "improve," or invent copy to fill a slot.** This is not limited to reviews; it governs *all* prose. Reproducing copy verbatim is the whole point of a replica — paraphrase is a fidelity lie that silently rewrites the source's own words.
+
+Where the source text lives, in order:
+- **Headings / labels:** `spec.headings`, `spec.buttonLabels`.
+- **Body paragraphs / list items:** `spec.bodyText` (every captured `<p>`/`<li>` text node, verbatim — see `SectionSpec.bodyText`). If a template slot wants body copy that is **not** in `spec.bodyText`, do NOT write your own — re-read the section's captured `html/<slug>.html` and pull the real line. If the source genuinely has no text for that slot, leave the slot out or use the missing-content placeholder; never fabricate.
+- **Review/testimonial quotes, authors, categories:** `spec.reviews` → inline carousel HTML → embedded JSON → widget GET API (see `review-grid`).
+
+Allowed differences from the raw source byte stream are **only** mechanical renderings: HTML-entity encoding (`&#8217;`, `&nbsp;`, `&amp;`), whitespace collapse, and typographic-glyph folding (smart quotes ↔ straight, en/em dash ↔ hyphen, ellipsis char ↔ `...`). Anything beyond that — a different word, a reordered clause, a "punchier" rewrite — is paraphrase and is **rejected**.
+
+This is enforced deterministically: `liberate_validate_artifacts` checks emitted text against the captured source. Headings must each be contained in a single `spec.expectedText` entry; **body paragraphs must be substantially contained in `spec.expectedText` ∪ `spec.bodyText` — a reworded paragraph HARD-FAILS the gate** (not a warning). You may not bypass that gate. An earlier getsnooz build paraphrased section body copy ("Real fan-powered sound — no loops…", "Your best shut-eye, guaranteed.") and invented three testimonials while the real lines sat in the captured HTML the whole time — exactly the failure this rule and gate exist to stop.
+
 ## Missing-content fallback (do NOT fabricate substitutes — images OR text)
 
 If a section spec references an image that could not be captured (cross-origin, 403/expired CDN, rejected content-type), emit a **sized placeholder** that preserves the layout slot, **flag it** in `run-report.json` (`details.provenanceFlags` + bump `summary.provenanceFlags`), and **never** substitute an unrelated image as if it were the source. A confident wrong image hides the extraction failure and produces a plausible-but-wrong replica — the exact mistake behind the first getsnooz build.
 
-The same rule governs **text — most acutely review/testimonial copy.** Never synthesize, paraphrase, or invent review quotes, author names, ratings, or category labels. They are source-captured verbatim or rendered as a clearly-marked placeholder (`[review text not captured]`) plus a run-report flag — never fabricated, and never bypass the `liberate_validate_artifacts` provenance gate (text ⊆ captured source). An earlier getsnooz build invented three testimonials and manually skipped that gate; the real reviews were in the captured HTML the entire time. See *Missing-media fallback*, *Missing-content fallback (review/testimonial text)*, and the `review-grid` sourcing order in `references/section-mapping.md`.
+The same rule governs **all text** (per the cardinal rule above), **most acutely review/testimonial copy.** Never synthesize, paraphrase, or invent review quotes, author names, ratings, category labels, headings, or body paragraphs. They are source-captured verbatim or rendered as a clearly-marked placeholder (`[review text not captured]`, or for body copy `[copy not captured]`) plus a run-report flag — never fabricated, and never bypass the `liberate_validate_artifacts` provenance gate (text ⊆ captured source). An earlier getsnooz build invented three testimonials AND paraphrased section body copy, and manually skipped that gate; the real text was in the captured HTML the entire time. See *Missing-media fallback*, *Missing-content fallback (review/testimonial text)*, and the `review-grid` sourcing order in `references/section-mapping.md`.
 
 ## Pattern Generation Rules
 
@@ -32,7 +45,7 @@ The same rule governs **text — most acutely review/testimonial copy.** Never s
 - Each pattern file must start with a PHP comment header registering the pattern
 - Use descriptive, kebab-case filenames (e.g., `hero-split.php`, `faq-accordion.php`)
 - Never use emojis in any pattern content
-- Keep copy realistic but placeholder-friendly — never reference real clients or brands
+- **Copy is source-verbatim, never invented** (see the Cardinal rule above). This overrides any "write realistic placeholder copy" habit from generic landing-page generation: for a *replica*, the copy IS the source's copy, reproduced verbatim from `spec.headings` / `spec.bodyText` / `spec.buttonLabels` / `spec.reviews` (or placeholdered + flagged). Do not write your own headlines, body, or CTAs.
 - Alternate between light and dark section backgrounds to create visual rhythm
 - Patterns must be self-contained — do not use `<inner-blocks>` or assume external context
 
