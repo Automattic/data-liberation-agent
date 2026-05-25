@@ -146,6 +146,85 @@ describe('validateArtifacts — provenance evasions (regression)', () => {
   });
 });
 
+describe('validateArtifacts — body-copy provenance (paraphrase hard-fails)', () => {
+  // The captured source line. spec.bodyText carries verbatim body copy.
+  const SOURCE_BODY =
+    "Recordings loop. Speakers hiss. SNOOZ's natural and seamless sound helps you drift off and stay asleep.";
+
+  const withBody = (php: string, bodyText: string[] = [SOURCE_BODY]): ArtifactInput => ({
+    patterns: [{
+      slug: 'getsnooz/section-3',
+      php,
+      spec: { interactionModel: 'media-text', expectedText: [], bodyText, expectedAssets: [] },
+    }],
+  });
+
+  it('HARD-FAILS a reworded body paragraph (the getsnooz paraphrase class)', () => {
+    // The invented copy the earlier agent shipped — fully reworded, not in source.
+    const php =
+      `<!-- wp:paragraph --><p>Real fan-powered sound — no loops, no digital tracks. Just the deep, soothing rush of moving air that helps you fall asleep faster and stay asleep longer.</p><!-- /wp:paragraph -->`;
+    const r = validateArtifacts(withBody(php));
+    expect(r.ok).toBe(false);
+    expect(r.errors.some((e) => /body copy not source-verbatim/i.test(e.message))).toBe(true);
+  });
+
+  it('PASSES verbatim body copy that differs only by entity/whitespace/glyph normalization', () => {
+    // Same source line but with HTML entity (&#8217; / &nbsp;), an em-dash, and an
+    // ellipsis char — all LEGIT renderings of the captured text. Must NOT fail.
+    const php =
+      `<!-- wp:paragraph --><p>Recordings&nbsp;loop. Speakers hiss. SNOOZ&#8217;s natural and seamless sound helps you drift off and stay asleep.</p><!-- /wp:paragraph -->`;
+    const r = validateArtifacts(withBody(php));
+    expect(r.ok).toBe(true);
+    expect(r.errors.some((e) => /body copy/i.test(e.message))).toBe(false);
+  });
+
+  it('does NOT flag the missing-content placeholder as paraphrase (honest gap is exempt)', () => {
+    // bodyText non-empty → the hard gate is ARMED; the placeholder is still exempt.
+    const php =
+      `<!-- wp:paragraph --><p style="opacity:0.6">[review text not captured]</p><!-- /wp:paragraph -->`;
+    const r = validateArtifacts(withBody(php));
+    expect(r.errors.some((e) => /body copy/i.test(e.message))).toBe(false);
+  });
+
+  it('does NOT treat a star-glyph rating run or a price as body prose (gate armed)', () => {
+    const php =
+      `<!-- wp:paragraph --><p>★★★★★</p><!-- /wp:paragraph --><!-- wp:paragraph --><p>$199.99</p><!-- /wp:paragraph -->`;
+    const r = validateArtifacts(withBody(php));
+    expect(r.errors.some((e) => /body copy/i.test(e.message))).toBe(false);
+  });
+
+  it('BACK-COMPAT: a legacy spec with no captured bodyText does NOT hard-fail body prose (soft warning only)', () => {
+    // Reworded prose, but spec.bodyText is empty (pre-capture spec) → the gate is
+    // NOT armed, so this stays a warning, not a failure — no regression for
+    // in-flight builds whose source body copy the geometry spec never recorded.
+    const php =
+      `<!-- wp:paragraph --><p>Some entirely different sentence the geometry spec never captured anywhere at all.</p><!-- /wp:paragraph -->`;
+    const r = validateArtifacts(withBody(php, []));
+    expect(r.errors.some((e) => /body copy not source-verbatim/i.test(e.message))).toBe(false);
+  });
+
+  it('folds bodyText into the corpus so multi-paragraph verbatim copy passes', () => {
+    const php =
+      `<!-- wp:paragraph --><p>This isn't a speaker - there's a fan inside. Result: a smooth, room-filling hush</p><!-- /wp:paragraph -->` +
+      `<!-- wp:paragraph --><p>Recordings loop. Speakers hiss. SNOOZ's natural and seamless sound helps you drift off and stay asleep.</p><!-- /wp:paragraph -->`;
+    const r = validateArtifacts(withBody(php, [
+      "This isn't a speaker - there's a fan inside. Result: a smooth, room-filling hush",
+      SOURCE_BODY,
+    ]));
+    expect(r.ok).toBe(true);
+  });
+
+  it('em-dash heading normalizes to the hyphenated source form (no false heading failure)', () => {
+    const php = `<!-- wp:heading --><h2>There's white noise — and there's SNOOZ.</h2><!-- /wp:heading -->`;
+    const r = validateArtifacts({ patterns: [{
+      slug: 'getsnooz/section-3',
+      php,
+      spec: { interactionModel: 'media-text', expectedText: ["There's white noise - and there's SNOOZ."], expectedAssets: [] },
+    }] });
+    expect(r.errors.some((e) => /provenance/i.test(e.message))).toBe(false);
+  });
+});
+
 describe('validateArtifacts — pattern-file header (regression: real builder output)', () => {
   it('allows the standard WP pattern-file PHP doc-comment header', () => {
     const php = `<?php\n/**\n * Title: Hero\n * Slug: site/section-0\n * Categories: featured\n */\n?>\n<!-- wp:heading --><h2>Our Services</h2><!-- /wp:heading -->`;

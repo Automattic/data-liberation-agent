@@ -602,6 +602,19 @@ export interface SectionSpec {
   top: number;
   height: number;
   headings: string[];
+  /**
+   * Source-VERBATIM body copy captured from this section's served HTML — every
+   * visible `<p>`/`<li>` text node, in document order, deduped. This is the
+   * provenance source for non-heading prose: the pattern builder MUST emit
+   * section body paragraphs from THIS array verbatim (entity/whitespace
+   * normalization only), never reworded, and `validateArtifacts` checks emitted
+   * body text against it. When a template slot wants body copy this array does
+   * not contain, the builder uses the missing-content placeholder + run-report
+   * flag — it must NEVER synthesize or paraphrase. (The earlier getsnooz build
+   * lacked this field, so body copy had no source to verify against and was
+   * invented; capturing it here closes that gap.)
+   */
+  bodyText: string[];
   buttonLabels: string[];
   images: SectionSpecImage[];
   /** Inline SVG / icon-font glyphs in the section's Y-band (icons above cards). */
@@ -652,6 +665,7 @@ interface RawIconCandidate {
 interface RawSection {
   features: SectionFeatures;
   headings: string[];
+  bodyText: string[];
   buttonLabels: string[];
   images: Array<{ src: string; alt: string; kind: 'img' | 'background'; w: number; h: number }>;
   iconCandidates: RawIconCandidate[];
@@ -1158,6 +1172,24 @@ export async function extractFull(
           return (d.textContent || '').trim().length > 4;
         });
 
+        // Source-VERBATIM body copy: every visible <p>/<li> text node, in
+        // document order, deduped. This is the provenance source for non-heading
+        // prose so the builder never has to invent it. Captured here (not later)
+        // because only the live DOM knows what's actually visible. Reviews are
+        // captured separately (spec.reviews) and buttons via buttonLabels, so we
+        // skip <p>/<li> that sit inside a button/anchor-button to avoid dupes.
+        const bodyTextSeen = new Set<string>();
+        const bodyText: string[] = [];
+        for (const p of paragraphEls) {
+          const inButton = !!(p as HTMLElement).closest('button,[role="button"]');
+          if (inButton) continue;
+          const t = (p.textContent || '').replace(/\s+/g, ' ').trim();
+          if (t.length < 5 || t.length > 600) continue;
+          if (bodyTextSeen.has(t)) continue;
+          bodyTextSeen.add(t);
+          bodyText.push(t.slice(0, 600));
+        }
+
         const imgEls = descendants.filter((d) => d.tagName === 'IMG') as HTMLImageElement[];
         const buttonEls = descendants.filter((d) => {
           const tag = d.tagName.toLowerCase();
@@ -1499,6 +1531,7 @@ export async function extractFull(
         return {
           features,
           headings,
+          bodyText: bodyText.slice(0, 40),
           buttonLabels,
           images: allImages.slice(0, 36),
           iconCandidates: iconCandidates.slice(0, 48),
@@ -1557,6 +1590,7 @@ export async function extractFull(
       top: rr.features.top,
       height: rr.features.height,
       headings: rr.headings,
+      bodyText: rr.bodyText ?? [],
       buttonLabels: rr.buttonLabels,
       images: rr.images.map((im) => ({
         url: rewriteThroughMediaMap(im.src, mediaMap),

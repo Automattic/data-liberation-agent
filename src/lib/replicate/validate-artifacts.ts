@@ -17,21 +17,73 @@ export const ALLOWED_INTERACTION_MODELS = new Set([
 ]);
 
 function decodeEntities(v: string): string {
-  return v.replace(/&#8217;|&#039;|&apos;/g, "'").replace(/&amp;/g, '&')
-          .replace(/&quot;/g, '"').replace(/&nbsp;/g, ' ');
+  return v
+    .replace(/&#8217;|&#8216;|&#039;|&#39;|&apos;|&rsquo;|&lsquo;/g, "'")
+    .replace(/&amp;/g, '&')
+    .replace(/&#8220;|&#8221;|&quot;|&ldquo;|&rdquo;/g, '"')
+    .replace(/&#8211;|&#8212;|&ndash;|&mdash;/g, '-')
+    .replace(/&hellip;|&#8230;/g, '...')
+    .replace(/&nbsp;|&#160;/g, ' ');
 }
+/**
+ * Normalize text for provenance comparison. Beyond entity decoding + whitespace
+ * collapse + lowercasing, we fold the typographic glyphs that LEGITIMATELY differ
+ * between source and emitted markup — smart quotes → straight, en/em dash →
+ * hyphen, ellipsis char → `...` — so that genuinely-verbatim copy (which only
+ * differs from source by these renderings) compares equal, while reworded copy
+ * still differs. This is the line between "legit normalization" and "paraphrase".
+ */
 function normalizeText(v: string): string {
-  return decodeEntities(v.replace(/<[^>]+>/g, ' ')).replace(/\s+/g, ' ').trim().toLowerCase();
+  return decodeEntities(v.replace(/<[^>]+>/g, ' '))
+    .replace(/[‘’‛]/g, "'")
+    .replace(/[“”]/g, '"')
+    .replace(/[–—‒]/g, '-')
+    .replace(/…/g, '...')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
 }
 /** Visible text content of block markup, stripped of wp comments + php + tags. */
 function visibleText(php: string): string {
   return normalizeText(php.replace(/<!--[\s\S]*?-->/g, ' ').replace(/<\?[\s\S]*?\?>/g, ' '));
 }
 
+/**
+ * "Significant" words for body-copy containment scoring: drop short
+ * stop-word-ish tokens and pure punctuation/glyph runs so the ratio reflects
+ * meaningful lexical content, not noise. Stars/prices/bullets are handled by the
+ * caller (they are not body prose), so here we only strip non-word characters.
+ */
+function significantWords(norm: string): string[] {
+  return norm
+    .split(' ')
+    .map((w) => w.replace(/[^a-z0-9'$.%-]/g, ''))
+    .filter((w) => w.replace(/[^a-z0-9]/g, '').length > 2);
+}
+
+/**
+ * BODY-COPY provenance threshold. A body paragraph passes when it is either a
+ * normalized substring of the joined source OR has at least this fraction of its
+ * significant words present in the source corpus. Verbatim copy (post entity/
+ * whitespace/glyph normalization) scores 1.0; a reworded paraphrase drops well
+ * below this. Set high enough to reject paraphrase, with headroom for a stray
+ * captured artifact (a trailing word, a split node) so legit copy isn't flagged.
+ */
+export const BODY_COPY_CONTAINMENT_THRESHOLD = 0.8;
+
 export interface PatternSpec {
   interactionModel: string;
   /** Verbatim captured text the pattern is allowed to contain. */
   expectedText: string[];
+  /**
+   * Source-VERBATIM body copy captured from the section (every `<p>`/`<li>` text
+   * node — see `SectionSpec.bodyText`). When present it is folded into the
+   * source corpus for the BODY-COPY provenance check. Emitted body paragraphs
+   * must be substantially contained in `expectedText` ∪ `bodyText`; reworded
+   * prose fails hard. Optional for back-compat — when absent, only `expectedText`
+   * forms the corpus.
+   */
+  bodyText?: string[];
   /** Local asset paths the pattern is expected to reference. */
   expectedAssets: string[];
 }
@@ -95,15 +147,23 @@ export function validateArtifacts(input: ArtifactInput): ValidationReport {
       fail('inline event handler attribute (on*=) in markup (not allowed)');
     }
 
-    // --- provenance: emitted text must be a subset of spec.expectedText ---
-    const allowed = normalizeText(p.spec.expectedText.join(' '));
-    const allowedEntries = p.spec.expectedText.map((t) => normalizeText(t));
+    // --- provenance: emitted copy must trace to the captured source ---
+    //
+    // The source corpus is the spec's captured text: headings + button labels +
+    // review quotes (expectedText) PLUS captured body copy (bodyText). Body
+    // paragraphs are checked against the union; headings against expectedText
+    // entries individually.
+    const corpus = normalizeText([...p.spec.expectedText, ...(p.spec.bodyText ?? [])].join('  '));
+    const allowedEntries = [...p.spec.expectedText, ...(p.spec.bodyText ?? [])].map((t) =>
+      normalizeText(t),
+    );
     const emitted = visibleText(p.php);
     for (const word of emitted.split(' ').filter((w) => w.length > 3)) {
-      if (!allowed.includes(word)) {
+      if (!corpus.includes(word)) {
         warnings.push({ slug: p.slug, message: `possible non-source content: "${word}"` });
       }
     }
+
     // Heading inner-HTML is normalized (tags stripped) so nested <span>/<a> can't
     // hide invented copy; each heading must be contained in a SINGLE spec entry,
     // not merely scattered across the joined blob.
@@ -111,6 +171,56 @@ export function validateArtifacts(input: ArtifactInput): ValidationReport {
       const h = normalizeText(heading[1]);
       if (h && !allowedEntries.some((e) => e.includes(h))) {
         fail(`heading "${h}" not found in source spec (provenance)`);
+      }
+    }
+
+    // BODY-COPY provenance — the hard gate that stops paraphrase from shipping.
+    //
+    // Before, body prose only emitted soft per-word warnings, so a fully
+    // reworded paragraph ("Real fan-powered sound — no loops…") sailed through
+    // while the real source line never made it in. Now every emitted body
+    // paragraph (a <p> that is real prose — not a heading, button, star glyph,
+    // price, bullet marker, or our own missing-content placeholder) must be
+    // SUBSTANTIALLY CONTAINED in the captured source: either a normalized
+    // substring of the corpus, or ≥ BODY_COPY_CONTAINMENT_THRESHOLD of its
+    // significant words present in the corpus. Verbatim copy (post entity/
+    // whitespace/glyph normalization) scores 1.0 and passes; a paraphrase falls
+    // below the threshold and HARD-FAILS. Honest gaps use the clearly-marked
+    // missing-content placeholder, which is exempt by design.
+    //
+    // GATING (back-compat): the hard fail only fires when the spec actually
+    // carries captured body copy (`spec.bodyText` non-empty). A spec that
+    // predates body-text capture has NO source to compare body prose against —
+    // so failing would punish legitimately-verbatim copy whose source the spec
+    // simply didn't record (the line lives in the captured HTML, not the
+    // geometry spec). For those legacy specs we keep the prior soft-warning
+    // behavior. New extractions populate `spec.bodyText` (see
+    // SectionSpec.bodyText) and get the full hard gate. This is why
+    // `liberate_section_extract` now captures body copy — it's what arms the gate.
+    const hasBodyCorpus = (p.spec.bodyText ?? []).length > 0;
+    const isPlaceholder = (t: string): boolean =>
+      /\bnot captured\]?$|\[(review|author|text|content)\b|image unavailable/i.test(t);
+    for (const para of (hasBodyCorpus ? p.php.matchAll(/<p\b[^>]*>([\s\S]*?)<\/p>/gi) : [])) {
+      const raw = para[1];
+      const t = normalizeText(raw);
+      if (!t) continue;
+      // Skip non-prose paragraph slots: star runs, price/money, bullet/byline,
+      // single-token labels, and the sanctioned missing-content placeholder.
+      if (/^[★☆\s]+$/.test(raw)) continue; // star-glyph rating run
+      if (isPlaceholder(t)) continue; // honest missing-content marker
+      const words = significantWords(t);
+      if (words.length < 3) continue; // labels / prices / short bylines — not prose
+      if (corpus.includes(t)) continue; // verbatim substring → provenance-clean
+      const present = words.filter((w) => corpus.includes(w)).length;
+      const ratio = present / words.length;
+      if (ratio < BODY_COPY_CONTAINMENT_THRESHOLD) {
+        const preview = t.length > 80 ? `${t.slice(0, 80)}…` : t;
+        fail(
+          `body copy not source-verbatim (provenance): "${preview}" — ` +
+            `${present}/${words.length} words trace to captured source ` +
+            `(< ${Math.round(BODY_COPY_CONTAINMENT_THRESHOLD * 100)}% threshold). ` +
+            `Emit captured text verbatim or use the missing-content placeholder; never paraphrase.`,
+        );
       }
     }
   }
