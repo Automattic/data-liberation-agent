@@ -15,13 +15,15 @@
 // See src/lib/replicate/theme-scaffold.ts for the mapping logic.
 //
 
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type { Handler } from '../handler-types.js';
 import { buildThemeScaffold } from '../../lib/replicate/theme-scaffold.js';
 import { extractThemeChromeFromHtml } from '../../lib/replicate/source-chrome.js';
-import { parseFontFaces, consolidateFontFaces } from '../../lib/replicate/font-capture.js';
+import { parseFontFaces, consolidateFontFaces, matchCapturedFamily } from '../../lib/replicate/font-capture.js';
 import { downloadFonts } from '../../lib/replicate/font-capture-download.js';
+import { findFreeReplacement, fallbackReplacement, firstFamilyToken } from '../../lib/replicate/font-substitution.js';
+import { downloadReplacementFont } from '../../lib/replicate/font-substitution-download.js';
 
 interface ScaffoldArgs {
   outputDir?: string;
@@ -61,6 +63,44 @@ function readObservedTypography(typographyPath: string): TypographyObserved {
     return out;
   } catch {
     return out;
+  }
+}
+
+/** Filesystem-safe basename for a logo URL (last path segment, ext preserved). */
+function logoFilename(url: string): string {
+  try {
+    const u = new URL(url);
+    const seg = u.pathname.slice(u.pathname.lastIndexOf('/') + 1) || 'logo';
+    const safe = seg.replace(/[^A-Za-z0-9._-]/g, '_');
+    return /\.[a-z0-9]{2,4}$/i.test(safe) ? safe : `${safe}.png`;
+  } catch {
+    return 'logo.png';
+  }
+}
+
+/**
+ * Download the captured header logo from the source CDN into the theme's
+ * `assets/` directory so the header references it locally instead of hot-linking
+ * the source CDN. Returns the theme-relative path (e.g. "assets/SNOOZ-Logo.png")
+ * or undefined when there's no logo / the download fails (header then falls back
+ * to the captured CDN URL).
+ */
+async function downloadLogo(logoUrl: string | undefined, themeDir: string): Promise<string | undefined> {
+  if (!logoUrl) return undefined;
+  const filename = logoFilename(logoUrl);
+  const relPath = `assets/${filename}`;
+  const destPath = join(themeDir, relPath);
+  if (existsSync(destPath)) return relPath;
+  try {
+    const res = await fetch(logoUrl, { signal: AbortSignal.timeout(30000) });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (buf.length === 0) throw new Error('empty response body');
+    mkdirSync(join(themeDir, 'assets'), { recursive: true });
+    writeFileSync(destPath, buf);
+    return relPath;
+  } catch {
+    return undefined;
   }
 }
 
@@ -124,6 +164,38 @@ export const themeScaffoldHandler: Handler = async (args, ctx) => {
 
   const observed = readObservedTypography(resolve(join(a.outputDir, 'typography.json')));
 
+  // ── Commercial / uncapturable → free font substitution ──────────────────────
+  // When the observed BODY (or display) family has no self-hostable @font-face
+  // among the captured fonts — e.g. getsnooz's body `quasimoda` is Adobe Typekit
+  // (CSS-only on use.typekit.net, no reachable woff) — the replica would render
+  // body copy in a bare `sans-serif` fallback. Map the unhostable family to the
+  // closest FREE web font, self-host its woff2 into assets/fonts/, and bind the
+  // body family to it. Headings (Larsseit) are usually captured, so the display
+  // substitute only fires when the heading font is also unhostable.
+  const fontSubstitutions: Array<{ from: string; to: string; rationale: string }> = [];
+
+  async function substituteIfUnhostable(observedStack: string | undefined): Promise<string | undefined> {
+    const first = firstFamilyToken(observedStack);
+    if (!first) return undefined;
+    // Already self-hostable from the captured set? Keep it.
+    if (matchCapturedFamily(observedStack, capturedFonts)) return undefined;
+    const replacement = findFreeReplacement(observedStack) ?? fallbackReplacement(observedStack);
+    const result = await downloadReplacementFont(replacement, { themeDir });
+    if (result.faces.length === 0) {
+      for (const e of result.errors) fontErrors.push({ family: replacement.family, error: e.error });
+      return undefined;
+    }
+    capturedFonts = [...capturedFonts, ...result.faces];
+    fontSubstitutions.push({ from: first, to: replacement.family, rationale: replacement.rationale });
+    return replacement.family;
+  }
+
+  const bodySubstituteFamily = await substituteIfUnhostable(observed.bodyFamily);
+  const displaySubstituteFamily = await substituteIfUnhostable(observed.headingFamily);
+
+  // ── Localize the header logo (download CDN logo → theme assets/) ─────────────
+  const localLogoPath = await downloadLogo(sourceChrome?.header?.logoUrl, themeDir);
+
   const themeFiles = buildThemeScaffold({
     foundation: foundation as Parameters<typeof buildThemeScaffold>[0]['foundation'],
     themeSlug: a.themeSlug,
@@ -132,9 +204,12 @@ export const themeScaffoldHandler: Handler = async (args, ctx) => {
     themeDescription: a.themeDescription,
     sourceChrome,
     capturedFonts,
+    localLogoPath,
     headingLineHeights: observed.lineHeights,
     headingFamily: observed.headingFamily,
     bodyFamily: observed.bodyFamily,
+    bodySubstituteFamily,
+    displaySubstituteFamily,
   });
 
   return ctx.textResult({
@@ -145,6 +220,8 @@ export const themeScaffoldHandler: Handler = async (args, ctx) => {
     relativePaths: themeFiles.map((f) => f.relativePath),
     sourceChromeUsed: Boolean(sourceChrome?.header?.links?.length || sourceChrome?.header?.logoUrl),
     capturedFonts: capturedFonts.map((f) => ({ family: f.family, weight: f.weight, localPath: f.localPath })),
+    fontSubstitutions,
+    localLogoPath,
     fontErrors,
   });
 };

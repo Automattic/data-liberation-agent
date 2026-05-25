@@ -43,10 +43,13 @@ const FOUNDATION_FIXTURE = {
 };
 
 describe('buildThemeScaffold', () => {
-  it('emits the canonical 6-file bundle', () => {
+  it('emits the canonical theme bundle (core files + header icon assets)', () => {
     const files = buildThemeScaffold({ foundation: FOUNDATION_FIXTURE, themeSlug: 'getsnooz-com-replica' });
     const paths = files.map((f) => f.relativePath).sort();
     expect(paths).toEqual([
+      'assets/icon-account.svg',
+      'assets/icon-cart.svg',
+      'assets/icon-search.svg',
       'functions.php',
       'parts/footer.html',
       'parts/header.html',
@@ -337,6 +340,85 @@ describe('buildThemeScaffold', () => {
       // The display family still exists (from foundation), so heading elements bind,
       // but no @font-face rules are emitted without captured fonts.
       expect(css).not.toContain('@font-face');
+    });
+
+    it('binds the BODY family to a self-hosted free substitute (quasimoda → Hanken Grotesk)', () => {
+      // The handler downloads Hanken Grotesk (the free substitute for the
+      // unhostable Typekit body font) into capturedFonts and passes
+      // bodySubstituteFamily; the scaffold must rebind body to it instead of the
+      // bare `quasimoda, sans-serif` fallback.
+      const captured = [
+        ...LARSSEIT,
+        { family: 'Hanken Grotesk', src: 'hk', format: 'woff2', weight: '400 700', style: 'normal', localPath: 'assets/fonts/HankenGrotesk-400-700.woff2' },
+      ];
+      const files = buildThemeScaffold({
+        foundation: { ...FOUNDATION_FIXTURE, typography: { families: { body: { value: 'quasimoda, sans-serif' }, display: { value: 'Poppins, sans-serif' } } } },
+        themeSlug: 'site-replica',
+        capturedFonts: captured,
+        headingFamily: 'Larsseit, sans-serif',
+        bodyFamily: 'quasimoda, sans-serif',
+        bodySubstituteFamily: 'Hanken Grotesk',
+      });
+      const themeJson = JSON.parse(files.find((f) => f.relativePath === 'theme.json')!.content);
+      const body = themeJson.settings.typography.fontFamilies.find((e: { slug: string }) => e.slug === 'body');
+      expect(body.fontFamily).toBe('Hanken Grotesk, sans-serif');
+      expect(body.fontFace.length).toBeGreaterThanOrEqual(1);
+      expect(body.fontFace[0].src[0]).toContain('assets/fonts/HankenGrotesk');
+      // styles.typography.fontFamily resolves to the body preset (the substitute).
+      expect(themeJson.styles.typography.fontFamily).toBe('var(--wp--preset--font-family--body)');
+      // No bare `quasimoda` left as the body family.
+      expect(body.fontFamily).not.toContain('quasimoda');
+    });
+  });
+
+  describe('header utility icons', () => {
+    const CHROME = { header: { logoUrl: 'http://x/logo.png', logoAlt: 'L', links: [{ label: 'Shop', href: '/shop', external: false }] } };
+
+    it('renders a search / account / cart icon cluster in the header (core/image, no wp:html)', () => {
+      const files = buildThemeScaffold({ foundation: FOUNDATION_FIXTURE, themeSlug: 'site-replica', sourceChrome: CHROME });
+      const header = files.find((f) => f.relativePath === 'parts/header.html')!.content;
+      expect(header).toContain('clone-header-icons');
+      // cart links to /cart, account to /account, search to a query
+      expect(header).toContain('href="/cart"');
+      expect(header).toContain('href="/account"');
+      expect(header).toContain('href="/?s="');
+      // referenced as core/image SVG assets, NOT inline wp:html (banned)
+      expect(header).toContain('/wp-content/themes/site-replica/assets/icon-cart.svg');
+      expect(header).not.toContain('wp:html');
+    });
+
+    it('ships the icon SVGs as theme assets', () => {
+      const files = buildThemeScaffold({ foundation: FOUNDATION_FIXTURE, themeSlug: 'site-replica', sourceChrome: CHROME });
+      const cart = files.find((f) => f.relativePath === 'assets/icon-cart.svg');
+      expect(cart).toBeDefined();
+      expect(cart!.content).toContain('<svg');
+      expect(cart!.content).toContain('stroke="#2f394e"');
+      expect(files.find((f) => f.relativePath === 'assets/icon-search.svg')).toBeDefined();
+      expect(files.find((f) => f.relativePath === 'assets/icon-account.svg')).toBeDefined();
+    });
+  });
+
+  describe('localized header logo', () => {
+    it('references a theme-asset logo path when localLogoPath is set (not the CDN url)', () => {
+      const files = buildThemeScaffold({
+        foundation: FOUNDATION_FIXTURE,
+        themeSlug: 'site-replica',
+        sourceChrome: { header: { logoUrl: 'https://cdn.example.com/SNOOZ-Logo.png', logoAlt: 'SNOOZ', links: [{ label: 'Shop', href: '/shop', external: false }] } },
+        localLogoPath: 'assets/SNOOZ-Logo.png',
+      });
+      const header = files.find((f) => f.relativePath === 'parts/header.html')!.content;
+      expect(header).toContain('/wp-content/themes/site-replica/assets/SNOOZ-Logo.png');
+      expect(header).not.toContain('cdn.example.com');
+    });
+
+    it('falls back to the captured CDN logo url when no local logo was downloaded', () => {
+      const files = buildThemeScaffold({
+        foundation: FOUNDATION_FIXTURE,
+        themeSlug: 'site-replica',
+        sourceChrome: { header: { logoUrl: 'https://cdn.example.com/SNOOZ-Logo.png', logoAlt: 'SNOOZ', links: [{ label: 'Shop', href: '/shop', external: false }] } },
+      });
+      const header = files.find((f) => f.relativePath === 'parts/header.html')!.content;
+      expect(header).toContain('cdn.example.com/SNOOZ-Logo.png');
     });
   });
 });

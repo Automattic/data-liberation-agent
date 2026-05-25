@@ -58,6 +58,14 @@ export interface ThemeScaffoldOpts {
    */
   capturedFonts?: LocalFontFace[];
   /**
+   * Theme-relative path to a LOCALIZED header logo (e.g. "assets/snooz-logo.png")
+   * downloaded from the source CDN into the theme. When set, the header `<img>`
+   * references it via `/wp-content/themes/<themeSlug>/<path>` instead of
+   * hot-linking the source CDN — offline-durable. Falls back to the captured
+   * `sourceChrome.header.logoUrl` (CDN) when absent.
+   */
+  localLogoPath?: string;
+  /**
    * Per-heading line-heights from typography.json (e.g. `{ h1: "1.1", h2: "1.2" }`).
    * Bogus `0` / `0px` values are sanitized to a sensible default before emit.
    */
@@ -70,6 +78,15 @@ export interface ThemeScaffoldOpts {
   headingFamily?: string;
   /** Observed body font stack from typography.json (e.g. "quasimoda, sans-serif"). */
   bodyFamily?: string;
+  /**
+   * Free family name substituted for an UNHOSTABLE body font (e.g. Typekit
+   * `quasimoda` → `Hanken Grotesk`). When set, the body family is bound to this
+   * (self-hosted) family instead of the bare declared stack. Its `@font-face`
+   * faces must already be present in `capturedFonts` (downloaded by the handler).
+   */
+  bodySubstituteFamily?: string;
+  /** Free family substituted for an unhostable DISPLAY font (rare — usually self-hosted). */
+  displaySubstituteFamily?: string;
 }
 
 /** Extremely loose type — mirrors what design-foundation.json actually contains. */
@@ -124,11 +141,18 @@ export function buildThemeScaffold(opts: ThemeScaffoldOpts): ReplicaFile[] {
 
   return [
     { relativePath: 'style.css', content: buildStyleCss({ themeName, themeSlug, themeDescription, capturedFonts }) },
-    { relativePath: 'theme.json', content: buildThemeJson(foundation, { capturedFonts, headingLineHeights: opts.headingLineHeights, headingFamily: opts.headingFamily, bodyFamily: opts.bodyFamily }) },
+    { relativePath: 'theme.json', content: buildThemeJson(foundation, { capturedFonts, headingLineHeights: opts.headingLineHeights, headingFamily: opts.headingFamily, bodyFamily: opts.bodyFamily, bodySubstituteFamily: opts.bodySubstituteFamily, displaySubstituteFamily: opts.displaySubstituteFamily }) },
     { relativePath: 'functions.php', content: buildFunctionsPhp({ themeSlug }) },
     { relativePath: 'templates/index.html', content: buildIndexTemplate() },
-    { relativePath: 'parts/header.html', content: buildHeaderPart({ chrome: opts.sourceChrome?.header }) },
+    { relativePath: 'parts/header.html', content: buildHeaderPart({
+      themeSlug,
+      chrome: opts.sourceChrome?.header,
+      localLogoUrl: opts.localLogoPath ? `/wp-content/themes/${themeSlug}/${opts.localLogoPath.replace(/^\/+/, '')}` : undefined,
+    }) },
     { relativePath: 'parts/footer.html', content: buildFooterPart({ siteTitle: opts.siteTitle ?? themeName, chrome: opts.sourceChrome?.footer }) },
+    // Header utility-icon SVG assets (shipped as files; referenced via core/image
+    // in the header — wp:html is banned, so glyphs can't be inlined).
+    ...buildHeaderIconAssets(),
   ];
 }
 
@@ -212,12 +236,19 @@ interface ThemeJsonOpts {
   headingLineHeights?: Record<string, string>;
   headingFamily?: string;
   bodyFamily?: string;
+  bodySubstituteFamily?: string;
+  displaySubstituteFamily?: string;
 }
 
 function buildThemeJson(f: DesignFoundation, opts: ThemeJsonOpts = {}): string {
   const captured = opts.capturedFonts ?? [];
   const palette = buildPalette(f);
-  const fontFamilies = buildFontFamilies(f, captured, { headingFamily: opts.headingFamily, bodyFamily: opts.bodyFamily });
+  const fontFamilies = buildFontFamilies(f, captured, {
+    headingFamily: opts.headingFamily,
+    bodyFamily: opts.bodyFamily,
+    bodySubstituteFamily: opts.bodySubstituteFamily,
+    displaySubstituteFamily: opts.displaySubstituteFamily,
+  });
   const breakpoints = buildBreakpoints(f);
   const blockOverrides = buildBlockOverrides(f);
   const elements = buildElementStyles(f, fontFamilies, opts.headingLineHeights);
@@ -305,7 +336,7 @@ interface FontFamilyEntry {
 function buildFontFamilies(
   f: DesignFoundation,
   capturedFonts: LocalFontFace[] = [],
-  hints: { headingFamily?: string; bodyFamily?: string } = {},
+  hints: { headingFamily?: string; bodyFamily?: string; bodySubstituteFamily?: string; displaySubstituteFamily?: string } = {},
 ): FontFamilyEntry[] {
   const fams = f.typography?.families ?? {};
   const out: FontFamilyEntry[] = [];
@@ -313,9 +344,15 @@ function buildFontFamilies(
   const capturedBySlug = new Map(capturedEntries.map((e) => [e.slug, e]));
 
   // ── Body (primary) ────────────────────────────────────────────────────────
-  // Try the foundation body token first, then the observed body stack hint.
+  // Priority: (1) a self-hosted FREE substitute for an unhostable body font
+  // (e.g. Typekit quasimoda → Hanken Grotesk — its faces are in capturedFonts),
+  // (2) a captured family matching the foundation body token, (3) the observed
+  // body stack hint. A substitute beats the bare declared stack so body copy
+  // renders in a real web font instead of a CSS-generic fallback.
   const body = fams.body?.value;
+  const bodySubMatch = matchCapturedFamily(hints.bodySubstituteFamily, capturedFonts);
   const bodyMatch =
+    bodySubMatch ??
     matchCapturedFamily(typeof body === 'string' ? body : null, capturedFonts) ??
     matchCapturedFamily(hints.bodyFamily, capturedFonts);
   if (bodyMatch) {
@@ -340,7 +377,8 @@ function buildFontFamilies(
   const display = fams.display?.value;
   const displayMatch =
     matchCapturedFamily(hints.headingFamily, capturedFonts) ??
-    matchCapturedFamily(typeof display === 'string' ? display : null, capturedFonts);
+    matchCapturedFamily(typeof display === 'string' ? display : null, capturedFonts) ??
+    matchCapturedFamily(hints.displaySubstituteFamily, capturedFonts);
   if (displayMatch) {
     const e = capturedBySlug.get(slugify(displayMatch));
     if (e) out.push({ ...e, slug: 'display', name: 'Display' });
@@ -571,9 +609,11 @@ function buildIndexTemplate(): string {
 
 // -- parts/header.html -------------------------------------------------------
 
-function buildHeaderPart(args: { chrome?: NonNullable<ThemeChromeEvidence['header']> } = {}): string {
+function buildHeaderPart(args: { themeSlug?: string; chrome?: NonNullable<ThemeChromeEvidence['header']>; localLogoUrl?: string } = {}): string {
   const links = args.chrome?.links ?? [];
-  const logoUrl = args.chrome?.logoUrl;
+  // Prefer a localized (theme-asset) logo over the hot-linked source CDN URL so
+  // the header is offline-durable.
+  const logoUrl = args.localLogoUrl ?? args.chrome?.logoUrl;
   if (links.length === 0 && !logoUrl) {
     return buildGenericHeaderPart();
   }
@@ -597,20 +637,77 @@ function buildHeaderPart(args: { chrome?: NonNullable<ThemeChromeEvidence['heade
     ? links.map((link) => buildNavigationLink(link)).join('\n')
     : '<!-- wp:page-list /-->';
 
+  // Header utility-icon cluster (search / account / cart). The source-chrome
+  // extractor intentionally drops these affordances from the PRIMARY nav, but
+  // a faithful storefront header still shows them on the right. `wp:html` is
+  // banned project-wide, so each glyph is shipped as a theme SVG asset
+  // (assets/icon-*.svg) and referenced from a `core/image` link — self-contained
+  // and offline-durable.
+  const icons = buildHeaderIcons({ themeSlug: args.themeSlug });
+
   return `<!-- wp:group {"align":"full","layout":{"type":"constrained"},"style":{"spacing":{"padding":{"top":"18px","bottom":"18px","left":"var(--wp--preset--spacing--40)","right":"var(--wp--preset--spacing--40)"}}},"backgroundColor":"${bgSlug}","textColor":"${textSlug}"} -->
 <div class="wp-block-group alignfull ${textClass} ${bgClass} has-text-color has-background" style="padding-top:18px;padding-right:var(--wp--preset--spacing--40);padding-bottom:18px;padding-left:var(--wp--preset--spacing--40)">
 <!-- wp:group {"layout":{"type":"flex","justifyContent":"space-between","flexWrap":"nowrap"}} -->
 <div class="wp-block-group">
 ${brand}
 
+<!-- wp:group {"layout":{"type":"flex","justifyContent":"right","flexWrap":"nowrap","verticalAlignment":"center"},"style":{"spacing":{"blockGap":"var:preset|spacing|40"}}} -->
+<div class="wp-block-group">
 <!-- wp:navigation {"textColor":"${textSlug}","overlayMenu":"mobile","layout":{"type":"flex","justifyContent":"right","orientation":"horizontal"},"style":{"typography":{"fontSize":"14px","fontWeight":"700","textTransform":"uppercase"}}} -->
 ${navigation}
 <!-- /wp:navigation -->
+
+${icons}
+</div>
+<!-- /wp:group -->
 </div>
 <!-- /wp:group -->
 </div>
 <!-- /wp:group -->
 `;
+}
+
+/**
+ * Stroke SVG glyphs for the header utility icons. `stroke="currentColor"` (not
+ * inline-styled) lets the rendered <img> show the navy line art; sized 22px.
+ * Shipped as standalone theme assets (see buildHeaderIconAssets) because
+ * `wp:html` is banned — they're referenced from `core/image` blocks.
+ */
+const HEADER_ICON_SVGS: Record<string, string> = {
+  search: `<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#2f394e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Search"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>`,
+  account: `<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#2f394e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Account"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>`,
+  cart: `<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#2f394e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Cart"><circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/></svg>`,
+};
+
+/** Theme ReplicaFiles for the header icon SVG assets. */
+function buildHeaderIconAssets(): ReplicaFile[] {
+  return Object.entries(HEADER_ICON_SVGS).map(([name, svg]) => ({
+    relativePath: `assets/icon-${name}.svg`,
+    content: svg,
+  }));
+}
+
+/**
+ * Build the header's search / account / cart icon cluster as `core/image` links
+ * referencing the shipped SVG assets (no `wp:html`). search → /?s= ,
+ * account → /account, cart → /cart (Woo-compatible paths). Offline-durable.
+ */
+function buildHeaderIcons(args: { themeSlug?: string }): string {
+  const slug = args.themeSlug ?? 'replica';
+  const asset = (name: string): string => `/wp-content/themes/${slug}/assets/icon-${name}.svg`;
+
+  const link = (name: string, href: string, label: string): string =>
+    `<!-- wp:image {"width":"22px","height":"22px","sizeSlug":"full","linkDestination":"custom","className":"clone-header-icon"} -->
+<figure class="wp-block-image size-full is-resized clone-header-icon"><a href="${href}"><img src="${asset(name)}" alt="${label}" style="width:22px;height:22px"/></a></figure>
+<!-- /wp:image -->`;
+
+  return `<!-- wp:group {"className":"clone-header-icons","layout":{"type":"flex","flexWrap":"nowrap","verticalAlignment":"center"},"style":{"spacing":{"blockGap":"16px"}}} -->
+<div class="wp-block-group clone-header-icons">
+${link('search', '/?s=', 'Search')}
+${link('account', '/account', 'Account')}
+${link('cart', '/cart', 'Cart')}
+</div>
+<!-- /wp:group -->`;
 }
 
 function buildGenericHeaderPart(): string {
