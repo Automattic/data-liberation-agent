@@ -11,7 +11,9 @@ When reconstructing a header for a liberated site, the navigation MUST mirror th
 - **Use explicit `core/navigation-link`s** for the source's top-level primary menu items (label + href). Map to local pages where they exist; keep external destinations as-is.
 - **NEVER use `core/page-list` inside the header nav.** `page-list` auto-renders every published WP page — on an imported site that means junk like "Sample Page", "Checkout", "My account", "delete-account", recall-notice pages, and other non-nav pages. It does not reflect the source's actual menu.
 - **Use `core/image` / `core/site-logo` for the brand** with the source's real logo image — not `core/site-title` text, and not a product image. Fall back to `core/site-title` only when the source header has no logo image.
-- Drop mega-menu sub-links, the mobile-drawer duplicate menu, and social/account/cart/search icons from the primary nav.
+- **Localize the logo.** Download the source CDN logo into the theme's `assets/` (or the WP media library) and reference it via `/wp-content/themes/<slug>/assets/<file>` (or its uploaded URL) — do NOT hot-link the source CDN, so the header is offline-durable. The deterministic scaffold does this automatically (`localLogoPath`).
+- Drop mega-menu sub-links and the mobile-drawer duplicate menu from the PRIMARY nav.
+- **Re-add the utility-icon cluster (search / account / cart) on the right of the header** — these are dropped from the *primary nav menu* but a faithful storefront header still shows them. `wp:html` is banned, so ship each glyph as a theme SVG asset (`assets/icon-*.svg`) and reference it from a `core/image` link (search → `/?s=`, account → `/account`, cart → `/cart`). The deterministic scaffold emits this cluster. Give the SVG an explicit `stroke`/`fill` color (not `currentColor`) — an `<img>`-referenced SVG won't inherit text color.
 
 ## Key attributes
 

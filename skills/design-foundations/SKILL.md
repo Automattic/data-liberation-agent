@@ -145,6 +145,7 @@ Fill all five with token references (not raw values). Reference form: `"color.ac
 Flag things that will affect downstream theme generation:
 
 - Commercial fonts (e.g. Reckless, Displaay faces) → suggest open-source substitution (`Fraunces`, `Playfair`).
+- **Uncapturable fonts (Typekit / Monotype / hashed builder names) →** these can't be self-hosted (no reachable woff/woff2). The deterministic font pipeline now AUTO-SUBSTITUTES them to the closest FREE web font, self-hosts its woff2, and binds it as the theme's body/display family — see `references/theme-tokens.md` ("Commercial / uncapturable → free substitution"). Record the substitution as an `openQuestion` (`blocksReplica:false`) noting which family was swapped (e.g. `quasimoda → Hanken Grotesk`) so an operator can confirm the visual match; do NOT leave the family as a bare `sans-serif` fallback.
 - Font files loaded from unknown CDNs (no open license path).
 - Colors observed once or twice that look like one-off overrides rather than design-system tokens — worth flagging for operator review.
 

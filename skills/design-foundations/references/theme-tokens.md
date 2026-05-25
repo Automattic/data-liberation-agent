@@ -74,6 +74,7 @@ Many builder sites use commercial fonts via their own CDNs. You cannot ship thos
 
 | Captured family substring (case-insensitive) | Free replacement |
 | --- | --- |
+| `quasimoda` | Hanken Grotesk (Google Fonts) — closest free geometric-humanist grotesque (x-height + terminal shape); preferred over rounder Mulish / narrower Figtree |
 | `madefor-display`, `madefor-text`, `madefor` | Inter (Google Fonts) |
 | `helvetica-w01`, `helveticaneuew01`, `helveticaneuew02`, `helveticaneuew10` | Inter or system Helvetica Neue |
 | `helvetica neue`, `helvetica` | Inter or system stack |
@@ -100,6 +101,16 @@ Many builder sites use commercial fonts via their own CDNs. You cannot ship thos
 Match by case-insensitive substring against the captured font family from `typography.json`. Self-host via the theme's `assets/fonts/` directory and wire up `@font-face` rules in `style.css`. Never reference a commercial-font CDN (`parastorage.com`, `static.wixstatic.com`, `use.typekit.net`, `fonts.squarespace-cdn.com`, `uploads-ssl.webflow.com`).
 
 If the captured display element is actually the headline (not the `<h1>`), use that element's `fontSize` for the `xx-large` preset upper bound.
+
+### Commercial / uncapturable → free substitution (deterministic)
+
+This substitution is now **automated** in the deterministic theme-scaffold path — you usually don't hand-write it:
+
+- `src/lib/replicate/font-substitution.ts` holds the substitution table (commercial/uncapturable family → free replacement) plus the gstatic woff2 URLs for each free family. The free families are Google Fonts **variable** woff2 (one file covers the whole weight axis via a `font-weight` range like `"400 700"`).
+- `src/lib/replicate/font-substitution-download.ts` downloads the free woff2 into `assets/fonts/` (self-hosted — never an `@import url(fonts.googleapis.com/...)`).
+- The `liberate_theme_scaffold` handler runs this whenever the observed BODY or DISPLAY family (from `typography.json`) has **no self-hostable `@font-face`** among the captured fonts (e.g. a Typekit family served CSS-only on `use.typekit.net`). It binds the body/display `fontFamily` in `theme.json` to the self-hosted free family. The captured-but-self-hostable case (e.g. getsnooz's heading `Larsseit` on the Shopify CDN) is untouched — only genuinely uncapturable families are swapped.
+
+When adding a new mapping, prefer matching the source font's classification (geometric-humanist sans → Hanken Grotesk; neutral sans → Inter; geometric sans → Montserrat; old-style serif → EB Garamond) and verify the substitute computes live (body paragraphs should report the substituted family, not a bare `sans-serif`). Unmapped uncapturable families fall back to a visual lookalike (serif → EB Garamond, sans → Inter).
 
 ## Font sizes
 
