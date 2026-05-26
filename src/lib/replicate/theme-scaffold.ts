@@ -389,6 +389,66 @@ Tags: block-theme, full-site-editing
 		overflow-x: clip;
 	}
 }
+
+/*
+ * Homepage hero overlay. When the front page's hero is a full-bleed cover
+ * (wp:cover as the first block in <main>), the site header OVERLAYS it
+ * transparently — white nav over the dimmed photo — instead of sitting as a
+ * solid bar above it (which leaves a color band + a gap before the hero). The
+ * rule is self-gated with :has() so a homepage WITHOUT a cover hero (e.g. a
+ * text sale banner) keeps the normal solid header, and other pages are never
+ * affected (they aren't .home). The cover's own dim keeps the nav legible.
+ */
+body.home:has(main > .wp-block-cover) header.wp-block-template-part {
+	position: absolute;
+	left: 0;
+	right: 0;
+	top: 0;
+	z-index: 100;
+}
+body.home:has(main > .wp-block-cover) header.wp-block-template-part .wp-block-group {
+	background-color: transparent !important;
+}
+/* White nav + logo over the (dimmed) hero photo, regardless of the detected
+ * header tone — dark nav links are unreadable over a photo. */
+body.home:has(main > .wp-block-cover) header.wp-block-template-part,
+body.home:has(main > .wp-block-cover) header.wp-block-template-part a,
+body.home:has(main > .wp-block-cover) header.wp-block-template-part .wp-block-navigation-item__content {
+	color: #ffffff !important;
+}
+body.home:has(main > .wp-block-cover) main {
+	margin-top: 0;
+}
+
+/*
+ * Gallery scroller. Page builders present galleries as a navigable carousel;
+ * WordPress core has no native carousel block, so this renders the wp:gallery as
+ * a horizontal, swipe/drag/scroll-navigable strip with scroll-snap points — no
+ * JS, no plugin. Image sets small enough to fit just render as a row. (A true
+ * arrow/autoplay carousel would require a JS block or a plugin like Jetpack.)
+ */
+.wp-block-gallery.is-gallery-scroller {
+	display: flex;
+	flex-wrap: nowrap;
+	justify-content: flex-start;
+	overflow-x: auto;
+	scroll-snap-type: x mandatory;
+	scroll-behavior: smooth;
+	-webkit-overflow-scrolling: touch;
+	gap: 16px;
+	padding-bottom: 8px;
+}
+.wp-block-gallery.is-gallery-scroller > .wp-block-image {
+	flex: 0 0 clamp(220px, 32%, 380px);
+	scroll-snap-align: center;
+	margin: 0;
+}
+.wp-block-gallery.is-gallery-scroller > .wp-block-image img {
+	width: 100%;
+	aspect-ratio: 4 / 3;
+	object-fit: cover;
+	border-radius: 8px;
+}
 ${fontFaceCss}`;
 }
 

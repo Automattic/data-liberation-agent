@@ -594,9 +594,13 @@ function galleryBlock(images: SectionSpecImage[], out: BlockOut): string {
       `<!-- /wp:image -->`
     );
   });
+  // is-gallery-scroller turns the grid into a horizontal swipe/scroll-navigable
+  // strip with snap points (theme CSS) — page builders show galleries as a
+  // carousel; WP core has no native carousel block, and this needs no JS/plugin.
+  // Small sets that fit just render as a row.
   return (
-    `<!-- wp:gallery {"columns":${cols},"imageCrop":true,"linkTo":"none","sizeSlug":"large"} -->\n` +
-    `<figure class="wp-block-gallery has-nested-images columns-${cols} is-cropped">\n${figures.join('\n')}\n</figure>\n` +
+    `<!-- wp:gallery {"columns":${cols},"imageCrop":true,"linkTo":"none","sizeSlug":"large","className":"is-gallery-scroller"} -->\n` +
+    `<figure class="wp-block-gallery has-nested-images columns-${cols} is-cropped is-gallery-scroller">\n${figures.join('\n')}\n</figure>\n` +
     `<!-- /wp:gallery -->`
   );
 }
@@ -828,9 +832,22 @@ function renderSection(s: SectionSpecWithFaqs, ctx: RenderCtx): BlockOut {
       }
       return renderTextBand(s);
     }
-    case 'animated-cover':
-      // A full-bleed hero cover (text overlaid on a background photo).
-      return renderCover(s);
+    case 'animated-cover': {
+      // A full-bleed hero cover needs a WIDE background photo (≥1000px). A
+      // smaller content image is a media band (a mid-page story section), not a
+      // cover — render it as media-text so it isn't turned into a full-bleed
+      // text-over-photo band.
+      const coverLead = pickLeadImage(s.images);
+      if (coverLead && isWpUrl(coverLead.url) && (coverLead.width || 0) >= 1000) {
+        return renderCover(s);
+      }
+      if (coverLead && (s.headings.length || (s.bodyText ?? []).length)) {
+        const flip = ctx.mediaTextIndex % 2 === 1;
+        ctx.mediaTextIndex++;
+        return renderMediaText(s, flip);
+      }
+      return renderTextBand(s);
+    }
     case 'static':
     case 'cta':
     case 'price-list':

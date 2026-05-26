@@ -459,8 +459,9 @@ describe('reconstructPagePattern', () => {
   });
 
   it('renders an animated-cover hero as a wp:cover with the photo + overlaid white text', () => {
+    const wideHero = { url: `${WP}yard.jpg`, sourceUrl: `${WP}yard.jpg`, alt: 'lumber yard', kind: 'img' as const, width: 1440, height: 796 };
     const r = reconstructPagePattern(
-      [section({ interactionModel: 'animated-cover', headings: ['Over 100 Years'], bodyText: ['We collaborate.'], buttonLabels: ['TALK TO US'], images: [img(`${WP}yard.jpg`, 'lumber yard')] })],
+      [section({ interactionModel: 'animated-cover', headings: ['Over 100 Years'], bodyText: ['We collaborate.'], buttonLabels: ['TALK TO US'], images: [wideHero] })],
       opts,
     );
     expect(r.php).toContain('<!-- wp:cover');
@@ -479,6 +480,7 @@ describe('reconstructPagePattern', () => {
     const r = reconstructPagePattern([section({ interactionModel: 'gallery', headings: ['Gallery'], images: imgs })], opts);
     expect(r.php).toContain('<!-- wp:gallery');
     expect(r.php).toContain('columns-4');
+    expect(r.php).toContain('is-gallery-scroller');
     // 25 images become 25 wp:image figures inside ONE gallery, not 25 wp:columns.
     expect((r.php.match(/<!-- wp:image /g) || []).length).toBe(25);
     expect((r.php.match(/<!-- wp:column /g) || []).length).toBe(0);
