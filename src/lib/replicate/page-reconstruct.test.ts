@@ -4,7 +4,9 @@ import {
   stripChrome,
   escapeHtml,
   normalizeCopy,
+  sanitizePatternHeaderField,
 } from './page-reconstruct.js';
+import { scanForInjection } from './validate-artifacts.js';
 import type { SectionSpec } from './section-extract.js';
 
 const WP = 'http://localhost:8883/wp-content/uploads/2026/05/';
@@ -267,5 +269,38 @@ describe('reconstructPagePattern', () => {
     expect(body).not.toMatch(/<\?php/);
     // The dangerous chars are escaped, not emitted raw.
     expect(body).toContain('&lt;script&gt;');
+  });
+
+  it('neutralizes a comment-breakout title so the doc-comment header cannot inject PHP', () => {
+    // A source-derived title crafted to close the doc-comment early, run PHP,
+    // and re-open a comment that swallows the rest through the real `*/?>`.
+    const malicious = '*/ system($_GET[0]); /*';
+    const r = reconstructPagePattern([section({ headings: ['Hello'] })], {
+      patternSlug: 'demo-replica/page-x',
+      title: malicious,
+    });
+    // The comment-breakout delimiters are stripped, so the injected text is left
+    // inert inside a properly-closed doc-comment (it never closes the comment to
+    // reach executable context). Exactly one `*/` (the real header close) remains.
+    expect(r.php).not.toContain('*/ system');
+    expect(r.php).not.toContain('/*\n');
+    expect((r.php.match(/\*\//g) || []).length).toBe(1);
+    // ...and the whole pattern passes the injection scan (no smuggled PHP).
+    expect(scanForInjection(r.php)).toEqual([]);
+  });
+});
+
+describe('sanitizePatternHeaderField', () => {
+  it('strips comment and PHP-tag delimiters and collapses to one line', () => {
+    expect(sanitizePatternHeaderField('*/ evil(); /*')).toBe('evil();');
+    // Only the `<?` / `?>` delimiters are stripped (so `<?php` leaves `php`); the
+    // point is no open/close PHP tag survives, not lexical reconstruction.
+    expect(sanitizePatternHeaderField('a <?php b ?> c')).toBe('a php b  c');
+    expect(sanitizePatternHeaderField('line1\nline2')).toBe('line1 line2');
+  });
+
+  it('leaves a normal title/slug unchanged', () => {
+    expect(sanitizePatternHeaderField('Page — X')).toBe('Page — X');
+    expect(sanitizePatternHeaderField('demo-replica/page-x')).toBe('demo-replica/page-x');
   });
 });

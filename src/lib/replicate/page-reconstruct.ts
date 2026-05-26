@@ -92,6 +92,27 @@ export function normalizeCopy(s: string): string {
 
 const MISSING_IMAGE_PLACEHOLDER = '[image unavailable — not captured]';
 
+/**
+ * Neutralize a value interpolated into the PHP pattern doc-comment header so a
+ * crafted source-derived title/slug cannot break OUT of the doc-comment and
+ * inject executable PHP. A title shaped like a comment-close + code + comment-open
+ * would, in PHP, close the doc-comment early, run the code, then re-open a comment
+ * that swallows the rest through the real header close — a comment-breakout RCE.
+ * (`validate_artifacts` also defends this via a tempered header match, but the
+ * renderer must never EMIT such a header in the first place.) The header is
+ * metadata only, never rendered copy, so stripping comment/PHP-tag delimiters and
+ * collapsing to one line is lossless here.
+ */
+export function sanitizePatternHeaderField(s: string): string {
+  return s
+    .replace(/\*\//g, '') // cannot close the doc-comment early
+    .replace(/\/\*/g, '') // cannot open a nested comment
+    .replace(/<\?/g, '') // no PHP open tag
+    .replace(/\?>/g, '') // no PHP close tag
+    .replace(/[\r\n]+/g, ' ') // single line
+    .trim();
+}
+
 /** A WP media-library URL is the migrated form; anything else is a capture gap. */
 function isWpUrl(u: string): boolean {
   return /\/wp-content\/uploads\//i.test(u);
@@ -564,7 +585,9 @@ export function reconstructPagePattern(
   }
 
   const header =
-    `<?php\n/**\n * Title: ${opts.title}\n * Slug: ${opts.patternSlug}\n` +
+    `<?php\n/**\n * Title: ${sanitizePatternHeaderField(opts.title)}\n * Slug: ${sanitizePatternHeaderField(
+      opts.patternSlug,
+    )}\n` +
     ` * Categories: featured\n * Inserter: false\n */\n?>\n`;
 
   return {

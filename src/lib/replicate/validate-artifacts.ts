@@ -108,7 +108,15 @@ export const BODY_COPY_CONTAINMENT_THRESHOLD = 0.8;
 export function scanForInjection(markup: string): string[] {
   const violations: string[] = [];
   const SANCTIONED_PHP = /<\?php\s+echo\s+esc_url\(\s*get_theme_file_uri\(\s*'[^']+'\s*\)\s*\);\s*\?>/gi;
-  const SANCTIONED_HEADER = /<\?php\s*\/\*\*[\s\S]*?\*\/\s*\?>/g;
+  // The doc-comment body is matched with a TEMPERED dot — `(?:(?!\*\/)[\s\S])*`
+  // stops at the FIRST `*/`, which must then be immediately followed by `?>`.
+  // A plain non-greedy `[\s\S]*?` would BACKTRACK past an early `*/` (e.g. a
+  // crafted title `*/ system($_GET[0]); /*` closes the comment early, runs PHP,
+  // then re-opens `/*` so the block still ends in `*/?>`); the non-greedy form
+  // would span the whole block and strip the injected PHP before the residual
+  // `<?` check, passing RCE. The tempered form refuses to cross the early `*/`,
+  // so such a header is NOT sanctioned and its `<?php` trips the check below.
+  const SANCTIONED_HEADER = /<\?php\s*\/\*\*(?:(?!\*\/)[\s\S])*\*\/\s*\?>/g;
   const residualPhp = markup.replace(SANCTIONED_PHP, '').replace(SANCTIONED_HEADER, '');
   if (/<\?/.test(residualPhp)) {
     violations.push('raw PHP tag in markup (only the pattern-header doc-comment and esc_url(get_theme_file_uri()) are allowed)');

@@ -315,4 +315,19 @@ describe('validateArtifacts — pattern-file header (regression: real builder ou
     expect(r.ok).toBe(false);
     expect(r.errors.some((e) => /php tag/i.test(e.message))).toBe(true);
   });
+  it('rejects comment-breakout RCE smuggled through a crafted Title (balanced re-open)', () => {
+    // A title of `*/ system($_GET[0]); /*` closes the doc-comment early, runs
+    // PHP, then re-opens `/*` so the block STILL ends in `*/?>`. A non-greedy
+    // header match would backtrack past the early `*/`, span the whole block,
+    // and strip the injected PHP before the residual `<?` check — passing RCE.
+    const php =
+      `<?php\n/**\n * Title: */ system($_GET[0]); /*\n * Slug: site/section-0\n * Categories: featured\n * Inserter: false\n */\n?>\n` +
+      `<!-- wp:paragraph --><p>hi</p><!-- /wp:paragraph -->`;
+    const r = validateArtifacts({ patterns: [{
+      slug: 'site/section-0', php,
+      spec: { interactionModel: 'cta', expectedText: [], expectedAssets: [] },
+    }] });
+    expect(r.ok).toBe(false);
+    expect(r.errors.some((e) => /php tag/i.test(e.message))).toBe(true);
+  });
 });
