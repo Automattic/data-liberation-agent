@@ -10,8 +10,8 @@
 //   - Convert a (themeFiles, blockPlugins, themeSlug) tuple into a list of
 //     concrete (vfsPath, content) writes the caller can apply.
 //
-import { mkdirSync, writeFileSync } from 'node:fs';
-import { dirname, join, normalize } from 'node:path';
+import { mkdirSync, writeFileSync, existsSync, readdirSync, statSync, copyFileSync } from 'node:fs';
+import { dirname, join, normalize, relative } from 'node:path';
 import type { ReplicaFile, ReplicaBlockPlugin } from './types.js';
 import {
   containsCustomHtmlBlock,
@@ -136,20 +136,55 @@ export function writeReplicaFilesToHost(args: {
   themeSlug?: string;
   themeFiles?: ReplicaFile[];
   blockPlugins?: ReplicaBlockPlugin[];
-}): { themeWritten: number; pluginsWritten: number; pluginSlugs: string[] } {
+  /**
+   * On-disk theme dir (e.g. output/<site>/theme) whose `assets/` holds BINARY
+   * files — self-hosted fonts (woff2), localized logo (png), icon SVGs — that
+   * aren't carried as string `themeFiles[]`. When set, those binaries are copied
+   * into the live theme so the install is self-contained (previously they had to
+   * be bridged by hand and self-hosted fonts/logo were missing from the install).
+   */
+  assetSourceDir?: string;
+}): { themeWritten: number; pluginsWritten: number; pluginSlugs: string[]; assetsCopied: number } {
   validateReplicaInputs(args.themeFiles, args.blockPlugins, args.themeSlug);
 
   let themeWritten = 0;
+  const writtenRel = new Set<string>();
   if (args.themeFiles && args.themeFiles.length > 0 && args.themeSlug) {
     const themeRoot = join(args.wpRoot, 'wp-content', 'themes', args.themeSlug);
     for (const original of args.themeFiles) {
       const f = sanitizeReplicaFile(original);
       const rel = safeRelativePath(f.relativePath);
+      writtenRel.add(rel);
       const dest = join(themeRoot, rel);
       mkdirSync(dirname(dest), { recursive: true });
       writeFileSync(dest, f.content);
       themeWritten++;
     }
+  }
+
+  // Copy on-disk binary assets (fonts/logo/icons) that string themeFiles[] can't
+  // carry. Only files under assets/ are copied, only when not already written,
+  // and each relative path is run through safeRelativePath (no traversal).
+  let assetsCopied = 0;
+  if (args.assetSourceDir && args.themeSlug && existsSync(join(args.assetSourceDir, 'assets'))) {
+    const themeRoot = join(args.wpRoot, 'wp-content', 'themes', args.themeSlug);
+    const assetsRoot = join(args.assetSourceDir, 'assets');
+    const walk = (dir: string): void => {
+      for (const name of readdirSync(dir)) {
+        const abs = join(dir, name);
+        if (statSync(abs).isDirectory()) {
+          walk(abs);
+          continue;
+        }
+        const rel = safeRelativePath(join('assets', relative(assetsRoot, abs)));
+        if (writtenRel.has(rel)) continue; // already written from themeFiles
+        const dest = join(themeRoot, rel);
+        mkdirSync(dirname(dest), { recursive: true });
+        copyFileSync(abs, dest);
+        assetsCopied++;
+      }
+    };
+    walk(assetsRoot);
   }
 
   const pluginSlugs: string[] = [];
@@ -167,7 +202,7 @@ export function writeReplicaFilesToHost(args: {
     }
   }
 
-  return { themeWritten, pluginsWritten, pluginSlugs };
+  return { themeWritten, pluginsWritten, pluginSlugs, assetsCopied };
 }
 
 /**

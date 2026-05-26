@@ -121,13 +121,16 @@ export const installThemeHandler: Handler = async (args, ctx) => {
     return ctx.errorResult(`Replica input invalid: ${(err as Error).message}`);
   }
 
-  let written: { themeWritten: number; pluginsWritten: number; pluginSlugs: string[] };
+  let written: { themeWritten: number; pluginsWritten: number; pluginSlugs: string[]; assetsCopied: number };
   try {
     written = writeReplicaFilesToHost({
       wpRoot,
       themeSlug,
       themeFiles,
       blockPlugins,
+      // Copy on-disk binary theme assets (self-hosted fonts, localized logo, icon
+      // SVGs) that string themeFiles[] can't carry — previously bridged by hand.
+      assetSourceDir: join(resolve(outputDir), 'theme'),
     });
   } catch (err) {
     return ctx.errorResult(`Failed to write replica files: ${(err as Error).message}`);
@@ -164,6 +167,7 @@ export const installThemeHandler: Handler = async (args, ctx) => {
     studioSitePath,
     themeSlug: themeSlug ?? null,
     themeWritten: written.themeWritten,
+    assetsCopied: written.assetsCopied,
     pluginsWritten: written.pluginsWritten,
     pluginSlugs: written.pluginSlugs,
     activated: {

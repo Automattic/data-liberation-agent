@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   validateSlug,
@@ -155,6 +155,31 @@ describe('writeReplicaFilesToHost', () => {
       expect(readFileSync(join(root, 'style.css'), 'utf8')).toContain('/* theme */');
       expect(readFileSync(join(root, 'templates/index.html'), 'utf8')).toContain('index');
       expect(readFileSync(join(root, 'parts/header.html'), 'utf8')).toContain('header');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('copies on-disk binary assets (fonts/logo) from assetSourceDir into the theme', () => {
+    const dir = mkdtempSync(join(FIXTURE_TMP, 'rh-assets-'));
+    try {
+      const wpRoot = join(dir, 'wordpress');
+      // On-disk theme assets (as the font/logo pipeline writes them), incl. a
+      // nested fonts/ dir — none of these are carried as string themeFiles.
+      const src = join(dir, 'theme');
+      mkdirSync(join(src, 'assets', 'fonts'), { recursive: true });
+      writeFileSync(join(src, 'assets', 'logo.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+      writeFileSync(join(src, 'assets', 'fonts', 'larsseit.woff2'), Buffer.from([0x77, 0x4f, 0x46, 0x32]));
+      const result = writeReplicaFilesToHost({
+        wpRoot,
+        themeSlug: 'site-replica',
+        themeFiles: [{ relativePath: 'style.css', content: '/* t */' }],
+        assetSourceDir: src,
+      });
+      expect(result.assetsCopied).toBe(2);
+      const root = join(wpRoot, 'wp-content', 'themes', 'site-replica');
+      expect(existsSync(join(root, 'assets', 'logo.png'))).toBe(true);
+      expect(existsSync(join(root, 'assets', 'fonts', 'larsseit.woff2'))).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
