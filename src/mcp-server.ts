@@ -32,6 +32,7 @@ import { statusHandler } from './mcp-server/handlers/status.js';
 import { previewHandler } from './mcp-server/handlers/preview.js';
 import { installThemeHandler } from './mcp-server/handlers/install-theme.js';
 import { themeScaffoldHandler } from './mcp-server/handlers/theme-scaffold.js';
+import { reconstructPagesHandler } from './mcp-server/handlers/reconstruct-pages.js';
 import { previewStopHandler } from './mcp-server/handlers/preview-stop.js';
 import { screenshotHandler } from './mcp-server/handlers/screenshot.js';
 import { designFoundationScaffoldHandler } from './mcp-server/handlers/design-foundation-scaffold.js';
@@ -397,6 +398,33 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: 'liberate_reconstruct_pages',
+      description: 'Deterministically reconstruct EVERY content page from its OWN captured section specs (no shared cluster skeleton, no carried-HTML fallback). For each page: capture computed-style section specs (Playwright), download + install its section media (incl. sibling background-image heroes) into the WP library, reconstruct verbatim block-pattern markup with mediaMapped images + theme tokens, GATE through validate_artifacts (escaping/injection/provenance — never installs a failing pattern), and write patterns/page-<slug>.php + templates/page-<slug>.html (+ front-page.html for isHome) + icon SVG assets into the running Studio theme, then flush the pattern cache. This is the primary page-faithfulness path: it replaces reconstructing only cluster representatives and rendering the rest as raw source HTML. The theme shell (header/footer/theme.json) must already be installed via liberate_theme_scaffold/install.',
+      inputSchema: {
+        type: 'object' as const,
+        properties: {
+          outputDir: { type: 'string', description: 'Liberation output directory (holds media/ + media-stubs.json).' },
+          studioSitePath: { type: 'string', description: 'On-disk path to the running Studio site (e.g. ~/Studio/example-com).' },
+          themeSlug: { type: 'string', description: 'Installed theme slug. Defaults to <siteSlug>-replica derived from outputDir.' },
+          pages: {
+            type: 'array',
+            description: 'Content pages to reconstruct. Reconstruct every page (not just cluster reps).',
+            items: {
+              type: 'object',
+              properties: {
+                slug: { type: 'string', description: 'Source-faithful WP page slug (sanitize_title-shaped), e.g. "about-us".' },
+                sourceUrl: { type: 'string', description: 'The page\'s source URL to capture + reconstruct.' },
+                title: { type: 'string', description: 'Human-readable page title (pattern doc-comment).' },
+                isHome: { type: 'boolean', description: 'When true, also emit front-page.html.' },
+              },
+              required: ['slug', 'sourceUrl', 'title'],
+            },
+          },
+        },
+        required: ['outputDir', 'studioSitePath', 'pages'],
+      },
+    },
+    {
       name: 'liberate_screenshot',
       description: 'Capture full-page + scrolled screenshots (desktop + mobile) and rendered HTML for every URL on a site. Writes to <outputDir>/screenshots/ and <outputDir>/html/, plus palette.json, typography.json, breakpoints.json, and computed-styles.json via DOM/CSS site-analysis. Reuses sitemap discovery or accepts explicit urls[].',
       inputSchema: {
@@ -614,6 +642,7 @@ const handlers: Record<string, Handler> = {
   liberate_section_extract: sectionExtractHandler,
   liberate_compose_instantiate: composeInstantiateHandler,
   liberate_validate_artifacts: validateArtifactsHandler,
+  liberate_reconstruct_pages: reconstructPagesHandler,
 };
 
 function makeContext(): HandlerContext {
