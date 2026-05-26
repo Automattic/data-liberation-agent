@@ -275,6 +275,41 @@ describe('reconstructPagePattern', () => {
     expect(photo.php).toContain(`${WP}hero.jpg`);
   });
 
+  it('renders a uniform multi-cell grid (icon-feature row) as columns with all cell titles + body', () => {
+    const s = section({
+      interactionModel: 'columns',
+      headings: ['One device.', 'Three bedtime essentials.'],
+    }) as SectionSpec;
+    s.cells = [
+      { heading: 'Built-In Sounds', body: ['No Subscriptions Ever'], image: null, icon: null, button: null },
+      { heading: 'Bluetooth Speaker', body: ['Listen to Anything'], image: null, icon: null, button: null },
+      { heading: 'Night Light', body: ['Optional Soft Light'], image: null, icon: null, button: null },
+    ];
+    const r = reconstructPagePattern([s], opts);
+    // Band headings render above the grid; all three cell titles recovered as h3.
+    expect(r.php).toContain('>One device.</h2>');
+    expect(r.php).toContain('>Three bedtime essentials.</h3>');
+    expect(r.php).toContain('>Built-In Sounds</h3>');
+    expect(r.php).toContain('>Bluetooth Speaker</h3>');
+    expect(r.php).toContain('>Night Light</h3>');
+    expect(r.php).toContain('Optional Soft Light');
+    // Three columns, one per cell (count opening column comments only).
+    expect((r.php.match(/<!-- wp:column /g) || []).length).toBe(3);
+  });
+
+  it('does NOT route to a cell grid when fewer than 2 cells carry a title + body (e.g. a hero split)', () => {
+    const s = section({ interactionModel: 'cover-with-headline', headings: ['Hero'], bodyText: ['Sub'] }) as SectionSpec;
+    // A 2-up hero: one text cell (title+body), one image cell (no title/body).
+    s.cells = [
+      { heading: 'Hero', body: ['Sub'], image: null, icon: null, button: null },
+      { heading: null, body: [], image: img(`${WP}p.jpg`), icon: null, button: null },
+    ];
+    const r = reconstructPagePattern([s], opts);
+    // Falls through to the text band (single h1), not a column grid.
+    expect(r.php).toContain('>Hero</h1>');
+    expect((r.php.match(/wp:columns\b/g) || []).length).toBe(0);
+  });
+
   it('produces only WordPress block comments (no raw PHP/script/handlers in body)', () => {
     const r = reconstructPagePattern(
       [section({ headings: ['Hi <script>'], bodyText: ['onerror=alert(1)'] })],

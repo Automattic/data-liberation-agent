@@ -528,6 +528,50 @@ function wrapSection(
   );
 }
 
+/**
+ * Uniform multi-cell content grid — an icon-feature row ("Built-In Sounds /
+ * Bluetooth Speaker / Night Light"), sound-library columns (Classic / Nature /
+ * Ambient), or a comparison's column triplet (labels / Go 2 / Go v1). Each
+ * captured cell becomes one column with its title, body lines, optional lead
+ * image, and button. Band-level headings (a heading that is NOT a cell title —
+ * e.g. "Three bedtime essentials.") render above the grid. This is what keeps a
+ * grid section from collapsing into one stacked text band that also drops the
+ * mid-size cell labels the flat-array capture missed.
+ */
+function renderCellGrid(s: SectionSpec): BlockOut {
+  const out = emptyOut();
+  const cells = s.cells ?? [];
+  const cellHeadSet = new Set(cells.map((c) => normalizeCopy(c.heading ?? '')).filter(Boolean));
+  const intro: string[] = [];
+  s.headings.forEach((h, i) => {
+    if (cellHeadSet.has(normalizeCopy(h))) return; // a cell title — rendered in its column
+    intro.push(headingBlock(h, out, { level: i === 0 ? 2 : 3, center: true }));
+  });
+  const cols: string[] = [];
+  for (const c of cells) {
+    const parts: string[] = [];
+    if (c.image && isWpUrl(c.image.url) && Math.min(c.image.width || 0, c.image.height || 0) >= MIN_LEAD_IMAGE_PX) {
+      parts.push(imageBlock(c.image, out, `cell#${s.sectionIndex}`, { rounded: true }));
+    }
+    if (c.heading) parts.push(headingBlock(c.heading, out, { level: 3, center: true }));
+    for (const b of c.body) parts.push(paragraphBlock(b, out, { center: true, size: 'small' }));
+    if (c.button) parts.push(buttonBlock(c.button, out));
+    const kept = parts.filter(Boolean);
+    if (kept.length) cols.push(column(kept));
+  }
+  out.markup = wrapSection([...intro.filter(Boolean), columns(cols)], { wide: '1100px' });
+  return out;
+}
+
+/** Models with their own specialized renderers — never overridden by the cell grid. */
+const NON_CELL_GRID_MODELS = new Set([
+  'product-card-row',
+  'project-card-grid',
+  'blog-card-grid',
+  'review-grid',
+  'testimonial',
+]);
+
 // ---------------------------------------------------------------------------
 // Section dispatch
 // ---------------------------------------------------------------------------
@@ -536,6 +580,16 @@ function renderSection(s: SectionSpecWithFaqs, mediaTextIndex: { i: number }): B
   // A section carrying re-captured FAQ pairs renders as an accordion regardless
   // of its geometric interaction model.
   if (s.faqs && s.faqs.length) return renderFaq(s);
+  // A uniform multi-cell content grid: >=2 cells each carrying BOTH a title and
+  // body (a genuine feature/column grid, not a hero's text|image split or a
+  // single CTA). Card grids / reviews keep their specialized paths.
+  if (
+    s.cells &&
+    !NON_CELL_GRID_MODELS.has(s.interactionModel) &&
+    s.cells.filter((c) => c.heading && c.body.length > 0).length >= 2
+  ) {
+    return renderCellGrid(s);
+  }
   switch (s.interactionModel) {
     case 'media-text': {
       const flip = mediaTextIndex.i % 2 === 1;

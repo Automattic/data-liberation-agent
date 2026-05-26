@@ -568,6 +568,27 @@ export interface SectionSpecIcon {
   height: number;
 }
 
+/**
+ * One structured cell of a grid/columns section (an icon-feature tile, a
+ * sound-library column, a comparison column). Captured PER cell so the renderer
+ * can emit a faithful N-column grid instead of flattening every cell's text into
+ * one stacked band. All text is source-verbatim. Present only on sections whose
+ * layout is a uniform multi-cell grid; the renderer decides whether to use it
+ * (card-grids keep their image-led per-index path).
+ */
+export interface SectionSpecCell {
+  /** The cell's title — its largest-font text node, or null when no clear title. */
+  heading: string | null;
+  /** Remaining cell text in document order (labels, descriptions, list items). */
+  body: string[];
+  /** A content image in the cell (mediaMapped), if any. */
+  image: SectionSpecImage | null;
+  /** A small inline icon (SVG) in the cell, if any. */
+  icon: SectionSpecIcon | null;
+  /** A button/CTA label in the cell, if any. */
+  button: string | null;
+}
+
 export interface SectionSpecMotion {
   /** Coarse motion class for the spec's "Motion profile". */
   motionClass:
@@ -651,6 +672,13 @@ export interface SectionSpec {
    * and the renderer emits a missing-content placeholder — NEVER an invented one.
    */
   faqs?: ExtractedFaq[];
+  /**
+   * Per-cell structured content for uniform grid/columns sections (icon-feature
+   * rows, sound-library columns, comparison columns). When present (>=2 cells),
+   * the renderer emits a faithful N-column grid; otherwise grid content is
+   * flattened into a single stacked band. All cell text is source-verbatim.
+   */
+  cells?: SectionSpecCell[];
 }
 
 // ---------------------------------------------------------------------------
@@ -687,6 +715,16 @@ interface RawSection {
   layout: SectionSpecLayout;
   /** Serialized outerHTML of the section (capped) — input to review-extract. */
   sectionHtml?: string;
+  /** Per-cell raw capture for grid sections (built into SectionSpec.cells in Node). */
+  cells?: RawCell[];
+}
+
+/** Raw per-cell capture from the browser walk (shaped into SectionSpecCell in Node). */
+interface RawCell {
+  texts: Array<{ t: string; size: number }>;
+  image: { src: string; alt: string; w: number; h: number } | null;
+  icon: { markup: string; w: number; h: number } | null;
+  button: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -1498,6 +1536,54 @@ export async function extractFull(
           };
         });
 
+        // Per-cell STRUCTURED content for grid/columns sections (icon-feature
+        // rows, sound-library columns, comparison columns). repeatedChildren
+        // above captures only COUNTS; this captures the actual ordered text +
+        // image + icon PER cell so the renderer can emit a faithful N-column
+        // grid instead of flattening every cell into one stacked text band
+        // (which also drops mid-size labels that are neither heading-sized nor
+        // <p>/<li>). Only captured when a uniform multi-cell grid host exists;
+        // the renderer decides whether to use it (card-grids keep their own path).
+        const cells = childUnits.map((cell) => {
+          const cdesc = [cell, ...Array.from(cell.querySelectorAll('*'))].filter(isVisible);
+          const texts: Array<{ t: string; size: number }> = [];
+          const seenText = new Set<string>();
+          for (const d of cdesc) {
+            const own = Array.from(d.childNodes)
+              .filter((n) => n.nodeType === 3)
+              .map((n) => (n.nodeValue || '').trim())
+              .filter(Boolean)
+              .join(' ');
+            if (own.length < 1 || own.length > 400) continue;
+            if (seenText.has(own)) continue;
+            seenText.add(own);
+            texts.push({ t: own, size: parseFloat(getComputedStyle(d).fontSize) || 0 });
+          }
+          let image: { src: string; alt: string; w: number; h: number } | null = null;
+          const imgEl = cell.querySelector('img');
+          if (imgEl) {
+            const ir = imgEl.getBoundingClientRect();
+            const src = (imgEl as HTMLImageElement).currentSrc || (imgEl as HTMLImageElement).src || '';
+            if (src) image = { src, alt: imgEl.getAttribute('alt') || '', w: Math.round(ir.width), h: Math.round(ir.height) };
+          }
+          let icon: { markup: string; w: number; h: number } | null = null;
+          const svgEl = cell.querySelector('svg');
+          if (svgEl) {
+            const sr = svgEl.getBoundingClientRect();
+            if (sr.width > 0 && sr.width <= 128 && sr.height > 0 && sr.height <= 128) {
+              try {
+                icon = { markup: (svgEl as unknown as HTMLElement).outerHTML || '', w: Math.round(sr.width), h: Math.round(sr.height) };
+              } catch {
+                icon = null;
+              }
+            }
+          }
+          let button = '';
+          const btn = cell.querySelector('button, a[role="button"]');
+          if (btn) button = (btn.textContent || '').replace(/\s+/g, ' ').trim();
+          return { texts: texts.slice(0, 14), image, icon, button: button.slice(0, 80) };
+        });
+
         // motion signals across the section
         const motionSet = new Set<string>();
         let animatedElements = 0;
@@ -1620,6 +1706,7 @@ export async function extractFull(
           layout,
           motionAnimatedElements: animatedElements,
           sectionHtml,
+          cells,
         };
       };
 
@@ -1679,6 +1766,39 @@ export async function extractFull(
       }
     }
 
+    // Build structured grid cells from the raw per-cell capture. Each cell's
+    // title is its largest-font text; the rest is body in document order. Only
+    // surfaced when there are >=2 non-empty cells (a real grid), so a hero's
+    // 2-up text|image split or a single-child wrapper doesn't masquerade as one.
+    let cells: SectionSpecCell[] | undefined;
+    const rawCells = (rr as unknown as { cells?: RawCell[] }).cells;
+    if (Array.isArray(rawCells) && rawCells.length >= 2) {
+      const built = rawCells.map((c): SectionSpecCell => {
+        const texts = (c.texts ?? []).filter((t) => t.t && t.t.trim().length > 0);
+        const maxSize = texts.reduce((m, t) => Math.max(m, t.size || 0), 0);
+        const headingIdx = texts.findIndex((t) => (t.size || 0) === maxSize && maxSize > 0);
+        const heading = headingIdx >= 0 ? texts[headingIdx].t.trim() : null;
+        const body = texts.filter((_t, i) => i !== headingIdx).map((t) => t.t.trim());
+        const image: SectionSpecImage | null = c.image && c.image.src
+          ? {
+              url: rewriteThroughMediaMap(c.image.src, mediaMap),
+              sourceUrl: c.image.src,
+              alt: c.image.alt ?? '',
+              kind: 'img',
+              width: c.image.w,
+              height: c.image.h,
+            }
+          : null;
+        const icon: SectionSpecIcon | null =
+          c.icon && c.icon.markup ? { kind: 'svg', markup: c.icon.markup, width: c.icon.w, height: c.icon.h } : null;
+        return { heading, body, image, icon, button: c.button ? c.button.trim() : null };
+      });
+      // A meaningful grid: at least 2 cells carrying real content (a heading,
+      // body, or image). Filters out decorative/empty wrappers.
+      const meaningful = built.filter((c) => c.heading || c.body.length > 0 || c.image);
+      if (meaningful.length >= 2) cells = meaningful;
+    }
+
     return {
       sectionIndex: i,
       interactionModel,
@@ -1716,6 +1836,7 @@ export async function extractFull(
       layout: rr.layout,
       ...(reviews ? { reviews } : {}),
       ...(faqs ? { faqs } : {}),
+      ...(cells ? { cells } : {}),
     };
   });
 }
