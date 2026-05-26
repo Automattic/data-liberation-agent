@@ -26,7 +26,7 @@
 // This is the same contract the about-us reconstruction satisfied; this module
 // generalizes it across the remaining content-page interaction models.
 
-import type { SectionSpec, SectionSpecImage } from './section-extract.js';
+import type { SectionSpec, SectionSpecImage, SectionSpecIcon } from './section-extract.js';
 import type { ExtractedReview } from './review-extract.js';
 
 /**
@@ -65,6 +65,13 @@ export interface ReconstructResult {
   provenanceFlags: string[];
   /** Count of page-body sections rendered (after chrome strip). */
   sectionsRendered: number;
+  /**
+   * Theme SVG assets the pattern references via get_theme_file_uri() (feature /
+   * comparison icons). The orchestrator/driver MUST write each `svg` to the
+   * theme's `path` (e.g. assets/icon-0.svg) before install, or the core/image
+   * references 404. Sanitized (no script/event handlers) — safe to write.
+   */
+  iconAssets: Array<{ path: string; svg: string }>;
 }
 
 // ---------------------------------------------------------------------------
@@ -168,10 +175,58 @@ interface BlockOut {
   bodyText: string[];
   assets: string[];
   flags: string[];
+  /** Theme SVG assets this block references (path relative to the theme root + bytes). */
+  iconAssets: Array<{ path: string; svg: string }>;
 }
 
 function emptyOut(): BlockOut {
-  return { markup: '', expectedText: [], bodyText: [], assets: [], flags: [] };
+  return { markup: '', expectedText: [], bodyText: [], assets: [], flags: [], iconAssets: [] };
+}
+
+/**
+ * Sanitize a source-captured inline SVG before it's written as a theme asset and
+ * referenced from a `core/image`. Loading SVG via `<img src>` already prevents
+ * script execution in browsers, but strip active content defensively (the SVG is
+ * source-derived = attacker-controlled per the project trust boundary): no
+ * <script>, <foreignObject>, event-handler attributes, or javascript: URLs.
+ */
+export function sanitizeSvgAsset(svg: string): string {
+  return svg
+    .replace(/<script[\s\S]*?<\/script\s*>/gi, '')
+    .replace(/<foreignObject[\s\S]*?<\/foreignObject\s*>/gi, '')
+    .replace(/\son[a-z]+\s*=\s*"[^"]*"/gi, '')
+    .replace(/\son[a-z]+\s*=\s*'[^']*'/gi, '')
+    .replace(/javascript:/gi, '')
+    .trim();
+}
+
+/** Shared render context threaded through a single reconstructPagePattern call. */
+interface RenderCtx {
+  /** Alternating side index for media-text bands. */
+  mediaTextIndex: number;
+  /** Monotonic counter for unique icon-asset filenames across the page. */
+  iconCounter: number;
+}
+
+/**
+ * Emit a cell icon as a `core/image` referencing a theme SVG asset via the
+ * gate-sanctioned `get_theme_file_uri()` form (theme-relative, no slug needed;
+ * wp:html is banned so the glyph can't be inlined). Registers the sanitized SVG
+ * bytes on `out.iconAssets` for the driver to write to assets/. Returns '' when
+ * the icon has no usable markup.
+ */
+function iconImageBlock(icon: SectionSpecIcon, out: BlockOut, ctx: RenderCtx, sizePx = 48): string {
+  if (icon.kind !== 'svg' || !icon.markup) return '';
+  const svg = sanitizeSvgAsset(icon.markup);
+  if (!svg || !/<svg[\s>]/i.test(svg)) return '';
+  const path = `assets/icon-${ctx.iconCounter++}.svg`;
+  out.iconAssets.push({ path, svg });
+  const src = `<?php echo esc_url(get_theme_file_uri('${path}')); ?>`;
+  return (
+    `<!-- wp:image {"width":"${sizePx}px","height":"${sizePx}px","sizeSlug":"full","align":"center"} -->\n` +
+    `<figure class="wp-block-image aligncenter size-full is-resized"><img src="${src}" alt="" style="width:${sizePx}px;height:${sizePx}px"/></figure>\n` +
+    `<!-- /wp:image -->`
+  );
 }
 
 /** Pick the first usable WP image; if none reached the library, flag it. */
@@ -538,7 +593,7 @@ function wrapSection(
  * grid section from collapsing into one stacked text band that also drops the
  * mid-size cell labels the flat-array capture missed.
  */
-function renderCellGrid(s: SectionSpec): BlockOut {
+function renderCellGrid(s: SectionSpec, ctx: RenderCtx): BlockOut {
   const out = emptyOut();
   const cells = s.cells ?? [];
   const cellHeadSet = new Set(cells.map((c) => normalizeCopy(c.heading ?? '')).filter(Boolean));
@@ -550,6 +605,9 @@ function renderCellGrid(s: SectionSpec): BlockOut {
   const cols: string[] = [];
   for (const c of cells) {
     const parts: string[] = [];
+    // A small inline icon (speaker / bluetooth / sun glyph, comparison check/X)
+    // tops the cell — shipped as a theme SVG asset, referenced via core/image.
+    if (c.icon) parts.push(iconImageBlock(c.icon, out, ctx));
     if (c.image && isWpUrl(c.image.url) && Math.min(c.image.width || 0, c.image.height || 0) >= MIN_LEAD_IMAGE_PX) {
       parts.push(imageBlock(c.image, out, `cell#${s.sectionIndex}`, { rounded: true }));
     }
@@ -576,7 +634,7 @@ const NON_CELL_GRID_MODELS = new Set([
 // Section dispatch
 // ---------------------------------------------------------------------------
 
-function renderSection(s: SectionSpecWithFaqs, mediaTextIndex: { i: number }): BlockOut {
+function renderSection(s: SectionSpecWithFaqs, ctx: RenderCtx): BlockOut {
   // A section carrying re-captured FAQ pairs renders as an accordion regardless
   // of its geometric interaction model.
   if (s.faqs && s.faqs.length) return renderFaq(s);
@@ -588,12 +646,12 @@ function renderSection(s: SectionSpecWithFaqs, mediaTextIndex: { i: number }): B
     !NON_CELL_GRID_MODELS.has(s.interactionModel) &&
     s.cells.filter((c) => c.heading && c.body.length > 0).length >= 2
   ) {
-    return renderCellGrid(s);
+    return renderCellGrid(s, ctx);
   }
   switch (s.interactionModel) {
     case 'media-text': {
-      const flip = mediaTextIndex.i % 2 === 1;
-      mediaTextIndex.i++;
+      const flip = ctx.mediaTextIndex % 2 === 1;
+      ctx.mediaTextIndex++;
       return renderMediaText(s, flip);
     }
     case 'product-card-row':
@@ -642,16 +700,18 @@ export function reconstructPagePattern(
   const assets: string[] = [];
   const provenanceFlags: string[] = [];
   const sectionMarkup: string[] = [];
-  const mediaTextIndex = { i: 0 };
+  const iconAssets: Array<{ path: string; svg: string }> = [];
+  const ctx: RenderCtx = { mediaTextIndex: 0, iconCounter: 0 };
 
   for (const s of body) {
-    const out = renderSection(s, mediaTextIndex);
+    const out = renderSection(s, ctx);
     if (!out.markup) continue;
     sectionMarkup.push(out.markup);
     expectedText.push(...out.expectedText);
     bodyText.push(...out.bodyText);
     assets.push(...out.assets);
     provenanceFlags.push(...out.flags);
+    iconAssets.push(...out.iconAssets);
   }
 
   const header =
@@ -667,6 +727,7 @@ export function reconstructPagePattern(
     expectedAssets: dedupe(assets),
     provenanceFlags,
     sectionsRendered: sectionMarkup.length,
+    iconAssets,
   };
 }
 

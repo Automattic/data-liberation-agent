@@ -297,6 +297,39 @@ describe('reconstructPagePattern', () => {
     expect((r.php.match(/<!-- wp:column /g) || []).length).toBe(3);
   });
 
+  it('emits cell icons as theme SVG assets referenced via get_theme_file_uri (no wp:html)', () => {
+    const s = section({ interactionModel: 'columns', headings: ['Three bedtime essentials.'] }) as SectionSpec;
+    s.cells = [
+      { heading: 'Built-In Sounds', body: ['No Subscriptions Ever'], image: null, icon: { kind: 'svg', markup: '<svg viewBox="0 0 24 24"><path d="M3 9h4l5-5v16l-5-5H3z"/></svg>', width: 52, height: 52 }, button: null },
+      { heading: 'Night Light', body: ['Optional Soft Light'], image: null, icon: { kind: 'svg', markup: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="5"/></svg>', width: 52, height: 52 }, button: null },
+    ];
+    const r = reconstructPagePattern([s], opts);
+    // Two icon assets registered for the driver to write...
+    expect(r.iconAssets).toHaveLength(2);
+    expect(r.iconAssets[0].path).toBe('assets/icon-0.svg');
+    expect(r.iconAssets[0].svg).toContain('<svg');
+    // ...and referenced via the gate-sanctioned get_theme_file_uri form (not inlined).
+    expect(r.php).toContain("get_theme_file_uri('assets/icon-0.svg')");
+    expect(r.php).not.toMatch(/<svg/); // never inlined into block markup
+    // The whole pattern passes the injection scan (the PHP form is sanctioned).
+    expect(scanForInjection(r.php)).toEqual([]);
+  });
+
+  it('sanitizes a malicious cell-icon SVG before writing it as an asset', () => {
+    const s = section({ interactionModel: 'columns', headings: ['Features'] }) as SectionSpec;
+    const evil = '<svg viewBox="0 0 24 24" onload="alert(1)"><script>alert(2)</script><path d="M0 0h24v24H0z"/></svg>';
+    s.cells = [
+      { heading: 'A', body: ['a'], image: null, icon: { kind: 'svg', markup: evil, width: 40, height: 40 }, button: null },
+      { heading: 'B', body: ['b'], image: null, icon: { kind: 'svg', markup: evil, width: 40, height: 40 }, button: null },
+    ];
+    const r = reconstructPagePattern([s], opts);
+    expect(r.iconAssets.length).toBeGreaterThan(0);
+    for (const a of r.iconAssets) {
+      expect(a.svg).not.toMatch(/<script/i);
+      expect(a.svg).not.toMatch(/onload/i);
+    }
+  });
+
   it('does NOT route to a cell grid when fewer than 2 cells carry a title + body (e.g. a hero split)', () => {
     const s = section({ interactionModel: 'cover-with-headline', headings: ['Hero'], bodyText: ['Sub'] }) as SectionSpec;
     // A 2-up hero: one text cell (title+body), one image cell (no title/body).
