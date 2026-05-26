@@ -164,17 +164,28 @@ function isTintedSection(s: SectionSpec): boolean {
   return sat >= 25;
 }
 
-/** Footer/nav chrome detection — the sitewide Shopify footer leaks into every
- *  Replo page capture as trailing sections. We render page body only; header +
- *  footer come from the theme parts. */
+/** Footer/nav chrome detection — the sitewide footer leaks into every page
+ *  capture as trailing sections. We render page body only; header + footer come
+ *  from the theme parts, so a captured footer section must be stripped or the
+ *  page shows TWO footers (the reconstructed one + the theme footer part). */
 function isChromeSection(s: SectionSpec): boolean {
   if (s.interactionModel === 'footer' || s.interactionModel === 'nav') return true;
   const heads = s.headings.map((h) => normalizeCopy(h).toLowerCase());
-  const hasFooterNav =
-    heads.includes('shop') && heads.includes('support') && heads.includes('company');
   const body = (s.bodyText ?? []).map((b) => normalizeCopy(b));
+  const buttons = (s.buttonLabels ?? []).map((b) => normalizeCopy(b));
+  const allText = [...heads, ...body, ...buttons];
+  // GENERIC footer signal: a copyright / attribution line. Only footers carry
+  // "© <year>", "all rights reserved", "website by", "powered by" — and
+  // stripChrome only removes TRAILING sections, so a stray mid-page mention
+  // can't be falsely stripped. (This is what swiftlumber's footer carries:
+  // "© 2026 Website by Tokuda Technology".)
+  const hasCopyright = allText.some((t) =>
+    /(?:©|\(c\)\s|copyright\b|all rights reserved|website by|powered by)/i.test(t),
+  );
+  // getsnooz's footer nav + newsletter (kept for back-compat).
+  const hasFooterNav = heads.includes('shop') && heads.includes('support') && heads.includes('company');
   const hasNewsletter = body.some((b) => /get some good snooz/i.test(b));
-  return hasFooterNav || hasNewsletter;
+  return hasCopyright || hasFooterNav || hasNewsletter;
 }
 
 /**
@@ -238,6 +249,20 @@ export function sanitizeSvgAsset(svg: string): string {
   );
 }
 
+/**
+ * Force a (monochrome) icon glyph to a single fill color. Captured icons often
+ * carry no fill (colored by page CSS, which an <img>-loaded SVG ignores → they
+ * default to black); on a dark card surface that's invisible. Drop existing
+ * fill/stroke colors (keep `none`) and set fill on the root <svg> so a pathless
+ * glyph inherits it.
+ */
+function recolorSvg(svg: string, hex: string): string {
+  const stripped = svg
+    .replace(/\sfill="(?!none")[^"]*"/gi, '')
+    .replace(/\sstroke="(?!none")[^"]*"/gi, '');
+  return stripped.replace(/<svg\b/i, `<svg fill="${hex}"`);
+}
+
 /** Shared render context threaded through a single reconstructPagePattern call. */
 interface RenderCtx {
   /** Alternating side index for media-text bands. */
@@ -255,10 +280,15 @@ interface RenderCtx {
  * bytes on `out.iconAssets` for the driver to write to assets/. Returns '' when
  * the icon has no usable markup.
  */
-function iconImageBlock(icon: SectionSpecIcon, out: BlockOut, ctx: RenderCtx, sizePx = 48): string {
+function iconImageBlock(icon: SectionSpecIcon, out: BlockOut, ctx: RenderCtx, opts: { sizePx?: number; fill?: string } = {}): string {
+  const sizePx = opts.sizePx ?? 48;
   if (icon.kind !== 'svg' || !icon.markup) return '';
-  const svg = sanitizeSvgAsset(icon.markup);
+  let svg = sanitizeSvgAsset(icon.markup);
   if (!svg || !/<svg[\s>]/i.test(svg)) return '';
+  // Captured icon glyphs usually carry NO fill (the source colors them via page
+  // CSS, which doesn't apply to an <img>-loaded SVG) — so they default to black.
+  // On a dark card the icon must be light or it's invisible; force the fill.
+  if (opts.fill) svg = recolorSvg(svg, opts.fill);
   const path = `assets/icon-${ctx.iconCounter++}.svg`;
   out.iconAssets.push({ path, svg });
   const src = `<?php echo esc_url(get_theme_file_uri('${path}')); ?>`;
@@ -704,7 +734,8 @@ function renderCellGrid(s: SectionSpec, ctx: RenderCtx): BlockOut {
     const parts: string[] = [];
     // A small inline icon (speaker / bluetooth / sun glyph, comparison check/X)
     // tops the cell — shipped as a theme SVG asset, referenced via core/image.
-    if (c.icon) parts.push(iconImageBlock(c.icon, out, ctx));
+    // On a dark card the glyph is recolored white (else it renders default black).
+    if (c.icon) parts.push(iconImageBlock(c.icon, out, ctx, cardDark ? { fill: '#ffffff' } : {}));
     if (c.image && isWpUrl(c.image.url) && Math.min(c.image.width || 0, c.image.height || 0) >= MIN_LEAD_IMAGE_PX) {
       parts.push(imageBlock(c.image, out, `cell#${s.sectionIndex}`, { rounded: true }));
     }

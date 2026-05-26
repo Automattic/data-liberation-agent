@@ -72,6 +72,22 @@ describe('stripChrome', () => {
     expect(out[0].headings).toEqual(['Body']);
   });
 
+  it('drops a trailing footer detected by a generic copyright/attribution line', () => {
+    // swiftlumber's footer: nav labels + contact + "© 2026 Website by …". Not the
+    // getsnooz Shop/Support/Company shape, so it needs the generic copyright signal
+    // — otherwise the page shows two footers (this section + the theme footer part).
+    const out = stripChrome([
+      section({ sectionIndex: 0, interactionModel: 'animated-cover', headings: ['Hero'] }),
+      section({ sectionIndex: 1, headings: ['Body'] }),
+      section({
+        sectionIndex: 2,
+        interactionModel: 'columns',
+        bodyText: ['PRODUCTS', 'GALLERY', 'CALL US', '© 2026 Website by Tokuda Technology'],
+      }),
+    ]);
+    expect(out.map((s) => s.sectionIndex)).toEqual([0, 1]);
+  });
+
   it('preserves a mid-page dark content band that is not the footer', () => {
     const out = stripChrome([
       section({ sectionIndex: 0, headings: ['Top'] }),
@@ -416,9 +432,10 @@ describe('reconstructPagePattern', () => {
 
   it('renders feature cells with a card background as distinct token-colored cards', () => {
     const s = section({ interactionModel: 'columns', headings: ['WHY DO BUSINESS WITH US', 'The Advantage'] }) as SectionSpec;
+    const noFillIcon = { kind: 'svg' as const, markup: '<svg viewBox="0 0 24 24"><path d="M3 9h4"/></svg>', width: 48, height: 48 };
     s.cells = [
-      { heading: 'EXPERIENCE', body: ['100 years in lumber.'], image: null, icon: null, button: null, background: 'rgb(102, 101, 88)', radius: 10 },
-      { heading: 'PROXIMITY', body: ['Near three major ports.'], image: null, icon: null, button: null, background: 'rgb(102, 101, 88)', radius: 10 },
+      { heading: 'EXPERIENCE', body: ['100 years in lumber.'], image: null, icon: noFillIcon, button: null, background: 'rgb(102, 101, 88)', radius: 10 },
+      { heading: 'PROXIMITY', body: ['Near three major ports.'], image: null, icon: noFillIcon, button: null, background: 'rgb(102, 101, 88)', radius: 10 },
     ];
     const r = reconstructPagePattern([s], {
       patternSlug: 'demo-replica/page-x',
@@ -433,6 +450,9 @@ describe('reconstructPagePattern', () => {
     expect((r.php.match(/has-surface-raised-background-color/g) || []).length).toBeGreaterThanOrEqual(2);
     expect(r.php).toContain('border-radius:10px');
     expect(r.php).toContain('has-text-inverse-color'); // dark card → light text
+    // The (fill-less) icon glyph is recolored white so it's visible on the dark card.
+    expect(r.iconAssets.length).toBe(2);
+    expect(r.iconAssets.every((a) => /fill="#ffffff"/.test(a.svg))).toBe(true);
     // Without paletteTokens, the same cells render as plain columns (no card bg).
     const plain = reconstructPagePattern([s], { patternSlug: 'demo-replica/page-x', title: 'X' });
     expect(plain.php).not.toContain('has-surface-raised-background-color');
