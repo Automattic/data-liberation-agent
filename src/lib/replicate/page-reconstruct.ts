@@ -93,6 +93,20 @@ export function normalizeCopy(s: string): string {
 const MISSING_IMAGE_PLACEHOLDER = '[image unavailable — not captured]';
 
 /**
+ * Minimum side (px) for an image to qualify as a section's LEAD photo. Below
+ * this it's decorative — a quote-mark glyph, badge, or icon that a page builder
+ * renders as a small <img>. Blowing such a graphic up to fill a hero/text-band
+ * lead slot is the "giant quotation mark where the product photo should be"
+ * artifact, so the lead-image slots skip sub-threshold images.
+ */
+const MIN_LEAD_IMAGE_PX = 200;
+
+/** First image large enough to be a real lead photo (not a decorative glyph). */
+function pickLeadImage(images: SectionSpecImage[]): SectionSpecImage | undefined {
+  return images.find((im) => Math.min(im.width || 0, im.height || 0) >= MIN_LEAD_IMAGE_PX);
+}
+
+/**
  * Neutralize a value interpolated into the PHP pattern doc-comment header so a
  * crafted source-derived title/slug cannot break OUT of the doc-comment and
  * inject executable PHP. A title shaped like a comment-close + code + comment-open
@@ -274,8 +288,10 @@ function renderTextBand(s: SectionSpec): BlockOut {
   );
   (s.bodyText ?? []).forEach((b) => parts.push(paragraphBlock(b, out, { center: true })));
   s.buttonLabels.forEach((b) => parts.push(buttonBlock(b, out)));
-  // A single lead image (if present) below the copy.
-  if (s.images[0]) parts.push(imageBlock(s.images[0], out, `${s.interactionModel}#${s.sectionIndex}`, { align: 'center', rounded: true }));
+  // A single lead image (if present) below the copy — only a real photo, never a
+  // decorative glyph (a small quote-mark/badge <img> would otherwise fill the slot).
+  const lead = pickLeadImage(s.images);
+  if (lead) parts.push(imageBlock(lead, out, `${s.interactionModel}#${s.sectionIndex}`, { align: 'center', rounded: true }));
   out.markup = wrapSection(parts.filter(Boolean), { constrained: '760px', center: true });
   return out;
 }

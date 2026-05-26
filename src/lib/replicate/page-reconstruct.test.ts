@@ -259,6 +259,22 @@ describe('reconstructPagePattern', () => {
     expect(r.sectionsRendered).toBe(1);
   });
 
+  it('skips a decorative (sub-200px) lead image in a text band but keeps a real photo', () => {
+    // A 144x144 quote-mark glyph must NOT become the hero lead image...
+    const deco = reconstructPagePattern(
+      [section({ interactionModel: 'cover-with-headline', headings: ['Hero'], images: [{ url: `${WP}quote.png`, sourceUrl: `${WP}quote.png`, alt: '', kind: 'img', width: 144, height: 144 }] })],
+      opts,
+    );
+    expect(deco.php).not.toContain('quote.png');
+    expect(deco.expectedAssets).not.toContain(`${WP}quote.png`);
+    // ...but a real 800x800 photo is rendered.
+    const photo = reconstructPagePattern(
+      [section({ interactionModel: 'cover-with-headline', headings: ['Hero'], images: [img(`${WP}hero.jpg`, 'Hero')] })],
+      opts,
+    );
+    expect(photo.php).toContain(`${WP}hero.jpg`);
+  });
+
   it('produces only WordPress block comments (no raw PHP/script/handlers in body)', () => {
     const r = reconstructPagePattern(
       [section({ headings: ['Hi <script>'], bodyText: ['onerror=alert(1)'] })],
