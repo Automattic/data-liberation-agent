@@ -72,6 +72,18 @@ describe('themeCacheFlushCommands', () => {
     expect(dbQuery![2].startsWith('DELETE FROM wp_options')).toBe(true);
   });
 
+  it('also purges the SITE-transient pattern-file cache (single-site stores it as _site_transient_)', () => {
+    // Regression guard: WordPress caches the patterns/*.php file list as a SITE
+    // transient. `transient delete --all` does NOT clear site transients on a
+    // single-site install, and the regular `_transient_` DELETE misses the
+    // `_site_transient_` row — so a freshly-added per-page pattern resolves to
+    // an EMPTY wp:pattern (blank page body) until the TTL lapses. Both prefixes
+    // must be deleted.
+    const dbQuery = cmds.find((c) => c[0] === 'db' && c[1] === 'query');
+    expect(dbQuery![2]).toContain('_site_transient_wp_theme_files_patterns-%');
+    expect(dbQuery![2]).toContain('_site_transient_timeout_wp_theme_files_patterns-%');
+  });
+
   it('runs the pattern-file purge LAST (after cache flush, so it is not re-populated)', () => {
     const dbIdx = cmds.findIndex((c) => c[0] === 'db');
     const flushIdx = cmds.findIndex((c) => c[0] === 'cache');

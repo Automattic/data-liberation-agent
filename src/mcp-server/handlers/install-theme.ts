@@ -200,10 +200,23 @@ export function themeCacheFlushCommands(): string[][] {
   return [
     ['transient', 'delete', '--all'],
     ['cache', 'flush'],
+    // The theme's block-pattern file list (patterns/*.php) is cached in the
+    // `wp_theme_files_patterns` transient. WordPress stores it as a SITE
+    // transient (`_site_transient_*`), not a regular transient — on a
+    // single-site install `transient delete --all` does NOT clear site
+    // transients, so a newly-added patterns/page-<slug>.php never gets scanned
+    // and its `wp:pattern` resolves to empty until the transient TTL lapses.
+    // Delete BOTH the regular and the site-transient option rows (value +
+    // timeout) so the next request re-scans the patterns directory and
+    // registers the just-installed pattern. Without the `_site_transient_`
+    // variant the freshly-reconstructed page renders a blank pattern.
     [
       'db',
       'query',
-      "DELETE FROM wp_options WHERE option_name LIKE '_transient_wp_theme_files_patterns-%' OR option_name LIKE '_transient_timeout_wp_theme_files_patterns-%'",
+      "DELETE FROM wp_options WHERE option_name LIKE '_transient_wp_theme_files_patterns-%' " +
+        "OR option_name LIKE '_transient_timeout_wp_theme_files_patterns-%' " +
+        "OR option_name LIKE '_site_transient_wp_theme_files_patterns-%' " +
+        "OR option_name LIKE '_site_transient_timeout_wp_theme_files_patterns-%'",
     ],
   ];
 }
