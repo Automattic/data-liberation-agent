@@ -630,6 +630,10 @@ export interface SectionSpec {
   top: number;
   height: number;
   headings: string[];
+  /** Computed font-size (px) of each heading, parallel to `headings` — lets the
+   *  renderer reproduce the source type scale (eyebrow label vs headline) rather
+   *  than collapse to generic heading levels. Optional for back-compat. */
+  headingSizes?: number[];
   /**
    * Source-VERBATIM body copy captured from this section's served HTML — every
    * visible `<p>`/`<li>` text node, in document order, deduped. This is the
@@ -709,6 +713,7 @@ interface RawIconCandidate {
 interface RawSection {
   features: SectionFeatures;
   headings: string[];
+  headingSizes: number[];
   bodyText: string[];
   buttonLabels: string[];
   images: Array<{ src: string; alt: string; kind: 'img' | 'background'; w: number; h: number }>;
@@ -1277,10 +1282,19 @@ export async function extractFull(
             if (size > maxHeadingPx) maxHeadingPx = size;
           }
         }
-        const headings = headingEls
-          .map((h) => (h.textContent || '').trim().slice(0, 160))
-          .filter(Boolean)
+        // Capture each heading's text WITH its computed font-size (px) so the
+        // renderer can reproduce the source type scale faithfully — a 16px
+        // eyebrow label and a 55px headline must not both collapse to generic
+        // heading levels (which inverts their sizes).
+        const headingData = headingEls
+          .map((h) => ({
+            text: (h.textContent || '').trim().slice(0, 160),
+            size: Math.round(parseFloat(getComputedStyle(h).fontSize) || 0),
+          }))
+          .filter((h) => h.text)
           .slice(0, 12);
+        const headings = headingData.map((h) => h.text);
+        const headingSizes = headingData.map((h) => h.size);
 
         const paragraphEls = descendants.filter((d) => {
           const tag = d.tagName.toLowerCase();
@@ -1760,6 +1774,7 @@ export async function extractFull(
         return {
           features,
           headings,
+          headingSizes,
           bodyText: bodyText.slice(0, 40),
           buttonLabels,
           images: allImages.slice(0, 36),
@@ -1879,6 +1894,7 @@ export async function extractFull(
       top: rr.features.top,
       height: rr.features.height,
       headings: rr.headings,
+      headingSizes: rr.headingSizes ?? [],
       bodyText: rr.bodyText ?? [],
       buttonLabels: rr.buttonLabels,
       images: rr.images.map((im) => ({

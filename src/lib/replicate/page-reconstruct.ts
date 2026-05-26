@@ -349,10 +349,22 @@ function imageBlock(
   );
 }
 
+/**
+ * A responsive font size that equals the captured px at a 1440px viewport and
+ * scales down on mobile (so a faithful 92px hero headline doesn't overflow the
+ * 390px responsiveness gate). Returns '' for a missing/zero size.
+ */
+function responsiveFontSize(px: number | undefined): string {
+  if (!px || px <= 0) return '';
+  const floor = Math.min(px, Math.max(16, Math.round(px * 0.5)));
+  const vw = (px / 14.4).toFixed(1); // == px at 1440px wide
+  return `clamp(${floor}px, ${vw}vw, ${px}px)`;
+}
+
 function headingBlock(
   text: string,
   out: BlockOut,
-  opts: { level?: number; center?: boolean; muted?: boolean; inverse?: boolean } = {},
+  opts: { level?: number; center?: boolean; muted?: boolean; inverse?: boolean; sizePx?: number } = {},
 ): string {
   const t = normalizeCopy(text);
   if (!t) return '';
@@ -361,9 +373,15 @@ function headingBlock(
   const centerAttr = opts.center ? '"textAlign":"center",' : '';
   const centerClass = opts.center ? ' has-text-align-center' : '';
   const colorSlug = opts.inverse ? 'text-inverse' : opts.muted ? 'text-muted' : 'text-default';
+  // Reproduce the source's heading size (responsive clamp) when captured, so an
+  // eyebrow label and a headline keep their real sizes instead of the generic
+  // level scale (which inverts them).
+  const fontCss = responsiveFontSize(opts.sizePx);
+  const styleAttr = fontCss ? `"style":{"typography":{"fontSize":"${fontCss}"}},` : '';
+  const styleInline = fontCss ? ` style="font-size:${fontCss}"` : '';
   return (
-    `<!-- wp:heading {${centerAttr}"level":${level},"fontFamily":"display","textColor":"${colorSlug}"} -->\n` +
-    `<h${level} class="wp-block-heading${centerClass} has-${colorSlug}-color has-text-color has-display-font-family">${escapeHtml(
+    `<!-- wp:heading {${centerAttr}${styleAttr}"level":${level},"fontFamily":"display","textColor":"${colorSlug}"} -->\n` +
+    `<h${level} class="wp-block-heading${centerClass} has-${colorSlug}-color has-text-color has-display-font-family"${styleInline}>${escapeHtml(
       t,
     )}</h${level}>\n<!-- /wp:heading -->`
   );
@@ -412,7 +430,7 @@ function renderTextBand(s: SectionSpec): BlockOut {
   const out = emptyOut();
   const parts: string[] = [];
   s.headings.forEach((h, i) =>
-    parts.push(headingBlock(h, out, { level: i === 0 ? 1 : 2, center: true })),
+    parts.push(headingBlock(h, out, { level: i === 0 ? 1 : 2, center: true, sizePx: s.headingSizes?.[i] })),
   );
   (s.bodyText ?? []).forEach((b) => parts.push(paragraphBlock(b, out, { center: true })));
   s.buttonLabels.forEach((b) => parts.push(buttonBlock(b, out)));
@@ -435,7 +453,7 @@ function renderCover(s: SectionSpec): BlockOut {
   const out = emptyOut();
   out.assets.push(lead.url);
   const inner: string[] = [];
-  s.headings.forEach((h, i) => inner.push(headingBlock(h, out, { level: i === 0 ? 1 : 2, center: true, inverse: true })));
+  s.headings.forEach((h, i) => inner.push(headingBlock(h, out, { level: i === 0 ? 1 : 2, center: true, inverse: true, sizePx: s.headingSizes?.[i] })));
   (s.bodyText ?? []).forEach((b) => inner.push(paragraphBlock(b, out, { center: true, inverse: true })));
   s.buttonLabels.forEach((b) => inner.push(buttonBlock(b, out)));
   const innerMarkup = inner.filter(Boolean).join('\n');
@@ -454,7 +472,7 @@ function renderCover(s: SectionSpec): BlockOut {
 function renderMediaText(s: SectionSpec, flip: boolean): BlockOut {
   const out = emptyOut();
   const textParts: string[] = [];
-  s.headings.forEach((h) => textParts.push(headingBlock(h, out, { level: 2 })));
+  s.headings.forEach((h, i) => textParts.push(headingBlock(h, out, { level: 2, sizePx: s.headingSizes?.[i] })));
   (s.bodyText ?? []).forEach((b) => textParts.push(paragraphBlock(b, out)));
   s.buttonLabels.forEach((b) => textParts.push(buttonBlock(b, out)));
   // Prefer a real lead photo over a decorative glyph (a small quote-mark <img>
@@ -613,7 +631,7 @@ function galleryBlock(images: SectionSpecImage[], out: BlockOut): string {
 function renderImageRow(s: SectionSpec): BlockOut {
   const out = emptyOut();
   const parts: string[] = [];
-  s.headings.forEach((h) => parts.push(headingBlock(h, out, { level: 2, center: true })));
+  s.headings.forEach((h, i) => parts.push(headingBlock(h, out, { level: 2, center: true, sizePx: s.headingSizes?.[i] })));
   (s.bodyText ?? []).forEach((b) => parts.push(paragraphBlock(b, out, { center: true })));
   const gallery = galleryBlock(s.images, out);
   if (gallery) parts.push(gallery);
@@ -729,7 +747,7 @@ function renderCellGrid(s: SectionSpec, ctx: RenderCtx): BlockOut {
   const intro: string[] = [];
   s.headings.forEach((h, i) => {
     if (cellHeadSet.has(normalizeCopy(h))) return; // a cell title — rendered in its column
-    intro.push(headingBlock(h, out, { level: i === 0 ? 2 : 3, center: true }));
+    intro.push(headingBlock(h, out, { level: i === 0 ? 2 : 3, center: true, sizePx: s.headingSizes?.[i] }));
   });
   const cols: string[] = [];
   for (const c of cells) {

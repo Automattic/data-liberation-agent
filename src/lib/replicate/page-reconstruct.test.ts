@@ -106,6 +106,18 @@ describe('stripChrome', () => {
 describe('reconstructPagePattern', () => {
   const opts = { patternSlug: 'demo-replica/page-x', title: 'Page — X' };
 
+  it('reproduces the source heading SIZES (responsive clamp) so eyebrow/headline are not inverted', () => {
+    const s = section({ headings: ['WHY DO BUSINESS WITH US', 'The Swift Lumber Advantage'] }) as SectionSpec;
+    s.headingSizes = [16, 55]; // tiny eyebrow label, large headline
+    const r = reconstructPagePattern([s], opts);
+    // Each heading carries a clamp() whose max equals the captured px.
+    expect(r.php).toMatch(/font-size:clamp\([^)]*16px\)/); // eyebrow stays 16px
+    expect(r.php).toMatch(/font-size:clamp\([^)]*55px\)/); // headline 55px
+    // Headings without a captured size emit no explicit font-size (theme scale).
+    const noSize = reconstructPagePattern([section({ headings: ['Plain'] })], opts);
+    expect(noSize.php).not.toContain('font-size:clamp');
+  });
+
   it('emits a PHP doc-comment header with the slug and title', () => {
     const r = reconstructPagePattern([section({ headings: ['Hello world'] })], opts);
     expect(r.php).toContain('Title: Page — X');
