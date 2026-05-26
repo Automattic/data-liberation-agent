@@ -587,6 +587,12 @@ export interface SectionSpecCell {
   icon: SectionSpecIcon | null;
   /** A button/CTA label in the cell, if any. */
   button: string | null;
+  /** Card container background (rgb string) when the cell is a styled card, else null.
+   *  Mapped to the nearest theme token by the renderer so cards render distinctly.
+   *  Optional for back-compat with hand-built specs. */
+  background?: string | null;
+  /** Card corner radius in px (0 = no rounded card). Optional for back-compat. */
+  radius?: number;
 }
 
 export interface SectionSpecMotion {
@@ -725,6 +731,9 @@ interface RawCell {
   image: { src: string; alt: string; w: number; h: number } | null;
   icon: { markup: string; w: number; h: number } | null;
   button: string;
+  /** Card container opaque background (rgb string) + corner radius (px), if any. */
+  bg: string | null;
+  radius: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -1609,7 +1618,36 @@ export async function extractFull(
           let button = '';
           const btn = cell.querySelector('button, a[role="button"]');
           if (btn) button = (btn.textContent || '').replace(/\s+/g, ' ').trim();
-          return { texts: texts.slice(0, 14), image, icon, button: button.slice(0, 80) };
+          // Card container styling: a feature CELL is often a styled card (its own
+          // opaque background + rounded corners on a plain section), not just a
+          // text column. Capture the cell's own opaque bg + radius, else the
+          // largest opaque-bg descendant (page builders wrap the card surface a
+          // level down). Lets the renderer emit distinct cards instead of a flat band.
+          const opaqueBg = (c: string | null): string | null => {
+            const m = c && c.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?/);
+            if (!m) return null;
+            const a = m[4] === undefined ? 1 : parseFloat(m[4]);
+            return a > 0.5 ? `rgb(${m[1]}, ${m[2]}, ${m[3]})` : null;
+          };
+          let bg: string | null = null;
+          let radius = 0;
+          const cellCs = getComputedStyle(cell);
+          bg = opaqueBg(cellCs.backgroundColor);
+          radius = parseFloat(cellCs.borderRadius) || 0;
+          if (!bg) {
+            const cr = cell.getBoundingClientRect();
+            for (const d of Array.from(cell.querySelectorAll('*'))) {
+              const o = opaqueBg(getComputedStyle(d).backgroundColor);
+              if (!o) continue;
+              const dr = d.getBoundingClientRect();
+              if (dr.width >= cr.width * 0.6 && dr.height >= cr.height * 0.5) {
+                bg = o;
+                radius = parseFloat(getComputedStyle(d).borderRadius) || radius;
+                break;
+              }
+            }
+          }
+          return { texts: texts.slice(0, 14), image, icon, button: button.slice(0, 80), bg, radius: Math.round(radius) };
         });
 
         // motion signals across the section
@@ -1819,7 +1857,15 @@ export async function extractFull(
           : null;
         const icon: SectionSpecIcon | null =
           c.icon && c.icon.markup ? { kind: 'svg', markup: c.icon.markup, width: c.icon.w, height: c.icon.h } : null;
-        return { heading, body, image, icon, button: c.button ? c.button.trim() : null };
+        return {
+          heading,
+          body,
+          image,
+          icon,
+          button: c.button ? c.button.trim() : null,
+          background: c.bg ?? null,
+          radius: c.radius ?? 0,
+        };
       });
       // A meaningful grid: at least 2 cells carrying real content (a heading,
       // body, or image). Filters out decorative/empty wrappers.

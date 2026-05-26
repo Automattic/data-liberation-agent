@@ -16,8 +16,9 @@
 
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
+import type { PaletteToken } from '../../lib/replicate/footer-color.js';
 import { extractFullFromUrl, rewriteThroughMediaMap } from '../../lib/replicate/section-extract.js';
 import type { SectionSpec } from '../../lib/replicate/section-extract.js';
 import { buildPageReconstruction } from '../../lib/replicate/reconstruct-pages.js';
@@ -57,6 +58,21 @@ async function forcePatternRescan(studioSitePath: string, themeSlug: string): Pr
     await wp(['theme', 'activate', themeSlug]);
   } catch {
     /* best-effort */
+  }
+}
+
+/** Read the theme.json color palette as {slug, hex} tokens for card-color mapping. */
+function readThemePalette(themeJsonPath: string): PaletteToken[] {
+  try {
+    const j = JSON.parse(readFileSync(themeJsonPath, 'utf8')) as {
+      settings?: { color?: { palette?: Array<{ slug?: string; color?: string }> } };
+    };
+    const palette = j.settings?.color?.palette ?? [];
+    return palette
+      .filter((p): p is { slug: string; color: string } => Boolean(p.slug && p.color && /^#?[0-9a-f]{3,8}$/i.test(p.color)))
+      .map((p) => ({ slug: p.slug, hex: p.color }));
+  } catch {
+    return [];
   }
 }
 
@@ -150,6 +166,10 @@ export const reconstructPagesHandler: Handler = async (args, ctx) => {
   const mediaMap: Record<string, string> = {};
   for (const it of mediaResult.installed) mediaMap[it.sourceUrl] = it.localUrl;
 
+  // Theme palette tokens (from the installed theme.json) — used to map captured
+  // card/cell background colors to token slugs (the gate forbids inline hex).
+  const paletteTokens = readThemePalette(join(themeRoot, 'theme.json'));
+
   // 3. Reconstruct + gate + write each page.
   const report: Array<Record<string, unknown>> = [];
   const outThemeDir = join(resolve(outputDir), 'theme');
@@ -162,7 +182,7 @@ export const reconstructPagesHandler: Handler = async (args, ctx) => {
     applyMediaMap(specs, mediaMap);
     let built;
     try {
-      built = buildPageReconstruction(specs, { slug: p.slug, title: p.title, themeSlug, isHome: p.isHome });
+      built = buildPageReconstruction(specs, { slug: p.slug, title: p.title, themeSlug, isHome: p.isHome, paletteTokens });
     } catch (err) {
       report.push({ slug: p.slug, ok: false, reason: `build: ${err instanceof Error ? err.message : String(err)}` });
       continue;

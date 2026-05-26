@@ -18,6 +18,7 @@
 import { reconstructPagePattern } from './page-reconstruct.js';
 import { validateArtifacts, type ValidationReport } from './validate-artifacts.js';
 import type { SectionSpec } from './section-extract.js';
+import type { PaletteToken } from './footer-color.js';
 
 /** A theme file to write, path relative to the theme root. */
 export interface ReconstructedFile {
@@ -64,13 +65,13 @@ function buildPageTemplate(patternSlug: string): string {
  */
 export function buildPageReconstruction(
   sections: SectionSpec[],
-  opts: { slug: string; title: string; themeSlug: string; isHome?: boolean },
+  opts: { slug: string; title: string; themeSlug: string; isHome?: boolean; paletteTokens?: PaletteToken[] },
 ): PageReconstructionResult {
   if (!SAFE_SLUG.test(opts.slug)) throw new Error(`unsafe page slug: "${opts.slug}"`);
   if (!SAFE_SLUG.test(opts.themeSlug)) throw new Error(`unsafe theme slug: "${opts.themeSlug}"`);
 
   const patternSlug = `${opts.themeSlug}/page-${opts.slug}`;
-  const r = reconstructPagePattern(sections, { patternSlug, title: opts.title });
+  const r = reconstructPagePattern(sections, { patternSlug, title: opts.title, paletteTokens: opts.paletteTokens });
 
   // The provenance/injection/escaping gate. The reconstruct output is validated
   // against its OWN captured corpus (expectedText ∪ bodyText) — this catches

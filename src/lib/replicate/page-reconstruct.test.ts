@@ -414,6 +414,30 @@ describe('reconstructPagePattern', () => {
     expect(banner.php).toContain('>SUMMER SALE</h1>');
   });
 
+  it('renders feature cells with a card background as distinct token-colored cards', () => {
+    const s = section({ interactionModel: 'columns', headings: ['WHY DO BUSINESS WITH US', 'The Advantage'] }) as SectionSpec;
+    s.cells = [
+      { heading: 'EXPERIENCE', body: ['100 years in lumber.'], image: null, icon: null, button: null, background: 'rgb(102, 101, 88)', radius: 10 },
+      { heading: 'PROXIMITY', body: ['Near three major ports.'], image: null, icon: null, button: null, background: 'rgb(102, 101, 88)', radius: 10 },
+    ];
+    const r = reconstructPagePattern([s], {
+      patternSlug: 'demo-replica/page-x',
+      title: 'X',
+      paletteTokens: [
+        { slug: 'surface-base', hex: '#ffffff' },
+        { slug: 'surface-raised', hex: '#666558' },
+        { slug: 'surface-inverse', hex: '#175236' },
+      ],
+    });
+    // Each card maps to the nearest token (surface-raised taupe), rounded, light text.
+    expect((r.php.match(/has-surface-raised-background-color/g) || []).length).toBeGreaterThanOrEqual(2);
+    expect(r.php).toContain('border-radius:10px');
+    expect(r.php).toContain('has-text-inverse-color'); // dark card → light text
+    // Without paletteTokens, the same cells render as plain columns (no card bg).
+    const plain = reconstructPagePattern([s], { patternSlug: 'demo-replica/page-x', title: 'X' });
+    expect(plain.php).not.toContain('has-surface-raised-background-color');
+  });
+
   it('does NOT route to a cell grid when fewer than 2 cells carry a title + body (e.g. a hero split)', () => {
     const s = section({ interactionModel: 'cover-with-headline', headings: ['Hero'], bodyText: ['Sub'] }) as SectionSpec;
     // A 2-up hero: one text cell (title+body), one image cell (no title/body).

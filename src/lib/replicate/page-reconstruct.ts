@@ -27,6 +27,7 @@
 // generalizes it across the remaining content-page interaction models.
 
 import type { SectionSpec, SectionSpecImage, SectionSpecIcon } from './section-extract.js';
+import { nearestToken, brightness, type PaletteToken } from './footer-color.js';
 import type { ExtractedReview } from './review-extract.js';
 
 /**
@@ -50,6 +51,13 @@ export interface ReconstructOptions {
   patternSlug: string;
   /** Human-readable pattern title for the PHP doc-comment. */
   title: string;
+  /**
+   * Theme palette tokens ({slug, hex}) — used to map a captured card/cell
+   * background color to the nearest token (the gate forbids inline hex, so card
+   * surfaces must reference a token slug). When absent, feature cells render as
+   * plain columns rather than styled cards.
+   */
+  paletteTokens?: PaletteToken[];
 }
 
 export interface ReconstructResult {
@@ -236,6 +244,8 @@ interface RenderCtx {
   mediaTextIndex: number;
   /** Monotonic counter for unique icon-asset filenames across the page. */
   iconCounter: number;
+  /** Theme palette tokens for mapping captured card backgrounds → token slugs. */
+  paletteTokens: PaletteToken[];
 }
 
 /**
@@ -329,14 +339,14 @@ function headingBlock(
 function paragraphBlock(
   text: string,
   out: BlockOut,
-  opts: { center?: boolean; muted?: boolean; size?: string } = {},
+  opts: { center?: boolean; muted?: boolean; size?: string; inverse?: boolean } = {},
 ): string {
   const t = normalizeCopy(text);
   if (!t) return '';
   out.bodyText.push(t);
   const centerAttr = opts.center ? '"align":"center",' : '';
   const centerClass = opts.center ? 'has-text-align-center ' : '';
-  const colorSlug = opts.muted === false ? 'text-default' : 'text-muted';
+  const colorSlug = opts.inverse ? 'text-inverse' : opts.muted === false ? 'text-default' : 'text-muted';
   const sizeAttr = opts.size ? `"fontSize":"${opts.size}",` : '';
   const sizeClass = opts.size ? ` has-${opts.size}-font-size` : '';
   return (
@@ -639,6 +649,11 @@ function renderCellGrid(s: SectionSpec, ctx: RenderCtx): BlockOut {
   });
   const cols: string[] = [];
   for (const c of cells) {
+    // A styled card: the captured cell container background mapped to the nearest
+    // theme token (dark card → light text + rounded surface), so feature cards
+    // render DISTINCTLY instead of flattening into one band.
+    const cardToken = c.background ? nearestToken(c.background, ctx.paletteTokens) : null;
+    const cardDark = c.background ? brightness(c.background) < 140 : false;
     const parts: string[] = [];
     // A small inline icon (speaker / bluetooth / sun glyph, comparison check/X)
     // tops the cell — shipped as a theme SVG asset, referenced via core/image.
@@ -646,14 +661,27 @@ function renderCellGrid(s: SectionSpec, ctx: RenderCtx): BlockOut {
     if (c.image && isWpUrl(c.image.url) && Math.min(c.image.width || 0, c.image.height || 0) >= MIN_LEAD_IMAGE_PX) {
       parts.push(imageBlock(c.image, out, `cell#${s.sectionIndex}`, { rounded: true }));
     }
-    if (c.heading) parts.push(headingBlock(c.heading, out, { level: 3, center: true }));
-    for (const b of c.body) parts.push(paragraphBlock(b, out, { center: true, size: 'small' }));
+    if (c.heading) parts.push(headingBlock(c.heading, out, { level: 3, center: true, inverse: cardDark }));
+    for (const b of c.body) parts.push(paragraphBlock(b, out, { center: true, size: 'small', inverse: cardDark }));
     if (c.button) parts.push(buttonBlock(c.button, out));
     const kept = parts.filter(Boolean);
-    if (kept.length) cols.push(column(kept));
+    if (!kept.length) continue;
+    cols.push(column(cardToken ? [cardGroup(kept, cardToken, cardDark, c.radius ?? 0)] : kept));
   }
   out.markup = wrapSection([...intro.filter(Boolean), columns(cols)], { wide: '1100px', raised: isTintedSection(s) });
   return out;
+}
+
+/** Wrap a cell's content in a styled card group: token background, light text on a
+ *  dark card, rounded corners, and padding. Radius is capped to a sane range. */
+function cardGroup(parts: string[], bgToken: string, dark: boolean, radius: number): string {
+  const textToken = dark ? 'text-inverse' : 'text-default';
+  const r = radius > 0 ? Math.min(radius, 32) : 12;
+  return (
+    `<!-- wp:group {"style":{"spacing":{"padding":{"top":"var:preset|spacing|40","bottom":"var:preset|spacing|40","left":"var:preset|spacing|40","right":"var:preset|spacing|40"}},"border":{"radius":"${r}px"}},"backgroundColor":"${bgToken}","textColor":"${textToken}","layout":{"type":"constrained"}} -->\n` +
+    `<div class="wp-block-group has-${textToken}-color has-${bgToken}-background-color has-text-color has-background" style="border-radius:${r}px;padding-top:var(--wp--preset--spacing--40);padding-right:var(--wp--preset--spacing--40);padding-bottom:var(--wp--preset--spacing--40);padding-left:var(--wp--preset--spacing--40)">\n${parts.join('\n')}\n</div>\n` +
+    `<!-- /wp:group -->`
+  );
 }
 
 /** Models with their own specialized renderers — never overridden by the cell grid. */
@@ -748,7 +776,7 @@ export function reconstructPagePattern(
   const provenanceFlags: string[] = [];
   const sectionMarkup: string[] = [];
   const iconAssets: Array<{ path: string; svg: string }> = [];
-  const ctx: RenderCtx = { mediaTextIndex: 0, iconCounter: 0 };
+  const ctx: RenderCtx = { mediaTextIndex: 0, iconCounter: 0, paletteTokens: opts.paletteTokens ?? [] };
 
   for (const s of body) {
     const out = renderSection(s, ctx);

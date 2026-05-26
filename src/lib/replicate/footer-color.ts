@@ -21,9 +21,12 @@ export interface PaletteToken {
   hex: string;
 }
 
-/** Parse #rgb / #rrggbb to [r,g,b], or null. */
-export function parseHex(hex: string): [number, number, number] | null {
-  const m = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(hex.trim());
+/** Parse a CSS color to [r,g,b] — accepts #rgb / #rrggbb and rgb()/rgba(). null otherwise. */
+export function parseHex(color: string): [number, number, number] | null {
+  const s = color.trim();
+  const rgb = /^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i.exec(s);
+  if (rgb) return [Number(rgb[1]), Number(rgb[2]), Number(rgb[3])];
+  const m = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(s);
   if (!m) return null;
   let h = m[1];
   if (h.length === 3) h = h.split('').map((c) => c + c).join('');
