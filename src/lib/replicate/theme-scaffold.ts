@@ -87,6 +87,25 @@ export interface ThemeScaffoldOpts {
   bodySubstituteFamily?: string;
   /** Free family substituted for an unhostable DISPLAY font (rare — usually self-hosted). */
   displaySubstituteFamily?: string;
+  /**
+   * Source-path → local-WP-permalink map, built from redirect-map.json
+   * (`{ from: "/pages/about-us", to: "/about-us/" }`). When present, every
+   * SAME-SITE primary-nav (and footer) href is rewritten to its local permalink
+   * so the menu resolves instead of 404ing on the source path. External links
+   * (`link.external`) are left unchanged.
+   *
+   * A same-site nav href with NO entry in this map points at a page that was
+   * not imported — `onUnmappedNavLink` decides what happens ('drop' by default,
+   * never a dead local 404).
+   */
+  navHrefMap?: Record<string, string>;
+  /**
+   * What to do with a same-site primary-nav link whose target page is NOT in
+   * `navHrefMap` (not imported locally):
+   *   - 'drop'  (default): omit the link — never emit a dead local 404.
+   *   - 'keep': emit the original source path unchanged (last resort).
+   */
+  onUnmappedNavLink?: 'drop' | 'keep';
 }
 
 /** Extremely loose type — mirrors what design-foundation.json actually contains. */
@@ -139,6 +158,18 @@ export function buildThemeScaffold(opts: ThemeScaffoldOpts): ReplicaFile[] {
   // names (e.g. "Larsseit", "Larsseit Bold", "Larsseit-Bold") into one family.
   const capturedFonts = consolidateFontFaces(opts.capturedFonts ?? []);
 
+  // Rewrite captured source nav/footer hrefs to local WP permalinks using the
+  // redirect map. Same-site links resolve to `/slug/`; external links and
+  // already-local links pass through; unmapped same-site links are dropped
+  // (default) so the menu never points at an uncaptured 404.
+  const remap = makeNavHrefRemapper(opts.navHrefMap, opts.onUnmappedNavLink ?? 'drop');
+  const remappedHeader = opts.sourceChrome?.header
+    ? { ...opts.sourceChrome.header, links: remapLinks(opts.sourceChrome.header.links, remap) }
+    : opts.sourceChrome?.header;
+  const remappedFooter = opts.sourceChrome?.footer
+    ? { ...opts.sourceChrome.footer, links: remapLinks(opts.sourceChrome.footer.links, remap) }
+    : opts.sourceChrome?.footer;
+
   return [
     { relativePath: 'style.css', content: buildStyleCss({ themeName, themeSlug, themeDescription, capturedFonts }) },
     { relativePath: 'theme.json', content: buildThemeJson(foundation, { capturedFonts, headingLineHeights: opts.headingLineHeights, headingFamily: opts.headingFamily, bodyFamily: opts.bodyFamily, bodySubstituteFamily: opts.bodySubstituteFamily, displaySubstituteFamily: opts.displaySubstituteFamily }) },
@@ -146,10 +177,10 @@ export function buildThemeScaffold(opts: ThemeScaffoldOpts): ReplicaFile[] {
     { relativePath: 'templates/index.html', content: buildIndexTemplate() },
     { relativePath: 'parts/header.html', content: buildHeaderPart({
       themeSlug,
-      chrome: opts.sourceChrome?.header,
+      chrome: remappedHeader,
       localLogoUrl: opts.localLogoPath ? `/wp-content/themes/${themeSlug}/${opts.localLogoPath.replace(/^\/+/, '')}` : undefined,
     }) },
-    { relativePath: 'parts/footer.html', content: buildFooterPart({ siteTitle: opts.siteTitle ?? themeName, chrome: opts.sourceChrome?.footer }) },
+    { relativePath: 'parts/footer.html', content: buildFooterPart({ siteTitle: opts.siteTitle ?? themeName, chrome: remappedFooter }) },
     // Header utility-icon SVG assets (shipped as files; referenced via core/image
     // in the header — wp:html is banned, so glyphs can't be inlined).
     ...buildHeaderIconAssets(),
@@ -780,6 +811,76 @@ function buildGenericFooterPart(args: { siteTitle: string }): string {
 </div>
 <!-- /wp:group -->
 `;
+}
+
+// -- nav href remapping (source path → local WP permalink) -------------------
+
+type NavHrefRemap = (link: ThemeChromeLink) => ThemeChromeLink | null;
+
+/**
+ * Build a remapper that rewrites a captured nav/footer link's href to its
+ * local WP permalink using the redirect map.
+ *
+ *   - External link (`link.external`) → unchanged.
+ *   - Same-site href found in the map (by normalized source path) → rewritten
+ *     to the local permalink (e.g. `/pages/about-us` → `/about-us/`).
+ *   - Same-site href already pointing at a local permalink (already a `to`
+ *     value, or root `/`) → unchanged.
+ *   - Same-site href NOT in the map → `unmapped` policy: `drop` returns null
+ *     (link omitted) or `keep` returns it unchanged.
+ *
+ * When no map is supplied at all, every link passes through unchanged
+ * (back-compat with callers that don't thread a redirect map).
+ */
+function makeNavHrefRemapper(
+  navHrefMap: Record<string, string> | undefined,
+  unmapped: 'drop' | 'keep',
+): NavHrefRemap {
+  if (!navHrefMap) return (link) => link;
+
+  // Index by normalized source path (no trailing slash, no query/hash) AND by
+  // local-permalink target, so an already-local href is recognized as mapped.
+  const bySource = new Map<string, string>();
+  const localTargets = new Set<string>();
+  for (const [from, to] of Object.entries(navHrefMap)) {
+    bySource.set(normalizePath(from), to);
+    localTargets.add(normalizePath(to));
+  }
+
+  return (link) => {
+    if (link.external) return link;
+    // Only rewrite same-site, path-style hrefs. Anchors / mailto / tel pass
+    // through unchanged (they aren't local page navigations).
+    const href = link.href;
+    if (!href.startsWith('/')) return link;
+
+    const key = normalizePath(href);
+    if (key === '' ) return link; // root → home, leave as "/"
+    const mapped = bySource.get(key);
+    if (mapped) return { ...link, href: mapped };
+    // Already a local permalink (matches a redirect target)?
+    if (localTargets.has(key)) return link;
+    // Same-site link whose target page was not imported.
+    return unmapped === 'keep' ? link : null;
+  };
+}
+
+/** Apply a remapper to a link list, dropping nulls. */
+function remapLinks(links: ThemeChromeLink[], remap: NavHrefRemap): ThemeChromeLink[] {
+  const out: ThemeChromeLink[] = [];
+  for (const link of links) {
+    const r = remap(link);
+    if (r) out.push(r);
+  }
+  return out;
+}
+
+/** Normalize a path-style href to a bare path: strip query/hash + trailing slash. */
+function normalizePath(href: string): string {
+  let p = href;
+  const q = p.search(/[?#]/);
+  if (q >= 0) p = p.slice(0, q);
+  return p.replace(/\/+$/, '');
 }
 
 function buildNavigationLink(link: ThemeChromeLink): string {

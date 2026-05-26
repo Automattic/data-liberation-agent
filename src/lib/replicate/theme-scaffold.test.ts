@@ -421,4 +421,108 @@ describe('buildThemeScaffold', () => {
       expect(header).toContain('cdn.example.com/SNOOZ-Logo.png');
     });
   });
+
+  describe('nav href remapping (source path → local permalink)', () => {
+    const GETSNOOZ_CHROME = {
+      header: {
+        logoUrl: 'https://cdn/SNOOZ.png',
+        logoAlt: 'SNOOZ',
+        links: [
+          { label: 'Shop', href: '/pages/shop-all', external: false },
+          { label: 'Bundle & Save', href: '/pages/sleep-bundle', external: false },
+          { label: 'About', href: '/pages/about-us', external: false },
+          { label: 'Support', href: 'https://snooz.zendesk.com/hc/en-us', external: true },
+        ],
+      },
+    };
+    const REDIRECT_MAP = {
+      '/pages/shop-all': '/shop-all/',
+      '/pages/sleep-bundle': '/sleep-bundle/',
+      '/pages/about-us': '/about-us/',
+    };
+
+    function header(opts: Partial<Parameters<typeof buildThemeScaffold>[0]> = {}) {
+      const files = buildThemeScaffold({
+        foundation: FOUNDATION_FIXTURE,
+        themeSlug: 'getsnooz-com-replica',
+        sourceChrome: GETSNOOZ_CHROME,
+        ...opts,
+      });
+      return files.find((f) => f.relativePath === 'parts/header.html')!.content;
+    }
+
+    it('rewrites same-site nav hrefs to their local permalinks', () => {
+      const h = header({ navHrefMap: REDIRECT_MAP });
+      expect(h).toContain('"url":"/shop-all/"');
+      expect(h).toContain('"url":"/sleep-bundle/"');
+      expect(h).toContain('"url":"/about-us/"');
+      // The raw source paths must be gone.
+      expect(h).not.toContain('/pages/shop-all');
+      expect(h).not.toContain('/pages/about-us');
+    });
+
+    it('leaves external nav links unchanged', () => {
+      const h = header({ navHrefMap: REDIRECT_MAP });
+      expect(h).toContain('snooz.zendesk.com/hc/en-us');
+    });
+
+    it('drops a same-site nav link whose target page was not imported (no dead 404)', () => {
+      const partialMap = { '/pages/shop-all': '/shop-all/' };
+      const h = header({ navHrefMap: partialMap });
+      expect(h).toContain('"url":"/shop-all/"');
+      // about-us / sleep-bundle weren't imported → dropped, not emitted as /pages/* 404s.
+      expect(h).not.toContain('/pages/about-us');
+      expect(h).not.toContain('/pages/sleep-bundle');
+      expect(h).not.toContain('"label":"About"');
+    });
+
+    it('keeps unmapped same-site links when onUnmappedNavLink="keep"', () => {
+      const partialMap = { '/pages/shop-all': '/shop-all/' };
+      const h = header({ navHrefMap: partialMap, onUnmappedNavLink: 'keep' });
+      expect(h).toContain('/pages/about-us');
+    });
+
+    it('passes hrefs through unchanged when no map is supplied (back-compat)', () => {
+      const h = header();
+      expect(h).toContain('/pages/shop-all');
+      expect(h).toContain('/pages/about-us');
+    });
+
+    it('recognizes an already-local href (matches a redirect target) and keeps it', () => {
+      const chrome = {
+        header: {
+          links: [{ label: 'Shop', href: '/shop-all/', external: false }],
+        },
+      };
+      const files = buildThemeScaffold({
+        foundation: FOUNDATION_FIXTURE,
+        themeSlug: 'getsnooz-com-replica',
+        sourceChrome: chrome,
+        navHrefMap: REDIRECT_MAP,
+      });
+      const h = files.find((f) => f.relativePath === 'parts/header.html')!.content;
+      expect(h).toContain('"url":"/shop-all/"');
+    });
+
+    it('also remaps footer links', () => {
+      const files = buildThemeScaffold({
+        foundation: FOUNDATION_FIXTURE,
+        themeSlug: 'getsnooz-com-replica',
+        sourceChrome: {
+          footer: {
+            text: ['SNOOZ'],
+            links: [
+              { label: 'About', href: '/pages/about-us', external: false },
+              { label: 'Privacy', href: 'https://external.com/privacy', external: true },
+            ],
+          },
+        },
+        navHrefMap: REDIRECT_MAP,
+      });
+      const footer = files.find((f) => f.relativePath === 'parts/footer.html')!.content;
+      expect(footer).toContain('"url":"/about-us/"');
+      expect(footer).toContain('external.com/privacy');
+      expect(footer).not.toContain('/pages/about-us');
+    });
+  });
 });

@@ -66,6 +66,28 @@ function readObservedTypography(typographyPath: string): TypographyObserved {
   }
 }
 
+/**
+ * Read redirect-map.json into a `{ sourcePath: localPermalink }` record for nav
+ * href rewriting. Returns undefined when the file is missing/corrupt so the
+ * scaffold falls back to passing nav hrefs through unchanged.
+ */
+function readRedirectMap(path: string): Record<string, string> | undefined {
+  try {
+    if (!existsSync(path)) return undefined;
+    const raw = JSON.parse(readFileSync(path, 'utf8')) as Array<{ from?: string; to?: string }>;
+    if (!Array.isArray(raw)) return undefined;
+    const map: Record<string, string> = {};
+    for (const entry of raw) {
+      if (typeof entry?.from === 'string' && typeof entry?.to === 'string') {
+        map[entry.from] = entry.to;
+      }
+    }
+    return Object.keys(map).length > 0 ? map : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Filesystem-safe basename for a logo URL (last path segment, ext preserved). */
 function logoFilename(url: string): string {
   try {
@@ -196,6 +218,13 @@ export const themeScaffoldHandler: Handler = async (args, ctx) => {
   // ── Localize the header logo (download CDN logo → theme assets/) ─────────────
   const localLogoPath = await downloadLogo(sourceChrome?.header?.logoUrl, themeDir);
 
+  // ── Source-path → local-permalink map (redirect-map.json) ────────────────────
+  // Produced during extraction (src/adapters/shared.ts runExtractionLoop emits
+  // `{ from: "/pages/about-us", to: "/about-us/" }`). Used to rewrite captured
+  // nav hrefs to the local pages so the menu resolves instead of 404ing on the
+  // raw source path.
+  const navHrefMap = readRedirectMap(resolve(join(a.outputDir, 'redirect-map.json')));
+
   const themeFiles = buildThemeScaffold({
     foundation: foundation as Parameters<typeof buildThemeScaffold>[0]['foundation'],
     themeSlug: a.themeSlug,
@@ -210,6 +239,7 @@ export const themeScaffoldHandler: Handler = async (args, ctx) => {
     bodyFamily: observed.bodyFamily,
     bodySubstituteFamily,
     displaySubstituteFamily,
+    navHrefMap,
   });
 
   return ctx.textResult({
