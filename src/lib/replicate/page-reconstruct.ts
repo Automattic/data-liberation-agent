@@ -764,7 +764,7 @@ function renderCellGrid(s: SectionSpec, ctx: RenderCtx): BlockOut {
     if (c.image && isWpUrl(c.image.url) && Math.min(c.image.width || 0, c.image.height || 0) >= MIN_LEAD_IMAGE_PX) {
       parts.push(imageBlock(c.image, out, `cell#${s.sectionIndex}`, { rounded: true }));
     }
-    if (c.heading) parts.push(headingBlock(c.heading, out, { level: 3, center: true, inverse: cardDark }));
+    if (c.heading) parts.push(headingBlock(c.heading, out, { level: 3, center: true, inverse: cardDark, sizePx: c.headingSize }));
     for (const b of c.body) parts.push(paragraphBlock(b, out, { center: true, size: 'small', inverse: cardDark }));
     if (c.button) parts.push(buttonBlock(c.button, out));
     const kept = parts.filter(Boolean);

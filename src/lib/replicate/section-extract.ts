@@ -593,6 +593,9 @@ export interface SectionSpecCell {
   background?: string | null;
   /** Card corner radius in px (0 = no rounded card). Optional for back-compat. */
   radius?: number;
+  /** Computed font-size (px) of the cell's title — lets the renderer reproduce
+   *  the source card-title size instead of the generic level scale. */
+  headingSize?: number;
 }
 
 export interface SectionSpecMotion {
@@ -1859,6 +1862,7 @@ export async function extractFull(
         const maxSize = texts.reduce((m, t) => Math.max(m, t.size || 0), 0);
         const headingIdx = texts.findIndex((t) => (t.size || 0) === maxSize && maxSize > 0);
         const heading = headingIdx >= 0 ? texts[headingIdx].t.trim() : null;
+        const headingSize = headingIdx >= 0 ? Math.round(texts[headingIdx].size || 0) : 0;
         const body = texts.filter((_t, i) => i !== headingIdx).map((t) => t.t.trim());
         const image: SectionSpecImage | null = c.image && c.image.src
           ? {
@@ -1880,6 +1884,7 @@ export async function extractFull(
           button: c.button ? c.button.trim() : null,
           background: c.bg ?? null,
           radius: c.radius ?? 0,
+          headingSize,
         };
       });
       // A meaningful grid: at least 2 cells carrying real content (a heading,
