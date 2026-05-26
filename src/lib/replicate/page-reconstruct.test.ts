@@ -386,6 +386,34 @@ describe('reconstructPagePattern', () => {
     expect(grey.php).not.toContain('has-surface-raised-background-color');
   });
 
+  it('renders a cover-with-headline hero WITH a lead photo as a 2-column media-text', () => {
+    const withPhoto = reconstructPagePattern(
+      [
+        section({
+          interactionModel: 'cover-with-headline',
+          headings: ['Your Go-Anywhere Sound Machine', '$59.99'],
+          bodyText: ['A travel-ready 3-in-1.'],
+          images: [
+            { url: `${WP}quote.png`, sourceUrl: `${WP}quote.png`, alt: '', kind: 'img', width: 144, height: 144 },
+            img(`${WP}hero.jpg`, 'Hero photo'),
+          ],
+        }),
+      ],
+      opts,
+    );
+    // Two-column band with the real photo (not the 144px glyph) in the media column.
+    expect(withPhoto.php).toContain('<!-- wp:columns');
+    expect(withPhoto.php).toContain(`${WP}hero.jpg`);
+    expect(withPhoto.php).not.toContain('quote.png');
+    // A photo-less cover (e.g. a text sale banner) stays a centered text band.
+    const banner = reconstructPagePattern(
+      [section({ interactionModel: 'cover-with-headline', headings: ['SUMMER SALE'], images: [] })],
+      opts,
+    );
+    expect(banner.php).not.toContain('<!-- wp:columns');
+    expect(banner.php).toContain('>SUMMER SALE</h1>');
+  });
+
   it('does NOT route to a cell grid when fewer than 2 cells carry a title + body (e.g. a hero split)', () => {
     const s = section({ interactionModel: 'cover-with-headline', headings: ['Hero'], bodyText: ['Sub'] }) as SectionSpec;
     // A 2-up hero: one text cell (title+body), one image cell (no title/body).

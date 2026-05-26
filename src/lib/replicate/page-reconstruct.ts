@@ -388,7 +388,9 @@ function renderMediaText(s: SectionSpec, flip: boolean): BlockOut {
   s.headings.forEach((h) => textParts.push(headingBlock(h, out, { level: 2 })));
   (s.bodyText ?? []).forEach((b) => textParts.push(paragraphBlock(b, out)));
   s.buttonLabels.forEach((b) => textParts.push(buttonBlock(b, out)));
-  const imgMarkup = imageBlock(s.images[0], out, `media-text#${s.sectionIndex}`, { rounded: true });
+  // Prefer a real lead photo over a decorative glyph (a small quote-mark <img>
+  // would otherwise fill the media column).
+  const imgMarkup = imageBlock(pickLeadImage(s.images) ?? s.images[0], out, `media-text#${s.sectionIndex}`, { rounded: true });
   const textCol = column(textParts.filter(Boolean), '55%');
   const imgCol = column([imgMarkup], '45%');
   const cols = flip ? [imgCol, textCol] : [textCol, imgCol];
@@ -707,9 +709,21 @@ function renderSection(s: SectionSpecWithFaqs, ctx: RenderCtx): BlockOut {
         return renderMediaText(s, false);
       }
       return renderTextBand(s);
+    case 'cover-with-headline': {
+      // A hero with a REAL lead photo renders as a 2-column media-text (text |
+      // image), matching the common source hero layout. flip=false keeps text
+      // left / image right. Without a photo (e.g. a text-only sale banner) it's
+      // a centered band. (animated-cover stays a centered band — those are
+      // typically full-bleed covers, not two-up heroes.)
+      if (pickLeadImage(s.images) && (s.headings.length || (s.bodyText ?? []).length)) {
+        const flip = ctx.mediaTextIndex % 2 === 1;
+        ctx.mediaTextIndex++;
+        return renderMediaText(s, flip);
+      }
+      return renderTextBand(s);
+    }
     case 'static':
     case 'cta':
-    case 'cover-with-headline':
     case 'animated-cover':
     case 'price-list':
     case 'app-download':
