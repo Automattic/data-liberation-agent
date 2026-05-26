@@ -25,6 +25,7 @@ import { downloadFonts } from '../../lib/replicate/font-capture-download.js';
 import { findFreeReplacement, fallbackReplacement, firstFamilyToken } from '../../lib/replicate/font-substitution.js';
 import { downloadReplacementFont } from '../../lib/replicate/font-substitution-download.js';
 import { safeFetch } from '../../lib/extraction/safe-fetch.js';
+import { sampleFooterColor, nearestToken, brightness, type PaletteToken } from '../../lib/replicate/footer-color.js';
 
 interface ScaffoldArgs {
   outputDir?: string;
@@ -236,6 +237,31 @@ export const themeScaffoldHandler: Handler = async (args, ctx) => {
   // raw source path.
   const navHrefMap = readRedirectMap(resolve(join(a.outputDir, 'redirect-map.json')));
 
+  // Footer band color: sample the rendered footer from the desktop homepage
+  // screenshot (page builders paint footers via background-images, so computed-
+  // style extraction + the AI role-label can be wrong — swiftlumber's footer is
+  // taupe, not the brand green the foundation guessed) and map it to the nearest
+  // palette token. Falls back to the buildFooterPart default when no screenshot.
+  let footerBgToken: string | undefined;
+  let footerTextToken: string | undefined;
+  {
+    const shot = resolve(join(a.outputDir, 'screenshots', 'desktop', 'homepage.png'));
+    const fc = (foundation as { color?: { surface?: Record<string, { value?: string }> } }).color?.surface ?? {};
+    const tokens: PaletteToken[] = [];
+    for (const [key, slug] of [['base', 'surface-base'], ['raised', 'surface-raised'], ['inverse', 'surface-inverse']] as const) {
+      const hex = fc[key]?.value;
+      if (hex && /^#?[0-9a-f]{3,6}$/i.test(hex)) tokens.push({ slug, hex });
+    }
+    const sampled = existsSync(shot) ? sampleFooterColor(shot) : null;
+    if (sampled && tokens.length > 0) {
+      const tok = nearestToken(sampled, tokens);
+      if (tok) {
+        footerBgToken = tok;
+        footerTextToken = brightness(sampled) < 140 ? 'text-inverse' : 'text-default';
+      }
+    }
+  }
+
   // Surface dropped (unmapped) same-site nav/footer links so a missing menu item
   // is visible in the result instead of silently vanishing during remap.
   const scaffoldStats: { droppedNavLinks?: number } = {};
@@ -256,6 +282,8 @@ export const themeScaffoldHandler: Handler = async (args, ctx) => {
     navHrefMap,
     stats: scaffoldStats,
     reconstructedPages: Array.isArray(a.reconstructedPages) ? a.reconstructedPages : undefined,
+    footerBgToken,
+    footerTextToken,
   });
 
   return ctx.textResult({

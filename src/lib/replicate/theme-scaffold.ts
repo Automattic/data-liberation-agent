@@ -48,6 +48,12 @@ export interface ThemeScaffoldOpts {
   themeDescription?: string;
   /** Optional source-derived header/footer evidence from captured homepage HTML. */
   sourceChrome?: ThemeChromeEvidence;
+  /** Footer band background-color token, sampled from the rendered footer + mapped
+   *  to the nearest palette token (page builders paint footers via bg-images, so
+   *  computed-style extraction misses the real color). Defaults to surface-inverse. */
+  footerBgToken?: string;
+  /** Footer text color token (text-inverse on a dark band, text-default on light). */
+  footerTextToken?: string;
   /**
    * Self-hosted fonts captured from the source site's `@font-face` rules and
    * already downloaded into the theme's `assets/fonts/`. When present, the
@@ -228,7 +234,12 @@ export function buildThemeScaffold(opts: ThemeScaffoldOpts): ReplicaFile[] {
     localLogoUrl: opts.localLogoPath ? `/wp-content/themes/${themeSlug}/${opts.localLogoPath.replace(/^\/+/, '')}` : undefined,
   });
   assertNoInjection(headerHtml, 'parts/header.html');
-  const footerHtml = buildFooterPart({ siteTitle: opts.siteTitle ?? themeName, chrome: remappedFooter });
+  const footerHtml = buildFooterPart({
+    siteTitle: opts.siteTitle ?? themeName,
+    chrome: remappedFooter,
+    bgToken: opts.footerBgToken,
+    textToken: opts.footerTextToken,
+  });
   assertNoInjection(footerHtml, 'parts/footer.html');
 
   // Per-page templates wiring each block-reconstructed page to its pattern. The
@@ -881,20 +892,32 @@ function buildGenericHeaderPart(): string {
 
 // -- parts/footer.html -------------------------------------------------------
 
-function buildFooterPart(args: { siteTitle: string; chrome?: NonNullable<ThemeChromeEvidence['footer']> }): string {
+function buildFooterPart(args: {
+  siteTitle: string;
+  chrome?: NonNullable<ThemeChromeEvidence['footer']>;
+  /** Background color token for the footer band. Defaults to surface-inverse. */
+  bgToken?: string;
+  /** Text color token. Defaults to text-inverse. */
+  textToken?: string;
+}): string {
   const text = args.chrome?.text ?? [];
   const links = args.chrome?.links ?? [];
   if (text.length === 0 && links.length === 0) {
     return buildGenericFooterPart({ siteTitle: args.siteTitle });
   }
+  // The footer band color is sampled from the source's rendered footer (page
+  // builders paint it via background-images, so computed-style extraction misses
+  // it) and mapped to the nearest palette token. Defaults preserve prior behavior.
+  const bgToken = args.bgToken ?? 'surface-inverse';
+  const textToken = args.textToken ?? 'text-inverse';
 
   const textBlocks = text.slice(0, 5).map((chunk) => `<!-- wp:paragraph -->
 <p>${escapeHtml(chunk)}</p>
 <!-- /wp:paragraph -->`).join('\n\n');
   const navigationItems = links.slice(0, 10).map((link) => buildNavigationLink(link)).join('\n');
 
-  return `<!-- wp:group {"align":"full","layout":{"type":"constrained"},"style":{"spacing":{"padding":{"top":"var(--wp--preset--spacing--60)","bottom":"var(--wp--preset--spacing--60)","left":"var(--wp--preset--spacing--40)","right":"var(--wp--preset--spacing--40)"}}},"backgroundColor":"surface-inverse","textColor":"text-inverse"} -->
-<div class="wp-block-group alignfull has-text-inverse-color has-surface-inverse-background-color has-text-color has-background" style="padding-top:var(--wp--preset--spacing--60);padding-right:var(--wp--preset--spacing--40);padding-bottom:var(--wp--preset--spacing--60);padding-left:var(--wp--preset--spacing--40)">
+  return `<!-- wp:group {"align":"full","layout":{"type":"constrained"},"style":{"spacing":{"padding":{"top":"var(--wp--preset--spacing--60)","bottom":"var(--wp--preset--spacing--60)","left":"var(--wp--preset--spacing--40)","right":"var(--wp--preset--spacing--40)"}}},"backgroundColor":"${bgToken}","textColor":"${textToken}"} -->
+<div class="wp-block-group alignfull has-${textToken}-color has-${bgToken}-background-color has-text-color has-background" style="padding-top:var(--wp--preset--spacing--60);padding-right:var(--wp--preset--spacing--40);padding-bottom:var(--wp--preset--spacing--60);padding-left:var(--wp--preset--spacing--40)">
 <!-- wp:columns {"verticalAlignment":"top"} -->
 <div class="wp-block-columns are-vertically-aligned-top">
 <!-- wp:column {"verticalAlignment":"top","width":"60%"} -->
