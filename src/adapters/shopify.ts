@@ -945,6 +945,30 @@ export const shopifyAdapter: PlatformAdapter = {
       counts[type] = (counts[type] || 0) + 1;
     }
 
+    // 4b. Primary-nav targets that aren't otherwise discoverable.
+    // Replo/Shopify landing pages linked from the header (e.g.
+    // /pages/sleep-bundle) are sometimes NOT listed in /pages.json or the
+    // sitemap, so they never enter the inventory and the reconstructed menu
+    // would point at an uncaptured page. Add every same-origin primary-nav
+    // href as an inventory URL so it is always a capture candidate (and gets
+    // pinned into a --limit slice by runExtractionLoop). Off-site nav links are
+    // skipped — they stay external in the header.
+    for (const navLink of navigation) {
+      let navUrl: URL;
+      try {
+        navUrl = new URL(navLink.href);
+      } catch {
+        continue;
+      }
+      if (navUrl.origin !== origin) continue;
+      const clean = `${navUrl.origin}${navUrl.pathname.replace(/\/+$/, '')}`;
+      if (clean === origin || clean === `${origin}/`) continue; // homepage
+      if (inventoryUrls.some((inv) => inv.url === clean || inv.url === navLink.href)) continue;
+      const type = classifyUrl(clean);
+      inventoryUrls.push({ url: clean, type });
+      counts[type] = (counts[type] || 0) + 1;
+    }
+
     // 5. CDP-based admin discovery (if cdpPort provided)
     const shopifyOpts = _opts as ShopifyAdapterOpts;
     if (shopifyOpts.cdpPort) {
