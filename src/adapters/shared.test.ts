@@ -3,7 +3,15 @@ import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { ExtractionLog } from '../lib/extraction/extraction-log.js';
 import { WxrBuilder } from '../lib/extraction/wxr-builder.js';
-import { connectBrowser, runExtractionLoop, stratifiedUrlSlice, type ExtractedPage } from './shared.js';
+import {
+  connectBrowser,
+  runExtractionLoop,
+  stratifiedUrlSlice,
+  pageSlugFromUrl,
+  claimSlug,
+  navTargetInventoryUrls,
+  type ExtractedPage,
+} from './shared.js';
 
 const FIXTURE_TMP = join(process.cwd(), '.tmp-test');
 mkdirSync(FIXTURE_TMP, { recursive: true });
@@ -95,6 +103,102 @@ describe('stratifiedUrlSlice', () => {
     const urls = [u('page', 1), u('product', 1), u('post', 1), u('product', 2)];
     expect(stratifiedUrlSlice(urls, 3)).toHaveLength(3);
   });
+
+  it('pins primary-nav-target URLs even when the cap would drop them', () => {
+    // 30 pages + 20 products; the nav points at the 25th page, which a naive
+    // round-robin slice under limit 6 would never reach.
+    const pages = Array.from({ length: 30 }, (_, i) => u('page', i));
+    const products = Array.from({ length: 20 }, (_, i) => u('product', i));
+    const navTarget = pages[25].url; // https://x.com/page/25
+    const sliced = stratifiedUrlSlice([...pages, ...products], 6, new Set([navTarget]));
+    expect(sliced).toHaveLength(6);
+    expect(sliced.map((s) => s.url)).toContain(navTarget);
+  });
+
+  it('does not double-count a pinned URL', () => {
+    const pages = Array.from({ length: 10 }, (_, i) => u('page', i));
+    const pinned = new Set([pages[0].url, pages[5].url]);
+    const sliced = stratifiedUrlSlice(pages, 4, pinned);
+    expect(sliced).toHaveLength(4);
+    expect(new Set(sliced.map((s) => s.url)).size).toBe(4); // all unique
+    expect(sliced.map((s) => s.url)).toContain(pages[0].url);
+    expect(sliced.map((s) => s.url)).toContain(pages[5].url);
+  });
+});
+
+describe('pageSlugFromUrl', () => {
+  it('uses the LAST path segment, not the --joined path', () => {
+    expect(pageSlugFromUrl('https://getsnooz.com/pages/about-us')).toBe('about-us');
+    expect(pageSlugFromUrl('https://getsnooz.com/pages/shop-all')).toBe('shop-all');
+  });
+
+  it('handles blog/article nested paths', () => {
+    expect(pageSlugFromUrl('https://getsnooz.com/blogs/snoozweek/white-noise-vs-brown-noise'))
+      .toBe('white-noise-vs-brown-noise');
+  });
+
+  it('maps the homepage / root to "homepage"', () => {
+    expect(pageSlugFromUrl('https://getsnooz.com/')).toBe('homepage');
+    expect(pageSlugFromUrl('https://getsnooz.com')).toBe('homepage');
+  });
+
+  it('tolerates trailing slashes', () => {
+    expect(pageSlugFromUrl('https://getsnooz.com/pages/about-us/')).toBe('about-us');
+  });
+
+  it('normalizes to WP slug characters', () => {
+    expect(pageSlugFromUrl('https://x.com/pages/About Us!')).toBe('about-us');
+    expect(pageSlugFromUrl('https://x.com/pages/Caf%C3%A9')).toBe('caf');
+  });
+
+  it('falls back to "homepage" on unparseable input', () => {
+    expect(pageSlugFromUrl('not a url')).toBe('homepage');
+  });
+});
+
+describe('claimSlug', () => {
+  it('returns the base on first use, suffixes on collision', () => {
+    const seen = new Map<string, number>();
+    expect(claimSlug('contact', seen)).toBe('contact');
+    expect(claimSlug('contact', seen)).toBe('contact-2');
+    expect(claimSlug('contact', seen)).toBe('contact-3');
+    expect(claimSlug('about', seen)).toBe('about');
+  });
+});
+
+describe('navTargetInventoryUrls', () => {
+  const inventory = [
+    { url: 'https://getsnooz.com/pages/shop-all' },
+    { url: 'https://getsnooz.com/pages/sleep-bundle' },
+    { url: 'https://getsnooz.com/pages/about-us' },
+    { url: 'https://getsnooz.com/products/snooz-original' },
+  ];
+
+  it('matches absolutized nav hrefs to inventory URLs by pathname', () => {
+    const nav = [
+      { text: 'Shop', href: 'https://getsnooz.com/pages/shop-all' },
+      { text: 'About', href: 'https://getsnooz.com/pages/about-us' },
+    ];
+    const pinned = navTargetInventoryUrls(nav, inventory);
+    expect(pinned).toContain('https://getsnooz.com/pages/shop-all');
+    expect(pinned).toContain('https://getsnooz.com/pages/about-us');
+    expect(pinned.size).toBe(2);
+  });
+
+  it('ignores trailing slash differences', () => {
+    const nav = [{ text: 'Shop', href: 'https://getsnooz.com/pages/shop-all/' }];
+    const pinned = navTargetInventoryUrls(nav, inventory);
+    expect(pinned).toContain('https://getsnooz.com/pages/shop-all');
+  });
+
+  it('does not pin off-site nav links', () => {
+    const nav = [{ text: 'Support', href: 'https://snooz.zendesk.com/hc/en-us' }];
+    expect(navTargetInventoryUrls(nav, inventory).size).toBe(0);
+  });
+
+  it('returns empty for empty navigation', () => {
+    expect(navTargetInventoryUrls([], inventory).size).toBe(0);
+  });
 });
 
 describe('runExtractionLoop streaming callback', () => {
@@ -138,6 +242,113 @@ describe('runExtractionLoop streaming callback', () => {
         type: 'post',
       });
       expect(onPageExtracted.mock.calls[1][0].items.map((item: { type: string }) => item.type)).toEqual(['post']);
+    } finally {
+      rmSync(outputDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('runExtractionLoop source-faithful slugs + redirect map', () => {
+  it('uses the LAST path segment for the WXR post_name and a /slug/ redirect target', async () => {
+    const outputDir = mkdtempSync(join(FIXTURE_TMP, 'shared-slug-'));
+    try {
+      const wxr = makeWxr();
+      const log = new ExtractionLog(outputDir);
+      // Adapter returns the mangled `slugify` slug (manifest filename
+      // convention). The loop must override the WXR slug with the last segment.
+      const extractPage = (url: string) =>
+        Promise.resolve(
+          makePage(url, {
+            title: 'About',
+            // Simulate slugify(url) = `--`-joined path.
+            slug: new URL(url).pathname.replace(/^\//, '').replace(/\//g, '--') || 'homepage',
+          }),
+        );
+
+      await runExtractionLoop({
+        urls: [
+          { url: 'https://getsnooz.com/pages/about-us', type: 'page' },
+          { url: 'https://getsnooz.com/pages/shop-all', type: 'page' },
+        ],
+        navigation: [],
+        wxr,
+        log,
+        outputDir,
+        delay: 0,
+        dryRun: false,
+        resume: false,
+        extractPage,
+      });
+
+      const pages = wxr.items.filter((i) => i.type === 'page');
+      expect(pages.map((p) => p.slug).sort()).toEqual(['about-us', 'shop-all']);
+
+      // Redirect map: source path → local pretty permalink (/slug/).
+      const redirects = wxr.redirects;
+      expect(redirects).toContainEqual({ from: '/pages/about-us', to: '/about-us/' });
+      expect(redirects).toContainEqual({ from: '/pages/shop-all', to: '/shop-all/' });
+    } finally {
+      rmSync(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  it('collision-suffixes duplicate last-segment slugs', async () => {
+    const outputDir = mkdtempSync(join(FIXTURE_TMP, 'shared-collide-'));
+    try {
+      const wxr = makeWxr();
+      const log = new ExtractionLog(outputDir);
+      const extractPage = (url: string) => Promise.resolve(makePage(url, { slug: 'x' }));
+
+      await runExtractionLoop({
+        urls: [
+          { url: 'https://x.com/a/contact', type: 'page' },
+          { url: 'https://x.com/b/contact', type: 'page' },
+        ],
+        navigation: [],
+        wxr,
+        log,
+        outputDir,
+        delay: 0,
+        dryRun: false,
+        resume: false,
+        extractPage,
+      });
+
+      const slugs = wxr.items.filter((i) => i.type === 'page').map((p) => p.slug);
+      expect(slugs).toEqual(['contact', 'contact-2']);
+    } finally {
+      rmSync(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps the adapter (manifest) slug in the onPageExtracted callback', async () => {
+    const outputDir = mkdtempSync(join(FIXTURE_TMP, 'shared-cb-slug-'));
+    try {
+      const wxr = makeWxr();
+      const log = new ExtractionLog(outputDir);
+      const onPageExtracted = vi.fn();
+      // Adapter slug = `--`-joined manifest filename convention.
+      const extractPage = (url: string) =>
+        Promise.resolve(makePage(url, { slug: 'pages--about-us' }));
+
+      await runExtractionLoop({
+        urls: [{ url: 'https://getsnooz.com/pages/about-us', type: 'page' }],
+        navigation: [],
+        wxr,
+        log,
+        outputDir,
+        delay: 0,
+        dryRun: false,
+        resume: false,
+        extractPage,
+        onPageExtracted,
+      });
+
+      // Callback slug stays the screenshot/manifest slug (used to join back to
+      // html/<slug>.html + screenshots/.../<slug>.png) — NOT the WXR post_name.
+      expect(onPageExtracted.mock.calls[0][0].slug).toBe('pages--about-us');
+      // But the WXR post_name is source-faithful.
+      expect(wxr.items.find((i) => i.type === 'page')?.slug).toBe('about-us');
     } finally {
       rmSync(outputDir, { recursive: true, force: true });
     }

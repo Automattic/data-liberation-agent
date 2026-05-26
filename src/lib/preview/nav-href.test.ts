@@ -32,8 +32,12 @@ describe('resolveNavHref', () => {
     expect(resolveNavHref('https://www.swiftlumber.com/about-us/', SITE)).toBe('/about-us/');
   });
 
-  it('maps a nested path (interior / becomes --)', () => {
-    expect(resolveNavHref('https://www.swiftlumber.com/products/lumber', SITE)).toBe('/products--lumber/');
+  it('maps a nested path to its last segment (source-faithful slug)', () => {
+    // The imported page's WP post_name is the LAST path segment
+    // (pageSlugFromUrl), so a Shopify /pages/about-us nav link resolves to
+    // /about-us/, not the `--`-joined /pages--about-us/.
+    expect(resolveNavHref('https://www.swiftlumber.com/pages/about-us', SITE)).toBe('/about-us/');
+    expect(resolveNavHref('https://www.swiftlumber.com/products/lumber', SITE)).toBe('/lumber/');
   });
 
   it('drops query string for local path (slugify uses only pathname)', () => {

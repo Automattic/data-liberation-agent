@@ -88,6 +88,81 @@ export function slugify(url: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// Page slug derivation — source-faithful WP post_name
+// ---------------------------------------------------------------------------
+
+/**
+ * Derive a WordPress `post_name` (page/post slug) from a source URL.
+ *
+ * Unlike {@link slugify} — which joins the full path with `--` for use as a
+ * screenshot/manifest *filename* (`/pages/about-us` → `pages--about-us`) — this
+ * returns the LAST path segment so the imported page lives at a source-faithful
+ * permalink:
+ *
+ *   /pages/about-us                        → about-us
+ *   /pages/shop-all                        → shop-all
+ *   /blogs/snoozweek/white-noise-vs-brown  → white-noise-vs-brown
+ *   /                                      → homepage
+ *
+ * IMPORTANT: this is intentionally separate from `slugify`. The screenshot
+ * manifest join + filenames depend on `slugify`'s `--`-joined convention and
+ * MUST NOT change; only the WXR `post_name` uses this last-segment slug.
+ *
+ * The result is normalized to WP slug characters (lowercase a–z0–9 and `-`).
+ * Collision suffixing is the caller's responsibility (see `claimSlug`), so the
+ * extraction loop can keep a single shared `seen` map across all pages.
+ */
+export function pageSlugFromUrl(url: string): string {
+  let pathname: string;
+  try {
+    pathname = new URL(url).pathname;
+  } catch {
+    return 'homepage';
+  }
+  // Last non-empty path segment.
+  const segments = pathname.split('/').filter((s) => s.length > 0);
+  const last = segments[segments.length - 1];
+  if (!last) return 'homepage';
+  const normalized = normalizeSlug(decodeSegment(last));
+  return normalized || 'homepage';
+}
+
+/** Decode a single path segment (percent-encoding), tolerating malformed input. */
+function decodeSegment(seg: string): string {
+  try {
+    return decodeURIComponent(seg);
+  } catch {
+    return seg;
+  }
+}
+
+/** Normalize a string to WordPress slug characters: lowercase, a–z0–9 and `-`. */
+function normalizeSlug(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+/**
+ * Claim a slug, appending `-2`, `-3`, … on collision. Mutates `seen`.
+ *
+ * Mirrors the screenshot pipeline's `claimSlug` (src/lib/screenshot/output-layout.ts)
+ * so page-slug collisions (e.g. `/a/contact` and `/b/contact` both → `contact`)
+ * resolve deterministically to distinct WP `post_name`s.
+ */
+export function claimSlug(base: string, seen: Map<string, number>): string {
+  const existing = seen.get(base);
+  if (existing === undefined) {
+    seen.set(base, 1);
+    return base;
+  }
+  const next = existing + 1;
+  seen.set(base, next);
+  return `${base}-${next}`;
+}
+
+// ---------------------------------------------------------------------------
 // Shared sleep helper
 // ---------------------------------------------------------------------------
 
@@ -230,14 +305,25 @@ export interface InventoryUrl {
  *
  * Strategy:
  *   1. The homepage (if present) is always included first.
- *   2. The remaining slots are filled round-robin across the type buckets,
+ *   2. PINNED urls (e.g. primary-nav targets) come next — they MUST survive the
+ *      cap so the reconstructed menu never points at an uncaptured page.
+ *   3. The remaining slots are filled round-robin across the type buckets,
  *      in each type's first-appearance order, so every content type that
  *      exists gets proportional representation.
- *   3. Relative order within a type is preserved.
+ *   4. Relative order within a type is preserved.
  *
  * Returns exactly `min(limit, urls.length)` entries.
+ *
+ * @param pinnedUrls - Optional set of URL strings to prioritize immediately
+ *   after the homepage. Entries whose `.url` is in this set are pulled to the
+ *   front of the slice (in their original order) so a small `--limit` still
+ *   includes every primary-nav destination.
  */
-export function stratifiedUrlSlice<T extends { type: string }>(urls: T[], limit: number): T[] {
+export function stratifiedUrlSlice<T extends { type: string; url?: string }>(
+  urls: T[],
+  limit: number,
+  pinnedUrls?: Set<string>,
+): T[] {
   if (limit < 0) return [];
   if (urls.length <= limit) return urls.slice();
   if (limit === 0) return [];
@@ -264,7 +350,24 @@ export function stratifiedUrlSlice<T extends { type: string }>(urls: T[], limit:
     buckets.delete('homepage');
   }
 
-  // 2. Round-robin across remaining type buckets until the limit is hit.
+  // 2. Pinned URLs (primary-nav targets) — pull them to the front, in original
+  //    order, so the cap can't strand a menu link on an uncaptured page. We
+  //    leave the taken entries in their type buckets and skip them in the
+  //    round-robin below via `taken`.
+  if (pinnedUrls && pinnedUrls.size > 0) {
+    for (const u of urls) {
+      if (result.length >= limit) break;
+      if (taken.has(u)) continue;
+      if (u.url && pinnedUrls.has(u.url)) {
+        result.push(u);
+        taken.add(u);
+      }
+    }
+  }
+
+  // 3. Round-robin across remaining type buckets until the limit is hit.
+  //    Skip entries already taken as pinned nav targets so they aren't
+  //    double-counted.
   const cursors = new Map<string, number>();
   for (const type of buckets.keys()) cursors.set(type, 0);
   let progressed = true;
@@ -272,12 +375,16 @@ export function stratifiedUrlSlice<T extends { type: string }>(urls: T[], limit:
     progressed = false;
     for (const [type, bucket] of buckets) {
       if (result.length >= limit) break;
-      const idx = cursors.get(type)!;
+      let idx = cursors.get(type)!;
+      // Advance past any pinned entries already in the result.
+      while (idx < bucket.length && taken.has(bucket[idx])) idx++;
       if (idx < bucket.length) {
         result.push(bucket[idx]);
         taken.add(bucket[idx]);
         cursors.set(type, idx + 1);
         progressed = true;
+      } else {
+        cursors.set(type, idx);
       }
     }
   }
@@ -288,6 +395,48 @@ export function stratifiedUrlSlice<T extends { type: string }>(urls: T[], limit:
 export interface NavLink {
   text: string;
   href: string;
+}
+
+/**
+ * Resolve captured primary-nav hrefs to the matching inventory URL strings, so
+ * they can be pinned into a `--limit` slice. Matching is by same-origin
+ * pathname (ignoring trailing slash, query, hash): a nav href
+ * `https://site/pages/about-us` pins the inventory URL `https://site/pages/about-us`
+ * (or `.../about-us/`). Off-site nav hrefs match nothing and are omitted.
+ */
+export function navTargetInventoryUrls(
+  navigation: NavLink[],
+  inventory: Array<{ url: string }>,
+): Set<string> {
+  const pinned = new Set<string>();
+  if (navigation.length === 0) return pinned;
+
+  // Index inventory by normalized pathname → original URL.
+  const byPath = new Map<string, string>();
+  for (const inv of inventory) {
+    const p = normalizeUrlPath(inv.url);
+    if (p !== null && !byPath.has(p)) byPath.set(p, inv.url);
+  }
+
+  for (const nav of navigation) {
+    const p = normalizeUrlPath(nav.href);
+    if (p === null) continue;
+    const match = byPath.get(p);
+    if (match) pinned.add(match);
+  }
+  return pinned;
+}
+
+/** Normalize an absolute URL to its pathname without trailing slash / query / hash. Null if unparseable or root. */
+function normalizeUrlPath(raw: string): string | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    return null;
+  }
+  const stripped = parsed.pathname.replace(/\/+$/, '');
+  return stripped || null; // root → null (homepage handled separately)
 }
 
 export interface ExtractedPage {
@@ -454,9 +603,16 @@ export async function runExtractionLoop(opts: ExtractionLoopOpts): Promise<{
   // The cap is *stratified* across content types (see stratifiedUrlSlice) so a
   // limited extraction of a multi-type site (e.g. a Shopify store) still
   // includes products/posts rather than exhausting the budget on `/pages/*`.
+  //
+  // Primary-nav targets are PINNED into the slice so the reconstructed menu
+  // never points at a page the cap dropped. We match captured nav hrefs to
+  // inventory URLs by same-origin pathname (nav hrefs are absolutized in
+  // extractNavLinks; off-site nav links won't match any inventory URL and are
+  // simply not pinned).
+  const navTargetUrls = navTargetInventoryUrls(navigation, typedUrls);
   const effectiveLimit = limit ?? (dryRun ? 3 : undefined);
   if (effectiveLimit !== undefined && effectiveLimit >= 0) {
-    typedUrls = stratifiedUrlSlice(typedUrls, effectiveLimit);
+    typedUrls = stratifiedUrlSlice(typedUrls, effectiveLimit, navTargetUrls);
   }
   let urls = typedUrls.map((u) => u.url);
 
@@ -471,6 +627,14 @@ export async function runExtractionLoop(opts: ExtractionLoopOpts): Promise<{
 
   // Track authors by name to avoid duplicates
   const authorSlugs = new Set<string>();
+
+  // Source-faithful page/post slug claiming. The loop is the SINGLE owner of
+  // the WP `post_name` so the redirect map and WXR slug never diverge: the
+  // adapter's `pageData.slug` (often `slugify(url)` = `pages--about-us`) is
+  // overridden with the last-path-segment slug (`about-us`), collision-suffixed.
+  // This is intentionally distinct from the screenshot/manifest `slugify`
+  // filename convention, which stays untouched.
+  const claimedSlugs = new Map<string, number>();
 
   const sendLog = (message: string) => {
     try {
@@ -711,6 +875,19 @@ export async function runExtractionLoop(opts: ExtractionLoopOpts): Promise<{
 
       const cleanContent = stripNonContentTags(pageData.content);
 
+      // Derive the source-faithful WP slug from the URL (last path segment),
+      // collision-suffixed. Products are CSV-only (no WP post_name), so only
+      // claim for pages/posts. The claimed slug is authoritative for the WXR
+      // `post_name` and the redirect-map target.
+      //
+      // NOTE: `pageData.slug` (= `slugify(url)`, the `--`-joined path) is the
+      // SCREENSHOT/MANIFEST filename convention and MUST stay that way for the
+      // `onPageExtracted` callback and `log.logProcessed` below — the watch
+      // loop joins those back to `html/<slug>.html` + `screenshots/.../<slug>.png`.
+      const pageSlug = (isProduct && csvBuilder)
+        ? pageData.slug
+        : claimSlug(pageSlugFromUrl(url), claimedSlugs);
+
       // Register author if present
       let authorLogin: string | undefined;
       if (pageData.author) {
@@ -726,7 +903,7 @@ export async function runExtractionLoop(opts: ExtractionLoopOpts): Promise<{
       } else if (isPost) {
         wxr.addPost({
           title: pageData.title,
-          slug: pageData.slug,
+          slug: pageSlug,
           content: cleanContent,
           excerpt: pageData.excerpt,
           date: pageData.date,
@@ -742,7 +919,7 @@ export async function runExtractionLoop(opts: ExtractionLoopOpts): Promise<{
       } else {
         wxr.addPage({
           title: pageData.title,
-          slug: pageData.slug,
+          slug: pageSlug,
           content: cleanContent,
           excerpt: pageData.excerpt,
           date: pageData.date,
@@ -759,11 +936,16 @@ export async function runExtractionLoop(opts: ExtractionLoopOpts): Promise<{
           wxr.flushItem(wxr.items[wxr.items.length - 1]);
         }
 
-        // Add redirect from original path to slug
+        // Add redirect (and source→local-permalink mapping) from the original
+        // source path to the local WP permalink. `to` is the pretty-permalink
+        // form `/<slug>/` so the nav-href remap (theme-scaffold) and WP's own
+        // trailing-slash permalinks agree. This redirect-map.json doubles as
+        // the source-URL → local-permalink map consumed by the header builder.
         try {
           const originalPath = new URL(url).pathname;
-          if (originalPath && originalPath !== '/' && originalPath !== `/${pageData.slug}`) {
-            wxr.addRedirect({ from: originalPath, to: `/${pageData.slug}` });
+          const localPermalink = `/${pageSlug}/`;
+          if (originalPath && originalPath !== '/' && originalPath !== localPermalink) {
+            wxr.addRedirect({ from: originalPath, to: localPermalink });
           }
         } catch {
           // URL parsing failed

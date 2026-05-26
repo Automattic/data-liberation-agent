@@ -7,13 +7,15 @@
  *   - Unparseable href (relative, anchor, mailto:, tel:) → returned unchanged.
  *   - Different registrable domain (eTLD+1) → EXTERNAL → returned unchanged.
  *   - Same site, pathname is `/` or empty → `/` (WP front page).
- *   - Same site, any other pathname → `/<slugify(href)>/`
- *     where slugify strips the leading `/` and converts interior `/` to `--`,
- *     matching exactly how imported pages get their slugs (src/adapters/shared.ts).
+ *   - Same site, any other pathname → `/<pageSlugFromUrl(href)>/`
+ *     where the slug is the LAST path segment, matching exactly how imported
+ *     pages get their WP `post_name` (src/adapters/shared.ts runExtractionLoop).
+ *     This is the SOURCE-FAITHFUL slug (`/pages/about-us` → `/about-us/`), NOT
+ *     the `--`-joined screenshot/manifest `slugify` filename.
  */
 
 import { registrableDomain } from '../screenshot/first-party.js';
-import { slugify } from '../../adapters/shared.js';
+import { pageSlugFromUrl } from '../../adapters/shared.js';
 
 /**
  * Map a source nav href to the corresponding local WordPress page path.
@@ -66,13 +68,13 @@ export function resolveNavHref(href: string, siteUrl: string): string {
   }
 
   // Non-root same-site URL: build a normalized URL with the trailing slash
-  // removed (preserving origin) so slugify produces the same slug as the
-  // imported page, which is slugify(canonicalUrl) without trailing slash.
-  // Example: "https://example.com/about-us/" → strip trailing "/" from
-  // pathname → "https://example.com/about-us" → slugify → "about-us".
+  // removed (preserving origin) so the derived slug matches the imported page,
+  // which is pageSlugFromUrl(canonicalUrl) — the last path segment.
+  // Example: "https://example.com/pages/about-us/" → strip trailing "/" →
+  // "https://example.com/pages/about-us" → pageSlugFromUrl → "about-us".
   const normalized = new URL(parsed.href);
   normalized.pathname = stripped;
   normalized.search = '';
   normalized.hash = '';
-  return `/${slugify(normalized.href)}/`;
+  return `/${pageSlugFromUrl(normalized.href)}/`;
 }
