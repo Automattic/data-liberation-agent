@@ -19,6 +19,7 @@ import { existsSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type { Handler } from '../handler-types.js';
 import { buildThemeScaffold } from '../../lib/replicate/theme-scaffold.js';
+import { lintThemeJson } from '../../lib/replicate/theme-json-lint.js';
 import { extractThemeChromeFromHtml } from '../../lib/replicate/source-chrome.js';
 import { parseFontFaces, consolidateFontFaces, matchCapturedFamily } from '../../lib/replicate/font-capture.js';
 import { downloadFonts } from '../../lib/replicate/font-capture-download.js';
@@ -298,10 +299,26 @@ export const themeScaffoldHandler: Handler = async (args, ctx) => {
     footerTextToken,
   });
 
+  // Lint the generated theme.json before it ships — a malformed theme.json
+  // (bad schema/version, missing settings) silently breaks the whole block
+  // theme. Free fidelity protection; surfaced as warnings on the result.
+  let themeJsonLint: string[] = [];
+  const themeJsonFile = themeFiles.find((f) => f.relativePath === 'theme.json');
+  if (themeJsonFile) {
+    try {
+      const parsed = JSON.parse(themeJsonFile.content) as Record<string, unknown>;
+      const lint = lintThemeJson(parsed);
+      if (!lint.ok) themeJsonLint = lint.errors;
+    } catch (err) {
+      themeJsonLint = [`theme.json did not parse: ${(err as Error).message}`];
+    }
+  }
+
   return ctx.textResult({
     ok: true,
     themeSlug: a.themeSlug,
     themeFiles,
+    themeJsonLint,
     fileCount: themeFiles.length,
     relativePaths: themeFiles.map((f) => f.relativePath),
     sourceChromeUsed: Boolean(sourceChrome?.header?.links?.length || sourceChrome?.header?.logoUrl),
