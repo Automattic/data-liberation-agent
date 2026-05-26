@@ -898,12 +898,11 @@ export async function extractFull(
           ),
       );
 
-      let bandWinners: Array<{ band: number; el: Element }>;
-      if (semanticWinners.length >= 3) {
-        bandWinners = semanticWinners.map((el) => ({ band: absTop(el), el })).sort((a, b) => a.band - b.band);
-      } else {
-        // Y-band clustering fallback (page-builder DOM with no semantic sections).
-        const candidates = Array.from(document.body.querySelectorAll('*')).filter((el) => {
+      // Y-band candidate collection: every element big enough to be a content
+      // band that carries an image or real text. Shared by the page-builder
+      // fallback AND the hybrid gap-fill below.
+      const collectBandCandidates = (): Element[] =>
+        Array.from(document.body.querySelectorAll('*')).filter((el) => {
           if (!isVisible(el)) return false;
           const r = el.getBoundingClientRect();
           if (r.height < 200 || r.width < 600) return false;
@@ -911,23 +910,83 @@ export async function extractFull(
           if (el === document.body || el === document.documentElement) return false;
           return true;
         });
+      // Y-band clustering: bucket candidates into 300px bands and keep the
+      // SMALLEST qualifying element per band (avoids picking giant wrapper divs).
+      const pickBandWinners = (candidates: Element[]): Array<{ band: number; el: Element }> => {
         const bands = new Map<number, Element[]>();
         for (const el of candidates) {
           const band = Math.round(absTop(el) / 300) * 300;
           if (!bands.has(band)) bands.set(band, []);
           bands.get(band)!.push(el);
         }
-        bandWinners = [];
+        const winners: Array<{ band: number; el: Element }> = [];
         for (const [band, els] of bands) {
           els.sort((a, b) => {
             const ra = a.getBoundingClientRect();
             const rb = b.getBoundingClientRect();
             return ra.width * ra.height - rb.width * rb.height;
           });
-          bandWinners.push({ band, el: els[0] });
+          winners.push({ band, el: els[0] });
         }
-        bandWinners.sort((a, b) => a.band - b.band);
+        winners.sort((a, b) => a.band - b.band);
+        return winners;
+      };
+
+      let bandWinners: Array<{ band: number; el: Element }>;
+      if (semanticWinners.length >= 3) {
+        // Base: the semantic landmarks in document order.
+        const base = semanticWinners
+          .map((el) => ({ band: absTop(el), el }))
+          .sort((a, b) => a.band - b.band);
+        // HYBRID pages (e.g. a Shopify/Replo theme: a handful of real
+        // <section>/<footer>/<header> tags wrapping a <main> full of <div>-based
+        // page-builder bands) leave large VERTICAL GAPS between semantic
+        // landmarks where the div content actually lives — hero, comparison,
+        // feature bands. The pure-semantic path would drop all of it. Fill each
+        // gap taller than GAP_MIN with band-fallback winners whose top falls
+        // inside it. Fully-semantic exports (Wix real <section>s that tile the
+        // page with no >GAP_MIN gaps) get no fillers, so this is a no-op there.
+        const GAP_MIN = 400;
+        const bandCands = collectBandCandidates();
+        const sortedCovers = base
+          .map((w) => {
+            const r = w.el.getBoundingClientRect();
+            const top = absTop(w.el);
+            return { top, bottom: top + Math.round(r.height) };
+          })
+          .sort((a, b) => a.top - b.top);
+        const gapRanges: Array<[number, number]> = [];
+        let cursor = 0;
+        for (const c of sortedCovers) {
+          if (c.top - cursor > GAP_MIN) gapRanges.push([cursor, c.top]);
+          cursor = Math.max(cursor, c.bottom);
+        }
+        const fillers: Array<{ band: number; el: Element }> = [];
+        for (const [lo, hi] of gapRanges) {
+          // Div bands STRICTLY inside the gap: a top in [lo,hi) and not a wrapper
+          // that contains a semantic landmark (those are page/section wrappers,
+          // not content bands).
+          const within = bandCands.filter((el) => {
+            const t = absTop(el);
+            return t >= lo && t < hi && !base.some((b) => el.contains(b.el));
+          });
+          for (const w of pickBandWinners(within)) fillers.push(w);
+        }
+        bandWinners = base.concat(fillers).sort((a, b) => a.band - b.band);
+      } else {
+        // Page-builder DOM with no semantic sections: pure Y-band fallback.
+        bandWinners = pickBandWinners(collectBandCandidates());
       }
+
+      // De-nest: drop any winner CONTAINED by another kept winner. The hybrid
+      // gap-fill can pick both a content band and a grid nested inside it when
+      // they fall in different 300px bands (e.g. a comparison band at y2758 and
+      // its inner spec table at y2970) — the ±40px collapse below would miss
+      // that, and buildSection would emit the inner content twice. Keep the
+      // outer band, which carries the section heading plus the nested content.
+      bandWinners = bandWinners.filter(
+        (w) => !bandWinners.some((o) => o.el !== w.el && o.el.contains(w.el)),
+      );
 
       // near-duplicate collapse (desktop/mobile DOM variants).
       // When two winners share a Y band (±40px) keep the TALLER one. Wix stacks
