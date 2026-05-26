@@ -36,6 +36,7 @@ import type { Element as DomElement } from 'domhandler';
 import type { Page } from 'playwright';
 import type { PageSignature, SectionSignature } from './page-signature.js';
 import { extractReviewsFromHtml, type ExtractedReview } from './review-extract.js';
+import { extractFaqsFromHtml, type ExtractedFaq } from './faq-extract.js';
 import { getPlaywright, slugify } from '../../adapters/shared.js';
 import { waitForStable, triggerLazyLoad, withEvaluateTimeout } from '../screenshot/page-helpers.js';
 import { enforceSameOrigin } from '../screenshot/same-origin.js';
@@ -641,6 +642,15 @@ export interface SectionSpec {
    * must NEVER synthesize review prose.
    */
   reviews?: ExtractedReview[];
+  /**
+   * Source-VERBATIM FAQ question/answer pairs captured from this section's
+   * served HTML (accordions render every answer inline; see faq-extract.ts).
+   * Present only on FAQ sections. When set, the renderer emits a faithful
+   * `wp:details` accordion instead of dumping answers as a generic text band.
+   * A question whose answer could not be resolved carries an empty `answer`,
+   * and the renderer emits a missing-content placeholder — NEVER an invented one.
+   */
+  faqs?: ExtractedFaq[];
 }
 
 // ---------------------------------------------------------------------------
@@ -1651,6 +1661,24 @@ export async function extractFull(
       }
     }
 
+    // Deterministic FAQ capture: when a band reads as an FAQ (a "Frequently
+    // Asked Questions" heading, or accordion markup), pull source-verbatim
+    // {question, answer} pairs so the renderer emits a faithful wp:details
+    // accordion instead of dumping every answer as one wall of prose with
+    // disconnected question labels. Gated on FAQ signals so a product-spec
+    // accordion elsewhere doesn't get mistaken for an FAQ. Reviews take
+    // precedence (a review band is never an FAQ).
+    let faqs: ExtractedFaq[] | undefined;
+    if (!reviews && rr.sectionHtml) {
+      const looksFaq =
+        (rr.headings ?? []).some((h) => /frequently asked questions|\bfaqs?\b/i.test(h)) ||
+        /faq-question|faq__question|class="[^"]*\bfaq\b/i.test(rr.sectionHtml);
+      if (looksFaq) {
+        const found = extractFaqsFromHtml(rr.sectionHtml);
+        if (found.length >= 2) faqs = found;
+      }
+    }
+
     return {
       sectionIndex: i,
       interactionModel,
@@ -1687,6 +1715,7 @@ export async function extractFull(
       dividerBelow: rr.dividerBelow,
       layout: rr.layout,
       ...(reviews ? { reviews } : {}),
+      ...(faqs ? { faqs } : {}),
     };
   });
 }
