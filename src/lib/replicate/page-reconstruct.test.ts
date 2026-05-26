@@ -154,6 +154,28 @@ describe('reconstructPagePattern', () => {
     expect(r.bodyText).toContain('"It just works."');
   });
 
+  it('renders a dark-background review band on the inverse surface with light text', () => {
+    const r = reconstructPagePattern(
+      [
+        section({
+          interactionModel: 'review-grid',
+          headings: ['Loved by Thousands'],
+          backgroundColor: 'rgb(47, 57, 78)',
+          backgroundBrightness: 56,
+          reviews: [{ category: null, stars: 5, quote: '"It just works."', author: '- AVA S.' }],
+        }),
+      ],
+      opts,
+    );
+    expect(r.php).toContain('has-surface-inverse-background-color');
+    // Quote text is light (inverse), not dark — readable on navy.
+    expect(r.php).toContain('has-text-inverse-color');
+    expect(r.php).not.toContain('has-text-default-color');
+    // Content still verbatim.
+    expect(r.php).toContain('It just works.');
+    expect(r.php).toContain('★★★★★');
+  });
+
   it('flags an empty review band with no captured copy as a placeholder, never invents', () => {
     const r = reconstructPagePattern(
       [section({ interactionModel: 'review-grid', headings: ['Reviews'], reviews: [], bodyText: [] })],

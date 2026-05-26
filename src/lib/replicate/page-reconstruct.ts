@@ -296,7 +296,7 @@ function imageBlock(
 function headingBlock(
   text: string,
   out: BlockOut,
-  opts: { level?: number; center?: boolean; muted?: boolean } = {},
+  opts: { level?: number; center?: boolean; muted?: boolean; inverse?: boolean } = {},
 ): string {
   const t = normalizeCopy(text);
   if (!t) return '';
@@ -304,7 +304,7 @@ function headingBlock(
   const level = opts.level ?? 2;
   const centerAttr = opts.center ? '"textAlign":"center",' : '';
   const centerClass = opts.center ? ' has-text-align-center' : '';
-  const colorSlug = opts.muted ? 'text-muted' : 'text-default';
+  const colorSlug = opts.inverse ? 'text-inverse' : opts.muted ? 'text-muted' : 'text-default';
   return (
     `<!-- wp:heading {${centerAttr}"level":${level},"fontFamily":"display","textColor":"${colorSlug}"} -->\n` +
     `<h${level} class="wp-block-heading${centerClass} has-${colorSlug}-color has-text-color has-display-font-family">${escapeHtml(
@@ -423,15 +423,29 @@ function dedupeAdjacent(arr: string[]): string[] {
   return out;
 }
 
-/** review-grid: verbatim source reviews (stars + quote + author). Never synthesized. */
+/** review-grid: verbatim source reviews (stars + quote + author). Never synthesized.
+ *  On a dark source band (e.g. getsnooz's navy reviews) the band renders on the
+ *  inverse surface with light text; on a light band it keeps the mint raised
+ *  surface with dark text. */
 function renderReviewGrid(s: SectionSpec): BlockOut {
   const out = emptyOut();
+  const dark = isDarkSection(s);
+  const bodyColor = dark ? 'text-inverse' : 'text-default';
+  const mutedColor = dark ? 'text-inverse' : 'text-muted';
+  // A centered review paragraph in the band's text color (kept as a local helper
+  // so quote/author/rating all track the dark-vs-light treatment consistently).
+  const reviewP = (text: string, slug: string, small = false): string =>
+    `<!-- wp:paragraph {"align":"center","textColor":"${slug}"${small ? ',"fontSize":"small"' : ''}} -->\n` +
+    `<p class="has-text-align-center has-${slug}-color has-text-color${small ? ' has-small-font-size' : ''}">${escapeHtml(
+      text,
+    )}</p>\n<!-- /wp:paragraph -->`;
+
   const intro: string[] = [];
   // A leading heading (e.g. "Loved by Thousands") is band copy, not a review.
   s.headings
     .filter((h) => !/^\s*-/.test(h))
     .slice(0, 1)
-    .forEach((h) => intro.push(headingBlock(h, out, { level: 2, center: true })));
+    .forEach((h) => intro.push(headingBlock(h, out, { level: 2, center: true, inverse: dark })));
 
   const reviews: ExtractedReview[] = s.reviews ?? [];
   const cards: string[] = [];
@@ -448,65 +462,38 @@ function renderReviewGrid(s: SectionSpec): BlockOut {
       for (const line of captured) {
         out.bodyText.push(line);
         const isRating = /\d(?:\.\d)?\s*\/\s*5|rating|\breviews?\b/i.test(line) && line.length < 60;
-        parts.push(
-          `<!-- wp:paragraph {"align":"center","textColor":"${isRating ? 'text-muted' : 'text-default'}"${
-            isRating ? ',"fontSize":"small"' : ''
-          }} -->\n` +
-            `<p class="has-text-align-center has-${isRating ? 'text-muted' : 'text-default'}-color has-text-color${
-              isRating ? ' has-small-font-size' : ''
-            }">${escapeHtml(line)}</p>\n<!-- /wp:paragraph -->`,
-        );
+        parts.push(reviewP(line, isRating ? mutedColor : bodyColor, isRating));
       }
       cards.push(column(parts.filter(Boolean)));
     } else {
       out.flags.push(
         `review-grid#${s.sectionIndex}: review band detected but no verbatim reviews captured — placeholder emitted`,
       );
-      cards.push(
-        column([
-          `<!-- wp:paragraph {"align":"center","textColor":"text-subtle"} -->\n` +
-            `<p class="has-text-align-center has-text-subtle-color has-text-color">[reviews not captured]</p>\n` +
-            `<!-- /wp:paragraph -->`,
-        ]),
-      );
+      cards.push(column([reviewP('[reviews not captured]', dark ? 'text-inverse' : 'text-subtle')]));
     }
   } else {
     for (const r of reviews) {
       const parts: string[] = [];
       const starCount = Math.max(0, Math.min(5, Math.round(r.stars || 0)));
-      if (starCount > 0) {
-        // Star glyphs are a gate-exempt decorative run (not prose).
-        parts.push(
-          `<!-- wp:paragraph {"align":"center","textColor":"accent-primary"} -->\n` +
-            `<p class="has-text-align-center has-accent-primary-color has-text-color">${'★'.repeat(starCount)}</p>\n` +
-            `<!-- /wp:paragraph -->`,
-        );
-      }
+      // Star glyphs are a gate-exempt decorative run (accent on either surface).
+      if (starCount > 0) parts.push(reviewP('★'.repeat(starCount), 'accent-primary'));
       const quote = normalizeCopy(r.quote);
       if (quote) {
         out.bodyText.push(quote);
-        parts.push(
-          `<!-- wp:paragraph {"align":"center","textColor":"text-default"} -->\n` +
-            `<p class="has-text-align-center has-text-default-color has-text-color">${escapeHtml(quote)}</p>\n` +
-            `<!-- /wp:paragraph -->`,
-        );
+        parts.push(reviewP(quote, bodyColor));
       }
       if (r.author) {
         const author = normalizeCopy(r.author);
         out.bodyText.push(author);
-        parts.push(
-          `<!-- wp:paragraph {"align":"center","textColor":"text-muted","fontSize":"small"} -->\n` +
-            `<p class="has-text-align-center has-text-muted-color has-text-color has-small-font-size">${escapeHtml(
-              author,
-            )}</p>\n<!-- /wp:paragraph -->`,
-        );
+        parts.push(reviewP(author, mutedColor, true));
       }
       cards.push(column(parts.filter(Boolean)));
     }
   }
   out.markup = wrapSection([...intro.filter(Boolean), columns(cards)], {
     wide: '1100px',
-    raised: true,
+    inverse: dark,
+    raised: !dark,
   });
   return out;
 }
@@ -581,7 +568,7 @@ function columns(cols: string[]): string {
 
 function wrapSection(
   parts: string[],
-  opts: { constrained?: string; wide?: string; center?: boolean; raised?: boolean },
+  opts: { constrained?: string; wide?: string; center?: boolean; raised?: boolean; inverse?: boolean },
 ): string {
   const body = parts.filter(Boolean).join('\n');
   if (!body) return '';
@@ -590,14 +577,30 @@ function wrapSection(
     : opts.wide
       ? `"layout":{"type":"constrained","wideSize":"${opts.wide}"}`
       : `"layout":{"type":"constrained"}`;
-  const bg = opts.raised ? ',"backgroundColor":"surface-raised"' : '';
-  const bgClass = opts.raised ? ' has-surface-raised-background-color has-background' : '';
+  // inverse (dark band) wins over raised (mint band). A dark band also sets the
+  // group text color to text-inverse so emitters that don't self-set a color
+  // (and the inverse-aware ones) read light on the dark surface.
+  const bg = opts.inverse
+    ? ',"backgroundColor":"surface-inverse","textColor":"text-inverse"'
+    : opts.raised
+      ? ',"backgroundColor":"surface-raised"'
+      : '';
+  const bgClass = opts.inverse
+    ? ' has-surface-inverse-background-color has-text-inverse-color has-text-color has-background'
+    : opts.raised
+      ? ' has-surface-raised-background-color has-background'
+      : '';
   return (
     `<!-- wp:group {"tagName":"section","align":"full","style":{"spacing":{"padding":{"top":"var:preset|spacing|60","bottom":"var:preset|spacing|60","left":"var:preset|spacing|40","right":"var:preset|spacing|40"},"blockGap":"var:preset|spacing|40"}}${bg},${layout}} -->\n` +
     `<section class="wp-block-group alignfull${bgClass}" style="padding-top:var(--wp--preset--spacing--60);padding-right:var(--wp--preset--spacing--40);padding-bottom:var(--wp--preset--spacing--60);padding-left:var(--wp--preset--spacing--40)">\n` +
     `${body}\n` +
     `</section>\n<!-- /wp:group -->`
   );
+}
+
+/** A section whose captured background is dark (needs inverse/light text). */
+function isDarkSection(s: SectionSpec): boolean {
+  return s.backgroundBrightness < 100;
 }
 
 /**
