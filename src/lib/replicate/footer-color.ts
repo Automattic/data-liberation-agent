@@ -86,6 +86,19 @@ export function sampleFooterColor(pngPath: string, band: { from: number; to: num
   return dominantBandColor(png, band.from, band.to);
 }
 
+/** Dominant OPAQUE color of an entire image (e.g. a logo's ink color, ignoring
+ *  its transparent field). Used to decide header tone: a light/white logo needs
+ *  a dark header to be visible. Returns #rrggbb or null. */
+export function sampleImageColor(pngPath: string): string | null {
+  let png: { width: number; height: number; data: Buffer };
+  try {
+    png = PNG.sync.read(readFileSync(pngPath));
+  } catch {
+    return null;
+  }
+  return dominantBandColor(png, 0, 1);
+}
+
 /** Nearest palette token to a color by squared RGB distance, or null. */
 export function nearestToken(hex: string, tokens: PaletteToken[]): string | null {
   const c = parseHex(hex);

@@ -55,6 +55,21 @@ describe('buildPageReconstruction', () => {
     expect(paths).toContain('templates/page-home.html');
   });
 
+  it('wires the overlay header in the template ONLY when the hero is a full-bleed cover', () => {
+    const wideHero = { url: 'http://x/wp-content/uploads/hero.jpg', sourceUrl: 'http://x/wp-content/uploads/hero.jpg', alt: '', kind: 'img' as const, width: 1440, height: 796 };
+    const coverHome = buildPageReconstruction(
+      [section({ interactionModel: 'animated-cover', headings: ['Hero'], bodyText: ['Sub'], images: [wideHero] })],
+      { ...base, slug: 'home', isHome: true },
+    );
+    const coverTpl = coverHome.files.find((f) => f.path === 'templates/front-page.html')!.content;
+    expect(coverTpl).toContain('"className":"site-header-overlay"'); // overlay header on the cover-hero homepage
+
+    const plainPage = buildPageReconstruction([section({ headings: ['About'], bodyText: ['copy'] })], { ...base, slug: 'about' });
+    const plainTpl = plainPage.files.find((f) => f.path === 'templates/page-about.html')!.content;
+    expect(plainTpl).toContain('"slug":"header","tagName":"header"} /-->'); // solid header
+    expect(plainTpl).not.toContain('site-header-overlay');
+  });
+
   it('includes icon SVG assets the pattern references', () => {
     const s = section({ interactionModel: 'columns', headings: ['Features'] });
     s.cells = [

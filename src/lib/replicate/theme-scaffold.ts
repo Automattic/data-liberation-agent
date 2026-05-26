@@ -391,33 +391,31 @@ Tags: block-theme, full-site-editing
 }
 
 /*
- * Homepage hero overlay. When the front page's hero is a full-bleed cover
- * (wp:cover as the first block in <main>), the site header OVERLAYS it
- * transparently — white nav over the dimmed photo — instead of sitting as a
- * solid bar above it (which leaves a color band + a gap before the hero). The
- * rule is self-gated with :has() so a homepage WITHOUT a cover hero (e.g. a
- * text sale banner) keeps the normal solid header, and other pages are never
- * affected (they aren't .home). The cover's own dim keeps the nav legible.
+ * Overlay header. A page whose template wires the header with the
+ * site-header-overlay class (its hero is a full-bleed cover) renders the
+ * header as a transparent overlay on the hero — white nav over the dimmed photo
+ * — instead of a solid bar above it. The distinction is expressed in the
+ * TEMPLATE (which header treatment each page wires), not a global page-class
+ * override, so it applies exactly where the template asks and nowhere else.
+ * Pages with the solid header are untouched. The cover's own dim keeps the nav
+ * legible.
  */
-body.home:has(main > .wp-block-cover) header.wp-block-template-part {
+header.site-header-overlay {
 	position: absolute;
 	left: 0;
 	right: 0;
 	top: 0;
 	z-index: 100;
 }
-body.home:has(main > .wp-block-cover) header.wp-block-template-part .wp-block-group {
+header.site-header-overlay .wp-block-group {
 	background-color: transparent !important;
 }
 /* White nav + logo over the (dimmed) hero photo, regardless of the detected
  * header tone — dark nav links are unreadable over a photo. */
-body.home:has(main > .wp-block-cover) header.wp-block-template-part,
-body.home:has(main > .wp-block-cover) header.wp-block-template-part a,
-body.home:has(main > .wp-block-cover) header.wp-block-template-part .wp-block-navigation-item__content {
+header.site-header-overlay,
+header.site-header-overlay a,
+header.site-header-overlay .wp-block-navigation-item__content {
 	color: #ffffff !important;
-}
-body.home:has(main > .wp-block-cover) main {
-	margin-top: 0;
 }
 
 /*

@@ -25,7 +25,7 @@ import { downloadFonts } from '../../lib/replicate/font-capture-download.js';
 import { findFreeReplacement, fallbackReplacement, firstFamilyToken } from '../../lib/replicate/font-substitution.js';
 import { downloadReplacementFont } from '../../lib/replicate/font-substitution-download.js';
 import { safeFetch } from '../../lib/extraction/safe-fetch.js';
-import { sampleFooterColor, nearestToken, brightness, type PaletteToken } from '../../lib/replicate/footer-color.js';
+import { sampleFooterColor, sampleImageColor, nearestToken, brightness, type PaletteToken } from '../../lib/replicate/footer-color.js';
 
 interface ScaffoldArgs {
   outputDir?: string;
@@ -229,6 +229,18 @@ export const themeScaffoldHandler: Handler = async (args, ctx) => {
 
   // ── Localize the header logo (download CDN logo → theme assets/) ─────────────
   const localLogoPath = await downloadLogo(sourceChrome?.header?.logoUrl, themeDir);
+
+  // Header tone from the LOGO color. The solid (interior-page) header must show
+  // the logo: a light/white logo (designed for a dark/brand header — common when
+  // the source homepage uses a transparent overlay header) needs a dark header,
+  // or the wordmark vanishes on a white bar. Sample the localized logo and force
+  // a dark header tone when its ink is light; a dark logo keeps the light header.
+  if (localLogoPath && /\.png$/i.test(localLogoPath)) {
+    const logoColor = sampleImageColor(resolve(themeDir, localLogoPath));
+    if (logoColor && brightness(logoColor) > 180 && sourceChrome?.header) {
+      sourceChrome = { ...sourceChrome, header: { ...sourceChrome.header, tone: 'dark' } };
+    }
+  }
 
   // ── Source-path → local-permalink map (redirect-map.json) ────────────────────
   // Produced during extraction (src/adapters/shared.ts runExtractionLoop emits

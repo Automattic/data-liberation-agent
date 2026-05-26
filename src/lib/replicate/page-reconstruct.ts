@@ -80,6 +80,9 @@ export interface ReconstructResult {
    * references 404. Sanitized (no script/event handlers) — safe to write.
    */
   iconAssets: Array<{ path: string; svg: string }>;
+  /** True when the first rendered section is a full-bleed wp:cover hero — the page
+   *  template should wire the transparent OVERLAY header rather than the solid one. */
+  heroIsCover: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -892,6 +895,11 @@ export function reconstructPagePattern(
     )}\n` +
     ` * Categories: featured\n * Inserter: false\n */\n?>\n`;
 
+  // The hero is a full-bleed cover when the first rendered section is a wp:cover.
+  // The template uses this to wire the OVERLAY header (transparent, over the
+  // photo) vs the solid header — the chrome distinction lives in the template.
+  const heroIsCover = sectionMarkup.length > 0 && /^\s*<!-- wp:cover\b/.test(sectionMarkup[0]);
+
   return {
     php: header + sectionMarkup.join('\n\n') + '\n',
     expectedText: dedupe(expectedText),
@@ -900,6 +908,7 @@ export function reconstructPagePattern(
     provenanceFlags,
     sectionsRendered: sectionMarkup.length,
     iconAssets,
+    heroIsCover,
   };
 }
 

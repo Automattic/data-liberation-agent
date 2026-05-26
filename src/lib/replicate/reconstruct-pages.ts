@@ -43,9 +43,19 @@ export interface PageReconstructionResult {
 // theme-scaffold check; sanitize_title-shaped).
 const SAFE_SLUG = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
 
-/** A page template shell: header part → reconstructed pattern → footer part. */
-function buildPageTemplate(patternSlug: string): string {
-  return `<!-- wp:template-part {"slug":"header","tagName":"header"} /-->
+/**
+ * A page template shell: header part → reconstructed pattern → footer part.
+ * When the page's hero is a full-bleed cover, the header template-part is tagged
+ * with the `site-header-overlay` class so the theme renders it as a transparent
+ * overlay on the hero (white nav over the photo). Other pages get the solid
+ * header. The header distinction lives HERE, in the template — not in a global
+ * `.home:has(cover)` CSS override.
+ */
+function buildPageTemplate(patternSlug: string, overlayHeader = false): string {
+  const headerPart = overlayHeader
+    ? `<!-- wp:template-part {"slug":"header","tagName":"header","className":"site-header-overlay"} /-->`
+    : `<!-- wp:template-part {"slug":"header","tagName":"header"} /-->`;
+  return `${headerPart}
 
 <!-- wp:group {"tagName":"main","layout":{"type":"constrained"}} -->
 <main class="wp-block-group">
@@ -91,7 +101,8 @@ export function buildPageReconstruction(
     ],
   });
 
-  const template = buildPageTemplate(patternSlug);
+  // A cover-hero page wires the transparent overlay header; others the solid one.
+  const template = buildPageTemplate(patternSlug, r.heroIsCover);
   const files: ReconstructedFile[] = [
     { path: `patterns/page-${opts.slug}.php`, content: r.php },
     { path: `templates/page-${opts.slug}.html`, content: template },
