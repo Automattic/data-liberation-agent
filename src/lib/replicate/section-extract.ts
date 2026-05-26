@@ -1359,6 +1359,34 @@ export async function extractFull(
             });
           }
         }
+        // Content background-images that live OUTSIDE this section's DOM subtree
+        // but VISUALLY within its Y-band. A 2-column hero often renders its
+        // product photo as a CSS background-image on the IMAGE column, which is a
+        // SIBLING of the detected (text-column) section element — so the
+        // descendant scan above misses it and the hero loses its photo. Assign a
+        // large RASTER bg-image to the section whose band contains its vertical
+        // center (near-unique: section bands don't overlap). Excludes the
+        // section's own ancestors (their bg is the section background, not
+        // content) and gradients/data-URIs (decorative, not photos).
+        const RASTER_BG = /\.(?:jpe?g|png|webp|avif|gif)(?:[?#]|$)/i;
+        for (const d of Array.from(document.body.querySelectorAll('*'))) {
+          if (!isVisible(d) || el.contains(d) || d.contains(el)) continue;
+          const dr = d.getBoundingClientRect();
+          if (dr.width < 200 || dr.height < 200) continue;
+          const cy = dr.top + window.scrollY + dr.height / 2;
+          if (cy < top || cy >= bottom) continue;
+          const dcs = getComputedStyle(d);
+          for (const u of extractCssUrls(dcs.backgroundImage)) {
+            if (!RASTER_BG.test(u)) continue;
+            bgImages.push({
+              src: u.slice(0, 400),
+              alt: d.getAttribute('aria-label') || d.getAttribute('title') || '',
+              kind: 'background',
+              w: Math.round(dr.width),
+              h: Math.round(dr.height),
+            });
+          }
+        }
         // dedupe images by params-stripped src
         const seen = new Set<string>();
         const allImages: Array<{ src: string; alt: string; kind: 'img' | 'background'; w: number; h: number }> = [];
