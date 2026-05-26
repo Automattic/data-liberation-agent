@@ -523,16 +523,37 @@ function renderReviewGrid(s: SectionSpec): BlockOut {
   return out;
 }
 
-/** color-block-grid / logo-strip / gallery: a row of images, no per-image copy. */
+/** A responsive wp:gallery grid of WP-library images. A single flex `columns`
+ *  row gives every image 1/N width (25 images → unreadable thumbnails); a gallery
+ *  block wraps to a fixed column count at a sensible size. */
+function galleryBlock(images: SectionSpecImage[], out: BlockOut): string {
+  const usable = images.filter((im) => isWpUrl(im.url));
+  if (usable.length === 0) return '';
+  const cols = Math.min(4, usable.length);
+  const figures = usable.map((im) => {
+    out.assets.push(im.url);
+    return (
+      `<!-- wp:image {"sizeSlug":"large","linkDestination":"none"} -->\n` +
+      `<figure class="wp-block-image size-large"><img src="${escapeHtml(im.url)}" alt="${escapeHtml(im.alt || '')}"/></figure>\n` +
+      `<!-- /wp:image -->`
+    );
+  });
+  return (
+    `<!-- wp:gallery {"columns":${cols},"imageCrop":true,"linkTo":"none","sizeSlug":"large"} -->\n` +
+    `<figure class="wp-block-gallery has-nested-images columns-${cols} is-cropped">\n${figures.join('\n')}\n</figure>\n` +
+    `<!-- /wp:gallery -->`
+  );
+}
+
+/** color-block-grid / logo-strip / gallery: a band of images, no per-image copy.
+ *  Rendered as a responsive gallery grid (not a single N-wide flex row). */
 function renderImageRow(s: SectionSpec): BlockOut {
   const out = emptyOut();
   const parts: string[] = [];
   s.headings.forEach((h) => parts.push(headingBlock(h, out, { level: 2, center: true })));
   (s.bodyText ?? []).forEach((b) => parts.push(paragraphBlock(b, out, { center: true })));
-  const imgCols = s.images
-    .map((im, i) => column([imageBlock(im, out, `${s.interactionModel}#${s.sectionIndex}.img${i}`, { rounded: true })]))
-    .filter(Boolean);
-  if (imgCols.length) parts.push(columns(imgCols));
+  const gallery = galleryBlock(s.images, out);
+  if (gallery) parts.push(gallery);
   out.markup = wrapSection(parts.filter(Boolean), { wide: '1100px', raised: isTintedSection(s) });
   return out;
 }

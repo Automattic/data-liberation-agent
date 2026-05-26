@@ -438,6 +438,17 @@ describe('reconstructPagePattern', () => {
     expect(plain.php).not.toContain('has-surface-raised-background-color');
   });
 
+  it('renders a many-image gallery as a wp:gallery grid, not a 25-wide flex row', () => {
+    const imgs = Array.from({ length: 25 }, (_, i) => img(`${WP}g${i}.jpg`, `img ${i}`));
+    const r = reconstructPagePattern([section({ interactionModel: 'gallery', headings: ['Gallery'], images: imgs })], opts);
+    expect(r.php).toContain('<!-- wp:gallery');
+    expect(r.php).toContain('columns-4');
+    // 25 images become 25 wp:image figures inside ONE gallery, not 25 wp:columns.
+    expect((r.php.match(/<!-- wp:image /g) || []).length).toBe(25);
+    expect((r.php.match(/<!-- wp:column /g) || []).length).toBe(0);
+    expect(r.expectedAssets).toHaveLength(25);
+  });
+
   it('does NOT route to a cell grid when fewer than 2 cells carry a title + body (e.g. a hero split)', () => {
     const s = section({ interactionModel: 'cover-with-headline', headings: ['Hero'], bodyText: ['Sub'] }) as SectionSpec;
     // A 2-up hero: one text cell (title+body), one image cell (no title/body).
