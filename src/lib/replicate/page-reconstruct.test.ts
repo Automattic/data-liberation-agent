@@ -5,6 +5,7 @@ import {
   escapeHtml,
   normalizeCopy,
   sanitizePatternHeaderField,
+  sanitizeSvgAsset,
 } from './page-reconstruct.js';
 import { scanForInjection } from './validate-artifacts.js';
 import type { SectionSpec } from './section-extract.js';
@@ -350,6 +351,18 @@ describe('reconstructPagePattern', () => {
       expect(a.svg).not.toMatch(/<script/i);
       expect(a.svg).not.toMatch(/onload/i);
     }
+  });
+
+  it('sanitizeSvgAsset strips SMIL animation + external/script hrefs (direct-navigation XSS vectors)', () => {
+    // SMIL <set> setting an event handler — must be removed (on*= strip misses it).
+    expect(sanitizeSvgAsset('<svg><set attributeName="onload" to="alert(1)"/></svg>')).not.toMatch(/<set|onload/i);
+    expect(sanitizeSvgAsset('<svg><animate attributeName="onbegin" to="x"/></svg>')).not.toMatch(/<animate|onbegin/i);
+    // External href on <image>/<a>/<use> — removed; local #refs + data:image kept.
+    expect(sanitizeSvgAsset('<svg><image href="https://evil.example/x"/></svg>')).not.toMatch(/https?:/i);
+    expect(sanitizeSvgAsset('<svg><a xlink:href="javascript:alert(1)">x</a></svg>')).not.toMatch(/javascript:/i);
+    expect(sanitizeSvgAsset('<svg><use href="#local-glyph"/></svg>')).toContain('#local-glyph');
+    // A normal icon is untouched.
+    expect(sanitizeSvgAsset('<svg viewBox="0 0 24 24"><path d="M3 9h4"/></svg>')).toContain('<path');
   });
 
   it('renders a colorful light-tinted section on the raised surface (mint band), white on default', () => {

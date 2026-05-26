@@ -208,13 +208,26 @@ function emptyOut(): BlockOut {
  * <script>, <foreignObject>, event-handler attributes, or javascript: URLs.
  */
 export function sanitizeSvgAsset(svg: string): string {
-  return svg
-    .replace(/<script[\s\S]*?<\/script\s*>/gi, '')
-    .replace(/<foreignObject[\s\S]*?<\/foreignObject\s*>/gi, '')
-    .replace(/\son[a-z]+\s*=\s*"[^"]*"/gi, '')
-    .replace(/\son[a-z]+\s*=\s*'[^']*'/gi, '')
-    .replace(/javascript:/gi, '')
-    .trim();
+  return (
+    svg
+      .replace(/<script[\s\S]*?<\/script\s*>/gi, '')
+      .replace(/<foreignObject[\s\S]*?<\/foreignObject\s*>/gi, '')
+      // SMIL animation elements can set event-handler attributes at runtime
+      // (e.g. <set attributeName="onload" to="…">) — a direct-navigation XSS
+      // vector that the on*= attribute strip below misses. A static icon glyph
+      // never animates, so drop these wholesale (both self-closing and paired).
+      .replace(/<(set|animate|animateTransform|animateMotion)\b[\s\S]*?(?:\/>|<\/\1\s*>)/gi, '')
+      // External / script href on <a>/<use>/<image> (tracking + SSRF-ish on
+      // direct navigation). Keep local #fragment refs and inline data:image.
+      .replace(
+        /\s(?:xlink:)?href\s*=\s*["']\s*(?:https?:|\/\/|data:(?!image\/))[^"']*["']/gi,
+        '',
+      )
+      .replace(/\son[a-z]+\s*=\s*"[^"]*"/gi, '')
+      .replace(/\son[a-z]+\s*=\s*'[^']*'/gi, '')
+      .replace(/javascript:/gi, '')
+      .trim()
+  );
 }
 
 /** Shared render context threaded through a single reconstructPagePattern call. */
