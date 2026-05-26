@@ -122,9 +122,31 @@ export function pageSlugFromUrl(url: string): string {
   // Last non-empty path segment.
   const segments = pathname.split('/').filter((s) => s.length > 0);
   const last = segments[segments.length - 1];
+  // Truly empty path (root `/`) → the homepage sentinel.
   if (!last) return 'homepage';
   const normalized = normalizeSlug(decodeSegment(last));
-  return normalized || 'homepage';
+  // A non-empty segment that normalizes to empty (all-punctuation, `..`, etc.)
+  // must NOT silently shadow the homepage sentinel — it's a distinct page.
+  if (!normalized) return 'page-1';
+  return escapeReservedSlug(normalized);
+}
+
+/**
+ * WordPress slugs that collide with core routes (or our own `homepage`
+ * sentinel). A source page whose last path segment normalizes to one of these
+ * would shadow a core endpoint (`/feed/`, `/wp-admin/`, `/page/2/` pagination,
+ * `/wp-json/`) or our homepage — silently breaking the route. Suffix such a
+ * slug with `-page` so it stays distinct and visible rather than colliding.
+ */
+const RESERVED_SLUGS = new Set([
+  'wp-admin', 'wp-content', 'wp-includes', 'wp-json', 'feed', 'embed',
+  'page', 'attachment', 'comments', 'trackback', 'author', 'category', 'tag',
+  'homepage',
+]);
+
+/** Suffix a normalized slug when it would collide with a WP-reserved route. */
+function escapeReservedSlug(slug: string): string {
+  return RESERVED_SLUGS.has(slug) ? `${slug}-page` : slug;
 }
 
 /** Decode a single path segment (percent-encoding), tolerating malformed input. */

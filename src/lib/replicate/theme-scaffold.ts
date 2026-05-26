@@ -33,6 +33,7 @@ import {
   consolidateFontFaces,
   type LocalFontFace,
 } from './font-capture.js';
+import { assertNoInjection } from './validate-artifacts.js';
 
 export interface ThemeScaffoldOpts {
   /** Required — the parsed design-foundation.json. */
@@ -106,6 +107,13 @@ export interface ThemeScaffoldOpts {
    *   - 'keep': emit the original source path unchanged (last resort).
    */
   onUnmappedNavLink?: 'drop' | 'keep';
+  /**
+   * Optional out-param. When provided, `buildThemeScaffold` populates it with
+   * the count of same-site nav/footer links that were DROPPED during remapping
+   * (unmapped target page → not imported). Surfaces a silent menu-loss so the
+   * handler can report `droppedNavLinks` instead of the menu just missing items.
+   */
+  stats?: { droppedNavLinks?: number };
 }
 
 /** Extremely loose type — mirrors what design-foundation.json actually contains. */
@@ -163,24 +171,41 @@ export function buildThemeScaffold(opts: ThemeScaffoldOpts): ReplicaFile[] {
   // already-local links pass through; unmapped same-site links are dropped
   // (default) so the menu never points at an uncaptured 404.
   const remap = makeNavHrefRemapper(opts.navHrefMap, opts.onUnmappedNavLink ?? 'drop');
-  const remappedHeader = opts.sourceChrome?.header
-    ? { ...opts.sourceChrome.header, links: remapLinks(opts.sourceChrome.header.links, remap) }
-    : opts.sourceChrome?.header;
-  const remappedFooter = opts.sourceChrome?.footer
-    ? { ...opts.sourceChrome.footer, links: remapLinks(opts.sourceChrome.footer.links, remap) }
-    : opts.sourceChrome?.footer;
+  let droppedNavLinks = 0;
+  let remappedHeader = opts.sourceChrome?.header;
+  if (opts.sourceChrome?.header) {
+    const r = remapLinks(opts.sourceChrome.header.links, remap);
+    droppedNavLinks += r.dropped;
+    remappedHeader = { ...opts.sourceChrome.header, links: r.links };
+  }
+  let remappedFooter = opts.sourceChrome?.footer;
+  if (opts.sourceChrome?.footer) {
+    const r = remapLinks(opts.sourceChrome.footer.links, remap);
+    droppedNavLinks += r.dropped;
+    remappedFooter = { ...opts.sourceChrome.footer, links: r.links };
+  }
+  if (opts.stats) opts.stats.droppedNavLinks = droppedNavLinks;
+
+  // Header/footer parts carry source-derived nav labels + hrefs (attacker-
+  // controlled) and are written to disk WITHOUT going through validateArtifacts.
+  // Gate them through the SAME injection scan so a malicious nav label/href
+  // gets the `<script>`/`on*=`/`<?php` protection the pattern validator applies.
+  const headerHtml = buildHeaderPart({
+    themeSlug,
+    chrome: remappedHeader,
+    localLogoUrl: opts.localLogoPath ? `/wp-content/themes/${themeSlug}/${opts.localLogoPath.replace(/^\/+/, '')}` : undefined,
+  });
+  assertNoInjection(headerHtml, 'parts/header.html');
+  const footerHtml = buildFooterPart({ siteTitle: opts.siteTitle ?? themeName, chrome: remappedFooter });
+  assertNoInjection(footerHtml, 'parts/footer.html');
 
   return [
     { relativePath: 'style.css', content: buildStyleCss({ themeName, themeSlug, themeDescription, capturedFonts }) },
     { relativePath: 'theme.json', content: buildThemeJson(foundation, { capturedFonts, headingLineHeights: opts.headingLineHeights, headingFamily: opts.headingFamily, bodyFamily: opts.bodyFamily, bodySubstituteFamily: opts.bodySubstituteFamily, displaySubstituteFamily: opts.displaySubstituteFamily }) },
     { relativePath: 'functions.php', content: buildFunctionsPhp({ themeSlug }) },
     { relativePath: 'templates/index.html', content: buildIndexTemplate() },
-    { relativePath: 'parts/header.html', content: buildHeaderPart({
-      themeSlug,
-      chrome: remappedHeader,
-      localLogoUrl: opts.localLogoPath ? `/wp-content/themes/${themeSlug}/${opts.localLogoPath.replace(/^\/+/, '')}` : undefined,
-    }) },
-    { relativePath: 'parts/footer.html', content: buildFooterPart({ siteTitle: opts.siteTitle ?? themeName, chrome: remappedFooter }) },
+    { relativePath: 'parts/header.html', content: headerHtml },
+    { relativePath: 'parts/footer.html', content: footerHtml },
     // Header utility-icon SVG assets (shipped as files; referenced via core/image
     // in the header — wp:html is banned, so glyphs can't be inlined).
     ...buildHeaderIconAssets(),
@@ -865,14 +890,16 @@ function makeNavHrefRemapper(
   };
 }
 
-/** Apply a remapper to a link list, dropping nulls. */
-function remapLinks(links: ThemeChromeLink[], remap: NavHrefRemap): ThemeChromeLink[] {
+/** Apply a remapper to a link list, dropping nulls. Returns kept links + drop count. */
+function remapLinks(links: ThemeChromeLink[], remap: NavHrefRemap): { links: ThemeChromeLink[]; dropped: number } {
   const out: ThemeChromeLink[] = [];
+  let dropped = 0;
   for (const link of links) {
     const r = remap(link);
     if (r) out.push(r);
+    else dropped++;
   }
-  return out;
+  return { links: out, dropped };
 }
 
 /** Normalize a path-style href to a bare path: strip query/hash + trailing slash. */
@@ -883,10 +910,40 @@ function normalizePath(href: string): string {
   return p.replace(/\/+$/, '');
 }
 
+/**
+ * Allow only navigation hrefs whose scheme is safe to render. Source nav hrefs
+ * are attacker-controlled, so a `javascript:`/`data:`/`vbscript:` href must
+ * never reach the emitted markup. Relative paths, anchors, query-only,
+ * `http(s):`, `mailto:`, and `tel:` are allowed; anything else is dropped to
+ * `#` so the link is inert rather than an injection vector.
+ */
+export function safeNavHref(href: string): string {
+  const h = (href ?? '').trim();
+  if (h === '') return '#';
+  // Relative / root-relative / anchor / query — no scheme, safe.
+  if (h.startsWith('/') || h.startsWith('#') || h.startsWith('?')) return h;
+  // A scheme is present only when a colon precedes the first slash/?/#.
+  const schemeMatch = h.match(/^([a-z][a-z0-9+.-]*):/i);
+  if (!schemeMatch) {
+    // No scheme and not root-relative → treat as a relative path (safe).
+    return h;
+  }
+  const scheme = schemeMatch[1].toLowerCase();
+  if (scheme === 'http' || scheme === 'https' || scheme === 'mailto' || scheme === 'tel') {
+    return h;
+  }
+  // javascript:, data:, vbscript:, file:, etc. — drop to an inert anchor.
+  return '#';
+}
+
 function buildNavigationLink(link: ThemeChromeLink): string {
+  const safeHref = safeNavHref(link.href);
   return `<!-- wp:navigation-link ${jsonAttr({
-    label: link.label,
-    url: link.href,
+    // Escape the source-derived label so a `Shop --><script>` label can't break
+    // out of the block-comment / inject markup. jsonAttr is JSON-only (not
+    // HTML-escaped), so the escape must happen here.
+    label: escapeHtml(link.label),
+    url: safeHref,
     kind: 'custom',
     isTopLevelLink: true,
     opensInNewTab: link.external || undefined,

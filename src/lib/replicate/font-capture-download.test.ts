@@ -60,4 +60,17 @@ describe('downloadFonts', () => {
     expect(faces).toHaveLength(2);
     expect(calls).toBe(1);
   });
+
+  it('records an error (does not throw) for an internal-host font src — SSRF guard', async () => {
+    let calls = 0;
+    const fakeFetch = (async () => { calls++; return { ok: true, status: 200, arrayBuffer: async () => new TextEncoder().encode('x').buffer }; }) as unknown as typeof fetch;
+    const internal: ParsedFontFace[] = [
+      { family: 'Evil', src: 'http://169.254.169.254/x.woff2', format: 'woff2', weight: '400', style: 'normal' },
+    ];
+    const { faces, errors } = await downloadFonts(internal, { themeDir: dir, fetchImpl: fakeFetch });
+    expect(faces).toEqual([]);
+    expect(errors).toHaveLength(1);
+    expect(errors[0].error).toMatch(/internal|loopback|not allowed/i);
+    expect(calls).toBe(0); // never fetched
+  });
 });

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildThemeScaffold } from './theme-scaffold.js';
+import { buildThemeScaffold, safeNavHref } from './theme-scaffold.js';
 
 const FOUNDATION_FIXTURE = {
   version: 1,
@@ -523,6 +523,115 @@ describe('buildThemeScaffold', () => {
       expect(footer).toContain('"url":"/about-us/"');
       expect(footer).toContain('external.com/privacy');
       expect(footer).not.toContain('/pages/about-us');
+    });
+  });
+
+  describe('nav label/href XSS hardening', () => {
+    it('escapes a source nav label containing --><script> (no raw <script> in markup)', () => {
+      const files = buildThemeScaffold({
+        foundation: FOUNDATION_FIXTURE,
+        themeSlug: 'site-replica',
+        sourceChrome: {
+          header: {
+            logoUrl: 'http://x/logo.png',
+            logoAlt: 'L',
+            links: [{ label: 'Shop --><script>alert(1)</script>', href: '/shop', external: false }],
+          },
+        },
+      });
+      const header = files.find((f) => f.relativePath === 'parts/header.html')!.content;
+      // The raw <script> must not survive; the label is HTML-escaped.
+      expect(header).not.toContain('<script>');
+      expect(header).toContain('&lt;script&gt;');
+    });
+
+    it('drops a javascript: nav href to an inert anchor', () => {
+      const files = buildThemeScaffold({
+        foundation: FOUNDATION_FIXTURE,
+        themeSlug: 'site-replica',
+        sourceChrome: {
+          header: {
+            logoUrl: 'http://x/logo.png',
+            logoAlt: 'L',
+            // eslint-disable-next-line no-script-url
+            links: [{ label: 'Evil', href: 'javascript:alert(document.cookie)', external: true }],
+          },
+        },
+      });
+      const header = files.find((f) => f.relativePath === 'parts/header.html')!.content;
+      expect(header).not.toContain('javascript:');
+      expect(header).toContain('"url":"#"');
+    });
+
+    it('round-trips a normal label + href unchanged', () => {
+      const files = buildThemeScaffold({
+        foundation: FOUNDATION_FIXTURE,
+        themeSlug: 'site-replica',
+        sourceChrome: {
+          header: {
+            logoUrl: 'http://x/logo.png',
+            logoAlt: 'L',
+            links: [{ label: 'Products', href: '/shop-all', external: false }],
+          },
+        },
+      });
+      const header = files.find((f) => f.relativePath === 'parts/header.html')!.content;
+      expect(header).toContain('"label":"Products"');
+      expect(header).toContain('"url":"/shop-all"');
+    });
+
+    it('safeNavHref allows http/https/relative/mailto/tel and drops javascript/data/vbscript', () => {
+      expect(safeNavHref('/about')).toBe('/about');
+      expect(safeNavHref('https://example.com/x')).toBe('https://example.com/x');
+      expect(safeNavHref('mailto:hi@example.com')).toBe('mailto:hi@example.com');
+      expect(safeNavHref('tel:+15551234567')).toBe('tel:+15551234567');
+      expect(safeNavHref('#section')).toBe('#section');
+      // eslint-disable-next-line no-script-url
+      expect(safeNavHref('javascript:alert(1)')).toBe('#');
+      expect(safeNavHref('data:text/html,<script>1</script>')).toBe('#');
+      expect(safeNavHref('vbscript:msgbox(1)')).toBe('#');
+    });
+  });
+
+  describe('dropped-nav observability (stats out-param)', () => {
+    it('reports the count of unmapped same-site nav links dropped during remap', () => {
+      const stats: { droppedNavLinks?: number } = {};
+      buildThemeScaffold({
+        foundation: FOUNDATION_FIXTURE,
+        themeSlug: 'site-replica',
+        sourceChrome: {
+          header: {
+            logoUrl: 'http://x/logo.png',
+            logoAlt: 'L',
+            links: [
+              { label: 'About', href: '/pages/about-us', external: false }, // mapped
+              { label: 'Ghost', href: '/pages/never-imported', external: false }, // unmapped → dropped
+              { label: 'Ext', href: 'https://other.com/x', external: true }, // external → kept
+            ],
+          },
+        },
+        navHrefMap: { '/pages/about-us': '/about-us/' },
+        stats,
+      });
+      expect(stats.droppedNavLinks).toBe(1);
+    });
+
+    it('reports 0 dropped when every same-site link maps', () => {
+      const stats: { droppedNavLinks?: number } = {};
+      buildThemeScaffold({
+        foundation: FOUNDATION_FIXTURE,
+        themeSlug: 'site-replica',
+        sourceChrome: {
+          header: {
+            logoUrl: 'http://x/logo.png',
+            logoAlt: 'L',
+            links: [{ label: 'About', href: '/pages/about-us', external: false }],
+          },
+        },
+        navHrefMap: { '/pages/about-us': '/about-us/' },
+        stats,
+      });
+      expect(stats.droppedNavLinks).toBe(0);
     });
   });
 });

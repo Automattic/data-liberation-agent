@@ -14,6 +14,7 @@ import { mkdirSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { LocalFontFace } from './font-capture.js';
 import type { FreeFontReplacement } from './font-substitution.js';
+import { safeFetch } from '../extraction/safe-fetch.js';
 
 export interface DownloadReplacementOpts {
   /** Absolute path to the theme root (e.g. output/<site>/theme). */
@@ -22,7 +23,7 @@ export interface DownloadReplacementOpts {
   fontsSubdir?: string;
   /** Per-request timeout in ms (default 30000). */
   timeoutMs?: number;
-  /** Injected fetch (for tests). Defaults to global fetch. */
+  /** Injected fetch (for tests). Routed through the SSRF-safe wrapper. Defaults to global fetch. */
   fetchImpl?: typeof fetch;
 }
 
@@ -52,7 +53,6 @@ export async function downloadReplacementFont(
 ): Promise<DownloadReplacementResult> {
   const fontsSubdir = opts.fontsSubdir ?? 'assets/fonts';
   const timeoutMs = opts.timeoutMs ?? 30000;
-  const doFetch = opts.fetchImpl ?? fetch;
   const destDir = join(opts.themeDir, fontsSubdir);
   const stem = familyStem(replacement.family);
 
@@ -82,9 +82,11 @@ export async function downloadReplacementFont(
     }
 
     try {
-      const res = await doFetch(f.url, { signal: AbortSignal.timeout(timeoutMs) });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const buf = Buffer.from(await res.arrayBuffer());
+      // SSRF-safe + size-capped. gstatic URLs are fixed, but routing through the
+      // wrapper still applies the redirect re-check + max-body cap uniformly.
+      const res = await safeFetch(f.url, { timeoutMs, fetchImpl: opts.fetchImpl });
+      if (res.status < 200 || res.status >= 300) throw new Error(`HTTP ${res.status}`);
+      const buf = res.body;
       if (buf.length === 0) throw new Error('empty response body');
       mkdirSync(destDir, { recursive: true });
       writeFileSync(destPath, buf);

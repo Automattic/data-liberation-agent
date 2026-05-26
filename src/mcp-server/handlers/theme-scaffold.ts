@@ -24,6 +24,7 @@ import { parseFontFaces, consolidateFontFaces, matchCapturedFamily } from '../..
 import { downloadFonts } from '../../lib/replicate/font-capture-download.js';
 import { findFreeReplacement, fallbackReplacement, firstFamilyToken } from '../../lib/replicate/font-substitution.js';
 import { downloadReplacementFont } from '../../lib/replicate/font-substitution-download.js';
+import { safeFetch } from '../../lib/extraction/safe-fetch.js';
 
 interface ScaffoldArgs {
   outputDir?: string;
@@ -114,9 +115,11 @@ async function downloadLogo(logoUrl: string | undefined, themeDir: string): Prom
   const destPath = join(themeDir, relPath);
   if (existsSync(destPath)) return relPath;
   try {
-    const res = await fetch(logoUrl, { signal: AbortSignal.timeout(30000) });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const buf = Buffer.from(await res.arrayBuffer());
+    // SSRF-safe: the logo URL is parsed from arbitrary source HTML, so validate
+    // it (and any redirect) against internal hosts and cap the body size.
+    const res = await safeFetch(logoUrl, { timeoutMs: 30000 });
+    if (res.status < 200 || res.status >= 300) throw new Error(`HTTP ${res.status}`);
+    const buf = res.body;
     if (buf.length === 0) throw new Error('empty response body');
     mkdirSync(join(themeDir, 'assets'), { recursive: true });
     writeFileSync(destPath, buf);
@@ -225,6 +228,9 @@ export const themeScaffoldHandler: Handler = async (args, ctx) => {
   // raw source path.
   const navHrefMap = readRedirectMap(resolve(join(a.outputDir, 'redirect-map.json')));
 
+  // Surface dropped (unmapped) same-site nav/footer links so a missing menu item
+  // is visible in the result instead of silently vanishing during remap.
+  const scaffoldStats: { droppedNavLinks?: number } = {};
   const themeFiles = buildThemeScaffold({
     foundation: foundation as Parameters<typeof buildThemeScaffold>[0]['foundation'],
     themeSlug: a.themeSlug,
@@ -240,6 +246,7 @@ export const themeScaffoldHandler: Handler = async (args, ctx) => {
     bodySubstituteFamily,
     displaySubstituteFamily,
     navHrefMap,
+    stats: scaffoldStats,
   });
 
   return ctx.textResult({
@@ -253,5 +260,6 @@ export const themeScaffoldHandler: Handler = async (args, ctx) => {
     fontSubstitutions,
     localLogoPath,
     fontErrors,
+    droppedNavLinks: scaffoldStats.droppedNavLinks ?? 0,
   });
 };

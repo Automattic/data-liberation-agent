@@ -62,6 +62,29 @@ function significantWords(norm: string): string[] {
 }
 
 /**
+ * True when `heading` (normalized) equals the space-joined concatenation of a
+ * run of CONSECUTIVE normalized entries. This recognizes a source heading the
+ * extractor split across adjacent text nodes (captured as two ordered entries)
+ * WITHOUT admitting a sub-phrase that merely spans an entry boundary: the match
+ * must align to whole-entry boundaries (start at an entry start, end at an entry
+ * end), so "win award" from ["we win", "award every year"] still fails while
+ * ["sleep better", "tonight"] reconstructs "sleep better tonight".
+ */
+function matchesConsecutiveEntries(heading: string, entries: string[]): boolean {
+  const norm = entries.map((e) => e.trim()).filter((e) => e.length > 0);
+  for (let i = 0; i < norm.length; i++) {
+    let joined = norm[i];
+    if (joined === heading) return true; // (also covered by single-entry check)
+    for (let j = i + 1; j < norm.length; j++) {
+      joined = `${joined} ${norm[j]}`;
+      if (joined.length > heading.length) break; // can only grow — past the target
+      if (joined === heading) return true;
+    }
+  }
+  return false;
+}
+
+/**
  * BODY-COPY provenance threshold. A body paragraph passes when it is either a
  * normalized substring of the joined source OR has at least this fraction of its
  * significant words present in the source corpus. Verbatim copy (post entity/
@@ -70,6 +93,46 @@ function significantWords(norm: string): string[] {
  * captured artifact (a trailing word, a split node) so legit copy isn't flagged.
  */
 export const BODY_COPY_CONTAINMENT_THRESHOLD = 0.8;
+
+/**
+ * Shared injection / XSS scan over arbitrary block markup. Returns the list of
+ * violation messages (empty = clean). The SAME trust-boundary the pattern
+ * validator enforces, extracted so the theme-part builders (header/footer) can
+ * gate their output too — nav markup is attacker-controlled (source labels +
+ * hrefs) and is written to disk WITHOUT going through `validateArtifacts`.
+ *
+ * Two PHP forms are sanctioned (theme-asset echo + the pattern-file doc-comment
+ * header); ANY other residual `<?`, a `<script>` tag, or an inline `on*=` event
+ * handler is treated as injection.
+ */
+export function scanForInjection(markup: string): string[] {
+  const violations: string[] = [];
+  const SANCTIONED_PHP = /<\?php\s+echo\s+esc_url\(\s*get_theme_file_uri\(\s*'[^']+'\s*\)\s*\);\s*\?>/gi;
+  const SANCTIONED_HEADER = /<\?php\s*\/\*\*[\s\S]*?\*\/\s*\?>/g;
+  const residualPhp = markup.replace(SANCTIONED_PHP, '').replace(SANCTIONED_HEADER, '');
+  if (/<\?/.test(residualPhp)) {
+    violations.push('raw PHP tag in markup (only the pattern-header doc-comment and esc_url(get_theme_file_uri()) are allowed)');
+  }
+  if (/<\s*script/i.test(markup)) {
+    violations.push('raw <script> tag in markup (not allowed)');
+  }
+  if (/[\s"'/]on[a-z]+\s*=/i.test(markup)) {
+    violations.push('inline event handler attribute (on*=) in markup (not allowed)');
+  }
+  return violations;
+}
+
+/**
+ * Throw if `markup` contains any injection pattern (see {@link scanForInjection}).
+ * Used by the theme-part builders to fail fast on attacker-controlled nav markup
+ * that would otherwise bypass the pattern validator.
+ */
+export function assertNoInjection(markup: string, context = 'markup'): void {
+  const violations = scanForInjection(markup);
+  if (violations.length > 0) {
+    throw new Error(`injection check failed for ${context}: ${violations.join('; ')}`);
+  }
+}
 
 export interface PatternSpec {
   interactionModel: string;
@@ -128,24 +191,9 @@ export function validateArtifacts(input: ArtifactInput): ValidationReport {
 
     // --- security: injection / XSS trust boundary ---
     // Two PHP forms are sanctioned; ANY other residual open tag — <?php, <?PHP,
-    // <?= or the short <? — is treated as injection:
-    //   1. the theme-asset echo `<?php echo esc_url( get_theme_file_uri('...') ); ?>` (any case)
-    //   2. the WP pattern-file header: a block containing ONLY a /** ... */
-    //      doc-comment (Title/Slug/Categories) — required for registration,
-    //      executes nothing. The non-greedy `*/\s*\?>` anchor means code after the
-    //      comment (e.g. `<?php /** */ system(); ?>`) is NOT stripped → still flagged.
-    const SANCTIONED_PHP = /<\?php\s+echo\s+esc_url\(\s*get_theme_file_uri\(\s*'[^']+'\s*\)\s*\);\s*\?>/gi;
-    const SANCTIONED_HEADER = /<\?php\s*\/\*\*[\s\S]*?\*\/\s*\?>/g;
-    const residualPhp = p.php.replace(SANCTIONED_PHP, '').replace(SANCTIONED_HEADER, '');
-    if (/<\?/.test(residualPhp)) {
-      fail('raw PHP tag in markup (only the pattern-header doc-comment and esc_url(get_theme_file_uri()) are allowed)');
-    }
-    if (/<\s*script/i.test(p.php)) {
-      fail('raw <script> tag in markup (not allowed)');
-    }
-    if (/[\s"'/]on[a-z]+\s*=/i.test(p.php)) {
-      fail('inline event handler attribute (on*=) in markup (not allowed)');
-    }
+    // <?= or the short <? — plus <script> and inline on*= handlers are treated as
+    // injection. Shared with the theme-part builders via scanForInjection().
+    for (const violation of scanForInjection(p.php)) fail(violation);
 
     // --- provenance: emitted copy must trace to the captured source ---
     //
@@ -165,13 +213,20 @@ export function validateArtifacts(input: ArtifactInput): ValidationReport {
     }
 
     // Heading inner-HTML is normalized (tags stripped) so nested <span>/<a> can't
-    // hide invented copy; each heading must be contained in a SINGLE spec entry,
-    // not merely scattered across the joined blob.
+    // hide invented copy. A heading passes when it is contained in a SINGLE spec
+    // entry, OR it equals the concatenation of a run of CONSECUTIVE entries (a
+    // source heading the extractor split across adjacent text nodes — e.g. a
+    // `<span>`/`<br>` split — captured as two ordered entries). Crucially this
+    // still REJECTS a heading merely scattered across the joined blob ("win
+    // award" from ["we win", "award every year"]): the heading must align to
+    // whole-entry boundaries, so a sub-phrase spanning an entry boundary fails.
     for (const heading of p.php.matchAll(/<h[1-6][^>]*>([\s\S]*?)<\/h[1-6]>/gi)) {
       const h = normalizeText(heading[1]);
-      if (h && !allowedEntries.some((e) => e.includes(h))) {
-        fail(`heading "${h}" not found in source spec (provenance)`);
-      }
+      if (!h) continue;
+      const inSingleEntry = allowedEntries.some((e) => e.includes(h));
+      if (inSingleEntry) continue;
+      if (matchesConsecutiveEntries(h, allowedEntries)) continue;
+      fail(`heading "${h}" not found in source spec (provenance)`);
     }
 
     // BODY-COPY provenance — the hard gate that stops paraphrase from shipping.

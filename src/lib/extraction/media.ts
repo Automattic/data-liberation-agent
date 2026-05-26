@@ -2,6 +2,13 @@ import { createWriteStream, mkdirSync, readFileSync, statSync, unlinkSync } from
 import { createHash } from 'crypto';
 import { basename, extname, join, resolve } from 'path';
 import { pipeline } from 'stream/promises';
+import {
+  assertPublicHttpUrl,
+  BodyTooLargeError,
+  MAX_DOWNLOAD_BYTES,
+  MAX_REDIRECTS,
+} from './safe-fetch.js';
+import { Transform } from 'stream';
 
 export interface DownloadResult {
   url: string;
@@ -97,6 +104,33 @@ export function extensionFromContentType(contentType: string): string {
   }
 }
 
+/**
+ * SSRF-safe media fetch: validates the (attacker-controlled) media URL and
+ * every redirect target against internal hosts, follows redirects manually
+ * (capped), and returns the final Response for streaming. Throws on a blocked
+ * host or too-many-redirects.
+ */
+async function fetchMediaResponse(rawUrl: string): Promise<Response> {
+  let currentUrl = assertPublicHttpUrl(rawUrl).toString();
+  for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+    const res = await fetch(currentUrl, {
+      signal: AbortSignal.timeout(30000),
+      redirect: 'manual',
+    });
+    if (res.status >= 300 && res.status < 400) {
+      const location = res.headers.get('location');
+      try { await res.body?.cancel(); } catch { /* ignore */ }
+      if (!location) throw new Error(`redirect ${res.status} with no Location header`);
+      if (hop === MAX_REDIRECTS) throw new Error(`too many redirects (> ${MAX_REDIRECTS})`);
+      // Re-validate every redirect target so a public URL can't 302 internal.
+      currentUrl = assertPublicHttpUrl(new URL(location, currentUrl).toString()).toString();
+      continue;
+    }
+    return res;
+  }
+  throw new Error(`too many redirects (> ${MAX_REDIRECTS})`);
+}
+
 export async function downloadMedia(
   url: string,
   outputDir: string,
@@ -104,14 +138,29 @@ export async function downloadMedia(
   seenHashes?: Map<string, string>,
 ): Promise<DownloadResult> {
   try {
-    const urlObj = new URL(url);
+    // assertPublicHttpUrl (inside fetchMediaResponse) is the SSRF gate; parse
+    // here only to derive the filename. Reject non-http(s)/internal up front so
+    // the filename derivation never runs on a blocked URL.
+    const urlObj = assertPublicHttpUrl(url);
     let rawFilename = deriveFilenameFromUrl(urlObj) || `image-${Date.now()}.jpg`;
 
     mkdirSync(outputDir, { recursive: true });
 
-    const response = await fetch(url, { signal: AbortSignal.timeout(30000) });
+    const response = await fetchMediaResponse(url);
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`);
+    }
+
+    // Reject an over-size body via Content-Length before streaming a byte.
+    const contentLength = response.headers.get('content-length');
+    if (contentLength) {
+      const declared = Number(contentLength);
+      if (Number.isFinite(declared) && declared > MAX_DOWNLOAD_BYTES) {
+        try { await response.body?.cancel(); } catch { /* ignore */ }
+        throw new BodyTooLargeError(
+          `media body ${declared} bytes exceeds max ${MAX_DOWNLOAD_BYTES} (Content-Length)`,
+        );
+      }
     }
 
     // If the derived filename has no extension, add one from the response
@@ -137,8 +186,28 @@ export async function downloadMedia(
     const filename = safeFilename(rawFilename, seenNames);
     const destPath = resolveMediaPath(filename, outputDir);
 
+    // Stream to disk with a running byte counter so a body that lies about (or
+    // omits) Content-Length still can't fill the disk — abort + delete the
+    // partial file if the cap is exceeded.
+    let written = 0;
+    const sizeGuard = new Transform({
+      transform(chunk: Buffer, _enc, cb) {
+        written += chunk.length;
+        if (written > MAX_DOWNLOAD_BYTES) {
+          cb(new BodyTooLargeError(`media body exceeds max ${MAX_DOWNLOAD_BYTES} bytes (streamed)`));
+          return;
+        }
+        cb(null, chunk);
+      },
+    });
     const fileStream = createWriteStream(destPath);
-    await pipeline(response.body as unknown as NodeJS.ReadableStream, fileStream);
+    try {
+      await pipeline(response.body as unknown as NodeJS.ReadableStream, sizeGuard, fileStream);
+    } catch (streamErr) {
+      // Remove the partial file on any streaming failure (size cap or otherwise).
+      try { unlinkSync(destPath); } catch { /* ignore */ }
+      throw streamErr;
+    }
 
     // Deduplicate byte-identical files by content hash
     if (seenHashes) {

@@ -154,6 +154,29 @@ describe('pageSlugFromUrl', () => {
   it('falls back to "homepage" on unparseable input', () => {
     expect(pageSlugFromUrl('not a url')).toBe('homepage');
   });
+
+  // FINDING D: reserved-word / collision visibility.
+  it('suffixes a WP-reserved last segment so it cannot shadow a core route', () => {
+    expect(pageSlugFromUrl('https://x.com/feed')).toBe('feed-page');
+    expect(pageSlugFromUrl('https://x.com/section/wp-admin')).toBe('wp-admin-page');
+    expect(pageSlugFromUrl('https://x.com/embed')).toBe('embed-page');
+    expect(pageSlugFromUrl('https://x.com/blog/page')).toBe('page-page');
+    expect(pageSlugFromUrl('https://x.com/attachment')).toBe('attachment-page');
+    expect(pageSlugFromUrl('https://x.com/wp-json')).toBe('wp-json-page');
+  });
+
+  it('does not let a page literally named "homepage" shadow the root sentinel', () => {
+    expect(pageSlugFromUrl('https://x.com/pages/homepage')).toBe('homepage-page');
+  });
+
+  it('does not shadow homepage when a non-empty segment normalizes to empty', () => {
+    // All-punctuation segment → distinct fallback, not the homepage sentinel.
+    expect(pageSlugFromUrl('https://x.com/pages/!!!')).toBe('page-1');
+  });
+
+  it('leaves a normal (non-reserved) slug unchanged', () => {
+    expect(pageSlugFromUrl('https://x.com/pages/about-us')).toBe('about-us');
+  });
 });
 
 describe('claimSlug', () => {

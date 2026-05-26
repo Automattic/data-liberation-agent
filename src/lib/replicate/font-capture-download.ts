@@ -12,6 +12,7 @@
 import { mkdirSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { absolutizeFontUrl, fontFilename, type ParsedFontFace, type LocalFontFace } from './font-capture.js';
+import { safeFetch } from '../extraction/safe-fetch.js';
 
 export interface DownloadFontsOpts {
   /** Absolute path to the theme root (e.g. output/<site>/theme). */
@@ -22,7 +23,7 @@ export interface DownloadFontsOpts {
   baseUrl?: string;
   /** Per-request timeout in ms (default 30000). */
   timeoutMs?: number;
-  /** Injected fetch (for tests). Defaults to global fetch. */
+  /** Injected fetch (for tests). Routed through the SSRF-safe wrapper. Defaults to global fetch. */
   fetchImpl?: typeof fetch;
 }
 
@@ -44,7 +45,6 @@ export async function downloadFonts(
 ): Promise<DownloadFontsResult> {
   const fontsSubdir = opts.fontsSubdir ?? 'assets/fonts';
   const timeoutMs = opts.timeoutMs ?? 30000;
-  const doFetch = opts.fetchImpl ?? fetch;
   const destDir = join(opts.themeDir, fontsSubdir);
 
   const faces: LocalFontFace[] = [];
@@ -71,9 +71,11 @@ export async function downloadFonts(
     }
 
     try {
-      const res = await doFetch(absolute, { signal: AbortSignal.timeout(timeoutMs) });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const buf = Buffer.from(await res.arrayBuffer());
+      // SSRF-safe: validates the URL (a font `src` parsed from arbitrary source
+      // CSS), re-checks every redirect, and caps the body size.
+      const res = await safeFetch(absolute, { timeoutMs, fetchImpl: opts.fetchImpl });
+      if (res.status < 200 || res.status >= 300) throw new Error(`HTTP ${res.status}`);
+      const buf = res.body;
       if (buf.length === 0) throw new Error('empty response body');
       mkdirSync(destDir, { recursive: true });
       writeFileSync(destPath, buf);

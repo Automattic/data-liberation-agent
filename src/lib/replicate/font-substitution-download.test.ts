@@ -82,4 +82,19 @@ describe('downloadReplacementFont', () => {
     expect(faces).toHaveLength(1);
     expect(calls).toBe(1); // no re-fetch
   });
+
+  it('records an error (does not throw) for an internal-host replacement URL — SSRF guard', async () => {
+    let calls = 0;
+    const fakeFetch = (async () => { calls++; return { ok: true, status: 200, arrayBuffer: async () => new TextEncoder().encode('x').buffer }; }) as unknown as typeof fetch;
+    const internal: FreeFontReplacement = {
+      family: 'Evil',
+      faces: [{ weight: '400', style: 'normal', url: 'http://localhost/evil.woff2' }],
+      rationale: 'test',
+    };
+    const { faces, errors } = await downloadReplacementFont(internal, { themeDir: dir, fetchImpl: fakeFetch });
+    expect(faces).toEqual([]);
+    expect(errors).toHaveLength(1);
+    expect(errors[0].error).toMatch(/loopback|internal|not allowed/i);
+    expect(calls).toBe(0);
+  });
 });

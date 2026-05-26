@@ -223,6 +223,78 @@ describe('validateArtifacts — body-copy provenance (paraphrase hard-fails)', (
     }] });
     expect(r.errors.some((e) => /provenance/i.test(e.message))).toBe(false);
   });
+
+  // FINDING C: provenance gate false-positive on genuinely-verbatim copy.
+  // A long (>600 char) source paragraph used to be truncated to 600 chars in
+  // capture, so a verbatim emit fell below the containment threshold and
+  // HARD-FAILED — blocking a real install. The capture cap is now generous.
+  it('PASSES a verbatim paragraph longer than 600 chars (no truncation false-fail)', () => {
+    const longPara =
+      'SNOOZ is a mechanical white noise machine that uses a real fan to create a natural, ' +
+      'non-looping sound that helps you fall asleep and stay asleep through the night. ' +
+      'Unlike electronic sound machines that play short digital recordings on a loop, the ' +
+      'tone never repeats, so your brain never latches onto a seam in the audio. You can ' +
+      'tune both the volume and the timbre by rotating the outer shell, dialing in anything ' +
+      'from a soft, distant hush to a deep, room-filling rush of air that masks the snoring ' +
+      'partner, the hallway traffic, the early-morning garbage truck, and every other ' +
+      'disruption that would otherwise pull you out of deep sleep before you are ready to ' +
+      'wake up on your own terms in the morning feeling genuinely rested and recovered.';
+    expect(longPara.length).toBeGreaterThan(600);
+    const php = `<!-- wp:paragraph --><p>${longPara}</p><!-- /wp:paragraph -->`;
+    const r = validateArtifacts({ patterns: [{
+      slug: 'getsnooz/section-3',
+      php,
+      spec: { interactionModel: 'media-text', expectedText: [], bodyText: [longPara], expectedAssets: [] },
+    }] });
+    expect(r.ok).toBe(true);
+    expect(r.errors.some((e) => /body copy/i.test(e.message))).toBe(false);
+  });
+
+  it('still HARD-FAILS a reworded long paragraph (paraphrase not source-verbatim)', () => {
+    const sourcePara =
+      'SNOOZ is a mechanical white noise machine that uses a real fan to create a natural, ' +
+      'non-looping sound that helps you fall asleep and stay asleep through the night, with ' +
+      'a tone you can tune from a soft hush to a deep, room-filling rush of air across the ' +
+      'whole bedroom so nothing disturbs your rest until you are ready to wake on your own.';
+    const reworded =
+      'Forget cheap digital gadgets and tinny phone apps: our premium engineered acoustic ' +
+      'wellness device leverages aerodynamic principles to deliver an immersive, scientifically ' +
+      'optimized auditory cocoon that revolutionizes how modern professionals reclaim their ' +
+      'circadian rhythm and unlock peak restorative recovery every single evening guaranteed.';
+    const php = `<!-- wp:paragraph --><p>${reworded}</p><!-- /wp:paragraph -->`;
+    const r = validateArtifacts({ patterns: [{
+      slug: 'getsnooz/section-3',
+      php,
+      spec: { interactionModel: 'media-text', expectedText: [], bodyText: [sourcePara], expectedAssets: [] },
+    }] });
+    expect(r.ok).toBe(false);
+    expect(r.errors.some((e) => /body copy not source-verbatim/i.test(e.message))).toBe(true);
+  });
+
+  it('PASSES a heading split across CONSECUTIVE captured entries (legit node split)', () => {
+    // The source heading "Sleep better tonight" was captured as two adjacent
+    // text nodes; the emitted heading reconstructs the full line.
+    const php = `<!-- wp:heading --><h2>Sleep better tonight</h2><!-- /wp:heading -->`;
+    const r = validateArtifacts({ patterns: [{
+      slug: 'getsnooz/section-3',
+      php,
+      spec: { interactionModel: 'cover-with-headline', expectedText: ['Sleep better', 'tonight'], expectedAssets: [] },
+    }] });
+    expect(r.errors.some((e) => /provenance/i.test(e.message))).toBe(false);
+  });
+
+  it('still FAILS a heading whose words merely span an entry boundary (not whole-entry aligned)', () => {
+    // "win award" spans the end of entry 1 + start of entry 2 but is not a
+    // reconstruction of whole consecutive entries → still an evasion.
+    const php = `<!-- wp:heading --><h2>Win Award</h2><!-- /wp:heading -->`;
+    const r = validateArtifacts({ patterns: [{
+      slug: 'getsnooz/section-3',
+      php,
+      spec: { interactionModel: 'cta', expectedText: ['we win', 'award every year'], expectedAssets: [] },
+    }] });
+    expect(r.ok).toBe(false);
+    expect(r.errors.some((e) => /provenance/i.test(e.message))).toBe(true);
+  });
 });
 
 describe('validateArtifacts — pattern-file header (regression: real builder output)', () => {

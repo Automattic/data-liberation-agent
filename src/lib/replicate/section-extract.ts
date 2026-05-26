@@ -1178,16 +1178,24 @@ export async function extractFull(
         // because only the live DOM knows what's actually visible. Reviews are
         // captured separately (spec.reviews) and buttons via buttonLabels, so we
         // skip <p>/<li> that sit inside a button/anchor-button to avoid dupes.
+        // NOTE: the cap MUST be large enough to hold a whole paragraph verbatim.
+        // The validate-artifacts BODY-COPY provenance gate compares emitted
+        // paragraphs against this captured text; truncating to 600 chars made a
+        // genuinely-verbatim >600-char paragraph fall below the containment
+        // threshold and falsely HARD-FAIL the install. Capture the full
+        // paragraph (bounded to a generous 8000 chars so a runaway node can't
+        // bloat the payload — real prose paragraphs are well under that).
+        const BODY_TEXT_MAX = 8000;
         const bodyTextSeen = new Set<string>();
         const bodyText: string[] = [];
         for (const p of paragraphEls) {
           const inButton = !!(p as HTMLElement).closest('button,[role="button"]');
           if (inButton) continue;
           const t = (p.textContent || '').replace(/\s+/g, ' ').trim();
-          if (t.length < 5 || t.length > 600) continue;
+          if (t.length < 5 || t.length > BODY_TEXT_MAX) continue;
           if (bodyTextSeen.has(t)) continue;
           bodyTextSeen.add(t);
-          bodyText.push(t.slice(0, 600));
+          bodyText.push(t);
         }
 
         const imgEls = descendants.filter((d) => d.tagName === 'IMG') as HTMLImageElement[];
