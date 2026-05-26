@@ -330,6 +330,27 @@ describe('reconstructPagePattern', () => {
     }
   });
 
+  it('renders a colorful light-tinted section on the raised surface (mint band), white on default', () => {
+    // A mint-tinted band (rgba(158,228,211,...), brightness ~205) -> surface-raised.
+    const tinted = reconstructPagePattern(
+      [section({ interactionModel: 'static', headings: ['Tinted'], backgroundColor: 'rgba(158, 228, 211, 0.3)', backgroundBrightness: 205 })],
+      opts,
+    );
+    expect(tinted.php).toContain('has-surface-raised-background-color');
+    // A white band stays default (no raised background).
+    const white = reconstructPagePattern(
+      [section({ interactionModel: 'static', headings: ['White'], backgroundColor: 'rgb(255, 255, 255)', backgroundBrightness: 255 })],
+      opts,
+    );
+    expect(white.php).not.toContain('has-surface-raised-background-color');
+    // A neutral light grey is NOT treated as a tint.
+    const grey = reconstructPagePattern(
+      [section({ interactionModel: 'static', headings: ['Grey'], backgroundColor: 'rgb(238, 238, 238)', backgroundBrightness: 238 })],
+      opts,
+    );
+    expect(grey.php).not.toContain('has-surface-raised-background-color');
+  });
+
   it('does NOT route to a cell grid when fewer than 2 cells carry a title + body (e.g. a hero split)', () => {
     const s = section({ interactionModel: 'cover-with-headline', headings: ['Hero'], bodyText: ['Sub'] }) as SectionSpec;
     // A 2-up hero: one text cell (title+body), one image cell (no title/body).

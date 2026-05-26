@@ -139,6 +139,23 @@ function isWpUrl(u: string): boolean {
   return /\/wp-content\/uploads\//i.test(u);
 }
 
+/**
+ * True when a section sits on a colorful LIGHT background tint (the source's
+ * mint feature bands), so it should render on the raised surface token instead
+ * of flattening to white. Excludes white/near-white (brightness >=245), dark
+ * bands (<100 — those need an inverse-text treatment, handled separately), and
+ * neutral greys (low saturation). Navy text stays readable on the light mint, so
+ * no per-emitter text-color cascade is needed for this case.
+ */
+function isTintedSection(s: SectionSpec): boolean {
+  const b = s.backgroundBrightness;
+  if (b >= 245 || b < 100) return false;
+  const m = /rgba?\((\d+),\s*(\d+),\s*(\d+)/.exec(s.backgroundColor || '');
+  if (!m) return false;
+  const sat = Math.max(+m[1], +m[2], +m[3]) - Math.min(+m[1], +m[2], +m[3]);
+  return sat >= 25;
+}
+
 /** Footer/nav chrome detection — the sitewide Shopify footer leaks into every
  *  Replo page capture as trailing sections. We render page body only; header +
  *  footer come from the theme parts. */
@@ -347,7 +364,7 @@ function renderTextBand(s: SectionSpec): BlockOut {
   // decorative glyph (a small quote-mark/badge <img> would otherwise fill the slot).
   const lead = pickLeadImage(s.images);
   if (lead) parts.push(imageBlock(lead, out, `${s.interactionModel}#${s.sectionIndex}`, { align: 'center', rounded: true }));
-  out.markup = wrapSection(parts.filter(Boolean), { constrained: '760px', center: true });
+  out.markup = wrapSection(parts.filter(Boolean), { constrained: '760px', center: true, raised: isTintedSection(s) });
   return out;
 }
 
@@ -362,7 +379,7 @@ function renderMediaText(s: SectionSpec, flip: boolean): BlockOut {
   const textCol = column(textParts.filter(Boolean), '55%');
   const imgCol = column([imgMarkup], '45%');
   const cols = flip ? [imgCol, textCol] : [textCol, imgCol];
-  out.markup = wrapSection([columns(cols)], { wide: '1100px' });
+  out.markup = wrapSection([columns(cols)], { wide: '1100px', raised: isTintedSection(s) });
   return out;
 }
 
@@ -393,7 +410,7 @@ function renderCardGrid(s: SectionSpec, withButtons: boolean): BlockOut {
   // Body text not consumed per-card (a section intro) renders above the grid.
   const extra: string[] = [];
   for (let i = cardCount; i < bodyText.length; i++) extra.push(paragraphBlock(bodyText[i], out, { center: true }));
-  out.markup = wrapSection([...extra.filter(Boolean), columns(cards)], { wide: '1100px' });
+  out.markup = wrapSection([...extra.filter(Boolean), columns(cards)], { wide: '1100px', raised: isTintedSection(s) });
   return out;
 }
 
@@ -504,7 +521,7 @@ function renderImageRow(s: SectionSpec): BlockOut {
     .map((im, i) => column([imageBlock(im, out, `${s.interactionModel}#${s.sectionIndex}.img${i}`, { rounded: true })]))
     .filter(Boolean);
   if (imgCols.length) parts.push(columns(imgCols));
-  out.markup = wrapSection(parts.filter(Boolean), { wide: '1100px' });
+  out.markup = wrapSection(parts.filter(Boolean), { wide: '1100px', raised: isTintedSection(s) });
   return out;
 }
 
@@ -537,7 +554,7 @@ function renderFaq(s: SectionSpecWithFaqs): BlockOut {
         `${answerBlock}\n</details>\n<!-- /wp:details -->`,
     );
   }
-  out.markup = wrapSection(parts.filter(Boolean), { constrained: '760px' });
+  out.markup = wrapSection(parts.filter(Boolean), { constrained: '760px', raised: isTintedSection(s) });
   return out;
 }
 
@@ -617,7 +634,7 @@ function renderCellGrid(s: SectionSpec, ctx: RenderCtx): BlockOut {
     const kept = parts.filter(Boolean);
     if (kept.length) cols.push(column(kept));
   }
-  out.markup = wrapSection([...intro.filter(Boolean), columns(cols)], { wide: '1100px' });
+  out.markup = wrapSection([...intro.filter(Boolean), columns(cols)], { wide: '1100px', raised: isTintedSection(s) });
   return out;
 }
 
