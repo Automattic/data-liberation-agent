@@ -64,10 +64,12 @@ function parseExtractionLog(logPath: string): {
 }
 
 function countWxrItems(wxrContent: string): { pages: number; posts: number; media: number } {
-  const pages = (wxrContent.match(/<wp:post_type>\s*<!\[CDATA\[page\]\]>/g) || []).length;
-  const posts = (wxrContent.match(/<wp:post_type>\s*<!\[CDATA\[post\]\]>/g) || []).length;
-  const media = (wxrContent.match(/<wp:post_type>\s*<!\[CDATA\[attachment\]\]>/g) || []).length;
-  return { pages, posts, media };
+  // Match BOTH the CDATA-wrapped form (<wp:post_type><![CDATA[page]]></wp:post_type>)
+  // AND the plain-text form (<wp:post_type>page</wp:post_type>) — the WXR builder
+  // emits the plain form, so a CDATA-only regex counted 0 on real output.
+  const countType = (type: string): number =>
+    (wxrContent.match(new RegExp(`<wp:post_type>\\s*(?:<!\\[CDATA\\[)?${type}(?:\\]\\]>)?\\s*</wp:post_type>`, 'g')) || []).length;
+  return { pages: countType('page'), posts: countType('post'), media: countType('attachment') };
 }
 
 export async function verifyExtraction(outputDir: string): Promise<VerificationReport> {

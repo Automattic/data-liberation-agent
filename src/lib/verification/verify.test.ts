@@ -116,6 +116,24 @@ describe('verifyExtraction', () => {
     expect(report.mediaOnDisk).toBe(1);
   });
 
+  it('counts post_type items in the PLAIN-text WXR form (not just CDATA-wrapped)', async () => {
+    // The WXR builder emits <wp:post_type>page</wp:post_type> (no CDATA); the
+    // counter must match both forms or it reports 0 on real output.
+    const wxr = `<?xml version="1.0"?>
+<rss xmlns:wp="http://wordpress.org/export/1.2/"><channel>
+  <item><wp:post_type>page</wp:post_type></item>
+  <item><wp:post_type>page</wp:post_type></item>
+  <item><wp:post_type>attachment</wp:post_type></item>
+  <item><wp:post_type><![CDATA[post]]></wp:post_type></item>
+</channel></rss>`;
+    writeFileSync(join(TMP, 'output.wxr'), wxr);
+    writeLog([]);
+    const report = await verifyExtraction(TMP);
+    expect(report.pages).toBe(2);
+    expect(report.mediaAttachments).toBe(1);
+    expect(report.posts).toBe(1);
+  });
+
   it('reports missing WXR gracefully', async () => {
     writeLog([]);
 

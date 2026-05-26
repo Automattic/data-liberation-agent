@@ -207,6 +207,8 @@ Verify: `themeWritten > 0` and `warnings` empty. Capture the replica URL.
 **QA:** invoke `design-qa`. It captures replica desktop + mobile screenshots, pairs them with source screenshots, runs the responsiveness gate (390px — HARD: no horizontal overflow, sections reflow), and produces qualitative observations + A/B/C classification per archetype representative.
 
 - **Responsiveness gate is hard.** A theme that overflows at 390px fails, full stop.
+- **Grade EVERY page, not just one representative per archetype** — the user sees every page, and a cluster's non-rep members can differ sharply from its rep. QA must screenshot + classify each reconstructed page.
+- **A page rendering carried `wp:post-content` (raw source-platform HTML) through `page.html` is a FAIL (C), never a B/"pass-with-notes".** It is not a faithful reconstruction — it is the absence of one. The overall verdict cannot be "pass" while any content page is carried-HTML; fix it by running that page through `liberate_reconstruct_pages`.
 - Pixel-diff is a signal only — not the gate criterion.
 - Cap QA at 3 iterations per archetype representative. If iteration 3 still fails, amend `design.md`, re-run `creating-themes` to regenerate `theme.json` and style foundation, and rebuild affected clusters from scratch (full foundation invalidation). Then re-enter QA.
 - Between iterations: apply fix directives from `design-qa` via `editing-themes`; reinstall via `liberate_install_theme`; re-run `design-qa`.
