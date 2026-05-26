@@ -46,6 +46,7 @@ interface PageArg {
 async function forcePatternRescan(studioSitePath: string, themeSlug: string): Promise<void> {
   const wp = (extra: string[]) =>
     execFileAsync('studio', ['wp', '--path', studioSitePath, ...extra], { timeout: 120_000, maxBuffer: 16 * 1024 * 1024 });
+  let bounced = false;
   try {
     const { stdout } = await wp(['theme', 'list', '--field=name']);
     const fallback = stdout
@@ -55,9 +56,22 @@ async function forcePatternRescan(studioSitePath: string, themeSlug: string): Pr
       .find((t) => t !== themeSlug);
     if (!fallback) return; // only one theme installed — nothing to bounce through
     await wp(['theme', 'activate', fallback]);
-    await wp(['theme', 'activate', themeSlug]);
+    bounced = true;
   } catch {
-    /* best-effort */
+    return; // couldn't switch away — the replica theme is still active, no harm
+  }
+  // CRITICAL: once switched to the fallback we MUST switch back, or the site is
+  // left stranded on the fallback theme (replica deactivated). Always re-activate
+  // the replica, retrying once, regardless of any earlier failure.
+  if (bounced) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        await wp(['theme', 'activate', themeSlug]);
+        return;
+      } catch {
+        /* retry */
+      }
+    }
   }
 }
 
