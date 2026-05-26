@@ -391,6 +391,32 @@ function renderTextBand(s: SectionSpec): BlockOut {
   return out;
 }
 
+/** Full-bleed hero cover: a wp:cover with the hero photo as background and the
+ *  headline / subhead / CTA overlaid in white over a dim — the faithful form for
+ *  a full-width cover band (text OVER the image), vs renderTextBand stacking the
+ *  photo below black copy. Falls back to a centered text band when there's no
+ *  usable full-bleed photo. */
+function renderCover(s: SectionSpec): BlockOut {
+  const lead = pickLeadImage(s.images);
+  if (!lead || !isWpUrl(lead.url)) return renderTextBand(s);
+  const out = emptyOut();
+  out.assets.push(lead.url);
+  const inner: string[] = [];
+  s.headings.forEach((h, i) => inner.push(headingBlock(h, out, { level: i === 0 ? 1 : 2, center: true, inverse: true })));
+  (s.bodyText ?? []).forEach((b) => inner.push(paragraphBlock(b, out, { center: true, inverse: true })));
+  s.buttonLabels.forEach((b) => inner.push(buttonBlock(b, out)));
+  const innerMarkup = inner.filter(Boolean).join('\n');
+  const url = escapeHtml(lead.url);
+  out.markup =
+    `<!-- wp:cover {"url":"${url}","dimRatio":40,"overlayColor":"surface-inverse","isUserOverlayColor":true,"minHeight":520,"minHeightUnit":"px","align":"full","layout":{"type":"constrained"}} -->\n` +
+    `<div class="wp-block-cover alignfull" style="min-height:520px">` +
+    `<span aria-hidden="true" class="wp-block-cover__background has-surface-inverse-background-color has-background-dim-40 has-background-dim"></span>` +
+    `<img class="wp-block-cover__image-background" src="${url}" alt="${escapeHtml(lead.alt || '')}"/>\n` +
+    `<div class="wp-block-cover__inner-container">\n${innerMarkup}\n</div>\n` +
+    `</div>\n<!-- /wp:cover -->`;
+  return out;
+}
+
 /** media-text: one image beside a heading + paragraph (alternating sides). */
 function renderMediaText(s: SectionSpec, flip: boolean): BlockOut {
   const out = emptyOut();
@@ -771,9 +797,11 @@ function renderSection(s: SectionSpecWithFaqs, ctx: RenderCtx): BlockOut {
       }
       return renderTextBand(s);
     }
+    case 'animated-cover':
+      // A full-bleed hero cover (text overlaid on a background photo).
+      return renderCover(s);
     case 'static':
     case 'cta':
-    case 'animated-cover':
     case 'price-list':
     case 'app-download':
     case 'horizontal-showcase':

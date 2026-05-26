@@ -438,6 +438,22 @@ describe('reconstructPagePattern', () => {
     expect(plain.php).not.toContain('has-surface-raised-background-color');
   });
 
+  it('renders an animated-cover hero as a wp:cover with the photo + overlaid white text', () => {
+    const r = reconstructPagePattern(
+      [section({ interactionModel: 'animated-cover', headings: ['Over 100 Years'], bodyText: ['We collaborate.'], buttonLabels: ['TALK TO US'], images: [img(`${WP}yard.jpg`, 'lumber yard')] })],
+      opts,
+    );
+    expect(r.php).toContain('<!-- wp:cover');
+    expect(r.php).toContain('wp-block-cover__image-background');
+    expect(r.php).toContain(`${WP}yard.jpg`);
+    expect(r.php).toContain('>Over 100 Years</h1>');
+    expect(r.php).toContain('has-text-inverse-color'); // overlaid white text
+    expect(r.expectedAssets).toContain(`${WP}yard.jpg`);
+    // No usable full-bleed photo → falls back to a centered text band.
+    const noImg = reconstructPagePattern([section({ interactionModel: 'animated-cover', headings: ['Hi'] })], opts);
+    expect(noImg.php).not.toContain('<!-- wp:cover');
+  });
+
   it('renders a many-image gallery as a wp:gallery grid, not a 25-wide flex row', () => {
     const imgs = Array.from({ length: 25 }, (_, i) => img(`${WP}g${i}.jpg`, `img ${i}`));
     const r = reconstructPagePattern([section({ interactionModel: 'gallery', headings: ['Gallery'], images: imgs })], opts);
