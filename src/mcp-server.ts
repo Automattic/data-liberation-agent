@@ -379,6 +379,19 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           themeName: { type: 'string', description: 'Display name. Defaults to themeSlug.' },
           siteTitle: { type: 'string', description: 'Source site title — used in style.css description and footer copyright.' },
           themeDescription: { type: 'string', description: 'Override the default style.css Description line.' },
+          reconstructedPages: {
+            type: 'array',
+            description: 'Block-reconstructed content pages. Each entry emits templates/page-<slug>.html wiring the page to its reconstructed pattern (and front-page.html for isHome), so the page renders block sections instead of falling through page.html to raw carried post_content. The pattern files (reconstructed block markup) are added to themeFiles[] separately by the replicate skill.',
+            items: {
+              type: 'object',
+              properties: {
+                slug: { type: 'string', description: 'Source-faithful WP page slug (last path segment), e.g. "about-us".' },
+                patternSlug: { type: 'string', description: 'Fully-qualified theme pattern slug, e.g. "<themeSlug>/page-about-us".' },
+                isHome: { type: 'boolean', description: 'When true, also emit templates/front-page.html for this page (static front page).' },
+              },
+              required: ['slug', 'patternSlug'],
+            },
+          },
         },
         required: ['outputDir', 'themeSlug'],
       },

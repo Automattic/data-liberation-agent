@@ -634,4 +634,82 @@ describe('buildThemeScaffold', () => {
       expect(stats.droppedNavLinks).toBe(0);
     });
   });
+
+  describe('per-page reconstructed templates (reconstructedPages)', () => {
+    const SLUG = 'getsnooz-com-replica';
+
+    it('emits no per-page templates when reconstructedPages is absent (carried-HTML default)', () => {
+      const files = buildThemeScaffold({ foundation: FOUNDATION_FIXTURE, themeSlug: SLUG });
+      const pagePaths = files.map((f) => f.relativePath).filter((p) => /^templates\/page-/.test(p));
+      expect(pagePaths).toEqual([]);
+      // No front-page.html either — root stays on index.html / WP default.
+      expect(files.some((f) => f.relativePath === 'templates/front-page.html')).toBe(false);
+    });
+
+    it('emits templates/page-<slug>.html wiring each page to its reconstructed pattern (not post-content)', () => {
+      const files = buildThemeScaffold({
+        foundation: FOUNDATION_FIXTURE,
+        themeSlug: SLUG,
+        reconstructedPages: [
+          { slug: 'about-us', patternSlug: `${SLUG}/page-about-us` },
+          { slug: 'sleep-bundle', patternSlug: `${SLUG}/page-sleep-bundle` },
+        ],
+      });
+      const about = files.find((f) => f.relativePath === 'templates/page-about-us.html');
+      const bundle = files.find((f) => f.relativePath === 'templates/page-sleep-bundle.html');
+      expect(about).toBeDefined();
+      expect(bundle).toBeDefined();
+      // Renders the page's reconstructed PATTERN, not raw post-content.
+      expect(about!.content).toContain(`<!-- wp:pattern {"slug":"${SLUG}/page-about-us"} /-->`);
+      expect(about!.content).not.toContain('wp:post-content');
+      // Shares the sitewide header/footer parts.
+      expect(about!.content).toContain('<!-- wp:template-part {"slug":"header","tagName":"header"} /-->');
+      expect(about!.content).toContain('<!-- wp:template-part {"slug":"footer","tagName":"footer"} /-->');
+    });
+
+    it('emits front-page.html for the homepage entry (isHome) in addition to its page template', () => {
+      const files = buildThemeScaffold({
+        foundation: FOUNDATION_FIXTURE,
+        themeSlug: SLUG,
+        reconstructedPages: [
+          { slug: 'homepage', patternSlug: `${SLUG}/homepage`, isHome: true },
+        ],
+      });
+      const front = files.find((f) => f.relativePath === 'templates/front-page.html');
+      const page = files.find((f) => f.relativePath === 'templates/page-homepage.html');
+      expect(front).toBeDefined();
+      expect(page).toBeDefined();
+      expect(front!.content).toContain(`<!-- wp:pattern {"slug":"${SLUG}/homepage"} /-->`);
+      // Both point at the same reconstructed pattern.
+      expect(front!.content).toBe(page!.content);
+    });
+
+    it('skips entries with a malformed slug or pattern slug (never writes an unsafe file path / attr)', () => {
+      const files = buildThemeScaffold({
+        foundation: FOUNDATION_FIXTURE,
+        themeSlug: SLUG,
+        reconstructedPages: [
+          { slug: '../etc/passwd', patternSlug: `${SLUG}/evil` }, // bad slug
+          { slug: 'ok-page', patternSlug: 'no-namespace' }, // bad pattern slug (missing /)
+          { slug: 'good', patternSlug: `${SLUG}/page-good` }, // valid → emitted
+        ],
+      });
+      const pagePaths = files.map((f) => f.relativePath).filter((p) => /^templates\/page-/.test(p));
+      expect(pagePaths).toEqual(['templates/page-good.html']);
+    });
+
+    it('de-dupes repeated slugs (first wins)', () => {
+      const files = buildThemeScaffold({
+        foundation: FOUNDATION_FIXTURE,
+        themeSlug: SLUG,
+        reconstructedPages: [
+          { slug: 'about', patternSlug: `${SLUG}/page-about` },
+          { slug: 'about', patternSlug: `${SLUG}/page-about-dup` },
+        ],
+      });
+      const aboutTemplates = files.filter((f) => f.relativePath === 'templates/page-about.html');
+      expect(aboutTemplates).toHaveLength(1);
+      expect(aboutTemplates[0].content).toContain(`${SLUG}/page-about"`);
+    });
+  });
 });

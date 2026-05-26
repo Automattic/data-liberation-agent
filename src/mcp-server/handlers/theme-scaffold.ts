@@ -36,6 +36,14 @@ interface ScaffoldArgs {
   sourceUrl?: string;
   /** Theme output dir for downloaded fonts. Defaults to <outputDir>/theme. */
   themeDir?: string;
+  /**
+   * Block-reconstructed pages. Each `{ slug, patternSlug, isHome? }` binds a page's
+   * source-faithful WP slug to the theme pattern holding its reconstructed section
+   * blocks. The scaffold emits `templates/page-<slug>.html` per entry (and
+   * `front-page.html` for the homepage), so content pages render their reconstructed
+   * pattern instead of falling through `page.html` to raw carried `wp:post-content`.
+   */
+  reconstructedPages?: Array<{ slug: string; patternSlug: string; isHome?: boolean }>;
 }
 
 interface TypographyObserved {
@@ -247,6 +255,7 @@ export const themeScaffoldHandler: Handler = async (args, ctx) => {
     displaySubstituteFamily,
     navHrefMap,
     stats: scaffoldStats,
+    reconstructedPages: Array.isArray(a.reconstructedPages) ? a.reconstructedPages : undefined,
   });
 
   return ctx.textResult({

@@ -152,12 +152,11 @@ export const installThemeHandler: Handler = async (args, ctx) => {
     // template resolution; without a flush the just-installed front-page /
     // patterns can render as the stale (empty) version until WP next clears
     // its cache. Best-effort — never fatal to a successful install.
-    try {
-      await studioWp(studioSitePath, ['transient', 'delete', '--all']);
-    } catch { /* best-effort */ }
-    try {
-      await studioWp(studioSitePath, ['cache', 'flush']);
-    } catch { /* best-effort */ }
+    for (const wpArgs of themeCacheFlushCommands()) {
+      try {
+        await studioWp(studioSitePath, wpArgs);
+      } catch { /* best-effort */ }
+    }
   }
 
   return ctx.textResult({
@@ -176,6 +175,38 @@ export const installThemeHandler: Handler = async (args, ctx) => {
     warnings,
   });
 };
+
+/**
+ * The post-theme-activate cache-flush sequence, as ordered `wp` CLI argument
+ * vectors. Extracted as a pure function so the ordering + completeness can be
+ * unit-tested without shelling out to Studio.
+ *
+ * Three steps, each best-effort:
+ *   1. `transient delete --all` — clears DB-backed transients broadly.
+ *   2. `cache flush` — clears the runtime object cache.
+ *   3. `db query DELETE ... wp_theme_files_patterns-*` — the load-bearing step
+ *      for RE-installs. `WP_Theme::get_block_patterns()` memoizes the theme's
+ *      `patterns/*.php` file list in the `wp_theme_files_patterns-<hash>`
+ *      transient. On a non-persistent object cache (Studio's SQLite), `cache
+ *      flush` does NOT remove that DB-backed transient, so a newly-added pattern
+ *      file stays UNregistered and its `wp:pattern` reference renders EMPTY —
+ *      the page silently loses its reconstructed content. Deleting these
+ *      transients forces the registry to rescan the patterns dir next request.
+ *      (`transient delete --all` would also catch them, but is sometimes scoped
+ *      to expired/timeout rows by site config, so we delete the pattern-file
+ *      transients explicitly and unconditionally.)
+ */
+export function themeCacheFlushCommands(): string[][] {
+  return [
+    ['transient', 'delete', '--all'],
+    ['cache', 'flush'],
+    [
+      'db',
+      'query',
+      "DELETE FROM wp_options WHERE option_name LIKE '_transient_wp_theme_files_patterns-%' OR option_name LIKE '_transient_timeout_wp_theme_files_patterns-%'",
+    ],
+  ];
+}
 
 async function studioWp(sitePath: string, wpArgs: string[]): Promise<string> {
   const { stdout } = await execFileAsync(

@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import {
   deriveInstallThemeSlug,
   resolveInstallThemeSlug,
+  themeCacheFlushCommands,
 } from './install-theme.js';
 
 const TMP_ROOT = join(process.cwd(), '.tmp-test', 'install-theme');
@@ -49,5 +50,31 @@ describe('resolveInstallThemeSlug', () => {
     } finally {
       rmSync(wpRoot, { recursive: true, force: true });
     }
+  });
+});
+
+describe('themeCacheFlushCommands', () => {
+  const cmds = themeCacheFlushCommands();
+
+  it('flushes transients then the object cache before the pattern-file purge', () => {
+    expect(cmds[0]).toEqual(['transient', 'delete', '--all']);
+    expect(cmds[1]).toEqual(['cache', 'flush']);
+  });
+
+  it('explicitly purges the wp_theme_files_patterns transient so re-installed patterns re-register', () => {
+    // Regression guard: a newly-added per-page pattern stays UNregistered (its
+    // wp:pattern renders empty) unless this DB-backed transient is cleared —
+    // `cache flush` alone does not remove it on a non-persistent object cache.
+    const dbQuery = cmds.find((c) => c[0] === 'db' && c[1] === 'query');
+    expect(dbQuery).toBeDefined();
+    expect(dbQuery![2]).toContain('_transient_wp_theme_files_patterns-%');
+    expect(dbQuery![2]).toContain('_transient_timeout_wp_theme_files_patterns-%');
+    expect(dbQuery![2].startsWith('DELETE FROM wp_options')).toBe(true);
+  });
+
+  it('runs the pattern-file purge LAST (after cache flush, so it is not re-populated)', () => {
+    const dbIdx = cmds.findIndex((c) => c[0] === 'db');
+    const flushIdx = cmds.findIndex((c) => c[0] === 'cache');
+    expect(dbIdx).toBeGreaterThan(flushIdx);
   });
 });

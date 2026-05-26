@@ -114,6 +114,38 @@ export interface ThemeScaffoldOpts {
    * handler can report `droppedNavLinks` instead of the menu just missing items.
    */
   stats?: { droppedNavLinks?: number };
+  /**
+   * Block-reconstructed pages. Each entry binds a page's WP slug (source-faithful,
+   * from `pageSlugFromUrl`) to the theme pattern that holds its reconstructed
+   * section blocks (e.g. `{ slug: 'about-us', patternSlug: 'getsnooz-com-replica/page-about-us' }`).
+   *
+   * For each entry, the scaffold emits `templates/page-<slug>.html` — a slug-specific
+   * WP block-theme page template that renders header → the page's reconstructed
+   * pattern → footer, INSTEAD of letting the generic `page.html` fall through to
+   * raw `wp:post-content` (which would display the source platform's carried
+   * Replo/Shopify HTML). This is the same mechanism the homepage uses
+   * (`front-page.html` → homepage pattern), generalized to every content page.
+   *
+   * The pattern FILES themselves (the reconstructed block markup) are produced by
+   * the replicate skill's compose/generate step and added to `themeFiles[]`
+   * separately; this opt only emits the deterministic template WIRING that points
+   * each page at its pattern. When the array is empty/absent, no per-page templates
+   * are emitted and pages render via `page.html` (carried-HTML fallback) as before.
+   *
+   * Set `isHome: true` on the homepage entry to additionally emit `templates/front-page.html`
+   * (WP serves it at the site root when the page is the static front page).
+   */
+  reconstructedPages?: ReconstructedPage[];
+}
+
+/** A block-reconstructed page: its WP slug + the pattern holding its section blocks. */
+export interface ReconstructedPage {
+  /** Source-faithful WP page slug (last path segment), e.g. `about-us`. */
+  slug: string;
+  /** Fully-qualified theme pattern slug, e.g. `getsnooz-com-replica/page-about-us`. */
+  patternSlug: string;
+  /** When true, also emit `templates/front-page.html` (homepage / static front page). */
+  isHome?: boolean;
 }
 
 /** Extremely loose type — mirrors what design-foundation.json actually contains. */
@@ -199,6 +231,12 @@ export function buildThemeScaffold(opts: ThemeScaffoldOpts): ReplicaFile[] {
   const footerHtml = buildFooterPart({ siteTitle: opts.siteTitle ?? themeName, chrome: remappedFooter });
   assertNoInjection(footerHtml, 'parts/footer.html');
 
+  // Per-page templates wiring each block-reconstructed page to its pattern. The
+  // homepage proved this path (front-page.html → homepage pattern); we generalize
+  // it to every content page so they render reconstructed section blocks instead
+  // of falling through page.html to raw carried `wp:post-content`.
+  const pageTemplates = buildReconstructedPageTemplates(opts.reconstructedPages ?? []);
+
   return [
     { relativePath: 'style.css', content: buildStyleCss({ themeName, themeSlug, themeDescription, capturedFonts }) },
     { relativePath: 'theme.json', content: buildThemeJson(foundation, { capturedFonts, headingLineHeights: opts.headingLineHeights, headingFamily: opts.headingFamily, bodyFamily: opts.bodyFamily, bodySubstituteFamily: opts.bodySubstituteFamily, displaySubstituteFamily: opts.displaySubstituteFamily }) },
@@ -209,7 +247,65 @@ export function buildThemeScaffold(opts: ThemeScaffoldOpts): ReplicaFile[] {
     // Header utility-icon SVG assets (shipped as files; referenced via core/image
     // in the header — wp:html is banned, so glyphs can't be inlined).
     ...buildHeaderIconAssets(),
+    ...pageTemplates,
   ];
+}
+
+// -- per-page reconstructed templates -----------------------------------------
+
+/**
+ * WP slug guard for `templates/page-<slug>.html` filenames and pattern-slug
+ * references. WP page slugs are already `sanitize_title`-shaped (lowercase,
+ * hyphen-joined, ASCII), but defend against a malformed slug reaching a file
+ * path or block-comment attribute.
+ */
+function isSafeWpSlug(slug: string): boolean {
+  return /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(slug);
+}
+
+/**
+ * Emit per-page block-theme templates for each reconstructed page. Each template
+ * renders header part → the page's reconstructed pattern → footer part, replacing
+ * the generic `page.html` → `wp:post-content` carried-HTML fallback for that slug.
+ * The homepage entry (`isHome`) additionally emits `front-page.html`.
+ *
+ * Malformed slugs / pattern slugs are skipped (never written to a file path or a
+ * block attribute) rather than emitted unsafely.
+ */
+function buildReconstructedPageTemplates(pages: ReconstructedPage[]): ReplicaFile[] {
+  const files: ReplicaFile[] = [];
+  const seen = new Set<string>();
+  for (const page of pages) {
+    const slug = (page.slug ?? '').trim();
+    const patternSlug = (page.patternSlug ?? '').trim();
+    if (!isSafeWpSlug(slug)) continue;
+    // Pattern slug is `namespace/name`; both segments must be slug-safe.
+    const parts = patternSlug.split('/');
+    if (parts.length !== 2 || !isSafeWpSlug(parts[0]) || !isSafeWpSlug(parts[1])) continue;
+    if (seen.has(slug)) continue;
+    seen.add(slug);
+
+    const content = buildPageTemplate(patternSlug);
+    files.push({ relativePath: `templates/page-${slug}.html`, content });
+    if (page.isHome) {
+      files.push({ relativePath: 'templates/front-page.html', content });
+    }
+  }
+  return files;
+}
+
+/** A single page-template shell: header part → reconstructed pattern → footer part. */
+function buildPageTemplate(patternSlug: string): string {
+  return `<!-- wp:template-part {"slug":"header","tagName":"header"} /-->
+
+<!-- wp:group {"tagName":"main","layout":{"type":"constrained"}} -->
+<main class="wp-block-group">
+<!-- wp:pattern {"slug":"${patternSlug}"} /-->
+</main>
+<!-- /wp:group -->
+
+<!-- wp:template-part {"slug":"footer","tagName":"footer"} /-->
+`;
 }
 
 // -- style.css ---------------------------------------------------------------
