@@ -1,11 +1,11 @@
 # How `/liberate` Works
 
-This document explains the end-to-end **liberate** process: pointing the tool at a closed-platform website (Wix, Squarespace, Shopify, …) and producing a faithful, editable **WordPress block-theme replica** plus a portable WXR/Woo export.
+The **liberate** process points the tool at a closed-platform website (Wix, Squarespace, Shopify, …) and produces a faithful, editable **WordPress block-theme replica** plus a portable WXR/Woo export.
 
 It is built from two cooperating layers:
 
-- a **deterministic core** — plain TypeScript MCP tools and pure functions that do the precise, repeatable work (fetch, extract, render, gate, score), and
-- an **AI orchestration layer** — Claude Code skills where an agent makes judgments (interpreting section structure, choosing block types, visual QA) and sequences the deterministic tools.
+- a **deterministic core**: plain TypeScript MCP tools and pure functions that do the precise, repeatable work (fetch, extract, render, gate, score), and
+- an **AI orchestration layer**: Claude Code skills where an agent makes judgments (reading section structure, choosing block types, doing visual QA) and sequences the deterministic tools.
 
 > Derived from the code as of 2026-05-27. The page-content path documented here is the current **per-page `liberate_reconstruct_pages`** flow. An older **cluster-skeleton + `compose_instantiate`** path still exists in `skills/liberate/SKILL.md` (steps 8–11) but is superseded for page *content*; clustering still earns its keep for sitewide-chrome dedup and posts/products templates.
 
@@ -15,10 +15,10 @@ Every diagram uses the same visual language:
 
 ```mermaid
 flowchart LR
-    a["AI reasoning — an agent/skill makes a judgment"]:::ai
-    d["Deterministic — a pure MCP tool or TS function"]:::det
-    g{"Gate — deterministic pass/fail that BLOCKS progress on failure"}:::gate
-    c{"Decision — routes flow based on a condition"}:::dec
+    a["AI reasoning: an agent/skill makes a judgment"]:::ai
+    d["Deterministic: a pure MCP tool or TS function"]:::det
+    g{"Gate: deterministic pass/fail that BLOCKS progress on failure"}:::gate
+    c{"Decision: routes flow based on a condition"}:::dec
     h(["Human-in-the-loop checkpoint"]):::human
     f["Artifact / data on disk"]:::art
 
@@ -35,12 +35,12 @@ flowchart LR
 
 ## Contents
 
-1. [The big picture — two phases](#1-the-big-picture--two-phases)
+1. [The big picture: two phases](#1-the-big-picture-two-phases)
 2. [Platform detection (decision tree)](#2-platform-detection-decision-tree)
 3. [The extraction loop (parallelism + decisions)](#3-the-extraction-loop-parallelism--decisions)
 4. [Shopify product path (decision tree)](#4-shopify-product-path-decision-tree)
 5. [Screenshot capture + design-token aggregation (parallel)](#5-screenshot-capture--design-token-aggregation-parallel)
-6. [The design contract — foundation + theme scaffold](#6-the-design-contract--foundation--theme-scaffold)
+6. [The design contract: foundation + theme scaffold](#6-the-design-contract-foundation--theme-scaffold)
 7. [Clustering + the parallel build fan-out](#7-clustering--the-parallel-build-fan-out)
 8. [Section → block-template routing (decision tree)](#8-section--block-template-routing-decision-tree)
 9. [Per-page reconstruction + the artifacts gate](#9-per-page-reconstruction--the-artifacts-gate)
@@ -50,9 +50,9 @@ flowchart LR
 
 ---
 
-## 1. The big picture — two phases
+## 1. The big picture: two phases
 
-The agent is the conductor: it narrates, sequences, and makes judgments, but each numbered step below is either a deterministic tool call or an inline AI sub-skill. **Phase 1 (Liberate)** pulls content out into portable form; a **human confirm checkpoint** gates spend; **Phase 2 (Replicate)** rebuilds the site as a block theme.
+The agent is the conductor: it narrates and sequences the run and makes the judgment calls, but each numbered step below is either a deterministic tool call or an inline AI sub-skill. **Phase 1 (Liberate)** pulls content out into portable form; a **human confirm checkpoint** gates spend; **Phase 2 (Replicate)** rebuilds the site as a block theme.
 
 ```mermaid
 flowchart TD
@@ -100,7 +100,7 @@ flowchart TD
     classDef art fill:#f1f5f9,stroke:#64748b,color:#0f172a;
 ```
 
-The single most important AI/deterministic boundary: **the renderer (`page-reconstruct.ts`) is pure** — specs in, gated block markup out, fully unit-tested. AI judgment lives on *both sides* of it (section interpretation upstream, visual QA downstream), never inside it.
+The single most important AI/deterministic boundary: **the renderer (`page-reconstruct.ts`) is pure**. Specs in, gated block markup out, fully unit-tested. AI judgment lives on *both sides* of it (section interpretation upstream, visual QA downstream), never inside it.
 
 ---
 
@@ -235,7 +235,7 @@ GraphQL pagination is sequential with two guards: `MAX_PAGES = 10000` and a non-
 
 ## 5. Screenshot capture + design-token aggregation (parallel)
 
-When screenshots are enabled (CLI default; `liberate_screenshot` opt-in via MCP), URLs are captured in parallel batches of 6 (clamped to 1–10). The Playwright browser is restarted every 100 URLs — but only at batch boundaries — to bound memory. After all captures, a single aggregation pass derives the site-wide design tokens.
+When screenshots are enabled (CLI default; `liberate_screenshot` opt-in via MCP), URLs are captured in parallel batches of 6 (clamped to 1–10). The Playwright browser restarts every 100 URLs, but only at batch boundaries, to bound memory. After all captures, a single aggregation pass derives the site-wide design tokens.
 
 ```mermaid
 flowchart TD
@@ -265,13 +265,13 @@ flowchart TD
     classDef art fill:#f1f5f9,stroke:#64748b,color:#0f172a;
 ```
 
-Cross-origin stylesheets are skipped silently during analysis (their `cssRules` throw); same-origin CSS contributes. The `manifest.json` is the filesystem-only join key between a URL and its screenshots/HTML — nothing is injected back into the WXR.
+Cross-origin stylesheets are skipped silently during analysis (their `cssRules` throw); same-origin CSS contributes. The `manifest.json` is the filesystem-only join key between a URL and its screenshots/HTML. Nothing is injected back into the WXR.
 
 ---
 
-## 6. The design contract — foundation + theme scaffold
+## 6. The design contract: foundation + theme scaffold
 
-This is where the **site-wide visual contract** is frozen. A deterministic scaffold pre-fills the obvious token roles from the aggregates; the `design-foundations` **AI skill** fills the judgment roles (accent, muted text, display font, gradient roles) from HTML+CSS evidence; a validate gate refuses to proceed while any required role is still null. The frozen `design.md` becomes immutable downstream (only a late QA iteration may amend it — see §10). The theme scaffold itself is explicitly pure (no vision, no reasoning) and is guarded by a theme.json lint gate.
+This is where the **site-wide visual contract** is frozen. A deterministic scaffold pre-fills the obvious token roles from the aggregates; the `design-foundations` **AI skill** fills the judgment roles (accent, muted text, display font, gradient roles) from HTML+CSS evidence; a validate gate refuses to proceed while any required role is still null. The frozen `design.md` becomes immutable downstream (only a late QA iteration may amend it; see §10). The theme scaffold itself is explicitly pure (no vision, no reasoning) and is guarded by a theme.json lint gate.
 
 ```mermaid
 flowchart TD
@@ -303,7 +303,7 @@ If a source font is commercial/uncapturable, the deterministic pipeline auto-sub
 
 ## 7. Clustering + the parallel build fan-out
 
-This is the **only true multi-agent parallel step**. Pages are grouped by exact layout signature and the richest representative per cluster is extracted in full (computed styles, interaction model, verbatim text, media URLs, and CSS-geometry **layout signals** — see §9). Then one `generating-patterns` **subagent per cluster representative** runs concurrently (cap ~4–6) to produce section block-skeletons. The fan-out is safe because subagents are **read-only** — they receive paths and return strings; only the orchestrator writes to disk.
+This is the **only true multi-agent parallel step**. Pages are grouped by exact layout signature and the richest representative per cluster is extracted in full (computed styles, interaction model, verbatim text, media URLs, and CSS-geometry **layout signals**; see §9). Then one `generating-patterns` **subagent per cluster representative** runs concurrently (cap ~4–6) to produce section block-skeletons. The fan-out is safe because subagents are **read-only**: they receive paths and return strings, and only the orchestrator writes to disk.
 
 ```mermaid
 flowchart TD
@@ -340,7 +340,7 @@ The macro-pipeline is otherwise strictly sequential: each stage consumes the pri
 
 ## 8. Section → block-template routing (decision tree)
 
-Inside each builder, every captured section is matched against the `section-mapping.md` template catalog by its interaction model. A match yields a specific, high-fidelity template; **no match falls back to a faithful generic layout** (`columns`/`group`) plus a run-report flag — a section is never forced into the wrong specific template.
+Inside each builder, every captured section is matched against the `section-mapping.md` template catalog by its interaction model. A match yields a specific, high-fidelity template; **no match falls back to a faithful generic layout** (`columns`/`group`) plus a run-report flag. A section is never forced into the wrong specific template.
 
 ```mermaid
 flowchart TD
@@ -371,7 +371,7 @@ flowchart TD
 
 ## 9. Per-page reconstruction + the artifacts gate
 
-`liberate_reconstruct_pages` reconstructs **every content page from its own specs** (not just cluster reps) using the pure `page-reconstruct.ts` renderer, and gates each page through `validate_artifacts` before it is kept. Layout is **CSS-geometry-driven and deterministic** — section-extract measures bounding boxes and computed styles to record image-beside-text placement (`mediaLayout` image-left/right), geometric inner padding, and content/icon alignment, and the renderer reproduces those (e.g. a 2-column media-text row) instead of defaulting to a stack. Missing media becomes a sized placeholder + provenance flag; copy that is not present verbatim in the spec is omitted or marked — **never paraphrased**, because the provenance check hard-fails invented prose.
+`liberate_reconstruct_pages` reconstructs **every content page from its own specs** (not just cluster reps) using the pure `page-reconstruct.ts` renderer, and gates each page through `validate_artifacts` before it is kept. Layout is **CSS-geometry-driven and deterministic**: section-extract measures bounding boxes and computed styles to record image-beside-text placement (`mediaLayout` image-left/right), geometric inner padding, and content/icon alignment, and the renderer reproduces those (e.g. a 2-column media-text row) instead of defaulting to a stack. Missing media becomes a sized placeholder + provenance flag; copy that is not present verbatim in the spec is omitted or marked, **never paraphrased**, because the provenance check hard-fails invented prose.
 
 ```mermaid
 flowchart TD
@@ -457,7 +457,7 @@ flowchart TD
     classDef dec fill:#fef3c7,stroke:#d97706,color:#713f12;
 ```
 
-A page that fell back to a carried `wp:post-content` block is an automatic **C/FAIL**, never "pass-with-notes" — the whole point is faithful reconstruction. A separate **budget guard** can pause at any checkpoint and ask the operator to continue / stop / raise the ceiling when subagent, cluster, or elapsed-time limits are hit.
+A page that fell back to a carried `wp:post-content` block is an automatic **C/FAIL**, never "pass-with-notes"; the whole point is faithful reconstruction. A separate **budget guard** can pause at any checkpoint and ask the operator to continue / stop / raise the ceiling when subagent, cluster, or elapsed-time limits are hit.
 
 ---
 
@@ -505,7 +505,7 @@ Four cooperating files make a run resumable; together they let any stage pick up
 
 ### What passes between AI and deterministic steps
 
-The arrows below are the **handoffs** — and the two frozen contracts where an AI judgment becomes immutable downstream input.
+The arrows below are the **handoffs**, plus the two frozen contracts where an AI judgment becomes immutable downstream input.
 
 ```mermaid
 flowchart LR
@@ -531,4 +531,4 @@ flowchart LR
 
 The **two frozen contracts** are where AI judgment hardens into deterministic input: `design.md` (only a QA-iteration-3 amendment can change it, at the cost of a full rebuild) and the per-rep `specs/*.md` files (the extraction→generation handshake).
 
-**Final deliverables:** a running Studio/Playground replica at a local URL, and `run-report.json` — a verdict-first report whose per-page grades and gaps are produced by the deterministic `buildRunReport`.
+**Final deliverables:** a running Studio/Playground replica at a local URL, and `run-report.json`, a verdict-first report whose per-page grades and gaps are produced by the deterministic `buildRunReport`.
