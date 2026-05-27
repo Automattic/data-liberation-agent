@@ -259,4 +259,54 @@ describe('SiteAnalysisAggregator', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it('aggregates :root CSS variables across URLs, deduped by name and ranked by urls desc', () => {
+    const agg = new SiteAnalysisAggregator();
+    agg.add('https://a.test/1', makeAnalysis({ cssVariables: [
+      { name: '--brand-primary', value: '#1d6f42', isColor: true },
+      { name: '--radius-base', value: '8px', isColor: false },
+    ] }));
+    agg.add('https://a.test/2', makeAnalysis({ cssVariables: [
+      { name: '--brand-primary', value: '#1d6f42', isColor: true },
+    ] }));
+
+    const dir = mkdtempSync(join(tmpdir(), 'agg-'));
+    try {
+      agg.serialize(dir);
+      const cssVars = JSON.parse(readFileSync(join(dir, 'css-variables.json'), 'utf8'));
+      expect(cssVars.version).toBe(1);
+      expect(cssVars.sampledUrls).toBe(2);
+      // --brand-primary appears on 2 urls, --radius-base on 1 → primary ranks first.
+      expect(cssVars.variables[0]).toMatchObject({ name: '--brand-primary', value: '#1d6f42', isColor: true, urls: 2 });
+      const radius = cssVars.variables.find((v: { name: string }) => v.name === '--radius-base');
+      expect(radius).toMatchObject({ value: '8px', isColor: false, urls: 1 });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('resume-merges css-variables.json from a prior run', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agg-'));
+    try {
+      const first = new SiteAnalysisAggregator();
+      first.add('https://a.test/1', makeAnalysis({ cssVariables: [
+        { name: '--brand-primary', value: '#1d6f42', isColor: true },
+      ] }));
+      first.serialize(dir);
+
+      const second = new SiteAnalysisAggregator();
+      second.init(dir);
+      second.add('https://a.test/2', makeAnalysis({ cssVariables: [
+        { name: '--brand-primary', value: '#1d6f42', isColor: true },
+      ] }));
+      second.serialize(dir);
+
+      const cssVars = JSON.parse(readFileSync(join(dir, 'css-variables.json'), 'utf8'));
+      const primary = cssVars.variables.find((v: { name: string }) => v.name === '--brand-primary');
+      expect(primary.urls).toBe(2);
+      expect(cssVars.sampledUrls).toBe(2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

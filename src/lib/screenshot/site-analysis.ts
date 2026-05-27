@@ -39,6 +39,15 @@ export interface PageAnalysis {
     minWidth: number[];
     maxWidth: number[];
   };
+  /**
+   * Named design tokens declared as CSS custom properties on `:root` / `html` /
+   * `body` rules in same-origin stylesheets (e.g. `--brand-primary: #1d6f42`),
+   * with each value RESOLVED off the document element. `isColor` is true when
+   * the resolved value parses as a CSS color. Higher-fidelity and more editable
+   * than pixel-sampled dominant colors; aggregated into `css-variables.json`
+   * and consumed by the design-foundation scaffold. Optional for back-compat.
+   */
+  cssVariables?: Array<{ name: string; value: string; isColor: boolean }>;
 }
 
 function validate(value: unknown): asserts value is PageAnalysis {
@@ -51,6 +60,9 @@ function validate(value: unknown): asserts value is PageAnalysis {
   const bp = v.breakpoints as Record<string, unknown>;
   if (!Array.isArray(bp.minWidth) || !Array.isArray(bp.maxWidth)) {
     throw new Error('analyzePage: breakpoints.minWidth / maxWidth must be arrays');
+  }
+  if (v.cssVariables !== undefined && !Array.isArray(v.cssVariables)) {
+    throw new Error('analyzePage: cssVariables must be an array when present');
   }
 }
 
@@ -201,8 +213,13 @@ export async function analyzePage(page: Page, timeoutMs = 5_000): Promise<PageAn
     // Same-origin stylesheets expose .cssRules; cross-origin sheets throw.
     // Skip them silently — CDN-hosted CSS won't contribute, which is OK for
     // a best-effort signal.
+    // Same loop also harvests `:root`/`html`/`body` custom-property NAMES (the
+    // authored design tokens) — values are resolved off the document element
+    // afterward so var() chains and the cascade are honored.
     const minWidthSet = new Set<number>();
     const maxWidthSet = new Set<number>();
+    const rootVarNames = new Set<string>();
+    const rootSelector = /(^|,)\s*(:root|html|body)\s*($|,)/i;
     for (const sheet of Array.from(document.styleSheets)) {
       let rules: CSSRuleList | null = null;
       try {
@@ -212,12 +229,21 @@ export async function analyzePage(page: Page, timeoutMs = 5_000): Promise<PageAn
       }
       if (!rules) continue;
       for (const rule of Array.from(rules)) {
-        if (!(rule instanceof CSSMediaRule)) continue;
-        for (const condition of rule.conditionText.split(',')) {
-          const min = condition.match(/min-width:\s*(\d+)px/i);
-          const max = condition.match(/max-width:\s*(\d+)px/i);
-          if (min) minWidthSet.add(Number(min[1]));
-          if (max) maxWidthSet.add(Number(max[1]));
+        if (rule instanceof CSSMediaRule) {
+          for (const condition of rule.conditionText.split(',')) {
+            const min = condition.match(/min-width:\s*(\d+)px/i);
+            const max = condition.match(/max-width:\s*(\d+)px/i);
+            if (min) minWidthSet.add(Number(min[1]));
+            if (max) maxWidthSet.add(Number(max[1]));
+          }
+          continue;
+        }
+        if (rule instanceof CSSStyleRule && rootSelector.test(rule.selectorText)) {
+          const style = rule.style;
+          for (let i = 0; i < style.length; i++) {
+            const prop = style.item(i);
+            if (prop && prop.startsWith('--')) rootVarNames.add(prop);
+          }
         }
       }
     }
@@ -226,12 +252,32 @@ export async function analyzePage(page: Page, timeoutMs = 5_000): Promise<PageAn
       maxWidth: Array.from(maxWidthSet).sort((a, b) => a - b),
     };
 
+    // Resolve each token's final value off :root (falling back to body), and
+    // classify color-valued tokens via CSS.supports (excluding var() chains,
+    // which CSS.supports accepts for any property).
+    const rootCS = getComputedStyle(document.documentElement);
+    const bodyCS = document.body ? getComputedStyle(document.body) : null;
+    const cssVariables: Array<{ name: string; value: string; isColor: boolean }> = [];
+    for (const name of Array.from(rootVarNames).slice(0, 200)) {
+      let value = rootCS.getPropertyValue(name).trim();
+      if (!value && bodyCS) value = bodyCS.getPropertyValue(name).trim();
+      if (!value) continue;
+      let isColor = false;
+      try {
+        isColor = !value.startsWith('var(') && typeof CSS !== 'undefined' && CSS.supports('color', value);
+      } catch {
+        isColor = false;
+      }
+      cssVariables.push({ name, value, isColor });
+    }
+
     return {
       palette,
       typography,
       computedStyles,
       metadata: { title, metaDescription, openGraph, jsonLdTypes, htmlBytes },
       breakpoints,
+      cssVariables,
     };
   }), timeoutMs);
 

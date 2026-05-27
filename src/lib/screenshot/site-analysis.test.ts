@@ -76,4 +76,31 @@ describe('analyzePage', () => {
     });
     await expect(analyzePage(page as never)).rejects.toThrow(/minWidth|arrays/i);
   });
+
+  it('passes through captured :root CSS custom properties', async () => {
+    const mock = {
+      palette: [],
+      typography: {},
+      metadata: {},
+      breakpoints: { minWidth: [], maxWidth: [] },
+      cssVariables: [
+        { name: '--brand-primary', value: '#1d6f42', isColor: true },
+        { name: '--radius-base', value: '8px', isColor: false },
+      ],
+    };
+    const result = await analyzePage(makeMockPage(mock) as never);
+    expect(result.cssVariables).toHaveLength(2);
+    expect(result.cssVariables?.[0]).toEqual({ name: '--brand-primary', value: '#1d6f42', isColor: true });
+  });
+
+  it('rejects when cssVariables is present but not an array', async () => {
+    const page = makeMockPage({
+      palette: [],
+      typography: {},
+      metadata: {},
+      breakpoints: { minWidth: [], maxWidth: [] },
+      cssVariables: 'nope',
+    });
+    await expect(analyzePage(page as never)).rejects.toThrow(/cssVariables/i);
+  });
 });

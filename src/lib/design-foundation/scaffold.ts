@@ -81,6 +81,24 @@ interface ManifestFile {
   entries: Record<string, unknown>;
 }
 
+interface CssVariablesFile {
+  version: 1;
+  sampledUrls: number;
+  variables: Array<{ name: string; value: string; isColor: boolean; urls: number }>;
+}
+
+/**
+ * Named `:root` design tokens map to color roles by name. Ordered by priority —
+ * a token is matched to the FIRST role it fits, so a name carrying two keywords
+ * (e.g. `--body-bg`) lands in one role only. A matched color-valued token
+ * OVERRIDES the pixel-derived role; unmatched roles keep their pixel value.
+ */
+const CSS_VAR_ROLE_MATCHERS: ReadonlyArray<readonly [RegExp, 'accent' | 'surface' | 'text', string]> = [
+  [/(?:^|[-_])(?:primary|brand|accent|cta)(?:[-_]|$)/i, 'accent', 'accent'],
+  [/(?:^|[-_])(?:background|bg|surface|paper)(?:[-_]|$)/i, 'surface', 'default page background'],
+  [/(?:^|[-_])(?:text|foreground|fg|ink|body)(?:[-_]|$)/i, 'text', 'body copy'],
+] as const;
+
 /**
  * Scaffold a design foundation from SP1 output.
  * Throws on missing / malformed SP1 files; traversal paths in outputDir.
@@ -154,6 +172,13 @@ export function scaffoldDesignFoundation(
     subtle: null,
   };
 
+  // --- :root design tokens override matched color roles ------------------
+  // Named, authored tokens (e.g. --brand-primary) are higher-fidelity and more
+  // editable than pixel-sampled dominant colors. Optional input — absent on
+  // sites with no :root custom properties, leaving the pixel roles untouched.
+  const cssVariablesRaw = readOptional(join(outputDir, 'css-variables.json'));
+  applyCssVariableTokens(cssVariablesRaw, { surface, text, accent });
+
   // --- typography.scale.base ---------------------------------------------
   const bodyTuples = typography.bySelector['body'] ?? [];
   const bodyMost = bodyTuples.slice().sort((a, b) => b.urls - a.urls)[0];
@@ -186,6 +211,9 @@ export function scaffoldDesignFoundation(
     typography: sha256(typographyRaw),
     breakpoints: sha256(breakpointsRaw),
     manifest: sha256(manifestRaw),
+    // Always present so an absent→present token file (or a token-value change)
+    // shows up as drift and regenerates the foundation. Empty string when absent.
+    cssVariables: sha256(cssVariablesRaw ?? ''),
   };
 
   // --- skillTodos --------------------------------------------------------
@@ -255,6 +283,55 @@ export function scaffoldDesignFoundation(
  */
 export function sha256(content: string): string {
   return 'sha256:' + createHash('sha256').update(content).digest('hex');
+}
+
+/** Read a file's contents, or null when it doesn't exist / can't be read. */
+function readOptional(path: string): string | null {
+  if (!existsSync(path)) return null;
+  try {
+    return readFileSync(path, 'utf8');
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Override pixel-derived color roles with matched, color-valued `:root` tokens.
+ * Tokens are ranked by `urls` desc (then name) so the most widely-used token
+ * wins a role deterministically, regardless of file order. Mutates the role
+ * buckets in place. A null/malformed input is a no-op (pixel roles stand).
+ */
+function applyCssVariableTokens(
+  raw: string | null,
+  buckets: { surface: Record<string, Role | null>; text: Record<string, Role | null>; accent: Record<string, Role | null> },
+): void {
+  if (!raw) return;
+  let parsed: CssVariablesFile;
+  try {
+    parsed = JSON.parse(raw) as CssVariablesFile;
+  } catch {
+    return;
+  }
+  if (parsed.version !== 1 || !Array.isArray(parsed.variables)) return;
+
+  const ranked = parsed.variables
+    .filter((v) => v && v.isColor && typeof v.value === 'string' && v.value.length > 0)
+    .slice()
+    .sort((a, b) => (b.urls - a.urls) || a.name.localeCompare(b.name));
+
+  const assigned = new Set<'accent' | 'surface' | 'text'>();
+  for (const v of ranked) {
+    for (const [pattern, target, role] of CSS_VAR_ROLE_MATCHERS) {
+      if (!pattern.test(v.name)) continue;
+      if (assigned.has(target)) break; // role already filled by a higher-urls token
+      const entry: Role = { value: v.value, role, evidence: [`css-var ${v.name}: ${v.urls} urls`] };
+      if (target === 'accent') buckets.accent.primary = entry;
+      else if (target === 'surface') buckets.surface.base = entry;
+      else buckets.text.default = entry;
+      assigned.add(target);
+      break; // one token fills at most one role
+    }
+  }
 }
 
 function pickExtreme(

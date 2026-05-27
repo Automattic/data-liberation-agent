@@ -73,11 +73,25 @@ export interface ComputedStylesFile {
   bySelector: Record<string, ComputedStyleEntry[]>;
 }
 
+export interface CssVariableEntry {
+  name: string;
+  value: string;
+  isColor: boolean;
+  urls: number;
+}
+
+export interface CssVariablesFile {
+  version: 1;
+  sampledUrls: number;
+  variables: CssVariableEntry[];
+}
+
 const PALETTE_LIMIT = 24;
 const PALETTE_FILE = 'palette.json';
 const TYPOGRAPHY_FILE = 'typography.json';
 const BREAKPOINTS_FILE = 'breakpoints.json';
 const COMPUTED_STYLES_FILE = 'computed-styles.json';
+const CSS_VARIABLES_FILE = 'css-variables.json';
 
 /**
  * Aggregates PageAnalysis results from many URLs into three site-level files.
@@ -95,6 +109,8 @@ export class SiteAnalysisAggregator {
   // union of integer px breakpoints
   private minWidth: Set<number> = new Set();
   private maxWidth: Set<number> = new Set();
+  // custom-property name -> { latest value, isColor, distinct URL count }
+  private cssVarsByName: Map<string, { value: string; isColor: boolean; urls: Set<string> }> = new Map();
   // distinct URLs that contributed to aggregation
   private sampledUrls: Set<string> = new Set();
 
@@ -151,6 +167,22 @@ export class SiteAnalysisAggregator {
           }
         }
       } catch { /* corrupt */ }
+    }
+
+    const cssVarsPath = join(outputDir, CSS_VARIABLES_FILE);
+    if (existsSync(cssVarsPath)) {
+      try {
+        const parsed = JSON.parse(readFileSync(cssVarsPath, 'utf8')) as CssVariablesFile;
+        if (parsed.version === 1 && Array.isArray(parsed.variables)) {
+          for (const v of parsed.variables) {
+            this.cssVarsByName.set(v.name, {
+              value: v.value,
+              isColor: v.isColor,
+              urls: new Set<string>(Array.from({ length: v.urls }, (_, i) => `__prior_run__cssvar_${v.name}_${i}`)),
+            });
+          }
+        }
+      } catch { /* corrupt — start fresh */ }
     }
 
     const computedPath = join(outputDir, COMPUTED_STYLES_FILE);
@@ -223,6 +255,22 @@ export class SiteAnalysisAggregator {
 
     for (const n of analysis.breakpoints.minWidth) this.minWidth.add(n);
     for (const n of analysis.breakpoints.maxWidth) this.maxWidth.add(n);
+
+    for (const v of analysis.cssVariables ?? []) {
+      let entry = this.cssVarsByName.get(v.name);
+      if (!entry) {
+        entry = { value: v.value, isColor: v.isColor, urls: new Set() };
+        this.cssVarsByName.set(v.name, entry);
+      } else {
+        // Keep the most recent non-empty value; a token rarely changes value
+        // across pages, but a later page's literal wins over an empty earlier one.
+        if (v.value) {
+          entry.value = v.value;
+          entry.isColor = v.isColor;
+        }
+      }
+      entry.urls.add(url);
+    }
   }
 
   hasSamples(): boolean {
@@ -237,11 +285,13 @@ export class SiteAnalysisAggregator {
     const typography = this._buildTypographyFile();
     const breakpoints = this._buildBreakpointsFile();
     const computedStyles = this._buildComputedStylesFile();
+    const cssVariables = this._buildCssVariablesFile();
 
     writeAtomic(join(outputDir, PALETTE_FILE), JSON.stringify(palette, null, 2));
     writeAtomic(join(outputDir, TYPOGRAPHY_FILE), JSON.stringify(typography, null, 2));
     writeAtomic(join(outputDir, BREAKPOINTS_FILE), JSON.stringify(breakpoints, null, 2));
     writeAtomic(join(outputDir, COMPUTED_STYLES_FILE), JSON.stringify(computedStyles, null, 2));
+    writeAtomic(join(outputDir, CSS_VARIABLES_FILE), JSON.stringify(cssVariables, null, 2));
   }
 
   private _buildPaletteFile(): PaletteFile {
@@ -285,6 +335,16 @@ export class SiteAnalysisAggregator {
       bySelector[selector] = entries;
     }
     return { version: 1, sampledUrls: this.sampledUrls.size, bySelector };
+  }
+
+  private _buildCssVariablesFile(): CssVariablesFile {
+    const variables: CssVariableEntry[] = Array.from(this.cssVarsByName.entries())
+      .map(([name, { value, isColor, urls }]) => ({ name, value, isColor, urls: urls.size }))
+      .sort((a, b) => {
+        if (b.urls !== a.urls) return b.urls - a.urls;
+        return a.name.localeCompare(b.name);
+      });
+    return { version: 1, sampledUrls: this.sampledUrls.size, variables };
   }
 }
 

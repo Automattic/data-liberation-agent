@@ -46,7 +46,8 @@ export function saveDesignFoundation(
         prior?.inputsDigest?.palette === validated.inputsDigest.palette &&
         prior?.inputsDigest?.typography === validated.inputsDigest.typography &&
         prior?.inputsDigest?.breakpoints === validated.inputsDigest.breakpoints &&
-        prior?.inputsDigest?.manifest === validated.inputsDigest.manifest
+        prior?.inputsDigest?.manifest === validated.inputsDigest.manifest &&
+        prior?.inputsDigest?.cssVariables === validated.inputsDigest.cssVariables
       ) {
         return { ok: true, jsonPath, mdPath, unchanged: true };
       }

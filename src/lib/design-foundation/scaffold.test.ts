@@ -260,3 +260,63 @@ describe('scaffoldDesignFoundation — output shape', () => {
     expect(f.typography!.families!.display).toBeNull();
   });
 });
+
+describe('scaffoldDesignFoundation — :root CSS variable tokens', () => {
+  beforeEach(() => rmSync(TMP_ROOT, { recursive: true, force: true }));
+  afterEach(() => rmSync(TMP_ROOT, { recursive: true, force: true }));
+
+  function writeCssVariables(dir: string, variables: unknown[], sampledUrls = 100) {
+    writeFileSync(
+      join(dir, 'css-variables.json'),
+      JSON.stringify({ version: 1, sampledUrls, variables }),
+    );
+  }
+
+  it('overrides matched color roles with named :root tokens; ignores non-color tokens', () => {
+    const dir = setupOutputDir('cssvars');
+    writeStandardInputs(dir);
+    writeCssVariables(dir, [
+      { name: '--brand-primary', value: '#1d6f42', isColor: true, urls: 90 },
+      { name: '--page-background', value: '#fafafa', isColor: true, urls: 80 },
+      { name: '--radius-base', value: '8px', isColor: false, urls: 50 },
+    ]);
+    const f = scaffoldDesignFoundation(dir, { origin: 'https://example.com' });
+    // accent.primary (pixel left it null) is filled by the named token.
+    expect(f.color?.accent?.primary?.value).toBe('#1d6f42');
+    expect(f.color?.accent?.primary?.evidence?.[0]).toMatch(/css-var --brand-primary/);
+    // surface.base overrides the pixel-lightest (#ffffff) with the named token.
+    expect(f.color?.surface?.base?.value).toBe('#fafafa');
+    // No text token → text.default stays the pixel-darkest.
+    expect(f.color?.text?.default?.value).toBe('#111111');
+    // Result still satisfies the schema.
+    expect(() => PartialDesignFoundationSchema.parse(f)).not.toThrow();
+  });
+
+  it('falls back to pixel-derived roles when no css-variables.json exists', () => {
+    const dir = setupOutputDir('nocssvars');
+    writeStandardInputs(dir);
+    const f = scaffoldDesignFoundation(dir, { origin: 'https://example.com' });
+    expect(f.color?.accent?.primary).toBeNull();
+    expect(f.color?.surface?.base?.value).toBe('#ffffff');
+  });
+
+  it('picks the higher-urls token when two match the same role (deterministic, order-independent)', () => {
+    const dir = setupOutputDir('tiebreak');
+    writeStandardInputs(dir);
+    // Provided out of urls order on purpose — the scaffold must rank by urls desc.
+    writeCssVariables(dir, [
+      { name: '--accent', value: '#aa0000', isColor: true, urls: 30 },
+      { name: '--primary', value: '#00aa00', isColor: true, urls: 70 },
+    ]);
+    const f = scaffoldDesignFoundation(dir, { origin: 'https://example.com' });
+    expect(f.color?.accent?.primary?.value).toBe('#00aa00');
+  });
+
+  it('records a cssVariables digest in inputsDigest', () => {
+    const dir = setupOutputDir('digest');
+    writeStandardInputs(dir);
+    writeCssVariables(dir, []);
+    const f = scaffoldDesignFoundation(dir, { origin: 'https://example.com' });
+    expect(f.inputsDigest?.cssVariables).toMatch(/^sha256:/);
+  });
+});

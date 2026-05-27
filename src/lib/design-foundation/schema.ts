@@ -43,6 +43,9 @@ function buildSchema<R extends z.ZodTypeAny, G extends z.ZodTypeAny>(
       typography: z.string().regex(/^sha256:/),
       breakpoints: z.string().regex(/^sha256:/),
       manifest: z.string().regex(/^sha256:/),
+      // Optional for back-compat with foundations written before :root token
+      // capture; the scaffold always emits it now.
+      cssVariables: z.string().regex(/^sha256:/).optional(),
     }),
     color: z.object({
       surface: z.record(z.string(), roleSchema),
