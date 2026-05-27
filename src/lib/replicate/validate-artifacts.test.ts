@@ -331,3 +331,29 @@ describe('validateArtifacts — pattern-file header (regression: real builder ou
     expect(r.errors.some((e) => /php tag/i.test(e.message))).toBe(true);
   });
 });
+
+describe('validateArtifacts — block-markup well-formedness', () => {
+  const withPhp = (php: string): ArtifactInput => ({
+    patterns: [{ slug: 'site/section-1', php, spec: { interactionModel: 'cta', expectedText: [], expectedAssets: [] } }],
+  });
+
+  it('rejects an unclosed block delimiter (the bug the WP parser silently swallows)', () => {
+    const r = validateArtifacts(withPhp(
+      `<!-- wp:columns --><div class="wp-block-columns">` +
+      `<!-- wp:column --><div class="wp-block-column"><!-- wp:paragraph --><p>a</p><!-- /wp:paragraph --></div><!-- /wp:column -->` +
+      `</div>`, // missing <!-- /wp:columns -->
+    ));
+    expect(r.ok).toBe(false);
+    expect(r.errors.some((e) => /unclosed.*wp:columns/i.test(e.message))).toBe(true);
+  });
+
+  it('rejects a mismatched closing delimiter', () => {
+    const r = validateArtifacts(withPhp(`<!-- wp:columns --><div></div><!-- /wp:group -->`));
+    expect(r.ok).toBe(false);
+    expect(r.errors.some((e) => /mismatch/i.test(e.message))).toBe(true);
+  });
+
+  it('still passes well-formed block markup (no false positive)', () => {
+    expect(validateArtifacts(base()).ok).toBe(true);
+  });
+});

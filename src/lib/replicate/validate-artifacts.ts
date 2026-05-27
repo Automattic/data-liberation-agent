@@ -1,13 +1,16 @@
 // src/lib/replicate/validate-artifacts.ts
 //
 // The pre-install gate. Pure: takes generated patterns + their specs, returns a
-// structured report. THREE responsibilities:
-//   1. drift      — placeholders, remote URLs, decorative comments, bad model
-//   2. security   — escaping / injection allowlist (the trust boundary)
-//   3. provenance — emitted text ⊆ spec captured text
+// structured report. FOUR responsibilities:
+//   1. drift       — placeholders, remote URLs, decorative comments, bad model
+//   2. security    — escaping / injection allowlist (the trust boundary)
+//   3. provenance  — emitted text ⊆ spec captured text
+//   4. structure   — block markup is well-formed (balanced delimiters, valid
+//                    attrs, no freeform leaks), per the official WP parser
 //
-//   patterns[] ──▶ for each: drift ✓ · security ✓ · provenance ✓ ──▶ { ok, errors[], warnings[] }
+//   patterns[] ──▶ for each: drift ✓ · security ✓ · provenance ✓ · structure ✓ ──▶ { ok, errors[], warnings[] }
 //
+import { validateBlockMarkup } from './validate-block-markup.js';
 export const ALLOWED_INTERACTION_MODELS = new Set([
   'static', 'gallery', 'media-text', 'columns', 'cover-with-headline',
   'animated-cover', 'logo-strip', 'testimonial', 'cta', 'blog-card-grid',
@@ -202,6 +205,13 @@ export function validateArtifacts(input: ArtifactInput): ValidationReport {
     // <?= or the short <? — plus <script> and inline on*= handlers are treated as
     // injection. Shared with the theme-part builders via scanForInjection().
     for (const violation of scanForInjection(p.php)) fail(violation);
+
+    // --- structure: block markup must be well-formed ---
+    // The renderer hand-builds <!-- wp:NAME -->…<!-- /wp:NAME --> strings. Run
+    // them through the official WP parser + a delimiter-balance check so an
+    // unclosed/mismatched delimiter (which the parser silently re-parents) or a
+    // freeform/bad-attrs leak fails the gate instead of shipping broken blocks.
+    for (const violation of validateBlockMarkup(p.php)) fail(violation);
 
     // --- provenance: emitted copy must trace to the captured source ---
     //
