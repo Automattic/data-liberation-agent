@@ -4,6 +4,7 @@ node_modules/
 .DS_Store
 *.log
 dist/
+docs/plans/
 docs/superpowers/
 qa-screenshots/
 .claude/
@@ -16,3 +17,9 @@ TODOS.md
 
 # Streaming compose-then-install scratch dir
 .tmp-compose/
+
+# Scratch reference clones (e.g. source-site mirrors, try-wordpress)
+clones/
+
+# This repo uses npm (package-lock.json) — a stray pnpm lockfile shouldn't land
+pnpm-lock.yaml
