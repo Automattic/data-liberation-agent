@@ -88,6 +88,31 @@ describe('stripChrome', () => {
     expect(out.map((s) => s.sectionIndex)).toEqual([0, 1]);
   });
 
+  it('strips a leading header-chrome tile (short nav+contact band) captured as static', () => {
+    // Flat-Wix pages get captured as <section> tiles; the header tile arrives as
+    // a short `static` band of nav links + contact, not model `nav`. It must be
+    // stripped (the theme supplies its own header) or it renders above content.
+    const out = stripChrome([
+      section({
+        sectionIndex: 0,
+        interactionModel: 'static',
+        height: 116,
+        headings: ['Swift Lumber 251-368-8801'],
+        bodyText: ['PRODUCTS', 'GALLERY', 'JOB OPPORTUNITIES', 'ABOUT US'],
+      }),
+      section({ sectionIndex: 1, height: 800, headings: ['Southern Yellow Pine'] }),
+    ]);
+    expect(out.map((s) => s.sectionIndex)).toEqual([1]);
+  });
+
+  it('does NOT strip a tall leading content band that happens to have short lines', () => {
+    const out = stripChrome([
+      section({ sectionIndex: 0, height: 520, headings: ['Hero'], bodyText: ['A', 'B', 'C'] }),
+      section({ sectionIndex: 1, height: 400, headings: ['Body'] }),
+    ]);
+    expect(out.map((s) => s.sectionIndex)).toEqual([0, 1]);
+  });
+
   it('preserves a mid-page dark content band that is not the footer', () => {
     const out = stripChrome([
       section({ sectionIndex: 0, headings: ['Top'] }),
@@ -158,6 +183,41 @@ describe('reconstructPagePattern', () => {
     const cr = reconstructPagePattern([ctr], opts);
     expect(cr.php).toContain('has-text-align-center');
     expect(cr.php).toContain('is-content-justification-center');
+  });
+
+  it('does not emit a body line that merely repeats a heading (page-builder <p> headline)', () => {
+    const s = section({ headings: ['Southern Yellow Pine'], bodyText: ['Southern Yellow Pine', 'Real prose here.'] });
+    const r = reconstructPagePattern([s], opts);
+    // The headline renders once (as a heading); the duplicate body line is dropped.
+    expect((r.php.match(/Southern Yellow Pine/g) || []).length).toBe(1);
+    expect(r.php).toContain('Real prose here.');
+  });
+
+  it('renders a 3+ same-scale non-lead image row as a gallery below the lead', () => {
+    const s = section({
+      headings: ['Products'],
+      images: [
+        img(`${WP}kiln.png`, 'kiln'), // lead (big)
+        img(`${WP}s1.png`), img(`${WP}s2.png`), img(`${WP}s3.png`), // sample strip
+      ],
+    });
+    // shrink the samples below the lead threshold but above the gallery floor
+    (s.images[1] as { width: number; height: number }).width = 146;
+    (s.images[1] as { width: number; height: number }).height = 146;
+    (s.images[2] as { width: number; height: number }).width = 146;
+    (s.images[2] as { width: number; height: number }).height = 146;
+    (s.images[3] as { width: number; height: number }).width = 146;
+    (s.images[3] as { width: number; height: number }).height = 146;
+    const r = reconstructPagePattern([s], opts);
+    expect(r.php).toContain('wp:gallery');
+    expect(r.php).toContain('s1.png');
+    expect(r.php).toContain('s3.png');
+  });
+
+  it('does not sprout a gallery for a text band with fewer than 3 extra images', () => {
+    const s = section({ headings: ['Story'], images: [img(`${WP}lead.png`), img(`${WP}one.png`)] });
+    const r = reconstructPagePattern([s], opts);
+    expect(r.php).not.toContain('wp:gallery');
   });
 
   it('emits a PHP doc-comment header with the slug and title', () => {

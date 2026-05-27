@@ -191,15 +191,32 @@ function isChromeSection(s: SectionSpec): boolean {
   return hasCopyright || hasFooterNav || hasNewsletter;
 }
 
+/** Leading site-header chrome: a SHORT top-of-page band dominated by nav links
+ *  (+ logo), with no real prose. When the section detector captures the whole
+ *  page as <section> tiles (flat Wix pages), the header tile arrives as a
+ *  `static` section rather than model `nav`, so the nav-model check alone misses
+ *  it and the page renders the menu/contact block above its content. The theme
+ *  supplies its own header part, so a leading header band is always redundant.
+ *  Guarded by height so a tall hero or content band can never match. */
+function isHeaderChrome(s: SectionSpec): boolean {
+  if (s.interactionModel === 'nav') return true;
+  if (s.height > 200) return false; // headers are thin; heroes/content are tall
+  const body = (s.bodyText ?? []).map((b) => normalizeCopy(b)).filter(Boolean);
+  const heads = s.headings.map((h) => normalizeCopy(h)).filter(Boolean);
+  const shortLinkish = body.filter((b) => b.length <= 30).length;
+  const hasLongProse = [...body, ...heads].some((t) => t.length > 80);
+  return shortLinkish >= 3 && !hasLongProse;
+}
+
 /**
- * Drop trailing sitewide chrome (footer + newsletter) and any leading nav.
+ * Drop trailing sitewide chrome (footer + newsletter) and leading header/nav.
  * Only strips from the ends — a dark-bg content band in the page middle (e.g.
  * the "100 Night Happiness Guarantee" block) is preserved.
  */
 export function stripChrome(sections: SectionSpec[]): SectionSpec[] {
   let start = 0;
   let end = sections.length;
-  while (start < end && sections[start].interactionModel === 'nav') start++;
+  while (start < end && isHeaderChrome(sections[start])) start++;
   while (end > start && isChromeSection(sections[end - 1])) end--;
   return sections.slice(start, end);
 }
@@ -479,6 +496,17 @@ function renderTextBand(s: SectionSpec): BlockOut {
   // decorative glyph (a small quote-mark/badge <img> would otherwise fill the slot).
   const lead = pickLeadImage(s.images);
   if (lead) parts.push(imageBlock(lead, out, `${s.interactionModel}#${s.sectionIndex}`, { align: centerOf(s) ? 'center' : null, rounded: true }));
+  // A row of additional same-scale images (a thumbnail/sample strip the lead
+  // image alone would drop) renders as a gallery below the lead. Gated to 3+
+  // content-sized non-lead images so a normal text band with one stray glyph
+  // never sprouts a gallery — this recovers e.g. a product page's wood-sample row.
+  const extra = s.images.filter(
+    (im) => im.url !== lead?.url && isWpUrl(im.url) && Math.min(im.width || 0, im.height || 0) >= 90,
+  );
+  if (extra.length >= 3) {
+    const g = galleryBlock(extra, out);
+    if (g) parts.push(g);
+  }
   out.markup = wrapSection(parts.filter(Boolean), { constrained: '760px', center: centerOf(s), raised: isTintedSection(s), ...sectionPad(s) });
   return out;
 }
@@ -945,7 +973,15 @@ export function reconstructPagePattern(
   sections: SectionSpec[],
   opts: ReconstructOptions,
 ): ReconstructResult {
-  const body = stripChrome(sections);
+  // Drop body entries that merely repeat a heading. Page-builders often mark a
+  // headline as a styled <p> (≥28px → captured as a heading) that is ALSO a
+  // <p> (captured as body), so without this the renderer emits the line twice.
+  const body = stripChrome(sections).map((s) => {
+    if (!s.bodyText || s.bodyText.length === 0) return s;
+    const headSet = new Set(s.headings.map((h) => normalizeCopy(h)).filter(Boolean));
+    const filtered = s.bodyText.filter((b) => !headSet.has(normalizeCopy(b)));
+    return filtered.length === s.bodyText.length ? s : { ...s, bodyText: filtered };
+  });
   const expectedText: string[] = [];
   const bodyText: string[] = [];
   const assets: string[] = [];

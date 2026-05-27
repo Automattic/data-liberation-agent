@@ -1050,8 +1050,49 @@ export async function extractFull(
         }
         bandWinners = base.concat(fillers).sort((a, b) => a.band - b.band);
       } else {
-        // Page-builder DOM with no semantic sections: pure Y-band fallback.
-        bandWinners = pickBandWinners(collectBandCandidates());
+        // Few/no qualifying semantic landmarks. This is the case that breaks on
+        // a flat Wix page: the real content lives in ONE tall <section> tile, but
+        // the innermost de-nest above discards it (it contains a [role="region"]
+        // child), and the pure 300px-band scan then fragments that content —
+        // lumping a headline+photo split across sibling subtrees into one bucket
+        // and dropping a sub-200px image row entirely.
+        //
+        // Prefer the top-level <section> tiles when they vertically TILE the page.
+        // Each tile becomes one section, so a tall content tile is captured whole
+        // (heading + photo + grid) and the chrome tiles (header/footer) get
+        // stripped downstream. Fall back to the Y-band scan when there's no clean
+        // section tiling (a div-only page-builder export).
+        const tileEls = Array.from(document.querySelectorAll('section'))
+          .filter((el) => isVisible(el))
+          .filter((el) => {
+            const r = el.getBoundingClientRect();
+            return r.width >= 600 && r.height >= 80;
+          });
+        const outerTiles = tileEls.filter((el) => !tileEls.some((o) => o !== el && o.contains(el)));
+        const sortedTiles = outerTiles
+          .map((el) => {
+            const top = absTop(el);
+            return { top, bottom: top + Math.round(el.getBoundingClientRect().height), el };
+          })
+          .sort((a, b) => a.top - b.top);
+        // Fraction of page height the tiles cover (union, ignoring overlaps).
+        const pageH = Math.max(
+          document.body.scrollHeight,
+          document.documentElement.scrollHeight,
+          sortedTiles.length ? sortedTiles[sortedTiles.length - 1].bottom : 0,
+        );
+        let covered = 0;
+        let cursor = 0;
+        for (const t of sortedTiles) {
+          const lo = Math.max(cursor, t.top);
+          if (t.bottom > lo) covered += t.bottom - lo;
+          cursor = Math.max(cursor, t.bottom);
+        }
+        if (sortedTiles.length >= 2 && pageH > 0 && covered / pageH >= 0.6) {
+          bandWinners = sortedTiles.map((t) => ({ band: t.top, el: t.el }));
+        } else {
+          bandWinners = pickBandWinners(collectBandCandidates());
+        }
       }
 
       // De-nest: drop any winner CONTAINED by another kept winner. The hybrid
