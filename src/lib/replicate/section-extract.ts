@@ -624,6 +624,13 @@ export interface SectionSpecLayout {
   childLayout: 'grid' | 'flex-row' | 'flex-column' | 'stack';
   columnCount: number;
   gap: string;
+  /** Geometric vertical padding (px): the gap between the section's box and the
+   *  bounding box of its actual content (headings/body/images/buttons). This is
+   *  the reliable whitespace signal — page-builder sections report `padding:0`
+   *  because the real padding lives on inner wrappers, so the renderer trusts
+   *  these measured values over the `padding` string. Optional for back-compat. */
+  padTopPx?: number;
+  padBottomPx?: number;
 }
 
 export interface SectionSpec {
@@ -637,6 +644,10 @@ export interface SectionSpec {
    *  renderer reproduce the source type scale (eyebrow label vs headline) rather
    *  than collapse to generic heading levels. Optional for back-compat. */
   headingSizes?: number[];
+  /** Dominant computed text-align of this section's headings + body (start/end
+   *  normalized to left/right, justify→left). Lets the renderer reproduce source
+   *  alignment instead of hard-centering every band. Optional for back-compat. */
+  textAlign?: 'left' | 'center' | 'right';
   /**
    * Source-VERBATIM body copy captured from this section's served HTML — every
    * visible `<p>`/`<li>` text node, in document order, deduped. This is the
@@ -1754,13 +1765,68 @@ export async function extractFull(
           hasStoreBadge: allImages.some((im) => isStoreBadge(im)),
         };
 
+        // Vertical whitespace, measured geometrically. Page-builder sections
+        // report padding:0 (the real padding lives on inner wrappers), so the
+        // computed `padding` string is unreliable. Instead measure the gap
+        // between the section box and the bounding box of its actual CONTENT
+        // (headings, body, images, buttons — wrapper divs are excluded by
+        // construction). The space above the first content and below the last
+        // IS the section's top/bottom padding, whichever descendant carries it.
+        let padTopPx = 0;
+        let padBottomPx = 0;
+        {
+          const contentEls = [...headingEls, ...paragraphEls, ...imgEls, ...buttonEls];
+          let cTop = Infinity;
+          let cBot = -Infinity;
+          for (const ce of contentEls) {
+            const cr = ce.getBoundingClientRect();
+            if (cr.width < 1 || cr.height < 1) continue;
+            const ct = cr.top + window.scrollY;
+            const cb = cr.bottom + window.scrollY;
+            if (ct < cTop) cTop = ct;
+            if (cb > cBot) cBot = cb;
+          }
+          if (cTop !== Infinity) {
+            // Clamp: never negative; never more than 40% of the section height
+            // (guards against a stray off-screen/absolute element skewing it).
+            const cap = Math.max(0, Math.round(height * 0.4));
+            padTopPx = Math.min(cap, Math.max(0, Math.round(cTop - top)));
+            padBottomPx = Math.min(cap, Math.max(0, Math.round(bottom - cBot)));
+          }
+        }
+
         const layout: SectionSpecLayout = {
           containerWidth: width,
           padding: cs.padding || '0px',
           childLayout,
           columnCount: repeatedChildren.length,
           gap: gapVal,
+          padTopPx,
+          padBottomPx,
         };
+
+        // Dominant text alignment of the section's real content. The renderer
+        // honors this instead of hard-centering — a left-aligned source band
+        // (the common page-builder case) must not render centered.
+        let textAlign: 'left' | 'center' | 'right' = 'left';
+        {
+          const votes: Record<string, number> = {};
+          for (const e of [...headingEls, ...paragraphEls]) {
+            let ta = getComputedStyle(e).textAlign || 'left';
+            if (ta === 'start') ta = 'left';
+            else if (ta === 'end') ta = 'right';
+            else if (ta === 'justify') ta = 'left';
+            if (ta !== 'left' && ta !== 'center' && ta !== 'right') ta = 'left';
+            votes[ta] = (votes[ta] || 0) + 1;
+          }
+          let best = -1;
+          for (const k of Object.keys(votes)) {
+            if (votes[k] > best) {
+              best = votes[k];
+              textAlign = k as 'left' | 'center' | 'right';
+            }
+          }
+        }
 
         // Serialized section markup — handed back to Node so the deterministic
         // review extractor (review-extract.ts) can pull source-verbatim review
@@ -1788,6 +1854,7 @@ export async function extractFull(
           dividerAbove: dAbove ? { color: dAbove.color, thickness: dAbove.height } : null,
           dividerBelow: dBelow ? { color: dBelow.color, thickness: dBelow.height } : null,
           layout,
+          textAlign,
           motionAnimatedElements: animatedElements,
           sectionHtml,
           cells,
@@ -1929,6 +1996,7 @@ export async function extractFull(
       dividerAbove: rr.dividerAbove,
       dividerBelow: rr.dividerBelow,
       layout: rr.layout,
+      textAlign: (rr as unknown as { textAlign?: 'left' | 'center' | 'right' }).textAlign ?? 'left',
       ...(reviews ? { reviews } : {}),
       ...(faqs ? { faqs } : {}),
       ...(cells ? { cells } : {}),

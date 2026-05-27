@@ -361,6 +361,45 @@ function responsiveFontSize(px: number | undefined): string {
   return `clamp(${floor}px, ${vw}vw, ${px}px)`;
 }
 
+// Reproduce a measured vertical-padding value (px, captured at 1440 desktop)
+// as a responsive CSS length so section whitespace scales down on mobile rather
+// than dwarfing a small screen. Small values are emitted literally (a clamp with
+// min>max is invalid, and there's nothing to scale below ~24px).
+function responsiveSpace(px: number): string {
+  const p = Math.max(0, Math.round(px));
+  if (p < 24) return `${p}px`;
+  const floor = Math.max(16, Math.round(p * 0.45));
+  const vw = (p / 14.4).toFixed(2); // == px at 1440px wide
+  return `clamp(${floor}px, ${vw}vw, ${p}px)`;
+}
+
+// Pull the geometrically-measured top/bottom padding off a section's layout.
+// Only present when section-extract measured it (content-box vs section-box);
+// absent → wrapSection keeps its preset spacing for back-compat.
+function sectionPad(s: SectionSpec): { padTopPx?: number; padBottomPx?: number } {
+  const t = s.layout?.padTopPx;
+  const b = s.layout?.padBottomPx;
+  return {
+    ...(typeof t === 'number' ? { padTopPx: t } : {}),
+    ...(typeof b === 'number' ? { padBottomPx: b } : {}),
+  };
+}
+
+// Reproduce the section's source text alignment. When section-extract didn't
+// capture `textAlign` (older specs / unit fixtures) we preserve the historical
+// hard-centered behavior so existing output and tests don't shift; a real
+// extraction always sets it, so left-aligned source bands render left.
+function centerOf(s: SectionSpec): boolean {
+  return s.textAlign == null ? true : s.textAlign === 'center';
+}
+// CSS flex justify for a button row. Mirrors the text helpers' capability
+// (center vs left) so a button row never diverges from the copy beside it —
+// headingBlock/paragraphBlock don't emit right alignment yet, so a 'right'
+// section renders left text and must not right-justify its buttons.
+function buttonJustify(s: SectionSpec): 'left' | 'center' {
+  return centerOf(s) ? 'center' : 'left';
+}
+
 function headingBlock(
   text: string,
   out: BlockOut,
@@ -408,15 +447,17 @@ function paragraphBlock(
   );
 }
 
-function buttonBlock(label: string, out: BlockOut): string {
+function buttonBlock(label: string, out: BlockOut, opts: { align?: 'left' | 'center' | 'right' } = {}): string {
   const t = normalizeCopy(label);
   if (!t) return '';
   out.expectedText.push(t);
+  const justify = opts.align ?? 'center';
+  const justifyClass = ` is-content-justification-${justify}`;
   // Static, hrefless CTA: source interactivity (add-to-cart) did not survive
   // extraction, so we emit an honest non-linking button rather than invent a URL.
   return (
-    `<!-- wp:buttons {"layout":{"type":"flex","justifyContent":"center"}} -->\n` +
-    `<div class="wp-block-buttons">\n` +
+    `<!-- wp:buttons {"layout":{"type":"flex","justifyContent":"${justify}"}} -->\n` +
+    `<div class="wp-block-buttons${justifyClass}">\n` +
     `<!-- wp:button {"backgroundColor":"accent-primary","textColor":"text-inverse"} -->\n` +
     `<div class="wp-block-button"><a class="wp-block-button__link has-text-inverse-color has-accent-primary-background-color has-text-color has-background wp-element-button">${escapeHtml(
       t,
@@ -430,15 +471,15 @@ function renderTextBand(s: SectionSpec): BlockOut {
   const out = emptyOut();
   const parts: string[] = [];
   s.headings.forEach((h, i) =>
-    parts.push(headingBlock(h, out, { level: i === 0 ? 1 : 2, center: true, sizePx: s.headingSizes?.[i] })),
+    parts.push(headingBlock(h, out, { level: i === 0 ? 1 : 2, center: centerOf(s), sizePx: s.headingSizes?.[i] })),
   );
-  (s.bodyText ?? []).forEach((b) => parts.push(paragraphBlock(b, out, { center: true })));
-  s.buttonLabels.forEach((b) => parts.push(buttonBlock(b, out)));
+  (s.bodyText ?? []).forEach((b) => parts.push(paragraphBlock(b, out, { center: centerOf(s) })));
+  s.buttonLabels.forEach((b) => parts.push(buttonBlock(b, out, { align: buttonJustify(s) })));
   // A single lead image (if present) below the copy — only a real photo, never a
   // decorative glyph (a small quote-mark/badge <img> would otherwise fill the slot).
   const lead = pickLeadImage(s.images);
-  if (lead) parts.push(imageBlock(lead, out, `${s.interactionModel}#${s.sectionIndex}`, { align: 'center', rounded: true }));
-  out.markup = wrapSection(parts.filter(Boolean), { constrained: '760px', center: true, raised: isTintedSection(s) });
+  if (lead) parts.push(imageBlock(lead, out, `${s.interactionModel}#${s.sectionIndex}`, { align: centerOf(s) ? 'center' : null, rounded: true }));
+  out.markup = wrapSection(parts.filter(Boolean), { constrained: '760px', center: centerOf(s), raised: isTintedSection(s), ...sectionPad(s) });
   return out;
 }
 
@@ -453,9 +494,9 @@ function renderCover(s: SectionSpec): BlockOut {
   const out = emptyOut();
   out.assets.push(lead.url);
   const inner: string[] = [];
-  s.headings.forEach((h, i) => inner.push(headingBlock(h, out, { level: i === 0 ? 1 : 2, center: true, inverse: true, sizePx: s.headingSizes?.[i] })));
-  (s.bodyText ?? []).forEach((b) => inner.push(paragraphBlock(b, out, { center: true, inverse: true })));
-  s.buttonLabels.forEach((b) => inner.push(buttonBlock(b, out)));
+  s.headings.forEach((h, i) => inner.push(headingBlock(h, out, { level: i === 0 ? 1 : 2, center: centerOf(s), inverse: true, sizePx: s.headingSizes?.[i] })));
+  (s.bodyText ?? []).forEach((b) => inner.push(paragraphBlock(b, out, { center: centerOf(s), inverse: true })));
+  s.buttonLabels.forEach((b) => inner.push(buttonBlock(b, out, { align: buttonJustify(s) })));
   const innerMarkup = inner.filter(Boolean).join('\n');
   const url = escapeHtml(lead.url);
   out.markup =
@@ -474,14 +515,14 @@ function renderMediaText(s: SectionSpec, flip: boolean): BlockOut {
   const textParts: string[] = [];
   s.headings.forEach((h, i) => textParts.push(headingBlock(h, out, { level: 2, sizePx: s.headingSizes?.[i] })));
   (s.bodyText ?? []).forEach((b) => textParts.push(paragraphBlock(b, out)));
-  s.buttonLabels.forEach((b) => textParts.push(buttonBlock(b, out)));
+  s.buttonLabels.forEach((b) => textParts.push(buttonBlock(b, out, { align: buttonJustify(s) })));
   // Prefer a real lead photo over a decorative glyph (a small quote-mark <img>
   // would otherwise fill the media column).
   const imgMarkup = imageBlock(pickLeadImage(s.images) ?? s.images[0], out, `media-text#${s.sectionIndex}`, { rounded: true });
   const textCol = column(textParts.filter(Boolean), '55%');
   const imgCol = column([imgMarkup], '45%');
   const cols = flip ? [imgCol, textCol] : [textCol, imgCol];
-  out.markup = wrapSection([columns(cols)], { wide: '1100px', raised: isTintedSection(s) });
+  out.markup = wrapSection([columns(cols)], { wide: '1100px', raised: isTintedSection(s), ...sectionPad(s) });
   return out;
 }
 
@@ -504,15 +545,15 @@ function renderCardGrid(s: SectionSpec, withButtons: boolean): BlockOut {
     if (s.images.length > 0) {
       cardParts.push(imageBlock(s.images[i], out, `${s.interactionModel}#${s.sectionIndex}.card${i}`, { rounded: true }));
     }
-    if (headings[i]) cardParts.push(headingBlock(headings[i], out, { level: 3, center: true }));
-    if (bodyText[i]) cardParts.push(paragraphBlock(bodyText[i], out, { center: true, size: 'small' }));
-    if (withButtons && s.buttonLabels[i]) cardParts.push(buttonBlock(s.buttonLabels[i], out));
+    if (headings[i]) cardParts.push(headingBlock(headings[i], out, { level: 3, center: centerOf(s) }));
+    if (bodyText[i]) cardParts.push(paragraphBlock(bodyText[i], out, { center: centerOf(s), size: 'small' }));
+    if (withButtons && s.buttonLabels[i]) cardParts.push(buttonBlock(s.buttonLabels[i], out, { align: buttonJustify(s) }));
     if (cardParts.filter(Boolean).length) cards.push(column(cardParts.filter(Boolean)));
   }
   // Body text not consumed per-card (a section intro) renders above the grid.
   const extra: string[] = [];
-  for (let i = cardCount; i < bodyText.length; i++) extra.push(paragraphBlock(bodyText[i], out, { center: true }));
-  out.markup = wrapSection([...extra.filter(Boolean), columns(cards)], { wide: '1100px', raised: isTintedSection(s) });
+  for (let i = cardCount; i < bodyText.length; i++) extra.push(paragraphBlock(bodyText[i], out, { center: centerOf(s) }));
+  out.markup = wrapSection([...extra.filter(Boolean), columns(cards)], { wide: '1100px', raised: isTintedSection(s), ...sectionPad(s) });
   return out;
 }
 
@@ -547,7 +588,7 @@ function renderReviewGrid(s: SectionSpec): BlockOut {
   s.headings
     .filter((h) => !/^\s*-/.test(h))
     .slice(0, 1)
-    .forEach((h) => intro.push(headingBlock(h, out, { level: 2, center: true, inverse: dark })));
+    .forEach((h) => intro.push(headingBlock(h, out, { level: 2, center: centerOf(s), inverse: dark })));
 
   const reviews: ExtractedReview[] = s.reviews ?? [];
   const cards: string[] = [];
@@ -596,6 +637,7 @@ function renderReviewGrid(s: SectionSpec): BlockOut {
     wide: '1100px',
     inverse: dark,
     raised: !dark,
+    ...sectionPad(s),
   });
   return out;
 }
@@ -631,11 +673,11 @@ function galleryBlock(images: SectionSpecImage[], out: BlockOut): string {
 function renderImageRow(s: SectionSpec): BlockOut {
   const out = emptyOut();
   const parts: string[] = [];
-  s.headings.forEach((h, i) => parts.push(headingBlock(h, out, { level: 2, center: true, sizePx: s.headingSizes?.[i] })));
-  (s.bodyText ?? []).forEach((b) => parts.push(paragraphBlock(b, out, { center: true })));
+  s.headings.forEach((h, i) => parts.push(headingBlock(h, out, { level: 2, center: centerOf(s), sizePx: s.headingSizes?.[i] })));
+  (s.bodyText ?? []).forEach((b) => parts.push(paragraphBlock(b, out, { center: centerOf(s) })));
   const gallery = galleryBlock(s.images, out);
   if (gallery) parts.push(gallery);
-  out.markup = wrapSection(parts.filter(Boolean), { wide: '1100px', raised: isTintedSection(s) });
+  out.markup = wrapSection(parts.filter(Boolean), { wide: '1100px', raised: isTintedSection(s), ...sectionPad(s) });
   return out;
 }
 
@@ -644,7 +686,7 @@ function renderFaq(s: SectionSpecWithFaqs): BlockOut {
   const out = emptyOut();
   const parts: string[] = [];
   // A leading "Frequently Asked Questions" heading is band copy.
-  s.headings.slice(0, 1).forEach((h) => parts.push(headingBlock(h, out, { level: 2, center: true })));
+  s.headings.slice(0, 1).forEach((h) => parts.push(headingBlock(h, out, { level: 2, center: centerOf(s) })));
   const faqs = s.faqs ?? [];
   for (const f of faqs) {
     const q = normalizeCopy(f.question);
@@ -668,7 +710,7 @@ function renderFaq(s: SectionSpecWithFaqs): BlockOut {
         `${answerBlock}\n</details>\n<!-- /wp:details -->`,
     );
   }
-  out.markup = wrapSection(parts.filter(Boolean), { constrained: '760px', raised: isTintedSection(s) });
+  out.markup = wrapSection(parts.filter(Boolean), { constrained: '760px', raised: isTintedSection(s), ...sectionPad(s) });
   return out;
 }
 
@@ -695,7 +737,15 @@ function columns(cols: string[]): string {
 
 function wrapSection(
   parts: string[],
-  opts: { constrained?: string; wide?: string; center?: boolean; raised?: boolean; inverse?: boolean },
+  opts: {
+    constrained?: string;
+    wide?: string;
+    center?: boolean;
+    raised?: boolean;
+    inverse?: boolean;
+    padTopPx?: number;
+    padBottomPx?: number;
+  },
 ): string {
   const body = parts.filter(Boolean).join('\n');
   if (!body) return '';
@@ -717,9 +767,17 @@ function wrapSection(
     : opts.raised
       ? ' has-surface-raised-background-color has-background'
       : '';
+  // Vertical padding: trust the geometrically-measured value when section-extract
+  // captured it (faithful whitespace — page-builder `padding` reads 0); otherwise
+  // fall back to the theme spacing preset. Horizontal padding stays preset.
+  const topVal = typeof opts.padTopPx === 'number' ? responsiveSpace(opts.padTopPx) : 'var:preset|spacing|60';
+  const botVal =
+    typeof opts.padBottomPx === 'number' ? responsiveSpace(opts.padBottomPx) : 'var:preset|spacing|60';
+  const cssLen = (v: string): string =>
+    v.startsWith('var:preset|spacing|') ? `var(--wp--preset--spacing--${v.split('|').pop()})` : v;
   return (
-    `<!-- wp:group {"tagName":"section","align":"full","style":{"spacing":{"padding":{"top":"var:preset|spacing|60","bottom":"var:preset|spacing|60","left":"var:preset|spacing|40","right":"var:preset|spacing|40"},"blockGap":"var:preset|spacing|40"}}${bg},${layout}} -->\n` +
-    `<section class="wp-block-group alignfull${bgClass}" style="padding-top:var(--wp--preset--spacing--60);padding-right:var(--wp--preset--spacing--40);padding-bottom:var(--wp--preset--spacing--60);padding-left:var(--wp--preset--spacing--40)">\n` +
+    `<!-- wp:group {"tagName":"section","align":"full","style":{"spacing":{"padding":{"top":"${topVal}","bottom":"${botVal}","left":"var:preset|spacing|40","right":"var:preset|spacing|40"},"blockGap":"var:preset|spacing|40"}}${bg},${layout}} -->\n` +
+    `<section class="wp-block-group alignfull${bgClass}" style="padding-top:${cssLen(topVal)};padding-right:var(--wp--preset--spacing--40);padding-bottom:${cssLen(botVal)};padding-left:var(--wp--preset--spacing--40)">\n` +
     `${body}\n` +
     `</section>\n<!-- /wp:group -->`
   );
@@ -747,7 +805,7 @@ function renderCellGrid(s: SectionSpec, ctx: RenderCtx): BlockOut {
   const intro: string[] = [];
   s.headings.forEach((h, i) => {
     if (cellHeadSet.has(normalizeCopy(h))) return; // a cell title — rendered in its column
-    intro.push(headingBlock(h, out, { level: i === 0 ? 2 : 3, center: true, sizePx: s.headingSizes?.[i] }));
+    intro.push(headingBlock(h, out, { level: i === 0 ? 2 : 3, center: centerOf(s), sizePx: s.headingSizes?.[i] }));
   });
   const cols: string[] = [];
   for (const c of cells) {
@@ -764,14 +822,14 @@ function renderCellGrid(s: SectionSpec, ctx: RenderCtx): BlockOut {
     if (c.image && isWpUrl(c.image.url) && Math.min(c.image.width || 0, c.image.height || 0) >= MIN_LEAD_IMAGE_PX) {
       parts.push(imageBlock(c.image, out, `cell#${s.sectionIndex}`, { rounded: true }));
     }
-    if (c.heading) parts.push(headingBlock(c.heading, out, { level: 3, center: true, inverse: cardDark, sizePx: c.headingSize }));
-    for (const b of c.body) parts.push(paragraphBlock(b, out, { center: true, size: 'small', inverse: cardDark }));
+    if (c.heading) parts.push(headingBlock(c.heading, out, { level: 3, center: centerOf(s), inverse: cardDark, sizePx: c.headingSize }));
+    for (const b of c.body) parts.push(paragraphBlock(b, out, { center: centerOf(s), size: 'small', inverse: cardDark }));
     if (c.button) parts.push(buttonBlock(c.button, out));
     const kept = parts.filter(Boolean);
     if (!kept.length) continue;
     cols.push(column(cardToken ? [cardGroup(kept, cardToken, cardDark, c.radius ?? 0)] : kept));
   }
-  out.markup = wrapSection([...intro.filter(Boolean), columns(cols)], { wide: '1100px', raised: isTintedSection(s) });
+  out.markup = wrapSection([...intro.filter(Boolean), columns(cols)], { wide: '1100px', raised: isTintedSection(s), ...sectionPad(s) });
   return out;
 }
 

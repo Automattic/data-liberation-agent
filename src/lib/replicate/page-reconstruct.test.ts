@@ -118,6 +118,48 @@ describe('reconstructPagePattern', () => {
     expect(noSize.php).not.toContain('font-size:clamp');
   });
 
+  it('reproduces measured section vertical padding (whitespace) as responsive CSS', () => {
+    // section-extract measures padding geometrically (content-box vs section-box)
+    // because page-builder sections report padding:0. The renderer must trust the
+    // measured px over the theme preset so source whitespace is faithful.
+    const s = section({ headings: ['Spacious'] }) as SectionSpec;
+    s.layout = { ...s.layout, padTopPx: 120, padBottomPx: 140 };
+    const r = reconstructPagePattern([s], opts);
+    // Responsive clamp whose max equals the captured px, on both top and bottom.
+    expect(r.php).toMatch(/padding-top:clamp\(\d+px, [\d.]+vw, 120px\)/);
+    expect(r.php).toMatch(/padding-bottom:clamp\(\d+px, [\d.]+vw, 140px\)/);
+    // The preset spacing is NOT used for the measured vertical edges.
+    expect(r.php).not.toMatch(/padding-top:var\(--wp--preset--spacing--60\)/);
+  });
+
+  it('emits a near-zero measured padding literally (no invalid clamp) and falls back to preset when unmeasured', () => {
+    // Small measured values can't form a valid clamp (min would exceed max), so
+    // they emit as a literal px. A full-bleed source band (≈0 padding) stays flush.
+    const tight = section({ headings: ['Flush'] }) as SectionSpec;
+    tight.layout = { ...tight.layout, padTopPx: 8, padBottomPx: 0 };
+    const t = reconstructPagePattern([tight], opts);
+    expect(t.php).toContain('padding-top:8px');
+    expect(t.php).toContain('padding-bottom:0px');
+    // No measurement → theme spacing preset (back-compat).
+    const plain = reconstructPagePattern([section({ headings: ['Default'] })], opts);
+    expect(plain.php).toMatch(/padding-top:var\(--wp--preset--spacing--60\)/);
+  });
+
+  it('honors the source text alignment instead of hard-centering (left source → left output)', () => {
+    // swiftlumber left-aligns every heading; the renderer must not center them.
+    const left = section({ headings: ['The Swift Lumber Advantage'], bodyText: ['Body copy.'], buttonLabels: ['SEE ALL'] }) as SectionSpec;
+    left.textAlign = 'left';
+    const lr = reconstructPagePattern([left], opts);
+    expect(lr.php).not.toContain('has-text-align-center');
+    expect(lr.php).toContain('is-content-justification-left'); // button row follows
+    // A genuinely centered source band still centers.
+    const ctr = section({ headings: ['Centered'], buttonLabels: ['GO'] }) as SectionSpec;
+    ctr.textAlign = 'center';
+    const cr = reconstructPagePattern([ctr], opts);
+    expect(cr.php).toContain('has-text-align-center');
+    expect(cr.php).toContain('is-content-justification-center');
+  });
+
   it('emits a PHP doc-comment header with the slug and title', () => {
     const r = reconstructPagePattern([section({ headings: ['Hello world'] })], opts);
     expect(r.php).toContain('Title: Page — X');
