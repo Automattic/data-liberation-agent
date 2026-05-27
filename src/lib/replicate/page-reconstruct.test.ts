@@ -220,6 +220,44 @@ describe('reconstructPagePattern', () => {
     expect(r.php).not.toContain('wp:gallery');
   });
 
+  it('renders a captured side-by-side mediaLayout as a 2-column media-text with the correct side', () => {
+    // image-left: the image column precedes the text column.
+    const left = section({ interactionModel: 'static', headings: ['Headline'], bodyText: ['Body.'], images: [img(`${WP}photo.png`, 'p')] });
+    left.mediaLayout = 'image-left';
+    const lr = reconstructPagePattern([left], opts);
+    expect(lr.php).toContain('wp:columns');
+    expect(lr.php.indexOf('photo.png')).toBeLessThan(lr.php.indexOf('>Headline<'));
+    // image-right: the text column precedes the image column.
+    const right = section({ interactionModel: 'static', headings: ['Headline'], bodyText: ['Body.'], images: [img(`${WP}photo.png`, 'p')] });
+    right.mediaLayout = 'image-right';
+    const rr = reconstructPagePattern([right], opts);
+    expect(rr.php.indexOf('>Headline<')).toBeLessThan(rr.php.indexOf('photo.png'));
+  });
+
+  it('does not route a gallery model to media-text even if mediaLayout is set', () => {
+    const s = section({ interactionModel: 'gallery', headings: ['Gallery'], images: [img(`${WP}a.png`), img(`${WP}b.png`)] });
+    s.mediaLayout = 'image-left';
+    const r = reconstructPagePattern([s], opts);
+    expect(r.php).toContain('wp:gallery'); // stays a gallery, not 2-col media-text
+  });
+
+  it('renders sub-200px cell images (team headshots) that the lead threshold would drop', () => {
+    const cell = (heading: string, url: string) => ({
+      heading,
+      body: ['contact'],
+      image: { url, sourceUrl: url, alt: '', kind: 'img' as const, width: 182, height: 193 },
+      icon: null,
+      button: null,
+    });
+    const s = section({ interactionModel: 'static', headings: ['Meet the Experts'] }) as SectionSpec & {
+      cells: unknown[];
+    };
+    s.cells = [cell('Al Thrash', `${WP}al.png`), cell('Shapard Marks', `${WP}shap.png`)];
+    const r = reconstructPagePattern([s as SectionSpec], opts);
+    expect(r.php).toContain('al.png');
+    expect(r.php).toContain('shap.png');
+  });
+
   it('emits a PHP doc-comment header with the slug and title', () => {
     const r = reconstructPagePattern([section({ headings: ['Hello world'] })], opts);
     expect(r.php).toContain('Title: Page — X');
@@ -570,6 +608,37 @@ describe('reconstructPagePattern', () => {
     // Without paletteTokens, the same cells render as plain columns (no card bg).
     const plain = reconstructPagePattern([s], { patternSlug: 'demo-replica/page-x', title: 'X' });
     expect(plain.php).not.toContain('has-surface-raised-background-color');
+  });
+
+  it('reproduces a card’s captured padding + left icon/text alignment (computed-style transfer)', () => {
+    const s = section({ interactionModel: 'columns', headings: ['WHY'] }) as SectionSpec;
+    s.textAlign = 'left';
+    const icon = { kind: 'svg' as const, markup: '<svg viewBox="0 0 24 24"><path d="M3 9h4"/></svg>', width: 48, height: 48 };
+    const base = {
+      body: ['desc'],
+      image: null,
+      icon,
+      button: null,
+      background: 'rgb(102, 101, 88)',
+      radius: 10,
+      padding: { top: 34, right: 45, bottom: 96, left: 45 },
+      align: 'left' as const,
+      iconAlign: 'left' as const,
+    };
+    s.cells = [{ heading: 'EXPERIENCE', ...base }, { heading: 'PROXIMITY', ...base }];
+    const r = reconstructPagePattern([s], {
+      patternSlug: 'demo-replica/page-x',
+      title: 'X',
+      paletteTokens: [{ slug: 'surface-raised', hex: '#666558' }],
+    });
+    // Captured card padding reproduced as a responsive clamp (max == captured px).
+    // (The section wrapper keeps the preset for its own horizontal padding.)
+    expect(r.php).toMatch(/padding-left:clamp\([^)]*45px\)/);
+    expect(r.php).toMatch(/padding-top:clamp\([^)]*34px\)/);
+    // Icon follows the card alignment (left) — not the old hard-center.
+    expect(r.php).not.toContain('aligncenter');
+    // Card text is left-aligned (no centered text).
+    expect(r.php).not.toContain('has-text-align-center');
   });
 
   it('renders an animated-cover hero as a wp:cover with the photo + overlaid white text', () => {

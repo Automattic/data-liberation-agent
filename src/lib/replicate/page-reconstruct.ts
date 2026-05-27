@@ -118,6 +118,11 @@ const MISSING_IMAGE_PLACEHOLDER = '[image unavailable — not captured]';
  * artifact, so the lead-image slots skip sub-threshold images.
  */
 const MIN_LEAD_IMAGE_PX = 200;
+/** Cell/card images (team headshots, product thumbnails) are legitimately
+ *  smaller than a hero lead photo, so they use a lower floor — still well above
+ *  decorative-glyph size (quote marks / tiny icons are <40px). Without this a
+ *  ~180px circular team avatar is dropped and a member renders as text-only. */
+const MIN_CELL_IMAGE_PX = 90;
 
 /** First image large enough to be a real lead photo (not a decorative glyph). */
 function pickLeadImage(images: SectionSpecImage[]): SectionSpecImage | undefined {
@@ -300,7 +305,12 @@ interface RenderCtx {
  * bytes on `out.iconAssets` for the driver to write to assets/. Returns '' when
  * the icon has no usable markup.
  */
-function iconImageBlock(icon: SectionSpecIcon, out: BlockOut, ctx: RenderCtx, opts: { sizePx?: number; fill?: string } = {}): string {
+function iconImageBlock(
+  icon: SectionSpecIcon,
+  out: BlockOut,
+  ctx: RenderCtx,
+  opts: { sizePx?: number; fill?: string; align?: 'left' | 'center' | 'right' } = {},
+): string {
   const sizePx = opts.sizePx ?? 48;
   if (icon.kind !== 'svg' || !icon.markup) return '';
   let svg = sanitizeSvgAsset(icon.markup);
@@ -312,9 +322,15 @@ function iconImageBlock(icon: SectionSpecIcon, out: BlockOut, ctx: RenderCtx, op
   const path = `assets/icon-${ctx.iconCounter++}.svg`;
   out.iconAssets.push({ path, svg });
   const src = `<?php echo esc_url(get_theme_file_uri('${path}')); ?>`;
+  // Honor the source icon placement (left when the card content is left-aligned —
+  // a centered icon over left text is the mismatch). 'left' = no align (default
+  // left in the block flow, not a float).
+  const align = opts.align ?? 'center';
+  const alignAttr = align === 'center' ? ',"align":"center"' : align === 'right' ? ',"align":"right"' : '';
+  const alignClass = align === 'center' ? ' aligncenter' : align === 'right' ? ' alignright' : '';
   return (
-    `<!-- wp:image {"width":"${sizePx}px","height":"${sizePx}px","sizeSlug":"full","align":"center"} -->\n` +
-    `<figure class="wp-block-image aligncenter size-full is-resized"><img src="${src}" alt="" style="width:${sizePx}px;height:${sizePx}px"/></figure>\n` +
+    `<!-- wp:image {"width":"${sizePx}px","height":"${sizePx}px","sizeSlug":"full"${alignAttr}} -->\n` +
+    `<figure class="wp-block-image${alignClass} size-full is-resized"><img src="${src}" alt="" style="width:${sizePx}px;height:${sizePx}px"/></figure>\n` +
     `<!-- /wp:image -->`
   );
 }
@@ -546,11 +562,23 @@ function renderMediaText(s: SectionSpec, flip: boolean): BlockOut {
   s.buttonLabels.forEach((b) => textParts.push(buttonBlock(b, out, { align: buttonJustify(s) })));
   // Prefer a real lead photo over a decorative glyph (a small quote-mark <img>
   // would otherwise fill the media column).
-  const imgMarkup = imageBlock(pickLeadImage(s.images) ?? s.images[0], out, `media-text#${s.sectionIndex}`, { rounded: true });
+  const lead = pickLeadImage(s.images) ?? s.images[0];
+  const imgMarkup = imageBlock(lead, out, `media-text#${s.sectionIndex}`, { rounded: true });
   const textCol = column(textParts.filter(Boolean), '55%');
   const imgCol = column([imgMarkup], '45%');
   const cols = flip ? [imgCol, textCol] : [textCol, imgCol];
-  out.markup = wrapSection([columns(cols)], { wide: '1100px', raised: isTintedSection(s), ...sectionPad(s) });
+  const blocks: string[] = [columns(cols)];
+  // A row of additional same-scale images (a sample/thumbnail strip) renders as
+  // a gallery below the 2-up — the single media-column image would otherwise drop
+  // it. Same gate as renderTextBand (3+ content-sized non-lead images).
+  const extra = s.images.filter(
+    (im) => im.url !== lead?.url && isWpUrl(im.url) && Math.min(im.width || 0, im.height || 0) >= 90,
+  );
+  if (extra.length >= 3) {
+    const g = galleryBlock(extra, out);
+    if (g) blocks.push(g);
+  }
+  out.markup = wrapSection(blocks, { wide: '1100px', raised: isTintedSection(s), ...sectionPad(s) });
   return out;
 }
 
@@ -842,39 +870,78 @@ function renderCellGrid(s: SectionSpec, ctx: RenderCtx): BlockOut {
     // render DISTINCTLY instead of flattening into one band.
     const cardToken = c.background ? nearestToken(c.background, ctx.paletteTokens) : null;
     const cardDark = c.background ? brightness(c.background) < 140 : false;
+    // The card's own captured alignment (left/center) drives its text and icon —
+    // not the section's — so a left-aligned card with a centered icon never
+    // happens unless the source did it. Falls back to the section alignment when
+    // a cell carries no captured alignment (older specs / hand-built fixtures).
+    const cellCenter = c.align ? c.align === 'center' : centerOf(s);
+    const iconAlign = c.iconAlign ?? (cellCenter ? 'center' : 'left');
     const parts: string[] = [];
     // A small inline icon (speaker / bluetooth / sun glyph, comparison check/X)
     // tops the cell — shipped as a theme SVG asset, referenced via core/image.
     // On a dark card the glyph is recolored white (else it renders default black).
-    if (c.icon) parts.push(iconImageBlock(c.icon, out, ctx, cardDark ? { fill: '#ffffff' } : {}));
-    if (c.image && isWpUrl(c.image.url) && Math.min(c.image.width || 0, c.image.height || 0) >= MIN_LEAD_IMAGE_PX) {
+    if (c.icon) parts.push(iconImageBlock(c.icon, out, ctx, { align: iconAlign, ...(cardDark ? { fill: '#ffffff' } : {}) }));
+    if (c.image && isWpUrl(c.image.url) && Math.min(c.image.width || 0, c.image.height || 0) >= MIN_CELL_IMAGE_PX) {
       parts.push(imageBlock(c.image, out, `cell#${s.sectionIndex}`, { rounded: true }));
     }
-    if (c.heading) parts.push(headingBlock(c.heading, out, { level: 3, center: centerOf(s), inverse: cardDark, sizePx: c.headingSize }));
-    for (const b of c.body) parts.push(paragraphBlock(b, out, { center: centerOf(s), size: 'small', inverse: cardDark }));
-    if (c.button) parts.push(buttonBlock(c.button, out));
+    if (c.heading) parts.push(headingBlock(c.heading, out, { level: 3, center: cellCenter, inverse: cardDark, sizePx: c.headingSize }));
+    for (const b of c.body) parts.push(paragraphBlock(b, out, { center: cellCenter, size: 'small', inverse: cardDark }));
+    if (c.button) parts.push(buttonBlock(c.button, out, { align: cellCenter ? 'center' : 'left' }));
     const kept = parts.filter(Boolean);
     if (!kept.length) continue;
-    cols.push(column(cardToken ? [cardGroup(kept, cardToken, cardDark, c.radius ?? 0)] : kept));
+    cols.push(column(cardToken ? [cardGroup(kept, cardToken, cardDark, c.radius ?? 0, c.padding ?? null)] : kept));
   }
   out.markup = wrapSection([...intro.filter(Boolean), columns(cols)], { wide: '1100px', raised: isTintedSection(s), ...sectionPad(s) });
   return out;
 }
 
 /** Wrap a cell's content in a styled card group: token background, light text on a
- *  dark card, rounded corners, and padding. Radius is capped to a sane range. */
-function cardGroup(parts: string[], bgToken: string, dark: boolean, radius: number): string {
+ *  dark card, rounded corners, and padding. Radius is capped to a sane range.
+ *  When the source card's geometric inner padding was captured it's reproduced
+ *  (responsive, so it scales down on mobile); otherwise the theme preset is used. */
+function cardGroup(
+  parts: string[],
+  bgToken: string,
+  dark: boolean,
+  radius: number,
+  padding: { top: number; right: number; bottom: number; left: number } | null,
+): string {
   const textToken = dark ? 'text-inverse' : 'text-default';
   const r = radius > 0 ? Math.min(radius, 32) : 12;
+  const cssLen = (v: string): string =>
+    v.startsWith('var:preset|spacing|') ? `var(--wp--preset--spacing--${v.split('|').pop()})` : v;
+  // Captured px → responsive clamp; clamp the raw value to a sane card range so a
+  // mismeasured outlier can't produce an absurd inset. No capture → preset.
+  const side = (px: number | undefined): string =>
+    typeof px === 'number' ? responsiveSpace(Math.max(8, Math.min(96, px))) : 'var:preset|spacing|40';
+  const pt = side(padding?.top);
+  const pr = side(padding?.right);
+  const pb = side(padding?.bottom);
+  const pl = side(padding?.left);
   return (
-    `<!-- wp:group {"style":{"spacing":{"padding":{"top":"var:preset|spacing|40","bottom":"var:preset|spacing|40","left":"var:preset|spacing|40","right":"var:preset|spacing|40"}},"border":{"radius":"${r}px"}},"backgroundColor":"${bgToken}","textColor":"${textToken}","layout":{"type":"constrained"}} -->\n` +
-    `<div class="wp-block-group has-${textToken}-color has-${bgToken}-background-color has-text-color has-background" style="border-radius:${r}px;padding-top:var(--wp--preset--spacing--40);padding-right:var(--wp--preset--spacing--40);padding-bottom:var(--wp--preset--spacing--40);padding-left:var(--wp--preset--spacing--40)">\n${parts.join('\n')}\n</div>\n` +
+    `<!-- wp:group {"style":{"spacing":{"padding":{"top":"${pt}","bottom":"${pb}","left":"${pl}","right":"${pr}"}},"border":{"radius":"${r}px"}},"backgroundColor":"${bgToken}","textColor":"${textToken}","layout":{"type":"constrained"}} -->\n` +
+    `<div class="wp-block-group has-${textToken}-color has-${bgToken}-background-color has-text-color has-background" style="border-radius:${r}px;padding-top:${cssLen(pt)};padding-right:${cssLen(pr)};padding-bottom:${cssLen(pb)};padding-left:${cssLen(pl)}">\n${parts.join('\n')}\n</div>\n` +
     `<!-- /wp:group -->`
   );
 }
 
 /** Models with their own specialized renderers — never overridden by the cell grid. */
 const NON_CELL_GRID_MODELS = new Set([
+  'product-card-row',
+  'project-card-grid',
+  'blog-card-grid',
+  'review-grid',
+  'testimonial',
+]);
+
+/** Models whose multi-image layouts own their rendering — a captured 2-up
+ *  `mediaLayout` must not re-route them to media-text (a gallery/card/review band
+ *  is not a single image beside text even if one image happens to sit beside a label). */
+const MEDIA_LAYOUT_DENY = new Set([
+  'gallery',
+  'logo-strip',
+  'color-block-grid',
+  'marquee-strip',
   'product-card-row',
   'project-card-grid',
   'blog-card-grid',
@@ -899,6 +966,21 @@ function renderSection(s: SectionSpecWithFaqs, ctx: RenderCtx): BlockOut {
     s.cells.filter((c) => c.heading && c.body.length > 0).length >= 2
   ) {
     return renderCellGrid(s, ctx);
+  }
+  // The source places a large image BESIDE the text (a 2-up media row) — render
+  // media-text with the captured side, regardless of the geometric model, so the
+  // arrangement isn't stacked. Skipped for gallery/card/review models (their
+  // multi-image layouts own their rendering) and when there's no lead image or
+  // text to pair. This is what makes a flat-Wix content tile (e.g. a product
+  // page's photo|description row) reproduce its real two-column layout.
+  if (
+    s.mediaLayout &&
+    !MEDIA_LAYOUT_DENY.has(s.interactionModel) &&
+    pickLeadImage(s.images) &&
+    (s.headings.length > 0 || (s.bodyText ?? []).length > 0)
+  ) {
+    ctx.mediaTextIndex++;
+    return renderMediaText(s, s.mediaLayout === 'image-left');
   }
   switch (s.interactionModel) {
     case 'media-text': {

@@ -596,6 +596,16 @@ export interface SectionSpecCell {
   /** Computed font-size (px) of the cell's title — lets the renderer reproduce
    *  the source card-title size instead of the generic level scale. */
   headingSize?: number;
+  /** Geometric inner padding (px) of the card — gap from the card box to its
+   *  content's bounding box. Reliable on page-builder markup where the card box's
+   *  own `padding` reads 0 (padding on inner wrappers). Optional for back-compat. */
+  padding?: { top: number; right: number; bottom: number; left: number } | null;
+  /** Dominant text alignment of the card content (left/center/right). Lets the
+   *  renderer reproduce source alignment instead of hard-centering. */
+  align?: 'left' | 'center' | 'right';
+  /** Horizontal placement of the card's icon (left/center/right) — the icon
+   *  doesn't always follow the text alignment in the source. */
+  iconAlign?: 'left' | 'center' | 'right';
 }
 
 export interface SectionSpecMotion {
@@ -648,6 +658,11 @@ export interface SectionSpec {
    *  normalized to left/right, justify→left). Lets the renderer reproduce source
    *  alignment instead of hard-centering every band. Optional for back-compat. */
   textAlign?: 'left' | 'center' | 'right';
+  /** Set when the source arranges a large image BESIDE the text (a 2-column
+   *  media-text row), with the side the image is on. null when content is stacked,
+   *  gridded (a gallery), or text-over-image (a hero). Lets the renderer reproduce
+   *  the real 2-up arrangement. Optional for back-compat. */
+  mediaLayout?: 'image-left' | 'image-right' | null;
   /**
    * Source-VERBATIM body copy captured from this section's served HTML — every
    * visible `<p>`/`<li>` text node, in document order, deduped. This is the
@@ -753,6 +768,10 @@ interface RawCell {
   /** Card container opaque background (rgb string) + corner radius (px), if any. */
   bg: string | null;
   radius: number;
+  /** Geometric inner padding (px), content alignment, and icon placement. */
+  pad: { t: number; r: number; b: number; l: number } | null;
+  align: 'left' | 'center' | 'right';
+  iconAlign: 'left' | 'center' | 'right';
 }
 
 // ---------------------------------------------------------------------------
@@ -1700,6 +1719,7 @@ export async function extractFull(
           };
           let bg: string | null = null;
           let radius = 0;
+          let bgBox: Element = cell;
           const cellCs = getComputedStyle(cell);
           bg = opaqueBg(cellCs.backgroundColor);
           radius = parseFloat(cellCs.borderRadius) || 0;
@@ -1711,12 +1731,99 @@ export async function extractFull(
               const dr = d.getBoundingClientRect();
               if (dr.width >= cr.width * 0.6 && dr.height >= cr.height * 0.5) {
                 bg = o;
+                bgBox = d;
                 radius = parseFloat(getComputedStyle(d).borderRadius) || radius;
                 break;
               }
             }
           }
-          return { texts: texts.slice(0, 14), image, icon, button: button.slice(0, 80), bg, radius: Math.round(radius) };
+          // Systematic computed-style transfer for the card: capture the inner
+          // padding GEOMETRICALLY (page-builders put it on inner wrappers, so the
+          // card box's own `padding` reads 0 — measure the gap from the card box
+          // to its content's bounding box), the content text-alignment, and the
+          // icon's horizontal placement. The renderer applies these so a card
+          // reproduces the source's whitespace + alignment instead of a fixed
+          // preset + hard-centered icon.
+          // The card box is the background-carrying element (bgBox). Page builders
+          // often render that as an EMPTY layer div with the real content in a
+          // sibling subtree, so query content from the whole CELL and keep only
+          // what visually sits inside the card box — measuring content within
+          // bgBox alone would find nothing and yield no padding.
+          const bbr = bgBox.getBoundingClientRect();
+          const contentEls = Array.from(cell.querySelectorAll('img,svg,h1,h2,h3,h4,h5,h6,p,span,a,button,li')).filter(
+            (e) => {
+              const r = e.getBoundingClientRect();
+              if (r.width < 2 || r.height < 4) return false;
+              const t = e.tagName.toLowerCase();
+              if (!(t === 'img' || t === 'svg' || (e.textContent || '').trim().length > 0)) return false;
+              const cx = (r.left + r.right) / 2;
+              const cy = (r.top + r.bottom) / 2;
+              return cx >= bbr.left - 2 && cx <= bbr.right + 2 && cy >= bbr.top - 2 && cy <= bbr.bottom + 2;
+            },
+          );
+          let pad: { t: number; r: number; b: number; l: number } | null = null;
+          let cl = Infinity;
+          let cr2 = -Infinity;
+          let ct = Infinity;
+          let cb = -Infinity;
+          for (const e of contentEls) {
+            const er = e.getBoundingClientRect();
+            if (er.width < 2 || er.height < 2) continue;
+            cl = Math.min(cl, er.left);
+            cr2 = Math.max(cr2, er.right);
+            ct = Math.min(ct, er.top);
+            cb = Math.max(cb, er.bottom);
+          }
+          if (cl !== Infinity) {
+            const cap = Math.max(8, Math.round(Math.min(bbr.width, bbr.height) * 0.5));
+            pad = {
+              t: Math.min(cap, Math.max(0, Math.round(ct - bbr.top))),
+              r: Math.min(cap, Math.max(0, Math.round(bbr.right - cr2))),
+              b: Math.min(cap, Math.max(0, Math.round(bbr.bottom - cb))),
+              l: Math.min(cap, Math.max(0, Math.round(cl - bbr.left))),
+            };
+          }
+          // content alignment vote (text elements only)
+          let align: 'left' | 'center' | 'right' = 'left';
+          {
+            const votes: Record<string, number> = {};
+            for (const e of contentEls) {
+              const t = e.tagName.toLowerCase();
+              if (t === 'img' || t === 'svg') continue;
+              let a = getComputedStyle(e).textAlign || 'left';
+              if (a === 'start') a = 'left';
+              else if (a === 'end') a = 'right';
+              else if (a === 'justify') a = 'left';
+              if (a !== 'left' && a !== 'center' && a !== 'right') a = 'left';
+              votes[a] = (votes[a] || 0) + 1;
+            }
+            let best = -1;
+            for (const k of Object.keys(votes)) {
+              if (votes[k] > best) {
+                best = votes[k];
+                align = k as 'left' | 'center' | 'right';
+              }
+            }
+          }
+          // icon horizontal placement within the card content box
+          let iconAlign: 'left' | 'center' | 'right' = align;
+          if (svgEl && cl !== Infinity) {
+            const sr = svgEl.getBoundingClientRect();
+            const leftGap = sr.left - cl;
+            const rightGap = cr2 - sr.right;
+            iconAlign = Math.abs(leftGap - rightGap) < 24 ? 'center' : leftGap < rightGap ? 'left' : 'right';
+          }
+          return {
+            texts: texts.slice(0, 14),
+            image,
+            icon,
+            button: button.slice(0, 80),
+            bg,
+            radius: Math.round(radius),
+            pad,
+            align,
+            iconAlign,
+          };
         });
 
         // motion signals across the section
@@ -1869,6 +1976,52 @@ export async function extractFull(
           }
         }
 
+        // Media layout: does the source place a large image BESIDE the text (a
+        // two-column media-text row) rather than stacked or text-over-image? We
+        // detect it geometrically — the dominant image and the text bounding box
+        // are horizontally disjoint and vertically overlapping — and which side
+        // the image is on, so the renderer reproduces the real 2-up arrangement
+        // instead of stacking everything. A gallery (images gridded, no text
+        // beside them) or a hero (text OVER the image) does not match.
+        let mediaLayout: 'image-left' | 'image-right' | null = null;
+        {
+          const bigImg = imgEls
+            .filter((im) => {
+              const r = im.getBoundingClientRect();
+              return Math.min(r.width, r.height) >= 200;
+            })
+            .sort((a, b) => {
+              const ra = a.getBoundingClientRect();
+              const rb = b.getBoundingClientRect();
+              return rb.width * rb.height - ra.width * ra.height;
+            })[0];
+          if (bigImg) {
+            const ir = bigImg.getBoundingClientRect();
+            // Only text that sits BESIDE the image counts — i.e. vertically
+            // overlaps the image band. A full-width headline ABOVE the 2-up row
+            // must not be folded in (it would span the image's columns and mask
+            // the side-by-side arrangement).
+            let tl = Infinity;
+            let tr = -Infinity;
+            let beside = 0;
+            for (const e of [...headingEls, ...paragraphEls]) {
+              const r = e.getBoundingClientRect();
+              if (r.width < 1 || r.height < 1) continue;
+              const vOverlap = Math.min(r.bottom, ir.bottom) - Math.max(r.top, ir.top);
+              if (vOverlap <= 0) continue; // above/below the image, not beside it
+              tl = Math.min(tl, r.left);
+              tr = Math.max(tr, r.right);
+              beside++;
+            }
+            if (beside > 0) {
+              const horizDisjoint = ir.right <= tl + 8 || ir.left >= tr - 8;
+              if (horizDisjoint) {
+                mediaLayout = ir.right <= tl + 8 ? 'image-left' : 'image-right';
+              }
+            }
+          }
+        }
+
         // Serialized section markup — handed back to Node so the deterministic
         // review extractor (review-extract.ts) can pull source-verbatim review
         // text without a second browser pass. Capped so a huge section doesn't
@@ -1896,6 +2049,7 @@ export async function extractFull(
           dividerBelow: dBelow ? { color: dBelow.color, thickness: dBelow.height } : null,
           layout,
           textAlign,
+          mediaLayout,
           motionAnimatedElements: animatedElements,
           sectionHtml,
           cells,
@@ -1993,6 +2147,9 @@ export async function extractFull(
           background: c.bg ?? null,
           radius: c.radius ?? 0,
           headingSize,
+          padding: c.pad ? { top: c.pad.t, right: c.pad.r, bottom: c.pad.b, left: c.pad.l } : null,
+          align: c.align ?? 'left',
+          iconAlign: c.iconAlign ?? c.align ?? 'left',
         };
       });
       // A meaningful grid: at least 2 cells carrying real content (a heading,
@@ -2038,6 +2195,8 @@ export async function extractFull(
       dividerBelow: rr.dividerBelow,
       layout: rr.layout,
       textAlign: (rr as unknown as { textAlign?: 'left' | 'center' | 'right' }).textAlign ?? 'left',
+      mediaLayout:
+        (rr as unknown as { mediaLayout?: 'image-left' | 'image-right' | null }).mediaLayout ?? null,
       ...(reviews ? { reviews } : {}),
       ...(faqs ? { faqs } : {}),
       ...(cells ? { cells } : {}),
