@@ -239,6 +239,9 @@ export function buildThemeScaffold(opts: ThemeScaffoldOpts): ReplicaFile[] {
     chrome: remappedFooter,
     bgToken: opts.footerBgToken,
     textToken: opts.footerTextToken,
+    // Footer logos are typically the same white/inverse variant as the header's
+    // localized logo — prefer the offline-durable theme asset over the CDN URL.
+    localLogoUrl: opts.localLogoPath ? `/wp-content/themes/${themeSlug}/${opts.localLogoPath.replace(/^\/+/, '')}` : undefined,
   });
   assertNoInjection(footerHtml, 'parts/footer.html');
 
@@ -1107,6 +1110,8 @@ function buildGenericHeaderPart(): string {
 
 // -- parts/footer.html -------------------------------------------------------
 
+const COPYRIGHT_RE = /(?:©|\(c\)\s|copyright\b|all rights reserved|website by|powered by)/i;
+
 function buildFooterPart(args: {
   siteTitle: string;
   chrome?: NonNullable<ThemeChromeEvidence['footer']>;
@@ -1114,10 +1119,13 @@ function buildFooterPart(args: {
   bgToken?: string;
   /** Text color token. Defaults to text-inverse. */
   textToken?: string;
+  /** Offline-durable footer logo (theme asset), preferred over the CDN URL. */
+  localLogoUrl?: string;
 }): string {
   const text = args.chrome?.text ?? [];
   const links = args.chrome?.links ?? [];
-  if (text.length === 0 && links.length === 0) {
+  const logoUrl = args.localLogoUrl ?? args.chrome?.logoUrl;
+  if (text.length === 0 && links.length === 0 && !logoUrl) {
     return buildGenericFooterPart({ siteTitle: args.siteTitle });
   }
   // The footer band color is sampled from the source's rendered footer (page
@@ -1126,30 +1134,83 @@ function buildFooterPart(args: {
   const bgToken = args.bgToken ?? 'surface-inverse';
   const textToken = args.textToken ?? 'text-inverse';
 
-  const textBlocks = text.slice(0, 5).map((chunk) => `<!-- wp:paragraph -->
-<p>${escapeHtml(chunk)}</p>
-<!-- /wp:paragraph -->`).join('\n\n');
-  const navigationItems = links.slice(0, 10).map((link) => buildNavigationLink(link)).join('\n');
+  // Split the captured footer into faithful columns: a brand/logo column, a
+  // primary-link column (internal page links), and a contact column (labels like
+  // "CALL US" / "SEND US A MESSAGE" + tel:/mailto: links). The copyright /
+  // "website by" line is pulled out to a centered bottom bar.
+  const copyrightText = text.filter((t) => COPYRIGHT_RE.test(t));
+  const copyrightJoined = copyrightText.join(' ').toLowerCase();
+  const labelText = text.filter((t) => !COPYRIGHT_RE.test(t)).slice(0, 6);
+  const contactLinks = links.filter((l) => l.href.startsWith('tel:') || l.href.startsWith('mailto:'));
+  // The "website by …" credit is the external link whose label is named in the
+  // copyright line (e.g. "Tokuda Technology") — NOT just any external link (an
+  // external nav destination like "Job Opportunities" → ADP stays in the nav).
+  const creditLinks = links.filter((l) => l.external && l.label && copyrightJoined.includes(l.label.toLowerCase()));
+  const navLinks = links.filter((l) => !contactLinks.includes(l) && !creditLinks.includes(l)).slice(0, 10);
 
-  return `<!-- wp:group {"align":"full","layout":{"type":"constrained"},"style":{"spacing":{"padding":{"top":"var(--wp--preset--spacing--60)","bottom":"var(--wp--preset--spacing--60)","left":"var(--wp--preset--spacing--40)","right":"var(--wp--preset--spacing--40)"}}},"backgroundColor":"${bgToken}","textColor":"${textToken}"} -->
-<div class="wp-block-group alignfull has-${textToken}-color has-${bgToken}-background-color has-text-color has-background" style="padding-top:var(--wp--preset--spacing--60);padding-right:var(--wp--preset--spacing--40);padding-bottom:var(--wp--preset--spacing--60);padding-left:var(--wp--preset--spacing--40)">
+  const brandCol = logoUrl
+    ? `<!-- wp:image ${jsonAttr({ url: logoUrl, alt: args.chrome?.logoAlt ?? 'Site logo', width: 170, linkDestination: 'custom', href: '/' })} -->
+<figure class="wp-block-image is-resized"><a href="/"><img src="${escapeAttr(logoUrl)}" alt="${escapeAttr(args.chrome?.logoAlt ?? 'Site logo')}" style="width:170px"/></a></figure>
+<!-- /wp:image -->`
+    : `<!-- wp:site-title {"isLink":true} /-->`;
+
+  const navCol = navLinks.length
+    ? `<!-- wp:navigation {"overlayMenu":"never","layout":{"type":"flex","orientation":"vertical","justifyContent":"left"},"style":{"spacing":{"blockGap":"10px"},"typography":{"textTransform":"uppercase","fontSize":"14px"}}} -->
+${navLinks.map((link) => buildNavigationLink(link)).join('\n')}
+<!-- /wp:navigation -->`
+    : '';
+
+  // Contact column: source-verbatim labels (rendered as captured — the source
+  // labels like "CALL US" already carry their case, so no transform is imposed)
+  // + the phone/email as a real link.
+  const contactParts: string[] = [];
+  for (const t of labelText) {
+    contactParts.push(`<!-- wp:paragraph -->
+<p>${escapeHtml(t)}</p>
+<!-- /wp:paragraph -->`);
+  }
+  for (const l of contactLinks) {
+    contactParts.push(`<!-- wp:paragraph -->
+<p><a href="${escapeAttr(l.href)}">${escapeHtml(l.label)}</a></p>
+<!-- /wp:paragraph -->`);
+  }
+  const contactCol = contactParts.join('\n');
+
+  // Bottom bar: the copyright line, with the "website by" credit linkified IN
+  // PLACE (the credit label already appears in the line, so don't append a dup).
+  let copyrightHtml = escapeHtml(copyrightText.join(' '));
+  if (creditLinks.length) {
+    const c = creditLinks[0];
+    const escLabel = escapeHtml(c.label);
+    const anchor = `<a href="${escapeAttr(c.href)}">${escLabel}</a>`;
+    copyrightHtml = copyrightHtml.includes(escLabel) ? copyrightHtml.replace(escLabel, anchor) : `${copyrightHtml} ${anchor}`.trim();
+  }
+  const copyrightLine = copyrightHtml
+    ? `<!-- wp:paragraph {"align":"center","style":{"typography":{"fontSize":"13px"}}} -->
+<p class="has-text-align-center" style="font-size:13px">${copyrightHtml}</p>
+<!-- /wp:paragraph -->`
+    : '';
+
+  // Build only the non-empty columns so the footer doesn't carry blank columns.
+  const cols = [brandCol, navCol, contactCol].filter(Boolean);
+  const columnsMarkup = cols
+    .map(
+      (c) => `<!-- wp:column {"verticalAlignment":"top"} -->
+<div class="wp-block-column is-vertically-aligned-top">
+${c}
+</div>
+<!-- /wp:column -->`,
+    )
+    .join('\n\n');
+
+  return `<!-- wp:group {"align":"full","layout":{"type":"constrained"},"style":{"spacing":{"padding":{"top":"var(--wp--preset--spacing--60)","bottom":"var(--wp--preset--spacing--50)","left":"var(--wp--preset--spacing--40)","right":"var(--wp--preset--spacing--40)"},"blockGap":"var:preset|spacing|50"}},"backgroundColor":"${bgToken}","textColor":"${textToken}"} -->
+<div class="wp-block-group alignfull has-${textToken}-color has-${bgToken}-background-color has-text-color has-background" style="padding-top:var(--wp--preset--spacing--60);padding-right:var(--wp--preset--spacing--40);padding-bottom:var(--wp--preset--spacing--50);padding-left:var(--wp--preset--spacing--40)">
 <!-- wp:columns {"verticalAlignment":"top"} -->
 <div class="wp-block-columns are-vertically-aligned-top">
-<!-- wp:column {"verticalAlignment":"top","width":"60%"} -->
-<div class="wp-block-column is-vertically-aligned-top" style="flex-basis:60%">
-${textBlocks || '<!-- wp:site-title {"isLink":true} /-->'}
-</div>
-<!-- /wp:column -->
-
-<!-- wp:column {"verticalAlignment":"top","width":"40%"} -->
-<div class="wp-block-column is-vertically-aligned-top" style="flex-basis:40%">
-${navigationItems ? `<!-- wp:navigation {"overlayMenu":"never","layout":{"type":"flex","orientation":"vertical","justifyContent":"left"},"style":{"spacing":{"blockGap":"10px"}}} -->
-${navigationItems}
-<!-- /wp:navigation -->` : ''}
-</div>
-<!-- /wp:column -->
+${columnsMarkup}
 </div>
 <!-- /wp:columns -->
+${copyrightLine}
 </div>
 <!-- /wp:group -->
 `;

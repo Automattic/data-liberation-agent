@@ -73,7 +73,7 @@ describe('stripChrome', () => {
   });
 
   it('drops a trailing footer detected by a generic copyright/attribution line', () => {
-    // swiftlumber's footer: nav labels + contact + "© 2026 Website by …". Not the
+    // a page-builder footer: nav labels + contact + "© 2026 Website by …". Not the
     // getsnooz Shop/Support/Company shape, so it needs the generic copyright signal
     // — otherwise the page shows two footers (this section + the theme footer part).
     const out = stripChrome([
@@ -82,7 +82,7 @@ describe('stripChrome', () => {
       section({
         sectionIndex: 2,
         interactionModel: 'columns',
-        bodyText: ['PRODUCTS', 'GALLERY', 'CALL US', '© 2026 Website by Tokuda Technology'],
+        bodyText: ['PRODUCTS', 'GALLERY', 'CALL US', '© 2026 Website by Acme Studio'],
       }),
     ]);
     expect(out.map((s) => s.sectionIndex)).toEqual([0, 1]);
@@ -97,10 +97,10 @@ describe('stripChrome', () => {
         sectionIndex: 0,
         interactionModel: 'static',
         height: 116,
-        headings: ['Swift Lumber 251-368-8801'],
+        headings: ['Acme Co 555-0142'],
         bodyText: ['PRODUCTS', 'GALLERY', 'JOB OPPORTUNITIES', 'ABOUT US'],
       }),
-      section({ sectionIndex: 1, height: 800, headings: ['Southern Yellow Pine'] }),
+      section({ sectionIndex: 1, height: 800, headings: ['Premium Hardwood'] }),
     ]);
     expect(out.map((s) => s.sectionIndex)).toEqual([1]);
   });
@@ -132,7 +132,7 @@ describe('reconstructPagePattern', () => {
   const opts = { patternSlug: 'demo-replica/page-x', title: 'Page — X' };
 
   it('reproduces the source heading SIZES (responsive clamp) so eyebrow/headline are not inverted', () => {
-    const s = section({ headings: ['WHY DO BUSINESS WITH US', 'The Swift Lumber Advantage'] }) as SectionSpec;
+    const s = section({ headings: ['WHY DO BUSINESS WITH US', 'The Premium Advantage'] }) as SectionSpec;
     s.headingSizes = [16, 55]; // tiny eyebrow label, large headline
     const r = reconstructPagePattern([s], opts);
     // Each heading carries a clamp() whose max equals the captured px.
@@ -171,8 +171,8 @@ describe('reconstructPagePattern', () => {
   });
 
   it('honors the source text alignment instead of hard-centering (left source → left output)', () => {
-    // swiftlumber left-aligns every heading; the renderer must not center them.
-    const left = section({ headings: ['The Swift Lumber Advantage'], bodyText: ['Body copy.'], buttonLabels: ['SEE ALL'] }) as SectionSpec;
+    // the source left-aligns every heading; the renderer must not center them.
+    const left = section({ headings: ['The Premium Advantage'], bodyText: ['Body copy.'], buttonLabels: ['SEE ALL'] }) as SectionSpec;
     left.textAlign = 'left';
     const lr = reconstructPagePattern([left], opts);
     expect(lr.php).not.toContain('has-text-align-center');
@@ -186,10 +186,10 @@ describe('reconstructPagePattern', () => {
   });
 
   it('does not emit a body line that merely repeats a heading (page-builder <p> headline)', () => {
-    const s = section({ headings: ['Southern Yellow Pine'], bodyText: ['Southern Yellow Pine', 'Real prose here.'] });
+    const s = section({ headings: ['Premium Hardwood'], bodyText: ['Premium Hardwood', 'Real prose here.'] });
     const r = reconstructPagePattern([s], opts);
     // The headline renders once (as a heading); the duplicate body line is dropped.
-    expect((r.php.match(/Southern Yellow Pine/g) || []).length).toBe(1);
+    expect((r.php.match(/Premium Hardwood/g) || []).length).toBe(1);
     expect(r.php).toContain('Real prose here.');
   });
 
@@ -252,7 +252,7 @@ describe('reconstructPagePattern', () => {
     const s = section({ interactionModel: 'static', headings: ['Meet the Experts'] }) as SectionSpec & {
       cells: unknown[];
     };
-    s.cells = [cell('Al Thrash', `${WP}al.png`), cell('Shapard Marks', `${WP}shap.png`)];
+    s.cells = [cell('Jane Doe', `${WP}al.png`), cell('John Smith', `${WP}shap.png`)];
     const r = reconstructPagePattern([s as SectionSpec], opts);
     expect(r.php).toContain('al.png');
     expect(r.php).toContain('shap.png');

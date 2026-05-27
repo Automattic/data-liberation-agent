@@ -245,6 +245,39 @@ describe('buildThemeScaffold', () => {
     expect(footer).not.toContain('wp:list');
   });
 
+  it('parts/footer.html renders the footer logo, contact phone (tel), and linkified copyright credit', () => {
+    // Fictional data only — never real source-site phones/names/titles.
+    const files = buildThemeScaffold({
+      foundation: FOUNDATION_FIXTURE,
+      themeSlug: 'site-replica',
+      sourceChrome: {
+        footer: {
+          logoUrl: 'https://cdn.example.com/footer-logo.png',
+          logoAlt: 'Site logo',
+          text: ['CALL US', 'SEND US A MESSAGE', '© 2026 Website by Acme Studio'],
+          links: [
+            { label: 'HOME', href: '/', external: false },
+            { label: 'CAREERS', href: 'https://jobs.example.com/x', external: true },
+            { label: '555-0142', href: 'tel:+15550142', external: false },
+            { label: 'Acme Studio', href: 'https://acme.example', external: true },
+          ],
+        },
+      },
+    });
+    const footer = files.find((f) => f.relativePath === 'parts/footer.html')!.content;
+    // Logo present (CDN url, since no local logo passed here).
+    expect(footer).toContain('footer-logo.png');
+    // Phone kept as a tel: link (was previously dropped).
+    expect(footer).toContain('href="tel:+15550142"');
+    // Contact labels verbatim.
+    expect(footer).toContain('>CALL US</p>');
+    // External nav destination stays in the nav (not mistaken for the credit).
+    expect(footer).toContain('"label":"CAREERS"');
+    // Credit linkified IN the copyright line (no duplicate label).
+    expect(footer).toContain('© 2026 Website by <a href="https://acme.example">Acme Studio</a>');
+    expect((footer.match(/Acme Studio/g) || []).length).toBe(1);
+  });
+
   it('parts/footer.html escapes site title HTML when rendering copyright', () => {
     const files = buildThemeScaffold({ foundation: FOUNDATION_FIXTURE, themeSlug: 'site-replica', siteTitle: 'A & B <Co>' });
     const footer = files.find((f) => f.relativePath === 'parts/footer.html')!.content;

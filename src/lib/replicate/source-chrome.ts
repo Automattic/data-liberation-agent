@@ -33,7 +33,12 @@ export interface ThemeChromeEvidence {
     utilities?: { search?: boolean; account?: boolean; cart?: boolean };
   };
   footer?: {
+    /** Footer logo (often a white/inverse variant), rendered as the first column. */
+    logoUrl?: string;
+    logoAlt?: string;
     text: string[];
+    /** Footer links — INCLUDING tel:/mailto: contact links (kept, unlike the
+     *  primary nav) so a "call us" phone number isn't dropped. */
     links: ThemeChromeLink[];
   };
 }
@@ -128,8 +133,9 @@ export function extractThemeChromeFromHtml(html: string, sourceUrl: string): The
   }
   if ($footer.length > 0) {
     out.footer = {
+      ...extractLogo($, $footer, sourceUrl),
       text: extractFooterText($, $footer),
-      links: extractLinks($, $footer, sourceUrl, 12),
+      links: extractLinks($, $footer, sourceUrl, 14),
     };
   }
 
@@ -387,7 +393,18 @@ function finalizeLinks(
     if (primaryOnly && SOCIAL_LINK_LABELS.has(lower)) continue;
 
     const rawHref = $link.attr('href') ?? '';
-    if (!rawHref || rawHref.startsWith('#') || rawHref.startsWith('mailto:') || rawHref.startsWith('tel:')) continue;
+    if (!rawHref || rawHref.startsWith('#')) continue;
+    // tel:/mailto: are contact affordances — dropped from the primary nav, but
+    // KEPT (verbatim) in the footer so a "Call Us" phone number isn't lost.
+    if (rawHref.startsWith('mailto:') || rawHref.startsWith('tel:')) {
+      if (primaryOnly) continue;
+      const ckey = `${lower} ${rawHref}`;
+      if (seen.has(ckey)) continue;
+      seen.add(ckey);
+      links.push({ label, href: rawHref, external: false });
+      if (links.length >= limit) break;
+      continue;
+    }
     if (primaryOnly && NON_PRIMARY_HREF_HINTS.some((h) => rawHref.toLowerCase().includes(h))) continue;
 
     const absolute = absolutizeUrl(rawHref, sourceUrl);

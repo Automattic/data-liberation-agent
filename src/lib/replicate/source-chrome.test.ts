@@ -88,7 +88,7 @@ describe('extractThemeChromeFromHtml', () => {
   });
 
   it('captures the visible-bar CTA (not a drawer control) and no utilities when the source has none', () => {
-    // swiftlumber shape: nav links + a "CALL US" button in the open bar, plus a
+    // page-builder shape: nav links + a "CALL US" button in the open bar, plus a
     // mobile hamburger dialog holding "Back to site" + a duplicate CTA.
     const html = `
       <header>
@@ -103,7 +103,7 @@ describe('extractThemeChromeFromHtml', () => {
           <button>Close</button>
         </div>
       </header>`;
-    const chrome = extractThemeChromeFromHtml(html, 'https://www.swiftlumber.com/');
+    const chrome = extractThemeChromeFromHtml(html, 'https://demo.example.com/');
     expect(chrome.header?.cta).toEqual({ label: 'CALL US', href: '', external: false });
     expect(chrome.header?.utilities).toBeUndefined(); // no cart/account/search affordances
   });
@@ -122,9 +122,9 @@ describe('extractThemeChromeFromHtml', () => {
   it('extracts footer text and links from the source footer', () => {
     const html = `
       <footer class="wixui-footer">
-        <h4>Swift Lumber</h4>
-        <p>1450 Swift Mill Rd, Atmore, AL</p>
-        <p>251-446-4123</p>
+        <h4>Acme Co</h4>
+        <p>123 Demo Street, Springfield</p>
+        <p>555-0188</p>
         <nav>
           <a href="/privacy-policy">Privacy Policy</a>
           <a href="/accessibility-statement">Accessibility Statement</a>
@@ -132,10 +132,10 @@ describe('extractThemeChromeFromHtml', () => {
       </footer>
     `;
 
-    const chrome = extractThemeChromeFromHtml(html, 'https://www.swiftlumber.com/');
+    const chrome = extractThemeChromeFromHtml(html, 'https://demo.example.com/');
 
-    expect(chrome.footer?.text).toContain('Swift Lumber');
-    expect(chrome.footer?.text).toContain('1450 Swift Mill Rd, Atmore, AL');
+    expect(chrome.footer?.text).toContain('Acme Co');
+    expect(chrome.footer?.text).toContain('123 Demo Street, Springfield');
     expect(chrome.footer?.links).toEqual([
       { label: 'Privacy Policy', href: '/privacy-policy', external: false },
       { label: 'Accessibility Statement', href: '/accessibility-statement', external: false },
