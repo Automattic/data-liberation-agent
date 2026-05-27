@@ -22,6 +22,7 @@ import type { PaletteToken } from '../../lib/replicate/footer-color.js';
 import type { FontFamilyToken } from '../../lib/replicate/page-reconstruct.js';
 import { extractFullFromUrl, rewriteThroughMediaMap } from '../../lib/replicate/section-extract.js';
 import type { SectionSpec } from '../../lib/replicate/section-extract.js';
+import { SectionSpecsStore } from '../../lib/replicate/section-specs-store.js';
 import { buildPageReconstruction } from '../../lib/replicate/reconstruct-pages.js';
 import { installMediaForUrl } from '../../lib/streaming/media-install.js';
 import { BlockFixerClient } from '../../lib/streaming/block-fixer-client.js';
@@ -191,13 +192,28 @@ export const reconstructPagesHandler: Handler = async (args, ctx) => {
   }
   const mediaDir = join(resolve(outputDir), 'media');
 
-  // 1. Extract every page once. Specs are reused after the media map is built.
+  // 1. Get every page's section specs once (reused after the media map is built).
+  //    Prefer the capture-once cache (`<outputDir>/sections/<slug>.json`, written
+  //    during the screenshot pass) so we skip a redundant live Playwright pass.
+  //    Fall back to a live extract when the cache is absent/stale/colliding, and
+  //    persist the result so the next run is cache-hot. `refresh: true` forces live.
+  const specsStore = SectionSpecsStore.load(outputDir);
+  const refresh = args.refresh === true;
   const specsByPage = new Map<string, SectionSpec[]>();
   const srcUrls = new Set<string>();
   const extractErrors: Array<{ slug: string; error: string }> = [];
+  let specsFromCache = 0;
+  let specsFromLive = 0;
   for (const p of pages) {
     try {
-      const specs = await extractFullFromUrl(p.sourceUrl, {});
+      let specs = refresh ? null : specsStore.get(p.sourceUrl);
+      if (specs) {
+        specsFromCache++;
+      } else {
+        specs = await extractFullFromUrl(p.sourceUrl, {});
+        specsStore.set(p.sourceUrl, specs); // cache for the next run
+        specsFromLive++;
+      }
       specsByPage.set(p.slug, specs);
       collectSourceUrls(specs, srcUrls);
     } catch (err) {
@@ -329,6 +345,8 @@ export const reconstructPagesHandler: Handler = async (args, ctx) => {
     failed: report.length - reconstructed,
     mediaDownloaded: downloaded,
     mediaInstalled: mediaResult.installed.length,
+    specsFromCache,
+    specsFromLive,
     extractErrors,
     pages: report,
   });

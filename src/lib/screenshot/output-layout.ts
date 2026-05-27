@@ -9,10 +9,14 @@ export interface ArtifactPlan {
   captureFullpage: boolean;
   captureScrolled: boolean;
   captureHtml: boolean;
+  /** Capture per-page section specs (extractFull) on the desktop pass, so the
+   *  reconstruction phase can read them instead of re-running Playwright. */
+  captureSections: boolean;
   paths: {
     fullpage: string;
     scrolled: string;
     html: string;
+    sections: string;
   };
 }
 
@@ -62,17 +66,21 @@ export function planArtifacts(args: {
     const fullpage = join(args.outputDir, 'screenshots', viewport, `${args.slug}.png`);
     const scrolled = join(args.outputDir, 'screenshots', viewport, `${args.slug}.scrolled.png`);
     const html = join(args.outputDir, 'html', `${args.slug}.html`);
+    const sections = join(args.outputDir, 'sections', `${args.slug}.json`);
     const captureFullpage = args.force || !existsSync(fullpage);
     const captureScrolled = args.force || !existsSync(scrolled);
-    // HTML is captured on the desktop pass only.
+    // HTML + section specs are captured on the desktop pass only (specs are
+    // viewport-relative; desktop 1440×900 matches the live-extract basis).
     const captureHtml = viewport === 'desktop' && (args.force || !existsSync(html));
-    const needsLoad = captureFullpage || captureScrolled || captureHtml;
+    const captureSections = viewport === 'desktop' && (args.force || !existsSync(sections));
+    const needsLoad = captureFullpage || captureScrolled || captureHtml || captureSections;
     return {
       needsLoad,
       captureFullpage,
       captureScrolled,
       captureHtml,
-      paths: { fullpage, scrolled, html },
+      captureSections,
+      paths: { fullpage, scrolled, html, sections },
     };
   };
   return { desktop: plan('desktop'), mobile: plan('mobile') };

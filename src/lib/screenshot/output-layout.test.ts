@@ -57,17 +57,38 @@ describe('planArtifacts', () => {
     }
   });
 
+  it('captures section specs on desktop only, gated on the sections file existing', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'artifacts-'));
+    try {
+      const plan = planArtifacts({ slug: 'about', outputDir: dir, force: false });
+      expect(plan.desktop.captureSections).toBe(true); // missing → capture
+      expect(plan.mobile.captureSections).toBe(false); // never on mobile
+      expect(plan.desktop.paths.sections.endsWith('/sections/about.json')).toBe(true);
+
+      mkdirSync(join(dir, 'sections'), { recursive: true });
+      writeFileSync(join(dir, 'sections', 'about.json'), 'fake');
+      const plan2 = planArtifacts({ slug: 'about', outputDir: dir, force: false });
+      expect(plan2.desktop.captureSections).toBe(false); // present → skip
+      // force re-captures regardless
+      expect(planArtifacts({ slug: 'about', outputDir: dir, force: true }).desktop.captureSections).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('skips entire viewport when all artifacts exist', () => {
     const dir = mkdtempSync(join(tmpdir(), 'artifacts-'));
     try {
       mkdirSync(join(dir, 'screenshots', 'desktop'), { recursive: true });
       mkdirSync(join(dir, 'screenshots', 'mobile'), { recursive: true });
       mkdirSync(join(dir, 'html'), { recursive: true });
+      mkdirSync(join(dir, 'sections'), { recursive: true });
       writeFileSync(join(dir, 'screenshots', 'desktop', 'about.png'), 'fake');
       writeFileSync(join(dir, 'screenshots', 'desktop', 'about.scrolled.png'), 'fake');
       writeFileSync(join(dir, 'screenshots', 'mobile', 'about.png'), 'fake');
       writeFileSync(join(dir, 'screenshots', 'mobile', 'about.scrolled.png'), 'fake');
       writeFileSync(join(dir, 'html', 'about.html'), 'fake');
+      writeFileSync(join(dir, 'sections', 'about.json'), 'fake');
 
       const plan = planArtifacts({ slug: 'about', outputDir: dir, force: false });
       expect(plan.desktop.needsLoad).toBe(false);

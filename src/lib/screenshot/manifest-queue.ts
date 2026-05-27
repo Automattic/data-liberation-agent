@@ -8,6 +8,8 @@ export interface ManifestEntry {
   mobile?: string;
   mobileScrolled?: string;
   html?: string;
+  /** path to sections/<slug>.json (captured section specs) when present */
+  sections?: string;
   capturedAt: string;
   /** Populated by site-analysis; may be absent */
   metadata?: {

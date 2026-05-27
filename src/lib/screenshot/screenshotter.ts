@@ -23,6 +23,8 @@ import { captureDesignForUrl, captureMobileBodyFragment } from './design-capture
 import { collectMobileChromeLayout } from './dom-capture.js';
 import { generateChromeCss, type BakedLayoutMap } from './fixups.js';
 import type { ExtractedNav } from './nav-extract.js';
+import { extractFull } from '../replicate/section-extract.js';
+import { SectionSpecsStore } from '../replicate/section-specs-store.js';
 
 /**
  * Scroll offset multiplier for the scrolled-state screenshot: we scroll to
@@ -195,6 +197,26 @@ async function capturePerViewport(args: CapturePerViewportArgs): Promise<void> {
         timestamp: now(),
         attempt: 1,
       });
+    }
+  }
+
+  // --- section specs (desktop only) -----------------------------------------
+  // Capture extractFull from the SAME settled page so reconstruction can read
+  // the specs from disk instead of re-running Playwright. Desktop 1440×900
+  // matches the live-extract basis, so geometry/fullBleed agree. STRICTLY
+  // best-effort: a spec-capture miss must NOT mark the (successful) screenshot
+  // as failed — reconstruction falls back to a live extract when the cache is
+  // absent. So this never touches `failures[]`; it just leaves `entry.sections`
+  // unset.
+  if (isDesktop && plan.captureSections) {
+    try {
+      const specs = await extractFull(page, {}, evaluateTimeoutMs);
+      SectionSpecsStore.load(outputDir).set(url, specs, { width: viewport.width, height: viewport.height });
+      // Point at the store's ACTUAL path (keyed by slugify(url)); the screenshot
+      // `slug` may be a collision-deduped variant (`-2`), which the store doesn't use.
+      entry.sections = `sections/${slugify(url)}.json`;
+    } catch {
+      /* best-effort — reconstruction live-extracts when the spec cache is missing */
     }
   }
 

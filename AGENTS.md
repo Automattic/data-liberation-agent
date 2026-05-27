@@ -26,6 +26,8 @@ Four files cooperate to make runs resumable. Never write to them outside of the 
 - `media-stubs.json` (`MediaStubStore`) — per-asset status (`success` / `error` / `ignored`) with retry cap (default 3). Successful writes are buffered via `flush()`; failures persist immediately.
 - `products.jsonl` — streaming Woo product output. `openStream({resume: true})` appends instead of truncating, preserving GraphQL-emitted products across mid-run crashes.
 
+A fifth artifact, `sections/<slug>.json` (`SectionSpecsStore`), is a per-URL capture-once cache rather than shared run state, so it does NOT need the lockfile: each file is independent and written atomically (unique tmp + rename). The screenshot/capture phase runs `extractFull` on the settled desktop page (1440×900) and persists the `SectionSpec[]` here, keyed by `slugify(url)` and self-describing (records `sourceUrl` + a `SECTION_SPECS_SCHEMA` version). The reconstruction phase (`liberate_reconstruct_pages`) reads this instead of re-running Playwright, falling back to a live extract only on a cache miss — absent, corrupt, schema drift, or a slug collision (recorded `sourceUrl` ≠ requested) — and persisting the live result for the next run. Bump `SECTION_SPECS_SCHEMA` whenever `SectionSpec`'s shape changes so stale caches invalidate instead of silently degrading fidelity.
+
 Adapters call `ImportSession.loadOrCreate(outputDir, id, opts, { resume })` and pass the session to `runExtractionLoop` via `ExtractionLoopOpts.session`. The shared loop updates stage + per-entity counts automatically.
 
 ## Shopify GraphQL Path
