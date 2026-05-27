@@ -731,6 +731,14 @@ function buildElementStyles(
       },
     };
   }
+  // Links inherit the surrounding text color (so a footer/header link is light on
+  // the dark band and a body link is dark) instead of the browser default blue —
+  // source sites almost never use #00e blue links. Accent color on hover gives an
+  // affordance without underlining every nav item.
+  elements.link = {
+    color: { text: 'currentColor' },
+    ':hover': { color: { text: 'var(--wp--preset--color--accent-primary)' } },
+  };
   return elements;
 }
 

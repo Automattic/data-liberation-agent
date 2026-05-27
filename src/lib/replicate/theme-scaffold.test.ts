@@ -100,6 +100,14 @@ describe('buildThemeScaffold', () => {
     expect(slugs).not.toContain('accent-warning');
   });
 
+  it('styles links to inherit the surrounding text color (no browser-blue), accent on hover', () => {
+    const files = buildThemeScaffold({ foundation: FOUNDATION_FIXTURE, themeSlug: 'site-replica' });
+    const themeJson = JSON.parse(files.find((f) => f.relativePath === 'theme.json')!.content);
+    const link = themeJson.styles?.elements?.link;
+    expect(link?.color?.text).toBe('currentColor');
+    expect(link?.[':hover']?.color?.text).toBe('var(--wp--preset--color--accent-primary)');
+  });
+
   it('emits both display and body fontFamilies when both are set', () => {
     const files = buildThemeScaffold({ foundation: FOUNDATION_FIXTURE, themeSlug: 'getsnooz-com-replica' });
     const themeJson = JSON.parse(files.find((f) => f.relativePath === 'theme.json')!.content);
