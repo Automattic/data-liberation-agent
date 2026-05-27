@@ -185,11 +185,16 @@ describe('reconstructPagePattern', () => {
     expect(cr.php).toContain('is-content-justification-center');
   });
 
-  it('does not emit a body line that merely repeats a heading (page-builder <p> headline)', () => {
+  it('preserves a body line that repeats a heading (the source genuinely shows both)', () => {
     const s = section({ headings: ['Premium Hardwood'], bodyText: ['Premium Hardwood', 'Real prose here.'] });
     const r = reconstructPagePattern([s], opts);
-    // The headline renders once (as a heading); the duplicate body line is dropped.
-    expect((r.php.match(/Premium Hardwood/g) || []).length).toBe(1);
+    // Heading tags and <p> are disjoint, visible-only captures — an exact match
+    // means the source renders BOTH (e.g. a large subheading AND an identical
+    // paragraph), so we keep both rather than lose content: the text appears
+    // twice, once as a heading block and once as a paragraph block.
+    expect((r.php.match(/Premium Hardwood/g) || []).length).toBe(2);
+    expect(r.php).toContain('wp:heading');
+    expect(r.php).toContain('wp:paragraph');
     expect(r.php).toContain('Real prose here.');
   });
 

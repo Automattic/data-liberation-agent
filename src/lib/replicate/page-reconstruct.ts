@@ -1351,32 +1351,19 @@ export function reconstructPagePattern(
   const famTokens = opts.fontFamilies ?? [];
   const resolveFamilies = (names?: string[]): string[] | undefined =>
     names ? names.map((n) => nearestFamily(n, famTokens) ?? '') : undefined;
+  // Resolve captured font-family names to theme tokens. We do NOT drop a bodyText
+  // paragraph that matches a heading: heading tags (<h1>–<h6>) and <p>/<li> are
+  // DISJOINT selectors capturing only VISIBLE elements, so an exact text match
+  // means the source genuinely renders BOTH (e.g. a 34px subheading AND an 18px
+  // paragraph of the same copy) — dropping the paragraph loses real content.
   const body = stripChrome(sections).map((s) => {
     const headFamSlugs = resolveFamilies(s.headingFamilies);
-    const headBase = headFamSlugs ? { ...s, headingFamilies: headFamSlugs } : s;
-    if (!s.bodyText || s.bodyText.length === 0) return headBase;
-    const headSet = new Set(s.headings.map((h) => normalizeCopy(h)).filter(Boolean));
-    const keptIdx: number[] = [];
-    const filtered = s.bodyText.filter((b, i) => {
-      const keep = !headSet.has(normalizeCopy(b));
-      if (keep) keptIdx.push(i);
-      return keep;
-    });
-    const bodyFamSlugsAll = resolveFamilies(s.bodyFamilies);
-    if (filtered.length === s.bodyText.length) {
-      return bodyFamSlugsAll ? { ...headBase, bodyFamilies: bodyFamSlugsAll } : headBase;
-    }
-    // Keep the parallel per-paragraph typography arrays lined up with the filtered
-    // bodyText by index.
-    const sizes = s.bodyTextSizes ? keptIdx.map((i) => s.bodyTextSizes![i]) : undefined;
-    const fams = bodyFamSlugsAll ? keptIdx.map((i) => bodyFamSlugsAll[i]) : undefined;
-    const lhs = s.bodyLineHeights ? keptIdx.map((i) => s.bodyLineHeights![i]) : undefined;
+    const bodyFamSlugs = resolveFamilies(s.bodyFamilies);
+    if (!headFamSlugs && !bodyFamSlugs) return s;
     return {
-      ...headBase,
-      bodyText: filtered,
-      ...(sizes ? { bodyTextSizes: sizes } : {}),
-      ...(fams ? { bodyFamilies: fams } : {}),
-      ...(lhs ? { bodyLineHeights: lhs } : {}),
+      ...s,
+      ...(headFamSlugs ? { headingFamilies: headFamSlugs } : {}),
+      ...(bodyFamSlugs ? { bodyFamilies: bodyFamSlugs } : {}),
     };
   });
   const expectedText: string[] = [];
