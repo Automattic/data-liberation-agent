@@ -54,6 +54,48 @@ describe('buildPageReconstruction', () => {
     expect(r.postContent).not.toContain('Slug: demo-replica'); // no pattern header
   });
 
+  it('renders full-width when the source has a full-bleed section, constrained otherwise (defers to source)', () => {
+    // A page with a full-bleed section → full-width (default layout) so the hero
+    // and bands stretch edge-to-edge.
+    const fw = buildPageReconstruction(
+      [section({ headings: ['Hero'], fullBleed: true } as Partial<SectionSpec>)],
+      { ...base, slug: 'full' },
+    );
+    const fwTpl = fw.files.find((f) => f.path === 'templates/page-full.html')!.content;
+    expect(fwTpl).toContain('wp:post-content {"layout":{"type":"default"}}');
+    expect(fwTpl).not.toContain('wp:post-content {"layout":{"type":"constrained"}}');
+    // A page with only boxed content → constrained.
+    const cw = buildPageReconstruction([section({ headings: ['Body'], bodyText: ['x'] })], { ...base, slug: 'boxed' });
+    const cwTpl = cw.files.find((f) => f.path === 'templates/page-boxed.html')!.content;
+    expect(cwTpl).toContain('wp:post-content {"layout":{"type":"constrained"}}');
+  });
+
+  it('does NOT force full-width when only a chrome (footer/nav) section is full-bleed', () => {
+    // A full-bleed footer/nav band is page chrome, not page content — it must not
+    // flip the whole page to full-width.
+    const r = buildPageReconstruction(
+      [
+        section({ headings: ['Body'], bodyText: ['x'] }),
+        section({ interactionModel: 'footer', fullBleed: true } as Partial<SectionSpec>),
+      ],
+      { ...base, slug: 'chrome' },
+    );
+    const tpl = r.files.find((f) => f.path === 'templates/page-chrome.html')!.content;
+    expect(tpl).toContain('wp:post-content {"layout":{"type":"constrained"}}');
+  });
+
+  it('an overlay-cover homepage is BOTH full-width and flush-top (the two decisions are independent)', () => {
+    const wideHero = { url: 'http://x/wp-content/uploads/hero.jpg', sourceUrl: 'http://x/wp-content/uploads/hero.jpg', alt: '', kind: 'img' as const, width: 1440, height: 796 };
+    const r = buildPageReconstruction(
+      [section({ interactionModel: 'animated-cover', headings: ['Hero'], images: [wideHero], fullBleed: true } as Partial<SectionSpec>)],
+      { ...base, slug: 'home', isHome: true },
+    );
+    const tpl = r.files.find((f) => f.path === 'templates/front-page.html')!.content;
+    expect(tpl).toContain('"className":"site-header-overlay"'); // overlay header
+    expect(tpl).toContain('wp:post-content {"layout":{"type":"default"}}'); // full-width
+    expect(tpl).toContain('margin-top:0px;padding-top:0px'); // flush-top preserved
+  });
+
   it('emits front-page.html for the home page', () => {
     const r = buildPageReconstruction([section({ headings: ['Home'] })], { ...base, slug: 'home', isHome: true });
     const paths = r.files.map((f) => f.path);

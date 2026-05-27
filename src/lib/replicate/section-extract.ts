@@ -698,6 +698,10 @@ export interface SectionSpec {
    *  gridded (a gallery), or text-over-image (a hero). Lets the renderer reproduce
    *  the real 2-up arrangement. Optional for back-compat. */
   mediaLayout?: 'image-left' | 'image-right' | null;
+  /** True when the section carries a full-bleed IMAGE spanning ~the viewport (a
+   *  hero cover photo / edge-to-edge media). Drives whether the PAGE renders
+   *  full-width vs constrained — deferring to the source. Optional for back-compat. */
+  fullBleed?: boolean;
   /**
    * Source-VERBATIM body copy captured from this section's served HTML — every
    * visible `<p>`/`<li>` text node, in document order, deduped. This is the
@@ -2179,6 +2183,45 @@ export async function extractFull(
           }
         }
 
+        // Full-bleed signal: does this section carry an IMAGE that spans ~the full
+        // viewport width (a foreground photo, or a near-viewport section/child with
+        // a background IMAGE — a hero cover)? Requires an image, not just a colored
+        // band, so a footer's color fill doesn't count. The page is rendered
+        // full-width when it has a full-bleed section; otherwise constrained — so
+        // the layout DEFERS to the source rather than assuming homepage=full-width.
+        let fullBleed = false;
+        {
+          const vw = window.innerWidth || 1280;
+          const FULL = vw * 0.92;
+          // Require real height too — a thin full-width image (a divider/rule/
+          // separator banner) spans the viewport but is NOT a full-bleed hero and
+          // must not force the page full-width. 100px matches the bg-image branch's
+          // intent (substantial media, not a decorative strip).
+          for (const im of imgEls) {
+            const ir = im.getBoundingClientRect();
+            if (ir.width >= FULL && ir.height >= 100) {
+              fullBleed = true;
+              break;
+            }
+          }
+          const hasBgImage = (e: Element): boolean => {
+            const bi = getComputedStyle(e).backgroundImage;
+            return !!bi && bi !== 'none' && /url\(/i.test(bi) && !/^\s*(linear|radial|conic)-gradient/i.test(bi);
+          };
+          if (!fullBleed && width >= FULL) {
+            if (hasBgImage(el)) fullBleed = true;
+            else {
+              for (const d of descendants) {
+                const dr = d.getBoundingClientRect();
+                if (dr.width >= FULL && dr.height >= 200 && hasBgImage(d)) {
+                  fullBleed = true;
+                  break;
+                }
+              }
+            }
+          }
+        }
+
         // Serialized section markup — handed back to Node so the deterministic
         // review extractor (review-extract.ts) can pull source-verbatim review
         // text without a second browser pass. Capped so a huge section doesn't
@@ -2213,6 +2256,7 @@ export async function extractFull(
           layout,
           textAlign,
           mediaLayout,
+          fullBleed,
           motionAnimatedElements: animatedElements,
           sectionHtml,
           cells,
@@ -2385,6 +2429,7 @@ export async function extractFull(
       textAlign: (rr as unknown as { textAlign?: 'left' | 'center' | 'right' }).textAlign ?? 'left',
       mediaLayout:
         (rr as unknown as { mediaLayout?: 'image-left' | 'image-right' | null }).mediaLayout ?? null,
+      fullBleed: (rr as unknown as { fullBleed?: boolean }).fullBleed ?? false,
       ...(reviews ? { reviews } : {}),
       ...(faqs ? { faqs } : {}),
       ...(cells ? { cells } : {}),

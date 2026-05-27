@@ -41,6 +41,7 @@ When `adminToken` is present, `shopifyAdapter.extract` fetches products via the 
 ## Non-obvious Details
 
 - WXR builder targets WXR 1.2 spec compliance
+- Page-reconstruction full-width vs constrained DEFERS TO THE SOURCE: `SectionSpec.fullBleed` (a section carrying an IMAGE — foreground or background, height ≥ 100px — spanning ≥ 92% of the viewport) drives the page's `main`/`post-content` layout type. Any non-chrome (`footer`/`nav`) full-bleed section → `default` (full-width); otherwise `constrained`. This is independent of `heroIsCover`, which only controls the transparent overlay header. Specs without `fullBleed` default to constrained (back-compat).
 - `classifyUrl` types: `homepage`, `post`, `product`, `gallery`, `event`, `page` (no `category`/`author`/`other`)
 - Media filename collision handling uses numeric suffixes (`-2`, `-3`), not hashes
 - `detect-platform` uses domain-level URL patterns and HTTP fingerprinting (headers + HTML markers) — no path-based detection

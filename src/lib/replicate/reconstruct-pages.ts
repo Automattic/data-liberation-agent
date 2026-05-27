@@ -65,25 +65,32 @@ const SAFE_SLUG = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
  * header. The header distinction lives HERE, in the template — not in a global
  * `.home:has(cover)` CSS override.
  */
-function buildPageTemplate(overlayHeader = false): string {
+function buildPageTemplate(overlayHeader = false, fullWidth = false): string {
   const headerPart = overlayHeader
     ? `<!-- wp:template-part {"slug":"header","tagName":"header","className":"site-header-overlay"} /-->`
     : `<!-- wp:template-part {"slug":"header","tagName":"header"} /-->`;
-  // When the header overlays a full-bleed hero cover, the main content must be
-  // flush with the page top (the absolute header floats above it) — so zero the
-  // main group's top margin/padding, which otherwise leaves a gap above the hero.
-  const mainGroup = overlayHeader
-    ? `<!-- wp:group {"tagName":"main","style":{"spacing":{"margin":{"top":"0px"},"padding":{"top":"0px"}}},"layout":{"type":"constrained"}} -->
-<main class="wp-block-group" style="margin-top:0px;padding-top:0px">`
-    : `<!-- wp:group {"tagName":"main","layout":{"type":"constrained"}} -->
-<main class="wp-block-group">`;
+  // Full-width vs constrained DEFERS TO THE SOURCE (fullWidth): a source page with
+  // full-bleed sections renders full-width so the hero + alignfull bands stretch
+  // edge-to-edge (a `constrained` main/post-content would box them to ~content
+  // width — the regression where the hero rendered ~1000px); each section still
+  // constrains its OWN inner content. A source page with boxed content stays
+  // constrained. An overlay-header page also zeroes the main top margin/padding so
+  // the hero is flush with the page top (the absolute header floats above it).
+  const layoutType = fullWidth ? 'default' : 'constrained';
+  const mainAttrs = overlayHeader
+    ? `"style":{"spacing":{"margin":{"top":"0px"},"padding":{"top":"0px"}}},"layout":{"type":"${layoutType}"}`
+    : `"layout":{"type":"${layoutType}"}`;
+  const topZeroStyle = overlayHeader ? ' style="margin-top:0px;padding-top:0px"' : '';
+  const mainGroup = `<!-- wp:group {"tagName":"main",${mainAttrs}} -->
+<main class="wp-block-group"${topZeroStyle}>`;
+  const postContent = `<!-- wp:post-content {"layout":{"type":"${layoutType}"}} /-->`;
   // Render the PAGE's post_content (which the reconstruction writes as block
   // markup) — so the page is a real, editable block page. The theme still ships
   // the reconstructed pattern as a library entry.
   return `${headerPart}
 
 ${mainGroup}
-<!-- wp:post-content {"layout":{"type":"constrained"}} /-->
+${postContent}
 </main>
 <!-- /wp:group -->
 
@@ -137,10 +144,16 @@ export function buildPageReconstruction(
     ],
   });
 
-  // A cover-hero page wires the transparent overlay header; others the solid one.
-  // The template renders the PAGE's post_content (so the page is a real editable
-  // block page); the theme keeps the pattern as a library entry.
-  const template = buildPageTemplate(r.heroIsCover);
+  // Full-width vs constrained DEFERS TO THE SOURCE: a page with a full-bleed
+  // section (edge-to-edge hero/media in the source) renders full-width; a page
+  // whose content is boxed renders constrained. Chrome sections are excluded.
+  const fullWidth = sections.some(
+    (s) => s.fullBleed && s.interactionModel !== 'footer' && s.interactionModel !== 'nav',
+  );
+  // A cover-hero page wires the transparent overlay header; others the solid one
+  // (independent of the width decision). The template renders the PAGE's
+  // post_content (real editable block page); the theme keeps the pattern as a lib.
+  const template = buildPageTemplate(r.heroIsCover, fullWidth);
   const files: ReconstructedFile[] = [
     { path: `patterns/page-${opts.slug}.php`, content: r.php },
     { path: `templates/page-${opts.slug}.html`, content: template },
