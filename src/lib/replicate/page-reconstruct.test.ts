@@ -297,6 +297,48 @@ describe('reconstructPagePattern', () => {
     expect(g.php).toContain('flex:0 0 149px');
   });
 
+  it('reproduces a structured CTA: source button color (token), icon, and destination href', () => {
+    const s = section({ interactionModel: 'static', headings: ['Hero'] }) as SectionSpec;
+    s.buttons = [
+      {
+        label: 'GET A QUOTE',
+        href: '/contact',
+        background: 'rgb(255, 255, 255)',
+        color: 'rgb(0, 0, 0)',
+        icon: { kind: 'svg', markup: '<svg viewBox="0 0 24 24"><path d="M3 9h4"/></svg>', width: 18, height: 18 },
+      },
+    ];
+    const r = reconstructPagePattern([s], {
+      patternSlug: 'demo-replica/page-x',
+      title: 'X',
+      paletteTokens: [
+        { slug: 'surface-base', hex: '#ffffff' },
+        { slug: 'text-default', hex: '#000000' },
+        { slug: 'accent-primary', hex: '#175236' },
+      ],
+    });
+    expect(r.php).toContain('href="/contact"'); // destination link
+    expect(r.php).toContain('has-surface-base-background-color'); // white → surface-base
+    expect(r.php).not.toContain('has-accent-primary-background-color'); // NOT the default green
+    expect(r.php).toContain("get_theme_file_uri('assets/icon-0.svg')"); // icon shipped + referenced
+    expect(r.iconAssets.length).toBeGreaterThan(0);
+    expect(r.php).toContain('GET A QUOTE</a>'); // label present
+  });
+
+  it('places the button icon on the source-captured side (after the label when iconAfter)', () => {
+    const icon = { kind: 'svg' as const, markup: '<svg viewBox="0 0 24 24"><path d="M5 12h14"/></svg>', width: 18, height: 18 };
+    const after = section({ interactionModel: 'static', headings: ['H'] }) as SectionSpec;
+    after.buttons = [{ label: 'NEXT', href: '/x', icon, iconAfter: true }];
+    const ra = reconstructPagePattern([after], opts);
+    // label precedes the icon <img> in the markup
+    expect(ra.php.indexOf('NEXT')).toBeLessThan(ra.php.indexOf('icon-0.svg'));
+    const before = section({ interactionModel: 'static', headings: ['H'] }) as SectionSpec;
+    before.buttons = [{ label: 'BACK', href: '/y', icon, iconAfter: false }];
+    const rb = reconstructPagePattern([before], opts);
+    // icon precedes the label
+    expect(rb.php.indexOf('icon-0.svg')).toBeLessThan(rb.php.indexOf('BACK'));
+  });
+
   it('emits a PHP doc-comment header with the slug and title', () => {
     const r = reconstructPagePattern([section({ headings: ['Hello world'] })], opts);
     expect(r.php).toContain('Title: Page — X');

@@ -618,15 +618,85 @@ function buttonBlock(label: string, out: BlockOut, opts: { align?: 'left' | 'cen
   );
 }
 
+/** rgb()/rgba() → #rrggbb (for recoloring a button icon SVG to the text color). */
+function rgbToHex(rgb: string): string | null {
+  const m = rgb.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+  if (!m) return null;
+  const h = (n: string) => Math.max(0, Math.min(255, parseInt(n, 10))).toString(16).padStart(2, '0');
+  return `#${h(m[1])}${h(m[2])}${h(m[3])}`;
+}
+
+/**
+ * A structured section CTA: reproduces the source button's destination (href),
+ * colors (captured bg/text mapped to theme tokens — a white CTA renders white,
+ * not the brand green), and inline icon (shipped as a theme SVG asset, recolored
+ * to the text color, referenced via get_theme_file_uri — wp:html is banned).
+ * Falls back to the default accent pill when colors/href/icon weren't captured.
+ */
+function ctaButton(
+  out: BlockOut,
+  ctx: RenderCtx,
+  btn: { label: string; href?: string; background?: string | null; color?: string | null; icon?: SectionSpecIcon | null; iconAfter?: boolean },
+  opts: { align?: 'left' | 'center' } = {},
+): string {
+  const t = normalizeCopy(btn.label);
+  if (!t && !btn.icon) return '';
+  if (t) out.expectedText.push(t);
+  const justify = opts.align ?? 'center';
+  const justifyClass = ` is-content-justification-${justify}`;
+  // Map captured colors to theme tokens; default to the accent pill.
+  const bgToken = btn.background ? nearestToken(btn.background, ctx.paletteTokens) : null;
+  const textTok = btn.color ? nearestToken(btn.color, ctx.paletteTokens) : null;
+  const bg = bgToken ?? 'accent-primary';
+  const text = textTok ?? (bgToken ? 'text-default' : 'text-inverse');
+  // Inline icon → theme SVG asset, recolored to the button text color so it's
+  // visible on the button surface. Placed on the side the SOURCE captured it
+  // (iconAfter — geometry-derived, not assumed), with the margin between icon and
+  // label on the correct side.
+  let iconImg = '';
+  if (btn.icon && btn.icon.kind === 'svg' && btn.icon.markup) {
+    let svg = sanitizeSvgAsset(btn.icon.markup);
+    if (svg && /<svg[\s>]/i.test(svg)) {
+      const fillHex = btn.color ? rgbToHex(btn.color) : null;
+      if (fillHex) svg = recolorSvg(svg, fillHex);
+      const path = `assets/icon-${ctx.iconCounter++}.svg`;
+      out.iconAssets.push({ path, svg });
+      const src = `<?php echo esc_url(get_theme_file_uri('${path}')); ?>`;
+      const margin = btn.iconAfter ? 'margin-left:8px' : 'margin-right:8px';
+      iconImg = `<img src="${src}" alt="" style="width:18px;height:18px;vertical-align:middle;${margin}"/>`;
+    }
+  }
+  // Destination: same-origin path / external URL / tel: — honest non-linking when absent.
+  const href = btn.href ? ` href="${escapeHtml(btn.href)}"` : '';
+  const inner = btn.iconAfter ? `${escapeHtml(t)}${iconImg}` : `${iconImg}${escapeHtml(t)}`;
+  return (
+    `<!-- wp:buttons {"layout":{"type":"flex","justifyContent":"${justify}"}} -->\n` +
+    `<div class="wp-block-buttons${justifyClass}">\n` +
+    `<!-- wp:button {"backgroundColor":"${bg}","textColor":"${text}"} -->\n` +
+    `<div class="wp-block-button"><a class="wp-block-button__link has-${text}-color has-${bg}-background-color has-text-color has-background wp-element-button"${href}>${inner}</a></div>\n` +
+    `<!-- /wp:button -->\n</div>\n<!-- /wp:buttons -->`
+  );
+}
+
+/** Emit a section's CTAs from the structured `buttons` capture when present,
+ *  else fall back to the plain label list. Shared by the section renderers. */
+function sectionButtons(s: SectionSpec, out: BlockOut, ctx: RenderCtx): string[] {
+  const align = buttonJustify(s);
+  if (s.buttons && s.buttons.length) {
+    return s.buttons.map((b) => ctaButton(out, ctx, b, { align })).filter(Boolean);
+  }
+  return s.buttonLabels.map((b) => ctaButton(out, ctx, { label: b }, { align })).filter(Boolean);
+}
+
 /** A centered, constrained text band (hero / intro / static). */
-function renderTextBand(s: SectionSpec): BlockOut {
+function renderTextBand(s: SectionSpec, ctx: RenderCtx): BlockOut {
   const out = emptyOut();
   const parts: string[] = [];
   s.headings.forEach((h, i) =>
     parts.push(headingBlock(h, out, { level: i === 0 ? 1 : 2, center: centerOf(s), sizePx: s.headingSizes?.[i], fontFamily: s.headingFamilies?.[i] || undefined, lineHeight: s.headingLineHeights?.[i] })),
   );
   (s.bodyText ?? []).forEach((b, i) => parts.push(paragraphBlock(b, out, { center: centerOf(s), sizePx: s.bodyTextSizes?.[i], fontFamily: s.bodyFamilies?.[i] || undefined, lineHeight: s.bodyLineHeights?.[i] })));
-  s.buttonLabels.forEach((b) => parts.push(buttonBlock(b, out, { align: buttonJustify(s) })));
+  parts.push(...sectionButtons(s, out, ctx));
   // A single lead image (if present) below the copy — only a real photo, never a
   // decorative glyph (a small quote-mark/badge <img> would otherwise fill the slot).
   const lead = pickLeadImage(s.images);
@@ -651,15 +721,15 @@ function renderTextBand(s: SectionSpec): BlockOut {
  *  a full-width cover band (text OVER the image), vs renderTextBand stacking the
  *  photo below black copy. Falls back to a centered text band when there's no
  *  usable full-bleed photo. */
-function renderCover(s: SectionSpec): BlockOut {
+function renderCover(s: SectionSpec, ctx: RenderCtx): BlockOut {
   const lead = pickLeadImage(s.images);
-  if (!lead || !isWpUrl(lead.url)) return renderTextBand(s);
+  if (!lead || !isWpUrl(lead.url)) return renderTextBand(s, ctx);
   const out = emptyOut();
   out.assets.push(lead.url);
   const inner: string[] = [];
   s.headings.forEach((h, i) => inner.push(headingBlock(h, out, { level: i === 0 ? 1 : 2, center: centerOf(s), inverse: true, sizePx: s.headingSizes?.[i], fontFamily: s.headingFamilies?.[i] || undefined, lineHeight: s.headingLineHeights?.[i] })));
   (s.bodyText ?? []).forEach((b, i) => inner.push(paragraphBlock(b, out, { center: centerOf(s), inverse: true, sizePx: s.bodyTextSizes?.[i], fontFamily: s.bodyFamilies?.[i] || undefined, lineHeight: s.bodyLineHeights?.[i] })));
-  s.buttonLabels.forEach((b) => inner.push(buttonBlock(b, out, { align: buttonJustify(s) })));
+  inner.push(...sectionButtons(s, out, ctx));
   const innerMarkup = inner.filter(Boolean).join('\n');
   const url = escapeHtml(lead.url);
   // Reproduce the source hero's RENDERED height (a tall fixed cover, often ~full
@@ -678,12 +748,12 @@ function renderCover(s: SectionSpec): BlockOut {
 }
 
 /** media-text: one image beside a heading + paragraph (alternating sides). */
-function renderMediaText(s: SectionSpec, flip: boolean): BlockOut {
+function renderMediaText(s: SectionSpec, flip: boolean, ctx: RenderCtx): BlockOut {
   const out = emptyOut();
   const textParts: string[] = [];
   s.headings.forEach((h, i) => textParts.push(headingBlock(h, out, { level: 2, sizePx: s.headingSizes?.[i], fontFamily: s.headingFamilies?.[i] || undefined, lineHeight: s.headingLineHeights?.[i] })));
   (s.bodyText ?? []).forEach((b, i) => textParts.push(paragraphBlock(b, out, { sizePx: s.bodyTextSizes?.[i], fontFamily: s.bodyFamilies?.[i] || undefined, lineHeight: s.bodyLineHeights?.[i] })));
-  s.buttonLabels.forEach((b) => textParts.push(buttonBlock(b, out, { align: buttonJustify(s) })));
+  textParts.push(...sectionButtons(s, out, ctx));
   // Prefer a real lead photo over a decorative glyph (a small quote-mark <img>
   // would otherwise fill the media column).
   const lead = pickLeadImage(s.images) ?? s.images[0];
@@ -1139,13 +1209,13 @@ function renderSection(s: SectionSpecWithFaqs, ctx: RenderCtx): BlockOut {
     (s.headings.length > 0 || (s.bodyText ?? []).length > 0)
   ) {
     ctx.mediaTextIndex++;
-    return renderMediaText(s, s.mediaLayout === 'image-left');
+    return renderMediaText(s, s.mediaLayout === 'image-left', ctx);
   }
   switch (s.interactionModel) {
     case 'media-text': {
       const flip = ctx.mediaTextIndex % 2 === 1;
       ctx.mediaTextIndex++;
-      return renderMediaText(s, flip);
+      return renderMediaText(s, flip, ctx);
     }
     case 'product-card-row':
       return renderCardGrid(s, /* withButtons */ true);
@@ -1164,9 +1234,9 @@ function renderSection(s: SectionSpecWithFaqs, ctx: RenderCtx): BlockOut {
       // A two-up columns band: if it has both copy and one image, treat as media-text;
       // otherwise a centered text band.
       if (s.images.length === 1 && (s.headings.length || (s.bodyText ?? []).length)) {
-        return renderMediaText(s, false);
+        return renderMediaText(s, false, ctx);
       }
-      return renderTextBand(s);
+      return renderTextBand(s, ctx);
     case 'cover-with-headline': {
       // A hero with a REAL lead photo renders as a 2-column media-text (text |
       // image), matching the common source hero layout. flip=false keeps text
@@ -1176,9 +1246,9 @@ function renderSection(s: SectionSpecWithFaqs, ctx: RenderCtx): BlockOut {
       if (pickLeadImage(s.images) && (s.headings.length || (s.bodyText ?? []).length)) {
         const flip = ctx.mediaTextIndex % 2 === 1;
         ctx.mediaTextIndex++;
-        return renderMediaText(s, flip);
+        return renderMediaText(s, flip, ctx);
       }
-      return renderTextBand(s);
+      return renderTextBand(s, ctx);
     }
     case 'animated-cover': {
       // A full-bleed hero cover needs a WIDE background photo (≥1000px). A
@@ -1187,14 +1257,14 @@ function renderSection(s: SectionSpecWithFaqs, ctx: RenderCtx): BlockOut {
       // text-over-photo band.
       const coverLead = pickLeadImage(s.images);
       if (coverLead && isWpUrl(coverLead.url) && (coverLead.width || 0) >= 1000) {
-        return renderCover(s);
+        return renderCover(s, ctx);
       }
       if (coverLead && (s.headings.length || (s.bodyText ?? []).length)) {
         const flip = ctx.mediaTextIndex % 2 === 1;
         ctx.mediaTextIndex++;
-        return renderMediaText(s, flip);
+        return renderMediaText(s, flip, ctx);
       }
-      return renderTextBand(s);
+      return renderTextBand(s, ctx);
     }
     case 'static':
     case 'cta':
@@ -1202,7 +1272,7 @@ function renderSection(s: SectionSpecWithFaqs, ctx: RenderCtx): BlockOut {
     case 'app-download':
     case 'horizontal-showcase':
     default:
-      return renderTextBand(s);
+      return renderTextBand(s, ctx);
   }
 }
 

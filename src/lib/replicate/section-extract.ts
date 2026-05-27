@@ -576,6 +576,26 @@ export interface SectionSpecIcon {
  * layout is a uniform multi-cell grid; the renderer decides whether to use it
  * (card-grids keep their image-led per-index path).
  */
+export interface SectionSpecButton {
+  /** Source-verbatim button label. */
+  label: string;
+  /** Destination — same-origin path (resolves to the local reconstructed page) or
+   *  an absolute external URL / tel:/mailto:. Empty when the source button had no
+   *  href (the renderer emits a non-linking button). */
+  href: string;
+  /** Computed button background (rgb) — mapped to the nearest theme token by the
+   *  renderer (a white CTA → surface-base, not the brand accent). null = use the
+   *  default accent pill. */
+  background?: string | null;
+  /** Computed button text color (rgb) — mapped to the nearest token. */
+  color?: string | null;
+  /** An inline icon shown in the button (shipped as a theme SVG asset). */
+  icon?: SectionSpecIcon | null;
+  /** True when the icon sits AFTER the label in the source (e.g. "LABEL ›"); false
+   *  = before. Lets the renderer keep the source icon order. */
+  iconAfter?: boolean;
+}
+
 export interface SectionSpecCell {
   /** The cell's title — its largest-font text node, or null when no clear title. */
   heading: string | null;
@@ -704,6 +724,11 @@ export interface SectionSpec {
    *  `bodyText` (0 = theme default). Optional for back-compat. */
   bodyLineHeights?: number[];
   buttonLabels: string[];
+  /** Structured buttons (label + href + computed bg/text color + inline icon) —
+   *  parallel-ish to buttonLabels but carrying the data needed to reproduce a
+   *  faithful CTA (a white CTA, its icon, and its destination). Optional for
+   *  back-compat; renderers prefer this over buttonLabels when present. */
+  buttons?: SectionSpecButton[];
   images: SectionSpecImage[];
   /** Inline SVG / icon-font glyphs in the section's Y-band (icons above cards). */
   icons: SectionSpecIcon[];
@@ -789,6 +814,18 @@ interface RawSection {
   sectionHtml?: string;
   /** Per-cell raw capture for grid sections (built into SectionSpec.cells in Node). */
   cells?: RawCell[];
+  /** Structured button capture (built into SectionSpec.buttons in Node). */
+  buttons?: RawButton[];
+}
+
+/** Raw per-button capture from the browser walk (shaped into SectionSpecButton in Node). */
+interface RawButton {
+  label: string;
+  href: string;
+  bg: string | null;
+  color: string | null;
+  icon: { markup: string; w: number; h: number } | null;
+  iconAfter: boolean;
 }
 
 /** Raw per-cell capture from the browser walk (shaped into SectionSpecCell in Node). */
@@ -1636,6 +1673,55 @@ export async function extractFull(
           .filter(Boolean)
           .slice(0, 12);
 
+        // Structured button capture: the source button's label, destination href
+        // (same-origin → pathname so it resolves to the local reconstructed page),
+        // computed background + text colors (mapped to theme tokens by the
+        // renderer — a white CTA must not render as the brand green), and an inline
+        // icon. Lets the replica reproduce a faithful CTA instead of a generic
+        // green hrefless button.
+        const buttons = buttonEls
+          .map((b) => {
+            const cs = getComputedStyle(b);
+            const label = (b.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 100);
+            const a = b.tagName === 'A' ? (b as HTMLAnchorElement) : (b.closest('a') as HTMLAnchorElement | null);
+            let href = a ? a.getAttribute('href') || '' : '';
+            if (href && !href.startsWith('#') && !href.startsWith('mailto:') && !href.startsWith('tel:')) {
+              try {
+                const u = new URL(href, location.href);
+                href = u.origin === location.origin ? `${u.pathname}${u.search}` : u.href;
+              } catch {
+                /* keep raw */
+              }
+            }
+            if (href.startsWith('#')) href = '';
+            const bgM = cs.backgroundColor.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?/);
+            const bgA = bgM ? (bgM[4] === undefined ? 1 : parseFloat(bgM[4])) : 0;
+            const bg = bgM && bgA > 0.5 ? `rgb(${bgM[1]}, ${bgM[2]}, ${bgM[3]})` : null;
+            let icon: { markup: string; w: number; h: number } | null = null;
+            let iconAfter = false;
+            const svg = b.querySelector('svg');
+            if (svg) {
+              const sr = svg.getBoundingClientRect();
+              if (sr.width > 0 && sr.width <= 80 && sr.height > 0 && sr.height <= 80) {
+                try {
+                  icon = { markup: (svg as unknown as HTMLElement).outerHTML || '', w: Math.round(sr.width), h: Math.round(sr.height) };
+                  // Which side is the icon on? Compare to the button's text element
+                  // so the renderer keeps the source order (e.g. "LABEL ›" vs "› LABEL").
+                  const txtEl = Array.from(b.querySelectorAll('*')).find(
+                    (e) => e !== svg && !svg.contains(e) && Array.from(e.childNodes).some((n) => n.nodeType === 3 && (n.nodeValue || '').trim()),
+                  );
+                  const tr = txtEl ? txtEl.getBoundingClientRect() : null;
+                  if (tr && tr.width > 0) iconAfter = sr.left >= tr.left;
+                } catch {
+                  icon = null;
+                }
+              }
+            }
+            return { label, href, bg, color: cs.color || null, icon, iconAfter };
+          })
+          .filter((b) => b.label || b.icon)
+          .slice(0, 12);
+
         // repeated direct-child units (cards / columns / rows)
         // Use the tightest content wrapper whose direct children form a UNIFORM
         // repeated set (a card row / column grid) as the unit grid. Page
@@ -2110,6 +2196,7 @@ export async function extractFull(
           bodyFamilies: bodyFamilies.slice(0, 40),
           bodyLineHeights: bodyLineHeights.slice(0, 40),
           buttonLabels,
+          buttons,
           images: allImages.slice(0, 36),
           iconCandidates: iconCandidates.slice(0, 48),
           backgroundColor: baseColor && !isTransparent(baseColor) ? baseColor : 'rgb(255, 255, 255)',
@@ -2252,6 +2339,16 @@ export async function extractFull(
       bodyFamilies: (rr as unknown as { bodyFamilies?: string[] }).bodyFamilies ?? [],
       bodyLineHeights: (rr as unknown as { bodyLineHeights?: number[] }).bodyLineHeights ?? [],
       buttonLabels: rr.buttonLabels,
+      buttons: ((rr as unknown as { buttons?: RawButton[] }).buttons ?? []).map(
+        (b): SectionSpecButton => ({
+          label: b.label,
+          href: b.href,
+          background: b.bg ?? null,
+          color: b.color ?? null,
+          icon: b.icon && b.icon.markup ? { kind: 'svg', markup: b.icon.markup, width: b.icon.w, height: b.icon.h } : null,
+          iconAfter: b.iconAfter ?? false,
+        }),
+      ),
       images: rr.images.map((im) => ({
         url: rewriteThroughMediaMap(im.src, mediaMap),
         sourceUrl: im.src,
