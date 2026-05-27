@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { buildPageReconstruction } from './reconstruct-pages.js';
+import { buildInternalLinkMap } from '../streaming/internal-link-rewrite.js';
 import type { SectionSpec } from './section-extract.js';
 
 function section(partial: Partial<SectionSpec>): SectionSpec {
@@ -134,5 +135,31 @@ describe('buildPageReconstruction', () => {
   it('throws on an unsafe slug rather than emitting a bad path', () => {
     expect(() => buildPageReconstruction([section({})], { ...base, slug: '../evil' })).toThrow(/unsafe/);
     expect(() => buildPageReconstruction([section({})], { themeSlug: 'a/b', title: 'x', slug: 'ok' })).toThrow(/unsafe/);
+  });
+
+  it('rewrites page-body CTA links to local permalinks when a linkMap is supplied', () => {
+    const linkMap = buildInternalLinkMap([{ from: '/about-us', to: '/about-us/' }], {
+      siteOrigins: ['demo.test'],
+    });
+    const cta = section({
+      headings: ['Learn more'],
+      buttons: [{ label: 'About', href: '/about-us' }],
+    } as Partial<SectionSpec>);
+    const r = buildPageReconstruction([cta], { ...base, slug: 'cta', linkMap });
+    // Both the editable post_content and the theme-library pattern get rewritten.
+    expect(r.postContent).toContain('href="/about-us/"');
+    expect(r.postContent).not.toContain('href="/about-us"');
+    const php = r.files.find((f) => f.path === 'patterns/page-cta.php')!.content;
+    expect(php).toContain('href="/about-us/"');
+    expect(r.gate.ok).toBe(true);
+  });
+
+  it('leaves body links untouched when no linkMap is supplied (back-compat)', () => {
+    const cta = section({
+      headings: ['Learn more'],
+      buttons: [{ label: 'About', href: '/about-us' }],
+    } as Partial<SectionSpec>);
+    const r = buildPageReconstruction([cta], { ...base, slug: 'cta2' });
+    expect(r.postContent).toContain('href="/about-us"');
   });
 });

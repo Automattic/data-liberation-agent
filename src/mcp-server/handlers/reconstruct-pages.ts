@@ -24,6 +24,11 @@ import { extractFullFromUrl, rewriteThroughMediaMap } from '../../lib/replicate/
 import type { SectionSpec } from '../../lib/replicate/section-extract.js';
 import { SectionSpecsStore } from '../../lib/replicate/section-specs-store.js';
 import { buildPageReconstruction } from '../../lib/replicate/reconstruct-pages.js';
+import {
+  buildInternalLinkMap,
+  type InternalLinkMap,
+  type RedirectMapEntry,
+} from '../../lib/streaming/internal-link-rewrite.js';
 import { installMediaForUrl } from '../../lib/streaming/media-install.js';
 import { BlockFixerClient } from '../../lib/streaming/block-fixer-client.js';
 import { downloadMedia } from '../../lib/extraction/media.js';
@@ -166,6 +171,35 @@ function applyMediaMap(specs: SectionSpec[], mediaMap: Record<string, string>): 
   }
 }
 
+/**
+ * Build the source-path → local-permalink map once for the whole run, from the
+ * same `redirect-map.json` the nav/footer rewrite consumes (so page-body links
+ * agree with the menu). Page origins seed the host+path keys that let ABSOLUTE
+ * same-site body hrefs match. Best-effort: a missing/corrupt map yields a
+ * root-only map and links simply pass through.
+ */
+function buildPageLinkMap(outputDir: string, pages: PageArg[]): InternalLinkMap {
+  let redirectMap: RedirectMapEntry[] = [];
+  try {
+    const p = join(resolve(outputDir), 'redirect-map.json');
+    if (existsSync(p)) {
+      const parsed = JSON.parse(readFileSync(p, 'utf8'));
+      if (Array.isArray(parsed)) redirectMap = parsed as RedirectMapEntry[];
+    }
+  } catch {
+    /* best-effort — fall back to a root-only map */
+  }
+  const origins = new Set<string>();
+  for (const pg of pages) {
+    try {
+      origins.add(new URL(pg.sourceUrl).hostname);
+    } catch {
+      /* skip an unparseable source URL */
+    }
+  }
+  return buildInternalLinkMap(redirectMap, { siteOrigins: [...origins] });
+}
+
 function collectSourceUrls(specs: SectionSpec[], into: Set<string>): void {
   for (const s of specs) {
     for (const im of s.images ?? []) if (im.sourceUrl) into.add(im.sourceUrl);
@@ -257,6 +291,9 @@ export const reconstructPagesHandler: Handler = async (args, ctx) => {
   // Theme fontFamily tokens — used to map each captured element's computed
   // font-family to the nearest registered token (per-element family fidelity).
   const fontFamilies = readThemeFontFamilies(join(themeRoot, 'theme.json'));
+  // Source-path → local-permalink map, built once and reused per page so body
+  // links (inline + CTA hrefs) resolve to imported pages, like the nav already does.
+  const linkMap = buildPageLinkMap(outputDir, pages);
 
   // 3. Reconstruct + gate + write each page.
   const report: Array<Record<string, unknown>> = [];
@@ -278,7 +315,7 @@ export const reconstructPagesHandler: Handler = async (args, ctx) => {
     applyMediaMap(specs, mediaMap);
     let built;
     try {
-      built = buildPageReconstruction(specs, { slug: p.slug, title: p.title, themeSlug, isHome: p.isHome, paletteTokens, fontFamilies });
+      built = buildPageReconstruction(specs, { slug: p.slug, title: p.title, themeSlug, isHome: p.isHome, paletteTokens, fontFamilies, linkMap });
     } catch (err) {
       report.push({ slug: p.slug, ok: false, reason: `build: ${err instanceof Error ? err.message : String(err)}` });
       continue;

@@ -17,6 +17,7 @@
 
 import { reconstructPagePattern, type FontFamilyToken } from './page-reconstruct.js';
 import { validateArtifacts, type ValidationReport } from './validate-artifacts.js';
+import { rewriteInternalLinks, type InternalLinkMap } from '../streaming/internal-link-rewrite.js';
 import type { SectionSpec } from './section-extract.js';
 import type { PaletteToken } from './footer-color.js';
 
@@ -113,6 +114,14 @@ export function buildPageReconstruction(
     isHome?: boolean;
     paletteTokens?: PaletteToken[];
     fontFamilies?: FontFamilyToken[];
+    /**
+     * Source-path → local-permalink map (built from `redirect-map.json` via
+     * `buildInternalLinkMap`). When supplied, page-body links (inline + CTA
+     * hrefs) are rewritten to their imported permalinks — the same map the
+     * nav/footer rewrite consumes, so body links agree with the menu. Absent →
+     * links pass through unchanged (back-compat).
+     */
+    linkMap?: InternalLinkMap;
   },
 ): PageReconstructionResult {
   if (!SAFE_SLUG.test(opts.slug)) throw new Error(`unsafe page slug: "${opts.slug}"`);
@@ -126,6 +135,12 @@ export function buildPageReconstruction(
     fontFamilies: opts.fontFamilies,
   });
 
+  // Rewrite same-site body links to local permalinks BEFORE the gate, so the
+  // gate validates the final shipped markup. Only href attribute values change;
+  // text/assets are untouched, so provenance still holds.
+  const php = opts.linkMap ? rewriteInternalLinks(r.php, opts.linkMap) : r.php;
+  const body = opts.linkMap ? rewriteInternalLinks(r.body, opts.linkMap) : r.body;
+
   // The provenance/injection/escaping gate. The reconstruct output is validated
   // against its OWN captured corpus (expectedText ∪ bodyText) — this catches
   // escaping/injection and that emitted copy traces to captured source text.
@@ -133,7 +148,7 @@ export function buildPageReconstruction(
     patterns: [
       {
         slug: patternSlug,
-        php: r.php,
+        php,
         spec: {
           interactionModel: 'static',
           expectedText: r.expectedText,
@@ -155,7 +170,7 @@ export function buildPageReconstruction(
   // post_content (real editable block page); the theme keeps the pattern as a lib.
   const template = buildPageTemplate(r.heroIsCover, fullWidth);
   const files: ReconstructedFile[] = [
-    { path: `patterns/page-${opts.slug}.php`, content: r.php },
+    { path: `patterns/page-${opts.slug}.php`, content: php },
     { path: `templates/page-${opts.slug}.html`, content: template },
     ...r.iconAssets.map((a) => ({ path: a.path, content: a.svg })),
   ];
@@ -167,7 +182,7 @@ export function buildPageReconstruction(
     slug: opts.slug,
     patternSlug,
     files,
-    postContent: toPostContent(r.body, opts.themeSlug),
+    postContent: toPostContent(body, opts.themeSlug),
     gate,
     expectedAssets: r.expectedAssets,
     provenanceFlags: r.provenanceFlags,
