@@ -55,10 +55,17 @@ function buildPageTemplate(patternSlug: string, overlayHeader = false): string {
   const headerPart = overlayHeader
     ? `<!-- wp:template-part {"slug":"header","tagName":"header","className":"site-header-overlay"} /-->`
     : `<!-- wp:template-part {"slug":"header","tagName":"header"} /-->`;
+  // When the header overlays a full-bleed hero cover, the main content must be
+  // flush with the page top (the absolute header floats above it) — so zero the
+  // main group's top margin/padding, which otherwise leaves a gap above the hero.
+  const mainGroup = overlayHeader
+    ? `<!-- wp:group {"tagName":"main","style":{"spacing":{"margin":{"top":"0px"},"padding":{"top":"0px"}}},"layout":{"type":"constrained"}} -->
+<main class="wp-block-group" style="margin-top:0px;padding-top:0px">`
+    : `<!-- wp:group {"tagName":"main","layout":{"type":"constrained"}} -->
+<main class="wp-block-group">`;
   return `${headerPart}
 
-<!-- wp:group {"tagName":"main","layout":{"type":"constrained"}} -->
-<main class="wp-block-group">
+${mainGroup}
 <!-- wp:pattern {"slug":"${patternSlug}"} /-->
 </main>
 <!-- /wp:group -->

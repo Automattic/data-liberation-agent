@@ -662,9 +662,14 @@ function renderCover(s: SectionSpec): BlockOut {
   s.buttonLabels.forEach((b) => inner.push(buttonBlock(b, out, { align: buttonJustify(s) })));
   const innerMarkup = inner.filter(Boolean).join('\n');
   const url = escapeHtml(lead.url);
+  // Reproduce the source hero's RENDERED height (a tall fixed cover, often ~full
+  // viewport) instead of letting the cover shrink to its content. Clamped to a
+  // sane range. A top-anchored hero cover also zeroes its own top margin so it's
+  // flush with the page top (the overlay header floats above it).
+  const minH = Math.max(480, Math.min(Math.round(s.height || 520), 1000));
   out.markup =
-    `<!-- wp:cover {"url":"${url}","dimRatio":40,"overlayColor":"surface-inverse","isUserOverlayColor":true,"minHeight":520,"minHeightUnit":"px","align":"full","layout":{"type":"constrained"}} -->\n` +
-    `<div class="wp-block-cover alignfull" style="min-height:520px">` +
+    `<!-- wp:cover {"url":"${url}","dimRatio":40,"overlayColor":"surface-inverse","isUserOverlayColor":true,"minHeight":${minH},"minHeightUnit":"px","align":"full","style":{"spacing":{"margin":{"top":"0px"}}},"layout":{"type":"constrained"}} -->\n` +
+    `<div class="wp-block-cover alignfull" style="margin-top:0px;min-height:${minH}px">` +
     `<span aria-hidden="true" class="wp-block-cover__background has-surface-inverse-background-color has-background-dim-40 has-background-dim"></span>` +
     `<img class="wp-block-cover__image-background" src="${url}" alt="${escapeHtml(lead.alt || '')}"/>\n` +
     `<div class="wp-block-cover__inner-container">\n${innerMarkup}\n</div>\n` +
