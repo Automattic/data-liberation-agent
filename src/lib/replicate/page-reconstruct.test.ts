@@ -289,12 +289,32 @@ describe('reconstructPagePattern', () => {
     expect(r.php).toContain('max-width:100%');
     expect(r.php).toContain('is-resized');
     // A row of SQUARE thumbnails → a gallery whose items carry the source square
-    // aspect + width, not the theme's default 4:3 / 220–380px cell.
+    // size via core/image width+height ATTRIBUTES (which survive block-fixer
+    // canonicalization), not a stripped inline flex/aspect-ratio. 149×149 stays
+    // square (width===height), not the theme's default 4:3 / 220–380px cell.
     const sq = (n: number) => ({ url: `${WP}s${n}.png`, sourceUrl: `${WP}s${n}.png`, alt: '', kind: 'img' as const, width: 149, height: 149 });
     const g = reconstructPagePattern([section({ headings: ['Samples'], images: [sq(1), sq(2), sq(3)] })], opts);
     expect(g.php).toContain('wp:gallery');
-    expect(g.php).toContain('aspect-ratio:149 / 149');
-    expect(g.php).toContain('flex:0 0 149px');
+    expect(g.php).toContain('"width":"149px"');
+    expect(g.php).toContain('"height":"149px"');
+    expect(g.php).toContain('size-large is-resized');
+    // No stripped-on-canonicalization inline flex/aspect-ratio on gallery figures.
+    expect(g.php).not.toContain('flex:0 0');
+    expect(g.php).not.toContain('aspect-ratio:149');
+  });
+
+  it('gallery is a fixed-height row constrained to the (clamped) landscape image height', () => {
+    // A same-scale landscape gallery (the routed case — the first big photo is the
+    // lead, the 3+ same-scale extras below it become the gallery). 800×400 items
+    // wider than the 560 clamp: row height = 400*560/800 = 280, each item width =
+    // 280*800/400 = 560. Uniform box, source 2:1 aspect retained (560/280), never
+    // stretched or forced to the theme's 4:3 cell.
+    const wide = (n: number) => ({ url: `${WP}w${n}.png`, sourceUrl: `${WP}w${n}.png`, alt: '', kind: 'img' as const, width: 800, height: 400 });
+    const g = reconstructPagePattern([section({ headings: ['Gallery'], images: [wide(1), wide(2), wide(3), wide(4)] })], opts);
+    expect(g.php).toContain('wp:gallery');
+    expect((g.php.match(/"height":"280px"/g) || []).length).toBe(3); // 3 extras share the row height
+    expect((g.php.match(/"width":"560px"/g) || []).length).toBe(3); // width clamped at the basis
+    expect(g.php).toContain('size-large is-resized');
   });
 
   it('reproduces a structured CTA: source button color (token), icon, and destination href', () => {

@@ -378,6 +378,33 @@ Tags: block-theme, full-site-editing
 .entry-content svg,
 .entry-content table {
 	max-width: 100% !important;
+}
+/*
+ * Responsive height:auto for media WITHOUT an explicit size. Two exemptions:
+ *  - RESIZED core/images (gallery items + sized photos) carry their own
+ *    width+height attributes and must keep that box (so object-fit can crop to a
+ *    uniform row height matching the source's horizontal images) — or the reset
+ *    would collapse each back to its natural aspect and the row height go ragged.
+ *  - A cover's background image (.wp-block-cover__image-background) must keep WP
+ *    core's height:100% so it FILLS the cover (object-fit:cover crops); height:auto
+ *    shrinks it to its natural aspect, leaving a grey band below it in the hero.
+ */
+.wp-block-post-content img:not(.wp-block-image.is-resized img):not(.wp-block-cover__image-background),
+.wp-block-post-content picture,
+.wp-block-post-content picture img,
+.wp-block-post-content video,
+.wp-block-post-content iframe,
+.wp-block-post-content embed,
+.wp-block-post-content object,
+.wp-block-post-content svg,
+.entry-content img:not(.wp-block-image.is-resized img):not(.wp-block-cover__image-background),
+.entry-content picture,
+.entry-content picture img,
+.entry-content video,
+.entry-content iframe,
+.entry-content embed,
+.entry-content object,
+.entry-content svg {
 	height: auto !important;
 }
 
@@ -414,6 +441,23 @@ header.site-header-overlay {
 	top: 0;
 	z-index: 100;
 }
+/*
+ * Admin bar accommodation. The overlay header is positioned against the viewport
+ * (position:absolute, no positioned ancestor), so WordPress core's html margin-top
+ * (32px) — which pushes normal flow content (the solid header, the hero) below the
+ * fixed admin bar — does NOT move it; it would sit UNDER the bar. Offset it by the
+ * admin bar height so a logged-in viewer's bar never covers the nav. (The solid
+ * header and hero are in flow and already clear the bar.)
+ * 32px desktop, 46px at the <=782px breakpoint where WP grows the bar.
+ */
+body.admin-bar header.site-header-overlay {
+	top: 32px;
+}
+@media screen and (max-width: 782px) {
+	body.admin-bar header.site-header-overlay {
+		top: 46px;
+	}
+}
 header.site-header-overlay .wp-block-group {
 	background-color: transparent !important;
 }
@@ -444,11 +488,37 @@ header.site-header-overlay .wp-block-navigation-item__content {
 	padding-bottom: 8px;
 }
 .wp-block-gallery.is-gallery-scroller > .wp-block-image {
+	scroll-snap-align: center;
+	margin: 0;
+}
+/* A reconstructed item carries the source's rendered size via core/image
+ * width+height (-> is-resized + inline width/height on the img, which survive
+ * block canonicalization). Size the figure to that image so items RETAIN their
+ * source aspect ratio and large source photos stay large (~2 per view) instead
+ * of collapsing into core's uniform column cell. The width:auto + max-width
+ * override defeat core gallery's columns-N width:calc() grid (which would
+ * otherwise force every item to ~25% of the row and cap the img via max-width). */
+.wp-block-gallery.is-gallery-scroller.has-nested-images > .wp-block-image.is-resized {
+	flex: 0 0 auto !important;   /* defeat core columns-N width:calc() grid */
+	width: auto !important;      /* size the figure to the resized image */
+	max-width: none !important;
+}
+.wp-block-gallery.is-gallery-scroller > .wp-block-image.is-resized img {
+	/* The inline width/height (core/image attrs) define the box at the source's
+	 * DISPLAYED aspect; max-width:none lifts core's max-width:100% cap (set via an
+	 * id-hack selector) so the inline width actually applies; object-fit:cover
+	 * crops the natural file into that box, retaining the source aspect ratio. */
+	max-width: none !important;
+	object-fit: cover;
+	border-radius: 8px;
+}
+/* Un-sized items (no captured dimensions) keep the responsive scroller cell. */
+.wp-block-gallery.is-gallery-scroller > .wp-block-image:not(.is-resized) {
 	flex: 0 0 clamp(220px, 32%, 380px);
 	scroll-snap-align: center;
 	margin: 0;
 }
-.wp-block-gallery.is-gallery-scroller > .wp-block-image img {
+.wp-block-gallery.is-gallery-scroller > .wp-block-image:not(.is-resized) img {
 	width: 100%;
 	aspect-ratio: 4 / 3;
 	object-fit: cover;

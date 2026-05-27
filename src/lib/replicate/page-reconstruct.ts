@@ -916,21 +916,36 @@ function galleryBlock(images: SectionSpecImage[], out: BlockOut): string {
   const usable = images.filter((im) => isWpUrl(im.url));
   if (usable.length === 0) return '';
   const cols = Math.min(4, usable.length);
+  // Fixed-height "justified row" sizing: pick ONE target row height from the
+  // gallery's LANDSCAPE items (so the strip is constrained to the height of the
+  // horizontal images, like the source), then size every item to that height with
+  // its width following its OWN aspect — so items RETAIN their aspect ratio and
+  // are never stretched. We carry width+height via core/image's `width`/`height`
+  // ATTRIBUTES (which survive block-fixer canonicalization, unlike inline
+  // flex/aspect-ratio on the figure). The theme's is-resized scroller rule sizes
+  // each figure to its image and exempts these from the responsive height reset.
+  const sized = usable.filter((im) => im.width && im.height);
+  const landscape = sized.filter((im) => im.width! >= im.height!);
+  const basis = (landscape.length ? landscape : sized).map((im) => im.height! * Math.min(560, im.width!) / im.width!);
+  // Median target height across the basis set, clamped to a sane scroller range.
+  const sortedH = basis.slice().sort((a, b) => a - b);
+  const rowH = sortedH.length
+    ? Math.max(140, Math.min(460, Math.round(sortedH[Math.floor(sortedH.length / 2)])))
+    : 0;
   const figures = usable.map((im) => {
     out.assets.push(im.url);
-    // Carry the source's rendered item width + aspect ratio so a gallery isn't
-    // forced to the theme's default 220–380px / 4:3 cell (which both resized and
-    // distorted e.g. a row of ~149px SQUARE samples into 352×264). The inline
-    // flex-basis + aspect-ratio override the scroller CSS per item; object-fit
-    // then crops nothing because the box matches the image aspect. Width is
-    // clamped to a sane scroller range; max-width:100% keeps it responsive.
-    const w = im.width && im.height ? Math.max(120, Math.min(560, Math.round(im.width))) : 0;
-    const ar = im.width && im.height ? `${Math.round(im.width)} / ${Math.round(im.height)}` : '';
-    const figStyle = w ? ` style="flex:0 0 ${w}px;max-width:100%"` : '';
-    const imgStyle = ar ? ` style="aspect-ratio:${ar}"` : '';
+    if (im.width && im.height && rowH) {
+      // Uniform row height; per-item width preserves the item's own aspect.
+      const w = Math.max(80, Math.min(900, Math.round((rowH * im.width) / im.height)));
+      return (
+        `<!-- wp:image {"width":"${w}px","height":"${rowH}px","sizeSlug":"large","linkDestination":"none"} -->\n` +
+        `<figure class="wp-block-image size-large is-resized"><img src="${escapeHtml(im.url)}" alt="${escapeHtml(im.alt || '')}" style="width:${w}px;height:${rowH}px"/></figure>\n` +
+        `<!-- /wp:image -->`
+      );
+    }
     return (
       `<!-- wp:image {"sizeSlug":"large","linkDestination":"none"} -->\n` +
-      `<figure class="wp-block-image size-large"${figStyle}><img src="${escapeHtml(im.url)}" alt="${escapeHtml(im.alt || '')}"${imgStyle}/></figure>\n` +
+      `<figure class="wp-block-image size-large"><img src="${escapeHtml(im.url)}" alt="${escapeHtml(im.alt || '')}"/></figure>\n` +
       `<!-- /wp:image -->`
     );
   });
@@ -938,9 +953,15 @@ function galleryBlock(images: SectionSpecImage[], out: BlockOut): string {
   // strip with snap points (theme CSS) — page builders show galleries as a
   // carousel; WP core has no native carousel block, and this needs no JS/plugin.
   // Small sets that fit just render as a row.
+  //
+  // imageCrop:false / NO is-cropped: core's "cropped" mode forces every item to a
+  // uniform cell via object-fit:cover, which DISTORTS items away from their source
+  // aspect. We instead size each item explicitly (core/image width+height, above)
+  // so it RETAINS its source aspect ratio; the theme's is-resized scroller rule
+  // sizes the figure to that image.
   return (
-    `<!-- wp:gallery {"columns":${cols},"imageCrop":true,"linkTo":"none","sizeSlug":"large","className":"is-gallery-scroller"} -->\n` +
-    `<figure class="wp-block-gallery has-nested-images columns-${cols} is-cropped is-gallery-scroller">\n${figures.join('\n')}\n</figure>\n` +
+    `<!-- wp:gallery {"columns":${cols},"imageCrop":false,"linkTo":"none","sizeSlug":"large","className":"is-gallery-scroller"} -->\n` +
+    `<figure class="wp-block-gallery has-nested-images columns-${cols} is-gallery-scroller">\n${figures.join('\n')}\n</figure>\n` +
     `<!-- /wp:gallery -->`
   );
 }
