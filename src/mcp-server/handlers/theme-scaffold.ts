@@ -16,7 +16,7 @@
 //
 
 import { existsSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { join, resolve, dirname } from 'node:path';
 import type { Handler } from '../handler-types.js';
 import { buildThemeScaffold } from '../../lib/replicate/theme-scaffold.js';
 import { lintThemeJson } from '../../lib/replicate/theme-json-lint.js';
@@ -46,6 +46,33 @@ interface ScaffoldArgs {
    * pattern instead of falling through `page.html` to raw carried `wp:post-content`.
    */
   reconstructedPages?: Array<{ slug: string; patternSlug: string; isHome?: boolean }>;
+  /**
+   * When true, write the emitted text theme files to `themeDir` (defaults to
+   * `<outputDir>/theme`) alongside the font/logo assets the handler already
+   * downloads there — materializing a complete on-disk theme. Left in-memory by
+   * default so the "builders return strings, the orchestrator persists" contract
+   * holds for callers that install `themeFiles[]` straight into a live site.
+   */
+  persist?: boolean;
+}
+
+/**
+ * Write theme text files to disk under `themeDir`, creating parent dirs. Returns
+ * the written relative paths. Pure aside from the filesystem — the binary font/
+ * logo assets are downloaded separately by the handler.
+ */
+export function persistThemeFiles(
+  themeDir: string,
+  files: Array<{ relativePath: string; content: string }>,
+): string[] {
+  const written: string[] = [];
+  for (const f of files) {
+    const dest = join(themeDir, f.relativePath);
+    mkdirSync(dirname(dest), { recursive: true });
+    writeFileSync(dest, f.content);
+    written.push(f.relativePath);
+  }
+  return written;
 }
 
 interface TypographyObserved {
@@ -314,11 +341,18 @@ export const themeScaffoldHandler: Handler = async (args, ctx) => {
     }
   }
 
+  // Optionally materialize the text files to disk (fonts/logo are already
+  // written above). Off by default — callers that install themeFiles[] straight
+  // into a live site don't need an on-disk copy; the standalone disk-preview path
+  // (and reconstruct-pages, which also writes here) does.
+  const persistedPaths = a.persist ? persistThemeFiles(themeDir, themeFiles) : [];
+
   return ctx.textResult({
     ok: true,
     themeSlug: a.themeSlug,
     themeFiles,
     themeJsonLint,
+    persisted: a.persist ? { themeDir, count: persistedPaths.length } : undefined,
     fileCount: themeFiles.length,
     relativePaths: themeFiles.map((f) => f.relativePath),
     sourceChromeUsed: Boolean(sourceChrome?.header?.links?.length || sourceChrome?.header?.logoUrl),

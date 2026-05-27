@@ -381,6 +381,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           siteTitle: { type: 'string', description: 'Source site title — used in style.css description and footer copyright.' },
           themeDescription: { type: 'string', description: 'Override the default style.css Description line.' },
           sourceUrl: { type: 'string', description: 'The source site origin (e.g. https://www.example.com/). Used to resolve the captured header/footer chrome links to absolute URLs so they remap to local permalinks (without it, nav hrefs are not remapped and point off-site). Defaults to a placeholder origin.' },
+          persist: { type: 'boolean', description: 'When true, also write the emitted text theme files to <outputDir>/theme (alongside the font/logo assets always written there), materializing a complete on-disk theme. Default false: themeFiles[] is returned for the caller to install into a live site.' },
           reconstructedPages: {
             type: 'array',
             description: 'Block-reconstructed content pages. Each entry emits templates/page-<slug>.html wiring the page to its reconstructed pattern (and front-page.html for isHome), so the page renders block sections instead of falling through page.html to raw carried post_content. The pattern files (reconstructed block markup) are added to themeFiles[] separately by the replicate skill.',
