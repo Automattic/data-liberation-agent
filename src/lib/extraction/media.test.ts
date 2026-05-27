@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, existsSync } from 'fs';
 import { join } from 'path';
-import { sanitizeMediaFilename, deriveFilenameFromUrl, downloadMedia } from './media.js';
+import { sanitizeMediaFilename, deriveFilenameFromUrl, downloadMedia, upgradeMediaUrl } from './media.js';
 import { Readable } from 'stream';
 
 // Build a minimal fetch Response stub that downloadMedia can stream from.
@@ -33,6 +33,32 @@ describe('sanitizeMediaFilename', () => {
   });
   it('falls back to "image" when the base reduces to nothing', () => {
     expect(sanitizeMediaFilename('%20.png')).toBe('image.png');
+  });
+});
+
+describe('upgradeMediaUrl', () => {
+  it('doubles a Wix fill transform (retina) while preserving aspect, under the cap', () => {
+    const u = 'https://static.wixstatic.com/media/abc~mv2.jpg/v1/fill/w_679,h_381,al_c,q_80,enc_avif/x.jpg';
+    const up = upgradeMediaUrl(u);
+    expect(up).toContain('w_1358');
+    expect(up).toContain('h_762');
+    // aspect preserved: 1358/762 ≈ 679/381
+    expect(Math.round((1358 / 762) * 100)).toBe(Math.round((679 / 381) * 100));
+  });
+  it('caps the longest edge at 2000 and scales both dimensions by the same factor', () => {
+    // longest=1500 -> scale=min(2, 2000/1500)=1.333 -> w=2000, h=1333 (aspect kept)
+    const u = 'https://static.wixstatic.com/media/abc~mv2.jpg/v1/fill/w_1500,h_1000,al_c/x.jpg';
+    const up = upgradeMediaUrl(u);
+    expect(up).toContain('w_2000');
+    expect(up).toContain('h_1333');
+  });
+  it('leaves a URL already at/above the cap unchanged', () => {
+    const u = 'https://static.wixstatic.com/media/abc~mv2.jpg/v1/fill/w_2400,h_1200,al_c/x.jpg';
+    expect(upgradeMediaUrl(u)).toBe(u);
+  });
+  it('is a no-op for non-Wix URLs and Wix URLs without a w_/h_ transform', () => {
+    expect(upgradeMediaUrl('https://cdn.shopify.com/s/files/1/x_600x400.jpg')).toBe('https://cdn.shopify.com/s/files/1/x_600x400.jpg');
+    expect(upgradeMediaUrl('https://static.wixstatic.com/media/abc~mv2.jpg')).toBe('https://static.wixstatic.com/media/abc~mv2.jpg');
   });
 });
 

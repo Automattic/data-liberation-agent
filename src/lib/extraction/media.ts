@@ -86,6 +86,46 @@ export function deriveFilenameFromUrl(urlObj: URL): string {
   return sanitizeMediaFilename(basename(effectivePath));
 }
 
+/** Cap on an upgraded image's longest edge — keeps retina upscaling from pulling
+ *  multi-megapixel originals for a small slot. */
+const MEDIA_UPGRADE_MAX_DIM = 2000;
+
+/**
+ * Upgrade a CDN image URL to a higher-resolution variant for crisp (retina)
+ * rendering, WITHOUT changing the derived filename or the URL's identity as a
+ * map key (the caller still keys media on the ORIGINAL url; only the fetched
+ * BYTES are higher-res). Returns the url unchanged when no rule applies.
+ *
+ * Platform rule — Wix (`static.wixstatic.com`): the served size is encoded in the
+ * `/v1/{fill,fit,crop}/…w_W,h_H,…/` transform, and the captured URL carries the
+ * small DISPLAY size (e.g. w_679,h_381), so the downloaded file is low-res and
+ * looks soft when shown at 1× on a HiDPI display. We scale w_/h_ by 2× (both by
+ * the SAME factor so the fill aspect/crop is preserved), capped at
+ * MEDIA_UPGRADE_MAX_DIM. NOTE: stripping the transform does NOT help — the bare
+ * media URL serves a small default variant, so a larger fill is required.
+ */
+export function upgradeMediaUrl(url: string): string {
+  try {
+    const u = new URL(url);
+    if (!u.hostname.endsWith('wixstatic.com')) return url;
+    const wm = u.pathname.match(/\bw_(\d+)/);
+    const hm = u.pathname.match(/\bh_(\d+)/);
+    if (!wm && !hm) return url;
+    const w = wm ? Number(wm[1]) : 0;
+    const h = hm ? Number(hm[1]) : 0;
+    const longest = Math.max(w, h);
+    if (!longest) return url;
+    const scale = Math.min(2, MEDIA_UPGRADE_MAX_DIM / longest);
+    if (scale <= 1) return url; // already at/above the cap — leave it
+    u.pathname = u.pathname
+      .replace(/\bw_(\d+)/, (_m, d: string) => `w_${Math.round(Number(d) * scale)}`)
+      .replace(/\bh_(\d+)/, (_m, d: string) => `h_${Math.round(Number(d) * scale)}`);
+    return u.toString();
+  } catch {
+    return url;
+  }
+}
+
 // Map common image content-types to file extensions. Used when the URL
 // provides no extension (e.g. `/isteam/getty/<numeric-id>`).
 export function extensionFromContentType(contentType: string): string {
@@ -146,7 +186,11 @@ export async function downloadMedia(
 
     mkdirSync(outputDir, { recursive: true });
 
-    const response = await fetchMediaResponse(url);
+    // Fetch a higher-resolution variant when the CDN URL carries a small display
+    // size (e.g. Wix fill transforms), but keep the filename/key derived from the
+    // ORIGINAL url so the source→local rewrite map stays consistent. No-op for
+    // URLs without a known upgrade rule.
+    const response = await fetchMediaResponse(upgradeMediaUrl(url));
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`);
     }
