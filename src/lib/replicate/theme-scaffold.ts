@@ -988,13 +988,17 @@ function buildHeaderPart(args: { themeSlug?: string; chrome?: NonNullable<ThemeC
     ? links.map((link) => buildNavigationLink(link)).join('\n')
     : '<!-- wp:page-list /-->';
 
-  // Header utility-icon cluster (search / account / cart). The source-chrome
-  // extractor intentionally drops these affordances from the PRIMARY nav, but
-  // a faithful storefront header still shows them on the right. `wp:html` is
-  // banned project-wide, so each glyph is shipped as a theme SVG asset
-  // (assets/icon-*.svg) and referenced from a `core/image` link — self-contained
-  // and offline-durable.
-  const icons = buildHeaderIcons({ themeSlug: args.themeSlug });
+  // Header utility-icon cluster (search / account / cart) — ONLY the affordances
+  // the source header actually has (detected in source-chrome). A non-storefront
+  // site (no cart/account/search) gets none, instead of inventing a cluster.
+  // `wp:html` is banned project-wide, so each glyph is a theme SVG asset
+  // referenced from a `core/image` link — self-contained and offline-durable.
+  const icons = args.chrome?.utilities
+    ? buildHeaderIcons({ themeSlug: args.themeSlug, utilities: args.chrome.utilities })
+    : '';
+  // The source header's prominent CTA (e.g. "CALL US"), rendered as a button —
+  // captured separately from the nav, so the replica isn't missing it.
+  const cta = args.chrome?.cta ? buildHeaderCtaButton(args.chrome.cta) : '';
 
   return `<!-- wp:group {"align":"full","layout":{"type":"constrained"},"style":{"spacing":{"padding":{"top":"18px","bottom":"18px","left":"var(--wp--preset--spacing--40)","right":"var(--wp--preset--spacing--40)"}}},"backgroundColor":"${bgSlug}","textColor":"${textSlug}"} -->
 <div class="wp-block-group alignfull ${textClass} ${bgClass} has-text-color has-background" style="padding-top:18px;padding-right:var(--wp--preset--spacing--40);padding-bottom:18px;padding-left:var(--wp--preset--spacing--40)">
@@ -1007,7 +1011,7 @@ ${brand}
 <!-- wp:navigation {"textColor":"${textSlug}","overlayMenu":"mobile","layout":{"type":"flex","justifyContent":"right","orientation":"horizontal"},"style":{"typography":{"fontSize":"14px","fontWeight":"700","textTransform":"uppercase"}}} -->
 ${navigation}
 <!-- /wp:navigation -->
-
+${cta ? `\n${cta}\n` : ''}
 ${icons}
 </div>
 <!-- /wp:group -->
@@ -1043,8 +1047,9 @@ function buildHeaderIconAssets(): ReplicaFile[] {
  * referencing the shipped SVG assets (no `wp:html`). search → /?s= ,
  * account → /account, cart → /cart (Woo-compatible paths). Offline-durable.
  */
-function buildHeaderIcons(args: { themeSlug?: string }): string {
+function buildHeaderIcons(args: { themeSlug?: string; utilities?: { search?: boolean; account?: boolean; cart?: boolean } }): string {
   const slug = args.themeSlug ?? 'replica';
+  const u = args.utilities ?? {};
   const asset = (name: string): string => `/wp-content/themes/${slug}/assets/icon-${name}.svg`;
 
   const link = (name: string, href: string, label: string): string =>
@@ -1052,13 +1057,35 @@ function buildHeaderIcons(args: { themeSlug?: string }): string {
 <figure class="wp-block-image size-full is-resized clone-header-icon"><a href="${href}"><img src="${asset(name)}" alt="${label}" style="width:22px;height:22px"/></a></figure>
 <!-- /wp:image -->`;
 
+  // Only the affordances the source actually has — no inventing a storefront cluster.
+  const parts: string[] = [];
+  if (u.search) parts.push(link('search', '/?s=', 'Search'));
+  if (u.account) parts.push(link('account', '/account', 'Account'));
+  if (u.cart) parts.push(link('cart', '/cart', 'Cart'));
+  if (parts.length === 0) return '';
+
   return `<!-- wp:group {"className":"clone-header-icons","layout":{"type":"flex","flexWrap":"nowrap","verticalAlignment":"center"},"style":{"spacing":{"blockGap":"16px"}}} -->
 <div class="wp-block-group clone-header-icons">
-${link('search', '/?s=', 'Search')}
-${link('account', '/account', 'Account')}
-${link('cart', '/cart', 'Cart')}
+${parts.join('\n')}
 </div>
 <!-- /wp:group -->`;
+}
+
+/**
+ * The source header's CTA as an accent-pill button. A captured href links it;
+ * a hrefless source button (e.g. a Wix onClick "CALL US") renders as a
+ * non-linking button — honest, matching the body CTA convention.
+ */
+function buildHeaderCtaButton(cta: ThemeChromeLink): string {
+  const label = escapeHtml(cta.label);
+  const hrefAttr = cta.href ? ` href="${escapeAttr(cta.href)}"` : '';
+  return `<!-- wp:buttons {"layout":{"type":"flex","verticalAlignment":"center"}} -->
+<div class="wp-block-buttons">
+<!-- wp:button {"backgroundColor":"accent-primary","textColor":"text-inverse","style":{"typography":{"textTransform":"uppercase","fontSize":"14px","fontWeight":"700"}}} -->
+<div class="wp-block-button"><a class="wp-block-button__link has-text-inverse-color has-accent-primary-background-color has-text-color has-background wp-element-button" style="text-transform:uppercase;font-size:14px;font-weight:700"${hrefAttr}>${label}</a></div>
+<!-- /wp:button -->
+</div>
+<!-- /wp:buttons -->`;
 }
 
 function buildGenericHeaderPart(): string {

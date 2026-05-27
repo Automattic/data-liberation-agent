@@ -375,17 +375,33 @@ describe('buildThemeScaffold', () => {
   describe('header utility icons', () => {
     const CHROME = { header: { logoUrl: 'http://x/logo.png', logoAlt: 'L', links: [{ label: 'Shop', href: '/shop', external: false }] } };
 
-    it('renders a search / account / cart icon cluster in the header (core/image, no wp:html)', () => {
-      const files = buildThemeScaffold({ foundation: FOUNDATION_FIXTURE, themeSlug: 'site-replica', sourceChrome: CHROME });
+    it('renders ONLY the utility icons the source header actually has (core/image, no wp:html)', () => {
+      // A storefront with cart + search (but no account affordance) → cart + search only.
+      const chrome = { header: { ...CHROME.header, utilities: { search: true, cart: true } } };
+      const files = buildThemeScaffold({ foundation: FOUNDATION_FIXTURE, themeSlug: 'site-replica', sourceChrome: chrome });
       const header = files.find((f) => f.relativePath === 'parts/header.html')!.content;
       expect(header).toContain('clone-header-icons');
-      // cart links to /cart, account to /account, search to a query
       expect(header).toContain('href="/cart"');
-      expect(header).toContain('href="/account"');
       expect(header).toContain('href="/?s="');
+      expect(header).not.toContain('href="/account"'); // not detected → not emitted
       // referenced as core/image SVG assets, NOT inline wp:html (banned)
       expect(header).toContain('/wp-content/themes/site-replica/assets/icon-cart.svg');
       expect(header).not.toContain('wp:html');
+    });
+
+    it('omits the icon cluster entirely when the source header has no utility affordances', () => {
+      // swiftlumber's case — no cart/account/search, so no invented storefront icons.
+      const files = buildThemeScaffold({ foundation: FOUNDATION_FIXTURE, themeSlug: 'site-replica', sourceChrome: CHROME });
+      const header = files.find((f) => f.relativePath === 'parts/header.html')!.content;
+      expect(header).not.toContain('clone-header-icons');
+    });
+
+    it('renders the source header CTA as a button (captured separately from the nav)', () => {
+      const chrome = { header: { ...CHROME.header, cta: { label: 'CALL US', href: '', external: false } } };
+      const files = buildThemeScaffold({ foundation: FOUNDATION_FIXTURE, themeSlug: 'site-replica', sourceChrome: chrome });
+      const header = files.find((f) => f.relativePath === 'parts/header.html')!.content;
+      expect(header).toContain('wp:button');
+      expect(header).toContain('>CALL US</a>');
     });
 
     it('ships the icon SVGs as theme assets', () => {

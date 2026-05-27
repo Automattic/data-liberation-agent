@@ -18,6 +18,19 @@ export interface ThemeChromeEvidence {
      * Defaults to 'light' when indeterminate (most storefront headers are light).
      */
     tone?: 'light' | 'dark';
+    /**
+     * The header's prominent call-to-action (a button or button-styled link —
+     * e.g. "CALL US", "Talk To Us", "Get Started"), captured separately from the
+     * primary nav links. Rendered as a header button so the replica isn't missing
+     * the source CTA. Absent when the header has none.
+     */
+    cta?: ThemeChromeLink;
+    /**
+     * Which utility affordances the SOURCE header actually shows. The header only
+     * emits the icons that are present here — so a non-storefront site (no
+     * cart/account/search) gets none, instead of inventing them.
+     */
+    utilities?: { search?: boolean; account?: boolean; cart?: boolean };
   };
   footer?: {
     text: string[];
@@ -109,6 +122,8 @@ export function extractThemeChromeFromHtml(html: string, sourceUrl: string): The
       ...logo,
       links: extractPrimaryNavLinks($, $header, sourceUrl, 8),
       tone: detectHeaderTone($header),
+      cta: extractHeaderCta($, $header, sourceUrl),
+      utilities: detectHeaderUtilities($header),
     };
   }
   if ($footer.length > 0) {
@@ -262,6 +277,68 @@ function extractPrimaryNavLinks(
   }
 
   return finalizeLinks($, anchorEls, sourceUrl, limit, true);
+}
+
+/** Labels that are NOT a content CTA (controls / utility affordances). */
+const NON_CTA_LABEL = /\b(menu|close|open|toggle|hamburger|skip|search|cart|account|log\s?in|sign\s?in|next|previous|prev|submit|play|pause|expand|collapse|back|back to site)\b/i;
+
+/**
+ * Capture the header's prominent CTA — a `<button>` or button-styled link with a
+ * real label (e.g. "CALL US"), distinct from the nav links. The first qualifying
+ * one wins (CTAs sit at the header's end). tel:/mailto: hrefs are kept verbatim;
+ * other hrefs are absolutized; a hrefless button yields an empty href (the
+ * renderer emits a non-linking button). Site-agnostic.
+ */
+function extractHeaderCta(
+  $: cheerio.CheerioAPI,
+  $header: cheerio.Cheerio<AnyNode>,
+  sourceUrl: string,
+): ThemeChromeLink | undefined {
+  const els = $header
+    .find('button, [role="button"], a.button, a.btn, a[class*="cta" i], a[class*="button" i]')
+    .toArray();
+  const origin = safeUrl(sourceUrl)?.origin;
+  for (const el of els) {
+    const $el = $(el);
+    // Skip controls inside a mobile drawer / dialog overlay — the desktop-visible
+    // CTA lives in the open header bar, not the hamburger menu (which also holds
+    // "Back to site"/duplicate CTAs). This keeps the captured CTA the one the user
+    // actually sees in the nav.
+    if ($el.closest('[role="dialog"],[aria-hidden="true"],[class*="hamburger" i],[class*="drawer" i],[class*="overlay" i]').length > 0) continue;
+    const label = normalizeText($el.text());
+    const lower = label.toLowerCase();
+    if (label.length < 2 || label.length > 32) continue;
+    if (NON_CTA_LABEL.test(lower) || IGNORE_LINK_LABELS.has(lower) || SOCIAL_LINK_LABELS.has(lower)) continue;
+    const rawHref = $el.attr('href') ?? $el.find('a[href]').first().attr('href') ?? '';
+    let href = '';
+    if (rawHref.startsWith('tel:') || rawHref.startsWith('mailto:')) {
+      href = rawHref;
+    } else if (rawHref && !rawHref.startsWith('#')) {
+      const parsed = safeUrl(absolutizeUrl(rawHref, sourceUrl));
+      if (parsed) href = origin && parsed.origin === origin ? `${parsed.pathname}${parsed.search}` || '/' : parsed.toString();
+    }
+    return { label, href, external: false };
+  }
+  return undefined;
+}
+
+/**
+ * Detect which utility affordances the source header actually has (search /
+ * account / cart) from strong signals — an input/aria-label/link href — so the
+ * replica only emits the icons that exist instead of inventing a storefront
+ * cluster. Returns undefined when none (a non-storefront header gets no icons).
+ */
+function detectHeaderUtilities($header: cheerio.Cheerio<AnyNode>): { search?: boolean; account?: boolean; cart?: boolean } | undefined {
+  const has = (sel: string): boolean => $header.find(sel).length > 0;
+  const search = has('input[type="search"]') || has('[aria-label*="search" i]') || has('a[href*="?s=" i]') || has('a[href*="/search" i]');
+  const account =
+    has('a[href*="/account" i]') || has('a[href*="login" i]') || has('a[href*="signin" i]') || has('a[href*="customer_authentication" i]') || has('[aria-label*="account" i]') || has('[aria-label*="log in" i]');
+  const cart = has('a[href*="/cart" i]') || has('[aria-label*="cart" i]') || has('[data-hook*="cart" i]') || has('[data-testid*="cart" i]');
+  const out: { search?: boolean; account?: boolean; cart?: boolean } = {};
+  if (search) out.search = true;
+  if (account) out.account = true;
+  if (cart) out.cart = true;
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 /**

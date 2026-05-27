@@ -87,6 +87,38 @@ describe('extractThemeChromeFromHtml', () => {
     expect(chrome.header?.tone).toBe('dark');
   });
 
+  it('captures the visible-bar CTA (not a drawer control) and no utilities when the source has none', () => {
+    // swiftlumber shape: nav links + a "CALL US" button in the open bar, plus a
+    // mobile hamburger dialog holding "Back to site" + a duplicate CTA.
+    const html = `
+      <header>
+        <nav><ul>
+          <li><a href="/">HOME</a></li>
+          <li><a href="/products">PRODUCTS</a></li>
+        </ul></nav>
+        <button>CALL US</button>
+        <div role="dialog" class="hamburgeroverlay">
+          <button>Back to site</button>
+          <a class="button" href="/talk-to-us">TALK TO US</a>
+          <button>Close</button>
+        </div>
+      </header>`;
+    const chrome = extractThemeChromeFromHtml(html, 'https://www.swiftlumber.com/');
+    expect(chrome.header?.cta).toEqual({ label: 'CALL US', href: '', external: false });
+    expect(chrome.header?.utilities).toBeUndefined(); // no cart/account/search affordances
+  });
+
+  it('detects only the utility affordances present (cart + search, not account)', () => {
+    const html = `
+      <header>
+        <nav><ul><li><a href="/">Home</a></li></ul></nav>
+        <a href="/cart" aria-label="Cart">cart</a>
+        <input type="search" />
+      </header>`;
+    const chrome = extractThemeChromeFromHtml(html, 'https://shop.example.com/');
+    expect(chrome.header?.utilities).toEqual({ search: true, cart: true });
+  });
+
   it('extracts footer text and links from the source footer', () => {
     const html = `
       <footer class="wixui-footer">
