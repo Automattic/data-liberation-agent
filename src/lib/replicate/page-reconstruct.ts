@@ -725,6 +725,15 @@ function renderTextBand(s: SectionSpec, ctx: RenderCtx): BlockOut {
   if (extra.length >= 3) {
     const g = galleryBlock(extra, out);
     if (g) parts.push(g);
+  } else {
+    // 1–2 additional REAL-PHOTO images: render each as its own image block rather
+    // than dropping it — an extractor often MERGES consecutive image rows into one
+    // section, so a "2nd" image is real content (a stacked media row). Use the
+    // lead-photo floor (not the gallery ≥90) so a decorative glyph/badge that
+    // pickLeadImage already rejected isn't sprouted here.
+    for (const im of extra.filter((im) => Math.min(im.width || 0, im.height || 0) >= MIN_LEAD_IMAGE_PX)) {
+      parts.push(imageBlock(im, out, `${s.interactionModel}#${s.sectionIndex}.extra`, { align: centerOf(s) ? 'center' : null, rounded: true }));
+    }
   }
   out.markup = wrapSection(parts.filter(Boolean), { constrained: '760px', center: centerOf(s), raised: isTintedSection(s), ...sectionPad(s) });
   return out;
@@ -788,6 +797,14 @@ function renderMediaText(s: SectionSpec, flip: boolean, ctx: RenderCtx): BlockOu
   if (extra.length >= 3) {
     const g = galleryBlock(extra, out);
     if (g) blocks.push(g);
+  } else {
+    // 1–2 additional REAL-PHOTO images: a media-text section with a 2nd photo is
+    // usually two stacked media rows the extractor merged — render each extra as
+    // its own image block (centered, below the 2-up) so no captured photo drops.
+    // Lead-photo floor (not the gallery ≥90) keeps a decorative glyph out.
+    for (const im of extra.filter((im) => Math.min(im.width || 0, im.height || 0) >= MIN_LEAD_IMAGE_PX)) {
+      blocks.push(imageBlock(im, out, `media-text#${s.sectionIndex}.extra`, { align: 'center', rounded: true }));
+    }
   }
   out.markup = wrapSection(blocks, { wide: '1100px', raised: isTintedSection(s), ...sectionPad(s) });
   return out;

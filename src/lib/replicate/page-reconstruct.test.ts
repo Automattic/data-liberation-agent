@@ -220,6 +220,18 @@ describe('reconstructPagePattern', () => {
     expect(r.php).not.toContain('wp:gallery');
   });
 
+  it('renders 1–2 extra content images individually instead of dropping them', () => {
+    // A merged media-text section with a 2nd photo: both images must appear (no
+    // gallery, but no dropped content either). Mirrors the about-us case where the
+    // extractor merged two stacked image-right rows into one 2-image section.
+    const s = section({ interactionModel: 'static', headings: ['Journey'], bodyText: ['Body.'], images: [img(`${WP}first.png`), img(`${WP}second.png`)] });
+    s.mediaLayout = 'image-right';
+    const r = reconstructPagePattern([s], opts);
+    expect(r.php).not.toContain('wp:gallery'); // 1 extra → not a gallery
+    expect(r.php).toContain('first.png'); // lead (media column)
+    expect(r.php).toContain('second.png'); // extra — rendered, NOT dropped
+  });
+
   it('renders a captured side-by-side mediaLayout as a 2-column media-text with the correct side', () => {
     // image-left: the image column precedes the text column.
     const left = section({ interactionModel: 'static', headings: ['Headline'], bodyText: ['Body.'], images: [img(`${WP}photo.png`, 'p')] });

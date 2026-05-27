@@ -33,7 +33,11 @@ import type { SectionSpec } from './section-extract.js';
  * A file written under an older schema is treated as a cache MISS (→ live
  * re-extract + rewrite), so a stale cache never silently degrades fidelity.
  */
-export const SECTION_SPECS_SCHEMA = 1;
+// v3: heading capture no longer truncates (full verbatim text, at the source
+// heading size) and bodyText drops any paragraph that merely repeats a heading
+// (Wix responsive <h3>+<p> duplicate). Capture-semantics change → invalidate
+// older caches and re-extract.
+export const SECTION_SPECS_SCHEMA = 3;
 
 interface SectionSpecsFile {
   schema: number;

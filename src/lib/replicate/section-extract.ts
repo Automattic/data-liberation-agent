@@ -1448,11 +1448,18 @@ export async function extractFull(
           }
           return { family, lh };
         };
+        // Capture the FULL heading text — NEVER truncate. A clipped heading is
+        // exactly the "chopped off" content loss the user saw; and the source
+        // styles some long headings as real headings (e.g. a 188-char story
+        // headline at 34px), so we keep them verbatim at their captured size
+        // rather than slicing or demoting them. A duplicate copy that also appears
+        // in a <p> (Wix responsive desktop/mobile variants) is deduped out of
+        // bodyText below so the heading renders ONCE, as a heading.
         const headingData = headingEls
           .map((h) => {
             const t = typo(h);
             return {
-              text: (h.textContent || '').trim().slice(0, 160),
+              text: (h.textContent || '').replace(/\s+/g, ' ').trim(),
               size: Math.round(parseFloat(getComputedStyle(h).fontSize) || 0),
               family: t.family,
               lh: t.lh,
@@ -1464,6 +1471,9 @@ export async function extractFull(
         const headingSizes = headingData.map((h) => h.size);
         const headingFamilies = headingData.map((h) => h.family);
         const headingLineHeights = headingData.map((h) => h.lh);
+        // Heading texts — bodyText skips a paragraph that merely repeats a heading
+        // so a heading isn't ALSO rendered as a duplicate paragraph.
+        const headingTextSet = new Set(headings);
 
         const paragraphEls = descendants.filter((d) => {
           const tag = d.tagName.toLowerCase();
@@ -1496,6 +1506,10 @@ export async function extractFull(
           const t = (p.textContent || '').replace(/\s+/g, ' ').trim();
           if (t.length < 5 || t.length > BODY_TEXT_MAX) continue;
           if (bodyTextSeen.has(t)) continue;
+          // Skip a paragraph that merely repeats a heading (Wix renders the same
+          // copy as both an <h3> heading and a <p> responsive variant) — the
+          // heading already carries it, so this prevents a duplicate render.
+          if (headingTextSet.has(t)) continue;
           bodyTextSeen.add(t);
           bodyText.push(t);
           // Computed body typography (size px, family, line-height ratio), parallel
