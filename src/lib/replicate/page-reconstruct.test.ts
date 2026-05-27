@@ -278,6 +278,25 @@ describe('reconstructPagePattern', () => {
     expect(r.php).toContain('line-height:1.4');
   });
 
+  it('carries source image width + aspect (not blown up to the container, not forced 4:3)', () => {
+    // A standalone lead photo keeps its source rendered width, capped responsively.
+    const big = section({
+      headings: ['Photo'],
+      images: [{ url: `${WP}kiln.png`, sourceUrl: `${WP}kiln.png`, alt: '', kind: 'img', width: 532, height: 472 }],
+    });
+    const r = reconstructPagePattern([big], opts);
+    expect(r.php).toContain('width:532px');
+    expect(r.php).toContain('max-width:100%');
+    expect(r.php).toContain('is-resized');
+    // A row of SQUARE thumbnails → a gallery whose items carry the source square
+    // aspect + width, not the theme's default 4:3 / 220–380px cell.
+    const sq = (n: number) => ({ url: `${WP}s${n}.png`, sourceUrl: `${WP}s${n}.png`, alt: '', kind: 'img' as const, width: 149, height: 149 });
+    const g = reconstructPagePattern([section({ headings: ['Samples'], images: [sq(1), sq(2), sq(3)] })], opts);
+    expect(g.php).toContain('wp:gallery');
+    expect(g.php).toContain('aspect-ratio:149 / 149');
+    expect(g.php).toContain('flex:0 0 149px');
+  });
+
   it('emits a PHP doc-comment header with the slug and title', () => {
     const r = reconstructPagePattern([section({ headings: ['Hello world'] })], opts);
     expect(r.php).toContain('Title: Page — X');

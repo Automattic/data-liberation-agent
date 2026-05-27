@@ -383,11 +383,21 @@ function imageBlock(
     );
   }
   out.assets.push(r.url);
+  // Carry the source's RENDERED width so the image isn't blown up to the full
+  // container (a 532px photo rendered container-wide). max-width:100% keeps it
+  // responsive AND lets it fill a narrower column (media-text) — capped there,
+  // intrinsic when standalone. height:auto preserves aspect.
+  const w = img && img.width && img.height ? Math.round(img.width) : 0;
+  const widthAttr = w ? `,"width":"${w}px"` : '';
+  const resizedClass = w ? ' is-resized' : '';
+  const dimStyle = w ? `width:${w}px;max-width:100%;height:auto;` : '';
+  const borderStyle = opts.rounded ? 'border-radius:12px;' : '';
+  const imgStyle = dimStyle || borderStyle ? ` style="${dimStyle}${borderStyle}"` : '';
   return (
-    `<!-- wp:image {"sizeSlug":"large"${alignAttr}${roundStyle}} -->\n` +
-    `<figure class="wp-block-image${alignClass} size-large${roundClass}"><img src="${escapeHtml(
+    `<!-- wp:image {"sizeSlug":"large"${widthAttr}${alignAttr}${roundStyle}} -->\n` +
+    `<figure class="wp-block-image${alignClass} size-large${roundClass}${resizedClass}"><img src="${escapeHtml(
       r.url,
-    )}" alt="${escapeHtml(r.alt)}"${opts.rounded ? ' style="border-radius:12px"' : ''}/></figure>\n` +
+    )}" alt="${escapeHtml(r.alt)}"${imgStyle}/></figure>\n` +
     `<!-- /wp:image -->`
   );
 }
@@ -816,9 +826,19 @@ function galleryBlock(images: SectionSpecImage[], out: BlockOut): string {
   const cols = Math.min(4, usable.length);
   const figures = usable.map((im) => {
     out.assets.push(im.url);
+    // Carry the source's rendered item width + aspect ratio so a gallery isn't
+    // forced to the theme's default 220–380px / 4:3 cell (which both resized and
+    // distorted e.g. a row of ~149px SQUARE samples into 352×264). The inline
+    // flex-basis + aspect-ratio override the scroller CSS per item; object-fit
+    // then crops nothing because the box matches the image aspect. Width is
+    // clamped to a sane scroller range; max-width:100% keeps it responsive.
+    const w = im.width && im.height ? Math.max(120, Math.min(560, Math.round(im.width))) : 0;
+    const ar = im.width && im.height ? `${Math.round(im.width)} / ${Math.round(im.height)}` : '';
+    const figStyle = w ? ` style="flex:0 0 ${w}px;max-width:100%"` : '';
+    const imgStyle = ar ? ` style="aspect-ratio:${ar}"` : '';
     return (
       `<!-- wp:image {"sizeSlug":"large","linkDestination":"none"} -->\n` +
-      `<figure class="wp-block-image size-large"><img src="${escapeHtml(im.url)}" alt="${escapeHtml(im.alt || '')}"/></figure>\n` +
+      `<figure class="wp-block-image size-large"${figStyle}><img src="${escapeHtml(im.url)}" alt="${escapeHtml(im.alt || '')}"${imgStyle}/></figure>\n` +
       `<!-- /wp:image -->`
     );
   });
