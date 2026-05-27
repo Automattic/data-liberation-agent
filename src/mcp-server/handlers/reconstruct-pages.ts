@@ -24,6 +24,7 @@ import { extractFullFromUrl, rewriteThroughMediaMap } from '../../lib/replicate/
 import type { SectionSpec } from '../../lib/replicate/section-extract.js';
 import { buildPageReconstruction } from '../../lib/replicate/reconstruct-pages.js';
 import { installMediaForUrl } from '../../lib/streaming/media-install.js';
+import { BlockFixerClient } from '../../lib/streaming/block-fixer-client.js';
 import { downloadMedia } from '../../lib/extraction/media.js';
 import { MediaStubStore } from '../../lib/extraction/media-stubs.js';
 import { deriveInstallThemeSlug } from './install-theme.js';
@@ -73,6 +74,43 @@ async function forcePatternRescan(studioSitePath: string, themeSlug: string): Pr
         /* retry */
       }
     }
+  }
+}
+
+/**
+ * Write the reconstructed block markup into the WP page's post_content, so it's a
+ * real, editable block page (not a Classic block wrapping the carried HTML). The
+ * page renders via the template's wp:post-content; the theme keeps the pattern as
+ * a library entry. Resolves the post: the home page is page_on_front (its WP slug
+ * may differ from the reconstruction's "home"); others match by slug. Best-effort
+ * — a slug that resolves to no page is reported, not fatal.
+ */
+async function updatePagePostContent(
+  studioSitePath: string,
+  slug: string,
+  isHome: boolean,
+  content: string,
+): Promise<boolean> {
+  const wp = (extra: string[]) =>
+    execFileAsync('studio', ['wp', '--path', studioSitePath, ...extra], { timeout: 120_000, maxBuffer: 50 * 1024 * 1024 });
+  let id = '';
+  try {
+    if (isHome) {
+      const { stdout } = await wp(['option', 'get', 'page_on_front']);
+      id = stdout.trim();
+    }
+    if (!id || id === '0') {
+      const { stdout } = await wp(['post', 'list', '--post_type=page', `--name=${slug}`, '--field=ID', '--format=ids']);
+      id = stdout.trim().split(/\s+/)[0] || '';
+    }
+    if (!id) return false;
+    // Pass content as a single argv value (execFile = no shell, so no escaping /
+    // injection concern); page block markup is well under ARG_MAX. The wp-cli
+    // field is `post_content` (the bare `--content` flag is silently ignored).
+    await wp(['post', 'update', id, `--post_content=${content}`]);
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -207,6 +245,14 @@ export const reconstructPagesHandler: Handler = async (args, ctx) => {
   // 3. Reconstruct + gate + write each page.
   const report: Array<Record<string, unknown>> = [];
   const outThemeDir = join(resolve(outputDir), 'theme');
+  // Block fixer: canonicalize the reconstructed markup through @wordpress/blocks
+  // (the actual block save() functions) before writing it to post_content, so the
+  // blocks validate cleanly in the editor (no "unexpected content"/recovery). The
+  // client passes the markup through unchanged if the server can't start.
+  const blockFixer = new BlockFixerClient();
+  await blockFixer.start().catch(() => {
+    /* best-effort — fix() passes through if the server didn't start */
+  });
   for (const p of pages) {
     const specs = specsByPage.get(p.slug);
     if (!specs) {
@@ -235,6 +281,12 @@ export const reconstructPagesHandler: Handler = async (args, ctx) => {
         writeFileSync(full, f.content);
       }
     }
+    // Canonicalize the block markup so it validates in the editor, then make the
+    // WP page a real editable block page: write it into post_content (rendered via
+    // the template's wp:post-content).
+    const fixResult = (await blockFixer.fix([built.postContent]))[0];
+    const finalContent = fixResult?.html ?? built.postContent;
+    const postUpdated = await updatePagePostContent(studioSitePath, p.slug, p.isHome ?? false, finalContent);
     report.push({
       slug: p.slug,
       ok: true,
@@ -243,8 +295,14 @@ export const reconstructPagesHandler: Handler = async (args, ctx) => {
       iconAssets: built.iconAssetCount,
       assets: built.expectedAssets.length,
       provenanceFlags: built.provenanceFlags,
+      postContentUpdated: postUpdated,
+      blocksFixed: fixResult?.changed ?? false,
     });
   }
+
+  await blockFixer.stop().catch(() => {
+    /* best-effort teardown */
+  });
 
   // 4. Flush caches so the freshly-written patterns register immediately.
   for (const wpArgs of themeCacheFlushCommands()) {

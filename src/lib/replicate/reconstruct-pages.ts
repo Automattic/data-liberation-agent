@@ -31,12 +31,26 @@ export interface PageReconstructionResult {
   patternSlug: string;
   /** pattern php + per-page template(s) + icon SVG assets, theme-root-relative. */
   files: ReconstructedFile[];
+  /** The page's post_content: the reconstructed block markup with literal
+   *  theme-asset URLs (no PHP) — written into the WP post so it's a real, editable
+   *  block page (not a Classic block wrapping carried HTML). */
+  postContent: string;
   /** validate_artifacts report for the pattern — caller MUST NOT install when !ok. */
   gate: ValidationReport;
   expectedAssets: string[];
   provenanceFlags: string[];
   sectionsRendered: number;
   iconAssetCount: number;
+}
+
+/** Swap the pattern's `get_theme_file_uri()` PHP asset refs for literal
+ *  theme-relative URLs, so the block markup is valid in post_content (which is
+ *  NOT PHP-evaluated — the PHP would otherwise render as literal text). */
+function toPostContent(body: string, themeSlug: string): string {
+  return body.replace(
+    /<\?php echo esc_url\(get_theme_file_uri\('([^']+)'\)\); \?>/g,
+    (_m, rel: string) => `/wp-content/themes/${themeSlug}/${rel}`,
+  );
 }
 
 // WP slug guard for filenames + block-attribute pattern slugs (mirrors the
@@ -51,7 +65,7 @@ const SAFE_SLUG = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
  * header. The header distinction lives HERE, in the template — not in a global
  * `.home:has(cover)` CSS override.
  */
-function buildPageTemplate(patternSlug: string, overlayHeader = false): string {
+function buildPageTemplate(overlayHeader = false): string {
   const headerPart = overlayHeader
     ? `<!-- wp:template-part {"slug":"header","tagName":"header","className":"site-header-overlay"} /-->`
     : `<!-- wp:template-part {"slug":"header","tagName":"header"} /-->`;
@@ -63,10 +77,13 @@ function buildPageTemplate(patternSlug: string, overlayHeader = false): string {
 <main class="wp-block-group" style="margin-top:0px;padding-top:0px">`
     : `<!-- wp:group {"tagName":"main","layout":{"type":"constrained"}} -->
 <main class="wp-block-group">`;
+  // Render the PAGE's post_content (which the reconstruction writes as block
+  // markup) — so the page is a real, editable block page. The theme still ships
+  // the reconstructed pattern as a library entry.
   return `${headerPart}
 
 ${mainGroup}
-<!-- wp:pattern {"slug":"${patternSlug}"} /-->
+<!-- wp:post-content {"layout":{"type":"constrained"}} /-->
 </main>
 <!-- /wp:group -->
 
@@ -121,7 +138,9 @@ export function buildPageReconstruction(
   });
 
   // A cover-hero page wires the transparent overlay header; others the solid one.
-  const template = buildPageTemplate(patternSlug, r.heroIsCover);
+  // The template renders the PAGE's post_content (so the page is a real editable
+  // block page); the theme keeps the pattern as a library entry.
+  const template = buildPageTemplate(r.heroIsCover);
   const files: ReconstructedFile[] = [
     { path: `patterns/page-${opts.slug}.php`, content: r.php },
     { path: `templates/page-${opts.slug}.html`, content: template },
@@ -135,6 +154,7 @@ export function buildPageReconstruction(
     slug: opts.slug,
     patternSlug,
     files,
+    postContent: toPostContent(r.body, opts.themeSlug),
     gate,
     expectedAssets: r.expectedAssets,
     provenanceFlags: r.provenanceFlags,

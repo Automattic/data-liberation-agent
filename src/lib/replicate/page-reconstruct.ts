@@ -71,6 +71,11 @@ export interface ReconstructOptions {
 export interface ReconstructResult {
   /** The pattern file body (PHP doc-comment header + block markup). */
   php: string;
+  /** Just the block markup (no PHP doc-comment header) — the source for a page's
+   *  post_content so the page is a real, editable block page. Asset refs still use
+   *  the get_theme_file_uri PHP form here; the caller swaps them for literal theme
+   *  URLs (post_content is not PHP-evaluated). */
+  body: string;
   /** Verbatim headings + button labels + review quotes (provenance: headings). */
   expectedText: string[];
   /** Verbatim body prose (provenance: body <p> corpus). */
@@ -749,8 +754,11 @@ function renderCover(s: SectionSpec, ctx: RenderCtx): BlockOut {
   out.markup =
     `<!-- wp:cover {"url":"${url}","dimRatio":40,"overlayColor":"surface-inverse","isUserOverlayColor":true,"minHeight":${minH},"minHeightUnit":"px","align":"full","style":{"spacing":{"margin":{"top":"0px"}}},"layout":{"type":"constrained"}} -->\n` +
     `<div class="wp-block-cover alignfull" style="margin-top:0px;min-height:${minH}px">` +
-    `<span aria-hidden="true" class="wp-block-cover__background has-surface-inverse-background-color has-background-dim-40 has-background-dim"></span>` +
-    `<img class="wp-block-cover__image-background" src="${url}" alt="${escapeHtml(lead.alt || '')}"/>\n` +
+    // Canonical core/cover order: the background <img> precedes the dim <span>
+    // (WP's save() validator rejects span-before-img). Keeps the pattern valid in
+    // the editor, matching what the block fixer normalizes post_content to.
+    `<img class="wp-block-cover__image-background" src="${url}" alt="${escapeHtml(lead.alt || '')}" data-object-fit="cover"/>` +
+    `<span aria-hidden="true" class="wp-block-cover__background has-surface-inverse-background-color has-background-dim-40 has-background-dim"></span>\n` +
     `<div class="wp-block-cover__inner-container">\n${innerMarkup}\n</div>\n` +
     `</div>\n<!-- /wp:cover -->`;
   return out;
@@ -1368,8 +1376,10 @@ export function reconstructPagePattern(
   // photo) vs the solid header — the chrome distinction lives in the template.
   const heroIsCover = sectionMarkup.length > 0 && /^\s*<!-- wp:cover\b/.test(sectionMarkup[0]);
 
+  const bodyMarkup = sectionMarkup.join('\n\n') + '\n';
   return {
-    php: header + sectionMarkup.join('\n\n') + '\n',
+    php: header + bodyMarkup,
+    body: bodyMarkup,
     expectedText: dedupe(expectedText),
     bodyText: dedupe(bodyText),
     expectedAssets: dedupe(assets),

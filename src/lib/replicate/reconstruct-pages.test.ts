@@ -38,14 +38,20 @@ describe('buildPageReconstruction', () => {
     const paths = r.files.map((f) => f.path);
     expect(paths).toContain('patterns/page-about-us.php');
     expect(paths).toContain('templates/page-about-us.html');
-    // The template wires the pattern between header/footer parts.
+    // The template renders the page's post_content (real editable block page),
+    // between header/footer parts — NOT a wp:pattern ref.
     const tpl = r.files.find((f) => f.path === 'templates/page-about-us.html')!.content;
-    expect(tpl).toContain('"slug":"demo-replica/page-about-us"');
+    expect(tpl).toContain('wp:post-content');
+    expect(tpl).not.toContain('wp:pattern');
     expect(tpl).toContain('template-part {"slug":"header"');
     expect(tpl).toContain('template-part {"slug":"footer"');
-    // Pattern carries the verbatim copy.
+    // Pattern (theme library) carries the verbatim copy.
     const php = r.files.find((f) => f.path === 'patterns/page-about-us.php')!.content;
     expect(php).toContain('We sell lumber.');
+    // post_content is the block markup WITHOUT the PHP doc-comment header, for the WP post.
+    expect(r.postContent).toContain('We sell lumber.');
+    expect(r.postContent).not.toContain('<?php'); // no PHP in post_content
+    expect(r.postContent).not.toContain('Slug: demo-replica'); // no pattern header
   });
 
   it('emits front-page.html for the home page', () => {
