@@ -258,6 +258,26 @@ describe('reconstructPagePattern', () => {
     expect(r.php).toContain('shap.png');
   });
 
+  it('maps per-heading font-families to display vs body and reproduces line-height', () => {
+    const s = section({ headings: ['Serif Headline', 'A SANS EYEBROW'] }) as SectionSpec;
+    s.headingFamilies = ['libre baskerville', 'wfont_5499e3_8190210ff07446afa535fc100a057226'];
+    s.headingLineHeights = [1.4, 1.4];
+    const r = reconstructPagePattern([s], {
+      patternSlug: 'demo-replica/page-x',
+      title: 'X',
+      fontFamilies: [
+        { slug: 'display', family: 'libre baskerville, serif' },
+        { slug: 'body', family: 'Inter, sans-serif' },
+        { slug: 'wf-8190210ff07446afa535fc100', family: 'wf_8190210ff07446afa535fc100, sans-serif' },
+      ],
+    });
+    // The serif headline → display; the sans eyebrow (a Wix handle WP won't render
+    // reliably) → the body face by elimination. Line-height transferred.
+    expect(r.php).toMatch(/has-display-font-family[^>]*>Serif Headline</);
+    expect(r.php).toMatch(/has-body-font-family[^>]*>A SANS EYEBROW</);
+    expect(r.php).toContain('line-height:1.4');
+  });
+
   it('emits a PHP doc-comment header with the slug and title', () => {
     const r = reconstructPagePattern([section({ headings: ['Hello world'] })], opts);
     expect(r.php).toContain('Title: Page — X');

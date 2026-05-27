@@ -47,6 +47,7 @@ describe('buildThemeScaffold', () => {
     const files = buildThemeScaffold({ foundation: FOUNDATION_FIXTURE, themeSlug: 'getsnooz-com-replica' });
     const paths = files.map((f) => f.relativePath).sort();
     expect(paths).toEqual([
+      'assets/gallery-scroller.js',
       'assets/icon-account.svg',
       'assets/icon-cart.svg',
       'assets/icon-search.svg',

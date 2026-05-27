@@ -58,6 +58,14 @@ export interface ReconstructOptions {
    * plain columns rather than styled cards.
    */
   paletteTokens?: PaletteToken[];
+  /**
+   * Registered theme fontFamily tokens ({slug, family}) from the theme.json. Used
+   * to map each captured element's computed font-family to the nearest registered
+   * token, so a source that mixes families (serif headline + sans eyebrow, or a
+   * serif body on a sans-default theme) is reproduced per-element. When absent,
+   * headings use the display family and body uses the theme body family.
+   */
+  fontFamilies?: FontFamilyToken[];
 }
 
 export interface ReconstructResult {
@@ -296,6 +304,8 @@ interface RenderCtx {
   iconCounter: number;
   /** Theme palette tokens for mapping captured card backgrounds → token slugs. */
   paletteTokens: PaletteToken[];
+  /** Theme fontFamily tokens for mapping captured cell families → token slugs. */
+  fontFamilies: FontFamilyToken[];
 }
 
 /**
@@ -433,10 +443,89 @@ function buttonJustify(s: SectionSpec): 'left' | 'center' {
   return centerOf(s) ? 'center' : 'left';
 }
 
+// Build a block typography style (attr JSON fragment + inline style) from a
+// computed font-size clamp + line-height ratio. Both are gate-safe (px/clamp/
+// unitless number — no hex, no URL). Line-height is bounded to a sane range so a
+// mismeasured value can't wreck leading.
+function typographyStyle(fontCss: string, lineHeight?: number): { attr: string; inline: string } {
+  const attrParts: string[] = [];
+  const inlineParts: string[] = [];
+  if (fontCss) {
+    attrParts.push(`"fontSize":"${fontCss}"`);
+    inlineParts.push(`font-size:${fontCss}`);
+  }
+  if (typeof lineHeight === 'number' && lineHeight >= 0.8 && lineHeight <= 2.4) {
+    attrParts.push(`"lineHeight":"${lineHeight}"`);
+    inlineParts.push(`line-height:${lineHeight}`);
+  }
+  return {
+    attr: attrParts.length ? `"style":{"typography":{${attrParts.join(',')}}},` : '',
+    inline: inlineParts.length ? ` style="${inlineParts.join(';')}"` : '',
+  };
+}
+
+/** Registered theme fontFamily token ({slug, family}); used to map a captured
+ *  computed font-family to the nearest registered token (the gate wants a token,
+ *  not a raw family, and the file must be self-hosted). */
+export interface FontFamilyToken {
+  slug: string;
+  family: string;
+}
+function familyHash(s: string): string | null {
+  const m = s.match(/[0-9a-f]{10,}/i);
+  return m ? m[0].toLowerCase() : null;
+}
+/** Does a computed font-family (first token, lowercased) reference this token? Exact
+ *  name match, Wix obfuscated-handle hash match (wfont_5499e3_<hash> vs wf_<hash>,
+ *  matched when one hash contains the other), or ≥4-char substring overlap. */
+function familyMatches(c: string, t: FontFamilyToken): boolean {
+  const first = (t.family || '').split(',')[0].replace(/["']/g, '').trim().toLowerCase();
+  const slug = (t.slug || '').toLowerCase();
+  if (first && first === c) return true;
+  const ch = familyHash(c);
+  if (ch) {
+    const th = familyHash(t.family) || familyHash(slug);
+    if (th && (th.includes(ch) || ch.includes(th))) return true;
+  }
+  if (first && first.length >= 4 && (c.includes(first) || first.includes(c))) return true;
+  return false;
+}
+/**
+ * Map a captured computed font-family to a theme fontFamily token SLUG. Only the
+ * theme's two primary faces render reliably — `display` (the captured heading
+ * face) and `body` (the body face/substitute); the many extra captured Wix
+ * handles often carry broken fontFace (a `file.woff2` stub) that WP drops, so
+ * mapping to them would render nothing. So: a family that IS the display face →
+ * `display`; anything else → `body` (the other primary face). This reproduces a
+ * source that mixes faces (a sans eyebrow over a serif headline, or a serif body
+ * on a sans-default theme) using only faces that actually render. Site-agnostic.
+ */
+function nearestFamily(computed: string | undefined, tokens: FontFamilyToken[]): string | null {
+  if (!computed || tokens.length === 0) return null;
+  const c = computed.replace(/["']/g, '').trim().toLowerCase();
+  if (!c || c === 'inherit' || c === 'sans-serif' || c === 'serif') return null;
+  const display = tokens.find((t) => t.slug === 'display');
+  const body = tokens.find((t) => t.slug === 'body');
+  if (display && familyMatches(c, display)) return 'display';
+  if (body && familyMatches(c, body)) return 'body';
+  // Matches neither primary face by name (a Wix handle whose own face WP dropped):
+  // classify by elimination — not the display face → the body face.
+  if (body) return 'body';
+  return null;
+}
+
 function headingBlock(
   text: string,
   out: BlockOut,
-  opts: { level?: number; center?: boolean; muted?: boolean; inverse?: boolean; sizePx?: number } = {},
+  opts: {
+    level?: number;
+    center?: boolean;
+    muted?: boolean;
+    inverse?: boolean;
+    sizePx?: number;
+    fontFamily?: string | null;
+    lineHeight?: number;
+  } = {},
 ): string {
   const t = normalizeCopy(text);
   if (!t) return '';
@@ -445,15 +534,17 @@ function headingBlock(
   const centerAttr = opts.center ? '"textAlign":"center",' : '';
   const centerClass = opts.center ? ' has-text-align-center' : '';
   const colorSlug = opts.inverse ? 'text-inverse' : opts.muted ? 'text-muted' : 'text-default';
-  // Reproduce the source's heading size (responsive clamp) when captured, so an
-  // eyebrow label and a headline keep their real sizes instead of the generic
-  // level scale (which inverts them).
+  // Reproduce the source's heading size (responsive clamp) + line-height when
+  // captured, so an eyebrow label and a headline keep their real sizes instead of
+  // the generic level scale (which inverts them).
   const fontCss = responsiveFontSize(opts.sizePx);
-  const styleAttr = fontCss ? `"style":{"typography":{"fontSize":"${fontCss}"}},` : '';
-  const styleInline = fontCss ? ` style="font-size:${fontCss}"` : '';
+  const ts = typographyStyle(fontCss, opts.lineHeight);
+  // Per-heading family when the source mixes families (a sans eyebrow over a serif
+  // headline); falls back to the heading display family.
+  const familySlug = opts.fontFamily || 'display';
   return (
-    `<!-- wp:heading {${centerAttr}${styleAttr}"level":${level},"fontFamily":"display","textColor":"${colorSlug}"} -->\n` +
-    `<h${level} class="wp-block-heading${centerClass} has-${colorSlug}-color has-text-color has-display-font-family"${styleInline}>${escapeHtml(
+    `<!-- wp:heading {${centerAttr}${ts.attr}"level":${level},"fontFamily":"${familySlug}","textColor":"${colorSlug}"} -->\n` +
+    `<h${level} class="wp-block-heading${centerClass} has-${colorSlug}-color has-text-color has-${familySlug}-font-family"${ts.inline}>${escapeHtml(
       t,
     )}</h${level}>\n<!-- /wp:heading -->`
   );
@@ -462,7 +553,15 @@ function headingBlock(
 function paragraphBlock(
   text: string,
   out: BlockOut,
-  opts: { center?: boolean; muted?: boolean; size?: string; inverse?: boolean } = {},
+  opts: {
+    center?: boolean;
+    muted?: boolean;
+    size?: string;
+    inverse?: boolean;
+    sizePx?: number;
+    fontFamily?: string | null;
+    lineHeight?: number;
+  } = {},
 ): string {
   const t = normalizeCopy(text);
   if (!t) return '';
@@ -470,11 +569,21 @@ function paragraphBlock(
   const centerAttr = opts.center ? '"align":"center",' : '';
   const centerClass = opts.center ? 'has-text-align-center ' : '';
   const colorSlug = opts.inverse ? 'text-inverse' : opts.muted === false ? 'text-default' : 'text-muted';
-  const sizeAttr = opts.size ? `"fontSize":"${opts.size}",` : '';
-  const sizeClass = opts.size ? ` has-${opts.size}-font-size` : '';
+  // Reproduce the source prose size (responsive clamp) when captured and in a
+  // sane body range — takes precedence over the size slug. Out-of-range values
+  // (tiny captions / heading-sized) fall back to the slug / theme scale.
+  const px = opts.sizePx && opts.sizePx >= 11 && opts.sizePx <= 32 ? opts.sizePx : 0;
+  const fontCss = responsiveFontSize(px);
+  const ts = typographyStyle(fontCss, opts.lineHeight);
+  const sizeAttr = !fontCss && opts.size ? `"fontSize":"${opts.size}",` : '';
+  const sizeClass = !fontCss && opts.size ? ` has-${opts.size}-font-size` : '';
+  // Per-paragraph family when the source body diverges from the theme body family
+  // (e.g. a serif body on a sans-default theme). Absent → theme body family.
+  const familyAttr = opts.fontFamily ? `"fontFamily":"${opts.fontFamily}",` : '';
+  const familyClass = opts.fontFamily ? ` has-${opts.fontFamily}-font-family` : '';
   return (
-    `<!-- wp:paragraph {${centerAttr}${sizeAttr}"textColor":"${colorSlug}"} -->\n` +
-    `<p class="${centerClass}has-${colorSlug}-color has-text-color${sizeClass}">${escapeHtml(
+    `<!-- wp:paragraph {${centerAttr}${ts.attr}${sizeAttr}${familyAttr}"textColor":"${colorSlug}"} -->\n` +
+    `<p class="${centerClass}has-${colorSlug}-color has-text-color${sizeClass}${familyClass}"${ts.inline}>${escapeHtml(
       t,
     )}</p>\n<!-- /wp:paragraph -->`
   );
@@ -504,9 +613,9 @@ function renderTextBand(s: SectionSpec): BlockOut {
   const out = emptyOut();
   const parts: string[] = [];
   s.headings.forEach((h, i) =>
-    parts.push(headingBlock(h, out, { level: i === 0 ? 1 : 2, center: centerOf(s), sizePx: s.headingSizes?.[i] })),
+    parts.push(headingBlock(h, out, { level: i === 0 ? 1 : 2, center: centerOf(s), sizePx: s.headingSizes?.[i], fontFamily: s.headingFamilies?.[i] || undefined, lineHeight: s.headingLineHeights?.[i] })),
   );
-  (s.bodyText ?? []).forEach((b) => parts.push(paragraphBlock(b, out, { center: centerOf(s) })));
+  (s.bodyText ?? []).forEach((b, i) => parts.push(paragraphBlock(b, out, { center: centerOf(s), sizePx: s.bodyTextSizes?.[i], fontFamily: s.bodyFamilies?.[i] || undefined, lineHeight: s.bodyLineHeights?.[i] })));
   s.buttonLabels.forEach((b) => parts.push(buttonBlock(b, out, { align: buttonJustify(s) })));
   // A single lead image (if present) below the copy — only a real photo, never a
   // decorative glyph (a small quote-mark/badge <img> would otherwise fill the slot).
@@ -538,8 +647,8 @@ function renderCover(s: SectionSpec): BlockOut {
   const out = emptyOut();
   out.assets.push(lead.url);
   const inner: string[] = [];
-  s.headings.forEach((h, i) => inner.push(headingBlock(h, out, { level: i === 0 ? 1 : 2, center: centerOf(s), inverse: true, sizePx: s.headingSizes?.[i] })));
-  (s.bodyText ?? []).forEach((b) => inner.push(paragraphBlock(b, out, { center: centerOf(s), inverse: true })));
+  s.headings.forEach((h, i) => inner.push(headingBlock(h, out, { level: i === 0 ? 1 : 2, center: centerOf(s), inverse: true, sizePx: s.headingSizes?.[i], fontFamily: s.headingFamilies?.[i] || undefined, lineHeight: s.headingLineHeights?.[i] })));
+  (s.bodyText ?? []).forEach((b, i) => inner.push(paragraphBlock(b, out, { center: centerOf(s), inverse: true, sizePx: s.bodyTextSizes?.[i], fontFamily: s.bodyFamilies?.[i] || undefined, lineHeight: s.bodyLineHeights?.[i] })));
   s.buttonLabels.forEach((b) => inner.push(buttonBlock(b, out, { align: buttonJustify(s) })));
   const innerMarkup = inner.filter(Boolean).join('\n');
   const url = escapeHtml(lead.url);
@@ -557,8 +666,8 @@ function renderCover(s: SectionSpec): BlockOut {
 function renderMediaText(s: SectionSpec, flip: boolean): BlockOut {
   const out = emptyOut();
   const textParts: string[] = [];
-  s.headings.forEach((h, i) => textParts.push(headingBlock(h, out, { level: 2, sizePx: s.headingSizes?.[i] })));
-  (s.bodyText ?? []).forEach((b) => textParts.push(paragraphBlock(b, out)));
+  s.headings.forEach((h, i) => textParts.push(headingBlock(h, out, { level: 2, sizePx: s.headingSizes?.[i], fontFamily: s.headingFamilies?.[i] || undefined, lineHeight: s.headingLineHeights?.[i] })));
+  (s.bodyText ?? []).forEach((b, i) => textParts.push(paragraphBlock(b, out, { sizePx: s.bodyTextSizes?.[i], fontFamily: s.bodyFamilies?.[i] || undefined, lineHeight: s.bodyLineHeights?.[i] })));
   s.buttonLabels.forEach((b) => textParts.push(buttonBlock(b, out, { align: buttonJustify(s) })));
   // Prefer a real lead photo over a decorative glyph (a small quote-mark <img>
   // would otherwise fill the media column).
@@ -729,8 +838,8 @@ function galleryBlock(images: SectionSpecImage[], out: BlockOut): string {
 function renderImageRow(s: SectionSpec): BlockOut {
   const out = emptyOut();
   const parts: string[] = [];
-  s.headings.forEach((h, i) => parts.push(headingBlock(h, out, { level: 2, center: centerOf(s), sizePx: s.headingSizes?.[i] })));
-  (s.bodyText ?? []).forEach((b) => parts.push(paragraphBlock(b, out, { center: centerOf(s) })));
+  s.headings.forEach((h, i) => parts.push(headingBlock(h, out, { level: 2, center: centerOf(s), sizePx: s.headingSizes?.[i], fontFamily: s.headingFamilies?.[i] || undefined, lineHeight: s.headingLineHeights?.[i] })));
+  (s.bodyText ?? []).forEach((b, i) => parts.push(paragraphBlock(b, out, { center: centerOf(s), sizePx: s.bodyTextSizes?.[i], fontFamily: s.bodyFamilies?.[i] || undefined, lineHeight: s.bodyLineHeights?.[i] })));
   const gallery = galleryBlock(s.images, out);
   if (gallery) parts.push(gallery);
   out.markup = wrapSection(parts.filter(Boolean), { wide: '1100px', raised: isTintedSection(s), ...sectionPad(s) });
@@ -861,7 +970,7 @@ function renderCellGrid(s: SectionSpec, ctx: RenderCtx): BlockOut {
   const intro: string[] = [];
   s.headings.forEach((h, i) => {
     if (cellHeadSet.has(normalizeCopy(h))) return; // a cell title — rendered in its column
-    intro.push(headingBlock(h, out, { level: i === 0 ? 2 : 3, center: centerOf(s), sizePx: s.headingSizes?.[i] }));
+    intro.push(headingBlock(h, out, { level: i === 0 ? 2 : 3, center: centerOf(s), sizePx: s.headingSizes?.[i], fontFamily: s.headingFamilies?.[i] || undefined, lineHeight: s.headingLineHeights?.[i] }));
   });
   const cols: string[] = [];
   for (const c of cells) {
@@ -884,8 +993,30 @@ function renderCellGrid(s: SectionSpec, ctx: RenderCtx): BlockOut {
     if (c.image && isWpUrl(c.image.url) && Math.min(c.image.width || 0, c.image.height || 0) >= MIN_CELL_IMAGE_PX) {
       parts.push(imageBlock(c.image, out, `cell#${s.sectionIndex}`, { rounded: true }));
     }
-    if (c.heading) parts.push(headingBlock(c.heading, out, { level: 3, center: cellCenter, inverse: cardDark, sizePx: c.headingSize }));
-    for (const b of c.body) parts.push(paragraphBlock(b, out, { center: cellCenter, size: 'small', inverse: cardDark }));
+    // Per-cell family (a sans card title over a serif body) mapped to a token.
+    const cellHeadFamily = nearestFamily(c.headingFamily, ctx.fontFamilies) || undefined;
+    const cellBodyFamily = nearestFamily(c.bodyFamily, ctx.fontFamilies) || undefined;
+    if (c.heading)
+      parts.push(
+        headingBlock(c.heading, out, {
+          level: 3,
+          center: cellCenter,
+          inverse: cardDark,
+          sizePx: c.headingSize,
+          fontFamily: cellHeadFamily,
+          lineHeight: c.headingLineHeight,
+        }),
+      );
+    for (const b of c.body)
+      parts.push(
+        paragraphBlock(b, out, {
+          center: cellCenter,
+          size: 'small',
+          inverse: cardDark,
+          fontFamily: cellBodyFamily,
+          lineHeight: c.bodyLineHeight,
+        }),
+      );
     if (c.button) parts.push(buttonBlock(c.button, out, { align: cellCenter ? 'center' : 'left' }));
     const kept = parts.filter(Boolean);
     if (!kept.length) continue;
@@ -918,9 +1049,12 @@ function cardGroup(
   const pr = side(padding?.right);
   const pb = side(padding?.bottom);
   const pl = side(padding?.left);
+  // is-replica-card lets theme CSS stretch sibling cards to equal height (the
+  // source renders a uniform card grid equal-height; a WP group is otherwise
+  // content-height, leaving ragged card bottoms).
   return (
-    `<!-- wp:group {"style":{"spacing":{"padding":{"top":"${pt}","bottom":"${pb}","left":"${pl}","right":"${pr}"}},"border":{"radius":"${r}px"}},"backgroundColor":"${bgToken}","textColor":"${textToken}","layout":{"type":"constrained"}} -->\n` +
-    `<div class="wp-block-group has-${textToken}-color has-${bgToken}-background-color has-text-color has-background" style="border-radius:${r}px;padding-top:${cssLen(pt)};padding-right:${cssLen(pr)};padding-bottom:${cssLen(pb)};padding-left:${cssLen(pl)}">\n${parts.join('\n')}\n</div>\n` +
+    `<!-- wp:group {"className":"is-replica-card","style":{"spacing":{"padding":{"top":"${pt}","bottom":"${pb}","left":"${pl}","right":"${pr}"}},"border":{"radius":"${r}px"}},"backgroundColor":"${bgToken}","textColor":"${textToken}","layout":{"type":"constrained"}} -->\n` +
+    `<div class="wp-block-group is-replica-card has-${textToken}-color has-${bgToken}-background-color has-text-color has-background" style="border-radius:${r}px;padding-top:${cssLen(pt)};padding-right:${cssLen(pr)};padding-bottom:${cssLen(pb)};padding-left:${cssLen(pl)}">\n${parts.join('\n')}\n</div>\n` +
     `<!-- /wp:group -->`
   );
 }
@@ -1058,11 +1192,42 @@ export function reconstructPagePattern(
   // Drop body entries that merely repeat a heading. Page-builders often mark a
   // headline as a styled <p> (≥28px → captured as a heading) that is ALSO a
   // <p> (captured as body), so without this the renderer emits the line twice.
+  // Resolve each section's captured per-element font-families (computed names) to
+  // registered theme fontFamily token slugs once, here — the renderers then read
+  // headingFamilies/bodyFamilies as slugs. '' means "no token match → use the
+  // block default family". Then drop body entries that merely repeat a heading
+  // (page-builders mark a headline as a styled <p> captured as both heading AND
+  // body), keeping the parallel typography arrays index-aligned.
+  const famTokens = opts.fontFamilies ?? [];
+  const resolveFamilies = (names?: string[]): string[] | undefined =>
+    names ? names.map((n) => nearestFamily(n, famTokens) ?? '') : undefined;
   const body = stripChrome(sections).map((s) => {
-    if (!s.bodyText || s.bodyText.length === 0) return s;
+    const headFamSlugs = resolveFamilies(s.headingFamilies);
+    const headBase = headFamSlugs ? { ...s, headingFamilies: headFamSlugs } : s;
+    if (!s.bodyText || s.bodyText.length === 0) return headBase;
     const headSet = new Set(s.headings.map((h) => normalizeCopy(h)).filter(Boolean));
-    const filtered = s.bodyText.filter((b) => !headSet.has(normalizeCopy(b)));
-    return filtered.length === s.bodyText.length ? s : { ...s, bodyText: filtered };
+    const keptIdx: number[] = [];
+    const filtered = s.bodyText.filter((b, i) => {
+      const keep = !headSet.has(normalizeCopy(b));
+      if (keep) keptIdx.push(i);
+      return keep;
+    });
+    const bodyFamSlugsAll = resolveFamilies(s.bodyFamilies);
+    if (filtered.length === s.bodyText.length) {
+      return bodyFamSlugsAll ? { ...headBase, bodyFamilies: bodyFamSlugsAll } : headBase;
+    }
+    // Keep the parallel per-paragraph typography arrays lined up with the filtered
+    // bodyText by index.
+    const sizes = s.bodyTextSizes ? keptIdx.map((i) => s.bodyTextSizes![i]) : undefined;
+    const fams = bodyFamSlugsAll ? keptIdx.map((i) => bodyFamSlugsAll[i]) : undefined;
+    const lhs = s.bodyLineHeights ? keptIdx.map((i) => s.bodyLineHeights![i]) : undefined;
+    return {
+      ...headBase,
+      bodyText: filtered,
+      ...(sizes ? { bodyTextSizes: sizes } : {}),
+      ...(fams ? { bodyFamilies: fams } : {}),
+      ...(lhs ? { bodyLineHeights: lhs } : {}),
+    };
   });
   const expectedText: string[] = [];
   const bodyText: string[] = [];
@@ -1070,7 +1235,12 @@ export function reconstructPagePattern(
   const provenanceFlags: string[] = [];
   const sectionMarkup: string[] = [];
   const iconAssets: Array<{ path: string; svg: string }> = [];
-  const ctx: RenderCtx = { mediaTextIndex: 0, iconCounter: 0, paletteTokens: opts.paletteTokens ?? [] };
+  const ctx: RenderCtx = {
+    mediaTextIndex: 0,
+    iconCounter: 0,
+    paletteTokens: opts.paletteTokens ?? [],
+    fontFamilies: opts.fontFamilies ?? [],
+  };
 
   for (const s of body) {
     const out = renderSection(s, ctx);

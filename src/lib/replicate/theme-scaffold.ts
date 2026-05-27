@@ -252,6 +252,10 @@ export function buildThemeScaffold(opts: ThemeScaffoldOpts): ReplicaFile[] {
     { relativePath: 'style.css', content: buildStyleCss({ themeName, themeSlug, themeDescription, capturedFonts }) },
     { relativePath: 'theme.json', content: buildThemeJson(foundation, { capturedFonts, headingLineHeights: opts.headingLineHeights, headingFamily: opts.headingFamily, bodyFamily: opts.bodyFamily, bodySubstituteFamily: opts.bodySubstituteFamily, displaySubstituteFamily: opts.displaySubstituteFamily }) },
     { relativePath: 'functions.php', content: buildFunctionsPhp({ themeSlug }) },
+    // Progressive-enhancement JS: clickable prev/next arrows for gallery
+    // scrollers (page builders show galleries as a navigable carousel; WP core
+    // has none). Targets the generic .is-gallery-scroller class — site-agnostic.
+    { relativePath: 'assets/gallery-scroller.js', content: buildGalleryScrollerJs() },
     { relativePath: 'templates/index.html', content: buildIndexTemplate() },
     { relativePath: 'parts/header.html', content: headerHtml },
     { relativePath: 'parts/footer.html', content: footerHtml },
@@ -446,6 +450,63 @@ header.site-header-overlay .wp-block-navigation-item__content {
 	aspect-ratio: 4 / 3;
 	object-fit: cover;
 	border-radius: 8px;
+}
+
+/*
+ * Gallery scroller arrows. gallery-scroller.js wraps each scroller in
+ * .gallery-scroller-wrap and injects prev/next buttons; the wrap only gets
+ * .has-nav (which reveals the buttons) when the strip actually overflows, so a
+ * gallery that fits shows none. Pure progressive enhancement — without JS the
+ * strip stays swipe/scroll-navigable.
+ */
+.gallery-scroller-wrap {
+	position: relative;
+}
+.gallery-scroller-nav {
+	position: absolute;
+	top: 50%;
+	transform: translateY(-50%);
+	z-index: 2;
+	display: none;
+	align-items: center;
+	justify-content: center;
+	width: 44px;
+	height: 44px;
+	padding: 0;
+	border: none;
+	border-radius: 50%;
+	cursor: pointer;
+	font-size: 26px;
+	line-height: 1;
+	color: #1a1a1a;
+	background: rgba(255, 255, 255, 0.92);
+	box-shadow: 0 1px 6px rgba(0, 0, 0, 0.28);
+}
+.gallery-scroller-wrap.has-nav .gallery-scroller-nav {
+	display: flex;
+}
+.gallery-scroller-prev {
+	left: 8px;
+}
+.gallery-scroller-next {
+	right: 8px;
+}
+.gallery-scroller-nav:disabled {
+	opacity: 0.35;
+	cursor: default;
+}
+
+/*
+ * Equal-height cards. A reconstructed uniform card grid (.is-replica-card in a
+ * columns row) should render all cards the same height like the source, but a WP
+ * group is content-height — leaving ragged bottoms. The columns row already
+ * stretches its columns to the tallest; make the card fill that stretched column.
+ */
+.wp-block-columns > .wp-block-column:has(> .is-replica-card) {
+	display: flex;
+}
+.wp-block-column > .is-replica-card {
+	flex: 1 1 auto;
 }
 ${fontFaceCss}`;
 }
@@ -788,6 +849,19 @@ add_action('wp_enqueue_scripts', function () {
         array(),
         $version
     );
+
+    // Progressive-enhancement gallery-scroller arrows (no dependency). Enqueued
+    // in the footer; absent file is a silent no-op (the strip stays swipe-navigable).
+    $gs_path = get_theme_file_path('assets/gallery-scroller.js');
+    if (file_exists($gs_path)) {
+        wp_enqueue_script(
+            '${args.themeSlug}-gallery-scroller',
+            get_theme_file_uri('assets/gallery-scroller.js'),
+            array(),
+            (string) filemtime($gs_path),
+            true
+        );
+    }
 });
 
 /**
@@ -808,6 +882,62 @@ add_action('init', function () {
 
 function slugToPhp(slug: string): string {
   return slug.replace(/-/g, '_');
+}
+
+// -- assets/gallery-scroller.js ----------------------------------------------
+
+/**
+ * Vanilla, dependency-free progressive enhancement: give every
+ * `.wp-block-gallery.is-gallery-scroller` clickable prev/next arrows that scroll
+ * it by one item. Buttons are revealed (via .has-nav on the wrapper) only when
+ * the strip overflows, and disable at each end. No framework, no plugin, no
+ * inline handlers — enqueued as a theme script. Site-agnostic (keys off the
+ * generic scroller class the renderer emits, not any site's markup).
+ */
+function buildGalleryScrollerJs(): string {
+  return `(function () {
+  function initScroller(g) {
+    if (g.dataset.scrollerInit) return;
+    g.dataset.scrollerInit = '1';
+    var wrap = document.createElement('div');
+    wrap.className = 'gallery-scroller-wrap';
+    g.parentNode.insertBefore(wrap, g);
+    wrap.appendChild(g);
+    function makeButton(dir, label, glyph) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'gallery-scroller-nav gallery-scroller-' + dir;
+      b.setAttribute('aria-label', label);
+      b.textContent = glyph;
+      b.addEventListener('click', function () {
+        var item = g.querySelector('.wp-block-image');
+        var step = item ? item.getBoundingClientRect().width + 16 : g.clientWidth * 0.8;
+        g.scrollBy({ left: dir === 'prev' ? -step : step, behavior: 'smooth' });
+      });
+      return b;
+    }
+    var prev = makeButton('prev', 'Previous', '\\u2039');
+    var next = makeButton('next', 'Next', '\\u203A');
+    wrap.appendChild(prev);
+    wrap.appendChild(next);
+    function update() {
+      var max = g.scrollWidth - g.clientWidth - 1;
+      wrap.classList.toggle('has-nav', max > 4);
+      prev.disabled = g.scrollLeft <= 1;
+      next.disabled = g.scrollLeft >= max;
+    }
+    g.addEventListener('scroll', update, { passive: true });
+    window.addEventListener('resize', update);
+    update();
+  }
+  function init() {
+    var list = document.querySelectorAll('.wp-block-gallery.is-gallery-scroller');
+    for (var i = 0; i < list.length; i++) initScroller(list[i]);
+  }
+  if (document.readyState !== 'loading') init();
+  else document.addEventListener('DOMContentLoaded', init);
+})();
+`;
 }
 
 // -- templates/index.html ----------------------------------------------------

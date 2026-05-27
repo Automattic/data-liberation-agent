@@ -265,11 +265,19 @@ export interface ThemeFontFamily {
  * the convention is `file:./assets/fonts/...` which WordPress resolves to the
  * theme directory.
  */
+/** Common serif typeface-name fragments — used to pick a `serif` vs `sans-serif`
+ *  generic fallback for a captured family so a serif heading degrades to a serif,
+ *  not a sans, when its exact weight isn't loaded. Site-agnostic name heuristic. */
+const SERIF_NAME_HINTS =
+  /baskerville|garamond|georgia|\btimes\b|playfair|merriweather|\blora\b|didot|bodoni|caslon|minion|freight|tiempos|canela|recoleta|crimson|cormorant|spectral|frank ruhl|\bserif\b|\broman\b|\bslab\b|rockwell|glypha|\bdjr\b|noto serif|pt serif|dm serif|source serif|plex serif/i;
+function genericFallbackForFamily(family: string): string {
+  return SERIF_NAME_HINTS.test(family) ? 'serif' : 'sans-serif';
+}
+
 export function buildThemeFontFamilies(
   faces: LocalFontFace[],
   opts: { fallback?: string } = {},
 ): ThemeFontFamily[] {
-  const fallback = opts.fallback ?? 'sans-serif';
   const byFamily = new Map<string, LocalFontFace[]>();
   for (const f of faces) {
     const arr = byFamily.get(f.family) ?? [];
@@ -279,6 +287,11 @@ export function buildThemeFontFamilies(
 
   const out: ThemeFontFamily[] = [];
   for (const [family, group] of byFamily) {
+    // Generic fallback must match the typeface CLASS, or a serif heading whose
+    // exact weight isn't loaded falls back to a sans (the "serif headline renders
+    // as bold Arial" bug). Detect serif by name and emit `serif`, else `sans-serif`.
+    // An explicit opts.fallback still wins (callers that know the class).
+    const fallback = opts.fallback ?? genericFallbackForFamily(family);
     out.push({
       fontFamily: `${family}, ${fallback}`,
       name: family,

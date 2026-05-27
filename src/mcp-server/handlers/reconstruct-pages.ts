@@ -19,6 +19,7 @@ import { promisify } from 'node:util';
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import type { PaletteToken } from '../../lib/replicate/footer-color.js';
+import type { FontFamilyToken } from '../../lib/replicate/page-reconstruct.js';
 import { extractFullFromUrl, rewriteThroughMediaMap } from '../../lib/replicate/section-extract.js';
 import type { SectionSpec } from '../../lib/replicate/section-extract.js';
 import { buildPageReconstruction } from '../../lib/replicate/reconstruct-pages.js';
@@ -85,6 +86,22 @@ function readThemePalette(themeJsonPath: string): PaletteToken[] {
     return palette
       .filter((p): p is { slug: string; color: string } => Boolean(p.slug && p.color && /^#?[0-9a-f]{3,8}$/i.test(p.color)))
       .map((p) => ({ slug: p.slug, hex: p.color }));
+  } catch {
+    return [];
+  }
+}
+
+/** Read the theme's registered fontFamily tokens ({slug, family}) so the renderer
+ *  can map each captured element's computed font-family to the nearest token. */
+function readThemeFontFamilies(themeJsonPath: string): FontFamilyToken[] {
+  try {
+    const j = JSON.parse(readFileSync(themeJsonPath, 'utf8')) as {
+      settings?: { typography?: { fontFamilies?: Array<{ slug?: string; fontFamily?: string }> } };
+    };
+    const fams = j.settings?.typography?.fontFamilies ?? [];
+    return fams
+      .filter((f): f is { slug: string; fontFamily: string } => Boolean(f.slug && f.fontFamily))
+      .map((f) => ({ slug: f.slug, family: f.fontFamily }));
   } catch {
     return [];
   }
@@ -183,6 +200,9 @@ export const reconstructPagesHandler: Handler = async (args, ctx) => {
   // Theme palette tokens (from the installed theme.json) — used to map captured
   // card/cell background colors to token slugs (the gate forbids inline hex).
   const paletteTokens = readThemePalette(join(themeRoot, 'theme.json'));
+  // Theme fontFamily tokens — used to map each captured element's computed
+  // font-family to the nearest registered token (per-element family fidelity).
+  const fontFamilies = readThemeFontFamilies(join(themeRoot, 'theme.json'));
 
   // 3. Reconstruct + gate + write each page.
   const report: Array<Record<string, unknown>> = [];
@@ -196,7 +216,7 @@ export const reconstructPagesHandler: Handler = async (args, ctx) => {
     applyMediaMap(specs, mediaMap);
     let built;
     try {
-      built = buildPageReconstruction(specs, { slug: p.slug, title: p.title, themeSlug, isHome: p.isHome, paletteTokens });
+      built = buildPageReconstruction(specs, { slug: p.slug, title: p.title, themeSlug, isHome: p.isHome, paletteTokens, fontFamilies });
     } catch (err) {
       report.push({ slug: p.slug, ok: false, reason: `build: ${err instanceof Error ? err.message : String(err)}` });
       continue;

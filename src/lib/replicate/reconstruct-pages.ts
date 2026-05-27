@@ -15,7 +15,7 @@
 // The MCP handler (liberate_reconstruct_pages) composes this with extraction,
 // media install, and the Studio write/flush; this part is pure + unit-tested.
 
-import { reconstructPagePattern } from './page-reconstruct.js';
+import { reconstructPagePattern, type FontFamilyToken } from './page-reconstruct.js';
 import { validateArtifacts, type ValidationReport } from './validate-artifacts.js';
 import type { SectionSpec } from './section-extract.js';
 import type { PaletteToken } from './footer-color.js';
@@ -75,13 +75,25 @@ function buildPageTemplate(patternSlug: string, overlayHeader = false): string {
  */
 export function buildPageReconstruction(
   sections: SectionSpec[],
-  opts: { slug: string; title: string; themeSlug: string; isHome?: boolean; paletteTokens?: PaletteToken[] },
+  opts: {
+    slug: string;
+    title: string;
+    themeSlug: string;
+    isHome?: boolean;
+    paletteTokens?: PaletteToken[];
+    fontFamilies?: FontFamilyToken[];
+  },
 ): PageReconstructionResult {
   if (!SAFE_SLUG.test(opts.slug)) throw new Error(`unsafe page slug: "${opts.slug}"`);
   if (!SAFE_SLUG.test(opts.themeSlug)) throw new Error(`unsafe theme slug: "${opts.themeSlug}"`);
 
   const patternSlug = `${opts.themeSlug}/page-${opts.slug}`;
-  const r = reconstructPagePattern(sections, { patternSlug, title: opts.title, paletteTokens: opts.paletteTokens });
+  const r = reconstructPagePattern(sections, {
+    patternSlug,
+    title: opts.title,
+    paletteTokens: opts.paletteTokens,
+    fontFamilies: opts.fontFamilies,
+  });
 
   // The provenance/injection/escaping gate. The reconstruct output is validated
   // against its OWN captured corpus (expectedText ∪ bodyText) — this catches

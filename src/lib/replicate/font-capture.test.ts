@@ -165,6 +165,18 @@ describe('buildThemeFontFamilies', () => {
     expect(fams[0].fontFace).toHaveLength(2);
     expect(fams[0].fontFace?.[0].src[0]).toBe('file:./assets/fonts/Larsseit-Regular.woff');
   });
+
+  it('picks a serif vs sans generic fallback by family name (so a serif heading degrades to serif, not Arial)', () => {
+    const faces: LocalFontFace[] = [
+      { family: 'Libre Baskerville', src: 'x', format: 'woff2', weight: '400', style: 'normal', localPath: 'assets/fonts/lb.woff2' },
+      { family: 'Inter', src: 'y', format: 'woff2', weight: '400', style: 'normal', localPath: 'assets/fonts/inter.woff2' },
+    ];
+    const fams = buildThemeFontFamilies(faces); // no explicit fallback → auto-detect
+    const lb = fams.find((f) => f.name === 'Libre Baskerville')!;
+    const inter = fams.find((f) => f.name === 'Inter')!;
+    expect(lb.fontFamily).toBe('Libre Baskerville, serif');
+    expect(inter.fontFamily).toBe('Inter, sans-serif');
+  });
 });
 
 describe('baseFamilyName', () => {

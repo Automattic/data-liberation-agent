@@ -596,6 +596,13 @@ export interface SectionSpecCell {
   /** Computed font-size (px) of the cell's title — lets the renderer reproduce
    *  the source card-title size instead of the generic level scale. */
   headingSize?: number;
+  /** Computed font-family (first token) + line-height ratio of the cell's title
+   *  and body — mapped to a registered theme fontFamily token by the renderer so
+   *  a card title's family (a sans title over serif body) is reproduced. */
+  headingFamily?: string;
+  headingLineHeight?: number;
+  bodyFamily?: string;
+  bodyLineHeight?: number;
   /** Geometric inner padding (px) of the card — gap from the card box to its
    *  content's bounding box. Reliable on page-builder markup where the card box's
    *  own `padding` reads 0 (padding on inner wrappers). Optional for back-compat. */
@@ -654,6 +661,14 @@ export interface SectionSpec {
    *  renderer reproduce the source type scale (eyebrow label vs headline) rather
    *  than collapse to generic heading levels. Optional for back-compat. */
   headingSizes?: number[];
+  /** Primary computed font-family (first token, lowercased) of each heading,
+   *  parallel to `headings`. The renderer maps it to the nearest registered theme
+   *  fontFamily token so a source that mixes families (serif headline + sans
+   *  eyebrow) is reproduced per-element, not bucketed. Optional for back-compat. */
+  headingFamilies?: string[];
+  /** Computed line-height as a unitless ratio for each heading, parallel to
+   *  `headings` (0 = theme default). Optional for back-compat. */
+  headingLineHeights?: number[];
   /** Dominant computed text-align of this section's headings + body (start/end
    *  normalized to left/right, justify→left). Lets the renderer reproduce source
    *  alignment instead of hard-centering every band. Optional for back-compat. */
@@ -676,6 +691,18 @@ export interface SectionSpec {
    * invented; capturing it here closes that gap.)
    */
   bodyText: string[];
+  /** Computed font-size (px) of each body paragraph, parallel to `bodyText` — lets
+   *  the renderer reproduce the source prose size instead of the generic theme
+   *  scale. Optional for back-compat. */
+  bodyTextSizes?: number[];
+  /** Primary computed font-family (first token, lowercased) of each body
+   *  paragraph, parallel to `bodyText` — mapped to the nearest registered theme
+   *  fontFamily token (a serif body on a sans-default theme is reproduced).
+   *  Optional for back-compat. */
+  bodyFamilies?: string[];
+  /** Computed line-height as a unitless ratio for each body paragraph, parallel to
+   *  `bodyText` (0 = theme default). Optional for back-compat. */
+  bodyLineHeights?: number[];
   buttonLabels: string[];
   images: SectionSpecImage[];
   /** Inline SVG / icon-font glyphs in the section's Y-band (icons above cards). */
@@ -743,7 +770,12 @@ interface RawSection {
   features: SectionFeatures;
   headings: string[];
   headingSizes: number[];
+  headingFamilies: string[];
+  headingLineHeights: number[];
   bodyText: string[];
+  bodyTextSizes: number[];
+  bodyFamilies: string[];
+  bodyLineHeights: number[];
   buttonLabels: string[];
   images: Array<{ src: string; alt: string; kind: 'img' | 'background'; w: number; h: number }>;
   iconCandidates: RawIconCandidate[];
@@ -761,7 +793,7 @@ interface RawSection {
 
 /** Raw per-cell capture from the browser walk (shaped into SectionSpecCell in Node). */
 interface RawCell {
-  texts: Array<{ t: string; size: number }>;
+  texts: Array<{ t: string; size: number; family: string; lh: number }>;
   image: { src: string; alt: string; w: number; h: number } | null;
   icon: { markup: string; w: number; h: number } | null;
   button: string;
@@ -1360,15 +1392,37 @@ export async function extractFull(
         // renderer can reproduce the source type scale faithfully — a 16px
         // eyebrow label and a 55px headline must not both collapse to generic
         // heading levels (which inverts their sizes).
+        // Computed typography of a text element: primary font-family name (first
+        // token, normalized) + line-height as a unitless ratio (resolution- and
+        // size-independent so it scales with the responsive font-size; 'normal'
+        // and unresolved values → 0 = use the theme default).
+        const typo = (el: Element): { family: string; lh: number } => {
+          const cs = getComputedStyle(el);
+          const family = (cs.fontFamily || '').split(',')[0].replace(/["']/g, '').trim().toLowerCase();
+          const fs = parseFloat(cs.fontSize) || 0;
+          let lh = 0;
+          if (cs.lineHeight && cs.lineHeight !== 'normal') {
+            const v = parseFloat(cs.lineHeight);
+            if (v && fs) lh = Math.round((v / fs) * 100) / 100;
+          }
+          return { family, lh };
+        };
         const headingData = headingEls
-          .map((h) => ({
-            text: (h.textContent || '').trim().slice(0, 160),
-            size: Math.round(parseFloat(getComputedStyle(h).fontSize) || 0),
-          }))
+          .map((h) => {
+            const t = typo(h);
+            return {
+              text: (h.textContent || '').trim().slice(0, 160),
+              size: Math.round(parseFloat(getComputedStyle(h).fontSize) || 0),
+              family: t.family,
+              lh: t.lh,
+            };
+          })
           .filter((h) => h.text)
           .slice(0, 12);
         const headings = headingData.map((h) => h.text);
         const headingSizes = headingData.map((h) => h.size);
+        const headingFamilies = headingData.map((h) => h.family);
+        const headingLineHeights = headingData.map((h) => h.lh);
 
         const paragraphEls = descendants.filter((d) => {
           const tag = d.tagName.toLowerCase();
@@ -1392,6 +1446,9 @@ export async function extractFull(
         const BODY_TEXT_MAX = 8000;
         const bodyTextSeen = new Set<string>();
         const bodyText: string[] = [];
+        const bodyTextSizes: number[] = [];
+        const bodyFamilies: string[] = [];
+        const bodyLineHeights: number[] = [];
         for (const p of paragraphEls) {
           const inButton = !!(p as HTMLElement).closest('button,[role="button"]');
           if (inButton) continue;
@@ -1400,6 +1457,13 @@ export async function extractFull(
           if (bodyTextSeen.has(t)) continue;
           bodyTextSeen.add(t);
           bodyText.push(t);
+          // Computed body typography (size px, family, line-height ratio), parallel
+          // to bodyText — lets the renderer reproduce the source prose size, family,
+          // and leading instead of the generic theme scale.
+          bodyTextSizes.push(Math.round(parseFloat(getComputedStyle(p).fontSize) || 0));
+          const bt = typo(p);
+          bodyFamilies.push(bt.family);
+          bodyLineHeights.push(bt.lh);
         }
 
         const imgEls = descendants.filter((d) => d.tagName === 'IMG') as HTMLImageElement[];
@@ -1671,7 +1735,7 @@ export async function extractFull(
         // the renderer decides whether to use it (card-grids keep their own path).
         const cells = childUnits.map((cell) => {
           const cdesc = [cell, ...Array.from(cell.querySelectorAll('*'))].filter(isVisible);
-          const texts: Array<{ t: string; size: number }> = [];
+          const texts: Array<{ t: string; size: number; family: string; lh: number }> = [];
           const seenText = new Set<string>();
           for (const d of cdesc) {
             const own = Array.from(d.childNodes)
@@ -1682,7 +1746,8 @@ export async function extractFull(
             if (own.length < 1 || own.length > 400) continue;
             if (seenText.has(own)) continue;
             seenText.add(own);
-            texts.push({ t: own, size: parseFloat(getComputedStyle(d).fontSize) || 0 });
+            const ct = typo(d);
+            texts.push({ t: own, size: parseFloat(getComputedStyle(d).fontSize) || 0, family: ct.family, lh: ct.lh });
           }
           let image: { src: string; alt: string; w: number; h: number } | null = null;
           const imgEl = cell.querySelector('img');
@@ -2038,7 +2103,12 @@ export async function extractFull(
           features,
           headings,
           headingSizes,
+          headingFamilies,
+          headingLineHeights,
           bodyText: bodyText.slice(0, 40),
+          bodyTextSizes: bodyTextSizes.slice(0, 40),
+          bodyFamilies: bodyFamilies.slice(0, 40),
+          bodyLineHeights: bodyLineHeights.slice(0, 40),
           buttonLabels,
           images: allImages.slice(0, 36),
           iconCandidates: iconCandidates.slice(0, 48),
@@ -2125,7 +2195,13 @@ export async function extractFull(
         const headingIdx = texts.findIndex((t) => (t.size || 0) === maxSize && maxSize > 0);
         const heading = headingIdx >= 0 ? texts[headingIdx].t.trim() : null;
         const headingSize = headingIdx >= 0 ? Math.round(texts[headingIdx].size || 0) : 0;
-        const body = texts.filter((_t, i) => i !== headingIdx).map((t) => t.t.trim());
+        const headingFamily = headingIdx >= 0 ? texts[headingIdx].family : '';
+        const headingLineHeight = headingIdx >= 0 ? texts[headingIdx].lh : 0;
+        const bodyTexts = texts.filter((_t, i) => i !== headingIdx);
+        const body = bodyTexts.map((t) => t.t.trim());
+        // Cell body typography from the first body text (cell bodies are uniform).
+        const bodyFamily = bodyTexts[0]?.family ?? '';
+        const bodyLineHeight = bodyTexts[0]?.lh ?? 0;
         const image: SectionSpecImage | null = c.image && c.image.src
           ? {
               url: rewriteThroughMediaMap(c.image.src, mediaMap),
@@ -2147,6 +2223,10 @@ export async function extractFull(
           background: c.bg ?? null,
           radius: c.radius ?? 0,
           headingSize,
+          headingFamily,
+          headingLineHeight,
+          bodyFamily,
+          bodyLineHeight,
           padding: c.pad ? { top: c.pad.t, right: c.pad.r, bottom: c.pad.b, left: c.pad.l } : null,
           align: c.align ?? 'left',
           iconAlign: c.iconAlign ?? c.align ?? 'left',
@@ -2165,7 +2245,12 @@ export async function extractFull(
       height: rr.features.height,
       headings: rr.headings,
       headingSizes: rr.headingSizes ?? [],
+      headingFamilies: (rr as unknown as { headingFamilies?: string[] }).headingFamilies ?? [],
+      headingLineHeights: (rr as unknown as { headingLineHeights?: number[] }).headingLineHeights ?? [],
       bodyText: rr.bodyText ?? [],
+      bodyTextSizes: (rr as unknown as { bodyTextSizes?: number[] }).bodyTextSizes ?? [],
+      bodyFamilies: (rr as unknown as { bodyFamilies?: string[] }).bodyFamilies ?? [],
+      bodyLineHeights: (rr as unknown as { bodyLineHeights?: number[] }).bodyLineHeights ?? [],
       buttonLabels: rr.buttonLabels,
       images: rr.images.map((im) => ({
         url: rewriteThroughMediaMap(im.src, mediaMap),
