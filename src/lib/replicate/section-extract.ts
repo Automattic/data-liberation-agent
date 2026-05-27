@@ -1697,19 +1697,25 @@ export async function extractFull(
             const bgM = cs.backgroundColor.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?/);
             const bgA = bgM ? (bgM[4] === undefined ? 1 : parseFloat(bgM[4])) : 0;
             const bg = bgM && bgA > 0.5 ? `rgb(${bgM[1]}, ${bgM[2]}, ${bgM[3]})` : null;
+            // The TEXT color must come from the element that actually holds the
+            // label — page builders wrap the label in a span colored white over a
+            // green <a> whose own `color` is the inherited black, so reading the
+            // button's own computed color is wrong. Read the deepest text-bearing
+            // descendant's color (fall back to the button's own).
+            const svg = b.querySelector('svg');
+            const txtEl = Array.from(b.querySelectorAll('*')).find(
+              (e) => (!svg || (e !== svg && !svg.contains(e))) && Array.from(e.childNodes).some((n) => n.nodeType === 3 && (n.nodeValue || '').trim()),
+            );
+            const color = (txtEl ? getComputedStyle(txtEl).color : cs.color) || null;
             let icon: { markup: string; w: number; h: number } | null = null;
             let iconAfter = false;
-            const svg = b.querySelector('svg');
             if (svg) {
               const sr = svg.getBoundingClientRect();
               if (sr.width > 0 && sr.width <= 80 && sr.height > 0 && sr.height <= 80) {
                 try {
                   icon = { markup: (svg as unknown as HTMLElement).outerHTML || '', w: Math.round(sr.width), h: Math.round(sr.height) };
-                  // Which side is the icon on? Compare to the button's text element
-                  // so the renderer keeps the source order (e.g. "LABEL ›" vs "› LABEL").
-                  const txtEl = Array.from(b.querySelectorAll('*')).find(
-                    (e) => e !== svg && !svg.contains(e) && Array.from(e.childNodes).some((n) => n.nodeType === 3 && (n.nodeValue || '').trim()),
-                  );
+                  // Which side is the icon on? Compare to the label element so the
+                  // renderer keeps the source order (e.g. "LABEL ›" vs "› LABEL").
                   const tr = txtEl ? txtEl.getBoundingClientRect() : null;
                   if (tr && tr.width > 0) iconAfter = sr.left >= tr.left;
                 } catch {
@@ -1717,7 +1723,7 @@ export async function extractFull(
                 }
               }
             }
-            return { label, href, bg, color: cs.color || null, icon, iconAfter };
+            return { label, href, bg, color, icon, iconAfter };
           })
           .filter((b) => b.label || b.icon)
           .slice(0, 12);

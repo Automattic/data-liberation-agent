@@ -648,7 +648,16 @@ function ctaButton(
   const bgToken = btn.background ? nearestToken(btn.background, ctx.paletteTokens) : null;
   const textTok = btn.color ? nearestToken(btn.color, ctx.paletteTokens) : null;
   const bg = bgToken ?? 'accent-primary';
-  const text = textTok ?? (bgToken ? 'text-default' : 'text-inverse');
+  // Text color: the captured token, else contrast-based off the button background
+  // (a dark/green button gets light text, a light button dark) — never blindly
+  // text-default, which produced black text on the green CTA.
+  let text: string;
+  if (textTok) {
+    text = textTok;
+  } else {
+    const bgHex = ctx.paletteTokens.find((t) => t.slug === bg)?.hex;
+    text = bgHex && brightness(bgHex) >= 140 ? 'text-default' : 'text-inverse';
+  }
   // Inline icon → theme SVG asset, recolored to the button text color so it's
   // visible on the button surface. Placed on the side the SOURCE captured it
   // (iconAfter — geometry-derived, not assumed), with the margin between icon and
