@@ -715,10 +715,15 @@ function sectionButtons(s: SectionSpec, out: BlockOut, ctx: RenderCtx): string[]
 function renderTextBand(s: SectionSpec, ctx: RenderCtx): BlockOut {
   const out = emptyOut();
   const parts: string[] = [];
+  // A dark band (e.g. a cover-with-headline that fell back here because its hero
+  // photo wasn't captured, or any dark section) MUST render its copy in the
+  // inverse (light) color, or the heading/body is dark-on-dark and invisible.
+  // Generic: keyed off the captured background brightness, not any one site.
+  const dark = isDarkSection(s);
   s.headings.forEach((h, i) =>
-    parts.push(headingBlock(h, out, { level: i === 0 ? 1 : 2, center: centerOf(s), sizePx: s.headingSizes?.[i], fontFamily: s.headingFamilies?.[i] || undefined, lineHeight: s.headingLineHeights?.[i] })),
+    parts.push(headingBlock(h, out, { level: i === 0 ? 1 : 2, center: centerOf(s), inverse: dark, sizePx: s.headingSizes?.[i], fontFamily: s.headingFamilies?.[i] || undefined, lineHeight: s.headingLineHeights?.[i] })),
   );
-  (s.bodyText ?? []).forEach((b, i) => parts.push(paragraphBlock(b, out, { center: centerOf(s), sizePx: s.bodyTextSizes?.[i], fontFamily: s.bodyFamilies?.[i] || undefined, lineHeight: s.bodyLineHeights?.[i] })));
+  (s.bodyText ?? []).forEach((b, i) => parts.push(paragraphBlock(b, out, { center: centerOf(s), inverse: dark, sizePx: s.bodyTextSizes?.[i], fontFamily: s.bodyFamilies?.[i] || undefined, lineHeight: s.bodyLineHeights?.[i] })));
   parts.push(...sectionButtons(s, out, ctx));
   // A single lead image (if present) below the copy — only a real photo, never a
   // decorative glyph (a small quote-mark/badge <img> would otherwise fill the slot).
@@ -744,7 +749,7 @@ function renderTextBand(s: SectionSpec, ctx: RenderCtx): BlockOut {
       parts.push(imageBlock(im, out, `${s.interactionModel}#${s.sectionIndex}.extra`, { align: centerOf(s) ? 'center' : null, rounded: true }));
     }
   }
-  out.markup = wrapSection(parts.filter(Boolean), { constrained: '760px', center: centerOf(s), raised: isTintedSection(s), bgColor: s.backgroundColor, ...sectionPad(s) });
+  out.markup = wrapSection(parts.filter(Boolean), { constrained: '760px', center: centerOf(s), inverse: dark, raised: isTintedSection(s), bgColor: s.backgroundColor, ...sectionPad(s) });
   return out;
 }
 
@@ -1380,12 +1385,20 @@ function renderSection(s: SectionSpecWithFaqs, ctx: RenderCtx): BlockOut {
       }
       return renderTextBand(s, ctx);
     case 'cover-with-headline': {
-      // A hero with a REAL lead photo renders as a 2-column media-text (text |
-      // image), matching the common source hero layout. flip=false keeps text
-      // left / image right. Without a photo (e.g. a text-only sale banner) it's
-      // a centered band. (animated-cover stays a centered band — those are
-      // typically full-bleed covers, not two-up heroes.)
-      if (pickLeadImage(s.images) && (s.headings.length || (s.bodyText ?? []).length)) {
+      const coverLead = pickLeadImage(s.images);
+      // A FULL-BLEED hero with a wide background photo (≥1000px) is a
+      // text-OVER-photo cover (the title sits on the image) — render it as a
+      // wp:cover, not a side-by-side. Routing it to media-text produced the
+      // common failure where the hero became a flat dark band with a dark
+      // (often invisible) heading beside a shrunken photo. Mirrors the
+      // animated-cover branch. Generic: keyed on the captured fullBleed flag +
+      // image width, not any one site.
+      if (coverLead && isWpUrl(coverLead.url) && s.fullBleed && (coverLead.width || 0) >= 1000) {
+        return renderCover(s, ctx);
+      }
+      // A non-full-bleed hero with a REAL lead photo renders as a 2-column
+      // media-text (text | image). Without a photo it's a centered band.
+      if (coverLead && (s.headings.length || (s.bodyText ?? []).length)) {
         const flip = ctx.mediaTextIndex % 2 === 1;
         ctx.mediaTextIndex++;
         return renderMediaText(s, flip, ctx);

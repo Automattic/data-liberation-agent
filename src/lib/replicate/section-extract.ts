@@ -1661,6 +1661,31 @@ export async function extractFull(
             });
           }
         }
+        // Large <img> LAYERS outside this section's DOM subtree but visually
+        // within its Y-band. Page builders (Wix) render a full-bleed hero photo
+        // as an <img> in a SIBLING stacking layer of the detected (text-column)
+        // section element — not a CSS background and not a subtree descendant —
+        // so both the fg-image walk and the bg-image sibling scan above miss it
+        // and the hero loses its photo (the cover then falls back to a flat
+        // text band). Mirror the sibling background scan for raster <img>s so the
+        // hero's photo is captured and the reconstructor can emit a wp:cover.
+        // Generic + geometry-based: same large-and-in-band guards as the bg scan.
+        for (const d of Array.from(document.body.querySelectorAll('img'))) {
+          if (!isVisible(d) || el.contains(d)) continue;
+          const dr = d.getBoundingClientRect();
+          if (dr.width < 200 || dr.height < 200) continue;
+          const cy = dr.top + window.scrollY + dr.height / 2;
+          if (cy < top || cy >= bottom) continue;
+          const isrc = ((d as HTMLImageElement).currentSrc || (d as HTMLImageElement).src || '').slice(0, 400);
+          if (!isrc || !RASTER_BG.test(isrc)) continue;
+          bgImages.push({
+            src: isrc,
+            alt: (d as HTMLImageElement).alt || '',
+            kind: 'background',
+            w: Math.round(dr.width),
+            h: Math.round(dr.height),
+          });
+        }
         // dedupe images by params-stripped src
         const seen = new Set<string>();
         const allImages: Array<{ src: string; alt: string; kind: 'img' | 'background'; w: number; h: number }> = [];
