@@ -40,7 +40,7 @@ liberate_replicate_verify({
 })
 ```
 
-Read the returned `pairs[]` manifest. You will use the paired PNGs for both the responsiveness gate and the qualitative review.
+Read the returned `pairs[]` manifest. You will use the paired PNGs for both the responsiveness gate and the qualitative review. Each pair also carries `sections[]` — per-section layout metrics read from the live replica DOM at desktop (`{ columnCount, bg, hasMedia }` in document order) — which feed the parity gate (Step 3).
 
 ### Step 2 — Responsiveness gate (HARD)
 
@@ -72,16 +72,15 @@ A no-PIL environment can sample PNGs with the project's `pngjs` dependency (load
 
 The per-section pixel-diff from `liberate_compare` (or `diff-pngs`) is a **forces-inspection signal**: a section whose desktop delta is high MUST be inspected. It is NOT itself the gate value (raw delta is noisy under font substitution / reflow). NOTE: `liberate_compare` needs the standard layout in BOTH dirs (`manifest.json` + `desktop/<slug>.png` + `mobile/<slug>.png`). `liberate_replicate_verify` writes the replica PNGs in that shape but its `pairs[]` come back in the tool result; if `compare` errors with "manifest missing," the replica subdir lacks a `manifest.json` — copy/symlink the source `manifest.json` into the replica dir, then re-run (don't silently fall back to vision-only).
 
-**Record a measured `SectionParity` per section — this is the gate, not your prose.** For every content-page section, fill a `SectionParity` record (`src/lib/replicate/section-parity.ts`) from sampled measurement, not vision assertion:
+**Build the measured `SectionParity[]` per content page — this is the gate, not your prose.** The metrics are read for you; you assemble and score them (`src/lib/replicate/section-parity.ts`):
 
-- `signals.sectionPresent` — the replica did not drop/merge the section.
-- `signals.bgDeltaE` — CIE2000 ΔE of the band background (source vs replica). `> BG_DELTA_E_FLOOR` (10) is a divergence.
-- `signals.columnCountMatch` — a 3-card grid stayed 3, a 2-column band stayed 2.
-- `signals.mediaPresent` — captured image(s) present and placed.
-- `signals.fallbackUnstyled` — a `core/html` island landed on a CSS-layout section (unstyled).
-- `evidence.{srcSample,repSample}` — the sampled pixels backing the score. **No record ships without evidence** (prove-it-works: no evidence ≠ matches).
+1. For each content page, pair the verify result's `pairs[].sections[i]` (live replica DOM: `{ columnCount, bg, hasMedia }`) to the source spec section `specs[...][i]` **by index**.
+2. Build a `SourceSectionDescriptor` from each spec section: `columnCount = layout.columnCount`, `backgroundColor`, `hasMedia = images.length > 0`, `isCssLayout = columnCount >= 2 || cells >= 2`, `isHtmlFallback = provenanceFlags has \`html-fallback#<i>\``.
+3. `toSectionParityMetrics(descriptor, replicaSection ?? null)` → `evaluateSectionParity(...)` → the five signals. A missing replica section (`null`) reads as `sectionPresent: false`.
 
-For each section, also state concretely what a **10** (matches the source) looks like, then **gap-to-target**: do the work to close it and re-score, showing before→after. `deriveSectionParityStatus(signals, acceptance)` decides `match` / `divergent` / `accepted` — and the run-report verdict re-derives from these records, so you cannot talk a `divergent` section into a pass.
+The signals: `sectionPresent` (not dropped/merged), `bgDeltaE` (ΔE2000 of `spec.backgroundColor` vs rendered `bg`, `> BG_DELTA_E_FLOOR` = 10 diverges), `columnCountMatch` (replica `columnCount >= source`), `mediaPresent`, `fallbackUnstyled` (island on a CSS-layout section). `evidence` carries the measured source/replica values backing the score — **no record ships without it** (prove-it-works: no evidence ≠ matches).
+
+For each `divergent` section, state concretely what a **10** (matches the source) looks like, then **gap-to-target**: climb the escalation ladder (Step 6) to close it and re-score, showing before→after. `deriveSectionParityStatus(signals, acceptance)` decides `match` / `divergent` / `accepted` — and the run-report verdict re-derives from these records, so you cannot talk a `divergent` section into a pass. Pixel sampling is now only a fallback when a section has no spec-captured `backgroundColor`.
 
 **Vision review must catch what the upstream gates structurally cannot:**
 

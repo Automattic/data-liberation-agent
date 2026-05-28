@@ -23,6 +23,61 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type { Browser, BrowserContext, Page } from 'playwright';
 import { connectBrowser } from '../../adapters/shared.js';
+import type { ReplicaSectionMeasure } from './section-parity.js';
+
+/**
+ * Read per-section layout metrics from the LIVE replica DOM at desktop width. Runs in the
+ * page context (serialized by Playwright — must be self-contained, no imports). Walks the
+ * content root's top-level sections in document order and, per section, returns the
+ * rendered column count (columns in the largest single horizontal row — so a CSS-collapsed
+ * grid reads as 1, mirroring `largestRowGroupSize`), the resolved background color, and
+ * whether it carries media. Paired to the source spec sections BY INDEX by the caller.
+ */
+function measureReplicaSectionsInBrowser(): ReplicaSectionMeasure[] {
+  const TOL = 6;
+  const isTransparent = (c: string) => !c || c === 'transparent' || /,\s*0\s*\)$/.test(c);
+  const resolveBg = (el: Element): string => {
+    let node: Element | null = el;
+    while (node) {
+      const c = getComputedStyle(node).backgroundColor;
+      if (!isTransparent(c)) return c;
+      node = node.parentElement;
+    }
+    return 'rgb(255, 255, 255)';
+  };
+  const hasMediaIn = (el: Element): boolean => {
+    if (el.querySelector('img, video, svg image, picture')) return true;
+    for (const n of [el, ...Array.from(el.querySelectorAll('*'))]) {
+      const bi = getComputedStyle(n as Element).backgroundImage;
+      if (bi && bi !== 'none' && bi.includes('url(')) return true;
+    }
+    return false;
+  };
+  const columnCount = (section: Element): number => {
+    const colsEl = section.querySelector('.wp-block-columns');
+    if (!colsEl) return 1;
+    const cols = Array.from(colsEl.children).filter((c) => c.classList.contains('wp-block-column'));
+    if (cols.length === 0) return 1;
+    const tops = cols.map((c) => Math.round(c.getBoundingClientRect().top));
+    let best = 1;
+    for (const a of tops) {
+      const n = tops.filter((t) => Math.abs(t - a) <= TOL).length;
+      if (n > best) best = n;
+    }
+    return best;
+  };
+  const root =
+    document.querySelector('.entry-content') ||
+    document.querySelector('main .wp-block-post-content') ||
+    document.querySelector('main') ||
+    document.body;
+  const SKIP = new Set(['HEADER', 'FOOTER', 'NAV']);
+  const sections = Array.from(root.children).filter((el) => {
+    const role = el.getAttribute('role');
+    return !SKIP.has(el.tagName) && role !== 'banner' && role !== 'contentinfo';
+  });
+  return sections.map((s) => ({ columnCount: columnCount(s), bg: resolveBg(s), hasMedia: hasMediaIn(s) }));
+}
 
 export type Viewport = 'desktop' | 'mobile';
 
@@ -46,6 +101,10 @@ export interface VerifyPair {
   slug: string;
   /** One ViewportCapture per requested viewport (default: desktop + mobile). */
   captures: ViewportCapture[];
+  /** Per-section layout metrics read from the live replica DOM at desktop, in document
+   *  order. Paired to the source spec sections BY INDEX by the QA loop to score visual
+   *  parity. Empty when the desktop read failed or desktop wasn't a requested viewport. */
+  sections?: ReplicaSectionMeasure[];
 }
 
 export interface VerifyResult {
@@ -219,6 +278,7 @@ export async function verifyReplica(opts: VerifyOpts): Promise<VerifyResult> {
       }
 
       const captures: ViewportCapture[] = [];
+      let sectionMeasures: ReplicaSectionMeasure[] | undefined;
       for (const vp of viewports) {
         const dimensions = VIEWPORT_DIMENSIONS[vp];
         const replicaPath = join(outputDir, subdir, vp, `${slug}.png`);
@@ -253,6 +313,15 @@ export async function verifyReplica(opts: VerifyOpts): Promise<VerifyResult> {
             .waitForLoadState('networkidle', { timeout: Math.min(timeout, 15_000) })
             .catch(() => undefined);
           await page.screenshot({ path: replicaPath, fullPage: true });
+          // Read per-section layout metrics once, at desktop width (the parity gate's
+          // structural comparison is a desktop concern; mobile is the responsiveness gate).
+          if (vp === 'desktop') {
+            try {
+              sectionMeasures = await page.evaluate(measureReplicaSectionsInBrowser);
+            } catch (err) {
+              capture.errors.push(`section-metrics: ${(err as Error).message}`);
+            }
+          }
         } catch (err) {
           capture.errors.push((err as Error).message);
         } finally {
@@ -262,7 +331,7 @@ export async function verifyReplica(opts: VerifyOpts): Promise<VerifyResult> {
         captures.push(capture);
       }
 
-      pairs.push({ urlPath, slug, captures });
+      pairs.push({ urlPath, slug, captures, ...(sectionMeasures ? { sections: sectionMeasures } : {}) });
       const entry: { slug: string; desktop?: string; mobile?: string } = { slug };
       if (viewports.includes('desktop')) entry.desktop = `desktop/${slug}.png`;
       if (viewports.includes('mobile')) entry.mobile = `mobile/${slug}.png`;

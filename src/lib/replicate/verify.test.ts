@@ -8,10 +8,16 @@ mkdirSync(FIXTURE_TMP, { recursive: true });
 // Mock Playwright connectBrowser to avoid launching a real browser.
 const screenshotMock = vi.fn().mockResolvedValue(undefined);
 const gotoMock = vi.fn().mockResolvedValue({ status: () => 200 });
+const SECTION_MEASURES = [
+  { columnCount: 3, bg: 'rgb(204, 198, 198)', hasMedia: true },
+  { columnCount: 1, bg: 'rgb(255, 255, 255)', hasMedia: false },
+];
+const evaluateMock = vi.fn().mockResolvedValue(SECTION_MEASURES);
 const newPageMock = vi.fn(async () => ({
   goto: gotoMock,
   waitForLoadState: vi.fn().mockResolvedValue(undefined),
   screenshot: screenshotMock,
+  evaluate: evaluateMock,
   close: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -87,7 +93,11 @@ describe('verifyReplica', () => {
         expect(mobile.viewport).toBe('mobile');
         expect(mobile.replicaScreenshot.startsWith('replica-screenshots/mobile/')).toBe(true);
         expect(mobile.sourceScreenshot?.startsWith('screenshots/mobile/')).toBe(true);
+        // Per-section DOM metrics are read once (desktop) and attached to the pair.
+        expect(pair.sections).toEqual(SECTION_MEASURES);
       }
+      // The section read runs only at desktop — once per URL, not per viewport.
+      expect(evaluateMock).toHaveBeenCalledTimes(2);
 
       // Replica viewport directories were created
       expect(existsSync(join(dir, 'replica-screenshots', 'desktop'))).toBe(true);
