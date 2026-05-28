@@ -119,6 +119,8 @@ Every `divergent` section must be driven toward `match`. **Each iteration climbs
 - **R3 — re-extract the spec** (Class A): if the section spec itself is wrong, re-extract it, then rebuild via R2.
 - **R4 — source-CSS-scoped styled rebuild** *(arriving with the section-rebuild capability work; until then, R4-class divergences escalate to the operator at Step 7)*: reproduce a bespoke section faithfully instead of flattening or shipping an unstyled island.
 
+`editing-themes` and `editing-blocks` are `disable-model-invocation: true` — you cannot `Skill`-launch them from this inline-run loop. Apply each rung by **dispatching a subagent whose prompt points it at the skill's `SKILL.md`** (the subagent reads the file and applies the fix), matching the subagent-dispatch convention; do not stall on a refused Skill call.
+
 After applying a rung, reinstall the updated theme files via the orchestrator's install path and return to Step 1 to re-capture and re-score. "Known gap" / "where it falls short" is an **escalation trigger, not a conclusion** — never write it as the terminal state of a shipped run.
 
 ### Step 7 — Circuit-breaker checkpoint (escalate, don't surrender)

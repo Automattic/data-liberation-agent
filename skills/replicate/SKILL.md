@@ -52,7 +52,11 @@ Use these tools rather than reimplementing their logic in Bash. Each has a typed
 
 ## Sub-skills you invoke
 
-Read each skill's SKILL.md before using it. **`design-foundations` and `design-qa` are `disable-model-invocation: true`** — the Skill tool will REFUSE to launch them. Do not try to "invoke" them; instead READ their `SKILL.md` and follow it inline in this shared context, driving their MCP tools (`liberate_design_foundation_scaffold`/`_save`/`_validate`, `liberate_replicate_verify`, `evaluateResponsive`) yourself. `generating-patterns` / `compose-page-blocks` / `editing-themes` / `editing-blocks` are normal Skill-/subagent-invocable.
+Read each skill's SKILL.md before using it.
+
+- **`design-qa` is `disable-model-invocation: true`** — the Skill tool will REFUSE to launch it. Do not try to "invoke" it; READ its `SKILL.md` and follow it inline in this shared context, driving its MCP tools (`liberate_replicate_verify`, `evaluateResponsive`) yourself.
+- **`design-foundations` is model-invocable** (a user may run it standalone), but in THIS flow you still run it inline for shared context — read its `SKILL.md` and drive `liberate_design_foundation_scaffold`/`_save`/`_validate` yourself.
+- **`generating-patterns` / `compose-page-blocks` / `editing-themes` / `editing-blocks` are ALSO `disable-model-invocation: true`** — you cannot `Skill`-launch them. Invoke each by **dispatching a subagent whose prompt points it at the skill's `SKILL.md`** (the builder fan-out in Step 4 already works this way); the subagent reads the file and follows it. This matches the subagent-dispatch convention and keeps the workflow from stalling on a refused Skill call.
 
 | Skill | When |
 |---|---|

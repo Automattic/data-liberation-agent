@@ -1,7 +1,6 @@
 ---
 name: design-foundations
 description: Build a coherent design-foundation JSON from a liberated site — semantic color/typography/spacing roles with evidence trails. Consumes the partial scaffold produced by liberate_design_foundation_scaffold plus aggregate HTML/CSS analysis and representative rendered HTML; produces a complete design-foundation matching the schema. Call after liberation, before theme generation.
-disable-model-invocation: true
 ---
 
 # Design Foundations
