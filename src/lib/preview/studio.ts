@@ -170,6 +170,40 @@ export async function updateStudioSiteOptions(
   return warnings;
 }
 
+/** WP-default demo content created by every fresh install, identified by slug. */
+export const WP_DEFAULT_CONTENT_SLUGS = ['hello-world', 'sample-page', 'privacy-policy'];
+
+/**
+ * Delete WP's default demo content (Hello world! post, Sample Page, the
+ * auto-drafted Privacy Policy) BEFORE importing the source WXR. Two reasons:
+ *  1. It pollutes a faithful replica (a replica reflects the SOURCE, not WP).
+ *  2. The default `privacy-policy` draft STEALS the slug, so the source's own
+ *     privacy page imports as `privacy-policy-2` — which then mismatches the
+ *     slug the reconstruct step targets, writing the reconstruction into the
+ *     wrong post. Clearing the defaults first lets source pages claim their
+ *     natural slugs. Best-effort + per-slug isolated: one failure never blocks
+ *     the import. Idempotent (a re-run finds nothing to delete).
+ */
+export async function deleteDefaultWpContent(
+  sitePath: string,
+  runWp: StudioWpRunner = studioWp,
+): Promise<string[]> {
+  const warnings: string[] = [];
+  for (const slug of WP_DEFAULT_CONTENT_SLUGS) {
+    try {
+      const out = await runWp(sitePath, [
+        'post', 'list', `--name=${slug}`, '--post_type=post,page',
+        '--post_status=any', '--field=ID', '--format=ids',
+      ]);
+      const ids = out.trim().split(/\s+/).filter(Boolean);
+      if (ids.length > 0) await runWp(sitePath, ['post', 'delete', ...ids, '--force']);
+    } catch (err) {
+      warnings.push(`WP-default cleanup for "${slug}" failed: ${(err as Error).message.trim()}`);
+    }
+  }
+  return warnings;
+}
+
 /**
  * Best-effort cleanup for a Studio site that `startStudioPreview` created but
  * then failed to finish setting up (staging, wp import, etc.). We'd rather
@@ -372,6 +406,10 @@ export async function startStudioPreview(opts: StartStudioOpts): Promise<StartPr
     const staged = stageArtifacts(opts.outputDir, sitePath);
 
     if (staged.wxrRelPath) {
+      // Clear WP-default demo content BEFORE import so source pages claim their
+      // natural slugs (esp. the default privacy-policy draft, which would force
+      // the source privacy page to import as privacy-policy-2). Best-effort.
+      warnings.push(...await deleteDefaultWpContent(sitePath));
       // File paths for the rewrite step are host paths (Node writes locally).
       const wxrHostPath = join(sitePath, staged.wxrRelPath);
       // Paths passed to `studio wp` must be VFS paths — Studio mounts the
@@ -435,6 +473,10 @@ export async function startStudioPreview(opts: StartStudioOpts): Promise<StartPr
           themeSlug: opts.themeSlug,
           themeFiles: opts.themeFiles,
           blockPlugins: opts.blockPlugins,
+          // Bridge on-disk BINARY assets (self-hosted fonts, logo.png, icon SVGs)
+          // that string themeFiles[] can't carry — same as liberate_install_theme.
+          // Without this the replica renders with system fonts + a broken logo.
+          assetSourceDir: join(resolve(opts.outputDir), 'theme'),
         });
         for (const slug of written.pluginSlugs) {
           try {

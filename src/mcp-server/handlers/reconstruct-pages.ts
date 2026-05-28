@@ -110,6 +110,18 @@ async function updatePagePostContent(
       id = stdout.trim().split(/\s+/)[0] || '';
     }
     if (!id) return false;
+    if (isHome) {
+      // Make this page the static front page so `/` renders the homepage
+      // reconstruction (front-page.html) instead of the blog index. Best-effort
+      // + idempotent (no-op when already set); the content update is the primary
+      // goal, so a front-page failure must not abort it.
+      try {
+        await wp(['option', 'update', 'show_on_front', 'page']);
+        await wp(['option', 'update', 'page_on_front', id]);
+      } catch {
+        /* best-effort */
+      }
+    }
     // Pass content as a single argv value (execFile = no shell, so no escaping /
     // injection concern); page block markup is well under ARG_MAX. The wp-cli
     // field is `post_content` (the bare `--content` flag is silently ignored).

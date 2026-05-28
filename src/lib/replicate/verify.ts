@@ -19,7 +19,7 @@
 // Replica screenshots land at <outputDir>/replica-screenshots/<slug>.png so
 // the side-by-side pairs sit alongside the source set.
 //
-import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type { Browser, BrowserContext, Page } from 'playwright';
 import { connectBrowser } from '../../adapters/shared.js';
@@ -187,6 +187,12 @@ export async function verifyReplica(opts: VerifyOpts): Promise<VerifyResult> {
   const pairs: VerifyPair[] = [];
   const errors: string[] = [];
   const unmatchedUrls: string[] = [];
+  // Replica manifest entries (standard {version,entries} shape) so liberate_compare
+  // can join this dir against the source screenshots dir. KEY by the matched
+  // SOURCE url when available — compare joins on `new URL(url).pathname`, and the
+  // source manifest's urls lack the trailing slash the replica paths carry, so
+  // reusing the source url string guarantees the pathnames align.
+  const manifestEntries: Record<string, { slug: string; desktop?: string; mobile?: string }> = {};
 
   let browser: Browser | null = null;
   try {
@@ -257,9 +263,26 @@ export async function verifyReplica(opts: VerifyOpts): Promise<VerifyResult> {
       }
 
       pairs.push({ urlPath, slug, captures });
+      const entry: { slug: string; desktop?: string; mobile?: string } = { slug };
+      if (viewports.includes('desktop')) entry.desktop = `desktop/${slug}.png`;
+      if (viewports.includes('mobile')) entry.mobile = `mobile/${slug}.png`;
+      manifestEntries[sourceMatch?.url ?? fullUrl] = entry;
     }
   } finally {
     await browser.close().catch(() => undefined);
+  }
+
+  // Write the replica manifest so `liberate_compare` can join this dir to the
+  // source screenshots dir (it reads {version:1, entries:{url:{slug}}} and builds
+  // <dir>/<viewport>/<slug>.png paths itself). Best-effort — a write failure must
+  // not fail the capture (the agent's vision review is the gate, not the score).
+  try {
+    writeFileSync(
+      join(outputDir, subdir, 'manifest.json'),
+      JSON.stringify({ version: 1, entries: manifestEntries }, null, 2),
+    );
+  } catch {
+    /* best-effort */
   }
 
   const ok =
