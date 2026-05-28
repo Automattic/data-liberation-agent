@@ -4,6 +4,7 @@ import type { ExtractionLog } from '../lib/extraction/extraction-log.js';
 import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { fetchSitemap, classifyUrl } from '../lib/extraction/sitemap.js';
 import { slugify, launchBrowser, getPlaywright, runExtractionLoop, IMAGE_EXTENSIONS } from './shared.js';
+import { squarespaceHtmlToGutenberg } from './squarespace-blocks.js';
 import type { InventoryUrl, NavLink } from './shared.js';
 import { WooProductCsvBuilder } from '../lib/import/woo-product-csv.js';
 import type { WooProduct } from '../lib/import/woo-product-csv.js';
@@ -757,6 +758,12 @@ export const squarespaceAdapter: PlatformAdapter = {
               // Playwright not available or DOM extraction failed — continue with what we have
             }
           }
+
+          // Convert Squarespace's sqs-block markup into Gutenberg block markup so
+          // the imported post lands as proper editable blocks (image, gallery,
+          // paragraph, heading, …) instead of one Classic blob. No-op when the
+          // body doesn't contain sqs-block markers (e.g. DOM-fallback output).
+          body = squarespaceHtmlToGutenberg(body);
 
           const bodyText = body.replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
           let qualityScore: 'high' | 'medium' | 'low' = 'low';
