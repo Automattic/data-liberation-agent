@@ -6,6 +6,23 @@ AI agents: when you contribute an improvement, add an entry here. See [CONTRIBUT
 
 ---
 
+## 2026-05-28 — corneliusholmes.com (Wix) re-run: content-width band layers + verify `__name` tooling bug
+
+**Found by:** Claude + Matt
+**During:** A second `/liberate` pass on corneliusholmes.com. After the prior fixes, content pages STILL rendered flat-white and every captured section `backgroundColor` was `rgb(255,255,255)`.
+**Type:** reconstruction fidelity + tooling bug
+
+### 1. Section bands missed because the colored layer is content-width, not full-bleed
+The descendant bg-layer scan in `section-extract.ts` (`pickEffectiveBg`) required the colored child to span **≥90% width AND ≥90% height**. A live DOM probe showed Wix paints each band's tint on an **~810px-of-1440 (~56%) inner column** beside a photo (peach `#fadcd6`, blue `#b6d1d9`, sage `#d5e1ca`, warm-grey `#f0eded`), so the ≥90%-width gate skipped them and the section recorded white. **Fix:** accept a *content-width band* — `width ≥ 50%` when it still spans `height ≥ 90%` of the section (full-height ⇒ it's the band, not a small card); largest-area still wins. 40/40 `section-extract.test.ts` pass. Re-extracting with `refresh:true` restored the pastel bands across all content pages. (Extends fix #5 below.)
+
+### 2. `liberate_replicate_verify` section-metrics crash: `__name is not defined`
+Every desktop capture's `measureReplicaSectionsInBrowser` `page.evaluate` threw `ReferenceError: __name is not defined` — esbuild/tsx's `keepNames` helper (`__name`) is referenced inside the function body but isn't defined in the page context. This silently disables the automated `SectionParity` live-DOM metrics, forcing QA onto the vision+pngjs fallback. **Still open** — the browser-evaluated function needs to be self-contained (no bundler-injected helpers). Screenshots themselves capture fine.
+
+### 3. Card-grid flatten (prior "still open") — hand-fixed per-page for the homepage
+The 3-card numbered service row and the two-tone My-Approach/About-Me blocks still flatten (geometry classifier reads them as `static`, no `cells[]`). For this run they were rebuilt as an R2 per-page `post_content` patch (3 peach cards in a columns row; peach+coral two-tone cards), and the homepage hero was rebuilt as a `wp:cover` (the captured hero `<img>` src came back empty, so the structured render fell back to a black band with an invisible black-on-black title). The underlying **card-grid / cover-hero classifier** gap remains the right systemic fix.
+
+---
+
 ## 2026-05-28 — Visual-parity fixes from the corneliusholmes.com (Wix) rebuild: gapless sections, exact captured colors, fluid-off, suffix-tolerant font match, QA sampling
 
 **Found by:** Claude + Matt

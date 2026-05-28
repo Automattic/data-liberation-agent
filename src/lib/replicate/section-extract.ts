@@ -1338,9 +1338,19 @@ export async function extractFull(
             const dTop = dr.top + window.scrollY;
             const dBot = dTop + dr.height;
             const vOverlap = Math.max(0, Math.min(dBot, bottom) - Math.max(dTop, top));
-            // a full-bleed background layer: spans ≥90% of the section height AND
-            // ≥90% of its width (excludes smaller colored cards/buttons).
-            if (vOverlap >= secH * 0.9 && dr.width >= r0.width * 0.9) {
+            // A section band layer. Two shapes qualify:
+            //  - full-bleed: spans ≥90% of the section width (a true bg layer).
+            //  - content-width band: a page builder constrains the colored layer
+            //    to the content column (e.g. Wix paints a band tint on an ~810px
+            //    of 1440px = 56%-wide inner block beside a photo), so it never
+            //    reaches 90% width but it IS the section's dominant colored
+            //    surface. Accept ≥50% width when it also spans ≥90% of the
+            //    section HEIGHT (full-height ⇒ it's the band, not a small card).
+            // Both require near-full height to exclude small colored cards/buttons;
+            // largest-area wins so the band beats any nested chip.
+            const fullBleed = vOverlap >= secH * 0.9 && dr.width >= r0.width * 0.9;
+            const contentBand = vOverlap >= secH * 0.9 && dr.width >= r0.width * 0.5;
+            if (fullBleed || contentBand) {
               const area = vOverlap * dr.width;
               if (area > bestArea) {
                 bestColor = dcs.backgroundColor;
