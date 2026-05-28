@@ -6,6 +6,58 @@ AI agents: when you contribute an improvement, add an entry here. See [CONTRIBUT
 
 ---
 
+## 2026-05-28 — Squarespace 7.1 `sqs-block` HTML imports as one Classic block instead of editable Gutenberg blocks
+
+**Found by:** Claude + Davi
+**During:** Migrating walkaboutchronicles.com — a 1,500+ post Squarespace 7.1 photo blog. After import, every post body opened as a single Classic block in the editor; users couldn't reorder images, swap individual photos, or toggle the gallery lightbox without first running "Convert to blocks" (which produced ugly, broken-up output that lost gallery semantics).
+**Type:** content type
+
+### What I found
+Squarespace 7.1's per-post `item.body` HTML is a deeply-nested layout — `<div class="sqs-layout"><div class="row"><div class="col"><div class="sqs-block image-block">…` — with content wrapped inside class-named block containers. The current Squarespace adapter passes this HTML straight into `<content:encoded>`. WordPress's import has no way to know those `sqs-block` divs map to Gutenberg blocks, so the entire body lands as a single Classic block in the editor.
+
+The Squarespace class names are stable and easy to map deterministically:
+
+| Squarespace class                                | Gutenberg block                                   |
+| ------------------------------------------------ | ------------------------------------------------- |
+| `sqs-block image-block`                          | `core/image`                                      |
+| `sqs-block gallery-block`                        | `core/gallery` (`linkTo:media` → core lightbox)   |
+| `sqs-block html-block` (h1–h6, p, ul/ol, blockquote, hr) | `core/heading` / `core/paragraph` / `core/list` / `core/quote` / `core/separator` |
+| `sqs-block embed-block` / `video-block`          | `core/embed` (with provider slug for YouTube/Vimeo/etc.) |
+| `sqs-block quote-block`                          | `core/quote`                                      |
+| `sqs-block horizontal-rule-block` / `line-block` | `core/separator`                                  |
+| `sqs-block spacer-block`                         | dropped (Gutenberg handles spacing natively)      |
+| unrecognised `sqs-block …`                       | `core/html` (lossless fallback)                   |
+
+Two gotchas worth noting:
+
+- **Lazy-loaded image URLs.** Squarespace 7.1 puts the real CDN URL in `data-image=` and uses a placeholder for `src=` until JS hydrates. Block emission has to read `data-image` first or every image lands as a placeholder. (Same fix as the DOM-fallback discovery; the helper reuses the pattern.)
+- **Gallery lightbox.** Emitting `<!-- wp:gallery {"linkTo":"media"} -->` with each inner `wp:image` wrapped in `<a href="…">` triggers core's native click-to-zoom lightbox when the theme enables it, which is the closest match to Squarespace's gallery click-to-enlarge behaviour. No third-party plugin needed.
+
+### How it works
+A new module `src/adapters/squarespace-blocks.ts` exposes `squarespaceHtmlToGutenberg(html)`:
+
+- No-op when the input doesn't contain `sqs-block` markers (safe to call on every body, including DOM-fallback output).
+- Loads the HTML with cheerio (already a project dependency).
+- Walks every top-level `sqs-block` element (children of one are skipped to avoid double-emission).
+- Dispatches on the block class via a small regex table, emitting the matching Gutenberg block markup with the right block JSON.
+- Preserves block order; preserves inline formatting (`<em>`, `<strong>`, `<a>`) inside paragraphs; preserves figure captions on images.
+- Lossless fallback to `core/html` for any unrecognised `sqs-block` variant so future Squarespace block types don't drop content.
+
+```ts
+// In squarespace.ts → extract() → extractPage()
+body = squarespaceHtmlToGutenberg(body);
+```
+
+12 new unit tests cover image (with `data-image` preference), captioned image, multi-image gallery (with lightbox link), heading + paragraph + list, ordered lists, YouTube embed with provider slug, spacer drop, horizontal rule, unrecognised block fallback, and block-order preservation.
+
+### Why it's better than the previous approach
+Before: every imported Squarespace post landed as one Classic block. Editing was awkward, gallery lightbox didn't work (because there was no gallery block), images couldn't be swapped individually, and "Convert to blocks" produced messy intermediate HTML that lost the gallery grouping entirely.
+
+After: posts land as the same proper Gutenberg blocks the user would have built by hand on a fresh WordPress site. Galleries trigger the core lightbox without a plugin. Images carry their alt text + caption. Embeds get their oEmbed provider slug. Unknown future Squarespace block types degrade to `core/html` instead of breaking the import.
+
+
+---
+
 ## 2026-04-30 — `--resume` overwrites the existing WXR with only newly-extracted items
 
 **Found by:** Claude + James
