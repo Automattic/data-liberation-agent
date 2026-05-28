@@ -160,6 +160,15 @@ if ( ! empty( $admins ) ) {
 $wp_import                    = new WP_Import();
 $wp_import->fetch_attachments = true;
 
+// Skip intermediate image-size (thumbnail) generation during import. WP_Import
+// runs wp_generate_attachment_metadata per attachment, which regenerates every
+// registered size — for media-heavy sites (100s of images) this blows Studio's
+// 120s `start-server` IPC silence window before the import can finish. The
+// replica preview only needs the full-size image to render faithfully;
+// thumbnails can be regenerated later via `wp media regenerate` if a template
+// needs a specific size.
+add_filter( 'intermediate_image_sizes_advanced', '__return_empty_array' );
+
 $_GET  = array(
 	'import' => 'wordpress',
 	'step'   => 2,
