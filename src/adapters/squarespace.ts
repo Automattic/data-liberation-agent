@@ -3,7 +3,7 @@ import type { WxrBuilder } from '../lib/extraction/wxr-builder.js';
 import type { ExtractionLog } from '../lib/extraction/extraction-log.js';
 import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { fetchSitemap, classifyUrl } from '../lib/extraction/sitemap.js';
-import { slugify, launchBrowser, getPlaywright, runExtractionLoop, IMAGE_EXTENSIONS } from './shared.js';
+import { slugify, launchBrowser, getPlaywright, runExtractionLoop, extractNavLinks, IMAGE_EXTENSIONS } from './shared.js';
 import type { InventoryUrl, NavLink } from './shared.js';
 import { WooProductCsvBuilder } from '../lib/import/woo-product-csv.js';
 import type { WooProduct } from '../lib/import/woo-product-csv.js';
@@ -597,10 +597,25 @@ export const squarespaceAdapter: PlatformAdapter = {
     // 2. Fetch sitemap
     const sitemapUrls = await fetchSitemap(url);
 
-    // 3. Extract navigation from the homepage JSON or sitemap
-    const navigation: NavLink[] = [];
-    // Squarespace JSON sometimes includes navigation in the website object;
-    // for now, we derive nav from the top-level sitemap pages.
+    // 3. Extract navigation from the homepage HTML — Squarespace renders its
+    // primary navigation server-side as <nav><a>…</a></nav>, so a plain HTML
+    // fetch of the homepage is enough. The `?format=json` payload only
+    // contains nav data when the user has an admin session (e.g. via CDP),
+    // which we don't require for public extraction.
+    let navigation: NavLink[] = [];
+    try {
+      const homepageResp = await fetch(url, {
+        signal: AbortSignal.timeout(15000),
+        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; DataLiberation/1.0)' },
+      });
+      if (homepageResp.ok) {
+        const homepageHtml = await homepageResp.text();
+        navigation = extractNavLinks(homepageHtml, url);
+      }
+    } catch {
+      // Non-fatal — leave navigation empty; the merge from admin discovery
+      // (below, when cdpPort is set) can still backfill links.
+    }
 
     // 4. Classify URLs — for Squarespace, we can probe each URL with ?format=json
     // to determine if it's a collection or item, but for the initial pass we use
