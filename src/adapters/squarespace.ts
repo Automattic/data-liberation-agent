@@ -33,6 +33,12 @@ export interface SquarespaceInventory {
   navigation: NavLink[];
   counts: Record<string, number>;
   urls: InventoryUrl[];
+  /** Per-post metadata captured from the paginated `?format=json-pretty` blog
+   * archive(s). Keyed by canonical post URL. Used by `extract()` to backfill
+   * `assetUrl`, author display name, categories, and tags even when the
+   * per-URL `?format=json` response is empty (common on 7.1 Fluid Engine
+   * sites). Set during discover(); persisted in `inventory.json`. */
+  blogArchive?: SqsBlogArchiveEntry[];
 }
 
 // ---------------------------------------------------------------------------
@@ -110,6 +116,183 @@ async function fetchSqsJson(url: string): Promise<SqsJsonResponse | null> {
   } catch {
     return null;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Squarespace blog archive walker via `?format=json-pretty`
+//
+// Every Squarespace blog "section" exposes itself as a paginated JSON feed at
+// `<blog-prefix>?format=json-pretty[&offset=<addedOn>]`. Each page returns up
+// to ~20 `items` plus a `pagination` object with `nextPageOffset`. Walking
+// this feed is far cheaper than probing every post URL with `?format=json`,
+// and it gives us per-post `authorId`, `author.firstName` / `lastName`, and
+// `assetUrl` (cover image) in one HTTP round-trip per ~20 posts.
+//
+// It also catches posts the sitemap misses (new posts published between
+// sitemap regenerations) and surfaces the canonical cover image even on
+// 7.1 Fluid Engine pages where per-URL `?format=json` returns an empty body.
+// ---------------------------------------------------------------------------
+
+export interface SqsBlogArchiveEntry {
+  url: string;
+  urlId: string;
+  fullUrl: string;
+  title: string;
+  assetUrl?: string;
+  publishOn?: number;
+  addedOn?: number;
+  categories?: string[];
+  tags?: string[];
+  authorId?: string;
+  authorFirstName?: string;
+  authorLastName?: string;
+  authorDisplayName?: string;
+}
+
+interface SqsBlogArchivePageItem {
+  id?: string;
+  title?: string;
+  urlId?: string;
+  fullUrl?: string;
+  assetUrl?: string;
+  publishOn?: number;
+  addedOn?: number;
+  categories?: string[];
+  tags?: string[];
+  authorId?: string;
+  author?: { firstName?: string; lastName?: string; displayName?: string };
+}
+
+interface SqsBlogArchivePage {
+  items?: SqsBlogArchivePageItem[];
+  pagination?: { nextPage?: number | string; nextPageOffset?: number | string };
+}
+
+const MAX_ARCHIVE_PAGES = 200;
+
+/**
+ * Walk the paginated blog archive feed at `<siteUrl><blogPrefix>?format=json-pretty`.
+ * Returns one entry per post. Stops on empty page, missing pagination, or
+ * MAX_ARCHIVE_PAGES (safety cap for runaway loops).
+ */
+async function fetchBlogArchive(
+  siteUrl: string,
+  blogPrefix: string,
+  opts: { maxPages?: number } = {}
+): Promise<SqsBlogArchiveEntry[]> {
+  const origin = (() => { try { return new URL(siteUrl).origin; } catch { return siteUrl.replace(/\/+$/, ''); } })();
+  const prefix = blogPrefix.startsWith('/') ? blogPrefix : `/${blogPrefix}`;
+  const maxPages = opts.maxPages ?? MAX_ARCHIVE_PAGES;
+
+  const out: SqsBlogArchiveEntry[] = [];
+  const seenUrlIds = new Set<string>();
+  let offset: number | string | null = null;
+  let prevOffset: number | string | null = null;
+
+  for (let page = 0; page < maxPages; page++) {
+    const url = origin + prefix + '?format=json-pretty' + (offset != null ? `&offset=${encodeURIComponent(String(offset))}` : '');
+    let resp: Response;
+    try {
+      resp = await fetch(url, { signal: AbortSignal.timeout(20000), headers: { 'User-Agent': 'Mozilla/5.0 (compatible; DataLiberation/1.0)' } });
+    } catch {
+      break;
+    }
+    if (!resp.ok) break;
+    let json: SqsBlogArchivePage;
+    try { json = (await resp.json()) as SqsBlogArchivePage; } catch { break; }
+    const items = json.items;
+    if (!items || items.length === 0) break;
+
+    for (const it of items) {
+      if (!it.urlId || seenUrlIds.has(it.urlId)) continue;
+      seenUrlIds.add(it.urlId);
+      const author = it.author || {};
+      const full = it.fullUrl || '';
+      const absUrl = full.startsWith('http') ? full : origin + (full.startsWith('/') ? full : `/${full}`);
+      out.push({
+        url: absUrl,
+        urlId: it.urlId,
+        fullUrl: full,
+        title: it.title || '',
+        assetUrl: it.assetUrl,
+        publishOn: it.publishOn,
+        addedOn: it.addedOn,
+        categories: it.categories,
+        tags: it.tags,
+        authorId: it.authorId,
+        authorFirstName: author.firstName,
+        authorLastName: author.lastName,
+        authorDisplayName: author.displayName,
+      });
+    }
+
+    // Resolve next-page offset. Prefer the explicit `nextPageOffset` field; fall back to
+    // `nextPage`; finally fall back to the `addedOn` of the oldest item on the page
+    // (Squarespace uses descending-by-addedOn ordering by default).
+    const pag = json.pagination || {};
+    let next: number | string | null = pag.nextPageOffset ?? pag.nextPage ?? null;
+    if (next == null) {
+      const last = items[items.length - 1];
+      next = last?.addedOn ?? null;
+    }
+    if (next == null || next === offset || next === prevOffset) break;
+    prevOffset = offset;
+    offset = next;
+  }
+
+  return out;
+}
+
+/**
+ * Detect which URL prefixes look like a Squarespace blog section so we can walk
+ * each one's archive feed. Two signals:
+ *   1) prefixes with at least 2 URLs matching `/<prefix>/<slug>` AND a sibling
+ *      year-based path (`/<prefix>/YYYY/M/D/<slug>`) — Squarespace date-based
+ *      blog URLs.
+ *   2) Common conventional names (/blog, /journal, /news, /posts, /stories)
+ *      whenever any URL sits under them.
+ *
+ * Returns the prefixes in order of confidence. Always returns absolute paths
+ * that start with `/`.
+ */
+export function detectBlogPrefixes(urls: InventoryUrl[]): string[] {
+  const CONVENTIONS = ['/blog', '/journal', '/news', '/posts', '/stories'];
+  const datePathRe = /^(\/[^/]+(?:\/[^/]+)*?)\/\d{4}\/\d{1,2}\/\d{1,2}\/[^/]+\/?$/;
+  const dateCounts = new Map<string, number>();
+  const conventionHits = new Set<string>();
+
+  for (const { url } of urls) {
+    let path: string;
+    try { path = new URL(url).pathname; } catch { continue; }
+    if (path === '/' || path === '') continue;
+
+    const m = datePathRe.exec(path);
+    if (m) {
+      const prefix = m[1] || '/';
+      dateCounts.set(prefix, (dateCounts.get(prefix) || 0) + 1);
+      continue;
+    }
+
+    for (const c of CONVENTIONS) {
+      if (path === c || path.startsWith(c + '/')) {
+        conventionHits.add(c);
+        break;
+      }
+    }
+  }
+
+  const datePrefixes = [...dateCounts.entries()]
+    .filter(([_, n]) => n >= 2)
+    .sort((a, b) => b[1] - a[1])
+    .map(([p]) => p);
+
+  // Date-based prefixes are higher confidence (proves the blog exists at that path).
+  const seen = new Set<string>();
+  const ordered: string[] = [];
+  for (const p of [...datePrefixes, ...conventionHits]) {
+    if (!seen.has(p)) { seen.add(p); ordered.push(p); }
+  }
+  return ordered;
 }
 
 /**
@@ -635,6 +818,32 @@ export const squarespaceAdapter: PlatformAdapter = {
       counts['homepage'] = 1;
     }
 
+    // Walk the paginated blog archive feed (`?format=json-pretty&offset=`) for
+    // any blog section we can identify in the sitemap. This catches posts the
+    // sitemap missed and captures per-post metadata (assetUrl, authorId, full
+    // author name, categories, tags) in pages of ~20 — cheaper than per-URL
+    // probes for large archives.
+    const blogArchive: SqsBlogArchiveEntry[] = [];
+    const archiveSeen = new Set<string>();
+    try {
+      const blogPrefixes = detectBlogPrefixes(inventoryUrls);
+      for (const prefix of blogPrefixes) {
+        const entries = await fetchBlogArchive(url, prefix);
+        for (const e of entries) {
+          if (archiveSeen.has(e.url)) continue;
+          archiveSeen.add(e.url);
+          blogArchive.push(e);
+          // Add to the inventory if the sitemap didn't surface it.
+          if (!inventoryUrls.find((u) => u.url === e.url)) {
+            inventoryUrls.push({ url: e.url, type: 'post' });
+            counts['post'] = (counts['post'] || 0) + 1;
+          }
+        }
+      }
+    } catch {
+      // Non-fatal — the per-URL `?format=json` path still works on its own.
+    }
+
     let inventory: SquarespaceInventory = {
       siteUrl: url,
       discoveredAt: new Date().toISOString(),
@@ -646,6 +855,7 @@ export const squarespaceAdapter: PlatformAdapter = {
       navigation,
       counts,
       urls: inventoryUrls,
+      blogArchive: blogArchive.length > 0 ? blogArchive : undefined,
     };
 
     // Admin discovery via CDP — finds drafts, unlisted pages, password-protected content
@@ -700,6 +910,11 @@ export const squarespaceAdapter: PlatformAdapter = {
     }
 
     try {
+      // Index the blog-archive metadata captured during discover() so per-URL
+      // extraction can fall back to it when `?format=json` returns empty body.
+      const archiveByUrl = new Map<string, SqsBlogArchiveEntry>();
+      for (const e of inv.blogArchive || []) archiveByUrl.set(e.url, e);
+
       const result = await runExtractionLoop({
         urls: inv.urls,
         navigation: inv.navigation,
@@ -718,17 +933,18 @@ export const squarespaceAdapter: PlatformAdapter = {
 
           const item = json?.item;
           const collection = json?.collection;
+          const archive = archiveByUrl.get(url);
 
           let body = item?.body || collection?.mainContent || '';
-          let title = item?.title || collection?.title || slugify(url);
+          let title = item?.title || collection?.title || archive?.title || slugify(url);
           const excerpt = item?.excerpt || collection?.description || '';
-          const date = sqsTimestampToIso(item?.publishOn || item?.addedOn);
+          const date = sqsTimestampToIso(item?.publishOn || item?.addedOn || archive?.publishOn || archive?.addedOn);
           const seoTitle = item?.seoData?.seoTitle || title;
           const seoDescription = item?.seoData?.seoDescription || excerpt;
-          const categories = item?.categories || [];
-          const tags = item?.tags || [];
+          const categories = item?.categories || archive?.categories || [];
+          const tags = item?.tags || archive?.tags || [];
 
-          let mediaUrls = extractSquarespaceMediaUrls(body, item?.assetUrl);
+          let mediaUrls = extractSquarespaceMediaUrls(body, item?.assetUrl || archive?.assetUrl);
 
           // Check if JSON content is empty/stub (Squarespace 7.1 Fluid Engine returns
           // structural HTML like sqs-layout/sqs-block divs with no actual text content)
@@ -763,7 +979,16 @@ export const squarespaceAdapter: PlatformAdapter = {
           if (bodyText.length > 200) qualityScore = 'high';
           else if (bodyText.length > 50) qualityScore = 'medium';
 
-          const author = item?.author?.displayName || undefined;
+          // Prefer the per-item displayName when present; otherwise use the
+          // archive entry's display name (or first+last fallback). authorId is
+          // surfaced in the archive but the WXR author records are deduped by
+          // display name downstream, so we don't expose the ID here.
+          const archiveAuthor = archive
+            ? archive.authorDisplayName
+              || [archive.authorFirstName, archive.authorLastName].filter(Boolean).join(' ').trim()
+              || undefined
+            : undefined;
+          const author = item?.author?.displayName || archiveAuthor || undefined;
 
           return {
             title,

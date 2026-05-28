@@ -6,6 +6,52 @@ AI agents: when you contribute an improvement, add an entry here. See [CONTRIBUT
 
 ---
 
+## 2026-05-28 — Squarespace blog archive `?format=json-pretty` paginates a structured per-post feed (assetUrl + authorId + categories)
+
+**Found by:** Claude + Davi
+**During:** Migrating walkaboutchronicles.com — a 1,500+ post Squarespace 7.1 blog with two contributors (Steven and Kimberly). Probing each post URL with `?format=json` to rebuild author attribution and cover images would have meant ~3,000 HTTP round-trips and 1–2 hours of fetch time. Walking the archive feed instead took ~75 round-trips and surfaced richer data than the per-URL endpoint.
+**Type:** API endpoint
+
+### What I found
+Every Squarespace blog "section" exposes itself as a paginated JSON feed at `<blog-prefix>?format=json-pretty[&offset=<addedOn>]`. Each page returns up to ~20 `items` plus a `pagination` object with `nextPageOffset` (older Squarespace deployments use `nextPage` instead, and on a few sites both fields are absent and you have to fall back to the `addedOn` of the oldest item on the current page).
+
+Each item carries:
+
+- `title`, `urlId`, `fullUrl`, `excerpt`
+- `publishOn`, `addedOn` (ms-since-epoch)
+- `categories[]`, `tags[]`
+- `assetUrl` — the canonical cover image, useful for backfilling `_thumbnail_id` in WordPress
+- `authorId` — Squarespace's per-author stable ID, useful for reattributing multi-contributor blogs (two authors with the same display name still get distinct IDs)
+- `author.firstName`, `author.lastName`, `author.displayName`, `author.avatarUrl`
+
+The endpoint works without auth, returns the data on both 7.0 and 7.1 sites, and crucially **still serves real metadata for 7.1 Fluid Engine posts** where the per-URL `?format=json` returns an empty body.
+
+### How it works
+`src/adapters/squarespace.ts` gains three pieces:
+
+1. `SqsBlogArchiveEntry` type capturing the per-post fields above.
+2. `detectBlogPrefixes(urls)` — scans the inventory for date-based blog paths (`/foo/YYYY/M/D/slug` ≥ 2 hits) and known conventional names (`/blog`, `/journal`, `/news`, `/posts`, `/stories`).
+3. `fetchBlogArchive(siteUrl, blogPrefix)` — walks pagination via `?offset=`, dedupes by `urlId`, and stops on empty page, non-advancing offset, or a 200-page safety cap.
+
+`discover()` calls these after building the sitemap-based inventory, merges any post URLs the sitemap missed, and stashes the per-post entries on `SquarespaceInventory.blogArchive`. `extract()` builds an `archiveByUrl` map and uses it inside `extractPage()` as a fallback for `assetUrl`, `categories`, `tags`, `publishOn`, `addedOn`, and author display name when the per-URL JSON is empty.
+
+```ts
+const archive = archiveByUrl.get(url);
+let body  = item?.body || collection?.mainContent || '';
+let title = item?.title || collection?.title || archive?.title || slugify(url);
+const date = sqsTimestampToIso(item?.publishOn || item?.addedOn || archive?.publishOn || archive?.addedOn);
+const categories = item?.categories || archive?.categories || [];
+let   mediaUrls = extractSquarespaceMediaUrls(body, item?.assetUrl || archive?.assetUrl);
+```
+
+### Why it's better than the previous approach
+Before: the adapter enumerated blog posts via the sitemap then ran one `?format=json` HTTP request per URL to extract content + metadata. On 7.1 Fluid Engine sites the per-URL body came back empty, so the adapter fell through to Playwright DOM extraction — but the cover image (`assetUrl`) was lost in that path because it's not in the rendered DOM, and the author attribution collapsed to whatever the per-URL `item.author.displayName` returned (often empty on Fluid Engine pages).
+
+After: a single paginated walk picks up the full per-post metadata in one shot, posts the sitemap missed get backfilled, every post has its canonical `assetUrl`/cover image, and `authorId` is available for downstream user-mapping work. On large blogs the HTTP cost drops from O(N) to O(N/20).
+
+
+---
+
 ## 2026-04-30 — `--resume` overwrites the existing WXR with only newly-extracted items
 
 **Found by:** Claude + James
