@@ -202,13 +202,22 @@ async function extractDomContent(
 
     for (const el of elements.slice(0, 250)) {
       if (el.tagName === 'IMG') {
-        const src = (el as HTMLImageElement).src;
-        const alt = (el as HTMLImageElement).alt || '';
-        if (src && src.startsWith('http')) {
-          mediaUrls.push(src);
-          if (!seen.has(src)) {
-            seen.add(src);
-            blocks.push(`<img src="${src}" alt="${alt}" />`);
+        const img = el as HTMLImageElement;
+        // Squarespace 7.1 lazy-loads images: the visible `src` may be a
+        // 1x1 placeholder (or empty) until the JS loader runs, while the
+        // real CDN URL sits in `data-image=`. On a freshly-rendered DOM
+        // captured by Playwright the loader frequently hasn't fired for
+        // off-screen images, so reading `.src` yields placeholders.
+        // Prefer `data-image` when it looks like a real URL; fall back to
+        // `data-src` (other lazy patterns) and finally `.src`.
+        const dataImage = img.getAttribute('data-image') || img.getAttribute('data-src') || '';
+        const rawSrc = dataImage && /^https?:\/\//.test(dataImage) ? dataImage : img.src;
+        const alt = img.alt || '';
+        if (rawSrc && rawSrc.startsWith('http')) {
+          mediaUrls.push(rawSrc);
+          if (!seen.has(rawSrc)) {
+            seen.add(rawSrc);
+            blocks.push(`<img src="${rawSrc}" alt="${alt}" />`);
           }
         }
         continue;

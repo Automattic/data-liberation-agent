@@ -6,6 +6,34 @@ AI agents: when you contribute an improvement, add an entry here. See [CONTRIBUT
 
 ---
 
+## 2026-05-28 — Squarespace 7.1 DOM fallback was capturing 1×1 placeholders instead of real images
+
+**Found by:** Claude + Davi
+**During:** Migrating https://www.walkaboutchronicles.com — a 1,500+ post Squarespace 7.1 photo blog with image-heavy posts (median 1–3 images, heaviest 33). On 7.1 Fluid Engine pages the `?format=json` body comes back empty, so the adapter falls through to the Playwright DOM extractor. Most posts ended up referencing the same placeholder image instead of the actual photos.
+**Type:** platform quirk
+
+### What I found
+Squarespace 7.1 lazy-loads `<img>` elements via its own image loader. At the moment Playwright's `domcontentloaded` + 10s `networkidle` fires, most off-screen `<img>` tags still have a placeholder `src` (often `data:image/svg+xml;base64,...` or `https://images.squarespace-cdn.com/.../1x1`) — and the real CDN URL lives in `data-image=` waiting for the loader to swap it in. `extractDomContent` in `src/adapters/squarespace.ts` reads `(el as HTMLImageElement).src`, so for any image not yet hydrated by the loader it captures the placeholder, not the real URL.
+
+The net effect: a Fluid Engine post with 8 images shows up in the WXR with 1 distinct media URL (the placeholder) referenced 8 times. The media downloader then fetches a tiny SVG, the post body shows broken images, and `verify` reports a confusing mix of "no extraction failures" + "all images failed at preview time."
+
+### How it works
+Read `data-image` first, then `data-src` (other lazy patterns sometimes use it), and only fall back to `.src` last. Validate with a `^https?://` regex so we don't accidentally pick up data URIs:
+
+```ts
+const dataImage = img.getAttribute('data-image') || img.getAttribute('data-src') || '';
+const rawSrc = dataImage && /^https?:\/\//.test(dataImage) ? dataImage : img.src;
+```
+
+The fix sits inside the `IMG` branch of the existing element walker; no new browser round-trip and no waiting for the loader to fire.
+
+### Why it's better than the previous approach
+Before: 7.1 posts surfaced through DOM fallback emerged with placeholder URLs as their media references — silently, because the downloader saw a valid HTTP response (1×1 SVG) and the extraction log marked the URL as successfully fetched. The break only surfaced on visual review of the imported site.
+
+After: the first-pass DOM extraction captures the real CDN URLs directly, eliminating a class of silent-failure migrations on what is the most common modern Squarespace site flavor.
+
+---
+
 ## 2026-04-30 — `--resume` overwrites the existing WXR with only newly-extracted items
 
 **Found by:** Claude + James
