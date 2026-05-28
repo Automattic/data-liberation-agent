@@ -112,6 +112,38 @@ describe('verifyReplica', () => {
     }
   });
 
+  it('captures pages concurrently (bounded) and preserves input order', async () => {
+    const { dir, cleanup } = setupFixture();
+    try {
+      gotoMock.mockClear();
+      let inflight = 0;
+      let maxInflight = 0;
+      gotoMock.mockImplementation(async () => {
+        inflight += 1;
+        maxInflight = Math.max(maxInflight, inflight);
+        await new Promise((r) => setTimeout(r, 10));
+        inflight -= 1;
+        return { status: () => 200 };
+      });
+      // 3 URLs, desktop only, concurrency 2 → at least 2 navigations overlap.
+      const result = await verifyReplica({
+        outputDir: dir,
+        replicaBaseUrl: 'http://localhost:8881',
+        urls: ['/', '/about', '/contact'],
+        viewports: ['desktop'],
+        concurrency: 2,
+      });
+      expect(maxInflight).toBeGreaterThan(1); // ran in parallel, not one-at-a-time
+      expect(maxInflight).toBeLessThanOrEqual(2); // bounded by the cap
+      // Results stay in input order regardless of which finished first.
+      expect(result.pairs.map((p) => p.urlPath)).toEqual(['/', '/about', '/contact']);
+    } finally {
+      gotoMock.mockReset();
+      gotoMock.mockResolvedValue({ status: () => 200 });
+      cleanup();
+    }
+  });
+
   it('honors a custom viewports list (desktop only)', async () => {
     const { dir, cleanup } = setupFixture();
     try {

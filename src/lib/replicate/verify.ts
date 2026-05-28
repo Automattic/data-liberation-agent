@@ -133,6 +133,9 @@ export interface VerifyOpts {
   timeoutMs?: number;
   /** Optional CDP port — if provided, connect to an existing Chrome instead of launching a new one. */
   cdpPort?: number;
+  /** Max pages captured+measured concurrently. Pages are independent, so the per-URL loop
+   *  fans out (mirrors the screenshot stage). Default 6, clamped to [1, 10]. */
+  concurrency?: number;
 }
 
 /** Viewport dimensions matched to the source screenshotter's defaults. */
@@ -158,6 +161,7 @@ interface Manifest {
 const DEFAULT_VIEWPORTS: Viewport[] = ['desktop', 'mobile'];
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_OUTPUT_SUBDIR = 'replica-screenshots';
+const DEFAULT_CONCURRENCY = 6;
 
 /** Strip query/hash and trailing slash for matching. */
 function canonical(url: string): string {
@@ -268,14 +272,21 @@ export async function verifyReplica(opts: VerifyOpts): Promise<VerifyResult> {
     };
   }
 
-  try {
-    for (const urlPath of opts.urls) {
+  const activeBrowser = browser;
+  // One URL's full capture (all viewports + the desktop section read). Pure of shared
+  // mutable state — returns its contribution so the batched loop can aggregate in input
+  // order regardless of which page finished first.
+  const captureOne = async (
+    urlPath: string,
+  ): Promise<{
+    pair: VerifyPair;
+    unmatched: string | null;
+    manifestKey: string;
+    manifestEntry: { slug: string; desktop?: string; mobile?: string };
+  }> => {
       const slug = slugFromPath(urlPath);
       const fullUrl = `${replicaBaseUrl}${urlPath.startsWith('/') ? urlPath : '/' + urlPath}`;
       const sourceMatch = findSourceEntry(manifest, urlPath);
-      if (!sourceMatch) {
-        unmatchedUrls.push(urlPath);
-      }
 
       const captures: ViewportCapture[] = [];
       let sectionMeasures: ReplicaSectionMeasure[] | undefined;
@@ -300,7 +311,7 @@ export async function verifyReplica(opts: VerifyOpts): Promise<VerifyResult> {
         let context: BrowserContext | null = null;
         let page: Page | null = null;
         try {
-          context = await browser.newContext({ viewport: dimensions });
+          context = await activeBrowser.newContext({ viewport: dimensions });
           context.on('page', (p: Page) => {
             p.on('dialog', (d) => {
               d.dismiss().catch(() => undefined);
@@ -331,14 +342,33 @@ export async function verifyReplica(opts: VerifyOpts): Promise<VerifyResult> {
         captures.push(capture);
       }
 
-      pairs.push({ urlPath, slug, captures, ...(sectionMeasures ? { sections: sectionMeasures } : {}) });
       const entry: { slug: string; desktop?: string; mobile?: string } = { slug };
       if (viewports.includes('desktop')) entry.desktop = `desktop/${slug}.png`;
       if (viewports.includes('mobile')) entry.mobile = `mobile/${slug}.png`;
-      manifestEntries[sourceMatch?.url ?? fullUrl] = entry;
+      return {
+        pair: { urlPath, slug, captures, ...(sectionMeasures ? { sections: sectionMeasures } : {}) },
+        unmatched: sourceMatch ? null : urlPath,
+        manifestKey: sourceMatch?.url ?? fullUrl,
+        manifestEntry: entry,
+      };
+  };
+
+  // Fan out across pages in concurrency-bounded batches (pages are independent). Results
+  // are aggregated in INPUT order so `pairs`/`unmatchedUrls` are deterministic regardless
+  // of which page settled first.
+  const concurrency = Math.max(1, Math.min(10, opts.concurrency ?? DEFAULT_CONCURRENCY));
+  try {
+    for (let i = 0; i < opts.urls.length; i += concurrency) {
+      const batch = opts.urls.slice(i, i + concurrency);
+      const results = await Promise.all(batch.map(captureOne));
+      for (const r of results) {
+        pairs.push(r.pair);
+        if (r.unmatched) unmatchedUrls.push(r.unmatched);
+        manifestEntries[r.manifestKey] = r.manifestEntry;
+      }
     }
   } finally {
-    await browser.close().catch(() => undefined);
+    await activeBrowser.close().catch(() => undefined);
   }
 
   // Write the replica manifest so `liberate_compare` can join this dir to the

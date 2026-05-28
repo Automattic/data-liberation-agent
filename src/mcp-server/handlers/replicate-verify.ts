@@ -14,6 +14,7 @@ export const replicateVerifyHandler: Handler = async (args, ctx) => {
       viewports: args.viewports as ('desktop' | 'mobile')[] | undefined,
       outputSubdir: args.outputSubdir as string | undefined,
       cdpPort: args.cdpPort as number | undefined,
+      concurrency: args.concurrency as number | undefined,
     });
     console.error(`[replicate] ${JSON.stringify({
       tool: 'verify', outputDir, replicaBaseUrl, urlCount: urls.length,
