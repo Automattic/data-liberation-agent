@@ -312,6 +312,13 @@ export async function verifyReplica(opts: VerifyOpts): Promise<VerifyResult> {
         let page: Page | null = null;
         try {
           context = await activeBrowser.newContext({ viewport: dimensions });
+          // Polyfill tsx/esbuild's `__name` helper inside the page (mirrors section-extract):
+          // a named function passed to `page.evaluate` (measureReplicaSectionsInBrowser) is
+          // serialized WITH esbuild's `__name(fn,...)` instrumentation, which is undefined in
+          // the browser → "__name is not defined". The init script defines it before any eval.
+          await context.addInitScript(
+            `if (typeof globalThis.__name === 'undefined') { globalThis.__name = function (fn) { return fn; }; }`,
+          );
           context.on('page', (p: Page) => {
             p.on('dialog', (d) => {
               d.dismiss().catch(() => undefined);

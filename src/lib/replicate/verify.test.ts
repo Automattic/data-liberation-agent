@@ -21,6 +21,7 @@ const newPageMock = vi.fn(async () => ({
   close: vi.fn().mockResolvedValue(undefined),
 }));
 
+const addInitScriptMock = vi.fn().mockResolvedValue(undefined);
 vi.mock('../../adapters/shared.js', async (importOriginal) => {
   const actual = (await importOriginal()) as Record<string, unknown>;
   return {
@@ -28,6 +29,7 @@ vi.mock('../../adapters/shared.js', async (importOriginal) => {
     connectBrowser: vi.fn(async () => ({
       newContext: vi.fn(async () => ({
         on: vi.fn(),
+        addInitScript: addInitScriptMock,
         newPage: newPageMock,
         close: vi.fn().mockResolvedValue(undefined),
       })),
@@ -140,6 +142,24 @@ describe('verifyReplica', () => {
     } finally {
       gotoMock.mockReset();
       gotoMock.mockResolvedValue({ status: () => 200 });
+      cleanup();
+    }
+  });
+
+  it('injects the __name polyfill so serialized in-browser functions run (regression: __name is not defined)', async () => {
+    const { dir, cleanup } = setupFixture();
+    try {
+      addInitScriptMock.mockClear();
+      await verifyReplica({
+        outputDir: dir,
+        replicaBaseUrl: 'http://localhost:8881',
+        urls: ['/'],
+        viewports: ['desktop'],
+      });
+      expect(addInitScriptMock).toHaveBeenCalled();
+      const injected = addInitScriptMock.mock.calls.map((c) => String(c[0])).join('\n');
+      expect(injected).toContain('__name');
+    } finally {
       cleanup();
     }
   });
