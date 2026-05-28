@@ -185,6 +185,14 @@ Bad evidence:
 - **Over-confident mapping.** If two palette entries tie for `primary`, flag the tie in `openQuestions` rather than silently picking one.
 - **Duplicating deterministic work.** Do not override the scaffold's filled slots (surface.base, text.default, etc.) unless they're demonstrably wrong.
 
+## Known scaffold-pollution failure modes (correct these every run)
+
+The deterministic scaffold can be misled by markup that isn't the real page design. These are common enough to check explicitly — when you see them, the slot IS "demonstrably wrong," so correct it against `palette.json` frequency + a screenshot and note the correction in `openQuestions`:
+
+- **Inverted surface/text from a one-off CSS variable.** The scaffold can fill `color.surface.base` and `color.text.default` from a low-frequency `:root`/component CSS var (e.g. `--tooltip-background-color`) instead of palette frequency — producing `surface.base: "black"` / `text.default: "white"` on a site that's actually white-background/dark-text. **Sanity check: if `surface.base` is dark or `text.default` is light, verify against `palette.json` — the dominant high-count entry is the real surface; the darkest high-count entry is the real text.** Swiftlumber (2026-05-28): scaffold gave black/white from a 1-url tooltip var; palette showed `#ffffff`×57 / `#000000`×3 → corrected to #fff/#000.
+- **10px base font size from a hidden SEO `<body>`.** `typography.scale.base` (and `typography.body.fontSize`) can read ~10px from a visually-hidden SEO body element. Real body copy is ~16px (check `typography.scale.steps.base`). Reconstruction uses captured per-element sizes, so this rarely changes output — but flag it in `openQuestions` so it isn't trusted downstream.
+- **Hidden-SEO display font.** Computed `h1`/`h2` may report a hidden-SEO face (e.g. `orig_sf_pro_display_bold`, `wfont_*`) that is NOT the visible heading face. Cross-check `h3`/visible headings — the real display family often surfaces there (swiftlumber: visible headings are `"libre baskerville", serif` from h3; h1/h2 were the SEO SF-Pro face).
+
 ## Example (abbreviated)
 
 Input partial (relevant slots only):

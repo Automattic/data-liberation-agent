@@ -41,6 +41,8 @@ The single front-door, root orchestrator for the whole migration pipeline. One s
 
 The whole run is bounded by a **budget guard** (`checkBudget` in `src/lib/replicate/budget-guard.ts`) — configurable subagent/cluster/elapsed ceiling → pause-and-ask. The final deliverable is `run-report.json` + the replica URL (`buildRunReport` in `src/lib/replicate/run-report.ts`).
 
+> **Canonical design path (read this before steps 6–14).** The design phase is the `replicate` sub-orchestrator — `skills/replicate/SKILL.md` is the authoritative, up-to-date flow; follow it. The PRIMARY page path is **per-page** `liberate_reconstruct_pages` (reconstructs EVERY content page from its own specs), NOT the cluster-representative `generating-patterns` fan-out + `compose_instantiate` shown in steps 9–11 below. Clustering still earns its keep for sitewide-shared CHROME (header/footer/CTA bands) and for posts/products *templates* — but page CONTENT is reconstructed per page. Steps 9–11 are retained here for that chrome/template work and for the legacy fan-out fallback; do not read them as the page-build mechanism.
+
 ---
 
 ## Step-by-step workflow

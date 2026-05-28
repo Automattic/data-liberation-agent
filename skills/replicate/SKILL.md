@@ -20,7 +20,7 @@ The acceptance bar is source parity, not a pleasant approximation:
 - Preserve observed section order, header/footer structure, navigation labels, CTA placement, media placement/aspect ratios, column counts, alignment, spacing rhythm, and responsive stacking.
 - Use source text and uploaded media only. Do not invent copy, placeholder cards, stock-like sections, or generic marketing layouts.
 - Templates render imported post/product content through proper WP template hierarchy; patterns and layout skeletons are for pages. Do not reconstruct posts or products section-by-section — that is handled by templates + Query Loop + WooCommerce.
-- Do not use Custom HTML blocks (`core/html` / `wp:html`). Use core blocks first; embed a custom block inside the theme (`blocks/<slug>/`) only when a source component cannot be expressed any other way (see anti-patterns).
+- Do not hand-author Custom HTML blocks (`core/html` / `wp:html`) for layout or styling. Use core blocks first; embed a custom block inside the theme (`blocks/<slug>/`) only when a source component cannot be expressed any other way (see anti-patterns). **One sanctioned exception:** the deterministic per-section *coverage-gated verbatim fallback* (`src/lib/replicate/html-fallback.ts`) emits a section's sanitized source HTML as a `core/html` island when the structured render would otherwise DROP content — see "core/html fallback" below. You never author these by hand; `reconstructPagePattern` emits them automatically when a render is badly lossy.
 - The old 27-pattern library is now seed material in the `section-mapping` catalog — it is not the primary mechanism. Builders pick block templates from the catalog; they do not pick-tweak from the 27-pattern library.
 
 ## Prerequisites
@@ -46,13 +46,13 @@ Use these tools rather than reimplementing their logic in Bash. Each has a typed
 | `liberate_cluster_pages({ outputDir, signatures })` | Groups pages by exact layout signature → `cluster-map.json` (cluster per unique signature, representative = richest HTML) |
 | `liberate_reconstruct_pages({ outputDir, studioSitePath, themeSlug, pages })` | **PRIMARY page path.** Reconstructs EVERY content page from its OWN captured section specs (no shared cluster skeleton): per page → capture specs, download+install its media, reconstruct gated block markup, install `patterns/page-<slug>.php` + `templates/page-<slug>.html` (+ `front-page.html` for home), force a pattern re-scan. Replaces cluster-rep-only reconstruction + carried-HTML fallback |
 | `liberate_compose_instantiate({ outputDir, skeleton, pageContent, mediaMap })` | LEGACY (superseded by `liberate_reconstruct_pages` for pages). Deterministic slot-fill: cluster layout skeleton + this page's content → `post_content` block markup; returns `{ postContent, misfit }` |
-| `liberate_validate_artifacts({ outputDir })` | Security + quality trust boundary before install. Asserts: escaping (`esc_html`/`esc_attr`/`esc_url`), no raw `<?php`/`<script>`/`on*=`, emitted text ⊆ spec captured text (provenance), no remote CDN URLs, no `{{placeholder}}` text, block-comment-only markup. Fail → fix, don't install |
+| `liberate_validate_artifacts({ patterns: ArtifactPattern[] })` | Security + quality trust boundary. Asserts: escaping (`esc_html`/`esc_attr`/`esc_url`), no raw `<?php`/`<script>`/`on*=`, emitted text ⊆ spec captured text (provenance), no remote CDN URLs, no `{{placeholder}}` text, block-comment-only markup. **Takes `patterns`, not `outputDir`.** NOTE: `liberate_reconstruct_pages` already runs this gate per-page against each page's OWN spec corpus and refuses to install a failing page — that internal gate is AUTHORITATIVE. `scripts/_validate.ts <outputDir>` is a convenience sweep over the on-disk `theme/patterns/*.php`, but its provenance corpus is APPROXIMATE (sourced from `html/<slug>.html`), so it can emit provenance FALSE-POSITIVES (e.g. text the renderer concatenated across source elements). Treat its provenance flags as "verify against the source," not as gate failures; security/injection/drift checks are exact. |
 | `liberate_install_theme({ outputDir, studioSitePath, themeFiles, themeSlug })` | Writes theme files into a running Studio site and activates the theme (streaming / watch-loop context) |
 | `liberate_preview({ outputDir, themeFiles, themeSlug, open?, port? })` | Standalone context: creates/reuses a Studio site, imports WXR + products.csv, writes + activates the theme |
 
 ## Sub-skills you invoke
 
-Read each skill's SKILL.md before invoking it.
+Read each skill's SKILL.md before using it. **`design-foundations` and `design-qa` are `disable-model-invocation: true`** — the Skill tool will REFUSE to launch them. Do not try to "invoke" them; instead READ their `SKILL.md` and follow it inline in this shared context, driving their MCP tools (`liberate_design_foundation_scaffold`/`_save`/`_validate`, `liberate_replicate_verify`, `evaluateResponsive`) yourself. `generating-patterns` / `compose-page-blocks` / `editing-themes` / `editing-blocks` are normal Skill-/subagent-invocable.
 
 | Skill | When |
 |---|---|
@@ -144,6 +144,8 @@ Checkpoint by cluster-group with a compaction/handoff between groups (full state
 
 **This replaces the cluster-representative-only reconstruction.** Do NOT leave non-representative pages rendering carried `wp:post-content` through `page.html` — that renders raw source-platform HTML and looks drastically different from the source. Every content page gets reconstructed. A page whose pattern FAILS the gate is reported (not installed) — fix the tooling/spec, never ship carried HTML as the "faithful" answer.
 
+**core/html verbatim fallback (per-section, renderer-emitted).** Inside `reconstructPagePattern`, each section's structured render is checked for content loss (`measureSectionCoverage`): if a captured image is dropped, or rendered text coverage falls below `TEXT_FLOOR` (0.5), the renderer emits the section's sanitized source HTML as a `core/html` island instead (`html-fallback.ts`) and records an `html-fallback#<n>` flag. This preserves content the structured path would otherwise silently drop ([[feedback_never_lose_source_content]]) — the provenance gate guards against INVENTED text, NOT DROPPED text. **The trigger is deliberately conservative (only when badly broken) because an island carries the source HTML but NOT its CSS, so a CSS-styled section renders UNSTYLED inside it — worse than an incomplete-but-styled structured render.** Surfaced as `run-report.htmlFallbackSections` (a warning, not a pass/fail): in QA, vision-check each island — text-heavy sections render fine verbatim, but a CSS-layout section that fell back will look unstyled and should be treated as a fidelity gap. Note: coverage measures text PRESENCE, not semantic correctness — a paragraph mis-rendered as a heading still "covers" its text and won't trip the fallback.
+
 **Legacy cluster-skeleton path (`liberate_compose_instantiate` + `compose-page-blocks`):** superseded for page faithfulness by `liberate_reconstruct_pages`. Clustering (Step 2) is still useful for identifying sitewide-shared chrome and for posts/products *templates*, but page CONTENT is reconstructed per-page. Only fall back to compose-instantiate if `liberate_reconstruct_pages` is unavailable.
 
 **Header/footer:** reconstruct the header from the SOURCE header — never from WordPress's page list. The deterministic `liberate_theme_scaffold` handler does this for you: it reads the captured `html/homepage.html`, extracts the real **logo image** + the **primary top-level nav** (label + href) via `extractThemeChromeFromHtml`, infers light/dark header tone, and emits explicit `wp:navigation-link`s + a `core/image` logo. Requirements for any header you build or refine:
@@ -183,7 +185,7 @@ Custom blocks (rare — only when core blocks cannot express a real source inter
 
 ### Step 6 — Validate
 
-Call `liberate_validate_artifacts({ outputDir })`. This is the security trust boundary — run it before every install, every time.
+`liberate_reconstruct_pages` ALREADY gates every page through `validate_artifacts` against that page's own spec corpus and refuses to install a failing page — that is the authoritative trust boundary and it ran in Step 5. For an independent on-disk sweep, run `scripts/_validate.ts <outputDir>` (auto-discovers `theme/patterns/*.php`). Its security/injection/drift checks are exact; its provenance check is APPROXIMATE (corpus from `html/<slug>.html`) and can FALSE-POSITIVE when the renderer concatenated text across source elements — verify any provenance flag against the source before treating it as real. The raw `liberate_validate_artifacts` MCP tool takes `{ patterns: ArtifactPattern[] }` (not `{ outputDir }`).
 
 It asserts:
 - All source-derived text is escaped (`esc_html`/`esc_attr`/`esc_url`)
@@ -202,7 +204,15 @@ It asserts:
 - **Streaming / watch-loop context:** call `liberate_install_theme({ outputDir, studioSitePath, themeFiles, themeSlug })` using the exact `themeSlug` value from the runner prompt. Writes files into the running Studio site and activates. No site creation, no duplicate WXR import.
 - **Standalone replicate:** call `liberate_preview({ outputDir, themeFiles, themeSlug: "<siteSlug>-replica" })`. Creates/reuses a Studio site (clean site on full re-run; keep existing on resume) and imports `output.wxr` + `products.csv`.
 
+**Binary assets:** `themeFiles[]` is text-only — the self-hosted fonts (`.woff2`), localized `logo.png`, and icon SVGs live on disk at `<outputDir>/theme/assets/` (written by `liberate_theme_scaffold persist:true`). Both `liberate_install_theme` and `liberate_preview` now bridge them via `assetSourceDir`. If you install by some other path (e.g. a manual copy), you MUST also copy `<outputDir>/theme/assets/` into the live theme or the replica renders with system fonts and a broken logo.
+
+**Reconstruct order:** `liberate_reconstruct_pages` requires the theme already installed in the live Studio site, so install (above) FIRST, then run Step 5's reconstruct against the resulting `studioSitePath` (`~/Studio/<siteName>`). `liberate_preview` returns `siteName`, not the path.
+
 Verify: `themeWritten > 0` and `warnings` empty. Capture the replica URL.
+
+**Site hygiene (verify after install — the WXR imports onto a fresh WP install):**
+- **Static front page.** `liberate_reconstruct_pages` sets `show_on_front=page` + `page_on_front` to the `isHome` page. Confirm `wp option get show_on_front` == `page`; otherwise `/` renders the blog index, not the homepage reconstruction.
+- **WP-default junk + slug collisions.** A fresh WP install ships `Sample Page`, a `Hello world!` post, and an auto-drafted `Privacy Policy`. The default `privacy-policy` draft STEALS the slug, forcing the source privacy page to import as `privacy-policy-2` — which then mismatches the `slug` you pass to `reconstruct_pages` (it would write the reconstruction into the wrong post). `startStudioPreview` deletes these defaults before import; if you import some other way, delete them first (`wp post delete` by slug `sample-page`/`hello-world`/`privacy-policy`) and confirm imported pages kept their source slugs (`wp post list --post_type=page --fields=ID,post_name`).
 
 **QA:** invoke `design-qa`. It captures replica desktop + mobile screenshots, pairs them with source screenshots, runs the responsiveness gate (390px — HARD: no horizontal overflow, sections reflow), and produces qualitative observations + A/B/C classification per archetype representative.
 
@@ -246,7 +256,7 @@ Verify: `themeWritten > 0` and `warnings` empty. Capture the replica URL.
 
 - **Trust `design-foundation.json`** for tokens. Don't reinterpret colors from raw palette. Don't hallucinate a display font when `typography.families.display: null`.
 - **Prefer core blocks.** `wp:columns`, `wp:cover`, `wp:group`, `wp:details`, `wp:navigation` cover most observed layouts.
-- **No `core/html`.** `wp:html` is not a fallback. CSS goes in `style.css`; structure goes in core block markup.
+- **No hand-authored `core/html`.** Never reach for `wp:html` to express layout or CSS — CSS goes in `style.css`; structure goes in core block markup. The ONLY `wp:html` that ships is the automatic coverage-gated verbatim fallback (below), which the renderer emits — not you.
 - **One layout skeleton per cluster, not per page.** Builders emit layout templates; `liberate_compose_instantiate` fills content.
 - **Posts and products are data.** Route through templates + Query Loop + WooCommerce. No per-post or per-product section reconstruction.
 - **Skip archetypes with `count === 0`** silently.
@@ -264,7 +274,7 @@ Verify: `themeWritten > 0` and `warnings` empty. Capture the replica URL.
 - **Hallucinating tokens.** `display: null` → omit, don't invent. No hex values in patterns — always token slugs.
 - **Running `liberate_validate_artifacts` and ignoring failures.** The gate is a trust boundary. Failures mean injected/invented text could reach the installed theme.
 - **Skipping the responsiveness gate.** A theme that overflows at 390px is not done, regardless of how it looks on desktop.
-- **Custom HTML for layout or CSS.** Inline `<style>`, raw SVG sets, embedded `<script>`, hidden `<form>` → all rejected. Use core blocks + `style.css` or a real theme-embedded custom block.
+- **Hand-authored Custom HTML for layout or CSS.** Inline `<style>`, raw SVG sets, embedded `<script>`, hidden `<form>` → all rejected. Use core blocks + `style.css` or a real theme-embedded custom block. (The automatic coverage-gated verbatim fallback is the one exception — it is renderer-emitted and sanitized, never hand-written.)
 - **Custom blocks for layout-only differences.** If the only issue is "columns aren't quite right," edit the layout skeleton instead. Custom blocks are for interactive components that core blocks genuinely cannot express (multi-step form, non-standard carousel with computed state, pricing table with toggles). If the source's interactivity didn't survive extraction, use core blocks + honest static content — not a non-functional custom block.
 - **Telex-flavored output.** Footer credits, plugin namespaces, and author fields use `<siteSlug>-replica`, not `telex/`.
 

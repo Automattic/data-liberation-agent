@@ -62,7 +62,12 @@ Once the responsiveness gate passes, read each source/replica screenshot pair wi
 - Typography (family, weight, size, color) fidelity
 - Mobile stacking behavior
 
-The pixel-diff score from `liberate_compare` (or `diff-pngs`) is a **signal** to direct your attention — it is not the acceptance gate. Qualitative vision review is the gate.
+The pixel-diff score from `liberate_compare` (or `diff-pngs`) is a **signal** to direct your attention — it is not the acceptance gate. Qualitative vision review is the gate. NOTE: `liberate_compare` needs the standard layout in BOTH dirs (`manifest.json` + `desktop/<slug>.png` + `mobile/<slug>.png`). `liberate_replicate_verify` writes the replica PNGs in that shape but its `pairs[]` come back in the tool result; if `compare` errors with "manifest missing," the replica subdir lacks a `manifest.json` — skip the pixel score and rely on vision (it's only a signal anyway).
+
+**Vision review must catch what the upstream gates structurally cannot:**
+
+- **Semantic misclassification.** The reconstruction's coverage + provenance gates check that captured text is PRESENT and not invented — they do NOT check it's rendered with the right semantics. A paragraph mis-rendered as a giant `<h2>` (body-as-heading), or an eyebrow duplicated as a trailing line, passes every gate. Only vision catches it → classify as **A** (spec/extractor wrong) and flag the extractor heading/body classification.
+- **`core/html` fallback islands.** Sections the renderer fell back to (`run-report.htmlFallbackSections > 0`) carry verbatim source HTML but NOT the source CSS. Text-heavy sections render fine; a CSS-styled section (cards/grid/columns) that fell back renders UNSTYLED — looks broken. Vision-check every island: an unstyled-island regression is a **fidelity gap**, not a pass. (Root tuning lives in `section-coverage.ts` `TEXT_FLOOR` — see `replicate/SKILL.md`.)
 
 ### Step 4 — Accessibility checks (warn, not block)
 
