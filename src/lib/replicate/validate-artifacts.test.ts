@@ -357,3 +357,42 @@ describe('validateArtifacts — block-markup well-formedness', () => {
     expect(validateArtifacts(base()).ok).toBe(true);
   });
 });
+
+describe('validateArtifacts — core/html fallback islands', () => {
+  it('exempts text inside a core/html island from the provenance trace', () => {
+    // The island deliberately carries content the structured spec never captured
+    // (that loss is WHY we fell back). bodyText is non-empty, so the body-copy
+    // hard gate is armed — yet the island must still pass.
+    const input: ArtifactInput = {
+      patterns: [{
+        slug: 'site/section-1',
+        php:
+          `<!-- wp:html -->\n` +
+          `<section><h2>An entirely uncaptured headline</h2>` +
+          `<p>This paragraph was never recorded in the structured spec corpus.</p></section>\n` +
+          `<!-- /wp:html -->`,
+        spec: {
+          interactionModel: 'static',
+          expectedText: ['Some unrelated captured heading'],
+          bodyText: ['Some unrelated captured body copy that differs entirely'],
+          expectedAssets: [],
+        },
+      }],
+    };
+    const r = validateArtifacts(input);
+    expect(r.ok).toBe(true);
+  });
+
+  it('still rejects a <script> inside a core/html island (injection scan applies)', () => {
+    const input: ArtifactInput = {
+      patterns: [{
+        slug: 'site/section-1',
+        php: `<!-- wp:html -->\n<section><script>alert(1)</script></section>\n<!-- /wp:html -->`,
+        spec: { interactionModel: 'static', expectedText: [], expectedAssets: [] },
+      }],
+    };
+    const r = validateArtifacts(input);
+    expect(r.ok).toBe(false);
+    expect(r.errors.some((e) => /script/i.test(e.message))).toBe(true);
+  });
+});

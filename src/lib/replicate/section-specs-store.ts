@@ -37,7 +37,9 @@ import type { SectionSpec } from './section-extract.js';
 // paragraph that repeats a heading is NO LONGER deduped — the source genuinely
 // shows both a subheading and an identical paragraph, so reproducing both is
 // faithful. Capture-semantics change → invalidate older caches and re-extract.
-export const SECTION_SPECS_SCHEMA = 4;
+// v5: sections now persist `sectionHtml` (capped) for the coverage-gated
+// core/html verbatim fallback. Older caches lack it → invalidate + re-extract.
+export const SECTION_SPECS_SCHEMA = 5;
 
 interface SectionSpecsFile {
   schema: number;

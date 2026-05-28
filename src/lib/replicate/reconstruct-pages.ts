@@ -42,6 +42,8 @@ export interface PageReconstructionResult {
   provenanceFlags: string[];
   sectionsRendered: number;
   iconAssetCount: number;
+  /** Sections emitted as verbatim core/html islands (coverage-gated fallback). */
+  fallbackSections: number;
 }
 
 /** Swap the pattern's `get_theme_file_uri()` PHP asset refs for literal
@@ -122,6 +124,8 @@ export function buildPageReconstruction(
      * links pass through unchanged (back-compat).
      */
     linkMap?: InternalLinkMap;
+    /** Source media URL -> local upload URL, for rewriting core/html fallback islands. */
+    mediaUrlMap?: Map<string, string>;
   },
 ): PageReconstructionResult {
   if (!SAFE_SLUG.test(opts.slug)) throw new Error(`unsafe page slug: "${opts.slug}"`);
@@ -133,6 +137,7 @@ export function buildPageReconstruction(
     title: opts.title,
     paletteTokens: opts.paletteTokens,
     fontFamilies: opts.fontFamilies,
+    mediaUrlMap: opts.mediaUrlMap,
   });
 
   // Rewrite same-site body links to local permalinks BEFORE the gate, so the
@@ -188,5 +193,6 @@ export function buildPageReconstruction(
     provenanceFlags: r.provenanceFlags,
     sectionsRendered: r.sectionsRendered,
     iconAssetCount: r.iconAssets.length,
+    fallbackSections: r.provenanceFlags.filter((f) => f.startsWith('html-fallback#')).length,
   };
 }

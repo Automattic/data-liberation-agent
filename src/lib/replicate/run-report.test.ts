@@ -35,3 +35,19 @@ describe('buildRunReport', () => {
     expect(r.summary.responsivePass).toBe(1);
   });
 });
+
+describe('buildRunReport — html fallback islands', () => {
+  it('surfaces htmlFallbackSections in the summary', () => {
+    const i = good();
+    i.htmlFallbackSections = 3;
+    expect(buildRunReport(i).summary.htmlFallbackSections).toBe(3);
+  });
+  it('warns when there are html fallback islands on an otherwise-clean run', () => {
+    const i = good();
+    i.htmlFallbackSections = 1;
+    expect(buildRunReport(i).verdict.overall).toBe('warn');
+  });
+  it('defaults htmlFallbackSections to 0 when absent (back-compat)', () => {
+    expect(buildRunReport(good()).summary.htmlFallbackSections).toBe(0);
+  });
+});

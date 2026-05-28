@@ -108,6 +108,16 @@ export const BODY_COPY_CONTAINMENT_THRESHOLD = 0.8;
  * header); ANY other residual `<?`, a `<script>` tag, or an inline `on*=` event
  * handler is treated as injection.
  */
+/**
+ * Remove `<!-- wp:html -->…<!-- /wp:html -->` fallback islands from markup.
+ * Used to exempt verbatim islands from the text-PROVENANCE trace (their content
+ * is source-verbatim by construction); injection + structure checks still run
+ * on the full markup, so this never weakens the security boundary.
+ */
+export function stripHtmlFallbackBlocks(markup: string): string {
+  return markup.replace(/<!--\s*wp:html\s*-->[\s\S]*?<!--\s*\/wp:html\s*-->/g, '');
+}
+
 export function scanForInjection(markup: string): string[] {
   const violations: string[] = [];
   const SANCTIONED_PHP = /<\?php\s+echo\s+esc_url\(\s*get_theme_file_uri\(\s*'[^']+'\s*\)\s*\);\s*\?>/gi;
@@ -219,11 +229,17 @@ export function validateArtifacts(input: ArtifactInput): ValidationReport {
     // review quotes (expectedText) PLUS captured body copy (bodyText). Body
     // paragraphs are checked against the union; headings against expectedText
     // entries individually.
+    // core/html fallback islands are source-verbatim by construction (the
+    // structured render dropped content, so we emitted the section's own HTML).
+    // Their text legitimately exceeds the captured corpus, so EXEMPT island
+    // spans from the provenance trace — they still went through scanForInjection
+    // + validateBlockMarkup above on the full `p.php`.
+    const provenancePhp = stripHtmlFallbackBlocks(p.php);
     const corpus = normalizeText([...p.spec.expectedText, ...(p.spec.bodyText ?? [])].join('  '));
     const allowedEntries = [...p.spec.expectedText, ...(p.spec.bodyText ?? [])].map((t) =>
       normalizeText(t),
     );
-    const emitted = visibleText(p.php);
+    const emitted = visibleText(provenancePhp);
     for (const word of emitted.split(' ').filter((w) => w.length > 3)) {
       if (!corpus.includes(word)) {
         warnings.push({ slug: p.slug, message: `possible non-source content: "${word}"` });
@@ -238,7 +254,7 @@ export function validateArtifacts(input: ArtifactInput): ValidationReport {
     // still REJECTS a heading merely scattered across the joined blob ("win
     // award" from ["we win", "award every year"]): the heading must align to
     // whole-entry boundaries, so a sub-phrase spanning an entry boundary fails.
-    for (const heading of p.php.matchAll(/<h[1-6][^>]*>([\s\S]*?)<\/h[1-6]>/gi)) {
+    for (const heading of provenancePhp.matchAll(/<h[1-6][^>]*>([\s\S]*?)<\/h[1-6]>/gi)) {
       const h = normalizeText(heading[1]);
       if (!h) continue;
       const inSingleEntry = allowedEntries.some((e) => e.includes(h));
@@ -273,7 +289,7 @@ export function validateArtifacts(input: ArtifactInput): ValidationReport {
     const hasBodyCorpus = (p.spec.bodyText ?? []).length > 0;
     const isPlaceholder = (t: string): boolean =>
       /\bnot captured\]?$|\[(review|author|text|content)\b|image unavailable/i.test(t);
-    for (const para of (hasBodyCorpus ? p.php.matchAll(/<p\b[^>]*>([\s\S]*?)<\/p>/gi) : [])) {
+    for (const para of (hasBodyCorpus ? provenancePhp.matchAll(/<p\b[^>]*>([\s\S]*?)<\/p>/gi) : [])) {
       const raw = para[1];
       const t = normalizeText(raw);
       if (!t) continue;

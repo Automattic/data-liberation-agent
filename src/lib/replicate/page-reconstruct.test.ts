@@ -846,3 +846,42 @@ describe('sanitizePatternHeaderField', () => {
     expect(sanitizePatternHeaderField('demo-replica/page-x')).toBe('demo-replica/page-x');
   });
 });
+
+describe('reconstructPagePattern — coverage-gated core/html fallback', () => {
+  const opts = { patternSlug: 'demo-replica/page-x', title: 'Page — X' };
+
+  it('emits a verbatim core/html island when the structured render drops a captured image', () => {
+    // A 150px image is below MIN_LEAD_IMAGE_PX (200), so renderTextBand drops it —
+    // a silent content loss. With sectionHtml present, we fall back to the island.
+    const s = section({
+      headings: ['Our Story'],
+      images: [{ url: '/wp-content/uploads/team.jpg', sourceUrl: 'https://cdn.test/team.jpg', alt: '', kind: 'img', width: 150, height: 150 }],
+      sectionHtml: '<section><h2>Our Story</h2><img src="/wp-content/uploads/team.jpg" alt=""/></section>',
+    } as Partial<SectionSpec>);
+    const r = reconstructPagePattern([s], opts);
+    expect(r.body).toContain('<!-- wp:html -->');
+    expect(r.body).toContain('/wp-content/uploads/team.jpg'); // the dropped image is preserved
+    expect(r.provenanceFlags.some((f) => /html-fallback#0/.test(f))).toBe(true);
+  });
+
+  it('keeps structured blocks when the render covers the captured content', () => {
+    const s = section({
+      headings: ['Our Story'],
+      images: [{ url: '/wp-content/uploads/big.jpg', sourceUrl: 'https://cdn.test/big.jpg', alt: '', kind: 'img', width: 800, height: 600 }],
+      sectionHtml: '<section><h2>Our Story</h2><img src="/wp-content/uploads/big.jpg"/></section>',
+    } as Partial<SectionSpec>);
+    const r = reconstructPagePattern([s], opts);
+    expect(r.body).not.toContain('<!-- wp:html -->');
+    expect(r.provenanceFlags.some((f) => /html-fallback/.test(f))).toBe(false);
+  });
+
+  it('does NOT fall back when the section is lossy but has no sectionHtml (ineligible)', () => {
+    const s = section({
+      headings: ['Our Story'],
+      images: [{ url: '/wp-content/uploads/team.jpg', sourceUrl: 'https://cdn.test/team.jpg', alt: '', kind: 'img', width: 150, height: 150 }],
+      // no sectionHtml → not fallback-eligible (e.g. over-cap / truncated)
+    } as Partial<SectionSpec>);
+    const r = reconstructPagePattern([s], opts);
+    expect(r.body).not.toContain('<!-- wp:html -->');
+  });
+});

@@ -774,6 +774,14 @@ export interface SectionSpec {
    * flattened into a single stacked band. All cell text is source-verbatim.
    */
   cells?: SectionSpecCell[];
+  /**
+   * Sanitizable source outerHTML of the section, for the coverage-gated
+   * `core/html` verbatim fallback (see section-coverage.ts / html-fallback.ts).
+   * Present only when the section's HTML fit under SECTION_HTML_FALLBACK_CAP —
+   * truncated markup can't be safely emitted, so an over-cap section is simply
+   * not fallback-eligible.
+   */
+  sectionHtml?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -853,6 +861,9 @@ interface RawCell {
 // what counts as a usable icon is exercised without a browser.
 // ---------------------------------------------------------------------------
 
+/** Max persisted section outerHTML for the verbatim fallback. Over this, the
+ *  section is not fallback-eligible (truncated HTML can't be safely emitted). */
+export const SECTION_HTML_FALLBACK_CAP = 256 * 1024; // 256KB
 /** Max serialized inline-SVG size we keep. Bigger = an illustration, not a glyph. */
 export const MAX_SVG_MARKUP_BYTES = 8 * 1024; // 8KB
 /** Smallest rendered side (px) we'll treat as a real icon (skip 1px tracking pixels). */
@@ -2440,6 +2451,12 @@ export async function extractFull(
       ...(reviews ? { reviews } : {}),
       ...(faqs ? { faqs } : {}),
       ...(cells ? { cells } : {}),
+      // Persist the section's source HTML for the verbatim fallback ONLY when it
+      // fit under the cap — an over-cap section yields truncated (invalid) markup
+      // and is therefore not fallback-eligible.
+      ...(rr.sectionHtml && rr.sectionHtml.length <= SECTION_HTML_FALLBACK_CAP
+        ? { sectionHtml: rr.sectionHtml }
+        : {}),
     };
   });
 }

@@ -29,6 +29,8 @@
 import type { SectionSpec, SectionSpecImage, SectionSpecIcon } from './section-extract.js';
 import { nearestToken, brightness, type PaletteToken } from './footer-color.js';
 import type { ExtractedReview } from './review-extract.js';
+import { measureSectionCoverage } from './section-coverage.js';
+import { buildHtmlFallbackBlock } from './html-fallback.js';
 
 /**
  * A source-VERBATIM FAQ question/answer pair. The renderer emits these as a
@@ -66,6 +68,13 @@ export interface ReconstructOptions {
    * headings use the display family and body uses the theme body family.
    */
   fontFamilies?: FontFamilyToken[];
+  /**
+   * Source media URL -> local upload URL. Used ONLY to rewrite media inside a
+   * coverage-gated `core/html` fallback island (the structured renderers already
+   * receive media-mapped specs). Island internal links ride buildPageReconstruction's
+   * existing link-rewrite post-pass, so no linkMap is threaded here.
+   */
+  mediaUrlMap?: Map<string, string>;
 }
 
 export interface ReconstructResult {
@@ -1381,6 +1390,28 @@ export function reconstructPagePattern(
 
   for (const s of body) {
     const out = renderSection(s, ctx);
+
+    // Coverage-gated verbatim fallback: if the structured render dropped captured
+    // content (media-first rule) and the section's source HTML is available, emit
+    // a sanitized `core/html` island INSTEAD — nothing is dropped, at the cost of
+    // this one section's block-editability. Runs BEFORE the empty-markup skip so a
+    // section that rendered to nothing but had real content still falls back. The
+    // island is provenance-exempt at the gate (verbatim by construction).
+    const captured = {
+      texts: [...s.headings, ...(s.bodyText ?? []), ...(s.buttonLabels ?? [])],
+      imageUrls: (s.images ?? []).map((im) => im.url).filter(Boolean),
+    };
+    const cov = measureSectionCoverage(captured, out.markup);
+    if (cov.lost && s.sectionHtml) {
+      sectionMarkup.push(buildHtmlFallbackBlock(s.sectionHtml, { mediaUrlMap: opts.mediaUrlMap }));
+      provenanceFlags.push(
+        `html-fallback#${s.sectionIndex}: structured render dropped content ` +
+          `(${cov.missingImages.length} images missing, text ${Math.round(cov.textCoverage * 100)}%) — ` +
+          `emitted verbatim core/html`,
+      );
+      continue;
+    }
+
     if (!out.markup) continue;
     sectionMarkup.push(out.markup);
     expectedText.push(...out.expectedText);

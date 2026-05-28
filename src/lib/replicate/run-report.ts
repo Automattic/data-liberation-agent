@@ -12,6 +12,8 @@ export interface RunReportInput {
   responsive: ArchetypeResponsive[];
   provenanceFlags: number;
   fallbackPages: number;
+  /** Sections emitted as verbatim core/html islands (coverage-gated fallback). Warning-level. */
+  htmlFallbackSections?: number;
   cost?: { tokens?: number; subagents?: number; skillCalls?: number };
   qualitativeNotes?: string[];
   knownGaps?: string[];
@@ -25,6 +27,7 @@ export interface RunReport {
     pagesComposed: number; pagesMisfit: number;
     responsivePass: number; responsiveFail: number;
     provenanceFlags: number; fallbackPages: number;
+    htmlFallbackSections: number;
     cost: { tokens?: number; subagents?: number; skillCalls?: number };
   };
   details: { clusters: ClusterReport[]; qualitativeNotes: string[]; knownGaps: string[] };
@@ -34,13 +37,14 @@ export function buildRunReport(input: RunReportInput): RunReport {
   const clustersFailed = input.clusters.filter((c) => !c.built || !c.gatePassed).length;
   const responsiveFail = input.responsive.filter((r) => !r.responsive).length;
   const responsivePass = input.responsive.length - responsiveFail;
+  const htmlFallbackSections = input.htmlFallbackSections ?? 0;
 
   let overall: Verdict;
   if (clustersFailed > 0 || responsiveFail > 0) {
     overall = 'fail';
   } else if (
     input.fallbackPages > 0 || input.pagesMisfit > 0 ||
-    input.provenanceFlags > 0 || (input.knownGaps?.length ?? 0) > 0
+    input.provenanceFlags > 0 || htmlFallbackSections > 0 || (input.knownGaps?.length ?? 0) > 0
   ) {
     overall = 'warn';
   } else {
@@ -59,6 +63,7 @@ export function buildRunReport(input: RunReportInput): RunReport {
       responsiveFail,
       provenanceFlags: input.provenanceFlags,
       fallbackPages: input.fallbackPages,
+      htmlFallbackSections,
       cost: input.cost ?? {},
     },
     details: {

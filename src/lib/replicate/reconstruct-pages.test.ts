@@ -154,6 +154,22 @@ describe('buildPageReconstruction', () => {
     expect(r.gate.ok).toBe(true);
   });
 
+  it('emits a verbatim core/html island for a lossy section, rewriting island media + counting fallbackSections', () => {
+    const mediaUrlMap = new Map([['https://cdn.test/team.jpg', '/wp-content/uploads/team.jpg']]);
+    const lossy = section({
+      headings: ['Our Story'],
+      // 150px image is below the lead-image threshold → dropped by the structured render.
+      images: [{ url: '/wp-content/uploads/team.jpg', sourceUrl: 'https://cdn.test/team.jpg', alt: '', kind: 'img', width: 150, height: 150 }],
+      sectionHtml: '<section><h2>Our Story</h2><img src="https://cdn.test/team.jpg" alt=""/></section>',
+    } as Partial<SectionSpec>);
+    const r = buildPageReconstruction([lossy], { ...base, slug: 'story', mediaUrlMap });
+    expect(r.postContent).toContain('<!-- wp:html -->');
+    expect(r.postContent).toContain('/wp-content/uploads/team.jpg'); // island media rewritten to local
+    expect(r.postContent).not.toContain('cdn.test'); // source CDN URL gone
+    expect(r.fallbackSections).toBe(1);
+    expect(r.gate.ok).toBe(true);
+  });
+
   it('leaves body links untouched when no linkMap is supplied (back-compat)', () => {
     const cta = section({
       headings: ['Learn more'],

@@ -284,6 +284,8 @@ export const reconstructPagesHandler: Handler = async (args, ctx) => {
   });
   const mediaMap: Record<string, string> = {};
   for (const it of mediaResult.installed) mediaMap[it.sourceUrl] = it.localUrl;
+  // Map form for the core/html fallback island rewrite (source URL -> local upload URL).
+  const mediaUrlMap = new Map(Object.entries(mediaMap));
 
   // Theme palette tokens (from the installed theme.json) — used to map captured
   // card/cell background colors to token slugs (the gate forbids inline hex).
@@ -315,7 +317,7 @@ export const reconstructPagesHandler: Handler = async (args, ctx) => {
     applyMediaMap(specs, mediaMap);
     let built;
     try {
-      built = buildPageReconstruction(specs, { slug: p.slug, title: p.title, themeSlug, isHome: p.isHome, paletteTokens, fontFamilies, linkMap });
+      built = buildPageReconstruction(specs, { slug: p.slug, title: p.title, themeSlug, isHome: p.isHome, paletteTokens, fontFamilies, linkMap, mediaUrlMap });
     } catch (err) {
       report.push({ slug: p.slug, ok: false, reason: `build: ${err instanceof Error ? err.message : String(err)}` });
       continue;
@@ -348,6 +350,7 @@ export const reconstructPagesHandler: Handler = async (args, ctx) => {
       iconAssets: built.iconAssetCount,
       assets: built.expectedAssets.length,
       provenanceFlags: built.provenanceFlags,
+      fallbackSections: built.fallbackSections,
       postContentUpdated: postUpdated,
       blocksFixed: fixResult?.changed ?? false,
     });
@@ -375,6 +378,9 @@ export const reconstructPagesHandler: Handler = async (args, ctx) => {
   await forcePatternRescan(studioSitePath, themeSlug);
 
   const reconstructed = report.filter((r) => r.ok).length;
+  // Site-level count of sections emitted as verbatim core/html islands — feeds the
+  // run-report's warning-level htmlFallbackSections so QA can upgrade each to blocks.
+  const htmlFallbackSections = report.reduce((n, r) => n + ((r.fallbackSections as number) ?? 0), 0);
   return ctx.textResult({
     ok: extractErrors.length === 0 && report.every((r) => r.ok),
     themeSlug,
@@ -382,6 +388,7 @@ export const reconstructPagesHandler: Handler = async (args, ctx) => {
     failed: report.length - reconstructed,
     mediaDownloaded: downloaded,
     mediaInstalled: mediaResult.installed.length,
+    htmlFallbackSections,
     specsFromCache,
     specsFromLive,
     extractErrors,
