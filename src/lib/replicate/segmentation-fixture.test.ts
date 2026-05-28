@@ -18,6 +18,7 @@ import { chromium, type Browser } from 'playwright';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { extractFull, type SectionSpec } from './section-extract.js';
+import { measureSourceBands, scoreSegmentation } from './segmentation-parity.js';
 
 // Discover snapshotted homepage fixtures generically (any output/<site>/html/).
 // Gitignored output/ means these run locally where a liberation has been done;
@@ -43,13 +44,15 @@ afterAll(async () => {
   if (browser) await browser.close();
 });
 
-async function specsForFixture(path: string): Promise<SectionSpec[]> {
+async function analyzeFixture(path: string): Promise<{ specs: SectionSpec[]; score: ReturnType<typeof scoreSegmentation> }> {
   const html = readFileSync(path, 'utf8').replace(/<script[\s\S]*?<\/script>/gi, '');
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   try {
     await page.setContent(html, { waitUntil: 'load', timeout: 30_000 });
     await page.waitForTimeout(300);
-    return await extractFull(page, {}, 20_000);
+    const specs = await extractFull(page, {}, 20_000);
+    const bands = await measureSourceBands(page);
+    return { specs, score: scoreSegmentation(bands, specs) };
   } finally {
     await page.close();
   }
@@ -69,10 +72,16 @@ function summarize(specs: SectionSpec[]): string {
 describe.runIf(haveFixture)('segmentation fixture harness', () => {
   for (const fixture of FIXTURES) {
     it(`reproduces segmentation from ${fixture}`, async () => {
-      const specs = await specsForFixture(fixture);
+      const { specs, score } = await analyzeFixture(fixture);
       // eslint-disable-next-line no-console
-      console.log(`\n--- ${fixture} (offline) ---\n` + summarize(specs) + '\n');
+      console.log(
+        `\n--- ${fixture} (offline) ---\n` +
+          summarize(specs) +
+          `\nPARITY ${JSON.stringify(score)}\n`,
+      );
       expect(specs.length).toBeGreaterThan(0);
+      // No hard floor yet — this logs the baseline the dynamic ruleset must raise.
+      // Once a fixture corpus exists, assert composite >= an agreed floor per fixture.
     }, 60_000);
   }
 });
