@@ -149,3 +149,55 @@ describe('Squarespace adapter WXR integration', () => {
     expect(validation.valid).toBe(true);
   });
 });
+
+import { detectBlogPrefixes } from '../../src/adapters/squarespace.js';
+
+describe('detectBlogPrefixes', () => {
+  it('picks up date-based blog prefixes', () => {
+    const urls = [
+      { url: 'https://example.com/', type: 'homepage' },
+      { url: 'https://example.com/walkabout-chronicles/2024/3/1/post-a', type: 'post' },
+      { url: 'https://example.com/walkabout-chronicles/2024/3/15/post-b', type: 'post' },
+      { url: 'https://example.com/walkabout-chronicles/2024/4/2/post-c', type: 'post' },
+      { url: 'https://example.com/about', type: 'page' },
+    ];
+    const prefixes = detectBlogPrefixes(urls);
+    expect(prefixes).toContain('/walkabout-chronicles');
+  });
+
+  it('picks up conventional blog paths', () => {
+    const urls = [
+      { url: 'https://example.com/', type: 'homepage' },
+      { url: 'https://example.com/blog/post-a', type: 'post' },
+      { url: 'https://example.com/blog/post-b', type: 'post' },
+    ];
+    expect(detectBlogPrefixes(urls)).toContain('/blog');
+  });
+
+  it('orders date-based prefixes ahead of conventional fallbacks', () => {
+    const urls = [
+      { url: 'https://example.com/journal/2024/3/1/a', type: 'post' },
+      { url: 'https://example.com/journal/2024/3/2/b', type: 'post' },
+      { url: 'https://example.com/blog/c', type: 'post' },
+    ];
+    const prefixes = detectBlogPrefixes(urls);
+    expect(prefixes[0]).toBe('/journal');
+  });
+
+  it('requires at least 2 hits for a date-based prefix', () => {
+    const urls = [
+      { url: 'https://example.com/one-off/2024/3/1/lonely-post', type: 'post' },
+      { url: 'https://example.com/about', type: 'page' },
+    ];
+    expect(detectBlogPrefixes(urls)).not.toContain('/one-off');
+  });
+
+  it('returns empty array when no blog-like URLs are present', () => {
+    const urls = [
+      { url: 'https://example.com/', type: 'homepage' },
+      { url: 'https://example.com/about', type: 'page' },
+      { url: 'https://example.com/contact', type: 'page' },
+    ];
+    expect(detectBlogPrefixes(urls)).toHaveLength(0);
+  });
+});
