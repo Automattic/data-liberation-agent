@@ -221,4 +221,18 @@ describe('matchCapturedFamily', () => {
     expect(matchCapturedFamily('Poppins, sans-serif', faces)).toBeNull();
     expect(matchCapturedFamily(null, faces)).toBeNull();
   });
+  it('matches a variant-suffixed observed family to the base captured family', () => {
+    // The capture pipeline derives a suffix-free family ("futura-lt-w01") while
+    // the source's computed style carries a weight/style suffix or builder hash
+    // ("futura-lt-w01-book", "avenir-lt-w01_35-light1475496"). These must match
+    // so the real self-hosted font is used instead of substituting a generic.
+    const variant: ParsedFontFace[] = [
+      { family: 'futura-lt-w01', src: 'f.woff2', format: 'woff2', weight: '400', style: 'normal' },
+      { family: 'avenir-lt-w01_35-light1475496', src: 'a.woff2', format: 'woff2', weight: '300', style: 'normal' },
+    ];
+    expect(matchCapturedFamily('futura-lt-w01-book, sans-serif', variant)).toBe('futura-lt-w01');
+    expect(matchCapturedFamily('avenir-lt-w01_35-light1475496, sans-serif', variant)).toBe('avenir-lt-w01_35-light1475496');
+    // A genuinely different family still does not match.
+    expect(matchCapturedFamily('helvetica-w02-bold', variant)).toBeNull();
+  });
 });

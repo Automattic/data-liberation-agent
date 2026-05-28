@@ -275,6 +275,32 @@ describe('reconstructPagePattern', () => {
     expect(r.php).toContain('shap.png');
   });
 
+  it('un-flattens a static band with columnCount>=2 and heading-only cells into a real grid', () => {
+    const headingOnly = (heading: string) => ({ heading, body: [], image: null, icon: null, button: null });
+    const s = section({ interactionModel: 'static', headings: ['Our Process'] }) as SectionSpec & {
+      cells: unknown[];
+    };
+    s.layout = { ...s.layout, columnCount: 3 };
+    s.cells = [headingOnly('Discover'), headingOnly('Design'), headingOnly('Deliver')];
+    const r = reconstructPagePattern([s as SectionSpec], opts);
+    // Was flattened to a centered text band that dropped the card titles; now a real grid.
+    expect(r.php).toContain('wp:columns');
+    expect(r.php).toContain('Discover');
+    expect(r.php).toContain('Design');
+    expect(r.php).toContain('Deliver');
+  });
+
+  it('does NOT un-flatten heading-only cells when columnCount < 2 (the gate)', () => {
+    const headingOnly = (heading: string) => ({ heading, body: [], image: null, icon: null, button: null });
+    const s = section({ interactionModel: 'static', headings: ['Single'] }) as SectionSpec & {
+      cells: unknown[];
+    };
+    s.layout = { ...s.layout, columnCount: 1 };
+    s.cells = [headingOnly('A'), headingOnly('B')];
+    const r = reconstructPagePattern([s as SectionSpec], opts);
+    expect(r.php).not.toContain('wp:columns');
+  });
+
   it('maps per-heading font-families to display vs body and reproduces line-height', () => {
     const s = section({ headings: ['Serif Headline', 'A SANS EYEBROW'] }) as SectionSpec;
     s.headingFamilies = ['libre baskerville', 'wfont_5499e3_8190210ff07446afa535fc100a057226'];
@@ -670,6 +696,33 @@ describe('reconstructPagePattern', () => {
       opts,
     );
     expect(grey.php).not.toContain('has-surface-raised-background-color');
+    expect(grey.php).not.toContain('background-color:#');
+  });
+
+  it('paints an opaque COLORED tint band with its exact captured color (not the grey raised token)', () => {
+    // A solid pale-blue band (rgb(232,239,241)) is painted edge-to-edge with its
+    // real color instead of being approximated by surface-raised.
+    const blue = reconstructPagePattern(
+      [section({ interactionModel: 'static', headings: ['Pale blue band'], backgroundColor: 'rgb(232, 239, 241)', backgroundBrightness: 237 })],
+      opts,
+    );
+    expect(blue.php).toContain('background-color:#e8eff1');
+    expect(blue.php).toContain('has-background');
+    expect(blue.php).not.toContain('has-surface-raised-background-color');
+  });
+
+  it('stacks sections gaplessly — every section zeroes its top/bottom margin', () => {
+    // White gaps between sections come from WP's default top-level block-gap;
+    // each reconstructed section must zero its margin so bands butt edge-to-edge.
+    const r = reconstructPagePattern(
+      [
+        section({ interactionModel: 'static', headings: ['One'] }),
+        section({ interactionModel: 'static', headings: ['Two'] }),
+      ],
+      opts,
+    );
+    expect(r.php).toContain('margin-top:0;margin-bottom:0;');
+    expect(r.php).not.toMatch(/"margin":\{"top":"var:preset/);
   });
 
   it('renders a cover-with-headline hero WITH a lead photo as a 2-column media-text', () => {

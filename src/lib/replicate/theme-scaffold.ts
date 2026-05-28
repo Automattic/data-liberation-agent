@@ -621,7 +621,11 @@ function buildThemeJson(f: DesignFoundation, opts: ThemeJsonOpts = {}): string {
       typography: {
         customFontSize: false,
         defaultFontSizes: false,
-        fluid: true,
+        // Fluid OFF for replicas: fluid typography silently rewrites the exact
+        // px sizes the reconstruction sets (from the source's computed styles)
+        // into shrinking clamp()s, so a captured 36px heading renders ~22px and
+        // breaks visual parity. Faithful px sizing wins over fluid scaling here.
+        fluid: false,
         fontFamilies,
       },
       layout: breakpoints,
@@ -704,12 +708,16 @@ function buildFontFamilies(
   // (2) a captured family matching the foundation body token, (3) the observed
   // body stack hint. A substitute beats the bare declared stack so body copy
   // renders in a real web font instead of a CSS-generic fallback.
+  // Prefer the REAL captured source font (observed body stack, then foundation
+  // body token) over the free substitute — the substitute exists only as a
+  // fallback for an UNHOSTABLE font, so a successfully self-hosted source face
+  // must win. Only fall back to the substitute when the real font wasn't captured.
   const body = fams.body?.value;
   const bodySubMatch = matchCapturedFamily(hints.bodySubstituteFamily, capturedFonts);
   const bodyMatch =
-    bodySubMatch ??
+    matchCapturedFamily(hints.bodyFamily, capturedFonts) ??
     matchCapturedFamily(typeof body === 'string' ? body : null, capturedFonts) ??
-    matchCapturedFamily(hints.bodyFamily, capturedFonts);
+    bodySubMatch;
   if (bodyMatch) {
     const e = capturedBySlug.get(slugify(bodyMatch));
     if (e) out.push({ ...e, slug: 'body', name: 'Body' });

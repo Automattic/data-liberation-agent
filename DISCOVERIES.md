@@ -6,6 +6,55 @@ AI agents: when you contribute an improvement, add an entry here. See [CONTRIBUT
 
 ---
 
+## 2026-05-28 — Visual-parity fixes from the corneliusholmes.com (Wix) rebuild: gapless sections, exact captured colors, fluid-off, suffix-tolerant font match, QA sampling
+
+**Found by:** Claude + Matt
+**During:** A long parity pass on the corneliusholmes.com homepage where the block reconstruction looked significantly different from the source (muddy/dark hero, saturated-wrong card colors, flattened tiles, white gaps between sections). Root retro → 5 systemic fixes.
+**Type:** reconstruction fidelity + scaffold defaults + QA workflow
+
+### What was wrong (and the meta-lesson)
+Core-block reconstruction re-derives a bespoke design with generic blocks and *inferred* values, and the agent compounded that by **guessing colors/sizes and declaring "parity" before measuring**. Almost every fix came from MEASURING the source (sampling screenshot pixels, reading the SectionSpec) instead of eyeballing. Treat that as the default: sample, don't guess; lead with the differences.
+
+### Fixes shipped
+1. **Suffix-tolerant captured-font matching** (`font-capture.ts` `matchCapturedFamily`). The capture pipeline derives a suffix-free family (`futura-lt-w01`) while the computed style carries a weight/style suffix or builder hash (`futura-lt-w01-book`, `avenir-lt-w01_35-light1475496`). The old EXACT match failed, so the substitution path wrongly fired and replaced the real self-hosted source font with Inter. Now falls back to comparing weight/style/hash-stripped base names. Also reordered `theme-scaffold.ts buildFontFamilies` so a real captured family beats the free substitute.
+2. **Fluid typography OFF for replicas** (`theme-scaffold.ts`). `settings.typography.fluid:true` silently rewrote the reconstruction's exact px sizes into shrinking `clamp()`s (a captured 36px heading rendered ~22px). Faithful px wins over fluid scaling.
+3. **Gapless full-bleed section stacking** (`page-reconstruct.ts wrapSection`). White gaps between sections came from WP's default top-level block-gap. Every section now zeroes its top/bottom margin so bands butt edge-to-edge; all vertical rhythm comes from each section's own captured padding (`padTopPx`/`padBottomPx`, which the spec already carried).
+4. **Paint the exact captured band color** (`page-reconstruct.ts`). A band now renders its real captured tint (e.g. pale-blue `#e8eff1`) instead of the generic `surface-raised` grey approximation. Guarded: near-white and low-alpha (<0.6) and near-neutral-grey tints fall back to the token (don't over-saturate).
+5. **Capture the band's real background from a full-span DESCENDANT layer** (`section-extract.ts` `pickEffectiveBg`). Page builders (Wix) paint a section's color on a full-span child (`colorUnderlay`/bgLayers) div, not the `<section>` or its ancestors — so the own→ancestor→sibling walk reported the page white and missed the real band color. Added a geometry-based descendant scan (≥90% width AND height of the section) when own+ancestors give no color or near-white.
+6. **design-qa now samples + gates per-section** (`skills/design-qa/SKILL.md`). The skill must sample source-vs-replica pixels per band (colors, inter-section gaps, heading/body sizes), report a per-section delta table, and treat a high structural delta as disqualifying — not declare "matches" from vision alone.
+
+### Still open (next)
+- **Card-grid DETECTION.** The 3-card service row flattened to stacked text because the geometry classifier read it as flat `static` (so no `cells[]` were captured → no card bgs). The cell-bg walk already handles descendants; the gap is detecting the grid in the first place. Needs a stronger card-grid/​hero-cover/​pill-row/​testimonial-grid classifier + `section-mapping` templates.
+- **Set the html-first expectation up front.** Core-block reconstruction can't pixel-match a bespoke Wix design (absolute positioning, full-bleed image backgrounds, container-query scaling). The skill should say so early and offer the carried-CSS html-first path when the user prioritizes pixel fidelity over editable blocks.
+
+### Verification
+`font-capture` / `theme-scaffold` / `font-substitution` (82), `page-reconstruct` / `validate-block-markup` / `compose-instantiate` (71), `section-extract` (40) unit suites pass, incl. new cases (suffix-tolerant match, gapless margins, exact-tint paint, grey-skip). Browser-eval (`pickEffectiveBg` descendant scan) needs a live re-extract to exercise; the MCP server must be restarted to pick up `src/` changes.
+
+---
+
+## 2026-05-28 — Wix `/liberate`: scaffold drops valid captured fonts to Inter; updating post_content in a Studio site needs the VFS path
+
+**Found by:** Claude + Matt
+**During:** Migrating https://www.corneliusholmes.com/ (Wix therapy practice — 18 pages, 32 posts).
+**Type:** theme-scaffold behavior + Studio CLI operational gotcha
+
+### Finding 1 — `liberate_theme_scaffold` substituted self-hostable source fonts with a generic
+The source uses commercial Wix faces — **Futura LT** (display) and **Avenir LT** (body). The scaffold's font pipeline successfully downloaded BOTH as valid woff2 into `theme/assets/fonts/` (verified `file` → "Web Open Font Format (Version 2), TrueType"), yet `theme.json` bound the `body` AND `display` families to **Inter** via `fontSubstitutions` (`arial→Inter`, `futura-lt-w01-book→Inter`). Net effect: the source's geometric-display / humanist-body contrast collapses into one neutral face. The design-foundation's intended substitutes (Jost/Mulish) were also ignored.
+
+**Workaround this run:** hand-rebound `theme.json` `body`→`avenir-lt-w01_35-light1475496` and `display`→`futura-lt-w01` (the real captured woff2, with Jost/Mulish kept as fallback in the stack). Worth tightening the substitution logic: when a captured woff2 is present and valid, prefer self-hosting the real face (or the foundation's chosen substitute) over a generic Inter fallback. Note licensing — Futura/Avenir are commercial; fine for a local benchmark replica, flag for publication.
+
+### Finding 2 — `studio wp post update <id>` can only read files via the `/wordpress` VFS path
+QA edits to a page's `post_content` (re-carding the homepage service row) failed two ways before working:
+- `post update 208 /abs/host/path.html` → `Error: Unable to read content from '...'` (Studio's PHP sandbox can't see arbitrary host paths).
+- `post update 208 - < file.html` (STDIN) → reports `Success` but silently sets `post_content` to **empty** (the proxy doesn't forward stdin).
+
+**Working method:** copy the content file INTO the site dir (`~/Studio/<site>/<file>`) and reference it by its VFS path — Studio mounts the site at `/wordpress`, so `studio wp --path <site> post update <id> /wordpress/<file>`. This mirrors how `studio.ts` drives WXR import (`toVfsPath` + `eval-file`). Always verify with a follow-up `post get <id> --field=post_content | wc -c` — the STDIN path's false success is the dangerous one.
+
+### Why it matters
+Both bite any agent-driven Wix replica: Finding 1 silently flattens type identity on sites whose fonts ARE capturable; Finding 2 can blank a reconstructed page during QA touch-ups while reporting success.
+
+---
+
 ## 2026-05-22 — `liberate_extract_one` clobbered the WXR (same bug as the 2026-04-30 resume fix, second site of)
 
 **Found by:** Claude + Matt
@@ -874,6 +923,41 @@ Using Playwright's `page.on('response', ...)` handler to capture all `applicatio
 
 ### Why it's better than the previous approach
 HTML scraping requires parsing Wix's heavily nested, obfuscated markup. API interception gives you clean JSON with semantic field names, correct dates, author information, and structured content — everything you'd want for a clean migration.
+
+---
+
+## 2026-05-27 — Shopify capture bot-blocks the headless browser (getsnooz.com)
+
+**Found by:** Claude + Matt
+**During:** getsnooz.com migration (Shopify, Tier 1, /liberate full pipeline)
+**Type:** platform quirk | workaround for blocked content
+
+### What I found
+HTTP/JSON extraction worked fine, but the Playwright **capture** phase was bot-blocked by Shopify: at concurrency 6, ~70 navigations returned `HTTP 403` and ~32 hit `goto` timeouts (only 31/133 captures succeeded). That left `palette/typography/breakpoints` unwritten and most `html/<slug>.html` missing — silently degrading the whole design phase.
+
+### How it works
+Re-run `liberate_screenshot` with `cdpPort` pointed at a **real headful Chrome** (`--remote-debugging-port=9222 --user-data-dir=/tmp/dla-chrome-cdp`). A real (non-headless) fingerprint sails past Shopify's detection: getsnooz went from 31/133 to 90/97 at concurrency 2. The section-spec cache (`sections/<slug>.json`) is written during this pass, so `liberate_reconstruct_pages` reads from cache afterward — no re-navigation, no further 403.
+
+### Why it matters
+Headless capture on Shopify is unreliable. Default to CDP-with-real-Chrome for Shopify (mirror the Squarespace CDP guidance) and consider a lower default capture concurrency for Shopify origins.
+
+---
+
+## 2026-05-27 — Studio WXR import times out on media-heavy sites; install bugs
+
+**Found by:** Claude + Matt
+**During:** getsnooz.com migration (939 media)
+**Type:** architecture | install-path bug + fix
+
+### What I found
+`liberate_preview` died on the 939-image import with Studio's "No activity for 120s" IPC-silence kill. The import already serves media locally (no CDN refetch), so the time sink is WordPress regenerating every intermediate image size (`wp_generate_attachment_metadata`) for 939 attachments in one synchronous WP-CLI call. This blocks **every** install path (`preview`, `install_theme`, `reconstruct_pages` — all need an imported Studio site).
+
+### Fix
+Added `add_filter('intermediate_image_sizes_advanced', '__return_empty_array')` before `WP_Import::import()` in `src/lib/preview/scripts/import-wxr.php`. Thumbnails aren't needed for a faithful replica (full-size renders fine; regenerate later via `wp media regenerate`). Import then completes in seconds. Applied this run, left uncommitted for review.
+
+### Adjacent install gotchas found same run
+- **cover-with-headline drops the background image.** The homepage hero spec carried `images[0].kind:"background"` + `fullBleed:true` and the file installed to the media library, but `liberate_reconstruct_pages` rendered a constrained group on white and omitted the image. The handler should emit a `wp:cover` when the spec has a `kind:background` image. (Fixed manually for the homepage.)
+- **front-page renders `wp:post-content`, not the pattern file.** The homepage reconstruction `slug` must equal the imported WP page slug (`homepage`, not `home`) or `postContentUpdated` is silently `false`. Edits must go to the page's `post_content` in the DB; editing `patterns/page-<slug>.php` changes nothing. `studio wp post update` can't read host `/tmp` paths — stage the file inside the site dir and pass the `/wordpress/...` VFS path.
 
 ---
 

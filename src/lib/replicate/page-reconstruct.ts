@@ -26,7 +26,7 @@
 // This is the same contract the about-us reconstruction satisfied; this module
 // generalizes it across the remaining content-page interaction models.
 
-import type { SectionSpec, SectionSpecImage, SectionSpecIcon } from './section-extract.js';
+import type { SectionSpec, SectionSpecImage, SectionSpecIcon, SectionSpecCell } from './section-extract.js';
 import { nearestToken, brightness, type PaletteToken } from './footer-color.js';
 import type { ExtractedReview } from './review-extract.js';
 import { measureSectionCoverage } from './section-coverage.js';
@@ -744,7 +744,7 @@ function renderTextBand(s: SectionSpec, ctx: RenderCtx): BlockOut {
       parts.push(imageBlock(im, out, `${s.interactionModel}#${s.sectionIndex}.extra`, { align: centerOf(s) ? 'center' : null, rounded: true }));
     }
   }
-  out.markup = wrapSection(parts.filter(Boolean), { constrained: '760px', center: centerOf(s), raised: isTintedSection(s), ...sectionPad(s) });
+  out.markup = wrapSection(parts.filter(Boolean), { constrained: '760px', center: centerOf(s), raised: isTintedSection(s), bgColor: s.backgroundColor, ...sectionPad(s) });
   return out;
 }
 
@@ -815,7 +815,7 @@ function renderMediaText(s: SectionSpec, flip: boolean, ctx: RenderCtx): BlockOu
       blocks.push(imageBlock(im, out, `media-text#${s.sectionIndex}.extra`, { align: 'center', rounded: true }));
     }
   }
-  out.markup = wrapSection(blocks, { wide: '1100px', raised: isTintedSection(s), ...sectionPad(s) });
+  out.markup = wrapSection(blocks, { wide: '1100px', raised: isTintedSection(s), bgColor: s.backgroundColor, ...sectionPad(s) });
   return out;
 }
 
@@ -846,7 +846,7 @@ function renderCardGrid(s: SectionSpec, withButtons: boolean): BlockOut {
   // Body text not consumed per-card (a section intro) renders above the grid.
   const extra: string[] = [];
   for (let i = cardCount; i < bodyText.length; i++) extra.push(paragraphBlock(bodyText[i], out, { center: centerOf(s) }));
-  out.markup = wrapSection([...extra.filter(Boolean), columns(cards)], { wide: '1100px', raised: isTintedSection(s), ...sectionPad(s) });
+  out.markup = wrapSection([...extra.filter(Boolean), columns(cards)], { wide: '1100px', raised: isTintedSection(s), bgColor: s.backgroundColor, ...sectionPad(s) });
   return out;
 }
 
@@ -930,6 +930,7 @@ function renderReviewGrid(s: SectionSpec): BlockOut {
     wide: '1100px',
     inverse: dark,
     raised: !dark,
+    bgColor: s.backgroundColor,
     ...sectionPad(s),
   });
   return out;
@@ -1001,7 +1002,7 @@ function renderImageRow(s: SectionSpec): BlockOut {
   (s.bodyText ?? []).forEach((b, i) => parts.push(paragraphBlock(b, out, { center: centerOf(s), sizePx: s.bodyTextSizes?.[i], fontFamily: s.bodyFamilies?.[i] || undefined, lineHeight: s.bodyLineHeights?.[i] })));
   const gallery = galleryBlock(s.images, out);
   if (gallery) parts.push(gallery);
-  out.markup = wrapSection(parts.filter(Boolean), { wide: '1100px', raised: isTintedSection(s), ...sectionPad(s) });
+  out.markup = wrapSection(parts.filter(Boolean), { wide: '1100px', raised: isTintedSection(s), bgColor: s.backgroundColor, ...sectionPad(s) });
   return out;
 }
 
@@ -1034,7 +1035,7 @@ function renderFaq(s: SectionSpecWithFaqs): BlockOut {
         `${answerBlock}\n</details>\n<!-- /wp:details -->`,
     );
   }
-  out.markup = wrapSection(parts.filter(Boolean), { constrained: '760px', raised: isTintedSection(s), ...sectionPad(s) });
+  out.markup = wrapSection(parts.filter(Boolean), { constrained: '760px', raised: isTintedSection(s), bgColor: s.backgroundColor, ...sectionPad(s) });
   return out;
 }
 
@@ -1067,6 +1068,10 @@ function wrapSection(
     center?: boolean;
     raised?: boolean;
     inverse?: boolean;
+    /** Exact captured section background (hex/rgb) — painted edge-to-edge when
+     *  the band is neither the raised nor inverse token. Lets a pale-tint band
+     *  (e.g. the source's pale-blue newsletter strip) render its real color. */
+    bgColor?: string;
     padTopPx?: number;
     padBottomPx?: number;
   },
@@ -1078,19 +1083,30 @@ function wrapSection(
     : opts.wide
       ? `"layout":{"type":"constrained","wideSize":"${opts.wide}"}`
       : `"layout":{"type":"constrained"}`;
-  // inverse (dark band) wins over raised (mint band). A dark band also sets the
-  // group text color to text-inverse so emitters that don't self-set a color
-  // (and the inverse-aware ones) read light on the dark surface.
-  const bg = opts.inverse
-    ? ',"backgroundColor":"surface-inverse","textColor":"text-inverse"'
-    : opts.raised
-      ? ',"backgroundColor":"surface-raised"'
-      : '';
+  // Background precedence: inverse (dark band, needs light text) > an EXACT
+  // captured tint > raised token (approximation fallback). Painting the exact
+  // captured OPAQUE tint beats the generic surface-raised so the source's real
+  // pale-blue/pale-pink band renders its true color instead of a grey
+  // approximation. Skipped when: near-white (page surface shows through) or the
+  // capture carries a low alpha (a faint translucent tint would over-saturate
+  // if stamped solid — fall back to the raised token in that case).
+  const customBg = !opts.inverse ? opaqueTintHex(opts.bgColor) : null;
+  const colorAttr = opts.inverse
+    ? '"backgroundColor":"surface-inverse","textColor":"text-inverse",'
+    : customBg
+      ? ''
+      : opts.raised
+        ? '"backgroundColor":"surface-raised",'
+        : '';
+  const styleColor = !opts.inverse && customBg ? `"color":{"background":"${customBg}"},` : '';
   const bgClass = opts.inverse
     ? ' has-surface-inverse-background-color has-text-inverse-color has-text-color has-background'
-    : opts.raised
-      ? ' has-surface-raised-background-color has-background'
-      : '';
+    : customBg
+      ? ' has-background'
+      : opts.raised
+        ? ' has-surface-raised-background-color has-background'
+        : '';
+  const bgInlineStyle = !opts.inverse && customBg ? `background-color:${customBg};` : '';
   // Vertical padding: trust the geometrically-measured value when section-extract
   // captured it (faithful whitespace — page-builder `padding` reads 0); otherwise
   // fall back to the theme spacing preset. Horizontal padding stays preset.
@@ -1099,12 +1115,49 @@ function wrapSection(
     typeof opts.padBottomPx === 'number' ? responsiveSpace(opts.padBottomPx) : 'var:preset|spacing|60';
   const cssLen = (v: string): string =>
     v.startsWith('var:preset|spacing|') ? `var(--wp--preset--spacing--${v.split('|').pop()})` : v;
+  // Zero inter-section margin: sections butt directly so there are NO white gaps
+  // between them (WP's default top-level block-gap would otherwise insert a
+  // margin above each section — the source stacks its bands edge-to-edge). All
+  // vertical rhythm comes from each section's own captured padding.
   return (
-    `<!-- wp:group {"tagName":"section","align":"full","style":{"spacing":{"padding":{"top":"${topVal}","bottom":"${botVal}","left":"var:preset|spacing|40","right":"var:preset|spacing|40"},"blockGap":"var:preset|spacing|40"}}${bg},${layout}} -->\n` +
-    `<section class="wp-block-group alignfull${bgClass}" style="padding-top:${cssLen(topVal)};padding-right:var(--wp--preset--spacing--40);padding-bottom:${cssLen(botVal)};padding-left:var(--wp--preset--spacing--40)">\n` +
+    `<!-- wp:group {"tagName":"section","align":"full",${colorAttr}"style":{${styleColor}"spacing":{"margin":{"top":"0","bottom":"0"},"padding":{"top":"${topVal}","bottom":"${botVal}","left":"var:preset|spacing|40","right":"var:preset|spacing|40"},"blockGap":"var:preset|spacing|40"}},${layout}} -->\n` +
+    `<section class="wp-block-group alignfull${bgClass}" style="margin-top:0;margin-bottom:0;${bgInlineStyle}padding-top:${cssLen(topVal)};padding-right:var(--wp--preset--spacing--40);padding-bottom:${cssLen(botVal)};padding-left:var(--wp--preset--spacing--40)">\n` +
     `${body}\n` +
     `</section>\n<!-- /wp:group -->`
   );
+}
+
+/**
+ * Return a `#rrggbb` hex for a captured section background ONLY when it is a
+ * meaningful, effectively-opaque tint worth painting edge-to-edge. Returns null
+ * for: missing color, near-white (let the page surface show), or a low-alpha
+ * translucent tint (alpha < 0.6 — painting it solid would over-saturate vs. the
+ * source's faint wash, so the caller falls back to the raised token).
+ */
+function opaqueTintHex(color: string | null | undefined): string | null {
+  if (!color) return null;
+  const s = color.trim();
+  const rgba = /rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)(?:\s*,\s*([\d.]+))?\s*\)/.exec(s);
+  let r: number, g: number, b: number;
+  if (rgba) {
+    const alpha = rgba[4] === undefined ? 1 : Number(rgba[4]);
+    if (alpha < 0.6) return null; // faint translucent tint → use raised token instead
+    [r, g, b] = [Number(rgba[1]), Number(rgba[2]), Number(rgba[3])];
+  } else {
+    const hex = /^#?([0-9a-f]{6})$/i.exec(s);
+    if (!hex) return null; // unknown keyword/format — don't risk it
+    r = parseInt(hex[1].slice(0, 2), 16);
+    g = parseInt(hex[1].slice(2, 4), 16);
+    b = parseInt(hex[1].slice(4, 6), 16);
+  }
+  const bright = (r + g + b) / 3;
+  if (bright >= 248) return null; // near-white → page surface shows through
+  // A near-neutral light grey (tiny channel spread) is not a design tint — the
+  // raised token / page surface covers it. Only paint genuinely COLORED tints
+  // (e.g. pale blue rgb(232,239,241) spread 9, pale pink) edge-to-edge.
+  const spread = Math.max(r, g, b) - Math.min(r, g, b);
+  if (spread <= 6 && bright >= 230) return null;
+  return '#' + [r, g, b].map((n) => n.toString(16).padStart(2, '0')).join('');
 }
 
 /** A section whose captured background is dark (needs inverse/light text). */
@@ -1181,7 +1234,7 @@ function renderCellGrid(s: SectionSpec, ctx: RenderCtx): BlockOut {
     if (!kept.length) continue;
     cols.push(column(cardToken ? [cardGroup(kept, cardToken, cardDark, c.radius ?? 0, c.padding ?? null)] : kept));
   }
-  out.markup = wrapSection([...intro.filter(Boolean), columns(cols)], { wide: '1100px', raised: isTintedSection(s), ...sectionPad(s) });
+  out.markup = wrapSection([...intro.filter(Boolean), columns(cols)], { wide: '1100px', raised: isTintedSection(s), bgColor: s.backgroundColor, ...sectionPad(s) });
   return out;
 }
 
@@ -1227,6 +1280,18 @@ const NON_CELL_GRID_MODELS = new Set([
   'testimonial',
 ]);
 
+/** Models that otherwise fall through `renderSection`'s switch to `renderTextBand`
+ *  (a single centered column). These are the ONLY models eligible for the relaxed
+ *  column-count un-flatten below — so a hero/cover/media-text band is never swept into a
+ *  card grid by column count alone (the cell check runs before the media-text check). */
+const FLATTEN_PRONE_MODELS = new Set([
+  'static',
+  'cta',
+  'price-list',
+  'app-download',
+  'horizontal-showcase',
+]);
+
 /** Models whose multi-image layouts own their rendering — a captured 2-up
  *  `mediaLayout` must not re-route them to media-text (a gallery/card/review band
  *  is not a single image beside text even if one image happens to sit beside a label). */
@@ -1253,10 +1318,23 @@ function renderSection(s: SectionSpecWithFaqs, ctx: RenderCtx): BlockOut {
   // A uniform multi-cell content grid: >=2 cells each carrying BOTH a title and
   // body (a genuine feature/column grid, not a hero's text|image split or a
   // single CTA). Card grids / reviews keep their specialized paths.
+  // A uniform multi-cell content grid. The base trigger needs cells carrying BOTH a
+  // heading and body (an unambiguous feature grid). RELAXED un-flatten: when the source
+  // reported >=2 columns AND the model would otherwise flatten to a centered text band,
+  // >=2 cells carrying ANY content (heading/body/image/icon/button) is enough — so a
+  // numbered-card band whose cells are heading-only stops collapsing into one column. The
+  // relaxed path is gated to FLATTEN_PRONE_MODELS so heroes/covers/media-text (which run
+  // their own checks after this) are never swept into a card grid by column count alone.
+  const cellHasHeadingAndBody = (c: SectionSpecCell) => !!(c.heading && c.body.length > 0);
+  const cellHasAnyContent = (c: SectionSpecCell) =>
+    !!(c.heading || c.body.length > 0 || c.image || c.icon || c.button);
   if (
     s.cells &&
     !NON_CELL_GRID_MODELS.has(s.interactionModel) &&
-    s.cells.filter((c) => c.heading && c.body.length > 0).length >= 2
+    (s.cells.filter(cellHasHeadingAndBody).length >= 2 ||
+      (FLATTEN_PRONE_MODELS.has(s.interactionModel) &&
+        s.layout.columnCount >= 2 &&
+        s.cells.filter(cellHasAnyContent).length >= 2))
   ) {
     return renderCellGrid(s, ctx);
   }

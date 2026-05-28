@@ -372,9 +372,35 @@ export function consolidateFontFaces<T extends ParsedFontFace>(faces: T[]): T[] 
 }
 
 /**
+ * Strip a trailing weight/style descriptor and any numeric hash from a family
+ * name so variant-suffixed observed names match the base captured family.
+ * e.g. `futura-lt-w01-book` → `futura-lt-w01`, `avenir-lt-w01_35-light1475496`
+ * → `avenir-lt-w01_35`, `helvetica-w01-roman` → `helvetica-w01`. Without this,
+ * a computed/observed family carrying a `-book`/`-light`/hash suffix never
+ * matches the captured `@font-face` family (which the capture pipeline derives
+ * without the suffix), so the substitution path wrongly fires and the real
+ * self-hosted source font is replaced by a generic (Inter). Wix-style.
+ */
+function normalizeFamilyBase(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/^["']|["']$/g, '')
+    .replace(/[0-9]{3,}/g, '') // drop builder hashes (e.g. ...light1475496)
+    .replace(
+      /[-_ ]+(thin|extra-?light|ultra-?light|light|book|regular|normal|roman|text|medium|semi-?bold|demi-?bold|demi|bold|extra-?bold|ultra-?bold|black|heavy|italic|oblique)\b/g,
+      '',
+    )
+    .replace(/[-_ ]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .trim();
+}
+
+/**
  * Pick the captured family that best matches a requested family stack from the
  * design foundation / typography.json (e.g. "Larsseit, sans-serif"). Matches on
- * the first family token, case-insensitively. Returns the matching captured
+ * the first family token, case-insensitively. Falls back to comparing the
+ * weight/style/hash-stripped base names so an observed `futura-lt-w01-book`
+ * still resolves to the captured `futura-lt-w01`. Returns the matching captured
  * family name (canonical casing) or null.
  */
 export function matchCapturedFamily(
@@ -386,6 +412,13 @@ export function matchCapturedFamily(
   if (!first) return null;
   for (const f of faces) {
     if (f.family.toLowerCase() === first) return f.family;
+  }
+  // Suffix-tolerant fallback: match on the normalized base name.
+  const firstBase = normalizeFamilyBase(first);
+  if (firstBase.length >= 4) {
+    for (const f of faces) {
+      if (normalizeFamilyBase(f.family) === firstBase) return f.family;
+    }
   }
   return null;
 }

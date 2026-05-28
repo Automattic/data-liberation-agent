@@ -1309,6 +1309,50 @@ export async function extractFull(
           p = p.parentElement;
           depth++;
         }
+        // ── full-span DESCENDANT background layer ───────────────────────────
+        // Page builders (Wix, etc.) paint a band's color on a full-span child
+        // layer (a "colorUnderlay" / bgLayers div) rather than on the <section>
+        // element or its ancestors — so the walk above reports the page white
+        // and the real band color is missed. When own+ancestors gave no color
+        // or a plain near-white, adopt the color of a descendant whose opaque
+        // background covers ~the whole section box (that's the layer the viewer
+        // actually sees). Geometry-based so it's platform-agnostic.
+        const rgbLuma = (v: string): number | null => {
+          const mm = /rgba?\((\d+),\s*(\d+),\s*(\d+)/.exec(v);
+          return mm ? (Number(mm[1]) + Number(mm[2]) + Number(mm[3])) / 3 : null;
+        };
+        const nearWhite = (v: string | null): boolean => {
+          if (!v) return false;
+          const lum = rgbLuma(v);
+          return lum !== null && lum >= 248;
+        };
+        if (!out.color || nearWhite(out.color)) {
+          const r0 = el.getBoundingClientRect();
+          const secH = bottom - top;
+          let bestColor: string | null = null;
+          let bestArea = 0;
+          el.querySelectorAll('*').forEach((d) => {
+            const dcs = getComputedStyle(d);
+            if (isTransparent(dcs.backgroundColor) || nearWhite(dcs.backgroundColor)) return;
+            const dr = d.getBoundingClientRect();
+            const dTop = dr.top + window.scrollY;
+            const dBot = dTop + dr.height;
+            const vOverlap = Math.max(0, Math.min(dBot, bottom) - Math.max(dTop, top));
+            // a full-bleed background layer: spans ≥90% of the section height AND
+            // ≥90% of its width (excludes smaller colored cards/buttons).
+            if (vOverlap >= secH * 0.9 && dr.width >= r0.width * 0.9) {
+              const area = vOverlap * dr.width;
+              if (area > bestArea) {
+                bestColor = dcs.backgroundColor;
+                bestArea = area;
+              }
+            }
+          });
+          if (bestColor) {
+            out.color = bestColor;
+            out.source = 'bg-layer';
+          }
+        }
         if (!out.image || !isGradient(out.image)) {
           const sectionH = bottom - top;
           const siblings = Array.from(document.body.querySelectorAll('*')).filter((c) => {
