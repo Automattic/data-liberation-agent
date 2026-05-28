@@ -32,6 +32,7 @@ import {
 import { installMediaForUrl } from '../../lib/streaming/media-install.js';
 import { BlockFixerClient } from '../../lib/streaming/block-fixer-client.js';
 import { downloadMedia } from '../../lib/extraction/media.js';
+import { downloadSectionMedia } from '../../lib/replicate/download-section-media.js';
 import { MediaStubStore } from '../../lib/extraction/media-stubs.js';
 import { deriveInstallThemeSlug } from './install-theme.js';
 import { themeCacheFlushCommands } from './install-theme.js';
@@ -271,21 +272,19 @@ export const reconstructPagesHandler: Handler = async (args, ctx) => {
   //    into the WP library and build the CDN→WP rewrite map.
   const stubs = MediaStubStore.load(outputDir);
   const seenNames = new Map<string, number>();
-  let downloaded = 0;
-  for (const u of srcUrls) {
-    if (!/^https?:/i.test(u)) continue;
-    const ex = stubs.get(u);
-    if (ex && ex.status === 'success' && ex.localPath) continue;
-    try {
-      const res = await downloadMedia(u, mediaDir, seenNames);
-      if (res.localPath) {
-        stubs.markSuccess(u, res.localPath);
-        downloaded++;
-      }
-    } catch {
-      /* best-effort — a missing image becomes a flagged placeholder downstream */
-    }
-  }
+  // Fetch the section-background imagery in a bounded-concurrency pool (these are
+  // independent I/O-bound fetches; the old serial loop dominated wall-clock on media-heavy
+  // sites). `safeFilename`/`seenNames` mutate synchronously, so the shared collision map is
+  // race-free; the stub check keeps anything extraction already fetched from re-downloading.
+  const { downloaded } = await downloadSectionMedia({
+    srcUrls,
+    isAlreadyDone: (u) => {
+      const ex = stubs.get(u);
+      return !!(ex && ex.status === 'success' && ex.localPath);
+    },
+    download: async (u) => (await downloadMedia(u, mediaDir, seenNames)).localPath ?? null,
+    onSuccess: (u, localPath) => stubs.markSuccess(u, localPath),
+  });
   stubs.flush();
 
   const mediaResult = await installMediaForUrl({
