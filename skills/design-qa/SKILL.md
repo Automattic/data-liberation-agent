@@ -1,6 +1,6 @@
 ---
 name: design-qa
-description: Visual-QA loop run after replica theme install and content import. Captures replica screenshots, applies a hard responsiveness gate at 390px, runs qualitative vision review of source/replica pairs, checks accessibility, classifies discrepancies A/B/C, applies fixes via editing-themes/editing-blocks, and logs remaining gaps. Orchestration-internal — invoked by the replicate/liberate orchestrators, not directly by users.
+description: Visual-QA loop run after replica theme install and content import. Captures replica screenshots, applies a hard responsiveness gate at 390px AND a hard per-section visual-parity gate (measured SectionParity records, verdict computed by buildRunReport), runs qualitative vision review of source/replica pairs, checks accessibility, and drives an escalation ladder of fixes via editing-themes/editing-blocks — escalating unresolved divergences to the operator rather than shipping them. Orchestration-internal — invoked by the replicate/liberate orchestrators, not directly by users.
 disable-model-invocation: true
 allowed-tools:
   - Bash
@@ -62,7 +62,26 @@ Once the responsiveness gate passes, read each source/replica screenshot pair wi
 - Typography (family, weight, size, color) fidelity
 - Mobile stacking behavior
 
-The pixel-diff score from `liberate_compare` (or `diff-pngs`) is a **signal** to direct your attention — it is not the acceptance gate. Qualitative vision review is the gate. NOTE: `liberate_compare` needs the standard layout in BOTH dirs (`manifest.json` + `desktop/<slug>.png` + `mobile/<slug>.png`). `liberate_replicate_verify` writes the replica PNGs in that shape but its `pairs[]` come back in the tool result; if `compare` errors with "manifest missing," the replica subdir lacks a `manifest.json` — skip the pixel score and rely on vision (it's only a signal anyway).
+**Measure, don't trust vision alone — sample the source.** Before asserting any band "matches," SAMPLE the actual pixels of both source and replica and compare. Eyeballing repeatedly mis-judged colors, sizes, and gaps in practice; the source screenshot is ground truth. For each section band (use the section Y-bands from the spec, or scan the full-page screenshot top→bottom):
+
+- **Section background color** — sample source vs replica at the band center and at left/center/right thirds. A hue/lightness delta beyond a small tolerance is a **real gap** (e.g. a pale-blue source band rendered grey), not "close enough."
+- **Inter-section gaps** — scan a vertical strip; a white band between two colored sections in the replica that the source does not have is a gap-margin regression (sections must butt edge-to-edge).
+- **Heading vs body sizes** — sample the rendered text height of a heading vs a paragraph; if the replica heading is markedly smaller than the source's, suspect fluid-typography shrink or a too-small size.
+
+A no-PIL environment can sample PNGs with the project's `pngjs` dependency (load → index `(W*y+x)<<2`). Report the sampled deltas — do not write "matches" without them.
+
+The per-section pixel-diff from `liberate_compare` (or `diff-pngs`) is a **forces-inspection signal**: a section whose desktop delta is high MUST be inspected. It is NOT itself the gate value (raw delta is noisy under font substitution / reflow). NOTE: `liberate_compare` needs the standard layout in BOTH dirs (`manifest.json` + `desktop/<slug>.png` + `mobile/<slug>.png`). `liberate_replicate_verify` writes the replica PNGs in that shape but its `pairs[]` come back in the tool result; if `compare` errors with "manifest missing," the replica subdir lacks a `manifest.json` — copy/symlink the source `manifest.json` into the replica dir, then re-run (don't silently fall back to vision-only).
+
+**Record a measured `SectionParity` per section — this is the gate, not your prose.** For every content-page section, fill a `SectionParity` record (`src/lib/replicate/section-parity.ts`) from sampled measurement, not vision assertion:
+
+- `signals.sectionPresent` — the replica did not drop/merge the section.
+- `signals.bgDeltaE` — CIE2000 ΔE of the band background (source vs replica). `> BG_DELTA_E_FLOOR` (10) is a divergence.
+- `signals.columnCountMatch` — a 3-card grid stayed 3, a 2-column band stayed 2.
+- `signals.mediaPresent` — captured image(s) present and placed.
+- `signals.fallbackUnstyled` — a `core/html` island landed on a CSS-layout section (unstyled).
+- `evidence.{srcSample,repSample}` — the sampled pixels backing the score. **No record ships without evidence** (prove-it-works: no evidence ≠ matches).
+
+For each section, also state concretely what a **10** (matches the source) looks like, then **gap-to-target**: do the work to close it and re-score, showing before→after. `deriveSectionParityStatus(signals, acceptance)` decides `match` / `divergent` / `accepted` — and the run-report verdict re-derives from these records, so you cannot talk a `divergent` section into a pass.
 
 **Vision review must catch what the upstream gates structurally cannot:**
 
@@ -80,40 +99,44 @@ Add all flags to the run-report under `a11yWarnings[]`.
 
 ### Step 5 — Classify discrepancies
 
-For each visual gap identified in Step 3, classify:
+For each `divergent` section from Step 3, classify — class drives which **escalation rung** (Step 6) you climb, NOT whether you ship:
 
 | Class | Meaning | Action |
 |---|---|---|
-| **A** | Spec wrong — the section spec or captured content is incorrect | Re-extract that section spec; do not fix the theme |
-| **B** | Template dropped info — the pattern or template didn't carry through content that was in the spec | Fix section-mapping or regenerate the affected pattern |
-| **C** | WP renders differently — a core-block or WP rendering constraint, not a theme authoring error | Log to `theme/notes.md`; no fix |
+| **A** | Spec wrong — the section spec or captured content is incorrect | Re-extract that section spec, then rebuild (rung R3) |
+| **B** | Template dropped info — the pattern/template didn't carry through content that was in the spec | Fix section-mapping or rebuild the affected block markup (rungs R1–R2) |
+| **C** | WP renders differently — a genuine core-block/WP rendering constraint, not a theme authoring error | Only Class C may be `accepted` by the agent, and ONLY with sampled-pixel `proof` attached |
 
-Produce a structured list: `{ urlPath, class, description, action }`.
+**Class C is narrow and never a flatten.** Flattening (3 cards → 1 column), wrong background color, dropped grid/columns, and dropped media are **fixable, never Class C** — `deriveSectionParityStatus` rejects a `class-c` acceptance for them outright. A true Class-C constraint does not trip the robust signals at all (it shows as `match` with a high pixel-delta you annotate). Accepting any *divergent* section is therefore the **operator's** call (Step 7), not the agent's.
 
-### Step 6 — Apply fixes
+Produce the `SectionParity[]` records (Step 3) plus, per section, `{ urlPath, band, class, description, rung }`.
 
-For Class B discrepancies, load the appropriate editing skill and apply fixes:
+### Step 6 — Close the gap (escalation ladder)
 
-- **Theme JSON / CSS issues** → load `editing-themes`
-- **Block markup / pattern issues** → load `editing-blocks`
-- **Custom block logic** → load `editing-blocks` (or `creating-blocks` only if core blocks cannot express the component)
+Every `divergent` section must be driven toward `match`. **Each iteration climbs to a STRONGER rung — never re-run the same failed tweak.** Climb until the section re-scores `match`:
 
-After applying fixes, reinstall the updated theme files via the orchestrator's install path and return to Step 1 to re-capture.
+- **R1 — theme/CSS fix** (`editing-themes`): band background color, spacing, inter-section gap.
+- **R2 — rebuild block markup** (`editing-blocks`): restore the columns/grid the structured render flattened, from the source spec.
+- **R3 — re-extract the spec** (Class A): if the section spec itself is wrong, re-extract it, then rebuild via R2.
+- **R4 — source-CSS-scoped styled rebuild** *(arriving with the section-rebuild capability work; until then, R4-class divergences escalate to the operator at Step 7)*: reproduce a bespoke section faithfully instead of flattening or shipping an unstyled island.
 
-### Step 7 — Budget and logging
+After applying a rung, reinstall the updated theme files via the orchestrator's install path and return to Step 1 to re-capture and re-score. "Known gap" / "where it falls short" is an **escalation trigger, not a conclusion** — never write it as the terminal state of a shipped run.
 
-**Budget: 3 iterations per archetype representative.** After 3 iterations, stop regardless of remaining gaps:
+### Step 7 — Circuit-breaker checkpoint (escalate, don't surrender)
 
-1. Log all unresolved Class A and B gaps to `theme/notes.md`.
-2. Log Class C constraints to `theme/notes.md`.
-3. Add all items to `run-report.json` under `qaGaps[]`.
-4. Return the final QA result to the orchestrator.
+**3 iterations per page is a CHECKPOINT, not an exit.** When you exhaust the escalation ladder on a section without reaching `match`, you do NOT log-and-ship. Stop and ask the **operator**, routed through the budget guard (`src/lib/replicate/budget-guard.ts`), surfacing what you tried per rung and the current `SectionParity`:
 
-Do not loop beyond 3 iterations. Remaining gaps are surfaced for human review, not silently accepted or retried.
+- **Raise the budget** — keep climbing (e.g. R4 / a custom block).
+- **Accept with sign-off** — the operator accepts the divergence; record it as `acceptance: { by: 'human', proof: <operator rationale> }` on that section. This is the ONLY way a `divergent` section ships.
+- **Abandon this page** — recorded explicitly, surfaced as a hard `fail` in the run-report.
+
+Log per-rung attempts to `theme/notes.md`. Do NOT silently accept or stop. A `divergent` section with no human `acceptance` keeps the run at `fail`.
 
 ## Output contract
 
 Return to the orchestrator:
+
+Pass the `pageParity[]` (`{ page, sections: SectionParity[] }` per content page) into `buildRunReport` — the verdict is computed from it. Return to the orchestrator:
 
 ```json
 {
@@ -124,23 +147,32 @@ Return to the orchestrator:
       "urlPath": "/",
       "archetype": "homepage",
       "responsiveness": { "passed": true },
-      "qualitative": "Hero image crop matches. CTA color drifted (Class B, fixed iter 1). Footer link order correct.",
-      "a11yWarnings": [],
-      "gaps": []
+      "sections": [
+        { "band": "hero", "score": 10, "status": "match",
+          "signals": { "sectionPresent": true, "bgDeltaE": 1.2, "columnCountMatch": true, "mediaPresent": true, "fallbackUnstyled": false },
+          "evidence": { "srcSample": "#d0d2cd", "repSample": "#d0d2cd" } },
+        { "band": "service-cards", "score": 10, "status": "match",
+          "signals": { "sectionPresent": true, "bgDeltaE": 2.0, "columnCountMatch": true, "mediaPresent": true, "fallbackUnstyled": false },
+          "evidence": { "srcSample": "#ccc6c6", "repSample": "#cdc7c7" },
+          "note": "was FLATTENED — cards lost bg + grid; restored via R2 iter 1, re-scored 4→10" }
+      ],
+      "qualitative": "Per-section parity above. CTA color drifted, fixed via R1 iter 1.",
+      "a11yWarnings": []
     }
   ],
   "a11yWarnings": [],
-  "qaGaps": [],
   "notesPath": "output/example.com/theme/notes.md"
 }
 ```
 
-`passed` is `true` only when the responsiveness gate passes for all archetypes. Qualitative gaps do not set `passed: false` — they are surfaced in `qaGaps[]`.
+`passed` is NOT a separate assertion — it is the run-report verdict computed by `buildRunReport` over `pageParity[]`: it is `true` only when (1) the responsiveness gate passes for all archetypes, AND (2) every content-page section re-derives to `match` or `accepted` (a `divergent` section, or a reconstructed page with NO sampled sections, forces `fail`). You cannot move a section to "accepted" yourself except a Class-C constraint with sampled-pixel proof — flattening/wrong-bg/dropped-grid/dropped-media never qualify and require the operator's sign-off (Step 7).
 
 ## Rules
 
-- The responsiveness gate is the only hard pass/fail. Everything else classifies and logs.
+- The responsiveness gate is a hard pass/fail. Per-section visual parity is **also a hard gate**: any unaccepted `divergent` section fails the run.
+- **Record the measured `SectionParity[]` with `evidence` — never claim a page "matches" without sampled signals.** Vision + eyeballing repeatedly mis-judged color/size/gaps; a page with no sampled sections is `fail (unverified)`, not a pass.
+- **Never self-accept a structural divergence.** Flattening, wrong bg, dropped grid/media → fix via the escalation ladder or escalate to the operator. Only a genuine Class-C WP constraint may be agent-accepted, and only with `proof`.
 - Never auto-fix accessibility issues — flag and move on.
 - Never accept a result that failed the responsiveness gate.
 - Never generate net-new theme structure — drive `editing-themes` and `editing-blocks` for all modifications.
-- Cap at 3 iterations per representative. Surface remaining gaps; do not loop forever.
+- 3 iterations per page is a circuit-breaker **checkpoint with the operator**, not a license to stop and ship. Escalate; don't surrender.

@@ -1,5 +1,25 @@
 import { describe, it, expect } from 'vitest';
 import { buildRunReport, type RunReportInput } from './run-report.js';
+import type { SectionParity, SectionParitySignals, SectionAcceptance } from './section-parity.js';
+
+const sec = (
+  signals: Partial<SectionParitySignals> = {},
+  acceptance?: SectionAcceptance,
+): SectionParity => ({
+  band: 'band',
+  score: 10,
+  status: 'match',
+  evidence: { srcSample: '#fff', repSample: '#fff' },
+  signals: {
+    sectionPresent: true,
+    bgDeltaE: 1,
+    columnCountMatch: true,
+    mediaPresent: true,
+    fallbackUnstyled: false,
+    ...signals,
+  },
+  acceptance,
+});
 
 const good = (): RunReportInput => ({
   site: 'example.com',
@@ -49,5 +69,64 @@ describe('buildRunReport — html fallback islands', () => {
   });
   it('defaults htmlFallbackSections to 0 when absent (back-compat)', () => {
     expect(buildRunReport(good()).summary.htmlFallbackSections).toBe(0);
+  });
+});
+
+describe('buildRunReport — section parity gate (faithful recreation)', () => {
+  it('back-compat: an otherwise-clean run with no pageParity still passes', () => {
+    expect(buildRunReport(good()).verdict.overall).toBe('pass');
+  });
+  it('passes when every parity section matches the source', () => {
+    const i = good();
+    i.pageParity = [{ page: '/', sections: [sec(), sec()] }];
+    expect(buildRunReport(i).verdict.overall).toBe('pass');
+  });
+  it('FAILS when any section is divergent (flattened columns)', () => {
+    const i = good();
+    i.pageParity = [{ page: '/', sections: [sec(), sec({ columnCountMatch: false })] }];
+    expect(buildRunReport(i).verdict.overall).toBe('fail');
+  });
+  it('FAILS (unverified) when a content page has no sampled sections', () => {
+    const i = good();
+    i.pageParity = [{ page: '/', sections: [] }];
+    expect(buildRunReport(i).verdict.overall).toBe('fail');
+  });
+  it('passes when a divergence is accepted by the human operator with proof', () => {
+    const i = good();
+    i.pageParity = [
+      { page: '/', sections: [sec({ columnCountMatch: false }, { by: 'human', proof: 'approved' })] },
+    ];
+    expect(buildRunReport(i).verdict.overall).toBe('pass');
+  });
+  it('still FAILS when the agent self-accepts a structural divergence as class-c', () => {
+    const i = good();
+    i.pageParity = [
+      {
+        page: '/',
+        sections: [sec({ bgDeltaE: 40 }, { by: 'class-c', proof: 'sampled #aaa vs #bbb' })],
+      },
+    ];
+    expect(buildRunReport(i).verdict.overall).toBe('fail');
+  });
+  it('FAILS on an unstyled fallback island landing on a CSS-layout section', () => {
+    const i = good();
+    i.pageParity = [{ page: '/', sections: [sec({ fallbackUnstyled: true })] }];
+    expect(buildRunReport(i).verdict.overall).toBe('fail');
+  });
+  it('counts divergent and accepted sections in the summary', () => {
+    const i = good();
+    i.pageParity = [
+      {
+        page: '/',
+        sections: [
+          sec(),
+          sec({ columnCountMatch: false }),
+          sec({ mediaPresent: false }, { by: 'human', proof: 'ok' }),
+        ],
+      },
+    ];
+    const r = buildRunReport(i);
+    expect(r.summary.sectionsDivergent).toBe(1);
+    expect(r.summary.sectionsAccepted).toBe(1);
   });
 });

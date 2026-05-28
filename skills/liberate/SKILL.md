@@ -36,7 +36,7 @@ The single front-door, root orchestrator for the whole migration pipeline. One s
 │                                   → compose-page-blocks SKILL for misfits only · dynamic block-header → templates + parts + post_content
 ├─ 12 validate-artifacts   [gate]  escaping (esc_*) · injection allowlist · provenance (text ⊆ spec) · drift · no remote URLs · no placeholders
 ├─ 13 install + import     [tool]  clean Studio site on full re-run · theme + WXR + products.csv · set front page
-└─ 14 visual-QA loop       [SKILL] design-qa: replica desktop+mobile · responsive@390 (HARD gate) + qualitative · A/B/C · fix via editing-themes · ≤3 iters → run-report.json
+└─ 14 visual-QA loop       [SKILL] design-qa: replica desktop+mobile · responsive@390 (HARD) + per-section visual-parity (HARD, measured) · escalation ladder R1→R4 · circuit-breaker checkpoint → operator → run-report.json
 ```
 
 The whole run is bounded by a **budget guard** (`checkBudget` in `src/lib/replicate/budget-guard.ts`) — configurable subagent/cluster/elapsed ceiling → pause-and-ask. The final deliverable is `run-report.json` + the replica URL (`buildRunReport` in `src/lib/replicate/run-report.ts`).
@@ -150,9 +150,10 @@ Invoke `design-qa` inline. Captures replica desktop+mobile screenshots, compares
 
 **Gates (in order):**
 1. **Responsiveness** (HARD): no horizontal overflow + sections reflow at 390px (automated Playwright check). Must pass to ship.
-2. **Qualitative:** vision review across ≤3 iterations per archetype representative — classify A/B/C, emit fix directives, invoke `editing-themes` / `editing-blocks` / `creating-blocks` to resolve. Pixel-diff is a signal, **not** the gate.
+2. **Visual parity** (HARD): every content-page section gets a measured `SectionParity` record (`src/lib/replicate/section-parity.ts`); `buildRunReport` computes the verdict from them. Any unaccepted `divergent` section (flattened columns, wrong band color, dropped media, unstyled island) — or a reconstructed page with no sampled sections — is `fail`. Fix by climbing the escalation ladder (R1 CSS → R2 rebuild markup → R3 re-extract spec → R4 styled rebuild); each iteration a stronger rung.
+3. **Qualitative:** vision review for nuance (typography weight, micro-spacing) — surfaced, not blocking.
 
-After ≤3 iterations (or on gate failure), emit `run-report.json` + replica URL. Iteration 3 `design.md` amendment invalidates theme + all built clusters and re-enters step 6.
+3 iterations is a **circuit-breaker checkpoint, not an exit**: if the ladder is exhausted without `match`, STOP and ask the operator (raise budget · accept-with-sign-off · abandon page) — never log-and-ship a flattened page. Only an operator `acceptance` (or a Class-C constraint with pixel proof) lets a `divergent` section ship. Then emit `run-report.json` + replica URL. A foundation-level `design.md` amendment (invalidates theme + built clusters, re-enters step 6) is one available rung.
 
 ---
 
@@ -164,7 +165,7 @@ After ≤3 iterations (or on gate failure), emit `run-report.json` + replica URL
 | extraction | adapter fail | Log + pointer to `/diagnose` |
 | design | no page archetype | Templates-only run (posts + products render through base templates; no page reconstruction) |
 | design | gate fail | Don't install — report to `run-report.json` with problem + cause + fix |
-| design | some clusters failed | Built-with-gaps — list gaps in `run-report.json`; install what passed |
+| design | some clusters failed | Stop and ask the operator before shipping with gaps — never auto-"install what passed". An unaccepted layout divergence keeps the verdict at `fail`; shipping a gap needs operator sign-off (recorded as section `acceptance`) |
 | budget guard | ceiling hit | "Built N clusters / dispatched M subagents (~est. $X, Y min). Continue · stop and report what's done · raise the ceiling?" |
 
 Progress is the agent's own narration — no Ink TUI in agent mode. The headless extraction CLI keeps its existing Ink surfaces (`discover.tsx`, `screenshot.tsx`).
@@ -176,8 +177,8 @@ Progress is the agent's own narration — no Ink TUI in agent mode. The headless
 Read top-down to answer "is this good?":
 
 1. `verdict` — overall ✓ / ⚠ / ✗ + per-archetype.
-2. `summary` — clusters built/failed · pages composed/misfit · responsive pass/fail · provenance flags · fallback/low-confidence pages · est. cost/usage.
-3. `details[]` — per-cluster + per-page status, gate results, QA notes, known gaps.
+2. `summary` — clusters built/failed · pages composed/misfit · responsive pass/fail · sections divergent/accepted · pages unverified · provenance flags · fallback/low-confidence pages · est. cost/usage.
+3. `details[]` — per-cluster + per-page status, gate results, QA notes, operator-accepted divergences (with proof).
 
 ---
 

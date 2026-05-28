@@ -219,10 +219,9 @@ Verify: `themeWritten > 0` and `warnings` empty. Capture the replica URL.
 - **Responsiveness gate is hard.** A theme that overflows at 390px fails, full stop.
 - **Grade EVERY page, not just one representative per archetype** — the user sees every page, and a cluster's non-rep members can differ sharply from its rep. QA must screenshot + classify each reconstructed page.
 - **A page rendering carried `wp:post-content` (raw source-platform HTML) through `page.html` is a FAIL (C), never a B/"pass-with-notes".** It is not a faithful reconstruction — it is the absence of one. The overall verdict cannot be "pass" while any content page is carried-HTML; fix it by running that page through `liberate_reconstruct_pages`.
-- Pixel-diff is a signal only — not the gate criterion.
-- Cap QA at 3 iterations per archetype representative. If iteration 3 still fails, amend `design.md`, re-run `creating-themes` to regenerate `theme.json` and style foundation, and rebuild affected clusters from scratch (full foundation invalidation). Then re-enter QA.
-- Between iterations: apply fix directives from `design-qa` via `editing-themes`; reinstall via `liberate_install_theme`; re-run `design-qa`.
-- After 3 failed iterations: stop, log unresolved gaps to `theme/notes.md` and `run-report.json`, and surface as `openQuestions` in the return value.
+- **Visual parity is a hard gate.** Every content-page section gets a measured `SectionParity` record; any unaccepted `divergent` section (flattened columns, wrong band color, dropped media, unstyled island) keeps the run at `fail`. Pixel-diff is a forces-inspection signal, not the gate value.
+- Between iterations, climb the escalation ladder (R1 CSS → R2 rebuild block markup → R3 re-extract spec → R4 styled rebuild) — each iteration a STRONGER rung, not the same tweak; reinstall via `liberate_install_theme`; re-run `design-qa`.
+- **3 iterations is a circuit-breaker checkpoint, not an exit.** If the ladder is exhausted without `match`, do NOT log-and-ship: stop and ask the operator (raise budget · accept-with-sign-off · abandon page). Only an operator `acceptance: { by: 'human', proof }` (or a Class-C constraint with sampled-pixel proof) lets a `divergent` section ship; everything else stays `fail`. A larger foundation problem may still warrant amending `design.md` + re-running `creating-themes` (full invalidation) as one rung.
 
 **Return** a structured summary to the caller:
 
@@ -250,7 +249,8 @@ Verify: `themeWritten > 0` and `warnings` empty. Capture the replica URL.
 | Builder envelope validation (parseBuilderEnvelope) | After step 4 each builder | Yes — retry → sequential, never use partial |
 | validate-artifacts (escaping + provenance + injection + placeholders) | Step 6, before every install | Yes — fix, don't install |
 | Responsiveness gate (390px, no overflow, sections reflow) | Step 7 QA | Hard — fail = not done |
-| Qualitative gate | Step 7 QA, ≤3 iters | Soft — iterate, then surface gaps |
+| Visual-parity gate (measured `SectionParity` per section; verdict via `buildRunReport`) | Step 7 QA | **Hard** — any unaccepted `divergent` section, or a reconstructed page with no sampled sections, = `fail` |
+| Qualitative observations (typography nuance, micro-spacing) | Step 7 QA | Soft — surfaced, not blocking |
 
 ## Decision rules
 
@@ -274,6 +274,8 @@ Verify: `themeWritten > 0` and `warnings` empty. Capture the replica URL.
 - **Hallucinating tokens.** `display: null` → omit, don't invent. No hex values in patterns — always token slugs.
 - **Running `liberate_validate_artifacts` and ignoring failures.** The gate is a trust boundary. Failures mean injected/invented text could reach the installed theme.
 - **Skipping the responsiveness gate.** A theme that overflows at 390px is not done, regardless of how it looks on desktop.
+- **Documenting a layout divergence as a "known gap" and shipping it.** A flattened section, wrong band color, or dropped grid is not a gap to log — it is work to do. Climb the escalation ladder (R1→R4) or escalate to the operator. "Known gap" / "where it falls short" is an escalation trigger, never the terminal state of a shipped run.
+- **Emitting a verdict not backed by the sampled `SectionParity` table.** "Looks good" / "honest rundown" prose cannot move a `divergent` section to pass. A reconstructed page with no sampled sections is `fail (unverified)`, not a pass — measure, don't assert.
 - **Hand-authored Custom HTML for layout or CSS.** Inline `<style>`, raw SVG sets, embedded `<script>`, hidden `<form>` → all rejected. Use core blocks + `style.css` or a real theme-embedded custom block. (The automatic coverage-gated verbatim fallback is the one exception — it is renderer-emitted and sanitized, never hand-written.)
 - **Custom blocks for layout-only differences.** If the only issue is "columns aren't quite right," edit the layout skeleton instead. Custom blocks are for interactive components that core blocks genuinely cannot express (multi-step form, non-standard carousel with computed state, pricing table with toggles). If the source's interactivity didn't survive extraction, use core blocks + honest static content — not a non-functional custom block.
 - **Telex-flavored output.** Footer credits, plugin namespaces, and author fields use `<siteSlug>-replica`, not `telex/`.

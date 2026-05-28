@@ -2,8 +2,14 @@
 // Assembles the verdict-first run report the operator reads to answer "is this
 // liberation good?". Order: verdict → summary → details. Responsiveness is the
 // HARD gate (fail); fallbacks/misfits/provenance flags are warnings.
+import { deriveSectionParityStatus, type SectionParity } from './section-parity.js';
+
 export interface ClusterReport { key: string; representative: string; built: boolean; gatePassed: boolean; }
 export interface ArchetypeResponsive { archetype: string; responsive: boolean; }
+/** Per content page: the sampled section-parity records. An EMPTY `sections` array means
+ *  the page was reconstructed but never measured → unverified → hard fail (no evidence ≠
+ *  matches). Posts/products are template-rendered and are NOT listed here. */
+export interface PageParity { page: string; sections: SectionParity[]; }
 export interface RunReportInput {
   site: string;
   clusters: ClusterReport[];
@@ -14,6 +20,10 @@ export interface RunReportInput {
   fallbackPages: number;
   /** Sections emitted as verbatim core/html islands (coverage-gated fallback). Warning-level. */
   htmlFallbackSections?: number;
+  /** Per-page visual-parity records. When present, the verdict is gated on them: any
+   *  unaccepted divergent section, or any reconstructed page with no sampled sections,
+   *  is a HARD fail. Absent → parity gate off (back-compat). */
+  pageParity?: PageParity[];
   cost?: { tokens?: number; subagents?: number; skillCalls?: number };
   qualitativeNotes?: string[];
   knownGaps?: string[];
@@ -28,6 +38,7 @@ export interface RunReport {
     responsivePass: number; responsiveFail: number;
     provenanceFlags: number; fallbackPages: number;
     htmlFallbackSections: number;
+    sectionsDivergent: number; sectionsAccepted: number; pagesParityUnverified: number;
     cost: { tokens?: number; subagents?: number; skillCalls?: number };
   };
   details: { clusters: ClusterReport[]; qualitativeNotes: string[]; knownGaps: string[] };
@@ -39,8 +50,29 @@ export function buildRunReport(input: RunReportInput): RunReport {
   const responsivePass = input.responsive.length - responsiveFail;
   const htmlFallbackSections = input.htmlFallbackSections ?? 0;
 
+  // Section-parity gate (faithful recreation). Re-derive each section's status from its
+  // measured signals + acceptance — NOT a stored `status` — so the verdict is a function
+  // of the table, not the agent's prose (schema-locked). A reconstructed page with no
+  // sampled sections is "unverified" → hard fail (prove-it-works: no evidence ≠ matches).
+  const parityPages = input.pageParity ?? [];
+  let sectionsDivergent = 0;
+  let sectionsAccepted = 0;
+  let pagesParityUnverified = 0;
+  for (const pp of parityPages) {
+    if (pp.sections.length === 0) {
+      pagesParityUnverified += 1;
+      continue;
+    }
+    for (const s of pp.sections) {
+      const status = deriveSectionParityStatus(s.signals, s.acceptance);
+      if (status === 'divergent') sectionsDivergent += 1;
+      else if (status === 'accepted') sectionsAccepted += 1;
+    }
+  }
+  const parityFail = sectionsDivergent > 0 || pagesParityUnverified > 0;
+
   let overall: Verdict;
-  if (clustersFailed > 0 || responsiveFail > 0) {
+  if (clustersFailed > 0 || responsiveFail > 0 || parityFail) {
     overall = 'fail';
   } else if (
     input.fallbackPages > 0 || input.pagesMisfit > 0 ||
@@ -64,6 +96,9 @@ export function buildRunReport(input: RunReportInput): RunReport {
       provenanceFlags: input.provenanceFlags,
       fallbackPages: input.fallbackPages,
       htmlFallbackSections,
+      sectionsDivergent,
+      sectionsAccepted,
+      pagesParityUnverified,
       cost: input.cost ?? {},
     },
     details: {
