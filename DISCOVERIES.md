@@ -6,6 +6,37 @@ AI agents: when you contribute an improvement, add an entry here. See [CONTRIBUT
 
 ---
 
+## 2026-05-28 — Squarespace adapter was leaving navigation empty even though every other adapter populates it the same way
+
+**Found by:** Claude + Davi
+**During:** Migrating walkaboutchronicles.com — the resulting WXR shipped with zero `nav_menu_item`s even though the live site has a 7-item top nav (Journal, Collections, Purchase, Gear, Contributors, Contact & Copyright, Walkabout Logs).
+**Type:** bug fix
+
+### What I found
+`squarespaceAdapter.discover()` declares `const navigation: NavLink[] = [];` with a TODO comment ("Squarespace JSON sometimes includes navigation in the website object; for now, we derive nav from the top-level sitemap pages") — but the loop never actually populates it, so the inventory always has an empty `navigation` array. Downstream, `runExtractionLoop` iterates `navigation` to register `nav_menu_item` records in the WXR, so the resulting import has no menu items to attach to the destination site.
+
+Every other adapter (`godaddy-wm.ts`, `hostinger.ts`, `hubspot.ts`, `shopify.ts`, `webflow.ts`) already imports the shared `extractNavLinks(homepageHtml, baseUrl)` helper, fetches the homepage HTML, and assigns the result to `navigation` before building the inventory. Squarespace was the only adapter missing this single step.
+
+### How it works
+Squarespace renders its primary navigation server-side as plain `<nav><a href="...">…</a></nav>` markup on the homepage, so a public `fetch(url)` followed by `extractNavLinks` is sufficient — no admin auth, no `?format=json` quirks, no Playwright. The existing CDP admin discovery path can still enrich the menu later via `mergeAdminDiscovery`, which only appends published admin pages that aren't already in the nav.
+
+```ts
+import { /* … */, extractNavLinks } from './shared.js';
+
+let navigation: NavLink[] = [];
+try {
+  const resp = await fetch(url, { signal: AbortSignal.timeout(15000), headers: { 'User-Agent': '…' } });
+  if (resp.ok) navigation = extractNavLinks(await resp.text(), url);
+} catch { /* non-fatal */ }
+```
+
+### Why it's better than the previous approach
+Before: every Squarespace migration shipped a WXR with no top-nav data; the destination WordPress site started with whatever default menu the theme provided, and the user had to rebuild the menu manually.
+
+After: the public homepage nav is captured during `discover()` with no new dependencies, the WXR includes `nav_menu_item` records for each link, and the destination site's menu lands closer to the original. CDP admin discovery continues to layer on drafts/unlisted pages on top of the public nav.
+
+---
+
 ## 2026-04-30 — `--resume` overwrites the existing WXR with only newly-extracted items
 
 **Found by:** Claude + James
