@@ -17,6 +17,14 @@ const tallHtml = (title: string) =>
   `<div style="height:3000px;background:linear-gradient(#fff,#000)">tall content</div>` +
   '</body></html>';
 
+// A page whose script nests extra <body> elements into the DOM (mimics an AJAX
+// page-loader stacking whole documents) so page.content() serializes >1 <body>.
+const nestedDocHtml = (title: string) =>
+  `<!doctype html><html><head><title>${title}</title></head><body>` +
+  `<h1>${title}</h1><div style="height:3000px">tall</div>` +
+  `<script>for(var i=0;i<10;i++){var b=document.createElement('body');b.textContent='copy'+i;document.body.appendChild(b);}</script>` +
+  '</body></html>';
+
 describe.skipIf(process.env.SKIP_BROWSER_TESTS)('screenshot smoke (real Chromium)', () => {
   it('captures two pages end-to-end', async () => {
     mkdirSync(TMP_ROOT, { recursive: true });
@@ -68,6 +76,43 @@ describe.skipIf(process.env.SKIP_BROWSER_TESTS)('screenshot smoke (real Chromium
       // URL's viewports succeeded (captured counts URLs where *all* viewports
       // had zero failures, so may legitimately be 0 here).
       expect(result.captured + result.failed).toBeGreaterThan(0);
+    } finally {
+      await new Promise<void>((r) => server.close(() => r()));
+      rmSync(pagesDir, { recursive: true, force: true });
+      rmSync(outputDir, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  it('refuses to persist a nested-document (stacking-artifact) capture', async () => {
+    mkdirSync(TMP_ROOT, { recursive: true });
+    const pagesDir = mkdtempSync(join(tmpdir(), 'smoke-stack-'));
+    writeFileSync(join(pagesDir, 'good.html'), tallHtml('GOOD'));
+    writeFileSync(join(pagesDir, 'stacked.html'), nestedDocHtml('STACKED'));
+    const server: HttpServer = createServer((req, res) => {
+      const path = (req.url || '/').replace(/^\//, '') || 'good.html';
+      try {
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.end(readFileSync(join(pagesDir, path)));
+      } catch {
+        res.writeHead(404);
+        res.end();
+      }
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
+    const port = (server.address() as { port: number }).port;
+    const outputDir = mkdtempSync(join(TMP_ROOT, 'stack-out-'));
+    try {
+      await captureScreenshots({
+        urls: [`http://127.0.0.1:${port}/good.html`, `http://127.0.0.1:${port}/stacked.html`],
+        outputDir,
+        concurrency: 1,
+      });
+      // Clean page: HTML persisted. Stacking artifact: HTML NOT persisted.
+      expect(existsSync(join(outputDir, 'html', 'good.html.html'))).toBe(true);
+      expect(existsSync(join(outputDir, 'html', 'stacked.html.html'))).toBe(false);
+      const manifest = JSON.parse(readFileSync(join(outputDir, 'screenshots', 'manifest.json'), 'utf8'));
+      // The artifact URL still gets a manifest entry (the PNG renders fine) but no html field.
+      expect(manifest.entries[`http://127.0.0.1:${port}/stacked.html`]?.html).toBeUndefined();
     } finally {
       await new Promise<void>((r) => server.close(() => r()));
       rmSync(pagesDir, { recursive: true, force: true });

@@ -15,6 +15,7 @@ import { validateOutputDir, planArtifacts, type ArtifactPlan } from './output-la
 import { enforceSameOrigin } from './same-origin.js';
 import { ManifestQueue, type ManifestEntry, type FailureEntry } from './manifest-queue.js';
 import { waitForStable, triggerLazyLoad } from './page-helpers.js';
+import { countBodyTags, isStackingArtifact } from './document-integrity.js';
 import { analyzePage } from './site-analysis.js';
 import { SiteAnalysisAggregator } from './aggregator.js';
 import { CssAggregator } from './css-aggregator.js';
@@ -185,9 +186,25 @@ async function capturePerViewport(args: CapturePerViewportArgs): Promise<void> {
   if (isDesktop && plan.captureHtml) {
     try {
       const html = await page.content();
-      mkdirSync(dirname(plan.paths.html), { recursive: true });
-      writeFileSync(plan.paths.html, html);
-      entry.html = `html/${slug}.html`;
+      // Refuse to persist a corrupted capture: if the live DOM serialized more
+      // than one document (e.g. an AJAX page-loader prefetched and nested whole
+      // pages into the body), every section is duplicated + truncated downstream.
+      // Record it as a content failure and skip the write rather than poison the
+      // reference HTML that comparison/design tooling correlates by URL.
+      if (isStackingArtifact(html)) {
+        failures.push({
+          url,
+          viewport: viewport.id,
+          stage: 'content',
+          error: `nested document capture (${countBodyTags(html)} <body> in one page); HTML not persisted`,
+          timestamp: now(),
+          attempt: 1,
+        });
+      } else {
+        mkdirSync(dirname(plan.paths.html), { recursive: true });
+        writeFileSync(plan.paths.html, html);
+        entry.html = `html/${slug}.html`;
+      }
     } catch (err) {
       failures.push({
         url,
