@@ -222,12 +222,19 @@ export function scoreSegmentation(
   const repeatTol = opts.repeatTolPx ?? 80;
   const deFloor = opts.deltaEFloor ?? 10;
   const repeats = opts.repeats ?? [];
-  const sectionTops = specs.map((s) => s.top);
+  // A section's TOP and its BOTTOM are both real visual boundaries. Matching only
+  // tops misses a boundary reproduced by a section's bottom edge — e.g. a hero
+  // ends and the next section starts after a gap, so the hero→content boundary is
+  // its bottom, not the next top. A merge is still penalised: a section spanning
+  // several bands has edges only at the merge's outer top/bottom, so the dropped
+  // INTERIOR boundaries align with neither edge (and decorative sub-section bands
+  // align with neither either, so they stay correctly unrecalled).
+  const sectionEdges = specs.flatMap((s) => [s.top, s.top + s.height]);
 
   // Interior source boundaries (the top of each band after the first): each should
-  // align with some extracted section top. A merge drops a boundary → lower recall.
+  // align with some extracted section EDGE. A merge drops a boundary → lower recall.
   const interior = bands.slice(1).map((b) => b.top);
-  const matched = interior.filter((y) => sectionTops.some((t) => Math.abs(t - y) <= boundaryTol));
+  const matched = interior.filter((y) => sectionEdges.some((t) => Math.abs(t - y) <= boundaryTol));
   const boundaryRecall = interior.length ? matched.length / interior.length : 1;
 
   // Per-section background fidelity vs the source band at the section's y-center.

@@ -102,6 +102,18 @@ describe('scoreSegmentation', () => {
     expect(scoreSegmentation(bands, flatSpecs, { repeats }).repetitionRecall).toBe(0);
   });
 
+  it('credits a boundary reproduced by a section BOTTOM (gap before next section)', () => {
+    const b: SourceBand[] = [
+      { top: 0, bottom: 600, bg: 'rgb(255, 255, 255)' },
+      { top: 600, bottom: 1200, bg: 'rgb(31, 31, 31)' },
+    ];
+    // The hero ends at 600 (its bottom reproduces the boundary), but the next
+    // section starts late at 800 — no section TOP is near 600. Matching tops only
+    // would miss it; matching the section bottom recalls it.
+    const specs = [spec(0, 600, 'rgb(255, 255, 255)'), spec(800, 400, 'rgb(31, 31, 31)')];
+    expect(scoreSegmentation(b, specs).boundaryRecall).toBe(1);
+  });
+
   it('handles the no-bands / single-band degenerate case', () => {
     const s = scoreSegmentation([{ top: 0, bottom: 800, bg: 'rgb(255, 255, 255)' }], [spec(0, 800, 'rgb(255, 255, 255)')]);
     expect(s.boundaryRecall).toBe(1); // no interior boundaries to miss
