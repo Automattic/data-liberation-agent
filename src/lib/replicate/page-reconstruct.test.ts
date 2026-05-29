@@ -866,6 +866,11 @@ describe('reconstructPagePattern', () => {
     expect(body).toContain('&lt;script&gt;');
   });
 
+  it('renderCardGrid carries captured card heading/body type', () => {
+    const r = reconstructPagePattern([section({ interactionModel: 'project-card-grid', headings: ['Alpha', 'Beta'], headingSizes: [20, 20], headingLineHeights: [1.3, 1.3], headingFamilies: ['display', 'display'], bodyText: ['desc a', 'desc b'], bodyTextSizes: [15, 15], images: [img(`${WP}1.jpg`), img(`${WP}2.jpg`)] })], opts);
+    expect(r.php).toMatch(/"fontSize":"[^"]*20px|font-size:[^;]*20px/);
+  });
+
   it('renderReviewGrid carries the captured heading size + line-height (not the theme preset)', () => {
     const r = reconstructPagePattern([section({ interactionModel: 'review-grid', headings: ['What People Say'], headingSizes: [24], headingLineHeights: [1.4], headingFamilies: ['display'], bodyText: ['Great service', 'Loved it', 'Recommend'] })], opts);
     expect(r.php).toMatch(/"fontSize":"[^"]*24px|font-size:[^;]*24px/);

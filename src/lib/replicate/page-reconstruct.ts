@@ -843,8 +843,8 @@ function renderCardGrid(s: SectionSpec, withButtons: boolean): BlockOut {
     if (s.images.length > 0) {
       cardParts.push(imageBlock(s.images[i], out, `${s.interactionModel}#${s.sectionIndex}.card${i}`, { rounded: true }));
     }
-    if (headings[i]) cardParts.push(headingBlock(headings[i], out, { level: 3, center: centerOf(s) }));
-    if (bodyText[i]) cardParts.push(paragraphBlock(bodyText[i], out, { center: centerOf(s), size: 'small' }));
+    if (headings[i]) cardParts.push(headingBlock(headings[i], out, { level: 3, center: centerOf(s), sizePx: s.headingSizes?.[i], fontFamily: s.headingFamilies?.[i] || undefined, lineHeight: s.headingLineHeights?.[i] }));
+    if (bodyText[i]) cardParts.push(paragraphBlock(bodyText[i], out, { center: centerOf(s), size: 'small', sizePx: s.bodyTextSizes?.[i], fontFamily: s.bodyFamilies?.[i] || undefined, lineHeight: s.bodyLineHeights?.[i] }));
     if (withButtons && s.buttonLabels[i]) cardParts.push(buttonBlock(s.buttonLabels[i], out, { align: buttonJustify(s) }));
     if (cardParts.filter(Boolean).length) cards.push(column(cardParts.filter(Boolean)));
   }
