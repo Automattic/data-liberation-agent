@@ -84,6 +84,24 @@ describe('scoreSegmentation', () => {
     expect(gridScore.composite).toBeGreaterThan(flatScore.composite);
   });
 
+  it('credits carousel/gallery models as reproducing a repeat despite low columnCount', () => {
+    const repeats = [{ top: 1050, bottom: 1400, count: 6 }]; // a 6-item row in the light band
+    // A horizontal-showcase (carousel) scrolls its 6 items but reports columnCount 1.
+    // Track-count alone would fail it, but the repetition IS reproduced.
+    const carousel = spec(1000, 600, 'rgb(255, 255, 255)');
+    (carousel as unknown as { interactionModel: string }).interactionModel = 'horizontal-showcase';
+    (carousel as unknown as { layout: { columnCount: number } }).layout = { columnCount: 1 };
+    const specs = [spec(0, 600, 'rgb(255, 255, 255)'), spec(600, 400, 'rgb(31, 31, 31)'), carousel];
+    expect(scoreSegmentation(bands, specs, { repeats }).repetitionRecall).toBe(1);
+
+    // A genuinely flattened grid (static, 1 column) still fails — crediting is
+    // scoped to scroll/masonry/strip models, so it can't mask a real flatten.
+    const flat = spec(1000, 600, 'rgb(255, 255, 255)');
+    (flat as unknown as { layout: { columnCount: number } }).layout = { columnCount: 1 };
+    const flatSpecs = [spec(0, 600, 'rgb(255, 255, 255)'), spec(600, 400, 'rgb(31, 31, 31)'), flat];
+    expect(scoreSegmentation(bands, flatSpecs, { repeats }).repetitionRecall).toBe(0);
+  });
+
   it('handles the no-bands / single-band degenerate case', () => {
     const s = scoreSegmentation([{ top: 0, bottom: 800, bg: 'rgb(255, 255, 255)' }], [spec(0, 800, 'rgb(255, 255, 255)')]);
     expect(s.boundaryRecall).toBe(1); // no interior boundaries to miss

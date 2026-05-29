@@ -241,11 +241,18 @@ export function scoreSegmentation(
   // or cells) is at least the source's. A flattened row (1 column) fails it.
   const sectionTracks = (s: SectionSpec): number =>
     Math.max(s.layout?.columnCount ?? 1, (s.cells ?? []).length ? Math.min((s.cells ?? []).length, 6) : 1);
+  // Interaction models that carry the WHOLE repeated set without a fixed column
+  // count: a carousel scrolls its items, a gallery is masonry, a strip wraps. Their
+  // columnCount underrepresents the item count, so don't require tracks >= source —
+  // the repetition IS reproduced, just not as a rigid grid. (A genuinely flattened
+  // grid is classified static/columns and still fails, so this can't mask a flatten.)
+  const REPEAT_MODELS = new Set(['gallery', 'horizontal-showcase', 'marquee-strip', 'logo-strip']);
   let repHit = 0;
   for (const rep of repeats) {
     const mid = (rep.top + rep.bottom) / 2;
     const covering = specs.filter((s) => mid >= s.top - repeatTol && mid <= s.top + s.height + repeatTol);
-    if (covering.some((s) => sectionTracks(s) >= Math.min(rep.count, 4))) repHit++;
+    if (covering.some((s) => REPEAT_MODELS.has(s.interactionModel) || sectionTracks(s) >= Math.min(rep.count, 4)))
+      repHit++;
   }
   const repetitionRecall = repeats.length ? repHit / repeats.length : 1;
 
