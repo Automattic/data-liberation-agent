@@ -1875,6 +1875,7 @@ export async function extractFull(
             const kids = Array.from(d.children).filter(isVisible);
             return kids.length >= 2 && kids.length <= 12;
           });
+          const vw = window.innerWidth;
           let best: Element | null = null;
           let bestScore = -1;
           for (const c of candidates) {
@@ -1888,16 +1889,31 @@ export async function extractFull(
               (hcs.display === 'flex' && hcs.flexDirection !== 'column') ||
               hcs.display === 'grid' ||
               hcs.display === 'inline-grid';
-            // Score: reward uniformity, per-child imagery, horizontal layout, and
-            // a moderate count (real card rows are 2-6 wide). The raw child count
-            // is only a weak tiebreaker so a deep one-product wrapper can't win.
+            // A real card ROW tiles narrow children side-by-side. Measure how many
+            // children actually share the top row, AND whether they're narrow
+            // enough to genuinely sit beside each other (full-viewport-wide kids
+            // that "share a row" are stacked/overlapping media bands — a 2-up of
+            // full-width media-text rows, not a column grid). Without this, the
+            // image-fraction term lets a 2-child full-width stack outscore the real
+            // 4-card row beside it (it has a higher per-child image fraction).
+            const krects = kids.map((k) => k.getBoundingClientRect());
+            const rowMates = krects.reduce(
+              (max, a) => Math.max(max, krects.filter((b) => Math.abs(b.top - a.top) <= 24).length),
+              1,
+            );
+            const narrowChildren = krects.every((r) => r.width <= vw * 0.85);
+            const tiledTracks = narrowChildren ? rowMates : 1;
+            // Score: reward uniformity, per-child imagery, horizontal layout, a
+            // moderate count (real card rows are 2-6 wide), and ACTUAL horizontal
+            // tiling (so a genuine k-up row beats a full-width vertical stack).
             const countFit = kids.length >= 2 && kids.length <= 6 ? 1 : 0.3;
             const score =
               (uniformTag ? 2 : 0) +
               withImg * 3 +
               (horiz ? 1.5 : 0) +
               countFit +
-              kids.length * 0.05;
+              kids.length * 0.05 +
+              (tiledTracks >= 2 ? tiledTracks * 0.4 : 0);
             if (score > bestScore) {
               best = c;
               bestScore = score;
