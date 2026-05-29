@@ -884,9 +884,10 @@ function renderReviewGrid(s: SectionSpec): BlockOut {
   const intro: string[] = [];
   // A leading heading (e.g. "Loved by Thousands") is band copy, not a review.
   s.headings
-    .filter((h) => !/^\s*-/.test(h))
+    .map((h, origIdx) => ({ h, origIdx }))
+    .filter(({ h }) => !/^\s*-/.test(h))
     .slice(0, 1)
-    .forEach((h) => intro.push(headingBlock(h, out, { level: 2, center: centerOf(s), inverse: dark })));
+    .forEach(({ h, origIdx }) => intro.push(headingBlock(h, out, { level: 2, center: centerOf(s), inverse: dark, sizePx: s.headingSizes?.[origIdx], fontFamily: s.headingFamilies?.[origIdx] || undefined, lineHeight: s.headingLineHeights?.[origIdx] })));
 
   const reviews: ExtractedReview[] = s.reviews ?? [];
   const cards: string[] = [];
@@ -1493,12 +1494,20 @@ export function reconstructPagePattern(
       imageUrls: (s.images ?? []).map((im) => im.url).filter(Boolean),
     };
     const cov = measureSectionCoverage(captured, out.markup);
-    if (cov.lost && s.sectionHtml) {
-      sectionMarkup.push(buildHtmlFallbackBlock(s.sectionHtml, { mediaUrlMap: opts.mediaUrlMap }));
+    if (cov.lost && (s.styledHtml || s.sectionHtml)) {
+      // R4b floor: prefer the self-contained styled snapshot so a CSS-layout
+      // section renders styled, not bare. Fall to the verbatim sectionHtml only
+      // when no styled snapshot was captured (older cache / capture gap). The
+      // styled island uses a DISTINCT provenance prefix (`html-fallback-styled#`)
+      // so it is not counted as an `unstyled-island` parity divergence — the
+      // bare `html-fallback#` prefix remains the unstyled signal.
+      const styled = !!s.styledHtml;
+      const source = (s.styledHtml ?? s.sectionHtml) as string;
+      sectionMarkup.push(buildHtmlFallbackBlock(source, { mediaUrlMap: opts.mediaUrlMap }));
       provenanceFlags.push(
-        `html-fallback#${s.sectionIndex}: structured render dropped content ` +
+        `html-fallback${styled ? '-styled' : ''}#${s.sectionIndex}: structured render dropped content ` +
           `(${cov.missingImages.length} images missing, text ${Math.round(cov.textCoverage * 100)}%) — ` +
-          `emitted verbatim core/html`,
+          `emitted ${styled ? 'styled' : 'verbatim'} core/html`,
       );
       continue;
     }

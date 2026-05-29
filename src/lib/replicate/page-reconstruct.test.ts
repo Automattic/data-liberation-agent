@@ -866,6 +866,11 @@ describe('reconstructPagePattern', () => {
     expect(body).toContain('&lt;script&gt;');
   });
 
+  it('renderReviewGrid carries the captured heading size + line-height (not the theme preset)', () => {
+    const r = reconstructPagePattern([section({ interactionModel: 'review-grid', headings: ['What People Say'], headingSizes: [24], headingLineHeights: [1.4], headingFamilies: ['display'], bodyText: ['Great service', 'Loved it', 'Recommend'] })], opts);
+    expect(r.php).toMatch(/"fontSize":"[^"]*24px|font-size:[^;]*24px/);
+  });
+
   it('neutralizes a comment-breakout title so the doc-comment header cannot inject PHP', () => {
     // A source-derived title crafted to close the doc-comment early, run PHP,
     // and re-open a comment that swallows the rest through the real `*/?>`.
@@ -926,6 +931,29 @@ describe('reconstructPagePattern — coverage-gated core/html fallback', () => {
     const r = reconstructPagePattern([s], opts);
     expect(r.body).not.toContain('<!-- wp:html -->');
     expect(r.provenanceFlags.some((f) => /html-fallback/.test(f))).toBe(false);
+  });
+
+  it('prefers the styled snapshot and flags html-fallback-styled when styledHtml is present (R4b floor)', () => {
+    // Same silent loss as above, but the section carries a self-contained styled
+    // snapshot — R4b emits THAT (renders styled), not the bare sectionHtml.
+    const s = section({
+      headings: ['Our Story'],
+      images: [{ url: '/wp-content/uploads/team.jpg', sourceUrl: 'https://cdn.test/team.jpg', alt: '', kind: 'img', width: 150, height: 150 }],
+      sectionHtml: '<section><h2>Our Story</h2><img src="/wp-content/uploads/team.jpg" alt=""/></section>',
+      styledHtml:
+        '<section style="display:flex;background-color:rgb(10,20,30)">' +
+        '<h2 style="color:rgb(255,255,255)">Our Story</h2>' +
+        '<img style="width:150px;height:150px" src="/wp-content/uploads/team.jpg" alt=""/></section>',
+    } as Partial<SectionSpec>);
+    const r = reconstructPagePattern([s], opts);
+    expect(r.body).toContain('<!-- wp:html -->');
+    // The STYLED snapshot is what shipped — inline styles preserved verbatim.
+    expect(r.body).toContain('display:flex');
+    expect(r.body).toContain('color:rgb(255,255,255)');
+    // Distinct provenance prefix so the styled island is NOT counted as an
+    // unstyled fallback (`html-fallback#<i>` is the unstyled signal).
+    expect(r.provenanceFlags.some((f) => /html-fallback-styled#0/.test(f))).toBe(true);
+    expect(r.provenanceFlags.some((f) => /(^|\s)html-fallback#0/.test(f))).toBe(false);
   });
 
   it('does NOT fall back when the section is lossy but has no sectionHtml (ineligible)', () => {
