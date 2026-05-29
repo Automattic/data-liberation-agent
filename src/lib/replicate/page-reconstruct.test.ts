@@ -866,6 +866,13 @@ describe('reconstructPagePattern', () => {
     expect(body).toContain('&lt;script&gt;');
   });
 
+  it('renderFaq carries the captured intro heading size', () => {
+    const s = section({ interactionModel: 'static', headings: ['Questions'], headingSizes: [28], headingLineHeights: [1.2], headingFamilies: ['display'] }) as SectionSpec & { faqs?: { question: string; answer: string }[] };
+    s.faqs = [{ question: 'Q one?', answer: 'A one.' }];
+    const r = reconstructPagePattern([s], opts);
+    expect(r.php).toMatch(/"fontSize":"[^"]*28px|font-size:[^;]*28px/);
+  });
+
   it('renderCardGrid carries captured card heading/body type', () => {
     const r = reconstructPagePattern([section({ interactionModel: 'project-card-grid', headings: ['Alpha', 'Beta'], headingSizes: [20, 20], headingLineHeights: [1.3, 1.3], headingFamilies: ['display', 'display'], bodyText: ['desc a', 'desc b'], bodyTextSizes: [15, 15], images: [img(`${WP}1.jpg`), img(`${WP}2.jpg`)] })], opts);
     expect(r.php).toMatch(/"fontSize":"[^"]*20px|font-size:[^;]*20px/);

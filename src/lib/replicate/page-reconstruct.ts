@@ -1017,7 +1017,7 @@ function renderFaq(s: SectionSpecWithFaqs): BlockOut {
   const out = emptyOut();
   const parts: string[] = [];
   // A leading "Frequently Asked Questions" heading is band copy.
-  s.headings.slice(0, 1).forEach((h) => parts.push(headingBlock(h, out, { level: 2, center: centerOf(s) })));
+  s.headings.slice(0, 1).forEach((h, i) => parts.push(headingBlock(h, out, { level: 2, center: centerOf(s), sizePx: s.headingSizes?.[i], fontFamily: s.headingFamilies?.[i] || undefined, lineHeight: s.headingLineHeights?.[i] })));
   const faqs = s.faqs ?? [];
   for (const f of faqs) {
     const q = normalizeCopy(f.question);
