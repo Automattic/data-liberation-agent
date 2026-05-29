@@ -70,11 +70,16 @@ export async function measureSourceBands(
   const widthFrac = opts.widthFrac ?? 0.9;
   return page.evaluate(
     ({ stepPx, minBandPx, widthFrac }) => {
+      // A background BAND is a SOLID fill. Overlay scrims (modal/cart/menu
+      // backdrops) are semi-transparent tints over content — they darken what's
+      // behind them, they aren't the page background — so require near-solid
+      // alpha. A 0.5 threshold let a rgba(0,0,0,0.7) popup scrim register as a
+      // full-width black band the page never actually shows.
       const opaque = (v: string): string | null => {
         const m = /rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?/.exec(v || '');
         if (!m) return null;
         const a = m[4] === undefined ? 1 : Number(m[4]);
-        if (a < 0.5) return null;
+        if (a < 0.85) return null;
         return `rgb(${m[1]}, ${m[2]}, ${m[3]})`;
       };
       const vw = window.innerWidth;
@@ -82,10 +87,16 @@ export async function measureSourceBands(
       const blocks: Array<{ top: number; bottom: number; bg: string; area: number }> = [];
       for (const el of Array.from(document.body.querySelectorAll('*'))) {
         const he = el as HTMLElement;
-        if (he.offsetParent === null && getComputedStyle(el).position !== 'fixed') continue;
+        const cs = getComputedStyle(el);
+        // Background bands come from IN-FLOW block backgrounds. Out-of-flow chrome
+        // (fixed/sticky modal, cart-drawer and menu scrims, sticky bars) is not a
+        // document background — and in a scripts-stripped snapshot these render
+        // full-width, fabricating a dark band that isn't part of the page.
+        if (cs.position === 'fixed' || cs.position === 'sticky') continue;
+        if (he.offsetParent === null) continue; // not rendered (e.g. display:none)
         const r = el.getBoundingClientRect();
         if (r.width < vw * widthFrac || r.height < 40) continue;
-        const bg = opaque(getComputedStyle(el).backgroundColor);
+        const bg = opaque(cs.backgroundColor);
         if (!bg) continue;
         blocks.push({ top: r.top, bottom: r.top + r.height, bg, area: r.width * r.height });
       }

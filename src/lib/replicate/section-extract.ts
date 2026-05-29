@@ -1359,6 +1359,14 @@ export async function extractFull(
           const lum = rgbLuma(v);
           return lum !== null && lum >= 248;
         };
+        // A SEMI-TRANSPARENT layer tints what's behind it — it's an overlay/scrim
+        // (e.g. a UIkit `uk-overlay-pan` darkening a card image), not the section's
+        // solid background. Adopting its color paints the whole section that dark
+        // tint; require a near-solid fill instead.
+        const semiTransparent = (v: string | null): boolean => {
+          const mm = /rgba?\([^,]+,[^,]+,[^,]+,\s*([\d.]+)\)/.exec(v || '');
+          return mm ? Number(mm[1]) < 0.85 : false;
+        };
         if (!out.color || nearWhite(out.color)) {
           const r0 = el.getBoundingClientRect();
           const secH = bottom - top;
@@ -1366,7 +1374,7 @@ export async function extractFull(
           let bestArea = 0;
           el.querySelectorAll('*').forEach((d) => {
             const dcs = getComputedStyle(d);
-            if (isTransparent(dcs.backgroundColor) || nearWhite(dcs.backgroundColor)) return;
+            if (isTransparent(dcs.backgroundColor) || semiTransparent(dcs.backgroundColor) || nearWhite(dcs.backgroundColor)) return;
             const dr = d.getBoundingClientRect();
             const dTop = dr.top + window.scrollY;
             const dBot = dTop + dr.height;
