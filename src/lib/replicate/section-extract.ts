@@ -1077,6 +1077,39 @@ export async function extractFull(
           ),
       );
 
+      // Promote an inner content section back to its heading-bearing parent.
+      // Page builders (Wix) nest the cards/content in their OWN <section> inside
+      // the authored section, so the innermost de-nest above keeps the inner
+      // content section and drops the parent that carries the section heading
+      // (e.g. "What People Say"). That shifts the section top DOWN past the
+      // heading — orphaning it (content loss) and missing the real band boundary.
+      // If a kept winner's nearest ancestor <section> begins a heading-height
+      // above it (>=HEAD_GAP) with an actual heading in that lead region, and that
+      // ancestor wraps ONLY this winner, use the ancestor. The wraps-only-this
+      // guard is what stops a multi-section wrapper from re-merging two sections
+      // into one (the failure mode an earlier splitter attempt hit).
+      const HEAD_GAP = 80;
+      const promoteToHeadingParent = (el: Element): Element => {
+        const er = el.getBoundingClientRect();
+        let p = el.parentElement;
+        while (p && p !== document.body && p !== document.documentElement) {
+          if (p.tagName === 'SECTION' && isVisible(p)) {
+            const pr = p.getBoundingClientRect();
+            if (pr.width >= 600 && er.top - pr.top >= HEAD_GAP) {
+              const headInLead = Array.from(p.querySelectorAll('h1,h2,h3,h4,h5,h6')).some((h) => {
+                const hr = h.getBoundingClientRect();
+                return hr.height > 0 && hr.top >= pr.top - 4 && hr.top < er.top;
+              });
+              const wrapsOnlyThis = !semanticWinners.some((o) => o !== el && p!.contains(o));
+              if (headInLead && wrapsOnlyThis) return p;
+            }
+          }
+          p = p.parentElement;
+        }
+        return el;
+      };
+      const promotedWinners = Array.from(new Set(semanticWinners.map(promoteToHeadingParent)));
+
       // Y-band candidate collection: every element big enough to be a content
       // band that carries an image or real text. Shared by the page-builder
       // fallback AND the hybrid gap-fill below.
@@ -1112,9 +1145,9 @@ export async function extractFull(
       };
 
       let bandWinners: Array<{ band: number; el: Element }>;
-      if (semanticWinners.length >= 3) {
+      if (promotedWinners.length >= 3) {
         // Base: the semantic landmarks in document order.
-        const base = semanticWinners
+        const base = promotedWinners
           .map((el) => ({ band: absTop(el), el }))
           .sort((a, b) => a.band - b.band);
         // HYBRID pages (e.g. a Shopify/Replo theme: a handful of real
