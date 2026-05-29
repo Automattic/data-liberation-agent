@@ -165,6 +165,14 @@ export async function measureSourceRepeats(
           if (row > tracks) tracks = row;
         }
         if (tracks < 2) continue; // a vertical stack isn't a grid row
+        // A multi-track row's columns are NARROWER than the viewport (they sit
+        // side-by-side). Page builders (Wix) stack several full-bleed section
+        // layers at the same top; those read as N "tracks" each ~viewport-wide,
+        // but you can't fit 2+ viewport-wide columns side-by-side — they overlap,
+        // so they're stacked layers, not a grid. Reject them. Without this, one
+        // whole-page false grid swallows the real card rows in the de-nest below.
+        // (Genuinely wide repeated rows are single-track and already dropped above.)
+        if (avgW > vw * 0.9) continue;
         const top = Math.min(...rects.map((r) => r.top));
         const bottom = Math.max(...rects.map((r) => r.top + r.height));
         groups.push({ top, bottom, count: tracks });
