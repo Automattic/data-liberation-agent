@@ -19,6 +19,7 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { extractFull, type SectionSpec } from './section-extract.js';
 import { measureSourceBands, measureSourceRepeats, scoreSegmentation } from './segmentation-parity.js';
+import { countBodyTags, isStackingArtifact } from '../screenshot/document-integrity.js';
 
 // Discover snapshotted homepage fixtures generically (any output/<site>/html/).
 // Gitignored output/ means these run locally where a liberation has been done;
@@ -33,8 +34,19 @@ function discoverHomepageFixtures(): string[] {
   }
   return out;
 }
-const FIXTURES = discoverHomepageFixtures();
+
+// A capture bug nests the whole document into itself N times for some sites (seen
+// at 11× across Squarespace/Wix/GoDaddy), so the saved HTML carries N <body>s and
+// every section is duplicated + truncated against the extractor's section cap.
+// Such a fixture is NOT a faithful single-page render — its parity score measures
+// the capture artifact, not the segmentation — so it is quarantined out of the
+// corpus baseline (and logged) rather than dragging the numbers. The detection is
+// generic (>1 <body>); the underlying capture bug is tracked separately.
+const ALL_FIXTURES = discoverHomepageFixtures();
+const QUARANTINED = ALL_FIXTURES.filter((f) => isStackingArtifact(readFileSync(f, 'utf8')));
+const FIXTURES = ALL_FIXTURES.filter((f) => !QUARANTINED.includes(f));
 const haveFixture = FIXTURES.length > 0;
+const haveQuarantined = QUARANTINED.length > 0;
 
 let browser: Browser;
 beforeAll(async () => {
@@ -84,5 +96,22 @@ describe.runIf(haveFixture)('segmentation fixture harness', () => {
       // No hard floor yet — this logs the baseline the dynamic ruleset must raise.
       // Once a fixture corpus exists, assert composite >= an agreed floor per fixture.
     }, 60_000);
+  }
+});
+
+// Quarantined fixtures are documented (not silently dropped) so the corpus is
+// honest about what it excludes and why, and so a re-snapshot after the capture
+// fix is caught by the same gate.
+describe.runIf(haveQuarantined)('quarantined capture artifacts (excluded from corpus)', () => {
+  for (const fixture of QUARANTINED) {
+    it(`${fixture} is a stacking artifact and excluded`, () => {
+      const copies = countBodyTags(readFileSync(fixture, 'utf8'));
+      // eslint-disable-next-line no-console
+      console.log(
+        `\nQUARANTINED ${fixture} — ${copies}× nested <body> (capture stacked the ` +
+          `document into itself); excluded from the parity corpus until re-snapshotted.\n`,
+      );
+      expect(copies).toBeGreaterThan(1);
+    });
   }
 });

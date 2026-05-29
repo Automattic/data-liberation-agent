@@ -192,9 +192,15 @@ export async function measureSourceRepeats(
 export function scoreSegmentation(
   bands: SourceBand[],
   specs: SectionSpec[],
-  opts: { boundaryTolPx?: number; deltaEFloor?: number; repeats?: SourceRepeat[] } = {},
+  opts: { boundaryTolPx?: number; repeatTolPx?: number; deltaEFloor?: number; repeats?: SourceRepeat[] } = {},
 ): ParityScore {
-  const tol = opts.boundaryTolPx ?? 80;
+  // A band boundary within boundaryTolPx of a section top is the SAME boundary —
+  // the extractor reproduced it, just not pixel-exact. 120px (= one minBandPx)
+  // forgives sub-section rounding without letting one section's top match a
+  // neighbouring band (real section tops are spaced hundreds of px apart). An
+  // 80px window was too tight: it false-missed real boundaries off by 110–117px.
+  const boundaryTol = opts.boundaryTolPx ?? 120;
+  const repeatTol = opts.repeatTolPx ?? 80;
   const deFloor = opts.deltaEFloor ?? 10;
   const repeats = opts.repeats ?? [];
   const sectionTops = specs.map((s) => s.top);
@@ -202,7 +208,7 @@ export function scoreSegmentation(
   // Interior source boundaries (the top of each band after the first): each should
   // align with some extracted section top. A merge drops a boundary → lower recall.
   const interior = bands.slice(1).map((b) => b.top);
-  const matched = interior.filter((y) => sectionTops.some((t) => Math.abs(t - y) <= tol));
+  const matched = interior.filter((y) => sectionTops.some((t) => Math.abs(t - y) <= boundaryTol));
   const boundaryRecall = interior.length ? matched.length / interior.length : 1;
 
   // Per-section background fidelity vs the source band at the section's y-center.
@@ -230,7 +236,7 @@ export function scoreSegmentation(
   let repHit = 0;
   for (const rep of repeats) {
     const mid = (rep.top + rep.bottom) / 2;
-    const covering = specs.filter((s) => mid >= s.top - tol && mid <= s.top + s.height + tol);
+    const covering = specs.filter((s) => mid >= s.top - repeatTol && mid <= s.top + s.height + repeatTol);
     if (covering.some((s) => sectionTracks(s) >= Math.min(rep.count, 4))) repHit++;
   }
   const repetitionRecall = repeats.length ? repHit / repeats.length : 1;
