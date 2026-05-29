@@ -11,6 +11,7 @@ import { chromium } from 'playwright';
 import { readFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { countBodyTags, isStackingArtifact } from '../src/lib/screenshot/document-integrity.js';
+import { newShimmedPage } from './_pw.js';
 
 const urlsFile = process.argv[2];
 if (!urlsFile) { console.error('usage: tsx scripts/_snapshot-corpus.ts <urls-file>'); process.exit(1); }
@@ -33,17 +34,47 @@ const results: Array<{ url: string; slug: string; ok: boolean; bytes?: number; s
 
 for (const url of urls) {
   const slug = slugFor(url);
-  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  const page = await newShimmedPage(browser); // installs the __name shim (see _pw.ts)
   try {
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60_000 });
     await page.waitForTimeout(4500);
-    // trigger lazy content
+    // Settle lazy media so the snapshot bakes LOADED images, not placeholders.
+    // Scroll the whole page slowly (gives IntersectionObserver lazy-loaders time
+    // to swap data-src -> src AND to drop their grey placeholder backgrounds, the
+    // "loaded" state). Then force any stragglers (data-src/data-srcset that never
+    // tripped) and wait for decode + network idle before serializing.
     await page.evaluate(async () => {
-      const h = document.body.scrollHeight;
-      for (let y = 0; y < h; y += 600) { window.scrollTo(0, y); await new Promise((r) => setTimeout(r, 80)); }
+      const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms)); // __name-shimmed (see _pw.ts)
+      let h = document.body.scrollHeight;
+      for (let y = 0; y < h; y += 400) {
+        window.scrollTo(0, y);
+        await sleep(140);
+        h = Math.max(h, document.body.scrollHeight); // page can grow as content loads
+      }
+      window.scrollTo(0, document.body.scrollHeight);
+      await sleep(500);
       window.scrollTo(0, 0);
+      await sleep(300);
+      // Fallback for lazy images the natural scroll didn't trip.
+      for (const im of Array.from(document.querySelectorAll('img[data-src]'))) {
+        const s = im.getAttribute('data-src');
+        if (s && !im.getAttribute('src')) im.setAttribute('src', s);
+      }
+      for (const im of Array.from(document.querySelectorAll('img[data-srcset], source[data-srcset]'))) {
+        const s = im.getAttribute('data-srcset');
+        if (s) im.setAttribute('srcset', s);
+      }
     });
-    await page.waitForTimeout(1200);
+    await page.waitForLoadState('networkidle', { timeout: 15_000 }).catch(() => {});
+    // Wait for in-DOM images to finish decoding so layout is final at capture.
+    await page.evaluate(async () => {
+      await Promise.all(
+        Array.from(document.images)
+          .filter((i) => !i.complete)
+          .map((i) => i.decode().catch(() => undefined)),
+      );
+    });
+    await page.waitForTimeout(800);
     // Collect external stylesheet hrefs (absolute) + the rendered HTML.
     const { linkHrefs, html } = await page.evaluate(() => {
       const hrefs = Array.from(document.querySelectorAll('link[rel~="stylesheet"]'))
