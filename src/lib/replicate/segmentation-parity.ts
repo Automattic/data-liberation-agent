@@ -25,6 +25,16 @@ export interface SourceBand {
   bg: string;
 }
 
+/** A uniform repeated-sibling group in the source (a card row, pill row, icon
+ *  row, logo strip) — the structure that must reconstruct as a multi-track grid,
+ *  not flatten to a single stacked column. */
+export interface SourceRepeat {
+  top: number;
+  bottom: number;
+  /** Number of uniform repeated siblings (the row/grid track count). */
+  count: number;
+}
+
 export interface ParityScore {
   sourceBandCount: number;
   sectionCount: number;
@@ -34,6 +44,11 @@ export interface ParityScore {
   bgFidelity: number;
   /** Mean ΔE2000 between each section's bg and the source band at its y-center. */
   avgBgDeltaE: number;
+  /** Number of uniform repeated-sibling groups detected in the source. */
+  sourceRepeatCount: number;
+  /** Fraction of source repeat-groups the extractor reproduced as a multi-track
+   *  section (columnCount or cells >= the source track count). Flatten → low. */
+  repetitionRecall: number;
   /** Weighted composite in [0,1] (higher = closer to the source structure). */
   composite: number;
 }
@@ -93,16 +108,95 @@ export async function measureSourceBands(
 }
 
 /**
- * Score how well the extracted sections reproduce the source's visual bands.
- * Pure: no browser, no I/O — unit-tested.
+ * Detect uniform repeated-sibling groups (card/pill/icon/logo rows) — the source
+ * structures that must reconstruct as a multi-track grid, not flatten to one
+ * stacked column. Generic + geometry-based: a container with >=3 visible direct
+ * children sharing a structural signature and a uniform width, arranged across a
+ * row. trackCount = how many share the top row (the grid's columns).
+ */
+export async function measureSourceRepeats(
+  page: Page,
+  opts: { minItems?: number; widthTolFrac?: number } = {},
+): Promise<SourceRepeat[]> {
+  const minItems = opts.minItems ?? 3;
+  const widthTolFrac = opts.widthTolFrac ?? 0.3;
+  return page.evaluate(
+    ({ minItems, widthTolFrac }) => {
+      const visible = (el: Element): boolean => {
+        const he = el as HTMLElement;
+        if (he.offsetParent === null && getComputedStyle(el).position !== 'fixed') return false;
+        const r = el.getBoundingClientRect();
+        return r.width > 0 && r.height > 0;
+      };
+      // Structural signature: tag + direct-child count bucket + has img / heading / link.
+      const sig = (el: Element): string => {
+        const kids = Array.from(el.children);
+        const hasImg = !!el.querySelector('img,svg,picture');
+        const hasH = !!el.querySelector('h1,h2,h3,h4,h5,h6');
+        const hasA = !!el.querySelector('a,button');
+        return `${el.tagName}|${Math.min(kids.length, 6)}|${hasImg ? 'i' : ''}${hasH ? 'h' : ''}${hasA ? 'a' : ''}`;
+      };
+      const vw = window.innerWidth;
+      const groups: Array<{ top: number; bottom: number; count: number }> = [];
+      for (const parent of Array.from(document.body.querySelectorAll('*'))) {
+        // Skip site chrome — nav menus and footer link columns are uniform
+        // repeated siblings too, but they're not content grids to reconstruct.
+        if (parent.closest('nav,header,footer,[role="navigation"],[role="contentinfo"],[role="banner"]')) continue;
+        const kids = Array.from(parent.children).filter(visible);
+        if (kids.length < minItems) continue;
+        const sigs = kids.map(sig);
+        const counts: Record<string, number> = {};
+        for (const s of sigs) counts[s] = (counts[s] || 0) + 1;
+        const dom = Object.entries(counts).sort((a, b) => b[1] - a[1])[0];
+        if (!dom || dom[1] < minItems) continue;
+        const matched = kids.filter((_k, i) => sigs[i] === dom[0]);
+        const rects = matched.map((k) => k.getBoundingClientRect());
+        const avgW = rects.reduce((s, r) => s + r.width, 0) / rects.length;
+        if (avgW < 120) continue; // ignore tiny repeated chips (bullets, tag pills in nav)
+        if (!rects.every((r) => Math.abs(r.width - avgW) <= avgW * widthTolFrac)) continue;
+        // The row must span a real content width — a grid row is wide; a small
+        // 3-item cluster in a corner is not a section-level grid.
+        const span = Math.max(...rects.map((r) => r.right)) - Math.min(...rects.map((r) => r.left));
+        if (span < vw * 0.45) continue;
+        // track count = max siblings sharing a row (top within 24px)
+        let tracks = 1;
+        for (const a of rects) {
+          const row = rects.filter((b) => Math.abs(b.top - a.top) <= 24).length;
+          if (row > tracks) tracks = row;
+        }
+        if (tracks < 2) continue; // a vertical stack isn't a grid row
+        const top = Math.min(...rects.map((r) => r.top));
+        const bottom = Math.max(...rects.map((r) => r.top + r.height));
+        groups.push({ top, bottom, count: tracks });
+      }
+      // De-nest: keep the OUTERMOST group when ranges overlap heavily (a card row
+      // and the cards inside it both match) — the outer is the real grid.
+      groups.sort((a, b) => b.bottom - b.top - (a.bottom - a.top));
+      const kept: Array<{ top: number; bottom: number; count: number }> = [];
+      for (const g of groups) {
+        const overlaps = kept.some(
+          (k) => Math.min(k.bottom, g.bottom) - Math.max(k.top, g.top) > (g.bottom - g.top) * 0.6,
+        );
+        if (!overlaps) kept.push(g);
+      }
+      return kept.sort((a, b) => a.top - b.top);
+    },
+    { minItems, widthTolFrac },
+  );
+}
+
+/**
+ * Score how well the extracted sections reproduce the source's visual bands and
+ * repeated-grid structure. Pure: no browser, no I/O — unit-tested.
  */
 export function scoreSegmentation(
   bands: SourceBand[],
   specs: SectionSpec[],
-  opts: { boundaryTolPx?: number; deltaEFloor?: number } = {},
+  opts: { boundaryTolPx?: number; deltaEFloor?: number; repeats?: SourceRepeat[] } = {},
 ): ParityScore {
   const tol = opts.boundaryTolPx ?? 80;
   const deFloor = opts.deltaEFloor ?? 10;
+  const repeats = opts.repeats ?? [];
   const sectionTops = specs.map((s) => s.top);
 
   // Interior source boundaries (the top of each band after the first): each should
@@ -128,8 +222,24 @@ export function scoreSegmentation(
   const bgFidelity = scored ? dePass / scored : 1;
   const avgBgDeltaE = scored ? deSum / scored : 0;
 
-  // Composite: segmentation correctness (boundary recall) weighted with color fidelity.
-  const composite = 0.6 * boundaryRecall + 0.4 * bgFidelity;
+  // Repetition fidelity: each source repeat-group (a card/pill/icon row) should be
+  // reproduced by a section overlapping its y-range whose track count (columnCount,
+  // or cells) is at least the source's. A flattened row (1 column) fails it.
+  const sectionTracks = (s: SectionSpec): number =>
+    Math.max(s.layout?.columnCount ?? 1, (s.cells ?? []).length ? Math.min((s.cells ?? []).length, 6) : 1);
+  let repHit = 0;
+  for (const rep of repeats) {
+    const mid = (rep.top + rep.bottom) / 2;
+    const covering = specs.filter((s) => mid >= s.top - tol && mid <= s.top + s.height + tol);
+    if (covering.some((s) => sectionTracks(s) >= Math.min(rep.count, 4))) repHit++;
+  }
+  const repetitionRecall = repeats.length ? repHit / repeats.length : 1;
+
+  // Composite: segmentation (boundary recall) + color fidelity + repetition fidelity.
+  // Repetition only weighted when the page actually has repeated grids.
+  const composite = repeats.length
+    ? 0.4 * boundaryRecall + 0.3 * bgFidelity + 0.3 * repetitionRecall
+    : 0.6 * boundaryRecall + 0.4 * bgFidelity;
 
   return {
     sourceBandCount: bands.length,
@@ -137,6 +247,8 @@ export function scoreSegmentation(
     boundaryRecall: Number(boundaryRecall.toFixed(3)),
     bgFidelity: Number(bgFidelity.toFixed(3)),
     avgBgDeltaE: Number(avgBgDeltaE.toFixed(2)),
+    sourceRepeatCount: repeats.length,
+    repetitionRecall: Number(repetitionRecall.toFixed(3)),
     composite: Number(composite.toFixed(3)),
   };
 }

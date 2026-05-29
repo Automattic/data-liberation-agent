@@ -18,7 +18,7 @@ import { chromium, type Browser } from 'playwright';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { extractFull, type SectionSpec } from './section-extract.js';
-import { measureSourceBands, scoreSegmentation } from './segmentation-parity.js';
+import { measureSourceBands, measureSourceRepeats, scoreSegmentation } from './segmentation-parity.js';
 
 // Discover snapshotted homepage fixtures generically (any output/<site>/html/).
 // Gitignored output/ means these run locally where a liberation has been done;
@@ -52,7 +52,8 @@ async function analyzeFixture(path: string): Promise<{ specs: SectionSpec[]; sco
     await page.waitForTimeout(300);
     const specs = await extractFull(page, {}, 20_000);
     const bands = await measureSourceBands(page);
-    return { specs, score: scoreSegmentation(bands, specs) };
+    const repeats = await measureSourceRepeats(page);
+    return { specs, score: scoreSegmentation(bands, specs, { repeats }) };
   } finally {
     await page.close();
   }
