@@ -530,8 +530,13 @@ function nearestFamily(computed: string | undefined, tokens: FontFamilyToken[]):
   if (!c || c === 'inherit' || c === 'sans-serif' || c === 'serif') return null;
   const display = tokens.find((t) => t.slug === 'display');
   const body = tokens.find((t) => t.slug === 'body');
-  if (display && familyMatches(c, display)) return 'display';
+  // Check body BEFORE display so that an exact or substring name match on the
+  // body token wins even when the display token's name CONTAINS the body name as
+  // a prefix/substring (e.g. display="Caldera Display", body="Caldera": a
+  // paragraph computed as "caldera" must map to body, not display). The
+  // catch-all at the end still maps unrecognised handles to body by elimination.
   if (body && familyMatches(c, body)) return 'body';
+  if (display && familyMatches(c, display)) return 'display';
   // Matches neither primary face by name (a Wix handle whose own face WP dropped):
   // classify by elimination — not the display face → the body face.
   if (body) return 'body';

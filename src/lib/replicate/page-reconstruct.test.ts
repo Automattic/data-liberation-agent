@@ -321,6 +321,25 @@ describe('reconstructPagePattern', () => {
     expect(r.php).toContain('line-height:1.4');
   });
 
+  it('body paragraphs use the body font even when the computed family is a substring of the display name', () => {
+    // Fictional fonts: display = "Caldera Display", body = "Caldera". The body
+    // font's name ("caldera") is a prefix-substring of the display font's full
+    // name ("caldera display"), so familyMatches wrongly fires for display before
+    // it can match body. Body prose must land on has-body-font-family, never display.
+    const s = section({ headings: ['Intro'], bodyText: ['Body prose here.'] }) as SectionSpec;
+    (s as SectionSpec & { bodyFamilies?: string[] }).bodyFamilies = ['caldera'];
+    const r = reconstructPagePattern([s], {
+      patternSlug: 'demo-replica/page-body-font',
+      title: 'Body font test',
+      fontFamilies: [
+        { slug: 'display', family: 'Caldera Display, sans-serif' },
+        { slug: 'body', family: 'Caldera, sans-serif' },
+      ],
+    });
+    // Body prose rendered in the body font (Caldera), NOT the display variant.
+    expect(r.php).toMatch(/has-body-font-family[^>]*>Body prose here\./);
+  });
+
   it('carries source image width + aspect (not blown up to the container, not forced 4:3)', () => {
     // A standalone lead photo keeps its source rendered width, capped responsively.
     const big = section({
