@@ -55,7 +55,7 @@ browser_resize { width: 390, height: 844 }
 browser_take_screenshot { fullPage: true, path: "output/<site>/wp-result-mobile.png" }
 ```
 
-After capture, check the actual screenshot dimensions. Some Wix layouts keep a fixed wide canvas on a 390px viewport, so `mobile.png` may be wider than 390px (for example `980px`). In that case, reproduce the source `scrollWidth` with a theme-scoped `min-width` instead of forcing a narrow responsive stack; visual QA should compare against the captured mobile image dimensions, not the requested viewport alone.
+After capture, check the actual screenshot dimensions. Some Wix layouts keep a fixed wide canvas on a 390px viewport, so the rendered content stays ~`980`/`1280px` and gets clipped (an ancestor's `overflow-x:clip` keeps `scrollWidth == 390` while real content sits off-screen). **This is a responsiveness FAILURE, not something to preserve** — do NOT reproduce the source's fixed width with a theme-scoped `min-width` (that ships an amputated mobile layout). A fixed-coordinate page-builder section that renders past the fold (`contentPastFold > 0`) must be rebuilt via **R4a** (`rebuild-section` → reflowing core blocks); the raw styled island (R4b) is a desktop-only floor. See [[project_r4b_styled_island_responsiveness]].
 
 If the screenshot returns before the page is fully painted, increase the wait to 4-5 s or scroll to the bottom and back to trigger lazy hydration.
 
@@ -81,11 +81,13 @@ Repeat against the mobile pair.
 
 This is the **hard acceptance gate**. The pixel-diff score is a signal; this gate is a pass/fail condition that must be satisfied before the site is considered complete.
 
-**Both conditions must pass:**
+**All three conditions must pass:**
 
 1. **No horizontal overflow at 390px.** Capture the page at 390px wide. `document.documentElement.scrollWidth` must equal `window.innerWidth` (≤ 390). Any overflow indicates a layout that doesn't reflow correctly on mobile.
 
 2. **Sections reflow at 390px.** Multi-column sections must collapse to a single column (or a readable narrower layout). A fixed-width canvas that merely scales down is a failure.
+
+3. **No content past the fold.** `scrollWidth == 390` is necessary but NOT sufficient: `overflow-x:clip` makes a clipped fixed-width island report `scrollWidth == 390` while its content is amputated off-screen. Measure leaf content (text/img) whose `getBoundingClientRect().right > innerWidth` — a non-zero count fails. Fix via R4a rebuild, not CSS.
 
 Check both conditions on every iteration. A site that passes the pixel-diff but fails the responsiveness gate is not complete.
 

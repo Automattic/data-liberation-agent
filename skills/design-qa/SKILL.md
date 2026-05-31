@@ -1,6 +1,6 @@
 ---
 name: design-qa
-description: Visual-QA loop run after replica theme install and content import. Captures replica screenshots, applies a hard responsiveness gate at 390px AND a hard per-section visual-parity gate (measured SectionParity records, verdict computed by buildRunReport), runs qualitative vision review of source/replica pairs, checks accessibility, and drives an escalation ladder of fixes via editing-themes/editing-blocks — escalating unresolved divergences to the operator rather than shipping them. Orchestration-internal — invoked by the replicate/liberate orchestrators, not directly by users.
+description: Visual-QA loop run after replica theme install and content import. Captures replica screenshots, applies a hard responsiveness gate at 390px AND a hard per-section visual-parity gate (measured SectionParity records, verdict computed by buildRunReport), runs qualitative vision review of source/replica pairs, checks accessibility, and drives a per-section escalation ladder of fixes via editing-themes/editing-blocks/rebuild-section (R1 CSS → R2 spec-rebuild → R3 re-extract → R4a AI canonical-block rebuild → R4b deterministic styled-island floor) — escalating unresolved divergences to the operator rather than shipping them. Orchestration-internal — invoked by the replicate/liberate orchestrators, not directly by users.
 disable-model-invocation: true
 allowed-tools:
   - Bash
@@ -58,12 +58,13 @@ Read the returned `pairs[]` manifest. You will use the paired PNGs for both the 
 
 ### Step 2 — Responsiveness gate (HARD)
 
-For each captured mobile pair, evaluate responsiveness using the `evaluateResponsive` helper from `src/lib/replicate/responsive-check.ts`. The gate checks two conditions at 390px viewport width:
+For each captured mobile pair, evaluate responsiveness using the `evaluateResponsive` helper from `src/lib/replicate/responsive-check.ts`. The gate checks three conditions at 390px viewport width:
 
 - **No horizontal overflow:** `scrollWidth <= viewportWidth` — the page must not extend beyond the viewport.
 - **Sections reflow:** `sectionsReflowed >= sectionsTotal` — every section must have stacked vertically (single-column) at mobile width.
+- **No content past the fold:** `contentPastFoldCount == 0` — read from the mobile `ViewportCapture.contentPastFold` returned by `liberate_replicate_verify`. This catches a **fixed-layout styled island** (R4b) that keeps `scrollWidth == 390` because `overflow-x:clip` hides it, while its content is amputated off-screen. `scrollWidth` alone cannot see this.
 
-A fail on either condition is a **hard block** — do not continue to qualitative review or acceptance. Apply responsive CSS fixes via `editing-themes`, then re-capture (return to Step 1). If the gate still fails after 3 fix attempts, stop, log the failure to `theme/notes.md` and `run-report.json`, and report to the orchestrator without accepting.
+A fail on ANY condition is a **hard block** — do not continue to qualitative review or acceptance. For overflow/reflow, apply responsive CSS via `editing-themes`. For **content-past-fold**, a CSS tweak will NOT fix a fixed-coordinate page-builder section (Wix etc.) — the styled island is a desktop-only floor and does not reflow; the section must be rebuilt via **R4a** (`rebuild-section` → reflowing core blocks). Re-capture (return to Step 1) after the fix. If the gate still fails after the ladder is exhausted, stop, log to `theme/notes.md` and `run-report.json`, and escalate to the operator (Step 7) without accepting.
 
 ### Step 3 — Qualitative review
 
@@ -89,7 +90,7 @@ The per-section pixel-diff from `liberate_compare` (or `diff-pngs`) is a **force
 **Build the measured `SectionParity[]` per content page — this is the gate, not your prose.** The metrics are read for you; you assemble and score them (`src/lib/replicate/section-parity.ts`):
 
 1. For each content page, pair the verify result's `pairs[].sections[i]` (live replica DOM: `{ columnCount, bg, hasMedia }`) to the source spec section `specs[...][i]` **by index**.
-2. Build a `SourceSectionDescriptor` from each spec section: `columnCount = layout.columnCount`, `backgroundColor`, `hasMedia = images.length > 0`, `isCssLayout = columnCount >= 2 || cells >= 2`, `isHtmlFallback = provenanceFlags has \`html-fallback#<i>\``.
+2. Build a `SourceSectionDescriptor` from each spec section: `columnCount = layout.columnCount`, `backgroundColor`, `hasMedia = images.length > 0`, `isCssLayout = columnCount >= 2 || cells >= 2`, `isHtmlFallback = provenanceFlags has \`html-fallback#<i>\``. **Note the `#`:** a `html-fallback-styled#<i>` flag (the R4b styled-island floor) is NOT an unstyled fallback — `'html-fallback-styled#0'` does not start with `'html-fallback#'`, so it correctly does NOT set `isHtmlFallback`/`fallbackUnstyled`. Only the bare unstyled island trips the signal.
 3. `toSectionParityMetrics(descriptor, replicaSection ?? null)` → `evaluateSectionParity(...)` → the five signals. A missing replica section (`null`) reads as `sectionPresent: false`.
 
 The signals: `sectionPresent` (not dropped/merged), `bgDeltaE` (ΔE2000 of `spec.backgroundColor` vs rendered `bg`, `> BG_DELTA_E_FLOOR` = 10 diverges), `columnCountMatch` (replica `columnCount >= source`), `mediaPresent`, `fallbackUnstyled` (island on a CSS-layout section). `evidence` carries the measured source/replica values backing the score — **no record ships without it** (prove-it-works: no evidence ≠ matches).
@@ -126,22 +127,25 @@ Produce the `SectionParity[]` records (Step 3) plus, per section, `{ urlPath, ba
 
 ### Step 6 — Close the gap (escalation ladder)
 
-Every `divergent` section must be driven toward `match`. **Each iteration climbs to a STRONGER rung — never re-run the same failed tweak.** Climb until the section re-scores `match`:
+Every `divergent` section must be driven toward `match`. The ladder is climbed **per section** — each section gets its own climb, so a page with several bespoke sections is not capped at one section's worth of fixes. **Each iteration climbs to a STRONGER rung — never re-run the same rung.** This strictly-climbing rule is what makes the 5-rung ceiling safe: it cannot degrade into five attempts at the same tweak. Climb until the section re-scores `match`:
 
 - **R1 — theme/CSS fix** (`editing-themes`): band background color, spacing, inter-section gap.
 - **R2 — rebuild block markup** (`editing-blocks`): restore the columns/grid the structured render flattened, from the source spec.
 - **R3 — re-extract the spec** (Class A): if the section spec itself is wrong, re-extract it, then rebuild via R2.
-- **R4 — source-CSS-scoped styled rebuild** *(arriving with the section-rebuild capability work; until then, R4-class divergences escalate to the operator at Step 7)*: reproduce a bespoke section faithfully instead of flattening or shipping an unstyled island.
+- **R4a — AI canonical-block rebuild** (`rebuild-section`): when R1–R3 can't reach `match`, rebuild the section into native core blocks from its **source HTML + `styledHtml` + section screenshots + spec + design tokens** (richer inputs than R2's spec-only). Assemble that input bundle, dispatch the subagent, then run the **four acceptance gates**: ① block-markup oracle (`liberate_validate_artifacts`), ② canonicalization round-trip survives `@wordpress/blocks`, ③ re-measured `section-parity` = `match`, ④ `measureSectionCoverage` = no loss. Accept the rebuild **only if all four pass** — the agent cannot self-accept; acceptance is the measured re-score. If any gate fails, fall to R4b.
+- **R4b — deterministic styled-island floor** (no AI): the section's `styledHtml` snapshot already ships through the reconstruction as a **styled** `core/html` island (provenance `html-fallback-styled#<i>`), which renders pixel-faithful and clears the `unstyled-island` signal. Faithful but not block-editable — the floor for genuinely bespoke sections R4a can't map to core blocks. R4b reaching `match` is a **valid pass**; R4a (editable) is always tried first.
 
-`editing-themes` and `editing-blocks` are `disable-model-invocation: true` — you cannot `Skill`-launch them from this inline-run loop. Apply each rung by **dispatching a subagent whose prompt points it at the skill's `SKILL.md`** (the subagent reads the file and applies the fix), matching the subagent-dispatch convention; do not stall on a refused Skill call.
+Each R4a dispatch is a **subagent**, counted toward the run's subagent ceiling in `budget-guard` — that is the per-run cost bound on AI spend.
+
+`editing-themes`, `editing-blocks`, and `rebuild-section` are `disable-model-invocation: true` — you cannot `Skill`-launch them from this inline-run loop. Apply each rung by **dispatching a subagent whose prompt points it at the skill's `SKILL.md`** (the subagent reads the file and applies the fix), matching the subagent-dispatch convention; do not stall on a refused Skill call.
 
 After applying a rung, reinstall the updated theme files via the orchestrator's install path and return to Step 1 to re-capture and re-score. "Known gap" / "where it falls short" is an **escalation trigger, not a conclusion** — never write it as the terminal state of a shipped run.
 
 ### Step 7 — Circuit-breaker checkpoint (escalate, don't surrender)
 
-**3 iterations per page is a CHECKPOINT, not an exit.** When you exhaust the escalation ladder on a section without reaching `match`, you do NOT log-and-ship. Stop and ask the **operator**, routed through the budget guard (`src/lib/replicate/budget-guard.ts`), surfacing what you tried per rung and the current `SectionParity`:
+**The checkpoint is "ladder exhausted per section" (all 5 rungs — R1, R2, R3, R4a, R4b — tried without `match`) OR the per-run cost ceiling, whichever comes first — not a per-page iteration tally.** The 5-rung ceiling is derived from the rung count, so it stays in sync if rungs change; the strictly-climbing rule (Step 6) prevents thrashing within it. Total AI spend is bounded by `budget-guard`'s subagent ceiling (`checkBudget`), which `pause`s the run when reached. When a section exhausts the ladder, or the budget guard signals `pause`, you do NOT log-and-ship. Stop and ask the **operator**, surfacing what you tried per rung and the current `SectionParity`:
 
-- **Raise the budget** — keep climbing (e.g. R4 / a custom block).
+- **Raise the budget** — keep climbing / accept more R4a subagent spend.
 - **Accept with sign-off** — the operator accepts the divergence; record it as `acceptance: { by: 'human', proof: <operator rationale> }` on that section. This is the ONLY way a `divergent` section ships.
 - **Abandon this page** — recorded explicitly, surfaced as a hard `fail` in the run-report.
 
