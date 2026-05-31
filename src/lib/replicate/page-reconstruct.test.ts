@@ -848,6 +848,18 @@ describe('reconstructPagePattern', () => {
     expect(noImg.php).not.toContain('<!-- wp:cover');
   });
 
+  it('renders the cover hero height as a proportional vw (scales across widths), not fixed desktop px', () => {
+    const wideHero = { url: `${WP}yard.jpg`, sourceUrl: `${WP}yard.jpg`, alt: '', kind: 'img' as const, width: 1440, height: 796 };
+    const s = section({ interactionModel: 'animated-cover', headings: ['Hero'], images: [wideHero] }) as SectionSpec;
+    s.height = 720; // captured at the 1440-px desktop width
+    const r = reconstructPagePattern([s], opts);
+    // 720 / 1440 = 50vw — proportional, so it renders ~513px at 1008, not a fixed
+    // 720px that is too tall at any narrower width.
+    expect(r.php).toMatch(/min-height:50vw/);
+    expect(r.php).toContain('"minHeightUnit":"vw"');
+    expect(r.php).not.toMatch(/min-height:720px/);
+  });
+
   it('renders a many-image gallery as a wp:gallery grid, not a 25-wide flex row', () => {
     const imgs = Array.from({ length: 25 }, (_, i) => img(`${WP}g${i}.jpg`, `img ${i}`));
     const r = reconstructPagePattern([section({ interactionModel: 'gallery', headings: ['Gallery'], images: imgs })], opts);

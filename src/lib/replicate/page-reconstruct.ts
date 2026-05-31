@@ -778,10 +778,16 @@ function renderCover(s: SectionSpec, ctx: RenderCtx): BlockOut {
   // viewport) instead of letting the cover shrink to its content. Clamped to a
   // sane range. A top-anchored hero cover also zeroes its own top margin so it's
   // flush with the page top (the overlay header floats above it).
-  const minH = Math.max(480, Math.min(Math.round(s.height || 520), 1000));
+  const minHpx = Math.max(480, Math.min(Math.round(s.height || 520), 1000));
+  // Emit the hero height as a PROPORTIONAL vw of the 1440-px desktop capture
+  // width, not a fixed desktop px — a fixed px is too tall at narrower viewports
+  // (733px captured at 1440 → ~513px at 1008, which `50.9vw` reproduces, but
+  // `733px` does not). vw scales the cover the way the source's proportional hero
+  // does. (Capture width is the settled desktop page; see AGENTS.md.)
+  const minVw = Math.round((minHpx / 1440) * 1000) / 10;
   out.markup =
-    `<!-- wp:cover {"url":"${url}","dimRatio":40,"overlayColor":"surface-inverse","isUserOverlayColor":true,"minHeight":${minH},"minHeightUnit":"px","align":"full","style":{"spacing":{"margin":{"top":"0px"}}},"layout":{"type":"constrained"}} -->\n` +
-    `<div class="wp-block-cover alignfull" style="margin-top:0px;min-height:${minH}px">` +
+    `<!-- wp:cover {"url":"${url}","dimRatio":40,"overlayColor":"surface-inverse","isUserOverlayColor":true,"minHeight":${minVw},"minHeightUnit":"vw","align":"full","style":{"spacing":{"margin":{"top":"0px"}}},"layout":{"type":"constrained"}} -->\n` +
+    `<div class="wp-block-cover alignfull" style="margin-top:0px;min-height:${minVw}vw">` +
     // Canonical core/cover order: the background <img> precedes the dim <span>
     // (WP's save() validator rejects span-before-img). Keeps the pattern valid in
     // the editor, matching what the block fixer normalizes post_content to.

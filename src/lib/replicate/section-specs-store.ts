@@ -39,7 +39,10 @@ import type { SectionSpec } from './section-extract.js';
 // faithful. Capture-semantics change → invalidate older caches and re-extract.
 // v5: sections now persist `sectionHtml` (capped) for the coverage-gated
 // core/html verbatim fallback. Older caches lack it → invalidate + re-extract.
-export const SECTION_SPECS_SCHEMA = 5;
+// v6: sections now persist `styledHtml` (capped) — a computed-style-inlined
+// snapshot powering the R4b deterministic styled-island floor. Older caches lack
+// it → invalidate + re-extract so the floor renders styled, not bare.
+export const SECTION_SPECS_SCHEMA = 6;
 
 interface SectionSpecsFile {
   schema: number;

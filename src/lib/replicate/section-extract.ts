@@ -782,6 +782,17 @@ export interface SectionSpec {
    * not fallback-eligible.
    */
   sectionHtml?: string;
+  /**
+   * Self-contained styled snapshot of the section subtree: a clone with each
+   * element's relevant computed styles inlined onto a `style` attribute, so it
+   * renders faithfully with NO external CSS, NO cascade to reconstruct, and NO
+   * `:root` vars to scope. Powers the R4b deterministic styled-island floor (see
+   * the section-rebuild R4 design + html-fallback.ts): when present, the
+   * coverage-gated fallback prefers this over the unstyled `sectionHtml` so a
+   * CSS-layout section renders styled instead of bare. Captured once during the
+   * fidelity walk; subject to the same SECTION_HTML_FALLBACK_CAP as sectionHtml.
+   */
+  styledHtml?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -824,6 +835,9 @@ interface RawSection {
   layout: SectionSpecLayout;
   /** Serialized outerHTML of the section (capped) — input to review-extract. */
   sectionHtml?: string;
+  /** Computed-style-inlined snapshot of the section subtree (capped) — the R4b
+   *  deterministic styled-island floor. Self-contained: renders with no CSS. */
+  styledHtml?: string;
   /** Per-cell raw capture for grid sections (built into SectionSpec.cells in Node). */
   cells?: RawCell[];
   /** Structured button capture (built into SectionSpec.buttons in Node). */
@@ -2388,6 +2402,87 @@ export async function extractFull(
         }
         if (sectionHtml.length > 600_000) sectionHtml = sectionHtml.slice(0, 600_000);
 
+        // Self-contained styled snapshot (R4b floor): clone the subtree and
+        // inline each element's allow-listed computed styles, so the section
+        // lays out and is colored with NO external CSS, NO cascade, and NO
+        // `:root` vars to scope (every element carries its own RESOLVED values).
+        // The allow-list (layout/box/visual/typography) is the one tuning knob —
+        // kept off the full ~350-prop set to bound size. `getComputedStyle`
+        // returns resolved px/rgb values, so the clone is fully self-describing.
+        let styledHtml = '';
+        try {
+          const STYLE_PROPS = [
+            'display', 'flex-direction', 'flex-wrap', 'flex-grow', 'flex-shrink', 'flex-basis',
+            'justify-content', 'align-items', 'align-content', 'gap', 'row-gap', 'column-gap',
+            'grid-template-columns', 'grid-template-rows', 'grid-auto-flow', 'grid-column', 'grid-row',
+            'width', 'min-width', 'max-width', 'height', 'min-height', 'max-height',
+            'margin-top', 'margin-right', 'margin-bottom', 'margin-left',
+            'padding-top', 'padding-right', 'padding-bottom', 'padding-left',
+            'position', 'top', 'right', 'bottom', 'left', 'z-index', 'box-sizing',
+            'color', 'background-color', 'background-image', 'background-size', 'background-position', 'background-repeat',
+            'border-top-width', 'border-right-width', 'border-bottom-width', 'border-left-width',
+            'border-style', 'border-color', 'border-radius', 'box-shadow', 'opacity', 'transform', 'transform-origin',
+            'font-family', 'font-size', 'font-weight', 'font-style', 'line-height', 'letter-spacing',
+            'text-align', 'text-transform', 'text-decoration-line', 'white-space', 'list-style-type',
+            'object-fit', 'object-position', 'overflow',
+          ];
+          // Per-property initial values — when the computed value equals the
+          // property's initial value it adds no fidelity, so it is skipped. This
+          // (plus the context skips below) is what keeps the snapshot from
+          // carrying ~60 default props on every element.
+          const INITIAL: Record<string, string> = {
+            'flex-direction': 'row', 'flex-wrap': 'nowrap', 'flex-grow': '0', 'flex-shrink': '1', 'flex-basis': 'auto',
+            'justify-content': 'normal', 'align-items': 'normal', 'align-content': 'normal',
+            'gap': 'normal', 'row-gap': 'normal', 'column-gap': 'normal',
+            'grid-auto-flow': 'row', 'grid-template-columns': 'none', 'grid-template-rows': 'none', 'grid-column': 'auto', 'grid-row': 'auto',
+            'min-width': 'auto', 'max-width': 'none', 'min-height': 'auto', 'max-height': 'none',
+            'margin-top': '0px', 'margin-right': '0px', 'margin-bottom': '0px', 'margin-left': '0px',
+            'padding-top': '0px', 'padding-right': '0px', 'padding-bottom': '0px', 'padding-left': '0px',
+            'top': 'auto', 'right': 'auto', 'bottom': 'auto', 'left': 'auto', 'z-index': 'auto', 'box-sizing': 'content-box',
+            'background-color': 'rgba(0, 0, 0, 0)', 'background-image': 'none', 'background-size': 'auto', 'background-position': '0% 0%', 'background-repeat': 'repeat',
+            'border-top-width': '0px', 'border-right-width': '0px', 'border-bottom-width': '0px', 'border-left-width': '0px',
+            'border-style': 'none', 'border-radius': '0px', 'box-shadow': 'none', 'opacity': '1', 'transform': 'none',
+            'font-style': 'normal', 'line-height': 'normal', 'letter-spacing': 'normal',
+            'text-align': 'start', 'text-transform': 'none', 'text-decoration-line': 'none', 'white-space': 'normal', 'list-style-type': 'disc',
+            'object-fit': 'fill', 'object-position': '50% 50%', 'overflow': 'visible',
+          };
+          const clone = (el as HTMLElement).cloneNode(true) as HTMLElement;
+          const origAll = [el, ...Array.from(el.querySelectorAll('*'))];
+          const cloneAll = [clone, ...Array.from(clone.querySelectorAll('*'))];
+          const count = Math.min(origAll.length, cloneAll.length);
+          for (let i = 0; i < count; i++) {
+            const cs = getComputedStyle(origAll[i] as Element);
+            const display = cs.getPropertyValue('display');
+            const isFlex = display === 'flex' || display === 'inline-flex';
+            const isGrid = display === 'grid' || display === 'inline-grid';
+            const position = cs.getPropertyValue('position');
+            const noBorder = cs.getPropertyValue('border-style') === 'none';
+            let decl = '';
+            for (let p = 0; p < STYLE_PROPS.length; p++) {
+              const prop = STYLE_PROPS[p];
+              const v = cs.getPropertyValue(prop);
+              if (!v) continue;
+              // Context-irrelevant property groups — skip wholesale.
+              if (prop.startsWith('flex-') && !isFlex) continue;
+              if ((prop === 'justify-content' || prop === 'align-items' || prop === 'align-content') && !isFlex && !isGrid) continue;
+              if (prop.startsWith('grid-') && !isGrid) continue;
+              if ((prop === 'top' || prop === 'right' || prop === 'bottom' || prop === 'left') && position === 'static') continue;
+              if (prop === 'transform-origin' && cs.getPropertyValue('transform') === 'none') continue;
+              if (prop === 'border-color' && noBorder) continue;
+              // Initial/default value — no fidelity, skip.
+              if (INITIAL[prop] === v) continue;
+              decl += prop + ':' + v + ';';
+            }
+            if (decl) (cloneAll[i] as HTMLElement).setAttribute('style', decl);
+          }
+          styledHtml = clone.outerHTML || '';
+        } catch {
+          styledHtml = '';
+        }
+        // Over-cap → drop entirely (a sliced styled snapshot is invalid markup);
+        // the renderer then falls back to the verbatim sectionHtml path.
+        if (styledHtml.length > 600_000) styledHtml = '';
+
         return {
           features,
           headings,
@@ -2413,6 +2508,7 @@ export async function extractFull(
           fullBleed,
           motionAnimatedElements: animatedElements,
           sectionHtml,
+          styledHtml,
           cells,
         };
       };
@@ -2592,6 +2688,11 @@ export async function extractFull(
       // and is therefore not fallback-eligible.
       ...(rr.sectionHtml && rr.sectionHtml.length <= SECTION_HTML_FALLBACK_CAP
         ? { sectionHtml: rr.sectionHtml }
+        : {}),
+      // Persist the styled snapshot under the same cap — an over-cap snapshot is
+      // dropped so the R4b floor falls back to the verbatim sectionHtml path.
+      ...(rr.styledHtml && rr.styledHtml.length <= SECTION_HTML_FALLBACK_CAP
+        ? { styledHtml: rr.styledHtml }
         : {}),
     };
   });

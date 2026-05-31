@@ -79,6 +79,33 @@ function measureReplicaSectionsInBrowser(): ReplicaSectionMeasure[] {
   return sections.map((s) => ({ columnCount: columnCount(s), bg: resolveBg(s), hasMedia: hasMediaIn(s) }));
 }
 
+/**
+ * Count leaf CONTENT elements (text nodes / images) whose box extends beyond the
+ * viewport. Uses `getBoundingClientRect`, which reports the LAYOUT rect and so
+ * ignores `overflow-x: clip/hidden` — closing the gate blind spot where a
+ * fixed-width R4b styled island keeps `scrollWidth == viewport` (an ancestor
+ * clips it) while its content is amputated off-screen. Runs at the mobile
+ * viewport. A non-zero count fails responsiveness → the section must be rebuilt
+ * via R4a (reflowing core blocks), not left on the desktop-only styled floor.
+ */
+function measureContentPastFoldInBrowser(): number {
+  const vw = document.documentElement.clientWidth;
+  const TOL = 1;
+  let count = 0;
+  const all = document.querySelectorAll('body *');
+  for (let i = 0; i < all.length; i++) {
+    const el = all[i] as HTMLElement;
+    if (el.children.length > 0) continue; // leaf content only
+    const isImg = el.tagName === 'IMG';
+    const txt = (el.textContent || '').trim();
+    if (!isImg && !txt) continue;
+    const r = el.getBoundingClientRect();
+    if (r.width === 0 && r.height === 0) continue; // not rendered
+    if (r.right > vw + TOL || r.left > vw + TOL) count++;
+  }
+  return count;
+}
+
 export type Viewport = 'desktop' | 'mobile';
 
 /** One viewport's worth of capture + pairing for a single URL. */
@@ -92,6 +119,10 @@ export interface ViewportCapture {
   httpStatus: number | null;
   /** Errors encountered for this viewport (capture failed, navigation timed out, etc.). */
   errors: string[];
+  /** Mobile viewport only: count of leaf content elements rendering past the fold
+   *  (measured ignoring overflow clipping). Feeds `ResponsiveMetrics.contentPastFoldCount`
+   *  so a clipped fixed-layout styled island fails the responsiveness gate. */
+  contentPastFold?: number;
 }
 
 export interface VerifyPair {
@@ -338,6 +369,15 @@ export async function verifyReplica(opts: VerifyOpts): Promise<VerifyResult> {
               sectionMeasures = await page.evaluate(measureReplicaSectionsInBrowser);
             } catch (err) {
               capture.errors.push(`section-metrics: ${(err as Error).message}`);
+            }
+          }
+          // Mobile is the responsiveness gate: measure content past the fold here
+          // (catches clipped fixed-layout islands that scrollWidth alone misses).
+          if (vp === 'mobile') {
+            try {
+              capture.contentPastFold = await page.evaluate(measureContentPastFoldInBrowser);
+            } catch (err) {
+              capture.errors.push(`content-past-fold: ${(err as Error).message}`);
             }
           }
         } catch (err) {

@@ -42,8 +42,12 @@ export interface PageReconstructionResult {
   provenanceFlags: string[];
   sectionsRendered: number;
   iconAssetCount: number;
-  /** Sections emitted as verbatim core/html islands (coverage-gated fallback). */
+  /** Sections emitted as UNSTYLED verbatim core/html islands (coverage-gated
+   *  fallback, no source CSS → renders bare). These are the fidelity gaps. */
   fallbackSections: number;
+  /** Sections emitted as STYLED core/html islands (R4b floor: computed styles
+   *  inlined → renders faithfully). Visible, not hidden, but not block-editable. */
+  styledFallbackSections: number;
 }
 
 /** Swap the pattern's `get_theme_file_uri()` PHP asset refs for literal
@@ -194,5 +198,6 @@ export function buildPageReconstruction(
     sectionsRendered: r.sectionsRendered,
     iconAssetCount: r.iconAssets.length,
     fallbackSections: r.provenanceFlags.filter((f) => f.startsWith('html-fallback#')).length,
+    styledFallbackSections: r.provenanceFlags.filter((f) => f.startsWith('html-fallback-styled#')).length,
   };
 }
