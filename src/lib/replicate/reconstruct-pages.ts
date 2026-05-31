@@ -174,10 +174,20 @@ export function buildPageReconstruction(
   const fullWidth = sections.some(
     (s) => s.fullBleed && s.interactionModel !== 'footer' && s.interactionModel !== 'nav',
   );
-  // A cover-hero page wires the transparent overlay header; others the solid one
-  // (independent of the width decision). The template renders the PAGE's
-  // post_content (real editable block page); the theme keeps the pattern as a lib.
-  const template = buildPageTemplate(r.heroIsCover, fullWidth);
+  // A cover-hero page wires the transparent overlay header ONLY when the source
+  // hero sits flush at the page top — i.e. the source header is out-of-flow,
+  // floating OVER the hero (heroTop ≈ 0). When the hero is pushed DOWN by roughly
+  // a header height, the source renders a SOLID header ABOVE the hero, so the
+  // replica must too (corneliusholmes: heroTop 93 → solid, not the old
+  // heroIsCover-always-overlay heuristic that put a transparent bar over a hero
+  // the source kept below a white header). Derived from captured geometry, generic.
+  const bodyForHeader = sections.filter(
+    (s) => s.interactionModel !== 'footer' && s.interactionModel !== 'nav',
+  );
+  const heroTop = bodyForHeader.length ? bodyForHeader[0].top ?? 0 : 0;
+  const SOURCE_HEADER_ABOVE_PX = 40;
+  const overlayHeader = r.heroIsCover && heroTop < SOURCE_HEADER_ABOVE_PX;
+  const template = buildPageTemplate(overlayHeader, fullWidth);
   const files: ReconstructedFile[] = [
     { path: `patterns/page-${opts.slug}.php`, content: php },
     { path: `templates/page-${opts.slug}.html`, content: template },

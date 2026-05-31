@@ -97,6 +97,17 @@ describe('buildPageReconstruction', () => {
     expect(tpl).toContain('margin-top:0px;padding-top:0px'); // flush-top preserved
   });
 
+  it('a cover hero pushed down by a source header (top >= 40) gets the SOLID header, not overlay', () => {
+    const wideHero = { url: 'http://x/wp-content/uploads/hero.jpg', sourceUrl: 'http://x/wp-content/uploads/hero.jpg', alt: '', kind: 'img' as const, width: 1440, height: 796 };
+    const r = buildPageReconstruction(
+      [section({ interactionModel: 'animated-cover', headings: ['Hero'], images: [wideHero], fullBleed: true, top: 93 } as Partial<SectionSpec>)],
+      { ...base, slug: 'home', isHome: true },
+    );
+    const tpl = r.files.find((f) => f.path === 'templates/front-page.html')!.content;
+    // The 93px above the hero is a SOLID source header → no transparent overlay.
+    expect(tpl).not.toContain('site-header-overlay');
+  });
+
   it('emits front-page.html for the home page', () => {
     const r = buildPageReconstruction([section({ headings: ['Home'] })], { ...base, slug: 'home', isHome: true });
     const paths = r.files.map((f) => f.path);
