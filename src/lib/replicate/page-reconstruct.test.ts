@@ -800,6 +800,28 @@ describe('reconstructPagePattern', () => {
     expect(plain.php).not.toContain('has-surface-raised-background-color');
   });
 
+  it('renders a full-width source card grid edge-to-edge (full-bleed), not constrained with margins', () => {
+    const cells = [
+      { heading: 'A', body: ['da'], image: null, icon: null, button: null, background: 'rgb(204, 198, 198)', radius: 0 },
+      { heading: 'B', body: ['db'], image: null, icon: null, button: null, background: 'rgb(240, 237, 237)', radius: 0 },
+    ] as unknown as SectionSpec['cells'];
+    const palette = [{ slug: 'surface-base', hex: '#ffffff' }, { slug: 'surface-raised', hex: '#ccc6c6' }];
+    const full = section({ interactionModel: 'columns', headings: ['Services'] }) as SectionSpec;
+    full.layout = { ...full.layout, containerWidth: 1440 };
+    full.cells = cells;
+    const r = reconstructPagePattern([full], { patternSlug: 'x/x', title: 'X', paletteTokens: palette });
+    expect(r.php).toContain('"align":"full"'); // full-bleed columns
+    expect(r.php).toMatch(/wp:columns \{[^}]*"blockGap":"0"/); // cards touch (no gap)
+    expect(r.php).toContain('padding-left:0px'); // no side margin
+
+    // A genuinely constrained source (narrow container) keeps the constraint.
+    const narrow = section({ interactionModel: 'columns', headings: ['X'] }) as SectionSpec;
+    narrow.layout = { ...narrow.layout, containerWidth: 760 };
+    narrow.cells = cells;
+    const r2 = reconstructPagePattern([narrow], { patternSlug: 'x/x', title: 'X', paletteTokens: palette });
+    expect(r2.php).toContain('wideSize":"1100px');
+  });
+
   it('defaults card corners to FLAT (0px) when the source card has no rounding — not a phantom 12px', () => {
     const s = section({ interactionModel: 'columns', headings: ['Services'] }) as SectionSpec;
     s.cells = [

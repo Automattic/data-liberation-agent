@@ -1068,11 +1068,20 @@ function column(parts: string[], width?: string): string {
   );
 }
 
-function columns(cols: string[]): string {
+function columns(cols: string[], opts: { fullBleed?: boolean } = {}): string {
   if (cols.length === 0) return '';
+  // Full-bleed: the source's card row spans the viewport edge-to-edge with the
+  // cards flush (no gap). align:full + blockGap:0 reproduce that; otherwise the
+  // columns stay constrained with the default inter-card gap.
+  const attr = opts.fullBleed
+    ? `"verticalAlignment":"center","align":"full","style":{"spacing":{"blockGap":"0"}}`
+    : `"verticalAlignment":"center"`;
+  const cls = opts.fullBleed
+    ? 'wp-block-columns alignfull are-vertically-aligned-center'
+    : 'wp-block-columns are-vertically-aligned-center';
   return (
-    `<!-- wp:columns {"verticalAlignment":"center"} -->\n` +
-    `<div class="wp-block-columns are-vertically-aligned-center">\n${cols.join('\n')}\n</div>\n` +
+    `<!-- wp:columns {${attr}} -->\n` +
+    `<div class="${cls}">\n${cols.join('\n')}\n</div>\n` +
     `<!-- /wp:columns -->`
   );
 }
@@ -1091,15 +1100,24 @@ function wrapSection(
     bgColor?: string;
     padTopPx?: number;
     padBottomPx?: number;
+    /** The source band spans the viewport edge-to-edge (captured containerWidth ≈
+     *  viewport). Drop the width constraint AND the horizontal padding so the
+     *  content (e.g. a card row) is flush to the edges like the source. */
+    fullBleed?: boolean;
   },
 ): string {
   const body = parts.filter(Boolean).join('\n');
   if (!body) return '';
-  const layout = opts.constrained
-    ? `"layout":{"type":"constrained","contentSize":"${opts.constrained}"}`
-    : opts.wide
-      ? `"layout":{"type":"constrained","wideSize":"${opts.wide}"}`
-      : `"layout":{"type":"constrained"}`;
+  const layout = opts.fullBleed
+    ? `"layout":{"type":"default"}`
+    : opts.constrained
+      ? `"layout":{"type":"constrained","contentSize":"${opts.constrained}"}`
+      : opts.wide
+        ? `"layout":{"type":"constrained","wideSize":"${opts.wide}"}`
+        : `"layout":{"type":"constrained"}`;
+  const hpadJson = opts.fullBleed ? `"left":"0","right":"0"` : `"left":"var:preset|spacing|40","right":"var:preset|spacing|40"`;
+  const hpadL = opts.fullBleed ? '0px' : 'var(--wp--preset--spacing--40)';
+  const hpadR = hpadL;
   // Background precedence: inverse (dark band, needs light text) > an EXACT
   // captured tint > raised token (approximation fallback). Painting the exact
   // captured OPAQUE tint beats the generic surface-raised so the source's real
@@ -1137,8 +1155,8 @@ function wrapSection(
   // margin above each section — the source stacks its bands edge-to-edge). All
   // vertical rhythm comes from each section's own captured padding.
   return (
-    `<!-- wp:group {"tagName":"section","align":"full",${colorAttr}"style":{${styleColor}"spacing":{"margin":{"top":"0","bottom":"0"},"padding":{"top":"${topVal}","bottom":"${botVal}","left":"var:preset|spacing|40","right":"var:preset|spacing|40"},"blockGap":"var:preset|spacing|40"}},${layout}} -->\n` +
-    `<section class="wp-block-group alignfull${bgClass}" style="margin-top:0;margin-bottom:0;${bgInlineStyle}padding-top:${cssLen(topVal)};padding-right:var(--wp--preset--spacing--40);padding-bottom:${cssLen(botVal)};padding-left:var(--wp--preset--spacing--40)">\n` +
+    `<!-- wp:group {"tagName":"section","align":"full",${colorAttr}"style":{${styleColor}"spacing":{"margin":{"top":"0","bottom":"0"},"padding":{"top":"${topVal}","bottom":"${botVal}",${hpadJson}},"blockGap":"var:preset|spacing|40"}},${layout}} -->\n` +
+    `<section class="wp-block-group alignfull${bgClass}" style="margin-top:0;margin-bottom:0;${bgInlineStyle}padding-top:${cssLen(topVal)};padding-right:${hpadR};padding-bottom:${cssLen(botVal)};padding-left:${hpadL}">\n` +
     `${body}\n` +
     `</section>\n<!-- /wp:group -->`
   );
@@ -1251,7 +1269,16 @@ function renderCellGrid(s: SectionSpec, ctx: RenderCtx): BlockOut {
     if (!kept.length) continue;
     cols.push(column(cardToken ? [cardGroup(kept, cardToken, cardDark, c.radius ?? 0, c.padding ?? null)] : kept));
   }
-  out.markup = wrapSection([...intro.filter(Boolean), columns(cols)], { wide: '1100px', raised: isTintedSection(s), bgColor: s.backgroundColor, ...sectionPad(s) });
+  // A source band whose captured container spans ~the full viewport is a
+  // full-bleed card row (the cards touch the edges, flush) — reproduce that
+  // instead of a constrained 1100px box with side margins + inter-card gaps.
+  const fullBleed = (s.layout?.containerWidth ?? 0) >= 1380;
+  out.markup = wrapSection([...intro.filter(Boolean), columns(cols, { fullBleed })], {
+    ...(fullBleed ? { fullBleed: true } : { wide: '1100px' }),
+    raised: isTintedSection(s),
+    bgColor: s.backgroundColor,
+    ...sectionPad(s),
+  });
   return out;
 }
 
