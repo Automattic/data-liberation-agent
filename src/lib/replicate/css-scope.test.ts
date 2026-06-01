@@ -43,3 +43,33 @@ describe('scopeCss — at-rules', () => {
     expect(out).toContain('url(/wp/up/a.png)');
   });
 });
+
+describe('scopeCss — combined-root + edge selectors', () => {
+  it('folds :root combined with a class onto the scope', () => {
+    const out = scopeCss(':root.dark { color: white }', { scope: 'body.lib-alt-site' });
+    expect(out).toContain('body.lib-alt-site.dark');
+    // .dark must not be orphaned as its own selector: no leading combinator (space, >, ~, +) or
+    // comma directly before it. It is only legal glued onto the scope (…lib-alt-site.dark).
+    expect(out).not.toMatch(/(?:^|[\s,>~+])\.dark\s*\{/);
+  });
+
+  it('folds :root:not(...) onto the scope', () => {
+    const out = scopeCss(':root:not(.x) { color: white }', { scope: 'body.lib-alt-site' });
+    expect(out).toContain('body.lib-alt-site:not(.x)');
+  });
+
+  it('preserves a child combinator after body', () => {
+    const out = scopeCss('body > .x { color: red }', { scope: 'body.lib-alt-site' });
+    expect(out).toContain('body.lib-alt-site > .x');
+  });
+
+  it('returns empty string for empty CSS without throwing', () => {
+    expect(scopeCss('', { scope: 'body.lib-alt-site' })).toBe('');
+  });
+
+  it('leaves no un-renamed animation reference after keyframe namespacing', () => {
+    const css = '@keyframes spin { from {opacity:0} to {opacity:1} } .x { animation: spin 1s }';
+    const out = scopeCss(css, { scope: 'body.lib-alt-site', scopeId: 'p1' });
+    expect(out).not.toContain('animation: spin 1s');
+  });
+});

@@ -24,6 +24,8 @@ function scopeSelector(selector: string, scope: string): string {
         first.replaceWith(selectorParser.string({ value: scope }));
         return;
       }
+      // Reverse-order prepends: each prepend pushes ahead of the current first node, so
+      // inserting the combinator first then the scope yields `scope <combinator> <original…>`.
       sel.prepend(selectorParser.combinator({ value: ' ' }));
       sel.prepend(selectorParser.string({ value: scope }));
     });
