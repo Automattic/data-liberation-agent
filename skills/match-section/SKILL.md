@@ -1,6 +1,6 @@
 ---
 name: match-section
-description: Reach VISUAL parity for ONE section by guiding AI to apply the captured design data (colors, padding, margins, full-bleed, font sizes, line-heights, families, alignment) to that section's WordPress block markup, then VERIFYING by looking at the source section and the built section side-by-side and iterating until they are visually identical. Non-deterministic on purpose — deterministic emission gets the structure right but misses visual parity; this skill closes the gap with an AI eyes-on loop. Dispatched per section (subagent) by the replicate/design-qa orchestrators. Not user-invocable directly.
+description: Reach VISUAL parity for ONE section by guiding AI to apply the captured design data (colors, padding, margins, full-bleed, font sizes, line-heights, families, alignment) to that section's WordPress block markup, then VERIFYING by looking at the source section and the built section side-by-side and iterating until they are visually identical. Non-deterministic on purpose — deterministic emission gets the structure right but misses visual parity; this skill closes the gap with an AI eyes-on loop. The per-section EXECUTOR called by `match-page` (which runs the batch Phase-1 assessment first, then dispatches this per divergent section). Do not drive whole-page parity by hand-rolling per-section work — run `match-page` so the batch assessment happens first. Dispatched per section (subagent) by match-page/replicate/design-qa. Not user-invocable directly.
 disable-model-invocation: true
 allowed-tools:
   - Bash
