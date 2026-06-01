@@ -21,6 +21,28 @@ describe('treeshakeCss', () => {
     expect(out).toContain('body');
     expect(out).toContain(':root');
     expect(out).toContain('@media');
+    expect(out).toContain('.gone');
+  });
+
+  it('keeps interactive-state rules when the base element exists', () => {
+    const out = treeshakeCss('.title:hover { color: blue } .nonexistent:hover { color: red }',
+      '<div class="hero"><h1 class="title">Hi</h1></div>');
+    expect(out).toContain('.title:hover');
+    expect(out).not.toContain('.nonexistent');
+  });
+
+  it('keys off the rightmost compound for descendant selectors', () => {
+    const HTML = '<div class="hero"><h1 class="title">Hi</h1></div>';
+    // key is .title (present) even though .wrapper is absent -> KEEP
+    expect(treeshakeCss('.wrapper .title { color: red }', HTML)).toContain('.title');
+    // key is .nonexistent (absent) even though .hero is present -> DROP
+    expect(treeshakeCss('.hero .nonexistent { color: red }', HTML)).not.toContain('.nonexistent');
+  });
+
+  it('keeps a comma rule when any selector matches', () => {
+    const HTML = '<div class="hero"><h1 class="title">Hi</h1></div>';
+    const out = treeshakeCss('.title, .nonexistent { color: red }', HTML);
+    expect(out).toContain('.title');
   });
 
   it('keeps on doubt: pseudo-elements in key compound (cheerio cannot match them)', () => {

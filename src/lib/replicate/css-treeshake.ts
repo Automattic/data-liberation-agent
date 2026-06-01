@@ -30,9 +30,13 @@ export function treeshakeCss(css: string, carriedHtml: string): string {
     if (rule.parent && rule.parent.type === 'atrule') return;
     const keep = rule.selectors.some((sel) => {
       const key = keyCompound(sel);
-      if (!key) return true;                             // unparseable -> keep
-      if (/^(html|body|:root)/i.test(key)) return true; // structural -> keep
-      try { return $(key).length > 0; } catch { return true; } // bad selector -> keep
+      if (!key) return true;                                  // unparseable -> keep
+      if (/^(html|body|:root)(\b|$)/i.test(key)) return true; // structural -> keep (word boundary)
+      // Strip pseudo-classes/elements (:hover, ::before, :not(...)) so we match the
+      // base element's existence; cheerio silently returns 0 for :hover et al.
+      const base = key.replace(/:{1,2}[\w-]+(\([^)]*\))?/g, '').trim();
+      if (!base) return true;                                 // pseudo-only key -> keep on doubt
+      try { return $(base).length > 0; } catch { return true; } // bad selector -> keep
     });
     if (!keep) rule.remove();
   });
