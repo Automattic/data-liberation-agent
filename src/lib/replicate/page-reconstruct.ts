@@ -1267,7 +1267,11 @@ function cardGroup(
   padding: { top: number; right: number; bottom: number; left: number } | null,
 ): string {
   const textToken = dark ? 'text-inverse' : 'text-default';
-  const r = radius > 0 ? Math.min(radius, 32) : 12;
+  // Default to FLAT corners (0) when the source card has no captured radius — page
+  // builders (Wix/Squarespace) are overwhelmingly square; a phantom 12px radius is
+  // a visible mismatch the source never has. A genuinely-rounded source card carries
+  // a captured radius > 0 and is reproduced (capped to a sane range).
+  const r = radius > 0 ? Math.min(radius, 32) : 0;
   const cssLen = (v: string): string =>
     v.startsWith('var:preset|spacing|') ? `var(--wp--preset--spacing--${v.split('|').pop()})` : v;
   // Captured px → responsive clamp; clamp the raw value to a sane card range so a

@@ -800,6 +800,21 @@ describe('reconstructPagePattern', () => {
     expect(plain.php).not.toContain('has-surface-raised-background-color');
   });
 
+  it('defaults card corners to FLAT (0px) when the source card has no rounding — not a phantom 12px', () => {
+    const s = section({ interactionModel: 'columns', headings: ['Services'] }) as SectionSpec;
+    s.cells = [
+      { heading: 'A', body: ['desc a'], image: null, icon: null, button: null, background: 'rgb(204, 198, 198)', radius: 0 },
+      { heading: 'B', body: ['desc b'], image: null, icon: null, button: null, background: 'rgb(240, 237, 237)', radius: 0 },
+    ] as unknown as SectionSpec['cells'];
+    const r = reconstructPagePattern([s], {
+      patternSlug: 'demo-replica/page-x',
+      title: 'X',
+      paletteTokens: [{ slug: 'surface-base', hex: '#ffffff' }, { slug: 'surface-raised', hex: '#ccc6c6' }],
+    });
+    expect(r.php).not.toContain('border-radius:12px');
+    expect(r.php).toContain('border-radius:0px');
+  });
+
   it('reproduces a card’s captured padding + left icon/text alignment (computed-style transfer)', () => {
     const s = section({ interactionModel: 'columns', headings: ['WHY'] }) as SectionSpec;
     s.textAlign = 'left';
