@@ -12,7 +12,14 @@ const SECTION_MEASURES = [
   { columnCount: 3, bg: 'rgb(204, 198, 198)', hasMedia: true },
   { columnCount: 1, bg: 'rgb(255, 255, 255)', hasMedia: false },
 ];
-const evaluateMock = vi.fn().mockResolvedValue(SECTION_MEASURES);
+// One mock backs both in-page reads (page.evaluate). Distinguish them by the
+// evaluated function's name so the desktop section read can be counted
+// independently of the mobile content-past-fold read: the section read returns
+// the per-section measures, the past-fold read returns a leaf count.
+const evaluateMock = vi.fn(async (fn: unknown) => {
+  if (typeof fn === 'function' && fn.name === 'measureContentPastFoldInBrowser') return 0;
+  return SECTION_MEASURES;
+});
 const newPageMock = vi.fn(async () => ({
   goto: gotoMock,
   waitForLoadState: vi.fn().mockResolvedValue(undefined),
@@ -76,6 +83,7 @@ describe('verifyReplica', () => {
     try {
       screenshotMock.mockClear();
       gotoMock.mockClear();
+      evaluateMock.mockClear();
       const result = await verifyReplica({
         outputDir: dir,
         replicaBaseUrl: 'http://localhost:8881',
@@ -98,8 +106,12 @@ describe('verifyReplica', () => {
         // Per-section DOM metrics are read once (desktop) and attached to the pair.
         expect(pair.sections).toEqual(SECTION_MEASURES);
       }
-      // The section read runs only at desktop — once per URL, not per viewport.
-      expect(evaluateMock).toHaveBeenCalledTimes(2);
+      // The section read runs only at desktop — once per URL, not per viewport
+      // (the mobile content-past-fold read is a separate page.evaluate call).
+      const sectionReads = evaluateMock.mock.calls.filter(
+        ([fn]) => typeof fn === 'function' && fn.name === 'measureReplicaSectionsInBrowser',
+      );
+      expect(sectionReads).toHaveLength(2);
 
       // Replica viewport directories were created
       expect(existsSync(join(dir, 'replica-screenshots', 'desktop'))).toBe(true);
