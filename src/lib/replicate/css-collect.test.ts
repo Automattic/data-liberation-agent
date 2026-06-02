@@ -19,11 +19,30 @@ describe('collectCss', () => {
 
   it('skips a failing sheet without aborting the rest', async () => {
     const html = '<link rel="stylesheet" href="https://cdn/ok.css"><link rel="stylesheet" href="https://cdn/bad.css">';
+    // The bad fetch carries a distinct sentinel inside the thrown error; if the
+    // failed sheet leaked into the output it would surface here.
     const out = await collectCss({
       html, inlineStyleText: '', baseUrl: 'https://src.example/',
-      fetcher: async (url) => { if (url.includes('bad')) throw new Error('500'); return 'OK{}'; },
+      fetcher: async (url) => {
+        if (url.includes('bad')) throw new Error('BAD_SHEET_BODY');
+        return 'OK{}';
+      },
     });
     expect(out).toContain('OK{}');
+    expect(out).not.toContain('BAD_SHEET_BODY');
+  });
+
+  it('invokes onError with the failing URL and reason', async () => {
+    const html = '<link rel="stylesheet" href="https://cdn/ok.css"><link rel="stylesheet" href="https://cdn/bad.css">';
+    const errors: Array<{ url: string; err: unknown }> = [];
+    await collectCss({
+      html, inlineStyleText: '', baseUrl: 'https://src.example/',
+      fetcher: async (url) => { if (url.includes('bad')) throw new Error('boom'); return 'OK{}'; },
+      onError: (url, err) => errors.push({ url, err }),
+    });
+    expect(errors).toHaveLength(1);
+    expect(errors[0].url).toBe('https://cdn/bad.css');
+    expect((errors[0].err as Error).message).toBe('boom');
   });
 
   it('deduplicates identical hrefs', async () => {

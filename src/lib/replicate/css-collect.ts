@@ -6,11 +6,15 @@ export interface CollectOpts {
   baseUrl: string;
   /** Override for tests; defaults to global fetch -> text. */
   fetcher?: (url: string) => Promise<string>;
+  /** Called for each sheet that fails to fetch (non-breaking; caller decides logging). */
+  onError?: (url: string, err: unknown) => void;
 }
 
 const defaultFetcher = async (url: string): Promise<string> => {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`${res.status} ${url}`);
+  const ct = res.headers.get('content-type') ?? '';
+  if (ct && !/css|text\/plain/i.test(ct)) throw new Error(`non-CSS content-type (${ct}) for ${url}`);
   return res.text();
 };
 
@@ -33,8 +37,11 @@ export async function collectCss(opts: CollectOpts): Promise<string> {
   });
   const sheets: string[] = [];
   if (opts.inlineStyleText.trim()) sheets.push(opts.inlineStyleText);
-  for (const url of hrefs) {
-    try { sheets.push(await fetcher(url)); } catch { /* keep-going: skip failed sheet */ }
-  }
+  // Fetch in parallel; preserve source order via the deduped hrefs index. Keep-going on failure.
+  const results = await Promise.allSettled(hrefs.map((url) => fetcher(url)));
+  results.forEach((r, i) => {
+    if (r.status === 'fulfilled') sheets.push(r.value);
+    else opts.onError?.(hrefs[i], r.reason);
+  });
   return sheets.join('\n\n');
 }
