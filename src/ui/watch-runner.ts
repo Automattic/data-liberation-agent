@@ -1127,7 +1127,7 @@ export function shouldDeferFoundationJudgment(judgment: JudgmentNeeded, outDir: 
  * + design sidecars replace the replica-theme path. Running both would let two
  * themes compete and cause compose to fight the design fragment.
  */
-export function isRecomposeJudgment(judgment: JudgmentNeeded): boolean {
+function isRecomposeJudgment(judgment: JudgmentNeeded): boolean {
   return (
     judgment.kind === 'foundation-rev' ||
     judgment.kind === 'theme-piece' ||

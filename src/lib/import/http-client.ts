@@ -3,7 +3,7 @@
  * Uses bare `fetch()` (not imported) so test mocks on globalThis.fetch work.
  */
 
-export class HttpError extends Error {
+class HttpError extends Error {
   constructor(public status: number, message: string) {
     super(message);
     this.name = 'HttpError';

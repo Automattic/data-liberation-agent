@@ -64,7 +64,7 @@ export class ShopifyGraphqlClient {
 // for a rich WooCommerce import in a single round-trip per page.
 // ---------------------------------------------------------------------------
 
-export const SHOPIFY_PRODUCT_QUERY = /* GraphQL */ `
+const SHOPIFY_PRODUCT_QUERY = /* GraphQL */ `
   query GetShopifyProducts(
     $first: Int!,
     $after: String,

@@ -37,7 +37,7 @@ import type { Page } from 'playwright';
 import type { PageSignature, SectionSignature } from './page-signature.js';
 import { extractReviewsFromHtml, type ExtractedReview } from './review-extract.js';
 import { extractFaqsFromHtml, type ExtractedFaq } from './faq-extract.js';
-import { getPlaywright, slugify } from '../../adapters/shared.js';
+import { getPlaywright } from '../../adapters/shared.js';
 import { waitForStable, triggerLazyLoad, withEvaluateTimeout } from '../screenshot/page-helpers.js';
 import { enforceSameOrigin } from '../screenshot/same-origin.js';
 
@@ -877,7 +877,7 @@ interface RawCell {
 
 /** Max persisted section outerHTML for the verbatim fallback. Over this, the
  *  section is not fallback-eligible (truncated HTML can't be safely emitted). */
-export const SECTION_HTML_FALLBACK_CAP = 256 * 1024; // 256KB
+const SECTION_HTML_FALLBACK_CAP = 256 * 1024; // 256KB
 /** Max serialized inline-SVG size we keep. Bigger = an illustration, not a glyph. */
 export const MAX_SVG_MARKUP_BYTES = 8 * 1024; // 8KB
 /** Smallest rendered side (px) we'll treat as a real icon (skip 1px tracking pixels). */
@@ -886,7 +886,7 @@ export const MIN_ICON_PX = 8;
 export const MAX_ICON_PX = 256;
 
 /** Substrings that mark a computed font-family as an icon font (lowercased match). */
-export const ICON_FONT_HINTS = [
+const ICON_FONT_HINTS = [
   'fontawesome',
   'font awesome',
   'material icons',
@@ -2749,7 +2749,3 @@ export async function extractFullFromUrl(
     }
   }
 }
-
-// Keep slugify referenced for callers that key specs by URL; re-export the
-// shared one so the orchestrator persisting specs uses the same derivation.
-export { slugify };

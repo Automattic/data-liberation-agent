@@ -141,7 +141,7 @@ function defaultModelFor(agent: AgentSelection): string | null {
  * the caller falls back to bare-spawn behavior in that case.
  */
 let cachedProjectRoot: string | null | undefined = undefined;
-export function findProjectRootWithMcpConfig(): string | null {
+function findProjectRootWithMcpConfig(): string | null {
   if (cachedProjectRoot !== undefined) return cachedProjectRoot;
   let dir: string;
   try {

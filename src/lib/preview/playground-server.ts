@@ -9,7 +9,7 @@ import { persistBlueprint, VFS_MOUNT_DIR, IMPORT_COMPLETE_MARKER } from './bluep
 import { isStudioAvailable, startStudioPreview } from './studio.js';
 import type { PreviewPhase, StartPreviewOpts, StartPreviewResult } from './types.js';
 
-export function playgroundDir(outputDir: string): string {
+function playgroundDir(outputDir: string): string {
   return join(resolve(outputDir), 'playground');
 }
 
@@ -54,11 +54,7 @@ export function logFilePath(outputDir: string): string {
   return join(playgroundDir(outputDir), 'preview.log');
 }
 
-export function blueprintFilePath(outputDir: string): string {
-  return join(playgroundDir(outputDir), 'blueprint.json');
-}
-
-export function lockFilePath(outputDir: string): string {
+function lockFilePath(outputDir: string): string {
   return join(playgroundDir(outputDir), '.lock');
 }
 

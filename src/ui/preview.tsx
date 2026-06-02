@@ -249,7 +249,7 @@ async function renderInlineSpinner(opts: RunOpts): Promise<StartPreviewResult> {
  * post-extract). Shows a spinner while booting, returns once Playground is
  * ready. The Playground process is detached and outlives this one.
  */
-export async function startInlinePreview(opts: RunOpts): Promise<StartPreviewResult> {
+async function startInlinePreview(opts: RunOpts): Promise<StartPreviewResult> {
   const useSpinner = process.stdout.isTTY && !opts.nonInteractive;
   const result = useSpinner
     ? await renderInlineSpinner(opts)

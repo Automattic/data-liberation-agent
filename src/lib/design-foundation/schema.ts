@@ -21,7 +21,7 @@ export const RoleObj = z.object({
   evidence: z.array(z.string()).min(1),
 });
 
-export const GradientObj = z.object({
+const GradientObj = z.object({
   css: z.string().min(1),
   role: z.string().min(1),
   evidence: z.array(z.string()).min(1),

@@ -8,7 +8,7 @@ export interface SourceSiteMeta {
   language?: string;
 }
 
-export function normalizeSiteOptionValue(value: unknown): string | null {
+function normalizeSiteOptionValue(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const trimmed = value.replace(/\s+/g, ' ').trim();
   return trimmed.length > 0 ? trimmed : null;

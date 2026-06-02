@@ -7,8 +7,6 @@
     "data-liberation": "./dist/cli.js"
   },
   "scripts": {
-    "discover": "node scripts/discover.js",
-    "extract": "node scripts/extract.js",
     "import": "tsx src/cli.ts import",
     "build": "tsc && node scripts/copy-runtime-assets.mjs",
     "copy-runtime-assets": "node scripts/copy-runtime-assets.mjs",
@@ -31,6 +29,7 @@
     "@wordpress/block-serialization-default-parser": "^5.47.0",
     "@wp-playground/cli": "^3.1.20",
     "cheerio": "^1.2.0",
+    "domhandler": "^5.0.3",
     "fast-xml-parser": "^5.5.10",
     "ink": "^6.8.0",
     "ink-spinner": "^5.0.0",

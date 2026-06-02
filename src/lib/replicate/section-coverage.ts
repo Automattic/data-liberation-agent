@@ -45,7 +45,7 @@ export interface CoverageResult {
  *  drops BELOW this fraction (i.e. the structured render lost more than half the
  *  copy). Set conservatively (0.5, not 0.8) because the island carries no source
  *  CSS — see the file header. Missing images trip the fallback independently. */
-export const TEXT_FLOOR = 0.5;
+const TEXT_FLOOR = 0.5;
 
 /** Collapse whitespace + case-fold so trivial reflow doesn't read as a loss. */
 function normalize(s: string): string {

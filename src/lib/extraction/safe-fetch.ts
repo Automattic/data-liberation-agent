@@ -22,7 +22,7 @@ export const MAX_DOWNLOAD_BYTES = 25 * 1024 * 1024; // 25 MB
 /** Max redirects to follow before giving up. */
 export const MAX_REDIRECTS = 5;
 /** Default per-request timeout. */
-export const DEFAULT_TIMEOUT_MS = 30_000;
+const DEFAULT_TIMEOUT_MS = 30_000;
 
 export class SsrfBlockedError extends Error {
   constructor(message: string) {

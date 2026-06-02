@@ -11,7 +11,7 @@
 //   patterns[] ──▶ for each: drift ✓ · security ✓ · provenance ✓ · structure ✓ ──▶ { ok, errors[], warnings[] }
 //
 import { validateBlockMarkup } from './validate-block-markup.js';
-export const ALLOWED_INTERACTION_MODELS = new Set([
+const ALLOWED_INTERACTION_MODELS = new Set([
   'static', 'gallery', 'media-text', 'columns', 'cover-with-headline',
   'animated-cover', 'logo-strip', 'testimonial', 'cta', 'blog-card-grid',
   'project-card-grid', 'price-list', 'product-card-row', 'review-grid',
@@ -95,7 +95,7 @@ function matchesConsecutiveEntries(heading: string, entries: string[]): boolean 
  * below this. Set high enough to reject paraphrase, with headroom for a stray
  * captured artifact (a trailing word, a split node) so legit copy isn't flagged.
  */
-export const BODY_COPY_CONTAINMENT_THRESHOLD = 0.8;
+const BODY_COPY_CONTAINMENT_THRESHOLD = 0.8;
 
 /**
  * Shared injection / XSS scan over arbitrary block markup. Returns the list of
@@ -114,7 +114,7 @@ export const BODY_COPY_CONTAINMENT_THRESHOLD = 0.8;
  * is source-verbatim by construction); injection + structure checks still run
  * on the full markup, so this never weakens the security boundary.
  */
-export function stripHtmlFallbackBlocks(markup: string): string {
+function stripHtmlFallbackBlocks(markup: string): string {
   return markup.replace(/<!--\s*wp:html\s*-->[\s\S]*?<!--\s*\/wp:html\s*-->/g, '');
 }
 
