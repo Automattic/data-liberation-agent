@@ -110,15 +110,18 @@ ${enqueue}
  * Returns an array of `{path, content}` — the caller writes them to disk.
  */
 export function buildAltThemeFiles(input: AltThemeInput): ThemeFile[] {
+  // Block themes do NOT auto-enqueue style.css on the front end — it's only the
+  // theme-header file. So the reset must ride the enqueued site.css instead, and
+  // it goes FIRST so the carried source CSS overrides it (the reset must lose the
+  // cascade to the source's own rules).
+  const RESET =
+    'body.lib-alt-site{all:revert}\nbody.lib-alt-site *{box-sizing:border-box}\n';
+
   const files: ThemeFile[] = [
-    // Required by WordPress to recognise the theme.
+    // Required by WordPress to recognise the theme — header metadata only.
     {
       path: 'style.css',
-      content:
-        styleCssHeader(input.themeName) +
-        // Minimal reset: honour revert so source CSS owns all styling.
-        'body.lib-alt-site { all: revert; }\n' +
-        'body.lib-alt-site * { box-sizing: border-box; }\n',
+      content: styleCssHeader(input.themeName),
     },
     // theme.json: full-width layout so carried HTML fills the viewport.
     {
@@ -139,8 +142,8 @@ export function buildAltThemeFiles(input: AltThemeInput): ThemeFile[] {
     // Template parts.
     { path: 'parts/header.html', content: input.headerIsland + '\n' },
     { path: 'parts/footer.html', content: input.footerIsland + '\n' },
-    // Site-wide CSS.
-    { path: 'assets/css/site.css', content: input.siteCss },
+    // Site-wide CSS — reset first (so source rules win the cascade), then carried CSS.
+    { path: 'assets/css/site.css', content: RESET + input.siteCss },
     // templates/index.html is REQUIRED by WordPress for a block theme to be
     // activatable — without it the theme won't appear in the admin or will
     // throw a "missing required files" error.  It uses the same

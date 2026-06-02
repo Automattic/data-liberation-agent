@@ -47,4 +47,32 @@ describe('buildAltThemeFiles', () => {
     const css = byPath('style.css');
     expect(css).toContain('Theme Name: Acme Alt');
   });
+
+  it('style.css has a Theme Name header and NO Template field (not a child theme)', () => {
+    const s = byPath('style.css');
+    expect(s).toContain('Theme Name:');
+    expect(s).not.toMatch(/^\s*Template:/m);
+  });
+
+  it('site.css carries the reset before the carried CSS', () => {
+    const css = byPath('assets/css/site.css');
+    expect(css).toContain('all:revert');
+    expect(css.indexOf('all:revert')).toBeLessThan(css.indexOf('body.lib-alt-site{margin:0}'));
+  });
+
+  it('theme.json is valid JSON at version 3', () => {
+    const parsed = JSON.parse(byPath('theme.json'));
+    expect(parsed.version).toBe(3);
+  });
+
+  it('a non-home page emits templates/page-<slug>.html and is_page() enqueue/body-class', () => {
+    const f = buildAltThemeFiles({
+      themeName: 'Acme Alt', headerIsland: '', footerIsland: '', siteCss: '',
+      pages: [{ slug: 'about', isHome: false, pageCss: '' }],
+    });
+    const paths = f.map((x) => x.path);
+    expect(paths).toContain('templates/page-about.html');
+    const fn = f.find((x) => x.path === 'functions.php')!.content;
+    expect(fn).toContain("is_page( 'about' )");
+  });
 });
