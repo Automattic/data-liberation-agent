@@ -67,4 +67,33 @@ describe('carryHtml', () => {
     expect(styleText).toContain('.b{color:blue}');
     expect(styleText).toBe('.a{color:red}\n.b{color:blue}');
   });
+
+  it('strips explicit width/height from object-fit:cover images (inline style + attrs)', () => {
+    const { html } = carryHtml(
+      '<img src="x.jpg" width="980" height="733" style="width: 1440px; height: 733px; object-fit: cover; object-position: 100% 0%;">',
+      {},
+    );
+    expect(html).not.toMatch(/width="980"/);
+    expect(html).not.toMatch(/height="733"/);
+    expect(html).not.toMatch(/width:\s*1440px/);
+    expect(html).not.toMatch(/height:\s*733px/);
+    // cover behavior is preserved
+    expect(html).toContain('object-fit: cover');
+    expect(html).toContain('object-position: 100% 0%');
+  });
+
+  it('keeps explicit width/height on images WITHOUT object-fit:cover', () => {
+    const { html } = carryHtml(
+      '<img src="x.jpg" width="100" height="50" style="width: 100px; height: 50px; object-fit: contain;">',
+      {},
+    );
+    expect(html).toContain('width="100"');
+    expect(html).toContain('height="50"');
+    expect(html).toContain('width: 100px');
+  });
+
+  it('does not crash on a cover image that has no width/height to strip', () => {
+    const { html } = carryHtml('<img src="x.jpg" style="object-fit: cover;">', {});
+    expect(html).toContain('object-fit: cover');
+  });
 });

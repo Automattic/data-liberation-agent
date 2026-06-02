@@ -109,6 +109,26 @@ export function carryHtml(regionHtml: string, opts: CarryOpts): CarryResult {
     if (!iframeAllowed(src)) $(el).remove();
   });
 
+  // `object-fit: cover` images are meant to FILL their container — an explicit
+  // width/height fixes the box to a captured pixel size and fights that (the
+  // builder-site case where a hero/card carries `width:1440px;height:733px`).
+  // Drop the explicit width/height (inline declarations AND attributes); keep
+  // object-fit/object-position so the cover crop is preserved and the container
+  // CSS drives the size.
+  $('img[style]').each((_, el) => {
+    const style = $(el).attr('style') ?? '';
+    if (!/object-fit\s*:\s*cover/i.test(style)) return;
+    const cleaned = style
+      .split(';')
+      .map((d) => d.trim())
+      .filter((d) => d && !/^(width|height)\s*:/i.test(d))
+      .join('; ');
+    if (cleaned) $(el).attr('style', cleaned + ';');
+    else $(el).removeAttr('style');
+    $(el).removeAttr('width');
+    $(el).removeAttr('height');
+  });
+
   const html = $.html();
 
   // Injection gate — must pass the same trust boundary as the pattern validator.
