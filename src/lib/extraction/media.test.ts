@@ -60,6 +60,20 @@ describe('upgradeMediaUrl', () => {
     expect(upgradeMediaUrl('https://cdn.shopify.com/s/files/1/x_600x400.jpg')).toBe('https://cdn.shopify.com/s/files/1/x_600x400.jpg');
     expect(upgradeMediaUrl('https://static.wixstatic.com/media/abc~mv2.jpg')).toBe('https://static.wixstatic.com/media/abc~mv2.jpg');
   });
+  it('scales the FILL output dims, never the /crop/ region coords', () => {
+    // The crop segment `w_500,h_160` is a region of the master image — scaling it
+    // pushes the crop out of bounds and the CDN returns a garbage fragment. Only
+    // the trailing fill output (`w_153,h_49`) may be upscaled for retina.
+    const u =
+      'https://static.wixstatic.com/media/abc~mv2.png/v1/crop/x_0,y_167,w_500,h_160/fill/w_153,h_49,al_c,q_85,enc_avif/Logo%20(1).png';
+    const up = upgradeMediaUrl(u);
+    // crop region MUST be untouched
+    expect(up).toContain('crop/x_0,y_167,w_500,h_160/');
+    // fill output doubled (longest=153, scale=2)
+    expect(up).toContain('fill/w_306,h_98,');
+    // no out-of-bounds w_1000 anywhere
+    expect(up).not.toContain('w_1000');
+  });
 });
 
 describe('deriveFilenameFromUrl', () => {

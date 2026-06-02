@@ -108,18 +108,26 @@ export function upgradeMediaUrl(url: string): string {
   try {
     const u = new URL(url);
     if (!u.hostname.endsWith('wixstatic.com')) return url;
-    const wm = u.pathname.match(/\bw_(\d+)/);
-    const hm = u.pathname.match(/\bh_(\d+)/);
-    if (!wm && !hm) return url;
-    const w = wm ? Number(wm[1]) : 0;
-    const h = hm ? Number(hm[1]) : 0;
+    // Target the LAST w_/h_ pair — the OUTPUT (fill/fit) dimensions. In a
+    // `/v1/crop/x,y,w,h/fill/w,h/` URL the FIRST w_/h_ are the crop REGION
+    // coords (relative to the master); scaling those pushes the crop out of
+    // bounds and the CDN returns a garbage fragment. The output dims are always
+    // last in Wix's path order, and for a plain `/fill/w,h/` URL the last pair
+    // is the only pair, so this is correct in both shapes.
+    const wMatches = [...u.pathname.matchAll(/\bw_(\d+)/g)];
+    const hMatches = [...u.pathname.matchAll(/\bh_(\d+)/g)];
+    if (wMatches.length === 0 && hMatches.length === 0) return url;
+    const w = wMatches.length ? Number(wMatches[wMatches.length - 1][1]) : 0;
+    const h = hMatches.length ? Number(hMatches[hMatches.length - 1][1]) : 0;
     const longest = Math.max(w, h);
     if (!longest) return url;
     const scale = Math.min(2, MEDIA_UPGRADE_MAX_DIM / longest);
     if (scale <= 1) return url; // already at/above the cap — leave it
+    // Replace only the LAST occurrence of each (greedy `.*` consumes earlier
+    // crop-region coords, leaving them untouched).
     u.pathname = u.pathname
-      .replace(/\bw_(\d+)/, (_m, d: string) => `w_${Math.round(Number(d) * scale)}`)
-      .replace(/\bh_(\d+)/, (_m, d: string) => `h_${Math.round(Number(d) * scale)}`);
+      .replace(/^(.*)\bw_(\d+)/, (_m, pre: string, d: string) => `${pre}w_${Math.round(Number(d) * scale)}`)
+      .replace(/^(.*)\bh_(\d+)/, (_m, pre: string, d: string) => `${pre}h_${Math.round(Number(d) * scale)}`);
     return u.toString();
   } catch {
     return url;

@@ -116,6 +116,43 @@ describe('rewriteMediaUrls', () => {
     expect(out).toContain(`srcset="${localUrl} 1x, ${localUrl} 2x"`);
     expect(out).toContain(`src="${localUrl}"`);
   });
+
+  it('rewrites a transform <img src> when only the BASE url is mapped (no transform-tail mangle)', () => {
+    // installMediaForUrl stores the BASE wixstatic URL as the map key (that's the
+    // stub source). Carried blog/post <img> use the transform CDN path. The base
+    // key is a substring-prefix of the transform URL, so applying it first would
+    // leave `<local>.jpg/v1/fill/.../img.jpg` (a 404). Longest-source-first fixes it.
+    const hash = '670df9_94b496dd08804719b2be70c43165684f';
+    const base = `https://static.wixstatic.com/media/${hash}~mv2.jpg`;
+    const local = `http://localhost:8884/wp-content/uploads/2026/05/${hash}-mv2.jpg`;
+    const map = new Map([[base, local]]);
+    const transform = `${base}/v1/fill/w_518,h_311,al_c,q_80,enc_avif,quality_auto/${hash}~mv2.jpg`;
+    const html = `<img src="${transform}">`;
+
+    const out = rewriteMediaUrls(html, map);
+
+    expect(out).toBe(`<img src="${local}">`);
+    expect(out).not.toContain('static.wixstatic.com');
+    expect(out).not.toContain(`${local}/v1`); // no leftover transform tail
+  });
+
+  it('rewrites a Wix srcset whose display filename contains parentheses (no `).png` mangle)', () => {
+    // The Wix logo srcset ends each variant with the display name `… (1).png`.
+    // URL_LIKE must not truncate at the `)`, or the rewrite leaves `<local>).png`.
+    const hash = '670df9_dc553b632f22456e8f3e591105cdc3da';
+    const base = `https://static.wixstatic.com/media/${hash}~mv2.png`;
+    const local = `http://localhost:8884/wp-content/uploads/2026/05/Cornelius-Holmes-1.png`;
+    const map = new Map([[base, local]]);
+    const v1 = `${base}/v1/crop/x_0,y_167,w_500,h_160/fill/w_153,h_49,q_85,enc_avif,quality_auto/Cornelius%20Holmes%20(1).png`;
+    const v2 = `${base}/v1/crop/x_0,y_167,w_500,h_160/fill/w_306,h_98,q_85,enc_avif,quality_auto/Cornelius%20Holmes%20(1).png`;
+    const html = `<img srcset="${v1} 1x, ${v2} 2x" src="${v1}">`;
+
+    const out = rewriteMediaUrls(html, map);
+
+    expect(out).toBe(`<img srcset="${local} 1x, ${local} 2x" src="${local}">`);
+    expect(out).not.toContain('static.wixstatic.com');
+    expect(out).not.toContain(').png'); // the mangle signature
+  });
 });
 
 describe('toLocalUrlMapping', () => {

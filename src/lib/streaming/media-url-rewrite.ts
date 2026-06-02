@@ -80,8 +80,17 @@ export function rewriteMediaUrls(
   }
 
   let out = input;
-  for (const [source, local] of replacements.entries()) {
-    if (!source) continue;
+  // Apply LONGEST source URLs first. A mapped BASE url (e.g. `…/<id>~mv2.jpg`)
+  // is a substring-prefix of a carried transform url (`…/<id>~mv2.jpg/v1/fill/
+  // …/img.jpg`). The alias index resolves that transform url to the same local
+  // file and adds it to `replacements`, but if the shorter base entry runs
+  // first it rewrites only the prefix — leaving `<local>/v1/fill/…/img.jpg`
+  // (a 404). Longest-first guarantees the most-specific (full) url is replaced
+  // before any shorter substring of it.
+  const ordered = [...replacements.entries()]
+    .filter(([source]) => source)
+    .sort((a, b) => b[0].length - a[0].length);
+  for (const [source, local] of ordered) {
     // Escape the source URL for safe inclusion in a RegExp. This handles
     // querystring `?`, `&`, `+` and other regex metacharacters that often
     // appear in CDN URLs.
@@ -111,7 +120,13 @@ export function toLocalUrlMapping(
   return out;
 }
 
-const URL_LIKE = /https?:\/\/[^\s"'<>\\)]+/g;
+// NB: `)` is intentionally NOT excluded. Wix appends the human display filename
+// to transform URLs (`…/Cornelius%20Holmes%20(1).png`), so stopping at `)` would
+// truncate the URL at `(1`, and the rewrite would then swap only the prefix —
+// leaving `<local>).png` (a 404). Candidates are extracted from quoted attribute
+// surfaces / srcset (whitespace- and comma-delimited), so a literal `)` is part
+// of the URL, never a delimiter.
+const URL_LIKE = /https?:\/\/[^\s"'<>\\]+/g;
 
 /**
  * Collect plausible media URLs from common attribute surfaces. We don't try
