@@ -31,4 +31,40 @@ describe('carryHtml', () => {
     expect(html).toContain('/wp/up/x.png');
     expect(html).toContain('/about-2');
   });
+
+  it('rewrites media URLs that contain multi-param query strings', () => {
+    const { html } = carryHtml('<img src="https://cdn/x?w=300&h=200">', {
+      mediaUrlMap: new Map([['https://cdn/x?w=300&h=200', '/wp/up/x.png']]),
+    });
+    expect(html).toContain('/wp/up/x.png');
+  });
+
+  it('strips <base> so relative links are not redirected to the source domain', () => {
+    const { html } = carryHtml('<base href="https://source.example/"><a href="/x">y</a>', {});
+    expect(html).not.toContain('<base');
+    expect(html).toContain('href="/x"');
+  });
+
+  it('strips javascript: hrefs but keeps the element and text', () => {
+    const { html } = carryHtml('<a href="javascript:alert(1)">click</a>', {});
+    expect(html).not.toContain('javascript:');
+    expect(html).toContain('>click</a>');
+    expect(html).toContain('<a');
+  });
+
+  it('strips vbscript: hrefs (with leading whitespace)', () => {
+    const { html } = carryHtml('<a href="  vbscript:msgbox(1)">click</a>', {});
+    expect(html).not.toContain('vbscript:');
+    expect(html).toContain('>click</a>');
+  });
+
+  it('joins multiple <style> blocks into styleText with a newline', () => {
+    const { styleText } = carryHtml(
+      '<style>.a{color:red}</style><div>x</div><style>.b{color:blue}</style>',
+      {},
+    );
+    expect(styleText).toContain('.a{color:red}');
+    expect(styleText).toContain('.b{color:blue}');
+    expect(styleText).toBe('.a{color:red}\n.b{color:blue}');
+  });
 });

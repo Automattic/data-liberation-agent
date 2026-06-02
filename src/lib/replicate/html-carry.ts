@@ -18,8 +18,7 @@ import { scanForInjection } from './validate-artifacts.js';
 const IFRAME_ALLOW: RegExp[] = [
   /(^|\.)youtube\.com$/i,
   /(^|\.)youtube-nocookie\.com$/i,
-  /(^|\.)vimeo\.com$/i,
-  /(^|\.)player\.vimeo\.com$/i,
+  /(^|\.)vimeo\.com$/i, // also covers player.vimeo.com
   /(^|\.)google\.com$/i, // Maps embeds
 ];
 
@@ -54,15 +53,29 @@ function iframeAllowed(src: string): boolean {
  * Sanitize and URL-rewrite a verbatim region of source HTML.
  *
  * - Keeps class names and element structure intact.
- * - Strips `<script>`, `<noscript>`, and inline event handlers (`on*=`).
+ * - Strips `<script>`, `<noscript>`, `<base>`, and inline event handlers (`on*=`).
+ * - Strips `javascript:`/`vbscript:` hrefs (keeps the element + text).
  * - Extracts `<style>` blocks into `styleText` (removes them from `html`).
  * - Removes non-allowlisted `<iframe>` elements.
  * - Rewrites media URLs and internal hrefs via the provided maps.
  * - Throws if the sanitized result still contains injection vectors.
  */
 export function carryHtml(regionHtml: string, opts: CarryOpts): CarryResult {
+  // URL rewrites run on the RAW string BEFORE cheerio. cheerio's serializer
+  // re-encodes `&` to `&amp;` in attribute values, so a CDN URL like
+  // `https://cdn/x?w=300&h=200` would no longer exist as a substring post-load
+  // and the rewrite (which matches the source URL verbatim) would silently
+  // no-op, shipping the source URL. Rewriting first sidesteps that entirely.
+  let input = regionHtml;
+  if (opts.mediaUrlMap && opts.mediaUrlMap.size > 0) {
+    input = rewriteMediaUrls(input, opts.mediaUrlMap);
+  }
+  if (opts.linkMap && opts.linkMap.size > 0) {
+    input = rewriteInternalLinks(input, opts.linkMap);
+  }
+
   // Fragment mode (third arg = false) — no <html><head><body> wrapper injected.
-  const $ = cheerio.load(regionHtml, null, false);
+  const $ = cheerio.load(input, null, false);
 
   // Extract and remove <style> blocks.
   const styles: string[] = [];
@@ -71,8 +84,9 @@ export function carryHtml(regionHtml: string, opts: CarryOpts): CarryResult {
     $(el).remove();
   });
 
-  // Remove script and noscript elements entirely.
-  $('script, noscript').remove();
+  // Remove script, noscript, and base elements entirely. `<base href>` would
+  // re-root every relative link/asset onto the source domain.
+  $('script, noscript, base').remove();
 
   // Strip inline event handler attributes (onclick, onerror, onload, …).
   $('*').each((_, el) => {
@@ -82,21 +96,20 @@ export function carryHtml(regionHtml: string, opts: CarryOpts): CarryResult {
     }
   });
 
+  // Strip javascript:/vbscript: hrefs (leading whitespace allowed) — the
+  // element + its text are kept, only the dangerous navigation target is dropped.
+  $('a[href]').each((_, el) => {
+    const href = $(el).attr('href') ?? '';
+    if (/^\s*(?:javascript|vbscript):/i.test(href)) $(el).removeAttr('href');
+  });
+
   // Remove iframes not in the allowlist.
   $('iframe').each((_, el) => {
     const src = $(el).attr('src') ?? '';
     if (!iframeAllowed(src)) $(el).remove();
   });
 
-  let html = $.html();
-
-  // URL rewrites (same maps as the block-reconstruction path).
-  if (opts.mediaUrlMap && opts.mediaUrlMap.size > 0) {
-    html = rewriteMediaUrls(html, opts.mediaUrlMap);
-  }
-  if (opts.linkMap && (opts.linkMap as Map<string, unknown>).size > 0) {
-    html = rewriteInternalLinks(html, opts.linkMap);
-  }
+  const html = $.html();
 
   // Injection gate — must pass the same trust boundary as the pattern validator.
   const violations = scanForInjection(html);
