@@ -102,4 +102,48 @@ describe('buildAltThemeFiles', () => {
     expect(paths).not.toContain('templates/page-post-a.html');
     expect(paths).not.toContain('templates/page-post-b.html');
   });
+
+  describe('scaffolded chrome architecture', () => {
+    const scaffold = { openWrap: '<div id="C"><div id="root">', midBefore: '<div id="inner">', midAfter: '</div>', closeWrap: '</div></div>' };
+    const f = buildAltThemeFiles({
+      themeName: 'Acme Alt',
+      headerIsland: '<!-- wp:html --><header id="H">nav</header><!-- /wp:html -->',
+      footerIsland: '<!-- wp:html --><footer id="F">foot</footer><!-- /wp:html -->',
+      siteCss: 'body.lib-alt-site #H{a:b}',
+      pages: [{ slug: 'about', isHome: false, scaffold, pageCss: '' }],
+    });
+    const get = (p: string) => f.find((x) => x.path === p)?.content ?? '';
+
+    it('puts the wrapper scaffold + chrome parts + post-content in the template', () => {
+      const tpl = get('templates/page-about.html');
+      // wrapper chunks as core/html, chrome as parts, post-content between
+      expect(tpl).toContain('<div id="C"><div id="root">');
+      expect(tpl).toContain('<div id="inner">');
+      expect(tpl).toContain('wp:template-part {"slug":"header","tagName":"div"}');
+      expect(tpl).toContain('wp:post-content');
+      expect(tpl).toContain('wp:template-part {"slug":"footer","tagName":"div"}');
+      // ordering: header part before post-content before footer part
+      expect(tpl.indexOf('"header"')).toBeLessThan(tpl.indexOf('wp:post-content'));
+      expect(tpl.indexOf('wp:post-content')).toBeLessThan(tpl.indexOf('"footer"'));
+    });
+
+    it('adds the display:contents wrapper rescue to site.css when scaffolded', () => {
+      expect(get('assets/css/site.css')).toContain('.wp-block-template-part{display:contents}');
+    });
+
+    it('declares header/footer template-part areas in theme.json', () => {
+      const tj = JSON.parse(get('theme.json'));
+      const areas = (tj.templateParts ?? []).map((p: { area: string }) => p.area);
+      expect(areas).toContain('header');
+      expect(areas).toContain('footer');
+    });
+
+    it('omits the display:contents rescue when no page has a scaffold', () => {
+      const plain = buildAltThemeFiles({
+        themeName: 'Acme Alt', headerIsland: '', footerIsland: '', siteCss: '',
+        pages: [{ slug: 'about', isHome: false, pageCss: '' }],
+      });
+      expect(plain.find((x) => x.path === 'assets/css/site.css')?.content).not.toContain('display:contents');
+    });
+  });
 });

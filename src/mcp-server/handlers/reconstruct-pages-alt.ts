@@ -92,7 +92,7 @@ export function assembleAltTheme(input: AssembleInput): AssembleOutput {
       siteCss = r.chromeCss;
     }
 
-    scaffoldPages.push({ slug: p.slug, isHome: p.isHome, postType: p.postType, pageCss: r.mainCss });
+    scaffoldPages.push({ slug: p.slug, isHome: p.isHome, postType: p.postType, pageCss: r.mainCss, scaffold: r.scaffold });
     wxrPages.push({
       slug: p.slug,
       title: p.title,

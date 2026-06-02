@@ -1,6 +1,7 @@
 import type { SectionSpec } from './section-extract.js';
 import type { InternalLinkMap } from '../streaming/internal-link-rewrite.js';
 import { splitRegions } from './split-regions.js';
+import { splitRegionsDeep } from './split-regions-deep.js';
 import { carryHtml } from './html-carry.js';
 import { scopeCss } from './css-scope.js';
 import { treeshakeCss } from './css-treeshake.js';
@@ -15,10 +16,32 @@ export interface ReconstructAltInput {
   linkMap?: InternalLinkMap;
 }
 
+/**
+ * Raw wrapper-scaffold chunks that go in the TEMPLATE as core/html (not in
+ * post_content). Concatenated with the chrome parts + post-content they rebuild
+ * the exact source DOM, so the carried CSS holds while the post holds only the
+ * editable content sections. Present only when chrome was located (`splitChrome`).
+ */
+export interface AltScaffold {
+  openWrap: string;
+  midBefore: string;
+  midAfter: string;
+  closeWrap: string;
+}
+
 export interface ReconstructAltResult {
+  /** The page's post_content. When `splitChrome`, this is the content sections
+   *  only (N core/html blocks); otherwise the whole carried body as one island. */
   mainIsland: string;
+  /** Per-section core/html blocks (the content area). `[mainIsland]` when not split. */
+  postContentBlocks: string[];
   headerIsland: string;
   footerIsland: string;
+  /** True when deep chrome was found → the template carries the wrapper scaffold
+   *  + chrome parts and post_content is content-only. False → legacy single island. */
+  splitChrome: boolean;
+  /** The wrapper chunks for the template. Present only when `splitChrome`. */
+  scaffold?: AltScaffold;
   /** Source CSS scoped to `body.lib-alt-site` (site-wide), treeshaken against the
    *  header+footer DOM only — styles the shared chrome parts on EVERY page. */
   chromeCss: string;
@@ -47,40 +70,76 @@ function island(html: string): string {
  * No IO: callers are responsible for persisting outputs.
  */
 export function reconstructPageAlt(input: ReconstructAltInput): ReconstructAltResult {
-  const regions = splitRegions(input.bodyHtml, input.specs);
-
   const carryOpts = { mediaUrlMap: input.mediaUrlMap, linkMap: input.linkMap };
-
-  const main = carryHtml(regions.mainHtml, carryOpts);
-  const header = regions.headerHtml
-    ? carryHtml(regions.headerHtml, carryOpts)
-    : { html: '', styleText: '' };
-  const footer = regions.footerHtml
-    ? carryHtml(regions.footerHtml, carryOpts)
-    : { html: '', styleText: '' };
-
   const SITE_SCOPE = 'body.lib-alt-site';
   const pageScope = `body.lib-alt-site.lib-alt-page-${input.slug}`;
   const rewriteUrl = (u: string): string | null => input.mediaUrlMap.get(u) ?? null;
 
-  // Chrome sheet: scope site-wide, keep only rules matching header/footer DOM.
+  // Carry the WHOLE body ONCE (sanitize, strip scripts, rewrite media/link URLs,
+  // extract inline <style>). Splitting the already-carried string with byte ops
+  // keeps the chunks lossless — running cheerio on an unbalanced wrapper fragment
+  // would auto-close it and break the concatenation.
+  const carried = carryHtml(input.bodyHtml, carryOpts);
+  const split = splitRegionsDeep(carried.html);
+
+  if (split.found) {
+    // Deep chrome path: chrome → parts, wrapper chunks → template, sections → post.
+    const chromeDom = `${split.headerHtml}${split.footerHtml}`;
+    const allCss = [input.css, carried.styleText].filter(Boolean).join('\n');
+    const chromeCss = chromeDom
+      ? treeshakeCss(scopeCss(allCss, { scope: SITE_SCOPE, scopeId: 'site', rewriteUrl }), chromeDom)
+      : '';
+    // Page sheet treeshakes against the NON-chrome DOM so chrome rules live only
+    // in the site-wide sheet, not duplicated per page.
+    const mainDom =
+      split.openWrap + split.midBefore + split.sectionsHtml.join('') + split.midAfter + split.closeWrap;
+    const mainCss = treeshakeCss(
+      scopeCss(allCss, { scope: pageScope, scopeId: input.slug, rewriteUrl }),
+      mainDom,
+    );
+    const postContentBlocks = split.sectionsHtml.map(island);
+    return {
+      mainIsland: postContentBlocks.join('\n'),
+      postContentBlocks,
+      headerIsland: island(split.headerHtml),
+      footerIsland: island(split.footerHtml),
+      splitChrome: true,
+      scaffold: {
+        openWrap: split.openWrap,
+        midBefore: split.midBefore,
+        midAfter: split.midAfter,
+        closeWrap: split.closeWrap,
+      },
+      chromeCss,
+      mainCss,
+    };
+  }
+
+  // Legacy fallback: no deep chrome → try a top-level <header>/<footer> split and
+  // emit the whole body as one island.
+  const regions = splitRegions(input.bodyHtml, input.specs);
+  const main = carryHtml(regions.mainHtml, carryOpts);
+  const header = regions.headerHtml ? carryHtml(regions.headerHtml, carryOpts) : { html: '', styleText: '' };
+  const footer = regions.footerHtml ? carryHtml(regions.footerHtml, carryOpts) : { html: '', styleText: '' };
+
   const chromeDom = `${header.html}${footer.html}`;
   const chromeCombined = [input.css, header.styleText, footer.styleText].filter(Boolean).join('\n');
   const chromeCss = chromeDom
     ? treeshakeCss(scopeCss(chromeCombined, { scope: SITE_SCOPE, scopeId: 'site', rewriteUrl }), chromeDom)
     : '';
-
-  // Page sheet: scope per-page, keep only rules matching the main DOM.
   const mainCombined = [input.css, main.styleText].filter(Boolean).join('\n');
   const mainCss = treeshakeCss(
     scopeCss(mainCombined, { scope: pageScope, scopeId: input.slug, rewriteUrl }),
     main.html,
   );
 
+  const mainIsland = island(main.html);
   return {
-    mainIsland: island(main.html),
+    mainIsland,
+    postContentBlocks: mainIsland ? [mainIsland] : [],
     headerIsland: island(header.html),
     footerIsland: island(footer.html),
+    splitChrome: false,
     chromeCss,
     mainCss,
   };

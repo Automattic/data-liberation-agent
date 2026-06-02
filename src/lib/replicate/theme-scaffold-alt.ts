@@ -18,6 +18,8 @@
 //   - assets/css/page-<slug>.css — enqueued conditionally via wp_enqueue_scripts
 //
 
+import type { AltScaffold } from './page-reconstruct-alt.js';
+
 export interface AltPage {
   /** URL-safe slug (kebab-case, produced by slugify — no quotes or special chars). */
   slug: string;
@@ -33,6 +35,12 @@ export interface AltPage {
   postType?: 'page' | 'post';
   /** Scoped CSS for this page (already scoped under `body.lib-alt-page-<slug>`). */
   pageCss: string;
+  /**
+   * Per-page wrapper-scaffold chunks. When present, the page template carries the
+   * scaffold + chrome parts and renders `post_content` (content sections only)
+   * between them — the editable-content architecture. Absent → legacy template.
+   */
+  scaffold?: AltScaffold;
 }
 
 /** body_class / enqueue conditional for a page (front page → single → page). */
@@ -85,6 +93,37 @@ function pageTemplate(): string {
   ].join('\n');
 }
 
+/** Wrap raw HTML in a core/html block, or '' when empty. */
+function htmlBlock(html: string): string {
+  return html ? `<!-- wp:html -->\n${html}\n<!-- /wp:html -->` : '';
+}
+
+/**
+ * Scaffolded template for the editable-content architecture: the wrapper chunks
+ * ride in the template as core/html, the chrome as template parts (rendered with
+ * a `tagName:div` wrapper that `display:contents` makes box-less so the carried
+ * chrome lands in its exact DOM position), and `post_content` (content sections
+ * only) sits between them. Concatenated, the stream rebuilds the source DOM.
+ */
+function scaffoldedTemplate(s: AltScaffold): string {
+  return [
+    htmlBlock(s.openWrap),
+    '<!-- wp:template-part {"slug":"header","tagName":"div"} /-->',
+    htmlBlock(s.midBefore),
+    '<!-- wp:post-content /-->',
+    htmlBlock(s.midAfter),
+    '<!-- wp:template-part {"slug":"footer","tagName":"div"} /-->',
+    htmlBlock(s.closeWrap),
+  ]
+    .filter(Boolean)
+    .join('\n');
+}
+
+/** The right template body for a page: scaffolded when it has a scaffold, else legacy. */
+function templateFor(p: AltPage): string {
+  return p.scaffold ? scaffoldedTemplate(p.scaffold) : pageTemplate();
+}
+
 function functionsPhp(pages: AltPage[]): string {
   // body_class filter: always add lib-alt-site; conditionally add per-page class.
   const bodyCases = pages
@@ -129,55 +168,60 @@ export function buildAltThemeFiles(input: AltThemeInput): ThemeFile[] {
   const RESET =
     'body.lib-alt-site{all:revert}\nbody.lib-alt-site *{box-sizing:border-box}\n';
 
+  // When the page templates carry the wrapper scaffold + chrome parts, the
+  // template-part wrapper element (`<div class="wp-block-template-part">`) would
+  // otherwise become a grid/flex item of the source layout and displace the
+  // carried chrome. `display:contents` makes that wrapper box-less so the real
+  // <header>/<footer> stay where the source put them. (No-op when no parts.)
+  const usesScaffold = input.pages.some((p) => p.scaffold);
+  const CHROME_RESCUE = usesScaffold ? '.wp-block-template-part{display:contents}\n' : '';
+
+  const themeJson: Record<string, unknown> = {
+    $schema: 'https://schemas.wp.org/trunk/theme.json',
+    version: 3,
+    settings: { layout: { contentSize: '100%', wideSize: '100%' } },
+  };
+  // Declare the chrome areas so the Site Editor treats header/footer as
+  // first-class, synced regions.
+  if (input.headerIsland || input.footerIsland) {
+    themeJson.templateParts = [
+      { name: 'header', title: 'Header', area: 'header' },
+      { name: 'footer', title: 'Footer', area: 'footer' },
+    ];
+  }
+
+  // index.html (required fallback) reuses the home page's scaffold so it renders
+  // chrome correctly; falls back to the legacy shell when no scaffold exists.
+  const homeScaffold = input.pages.find((p) => p.isHome)?.scaffold;
+  const indexTemplate = homeScaffold ? scaffoldedTemplate(homeScaffold) : pageTemplate();
+
   const files: ThemeFile[] = [
-    // Required by WordPress to recognise the theme — header metadata only.
-    {
-      path: 'style.css',
-      content: styleCssHeader(input.themeName),
-    },
-    // theme.json: full-width layout so carried HTML fills the viewport.
-    {
-      path: 'theme.json',
-      content: JSON.stringify(
-        {
-          $schema: 'https://schemas.wp.org/trunk/theme.json',
-          version: 3,
-          settings: {
-            layout: { contentSize: '100%', wideSize: '100%' },
-          },
-        },
-        null,
-        2,
-      ),
-    },
+    { path: 'style.css', content: styleCssHeader(input.themeName) },
+    { path: 'theme.json', content: JSON.stringify(themeJson, null, 2) },
     { path: 'functions.php', content: functionsPhp(input.pages) },
-    // Template parts.
+    // Template parts (the shared chrome).
     { path: 'parts/header.html', content: input.headerIsland + '\n' },
     { path: 'parts/footer.html', content: input.footerIsland + '\n' },
-    // Site-wide CSS — reset first (so source rules win the cascade), then carried CSS.
-    { path: 'assets/css/site.css', content: RESET + input.siteCss },
-    // templates/index.html is REQUIRED by WordPress for a block theme to be
-    // activatable — without it the theme won't appear in the admin or will
-    // throw a "missing required files" error.  It uses the same
-    // header→main→footer shell as every other template.
-    { path: 'templates/index.html', content: pageTemplate() },
+    // Site-wide CSS — reset first (so source rules win the cascade), then the
+    // chrome-wrapper rescue, then the carried chrome CSS.
+    { path: 'assets/css/site.css', content: RESET + CHROME_RESCUE + input.siteCss },
+    { path: 'templates/index.html', content: indexTemplate },
   ];
 
-  // Per-page CSS + template files. Posts share ONE single.html (the template
-  // hierarchy routes every post through it); the per-post body class + enqueued
-  // page-<slug>.css still scope each post's carried CSS individually.
+  // Per-page CSS + template files. Posts share ONE single.html; the per-post body
+  // class + enqueued page-<slug>.css still scope each post's carried CSS.
   let emittedSingle = false;
   for (const p of input.pages) {
     files.push({ path: `assets/css/page-${p.slug}.css`, content: p.pageCss });
     if (p.isHome) {
-      files.push({ path: 'templates/front-page.html', content: pageTemplate() });
+      files.push({ path: 'templates/front-page.html', content: templateFor(p) });
     } else if (p.postType === 'post') {
       if (!emittedSingle) {
-        files.push({ path: 'templates/single.html', content: pageTemplate() });
+        files.push({ path: 'templates/single.html', content: templateFor(p) });
         emittedSingle = true;
       }
     } else {
-      files.push({ path: `templates/page-${p.slug}.html`, content: pageTemplate() });
+      files.push({ path: `templates/page-${p.slug}.html`, content: templateFor(p) });
     }
   }
 
