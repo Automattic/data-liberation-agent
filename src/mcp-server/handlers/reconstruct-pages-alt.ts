@@ -60,6 +60,7 @@ export interface AssembleOutput {
 export function assembleAltTheme(input: AssembleInput): AssembleOutput {
   let headerIsland = '';
   let footerIsland = '';
+  let siteCss = '';
   const scaffoldPages: AltPage[] = [];
   const wxrPages: WxrPage[] = [];
 
@@ -75,12 +76,14 @@ export function assembleAltTheme(input: AssembleInput): AssembleOutput {
 
     // Prefer the home page's header/footer; fall back to the first page that
     // yields non-empty islands so the theme always has something to render.
+    // Take the chrome CSS from the same page as the header/footer islands.
     if (p.isHome || (!headerIsland && r.headerIsland)) {
       headerIsland = r.headerIsland;
       footerIsland = r.footerIsland;
+      siteCss = r.chromeCss;
     }
 
-    scaffoldPages.push({ slug: p.slug, isHome: p.isHome, pageCss: r.pageCss });
+    scaffoldPages.push({ slug: p.slug, isHome: p.isHome, pageCss: r.mainCss });
     wxrPages.push({
       slug: p.slug,
       title: p.title,
@@ -93,7 +96,7 @@ export function assembleAltTheme(input: AssembleInput): AssembleOutput {
     themeName: input.themeName,
     headerIsland,
     footerIsland,
-    siteCss: '',
+    siteCss,
     pages: scaffoldPages,
   });
 
