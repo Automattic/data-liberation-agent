@@ -1,6 +1,6 @@
 ---
 name: liberate-alt
-description: Parity-first ALTERNATE reconstruction path for an already-liberated site. Instead of projecting the source onto editable WordPress blocks (the `replicate` path), it CARRIES the source page near-verbatim and SCOPES the source's own CSS under a per-site wrapper, producing a high-fidelity but NON-block-editable theme. Reuses an existing run's captured `html/`, `sections/`, and `media/`; swaps only the reconstruct→theme stage; writes a parallel `theme-alt/` + `output-alt.wxr` and installs into a SEPARATE Studio site so you can A/B its parity against the block path on the same captured data. Use when block-path parity falls short and the user asks to "try the alt path", "carry the HTML", "scope the source CSS", run `/liberate-alt`, or compare carry-and-scope vs. blocks.
+description: Parity-first ALTERNATE reconstruction path. STANDALONE like `/liberate` — if the site hasn't been captured yet it runs the extraction pipeline (detect → discover → extract → media → capture) itself; if a prior run exists it reuses that capture verbatim. Instead of projecting the source onto editable WordPress blocks (the `replicate` path), it CARRIES the source page near-verbatim and SCOPES the source's own CSS under a per-site wrapper, producing a high-fidelity but NON-block-editable theme. It swaps only liberate's reconstruct→theme stage (skipping the whole block-design phase); writes a `theme-alt/` + `output-alt.wxr` and installs into a Studio site named after the source (NO `-alt` suffix on the site name — only the theme is `-alt`). Can optionally be A/B'd against a block-path run on the same captured data. Use when the user asks to "try the alt path", "carry the HTML", "scope the source CSS", run `/liberate-alt <url>`, or compare carry-and-scope vs. blocks.
 allowed-tools:
   - Bash
   - Read
@@ -13,22 +13,40 @@ allowed-tools:
 
 # Liberate (Alt) — Carry-and-Scope Parity Path
 
-You are an **alternate reconstruct orchestrator**. You take an already-liberated site and rebuild it by carrying the source markup near-verbatim and scoping the source's own CSS, rather than projecting onto core blocks. The goal is maximum visual parity for direct A/B comparison against the block path (`replicate`).
+You are an **alternate reconstruct orchestrator** and a **standalone front door**. You take a site — capturing it first if it hasn't been liberated yet (Stage 0) — and rebuild it by carrying the source markup near-verbatim and scoping the source's own CSS, rather than projecting onto core blocks. The goal is maximum visual parity for direct A/B comparison against the block path (`replicate`). Like `/liberate`, you run the deterministic EXTRACTION stages yourself; unlike `/liberate`, you skip the block-DESIGN phase entirely — carry-and-scope IS the reconstruct.
 
 **Read this first — what you are trading.** The alt path emits each page region as a single `core/html` island. These pages are **raw-HTML-editable, not block-editable**. You are deliberately trading all block editability for fidelity. Do not "improve" the output by converting islands to blocks — that is the block path's job, and the whole point here is to NOT do that.
 
 **Honesty bar.** Per [[feedback_honest_visual_assessment]] and [[feedback_never_guess_always_look]]: when you report parity, render source and alt at the same width, crop both, read both, and itemize the real differences bluntly BEFORE claiming any win. Never assert parity you have not looked at.
 
-## Prerequisites
+## Stage 0 — Ensure the run is captured (extract if necessary)
 
-Confirm these exist in `output/<site>/` (a prior `/liberate` run). If missing, stop and tell the user to run `/liberate <url>` first — the alt path does NOT re-capture:
+`/liberate-alt` is **standalone** — it does NOT assume a prior `/liberate`. Derive `output/<site>/` from the URL (the same dir liberate uses) and check whether the carry inputs already exist. **If they do, reuse them verbatim — do NOT re-capture.** If they don't, run liberate's EXTRACTION stages yourself to produce them, then continue. You skip only liberate's block-DESIGN phase (its steps 6–14) — that's the whole point of the alt path.
+
+**The carry inputs the alt path consumes (all produced by extraction):**
 
 - `html/*.html` — rendered source HTML per page (the carry source). **Required.** Posts are captured as `post--<name>.html`.
 - `screenshots/desktop/*.png` + `screenshots/mobile/*.png` + `screenshots/manifest.json` — source truth for the parity compare. **Required.**
-- `output.wxr` — the block path's WXR; used as the base you patch into `output-alt.wxr`.
+- `output.wxr` — the base WXR you patch into `output-alt.wxr`.
 - `redirect-map.json` — `[{from,to}]` source-path → local-permalink map. Drives the internal-link rewrite (nav + body hrefs → local). Without it, links pass through to the source domain.
 - `media/` + `media-stubs.json` — downloaded assets and their CDN-URL→filename records. The reconstruct installs these into the alt site and rewrites carried `<img>`/`url()` to the local WP library (v2 — see Media, self-hosted).
 - `sections/*.json` — optional (the splitter keys off the DOM, not specs), but read if present.
+
+**Idempotent check.** Treat the capture as present (skip extraction) when `output/<site>/output.wxr`, `output/<site>/html/*.html`, and `output/<site>/screenshots/manifest.json` all exist. Any of them missing → run extraction. Partial/older captures: prefer a `resume: true` extract over a clean re-run so existing work isn't thrown away.
+
+**If missing, capture it (mirrors `/liberate` steps 1–5 — read that skill for the platform-specific extraction notes: Squarespace/Shopify CDP + admin tokens, Webflow API token, Wix Playwright timing):**
+
+1. `liberate_detect({ url })` — identify the platform. Narrate it.
+2. `liberate_discover({ url, outputDir })` — inventory pages/posts/products + platform features. **Show the inventory (counts + platform features) and PAUSE for operator go-ahead before the capture** (mirrors liberate's confirm checkpoint). Surface `transferable:false` features with their `wpRecommendation`.
+3. `liberate_extract({ url, outputDir, screenshots: true, contentStatus: 'publish' })` — pages/posts/products content + media references.
+   - **`screenshots: true` is REQUIRED** — the parity compare in §6 needs `screenshots/` + `html/<slug>.html`, and MCP `liberate_extract` keeps capture opt-in (unlike the `data-liberation` CLI which captures by default).
+   - **`contentStatus: 'publish'`** so the replica's imported pages/posts resolve instead of 404ing — this is a live preview, per liberate's general notes. (Attachments always import as `inherit` regardless.)
+   - Media dedup + upload and `html/<slug>.html` capture run as part of this stage.
+   - **0 pages:** "No extractable pages found at `<url>` — the site may be behind auth or bot-protection. Try CDP/admin extraction (`/diagnose`)." Stop.
+4. If products were extracted, compile `products.jsonl` → `products.csv` (WooCommerce format).
+5. `liberate_verify({ outputDir })` — stale CDN URLs, failed page/media downloads, quality breakdown, redirect-map completeness. Report and flag anything needing attention before reconstruction.
+
+Whether reused or freshly captured, you now have `output/<site>/` with the carry inputs. Continue to §1.
 
 ## MCP tool you call
 
@@ -40,7 +58,7 @@ The tool reuses the SAME helpers as the block `replicate` path — `buildPageLin
 
 You also reuse the shared install/import/compare tools: `liberate_preview` (provision Studio site), `liberate_import` (WXR import), `liberate_compare` (source-vs-rendered pixel diff). Read their schemas in `src/mcp-server.ts` before calling.
 
-> **Self-hosted media needs an alt-scoped stub store (harness caveat).** The theme slug AND the media-stub bookkeeping derive from `outputDir`. The A/B reuses one run's `media-stubs.json`, which the block run already stamped with its own `wpPostId` + `localhost:<blockport>` URLs — so calling the reconstruct with `outputDir: output/<site>` makes media resolve to the **block** site, not self-host on the alt site. To self-host: run with `outputDir: output/<site>-alt`, a sibling dir holding (a) symlinks to the main run's `html/`, `redirect-map.json`, and `media/`, and (b) a FRESH `media-stubs.json` (copy with `wpPostId`/`localUrl` stripped). Side effect: the slug then double-suffixes (`-alt-alt`) — `mv` the theme dir to `<site>-alt` and re-activate. (Known gap: slug + stubs should derive from `studioSitePath`, not `outputDir`.)
+> **Theme slug derives from `outputDir`.** Run with `outputDir: output/<site>` and the theme installs to `wp-content/themes/<site>-alt` (the `-alt` suffix is on the THEME name only — the Studio *site* name stays un-suffixed, see step 2). Standalone means one run, one `media-stubs.json`, one site, so `installMediaForUrl` self-hosts media directly — the old A/B fresh-stub workaround (and its `-alt-alt` double-suffix) is no longer needed. (Known gap: the slug should really derive from `studioSitePath`, not `outputDir`.)
 
 > **The MCP server does NOT hot-reload.** `liberate_reconstruct_pages_alt` is a new tool — if the server was started before it was added, restart the MCP server first or the tool will be missing. (See AGENTS.md.)
 
@@ -54,16 +72,16 @@ You also reuse the shared install/import/compare tools: `liberate_preview` (prov
   - **Posts**: `slug` = bare WP `post_name` (e.g. `world-teacher-day`), `postType: 'post'`, and `htmlSlug` = the manifest slug for the captured file (e.g. `post--world-teacher-day`). The WXR post `<link>` drops `/post/` but the manifest URL keeps it; join WXR post → html file by exact `post--<post_name>.html` then prefix-match (handles `%`-encoded / truncated slugs).
 - Verify each `html/<htmlSlug>.html` exists; skip (and log) any with no captured HTML.
 
-### 2. Provision a SEPARATE Studio site (clean A/B)
+### 2. Provision the Studio site
 
-- Do NOT reuse the block path's Studio site. Create a site named `<site>-alt` via `liberate_preview({ outputDir, siteName: "<site>-alt" })` (the handler accepts `siteName` even though it's not in the schema). Capture the returned `studioSitePath` (`~/Studio/<siteName>`).
-- **Media-heavy WXR trips the Studio import timeout.** A WXR with hundreds of attachments hits Studio's ~120s blueprint-import silence timeout (surfaces as `Error establishing a database connection`, and the half-created site is removed) — see [[project_studio_import_heartbeat]]. Provision from a **media-free slimmed WXR**: copy `output.wxr`, drop every `<item>` whose `post_type` is `attachment` (keep pages/posts/nav), write it as the alt dir's `output.wxr`, and do NOT give the alt dir a `media/` dir at provision time. The reconstruct installs media separately (next step), so the alt site loses nothing.
+- Provision via `liberate_preview({ outputDir })`. The site is named after the run dir — `<site>` (e.g. `~/Studio/<site>`). **Do NOT append `-alt` to the Studio site name.** This is a standalone path: this IS the site, not a separate A/B copy of a block-path site.
+- **Media-heavy WXR trips the Studio import timeout.** A WXR with hundreds of attachments hits Studio's ~120s blueprint-import silence timeout (surfaces as `Error establishing a database connection`, and the half-created site is removed) — see [[project_studio_import_heartbeat]]. Provision from a **media-free slimmed WXR**: copy `output.wxr`, drop every `<item>` whose `post_type` is `attachment` (keep pages/posts/nav), write it as `output.wxr`, and do NOT stage a `media/` dir at provision time. The reconstruct installs media separately (next step), so the site loses nothing.
 
 ### 3. Run the alt reconstruct
 
-- Set up the alt-scoped dir (see the harness caveat above): `output/<site>-alt/` with symlinked `html/` + `redirect-map.json` + `media/` and a fresh `media-stubs.json`.
-- Call `liberate_reconstruct_pages_alt({ outputDir: "output/<site>-alt", studioSitePath, themeName: "<Site> (Alt)", pages })`. Because the MCP server doesn't hot-reload, drive it from a fresh `tsx` process importing the handler (the on-disk source has the link/media wiring) if the running server predates it.
-- It installs media (`mediaInstalled` in the result), rewrites links + img/url to local, writes the theme, and returns per-page `postContent` islands. Note `themeSlug` — if it double-suffixed (`-alt-alt`), consolidate the theme dir to `<site>-alt`.
+- Call `liberate_reconstruct_pages_alt({ outputDir: "output/<site>", studioSitePath, themeName: "<Site> (Alt)", pages })`. Because the MCP server doesn't hot-reload, drive it from a fresh `tsx` process importing the handler (the on-disk source has the link/media wiring) if the running server predates it.
+- Standalone means one site, one stub store: `installMediaForUrl` installs the run's media into this site and self-hosts it (no cross-site stamping, so no fresh-stub workaround is needed). The theme slug derives from `outputDir` → `<site>-alt` (theme name only — distinct from the un-suffixed *site* name).
+- It installs media (`mediaInstalled` in the result), rewrites links + img/url to local, writes the theme, and returns per-page `postContent` islands. Note `themeSlug`.
 - **Verify the fixes landed**, don't assume: the homepage island should have local `/…/` nav hrefs (not `https://<source>/…`) and `…/wp-content/uploads/…` img srcs (not the CDN); a post island should have `is_single('<slug>')` in functions.php; spot-check a few rewritten image URLs return HTTP 200.
 
 ### 4. Build `output-alt.wxr` (patch islands into the base WXR)
