@@ -2,20 +2,25 @@ import { describe, it, expect } from 'vitest';
 import { reconstructPageAlt } from './page-reconstruct-alt.js';
 
 describe('reconstructPageAlt', () => {
-  it('produces a scoped main island + scoped page CSS for a page', () => {
+  it('produces a scoped main island + split chrome/main CSS', () => {
     const r = reconstructPageAlt({
       slug: 'home',
       isHome: true,
       bodyHtml:
         '<header class="h">H</header><main><div class="hero">Hi</div></main><footer class="f">F</footer>',
-      css: '.hero{color:red} .nope{color:blue}',
+      css: '.hero{color:red} .h{color:green} .nope{color:blue}',
       specs: [],
       mediaUrlMap: new Map(),
     });
     expect(r.mainIsland).toContain('<!-- wp:html -->');
     expect(r.mainIsland).toContain('class="hero"');
-    expect(r.pageCss).toContain('body.lib-alt-site.lib-alt-page-home .hero');
-    expect(r.pageCss).not.toContain('.nope'); // dropped: matches nothing in carried DOM
+    // main sheet: page-scoped, has .hero, drops chrome-only and unmatched rules
+    expect(r.mainCss).toContain('body.lib-alt-site.lib-alt-page-home .hero');
+    expect(r.mainCss).not.toContain('.nope');
+    expect(r.mainCss).not.toContain('.h{'); // .h is chrome, not in main DOM -> dropped from main sheet
+    // chrome sheet: site-wide scoped, has .h, drops main-only rules
+    expect(r.chromeCss).toContain('body.lib-alt-site .h');
+    expect(r.chromeCss).not.toContain('.hero'); // .hero not in chrome DOM
     expect(r.headerIsland).toContain('class="h"');
     expect(r.footerIsland).toContain('class="f"');
   });
@@ -28,8 +33,8 @@ describe('reconstructPageAlt', () => {
       specs: [],
       mediaUrlMap: new Map(),
     });
-    // The @media rule containing .hero should survive treeshaking
-    expect(r.pageCss).toContain('.hero');
+    // The @media rule containing .hero should survive treeshaking in the main sheet
+    expect(r.mainCss).toContain('.hero');
   });
 
   it('returns empty islands when header/footer are absent', () => {
@@ -42,6 +47,7 @@ describe('reconstructPageAlt', () => {
     });
     expect(r.headerIsland).toBe('');
     expect(r.footerIsland).toBe('');
+    expect(r.chromeCss).toBe('');
     expect(r.mainIsland).toContain('<!-- wp:html -->');
     expect(r.mainIsland).toContain('class="content"');
   });
