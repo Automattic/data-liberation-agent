@@ -17,6 +17,9 @@ import type { SectionSpec } from '../../lib/replicate/section-extract.js';
 import { reconstructPageAlt } from '../../lib/replicate/page-reconstruct-alt.js';
 import { buildAltThemeFiles, type ThemeFile, type AltPage } from '../../lib/replicate/theme-scaffold-alt.js';
 import { collectCss } from '../../lib/replicate/css-collect.js';
+import { buildPageLinkMap } from '../../lib/replicate/page-link-map.js';
+import { installRunMediaMap } from '../../lib/replicate/run-media-map.js';
+import type { InternalLinkMap } from '../../lib/streaming/internal-link-rewrite.js';
 import { deriveInstallThemeSlug } from './install-theme.js';
 
 // ---------------------------------------------------------------------------
@@ -27,6 +30,8 @@ export interface AltPageInput {
   slug: string;
   title: string;
   isHome?: boolean;
+  /** WP object type — 'post' scopes via is_single() + shared single.html. Default 'page'. */
+  postType?: 'page' | 'post';
   bodyHtml: string;
   css: string;
   specs?: SectionSpec[];
@@ -36,12 +41,15 @@ export interface AssembleInput {
   themeName: string;
   pages: AltPageInput[];
   mediaUrlMap: Map<string, string>;
+  /** Source-href → local-permalink map; rewrites carried nav + body links. */
+  linkMap?: InternalLinkMap;
 }
 
 export interface WxrPage {
   slug: string;
   title: string;
   isHome?: boolean;
+  postType?: 'page' | 'post';
   postContent: string;
 }
 
@@ -72,6 +80,7 @@ export function assembleAltTheme(input: AssembleInput): AssembleOutput {
       css: p.css,
       specs: p.specs ?? [],
       mediaUrlMap: input.mediaUrlMap,
+      linkMap: input.linkMap,
     });
 
     // Prefer the home page's header/footer; fall back to the first page that
@@ -83,11 +92,12 @@ export function assembleAltTheme(input: AssembleInput): AssembleOutput {
       siteCss = r.chromeCss;
     }
 
-    scaffoldPages.push({ slug: p.slug, isHome: p.isHome, pageCss: r.mainCss });
+    scaffoldPages.push({ slug: p.slug, isHome: p.isHome, postType: p.postType, pageCss: r.mainCss });
     wxrPages.push({
       slug: p.slug,
       title: p.title,
       isHome: p.isHome,
+      postType: p.postType,
       postContent: r.mainIsland,
     });
   }
@@ -112,6 +122,14 @@ interface PageArg {
   sourceUrl: string;
   title: string;
   isHome?: boolean;
+  /** WP object type the slug resolves to. Default 'page'. Posts scope via is_single(). */
+  postType?: 'page' | 'post';
+  /**
+   * Override the cached-HTML filename stem (`html/<htmlSlug>.html`) when it
+   * differs from `slug` — e.g. posts captured as `post--<name>.html` but whose
+   * WP post_name (and thus is_single() slug) is the bare `<name>`. Defaults to slug.
+   */
+  htmlSlug?: string;
 }
 
 /** Resolve the WP root by probing for wp-content (flat vs nested Studio layout). */
@@ -158,8 +176,9 @@ export const reconstructPagesAltHandler: Handler = async (args, ctx) => {
   const fetchErrors: Array<{ slug: string; error: string }> = [];
 
   for (const p of pages) {
-    // Prefer cached rendered HTML written by liberate_screenshot (html/<slug>.html).
-    const htmlPath = join(resolve(outputDir), 'html', `${p.slug}.html`);
+    // Prefer cached rendered HTML written by liberate_screenshot. The filename
+    // stem is htmlSlug when given (posts: `post--<name>.html`), else the slug.
+    const htmlPath = join(resolve(outputDir), 'html', `${p.htmlSlug ?? p.slug}.html`);
     let bodyHtml = '';
     if (existsSync(htmlPath)) {
       try {
@@ -209,6 +228,7 @@ export const reconstructPagesAltHandler: Handler = async (args, ctx) => {
       slug: p.slug,
       title: p.title,
       isHome: p.isHome,
+      postType: p.postType,
       bodyHtml,
       css,
     });
@@ -220,12 +240,34 @@ export const reconstructPagesAltHandler: Handler = async (args, ctx) => {
     );
   }
 
-  // v1 gap: mediaUrlMap is empty — the orchestrator skill will need to populate
-  // it from the run's media map once media install is wired into this path.
+  // Internal-link rewrite map — same builder the block path uses (shared module),
+  // so carried nav + body hrefs resolve to the imported permalinks, not the source.
+  const linkMap = buildPageLinkMap(outputDir, pages.map((p) => p.sourceUrl));
+
+  // Install the run's media into the alt site + build the CDN→local URL map via
+  // the SAME installMediaForUrl the block path uses (installRunMediaMap). Carried
+  // <img>/url() references then point at this site's media library, not the CDN.
+  // Best-effort: media-install failure leaves the map empty (carried URLs survive).
+  let mediaUrlMap = new Map<string, string>();
+  const mediaErrors: Array<{ sourceUrl: string; error: string }> = [];
+  try {
+    const media = await installRunMediaMap({
+      outputDir,
+      url: pages[0].sourceUrl,
+      wpRoot,
+      useStudioCli: true,
+    });
+    mediaUrlMap = media.mediaUrlMap;
+    mediaErrors.push(...media.result.errors);
+  } catch (err) {
+    mediaErrors.push({ sourceUrl: '*', error: err instanceof Error ? err.message : String(err) });
+  }
+
   const { themeFiles, wxrPages } = assembleAltTheme({
     themeName,
     pages: altPages,
-    mediaUrlMap: new Map(),
+    mediaUrlMap,
+    linkMap,
   });
 
   // Write theme files to disk under wp-content/themes/<altSlug>.
@@ -241,10 +283,13 @@ export const reconstructPagesAltHandler: Handler = async (args, ctx) => {
     themeSlug: altSlug,
     themeFilesWritten: themeFiles.length,
     fetchErrors,
+    mediaInstalled: mediaUrlMap.size,
+    mediaErrors,
     pages: wxrPages.map((w) => ({
       slug: w.slug,
       title: w.title,
       isHome: w.isHome,
+      postType: w.postType,
       postContent: w.postContent,
     })),
   });

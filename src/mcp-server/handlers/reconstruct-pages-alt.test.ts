@@ -25,4 +25,57 @@ describe('assembleAltTheme', () => {
     expect(home.postContent).toContain('<!-- wp:html -->');
     expect(home.postContent).toContain('class="hero"');
   });
+
+  it('rewrites carried hrefs through the linkMap', () => {
+    const out = assembleAltTheme({
+      themeName: 'Acme Alt',
+      pages: [
+        {
+          slug: 'home',
+          title: 'Home',
+          isHome: true,
+          bodyHtml: '<main><a href="https://acme.test/about">About</a></main>',
+          css: '',
+        },
+      ],
+      mediaUrlMap: new Map(),
+      linkMap: new Map([['acme.test/about', '/about/']]),
+    });
+    const home = out.wxrPages.find((p) => p.slug === 'home')!;
+    expect(home.postContent).toContain('href="/about/"');
+    expect(home.postContent).not.toContain('acme.test/about');
+  });
+
+  it('rewrites carried image srcs through the mediaUrlMap', () => {
+    const out = assembleAltTheme({
+      themeName: 'Acme Alt',
+      pages: [
+        {
+          slug: 'home',
+          title: 'Home',
+          isHome: true,
+          bodyHtml: '<main><img src="https://cdn.test/a.jpg"></main>',
+          css: '',
+        },
+      ],
+      mediaUrlMap: new Map([['https://cdn.test/a.jpg', 'http://localhost/wp-content/uploads/a.jpg']]),
+    });
+    const home = out.wxrPages.find((p) => p.slug === 'home')!;
+    expect(home.postContent).toContain('/wp-content/uploads/a.jpg');
+    expect(home.postContent).not.toContain('cdn.test');
+  });
+
+  it('threads postType through to the WXR page records', () => {
+    const out = assembleAltTheme({
+      themeName: 'Acme Alt',
+      pages: [
+        { slug: 'a-post', title: 'A Post', postType: 'post', bodyHtml: '<main>x</main>', css: '' },
+      ],
+      mediaUrlMap: new Map(),
+    });
+    expect(out.wxrPages.find((p) => p.slug === 'a-post')!.postType).toBe('post');
+    // and the theme scopes it via is_single
+    const fn = out.themeFiles.find((f) => f.path === 'functions.php')!.content;
+    expect(fn).toContain("is_single( 'a-post' )");
+  });
 });

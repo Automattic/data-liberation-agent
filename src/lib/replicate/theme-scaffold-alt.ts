@@ -23,8 +23,23 @@ export interface AltPage {
   slug: string;
   /** True for the site front page — maps template to front-page.html and uses is_front_page(). */
   isHome?: boolean;
+  /**
+   * WP object type the slug resolves to. `'post'` scopes via `is_single()` and
+   * renders through a shared `single.html` (posts share one template); anything
+   * else (default `'page'`) scopes via `is_page()` and gets its own
+   * `page-<slug>.html`. Front page (`isHome`) ignores this and uses
+   * `is_front_page()` + `front-page.html`.
+   */
+  postType?: 'page' | 'post';
   /** Scoped CSS for this page (already scoped under `body.lib-alt-page-<slug>`). */
   pageCss: string;
+}
+
+/** body_class / enqueue conditional for a page (front page → single → page). */
+function pageCondition(p: AltPage): string {
+  if (p.isHome) return 'is_front_page()';
+  if (p.postType === 'post') return `is_single( '${p.slug}' )`;
+  return `is_page( '${p.slug}' )`;
 }
 
 export interface AltThemeInput {
@@ -73,18 +88,15 @@ function pageTemplate(): string {
 function functionsPhp(pages: AltPage[]): string {
   // body_class filter: always add lib-alt-site; conditionally add per-page class.
   const bodyCases = pages
-    .map((p) => {
-      const condition = p.isHome ? 'is_front_page()' : `is_page( '${p.slug}' )`;
-      return `    if ( ${condition} ) { $classes[] = 'lib-alt-page-${p.slug}'; }`;
-    })
+    .map((p) => `    if ( ${pageCondition(p)} ) { $classes[] = 'lib-alt-page-${p.slug}'; }`)
     .join('\n');
 
   // wp_enqueue_scripts: enqueue site.css globally; page CSS conditionally.
   const enqueue = pages
-    .map((p) => {
-      const condition = p.isHome ? 'is_front_page()' : `is_page( '${p.slug}' )`;
-      return `    if ( ${condition} ) { wp_enqueue_style( 'lib-alt-page-${p.slug}', get_stylesheet_directory_uri() . '/assets/css/page-${p.slug}.css', array( 'lib-alt-site' ), '1.0.0' ); }`;
-    })
+    .map(
+      (p) =>
+        `    if ( ${pageCondition(p)} ) { wp_enqueue_style( 'lib-alt-page-${p.slug}', get_stylesheet_directory_uri() . '/assets/css/page-${p.slug}.css', array( 'lib-alt-site' ), '1.0.0' ); }`,
+    )
     .join('\n');
 
   return `<?php
@@ -151,13 +163,22 @@ export function buildAltThemeFiles(input: AltThemeInput): ThemeFile[] {
     { path: 'templates/index.html', content: pageTemplate() },
   ];
 
-  // Per-page CSS + template files.
+  // Per-page CSS + template files. Posts share ONE single.html (the template
+  // hierarchy routes every post through it); the per-post body class + enqueued
+  // page-<slug>.css still scope each post's carried CSS individually.
+  let emittedSingle = false;
   for (const p of input.pages) {
     files.push({ path: `assets/css/page-${p.slug}.css`, content: p.pageCss });
-    const templatePath = p.isHome
-      ? 'templates/front-page.html'
-      : `templates/page-${p.slug}.html`;
-    files.push({ path: templatePath, content: pageTemplate() });
+    if (p.isHome) {
+      files.push({ path: 'templates/front-page.html', content: pageTemplate() });
+    } else if (p.postType === 'post') {
+      if (!emittedSingle) {
+        files.push({ path: 'templates/single.html', content: pageTemplate() });
+        emittedSingle = true;
+      }
+    } else {
+      files.push({ path: `templates/page-${p.slug}.html`, content: pageTemplate() });
+    }
   }
 
   return files;

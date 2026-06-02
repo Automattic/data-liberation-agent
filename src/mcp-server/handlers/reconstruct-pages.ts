@@ -24,12 +24,8 @@ import { extractFullFromUrl, rewriteThroughMediaMap } from '../../lib/replicate/
 import type { SectionSpec } from '../../lib/replicate/section-extract.js';
 import { SectionSpecsStore } from '../../lib/replicate/section-specs-store.js';
 import { buildPageReconstruction } from '../../lib/replicate/reconstruct-pages.js';
-import {
-  buildInternalLinkMap,
-  type InternalLinkMap,
-  type RedirectMapEntry,
-} from '../../lib/streaming/internal-link-rewrite.js';
-import { installMediaForUrl } from '../../lib/streaming/media-install.js';
+import { buildPageLinkMap } from '../../lib/replicate/page-link-map.js';
+import { installRunMediaMap } from '../../lib/replicate/run-media-map.js';
 import { BlockFixerClient } from '../../lib/streaming/block-fixer-client.js';
 import { downloadMedia } from '../../lib/extraction/media.js';
 import { downloadSectionMedia } from '../../lib/replicate/download-section-media.js';
@@ -184,34 +180,7 @@ function applyMediaMap(specs: SectionSpec[], mediaMap: Record<string, string>): 
   }
 }
 
-/**
- * Build the source-path → local-permalink map once for the whole run, from the
- * same `redirect-map.json` the nav/footer rewrite consumes (so page-body links
- * agree with the menu). Page origins seed the host+path keys that let ABSOLUTE
- * same-site body hrefs match. Best-effort: a missing/corrupt map yields a
- * root-only map and links simply pass through.
- */
-function buildPageLinkMap(outputDir: string, pages: PageArg[]): InternalLinkMap {
-  let redirectMap: RedirectMapEntry[] = [];
-  try {
-    const p = join(resolve(outputDir), 'redirect-map.json');
-    if (existsSync(p)) {
-      const parsed = JSON.parse(readFileSync(p, 'utf8'));
-      if (Array.isArray(parsed)) redirectMap = parsed as RedirectMapEntry[];
-    }
-  } catch {
-    /* best-effort — fall back to a root-only map */
-  }
-  const origins = new Set<string>();
-  for (const pg of pages) {
-    try {
-      origins.add(new URL(pg.sourceUrl).hostname);
-    } catch {
-      /* skip an unparseable source URL */
-    }
-  }
-  return buildInternalLinkMap(redirectMap, { siteOrigins: [...origins] });
-}
+// buildPageLinkMap is shared with the alt path — see ../../lib/replicate/page-link-map.ts.
 
 function collectSourceUrls(specs: SectionSpec[], into: Set<string>): void {
   for (const s of specs) {
@@ -287,16 +256,16 @@ export const reconstructPagesHandler: Handler = async (args, ctx) => {
   });
   stubs.flush();
 
-  const mediaResult = await installMediaForUrl({
+  // Install the run's media into the site + build the CDN→local URL map. Shared
+  // with the alt path via installRunMediaMap (same installMediaForUrl underneath).
+  const { mediaUrlMap, result: mediaResult } = await installRunMediaMap({
     outputDir,
     url: pages[0].sourceUrl,
     wpRoot,
     useStudioCli: true,
   });
-  const mediaMap: Record<string, string> = {};
-  for (const it of mediaResult.installed) mediaMap[it.sourceUrl] = it.localUrl;
-  // Map form for the core/html fallback island rewrite (source URL -> local upload URL).
-  const mediaUrlMap = new Map(Object.entries(mediaMap));
+  // Record form for applyMediaMap (spec background-image rewrite).
+  const mediaMap: Record<string, string> = Object.fromEntries(mediaUrlMap);
 
   // Theme palette tokens (from the installed theme.json) — used to map captured
   // card/cell background colors to token slugs (the gate forbids inline hex).
@@ -306,7 +275,7 @@ export const reconstructPagesHandler: Handler = async (args, ctx) => {
   const fontFamilies = readThemeFontFamilies(join(themeRoot, 'theme.json'));
   // Source-path → local-permalink map, built once and reused per page so body
   // links (inline + CTA hrefs) resolve to imported pages, like the nav already does.
-  const linkMap = buildPageLinkMap(outputDir, pages);
+  const linkMap = buildPageLinkMap(outputDir, pages.map((p) => p.sourceUrl));
 
   // 3. Reconstruct + gate + write each page.
   const report: Array<Record<string, unknown>> = [];

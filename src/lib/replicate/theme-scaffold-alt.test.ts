@@ -75,4 +75,31 @@ describe('buildAltThemeFiles', () => {
     const fn = f.find((x) => x.path === 'functions.php')!.content;
     expect(fn).toContain("is_page( 'about' )");
   });
+
+  it('a post scopes via is_single() and its CSS file, not is_page()', () => {
+    const f = buildAltThemeFiles({
+      themeName: 'Acme Alt', headerIsland: '', footerIsland: '', siteCss: '',
+      pages: [{ slug: 'my-article', isHome: false, postType: 'post', pageCss: 'body.lib-alt-page-my-article{}' }],
+    });
+    const fn = f.find((x) => x.path === 'functions.php')!.content;
+    expect(fn).toContain("is_single( 'my-article' )");
+    expect(fn).not.toContain("is_page( 'my-article' )");
+    // per-post CSS still emitted + scoped via body class
+    expect(f.map((x) => x.path)).toContain('assets/css/page-my-article.css');
+    expect(fn).toContain("lib-alt-page-my-article");
+  });
+
+  it('posts share ONE single.html and emit no per-post page template', () => {
+    const f = buildAltThemeFiles({
+      themeName: 'Acme Alt', headerIsland: '', footerIsland: '', siteCss: '',
+      pages: [
+        { slug: 'post-a', isHome: false, postType: 'post', pageCss: '' },
+        { slug: 'post-b', isHome: false, postType: 'post', pageCss: '' },
+      ],
+    });
+    const paths = f.map((x) => x.path);
+    expect(paths.filter((p) => p === 'templates/single.html')).toHaveLength(1);
+    expect(paths).not.toContain('templates/page-post-a.html');
+    expect(paths).not.toContain('templates/page-post-b.html');
+  });
 });
