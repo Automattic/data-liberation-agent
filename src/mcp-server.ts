@@ -33,6 +33,7 @@ import { previewHandler } from './mcp-server/handlers/preview.js';
 import { installThemeHandler } from './mcp-server/handlers/install-theme.js';
 import { themeScaffoldHandler } from './mcp-server/handlers/theme-scaffold.js';
 import { reconstructPagesHandler } from './mcp-server/handlers/reconstruct-pages.js';
+import { reconstructPagesAltHandler } from './mcp-server/handlers/reconstruct-pages-alt.js';
 import { previewStopHandler } from './mcp-server/handlers/preview-stop.js';
 import { screenshotHandler } from './mcp-server/handlers/screenshot.js';
 import { designFoundationScaffoldHandler } from './mcp-server/handlers/design-foundation-scaffold.js';
@@ -427,6 +428,33 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: 'liberate_reconstruct_pages_alt',
+      description: 'Carry-and-scope parity path: for each page, load cached body HTML (or fetch live), collect CSS, carry the sanitized HTML + scoped CSS into core/html block islands, write a minimal alt block theme under wp-content/themes/<siteSlug>-alt, and return per-page island content for building output-alt.wxr. Requires liberate_screenshot (html/ cache) to have run first for best results; falls back to live fetch. v1: mediaUrlMap is empty — source image URLs are not rewritten to WP library URLs yet.',
+      inputSchema: {
+        type: 'object' as const,
+        properties: {
+          outputDir: { type: 'string', description: 'Liberation output directory (holds html/ cache from liberate_screenshot).' },
+          studioSitePath: { type: 'string', description: 'On-disk path to the running Studio site (e.g. ~/Studio/example-com).' },
+          themeName: { type: 'string', description: 'Display name for the alt theme (default: "Liberated (Alt)").' },
+          pages: {
+            type: 'array',
+            description: 'Content pages to carry and scope. Pass every page in the site for full coverage.',
+            items: {
+              type: 'object',
+              properties: {
+                slug: { type: 'string', description: 'URL-safe page slug (sanitize_title-shaped), e.g. "about-us".' },
+                sourceUrl: { type: 'string', description: 'The page\'s source URL (used as base for CSS resolution and live HTML fallback).' },
+                title: { type: 'string', description: 'Human-readable page title.' },
+                isHome: { type: 'boolean', description: 'When true, emits front-page.html template and uses is_front_page() body-class condition.' },
+              },
+              required: ['slug', 'sourceUrl', 'title'],
+            },
+          },
+        },
+        required: ['outputDir', 'studioSitePath', 'pages'],
+      },
+    },
+    {
       name: 'liberate_screenshot',
       description: 'Capture full-page + scrolled screenshots (desktop + mobile) and rendered HTML for every URL on a site. Writes to <outputDir>/screenshots/ and <outputDir>/html/, plus palette.json, typography.json, breakpoints.json, and computed-styles.json via DOM/CSS site-analysis. Reuses sitemap discovery or accepts explicit urls[].',
       inputSchema: {
@@ -645,6 +673,7 @@ const handlers: Record<string, Handler> = {
   liberate_compose_instantiate: composeInstantiateHandler,
   liberate_validate_artifacts: validateArtifactsHandler,
   liberate_reconstruct_pages: reconstructPagesHandler,
+  liberate_reconstruct_pages_alt: reconstructPagesAltHandler,
 };
 
 function makeContext(): HandlerContext {
