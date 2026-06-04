@@ -281,7 +281,10 @@ export function isConsentBanner(c: OverlayCandidate): boolean {
 export function selectOverlayTargets(d: OverlayDetection): OverlayTarget[] {
   const takeovers: OverlayTarget[] = [];
   const consents: OverlayTarget[] = [];
-  for (const c of d.candidates) {
+  // `?? []` keeps this pure fn total: a partial detection result can't throw
+  // (lets the mocked-browser path be a true no-op, and removes a hidden
+  // dependency on dismissOverlays' try/catch).
+  for (const c of d.candidates ?? []) {
     const { score, signals } = scoreOverlay(c, d.scrollLock);
     // Ambient signals alone (page-global scroll-lock + a SIBLING modal's backdrop)
     // can lift benign sticky chrome to the threshold. Require a takeover to either
@@ -413,23 +416,15 @@ function ensureScrollUnlocked(page: Page): Promise<void> {
     for (const el of [document.body, document.documentElement]) {
       if (!el) continue;
       (el as HTMLElement).style.overflow = '';
+      // Strip only KNOWN single-purpose scroll-lock classes (safe to remove).
       if (typeof el.className === 'string') {
-        // Strip known scroll-lock class names.
         el.className = el.className.split(/\s+/).filter((c) => c && !SCROLL_LOCK.test(c)).join(' ');
-        // If still locked, strip any remaining class that is causing overflow:hidden
-        // (e.g. a generic 'locked' class not matched by the regex above).
-        if (isLocked(el as HTMLElement)) {
-          const classes = el.className.split(/\s+/).filter(Boolean);
-          for (const c of classes) {
-            el.classList.remove(c);
-            if (!isLocked(el as HTMLElement)) break; // found the culprit
-            el.classList.add(c); // not this one, restore and try next
-          }
-        }
       }
-      // Final fallback: if still locked, force an inline override.
+      // If a lock survives (inline !important, or an unrecognized lock class), force it
+      // open via an important inline override rather than brute-force-removing site
+      // classes — removing a class that also drives styling would corrupt carried HTML.
       if (isLocked(el as HTMLElement)) {
-        (el as HTMLElement).style.overflow = 'visible';
+        (el as HTMLElement).style.setProperty('overflow', 'visible', 'important');
       }
     }
   });
@@ -445,28 +440,35 @@ function cleanupStamps(page: Page): Promise<void> {
 }
 
 /**
- * Last resort: remove the stamped overlay + a full-viewport sibling backdrop.
- * Scroll-unlock is NOT done here — the orchestrator calls ensureScrollUnlocked
- * after any round that acted (a successful force-remove always sets a method),
- * so duplicating the unlock probe here would be redundant.
+ * Last resort: remove the stamped overlay, and (for takeovers only) a
+ * full-viewport sibling backdrop. Scroll-unlock is NOT done here — the
+ * orchestrator calls ensureScrollUnlocked after any round that acted (a
+ * successful force-remove always sets a method), so duplicating the unlock
+ * probe here would be redundant.
+ *
+ * `removeBackdrop` is gated to takeover modals: a consent strip reaching Tier 3
+ * could share a parent with a real full-viewport fixed element (hero bg / app
+ * shell), and deleting that would corrupt the carried page.
  */
-function forceRemoveOverlay(page: Page, idx: number): Promise<void> {
-  return page.evaluate((i: number) => {
+function forceRemoveOverlay(page: Page, idx: number, removeBackdrop: boolean): Promise<void> {
+  return page.evaluate(({ i, removeBackdrop }: { i: number; removeBackdrop: boolean }) => {
     const el = document.querySelector(`[data-lib-overlay="${i}"]`);
     if (el) {
-      const vpArea = (window.innerWidth || 1) * (window.innerHeight || 1) || 1;
-      const parent = el.parentElement;
-      if (parent) {
-        for (const s of Array.from(parent.children)) {
-          if (s === el) continue;
-          const cs = getComputedStyle(s);
-          const r = s.getBoundingClientRect();
-          if (cs.position === 'fixed' && (r.width * r.height) / vpArea >= 0.9) s.remove();
+      if (removeBackdrop) {
+        const vpArea = (window.innerWidth || 1) * (window.innerHeight || 1) || 1;
+        const parent = el.parentElement;
+        if (parent) {
+          for (const s of Array.from(parent.children)) {
+            if (s === el) continue;
+            const cs = getComputedStyle(s);
+            const r = s.getBoundingClientRect();
+            if (cs.position === 'fixed' && (r.width * r.height) / vpArea >= 0.9) s.remove();
+          }
         }
       }
       el.remove();
     }
-  }, idx);
+  }, { i: idx, removeBackdrop });
 }
 
 /**
@@ -526,9 +528,11 @@ async function dismissOne(
   } catch {
     /* fall through to the next tier */
   }
-  // Tier 3 — force remove + unlock (last resort).
+  // Tier 3 — force remove + unlock (last resort). Backdrop removal is gated to
+  // takeovers: a consent strip could share a parent with a real full-screen
+  // fixed element we must not delete.
   try {
-    await forceRemoveOverlay(page, t.idx);
+    await forceRemoveOverlay(page, t.idx, t.kind === 'takeover');
     if (!(await overlayPresent(page, t.idx))) return 'remove';
   } catch {
     /* give up on this overlay */

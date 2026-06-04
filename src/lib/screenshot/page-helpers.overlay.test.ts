@@ -351,8 +351,40 @@ describe('dismissOverlays — Tier 3 force remove (Playwright)', () => {
       expect(dismissed[0].method).toBe('remove');
       expect(await page.locator('#m').count()).toBe(0);
       expect(await page.locator('#bg').count()).toBe(0); // backdrop removed too
+      // The `body.locked` class is NOT a recognized scroll-lock name, so it
+      // legitimately survives — we force scroll open via an important inline
+      // override instead of removing site classes. Assert the real contract:
+      // scroll is restored.
       expect(await page.evaluate(() => getComputedStyle(document.body).overflow)).not.toBe('hidden');
-      expect(await page.evaluate(() => document.body.classList.contains('locked'))).toBe(false);
+    } finally {
+      await page.close();
+    }
+  });
+});
+
+// A cookie banner whose Accept button has NO dismiss handler (so it falls
+// through to Tier 3 force-remove), sharing <body> with a real full-viewport
+// fixed element that must NOT be deleted as a "backdrop".
+const CONSENT_STUBBORN_FIXTURE = `<!doctype html><html><head><style>
+  #hero { position: fixed; inset: 0; z-index: 1; background: #ddd; }
+  #c { position: fixed; left: 0; right: 0; bottom: 0; height: 80px; z-index: 5000; background: #222; color: #fff; }
+</style></head><body>
+  <div id="hero">full-screen background content</div>
+  <div id="c"><span>We use cookies.</span><button id="acc">Accept</button></div>
+  <main style="height:3000px">content</main>
+</body></html>`;
+
+describe('dismissOverlays — consent reaching Tier 3 does not delete a full-screen sibling (Playwright)', () => {
+  it('force-removes only the consent strip, preserving an unrelated full-viewport fixed element', async () => {
+    const page = await browser.newPage();
+    await page.setContent(CONSENT_STUBBORN_FIXTURE);
+    try {
+      const dismissed = await dismissOverlays(page);
+      expect(dismissed).toHaveLength(1);
+      expect(dismissed[0].kind).toBe('consent');
+      expect(dismissed[0].method).toBe('remove'); // dead Accept button → fell through to Tier 3
+      expect(await page.locator('#c').count()).toBe(0);    // strip removed
+      expect(await page.locator('#hero').count()).toBe(1); // full-screen sibling PRESERVED
     } finally {
       await page.close();
     }
