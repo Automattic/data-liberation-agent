@@ -2,21 +2,23 @@ import { describe, it, expect } from 'vitest';
 import { scopeCss } from './css-scope.js';
 
 describe('scopeCss — selectors', () => {
-  it('prefixes a plain class selector with the scope', () => {
+  // The scope is wrapped in :where() so it adds ZERO specificity — the carried
+  // CSS keeps its original cascade. Assertions reflect the :where(...) form.
+  it('prefixes a plain class selector with the zero-specificity scope', () => {
     const out = scopeCss('.hero { color: red }', { scope: 'body.lib-alt-site' });
-    expect(out).toContain('body.lib-alt-site .hero');
+    expect(out).toContain(':where(body.lib-alt-site) .hero');
   });
 
   it('prefixes each selector in a comma list', () => {
     const out = scopeCss('.a, .b { color: red }', { scope: 'body.lib-alt-site' });
-    expect(out).toContain('body.lib-alt-site .a');
-    expect(out).toContain('body.lib-alt-site .b');
+    expect(out).toContain(':where(body.lib-alt-site) .a');
+    expect(out).toContain(':where(body.lib-alt-site) .b');
   });
 
   it('folds html/body/:root onto the scope instead of nesting under it', () => {
     const out = scopeCss('body { margin: 0 } :root { --x: 1px }', { scope: 'body.lib-alt-site' });
-    expect(out).toContain('body.lib-alt-site {');
-    expect(out).not.toContain('body.lib-alt-site body');
+    expect(out).toContain(':where(body.lib-alt-site) {');
+    expect(out).not.toContain(':where(body.lib-alt-site) body');
     expect(out).toContain('--x: 1px');
   });
 });
@@ -25,7 +27,7 @@ describe('scopeCss — at-rules', () => {
   it('preserves @media and scopes its inner rules', () => {
     const out = scopeCss('@media (max-width: 600px){ .hero { color: red } }', { scope: 'body.lib-alt-site' });
     expect(out).toContain('@media (max-width: 600px)');
-    expect(out).toContain('body.lib-alt-site .hero');
+    expect(out).toContain(':where(body.lib-alt-site) .hero');
   });
 
   it('namespaces @keyframes and updates animation references', () => {
@@ -47,7 +49,7 @@ describe('scopeCss — at-rules', () => {
 describe('scopeCss — combined-root + edge selectors', () => {
   it('folds :root combined with a class onto the scope', () => {
     const out = scopeCss(':root.dark { color: white }', { scope: 'body.lib-alt-site' });
-    expect(out).toContain('body.lib-alt-site.dark');
+    expect(out).toContain(':where(body.lib-alt-site).dark');
     // .dark must not be orphaned as its own selector: no leading combinator (space, >, ~, +) or
     // comma directly before it. It is only legal glued onto the scope (…lib-alt-site.dark).
     expect(out).not.toMatch(/(?:^|[\s,>~+])\.dark\s*\{/);
@@ -55,12 +57,12 @@ describe('scopeCss — combined-root + edge selectors', () => {
 
   it('folds :root:not(...) onto the scope', () => {
     const out = scopeCss(':root:not(.x) { color: white }', { scope: 'body.lib-alt-site' });
-    expect(out).toContain('body.lib-alt-site:not(.x)');
+    expect(out).toContain(':where(body.lib-alt-site):not(.x)');
   });
 
   it('preserves a child combinator after body', () => {
     const out = scopeCss('body > .x { color: red }', { scope: 'body.lib-alt-site' });
-    expect(out).toContain('body.lib-alt-site > .x');
+    expect(out).toContain(':where(body.lib-alt-site) > .x');
   });
 
   it('returns empty string for empty CSS without throwing', () => {

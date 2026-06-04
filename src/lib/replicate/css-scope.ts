@@ -13,6 +13,16 @@ export interface ScopeOpts {
 const ROOTISH = new Set(['html', 'body', ':root']);
 
 function scopeSelector(selector: string, scope: string): string {
+  // Wrap the scope in :where() so it contributes ZERO specificity. The carried
+  // source CSS then keeps its ORIGINAL internal cascade exactly — critical because
+  // the same reset/component rules are emitted in both the site sheet (scope
+  // `body.lib-alt-site`) and the per-page sheet (scope `body.lib-alt-site.lib-alt-page-<slug>`).
+  // A plain prefix makes a page-scoped element reset (`…page-<slug> section`, 2
+  // classes + 2 elements) outrank a site-scoped component rule (`…site .comp`, 2
+  // classes + 1 element), so the reset wrongly zeroes chrome padding/margins. With
+  // :where() the wrapper adds nothing, so component classes beat element resets just
+  // like on the source.
+  const whereScope = `:where(${scope})`;
   return selectorParser((selectors) => {
     selectors.each((sel) => {
       const first = sel.first;
@@ -21,13 +31,13 @@ function scopeSelector(selector: string, scope: string): string {
         (first.type === 'tag' || first.type === 'pseudo') &&
         ROOTISH.has(first.toString())
       ) {
-        first.replaceWith(selectorParser.string({ value: scope }));
+        first.replaceWith(selectorParser.string({ value: whereScope }));
         return;
       }
       // Reverse-order prepends: each prepend pushes ahead of the current first node, so
       // inserting the combinator first then the scope yields `scope <combinator> <original…>`.
       sel.prepend(selectorParser.combinator({ value: ' ' }));
-      sel.prepend(selectorParser.string({ value: scope }));
+      sel.prepend(selectorParser.string({ value: whereScope }));
     });
   }).processSync(selector);
 }

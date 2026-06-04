@@ -14,12 +14,12 @@ describe('reconstructPageAlt', () => {
     });
     expect(r.mainIsland).toContain('<!-- wp:html -->');
     expect(r.mainIsland).toContain('class="hero"');
-    // main sheet: page-scoped, has .hero, drops chrome-only and unmatched rules
-    expect(r.mainCss).toContain('body.lib-alt-site.lib-alt-page-home .hero');
+    // main sheet: page-scoped (zero-specificity :where), has .hero, drops chrome-only/unmatched
+    expect(r.mainCss).toContain(':where(body.lib-alt-site.lib-alt-page-home) .hero');
     expect(r.mainCss).not.toContain('.nope');
     expect(r.mainCss).not.toContain('.h{'); // .h is chrome, not in main DOM -> dropped from main sheet
     // chrome sheet: site-wide scoped, has .h, drops main-only rules
-    expect(r.chromeCss).toContain('body.lib-alt-site .h');
+    expect(r.chromeCss).toContain(':where(body.lib-alt-site) .h');
     expect(r.chromeCss).not.toContain('.hero'); // .hero not in chrome DOM
     expect(r.headerIsland).toContain('class="h"');
     expect(r.footerIsland).toContain('class="f"');
