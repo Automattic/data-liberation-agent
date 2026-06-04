@@ -52,7 +52,7 @@ import { NEW_TOOL_SCHEMAS } from './mcp-server/handlers/tool-schemas.js';
 import { godaddyWmAdapter } from './adapters/godaddy-wm.js';
 import { hostingerAdapter } from './adapters/hostinger.js';
 import { hubspotAdapter } from './adapters/hubspot.js';
-import { shopifyAdapter } from './adapters/shopify.js';
+import { shopifyAdapter } from './adapters/shopify/index.js';
 import { squarespaceAdapter } from './adapters/squarespace.js';
 import { webflowAdapter } from './adapters/webflow.js';
 import { weeblyAdapter } from './adapters/weebly.js';

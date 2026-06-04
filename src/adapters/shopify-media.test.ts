@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { extractShopifyMediaUrls } from './shopify.js';
+import { extractShopifyMediaUrls } from './shopify/index.js';
 
 // Regression coverage for page-builder (Replo/Shogun/PageFly) imagery capture.
 // getsnooz.com is a Replo-on-Shopify store: 19 pages reference

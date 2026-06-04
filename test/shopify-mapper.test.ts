@@ -4,7 +4,7 @@ import {
   shopifyGraphqlProductToWoo,
   shopifyProductToWoo,
   extractShopDomain,
-} from '../src/adapters/shopify.js';
+} from '../src/adapters/shopify/index.js';
 import type { ShopifyGqlProduct } from '../src/lib/extraction/shopify-graphql.js';
 
 // --- normalizeWeightToKg ----------------------------------------------------
