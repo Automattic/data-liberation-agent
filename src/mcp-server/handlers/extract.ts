@@ -80,6 +80,8 @@ export const extractHandler: Handler = async (args, ctx) => {
         urls: processedUrls,
         outputDir,
         primaryUrl: args.url as string,
+        removeSelectors: adapter.capture?.removeSelectors,
+        prepareCapture: adapter.capture?.prepare,
         server: ctx.server,
       });
       session.setStage('finalizing');

@@ -1,6 +1,7 @@
 import { mkdirSync } from 'node:fs';
 import { fetchSitemap } from '../../lib/extraction/sitemap.js';
 import { ExtractionLog } from '../../lib/extraction/extraction-log.js';
+import { detect } from '../../lib/extraction/detect-platform.js';
 import type { Handler } from '../handler-types.js';
 
 export const screenshotHandler: Handler = async (args, ctx) => {
@@ -18,6 +19,8 @@ export const screenshotHandler: Handler = async (args, ctx) => {
     if (urls.length === 0) {
       urls = await fetchSitemap(url);
     }
+    const detection = await detect(url);
+    const adapter = ctx.findAdapter(detection.platform);
     const { captureScreenshots } = await import('../../lib/screenshot/screenshotter.js');
     const result = await captureScreenshots({
       urls,
@@ -30,6 +33,8 @@ export const screenshotHandler: Handler = async (args, ctx) => {
       cdpPort: args.cdpPort as number | undefined,
       force: args.force as boolean | undefined,
       verbose: args.verbose as boolean | undefined,
+      removeSelectors: adapter?.capture?.removeSelectors,
+      prepareCapture: adapter?.capture?.prepare,
       server: ctx.server,
     });
     return ctx.textResult(result);
