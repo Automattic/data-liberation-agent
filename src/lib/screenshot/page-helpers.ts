@@ -147,3 +147,112 @@ export async function withEvaluateTimeout<T>(p: Promise<T>, ms: number): Promise
     if (timer) clearTimeout(timer);
   }
 }
+
+// ---------------------------------------------------------------------------
+// Overlay dismissal (takeover modals + cookie/consent banners)
+// ===========================================================================
+// A source site's takeover modal (ad/newsletter popup) or consent banner gets
+// captured as part of the "true" page unless we dismiss it before capture.
+// Detection runs in the browser and returns serializable descriptors; the
+// scoring/selection below is pure Node so it is unit-testable without a browser.
+// ---------------------------------------------------------------------------
+
+/** One fixed/sticky candidate element, as measured in the page. */
+export interface OverlayCandidate {
+  idx: number;               // matches the in-page data-lib-overlay stamp
+  selector: string;          // best-effort CSS path, for logging
+  role: string | null;       // role attribute
+  ariaModal: boolean;        // aria-modal="true"
+  zIndex: number;            // computed z-index, non-numeric → 0
+  coverageRatio: number;     // boundingBox area / viewport area, clamped 0..1
+  hasBackdrop: boolean;      // a sibling fixed, ≥90%-coverage, semi-opaque layer exists
+  vendorHint: boolean;       // id/class matches a popup-vendor pattern
+  text: string;              // lowercased textContent, truncated
+  ariaLabel: string | null;  // lowercased aria-label
+  hasCloseAffordance: boolean; // a visible close control exists in the subtree
+}
+
+/** Page-global scroll-lock state (one modal locking scroll affects the page). */
+export interface ScrollLockState {
+  active: boolean;
+}
+
+/** What detectOverlays returns: candidates + the page scroll-lock state. */
+export interface OverlayDetection {
+  candidates: OverlayCandidate[];
+  scrollLock: ScrollLockState;
+}
+
+/** A candidate that selection decided IS an overlay, with how it scored. */
+export interface OverlayTarget {
+  idx: number;
+  kind: 'takeover' | 'consent';
+  score: number;
+  signals: string[];
+  selector: string;
+  hasCloseAffordance: boolean;
+}
+
+/** A record of one overlay we dismissed (returned + logged for observability). */
+export interface DismissedOverlay {
+  selector: string;
+  method: 'close-click' | 'escape' | 'remove';
+  kind: 'takeover' | 'consent';
+  score: number;
+  signals: string[];
+}
+
+export interface DismissOverlaysOpts {
+  /** Max detect→dismiss rounds (stacked overlays). Default 3. */
+  maxRounds?: number;
+}
+
+/** A candidate scoring this or higher is treated as a takeover modal. */
+export const OVERLAY_THRESHOLD = 4;
+
+/**
+ * Score a candidate from its signals. Pure — the browser supplies the measured
+ * descriptor + page scroll-lock state. scroll-lock is applied as a flat +3 to
+ * every candidate (page-global evidence that something locked scroll); benign
+ * chrome stays ≤3 because it lacks the other signals, so the threshold of 4
+ * keeps it. Documented risk: a legitimately full-screen scroll-locking
+ * experience (coverage≥90 + lock = 6) would be dismissed.
+ */
+export function scoreOverlay(
+  c: OverlayCandidate,
+  scrollLock: ScrollLockState,
+): { score: number; signals: string[] } {
+  let score = 0;
+  const signals: string[] = [];
+  if (c.ariaModal || c.role === 'dialog' || c.role === 'alertdialog') {
+    score += 3;
+    signals.push('dialog');
+  }
+  if (scrollLock.active) {
+    score += 3;
+    signals.push('scroll-lock');
+  }
+  if (c.coverageRatio >= 0.9) {
+    score += 3;
+    signals.push('coverage>=90');
+  } else if (c.coverageRatio >= 0.5) {
+    score += 2;
+    signals.push('coverage>=50');
+  }
+  if (c.zIndex >= 100000) {
+    score += 2;
+    signals.push('z>=1e5');
+  } else if (c.zIndex >= 1000) {
+    score += 1;
+    signals.push('z>=1000');
+  }
+  if (c.hasBackdrop) {
+    score += 1;
+    signals.push('backdrop');
+  }
+  if (c.vendorHint) {
+    score += 1;
+    signals.push('vendor');
+  }
+  return { score, signals };
+}

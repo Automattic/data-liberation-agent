@@ -1,0 +1,61 @@
+import { describe, it, expect } from 'vitest';
+import {
+  scoreOverlay,
+  OVERLAY_THRESHOLD,
+  type OverlayCandidate,
+  type ScrollLockState,
+} from './page-helpers.js';
+
+// A fully benign fixed/sticky element (e.g. a sticky site header).
+const benign = (over: Partial<OverlayCandidate> = {}): OverlayCandidate => ({
+  idx: 0,
+  selector: 'header.site',
+  role: null,
+  ariaModal: false,
+  zIndex: 100,
+  coverageRatio: 0.08,
+  hasBackdrop: false,
+  vendorHint: false,
+  text: 'home about contact',
+  ariaLabel: null,
+  hasCloseAffordance: false,
+  ...over,
+});
+const noLock: ScrollLockState = { active: false };
+const lock: ScrollLockState = { active: true };
+
+describe('scoreOverlay', () => {
+  it('scores a klaviyo-shaped modal above the takeover threshold', () => {
+    const modal = benign({
+      selector: 'div.klaviyo-form',
+      role: 'dialog',
+      ariaModal: true,
+      zIndex: 10000001,
+      coverageRatio: 0.7,
+      vendorHint: true,
+    });
+    const { score, signals } = scoreOverlay(modal, lock);
+    // dialog(3) + scroll-lock(3) + coverage>=50(2) + z>=1e5(2) + vendor(1) = 11
+    expect(score).toBe(11);
+    expect(score).toBeGreaterThanOrEqual(OVERLAY_THRESHOLD);
+    expect(signals).toEqual(
+      expect.arrayContaining(['dialog', 'scroll-lock', 'coverage>=50', 'z>=1e5', 'vendor']),
+    );
+  });
+
+  it('keeps a benign sticky header below threshold even when scroll is locked elsewhere', () => {
+    // scroll-lock alone (+3) must not push generic chrome over the line.
+    expect(scoreOverlay(benign(), lock).score).toBe(3);
+    expect(scoreOverlay(benign(), lock).score).toBeLessThan(OVERLAY_THRESHOLD);
+  });
+
+  it('keeps a bare role=dialog tooltip (no lock, small, low z) below threshold', () => {
+    const tip = benign({ role: 'dialog', coverageRatio: 0.05, zIndex: 50 });
+    expect(scoreOverlay(tip, noLock).score).toBe(3);
+  });
+
+  it('keeps a fixed full-screen parallax background below threshold without scroll-lock', () => {
+    const bg = benign({ coverageRatio: 1, zIndex: 0 });
+    expect(scoreOverlay(bg, noLock).score).toBe(3); // coverage>=90 only
+  });
+});
