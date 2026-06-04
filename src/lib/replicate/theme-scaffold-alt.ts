@@ -19,6 +19,7 @@
 //
 
 import type { AltScaffold } from './page-reconstruct-alt.js';
+import { GALLERY_MOBILE_GRID_CSS } from './gallery-mobile-grid.js';
 
 export interface AltPage {
   /** URL-safe slug (kebab-case, produced by slugify — no quotes or special chars). */
@@ -238,19 +239,14 @@ export function buildAltThemeFiles(input: AltThemeInput): ThemeFile[] {
   const usesScaffold = input.pages.some((p) => p.scaffold);
   const CHROME_RESCUE = usesScaffold ? '.wp-block-template-part{display:contents}\n' : '';
 
-  // Wix pro-galleries lay their items out with JS-computed ABSOLUTE coordinates
-  // frozen at the desktop capture (a multi-column grid). The carry has no JS to
-  // re-pack them for narrow viewports, so on mobile only the leftmost column is on
-  // screen and the rest overflow off the right. Re-flow them into a single stacked
-  // column at mobile widths — static position, full-width column — which matches
-  // the source's mobile gallery far better than the frozen desktop grid. Mobile-
-  // gated so the desktop absolute grid (which IS correct) is untouched.
-  const GALLERY_REFLOW =
-    '@media screen and (max-width:750px){' +
-    'body.lib-alt-site [class*="pro-gallery"]{height:auto!important;display:flex!important;flex-direction:column!important;align-items:center}' +
-    'body.lib-alt-site [class*="pro-gallery"] [class*="gallery-column"]{width:100%!important}' +
-    'body.lib-alt-site [class*="pro-gallery"] [class*="gallery-item-container"]{position:relative!important;inset:auto!important;left:auto!important;top:auto!important;transform:none!important;margin:4px 0!important}' +
-    '}\n';
+  // Wix pro-galleries freeze their items at JS-computed desktop ABSOLUTE
+  // coordinates, so on mobile only the leftmost column is on screen. Rather than
+  // fight the widget's deeply-nested frozen wrappers with CSS (every reset reveals
+  // another inline-styled level), `appendGalleryMobileGrid` emits an ADDITIVE
+  // single-column grid of the same images next to the widget; this CSS hides the
+  // widget and shows that grid below 750px. Desktop (where the frozen grid IS
+  // correct) is untouched. See gallery-mobile-grid.ts.
+  const GALLERY_REFLOW = GALLERY_MOBILE_GRID_CSS;
 
   // Map each distinct chrome variant to its part slugs (variant 0 → header/footer).
   const slugsByKey = new Map<string, ChromeSlugs>();

@@ -23,6 +23,7 @@ import {
 } from '../../lib/replicate/theme-scaffold-alt.js';
 import { chromeSignature, stripActiveNavState } from '../../lib/replicate/chrome-canonicalize.js';
 import { rewriteResponsiveImages } from '../../lib/replicate/responsive-image-rewrite.js';
+import { appendGalleryMobileGrid } from '../../lib/replicate/gallery-mobile-grid.js';
 import { collectCss } from '../../lib/replicate/css-collect.js';
 import { buildPageLinkMap } from '../../lib/replicate/page-link-map.js';
 import { installRunMediaMap } from '../../lib/replicate/run-media-map.js';
@@ -373,7 +374,13 @@ export const reconstructPagesAltHandler: Handler = async (args, ctx) => {
       // Wrap carried <img>s with a captured mobile variant in <picture> + a
       // `(max-width:750px)` <source>, AFTER media rewriting so the mobile CDN
       // URL isn't collapsed onto the single local desktop file (same media-id).
-      postContent: rewriteResponsiveImages(w.postContent, responsiveImages),
+      // Then append an additive single-column mobile grid next to any Wix
+      // pro-gallery (the frozen desktop grid only shows its left column on mobile);
+      // the grid uses captured mobile crops and is toggled in by GALLERY_MOBILE_GRID_CSS.
+      postContent: appendGalleryMobileGrid(
+        rewriteResponsiveImages(w.postContent, responsiveImages),
+        responsiveImages,
+      ),
     })),
   });
 };
