@@ -15,6 +15,7 @@ import { validateOutputDir, planArtifacts, type ArtifactPlan } from './output-la
 import { enforceSameOrigin } from './same-origin.js';
 import { ManifestQueue, type ManifestEntry, type FailureEntry } from './manifest-queue.js';
 import { waitForStable, triggerLazyLoad, dismissOverlays } from './page-helpers.js';
+import { applyCaptureRemovals } from './apply-removals.js';
 import { countBodyTags, isStackingArtifact } from './document-integrity.js';
 import { analyzePage } from './site-analysis.js';
 import { SiteAnalysisAggregator } from './aggregator.js';
@@ -132,6 +133,8 @@ interface DesignCaptureContext {
 
 interface CapturePerViewportArgs {
   page: Page;
+  removeSelectors?: string[];
+  prepareCapture?: (page: import('playwright').Page, ctx: import('../../adapters/page-actions.js').CaptureContext) => Promise<void>;
   viewport: Viewport;
   plan: ArtifactPlan;
   url: string;
@@ -205,6 +208,14 @@ async function capturePerViewport(args: CapturePerViewportArgs): Promise<void> {
     // this run's — intended (we want the most-recent capture's dismissals, not a union).
     entry.dismissed = [...(entry.dismissed ?? []), ...dismissedHere];
   }
+
+  // Seam 1: deterministic adapter-declared removals on the settled page, so they
+  // pollute neither screenshot, carried HTML, mobile carry, nor SectionSpec.
+  await applyCaptureRemovals(page, {
+    removeSelectors: args.removeSelectors,
+    prepare: args.prepareCapture,
+    ctx: { url, viewport: isDesktop ? 'desktop' : 'mobile' },
+  });
 
   // --- responsive image map (mobile only) -----------------------------------
   // At the mobile viewport, Wix's <wow-image> JS has swapped each image to its
@@ -694,6 +705,8 @@ export async function captureScreenshots(opts: ScreenshotOpts): Promise<Screensh
           outputDir: opts.outputDir,
           responsiveImages,
           mobileHeights,
+          removeSelectors: opts.removeSelectors,
+          prepareCapture: opts.prepareCapture,
         });
       } catch (err) {
         urlFailures.push({

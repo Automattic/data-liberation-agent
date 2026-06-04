@@ -64,6 +64,13 @@ export interface ScreenshotOpts {
    * "discovery → extraction" gap stops looking like a hang.
    */
   onProgress?: (current: number, total: number, url: string) => void;
+  /** Adapter-declared selectors removed from each page before capture (seam 1). */
+  removeSelectors?: string[];
+  /** Adapter imperative capture hook, run after removeSelectors. Best-effort. */
+  prepareCapture?: (
+    page: import('playwright').Page,
+    ctx: import('../../adapters/page-actions.js').CaptureContext,
+  ) => Promise<void>;
 }
 
 export interface ScreenshotResult {
