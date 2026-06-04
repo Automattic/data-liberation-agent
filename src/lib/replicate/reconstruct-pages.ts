@@ -130,6 +130,17 @@ export function buildPageReconstruction(
     linkMap?: InternalLinkMap;
     /** Source media URL -> local upload URL, for rewriting core/html fallback islands. */
     mediaUrlMap?: Map<string, string>;
+    /**
+     * Adapter-declared block recipe (blocks reconstruct path only). When present,
+     * the recipe gets first crack at a coverage-lost section before the opaque
+     * core/html fallback island. Absent on the carry/theme path — that's the gate.
+     */
+    adapterBlocks?: import('../../adapters/page-actions.js').AdapterBlocks;
+    /**
+     * The source URL of the page being reconstructed. Passed through to the block
+     * recipe context so recipes can emit rewritten media URLs keyed to the page.
+     */
+    sourceUrl?: string;
   },
 ): PageReconstructionResult {
   if (!SAFE_SLUG.test(opts.slug)) throw new Error(`unsafe page slug: "${opts.slug}"`);
@@ -142,6 +153,8 @@ export function buildPageReconstruction(
     paletteTokens: opts.paletteTokens,
     fontFamilies: opts.fontFamilies,
     mediaUrlMap: opts.mediaUrlMap,
+    adapterBlocks: opts.adapterBlocks,
+    sourceUrl: opts.sourceUrl,
   });
 
   // Rewrite same-site body links to local permalinks BEFORE the gate, so the

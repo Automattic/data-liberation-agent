@@ -33,6 +33,7 @@ import { MediaStubStore } from '../../lib/extraction/media-stubs.js';
 import { deriveInstallThemeSlug } from './install-theme.js';
 import { themeCacheFlushCommands } from './install-theme.js';
 import type { Handler } from '../handler-types.js';
+import { detect } from '../../lib/extraction/detect-platform.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -206,6 +207,13 @@ export const reconstructPagesHandler: Handler = async (args, ctx) => {
   if (!existsSync(themeRoot)) {
     return ctx.errorResult(`theme not installed at ${themeRoot} — run liberate_theme_scaffold/install first.`);
   }
+
+  // Resolve the source platform's adapter so its block recipe (seam 2) applies
+  // during reconstruction. Blocks path only — the carry handler never does this,
+  // which is the path-gate.
+  const detection = await detect(pages[0].sourceUrl);
+  const adapter = ctx.findAdapter(detection.platform);
+
   const mediaDir = join(resolve(outputDir), 'media');
 
   // 1. Get every page's section specs once (reused after the media map is built).
@@ -297,7 +305,7 @@ export const reconstructPagesHandler: Handler = async (args, ctx) => {
     applyMediaMap(specs, mediaMap);
     let built;
     try {
-      built = buildPageReconstruction(specs, { slug: p.slug, title: p.title, themeSlug, isHome: p.isHome, paletteTokens, fontFamilies, linkMap, mediaUrlMap });
+      built = buildPageReconstruction(specs, { slug: p.slug, title: p.title, themeSlug, isHome: p.isHome, paletteTokens, fontFamilies, linkMap, mediaUrlMap, adapterBlocks: adapter?.blocks, sourceUrl: p.sourceUrl });
     } catch (err) {
       report.push({ slug: p.slug, ok: false, reason: `build: ${err instanceof Error ? err.message : String(err)}` });
       continue;
