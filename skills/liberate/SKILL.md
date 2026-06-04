@@ -1,6 +1,6 @@
 ---
 name: liberate
-description: Front door for the whole migration — detect → discover → extract → capture, then choose the reconstruct path (blocks+products, or theme replication) and dispatch the matching sub-skill. Idempotent: re-running on an already-captured site skips straight to the path question.
+description: Front door for the whole migration — detect → discover, then ALWAYS stop and ask the operator (AskUserQuestion) which reconstruct path to take (blocks+products, or theme replication) BEFORE running extraction/capture, then dispatch the matching sub-skill. The path question is a mandatory, non-skippable gate that fires right after discovery while the operator is still present — never auto-select, never defer it past extraction. Idempotent: re-running on an already-captured site skips straight to the path question.
 ---
 
 # Liberate a website
@@ -22,22 +22,29 @@ Each sub-skill owns its own reconstruct → install → QA → report; this skil
 /liberate <url>   ── front door, shared context ────────────────────────────────
 │
 ├─ idempotent check: extraction already on disk?  (.discovery-complete / session.json stage / output.wxr + html/* + manifest.json)
-│     ├─ YES → load cached inventory ─────────────────────────────────┐
-│     └─ NO  → EXTRACTION (deterministic — existing MCP tools):        │
-│              1 detect → discover     platform · sitemap · features · archetype inventory
-│              2 extract               pages/posts/products content + media refs
-│              3 media: dedup+upload   → uploaded WP-library URLs (reused downstream)
-│              4 capture               desktop+mobile screenshots · palette/type/breakpoints · html/<slug>.html
-│              5 products → products.csv    WooCommerce import format
-│                                                                      ▼
-├─ CONFIRM + PATH CHECKPOINT
-│     show inventory + scope/cost estimate + a platform-informed recommendation,
-│     then ask: blocks+products vs theme replication — picking a path IS the go-ahead
-│                                                                      ▼
+│     ├─ YES → load cached inventory ──────────────────────────────────────┐
+│     └─ NO  → 1 detect → discover    platform · sitemap · features · archetype inventory (CHEAP)
+│                                                                           │
+│  ┌────────────────────────────────────────────────────────────────────────┘
+│  ▼
+├─ CONFIRM + PATH CHECKPOINT  ◀── MANDATORY HARD STOP, BEFORE EXTRACTION — never skip, never auto-select
+│     show discovery inventory + scope/cost estimate + a platform-informed recommendation,
+│     then ALWAYS AskUserQuestion: blocks+products vs theme replication.
+│     The operator's answer is the ONLY thing that authorizes the rest of the run.
+│     Nothing expensive (extract/capture) runs until they have answered.
+│     ▼
+├─ EXTRACTION (deterministic — only after the path is chosen):
+│     2 extract               pages/posts/products content + media refs
+│     3 media: dedup+upload   → uploaded WP-library URLs (reused downstream)
+│     4 capture               desktop+mobile screenshots · palette/type/breakpoints · html/<slug>.html
+│     5 products → products.csv    WooCommerce import format
+│     ▼
 └─ RECONSTRUCT — dispatch the chosen sub-skill INLINE (shared context):
       blocks+products → replicate-with-blocks   (core blocks + WooCommerce + QA ladder → run-report.json)
       theme           → replicate-theme         (carry-and-scope islands + scoped CSS → compare → run-report-carry.json)
 ```
+
+Capture is still shared across both paths, so the "try the other path with zero re-capture" property holds: re-running `/liberate <url>` after a full run hits the idempotent check, loads the cached inventory, and lands you straight back on the path question.
 
 Each sub-skill owns its own reconstruct → install → QA → report, plus its own budget guard (`checkBudget` in `src/lib/replicate/budget-guard.ts`) and run-report (`buildRunReport` in `src/lib/replicate/run-report.ts`). This skill's deliverable is the captured `output/<site>/` + the dispatch; the chosen sub-skill produces the replica + its `run-report*.json`.
 
@@ -47,7 +54,7 @@ Each sub-skill owns its own reconstruct → install → QA → report, plus its 
 
 ### Step 0 — Idempotent check (run first)
 
-Derive `output/<site>/` from the URL. If extraction is already complete — any of `.discovery-complete`, a `session.json` stage past extraction, or all of `output.wxr` + `html/*.html` + `screenshots/manifest.json` present — **skip steps 1–5**, load the cached inventory (`session.json` / discovery output), and jump straight to the **Confirm + path checkpoint** below. Otherwise run steps 1–5. (For a partial capture, prefer `resume: true`; see Resuming.)
+Derive `output/<site>/` from the URL. If extraction is already complete — any of `.discovery-complete`, a `session.json` stage past extraction, or all of `output.wxr` + `html/*.html` + `screenshots/manifest.json` present — **skip Steps 1 and 3–6**, load the cached inventory (`session.json` / discovery output), and jump straight to the **Step 2 — Confirm + path checkpoint** below. Otherwise run Step 1, hit the checkpoint, then run Steps 3–6. (For a partial capture, prefer `resume: true`; see Resuming.)
 
 ### Step 1 — Detect & discover
 
@@ -59,34 +66,43 @@ Derive `output/<site>/` from the URL. If extraction is already complete — any 
    - Features marked `transferable: false` include a `wpRecommendation` (suggested WP plugin).
    - Narrate: "Detected Wix · 47 pages · 3 archetypes · 12 products · store (WooCommerce) · forms (WPForms recommended)."
 
-### Step 2 — Extract
+### Step 2 — Confirm + path checkpoint — MANDATORY HARD STOP (fires here, before any extraction)
+
+> **This checkpoint is NOT optional and NOT skippable, and it fires RIGHT HERE — immediately after discovery, before extraction/capture.** You ask **while the operator is still present and paying attention**; that is the whole point of placing it before the long deterministic extraction, not after. You **MUST** stop and ask the operator to choose the reconstruct path via **AskUserQuestion** before running Step 3 (extract) or anything downstream. There is no "default path." You do **not** auto-select on the operator's behalf, no matter how strong the inventory signal is — a recommendation is a hint inside the question, never a decision. Starting extraction (or dispatching a sub-skill) without having asked this question is a defect. The **only** thing that authorizes the rest of the run is the operator's answer to this AskUserQuestion.
+
+**Red flags — if you catch yourself thinking any of these, STOP and ask:**
+- "Discovery's done, I'll kick off extraction and ask about the path later." → No. Extraction is the expensive part; ask BEFORE it, while the operator is here.
+- "The platform clearly calls for blocks/theme, so I'll just run it." → No. Recommend *inside* the question; let them pick.
+- "They already said blocks last time / earlier in the convo." → A prior run's choice does not carry over; ask again.
+- "This is obviously a store, blocks is the only sensible path." → Still ask. The operator may want fidelity over editability.
+- "I'll extract first so the operator has more data when they decide." → Discovery already gives platform · counts · features — enough to choose. Don't burn extraction to defer the question.
+
+Show the discovery inventory (pages · archetypes · products · platform features) and a scope/cost/time estimate. Make a **platform-informed recommendation** (mark it `(Recommended)` as the first option), then call **AskUserQuestion** with these two options:
+
+1. **Migrate content into blocks + products** — WordPress-native blocks + navigation + WooCommerce product pages. Best launchpad for a redesign. (Reconstructs product pages.)
+2. **Theme replication** — carry-and-scope: highest-fidelity replica of the source, raw-HTML-editable (not block-editable). (Imports product *data*; product pages fall back to default WooCommerce, not a carried replica.)
+
+Recommendation examples: a store with many products → recommend (1); a fixed-layout Wix marketing site, no store, where pixel-fidelity matters → recommend (2). **The operator's selection is the sole go-ahead** (this replaces the old proceed/confirm gate). Only after they answer do you run Steps 3–6 (extraction/capture) and then Dispatch.
+
+### Step 3 — Extract
 
 Call `liberate_extract` with an appropriate `outputDir`. Narrate per-URL progress.
 
 **0 pages:** "No extractable pages found at `<url>`. The site may be behind auth or bot-protection — try CDP/admin extraction (`/diagnose`)." Stop.
 
-### Step 3 — Media dedup + upload
+### Step 4 — Media dedup + upload
 
 Media references are deduped and uploaded to the WP media library. Uploaded URLs are the canonical media references used everywhere downstream (specs, templates, `post_content`).
 
-### Step 4 — Capture
+### Step 5 — Capture
 
-Runs automatically during or after extract: desktop+mobile screenshots, `palette.json` / `typography.json` / `breakpoints.json`, and `html/<slug>.html` per URL. Clustering in step 8 runs off the already-saved `html/<slug>.html` — no re-navigation.
+Runs automatically during or after extract: desktop+mobile screenshots, `palette.json` / `typography.json` / `breakpoints.json`, and `html/<slug>.html` per URL. Clustering in the blocks path runs off the already-saved `html/<slug>.html` — no re-navigation.
 
 Default concurrency: 6. Configure via `--screenshots-concurrency N` or `--concurrency N`.
 
-### Step 5 — Products → CSV
+### Step 6 — Products → CSV
 
 If products were extracted, compile `products.jsonl` → `products.csv` (WooCommerce import format). Report: "Also extracted N products → products.csv."
-
-### Confirm + path checkpoint
-
-Show the inventory (pages · estimated clusters · products · platform features) and a scope/cost/time estimate. Then make a **platform-informed recommendation** from the inventory and ask the operator to choose the reconstruct path (AskUserQuestion):
-
-1. **Migrate content into blocks + products** — WordPress-native blocks + navigation + WooCommerce product pages. Best launchpad for a redesign. (Reconstructs product pages.)
-2. **Theme replication** — carry-and-scope: highest-fidelity replica of the source, raw-HTML-editable (not block-editable). (Imports product *data*; product pages fall back to default WooCommerce, not a carried replica.)
-
-Recommendation examples: a store with many products → lean (1); a fixed-layout Wix marketing site, no store, where pixel-fidelity matters → lean (2). The operator chooses; **picking a path is the go-ahead** (this replaces the old proceed/confirm gate).
 
 ### Dispatch (inline)
 
@@ -131,7 +147,7 @@ If the user asks to resume (e.g. "resume", "continue", "it crashed"):
 
 1. Ask for the URL if not provided — `outputDir` is derived from it.
 2. Call `liberate_extract` with `resume: true` for extraction; `session.json` tracks stage so capture resumes where it stopped. Reconstruct resume (per-cluster build status, etc.) is the chosen sub-skill's concern.
-3. If extraction was already complete (`.discovery-complete` exists), skip straight to the **Confirm + path checkpoint** (the idempotent path) and offer to run a reconstruct path.
+3. If extraction was already complete (`.discovery-complete` exists), skip straight to the **Step 2 — Confirm + path checkpoint** (the idempotent path) and offer to run a reconstruct path. If only discovery completed and the run stopped before the checkpoint, re-run discovery (cheap) and ask the path question — extraction must not start until the operator has chosen.
 
 The `resume` flag causes extraction to:
 - Skip platform detection/discovery if a completed WXR already exists
