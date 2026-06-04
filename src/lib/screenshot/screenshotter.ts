@@ -140,6 +140,9 @@ interface CapturePerViewportArgs {
   shouldAnalyze: boolean;
   designCtx?: DesignCaptureContext;  // present when design capture is enabled
   outputDir: string;
+  /** Accumulates {wix-media-id → mobile-variant URL} from the mobile viewport, for
+   *  responsive-image carry. Mutated in place; written once after all captures. */
+  responsiveImages: Record<string, string>;
 }
 
 async function capturePerViewport(args: CapturePerViewportArgs): Promise<void> {
@@ -147,7 +150,7 @@ async function capturePerViewport(args: CapturePerViewportArgs): Promise<void> {
     page, viewport, plan, url, slug, archetype,
     settleMs, screenshotTimeoutMs, evaluateTimeoutMs,
     failures, entry, aggregator, shouldAnalyze,
-    designCtx, outputDir,
+    designCtx, outputDir, responsiveImages,
   } = args;
   const now = () => new Date().toISOString();
   const isDesktop = viewport.id === 'desktop';
@@ -181,6 +184,29 @@ async function capturePerViewport(args: CapturePerViewportArgs): Promise<void> {
   // --- settle + lazy load ---------------------------------------------------
   await waitForStable(page, settleMs);
   await triggerLazyLoad(page);
+
+  // --- responsive image map (mobile only) -----------------------------------
+  // At the mobile viewport, Wix's <wow-image> JS has swapped each image to its
+  // mobile-cropped CDN variant. Record {media-id → mobile URL} so the alt
+  // reconstruct can serve the mobile crop via <picture> (no JS) on narrow
+  // viewports. Best-effort: a read failure must not fail the screenshot.
+  if (!isDesktop) {
+    try {
+      const map = await page.evaluate(() => {
+        const out: Record<string, string> = {};
+        for (const im of Array.from(document.querySelectorAll('img'))) {
+          const url = (im as HTMLImageElement).currentSrc || (im as HTMLImageElement).src || '';
+          const idm = /([a-z0-9]{4,12}_[a-z0-9]{24,48})/i.exec(url);
+          // Only Wix CDN fills (the JS-swapped responsive variants) are useful.
+          if (idm && /static\.wixstatic\.com\/.+\/fill\/w_\d+,h_\d+/.test(url)) out[idm[1].toLowerCase()] = url;
+        }
+        return out;
+      });
+      Object.assign(responsiveImages, map);
+    } catch {
+      /* best-effort — never block capture on the responsive-image probe */
+    }
+  }
 
   // --- html (desktop only) --------------------------------------------------
   if (isDesktop && plan.captureHtml) {
@@ -476,6 +502,14 @@ export async function captureScreenshots(opts: ScreenshotOpts): Promise<Screensh
   await manifest.init();
   if (force) await manifest.resetFailures();
 
+  // Site-wide {wix-media-id → mobile-variant URL}, accumulated from each page's
+  // mobile pass, written once at the end for the alt reconstruct to consume.
+  const responsiveImages: Record<string, string> = existsSync(
+    join(opts.outputDir, 'responsive-images.json'),
+  )
+    ? (JSON.parse(readFileSync(join(opts.outputDir, 'responsive-images.json'), 'utf8')) as Record<string, string>)
+    : {};
+
   // --- site-analysis aggregator -------------------------------------------
   // Collects palette/typography/breakpoints for one representative URL
   // (homepage when present). The design-foundation fast path uses this as
@@ -609,6 +643,7 @@ export async function captureScreenshots(opts: ScreenshotOpts): Promise<Screensh
           shouldAnalyze: shouldAnalyzeUrl,
           designCtx,
           outputDir: opts.outputDir,
+          responsiveImages,
         });
       } catch (err) {
         urlFailures.push({
@@ -660,6 +695,18 @@ export async function captureScreenshots(opts: ScreenshotOpts): Promise<Screensh
     }
   } finally {
     await manifest.flush();
+    // Persist the accumulated responsive-image map (mobile variants) for the
+    // alt reconstruct. Best-effort; merge-on-resume already loaded any prior map.
+    if (Object.keys(responsiveImages).length > 0) {
+      try {
+        writeFileSync(
+          join(opts.outputDir, 'responsive-images.json'),
+          JSON.stringify(responsiveImages, null, 2),
+        );
+      } catch (err) {
+        sendLog(server, `[warn] responsive-images serialize failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
     if (aggregator.hasSamples()) {
       try { aggregator.serialize(opts.outputDir); } catch (err) {
         sendLog(server, `[warn] aggregator serialize failed: ${err instanceof Error ? err.message : String(err)}`);

@@ -22,6 +22,7 @@ import {
   type ChromeVariant,
 } from '../../lib/replicate/theme-scaffold-alt.js';
 import { chromeSignature, stripActiveNavState } from '../../lib/replicate/chrome-canonicalize.js';
+import { rewriteResponsiveImages } from '../../lib/replicate/responsive-image-rewrite.js';
 import { collectCss } from '../../lib/replicate/css-collect.js';
 import { buildPageLinkMap } from '../../lib/replicate/page-link-map.js';
 import { installRunMediaMap } from '../../lib/replicate/run-media-map.js';
@@ -242,6 +243,17 @@ export const reconstructPagesAltHandler: Handler = async (args, ctx) => {
   const altPages: AltPageInput[] = [];
   const fetchErrors: Array<{ slug: string; error: string }> = [];
 
+  // Responsive-image map ({wix-media-id → mobile-variant URL}) captured at the
+  // mobile viewport by liberate_screenshot. Used to wrap carried <img>s in a
+  // <picture> so the browser serves the mobile crop at narrow widths (no JS).
+  let responsiveImages: Record<string, string> = {};
+  try {
+    const riPath = join(resolve(outputDir), 'responsive-images.json');
+    if (existsSync(riPath)) responsiveImages = JSON.parse(readFileSync(riPath, 'utf8'));
+  } catch {
+    /* best-effort — reconstruct without mobile variants on a missing/corrupt map */
+  }
+
   for (const p of pages) {
     // Prefer cached rendered HTML written by liberate_screenshot. The filename
     // stem is htmlSlug when given (posts: `post--<name>.html`), else the slug.
@@ -266,6 +278,7 @@ export const reconstructPagesAltHandler: Handler = async (args, ctx) => {
         continue;
       }
     }
+
 
     // Collect external stylesheets referenced in the HTML.
     let css = '';
@@ -357,7 +370,10 @@ export const reconstructPagesAltHandler: Handler = async (args, ctx) => {
       title: w.title,
       isHome: w.isHome,
       postType: w.postType,
-      postContent: w.postContent,
+      // Wrap carried <img>s with a captured mobile variant in <picture> + a
+      // `(max-width:750px)` <source>, AFTER media rewriting so the mobile CDN
+      // URL isn't collapsed onto the single local desktop file (same media-id).
+      postContent: rewriteResponsiveImages(w.postContent, responsiveImages),
     })),
   });
 };
