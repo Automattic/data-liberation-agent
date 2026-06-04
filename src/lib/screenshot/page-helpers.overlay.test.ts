@@ -274,6 +274,58 @@ describe('dismissOverlays — consent banner (Playwright)', () => {
   });
 });
 
+// Closing modal A injects modal B (a second scroll-locking dialog). Only a
+// re-detect round can catch B — a single pass would leave it captured.
+const STACKED_FIXTURE = `<!doctype html><html><head><style>
+  body.locked { overflow: hidden; }
+  .ov { position: fixed; inset: 0; z-index: 999999; background: #fff; }
+</style></head><body class="locked">
+  <div id="a" class="ov" role="dialog" aria-modal="true">
+    <button aria-label="Close" id="ax">×</button>A
+  </div>
+  <main style="height:3000px">content</main>
+  <script>
+    document.getElementById('ax').addEventListener('click', function () {
+      document.getElementById('a').remove();
+      var b = document.createElement('div');
+      b.id = 'b'; b.className = 'ov'; b.setAttribute('role', 'dialog'); b.setAttribute('aria-modal', 'true');
+      b.innerHTML = '<button aria-label="Close" id="bx">×</button>B';
+      document.body.appendChild(b);
+      document.getElementById('bx').addEventListener('click', function () {
+        document.getElementById('b').remove();
+        document.body.classList.remove('locked');
+      });
+    });
+  </script>
+</body></html>`;
+
+describe('dismissOverlays — stacked overlays (Playwright)', () => {
+  it('clears a second overlay that only appears after the first is dismissed', async () => {
+    const page = await browser.newPage();
+    await page.setContent(STACKED_FIXTURE);
+    try {
+      const dismissed = await dismissOverlays(page);
+      expect(dismissed.length).toBe(2);
+      expect(await page.locator('.ov').count()).toBe(0);
+      expect(await page.evaluate(() => getComputedStyle(document.body).overflow)).not.toBe('hidden');
+    } finally {
+      await page.close();
+    }
+  });
+
+  it('respects maxRounds: a single round leaves the late overlay', async () => {
+    const page = await browser.newPage();
+    await page.setContent(STACKED_FIXTURE);
+    try {
+      const dismissed = await dismissOverlays(page, { maxRounds: 1 });
+      expect(dismissed.length).toBe(1); // only A; B surfaced after round 1 ended
+      expect(await page.locator('#b').count()).toBe(1);
+    } finally {
+      await page.close();
+    }
+  });
+});
+
 // An un-closeable scroll-locking modal: no close control, no Escape handler.
 const MODAL_STUBBORN_FIXTURE = `<!doctype html><html><head><style>
   body.locked { overflow: hidden; }
