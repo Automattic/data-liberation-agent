@@ -82,6 +82,13 @@ export interface StartPreviewResult {
   logTail?: string[];
   source?: PreviewSource;
   siteName?: string;
+  /**
+   * On-disk WP root of the provisioned site (the dir that contains `wp-content`),
+   * resolved via `resolveStudioWpRoot`. Studio only — lets callers (e.g. the carry
+   * reconstruct driver) use this directly as `studioSitePath` instead of re-deriving
+   * `~/Studio/<siteName>`. Absent on the Playground path.
+   */
+  path?: string;
 }
 
 export interface StopPreviewResult {

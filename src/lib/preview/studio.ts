@@ -512,6 +512,7 @@ export async function startStudioPreview(opts: StartStudioOpts): Promise<StartPr
       warnings,
       source: 'studio',
       siteName: site.name,
+      path: resolveStudioWpRoot(site.path),
     };
   } catch (err) {
     await removeStudioSite(sitePath);
