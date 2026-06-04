@@ -71,6 +71,12 @@ export interface AssembleOutput {
  *
  * No IO — callers (handler + tests) are responsible for reading inputs / writing outputs.
  */
+/** Parse the class tokens off the first `<body …>` tag in carried HTML. */
+function extractBodyClasses(html: string): string[] {
+  const m = /<body[^>]*\bclass\s*=\s*["']([^"']*)["']/i.exec(html);
+  return m ? m[1].split(/\s+/).filter(Boolean) : [];
+}
+
 export function assembleAltTheme(input: AssembleInput): AssembleOutput {
   // Reconstruct every page once, preserving input order for the emitted files.
   const recos = input.pages.map((p) => ({
@@ -158,10 +164,16 @@ export function assembleAltTheme(input: AssembleInput): AssembleOutput {
     .filter(Boolean)
     .join('\n');
 
+  // Replicate the source <body> classes (e.g. Wix's `responsive`) onto the WP body
+  // so body-state-gated carried rules — the whole mobile-reflow layout — behave like
+  // the source. Taken from the home page's carried HTML.
+  const bodyClasses = extractBodyClasses(homeReco?.p.bodyHtml ?? '');
+
   const themeFiles = buildAltThemeFiles({
     themeName: input.themeName,
     chromeVariants: variants,
     siteCss,
+    bodyClasses,
     pages: scaffoldPages,
   });
 

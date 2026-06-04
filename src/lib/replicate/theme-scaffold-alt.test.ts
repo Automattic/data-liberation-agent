@@ -46,6 +46,19 @@ describe('buildAltThemeFiles', () => {
     expect(fn).toContain('wp_enqueue_style');
   });
 
+  it('replicates sanitized source body classes onto the WP body (e.g. responsive)', () => {
+    const fn = buildAltThemeFiles({
+      themeName: 'A', chromeVariants: oneVariant(), siteCss: '',
+      bodyClasses: ['responsive', 'device-mobile', 'bad class!', '', '123nope'],
+      pages: [page({ slug: 'home', isHome: true, pageCss: '' })],
+    }).find((f) => f.path === 'functions.php')!.content;
+    expect(fn).toContain("$classes[] = 'responsive';");
+    expect(fn).toContain("$classes[] = 'device-mobile';");
+    // unsafe tokens are dropped
+    expect(fn).not.toContain('bad class!');
+    expect(fn).not.toContain("'123nope'");
+  });
+
   it('emits templates/index.html as a required WP block theme fallback template', () => {
     const paths = files.map((f) => f.path);
     expect(paths).toContain('templates/index.html');

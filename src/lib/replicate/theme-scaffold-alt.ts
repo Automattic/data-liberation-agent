@@ -83,6 +83,15 @@ export interface AltThemeInput {
    * per-header comp-ids, so a variant's rules match nothing on a page using another.
    */
   siteCss: string;
+  /**
+   * Classes from the source `<body>` to replicate on the WP body (via body_class).
+   * Carried CSS folds the source's `body` selector onto the scope, so rules keyed
+   * on body state — e.g. Wix's `body.responsive` / `body:not(.responsive)` that
+   * gate the entire responsive (mobile-reflow) layout — only behave correctly when
+   * the WP body carries the same classes. Without this the alt is stuck in the
+   * desktop layout on mobile.
+   */
+  bodyClasses?: string[];
   /** One entry per page that needs a template + per-page CSS file. */
   pages: AltPage[];
 }
@@ -160,8 +169,19 @@ function templateFor(p: AltPage, slugs: ChromeSlugs): string {
   return p.scaffold ? scaffoldedTemplate(p.scaffold, slugs) : pageTemplate(slugs);
 }
 
-function functionsPhp(pages: AltPage[]): string {
-  // body_class filter: always add lib-alt-site; conditionally add per-page class.
+/** Valid, safe CSS class token (no quotes/spaces); excludes WP-reserved-ish noise. */
+function sanitizeBodyClass(cls: string): string | null {
+  return /^[a-zA-Z][\w-]{0,60}$/.test(cls) ? cls : null;
+}
+
+function functionsPhp(pages: AltPage[], bodyClasses: string[]): string {
+  // body_class filter: always add lib-alt-site; replicate the source body classes
+  // (so body-state-gated carried rules behave like the source); add per-page class.
+  const sourceBodyCases = bodyClasses
+    .map(sanitizeBodyClass)
+    .filter((c): c is string => c !== null)
+    .map((c) => `    $classes[] = '${c}';`)
+    .join('\n');
   const bodyCases = pages
     .map((p) => `    if ( ${pageCondition(p)} ) { $classes[] = 'lib-alt-page-${p.slug}'; }`)
     .join('\n');
@@ -177,7 +197,7 @@ function functionsPhp(pages: AltPage[]): string {
   return `<?php
 add_filter( 'body_class', function( $classes ) {
     $classes[] = 'lib-alt-site';
-${bodyCases}
+${sourceBodyCases ? sourceBodyCases + '\n' : ''}${bodyCases}
     return $classes;
 } );
 
@@ -249,7 +269,7 @@ export function buildAltThemeFiles(input: AltThemeInput): ThemeFile[] {
   const files: ThemeFile[] = [
     { path: 'style.css', content: styleCssHeader(input.themeName) },
     { path: 'theme.json', content: JSON.stringify(themeJson, null, 2) },
-    { path: 'functions.php', content: functionsPhp(input.pages) },
+    { path: 'functions.php', content: functionsPhp(input.pages, input.bodyClasses ?? []) },
     // Site-wide CSS — reset first (so source rules win the cascade), then the
     // chrome-wrapper rescue, then EVERY variant's carried chrome CSS (concatenated
     // upstream into siteCss; comp-id-scoped so variants never collide).
