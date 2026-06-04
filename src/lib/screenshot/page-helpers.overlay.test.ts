@@ -124,6 +124,27 @@ describe('selectOverlayTargets', () => {
     expect(targets).toHaveLength(1);
     expect(targets[0].kind).toBe('takeover');
   });
+
+  it('drops thin sticky chrome that only reaches threshold via scroll-lock + a sibling backdrop', () => {
+    // score = scroll-lock(3) + backdrop(1) = 4 (== threshold), but no modal role and
+    // tiny coverage → NOT a takeover. (This is the false-positive the gate guards.)
+    const detection: OverlayDetection = {
+      scrollLock: { active: true },
+      candidates: [benign({ idx: 0, selector: 'header.site', hasBackdrop: true, coverageRatio: 0.08 })],
+    };
+    expect(selectOverlayTargets(detection)).toEqual([]);
+  });
+
+  it('keeps a small scroll-locking modal that carries its own dialog semantics', () => {
+    // score = dialog(3) + scroll-lock(3) = 6; coverage only 0.09 but aria-modal → takeover.
+    const detection: OverlayDetection = {
+      scrollLock: { active: true },
+      candidates: [benign({ idx: 0, selector: 'div.age-gate', ariaModal: true, coverageRatio: 0.09 })],
+    };
+    const targets = selectOverlayTargets(detection);
+    expect(targets).toHaveLength(1);
+    expect(targets[0].kind).toBe('takeover');
+  });
 });
 
 // A scroll-locking newsletter modal with a working close button, a backdrop, and

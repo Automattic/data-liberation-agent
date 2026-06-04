@@ -283,10 +283,13 @@ export function selectOverlayTargets(d: OverlayDetection): OverlayTarget[] {
   const consents: OverlayTarget[] = [];
   for (const c of d.candidates) {
     const { score, signals } = scoreOverlay(c, d.scrollLock);
-    // A minimum coverage floor for takeovers (15%) guards against sticky chrome
-    // that reaches the threshold via scroll-lock + backdrop from a sibling modal.
-    // Real takeover overlays always cover significant viewport area.
-    if (score >= OVERLAY_THRESHOLD && c.coverageRatio >= 0.15) {
+    // Ambient signals alone (page-global scroll-lock + a SIBLING modal's backdrop)
+    // can lift benign sticky chrome to the threshold. Require a takeover to either
+    // carry its own modal semantics (aria-modal / role=dialog) OR cover a real slice
+    // of the viewport — so a small age-gate dialog is still caught while a thin
+    // sticky header (no modal role, tiny coverage) is not.
+    const hasModalRole = c.ariaModal || c.role === 'dialog' || c.role === 'alertdialog';
+    if (score >= OVERLAY_THRESHOLD && (hasModalRole || c.coverageRatio >= 0.15)) {
       takeovers.push({
         idx: c.idx, kind: 'takeover', score, signals,
         selector: c.selector, hasCloseAffordance: c.hasCloseAffordance,
@@ -441,7 +444,12 @@ function cleanupStamps(page: Page): Promise<void> {
   });
 }
 
-/** Last resort: remove the stamped overlay + a full-viewport sibling backdrop. */
+/**
+ * Last resort: remove the stamped overlay + a full-viewport sibling backdrop.
+ * Scroll-unlock is NOT done here — the orchestrator calls ensureScrollUnlocked
+ * after any round that acted (a successful force-remove always sets a method),
+ * so duplicating the unlock probe here would be redundant.
+ */
 function forceRemoveOverlay(page: Page, idx: number): Promise<void> {
   return page.evaluate((i: number) => {
     const el = document.querySelector(`[data-lib-overlay="${i}"]`);
@@ -457,30 +465,6 @@ function forceRemoveOverlay(page: Page, idx: number): Promise<void> {
         }
       }
       el.remove();
-    }
-    const SCROLL_LOCK = /(prevent|disable|no)[-_]?(body[-_]?)?scroll|modal[-_]?open|scroll[-_]?lock/i;
-    const isLocked = (e: HTMLElement) => {
-      const cs = getComputedStyle(e);
-      return cs.overflow === 'hidden' || cs.overflow === 'clip' ||
-             cs.overflowY === 'hidden' || cs.overflowY === 'clip';
-    };
-    for (const e of [document.body, document.documentElement]) {
-      if (!e) continue;
-      (e as HTMLElement).style.overflow = '';
-      if (typeof e.className === 'string') {
-        e.className = e.className.split(/\s+/).filter((c) => c && !SCROLL_LOCK.test(c)).join(' ');
-        if (isLocked(e as HTMLElement)) {
-          const classes = e.className.split(/\s+/).filter(Boolean);
-          for (const c of classes) {
-            e.classList.remove(c);
-            if (!isLocked(e as HTMLElement)) break;
-            e.classList.add(c);
-          }
-        }
-      }
-      if (isLocked(e as HTMLElement)) {
-        (e as HTMLElement).style.overflow = 'visible';
-      }
     }
   }, idx);
 }
