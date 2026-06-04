@@ -248,6 +248,21 @@ export function buildCarryThemeFiles(input: CarryThemeInput): ThemeFile[] {
   const usesScaffold = input.pages.some((p) => p.scaffold);
   const CHROME_RESCUE = usesScaffold ? '.wp-block-template-part{display:contents}\n' : '';
 
+  // Wix paints every section/page background as DECORATIVE layers — `[data-hook="bgLayers"]`
+  // wrappers and their `[data-testid="colorUnderlay"]` color fill — positioned `absolute; inset:0`.
+  // In the live Wix runtime these never catch clicks: they sit behind the content and the
+  // section wrapper is a positioned containing block, so each layer fills only its own section.
+  // The static carry loses that containment — the section wrapper computes to `position:static`,
+  // so an absolute layer escapes its section and can blanket the whole page, floating ON TOP of
+  // the carried content (with `pointer-events:auto`) and swallowing every click on the links
+  // beneath it (Read More buttons, nav, CTAs). These layers are purely decorative and must never
+  // be interactive, so force them transparent to pointer events. (`!important` to win regardless
+  // of the carried source CSS — mirrors VP_TOGGLE_CSS's must-win overrides below.)
+  const BG_LAYER_CLICK_FIX =
+    'body.lib-carry-site [data-hook="bgLayers"],' +
+    'body.lib-carry-site [data-testid="colorUnderlay"],' +
+    'body.lib-carry-site [data-motion-part^="BG_LAYER"]{pointer-events:none!important}\n';
+
   // Wix pro-galleries freeze their items at JS-computed desktop ABSOLUTE
   // coordinates, so on mobile only the leftmost column is on screen. Rather than
   // fight the widget's deeply-nested frozen wrappers with CSS (every reset reveals
@@ -324,7 +339,7 @@ export function buildCarryThemeFiles(input: CarryThemeInput): ThemeFile[] {
     // Site-wide CSS — reset first (so source rules win the cascade), then the
     // chrome-wrapper rescue, then EVERY variant's carried chrome CSS (concatenated
     // upstream into siteCss; comp-id-scoped so variants never collide).
-    { path: 'assets/css/site.css', content: RESET + CHROME_RESCUE + GALLERY_REFLOW + VP_TOGGLE_CSS + input.siteCss },
+    { path: 'assets/css/site.css', content: RESET + CHROME_RESCUE + BG_LAYER_CLICK_FIX + GALLERY_REFLOW + VP_TOGGLE_CSS + input.siteCss },
     { path: 'templates/index.html', content: indexTemplate },
   ];
 

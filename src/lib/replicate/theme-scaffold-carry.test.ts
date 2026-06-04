@@ -83,6 +83,17 @@ describe('buildCarryThemeFiles', () => {
     expect(css.indexOf('all:revert')).toBeLessThan(css.indexOf('body.lib-carry-site{margin:0}'));
   });
 
+  it('site.css makes decorative Wix background layers non-interactive (they must not swallow clicks)', () => {
+    // Wix bgLayers/colorUnderlay are absolute; inset:0 overlays; without containment a carried
+    // one can blanket the page and intercept every click on the links beneath it. They are purely
+    // decorative, so the carry forces them pointer-events:none. Unconditional (this fixture has no
+    // scaffold), and must win the cascade (!important) over the carried source CSS.
+    const css = byPath('assets/css/site.css');
+    expect(css).toContain('[data-hook="bgLayers"]');
+    expect(css).toContain('[data-testid="colorUnderlay"]');
+    expect(css).toMatch(/\[data-testid="colorUnderlay"\][^}]*pointer-events:none!important/);
+  });
+
   it('theme.json is valid JSON at version 3', () => {
     expect(JSON.parse(byPath('theme.json')).version).toBe(3);
   });
