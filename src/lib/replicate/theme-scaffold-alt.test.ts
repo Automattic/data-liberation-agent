@@ -198,6 +198,13 @@ describe('buildAltThemeFiles', () => {
       expect(get('assets/css/site.css')).toContain('.wp-block-template-part{display:contents}');
     });
 
+    it('adds a mobile-gated pro-gallery reflow override to site.css', () => {
+      const css = get('assets/css/site.css');
+      expect(css).toContain('@media screen and (max-width:750px)');
+      expect(css).toContain('pro-gallery');
+      expect(css).toContain('flex-direction:column!important');
+    });
+
     it('declares header/footer template-part areas in theme.json', () => {
       const areas = (JSON.parse(get('theme.json')).templateParts ?? []).map((p: { area: string }) => p.area);
       expect(areas).toContain('header');

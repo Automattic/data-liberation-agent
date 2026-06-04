@@ -238,6 +238,20 @@ export function buildAltThemeFiles(input: AltThemeInput): ThemeFile[] {
   const usesScaffold = input.pages.some((p) => p.scaffold);
   const CHROME_RESCUE = usesScaffold ? '.wp-block-template-part{display:contents}\n' : '';
 
+  // Wix pro-galleries lay their items out with JS-computed ABSOLUTE coordinates
+  // frozen at the desktop capture (a multi-column grid). The carry has no JS to
+  // re-pack them for narrow viewports, so on mobile only the leftmost column is on
+  // screen and the rest overflow off the right. Re-flow them into a single stacked
+  // column at mobile widths — static position, full-width column — which matches
+  // the source's mobile gallery far better than the frozen desktop grid. Mobile-
+  // gated so the desktop absolute grid (which IS correct) is untouched.
+  const GALLERY_REFLOW =
+    '@media screen and (max-width:750px){' +
+    'body.lib-alt-site [class*="pro-gallery"]{height:auto!important;display:flex!important;flex-direction:column!important;align-items:center}' +
+    'body.lib-alt-site [class*="pro-gallery"] [class*="gallery-column"]{width:100%!important}' +
+    'body.lib-alt-site [class*="pro-gallery"] [class*="gallery-item-container"]{position:relative!important;inset:auto!important;left:auto!important;top:auto!important;transform:none!important;margin:4px 0!important}' +
+    '}\n';
+
   // Map each distinct chrome variant to its part slugs (variant 0 → header/footer).
   const slugsByKey = new Map<string, ChromeSlugs>();
   input.chromeVariants.forEach((v, i) => slugsByKey.set(v.key, chromeSlugsForIndex(i)));
@@ -279,7 +293,7 @@ export function buildAltThemeFiles(input: AltThemeInput): ThemeFile[] {
     // Site-wide CSS — reset first (so source rules win the cascade), then the
     // chrome-wrapper rescue, then EVERY variant's carried chrome CSS (concatenated
     // upstream into siteCss; comp-id-scoped so variants never collide).
-    { path: 'assets/css/site.css', content: RESET + CHROME_RESCUE + input.siteCss },
+    { path: 'assets/css/site.css', content: RESET + CHROME_RESCUE + GALLERY_REFLOW + input.siteCss },
     { path: 'templates/index.html', content: indexTemplate },
   ];
 
