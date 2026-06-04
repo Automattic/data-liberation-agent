@@ -1,5 +1,6 @@
 import { writeFileSync, renameSync, existsSync, readFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import type { DismissedOverlay } from './page-helpers.js';
 
 export interface ManifestEntry {
   slug: string;
@@ -10,6 +11,8 @@ export interface ManifestEntry {
   html?: string;
   /** path to sections/<slug>.json (captured section specs) when present */
   sections?: string;
+  /** Overlays/banners dismissed before this URL was captured (observability). */
+  dismissed?: DismissedOverlay[];
   capturedAt: string;
   /** Populated by site-analysis; may be absent */
   metadata?: {

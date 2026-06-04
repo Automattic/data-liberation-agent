@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ManifestQueue } from './manifest-queue.js';
+import type { DismissedOverlay } from './page-helpers.js';
 
 describe('ManifestQueue', () => {
   it('serializes concurrent updates deterministically', async () => {
@@ -96,6 +97,23 @@ describe('ManifestQueue', () => {
 
       const data = JSON.parse(readFileSync(join(dir, 'manifest.json'), 'utf8'));
       expect(Object.keys(data.entries)).toHaveLength(2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('round-trips a dismissed[] on a manifest entry', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mq-dismissed-'));
+    try {
+      const q = new ManifestQueue(join(dir, 'manifest.json'));
+      await q.init();
+      const dismissed: DismissedOverlay[] = [
+        { selector: 'div.popup', method: 'close-click', kind: 'takeover', score: 11, signals: ['dialog', 'scroll-lock'] },
+      ];
+      await q.updateEntry('https://example.test/', { slug: 'home', capturedAt: 't', dismissed });
+      await q.flush();
+      const parsed = JSON.parse(readFileSync(join(dir, 'manifest.json'), 'utf8'));
+      expect(parsed.entries['https://example.test/'].dismissed[0].method).toBe('close-click');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
