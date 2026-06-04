@@ -424,6 +424,8 @@ async function dismissOne(
   page: Page,
   t: OverlayTarget,
 ): Promise<DismissedOverlay['method'] | null> {
+  // Skip if already gone (e.g. removed by a sibling's close handler).
+  if (!(await overlayPresent(page, t.idx))) return null;
   // Tier 1 — graceful close: a real click fires the site's handler, which
   // releases its own scroll-lock.
   if (t.hasCloseAffordance) {
@@ -433,6 +435,13 @@ async function dismissOne(
     } catch {
       /* fall through to the next tier */
     }
+  }
+  // Tier 2 — Escape (many modal libraries close on it).
+  try {
+    await page.keyboard.press('Escape');
+    if (!(await overlayPresent(page, t.idx))) return 'escape';
+  } catch {
+    /* fall through to the next tier */
   }
   return null;
 }

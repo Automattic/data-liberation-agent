@@ -184,3 +184,36 @@ describe('dismissOverlays — Tier 1 graceful close (Playwright)', () => {
     }
   });
 });
+
+// A scroll-locking modal with NO close control that closes on Escape.
+const MODAL_ESCAPE_FIXTURE = `<!doctype html><html><head><style>
+  body.locked { overflow: hidden; }
+  #m { position: fixed; inset: 0; z-index: 999999; background: #fff; }
+</style></head><body class="locked">
+  <div id="m" role="dialog" aria-modal="true"><p>No close button here</p></div>
+  <main style="height:3000px">content</main>
+  <script>
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') {
+        document.getElementById('m').remove();
+        document.body.classList.remove('locked');
+      }
+    });
+  </script>
+</body></html>`;
+
+describe('dismissOverlays — Tier 2 Escape (Playwright)', () => {
+  it('falls back to Escape when there is no close control', async () => {
+    const page = await browser.newPage();
+    await page.setContent(MODAL_ESCAPE_FIXTURE);
+    try {
+      const dismissed = await dismissOverlays(page);
+      expect(dismissed).toHaveLength(1);
+      expect(dismissed[0].method).toBe('escape');
+      expect(await page.locator('#m').count()).toBe(0);
+      expect(await page.evaluate(() => getComputedStyle(document.body).overflow)).not.toBe('hidden');
+    } finally {
+      await page.close();
+    }
+  });
+});
