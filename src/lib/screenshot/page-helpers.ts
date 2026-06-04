@@ -256,3 +256,16 @@ export function scoreOverlay(
   }
   return { score, signals };
 }
+
+const CONSENT_TEXT_RE = /\bcookies?\b|consent|gdpr|ccpa|accept all|privacy (policy|preferences)/i;
+const CONSENT_VENDOR_RE = /onetrust|cookiebot|usercentrics|termly|osano|trustarc|cookieyes/i;
+
+/**
+ * A looser, separate classifier for cookie/consent banners. They frequently do
+ * NOT lock scroll and are thin strips, so they won't clear the takeover score;
+ * we flag them by consent keywords / known vendors in their text/aria/selector.
+ */
+export function isConsentBanner(c: OverlayCandidate): boolean {
+  const hay = `${c.text} ${c.ariaLabel ?? ''} ${c.selector}`.toLowerCase();
+  return CONSENT_TEXT_RE.test(hay) || CONSENT_VENDOR_RE.test(hay);
+}

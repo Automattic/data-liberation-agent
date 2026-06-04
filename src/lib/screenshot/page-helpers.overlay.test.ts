@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   scoreOverlay,
   OVERLAY_THRESHOLD,
+  isConsentBanner,
   type OverlayCandidate,
   type ScrollLockState,
 } from './page-helpers.js';
@@ -57,5 +58,19 @@ describe('scoreOverlay', () => {
   it('keeps a fixed full-screen parallax background below threshold without scroll-lock', () => {
     const bg = benign({ coverageRatio: 1, zIndex: 0 });
     expect(scoreOverlay(bg, noLock).score).toBe(3); // coverage>=90 only
+  });
+});
+
+describe('isConsentBanner', () => {
+  it('flags a banner by consent keyword in its text', () => {
+    expect(isConsentBanner(benign({ text: 'we use cookies to improve your experience' }))).toBe(true);
+  });
+
+  it('flags a banner by a known consent vendor in its selector', () => {
+    expect(isConsentBanner(benign({ selector: 'div#onetrust-banner-sdk', text: 'manage preferences' }))).toBe(true);
+  });
+
+  it('does not flag a generic newsletter modal as a consent banner', () => {
+    expect(isConsentBanner(benign({ text: 'join our list for 10 percent off', selector: 'div.popup' }))).toBe(false);
   });
 });
