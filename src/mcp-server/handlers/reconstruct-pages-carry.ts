@@ -25,6 +25,7 @@ import { chromeSignature, stripActiveNavState } from '../../lib/replicate/chrome
 import { rewriteResponsiveImages } from '../../lib/replicate/responsive-image-rewrite.js';
 import { appendGalleryMobileGrid } from '../../lib/replicate/gallery-mobile-grid.js';
 import { collectCss } from '../../lib/replicate/css-collect.js';
+import { assessBody, readPngHeight, classifyEmptyBodies, type EmptyBody, type PageStat } from '../../lib/screenshot/dynamic-content.js';
 import { buildPageLinkMap } from '../../lib/replicate/page-link-map.js';
 import { installRunMediaMap } from '../../lib/replicate/run-media-map.js';
 import type { InternalLinkMap } from '../../lib/streaming/internal-link-rewrite.js';
@@ -317,6 +318,16 @@ export const reconstructPagesCarryHandler: Handler = async (args, ctx) => {
   // Collect HTML + CSS for each page.
   const carryPages: CarryPageInput[] = [];
   const fetchErrors: Array<{ slug: string; error: string }> = [];
+  // Phase 0 guardrail: pages whose captured body renders effectively empty (a JS app that
+  // never rendered — reviews/FAQ widgets, cross-origin iframes). The reliable signal is
+  // RENDERED HEIGHT (a chrome-only page is dramatically shorter than the page-set median),
+  // not DOM text (the app's DOM is present-but-blank, plus ~300 chars of cart boilerplate).
+  // Collected per page here, decided after the loop once the median is known.
+  const emptyBodies: EmptyBody[] = [];
+  const pageStats: PageStat[] = [];
+  const siteOrigin = (() => {
+    try { return new URL(pages[0].sourceUrl).origin; } catch { return undefined; }
+  })();
 
   // Responsive-image map ({wix-media-id → mobile-variant URL}) captured at the
   // mobile viewport by liberate_screenshot. Used to wrap carried <img>s in a
@@ -367,6 +378,10 @@ export const reconstructPagesCarryHandler: Handler = async (args, ctx) => {
       }
     }
 
+    // Phase 0: record the rendered height + body classification; the empty decision is
+    // made after the loop (needs the page-set median).
+    const pngPath = join(resolve(outputDir), 'screenshots', 'desktop', `${p.htmlSlug ?? p.slug}.png`);
+    pageStats.push({ slug: p.slug, height: readPngHeight(pngPath), assess: assessBody(bodyHtml, siteOrigin) });
 
     // Collect external stylesheets referenced in the HTML.
     let css = '';
@@ -426,6 +441,12 @@ export const reconstructPagesCarryHandler: Handler = async (args, ctx) => {
       `liberate_reconstruct_pages_carry: no pages could be loaded. fetchErrors: ${JSON.stringify(fetchErrors)}`,
     );
   }
+
+  // Phase 0 decision (pure, tested in dynamic-content.test.ts): a page whose rendered
+  // desktop capture is dramatically shorter than the page-set median AND isn't text-rich
+  // is chrome-only — the JS app never rendered, so it carries blank. Falls back to the
+  // text signal for any page without a usable screenshot height.
+  emptyBodies.push(...classifyEmptyBodies(pageStats));
 
   // Internal-link rewrite map — same builder the block path uses (shared module),
   // so carried nav + body hrefs resolve to the imported permalinks, not the source.
@@ -505,6 +526,15 @@ export const reconstructPagesCarryHandler: Handler = async (args, ctx) => {
     pagesResult = finalPages;
   }
 
+  // Merge the Phase-0 empty-body guardrail into the operator-facing warnings.
+  const allWarnings = [...warnings];
+  if (emptyBodies.length) {
+    allWarnings.push(
+      `${emptyBodies.length} page(s) captured with an empty body (JS-app content that didn't render → carried blank). Re-capture with the dynamic-content waits, or use a WP-native equivalent: ` +
+        emptyBodies.map((e) => `${e.slug} [${e.reason}${e.detail ? ': ' + e.detail : ''}]`).join(', '),
+    );
+  }
+
   return ctx.textResult({
     ok: fetchErrors.length === 0,
     themeRoot,
@@ -512,7 +542,8 @@ export const reconstructPagesCarryHandler: Handler = async (args, ctx) => {
     themeFilesWritten: themeFiles.length,
     fetchErrors,
     skipped,
-    warnings,
+    warnings: allWarnings,
+    emptyBodies,
     mediaInstalled: mediaUrlMap.size,
     mediaErrors,
     islandsDir: islandsOutDir ? resolve(islandsOutDir) : undefined,

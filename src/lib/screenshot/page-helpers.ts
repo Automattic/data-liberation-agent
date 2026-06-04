@@ -1,4 +1,5 @@
 import type { Page } from 'playwright';
+import { expandCollapsedContent, waitForAppWidgets } from './dynamic-content.js';
 
 /**
  * Wait for a page to reach a stable state after load.
@@ -115,6 +116,12 @@ export async function triggerLazyLoad(page: Page): Promise<void> {
     try {
       await page.waitForLoadState('networkidle', { timeout: 5_000 });
     } catch { /* best-effort */ }
+    // Dynamic / JS-app content: expand statically-collapsed sections, then wait for known
+    // content widgets (reviews / FAQ apps) to populate — so the snapshot captures real
+    // content, not an empty placeholder. Both are no-ops on ordinary pages. (See
+    // dynamic-content.ts; DISCOVERIES 2026-06-04.)
+    await expandCollapsedContent(page);
+    await waitForAppWidgets(page);
     // Return to top AND fire a scroll event so scroll-reactive headers recompute
     // their at-top (un-faded) state — scrollTo alone doesn't trigger their handler.
     await page.evaluate(() => {
