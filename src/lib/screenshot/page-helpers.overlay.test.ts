@@ -1,13 +1,19 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { chromium, type Browser } from 'playwright';
 import {
   scoreOverlay,
   OVERLAY_THRESHOLD,
   isConsentBanner,
   selectOverlayTargets,
+  dismissOverlays,
   type OverlayCandidate,
   type ScrollLockState,
   type OverlayDetection,
 } from './page-helpers.js';
+
+let browser: Browser;
+beforeAll(async () => { browser = await chromium.launch(); });
+afterAll(async () => { await browser.close(); });
 
 // A fully benign fixed/sticky element (e.g. a sticky site header).
 const benign = (over: Partial<OverlayCandidate> = {}): OverlayCandidate => ({
@@ -117,5 +123,64 @@ describe('selectOverlayTargets', () => {
     const targets = selectOverlayTargets(detection);
     expect(targets).toHaveLength(1);
     expect(targets[0].kind).toBe('takeover');
+  });
+});
+
+// A scroll-locking newsletter modal with a working close button, a backdrop, and
+// — crucially — a benign sticky header that must survive dismissal untouched.
+const MODAL_CLOSE_FIXTURE = `<!doctype html><html><head><style>
+  body.locked { overflow: hidden; }
+  #hdr { position: sticky; top: 0; height: 60px; z-index: 100; background: #eee; }
+  #bg  { position: fixed; inset: 0; z-index: 2147482000; background: rgba(0,0,0,.5); }
+  #m   { position: fixed; inset: 0; z-index: 2147483000; background: #fff; }
+</style></head><body class="locked">
+  <header id="hdr">site nav</header>
+  <div id="bg"></div>
+  <div id="m" role="dialog" aria-modal="true">
+    <button aria-label="Close" id="x">×</button>
+    <p>Join our fictional newsletter</p>
+  </div>
+  <main style="height:3000px">content</main>
+  <script>
+    document.getElementById('x').addEventListener('click', function () {
+      document.getElementById('m').remove();
+      document.getElementById('bg').remove();
+      document.body.classList.remove('locked');
+    });
+  </script>
+</body></html>`;
+
+describe('dismissOverlays — Tier 1 graceful close (Playwright)', () => {
+  it('clicks the modal close button, restoring scroll and leaving chrome + no stamps', async () => {
+    const page = await browser.newPage();
+    await page.setContent(MODAL_CLOSE_FIXTURE);
+    try {
+      const dismissed = await dismissOverlays(page);
+
+      expect(dismissed).toHaveLength(1);
+      expect(dismissed[0].method).toBe('close-click');
+      expect(dismissed[0].kind).toBe('takeover');
+
+      // modal + backdrop gone, scroll restored
+      expect(await page.locator('#m').count()).toBe(0);
+      expect(await page.evaluate(() => getComputedStyle(document.body).overflow)).not.toBe('hidden');
+      // benign sticky header untouched
+      expect(await page.locator('#hdr').count()).toBe(1);
+      // no detection stamps leaked into the DOM (would otherwise be captured)
+      expect(await page.evaluate(() =>
+        document.querySelectorAll('[data-lib-overlay],[data-lib-overlay-close]').length)).toBe(0);
+    } finally {
+      await page.close();
+    }
+  });
+
+  it('returns [] (never throws) on a page with no overlays', async () => {
+    const page = await browser.newPage();
+    await page.setContent('<!doctype html><body><main style="height:2000px">plain</main></body>');
+    try {
+      expect(await dismissOverlays(page)).toEqual([]);
+    } finally {
+      await page.close();
+    }
   });
 });

@@ -298,3 +298,177 @@ export function selectOverlayTargets(d: OverlayDetection): OverlayTarget[] {
   takeovers.sort((a, b) => b.score - a.score);
   return [...takeovers, ...consents];
 }
+
+/**
+ * Measure all fixed/sticky candidates in the page, stamp each with
+ * data-lib-overlay="<idx>" (and its close control with data-lib-overlay-close)
+ * so Node can target them, and return descriptors + the page scroll-lock state.
+ */
+function detectOverlays(page: Page): Promise<OverlayDetection> {
+  return page.evaluate(() => {
+    const VENDOR = /klaviyo|privy|optinmonster|justuno|sumo|mailchimp|popup|newsletter|subscribe|interstitial/i;
+    const SCROLL_LOCK = /(prevent|disable|no)[-_]?(body[-_]?)?scroll|modal[-_]?open|scroll[-_]?lock/i;
+    const vw = window.innerWidth || 1;
+    const vh = window.innerHeight || 1;
+    const vpArea = vw * vh || 1;
+    const cls = (el: Element) => (typeof el.className === 'string' ? el.className : '');
+    const visible = (cs: CSSStyleDeclaration) =>
+      cs.display !== 'none' && cs.visibility !== 'hidden' && parseFloat(cs.opacity || '1') > 0.1;
+
+    const lockActive = [document.body, document.documentElement].some((el) => {
+      if (!el) return false;
+      const cs = getComputedStyle(el);
+      if (cs.overflow === 'hidden' || cs.overflow === 'clip' ||
+          cs.overflowY === 'hidden' || cs.overflowY === 'clip') return true;
+      return SCROLL_LOCK.test(cls(el));
+    });
+
+    const cssPath = (el: Element) => {
+      const tag = el.tagName.toLowerCase();
+      const id = el.id ? `#${el.id}` : '';
+      const c = cls(el).trim() ? '.' + cls(el).trim().split(/\s+/).slice(0, 2).join('.') : '';
+      return `${tag}${id}${c}`;
+    };
+
+    const CLOSE_SEL =
+      '[aria-label*="close" i],[title*="close" i],button[class*="close" i],[data-dismiss],[data-testid*="close" i]';
+    const findClose = (el: Element): Element | null => {
+      const explicit = el.querySelector(CLOSE_SEL);
+      if (explicit) return explicit;
+      const btns = Array.from(el.querySelectorAll('button,a,[role="button"]'));
+      return btns.find((b) => {
+        const t = (b.textContent || '').trim().toLowerCase();
+        return t === '×' || t === '✕' || t === 'x' || t === 'close';
+      }) || null;
+    };
+
+    const hasBackdrop = (el: Element): boolean => {
+      const sibs = el.parentElement ? Array.from(el.parentElement.children) : [];
+      return sibs.some((s) => {
+        if (s === el) return false;
+        const cs = getComputedStyle(s);
+        if (cs.position !== 'fixed') return false;
+        const r = s.getBoundingClientRect();
+        const cover = (r.width * r.height) / vpArea;
+        const op = parseFloat(cs.opacity || '1');
+        const bg = cs.backgroundColor || '';
+        return cover >= 0.9 && (op < 1 || /rgba?\([^)]*0?\.\d+\s*\)/.test(bg));
+      });
+    };
+
+    const candidates: Array<Record<string, unknown>> = [];
+    let idx = 0;
+    for (const el of Array.from(document.querySelectorAll('*'))) {
+      const cs = getComputedStyle(el);
+      if ((cs.position !== 'fixed' && cs.position !== 'sticky') || !visible(cs)) continue;
+      const r = el.getBoundingClientRect();
+      if (r.width < vw * 0.1 && r.height < vh * 0.1) continue; // drop trackers/badges
+      el.setAttribute('data-lib-overlay', String(idx));
+      const close = findClose(el);
+      if (close) close.setAttribute('data-lib-overlay-close', String(idx));
+      candidates.push({
+        idx,
+        selector: cssPath(el),
+        role: el.getAttribute('role'),
+        ariaModal: el.getAttribute('aria-modal') === 'true',
+        zIndex: parseInt(cs.zIndex, 10) || 0,
+        coverageRatio: Math.min(1, (r.width * r.height) / vpArea),
+        hasBackdrop: hasBackdrop(el),
+        vendorHint: VENDOR.test(`${el.id} ${cls(el)}`),
+        text: (el.textContent || '').toLowerCase().slice(0, 400),
+        ariaLabel: ((el.getAttribute('aria-label') || '').toLowerCase()) || null,
+        hasCloseAffordance: !!close,
+      });
+      idx++;
+    }
+    return { candidates, scrollLock: { active: lockActive } } as unknown as OverlayDetection;
+  });
+}
+
+/** Is the stamped overlay still present + visible? */
+function overlayPresent(page: Page, idx: number): Promise<boolean> {
+  return page.evaluate((i: number) => {
+    const el = document.querySelector(`[data-lib-overlay="${i}"]`);
+    if (!el) return false;
+    const cs = getComputedStyle(el);
+    return cs.display !== 'none' && cs.visibility !== 'hidden' && parseFloat(cs.opacity || '1') > 0.1;
+  }, idx);
+}
+
+/** If body/html scroll is still locked, force-unlock it (best-effort). */
+function ensureScrollUnlocked(page: Page): Promise<void> {
+  return page.evaluate(() => {
+    const SCROLL_LOCK = /(prevent|disable|no)[-_]?(body[-_]?)?scroll|modal[-_]?open|scroll[-_]?lock/i;
+    const cls = (el: Element) => (typeof el.className === 'string' ? el.className : '');
+    for (const el of [document.body, document.documentElement]) {
+      if (!el) continue;
+      (el as HTMLElement).style.overflow = '';
+      if (typeof el.className === 'string') {
+        el.className = cls(el).split(/\s+/).filter((c) => c && !SCROLL_LOCK.test(c)).join(' ');
+      }
+    }
+  });
+}
+
+/** Remove every detection stamp so the captured HTML is clean. */
+function cleanupStamps(page: Page): Promise<void> {
+  return page.evaluate(() => {
+    for (const a of ['data-lib-overlay', 'data-lib-overlay-close', 'data-lib-overlay-consent']) {
+      for (const el of Array.from(document.querySelectorAll(`[${a}]`))) el.removeAttribute(a);
+    }
+  });
+}
+
+/** Attempt to dismiss one target; returns the method that worked, or null. */
+async function dismissOne(
+  page: Page,
+  t: OverlayTarget,
+): Promise<DismissedOverlay['method'] | null> {
+  // Tier 1 — graceful close: a real click fires the site's handler, which
+  // releases its own scroll-lock.
+  if (t.hasCloseAffordance) {
+    try {
+      await page.click(`[data-lib-overlay-close="${t.idx}"]`, { timeout: 1500 });
+      if (!(await overlayPresent(page, t.idx))) return 'close-click';
+    } catch {
+      /* fall through to the next tier */
+    }
+  }
+  return null;
+}
+
+/**
+ * Best-effort: detect and dismiss takeover modals + consent banners before
+ * capture. NEVER throws — a dismissal failure must not fail a capture. Bounded
+ * by maxRounds; re-detects each round to clear stacked/late overlays.
+ */
+export async function dismissOverlays(
+  page: Page,
+  opts: DismissOverlaysOpts = {},
+): Promise<DismissedOverlay[]> {
+  const maxRounds = opts.maxRounds ?? 3;
+  const dismissed: DismissedOverlay[] = [];
+  try {
+    for (let round = 0; round < maxRounds; round++) {
+      const detection = await withEvaluateTimeout(detectOverlays(page), 4000);
+      const targets = selectOverlayTargets(detection);
+      if (targets.length === 0) break;
+      let acted = 0;
+      for (const t of targets) {
+        const method = await dismissOne(page, t);
+        if (method) {
+          dismissed.push({ selector: t.selector, method, kind: t.kind, score: t.score, signals: t.signals });
+          acted++;
+        }
+      }
+      if (acted > 0) await ensureScrollUnlocked(page);
+      await cleanupStamps(page);
+      if (acted === 0) break; // nothing dismissable left; stop early
+    }
+  } catch {
+    /* best-effort — never fail a capture on overlay dismissal */
+  } finally {
+    try { await cleanupStamps(page); } catch { /* ignore */ }
+  }
+  return dismissed;
+}
