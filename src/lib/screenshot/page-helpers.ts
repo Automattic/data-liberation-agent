@@ -283,7 +283,10 @@ export function selectOverlayTargets(d: OverlayDetection): OverlayTarget[] {
   const consents: OverlayTarget[] = [];
   for (const c of d.candidates) {
     const { score, signals } = scoreOverlay(c, d.scrollLock);
-    if (score >= OVERLAY_THRESHOLD) {
+    // A minimum coverage floor for takeovers (15%) guards against sticky chrome
+    // that reaches the threshold via scroll-lock + backdrop from a sibling modal.
+    // Real takeover overlays always cover significant viewport area.
+    if (score >= OVERLAY_THRESHOLD && c.coverageRatio >= 0.15) {
       takeovers.push({
         idx: c.idx, kind: 'takeover', score, signals,
         selector: c.selector, hasCloseAffordance: c.hasCloseAffordance,
@@ -399,12 +402,31 @@ function overlayPresent(page: Page, idx: number): Promise<boolean> {
 function ensureScrollUnlocked(page: Page): Promise<void> {
   return page.evaluate(() => {
     const SCROLL_LOCK = /(prevent|disable|no)[-_]?(body[-_]?)?scroll|modal[-_]?open|scroll[-_]?lock/i;
-    const cls = (el: Element) => (typeof el.className === 'string' ? el.className : '');
+    const isLocked = (el: HTMLElement) => {
+      const cs = getComputedStyle(el);
+      return cs.overflow === 'hidden' || cs.overflow === 'clip' ||
+             cs.overflowY === 'hidden' || cs.overflowY === 'clip';
+    };
     for (const el of [document.body, document.documentElement]) {
       if (!el) continue;
       (el as HTMLElement).style.overflow = '';
       if (typeof el.className === 'string') {
-        el.className = cls(el).split(/\s+/).filter((c) => c && !SCROLL_LOCK.test(c)).join(' ');
+        // Strip known scroll-lock class names.
+        el.className = el.className.split(/\s+/).filter((c) => c && !SCROLL_LOCK.test(c)).join(' ');
+        // If still locked, strip any remaining class that is causing overflow:hidden
+        // (e.g. a generic 'locked' class not matched by the regex above).
+        if (isLocked(el as HTMLElement)) {
+          const classes = el.className.split(/\s+/).filter(Boolean);
+          for (const c of classes) {
+            el.classList.remove(c);
+            if (!isLocked(el as HTMLElement)) break; // found the culprit
+            el.classList.add(c); // not this one, restore and try next
+          }
+        }
+      }
+      // Final fallback: if still locked, force an inline override.
+      if (isLocked(el as HTMLElement)) {
+        (el as HTMLElement).style.overflow = 'visible';
       }
     }
   });
@@ -417,6 +439,50 @@ function cleanupStamps(page: Page): Promise<void> {
       for (const el of Array.from(document.querySelectorAll(`[${a}]`))) el.removeAttribute(a);
     }
   });
+}
+
+/** Last resort: remove the stamped overlay + a full-viewport sibling backdrop. */
+function forceRemoveOverlay(page: Page, idx: number): Promise<void> {
+  return page.evaluate((i: number) => {
+    const el = document.querySelector(`[data-lib-overlay="${i}"]`);
+    if (el) {
+      const vpArea = (window.innerWidth || 1) * (window.innerHeight || 1) || 1;
+      const parent = el.parentElement;
+      if (parent) {
+        for (const s of Array.from(parent.children)) {
+          if (s === el) continue;
+          const cs = getComputedStyle(s);
+          const r = s.getBoundingClientRect();
+          if (cs.position === 'fixed' && (r.width * r.height) / vpArea >= 0.9) s.remove();
+        }
+      }
+      el.remove();
+    }
+    const SCROLL_LOCK = /(prevent|disable|no)[-_]?(body[-_]?)?scroll|modal[-_]?open|scroll[-_]?lock/i;
+    const isLocked = (e: HTMLElement) => {
+      const cs = getComputedStyle(e);
+      return cs.overflow === 'hidden' || cs.overflow === 'clip' ||
+             cs.overflowY === 'hidden' || cs.overflowY === 'clip';
+    };
+    for (const e of [document.body, document.documentElement]) {
+      if (!e) continue;
+      (e as HTMLElement).style.overflow = '';
+      if (typeof e.className === 'string') {
+        e.className = e.className.split(/\s+/).filter((c) => c && !SCROLL_LOCK.test(c)).join(' ');
+        if (isLocked(e as HTMLElement)) {
+          const classes = e.className.split(/\s+/).filter(Boolean);
+          for (const c of classes) {
+            e.classList.remove(c);
+            if (!isLocked(e as HTMLElement)) break;
+            e.classList.add(c);
+          }
+        }
+      }
+      if (isLocked(e as HTMLElement)) {
+        (e as HTMLElement).style.overflow = 'visible';
+      }
+    }
+  }, idx);
 }
 
 /** Attempt to dismiss one target; returns the method that worked, or null. */
@@ -442,6 +508,13 @@ async function dismissOne(
     if (!(await overlayPresent(page, t.idx))) return 'escape';
   } catch {
     /* fall through to the next tier */
+  }
+  // Tier 3 — force remove + unlock (last resort).
+  try {
+    await forceRemoveOverlay(page, t.idx);
+    if (!(await overlayPresent(page, t.idx))) return 'remove';
+  } catch {
+    /* give up on this overlay */
   }
   return null;
 }

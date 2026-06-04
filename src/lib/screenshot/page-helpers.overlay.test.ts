@@ -217,3 +217,32 @@ describe('dismissOverlays — Tier 2 Escape (Playwright)', () => {
     }
   });
 });
+
+// An un-closeable scroll-locking modal: no close control, no Escape handler.
+const MODAL_STUBBORN_FIXTURE = `<!doctype html><html><head><style>
+  body.locked { overflow: hidden; }
+  #bg { position: fixed; inset: 0; z-index: 999998; background: rgba(0,0,0,.6); }
+  #m  { position: fixed; inset: 0; z-index: 999999; background: #fff; }
+</style></head><body class="locked">
+  <div id="bg"></div>
+  <div id="m" role="dialog" aria-modal="true"><p>You cannot close me</p></div>
+  <main style="height:3000px">content</main>
+</body></html>`;
+
+describe('dismissOverlays — Tier 3 force remove (Playwright)', () => {
+  it('removes the overlay + backdrop and force-unlocks scroll as a last resort', async () => {
+    const page = await browser.newPage();
+    await page.setContent(MODAL_STUBBORN_FIXTURE);
+    try {
+      const dismissed = await dismissOverlays(page);
+      expect(dismissed).toHaveLength(1);
+      expect(dismissed[0].method).toBe('remove');
+      expect(await page.locator('#m').count()).toBe(0);
+      expect(await page.locator('#bg').count()).toBe(0); // backdrop removed too
+      expect(await page.evaluate(() => getComputedStyle(document.body).overflow)).not.toBe('hidden');
+      expect(await page.evaluate(() => document.body.classList.contains('locked'))).toBe(false);
+    } finally {
+      await page.close();
+    }
+  });
+});
