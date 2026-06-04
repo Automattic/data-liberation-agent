@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { chromium, type Browser } from 'playwright';
-import { mkdtempSync, mkdirSync, readFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { createServer, type Server as HttpServer } from 'node:http';
 import { captureScreenshots } from './screenshotter.js';
@@ -410,6 +410,7 @@ describe('captureScreenshots integration — overlay dismissed before capture (r
       expect(manifest.entries[url].dismissed?.[0]?.method).toBe('close-click');
     } finally {
       await new Promise<void>((r) => server.close(() => r()));
+      rmSync(outputDir, { recursive: true, force: true });
     }
   }, 60_000);
 });

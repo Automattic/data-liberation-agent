@@ -59,7 +59,13 @@ const ANALYSIS_SAMPLE_LIMIT = 1;
  *    │                                                 waitForStable
  *    │                                                   │
  *    │                                                   ▼
+ *    │                                                 dismissOverlays (early)
+ *    │                                                   │
+ *    │                                                   ▼
  *    │                                                 triggerLazyLoad
+ *    │                                                   │
+ *    │                                                   ▼
+ *    │                                                 dismissOverlays (late)
  *    │                                                   │
  *    │                            desktop only          ▼
  *    │                         ┌────────── plan.captureHtml ──▶ page.content → html/<slug>.html
@@ -194,6 +200,9 @@ async function capturePerViewport(args: CapturePerViewportArgs): Promise<void> {
   const dismissedLate = await dismissOverlays(page);
   const dismissedHere = [...dismissedEarly, ...dismissedLate];
   if (dismissedHere.length > 0) {
+    // Accumulates within one run (desktop + mobile both append); on a resumed
+    // re-capture, updateEntry's shallow spread REPLACES the prior dismissed[] with
+    // this run's — intended (we want the most-recent capture's dismissals, not a union).
     entry.dismissed = [...(entry.dismissed ?? []), ...dismissedHere];
   }
 
