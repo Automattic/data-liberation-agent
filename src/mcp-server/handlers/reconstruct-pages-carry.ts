@@ -26,6 +26,7 @@ import { rewriteResponsiveImages } from '../../lib/replicate/responsive-image-re
 import { appendGalleryMobileGrid } from '../../lib/replicate/gallery-mobile-grid.js';
 import { collectCss } from '../../lib/replicate/css-collect.js';
 import { assessBody, readPngHeight, classifyEmptyBodies, type EmptyBody, type PageStat } from '../../lib/screenshot/dynamic-content.js';
+import { loadCarryDesignTokens } from '../../lib/replicate/carry-design-tokens.js';
 import { buildPageLinkMap } from '../../lib/replicate/page-link-map.js';
 import { installRunMediaMap } from '../../lib/replicate/run-media-map.js';
 import type { InternalLinkMap } from '../../lib/streaming/internal-link-rewrite.js';
@@ -63,6 +64,10 @@ export interface AssembleInput {
    * default templates.
    */
   hasProducts?: boolean;
+  /** Captured design tokens to register in theme.json so product-marketing core blocks
+   *  resolve their color/font token references (built by loadCarryDesignTokens). */
+  themeJsonPalette?: Array<{ slug: string; name: string; color: string }>;
+  themeJsonFontFamilies?: Array<{ slug: string; name: string; fontFamily: string }>;
 }
 
 export interface WxrPage {
@@ -241,6 +246,8 @@ export function assembleCarryTheme(input: AssembleInput): AssembleOutput {
     pages: scaffoldPages,
     storeHeaderIsland,
     hasProducts: input.hasProducts,
+    themeJsonPalette: input.themeJsonPalette,
+    themeJsonFontFamilies: input.themeJsonFontFamilies,
   });
 
   // Guardrail: a store run that couldn't isolate a header → no store templates →
@@ -477,12 +484,17 @@ export const reconstructPagesCarryHandler: Handler = async (args, ctx) => {
     existsSync(join(resolve(outputDir), 'products.csv')) ||
     existsSync(join(resolve(outputDir), 'products.jsonl'));
 
+  // Register the captured palette/fonts in theme.json so the product-marketing core
+  // blocks (emitted later by enrich-product-marketing) resolve their token references.
+  const designTokens = loadCarryDesignTokens(outputDir);
   const { themeFiles, wxrPages, skipped, warnings } = assembleCarryTheme({
     themeName,
     pages: carryPages,
     mediaUrlMap,
     linkMap,
     hasProducts,
+    themeJsonPalette: designTokens.themeJsonPalette,
+    themeJsonFontFamilies: designTokens.themeJsonFontFamilies,
   });
 
   // Write theme files to disk under wp-content/themes/<carrySlug>.

@@ -168,7 +168,10 @@ describe('assembleCarryTheme', () => {
     expect(out.themeFiles.some((f) => f.path === 'parts/header-store.html')).toBe(true);
     const sp = out.themeFiles.find((f) => f.path === 'templates/single-product.html')?.content ?? '';
     expect(sp).toContain('"slug":"header-store"');
-    expect(sp).toContain('wp:woocommerce/legacy-template {"template":"single-product"}');
+    // Modern product blocks + full-width post-content (marketing), not legacy-template.
+    expect(sp).toContain('wp:woocommerce/add-to-cart-form');
+    expect(sp).toContain('wp:post-content');
+    expect(sp).not.toContain('legacy-template');
     expect(out.themeFiles.some((f) => f.path === 'templates/archive-product.html')).toBe(true);
   });
 

@@ -106,6 +106,15 @@ export interface CarryThemeInput {
   storeHeaderIsland?: string;
   /** True when the run produced WooCommerce products — gates the store templates. */
   hasProducts?: boolean;
+  /**
+   * Captured design tokens registered in theme.json (`settings.color.palette` /
+   * `settings.typography.fontFamilies`) so the product-marketing core blocks resolve
+   * their color/font token references. Same slugs the reconstruction maps to — built by
+   * `loadCarryDesignTokens` ([[product_shopify_liberate_findings]] follow-up). Absent →
+   * no tokens registered (core blocks fall back to theme defaults).
+   */
+  themeJsonPalette?: Array<{ slug: string; name: string; color: string }>;
+  themeJsonFontFamilies?: Array<{ slug: string; name: string; fontFamily: string }>;
 }
 
 /** Header/footer template-part slugs for a chrome variant by its position. */
@@ -164,15 +173,12 @@ function htmlBlock(html: string): string {
 const STORE_HEADER_SLUG = 'header-store';
 
 /**
- * WooCommerce store template (single-product / archive-product): the dedicated
- * store header part → a constrained `<main>` with breadcrumbs + the classic WC
- * template block (which preserves FULL product functionality: gallery, variations,
- * add-to-cart, tabs, related / shop grid + sorting + pagination) → the canonical
- * footer part. This gives product + shop/archive pages the site chrome + framing
- * the carry path otherwise skips (WooCommerce's default block templates render bare,
- * without the carried header/footer). Mirrors the block path's single-product shell.
+ * WooCommerce ARCHIVE (shop / category) template: store header → constrained `<main>`
+ * with breadcrumbs + the classic WC archive block (shop grid + sorting + pagination)
+ * → canonical footer. The legacy block keeps full archive functionality; the carried
+ * chrome gives it the site framing WooCommerce's bare default template lacks.
  */
-function wooStoreTemplate(wooTemplate: 'single-product' | 'archive-product'): string {
+function wooArchiveTemplate(): string {
   return [
     `<!-- wp:template-part {"slug":"${STORE_HEADER_SLUG}","tagName":"header"} /-->`,
     '',
@@ -180,8 +186,67 @@ function wooStoreTemplate(wooTemplate: 'single-product' | 'archive-product'): st
     '<main class="wp-block-group" style="padding-top:40px;padding-bottom:64px">',
     '<!-- wp:woocommerce/breadcrumbs /-->',
     '',
-    `<!-- wp:woocommerce/legacy-template {"template":"${wooTemplate}"} /-->`,
+    '<!-- wp:woocommerce/legacy-template {"template":"archive-product"} /-->',
     '</main>',
+    '<!-- /wp:group -->',
+    '',
+    '<!-- wp:template-part {"slug":"footer","tagName":"footer"} /-->',
+    '',
+  ].join('\n');
+}
+
+/**
+ * Single-PRODUCT template: store header → a constrained buy box composed from MODERN
+ * WooCommerce product blocks (gallery + title + rating + price + summary + add-to-cart
+ * + meta) → the product's rich source marketing FULL-WIDTH below via `core/post-content`
+ * (reconstructed into core blocks by enrich-product-marketing) → canonical footer.
+ *
+ * Modern blocks (not `legacy-template`) are used so we control the order: buy box first,
+ * then marketing, with the source's "you may also like" landing at the end of the
+ * marketing (the standalone `woocommerce/related-products` block does not render here).
+ * `core/post-title` renders the product name reliably (the `woocommerce/product-title`
+ * block came up empty on this template).
+ */
+function wooSingleProductTemplate(): string {
+  return [
+    `<!-- wp:template-part {"slug":"${STORE_HEADER_SLUG}","tagName":"header"} /-->`,
+    '',
+    '<!-- wp:group {"tagName":"main","layout":{"type":"constrained"},"style":{"spacing":{"padding":{"top":"32px","bottom":"24px"}}}} -->',
+    '<main class="wp-block-group" style="padding-top:32px;padding-bottom:24px">',
+    '<!-- wp:woocommerce/breadcrumbs /-->',
+    '',
+    '<!-- wp:columns {"style":{"spacing":{"blockGap":{"left":"48px"}}}} -->',
+    '<div class="wp-block-columns">',
+    '<!-- wp:column {"width":"52%"} -->',
+    '<div class="wp-block-column" style="flex-basis:52%">',
+    '<!-- wp:woocommerce/product-image-gallery /-->',
+    '</div>',
+    '<!-- /wp:column -->',
+    '',
+    '<!-- wp:column {"width":"48%"} -->',
+    '<div class="wp-block-column" style="flex-basis:48%">',
+    '<!-- wp:post-title {"level":1} /-->',
+    '',
+    '<!-- wp:woocommerce/product-rating /-->',
+    '',
+    '<!-- wp:woocommerce/product-price /-->',
+    '',
+    '<!-- wp:woocommerce/product-summary /-->',
+    '',
+    '<!-- wp:woocommerce/add-to-cart-form /-->',
+    '',
+    '<!-- wp:woocommerce/product-meta /-->',
+    '</div>',
+    '<!-- /wp:column -->',
+    '</div>',
+    '<!-- /wp:columns -->',
+    '</main>',
+    '<!-- /wp:group -->',
+    '',
+    '<!-- wp:group {"tagName":"section","align":"full","style":{"spacing":{"padding":{"bottom":"64px"}}},"layout":{"type":"constrained","contentSize":"1100px"}} -->',
+    '<section class="wp-block-group alignfull" style="padding-bottom:64px">',
+    '<!-- wp:post-content /-->',
+    '</section>',
     '<!-- /wp:group -->',
     '',
     '<!-- wp:template-part {"slug":"footer","tagName":"footer"} /-->',
@@ -350,10 +415,15 @@ export function buildCarryThemeFiles(input: CarryThemeInput): ThemeFile[] {
   const slugsFor = (key: string): ChromeSlugs =>
     slugsByKey.get(key) ?? chromeSlugsForIndex(0);
 
+  const settings: Record<string, unknown> = { layout: { contentSize: '100%', wideSize: '100%' } };
+  // Register the captured palette + fonts so product-marketing core blocks resolve their
+  // token references (the carry theme is otherwise token-less — verbatim CSS islands).
+  if (input.themeJsonPalette?.length) settings.color = { palette: input.themeJsonPalette };
+  if (input.themeJsonFontFamilies?.length) settings.typography = { fontFamilies: input.themeJsonFontFamilies };
   const themeJson: Record<string, unknown> = {
     $schema: 'https://schemas.wp.org/trunk/theme.json',
     version: 3,
-    settings: { layout: { contentSize: '100%', wideSize: '100%' } },
+    settings,
   };
   // Declare every variant's chrome areas so the Site Editor treats each header/
   // footer as a first-class, synced region.
@@ -428,8 +498,8 @@ export function buildCarryThemeFiles(input: CarryThemeInput): ThemeFile[] {
   if (input.hasProducts && input.storeHeaderIsland) {
     const sh = input.storeHeaderIsland.endsWith('\n') ? input.storeHeaderIsland : `${input.storeHeaderIsland}\n`;
     files.push({ path: `parts/${STORE_HEADER_SLUG}.html`, content: sh });
-    files.push({ path: 'templates/single-product.html', content: wooStoreTemplate('single-product') });
-    files.push({ path: 'templates/archive-product.html', content: wooStoreTemplate('archive-product') });
+    files.push({ path: 'templates/single-product.html', content: wooSingleProductTemplate() });
+    files.push({ path: 'templates/archive-product.html', content: wooArchiveTemplate() });
   }
 
   return files;

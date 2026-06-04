@@ -273,11 +273,29 @@ describe('buildCarryThemeFiles — WooCommerce store templates', () => {
     expect(find(files, 'parts/header-store.html')).toContain('section-header');
     const sp = find(files, 'templates/single-product.html');
     expect(sp).toContain('"slug":"header-store"');
-    expect(sp).toContain('wp:woocommerce/legacy-template {"template":"single-product"}');
+    // Modern product blocks (not legacy-template) so we control buy-box → marketing order.
+    expect(sp).toContain('wp:woocommerce/product-image-gallery');
+    expect(sp).toContain('wp:woocommerce/add-to-cart-form');
+    expect(sp).toContain('wp:post-content'); // rich marketing rendered full-width below the buy box
+    expect(sp).not.toContain('legacy-template');
     expect(sp).toContain('"slug":"footer"'); // canonical footer still used
+    // The shop/category archive keeps the robust classic WC archive grid.
     expect(find(files, 'templates/archive-product.html')).toContain(
       'wp:woocommerce/legacy-template {"template":"archive-product"}',
     );
+  });
+
+  it('registers captured palette + font tokens in theme.json when provided', () => {
+    const files = buildCarryThemeFiles({
+      ...base,
+      hasProducts: true,
+      storeHeaderIsland: STORE_HEADER,
+      themeJsonPalette: [{ slug: 'c1', name: 'Replica 1', color: '#abcdef' }],
+      themeJsonFontFamilies: [{ slug: 'brandsans', name: 'BrandSans', fontFamily: 'BrandSans, sans-serif' }],
+    });
+    const tj = JSON.parse(find(files, 'theme.json')!);
+    expect(tj.settings.color.palette).toEqual([{ slug: 'c1', name: 'Replica 1', color: '#abcdef' }]);
+    expect(tj.settings.typography.fontFamilies[0].slug).toBe('brandsans');
   });
 
   it('declares header-store as a header template part in theme.json', () => {
