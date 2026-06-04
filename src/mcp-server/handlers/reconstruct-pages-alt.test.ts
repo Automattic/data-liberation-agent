@@ -48,6 +48,22 @@ describe('assembleAltTheme', () => {
     expect(home.postContent).toContain('height="4000"');
   });
 
+  it('skips a page that throws in reconstructPageAlt instead of crashing the whole build', () => {
+    // `<xmp>` is rawtext: cheerio keeps the `<script>` as text, so carryHtml's
+    // injection gate throws. ONE such page must not take down the whole reconstruct.
+    const out = assembleAltTheme({
+      themeName: 'Acme Alt',
+      mediaUrlMap: new Map(),
+      pages: [
+        { slug: 'good', title: 'G', isHome: true, bodyHtml: '<main><div class="c">ok</div></main>', css: '' },
+        { slug: 'bad', title: 'B', bodyHtml: '<xmp><script>x()</script></xmp>', css: '' },
+      ],
+    });
+    expect(out.wxrPages.find((p) => p.slug === 'good')).toBeTruthy();
+    expect(out.wxrPages.find((p) => p.slug === 'bad')).toBeFalsy();
+    expect(out.skipped).toContain('bad');
+  });
+
   it('keeps the active-nav highlight on a single-page header, strips it on a shared one', () => {
     const header = (active: 'home' | 'about') =>
       '<header class="h"><nav data-hook="menu-root" class="wixui-horizontal-menu">' +

@@ -129,7 +129,13 @@ export function carryHtml(regionHtml: string, opts: CarryOpts): CarryResult {
     $(el).removeAttr('height');
   });
 
-  const html = $.html();
+  // Strip ALL HTML comments. They don't render, so the carry loses nothing, and
+  // they're a real injection-gate footgun: cheerio leaves comment nodes untouched,
+  // so a commented-out `<script>` (common in Shopify/Wix markup) — or a `<?php`
+  // that cheerio rewrote into a comment — survives `.remove()` and trips the
+  // `<script`/`<?` scan below. (Well-formed comments can't contain `-->`, so the
+  // non-greedy match is safe.)
+  const html = $.html().replace(/<!--[\s\S]*?-->/g, '');
 
   // Injection gate — must pass the same trust boundary as the pattern validator.
   const violations = scanForInjection(html);

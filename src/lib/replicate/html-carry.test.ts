@@ -10,6 +10,19 @@ describe('carryHtml', () => {
     expect(html).not.toContain('onclick');
   });
 
+  it('does not choke on a <script> inside an HTML comment (inert) — strips the comment', () => {
+    // Commented-out scripts are common in Shopify/Wix markup. They are inert, but
+    // cheerio leaves the comment node, so the injection gate used to false-positive
+    // and throw "raw <script> tag" — crashing reconstruction of the whole page.
+    const { html } = carryHtml(
+      '<div class="c">ok</div><!-- <script async src="https://x/a.js"></script> -->',
+      {},
+    );
+    expect(html).toContain('class="c"');
+    expect(html).not.toContain('<script');
+    expect(html).not.toContain('<!--');
+  });
+
   it('extracts inline <style> into styleText and removes it from html', () => {
     const { html, styleText } = carryHtml('<style>.a{color:red}</style><div class="a">x</div>', {});
     expect(styleText).toContain('.a{color:red}');

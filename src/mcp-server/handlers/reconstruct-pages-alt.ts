@@ -68,6 +68,9 @@ export interface WxrPage {
 export interface AssembleOutput {
   themeFiles: ThemeFile[];
   wxrPages: WxrPage[];
+  /** Slugs of pages whose reconstruction threw (e.g. carryHtml's injection gate on
+   *  un-strippable markup). Skipped so one bad page doesn't crash the whole build. */
+  skipped: string[];
 }
 
 /**
@@ -85,19 +88,29 @@ function extractBodyClasses(html: string): string[] {
 
 export function assembleAltTheme(input: AssembleInput): AssembleOutput {
   // Reconstruct every page once, preserving input order for the emitted files.
-  const recos = input.pages.map((p) => ({
-    p,
-    r: reconstructPageAlt({
-      slug: p.slug,
-      isHome: p.isHome,
-      bodyHtml: p.bodyHtml,
-      css: p.css,
-      specs: p.specs ?? [],
-      mediaUrlMap: input.mediaUrlMap,
-      linkMap: input.linkMap,
-      mobile: p.mobile,
-    }),
-  }));
+  // A page whose markup trips reconstructPageAlt (e.g. carryHtml's injection gate on
+  // un-strippable rawtext) is SKIPPED — one bad page must not crash the whole build.
+  const skipped: string[] = [];
+  const recos = input.pages.flatMap((p) => {
+    try {
+      return [{
+        p,
+        r: reconstructPageAlt({
+          slug: p.slug,
+          isHome: p.isHome,
+          bodyHtml: p.bodyHtml,
+          css: p.css,
+          specs: p.specs ?? [],
+          mediaUrlMap: input.mediaUrlMap,
+          linkMap: input.linkMap,
+          mobile: p.mobile,
+        }),
+      }];
+    } catch {
+      skipped.push(p.slug);
+      return [];
+    }
+  });
 
   // Dedupe chrome so pages that render the SAME header/footer share one variant
   // + part pair (e.g. a transparent-overlay home header and a solid interior
@@ -184,7 +197,7 @@ export function assembleAltTheme(input: AssembleInput): AssembleOutput {
     pages: scaffoldPages,
   });
 
-  return { themeFiles, wxrPages };
+  return { themeFiles, wxrPages, skipped };
 }
 
 // ---------------------------------------------------------------------------
@@ -381,7 +394,7 @@ export const reconstructPagesAltHandler: Handler = async (args, ctx) => {
     mediaErrors.push({ sourceUrl: '*', error: err instanceof Error ? err.message : String(err) });
   }
 
-  const { themeFiles, wxrPages } = assembleAltTheme({
+  const { themeFiles, wxrPages, skipped } = assembleAltTheme({
     themeName,
     pages: altPages,
     mediaUrlMap,
@@ -401,6 +414,7 @@ export const reconstructPagesAltHandler: Handler = async (args, ctx) => {
     themeSlug: altSlug,
     themeFilesWritten: themeFiles.length,
     fetchErrors,
+    skipped,
     mediaInstalled: mediaUrlMap.size,
     mediaErrors,
     pages: wxrPages.map((w) => ({
