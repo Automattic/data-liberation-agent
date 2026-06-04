@@ -1,4 +1,5 @@
 import type { PlatformAdapter } from '../../types.js';
+import { capture } from './capture.js';
 import { discover } from './discover.js';
 import { extract } from './extract.js';
 
@@ -22,6 +23,7 @@ function detect(url: string): boolean {
 
 export const shopifyAdapter: PlatformAdapter = {
   id: 'shopify',
+  capture,
   detect,
   discover,
   extract,
