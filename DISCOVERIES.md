@@ -6,6 +6,23 @@ AI agents: when you contribute an improvement, add an entry here. See [CONTRIBUT
 
 ---
 
+## 2026-06-04 — getsnooz.com (Shopify) carry run: capture 429s, carry-path media-install timeout, carry-tool schema gap
+
+**Found by:** Claude + Matt
+**During:** A `/liberate` → theme-replication (carry-and-scope) pass on getsnooz.com (Shopify, ~99 URLs, 436 media).
+**Type:** capture reliability + install-path bug + fix + MCP schema fix
+
+### 1. CDP beats Shopify's 403, but capture concurrency 6 trips a 429 rate-limit
+Memory said "Shopify capture needs CDP (headless 403s)" — true: a real Chrome over `--remote-debugging-port` captured cleanly where headless got 403s. But the *first* run still failed **168 capture ops** with `HTTP 429 Too Many Requests`, all clustered ~2 min in: the **default screenshot concurrency (6) × 2 viewports** hammered the origin fast enough that Shopify's edge throttled every subsequent `goto`. The capture loop does `attempt: 1` with **no 429 retry/backoff**, so once throttled the rest of the run cascaded into manifest stubs (slug+capturedAt, no PNG). **Workaround:** resume `liberate_screenshot` at `concurrency: 2` → 90 captured, **0 failed**. **Open fix:** add 429-aware retry/backoff (honor `Retry-After`) to `screenshotter.ts`, and/or lower the default capture concurrency for Shopify origins. (Extends the prior "default to CDP for Shopify" note.)
+
+### 2. Carry-path media install hit the SAME Studio 120s timeout that import-wxr.php already fixed
+`liberate_reconstruct_pages_carry` returned `mediaInstalled: 0` with every entry erroring `install-media.php failed: … No activity for 120s`. Root cause is identical to the 2026-05-27 `import-wxr.php` finding below: `install-media.php` calls `wp_generate_attachment_metadata()` (thumbnail regen) per file and **emits no output until after the loop**, so a large media set (here the run's full 992-file map installed on the first page) runs silently past Studio's 120s IPC-silence kill — leaving carried `<img>` on the source CDN (carry's "self-hosted media" promise broken). **Fix (applied, uncommitted):** mirror `import-wxr.php` in `src/lib/preview/scripts/install-media.php` — `add_filter('intermediate_image_sizes_advanced','__return_empty_array')` + a `WP_CLI::log` heartbeat inside the loop (printed before the `DLA_INSTALL_MEDIA_JSON_BEGIN` sentinel, so `media-install.ts`'s marker-delimited slice ignores it). Result after fix: **mediaInstalled 992, 0 errors**; homepage island went from all-CDN to 88 local `/wp-content/uploads/` refs (7 CDN left = known CSS-`url()` limit). Lesson: the thumbnail-skip + heartbeat pattern belongs in **every** vendored WP-CLI script that loops over media, not just `import-wxr.php`.
+
+### 3. `liberate_reconstruct_pages_carry` MCP schema under-declared `htmlSlug` + `postType`
+The handler reads `p.htmlSlug` (cached-HTML stem: `html/<htmlSlug>.html`) and `p.postType` (`page`|`post`), but the tool's `inputSchema.pages.items` only declared `slug`/`sourceUrl`/`title`/`isHome`. The server happens to pass args raw (no strip), so it worked — but the schema lied about the contract, and without `htmlSlug` every page (e.g. `about` whose file is `pages--about.html`) would silently fall back to a live fetch of `sourceUrl`. **Fix (applied):** added `postType` (enum page/post) + `htmlSlug` to the schema in `src/mcp-server.ts` so it matches the handler.
+
+---
+
 ## 2026-05-28 — corneliusholmes.com (Wix) re-run: content-width band layers + verify `__name` tooling bug
 
 **Found by:** Claude + Matt

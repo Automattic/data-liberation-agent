@@ -95,6 +95,17 @@ export interface CarryThemeInput {
   bodyClasses?: string[];
   /** One entry per page that needs a template + per-page CSS file. */
   pages: CarryPage[];
+  /**
+   * When the run has a store, the carried header to use for the WooCommerce store
+   * templates (single-product / archive-product). Product + shop/archive pages have
+   * NO carried island of their own, and the content-page `header` parts are usually
+   * empty (the header rides inline in each page island), so store pages need their
+   * own populated header. Already a complete `parts/*.html` body (a core/html block).
+   * Emitted as `parts/header-store.html` only when `hasProducts` is also true.
+   */
+  storeHeaderIsland?: string;
+  /** True when the run produced WooCommerce products — gates the store templates. */
+  hasProducts?: boolean;
 }
 
 /** Header/footer template-part slugs for a chrome variant by its position. */
@@ -142,6 +153,40 @@ function pageTemplate(slugs: ChromeSlugs): string {
 /** Wrap raw HTML in a core/html block, or '' when empty. */
 function htmlBlock(html: string): string {
   return html ? `<!-- wp:html -->\n${html}\n<!-- /wp:html -->` : '';
+}
+
+/**
+ * Slug of the dedicated header part used by the WooCommerce store templates. The
+ * content-page `header` parts stay empty when the splitter can't isolate a header
+ * (Shopify/Squarespace headers ride inline in each page island), so store pages —
+ * which have NO carried island — get their own populated header here instead.
+ */
+const STORE_HEADER_SLUG = 'header-store';
+
+/**
+ * WooCommerce store template (single-product / archive-product): the dedicated
+ * store header part → a constrained `<main>` with breadcrumbs + the classic WC
+ * template block (which preserves FULL product functionality: gallery, variations,
+ * add-to-cart, tabs, related / shop grid + sorting + pagination) → the canonical
+ * footer part. This gives product + shop/archive pages the site chrome + framing
+ * the carry path otherwise skips (WooCommerce's default block templates render bare,
+ * without the carried header/footer). Mirrors the block path's single-product shell.
+ */
+function wooStoreTemplate(wooTemplate: 'single-product' | 'archive-product'): string {
+  return [
+    `<!-- wp:template-part {"slug":"${STORE_HEADER_SLUG}","tagName":"header"} /-->`,
+    '',
+    '<!-- wp:group {"tagName":"main","layout":{"type":"constrained"},"style":{"spacing":{"padding":{"top":"40px","bottom":"64px"}}}} -->',
+    '<main class="wp-block-group" style="padding-top:40px;padding-bottom:64px">',
+    '<!-- wp:woocommerce/breadcrumbs /-->',
+    '',
+    `<!-- wp:woocommerce/legacy-template {"template":"${wooTemplate}"} /-->`,
+    '</main>',
+    '<!-- /wp:group -->',
+    '',
+    '<!-- wp:template-part {"slug":"footer","tagName":"footer"} /-->',
+    '',
+  ].join('\n');
 }
 
 /**
@@ -323,6 +368,13 @@ export function buildCarryThemeFiles(input: CarryThemeInput): ThemeFile[] {
       ];
     });
   }
+  // Declare the dedicated store header part so the Site Editor treats it as a
+  // first-class header region too.
+  if (input.hasProducts && input.storeHeaderIsland) {
+    const tp = (themeJson.templateParts as Array<Record<string, string>> | undefined) ?? [];
+    tp.push({ name: STORE_HEADER_SLUG, title: 'Header (Store)', area: 'header' });
+    themeJson.templateParts = tp;
+  }
 
   // index.html (required fallback) reuses the home page's scaffold + chrome so it
   // renders correctly; falls back to the legacy shell when no scaffold exists.
@@ -366,6 +418,18 @@ export function buildCarryThemeFiles(input: CarryThemeInput): ThemeFile[] {
     } else {
       files.push({ path: `templates/page-${p.slug}.html`, content: templateFor(p, slugs) });
     }
+  }
+
+  // WooCommerce store templates. Product + shop/category-archive pages have NO carried
+  // island, so WordPress falls back to WooCommerce's bare default templates (no site
+  // chrome). When the run has products and we isolated a header from a carried page,
+  // emit single-product / archive-product templates that wrap the classic WC template
+  // (full functionality) in the dedicated store header + canonical footer + a frame.
+  if (input.hasProducts && input.storeHeaderIsland) {
+    const sh = input.storeHeaderIsland.endsWith('\n') ? input.storeHeaderIsland : `${input.storeHeaderIsland}\n`;
+    files.push({ path: `parts/${STORE_HEADER_SLUG}.html`, content: sh });
+    files.push({ path: 'templates/single-product.html', content: wooStoreTemplate('single-product') });
+    files.push({ path: 'templates/archive-product.html', content: wooStoreTemplate('archive-product') });
   }
 
   return files;

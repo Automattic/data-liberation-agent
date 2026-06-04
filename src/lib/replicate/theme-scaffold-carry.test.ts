@@ -252,3 +252,51 @@ describe('buildCarryThemeFiles', () => {
     });
   });
 });
+
+describe('buildCarryThemeFiles — WooCommerce store templates', () => {
+  const STORE_HEADER =
+    '<!-- wp:html -->\n<div class="lib-carry-vp-desktop">\n<header class="section-header">NAV</header>\n</div>\n<!-- /wp:html -->';
+  const base: Omit<CarryThemeInput, 'hasProducts' | 'storeHeaderIsland'> = {
+    themeName: 'Acme Carry',
+    chromeVariants: oneVariant(
+      '<!-- wp:html -->\n<header>H</header>\n<!-- /wp:html -->',
+      '<!-- wp:html -->\n<footer>F</footer>\n<!-- /wp:html -->',
+    ),
+    siteCss: 'body.lib-carry-site{margin:0}',
+    pages: [page({ slug: 'home', isHome: true, pageCss: '' })],
+  };
+  const find = (files: ReturnType<typeof buildCarryThemeFiles>, p: string) =>
+    files.find((f) => f.path === p)?.content;
+
+  it('emits header-store part + single/archive-product templates when hasProducts + storeHeaderIsland', () => {
+    const files = buildCarryThemeFiles({ ...base, hasProducts: true, storeHeaderIsland: STORE_HEADER });
+    expect(find(files, 'parts/header-store.html')).toContain('section-header');
+    const sp = find(files, 'templates/single-product.html');
+    expect(sp).toContain('"slug":"header-store"');
+    expect(sp).toContain('wp:woocommerce/legacy-template {"template":"single-product"}');
+    expect(sp).toContain('"slug":"footer"'); // canonical footer still used
+    expect(find(files, 'templates/archive-product.html')).toContain(
+      'wp:woocommerce/legacy-template {"template":"archive-product"}',
+    );
+  });
+
+  it('declares header-store as a header template part in theme.json', () => {
+    const files = buildCarryThemeFiles({ ...base, hasProducts: true, storeHeaderIsland: STORE_HEADER });
+    const tj = JSON.parse(find(files, 'theme.json')!);
+    expect(tj.templateParts).toEqual(
+      expect.arrayContaining([expect.objectContaining({ name: 'header-store', area: 'header' })]),
+    );
+  });
+
+  it('does NOT emit store templates when hasProducts is false', () => {
+    const files = buildCarryThemeFiles({ ...base, hasProducts: false, storeHeaderIsland: STORE_HEADER });
+    expect(find(files, 'templates/single-product.html')).toBeUndefined();
+    expect(find(files, 'parts/header-store.html')).toBeUndefined();
+  });
+
+  it('does NOT emit store templates when no header could be isolated (empty storeHeaderIsland)', () => {
+    const files = buildCarryThemeFiles({ ...base, hasProducts: true, storeHeaderIsland: '' });
+    expect(find(files, 'templates/single-product.html')).toBeUndefined();
+    expect(find(files, 'templates/archive-product.html')).toBeUndefined();
+  });
+});

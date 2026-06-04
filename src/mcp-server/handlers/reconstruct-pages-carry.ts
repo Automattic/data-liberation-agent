@@ -55,6 +55,13 @@ export interface AssembleInput {
   mediaUrlMap: Map<string, string>;
   /** Source-href → local-permalink map; rewrites carried nav + body links. */
   linkMap?: InternalLinkMap;
+  /**
+   * True when the run produced WooCommerce products. Gates emission of the store
+   * templates (single-product / archive-product) + their dedicated `header-store`
+   * part, so product/shop pages get the site chrome instead of WooCommerce's bare
+   * default templates.
+   */
+  hasProducts?: boolean;
 }
 
 export interface WxrPage {
@@ -71,6 +78,9 @@ export interface AssembleOutput {
   /** Slugs of pages whose reconstruction threw (e.g. carryHtml's injection gate on
    *  un-strippable markup). Skipped so one bad page doesn't crash the whole build. */
   skipped: string[];
+  /** Operator-facing guardrail warnings — e.g. a store with no isolable header, so its
+   *  product/shop pages will render chrome-less. Surfaced in the handler result. */
+  warnings: string[];
 }
 
 /**
@@ -84,6 +94,21 @@ export interface AssembleOutput {
 function extractBodyClasses(html: string): string[] {
   const m = /<body[^>]*\bclass\s*=\s*["']([^"']*)["']/i.exec(html);
   return m ? m[1].split(/\s+/).filter(Boolean) : [];
+}
+
+/**
+ * Extract the first `<header>…</header>` from a (already media/link-rewritten) page
+ * island and wrap it as a `parts/header-store.html` body (a core/html block under the
+ * carry viewport div, so the scoped chrome CSS — keyed on `:where(body.lib-carry-site)
+ * .header` — applies). Used to give the WooCommerce store templates a header, since
+ * product/shop pages have no island and the content-page header parts ride inline in
+ * each page's island (the splitter leaves the separate parts empty). Returns '' when
+ * no `<header>` is present (non-storefront markup) — the caller then skips store chrome.
+ */
+function extractStoreHeaderIsland(island: string): string {
+  const m = /<header[\s>][\s\S]*?<\/header>/i.exec(island);
+  if (!m) return '';
+  return `<!-- wp:html -->\n<div class="lib-carry-vp-desktop">\n${m[0]}\n</div>\n<!-- /wp:html -->`;
 }
 
 export function assembleCarryTheme(input: AssembleInput): AssembleOutput {
@@ -189,15 +214,46 @@ export function assembleCarryTheme(input: AssembleInput): AssembleOutput {
   // the source. Taken from the home page's carried HTML.
   const bodyClasses = extractBodyClasses(homeReco?.p.bodyHtml ?? '');
 
+  // Store header for the WooCommerce templates. Product / shop / category-archive
+  // pages have no carried island, so isolate a header from a representative INTERIOR
+  // page (its solid header — the home page's is often a transparent overlay that
+  // vanishes on a white store page), falling back to any page that yields one. Only
+  // when the run has products; otherwise no store templates are emitted.
+  let storeHeaderIsland = '';
+  if (input.hasProducts) {
+    const ordered = [...recos.filter((x) => !x.p.isHome), ...recos.filter((x) => x.p.isHome)];
+    for (const cand of ordered) {
+      // The header may be a split-out region (headerIsland) on clean-semantic sites, or
+      // ride inline in the main island (Shopify — the splitter didn't lift it). Prefer
+      // the region, then fall back to the body.
+      storeHeaderIsland =
+        extractStoreHeaderIsland(cand.r.headerIsland) || extractStoreHeaderIsland(cand.r.mainIsland);
+      if (storeHeaderIsland) break;
+    }
+  }
+
   const themeFiles = buildCarryThemeFiles({
     themeName: input.themeName,
     chromeVariants: variants,
     siteCss,
     bodyClasses,
     pages: scaffoldPages,
+    storeHeaderIsland,
+    hasProducts: input.hasProducts,
   });
 
-  return { themeFiles, wxrPages, skipped };
+  // Guardrail: a store run that couldn't isolate a header → no store templates →
+  // product/shop pages render with WooCommerce's bare defaults (the failure mode
+  // that shipped silently on getsnooz, 2026-06-04). Surface it instead of letting
+  // the operator discover it by eye.
+  const warnings: string[] = [];
+  if (input.hasProducts && !storeHeaderIsland) {
+    warnings.push(
+      'Store pages (single-product / archive-product) will render WITHOUT site chrome: no <header> could be isolated from any carried page island, so WooCommerce defaults are used. Capture an interior page with a header, or add a header part manually.',
+    );
+  }
+
+  return { themeFiles, wxrPages, skipped, warnings };
 }
 
 // ---------------------------------------------------------------------------
@@ -394,11 +450,18 @@ export const reconstructPagesCarryHandler: Handler = async (args, ctx) => {
     mediaErrors.push({ sourceUrl: '*', error: err instanceof Error ? err.message : String(err) });
   }
 
-  const { themeFiles, wxrPages, skipped } = assembleCarryTheme({
+  // Store templates (single-product / archive-product) only make sense when the run
+  // produced WooCommerce products.
+  const hasProducts =
+    existsSync(join(resolve(outputDir), 'products.csv')) ||
+    existsSync(join(resolve(outputDir), 'products.jsonl'));
+
+  const { themeFiles, wxrPages, skipped, warnings } = assembleCarryTheme({
     themeName,
     pages: carryPages,
     mediaUrlMap,
     linkMap,
+    hasProducts,
   });
 
   // Write theme files to disk under wp-content/themes/<carrySlug>.
@@ -408,6 +471,40 @@ export const reconstructPagesCarryHandler: Handler = async (args, ctx) => {
     writeFileSync(full, f.content);
   }
 
+  // Final per-page island content. Wrap carried <img>s that have a captured mobile
+  // variant in <picture> + a `(max-width:750px)` <source> AFTER media rewriting (so the
+  // mobile CDN URL isn't collapsed onto the single local desktop file), then append an
+  // additive single-column mobile grid next to any Wix pro-gallery.
+  const finalPages = wxrPages.map((w) => ({
+    slug: w.slug,
+    title: w.title,
+    isHome: w.isHome,
+    postType: w.postType,
+    postContent: appendGalleryMobileGrid(
+      rewriteResponsiveImages(w.postContent, responsiveImages),
+      responsiveImages,
+    ),
+  }));
+
+  // The islands are whole carried page bodies — returning them all inline blows past
+  // the MCP response cap on real sites (getsnooz: 1 page ≈ 330KB). When `islandsOutDir`
+  // is given, write each island to disk and return PATHS instead, so this tool is
+  // callable straight from MCP, not only via the tsx driver. Without it, keep returning
+  // `postContent` inline (back-compat — the driver consumes that).
+  const islandsOutDir = args.islandsOutDir as string | undefined;
+  let pagesResult: Array<Record<string, unknown>>;
+  if (islandsOutDir) {
+    const dir = resolve(islandsOutDir);
+    mkdirSync(dir, { recursive: true });
+    pagesResult = finalPages.map((p) => {
+      const islandPath = join(dir, `${p.slug}.html`);
+      writeFileSync(islandPath, p.postContent);
+      return { slug: p.slug, title: p.title, isHome: p.isHome, postType: p.postType, islandPath, bytes: p.postContent.length };
+    });
+  } else {
+    pagesResult = finalPages;
+  }
+
   return ctx.textResult({
     ok: fetchErrors.length === 0,
     themeRoot,
@@ -415,23 +512,10 @@ export const reconstructPagesCarryHandler: Handler = async (args, ctx) => {
     themeFilesWritten: themeFiles.length,
     fetchErrors,
     skipped,
+    warnings,
     mediaInstalled: mediaUrlMap.size,
     mediaErrors,
-    pages: wxrPages.map((w) => ({
-      slug: w.slug,
-      title: w.title,
-      isHome: w.isHome,
-      postType: w.postType,
-      // Wrap carried <img>s with a captured mobile variant in <picture> + a
-      // `(max-width:750px)` <source>, AFTER media rewriting so the mobile CDN
-      // URL isn't collapsed onto the single local desktop file (same media-id).
-      // Then append an additive single-column mobile grid next to any Wix
-      // pro-gallery (the frozen desktop grid only shows its left column on mobile);
-      // the grid uses captured mobile crops and is toggled in by GALLERY_MOBILE_GRID_CSS.
-      postContent: appendGalleryMobileGrid(
-        rewriteResponsiveImages(w.postContent, responsiveImages),
-        responsiveImages,
-      ),
-    })),
+    islandsDir: islandsOutDir ? resolve(islandsOutDir) : undefined,
+    pages: pagesResult,
   });
 };

@@ -429,23 +429,26 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: 'liberate_reconstruct_pages_carry',
-      description: 'Carry-and-scope parity path: for each page, load cached body HTML (or fetch live), collect CSS, carry the sanitized HTML + scoped CSS into core/html block islands, write a minimal carry block theme under wp-content/themes/<siteSlug>-carry, and return per-page island content for building output-carry.wxr. Requires liberate_screenshot (html/ cache) to have run first for best results; falls back to live fetch. v1: mediaUrlMap is empty — source image URLs are not rewritten to WP library URLs yet.',
+      description: 'Carry-and-scope parity path: for each page, load cached body HTML (or fetch live), collect CSS, carry the sanitized HTML + scoped CSS into core/html block islands, self-host the run media (rewriting <img>/srcset/url() to the local WP library) + localize internal links, write a carry FSE block theme under wp-content/themes/<siteSlug>-carry (incl. WooCommerce single-product/archive-product templates wrapping the carried header/footer when the run has products), and return per-page islands for building output-carry.wxr. Requires liberate_screenshot (html/ cache); falls back to live fetch. Pass islandsOutDir to write islands to disk and return paths instead of inline content (avoids the MCP response-size cap on large sites).',
       inputSchema: {
         type: 'object' as const,
         properties: {
           outputDir: { type: 'string', description: 'Liberation output directory (holds html/ cache from liberate_screenshot).' },
           studioSitePath: { type: 'string', description: 'On-disk path to the running Studio site (e.g. ~/Studio/example-com).' },
           themeName: { type: 'string', description: 'Display name for the carry theme (default: "Liberated (Carry)").' },
+          islandsOutDir: { type: 'string', description: 'When set, write each carried island to <islandsOutDir>/<slug>.html and return its path + byte count instead of inline postContent. Use this from MCP to avoid the response-size cap (islands are whole page bodies). Omit to get postContent inline (the tsx driver default).' },
           pages: {
             type: 'array',
             description: 'Content pages to carry and scope. Pass every page in the site for full coverage.',
             items: {
               type: 'object',
               properties: {
-                slug: { type: 'string', description: 'URL-safe page slug (sanitize_title-shaped), e.g. "about-us".' },
+                slug: { type: 'string', description: 'URL-safe page slug (sanitize_title-shaped), e.g. "about-us". Must match the WP post_name so the island-swap finds the post and functions.php body-class scoping targets it.' },
                 sourceUrl: { type: 'string', description: 'The page\'s source URL (used as base for CSS resolution and live HTML fallback).' },
                 title: { type: 'string', description: 'Human-readable page title.' },
                 isHome: { type: 'boolean', description: 'When true, emits front-page.html template and uses is_front_page() body-class condition.' },
+                postType: { type: 'string', enum: ['page', 'post'], description: 'Post type (default "page"). "post" scopes via is_single() and renders through single.html; also selects the functions.php body-class condition.' },
+                htmlSlug: { type: 'string', description: 'Override the cached-HTML filename stem loaded as html/<htmlSlug>.html when it differs from the WP slug — e.g. posts captured as "blogs--snoozweek--<name>" or pages as "pages--<name>". Falls back to slug; without it the tool live-fetches sourceUrl.' },
               },
               required: ['slug', 'sourceUrl', 'title'],
             },

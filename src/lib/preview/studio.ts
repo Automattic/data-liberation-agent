@@ -455,6 +455,18 @@ export async function startStudioPreview(opts: StartStudioOpts): Promise<StartPr
       }
     }
 
+    // WooCommerce 8.x+ ships "Coming soon" mode ON by default (store-pages-only),
+    // which hides the shop + product pages behind a placeholder ("Great things are
+    // on the horizon…"). Disable it so the imported store actually renders. Only
+    // relevant when a store was installed; best-effort.
+    if (hasProducts) {
+      try {
+        await studioWp(sitePath, ['option', 'update', 'woocommerce_coming_soon', 'no']);
+      } catch (err) {
+        warnings.push(`Disable WooCommerce coming-soon failed: ${(err as Error).message.trim()}`);
+      }
+    }
+
     warnings.push(...await updateStudioSiteOptions(sitePath, readSiteMetaFromWxr(opts.outputDir)));
 
     // Replica theme + block plugin install. Happens after content import so

@@ -23,6 +23,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type { Browser, BrowserContext, Page } from 'playwright';
 import { connectBrowser } from '../../adapters/shared.js';
+import { mapPool } from '../concurrency.js';
 import type { ReplicaSectionMeasure } from './section-parity.js';
 
 /**
@@ -400,19 +401,17 @@ export async function verifyReplica(opts: VerifyOpts): Promise<VerifyResult> {
       };
   };
 
-  // Fan out across pages in concurrency-bounded batches (pages are independent). Results
-  // are aggregated in INPUT order so `pairs`/`unmatchedUrls` are deterministic regardless
-  // of which page settled first.
+  // Fan out across pages with a concurrency-bounded worker pool (shared mapPool) — no
+  // per-batch barrier, so a slow heavy page never stalls the others. mapPool returns
+  // results in INPUT order, so `pairs`/`unmatchedUrls` stay deterministic regardless of
+  // which page settled first.
   const concurrency = Math.max(1, Math.min(10, opts.concurrency ?? DEFAULT_CONCURRENCY));
   try {
-    for (let i = 0; i < opts.urls.length; i += concurrency) {
-      const batch = opts.urls.slice(i, i + concurrency);
-      const results = await Promise.all(batch.map(captureOne));
-      for (const r of results) {
-        pairs.push(r.pair);
-        if (r.unmatched) unmatchedUrls.push(r.unmatched);
-        manifestEntries[r.manifestKey] = r.manifestEntry;
-      }
+    const results = await mapPool(opts.urls, concurrency, (url) => captureOne(url));
+    for (const r of results) {
+      pairs.push(r.pair);
+      if (r.unmatched) unmatchedUrls.push(r.unmatched);
+      manifestEntries[r.manifestKey] = r.manifestEntry;
     }
   } finally {
     await activeBrowser.close().catch(() => undefined);

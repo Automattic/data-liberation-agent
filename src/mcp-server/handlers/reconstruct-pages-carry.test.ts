@@ -148,4 +148,50 @@ describe('assembleCarryTheme', () => {
     const fn = out.themeFiles.find((f) => f.path === 'functions.php')!.content;
     expect(fn).toContain("is_single( 'a-post' )");
   });
+
+  it('emits WooCommerce store templates + a header-store part when hasProducts and a header is found', () => {
+    const out = assembleCarryTheme({
+      themeName: 'Acme Carry',
+      hasProducts: true,
+      pages: [
+        {
+          slug: 'home',
+          title: 'H',
+          isHome: true,
+          bodyHtml: '<header class="h"><a href="/">Logo</a></header><main><div class="c">c</div></main>',
+          css: '',
+        },
+      ],
+      mediaUrlMap: new Map(),
+    });
+    expect(out.warnings).toHaveLength(0);
+    expect(out.themeFiles.some((f) => f.path === 'parts/header-store.html')).toBe(true);
+    const sp = out.themeFiles.find((f) => f.path === 'templates/single-product.html')?.content ?? '';
+    expect(sp).toContain('"slug":"header-store"');
+    expect(sp).toContain('wp:woocommerce/legacy-template {"template":"single-product"}');
+    expect(out.themeFiles.some((f) => f.path === 'templates/archive-product.html')).toBe(true);
+  });
+
+  it('WARNS and emits no store templates when hasProducts but no header can be isolated', () => {
+    const out = assembleCarryTheme({
+      themeName: 'Acme Carry',
+      hasProducts: true,
+      pages: [{ slug: 'home', title: 'H', isHome: true, bodyHtml: '<main><div class="c">no header here</div></main>', css: '' }],
+      mediaUrlMap: new Map(),
+    });
+    expect(out.warnings.join(' ')).toMatch(/without site chrome/i);
+    expect(out.themeFiles.some((f) => f.path === 'templates/single-product.html')).toBe(false);
+    expect(out.themeFiles.some((f) => f.path === 'parts/header-store.html')).toBe(false);
+  });
+
+  it('emits no store templates (and no warning) when the run has no products', () => {
+    const out = assembleCarryTheme({
+      themeName: 'Acme Carry',
+      hasProducts: false,
+      pages: [{ slug: 'home', title: 'H', isHome: true, bodyHtml: '<header class="h">H</header><main>x</main>', css: '' }],
+      mediaUrlMap: new Map(),
+    });
+    expect(out.warnings).toHaveLength(0);
+    expect(out.themeFiles.some((f) => f.path === 'templates/single-product.html')).toBe(false);
+  });
 });

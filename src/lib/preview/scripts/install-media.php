@@ -71,7 +71,27 @@ $uploads = wp_upload_dir();
 $results = array();
 $errors  = array();
 
+// --- Studio 120s IPC-silence-timeout mitigations (mirror import-wxr.php) -----
+// Skip intermediate image-size (thumbnail) generation. Regenerating every
+// registered size inside wp_generate_attachment_metadata() for hundreds of CDN
+// images is the dominant cost and runs SILENTLY — tripping Studio's 120s "no
+// activity" wp-cli IPC window and failing the WHOLE media install
+// (mediaInstalled: 0; carried <img> left pointing at the source CDN). The carry
+// replica renders faithfully from the full-size image (srcset variants fall
+// back to src); thumbnails can be regenerated later via `wp media regenerate`.
+add_filter( 'intermediate_image_sizes_advanced', '__return_empty_array' );
+
+// Heartbeat. The result JSON is emitted only AFTER this loop (see the
+// DLA_INSTALL_MEDIA_JSON_BEGIN sentinel), so a large media set otherwise runs
+// silently past Studio's 120s window. WP_CLI::log writes to the STDOUT handle,
+// keeping the IPC channel active; it is printed BEFORE the sentinel, so the
+// parent's marker-delimited slice (media-install.ts) ignores it.
+$dla_progress = 0;
+
 foreach ( $entries as $entry ) {
+	if ( 0 === ( ++$dla_progress % 5 ) ) {
+		WP_CLI::log( sprintf( '  …installed %d media', $dla_progress ) );
+	}
 	$filename   = isset( $entry['filename'] ) ? (string) $entry['filename'] : '';
 	$year       = isset( $entry['year'] ) ? (string) $entry['year'] : '';
 	$month      = isset( $entry['month'] ) ? (string) $entry['month'] : '';
