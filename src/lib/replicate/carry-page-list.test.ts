@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { joinCarryPageList } from './carry-page-list.js';
+import { joinCarryPageList, slimWxr } from './carry-page-list.js';
 
 /** Minimal WXR `<item>` — fictional data only (never real source content). */
 function item(f: { type: string; name?: string; title?: string; link?: string }): string {
@@ -64,5 +64,34 @@ describe('joinCarryPageList', () => {
     const { pages, skipped } = joinCarryPageList(w, { 'https://fictional.example/products/widget': { slug: 'products--widget' } }, new Set(['products--widget']));
     expect(pages).toHaveLength(0);
     expect(skipped).toHaveLength(1);
+  });
+});
+
+describe('slimWxr', () => {
+  const statusItem = (type: string, status: string) =>
+    `<item><wp:post_type>${type}</wp:post_type><wp:status>${status}</wp:status></item>`;
+
+  it('drops attachment items, flips draft→publish, and keeps pages/posts/nav', () => {
+    const src = `<rss><channel>\n${[
+      statusItem('page', 'draft'),
+      statusItem('post', 'draft'),
+      statusItem('attachment', 'inherit'),
+      statusItem('attachment', 'inherit'),
+      statusItem('nav_menu_item', 'publish'),
+    ].join('\n')}\n</channel></rss>`;
+    const { wxr: out, dropped, flipped } = slimWxr(src);
+    expect(dropped).toBe(2); // both attachments
+    expect(flipped).toBe(2); // page + post
+    expect(out).not.toContain('attachment');
+    expect(out).not.toContain('<wp:status>draft</wp:status>');
+    expect((out.match(/<item>/g) || []).length).toBe(3); // page, post, nav kept
+  });
+
+  it('is a no-op on a WXR with no attachments or drafts', () => {
+    const src = `<rss><channel>\n${statusItem('page', 'publish')}\n</channel></rss>`;
+    const { wxr: out, dropped, flipped } = slimWxr(src);
+    expect(dropped).toBe(0);
+    expect(flipped).toBe(0);
+    expect(out).toBe(src);
   });
 });

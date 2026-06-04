@@ -1,5 +1,9 @@
 /**
- * tsx driver for the carry-and-scope reconstruct (the `replicate-theme` path). Two modes:
+ * tsx driver for the carry-and-scope reconstruct (the `replicate-theme` path). Three modes:
+ *
+ *   npx tsx scripts/carry-reconstruct-drive.ts <outputDir> --slim
+ *       Slim `output.wxr` for provisioning: drop attachment items + flip draft→publish, backing the
+ *       full WXR up to `output.wxr.full`. Run BEFORE `liberate_preview`. (Replaces wxr-slim-publish.py.)
  *
  *   npx tsx scripts/carry-reconstruct-drive.ts <outputDir> --list
  *       Inspect-only: build + print the carry page list and write carry-pages.json. CHEAP —
@@ -16,7 +20,7 @@
  */
 import { writeFileSync, existsSync, mkdirSync, copyFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { buildCarryPageList, buildOutputCarryWxr, type BuildPageListResult } from '../src/lib/replicate/carry-page-list.js';
+import { buildCarryPageList, buildOutputCarryWxr, slimWxrForProvision, type BuildPageListResult } from '../src/lib/replicate/carry-page-list.js';
 
 function reportPageList(r: BuildPageListResult): void {
   console.log(`pages: ${r.pages.length} (${r.pages.filter((p) => p.postType === 'post').length} posts, home=${r.pages.some((p) => p.isHome)})`);
@@ -27,11 +31,21 @@ function reportPageList(r: BuildPageListResult): void {
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const listOnly = argv.includes('--list');
-  const [outputDir, studioSitePath, themeName = 'Liberated (Carry)'] = argv.filter((a) => a !== '--list');
-  if (!outputDir || (!listOnly && !studioSitePath)) {
-    console.error('usage:\n  tsx scripts/carry-reconstruct-drive.ts <outputDir> --list\n  tsx scripts/carry-reconstruct-drive.ts <outputDir> <studioSitePath> "<Theme Name>"');
+  const slimOnly = argv.includes('--slim');
+  const [outputDir, studioSitePath, themeName = 'Liberated (Carry)'] = argv.filter((a) => a !== '--list' && a !== '--slim');
+  if (!outputDir || (!listOnly && !slimOnly && !studioSitePath)) {
+    console.error('usage:\n  tsx scripts/carry-reconstruct-drive.ts <outputDir> --slim   # slim output.wxr for provisioning (run BEFORE liberate_preview)\n  tsx scripts/carry-reconstruct-drive.ts <outputDir> --list   # inspect the carry page list (no handler)\n  tsx scripts/carry-reconstruct-drive.ts <outputDir> <studioSitePath> "<Theme Name>"');
     process.exit(2);
   }
+
+  // --slim: drop attachment items + flip draft→publish so liberate_preview imports cleanly (no
+  // Studio ~120s media-import timeout). Runs BEFORE provision; the full WXR is preserved at .full.
+  if (slimOnly) {
+    const { dropped, flipped } = slimWxrForProvision(outputDir);
+    console.log(`slimmed: dropped ${dropped} attachment items, flipped ${flipped} draft->publish; full WXR preserved at output.wxr.full`);
+    return;
+  }
+
   const exclude = (process.env.EXCLUDE ?? '').split(',').map((s) => s.trim()).filter(Boolean);
 
   // 1. page list (handler-free — the same logic powers `--list`)
@@ -84,7 +98,7 @@ foreach ($slugs as $slug) {
   const wxr = buildOutputCarryWxr(outputDir, islandsDir);
   console.log(`output-carry.wxr: items=${wxr.items} patched=${wxr.patched} cdataBalanced=${wxr.cdataBalanced} -> ${wxr.outPath}`);
 
-  // 5. heal the dir: provision (wxr-slim-publish.py) slimmed output.wxr in place; restore the full one
+  // 5. heal the dir: the `--slim` step slimmed output.wxr in place; restore the full one
   //    so a later blocks run / liberate_verify sees the full WXR.
   const full = join(outputDir, 'output.wxr.full');
   if (existsSync(full)) {

@@ -9,7 +9,7 @@
 // site-agnostic, page+post-aware, tested source of truth instead.
 //
 
-import { readFileSync, existsSync, readdirSync, writeFileSync } from 'node:fs';
+import { readFileSync, existsSync, readdirSync, writeFileSync, copyFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 /** Read a tag's text from a WXR item block, stripping an optional CDATA wrapper. */
@@ -20,7 +20,7 @@ function tag(block: string, name: string): string {
   return (cd ? cd[1] : m[1]).trim();
 }
 
-/** Prefer the full WXR (output.wxr.full, written by wxr-slim-publish.py) over the possibly-slimmed output.wxr. */
+/** Prefer the full WXR (output.wxr.full, written by `slimWxrForProvision`) over the possibly-slimmed output.wxr. */
 function wxrSource(outputDir: string): string {
   const full = join(outputDir, 'output.wxr.full');
   return existsSync(full) ? full : join(outputDir, 'output.wxr');
@@ -160,4 +160,40 @@ export function buildOutputCarryWxr(outputDir: string, islandsDir: string): {
   writeFileSync(outPath, out);
   const cdataBalanced = (out.match(/<!\[CDATA\[/g) || []).length === (out.match(/]]>/g) || []).length;
   return { items, patched, cdataBalanced, outPath };
+}
+
+/**
+ * PURE: slim a WXR for Studio provisioning — drop every `attachment` `<item>` and flip
+ * `draft`→`publish` status (so the live preview resolves). Returns the slimmed WXR + counts.
+ * A surgical text transform (no DOM reserialize), so the rest of the document is preserved
+ * byte-for-byte — exactly what the import deliverable needs.
+ */
+export function slimWxr(wxrText: string): { wxr: string; dropped: number; flipped: number } {
+  let dropped = 0;
+  let flipped = 0;
+  const wxr = wxrText.split(/(<item>[\s\S]*?<\/item>)/).map((part) => {
+    if (!part.startsWith('<item>')) return part;
+    if (/<wp:post_type>attachment<\/wp:post_type>/.test(part)) { dropped++; return ''; }
+    const flippedPart = part.replace(/<wp:status>draft<\/wp:status>/g, '<wp:status>publish</wp:status>');
+    if (flippedPart !== part) flipped++;
+    return flippedPart;
+  }).join('');
+  return { wxr, dropped, flipped };
+}
+
+/**
+ * FS wrapper for the carry provision step. Backs `output.wxr` up to `output.wxr.full` ONCE (the
+ * pristine full WXR — `output-carry.wxr` is later rebuilt from it), then writes the slimmed WXR
+ * back to `output.wxr` so `liberate_preview` imports pages/posts only — no attachment items, hence
+ * no Studio ~120s blueprint-import timeout (see [[project_studio_import_heartbeat]]). Always slims
+ * FROM the `.full` backup, so re-runs are idempotent; the driver restores `output.wxr` from `.full`
+ * when the reconstruct finishes, so the slim is transient and the dir is never left lossy.
+ */
+export function slimWxrForProvision(outputDir: string): { dropped: number; flipped: number } {
+  const wxrPath = join(outputDir, 'output.wxr');
+  const fullPath = join(outputDir, 'output.wxr.full');
+  if (!existsSync(fullPath)) copyFileSync(wxrPath, fullPath);
+  const { wxr, dropped, flipped } = slimWxr(readFileSync(fullPath, 'utf8'));
+  writeFileSync(wxrPath, wxr);
+  return { dropped, flipped };
 }

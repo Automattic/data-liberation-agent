@@ -53,7 +53,7 @@ You also reuse the shared install/import/compare tools: `liberate_preview` (prov
 
 | Script | Does |
 |---|---|
-| `scripts/wxr-slim-publish.py` | Step 2: slim `output.wxr` for provisioning (drop attachments, draft→publish), backing the full WXR up to `output.wxr.full`. |
+| `carry-reconstruct-drive.ts <out> --slim` | Step 2: slim `output.wxr` for provisioning (drop attachment items, flip draft→publish), backing the full WXR up to `output.wxr.full`. |
 | `scripts/carry-reconstruct-drive.ts` | Steps 1 + 3 + 4 in one run: build the page list, drive `reconstructPagesCarryHandler` (theme + media + islands + `_swap.php`), write `output-carry.wxr`, restore `output.wxr` from `.full`. Pass `<outputDir> --list` (instead of `<studioSitePath>`) to just build + inspect the page list cheaply (no handler load). `EXCLUDE=slug1,slug2` drops junk/unwanted pages (404, sitemap, thank-you, or per-site curation). |
 | `scripts/carry-replica-shots.ts` | Step 6: screenshot the live carry site into a replica dir for `liberate_compare`. |
 
@@ -68,7 +68,7 @@ The driver builds this internally via `buildCarryPageList` (in the tested lib `s
 
 ### 2. Provision the Studio site
 
-- **Slim first:** `python3 scripts/wxr-slim-publish.py output/<site>/output.wxr`. A media-heavy WXR (hundreds of attachments) trips Studio's ~120s blueprint-import silence timeout (surfaces as `Error establishing a database connection`; the half-created site is removed) — see [[project_studio_import_heartbeat]]. The script slims `output.wxr` IN PLACE (drops every `attachment` `<item>`, flips draft→publish) and backs the full WXR up to `output.wxr.full`. The reconstruct installs media separately (step 3), so the provisioned site loses nothing — and **step 3's driver restores `output.wxr` from `.full` at the end**, so the slim is transient and the dir is never left lossy (a later blocks run / `liberate_verify` still sees the full WXR).
+- **Slim first:** `npx tsx scripts/carry-reconstruct-drive.ts output/<site> --slim`. A media-heavy WXR (hundreds of attachments) trips Studio's ~120s blueprint-import silence timeout (surfaces as `Error establishing a database connection`; the half-created site is removed) — see [[project_studio_import_heartbeat]]. The `--slim` mode (lib `slimWxrForProvision`) slims `output.wxr` IN PLACE (drops every `attachment` `<item>`, flips draft→publish) and backs the full WXR up to `output.wxr.full`. The reconstruct installs media separately (step 3), so the provisioned site loses nothing — and **step 3's driver restores `output.wxr` from `.full` at the end**, so the slim is transient and the dir is never left lossy (a later blocks run / `liberate_verify` still sees the full WXR).
 - Provision via `liberate_preview({ outputDir })` — it reads the now-slimmed `output.wxr`. The site is named `<site>` (e.g. `~/Studio/<site>`, no path suffix); if a blocks-path site already exists with that name, `studio.ts` uniques it (`<site>-2`, …), so both paths on one extraction yield distinct sites without clobbering. `liberate_preview` returns `path` (the resolved Studio WP root) — pass it straight through as `studioSitePath` in step 3 (no need to re-derive `~/Studio/<site>`).
 
 ### 3. Run the carry reconstruct (steps 1 + 3 + 4, one command)
