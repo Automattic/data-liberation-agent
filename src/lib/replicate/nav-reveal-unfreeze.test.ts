@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { appendNavRevealUnfreeze, HORIZONTAL_MENU_SELECTOR } from './nav-reveal-unfreeze.js';
 
-const SITE = 'body.lib-alt-site';
+const SITE = 'body.lib-carry-site';
 const menuDom =
   '<header><nav data-hook="menu-root" class="wixui-horizontal-menu wixui-menu"><a>HOME</a></nav></header>';
 
@@ -15,7 +15,7 @@ describe('appendNavRevealUnfreeze', () => {
   });
 
   it('uses the provided scope so a page sheet override matches its page wrapper', () => {
-    const pageScope = 'body.lib-alt-site.lib-alt-page-homepage';
+    const pageScope = 'body.lib-carry-site.lib-carry-page-homepage';
     const out = appendNavRevealUnfreeze('', menuDom, pageScope);
     expect(out).toContain(`${pageScope} *:has(${HORIZONTAL_MENU_SELECTOR})`);
   });

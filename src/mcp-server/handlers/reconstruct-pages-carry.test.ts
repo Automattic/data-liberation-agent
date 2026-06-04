@@ -1,10 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { assembleAltTheme } from './reconstruct-pages-alt.js';
+import { assembleCarryTheme } from './reconstruct-pages-carry.js';
 
-describe('assembleAltTheme', () => {
+describe('assembleCarryTheme', () => {
   it('builds theme files + per-page WXR content, with chrome CSS site-wide and main CSS per-page', () => {
-    const out = assembleAltTheme({
-      themeName: 'Acme Alt',
+    const out = assembleCarryTheme({
+      themeName: 'Acme Carry',
       pages: [
         {
           slug: 'home',
@@ -19,16 +19,16 @@ describe('assembleAltTheme', () => {
     });
     const byPath = (p: string) => out.themeFiles.find((f) => f.path === p)?.content ?? '';
     // chrome rule is in the globally-enqueued site.css (after the reset), main rule in page sheet
-    expect(byPath('assets/css/site.css')).toContain(':where(body.lib-alt-site) .h');
-    expect(byPath('assets/css/page-home.css')).toContain(':where(body.lib-alt-site.lib-alt-page-home) .hero');
+    expect(byPath('assets/css/site.css')).toContain(':where(body.lib-carry-site) .h');
+    expect(byPath('assets/css/page-home.css')).toContain(':where(body.lib-carry-site.lib-carry-page-home) .hero');
     const home = out.wxrPages.find((p) => p.slug === 'home')!;
     expect(home.postContent).toContain('<!-- wp:html -->');
     expect(home.postContent).toContain('class="hero"');
   });
 
   it('threads a page mobile-DOM into a dual-viewport island', () => {
-    const out = assembleAltTheme({
-      themeName: 'Acme Alt',
+    const out = assembleCarryTheme({
+      themeName: 'Acme Carry',
       pages: [
         {
           slug: 'home',
@@ -36,23 +36,23 @@ describe('assembleAltTheme', () => {
           isHome: true,
           bodyHtml: '<main><div class="c">desktop</div></main>',
           css: '',
-          mobile: { docUrl: '/wp-content/uploads/_alt-mobile/home.html', height: 4000 },
+          mobile: { docUrl: '/wp-content/uploads/_carry-mobile/home.html', height: 4000 },
         },
       ],
       mediaUrlMap: new Map(),
     });
     const home = out.wxrPages.find((p) => p.slug === 'home')!;
-    expect(home.postContent).toContain('class="lib-alt-vp-desktop"');
-    expect(home.postContent).toContain('class="lib-alt-vp-mobile"');
-    expect(home.postContent).toContain('src="/wp-content/uploads/_alt-mobile/home.html"');
+    expect(home.postContent).toContain('class="lib-carry-vp-desktop"');
+    expect(home.postContent).toContain('class="lib-carry-vp-mobile"');
+    expect(home.postContent).toContain('src="/wp-content/uploads/_carry-mobile/home.html"');
     expect(home.postContent).toContain('height="4000"');
   });
 
-  it('skips a page that throws in reconstructPageAlt instead of crashing the whole build', () => {
+  it('skips a page that throws in reconstructPageCarry instead of crashing the whole build', () => {
     // `<xmp>` is rawtext: cheerio keeps the `<script>` as text, so carryHtml's
     // injection gate throws. ONE such page must not take down the whole reconstruct.
-    const out = assembleAltTheme({
-      themeName: 'Acme Alt',
+    const out = assembleCarryTheme({
+      themeName: 'Acme Carry',
       mediaUrlMap: new Map(),
       pages: [
         { slug: 'good', title: 'G', isHome: true, bodyHtml: '<main><div class="c">ok</div></main>', css: '' },
@@ -70,11 +70,11 @@ describe('assembleAltTheme', () => {
       `<a ${active === 'home' ? 'data-selected="true" aria-current="page" ' : ''}data-part="x">HOME</a>` +
       `<a ${active === 'about' ? 'data-selected="true" aria-current="page" ' : ''}data-part="x">ABOUT</a>` +
       '</nav></header><main><div class="c">c</div></main>';
-    const findHeader = (out: ReturnType<typeof assembleAltTheme>) =>
+    const findHeader = (out: ReturnType<typeof assembleCarryTheme>) =>
       out.themeFiles.find((f) => f.path === 'parts/header.html')?.content ?? '';
 
     // One page using the header → keeps its own "current" highlight.
-    const solo = assembleAltTheme({
+    const solo = assembleCarryTheme({
       themeName: 'A',
       pages: [{ slug: 'home', title: 'H', isHome: true, bodyHtml: header('home'), css: '' }],
       mediaUrlMap: new Map(),
@@ -83,7 +83,7 @@ describe('assembleAltTheme', () => {
 
     // Two pages sharing one header (differ only by which item is current) → dedupe
     // to one variant, emitted active-stripped so it doesn't pin one page's highlight.
-    const shared = assembleAltTheme({
+    const shared = assembleCarryTheme({
       themeName: 'A',
       pages: [
         { slug: 'home', title: 'H', isHome: true, bodyHtml: header('home'), css: '' },
@@ -97,8 +97,8 @@ describe('assembleAltTheme', () => {
   });
 
   it('rewrites carried hrefs through the linkMap', () => {
-    const out = assembleAltTheme({
-      themeName: 'Acme Alt',
+    const out = assembleCarryTheme({
+      themeName: 'Acme Carry',
       pages: [
         {
           slug: 'home',
@@ -117,8 +117,8 @@ describe('assembleAltTheme', () => {
   });
 
   it('rewrites carried image srcs through the mediaUrlMap', () => {
-    const out = assembleAltTheme({
-      themeName: 'Acme Alt',
+    const out = assembleCarryTheme({
+      themeName: 'Acme Carry',
       pages: [
         {
           slug: 'home',
@@ -136,8 +136,8 @@ describe('assembleAltTheme', () => {
   });
 
   it('threads postType through to the WXR page records', () => {
-    const out = assembleAltTheme({
-      themeName: 'Acme Alt',
+    const out = assembleCarryTheme({
+      themeName: 'Acme Carry',
       pages: [
         { slug: 'a-post', title: 'A Post', postType: 'post', bodyHtml: '<main>x</main>', css: '' },
       ],

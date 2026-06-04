@@ -25,38 +25,38 @@ function widget(imgs: string[]): string {
 describe('appendGalleryMobileGrid', () => {
   it('appends one mobile grid with an <img> per gallery image', () => {
     const out = appendGalleryMobileGrid(widget([LOCAL_A, LOCAL_B]), {});
-    expect(out).toContain('class="lib-alt-gallery-mobile"');
-    const grids = out.match(/lib-alt-gallery-mobile/g) || [];
+    expect(out).toContain('class="lib-carry-gallery-mobile"');
+    const grids = out.match(/lib-carry-gallery-mobile/g) || [];
     expect(grids.length).toBe(1);
     // two images carried into the grid
-    const gridHtml = out.slice(out.indexOf('lib-alt-gallery-mobile'));
+    const gridHtml = out.slice(out.indexOf('lib-carry-gallery-mobile'));
     expect((gridHtml.match(/<img/g) || []).length).toBe(2);
   });
 
   it('uses the captured mobile-crop URL when the media-id is mapped, else the local src', () => {
     const out = appendGalleryMobileGrid(widget([LOCAL_A, LOCAL_B]), { [ID_A]: MOBILE_A });
-    const gridHtml = out.slice(out.indexOf('class="lib-alt-gallery-mobile"'));
+    const gridHtml = out.slice(out.indexOf('class="lib-carry-gallery-mobile"'));
     expect(gridHtml).toContain(MOBILE_A); // A → mobile crop
     expect(gridHtml).toContain(LOCAL_B); // B → no mapping, local desktop src
   });
 
   it('places the grid as a sibling immediately AFTER the widget (CSS :has(+) toggles it)', () => {
     const out = appendGalleryMobileGrid(widget([LOCAL_A]), {});
-    expect(out.indexOf('lib-alt-gallery-mobile')).toBeGreaterThan(out.indexOf('class="pro-gallery"'));
+    expect(out.indexOf('lib-carry-gallery-mobile')).toBeGreaterThan(out.indexOf('class="pro-gallery"'));
     // the widget's closing precedes the grid's opening
-    expect(/<\/div><div class="lib-alt-gallery-mobile">/.test(out)).toBe(true);
+    expect(/<\/div><div class="lib-carry-gallery-mobile">/.test(out)).toBe(true);
   });
 
   it('only emits ONE grid even though the widget has a nested .pro-gallery token', () => {
     const out = appendGalleryMobileGrid(widget([LOCAL_A, LOCAL_B]), {});
-    expect((out.match(/lib-alt-gallery-mobile/g) || []).length).toBe(1);
+    expect((out.match(/lib-carry-gallery-mobile/g) || []).length).toBe(1);
   });
 
   it('is idempotent — does not append a second grid on re-run', () => {
     const once = appendGalleryMobileGrid(widget([LOCAL_A]), {});
     const twice = appendGalleryMobileGrid(once, {});
     expect(twice).toBe(once);
-    expect((twice.match(/lib-alt-gallery-mobile/g) || []).length).toBe(1);
+    expect((twice.match(/lib-carry-gallery-mobile/g) || []).length).toBe(1);
   });
 
   it('is a no-op for HTML with no pro-gallery', () => {
@@ -75,16 +75,16 @@ describe('appendGalleryMobileGrid', () => {
       LOCAL_A +
       '" alt=\'a "quoted" caption\'/></div>';
     const out = appendGalleryMobileGrid(html, {});
-    const gridHtml = out.slice(out.indexOf('class="lib-alt-gallery-mobile"'));
+    const gridHtml = out.slice(out.indexOf('class="lib-carry-gallery-mobile"'));
     expect(gridHtml).toContain('&quot;quoted&quot;');
   });
 });
 
 describe('GALLERY_MOBILE_GRID_CSS', () => {
   it('hides the grid by default and toggles widget↔grid at the mobile breakpoint', () => {
-    expect(GALLERY_MOBILE_GRID_CSS).toContain('.lib-alt-gallery-mobile{display:none}');
+    expect(GALLERY_MOBILE_GRID_CSS).toContain('.lib-carry-gallery-mobile{display:none}');
     expect(GALLERY_MOBILE_GRID_CSS).toContain('@media screen and (max-width:750px)');
-    expect(GALLERY_MOBILE_GRID_CSS).toContain('div.pro-gallery:has(+ .lib-alt-gallery-mobile){display:none!important}');
+    expect(GALLERY_MOBILE_GRID_CSS).toContain('div.pro-gallery:has(+ .lib-carry-gallery-mobile){display:none!important}');
     expect(GALLERY_MOBILE_GRID_CSS).toContain('display:grid!important');
     expect(GALLERY_MOBILE_GRID_CSS).toContain('aspect-ratio:350/281');
   });

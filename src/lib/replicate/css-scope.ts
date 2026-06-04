@@ -2,7 +2,7 @@ import postcss, { type Rule } from 'postcss';
 import selectorParser from 'postcss-selector-parser';
 
 export interface ScopeOpts {
-  /** Wrapper selector to scope everything under, e.g. `body.lib-alt-site`. */
+  /** Wrapper selector to scope everything under, e.g. `body.lib-carry-site`. */
   scope: string;
   /** Stable short id (used later for @keyframes namespacing). */
   scopeId?: string;
@@ -16,7 +16,7 @@ function scopeSelector(selector: string, scope: string): string {
   // Wrap the scope in :where() so it contributes ZERO specificity. The carried
   // source CSS then keeps its ORIGINAL internal cascade exactly — critical because
   // the same reset/component rules are emitted in both the site sheet (scope
-  // `body.lib-alt-site`) and the per-page sheet (scope `body.lib-alt-site.lib-alt-page-<slug>`).
+  // `body.lib-carry-site`) and the per-page sheet (scope `body.lib-carry-site.lib-carry-page-<slug>`).
   // A plain prefix makes a page-scoped element reset (`…page-<slug> section`, 2
   // classes + 2 elements) outrank a site-scoped component rule (`…site .comp`, 2
   // classes + 1 element), so the reset wrongly zeroes chrome padding/margins. With

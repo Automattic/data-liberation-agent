@@ -1,24 +1,24 @@
 import { describe, it, expect } from 'vitest';
-import { buildAltThemeFiles, type AltThemeInput, type AltPage } from './theme-scaffold-alt.js';
+import { buildCarryThemeFiles, type CarryThemeInput, type CarryPage } from './theme-scaffold-carry.js';
 
 /** A single-variant chrome ('c0') so page-level tests stay terse. */
-function oneVariant(headerIsland = '', footerIsland = ''): AltThemeInput['chromeVariants'] {
+function oneVariant(headerIsland = '', footerIsland = ''): CarryThemeInput['chromeVariants'] {
   return [{ key: 'c0', headerIsland, footerIsland }];
 }
 /** Default a page onto the single 'c0' variant. */
-function page(p: Omit<AltPage, 'chromeKey'> & { chromeKey?: string }): AltPage {
+function page(p: Omit<CarryPage, 'chromeKey'> & { chromeKey?: string }): CarryPage {
   return { chromeKey: 'c0', ...p };
 }
 
-describe('buildAltThemeFiles', () => {
-  const files = buildAltThemeFiles({
-    themeName: 'Acme Alt',
+describe('buildCarryThemeFiles', () => {
+  const files = buildCarryThemeFiles({
+    themeName: 'Acme Carry',
     chromeVariants: oneVariant(
       '<!-- wp:html -->\n<header>H</header>\n<!-- /wp:html -->',
       '<!-- wp:html -->\n<footer>F</footer>\n<!-- /wp:html -->',
     ),
-    siteCss: 'body.lib-alt-site{margin:0}',
-    pages: [page({ slug: 'home', isHome: true, pageCss: 'body.lib-alt-page-home .x{a:b}' })],
+    siteCss: 'body.lib-carry-site{margin:0}',
+    pages: [page({ slug: 'home', isHome: true, pageCss: 'body.lib-carry-page-home .x{a:b}' })],
   });
   const byPath = (p: string) => files.find((f) => f.path === p)?.content ?? '';
 
@@ -41,13 +41,13 @@ describe('buildAltThemeFiles', () => {
 
   it('functions.php adds body classes and conditionally enqueues page css', () => {
     const fn = byPath('functions.php');
-    expect(fn).toContain('lib-alt-site');
-    expect(fn).toContain('lib-alt-page-home');
+    expect(fn).toContain('lib-carry-site');
+    expect(fn).toContain('lib-carry-page-home');
     expect(fn).toContain('wp_enqueue_style');
   });
 
   it('replicates sanitized source body classes onto the WP body (e.g. responsive)', () => {
-    const fn = buildAltThemeFiles({
+    const fn = buildCarryThemeFiles({
       themeName: 'A', chromeVariants: oneVariant(), siteCss: '',
       bodyClasses: ['responsive', 'device-mobile', 'bad class!', '', '123nope'],
       pages: [page({ slug: 'home', isHome: true, pageCss: '' })],
@@ -68,7 +68,7 @@ describe('buildAltThemeFiles', () => {
   });
 
   it('style.css contains Theme Name header', () => {
-    expect(byPath('style.css')).toContain('Theme Name: Acme Alt');
+    expect(byPath('style.css')).toContain('Theme Name: Acme Carry');
   });
 
   it('style.css has a Theme Name header and NO Template field (not a child theme)', () => {
@@ -80,7 +80,7 @@ describe('buildAltThemeFiles', () => {
   it('site.css carries the reset before the carried CSS', () => {
     const css = byPath('assets/css/site.css');
     expect(css).toContain('all:revert');
-    expect(css.indexOf('all:revert')).toBeLessThan(css.indexOf('body.lib-alt-site{margin:0}'));
+    expect(css.indexOf('all:revert')).toBeLessThan(css.indexOf('body.lib-carry-site{margin:0}'));
   });
 
   it('theme.json is valid JSON at version 3', () => {
@@ -88,8 +88,8 @@ describe('buildAltThemeFiles', () => {
   });
 
   it('a non-home page emits templates/page-<slug>.html and is_page() enqueue/body-class', () => {
-    const f = buildAltThemeFiles({
-      themeName: 'Acme Alt', chromeVariants: oneVariant(), siteCss: '',
+    const f = buildCarryThemeFiles({
+      themeName: 'Acme Carry', chromeVariants: oneVariant(), siteCss: '',
       pages: [page({ slug: 'about', isHome: false, pageCss: '' })],
     });
     expect(f.map((x) => x.path)).toContain('templates/page-about.html');
@@ -97,20 +97,20 @@ describe('buildAltThemeFiles', () => {
   });
 
   it('a post scopes via is_single() and its CSS file, not is_page()', () => {
-    const f = buildAltThemeFiles({
-      themeName: 'Acme Alt', chromeVariants: oneVariant(), siteCss: '',
-      pages: [page({ slug: 'my-article', isHome: false, postType: 'post', pageCss: 'body.lib-alt-page-my-article{}' })],
+    const f = buildCarryThemeFiles({
+      themeName: 'Acme Carry', chromeVariants: oneVariant(), siteCss: '',
+      pages: [page({ slug: 'my-article', isHome: false, postType: 'post', pageCss: 'body.lib-carry-page-my-article{}' })],
     });
     const fn = f.find((x) => x.path === 'functions.php')!.content;
     expect(fn).toContain("is_single( 'my-article' )");
     expect(fn).not.toContain("is_page( 'my-article' )");
     expect(f.map((x) => x.path)).toContain('assets/css/page-my-article.css');
-    expect(fn).toContain('lib-alt-page-my-article');
+    expect(fn).toContain('lib-carry-page-my-article');
   });
 
   it('posts share ONE single.html and emit no per-post page template', () => {
-    const f = buildAltThemeFiles({
-      themeName: 'Acme Alt', chromeVariants: oneVariant(), siteCss: '',
+    const f = buildCarryThemeFiles({
+      themeName: 'Acme Carry', chromeVariants: oneVariant(), siteCss: '',
       pages: [
         page({ slug: 'post-a', isHome: false, postType: 'post', pageCss: '' }),
         page({ slug: 'post-b', isHome: false, postType: 'post', pageCss: '' }),
@@ -124,13 +124,13 @@ describe('buildAltThemeFiles', () => {
 
   describe('per-page chrome variants (dedupe by content)', () => {
     // Home uses variant c0 (transparent overlay); two interior pages share c1 (solid).
-    const f = buildAltThemeFiles({
-      themeName: 'Acme Alt',
+    const f = buildCarryThemeFiles({
+      themeName: 'Acme Carry',
       chromeVariants: [
         { key: 'c0', headerIsland: '<!-- wp:html --><header id="home-hdr">home</header><!-- /wp:html -->', footerIsland: '<!-- wp:html --><footer id="f0">f0</footer><!-- /wp:html -->' },
         { key: 'c1', headerIsland: '<!-- wp:html --><header id="int-hdr">interior</header><!-- /wp:html -->', footerIsland: '<!-- wp:html --><footer id="f1">f1</footer><!-- /wp:html -->' },
       ],
-      siteCss: 'body.lib-alt-site #home-hdr{a:b}\nbody.lib-alt-site #int-hdr{c:d}',
+      siteCss: 'body.lib-carry-site #home-hdr{a:b}\nbody.lib-carry-site #int-hdr{c:d}',
       pages: [
         page({ slug: 'home', isHome: true, chromeKey: 'c0', pageCss: '' }),
         page({ slug: 'about', isHome: false, chromeKey: 'c1', pageCss: '' }),
@@ -172,13 +172,13 @@ describe('buildAltThemeFiles', () => {
 
   describe('scaffolded chrome architecture', () => {
     const scaffold = { openWrap: '<div id="C"><div id="root">', midBefore: '<div id="inner">', midAfter: '</div>', closeWrap: '</div></div>' };
-    const f = buildAltThemeFiles({
-      themeName: 'Acme Alt',
+    const f = buildCarryThemeFiles({
+      themeName: 'Acme Carry',
       chromeVariants: oneVariant(
         '<!-- wp:html --><header id="H">nav</header><!-- /wp:html -->',
         '<!-- wp:html --><footer id="F">foot</footer><!-- /wp:html -->',
       ),
-      siteCss: 'body.lib-alt-site #H{a:b}',
+      siteCss: 'body.lib-carry-site #H{a:b}',
       pages: [page({ slug: 'about', isHome: false, scaffold, pageCss: '' })],
     });
     const get = (p: string) => f.find((x) => x.path === p)?.content ?? '';
@@ -201,18 +201,18 @@ describe('buildAltThemeFiles', () => {
     it('adds the mobile-gated pro-gallery grid toggle to site.css', () => {
       const css = get('assets/css/site.css');
       expect(css).toContain('@media screen and (max-width:750px)');
-      expect(css).toContain('div.pro-gallery:has(+ .lib-alt-gallery-mobile){display:none!important}');
-      expect(css).toContain('.lib-alt-gallery-mobile{display:grid!important');
+      expect(css).toContain('div.pro-gallery:has(+ .lib-carry-gallery-mobile){display:none!important}');
+      expect(css).toContain('.lib-carry-gallery-mobile{display:grid!important');
     });
 
     it('adds the dual-viewport mobile-DOM iframe toggle to site.css', () => {
       const css = get('assets/css/site.css');
       // base: mobile island hidden, desktop wrapper transparent (no layout impact)
-      expect(css).toContain('.lib-alt-vp-mobile{display:none}');
-      expect(css).toContain('.lib-alt-vp-desktop{display:contents}');
+      expect(css).toContain('.lib-carry-vp-mobile{display:none}');
+      expect(css).toContain('.lib-carry-vp-desktop{display:contents}');
       // below 750px: hide desktop island, show the iframe, neutralize the desktop scaffold
-      expect(css).toContain('.lib-alt-vp-desktop{display:none!important}');
-      expect(css).toContain('.lib-alt-vp-mobile{display:block!important}');
+      expect(css).toContain('.lib-carry-vp-desktop{display:none!important}');
+      expect(css).toContain('.lib-carry-vp-mobile{display:block!important}');
       expect(css).toContain('[id^="pageBackground"]');
     });
 
@@ -229,8 +229,8 @@ describe('buildAltThemeFiles', () => {
     });
 
     it('omits the chrome-rescue display:contents rule when no page has a scaffold', () => {
-      const plain = buildAltThemeFiles({
-        themeName: 'Acme Alt', chromeVariants: oneVariant(), siteCss: '',
+      const plain = buildCarryThemeFiles({
+        themeName: 'Acme Carry', chromeVariants: oneVariant(), siteCss: '',
         pages: [page({ slug: 'about', isHome: false, pageCss: '' })],
       });
       // The CHROME_RESCUE rule specifically — NOT the unconditional vp-toggle's

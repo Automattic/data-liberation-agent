@@ -33,7 +33,7 @@ import { previewHandler } from './mcp-server/handlers/preview.js';
 import { installThemeHandler } from './mcp-server/handlers/install-theme.js';
 import { themeScaffoldHandler } from './mcp-server/handlers/theme-scaffold.js';
 import { reconstructPagesHandler } from './mcp-server/handlers/reconstruct-pages.js';
-import { reconstructPagesAltHandler } from './mcp-server/handlers/reconstruct-pages-alt.js';
+import { reconstructPagesCarryHandler } from './mcp-server/handlers/reconstruct-pages-carry.js';
 import { previewStopHandler } from './mcp-server/handlers/preview-stop.js';
 import { screenshotHandler } from './mcp-server/handlers/screenshot.js';
 import { designFoundationScaffoldHandler } from './mcp-server/handlers/design-foundation-scaffold.js';
@@ -428,14 +428,14 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
-      name: 'liberate_reconstruct_pages_alt',
-      description: 'Carry-and-scope parity path: for each page, load cached body HTML (or fetch live), collect CSS, carry the sanitized HTML + scoped CSS into core/html block islands, write a minimal alt block theme under wp-content/themes/<siteSlug>-alt, and return per-page island content for building output-alt.wxr. Requires liberate_screenshot (html/ cache) to have run first for best results; falls back to live fetch. v1: mediaUrlMap is empty — source image URLs are not rewritten to WP library URLs yet.',
+      name: 'liberate_reconstruct_pages_carry',
+      description: 'Carry-and-scope parity path: for each page, load cached body HTML (or fetch live), collect CSS, carry the sanitized HTML + scoped CSS into core/html block islands, write a minimal carry block theme under wp-content/themes/<siteSlug>-carry, and return per-page island content for building output-carry.wxr. Requires liberate_screenshot (html/ cache) to have run first for best results; falls back to live fetch. v1: mediaUrlMap is empty — source image URLs are not rewritten to WP library URLs yet.',
       inputSchema: {
         type: 'object' as const,
         properties: {
           outputDir: { type: 'string', description: 'Liberation output directory (holds html/ cache from liberate_screenshot).' },
           studioSitePath: { type: 'string', description: 'On-disk path to the running Studio site (e.g. ~/Studio/example-com).' },
-          themeName: { type: 'string', description: 'Display name for the alt theme (default: "Liberated (Alt)").' },
+          themeName: { type: 'string', description: 'Display name for the carry theme (default: "Liberated (Carry)").' },
           pages: {
             type: 'array',
             description: 'Content pages to carry and scope. Pass every page in the site for full coverage.',
@@ -673,7 +673,7 @@ const handlers: Record<string, Handler> = {
   liberate_compose_instantiate: composeInstantiateHandler,
   liberate_validate_artifacts: validateArtifactsHandler,
   liberate_reconstruct_pages: reconstructPagesHandler,
-  liberate_reconstruct_pages_alt: reconstructPagesAltHandler,
+  liberate_reconstruct_pages_carry: reconstructPagesCarryHandler,
 };
 
 function makeContext(): HandlerContext {

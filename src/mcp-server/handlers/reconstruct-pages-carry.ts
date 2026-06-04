@@ -1,26 +1,26 @@
 //
-// liberate_reconstruct_pages_alt
+// liberate_reconstruct_pages_carry
 // ================================
 // Carry-and-scope parity path handler. For each page it loads cached body HTML
-// (or fetches live), collects CSS via collectCss, calls the pure reconstructPageAlt
-// emitter, assembles theme files via buildAltThemeFiles, writes the theme under
+// (or fetches live), collects CSS via collectCss, calls the pure reconstructPageCarry
+// emitter, assembles theme files via buildCarryThemeFiles, writes the theme under
 // the Studio site, and returns per-page island content so the orchestrator skill
-// can build output-alt.wxr.
+// can build output-carry.wxr.
 //
-// The pure helper `assembleAltTheme` is unit-tested; the IO handler is not.
+// The pure helper `assembleCarryTheme` is unit-tested; the IO handler is not.
 //
 
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import type { Handler } from '../handler-types.js';
 import type { SectionSpec } from '../../lib/replicate/section-extract.js';
-import { reconstructPageAlt } from '../../lib/replicate/page-reconstruct-alt.js';
+import { reconstructPageCarry } from '../../lib/replicate/page-reconstruct-carry.js';
 import {
-  buildAltThemeFiles,
+  buildCarryThemeFiles,
   type ThemeFile,
-  type AltPage,
+  type CarryPage,
   type ChromeVariant,
-} from '../../lib/replicate/theme-scaffold-alt.js';
+} from '../../lib/replicate/theme-scaffold-carry.js';
 import { chromeSignature, stripActiveNavState } from '../../lib/replicate/chrome-canonicalize.js';
 import { rewriteResponsiveImages } from '../../lib/replicate/responsive-image-rewrite.js';
 import { appendGalleryMobileGrid } from '../../lib/replicate/gallery-mobile-grid.js';
@@ -34,7 +34,7 @@ import { deriveInstallThemeSlug } from './install-theme.js';
 // Pure helper types + implementation (unit-tested)
 // ---------------------------------------------------------------------------
 
-export interface AltPageInput {
+export interface CarryPageInput {
   slug: string;
   title: string;
   isHome?: boolean;
@@ -45,13 +45,13 @@ export interface AltPageInput {
   specs?: SectionSpec[];
   /** Classic/adaptive Wix mobile-DOM carry — emits a dual-viewport island
    *  (desktop content + a 320px iframe of the captured mobile DOM at `docUrl`).
-   *  See reconstructPageAlt's `mobile` input. */
+   *  See reconstructPageCarry's `mobile` input. */
   mobile?: { docUrl: string; height: number };
 }
 
 export interface AssembleInput {
   themeName: string;
-  pages: AltPageInput[];
+  pages: CarryPageInput[];
   mediaUrlMap: Map<string, string>;
   /** Source-href → local-permalink map; rewrites carried nav + body links. */
   linkMap?: InternalLinkMap;
@@ -74,9 +74,9 @@ export interface AssembleOutput {
 }
 
 /**
- * Pure helper: runs reconstructPageAlt for each page, collects header/footer islands
+ * Pure helper: runs reconstructPageCarry for each page, collects header/footer islands
  * from the home page (or first page that yields one), assembles the alt theme files
- * via buildAltThemeFiles, and returns the full file set + per-page WXR content.
+ * via buildCarryThemeFiles, and returns the full file set + per-page WXR content.
  *
  * No IO — callers (handler + tests) are responsible for reading inputs / writing outputs.
  */
@@ -86,16 +86,16 @@ function extractBodyClasses(html: string): string[] {
   return m ? m[1].split(/\s+/).filter(Boolean) : [];
 }
 
-export function assembleAltTheme(input: AssembleInput): AssembleOutput {
+export function assembleCarryTheme(input: AssembleInput): AssembleOutput {
   // Reconstruct every page once, preserving input order for the emitted files.
-  // A page whose markup trips reconstructPageAlt (e.g. carryHtml's injection gate on
+  // A page whose markup trips reconstructPageCarry (e.g. carryHtml's injection gate on
   // un-strippable rawtext) is SKIPPED — one bad page must not crash the whole build.
   const skipped: string[] = [];
   const recos = input.pages.flatMap((p) => {
     try {
       return [{
         p,
-        r: reconstructPageAlt({
+        r: reconstructPageCarry({
           slug: p.slug,
           isHome: p.isHome,
           bodyHtml: p.bodyHtml,
@@ -141,7 +141,7 @@ export function assembleAltTheme(input: AssembleInput): AssembleOutput {
   if (homeReco) ensureKey(homeReco.r);
 
   const countByKey = new Map<string, number>();
-  const scaffoldPages: AltPage[] = [];
+  const scaffoldPages: CarryPage[] = [];
   const wxrPages: WxrPage[] = [];
   for (const { p, r } of recos) {
     const chromeKey = ensureKey(r);
@@ -189,7 +189,7 @@ export function assembleAltTheme(input: AssembleInput): AssembleOutput {
   // the source. Taken from the home page's carried HTML.
   const bodyClasses = extractBodyClasses(homeReco?.p.bodyHtml ?? '');
 
-  const themeFiles = buildAltThemeFiles({
+  const themeFiles = buildCarryThemeFiles({
     themeName: input.themeName,
     chromeVariants: variants,
     siteCss,
@@ -228,20 +228,20 @@ function resolveWpRoot(studioSitePath: string): string | null {
   return null;
 }
 
-export const reconstructPagesAltHandler: Handler = async (args, ctx) => {
+export const reconstructPagesCarryHandler: Handler = async (args, ctx) => {
   const outputDir = args.outputDir as string | undefined;
   const studioSitePath = args.studioSitePath as string | undefined;
   const pages = args.pages as PageArg[] | undefined;
 
   if (!outputDir) {
-    return ctx.errorResult('liberate_reconstruct_pages_alt requires `outputDir`.');
+    return ctx.errorResult('liberate_reconstruct_pages_carry requires `outputDir`.');
   }
   if (!studioSitePath) {
-    return ctx.errorResult('liberate_reconstruct_pages_alt requires `studioSitePath`.');
+    return ctx.errorResult('liberate_reconstruct_pages_carry requires `studioSitePath`.');
   }
   if (!Array.isArray(pages) || pages.length === 0) {
     return ctx.errorResult(
-      'liberate_reconstruct_pages_alt requires a non-empty `pages` array ({slug, sourceUrl, title, isHome?}).',
+      'liberate_reconstruct_pages_carry requires a non-empty `pages` array ({slug, sourceUrl, title, isHome?}).',
     );
   }
 
@@ -250,16 +250,16 @@ export const reconstructPagesAltHandler: Handler = async (args, ctx) => {
     return ctx.errorResult(`studioSitePath has no wp-content: ${studioSitePath}`);
   }
 
-  // Derive alt theme slug from outputDir (parallel to block path, but suffixed -alt).
-  const themeName = (args.themeName as string | undefined) ?? 'Liberated (Alt)';
+  // Derive carry theme slug from outputDir (parallel to block path, but suffixed -carry).
+  const themeName = (args.themeName as string | undefined) ?? 'Liberated (Carry)';
   const baseSlug = deriveInstallThemeSlug(outputDir);
-  // Strip the trailing "-replica" suffix the block path uses and append "-alt" so
+  // Strip the trailing "-replica" suffix the block path uses and append "-carry" so
   // the two themes can coexist in wp-content/themes/ simultaneously.
-  const altSlug = baseSlug.replace(/-replica$/, '') + '-alt';
-  const themeRoot = join(wpRoot, 'wp-content', 'themes', altSlug);
+  const carrySlug = baseSlug.replace(/-replica$/, '') + '-carry';
+  const themeRoot = join(wpRoot, 'wp-content', 'themes', carrySlug);
 
   // Collect HTML + CSS for each page.
-  const altPages: AltPageInput[] = [];
+  const carryPages: CarryPageInput[] = [];
   const fetchErrors: Array<{ slug: string; error: string }> = [];
 
   // Responsive-image map ({wix-media-id → mobile-variant URL}) captured at the
@@ -276,7 +276,7 @@ export const reconstructPagesAltHandler: Handler = async (args, ctx) => {
   // Mobile-DOM carry (classic/adaptive Wix). liberate_screenshot's mobile pass
   // writes html-mobile/<slug>.html (the JS-built 320px mobile DOM, scripts stripped)
   // + heights.json. When present, each page emits a dual island whose mobile half is
-  // an iframe of that document, served from the site's uploads/_alt-mobile/.
+  // an iframe of that document, served from the site's uploads/_carry-mobile/.
   let mobileHeights: Record<string, number> = {};
   try {
     const hPath = join(resolve(outputDir), 'html-mobile', 'heights.json');
@@ -284,7 +284,7 @@ export const reconstructPagesAltHandler: Handler = async (args, ctx) => {
   } catch {
     /* best-effort — no mobile-DOM carry on a missing/corrupt heights map */
   }
-  const altMobileDir = join(wpRoot, 'wp-content', 'uploads', '_alt-mobile');
+  const carryMobileDir = join(wpRoot, 'wp-content', 'uploads', '_carry-mobile');
 
   for (const p of pages) {
     // Prefer cached rendered HTML written by liberate_screenshot. The filename
@@ -337,16 +337,16 @@ export const reconstructPagesAltHandler: Handler = async (args, ctx) => {
     }
 
     // Mobile-DOM carry: if a mobile capture exists for this page, install it under
-    // uploads/_alt-mobile/<slug>.html and emit a dual island referencing it.
+    // uploads/_carry-mobile/<slug>.html and emit a dual island referencing it.
     let mobile: { docUrl: string; height: number } | undefined;
     const mobileSrc = join(resolve(outputDir), 'html-mobile', `${p.htmlSlug ?? p.slug}.html`);
     if (existsSync(mobileSrc)) {
       try {
-        mkdirSync(altMobileDir, { recursive: true });
+        mkdirSync(carryMobileDir, { recursive: true });
         const mobileDoc = readFileSync(mobileSrc, 'utf8');
-        writeFileSync(join(altMobileDir, `${p.slug}.html`), mobileDoc);
+        writeFileSync(join(carryMobileDir, `${p.slug}.html`), mobileDoc);
         mobile = {
-          docUrl: `/wp-content/uploads/_alt-mobile/${p.slug}.html`,
+          docUrl: `/wp-content/uploads/_carry-mobile/${p.slug}.html`,
           height: mobileHeights[p.htmlSlug ?? p.slug] ?? 6000,
         };
       } catch {
@@ -354,7 +354,7 @@ export const reconstructPagesAltHandler: Handler = async (args, ctx) => {
       }
     }
 
-    altPages.push({
+    carryPages.push({
       slug: p.slug,
       title: p.title,
       isHome: p.isHome,
@@ -365,9 +365,9 @@ export const reconstructPagesAltHandler: Handler = async (args, ctx) => {
     });
   }
 
-  if (altPages.length === 0) {
+  if (carryPages.length === 0) {
     return ctx.errorResult(
-      `liberate_reconstruct_pages_alt: no pages could be loaded. fetchErrors: ${JSON.stringify(fetchErrors)}`,
+      `liberate_reconstruct_pages_carry: no pages could be loaded. fetchErrors: ${JSON.stringify(fetchErrors)}`,
     );
   }
 
@@ -394,14 +394,14 @@ export const reconstructPagesAltHandler: Handler = async (args, ctx) => {
     mediaErrors.push({ sourceUrl: '*', error: err instanceof Error ? err.message : String(err) });
   }
 
-  const { themeFiles, wxrPages, skipped } = assembleAltTheme({
+  const { themeFiles, wxrPages, skipped } = assembleCarryTheme({
     themeName,
-    pages: altPages,
+    pages: carryPages,
     mediaUrlMap,
     linkMap,
   });
 
-  // Write theme files to disk under wp-content/themes/<altSlug>.
+  // Write theme files to disk under wp-content/themes/<carrySlug>.
   for (const f of themeFiles) {
     const full = join(themeRoot, f.path);
     mkdirSync(dirname(full), { recursive: true });
@@ -411,7 +411,7 @@ export const reconstructPagesAltHandler: Handler = async (args, ctx) => {
   return ctx.textResult({
     ok: fetchErrors.length === 0,
     themeRoot,
-    themeSlug: altSlug,
+    themeSlug: carrySlug,
     themeFilesWritten: themeFiles.length,
     fetchErrors,
     skipped,

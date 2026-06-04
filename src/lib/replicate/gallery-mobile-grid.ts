@@ -38,11 +38,11 @@ import { mediaIdOf } from './responsive-image-rewrite.js';
 /** Mobile-gated CSS: hide the carried widget (only where a grid was emitted) and
  *  show the reconstructed single-column grid. Lives in the theme's site.css. */
 export const GALLERY_MOBILE_GRID_CSS =
-  '.lib-alt-gallery-mobile{display:none}\n' +
+  '.lib-carry-gallery-mobile{display:none}\n' +
   '@media screen and (max-width:750px){' +
-  'body.lib-alt-site div.pro-gallery:has(+ .lib-alt-gallery-mobile){display:none!important}' +
-  'body.lib-alt-site .lib-alt-gallery-mobile{display:grid!important;grid-template-columns:1fr;gap:4px;width:350px;max-width:100%;margin:0 auto;box-sizing:border-box}' +
-  'body.lib-alt-site .lib-alt-gallery-mobile img{width:100%;aspect-ratio:350/281;object-fit:cover;display:block}' +
+  'body.lib-carry-site div.pro-gallery:has(+ .lib-carry-gallery-mobile){display:none!important}' +
+  'body.lib-carry-site .lib-carry-gallery-mobile{display:grid!important;grid-template-columns:1fr;gap:4px;width:350px;max-width:100%;margin:0 auto;box-sizing:border-box}' +
+  'body.lib-carry-site .lib-carry-gallery-mobile img{width:100%;aspect-ratio:350/281;object-fit:cover;display:block}' +
   '}\n';
 
 function escapeAttr(s: string): string {
@@ -51,7 +51,7 @@ function escapeAttr(s: string): string {
 
 /**
  * For each top-level `div.pro-gallery` in `html`, append a sibling
- * `<div class="lib-alt-gallery-mobile">` containing one `<img>` per gallery image
+ * `<div class="lib-carry-gallery-mobile">` containing one `<img>` per gallery image
  * (using the captured mobile-crop URL when available, else the local desktop src).
  * Idempotent: skips a gallery that already has a grid sibling. No-op when there is
  * no pro-gallery or no extractable images.
@@ -69,7 +69,7 @@ export function appendGalleryMobileGrid(
     .filter((_, el) => $(el).parents('div.pro-gallery').length === 0)
     .each((_, el) => {
       const $gal = $(el);
-      if ($gal.next('.lib-alt-gallery-mobile').length) return; // idempotent
+      if ($gal.next('.lib-carry-gallery-mobile').length) return; // idempotent
       const items: Array<{ src: string; alt: string }> = [];
       $gal.find('img[data-hook="gallery-item-image-img"]').each((_i, im) => {
         const src = $(im).attr('src') || '';
@@ -80,7 +80,7 @@ export function appendGalleryMobileGrid(
       });
       if (!items.length) return;
       const grid =
-        '<div class="lib-alt-gallery-mobile">' +
+        '<div class="lib-carry-gallery-mobile">' +
         items
           .map(
             (i) => `<img src="${escapeAttr(i.src)}" alt="${escapeAttr(i.alt)}" loading="lazy"/>`,

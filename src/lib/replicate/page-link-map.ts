@@ -2,7 +2,7 @@
 // Shared page-body internal-link map builder
 // ==========================================
 // Both reconstruct paths (block `reconstruct-pages` and carry-and-scope
-// `reconstruct-pages-alt`) rewrite source hrefs in page bodies / nav parts to
+// `reconstruct-pages-carry`) rewrite source hrefs in page bodies / nav parts to
 // the imported WordPress permalinks. They build the rewrite map the SAME way —
 // from `<outputDir>/redirect-map.json` (the canonical source-path → local
 // permalink map the nav/footer rewrite also consumes), seeded with the page

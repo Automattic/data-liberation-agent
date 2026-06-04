@@ -7,7 +7,7 @@ import { scopeCss } from './css-scope.js';
 import { treeshakeCss } from './css-treeshake.js';
 import { appendNavRevealUnfreeze } from './nav-reveal-unfreeze.js';
 
-export interface ReconstructAltInput {
+export interface ReconstructCarryInput {
   slug: string;
   isHome?: boolean;
   bodyHtml: string;
@@ -21,7 +21,7 @@ export interface ReconstructAltInput {
    * carry froze (no static reflow path → renders 980px on mobile). When the mobile
    * DOM was captured (mobile emulation, scripts stripped) and written to a
    * site-local file at `docUrl`, the page emits a DUAL island: the desktop content
-   * wrapped in `.lib-alt-vp-desktop` + a `.lib-alt-vp-mobile` IFRAME of the mobile
+   * wrapped in `.lib-carry-vp-desktop` + a `.lib-carry-vp-mobile` IFRAME of the mobile
    * DOM. The iframe gets its OWN 320px viewport, so Wix's mobile `@media` fire
    * exactly as on the source (inline carrying can't — `@media` is viewport-driven
    * and the WP page is 390px device-width). The theme toggles desktop↔iframe below
@@ -34,14 +34,14 @@ export interface ReconstructAltInput {
 /** The mobile-island iframe: loads the captured mobile DOM at its own 320px viewport. */
 function mobileFrame(m: { docUrl: string; height: number }): string {
   const src = m.docUrl.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
-  return `<iframe class="lib-alt-mobile-frame" src="${src}" width="320" height="${m.height}" scrolling="no" title="mobile"></iframe>`;
+  return `<iframe class="lib-carry-mobile-frame" src="${src}" width="320" height="${m.height}" scrolling="no" title="mobile"></iframe>`;
 }
 
 /** Combine the desktop content + the mobile iframe into one dual-viewport island. */
 function dualIsland(desktopHtml: string, mobile: { docUrl: string; height: number }): string {
   return island(
-    `<div class="lib-alt-vp-desktop">${desktopHtml}</div>` +
-      `<div class="lib-alt-vp-mobile">${mobileFrame(mobile)}</div>`,
+    `<div class="lib-carry-vp-desktop">${desktopHtml}</div>` +
+      `<div class="lib-carry-vp-mobile">${mobileFrame(mobile)}</div>`,
   );
 }
 
@@ -51,14 +51,14 @@ function dualIsland(desktopHtml: string, mobile: { docUrl: string; height: numbe
  * the exact source DOM, so the carried CSS holds while the post holds only the
  * editable content sections. Present only when chrome was located (`splitChrome`).
  */
-export interface AltScaffold {
+export interface CarryScaffold {
   openWrap: string;
   midBefore: string;
   midAfter: string;
   closeWrap: string;
 }
 
-export interface ReconstructAltResult {
+export interface ReconstructCarryResult {
   /** The page's post_content. When `splitChrome`, this is the content sections
    *  only (N core/html blocks); otherwise the whole carried body as one island. */
   mainIsland: string;
@@ -70,11 +70,11 @@ export interface ReconstructAltResult {
    *  + chrome parts and post_content is content-only. False → legacy single island. */
   splitChrome: boolean;
   /** The wrapper chunks for the template. Present only when `splitChrome`. */
-  scaffold?: AltScaffold;
-  /** Source CSS scoped to `body.lib-alt-site` (site-wide), treeshaken against the
+  scaffold?: CarryScaffold;
+  /** Source CSS scoped to `body.lib-carry-site` (site-wide), treeshaken against the
    *  header+footer DOM only — styles the shared chrome parts on EVERY page. */
   chromeCss: string;
-  /** Source CSS scoped to `body.lib-alt-site.lib-alt-page-<slug>`, treeshaken
+  /** Source CSS scoped to `body.lib-carry-site.lib-carry-page-<slug>`, treeshaken
    *  against the main DOM only — styles this page's content. */
   mainCss: string;
 }
@@ -98,10 +98,10 @@ function island(html: string): string {
  *
  * No IO: callers are responsible for persisting outputs.
  */
-export function reconstructPageAlt(input: ReconstructAltInput): ReconstructAltResult {
+export function reconstructPageCarry(input: ReconstructCarryInput): ReconstructCarryResult {
   const carryOpts = { mediaUrlMap: input.mediaUrlMap, linkMap: input.linkMap };
-  const SITE_SCOPE = 'body.lib-alt-site';
-  const pageScope = `body.lib-alt-site.lib-alt-page-${input.slug}`;
+  const SITE_SCOPE = 'body.lib-carry-site';
+  const pageScope = `body.lib-carry-site.lib-carry-page-${input.slug}`;
   const rewriteUrl = (u: string): string | null => input.mediaUrlMap.get(u) ?? null;
 
   // Carry the WHOLE body ONCE (sanitize, strip scripts, rewrite media/link URLs,

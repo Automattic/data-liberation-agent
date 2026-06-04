@@ -1,5 +1,5 @@
 //
-// Alt theme scaffold (carry-and-scope path)
+// Carry theme scaffold (carry-and-scope path)
 // ==========================================
 // Emits the minimal file set for a WordPress block theme whose sole job is
 // to stay out of the way and let carried source HTML + scoped source CSS
@@ -7,21 +7,21 @@
 //
 // Intentionally minimal — no patterns, no archetypes beyond header/footer
 // parts and per-page templates.  No agent involvement required; pure
-// deterministic mapping of AltThemeInput → ThemeFile[].
+// deterministic mapping of CarryThemeInput → ThemeFile[].
 //
 // Body-class scoping strategy:
-//   - `lib-alt-site` — applied site-wide via body_class filter
-//   - `lib-alt-page-<slug>` — applied per page via body_class filter
+//   - `lib-carry-site` — applied site-wide via body_class filter
+//   - `lib-carry-page-<slug>` — applied per page via body_class filter
 //
 // CSS loading strategy:
 //   - assets/css/site.css — enqueued globally
 //   - assets/css/page-<slug>.css — enqueued conditionally via wp_enqueue_scripts
 //
 
-import type { AltScaffold } from './page-reconstruct-alt.js';
+import type { CarryScaffold } from './page-reconstruct-carry.js';
 import { GALLERY_MOBILE_GRID_CSS } from './gallery-mobile-grid.js';
 
-export interface AltPage {
+export interface CarryPage {
   /** URL-safe slug (kebab-case, produced by slugify — no quotes or special chars). */
   slug: string;
   /** True for the site front page — maps template to front-page.html and uses is_front_page(). */
@@ -41,18 +41,18 @@ export interface AltPage {
    * `is_front_page()` + `front-page.html`.
    */
   postType?: 'page' | 'post';
-  /** Scoped CSS for this page (already scoped under `body.lib-alt-page-<slug>`). */
+  /** Scoped CSS for this page (already scoped under `body.lib-carry-page-<slug>`). */
   pageCss: string;
   /**
    * Per-page wrapper-scaffold chunks. When present, the page template carries the
    * scaffold + chrome parts and renders `post_content` (content sections only)
    * between them — the editable-content architecture. Absent → legacy template.
    */
-  scaffold?: AltScaffold;
+  scaffold?: CarryScaffold;
 }
 
 /** body_class / enqueue conditional for a page (front page → single → page). */
-function pageCondition(p: AltPage): string {
+function pageCondition(p: CarryPage): string {
   if (p.isHome) return 'is_front_page()';
   if (p.postType === 'post') return `is_single( '${p.slug}' )`;
   return `is_page( '${p.slug}' )`;
@@ -65,7 +65,7 @@ function pageCondition(p: AltPage): string {
  * canonical `header`/`footer` parts; subsequent variants get `-2`, `-3`, … slugs.
  */
 export interface ChromeVariant {
-  /** Stable key referenced by [[AltPage.chromeKey]]. */
+  /** Stable key referenced by [[CarryPage.chromeKey]]. */
   key: string;
   /** Block markup for this variant's header template part. */
   headerIsland: string;
@@ -73,13 +73,13 @@ export interface ChromeVariant {
   footerIsland: string;
 }
 
-export interface AltThemeInput {
+export interface CarryThemeInput {
   /** Display name that appears in WP's theme list (required by WordPress). */
   themeName: string;
   /** Distinct chrome variants (home first). Each emits its own header/footer parts. */
   chromeVariants: ChromeVariant[];
   /**
-   * Site-wide CSS (already scoped under `body.lib-alt-site`). Holds EVERY variant's
+   * Site-wide CSS (already scoped under `body.lib-carry-site`). Holds EVERY variant's
    * chrome CSS concatenated — safe because each variant's rules key off the source's
    * per-header comp-ids, so a variant's rules match nothing on a page using another.
    */
@@ -94,7 +94,7 @@ export interface AltThemeInput {
    */
   bodyClasses?: string[];
   /** One entry per page that needs a template + per-page CSS file. */
-  pages: AltPage[];
+  pages: CarryPage[];
 }
 
 /** Header/footer template-part slugs for a chrome variant by its position. */
@@ -151,7 +151,7 @@ function htmlBlock(html: string): string {
  * chrome lands in its exact DOM position), and `post_content` (content sections
  * only) sits between them. Concatenated, the stream rebuilds the source DOM.
  */
-function scaffoldedTemplate(s: AltScaffold, slugs: ChromeSlugs): string {
+function scaffoldedTemplate(s: CarryScaffold, slugs: ChromeSlugs): string {
   return [
     htmlBlock(s.openWrap),
     `<!-- wp:template-part {"slug":"${slugs.header}","tagName":"div"} /-->`,
@@ -166,7 +166,7 @@ function scaffoldedTemplate(s: AltScaffold, slugs: ChromeSlugs): string {
 }
 
 /** The right template body for a page: scaffolded when it has a scaffold, else legacy. */
-function templateFor(p: AltPage, slugs: ChromeSlugs): string {
+function templateFor(p: CarryPage, slugs: ChromeSlugs): string {
   return p.scaffold ? scaffoldedTemplate(p.scaffold, slugs) : pageTemplate(slugs);
 }
 
@@ -175,8 +175,8 @@ function sanitizeBodyClass(cls: string): string | null {
   return /^[a-zA-Z][\w-]{0,60}$/.test(cls) ? cls : null;
 }
 
-function functionsPhp(pages: AltPage[], bodyClasses: string[]): string {
-  // body_class filter: always add lib-alt-site; replicate the source body classes
+function functionsPhp(pages: CarryPage[], bodyClasses: string[]): string {
+  // body_class filter: always add lib-carry-site; replicate the source body classes
   // (so body-state-gated carried rules behave like the source); add per-page class.
   const sourceBodyCases = bodyClasses
     .map(sanitizeBodyClass)
@@ -184,26 +184,26 @@ function functionsPhp(pages: AltPage[], bodyClasses: string[]): string {
     .map((c) => `    $classes[] = '${c}';`)
     .join('\n');
   const bodyCases = pages
-    .map((p) => `    if ( ${pageCondition(p)} ) { $classes[] = 'lib-alt-page-${p.slug}'; }`)
+    .map((p) => `    if ( ${pageCondition(p)} ) { $classes[] = 'lib-carry-page-${p.slug}'; }`)
     .join('\n');
 
   // wp_enqueue_scripts: enqueue site.css globally; page CSS conditionally.
   const enqueue = pages
     .map(
       (p) =>
-        `    if ( ${pageCondition(p)} ) { wp_enqueue_style( 'lib-alt-page-${p.slug}', get_stylesheet_directory_uri() . '/assets/css/page-${p.slug}.css', array( 'lib-alt-site' ), '1.0.0' ); }`,
+        `    if ( ${pageCondition(p)} ) { wp_enqueue_style( 'lib-carry-page-${p.slug}', get_stylesheet_directory_uri() . '/assets/css/page-${p.slug}.css', array( 'lib-carry-site' ), '1.0.0' ); }`,
     )
     .join('\n');
 
   return `<?php
 add_filter( 'body_class', function( $classes ) {
-    $classes[] = 'lib-alt-site';
+    $classes[] = 'lib-carry-site';
 ${sourceBodyCases ? sourceBodyCases + '\n' : ''}${bodyCases}
     return $classes;
 } );
 
 add_action( 'wp_enqueue_scripts', function() {
-    wp_enqueue_style( 'lib-alt-site', get_stylesheet_directory_uri() . '/assets/css/site.css', array(), '1.0.0' );
+    wp_enqueue_style( 'lib-carry-site', get_stylesheet_directory_uri() . '/assets/css/site.css', array(), '1.0.0' );
 ${enqueue}
 } );
 
@@ -226,7 +226,7 @@ add_filter( 'wp_kses_allowed_html', function( $tags, $context ) {
  * Build the complete file set for the alt (carry-and-scope) block theme.
  * Returns an array of `{path, content}` — the caller writes them to disk.
  */
-export function buildAltThemeFiles(input: AltThemeInput): ThemeFile[] {
+export function buildCarryThemeFiles(input: CarryThemeInput): ThemeFile[] {
   // Block themes do NOT auto-enqueue style.css on the front end — it's only the
   // theme-header file. So the reset must ride the enqueued site.css instead, and
   // it goes FIRST so the carried source CSS overrides it (the reset must lose the
@@ -234,11 +234,11 @@ export function buildAltThemeFiles(input: AltThemeInput): ThemeFile[] {
   //
   // `all:revert` reverts the body to the UA stylesheet, which REINTRODUCES the
   // default `<body>` margin (8px) — and the carried `body{margin:0}` reset is now
-  // `:where(body.lib-alt-site){margin:0}` (zero specificity), so it can't override
+  // `:where(body.lib-carry-site){margin:0}` (zero specificity), so it can't override
   // it. That 8px shifts the whole carried layout down vs the source. Zero
   // margin/padding explicitly (same rule, after `all:revert`, so it wins).
   const RESET =
-    'body.lib-alt-site{all:revert;margin:0;padding:0}\nbody.lib-alt-site *{box-sizing:border-box}\n';
+    'body.lib-carry-site{all:revert;margin:0;padding:0}\nbody.lib-carry-site *{box-sizing:border-box}\n';
 
   // When the page templates carry the wrapper scaffold + chrome parts, the
   // template-part wrapper element (`<div class="wp-block-template-part">`) would
@@ -258,29 +258,29 @@ export function buildAltThemeFiles(input: AltThemeInput): ThemeFile[] {
   const GALLERY_REFLOW = GALLERY_MOBILE_GRID_CSS;
 
   // Dual-viewport toggle for classic/adaptive Wix mobile-DOM carry. When a page
-  // emits a dual island (desktop content in `.lib-alt-vp-desktop` + a
-  // `.lib-alt-vp-mobile` iframe of the captured 320px mobile DOM), this hides the
+  // emits a dual island (desktop content in `.lib-carry-vp-desktop` + a
+  // `.lib-carry-vp-mobile` iframe of the captured 320px mobile DOM), this hides the
   // desktop island + chrome parts below 750px and shows the iframe, collapsing the
   // page to 320px and neutralizing the desktop scaffold containers (so the iframe
   // determines the width). The iframe is viewport-isolated, so `[id^=pageBackground]`
   // here only matches the DESKTOP scaffold — no leak into the mobile DOM. Harmless
-  // on desktop-only pages (`.lib-alt-vp-*` simply don't exist). See
-  // page-reconstruct-alt.ts (dualIsland) + project_liberate_alt_parity_ceiling.
-  // Every aggressive rule is gated on `:has(.lib-alt-vp-mobile)` so it ONLY fires on
+  // on desktop-only pages (`.lib-carry-vp-*` simply don't exist). See
+  // page-reconstruct-carry.ts (dualIsland) + project_liberate_alt_parity_ceiling.
+  // Every aggressive rule is gated on `:has(.lib-carry-vp-mobile)` so it ONLY fires on
   // pages that actually emit a mobile island — a desktop-only page (no mobile capture)
   // keeps its normal mobile rendering.
   const VP_TOGGLE_CSS =
-    '.lib-alt-vp-desktop{display:contents}\n' +
-    '.lib-alt-vp-mobile{display:none}\n' +
-    '.lib-alt-mobile-frame{border:0;display:block;width:320px;max-width:320px;margin:0}\n' +
+    '.lib-carry-vp-desktop{display:contents}\n' +
+    '.lib-carry-vp-mobile{display:none}\n' +
+    '.lib-carry-mobile-frame{border:0;display:block;width:320px;max-width:320px;margin:0}\n' +
     '@media screen and (max-width:750px){' +
-    'html:has(.lib-alt-vp-mobile),body.lib-alt-site:has(.lib-alt-vp-mobile){width:320px!important;min-width:0!important;max-width:320px!important;overflow-x:hidden!important}' +
-    'body.lib-alt-site:has(.lib-alt-vp-mobile) .lib-alt-vp-desktop{display:none!important}' +
-    'body.lib-alt-site:has(.lib-alt-vp-mobile) .wp-block-template-part{display:none!important}' +
-    'body.lib-alt-site:has(.lib-alt-vp-mobile) #masterPage,body.lib-alt-site:has(.lib-alt-vp-mobile) #SITE_CONTAINER,body.lib-alt-site:has(.lib-alt-vp-mobile) #site-root,' +
-    'body.lib-alt-site:has(.lib-alt-vp-mobile) [id^="SITE_PAGES"],body.lib-alt-site:has(.lib-alt-vp-mobile) #pagesContainer,' +
-    'body.lib-alt-site:has(.lib-alt-vp-mobile) [id^="pageBackground"],body.lib-alt-site:has(.lib-alt-vp-mobile) [id^="bgLayers_pageBackground"]{display:contents!important}' +
-    'body.lib-alt-site .lib-alt-vp-mobile{display:block!important}' +
+    'html:has(.lib-carry-vp-mobile),body.lib-carry-site:has(.lib-carry-vp-mobile){width:320px!important;min-width:0!important;max-width:320px!important;overflow-x:hidden!important}' +
+    'body.lib-carry-site:has(.lib-carry-vp-mobile) .lib-carry-vp-desktop{display:none!important}' +
+    'body.lib-carry-site:has(.lib-carry-vp-mobile) .wp-block-template-part{display:none!important}' +
+    'body.lib-carry-site:has(.lib-carry-vp-mobile) #masterPage,body.lib-carry-site:has(.lib-carry-vp-mobile) #SITE_CONTAINER,body.lib-carry-site:has(.lib-carry-vp-mobile) #site-root,' +
+    'body.lib-carry-site:has(.lib-carry-vp-mobile) [id^="SITE_PAGES"],body.lib-carry-site:has(.lib-carry-vp-mobile) #pagesContainer,' +
+    'body.lib-carry-site:has(.lib-carry-vp-mobile) [id^="pageBackground"],body.lib-carry-site:has(.lib-carry-vp-mobile) [id^="bgLayers_pageBackground"]{display:contents!important}' +
+    'body.lib-carry-site .lib-carry-vp-mobile{display:block!important}' +
     '}\n';
 
   // Map each distinct chrome variant to its part slugs (variant 0 → header/footer).

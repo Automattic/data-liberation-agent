@@ -33,8 +33,8 @@ const HORIZONTAL_MENU_MARKER = 'wixui-horizontal-menu';
 
 /**
  * Append the main-nav reveal-unfreeze override to `css`, scoped under `scope`
- * (the same wrapper the sheet is already scoped to, e.g. `body.lib-alt-site` for
- * the chrome sheet or `body.lib-alt-site.lib-alt-page-<slug>` for a page sheet).
+ * (the same wrapper the sheet is already scoped to, e.g. `body.lib-carry-site` for
+ * the chrome sheet or `body.lib-carry-site.lib-carry-page-<slug>` for a page sheet).
  *
  * @param css      The already-scoped, treeshaken sheet to augment.
  * @param domHtml  The carried DOM the sheet styles (chrome or main region).
