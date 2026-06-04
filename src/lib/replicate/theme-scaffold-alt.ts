@@ -221,8 +221,14 @@ export function buildAltThemeFiles(input: AltThemeInput): ThemeFile[] {
   // theme-header file. So the reset must ride the enqueued site.css instead, and
   // it goes FIRST so the carried source CSS overrides it (the reset must lose the
   // cascade to the source's own rules).
+  //
+  // `all:revert` reverts the body to the UA stylesheet, which REINTRODUCES the
+  // default `<body>` margin (8px) — and the carried `body{margin:0}` reset is now
+  // `:where(body.lib-alt-site){margin:0}` (zero specificity), so it can't override
+  // it. That 8px shifts the whole carried layout down vs the source. Zero
+  // margin/padding explicitly (same rule, after `all:revert`, so it wins).
   const RESET =
-    'body.lib-alt-site{all:revert}\nbody.lib-alt-site *{box-sizing:border-box}\n';
+    'body.lib-alt-site{all:revert;margin:0;padding:0}\nbody.lib-alt-site *{box-sizing:border-box}\n';
 
   // When the page templates carry the wrapper scaffold + chrome parts, the
   // template-part wrapper element (`<div class="wp-block-template-part">`) would
