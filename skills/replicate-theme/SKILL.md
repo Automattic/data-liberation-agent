@@ -49,42 +49,46 @@ You also reuse the shared install/import/compare tools: `liberate_preview` (prov
 
 ## The flow
 
+**Committed scripts that drive this (all site-generic, all paths from argv):**
+
+| Script | Does |
+|---|---|
+| `scripts/wxr-slim-publish.py` | Step 2: slim `output.wxr` for provisioning (drop attachments, draft→publish), backing the full WXR up to `output.wxr.full`. |
+| `scripts/carry-reconstruct-drive.ts` | Steps 1 + 3 + 4 in one run: build the page list, drive `reconstructPagesCarryHandler` (theme + media + islands + `_swap.php`), write `output-carry.wxr`, restore `output.wxr` from `.full`. |
+| `scripts/carry-replica-shots.ts` | Step 6: screenshot the live carry site into a replica dir for `liberate_compare`. |
+
+The reconstruct tool can't run via the MCP server (long-lived, no hot-reload), so these tsx scripts run the on-disk handler directly.
+
 ### 1. Resolve the run and build the page list
 
-- Locate `output/<site>/`. Read `screenshots/manifest.json` (URL → files) to enumerate pages; cross-reference `output.wxr` for each `page`/`post` item's `post_name` (slug) and title. Mark the homepage `isHome: true` (the front-page item).
-- Produce `pages: [{ slug, sourceUrl, title, isHome?, postType?, htmlSlug? }]` covering every content page AND post:
-  - **Pages**: `slug` = WP `post_name`, `postType: 'page'` (default), `htmlSlug` = slug.
-  - **Posts**: `slug` = bare WP `post_name` (e.g. `world-teacher-day`), `postType: 'post'`, and `htmlSlug` = the manifest slug for the captured file (e.g. `post--world-teacher-day`). The WXR post `<link>` drops `/post/` but the manifest URL keeps it; join WXR post → html file by exact `post--<post_name>.html` then prefix-match (handles `%`-encoded / truncated slugs).
-- Verify each `html/<htmlSlug>.html` exists; skip (and log) any with no captured HTML.
+`carry-reconstruct-drive.ts` builds this internally (`buildCarryPageList`) — you don't hand-assemble it. The join it performs, for reference: read `screenshots/manifest.json` (URL → files), cross-reference `output.wxr`(.full) for each `page`/`post` item's `post_name` (slug) + title, and produce `pages: [{ slug, sourceUrl, title, isHome?, postType?, htmlSlug? }]`:
+  - **Pages**: `slug` = WP `post_name`, `postType: 'page'`, `htmlSlug` = slug. The front page is captured as `homepage` (matched by root-URL `<link>` OR `post_name` `home`/`homepage`).
+  - **Posts**: `slug` = bare WP `post_name`, `postType: 'post'`, `htmlSlug` = the manifest slug (e.g. `post--world-teacher-day`). The WXR post `<link>` drops `/post/` but the manifest URL keeps it; join by exact `post--<post_name>.html` then prefix-match (`%`-encoded / truncated slugs).
+  - Pages with no captured `html/<htmlSlug>.html` are skipped + logged.
 
 ### 2. Provision the Studio site
 
-- Provision via `liberate_preview({ outputDir })`. Provision the Studio site as `<site>` (e.g. `~/Studio/<site>`) — do NOT add a path suffix. If a blocks-path site already exists with that name, `studio.ts` uniques it automatically (`<site>-2`, `-3`, …), so running both paths on one extraction yields distinct sites without clobbering.
-- **Media-heavy WXR trips the Studio import timeout.** A WXR with hundreds of attachments hits Studio's ~120s blueprint-import silence timeout (surfaces as `Error establishing a database connection`, and the half-created site is removed) — see [[project_studio_import_heartbeat]]. Provision from a **media-free slimmed WXR**: copy `output.wxr`, drop every `<item>` whose `post_type` is `attachment` (keep pages/posts/nav), write it as `output.wxr`, and do NOT stage a `media/` dir at provision time. The reconstruct installs media separately (next step), so the site loses nothing.
+- **Slim first:** `python3 scripts/wxr-slim-publish.py output/<site>/output.wxr`. A media-heavy WXR (hundreds of attachments) trips Studio's ~120s blueprint-import silence timeout (surfaces as `Error establishing a database connection`; the half-created site is removed) — see [[project_studio_import_heartbeat]]. The script slims `output.wxr` IN PLACE (drops every `attachment` `<item>`, flips draft→publish) and backs the full WXR up to `output.wxr.full`. The reconstruct installs media separately (step 3), so the provisioned site loses nothing — and **step 3's driver restores `output.wxr` from `.full` at the end**, so the slim is transient and the dir is never left lossy (a later blocks run / `liberate_verify` still sees the full WXR).
+- Provision via `liberate_preview({ outputDir })` — it reads the now-slimmed `output.wxr`. The site is named `<site>` (e.g. `~/Studio/<site>`, no path suffix); if a blocks-path site already exists with that name, `studio.ts` uniques it (`<site>-2`, …), so both paths on one extraction yield distinct sites without clobbering. `liberate_preview` returns `path` (the resolved Studio WP root) — pass it straight through as `studioSitePath` in step 3 (no need to re-derive `~/Studio/<site>`).
 
-### 3. Run the carry reconstruct
+### 3. Run the carry reconstruct (steps 1 + 3 + 4, one command)
 
-- Call `liberate_reconstruct_pages_carry({ outputDir: "output/<site>", studioSitePath, themeName: "<Site> (Carry)", pages })`. Because the MCP server doesn't hot-reload, drive it from a fresh `tsx` process importing the handler (the on-disk source has the link/media wiring) if the running server predates it.
-- Standalone means one site, one stub store: `installMediaForUrl` installs the run's media into this site and self-hosts it (no cross-site stamping, so no fresh-stub workaround is needed). The theme slug derives from `outputDir` → `<site>-carry` (theme name only — distinct from the un-suffixed *site* name).
-- It installs media (`mediaInstalled` in the result), rewrites links + img/url to local, writes the theme, and returns per-page `postContent` islands. Note `themeSlug`.
+- `npx tsx scripts/carry-reconstruct-drive.ts output/<site> <studioSitePath> "<Site> (Carry)"` — use `liberate_preview`'s returned `path` as `<studioSitePath>`. This runs `reconstructPagesCarryHandler` on the on-disk source (the MCP server can't — it doesn't hot-reload) and, in one pass: builds the page list (step 1), installs the run's media + self-hosts it (`installMediaForUrl` — one site, one stub store, no cross-site stamping), rewrites links + img/url to local, writes the theme, writes the islands + `_swap.php`, writes `output-carry.wxr` (step 4), and restores `output.wxr` from `.full`. The theme slug derives from `outputDir` → `<site>-carry` (theme name only — distinct from the un-suffixed *site* name); the driver prints `THEMESLUG=…` and the `mediaInstalled`/`mediaErrors`/`fetchErrors` counts.
 - **Verify the fixes landed**, don't assume: the homepage island should have local `/…/` nav hrefs (not `https://<source>/…`) and `…/wp-content/uploads/…` img srcs (not the CDN); a post island should have `is_single('<slug>')` in functions.php; spot-check a few rewritten image URLs return HTTP 200.
 
-### 4. Build `output-carry.wxr` (patch islands into the base WXR)
+### 4. `output-carry.wxr` (handled by the step-3 driver)
 
-The carry pages' content is the returned islands, not block markup. Produce `output/<site>/output-carry.wxr` by copying the FULL `output.wxr` (with attachments — this is the deliverable, not the slimmed provision WXR) and, for each returned island, REPLACING that item's `<content:encoded>` body with the island (match `page` AND `post` items by `<wp:post_name>` == slug). Preserve everything else (titles, dates, IDs, menus, media items) verbatim — do NOT drop content ([[feedback_never_lose_source_content]]).
-
-- Wrap the island in `<![CDATA[ ... ]]>`; escape any `]]>` inside the island as `]]]]><![CDATA[>`.
-- Do this with a small, auditable per-item transform, NOT a greedy regex over the whole file. Verify the item count round-trips and the doc still parses as XML before and after.
+The step-3 driver already writes this (`buildOutputCarryWxr`): it copies the FULL `output.wxr.full` (with attachments — this is the import deliverable, NOT the slimmed provision WXR) and, for each island, REPLACES that item's `<content:encoded>` body with the island (matching `page` AND `post` items by `<wp:post_name>` == slug), preserving everything else (titles, dates, IDs, menus, media items) verbatim ([[feedback_never_lose_source_content]]). The island is CDATA-wrapped (any `]]>` escaped as `]]]]><![CDATA[>`) via a per-item **function** replacer — not a greedy regex, not a string replacement (avoids the `$&`/`$1` footgun, see [[project_capture_document_nesting_bug]]). The driver prints `items`/`patched`/`cdataBalanced`; confirm the item count round-trips and `xmllint --noout output/<site>/output-carry.wxr` passes.
 
 ### 5. Swap content into the live site + activate
 
-- **Do NOT re-import `output-carry.wxr` to update content** — the WXR importer skips items whose GUID already exists, so it will NOT overwrite the block content already in the site. Instead swap directly: copy the islands into `<studioSitePath>/wp-content/uploads/_carry-islands/`, then `studio wp eval-file` a script that, for each slug, finds the post by `post_name` across `['page','post']` (`get_posts(['name'=>slug,'post_type'=>['page','post'],'post_status'=>'any'])`) and `wp_update_post`s its `post_content`. (Islands carry no inline `<style>` — CSS is theme assets enqueued by body-class — so KSES doesn't strip them.)
-- Activate the carry theme (`studio wp theme activate <themeSlug>`). Set the static front page (`wp option update show_on_front page` + `page_on_front <homepage id>`) and `wp rewrite flush`.
+- **Do NOT re-import `output-carry.wxr` to update content** — the WXR importer skips items whose GUID already exists, so it won't overwrite content already in the site. Instead swap directly. The step-3 driver already wrote the islands + a `_swap.php` into `<studioSitePath>/wp-content/uploads/_carry-islands/`; run it: `studio wp --path <studioSitePath> --user=admin eval-file /wordpress/wp-content/uploads/_carry-islands/_swap.php` (VFS path — Studio mounts the site at `/wordpress`; `--user=admin` gives `unfiltered_html` so KSES doesn't strip carried markup). It finds each post by `post_name` across `['page','post']` and `wp_update_post`s its `post_content`, publishing it.
+- Activate the carry theme (`studio wp --path <studioSitePath> theme activate <themeSlug>`). Set the static front page (`option update show_on_front page` + `option update page_on_front <homepage id>`) and `rewrite flush`.
 
 ### 6. Render, screenshot, and compare — the parity verdict
 
-- Screenshot the built site (desktop + mobile) for every page.
-- Run `liberate_compare` (or the existing replica-screenshot + diff tooling) against the SOURCE screenshots in `screenshots/`. Emit `output/<site>/run-report-carry.json` with a per-page and overall parity score, mirroring the block path's `run-report.json` shape.
+- Screenshot the built site (desktop + mobile) for every page: `npx tsx scripts/carry-replica-shots.ts output/<site> <carryBaseUrl> output/<site>/replica-carry`. It navigates via `redirect-map.json` (posts move `/post/<slug>` → `/<slug>/`, which WP further 301s to its date permalink, so the bare source path would rely on WP's flaky canonical-redirect guessing), and keys the replica manifest by the SOURCE url so `liberate_compare` joins origin↔replica by pathname.
+- Run `liberate_compare({ originDir: "output/<site>/screenshots", replicaDir: "output/<site>/replica-carry" })` against the SOURCE screenshots. Emit `output/<site>/run-report-carry.json` with a per-page and overall parity score, mirroring the block path's `run-report.json` shape.
 - **Report the carry score directly NEXT TO the block path's score** for the same pages. This is the deliverable — the evidence for whether carry-and-scope actually wins, and by how much.
 - Then do the honest visual pass: for the 2–3 worst pages, crop source and built at the same width side by side, read both, and itemize the real differences. State plainly where the carry theme still falls short.
 

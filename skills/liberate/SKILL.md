@@ -106,10 +106,10 @@ If products were extracted, compile `products.jsonl` → `products.csv` (WooComm
 
 ### Dispatch (inline)
 
-Invoke the chosen sub-skill **inline via the Skill tool** (shared context; each sub-skill reads `output/<site>/` from disk and owns its own install → QA → report):
+Both reconstruct sub-skills are `disable-model-invocation: true` by design — they only ever run from this front door (post-capture), never spontaneously. That means **the Skill tool cannot invoke them**: a `Skill({ skill: 'replicate-theme' })` call is rejected with `cannot be used with Skill tool due to disable-model-invocation`. So **dispatch = Read the chosen sub-skill's `SKILL.md` and execute its workflow inline in this same shared context** (each sub-skill reads `output/<site>/` from disk and owns its own install → QA → report):
 
-- blocks+products → **`replicate-with-blocks`**
-- theme replication → **`replicate-theme`**
+- blocks+products → read & follow `skills/replicate-with-blocks/SKILL.md`
+- theme replication → read & follow `skills/replicate-theme/SKILL.md`
 
 The reconstruct phase (clustering, foundations, theme, build, validate, install, visual-QA for blocks; carry-and-scope + compare for theme) lives **entirely in the dispatched sub-skill** — this front door ends here.
 
