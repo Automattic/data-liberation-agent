@@ -211,8 +211,10 @@ function wooSingleProductTemplate(): string {
   return [
     `<!-- wp:template-part {"slug":"${STORE_HEADER_SLUG}","tagName":"header"} /-->`,
     '',
-    '<!-- wp:group {"tagName":"main","layout":{"type":"constrained"},"style":{"spacing":{"padding":{"top":"32px","bottom":"24px"}}}} -->',
-    '<main class="wp-block-group" style="padding-top:32px;padding-bottom:24px">',
+    // The carry theme's contentSize is 100% (full-width carried islands), so the buy box
+    // needs an explicit centered max-width or the gallery + summary sprawl edge-to-edge.
+    '<!-- wp:group {"tagName":"main","layout":{"type":"constrained","contentSize":"1200px"},"style":{"spacing":{"padding":{"top":"32px","bottom":"24px","left":"24px","right":"24px"}}}} -->',
+    '<main class="wp-block-group" style="padding-top:32px;padding-bottom:24px;padding-left:24px;padding-right:24px">',
     '<!-- wp:woocommerce/breadcrumbs /-->',
     '',
     '<!-- wp:columns {"style":{"spacing":{"blockGap":{"left":"48px"}}}} -->',
@@ -382,6 +384,15 @@ export function buildCarryThemeFiles(input: CarryThemeInput): ThemeFile[] {
   // correct) is untouched. See gallery-mobile-grid.ts.
   const GALLERY_REFLOW = GALLERY_MOBILE_GRID_CSS;
 
+  // Store-header rescue: the carried announcement-bar arrow SVG has a viewBox but no
+  // width attr, and its sizing rule isn't in the carried chrome CSS, so on the store
+  // pages (which use the isolated header-store part) it renders huge. Constrain inline
+  // SVGs inside the announcement bar only (NOT the logo, which lives elsewhere).
+  const STORE_HEADER_RESCUE =
+    'body.lib-carry-site .announcement-bar svg,' +
+    'body.lib-carry-site .announcement-bar__message svg,' +
+    'body.lib-carry-site .announcement-bar__link svg{width:1.2rem;height:auto;display:inline-block;vertical-align:middle}\n';
+
   // Dual-viewport toggle for classic/adaptive Wix mobile-DOM carry. When a page
   // emits a dual island (desktop content in `.lib-carry-vp-desktop` + a
   // `.lib-carry-vp-mobile` iframe of the captured 320px mobile DOM), this hides the
@@ -461,7 +472,7 @@ export function buildCarryThemeFiles(input: CarryThemeInput): ThemeFile[] {
     // Site-wide CSS — reset first (so source rules win the cascade), then the
     // chrome-wrapper rescue, then EVERY variant's carried chrome CSS (concatenated
     // upstream into siteCss; comp-id-scoped so variants never collide).
-    { path: 'assets/css/site.css', content: RESET + CHROME_RESCUE + BG_LAYER_CLICK_FIX + GALLERY_REFLOW + VP_TOGGLE_CSS + input.siteCss },
+    { path: 'assets/css/site.css', content: RESET + CHROME_RESCUE + BG_LAYER_CLICK_FIX + GALLERY_REFLOW + STORE_HEADER_RESCUE + VP_TOGGLE_CSS + input.siteCss },
     { path: 'templates/index.html', content: indexTemplate },
   ];
 

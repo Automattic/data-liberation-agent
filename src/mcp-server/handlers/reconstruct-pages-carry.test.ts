@@ -1,5 +1,34 @@
 import { describe, it, expect } from 'vitest';
-import { assembleCarryTheme } from './reconstruct-pages-carry.js';
+import { assembleCarryTheme, extractStoreHeaderIsland } from './reconstruct-pages-carry.js';
+
+describe('extractStoreHeaderIsland', () => {
+  it('captures the FULL header group (announcement bar + header) when present, not just <header>', () => {
+    // Fictional Shopify-style header group: an announcement section + a header section,
+    // siblings sharing `shopify-section-group-header-group`.
+    const island =
+      '<div class="shopify-section shopify-section-group-header-group announcement-bar-section"><p class="announcement-bar__message">Sale on now</p></div>' +
+      '<div class="shopify-section shopify-section-group-header-group section-header"><header class="header"><a class="logo">Acme</a><nav><ul><li>Shop</li></ul></nav></header></div>' +
+      '<main>page body</main>';
+    const out = extractStoreHeaderIsland(island);
+    expect(out).toContain('Sale on now'); // announcement bar kept
+    expect(out).toContain('<header'); // header kept
+    expect(out).toContain('shopify-section-group-header-group'); // wrapper context kept (CSS relies on it)
+    expect(out).not.toContain('page body'); // main excluded
+    expect(out).toContain('lib-carry-vp-desktop');
+  });
+
+  it('falls back to the bare <header> when there is no header group (non-Shopify)', () => {
+    const island = '<header class="site-header"><a>Logo</a></header><main>body</main>';
+    const out = extractStoreHeaderIsland(island);
+    expect(out).toContain('site-header');
+    expect(out).not.toContain('body');
+  });
+
+  it('returns empty string when there is no header at all', () => {
+    expect(extractStoreHeaderIsland('<main>just content</main>')).toBe('');
+    expect(extractStoreHeaderIsland('')).toBe('');
+  });
+});
 
 describe('assembleCarryTheme', () => {
   it('builds theme files + per-page WXR content, with chrome CSS site-wide and main CSS per-page', () => {

@@ -27,6 +27,7 @@ import { appendGalleryMobileGrid } from '../../lib/replicate/gallery-mobile-grid
 import { collectCss } from '../../lib/replicate/css-collect.js';
 import { assessBody, readPngHeight, classifyEmptyBodies, type EmptyBody, type PageStat } from '../../lib/screenshot/dynamic-content.js';
 import { loadCarryDesignTokens } from '../../lib/replicate/carry-design-tokens.js';
+import * as cheerio from 'cheerio';
 import { buildPageLinkMap } from '../../lib/replicate/page-link-map.js';
 import { installRunMediaMap } from '../../lib/replicate/run-media-map.js';
 import type { InternalLinkMap } from '../../lib/streaming/internal-link-rewrite.js';
@@ -111,10 +112,24 @@ function extractBodyClasses(html: string): string[] {
  * each page's island (the splitter leaves the separate parts empty). Returns '' when
  * no `<header>` is present (non-storefront markup) — the caller then skips store chrome.
  */
-function extractStoreHeaderIsland(island: string): string {
-  const m = /<header[\s>][\s\S]*?<\/header>/i.exec(island);
-  if (!m) return '';
-  return `<!-- wp:html -->\n<div class="lib-carry-vp-desktop">\n${m[0]}\n</div>\n<!-- /wp:html -->`;
+export function extractStoreHeaderIsland(island: string): string {
+  if (!island.trim()) return '';
+  const $ = cheerio.load(island);
+  // Prefer the FULL header group (announcement bar + header + sub-bars) over the bare
+  // <header>: the bare header drops the announcement/sub bars AND the wrapper context its
+  // CSS relies on, so the store nav came out mismatched (oversized logo, list bullets,
+  // missing recall/eligibility bars) vs content pages (getsnooz, 2026-06-04). Shopify
+  // groups these as sibling `.shopify-section-group-header-group` sections.
+  let html = '';
+  const group = $('.shopify-section-group-header-group');
+  if (group.length) {
+    html = group.toArray().map((el) => $.html(el)).join('\n');
+  } else {
+    const hdr = $('header').first();
+    if (hdr.length) html = $.html(hdr);
+  }
+  if (!html.trim()) return '';
+  return `<!-- wp:html -->\n<div class="lib-carry-vp-desktop">\n${html}\n</div>\n<!-- /wp:html -->`;
 }
 
 export function assembleCarryTheme(input: AssembleInput): AssembleOutput {
