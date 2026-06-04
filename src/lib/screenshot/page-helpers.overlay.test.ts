@@ -75,6 +75,10 @@ describe('isConsentBanner', () => {
   it('does not flag a generic newsletter modal as a consent banner', () => {
     expect(isConsentBanner(benign({ text: 'join our list for 10 percent off', selector: 'div.popup' }))).toBe(false);
   });
+
+  it('flags a banner by the singular cookie keyword', () => {
+    expect(isConsentBanner(benign({ text: 'this site uses a cookie' }))).toBe(true);
+  });
 });
 
 describe('selectOverlayTargets', () => {
@@ -101,5 +105,17 @@ describe('selectOverlayTargets', () => {
       candidates: [benign({ idx: 0 }), benign({ idx: 1, selector: 'footer.site' })],
     };
     expect(selectOverlayTargets(detection)).toEqual([]);
+  });
+
+  it('routes an above-threshold candidate that also reads as consent to takeovers (not consent)', () => {
+    const detection: OverlayDetection = {
+      scrollLock: { active: true },
+      candidates: [
+        benign({ idx: 0, selector: 'div.gdpr-wall', text: 'we use cookies', role: 'dialog', coverageRatio: 0.95 }),
+      ],
+    };
+    const targets = selectOverlayTargets(detection);
+    expect(targets).toHaveLength(1);
+    expect(targets[0].kind).toBe('takeover');
   });
 });

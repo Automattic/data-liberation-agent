@@ -193,6 +193,9 @@ export interface OverlayTarget {
   hasCloseAffordance: boolean;
 }
 
+// DismissedOverlay and DismissOverlaysOpts are forward-declared here; they are
+// consumed by the dismissOverlays orchestrator added in a later task.
+
 /** A record of one overlay we dismissed (returned + logged for observability). */
 export interface DismissedOverlay {
   selector: string;
@@ -257,7 +260,7 @@ export function scoreOverlay(
   return { score, signals };
 }
 
-const CONSENT_TEXT_RE = /\bcookies?\b|consent|gdpr|ccpa|accept all|privacy (policy|preferences)/i;
+const CONSENT_TEXT_RE = /\bcookies?\b|\bconsent\b|\bgdpr\b|\bccpa\b|\baccept all\b|privacy (policy|preferences)/i;
 const CONSENT_VENDOR_RE = /onetrust|cookiebot|usercentrics|termly|osano|trustarc|cookieyes/i;
 
 /**
@@ -266,7 +269,7 @@ const CONSENT_VENDOR_RE = /onetrust|cookiebot|usercentrics|termly|osano|trustarc
  * we flag them by consent keywords / known vendors in their text/aria/selector.
  */
 export function isConsentBanner(c: OverlayCandidate): boolean {
-  const hay = `${c.text} ${c.ariaLabel ?? ''} ${c.selector}`.toLowerCase();
+  const hay = `${c.text} ${c.ariaLabel ?? ''} ${c.selector}`;
   return CONSENT_TEXT_RE.test(hay) || CONSENT_VENDOR_RE.test(hay);
 }
 
