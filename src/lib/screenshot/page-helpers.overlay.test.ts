@@ -239,6 +239,41 @@ describe('dismissOverlays — Tier 2 Escape (Playwright)', () => {
   });
 });
 
+// A bottom cookie strip (no scroll-lock) with Reject + Accept; each records the
+// choice so we can assert reject is preferred, and removes the strip.
+const CONSENT_FIXTURE = `<!doctype html><html><head><style>
+  #c { position: fixed; left: 0; right: 0; bottom: 0; height: 90px; z-index: 5000; background: #222; color: #fff; }
+</style></head><body>
+  <div id="c">
+    <span>We use cookies to improve your experience.</span>
+    <button id="acc">Accept</button>
+    <button id="rej">Reject</button>
+  </div>
+  <main style="height:3000px">content</main>
+  <script>
+    function done(which){ window.__consent = which; document.getElementById('c').remove(); }
+    document.getElementById('acc').addEventListener('click', function(){ done('accept'); });
+    document.getElementById('rej').addEventListener('click', function(){ done('reject'); });
+  </script>
+</body></html>`;
+
+describe('dismissOverlays — consent banner (Playwright)', () => {
+  it('dismisses a cookie banner, preferring reject', async () => {
+    const page = await browser.newPage();
+    await page.setContent(CONSENT_FIXTURE);
+    try {
+      const dismissed = await dismissOverlays(page);
+      expect(dismissed).toHaveLength(1);
+      expect(dismissed[0].kind).toBe('consent');
+      expect(dismissed[0].method).toBe('close-click');
+      expect(await page.locator('#c').count()).toBe(0);
+      expect(await page.evaluate(() => (window as unknown as { __consent?: string }).__consent)).toBe('reject');
+    } finally {
+      await page.close();
+    }
+  });
+});
+
 // An un-closeable scroll-locking modal: no close control, no Escape handler.
 const MODAL_STUBBORN_FIXTURE = `<!doctype html><html><head><style>
   body.locked { overflow: hidden; }

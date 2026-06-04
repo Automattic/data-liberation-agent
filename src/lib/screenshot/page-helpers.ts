@@ -469,6 +469,32 @@ function forceRemoveOverlay(page: Page, idx: number): Promise<void> {
   }, idx);
 }
 
+/**
+ * Click a consent banner's accept/reject control (preferring reject/decline).
+ * Stamps the chosen control so Node can issue a real, trusted click. Returns
+ * whether a control was found + clicked.
+ */
+async function clickConsentControl(page: Page, idx: number): Promise<boolean> {
+  const found = await page.evaluate((i: number) => {
+    const root = document.querySelector(`[data-lib-overlay="${i}"]`);
+    if (!root) return false;
+    const ACCEPT = /^(reject|decline|accept|agree|got it|allow|ok)\b/i;
+    const ctrls = Array.from(root.querySelectorAll('button,a,[role="button"]'));
+    const prefer = ctrls.find((b) => /^(reject|decline)\b/i.test((b.textContent || '').trim()));
+    const chosen = prefer || ctrls.find((b) => ACCEPT.test((b.textContent || '').trim()));
+    if (!chosen) return false;
+    chosen.setAttribute('data-lib-overlay-consent', String(i));
+    return true;
+  }, idx);
+  if (!found) return false;
+  try {
+    await page.click(`[data-lib-overlay-consent="${idx}"]`, { timeout: 1500 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Attempt to dismiss one target; returns the method that worked, or null. */
 async function dismissOne(
   page: Page,
@@ -476,6 +502,13 @@ async function dismissOne(
 ): Promise<DismissedOverlay['method'] | null> {
   // Skip if already gone (e.g. removed by a sibling's close handler).
   if (!(await overlayPresent(page, t.idx))) return null;
+  // Consent banners: their accept/reject control IS the dismissal (and rarely a
+  // close ×), so try it before the generic close affordance.
+  if (t.kind === 'consent') {
+    if (await clickConsentControl(page, t.idx)) {
+      if (!(await overlayPresent(page, t.idx))) return 'close-click';
+    }
+  }
   // Tier 1 — graceful close: a real click fires the site's handler, which
   // releases its own scroll-lock.
   if (t.hasCloseAffordance) {
