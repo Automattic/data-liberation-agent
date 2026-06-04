@@ -92,33 +92,34 @@ export function assembleAltTheme(input: AssembleInput): AssembleOutput {
   // canonical signature, not raw bytes (see registerChrome). The home page's
   // chrome is registered FIRST so it becomes variant 0 — the canonical
   // `header`/`footer` parts + index.html chrome.
-  const variants: ChromeVariant[] = [];
+  // Group by canonical signature (instance ids + active-nav state normalized away)
+  // so Wix's per-page header instances collapse to one variant. Each distinct
+  // signature reserves a key + its representative (raw) islands and chrome CSS.
   const keyBySig = new Map<string, string>();
-  const cssByKey = new Map<string, string>();
-  const registerChrome = (headerIsland: string, footerIsland: string, chromeCss: string): string => {
-    // Group by canonical signature (instance ids + active-nav state normalized
-    // away) so Wix's per-page header instances collapse to one variant; the
-    // emitted representative is active-stripped so it stays page-agnostic.
-    const sig = chromeSignature(headerIsland, footerIsland);
-    const existing = keyBySig.get(sig);
-    if (existing) return existing;
-    const key = `c${variants.length}`;
-    keyBySig.set(sig, key);
-    variants.push({
-      key,
-      headerIsland: stripActiveNavState(headerIsland),
-      footerIsland: stripActiveNavState(footerIsland),
-    });
-    cssByKey.set(key, chromeCss);
+  const orderedKeys: string[] = [];
+  const repByKey = new Map<string, { headerIsland: string; footerIsland: string; chromeCss: string }>();
+  const ensureKey = (r: { headerIsland: string; footerIsland: string; chromeCss: string }): string => {
+    const sig = chromeSignature(r.headerIsland, r.footerIsland);
+    let key = keyBySig.get(sig);
+    if (!key) {
+      key = `c${orderedKeys.length}`;
+      keyBySig.set(sig, key);
+      orderedKeys.push(key);
+      repByKey.set(key, { headerIsland: r.headerIsland, footerIsland: r.footerIsland, chromeCss: r.chromeCss });
+    }
     return key;
   };
+  // Reserve the home page's signature as variant 0 (the canonical `header`/`footer`
+  // + index.html chrome) without counting it as a member yet.
   const homeReco = recos.find((x) => x.p.isHome) ?? recos[0];
-  if (homeReco) registerChrome(homeReco.r.headerIsland, homeReco.r.footerIsland, homeReco.r.chromeCss);
+  if (homeReco) ensureKey(homeReco.r);
 
+  const countByKey = new Map<string, number>();
   const scaffoldPages: AltPage[] = [];
   const wxrPages: WxrPage[] = [];
   for (const { p, r } of recos) {
-    const chromeKey = registerChrome(r.headerIsland, r.footerIsland, r.chromeCss);
+    const chromeKey = ensureKey(r);
+    countByKey.set(chromeKey, (countByKey.get(chromeKey) ?? 0) + 1);
     scaffoldPages.push({
       slug: p.slug,
       isHome: p.isHome,
@@ -136,11 +137,24 @@ export function assembleAltTheme(input: AssembleInput): AssembleOutput {
     });
   }
 
+  // Build the emitted variants. A variant used by ONE page keeps its active-nav
+  // highlight (e.g. the home header underlining "HOME"); a SHARED variant strips
+  // it, since one representative can't carry every member's "current" item.
+  const variants: ChromeVariant[] = orderedKeys.map((key) => {
+    const rep = repByKey.get(key)!;
+    const shared = (countByKey.get(key) ?? 0) > 1;
+    return {
+      key,
+      headerIsland: shared ? stripActiveNavState(rep.headerIsland) : rep.headerIsland,
+      footerIsland: shared ? stripActiveNavState(rep.footerIsland) : rep.footerIsland,
+    };
+  });
+
   // site.css holds EVERY distinct variant's chrome CSS (variant order). Safe to
   // concatenate: each variant's rules key off the source's per-header comp-ids, so
   // a variant's rules match nothing on a page rendering a different variant.
   const siteCss = variants
-    .map((v) => cssByKey.get(v.key) ?? '')
+    .map((v) => repByKey.get(v.key)?.chromeCss ?? '')
     .filter(Boolean)
     .join('\n');
 

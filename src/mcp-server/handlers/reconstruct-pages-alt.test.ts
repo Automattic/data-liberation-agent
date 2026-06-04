@@ -26,6 +26,38 @@ describe('assembleAltTheme', () => {
     expect(home.postContent).toContain('class="hero"');
   });
 
+  it('keeps the active-nav highlight on a single-page header, strips it on a shared one', () => {
+    const header = (active: 'home' | 'about') =>
+      '<header class="h"><nav data-hook="menu-root" class="wixui-horizontal-menu">' +
+      `<a ${active === 'home' ? 'data-selected="true" aria-current="page" ' : ''}data-part="x">HOME</a>` +
+      `<a ${active === 'about' ? 'data-selected="true" aria-current="page" ' : ''}data-part="x">ABOUT</a>` +
+      '</nav></header><main><div class="c">c</div></main>';
+    const findHeader = (out: ReturnType<typeof assembleAltTheme>) =>
+      out.themeFiles.find((f) => f.path === 'parts/header.html')?.content ?? '';
+
+    // One page using the header → keeps its own "current" highlight.
+    const solo = assembleAltTheme({
+      themeName: 'A',
+      pages: [{ slug: 'home', title: 'H', isHome: true, bodyHtml: header('home'), css: '' }],
+      mediaUrlMap: new Map(),
+    });
+    expect(findHeader(solo)).toContain('aria-current="page"');
+
+    // Two pages sharing one header (differ only by which item is current) → dedupe
+    // to one variant, emitted active-stripped so it doesn't pin one page's highlight.
+    const shared = assembleAltTheme({
+      themeName: 'A',
+      pages: [
+        { slug: 'home', title: 'H', isHome: true, bodyHtml: header('home'), css: '' },
+        { slug: 'about', title: 'A', bodyHtml: header('about'), css: '' },
+      ],
+      mediaUrlMap: new Map(),
+    });
+    // single shared header part (no header-2), and it's stripped
+    expect(shared.themeFiles.some((f) => f.path === 'parts/header-2.html')).toBe(false);
+    expect(findHeader(shared)).not.toContain('aria-current="page"');
+  });
+
   it('rewrites carried hrefs through the linkMap', () => {
     const out = assembleAltTheme({
       themeName: 'Acme Alt',
