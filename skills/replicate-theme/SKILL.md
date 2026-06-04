@@ -54,14 +54,14 @@ You also reuse the shared install/import/compare tools: `liberate_preview` (prov
 | Script | Does |
 |---|---|
 | `scripts/wxr-slim-publish.py` | Step 2: slim `output.wxr` for provisioning (drop attachments, draft→publish), backing the full WXR up to `output.wxr.full`. |
-| `scripts/carry-reconstruct-drive.ts` | Steps 1 + 3 + 4 in one run: build the page list, drive `reconstructPagesCarryHandler` (theme + media + islands + `_swap.php`), write `output-carry.wxr`, restore `output.wxr` from `.full`. |
+| `scripts/carry-reconstruct-drive.ts` | Steps 1 + 3 + 4 in one run: build the page list, drive `reconstructPagesCarryHandler` (theme + media + islands + `_swap.php`), write `output-carry.wxr`, restore `output.wxr` from `.full`. Pass `<outputDir> --list` (instead of `<studioSitePath>`) to just build + inspect the page list cheaply (no handler load). `EXCLUDE=slug1,slug2` drops junk/unwanted pages (404, sitemap, thank-you, or per-site curation). |
 | `scripts/carry-replica-shots.ts` | Step 6: screenshot the live carry site into a replica dir for `liberate_compare`. |
 
-The reconstruct tool can't run via the MCP server (long-lived, no hot-reload), so these tsx scripts run the on-disk handler directly.
+The reconstruct tool can't run via the MCP server (long-lived, no hot-reload), so these tsx scripts run the on-disk handler directly. The page-list + WXR-patch logic is the tested lib `src/lib/replicate/carry-page-list.ts` (`buildCarryPageList` / `buildOutputCarryWxr`) — the single source of truth shared by the driver and its `--list` inspector.
 
 ### 1. Resolve the run and build the page list
 
-`carry-reconstruct-drive.ts` builds this internally (`buildCarryPageList`) — you don't hand-assemble it. The join it performs, for reference: read `screenshots/manifest.json` (URL → files), cross-reference `output.wxr`(.full) for each `page`/`post` item's `post_name` (slug) + title, and produce `pages: [{ slug, sourceUrl, title, isHome?, postType?, htmlSlug? }]`:
+The driver builds this internally via `buildCarryPageList` (in the tested lib `src/lib/replicate/carry-page-list.ts`) — you don't hand-assemble it; run `… <outputDir> --list` to inspect what will carry first. The join it performs, for reference: read `screenshots/manifest.json` (URL → files), cross-reference `output.wxr`(.full) for each `page`/`post` item's `post_name` (slug) + title, and produce `pages: [{ slug, sourceUrl, title, isHome?, postType?, htmlSlug? }]`:
   - **Pages**: `slug` = WP `post_name`, `postType: 'page'`, `htmlSlug` = slug. The front page is captured as `homepage` (matched by root-URL `<link>` OR `post_name` `home`/`homepage`).
   - **Posts**: `slug` = bare WP `post_name`, `postType: 'post'`, `htmlSlug` = the manifest slug (e.g. `post--world-teacher-day`). The WXR post `<link>` drops `/post/` but the manifest URL keeps it; join by exact `post--<post_name>.html` then prefix-match (`%`-encoded / truncated slugs).
   - Pages with no captured `html/<htmlSlug>.html` are skipped + logged.
