@@ -27,6 +27,17 @@ if (!originDir || !carryBaseUrl || !replicaDir) {
 const manifest = JSON.parse(readFileSync(join(originDir, 'screenshots/manifest.json'), 'utf8'));
 const entries: Record<string, { slug?: string }> = manifest.entries || manifest;
 
+// Restrict to the CARRIED set when the driver wrote carry-pages.json (e.g. an EXCLUDE'd subset):
+// screenshot only the pages that actually got carried islands, so the parity report doesn't include
+// pages you deliberately didn't carry (those are still imported from the slim WXR, just not carried).
+// Absent carry-pages.json → screenshot the whole manifest (back-compat).
+let carriedSlugs: Set<string> | null = null;
+const carryListPath = join(originDir, 'carry-pages.json');
+if (existsSync(carryListPath)) {
+  const carried = JSON.parse(readFileSync(carryListPath, 'utf8')) as Array<{ htmlSlug?: string }>;
+  carriedSlugs = new Set(carried.map((p) => p.htmlSlug).filter((s): s is string => !!s));
+}
+
 // redirect-map: source pathname -> local permalink (so posts hit /<slug>/ not /post/<slug>)
 const redirectTo = new Map<string, string>();
 const rmPath = join(originDir, 'redirect-map.json');
@@ -59,6 +70,7 @@ async function run() {
   for (const [url, info] of Object.entries(entries)) {
     const slug = info.slug;
     if (!slug) continue;
+    if (carriedSlugs && !carriedSlugs.has(slug)) continue; // not in the carried set → skip
     const pathname = new URL(url).pathname;
     const carryUrl = base + navFor(pathname);
     const files: Record<string, string> = { slug };
