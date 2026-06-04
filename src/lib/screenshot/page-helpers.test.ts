@@ -1,5 +1,11 @@
 import { describe, it, expect, vi } from 'vitest';
-import { waitForStable, triggerLazyLoad, withEvaluateTimeout } from './page-helpers.js';
+import {
+  waitForStable,
+  triggerLazyLoad,
+  withEvaluateTimeout,
+  waitForFonts,
+  waitForAnimations,
+} from './page-helpers.js';
 
 type MockPage = {
   waitForLoadState: ReturnType<typeof vi.fn>;
@@ -26,6 +32,53 @@ describe('waitForStable', () => {
       .mockResolvedValueOnce(undefined)
       .mockRejectedValueOnce(new Error('networkidle timeout'));
     await expect(waitForStable(page as never, 10)).resolves.toBeUndefined();
+  });
+
+  it('waits for fonts to resolve FOIT before returning', async () => {
+    const page = makePage();
+    await waitForStable(page as never, 10);
+    // the fonts wait evaluates document.fonts.ready in the page
+    expect(page.evaluate).toHaveBeenCalled();
+  });
+});
+
+describe('waitForFonts', () => {
+  it('awaits document.fonts.ready via page.evaluate', async () => {
+    const page = makePage();
+    await waitForFonts(page as never);
+    expect(page.evaluate).toHaveBeenCalled();
+  });
+
+  it('does not throw when the font wait rejects (blocked CDN)', async () => {
+    const page = makePage();
+    page.evaluate = vi.fn().mockRejectedValue(new Error('font load failed'));
+    await expect(waitForFonts(page as never)).resolves.toBeUndefined();
+  });
+
+  it('does not throw when the font wait exceeds its timeout', async () => {
+    const page = makePage();
+    page.evaluate = vi.fn().mockImplementation(() => new Promise(() => {}));
+    await expect(waitForFonts(page as never, 30)).resolves.toBeUndefined();
+  });
+});
+
+describe('waitForAnimations', () => {
+  it('awaits in-flight animations via page.evaluate', async () => {
+    const page = makePage();
+    await waitForAnimations(page as never);
+    expect(page.evaluate).toHaveBeenCalled();
+  });
+
+  it('does not throw when the animation wait rejects', async () => {
+    const page = makePage();
+    page.evaluate = vi.fn().mockRejectedValue(new Error('evaluate failed'));
+    await expect(waitForAnimations(page as never)).resolves.toBeUndefined();
+  });
+
+  it('does not throw (and resolves) when a stuck animation exceeds the timeout', async () => {
+    const page = makePage();
+    page.evaluate = vi.fn().mockImplementation(() => new Promise(() => {}));
+    await expect(waitForAnimations(page as never, 30)).resolves.toBeUndefined();
   });
 });
 
