@@ -269,3 +269,29 @@ export function isConsentBanner(c: OverlayCandidate): boolean {
   const hay = `${c.text} ${c.ariaLabel ?? ''} ${c.selector}`.toLowerCase();
   return CONSENT_TEXT_RE.test(hay) || CONSENT_VENDOR_RE.test(hay);
 }
+
+/**
+ * Decide which candidates are overlays and in what order to dismiss them.
+ * Pure. Takeovers (score ≥ threshold) first, highest score first; then consent
+ * banners that did not already qualify as takeovers. Benign chrome is dropped.
+ */
+export function selectOverlayTargets(d: OverlayDetection): OverlayTarget[] {
+  const takeovers: OverlayTarget[] = [];
+  const consents: OverlayTarget[] = [];
+  for (const c of d.candidates) {
+    const { score, signals } = scoreOverlay(c, d.scrollLock);
+    if (score >= OVERLAY_THRESHOLD) {
+      takeovers.push({
+        idx: c.idx, kind: 'takeover', score, signals,
+        selector: c.selector, hasCloseAffordance: c.hasCloseAffordance,
+      });
+    } else if (isConsentBanner(c)) {
+      consents.push({
+        idx: c.idx, kind: 'consent', score, signals: [...signals, 'consent'],
+        selector: c.selector, hasCloseAffordance: c.hasCloseAffordance,
+      });
+    }
+  }
+  takeovers.sort((a, b) => b.score - a.score);
+  return [...takeovers, ...consents];
+}

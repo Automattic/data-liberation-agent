@@ -3,8 +3,10 @@ import {
   scoreOverlay,
   OVERLAY_THRESHOLD,
   isConsentBanner,
+  selectOverlayTargets,
   type OverlayCandidate,
   type ScrollLockState,
+  type OverlayDetection,
 } from './page-helpers.js';
 
 // A fully benign fixed/sticky element (e.g. a sticky site header).
@@ -72,5 +74,32 @@ describe('isConsentBanner', () => {
 
   it('does not flag a generic newsletter modal as a consent banner', () => {
     expect(isConsentBanner(benign({ text: 'join our list for 10 percent off', selector: 'div.popup' }))).toBe(false);
+  });
+});
+
+describe('selectOverlayTargets', () => {
+  it('returns takeovers (highest score first) then consent banners, dropping benign chrome', () => {
+    const detection: OverlayDetection = {
+      scrollLock: { active: true },
+      candidates: [
+        benign({ idx: 0, selector: 'header.site' }),                       // benign → dropped
+        benign({ idx: 1, selector: 'div.klaviyo', role: 'dialog', ariaModal: true, coverageRatio: 0.7, zIndex: 10000001, vendorHint: true }), // strong takeover
+        benign({ idx: 2, selector: 'div.cookie-bar', text: 'we use cookies', coverageRatio: 0.09, zIndex: 50 }), // consent (score 3, below threshold)
+        benign({ idx: 3, selector: 'div.modal', role: 'dialog', coverageRatio: 0.6 }), // weaker takeover (3+3+2=8 with lock)
+      ],
+    };
+    const targets = selectOverlayTargets(detection);
+    expect(targets.map((t) => t.idx)).toEqual([1, 3, 2]); // takeovers by score desc, then consent
+    expect(targets[0].kind).toBe('takeover');
+    expect(targets[2].kind).toBe('consent');
+    expect(targets[2].signals).toContain('consent');
+  });
+
+  it('returns nothing for a page of only benign fixed chrome', () => {
+    const detection: OverlayDetection = {
+      scrollLock: { active: false },
+      candidates: [benign({ idx: 0 }), benign({ idx: 1, selector: 'footer.site' })],
+    };
+    expect(selectOverlayTargets(detection)).toEqual([]);
   });
 });
