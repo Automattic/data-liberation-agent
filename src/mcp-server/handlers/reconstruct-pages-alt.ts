@@ -15,7 +15,13 @@ import { dirname, join, resolve } from 'node:path';
 import type { Handler } from '../handler-types.js';
 import type { SectionSpec } from '../../lib/replicate/section-extract.js';
 import { reconstructPageAlt } from '../../lib/replicate/page-reconstruct-alt.js';
-import { buildAltThemeFiles, type ThemeFile, type AltPage } from '../../lib/replicate/theme-scaffold-alt.js';
+import {
+  buildAltThemeFiles,
+  type ThemeFile,
+  type AltPage,
+  type ChromeVariant,
+} from '../../lib/replicate/theme-scaffold-alt.js';
+import { chromeSignature, stripActiveNavState } from '../../lib/replicate/chrome-canonicalize.js';
 import { collectCss } from '../../lib/replicate/css-collect.js';
 import { buildPageLinkMap } from '../../lib/replicate/page-link-map.js';
 import { installRunMediaMap } from '../../lib/replicate/run-media-map.js';
@@ -66,14 +72,10 @@ export interface AssembleOutput {
  * No IO — callers (handler + tests) are responsible for reading inputs / writing outputs.
  */
 export function assembleAltTheme(input: AssembleInput): AssembleOutput {
-  let headerIsland = '';
-  let footerIsland = '';
-  let siteCss = '';
-  const scaffoldPages: AltPage[] = [];
-  const wxrPages: WxrPage[] = [];
-
-  for (const p of input.pages) {
-    const r = reconstructPageAlt({
+  // Reconstruct every page once, preserving input order for the emitted files.
+  const recos = input.pages.map((p) => ({
+    p,
+    r: reconstructPageAlt({
       slug: p.slug,
       isHome: p.isHome,
       bodyHtml: p.bodyHtml,
@@ -81,18 +83,50 @@ export function assembleAltTheme(input: AssembleInput): AssembleOutput {
       specs: p.specs ?? [],
       mediaUrlMap: input.mediaUrlMap,
       linkMap: input.linkMap,
+    }),
+  }));
+
+  // Dedupe chrome so pages that render the SAME header/footer share one variant
+  // + part pair (e.g. a transparent-overlay home header and a solid interior
+  // header → two variants total, regardless of page count). Grouping is by
+  // canonical signature, not raw bytes (see registerChrome). The home page's
+  // chrome is registered FIRST so it becomes variant 0 — the canonical
+  // `header`/`footer` parts + index.html chrome.
+  const variants: ChromeVariant[] = [];
+  const keyBySig = new Map<string, string>();
+  const cssByKey = new Map<string, string>();
+  const registerChrome = (headerIsland: string, footerIsland: string, chromeCss: string): string => {
+    // Group by canonical signature (instance ids + active-nav state normalized
+    // away) so Wix's per-page header instances collapse to one variant; the
+    // emitted representative is active-stripped so it stays page-agnostic.
+    const sig = chromeSignature(headerIsland, footerIsland);
+    const existing = keyBySig.get(sig);
+    if (existing) return existing;
+    const key = `c${variants.length}`;
+    keyBySig.set(sig, key);
+    variants.push({
+      key,
+      headerIsland: stripActiveNavState(headerIsland),
+      footerIsland: stripActiveNavState(footerIsland),
     });
+    cssByKey.set(key, chromeCss);
+    return key;
+  };
+  const homeReco = recos.find((x) => x.p.isHome) ?? recos[0];
+  if (homeReco) registerChrome(homeReco.r.headerIsland, homeReco.r.footerIsland, homeReco.r.chromeCss);
 
-    // Prefer the home page's header/footer; fall back to the first page that
-    // yields non-empty islands so the theme always has something to render.
-    // Take the chrome CSS from the same page as the header/footer islands.
-    if (p.isHome || (!headerIsland && r.headerIsland)) {
-      headerIsland = r.headerIsland;
-      footerIsland = r.footerIsland;
-      siteCss = r.chromeCss;
-    }
-
-    scaffoldPages.push({ slug: p.slug, isHome: p.isHome, postType: p.postType, pageCss: r.mainCss, scaffold: r.scaffold });
+  const scaffoldPages: AltPage[] = [];
+  const wxrPages: WxrPage[] = [];
+  for (const { p, r } of recos) {
+    const chromeKey = registerChrome(r.headerIsland, r.footerIsland, r.chromeCss);
+    scaffoldPages.push({
+      slug: p.slug,
+      isHome: p.isHome,
+      postType: p.postType,
+      pageCss: r.mainCss,
+      scaffold: r.scaffold,
+      chromeKey,
+    });
     wxrPages.push({
       slug: p.slug,
       title: p.title,
@@ -102,10 +136,17 @@ export function assembleAltTheme(input: AssembleInput): AssembleOutput {
     });
   }
 
+  // site.css holds EVERY distinct variant's chrome CSS (variant order). Safe to
+  // concatenate: each variant's rules key off the source's per-header comp-ids, so
+  // a variant's rules match nothing on a page rendering a different variant.
+  const siteCss = variants
+    .map((v) => cssByKey.get(v.key) ?? '')
+    .filter(Boolean)
+    .join('\n');
+
   const themeFiles = buildAltThemeFiles({
     themeName: input.themeName,
-    headerIsland,
-    footerIsland,
+    chromeVariants: variants,
     siteCss,
     pages: scaffoldPages,
   });

@@ -26,6 +26,13 @@ export interface AltPage {
   /** True for the site front page — maps template to front-page.html and uses is_front_page(). */
   isHome?: boolean;
   /**
+   * Which distinct chrome variant ([[ChromeVariant.key]]) this page renders. Pages
+   * with identical header+footer DOM share a key (and thus one part pair), so a
+   * site with a transparent-overlay home header and a solid interior header emits
+   * exactly two header parts, not one-per-page.
+   */
+  chromeKey: string;
+  /**
    * WP object type the slug resolves to. `'post'` scopes via `is_single()` and
    * renders through a shared `single.html` (posts share one template); anything
    * else (default `'page'`) scopes via `is_page()` and gets its own
@@ -50,17 +57,46 @@ function pageCondition(p: AltPage): string {
   return `is_page( '${p.slug}' )`;
 }
 
+/**
+ * A distinct header+footer pair. The assembler dedupes pages by chrome content,
+ * so one variant covers every page whose chrome DOM is identical. The variant
+ * order matters: the FIRST variant (conventionally the home page's) becomes the
+ * canonical `header`/`footer` parts; subsequent variants get `-2`, `-3`, … slugs.
+ */
+export interface ChromeVariant {
+  /** Stable key referenced by [[AltPage.chromeKey]]. */
+  key: string;
+  /** Block markup for this variant's header template part. */
+  headerIsland: string;
+  /** Block markup for this variant's footer template part. */
+  footerIsland: string;
+}
+
 export interface AltThemeInput {
   /** Display name that appears in WP's theme list (required by WordPress). */
   themeName: string;
-  /** Block markup for the header template part. */
-  headerIsland: string;
-  /** Block markup for the footer template part. */
-  footerIsland: string;
-  /** Site-wide CSS (already scoped under `body.lib-alt-site`). */
+  /** Distinct chrome variants (home first). Each emits its own header/footer parts. */
+  chromeVariants: ChromeVariant[];
+  /**
+   * Site-wide CSS (already scoped under `body.lib-alt-site`). Holds EVERY variant's
+   * chrome CSS concatenated — safe because each variant's rules key off the source's
+   * per-header comp-ids, so a variant's rules match nothing on a page using another.
+   */
   siteCss: string;
   /** One entry per page that needs a template + per-page CSS file. */
   pages: AltPage[];
+}
+
+/** Header/footer template-part slugs for a chrome variant by its position. */
+interface ChromeSlugs {
+  header: string;
+  footer: string;
+}
+
+/** Variant 0 → canonical `header`/`footer`; later variants → `header-2`, … */
+function chromeSlugsForIndex(index: number): ChromeSlugs {
+  const suffix = index === 0 ? '' : `-${index + 1}`;
+  return { header: `header${suffix}`, footer: `footer${suffix}` };
 }
 
 export interface ThemeFile {
@@ -82,13 +118,13 @@ function styleCssHeader(name: string): string {
  * Standard page template: header part → main post-content island → footer part.
  * Used for every page template including the required index.html fallback.
  */
-function pageTemplate(): string {
+function pageTemplate(slugs: ChromeSlugs): string {
   return [
-    '<!-- wp:template-part {"slug":"header","tagName":"header"} /-->',
+    `<!-- wp:template-part {"slug":"${slugs.header}","tagName":"header"} /-->`,
     '<!-- wp:group {"tagName":"main"} -->',
     '<main class="wp-block-group"><!-- wp:post-content /--></main>',
     '<!-- /wp:group -->',
-    '<!-- wp:template-part {"slug":"footer","tagName":"footer"} /-->',
+    `<!-- wp:template-part {"slug":"${slugs.footer}","tagName":"footer"} /-->`,
     '',
   ].join('\n');
 }
@@ -105,14 +141,14 @@ function htmlBlock(html: string): string {
  * chrome lands in its exact DOM position), and `post_content` (content sections
  * only) sits between them. Concatenated, the stream rebuilds the source DOM.
  */
-function scaffoldedTemplate(s: AltScaffold): string {
+function scaffoldedTemplate(s: AltScaffold, slugs: ChromeSlugs): string {
   return [
     htmlBlock(s.openWrap),
-    '<!-- wp:template-part {"slug":"header","tagName":"div"} /-->',
+    `<!-- wp:template-part {"slug":"${slugs.header}","tagName":"div"} /-->`,
     htmlBlock(s.midBefore),
     '<!-- wp:post-content /-->',
     htmlBlock(s.midAfter),
-    '<!-- wp:template-part {"slug":"footer","tagName":"div"} /-->',
+    `<!-- wp:template-part {"slug":"${slugs.footer}","tagName":"div"} /-->`,
     htmlBlock(s.closeWrap),
   ]
     .filter(Boolean)
@@ -120,8 +156,8 @@ function scaffoldedTemplate(s: AltScaffold): string {
 }
 
 /** The right template body for a page: scaffolded when it has a scaffold, else legacy. */
-function templateFor(p: AltPage): string {
-  return p.scaffold ? scaffoldedTemplate(p.scaffold) : pageTemplate();
+function templateFor(p: AltPage, slugs: ChromeSlugs): string {
+  return p.scaffold ? scaffoldedTemplate(p.scaffold, slugs) : pageTemplate(slugs);
 }
 
 function functionsPhp(pages: AltPage[]): string {
@@ -176,52 +212,73 @@ export function buildAltThemeFiles(input: AltThemeInput): ThemeFile[] {
   const usesScaffold = input.pages.some((p) => p.scaffold);
   const CHROME_RESCUE = usesScaffold ? '.wp-block-template-part{display:contents}\n' : '';
 
+  // Map each distinct chrome variant to its part slugs (variant 0 → header/footer).
+  const slugsByKey = new Map<string, ChromeSlugs>();
+  input.chromeVariants.forEach((v, i) => slugsByKey.set(v.key, chromeSlugsForIndex(i)));
+  // Fallback for pages whose chromeKey somehow isn't in the variant list (defensive).
+  const slugsFor = (key: string): ChromeSlugs =>
+    slugsByKey.get(key) ?? chromeSlugsForIndex(0);
+
   const themeJson: Record<string, unknown> = {
     $schema: 'https://schemas.wp.org/trunk/theme.json',
     version: 3,
     settings: { layout: { contentSize: '100%', wideSize: '100%' } },
   };
-  // Declare the chrome areas so the Site Editor treats header/footer as
-  // first-class, synced regions.
-  if (input.headerIsland || input.footerIsland) {
-    themeJson.templateParts = [
-      { name: 'header', title: 'Header', area: 'header' },
-      { name: 'footer', title: 'Footer', area: 'footer' },
-    ];
+  // Declare every variant's chrome areas so the Site Editor treats each header/
+  // footer as a first-class, synced region.
+  const hasChrome = input.chromeVariants.some((v) => v.headerIsland || v.footerIsland);
+  if (hasChrome) {
+    themeJson.templateParts = input.chromeVariants.flatMap((v, i) => {
+      const s = chromeSlugsForIndex(i);
+      const suffix = i === 0 ? '' : ` ${i + 1}`;
+      return [
+        { name: s.header, title: `Header${suffix}`, area: 'header' },
+        { name: s.footer, title: `Footer${suffix}`, area: 'footer' },
+      ];
+    });
   }
 
-  // index.html (required fallback) reuses the home page's scaffold so it renders
-  // chrome correctly; falls back to the legacy shell when no scaffold exists.
-  const homeScaffold = input.pages.find((p) => p.isHome)?.scaffold;
-  const indexTemplate = homeScaffold ? scaffoldedTemplate(homeScaffold) : pageTemplate();
+  // index.html (required fallback) reuses the home page's scaffold + chrome so it
+  // renders correctly; falls back to the legacy shell when no scaffold exists.
+  const homePage = input.pages.find((p) => p.isHome);
+  const homeSlugs = slugsFor(homePage?.chromeKey ?? input.chromeVariants[0]?.key ?? '');
+  const indexTemplate = homePage?.scaffold
+    ? scaffoldedTemplate(homePage.scaffold, homeSlugs)
+    : pageTemplate(homeSlugs);
 
   const files: ThemeFile[] = [
     { path: 'style.css', content: styleCssHeader(input.themeName) },
     { path: 'theme.json', content: JSON.stringify(themeJson, null, 2) },
     { path: 'functions.php', content: functionsPhp(input.pages) },
-    // Template parts (the shared chrome).
-    { path: 'parts/header.html', content: input.headerIsland + '\n' },
-    { path: 'parts/footer.html', content: input.footerIsland + '\n' },
     // Site-wide CSS — reset first (so source rules win the cascade), then the
-    // chrome-wrapper rescue, then the carried chrome CSS.
+    // chrome-wrapper rescue, then EVERY variant's carried chrome CSS (concatenated
+    // upstream into siteCss; comp-id-scoped so variants never collide).
     { path: 'assets/css/site.css', content: RESET + CHROME_RESCUE + input.siteCss },
     { path: 'templates/index.html', content: indexTemplate },
   ];
+
+  // One header/footer part pair per DISTINCT chrome variant.
+  input.chromeVariants.forEach((v, i) => {
+    const s = chromeSlugsForIndex(i);
+    files.push({ path: `parts/${s.header}.html`, content: v.headerIsland + '\n' });
+    files.push({ path: `parts/${s.footer}.html`, content: v.footerIsland + '\n' });
+  });
 
   // Per-page CSS + template files. Posts share ONE single.html; the per-post body
   // class + enqueued page-<slug>.css still scope each post's carried CSS.
   let emittedSingle = false;
   for (const p of input.pages) {
     files.push({ path: `assets/css/page-${p.slug}.css`, content: p.pageCss });
+    const slugs = slugsFor(p.chromeKey);
     if (p.isHome) {
-      files.push({ path: 'templates/front-page.html', content: templateFor(p) });
+      files.push({ path: 'templates/front-page.html', content: templateFor(p, slugs) });
     } else if (p.postType === 'post') {
       if (!emittedSingle) {
-        files.push({ path: 'templates/single.html', content: templateFor(p) });
+        files.push({ path: 'templates/single.html', content: templateFor(p, slugs) });
         emittedSingle = true;
       }
     } else {
-      files.push({ path: `templates/page-${p.slug}.html`, content: templateFor(p) });
+      files.push({ path: `templates/page-${p.slug}.html`, content: templateFor(p, slugs) });
     }
   }
 

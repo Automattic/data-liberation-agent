@@ -1,13 +1,24 @@
 import { describe, it, expect } from 'vitest';
-import { buildAltThemeFiles } from './theme-scaffold-alt.js';
+import { buildAltThemeFiles, type AltThemeInput, type AltPage } from './theme-scaffold-alt.js';
+
+/** A single-variant chrome ('c0') so page-level tests stay terse. */
+function oneVariant(headerIsland = '', footerIsland = ''): AltThemeInput['chromeVariants'] {
+  return [{ key: 'c0', headerIsland, footerIsland }];
+}
+/** Default a page onto the single 'c0' variant. */
+function page(p: Omit<AltPage, 'chromeKey'> & { chromeKey?: string }): AltPage {
+  return { chromeKey: 'c0', ...p };
+}
 
 describe('buildAltThemeFiles', () => {
   const files = buildAltThemeFiles({
     themeName: 'Acme Alt',
-    headerIsland: '<!-- wp:html -->\n<header>H</header>\n<!-- /wp:html -->',
-    footerIsland: '<!-- wp:html -->\n<footer>F</footer>\n<!-- /wp:html -->',
+    chromeVariants: oneVariant(
+      '<!-- wp:html -->\n<header>H</header>\n<!-- /wp:html -->',
+      '<!-- wp:html -->\n<footer>F</footer>\n<!-- /wp:html -->',
+    ),
     siteCss: 'body.lib-alt-site{margin:0}',
-    pages: [{ slug: 'home', isHome: true, pageCss: 'body.lib-alt-page-home .x{a:b}' }],
+    pages: [page({ slug: 'home', isHome: true, pageCss: 'body.lib-alt-page-home .x{a:b}' })],
   });
   const byPath = (p: string) => files.find((f) => f.path === p)?.content ?? '';
 
@@ -44,8 +55,7 @@ describe('buildAltThemeFiles', () => {
   });
 
   it('style.css contains Theme Name header', () => {
-    const css = byPath('style.css');
-    expect(css).toContain('Theme Name: Acme Alt');
+    expect(byPath('style.css')).toContain('Theme Name: Acme Alt');
   });
 
   it('style.css has a Theme Name header and NO Template field (not a child theme)', () => {
@@ -61,40 +71,36 @@ describe('buildAltThemeFiles', () => {
   });
 
   it('theme.json is valid JSON at version 3', () => {
-    const parsed = JSON.parse(byPath('theme.json'));
-    expect(parsed.version).toBe(3);
+    expect(JSON.parse(byPath('theme.json')).version).toBe(3);
   });
 
   it('a non-home page emits templates/page-<slug>.html and is_page() enqueue/body-class', () => {
     const f = buildAltThemeFiles({
-      themeName: 'Acme Alt', headerIsland: '', footerIsland: '', siteCss: '',
-      pages: [{ slug: 'about', isHome: false, pageCss: '' }],
+      themeName: 'Acme Alt', chromeVariants: oneVariant(), siteCss: '',
+      pages: [page({ slug: 'about', isHome: false, pageCss: '' })],
     });
-    const paths = f.map((x) => x.path);
-    expect(paths).toContain('templates/page-about.html');
-    const fn = f.find((x) => x.path === 'functions.php')!.content;
-    expect(fn).toContain("is_page( 'about' )");
+    expect(f.map((x) => x.path)).toContain('templates/page-about.html');
+    expect(f.find((x) => x.path === 'functions.php')!.content).toContain("is_page( 'about' )");
   });
 
   it('a post scopes via is_single() and its CSS file, not is_page()', () => {
     const f = buildAltThemeFiles({
-      themeName: 'Acme Alt', headerIsland: '', footerIsland: '', siteCss: '',
-      pages: [{ slug: 'my-article', isHome: false, postType: 'post', pageCss: 'body.lib-alt-page-my-article{}' }],
+      themeName: 'Acme Alt', chromeVariants: oneVariant(), siteCss: '',
+      pages: [page({ slug: 'my-article', isHome: false, postType: 'post', pageCss: 'body.lib-alt-page-my-article{}' })],
     });
     const fn = f.find((x) => x.path === 'functions.php')!.content;
     expect(fn).toContain("is_single( 'my-article' )");
     expect(fn).not.toContain("is_page( 'my-article' )");
-    // per-post CSS still emitted + scoped via body class
     expect(f.map((x) => x.path)).toContain('assets/css/page-my-article.css');
-    expect(fn).toContain("lib-alt-page-my-article");
+    expect(fn).toContain('lib-alt-page-my-article');
   });
 
   it('posts share ONE single.html and emit no per-post page template', () => {
     const f = buildAltThemeFiles({
-      themeName: 'Acme Alt', headerIsland: '', footerIsland: '', siteCss: '',
+      themeName: 'Acme Alt', chromeVariants: oneVariant(), siteCss: '',
       pages: [
-        { slug: 'post-a', isHome: false, postType: 'post', pageCss: '' },
-        { slug: 'post-b', isHome: false, postType: 'post', pageCss: '' },
+        page({ slug: 'post-a', isHome: false, postType: 'post', pageCss: '' }),
+        page({ slug: 'post-b', isHome: false, postType: 'post', pageCss: '' }),
       ],
     });
     const paths = f.map((x) => x.path);
@@ -103,26 +109,74 @@ describe('buildAltThemeFiles', () => {
     expect(paths).not.toContain('templates/page-post-b.html');
   });
 
+  describe('per-page chrome variants (dedupe by content)', () => {
+    // Home uses variant c0 (transparent overlay); two interior pages share c1 (solid).
+    const f = buildAltThemeFiles({
+      themeName: 'Acme Alt',
+      chromeVariants: [
+        { key: 'c0', headerIsland: '<!-- wp:html --><header id="home-hdr">home</header><!-- /wp:html -->', footerIsland: '<!-- wp:html --><footer id="f0">f0</footer><!-- /wp:html -->' },
+        { key: 'c1', headerIsland: '<!-- wp:html --><header id="int-hdr">interior</header><!-- /wp:html -->', footerIsland: '<!-- wp:html --><footer id="f1">f1</footer><!-- /wp:html -->' },
+      ],
+      siteCss: 'body.lib-alt-site #home-hdr{a:b}\nbody.lib-alt-site #int-hdr{c:d}',
+      pages: [
+        page({ slug: 'home', isHome: true, chromeKey: 'c0', pageCss: '' }),
+        page({ slug: 'about', isHome: false, chromeKey: 'c1', pageCss: '' }),
+        page({ slug: 'contact', isHome: false, chromeKey: 'c1', pageCss: '' }),
+      ],
+    });
+    const get = (p: string) => f.find((x) => x.path === p)?.content ?? '';
+    const paths = f.map((x) => x.path);
+
+    it('emits one part pair per DISTINCT variant (c0 → header, c1 → header-2)', () => {
+      expect(paths).toContain('parts/header.html');
+      expect(paths).toContain('parts/footer.html');
+      expect(paths).toContain('parts/header-2.html');
+      expect(paths).toContain('parts/footer-2.html');
+      // not one-per-page: no header-3 for the second c1 page
+      expect(paths).not.toContain('parts/header-3.html');
+      expect(get('parts/header.html')).toContain('home-hdr');
+      expect(get('parts/header-2.html')).toContain('int-hdr');
+    });
+
+    it('home template references the home header, interior templates reference header-2', () => {
+      expect(get('templates/front-page.html')).toContain('"slug":"header"');
+      expect(get('templates/front-page.html')).not.toContain('"slug":"header-2"');
+      expect(get('templates/page-about.html')).toContain('"slug":"header-2"');
+      expect(get('templates/page-contact.html')).toContain('"slug":"header-2"');
+    });
+
+    it('declares every variant\'s parts in theme.json', () => {
+      const names = (JSON.parse(get('theme.json')).templateParts ?? []).map((p: { name: string }) => p.name);
+      expect(names).toEqual(expect.arrayContaining(['header', 'footer', 'header-2', 'footer-2']));
+    });
+
+    it('site.css carries BOTH variants\' chrome CSS', () => {
+      const css = get('assets/css/site.css');
+      expect(css).toContain('#home-hdr');
+      expect(css).toContain('#int-hdr');
+    });
+  });
+
   describe('scaffolded chrome architecture', () => {
     const scaffold = { openWrap: '<div id="C"><div id="root">', midBefore: '<div id="inner">', midAfter: '</div>', closeWrap: '</div></div>' };
     const f = buildAltThemeFiles({
       themeName: 'Acme Alt',
-      headerIsland: '<!-- wp:html --><header id="H">nav</header><!-- /wp:html -->',
-      footerIsland: '<!-- wp:html --><footer id="F">foot</footer><!-- /wp:html -->',
+      chromeVariants: oneVariant(
+        '<!-- wp:html --><header id="H">nav</header><!-- /wp:html -->',
+        '<!-- wp:html --><footer id="F">foot</footer><!-- /wp:html -->',
+      ),
       siteCss: 'body.lib-alt-site #H{a:b}',
-      pages: [{ slug: 'about', isHome: false, scaffold, pageCss: '' }],
+      pages: [page({ slug: 'about', isHome: false, scaffold, pageCss: '' })],
     });
     const get = (p: string) => f.find((x) => x.path === p)?.content ?? '';
 
     it('puts the wrapper scaffold + chrome parts + post-content in the template', () => {
       const tpl = get('templates/page-about.html');
-      // wrapper chunks as core/html, chrome as parts, post-content between
       expect(tpl).toContain('<div id="C"><div id="root">');
       expect(tpl).toContain('<div id="inner">');
       expect(tpl).toContain('wp:template-part {"slug":"header","tagName":"div"}');
       expect(tpl).toContain('wp:post-content');
       expect(tpl).toContain('wp:template-part {"slug":"footer","tagName":"div"}');
-      // ordering: header part before post-content before footer part
       expect(tpl.indexOf('"header"')).toBeLessThan(tpl.indexOf('wp:post-content'));
       expect(tpl.indexOf('wp:post-content')).toBeLessThan(tpl.indexOf('"footer"'));
     });
@@ -132,16 +186,15 @@ describe('buildAltThemeFiles', () => {
     });
 
     it('declares header/footer template-part areas in theme.json', () => {
-      const tj = JSON.parse(get('theme.json'));
-      const areas = (tj.templateParts ?? []).map((p: { area: string }) => p.area);
+      const areas = (JSON.parse(get('theme.json')).templateParts ?? []).map((p: { area: string }) => p.area);
       expect(areas).toContain('header');
       expect(areas).toContain('footer');
     });
 
     it('omits the display:contents rescue when no page has a scaffold', () => {
       const plain = buildAltThemeFiles({
-        themeName: 'Acme Alt', headerIsland: '', footerIsland: '', siteCss: '',
-        pages: [{ slug: 'about', isHome: false, pageCss: '' }],
+        themeName: 'Acme Alt', chromeVariants: oneVariant(), siteCss: '',
+        pages: [page({ slug: 'about', isHome: false, pageCss: '' })],
       });
       expect(plain.find((x) => x.path === 'assets/css/site.css')?.content).not.toContain('display:contents');
     });

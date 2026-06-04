@@ -5,6 +5,7 @@ import { splitRegionsDeep } from './split-regions-deep.js';
 import { carryHtml } from './html-carry.js';
 import { scopeCss } from './css-scope.js';
 import { treeshakeCss } from './css-treeshake.js';
+import { appendNavRevealUnfreeze } from './nav-reveal-unfreeze.js';
 
 export interface ReconstructAltInput {
   slug: string;
@@ -87,15 +88,20 @@ export function reconstructPageAlt(input: ReconstructAltInput): ReconstructAltRe
     const chromeDom = `${split.headerHtml}${split.footerHtml}`;
     const allCss = [input.css, carried.styleText].filter(Boolean).join('\n');
     const chromeCss = chromeDom
-      ? treeshakeCss(scopeCss(allCss, { scope: SITE_SCOPE, scopeId: 'site', rewriteUrl }), chromeDom)
+      ? appendNavRevealUnfreeze(
+          treeshakeCss(scopeCss(allCss, { scope: SITE_SCOPE, scopeId: 'site', rewriteUrl }), chromeDom),
+          chromeDom,
+          SITE_SCOPE,
+        )
       : '';
     // Page sheet treeshakes against the NON-chrome DOM so chrome rules live only
     // in the site-wide sheet, not duplicated per page.
     const mainDom =
       split.openWrap + split.midBefore + split.sectionsHtml.join('') + split.midAfter + split.closeWrap;
-    const mainCss = treeshakeCss(
-      scopeCss(allCss, { scope: pageScope, scopeId: input.slug, rewriteUrl }),
+    const mainCss = appendNavRevealUnfreeze(
+      treeshakeCss(scopeCss(allCss, { scope: pageScope, scopeId: input.slug, rewriteUrl }), mainDom),
       mainDom,
+      pageScope,
     );
     const postContentBlocks = split.sectionsHtml.map(island);
     return {
@@ -125,12 +131,17 @@ export function reconstructPageAlt(input: ReconstructAltInput): ReconstructAltRe
   const chromeDom = `${header.html}${footer.html}`;
   const chromeCombined = [input.css, header.styleText, footer.styleText].filter(Boolean).join('\n');
   const chromeCss = chromeDom
-    ? treeshakeCss(scopeCss(chromeCombined, { scope: SITE_SCOPE, scopeId: 'site', rewriteUrl }), chromeDom)
+    ? appendNavRevealUnfreeze(
+        treeshakeCss(scopeCss(chromeCombined, { scope: SITE_SCOPE, scopeId: 'site', rewriteUrl }), chromeDom),
+        chromeDom,
+        SITE_SCOPE,
+      )
     : '';
   const mainCombined = [input.css, main.styleText].filter(Boolean).join('\n');
-  const mainCss = treeshakeCss(
-    scopeCss(mainCombined, { scope: pageScope, scopeId: input.slug, rewriteUrl }),
+  const mainCss = appendNavRevealUnfreeze(
+    treeshakeCss(scopeCss(mainCombined, { scope: pageScope, scopeId: input.slug, rewriteUrl }), main.html),
     main.html,
+    pageScope,
   );
 
   const mainIsland = island(main.html);
