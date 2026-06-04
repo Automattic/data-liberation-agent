@@ -1,6 +1,6 @@
 ---
 name: design-qa
-description: Visual-QA loop run after replica theme install and content import. Captures replica screenshots, applies a hard responsiveness gate at 390px AND a hard per-section visual-parity gate (measured SectionParity records, verdict computed by buildRunReport), runs qualitative vision review of source/replica pairs, checks accessibility, and drives a per-section escalation ladder of fixes via editing-themes/editing-blocks/rebuild-section (R1 CSS → R2 spec-rebuild → R3 re-extract → R4a AI canonical-block rebuild → R4b deterministic styled-island floor) — escalating unresolved divergences to the operator rather than shipping them. Orchestration-internal — invoked by the replicate/liberate orchestrators, not directly by users.
+description: Visual-QA loop run after replica theme install and content import. Captures replica screenshots, applies a hard responsiveness gate at 390px AND a hard per-section visual-parity gate (measured SectionParity records, verdict computed by buildRunReport), runs qualitative vision review of source/replica pairs, checks accessibility, and drives a per-section escalation ladder of fixes via editing-themes/editing-blocks/rebuild-section (R1 CSS → R2 spec-rebuild → R3 re-extract → R4a AI canonical-block rebuild → R4b deterministic styled-island floor) — escalating unresolved divergences to the operator rather than shipping them. Orchestration-internal — invoked by the replicate-with-blocks/liberate orchestrators, not directly by users.
 disable-model-invocation: true
 allowed-tools:
   - Bash

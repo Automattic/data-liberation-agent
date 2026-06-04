@@ -1,51 +1,53 @@
 ---
 name: liberate
-description: Extract content from a closed web platform and reconstruct it as a responsive, editable WordPress block theme — detect → discover → extract → capture → design → install → QA → run-report.json
+description: Front door for the whole migration — detect → discover → extract → capture, then choose the reconstruct path (blocks+products, or theme replication) and dispatch the matching sub-skill. Idempotent: re-running on an already-captured site skips straight to the path question.
 ---
 
 # Liberate a website
 
-The single front-door, root orchestrator for the whole migration pipeline. One shared agent context runs extraction through design — no subprocess spawning, no context fragmentation. Deterministic stages are MCP tool calls; judgment stages are inline sub-skill invocations; only the per-cluster section builders fan out to parallel subagents.
+The single front door for the whole migration pipeline. It captures the site **once** (detect → discover → extract → capture → products), then asks which reconstruct path to take and **dispatches the matching sub-skill inline** (shared context):
 
-**Headless extraction-only (CI/batch):** `data-liberation <url>` runs steps 1–5 without the design phase. The design phase is agent-only via this skill.
+- **`replicate-with-blocks`** — project the source onto editable WordPress core blocks + WooCommerce. Best launchpad for a redesign.
+- **`replicate-theme`** — carry the source markup near-verbatim + scope its own CSS into a high-fidelity, non-block-editable theme.
+
+Each sub-skill owns its own reconstruct → install → QA → report; this skill owns capture + the path decision. **Idempotent:** re-running `/liberate <url>` on an already-captured site skips straight to the path question (so you can try the other path later with zero re-capture).
+
+**Headless extraction-only (CI/batch):** `data-liberation <url>` runs steps 1–5 (capture only). The reconstruct (blocks or theme) is agent-only, via the dispatched sub-skill.
 
 ---
 
 ## Pipeline overview
 
 ```
-/liberate <url>   ── root orchestrator, shared context ─────────────────────────
+/liberate <url>   ── front door, shared context ────────────────────────────────
 │
-│  EXTRACTION  (deterministic — existing MCP tools)
-├─ 1  detect → discover            platform · sitemap · features · archetype inventory
-├─ 2  extract                      pages/posts/products content + media refs
-├─ 3  media: dedup + upload        → uploaded WP-library URLs (reused everywhere downstream)
-├─ 4  capture                      desktop+mobile screenshots · palette/typography/breakpoints · html/<slug>.html
-├─ 5  products → products.csv      WooCommerce import format
-│
-│  [ CONFIRM: show inventory + scope/cost/time estimate — wait for operator go-ahead ]
-│
-│  DESIGN  (replicate sub-orchestrator, invoked inline — shared context)
-├─ 6  design-foundations   [SKILL] → design-foundation.json + design.md (frozen site-wide brief)
-├─ 7  creating-themes      [SKILL] → theme.json · parts skeleton · base templates · style.css · self-hosted fonts
-├─ 8  page clustering      [tool]  → cluster-map.json (pages grouped by layout signature; 1 representative each)
-├─ 9  section extraction   [tool]  → specs/<rep>/section-<n>-<type>.md (computed styles · interaction model · media URLs · brightness · motion)
-├─ 10 BUILD (fan-out)      [SKILL × K subagents]  generating-patterns: one builder per cluster representative
-│                                   → layout skeletons as strings (concurrency-capped ~4–6; checkpointed by cluster-group)
-├─ 11 assemble        [tool+SKILL] deterministic compose-instantiate per non-representative page
-│                                   → compose-page-blocks SKILL for misfits only · dynamic block-header → templates + parts + post_content
-├─ 12 validate-artifacts   [gate]  escaping (esc_*) · injection allowlist · provenance (text ⊆ spec) · drift · no remote URLs · no placeholders
-├─ 13 install + import     [tool]  clean Studio site on full re-run · theme + WXR + products.csv · set front page
-└─ 14 visual-QA loop       [SKILL] design-qa: replica desktop+mobile · responsive@390 (HARD) + per-section visual-parity (HARD, measured) · escalation ladder R1→R4 · circuit-breaker checkpoint → operator → run-report.json
+├─ idempotent check: extraction already on disk?  (.discovery-complete / session.json stage / output.wxr + html/* + manifest.json)
+│     ├─ YES → load cached inventory ─────────────────────────────────┐
+│     └─ NO  → EXTRACTION (deterministic — existing MCP tools):        │
+│              1 detect → discover     platform · sitemap · features · archetype inventory
+│              2 extract               pages/posts/products content + media refs
+│              3 media: dedup+upload   → uploaded WP-library URLs (reused downstream)
+│              4 capture               desktop+mobile screenshots · palette/type/breakpoints · html/<slug>.html
+│              5 products → products.csv    WooCommerce import format
+│                                                                      ▼
+├─ CONFIRM + PATH CHECKPOINT
+│     show inventory + scope/cost estimate + a platform-informed recommendation,
+│     then ask: blocks+products vs theme replication — picking a path IS the go-ahead
+│                                                                      ▼
+└─ RECONSTRUCT — dispatch the chosen sub-skill INLINE (shared context):
+      blocks+products → replicate-with-blocks   (core blocks + WooCommerce + QA ladder → run-report.json)
+      theme           → replicate-theme         (carry-and-scope islands + scoped CSS → compare → run-report-carry.json)
 ```
 
-The whole run is bounded by a **budget guard** (`checkBudget` in `src/lib/replicate/budget-guard.ts`) — configurable subagent/cluster/elapsed ceiling → pause-and-ask. The final deliverable is `run-report.json` + the replica URL (`buildRunReport` in `src/lib/replicate/run-report.ts`).
-
-> **Canonical design path (read this before steps 6–14).** The design phase is the `replicate` sub-orchestrator — `skills/replicate/SKILL.md` is the authoritative, up-to-date flow; follow it. The PRIMARY page path is **per-page** `liberate_reconstruct_pages` (reconstructs EVERY content page from its own specs), NOT the cluster-representative `generating-patterns` fan-out + `compose_instantiate` shown in steps 9–11 below. Clustering still earns its keep for sitewide-shared CHROME (header/footer/CTA bands) and for posts/products *templates* — but page CONTENT is reconstructed per page. Steps 9–11 are retained here for that chrome/template work and for the legacy fan-out fallback; do not read them as the page-build mechanism.
+Each sub-skill owns its own reconstruct → install → QA → report, plus its own budget guard (`checkBudget` in `src/lib/replicate/budget-guard.ts`) and run-report (`buildRunReport` in `src/lib/replicate/run-report.ts`). This skill's deliverable is the captured `output/<site>/` + the dispatch; the chosen sub-skill produces the replica + its `run-report*.json`.
 
 ---
 
 ## Step-by-step workflow
+
+### Step 0 — Idempotent check (run first)
+
+Derive `output/<site>/` from the URL. If extraction is already complete — any of `.discovery-complete`, a `session.json` stage past extraction, or all of `output.wxr` + `html/*.html` + `screenshots/manifest.json` present — **skip steps 1–5**, load the cached inventory (`session.json` / discovery output), and jump straight to the **Confirm + path checkpoint** below. Otherwise run steps 1–5. (For a partial capture, prefer `resume: true`; see Resuming.)
 
 ### Step 1 — Detect & discover
 
@@ -77,83 +79,24 @@ Default concurrency: 6. Configure via `--screenshots-concurrency N` or `--concur
 
 If products were extracted, compile `products.jsonl` → `products.csv` (WooCommerce import format). Report: "Also extracted N products → products.csv."
 
-### Confirmation checkpoint
+### Confirm + path checkpoint
 
-After discovery (step 1), pause and show:
-- Inventory: pages · estimated clusters · products
-- Estimated scope, cost, and time
-- Ask to proceed before the long design phase
+Show the inventory (pages · estimated clusters · products · platform features) and a scope/cost/time estimate. Then make a **platform-informed recommendation** from the inventory and ask the operator to choose the reconstruct path (AskUserQuestion):
 
-This mirrors the existing `liberate` confirm step and complements the mid-run budget guard.
+1. **Migrate content into blocks + products** — WordPress-native blocks + navigation + WooCommerce product pages. Best launchpad for a redesign. (Reconstructs product pages.)
+2. **Theme replication** — carry-and-scope: highest-fidelity replica of the source, raw-HTML-editable (not block-editable). (Imports product *data*; product pages fall back to default WooCommerce, not a carried replica.)
 
-### Step 6 — Design foundations
+Recommendation examples: a store with many products → lean (1); a fixed-layout Wix marketing site, no store, where pixel-fidelity matters → lean (2). The operator chooses; **picking a path is the go-ahead** (this replaces the old proceed/confirm gate).
 
-Invoke `design-foundations` inline (shared context). Reads tokens, scaffold, representative HTML, and screenshots → emits `design-foundation.json` + `design.md` (frozen brief — only QA iteration 3 may amend, which invalidates the theme and all built clusters and re-enters this step).
+### Dispatch (inline)
 
-### Step 7 — Create theme
+Invoke the chosen sub-skill **inline via the Skill tool** (shared context; each sub-skill reads `output/<site>/` from disk and owns its own install → QA → report):
 
-Invoke `creating-themes` inline. Reads `design-foundation.json` + `design.md` → emits `theme.json`, `style.css`, `functions.php`, parts skeleton, base templates, self-hosted fonts. Header/footer come from the existing dynamic block-header + captured footer spec.
+- blocks+products → **`replicate-with-blocks`**
+- theme replication → **`replicate-theme`**
 
-### Step 8 — Page clustering
+The reconstruct phase (clustering, foundations, theme, build, validate, install, visual-QA for blocks; carry-and-scope + compare for theme) lives **entirely in the dispatched sub-skill** — this front door ends here.
 
-Call `liberate_cluster_pages`. Computes layout signatures off the saved `html/<slug>.html` (ordered section-type sequence + structural attrs). Pages with identical signatures join one cluster. The representative is the cluster member with the richest structure. Emits `cluster-map.json`.
-
-**Content model:**
-- **Pages** (homepage + content pages) → section-by-section reconstruction (steps 8–11) into reusable layout.
-- **Posts** → `single.html` + blog/archive template + Query Loop. Imported post content renders through the template.
-- **Products** → `single-product.html` + `archive-product.html` + WooCommerce. No per-product reconstruction.
-
-### Step 9 — Section extraction
-
-Call `liberate_section_extract` on each cluster representative. Full detail: `specs/<rep>/section-<n>-<type>.md` (computed styles, interaction model, uploaded media URLs, brightness, motion, divider/gradient flags). Browser-based; runs only on representatives.
-
-**Per-cluster readiness check before dispatch:** rep specs complete (interaction model set, computed styles present, media local-pathed, brightness recorded). Incomplete → fix spec, don't dispatch.
-
-### Step 10 — Build (fan-out)
-
-Fan out one `generating-patterns` builder subagent per cluster representative (concurrency-capped ~4–6). Builders:
-- Receive shared artifacts **by path** (`design.md`, theme slug, token snapshot, media URL map, their specs). Read-only on shared artifacts.
-- Return a **structured JSON envelope**: `{ patterns: [{ slug, php }], sitewideFlags: [...], notes: [...] }`. A malformed return is a builder failure — never silent corruption.
-- Emit **layout skeletons** (section-mapping templates with content slots), not finished per-page markup. Sitewide-shared sections (header, footer, CTA band) are promoted to registered WP patterns / template parts.
-
-**Checkpointing by cluster-group:** the design phase processes clusters in groups with a compaction/handoff between groups (state in `session.json` + a short design-state summary) to bound orchestrator context. Crash mid-build resumes at the next unbuilt cluster (write-then-mark).
-
-**On Codex/Gemini:** step 10 runs sequentially (no fan-out). All other steps are identical.
-
-**Builder subagent failure:** retry once → fall back to sequential for that cluster → persist subagent input + returned markup to `theme/debug/cluster-<n>.json`, log to `theme/notes.md`.
-
-### Step 11 — Assemble
-
-For each non-representative page, call `liberate_compose_instantiate` (deterministic): fills the cluster's layout skeleton with that page's captured content + uploaded media → `post_content`. Building cost scales with **K clusters, not N pages**.
-
-Invoke `compose-page-blocks` skill **only** for misfits (unmatched slots, extra/missing sections — those that don't cleanly map). A post-compose sanity check (all slots filled, section count matches the cluster signature) fails loud — never ships empty/broken sections silently.
-
-### Step 12 — Validate artifacts (gate)
-
-Call `liberate_validate_artifacts` (ports `validate-artifacts.js`, hardened). This is the **security trust boundary** and must pass before install:
-
-- **Escaping:** asserts `esc_html` / `esc_attr` / `esc_url` on all source-derived text.
-- **Injection allowlist:** rejects raw `<?php` / `<script>` / `on*=` handlers (PHP injection + stored XSS defense, including builder prompt-injection via source content).
-- **Provenance:** emitted text ⊆ spec captured text (flags invented prose, never ships it silently).
-- **Drift:** spec↔pattern consistency.
-- **No remote URLs, no unresolved `{{placeholders}}`, block-comment-only markup.**
-
-Gate fail → fix source, rerun — never install a failing theme. Log to `run-report.json`.
-
-### Step 13 — Install + import
-
-Clean Studio site on full re-run (or wipe replica content); resume keeps the existing site. Install theme, import WXR + `products.csv`, set front page. Returns replica URL.
-
-### Step 14 — Visual QA loop
-
-Invoke `design-qa` inline. Captures replica desktop+mobile screenshots, compares against source screenshots.
-
-**Gates (in order):**
-1. **Responsiveness** (HARD): no horizontal overflow + sections reflow at 390px (automated Playwright check). Must pass to ship.
-2. **Visual parity** (HARD): every content-page section gets a measured `SectionParity` record (`src/lib/replicate/section-parity.ts`); `buildRunReport` computes the verdict from them. Any unaccepted `divergent` section (flattened columns, wrong band color, dropped media, unstyled island) — or a reconstructed page with no sampled sections — is `fail`. Fix by climbing the escalation ladder (R1 CSS → R2 rebuild markup → R3 re-extract spec → R4 styled rebuild); each iteration a stronger rung.
-3. **Qualitative:** vision review for nuance (typography weight, micro-spacing) — surfaced, not blocking.
-
-3 iterations is a **circuit-breaker checkpoint, not an exit**: if the ladder is exhausted without `match`, STOP and ask the operator (raise budget · accept-with-sign-off · abandon page) — never log-and-ship a flattened page. Only an operator `acceptance` (or a Class-C constraint with pixel proof) lets a `divergent` section ship. Then emit `run-report.json` + replica URL. A foundation-level `design.md` amendment (invalidates theme + built clusters, re-enters step 6) is one available rung.
 
 ---
 
@@ -163,22 +106,22 @@ Invoke `design-qa` inline. Captures replica desktop+mobile screenshots, compares
 |---|---|---|
 | extraction | 0 pages | Stop + "No extractable pages found at `<url>`. Try CDP/admin extraction (`/diagnose`)." |
 | extraction | adapter fail | Log + pointer to `/diagnose` |
-| design | no page archetype | Templates-only run (posts + products render through base templates; no page reconstruction) |
-| design | gate fail | Don't install — report to `run-report.json` with problem + cause + fix |
-| design | some clusters failed | Stop and ask the operator before shipping with gaps — never auto-"install what passed". An unaccepted layout divergence keeps the verdict at `fail`; shipping a gap needs operator sign-off (recorded as section `acceptance`) |
-| budget guard | ceiling hit | "Built N clusters / dispatched M subagents (~est. $X, Y min). Continue · stop and report what's done · raise the ceiling?" |
+| checkpoint | operator picks a path | Dispatch the chosen sub-skill (`replicate-with-blocks` / `replicate-theme`) inline |
+| reconstruct | gate fail · clusters failed · QA divergence · budget ceiling | Owned by the dispatched sub-skill — see its SKILL.md (`replicate-with-blocks`'s validate-artifacts + QA-ladder gates + budget guard; `replicate-theme`'s parity compare) |
 
 Progress is the agent's own narration — no Ink TUI in agent mode. The headless extraction CLI keeps its existing Ink surfaces (`discover.tsx`, `screenshot.tsx`).
 
 ---
 
-## `run-report.json` — verdict-first
+## Run report (per path)
 
-Read top-down to answer "is this good?":
+Each reconstruct path emits its **own** report — `run-report.json` from `replicate-with-blocks`, `run-report-carry.json` from `replicate-theme` (each carries a `mode` field). The blocks-path `run-report.json` is verdict-first; read top-down to answer "is this good?":
 
 1. `verdict` — overall ✓ / ⚠ / ✗ + per-archetype.
 2. `summary` — clusters built/failed · pages composed/misfit · responsive pass/fail · sections divergent/accepted · pages unverified · provenance flags · fallback/low-confidence pages · est. cost/usage.
 3. `details[]` — per-cluster + per-page status, gate results, QA notes, operator-accepted divergences (with proof).
+
+The theme-path `run-report-carry.json` is parity-compare shaped — see `replicate-theme`.
 
 ---
 
@@ -187,8 +130,8 @@ Read top-down to answer "is this good?":
 If the user asks to resume (e.g. "resume", "continue", "it crashed"):
 
 1. Ask for the URL if not provided — `outputDir` is derived from it.
-2. Call `liberate_extract` with `resume: true` for extraction; `session.json` tracks design stage + per-cluster build status so the design phase resumes at the next unbuilt cluster.
-3. If extraction was already complete (`.discovery-complete` exists), skip straight to reporting and offer to import or re-run design.
+2. Call `liberate_extract` with `resume: true` for extraction; `session.json` tracks stage so capture resumes where it stopped. Reconstruct resume (per-cluster build status, etc.) is the chosen sub-skill's concern.
+3. If extraction was already complete (`.discovery-complete` exists), skip straight to the **Confirm + path checkpoint** (the idempotent path) and offer to run a reconstruct path.
 
 The `resume` flag causes extraction to:
 - Skip platform detection/discovery if a completed WXR already exists
@@ -199,6 +142,8 @@ The `resume` flag causes extraction to:
 ---
 
 ## Output-quality contract
+
+These guarantees are enforced by the reconstruct sub-skills (mainly `replicate-with-blocks`'s validate-artifacts + QA gates; alt-text + copyright apply to both paths):
 
 - A source section matching **no** catalog interaction-model maps to a **faithful generic** (`columns`/`group`) and is **flagged** in the run-report — never silently forced into a wrong-specific template.
 - Capture-health fallback pages (hero+gallery) and misfit pages routed to `compose-page-blocks` are labeled **low-confidence / fallback** in the run-report.

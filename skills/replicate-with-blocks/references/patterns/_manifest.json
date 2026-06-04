@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "description": "Curated pattern library for the replicate skill. Each entry maps to a .php file in this directory. Patterns are inspired by the most-used shapes on wp.org/patterns, adapted to use foundation tokens (var(--wp--preset--color--<slug>)) and to expose content slots ({{HEADLINE}}, {{SUBHEAD}}, etc.) the agent fills from source HTML — never with invented copy. Use this manifest as the FIRST scan target; only open individual .php files for the candidates a triage indicates fit.",
+  "description": "Curated pattern library for the replicate-with-blocks skill. Each entry maps to a .php file in this directory. Patterns are inspired by the most-used shapes on wp.org/patterns, adapted to use foundation tokens (var(--wp--preset--color--<slug>)) and to expose content slots ({{HEADLINE}}, {{SUBHEAD}}, etc.) the agent fills from source HTML — never with invented copy. Use this manifest as the FIRST scan target; only open individual .php files for the candidates a triage indicates fit.",
   "slot_conventions": {
     "{{HEADLINE}}": "Primary heading text — usually the section's H2. Required.",
     "{{SUBHEAD}}": "Optional supporting paragraph below headline. Drop the block if the source has no subhead.",

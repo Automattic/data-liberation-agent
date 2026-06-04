@@ -11,7 +11,7 @@ allowed-tools:
 
 You compose **one page's** WordPress block markup from its source HTML and, when supplied, a screenshot, using the site's design foundation. The streaming watch loop calls you per-URL; you produce a block-markup string and hand it to the runner via `liberate_block_compose` before the post is inserted.
 
-**You are NOT generating a theme.** That's the `replicate` skill's job. Your output is `post_content` for one specific post — not template parts, not patterns the theme registers, just the inner content of one page.
+**You are NOT generating a theme.** That's the `replicate-with-blocks` skill's job. Your output is `post_content` for one specific post — not template parts, not patterns the theme registers, just the inner content of one page.
 
 ## Input contract
 

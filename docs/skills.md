@@ -10,33 +10,19 @@ These are the skills you invoke directly in Claude Code (or another agent).
 
 ### /liberate
 
-**Root orchestrator — extract a site and produce a responsive, editable WordPress block-theme replica.**
+**Front door — capture a site once, then choose the reconstruct path and dispatch the matching sub-skill.**
 
-Full pipeline:
+Flow (idempotent — re-running on an already-captured site skips straight to the path choice):
 1. Detect the platform
 2. Discover all content (sitemap, navigation, platform features like stores/bookings/forms)
-3. Pause after discovery: show inventory (pages · clusters · products) + estimated scope/cost/time, confirm before the design phase
-4. Extract pages, posts, media, and products
-5. Capture screenshots, design tokens (palette, typography, breakpoints), and rendered HTML per URL
-6. Run the design sub-orchestrator (`/replicate` inline) to produce a block theme and import it into a local WordPress site
-7. Verify extraction and replica quality; produce `run-report.json`
+3. Extract pages, posts, media, and products
+4. Capture screenshots, design tokens (palette, typography, breakpoints), and rendered HTML per URL
+5. Confirm + path checkpoint: show inventory + estimated scope/cost/time + a platform-informed recommendation, then choose the reconstruct path (picking one is the go-ahead):
+   - **blocks + products** → dispatch `/replicate-with-blocks` (editable block theme + WooCommerce)
+   - **theme replication** → dispatch `/replicate-theme` (high-fidelity carry-and-scope)
+6. The chosen sub-skill reconstructs, installs into a local WordPress site, and produces its own run-report
 
 Handles resume for interrupted runs. In agent mode, progress is the agent's own narration; the headless extraction CLI keeps its own Ink TUI. Flags platform-specific features that won't transfer automatically (with WordPress plugin recommendations).
-
-### /replicate
-
-**Design sub-orchestrator — build a responsive, editable WordPress block theme from an already-extracted site.**
-
-Independently invocable to re-theme a site that has already been extracted (re-runs the design phase without re-extracting). Drives the full design pipeline inline:
-- Design foundations → `design-foundation.json` + `design.md`
-- Theme scaffolding (theme.json, style.css, parts skeleton, base templates, self-hosted fonts)
-- Page clustering by layout signature
-- Section extraction (computed styles, interaction model, media URLs, brightness) for cluster representatives
-- Builder fan-out (one subagent per cluster representative) → section layout skeletons
-- Deterministic assembly: fill cluster skeletons with each page's content and media
-- Security + provenance gate (`liberate_validate_artifacts`)
-- Install and import into a clean local WordPress site
-- Visual QA loop → `run-report.json` + replica URL
 
 ### /qa
 
@@ -82,7 +68,14 @@ Adapter development workflow:
 
 ## Orchestration-internal skills
 
-The following skills are invoked **only by the orchestrator** (`/liberate` or `/replicate`). They are not user-invoked — invoking them directly mid-session will conflict with the orchestrator's state. They are marked `disable-model-invocation` so they don't surface in `/`-discovery.
+The following skills are invoked **only by the orchestrator**, not by users — invoking them directly mid-session conflicts with the orchestrator's state. They are marked `disable-model-invocation` so they don't surface in `/`-discovery.
+
+**The two reconstruct paths** `/liberate` dispatches to (the choice offered at the path checkpoint):
+
+- **`replicate-with-blocks`** — block reconstruct: design-foundations → theme → clustering → section extraction → builder fan-out → assemble → validate → install → visual-QA loop → `run-report.json`. Editable WordPress block theme + WooCommerce.
+- **`replicate-theme`** — carry-and-scope reconstruct: carries source markup into `core/html` islands, scopes the source CSS, installs a `<site>-carry` theme, compares → `run-report-carry.json`. High-fidelity, non-block-editable.
+
+**The helper skills** these (and `design-qa`) call:
 
 | Skill | Purpose |
 |---|---|

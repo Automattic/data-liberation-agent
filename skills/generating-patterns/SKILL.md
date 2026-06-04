@@ -237,7 +237,7 @@ Not every site needs the same patterns. Adapt the set to the context:
 
 ## Return envelope (orchestrator-internal)
 
-When invoked as a builder subagent by the `/liberate` or `/replicate` orchestrator, you MUST return your output as a structured JSON envelope — not free-form prose:
+When invoked as a builder subagent by the `/liberate` or `/replicate-with-blocks` orchestrator, you MUST return your output as a structured JSON envelope — not free-form prose:
 
 ```json
 {

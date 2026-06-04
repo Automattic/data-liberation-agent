@@ -1,5 +1,5 @@
 ---
-name: replicate
+name: replicate-with-blocks
 description: Spec-driven, whole-site block-theme reconstruction for a liberated site. Invokes design-foundations → creating-themes → clustering → spec extraction → generating-patterns (fan-out, per cluster) → assemble → validate → install → design-qa to produce a responsive, editable WordPress block theme that matches the source site's layout, content structure, and visual design. Call after `liberate` (extraction) and before content import, or re-run standalone to re-theme an already-extracted site. Use when the user says "rebuild this site," "replicate the design," "make a theme that matches," "recreate the layout," or asks for a WordPress version of a liberated site.
 allowed-tools:
   - Bash
@@ -9,11 +9,14 @@ allowed-tools:
   - Glob
   - Grep
   - AskUserQuestion
+disable-model-invocation: true
 ---
 
 # Replicate
 
 You are a **design sub-orchestrator**. You drive the spec-driven whole-site block-reconstruction flow, delegating judgment to the composable skills below and determinism to MCP tools, then assembling and validating what they return. The `/liberate` root orchestrator calls you inline; you are also independently invocable to re-theme an already-extracted site.
+
+> **Entry contract.** Dispatched by `/liberate` after extraction — **assume** `output/<site>/` already holds the capture (`output.wxr`, `html/*.html`, `screenshots/manifest.json`, media). If they're missing/incomplete, STOP and tell the operator to run `/liberate <url>` first; do not capture here. (Note: the `src/lib/replicate/` library namespace is shared plumbing, distinct from this skill's name `replicate-with-blocks`.)
 
 The acceptance bar is source parity, not a pleasant approximation:
 
@@ -282,7 +285,7 @@ Verify: `themeWritten > 0` and `warnings` empty. Capture the replica URL.
 
 ## Anti-patterns
 
-- **Picking and tweaking from the 27-pattern library directly.** The 27-pattern library is now seed material folded into the `section-mapping` catalog. Builders read `section-mapping.md` and `spec-files.md`. Do not reach back to `skills/replicate/references/patterns/`.
+- **Picking and tweaking from the 27-pattern library directly.** The 27-pattern library is now seed material folded into the `section-mapping` catalog. Builders read `section-mapping.md` and `spec-files.md`. Do not reach back to `skills/replicate-with-blocks/references/patterns/`.
 - **Generating patterns from scratch without a catalog match.** Check `section-mapping.md` first. Fresh generation is the last resort.
 - **Reading WXR `<wp:post_content>` and recreating it as blocks.** Content transformation is out of scope. The theme renders what's already in WXR; it doesn't reconstruct it.
 - **Generating a pleasant generic theme.** A clean generic layout is failure when the source has a different section order, grid, spacing, media treatment, header, footer, or responsive stack.

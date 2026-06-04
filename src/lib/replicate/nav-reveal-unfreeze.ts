@@ -5,7 +5,7 @@
  * visible/opaque after hydration. The carry-and-scope path strips scripts, so
  * that reveal never fires and the main nav stays frozen invisible even though
  * the DOM, CSS, and (self-hosted) menu font were all captured correctly.
- * See memory: liberate-alt Wix nav gap.
+ * See memory: Wix nav gap (carry path).
  *
  * `appendNavRevealUnfreeze` appends a CSS override that un-freezes ONLY the main
  * horizontal menu's ancestor chain, satisfying three constraints:
@@ -45,7 +45,7 @@ export function appendNavRevealUnfreeze(css: string, domHtml: string, scope: str
     return css;
   }
   const override =
-    `\n\n/* liberate-alt: un-freeze the stripped entrance-animation reveal on the main nav.\n` +
+    `\n\n/* carry: un-freeze the stripped entrance-animation reveal on the main nav.\n` +
     `   :has() targets the horizontal menu's ANCESTORS only — leaves the header's\n` +
     `   solid-bg sibling and the hamburger overlay untouched. */\n` +
     `${scope} *:has(${HORIZONTAL_MENU_SELECTOR}){visibility:visible!important;opacity:1!important}\n`;

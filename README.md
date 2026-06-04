@@ -83,7 +83,7 @@ cd data-liberation-agent
 claude --add-plugin .
 ```
 
-Available skills: `/liberate` (full pipeline), `/replicate` (re-run design on an already-extracted site), `/qa`, `/diagnose`, `/adapt`. See [docs/skills.md](./docs/skills.md).
+Available skills: `/liberate` (front door — capture, then choose the reconstruct path), `/replicate-with-blocks` + `/replicate-theme` (the two reconstruct paths `/liberate` dispatches to), `/qa`, `/diagnose`, `/adapt`. See [docs/skills.md](./docs/skills.md).
 
 ### Codex
 
