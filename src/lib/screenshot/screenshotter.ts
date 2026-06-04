@@ -14,7 +14,7 @@ import {
 import { validateOutputDir, planArtifacts, type ArtifactPlan } from './output-layout.js';
 import { enforceSameOrigin } from './same-origin.js';
 import { ManifestQueue, type ManifestEntry, type FailureEntry } from './manifest-queue.js';
-import { waitForStable, triggerLazyLoad } from './page-helpers.js';
+import { waitForStable, triggerLazyLoad, dismissOverlays } from './page-helpers.js';
 import { countBodyTags, isStackingArtifact } from './document-integrity.js';
 import { analyzePage } from './site-analysis.js';
 import { SiteAnalysisAggregator } from './aggregator.js';
@@ -184,9 +184,18 @@ async function capturePerViewport(args: CapturePerViewportArgs): Promise<void> {
     return;
   }
 
-  // --- settle + lazy load ---------------------------------------------------
+  // --- settle, dismiss overlays, lazy load ----------------------------------
   await waitForStable(page, settleMs);
+  // Dismiss takeover modals / consent banners BEFORE lazy-load (a modal's
+  // scroll-lock would defeat the scroll-through) and again AFTER (scrolling can
+  // trigger exit-intent / scroll-depth popups). Best-effort: never fails capture.
+  const dismissedEarly = await dismissOverlays(page);
   await triggerLazyLoad(page);
+  const dismissedLate = await dismissOverlays(page);
+  const dismissedHere = [...dismissedEarly, ...dismissedLate];
+  if (dismissedHere.length > 0) {
+    entry.dismissed = [...(entry.dismissed ?? []), ...dismissedHere];
+  }
 
   // --- responsive image map (mobile only) -----------------------------------
   // At the mobile viewport, Wix's <wow-image> JS has swapped each image to its
@@ -698,6 +707,10 @@ export async function captureScreenshots(opts: ScreenshotOpts): Promise<Screensh
       allFailures.push(f);
     }
     await manifest.updateEntry(url, entry);
+
+    if (entry.dismissed && entry.dismissed.length > 0) {
+      sendLog(server, `[overlay] ${url} dismissed ${entry.dismissed.length} (${entry.dismissed.map((d) => d.method).join(',')})`);
+    }
 
     if (urlFailures.length === 0) {
       captured++;

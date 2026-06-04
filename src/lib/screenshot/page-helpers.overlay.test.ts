@@ -1,5 +1,9 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { chromium, type Browser } from 'playwright';
+import { mkdtempSync, mkdirSync, readFileSync, existsSync } from 'node:fs';
+import { join } from 'node:path';
+import { createServer, type Server as HttpServer } from 'node:http';
+import { captureScreenshots } from './screenshotter.js';
 import {
   scoreOverlay,
   OVERLAY_THRESHOLD,
@@ -353,4 +357,59 @@ describe('dismissOverlays — Tier 3 force remove (Playwright)', () => {
       await page.close();
     }
   });
+});
+
+// ---------------------------------------------------------------------------
+// Integration: captureScreenshots dismisses overlays before capture
+// ---------------------------------------------------------------------------
+
+const TMP_ROOT = join(process.cwd(), '.tmp-test');
+
+const MODAL_PAGE = `<!doctype html><html><head><style>
+  body.locked { overflow: hidden; }
+  #m { position: fixed; inset: 0; z-index: 2147483000; background: #fff; }
+</style></head><body class="locked">
+  <div id="m" role="dialog" aria-modal="true">
+    <button aria-label="Close" id="x">×</button>
+    <p data-modal-marker>FICTIONAL POPUP TEXT</p>
+  </div>
+  <h1>Real Page Heading</h1>
+  <div style="height:3000px;background:linear-gradient(#fff,#000)">tall content</div>
+  <script>
+    document.getElementById('x').addEventListener('click', function () {
+      document.getElementById('m').remove();
+      document.body.classList.remove('locked');
+    });
+  </script>
+</body></html>`;
+
+describe('captureScreenshots integration — overlay dismissed before capture (real Chromium)', () => {
+  it.skipIf(process.env.SKIP_BROWSER_TESTS)('captures the page without the modal markup', async () => {
+    mkdirSync(TMP_ROOT, { recursive: true });
+    const outputDir = mkdtempSync(join(TMP_ROOT, 'overlay-int-'));
+    const server: HttpServer = createServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'text/html' });
+      res.end(MODAL_PAGE);
+    });
+    await new Promise<void>((r) => server.listen(0, r));
+    const port = (server.address() as { port: number }).port;
+    const url = `http://127.0.0.1:${port}/`;
+    try {
+      await captureScreenshots({ urls: [url], outputDir });
+
+      // Desktop HTML was captured (html/<slug>.html) and is modal-free.
+      const htmlPath = join(outputDir, 'html', 'homepage.html');
+      expect(existsSync(htmlPath)).toBe(true);
+      const html = readFileSync(htmlPath, 'utf8');
+      expect(html).toContain('Real Page Heading');
+      expect(html).not.toContain('data-modal-marker');
+      expect(html).not.toContain('data-lib-overlay');
+
+      // Manifest recorded the dismissal.
+      const manifest = JSON.parse(readFileSync(join(outputDir, 'screenshots', 'manifest.json'), 'utf8'));
+      expect(manifest.entries[url].dismissed?.[0]?.method).toBe('close-click');
+    } finally {
+      await new Promise<void>((r) => server.close(() => r()));
+    }
+  }, 60_000);
 });
