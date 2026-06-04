@@ -1045,4 +1045,43 @@ describe('reconstructPagePattern — coverage-gated core/html fallback', () => {
     const r = reconstructPagePattern([s], opts);
     expect(r.body).not.toContain('<!-- wp:html -->');
   });
+
+  it('blocks path: fires adapter recipe before the core/html island when adapterBlocks is supplied', () => {
+    // A 150px image is below MIN_LEAD_IMAGE_PX (200), so renderTextBand drops it —
+    // triggering the lost-coverage branch. The adapter recipe matches <img> and
+    // emits a core/image block — it should win over the core/html fallback island.
+    const s = section({
+      headings: ['Our Story'],
+      images: [{ url: '/wp-content/uploads/team.jpg', sourceUrl: 'https://cdn.test/team.jpg', alt: '', kind: 'img', width: 150, height: 150 }],
+      sectionHtml: '<img src="https://cdn.test/team.jpg" alt="a"/>',
+    } as Partial<SectionSpec>);
+    const r = reconstructPagePattern([s], {
+      patternSlug: 'demo-replica/page-x',
+      title: 'Page — X',
+      adapterBlocks: { recipes: [{ match: 'img', block: 'core/image', inner: 'drop' }] },
+      sourceUrl: 'https://example.com/page',
+    });
+    expect(r.body).toContain('<!-- wp:image -->');
+    expect(r.body).not.toContain('<!-- wp:html -->');
+    expect(r.provenanceFlags.some((f) => f.includes('adapter-recipe#'))).toBe(true);
+    expect(r.provenanceFlags.some((f) => f.includes('html-fallback'))).toBe(false);
+  });
+
+  it('carry path: falls through to core/html island when adapterBlocks is absent', () => {
+    // Same fixture but NO adapterBlocks — the carry/theme path. Must land on
+    // the html-fallback island, not an adapter-recipe block.
+    const s = section({
+      headings: ['Our Story'],
+      images: [{ url: '/wp-content/uploads/team.jpg', sourceUrl: 'https://cdn.test/team.jpg', alt: '', kind: 'img', width: 150, height: 150 }],
+      sectionHtml: '<img src="https://cdn.test/team.jpg" alt="a"/>',
+    } as Partial<SectionSpec>);
+    const r = reconstructPagePattern([s], {
+      patternSlug: 'demo-replica/page-x',
+      title: 'Page — X',
+      // no adapterBlocks — carry/theme path
+    });
+    expect(r.body).toContain('<!-- wp:html -->');
+    expect(r.provenanceFlags.some((f) => f.includes('html-fallback'))).toBe(true);
+    expect(r.provenanceFlags.some((f) => f.includes('adapter-recipe#'))).toBe(false);
+  });
 });

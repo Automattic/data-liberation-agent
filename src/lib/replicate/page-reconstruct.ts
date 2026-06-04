@@ -31,6 +31,7 @@ import { nearestToken, brightness, type PaletteToken } from './footer-color.js';
 import type { ExtractedReview } from './review-extract.js';
 import { measureSectionCoverage } from './section-coverage.js';
 import { buildHtmlFallbackBlock } from './html-fallback.js';
+import { applyBlockRecipe } from './apply-block-recipe.js';
 
 /**
  * A source-VERBATIM FAQ question/answer pair. The renderer emits these as a
@@ -75,6 +76,17 @@ export interface ReconstructOptions {
    * existing link-rewrite post-pass, so no linkMap is threaded here.
    */
   mediaUrlMap?: Map<string, string>;
+  /**
+   * Adapter-declared block recipe (blocks reconstruct path only). When present,
+   * the recipe gets first crack at a coverage-lost section before the opaque
+   * core/html fallback island. Absent on the carry/theme path — that's the gate.
+   */
+  adapterBlocks?: import('../../adapters/page-actions.js').AdapterBlocks;
+  /**
+   * The source URL of the page being reconstructed. Passed through to the block
+   * recipe context so recipes can emit rewritten media URLs keyed to the page.
+   */
+  sourceUrl?: string;
 }
 
 export interface ReconstructResult {
@@ -1537,6 +1549,22 @@ export function reconstructPagePattern(
     };
     const cov = measureSectionCoverage(captured, out.markup);
     if (cov.lost && (s.styledHtml || s.sectionHtml)) {
+      // Blocks path: give the adapter's block recipe first crack at the source
+      // HTML before falling back to the opaque core/html island. The recipe is
+      // only wired when adapterBlocks is present (blocks reconstruct path); the
+      // carry/theme path never sets it, so it falls through unchanged.
+      const recipeSource = (s.styledHtml ?? s.sectionHtml) as string;
+      const recipeMarkup = opts.adapterBlocks
+        ? applyBlockRecipe(recipeSource, opts.adapterBlocks, {
+            url: opts.sourceUrl ?? '',
+            mediaMap: opts.mediaUrlMap ? Object.fromEntries(opts.mediaUrlMap) : undefined,
+          })
+        : null;
+      if (recipeMarkup) {
+        sectionMarkup.push(recipeMarkup);
+        provenanceFlags.push(`adapter-recipe#${s.sectionIndex}: platform recipe upgraded section to blocks`);
+        continue;
+      }
       // R4b floor: prefer the self-contained styled snapshot so a CSS-layout
       // section renders styled, not bare. Fall to the verbatim sectionHtml only
       // when no styled snapshot was captured (older cache / capture gap). The
