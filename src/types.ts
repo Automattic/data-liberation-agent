@@ -1,6 +1,7 @@
 import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import type { WxrBuilder } from './lib/extraction/wxr-builder.js';
 import type { ExtractionLog } from './lib/extraction/extraction-log.js';
+import type { AdapterCapture, AdapterBlocks } from './adapters/page-actions.js';
 
 export interface PlatformAdapter {
   id: string;
@@ -13,4 +14,6 @@ export interface PlatformAdapter {
     context: { log: ExtractionLog; server: Server }
   ): Promise<unknown>;
   probe?(url: string, urls: string[], opts: Record<string, unknown>): Promise<unknown[]>;
+  capture?: AdapterCapture;   // NEW (seam 1)
+  blocks?: AdapterBlocks;     // NEW (seam 2)
 }
