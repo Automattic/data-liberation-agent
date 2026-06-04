@@ -9,6 +9,10 @@ export interface ArtifactPlan {
   captureFullpage: boolean;
   captureScrolled: boolean;
   captureHtml: boolean;
+  /** Capture the JS-built mobile DOM (full document) on the MOBILE pass, for the
+   *  alt path's iframe mobile-DOM carry (classic/adaptive Wix). Mobile-only — the
+   *  counterpart to `captureHtml`'s desktop-only gate. */
+  captureMobileHtml: boolean;
   /** Capture per-page section specs (extractFull) on the desktop pass, so the
    *  reconstruction phase can read them instead of re-running Playwright. */
   captureSections: boolean;
@@ -16,6 +20,7 @@ export interface ArtifactPlan {
     fullpage: string;
     scrolled: string;
     html: string;
+    htmlMobile: string;
     sections: string;
   };
 }
@@ -66,21 +71,26 @@ export function planArtifacts(args: {
     const fullpage = join(args.outputDir, 'screenshots', viewport, `${args.slug}.png`);
     const scrolled = join(args.outputDir, 'screenshots', viewport, `${args.slug}.scrolled.png`);
     const html = join(args.outputDir, 'html', `${args.slug}.html`);
+    const htmlMobile = join(args.outputDir, 'html-mobile', `${args.slug}.html`);
     const sections = join(args.outputDir, 'sections', `${args.slug}.json`);
     const captureFullpage = args.force || !existsSync(fullpage);
     const captureScrolled = args.force || !existsSync(scrolled);
     // HTML + section specs are captured on the desktop pass only (specs are
     // viewport-relative; desktop 1440×900 matches the live-extract basis).
     const captureHtml = viewport === 'desktop' && (args.force || !existsSync(html));
+    // The mobile DOM (full document) is captured on the MOBILE pass — Wix serves a
+    // different layout to mobile UAs, so it must come from the emulated mobile pass.
+    const captureMobileHtml = viewport === 'mobile' && (args.force || !existsSync(htmlMobile));
     const captureSections = viewport === 'desktop' && (args.force || !existsSync(sections));
-    const needsLoad = captureFullpage || captureScrolled || captureHtml || captureSections;
+    const needsLoad = captureFullpage || captureScrolled || captureHtml || captureMobileHtml || captureSections;
     return {
       needsLoad,
       captureFullpage,
       captureScrolled,
       captureHtml,
+      captureMobileHtml,
       captureSections,
-      paths: { fullpage, scrolled, html, sections },
+      paths: { fullpage, scrolled, html, htmlMobile, sections },
     };
   };
   return { desktop: plan('desktop'), mobile: plan('mobile') };

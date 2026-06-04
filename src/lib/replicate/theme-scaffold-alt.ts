@@ -206,6 +206,15 @@ add_action( 'wp_enqueue_scripts', function() {
     wp_enqueue_style( 'lib-alt-site', get_stylesheet_directory_uri() . '/assets/css/site.css', array(), '1.0.0' );
 ${enqueue}
 } );
+
+// Allow the dual-viewport mobile-DOM <iframe> (carried mobile layout) through KSES
+// so wp_update_post / the_content don't strip it from the page islands.
+add_filter( 'wp_kses_allowed_html', function( $tags, $context ) {
+    if ( $context === 'post' ) {
+        $tags['iframe'] = array( 'src' => true, 'width' => true, 'height' => true, 'class' => true, 'style' => true, 'scrolling' => true, 'loading' => true, 'frameborder' => true, 'title' => true );
+    }
+    return $tags;
+}, 10, 2 );
 `;
 }
 
@@ -248,6 +257,32 @@ export function buildAltThemeFiles(input: AltThemeInput): ThemeFile[] {
   // correct) is untouched. See gallery-mobile-grid.ts.
   const GALLERY_REFLOW = GALLERY_MOBILE_GRID_CSS;
 
+  // Dual-viewport toggle for classic/adaptive Wix mobile-DOM carry. When a page
+  // emits a dual island (desktop content in `.lib-alt-vp-desktop` + a
+  // `.lib-alt-vp-mobile` iframe of the captured 320px mobile DOM), this hides the
+  // desktop island + chrome parts below 750px and shows the iframe, collapsing the
+  // page to 320px and neutralizing the desktop scaffold containers (so the iframe
+  // determines the width). The iframe is viewport-isolated, so `[id^=pageBackground]`
+  // here only matches the DESKTOP scaffold — no leak into the mobile DOM. Harmless
+  // on desktop-only pages (`.lib-alt-vp-*` simply don't exist). See
+  // page-reconstruct-alt.ts (dualIsland) + project_liberate_alt_parity_ceiling.
+  // Every aggressive rule is gated on `:has(.lib-alt-vp-mobile)` so it ONLY fires on
+  // pages that actually emit a mobile island — a desktop-only page (no mobile capture)
+  // keeps its normal mobile rendering.
+  const VP_TOGGLE_CSS =
+    '.lib-alt-vp-desktop{display:contents}\n' +
+    '.lib-alt-vp-mobile{display:none}\n' +
+    '.lib-alt-mobile-frame{border:0;display:block;width:320px;max-width:320px;margin:0}\n' +
+    '@media screen and (max-width:750px){' +
+    'html:has(.lib-alt-vp-mobile),body.lib-alt-site:has(.lib-alt-vp-mobile){width:320px!important;min-width:0!important;max-width:320px!important;overflow-x:hidden!important}' +
+    'body.lib-alt-site:has(.lib-alt-vp-mobile) .lib-alt-vp-desktop{display:none!important}' +
+    'body.lib-alt-site:has(.lib-alt-vp-mobile) .wp-block-template-part{display:none!important}' +
+    'body.lib-alt-site:has(.lib-alt-vp-mobile) #masterPage,body.lib-alt-site:has(.lib-alt-vp-mobile) #SITE_CONTAINER,body.lib-alt-site:has(.lib-alt-vp-mobile) #site-root,' +
+    'body.lib-alt-site:has(.lib-alt-vp-mobile) [id^="SITE_PAGES"],body.lib-alt-site:has(.lib-alt-vp-mobile) #pagesContainer,' +
+    'body.lib-alt-site:has(.lib-alt-vp-mobile) [id^="pageBackground"],body.lib-alt-site:has(.lib-alt-vp-mobile) [id^="bgLayers_pageBackground"]{display:contents!important}' +
+    'body.lib-alt-site .lib-alt-vp-mobile{display:block!important}' +
+    '}\n';
+
   // Map each distinct chrome variant to its part slugs (variant 0 → header/footer).
   const slugsByKey = new Map<string, ChromeSlugs>();
   input.chromeVariants.forEach((v, i) => slugsByKey.set(v.key, chromeSlugsForIndex(i)));
@@ -289,7 +324,7 @@ export function buildAltThemeFiles(input: AltThemeInput): ThemeFile[] {
     // Site-wide CSS — reset first (so source rules win the cascade), then the
     // chrome-wrapper rescue, then EVERY variant's carried chrome CSS (concatenated
     // upstream into siteCss; comp-id-scoped so variants never collide).
-    { path: 'assets/css/site.css', content: RESET + CHROME_RESCUE + GALLERY_REFLOW + input.siteCss },
+    { path: 'assets/css/site.css', content: RESET + CHROME_RESCUE + GALLERY_REFLOW + VP_TOGGLE_CSS + input.siteCss },
     { path: 'templates/index.html', content: indexTemplate },
   ];
 

@@ -143,6 +143,9 @@ interface CapturePerViewportArgs {
   /** Accumulates {wix-media-id → mobile-variant URL} from the mobile viewport, for
    *  responsive-image carry. Mutated in place; written once after all captures. */
   responsiveImages: Record<string, string>;
+  /** Accumulates {slug → mobile-DOM scrollHeight} from the mobile viewport, for the
+   *  alt path's iframe mobile-DOM carry. Mutated in place; written once at run end. */
+  mobileHeights: Record<string, number>;
 }
 
 async function capturePerViewport(args: CapturePerViewportArgs): Promise<void> {
@@ -150,7 +153,7 @@ async function capturePerViewport(args: CapturePerViewportArgs): Promise<void> {
     page, viewport, plan, url, slug, archetype,
     settleMs, screenshotTimeoutMs, evaluateTimeoutMs,
     failures, entry, aggregator, shouldAnalyze,
-    designCtx, outputDir, responsiveImages,
+    designCtx, outputDir, responsiveImages, mobileHeights,
   } = args;
   const now = () => new Date().toISOString();
   const isDesktop = viewport.id === 'desktop';
@@ -240,6 +243,26 @@ async function capturePerViewport(args: CapturePerViewportArgs): Promise<void> {
         timestamp: now(),
         attempt: 1,
       });
+    }
+  }
+
+  // --- mobile-DOM carry (mobile only) ---------------------------------------
+  // On the mobile pass, the mobile UA + isMobile emulation make JS builders like
+  // Wix serve their SEPARATE ~320px mobile DOM (classic/adaptive sites; desktop-DOM
+  // sites are identical, harmless). Persist that full document (scripts stripped, so
+  // it renders statically) + its height to html-mobile/. The alt reconstruct carries
+  // it in a viewport-isolated iframe to reproduce the mobile layout the desktop DOM
+  // can't reflow to. Best-effort: a miss leaves the page desktop-only.
+  if (!isDesktop && plan.captureMobileHtml) {
+    try {
+      const mhtml = (await page.content()).replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '');
+      if (!isStackingArtifact(mhtml)) {
+        mkdirSync(dirname(plan.paths.htmlMobile), { recursive: true });
+        writeFileSync(plan.paths.htmlMobile, mhtml);
+        mobileHeights[slug] = await page.evaluate(() => document.documentElement.scrollHeight);
+      }
+    } catch {
+      /* best-effort — desktop-only carry for this page on failure */
     }
   }
 
@@ -510,6 +533,14 @@ export async function captureScreenshots(opts: ScreenshotOpts): Promise<Screensh
     ? (JSON.parse(readFileSync(join(opts.outputDir, 'responsive-images.json'), 'utf8')) as Record<string, string>)
     : {};
 
+  // {slug → mobile-DOM scrollHeight} for the alt path's iframe mobile-DOM carry.
+  // Resume merges with a prior run (like responsiveImages); written at run end.
+  const mobileHeights: Record<string, number> = existsSync(
+    join(opts.outputDir, 'html-mobile', 'heights.json'),
+  )
+    ? (JSON.parse(readFileSync(join(opts.outputDir, 'html-mobile', 'heights.json'), 'utf8')) as Record<string, number>)
+    : {};
+
   // --- site-analysis aggregator -------------------------------------------
   // Collects palette/typography/breakpoints for one representative URL
   // (homepage when present). The design-foundation fast path uses this as
@@ -644,6 +675,7 @@ export async function captureScreenshots(opts: ScreenshotOpts): Promise<Screensh
           designCtx,
           outputDir: opts.outputDir,
           responsiveImages,
+          mobileHeights,
         });
       } catch (err) {
         urlFailures.push({
@@ -705,6 +737,19 @@ export async function captureScreenshots(opts: ScreenshotOpts): Promise<Screensh
         );
       } catch (err) {
         sendLog(server, `[warn] responsive-images serialize failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    // Persist mobile-DOM heights (alt iframe carry). The html-mobile/<slug>.html
+    // documents are written per-page during capture; this is their size sidecar.
+    if (Object.keys(mobileHeights).length > 0) {
+      try {
+        mkdirSync(join(opts.outputDir, 'html-mobile'), { recursive: true });
+        writeFileSync(
+          join(opts.outputDir, 'html-mobile', 'heights.json'),
+          JSON.stringify(mobileHeights, null, 2),
+        );
+      } catch (err) {
+        sendLog(server, `[warn] mobile-heights serialize failed: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
     if (aggregator.hasSamples()) {

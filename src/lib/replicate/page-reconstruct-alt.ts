@@ -15,6 +15,34 @@ export interface ReconstructAltInput {
   specs: SectionSpec[];
   mediaUrlMap: Map<string, string>;
   linkMap?: InternalLinkMap;
+  /**
+   * Classic/adaptive Wix mobile-DOM carry. Such sites serve a SEPARATE, JS-built
+   * mobile DOM (~320px) keyed on user-agent — distinct from the desktop DOM the
+   * carry froze (no static reflow path → renders 980px on mobile). When the mobile
+   * DOM was captured (mobile emulation, scripts stripped) and written to a
+   * site-local file at `docUrl`, the page emits a DUAL island: the desktop content
+   * wrapped in `.lib-alt-vp-desktop` + a `.lib-alt-vp-mobile` IFRAME of the mobile
+   * DOM. The iframe gets its OWN 320px viewport, so Wix's mobile `@media` fire
+   * exactly as on the source (inline carrying can't — `@media` is viewport-driven
+   * and the WP page is 390px device-width). The theme toggles desktop↔iframe below
+   * 750px (`VP_TOGGLE_CSS`). `height` is the captured 320-layout scrollHeight
+   * (iframes don't auto-size without JS). Absent → desktop-only (back-compat).
+   */
+  mobile?: { docUrl: string; height: number };
+}
+
+/** The mobile-island iframe: loads the captured mobile DOM at its own 320px viewport. */
+function mobileFrame(m: { docUrl: string; height: number }): string {
+  const src = m.docUrl.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+  return `<iframe class="lib-alt-mobile-frame" src="${src}" width="320" height="${m.height}" scrolling="no" title="mobile"></iframe>`;
+}
+
+/** Combine the desktop content + the mobile iframe into one dual-viewport island. */
+function dualIsland(desktopHtml: string, mobile: { docUrl: string; height: number }): string {
+  return island(
+    `<div class="lib-alt-vp-desktop">${desktopHtml}</div>` +
+      `<div class="lib-alt-vp-mobile">${mobileFrame(mobile)}</div>`,
+  );
 }
 
 /**
@@ -105,7 +133,9 @@ export function reconstructPageAlt(input: ReconstructAltInput): ReconstructAltRe
     );
     const postContentBlocks = split.sectionsHtml.map(island);
     return {
-      mainIsland: postContentBlocks.join('\n'),
+      mainIsland: input.mobile
+        ? dualIsland(split.sectionsHtml.join(''), input.mobile)
+        : postContentBlocks.join('\n'),
       postContentBlocks,
       headerIsland: island(split.headerHtml),
       footerIsland: island(split.footerHtml),
@@ -144,7 +174,7 @@ export function reconstructPageAlt(input: ReconstructAltInput): ReconstructAltRe
     pageScope,
   );
 
-  const mainIsland = island(main.html);
+  const mainIsland = input.mobile ? dualIsland(main.html, input.mobile) : island(main.html);
   return {
     mainIsland,
     postContentBlocks: mainIsland ? [mainIsland] : [],

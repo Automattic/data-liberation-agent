@@ -26,6 +26,28 @@ describe('assembleAltTheme', () => {
     expect(home.postContent).toContain('class="hero"');
   });
 
+  it('threads a page mobile-DOM into a dual-viewport island', () => {
+    const out = assembleAltTheme({
+      themeName: 'Acme Alt',
+      pages: [
+        {
+          slug: 'home',
+          title: 'Home',
+          isHome: true,
+          bodyHtml: '<main><div class="c">desktop</div></main>',
+          css: '',
+          mobile: { docUrl: '/wp-content/uploads/_alt-mobile/home.html', height: 4000 },
+        },
+      ],
+      mediaUrlMap: new Map(),
+    });
+    const home = out.wxrPages.find((p) => p.slug === 'home')!;
+    expect(home.postContent).toContain('class="lib-alt-vp-desktop"');
+    expect(home.postContent).toContain('class="lib-alt-vp-mobile"');
+    expect(home.postContent).toContain('src="/wp-content/uploads/_alt-mobile/home.html"');
+    expect(home.postContent).toContain('height="4000"');
+  });
+
   it('keeps the active-nav highlight on a single-page header, strips it on a shared one', () => {
     const header = (active: 'home' | 'about') =>
       '<header class="h"><nav data-hook="menu-root" class="wixui-horizontal-menu">' +

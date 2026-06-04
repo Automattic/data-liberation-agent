@@ -52,6 +52,51 @@ describe('reconstructPageAlt', () => {
     expect(r.mainIsland).toContain('class="content"');
   });
 
+  it('emits a dual island with a mobile-DOM iframe when `mobile` is provided', () => {
+    const r = reconstructPageAlt({
+      slug: 'home',
+      bodyHtml: '<div class="content">Desktop</div>',
+      css: '.content{color:red}',
+      specs: [],
+      mediaUrlMap: new Map(),
+      mobile: { docUrl: '/wp-content/uploads/_alt-mobile/home.html', height: 5200 },
+    });
+    // desktop content is wrapped so the theme can hide it on mobile
+    expect(r.mainIsland).toContain('class="lib-alt-vp-desktop"');
+    expect(r.mainIsland).toContain('class="content"');
+    // the mobile island is an iframe loading the captured mobile DOM (its own 320px viewport)
+    expect(r.mainIsland).toContain('class="lib-alt-vp-mobile"');
+    expect(r.mainIsland).toContain('<iframe');
+    expect(r.mainIsland).toContain('src="/wp-content/uploads/_alt-mobile/home.html"');
+    expect(r.mainIsland).toContain('width="320"');
+    expect(r.mainIsland).toContain('height="5200"');
+  });
+
+  it('omits the mobile island when `mobile` is absent (desktop-only, back-compat)', () => {
+    const r = reconstructPageAlt({
+      slug: 'home',
+      bodyHtml: '<div class="content">Desktop</div>',
+      css: '',
+      specs: [],
+      mediaUrlMap: new Map(),
+    });
+    expect(r.mainIsland).not.toContain('lib-alt-vp-mobile');
+    expect(r.mainIsland).not.toContain('<iframe');
+  });
+
+  it('escapes the iframe src URL', () => {
+    const r = reconstructPageAlt({
+      slug: 'p',
+      bodyHtml: '<div>x</div>',
+      css: '',
+      specs: [],
+      mediaUrlMap: new Map(),
+      mobile: { docUrl: '/wp-content/uploads/_alt-mobile/a"b.html', height: 100 },
+    });
+    expect(r.mainIsland).toContain('a&quot;b.html');
+    expect(r.mainIsland).not.toContain('a"b.html');
+  });
+
   it('rewrites media URLs in carried HTML', () => {
     const mediaUrlMap = new Map([['https://cdn.example.com/img.jpg', '/wp-content/uploads/img.jpg']]);
     const r = reconstructPageAlt({

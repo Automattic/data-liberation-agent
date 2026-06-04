@@ -43,6 +43,10 @@ export interface AltPageInput {
   bodyHtml: string;
   css: string;
   specs?: SectionSpec[];
+  /** Classic/adaptive Wix mobile-DOM carry — emits a dual-viewport island
+   *  (desktop content + a 320px iframe of the captured mobile DOM at `docUrl`).
+   *  See reconstructPageAlt's `mobile` input. */
+  mobile?: { docUrl: string; height: number };
 }
 
 export interface AssembleInput {
@@ -91,6 +95,7 @@ export function assembleAltTheme(input: AssembleInput): AssembleOutput {
       specs: p.specs ?? [],
       mediaUrlMap: input.mediaUrlMap,
       linkMap: input.linkMap,
+      mobile: p.mobile,
     }),
   }));
 
@@ -255,6 +260,19 @@ export const reconstructPagesAltHandler: Handler = async (args, ctx) => {
     /* best-effort — reconstruct without mobile variants on a missing/corrupt map */
   }
 
+  // Mobile-DOM carry (classic/adaptive Wix). liberate_screenshot's mobile pass
+  // writes html-mobile/<slug>.html (the JS-built 320px mobile DOM, scripts stripped)
+  // + heights.json. When present, each page emits a dual island whose mobile half is
+  // an iframe of that document, served from the site's uploads/_alt-mobile/.
+  let mobileHeights: Record<string, number> = {};
+  try {
+    const hPath = join(resolve(outputDir), 'html-mobile', 'heights.json');
+    if (existsSync(hPath)) mobileHeights = JSON.parse(readFileSync(hPath, 'utf8'));
+  } catch {
+    /* best-effort — no mobile-DOM carry on a missing/corrupt heights map */
+  }
+  const altMobileDir = join(wpRoot, 'wp-content', 'uploads', '_alt-mobile');
+
   for (const p of pages) {
     // Prefer cached rendered HTML written by liberate_screenshot. The filename
     // stem is htmlSlug when given (posts: `post--<name>.html`), else the slug.
@@ -305,6 +323,24 @@ export const reconstructPagesAltHandler: Handler = async (args, ctx) => {
       /* best-effort cache write */
     }
 
+    // Mobile-DOM carry: if a mobile capture exists for this page, install it under
+    // uploads/_alt-mobile/<slug>.html and emit a dual island referencing it.
+    let mobile: { docUrl: string; height: number } | undefined;
+    const mobileSrc = join(resolve(outputDir), 'html-mobile', `${p.htmlSlug ?? p.slug}.html`);
+    if (existsSync(mobileSrc)) {
+      try {
+        mkdirSync(altMobileDir, { recursive: true });
+        const mobileDoc = readFileSync(mobileSrc, 'utf8');
+        writeFileSync(join(altMobileDir, `${p.slug}.html`), mobileDoc);
+        mobile = {
+          docUrl: `/wp-content/uploads/_alt-mobile/${p.slug}.html`,
+          height: mobileHeights[p.htmlSlug ?? p.slug] ?? 6000,
+        };
+      } catch {
+        /* best-effort — fall back to desktop-only for this page */
+      }
+    }
+
     altPages.push({
       slug: p.slug,
       title: p.title,
@@ -312,6 +348,7 @@ export const reconstructPagesAltHandler: Handler = async (args, ctx) => {
       postType: p.postType,
       bodyHtml,
       css,
+      mobile,
     });
   }
 

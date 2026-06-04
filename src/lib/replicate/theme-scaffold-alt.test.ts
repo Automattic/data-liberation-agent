@@ -205,18 +205,39 @@ describe('buildAltThemeFiles', () => {
       expect(css).toContain('.lib-alt-gallery-mobile{display:grid!important');
     });
 
+    it('adds the dual-viewport mobile-DOM iframe toggle to site.css', () => {
+      const css = get('assets/css/site.css');
+      // base: mobile island hidden, desktop wrapper transparent (no layout impact)
+      expect(css).toContain('.lib-alt-vp-mobile{display:none}');
+      expect(css).toContain('.lib-alt-vp-desktop{display:contents}');
+      // below 750px: hide desktop island, show the iframe, neutralize the desktop scaffold
+      expect(css).toContain('.lib-alt-vp-desktop{display:none!important}');
+      expect(css).toContain('.lib-alt-vp-mobile{display:block!important}');
+      expect(css).toContain('[id^="pageBackground"]');
+    });
+
+    it('functions.php allows the mobile-island <iframe> through KSES', () => {
+      const fn = get('functions.php');
+      expect(fn).toContain('wp_kses_allowed_html');
+      expect(fn).toContain("'iframe'");
+    });
+
     it('declares header/footer template-part areas in theme.json', () => {
       const areas = (JSON.parse(get('theme.json')).templateParts ?? []).map((p: { area: string }) => p.area);
       expect(areas).toContain('header');
       expect(areas).toContain('footer');
     });
 
-    it('omits the display:contents rescue when no page has a scaffold', () => {
+    it('omits the chrome-rescue display:contents rule when no page has a scaffold', () => {
       const plain = buildAltThemeFiles({
         themeName: 'Acme Alt', chromeVariants: oneVariant(), siteCss: '',
         pages: [page({ slug: 'about', isHome: false, pageCss: '' })],
       });
-      expect(plain.find((x) => x.path === 'assets/css/site.css')?.content).not.toContain('display:contents');
+      // The CHROME_RESCUE rule specifically — NOT the unconditional vp-toggle's
+      // display:contents (which legitimately appears for the mobile-DOM iframe).
+      expect(plain.find((x) => x.path === 'assets/css/site.css')?.content).not.toContain(
+        '.wp-block-template-part{display:contents}',
+      );
     });
   });
 });

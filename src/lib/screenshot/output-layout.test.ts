@@ -57,6 +57,23 @@ describe('planArtifacts', () => {
     }
   });
 
+  it('captures the mobile DOM html on the mobile pass only, gated on the file existing', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'artifacts-'));
+    try {
+      const plan = planArtifacts({ slug: 'about', outputDir: dir, force: false });
+      expect(plan.mobile.captureMobileHtml).toBe(true); // missing → capture
+      expect(plan.desktop.captureMobileHtml).toBe(false); // never on desktop
+      expect(plan.mobile.paths.htmlMobile.endsWith('/html-mobile/about.html')).toBe(true);
+
+      mkdirSync(join(dir, 'html-mobile'), { recursive: true });
+      writeFileSync(join(dir, 'html-mobile', 'about.html'), 'fake');
+      expect(planArtifacts({ slug: 'about', outputDir: dir, force: false }).mobile.captureMobileHtml).toBe(false);
+      expect(planArtifacts({ slug: 'about', outputDir: dir, force: true }).mobile.captureMobileHtml).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('captures section specs on desktop only, gated on the sections file existing', () => {
     const dir = mkdtempSync(join(tmpdir(), 'artifacts-'));
     try {
@@ -82,12 +99,14 @@ describe('planArtifacts', () => {
       mkdirSync(join(dir, 'screenshots', 'desktop'), { recursive: true });
       mkdirSync(join(dir, 'screenshots', 'mobile'), { recursive: true });
       mkdirSync(join(dir, 'html'), { recursive: true });
+      mkdirSync(join(dir, 'html-mobile'), { recursive: true });
       mkdirSync(join(dir, 'sections'), { recursive: true });
       writeFileSync(join(dir, 'screenshots', 'desktop', 'about.png'), 'fake');
       writeFileSync(join(dir, 'screenshots', 'desktop', 'about.scrolled.png'), 'fake');
       writeFileSync(join(dir, 'screenshots', 'mobile', 'about.png'), 'fake');
       writeFileSync(join(dir, 'screenshots', 'mobile', 'about.scrolled.png'), 'fake');
       writeFileSync(join(dir, 'html', 'about.html'), 'fake');
+      writeFileSync(join(dir, 'html-mobile', 'about.html'), 'fake');
       writeFileSync(join(dir, 'sections', 'about.json'), 'fake');
 
       const plan = planArtifacts({ slug: 'about', outputDir: dir, force: false });
