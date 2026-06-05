@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { WxrBuilder, type WxrBuilderOpts } from '../wxr/index.js';
+import { WxrBuilder, type WxrBuilderOpts } from './index.js';
 
 const SITE = 'https://example.com';
 const TMP = join(process.cwd(), '.tmp-test');
