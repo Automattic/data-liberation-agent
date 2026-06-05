@@ -337,6 +337,24 @@ export interface StartStudioOpts {
  * actually done and it's safe to open the browser / prompt for the real
  * WordPress import.
  */
+/**
+ * Studio-only preview entry point (was the Studio-vs-Playground dispatcher in
+ * the to-be-deleted playground-server.ts). Hard-requires Studio — no fallback.
+ * `isAvailable` is injectable for testing (defaults to the real check).
+ */
+export async function startPreview(
+  opts: StartStudioOpts,
+  isAvailable: () => boolean = isStudioAvailable,
+): Promise<StartPreviewResult> {
+  if (!isAvailable()) {
+    return {
+      status: 'failed',
+      error: 'Studio is required for preview/import. Install it from https://developer.wordpress.com/studio/',
+    };
+  }
+  return startStudioPreview(opts);
+}
+
 export async function startStudioPreview(opts: StartStudioOpts): Promise<StartPreviewResult> {
   // Validate replica inputs up front — fail fast before creating a site.
   validateReplicaInputs(opts.themeFiles, opts.blockPlugins, opts.themeSlug);
