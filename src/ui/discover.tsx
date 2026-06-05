@@ -10,7 +10,7 @@ import { WxrBuilder } from '../lib/extraction/wxr-builder.js';
 import { ExtractionLog } from '../lib/extraction/extraction-log.js';
 import { godaddyWmAdapter } from '../adapters/godaddy-wm/index.js';
 import { hostingerAdapter } from '../adapters/hostinger/index.js';
-import { hubspotAdapter } from '../adapters/hubspot.js';
+import { hubspotAdapter } from '../adapters/hubspot/index.js';
 import { shopifyAdapter } from '../adapters/shopify/index.js';
 import { squarespaceAdapter } from '../adapters/squarespace/index.js';
 import { webflowAdapter } from '../adapters/webflow.js';
