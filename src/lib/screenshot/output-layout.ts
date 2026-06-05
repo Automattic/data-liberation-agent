@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { resolve, join, normalize } from 'node:path';
+import { join, normalize } from 'node:path';
 
 const VIEWPORTS = ['desktop', 'mobile'] as const;
 export type ViewportId = (typeof VIEWPORTS)[number];
@@ -30,16 +30,14 @@ export interface CapturePlan {
   mobile: ArtifactPlan;
 }
 
-/** Reject outputDir paths that escape cwd or contain `..` after normalization. */
+/** Reject outputDir paths containing `..` traversal. (No longer cwd-pinned:
+ *  the default base is now user-owned under ~/Studio, and explicit --output is
+ *  trusted user intent. Per-file joins stay contained at their join sites —
+ *  resolveMediaPath checks containment, slugs are separator-free.) */
 export function validateOutputDir(outputDir: string): void {
-  const cwd = resolve(process.cwd());
-  const abs = resolve(outputDir);
   const norm = normalize(outputDir);
   if (norm.split('/').includes('..') || norm.split('\\').includes('..')) {
     throw new Error(`outputDir contains '..' traversal: ${outputDir}`);
-  }
-  if (!abs.startsWith(cwd + '/') && abs !== cwd) {
-    throw new Error(`outputDir is outside the working directory: ${outputDir} (resolved: ${abs}, cwd: ${cwd})`);
   }
 }
 
