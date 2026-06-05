@@ -1,11 +1,11 @@
 import { readFileSync, existsSync, appendFileSync } from 'fs';
 import { dirname, join, basename, extname } from 'path';
-import { readWxr } from '../extraction/wxr-reader.js';
+import { readWxr } from '../wxr/index.js';
 import { deriveFilenameFromUrl, extensionFromContentType } from '../extraction/media.js';
 import { WpRestClient } from './wp-rest-client.js';
 import { WooCommerceClient } from './woo-rest-client.js';
 import { readProductsCsv } from './woo-csv-reader.js';
-import type { WxrData } from '../extraction/wxr-reader.js';
+import type { WxrData } from '../wxr/index.js';
 import type {
   Category,
   Tag,
@@ -15,7 +15,7 @@ import type {
   PostItem,
   MenuItem,
   Comment,
-} from '../extraction/wxr-builder.js';
+} from '../wxr/index.js';
 
 export interface ImportOptions {
   site: string;

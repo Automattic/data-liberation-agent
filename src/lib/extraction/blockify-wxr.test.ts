@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdirSync, rmSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { WxrBuilder, type WxrItem } from './wxr-builder.js';
-import { readWxr } from './wxr-reader.js';
+import { WxrBuilder, type WxrItem } from '../wxr/index.js';
+import { readWxr } from '../wxr/index.js';
 import { blockifyWxrBodies, blockifyWxrFile } from './blockify-wxr.js';
 import type { AdapterBlocks } from '../../adapters/page-actions.js';
 

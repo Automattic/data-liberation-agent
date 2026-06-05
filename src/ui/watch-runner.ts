@@ -39,7 +39,7 @@ import { createHash } from 'node:crypto';
 import { createInterface } from 'node:readline';
 import { detect } from '../lib/extraction/detect-platform.js';
 import { ExtractionLog } from '../lib/extraction/extraction-log.js';
-import { WxrBuilder } from '../lib/extraction/wxr-builder.js';
+import { WxrBuilder } from '../lib/wxr/index.js';
 import { ImportSession } from '../lib/extraction/import-session.js';
 import { classifyUrl } from '../lib/extraction/sitemap.js';
 import type { PageExtractedEvent } from '../adapters/shared.js';

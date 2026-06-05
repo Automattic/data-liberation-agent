@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { readWxr } from '../extraction/wxr-reader.js';
+import { readWxr } from '../wxr/index.js';
 
 export interface SourceSiteMeta {
   title?: string;

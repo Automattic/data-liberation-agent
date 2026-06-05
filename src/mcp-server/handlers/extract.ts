@@ -2,8 +2,8 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { detect } from '../../lib/extraction/detect-platform.js';
 import { ExtractionLog } from '../../lib/extraction/extraction-log.js';
-import { WxrBuilder } from '../../lib/extraction/wxr-builder.js';
-import { rehydrateBuilderFromWxr } from '../../lib/extraction/wxr-rehydrate.js';
+import { WxrBuilder } from '../../lib/wxr/index.js';
+import { rehydrateBuilderFromWxr } from '../../lib/wxr/index.js';
 import type { Handler } from '../handler-types.js';
 
 export const extractHandler: Handler = async (args, ctx) => {

@@ -1,5 +1,5 @@
 import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import type { WxrBuilder } from './lib/extraction/wxr-builder.js';
+import type { WxrBuilder } from './lib/wxr/index.js';
 import type { ExtractionLog } from './lib/extraction/extraction-log.js';
 import type { AdapterCapture, AdapterBlocks } from './adapters/page-actions.js';
 

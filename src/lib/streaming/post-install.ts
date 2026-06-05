@@ -14,7 +14,7 @@ import { promisify } from 'node:util';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { WxrItem, PageItem, PostItem } from '../extraction/wxr-builder.js';
+import type { WxrItem, PageItem, PostItem } from '../wxr/index.js';
 
 const execFileAsync = promisify(execFile);
 

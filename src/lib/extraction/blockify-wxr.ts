@@ -1,6 +1,6 @@
 import { readFileSync, renameSync } from 'node:fs';
-import { WxrBuilder, type WxrItem } from './wxr-builder.js';
-import { readWxr } from './wxr-reader.js';
+import { WxrBuilder, type WxrItem } from '../wxr/index.js';
+import { readWxr } from '../wxr/index.js';
 import { applyBlockRecipe } from '../replicate/apply-block-recipe.js';
 import type { AdapterBlocks } from '../../adapters/page-actions.js';
 

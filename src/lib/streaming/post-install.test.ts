@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { installPost } from './post-install.js';
-import type { WxrItem, PageItem, PostItem, MediaItem } from '../extraction/wxr-builder.js';
+import type { WxrItem, PageItem, PostItem, MediaItem } from '../wxr/index.js';
 
 const FIXTURE_TMP = join(process.cwd(), '.tmp-test');
 mkdirSync(FIXTURE_TMP, { recursive: true });

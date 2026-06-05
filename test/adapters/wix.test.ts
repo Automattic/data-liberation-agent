@@ -3,7 +3,7 @@ import { readFileSync, existsSync, mkdtempSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { wixAdapter } from '../../src/adapters/wix/index.js';
-import { WxrBuilder } from '../../src/lib/extraction/wxr-builder.js';
+import { WxrBuilder } from '../../src/lib/wxr/index.js';
 
 describe('wixAdapter', () => {
   it('has id "wix"', () => {

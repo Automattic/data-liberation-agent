@@ -6,7 +6,7 @@ import { Header } from './header.js';
 import { platformColor, confidenceBadge, pluralize } from './format.js';
 import { detect, type FullDetectionResult } from '../lib/extraction/detect-platform.js';
 import { fetchSitemap, classifyUrl } from '../lib/extraction/sitemap.js';
-import { WxrBuilder } from '../lib/extraction/wxr-builder.js';
+import { WxrBuilder } from '../lib/wxr/index.js';
 import { ExtractionLog } from '../lib/extraction/extraction-log.js';
 import { godaddyWmAdapter } from '../adapters/godaddy-wm/index.js';
 import { hostingerAdapter } from '../adapters/hostinger/index.js';
@@ -116,7 +116,7 @@ function Liberate(props: LiberateProps & { onComplete?: (wxrPath: string | null)
           const completePath = join(siteDir, '.discovery-complete');
           if (existsSync(completePath)) {
             const wxrPath = join(siteDir, 'output.wxr');
-            const { readWxr } = await import('../lib/extraction/wxr-reader.js');
+            const { readWxr } = await import('../lib/wxr/index.js');
             const wxrData = readWxr(wxrPath);
             setActualOutputDir(siteDir);
             const jsonlPath = join(siteDir, 'products.jsonl');
@@ -270,7 +270,7 @@ function Liberate(props: LiberateProps & { onComplete?: (wxrPath: string | null)
           const summary = log.getSummary();
           if (!dryRun) {
             writeFileSync(join(siteDir, '.discovery-complete'), new Date().toISOString(), 'utf8');
-            const { readWxr } = await import('../lib/extraction/wxr-reader.js');
+            const { readWxr } = await import('../lib/wxr/index.js');
             const wxrData = readWxr(wxrPath);
             setResult({
               pagesExtracted: wxrData.items.filter((i) => i.type === 'page').length,

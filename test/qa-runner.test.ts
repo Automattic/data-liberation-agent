@@ -3,7 +3,7 @@ import { readFileSync, existsSync, unlinkSync } from 'fs';
 import { dirname, join } from 'path';
 import { tmpdir } from 'os';
 import { mkdtempSync } from 'fs';
-import { WxrBuilder } from '../src/lib/extraction/wxr-builder.js';
+import { WxrBuilder } from '../src/lib/wxr/index.js';
 import { runQa } from '../src/lib/qa/qa-runner.js';
 
 function buildWxr(
@@ -134,7 +134,7 @@ describe('runQa', () => {
     expect(result.pages[0].fixed).toContain('added alt text to photo.jpg');
 
     // Re-read the WXR and verify the image now has alt text
-    const { readWxr } = await import('../src/lib/extraction/wxr-reader.js');
+    const { readWxr } = await import('../src/lib/wxr/index.js');
     const patched = readWxr(wxrPath);
     const page = patched.items.find(
       (i) => i.type === 'page' && i.slug === 'gallery',

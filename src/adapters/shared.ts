@@ -1,5 +1,5 @@
 import * as cheerio from 'cheerio';
-import type { WxrBuilder, WxrItem } from '../lib/extraction/wxr-builder.js';
+import type { WxrBuilder, WxrItem } from '../lib/wxr/index.js';
 import type { ExtractionLog } from '../lib/extraction/extraction-log.js';
 import type { ImportSession } from '../lib/extraction/import-session.js';
 import type { Server } from '@modelcontextprotocol/sdk/server/index.js';

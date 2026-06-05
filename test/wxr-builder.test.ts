@@ -3,7 +3,7 @@ import { readFileSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'fs
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { XMLParser } from 'fast-xml-parser';
-import { WxrBuilder } from '../src/lib/extraction/wxr-builder.js';
+import { WxrBuilder } from '../src/lib/wxr/index.js';
 
 describe('WxrBuilder', () => {
   it('constructs with site metadata', () => {

@@ -27,7 +27,7 @@
 
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { WxrItem } from '../extraction/wxr-builder.js';
+import type { WxrItem } from '../wxr/index.js';
 
 const LOG_FILENAME = 'pending-imports.jsonl';
 

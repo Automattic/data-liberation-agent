@@ -3,7 +3,7 @@ import { readFileSync, existsSync, mkdtempSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { godaddyWmAdapter } from '../../src/adapters/godaddy-wm/index.js';
-import { WxrBuilder } from '../../src/lib/extraction/wxr-builder.js';
+import { WxrBuilder } from '../../src/lib/wxr/index.js';
 import { ExtractionLog } from '../../src/lib/extraction/extraction-log.js';
 import { parseSitemapXml } from '../../src/lib/extraction/sitemap.js';
 

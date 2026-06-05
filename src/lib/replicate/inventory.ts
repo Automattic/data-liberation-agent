@@ -19,9 +19,9 @@
 //
 import { readFileSync, existsSync, statSync } from 'node:fs';
 import { join, basename } from 'node:path';
-import { readWxr } from '../extraction/wxr-reader.js';
+import { readWxr } from '../wxr/index.js';
 import { classifyUrl, type UrlType } from '../extraction/sitemap.js';
-import type { WxrItem } from '../extraction/wxr-builder.js';
+import type { WxrItem } from '../wxr/index.js';
 
 export interface ArchetypeRepresentative {
   url: string;
