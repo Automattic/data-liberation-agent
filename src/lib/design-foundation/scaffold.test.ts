@@ -64,9 +64,8 @@ describe('scaffoldDesignFoundation — input validation', () => {
 
   it('rejects outputDir containing `..` via validateOutputDir', () => {
     expect(() =>
-      scaffoldDesignFoundation(join(process.cwd(), '..', 'escape'), {
-        origin: 'https://example.com',
-      }),
+      // relative path — normalize keeps the leading '..' (join would collapse it)
+      scaffoldDesignFoundation('../escape', { origin: 'https://example.com' }),
     ).toThrow(/traversal|outside/i);
   });
 
