@@ -45,7 +45,7 @@ function Inspect({ url, token }: InspectProps) {
         // Phase 3: Probe sample pages (if adapter supports it)
         const { shopifyAdapter } = await import('../adapters/shopify/index.js');
         const { squarespaceAdapter } = await import('../adapters/squarespace/index.js');
-        const { webflowAdapter } = await import('../adapters/webflow.js');
+        const { webflowAdapter } = await import('../adapters/webflow/index.js');
         const { wixAdapter } = await import('../adapters/wix.js');
         const allAdapters = [shopifyAdapter, squarespaceAdapter, webflowAdapter, wixAdapter];
         const adapter = allAdapters.find(a => a.id === det.platform);

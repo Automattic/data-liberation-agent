@@ -13,7 +13,7 @@ import { hostingerAdapter } from '../adapters/hostinger/index.js';
 import { hubspotAdapter } from '../adapters/hubspot/index.js';
 import { shopifyAdapter } from '../adapters/shopify/index.js';
 import { squarespaceAdapter } from '../adapters/squarespace/index.js';
-import { webflowAdapter } from '../adapters/webflow.js';
+import { webflowAdapter } from '../adapters/webflow/index.js';
 import { weeblyAdapter } from '../adapters/weebly.js';
 import { wixAdapter, type Inventory } from '../adapters/wix.js';
 import { mkdirSync, existsSync, writeFileSync, readFileSync } from 'fs';
