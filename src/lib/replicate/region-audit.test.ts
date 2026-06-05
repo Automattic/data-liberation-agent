@@ -35,4 +35,26 @@ describe('reconcileRegions', () => {
     expect(r.assignments[0].kind).toBe('page_body_section');
     expect(r.unassignedRegions).toEqual([]);
   });
+
+  // Regression: a source page with a real nav whose content was DROPPED by the
+  // build (chrome extraction yielded no header → no header_part placed) must
+  // surface the nav as the one unassigned region, while the placed main + footer
+  // reconcile cleanly. This is the failure item-level content-diffing misses.
+  it('catches a dropped source nav while main/footer survive (corneliusholmes regression)', () => {
+    const census = [
+      L({ role: 'nav', tag: 'nav', selector: 'nav.main-nav', textLength: 90, mediaCount: 0 }),
+      L({ role: 'main', tag: 'main', selector: 'main' }),
+      L({ role: 'footer', tag: 'footer', selector: 'footer.site-footer', textLength: 120, mediaCount: 0 }),
+    ];
+    // Body sections placed + a footer part placed, but NO header part (nav dropped).
+    const placed = [
+      { kind: 'page_body_section' as const, selector: 'section#hero' },
+      { kind: 'footer_part' as const, role: 'footer' as const },
+    ];
+    const r = reconcileRegions(census, placed);
+    expect(r.counts.unassigned).toBe(1);
+    expect(r.unassignedRegions.map((x) => x.role)).toEqual(['nav']);
+    // main assigned (body placed) + footer assigned (footer_part) → only nav dropped.
+    expect(r.counts.assigned).toBe(2);
+  });
 });
