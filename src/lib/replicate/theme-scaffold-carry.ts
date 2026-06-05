@@ -384,14 +384,27 @@ export function buildCarryThemeFiles(input: CarryThemeInput): ThemeFile[] {
   // correct) is untouched. See gallery-mobile-grid.ts.
   const GALLERY_REFLOW = GALLERY_MOBILE_GRID_CSS;
 
-  // Store-header rescue: the carried announcement-bar arrow SVG has a viewBox but no
-  // width attr, and its sizing rule isn't in the carried chrome CSS, so on the store
-  // pages (which use the isolated header-store part) it renders huge. Constrain inline
-  // SVGs inside the announcement bar only (NOT the logo, which lives elsewhere).
+  // Store-header rescue (Shopify Dawn-family). The carried chrome CSS is :where()-scoped
+  // (zero specificity, to preserve the SOURCE cascade), so in the isolated store-header
+  // part it LOSES key layout/style rules to resets+defaults that content pages win via
+  // their own page CSS — the header collapses to block (logo/nav/icons stack), nav links
+  // pick up the generic `.link` underline + the default 1rem size, and the announcement
+  // arrow SVG (viewBox, no width attr) renders huge. These rules reassert the source
+  // intent for the store header. All selectors key off Dawn's `header__*` / `header--*`
+  // BEM classes (and `.announcement-bar`), so they are a NO-OP on themes that lack them.
+  // The fully general fix (any theme) is a computed-style-inlined header snapshot; this is
+  // the pragmatic rescue for the common Shopify-Dawn case. Scoped to `.lib-carry-vp-desktop`
+  // (the store-header wrapper) so it never touches content-page islands.
+  const sh = 'body.lib-carry-site .lib-carry-vp-desktop';
   const STORE_HEADER_RESCUE =
-    'body.lib-carry-site .announcement-bar svg,' +
-    'body.lib-carry-site .announcement-bar__message svg,' +
-    'body.lib-carry-site .announcement-bar__link svg{width:1.2rem;height:auto;display:inline-block;vertical-align:middle}\n';
+    `${sh} .announcement-bar svg,${sh} .announcement-bar__message svg,${sh} .announcement-bar__link svg{width:1.2rem;height:auto;display:inline-block;vertical-align:middle}\n` +
+    // Restore the header grid (logo | nav | icons). Scoped to Dawn's header-layout
+    // modifiers so it never forces grid on an unrelated `.header` element.
+    `${sh} .header.header--top-left,${sh} .header.header--top-center,${sh} .header.header--middle-left,${sh} .header.header--middle-center,${sh} .header.header--mobile-center,${sh} .header.header--mobile-left{display:grid!important}\n` +
+    `${sh} .header__icons{display:flex!important;align-items:center}\n` +
+    // Nav links: drop the generic `.link` underline and restore Dawn's nav size.
+    `${sh} .header__menu-item{font-size:1.4rem;text-decoration:none}\n` +
+    `${sh} .header__inline-menu .list-menu__item{text-decoration:none}\n`;
 
   // Dual-viewport toggle for classic/adaptive Wix mobile-DOM carry. When a page
   // emits a dual island (desktop content in `.lib-carry-vp-desktop` + a

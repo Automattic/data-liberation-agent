@@ -94,6 +94,17 @@ describe('buildCarryThemeFiles', () => {
     expect(css).toMatch(/\[data-testid="colorUnderlay"\][^}]*pointer-events:none!important/);
   });
 
+  it('site.css reasserts the store-header layout for the isolated header part (Dawn-family, scoped to the store-header wrapper)', () => {
+    const css = byPath('assets/css/site.css');
+    // The carried chrome CSS is :where()-scoped, so the isolated store header loses the
+    // grid/flex/nav rules; reassert them scoped to the store-header wrapper.
+    expect(css).toContain('.lib-carry-vp-desktop .header.header--middle-left');
+    expect(css).toMatch(/\.lib-carry-vp-desktop[^}]*\.header[^}]*display:grid!important/);
+    expect(css).toMatch(/\.lib-carry-vp-desktop \.header__icons\{display:flex!important/);
+    // Never scoped outside the store-header wrapper (must not touch content-page islands).
+    expect(css).not.toMatch(/(^|[^-])body\.lib-carry-site \.header\{display:grid/);
+  });
+
   it('theme.json is valid JSON at version 3', () => {
     expect(JSON.parse(byPath('theme.json')).version).toBe(3);
   });
