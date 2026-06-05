@@ -22,8 +22,9 @@ import {
   type ChromeVariant,
 } from '../../lib/replicate/theme-scaffold-carry.js';
 import { chromeSignature, stripActiveNavState } from '../../lib/replicate/chrome-canonicalize.js';
-import { rewriteResponsiveImages } from '../../lib/replicate/responsive-image-rewrite.js';
-import { appendGalleryMobileGrid } from '../../lib/replicate/gallery-mobile-grid.js';
+import { assembleResponsiveMobile } from '../../lib/replicate/carry-responsive-assemble.js';
+import { fetchMissingCarriedMedia } from '../../lib/replicate/carry-missing-media.js';
+import { localizeCarryFonts } from '../../lib/replicate/carry-fonts.js';
 import { collectCss } from '../../lib/replicate/css-collect.js';
 import { assessBody, readPngHeight, classifyEmptyBodies, type EmptyBody, type PageStat } from '../../lib/screenshot/dynamic-content.js';
 import { loadCarryDesignTokens } from '../../lib/replicate/carry-design-tokens.js';
@@ -198,6 +199,9 @@ export function assembleCarryTheme(input: AssembleInput): AssembleOutput {
       postType: p.postType,
       pageCss: r.mainCss,
       scaffold: r.scaffold,
+      // Dual-viewport mobile carry now rides in the TEMPLATE (scaffoldedTemplate wraps
+      // post-content + the iframe), so post_content stays editable section blocks.
+      mobile: p.mobile,
       chromeKey,
     });
     wxrPages.push({
@@ -474,6 +478,15 @@ export const reconstructPagesCarryHandler: Handler = async (args, ctx) => {
   // so carried nav + body hrefs resolve to the imported permalinks, not the source.
   const linkMap = buildPageLinkMap(outputDir, pages.map((p) => p.sourceUrl));
 
+  // Pre-pass: download any image the carried HTML references but extraction never
+  // captured (no local copy exists, so repoint can't self-host it). Runs BEFORE install
+  // so the fetched assets enter the media map and the rewrite repoints them like the rest.
+  // Best-effort: a failed fetch (e.g. CDN 403) is recorded and left as a CDN ref.
+  const missingMedia = await fetchMissingCarriedMedia(
+    outputDir,
+    carryPages.map((p) => p.bodyHtml),
+  );
+
   // Install the run's media into the alt site + build the CDN→local URL map via
   // the SAME installMediaForUrl the block path uses (installRunMediaMap). Carried
   // <img>/url() references then point at this site's media library, not the CDN.
@@ -512,26 +525,31 @@ export const reconstructPagesCarryHandler: Handler = async (args, ctx) => {
     themeJsonFontFamilies: designTokens.themeJsonFontFamilies,
   });
 
+  // Self-host fonts: the scoped CSS carries the source @font-face rules with Wix-CDN
+  // src URLs. Download each into the theme's assets/fonts/ and rewrite the CSS url() to
+  // a local ../fonts/ path (sheets are enqueued from assets/css/). Best-effort.
+  const fontLocalize = await localizeCarryFonts(themeRoot, themeFiles, { wpRoot });
+
   // Write theme files to disk under wp-content/themes/<carrySlug>.
-  for (const f of themeFiles) {
+  for (const f of fontLocalize.files) {
     const full = join(themeRoot, f.path);
     mkdirSync(dirname(full), { recursive: true });
     writeFileSync(full, f.content);
   }
 
-  // Final per-page island content. Wrap carried <img>s that have a captured mobile
-  // variant in <picture> + a `(max-width:750px)` <source> AFTER media rewriting (so the
-  // mobile CDN URL isn't collapsed onto the single local desktop file), then append an
-  // additive single-column mobile grid next to any Wix pro-gallery.
+  // Final per-page island content. Wrap carried <img>s with a captured mobile variant in
+  // <picture> + a `(max-width:750px)` <source>, and append a single-column mobile grid next
+  // to any Wix pro-gallery — THEN self-host. Both inject steps reference the captured
+  // mobile-crop URLs (responsive-images.json), which are CDN-only (never downloaded), so the
+  // assembly repoints them to the installed DESKTOP local copy of the same media-id via the
+  // run media map. Mobile shows the desktop crop, but every image is self-hosted (zero
+  // source-CDN dependency) — see carry-responsive-assemble.ts.
   const finalPages = wxrPages.map((w) => ({
     slug: w.slug,
     title: w.title,
     isHome: w.isHome,
     postType: w.postType,
-    postContent: appendGalleryMobileGrid(
-      rewriteResponsiveImages(w.postContent, responsiveImages),
-      responsiveImages,
-    ),
+    postContent: assembleResponsiveMobile(w.postContent, responsiveImages, mediaUrlMap),
   }));
 
   // The islands are whole carried page bodies — returning them all inline blows past
@@ -573,6 +591,10 @@ export const reconstructPagesCarryHandler: Handler = async (args, ctx) => {
     emptyBodies,
     mediaInstalled: mediaUrlMap.size,
     mediaErrors,
+    missingMediaDownloaded: missingMedia.downloaded,
+    missingMediaFailed: missingMedia.failed,
+    fontsLocalized: fontLocalize.downloaded,
+    fontsFailed: fontLocalize.failed,
     islandsDir: islandsOutDir ? resolve(islandsOutDir) : undefined,
     pages: pagesResult,
   });

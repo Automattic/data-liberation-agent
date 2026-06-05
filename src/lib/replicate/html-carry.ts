@@ -88,6 +88,19 @@ export function carryHtml(regionHtml: string, opts: CarryOpts): CarryResult {
   // re-root every relative link/asset onto the source domain.
   $('script, noscript, base').remove();
 
+  // Remove dead resource-hint <link>s and any <link> pointing at a builder CDN. In a
+  // static carry the source SPA runtime never executes, so preload/prefetch/preconnect
+  // hints and the builder's JS-bundle CSS chunks (Wix thunderbolt on parastorage/
+  // wixstatic) are inert — but a browser would still prefetch them, a needless CDN
+  // contact. Genuine links (canonical, icon, local stylesheet) are kept.
+  $('link').each((_, el) => {
+    const rel = ($(el).attr('rel') ?? '').toLowerCase();
+    const href = $(el).attr('href') ?? '';
+    const isHint = /\b(preload|prefetch|modulepreload|preconnect|dns-prefetch|prerender)\b/.test(rel);
+    const isBuilderCdn = /(?:parastorage|wixstatic)\.com|\.wix\.com/i.test(href);
+    if (isHint || isBuilderCdn) $(el).remove();
+  });
+
   // Strip inline event handler attributes (onclick, onerror, onload, …).
   $('*').each((_, el) => {
     const attribs = (el as { attribs?: Record<string, string> }).attribs ?? {};

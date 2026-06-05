@@ -63,9 +63,11 @@ async function main(): Promise<void> {
   const res = (await reconstructPagesCarryHandler(
     { outputDir, studioSitePath, themeName, pages: list.pages } as unknown as Parameters<typeof reconstructPagesCarryHandler>[0],
     ctx,
-  )) as { _data: { themeSlug: string; mediaInstalled: number; mediaErrors: unknown[]; fetchErrors: unknown[]; pages: Array<{ slug: string; postContent: string }> } };
+  )) as { _data: { themeSlug: string; mediaInstalled: number; mediaErrors: unknown[]; fetchErrors: unknown[]; missingMediaDownloaded?: number; missingMediaFailed?: unknown[]; fontsLocalized?: number; fontsFailed?: unknown[]; pages: Array<{ slug: string; postContent: string }> } };
   const data = res._data;
-  console.log(`theme: ${data.themeSlug}  media: ${data.mediaInstalled}  mediaErrors: ${data.mediaErrors.length}  fetchErrors: ${data.fetchErrors.length}`);
+  console.log(`theme: ${data.themeSlug}  media: ${data.mediaInstalled}  mediaErrors: ${data.mediaErrors.length}  fetchErrors: ${data.fetchErrors.length}  missingMediaDownloaded: ${data.missingMediaDownloaded ?? 0}  fontsLocalized: ${data.fontsLocalized ?? 0}`);
+  if (data.missingMediaFailed?.length) console.log('  missingMediaFailed:', JSON.stringify(data.missingMediaFailed));
+  if (data.fontsFailed?.length) console.log('  fontsFailed:', JSON.stringify(data.fontsFailed));
   if (data.mediaErrors.length) console.log('  mediaErrors sample:', JSON.stringify(data.mediaErrors.slice(0, 3)));
   if (data.fetchErrors.length) console.log('  fetchErrors:', JSON.stringify(data.fetchErrors));
 

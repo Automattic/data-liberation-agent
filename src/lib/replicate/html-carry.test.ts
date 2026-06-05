@@ -23,6 +23,22 @@ describe('carryHtml', () => {
     expect(html).not.toContain('<!--');
   });
 
+  it('strips dead SPA-runtime <link> hints (preload/prefetch + Wix-CDN), keeps real links', () => {
+    const input =
+      '<link rel="preload" as="script" href="https://siteassets.parastorage.com/pages/thunderbolt?x=1"/>' +
+      '<link rel="stylesheet" href="https://static.parastorage.com/services/wix-thunderbolt/dist/group_7.min.css"/>' +
+      '<link rel="prefetch" href="https://static.wixstatic.com/runtime/x.js"/>' +
+      '<link rel="canonical" href="https://www.example.com/page"/>' +
+      '<div class="c">body</div>';
+    const { html } = carryHtml(input, {});
+    expect(html).not.toContain('parastorage.com');
+    expect(html).not.toContain('wixstatic.com');
+    expect(html).not.toContain('rel="preload"');
+    expect(html).not.toContain('rel="prefetch"');
+    expect(html).toContain('rel="canonical"'); // genuine link kept
+    expect(html).toContain('class="c"');
+  });
+
   it('extracts inline <style> into styleText and removes it from html', () => {
     const { html, styleText } = carryHtml('<style>.a{color:red}</style><div class="a">x</div>', {});
     expect(styleText).toContain('.a{color:red}');
