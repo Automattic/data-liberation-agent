@@ -8,7 +8,7 @@ import { detect, type FullDetectionResult } from '../lib/extraction/detect-platf
 import { fetchSitemap, classifyUrl } from '../lib/extraction/sitemap.js';
 import { WxrBuilder } from '../lib/extraction/wxr-builder.js';
 import { ExtractionLog } from '../lib/extraction/extraction-log.js';
-import { godaddyWmAdapter } from '../adapters/godaddy-wm.js';
+import { godaddyWmAdapter } from '../adapters/godaddy-wm/index.js';
 import { hostingerAdapter } from '../adapters/hostinger.js';
 import { hubspotAdapter } from '../adapters/hubspot.js';
 import { shopifyAdapter } from '../adapters/shopify/index.js';

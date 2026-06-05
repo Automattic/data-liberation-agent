@@ -43,7 +43,7 @@ import { WxrBuilder } from '../lib/extraction/wxr-builder.js';
 import { ImportSession } from '../lib/extraction/import-session.js';
 import { classifyUrl } from '../lib/extraction/sitemap.js';
 import type { PageExtractedEvent } from '../adapters/shared.js';
-import { godaddyWmAdapter } from '../adapters/godaddy-wm.js';
+import { godaddyWmAdapter } from '../adapters/godaddy-wm/index.js';
 import { hostingerAdapter } from '../adapters/hostinger.js';
 import { hubspotAdapter } from '../adapters/hubspot.js';
 import { shopifyAdapter } from '../adapters/shopify/index.js';

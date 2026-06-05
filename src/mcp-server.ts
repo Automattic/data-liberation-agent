@@ -49,7 +49,7 @@ import { validateArtifactsHandler } from './mcp-server/handlers/validate-artifac
 import { NEW_TOOL_SCHEMAS } from './mcp-server/handlers/tool-schemas.js';
 
 // Static adapter imports — add new adapters here (alphabetical)
-import { godaddyWmAdapter } from './adapters/godaddy-wm.js';
+import { godaddyWmAdapter } from './adapters/godaddy-wm/index.js';
 import { hostingerAdapter } from './adapters/hostinger.js';
 import { hubspotAdapter } from './adapters/hubspot.js';
 import { shopifyAdapter } from './adapters/shopify/index.js';
