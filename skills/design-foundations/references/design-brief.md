@@ -14,7 +14,7 @@
 
 ## Source data
 
-Every section of `design.md` fills from `output/<site>/` artifacts, never from the live site:
+Every section of `design.md` fills from `<outputDir>/` artifacts, never from the live site:
 
 | Section | Source |
 |---|---|
@@ -31,7 +31,7 @@ Every section of `design.md` fills from `output/<site>/` artifacts, never from t
 
 ## Filename and path
 
-`output/<site>/design.md` — always at the site output root, alongside `palette.json`, `typography.json`, and `breakpoints.json`. The theme directory is a WP-consumable artifact; `design.md` is the contract driving that artifact.
+`<outputDir>/design.md` — always at the site output root, alongside `palette.json`, `typography.json`, and `breakpoints.json`. The theme directory is a WP-consumable artifact; `design.md` is the contract driving that artifact.
 
 ## The 10-section template
 
@@ -293,7 +293,7 @@ Button surface: {primary hex}
 ## What NOT to include
 
 - **Not a changelog.** Edits go directly into the content, not a "v1 / v2" list.
-- **Not per-section specs.** Those live in `output/<site>/specs/section-<n>.md`. `design.md` is site-wide.
+- **Not per-section specs.** Those live in `<outputDir>/specs/section-<n>.md`. `design.md` is site-wide.
 - **Not copy text.** Heading text, body copy, button labels all live in captured section data. `design.md` describes *style*, not *content*.
 - **Not raw computed-style dumps.** Summaries and tables only. If a section needs 50 lines to describe, it's wrong for this document.
 - **Not WP-specific markup.** No block JSON, no `wp:*` blocks. The emission templates in `references/section-mapping.md` are the WP-specific translation of `design.md` values.

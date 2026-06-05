@@ -2,7 +2,7 @@
 
 > **Since step 6 of `/liberate` (`design-foundations`), the site's `design.md` is the authoritative source for palette roles, font families, shadow stacks, and radius scale.** This file explains *how* to derive each value; `design.md` is *what* was derived. When emitting `theme.json`, copy values from `design.md` and use this file only to resolve format questions — e.g. how to express the captured spacing scale in `settings.spacing.spacingSizes`, or how `@font-face` URLs map into `settings.typography.fontFamilies`. If the two ever disagree, `design.md` wins and this file is the bug.
 
-Translate the tokens and palette data in `output/<site>/palette.json`, `output/<site>/typography.json`, and captured section analysis into a `theme.json` for the generated block theme. Aim for a clean, minimal token set — do not port every computed value verbatim.
+Translate the tokens and palette data in `<outputDir>/palette.json`, `<outputDir>/typography.json`, and captured section analysis into a `theme.json` for the generated block theme. Aim for a clean, minimal token set — do not port every computed value verbatim.
 
 ## Colors
 

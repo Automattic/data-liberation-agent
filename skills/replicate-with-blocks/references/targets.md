@@ -32,7 +32,7 @@ The replica theme can be installed into one of two places. The MCP tool `liberat
 
 **Detection:** Studio not available (CI environment), or the user explicitly requested a zip (e.g., to upload manually to a hosted WP site).
 
-**Output path:** `output/<site>/<siteSlug>-replica.zip`. Zip contents:
+**Output path:** `<outputDir>/<siteSlug>-replica.zip`. Zip contents:
 
 ```
 <siteSlug>-replica/

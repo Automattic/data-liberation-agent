@@ -16,7 +16,7 @@ disable-model-invocation: true
 
 You are a **design sub-orchestrator**. You drive the spec-driven whole-site block-reconstruction flow, delegating judgment to the composable skills below and determinism to MCP tools, then assembling and validating what they return. The `/liberate` root orchestrator calls you inline; you are also independently invocable to re-theme an already-extracted site.
 
-> **Entry contract.** Dispatched by `/liberate` after extraction — **assume** `output/<site>/` already holds the capture (`output.wxr`, `html/*.html`, `screenshots/manifest.json`, media). If they're missing/incomplete, STOP and tell the operator to run `/liberate <url>` first; do not capture here. (Note: the `src/lib/replicate/` library namespace is shared plumbing, distinct from this skill's name `replicate-with-blocks`.)
+> **Entry contract.** Dispatched by `/liberate` after extraction — the `siteDir` from `liberate_paths` is the resolved `<outputDir>`. **Assume it already holds the capture** (`output.wxr`, `html/*.html`, `screenshots/manifest.json`, media). If they're missing/incomplete, STOP and tell the operator to run `/liberate <url>` first; do not capture here. (Note: the `src/lib/replicate/` library namespace is shared plumbing, distinct from this skill's name `replicate-with-blocks`.)
 
 The acceptance bar is source parity, not a pleasant approximation:
 
@@ -28,7 +28,7 @@ The acceptance bar is source parity, not a pleasant approximation:
 
 ## Prerequisites
 
-Confirm these exist in `output/<site>/` before starting:
+Confirm these exist in `<outputDir>/` (the resolved site dir from `liberate_paths` / provided `siteDir`) before starting:
 
 - `design-foundation.json` — produced by `design-foundations`. **Required.** If missing, stop and tell the caller to run `design-foundations` first.
 - `design.md` — frozen brief from `design-foundations`. Required (written in the same step).
@@ -117,7 +117,7 @@ Read `cluster-map.json` and note: how many clusters, which pages are in each, wh
 
 ### Step 3 — Per-cluster representative specs
 
-For each cluster representative, call `liberate_section_extract` with `detail:"full"`. This emits `output/<site>/specs/<rep>/section-<n>-<type>.md` for each section of the representative page.
+For each cluster representative, call `liberate_section_extract` with `detail:"full"`. This emits `<outputDir>/specs/<rep>/section-<n>-<type>.md` for each section of the representative page.
 
 Spec files are the contract between extraction and pattern generation. Each spec contains: interaction model, Y band, background color + brightness, text/accent colors, overlay flags, headings (verbatim), body text (verbatim), buttons (label/href/colors), list items, and image references (uploaded WP-library URLs or `assets/<local-filename>`). For a `review-grid` section the spec also carries `reviews[]` — source-VERBATIM `{ category, stars, quote, author }` records pulled from the served HTML by the deterministic `review-extract.ts` extractor. When `reviews[]` is present, the builder MUST render them verbatim and MUST NOT synthesize review prose; when a review band is detected but `reviews[]` is empty, use the missing-content fallback (placeholder + run-report flag).
 
@@ -252,7 +252,7 @@ Verify: `themeWritten > 0` and `warnings` empty. Capture the replica URL.
   "misfitPages": [],
   "qa": { "responsivePass": true, "qualitative": "B", "itersUsed": 2 },
   "openQuestions": [],
-  "runReport": "output/example.com/run-report.json"
+  "runReport": "<outputDir>/run-report.json"
 }
 ```
 
