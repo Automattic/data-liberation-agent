@@ -81,6 +81,19 @@ describe('buildRunReport — html fallback islands', () => {
   });
 });
 
+describe('buildRunReport — unassigned regions', () => {
+  it('counts unassignedRegions and warns', () => {
+    const i = good();
+    i.unassignedRegions = 1;
+    const r = buildRunReport(i);
+    expect(r.summary.unassignedRegions).toBe(1);
+    expect(r.verdict.overall).toBe('warn');
+  });
+  it('defaults unassignedRegions to 0 when absent (back-compat)', () => {
+    expect(buildRunReport(good()).summary.unassignedRegions).toBe(0);
+  });
+});
+
 describe('buildRunReport — section parity gate (faithful recreation)', () => {
   it('back-compat: an otherwise-clean run with no pageParity still passes', () => {
     expect(buildRunReport(good()).verdict.overall).toBe('pass');

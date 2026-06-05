@@ -22,6 +22,8 @@ export interface RunReportInput {
   htmlFallbackSections?: number;
   /** Fallback islands by reason, e.g. { dropped_images: 2 }. Detail in fallback-diagnostics.json. */
   htmlFallbackByReason?: Record<string, number>;
+  /** Total source landmarks that weren't placed anywhere (body section, header, or footer). Warning-level. */
+  unassignedRegions?: number;
   /** Per-page visual-parity records. When present, the verdict is gated on them: any
    *  unaccepted divergent section, or any reconstructed page with no sampled sections,
    *  is a HARD fail. Absent → parity gate off (back-compat). */
@@ -41,6 +43,7 @@ export interface RunReport {
     provenanceFlags: number; fallbackPages: number;
     htmlFallbackSections: number;
     htmlFallbackByReason: Record<string, number>;
+    unassignedRegions: number;
     sectionsDivergent: number; sectionsAccepted: number; pagesParityUnverified: number;
     cost: { tokens?: number; subagents?: number; skillCalls?: number };
   };
@@ -79,7 +82,8 @@ export function buildRunReport(input: RunReportInput): RunReport {
     overall = 'fail';
   } else if (
     input.fallbackPages > 0 || input.pagesMisfit > 0 ||
-    input.provenanceFlags > 0 || htmlFallbackSections > 0 || (input.knownGaps?.length ?? 0) > 0
+    input.provenanceFlags > 0 || htmlFallbackSections > 0 || (input.knownGaps?.length ?? 0) > 0 ||
+    (input.unassignedRegions ?? 0) > 0
   ) {
     overall = 'warn';
   } else {
@@ -100,6 +104,7 @@ export function buildRunReport(input: RunReportInput): RunReport {
       fallbackPages: input.fallbackPages,
       htmlFallbackSections,
       htmlFallbackByReason: input.htmlFallbackByReason ?? {},
+      unassignedRegions: input.unassignedRegions ?? 0,
       sectionsDivergent,
       sectionsAccepted,
       pagesParityUnverified,

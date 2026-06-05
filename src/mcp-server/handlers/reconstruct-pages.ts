@@ -34,6 +34,9 @@ import { deriveInstallThemeSlug } from './install-theme.js';
 import { themeCacheFlushCommands } from './install-theme.js';
 import type { Handler } from '../handler-types.js';
 import type { FallbackDiagnostic } from '../../lib/replicate/fallback-diagnostic.js';
+import { extractThemeChromeFromHtml } from '../../lib/replicate/source-chrome.js';
+import { reconcileRegions, type PlacedRegion, type RegionSelectionReport } from '../../lib/replicate/region-audit.js';
+import { slugify } from '../../adapters/shared.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -380,6 +383,41 @@ export const reconstructPagesHandler: Handler = async (args, ctx) => {
     site: basename(resolve(outputDir)),
     diagnostics: allFallbackDiagnostics,
   });
+
+  // Region audit (#2): reconcile each page's source landmark census against what
+  // was placed (body section selectors + chrome presence). Chrome is site-level —
+  // derived once from the homepage's served HTML (same extractor theme-scaffold uses).
+  const homepage = pages.find((pg) => pg.isHome) ?? pages[0];
+  const chromePlaced: PlacedRegion[] = [];
+  try {
+    const homeHtml = readFileSync(join(resolve(outputDir), 'html', `${slugify(homepage.sourceUrl)}.html`), 'utf8');
+    const chrome = extractThemeChromeFromHtml(homeHtml, homepage.sourceUrl);
+    if (chrome.header?.links?.length || chrome.header?.logoUrl) {
+      chromePlaced.push({ kind: 'header_part', role: 'header', selector: chrome.header.sourceSelector });
+    }
+    if (chrome.footer?.links?.length || chrome.footer?.logoUrl) {
+      chromePlaced.push({ kind: 'footer_part', role: 'footer', selector: chrome.footer.sourceSelector });
+    }
+  } catch {
+    // Homepage HTML unreadable — assume chrome present (conservative: avoid false
+    // "dropped nav/footer" flags when we simply can't inspect the source).
+    chromePlaced.push({ kind: 'header_part', role: 'header' }, { kind: 'footer_part', role: 'footer' });
+  }
+  const regionReports: RegionSelectionReport[] = pages.map((p) => {
+    const census = specsStore.getLandmarks(p.sourceUrl) ?? [];
+    const bodyPlaced: PlacedRegion[] = (specsByPage.get(p.slug) ?? []).map((s) => ({
+      kind: 'page_body_section' as const,
+      selector: s.selector,
+    }));
+    return reconcileRegions(census, [...bodyPlaced, ...chromePlaced], p.slug, p.sourceUrl);
+  });
+  writeJsonArtifact(join(resolve(outputDir), 'region-audit.json'), {
+    schema: 1,
+    site: basename(resolve(outputDir)),
+    pages: regionReports,
+  });
+  const unassignedRegions = regionReports.reduce((n, r) => n + r.counts.unassigned, 0);
+
   return ctx.textResult({
     ok: extractErrors.length === 0 && report.every((r) => r.ok),
     themeSlug,
@@ -389,6 +427,7 @@ export const reconstructPagesHandler: Handler = async (args, ctx) => {
     mediaInstalled: mediaResult.installed.length,
     htmlFallbackSections,
     htmlFallbackByReason,
+    unassignedRegions,
     specsFromCache,
     specsFromLive,
     extractErrors,
