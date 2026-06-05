@@ -34,6 +34,7 @@ import { installThemeHandler } from './mcp-server/handlers/install-theme.js';
 import { themeScaffoldHandler } from './mcp-server/handlers/theme-scaffold.js';
 import { reconstructPagesHandler } from './mcp-server/handlers/reconstruct-pages.js';
 import { reconstructPagesCarryHandler } from './mcp-server/handlers/reconstruct-pages-carry.js';
+import { blockifyWxrHandler } from './mcp-server/handlers/blockify-wxr.js';
 import { previewStopHandler } from './mcp-server/handlers/preview-stop.js';
 import { screenshotHandler } from './mcp-server/handlers/screenshot.js';
 import { designFoundationScaffoldHandler } from './mcp-server/handlers/design-foundation-scaffold.js';
@@ -401,6 +402,19 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: 'liberate_blockify_wxr',
+      description: 'BULK blog-body block conversion (blocks reconstruct path ONLY). Rewrites every post/page content:encoded body in output.wxr through the source platform adapter\'s block recipe (seam 2) so imported posts land as editable Gutenberg blocks instead of one Classic block (e.g. Squarespace sqs-block bodies). Lossless: bodies the recipe can\'t convert are left verbatim, and all other items (attachments, nav menu items, comments, terms) are preserved unchanged. No-op when the platform adapter has no block recipe. Resolves the platform from session.json (recorded at extraction); pass `platform` to override. Run AFTER extraction and BEFORE liberate_import. The theme/carry path must NOT call this.',
+      inputSchema: {
+        type: 'object' as const,
+        properties: {
+          outputDir: { type: 'string', description: 'Liberation output directory holding output.wxr + session.json.' },
+          wxrPath: { type: 'string', description: 'Override the WXR path. Defaults to <outputDir>/output.wxr.' },
+          platform: { type: 'string', description: 'Override the platform adapter id (else read from session.json).' },
+        },
+        required: ['outputDir'],
+      },
+    },
+    {
       name: 'liberate_reconstruct_pages',
       description: 'Deterministically reconstruct EVERY content page from its OWN captured section specs (no shared cluster skeleton, no carried-HTML fallback). For each page: capture computed-style section specs (Playwright), download + install its section media (incl. sibling background-image heroes) into the WP library, reconstruct verbatim block-pattern markup with mediaMapped images + theme tokens, GATE through validate_artifacts (escaping/injection/provenance — never installs a failing pattern), and write patterns/page-<slug>.php + templates/page-<slug>.html (+ front-page.html for isHome) + icon SVG assets into the running Studio theme, then flush the pattern cache. This is the primary page-faithfulness path: it replaces reconstructing only cluster representatives and rendering the rest as raw source HTML. The theme shell (header/footer/theme.json) must already be installed via liberate_theme_scaffold/install.',
       inputSchema: {
@@ -677,6 +691,7 @@ const handlers: Record<string, Handler> = {
   liberate_validate_artifacts: validateArtifactsHandler,
   liberate_reconstruct_pages: reconstructPagesHandler,
   liberate_reconstruct_pages_carry: reconstructPagesCarryHandler,
+  liberate_blockify_wxr: blockifyWxrHandler,
 };
 
 function makeContext(): HandlerContext {

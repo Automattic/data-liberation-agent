@@ -4,7 +4,7 @@
 
 `data-liberation-agent` extracts content from closed web platforms (GoDaddy Websites & Marketing, Hostinger, HubSpot, Shopify, Squarespace, Webflow, Weebly, Wix) and produces WordPress-compatible WXR files. All eight platform adapters are implemented.
 
-Three entry points — MCP server (11 tools), CLI (`src/cli.ts`), and Claude Code plugin (`claude plugin add .`) — all share `src/lib/` and `src/adapters/`. The plugin just wraps the MCP server.
+Three entry points — MCP server (30 tools), CLI (`src/cli.ts`), and Claude Code plugin (`claude plugin add .`) — all share `src/lib/` and `src/adapters/`. The plugin just wraps the MCP server.
 
 The `scripts/` directory contains legacy standalone extraction scripts (Squarespace via CDP, Wix via Playwright). These predate the adapter system and are kept for reference.
 
@@ -22,7 +22,7 @@ Adapters produce structured content and call into `WxrBuilder`, `ExtractionLog`,
 Both are opt-in, declared on the adapter object, and consumed by later pipeline stages — the stage subsystems (screenshotter, reconstructor) stay adapter-agnostic; the handlers that already resolve the adapter do the wiring. Types live in `src/adapters/page-actions.ts`.
 
 - **`capture?: AdapterCapture`** (seam 1) — `removeSelectors: string[]` (plus an optional imperative `prepare(page, ctx)`) removed from the live page in `screenshotter.ts` after settle and BEFORE screenshots / carried HTML / mobile carry / `SectionSpec` are captured, so one removal cleans every artifact. Best-effort (never fails capture). Put it in `<platform>/capture.ts`; example: `src/adapters/shopify/capture.ts` (strips `#upCart` + Klaviyo teaser chrome).
-- **`blocks?: AdapterBlocks`** (seam 2) — a content→Gutenberg-blocks recipe (a declarative `recipes[]` table and/or a whole-body `htmlToBlocks(html, ctx)` fn). Applied ONLY on the blocks reconstruct path (`page-reconstruct.ts`, before the `core/html` fallback island); the theme/carry path never invokes it. Put it in `<platform>/blocks.ts`; example: `src/adapters/squarespace/blocks.ts`.
+- **`blocks?: AdapterBlocks`** (seam 2) — a content→Gutenberg-blocks recipe (a declarative `recipes[]` table and/or a whole-body `htmlToBlocks(html, ctx)` fn). Applied ONLY on the blocks reconstruct path; the theme/carry path never invokes it. Two firing points, both blocks-path-gated: (a) per visual section in `page-reconstruct.ts`, before the `core/html` fallback island; (b) in BULK over post/page `content:encoded` bodies via the `liberate_blockify_wxr` tool (`src/lib/extraction/blockify-wxr.ts`), run after extraction and before import. Put the recipe in `<platform>/blocks.ts`; example: `src/adapters/squarespace/blocks.ts`.
 
 ## Resume State Files
 
