@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { readFileSync } from 'fs';
-import { detectFromUrl, detectFromHttp, PATH_PROBES } from '../src/lib/extraction/detect-platform.js';
+import { detectFromUrl, detectFromHttp, PATH_PROBES } from '../src/lib/detect-platform/index.js';
 
 describe('detectFromUrl (heuristics)', () => {
   it('detects wixsite.com', () => {

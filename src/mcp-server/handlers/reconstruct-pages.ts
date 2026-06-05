@@ -33,7 +33,7 @@ import { MediaStubStore } from '../../lib/extraction/media-stubs.js';
 import { deriveInstallThemeSlug } from './install-theme.js';
 import { themeCacheFlushCommands } from './install-theme.js';
 import type { Handler } from '../handler-types.js';
-import { detect } from '../../lib/extraction/detect-platform.js';
+import { detect } from '../../lib/detect-platform/index.js';
 import { ImportSession } from '../../lib/extraction/import-session.js';
 import type { FallbackDiagnostic } from '../../lib/replicate/fallback-diagnostic.js';
 import { extractThemeChromeFromHtml } from '../../lib/replicate/source-chrome.js';

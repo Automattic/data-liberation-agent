@@ -1,4 +1,4 @@
-import { detect } from '../../lib/extraction/detect-platform.js';
+import { detect } from '../../lib/detect-platform/index.js';
 import type { Handler } from '../handler-types.js';
 
 export const detectHandler: Handler = async (args, ctx) => {

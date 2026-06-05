@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { detect } from '../../lib/extraction/detect-platform.js';
+import { detect } from '../../lib/detect-platform/index.js';
 import { ExtractionLog } from '../../lib/extraction/extraction-log.js';
 import { WxrBuilder } from '../../lib/wxr/index.js';
 import { rehydrateBuilderFromWxr } from '../../lib/wxr/index.js';

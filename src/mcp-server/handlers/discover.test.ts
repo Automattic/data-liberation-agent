@@ -4,7 +4,7 @@ import { join } from 'node:path';
 
 // Force a known platform so ctx.findAdapter resolves to our fake adapter and no
 // network detection runs.
-vi.mock('../../lib/extraction/detect-platform.js', () => ({
+vi.mock('../../lib/detect-platform/index.js', () => ({
   detect: vi.fn(async () => ({ platform: 'fake', confidence: 'high', signals: [] })),
 }));
 

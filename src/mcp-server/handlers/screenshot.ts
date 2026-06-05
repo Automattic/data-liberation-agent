@@ -1,7 +1,7 @@
 import { mkdirSync } from 'node:fs';
 import { fetchSitemap } from '../../lib/extraction/sitemap.js';
 import { ExtractionLog } from '../../lib/extraction/extraction-log.js';
-import { detect } from '../../lib/extraction/detect-platform.js';
+import { detect } from '../../lib/detect-platform/index.js';
 import type { Handler } from '../handler-types.js';
 
 export const screenshotHandler: Handler = async (args, ctx) => {

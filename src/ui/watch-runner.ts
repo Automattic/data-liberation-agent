@@ -37,7 +37,7 @@ import { designSidecarPath } from '../lib/screenshot/design-capture-runner.js';
 import type { ExtractedNav } from '../lib/screenshot/nav-extract.js';
 import { createHash } from 'node:crypto';
 import { createInterface } from 'node:readline';
-import { detect } from '../lib/extraction/detect-platform.js';
+import { detect } from '../lib/detect-platform/index.js';
 import { ExtractionLog } from '../lib/extraction/extraction-log.js';
 import { WxrBuilder } from '../lib/wxr/index.js';
 import { ImportSession } from '../lib/extraction/import-session.js';

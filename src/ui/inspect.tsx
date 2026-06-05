@@ -3,7 +3,7 @@ import { render, useApp, Box, Text } from 'ink';
 import Spinner from 'ink-spinner';
 import { Header } from './header.js';
 import { platformColor, confidenceBadge, pluralize } from './format.js';
-import { detect, type FullDetectionResult } from '../lib/extraction/detect-platform.js';
+import { detect, type FullDetectionResult } from '../lib/detect-platform/index.js';
 import { fetchSitemap, classifyUrl } from '../lib/extraction/sitemap.js';
 
 export interface InspectProps {
