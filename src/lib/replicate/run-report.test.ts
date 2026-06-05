@@ -70,6 +70,15 @@ describe('buildRunReport — html fallback islands', () => {
   it('defaults htmlFallbackSections to 0 when absent (back-compat)', () => {
     expect(buildRunReport(good()).summary.htmlFallbackSections).toBe(0);
   });
+  it('surfaces htmlFallbackByReason in the summary', () => {
+    const i = good();
+    i.htmlFallbackSections = 3;
+    i.htmlFallbackByReason = { dropped_images: 2, text_coverage_below_floor: 1 };
+    expect(buildRunReport(i).summary.htmlFallbackByReason).toEqual({ dropped_images: 2, text_coverage_below_floor: 1 });
+  });
+  it('defaults htmlFallbackByReason to {} when absent (back-compat)', () => {
+    expect(buildRunReport(good()).summary.htmlFallbackByReason).toEqual({});
+  });
 });
 
 describe('buildRunReport — section parity gate (faithful recreation)', () => {

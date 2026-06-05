@@ -16,8 +16,8 @@
 
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { existsSync, mkdirSync, writeFileSync, readFileSync, renameSync } from 'node:fs';
+import { basename, dirname, join, resolve } from 'node:path';
 import type { PaletteToken } from '../../lib/replicate/footer-color.js';
 import type { FontFamilyToken } from '../../lib/replicate/page-reconstruct.js';
 import { extractFullFromUrl, rewriteThroughMediaMap } from '../../lib/replicate/section-extract.js';
@@ -33,8 +33,15 @@ import { MediaStubStore } from '../../lib/extraction/media-stubs.js';
 import { deriveInstallThemeSlug } from './install-theme.js';
 import { themeCacheFlushCommands } from './install-theme.js';
 import type { Handler } from '../handler-types.js';
+import type { FallbackDiagnostic } from '../../lib/replicate/fallback-diagnostic.js';
 
 const execFileAsync = promisify(execFile);
+
+function writeJsonArtifact(path: string, data: unknown): void {
+  const tmp = `${path}.${process.pid}.tmp`;
+  writeFileSync(tmp, JSON.stringify(data, null, 2));
+  renameSync(tmp, path);
+}
 
 interface PageArg {
   slug: string;
@@ -332,6 +339,7 @@ export const reconstructPagesHandler: Handler = async (args, ctx) => {
       assets: built.expectedAssets.length,
       provenanceFlags: built.provenanceFlags,
       fallbackSections: built.fallbackSections,
+      fallbackDiagnostics: built.fallbackDiagnostics,
       postContentUpdated: postUpdated,
       blocksFixed: fixResult?.changed ?? false,
     });
@@ -362,6 +370,16 @@ export const reconstructPagesHandler: Handler = async (args, ctx) => {
   // Site-level count of sections emitted as verbatim core/html islands — feeds the
   // run-report's warning-level htmlFallbackSections so QA can upgrade each to blocks.
   const htmlFallbackSections = report.reduce((n, r) => n + ((r.fallbackSections as number) ?? 0), 0);
+  const allFallbackDiagnostics = report.flatMap((r) => (r.fallbackDiagnostics as FallbackDiagnostic[] | undefined) ?? []);
+  const htmlFallbackByReason = allFallbackDiagnostics.reduce<Record<string, number>>((acc, d) => {
+    acc[d.reasonCode] = (acc[d.reasonCode] ?? 0) + 1;
+    return acc;
+  }, {});
+  writeJsonArtifact(join(resolve(outputDir), 'fallback-diagnostics.json'), {
+    schema: 1,
+    site: basename(resolve(outputDir)),
+    diagnostics: allFallbackDiagnostics,
+  });
   return ctx.textResult({
     ok: extractErrors.length === 0 && report.every((r) => r.ok),
     themeSlug,
@@ -370,6 +388,7 @@ export const reconstructPagesHandler: Handler = async (args, ctx) => {
     mediaDownloaded: downloaded,
     mediaInstalled: mediaResult.installed.length,
     htmlFallbackSections,
+    htmlFallbackByReason,
     specsFromCache,
     specsFromLive,
     extractErrors,
