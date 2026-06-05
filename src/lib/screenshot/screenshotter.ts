@@ -305,8 +305,8 @@ async function capturePerViewport(args: CapturePerViewportArgs): Promise<void> {
   // unset.
   if (isDesktop && plan.captureSections) {
     try {
-      const specs = await extractFull(page, {}, evaluateTimeoutMs);
-      SectionSpecsStore.load(outputDir).set(url, specs, { width: viewport.width, height: viewport.height });
+      const { specs, landmarks } = await extractFull(page, {}, evaluateTimeoutMs);
+      SectionSpecsStore.load(outputDir).set(url, specs, landmarks, { width: viewport.width, height: viewport.height });
       // Point at the store's ACTUAL path (keyed by slugify(url)); the screenshot
       // `slug` may be a collision-deduped variant (`-2`), which the store doesn't use.
       entry.sections = `sections/${slugify(url)}.json`;

@@ -226,8 +226,9 @@ export const reconstructPagesHandler: Handler = async (args, ctx) => {
       if (specs) {
         specsFromCache++;
       } else {
-        specs = await extractFullFromUrl(p.sourceUrl, {});
-        specsStore.set(p.sourceUrl, specs); // cache for the next run
+        const live = await extractFullFromUrl(p.sourceUrl, {});
+        specs = live.specs;
+        specsStore.set(p.sourceUrl, live.specs, live.landmarks); // cache specs + census for the next run
         specsFromLive++;
       }
       specsByPage.set(p.slug, specs);

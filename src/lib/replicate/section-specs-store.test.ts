@@ -39,7 +39,7 @@ describe('SectionSpecsStore', () => {
       const url = 'https://example.com/about';
       const sections = [spec({ headings: ['About'], fullBleed: true } as Partial<SectionSpec>), spec()];
       expect(store.get(url)).toBeNull(); // nothing yet
-      store.set(url, sections);
+      store.set(url, sections, []);
       expect(store.has(url)).toBe(true);
       const got = store.get(url);
       expect(got).not.toBeNull();
@@ -77,7 +77,7 @@ describe('SectionSpecsStore', () => {
       const a = 'https://example.com/page?v=1';
       const b = 'https://example.com/page?v=2';
       expect(store.pathFor(a)).toBe(store.pathFor(b));
-      store.set(a, [spec({ headings: ['Page A'] })]);
+      store.set(a, [spec({ headings: ['Page A'] })], []);
       expect(store.get(a)).not.toBeNull(); // exact URL hits
       expect(store.get(b)).toBeNull(); // collision → miss, not wrong-page specs
     } finally {
@@ -102,7 +102,7 @@ describe('SectionSpecsStore', () => {
     const dir = mkdtempSync(join(TMP_ROOT, 'out-'));
     try {
       const store = SectionSpecsStore.load(dir);
-      store.set('https://example.com/home', [spec()]);
+      store.set('https://example.com/home', [spec()], []);
       const files = readdirSync(join(dir, 'sections'));
       expect(files.some((f) => f.endsWith('.tmp'))).toBe(false);
       expect(files).toContain('home.json');
@@ -116,7 +116,7 @@ describe('SectionSpecsStore', () => {
     try {
       const store = SectionSpecsStore.load(dir);
       const url = 'https://example.com/vp';
-      store.set(url, [spec()]);
+      store.set(url, [spec()], []);
       const f = JSON.parse(readFileSync(store.pathFor(url), 'utf8'));
       expect(f.viewport).toEqual({ width: 1440, height: 900 });
       expect(f.schema).toBe(SECTION_SPECS_SCHEMA);
@@ -124,5 +124,18 @@ describe('SectionSpecsStore', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it('round-trips sections + landmarks and invalidates an older schema', () => {
+    const dir = mkdtempSync(join(TMP_ROOT, 'out-'));
+    const store = SectionSpecsStore.load(dir);
+    const landmarks = [{ role: 'nav', tag: 'nav', selector: 'nav.site-nav', textLength: 40, mediaCount: 0 }];
+    store.set('https://example.test/', [], landmarks as never);
+    expect(store.getLandmarks('https://example.test/')).toEqual(landmarks);
+    // schema mismatch → miss
+    const p = store.pathFor('https://example.test/');
+    const raw = JSON.parse(readFileSync(p, 'utf8')); raw.schema = 6;
+    writeFileSync(p, JSON.stringify(raw));
+    expect(store.getLandmarks('https://example.test/')).toBeNull();
   });
 });

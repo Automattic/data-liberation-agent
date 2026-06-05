@@ -18,7 +18,7 @@ export const sectionExtractHandler: Handler = async (args, ctx) => {
     const mediaMap = (args.mediaMap as Record<string, string> | undefined) ?? {};
     const cdpPort = typeof args.cdpPort === 'number' ? (args.cdpPort as number) : undefined;
     try {
-      const specs = await extractFullFromUrl(url, mediaMap, { cdpPort });
+      const { specs } = await extractFullFromUrl(url, mediaMap, { cdpPort });
       return ctx.textResult(specs);
     } catch (err) {
       return ctx.errorResult(

@@ -26,7 +26,7 @@
 import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { slugify } from '../../adapters/shared.js';
-import type { SectionSpec } from './section-extract.js';
+import type { SectionSpec, SourceLandmark } from './section-extract.js';
 
 /**
  * Bump when `SectionSpec`'s shape changes in a way that affects reconstruction.
@@ -42,7 +42,8 @@ import type { SectionSpec } from './section-extract.js';
 // v6: sections now persist `styledHtml` (capped) — a computed-style-inlined
 // snapshot powering the R4b deterministic styled-island floor. Older caches lack
 // it → invalidate + re-extract so the floor renders styled, not bare.
-export const SECTION_SPECS_SCHEMA = 6;
+// v7: + SectionSpec.selector and a landmarks census (region audit #2)
+export const SECTION_SPECS_SCHEMA = 7;
 
 interface SectionSpecsFile {
   schema: number;
@@ -52,6 +53,8 @@ interface SectionSpecsFile {
    *  relative, so this records the basis for the capture (desktop 1440×900). */
   viewport: { width: number; height: number };
   sections: SectionSpec[];
+  /** Top-level source landmarks captured in the same walk (region audit #2). */
+  landmarks: SourceLandmark[];
 }
 
 /**
@@ -103,6 +106,7 @@ export class SectionSpecsStore {
   set(
     sourceUrl: string,
     sections: SectionSpec[],
+    landmarks: SourceLandmark[],
     viewport: { width: number; height: number } = { width: 1440, height: 900 },
   ): void {
     const file: SectionSpecsFile = {
@@ -111,6 +115,7 @@ export class SectionSpecsStore {
       capturedAt: new Date().toISOString(),
       viewport,
       sections,
+      landmarks,
     };
     const p = this.pathFor(sourceUrl);
     mkdirSync(dirname(p), { recursive: true });
@@ -121,5 +126,19 @@ export class SectionSpecsStore {
     const tmp = `${p}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
     writeFileSync(tmp, JSON.stringify(file));
     renameSync(tmp, p);
+  }
+
+  /** Cached landmark census for a URL, or `null` on any miss (same rules as get()). */
+  getLandmarks(sourceUrl: string): SourceLandmark[] | null {
+    const p = this.pathFor(sourceUrl);
+    if (!existsSync(p)) return null;
+    try {
+      const f = JSON.parse(readFileSync(p, 'utf8')) as SectionSpecsFile;
+      if (f.schema !== SECTION_SPECS_SCHEMA) return null;
+      if (f.sourceUrl !== sourceUrl) return null;
+      return Array.isArray(f.landmarks) ? f.landmarks : [];
+    } catch {
+      return null;
+    }
   }
 }

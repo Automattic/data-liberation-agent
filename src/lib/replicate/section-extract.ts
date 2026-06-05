@@ -800,6 +800,19 @@ export interface SectionSpec {
   styledHtml?: string;
 }
 
+/** A top-level source landmark, for the region audit (#2). Collected in the same
+ *  browser walk as the sections so its selector matches theirs by construction. */
+export interface SourceLandmark {
+  role: 'main' | 'nav' | 'header' | 'footer' | 'section' | 'article';
+  tag: string;
+  /** buildSelector(parts), built Node-side. */
+  selector: string;
+  /** Visible text length — actionability signal (skip-links/empty fall below floor). */
+  textLength: number;
+  /** Foreground media count (img/video/picture) — actionability signal. */
+  mediaCount: number;
+}
+
 // ---------------------------------------------------------------------------
 // extractFull — FIDELITY path. Runs inside the browser via page.evaluate.
 //
@@ -1025,7 +1038,7 @@ export async function extractFull(
   page: Page,
   mediaMap: Record<string, string>,
   timeoutMs = 15_000,
-): Promise<SectionSpec[]> {
+): Promise<{ specs: SectionSpec[]; landmarks: SourceLandmark[] }> {
   const raw = await withEvaluateTimeout(
     page.evaluate(() => {
       // ====== ported helpers (extract.js / extract-section.js) ==============
@@ -2535,13 +2548,30 @@ export async function extractFull(
         | 'inherited'
         | null;
 
-      return deduped.slice(0, 25).map((entry, i) => buildSection(entry, i));
+      const LANDMARK_TAGS = ['main', 'nav', 'header', 'footer', 'section', 'article'];
+      const landmarkEls = Array.from(document.querySelectorAll(LANDMARK_TAGS.join(',')))
+        .filter((el) => {
+          for (let a = el.parentElement; a; a = a.parentElement) {
+            if (LANDMARK_TAGS.includes(a.tagName.toLowerCase())) return false; // nested → skip
+          }
+          return true;
+        })
+        .filter(isVisible);
+      const landmarks = landmarkEls.map((el) => ({
+        role: el.tagName.toLowerCase(),
+        tag: el.tagName.toLowerCase(),
+        selectorParts: selectorPartsOf(el),
+        textLength: (el.textContent || '').replace(/\s+/g, ' ').trim().length,
+        mediaCount: el.querySelectorAll('img,video,picture').length,
+      }));
+      const rows = deduped.slice(0, 25).map((entry, i) => buildSection(entry, i));
+      return { rows, landmarks };
     }),
     timeoutMs,
   );
 
   // Classify back in Node (same code as the unit tests) and assemble specs.
-  return raw.map((r, i) => {
+  const specs = raw.rows.map((r, i) => {
     const rr = r as unknown as RawSection & { motionAnimatedElements: number };
     let interactionModel = classifySection(rr.features);
 
@@ -2711,6 +2741,15 @@ export async function extractFull(
         : {}),
     };
   });
+
+  const landmarks: SourceLandmark[] = raw.landmarks.map((l) => ({
+    role: l.role as SourceLandmark['role'],
+    tag: l.tag,
+    selector: buildSelector(l.selectorParts as SelectorParts),
+    textLength: l.textLength,
+    mediaCount: l.mediaCount,
+  }));
+  return { specs, landmarks };
 }
 
 // ---------------------------------------------------------------------------
@@ -2723,7 +2762,7 @@ export async function extractFullFromUrl(
   url: string,
   mediaMap: Record<string, string>,
   opts: { cdpPort?: number; timeoutMs?: number; settleMs?: number } = {},
-): Promise<SectionSpec[]> {
+): Promise<{ specs: SectionSpec[]; landmarks: SourceLandmark[] }> {
   // Same-origin hygiene: a single URL trivially shares its own origin, but this
   // also normalizes/validates the URL the same way the capture pipeline does.
   enforceSameOrigin(url, [url]);
