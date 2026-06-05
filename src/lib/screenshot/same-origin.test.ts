@@ -47,6 +47,48 @@ describe('enforceSameOrigin', () => {
     ).toThrow(SameOriginViolation);
   });
 
+  it('treats a leading www. as origin-equivalent: apex primary + www urls', () => {
+    expect(() =>
+      enforceSameOrigin('https://example.com', [
+        'https://www.example.com/a',
+        'https://www.example.com/b',
+      ]),
+    ).not.toThrow();
+  });
+
+  it('treats a leading www. as origin-equivalent: www primary + apex urls', () => {
+    expect(() =>
+      enforceSameOrigin('https://www.example.com', [
+        'https://example.com/a',
+        'https://example.com/b',
+      ]),
+    ).not.toThrow();
+  });
+
+  it('accepts a www/apex mix within the same urls[] list', () => {
+    expect(() =>
+      enforceSameOrigin(null, ['https://example.com/a', 'https://www.example.com/b']),
+    ).not.toThrow();
+  });
+
+  it('still rejects a genuinely different host even with www stripping', () => {
+    expect(() =>
+      enforceSameOrigin('https://www.example.com', ['https://www.evil.com/x']),
+    ).toThrow(SameOriginViolation);
+  });
+
+  it('does not collapse www onto a different bare host (www.example vs example2)', () => {
+    expect(() =>
+      enforceSameOrigin('https://www.example.com', ['https://example2.com/x']),
+    ).toThrow(SameOriginViolation);
+  });
+
+  it('still distinguishes protocol when only www differs', () => {
+    expect(() =>
+      enforceSameOrigin('https://example.com', ['http://www.example.com/a']),
+    ).toThrow(SameOriginViolation);
+  });
+
   it('SameOriginViolation exposes violations and expected fields', () => {
     try {
       enforceSameOrigin('https://example.com', ['https://evil.com/x', 'https://evil2.com/y']);
