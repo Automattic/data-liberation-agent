@@ -31,6 +31,9 @@ export interface ThemeChromeEvidence {
      * cart/account/search) gets none, instead of inventing them.
      */
     utilities?: { search?: boolean; account?: boolean; cart?: boolean };
+    /** Source selector the chrome was matched from (display/tiebreak for the
+     *  region audit #2; the audit's join is by role). */
+    sourceSelector?: string;
   };
   footer?: {
     /** Footer logo (often a white/inverse variant), rendered as the first column. */
@@ -40,8 +43,14 @@ export interface ThemeChromeEvidence {
     /** Footer links — INCLUDING tel:/mailto: contact links (kept, unlike the
      *  primary nav) so a "call us" phone number isn't dropped. */
     links: ThemeChromeLink[];
+    /** Source selector the chrome was matched from (display/tiebreak for the
+     *  region audit #2; the audit's join is by role). */
+    sourceSelector?: string;
   };
 }
+
+const HEADER_SELECTORS = ['header', '[role="banner"]', '.wixui-header', '[data-testid="header"]', '#header', '.site-header'];
+const FOOTER_SELECTORS = ['footer', '[role="contentinfo"]', '.wixui-footer', '[data-testid="footer"]', '#footer', '.site-footer'];
 
 const IGNORE_LINK_LABELS = new Set([
   '',
@@ -103,22 +112,8 @@ export function extractThemeChromeFromHtml(html: string, sourceUrl: string): The
   const $ = cheerio.load(html);
   $('script, style, noscript').remove();
 
-  const $header = firstUseful($, [
-    'header',
-    '[role="banner"]',
-    '.wixui-header',
-    '[data-testid="header"]',
-    '#header',
-    '.site-header',
-  ]);
-  const $footer = firstUseful($, [
-    'footer',
-    '[role="contentinfo"]',
-    '.wixui-footer',
-    '[data-testid="footer"]',
-    '#footer',
-    '.site-footer',
-  ]);
+  const $header = firstUseful($, HEADER_SELECTORS);
+  const $footer = firstUseful($, FOOTER_SELECTORS);
 
   const out: ThemeChromeEvidence = {};
   if ($header.length > 0) {
@@ -129,6 +124,7 @@ export function extractThemeChromeFromHtml(html: string, sourceUrl: string): The
       tone: detectHeaderTone($header),
       cta: extractHeaderCta($, $header, sourceUrl),
       utilities: detectHeaderUtilities($header),
+      sourceSelector: firstUsefulSelector($, HEADER_SELECTORS),
     };
   }
   if ($footer.length > 0) {
@@ -136,6 +132,7 @@ export function extractThemeChromeFromHtml(html: string, sourceUrl: string): The
       ...extractLogo($, $footer, sourceUrl),
       text: extractFooterText($, $footer),
       links: extractLinks($, $footer, sourceUrl, 14),
+      sourceSelector: firstUsefulSelector($, FOOTER_SELECTORS),
     };
   }
 
@@ -191,6 +188,15 @@ function firstUseful($: cheerio.CheerioAPI, selectors: string[]): cheerio.Cheeri
     }
   }
   return $([]);
+}
+
+/** The selector firstUseful would have matched (for sourceSelector back-ref). */
+function firstUsefulSelector($: cheerio.CheerioAPI, selectors: string[]): string | undefined {
+  for (const selector of selectors) {
+    const $match = $(selector).first();
+    if ($match.length > 0 && normalizeText($match.text()).length > 0) return selector;
+  }
+  return undefined;
 }
 
 function extractLogo(

@@ -37,6 +37,7 @@ import type { Page } from 'playwright';
 import type { PageSignature, SectionSignature } from './page-signature.js';
 import { extractReviewsFromHtml, type ExtractedReview } from './review-extract.js';
 import { extractFaqsFromHtml, type ExtractedFaq } from './faq-extract.js';
+import { buildSelector, type SelectorParts } from './section-selector.js';
 import { getPlaywright } from '../../adapters/shared.js';
 import { waitForStable, triggerLazyLoad, withEvaluateTimeout } from '../screenshot/page-helpers.js';
 import { enforceSameOrigin } from '../screenshot/same-origin.js';
@@ -702,6 +703,10 @@ export interface SectionSpec {
    *  hero cover photo / edge-to-edge media). Drives whether the PAGE renders
    *  full-width vs constrained — deferring to the source. Optional for back-compat. */
   fullBleed?: boolean;
+  /** Compact CSS selector locating this section in the source DOM (Part 0).
+   *  Powers fallback diagnostics (#1) + region reconciliation (#2). Built
+   *  Node-side from browser-emitted SelectorParts. Optional for back-compat. */
+  selector?: string;
   /**
    * Source-VERBATIM body copy captured from this section's served HTML — every
    * visible `<p>`/`<li>` text node, in document order, deduped. This is the
@@ -793,6 +798,19 @@ export interface SectionSpec {
    * fidelity walk; subject to the same SECTION_HTML_FALLBACK_CAP as sectionHtml.
    */
   styledHtml?: string;
+}
+
+/** A top-level source landmark, for the region audit (#2). Collected in the same
+ *  browser walk as the sections so its selector matches theirs by construction. */
+export interface SourceLandmark {
+  role: 'main' | 'nav' | 'header' | 'footer' | 'section' | 'article';
+  tag: string;
+  /** buildSelector(parts), built Node-side. */
+  selector: string;
+  /** Visible text length — actionability signal (skip-links/empty fall below floor). */
+  textLength: number;
+  /** Foreground media count (img/video/picture) — actionability signal. */
+  mediaCount: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -1020,7 +1038,7 @@ export async function extractFull(
   page: Page,
   mediaMap: Record<string, string>,
   timeoutMs = 15_000,
-): Promise<SectionSpec[]> {
+): Promise<{ specs: SectionSpec[]; landmarks: SourceLandmark[] }> {
   const raw = await withEvaluateTimeout(
     page.evaluate(() => {
       // ====== ported helpers (extract.js / extract-section.js) ==============
@@ -1030,6 +1048,14 @@ export async function extractFull(
         if (he.offsetParent === null && getComputedStyle(el).position !== 'fixed') return false;
         const r = el.getBoundingClientRect();
         return r.width > 0 && r.height > 0;
+      };
+      const selectorPartsOf = (el: Element) => {
+        const tag = el.tagName.toLowerCase();
+        let nth = 1;
+        for (let s = el.previousElementSibling; s; s = s.previousElementSibling) {
+          if (s.tagName.toLowerCase() === tag) nth++;
+        }
+        return { tag, id: (el as HTMLElement).id || null, classes: Array.from(el.classList), nthOfType: nth };
       };
       const absTop = (el: Element): number => {
         const r = el.getBoundingClientRect();
@@ -2510,6 +2536,7 @@ export async function extractFull(
           sectionHtml,
           styledHtml,
           cells,
+          selectorParts: selectorPartsOf(el),
         };
       };
 
@@ -2521,13 +2548,30 @@ export async function extractFull(
         | 'inherited'
         | null;
 
-      return deduped.slice(0, 25).map((entry, i) => buildSection(entry, i));
+      const LANDMARK_TAGS = ['main', 'nav', 'header', 'footer', 'section', 'article'];
+      const landmarkEls = Array.from(document.querySelectorAll(LANDMARK_TAGS.join(',')))
+        .filter((el) => {
+          for (let a = el.parentElement; a; a = a.parentElement) {
+            if (LANDMARK_TAGS.includes(a.tagName.toLowerCase())) return false; // nested → skip
+          }
+          return true;
+        })
+        .filter(isVisible);
+      const landmarks = landmarkEls.map((el) => ({
+        role: el.tagName.toLowerCase(),
+        tag: el.tagName.toLowerCase(),
+        selectorParts: selectorPartsOf(el),
+        textLength: (el.textContent || '').replace(/\s+/g, ' ').trim().length,
+        mediaCount: el.querySelectorAll('img,video,picture').length,
+      }));
+      const rows = deduped.slice(0, 25).map((entry, i) => buildSection(entry, i));
+      return { rows, landmarks };
     }),
     timeoutMs,
   );
 
   // Classify back in Node (same code as the unit tests) and assemble specs.
-  return raw.map((r, i) => {
+  const specs = raw.rows.map((r, i) => {
     const rr = r as unknown as RawSection & { motionAnimatedElements: number };
     let interactionModel = classifySection(rr.features);
 
@@ -2627,6 +2671,7 @@ export async function extractFull(
 
     return {
       sectionIndex: i,
+      selector: buildSelector((rr as unknown as { selectorParts: SelectorParts }).selectorParts),
       interactionModel,
       top: rr.features.top,
       height: rr.features.height,
@@ -2696,6 +2741,15 @@ export async function extractFull(
         : {}),
     };
   });
+
+  const landmarks: SourceLandmark[] = raw.landmarks.map((l) => ({
+    role: l.role as SourceLandmark['role'],
+    tag: l.tag,
+    selector: buildSelector(l.selectorParts as SelectorParts),
+    textLength: l.textLength,
+    mediaCount: l.mediaCount,
+  }));
+  return { specs, landmarks };
 }
 
 // ---------------------------------------------------------------------------
@@ -2708,7 +2762,7 @@ export async function extractFullFromUrl(
   url: string,
   mediaMap: Record<string, string>,
   opts: { cdpPort?: number; timeoutMs?: number; settleMs?: number } = {},
-): Promise<SectionSpec[]> {
+): Promise<{ specs: SectionSpec[]; landmarks: SourceLandmark[] }> {
   // Same-origin hygiene: a single URL trivially shares its own origin, but this
   // also normalizes/validates the URL the same way the capture pipeline does.
   enforceSameOrigin(url, [url]);

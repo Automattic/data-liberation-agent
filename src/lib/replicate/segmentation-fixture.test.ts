@@ -60,7 +60,7 @@ async function analyzeFixture(path: string): Promise<{ specs: SectionSpec[]; sco
   try {
     await page.setContent(html, { waitUntil: 'load', timeout: 30_000 });
     await page.waitForTimeout(300);
-    const specs = await extractFull(page, {}, 20_000);
+    const { specs } = await extractFull(page, {}, 20_000);
     const bands = await measureSourceBands(page);
     const repeats = await measureSourceRepeats(page);
     return { specs, score: scoreSegmentation(bands, specs, { repeats }) };

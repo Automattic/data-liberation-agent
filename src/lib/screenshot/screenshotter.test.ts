@@ -42,7 +42,7 @@ function makeGoodPage(gotoStatus = 200) {
       // Checked FIRST: this closure also references `scrollHeight`, so it would be
       // mis-caught by the scroll branch below. Match a code identifier (comments
       // are stripped by the transpiler).
-      if (s.includes('motionAnimatedElements')) return [];
+      if (s.includes('motionAnimatedElements')) return { rows: [], landmarks: [] };
       if (s.includes('scrollHeight')) return 3000;
       if (s.includes('scrollTo')) return undefined;
       const isHomepage = new URL(currentUrl).pathname === '/';

@@ -141,4 +141,31 @@ describe('extractThemeChromeFromHtml', () => {
       { label: 'Accessibility Statement', href: '/accessibility-statement', external: false },
     ]);
   });
+
+  it('records sourceSelector on header and footer evidence', () => {
+    // Fictional site: header uses a plain <header> tag, footer a plain <footer> tag.
+    // 'header' is first in HEADER_SELECTORS and 'footer' is first in FOOTER_SELECTORS,
+    // so the matched selectors are deterministic.
+    const html = `
+      <header class="site-header">
+        <nav>
+          <ul>
+            <li><a href="/widgets">Widgets</a></li>
+            <li><a href="/gadgets">Gadgets</a></li>
+          </ul>
+        </nav>
+      </header>
+      <footer>
+        <p>Acme Widgets Ltd — fictional address</p>
+        <a href="/contact">Contact</a>
+      </footer>
+    `;
+
+    const chrome = extractThemeChromeFromHtml(html, 'https://acme-widgets.test/');
+
+    // <header> matches the 'header' selector (index 0 in HEADER_SELECTORS)
+    expect(chrome.header?.sourceSelector).toBe('header');
+    // <footer> matches the 'footer' selector (index 0 in FOOTER_SELECTORS)
+    expect(chrome.footer?.sourceSelector).toBe('footer');
+  });
 });

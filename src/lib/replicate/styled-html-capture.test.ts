@@ -35,7 +35,7 @@ describe('extractFull — styledHtml capture (R4b floor)', () => {
     </body></html>`;
     await page.setContent(html, { waitUntil: 'load', timeout: 30_000 });
     await page.waitForTimeout(150);
-    const specs = await extractFull(page, {}, 20_000);
+    const { specs } = await extractFull(page, {}, 20_000);
     await page.close();
 
     const band = specs.find((s) => s.headings.includes('Findings overview'));
@@ -70,7 +70,7 @@ describe('extractFull — styledHtml capture (R4b floor)', () => {
     </body></html>`;
     await page.setContent(html, { waitUntil: 'load', timeout: 30_000 });
     await page.waitForTimeout(150);
-    const specs = await extractFull(page, {}, 20_000);
+    const { specs } = await extractFull(page, {}, 20_000);
     await page.close();
 
     const styled = specs.find((s) => s.headings.includes('Bloat control'))!.styledHtml!;

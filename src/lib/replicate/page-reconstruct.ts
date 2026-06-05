@@ -32,6 +32,7 @@ import type { ExtractedReview } from './review-extract.js';
 import { measureSectionCoverage } from './section-coverage.js';
 import { buildHtmlFallbackBlock } from './html-fallback.js';
 import { applyBlockRecipe } from './apply-block-recipe.js';
+import { buildFallbackDiagnostic, type FallbackDiagnostic } from './fallback-diagnostic.js';
 
 /**
  * A source-VERBATIM FAQ question/answer pair. The renderer emits these as a
@@ -87,6 +88,12 @@ export interface ReconstructOptions {
    * recipe context so recipes can emit rewritten media URLs keyed to the page.
    */
   sourceUrl?: string;
+  /**
+   * The bare page slug (e.g. "go2", NOT the slash-bearing patternSlug). Used as
+   * the slash-free key component for fallback-diagnostic ids. Falls back to
+   * patternSlug when absent.
+   */
+  slug?: string;
 }
 
 export interface ReconstructResult {
@@ -105,6 +112,8 @@ export interface ReconstructResult {
   expectedAssets: string[];
   /** Human-readable notes about missing-media / missing-content fallbacks. */
   provenanceFlags: string[];
+  /** Structured fallback records (#1), one per core/html island emitted. */
+  fallbackDiagnostics: FallbackDiagnostic[];
   /** Count of page-body sections rendered (after chrome strip). */
   sectionsRendered: number;
   /**
@@ -1525,6 +1534,7 @@ export function reconstructPagePattern(
   const bodyText: string[] = [];
   const assets: string[] = [];
   const provenanceFlags: string[] = [];
+  const fallbackDiagnostics: FallbackDiagnostic[] = [];
   const sectionMarkup: string[] = [];
   const iconAssets: Array<{ path: string; svg: string }> = [];
   const ctx: RenderCtx = {
@@ -1577,11 +1587,22 @@ export function reconstructPagePattern(
       // bare `html-fallback#` prefix remains the unstyled signal.
       const styled = !!s.styledHtml;
       const source = (s.styledHtml ?? s.sectionHtml) as string;
-      sectionMarkup.push(buildHtmlFallbackBlock(source, { mediaUrlMap: opts.mediaUrlMap }));
+      const island = buildHtmlFallbackBlock(source, { mediaUrlMap: opts.mediaUrlMap });
+      sectionMarkup.push(island);
       provenanceFlags.push(
         `html-fallback${styled ? '-styled' : ''}#${s.sectionIndex}: structured render dropped content ` +
           `(${cov.missingImages.length} images missing, text ${Math.round(cov.textCoverage * 100)}%) — ` +
           `emitted ${styled ? 'styled' : 'verbatim'} core/html`,
+      );
+      fallbackDiagnostics.push(
+        buildFallbackDiagnostic({
+          page: opts.sourceUrl ?? opts.patternSlug,
+          slug: opts.slug ?? opts.patternSlug,
+          section: s,
+          coverage: cov,
+          islandKind: styled ? 'styled' : 'verbatim',
+          islandMarkup: island,
+        }),
       );
       continue;
     }
@@ -1614,6 +1635,7 @@ export function reconstructPagePattern(
     bodyText: dedupe(bodyText),
     expectedAssets: dedupe(assets),
     provenanceFlags,
+    fallbackDiagnostics,
     sectionsRendered: sectionMarkup.length,
     iconAssets,
     heroIsCover,

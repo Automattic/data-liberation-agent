@@ -20,6 +20,7 @@ import { validateArtifacts, type ValidationReport } from './validate-artifacts.j
 import { rewriteInternalLinks, type InternalLinkMap } from '../streaming/internal-link-rewrite.js';
 import type { SectionSpec } from './section-extract.js';
 import type { PaletteToken } from './footer-color.js';
+import type { FallbackDiagnostic } from './fallback-diagnostic.js';
 
 /** A theme file to write, path relative to the theme root. */
 export interface ReconstructedFile {
@@ -48,6 +49,8 @@ export interface PageReconstructionResult {
   /** Sections emitted as STYLED core/html islands (R4b floor: computed styles
    *  inlined → renders faithfully). Visible, not hidden, but not block-editable. */
   styledFallbackSections: number;
+  /** Structured fallback records (#1), one per core/html island emitted. */
+  fallbackDiagnostics: FallbackDiagnostic[];
 }
 
 /** Swap the pattern's `get_theme_file_uri()` PHP asset refs for literal
@@ -149,6 +152,7 @@ export function buildPageReconstruction(
   const patternSlug = `${opts.themeSlug}/page-${opts.slug}`;
   const r = reconstructPagePattern(sections, {
     patternSlug,
+    slug: opts.slug,
     title: opts.title,
     paletteTokens: opts.paletteTokens,
     fontFamilies: opts.fontFamilies,
@@ -222,5 +226,6 @@ export function buildPageReconstruction(
     iconAssetCount: r.iconAssets.length,
     fallbackSections: r.provenanceFlags.filter((f) => f.startsWith('html-fallback#')).length,
     styledFallbackSections: r.provenanceFlags.filter((f) => f.startsWith('html-fallback-styled#')).length,
+    fallbackDiagnostics: r.fallbackDiagnostics,
   };
 }

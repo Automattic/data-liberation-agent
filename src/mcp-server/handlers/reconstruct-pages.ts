@@ -16,8 +16,8 @@
 
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { existsSync, mkdirSync, writeFileSync, readFileSync, renameSync } from 'node:fs';
+import { basename, dirname, join, resolve } from 'node:path';
 import type { PaletteToken } from '../../lib/replicate/footer-color.js';
 import type { FontFamilyToken } from '../../lib/replicate/page-reconstruct.js';
 import { extractFullFromUrl, rewriteThroughMediaMap } from '../../lib/replicate/section-extract.js';
@@ -35,8 +35,18 @@ import { themeCacheFlushCommands } from './install-theme.js';
 import type { Handler } from '../handler-types.js';
 import { detect } from '../../lib/extraction/detect-platform.js';
 import { ImportSession } from '../../lib/extraction/import-session.js';
+import type { FallbackDiagnostic } from '../../lib/replicate/fallback-diagnostic.js';
+import { extractThemeChromeFromHtml } from '../../lib/replicate/source-chrome.js';
+import { reconcileRegions, type PlacedRegion, type RegionSelectionReport } from '../../lib/replicate/region-audit.js';
+import { slugify } from '../../adapters/shared.js';
 
 const execFileAsync = promisify(execFile);
+
+function writeJsonArtifact(path: string, data: unknown): void {
+  const tmp = `${path}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
+  writeFileSync(tmp, JSON.stringify(data, null, 2));
+  renameSync(tmp, path);
+}
 
 interface PageArg {
   slug: string;
@@ -238,8 +248,9 @@ export const reconstructPagesHandler: Handler = async (args, ctx) => {
       if (specs) {
         specsFromCache++;
       } else {
-        specs = await extractFullFromUrl(p.sourceUrl, {});
-        specsStore.set(p.sourceUrl, specs); // cache for the next run
+        const live = await extractFullFromUrl(p.sourceUrl, {});
+        specs = live.specs;
+        specsStore.set(p.sourceUrl, live.specs, live.landmarks); // cache specs + census for the next run
         specsFromLive++;
       }
       specsByPage.set(p.slug, specs);
@@ -343,6 +354,7 @@ export const reconstructPagesHandler: Handler = async (args, ctx) => {
       assets: built.expectedAssets.length,
       provenanceFlags: built.provenanceFlags,
       fallbackSections: built.fallbackSections,
+      fallbackDiagnostics: built.fallbackDiagnostics,
       postContentUpdated: postUpdated,
       blocksFixed: fixResult?.changed ?? false,
     });
@@ -373,6 +385,51 @@ export const reconstructPagesHandler: Handler = async (args, ctx) => {
   // Site-level count of sections emitted as verbatim core/html islands — feeds the
   // run-report's warning-level htmlFallbackSections so QA can upgrade each to blocks.
   const htmlFallbackSections = report.reduce((n, r) => n + ((r.fallbackSections as number) ?? 0), 0);
+  const allFallbackDiagnostics = report.flatMap((r) => (r.fallbackDiagnostics as FallbackDiagnostic[] | undefined) ?? []);
+  const htmlFallbackByReason = allFallbackDiagnostics.reduce<Record<string, number>>((acc, d) => {
+    acc[d.reasonCode] = (acc[d.reasonCode] ?? 0) + 1;
+    return acc;
+  }, {});
+  writeJsonArtifact(join(resolve(outputDir), 'fallback-diagnostics.json'), {
+    schema: 1,
+    site: basename(resolve(outputDir)),
+    diagnostics: allFallbackDiagnostics,
+  });
+
+  // Region audit (#2): reconcile each page's source landmark census against what
+  // was placed (body section selectors + chrome presence). Chrome is site-level —
+  // derived once from the homepage's served HTML (same extractor theme-scaffold uses).
+  const homepage = pages.find((pg) => pg.isHome) ?? pages[0];
+  const chromePlaced: PlacedRegion[] = [];
+  try {
+    const homeHtml = readFileSync(join(resolve(outputDir), 'html', `${slugify(homepage.sourceUrl)}.html`), 'utf8');
+    const chrome = extractThemeChromeFromHtml(homeHtml, homepage.sourceUrl);
+    if (chrome.header?.links?.length || chrome.header?.logoUrl) {
+      chromePlaced.push({ kind: 'header_part', role: 'header', selector: chrome.header.sourceSelector });
+    }
+    if (chrome.footer?.links?.length || chrome.footer?.logoUrl) {
+      chromePlaced.push({ kind: 'footer_part', role: 'footer', selector: chrome.footer.sourceSelector });
+    }
+  } catch {
+    // Homepage HTML unreadable — assume chrome present (conservative: avoid false
+    // "dropped nav/footer" flags when we simply can't inspect the source).
+    chromePlaced.push({ kind: 'header_part', role: 'header' }, { kind: 'footer_part', role: 'footer' });
+  }
+  const regionReports: RegionSelectionReport[] = pages.map((p) => {
+    const census = specsStore.getLandmarks(p.sourceUrl) ?? [];
+    const bodyPlaced: PlacedRegion[] = (specsByPage.get(p.slug) ?? []).map((s) => ({
+      kind: 'page_body_section' as const,
+      selector: s.selector,
+    }));
+    return reconcileRegions(census, [...bodyPlaced, ...chromePlaced], p.slug, p.sourceUrl);
+  });
+  writeJsonArtifact(join(resolve(outputDir), 'region-audit.json'), {
+    schema: 1,
+    site: basename(resolve(outputDir)),
+    pages: regionReports,
+  });
+  const unassignedRegions = regionReports.reduce((n, r) => n + r.counts.unassigned, 0);
+
   return ctx.textResult({
     ok: extractErrors.length === 0 && report.every((r) => r.ok),
     themeSlug,
@@ -381,6 +438,8 @@ export const reconstructPagesHandler: Handler = async (args, ctx) => {
     mediaDownloaded: downloaded,
     mediaInstalled: mediaResult.installed.length,
     htmlFallbackSections,
+    htmlFallbackByReason,
+    unassignedRegions,
     specsFromCache,
     specsFromLive,
     extractErrors,
