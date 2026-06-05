@@ -1,7 +1,6 @@
 import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { resolve, basename, join, dirname } from 'node:path';
-import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { cpSync, existsSync, mkdirSync, copyFileSync, rmSync } from 'node:fs';
 import { persistBlueprint } from './blueprint-builder.js';
@@ -13,6 +12,7 @@ import {
   type SourceSiteMeta,
 } from './site-options.js';
 import type { ReplicaFile, ReplicaBlockPlugin, StartPreviewResult } from './types.js';
+import { resolveStudioRoot } from '../paths.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -70,7 +70,7 @@ export interface StudioSite {
 
 /**
  * Returns true if the `studio` CLI binary is reachable on PATH.
- * Fast-fails on any error so startPreview can fall through to Playground.
+ * Fast-fails on any error so callers can surface a clear 'install Studio' error.
  */
 export function isStudioAvailable(): boolean {
   try {
@@ -106,10 +106,6 @@ export function makeStudioSiteName(
     if (!taken.has(candidate)) return candidate;
   }
   return `${base}-${Date.now()}`;
-}
-
-function defaultStudioRoot(): string {
-  return process.env.STUDIO_SITES_DIR || join(homedir(), 'Studio');
 }
 
 /**
@@ -341,11 +337,28 @@ export interface StartStudioOpts {
  * actually done and it's safe to open the browser / prompt for the real
  * WordPress import.
  */
+/**
+ * Studio-only preview entry point. Hard-requires Studio — no fallback.
+ * `isAvailable` is injectable for testing (defaults to the real check).
+ */
+export async function startPreview(
+  opts: StartStudioOpts,
+  isAvailable: () => boolean = isStudioAvailable,
+): Promise<StartPreviewResult> {
+  if (!isAvailable()) {
+    return {
+      status: 'failed',
+      error: 'Studio is required for preview/import. Install it from https://developer.wordpress.com/studio/',
+    };
+  }
+  return startStudioPreview(opts);
+}
+
 export async function startStudioPreview(opts: StartStudioOpts): Promise<StartPreviewResult> {
   // Validate replica inputs up front — fail fast before creating a site.
   validateReplicaInputs(opts.themeFiles, opts.blockPlugins, opts.themeSlug);
 
-  const blueprintPath = persistBlueprint(opts.outputDir, 'studio');
+  const blueprintPath = persistBlueprint(opts.outputDir);
   let existingSites: StudioSite[] = [];
   try {
     existingSites = await listStudioSites();
@@ -356,7 +369,7 @@ export async function startStudioPreview(opts: StartStudioOpts): Promise<StartPr
   const existingNames = existingSites.map((s) => s.name);
   const existingPaths = new Set(existingSites.map((s) => resolve(s.path)));
   const name = makeStudioSiteName(opts.outputDir, existingNames, opts.siteName);
-  const sitePath = join(defaultStudioRoot(), name);
+  const sitePath = join(resolveStudioRoot(), name);
   const absOutput = resolve(opts.outputDir);
   const hasProducts = existsSync(join(absOutput, 'products.csv'));
 
@@ -370,7 +383,7 @@ export async function startStudioPreview(opts: StartStudioOpts): Promise<StartPr
   if (
     existsSync(resolvedSitePath) &&
     !existingPaths.has(resolvedSitePath) &&
-    resolvedSitePath.startsWith(resolve(defaultStudioRoot()) + '/')
+    resolvedSitePath.startsWith(resolve(resolveStudioRoot()) + '/')
   ) {
     rmSync(resolvedSitePath, { recursive: true, force: true });
   }

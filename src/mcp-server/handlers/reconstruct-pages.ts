@@ -285,7 +285,6 @@ export const reconstructPagesHandler: Handler = async (args, ctx) => {
     outputDir,
     url: pages[0].sourceUrl,
     wpRoot,
-    useStudioCli: true,
   });
   // Record form for applyMediaMap (spec background-image rewrite).
   const mediaMap: Record<string, string> = Object.fromEntries(mediaUrlMap);

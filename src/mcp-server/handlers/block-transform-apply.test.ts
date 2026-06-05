@@ -148,23 +148,6 @@ describe('blockTransformApplyHandler — validation and idempotency', () => {
     expect(result.content[0].text).toContain('identical');
   });
 
-  it('returns a typed not-implemented response for the playground target', async () => {
-    const dir = mkdtempSync(join(FIXTURE_TMP, 'apply-'));
-    const ctx = makeCtx();
-    const result = await blockTransformApplyHandler(
-      {
-        outputDir: dir,
-        url: 'https://example.com/x',
-        blocks: '<!-- wp:paragraph --><p>Hi</p><!-- /wp:paragraph -->',
-        target: { kind: 'playground' },
-      },
-      ctx,
-    );
-    expect(result.isError).toBeUndefined();
-    expect(result.content[0].text).toContain('Playground');
-    expect(result.content[0].text).toContain('not implemented');
-  });
-
   it('errors when studio target is selected without a studioSitePath', async () => {
     const dir = mkdtempSync(join(FIXTURE_TMP, 'apply-'));
     const ctx = makeCtx();

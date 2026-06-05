@@ -16,7 +16,6 @@
 // land in watch.log and the user can re-run with --agent to fill them in.
 //
 import { mkdirSync, existsSync, appendFileSync, readFileSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -70,6 +69,7 @@ import {
   foundationRevDecision,
   readCurrentFoundationInputsDigest,
 } from '../lib/streaming/foundation-run-state.js';
+import { siteOutputDir, resolveStudioRoot } from '../lib/paths.js';
 
 // Judgments chain multiple skills: foundation-rev runs design-foundations
 // (read aggregates + scaffold + validate + save), theme-piece runs replicate
@@ -110,8 +110,8 @@ export interface WatchEvents {
   onUrlObserved?: (url: string, archetype: string) => void;
   /** Fires the moment preview boot begins (in parallel with discovery). The TUI shows "Preview: starting up…" until onPreviewReady. */
   onPreviewStarting?: () => void;
-  /** Fires once the running Playground/Studio site is up. Surface this URL in the UI so the user can browse while content keeps streaming in. */
-  onPreviewReady?: (info: { url: string; source: 'studio' | 'playground'; siteName?: string }) => void;
+  /** Fires once the running Studio site is up. Surface this URL in the UI so the user can browse while content keeps streaming in. */
+  onPreviewReady?: (info: { url: string; source: 'studio'; siteName?: string }) => void;
   /** Fires when preview startup fails (non-fatal — extraction continues without a live preview). */
   onPreviewFailed?: (error: string) => void;
   onJudgmentsReady?: (judgments: JudgmentNeeded[]) => void;
@@ -139,23 +139,6 @@ const ADAPTERS: PlatformAdapter[] = [
 
 function findAdapter(platform: string): PlatformAdapter | null {
   return ADAPTERS.find((a) => a.id === platform) || null;
-}
-
-function siteOutputDir(baseDir: string, url: string): string {
-  let host: string;
-  try {
-    const parsed = new URL(url.includes('://') ? url : `https://${url}`);
-    host = parsed.hostname + parsed.pathname;
-  } catch {
-    host = url;
-  }
-  const sanitized = host
-    .toLowerCase()
-    .replace(/\/$/, '')
-    .replace(/[^a-z0-9.-]/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^-|-$/g, '');
-  return join(baseDir, sanitized);
 }
 
 export interface WatchOpts {
@@ -254,13 +237,12 @@ export function buildJudgmentPrompt(
   studioSitePath: string | null,
 ): string {
   // The agent only knows where to install theme files when we tell it. If
-  // the runner is in Playground mode (no studioSitePath), we currently
-  // can't update the theme of a running Playground site from outside —
-  // surface that explicitly so the agent doesn't try liberate_preview.
+  // no Studio site is available (studioSitePath is null), surface that
+  // explicitly so the agent doesn't try liberate_preview.
   const themeSlug = deriveThemeSlug(outputDir);
   const installTarget = studioSitePath
     ? `\`liberate_install_theme\` with { outputDir: "${outputDir}", studioSitePath: "${studioSitePath}", themeSlug: "${themeSlug}", themeFiles: [...] }. This exact themeSlug is the runner-created shell theme; use it to overwrite the existing shell theme, not a slug derived from inventory/siteSlug. Custom blocks (rare) are theme-embedded under blocks/<slug>/{src,build}/ — pass them through themeFiles[], NOT a separate plugin. See skills/replicate/SKILL.md §4d for the pre-built artifact rule and functions.php registration loop.`
-    : `[no install target — Playground mode: skip the install call, just write theme files to <outputDir>/theme/ for the post-extraction reimport]`;
+    : `[no install target (Studio site not available); write theme files to <outputDir>/theme/ for the post-extraction reimport]`;
 
   // IMPORTANT — claude -p only EXECUTES a skill when the prompt opens with
   // its slash invocation (`/data-liberation:<skill>`). Plain English ("Invoke
@@ -355,7 +337,7 @@ export function buildThemePieceBatchPrompt(
   const themeSlug = deriveThemeSlug(outputDir);
   const installTarget = studioSitePath
     ? `\`liberate_install_theme\` with { outputDir: "${outputDir}", studioSitePath: "${studioSitePath}", themeSlug: "${themeSlug}", themeFiles: [...] }`
-    : `[no install target — Playground mode: write theme files to <outputDir>/theme/ for the post-extraction reimport]`;
+    : `[no install target (Studio site not available); write theme files to <outputDir>/theme/ for the post-extraction reimport]`;
   const orderedPieces = pieces
     .map((j) => String(j.inputs.themePiece ?? 'foundation'))
     .filter((piece) => isThemePiece(piece));
@@ -416,7 +398,7 @@ export function buildReplicaBriefMarkdown(opts: {
     '## Install Target',
     '',
     `- Output directory: ${opts.outputDir}`,
-    `- Studio site path: ${opts.studioSitePath ?? '(none; Playground mode)'}`,
+    `- Studio site path: ${opts.studioSitePath ?? '(none; Studio site not available)'}`,
     `- Theme slug: ${opts.themeSlug}`,
     '',
     '## Shared Evidence',
@@ -1821,7 +1803,7 @@ async function flushPendingImports(opts: {
     // @wordpress/blocks parse() + serialize() so it lands in the DB in
     // canonical WP form. This catches subtle differences (attribute
     // order, missing wp-block-* classes, nested <p>) that would
-    // otherwise fail Playground's stricter validator on next render.
+    // otherwise fail WordPress's block validator on next render.
     // Only blocks-mode payloads — raw-html (NO_AGENT) bypasses.
     if (contentOverride && composedAs === 'blocks' && blockFixer) {
       const before = contentOverride;
@@ -1991,18 +1973,16 @@ export async function runWatch(opts: WatchOpts): Promise<{ ok: boolean; duration
   ensureStubWxr(outDir);
   events.onPreviewStarting?.();
   let studioSitePath: string | null = null;
-  let previewSource: 'studio' | 'playground' | null = null;
-  const { startPreview } = await import('../lib/preview/playground-server.js');
+  let previewSource: 'studio' | null = null;
+  const { startPreview } = await import('../lib/preview/studio.js');
   const previewPromise = startPreview({
     outputDir: outDir,
-    detached: true,
-    allowEmptyWxr: true,
   })
     .then((stub) => {
       if (stub.status === 'ready' && stub.url) {
-        previewSource = stub.source ?? 'playground';
+        previewSource = stub.source ?? 'studio';
         if (previewSource === 'studio' && stub.siteName) {
-          const studioRoot = process.env.STUDIO_SITES_DIR || join(homedir(), 'Studio');
+          const studioRoot = resolveStudioRoot();
           studioSitePath = join(studioRoot, stub.siteName);
         }
         events.onPreviewReady?.({
@@ -2242,7 +2222,6 @@ export async function runWatch(opts: WatchOpts): Promise<{ ok: boolean; duration
             outputDir: outDir,
             url: urlsToInstall[0] ?? opts.url,
             wpRoot,
-            useStudioCli: true,
           });
           let added = 0;
           for (const entry of mediaResult.installed ?? []) {
@@ -2663,7 +2642,6 @@ export async function runWatch(opts: WatchOpts): Promise<{ ok: boolean; duration
               outputDir: outDir,
               url: opts.url,
               wpRoot,
-              useStudioCli: true,
             });
             let cssMediaInstalled = 0;
             for (const entry of cssMediaInstallResult.installed ?? []) {
@@ -2781,10 +2759,10 @@ export async function runWatch(opts: WatchOpts): Promise<{ ok: boolean; duration
   // we skip the second boot entirely; the user is already on the URL we
   // emitted at pre-start.
   //
-  // Playground mode: per-URL inserts were skipped (no studio CLI), so the
-  // pre-started site is still empty. forceReimport wipes the persistent
-  // SQLite so the import-when-empty branch picks up the now-populated
-  // output.wxr.
+  // Source-absent path: Studio was not running (previewSource is null/undefined),
+  // so attempt another startPreview with the now-populated output.wxr. This
+  // will fail if Studio is still unavailable — the error is surfaced via
+  // onPreviewFailed rather than throwing.
   if (previewSource === 'studio') {
     appendWatchLog(outDir, {
       event: 'preview-reimport-skipped',
@@ -2793,16 +2771,14 @@ export async function runWatch(opts: WatchOpts): Promise<{ ok: boolean; duration
   } else {
     events.onPhase?.('starting-preview');
     try {
-      const { startPreview } = await import('../lib/preview/playground-server.js');
+      const { startPreview } = await import('../lib/preview/studio.js');
       const reimport = await startPreview({
         outputDir: outDir,
-        detached: true,
-        forceReimport: true,
       });
       if (reimport.status === 'ready' && reimport.url) {
         events.onPreviewReady?.({
           url: reimport.url,
-          source: reimport.source ?? 'playground',
+          source: reimport.source ?? 'studio',
           siteName: reimport.siteName,
         });
         appendWatchLog(outDir, {

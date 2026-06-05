@@ -4,7 +4,7 @@
 //
 // Fixes nested <p> tags inside WordPress paragraph blocks. The WP serializer
 // can wrap mismatched-style paragraphs and produce <p><p>...</p></p>, which
-// then fails block-validation in Playground. Merge attributes (classes
+// then fails block-validation in WordPress. Merge attributes (classes
 // concatenated, styles combined, others outer-wins) and flatten to one <p>.
 //
 

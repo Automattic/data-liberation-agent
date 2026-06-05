@@ -118,16 +118,4 @@ describe('pollForPost', () => {
     expect(result.postId).toBe(99);
   });
 
-  it('falls through to non-Studio runner when useStudioCli is false', async () => {
-    const runner = vi.fn(async () => ({ stdout: '[8]' })) as unknown as PollRunner;
-    const result = await pollForPost({
-      siteUrl: 'http://localhost:9400',
-      sourceUrl: 'https://example.com/foo',
-      useStudioCli: false,
-      runner,
-      sleep: vi.fn(),
-    });
-    expect(result.found).toBe(true);
-    expect(result.postId).toBe(8);
-  });
 });

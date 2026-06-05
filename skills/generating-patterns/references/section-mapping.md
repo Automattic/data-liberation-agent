@@ -2,7 +2,7 @@
 
 This file has one block markup template per interaction model. The pattern generator (step 10 of `/liberate`) picks the template matching the spec file's `Interaction model` field, fills the `{{placeholders}}` from the spec's `Generation instructions` section, and writes the result to `theme/patterns/section-<n>.php`.
 
-**Every template assumes the `theme/patterns/` directory exists and the theme's `style.css` is present.** Image paths use `<?php echo esc_url( get_theme_file_uri('assets/img-XX.ext') ); ?>` so the deployed theme serves them from `wp-content/themes/<slug>/assets/`. Do NOT curl CDN URLs — reuse media already uploaded to the WP library (uploaded WP URLs) or theme-shipped assets from the pipeline's `output/<site>/assets/` directory.
+**Every template assumes the `theme/patterns/` directory exists and the theme's `style.css` is present.** Image paths use `<?php echo esc_url( get_theme_file_uri('assets/img-XX.ext') ); ?>` so the deployed theme serves them from `wp-content/themes/<slug>/assets/`. Do NOT curl CDN URLs — reuse media already uploaded to the WP library (uploaded WP URLs) or theme-shipped assets from the pipeline's `<outputDir>/assets/` directory.
 
 ## The brightness rule (applies to every template)
 

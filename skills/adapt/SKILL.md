@@ -1,6 +1,6 @@
 ---
 name: adapt
-description: Build a new platform adapter to extract content from an unsupported platform (Blogger, Ghost, Weebly, etc.)
+description: Build a new platform adapter to extract content from an unsupported platform (Blogger, Ghost, Tumblr, etc.)
 allowed-tools:
   - Bash
   - Read
@@ -77,18 +77,55 @@ You can also call `liberate_probe` to inspect window globals, localStorage, cook
 
 ### 2a. Scaffold
 
-Create `src/adapters/<platform>/` — a directory whose `index.ts` assembles and exports the adapter over focused siblings (`discover.ts`, `extract.ts`, `content.ts`, `media.ts`, `products.ts`, `types.ts`, …). Read `src/adapters/webflow/` as a reference — it's the simplest adapter (a 3-file split). Optionally add `<platform>/capture.ts` (pre-capture DOM removals) or `<platform>/blocks.ts` (content→blocks recipe); see `src/adapters/page-actions.ts`.
+An adapter is a **directory** `src/adapters/<platform>/`, never a single file. `index.ts` is a thin assembler; each concern lives in its own sibling. Read `src/adapters/webflow/` (the smallest — a 3-file split) and `src/adapters/shopify/` (a fuller split) as references.
 
-Every adapter must:
-- Export a `<platform>Adapter` object implementing `PlatformAdapter` from `src/types.ts`
-- Define `<Platform>AdapterOpts` extending `Record<string, unknown>` with: `delay?`, `resume?`, `dryRun?`, `verbose?`, `outputDir?`
-- Define `<Platform>Inventory` with: `siteUrl`, `discoveredAt`, `siteMeta` (title, tagline, language), `navigation`, `counts`, `urls`
+**`index.ts` — thin assembler + public API.** It defines `detect` inline, imports `discover`/`extract` (and optional `capture`/`blocks`) from siblings, exports the `<platform>Adapter` object, and **re-exports the inventory/opts types** (plus any helpers other modules need) so external code only ever imports `<platform>/index.js`. Keep all real logic in siblings.
 
-Required methods:
+```typescript
+// src/adapters/webflow/index.ts — the whole assembler
+import type { PlatformAdapter } from '../../types.js';
+import { discoverWebflow } from './discover.js';
+import { extractWebflow } from './extract.js';
+
+export type { WebflowInventory, WebflowAdapterOpts } from './discover.js';
+
+function detect(url: string): boolean {
+  return /webflow\.io|webflow\.com/i.test(url);
+}
+
+export const webflowAdapter: PlatformAdapter = {
+  id: 'webflow',
+  detect,
+  discover: discoverWebflow,
+  extract: extractWebflow,
+};
+```
+
+**Sibling files** — add only what the platform needs (webflow uses 3; richer platforms split further):
+
+| file | holds |
+|------|-------|
+| `types.ts` | `<Platform>AdapterOpts` + `<Platform>Inventory` (+ platform JSON shapes) |
+| `discover.ts` | `discover()` — sitemap/nav crawl, URL classification → inventory |
+| `extract.ts` | `extract()` — drives `runExtractionLoop()` with an `extractPage` fn |
+| `content.ts` | HTML/content parsing + quality scoring |
+| `media.ts` | media URL extraction |
+| `products.ts` | product → `WooProduct` mapping (e-commerce only) |
+| `capture.ts` | optional `AdapterCapture` (seam 1 — pre-capture DOM removals) |
+| `blocks.ts` | optional `AdapterBlocks` (seam 2 — content→blocks recipe) |
+
+Both seams are typed in `src/adapters/page-actions.ts`; examples are `shopify/capture.ts` and `squarespace/blocks.ts`. Add any platform-specific helpers as further siblings (wix has `runtime.ts`/`gallery.ts`/`page.ts`; hubspot has `url.ts`/`metadata.ts`). The tiny webflow adapter has no `types.ts` — it inlines its opts/inventory in `discover.ts` and re-exports from there; use a dedicated `types.ts` for anything non-trivial.
+
+**The adapter contract** — `<platform>Adapter` implements `PlatformAdapter` (`src/types.ts`):
 - **`id`** — lowercase platform name (e.g. `'ghost'`)
-- **`detect(url)`** — return `true` if the URL belongs to this platform
+- **`detect(url)`** — `true` if the URL belongs to this platform (defined inline in `index.ts`)
 - **`discover(url, opts)`** — fetch sitemap + navigation, classify URLs, return inventory
 - **`extract(inventory, wxr, opts, context)`** — call `runExtractionLoop()` from `src/adapters/shared.ts` with an `extractPage` function
+- optional **`probe`**, **`capture`**, **`blocks`**
+
+Define in `types.ts`:
+- `<Platform>AdapterOpts` extending `Record<string, unknown>` with: `delay?`, `resume?`, `dryRun?`, `verbose?`, `outputDir?`
+- `<Platform>Inventory` with: `siteUrl`, `discoveredAt`, `siteMeta` (title, tagline, language), `navigation`, `counts`, `urls`
 
 ### 2b. The extractPage Function
 
@@ -147,9 +184,11 @@ The custom extractor is called before the generic JSON-LD fallback, so it takes 
 
 ## Phase 3: Register
 
-1. Import the adapter in `src/mcp-server.ts` and add it to the `adapters` array
-2. Import the adapter in `src/ui/discover.tsx` and add to the adapters array
-3. Import the adapter in `src/ui/inspect.tsx` and add to the adapters array
+Always import the adapter from its barrel — `./adapters/<platform>/index.js` — never a sibling directly.
+
+1. **`src/mcp-server.ts`** (required) — add the import under the `// Static adapter imports` comment and add the adapter to the `adapters: PlatformAdapter[]` array. Both are kept **alphabetical**.
+2. **`src/ui/discover.tsx`** (CLI/Ink discovery UI) — add the top-level import and append to its `adapters` array. The default `data-liberation <url>` flow resolves adapters here, so the CLI path needs it.
+3. **`src/ui/inspect.tsx`** (optional) — `liberate_inspect` lazy-`import()`s a small `allAdapters` list inside the component; add yours there for inspect coverage. This list is partial today and isn't required for extraction.
 
 ## Phase 4: Test
 

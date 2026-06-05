@@ -33,9 +33,4 @@ describe('wpRootFor — Studio layout detection', () => {
     expect(wpRootFor({ kind: 'studio', sitePath })).not.toBe(join(sitePath, 'wordpress'));
   });
 
-  it('playground target uses the site path directly', () => {
-    const sitePath = join(root, 'pg-site');
-    mkdirSync(sitePath, { recursive: true });
-    expect(wpRootFor({ kind: 'playground', sitePath })).toBe(sitePath);
-  });
 });

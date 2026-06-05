@@ -308,7 +308,7 @@ export class WxrBuilder {
    * pages/posts whose adapter didn't populate a date) that would otherwise
    * serialize as `0000-00-00 00:00:00`. A zero date causes WordPress's WXR
    * importer to route attachment uploads into `wp-content/uploads/0000/00/`,
-   * which breaks Playground/Studio blueprint application.
+   * which breaks Studio blueprint application.
    */
   private readonly _fallbackDate: string = new Date().toISOString();
 

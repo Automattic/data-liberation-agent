@@ -7,7 +7,6 @@ import {
   sanitizeReplicaFile,
   validateReplicaInputs,
   writeReplicaFilesToHost,
-  buildReplicaBlueprintSteps,
 } from './replica-install.js';
 
 const FIXTURE_TMP = join(process.cwd(), '.tmp-test');
@@ -229,76 +228,3 @@ describe('writeReplicaFilesToHost', () => {
   });
 });
 
-describe('buildReplicaBlueprintSteps', () => {
-  it('emits writeFile + activate steps in the right order', () => {
-    const steps = buildReplicaBlueprintSteps({
-      themeSlug: 'foo-replica',
-      themeFiles: [
-        { relativePath: 'style.css', content: '/* */' },
-        { relativePath: 'templates/index.html', content: '<!-- i -->' },
-      ],
-      blockPlugins: [
-        {
-          slug: 'foo-replica-blocks',
-          files: [{ relativePath: 'foo-replica-blocks.php', content: '<?php' }],
-        },
-      ],
-    });
-
-    // Order: theme files → plugin files → plugin activate → theme activate
-    expect(steps[0]).toMatchObject({
-      step: 'writeFile',
-      path: '/wordpress/wp-content/themes/foo-replica/style.css',
-    });
-    expect(steps[1]).toMatchObject({
-      step: 'writeFile',
-      path: '/wordpress/wp-content/themes/foo-replica/templates/index.html',
-    });
-    expect(steps[2]).toMatchObject({
-      step: 'writeFile',
-      path: '/wordpress/wp-content/plugins/foo-replica-blocks/foo-replica-blocks.php',
-    });
-    expect(steps[3]).toMatchObject({
-      step: 'wp-cli',
-      command: 'wp plugin activate foo-replica-blocks',
-    });
-    expect(steps[4]).toMatchObject({
-      step: 'wp-cli',
-      command: 'wp theme activate foo-replica',
-    });
-  });
-
-  it('returns no steps when given empty inputs', () => {
-    expect(buildReplicaBlueprintSteps({})).toEqual([]);
-  });
-
-  it('sanitizes theme.json before emitting Playground writeFile steps', () => {
-    const steps = buildReplicaBlueprintSteps({
-      themeSlug: 'foo-replica',
-      themeFiles: [
-        {
-          relativePath: 'theme.json',
-          content: JSON.stringify({
-            version: 3,
-            settings: { spacing: { spacingScale: { theme: false } } },
-          }),
-        },
-      ],
-    });
-
-    const themeJsonStep = steps.find(
-      (s) => s.step === 'writeFile' && s.path.endsWith('/theme.json'),
-    ) as { step: 'writeFile'; path: string; data: string };
-    const parsed = JSON.parse(themeJsonStep.data);
-    expect(parsed.settings.spacing.spacingScale).toBeUndefined();
-  });
-
-  it('emits only theme activation when no plugins', () => {
-    const steps = buildReplicaBlueprintSteps({
-      themeSlug: 'foo',
-      themeFiles: [{ relativePath: 'style.css', content: '' }],
-    });
-    expect(steps.find((s) => 'command' in s && s.command.includes('plugin activate'))).toBeUndefined();
-    expect(steps.find((s) => 'command' in s && s.command.includes('theme activate foo'))).toBeDefined();
-  });
-});

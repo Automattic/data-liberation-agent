@@ -21,7 +21,7 @@ This is an eyes-on loop, not a one-shot emit. Apply → render → **look at bot
 
 ## Inputs the orchestrator gives you
 
-- `outputDir` (e.g. `output/example.com`), `studioSitePath` (e.g. `~/Studio/example-com`), `themeSlug`, the page `slug` + `sourceUrl`, and the **section index** `i` within that page.
+- `outputDir` (e.g. `~/Studio/_liberations/example.com`), `studioSitePath` (e.g. `~/Studio/example-com`), `themeSlug`, the page `slug` + `sourceUrl`, and the **section index** `i` within that page.
 - The replica preview URL (e.g. `http://localhost:8881`).
 
 Everything else you READ yourself from the captured data below.

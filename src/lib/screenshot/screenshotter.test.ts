@@ -171,7 +171,8 @@ describe('captureScreenshots', () => {
     await expect(
       captureScreenshots({
         urls: ['https://a.com/x'],
-        outputDir: '/tmp/../etc/evil',
+        // relative path — normalize keeps the leading '..' (join would collapse it)
+        outputDir: '../escape',
       }),
     ).rejects.toThrow(/traversal|outside/i);
   });
