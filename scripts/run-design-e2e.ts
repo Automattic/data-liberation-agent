@@ -30,6 +30,7 @@
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { compareScreenshotDirs, type ComparisonResult } from '../src/lib/screenshot/compare.js';
+import { resolveOutputBase } from '../src/lib/paths.js';
 
 // ── Arg parsing ──────────────────────────────────────────────────────────────
 
@@ -56,7 +57,7 @@ if (!originUrl) {
   process.exit(1);
 }
 
-const outDirArg = positional[1] ?? './output/design-e2e';
+const outDirArg = positional[1] ?? join(resolveOutputBase(), 'design-e2e');
 const outDir = resolve(outDirArg);
 mkdirSync(outDir, { recursive: true });
 
