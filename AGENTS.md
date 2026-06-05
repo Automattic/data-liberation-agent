@@ -10,12 +10,19 @@ The `scripts/` directory contains legacy standalone extraction scripts (Squaresp
 
 ## Adding a New Platform
 
-1. Create `src/adapters/<platform>.ts` implementing `PlatformAdapter`
-2. Register it in `src/mcp-server.ts` (see the "Static adapter imports" comment)
+1. Create `src/adapters/<platform>/` — a directory whose `index.ts` assembles and exports the `PlatformAdapter` (inline `detect` + `discover`/`extract` imported from focused siblings: `discover.ts`, `extract.ts`, `content.ts`, `media.ts`, `products.ts`, `types.ts`, …). Keep `index.ts` a thin assembler and re-export the adapter's public API from it so external imports only reference `<platform>/index.js`. See `src/adapters/webflow/` (smallest) or `src/adapters/shopify/` (fuller split) as references.
+2. Register it in `src/mcp-server.ts` (see the "Static adapter imports" comment) — import from `./adapters/<platform>/index.js`.
 3. Add platform-specific barriers and workarounds as inline comments in the adapter
 4. Update the supported platforms table in `README.md`
 
 Adapters produce structured content and call into `WxrBuilder`, `ExtractionLog`, `ImportSession`, `MediaStubStore`, and `media` utilities for output.
+
+### Optional per-adapter capabilities
+
+Both are opt-in, declared on the adapter object, and consumed by later pipeline stages — the stage subsystems (screenshotter, reconstructor) stay adapter-agnostic; the handlers that already resolve the adapter do the wiring. Types live in `src/adapters/page-actions.ts`.
+
+- **`capture?: AdapterCapture`** (seam 1) — `removeSelectors: string[]` (plus an optional imperative `prepare(page, ctx)`) removed from the live page in `screenshotter.ts` after settle and BEFORE screenshots / carried HTML / mobile carry / `SectionSpec` are captured, so one removal cleans every artifact. Best-effort (never fails capture). Put it in `<platform>/capture.ts`; example: `src/adapters/shopify/capture.ts` (strips `#upCart` + Klaviyo teaser chrome).
+- **`blocks?: AdapterBlocks`** (seam 2) — a content→Gutenberg-blocks recipe (a declarative `recipes[]` table and/or a whole-body `htmlToBlocks(html, ctx)` fn). Applied ONLY on the blocks reconstruct path (`page-reconstruct.ts`, before the `core/html` fallback island); the theme/carry path never invokes it. Put it in `<platform>/blocks.ts`; example: `src/adapters/squarespace/blocks.ts`.
 
 ## Resume State Files
 

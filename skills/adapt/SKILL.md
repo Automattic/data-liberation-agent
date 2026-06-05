@@ -77,7 +77,7 @@ You can also call `liberate_probe` to inspect window globals, localStorage, cook
 
 ### 2a. Scaffold
 
-Create `src/adapters/<platform>.ts` following the existing pattern. Read `src/adapters/webflow.ts` as a reference — it's the simplest adapter.
+Create `src/adapters/<platform>/` — a directory whose `index.ts` assembles and exports the adapter over focused siblings (`discover.ts`, `extract.ts`, `content.ts`, `media.ts`, `products.ts`, `types.ts`, …). Read `src/adapters/webflow/` as a reference — it's the simplest adapter (a 3-file split). Optionally add `<platform>/capture.ts` (pre-capture DOM removals) or `<platform>/blocks.ts` (content→blocks recipe); see `src/adapters/page-actions.ts`.
 
 Every adapter must:
 - Export a `<platform>Adapter` object implementing `PlatformAdapter` from `src/types.ts`
@@ -141,7 +141,7 @@ The custom extractor is called before the generic JSON-LD fallback, so it takes 
 - `type` — `'simple'`, `'variable'`, `'grouped'`, `'external'`, or `'variation'`
 - `parentSku` — for variations, the parent product's SKU
 
-**Variable products:** If the platform supports product variants (sizes, colors), generate one `variable` parent row plus `variation` child rows with `parentSku` linking them. See `shopifyProductToWoo()` in `src/adapters/shopify.ts` for the pattern.
+**Variable products:** If the platform supports product variants (sizes, colors), generate one `variable` parent row plus `variation` child rows with `parentSku` linking them. See `shopifyProductToWoo()` in `src/adapters/shopify/products.ts` for the pattern.
 
 **CSV streaming:** The adapter should create a `WooProductCsvBuilder`, call `openStream(outputDir)` before extraction, and `closeStream()` after. The shared loop calls `csvBuilder.addProduct()` automatically when it detects products. See the Shopify or Wix adapters for the wiring pattern.
 
