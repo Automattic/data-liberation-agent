@@ -18,7 +18,8 @@ vi.mock('../../adapters/shared.js', async (importOriginal) => {
   };
 });
 
-import { captureScreenshots } from './screenshotter.js';
+import { captureScreenshots, getHomepageUrl } from './screenshotter.js';
+import { classifyUrl } from '../extraction/sitemap.js';
 import * as shared from '../../adapters/shared.js';
 
 interface MockContext { newPage: () => Promise<unknown>; addInitScript: (script: unknown) => Promise<void>; close: () => Promise<void> }
@@ -251,5 +252,96 @@ describe('captureScreenshots', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it('samples evenly across types under a tight limit and always includes the homepage', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ss-'));
+    try {
+      // 20 posts FIRST (sitemap-order leads with one kind), then 5 pages, then a
+      // /home homepage last. First-N would capture only posts and miss home.
+      const posts = Array.from({ length: 20 }, (_, i) => `https://example.com/blog/post-${i}`);
+      const pages = Array.from({ length: 5 }, (_, i) => `https://example.com/info-${i}`);
+      const urls = [...posts, ...pages, 'https://example.com/home'];
+      (shared.connectBrowser as ReturnType<typeof vi.fn>).mockResolvedValue(makeMockBrowser());
+      const result = await captureScreenshots({
+        urls,
+        outputDir: dir,
+        concurrency: 3,
+        limit: 6,
+        settleMs: 0,
+      });
+      expect(result.captured + result.skipped).toBe(6);
+      const manifest = JSON.parse(readFileSync(join(dir, 'screenshots', 'manifest.json'), 'utf8'));
+      const capturedUrls = Object.keys(manifest.entries);
+      expect(capturedUrls).toHaveLength(6);
+      // Homepage (/home) must be present even though it was last in sitemap order.
+      expect(capturedUrls).toContain('https://example.com/home');
+      const types = capturedUrls.map((u) => classifyUrl(u));
+      // The sample must span BOTH posts and pages — not all one kind.
+      expect(types).toContain('post');
+      expect(types).toContain('page');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('captures all URLs when limit >= count', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ss-'));
+    try {
+      const urls = [
+        'https://example.com/blog/post-0',
+        'https://example.com/info-0',
+        'https://example.com/home',
+      ];
+      (shared.connectBrowser as ReturnType<typeof vi.fn>).mockResolvedValue(makeMockBrowser());
+      const result = await captureScreenshots({
+        urls,
+        outputDir: dir,
+        concurrency: 3,
+        limit: 10,
+        settleMs: 0,
+      });
+      expect(result.captured + result.skipped).toBe(3);
+      const manifest = JSON.parse(readFileSync(join(dir, 'screenshots', 'manifest.json'), 'utf8'));
+      expect(Object.keys(manifest.entries)).toHaveLength(3);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('getHomepageUrl', () => {
+  it('returns the real bare-root URL when one exists', () => {
+    expect(
+      getHomepageUrl(['https://example.com/about', 'https://example.com/', 'https://example.com/contact']),
+    ).toBe('https://example.com/');
+  });
+
+  it('falls back to a /home slug URL when no bare-root URL exists', () => {
+    expect(
+      getHomepageUrl(['https://example.com/blog/post-1', 'https://example.com/home', 'https://example.com/contact']),
+    ).toBe('https://example.com/home');
+  });
+
+  it('prefers the bare root over a /home slug when both are present', () => {
+    expect(
+      getHomepageUrl(['https://example.com/home', 'https://example.com/']),
+    ).toBe('https://example.com/');
+  });
+
+  it('recognizes the common homepage slugs case-insensitively (trailing slash tolerated)', () => {
+    expect(getHomepageUrl(['https://example.com/p', 'https://example.com/Index'])).toBe('https://example.com/Index');
+    expect(getHomepageUrl(['https://example.com/p', 'https://example.com/home-page/'])).toBe('https://example.com/home-page/');
+    expect(getHomepageUrl(['https://example.com/p', 'https://example.com/Homepage'])).toBe('https://example.com/Homepage');
+  });
+
+  it('falls back to urls[0] when nothing matches', () => {
+    expect(
+      getHomepageUrl(['https://example.com/about', 'https://example.com/contact']),
+    ).toBe('https://example.com/about');
+  });
+
+  it('returns null for an empty list', () => {
+    expect(getHomepageUrl([])).toBeNull();
   });
 });

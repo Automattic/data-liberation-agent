@@ -3,7 +3,7 @@ import { dirname, join } from 'node:path';
 import type { Browser, BrowserContext, Page } from 'playwright';
 import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { connectBrowser, slugify } from '../../adapters/shared.js';
-import { classifyUrl } from '../extraction/sitemap.js';
+import { classifyUrl, type UrlType } from '../extraction/sitemap.js';
 import {
   DEFAULT_VIEWPORTS,
   SCREENSHOT_DEVICE_SCALE_FACTOR,
@@ -157,6 +157,23 @@ interface CapturePerViewportArgs {
   mobileHeights: Record<string, number>;
 }
 
+/** Sleep helper for navigation backoff. */
+function navSleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Backoff before retrying a throttled / transiently-failed navigation. Honors a
+ * numeric `Retry-After` (seconds) when the throttler supplies one; otherwise
+ * exponential (1s, 2s, 4s…), capped at 15s.
+ */
+function navBackoffMs(attempt: number, retryAfter?: string): number {
+  const cap = 15_000;
+  const raSec = retryAfter ? Number(retryAfter) : NaN;
+  if (Number.isFinite(raSec) && raSec >= 0) return Math.min(raSec * 1000, cap);
+  return Math.min(1000 * 2 ** (attempt - 1), cap);
+}
+
 async function capturePerViewport(args: CapturePerViewportArgs): Promise<void> {
   const {
     page, viewport, plan, url, slug, archetype,
@@ -167,31 +184,39 @@ async function capturePerViewport(args: CapturePerViewportArgs): Promise<void> {
   const now = () => new Date().toISOString();
   const isDesktop = viewport.id === 'desktop';
 
-  // --- navigation -----------------------------------------------------------
-  try {
-    const response = await page.goto(url, { waitUntil: 'load', timeout: 30_000 });
-    if (response && response.status() >= 400) {
-      failures.push({
-        url,
-        viewport: viewport.id,
-        stage: 'goto',
-        error: `HTTP ${response.status()}`,
-        timestamp: now(),
-        attempt: 1,
-      });
+  // --- navigation (with 429/503 backoff) ------------------------------------
+  // Shopify and other CDNs rate-limit aggressive concurrent capture with HTTP 429
+  // (and transient 503s). Without backoff one throttle cascades into wholesale
+  // failure (see DISCOVERIES 2026-06-04 — getsnooz's 168-op cascade). Retry the
+  // retryable statuses + transient nav errors, honoring Retry-After, before
+  // recording the failure. Non-retryable 4xx fail immediately.
+  const RETRYABLE_STATUS = new Set([429, 503]);
+  const MAX_NAV_ATTEMPTS = 4;
+  let navigated = false;
+  for (let attempt = 1; attempt <= MAX_NAV_ATTEMPTS; attempt++) {
+    try {
+      const response = await page.goto(url, { waitUntil: 'load', timeout: 30_000 });
+      const status = response ? response.status() : 0;
+      if (status >= 400) {
+        if (RETRYABLE_STATUS.has(status) && attempt < MAX_NAV_ATTEMPTS) {
+          await navSleep(navBackoffMs(attempt, response?.headers()['retry-after']));
+          continue;
+        }
+        failures.push({ url, viewport: viewport.id, stage: 'goto', error: `HTTP ${status}`, timestamp: now(), attempt });
+        return;
+      }
+      navigated = true;
+      break;
+    } catch (err) {
+      if (attempt < MAX_NAV_ATTEMPTS) {
+        await navSleep(navBackoffMs(attempt));
+        continue;
+      }
+      failures.push({ url, viewport: viewport.id, stage: 'goto', error: err instanceof Error ? err.message : String(err), timestamp: now(), attempt });
       return;
     }
-  } catch (err) {
-    failures.push({
-      url,
-      viewport: viewport.id,
-      stage: 'goto',
-      error: err instanceof Error ? err.message : String(err),
-      timestamp: now(),
-      attempt: 1,
-    });
-    return;
   }
+  if (!navigated) return;
 
   // --- settle, dismiss overlays, lazy load ----------------------------------
   await waitForStable(page, settleMs);
@@ -483,9 +508,96 @@ async function capturePerViewport(args: CapturePerViewportArgs): Promise<void> {
   }
 }
 
+/**
+ * Common homepage path slugs used by builders that DON'T serve the home page at
+ * the bare root (e.g. a sitemap whose only "home" entry is `/home`). Matched
+ * case-insensitively against the exact pathname (trailing slash tolerated).
+ */
+const HOMEPAGE_SLUGS = new Set(['/home', '/index', '/home-page', '/homepage']);
+
+/**
+ * Pick the URL that represents the site's home page. Prefers a URL that
+ * `classifyUrl` recognizes as 'homepage' (path `/` or empty). When none exists
+ * — some sites have no bare-root entry and serve home at `/home` — fall back to
+ * the first URL whose path is a well-known homepage slug, and only then to
+ * `urls[0]`. Returns null for an empty list.
+ */
+export function getHomepageUrl(urls: string[]): string | null {
+  if (urls.length === 0) return null;
+  const classified = urls.find((url) => classifyUrl(url) === 'homepage');
+  if (classified) return classified;
+  const slugMatch = urls.find((url) => {
+    let path: string;
+    try {
+      path = new URL(url).pathname.toLowerCase();
+    } catch {
+      path = url.toLowerCase();
+    }
+    return HOMEPAGE_SLUGS.has(path.replace(/\/$/, '') || '/');
+  });
+  return slugMatch ?? urls[0];
+}
+
+/**
+ * Reduce `urls` to at most `limit` entries. When the truncation would drop
+ * pages AND the filtered set spans more than one `UrlType`, sample EVENLY
+ * across the present types (round-robin in stable first-seen order) instead of
+ * taking the first N — a small sample of a sitemap that happens to lead with
+ * dozens of one kind (e.g. news posts) would otherwise miss the design-defining
+ * info pages entirely. The homepage URL is always included even if the
+ * round-robin would have dropped it. When `limit >= count` or only one type is
+ * present, the original order is preserved (still guaranteeing homepage
+ * inclusion).
+ */
+function sampleUrlsByType(urls: string[], limit: number): string[] {
+  if (urls.length <= limit) return urls;
+
+  const homepage = getHomepageUrl(urls);
+
+  // Group URLs by type, preserving first-seen type order and per-type order.
+  const buckets = new Map<UrlType, string[]>();
+  for (const url of urls) {
+    const type = classifyUrl(url);
+    const bucket = buckets.get(type);
+    if (bucket) bucket.push(url);
+    else buckets.set(type, [url]);
+  }
+
+  let selected: string[];
+  if (buckets.size <= 1) {
+    // Single type — first-N is already representative.
+    selected = urls.slice(0, limit);
+  } else {
+    // Round-robin across the type buckets until we hit the limit.
+    const order = [...buckets.keys()];
+    const out: string[] = [];
+    let added = true;
+    while (out.length < limit && added) {
+      added = false;
+      for (const type of order) {
+        if (out.length >= limit) break;
+        const bucket = buckets.get(type)!;
+        if (bucket.length > 0) {
+          out.push(bucket.shift()!);
+          added = true;
+        }
+      }
+    }
+    selected = out;
+  }
+
+  // Guarantee the homepage is present even if the sample dropped it. Swap it in
+  // for the last slot rather than overflow `limit`.
+  if (homepage && !selected.includes(homepage)) {
+    if (selected.length < limit) selected.push(homepage);
+    else selected[selected.length - 1] = homepage;
+  }
+  return selected;
+}
+
 function selectRepresentativeAnalysisUrl(urls: string[]): string | null {
   if (urls.length === 0 || ANALYSIS_SAMPLE_LIMIT <= 0) return null;
-  return urls.find((url) => classifyUrl(url) === 'homepage') ?? urls[0];
+  return getHomepageUrl(urls);
 }
 
 function hasSingleUrlAggregate(outputDir: string): boolean {
@@ -530,7 +642,7 @@ export async function captureScreenshots(opts: ScreenshotOpts): Promise<Screensh
     urls = urls.filter((u) => allowed.has(classifyUrl(u)));
   }
   if (typeof opts.limit === 'number' && opts.limit >= 0) {
-    urls = urls.slice(0, opts.limit);
+    urls = sampleUrlsByType(urls, opts.limit);
   }
   const representativeAnalysisUrl = selectRepresentativeAnalysisUrl(urls);
 
