@@ -358,7 +358,7 @@ export async function startStudioPreview(opts: StartStudioOpts): Promise<StartPr
   // Validate replica inputs up front — fail fast before creating a site.
   validateReplicaInputs(opts.themeFiles, opts.blockPlugins, opts.themeSlug);
 
-  const blueprintPath = persistBlueprint(opts.outputDir, 'studio');
+  const blueprintPath = persistBlueprint(opts.outputDir);
   let existingSites: StudioSite[] = [];
   try {
     existingSites = await listStudioSites();
