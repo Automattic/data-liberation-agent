@@ -15,6 +15,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { chromium } from 'playwright';
+import { resolveOutputBase } from '../src/lib/paths.js';
 import { freezePage } from '../src/lib/screenshot/freeze.js';
 import { scoreViewportPair, type ViewportId } from '../src/lib/screenshot/compare.js';
 
@@ -28,7 +29,7 @@ if (!originUrl) {
   process.exit(1);
 }
 
-const outDir = outDirArg ?? './output/spike';
+const outDir = outDirArg ?? join(resolveOutputBase(), 'spike');
 mkdirSync(outDir, { recursive: true });
 
 // Load single-file bundle (devDependency; no type declarations).

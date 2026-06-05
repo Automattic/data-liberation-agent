@@ -1,6 +1,6 @@
 # Visual QA
 
-Mandatory final step (step 14 of `/liberate`). Deploy the generated theme to Automattic Studio (Playground as fallback), screenshot the rendered result, and iterate until the diff against the captured source passes. Do not declare the site complete without this step.
+Mandatory final step (step 14 of `/liberate`). Deploy the generated theme to Automattic Studio (required — install at https://developer.wordpress.com/studio/ if absent), screenshot the rendered result, and iterate until the diff against the captured source passes. Do not declare the site complete without this step.
 
 ## Contents
 
@@ -17,7 +17,7 @@ Mandatory final step (step 14 of `/liberate`). Deploy the generated theme to Aut
 
 ## 1. Deploy with Automattic Studio
 
-Our preview runtime is **Automattic Studio** (use Playground only as a fallback when Studio is unavailable).
+Our preview runtime is **Automattic Studio** (required; install at https://developer.wordpress.com/studio/ if absent).
 
 0. Run the artifact validator and fix any failures before launching WordPress:
 
@@ -46,13 +46,13 @@ Use the Playwright MCP tools (`mcp__plugin_playwright_playwright__*`) to navigat
 browser_navigate { url: "<studio-local-url>" }
 browser_resize { width: 1280, height: 1400 }
 # Wait ~2s for WP to hydrate fonts + images, then capture:
-browser_take_screenshot { fullPage: true, path: "output/<site>/wp-result-desktop.png" }
+browser_take_screenshot { fullPage: true, path: "<outputDir>/wp-result-desktop.png" }
 ```
 
 For mobile:
 ```
 browser_resize { width: 390, height: 844 }
-browser_take_screenshot { fullPage: true, path: "output/<site>/wp-result-mobile.png" }
+browser_take_screenshot { fullPage: true, path: "<outputDir>/wp-result-mobile.png" }
 ```
 
 After capture, check the actual screenshot dimensions. Some Wix layouts keep a fixed wide canvas on a 390px viewport, so the rendered content stays ~`980`/`1280px` and gets clipped (an ancestor's `overflow-x:clip` keeps `scrollWidth == 390` while real content sits off-screen). **This is a responsiveness FAILURE, not something to preserve** — do NOT reproduce the source's fixed width with a theme-scoped `min-width` (that ships an amputated mobile layout). A fixed-coordinate page-builder section that renders past the fold (`contentPastFold > 0`) must be rebuilt via **R4a** (`rebuild-section` → reflowing core blocks); the raw styled island (R4b) is a desktop-only floor. See [[project_r4b_styled_island_responsiveness]].
@@ -124,7 +124,7 @@ A site targeting high UI match cannot pass with a motion `fail`; either preserve
 
 ### Failure class A — spec file was wrong
 
-The `output/<site>/specs/section-<n>-<type>.md` file has a value that doesn't match what the site actually shows. Re-run the section extraction tool for that section's Y band, update the spec, regenerate the pattern (step 10 of `/liberate`), reinstall, screenshot again.
+The `<outputDir>/specs/section-<n>-<type>.md` file has a value that doesn't match what the site actually shows. Re-run the section extraction tool for that section's Y band, update the spec, regenerate the pattern (step 10 of `/liberate`), reinstall, screenshot again.
 
 If the extractor and the screenshot disagree, the screenshot wins. Page builders can expose hidden or off-band DOM content that is technically extractable but not visually present in the capture. Mark those cases in the spec's "Notes for the pattern generator" and either omit the visible output or preserve only its vertical rhythm.
 
@@ -144,7 +144,7 @@ Each iteration: fix the highest-impact failure class first (A before B before C)
 
 ## 9. Run-report output
 
-At the end of the QA loop, the `design-qa` skill emits `output/<site>/run-report.json`. Required fields:
+At the end of the QA loop, the `design-qa` skill emits `<outputDir>/run-report.json`. Required fields:
 
 ```json
 {

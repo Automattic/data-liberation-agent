@@ -1,12 +1,11 @@
 # Install Targets
 
-The replica theme can be installed into one of three places. The MCP tool `liberate_replicate_install` picks one when `target: { kind: "auto" }` is passed. This reference covers what each target means and when to override `auto`.
+The replica theme can be installed into one of two places. The MCP tool `liberate_replicate_install` picks one when `target: { kind: "auto" }` is passed. This reference covers what each target means and when to override `auto`.
 
 ## Detection precedence
 
-1. **Studio** — preferred when available. Persistent, named site, built-in admin and DB.
-2. **Playground** — used when Studio is not installed, or `_noStudio` is forced (test runs).
-3. **Zip** — fallback for environments without either, or for CI/automation.
+1. **Studio** — required for preview/import. Persistent, named site, built-in admin and DB. Install at https://developer.wordpress.com/studio/ if absent.
+2. **Zip** — fallback for CI/automation without Studio, or when the user wants to upload manually to a hosted WP site.
 
 ## Studio
 
@@ -29,35 +28,11 @@ The replica theme can be installed into one of three places. The MCP tool `liber
 
 **HTTPS:** Studio sites support HTTPS via mkcert. If the source site uses HTTPS-only resources (mixed content blocks them), enable HTTPS in the Studio site config. The MCP tool toggles this automatically based on whether the source's `screenshots/manifest.json` URLs are all HTTPS.
 
-## Playground
-
-**Detection:** Studio missing, but `@wp-playground/cli` available (or a Playground server is already running per `output/<site>/playground/blueprint.studio.json`).
-
-**Theme path:** Theme files are uploaded via Playground's blueprint mechanism — they go into the in-memory VFS at `/wordpress/wp-content/themes/<siteSlug>-replica/`.
-
-**Blueprint integration:** The MCP tool extends the existing `output/<site>/playground/blueprint.studio.json` with additional steps:
-
-```jsonc
-{
-  "step": "writeFile",
-  "path": "/wordpress/wp-content/themes/<siteSlug>-replica/style.css",
-  "data": "..."
-}
-// repeated per file
-{ "step": "activateTheme", "themeFolderName": "<siteSlug>-replica" }
-```
-
-For block plugins, similarly add `installPlugin` or `writeFile` steps and a corresponding `activatePlugin` step.
-
-**Persistence:** Playground state is in-memory by default. The replica goes away when the Playground process exits. For longer-lived dev, prefer Studio.
-
-**WooCommerce:** Already added to the existing blueprint when `products.jsonl` is present (see the example blueprint with `slug: "woocommerce"`).
-
 ## Zip
 
-**Detection:** Neither Studio nor Playground available. Or the user explicitly requested a zip (e.g., to upload manually to a hosted WP site).
+**Detection:** Studio not available (CI environment), or the user explicitly requested a zip (e.g., to upload manually to a hosted WP site).
 
-**Output path:** `output/<site>/<siteSlug>-replica.zip`. Zip contents:
+**Output path:** `<outputDir>/<siteSlug>-replica.zip`. Zip contents:
 
 ```
 <siteSlug>-replica/
@@ -79,7 +54,7 @@ If block plugins were generated, they go in a separate zip: `<siteSlug>-replica-
 Pass an explicit target when:
 
 - The user has multiple Studio sites and wants a specific one — pass `siteId`.
-- You're testing the skill in CI without Studio — pass `kind: "playground"` or `kind: "zip"`.
+- You're running in CI without Studio — pass `kind: "zip"` to export a theme zip instead.
 - You want a clean install — pass `kind: "studio", siteId: "new"` to force a new Studio site.
 
 ## Failure modes

@@ -10,13 +10,13 @@ describe('validateOutputDir', () => {
     expect(() => validateOutputDir(p)).not.toThrow();
   });
 
-  it('rejects ../ path traversal', () => {
-    const p = join(process.cwd(), '..', 'escape');
-    expect(() => validateOutputDir(p)).toThrow(/traversal|outside/i);
+  it('accepts an absolute path outside cwd (no longer cwd-pinned)', () => {
+    expect(() => validateOutputDir(join(tmpdir(), 'dla-out'))).not.toThrow();
   });
 
-  it('rejects embedded ..', () => {
-    expect(() => validateOutputDir('/tmp/output/../etc')).toThrow();
+  it("rejects '..' traversal", () => {
+    // path.join resolves '..', so use a raw relative path — normalize keeps the leading '..'
+    expect(() => validateOutputDir('../escape')).toThrow(/traversal/);
   });
 });
 

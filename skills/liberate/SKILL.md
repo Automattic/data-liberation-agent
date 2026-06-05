@@ -46,7 +46,7 @@ Each sub-skill owns its own reconstruct → install → QA → report; this skil
 
 Capture is still shared across both paths, so the "try the other path with zero re-capture" property holds: re-running `/liberate <url>` after a full run hits the idempotent check, loads the cached inventory, and lands you straight back on the path question.
 
-Each sub-skill owns its own reconstruct → install → QA → report, plus its own budget guard (`checkBudget` in `src/lib/replicate/budget-guard.ts`) and run-report (`buildRunReport` in `src/lib/replicate/run-report.ts`). This skill's deliverable is the captured `output/<site>/` + the dispatch; the chosen sub-skill produces the replica + its `run-report*.json`.
+Each sub-skill owns its own reconstruct → install → QA → report, plus its own budget guard (`checkBudget` in `src/lib/replicate/budget-guard.ts`) and run-report (`buildRunReport` in `src/lib/replicate/run-report.ts`). This skill's deliverable is the captured output directory + the dispatch; the chosen sub-skill produces the replica + its `run-report*.json`.
 
 ---
 
@@ -54,7 +54,7 @@ Each sub-skill owns its own reconstruct → install → QA → report, plus its 
 
 ### Step 0 — Idempotent check (run first)
 
-Derive `output/<site>/` from the URL. If extraction is already complete — any of `.discovery-complete`, a `session.json` stage past extraction, or all of `output.wxr` + `html/*.html` + `screenshots/manifest.json` present — **skip Steps 1 and 3–6**, load the cached inventory (`session.json` / discovery output), and jump straight to the **Step 2 — Confirm + path checkpoint** below. Otherwise run Step 1, hit the checkpoint, then run Steps 3–6. (For a partial capture, prefer `resume: true`; see Resuming.)
+Call `liberate_paths({ url })` to resolve the output directory (`siteDir`). Do not hardcode `output/<site>/` relative to cwd — the default output base is now `~/Studio/_liberations/<host>`. If extraction is already complete — any of `.discovery-complete`, a `session.json` stage past extraction, or all of `output.wxr` + `html/*.html` + `screenshots/manifest.json` present in the resolved `siteDir` — **skip Steps 1 and 3–6**, load the cached inventory (`session.json` / discovery output), and jump straight to the **Step 2 — Confirm + path checkpoint** below. Otherwise run Step 1, hit the checkpoint, then run Steps 3–6. (For a partial capture, prefer `resume: true`; see Resuming.)
 
 ### Step 1 — Detect & discover
 
@@ -111,7 +111,7 @@ If products were extracted, compile `products.jsonl` → `products.csv` (WooComm
 
 ### Dispatch (inline)
 
-Both reconstruct sub-skills are `disable-model-invocation: true` by design — they only ever run from this front door (post-capture), never spontaneously. That means **the Skill tool cannot invoke them**: a `Skill({ skill: 'replicate-theme' })` call is rejected with `cannot be used with Skill tool due to disable-model-invocation`. So **dispatch = Read the chosen sub-skill's `SKILL.md` and execute its workflow inline in this same shared context** (each sub-skill reads `output/<site>/` from disk and owns its own install → QA → report):
+Both reconstruct sub-skills are `disable-model-invocation: true` by design — they only ever run from this front door (post-capture), never spontaneously. That means **the Skill tool cannot invoke them**: a `Skill({ skill: 'replicate-theme' })` call is rejected with `cannot be used with Skill tool due to disable-model-invocation`. So **dispatch = Read the chosen sub-skill's `SKILL.md` and execute its workflow inline in this same shared context** (each sub-skill reads the resolved output directory from disk — use the `siteDir` returned by `liberate_paths` — and owns its own install → QA → report):
 
 - blocks+products → read & follow `skills/replicate-with-blocks/SKILL.md`
 - theme replication → read & follow `skills/replicate-theme/SKILL.md`
@@ -292,6 +292,6 @@ Pages use DOM-based extraction: strip `HEADER_SECTION`, `FOOTER_*`, cookie banne
 
 - The extraction produces a WXR file (WordPress import format) + a media directory + a redirect map.
 - If the site has products, a `products.csv` (WooCommerce format) and `products.jsonl` are also produced.
-- All content is imported as **drafts by default** — the user reviews and publishes manually (the WXR a user imports into their production WordPress). This is `liberate_extract`'s `contentStatus` default (`'draft'`). **When building a replica/preview** (the design phase — a Studio/Playground replica whose nav must resolve), pass `contentStatus: 'publish'` to `liberate_extract`/`liberate_extract_one` so imported pages/posts are live instead of 404ing. Attachments always use WP's `inherit` regardless.
+- All content is imported as **drafts by default** — the user reviews and publishes manually (the WXR a user imports into their production WordPress). This is `liberate_extract`'s `contentStatus` default (`'draft'`). **When building a replica/preview** (the design phase — a Studio replica whose nav must resolve), pass `contentStatus: 'publish'` to `liberate_extract`/`liberate_extract_one` so imported pages/posts are live instead of 404ing. Attachments always use WP's `inherit` regardless.
 - The WordPress import step supports `importAuthors: true` to create WP user accounts per author, or `importAuthors: false` (default) to assign all content to the authenticated user. Ask before importing.
 - If no environment import skill is available, validate the WordPress connection with `liberate_setup` first, then call `liberate_import` with REST API credentials. If the environment provides an import skill (e.g. `import-liberated-data`), use `delegate: true` with both `liberate_setup` and `liberate_import`.

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // src/cli.ts
 import { join } from 'node:path';
+import { resolveOutputBase } from './lib/paths.js';
 
 const args = process.argv.slice(2);
 
@@ -27,14 +28,14 @@ if (args[0] === 'mcp') {
     data-liberation qa <wxr-file>        Compare WXR against source site
     data-liberation verify <output-dir>  Verify extraction results
     data-liberation setup                Validate WordPress connection
-    data-liberation preview <outputDir>  Preview extraction in WordPress Playground
+    data-liberation preview <outputDir>  Preview extraction in Studio
     data-liberation screenshot <url>   Capture screenshots of every URL
     data-liberation design-foundation <outputDir>  Build/validate design-foundation.json (agent fallback)
     data-liberation mcp                Start MCP server (stdio transport)
     data-liberation --version          Show version
 
   Extract options:
-    --output <dir>       Output directory (default: ./output)
+    --output <dir>       Output directory (default: <Studio root>/_liberations/<hostname>; override with --output or DLA_OUTPUT_DIR)
     --dry-run            Extract 2-3 pages and report without writing WXR
     --limit <N>          Cap extraction to the first N URLs (writes a real WXR)
     --resume             Resume a previous extraction
@@ -60,7 +61,7 @@ if (args[0] === 'mcp') {
     --no-agent           Run deterministic-only — no AI invocations, judgmentNeeded markers
                          accumulate in <outputDir>/<site>/watch.log for later resolution
     --reset              Wipe streaming state (replicate-state.json + block-transform-log.jsonl
-                         + playground-site/) before starting
+                         + composed/) before starting
 
   Import options:
     --site <domain>       WordPress site domain
@@ -78,7 +79,7 @@ if (args[0] === 'mcp') {
     --non-interactive    Skip the post-preview import nudge
 
   Screenshot options:
-    --output <dir>         Output directory (default: ./output/<hostname>)
+    --output <dir>         Output directory (default: <Studio root>/_liberations/<hostname>; override with --output or DLA_OUTPUT_DIR)
     --types <list>         Comma-separated: page,post,product,homepage,gallery,event
     --limit <N>            Cap to first N URLs
     --concurrency <N>      Parallel captures (default 6, max 10)
@@ -125,7 +126,7 @@ if (args[0] === 'mcp') {
   runQaUi({ wxrFile, fix });
 
 } else if (args[0] === 'verify') {
-  const outputDir = args[1] || getArg('--output') || './output';
+  const outputDir = args[1] || getArg('--output') || resolveOutputBase();
   if (outputDir.startsWith('-')) {
     console.error('Error: output directory required. Usage: data-liberation verify <output-dir>');
     process.exit(1);
@@ -168,7 +169,7 @@ if (args[0] === 'mcp') {
     output = outputArg;
   } else {
     try {
-      output = `./output/${new URL(url).hostname}`;
+      output = join(resolveOutputBase(), new URL(url).hostname);
     } catch {
       console.error(`Error: invalid URL: ${url}`);
       process.exit(1);
@@ -274,7 +275,8 @@ if (args[0] === 'mcp') {
     process.exit(1);
   }
 
-  const outputDir = getArg('--output') || './output';
+  const outputDir = getArg('--output') || resolveOutputBase();
+  process.stderr.write(`[output] base: ${outputDir}\n`);
   const dryRun = args.includes('--dry-run');
   const resume = args.includes('--resume');
   const verbose = args.includes('--verbose');

@@ -13,7 +13,7 @@ The agent gives you:
 
 1. A `PartialDesignFoundation` JSON blob (the output of `liberate_design_foundation_scaffold`). Some roles are already filled in by deterministic rules. The remaining slots are `null`, listed in `skillTodos`.
 2. Aggregate HTML/CSS analysis files: `palette.json`, `typography.json`, `breakpoints.json`, and when present `computed-styles.json`.
-3. Paths to representative rendered HTML excerpts (e.g. `output/<site>/html/homepage.html`).
+3. Paths to representative rendered HTML excerpts (e.g. `<outputDir>/html/homepage.html`).
 4. Optional paths to screenshots for ambiguity checks only.
 5. Access to the MCP tool `liberate_design_foundation_validate`.
 

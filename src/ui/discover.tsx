@@ -21,23 +21,7 @@ import { resolveAdapter } from '../adapters/resolve-adapter.js';
 import { mkdirSync, existsSync, writeFileSync, readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { autoPreview } from './preview.js';
-
-function siteOutputDir(baseDir: string, url: string): string {
-  let host: string;
-  try {
-    const parsed = new URL(url.includes('://') ? url : `https://${url}`);
-    host = parsed.hostname + parsed.pathname;
-  } catch {
-    host = url;
-  }
-  const sanitized = host
-    .toLowerCase()
-    .replace(/\/$/, '')
-    .replace(/[^a-z0-9.-]/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^-|-$/g, '');
-  return join(baseDir, sanitized);
-}
+import { siteOutputDir, resolveOutputBase } from '../lib/paths.js';
 
 export interface LiberateProps {
   url: string;
@@ -479,7 +463,7 @@ export function runDiscover(url: string, opts: Partial<LiberateProps> = {}): voi
 
   const props: LiberateProps = {
     url,
-    outputDir: opts.outputDir || './output',
+    outputDir: opts.outputDir || resolveOutputBase(),
     dryRun: opts.dryRun || false,
     resume: opts.resume || false,
     delay: opts.delay || 500,
@@ -499,10 +483,10 @@ export function runDiscover(url: string, opts: Partial<LiberateProps> = {}): voi
   waitUntilExit()
     .then(async () => {
       if (!wxrPath) return;
-      // Post-extract: always boot a local site (Studio if installed, else
-      // Playground) so the user can verify content before importing anywhere
-      // real. autoPreview honors nonInteractive internally — it still boots
-      // the site but skips browser/app auto-open so scripts get a URL.
+      // Post-extract: always boot a local Studio site so the user can verify
+      // content before importing anywhere real. autoPreview honors
+      // nonInteractive internally — it still boots the site but skips
+      // browser/app auto-open so scripts get a URL.
       const outputDir = dirname(wxrPath);
       await autoPreview(outputDir, { nonInteractive: props.nonInteractive });
       if (props.nonInteractive) return;

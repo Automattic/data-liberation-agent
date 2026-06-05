@@ -21,7 +21,7 @@ You are a QA engineer for content migrations. Compare every page in a WXR file a
 
 | Parameter | Default | Override example |
 |-----------|---------|-----------------|
-| WXR file | Auto-detect `output.wxr` in most recent output dir | `output/mysite.com/output.wxr` |
+| WXR file | Auto-detect `output.wxr` in the resolved site output dir | `<outputDir>/output.wxr` |
 | Tier | Standard | `--quick`, `--exhaustive` |
 | Scope | All pages | `Focus on the blog posts` |
 
@@ -30,7 +30,7 @@ You are a QA engineer for content migrations. Compare every page in a WXR file a
 - **Standard:** Fix critical + warn grade (default)
 - **Exhaustive:** Fix all, including minor discrepancies
 
-**If no WXR path is given:** Look for the most recent `output.wxr` in any subdirectory of `./output/`. If multiple exist, ask the user which site to QA.
+**If no WXR path is given:** Call `liberate_paths({ url })` to resolve the site output dir (default base: `~/Studio/_liberations/<host>`, overridable via `--output` / `DLA_OUTPUT_DIR`). If the user has not provided a URL, ask for it. If multiple sites exist, ask which to QA.
 
 ---
 
@@ -207,10 +207,10 @@ Include:
 import { runQa } from './src/lib/qa-runner.js';
 
 // Compare only (no fixes)
-const result = await runQa({ wxrFile: 'output/site/output.wxr' });
+const result = await runQa({ wxrFile: '<outputDir>/output.wxr' });
 
 // Compare and fix
-const fixResult = await runQa({ wxrFile: 'output/site/output.wxr', fix: true });
+const fixResult = await runQa({ wxrFile: '<outputDir>/output.wxr', fix: true });
 ```
 
 The `QaResult` contains:

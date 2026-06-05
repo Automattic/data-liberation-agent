@@ -6,7 +6,7 @@
 //   1. (prereq) origin screenshots exist at <out>/origin-shots/screenshots
 //   2. open the origin page in Playwright, freezePage() → sanitized HTML
 //   3. wrap as ONE core/html block, write frozen.html + frozen.block.html
-//   4. (manual) import the block into the Playground + screenshot the replica
+//   4. (manual) import the block into Studio + screenshot the replica
 //   5. compareScreenshotDirs(origin, replica) → comparison.json
 //   6. write NOTES.md: scores + freeze byte size + via + qualitative prompts
 //
@@ -65,7 +65,7 @@ export async function runFreezeSpike(opts: SpikeOpts): Promise<void> {
 
   if (!existsSync(join(replicaShots, 'manifest.json'))) {
     console.log(`\n[spike] Next steps (manual):`);
-    console.log(`  1. Import the block as a page into the Playground at ${opts.replicaBaseUrl}, e.g. via wp-cli:`);
+    console.log(`  1. Import the block as a page into Studio at ${opts.replicaBaseUrl}, e.g. via wp-cli:`);
     console.log(`       wp post create --post_type=page --post_status=publish --post_name="${slug}" --post_content="$(cat ${join(opts.outputDir, 'frozen.block.html')})"`);
     console.log(`  2. Screenshot the replica:`);
     console.log(`       data-liberation screenshot ${opts.replicaBaseUrl}${pathname} --output ${join(opts.outputDir, 'replica-shots')}`);

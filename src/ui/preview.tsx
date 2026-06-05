@@ -2,9 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { render, useApp, Box, Text } from 'ink';
 import { spawn as spawnProc, execFileSync } from 'node:child_process';
 import { BootSpinner } from '../lib/preview/boot-spinner.js';
-import { startPreview, stopPreview } from '../lib/preview/playground-server.js';
-import { isStudioAvailable } from '../lib/preview/studio.js';
-import type { PreviewPhase, PreviewSource, StartPreviewResult } from '../lib/preview/types.js';
+import { startPreview } from '../lib/preview/studio.js';
+import type { PreviewSource, StartPreviewResult } from '../lib/preview/types.js';
 
 interface RunOpts {
   outputDir: string;
@@ -75,24 +74,18 @@ function openPreview(result: StartPreviewResult): void {
  * Blocking foreground Ink app used by `liberate preview <outputDir>`.
  * Waits until Ctrl+C.
  */
-const PreviewApp: React.FC<RunOpts> = ({ outputDir, open, port }) => {
+const PreviewApp: React.FC<RunOpts> = ({ outputDir, open }) => {
   const { exit } = useApp();
   const [status, setStatus] = useState<'starting' | 'ready' | 'failed'>('starting');
   const [url, setUrl] = useState<string | undefined>();
   const [error, setError] = useState<string | undefined>();
   const [warnings, setWarnings] = useState<string[]>([]);
-  const [, setPhase] = useState<PreviewPhase>('download');
-  const [source] = useState<PreviewSource>(() => isStudioAvailable() ? 'studio' : 'playground');
+  const [source] = useState<PreviewSource>('studio');
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const result = await startPreview({
-        outputDir,
-        port,
-        detached: false,
-        onPhase: (p: PreviewPhase) => { if (!cancelled) setPhase(p); },
-      });
+      const result = await startPreview({ outputDir });
       if (cancelled) return;
       if (result.status === 'ready' && result.url) {
         setUrl(result.url);
@@ -106,9 +99,9 @@ const PreviewApp: React.FC<RunOpts> = ({ outputDir, open, port }) => {
       }
     })();
 
-    const onSig = async () => {
+    const onSig = () => {
       cancelled = true;
-      try { await stopPreview({ outputDir }); } catch { /* best-effort */ }
+      // Studio sites persist; nothing to stop on exit.
       exit();
       process.exit(130);
     };
@@ -118,23 +111,18 @@ const PreviewApp: React.FC<RunOpts> = ({ outputDir, open, port }) => {
       process.off('SIGINT', onSig);
       process.off('SIGTERM', onSig);
     };
-  }, [outputDir, port, open, exit]);
+  }, [outputDir, open, exit]);
 
   return (
     <Box flexDirection="column">
       <BootSpinner done={status === 'ready'} url={url} error={error} source={source} />
       {status === 'ready' && warnings.length > 0 && (
         <Box flexDirection="column" marginTop={1}>
-          <Text color="yellow">⚠ {warnings.length} warning(s) from Playground log:</Text>
+          <Text color="yellow">⚠ {warnings.length} warning(s) from Studio setup:</Text>
           {warnings.slice(0, 5).map((w, i) => (
             <Text key={i} color="yellow">  {w}</Text>
           ))}
-          {warnings.length > 5 && <Text color="gray">  … and {warnings.length - 5} more. See playground/preview.log.</Text>}
-        </Box>
-      )}
-      {status === 'ready' && (
-        <Box marginTop={1}>
-          <Text dimColor>Press Ctrl+C to stop.</Text>
+          {warnings.length > 5 && <Text color="gray">  … and {warnings.length - 5} more. Check Studio's output for details.</Text>}
         </Box>
       )}
     </Box>
@@ -147,51 +135,36 @@ export async function runCliPreview(opts: RunOpts): Promise<void> {
     const { waitUntilExit } = render(<PreviewApp {...opts} />);
     await waitUntilExit();
   } else {
-    const result = await startPreview({
-      outputDir: opts.outputDir,
-      port: opts.port,
-      detached: false,
-    });
+    const result = await startPreview({ outputDir: opts.outputDir });
     if (result.status !== 'ready') {
       console.error(`[preview] failed: ${result.error}`);
       process.exit(1);
     }
     console.log(result.url);
     if (opts.open && result.url) openPreview(result);
-    process.once('SIGINT', async () => {
-      await stopPreview({ outputDir: opts.outputDir });
-      process.exit(130);
-    });
-    await new Promise(() => {});
+    // Studio sites persist; nothing to stop on exit.
   }
 }
 
 /**
- * Transient Ink app for the post-extract "Preview in Playground?" flow.
- * Shows the boot spinner until Playground is ready, then exits the Ink render
- * (but Playground keeps running because it's detached). Returns the final result.
+ * Transient Ink app for the post-extract inline preview flow.
+ * Shows the boot spinner until Studio is ready, then exits the Ink render
+ * (the Studio site persists). Returns the final result.
  */
 const InlinePreviewApp: React.FC<{
   outputDir: string;
-  port?: number;
   onDone: (r: StartPreviewResult) => void;
-}> = ({ outputDir, port, onDone }) => {
+}> = ({ outputDir, onDone }) => {
   const { exit } = useApp();
   const [status, setStatus] = useState<'starting' | 'ready' | 'failed'>('starting');
   const [url, setUrl] = useState<string | undefined>();
   const [error, setError] = useState<string | undefined>();
   const [warnings, setWarnings] = useState<string[]>([]);
-  const [, setPhase] = useState<PreviewPhase>('download');
-  const [source] = useState<PreviewSource>(() => isStudioAvailable() ? 'studio' : 'playground');
+  const [source] = useState<PreviewSource>('studio');
 
   useEffect(() => {
     (async () => {
-      const result = await startPreview({
-        outputDir,
-        port,
-        detached: true,
-        onPhase: (p: PreviewPhase) => setPhase(p),
-      });
+      const result = await startPreview({ outputDir });
       if (result.status === 'ready' && result.url) {
         setUrl(result.url);
         setWarnings(result.warnings ?? []);
@@ -203,18 +176,18 @@ const InlinePreviewApp: React.FC<{
       onDone(result);
       setTimeout(() => exit(), 80);
     })();
-  }, [outputDir, port, exit, onDone]);
+  }, [outputDir, exit, onDone]);
 
   return (
     <Box flexDirection="column">
       <BootSpinner done={status === 'ready'} url={url} error={error} source={source} />
       {status === 'ready' && warnings.length > 0 && (
         <Box flexDirection="column" marginTop={1}>
-          <Text color="yellow">⚠ {warnings.length} warning(s) from Playground log:</Text>
+          <Text color="yellow">⚠ {warnings.length} warning(s) from Studio setup:</Text>
           {warnings.slice(0, 5).map((w, i) => (
             <Text key={i} color="yellow">  {w}</Text>
           ))}
-          {warnings.length > 5 && <Text color="gray">  … and {warnings.length - 5} more. See playground/preview.log.</Text>}
+          {warnings.length > 5 && <Text color="gray">  … and {warnings.length - 5} more. Check Studio's output for details.</Text>}
         </Box>
       )}
     </Box>
@@ -226,7 +199,6 @@ async function renderInlineSpinner(opts: RunOpts): Promise<StartPreviewResult> {
   const { waitUntilExit } = render(
     <InlinePreviewApp
       outputDir={opts.outputDir}
-      port={opts.port}
       onDone={(r) => { captured = r; }}
     />,
   );
@@ -245,15 +217,15 @@ async function renderInlineSpinner(opts: RunOpts): Promise<StartPreviewResult> {
 }
 
 /**
- * Start a detached Playground preview inline (during another flow such as
- * post-extract). Shows a spinner while booting, returns once Playground is
- * ready. The Playground process is detached and outlives this one.
+ * Start a Studio preview inline (during another flow such as post-extract).
+ * Shows a spinner while booting, returns once the Studio site is ready.
+ * The Studio site persists after this function returns.
  */
 async function startInlinePreview(opts: RunOpts): Promise<StartPreviewResult> {
   const useSpinner = process.stdout.isTTY && !opts.nonInteractive;
   const result = useSpinner
     ? await renderInlineSpinner(opts)
-    : await startPreview({ outputDir: opts.outputDir, port: opts.port, detached: true });
+    : await startPreview({ outputDir: opts.outputDir });
 
   if (result.status === 'ready' && result.url && opts.open) {
     openPreview(result);
@@ -262,10 +234,9 @@ async function startInlinePreview(opts: RunOpts): Promise<StartPreviewResult> {
 }
 
 /**
- * Post-extract auto-preview: unconditionally spins up a local site (Studio
- * when the CLI is installed, Playground otherwise). In interactive mode we
- * also auto-launch Studio / the browser; in non-interactive mode we just
- * print the URL so scripts can capture it. `startInlinePreview` already
+ * Post-extract auto-preview: spins up a local Studio site. In interactive
+ * mode we also auto-launch Studio / the browser; in non-interactive mode we
+ * just print the URL so scripts can capture it. `startInlinePreview` already
  * falls back to a plain startPreview when there's no TTY.
  */
 export async function autoPreview(
@@ -286,9 +257,6 @@ export async function autoPreview(
   if (result.source === 'studio') {
     console.log(`Studio site "${result.siteName}" ready at ${result.url}`);
     console.log(`Manage it: studio site list | studio site stop ${result.siteName}`);
-  } else {
-    console.log(`Playground running at ${result.url}${result.pid ? ` (PID ${result.pid})` : ''}`);
-    console.log(`Stop it later with: kill ${result.pid ?? '<pid>'}`);
   }
   return true;
 }

@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 import { buildBlueprint, persistBlueprint } from './blueprint-builder.js';
 
 let tempDirs: string[] = [];
@@ -18,81 +18,44 @@ afterEach(() => {
 });
 
 describe('buildBlueprint', () => {
-  it('generates a content-only blueprint when products.csv is absent', () => {
+  it('generates a Studio blueprint: installPlugin wordpress-importer, no landingPage, no importWxr', () => {
     const dir = mkDir();
     writeFileSync(join(dir, 'output.wxr'), '<rss></rss>');
     mkdirSync(join(dir, 'media'));
 
     const bp = buildBlueprint({ outputDir: dir });
 
-    // Default mode is 'playground' which requires landingPage.
-    expect(bp.landingPage).toBe('/');
+    // landingPage is absent from the Blueprint type entirely — Studio errors
+    // with "WordPress server process exited unexpectedly" when it is present.
     expect(bp.login).toBe(true);
-
-    // Studio mode must omit landingPage — Studio errors with
-    // "WordPress server process exited unexpectedly" otherwise.
-    const studioBp = buildBlueprint({ outputDir: dir, mode: 'studio' });
-    expect(studioBp.landingPage).toBeUndefined();
     expect(bp.preferredVersions.wp).toBe('latest');
     expect(bp.preferredVersions.php).toBe('8.2');
 
+    // Studio does not use importWxr — import happens out-of-band via `studio wp`
     const stepNames = bp.steps.map((s) => s.step);
-    expect(stepNames).toContain('importWxr');
-    expect(stepNames).not.toContain('installPlugin');
-    expect(stepNames).not.toContain('wp-cli');
+    expect(stepNames).not.toContain('importWxr');
 
-    const importWxr = bp.steps.find((s) => s.step === 'importWxr') as any;
-    expect(importWxr.file.resource).toBe('vfs');
-    expect(importWxr.file.path).toBe('/wordpress/wp-content/uploads/liberation/output.wxr');
+    // Always installs wordpress-importer
+    const hasImporter = bp.steps.some(
+      (s) => s.step === 'installPlugin' && (s as any).pluginData?.slug === 'wordpress-importer',
+    );
+    expect(hasImporter).toBe(true);
   });
 
-  it('includes WooCommerce install + writeFile import-products.php + wp-cli eval-file when products.csv exists', () => {
+  it('installs WooCommerce when products.csv exists; no wp-cli steps in the blueprint', () => {
     const dir = mkDir();
-    writeFileSync(join(dir, 'output.wxr'), '<rss></rss>');
+    writeFileSync(join(dir, 'output.wxr'), '<rss/>');
     writeFileSync(join(dir, 'products.csv'), 'name\nfoo');
-    mkdirSync(join(dir, 'media'));
 
     const bp = buildBlueprint({ outputDir: dir });
-
-    const install = bp.steps.find(
+    const hasWoo = bp.steps.some(
       (s) => s.step === 'installPlugin' && (s as any).pluginData?.slug === 'woocommerce',
     );
-    expect(install).toBeDefined();
-
-    const writeScript = bp.steps.find(
-      (s) => s.step === 'writeFile' && (s as any).path?.endsWith('/import-products.php'),
-    ) as any;
-    expect(writeScript).toBeDefined();
-    expect(writeScript.data).toContain('WC_Product_CSV_Importer');
-
-    const wpcli = bp.steps.find((s) => s.step === 'wp-cli') as any;
-    expect(wpcli.command).toContain('wp eval-file');
-    expect(wpcli.command).toContain('/wordpress/wp-content/uploads/liberation/import-products.php');
-    expect(wpcli.command).toContain('/wordpress/wp-content/uploads/liberation/products.csv');
-  });
-
-  it('updates the Playground WordPress site title from WXR metadata', () => {
-    const dir = mkDir();
-    writeFileSync(
-      join(dir, 'output.wxr'),
-      `<?xml version="1.0"?>
-<rss version="2.0" xmlns:wp="http://wordpress.org/export/1.2/">
-  <channel>
-    <title>Swift Lumber</title>
-    <link>https://www.swiftlumber.com</link>
-    <description>Quality building materials</description>
-    <language>en-US</language>
-  </channel>
-</rss>`,
-    );
-
-    const bp = buildBlueprint({ outputDir: dir });
-    const commands = bp.steps
-      .filter((s) => s.step === 'wp-cli')
-      .map((s) => (s as { command: string }).command);
-
-    expect(commands).toContain("wp option update blogname 'Swift Lumber'");
-    expect(commands).toContain("wp option update blogdescription 'Quality building materials'");
+    const hasWpCli = bp.steps.some((s) => s.step === 'wp-cli');
+    expect(hasWoo).toBe(true);
+    // Studio blueprint does NOT contain wp-cli steps — WXR and product CSV
+    // imports both happen out-of-band via `studio wp` in startStudioPreview.
+    expect(hasWpCli).toBe(false);
   });
 
   it('honors DLA_PREVIEW_WP_VERSION env override', () => {
@@ -110,113 +73,20 @@ describe('buildBlueprint', () => {
     }
   });
 
-  it('writes the blueprint to <outputDir>/playground/blueprint.json when persistBlueprint is called', () => {
+  it('persistBlueprint writes blueprint.studio.json to <outputDir>/blueprint/', () => {
     const dir = mkDir();
     writeFileSync(join(dir, 'output.wxr'), '<rss></rss>');
     mkdirSync(join(dir, 'media'));
 
     const p = persistBlueprint(dir);
 
-    expect(p).toBe(join(dir, 'playground', 'blueprint.json'));
+    expect(p).toBe(join(dir, 'blueprint', 'blueprint.studio.json'));
     expect(existsSync(p)).toBe(true);
     const parsed = JSON.parse(readFileSync(p, 'utf8'));
-    expect(parsed.steps[0].step).toBe('importWxr');
-  });
-
-  describe('studio mode', () => {
-    it('installs wordpress-importer but does not inline the WXR (imported out-of-band)', () => {
-      const dir = mkDir();
-      writeFileSync(join(dir, 'output.wxr'), '<?xml version="1.0"?><rss/>');
-
-      const bp = buildBlueprint({ outputDir: dir, mode: 'studio' });
-
-      expect(bp.steps.find((s) => s.step === 'importWxr')).toBeUndefined();
-      const hasImporter = bp.steps.some(
-        (s) => s.step === 'installPlugin' && (s as any).pluginData?.slug === 'wordpress-importer',
-      );
-      expect(hasImporter).toBe(true);
-    });
-
-    it('installs WooCommerce when products.csv exists, no wp-cli step', () => {
-      const dir = mkDir();
-      writeFileSync(join(dir, 'output.wxr'), '<rss/>');
-      writeFileSync(join(dir, 'products.csv'), 'name\nfoo');
-
-      const bp = buildBlueprint({ outputDir: dir, mode: 'studio' });
-      const hasWoo = bp.steps.some(
-        (s) => s.step === 'installPlugin' && (s as any).pluginData?.slug === 'woocommerce',
-      );
-      const hasWpCli = bp.steps.some((s) => s.step === 'wp-cli');
-      expect(hasWoo).toBe(true);
-      // Studio blueprint does NOT contain wp-cli steps — WXR and product CSV
-      // imports both happen out-of-band via `studio wp` in startStudioPreview.
-      expect(hasWpCli).toBe(false);
-    });
-
-    it('persistBlueprint writes blueprint.studio.json in studio mode', () => {
-      const dir = mkDir();
-      writeFileSync(join(dir, 'output.wxr'), '<rss/>');
-      const p = persistBlueprint(dir, 'studio');
-      expect(p).toBe(join(dir, 'playground', 'blueprint.studio.json'));
-      expect(existsSync(p)).toBe(true);
-      const parsed = JSON.parse(readFileSync(p, 'utf8'));
-      const hasImporter = parsed.steps.some(
-        (s: { step: string; pluginData?: { slug: string } }) =>
-          s.step === 'installPlugin' && s.pluginData?.slug === 'wordpress-importer',
-      );
-      expect(hasImporter).toBe(true);
-    });
-  });
-
-  describe('persisted mode (Playground)', () => {
-    it('skips importWxr + products import when persisted=true', () => {
-      const dir = mkDir();
-      writeFileSync(join(dir, 'output.wxr'), '<rss/>');
-      writeFileSync(join(dir, 'products.csv'), 'name\nfoo');
-      const bp = buildBlueprint({ outputDir: dir, persisted: true });
-
-      // No importWxr — content is already in the persisted SQLite from a prior boot.
-      expect(bp.steps.find((s) => s.step === 'importWxr')).toBeUndefined();
-      // No woocommerce installPlugin or wp-cli eval-file for products either.
-      expect(
-        bp.steps.find(
-          (s) => s.step === 'installPlugin' && (s as any).pluginData?.slug === 'woocommerce',
-        ),
-      ).toBeUndefined();
-      expect(bp.steps.find((s) => s.step === 'wp-cli')).toBeUndefined();
-      // The import-complete sentinel still fires so the readiness probe works.
-      expect(
-        bp.steps.find(
-          (s) => s.step === 'writeFile' && (s as any).path?.endsWith('.import-complete'),
-        ),
-      ).toBeDefined();
-    });
-
-    it('persisted=true still writes theme files + activates them (idempotent)', () => {
-      const dir = mkDir();
-      writeFileSync(join(dir, 'output.wxr'), '<rss/>');
-      const bp = buildBlueprint({
-        outputDir: dir,
-        persisted: true,
-        themeSlug: 'foo-replica',
-        themeFiles: [{ relativePath: 'style.css', content: '/* */' }],
-      });
-
-      const themeWrite = bp.steps.find(
-        (s) => s.step === 'writeFile' && (s as any).path?.includes('/themes/foo-replica/'),
-      );
-      expect(themeWrite).toBeDefined();
-      const themeActivate = bp.steps.find(
-        (s) => s.step === 'wp-cli' && (s as any).command?.includes('theme activate foo-replica'),
-      );
-      expect(themeActivate).toBeDefined();
-    });
-
-    it('persisted=false (default) still includes importWxr', () => {
-      const dir = mkDir();
-      writeFileSync(join(dir, 'output.wxr'), '<rss/>');
-      const bp = buildBlueprint({ outputDir: dir });
-      expect(bp.steps.find((s) => s.step === 'importWxr')).toBeDefined();
-    });
+    const hasImporter = parsed.steps.some(
+      (s: { step: string; pluginData?: { slug: string } }) =>
+        s.step === 'installPlugin' && s.pluginData?.slug === 'wordpress-importer',
+    );
+    expect(hasImporter).toBe(true);
   });
 });

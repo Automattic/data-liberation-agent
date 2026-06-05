@@ -123,7 +123,8 @@ describe('saveDesignFoundation', () => {
 
   it('rejects outputDir containing `..` via validateOutputDir', () => {
     expect(() =>
-      saveDesignFoundation(join(process.cwd(), '..', 'escape'), validFoundation()),
+      // relative path — normalize keeps the leading '..' (join would collapse it)
+      saveDesignFoundation('../escape', validFoundation()),
     ).toThrow(/traversal|outside/i);
   });
 });

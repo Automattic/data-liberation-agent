@@ -29,13 +29,13 @@ import { verifyHandler } from './mcp-server/handlers/verify.js';
 import { setupHandler } from './mcp-server/handlers/setup.js';
 import { wpImportHandler } from './mcp-server/handlers/wp-import.js';
 import { statusHandler } from './mcp-server/handlers/status.js';
+import { pathsHandler } from './mcp-server/handlers/paths.js';
 import { previewHandler } from './mcp-server/handlers/preview.js';
 import { installThemeHandler } from './mcp-server/handlers/install-theme.js';
 import { themeScaffoldHandler } from './mcp-server/handlers/theme-scaffold.js';
 import { reconstructPagesHandler } from './mcp-server/handlers/reconstruct-pages.js';
 import { reconstructPagesCarryHandler } from './mcp-server/handlers/reconstruct-pages-carry.js';
 import { blockifyWxrHandler } from './mcp-server/handlers/blockify-wxr.js';
-import { previewStopHandler } from './mcp-server/handlers/preview-stop.js';
 import { screenshotHandler } from './mcp-server/handlers/screenshot.js';
 import { designFoundationScaffoldHandler } from './mcp-server/handlers/design-foundation-scaffold.js';
 import { designFoundationValidateHandler } from './mcp-server/handlers/design-foundation-validate.js';
@@ -167,6 +167,16 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: 'liberate_paths',
+      description: 'Resolve where liberation output lives. Returns { base, siteDir }. base = the default output base (DLA_OUTPUT_DIR or <Studio root>/_liberations). siteDir = base/<sanitized host+path> when a url is given. Skills MUST use this instead of assuming output/<site>/ relative to cwd.',
+      inputSchema: {
+        type: 'object' as const,
+        properties: {
+          url: { type: 'string', description: 'Optional source URL; when present, siteDir is returned.' },
+        },
+      },
+    },
+    {
       name: 'liberate_status',
       description: 'Check progress of a running or completed extraction',
       inputSchema: {
@@ -269,7 +279,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: 'liberate_preview',
-      description: 'Spawn a local WordPress Playground (or Studio) preview of an extraction output. Returns { url, pid, port, status, warnings }. Kills any existing preview on the same outputDir before starting. Optionally installs a generated replica theme + block plugins via themeFiles[] + blockPlugins[]; the theme is activated after content import. Used by the replicate skill in Step 5 (Install).',
+      description: 'Spawn a local Studio preview of an extraction output. Returns { url, port, status, warnings }. Kills any existing preview on the same outputDir before starting. Optionally installs a generated replica theme + block plugins via themeFiles[] + blockPlugins[]; the theme is activated after content import. Used by the replicate skill in Step 5 (Install).',
       inputSchema: {
         type: 'object' as const,
         properties: {
@@ -311,17 +321,6 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             },
           },
           themeSlug: { type: 'string', description: 'Theme directory name (kebab-case). Required when themeFiles is non-empty. Conventionally <siteSlug>-replica.' },
-        },
-        required: ['outputDir'],
-      },
-    },
-    {
-      name: 'liberate_preview_stop',
-      description: 'Stop a running Playground preview by outputDir.',
-      inputSchema: {
-        type: 'object' as const,
-        properties: {
-          outputDir: { type: 'string', description: 'Path to the extraction output directory.' },
         },
         required: ['outputDir'],
       },
@@ -534,7 +533,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: 'liberate_media_install',
-      description: 'Install one URL\'s pending media into the running replica WP site. Idempotent: skips media already registered as attachments (tracked via MediaStubStore.wpPostId). Studio path uses `studio wp eval-file`; Playground path uses `wp-playground-cli run-blueprint` against the persisted playground-site wp-content mount.',
+      description: 'Install one URL\'s pending media into the running replica WP site. Idempotent: skips media already registered as attachments (tracked via MediaStubStore.wpPostId). Uses `studio wp eval-file` to run a vendored PHP installer script.',
       inputSchema: {
         type: 'object' as const,
         properties: {
@@ -542,11 +541,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           url: { type: 'string', description: 'Source URL whose media we are installing (used for logging; the install acts on all pending media in MediaStubStore).' },
           target: {
             type: 'object' as const,
-            description: 'Where to install the media. Studio: { kind: "studio", sitePath: "/Users/.../Studio/site-name" }. Playground: { kind: "playground", sitePath: "<outputDir>/playground-site", siteUrl: "http://127.0.0.1:9400" }.',
+            description: 'Where to install the media. Studio: { kind: "studio", sitePath: "/Users/.../Studio/site-name" }.',
             properties: {
-              kind: { type: 'string', enum: ['studio', 'playground'] },
+              kind: { type: 'string', enum: ['studio'] },
               sitePath: { type: 'string' },
-              siteUrl: { type: 'string', description: 'Optional running Playground URL used to compute browser-visible upload URLs.' },
+              siteUrl: { type: 'string', description: 'Optional site URL used to compute browser-visible upload URLs.' },
             },
             required: ['kind', 'sitePath'],
           },
@@ -578,9 +577,9 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           sourceHtml: { type: 'string', description: 'Original sanitized source HTML — passed to output-verify for text-substring validation.' },
           target: {
             type: 'object' as const,
-            description: 'Replica site target. Studio: { kind: "studio", sitePath: "..." }. Playground: { kind: "playground", siteUrl: "http://localhost:9400" }.',
+            description: 'Replica site target. Studio: { kind: "studio", sitePath: "..." }.',
             properties: {
-              kind: { type: 'string', enum: ['studio', 'playground'] },
+              kind: { type: 'string', enum: ['studio'] },
               sitePath: { type: 'string' },
               siteUrl: { type: 'string' },
             },
@@ -678,13 +677,13 @@ const handlers: Record<string, Handler> = {
   liberate_preview: previewHandler,
   liberate_install_theme: installThemeHandler,
   liberate_theme_scaffold: themeScaffoldHandler,
-  liberate_preview_stop: previewStopHandler,
   liberate_probe: probeHandler,
   liberate_qa: qaHandler,
   liberate_replicate_inventory: replicateInventoryHandler,
   liberate_replicate_verify: replicateVerifyHandler,
   liberate_screenshot: screenshotHandler,
   liberate_setup: setupHandler,
+  liberate_paths: pathsHandler,
   liberate_status: statusHandler,
   liberate_verify: verifyHandler,
   liberate_cluster_pages: clusterPagesHandler,

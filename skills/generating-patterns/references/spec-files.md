@@ -2,7 +2,7 @@
 
 A spec file is a contract between extraction and pattern generation. One spec file per section. It contains every value needed to write the WP block pattern without re-running capture.
 
-**Path:** `output/<site>/specs/section-<n>-<type>.md`
+**Path:** `<outputDir>/specs/section-<n>-<type>.md`
 **Source:** the section extraction tool (step 9 of `/liberate`) — computed styles, interaction model, uploaded WP media URLs, brightness, motion signals.
 **Consumed by:** Step 10 of `/liberate` — the pattern generator (builder subagent) reads this file and picks the matching block template from `references/section-mapping.md`.
 

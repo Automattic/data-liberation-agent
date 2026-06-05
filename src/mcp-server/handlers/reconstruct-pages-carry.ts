@@ -500,7 +500,6 @@ export const reconstructPagesCarryHandler: Handler = async (args, ctx) => {
       outputDir,
       url: pages[0].sourceUrl,
       wpRoot,
-      useStudioCli: true,
     });
     mediaUrlMap = media.mediaUrlMap;
     mediaErrors.push(...media.result.errors);

@@ -2,12 +2,9 @@ import { spawn, execFileSync } from 'node:child_process';
 import type { Handler } from '../handler-types.js';
 
 export const previewHandler: Handler = async (args, ctx) => {
-  const { startPreview } = await import('../../lib/preview/playground-server.js');
+  const { startPreview } = await import('../../lib/preview/studio.js');
   const result = await startPreview({
     outputDir: args.outputDir as string,
-    open: args.open as boolean | undefined,
-    port: args.port as number | undefined,
-    detached: true,
     themeFiles: args.themeFiles as import('../../lib/preview/types.js').ReplicaFile[] | undefined,
     blockPlugins: args.blockPlugins as import('../../lib/preview/types.js').ReplicaBlockPlugin[] | undefined,
     themeSlug: args.themeSlug as string | undefined,

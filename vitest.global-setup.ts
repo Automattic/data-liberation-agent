@@ -4,8 +4,7 @@ import { join } from 'node:path';
 /**
  * Age-gated cleanup of the cwd-local test scratch dir (`.tmp-test/`).
  *
- * Tests `mkdtemp` fixtures under `.tmp-test/` rather than `os.tmpdir()` — `validateOutputDir` rejects
- * paths outside `process.cwd()`, so the OS's free auto-cleanup of its temp dir isn't available here.
+ * Tests use cwd-local .tmp-test/ fixtures by convention (not because validateOutputDir requires it).
  * Most tests don't remove what they create, so the dir grows unbounded across runs (it reached ~15k
  * dirs / 91 MB).
  *

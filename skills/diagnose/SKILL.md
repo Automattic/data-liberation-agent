@@ -29,7 +29,7 @@ Ask for or detect:
 
 | Parameter | How to find it |
 |-----------|---------------|
-| Output directory | Look for most recent `output/*/` subdirectory |
+| Output directory | Call `liberate_paths({ url })` to resolve `siteDir`; default base is `~/Studio/_liberations/<host>` |
 | WXR file | `output.wxr` in the output directory |
 | Extraction log | `extraction-log.jsonl` in the output directory |
 | Source URL | From the WXR's `<link>` element or ask the user |
@@ -47,9 +47,9 @@ This replaces manual log grepping for the initial assessment. If you need more d
 
 ```bash
 # Count successes vs failures
-grep -c '"type":"processed"' output/<site>/extraction-log.jsonl
-grep -c '"type":"failed"' output/<site>/extraction-log.jsonl
-grep -c '"type":"media_failed"' output/<site>/extraction-log.jsonl
+grep -c '"type":"processed"' <outputDir>/extraction-log.jsonl
+grep -c '"type":"failed"' <outputDir>/extraction-log.jsonl
+grep -c '"type":"media_failed"' <outputDir>/extraction-log.jsonl
 ```
 
 ### Classify the problem:
@@ -158,7 +158,7 @@ Products were expected but `products.csv` is missing, empty, or has wrong data.
 
 1. **Check if products.csv and products.jsonl exist:**
    ```bash
-   ls -la output/<site>/products.csv output/<site>/products.jsonl
+   ls -la <outputDir>/products.csv <outputDir>/products.jsonl
    ```
 
 2. **If both are missing** — no products were detected during extraction. Investigate:
@@ -173,7 +173,7 @@ Products were expected but `products.csv` is missing, empty, or has wrong data.
 
 3. **If products.jsonl exists but products.csv is missing or empty** — the JSONL→CSV conversion failed. Read products.jsonl to check data quality:
    ```bash
-   head -3 output/<site>/products.jsonl | jq .
+   head -3 <outputDir>/products.jsonl | jq .
    ```
    Check: do products have names? Prices? Are fields malformed?
 
@@ -185,8 +185,8 @@ Products were expected but `products.csv` is missing, empty, or has wrong data.
 
 5. **Check product count vs expectations:**
    ```bash
-   wc -l output/<site>/products.jsonl
-   grep -c '"type":"product"' output/<site>/extraction-log.jsonl || echo "no product type in log"
+   wc -l <outputDir>/products.jsonl
+   grep -c '"type":"product"' <outputDir>/extraction-log.jsonl || echo "no product type in log"
    ```
 
 ## Phase 3: Fix
@@ -232,31 +232,31 @@ If you discovered a platform-specific issue or workaround:
 
 ```bash
 # Overview of extraction results
-wc -l output/<site>/extraction-log.jsonl
-grep -c '"processed"' output/<site>/extraction-log.jsonl
-grep -c '"failed"' output/<site>/extraction-log.jsonl
+wc -l <outputDir>/extraction-log.jsonl
+grep -c '"processed"' <outputDir>/extraction-log.jsonl
+grep -c '"failed"' <outputDir>/extraction-log.jsonl
 
 # Most common errors
-grep '"failed"' output/<site>/extraction-log.jsonl | grep -o '"error":"[^"]*"' | sort | uniq -c | sort -rn
+grep '"failed"' <outputDir>/extraction-log.jsonl | grep -o '"error":"[^"]*"' | sort | uniq -c | sort -rn
 
 # Slowest pages
-grep '"processed"' output/<site>/extraction-log.jsonl | grep -o '"durationMs":[0-9]*' | sort -t: -k2 -rn | head -10
+grep '"processed"' <outputDir>/extraction-log.jsonl | grep -o '"durationMs":[0-9]*' | sort -t: -k2 -rn | head -10
 
 # Check WXR size and item count
-wc -c output/<site>/output.wxr
-grep -c '<item>' output/<site>/output.wxr
+wc -c <outputDir>/output.wxr
+grep -c '<item>' <outputDir>/output.wxr
 
 # Check media downloads
-ls output/<site>/media/ | wc -l
-grep -c '"media_failed"' output/<site>/extraction-log.jsonl
+ls <outputDir>/media/ | wc -l
+grep -c '"media_failed"' <outputDir>/extraction-log.jsonl
 
 # Check if extraction is complete
-test -f output/<site>/.discovery-complete && echo "Complete" || echo "Incomplete"
+test -f <outputDir>/.discovery-complete && echo "Complete" || echo "Incomplete"
 
 # Product diagnostics
-wc -l output/<site>/products.jsonl 2>/dev/null || echo "No products.jsonl"
-wc -l output/<site>/products.csv 2>/dev/null || echo "No products.csv"
-head -3 output/<site>/products.jsonl 2>/dev/null | python3 -m json.tool 2>/dev/null || true
+wc -l <outputDir>/products.jsonl 2>/dev/null || echo "No products.jsonl"
+wc -l <outputDir>/products.csv 2>/dev/null || echo "No products.csv"
+head -3 <outputDir>/products.jsonl 2>/dev/null | python3 -m json.tool 2>/dev/null || true
 ```
 
 ## Important Rules
