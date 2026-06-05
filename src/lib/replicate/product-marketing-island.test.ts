@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildProductMarketing, selectMarketingSections, type SectionSpecFile } from './product-marketing-island.js';
+import { buildProductMarketing, selectMarketingSections, dropDeadImages, type SectionSpecFile } from './product-marketing-island.js';
 import type { SectionSpec, InteractionModel } from './section-extract.js';
 
 // Minimal fictional SectionSpec factory — only the fields these functions read matter;
@@ -104,6 +104,18 @@ describe('buildProductMarketing (reconstruction)', () => {
     );
     expect(r.postContent).toContain('/wp-content/uploads/2026/06/a.jpg');
     expect(r.postContent).not.toContain('cdn.example');
+  });
+
+  it('dropDeadImages drops non-local (unjoined/dead CDN) imgs but keeps local library imgs', () => {
+    const html =
+      '<figure><img src="https://cdn.example/dead-recommendation.png?v=1" alt="x"></figure>' +
+      '<figure><img src="http://localhost:8883/wp-content/uploads/2026/06/real.jpg" alt="y"></figure>' +
+      '<figure><img src="//getsnooz.cdn/also-dead.png"></figure>';
+    const out = dropDeadImages(html);
+    expect(out).toContain('/wp-content/uploads/2026/06/real.jpg'); // local kept
+    expect(out).not.toContain('dead-recommendation'); // unjoined CDN dropped (no broken icon)
+    expect(out).not.toContain('also-dead'); // protocol-relative CDN dropped
+    expect((out.match(/<img/g) || []).length).toBe(1);
   });
 
   it('returns empty post_content when only chrome + hero remain', () => {

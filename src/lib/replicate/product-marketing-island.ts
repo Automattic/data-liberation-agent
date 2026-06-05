@@ -116,6 +116,22 @@ function rewriteSpecMedia(sections: SectionSpec[], map?: Map<string, string>): S
 }
 
 /**
+ * Drop `<img>` whose src did NOT resolve to the local media library — an unjoined CDN
+ * url, often a DEAD source image (e.g. a stale "you may also like" recommendation whose
+ * CDN file 404s) that otherwise renders as a broken-image icon. Reconstructed blocks only
+ * ever emit local (`/wp-content/uploads/`) imgs, so this only strips dead refs left in the
+ * verbatim core/html island sections — keeping every joined image. A broken icon is a
+ * broken reference, not viewable content, so removing it loses nothing on screen.
+ */
+export function dropDeadImages(html: string): string {
+  return html.replace(/<img\b[^>]*>/gi, (tag) => {
+    const src = /\bsrc\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s">]+))/i.exec(tag);
+    const url = (src?.[1] ?? src?.[2] ?? src?.[3] ?? '').trim();
+    return /\/wp-content\/uploads\//i.test(url) ? tag : '';
+  });
+}
+
+/**
  * Build a product's marketing block markup (post_content) from its captured section
  * specs by reusing the block path's `reconstructPagePattern`. Pure: no I/O. Pass
  * `opts.paletteTokens` / `opts.fontFamilies` (from the carry theme.json / captured
@@ -143,7 +159,7 @@ export function buildProductMarketing(
     mediaUrlMap: opts.mediaUrlMap,
   });
   return {
-    postContent: result.body,
+    postContent: dropDeadImages(result.body),
     keptIndices: kept.map((s) => s.sectionIndex),
     dropped,
     iconAssets: result.iconAssets,
