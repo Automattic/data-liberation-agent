@@ -1,5 +1,37 @@
-import { describe, it, expect } from 'vitest';
-import { joinCarryPageList, slimWxr } from './carry-page-list.js';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { mkdirSync, writeFileSync, readdirSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { joinCarryPageList, slimWxr, reconcileCarryIslands } from './carry-page-list.js';
+
+describe('reconcileCarryIslands', () => {
+  const dir = join('.tmp-test', 'reconcile-islands');
+  beforeEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+    mkdirSync(dir, { recursive: true });
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  it('removes stale islands not in the current set; keeps current + _swap.php', () => {
+    for (const f of ['home.html', 'about.html', 'grief-and-loss.html', 'world-teacher-day.html']) {
+      writeFileSync(join(dir, f), 'island');
+    }
+    writeFileSync(join(dir, '_swap.php'), '<?php');
+    const removed = reconcileCarryIslands(dir, ['home', 'about']);
+    expect(removed.sort()).toEqual(['grief-and-loss', 'world-teacher-day']);
+    expect(readdirSync(dir).sort()).toEqual(['_swap.php', 'about.html', 'home.html']);
+  });
+
+  it('keeps everything when all islands are in the current set', () => {
+    writeFileSync(join(dir, 'home.html'), 'x');
+    writeFileSync(join(dir, 'about.html'), 'x');
+    expect(reconcileCarryIslands(dir, ['home', 'about', 'extra'])).toEqual([]);
+    expect(readdirSync(dir).sort()).toEqual(['about.html', 'home.html']);
+  });
+
+  it('is a no-op when the dir does not exist', () => {
+    expect(reconcileCarryIslands(join('.tmp-test', 'reconcile-missing'), ['a'])).toEqual([]);
+  });
+});
 
 /** Minimal WXR `<item>` — fictional data only (never real source content). */
 function item(f: { type: string; name?: string; title?: string; link?: string }): string {

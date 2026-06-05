@@ -31,6 +31,7 @@ import { assessBody, readPngHeight, classifyEmptyBodies, type EmptyBody, type Pa
 import { loadCarryDesignTokens } from '../../lib/replicate/carry-design-tokens.js';
 import * as cheerio from 'cheerio';
 import { buildPageLinkMap } from '../../lib/replicate/page-link-map.js';
+import { reconcileCarryIslands } from '../../lib/replicate/carry-page-list.js';
 import { installRunMediaMap } from '../../lib/replicate/run-media-map.js';
 import type { InternalLinkMap } from '../../lib/streaming/internal-link-rewrite.js';
 import { deriveInstallThemeSlug } from './install-theme.js';
@@ -575,6 +576,9 @@ export const reconstructPagesCarryHandler: Handler = async (args, ctx) => {
   if (islandsOutDir) {
     const dir = resolve(islandsOutDir);
     mkdirSync(dir, { recursive: true });
+    // Drop islands from a prior wider-scope run before writing the current set — see
+    // reconcileCarryIslands (stale files silently re-enter output-carry.wxr otherwise).
+    reconcileCarryIslands(dir, finalPages.map((p) => p.slug));
     pagesResult = finalPages.map((p) => {
       const islandPath = join(dir, `${p.slug}.html`);
       writeFileSync(islandPath, p.postContent);

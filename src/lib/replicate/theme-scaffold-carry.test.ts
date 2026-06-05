@@ -302,6 +302,63 @@ describe('buildCarryThemeFiles', () => {
   });
 });
 
+describe('buildCarryThemeFiles — native blog templates (hybrid carry)', () => {
+  const scaffold = { openWrap: '<div id="C"><div id="root">', midBefore: '<div id="inner">', midAfter: '</div>', closeWrap: '</div></div>' };
+  const build = (pages: CarryPage[], nativeBlog?: boolean) =>
+    buildCarryThemeFiles({
+      themeName: 'Acme Carry',
+      chromeVariants: oneVariant(
+        '<!-- wp:html --><header id="H">nav</header><!-- /wp:html -->',
+        '<!-- wp:html --><footer id="F">foot</footer><!-- /wp:html -->',
+      ),
+      siteCss: '',
+      pages,
+      nativeBlog,
+    });
+  const pick = (files: ReturnType<typeof build>, p: string) => files.find((f) => f.path === p)?.content ?? '';
+
+  it('emits single/home/archive when no post is carried (hybrid default)', () => {
+    const files = build([
+      page({ slug: 'home', isHome: true, scaffold, pageCss: '' }),
+      page({ slug: 'about', scaffold, pageCss: '' }),
+    ]);
+    const single = pick(files, 'templates/single.html');
+    const home = pick(files, 'templates/home.html');
+    const archive = pick(files, 'templates/archive.html');
+    expect(single).toContain('wp:post-title');
+    expect(single).toContain('wp:post-content');
+    expect(home).toContain('wp:query');
+    expect(home).toContain('>Blog<');
+    expect(archive).toContain('wp:query-title');
+    // chrome parts wrap them, and there is NO dual-viewport wrapper (native posts have no mobile iframe)
+    expect(single).toContain('wp:template-part {"slug":"header"');
+    expect(single).toContain('wp:template-part {"slug":"footer"');
+    expect(single).not.toContain('lib-carry-vp-desktop');
+    expect(home).not.toContain('lib-carry-vp-mobile');
+    // index.html stays the homepage fallback (not overridden)
+    expect(pick(files, 'templates/index.html')).not.toContain('wp:query');
+  });
+
+  it('does NOT emit native blog templates when a post is carried', () => {
+    const files = build([
+      page({ slug: 'home', isHome: true, scaffold, pageCss: '' }),
+      page({ slug: 'my-post', postType: 'post', scaffold, pageCss: '' }),
+    ]);
+    // the carried-post single.html is emitted by the per-page loop, but the listing
+    // templates are not — carried posts are not a native feed.
+    expect(files.some((f) => f.path === 'templates/single.html')).toBe(true);
+    expect(pick(files, 'templates/single.html')).not.toContain('wp:post-navigation-link');
+    expect(pick(files, 'templates/home.html')).toBe('');
+    expect(pick(files, 'templates/archive.html')).toBe('');
+  });
+
+  it('respects an explicit nativeBlog=false override', () => {
+    const files = build([page({ slug: 'home', isHome: true, scaffold, pageCss: '' })], false);
+    expect(pick(files, 'templates/home.html')).toBe('');
+    expect(pick(files, 'templates/single.html')).toBe('');
+  });
+});
+
 describe('buildCarryThemeFiles — WooCommerce store templates', () => {
   const STORE_HEADER =
     '<!-- wp:html -->\n<div class="lib-carry-vp-desktop">\n<header class="section-header">NAV</header>\n</div>\n<!-- /wp:html -->';

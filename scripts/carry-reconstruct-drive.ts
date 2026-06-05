@@ -20,7 +20,7 @@
  */
 import { writeFileSync, existsSync, mkdirSync, copyFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { buildCarryPageList, buildOutputCarryWxr, slimWxrForProvision, type BuildPageListResult } from '../src/lib/replicate/carry-page-list.js';
+import { buildCarryPageList, buildOutputCarryWxr, reconcileCarryIslands, slimWxrForProvision, type BuildPageListResult } from '../src/lib/replicate/carry-page-list.js';
 
 function reportPageList(r: BuildPageListResult): void {
   console.log(`pages: ${r.pages.length} (${r.pages.filter((p) => p.postType === 'post').length} posts, home=${r.pages.some((p) => p.isHome)})`);
@@ -77,11 +77,13 @@ async function main(): Promise<void> {
   // 3. islands + _swap.php (VFS path; Studio mounts the host site dir at /wordpress)
   const islandsDir = join(studioSitePath, 'wp-content/uploads/_carry-islands');
   mkdirSync(islandsDir, { recursive: true });
-  const slugs: string[] = [];
-  for (const p of data.pages) {
-    writeFileSync(join(islandsDir, `${p.slug}.html`), p.postContent);
-    slugs.push(p.slug);
-  }
+  const slugs = data.pages.map((p) => p.slug);
+  // Drop islands left over from a prior, wider-scope run (e.g. posts carried before but
+  // excluded now) — buildOutputCarryWxr patches by island-file existence, so a stale file
+  // would silently re-enter output-carry.wxr.
+  const removedStale = reconcileCarryIslands(islandsDir, slugs);
+  if (removedStale.length) console.log(`  removed ${removedStale.length} stale island(s): ${removedStale.slice(0, 8).join(', ')}${removedStale.length > 8 ? ' …' : ''}`);
+  for (const p of data.pages) writeFileSync(join(islandsDir, `${p.slug}.html`), p.postContent);
   const swap = `<?php
 $dir = '/wordpress/wp-content/uploads/_carry-islands';
 $slugs = ${JSON.stringify(slugs)};

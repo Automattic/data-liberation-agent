@@ -9,7 +9,7 @@
 // site-agnostic, page+post-aware, tested source of truth instead.
 //
 
-import { readFileSync, existsSync, readdirSync, writeFileSync, copyFileSync } from 'node:fs';
+import { readFileSync, existsSync, readdirSync, writeFileSync, copyFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 
 /** Read a tag's text from a WXR item block, stripping an optional CDATA wrapper. */
@@ -160,6 +160,30 @@ export function buildOutputCarryWxr(outputDir: string, islandsDir: string): {
   writeFileSync(outPath, out);
   const cdataBalanced = (out.match(/<!\[CDATA\[/g) || []).length === (out.match(/]]>/g) || []).length;
   return { items, patched, cdataBalanced, outPath };
+}
+
+/**
+ * Remove STALE island files from a prior, wider-scope run. `buildOutputCarryWxr` patches a
+ * WXR item whenever `<post_name>.html` EXISTS in the islands dir (and `_swap.php` only swaps
+ * the slugs it's handed), so an island left over from an earlier run — e.g. a post carried in
+ * a full run but excluded in a later hybrid run — would silently re-enter output-carry.wxr and
+ * overwrite a now-native post. Deletes `<stem>.html` whose stem isn't in `currentSlugs`; keeps
+ * `_swap.php` and any non-`.html` file. Returns the removed stems (for logging). No-op when the
+ * dir is absent.
+ */
+export function reconcileCarryIslands(islandsDir: string, currentSlugs: string[]): string[] {
+  if (!existsSync(islandsDir)) return [];
+  const keep = new Set(currentSlugs);
+  const removed: string[] = [];
+  for (const file of readdirSync(islandsDir)) {
+    if (!file.endsWith('.html')) continue;
+    const stem = file.slice(0, -'.html'.length);
+    if (!keep.has(stem)) {
+      rmSync(join(islandsDir, file));
+      removed.push(stem);
+    }
+  }
+  return removed;
 }
 
 /**

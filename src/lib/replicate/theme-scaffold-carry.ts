@@ -106,6 +106,13 @@ export interface CarryThemeInput {
   /** One entry per page that needs a template + per-page CSS file. */
   pages: CarryPage[];
   /**
+   * Hybrid carry: posts are excluded from the carry set and render NATIVE (a normal
+   * blog feed), so the theme needs working `single.html` / `home.html` / `archive.html`.
+   * Defaults to "no POST is carried" (`!pages.some(postType==='post')`) — correct for the
+   * hybrid case and harmless on a posts-free site (the templates simply go unused).
+   */
+  nativeBlog?: boolean;
+  /**
    * When the run has a store, the carried header to use for the WooCommerce store
    * templates (single-product / archive-product). Product + shop/archive pages have
    * NO carried island of their own, and the content-page `header` parts are usually
@@ -305,6 +312,90 @@ function scaffoldedTemplate(
 /** The right template body for a page: scaffolded when it has a scaffold, else legacy. */
 function templateFor(p: CarryPage, slugs: ChromeSlugs): string {
   return p.scaffold ? scaffoldedTemplate(p.scaffold, slugs, p.mobile) : pageTemplate(slugs);
+}
+
+// --- Native blog templates (hybrid carry — posts render native, not carried) -------
+// Built from the home page's CarryScaffold (chrome parts + Wix wrapper) with a CLEAN
+// block middle and NO dual-viewport wrapper (native posts have no captured mobile DOM).
+// The scaffold gives the chrome its DOM anchor; the middle is normal core blocks the
+// editor renders + edits like any block (the carried islands' raw-HTML limitation
+// applies only to the carried marketing pages).
+
+/** Single-post body: a constrained white card with title, date, featured image, content, prev/next. */
+const NATIVE_SINGLE_MIDDLE = [
+  '<!-- wp:group {"tagName":"div","layout":{"type":"constrained","contentSize":"760px"},"style":{"spacing":{"padding":{"top":"48px","bottom":"72px","left":"20px","right":"20px"}}}} -->',
+  '<div class="wp-block-group" style="padding:48px 20px 72px">',
+  '<!-- wp:group {"style":{"color":{"background":"#ffffff"},"spacing":{"padding":{"top":"44px","bottom":"56px","left":"clamp(20px,4vw,56px)","right":"clamp(20px,4vw,56px)"}},"border":{"radius":"10px"}},"layout":{"type":"constrained"}} -->',
+  '<div class="wp-block-group has-background" style="border-radius:10px;background-color:#ffffff;padding:44px clamp(20px,4vw,56px) 56px">',
+  '<!-- wp:post-title {"level":1} /-->',
+  '<!-- wp:post-date /-->',
+  '<!-- wp:spacer {"height":"24px"} --><div style="height:24px" aria-hidden="true" class="wp-block-spacer"></div><!-- /wp:spacer -->',
+  '<!-- wp:post-featured-image {"isLink":false,"style":{"border":{"radius":"8px"}}} /-->',
+  '<!-- wp:spacer {"height":"24px"} --><div style="height:24px" aria-hidden="true" class="wp-block-spacer"></div><!-- /wp:spacer -->',
+  '<!-- wp:post-content {"layout":{"type":"constrained"}} /-->',
+  '</div>',
+  '<!-- /wp:group -->',
+  '<!-- wp:spacer {"height":"40px"} --><div style="height:40px" aria-hidden="true" class="wp-block-spacer"></div><!-- /wp:spacer -->',
+  '<!-- wp:post-navigation-link {"type":"previous","label":"Previous post","showTitle":true} /-->',
+  '<!-- wp:post-navigation-link {"label":"Next post","showTitle":true} /-->',
+  '</div>',
+  '<!-- /wp:group -->',
+].join('\n');
+
+const NATIVE_HOME_TITLE = '<!-- wp:heading {"level":1} -->\n<h1 class="wp-block-heading">Blog</h1>\n<!-- /wp:heading -->';
+const NATIVE_ARCHIVE_TITLE = '<!-- wp:query-title {"type":"archive"} /-->';
+
+/** A post-listing body: an optional title block above a `core/query` inherit loop. */
+function nativeQueryLoop(titleBlock: string): string {
+  return [
+    '<!-- wp:group {"tagName":"div","layout":{"type":"constrained","contentSize":"880px"},"style":{"spacing":{"padding":{"top":"48px","bottom":"72px","left":"20px","right":"20px"}}}} -->',
+    '<div class="wp-block-group" style="padding:48px 20px 72px">',
+    titleBlock,
+    '<!-- wp:query {"queryId":0,"query":{"perPage":10,"pages":0,"offset":0,"postType":"post","order":"desc","orderBy":"date","inherit":true},"layout":{"type":"default"}} -->',
+    '<div class="wp-block-query">',
+    '<!-- wp:post-template {"style":{"spacing":{"blockGap":"40px"}},"layout":{"type":"default"}} -->',
+    '<!-- wp:group {"style":{"color":{"background":"#ffffff"},"spacing":{"padding":{"top":"30px","bottom":"30px","left":"32px","right":"32px"}},"border":{"radius":"10px"}},"layout":{"type":"constrained"}} -->',
+    '<div class="wp-block-group has-background" style="border-radius:10px;background-color:#ffffff;padding:30px 32px">',
+    '<!-- wp:post-title {"isLink":true,"level":2} /-->',
+    '<!-- wp:post-date /-->',
+    '<!-- wp:post-excerpt {"moreText":"Read more →"} /-->',
+    '</div>',
+    '<!-- /wp:group -->',
+    '<!-- /wp:post-template -->',
+    '<!-- wp:query-pagination {"layout":{"type":"flex","justifyContent":"space-between"}} -->',
+    '<!-- wp:query-pagination-previous /--><!-- wp:query-pagination-numbers /--><!-- wp:query-pagination-next /-->',
+    '<!-- /wp:query-pagination -->',
+    '<!-- wp:query-no-results --><!-- wp:paragraph --><p>No posts yet.</p><!-- /wp:paragraph --><!-- /wp:query-no-results -->',
+    '</div>',
+    '<!-- /wp:query -->',
+    '</div>',
+    '<!-- /wp:group -->',
+  ].join('\n');
+}
+
+/** Wrap a native block middle in the home page's chrome scaffold (no dual-viewport wrapper). */
+function nativeBlogTemplate(middle: string, slugs: ChromeSlugs, scaffold?: CarryScaffold): string {
+  if (scaffold) {
+    return [
+      htmlBlock(scaffold.openWrap),
+      `<!-- wp:template-part {"slug":"${slugs.header}","tagName":"div"} /-->`,
+      htmlBlock(scaffold.midBefore),
+      middle,
+      htmlBlock(scaffold.midAfter),
+      `<!-- wp:template-part {"slug":"${slugs.footer}","tagName":"div"} /-->`,
+      htmlBlock(scaffold.closeWrap),
+    ]
+      .filter(Boolean)
+      .join('\n');
+  }
+  // No deep-chrome scaffold (legacy): header part → constrained main → footer part.
+  return [
+    `<!-- wp:template-part {"slug":"${slugs.header}","tagName":"header"} /-->`,
+    '<!-- wp:group {"tagName":"main"} -->',
+    `<main class="wp-block-group">${middle}</main>`,
+    '<!-- /wp:group -->',
+    `<!-- wp:template-part {"slug":"${slugs.footer}","tagName":"footer"} /-->`,
+  ].join('\n');
 }
 
 /** Valid, safe CSS class token (no quotes/spaces); excludes WP-reserved-ish noise. */
@@ -537,6 +628,20 @@ export function buildCarryThemeFiles(input: CarryThemeInput): ThemeFile[] {
     } else {
       files.push({ path: `templates/page-${p.slug}.html`, content: templateFor(p, slugs) });
     }
+  }
+
+  // Hybrid blog: when no POST is carried, the per-page loop above never emits a
+  // single.html, so native posts/archives would fall back to index.html (the homepage
+  // shell). Emit clean native blog templates from the home page's scaffold so native
+  // posts (single.html), the posts page (home.html) and date/term archives (archive.html)
+  // render properly. index.html is left as the homepage fallback. The carried-post case
+  // (posts in the carry set) keeps its own single.html via the loop above.
+  const nativeBlog = input.nativeBlog ?? !input.pages.some((p) => p.postType === 'post');
+  if (nativeBlog) {
+    const sc = homePage?.scaffold;
+    files.push({ path: 'templates/single.html', content: nativeBlogTemplate(NATIVE_SINGLE_MIDDLE, homeSlugs, sc) });
+    files.push({ path: 'templates/home.html', content: nativeBlogTemplate(nativeQueryLoop(NATIVE_HOME_TITLE), homeSlugs, sc) });
+    files.push({ path: 'templates/archive.html', content: nativeBlogTemplate(nativeQueryLoop(NATIVE_ARCHIVE_TITLE), homeSlugs, sc) });
   }
 
   // WooCommerce store templates. Product + shop/category-archive pages have NO carried
