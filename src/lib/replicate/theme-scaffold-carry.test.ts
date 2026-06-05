@@ -216,6 +216,44 @@ describe('buildCarryThemeFiles', () => {
       expect(tpl.indexOf('wp:post-content')).toBeLessThan(tpl.indexOf('"footer"'));
     });
 
+    it('wraps post-content in the dual-viewport desktop wrapper + mobile iframe when the page has mobile', () => {
+      const fm = buildCarryThemeFiles({
+        themeName: 'Acme Carry',
+        chromeVariants: oneVariant(
+          '<!-- wp:html --><header id="H">nav</header><!-- /wp:html -->',
+          '<!-- wp:html --><footer id="F">foot</footer><!-- /wp:html -->',
+        ),
+        siteCss: '',
+        pages: [
+          page({
+            slug: 'about',
+            isHome: false,
+            scaffold,
+            pageCss: '',
+            mobile: { docUrl: '/wp-content/uploads/_carry-mobile/about.html', height: 1234 },
+          }),
+        ],
+      });
+      const tpl = fm.find((x) => x.path === 'templates/page-about.html')?.content ?? '';
+      // the viewport wrapper + iframe live in the TEMPLATE now (not post_content)
+      expect(tpl).toContain('<div class="lib-carry-vp-desktop">');
+      expect(tpl).toContain('wp:post-content');
+      expect(tpl).toContain('<div class="lib-carry-vp-mobile">');
+      expect(tpl).toContain('<iframe');
+      expect(tpl).toContain('src="/wp-content/uploads/_carry-mobile/about.html"');
+      expect(tpl).toContain('height="1234"');
+      // ordering: desktop wrapper opens → post-content (sections) → mobile iframe
+      expect(tpl.indexOf('lib-carry-vp-desktop')).toBeLessThan(tpl.indexOf('wp:post-content'));
+      expect(tpl.indexOf('wp:post-content')).toBeLessThan(tpl.indexOf('lib-carry-vp-mobile'));
+    });
+
+    it('does NOT add the viewport wrapper to the template when the page has no mobile', () => {
+      const tpl = get('templates/page-about.html');
+      expect(tpl).toContain('wp:post-content');
+      expect(tpl).not.toContain('lib-carry-vp-desktop');
+      expect(tpl).not.toContain('<iframe');
+    });
+
     it('adds the display:contents wrapper rescue to site.css when scaffolded', () => {
       expect(get('assets/css/site.css')).toContain('.wp-block-template-part{display:contents}');
     });

@@ -20,6 +20,7 @@
 
 import type { CarryScaffold } from './page-reconstruct-carry.js';
 import { GALLERY_MOBILE_GRID_CSS } from './gallery-mobile-grid.js';
+import { mobileFrame } from './page-reconstruct-carry.js';
 
 export interface CarryPage {
   /** URL-safe slug (kebab-case, produced by slugify — no quotes or special chars). */
@@ -49,6 +50,15 @@ export interface CarryPage {
    * between them — the editable-content architecture. Absent → legacy template.
    */
   scaffold?: CarryScaffold;
+  /**
+   * Classic/adaptive Wix dual-viewport mobile-DOM carry. When present (and the page
+   * has a `scaffold`), the template wraps `wp:post-content` in `.lib-carry-vp-desktop`
+   * and appends a `.lib-carry-vp-mobile` iframe of the captured 320px mobile DOM — so
+   * the desktop content stays as editable per-section blocks in post_content while the
+   * viewport toggle (`VP_TOGGLE_CSS`) still swaps to the mobile iframe below 750px.
+   * Only consumed by the scaffolded template; the legacy path inlines the wrapper itself.
+   */
+  mobile?: { docUrl: string; height: number };
 }
 
 /** body_class / enqueue conditional for a page (front page → single → page). */
@@ -263,12 +273,27 @@ function wooSingleProductTemplate(): string {
  * chrome lands in its exact DOM position), and `post_content` (content sections
  * only) sits between them. Concatenated, the stream rebuilds the source DOM.
  */
-function scaffoldedTemplate(s: CarryScaffold, slugs: ChromeSlugs): string {
+function scaffoldedTemplate(
+  s: CarryScaffold,
+  slugs: ChromeSlugs,
+  mobile?: { docUrl: string; height: number },
+): string {
+  // Under dual-viewport mobile carry, the template (not post_content) hosts the
+  // wrapper: `.lib-carry-vp-desktop` wraps the editable section blocks, and a
+  // `.lib-carry-vp-mobile` iframe of the captured mobile DOM follows. VP_TOGGLE_CSS
+  // swaps between them below 750px. Without mobile, post-content stands alone.
+  const postContentSlot = mobile
+    ? [
+        htmlBlock('<div class="lib-carry-vp-desktop">'),
+        '<!-- wp:post-content /-->',
+        htmlBlock(`</div>\n<div class="lib-carry-vp-mobile">${mobileFrame(mobile)}</div>`),
+      ].join('\n')
+    : '<!-- wp:post-content /-->';
   return [
     htmlBlock(s.openWrap),
     `<!-- wp:template-part {"slug":"${slugs.header}","tagName":"div"} /-->`,
     htmlBlock(s.midBefore),
-    '<!-- wp:post-content /-->',
+    postContentSlot,
     htmlBlock(s.midAfter),
     `<!-- wp:template-part {"slug":"${slugs.footer}","tagName":"div"} /-->`,
     htmlBlock(s.closeWrap),
@@ -279,7 +304,7 @@ function scaffoldedTemplate(s: CarryScaffold, slugs: ChromeSlugs): string {
 
 /** The right template body for a page: scaffolded when it has a scaffold, else legacy. */
 function templateFor(p: CarryPage, slugs: ChromeSlugs): string {
-  return p.scaffold ? scaffoldedTemplate(p.scaffold, slugs) : pageTemplate(slugs);
+  return p.scaffold ? scaffoldedTemplate(p.scaffold, slugs, p.mobile) : pageTemplate(slugs);
 }
 
 /** Valid, safe CSS class token (no quotes/spaces); excludes WP-reserved-ish noise. */
@@ -475,7 +500,7 @@ export function buildCarryThemeFiles(input: CarryThemeInput): ThemeFile[] {
   const homePage = input.pages.find((p) => p.isHome);
   const homeSlugs = slugsFor(homePage?.chromeKey ?? input.chromeVariants[0]?.key ?? '');
   const indexTemplate = homePage?.scaffold
-    ? scaffoldedTemplate(homePage.scaffold, homeSlugs)
+    ? scaffoldedTemplate(homePage.scaffold, homeSlugs, homePage.mobile)
     : pageTemplate(homeSlugs);
 
   const files: ThemeFile[] = [

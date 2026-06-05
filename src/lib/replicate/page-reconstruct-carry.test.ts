@@ -1,5 +1,24 @@
 import { describe, it, expect } from 'vitest';
-import { reconstructPageCarry } from './page-reconstruct-carry.js';
+import { reconstructPageCarry, deriveSectionName } from './page-reconstruct-carry.js';
+
+describe('deriveSectionName', () => {
+  it('prefers the first heading text', () => {
+    expect(deriveSectionName('<section><div><h2 class="x">What I Offer</h2><p>body</p></div></section>', 0)).toBe('What I Offer');
+  });
+  it('decodes entities in the label', () => {
+    expect(deriveSectionName('<section><h1>FAQ&apos;s &amp; More</h1></section>', 1)).toBe("FAQ's & More");
+  });
+  it('falls back to first visible text when there is no heading', () => {
+    expect(deriveSectionName('<section><div>Therapy in the Keystone State</div></section>', 2)).toBe('Therapy in the Keystone State');
+  });
+  it('falls back to a positional name when the section has no text', () => {
+    expect(deriveSectionName('<section><img src="/x.jpg" alt=""></section>', 4)).toBe('Section 5');
+  });
+  it('caps the label length', () => {
+    const long = 'A'.repeat(80);
+    expect(deriveSectionName(`<section><h2>${long}</h2></section>`, 0).length).toBeLessThanOrEqual(48);
+  });
+});
 
 describe('reconstructPageCarry', () => {
   it('produces a scoped main island + split chrome/main CSS', () => {
@@ -12,7 +31,7 @@ describe('reconstructPageCarry', () => {
       specs: [],
       mediaUrlMap: new Map(),
     });
-    expect(r.mainIsland).toContain('<!-- wp:html -->');
+    expect(r.mainIsland).toContain('<!-- wp:html ');
     expect(r.mainIsland).toContain('class="hero"');
     // main sheet: page-scoped (zero-specificity :where), has .hero, drops chrome-only/unmatched
     expect(r.mainCss).toContain(':where(body.lib-carry-site.lib-carry-page-home) .hero');
@@ -70,6 +89,33 @@ describe('reconstructPageCarry', () => {
     expect(r.mainIsland).toContain('src="/wp-content/uploads/_carry-mobile/home.html"');
     expect(r.mainIsland).toContain('width="320"');
     expect(r.mainIsland).toContain('height="5200"');
+  });
+
+  it('deep chrome path: emits per-section core/html blocks (not one dual island) even with mobile', () => {
+    const r = reconstructPageCarry({
+      slug: 'svc',
+      bodyHtml:
+        '<header id="SITE_HEADER">H</header>' +
+        '<div id="PAGES_CONTAINER"><section class="s1">A</section><section class="s2">B</section></div>' +
+        '<footer id="SITE_FOOTER">F</footer>',
+      css: '',
+      specs: [],
+      mediaUrlMap: new Map(),
+      mobile: { docUrl: '/wp-content/uploads/_carry-mobile/svc.html', height: 1000 },
+    });
+    expect(r.splitChrome).toBe(true);
+    // content splits into one NAMED core/html block per source <section> …
+    expect(r.postContentBlocks.length).toBe(2);
+    expect((r.mainIsland.match(/<!-- wp:html /g) ?? []).length).toBe(2);
+    expect(r.mainIsland).toContain('class="s1"');
+    expect(r.mainIsland).toContain('class="s2"');
+    // … each block carries metadata.name (List View label) derived from its text
+    expect(r.mainIsland).toContain('"metadata":{"name":"A"}');
+    expect(r.mainIsland).toContain('"metadata":{"name":"B"}');
+    // … and the dual-viewport wrapper + iframe do NOT live in post_content here:
+    // they move to the template (scaffoldedTemplate) so the post stays editable section blocks.
+    expect(r.mainIsland).not.toContain('lib-carry-vp-desktop');
+    expect(r.mainIsland).not.toContain('<iframe');
   });
 
   it('omits the mobile island when `mobile` is absent (desktop-only, back-compat)', () => {

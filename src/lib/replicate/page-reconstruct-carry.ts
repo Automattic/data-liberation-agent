@@ -31,8 +31,10 @@ export interface ReconstructCarryInput {
   mobile?: { docUrl: string; height: number };
 }
 
-/** The mobile-island iframe: loads the captured mobile DOM at its own 320px viewport. */
-function mobileFrame(m: { docUrl: string; height: number }): string {
+/** The mobile-island iframe: loads the captured mobile DOM at its own 320px viewport.
+ *  Exported so the template builder (theme-scaffold-carry) can host the dual-viewport
+ *  wrapper itself on the deep-chrome path, keeping post_content as editable section blocks. */
+export function mobileFrame(m: { docUrl: string; height: number }): string {
   const src = m.docUrl.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
   return `<iframe class="lib-carry-mobile-frame" src="${src}" width="320" height="${m.height}" scrolling="no" title="mobile"></iframe>`;
 }
@@ -83,6 +85,41 @@ function island(html: string): string {
   return html ? `<!-- wp:html -->\n${html}\n<!-- /wp:html -->` : '';
 }
 
+/** Decode the handful of HTML entities that show up in heading/label text. */
+function decodeEntities(s: string): string {
+  return s
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#0?39;|&apos;|&#x27;/gi, "'")
+    .replace(/&nbsp;|&#160;/gi, ' ')
+    .replace(/&#8217;|&rsquo;/gi, '’')
+    .replace(/&#8216;|&lsquo;/gi, '‘')
+    .replace(/&#8230;|&hellip;/gi, '…');
+}
+
+/**
+ * Human-readable label for a carried section, emitted as the block's
+ * `metadata.name` so the editor List View shows the section (e.g. "What I Offer")
+ * instead of a stack of opaque "Custom HTML" rows — the only practical content
+ * indicator for a raw-HTML island. Prefers the section's first heading; falls back
+ * to its first visible text, then a positional "Section N". Capped to 48 chars.
+ */
+export function deriveSectionName(sectionHtml: string, index: number): string {
+  const heading = sectionHtml.match(/<h[1-6][^>]*>([\s\S]*?)<\/h[1-6]>/i);
+  const source = heading && heading[1].replace(/<[^>]+>/g, '').trim() ? heading[1] : sectionHtml;
+  const clean = decodeEntities(source.replace(/<[^>]+>/g, ' ')).replace(/\s+/g, ' ').trim();
+  const label = clean.slice(0, 48).trim();
+  return label || `Section ${index + 1}`;
+}
+
+/** Carry a section as a NAMED `core/html` block (metadata.name → List View label). */
+function namedIsland(html: string, name: string): string {
+  if (!html) return '';
+  return `<!-- wp:html ${JSON.stringify({ metadata: { name } })} -->\n${html}\n<!-- /wp:html -->`;
+}
+
 /**
  * Pure per-page emitter for the carry-and-scope parity path.
  *
@@ -131,11 +168,15 @@ export function reconstructPageCarry(input: ReconstructCarryInput): ReconstructC
       mainDom,
       pageScope,
     );
-    const postContentBlocks = split.sectionsHtml.map(island);
+    const postContentBlocks = split.sectionsHtml.map((s, i) => namedIsland(s, deriveSectionName(s, i)));
     return {
-      mainIsland: input.mobile
-        ? dualIsland(split.sectionsHtml.join(''), input.mobile)
-        : postContentBlocks.join('\n'),
+      // post_content is ALWAYS the per-section core/html blocks — even under mobile
+      // carry. The dual-viewport wrapper (`.lib-carry-vp-desktop` + the mobile-DOM
+      // iframe) is hosted by the TEMPLATE (scaffoldedTemplate wraps `wp:post-content`),
+      // not baked into post_content, so the post stays editable section blocks. The
+      // rendered DOM is identical to the old single dual-island. (The legacy path below
+      // still inlines `dualIsland` — it has no scaffold/template to carry the wrapper.)
+      mainIsland: postContentBlocks.join('\n'),
       postContentBlocks,
       headerIsland: island(split.headerHtml),
       footerIsland: island(split.footerHtml),

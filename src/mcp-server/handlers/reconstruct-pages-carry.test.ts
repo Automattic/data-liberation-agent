@@ -51,7 +51,7 @@ describe('assembleCarryTheme', () => {
     expect(byPath('assets/css/site.css')).toContain(':where(body.lib-carry-site) .h');
     expect(byPath('assets/css/page-home.css')).toContain(':where(body.lib-carry-site.lib-carry-page-home) .hero');
     const home = out.wxrPages.find((p) => p.slug === 'home')!;
-    expect(home.postContent).toContain('<!-- wp:html -->');
+    expect(home.postContent).toContain('<!-- wp:html ');
     expect(home.postContent).toContain('class="hero"');
   });
 
