@@ -50,11 +50,11 @@ import {
 const execFileAsync = promisify(execFile);
 
 interface ApplyTarget {
-  /** "studio" | "playground". v1 implements studio. */
+  /** "studio". */
   kind?: string;
   /** Studio site path (parent dir, NOT the wordpress sub-dir). */
   studioSitePath?: string;
-  /** Site URL — used by the poller for the Playground REST fallback. */
+  /** Site URL — kept for forward compatibility with the poller opts shape. */
   siteUrl?: string;
 }
 
@@ -109,24 +109,15 @@ export const blockTransformApplyHandler: Handler = async (args, ctx) => {
 
   // Pre-apply 4: post existence (3 retries with backoff).
   const studioSitePath = target.studioSitePath;
-  const useStudio = target.kind !== 'playground';
-  if (useStudio && !studioSitePath) {
+  if (!studioSitePath) {
     return ctx.errorResult(
-      'Studio target requires `target.studioSitePath`. Pass `target: {kind: "studio", studioSitePath: "..."}` or specify a Playground target.',
+      'Studio target requires `target.studioSitePath`. Pass `target: {kind: "studio", studioSitePath: "..."}` to specify the running Studio site.',
     );
-  }
-  if (!useStudio) {
-    return ctx.textResult({
-      ok: false,
-      url,
-      reason: 'Playground apply path not implemented in v1; use Studio target.',
-    });
   }
 
   const poll = await pollForPost({
     siteUrl: target.siteUrl ?? '',
     sourceUrl: url,
-    useStudioCli: true,
     studioSitePath,
   });
   if (!poll.found || !poll.postId) {

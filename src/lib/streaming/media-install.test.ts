@@ -60,7 +60,6 @@ describe('installMediaForUrl', () => {
         outputDir,
         url: 'https://example.com/page',
         wpRoot,
-        useStudioCli: true,
         _execFile: exec,
       });
 
@@ -119,7 +118,6 @@ describe('installMediaForUrl', () => {
         outputDir,
         url: 'https://example.com/page',
         wpRoot,
-        useStudioCli: true,
         _execFile: exec,
       });
 
@@ -142,7 +140,6 @@ describe('installMediaForUrl', () => {
         outputDir,
         url: 'https://example.com/page',
         wpRoot,
-        useStudioCli: true,
         _execFile: exec,
       });
 
@@ -179,7 +176,6 @@ describe('installMediaForUrl', () => {
         outputDir,
         url: 'https://example.com/page',
         wpRoot,
-        useStudioCli: true,
         _execFile: exec,
       });
 
@@ -215,7 +211,6 @@ describe('installMediaForUrl', () => {
         outputDir,
         url: 'https://example.com/page',
         wpRoot,
-        useStudioCli: true,
         _execFile: exec,
       });
 
@@ -246,7 +241,6 @@ describe('installMediaForUrl', () => {
         outputDir,
         url: 'https://example.com/page',
         wpRoot,
-        useStudioCli: true,
         _execFile: exec,
       });
       expect(exec).not.toHaveBeenCalled();
@@ -267,7 +261,6 @@ describe('installMediaForUrl', () => {
         outputDir,
         url: 'https://example.com/page',
         wpRoot,
-        useStudioCli: true,
         _execFile: exec,
       });
 
@@ -294,7 +287,6 @@ describe('installMediaForUrl', () => {
         outputDir,
         url: 'https://example.com/page',
         wpRoot,
-        useStudioCli: true,
         _execFile: exec,
       });
 
@@ -317,7 +309,6 @@ describe('installMediaForUrl', () => {
         outputDir,
         url: 'https://example.com/page',
         wpRoot,
-        useStudioCli: true,
         _execFile: exec,
       });
 
@@ -359,7 +350,6 @@ describe('installMediaForUrl', () => {
         outputDir,
         url: 'https://example.com/page',
         wpRoot,
-        useStudioCli: true,
         _execFile: exec,
       });
 
@@ -387,52 +377,10 @@ describe('installMediaForUrl', () => {
         outputDir,
         url: 'https://example.com/page',
         wpRoot,
-        useStudioCli: true,
         _execFile: exec,
       });
       expect(result.errors.length).toBeGreaterThan(0);
       expect(result.errors[0].error).toMatch(/no parseable JSON/);
-    } finally {
-      rmSync(outputDir, { recursive: true, force: true });
-    }
-  });
-
-  it('registers attachments through wp-playground-cli run-blueprint when Studio is unavailable', async () => {
-    const { outputDir, wpRoot } = setup({
-      stubs: [{ url: 'https://cdn/a.jpg', filename: 'a.jpg' }],
-    });
-    try {
-      const exec = vi.fn().mockResolvedValue({
-        stdout: SUCCESS_RESPONSE([
-          { sourceUrl: 'https://cdn/a.jpg', filename: 'a.jpg', postId: 55, localUrl: 'http://127.0.0.1:9400/wp-content/uploads/2026/04/a.jpg' },
-        ]),
-        stderr: '',
-      });
-      const result = await installMediaForUrl({
-        outputDir,
-        url: 'https://example.com/page',
-        wpRoot,
-        useStudioCli: false,
-        playgroundSiteUrl: 'http://127.0.0.1:9400',
-        _execFile: exec,
-      });
-      expect(result.errors).toEqual([]);
-      expect(result.installed[0]).toMatchObject({
-        sourceUrl: 'https://cdn/a.jpg',
-        postId: 55,
-        localUrl: '/wp-content/uploads/2026/04/a.jpg',
-      });
-
-      const [bin, args] = exec.mock.calls[0];
-      expect(bin).toBe('npx');
-      expect(args).toContain('wp-playground-cli');
-      expect(args).toContain('run-blueprint');
-      expect(args).toContain('--site-url=http://127.0.0.1:9400');
-      expect(args.some((arg: string) => arg.startsWith('--mount-before-install=') && arg.endsWith(':/wordpress/wp-content'))).toBe(true);
-
-      const store = MediaStubStore.load(outputDir);
-      expect(store.get('https://cdn/a.jpg')?.wpPostId).toBe(55);
-      expect(store.get('https://cdn/a.jpg')?.localUrl).toBe('/wp-content/uploads/2026/04/a.jpg');
     } finally {
       rmSync(outputDir, { recursive: true, force: true });
     }
@@ -458,7 +406,6 @@ describe('installMediaForUrl', () => {
         outputDir,
         url: 'https://example.com/page',
         wpRoot,
-        useStudioCli: true,
         _execFile: exec,
       });
       expect(result.installed).toHaveLength(1);

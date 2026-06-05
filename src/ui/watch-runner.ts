@@ -110,8 +110,8 @@ export interface WatchEvents {
   onUrlObserved?: (url: string, archetype: string) => void;
   /** Fires the moment preview boot begins (in parallel with discovery). The TUI shows "Preview: starting up…" until onPreviewReady. */
   onPreviewStarting?: () => void;
-  /** Fires once the running Playground/Studio site is up. Surface this URL in the UI so the user can browse while content keeps streaming in. */
-  onPreviewReady?: (info: { url: string; source: 'studio' | 'playground'; siteName?: string }) => void;
+  /** Fires once the running Studio site is up. Surface this URL in the UI so the user can browse while content keeps streaming in. */
+  onPreviewReady?: (info: { url: string; source: 'studio'; siteName?: string }) => void;
   /** Fires when preview startup fails (non-fatal — extraction continues without a live preview). */
   onPreviewFailed?: (error: string) => void;
   onJudgmentsReady?: (judgments: JudgmentNeeded[]) => void;
@@ -243,7 +243,7 @@ export function buildJudgmentPrompt(
   const themeSlug = deriveThemeSlug(outputDir);
   const installTarget = studioSitePath
     ? `\`liberate_install_theme\` with { outputDir: "${outputDir}", studioSitePath: "${studioSitePath}", themeSlug: "${themeSlug}", themeFiles: [...] }. This exact themeSlug is the runner-created shell theme; use it to overwrite the existing shell theme, not a slug derived from inventory/siteSlug. Custom blocks (rare) are theme-embedded under blocks/<slug>/{src,build}/ — pass them through themeFiles[], NOT a separate plugin. See skills/replicate/SKILL.md §4d for the pre-built artifact rule and functions.php registration loop.`
-    : `[no install target — Playground mode: skip the install call, just write theme files to <outputDir>/theme/ for the post-extraction reimport]`;
+    : `[no install target (Studio site not available); write theme files to <outputDir>/theme/ for the post-extraction reimport]`;
 
   // IMPORTANT — claude -p only EXECUTES a skill when the prompt opens with
   // its slash invocation (`/data-liberation:<skill>`). Plain English ("Invoke
@@ -338,7 +338,7 @@ export function buildThemePieceBatchPrompt(
   const themeSlug = deriveThemeSlug(outputDir);
   const installTarget = studioSitePath
     ? `\`liberate_install_theme\` with { outputDir: "${outputDir}", studioSitePath: "${studioSitePath}", themeSlug: "${themeSlug}", themeFiles: [...] }`
-    : `[no install target — Playground mode: write theme files to <outputDir>/theme/ for the post-extraction reimport]`;
+    : `[no install target (Studio site not available); write theme files to <outputDir>/theme/ for the post-extraction reimport]`;
   const orderedPieces = pieces
     .map((j) => String(j.inputs.themePiece ?? 'foundation'))
     .filter((piece) => isThemePiece(piece));
@@ -399,7 +399,7 @@ export function buildReplicaBriefMarkdown(opts: {
     '## Install Target',
     '',
     `- Output directory: ${opts.outputDir}`,
-    `- Studio site path: ${opts.studioSitePath ?? '(none; Playground mode)'}`,
+    `- Studio site path: ${opts.studioSitePath ?? '(none; Studio site not available)'}`,
     `- Theme slug: ${opts.themeSlug}`,
     '',
     '## Shared Evidence',
@@ -1974,14 +1974,14 @@ export async function runWatch(opts: WatchOpts): Promise<{ ok: boolean; duration
   ensureStubWxr(outDir);
   events.onPreviewStarting?.();
   let studioSitePath: string | null = null;
-  let previewSource: 'studio' | 'playground' | null = null;
+  let previewSource: 'studio' | null = null;
   const { startPreview } = await import('../lib/preview/studio.js');
   const previewPromise = startPreview({
     outputDir: outDir,
   })
     .then((stub) => {
       if (stub.status === 'ready' && stub.url) {
-        previewSource = stub.source ?? 'playground';
+        previewSource = stub.source ?? 'studio';
         if (previewSource === 'studio' && stub.siteName) {
           const studioRoot = resolveStudioRoot();
           studioSitePath = join(studioRoot, stub.siteName);
@@ -2223,7 +2223,6 @@ export async function runWatch(opts: WatchOpts): Promise<{ ok: boolean; duration
             outputDir: outDir,
             url: urlsToInstall[0] ?? opts.url,
             wpRoot,
-            useStudioCli: true,
           });
           let added = 0;
           for (const entry of mediaResult.installed ?? []) {
@@ -2644,7 +2643,6 @@ export async function runWatch(opts: WatchOpts): Promise<{ ok: boolean; duration
               outputDir: outDir,
               url: opts.url,
               wpRoot,
-              useStudioCli: true,
             });
             let cssMediaInstalled = 0;
             for (const entry of cssMediaInstallResult.installed ?? []) {
@@ -2781,7 +2779,7 @@ export async function runWatch(opts: WatchOpts): Promise<{ ok: boolean; duration
       if (reimport.status === 'ready' && reimport.url) {
         events.onPreviewReady?.({
           url: reimport.url,
-          source: reimport.source ?? 'playground',
+          source: reimport.source ?? 'studio',
           siteName: reimport.siteName,
         });
         appendWatchLog(outDir, {

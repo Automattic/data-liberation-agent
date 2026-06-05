@@ -3,7 +3,7 @@
 // =====================
 // Phase 1.5 of the streaming/incremental replicate pipeline. For each URL
 // processed by the streaming loop, install pending media into the running
-// replica WP site so pages render with real images while streaming.
+// Studio replica WP site so pages render with real images while streaming.
 //
 // Behavior:
 //   - Reads MediaStubStore.list() for all stubs in `success` state with
@@ -12,8 +12,7 @@
 //     <wpRoot>/wp-content/uploads/<year>/<month>/<filename> based on the
 //     local file's mtime (matches WP's default uploads layout).
 //   - Invokes a vendored PHP script (install-media.php) via `studio wp
-//     eval-file` or `wp-playground-cli run-blueprint` that runs
-//     `wp_insert_attachment` for each entry.
+//     eval-file` that runs `wp_insert_attachment` for each entry.
 //     The script is idempotent: it checks `_wp_attached_file` first and
 //     re-uses an existing attachment ID when present.
 //   - Records the resulting post ID back into MediaStubStore via
@@ -24,9 +23,6 @@
 //     existing MediaStubStore doesn't track URL→media membership, so
 //     scoping to one URL's media isn't possible without a schema change.
 //     Idempotency keeps duplicate calls cheap.
-//   - Both Studio and persisted Playground sites are supported. Calls with
-//     `useStudioCli: false` drive `wp-playground-cli run-blueprint` against
-//     the persisted Playground wp-content directory.
 //
 import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -61,16 +57,8 @@ export interface MediaInstallOpts {
   outputDir: string;
   /** Source URL whose media we're installing — kept for trace logging. */
   url: string;
-  /** Running WP install root (Studio: <sitePath>/wordpress; Playground: <outputDir>/playground-site/wp-content's parent). */
+  /** Running Studio WP install root (e.g. <sitePath>/wordpress or <sitePath> for flat sites). */
   wpRoot: string;
-  /**
-   * When true, drive the install via `studio wp eval-file`. When false,
-   * drive it via `wp-playground-cli run-blueprint` against a persisted
-   * Playground wp-content mount.
-   */
-  useStudioCli?: boolean;
-  /** Playground URL used by wp_upload_dir() to produce localUrl values. */
-  playgroundSiteUrl?: string;
   /** Override the studio binary location (for tests). */
   _studioBin?: string;
   /** Inject an exec-file impl (for tests). */
@@ -197,34 +185,19 @@ export async function installMediaForUrl(opts: MediaInstallOpts): Promise<MediaI
   }
 
   // 3. Stage payload + invoke wp eval-file.
-  const useStudio = opts.useStudioCli !== false;
   let scriptOut: { stdout: string; resultHostPath: string };
-  if (!useStudio) {
-    try {
-      scriptOut = await installViaPlayground(opts, installedFiles.map((p) => p.entry));
-    } catch (err) {
-      for (const item of installedFiles) {
-        result.errors.push({
-          sourceUrl: item.url,
-          error: `wp-playground-cli install-media.php failed: ${(err as Error).message.trim()}`,
-        });
-      }
-      return result;
+  try {
+    scriptOut = await installViaStudio(opts, installedFiles.map((p) => p.entry));
+  } catch (err) {
+    // The shell-level failure means none of the entries got registered.
+    // Each pending entry surfaces as an error so the caller can retry.
+    for (const item of installedFiles) {
+      result.errors.push({
+        sourceUrl: item.url,
+        error: `wp eval-file install-media.php failed: ${formatExecError(err)}`,
+      });
     }
-  } else {
-    try {
-      scriptOut = await installViaStudio(opts, installedFiles.map((p) => p.entry));
-    } catch (err) {
-      // The shell-level failure means none of the entries got registered.
-      // Each pending entry surfaces as an error so the caller can retry.
-      for (const item of installedFiles) {
-        result.errors.push({
-          sourceUrl: item.url,
-          error: `wp eval-file install-media.php failed: ${formatExecError(err)}`,
-        });
-      }
-      return result;
-    }
+    return result;
   }
 
   // 4. Parse the script's response and reconcile with the stub store.
@@ -306,57 +279,6 @@ function studioSitePathForWpRoot(wpRoot: string): string {
     return dirname(resolved);
   }
   return resolved;
-}
-
-async function installViaPlayground(opts: MediaInstallOpts, entries: PayloadEntry[]): Promise<{ stdout: string; resultHostPath: string }> {
-  const wpRoot = resolve(opts.wpRoot);
-  const wpContentHost = join(wpRoot, 'wp-content');
-  const scriptsDir = join(wpContentHost, 'uploads', 'liberation', '.dla-scripts');
-  mkdirSync(scriptsDir, { recursive: true });
-
-  const stamp = `install-media-${Date.now()}-${process.pid}`;
-  const scriptVfsPath = `/wordpress/wp-content/uploads/liberation/.dla-scripts/${stamp}.php`;
-  const payloadVfsPath = `/wordpress/wp-content/uploads/liberation/.dla-scripts/${stamp}.json`;
-  const blueprintPath = join(scriptsDir, `${stamp}.blueprint.json`);
-  const siteUrl = opts.playgroundSiteUrl ?? 'http://127.0.0.1:9400';
-
-  const blueprint = {
-    preferredVersions: {
-      php: '8.2',
-      wp: process.env.DLA_PREVIEW_WP_VERSION ?? 'latest',
-    },
-    login: true,
-    steps: [
-      {
-        step: 'writeFile',
-        path: scriptVfsPath,
-        data: readFileSync(INSTALL_MEDIA_SCRIPT, 'utf8'),
-      },
-      {
-        step: 'writeFile',
-        path: payloadVfsPath,
-        data: JSON.stringify(entries),
-      },
-      {
-        step: 'wp-cli',
-        command: `wp eval-file ${scriptVfsPath} ${payloadVfsPath} --user=admin`,
-      },
-    ],
-  };
-  writeFileSync(blueprintPath, JSON.stringify(blueprint, null, 2), 'utf8');
-
-  const payloadHostPath = join(scriptsDir, `${stamp}.json`);
-  const exec = opts._execFile ?? defaultExec;
-  const out = await exec('npx', [
-    'wp-playground-cli',
-    'run-blueprint',
-    `--blueprint=${blueprintPath}`,
-    `--site-url=${siteUrl}`,
-    '--wordpress-install-mode=install-from-existing-files-if-needed',
-    `--mount-before-install=${wpContentHost}:/wordpress/wp-content`,
-    '--verbosity=quiet',
-  ]);
-  return { stdout: out.stdout, resultHostPath: `${payloadHostPath}.result.json` };
 }
 
 function defaultExec(file: string, args: readonly string[]): Promise<{ stdout: string; stderr: string }> {

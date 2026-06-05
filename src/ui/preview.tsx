@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { render, useApp, Box, Text } from 'ink';
 import { spawn as spawnProc, execFileSync } from 'node:child_process';
 import { BootSpinner } from '../lib/preview/boot-spinner.js';
-import { startPreview, isStudioAvailable } from '../lib/preview/studio.js';
+import { startPreview } from '../lib/preview/studio.js';
 import type { PreviewSource, StartPreviewResult } from '../lib/preview/types.js';
 
 interface RunOpts {
@@ -80,7 +80,7 @@ const PreviewApp: React.FC<RunOpts> = ({ outputDir, open }) => {
   const [url, setUrl] = useState<string | undefined>();
   const [error, setError] = useState<string | undefined>();
   const [warnings, setWarnings] = useState<string[]>([]);
-  const [source] = useState<PreviewSource>(() => isStudioAvailable() ? 'studio' : 'playground');
+  const [source] = useState<PreviewSource>('studio');
 
   useEffect(() => {
     let cancelled = false;
@@ -160,7 +160,7 @@ const InlinePreviewApp: React.FC<{
   const [url, setUrl] = useState<string | undefined>();
   const [error, setError] = useState<string | undefined>();
   const [warnings, setWarnings] = useState<string[]>([]);
-  const [source] = useState<PreviewSource>(() => isStudioAvailable() ? 'studio' : 'playground');
+  const [source] = useState<PreviewSource>('studio');
 
   useEffect(() => {
     (async () => {

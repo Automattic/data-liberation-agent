@@ -9,15 +9,10 @@
 //   url:       source URL whose media we're installing (kept for logging;
 //              the underlying installer processes ALL pending media each
 //              call thanks to MediaStubStore-keyed idempotency)
-//   target:    { kind: 'studio',     sitePath: string }   — Studio site path
-//            | { kind: 'playground', sitePath: string, siteUrl?: string }
-//                                                        — playground-site path
+//   target:    { kind: 'studio', sitePath: string }   — Studio site path
 //
 // Studio sitePath is the per-site directory Studio created (e.g.
 // ~/Studio/<slug>); the WP install root inside it is `<sitePath>/wordpress`.
-// Playground sitePath is `<outputDir>/playground-site` and siteUrl should be
-// the running preview URL when available so returned localUrl values match
-// the browser-visible site.
 //
 import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -25,12 +20,11 @@ import type { Handler } from '../handler-types.js';
 import { installMediaForUrl, type MediaInstallResult } from '../../lib/streaming/media-install.js';
 
 interface StudioTarget { kind: 'studio'; sitePath: string }
-interface PlaygroundTarget { kind: 'playground'; sitePath: string; siteUrl?: string }
-type Target = StudioTarget | PlaygroundTarget;
+type Target = StudioTarget;
 
 function parseTarget(raw: unknown): Target | string {
   if (!raw || typeof raw !== 'object') {
-    return 'target must be an object with kind ("studio"|"playground") + sitePath';
+    return 'target must be an object with kind ("studio") + sitePath';
   }
   const t = raw as Record<string, unknown>;
   const kind = t.kind;
@@ -41,29 +35,21 @@ function parseTarget(raw: unknown): Target | string {
   if (kind === 'studio') {
     return { kind, sitePath };
   }
-  if (kind === 'playground') {
-    return {
-      kind,
-      sitePath,
-      siteUrl: typeof t.siteUrl === 'string' && t.siteUrl ? t.siteUrl : undefined,
-    };
-  }
-  return 'target.kind must be "studio" or "playground"';
+  return 'target.kind must be "studio"';
 }
 
 /**
- * Resolve the WP install root from a target by probing the on-disk layout —
- * mirrors the detection in install-theme.ts. Studio sites exist in two shapes:
+ * Resolve the WP install root from a Studio target by probing the on-disk
+ * layout — mirrors the detection in install-theme.ts. Studio sites exist in
+ * two shapes:
  *   - flat:   <sitePath>/wp-content          (current Studio versions)
  *   - nested: <sitePath>/wordpress/wp-content (older layouts)
  * Hardcoding `<sitePath>/wordpress` (the previous behavior) wrote uploads into
  * a phantom `wordpress/` subdir on flat sites, so attachments never appeared in
- * the running library. Probe instead. Playground persists wp-content directly
- * at `<sitePath>/wp-content`, so the install root is `sitePath` itself.
+ * the running library. Probe instead.
  */
 export function wpRootFor(target: Target): string {
   const sitePath = resolve(target.sitePath);
-  if (target.kind === 'playground') return sitePath;
   if (existsSync(join(sitePath, 'wp-content'))) return sitePath;
   const nested = join(sitePath, 'wordpress');
   if (existsSync(join(nested, 'wp-content'))) return nested;
@@ -92,8 +78,6 @@ export const mediaInstallHandler: Handler = async (args, ctx) => {
       outputDir,
       url,
       wpRoot,
-      useStudioCli: target.kind === 'studio',
-      playgroundSiteUrl: target.kind === 'playground' ? target.siteUrl : undefined,
     });
   } catch (err) {
     return ctx.errorResult(`liberate_media_install failed: ${(err as Error).message}`);

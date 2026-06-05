@@ -29,12 +29,10 @@ import { promisify } from 'node:util';
 const execFileAsync = promisify(execFile);
 
 export interface PostExistencePollOpts {
-  /** Running replica URL e.g. http://localhost:9400. Used for Playground REST fallback. */
+  /** Running replica URL e.g. http://localhost:9400. Kept for caller compatibility. */
   siteUrl: string;
   /** `_source_url` meta value to match against. */
   sourceUrl: string;
-  /** When true, use `studio wp` CLI (VFS-aware). Defaults true. */
-  useStudioCli?: boolean;
   /** Studio site path passed to `studio wp --path <studioSitePath>`. */
   studioSitePath?: string;
   /**
@@ -101,7 +99,6 @@ function parsePostId(stdout: string): number | null {
 export async function pollForPost(
   opts: PostExistencePollOpts,
 ): Promise<PostExistenceResult> {
-  const useStudio = opts.useStudioCli !== false;
   const runner = opts.runner ?? defaultRunner;
   const sleep = opts.sleep ?? defaultSleep;
   const schedule = opts.backoffMs ?? DEFAULT_BACKOFF_MS;
@@ -110,7 +107,7 @@ export async function pollForPost(
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     let postId: number | null = null;
     try {
-      if (useStudio && opts.studioSitePath) {
+      if (opts.studioSitePath) {
         const args = [
           'wp',
           '--path',
@@ -125,12 +122,6 @@ export async function pollForPost(
           '--format=json',
         ];
         const { stdout } = await runner('studio', args);
-        postId = parsePostId(stdout);
-      } else {
-        // Playground / generic fallback: call the runner with a synthetic
-        // command shape. Tests target this path; production sites that
-        // can't use Studio should provide a REST-backed runner.
-        const { stdout } = await runner('wp-rest-poll', [opts.siteUrl, opts.sourceUrl]);
         postId = parsePostId(stdout);
       }
     } catch {

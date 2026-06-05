@@ -64,18 +64,16 @@ export interface StartPreviewOpts {
    * Explicit Studio site name. When omitted, the name is derived from the
    * outputDir basename (e.g. `output/getsnooz.com` → `getsnooz-com`). Pass this
    * to honor the replica naming convention `<siteSlug>-replica` independent of
-   * the output directory. Still uniqued against existing sites. Ignored by the
-   * Playground path (which has no named sites).
+   * the output directory. Still uniqued against existing sites.
    */
   siteName?: string;
 }
 
-export type PreviewSource = 'studio' | 'playground';
+export type PreviewSource = 'studio';
 
 export interface StartPreviewResult {
   status: 'ready' | 'failed';
   url?: string;
-  pid?: number;
   port?: number;
   warnings?: string[];
   error?: string;
@@ -84,13 +82,9 @@ export interface StartPreviewResult {
   siteName?: string;
   /**
    * On-disk WP root of the provisioned site (the dir that contains `wp-content`),
-   * resolved via `resolveStudioWpRoot`. Studio only — lets callers (e.g. the carry
-   * reconstruct driver) use this directly as `studioSitePath` instead of re-deriving
-   * `~/Studio/<siteName>`. Absent on the Playground path.
+   * resolved via `resolveStudioWpRoot`. Lets callers (e.g. the carry reconstruct
+   * driver) use this directly as `studioSitePath` instead of re-deriving
+   * `~/Studio/<siteName>`.
    */
   path?: string;
-}
-
-export interface StopPreviewResult {
-  status: 'stopped' | 'not-running';
 }

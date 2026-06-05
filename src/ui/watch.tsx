@@ -177,7 +177,7 @@ function WatchApp({ url, watchOpts, onComplete }: WatchAppProps) {
   const [previewStatus, setPreviewStatus] = useState<'idle' | 'starting' | 'ready' | 'failed'>('idle');
   /** Live preview URL — pinned in the header as soon as the site is up. */
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const [previewSource, setPreviewSource] = useState<'studio' | 'playground' | null>(null);
+  const [previewSource, setPreviewSource] = useState<'studio' | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   /** True once the design-foundation has been generated (governs Determining vs Refreshing wording). Seeded from disk so re-runs against an existing project start with "Refreshing". */
   const [foundationExists, setFoundationExists] = useState(() => {
