@@ -37,6 +37,7 @@ import type { Page } from 'playwright';
 import type { PageSignature, SectionSignature } from './page-signature.js';
 import { extractReviewsFromHtml, type ExtractedReview } from './review-extract.js';
 import { extractFaqsFromHtml, type ExtractedFaq } from './faq-extract.js';
+import { buildSelector, type SelectorParts } from './section-selector.js';
 import { getPlaywright } from '../../adapters/shared.js';
 import { waitForStable, triggerLazyLoad, withEvaluateTimeout } from '../screenshot/page-helpers.js';
 import { enforceSameOrigin } from '../screenshot/same-origin.js';
@@ -702,6 +703,10 @@ export interface SectionSpec {
    *  hero cover photo / edge-to-edge media). Drives whether the PAGE renders
    *  full-width vs constrained — deferring to the source. Optional for back-compat. */
   fullBleed?: boolean;
+  /** Compact CSS selector locating this section in the source DOM (Part 0).
+   *  Powers fallback diagnostics (#1) + region reconciliation (#2). Built
+   *  Node-side from browser-emitted SelectorParts. Optional for back-compat. */
+  selector?: string;
   /**
    * Source-VERBATIM body copy captured from this section's served HTML — every
    * visible `<p>`/`<li>` text node, in document order, deduped. This is the
@@ -1030,6 +1035,14 @@ export async function extractFull(
         if (he.offsetParent === null && getComputedStyle(el).position !== 'fixed') return false;
         const r = el.getBoundingClientRect();
         return r.width > 0 && r.height > 0;
+      };
+      const selectorPartsOf = (el: Element) => {
+        const tag = el.tagName.toLowerCase();
+        let nth = 1;
+        for (let s = el.previousElementSibling; s; s = s.previousElementSibling) {
+          if (s.tagName.toLowerCase() === tag) nth++;
+        }
+        return { tag, id: (el as HTMLElement).id || null, classes: Array.from(el.classList), nthOfType: nth };
       };
       const absTop = (el: Element): number => {
         const r = el.getBoundingClientRect();
@@ -2510,6 +2523,7 @@ export async function extractFull(
           sectionHtml,
           styledHtml,
           cells,
+          selectorParts: selectorPartsOf(el),
         };
       };
 
@@ -2627,6 +2641,7 @@ export async function extractFull(
 
     return {
       sectionIndex: i,
+      selector: buildSelector((rr as unknown as { selectorParts: SelectorParts }).selectorParts),
       interactionModel,
       top: rr.features.top,
       height: rr.features.height,
