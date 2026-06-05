@@ -108,7 +108,7 @@ The output is assembled by the **WXR builder** targeting **WXR 1.2** spec compli
 **Platform-specific note — Shopify has two tiers.** Without an admin token, products come from the public JSON API. *With* an admin token, it uses the **Shopify Admin GraphQL API** (pinned to `2025-04`) for richer product data — resumable via stored cursors, idempotent on product handles, with a fallback to the JSON path on any GraphQL failure.
 
 ### Step 4 — Media (download + dedup)
-Every referenced image/PDF is downloaded, **hash-deduplicated**, and saved locally. Filename collisions get numeric suffixes (not hashes). Each asset's status is tracked in a media store (`success`/`error`/`ignored`) with a retry cap, so media survives mid-run crashes and resumes cleanly. Later phases rewrite source-CDN URLs to the local/WP-library copies through a CDN→local map.
+Every referenced image/PDF is downloaded, **hash-deduplicated**, and saved locally. Filename collisions get numeric suffixes (not hashes). Each asset's status is tracked in a media store (`success`/`error`/`ignored`) with a retry cap, so media survives mid-run crashes and resumes cleanly. Later phases rewrite source-CDN URLs to the local/WP-library copies through a CDN→local map. The local copies are recorded **root-relative** (`/wp-content/uploads/…`), not as absolute `localhost:<port>` URLs, so the mapping survives the replica being served from a different WordPress site/port — an absolute URL from a prior run's site would 404 when reused.
 
 ### Step 5 — Capture (`liberate_screenshot`) — *this is what makes design rebuild possible*
 This phase is the bridge from "content" to "design." For each page it:
@@ -148,21 +148,25 @@ The front door shows the discovery inventory + a scope/cost estimate + a **platf
 
 **Goal:** rebuild the site as *editable* WordPress core blocks (columns, groups, cover, gallery, …) styled by theme tokens — so the result is a real, maintainable WordPress site, not a frozen snapshot. Dispatched by `/liberate`, or run standalone to re-theme an already-extracted site. The steps below all live inside `replicate-with-blocks` (a seven-step flow, broken out finer here); it delegates judgment to the sub-skills (`design-foundations`, `creating-themes`, `generating-patterns`, `design-qa`) and determinism to MCP tools.
 
+> **The page path is deterministic-first.** Step 11 (`liberate_reconstruct_pages`) is the primary, **self-contained** page emitter — it captures each page's *own* specs and renders them, independent of clustering and the AI fan-out. So **clustering (Step 8) is informational** — it surfaces shared chrome and an archetype map but gates nothing; where layout signatures are unreliable (e.g. Wix serving CSS cross-origin collapses nearly every page to one signature) it simply doesn't matter. And the **AI builder fan-out (Steps 9–10) is supplementary** — skipped by default, run only when reconstruct can't map a genuinely bespoke section. Header/footer chrome comes from the theme scaffold (Step 7), not the builders.
+
 ### Step 6 — Design foundation  🤖 AI
 Read the captured palette, typography, and breakpoints and **infer a coherent design system** — semantic color roles, type scale, spacing — written to `design-foundation.json` + a human-readable `design.md`. This is the one place raw measurements become *design intent* (e.g. "this green is the brand primary," not just "this hex appears 40 times"). The foundation is then **frozen** as a site-wide brief; later stages defer to it rather than re-deriving styling per page.
+
+A deterministic **scaffold** pre-fills the unambiguous roles first (lightest/darkest high-frequency palette colors → `surface.base`/`text.default`); the AI fills the interpretive remainder. A named `:root` CSS variable may *override* those palette picks only when it's backed by a real cross-page frequency signal (≥2 sampled pages) — so a single-page sample (e.g. a Wix site serving its CSS cross-origin, where only one same-origin page is readable) can't let a low-confidence component token like `--wst-button-color-text-secondary` clobber the page's true white/black. It can still *fill* a role the palette left empty.
 
 *Why AI here:* clustering colors and naming roles is interpretation, not lookup. Raw measurements alone conflate (e.g. several near-greens that are really one brand color).
 
 ### Step 7 — Create theme  ⚙️ Deterministic
-Map the frozen foundation into a scaffolded block theme: `theme.json`, `style.css`, `functions.php`, template-part skeletons, base templates, self-hosted fonts. This is a mechanical translation from foundation → theme files, audited by a `theme.json` lint gate.
+Map the frozen foundation into a scaffolded block theme: `theme.json`, `style.css`, `functions.php`, template-part skeletons, base templates, self-hosted fonts. Base templates include `single.html` (post title + date + featured image + content) and a generic `page.html` fallback, so imported posts/pages render **with a title** instead of falling through `index.html` titleless. This is a mechanical translation from foundation → theme files, audited by a `theme.json` lint gate.
 
-### Step 8 — Cluster pages (`liberate_cluster_pages`)  ⚙️ Deterministic
+### Step 8 — Cluster pages (`liberate_cluster_pages`)  ⚙️ Deterministic — *informational*
 Group pages that share a layout. Each page has a **layout signature** (its ordered sequence of section types + structural attributes); pages with **identical signatures** join one cluster. This is exact-match, not fuzzy. The point: build each distinct layout once, then apply it to all its members. Output: `cluster-map.json`.
 
-### Step 9 — Section extraction (`liberate_section_extract`)  ⚙️ Deterministic (browser-eval)
+### Step 9 — Section extraction (`liberate_section_extract`)  ⚙️ Deterministic (browser-eval) — *supplementary*
 For each cluster's **representative** page, produce detailed per-section specs (`specs/<rep>/section-<n>-<type>.md`) from computed styles + geometry: the interaction model, verbatim text, media URLs, background/brightness. These spec files are the **contract** between extraction and the AI builders — the builders are only allowed to use what's in them.
 
-### Step 10 — BUILD: pattern generation (`generating-patterns`)  🤖 AI, fanned out
+### Step 10 — BUILD: pattern generation (`generating-patterns`)  🤖 AI, fanned out — *supplementary (skipped by default)*
 For each cluster representative, an AI **builder subagent** reads the design brief + section specs + a catalog of section→block templates, and emits a **WordPress block pattern** — layout skeleton with content slots filled from the spec. Builders run **in parallel** (concurrency-capped, ~4–6 on Claude Code; sequential on other runtimes), each in its own isolated workspace so file writes don't collide, returning a structured JSON envelope of patterns + flags + notes. Progress is checkpointed by cluster-group so a crash resumes at the next unbuilt cluster.
 
 **The cardinal rule, enforced here:** all visible prose is **source-verbatim or placeholdered, never paraphrased.** Paraphrased body copy hard-fails the validation gate downstream.
@@ -320,10 +324,10 @@ This is a deliberate stance: the system would rather *show you an honest gap* th
 | Capture screenshots + specs + tokens | `liberate_screenshot` | ⚙️ |
 | Infer design system | `design-foundations` | 🤖 |
 | Scaffold theme | `creating-themes` | ⚙️ |
-| Cluster pages | `liberate_cluster_pages` | ⚙️ |
-| Extract section specs | `liberate_section_extract` | ⚙️ |
-| Build patterns (fan-out) | `generating-patterns` | 🤖 |
-| Reconstruct pages | `liberate_reconstruct_pages` | ⚙️ |
+| Cluster pages *(informational)* | `liberate_cluster_pages` | ⚙️ |
+| Extract section specs *(supplementary)* | `liberate_section_extract` | ⚙️ |
+| Build patterns (fan-out) *(supplementary)* | `generating-patterns` | 🤖 |
+| Reconstruct pages *(primary page path)* | `liberate_reconstruct_pages` | ⚙️ |
 | Validate (gate) | `liberate_validate_artifacts` | ⚙️ |
 | Install + import | `liberate_install_theme`, `liberate_import` | ⚙️ |
 | Visual QA + escalation | `design-qa`, `match-page`, `match-section`, `rebuild-section` | 🤖 + measured ⚙️ |
