@@ -116,7 +116,7 @@ This phase is the bridge from "content" to "design." For each page it:
 - Renders the page in a real browser (Playwright) at **desktop (1440×900) and mobile** viewports, after **dismissing overlays** (cookie/consent banners) and triggering lazy-load.
 - Saves a full-page screenshot plus a **post-scroll** capture (`<slug>.scrolled.png`) — short pages skip the scrolled shot silently.
 - Optionally saves the **rendered HTML** to `html/<slug>.html`.
-- Runs `extractFull` on the settled desktop page to produce a **`SectionSpec[]`** — the page broken into sections, each with its computed styles, geometry, interaction model (hero/cover, columns, gallery, review-grid, price-list, product-card-row, …), brightness, and media URLs. These are cached per-URL under `sections/<slug>.json` (capture-once, schema-versioned).
+- Runs `extractFull` on the settled desktop page to produce a **`SectionSpec[]`** — the page broken into sections, each with its computed styles, geometry, interaction model (hero/cover, columns, gallery, review-grid, price-list, product-card-row, …), brightness, media URLs, and a compact CSS **`selector`** that locates it back in the source DOM (a stable per-section identifier). The same browser walk also records a top-level **landmark census** (`main`/`nav`/`header`/`footer`). Both the specs and the census are cached per-URL under `sections/<slug>.json` (capture-once, schema-versioned) and feed the reconstruction-phase diagnostics below.
 - Aggregates **site-wide design tokens** across all pages: `palette.json` (dominant colors), `typography.json` (font metrics per selector), `breakpoints.json` (the `@media` widths the site actually uses), plus CSS variables.
 
 The join from content back to design is **filesystem-only**, via `screenshots/manifest.json` mapping each URL → its files. Nothing is injected into the WXR — downstream tooling correlates by URL.
@@ -173,6 +173,11 @@ For each cluster representative, an AI **builder subagent** reads the design bri
 This is the deterministic **emitter** at the core of the hybrid. For **every** content page (not just representatives), it reads that page's **own** section specs and renders them to core blocks via per-interaction-model renderers (`renderCover`, `renderColumns`, `renderReviewGrid`, `renderProductCardRow`, …). It fills content slots with **verbatim** spec text, applies **design-foundation tokens** (color slugs and font families — never inlined hex/px, so the editor's canonicalization doesn't fight it), installs the page's media into the WP library, and rewrites image URLs through the media map. Output: `patterns/page-<slug>.php` + `templates/page-<slug>.html`.
 
 A built-in **content-loss guard**: if a structured render would drop content or coverage falls below a text floor, that section falls back to emitting sanitized **source HTML as a `core/html` island** instead — faithful but not block-editable — and flags itself.
+
+Two **warning-level diagnostic artifacts** make those flags machine-actionable (neither blocks install):
+
+- **`fallback-diagnostics.json`** — one structured record per `core/html` island, keyed by the section's `selector`: *why* it fell back (`dropped_images` vs `text_coverage_below_floor`), a `suggestedRepairClass`, and source/emitted previews — so the QA loop (or an agent) can triage and upgrade each island back to blocks rather than just seeing a count.
+- **`region-audit.json`** — a **structural** completeness check that the verbatim/provenance content-diff misses: it reconciles each page's source landmark census (`main`/`nav`/`header`/`footer`) against what the build actually placed — body sections by `selector`, chrome by role — and lists any **`unassignedRegions`** (an actionable source landmark that survived nowhere, e.g. a dropped `<nav>`). This catches a whole landmark vanishing, which item-level text/media diffing under-weights.
 
 > The full-width vs. constrained layout decision **defers to the source**: a section carrying a large image spanning ≥92% of the viewport marks the page full-bleed; otherwise constrained.
 
@@ -291,13 +296,15 @@ This is a deliberate stance: the system would rather *show you an honest gap* th
 | `screenshots/manifest.json` | Capture | URL → files join (the only content↔design link) |
 | `html/<slug>.html` | Capture | Rendered source HTML (feeds the carry path + fallbacks) |
 | `palette.json`, `typography.json`, `breakpoints.json` | Capture | Aggregated design tokens |
-| `sections/<slug>.json` | Capture | Cached per-page section specs |
+| `sections/<slug>.json` | Capture | Cached per-page section specs (each carries a `selector`) + top-level landmark census |
 | `design-foundation.json` + `design.md` | 🤖 Foundation | Inferred design system (frozen brief) — block path |
 | `theme/` | Theme | The generated block theme (block path) |
 | `<site>-carry` theme + `output-carry.wxr` | Theme | The carry-and-scope theme + content-swapped WXR (carry path) |
 | `cluster-map.json` | Cluster | Pages grouped by layout signature |
 | `specs/<rep>/section-*.md` | Section extract | Per-section contract for builders |
 | `patterns/page-<slug>.php`, `templates/*.html` | Assemble | Reconstructed page markup |
+| `fallback-diagnostics.json` | Assemble | Structured records of coverage-gated `core/html` islands (selector · reason · suggested repair) — block path, warning-level |
+| `region-audit.json` | Assemble | Source landmark census reconciled vs placed; lists dropped (`unassigned`) regions — block path, warning-level |
 | `run-report.json` (block) / `run-report-carry.json` (carry) | QA | Verdict + per-section parity records |
 
 ---
