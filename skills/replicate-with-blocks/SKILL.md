@@ -206,6 +206,8 @@ It asserts:
 
 ### Step 7 — Install + QA
 
+**Blockify post/page bodies (blocks path only):** BEFORE importing, call `liberate_blockify_wxr({ outputDir })`. It rewrites every post/page `content:encoded` body in `output.wxr` through the source adapter's block recipe (seam 2) so imported posts land as editable Gutenberg blocks instead of one Classic block (e.g. Squarespace `sqs-block` bodies). No-op when the platform adapter has no recipe (`skipped:true`); lossless otherwise — bodies it can't convert stay verbatim, and attachments/nav/terms are untouched. It mutates `output.wxr` in place, so it MUST run before the import below. (Blog posts are imported as-is — not section-reconstructed — so this is the only thing that blockifies their bodies. The theme/carry path never calls this.)
+
 **Install:**
 
 - **Streaming / watch-loop context:** call `liberate_install_theme({ outputDir, studioSitePath, themeFiles, themeSlug })` using the exact `themeSlug` value from the runner prompt. Writes files into the running Studio site and activates. No site creation, no duplicate WXR import.
