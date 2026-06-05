@@ -21,7 +21,7 @@ import { ExtractionLog } from '../resume-state/index.js';
 import { WxrBuilder } from '../wxr/index.js';
 import { ImportSession } from '../resume-state/index.js';
 import { classifyUrl, type UrlType } from '../extraction/sitemap.js';
-import type { WooProduct, WooProductCsvBuilder } from '../import/woo-product-csv.js';
+import type { WooProduct, WooProductCsvBuilder } from '../woo-csv/index.js';
 
 export interface ProcessOneUrlOpts {
   /** Absolute URL to extract. Must be a full URL (https://...). */

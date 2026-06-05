@@ -1,4 +1,4 @@
-import type { WooProduct } from '../../lib/import/woo-product-csv.js';
+import type { WooProduct } from '../../lib/woo-csv/index.js';
 
 // ---------------------------------------------------------------------------
 // JSON-LD parsing

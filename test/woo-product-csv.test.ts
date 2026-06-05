@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { readFileSync, mkdtempSync, rmSync, existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { WooProductCsvBuilder } from '../src/lib/import/woo-product-csv.js';
+import { WooProductCsvBuilder } from '../src/lib/woo-csv/index.js';
 
 describe('WooProductCsvBuilder', () => {
   let tempDir: string;

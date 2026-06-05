@@ -1,5 +1,5 @@
 import { IMAGE_EXTENSIONS } from '../shared.js';
-import type { WooProduct } from '../../lib/import/woo-product-csv.js';
+import type { WooProduct } from '../../lib/woo-csv/index.js';
 
 // ---------------------------------------------------------------------------
 // Weebly product extraction from HTML

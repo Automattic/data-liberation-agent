@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { WooProductCsvBuilder } from '../src/lib/import/woo-product-csv.js';
+import { WooProductCsvBuilder } from '../src/lib/woo-csv/index.js';
 import { readProductsCsv } from '../src/lib/import/woo-csv-reader.js';
 
 describe('readProductsCsv', () => {

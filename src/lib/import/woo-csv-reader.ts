@@ -1,6 +1,6 @@
 import { readFileSync, existsSync } from 'fs';
 import Papa from 'papaparse';
-import type { WooProduct } from './woo-product-csv.js';
+import type { WooProduct } from '../woo-csv/index.js';
 
 /**
  * Read a WooCommerce product CSV file written by WooProductCsvBuilder

@@ -1,5 +1,5 @@
 import type { PageData } from './types.js';
-import type { WooProduct } from '../../lib/import/woo-product-csv.js';
+import type { WooProduct } from '../../lib/woo-csv/index.js';
 
 // ---------------------------------------------------------------------------
 // Wix product extraction helper

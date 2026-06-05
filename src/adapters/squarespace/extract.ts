@@ -3,8 +3,8 @@ import type { ExtractionLog } from '../../lib/resume-state/index.js';
 import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { classifyUrl } from '../../lib/extraction/sitemap.js';
 import { slugify, launchBrowser, runExtractionLoop } from '../shared.js';
-import { WooProductCsvBuilder } from '../../lib/import/woo-product-csv.js';
-import type { WooProduct } from '../../lib/import/woo-product-csv.js';
+import { WooProductCsvBuilder } from '../../lib/woo-csv/index.js';
+import type { WooProduct } from '../../lib/woo-csv/index.js';
 import type { SquarespaceInventory, SquarespaceAdapterOpts } from './types.js';
 import { fetchSqsJson, extractSquarespaceMediaUrls, sqsTimestampToIso, extractDomContent } from './content.js';
 
