@@ -24,8 +24,9 @@ This tool extracts all content from closed platforms — posts, pages, media, na
 | **Webflow** | Ready | [`prompts/webflow.md`](./prompts/webflow.md) |
 | **Weebly** (blog/pages/products) | Ready | — |
 | **Wix** | Ready | [`prompts/wix.md`](./prompts/wix.md) |
+| **Any other website** (generic fallback) | Best-effort | — |
 
-All eight platforms have MCP adapters with full extraction support including products (exported as WooCommerce-compatible CSV). GoDaddy Websites & Marketing is pages + blog only in v1; GoDaddy Online Store (OLS) product support is planned for v1.1.
+All eight platforms have MCP adapters with full extraction support including products (exported as WooCommerce-compatible CSV). Sites matching none of them fall back to a generic `default` adapter that renders each page in a headless browser and extracts the main content, media, and any JSON-LD products — best-effort, since it can't key off platform-specific markup. GoDaddy Websites & Marketing is pages + blog only in v1; GoDaddy Online Store (OLS) product support is planned for v1.1.
 
 ## Screenshots
 

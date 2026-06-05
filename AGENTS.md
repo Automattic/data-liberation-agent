@@ -2,7 +2,7 @@
 
 ## Overview
 
-`data-liberation-agent` extracts content from closed web platforms (GoDaddy Websites & Marketing, Hostinger, HubSpot, Shopify, Squarespace, Webflow, Weebly, Wix) and produces WordPress-compatible WXR files. All eight platform adapters are implemented.
+`data-liberation-agent` extracts content from closed web platforms (GoDaddy Websites & Marketing, Hostinger, HubSpot, Shopify, Squarespace, Webflow, Weebly, Wix) and produces WordPress-compatible WXR files. All eight platform adapters are implemented, plus a generic `default` fallback adapter for sites that match no known platform.
 
 Three entry points — MCP server (30 tools), CLI (`src/cli.ts`), and Claude Code plugin (`claude plugin add .`) — all share `src/lib/` and `src/adapters/`. The plugin just wraps the MCP server.
 
@@ -56,6 +56,7 @@ When `adminToken` is present, `shopifyAdapter.extract` fetches products via the 
 - `classifyUrl` types: `homepage`, `post`, `product`, `gallery`, `event`, `page` (no `category`/`author`/`other`)
 - Media filename collision handling uses numeric suffixes (`-2`, `-3`), not hashes
 - `detect-platform` uses domain-level URL patterns and HTTP fingerprinting (headers + HTML markers) — no path-based detection
+- **Fallback adapter:** sites that detect as `unknown` (or name an unregistered platform) resolve to the `default` adapter (`src/adapters/default/`) via `resolveAdapter` (`src/adapters/resolve-adapter.ts`), used by all three resolver sites (`mcp-server.ts`, `ui/discover.tsx`, `ui/inspect.tsx`). Detection is unchanged — it still reports `unknown`; the fallback is at *resolution* (so the "No adapter available" error is now unreachable). The adapter is platform-agnostic: Playwright-rendered HTML → cheerio main-content + media + JSON-LD products; its `detect()` returns `false` (nothing selects by `.detect()`). Products gotcha: the shared loop's `extractProductFromHtml` reads JSON-LD from `ExtractedPage.content` (not a re-fetch), so `default` re-attaches the Product `ld+json` script to `content` (content extraction strips `<script>` otherwise).
 - Shopify variant weights are normalized to kilograms regardless of source unit (`kg`, `g`, `lb`, `oz`) via `normalizeWeightToKg`
 - Shopify simple-product sale price uses `compareAtPrice > price` semantics — when set, `compareAtPrice` becomes `regularPrice` and `price` becomes `salePrice`
 - `WooProduct` has first-class `seoTitle`, `seoDescription`, `costOfGoods` fields plus an open `meta` record; the CSV builder emits `meta:_yoast_wpseo_title`, `meta:_yoast_wpseo_metadesc`, `meta:_wc_cog_cost` columns always, plus `meta:<key>` columns for any custom keys

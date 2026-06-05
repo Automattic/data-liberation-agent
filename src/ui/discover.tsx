@@ -16,6 +16,8 @@ import { squarespaceAdapter } from '../adapters/squarespace/index.js';
 import { webflowAdapter } from '../adapters/webflow/index.js';
 import { weeblyAdapter } from '../adapters/weebly/index.js';
 import { wixAdapter, type Inventory } from '../adapters/wix/index.js';
+import { defaultAdapter } from '../adapters/default/index.js';
+import { resolveAdapter } from '../adapters/resolve-adapter.js';
 import { mkdirSync, existsSync, writeFileSync, readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { autoPreview } from './preview.js';
@@ -87,10 +89,10 @@ interface ExtractionResult {
   wxrPath: string | null;
 }
 
-const adapters = [godaddyWmAdapter, hostingerAdapter, hubspotAdapter, shopifyAdapter, squarespaceAdapter, webflowAdapter, weeblyAdapter, wixAdapter];
+const adapters = [defaultAdapter, godaddyWmAdapter, hostingerAdapter, hubspotAdapter, shopifyAdapter, squarespaceAdapter, webflowAdapter, weeblyAdapter, wixAdapter];
 
 function findAdapter(platform: string) {
-  return adapters.find((a) => a.id === platform) || null;
+  return resolveAdapter(adapters, platform);
 }
 
 
@@ -140,8 +142,8 @@ function Liberate(props: LiberateProps & { onComplete?: (wxrPath: string | null)
         const det = await detect(url);
         setDetection(det);
 
-        // Find adapter
-        const adapter = adapters.find((a) => a.id === det.platform);
+        // Find adapter (falls back to the `default` adapter for unknown sites)
+        const adapter = resolveAdapter(adapters, det.platform);
 
         if (!adapter) {
           // No adapter — fall back to sitemap-only discovery

@@ -50,6 +50,7 @@ import { validateArtifactsHandler } from './mcp-server/handlers/validate-artifac
 import { NEW_TOOL_SCHEMAS } from './mcp-server/handlers/tool-schemas.js';
 
 // Static adapter imports — add new adapters here (alphabetical)
+import { defaultAdapter } from './adapters/default/index.js';
 import { godaddyWmAdapter } from './adapters/godaddy-wm/index.js';
 import { hostingerAdapter } from './adapters/hostinger/index.js';
 import { hubspotAdapter } from './adapters/hubspot/index.js';
@@ -58,10 +59,11 @@ import { squarespaceAdapter } from './adapters/squarespace/index.js';
 import { webflowAdapter } from './adapters/webflow/index.js';
 import { weeblyAdapter } from './adapters/weebly/index.js';
 import { wixAdapter } from './adapters/wix/index.js';
-const adapters: PlatformAdapter[] = [godaddyWmAdapter, hostingerAdapter, hubspotAdapter, shopifyAdapter, squarespaceAdapter, webflowAdapter, weeblyAdapter, wixAdapter];
+import { resolveAdapter } from './adapters/resolve-adapter.js';
+const adapters: PlatformAdapter[] = [defaultAdapter, godaddyWmAdapter, hostingerAdapter, hubspotAdapter, shopifyAdapter, squarespaceAdapter, webflowAdapter, weeblyAdapter, wixAdapter];
 
 function findAdapter(platform: string): PlatformAdapter | null {
-  return adapters.find((a) => a.id === platform) || null;
+  return resolveAdapter(adapters, platform);
 }
 
 function textResult(data: unknown): ToolResult {
