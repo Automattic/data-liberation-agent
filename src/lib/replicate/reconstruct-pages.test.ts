@@ -53,6 +53,7 @@ describe('buildPageReconstruction', () => {
     expect(r.postContent).toContain('We sell lumber.');
     expect(r.postContent).not.toContain('<?php'); // no PHP in post_content
     expect(r.postContent).not.toContain('Slug: demo-replica'); // no pattern header
+    expect(r.fallbackDiagnostics).toHaveLength(0);
   });
 
   it('renders full-width when the source has a full-bleed section, constrained otherwise (defers to source)', () => {
@@ -179,6 +180,11 @@ describe('buildPageReconstruction', () => {
     expect(r.postContent).not.toContain('cdn.test'); // source CDN URL gone
     expect(r.fallbackSections).toBe(1);
     expect(r.gate.ok).toBe(true);
+    expect(r.fallbackDiagnostics).toHaveLength(1);
+    // id keys the fallback-diagnostics artifact — must use the bare slug, not the
+    // slash-bearing patternSlug.
+    expect(r.fallbackDiagnostics[0].id).not.toContain('/');
+    expect(r.fallbackDiagnostics[0].reasonCode).toBe('dropped_images');
   });
 
   it('leaves body links untouched when no linkMap is supplied (back-compat)', () => {
