@@ -29,6 +29,7 @@ import { verifyHandler } from './mcp-server/handlers/verify.js';
 import { setupHandler } from './mcp-server/handlers/setup.js';
 import { wpImportHandler } from './mcp-server/handlers/wp-import.js';
 import { statusHandler } from './mcp-server/handlers/status.js';
+import { pathsHandler } from './mcp-server/handlers/paths.js';
 import { previewHandler } from './mcp-server/handlers/preview.js';
 import { installThemeHandler } from './mcp-server/handlers/install-theme.js';
 import { themeScaffoldHandler } from './mcp-server/handlers/theme-scaffold.js';
@@ -162,6 +163,16 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           contentStatus: { type: 'string', enum: ['draft', 'publish'], description: 'WXR post status for extracted pages/posts. Default "draft" (import-as-drafts convention); the replica/preview flow passes "publish". Attachments always use "inherit".' },
         },
         required: ['url', 'outputDir'],
+      },
+    },
+    {
+      name: 'liberate_paths',
+      description: 'Resolve where liberation output lives. Returns { base, siteDir }. base = the default output base (DLA_OUTPUT_DIR or <Studio root>/_liberations). siteDir = base/<sanitized host+path> when a url is given. Skills MUST use this instead of assuming output/<site>/ relative to cwd.',
+      inputSchema: {
+        type: 'object' as const,
+        properties: {
+          url: { type: 'string', description: 'Optional source URL; when present, siteDir is returned.' },
+        },
       },
     },
     {
@@ -683,6 +694,7 @@ const handlers: Record<string, Handler> = {
   liberate_replicate_verify: replicateVerifyHandler,
   liberate_screenshot: screenshotHandler,
   liberate_setup: setupHandler,
+  liberate_paths: pathsHandler,
   liberate_status: statusHandler,
   liberate_verify: verifyHandler,
   liberate_cluster_pages: clusterPagesHandler,
