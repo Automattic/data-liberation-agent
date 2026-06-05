@@ -4,7 +4,7 @@
  * The segmentation/cell-grouping geometry runs inside extractFull's page.evaluate
  * (live getComputedStyle/getBoundingClientRect), so it has no pure unit coverage
  * and is risky to change blind. This harness replays the REAL segmentation against
- * SNAPSHOTTED page HTML (output/<site>/html/<slug>.html) loaded offline via
+ * SNAPSHOTTED page HTML (captured pages passed via LIBERATE_SEGMENTATION_FIXTURES) loaded offline via
  * setContent — Wix/Squarespace inline most layout CSS, so it lays out faithfully.
  * Scripts are stripped (the captured HTML is already the rendered DOM; we don't
  * want the builder runtime hitting the network).
@@ -15,24 +15,22 @@
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { chromium, type Browser } from 'playwright';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
 import { extractFull, type SectionSpec } from './section-extract.js';
 import { measureSourceBands, measureSourceRepeats, scoreSegmentation } from './segmentation-parity.js';
 import { countBodyTags, isStackingArtifact } from '../screenshot/document-integrity.js';
 
-// Discover snapshotted homepage fixtures generically (any output/<site>/html/).
-// Gitignored output/ means these run locally where a liberation has been done;
-// the harness itself is site-agnostic — point specsForFixture at any captured page.
+// Opt-in local harness: set LIBERATE_SEGMENTATION_FIXTURES to one or more captured
+// homepage HTML paths (comma/colon-separated) to replay segmentation against them.
+// Defaults to NONE so the suite never depends on the gitignored output/ dir or any
+// local machine state — the describe blocks below skip when no fixtures are provided.
 function discoverHomepageFixtures(): string[] {
-  const root = 'output';
-  if (!existsSync(root)) return [];
-  const out: string[] = [];
-  for (const site of readdirSync(root)) {
-    const hp = join(root, site, 'html', 'homepage.html');
-    if (existsSync(hp)) out.push(hp);
-  }
-  return out;
+  const env = process.env.LIBERATE_SEGMENTATION_FIXTURES;
+  if (!env) return [];
+  return env
+    .split(/[,:]/)
+    .map((p) => p.trim())
+    .filter((p) => p.length > 0 && existsSync(p));
 }
 
 // A capture bug nests the whole document into itself N times for some sites (seen

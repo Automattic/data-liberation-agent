@@ -1,9 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { existsSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { inventoryReplica, sanitizeSlug } from './inventory.js';
 
-const REPO_OUTPUT = join(process.cwd(), 'output');
 const FIXTURE_TMP = join(process.cwd(), '.tmp-test');
 
 describe('sanitizeSlug', () => {
@@ -90,6 +89,23 @@ describe('inventoryReplica — synthetic fixtures', () => {
       expect(inv.designFoundationPath).toBeNull();
       expect(inv.hasProducts).toBe(false);
       expect(inv.productCount).toBe(0);
+
+      // siteSlug is sanitized; representatives carry the expected shape (1-3 per
+      // non-empty archetype, with url/slug/htmlBytes). Hermetic replacement for the
+      // assertions the deleted real-output-fixture block used to make.
+      expect(inv.siteSlug).toBeTruthy();
+      expect(inv.siteSlug).not.toContain('.');
+      expect(inv.siteSlug).not.toMatch(/^www-/);
+      for (const archetype of ['page', 'post'] as const) {
+        const reps = inv.representatives[archetype];
+        expect(reps.length).toBeGreaterThan(0);
+        expect(reps.length).toBeLessThanOrEqual(3);
+        for (const r of reps) {
+          expect(r.url).toBeTruthy();
+          expect(r.slug).toBeTruthy();
+          expect(typeof r.htmlBytes).toBe('number');
+        }
+      }
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -132,70 +148,3 @@ describe('inventoryReplica — synthetic fixtures', () => {
   });
 });
 
-// Real-fixture tests — exercised against the three test sites already in
-// output/. They assert the archetype counts and representative shapes the
-// skill expects to consume. Skipped silently when fixtures are absent
-// (so CI without fixtures still passes).
-const FIXTURES = [
-  {
-    site: 'getsnooz.com',
-    expectArchetypes: { homepage: 0, page: { min: 1 }, post: 0, product: 0 },
-    description: 'Shopify pages-heavy, no products extracted',
-  },
-  {
-    site: 'www.dopplepress.com-riso',
-    expectArchetypes: { homepage: 0, page: { min: 1 }, post: 0, product: 0 },
-    description: 'Wix riso store; products live in products.jsonl, not WXR',
-    expectProducts: { min: 12 },
-  },
-  {
-    site: 'www.biostratamarketing.com',
-    expectArchetypes: { homepage: 0, page: { min: 1 }, post: { min: 5 }, product: 0 },
-    description: 'HubSpot blog-heavy',
-  },
-];
-
-describe('inventoryReplica — real fixtures', () => {
-  for (const f of FIXTURES) {
-    const dir = join(REPO_OUTPUT, f.site);
-    const fixtureExists = existsSync(join(dir, 'output.wxr'));
-
-    it.skipIf(!fixtureExists)(`${f.site}: ${f.description}`, () => {
-      const inv = inventoryReplica(dir);
-      const a = f.expectArchetypes as Record<string, number | { min: number }>;
-      for (const [archetype, expected] of Object.entries(a)) {
-        const actual = inv.archetypes[archetype as keyof typeof inv.archetypes].count;
-        if (typeof expected === 'number') {
-          expect(actual).toBe(expected);
-        } else {
-          expect(actual).toBeGreaterThanOrEqual(expected.min);
-        }
-      }
-      if (f.expectProducts) {
-        expect(inv.productCount).toBeGreaterThanOrEqual(f.expectProducts.min);
-        expect(inv.hasProducts).toBe(true);
-      }
-
-      // Representatives have the expected shape when archetype count > 0.
-      for (const archetype of ['page', 'post', 'product'] as const) {
-        if (inv.archetypes[archetype].count > 0) {
-          const reps = inv.representatives[archetype];
-          expect(reps.length).toBeGreaterThan(0);
-          expect(reps.length).toBeLessThanOrEqual(3);
-          for (const r of reps) {
-            expect(r.url).toBeTruthy();
-            expect(r.slug).toBeTruthy();
-            // htmlBytes should be > 0 only when manifest had a corresponding entry.
-            // For URLs not in the manifest, htmlBytes is 0 — that's fine, just check shape.
-            expect(typeof r.htmlBytes).toBe('number');
-          }
-        }
-      }
-
-      expect(inv.siteSlug).toBeTruthy();
-      // siteSlug should be sanitized — lowercase, no www., no dots.
-      expect(inv.siteSlug).not.toContain('.');
-      expect(inv.siteSlug).not.toMatch(/^www-/);
-    });
-  }
-});
