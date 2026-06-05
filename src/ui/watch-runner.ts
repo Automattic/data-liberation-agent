@@ -16,7 +16,6 @@
 // land in watch.log and the user can re-run with --agent to fill them in.
 //
 import { mkdirSync, existsSync, appendFileSync, readFileSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -70,6 +69,7 @@ import {
   foundationRevDecision,
   readCurrentFoundationInputsDigest,
 } from '../lib/streaming/foundation-run-state.js';
+import { siteOutputDir, resolveStudioRoot } from '../lib/paths.js';
 
 // Judgments chain multiple skills: foundation-rev runs design-foundations
 // (read aggregates + scaffold + validate + save), theme-piece runs replicate
@@ -139,23 +139,6 @@ const ADAPTERS: PlatformAdapter[] = [
 
 function findAdapter(platform: string): PlatformAdapter | null {
   return ADAPTERS.find((a) => a.id === platform) || null;
-}
-
-function siteOutputDir(baseDir: string, url: string): string {
-  let host: string;
-  try {
-    const parsed = new URL(url.includes('://') ? url : `https://${url}`);
-    host = parsed.hostname + parsed.pathname;
-  } catch {
-    host = url;
-  }
-  const sanitized = host
-    .toLowerCase()
-    .replace(/\/$/, '')
-    .replace(/[^a-z0-9.-]/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^-|-$/g, '');
-  return join(baseDir, sanitized);
 }
 
 export interface WatchOpts {
@@ -2002,7 +1985,7 @@ export async function runWatch(opts: WatchOpts): Promise<{ ok: boolean; duration
       if (stub.status === 'ready' && stub.url) {
         previewSource = stub.source ?? 'playground';
         if (previewSource === 'studio' && stub.siteName) {
-          const studioRoot = process.env.STUDIO_SITES_DIR || join(homedir(), 'Studio');
+          const studioRoot = resolveStudioRoot();
           studioSitePath = join(studioRoot, stub.siteName);
         }
         events.onPreviewReady?.({

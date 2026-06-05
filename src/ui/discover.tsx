@@ -19,23 +19,7 @@ import { wixAdapter, type Inventory } from '../adapters/wix/index.js';
 import { mkdirSync, existsSync, writeFileSync, readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { autoPreview } from './preview.js';
-
-function siteOutputDir(baseDir: string, url: string): string {
-  let host: string;
-  try {
-    const parsed = new URL(url.includes('://') ? url : `https://${url}`);
-    host = parsed.hostname + parsed.pathname;
-  } catch {
-    host = url;
-  }
-  const sanitized = host
-    .toLowerCase()
-    .replace(/\/$/, '')
-    .replace(/[^a-z0-9.-]/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^-|-$/g, '');
-  return join(baseDir, sanitized);
-}
+import { siteOutputDir, resolveOutputBase } from '../lib/paths.js';
 
 export interface LiberateProps {
   url: string;
@@ -477,7 +461,7 @@ export function runDiscover(url: string, opts: Partial<LiberateProps> = {}): voi
 
   const props: LiberateProps = {
     url,
-    outputDir: opts.outputDir || './output',
+    outputDir: opts.outputDir || resolveOutputBase(),
     dryRun: opts.dryRun || false,
     resume: opts.resume || false,
     delay: opts.delay || 500,
