@@ -28,3 +28,25 @@ describe('ImportSession new stages', () => {
     }
   });
 });
+
+describe('ImportSession.readAdapter', () => {
+  it('reads the recorded platform from session.json without mutating it', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'session-'));
+    try {
+      const s = ImportSession.loadOrCreate(dir, 'shopify', {});
+      s.setStage('extracting'); // persists session.json
+      expect(ImportSession.readAdapter(dir)).toBe('shopify');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('returns null when no session.json exists', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'session-'));
+    try {
+      expect(ImportSession.readAdapter(dir)).toBeNull();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

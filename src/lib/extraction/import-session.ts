@@ -77,6 +77,23 @@ export class ImportSession {
     this.data = data;
   }
 
+  /**
+   * Read the platform adapter recorded by a prior run's session.json WITHOUT
+   * creating or mutating a session. Returns null when no valid session exists.
+   * Lets later stages (e.g. reconstruction) reuse the platform detected at
+   * extraction time instead of re-detecting over the network.
+   */
+  static readAdapter(outputDir: string): string | null {
+    const sessionPath = join(outputDir, 'session.json');
+    if (!existsSync(sessionPath)) return null;
+    try {
+      const loaded = JSON.parse(readFileSync(sessionPath, 'utf8')) as Partial<SessionData>;
+      return loaded.version === 1 && typeof loaded.adapter === 'string' ? loaded.adapter : null;
+    } catch {
+      return null;
+    }
+  }
+
   static loadOrCreate(
     outputDir: string,
     adapter: string,

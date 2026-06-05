@@ -34,6 +34,7 @@ import { deriveInstallThemeSlug } from './install-theme.js';
 import { themeCacheFlushCommands } from './install-theme.js';
 import type { Handler } from '../handler-types.js';
 import { detect } from '../../lib/extraction/detect-platform.js';
+import { ImportSession } from '../../lib/extraction/import-session.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -210,9 +211,12 @@ export const reconstructPagesHandler: Handler = async (args, ctx) => {
 
   // Resolve the source platform's adapter so its block recipe (seam 2) applies
   // during reconstruction. Blocks path only — the carry handler never does this,
-  // which is the path-gate.
-  const detection = await detect(pages[0].sourceUrl);
-  const adapter = ctx.findAdapter(detection.platform);
+  // which is the path-gate. Prefer the platform RECORDED at extraction
+  // (session.json) over a live network detect: it avoids a round-trip to the
+  // (possibly down/changed) source and the single-pages[0] homogeneity guess.
+  // Fall back to detect only when this outputDir has no prior session.
+  const platform = ImportSession.readAdapter(outputDir) ?? (await detect(pages[0].sourceUrl)).platform;
+  const adapter = ctx.findAdapter(platform);
 
   const mediaDir = join(resolve(outputDir), 'media');
 
