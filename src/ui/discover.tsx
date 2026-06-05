@@ -14,7 +14,7 @@ import { hubspotAdapter } from '../adapters/hubspot/index.js';
 import { shopifyAdapter } from '../adapters/shopify/index.js';
 import { squarespaceAdapter } from '../adapters/squarespace/index.js';
 import { webflowAdapter } from '../adapters/webflow/index.js';
-import { weeblyAdapter } from '../adapters/weebly.js';
+import { weeblyAdapter } from '../adapters/weebly/index.js';
 import { wixAdapter, type Inventory } from '../adapters/wix.js';
 import { mkdirSync, existsSync, writeFileSync, readFileSync } from 'fs';
 import { join, dirname } from 'path';
