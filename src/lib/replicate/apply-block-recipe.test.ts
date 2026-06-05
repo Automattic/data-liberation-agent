@@ -28,4 +28,12 @@ describe('applyBlockRecipe', () => {
     const blocks: AdapterBlocks = { recipes: [{ match: 'video', block: 'core/video' }] };
     expect(applyBlockRecipe('<p>nothing matches</p>', blocks, CTX)).toContain('<!-- wp:html -->');
   });
+  it('sanitizes unmatched elements before wrapping them in a core/html island', () => {
+    const blocks: AdapterBlocks = { recipes: [{ match: 'img', block: 'core/image', inner: 'drop' }] };
+    const out = applyBlockRecipe('<div onclick="x()"><script>alert(1)</script>keep me</div>', blocks, CTX)!;
+    expect(out).toContain('<!-- wp:html -->');
+    expect(out).toContain('keep me');
+    expect(out).not.toContain('<script>');
+    expect(out).not.toContain('onclick');
+  });
 });

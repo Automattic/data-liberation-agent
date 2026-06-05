@@ -35,6 +35,7 @@ import * as cheerio from 'cheerio';
 import type { CheerioAPI, Cheerio } from 'cheerio';
 import type { Element } from 'domhandler';
 import type { AdapterBlocks, BlockRecipeContext } from '../page-actions.js';
+import { sanitize } from '../../lib/replicate/html-fallback.js';
 
 const SQS_BLOCK_MARKER = /\bsqs-block\b/;
 
@@ -183,7 +184,7 @@ function emitHtmlBlock($: CheerioAPI, node: Cheerio<Element>): string | null {
       const innerHtml = ($el.html() || '').trim();
       if (innerHtml) out.push(`<!-- wp:paragraph -->\n<p>${innerHtml}</p>\n<!-- /wp:paragraph -->`);
     } else {
-      out.push(`<!-- wp:html -->\n${$.html(el)}\n<!-- /wp:html -->`);
+      out.push(`<!-- wp:html -->\n${sanitize($.html(el))}\n<!-- /wp:html -->`);
     }
   });
   if (out.length === 0) {
@@ -196,7 +197,7 @@ function emitHtmlBlock($: CheerioAPI, node: Cheerio<Element>): string | null {
 function emitFallback($: CheerioAPI, node: Cheerio<Element>): string | null {
   const inner = $.html(node);
   if (!inner.trim()) return null;
-  return `<!-- wp:html -->\n${inner}\n<!-- /wp:html -->`;
+  return `<!-- wp:html -->\n${sanitize(inner)}\n<!-- /wp:html -->`;
 }
 
 function escapeAttr(s: string): string {

@@ -2,6 +2,7 @@ import * as cheerio from 'cheerio';
 import type { CheerioAPI } from 'cheerio';
 import type { Element } from 'domhandler';
 import type { AdapterBlocks, BlockRecipe, BlockRecipeContext } from '../../adapters/page-actions.js';
+import { sanitize } from './html-fallback.js';
 
 /**
  * Seam 2: turn platform-structured source HTML into Gutenberg block markup via
@@ -61,6 +62,9 @@ function emitRecipeBlock($: CheerioAPI, el: Element, recipe: BlockRecipe, ctx: B
   return `${open}\n${inner}\n${close}`;
 }
 
-function coreHtmlIsland(html: string): string { return `<!-- wp:html -->\n${html}\n<!-- /wp:html -->`; }
+// Strip active/unsafe content (script/style/php/comments/on*) before wrapping
+// raw source HTML in a core/html island — matches buildHtmlFallbackBlock so a
+// recipe island degrades gracefully instead of failing the whole page at the gate.
+function coreHtmlIsland(html: string): string { return `<!-- wp:html -->\n${sanitize(html)}\n<!-- /wp:html -->`; }
 function escapeAttr(s: string): string { return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
 function escapeHtml(s: string): string { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }

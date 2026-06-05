@@ -26,7 +26,7 @@ export interface HtmlFallbackOpts {
 }
 
 /** Remove script/style/comment blocks, inline event handlers, and PHP tags. */
-function sanitize(html: string): string {
+export function sanitize(html: string): string {
   return html
     // Paired script/style including their contents.
     .replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, '')
