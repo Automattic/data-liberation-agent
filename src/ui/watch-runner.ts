@@ -50,7 +50,7 @@ import { shopifyAdapter } from '../adapters/shopify/index.js';
 import { squarespaceAdapter } from '../adapters/squarespace/index.js';
 import { webflowAdapter } from '../adapters/webflow/index.js';
 import { weeblyAdapter } from '../adapters/weebly/index.js';
-import { wixAdapter } from '../adapters/wix.js';
+import { wixAdapter } from '../adapters/wix/index.js';
 import type { PlatformAdapter } from '../types.js';
 import {
   resolveAgent,

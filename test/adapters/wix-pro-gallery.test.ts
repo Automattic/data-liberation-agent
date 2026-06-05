@@ -5,7 +5,7 @@ import {
   isExecutionContextDestroyed,
   extractGalleryFromHtml,
   ROUTE_PIN_INIT_SCRIPT,
-} from '../../src/adapters/wix.js';
+} from '../../src/adapters/wix/index.js';
 
 // ---------------------------------------------------------------------------
 // Pro Gallery resilience: detecting the destroyed-context error so the

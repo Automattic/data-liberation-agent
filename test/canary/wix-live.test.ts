@@ -1,6 +1,6 @@
 // test/canary/wix-live.test.ts
 import { describe, it, expect } from 'vitest';
-import { wixAdapter } from '../../src/adapters/wix.js';
+import { wixAdapter } from '../../src/adapters/wix/index.js';
 
 // This test hits a real Wix site. Run manually:
 //   npx vitest run test/canary/wix-live.test.ts

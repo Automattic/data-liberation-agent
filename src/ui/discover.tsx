@@ -15,7 +15,7 @@ import { shopifyAdapter } from '../adapters/shopify/index.js';
 import { squarespaceAdapter } from '../adapters/squarespace/index.js';
 import { webflowAdapter } from '../adapters/webflow/index.js';
 import { weeblyAdapter } from '../adapters/weebly/index.js';
-import { wixAdapter, type Inventory } from '../adapters/wix.js';
+import { wixAdapter, type Inventory } from '../adapters/wix/index.js';
 import { mkdirSync, existsSync, writeFileSync, readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { autoPreview } from './preview.js';
