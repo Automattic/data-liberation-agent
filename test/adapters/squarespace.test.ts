@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { readFileSync, existsSync, mkdtempSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { squarespaceAdapter } from '../../src/adapters/squarespace.js';
+import { squarespaceAdapter } from '../../src/adapters/squarespace/index.js';
 import { WxrBuilder } from '../../src/lib/extraction/wxr-builder.js';
 
 describe('squarespaceAdapter', () => {
