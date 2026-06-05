@@ -58,7 +58,9 @@ export function loadCarryDesignTokens(outputDir: string, maxColors = 8): CarryDe
   const paletteTokens: PaletteToken[] = [];
   const themeJsonPalette: Array<{ slug: string; name: string; color: string }> = [];
   for (const c of colors) {
-    if (!c?.hex || !/^#?[0-9a-f]{3,8}$/i.test(c.hex)) continue;
+    // Only valid CSS hex lengths (3/4/6/8) — `{3,8}` would admit junk 5/7-char strings
+    // that become a dead theme.json color token.
+    if (!c?.hex || !/^#?(?:[0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(c.hex)) continue;
     const slug = `c${paletteTokens.length + 1}`;
     const hex = c.hex.startsWith('#') ? c.hex : `#${c.hex}`;
     paletteTokens.push({ slug, hex });

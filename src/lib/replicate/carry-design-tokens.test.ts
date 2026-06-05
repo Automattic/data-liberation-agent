@@ -11,7 +11,7 @@ describe('loadCarryDesignTokens', () => {
     // Fictional captured aggregates ([[feedback_no_source_data_in_tests]]).
     writeFileSync(
       join(dir, 'palette.json'),
-      JSON.stringify({ colors: [{ hex: '#ffffff', count: 9 }, { hex: '#123456', count: 4 }, { hex: 'aabbcc', count: 1 }] }),
+      JSON.stringify({ colors: [{ hex: '#ffffff', count: 9 }, { hex: '#123456', count: 4 }, { hex: 'aabbcc', count: 1 }, { hex: '#abcde', count: 1 }] }),
     );
     writeFileSync(
       join(dir, 'typography.json'),

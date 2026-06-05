@@ -164,8 +164,14 @@ export function assessBody(html: string, siteOrigin?: string): BodyAssessment {
 export function readPngHeight(path: string): number | null {
   try {
     const buf = readFileSync(path);
+    // 8-byte signature, then the first chunk MUST be IHDR (length@8, type@12). Verify the
+    // type bytes too — not just the signature — so a corrupt/non-PNG file can't yield a
+    // garbage height that would poison the page-set median in classifyEmptyBodies.
     if (buf.length < 24 || buf.readUInt32BE(0) !== 0x89504e47) return null;
-    return buf.readUInt32BE(20);
+    if (buf.toString('latin1', 12, 16) !== 'IHDR') return null;
+    const height = buf.readUInt32BE(20);
+    // Reject implausible heights (0 / corrupt huge value) rather than skew the median.
+    return height > 0 && height <= 200_000 ? height : null;
   } catch {
     return null;
   }

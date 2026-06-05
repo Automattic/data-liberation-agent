@@ -124,7 +124,10 @@ function rewriteSpecMedia(sections: SectionSpec[], map?: Map<string, string>): S
  * broken reference, not viewable content, so removing it loses nothing on screen.
  */
 export function dropDeadImages(html: string): string {
-  return html.replace(/<img\b[^>]*>/gi, (tag) => {
+  // Match the whole <img> tag while RESPECTING quoted attribute values, so a `>` inside
+  // an attribute (e.g. Shopify alt text "a > b") doesn't truncate the match and corrupt
+  // the surrounding markup.
+  return html.replace(/<img\b(?:"[^"]*"|'[^']*'|[^"'>])*>/gi, (tag) => {
     const src = /\bsrc\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s">]+))/i.exec(tag);
     const url = (src?.[1] ?? src?.[2] ?? src?.[3] ?? '').trim();
     return /\/wp-content\/uploads\//i.test(url) ? tag : '';

@@ -82,39 +82,56 @@ let iconsWritten = 0;
 
 const lines = readFileSync(join(resolve(outputDir), 'products.jsonl'), 'utf8').split('\n').filter((l) => l.trim());
 for (const line of lines) {
-  const p = JSON.parse(line) as { name?: string; sku?: string; sourceUrl?: string; description?: string };
+  // Per-product error isolation: a single corrupt products.jsonl line, unreadable/invalid
+  // section spec, or reconstruction failure must NOT abort the whole run (all other
+  // products would otherwise go un-enriched) — record it and move on.
+  let p: { name?: string; sku?: string; sourceUrl?: string; description?: string };
+  try {
+    p = JSON.parse(line);
+  } catch {
+    skipped.push({ name: line.slice(0, 40), reason: 'malformed products.jsonl line' });
+    continue;
+  }
   // Parents only — variations carry no sourceUrl (and inherit the parent page).
   if (!p.sourceUrl || !p.sku) continue;
-  const slug = slugForUrl(p.sourceUrl);
-  if (!slug) { skipped.push({ name: p.name ?? p.sku, reason: 'no manifest slug' }); continue; }
-  const specPath = join(resolve(outputDir), 'sections', `${slug}.json`);
-  if (!existsSync(specPath)) { skipped.push({ name: p.name ?? p.sku, reason: `no section spec (${slug})` }); continue; }
+  try {
+    const slug = slugForUrl(p.sourceUrl);
+    if (!slug) { skipped.push({ name: p.name ?? p.sku, reason: 'no manifest slug' }); continue; }
+    const specPath = join(resolve(outputDir), 'sections', `${slug}.json`);
+    if (!existsSync(specPath)) { skipped.push({ name: p.name ?? p.sku, reason: `no section spec (${slug})` }); continue; }
 
-  const spec = JSON.parse(readFileSync(specPath, 'utf8'));
-  const r = buildProductMarketing(spec, {
-    paletteTokens: tokens.paletteTokens,
-    fontFamilies: tokens.fontFamilies,
-    mediaUrlMap,
-    title: p.name,
-    patternSlug: `${themeSlug}/product-marketing`,
-  });
-  if (!r.postContent) { skipped.push({ name: p.name ?? p.sku, reason: 'no marketing sections' }); continue; }
+    const spec = JSON.parse(readFileSync(specPath, 'utf8'));
+    const r = buildProductMarketing(spec, {
+      paletteTokens: tokens.paletteTokens,
+      fontFamilies: tokens.fontFamilies,
+      mediaUrlMap,
+      title: p.name,
+      patternSlug: `${themeSlug}/product-marketing`,
+    });
+    if (!r.postContent) { skipped.push({ name: p.name ?? p.sku, reason: 'no marketing sections' }); continue; }
 
-  for (const a of r.iconAssets) {
-    try {
-      const dest = join(themeRoot, a.path);
-      mkdirSync(join(dest, '..'), { recursive: true });
-      writeFileSync(dest, a.svg);
-      iconsWritten++;
-    } catch { /* best-effort */ }
+    for (const a of r.iconAssets) {
+      // Never let a reconstructed asset path escape the theme dir.
+      if (!a.path || a.path.includes('..') || a.path.startsWith('/')) continue;
+      try {
+        const dest = join(themeRoot, a.path);
+        mkdirSync(join(dest, '..'), { recursive: true });
+        writeFileSync(dest, a.svg);
+        iconsWritten++;
+      } catch { /* best-effort */ }
+    }
+
+    // Index-prefixed so two SKUs that sanitize to the same string can't clobber each
+    // other's staged content before the DB write (Shopify SKUs are non-unique/optional).
+    const fileName = `${updates.length}-${p.sku.replace(/[^a-z0-9._-]/gi, '_')}.html`;
+    writeFileSync(join(stageDir, fileName), r.postContent);
+    updates.push({ sku: p.sku, file: fileName, excerpt: p.description ?? '', name: p.name ?? p.sku });
+    const islands = (r.postContent.match(/<!-- wp:html -->/g) || []).length;
+    const core = (r.postContent.match(/<!-- wp:(?!html)/g) || []).length;
+    console.log(`  ${p.name}: ${core} core blocks, ${islands} html islands (${r.keptIndices.length} sections)`);
+  } catch (err) {
+    skipped.push({ name: p.name ?? p.sku ?? '?', reason: `error: ${err instanceof Error ? err.message : String(err)}` });
   }
-
-  const fileName = `${p.sku.replace(/[^a-z0-9._-]/gi, '_')}.html`;
-  writeFileSync(join(stageDir, fileName), r.postContent);
-  updates.push({ sku: p.sku, file: fileName, excerpt: p.description ?? '', name: p.name ?? p.sku });
-  const islands = (r.postContent.match(/<!-- wp:html -->/g) || []).length;
-  const core = (r.postContent.match(/<!-- wp:(?!html)/g) || []).length;
-  console.log(`  ${p.name}: ${core} core blocks, ${islands} html islands (${r.keptIndices.length} sections)`);
 }
 
 writeFileSync(join(stageDir, 'manifest.json'), JSON.stringify(updates));

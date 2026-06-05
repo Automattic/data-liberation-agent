@@ -62,6 +62,31 @@ describe('readPngHeight (rendered-height signal)', () => {
     expect(readPngHeight(p)).toBeNull();
     rmSync(p);
   });
+
+  it('rejects a corrupt/implausible height (would otherwise poison the page-set median)', () => {
+    const buf = Buffer.alloc(24);
+    buf.writeUInt32BE(0x89504e47, 0);
+    buf.writeUInt32BE(0x0d0a1a0a, 4);
+    buf.writeUInt32BE(13, 8);
+    buf.write('IHDR', 12);
+    buf.writeUInt32BE(800, 16);
+    buf.writeUInt32BE(0xffffffff, 20); // garbage huge height
+    const p = join(tmpdir(), `dla-png-huge-${process.pid}.png`);
+    writeFileSync(p, buf);
+    expect(readPngHeight(p)).toBeNull();
+    rmSync(p);
+  });
+
+  it('returns null when the first chunk is not IHDR (valid signature, junk chunk)', () => {
+    const buf = Buffer.alloc(24);
+    buf.writeUInt32BE(0x89504e47, 0);
+    buf.write('JUNK', 12); // not IHDR
+    buf.writeUInt32BE(630, 20);
+    const p = join(tmpdir(), `dla-png-junk-${process.pid}.png`);
+    writeFileSync(p, buf);
+    expect(readPngHeight(p)).toBeNull();
+    rmSync(p);
+  });
 });
 
 describe('classifyEmptyBodies (Phase 0 page-set decision)', () => {

@@ -118,6 +118,15 @@ describe('buildProductMarketing (reconstruction)', () => {
     expect((out.match(/<img/g) || []).length).toBe(1);
   });
 
+  it('dropDeadImages does not corrupt markup when an attribute value contains ">"', () => {
+    // Shopify alt text routinely contains ">"; a naive [^>]* match truncates here.
+    const html = '<img src="http://localhost/wp-content/uploads/a.jpg" alt="before > after"><p>keep me</p>';
+    const out = dropDeadImages(html);
+    expect(out).toContain('/wp-content/uploads/a.jpg'); // local img survives intact
+    expect(out).toContain('alt="before > after"'); // attribute not truncated
+    expect(out).toContain('<p>keep me</p>'); // following markup not corrupted
+  });
+
   it('returns empty post_content when only chrome + hero remain', () => {
     const r = buildProductMarketing(
       file([
