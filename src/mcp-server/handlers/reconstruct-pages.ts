@@ -41,7 +41,7 @@ import { slugify } from '../../adapters/shared.js';
 const execFileAsync = promisify(execFile);
 
 function writeJsonArtifact(path: string, data: unknown): void {
-  const tmp = `${path}.${process.pid}.tmp`;
+  const tmp = `${path}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
   writeFileSync(tmp, JSON.stringify(data, null, 2));
   renameSync(tmp, path);
 }
