@@ -1,5 +1,7 @@
+import { join } from 'node:path';
 import { detect } from '../../lib/extraction/detect-platform.js';
 import type { Handler } from '../handler-types.js';
+import { compactResult } from '../result-compaction.js';
 
 export const discoverHandler: Handler = async (args, ctx) => {
   const detection = await detect(args.url as string);
@@ -23,5 +25,18 @@ export const discoverHandler: Handler = async (args, ctx) => {
   const urls = (inv.urls || []).map((u) => u.url);
   const platformFeatures = detectFeatures(detection.platform, urls, []);
 
-  return ctx.textResult({ ...(inventory as object), platformFeatures });
+  const result = { ...(inventory as object), platformFeatures } as Record<string, unknown>;
+
+  // A large sitemap (one run had 616 URLs / ~68k chars) overflows the MCP token
+  // cap. Cap the `urls` array inline; preserve counts, platformFeatures,
+  // navigation, siteMeta verbatim. discover usually has no outputDir, so the
+  // full result is only spilled to <outputDir>/.discover.json when one is passed
+  // — otherwise arrays are capped inline with a `urlsTruncated` count.
+  const outputDir = typeof args.outputDir === 'string' ? (args.outputDir as string) : null;
+  return ctx.textResult(
+    compactResult(result, {
+      arrayFields: ['urls'],
+      fullResultPath: outputDir ? join(outputDir, '.discover.json') : null,
+    }),
+  );
 };

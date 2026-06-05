@@ -98,7 +98,7 @@ export const extractHandler: Handler = async (args, ctx) => {
       }
     }
 
-    return ctx.textResult({
+    const result: Record<string, unknown> = {
       wxrPath: args.dryRun ? null : wxrPath,
       redirectMapPath: wxr.redirects.length > 0 ? join(outputDir, 'redirect-map.json') : null,
       outputDir,
@@ -120,7 +120,20 @@ export const extractHandler: Handler = async (args, ctx) => {
       wxrValidation: validation,
       dryRun: !!args.dryRun,
       ...(screenshotResult ? { screenshots: screenshotResult } : {}),
-    });
+    };
+
+    // A large site (one run hit ~132k chars) can push `failures` past the MCP
+    // token cap. Cap only that array inline and spill the full result to
+    // <outputDir>/.extract-result.json. summary (incl. failedUrls count),
+    // wxrValidation, and wxrPath are preserved verbatim; `failuresTruncated`
+    // exposes any capping and `fullResultPath` recovers the complete set.
+    const { compactResult } = await import('../result-compaction.js');
+    return ctx.textResult(
+      compactResult(result, {
+        arrayFields: ['failures'],
+        fullResultPath: join(outputDir, '.extract-result.json'),
+      }),
+    );
   } finally {
     log.releaseLock();
   }
