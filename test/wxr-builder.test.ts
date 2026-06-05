@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { readFileSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { XMLParser } from 'fast-xml-parser';
 import { WxrBuilder } from '../src/lib/extraction/wxr-builder.js';
 
 describe('WxrBuilder', () => {
@@ -450,6 +451,110 @@ describe('WxrBuilder validate with comments and terms', () => {
     });
     const result = wxr.validate();
     expect(result.warnings.some(w => w.includes('unknown'))).toBe(true);
+  });
+});
+
+describe('WxrBuilder backfills inline post terms into the channel header', () => {
+  let tempDir: string;
+  beforeEach(() => { tempDir = mkdtempSync(join(tmpdir(), 'wxr-inline-terms-')); });
+  afterEach(() => { rmSync(tempDir, { recursive: true, force: true }); });
+
+  // Regression: a Squarespace extract attached terms to posts inline
+  // (<category domain="category|post_tag" nicename="…">) without ever calling
+  // addCategory/addTag, so the channel header declared ZERO terms. That produced
+  // hundreds of "references unknown category/tag slug …" validator warnings.
+  // The builder must now collect the distinct inline terms and declare each once
+  // in the header, with the declared slug matching the inline nicename exactly.
+  // Data below is fictional — invented outlet names and topics.
+  it('emits one <wp:category>/<wp:tag> per distinct inline term with matching slugs', () => {
+    const wxr = new WxrBuilder({ title: 'Newsroom', url: 'https://example.com' });
+    // No addCategory/addTag calls — terms arrive only inline on the posts.
+    wxr.addPost({
+      title: 'Quarterly Filing Roundup',
+      slug: 'quarterly-filing-roundup',
+      content: '<p>Body one</p>',
+      date: '2026-01-15T10:00:00Z',
+      categories: ['The Gazette Ledger', 'Markets Watch'],
+      tags: ['Insurance coverage', 'Annual report'],
+    });
+    wxr.addPost({
+      title: 'Storm Season Outlook',
+      slug: 'storm-season-outlook',
+      content: '<p>Body two</p>',
+      date: '2026-01-16T10:00:00Z',
+      // 'The Gazette Ledger' and 'Insurance coverage' repeat across posts.
+      categories: ['The Gazette Ledger', 'Weather Desk'],
+      tags: ['Insurance coverage', 'Forecasting'],
+    });
+
+    const wxrPath = join(tempDir, 'output.wxr');
+    const { validation } = wxr.serialize(wxrPath);
+    const xml = readFileSync(wxrPath, 'utf8');
+
+    // (a) A header declaration exists for each distinct category and tag.
+    expect(xml).toContain('<wp:cat_name><![CDATA[The Gazette Ledger]]></wp:cat_name>');
+    expect(xml).toContain('<wp:cat_name><![CDATA[Markets Watch]]></wp:cat_name>');
+    expect(xml).toContain('<wp:cat_name><![CDATA[Weather Desk]]></wp:cat_name>');
+    expect(xml).toContain('<wp:tag_name><![CDATA[Insurance coverage]]></wp:tag_name>');
+    expect(xml).toContain('<wp:tag_name><![CDATA[Annual report]]></wp:tag_name>');
+    expect(xml).toContain('<wp:tag_name><![CDATA[Forecasting]]></wp:tag_name>');
+
+    // (b) The declared slug matches the inline nicename exactly (so refs resolve).
+    expect(xml).toContain('<wp:category_nicename><![CDATA[The Gazette Ledger]]></wp:category_nicename>');
+    expect(xml).toContain('<wp:tag_slug><![CDATA[Insurance coverage]]></wp:tag_slug>');
+    // The inline post ref uses the same nicename string.
+    expect(xml).toContain('nicename="The Gazette Ledger"');
+    expect(xml).toContain('nicename="Insurance coverage"');
+
+    // (c) Terms shared across posts are declared exactly once.
+    const countOccurrences = (haystack: string, needle: string): number =>
+      haystack.split(needle).length - 1;
+    expect(countOccurrences(xml, '<wp:cat_name><![CDATA[The Gazette Ledger]]></wp:cat_name>')).toBe(1);
+    expect(countOccurrences(xml, '<wp:tag_name><![CDATA[Insurance coverage]]></wp:tag_name>')).toBe(1);
+    // 3 distinct categories + 3 distinct tags declared in the header.
+    expect(countOccurrences(xml, '<wp:cat_name>')).toBe(3);
+    expect(countOccurrences(xml, '<wp:tag_name>')).toBe(3);
+
+    // The backfill also clears the would-be "unknown category/tag slug" warnings
+    // and surfaces the terms via the public arrays the extract summary reads.
+    expect(validation.warnings.some((w) => /unknown (category|tag) slug/.test(w))).toBe(false);
+    expect(wxr.categories.map((c) => c.slug).sort()).toEqual(
+      ['Markets Watch', 'The Gazette Ledger', 'Weather Desk']
+    );
+    expect(wxr.tags.map((t) => t.slug).sort()).toEqual(
+      ['Annual report', 'Forecasting', 'Insurance coverage']
+    );
+
+    // (d) The output still parses as well-formed XML.
+    const parser = new XMLParser({ ignoreAttributes: false });
+    expect(() => parser.parse(xml)).not.toThrow();
+    const parsed = parser.parse(xml);
+    expect(parsed.rss.channel).toBeDefined();
+  });
+
+  it('does not duplicate a term already registered via addCategory/addTag', () => {
+    const wxr = new WxrBuilder({ title: 'Newsroom', url: 'https://example.com' });
+    // Explicitly registered with a curated display name; the inline ref reuses
+    // the same slug, so the backfill must NOT add a second declaration.
+    wxr.addCategory({ slug: 'markets-watch', name: 'Markets Watch Desk' });
+    wxr.addPost({
+      title: 'Bond Yields Slip',
+      slug: 'bond-yields-slip',
+      content: '<p>Body</p>',
+      date: '2026-01-17T10:00:00Z',
+      categories: ['markets-watch'],
+    });
+
+    const wxrPath = join(tempDir, 'output.wxr');
+    wxr.serialize(wxrPath);
+    const xml = readFileSync(wxrPath, 'utf8');
+
+    const countOccurrences = (haystack: string, needle: string): number =>
+      haystack.split(needle).length - 1;
+    expect(countOccurrences(xml, '<wp:cat_name>')).toBe(1);
+    // The curated name is preserved, not overwritten by the slug.
+    expect(xml).toContain('<wp:cat_name><![CDATA[Markets Watch Desk]]></wp:cat_name>');
+    expect(wxr.categories).toHaveLength(1);
   });
 });
 

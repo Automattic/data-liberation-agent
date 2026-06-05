@@ -482,6 +482,50 @@ export class WxrBuilder {
     return id;
   }
 
+  /**
+   * Backfill channel-header term declarations for any category/tag referenced
+   * inline on a post but never explicitly registered via {@link addCategory} /
+   * {@link addTag}.
+   *
+   * Some adapters (e.g. Squarespace) attach terms directly to posts as inline
+   * `<category domain="category|post_tag" nicename="…">` refs without declaring
+   * them in the channel header. A spec-compliant WXR 1.2 also declares each term
+   * once in the header; absent declarations trip validators ("references unknown
+   * category/tag slug …") even though WordPress can still create the terms from
+   * the inline refs.
+   *
+   * The inline `nicename` emitted by {@link _serializeItem} is the raw slug
+   * string from `post.categories` / `post.tags`, so the backfilled declaration's
+   * resolvable key (`wp:category_nicename` / `wp:tag_slug`) MUST equal that raw
+   * string verbatim for references to resolve. We therefore use the inline value
+   * as both the declared slug and the human-readable name (Squarespace term refs
+   * already carry display-shaped values like "The New York Times").
+   *
+   * Idempotent and order-independent: only terms missing from `this.categories`
+   * / `this.tags` are appended, so it is safe to call from both `serialize()`
+   * and `openStream()` and safe to call more than once.
+   */
+  private _backfillInlineTerms(): void {
+    const knownCategorySlugs = new Set(this.categories.map((c) => c.slug));
+    const knownTagSlugs = new Set(this.tags.map((t) => t.slug));
+    const seenCategorySlugs = new Set<string>();
+    const seenTagSlugs = new Set<string>();
+
+    for (const item of this.items) {
+      if (item.type !== 'post') continue;
+      for (const slug of item.categories) {
+        if (!slug || knownCategorySlugs.has(slug) || seenCategorySlugs.has(slug)) continue;
+        seenCategorySlugs.add(slug);
+        this.addCategory({ slug, name: slug });
+      }
+      for (const slug of item.tags) {
+        if (!slug || knownTagSlugs.has(slug) || seenTagSlugs.has(slug)) continue;
+        seenTagSlugs.add(slug);
+        this.addTag({ slug, name: slug });
+      }
+    }
+  }
+
   validate(): ValidationResult {
     const warnings: string[] = [];
     const attachmentIds = new Set(
@@ -736,6 +780,7 @@ export class WxrBuilder {
   }
 
   serialize(outputPath: string): { validation: ValidationResult; wxrPath: string } {
+    this._backfillInlineTerms();
     const validation = this.validate();
 
     mkdirSync(dirname(outputPath), { recursive: true });
@@ -768,6 +813,7 @@ export class WxrBuilder {
   openStream(outputPath: string): void {
     mkdirSync(dirname(outputPath), { recursive: true });
 
+    this._backfillInlineTerms();
     const header = this._serializeHeader();
     const taxonomies = this._serializeTaxonomies();
 
