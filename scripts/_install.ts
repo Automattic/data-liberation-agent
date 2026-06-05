@@ -26,6 +26,5 @@ const res = await startPreview({
   outputDir,
   themeFiles: files,
   themeSlug,
-  detached: true,
-} as Parameters<typeof startPreview>[0]);
+});
 console.log(JSON.stringify(res, null, 2));

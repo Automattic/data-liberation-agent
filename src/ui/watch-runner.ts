@@ -2759,9 +2759,10 @@ export async function runWatch(opts: WatchOpts): Promise<{ ok: boolean; duration
   // we skip the second boot entirely; the user is already on the URL we
   // emitted at pre-start.
   //
-  // Non-Studio mode: per-URL inserts were skipped, so the pre-started site
-  // is still empty. forceReimport wipes the persistent SQLite so the
-  // import-when-empty branch picks up the now-populated output.wxr.
+  // Source-absent path: Studio was not running (previewSource is null/undefined),
+  // so attempt another startPreview with the now-populated output.wxr. This
+  // will fail if Studio is still unavailable — the error is surfaced via
+  // onPreviewFailed rather than throwing.
   if (previewSource === 'studio') {
     appendWatchLog(outDir, {
       event: 'preview-reimport-skipped',
