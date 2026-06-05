@@ -1,9 +1,8 @@
 //
 // Replica Install Helpers
 // =======================
-// Shared utilities used by both the Studio path (writes directly to
-// <sitePath>/wordpress/wp-content/themes,plugins) and the Playground path
-// (emits blueprint writeFile + wp-cli steps).
+// Shared utilities for the Studio path (writes directly to
+// <sitePath>/wordpress/wp-content/themes,plugins).
 //
 // Two responsibilities:
 //   - Sanitize relativePath entries so they cannot escape the install root.

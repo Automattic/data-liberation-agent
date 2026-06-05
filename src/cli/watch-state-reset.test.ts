@@ -7,7 +7,7 @@ const FIXTURE_TMP = join(process.cwd(), '.tmp-test');
 mkdirSync(FIXTURE_TMP, { recursive: true });
 
 describe('resetStreamingState', () => {
-  it('removes streaming state files + playground-site dir', () => {
+  it('removes streaming state files', () => {
     const dir = mkdtempSync(join(FIXTURE_TMP, 'reset-'));
     try {
       writeFileSync(join(dir, 'replicate-state.json'), '{}');
@@ -18,8 +18,6 @@ describe('resetStreamingState', () => {
       writeFileSync(join(dir, 'pending-imports.jsonl'), '');
       mkdirSync(join(dir, 'composed'), { recursive: true });
       writeFileSync(join(dir, 'composed', 'about.blocks.html'), '<!-- wp:paragraph -->...<!-- /wp:paragraph -->');
-      mkdirSync(join(dir, 'playground-site', 'wp-content'), { recursive: true });
-      writeFileSync(join(dir, 'playground-site', 'wp-content', 'foo.txt'), 'hi');
 
       const result = resetStreamingState(dir);
 
@@ -30,7 +28,6 @@ describe('resetStreamingState', () => {
       expect(result.removed).toContain('block-transform-log.jsonl');
       expect(result.removed).toContain('pending-imports.jsonl');
       expect(result.removed).toContain('composed');
-      expect(result.removed).toContain('playground-site');
       expect(existsSync(join(dir, 'replicate-state.json'))).toBe(false);
       expect(existsSync(join(dir, 'base-theme-replicated.json'))).toBe(false);
       expect(existsSync(join(dir, 'theme-pieces-replicated.json'))).toBe(false);
@@ -38,7 +35,6 @@ describe('resetStreamingState', () => {
       expect(existsSync(join(dir, 'block-transform-log.jsonl'))).toBe(false);
       expect(existsSync(join(dir, 'pending-imports.jsonl'))).toBe(false);
       expect(existsSync(join(dir, 'composed'))).toBe(false);
-      expect(existsSync(join(dir, 'playground-site'))).toBe(false);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -76,7 +72,6 @@ describe('resetStreamingState', () => {
       expect(result.skipped).toContain('block-transform-log.jsonl');
       expect(result.skipped).toContain('pending-imports.jsonl');
       expect(result.skipped).toContain('composed');
-      expect(result.skipped).toContain('playground-site');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

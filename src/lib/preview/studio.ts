@@ -70,7 +70,7 @@ export interface StudioSite {
 
 /**
  * Returns true if the `studio` CLI binary is reachable on PATH.
- * Fast-fails on any error so startPreview can fall through to Playground.
+ * Fast-fails on any error so callers can surface a clear 'install Studio' error.
  */
 export function isStudioAvailable(): boolean {
   try {

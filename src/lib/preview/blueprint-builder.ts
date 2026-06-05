@@ -23,7 +23,7 @@ export function buildBlueprint({ outputDir }: BuildBlueprintOpts): Blueprint {
   const steps: BlueprintStep[] = [];
 
   // Studio's blueprint runs INSIDE the `start-server` IPC window (120s
-  // no-activity). Playground's `importWxr` step hardcodes FETCH_ATTACHMENTS
+  // no-activity). The `importWxr` step hardcodes FETCH_ATTACHMENTS
   // = true, so for sites with many media items it blows the window fetching
   // from the origin CDN.
   //

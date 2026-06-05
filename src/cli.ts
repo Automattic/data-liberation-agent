@@ -28,7 +28,7 @@ if (args[0] === 'mcp') {
     data-liberation qa <wxr-file>        Compare WXR against source site
     data-liberation verify <output-dir>  Verify extraction results
     data-liberation setup                Validate WordPress connection
-    data-liberation preview <outputDir>  Preview extraction in WordPress Playground
+    data-liberation preview <outputDir>  Preview extraction in Studio
     data-liberation screenshot <url>   Capture screenshots of every URL
     data-liberation design-foundation <outputDir>  Build/validate design-foundation.json (agent fallback)
     data-liberation mcp                Start MCP server (stdio transport)
@@ -61,7 +61,7 @@ if (args[0] === 'mcp') {
     --no-agent           Run deterministic-only — no AI invocations, judgmentNeeded markers
                          accumulate in <outputDir>/<site>/watch.log for later resolution
     --reset              Wipe streaming state (replicate-state.json + block-transform-log.jsonl
-                         + playground-site/) before starting
+                         + composed/) before starting
 
   Import options:
     --site <domain>       WordPress site domain

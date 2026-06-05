@@ -277,7 +277,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: 'liberate_preview',
-      description: 'Spawn a local WordPress Playground (or Studio) preview of an extraction output. Returns { url, pid, port, status, warnings }. Kills any existing preview on the same outputDir before starting. Optionally installs a generated replica theme + block plugins via themeFiles[] + blockPlugins[]; the theme is activated after content import. Used by the replicate skill in Step 5 (Install).',
+      description: 'Spawn a local Studio preview of an extraction output. Returns { url, port, status, warnings }. Kills any existing preview on the same outputDir before starting. Optionally installs a generated replica theme + block plugins via themeFiles[] + blockPlugins[]; the theme is activated after content import. Used by the replicate skill in Step 5 (Install).',
       inputSchema: {
         type: 'object' as const,
         properties: {
@@ -531,7 +531,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: 'liberate_media_install',
-      description: 'Install one URL\'s pending media into the running replica WP site. Idempotent: skips media already registered as attachments (tracked via MediaStubStore.wpPostId). Studio path uses `studio wp eval-file`; Playground path uses `wp-playground-cli run-blueprint` against the persisted playground-site wp-content mount.',
+      description: 'Install one URL\'s pending media into the running replica WP site. Idempotent: skips media already registered as attachments (tracked via MediaStubStore.wpPostId). Uses `studio wp eval-file` to run a vendored PHP installer script.',
       inputSchema: {
         type: 'object' as const,
         properties: {
@@ -539,11 +539,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           url: { type: 'string', description: 'Source URL whose media we are installing (used for logging; the install acts on all pending media in MediaStubStore).' },
           target: {
             type: 'object' as const,
-            description: 'Where to install the media. Studio: { kind: "studio", sitePath: "/Users/.../Studio/site-name" }. Playground: { kind: "playground", sitePath: "<outputDir>/playground-site", siteUrl: "http://127.0.0.1:9400" }.',
+            description: 'Where to install the media. Studio: { kind: "studio", sitePath: "/Users/.../Studio/site-name" }.',
             properties: {
-              kind: { type: 'string', enum: ['studio', 'playground'] },
+              kind: { type: 'string', enum: ['studio'] },
               sitePath: { type: 'string' },
-              siteUrl: { type: 'string', description: 'Optional running Playground URL used to compute browser-visible upload URLs.' },
+              siteUrl: { type: 'string', description: 'Optional site URL used to compute browser-visible upload URLs.' },
             },
             required: ['kind', 'sitePath'],
           },
@@ -575,9 +575,9 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           sourceHtml: { type: 'string', description: 'Original sanitized source HTML — passed to output-verify for text-substring validation.' },
           target: {
             type: 'object' as const,
-            description: 'Replica site target. Studio: { kind: "studio", sitePath: "..." }. Playground: { kind: "playground", siteUrl: "http://localhost:9400" }.',
+            description: 'Replica site target. Studio: { kind: "studio", sitePath: "..." }.',
             properties: {
-              kind: { type: 'string', enum: ['studio', 'playground'] },
+              kind: { type: 'string', enum: ['studio'] },
               sitePath: { type: 'string' },
               siteUrl: { type: 'string' },
             },

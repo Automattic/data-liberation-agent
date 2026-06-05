@@ -237,9 +237,8 @@ export function buildJudgmentPrompt(
   studioSitePath: string | null,
 ): string {
   // The agent only knows where to install theme files when we tell it. If
-  // the runner is in Playground mode (no studioSitePath), we currently
-  // can't update the theme of a running Playground site from outside —
-  // surface that explicitly so the agent doesn't try liberate_preview.
+  // no Studio site is available (studioSitePath is null), surface that
+  // explicitly so the agent doesn't try liberate_preview.
   const themeSlug = deriveThemeSlug(outputDir);
   const installTarget = studioSitePath
     ? `\`liberate_install_theme\` with { outputDir: "${outputDir}", studioSitePath: "${studioSitePath}", themeSlug: "${themeSlug}", themeFiles: [...] }. This exact themeSlug is the runner-created shell theme; use it to overwrite the existing shell theme, not a slug derived from inventory/siteSlug. Custom blocks (rare) are theme-embedded under blocks/<slug>/{src,build}/ — pass them through themeFiles[], NOT a separate plugin. See skills/replicate/SKILL.md §4d for the pre-built artifact rule and functions.php registration loop.`
@@ -1804,7 +1803,7 @@ async function flushPendingImports(opts: {
     // @wordpress/blocks parse() + serialize() so it lands in the DB in
     // canonical WP form. This catches subtle differences (attribute
     // order, missing wp-block-* classes, nested <p>) that would
-    // otherwise fail Playground's stricter validator on next render.
+    // otherwise fail WordPress's block validator on next render.
     // Only blocks-mode payloads — raw-html (NO_AGENT) bypasses.
     if (contentOverride && composedAs === 'blocks' && blockFixer) {
       const before = contentOverride;
@@ -2760,10 +2759,9 @@ export async function runWatch(opts: WatchOpts): Promise<{ ok: boolean; duration
   // we skip the second boot entirely; the user is already on the URL we
   // emitted at pre-start.
   //
-  // Playground mode: per-URL inserts were skipped (no studio CLI), so the
-  // pre-started site is still empty. forceReimport wipes the persistent
-  // SQLite so the import-when-empty branch picks up the now-populated
-  // output.wxr.
+  // Non-Studio mode: per-URL inserts were skipped, so the pre-started site
+  // is still empty. forceReimport wipes the persistent SQLite so the
+  // import-when-empty branch picks up the now-populated output.wxr.
   if (previewSource === 'studio') {
     appendWatchLog(outDir, {
       event: 'preview-reimport-skipped',

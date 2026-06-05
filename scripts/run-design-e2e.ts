@@ -12,7 +12,7 @@
 //   - JS fidelity: carousels, dropdowns, JS-driven UI (only when --include-scripts)
 //
 // Because the full extract + live-preview install is environment-dependent
-// (Studio/Playground), this is a GUIDED runner: it prints exact commands for
+// (Studio), this is a GUIDED runner: it prints exact commands for
 // steps that require a live environment and exits with guidance when those
 // artifacts aren't yet present.
 //
@@ -84,7 +84,7 @@ if (!existsSync(originManifest)) {
   console.log('  1. Screenshot every page of the origin site (into origin/screenshots/)');
   console.log('  2. Extract content and build the html-first replica theme (site.css, site.js,');
   console.log('     blank companion theme, per-page design/<slug>.fragment.html sidecars)');
-  console.log('  3. Install the replica into Studio/Playground (if connected)');
+  console.log('  3. Install the replica into Studio (if connected)');
   console.log('');
   console.log('[design-e2e] After it completes, note the replica preview base URL, then re-run');
   console.log('[design-e2e] this script to proceed to Step 2.');
@@ -98,7 +98,7 @@ const replicaManifest = join(replicaScreenshotsDir, 'manifest.json');
 
 if (!existsSync(replicaManifest)) {
   console.log('[design-e2e] Origin screenshots found. Replica screenshots not found.');
-  console.log('[design-e2e] Start your html-first replica preview (Studio/Playground) and');
+  console.log('[design-e2e] Start your html-first replica preview (Studio) and');
   console.log('[design-e2e] run the following command to screenshot it:');
   console.log('');
   console.log('[design-e2e] Replace <replicaBaseUrl> with your running replica\'s base URL');

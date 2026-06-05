@@ -5,8 +5,7 @@
 // fix-server.js), waits for /health to flip green, and exposes a `fix()`
 // call that POSTs composed block markup for normalization. Used by the
 // streaming watch runner to canonicalize agent / heuristic output before
-// `wp_insert_post` so imported posts don't trip Playground's stricter
-// block validator.
+// `wp_insert_post` so imported posts pass WordPress's block validator.
 //
 // Why a subprocess (not in-process):
 //   `@wordpress/blocks` pulls in React 18; this repo hoists React 19

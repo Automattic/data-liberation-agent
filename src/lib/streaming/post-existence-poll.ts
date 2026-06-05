@@ -17,10 +17,8 @@
 // site VFS, so we get the live post ID even though Studio uses SQLite under
 // the hood.
 //
-// Playground path: documented as a known limitation. Polling against
-// wp-playground-cli's `wp eval` requires per-call PHP startup (~5-10s each)
-// so a 3-retry loop has poor latency. Future: hit `wp-json/wp/v2/posts`
-// with a meta query when Playground exposes auth + REST.
+// Only Studio is supported. Non-Studio callers receive a not-yet-supported
+// error from liberate_block_transform_apply before reaching this path.
 //
 
 import { execFile } from 'node:child_process';

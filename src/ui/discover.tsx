@@ -481,10 +481,10 @@ export function runDiscover(url: string, opts: Partial<LiberateProps> = {}): voi
   waitUntilExit()
     .then(async () => {
       if (!wxrPath) return;
-      // Post-extract: always boot a local site (Studio if installed, else
-      // Playground) so the user can verify content before importing anywhere
-      // real. autoPreview honors nonInteractive internally — it still boots
-      // the site but skips browser/app auto-open so scripts get a URL.
+      // Post-extract: always boot a local Studio site so the user can verify
+      // content before importing anywhere real. autoPreview honors
+      // nonInteractive internally — it still boots the site but skips
+      // browser/app auto-open so scripts get a URL.
       const outputDir = dirname(wxrPath);
       await autoPreview(outputDir, { nonInteractive: props.nonInteractive });
       if (props.nonInteractive) return;

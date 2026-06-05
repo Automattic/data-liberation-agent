@@ -9,16 +9,14 @@
 //   <outputDir>/block-transform-log.jsonl
 //   <outputDir>/pending-imports.jsonl   (queued/imported per-URL log)
 //   <outputDir>/composed/               (block-markup sidecars from compose)
-//   <outputDir>/playground-site/        (entire persistent WP site)
 //
 // Does NOT touch:
 //   output.wxr, screenshots/, html/, palette.json, typography.json,
 //   breakpoints.json, design-foundation.json, media/, products.jsonl,
 //   extraction-log.jsonl, session.json, media-stubs.json, watch.log
 //
-// The reset is intentionally narrow — only the streaming-pipeline state +
-// the persistent Playground. Re-running watch after a reset re-imports
-// content into a fresh Playground.
+// The reset is intentionally narrow — only the streaming-pipeline state.
+// Re-running watch after a reset re-imports content into a fresh Studio site.
 //
 import { existsSync, rmSync, unlinkSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -38,7 +36,6 @@ const TARGETS = [
   'block-transform-log.jsonl',
   'pending-imports.jsonl',
   'composed',
-  'playground-site',
 ];
 
 export function resetStreamingState(outputDir: string): ResetResult {

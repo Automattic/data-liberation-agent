@@ -234,10 +234,9 @@ async function startInlinePreview(opts: RunOpts): Promise<StartPreviewResult> {
 }
 
 /**
- * Post-extract auto-preview: unconditionally spins up a local site (Studio
- * when the CLI is installed, Playground otherwise). In interactive mode we
- * also auto-launch Studio / the browser; in non-interactive mode we just
- * print the URL so scripts can capture it. `startInlinePreview` already
+ * Post-extract auto-preview: spins up a local Studio site. In interactive
+ * mode we also auto-launch Studio / the browser; in non-interactive mode we
+ * just print the URL so scripts can capture it. `startInlinePreview` already
  * falls back to a plain startPreview when there's no TTY.
  */
 export async function autoPreview(

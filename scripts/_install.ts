@@ -5,7 +5,7 @@
 // slug is derived from the output dir, so this works for any extracted site.
 import { readdirSync, readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
-import { startPreview } from '../src/lib/preview/playground-server.js';
+import { startPreview } from '../src/lib/preview/studio.js';
 import { requireOutputDir, installThemeSlug } from './_site-meta.js';
 
 const outputDir = requireOutputDir();

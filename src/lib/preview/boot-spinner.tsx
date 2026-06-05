@@ -18,8 +18,7 @@ function phaseLabel(source: PreviewSource | undefined, elapsedMs: number): strin
     if (elapsedMs < 15_000) return 'Creating Studio site…';
     return 'Importing content…';
   }
-  // Playground: first-run fetches WP into the WASM runtime, then boots, then
-  // runs the blueprint imports.
+  // Fallback (non-Studio): generic progress messages.
   if (elapsedMs < 10_000) return 'Downloading WordPress…';
   if (elapsedMs < 25_000) return 'Starting WordPress…';
   return 'Importing content…';

@@ -5,7 +5,7 @@
 // parse() applies validation-fixes automatically; createBlock() + serialize()
 // re-emits canonical WordPress markup. Even "valid" blocks get re-serialized
 // because subtle structural differences (attribute order, missing data-attrs,
-// CSS property order) can still fail Playground's stricter validator.
+// CSS property order) can still fail WordPress's block validator.
 //
 
 const { parse, serialize, createBlock } = require('@wordpress/blocks');

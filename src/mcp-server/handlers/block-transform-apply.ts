@@ -17,9 +17,8 @@
 //   5. Apply — `wp post update <postId> --post_content=<blocks>`.
 //   6. Append to block-transform-log.jsonl on success.
 //
-// `target` selects the application path. v1 supports Studio; Playground is
-// recognised but returns a not-yet-supported error so callers handle it
-// explicitly.
+// `target` selects the application path. Studio is the only supported target;
+// other kinds return a not-yet-supported error so callers handle it explicitly.
 //
 
 import { createHash } from 'node:crypto';
