@@ -135,7 +135,7 @@ Now the captured artifacts become a living WordPress site. This is where AI ente
 
 > **This checkpoint fires after discovery and BEFORE extraction — it is a mandatory, non-skippable hard stop, not an after-capture confirmation.** It's placed early on purpose: discovery is cheap and already yields the inventory the recommendation needs, so the operator commits the path *before* the long extraction runs — while they still have attention. (Earlier versions asked this after capture; that was wrong — it either wasted the extraction or fired once the operator had walked away.)
 
-The front door shows the discovery inventory + a scope/cost estimate + a **platform-informed recommendation**, then asks the operator (via `AskUserQuestion`) to pick one of **two reconstruct paths**. The recommendation is a hint *inside* the question (marked `(Recommended)`), **never** an auto-selection — no matter how strong the platform signal, `/liberate` does not choose on the operator's behalf. *The operator's answer is the sole go-ahead* — it replaces the old proceed/confirm gate, and starting extraction without it is a defect. Only after the operator chooses does `/liberate` run the rest of Phase 1 (extract → media → capture → products) and then dispatch the matching sub-skill inline (shared context); each sub-skill reads `output/<site>/` from disk and owns its own reconstruct → install → QA → report (plus its own budget guard and `run-report*.json`).
+The front door shows the discovery inventory + a scope/cost estimate + a **platform-informed recommendation**, then asks the operator (via `AskUserQuestion`) to pick one of **two reconstruct paths**. The recommendation is a hint *inside* the question (marked `(Recommended)`), **never** an auto-selection — no matter how strong the platform signal, `/liberate` does not choose on the operator's behalf. *The operator's answer is the sole go-ahead* — it replaces the old proceed/confirm gate, and starting extraction without it is a defect. Only after the operator chooses does `/liberate` run the rest of Phase 1 (extract → media → capture → products) and then dispatch the matching sub-skill inline (shared context); each sub-skill reads the resolved output directory from disk and owns its own reconstruct → install → QA → report (plus its own budget guard and `run-report*.json`).
 
 | Operator picks | Dispatches | What you get | Products |
 |---|---|---|---|
@@ -196,7 +196,7 @@ The trust boundary. Nothing installs unless it passes. It asserts:
 A validation backstop also exists as a **block-markup oracle** (the real WordPress block parser) confirming the markup round-trips.
 
 ### Step 13 — Install (`liberate_install_theme`, `liberate_import`, `liberate_preview`)  ⚙️ Deterministic
-Write the theme into a local WordPress (Studio / Playground), import the WXR content and products CSV, activate the theme, set the front page, flush rewrites. Now there's a running site to look at.
+Write the theme into a local WordPress (Studio), import the WXR content and products CSV, activate the theme, set the front page, flush rewrites. Now there's a running site to look at.
 
 > *Operational gotcha:* a media-heavy WXR can trip Studio's ~120s import-silence timeout (looks like a "DB connection" error). The fix is a per-item heartbeat in the importer; some flows slim attachments out of the WXR and install media separately.
 
@@ -287,7 +287,9 @@ This is a deliberate stance: the system would rather *show you an honest gap* th
 
 ---
 
-## Quick reference — artifacts in `output/<site>/`
+## Quick reference — artifacts in the output directory
+
+> The default output base is `~/Studio/_liberations/<host>`. Override with `--output <dir>` (CLI) or the `DLA_OUTPUT_DIR` env var. Use `liberate_paths` to resolve the actual path at runtime.
 
 | File / dir | Phase | What it is |
 |---|---|---|

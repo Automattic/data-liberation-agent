@@ -61,7 +61,7 @@ Extract all content from a website. Produces a WXR file, media directory, redire
 | `verbose` | no | Enable detailed per-page logging |
 | `shopDomain` | no | **Shopify only** — the `*.myshopify.com` hostname used for Admin API calls. Usually unnecessary: `liberate_discover` auto-detects it from the storefront HTML (the `Shopify.shop` JS global) and stores it as `inventory.shopDomain`, so `liberate_extract` picks it up automatically even when the site is served on a custom domain. Only pass explicitly if auto-detection failed (e.g. Cloudflare-protected storefront). |
 | `adminToken` | no | **Shopify only** — Admin API access token. When present, products are fetched via the Admin GraphQL API (2025-04) instead of the public JSON API, yielding richer data: `compareAtPrice` sale semantics, `inventoryItem.tracked` + `inventoryPolicy` stock status, `unitCost` cost-of-goods, collections as categories, `measurement.weight` unit normalization, and global SEO metafields. |
-| `screenshots` | no | When `true`, runs the screenshot capture loop after extraction. Results land under `output/<site>/screenshots/` with a `manifest.json` keyed by URL; no postmeta or CSV columns are written — any cross-reference against the WXR / products CSV happens on the filesystem. Adds one `ImportSession` stage (`screenshotting`) that is resumable. |
+| `screenshots` | no | When `true`, runs the screenshot capture loop after extraction. Results land under `<outputDir>/screenshots/` with a `manifest.json` keyed by URL; no postmeta or CSV columns are written — any cross-reference against the WXR / products CSV happens on the filesystem. Adds one `ImportSession` stage (`screenshotting`) that is resumable. |
 
 Returns: `wxrPath`, `redirectMapPath`, `outputDir`, `summary` (counts, quality scores), `failures` (URLs and errors), `wxrValidation`.
 
@@ -218,25 +218,24 @@ Returns: per-stage results (media, categories, tags, pages, posts, comments, men
 
 ### `liberate_preview`
 
-Start a local WordPress site serving a completed extraction. Uses
-Automattic Studio (persistent, real WP) when the `studio` CLI is on
-PATH; falls back to a detached WordPress Playground (ephemeral WASM)
-otherwise.
+Start a local WordPress site serving a completed extraction using Automattic Studio. Studio is required — if the `studio` CLI is not on PATH, the tool returns an error with a link to https://developer.wordpress.com/studio/. Extraction itself needs no WordPress.
 
 **Arguments:**
 - `outputDir` (string, required) — path to the extraction output directory.
-- `open` (boolean, optional) — focus the Studio app (Studio path) or open the URL in the default browser (Playground path).
-- `port` (number, optional) — Playground-only. Override the auto-picked port (9400–9499). Ignored on the Studio path.
+- `open` (boolean, optional) — focus the Studio app after the site is ready.
 
-**Returns:** `{ status: "ready" | "failed", url?, pid?, port?, warnings?, error?, source?, siteName? }`. `source` is `"studio"` or `"playground"`. `siteName` is set on the Studio path (e.g. `example-com-2`).
+**Returns:** `{ status: "ready" | "failed", url?, warnings?, error?, siteName? }`. `siteName` is the Studio site name (e.g. `example-com-2`).
 
-On the Playground path, a second call on the same `outputDir` stops the prior preview and starts a new one. On the Studio path, each call creates a fresh Studio site with a collision-incremented name; old sites persist until you remove them with `studio site remove`. Warnings (Playground only) are extracted from `ERROR|WARN|Fatal` lines in `<outputDir>/playground/preview.log`.
+Each call creates a fresh Studio site with a collision-incremented name; old sites persist until you remove them with `studio site remove`.
 
-### `liberate_preview_stop`
+### `liberate_paths`
 
-Stop a running preview.
+Resolve where liberation output lives for a given URL.
 
-**Arguments:**
-- `outputDir` (string, required) — path to the extraction output directory.
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `url` | no | The website URL. When provided, `siteDir` is populated. |
 
-**Returns:** `{ status: "stopped" | "not-running" }`.
+**Returns:** `{ base, siteDir? }`. `base` is the resolved output base (`~/Studio/_liberations` by default; overridable via the `DLA_OUTPUT_DIR` env var or `--output` on the CLI). `siteDir` is `base/<sanitized host+path>` when `url` is given.
+
+Skills and agents MUST call this tool to locate liberation output instead of assuming `output/<site>/` relative to cwd. The default output base changed from `./output` (cwd-relative) to `~/Studio/_liberations` (user-owned, Studio-adjacent).

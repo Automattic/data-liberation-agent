@@ -519,7 +519,7 @@ flowchart LR
 
     bundle --> spec["section-extract (full)"]:::det --> specs["specs/rep/section-N.md  [EXTRACTION->BUILD CONTRACT]"]:::art
     specs --> gen["generating-patterns (AI, parallel)"]:::ai --> rpages["reconstruct_pages (pure)"]:::det
-    rpages --> gate{"validate_artifacts"}:::gate --> live["install -> live Studio/Playground replica"]:::art
+    rpages --> gate{"validate_artifacts"}:::gate --> live["install -> live Studio replica"]:::art
     live --> qa["replicate_verify + responsive gate + AI vision QA"]:::ai --> rep["run-report.json + replica URL"]:::art
 
     classDef ai fill:#ede9fe,stroke:#7c3aed,color:#2e1065;
@@ -531,4 +531,4 @@ flowchart LR
 
 The **two frozen contracts** are where AI judgment hardens into deterministic input: `design.md` (only a QA-iteration-3 amendment can change it, at the cost of a full rebuild) and the per-rep `specs/*.md` files (the extraction→generation handshake).
 
-**Final deliverables:** a running Studio/Playground replica at a local URL, and `run-report.json`, a verdict-first report whose per-page grades and gaps are produced by the deterministic `buildRunReport`.
+**Final deliverables:** a running Studio replica at a local URL, and `run-report.json`, a verdict-first report whose per-page grades and gaps are produced by the deterministic `buildRunReport`.

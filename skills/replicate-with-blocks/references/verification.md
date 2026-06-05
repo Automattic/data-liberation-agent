@@ -116,8 +116,8 @@ Example openQuestion:
 
 If `liberate_replicate_verify` isn't available, do it manually:
 
-1. For each archetype, screenshot the replica URL via Playwright/`@wp-playground/cli` browser commands.
-2. Save replica screenshots next to source: `output/<site>/screenshots/desktop/<slug>.png` (source) and `output/<site>/replica/screenshots/desktop/<slug>.png`.
+1. For each archetype, screenshot the replica URL via Playwright browser commands against the Studio local URL.
+2. Save replica screenshots next to source: `<outputDir>/screenshots/desktop/<slug>.png` (source) and `<outputDir>/replica/screenshots/desktop/<slug>.png`.
 3. Read both screenshots into vision and produce a side-by-side analysis. Use the same categories (structural, palette, typography) so the result is comparable.
 4. Write a `verify-result.json` next to the screenshots with the issues list and scalar scores (your best estimate).
 5. Iterate based on the issues list.
