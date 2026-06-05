@@ -1,1 +1,1 @@
-export { detect, detectFromHttp, detectFromUrl, FullDetectionResult, PATH_PROBES } from './detect-platform.js';
+export { detect, detectFromHttp, detectFromUrl, DetectionResult, FullDetectionResult, PATH_PROBES } from './detect-platform.js';
