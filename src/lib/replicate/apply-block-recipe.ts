@@ -40,14 +40,20 @@ function blockTag(block: string): string {
 
 function emitRecipeBlock($: CheerioAPI, el: Element, recipe: BlockRecipe, ctx: BlockRecipeContext): string {
   const tag = blockTag(recipe.block);
-  const attrs = recipe.attrs && Object.keys(recipe.attrs).length ? ` ${JSON.stringify(recipe.attrs)}` : '';
+  // Escape `-->` inside attr JSON per WP block-comment serialization — a value
+  // containing `-->` would otherwise close the comment early and corrupt markup.
+  const attrs = recipe.attrs && Object.keys(recipe.attrs).length ? ` ${JSON.stringify(recipe.attrs).replace(/-->/g, '--\\u003e')}` : '';
   const open = `<!-- wp:${tag}${attrs} -->`;
   const close = `<!-- /wp:${tag} -->`;
   const mode = recipe.inner ?? 'innerHtml';
   const $el = $(el);
   if (recipe.block === 'core/image' || mode === 'images') {
     const img = $el.is('img') ? $el : $el.find('img').first();
-    const src = ctx.mediaMap?.[img.attr('src') || ''] ?? (img.attr('src') || '');
+    const rawSrc = img.attr('src') || '';
+    // No <img> under a core/image match → don't emit a broken src=""; keep the
+    // element losslessly as a core/html island instead.
+    if (!rawSrc) return coreHtmlIsland($.html(el));
+    const src = ctx.mediaMap?.[rawSrc] ?? rawSrc;
     return `${open}\n<figure class="wp-block-image"><img src="${escapeAttr(src)}" alt="${escapeAttr(img.attr('alt') || '')}"/></figure>\n${close}`;
   }
   if (mode === 'drop') return `${open}\n${close}`;

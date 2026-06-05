@@ -120,9 +120,12 @@ function emitEmbed(_$: CheerioAPI, node: Cheerio<Element>): string | null {
   const url = iframe.attr('src') || node.find('a[href]').first().attr('href') || '';
   if (!/^https?:\/\//.test(url)) return null;
   const provider = guessEmbedProvider(url);
+  // The url sits inside the block-comment JSON, so it must be JSON-escaped, NOT
+  // HTML-escaped — escapeAttr would turn `?a=1&b=2` into `&amp;`, which json_decode
+  // reads literally and breaks oEmbed resolution. JSON.stringify emits the quotes.
   const attrs = provider
-    ? `{"url":"${escapeAttr(url)}","type":"video","providerNameSlug":"${provider}","responsive":true}`
-    : `{"url":"${escapeAttr(url)}","responsive":true}`;
+    ? `{"url":${JSON.stringify(url)},"type":"video","providerNameSlug":"${provider}","responsive":true}`
+    : `{"url":${JSON.stringify(url)},"responsive":true}`;
   return (
     `<!-- wp:embed ${attrs} -->\n` +
     `<figure class="wp-block-embed${provider ? ` is-provider-${provider} wp-block-embed-${provider}` : ''} wp-embed-aspect-16-9 wp-has-aspect-ratio">` +

@@ -1553,7 +1553,11 @@ export function reconstructPagePattern(
       // HTML before falling back to the opaque core/html island. The recipe is
       // only wired when adapterBlocks is present (blocks reconstruct path); the
       // carry/theme path never sets it, so it falls through unchanged.
-      const recipeSource = (s.styledHtml ?? s.sectionHtml) as string;
+      // Recipes parse raw platform structure (sqs-block classes, CDN image
+      // URLs), so feed the LESS-transformed sectionHtml first — styledHtml is the
+      // R4b snapshot with inlined <style> blocks that would pollute the output.
+      // (The verbatim core/html fallback below keeps its styledHtml-first floor.)
+      const recipeSource = (s.sectionHtml ?? s.styledHtml) as string;
       const recipeMarkup = opts.adapterBlocks
         ? applyBlockRecipe(recipeSource, opts.adapterBlocks, {
             url: opts.sourceUrl ?? '',
