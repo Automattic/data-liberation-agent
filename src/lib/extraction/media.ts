@@ -152,6 +152,20 @@ export function extensionFromContentType(contentType: string): string {
   }
 }
 
+const FONT_EXT_RE = /\.(woff2|woff|ttf|otf|eot)(?:[?#]|$)/i;
+
+/**
+ * Whether a URL points at a font file (by extension or a Wix `/ufonts/` path).
+ * Fonts belong in the reconstructed theme's `assets/fonts/` (the carry path downloads
+ * them there), not the WP media library — so the extraction media loop skips them.
+ * Letting fonts into the media pipeline also mangles their CSS `url()` into
+ * localhost-absolute uploads URLs via the media rewrite (the leak carry-fonts.ts then
+ * has to copy back out).
+ */
+export function isFontUrl(url: string): boolean {
+  return FONT_EXT_RE.test(url) || /\/ufonts\//i.test(url);
+}
+
 /**
  * SSRF-safe media fetch: validates the (attacker-controlled) media URL and
  * every redirect target against internal hosts, follows redirects manually

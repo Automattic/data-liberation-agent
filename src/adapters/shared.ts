@@ -4,7 +4,7 @@ import type { ExtractionLog } from '../lib/extraction/extraction-log.js';
 import type { ImportSession } from '../lib/extraction/import-session.js';
 import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { classifyUrl } from '../lib/extraction/sitemap.js';
-import { downloadMedia } from '../lib/extraction/media.js';
+import { downloadMedia, isFontUrl } from '../lib/extraction/media.js';
 import { MediaStubStore } from '../lib/extraction/media-stubs.js';
 import type { WooProductCsvBuilder, WooProduct } from '../lib/import/woo-product-csv.js';
 import { AdaptiveTuner, TUNER_DEFAULTS } from '../lib/extraction/adaptive-tuner.js';
@@ -754,6 +754,11 @@ export async function runExtractionLoop(opts: ExtractionLoopOpts): Promise<{
         const newMediaUrls: string[] = [];
         for (const mediaUrl of pageData.mediaUrls) {
           if (downloadedMediaUrls.has(mediaUrl)) continue;
+          // Fonts belong in the reconstructed theme's assets/fonts/, not the WP media
+          // library. Skip them here so they never enter the uploads/media pipeline (which
+          // would mangle their CSS url() into localhost-absolute uploads paths). The carry
+          // path self-hosts fonts independently (carry-fonts.ts).
+          if (isFontUrl(mediaUrl)) { downloadedMediaUrls.add(mediaUrl); continue; }
           // Respect persistent stub state: skip permanently-failed / ignored
           // URLs so resume runs don't burn cycles retrying them.
           if (mediaStubs && !mediaStubs.shouldAttempt(mediaUrl)) {

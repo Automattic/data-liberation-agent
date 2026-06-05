@@ -25,6 +25,7 @@ import { chromeSignature, stripActiveNavState } from '../../lib/replicate/chrome
 import { assembleResponsiveMobile } from '../../lib/replicate/carry-responsive-assemble.js';
 import { fetchMissingCarriedMedia } from '../../lib/replicate/carry-missing-media.js';
 import { localizeCarryFonts } from '../../lib/replicate/carry-fonts.js';
+import { findExternalAssetRefs } from '../../lib/replicate/carry-cdn-audit.js';
 import { collectCss } from '../../lib/replicate/css-collect.js';
 import { assessBody, readPngHeight, classifyEmptyBodies, type EmptyBody, type PageStat } from '../../lib/screenshot/dynamic-content.js';
 import { loadCarryDesignTokens } from '../../lib/replicate/carry-design-tokens.js';
@@ -552,6 +553,18 @@ export const reconstructPagesCarryHandler: Handler = async (args, ctx) => {
     postContent: assembleResponsiveMobile(w.postContent, responsiveImages, mediaUrlMap),
   }));
 
+  // Self-hosting assertion: after all media/font/link localization, scan the assembled
+  // islands + theme CSS/parts for any asset ref still pointing at an external host. A
+  // fully self-hosted replica should report 0; anything here is a leak to surface in the
+  // run-report (it does NOT flip the verdict — editorial external LINKS are excluded by
+  // construction; this is asset positions only).
+  const cdnAudit = findExternalAssetRefs([
+    ...finalPages.map((p) => p.postContent),
+    ...fontLocalize.files
+      .filter((f) => f.path.endsWith('.css') || f.path.endsWith('.html'))
+      .map((f) => f.content),
+  ]);
+
   // The islands are whole carried page bodies — returning them all inline blows past
   // the MCP response cap on real sites (getsnooz: 1 page ≈ 330KB). When `islandsOutDir`
   // is given, write each island to disk and return PATHS instead, so this tool is
@@ -595,6 +608,9 @@ export const reconstructPagesCarryHandler: Handler = async (args, ctx) => {
     missingMediaFailed: missingMedia.failed,
     fontsLocalized: fontLocalize.downloaded,
     fontsFailed: fontLocalize.failed,
+    residualCdnAssets: cdnAudit.refs.length,
+    residualCdnByHost: cdnAudit.byHost,
+    residualCdnSamples: cdnAudit.samples,
     islandsDir: islandsOutDir ? resolve(islandsOutDir) : undefined,
     pages: pagesResult,
   });

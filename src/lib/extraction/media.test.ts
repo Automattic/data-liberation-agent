@@ -1,8 +1,25 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, existsSync } from 'fs';
 import { join } from 'path';
-import { sanitizeMediaFilename, deriveFilenameFromUrl, downloadMedia, upgradeMediaUrl } from './media.js';
+import { sanitizeMediaFilename, deriveFilenameFromUrl, downloadMedia, upgradeMediaUrl, isFontUrl } from './media.js';
 import { Readable } from 'stream';
+
+describe('isFontUrl', () => {
+  it('detects font files by extension (woff2/woff/ttf/otf/eot), with query/fragment', () => {
+    expect(isFontUrl('https://static.parastorage.com/fonts/v2/x/madefor-text.woff2')).toBe(true);
+    expect(isFontUrl('//static.parastorage.com/fonts/x.woff')).toBe(true);
+    expect(isFontUrl('https://cdn/x.ttf?v=2')).toBe(true);
+    expect(isFontUrl('https://cdn/x.otf#a')).toBe(true);
+  });
+  it('detects Wix /ufonts/ paths even when the basename looks generic', () => {
+    expect(isFontUrl('https://static.wixstatic.com/ufonts/8fbd8c_abc/woff2/file.woff2')).toBe(true);
+  });
+  it('is false for images and non-font assets', () => {
+    expect(isFontUrl('https://static.wixstatic.com/media/abc~mv2.png/v1/fill/w_10/x.png')).toBe(false);
+    expect(isFontUrl('https://cdn/x.jpg')).toBe(false);
+    expect(isFontUrl('https://cdn/x.css')).toBe(false);
+  });
+});
 
 // Build a minimal fetch Response stub that downloadMedia can stream from.
 function stubResponse(contentType: string, body = 'fake-image-bytes'): Response {
