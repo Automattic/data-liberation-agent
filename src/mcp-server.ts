@@ -36,7 +36,6 @@ import { themeScaffoldHandler } from './mcp-server/handlers/theme-scaffold.js';
 import { reconstructPagesHandler } from './mcp-server/handlers/reconstruct-pages.js';
 import { reconstructPagesCarryHandler } from './mcp-server/handlers/reconstruct-pages-carry.js';
 import { blockifyWxrHandler } from './mcp-server/handlers/blockify-wxr.js';
-import { previewStopHandler } from './mcp-server/handlers/preview-stop.js';
 import { screenshotHandler } from './mcp-server/handlers/screenshot.js';
 import { designFoundationScaffoldHandler } from './mcp-server/handlers/design-foundation-scaffold.js';
 import { designFoundationValidateHandler } from './mcp-server/handlers/design-foundation-validate.js';
@@ -320,17 +319,6 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             },
           },
           themeSlug: { type: 'string', description: 'Theme directory name (kebab-case). Required when themeFiles is non-empty. Conventionally <siteSlug>-replica.' },
-        },
-        required: ['outputDir'],
-      },
-    },
-    {
-      name: 'liberate_preview_stop',
-      description: 'Stop a running Playground preview by outputDir.',
-      inputSchema: {
-        type: 'object' as const,
-        properties: {
-          outputDir: { type: 'string', description: 'Path to the extraction output directory.' },
         },
         required: ['outputDir'],
       },
@@ -687,7 +675,6 @@ const handlers: Record<string, Handler> = {
   liberate_preview: previewHandler,
   liberate_install_theme: installThemeHandler,
   liberate_theme_scaffold: themeScaffoldHandler,
-  liberate_preview_stop: previewStopHandler,
   liberate_probe: probeHandler,
   liberate_qa: qaHandler,
   liberate_replicate_inventory: replicateInventoryHandler,

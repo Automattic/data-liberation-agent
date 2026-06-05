@@ -59,11 +59,10 @@ export interface BuildBlueprintOpts {
   blockPlugins?: ReplicaBlockPlugin[];
   themeSlug?: string;
   /**
-   * True when the Playground site already has persisted state on disk (SQLite
-   * + previously-imported content). Skips importWxr / products import steps
-   * to avoid duplicating posts on every restart. Theme file writes still run
-   * idempotently. Caller is responsible for detecting this — see
-   * `isPlaygroundPersisted` in playground-server.
+   * True when the site already has persisted state on disk (previously-imported
+   * content). Skips importWxr / products import steps to avoid duplicating
+   * posts on every restart. Theme file writes still run idempotently.
+   * Caller is responsible for detecting this.
    */
   persisted?: boolean;
 }

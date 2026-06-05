@@ -1975,11 +1975,9 @@ export async function runWatch(opts: WatchOpts): Promise<{ ok: boolean; duration
   events.onPreviewStarting?.();
   let studioSitePath: string | null = null;
   let previewSource: 'studio' | 'playground' | null = null;
-  const { startPreview } = await import('../lib/preview/playground-server.js');
+  const { startPreview } = await import('../lib/preview/studio.js');
   const previewPromise = startPreview({
     outputDir: outDir,
-    detached: true,
-    allowEmptyWxr: true,
   })
     .then((stub) => {
       if (stub.status === 'ready' && stub.url) {
@@ -2776,11 +2774,9 @@ export async function runWatch(opts: WatchOpts): Promise<{ ok: boolean; duration
   } else {
     events.onPhase?.('starting-preview');
     try {
-      const { startPreview } = await import('../lib/preview/playground-server.js');
+      const { startPreview } = await import('../lib/preview/studio.js');
       const reimport = await startPreview({
         outputDir: outDir,
-        detached: true,
-        forceReimport: true,
       });
       if (reimport.status === 'ready' && reimport.url) {
         events.onPreviewReady?.({

@@ -338,8 +338,7 @@ export interface StartStudioOpts {
  * WordPress import.
  */
 /**
- * Studio-only preview entry point (was the Studio-vs-Playground dispatcher in
- * the to-be-deleted playground-server.ts). Hard-requires Studio — no fallback.
+ * Studio-only preview entry point. Hard-requires Studio — no fallback.
  * `isAvailable` is injectable for testing (defaults to the real check).
  */
 export async function startPreview(
