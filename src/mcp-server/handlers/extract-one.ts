@@ -1,10 +1,10 @@
 import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { detect } from '../../lib/detect-platform/index.js';
-import { ExtractionLog } from '../../lib/extraction/extraction-log.js';
+import { ExtractionLog } from '../../lib/resume-state/index.js';
 import { WxrBuilder } from '../../lib/wxr/index.js';
 import { rehydrateBuilderFromWxr } from '../../lib/wxr/index.js';
-import { ImportSession } from '../../lib/extraction/import-session.js';
+import { ImportSession } from '../../lib/resume-state/index.js';
 import { classifyUrl } from '../../lib/extraction/sitemap.js';
 import type { Handler } from '../handler-types.js';
 

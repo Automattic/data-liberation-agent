@@ -1,7 +1,7 @@
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { detect } from '../../lib/detect-platform/index.js';
-import { ExtractionLog } from '../../lib/extraction/extraction-log.js';
+import { ExtractionLog } from '../../lib/resume-state/index.js';
 import { WxrBuilder } from '../../lib/wxr/index.js';
 import { rehydrateBuilderFromWxr } from '../../lib/wxr/index.js';
 import type { Handler } from '../handler-types.js';
@@ -68,7 +68,7 @@ export const extractHandler: Handler = async (args, ctx) => {
     // WordPress-side postmeta injection).
     let screenshotResult: import('../../lib/screenshot/types.js').ScreenshotResult | undefined;
     if (args.screenshots && !args.dryRun) {
-      const { ImportSession } = await import('../../lib/extraction/import-session.js');
+      const { ImportSession } = await import('../../lib/resume-state/index.js');
       // resume:true — continuing the same run the adapter just finished, not
       // starting a new one. Preserves session.json (cursors, counters) so
       // liberate_status reflects state.

@@ -7,7 +7,7 @@ import { platformColor, confidenceBadge, pluralize } from './format.js';
 import { detect, type FullDetectionResult } from '../lib/detect-platform/index.js';
 import { fetchSitemap, classifyUrl } from '../lib/extraction/sitemap.js';
 import { WxrBuilder } from '../lib/wxr/index.js';
-import { ExtractionLog } from '../lib/extraction/extraction-log.js';
+import { ExtractionLog } from '../lib/resume-state/index.js';
 import { godaddyWmAdapter } from '../adapters/godaddy-wm/index.js';
 import { hostingerAdapter } from '../adapters/hostinger/index.js';
 import { hubspotAdapter } from '../adapters/hubspot/index.js';
@@ -244,7 +244,7 @@ function Liberate(props: LiberateProps & { onComplete?: (wxrPath: string | null)
           // cross-referencing against output.wxr / products.jsonl happens on
           // the filesystem (no WordPress-side injection).
           if (screenshots && !dryRun) {
-            const { ImportSession } = await import('../lib/extraction/import-session.js');
+            const { ImportSession } = await import('../lib/resume-state/index.js');
             // resume:true — we're continuing the same run the adapter just ran,
             // not starting a new one. Preserves the session.json the adapter
             // persisted so post-run status reflects actual extraction state.

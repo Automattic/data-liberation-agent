@@ -1,6 +1,6 @@
 import { mkdirSync } from 'node:fs';
 import { fetchSitemap } from '../../lib/extraction/sitemap.js';
-import { ExtractionLog } from '../../lib/extraction/extraction-log.js';
+import { ExtractionLog } from '../../lib/resume-state/index.js';
 import { detect } from '../../lib/detect-platform/index.js';
 import type { Handler } from '../handler-types.js';
 

@@ -4,7 +4,7 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { godaddyWmAdapter } from '../../src/adapters/godaddy-wm/index.js';
 import { WxrBuilder } from '../../src/lib/wxr/index.js';
-import { ExtractionLog } from '../../src/lib/extraction/extraction-log.js';
+import { ExtractionLog } from '../../src/lib/resume-state/index.js';
 import { parseSitemapXml } from '../../src/lib/extraction/sitemap.js';
 
 describe('godaddyWmAdapter', () => {

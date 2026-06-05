@@ -1,7 +1,7 @@
 import { readFileSync, existsSync, mkdirSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { fetchSitemap } from '../lib/extraction/sitemap.js';
-import { ExtractionLog } from '../lib/extraction/extraction-log.js';
+import { ExtractionLog } from '../lib/resume-state/index.js';
 import { runCliScreenshot } from './screenshot.js';
 import type { UrlType } from '../lib/extraction/sitemap.js';
 

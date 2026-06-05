@@ -38,9 +38,9 @@ import type { ExtractedNav } from '../lib/screenshot/nav-extract.js';
 import { createHash } from 'node:crypto';
 import { createInterface } from 'node:readline';
 import { detect } from '../lib/detect-platform/index.js';
-import { ExtractionLog } from '../lib/extraction/extraction-log.js';
+import { ExtractionLog } from '../lib/resume-state/index.js';
 import { WxrBuilder } from '../lib/wxr/index.js';
-import { ImportSession } from '../lib/extraction/import-session.js';
+import { ImportSession } from '../lib/resume-state/index.js';
 import { classifyUrl } from '../lib/extraction/sitemap.js';
 import type { PageExtractedEvent } from '../adapters/shared.js';
 import { godaddyWmAdapter } from '../adapters/godaddy-wm/index.js';
@@ -1511,7 +1511,7 @@ async function flushPendingImports(opts: {
   // the source-of-truth is what's actually on disk + registered in WP, not
   // an in-memory accumulator that may have missed entries.
   try {
-    const { MediaStubStore } = await import('../lib/extraction/media-stubs.js');
+    const { MediaStubStore } = await import('../lib/resume-state/index.js');
     const stubs = MediaStubStore.load(outDir);
     let added = 0;
     for (const [sourceUrl, stub] of stubs.list()) {
@@ -2628,7 +2628,7 @@ export async function runWatch(opts: WatchOpts): Promise<{ ok: boolean; duration
         if (designCaptureCssMediaUrls && designCaptureCssMediaUrls.length > 0) {
           try {
             const { downloadMedia } = await import('../lib/extraction/media.js');
-            const { MediaStubStore } = await import('../lib/extraction/media-stubs.js');
+            const { MediaStubStore } = await import('../lib/resume-state/index.js');
             const { join: joinPath } = await import('node:path');
             const mediaDir = joinPath(outDir, 'media');
             const { mkdirSync: mkdirSyncFn } = await import('node:fs');

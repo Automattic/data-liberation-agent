@@ -1,6 +1,6 @@
 import { join } from 'node:path';
 import { existsSync } from 'node:fs';
-import { ImportSession } from '../../lib/extraction/import-session.js';
+import { ImportSession } from '../../lib/resume-state/index.js';
 import { blockifyWxrFile } from '../../lib/extraction/blockify-wxr.js';
 import type { Handler } from '../handler-types.js';
 

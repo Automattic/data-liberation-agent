@@ -17,9 +17,9 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { runExtractionLoop, type ExtractedPage } from '../../adapters/shared.js';
-import { ExtractionLog } from '../extraction/extraction-log.js';
+import { ExtractionLog } from '../resume-state/index.js';
 import { WxrBuilder } from '../wxr/index.js';
-import { ImportSession } from '../extraction/import-session.js';
+import { ImportSession } from '../resume-state/index.js';
 import { classifyUrl, type UrlType } from '../extraction/sitemap.js';
 import type { WooProduct, WooProductCsvBuilder } from '../import/woo-product-csv.js';
 

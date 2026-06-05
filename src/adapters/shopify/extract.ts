@@ -1,6 +1,6 @@
 import type { WxrBuilder } from '../../lib/wxr/index.js';
-import type { ExtractionLog } from '../../lib/extraction/extraction-log.js';
-import { ImportSession } from '../../lib/extraction/import-session.js';
+import type { ExtractionLog } from '../../lib/resume-state/index.js';
+import { ImportSession } from '../../lib/resume-state/index.js';
 import {
   ShopifyGraphqlClient,
   fetchAllProducts,

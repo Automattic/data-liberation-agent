@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { ExtractionLog } from '../lib/extraction/extraction-log.js';
+import { ExtractionLog } from '../lib/resume-state/index.js';
 import { WxrBuilder } from '../lib/wxr/index.js';
 import {
   connectBrowser,

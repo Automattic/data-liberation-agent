@@ -1,4 +1,4 @@
-import { ExtractionLog } from '../../lib/extraction/extraction-log.js';
+import { ExtractionLog } from '../../lib/resume-state/index.js';
 import type { Handler } from '../handler-types.js';
 
 export const statusHandler: Handler = async (args, ctx) => {

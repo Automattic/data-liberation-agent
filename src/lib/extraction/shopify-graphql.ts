@@ -1,4 +1,4 @@
-import type { ImportSession } from './import-session.js';
+import type { ImportSession } from '../resume-state/index.js';
 
 /**
  * Minimal Shopify Admin GraphQL client.

@@ -1,5 +1,5 @@
 import type { WxrBuilder } from '../../lib/wxr/index.js';
-import type { ExtractionLog } from '../../lib/extraction/extraction-log.js';
+import type { ExtractionLog } from '../../lib/resume-state/index.js';
 import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { slugify, runExtractionLoop, extractMeta, extractTitle, IMAGE_EXTENSIONS } from '../shared.js';
 import { WooProductCsvBuilder } from '../../lib/import/woo-product-csv.js';

@@ -33,7 +33,7 @@ import { dirname, join, resolve } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
-import { MediaStubStore, type MediaStub } from '../extraction/media-stubs.js';
+import { MediaStubStore, type MediaStub } from '../resume-state/index.js';
 
 const execFileAsync = promisify(execFile);
 

@@ -1,5 +1,5 @@
 import type { WxrBuilder } from '../../lib/wxr/index.js';
-import type { ExtractionLog } from '../../lib/extraction/extraction-log.js';
+import type { ExtractionLog } from '../../lib/resume-state/index.js';
 import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { classifyUrl } from '../../lib/extraction/sitemap.js';
 import { slugify, launchBrowser, runExtractionLoop } from '../shared.js';

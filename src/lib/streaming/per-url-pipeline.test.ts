@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { processOneUrl } from './per-url-pipeline.js';
-import { ExtractionLog } from '../extraction/extraction-log.js';
+import { ExtractionLog } from '../resume-state/index.js';
 import { WxrBuilder } from '../wxr/index.js';
 import type { ExtractedPage } from '../../adapters/shared.js';
 

@@ -22,7 +22,7 @@
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { MediaStubStore } from '../src/lib/extraction/media-stubs.js';
+import { MediaStubStore } from '../src/lib/resume-state/index.js';
 
 const [outputDir, studioSitePath] = process.argv.slice(2);
 if (!outputDir || !studioSitePath) {

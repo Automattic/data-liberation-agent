@@ -1,11 +1,11 @@
 import * as cheerio from 'cheerio';
 import type { WxrBuilder, WxrItem } from '../lib/wxr/index.js';
-import type { ExtractionLog } from '../lib/extraction/extraction-log.js';
-import type { ImportSession } from '../lib/extraction/import-session.js';
+import type { ExtractionLog } from '../lib/resume-state/index.js';
+import type { ImportSession } from '../lib/resume-state/index.js';
 import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { classifyUrl } from '../lib/extraction/sitemap.js';
 import { downloadMedia, isFontUrl } from '../lib/extraction/media.js';
-import { MediaStubStore } from '../lib/extraction/media-stubs.js';
+import { MediaStubStore } from '../lib/resume-state/index.js';
 import type { WooProductCsvBuilder, WooProduct } from '../lib/import/woo-product-csv.js';
 import { AdaptiveTuner, TUNER_DEFAULTS } from '../lib/extraction/adaptive-tuner.js';
 import type { AdaptiveTunerConfig, TunerState } from '../lib/extraction/adaptive-tuner.js';

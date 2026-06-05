@@ -20,7 +20,7 @@
  */
 import { join, resolve } from 'node:path';
 import { downloadMedia } from '../extraction/media.js';
-import { MediaStubStore } from '../extraction/media-stubs.js';
+import { MediaStubStore } from '../resume-state/index.js';
 import { mediaIdOf } from './responsive-image-rewrite.js';
 
 const HTTP_URL = /^https?:\/\//i;

@@ -10,7 +10,7 @@ vi.mock('../../lib/detect-platform/index.js', () => ({
 
 import { extractHandler } from './extract.js';
 import { WxrBuilder } from '../../lib/wxr/index.js';
-import { ExtractionLog } from '../../lib/extraction/extraction-log.js';
+import { ExtractionLog } from '../../lib/resume-state/index.js';
 import type { HandlerContext, ToolResult } from '../handler-types.js';
 import type { PlatformAdapter } from '../../types.js';
 
