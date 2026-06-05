@@ -98,6 +98,11 @@ Media references are deduped and uploaded to the WP media library. Uploaded URLs
 
 Runs automatically during or after extract: desktop+mobile screenshots, `palette.json` / `typography.json` / `breakpoints.json`, and `html/<slug>.html` per URL. Clustering in the blocks path runs off the already-saved `html/<slug>.html` — no re-navigation.
 
+**Capture scope depends on the path you just chose** (a second reason the checkpoint fires before capture, not after):
+
+- **blocks** → a *representative sample* is enough. The blocks path clusters off a sample of `html/<slug>.html` and live-fetches the rest on a cache miss, so partial capture is fine. Sample **across** archetypes (homepage + a few of each kind), not the first N sitemap URLs — and make sure the **homepage** is in the sample.
+- **theme** → the carry path reconstructs **every page individually from its own `html/<slug>.html`**, so capture **full HTML for every page in the carry set up front**. A sample forces a re-capture once `replicate-theme` runs. For a blog-dominant site where the theme replica carries only the custom/marketing pages (posts/news staying native), capture those custom pages in full and skip per-post capture — but you must know that *before* capturing, which is why the path is chosen first.
+
 Default concurrency: 6. Configure via `--screenshots-concurrency N` or `--concurrency N`.
 
 ### Step 6 — Products → CSV

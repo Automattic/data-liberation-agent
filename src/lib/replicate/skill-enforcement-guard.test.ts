@@ -8,7 +8,7 @@ import { resolve } from 'node:path';
 // docs/superpowers/specs/2026-05-28-enforce-faithful-recreation-design.md.
 const read = (p: string) => readFileSync(resolve(process.cwd(), p), 'utf8');
 const designQa = read('skills/design-qa/SKILL.md');
-const replicate = read('skills/replicate/SKILL.md');
+const replicate = read('skills/replicate-with-blocks/SKILL.md');
 const liberate = read('skills/liberate/SKILL.md');
 
 describe('skill enforcement — escape hatches stay closed', () => {
@@ -32,9 +32,15 @@ describe('skill enforcement — measured-gate anchors stay present', () => {
     expect(replicate).toMatch(/Visual-parity gate.*\*\*Hard\*\*/);
     expect(replicate).toMatch(/known gap/i);
   });
-  it('all three skills route exhaustion to the operator (escalate-then-ask)', () => {
+  it('all three skills route decisions to the operator (escalate-then-ask)', () => {
     for (const txt of [designQa, replicate, liberate]) {
       expect(txt).toMatch(/operator/i);
+    }
+    // The reconstruct loop's exhaustion handling (escalation ladder / circuit-breaker)
+    // lives in the reconstruct-owning skills, NOT the liberate front door — liberate
+    // is now a thin detect→discover→path-checkpoint→dispatch dispatcher, so its
+    // operator hand-off is the path question, not a reconstruct circuit-breaker.
+    for (const txt of [designQa, replicate]) {
       expect(txt).toMatch(/escalation ladder|circuit-breaker/i);
     }
   });
