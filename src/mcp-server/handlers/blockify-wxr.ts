@@ -31,6 +31,11 @@ export const blockifyWxrHandler: Handler = async (args, ctx) => {
     });
   }
 
-  const result = blockifyWxrFile(wxrPath, adapter.blocks);
-  return ctx.textResult({ wxrPath, platform, ...result });
+  try {
+    const result = blockifyWxrFile(wxrPath, adapter.blocks);
+    return ctx.textResult({ wxrPath, platform, ...result });
+  } catch (err) {
+    // A corrupt/unreadable WXR shouldn't surface as an unhandled throw.
+    return ctx.errorResult(`blockify failed for ${wxrPath}: ${err instanceof Error ? err.message : String(err)}`);
+  }
 };

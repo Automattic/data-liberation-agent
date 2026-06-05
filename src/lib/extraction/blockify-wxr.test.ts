@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, rmSync } from 'node:fs';
+import { mkdirSync, rmSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { WxrBuilder, type WxrItem } from './wxr-builder.js';
 import { readWxr } from './wxr-reader.js';
@@ -59,7 +59,7 @@ describe('blockifyWxrFile — lossless round-trip', () => {
   afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
   it('converts post/page bodies and preserves every other item (incl. nav menu)', () => {
-    const wxr = new WxrBuilder({ title: 'Demo', url: 'https://demo.test', description: 'd', language: 'en-US' });
+    const wxr = new WxrBuilder({ title: 'Demo', url: 'https://demo.test', description: 'd', language: 'en-US' }, { contentStatus: 'publish' });
     wxr.addCategory({ slug: 'news', name: 'News' });
     wxr.addPost({ title: 'Convertible', slug: 'conv', content: '<div>CONVERT this body</div>', sourceUrl: 'https://demo.test/conv', categories: ['news'], seoTitle: 'SEO conv' });
     wxr.addPost({ title: 'Plain', slug: 'plain', content: '<p>nothing special</p>', sourceUrl: 'https://demo.test/plain' });
@@ -74,9 +74,17 @@ describe('blockifyWxrFile — lossless round-trip', () => {
     const beforeCounts = countByType(before.items);
     expect(beforeCounts.nav_menu_item).toBe(1); // sanity: nav round-tripped through serialize
 
+    // CRITICAL: status must survive. readWxr doesn't parse <wp:status> and a
+    // no-opts builder defaults to draft, so blockify must recover + keep publish.
+    const publishBefore = (readFileSync(wxrPath, 'utf8').match(/<wp:status>publish<\/wp:status>/g) || []).length;
+    expect(publishBefore).toBeGreaterThan(0); // posts/pages/nav serialize as publish (only attachments are 'inherit')
+
     const res = blockifyWxrFile(wxrPath, RECIPE);
     expect(res.converted).toBe(1); // only the convertible post
     expect(res.postsAndPages).toBe(3);
+
+    const publishAfter = (readFileSync(wxrPath, 'utf8').match(/<wp:status>publish<\/wp:status>/g) || []).length;
+    expect(publishAfter).toBe(publishBefore); // preserved — NOT silently downgraded to draft
 
     const after = readWxr(wxrPath);
     // Nothing dropped: identical per-type counts (incl. nav_menu_item) + categories.

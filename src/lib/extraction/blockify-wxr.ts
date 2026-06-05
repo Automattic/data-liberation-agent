@@ -1,3 +1,4 @@
+import { readFileSync, renameSync } from 'node:fs';
 import { WxrBuilder, type WxrItem } from './wxr-builder.js';
 import { readWxr } from './wxr-reader.js';
 import { applyBlockRecipe } from '../replicate/apply-block-recipe.js';
@@ -46,8 +47,16 @@ export function blockifyWxrFile(
   wxrPath: string,
   blocks: AdapterBlocks,
 ): { converted: number; postsAndPages: number } {
+  // Preserve the WXR's existing post/page status. `readWxr` does NOT parse
+  // `<wp:status>` and `WxrBuilder` defaults `contentStatus` to 'draft', so
+  // re-serializing without this would silently downgrade a `publish` WXR to all
+  // drafts — breaking nav resolution after import. Extraction sets a uniform
+  // status, so detecting any `publish` in the file recovers it.
+  const raw = readFileSync(wxrPath, 'utf8');
+  const contentStatus = /<wp:status>\s*publish\s*<\/wp:status>/.test(raw) ? 'publish' : 'draft';
+
   const data = readWxr(wxrPath);
-  const wxr = new WxrBuilder(data.site);
+  const wxr = new WxrBuilder(data.site, { contentStatus });
   wxr.authors = data.authors;
   wxr.categories = data.categories;
   wxr.tags = data.tags;
@@ -55,12 +64,27 @@ export function blockifyWxrFile(
   wxr.comments = data.comments;
   wxr.redirects = data.redirects;
   wxr.items = data.items; // keep EVERYTHING (incl nav_menu_item) — do NOT filter
+
+  // Reseed `_nextId` past the largest id across ALL collections (mirror
+  // rehydrateBuilderFromWxr) so serialize's inline-term backfill can't mint an
+  // id that collides with an existing author/category/tag/term/comment.
   let maxId = 0;
   for (const it of wxr.items) maxId = Math.max(maxId, it.id);
+  for (const a of wxr.authors) maxId = Math.max(maxId, a.id);
+  for (const c of wxr.categories) maxId = Math.max(maxId, c.id);
+  for (const t of wxr.tags) maxId = Math.max(maxId, t.id);
+  for (const t of wxr.terms) maxId = Math.max(maxId, t.id);
+  for (const c of wxr.comments) maxId = Math.max(maxId, c.id);
   wxr._nextId = maxId + 1;
 
   const postsAndPages = wxr.items.filter((i) => i.type === 'post' || i.type === 'page').length;
   const converted = blockifyWxrBodies(wxr.items, blocks);
-  if (converted > 0) wxr.serialize(wxrPath);
+  if (converted > 0) {
+    // Atomic write: serialize to a temp path then rename, so a crash mid-write
+    // can't truncate/corrupt the existing output.wxr (which we're overwriting).
+    const tmp = `${wxrPath}.blockify.tmp`;
+    wxr.serialize(tmp);
+    renameSync(tmp, wxrPath);
+  }
   return { converted, postsAndPages };
 }

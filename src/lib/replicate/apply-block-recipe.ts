@@ -22,6 +22,10 @@ export function applyBlockRecipe(html: string, blocks: AdapterBlocks | undefined
 }
 
 function composeFromRecipes(html: string, recipes: BlockRecipe[], ctx: BlockRecipeContext): string | null {
+  // Idempotency guard: already-blockified content (e.g. a second blockify run)
+  // would otherwise have its bare elements re-wrapped as core/html islands,
+  // losing block semantics. Block comments aren't matched by the table, so skip.
+  if (/<!--\s*wp:/.test(html)) return null;
   const $ = cheerio.load(html, null, false);
   const out: string[] = [];
   $.root().children().each((_, node) => {
