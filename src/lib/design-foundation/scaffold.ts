@@ -320,6 +320,21 @@ function applyCssVariableTokens(
     .sort((a, b) => (b.urls - a.urls) || a.name.localeCompare(b.name));
 
   const assigned = new Set<'accent' | 'surface' | 'text'>();
+
+  // Authority gate. OVERRIDING a palette-derived role requires a real cross-page
+  // frequency signal: a token must be observed across ≥2 sampled pages to be
+  // trusted over the palette's lightness-extreme. When CSS was sampled from a
+  // single page (e.g. a Wix site serving its stylesheets cross-origin → only the
+  // one same-origin page is readable → sampledUrls:1, every token urls:1), a
+  // low-confidence component token (e.g. --wst-button-color-text-secondary) must
+  // NOT clobber the palette surface/text. FILLING a role the palette left null is
+  // still allowed (better than nothing); only OVERRIDE of a confident pick is gated.
+  const trustOverride = (parsed.sampledUrls ?? 0) >= 2;
+  if (!trustOverride) {
+    if (buckets.surface.base !== null) assigned.add('surface');
+    if (buckets.text.default !== null) assigned.add('text');
+  }
+
   for (const v of ranked) {
     for (const [pattern, target, role] of CSS_VAR_ROLE_MATCHERS) {
       if (!pattern.test(v.name)) continue;

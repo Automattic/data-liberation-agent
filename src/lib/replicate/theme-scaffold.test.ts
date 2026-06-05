@@ -56,8 +56,28 @@ describe('buildThemeScaffold', () => {
       'parts/header.html',
       'style.css',
       'templates/index.html',
+      'templates/page.html',
+      'templates/single.html',
       'theme.json',
     ]);
+  });
+
+  it('emits base single.html (post title + content) and a page.html fallback', () => {
+    const files = buildThemeScaffold({ foundation: FOUNDATION_FIXTURE, themeSlug: 'getsnooz-com-replica' });
+    const single = files.find((f) => f.relativePath === 'templates/single.html');
+    const page = files.find((f) => f.relativePath === 'templates/page.html');
+    // Without single.html, imported posts fall through to index.html (no
+    // post-title) and render titleless — the gap hit on the corneliusholmes run.
+    expect(single, 'single.html must be emitted').toBeDefined();
+    expect(page, 'page.html fallback must be emitted').toBeDefined();
+    // single: post title + body inside the header/footer shell.
+    expect(single!.content).toContain('wp:post-title');
+    expect(single!.content).toContain('wp:post-content');
+    expect(single!.content).toContain('"slug":"header"');
+    expect(single!.content).toContain('"slug":"footer"');
+    // page fallback: title + content.
+    expect(page!.content).toContain('wp:post-title');
+    expect(page!.content).toContain('wp:post-content');
   });
 
   it('style.css carries a valid theme header', () => {

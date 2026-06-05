@@ -260,6 +260,12 @@ export function buildThemeScaffold(opts: ThemeScaffoldOpts): ReplicaFile[] {
     // has none). Targets the generic .is-gallery-scroller class — site-agnostic.
     { relativePath: 'assets/gallery-scroller.js', content: buildGalleryScrollerJs() },
     { relativePath: 'templates/index.html', content: buildIndexTemplate() },
+    // Base archetype templates so imported posts/pages render with a title (not
+    // titleless through index.html). A reconstructed page emits its own
+    // `templates/page-<slug>.html` which takes precedence over this generic
+    // `page.html`; `single.html` serves every imported post.
+    { relativePath: 'templates/single.html', content: buildSingleTemplate() },
+    { relativePath: 'templates/page.html', content: buildGenericPageTemplate() },
     { relativePath: 'parts/header.html', content: headerHtml },
     { relativePath: 'parts/footer.html', content: footerHtml },
     // Header utility-icon SVG assets (shipped as files; referenced via core/image
@@ -1039,6 +1045,53 @@ function buildIndexTemplate(): string {
 
 <!-- wp:group {"tagName":"main","layout":{"type":"constrained"}} -->
 <main class="wp-block-group">
+<!-- wp:post-content {"layout":{"type":"constrained"}} /-->
+</main>
+<!-- /wp:group -->
+
+<!-- wp:template-part {"slug":"footer","tagName":"footer"} /-->
+`;
+}
+
+// -- templates/single.html + page.html ---------------------------------------
+
+/**
+ * Base single-post template: header part → title + date + featured image +
+ * post-content → footer part. Without this, imported posts fall through to
+ * `index.html` (which has no `post-title`) and render titleless. Padding uses
+ * explicit rem (not spacing presets, which the scaffold's theme.json may omit).
+ */
+function buildSingleTemplate(): string {
+  return `<!-- wp:template-part {"slug":"header","tagName":"header"} /-->
+
+<!-- wp:group {"tagName":"main","layout":{"type":"constrained"},"style":{"spacing":{"padding":{"top":"3rem","bottom":"4rem"},"blockGap":"1.25rem"}}} -->
+<main class="wp-block-group" style="padding-top:3rem;padding-bottom:4rem">
+<!-- wp:post-title {"level":1} /-->
+
+<!-- wp:post-date /-->
+
+<!-- wp:post-featured-image {"isLink":false} /-->
+
+<!-- wp:post-content {"layout":{"type":"constrained"}} /-->
+</main>
+<!-- /wp:group -->
+
+<!-- wp:template-part {"slug":"footer","tagName":"footer"} /-->
+`;
+}
+
+/**
+ * Generic page fallback: header part → title + post-content → footer part. A
+ * reconstructed page emits its own `templates/page-<slug>.html` (higher
+ * precedence); this only renders a page that has no slug-specific template.
+ */
+function buildGenericPageTemplate(): string {
+  return `<!-- wp:template-part {"slug":"header","tagName":"header"} /-->
+
+<!-- wp:group {"tagName":"main","layout":{"type":"constrained"},"style":{"spacing":{"padding":{"top":"3rem","bottom":"4rem"},"blockGap":"1.25rem"}}} -->
+<main class="wp-block-group" style="padding-top:3rem;padding-bottom:4rem">
+<!-- wp:post-title {"level":1} /-->
+
 <!-- wp:post-content {"layout":{"type":"constrained"}} /-->
 </main>
 <!-- /wp:group -->

@@ -252,7 +252,9 @@ export async function installMediaForUrl(opts: MediaInstallOpts): Promise<MediaI
     result.installed.push({
       sourceUrl: ok.sourceUrl,
       postId: ok.postId,
-      localUrl: ok.localUrl,
+      // Prefer the store's normalized (root-relative) localUrl so the run-wide
+      // rewrite map is port-independent; fall back to the raw upload URL.
+      localUrl: stub?.localUrl ?? ok.localUrl,
       localPath: stub?.localPath ?? '',
     });
   }

@@ -65,12 +65,17 @@ Read each skill's SKILL.md before using it.
 |---|---|
 | `design-foundations` | Step 1 — if `design-foundation.json` or `design.md` are missing |
 | `creating-themes` | Step 1 — emits `theme.json`, `style.css`, `functions.php`, parts skeleton, base templates, self-hosted fonts |
-| `generating-patterns` | Step 4 — one builder per cluster representative (fan-out, concurrency-capped) |
+| `generating-patterns` | Step 4 — one builder per cluster representative (fan-out, concurrency-capped). SUPPLEMENTARY — skip when `liberate_reconstruct_pages` (Step 5) covers every page (the default) |
 | `compose-page-blocks` | Step 5 — misfit pages only (post-compose sanity check flagged them as unmatched) |
 | `design-qa` | Step 7 — visual QA loop after install |
 | `editing-themes` | Step 7 — apply fix directives from `design-qa` |
 
 ## The 7-step flow
+
+> **Page path is deterministic-first.** `liberate_reconstruct_pages` (Step 5) is the PRIMARY, self-contained page path: it captures each page's OWN computed-style specs, reconstructs gated block markup, and installs per-page patterns + templates. It does **not** consume `cluster-map.json` or the Step 3/4 spec+builder artifacts. So in the default flow:
+> - **Step 2 (cluster) is INFORMATIONAL** — it surfaces sitewide-shared chrome and an archetype map for the run-report, but does not gate reconstruction. Where the layout signature is unreliable (e.g. Wix serves CSS cross-origin, collapsing nearly every page to one signature) clustering is near-useless — that's expected, and fine; `reconstruct_pages` still works per-page.
+> - **Steps 3–4 (per-cluster specs → `generating-patterns` builder fan-out) are SUPPLEMENTARY.** Skip the fan-out when `reconstruct_pages` covers every page (the default). Reach for it only when reconstruct leaves a real gap (a bespoke section it can't map) or is unavailable (legacy `compose-instantiate` path).
+> - Header/footer chrome comes from `liberate_theme_scaffold` (Step 1), not the builders.
 
 ### Step 1 — Foundation + theme scaffold
 
@@ -124,7 +129,9 @@ Spec files are the contract between extraction and pattern generation. Each spec
 
 Sitewide-shared sections (header, footer, a recurring CTA band that appears identically across clusters) are identified here and built once — deduplicated before builder dispatch.
 
-### Step 4 — Build (fan-out)
+### Step 4 — Build (fan-out) — SUPPLEMENTARY (skip when `reconstruct_pages` covers all pages)
+
+> **Default flow skips this.** Page content is reconstructed per-page in Step 5 (`liberate_reconstruct_pages`), not from cluster skeletons. Run this fan-out ONLY when reconstruct can't map a bespoke section (needs a custom builder) or is unavailable.
 
 Invoke one `generating-patterns` builder **per cluster representative**. Builders are run in parallel, concurrency-capped to ~4–6. On Codex/Gemini, run sequentially.
 

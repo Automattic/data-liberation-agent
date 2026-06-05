@@ -3,6 +3,25 @@ import { join, dirname } from 'path';
 
 export type MediaStatus = 'awaiting' | 'success' | 'error' | 'ignored';
 
+/**
+ * Normalize a WP uploads URL to a root-relative path by stripping any
+ * `scheme://host[:port]` origin. The local upload URL is produced from the WP
+ * site's home URL at install time (e.g. `http://localhost:8886/wp-content/...`);
+ * persisting that absolute, PORT-bearing URL makes it stale the moment the
+ * replica is served from a different Studio site/port — the next run rewrites
+ * section markup to a dead `localhost:<oldport>` URL → 404. A root-relative
+ * `/wp-content/uploads/...` resolves on whatever origin serves the page, so it
+ * survives a site/port (or host) change. Non-uploads URLs and already-relative
+ * paths pass through untouched.
+ */
+export function toRootRelativeUploadUrl(url: string): string {
+  if (!url) return url;
+  const marker = '/wp-content/uploads/';
+  const i = url.indexOf(marker);
+  if (i <= 0) return url; // not an uploads URL, or already root-relative (marker at index 0)
+  return url.slice(i);
+}
+
 export interface MediaStub {
   status: MediaStatus;
   attempts: number;
@@ -58,6 +77,12 @@ export class MediaStubStore {
       try {
         const loaded = JSON.parse(readFileSync(storePath, 'utf8')) as StoreData;
         if (loaded.version === 1 && loaded.stubs) {
+          // Heal localUrls persisted as absolute (PORT-bearing) URLs by older
+          // runs — a stub written against a prior Studio site/port would
+          // otherwise rewrite this run's markup to a dead localhost:<oldport>.
+          for (const stub of Object.values(loaded.stubs)) {
+            if (stub.localUrl) stub.localUrl = toRootRelativeUploadUrl(stub.localUrl);
+          }
           return new MediaStubStore(storePath, loaded, maxAttempts);
         }
       } catch {
@@ -156,7 +181,8 @@ export class MediaStubStore {
     if (!prev) return;
     this.data.stubs[url] = {
       ...prev,
-      localUrl,
+      // Store root-relative so the mapping survives a Studio site/port change.
+      localUrl: toRootRelativeUploadUrl(localUrl),
       updatedAt: new Date().toISOString(),
     };
     this.save();

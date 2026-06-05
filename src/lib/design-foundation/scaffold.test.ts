@@ -319,4 +319,41 @@ describe('scaffoldDesignFoundation — :root CSS variable tokens', () => {
     const f = scaffoldDesignFoundation(dir, { origin: 'https://example.com' });
     expect(f.inputsDigest?.cssVariables).toMatch(/^sha256:/);
   });
+
+  it('does NOT let a single-page css-var override the palette surface/text extremes (Wix cross-origin case)', () => {
+    // Wix serves stylesheets cross-origin, so the aggregator can read only the
+    // one same-origin page → sampledUrls:1 and every token carries urls:1. The
+    // only :root tokens captured are component-internal (button/fill SECONDARY),
+    // NOT real page bg/text tokens. With no cross-page frequency signal, these
+    // must NOT clobber the palette's lightness-extreme surface (#ffffff) / text
+    // (#000000) — the recurring color-pollution failure mode.
+    const dir = setupOutputDir('cssvar-degenerate');
+    writeStandardInputs(dir, {
+      palette: {
+        version: 1,
+        sampledUrls: 1,
+        colors: [
+          { hex: '#ffffff', count: 9, urls: 1 },
+          { hex: '#000000', count: 2, urls: 1 },
+          { hex: '#5b7c88', count: 1, urls: 1 },
+        ],
+      },
+    });
+    writeCssVariables(
+      dir,
+      [
+        { name: '--wst-color-fill-background-secondary', value: 'rgb(240,237,237)', isColor: true, urls: 1 },
+        { name: '--wst-button-color-text-secondary', value: 'rgb(137,157,163)', isColor: true, urls: 1 },
+        { name: '--wst-button-color-border-primary', value: 'rgb(137,157,163)', isColor: true, urls: 1 },
+      ],
+      1, // sampledUrls=1 — degenerate, no cross-page authority
+    );
+    const f = scaffoldDesignFoundation(dir, { origin: 'https://example.com' });
+    // Palette extremes survive — protected from the 1-page component tokens.
+    expect(f.color?.surface?.base?.value).toBe('#ffffff');
+    expect(f.color?.text?.default?.value).toBe('#000000');
+    // accent.primary has no palette competition (always null from pixels), so a
+    // token still FILLS it — fill is allowed, only OVERRIDE is gated.
+    expect(f.color?.accent?.primary?.value).toBe('rgb(137,157,163)');
+  });
 });

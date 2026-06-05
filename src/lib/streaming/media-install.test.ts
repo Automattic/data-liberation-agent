@@ -189,7 +189,8 @@ describe('installMediaForUrl', () => {
         {
           sourceUrl: 'https://cdn/a.jpg',
           postId: 42,
-          localUrl: 'http://localhost:8882/wp-content/uploads/2024/01/a.jpg',
+          // Stored + surfaced root-relative (port-independent) by the stub store.
+          localUrl: '/wp-content/uploads/2024/01/a.jpg',
           localPath: filePath,
         },
       ]);
@@ -219,7 +220,9 @@ describe('installMediaForUrl', () => {
       });
 
       const store = MediaStubStore.load(outputDir);
-      expect(store.get('https://cdn/b.jpg')?.localUrl).toBe('http://localhost:8882/wp-content/uploads/2024/01/b.jpg');
+      // PHP returns an absolute URL; the stub store persists it root-relative
+      // so the mapping survives a Studio site/port change.
+      expect(store.get('https://cdn/b.jpg')?.localUrl).toBe('/wp-content/uploads/2024/01/b.jpg');
       expect(store.get('https://cdn/b.jpg')?.wpPostId).toBe(7);
     } finally {
       rmSync(outputDir, { recursive: true, force: true });
@@ -417,7 +420,7 @@ describe('installMediaForUrl', () => {
       expect(result.installed[0]).toMatchObject({
         sourceUrl: 'https://cdn/a.jpg',
         postId: 55,
-        localUrl: 'http://127.0.0.1:9400/wp-content/uploads/2026/04/a.jpg',
+        localUrl: '/wp-content/uploads/2026/04/a.jpg',
       });
 
       const [bin, args] = exec.mock.calls[0];
@@ -429,7 +432,7 @@ describe('installMediaForUrl', () => {
 
       const store = MediaStubStore.load(outputDir);
       expect(store.get('https://cdn/a.jpg')?.wpPostId).toBe(55);
-      expect(store.get('https://cdn/a.jpg')?.localUrl).toBe('http://127.0.0.1:9400/wp-content/uploads/2026/04/a.jpg');
+      expect(store.get('https://cdn/a.jpg')?.localUrl).toBe('/wp-content/uploads/2026/04/a.jpg');
     } finally {
       rmSync(outputDir, { recursive: true, force: true });
     }
