@@ -27,7 +27,7 @@ import { buildPageReconstruction } from '../../lib/replicate/reconstruct-pages.j
 import { buildPageLinkMap } from '../../lib/replicate/page-link-map.js';
 import { installRunMediaMap } from '../../lib/replicate/run-media-map.js';
 import { BlockFixerClient } from '../../lib/streaming/block-fixer-client.js';
-import { downloadMedia } from '../../lib/extraction/media.js';
+import { downloadMedia } from '../../lib/media-fetch/index.js';
 import { downloadSectionMedia } from '../../lib/replicate/download-section-media.js';
 import { MediaStubStore } from '../../lib/resume-state/index.js';
 import { deriveInstallThemeSlug } from './install-theme.js';

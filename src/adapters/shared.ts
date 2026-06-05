@@ -4,7 +4,7 @@ import type { ExtractionLog } from '../lib/resume-state/index.js';
 import type { ImportSession } from '../lib/resume-state/index.js';
 import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { classifyUrl } from '../lib/extraction/sitemap.js';
-import { downloadMedia, isFontUrl } from '../lib/extraction/media.js';
+import { downloadMedia, isFontUrl } from '../lib/media-fetch/index.js';
 import { MediaStubStore } from '../lib/resume-state/index.js';
 import type { WooProductCsvBuilder, WooProduct } from '../lib/import/woo-product-csv.js';
 import { AdaptiveTuner, TUNER_DEFAULTS } from '../lib/extraction/adaptive-tuner.js';

@@ -12,7 +12,7 @@
 import { mkdirSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { absolutizeFontUrl, fontFilename, type ParsedFontFace, type LocalFontFace } from './font-capture.js';
-import { safeFetch } from '../extraction/safe-fetch.js';
+import { safeFetch } from '../media-fetch/index.js';
 
 export interface DownloadFontsOpts {
   /** Absolute path to the theme root (e.g. output/<site>/theme). */

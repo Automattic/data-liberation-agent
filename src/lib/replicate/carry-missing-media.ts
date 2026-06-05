@@ -19,7 +19,7 @@
  * `fetchMissingCarriedMedia` is the thin I/O glue (mirrors adapters/shared.ts).
  */
 import { join, resolve } from 'node:path';
-import { downloadMedia } from '../extraction/media.js';
+import { downloadMedia } from '../media-fetch/index.js';
 import { MediaStubStore } from '../resume-state/index.js';
 import { mediaIdOf } from './responsive-image-rewrite.js';
 

@@ -25,7 +25,7 @@ import { parseFontFaces, consolidateFontFaces, matchCapturedFamily } from '../..
 import { downloadFonts } from '../../lib/replicate/font-capture-download.js';
 import { findFreeReplacement, fallbackReplacement, firstFamilyToken } from '../../lib/replicate/font-substitution.js';
 import { downloadReplacementFont } from '../../lib/replicate/font-substitution-download.js';
-import { safeFetch } from '../../lib/extraction/safe-fetch.js';
+import { safeFetch } from '../../lib/media-fetch/index.js';
 import { sampleFooterColor, sampleImageColor, nearestToken, brightness, type PaletteToken } from '../../lib/replicate/footer-color.js';
 
 interface ScaffoldArgs {

@@ -21,7 +21,7 @@
  */
 import { mkdirSync, writeFileSync, existsSync, copyFileSync } from 'node:fs';
 import { join, relative, dirname } from 'node:path';
-import { safeFetch } from '../extraction/safe-fetch.js';
+import { safeFetch } from '../media-fetch/index.js';
 
 const FONT_EXT = /\.(woff2|woff|ttf|otf|eot)(?:[?#]|$)/i;
 // @font-face has no nested braces, so [^{}]* safely bounds one block (multi-line ok).

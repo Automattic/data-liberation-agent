@@ -14,7 +14,7 @@ import { mkdirSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { LocalFontFace } from './font-capture.js';
 import type { FreeFontReplacement } from './font-substitution.js';
-import { safeFetch } from '../extraction/safe-fetch.js';
+import { safeFetch } from '../media-fetch/index.js';
 
 export interface DownloadReplacementOpts {
   /** Absolute path to the theme root (e.g. output/<site>/theme). */

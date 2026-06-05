@@ -1,7 +1,7 @@
 import { readFileSync, existsSync, appendFileSync } from 'fs';
 import { dirname, join, basename, extname } from 'path';
 import { readWxr } from '../wxr/index.js';
-import { deriveFilenameFromUrl, extensionFromContentType } from '../extraction/media.js';
+import { deriveFilenameFromUrl, extensionFromContentType } from '../media-fetch/index.js';
 import { WpRestClient } from './wp-rest-client.js';
 import { WooCommerceClient } from './woo-rest-client.js';
 import { readProductsCsv } from './woo-csv-reader.js';

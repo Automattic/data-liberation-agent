@@ -2627,7 +2627,7 @@ export async function runWatch(opts: WatchOpts): Promise<{ ok: boolean; duration
         // same installMediaForUrl helper used for per-URL <img> media.
         if (designCaptureCssMediaUrls && designCaptureCssMediaUrls.length > 0) {
           try {
-            const { downloadMedia } = await import('../lib/extraction/media.js');
+            const { downloadMedia } = await import('../lib/media-fetch/index.js');
             const { MediaStubStore } = await import('../lib/resume-state/index.js');
             const { join: joinPath } = await import('node:path');
             const mediaDir = joinPath(outDir, 'media');
