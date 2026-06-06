@@ -21,6 +21,7 @@ import { rewriteInternalLinks, type InternalLinkMap } from '../streaming/interna
 import type { SectionSpec } from './section-extract.js';
 import type { PaletteToken } from './footer-color.js';
 import type { FallbackDiagnostic } from './fallback-diagnostic.js';
+import { computeTemplateVariant, type TemplateVariant } from './page-template-plan.js';
 
 /** A theme file to write, path relative to the theme root. */
 export interface ReconstructedFile {
@@ -51,6 +52,12 @@ export interface PageReconstructionResult {
   styledFallbackSections: number;
   /** Structured fallback records (#1), one per core/html island emitted. */
   fallbackDiagnostics: FallbackDiagnostic[];
+  /** The page-template variant (drives which collapsed template the page uses). */
+  variant: TemplateVariant;
+  /** The rendered page-template content (header→main→post-content→footer) — the
+   *  handler writes this as templates/page-<slug>.html only when the collapse is
+   *  toggled OFF; otherwise the planner emits the deduped variant template. */
+  template: string;
 }
 
 /** Swap the pattern's `get_theme_file_uri()` PHP asset refs for literal
@@ -185,29 +192,14 @@ export function buildPageReconstruction(
     ],
   });
 
-  // Full-width vs constrained DEFERS TO THE SOURCE: a page with a full-bleed
-  // section (edge-to-edge hero/media in the source) renders full-width; a page
-  // whose content is boxed renders constrained. Chrome sections are excluded.
-  const fullWidth = sections.some(
-    (s) => s.fullBleed && s.interactionModel !== 'footer' && s.interactionModel !== 'nav',
-  );
-  // A cover-hero page wires the transparent overlay header ONLY when the source
-  // hero sits flush at the page top — i.e. the source header is out-of-flow,
-  // floating OVER the hero (heroTop ≈ 0). When the hero is pushed DOWN by roughly
-  // a header height, the source renders a SOLID header ABOVE the hero, so the
-  // replica must too (corneliusholmes: heroTop 93 → solid, not the old
-  // heroIsCover-always-overlay heuristic that put a transparent bar over a hero
-  // the source kept below a white header). Derived from captured geometry, generic.
-  const bodyForHeader = sections.filter(
-    (s) => s.interactionModel !== 'footer' && s.interactionModel !== 'nav',
-  );
-  const heroTop = bodyForHeader.length ? bodyForHeader[0].top ?? 0 : 0;
-  const SOURCE_HEADER_ABOVE_PX = 40;
-  const overlayHeader = r.heroIsCover && heroTop < SOURCE_HEADER_ABOVE_PX;
-  const template = buildPageTemplate(overlayHeader, fullWidth);
+  const variant = computeTemplateVariant(sections, r.heroIsCover);
+  const template = buildPageTemplate(variant.overlayHeader, variant.fullWidth);
+  // NOTE: templates/page-<slug>.html is intentionally NOT emitted here — the
+  // handler's collapse planner writes the deduped variant template instead (and
+  // the per-slug file only when collapseTemplates is toggled OFF). Home still
+  // gets front-page.html (its own variant), which WP resolves without assignment.
   const files: ReconstructedFile[] = [
     { path: `patterns/page-${opts.slug}.php`, content: php },
-    { path: `templates/page-${opts.slug}.html`, content: template },
     ...r.iconAssets.map((a) => ({ path: a.path, content: a.svg })),
   ];
   if (opts.isHome) {
@@ -227,5 +219,7 @@ export function buildPageReconstruction(
     fallbackSections: r.provenanceFlags.filter((f) => f.startsWith('html-fallback#')).length,
     styledFallbackSections: r.provenanceFlags.filter((f) => f.startsWith('html-fallback-styled#')).length,
     fallbackDiagnostics: r.fallbackDiagnostics,
+    variant,
+    template,
   };
 }
