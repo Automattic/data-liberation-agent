@@ -47,7 +47,8 @@ function upsertMeta(itemBlock: string, slugOrNull: string | null): { block: stri
   const metaXml = `<wp:postmeta><wp:meta_key>${META_KEY}</wp:meta_key>`
     + `<wp:meta_value><![CDATA[${slugOrNull}]]></wp:meta_value></wp:postmeta>`;
   if (has) return { block: itemBlock.replace(metaRe, () => metaXml), set: true, cleared: false };
-  return { block: itemBlock.replace('</item>', () => `${metaXml}</item>`), set: true, cleared: false };
+  const closeIdx = itemBlock.lastIndexOf('</item>');
+  return { block: itemBlock.slice(0, closeIdx) + metaXml + itemBlock.slice(closeIdx), set: true, cleared: false };
 }
 
 /** PURE single-pass patch. */

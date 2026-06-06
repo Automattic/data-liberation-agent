@@ -47,6 +47,17 @@ describe('patchWxrTemplates', () => {
     expect((out.match(/<!\[CDATA\[/g) || []).length).toBe((out.match(/]]>/g) || []).length);
   });
 
+  it('inserts meta before the REAL closing tag even when content contains </item>', () => {
+    const src = wxr([item({ type: 'page', name: 'shop' })]);
+    const { wxr: out } = patchWxrTemplates(src, [{ slug: 'shop', content: 'a</item>b', templateSlug: 'page-replica-full' }]);
+    // The meta must come AFTER the content's CDATA close, not inside it.
+    const metaIdx = out.indexOf('<wp:meta_key>_wp_page_template');
+    const cdataCloseIdx = out.indexOf(']]></content:encoded>');
+    expect(metaIdx).toBeGreaterThan(cdataCloseIdx);
+    // And exactly one real item close remains structurally valid.
+    expect(out.endsWith('</item></channel></rss>')).toBe(true);
+  });
+
   it('counts unmatched slugs and leaves siblings untouched', () => {
     const src = wxr([item({ type: 'page', name: 'about', content: 'KEEP' })]);
     const { wxr: out, result } = patchWxrTemplates(src, [{ slug: 'ghost', content: 'X', templateSlug: null }]);
