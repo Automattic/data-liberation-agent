@@ -125,3 +125,18 @@ export function reconcileReplicaTemplates(
     delete: existingReplicaSlugs.filter((s) => !keep.has(s)),
   };
 }
+
+/** Merge variant customTemplates into a theme.json STRING. Prunes any prior
+ *  `page-replica*` entries (idempotent), preserves all other keys, and re-serializes.
+ *  Throws on malformed input — the caller must fail loud (a broken theme.json
+ *  breaks the whole theme). Indentation matches the scaffold (2 spaces). */
+export function mergeCustomTemplates(
+  themeJsonText: string,
+  customTemplates: { name: string; title: string; postTypes: string[] }[],
+): string {
+  const json = JSON.parse(themeJsonText) as Record<string, unknown>;
+  const existing = Array.isArray(json.customTemplates) ? (json.customTemplates as { name?: string }[]) : [];
+  const kept = existing.filter((e) => !String(e?.name ?? '').startsWith('page-replica'));
+  json.customTemplates = [...kept, ...customTemplates];
+  return JSON.stringify(json, null, 2) + '\n';
+}

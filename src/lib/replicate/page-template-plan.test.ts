@@ -134,3 +134,30 @@ describe('reconcileReplicaTemplates', () => {
     expect(r.delete.sort()).toEqual(['page-replica', 'page-replica-full']);
   });
 });
+
+import { mergeCustomTemplates } from './page-template-plan.js';
+
+describe('mergeCustomTemplates', () => {
+  const base = JSON.stringify({ version: 3, customTemplates: [{ name: 'keep-me', title: 'Keep', postTypes: ['page'] }] }, null, 2);
+
+  it('adds replica entries without clobbering non-replica ones', () => {
+    const out = JSON.parse(mergeCustomTemplates(base, [{ name: 'page-replica', title: 'Replica — Standard', postTypes: ['page', 'post'] }]));
+    expect(out.customTemplates).toContainEqual({ name: 'keep-me', title: 'Keep', postTypes: ['page'] });
+    expect(out.customTemplates).toContainEqual({ name: 'page-replica', title: 'Replica — Standard', postTypes: ['page', 'post'] });
+  });
+
+  it('prunes stale replica entries (idempotent across runs)', () => {
+    const withStale = JSON.stringify({ version: 3, customTemplates: [{ name: 'page-replica-overlay', title: 'old', postTypes: ['page'] }] });
+    const out = JSON.parse(mergeCustomTemplates(withStale, [{ name: 'page-replica', title: 'Replica — Standard', postTypes: ['page', 'post'] }]));
+    expect(out.customTemplates.map((e: { name: string }) => e.name)).toEqual(['page-replica']);
+  });
+
+  it('handles a theme.json with no customTemplates key', () => {
+    const out = JSON.parse(mergeCustomTemplates('{"version":3}', [{ name: 'page-replica', title: 'Replica — Standard', postTypes: ['page', 'post'] }]));
+    expect(out.customTemplates).toHaveLength(1);
+  });
+
+  it('throws on malformed JSON (fail loud, not silent)', () => {
+    expect(() => mergeCustomTemplates('{not json', [])).toThrow();
+  });
+});
