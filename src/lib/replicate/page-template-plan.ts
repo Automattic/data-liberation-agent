@@ -47,3 +47,81 @@ function variantKey(overlayHeader: boolean, fullWidth: boolean): VariantKey {
 export function variantTemplateSlug(key: VariantKey): string {
   return key === 'standard' ? 'page-replica' : `page-replica-${key}`;
 }
+
+export interface PlannedPage {
+  slug: string;
+  isHome: boolean;
+  variant: TemplateVariant;
+}
+
+export interface TemplatePlan {
+  /** Variant template files to write (theme-relative path + content). */
+  templates: { relativePath: string; content: string }[];
+  /** theme.json customTemplates entries for the variant templates. */
+  customTemplates: { name: string; title: string; postTypes: string[] }[];
+  /** slug → template slug for every NON-home reconstructed page. */
+  assignments: Map<string, string>;
+  /** The page-replica* slugs this run wants to exist. */
+  desiredTemplateSlugs: Set<string>;
+  /** Slugs appearing more than once among reconstructed pages (logged). */
+  duplicateSlugs: string[];
+}
+
+const VARIANT_TITLE: Record<VariantKey, string> = {
+  standard: 'Replica — Standard',
+  full: 'Replica — Full width',
+  overlay: 'Replica — Overlay header',
+  'overlay-full': 'Replica — Overlay + full width',
+};
+// Stable order so output is deterministic regardless of input page order.
+const KEY_ORDER: VariantKey[] = ['standard', 'full', 'overlay', 'overlay-full'];
+
+export function planPageTemplates(
+  pages: PlannedPage[],
+  renderTemplate: (v: TemplateVariant) => string,
+): TemplatePlan {
+  const seen = new Set<string>();
+  const dup = new Set<string>();
+  for (const p of pages) {
+    if (seen.has(p.slug)) dup.add(p.slug);
+    seen.add(p.slug);
+  }
+
+  const nonHome = pages.filter((p) => !p.isHome);
+  const variantByKey = new Map<VariantKey, TemplateVariant>();
+  const assignments = new Map<string, string>();
+  for (const p of nonHome) {
+    variantByKey.set(p.variant.key, p.variant);
+    assignments.set(p.slug, variantTemplateSlug(p.variant.key));
+  }
+
+  const presentKeys = KEY_ORDER.filter((k) => variantByKey.has(k));
+  const templates = presentKeys.map((k) => ({
+    relativePath: `templates/${variantTemplateSlug(k)}.html`,
+    content: renderTemplate(variantByKey.get(k)!),
+  }));
+  const customTemplates = presentKeys.map((k) => ({
+    name: variantTemplateSlug(k),
+    title: VARIANT_TITLE[k],
+    postTypes: ['page', 'post'],
+  }));
+  const desiredTemplateSlugs = new Set(presentKeys.map((k) => variantTemplateSlug(k)));
+
+  return { templates, customTemplates, assignments, desiredTemplateSlugs, duplicateSlugs: [...dup] };
+}
+
+/** Decide which page-replica* templates to write vs delete. The `stillReferenced`
+ *  set (variant slugs any page — including ones excluded this run — is still
+ *  assigned to) is NEVER deleted, so a transient extract failure can't strand a
+ *  page on a deleted template (Issue 2 guard). */
+export function reconcileReplicaTemplates(
+  existingReplicaSlugs: string[],
+  desiredSlugs: Set<string>,
+  stillReferenced: Set<string>,
+): { write: string[]; delete: string[] } {
+  const keep = new Set<string>([...desiredSlugs, ...stillReferenced]);
+  return {
+    write: [...desiredSlugs],
+    delete: existingReplicaSlugs.filter((s) => !keep.has(s)),
+  };
+}
