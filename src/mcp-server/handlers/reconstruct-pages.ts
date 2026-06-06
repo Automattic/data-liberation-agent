@@ -4,8 +4,10 @@
 // Deterministic per-PAGE reconstruction, wired for the /liberate→replicate flow.
 // For EACH content page: capture computed-style section specs, reconstruct them
 // into block-pattern markup (verbatim copy, mediaMapped images, theme tokens),
-// gate through validate_artifacts, and write the pattern + per-page template +
-// icon assets into the running Studio theme. Replaces the old cluster-rep-only
+// gate through validate_artifacts, and write the pattern + post_content + icon
+// assets, then collapse page templates to a small set of variant-keyed templates
+// (page-replica[-<key>]) assigned per page via _wp_page_template, and patch
+// output.wxr to match. Replaces the old cluster-rep-only
 // reconstruction that left every other page rendering carried source HTML.
 //
 // Single extraction pass per page (specs captured once); section image URLs are
