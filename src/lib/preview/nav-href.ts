@@ -15,7 +15,7 @@
  */
 
 import { registrableDomain } from '../screenshot/first-party.js';
-import { pageSlugFromUrl } from '../../adapters/shared.js';
+import { pageSlugFromUrl } from '../url/index.js';
 
 /**
  * Map a source nav href to the corresponding local WordPress page path.

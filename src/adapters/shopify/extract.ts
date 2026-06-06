@@ -7,7 +7,8 @@ import {
   type ShopifyGqlProduct,
 } from '../../lib/extraction/shopify-graphql.js';
 import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import { slugify, runExtractionLoop } from '../shared.js';
+import { runExtractionLoop } from '../shared.js';
+import { slugify } from '../../lib/url/index.js';
 import { extractMeta, extractHeading, IMAGE_EXTENSIONS } from '../../lib/html-extract/index.js';
 import { WooProductCsvBuilder } from '../../lib/woo-csv/index.js';
 import type { ShopifyAdapterOpts, ShopifyInventory, ShopifyArticle, ShopifyPage, ShopifyProductJson } from './types.js';

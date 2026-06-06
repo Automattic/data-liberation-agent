@@ -3,7 +3,8 @@ import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { ExtractionLog } from '../lib/resume-state/index.js';
 import { WxrBuilder } from '../lib/wxr/index.js';
-import { runExtractionLoop, stratifiedUrlSlice, pageSlugFromUrl, claimSlug, navTargetInventoryUrls, type ExtractedPage } from './shared.js';
+import { runExtractionLoop, stratifiedUrlSlice, navTargetInventoryUrls, type ExtractedPage } from './shared.js';
+import { pageSlugFromUrl, claimSlug } from '../lib/url/index.js';
 import { connectBrowser } from '../lib/browser-kit/index.js';
 
 const FIXTURE_TMP = join(process.cwd(), '.tmp-test');

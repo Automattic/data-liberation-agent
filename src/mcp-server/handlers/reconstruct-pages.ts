@@ -38,7 +38,7 @@ import { ImportSession } from '../../lib/resume-state/index.js';
 import type { FallbackDiagnostic } from '../../lib/replicate/fallback-diagnostic.js';
 import { extractThemeChromeFromHtml } from '../../lib/replicate/source-chrome.js';
 import { reconcileRegions, type PlacedRegion, type RegionSelectionReport } from '../../lib/replicate/region-audit.js';
-import { slugify } from '../../adapters/shared.js';
+import { slugify } from '../../lib/url/index.js';
 
 const execFileAsync = promisify(execFile);
 

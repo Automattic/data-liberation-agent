@@ -8,8 +8,8 @@ const LOCAL_TMP = join(process.cwd(), '.tmp-test');
 mkdirSync(LOCAL_TMP, { recursive: true });
 const tmpdir = () => LOCAL_TMP;
 
-// Mock shared for slugify; connectBrowser now lives in browser-kit.
-vi.mock('../../adapters/shared.js', async (importOriginal) => {
+// Mock url for slugify; connectBrowser lives in browser-kit.
+vi.mock('../url/index.js', async (importOriginal) => {
   const actual = await importOriginal() as Record<string, unknown>;
   return {
     ...actual,

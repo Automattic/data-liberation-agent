@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { captureDesignForUrl, designSidecarPath } from './design-capture-runner.js';
 import { CssAggregator } from './css-aggregator.js';
 import { JsAggregator } from './js-aggregator.js';
-import { slugify } from '../../adapters/shared.js';
+import { slugify } from '../url/index.js';
 
 const LOCAL_TMP = join(process.cwd(), '.tmp-test');
 mkdirSync(LOCAL_TMP, { recursive: true });

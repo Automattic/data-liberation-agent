@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { ensureUrlScheme } from './url.js';
+import { ensureUrlScheme } from './url/index.js';
 
 describe('ensureUrlScheme', () => {
   it('adds https:// to a scheme-less host (the Wix discover bug)', () => {

@@ -1,5 +1,5 @@
 import { classifyUrl, parseSitemapXml } from '../../lib/extraction/sitemap.js';
-import { ensureUrlScheme } from '../../lib/url.js';
+import { ensureUrlScheme } from '../../lib/url/index.js';
 import { launchBrowser } from '../../lib/browser-kit/index.js';
 import type { InventoryUrl } from '../shared.js';
 import type { NavLink } from '../../lib/html-extract/index.js';

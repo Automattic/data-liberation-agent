@@ -25,7 +25,7 @@
 
 import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
-import { slugify } from '../../adapters/shared.js';
+import { slugify } from '../url/index.js';
 import type { SectionSpec, SourceLandmark } from './section-extract.js';
 
 /**

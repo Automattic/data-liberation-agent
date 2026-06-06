@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { Browser, BrowserContext, Page } from 'playwright';
 import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import { slugify } from '../../adapters/shared.js';
+import { slugify } from '../url/index.js';
 import { connectBrowser } from '../browser-kit/index.js';
 import { classifyUrl, type UrlType } from '../extraction/sitemap.js';
 import {
@@ -493,7 +493,7 @@ async function capturePerViewport(args: CapturePerViewportArgs): Promise<void> {
     const DESIGN_CAPTURE_ARCHETYPES = new Set(['homepage', 'page', 'post', 'gallery', 'event']);
     if (DESIGN_CAPTURE_ARCHETYPES.has(archetype)) {
       try {
-        const designSlug = (await import('../../adapters/shared.js')).slugify(url);
+        const designSlug = (await import('../url/index.js')).slugify(url);
         await captureMobileBodyFragment({
           page,
           slug: designSlug,

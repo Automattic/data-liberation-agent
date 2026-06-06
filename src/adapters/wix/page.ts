@@ -2,7 +2,7 @@ import type { PageData, PageMeta, CapturedApiCall } from './types.js';
 import { isExecutionContextDestroyed, ROUTE_PIN_INIT_SCRIPT } from './runtime.js';
 import { emptyMeta, extractImageUrls, deriveContent, extractFeaturedImageFromJsonLd } from './content.js';
 import { extractGalleryFromHtml } from './gallery.js';
-import { slugify } from '../shared.js';
+import { slugify } from '../../lib/url/index.js';
 
 /**
  * Plain GET of a page's served HTML. Used as the last-resort fallback when
