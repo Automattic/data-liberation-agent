@@ -108,8 +108,7 @@ async function updatePagePostContent(
   slug: string,
   isHome: boolean,
   content: string,
-  pageTemplate: string | null, // variant slug to assign, or null to clear (default bucket)
-): Promise<{ contentOk: boolean; assignOk: boolean }> {
+): Promise<{ contentOk: boolean; id: string }> {
   const wp = (extra: string[]) =>
     execFileAsync('studio', ['wp', '--path', studioSitePath, ...extra], { timeout: 120_000, maxBuffer: 50 * 1024 * 1024 });
   let id = '';
@@ -122,7 +121,7 @@ async function updatePagePostContent(
       const { stdout } = await wp(['post', 'list', '--post_type=page', `--name=${slug}`, '--field=ID', '--format=ids']);
       id = stdout.trim().split(/\s+/)[0] || '';
     }
-    if (!id) return { contentOk: false, assignOk: false };
+    if (!id) return { contentOk: false, id: '' };
     if (isHome) {
       // Make this page the static front page so `/` renders the homepage
       // reconstruction (front-page.html) instead of the blog index. Best-effort
@@ -138,17 +137,14 @@ async function updatePagePostContent(
     // Pass content as a single argv value (execFile = no shell, so no escaping /
     // injection concern); page block markup is well under ARG_MAX. The wp-cli
     // field is `post_content` (the bare `--content` flag is silently ignored).
-    const updateArgs = ['post', 'update', id, `--post_content=${content}`];
-    if (!isHome && pageTemplate) updateArgs.push(`--page_template=${pageTemplate}`);
-    await wp(updateArgs);
-    if (!isHome && pageTemplate === null) {
-      try { await wp(['post', 'meta', 'delete', id, '_wp_page_template']); }
-      catch { /* meta may not exist — fine */ }
-    }
-    return { contentOk: true, assignOk: true };
+    // NOTE: `_wp_page_template` assignment happens in a SEPARATE post-loop pass
+    // (after forcePatternRescan registers the variant customTemplates) — WP rejects
+    // a page_template that isn't yet registered in theme.json.
+    await wp(['post', 'update', id, `--post_content=${content}`]);
+    return { contentOk: true, id };
   } catch (err) {
     console.error(`[reconstruct] post update failed for slug="${slug}": ${err instanceof Error ? err.message : String(err)}`);
-    return { contentOk: false, assignOk: false };
+    return { contentOk: false, id: '' };
   }
 }
 
@@ -324,6 +320,7 @@ export const reconstructPagesHandler: Handler = async (args, ctx) => {
   });
   const plannedPages: { slug: string; isHome: boolean; variant: TemplateVariant }[] = [];
   const wxrInputs: WxrTemplatePatchInput[] = [];
+  const pageIdBySlug = new Map<string, string>();
   let assignmentFailures = 0;
   for (const p of pages) {
     const specs = specsByPage.get(p.slug);
@@ -361,17 +358,15 @@ export const reconstructPagesHandler: Handler = async (args, ctx) => {
     }
     // Canonicalize the block markup so it validates in the editor, then make the
     // WP page a real editable block page: write it into post_content (rendered via
-    // the template's wp:post-content).
+    // the template's wp:post-content). The _wp_page_template assignment is deferred
+    // to a post-loop pass (after the variant customTemplates register).
     const fixResult = (await blockFixer.fix([built.postContent]))[0];
     const finalContent = fixResult?.html ?? built.postContent;
-    const assignedTemplate = collapseTemplates && !(p.isHome ?? false)
-      ? variantTemplateSlug(built.variant.key)
-      : null;
-    const upd = await updatePagePostContent(studioSitePath, p.slug, p.isHome ?? false, finalContent, assignedTemplate);
+    const upd = await updatePagePostContent(studioSitePath, p.slug, p.isHome ?? false, finalContent);
     const postUpdated = upd.contentOk;
-    if (collapseTemplates && !upd.assignOk) assignmentFailures++;
+    if (upd.id) pageIdBySlug.set(p.slug, upd.id);
     plannedPages.push({ slug: p.slug, isHome: p.isHome ?? false, variant: built.variant });
-    wxrInputs.push({ slug: p.slug, content: finalContent, templateSlug: assignedTemplate });
+    wxrInputs.push({ slug: p.slug, content: finalContent, templateSlug: collapseTemplates && !(p.isHome ?? false) ? variantTemplateSlug(built.variant.key) : null });
     report.push({
       slug: p.slug,
       ok: true,
@@ -391,23 +386,34 @@ export const reconstructPagesHandler: Handler = async (args, ctx) => {
   let pageTemplatesWritten = 0;
   let templatesDeleted = 0;
   let wxrUnmatched: string[] = [];
+  let collapseError: string | undefined;
   const templateVariants: Record<string, number> = {};
   for (const pp of plannedPages) templateVariants[pp.variant.key] = (templateVariants[pp.variant.key] ?? 0) + 1;
 
   try {
-    // Patch the WXR first so existingAssignments (prior _wp_page_template) feed the reconcile guard.
-    const patch = patchWxrTemplatesFile(
-      resolve(outputDir),
-      collapseTemplates ? wxrInputs : wxrInputs.map((w) => ({ ...w, templateSlug: null })),
-    );
-    wxrUnmatched = patch.unmatched;
+    // Patch the WXR first so existingAssignments (prior _wp_page_template) feed the
+    // reconcile guard. An ABSENT/unreadable output.wxr (e.g. a reconstruct-only run
+    // that never produced a WXR) is non-fatal — skip the patch, treat prior
+    // assignments as empty, and continue to the template/theme.json writes.
+    let existingAssignments = new Map<string, string>();
+    try {
+      const patch = patchWxrTemplatesFile(
+        resolve(outputDir),
+        collapseTemplates ? wxrInputs : wxrInputs.map((w) => ({ ...w, templateSlug: null })),
+      );
+      wxrUnmatched = patch.unmatched;
+      existingAssignments = patch.existingAssignments;
+    } catch (err) {
+      console.error(`[reconstruct] output.wxr absent or unreadable — skipping WXR patch: ${err instanceof Error ? err.message : String(err)}`);
+      wxrUnmatched = [];
+    }
 
     if (collapseTemplates) {
       const plan = planPageTemplates(plannedPages, (v) => buildPageTemplate(v.overlayHeader, v.fullWidth));
       if (plan.duplicateSlugs.length) {
         console.error(`[reconstruct] duplicate slugs (templates/assignments act on first match): ${plan.duplicateSlugs.join(', ')}`);
       }
-      const stillReferenced = new Set<string>([...patch.existingAssignments.values()]);
+      const stillReferenced = new Set<string>([...existingAssignments.values()]);
       for (const root of [themeRoot, outThemeDir]) {
         const tplDir = join(root, 'templates');
         const existing = existsSync(tplDir)
@@ -440,8 +446,12 @@ export const reconstructPagesHandler: Handler = async (args, ctx) => {
       }
     }
   } catch (err) {
-    console.error(`[reconstruct] template-collapse step failed: ${err instanceof Error ? err.message : String(err)}`);
-    throw err; // theme.json / WXR corruption must abort, not ship silently
+    // A genuine theme.json write failure is surfaced (collapseError → result) but
+    // must NOT rethrow: rethrowing would skip blockFixer.stop()/flush/rescan/the
+    // assignment pass/diagnostics — leaking the block-fixer subprocess and leaving
+    // patterns unregistered. Report it; keep running teardown.
+    collapseError = err instanceof Error ? err.message : String(err);
+    console.error(`[reconstruct] template-collapse step failed: ${collapseError}`);
   }
 
   await blockFixer.stop().catch(() => {
@@ -464,6 +474,24 @@ export const reconstructPagesHandler: Handler = async (args, ctx) => {
   // wp_clean_themes_cache + rebuilds the pattern registry). Without this, the
   // newly-written page patterns resolve to EMPTY until WP next re-registers.
   await forcePatternRescan(studioSitePath, themeSlug);
+
+  // Studio _wp_page_template assignment — AFTER forcePatternRescan so the variant
+  // customTemplates are registered (WP rejects an unregistered page_template).
+  {
+    const studioWp = (extra: string[]) =>
+      execFileAsync('studio', ['wp', '--path', studioSitePath, ...extra], { timeout: 120_000, maxBuffer: 50 * 1024 * 1024 });
+    for (const pp of plannedPages) {
+      if (pp.isHome) continue;
+      const id = pageIdBySlug.get(pp.slug);
+      if (!id) continue;
+      try {
+        if (collapseTemplates) await studioWp(['post', 'update', id, `--page_template=${variantTemplateSlug(pp.variant.key)}`]);
+        else await studioWp(['post', 'meta', 'delete', id, '_wp_page_template']).catch(() => {}); // clear on toggle-off
+      } catch (err) {
+        if (collapseTemplates) { assignmentFailures++; console.error(`[reconstruct] assign failed slug="${pp.slug}": ${err instanceof Error ? err.message : String(err)}`); }
+      }
+    }
+  }
 
   const reconstructed = report.filter((r) => r.ok).length;
   // Site-level count of sections emitted as verbatim core/html islands — feeds the
@@ -533,9 +561,11 @@ export const reconstructPagesHandler: Handler = async (args, ctx) => {
     templateVariants,
     assignmentFailures,
     wxrUnmatched,
+    collapseError,
     summary: `${reconstructed} pages → ${pageTemplatesWritten} reconstructed templates`
       + (wxrUnmatched.length ? ` · ⚠ ${wxrUnmatched.length} WXR-unmatched (${wxrUnmatched.join(', ')})` : '')
-      + (assignmentFailures ? ` · ⚠ ${assignmentFailures} assignment failures` : ''),
+      + (assignmentFailures ? ` · ⚠ ${assignmentFailures} assignment failures` : '')
+      + (collapseError ? ` · ⚠ collapse error: ${collapseError}` : ''),
     pages: report,
   });
 };
