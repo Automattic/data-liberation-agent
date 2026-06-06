@@ -16,7 +16,7 @@
 
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { existsSync, mkdirSync, writeFileSync, readFileSync, renameSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync, readFileSync, renameSync, readdirSync, rmSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import type { PaletteToken } from '../../lib/replicate/footer-color.js';
 import type { FontFamilyToken } from '../../lib/replicate/page-reconstruct.js';
@@ -39,6 +39,9 @@ import type { FallbackDiagnostic } from '../../lib/replicate/fallback-diagnostic
 import { extractThemeChromeFromHtml } from '../../lib/replicate/source-chrome.js';
 import { reconcileRegions, type PlacedRegion, type RegionSelectionReport } from '../../lib/replicate/region-audit.js';
 import { slugify } from '../../lib/url/index.js';
+import { planPageTemplates, reconcileReplicaTemplates, mergeCustomTemplates, variantTemplateSlug, type TemplateVariant } from '../../lib/replicate/page-template-plan.js';
+import { patchWxrTemplatesFile, type WxrTemplatePatchInput } from '../../lib/replicate/wxr-template-patch.js';
+import { buildPageTemplate } from '../../lib/replicate/reconstruct-pages.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -105,7 +108,8 @@ async function updatePagePostContent(
   slug: string,
   isHome: boolean,
   content: string,
-): Promise<boolean> {
+  pageTemplate: string | null, // variant slug to assign, or null to clear (default bucket)
+): Promise<{ contentOk: boolean; assignOk: boolean }> {
   const wp = (extra: string[]) =>
     execFileAsync('studio', ['wp', '--path', studioSitePath, ...extra], { timeout: 120_000, maxBuffer: 50 * 1024 * 1024 });
   let id = '';
@@ -118,7 +122,7 @@ async function updatePagePostContent(
       const { stdout } = await wp(['post', 'list', '--post_type=page', `--name=${slug}`, '--field=ID', '--format=ids']);
       id = stdout.trim().split(/\s+/)[0] || '';
     }
-    if (!id) return false;
+    if (!id) return { contentOk: false, assignOk: false };
     if (isHome) {
       // Make this page the static front page so `/` renders the homepage
       // reconstruction (front-page.html) instead of the blog index. Best-effort
@@ -134,10 +138,17 @@ async function updatePagePostContent(
     // Pass content as a single argv value (execFile = no shell, so no escaping /
     // injection concern); page block markup is well under ARG_MAX. The wp-cli
     // field is `post_content` (the bare `--content` flag is silently ignored).
-    await wp(['post', 'update', id, `--post_content=${content}`]);
-    return true;
-  } catch {
-    return false;
+    const updateArgs = ['post', 'update', id, `--post_content=${content}`];
+    if (!isHome && pageTemplate) updateArgs.push(`--page_template=${pageTemplate}`);
+    await wp(updateArgs);
+    if (!isHome && pageTemplate === null) {
+      try { await wp(['post', 'meta', 'delete', id, '_wp_page_template']); }
+      catch { /* meta may not exist — fine */ }
+    }
+    return { contentOk: true, assignOk: true };
+  } catch (err) {
+    console.error(`[reconstruct] post update failed for slug="${slug}": ${err instanceof Error ? err.message : String(err)}`);
+    return { contentOk: false, assignOk: false };
   }
 }
 
@@ -237,6 +248,7 @@ export const reconstructPagesHandler: Handler = async (args, ctx) => {
   //    persist the result so the next run is cache-hot. `refresh: true` forces live.
   const specsStore = SectionSpecsStore.load(outputDir);
   const refresh = args.refresh === true;
+  const collapseTemplates = (args.collapseTemplates ?? true) === true;
   const specsByPage = new Map<string, SectionSpec[]>();
   const srcUrls = new Set<string>();
   const extractErrors: Array<{ slug: string; error: string }> = [];
@@ -310,6 +322,9 @@ export const reconstructPagesHandler: Handler = async (args, ctx) => {
   await blockFixer.start().catch(() => {
     /* best-effort — fix() passes through if the server didn't start */
   });
+  const plannedPages: { slug: string; isHome: boolean; variant: TemplateVariant }[] = [];
+  const wxrInputs: WxrTemplatePatchInput[] = [];
+  let assignmentFailures = 0;
   for (const p of pages) {
     const specs = specsByPage.get(p.slug);
     if (!specs) {
@@ -337,13 +352,26 @@ export const reconstructPagesHandler: Handler = async (args, ctx) => {
         if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
         writeFileSync(full, f.content);
       }
+      const perSlug = join(root, `templates/page-${p.slug}.html`);
+      if (!collapseTemplates) {
+        writeFileSync(perSlug, built.template); // legacy per-page template
+      } else if (existsSync(perSlug)) {
+        rmSync(perSlug); // Issue 5: drop any pre-existing per-slug template so existing replicas collapse
+      }
     }
     // Canonicalize the block markup so it validates in the editor, then make the
     // WP page a real editable block page: write it into post_content (rendered via
     // the template's wp:post-content).
     const fixResult = (await blockFixer.fix([built.postContent]))[0];
     const finalContent = fixResult?.html ?? built.postContent;
-    const postUpdated = await updatePagePostContent(studioSitePath, p.slug, p.isHome ?? false, finalContent);
+    const assignedTemplate = collapseTemplates && !(p.isHome ?? false)
+      ? variantTemplateSlug(built.variant.key)
+      : null;
+    const upd = await updatePagePostContent(studioSitePath, p.slug, p.isHome ?? false, finalContent, assignedTemplate);
+    const postUpdated = upd.contentOk;
+    if (collapseTemplates && !upd.assignOk) assignmentFailures++;
+    plannedPages.push({ slug: p.slug, isHome: p.isHome ?? false, variant: built.variant });
+    wxrInputs.push({ slug: p.slug, content: finalContent, templateSlug: assignedTemplate });
     report.push({
       slug: p.slug,
       ok: true,
@@ -357,6 +385,63 @@ export const reconstructPagesHandler: Handler = async (args, ctx) => {
       postContentUpdated: postUpdated,
       blocksFixed: fixResult?.changed ?? false,
     });
+  }
+
+  // ---- Template collapse (post-loop) -----------------------------------------
+  let pageTemplatesWritten = 0;
+  let templatesDeleted = 0;
+  let wxrUnmatched: string[] = [];
+  const templateVariants: Record<string, number> = {};
+  for (const pp of plannedPages) templateVariants[pp.variant.key] = (templateVariants[pp.variant.key] ?? 0) + 1;
+
+  try {
+    // Patch the WXR first so existingAssignments (prior _wp_page_template) feed the reconcile guard.
+    const patch = patchWxrTemplatesFile(
+      resolve(outputDir),
+      collapseTemplates ? wxrInputs : wxrInputs.map((w) => ({ ...w, templateSlug: null })),
+    );
+    wxrUnmatched = patch.unmatched;
+
+    if (collapseTemplates) {
+      const plan = planPageTemplates(plannedPages, (v) => buildPageTemplate(v.overlayHeader, v.fullWidth));
+      if (plan.duplicateSlugs.length) {
+        console.error(`[reconstruct] duplicate slugs (templates/assignments act on first match): ${plan.duplicateSlugs.join(', ')}`);
+      }
+      const stillReferenced = new Set<string>([...patch.existingAssignments.values()]);
+      for (const root of [themeRoot, outThemeDir]) {
+        const tplDir = join(root, 'templates');
+        const existing = existsSync(tplDir)
+          ? readdirSync(tplDir).filter((f) => f.startsWith('page-replica') && f.endsWith('.html')).map((f) => f.slice(0, -'.html'.length))
+          : [];
+        const rec = reconcileReplicaTemplates(existing, plan.desiredTemplateSlugs, stillReferenced);
+        for (const t of plan.templates) writeFileSync(join(root, t.relativePath), t.content);
+        for (const slug of rec.delete) { rmSync(join(tplDir, `${slug}.html`), { force: true }); templatesDeleted++; }
+        const themeJsonPath = join(root, 'theme.json');
+        const merged = mergeCustomTemplates(readFileSync(themeJsonPath, 'utf8'), plan.customTemplates);
+        const tmp = `${themeJsonPath}.tmp`;
+        writeFileSync(tmp, merged);
+        renameSync(tmp, themeJsonPath);
+      }
+      pageTemplatesWritten = plan.templates.length;
+    } else {
+      for (const root of [themeRoot, outThemeDir]) {
+        const tplDir = join(root, 'templates');
+        if (existsSync(tplDir)) {
+          for (const f of readdirSync(tplDir).filter((x) => x.startsWith('page-replica') && x.endsWith('.html'))) {
+            rmSync(join(tplDir, f), { force: true }); templatesDeleted++;
+          }
+        }
+        const themeJsonPath = join(root, 'theme.json');
+        if (existsSync(themeJsonPath)) {
+          const merged = mergeCustomTemplates(readFileSync(themeJsonPath, 'utf8'), []);
+          const tmp = `${themeJsonPath}.tmp`;
+          writeFileSync(tmp, merged); renameSync(tmp, themeJsonPath);
+        }
+      }
+    }
+  } catch (err) {
+    console.error(`[reconstruct] template-collapse step failed: ${err instanceof Error ? err.message : String(err)}`);
+    throw err; // theme.json / WXR corruption must abort, not ship silently
   }
 
   await blockFixer.stop().catch(() => {
@@ -442,6 +527,15 @@ export const reconstructPagesHandler: Handler = async (args, ctx) => {
     specsFromCache,
     specsFromLive,
     extractErrors,
+    pagesReconstructed: reconstructed,
+    pageTemplates: pageTemplatesWritten,
+    templatesDeleted,
+    templateVariants,
+    assignmentFailures,
+    wxrUnmatched,
+    summary: `${reconstructed} pages → ${pageTemplatesWritten} reconstructed templates`
+      + (wxrUnmatched.length ? ` · ⚠ ${wxrUnmatched.length} WXR-unmatched (${wxrUnmatched.join(', ')})` : '')
+      + (assignmentFailures ? ` · ⚠ ${assignmentFailures} assignment failures` : ''),
     pages: report,
   });
 };

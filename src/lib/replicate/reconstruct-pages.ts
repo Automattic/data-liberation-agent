@@ -82,7 +82,7 @@ const SAFE_SLUG = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
  * header. The header distinction lives HERE, in the template — not in a global
  * `.home:has(cover)` CSS override.
  */
-function buildPageTemplate(overlayHeader = false, fullWidth = false): string {
+export function buildPageTemplate(overlayHeader = false, fullWidth = false): string {
   const headerPart = overlayHeader
     ? `<!-- wp:template-part {"slug":"header","tagName":"header","className":"site-header-overlay"} /-->`
     : `<!-- wp:template-part {"slug":"header","tagName":"header"} /-->`;
