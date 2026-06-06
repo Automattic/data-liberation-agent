@@ -1,6 +1,6 @@
 import { classifyUrl, parseSitemapXml } from '../../lib/extraction/sitemap.js';
 import { ensureUrlScheme } from '../../lib/url.js';
-import { launchBrowser } from '../shared.js';
+import { launchBrowser } from '../../lib/browser-kit/index.js';
 import type { InventoryUrl, NavLink } from '../shared.js';
 import type { WixAdapterOpts, Inventory } from './types.js';
 

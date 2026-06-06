@@ -2,14 +2,8 @@ import type { WxrBuilder } from '../../lib/wxr/index.js';
 import type { ExtractionLog } from '../../lib/resume-state/index.js';
 import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import type { Browser, BrowserContext, Page } from 'playwright';
-import {
-  slugify,
-  runExtractionLoop,
-  launchBrowser,
-  extractMeta,
-  extractTitle,
-  extractHeading,
-} from '../shared.js';
+import { slugify, runExtractionLoop, extractMeta, extractTitle, extractHeading } from '../shared.js';
+import { launchBrowser } from '../../lib/browser-kit/index.js';
 import type { ExtractedPage } from '../shared.js';
 import { WooProductCsvBuilder } from '../../lib/woo-csv/index.js';
 import { extractMainContent, parseJsonLd, detectTypeFromJsonLd, productLdJsonScript } from './content.js';

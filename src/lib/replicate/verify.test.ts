@@ -29,21 +29,18 @@ const newPageMock = vi.fn(async () => ({
 }));
 
 const addInitScriptMock = vi.fn().mockResolvedValue(undefined);
-vi.mock('../../adapters/shared.js', async (importOriginal) => {
-  const actual = (await importOriginal()) as Record<string, unknown>;
-  return {
-    ...actual,
-    connectBrowser: vi.fn(async () => ({
-      newContext: vi.fn(async () => ({
-        on: vi.fn(),
-        addInitScript: addInitScriptMock,
-        newPage: newPageMock,
-        close: vi.fn().mockResolvedValue(undefined),
-      })),
+// connectBrowser now lives in browser-kit; mock it there.
+vi.mock('../browser-kit/index.js', () => ({
+  connectBrowser: vi.fn(async () => ({
+    newContext: vi.fn(async () => ({
+      on: vi.fn(),
+      addInitScript: addInitScriptMock,
+      newPage: newPageMock,
       close: vi.fn().mockResolvedValue(undefined),
     })),
-  };
-});
+    close: vi.fn().mockResolvedValue(undefined),
+  })),
+}));
 
 import { verifyReplica } from './verify.js';
 
@@ -241,9 +238,9 @@ describe('verifyReplica', () => {
   it('returns failure result when browser cannot launch', async () => {
     const { dir, cleanup } = setupFixture();
     try {
-      const shared = await import('../../adapters/shared.js');
-      const original = shared.connectBrowser;
-      (shared.connectBrowser as unknown as ReturnType<typeof vi.fn>) = vi
+      const bk = await import('../browser-kit/index.js');
+      const original = bk.connectBrowser;
+      (bk.connectBrowser as unknown as ReturnType<typeof vi.fn>) = vi
         .fn()
         .mockRejectedValueOnce(new Error('no chromium'));
       try {
@@ -255,7 +252,7 @@ describe('verifyReplica', () => {
         expect(result.ok).toBe(false);
         expect(result.errors[0]).toContain('Browser launch failed');
       } finally {
-        (shared.connectBrowser as unknown as typeof original) = original;
+        (bk.connectBrowser as unknown as typeof original) = original;
       }
     } finally {
       cleanup();

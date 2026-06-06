@@ -6,7 +6,7 @@ import { fetchShopifyPaginated } from './http.js';
 import { extractShopDomain } from './content.js';
 
 async function discoverProductsViaCdp(cdpPort: number, origin: string): Promise<string[]> {
-  const { launchBrowser } = await import('../shared.js');
+  const { launchBrowser } = await import('../../lib/browser-kit/index.js');
   const { page, close } = await launchBrowser({ cdpPort });
 
   const handles: string[] = [];

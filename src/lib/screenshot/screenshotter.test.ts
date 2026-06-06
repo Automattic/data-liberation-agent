@@ -8,19 +8,23 @@ const LOCAL_TMP = join(process.cwd(), '.tmp-test');
 mkdirSync(LOCAL_TMP, { recursive: true });
 const tmpdir = () => LOCAL_TMP;
 
-// Mock the shared helper so tests don't require real Chromium.
+// Mock shared for slugify; connectBrowser now lives in browser-kit.
 vi.mock('../../adapters/shared.js', async (importOriginal) => {
   const actual = await importOriginal() as Record<string, unknown>;
   return {
     ...actual,
-    connectBrowser: vi.fn(),
     slugify: (url: string) => new URL(url).pathname.replace(/^\//, '').replace(/\//g, '--') || 'homepage',
   };
 });
 
+// Mock browser-kit so tests don't require real Chromium.
+vi.mock('../browser-kit/index.js', () => ({
+  connectBrowser: vi.fn(),
+}));
+
 import { captureScreenshots, getHomepageUrl } from './screenshotter.js';
 import { classifyUrl } from '../extraction/sitemap.js';
-import * as shared from '../../adapters/shared.js';
+import { connectBrowser } from '../browser-kit/index.js';
 
 interface MockContext { newPage: () => Promise<unknown>; addInitScript: (script: unknown) => Promise<void>; close: () => Promise<void> }
 interface MockBrowser { newContext: (opts?: unknown) => Promise<MockContext>; close: () => Promise<void> }
@@ -71,7 +75,7 @@ describe('captureScreenshots', () => {
   it('captures two viewports and one HTML per URL', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'ss-'));
     try {
-      (shared.connectBrowser as ReturnType<typeof vi.fn>).mockResolvedValue(makeMockBrowser());
+      (connectBrowser as ReturnType<typeof vi.fn>).mockResolvedValue(makeMockBrowser());
       const result = await captureScreenshots({
         urls: ['https://example.com/a', 'https://example.com/b'],
         outputDir: dir,
@@ -96,7 +100,7 @@ describe('captureScreenshots', () => {
   it('writes palette.json, typography.json, and breakpoints.json from one representative URL', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'ss-'));
     try {
-      (shared.connectBrowser as ReturnType<typeof vi.fn>).mockResolvedValue(makeMockBrowser());
+      (connectBrowser as ReturnType<typeof vi.fn>).mockResolvedValue(makeMockBrowser());
       const result = await captureScreenshots({
         urls: ['https://example.com/a', 'https://example.com/b'],
         outputDir: dir,
@@ -124,7 +128,7 @@ describe('captureScreenshots', () => {
   it('prefers the homepage as the single representative analysis URL', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'ss-'));
     try {
-      (shared.connectBrowser as ReturnType<typeof vi.fn>).mockResolvedValue(makeMockBrowser());
+      (connectBrowser as ReturnType<typeof vi.fn>).mockResolvedValue(makeMockBrowser());
       await captureScreenshots({
         urls: ['https://example.com/about', 'https://example.com'],
         outputDir: dir,
@@ -142,9 +146,9 @@ describe('captureScreenshots', () => {
   it('skips existing files when force=false', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'ss-'));
     try {
-      (shared.connectBrowser as ReturnType<typeof vi.fn>).mockResolvedValue(makeMockBrowser());
+      (connectBrowser as ReturnType<typeof vi.fn>).mockResolvedValue(makeMockBrowser());
       await captureScreenshots({ urls: ['https://example.com/a'], outputDir: dir, concurrency: 1, settleMs: 0 });
-      (shared.connectBrowser as ReturnType<typeof vi.fn>).mockResolvedValue(makeMockBrowser());
+      (connectBrowser as ReturnType<typeof vi.fn>).mockResolvedValue(makeMockBrowser());
       const result = await captureScreenshots({ urls: ['https://example.com/a'], outputDir: dir, concurrency: 1, settleMs: 0 });
       expect(result.captured).toBe(0);
       expect(result.skipped).toBe(1);
@@ -181,7 +185,7 @@ describe('captureScreenshots', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ss-'));
     try {
       let connects = 0;
-      (shared.connectBrowser as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      (connectBrowser as ReturnType<typeof vi.fn>).mockImplementation(async () => {
         connects++;
         return makeMockBrowser();
       });
@@ -215,7 +219,7 @@ describe('captureScreenshots', () => {
         });
         return p;
       };
-      (shared.connectBrowser as ReturnType<typeof vi.fn>).mockResolvedValue(makeMockBrowser(shortPage));
+      (connectBrowser as ReturnType<typeof vi.fn>).mockResolvedValue(makeMockBrowser(shortPage));
       const result = await captureScreenshots({
         urls: ['https://example.com/short'],
         outputDir: dir,
@@ -240,7 +244,7 @@ describe('captureScreenshots', () => {
   it('records a failure entry when goto returns 4xx', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'ss-'));
     try {
-      (shared.connectBrowser as ReturnType<typeof vi.fn>).mockResolvedValue(makeMockBrowser(() => makeGoodPage(404)));
+      (connectBrowser as ReturnType<typeof vi.fn>).mockResolvedValue(makeMockBrowser(() => makeGoodPage(404)));
       const result = await captureScreenshots({
         urls: ['https://example.com/a'],
         outputDir: dir,
@@ -263,7 +267,7 @@ describe('captureScreenshots', () => {
       const posts = Array.from({ length: 20 }, (_, i) => `https://example.com/blog/post-${i}`);
       const pages = Array.from({ length: 5 }, (_, i) => `https://example.com/info-${i}`);
       const urls = [...posts, ...pages, 'https://example.com/home'];
-      (shared.connectBrowser as ReturnType<typeof vi.fn>).mockResolvedValue(makeMockBrowser());
+      (connectBrowser as ReturnType<typeof vi.fn>).mockResolvedValue(makeMockBrowser());
       const result = await captureScreenshots({
         urls,
         outputDir: dir,
@@ -294,7 +298,7 @@ describe('captureScreenshots', () => {
         'https://example.com/info-0',
         'https://example.com/home',
       ];
-      (shared.connectBrowser as ReturnType<typeof vi.fn>).mockResolvedValue(makeMockBrowser());
+      (connectBrowser as ReturnType<typeof vi.fn>).mockResolvedValue(makeMockBrowser());
       const result = await captureScreenshots({
         urls,
         outputDir: dir,

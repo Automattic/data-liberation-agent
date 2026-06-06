@@ -206,7 +206,7 @@ export async function extract(
   let browserSession: { page: unknown; close: () => Promise<void> } | null = null;
   async function getBrowserPage(): Promise<unknown> {
     if (!browserSession) {
-      const { launchBrowser } = await import('../shared.js');
+      const { launchBrowser } = await import('../../lib/browser-kit/index.js');
       // Prefer user-provided CDP port; otherwise auto-launch headed Chromium
       // (headed bypasses Cloudflare bot detection that blocks headless)
       const session = await launchBrowser(

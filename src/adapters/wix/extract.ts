@@ -1,7 +1,8 @@
 import type { WxrBuilder } from '../../lib/wxr/index.js';
 import type { ExtractionLog } from '../../lib/resume-state/index.js';
 import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import { launchBrowser, runExtractionLoop } from '../shared.js';
+import { runExtractionLoop } from '../shared.js';
+import { launchBrowser } from '../../lib/browser-kit/index.js';
 import { WooProductCsvBuilder } from '../../lib/woo-csv/index.js';
 import type { WixAdapterOpts, Inventory } from './types.js';
 import { extractWixPage } from './page.js';

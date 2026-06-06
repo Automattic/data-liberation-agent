@@ -22,7 +22,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type { Browser, BrowserContext, Page } from 'playwright';
-import { connectBrowser } from '../../adapters/shared.js';
+import { connectBrowser } from '../browser-kit/index.js';
 import { mapPool } from '../concurrency.js';
 import type { ReplicaSectionMeasure } from './section-parity.js';
 

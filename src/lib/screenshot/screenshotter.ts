@@ -2,7 +2,8 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { Browser, BrowserContext, Page } from 'playwright';
 import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import { connectBrowser, slugify } from '../../adapters/shared.js';
+import { slugify } from '../../adapters/shared.js';
+import { connectBrowser } from '../browser-kit/index.js';
 import { classifyUrl, type UrlType } from '../extraction/sitemap.js';
 import {
   DEFAULT_VIEWPORTS,

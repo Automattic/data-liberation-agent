@@ -1,4 +1,4 @@
-import { getPlaywright } from '../shared.js';
+import { getPlaywright } from '../../lib/browser-kit/index.js';
 import type { InventoryUrl } from '../shared.js';
 import type { AdminEntry, SquarespaceInventory } from './types.js';
 

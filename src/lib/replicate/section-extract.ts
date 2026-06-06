@@ -38,7 +38,7 @@ import type { PageSignature, SectionSignature } from './page-signature.js';
 import { extractReviewsFromHtml, type ExtractedReview } from './review-extract.js';
 import { extractFaqsFromHtml, type ExtractedFaq } from './faq-extract.js';
 import { buildSelector, type SelectorParts } from './section-selector.js';
-import { getPlaywright } from '../../adapters/shared.js';
+import { getPlaywright } from '../browser-kit/index.js';
 import { waitForStable, triggerLazyLoad, withEvaluateTimeout } from '../screenshot/page-helpers.js';
 import { enforceSameOrigin } from '../screenshot/same-origin.js';
 
