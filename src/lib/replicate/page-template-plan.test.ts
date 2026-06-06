@@ -161,3 +161,32 @@ describe('mergeCustomTemplates', () => {
     expect(() => mergeCustomTemplates('{not json', [])).toThrow();
   });
 });
+
+describe('convergence', () => {
+  it('apply-twice = no-op: same pages → identical plan', () => {
+    const pages = [
+      { slug: 'home', isHome: true, variant: V('overlay-full') },
+      { slug: 'a', isHome: false, variant: V('standard') },
+      { slug: 'b', isHome: false, variant: V('full') },
+    ];
+    const p1 = planPageTemplates(pages, render);
+    const p2 = planPageTemplates(pages, render);
+    expect(p2.templates).toEqual(p1.templates);
+    expect([...p2.assignments]).toEqual([...p1.assignments]);
+    expect(p2.customTemplates).toEqual(p1.customTemplates);
+  });
+
+  it('chaos: an excluded page still referencing a variant guards it from deletion', () => {
+    // 'c' was 'full' last run, is EXCLUDED this run but still references page-replica-full.
+    const plan = planPageTemplates([
+      { slug: 'a', isHome: false, variant: V('standard') },
+      { slug: 'b', isHome: false, variant: V('standard') },
+    ], render);
+    const rec = reconcileReplicaTemplates(
+      ['page-replica', 'page-replica-full'],
+      plan.desiredTemplateSlugs,                  // {page-replica}
+      new Set(['page-replica-full']),             // c still references it
+    );
+    expect(rec.delete).toEqual([]);               // full kept (guarded), not stranded
+  });
+});
