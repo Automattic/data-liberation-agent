@@ -1,4 +1,4 @@
-import { extractMeta } from '../shared.js';
+import { extractMeta } from '../../lib/html-extract/index.js';
 import type { CheerioRoot } from './types.js';
 
 // ---------------------------------------------------------------------------

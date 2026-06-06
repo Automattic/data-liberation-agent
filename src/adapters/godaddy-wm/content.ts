@@ -1,5 +1,5 @@
 import * as cheerio from 'cheerio';
-import { extractMeta, extractTitle } from '../shared.js';
+import { extractMeta, extractTitle } from '../../lib/html-extract/index.js';
 import { upgradeIsteamUrl } from './media.js';
 
 // ---------------------------------------------------------------------------

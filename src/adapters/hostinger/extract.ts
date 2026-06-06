@@ -1,7 +1,8 @@
 import type { WxrBuilder } from '../../lib/wxr/index.js';
 import type { ExtractionLog } from '../../lib/resume-state/index.js';
 import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import { slugify, runExtractionLoop, extractMeta, extractTitle, IMAGE_EXTENSIONS } from '../shared.js';
+import { slugify, runExtractionLoop } from '../shared.js';
+import { extractMeta, extractTitle, IMAGE_EXTENSIONS } from '../../lib/html-extract/index.js';
 import { WooProductCsvBuilder } from '../../lib/woo-csv/index.js';
 import type { WooProduct } from '../../lib/woo-csv/index.js';
 import { extractJsonLdBlocks, findJsonLdByType, jsonLdToWooProduct } from './products.js';

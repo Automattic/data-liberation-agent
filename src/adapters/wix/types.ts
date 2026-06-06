@@ -21,7 +21,7 @@ export interface Inventory {
     tagline: string;
     language: string;
   };
-  navigation: import('../shared.js').NavLink[];
+  navigation: import('../../lib/html-extract/index.js').NavLink[];
   counts: Record<string, number>;
   urls: import('../shared.js').InventoryUrl[];
 }

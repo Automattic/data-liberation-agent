@@ -1,7 +1,8 @@
 import { classifyUrl, parseSitemapXml } from '../../lib/extraction/sitemap.js';
 import { ensureUrlScheme } from '../../lib/url.js';
 import { launchBrowser } from '../../lib/browser-kit/index.js';
-import type { InventoryUrl, NavLink } from '../shared.js';
+import type { InventoryUrl } from '../shared.js';
+import type { NavLink } from '../../lib/html-extract/index.js';
 import type { WixAdapterOpts, Inventory } from './types.js';
 
 export async function discover(url: string, opts: Record<string, unknown>): Promise<Inventory> {

@@ -1,4 +1,4 @@
-import { extractMeta, IMAGE_EXTENSIONS } from '../shared.js';
+import { extractMeta, IMAGE_EXTENSIONS } from '../../lib/html-extract/index.js';
 
 /**
  * Extract the myshopify.com hostname from storefront HTML. Every Shopify

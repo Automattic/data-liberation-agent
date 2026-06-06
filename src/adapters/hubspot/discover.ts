@@ -1,6 +1,6 @@
 import * as cheerio from 'cheerio';
 import { fetchSitemap, classifyUrl } from '../../lib/extraction/sitemap.js';
-import { extractMeta, extractTitle, extractNavLinks } from '../shared.js';
+import { extractMeta, extractTitle, extractNavLinks } from '../../lib/html-extract/index.js';
 import type { InventoryUrl } from '../shared.js';
 import type { HubSpotInventory } from './types.js';
 import { MAX_HTML_BYTES } from './constants.js';

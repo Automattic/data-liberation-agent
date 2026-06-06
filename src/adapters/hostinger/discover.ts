@@ -1,5 +1,5 @@
 import { fetchSitemap, classifyUrl } from '../../lib/extraction/sitemap.js';
-import { extractMeta, extractTitle, extractNavLinks } from '../shared.js';
+import { extractMeta, extractTitle, extractNavLinks } from '../../lib/html-extract/index.js';
 import type { InventoryUrl } from '../shared.js';
 import type { HostingerInventory } from './types.js';
 

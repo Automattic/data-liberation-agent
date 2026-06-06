@@ -1,5 +1,5 @@
 import type { CapturedApiCall, PageMeta } from './types.js';
-import { IMAGE_EXTENSIONS } from '../shared.js';
+import { IMAGE_EXTENSIONS } from '../../lib/html-extract/index.js';
 
 /** An empty PageMeta, used when the live evaluate path is unavailable. */
 export function emptyMeta(): PageMeta {

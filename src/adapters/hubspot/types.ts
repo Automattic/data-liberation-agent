@@ -1,5 +1,5 @@
 import * as cheerio from 'cheerio';
-import type { NavLink } from '../shared.js';
+import type { NavLink } from '../../lib/html-extract/index.js';
 import type { InventoryUrl } from '../shared.js';
 
 // ---------------------------------------------------------------------------

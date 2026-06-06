@@ -1,4 +1,4 @@
-import { extractMeta, extractTitle } from '../shared.js';
+import { extractMeta, extractTitle } from '../../lib/html-extract/index.js';
 import { HOSTINGER_CHROME_CLASS, stripChrome } from './chrome.js';
 
 // ---------------------------------------------------------------------------

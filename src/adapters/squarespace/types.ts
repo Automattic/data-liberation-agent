@@ -1,4 +1,5 @@
-import type { NavLink, InventoryUrl } from '../shared.js';
+import type { InventoryUrl } from '../shared.js';
+import type { NavLink } from '../../lib/html-extract/index.js';
 
 export interface SquarespaceAdapterOpts extends Record<string, unknown> {
   cdpPort?: number;

@@ -1,5 +1,5 @@
-import { extractNavLinks, IMAGE_EXTENSIONS } from '../shared.js';
-import type { NavLink } from '../shared.js';
+import { extractNavLinks, IMAGE_EXTENSIONS } from '../../lib/html-extract/index.js';
+import type { NavLink } from '../../lib/html-extract/index.js';
 
 // ---------------------------------------------------------------------------
 // Media helpers

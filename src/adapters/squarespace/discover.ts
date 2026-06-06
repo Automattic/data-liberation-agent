@@ -1,5 +1,6 @@
 import { fetchSitemap, classifyUrl } from '../../lib/extraction/sitemap.js';
-import type { InventoryUrl, NavLink } from '../shared.js';
+import type { InventoryUrl } from '../shared.js';
+import type { NavLink } from '../../lib/html-extract/index.js';
 import type { SquarespaceAdapterOpts, SquarespaceInventory } from './types.js';
 import { fetchSqsJson } from './content.js';
 import { discoverAdmin, mergeAdminDiscovery } from './admin.js';

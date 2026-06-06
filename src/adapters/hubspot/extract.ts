@@ -2,7 +2,8 @@ import * as cheerio from 'cheerio';
 import type { WxrBuilder } from '../../lib/wxr/index.js';
 import type { ExtractionLog } from '../../lib/resume-state/index.js';
 import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import { slugify, runExtractionLoop, extractMeta, extractTitle, extractHeading } from '../shared.js';
+import { slugify, runExtractionLoop } from '../shared.js';
+import { extractMeta, extractTitle, extractHeading } from '../../lib/html-extract/index.js';
 import { WooProductCsvBuilder } from '../../lib/woo-csv/index.js';
 import type { HubSpotInventory, HubSpotAdapterOpts } from './types.js';
 import { MAX_HTML_BYTES } from './constants.js';
@@ -15,7 +16,7 @@ import {
   stripDuplicateTitle,
 } from './content.js';
 import { looksLikeBlogPostPath, normalizeUrl, parseOrigin } from './url.js';
-import { IMAGE_EXTENSIONS } from '../shared.js'; // used for og:image filtering below
+import { IMAGE_EXTENSIONS } from '../../lib/html-extract/index.js'; // used for og:image filtering below
 
 export async function extract(
   inventory: unknown,

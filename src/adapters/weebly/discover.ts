@@ -1,5 +1,5 @@
 import { fetchSitemap, classifyUrl } from '../../lib/extraction/sitemap.js';
-import { extractMeta, extractTitle } from '../shared.js';
+import { extractMeta, extractTitle } from '../../lib/html-extract/index.js';
 import type { InventoryUrl } from '../shared.js';
 import { extractWeeblyNavLinks } from './media.js';
 import type { WeeblyInventory } from './types.js';

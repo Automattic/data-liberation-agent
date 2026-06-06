@@ -1,4 +1,4 @@
-import { IMAGE_EXTENSIONS } from '../shared.js';
+import { IMAGE_EXTENSIONS } from '../../lib/html-extract/index.js';
 import type { SqsJsonResponse } from './types.js';
 
 /**

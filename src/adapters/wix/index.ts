@@ -3,7 +3,8 @@ import { discover } from './discover.js';
 import { extract } from './extract.js';
 
 // Re-export shared types so existing consumers still work
-export type { InventoryUrl, NavLink } from '../shared.js';
+export type { InventoryUrl } from '../shared.js';
+export type { NavLink } from '../../lib/html-extract/index.js';
 
 export type { WixAdapterOpts, Inventory, CapturedApiCall, PageMeta, PageData } from './types.js';
 export { isExecutionContextDestroyed, ROUTE_PIN_INIT_SCRIPT } from './runtime.js';
