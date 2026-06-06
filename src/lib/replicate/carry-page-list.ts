@@ -13,7 +13,7 @@ import { readFileSync, existsSync, readdirSync, writeFileSync, copyFileSync, rmS
 import { join } from 'node:path';
 
 /** Read a tag's text from a WXR item block, stripping an optional CDATA wrapper. */
-function tag(block: string, name: string): string {
+export function tag(block: string, name: string): string {
   const m = block.match(new RegExp(`<${name}>([\\s\\S]*?)</${name}>`));
   if (!m) return '';
   const cd = m[1].match(/^<!\[CDATA\[([\s\S]*)\]\]>$/);
@@ -21,7 +21,7 @@ function tag(block: string, name: string): string {
 }
 
 /** Prefer the full WXR (output.wxr.full, written by `slimWxrForProvision`) over the possibly-slimmed output.wxr. */
-function wxrSource(outputDir: string): string {
+export function wxrSource(outputDir: string): string {
   const full = join(outputDir, 'output.wxr.full');
   return existsSync(full) ? full : join(outputDir, 'output.wxr');
 }
