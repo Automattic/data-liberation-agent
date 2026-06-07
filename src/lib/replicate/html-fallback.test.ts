@@ -77,3 +77,11 @@ describe('selectIslandSource', () => {
     expect(selectIslandSource({ styledHtml: STYLED })).toEqual({ source: STYLED, tier: 'styled' });
   });
 });
+
+describe('provenance prefix semantics', () => {
+  it('responsive/styled flags are NOT counted as the bare html-fallback# divergence', () => {
+    expect('html-fallback-responsive#0: x'.startsWith('html-fallback#')).toBe(false);
+    expect('html-fallback-styled#0: x'.startsWith('html-fallback#')).toBe(false);
+    expect('html-fallback#0: x'.startsWith('html-fallback#')).toBe(true);
+  });
+});

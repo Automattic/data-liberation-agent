@@ -217,7 +217,9 @@ export function buildPageReconstruction(
     sectionsRendered: r.sectionsRendered,
     iconAssetCount: r.iconAssets.length,
     fallbackSections: r.provenanceFlags.filter((f) => f.startsWith('html-fallback#')).length,
-    styledFallbackSections: r.provenanceFlags.filter((f) => f.startsWith('html-fallback-styled#')).length,
+    styledFallbackSections: r.provenanceFlags.filter(
+      (f) => f.startsWith('html-fallback-styled#') || f.startsWith('html-fallback-responsive#'),
+    ).length,
     fallbackDiagnostics: r.fallbackDiagnostics,
     variant,
     template,

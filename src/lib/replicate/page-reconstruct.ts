@@ -30,7 +30,7 @@ import type { SectionSpec, SectionSpecImage, SectionSpecIcon, SectionSpecCell } 
 import { nearestToken, brightness, type PaletteToken } from './footer-color.js';
 import type { ExtractedReview } from './review-extract.js';
 import { measureSectionCoverage } from './section-coverage.js';
-import { buildHtmlFallbackBlock } from './html-fallback.js';
+import { buildHtmlFallbackBlock, selectIslandSource } from './html-fallback.js';
 import { applyBlockRecipe } from './apply-block-recipe.js';
 import { buildFallbackDiagnostic, type FallbackDiagnostic } from './fallback-diagnostic.js';
 
@@ -1579,20 +1579,18 @@ export function reconstructPagePattern(
         provenanceFlags.push(`adapter-recipe#${s.sectionIndex}: platform recipe upgraded section to blocks`);
         continue;
       }
-      // R4b floor: prefer the self-contained styled snapshot so a CSS-layout
-      // section renders styled, not bare. Fall to the verbatim sectionHtml only
-      // when no styled snapshot was captured (older cache / capture gap). The
-      // styled island uses a DISTINCT provenance prefix (`html-fallback-styled#`)
-      // so it is not counted as an `unstyled-island` parity divergence — the
-      // bare `html-fallback#` prefix remains the unstyled signal.
-      const styled = !!s.styledHtml;
-      const source = (s.styledHtml ?? s.sectionHtml) as string;
+      // Source-aware snapshot selection: WP-native sections use the clean,
+      // responsive sectionHtml (theme styles their classes); non-WP keep the
+      // styledHtml snapshot, where the inlined dims are load-bearing. `tier`
+      // drives the provenance: `responsive`/`styled` are NOT bare divergences;
+      // only `verbatim` (bare `html-fallback#`) is the unstyled signal.
+      const { source, tier } = selectIslandSource(s);
       const island = buildHtmlFallbackBlock(source, { mediaUrlMap: opts.mediaUrlMap });
       sectionMarkup.push(island);
       provenanceFlags.push(
-        `html-fallback${styled ? '-styled' : ''}#${s.sectionIndex}: structured render dropped content ` +
+        `html-fallback${tier === 'verbatim' ? '' : `-${tier}`}#${s.sectionIndex}: structured render dropped content ` +
           `(${cov.missingImages.length} images missing, text ${Math.round(cov.textCoverage * 100)}%) — ` +
-          `emitted ${styled ? 'styled' : 'verbatim'} core/html`,
+          `emitted ${tier} core/html`,
       );
       fallbackDiagnostics.push(
         buildFallbackDiagnostic({
@@ -1600,7 +1598,7 @@ export function reconstructPagePattern(
           slug: opts.slug ?? opts.patternSlug,
           section: s,
           coverage: cov,
-          islandKind: styled ? 'styled' : 'verbatim',
+          islandKind: tier,
           islandMarkup: island,
         }),
       );

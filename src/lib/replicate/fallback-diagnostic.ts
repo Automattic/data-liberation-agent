@@ -18,7 +18,7 @@ export interface FallbackDiagnostic {
   selector: string;
   severity: 'warning';
   reasonCode: FallbackReasonCode;
-  islandKind: 'verbatim' | 'styled';
+  islandKind: 'verbatim' | 'styled' | 'responsive';
   droppedImages: string[];
   textCoverage: number;
   suggestedRepairClass: FallbackRepairClass;
@@ -33,7 +33,7 @@ export function buildFallbackDiagnostic(args: {
   slug: string;
   section: SectionSpec;
   coverage: CoverageResult;
-  islandKind: 'verbatim' | 'styled';
+  islandKind: 'verbatim' | 'styled' | 'responsive';
   islandMarkup: string;
 }): FallbackDiagnostic {
   const { page, slug, section, coverage, islandKind, islandMarkup } = args;
