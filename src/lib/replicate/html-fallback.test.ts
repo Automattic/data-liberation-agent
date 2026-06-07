@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildHtmlFallbackBlock } from './html-fallback.js';
+import { buildHtmlFallbackBlock, isWpLayoutMarkup, selectIslandSource } from './html-fallback.js';
 import { scanForInjection } from './validate-artifacts.js';
 import { buildInternalLinkMap } from '../streaming/internal-link-rewrite.js';
 
@@ -42,5 +42,38 @@ describe('buildHtmlFallbackBlock', () => {
     const linkMap = buildInternalLinkMap([{ from: '/about', to: '/about/' }], { siteOrigins: ['example.test'] });
     const out = buildHtmlFallbackBlock('<a href="/about">About</a>', { linkMap });
     expect(out).toContain('href="/about/"');
+  });
+});
+
+describe('isWpLayoutMarkup', () => {
+  it('true for WP block-layout classes', () => {
+    expect(isWpLayoutMarkup('<div class="wp-block-group is-layout-constrained">x</div>')).toBe(true);
+    expect(isWpLayoutMarkup('<main class="has-global-padding">x</main>')).toBe(true);
+  });
+  it('false for non-WP / plain markup', () => {
+    expect(isWpLayoutMarkup('<div class="sqs-block comp-abc">x</div>')).toBe(false);
+    expect(isWpLayoutMarkup('<section><p>hello</p></section>')).toBe(false);
+  });
+});
+
+describe('selectIslandSource', () => {
+  const WP = '<main class="wp-block-group is-layout-constrained"><h1 class="has-text-align-center">A</h1></main>';
+  const STYLED = '<main style="width:1440px">A</main>';
+
+  it('WP-native sectionHtml → responsive (prefers sectionHtml)', () => {
+    expect(selectIslandSource({ sectionHtml: WP, styledHtml: STYLED }))
+      .toEqual({ source: WP, tier: 'responsive' });
+  });
+  it('non-WP sectionHtml + styledHtml → styled (prefers styledHtml)', () => {
+    const nonWp = '<div class="sqs-block">A</div>';
+    expect(selectIslandSource({ sectionHtml: nonWp, styledHtml: STYLED }))
+      .toEqual({ source: STYLED, tier: 'styled' });
+  });
+  it('styledHtml absent + non-WP sectionHtml → verbatim', () => {
+    const nonWp = '<div class="sqs-block">A</div>';
+    expect(selectIslandSource({ sectionHtml: nonWp })).toEqual({ source: nonWp, tier: 'verbatim' });
+  });
+  it('sectionHtml absent → uses styledHtml (styled tier)', () => {
+    expect(selectIslandSource({ styledHtml: STYLED })).toEqual({ source: STYLED, tier: 'styled' });
   });
 });
