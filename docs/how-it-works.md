@@ -289,7 +289,7 @@ This is a deliberate stance: the system would rather *show you an honest gap* th
 
 ## Quick reference — artifacts in the output directory
 
-> The default output base is `~/Studio/_liberations/<host>`. Override with `--output <dir>` (CLI) or the `DLA_OUTPUT_DIR` env var. Use `liberate_paths` to resolve the actual path at runtime.
+> The default output base is `~/Studio/_liberations/<host>`. Override with the `DLA_OUTPUT_DIR` env var or the `outputDir` arg to the MCP tools (the `--output <dir>` CLI flag also works). Use `liberate_paths` to resolve the actual path at runtime.
 
 | File / dir | Phase | What it is |
 |---|---|---|
