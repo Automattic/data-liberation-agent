@@ -1056,10 +1056,15 @@ function buildIndexTemplate(): string {
 // -- templates/single.html + page.html ---------------------------------------
 
 /**
- * Base single-post template: header part → title + date + featured image +
- * post-content → footer part. Without this, imported posts fall through to
- * `index.html` (which has no `post-title`) and render titleless. Padding uses
- * explicit rem (not spacing presets, which the scaffold's theme.json may omit).
+ * Base single-post template: header part → title + byline (date · author) +
+ * featured image + post-content + tags + prev/next navigation → footer part.
+ * Without this, imported posts fall through to `index.html` (which has no
+ * `post-title`) and render titleless. The post-meta blocks here are the
+ * destination for the chrome that rawConvert strips out of post_content (see
+ * POST_META_CHROME in scripts/block-fixer/lib/rawConvert.js) — so a liberated
+ * post renders its date/author/tags/nav via the TEMPLATE while the content
+ * converts to native blocks. Padding uses explicit rem (not spacing presets,
+ * which the scaffold's theme.json may omit).
  */
 function buildSingleTemplate(): string {
   return `<!-- wp:template-part {"slug":"header","tagName":"header"} /-->
@@ -1068,11 +1073,27 @@ function buildSingleTemplate(): string {
 <main class="wp-block-group" style="padding-top:3rem;padding-bottom:4rem">
 <!-- wp:post-title {"level":1} /-->
 
+<!-- wp:group {"layout":{"type":"flex","flexWrap":"wrap"},"style":{"spacing":{"blockGap":"0.5rem"}}} -->
+<div class="wp-block-group">
 <!-- wp:post-date /-->
+
+<!-- wp:post-author-name /-->
+</div>
+<!-- /wp:group -->
 
 <!-- wp:post-featured-image {"isLink":false} /-->
 
 <!-- wp:post-content {"layout":{"type":"constrained"}} /-->
+
+<!-- wp:post-terms {"term":"post_tag","prefix":"Tags: "} /-->
+
+<!-- wp:group {"layout":{"type":"flex","justifyContent":"space-between","flexWrap":"wrap"}} -->
+<div class="wp-block-group">
+<!-- wp:post-navigation-link {"type":"previous","label":"Previous post","showTitle":true} /-->
+
+<!-- wp:post-navigation-link {"label":"Next post","showTitle":true} /-->
+</div>
+<!-- /wp:group -->
 </main>
 <!-- /wp:group -->
 

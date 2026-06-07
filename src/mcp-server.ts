@@ -417,13 +417,17 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: 'liberate_reconstruct_pages',
-      description: 'Deterministically reconstruct EVERY content page from its OWN captured section specs (no shared cluster skeleton, no carried-HTML fallback). For each page: capture computed-style section specs (Playwright), download + install its section media (incl. sibling background-image heroes) into the WP library, reconstruct verbatim block-pattern markup with mediaMapped images + theme tokens, GATE through validate_artifacts (escaping/injection/provenance — never installs a failing pattern), and write patterns/page-<slug>.php + templates/page-<slug>.html (+ front-page.html for isHome) + icon SVG assets into the running Studio theme, then flush the pattern cache. This is the primary page-faithfulness path: it replaces reconstructing only cluster representatives and rendering the rest as raw source HTML. The theme shell (header/footer/theme.json) must already be installed via liberate_theme_scaffold/install.',
+      description: 'Deterministically reconstruct EVERY content page from its OWN captured section specs. For each page: capture specs, install section media, reconstruct verbatim block markup, GATE through validate_artifacts, write the pattern + reconstructed post_content. Page TEMPLATES are collapsed to a small set of variant templates (templates/page-replica[-<key>].html) registered in theme.json customTemplates and assigned per page via _wp_page_template; output.wxr is patched to match. Set collapseTemplates:false to fall back to one templates/page-<slug>.html per page. The theme shell must already be installed via liberate_theme_scaffold/install.',
       inputSchema: {
         type: 'object' as const,
         properties: {
           outputDir: { type: 'string', description: 'Liberation output directory (holds media/ + media-stubs.json).' },
           studioSitePath: { type: 'string', description: 'On-disk path to the running Studio site (e.g. ~/Studio/example-com).' },
           themeSlug: { type: 'string', description: 'Installed theme slug. Defaults to <siteSlug>-replica derived from outputDir.' },
+          collapseTemplates: {
+            type: 'boolean',
+            description: 'Collapse per-page templates into variant-keyed templates + _wp_page_template assignments (default true). false = one template per page (legacy).',
+          },
           pages: {
             type: 'array',
             description: 'Content pages to reconstruct. Reconstruct every page (not just cluster reps).',

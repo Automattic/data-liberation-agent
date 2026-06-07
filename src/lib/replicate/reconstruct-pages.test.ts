@@ -29,7 +29,7 @@ function section(partial: Partial<SectionSpec>): SectionSpec {
 describe('buildPageReconstruction', () => {
   const base = { themeSlug: 'demo-replica', title: 'About Us' };
 
-  it('emits a pattern, a per-page template, and a gate report for a content page', () => {
+  it('emits a pattern, a gate report, variant + template for a content page (no per-slug template file)', () => {
     const r = buildPageReconstruction([section({ headings: ['About Us'], bodyText: ['We sell lumber.'] })], {
       ...base,
       slug: 'about-us',
@@ -38,10 +38,14 @@ describe('buildPageReconstruction', () => {
     expect(r.gate.ok).toBe(true);
     const paths = r.files.map((f) => f.path);
     expect(paths).toContain('patterns/page-about-us.php');
-    expect(paths).toContain('templates/page-about-us.html');
+    // Per-slug template is no longer emitted — the collapse planner writes the
+    // deduped variant template instead.
+    expect(paths).not.toContain('templates/page-about-us.html');
+    expect(r.variant).toBeDefined();
+    expect(r.template).toBeDefined();
     // The template renders the page's post_content (real editable block page),
     // between header/footer parts — NOT a wp:pattern ref.
-    const tpl = r.files.find((f) => f.path === 'templates/page-about-us.html')!.content;
+    const tpl = r.template;
     expect(tpl).toContain('wp:post-content');
     expect(tpl).not.toContain('wp:pattern');
     expect(tpl).toContain('template-part {"slug":"header"');
@@ -63,13 +67,13 @@ describe('buildPageReconstruction', () => {
       [section({ headings: ['Hero'], fullBleed: true } as Partial<SectionSpec>)],
       { ...base, slug: 'full' },
     );
-    const fwTpl = fw.files.find((f) => f.path === 'templates/page-full.html')!.content;
-    expect(fwTpl).toContain('wp:post-content {"layout":{"type":"default"}}');
-    expect(fwTpl).not.toContain('wp:post-content {"layout":{"type":"constrained"}}');
+    expect(fw.template).toContain('wp:post-content {"layout":{"type":"default"}}');
+    expect(fw.template).not.toContain('wp:post-content {"layout":{"type":"constrained"}}');
+    expect(fw.variant.fullWidth).toBe(true);
     // A page with only boxed content → constrained.
     const cw = buildPageReconstruction([section({ headings: ['Body'], bodyText: ['x'] })], { ...base, slug: 'boxed' });
-    const cwTpl = cw.files.find((f) => f.path === 'templates/page-boxed.html')!.content;
-    expect(cwTpl).toContain('wp:post-content {"layout":{"type":"constrained"}}');
+    expect(cw.template).toContain('wp:post-content {"layout":{"type":"constrained"}}');
+    expect(cw.variant.fullWidth).toBe(false);
   });
 
   it('does NOT force full-width when only a chrome (footer/nav) section is full-bleed', () => {
@@ -82,8 +86,8 @@ describe('buildPageReconstruction', () => {
       ],
       { ...base, slug: 'chrome' },
     );
-    const tpl = r.files.find((f) => f.path === 'templates/page-chrome.html')!.content;
-    expect(tpl).toContain('wp:post-content {"layout":{"type":"constrained"}}');
+    expect(r.template).toContain('wp:post-content {"layout":{"type":"constrained"}}');
+    expect(r.variant.fullWidth).toBe(false);
   });
 
   it('an overlay-cover homepage is BOTH full-width and flush-top (the two decisions are independent)', () => {
@@ -109,11 +113,14 @@ describe('buildPageReconstruction', () => {
     expect(tpl).not.toContain('site-header-overlay');
   });
 
-  it('emits front-page.html for the home page', () => {
+  it('emits front-page.html for the home page but NOT a per-slug page template', () => {
     const r = buildPageReconstruction([section({ headings: ['Home'] })], { ...base, slug: 'home', isHome: true });
     const paths = r.files.map((f) => f.path);
     expect(paths).toContain('templates/front-page.html');
-    expect(paths).toContain('templates/page-home.html');
+    // Per-slug template is no longer emitted — the collapse planner dedupes it.
+    expect(paths).not.toContain('templates/page-home.html');
+    expect(r.variant).toBeDefined();
+    expect(r.template).toBeDefined();
   });
 
   it('wires the overlay header in the template ONLY when the hero is a full-bleed cover', () => {
@@ -126,9 +133,8 @@ describe('buildPageReconstruction', () => {
     expect(coverTpl).toContain('"className":"site-header-overlay"'); // overlay header on the cover-hero homepage
 
     const plainPage = buildPageReconstruction([section({ headings: ['About'], bodyText: ['copy'] })], { ...base, slug: 'about' });
-    const plainTpl = plainPage.files.find((f) => f.path === 'templates/page-about.html')!.content;
-    expect(plainTpl).toContain('"slug":"header","tagName":"header"} /-->'); // solid header
-    expect(plainTpl).not.toContain('site-header-overlay');
+    expect(plainPage.template).toContain('"slug":"header","tagName":"header"} /-->'); // solid header
+    expect(plainPage.template).not.toContain('site-header-overlay');
   });
 
   it('includes icon SVG assets the pattern references', () => {
@@ -194,5 +200,41 @@ describe('buildPageReconstruction', () => {
     } as Partial<SectionSpec>);
     const r = buildPageReconstruction([cta], { ...base, slug: 'cta2' });
     expect(r.postContent).toContain('href="/about-us"');
+  });
+});
+
+describe('buildPageReconstruction — converted-heading provenance', () => {
+  it('passes the gate when a converted section emits a heading not in s.headings', () => {
+    // rawHandler faithfully emits sub-headings the structured extraction never
+    // captured as s.headings (verified: 6 of 16 on a real page). The converted
+    // branch registers the converted markup's OWN <h>/<p> visible text into the
+    // gate corpus so those sub-headings don't trip the provenance check.
+    const markup =
+      '<!-- wp:heading --><h2>Known Heading</h2><!-- /wp:heading -->\n' +
+      '<!-- wp:paragraph --><p>Some captured body copy.</p><!-- /wp:paragraph -->\n' +
+      '<!-- wp:heading {"level":3} --><h3>Surprise Subheading</h3><!-- /wp:heading -->';
+    const result = buildPageReconstruction(
+      [
+        section({
+          headings: ['Known Heading'],       // captured corpus: ONE heading only
+          headingSizes: [28],
+          bodyText: ['Some captured body copy.'],
+          sectionHtml:
+            '<h2>Known Heading</h2><p>Some captured body copy.</p><h3>Surprise Subheading</h3>',
+        }),
+      ],
+      {
+        slug: 'about',
+        title: 'About',
+        themeSlug: 'demo-replica',
+        convertedSections: new Map([[0, { markup, wpHtmlResidue: 0 }]]),
+      },
+    );
+    // 'Surprise Subheading' was NOT in s.headings, but the converted branch
+    // registered it from the markup's <h3> — so the gate must not reject it.
+    expect(result.gate.ok).toBe(true);
+    expect(result.postContent).toContain('Surprise Subheading');
+    // The converted path emits native blocks — no core/html fallback island.
+    expect(result.postContent).not.toContain('<!-- wp:html');
   });
 });

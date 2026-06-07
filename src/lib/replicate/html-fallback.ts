@@ -43,6 +43,33 @@ export function sanitize(html: string): string {
     .replace(/\son[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '');
 }
 
+const WP_LAYOUT_MARKER = /(?:is-layout-(?:constrained|flow|flex)|wp-block-|has-global-padding)/;
+
+/** True when the markup carries WP-layout classes the replica block theme styles
+ *  responsively (`is-layout-*`, `wp-block-*`, `has-global-padding`). Used to pick
+ *  the responsive `sectionHtml` snapshot over the frozen `styledHtml` for WP
+ *  sources, so the island reflows via the theme's CSS instead of captured pixels. */
+export function isWpLayoutMarkup(html: string): boolean {
+  return WP_LAYOUT_MARKER.test(html);
+}
+
+export type IslandTier = 'responsive' | 'styled' | 'verbatim';
+
+/** Choose which captured snapshot the core/html island should use, and classify
+ *  the result. WP-native sections (the replica block theme styles their classes)
+ *  use the clean, responsive `sectionHtml`; otherwise the `styledHtml` snapshot
+ *  (computed dims inlined) is load-bearing; with no styled snapshot, the bare
+ *  `sectionHtml` is the verbatim floor. Pure — no I/O. */
+export function selectIslandSource(
+  section: { sectionHtml?: string; styledHtml?: string },
+): { source: string; tier: IslandTier } {
+  if (section.sectionHtml && isWpLayoutMarkup(section.sectionHtml)) {
+    return { source: section.sectionHtml ?? section.styledHtml ?? '', tier: 'responsive' };
+  }
+  if (section.styledHtml) return { source: section.styledHtml, tier: 'styled' };
+  return { source: section.sectionHtml ?? '', tier: 'verbatim' };
+}
+
 /**
  * Build a sanitized, URL-rewritten `core/html` block from a section's source
  * outerHTML. Throws if sanitization left any injection vector (defensive — a bad

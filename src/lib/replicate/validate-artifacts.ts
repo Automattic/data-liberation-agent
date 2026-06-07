@@ -176,6 +176,16 @@ export interface ArtifactInput { patterns: ArtifactPattern[]; }
 export interface Finding { slug: string; message: string; }
 export interface ValidationReport { ok: boolean; errors: Finding[]; warnings: Finding[]; }
 
+/** True when markup carries an un-migrated remote asset — a remote <img src> or
+ *  CSS url() that is NOT a /wp-content/uploads/ media-library URL. Shared with the
+ *  blocks reconstructor so it can reject a conversion that would fail this gate. */
+export function hasUnmigratedRemoteAsset(markup: string): boolean {
+  const isMediaLibraryUrl = (u: string): boolean => /\/wp-content\/uploads\//i.test(u);
+  const imgRemote = [...markup.matchAll(/<img\b[^>]*?\bsrc=["']?(https?:\/\/[^"'\s>]+)/gi)].some((m) => !isMediaLibraryUrl(m[1]));
+  const cssRemote = [...markup.matchAll(/url\(\s*['"]?(https?:\/\/[^)'"]+)/gi)].some((m) => !isMediaLibraryUrl(m[1]));
+  return imgRemote || cssRemote;
+}
+
 export function validateArtifacts(input: ArtifactInput): ValidationReport {
   const errors: Finding[] = [];
   const warnings: Finding[] = [];
@@ -193,12 +203,7 @@ export function validateArtifacts(input: ArtifactInput): ValidationReport {
     // for content images stored in post_content — not a leak — so it's exempt.
     // Theme-pattern chrome still routes through get_theme_file_uri(); content
     // images legitimately reference the uploaded media library by URL.
-    const isMediaLibraryUrl = (u: string): boolean => /\/wp-content\/uploads\//i.test(u);
-    const imgRemote = [...p.php.matchAll(/<img\b[^>]*?\bsrc=["']?(https?:\/\/[^"'\s>]+)/gi)]
-      .some((m) => !isMediaLibraryUrl(m[1]));
-    const cssRemote = [...p.php.matchAll(/url\(\s*['"]?(https?:\/\/[^)'"]+)/gi)]
-      .some((m) => !isMediaLibraryUrl(m[1]));
-    if (imgRemote || cssRemote) {
+    if (hasUnmigratedRemoteAsset(p.php)) {
       fail('remote image URL found; route theme assets through get_theme_file_uri() and content images through the WP media library');
     }
     for (const comment of p.php.matchAll(/<!--([\s\S]*?)-->/g)) {

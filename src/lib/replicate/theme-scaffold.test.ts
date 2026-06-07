@@ -75,6 +75,12 @@ describe('buildThemeScaffold', () => {
     expect(single!.content).toContain('wp:post-content');
     expect(single!.content).toContain('"slug":"header"');
     expect(single!.content).toContain('"slug":"footer"');
+    // Post-meta blocks: the template renders date/author/tags/nav so the chrome
+    // that rawConvert strips out of post_content (POST_META_CHROME) isn't lost.
+    expect(single!.content).toContain('wp:post-date');
+    expect(single!.content).toContain('wp:post-author-name');
+    expect(single!.content).toContain('wp:post-terms');
+    expect(single!.content).toContain('wp:post-navigation-link');
     // page fallback: title + content.
     expect(page!.content).toContain('wp:post-title');
     expect(page!.content).toContain('wp:post-content');

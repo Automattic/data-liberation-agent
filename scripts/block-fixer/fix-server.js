@@ -16,6 +16,8 @@
 // Wire:
 //   POST /fix    { items: [<block html>, ...] }
 //                → { results: [{ html, changed, fixedIssues }, ...] }
+//   POST /raw    { items: [<raw html>, ...] }
+//                → { results: [{ html, wpHtmlResidue }, ...] }
 //   GET  /health → { status: 'ok', workers: N, pid }
 //
 
@@ -117,6 +119,7 @@ if (cluster.isPrimary) {
   console.warn = (...args) => console.error(...args);
 
   const { fixBlocksInTemplate } = require('./lib/blockFixer.js');
+  const { convertHtmlToBlocks } = require('./lib/rawConvert.js');
 
   const MAX_BODY_BYTES = 4_194_304; // 4MB — generous; one composed page is ~30-130KB
 
@@ -139,6 +142,23 @@ if (cluster.isPrimary) {
       return fixBlocksInTemplate(html);
     });
 
+    return { status: 200, body: { results } };
+  }
+
+  function handleRaw(body) {
+    let payload;
+    try {
+      payload = JSON.parse(body);
+    } catch (e) {
+      return { status: 400, body: { error: 'Invalid JSON: ' + e.message } };
+    }
+    if (!Array.isArray(payload.items)) {
+      return { status: 400, body: { error: 'Missing or invalid "items" array' } };
+    }
+    const results = payload.items.map((html) => {
+      if (typeof html !== 'string') return { html: '', wpHtmlResidue: Infinity };
+      return convertHtmlToBlocks(html);
+    });
     return { status: 200, body: { results } };
   }
 
@@ -168,6 +188,40 @@ if (cluster.isPrimary) {
         if (res.writableEnded) return;
         const body = Buffer.concat(chunks).toString('utf-8');
         const result = handleFix(body);
+        res.writeHead(result.status, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(result.body));
+      });
+
+      req.on('error', (err) => {
+        console.error('[block-fixer] Request error:', err.message);
+        if (!res.writableEnded) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Internal server error' }));
+        }
+      });
+
+      return;
+    }
+
+    if (req.method === 'POST' && req.url === '/raw') {
+      const chunks = [];
+      let totalBytes = 0;
+
+      req.on('data', (chunk) => {
+        totalBytes += chunk.length;
+        if (totalBytes > MAX_BODY_BYTES) {
+          res.writeHead(413, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Request body too large' }));
+          req.destroy();
+          return;
+        }
+        chunks.push(chunk);
+      });
+
+      req.on('end', () => {
+        if (res.writableEnded) return;
+        const body = Buffer.concat(chunks).toString('utf-8');
+        const result = handleRaw(body);
         res.writeHead(result.status, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(result.body));
       });

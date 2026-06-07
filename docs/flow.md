@@ -387,7 +387,7 @@ flowchart TD
     txt{"copy is in spec headings / bodyText / reviews?"}:::dec
     omit["omit slot or '[copy not captured]' + flag"]:::det
     va{"validate_artifacts (per page): escaping + injection allowlist + provenance subset of spec + no remote URL + no placeholders"}:::gate
-    keep["pattern + per-page template + icon SVGs written"]:::det
+    keep["pattern + post_content + variant templates + _wp_page_template + icon SVGs written"]:::det
     skip["page NOT installed - reported with gateErrors (fix tooling/spec, never ship carried HTML)"]:::gate
 
     sp --> lay
