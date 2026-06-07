@@ -151,6 +151,12 @@ export function buildPageReconstruction(
      * recipe context so recipes can emit rewritten media URLs keyed to the page.
      */
     sourceUrl?: string;
+    /**
+     * Pre-resolved HTML→blocks conversions keyed by SectionSpec.sectionIndex
+     * (from convertSemanticSections). Passed straight to reconstructPagePattern;
+     * absent → structured render only.
+     */
+    convertedSections?: Map<number, { markup: string | null; wpHtmlResidue: number }>;
   },
 ): PageReconstructionResult {
   if (!SAFE_SLUG.test(opts.slug)) throw new Error(`unsafe page slug: "${opts.slug}"`);
@@ -166,6 +172,7 @@ export function buildPageReconstruction(
     mediaUrlMap: opts.mediaUrlMap,
     adapterBlocks: opts.adapterBlocks,
     sourceUrl: opts.sourceUrl,
+    convertedSections: opts.convertedSections,
   });
 
   // Rewrite same-site body links to local permalinks BEFORE the gate, so the

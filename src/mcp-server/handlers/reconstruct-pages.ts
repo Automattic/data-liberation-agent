@@ -29,6 +29,7 @@ import { buildPageReconstruction } from '../../lib/replicate/reconstruct-pages.j
 import { buildPageLinkMap } from '../../lib/replicate/page-link-map.js';
 import { installRunMediaMap } from '../../lib/replicate/run-media-map.js';
 import { BlockFixerClient } from '../../lib/streaming/block-fixer-client.js';
+import { convertSemanticSections } from '../../lib/replicate/convert-semantic-sections.js';
 import { downloadMedia } from '../../lib/media-fetch/index.js';
 import { downloadSectionMedia } from '../../lib/replicate/download-section-media.js';
 import { MediaStubStore } from '../../lib/resume-state/index.js';
@@ -331,9 +332,15 @@ export const reconstructPagesHandler: Handler = async (args, ctx) => {
       continue;
     }
     applyMediaMap(specs, mediaMap);
+    // Pre-resolve general HTML→blocks conversions for this page's semantic sections
+    // via the block-fixer sidecar (rawHandler). Async work stays here; results flow
+    // into the sync reconstructor as data. Sidecar down → empty map → structured render.
+    // .catch guards the loop: a rejected conversion must not escape and skip
+    // blockFixer.stop() (subprocess leak) — an empty map degrades to structured render.
+    const convertedSections = await convertSemanticSections(specs, blockFixer).catch(() => new Map());
     let built;
     try {
-      built = buildPageReconstruction(specs, { slug: p.slug, title: p.title, themeSlug, isHome: p.isHome, paletteTokens, fontFamilies, linkMap, mediaUrlMap, adapterBlocks: adapter?.blocks, sourceUrl: p.sourceUrl });
+      built = buildPageReconstruction(specs, { slug: p.slug, title: p.title, themeSlug, isHome: p.isHome, paletteTokens, fontFamilies, linkMap, mediaUrlMap, adapterBlocks: adapter?.blocks, sourceUrl: p.sourceUrl, convertedSections });
     } catch (err) {
       report.push({ slug: p.slug, ok: false, reason: `build: ${err instanceof Error ? err.message : String(err)}` });
       continue;
