@@ -33,6 +33,7 @@ function init() {
   initialized = true;
 }
 
+// Keep in sync with src/lib/replicate/semantic-html.ts (UNWRAP_SELECTOR).
 const UNWRAP_SELECTOR =
   'main, div.wp-block-group, div.wp-block-post-content, div.entry-content, div.wp-block-group__inner-container';
 
