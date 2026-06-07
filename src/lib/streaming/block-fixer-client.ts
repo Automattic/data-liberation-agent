@@ -33,6 +33,13 @@ export interface FixResult {
   fixedIssues: string[];
 }
 
+export interface RawConvertResult {
+  /** Native block markup, or null on passthrough (server unavailable / parse error). */
+  html: string | null;
+  /** Count of residual `wp:html` blocks; Infinity on passthrough/error. */
+  wpHtmlResidue: number;
+}
+
 export interface BlockFixerStartOpts {
   /** Override server port. Default 3201 (telex uses 3200 — pick another so both can coexist). */
   port?: number;
@@ -207,6 +214,34 @@ export class BlockFixerClient {
     } catch (err) {
       this.log(`[block-fixer] /fix request failed: ${(err as Error).message}`);
       return items.map((html) => ({ html, changed: false, fixedIssues: [] }));
+    }
+  }
+
+  /**
+   * Convert raw section HTML into native block markup via the sidecar `/raw`
+   * op (rawHandler). Returns one result per input, in order. On any failure
+   * (not ready, non-200, malformed, timeout) returns a passthrough sentinel
+   * per item so the caller falls back to the structured render.
+   */
+  async rawConvert(items: string[]): Promise<RawConvertResult[]> {
+    if (items.length === 0) return [];
+    const sentinel = (): RawConvertResult => ({ html: null, wpHtmlResidue: Infinity });
+    if (!this.ready) return items.map(sentinel);
+    try {
+      const res = await this.postJson('/raw', JSON.stringify({ items }));
+      if (res.status !== 200) {
+        this.log(`[block-fixer] /raw returned ${res.status}: ${res.body.slice(0, 200)}`);
+        return items.map(sentinel);
+      }
+      const decoded = JSON.parse(res.body) as { results?: RawConvertResult[] };
+      if (!Array.isArray(decoded.results) || decoded.results.length !== items.length) {
+        this.log(`[block-fixer] /raw returned malformed body — passthrough`);
+        return items.map(sentinel);
+      }
+      return decoded.results;
+    } catch (err) {
+      this.log(`[block-fixer] /raw request failed: ${(err as Error).message}`);
+      return items.map(sentinel);
     }
   }
 
