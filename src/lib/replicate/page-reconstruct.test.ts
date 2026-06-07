@@ -1085,3 +1085,71 @@ describe('reconstructPagePattern — coverage-gated core/html fallback', () => {
     expect(r.provenanceFlags.some((f) => f.includes('adapter-recipe#'))).toBe(false);
   });
 });
+
+describe('reconstructPagePattern — converted-sections (HTML→blocks) branch', () => {
+  const opts = { patternSlug: 'demo-replica/page-x', title: 'Page — X' };
+  // The provenance flag `html-to-blocks#<i>` is the reliable discriminator that the
+  // converted branch fired (the structured render never emits it).
+  const conv = (markup: string, wpHtmlResidue = 0) =>
+    new Map([[0, { markup, wpHtmlResidue }]]);
+
+  it('emits clean converted markup (native, no island) and skips the structured render', () => {
+    const s = section({ headings: ['My Heading'], bodyText: ['some body copy'] });
+    const markup =
+      '<!-- wp:heading --><h2>My Heading</h2><!-- /wp:heading -->\n' +
+      '<!-- wp:paragraph --><p>some body copy</p><!-- /wp:paragraph -->';
+    const r = reconstructPagePattern([s], { ...opts, convertedSections: conv(markup) });
+    expect(r.body).toContain('<!-- wp:heading');   // native blocks present
+    expect(r.body).not.toContain('<!-- wp:html');  // no core/html island
+    expect(r.provenanceFlags.some((f) => f.startsWith('html-to-blocks#0'))).toBe(true);
+  });
+
+  it('falls through to the structured render when residue > 0', () => {
+    const s = section({ headings: ['Fallback Heading'] });
+    const markup = '<!-- wp:html --><div>unconverted</div><!-- /wp:html -->';
+    const r = reconstructPagePattern([s], { ...opts, convertedSections: conv(markup, 2) });
+    expect(r.provenanceFlags.some((f) => f.startsWith('html-to-blocks#0'))).toBe(false);
+    expect(r.body).toContain('Fallback Heading');  // structured render ran
+    expect(r.body).not.toContain('unconverted');
+  });
+
+  it('falls through when the conversion drops a captured image (coverage lost)', () => {
+    const s = section({ headings: ['Has Image'], images: [img('https://example.test/keep.jpg')] });
+    const markup = '<!-- wp:heading --><h2>Has Image</h2><!-- /wp:heading -->'; // image missing
+    const r = reconstructPagePattern([s], { ...opts, convertedSections: conv(markup) });
+    expect(r.provenanceFlags.some((f) => f.startsWith('html-to-blocks#0'))).toBe(false);
+  });
+
+  it('falls through when a converted image keeps a remote (non-migrated) URL', () => {
+    // rawHandler preserves the source <img src>; a non-downloaded asset's remote CDN
+    // URL would FAIL the drift gate (validate-artifacts). Coverage can't catch it —
+    // the URL is present in BOTH the markup and the captured images — so the
+    // remote-asset guard must reject it and fall through to the structured render
+    // (which placeholders non-WP images).
+    const s = section({ headings: ['Remote Photo'], images: [img('https://cdn.example.test/photo.jpg')] });
+    const markup =
+      '<!-- wp:heading --><h2>Remote Photo</h2><!-- /wp:heading -->\n' +
+      '<!-- wp:image --><figure class="wp-block-image"><img src="https://cdn.example.test/photo.jpg" alt=""/></figure><!-- /wp:image -->';
+    const r = reconstructPagePattern([s], { ...opts, convertedSections: conv(markup) });
+    expect(r.provenanceFlags.some((f) => f.startsWith('html-to-blocks#0'))).toBe(false);
+    expect(r.body).not.toContain('https://cdn.example.test/photo.jpg'); // gate-safe fallback
+  });
+
+  it('accepts a converted image already migrated to the WP media library', () => {
+    const wpImg = `${WP}local.jpg`;
+    const s = section({ headings: ['Local Photo'], images: [img(wpImg)] });
+    const markup =
+      '<!-- wp:heading --><h2>Local Photo</h2><!-- /wp:heading -->\n' +
+      `<!-- wp:image --><figure class="wp-block-image"><img src="${wpImg}" alt=""/></figure><!-- /wp:image -->`;
+    const r = reconstructPagePattern([s], { ...opts, convertedSections: conv(markup) });
+    expect(r.provenanceFlags.some((f) => f.startsWith('html-to-blocks#0'))).toBe(true);
+    expect(r.body).toContain(wpImg); // migrated URL preserved natively (no island)
+  });
+
+  it('is identical to today when no convertedSections map is supplied', () => {
+    const s = section({ headings: ['Plain'] });
+    const a = reconstructPagePattern([s], opts);
+    const b = reconstructPagePattern([s], opts);
+    expect(a.body).toEqual(b.body);
+  });
+});

@@ -31,6 +31,8 @@ import { nearestToken, brightness, type PaletteToken } from './footer-color.js';
 import type { ExtractedReview } from './review-extract.js';
 import { measureSectionCoverage } from './section-coverage.js';
 import { buildHtmlFallbackBlock, selectIslandSource } from './html-fallback.js';
+import { rewriteMediaUrls } from '../streaming/media-url-rewrite.js';
+import { hasUnmigratedRemoteAsset } from './validate-artifacts.js';
 import { applyBlockRecipe } from './apply-block-recipe.js';
 import { buildFallbackDiagnostic, type FallbackDiagnostic } from './fallback-diagnostic.js';
 
@@ -94,6 +96,13 @@ export interface ReconstructOptions {
    * patternSlug when absent.
    */
   slug?: string;
+  /**
+   * Pre-resolved general HTML→blocks conversions, keyed by SectionSpec.sectionIndex.
+   * Supplied by the async handler (which owns the block-fixer client); absent →
+   * every section uses the structured render (back-compat). `markup` is raw native
+   * block markup (pre URL-rewrite), or null for a passthrough sentinel.
+   */
+  convertedSections?: Map<number, { markup: string | null; wpHtmlResidue: number }>;
 }
 
 export interface ReconstructResult {
@@ -150,6 +159,11 @@ export function normalizeCopy(s: string): string {
     .replace(/\s+/g, ' ')
     .trim();
 }
+
+/** Strip tags + collapse whitespace to the visible text of an `<h>`/`<p>` inner
+ *  HTML — used to seed the page provenance gate's text corpus from converted
+ *  native blocks (their headings/paragraphs trace by construction). */
+const visibleText = (h: string): string => h.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
 
 const MISSING_IMAGE_PLACEHOLDER = '[image unavailable — not captured]';
 
@@ -1545,6 +1559,47 @@ export function reconstructPagePattern(
   };
 
   for (const s of body) {
+    // First-choice GENERAL HTML→blocks: if the async handler pre-converted this
+    // (semantic) section via rawHandler and the result is clean — zero wp:html AND
+    // the coverage gate passes — emit the native blocks and skip the structured
+    // render + island entirely. rawHandler is a deterministic structural transform
+    // (re-delimits captured HTML, never paraphrases), so the blocks are source-
+    // verbatim; like core/html islands their text traces by construction.
+    const conv = opts.convertedSections?.get(s.sectionIndex);
+    if (conv && conv.markup && conv.wpHtmlResidue === 0) {
+      let markup = conv.markup;
+      if (opts.mediaUrlMap && opts.mediaUrlMap.size > 0) markup = rewriteMediaUrls(markup, opts.mediaUrlMap);
+      // rawHandler preserves the source <img src>; if a non-downloaded asset's
+      // remote URL survived the media rewrite, the drift gate would fail the whole
+      // page (the structured render placeholders non-WP images, so it never does).
+      // Coverage can't catch this — the CDN URL is present in BOTH the markup and
+      // captured.imageUrls, so it reads as "covered". Fall through to the structured
+      // render instead.
+      if (!hasUnmigratedRemoteAsset(markup)) {
+        const captured = {
+          texts: [...s.headings, ...(s.bodyText ?? []), ...(s.buttonLabels ?? [])],
+          imageUrls: (s.images ?? []).map((im) => im.url).filter(Boolean),
+        };
+        const cov = measureSectionCoverage(captured, markup);
+        if (!cov.lost) {
+          sectionMarkup.push(markup);
+          // Register the converted section's OWN <h>/<p> visible text into the gate
+          // corpus: rawHandler faithfully emits sub-headings the extraction didn't
+          // capture as headings, and the page provenance gate only knows the
+          // structured corpus. Corpus-expansion is link-rewrite-safe (unlike span-
+          // stripping). Content LOSS is guarded independently by the coverage check.
+          for (const m of markup.matchAll(/<h[1-6][^>]*>([\s\S]*?)<\/h[1-6]>/gi)) expectedText.push(visibleText(m[1]));
+          for (const m of markup.matchAll(/<p\b[^>]*>([\s\S]*?)<\/p>/gi)) bodyText.push(visibleText(m[1]));
+          assets.push(...captured.imageUrls);
+          provenanceFlags.push(
+            `html-to-blocks#${s.sectionIndex}: converted native blocks ` +
+              `(0 wp:html, text ${Math.round(cov.textCoverage * 100)}%)`,
+          );
+          continue;
+        }
+      }
+    }
+
     const out = renderSection(s, ctx);
 
     // Coverage-gated verbatim fallback: if the structured render dropped captured
