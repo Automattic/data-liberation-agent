@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { measureSectionCoverage } from './section-coverage.js';
+import { measureSectionCoverage, measureConvertedCoverage } from './section-coverage.js';
 
 // Fictional content — no real source-site data (project convention).
 describe('measureSectionCoverage', () => {
@@ -74,5 +74,42 @@ describe('measureSectionCoverage', () => {
     const cov = measureSectionCoverage({ texts: [], imageUrls: [] }, '<div></div>');
     expect(cov.textCoverage).toBe(1);
     expect(cov.lost).toBe(false);
+  });
+});
+
+describe('measureConvertedCoverage', () => {
+  it('matches captured plain text against markup with inline links (no spurious tag-boundary space)', () => {
+    const captured = { texts: ['Visit our shop today.'], imageUrls: [] };
+    const markup = '<!-- wp:paragraph --><p>Visit our <a href="/shop">shop</a> today.</p><!-- /wp:paragraph -->';
+    expect(measureConvertedCoverage(captured, markup).lost).toBe(false);
+  });
+
+  it('matches across smart-quote / entity differences', () => {
+    const captured = { texts: ["It's a quiet honor."], imageUrls: [] }; // straight quote
+    const markup = '<!-- wp:paragraph --><p>It&#8217;s a quiet honor.</p><!-- /wp:paragraph -->'; // curly entity
+    expect(measureConvertedCoverage(captured, markup).lost).toBe(false);
+  });
+
+  it('matches an image by basename across CDN vs uploads URL forms', () => {
+    const captured = { texts: [], imageUrls: ['https://cdn.example.test/x/photo.jpg?resize=800%2C600&ssl=1'] };
+    const markup = '<!-- wp:image --><figure class="wp-block-image"><img src="https://site.test/wp-content/uploads/2024/01/photo.jpg"/></figure><!-- /wp:image -->';
+    expect(measureConvertedCoverage(captured, markup).missingImages).toEqual([]);
+    expect(measureConvertedCoverage(captured, markup).lost).toBe(false);
+  });
+
+  it('still reports loss when captured text is genuinely absent', () => {
+    const captured = { texts: ['A sentence that does not appear at all.'], imageUrls: [] };
+    const markup = '<!-- wp:paragraph --><p>Completely different content.</p><!-- /wp:paragraph -->';
+    expect(measureConvertedCoverage(captured, markup).lost).toBe(true);
+  });
+
+  it('still reports loss when a captured image basename is genuinely absent', () => {
+    const captured = { texts: [], imageUrls: ['https://x.test/unique-basename-xyz.jpg'] };
+    const markup = '<!-- wp:paragraph --><p>No images here.</p><!-- /wp:paragraph -->';
+    expect(measureConvertedCoverage(captured, markup).lost).toBe(true);
+  });
+
+  it('empty captured content is fully covered', () => {
+    expect(measureConvertedCoverage({ texts: [], imageUrls: [] }, '<p>anything</p>').lost).toBe(false);
   });
 });

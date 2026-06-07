@@ -29,7 +29,7 @@
 import type { SectionSpec, SectionSpecImage, SectionSpecIcon, SectionSpecCell } from './section-extract.js';
 import { nearestToken, brightness, type PaletteToken } from './footer-color.js';
 import type { ExtractedReview } from './review-extract.js';
-import { measureSectionCoverage } from './section-coverage.js';
+import { measureSectionCoverage, measureConvertedCoverage } from './section-coverage.js';
 import { buildHtmlFallbackBlock, selectIslandSource } from './html-fallback.js';
 import { rewriteMediaUrls } from '../streaming/media-url-rewrite.js';
 import { hasUnmigratedRemoteAsset } from './validate-artifacts.js';
@@ -1580,7 +1580,7 @@ export function reconstructPagePattern(
           texts: [...s.headings, ...(s.bodyText ?? []), ...(s.buttonLabels ?? [])],
           imageUrls: (s.images ?? []).map((im) => im.url).filter(Boolean),
         };
-        const cov = measureSectionCoverage(captured, markup);
+        const cov = measureConvertedCoverage(captured, markup);
         if (!cov.lost) {
           sectionMarkup.push(markup);
           // Register the converted section's OWN <h>/<p> visible text into the gate

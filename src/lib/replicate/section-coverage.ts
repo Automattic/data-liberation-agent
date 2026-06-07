@@ -1,3 +1,5 @@
+import * as cheerio from 'cheerio';
+
 //
 // Section coverage measurement
 // ============================
@@ -56,6 +58,50 @@ function normalize(s: string): string {
  * Measure coverage of a section's captured content against its rendered block
  * markup. Empty captured content is "fully covered" (nothing to lose).
  */
+/** Fold typographic glyph variants + collapse whitespace + lowercase. Mirrors the
+ *  provenance gate's glyph-folding so converted-path coverage agrees with it. */
+function foldText(s: string): string {
+  return s
+    .replace(/[\u2018\u2019\u201b]/g, "'") // left/right single quotes, high-reversed-9
+    .replace(/[\u201c\u201d]/g, '"') // left/right double quotes
+    .replace(/[\u2013\u2014\u2012]/g, '-') // en-dash, em-dash, figure dash
+    .replace(/\u2026/g, '...') // horizontal ellipsis
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+/**
+ * Coverage for the rawHandler-CONVERTED path. `measureSectionCoverage` is built for
+ * the structured render (text/images emitted FROM the captured fields → exact match
+ * by construction). The converted markup is INDEPENDENTLY derived from sectionHtml,
+ * so its forms legitimately differ: inline tags interleave the text, entities/smart-
+ * quotes may be encoded, and an image may appear as a different URL form of the same
+ * asset (CDN vs uploads). So match captured text against the markup's TRUE textContent
+ * (cheerio — entities decoded, no spurious tag-boundary spaces) with glyph folding,
+ * and match images by BASENAME. Same TEXT_FLOOR + missing-image rule as the structured
+ * check, so the media-first "any dropped image is loss" guarantee is preserved.
+ */
+export function measureConvertedCoverage(
+  captured: CapturedSectionContent,
+  convertedMarkup: string,
+): CoverageResult {
+  const haystack = foldText(cheerio.load(convertedMarkup, null, false).root().text());
+  const texts = captured.texts.map(foldText).filter((t) => t.length > 0);
+  const present = texts.filter((t) => haystack.includes(t)).length;
+  const textCoverage = texts.length === 0 ? 1 : present / texts.length;
+
+  const basename = (u: string): string => (u.split(/[?#]/)[0].split('/').pop() || '').toLowerCase();
+  const markupLc = convertedMarkup.toLowerCase();
+  const missingImages = captured.imageUrls.filter((u) => {
+    const b = basename(u);
+    return b ? !markupLc.includes(b) : !!u && !markupLc.includes(u.toLowerCase());
+  });
+
+  const lost = missingImages.length > 0 || textCoverage < TEXT_FLOOR;
+  return { textCoverage, missingImages, lost };
+}
+
 export function measureSectionCoverage(
   captured: CapturedSectionContent,
   renderedMarkup: string,
