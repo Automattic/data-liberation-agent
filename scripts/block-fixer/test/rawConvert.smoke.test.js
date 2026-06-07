@@ -38,6 +38,23 @@ test('spacer div → native wp:spacer with source height', () => {
   assert.match(out, /<!-- wp:spacer \{"height":"48px"\}/, 'native spacer at source height');
 });
 
+test('strips post-meta dynamic-block chrome so content converts native (no wp:html residue)', () => {
+  // A poem post whose captured content carries WP post-meta chrome (title/date/
+  // author/terms/nav) interleaved with the poem. The meta is template-level and
+  // rawHandler can't convert it; it must be stripped so the poem goes native.
+  const html =
+    '<main><h1 class="wp-block-post-title">A Quiet Honor</h1>' +
+    '<div class="wp-block-template-part"><div class="wp-block-post-date"><time datetime="2024-11-11">Nov 11, 2024</time></div></div>' +
+    '<div class="wp-block-post-author-name"><a class="wp-block-post-author-name__link" href="/author/poet">Poet</a></div>' +
+    '<p>They leave without fanfare, packing pieces of themselves.</p>' +
+    '<div class="wp-block-post-terms"><span class="wp-block-post-terms__prefix">Tags: </span><a href="/tag/x" rel="tag">Sentimental</a></div>' +
+    '<a class="wp-block-post-navigation-link" href="/prev"><span class="wp-block-post-navigation-link__arrow-previous">←</span>Previous</a></main>';
+  const { html: out, wpHtmlResidue } = convertHtmlToBlocks(html);
+  assert.equal(wpHtmlResidue, 0, 'post-meta chrome stripped → no wp:html residue');
+  assert.match(out, /<!-- wp:paragraph -->[\s\S]*They leave without fanfare/, 'poem body converted native');
+  assert.doesNotMatch(out, /wp-block-post-date|wp-block-post-terms|wp-block-post-navigation|wp-block-post-author/, 'meta chrome removed');
+});
+
 test('empty / whitespace input is safe', () => {
   assert.deepEqual(convertHtmlToBlocks(''), { html: '', wpHtmlResidue: 0 });
 });

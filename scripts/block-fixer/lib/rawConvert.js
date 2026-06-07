@@ -42,8 +42,42 @@ function spacerBlock(height) {
   return `<!-- wp:spacer {"height":"${h}"} -->\n<div style="height:${h}" aria-hidden="true" class="wp-block-spacer"></div>\n<!-- /wp:spacer -->`;
 }
 
+// WordPress post-meta DYNAMIC blocks that rawHandler can't convert from rendered
+// HTML (they'd become wp:html residue) and that belong in the post TEMPLATE, not
+// post_content. A capture that bundled them into the content section (e.g. a poem
+// post carrying its title/date/author/tags/prev-next nav) is stripped here so the
+// real content converts native; the replica single.html renders this meta instead.
+// Keep in sync with the meta blocks emitted by buildSingleTemplate() in
+// src/lib/replicate/theme-scaffold.ts.
+const POST_META_CHROME =
+  '.wp-block-post-date, .wp-block-post-author, .wp-block-post-author-name, ' +
+  '.wp-block-post-author-biography, .wp-block-post-terms, .wp-block-post-navigation-link, ' +
+  '.wp-block-post-navigation, .wp-block-template-part, .wp-block-post-comments, .wp-block-comments, ' +
+  '.wp-block-post-excerpt, .wp-block-read-more';
+// Indicators that a section is a single-POST body (vs a page/home hero): the full
+// post-meta set. Used to gate the post-title strip — post-title is duplicated meta
+// on a post (single.html renders it) but the load-bearing HERO HEADING on the home
+// front page (front-page.html renders no title), so it must only be stripped on posts.
+const POST_BODY_SIGNAL =
+  '.wp-block-post-date, .wp-block-post-author-name, .wp-block-post-terms, .wp-block-post-navigation-link';
+
 function preprocess(html) {
   const d = new JSDOM(`<body>${html}</body>`).window.document.body;
+  // 0. Strip post-meta dynamic-block chrome — it's template-level meta, not content,
+  //    and rawHandler can't convert it (→ wp:html residue). The replica single.html
+  //    renders this meta instead.
+  // 0a. Detect a single-post body BEFORE removing anything (the signal blocks get
+  //     stripped below, so the check must come first).
+  const isPostBody = !!d.querySelector(POST_BODY_SIGNAL);
+  // 0b. The prev/next post-navigation wrapper is a <nav> holding post-navigation-link
+  //     blocks. Target it precisely (a content <nav> — should it ever appear — survives).
+  for (const nav of [...d.querySelectorAll('nav')]) {
+    if (nav.querySelector('.wp-block-post-navigation-link')) nav.remove();
+  }
+  // 0c. post-title only on a post body (see POST_BODY_SIGNAL) — never on the home hero.
+  if (isPostBody) for (const el of [...d.querySelectorAll('.wp-block-post-title')]) el.remove();
+  // 0d. The rest of the post-meta chrome (unambiguous on any context).
+  for (const el of [...d.querySelectorAll(POST_META_CHROME)]) el.remove();
   // 1. Unwrap non-semantic wrappers, repeatedly, until stable (NOT spacers).
   let changed = true;
   while (changed) {
