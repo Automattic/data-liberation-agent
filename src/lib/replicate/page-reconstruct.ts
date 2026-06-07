@@ -32,7 +32,7 @@ import type { ExtractedReview } from './review-extract.js';
 import { measureSectionCoverage, measureConvertedCoverage } from './section-coverage.js';
 import { buildHtmlFallbackBlock, selectIslandSource } from './html-fallback.js';
 import { rewriteMediaUrls } from '../streaming/media-url-rewrite.js';
-import { hasUnmigratedRemoteAsset } from './validate-artifacts.js';
+import { hasUnmigratedRemoteAsset, scanForInjection } from './validate-artifacts.js';
 import { applyBlockRecipe } from './apply-block-recipe.js';
 import { buildFallbackDiagnostic, type FallbackDiagnostic } from './fallback-diagnostic.js';
 
@@ -1575,7 +1575,17 @@ export function reconstructPagePattern(
       // Coverage can't catch this — the CDN URL is present in BOTH the markup and
       // captured.imageUrls, so it reads as "covered". Fall through to the structured
       // render instead.
-      if (!hasUnmigratedRemoteAsset(markup)) {
+      // Acceptance must imply the page gate (validateArtifacts) will PASS this
+      // section — that gate is all-or-nothing, so an accepted-but-poison section
+      // drops the WHOLE page. Beyond residue/coverage/provenance, mirror the gate's
+      // remote-asset, unresolved-placeholder ({{…}}), and injection checks here; a
+      // section that would trip them falls through to the structured render (which
+      // drops such content, so the page still passes — today's behavior).
+      const gateSafe =
+        !hasUnmigratedRemoteAsset(markup) &&
+        !/\{\{[\w -]+\}\}/.test(markup) &&
+        scanForInjection(markup).length === 0;
+      if (gateSafe) {
         const captured = {
           texts: [...s.headings, ...(s.bodyText ?? []), ...(s.buttonLabels ?? [])],
           imageUrls: (s.images ?? []).map((im) => im.url).filter(Boolean),

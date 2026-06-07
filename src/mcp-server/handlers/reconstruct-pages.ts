@@ -337,7 +337,9 @@ export const reconstructPagesHandler: Handler = async (args, ctx) => {
     // into the sync reconstructor as data. Sidecar down → empty map → structured render.
     // .catch guards the loop: a rejected conversion must not escape and skip
     // blockFixer.stop() (subprocess leak) — an empty map degrades to structured render.
-    const convertedSections = await convertSemanticSections(specs, blockFixer).catch(() => new Map());
+    const convertedSections = await convertSemanticSections(specs, blockFixer).catch(
+      () => new Map<number, { markup: string | null; wpHtmlResidue: number }>(),
+    );
     let built;
     try {
       built = buildPageReconstruction(specs, { slug: p.slug, title: p.title, themeSlug, isHome: p.isHome, paletteTokens, fontFamilies, linkMap, mediaUrlMap, adapterBlocks: adapter?.blocks, sourceUrl: p.sourceUrl, convertedSections });

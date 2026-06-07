@@ -1146,10 +1146,19 @@ describe('reconstructPagePattern — converted-sections (HTML→blocks) branch',
     expect(r.body).toContain(wpImg); // migrated URL preserved natively (no island)
   });
 
-  it('is identical to today when no convertedSections map is supplied', () => {
+  it('does not emit the converted branch when no convertedSections map is supplied', () => {
     const s = section({ headings: ['Plain'] });
-    const a = reconstructPagePattern([s], opts);
-    const b = reconstructPagePattern([s], opts);
-    expect(a.body).toEqual(b.body);
+    const r = reconstructPagePattern([s], opts);
+    expect(r.provenanceFlags.some((f) => f.startsWith('html-to-blocks#'))).toBe(false);
+    expect(r.body).toContain('Plain'); // structured render ran
+  });
+
+  it('falls through (not accepted) when converted markup carries an unresolved {{placeholder}}', () => {
+    const s = section({ headings: ['Tutorial'] });
+    const markup =
+      '<!-- wp:heading --><h2>Tutorial</h2><!-- /wp:heading -->\n' +
+      '<!-- wp:code --><pre class="wp-block-code"><code>Hello {{ name }}</code></pre><!-- /wp:code -->';
+    const r = reconstructPagePattern([s], { ...opts, convertedSections: conv(markup) });
+    expect(r.provenanceFlags.some((f) => f.startsWith('html-to-blocks#0'))).toBe(false);
   });
 });
