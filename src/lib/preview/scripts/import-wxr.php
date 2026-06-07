@@ -160,6 +160,35 @@ if ( ! empty( $admins ) ) {
 $wp_import                    = new WP_Import();
 $wp_import->fetch_attachments = true;
 
+// Skip intermediate image-size (thumbnail) generation during import. WP_Import
+// runs wp_generate_attachment_metadata per attachment, which regenerates every
+// registered size — for media-heavy sites (100s of images) this blows Studio's
+// 120s `start-server` IPC silence window before the import can finish. The
+// replica preview only needs the full-size image to render faithfully;
+// thumbnails can be regenerated later via `wp media regenerate` if a template
+// needs a specific size.
+add_filter( 'intermediate_image_sizes_advanced', '__return_empty_array' );
+
+// Heartbeat. The import below is wrapped in ob_start(), so WP_Import's own
+// per-item progress echo is captured into the buffer and never reaches the
+// WP-CLI channel until import() returns. A media-heavy WXR (100s of
+// attachments) then runs SILENTLY for well over Studio's 120s `start-server`
+// IPC silence window, so the daemon kills the wp-cli call mid-import and the
+// next DB access surfaces as "Error establishing a database connection".
+// WP_CLI::log writes to the STDOUT *handle*, which ob_start does NOT capture —
+// so emitting one per N imported items keeps the channel active without
+// polluting the captured HTML output. Generic: helps every large import.
+$dla_progress = 0;
+$dla_heartbeat = static function () use ( &$dla_progress ) {
+	$dla_progress++;
+	if ( 0 === $dla_progress % 5 ) {
+		WP_CLI::log( sprintf( '  …imported %d items', $dla_progress ) );
+	}
+};
+add_action( 'add_attachment', $dla_heartbeat );
+add_action( 'wp_import_insert_post', $dla_heartbeat );
+add_action( 'wp_import_insert_term', $dla_heartbeat );
+
 $_GET  = array(
 	'import' => 'wordpress',
 	'step'   => 2,

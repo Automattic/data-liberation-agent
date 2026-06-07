@@ -4,38 +4,24 @@ import Spinner from 'ink-spinner';
 import { createInterface } from 'readline';
 import { Header } from './header.js';
 import { platformColor, confidenceBadge, pluralize } from './format.js';
-import { detect, type FullDetectionResult } from '../lib/extraction/detect-platform.js';
+import { detect, type FullDetectionResult } from '../lib/detect-platform/index.js';
 import { fetchSitemap, classifyUrl } from '../lib/extraction/sitemap.js';
-import { WxrBuilder } from '../lib/extraction/wxr-builder.js';
-import { ExtractionLog } from '../lib/extraction/extraction-log.js';
-import { godaddyWmAdapter } from '../adapters/godaddy-wm.js';
-import { hostingerAdapter } from '../adapters/hostinger.js';
-import { hubspotAdapter } from '../adapters/hubspot.js';
-import { shopifyAdapter } from '../adapters/shopify.js';
-import { squarespaceAdapter } from '../adapters/squarespace.js';
-import { webflowAdapter } from '../adapters/webflow.js';
-import { weeblyAdapter } from '../adapters/weebly.js';
-import { wixAdapter, type Inventory } from '../adapters/wix.js';
+import { WxrBuilder } from '../lib/wxr/index.js';
+import { ExtractionLog } from '../lib/resume-state/index.js';
+import { godaddyWmAdapter } from '../adapters/godaddy-wm/index.js';
+import { hostingerAdapter } from '../adapters/hostinger/index.js';
+import { hubspotAdapter } from '../adapters/hubspot/index.js';
+import { shopifyAdapter } from '../adapters/shopify/index.js';
+import { squarespaceAdapter } from '../adapters/squarespace/index.js';
+import { webflowAdapter } from '../adapters/webflow/index.js';
+import { weeblyAdapter } from '../adapters/weebly/index.js';
+import { wixAdapter, type Inventory } from '../adapters/wix/index.js';
+import { defaultAdapter } from '../adapters/default/index.js';
+import { resolveAdapter } from '../adapters/resolve-adapter.js';
 import { mkdirSync, existsSync, writeFileSync, readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { autoPreview } from './preview.js';
-
-function siteOutputDir(baseDir: string, url: string): string {
-  let host: string;
-  try {
-    const parsed = new URL(url.includes('://') ? url : `https://${url}`);
-    host = parsed.hostname + parsed.pathname;
-  } catch {
-    host = url;
-  }
-  const sanitized = host
-    .toLowerCase()
-    .replace(/\/$/, '')
-    .replace(/[^a-z0-9.-]/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^-|-$/g, '');
-  return join(baseDir, sanitized);
-}
+import { siteOutputDir, resolveOutputBase } from '../lib/paths.js';
 
 export interface LiberateProps {
   url: string;
@@ -51,6 +37,10 @@ export interface LiberateProps {
   nonInteractive: boolean;
   /** Cap extraction at the first N URLs (writes a real WXR for those N). */
   limit: number | null;
+  /** Capture screenshots post-extract. Results go to output/<site>/screenshots/. */
+  screenshots: boolean;
+  /** Concurrency for the screenshot capture loop. Default 3. */
+  screenshotsConcurrency?: number;
 }
 
 type Phase =
@@ -58,8 +48,15 @@ type Phase =
   | 'discovering'
   | 'discovered'
   | 'extracting'
+  | 'screenshotting'
   | 'done'
   | 'error';
+
+interface ScreenshotSummary {
+  captured: number;
+  skipped: number;
+  failed: number;
+}
 
 interface ExtractionProgress {
   current: number;
@@ -76,15 +73,15 @@ interface ExtractionResult {
   wxrPath: string | null;
 }
 
-const adapters = [godaddyWmAdapter, hostingerAdapter, hubspotAdapter, shopifyAdapter, squarespaceAdapter, webflowAdapter, weeblyAdapter, wixAdapter];
+const adapters = [defaultAdapter, godaddyWmAdapter, hostingerAdapter, hubspotAdapter, shopifyAdapter, squarespaceAdapter, webflowAdapter, weeblyAdapter, wixAdapter];
 
 function findAdapter(platform: string) {
-  return adapters.find((a) => a.id === platform) || null;
+  return resolveAdapter(adapters, platform);
 }
 
 
 function Liberate(props: LiberateProps & { onComplete?: (wxrPath: string | null) => void }) {
-  const { url, outputDir, dryRun, resume, delay, verbose, token, cdpPort, adminToken, shopDomain, limit, onComplete } = props;
+  const { url, outputDir, dryRun, resume, delay, verbose, token, cdpPort, adminToken, shopDomain, limit, screenshots, screenshotsConcurrency, onComplete } = props;
   const app = useApp();
   const [phase, setPhase] = useState<Phase>('detecting');
   const [detection, setDetection] = useState<FullDetectionResult | null>(null);
@@ -94,6 +91,7 @@ function Liberate(props: LiberateProps & { onComplete?: (wxrPath: string | null)
   const [result, setResult] = useState<ExtractionResult | null>(null);
   const [actualOutputDir, setActualOutputDir] = useState<string>(outputDir);
   const [error, setError] = useState<string>('');
+  const [screenshotSummary, setScreenshotSummary] = useState<ScreenshotSummary | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -104,7 +102,7 @@ function Liberate(props: LiberateProps & { onComplete?: (wxrPath: string | null)
           const completePath = join(siteDir, '.discovery-complete');
           if (existsSync(completePath)) {
             const wxrPath = join(siteDir, 'output.wxr');
-            const { readWxr } = await import('../lib/extraction/wxr-reader.js');
+            const { readWxr } = await import('../lib/wxr/index.js');
             const wxrData = readWxr(wxrPath);
             setActualOutputDir(siteDir);
             const jsonlPath = join(siteDir, 'products.jsonl');
@@ -128,8 +126,8 @@ function Liberate(props: LiberateProps & { onComplete?: (wxrPath: string | null)
         const det = await detect(url);
         setDetection(det);
 
-        // Find adapter
-        const adapter = adapters.find((a) => a.id === det.platform);
+        // Find adapter (falls back to the `default` adapter for unknown sites)
+        const adapter = resolveAdapter(adapters, det.platform);
 
         if (!adapter) {
           // No adapter — fall back to sitemap-only discovery
@@ -227,10 +225,38 @@ function Liberate(props: LiberateProps & { onComplete?: (wxrPath: string | null)
             wxr.serialize(wxrPath);
           }
 
+          // Optional screenshot capture — mirrors the MCP path. Results land
+          // in siteDir/screenshots/ with a manifest.json keyed by URL; any
+          // cross-referencing against output.wxr / products.jsonl happens on
+          // the filesystem (no WordPress-side injection).
+          if (screenshots && !dryRun) {
+            const { ImportSession } = await import('../lib/resume-state/index.js');
+            // resume:true — we're continuing the same run the adapter just ran,
+            // not starting a new one. Preserves the session.json the adapter
+            // persisted so post-run status reflects actual extraction state.
+            const session = ImportSession.loadOrCreate(siteDir, det.platform, opts, { resume: true });
+            session.setStage('screenshotting');
+            setPhase('screenshotting');
+            const processedUrls = Array.from(log.getProcessedUrls());
+            const { captureScreenshots } = await import('../lib/screenshot/screenshotter.js');
+            const shotResult = await captureScreenshots({
+              urls: processedUrls,
+              outputDir: siteDir,
+              primaryUrl: url,
+              concurrency: screenshotsConcurrency,
+            });
+            setScreenshotSummary({
+              captured: shotResult.captured,
+              skipped: shotResult.skipped,
+              failed: shotResult.failed,
+            });
+            session.setStage('finalizing');
+          }
+
           const summary = log.getSummary();
           if (!dryRun) {
             writeFileSync(join(siteDir, '.discovery-complete'), new Date().toISOString(), 'utf8');
-            const { readWxr } = await import('../lib/extraction/wxr-reader.js');
+            const { readWxr } = await import('../lib/wxr/index.js');
             const wxrData = readWxr(wxrPath);
             setResult({
               pagesExtracted: wxrData.items.filter((i) => i.type === 'page').length,
@@ -344,6 +370,14 @@ function Liberate(props: LiberateProps & { onComplete?: (wxrPath: string | null)
         </Box>
       )}
 
+      {/* Screenshotting */}
+      {phase === 'screenshotting' && (
+        <Box marginTop={1}>
+          <Text color="yellow"><Spinner type="dots" /></Text>
+          <Text> Capturing screenshots...</Text>
+        </Box>
+      )}
+
       {/* Results */}
       {phase === 'done' && result && (
         <Box flexDirection="column" marginTop={1}>
@@ -362,6 +396,20 @@ function Liberate(props: LiberateProps & { onComplete?: (wxrPath: string | null)
               <Text color="red"><Text dimColor>{String(result.failed).padStart(4)} </Text>failed</Text>
             )}
           </Box>
+          {screenshotSummary && (
+            <Box marginTop={1}>
+              <Text color="green">✓</Text>
+              <Text> Screenshots: </Text>
+              <Text bold>{screenshotSummary.captured}</Text>
+              <Text dimColor> captured</Text>
+              {screenshotSummary.skipped > 0 && (
+                <Text dimColor>, {screenshotSummary.skipped} skipped</Text>
+              )}
+              {screenshotSummary.failed > 0 && (
+                <Text color="red">, {screenshotSummary.failed} failed</Text>
+              )}
+            </Box>
+          )}
           {result.wxrPath && (
             <Box marginTop={1}>
               <Text dimColor>WXR: {result.wxrPath}</Text>
@@ -415,7 +463,7 @@ export function runDiscover(url: string, opts: Partial<LiberateProps> = {}): voi
 
   const props: LiberateProps = {
     url,
-    outputDir: opts.outputDir || './output',
+    outputDir: opts.outputDir || resolveOutputBase(),
     dryRun: opts.dryRun || false,
     resume: opts.resume || false,
     delay: opts.delay || 500,
@@ -426,6 +474,8 @@ export function runDiscover(url: string, opts: Partial<LiberateProps> = {}): voi
     shopDomain: opts.shopDomain || null,
     nonInteractive: opts.nonInteractive || false,
     limit: opts.limit ?? null,
+    screenshots: opts.screenshots || false,
+    screenshotsConcurrency: opts.screenshotsConcurrency,
   };
   const { waitUntilExit } = render(
     <Liberate {...props} onComplete={(path) => { wxrPath = path; }} />,
@@ -433,10 +483,10 @@ export function runDiscover(url: string, opts: Partial<LiberateProps> = {}): voi
   waitUntilExit()
     .then(async () => {
       if (!wxrPath) return;
-      // Post-extract: always boot a local site (Studio if installed, else
-      // Playground) so the user can verify content before importing anywhere
-      // real. autoPreview honors nonInteractive internally — it still boots
-      // the site but skips browser/app auto-open so scripts get a URL.
+      // Post-extract: always boot a local Studio site so the user can verify
+      // content before importing anywhere real. autoPreview honors
+      // nonInteractive internally — it still boots the site but skips
+      // browser/app auto-open so scripts get a URL.
       const outputDir = dirname(wxrPath);
       await autoPreview(outputDir, { nonInteractive: props.nonInteractive });
       if (props.nonInteractive) return;

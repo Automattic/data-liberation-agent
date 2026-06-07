@@ -7,7 +7,7 @@ import {
   ShopifyGraphqlClient,
   type ShopifyGqlProduct,
 } from '../src/lib/extraction/shopify-graphql.js';
-import { ImportSession } from '../src/lib/extraction/import-session.js';
+import { ImportSession } from '../src/lib/resume-state/index.js';
 
 // --- Test helpers -----------------------------------------------------------
 

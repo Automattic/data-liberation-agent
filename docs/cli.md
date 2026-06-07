@@ -1,5 +1,7 @@
 # CLI Reference
 
+> **Headless / extraction path.** The CLI handles detection, extraction, screenshots, and import — the deterministic stages of the pipeline. The full design and replica flow (extraction + block-theme reconstruction → local preview URL) runs via the `/liberate` skill inside an AI agent (Claude Code, Codex). See [AI skills](./skills.md) and the [README](../README.md) for the agent-first getting-started path.
+
 The `data-liberation` CLI extracts content from closed web platforms and imports it into WordPress.
 
 ```bash
@@ -27,7 +29,7 @@ After extraction completes, the CLI prompts:
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `--output <dir>` | Output directory | `./output` |
+| `--output <dir>` | Output directory (base; a `<host>` subdirectory is created under it) | `~/Studio/_liberations` |
 | `--dry-run` | Extract 2-3 pages and report without writing WXR | off |
 | `--resume` | Resume a previous extraction, skipping already-processed URLs | off |
 | `--token <token>` | API token for platforms requiring auth (e.g. Webflow) | `LIBERATION_TOKEN` env var |
@@ -37,6 +39,8 @@ After extraction completes, the CLI prompts:
 | `--admin-token <tok>` | **Shopify only** — Admin API access token. Unlocks GraphQL product extraction with richer fields (sale pricing, stock policy, cost of goods, variant media, collections, SEO metafields). Falls back to public JSON API on failure. | `SHOPIFY_ADMIN_TOKEN` env var |
 | `--shop-domain <host>` | **Shopify only** — `*.myshopify.com` hostname used for Admin API calls. Usually auto-detected from the storefront HTML during discovery; only pass manually if detection fails. | auto-detected |
 | `--non-interactive` | Skip the post-extraction import prompt | off |
+| `--no-screenshots` | Skip screenshots. Screenshots run by default — capturing desktop + mobile fullpage and scrolled-state screenshots plus rendered HTML for every URL. Results go to `<outputDir>/screenshots/` with a `manifest.json` keyed by URL; any cross-reference against `output.wxr` / `products.jsonl` happens on the filesystem. See the `screenshot` subcommand below for the underlying flags. | on (use `--no-screenshots` to opt out) |
+| `--screenshots-concurrency <N>` | Parallel screenshot captures when screenshots are enabled. | 6 |
 
 **Output directory structure:**
 
@@ -199,22 +203,86 @@ data-liberation https://www.example.squarespace.com --cdp-port 9222
 
 ### `liberate preview <outputDir>`
 
-Preview a completed extraction in a local WordPress site. Uses Automattic
-Studio when the `studio` CLI is on PATH (a persistent site named after
-the output directory's domain slug — `example-com`, `example-com-2`,
-etc.); falls back to WordPress Playground (ephemeral WASM) otherwise.
+Preview a completed extraction in a local WordPress site using Automattic
+Studio (required — install at https://developer.wordpress.com/studio/ if
+it's not already installed). A persistent Studio site is created named
+after the output directory's domain slug — `example-com`, `example-com-2`,
+etc. Extraction itself needs no WordPress.
 Auto-runs after every `liberate <url>` extraction; the standalone
 `preview` subcommand is for re-opening a prior extraction.
 
 **Flags:**
-- `--open` — focus the Studio app (Studio path) or open the preview URL in the default browser (Playground path).
-- `--port <n>` — Playground-only. Override the auto-picked port (default: first free in 9400–9499). Ignored on the Studio path.
-- `--non-interactive` — skip the post-preview import nudge; still boots the site and prints the URL for scripts to capture.
+- `--open` — focus the Studio app after the site is ready.
+- `--non-interactive` — skip the post-preview import nudge; still provisions the site and prints the URL for scripts to capture.
 
-**Artifacts written to `<outputDir>/playground/`** (Playground path only; the Studio path stages files into the Studio site's `wp-content/uploads/liberation/` instead):
-- `blueprint.json` / `blueprint.studio.json` — the blueprint used for this run (regenerated each start).
-- `preview.pid` — JSON record while Playground is running.
-- `preview.log` — captured subprocess output; truncated on each start.
-- `.lock` — lockfile while start/stop is in flight.
+**Artifacts written to `<outputDir>/blueprint/`:**
+- `blueprint.json` — the blueprint used for this run (regenerated each start).
 
-**Lifecycle:** Foreground blocking in CLI mode. Ctrl+C stops Playground and prints an import-command nudge. A second `preview` invocation on the same outputDir stops the prior process before starting.
+**Lifecycle:** Provisions the Studio site, imports content, and returns the local URL. Studio sites persist after the command exits — remove them with `studio site remove <name>` when done.
+
+### screenshot
+
+```bash
+data-liberation screenshot <url> [options]
+```
+
+Capture full-page + scrolled-state screenshots (desktop 1440×900 + mobile 390×844) plus rendered HTML for every URL on a site. Runs independently from extraction — useful for pre-liberation analysis or downstream design-system synthesis. Also produces three per-site aggregated design-token files (`palette.json`, `typography.json`, `breakpoints.json`) sampled from every captured URL.
+
+**Options:**
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--output <dir>` | Output directory | `~/Studio/_liberations/<hostname>` |
+| `--types <list>` | Comma-separated URL types to capture: `page`, `post`, `product`, `homepage`, `gallery`, `event` | all |
+| `--limit <N>` | Cap to first N URLs | no cap |
+| `--concurrency <N>` | Parallel captures | 3 (max 10) |
+| `--browser-restart-every <N>` | Close + relaunch the browser every N URLs (memory bound) | 100 |
+| `--cdp-port <n>` | Connect to an existing Chrome session via CDP — use for authenticated sites | none |
+| `--force` | Re-capture even if output files already exist | off |
+| `--urls-file <path>` | Read URLs from a file (one per line), bypassing sitemap discovery | none |
+| `--non-interactive` | Skip the >500-URL preflight confirmation prompt | off |
+| `--verbose` | Per-URL progress logging | off |
+
+**Output layout:**
+
+```
+output/<site-hostname>/
+  screenshots/
+    manifest.json                       URL → files join table
+    desktop/
+      <slug>.png                        full-page desktop capture
+      <slug>.scrolled.png               post-scroll viewport capture (long pages only)
+    mobile/
+      <slug>.png                        full-page mobile capture
+      <slug>.scrolled.png               post-scroll viewport capture (long pages only)
+  html/
+    <slug>.html                         rendered HTML (post-hydration)
+  palette.json                          dominant colors, ranked by urls-desc (top 24)
+  typography.json                       font metrics per selector (h1/h2/h3/body/button),
+                                          deduplicated tuples ranked by urls-desc
+  breakpoints.json                      union of @media min-width / max-width integer px
+                                          values from same-origin stylesheets
+```
+
+Scrolled-state screenshots are silently skipped on short pages (where `scrollHeight < viewport.height * 2.5`).
+
+Same-origin enforcement: every URL must share origin with the `url` argument (or with the first entry of `--urls-file` if no bare URL is given). Mismatches throw `SameOriginViolation` and halt the run.
+
+**Preflight:** For sites with >500 URLs and no `--limit`, the CLI prints an estimated time + disk usage and prompts `Continue? [y/N]`. Skip with `--non-interactive`, or set `--limit N` to sidestep the prompt entirely.
+
+**Example — authenticated Webflow site via CDP:**
+
+```bash
+# 1. Launch Chrome with CDP and log in:
+google-chrome --remote-debugging-port=9222
+# 2. Capture:
+data-liberation screenshot https://staging.example.com --cdp-port 9222 --types page,post --concurrency 5
+```
+
+### Screenshots on the default extract command
+
+`data-liberation <url>` runs screenshot capture by default after the extraction phase finishes. Captured files are written under `<outputDir>/screenshots/{desktop,mobile}/<slug>.png` (plus `.scrolled.png` variants) and `<outputDir>/html/<slug>.html`, with a `manifest.json` at `<outputDir>/screenshots/manifest.json` that maps every captured URL to its file paths. The WXR and products CSV are not touched — cross-referencing screenshots with extracted content happens on the filesystem via the manifest.
+
+Pass `--no-screenshots` to skip screenshot capture entirely. Pass `--screenshots-concurrency N` to tune parallelism (default 6, max 10).
+
+This adds one `ImportSession` stage — `screenshotting` — after the normal extraction pipeline, and it's resumable via `--resume`.

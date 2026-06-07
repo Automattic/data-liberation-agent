@@ -2,8 +2,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { readFileSync, existsSync, mkdtempSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { webflowAdapter } from '../../src/adapters/webflow.js';
-import { WxrBuilder } from '../../src/lib/extraction/wxr-builder.js';
+import { webflowAdapter } from '../../src/adapters/webflow/index.js';
+import { WxrBuilder } from '../../src/lib/wxr/index.js';
 
 describe('webflowAdapter', () => {
   it('has id "webflow"', () => {

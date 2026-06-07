@@ -24,34 +24,69 @@ This tool extracts all content from closed platforms — posts, pages, media, na
 | **Webflow** | Ready | [`prompts/webflow.md`](./prompts/webflow.md) |
 | **Weebly** (blog/pages/products) | Ready | — |
 | **Wix** | Ready | [`prompts/wix.md`](./prompts/wix.md) |
+| **Any other website** (generic fallback) | Best-effort | — |
 
-All eight platforms have MCP adapters with full extraction support including products (exported as WooCommerce-compatible CSV). GoDaddy Websites & Marketing is pages + blog only in v1; GoDaddy Online Store (OLS) product support is planned for v1.1.
+All eight platforms have MCP adapters with full extraction support including products (exported as WooCommerce-compatible CSV). Sites matching none of them fall back to a generic `default` adapter that renders each page in a headless browser and extracts the main content, media, and any JSON-LD products — best-effort, since it can't key off platform-specific markup. GoDaddy Websites & Marketing is pages + blog only in v1; GoDaddy Online Store (OLS) product support is planned for v1.1.
 
-## AI tool integration
+## Screenshots
 
-### Claude Code
+Capture full-page + scrolled-state screenshots (desktop 1440×900 + mobile 390×844) plus rendered HTML and site-analysis metadata (palette, typography) for every URL on a site. Useful for pre-liberation analysis and feeding AI design-system tools.
 
-**As a marketplace & plugin from GitHub**
+Standalone:
 
 ```bash
-# Install from GitHub
+data-liberation screenshot https://example.com --output ~/Studio/_liberations/example.com
+```
+
+Screenshots run automatically at the end of `data-liberation <url>` extracts. Results land under `<outputDir>/screenshots/` alongside a `manifest.json` keyed by URL — the join back to `output.wxr` and `products.jsonl` happens on the filesystem, not via WordPress postmeta. Pass `--no-screenshots` to skip them:
+
+```bash
+data-liberation https://example.com                          # default: ~/Studio/_liberations/example.com
+data-liberation https://example.com --no-screenshots         # skip screenshots
+```
+
+Output lives at `<outputDir>/screenshots/{desktop,mobile}/<slug>.png` (fullpage + `.scrolled.png` variants) and `<outputDir>/html/<slug>.html`. See `<outputDir>/screenshots/manifest.json` for the URL → files join table.
+
+Options:
+- `--limit N` — cap to first N URLs
+- `--types page,post,product` — filter by URL type
+- `--concurrency N` — parallel captures (default 6, max 10)
+- `--browser-restart-every N` — restart Chromium every N URLs (default 100)
+- `--cdp-port <n>` — connect to existing Chrome session (for authenticated sites)
+- `--force` — re-capture even if output files already exist
+- `--urls-file <path>` — read URLs from a file instead of fetching the sitemap
+
+## Getting started — agent-first
+
+The front door is `/liberate` inside Claude Code (or Codex). One command runs the full pipeline: extraction + block-theme design + local WordPress preview.
+
+```bash
+# 1. Install the plugin
+claude plugin install data-liberation
+
+# 2. In Claude Code, run:
+/liberate https://your-site.com
+```
+
+What you'll see: the agent detects the platform, inventories all pages/posts/products, pauses to confirm scope and estimated time, then extracts content and media. It then drives the design phase — clustering page layouts, building a responsive block theme that mirrors your source site's structure and visual style, and importing everything into Automattic Studio. When it finishes you get a local preview URL and a `run-report.json` summarizing what was built, what's faithful, and any gaps.
+
+> **Studio required for preview/import.** Install at https://developer.wordpress.com/studio/ before running `/liberate`. Extraction itself needs no WordPress.
+
+The result is a responsive, editable WordPress block theme — not a static copy.
+
+### Claude Code (plugin install)
+
+```bash
+# From the marketplace
 claude plugin marketplace add Automattic/data-liberation-agent
 claude plugin install data-liberation
 
-# Use from the git checkout
+# Or from the git checkout
 cd data-liberation-agent
 claude --add-plugin .
 ```
 
-This installs the MCP server and skills directly.
-
-### Gemini CLI
-
-```bash
-# Use from the git checkout
-cd data-liberation-agent
-gemini extension link .
-```
+Available skills: `/liberate` (front door — capture, then choose the reconstruct path), `/replicate-with-blocks` + `/replicate-theme` (the two reconstruct paths `/liberate` dispatches to), `/qa`, `/diagnose`, `/adapt`. See [docs/skills.md](./docs/skills.md).
 
 ### Codex
 
@@ -60,7 +95,14 @@ cd data-liberation-agent
 codex
 ```
 
-The `.codex-plugin/plugin.json` and `.mcp.json` register the MCP server and skills automatically.
+The `.codex-plugin/plugin.json` and `.mcp.json` register the MCP server and skills automatically. `/liberate` runs sequentially on Codex (the builder fan-out step degrades to a sequential loop).
+
+### Gemini CLI
+
+```bash
+cd data-liberation-agent
+gemini extension link .
+```
 
 ### Any MCP client
 
@@ -74,40 +116,40 @@ npm run mcp
 
 Stdio transport. Exposes 11 tools: `liberate_detect`, `liberate_discover`, `liberate_inspect`, `liberate_extract`, `liberate_status`, `liberate_qa`, `liberate_map_apis`, `liberate_probe`, `liberate_verify`, `liberate_setup`, and `liberate_import`.
 
-## Quick start
+## Headless / CI (extraction only)
+
+The `data-liberation` CLI handles the deterministic extraction stages — detect, discover, extract, screenshot, and import. It does **not** run the design/replica phase; that requires an agent context. Use the CLI for CI pipelines, batch migrations, or when you only need a WXR + media.
 
 ```bash
 # 1. Install
 npm install
 
-# 2. Extract a site (works for any supported platform). A local preview site
-#    boots automatically after extraction — Automattic Studio if installed,
-#    WordPress Playground otherwise.
+# 2. Extract a site (produces WXR + media + screenshots; no design phase)
 npm run liberate -- https://yoursite.com
 
-# 3. Re-open the preview later (same Studio/Playground selection as above)
-npm run liberate -- preview ./output/yoursite.com --open
+# 3. Re-open the local preview later (Studio required)
+npm run liberate -- preview ~/Studio/_liberations/yoursite.com --open
 
-# 4. Or just the inspection
+# 4. Inspect before extracting
 npm run inspect -- https://yoursite.com
 
 # 5. Verify extraction quality
-npm run verify -- ./output/yoursite.com
+npm run verify -- ~/Studio/_liberations/yoursite.com
 
 # 6. Validate WordPress connection
 npm run setup -- --site your-wp-site.wordpress.com --username you --token YOUR_APP_PASSWORD
 
-# 7. Import to WordPress
-npm run liberate -- import ./output/yoursite.com/output.wxr --site your-wp-site --username you --token YOUR_APP_PASSWORD
+# 7. Import WXR to WordPress
+npm run liberate -- import ~/Studio/_liberations/yoursite.com/output.wxr --site your-wp-site --username you --token YOUR_APP_PASSWORD
 ```
 
-Or skip all of that and **paste the prompt into your AI assistant** — it will handle everything.
+Full CLI reference: [docs/cli.md](./docs/cli.md).
 
 ## Output
 
-A successful extraction produces in `/output/<site>/`:
+A successful extraction produces in `~/Studio/_liberations/<host>/` (default; override with `--output` or `DLA_OUTPUT_DIR`):
 
-- `output/<site>/`
+- `~/Studio/_liberations/<host>/`
    - `output.wxr` — WordPress eXtended RSS file, ready to import via WordPress Admin > Tools > Import
    - `media/` — downloaded images and attachments with local paths rewritten in the WXR
    - `redirect-map.json` — old platform paths mapped to new WordPress slugs
@@ -132,14 +174,10 @@ A successful extraction produces in `/output/<site>/`:
 
 ## Troubleshooting the preview
 
-**Picking between Studio and Playground** — the preview uses [Automattic Studio](https://developer.wordpress.com/studio/) when the `studio` CLI is on PATH (install the app — the CLI ships with it), and falls back to WordPress Playground otherwise. Studio sites are persistent and named after the output directory's domain slug (`example-com`, `example-com-2` on collision). Playground sites are ephemeral per-run.
+Preview and import require [Automattic Studio](https://developer.wordpress.com/studio/) — install the app first (the `studio` CLI ships with it). Studio sites are persistent and named after the output directory's domain slug (`example-com`, `example-com-2` on collision).
 
-**"No free port in 9400–9499"** (Playground only) — another process is holding the range. Pass `--port <n>` to override, or stop the conflict.
+**"Studio not found"** — the `studio` CLI is not on PATH. Install Studio from https://developer.wordpress.com/studio/ and relaunch the terminal so the PATH update takes effect.
 
-**"Playground failed to boot"** — the readiness probe didn't see HTTP within 60s. Check `<outputDir>/playground/preview.log` for the subprocess output. Common causes: slow network on first run (WASM download), wrong Node version (requires Node 18+).
+**"Studio create-site fails"** — out of disk, port conflict, or Studio config corruption. The error message includes the underlying CLI output. If it's a port conflict, retry. If the Studio config is corrupt, reinstalling Studio fixes it.
 
-**"ECONNREFUSED" when browsing the URL** (Playground only) — the Playground subprocess died after startup. Run `liberate_preview_stop <outputDir>` (or delete `<outputDir>/playground/preview.pid`), then re-run `preview`.
-
-**"stale preview running for >24h"** (Playground only) — the tool auto-cleans PID files older than a day. This is informational; it will restart cleanly.
-
-**Preview is not a secure environment.** Both paths auto-log in as `admin`/`password` and bind to `127.0.0.1` (Playground) or `localhost:<port>` (Studio). Do not paste secrets into it.
+**Preview is not a secure environment.** Studio sites auto-log in as `admin`/`password` and bind to `localhost`. Do not paste secrets into them.

@@ -1,4 +1,4 @@
-import { getPlaywright } from '../../adapters/shared.js';
+import { getPlaywright } from '../browser-kit/index.js';
 
 export interface ApiEndpoint {
   path: string;

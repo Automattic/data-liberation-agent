@@ -2,8 +2,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { readFileSync, existsSync, mkdtempSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { shopifyAdapter } from '../../src/adapters/shopify.js';
-import { WxrBuilder } from '../../src/lib/extraction/wxr-builder.js';
+import { shopifyAdapter } from '../../src/adapters/shopify/index.js';
+import { WxrBuilder } from '../../src/lib/wxr/index.js';
 
 describe('shopifyAdapter', () => {
   it('has id "shopify"', () => {
@@ -219,7 +219,7 @@ describe('Shopify WXR integration', () => {
 
 describe('shopifyProductToWoo', () => {
   it('collects images from featured image, images array, and inline body HTML', async () => {
-    const { shopifyProductToWoo } = await import('../../src/adapters/shopify.js');
+    const { shopifyProductToWoo } = await import('../../src/adapters/shopify/index.js');
     const fixture = JSON.parse(readFileSync('test/fixtures/shopify-product.json', 'utf8'));
     const { parent } = shopifyProductToWoo(fixture.product);
 
@@ -237,7 +237,7 @@ describe('shopifyProductToWoo', () => {
   });
 
   it('deduplicates when featured image is also in images array', async () => {
-    const { shopifyProductToWoo } = await import('../../src/adapters/shopify.js');
+    const { shopifyProductToWoo } = await import('../../src/adapters/shopify/index.js');
     const product = {
       title: 'Test',
       handle: 'test',
@@ -259,7 +259,7 @@ describe('shopifyProductToWoo', () => {
   });
 
   it('returns variation rows for variable products', async () => {
-    const { shopifyProductToWoo } = await import('../../src/adapters/shopify.js');
+    const { shopifyProductToWoo } = await import('../../src/adapters/shopify/index.js');
     const fixture = JSON.parse(readFileSync('test/fixtures/shopify-product.json', 'utf8'));
     const { parent, variations } = shopifyProductToWoo(fixture.product);
 
@@ -290,7 +290,7 @@ describe('shopifyProductToWoo', () => {
   });
 
   it('returns empty variations for simple products', async () => {
-    const { shopifyProductToWoo } = await import('../../src/adapters/shopify.js');
+    const { shopifyProductToWoo } = await import('../../src/adapters/shopify/index.js');
     const product = {
       title: 'Simple Candle',
       handle: 'simple-candle',
@@ -306,7 +306,7 @@ describe('shopifyProductToWoo', () => {
 
 describe('scorePageQuality', () => {
   it('scores high for page with title, long content, images, and date', async () => {
-    const { scorePageQuality } = await import('../../src/adapters/shopify.js');
+    const { scorePageQuality } = await import('../../src/adapters/shopify/index.js');
     // title=20, content>200=25, images=15, structuredData=10, date=10 → 80 → high
     const result = scorePageQuality({
       title: 'My Page',
@@ -320,7 +320,7 @@ describe('scorePageQuality', () => {
   });
 
   it('scores medium for page with title and short content', async () => {
-    const { scorePageQuality } = await import('../../src/adapters/shopify.js');
+    const { scorePageQuality } = await import('../../src/adapters/shopify/index.js');
     // title=20, content 50-200=10 → 30 → medium
     const result = scorePageQuality({
       title: 'My Page',
@@ -334,7 +334,7 @@ describe('scorePageQuality', () => {
   });
 
   it('scores low for page with only a title', async () => {
-    const { scorePageQuality } = await import('../../src/adapters/shopify.js');
+    const { scorePageQuality } = await import('../../src/adapters/shopify/index.js');
     // title=20 → 20 → low
     const result = scorePageQuality({
       title: 'My Page',
@@ -348,7 +348,7 @@ describe('scorePageQuality', () => {
   });
 
   it('includes price/SKU bonus for products', async () => {
-    const { scorePageQuality } = await import('../../src/adapters/shopify.js');
+    const { scorePageQuality } = await import('../../src/adapters/shopify/index.js');
     // title=20, content 50-200=10, images=15, hasPriceSku=10 → 55 → high
     const result = scorePageQuality({
       title: 'My Product',

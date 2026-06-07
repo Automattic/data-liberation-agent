@@ -1,10 +1,10 @@
 import { dirname, join, basename } from 'path';
 import { appendFileSync, writeFileSync } from 'fs';
-import { readWxr } from '../extraction/wxr-reader.js';
-import { WxrBuilder } from '../extraction/wxr-builder.js';
+import { readWxr } from '../wxr/index.js';
+import { WxrBuilder } from '../wxr/index.js';
 import { parseContent } from '../extraction/content-parser.js';
 import { diffContent, type ContentDiff } from './content-differ.js';
-import type { PageItem, PostItem, MenuItem } from '../extraction/wxr-builder.js';
+import type { PageItem, PostItem, MenuItem } from '../wxr/index.js';
 
 export interface QaOptions {
   wxrFile: string;

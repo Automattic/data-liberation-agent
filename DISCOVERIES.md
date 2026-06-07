@@ -6,6 +6,142 @@ AI agents: when you contribute an improvement, add an entry here. See [CONTRIBUT
 
 ---
 
+## 2026-06-04 — getsnooz.com (Shopify) carry run: capture 429s, carry-path media-install timeout, carry-tool schema gap
+
+**Found by:** Claude + Matt
+**During:** A `/liberate` → theme-replication (carry-and-scope) pass on getsnooz.com (Shopify, ~99 URLs, 436 media).
+**Type:** capture reliability + install-path bug + fix + MCP schema fix
+
+### 1. CDP beats Shopify's 403, but capture concurrency 6 trips a 429 rate-limit
+Memory said "Shopify capture needs CDP (headless 403s)" — true: a real Chrome over `--remote-debugging-port` captured cleanly where headless got 403s. But the *first* run still failed **168 capture ops** with `HTTP 429 Too Many Requests`, all clustered ~2 min in: the **default screenshot concurrency (6) × 2 viewports** hammered the origin fast enough that Shopify's edge throttled every subsequent `goto`. The capture loop does `attempt: 1` with **no 429 retry/backoff**, so once throttled the rest of the run cascaded into manifest stubs (slug+capturedAt, no PNG). **Workaround:** resume `liberate_screenshot` at `concurrency: 2` → 90 captured, **0 failed**. **Open fix:** add 429-aware retry/backoff (honor `Retry-After`) to `screenshotter.ts`, and/or lower the default capture concurrency for Shopify origins. (Extends the prior "default to CDP for Shopify" note.)
+
+### 2. Carry-path media install hit the SAME Studio 120s timeout that import-wxr.php already fixed
+`liberate_reconstruct_pages_carry` returned `mediaInstalled: 0` with every entry erroring `install-media.php failed: … No activity for 120s`. Root cause is identical to the 2026-05-27 `import-wxr.php` finding below: `install-media.php` calls `wp_generate_attachment_metadata()` (thumbnail regen) per file and **emits no output until after the loop**, so a large media set (here the run's full 992-file map installed on the first page) runs silently past Studio's 120s IPC-silence kill — leaving carried `<img>` on the source CDN (carry's "self-hosted media" promise broken). **Fix (applied, uncommitted):** mirror `import-wxr.php` in `src/lib/preview/scripts/install-media.php` — `add_filter('intermediate_image_sizes_advanced','__return_empty_array')` + a `WP_CLI::log` heartbeat inside the loop (printed before the `DLA_INSTALL_MEDIA_JSON_BEGIN` sentinel, so `media-install.ts`'s marker-delimited slice ignores it). Result after fix: **mediaInstalled 992, 0 errors**; homepage island went from all-CDN to 88 local `/wp-content/uploads/` refs (7 CDN left = known CSS-`url()` limit). Lesson: the thumbnail-skip + heartbeat pattern belongs in **every** vendored WP-CLI script that loops over media, not just `import-wxr.php`.
+
+### 3. `liberate_reconstruct_pages_carry` MCP schema under-declared `htmlSlug` + `postType`
+The handler reads `p.htmlSlug` (cached-HTML stem: `html/<htmlSlug>.html`) and `p.postType` (`page`|`post`), but the tool's `inputSchema.pages.items` only declared `slug`/`sourceUrl`/`title`/`isHome`. The server happens to pass args raw (no strip), so it worked — but the schema lied about the contract, and without `htmlSlug` every page (e.g. `about` whose file is `pages--about.html`) would silently fall back to a live fetch of `sourceUrl`. **Fix (applied):** added `postType` (enum page/post) + `htmlSlug` to the schema in `src/mcp-server.ts` so it matches the handler.
+
+---
+
+## 2026-05-28 — corneliusholmes.com (Wix) re-run: content-width band layers + verify `__name` tooling bug
+
+**Found by:** Claude + Matt
+**During:** A second `/liberate` pass on corneliusholmes.com. After the prior fixes, content pages STILL rendered flat-white and every captured section `backgroundColor` was `rgb(255,255,255)`.
+**Type:** reconstruction fidelity + tooling bug
+
+### 1. Section bands missed because the colored layer is content-width, not full-bleed
+The descendant bg-layer scan in `section-extract.ts` (`pickEffectiveBg`) required the colored child to span **≥90% width AND ≥90% height**. A live DOM probe showed Wix paints each band's tint on an **~810px-of-1440 (~56%) inner column** beside a photo (peach `#fadcd6`, blue `#b6d1d9`, sage `#d5e1ca`, warm-grey `#f0eded`), so the ≥90%-width gate skipped them and the section recorded white. **Fix:** accept a *content-width band* — `width ≥ 50%` when it still spans `height ≥ 90%` of the section (full-height ⇒ it's the band, not a small card); largest-area still wins. 40/40 `section-extract.test.ts` pass. Re-extracting with `refresh:true` restored the pastel bands across all content pages. (Extends fix #5 below.)
+
+### 2. `liberate_replicate_verify` section-metrics crash: `__name is not defined`
+Every desktop capture's `measureReplicaSectionsInBrowser` `page.evaluate` threw `ReferenceError: __name is not defined` — esbuild/tsx's `keepNames` helper (`__name`) is referenced inside the function body but isn't defined in the page context. This silently disables the automated `SectionParity` live-DOM metrics, forcing QA onto the vision+pngjs fallback. **Still open** — the browser-evaluated function needs to be self-contained (no bundler-injected helpers). Screenshots themselves capture fine.
+
+### 3. Card-grid flatten (prior "still open") — hand-fixed per-page for the homepage
+The 3-card numbered service row and the two-tone My-Approach/About-Me blocks still flatten (geometry classifier reads them as `static`, no `cells[]`). For this run they were rebuilt as an R2 per-page `post_content` patch (3 peach cards in a columns row; peach+coral two-tone cards), and the homepage hero was rebuilt as a `wp:cover` (the captured hero `<img>` src came back empty, so the structured render fell back to a black band with an invisible black-on-black title). The underlying **card-grid / cover-hero classifier** gap remains the right systemic fix.
+
+---
+
+## 2026-05-28 — Visual-parity fixes from the corneliusholmes.com (Wix) rebuild: gapless sections, exact captured colors, fluid-off, suffix-tolerant font match, QA sampling
+
+**Found by:** Claude + Matt
+**During:** A long parity pass on the corneliusholmes.com homepage where the block reconstruction looked significantly different from the source (muddy/dark hero, saturated-wrong card colors, flattened tiles, white gaps between sections). Root retro → 5 systemic fixes.
+**Type:** reconstruction fidelity + scaffold defaults + QA workflow
+
+### What was wrong (and the meta-lesson)
+Core-block reconstruction re-derives a bespoke design with generic blocks and *inferred* values, and the agent compounded that by **guessing colors/sizes and declaring "parity" before measuring**. Almost every fix came from MEASURING the source (sampling screenshot pixels, reading the SectionSpec) instead of eyeballing. Treat that as the default: sample, don't guess; lead with the differences.
+
+### Fixes shipped
+1. **Suffix-tolerant captured-font matching** (`font-capture.ts` `matchCapturedFamily`). The capture pipeline derives a suffix-free family (`futura-lt-w01`) while the computed style carries a weight/style suffix or builder hash (`futura-lt-w01-book`, `avenir-lt-w01_35-light1475496`). The old EXACT match failed, so the substitution path wrongly fired and replaced the real self-hosted source font with Inter. Now falls back to comparing weight/style/hash-stripped base names. Also reordered `theme-scaffold.ts buildFontFamilies` so a real captured family beats the free substitute.
+2. **Fluid typography OFF for replicas** (`theme-scaffold.ts`). `settings.typography.fluid:true` silently rewrote the reconstruction's exact px sizes into shrinking `clamp()`s (a captured 36px heading rendered ~22px). Faithful px wins over fluid scaling.
+3. **Gapless full-bleed section stacking** (`page-reconstruct.ts wrapSection`). White gaps between sections came from WP's default top-level block-gap. Every section now zeroes its top/bottom margin so bands butt edge-to-edge; all vertical rhythm comes from each section's own captured padding (`padTopPx`/`padBottomPx`, which the spec already carried).
+4. **Paint the exact captured band color** (`page-reconstruct.ts`). A band now renders its real captured tint (e.g. pale-blue `#e8eff1`) instead of the generic `surface-raised` grey approximation. Guarded: near-white and low-alpha (<0.6) and near-neutral-grey tints fall back to the token (don't over-saturate).
+5. **Capture the band's real background from a full-span DESCENDANT layer** (`section-extract.ts` `pickEffectiveBg`). Page builders (Wix) paint a section's color on a full-span child (`colorUnderlay`/bgLayers) div, not the `<section>` or its ancestors — so the own→ancestor→sibling walk reported the page white and missed the real band color. Added a geometry-based descendant scan (≥90% width AND height of the section) when own+ancestors give no color or near-white.
+6. **design-qa now samples + gates per-section** (`skills/design-qa/SKILL.md`). The skill must sample source-vs-replica pixels per band (colors, inter-section gaps, heading/body sizes), report a per-section delta table, and treat a high structural delta as disqualifying — not declare "matches" from vision alone.
+
+### Still open (next)
+- **Card-grid DETECTION.** The 3-card service row flattened to stacked text because the geometry classifier read it as flat `static` (so no `cells[]` were captured → no card bgs). The cell-bg walk already handles descendants; the gap is detecting the grid in the first place. Needs a stronger card-grid/​hero-cover/​pill-row/​testimonial-grid classifier + `section-mapping` templates.
+- **Set the html-first expectation up front.** Core-block reconstruction can't pixel-match a bespoke Wix design (absolute positioning, full-bleed image backgrounds, container-query scaling). The skill should say so early and offer the carried-CSS html-first path when the user prioritizes pixel fidelity over editable blocks.
+
+### Verification
+`font-capture` / `theme-scaffold` / `font-substitution` (82), `page-reconstruct` / `validate-block-markup` / `compose-instantiate` (71), `section-extract` (40) unit suites pass, incl. new cases (suffix-tolerant match, gapless margins, exact-tint paint, grey-skip). Browser-eval (`pickEffectiveBg` descendant scan) needs a live re-extract to exercise; the MCP server must be restarted to pick up `src/` changes.
+
+---
+
+## 2026-05-28 — Wix `/liberate`: scaffold drops valid captured fonts to Inter; updating post_content in a Studio site needs the VFS path
+
+**Found by:** Claude + Matt
+**During:** Migrating https://www.corneliusholmes.com/ (Wix therapy practice — 18 pages, 32 posts).
+**Type:** theme-scaffold behavior + Studio CLI operational gotcha
+
+### Finding 1 — `liberate_theme_scaffold` substituted self-hostable source fonts with a generic
+The source uses commercial Wix faces — **Futura LT** (display) and **Avenir LT** (body). The scaffold's font pipeline successfully downloaded BOTH as valid woff2 into `theme/assets/fonts/` (verified `file` → "Web Open Font Format (Version 2), TrueType"), yet `theme.json` bound the `body` AND `display` families to **Inter** via `fontSubstitutions` (`arial→Inter`, `futura-lt-w01-book→Inter`). Net effect: the source's geometric-display / humanist-body contrast collapses into one neutral face. The design-foundation's intended substitutes (Jost/Mulish) were also ignored.
+
+**Workaround this run:** hand-rebound `theme.json` `body`→`avenir-lt-w01_35-light1475496` and `display`→`futura-lt-w01` (the real captured woff2, with Jost/Mulish kept as fallback in the stack). Worth tightening the substitution logic: when a captured woff2 is present and valid, prefer self-hosting the real face (or the foundation's chosen substitute) over a generic Inter fallback. Note licensing — Futura/Avenir are commercial; fine for a local benchmark replica, flag for publication.
+
+### Finding 2 — `studio wp post update <id>` can only read files via the `/wordpress` VFS path
+QA edits to a page's `post_content` (re-carding the homepage service row) failed two ways before working:
+- `post update 208 /abs/host/path.html` → `Error: Unable to read content from '...'` (Studio's PHP sandbox can't see arbitrary host paths).
+- `post update 208 - < file.html` (STDIN) → reports `Success` but silently sets `post_content` to **empty** (the proxy doesn't forward stdin).
+
+**Working method:** copy the content file INTO the site dir (`~/Studio/<site>/<file>`) and reference it by its VFS path — Studio mounts the site at `/wordpress`, so `studio wp --path <site> post update <id> /wordpress/<file>`. This mirrors how `studio.ts` drives WXR import (`toVfsPath` + `eval-file`). Always verify with a follow-up `post get <id> --field=post_content | wc -c` — the STDIN path's false success is the dangerous one.
+
+### Why it matters
+Both bite any agent-driven Wix replica: Finding 1 silently flattens type identity on sites whose fonts ARE capturable; Finding 2 can blank a reconstructed page during QA touch-ups while reporting success.
+
+---
+
+## 2026-05-22 — `liberate_extract_one` clobbered the WXR (same bug as the 2026-04-30 resume fix, second site of)
+
+**Found by:** Claude + Matt
+**During:** Migrating https://www.swiftlumber.com/ — first full extract produced 6 pages; retrying the single failed `/projects` URL via `liberate_extract_one` left the WXR with only that one (failed) page, destroying the other 6.
+**Type:** extraction infrastructure bug
+
+### What I found
+The 2026-04-30 fix only patched the resume path of `liberate_extract` (`handlers/extract.ts`). `handlers/extract-one.ts` — the agent-first single-URL tool — has the *same* shape: it constructs a fresh `WxrBuilder`, extracts one URL into it, and calls `wxr.serialize(wxrPath)`, atomically overwriting whatever multi-page WXR was already there. Its own comment even flagged the limitation ("v1 extract-one writes a per-call WXR that the watch CLI is expected to merge if needed"), but when the tool is driven directly (not through the watch CLI's shared in-memory builder), nothing merges — so every `extract_one` against an existing extraction truncates it to one item.
+
+### How it's fixed
+Extracted the rehydrate-before-serialize logic into a shared helper `src/lib/extraction/wxr-rehydrate.ts` (`rehydrateBuilderFromWxr(wxr, wxrPath)`): reads the prior WXR, copies authors/categories/tags/terms/comments/redirects + non-`nav_menu_item` items onto the fresh builder, and reseeds `_nextId` past the largest retained id. `nav_menu_items` are dropped because the extraction loop regenerates them deterministically each run. Missing prior WXR → no-op; corrupt prior WXR → treated as a fresh start (builder untouched).
+
+- `extract.ts` now calls the helper on `args.resume` (replacing its inline block).
+- `extract-one.ts` calls it unconditionally — every `extract_one` is an append to an existing extraction.
+
+Covered by `wxr-rehydrate.test.ts` (merge/nav-drop/id-reseed, missing-file no-op, corrupt-file no-op) and `extract-one.test.ts` (prior pages survive a single-URL append). The latter reproduces the swiftlumber data loss: red before the fix (only `['new']` survived), green after (`['about','contact','home','new']`).
+
+### Why it matters
+`extract_one` is the agent-first streaming primitive — the orchestrator calls it repeatedly, once per URL. Pre-fix, any multi-call agent run kept only the *last* URL's item in the WXR. The bug was masked in the watch CLI (shared builder via `processOneUrl`) but active for every direct MCP/agent caller.
+
+---
+
+## 2026-05-22 — Wix Pro Gallery pages fail extraction with "Execution context was destroyed"
+
+**Found by:** Claude + Matt
+**During:** Migrating https://www.swiftlumber.com/ — the `/projects` page (a "GALLERY" nav item) failed both in the full extract and on single-URL retry, identically: `page.evaluate: Execution context was destroyed, most likely because of a navigation`.
+**Type:** Wix adapter limitation
+
+### What I found
+`/projects` returns HTTP 200 (no server redirect) and is a Wix **Pro Gallery** page — `pro-gallery` appears ~876× in the served HTML, with `ProGallery` widgets and inline `window.location` / `location.href` handlers. During hydration the gallery fires a client-side navigation (route/lightbox state), which invalidates the JS execution context just as the adapter's in-page `page.evaluate` extraction script runs. Result: deterministic failure, no HTML capture, no screenshot, no content for that page. All other pages on the site extracted at high quality.
+
+### How it's fixed (2026-05-23)
+Layered defense in `src/adapters/wix.ts` so the page survives the navigation-destroys-context race instead of erroring out. All four layers were shipped because the failure is **intermittent and timing-dependent** (under concurrent load the gallery's deferred navigation lands mid-evaluate; in isolation it often doesn't fire at all) — no single layer is reliable on its own:
+
+1. **Route pinning before navigation.** `addInitScript(ROUTE_PIN_INIT_SCRIPT)` no-ops `history.pushState`/`replaceState` and swallows `location.assign`/`replace` writes for the page's lifetime, so the gallery can't navigate away during extraction. Best-effort (the native `location` setter can't always be overridden), installed inside try/catch.
+2. **Settle before evaluate.** `goto('domcontentloaded')` → bounded `waitForLoadState('networkidle')` (6s, best-effort — Wix telemetry never truly idles) → fixed 4s delay → a lazy-load scroll pass (so below-the-fold gallery thumbnails enter the DOM) → re-settle. This lets the gallery finish hydrating *before* we read it.
+3. **Retry once on destroyed context.** Every in-page `page.evaluate` (globals/JSON-LD/meta, rendered content, blog-archive probe) goes through `evaluateWithRetry`, which on a `isExecutionContextDestroyed(err)` match re-settles and re-runs the evaluate exactly once. The globals read — historically the *unguarded* call that crashed the whole URL — now degrades to an empty shell on a second failure instead of throwing.
+4. **Served-HTML fallback.** When the live path fails (or `page.content()` is unreadable), we plain-GET the URL (`fetchHtml`) and run `extractGalleryFromHtml`, which recovers the title, an og:description/heading content shell, and the gallery image URLs from full `static.wixstatic.com/media/...` links *and* the bare `<hash>~mv2.<ext>` media tokens in the `wix-warmup-data` JSON (promoted to canonical CDN URLs). This runs on every page (folding any token-derived URLs the live scan missed into `mediaUrls`), so a Pro Gallery page is never dropped entirely.
+
+New exported, unit-tested helpers: `isExecutionContextDestroyed`, `extractGalleryFromHtml`, `ROUTE_PIN_INIT_SCRIPT`. Covered by `test/adapters/wix-pro-gallery.test.ts` (12 tests, fixture `test/fixtures/wix-pro-gallery.html`): error-classification (matches Playwright + bare CDP phrasings, rejects unrelated errors), gallery image recovery (img src / background-image / og:image / warmup tokens, all normalized to absolute CDN URLs, de-duped), title-suffix stripping, content-shell assembly, and no-false-positives on plain markup.
+
+### Verified live (2026-05-23)
+Ran the real `wixAdapter.extract` against just `https://www.swiftlumber.com/projects`:
+- **No "execution context destroyed" error escaped** (`thrown: null`); URL logged as `processed` with `qualityScore: high`.
+- `pagesExtracted: 1, failed: 0`; WXR item `type: page`, `title: "GALLERY"`, content length 6419 with **25 `<img>` tags** (descriptive alt text) plus heading/body text.
+- **72 media collected / 70 image files downloaded** (the gallery photos).
+- The served-HTML fallback, exercised in isolation against the live 1 MB markup with **zero JS execution**, independently recovered the title, a content shell, and **33 absolute gallery image URLs** — so even in the worst case (context destroyed, `page.content()` unreadable) the page still yields content + images.
+
+### Honest reliability assessment
+**Best-effort, not a guarantee — but the page is no longer dropped.** The live `page.evaluate` path now succeeds on the runs I observed (the destroyed-context error did not reproduce in isolation at the time of the fix; the site may hydrate faster now, or the race only triggers under the concurrent load of a full multi-page + screenshot run). Layers 1–3 widen the window where the live read succeeds; layer 4 guarantees that *if* the live read still fails, the page is salvaged from the served HTML (title + content shell + gallery image URLs) rather than failing the whole URL. The remaining gap vs. a clean live extract is **layout fidelity in the worst case**: the HTML fallback yields the images and a thin content shell, not the full rendered gallery markup. The images themselves — the gallery's actual value — are recovered in every path.
+
+---
+
 ## 2026-04-30 — `--resume` overwrites the existing WXR with only newly-extracted items
 
 **Found by:** Claude + James
@@ -821,6 +957,41 @@ Using Playwright's `page.on('response', ...)` handler to capture all `applicatio
 
 ### Why it's better than the previous approach
 HTML scraping requires parsing Wix's heavily nested, obfuscated markup. API interception gives you clean JSON with semantic field names, correct dates, author information, and structured content — everything you'd want for a clean migration.
+
+---
+
+## 2026-05-27 — Shopify capture bot-blocks the headless browser (getsnooz.com)
+
+**Found by:** Claude + Matt
+**During:** getsnooz.com migration (Shopify, Tier 1, /liberate full pipeline)
+**Type:** platform quirk | workaround for blocked content
+
+### What I found
+HTTP/JSON extraction worked fine, but the Playwright **capture** phase was bot-blocked by Shopify: at concurrency 6, ~70 navigations returned `HTTP 403` and ~32 hit `goto` timeouts (only 31/133 captures succeeded). That left `palette/typography/breakpoints` unwritten and most `html/<slug>.html` missing — silently degrading the whole design phase.
+
+### How it works
+Re-run `liberate_screenshot` with `cdpPort` pointed at a **real headful Chrome** (`--remote-debugging-port=9222 --user-data-dir=/tmp/dla-chrome-cdp`). A real (non-headless) fingerprint sails past Shopify's detection: getsnooz went from 31/133 to 90/97 at concurrency 2. The section-spec cache (`sections/<slug>.json`) is written during this pass, so `liberate_reconstruct_pages` reads from cache afterward — no re-navigation, no further 403.
+
+### Why it matters
+Headless capture on Shopify is unreliable. Default to CDP-with-real-Chrome for Shopify (mirror the Squarespace CDP guidance) and consider a lower default capture concurrency for Shopify origins.
+
+---
+
+## 2026-05-27 — Studio WXR import times out on media-heavy sites; install bugs
+
+**Found by:** Claude + Matt
+**During:** getsnooz.com migration (939 media)
+**Type:** architecture | install-path bug + fix
+
+### What I found
+`liberate_preview` died on the 939-image import with Studio's "No activity for 120s" IPC-silence kill. The import already serves media locally (no CDN refetch), so the time sink is WordPress regenerating every intermediate image size (`wp_generate_attachment_metadata`) for 939 attachments in one synchronous WP-CLI call. This blocks **every** install path (`preview`, `install_theme`, `reconstruct_pages` — all need an imported Studio site).
+
+### Fix
+Added `add_filter('intermediate_image_sizes_advanced', '__return_empty_array')` before `WP_Import::import()` in `src/lib/preview/scripts/import-wxr.php`. Thumbnails aren't needed for a faithful replica (full-size renders fine; regenerate later via `wp media regenerate`). Import then completes in seconds. Applied this run, left uncommitted for review.
+
+### Adjacent install gotchas found same run
+- **cover-with-headline drops the background image.** The homepage hero spec carried `images[0].kind:"background"` + `fullBleed:true` and the file installed to the media library, but `liberate_reconstruct_pages` rendered a constrained group on white and omitted the image. The handler should emit a `wp:cover` when the spec has a `kind:background` image. (Fixed manually for the homepage.)
+- **front-page renders `wp:post-content`, not the pattern file.** The homepage reconstruction `slug` must equal the imported WP page slug (`homepage`, not `home`) or `postContentUpdated` is silently `false`. Edits must go to the page's `post_content` in the DB; editing `patterns/page-<slug>.php` changes nothing. `studio wp post update` can't read host `/tmp` paths — stage the file inside the site dir and pass the `/wordpress/...` VFS path.
 
 ---
 

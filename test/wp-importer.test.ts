@@ -3,7 +3,7 @@ import { importToWordPress } from '../src/lib/import/wp-importer.js';
 import { writeFileSync, mkdirSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { WxrBuilder } from '../src/lib/extraction/wxr-builder.js';
+import { WxrBuilder } from '../src/lib/wxr/index.js';
 
 /** Build a WXR file using WxrBuilder, writing to the given path. */
 function buildWxrFile(wxrPath: string, setup: (b: WxrBuilder) => void): void {

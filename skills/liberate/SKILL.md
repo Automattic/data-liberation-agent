@@ -1,54 +1,184 @@
 ---
 name: liberate
-description: Extract content from a closed web platform (GoDaddy Websites & Marketing, Hostinger, HubSpot, Shopify, Squarespace, Webflow, Weebly, Wix) into a WordPress-compatible WXR file
+description: Front door for the whole migration — detect → discover, then ALWAYS stop and ask the operator (AskUserQuestion) which reconstruct path to take (blocks+products, or theme replication) BEFORE running extraction/capture, then dispatch the matching sub-skill. The path question is a mandatory, non-skippable gate that fires right after discovery while the operator is still present — never auto-select, never defer it past extraction. Idempotent: re-running on an already-captured site skips straight to the path question.
 ---
 
 # Liberate a website
 
-Help the user extract their content from a closed web platform.
+The single front door for the whole migration pipeline. It captures the site **once** (detect → discover → extract → capture → products), then asks which reconstruct path to take and **dispatches the matching sub-skill inline** (shared context):
 
-## Workflow
+- **`replicate-with-blocks`** — project the source onto editable WordPress core blocks + WooCommerce. Best launchpad for a redesign.
+- **`replicate-theme`** — carry the source markup near-verbatim + scope its own CSS into a high-fidelity, non-block-editable theme.
 
-1. Ask for the URL of the site to liberate (if not already provided)
-2. Call `liberate_detect` to identify the platform
-3. Call `liberate_discover` to inventory the site — show the counts and **platform features** to the user
-   - Discovery now returns `platformFeatures` — flags for stores, bookings, forms, members areas, scheduling, forums, and events
-   - Tell the user which features were detected and whether they transfer automatically
-   - Features marked `transferable: true` (like stores) are handled during extraction
-   - Features marked `transferable: false` include a `wpRecommendation` with a suggested WordPress plugin
-4. Confirm with the user before proceeding
-5. Call `liberate_extract` with an appropriate outputDir
-6. Call `liberate_verify` on the outputDir to check the extraction quality — report stale CDN URLs, failed pages, failed media, and quality scores
-7. If there are failures, offer to retry specific URLs or investigate
-8. When the user is ready to import:
-   - If the environment provides its own import mechanism (e.g. `import-liberated-data` skill, or `wp_cli` tool): call `liberate_setup` with `delegate: true`, then call `liberate_import` with `delegate: true` to get a structured import manifest. Hand off to the environment's import skill/tool.
-   - Otherwise: call `liberate_setup` with site/username/token to validate the REST API connection, then call `liberate_import` with REST API credentials
+Each sub-skill owns its own reconstruct → install → QA → report; this skill owns capture + the path decision. **Idempotent:** re-running `/liberate <url>` on an already-captured site skips straight to the path question (so you can try the other path later with zero re-capture).
+
+**Headless extraction-only (CI/batch):** `data-liberation <url>` runs steps 1–5 (capture only). The reconstruct (blocks or theme) is agent-only, via the dispatched sub-skill.
+
+---
+
+## Pipeline overview
+
+```
+/liberate <url>   ── front door, shared context ────────────────────────────────
+│
+├─ idempotent check: extraction already on disk?  (.discovery-complete / session.json stage / output.wxr + html/* + manifest.json)
+│     ├─ YES → load cached inventory ──────────────────────────────────────┐
+│     └─ NO  → 1 detect → discover    platform · sitemap · features · archetype inventory (CHEAP)
+│                                                                           │
+│  ┌────────────────────────────────────────────────────────────────────────┘
+│  ▼
+├─ CONFIRM + PATH CHECKPOINT  ◀── MANDATORY HARD STOP, BEFORE EXTRACTION — never skip, never auto-select
+│     show discovery inventory + scope/cost estimate + a platform-informed recommendation,
+│     then ALWAYS AskUserQuestion: blocks+products vs theme replication.
+│     The operator's answer is the ONLY thing that authorizes the rest of the run.
+│     Nothing expensive (extract/capture) runs until they have answered.
+│     ▼
+├─ EXTRACTION (deterministic — only after the path is chosen):
+│     2 extract               pages/posts/products content + media refs
+│     3 media: dedup+upload   → uploaded WP-library URLs (reused downstream)
+│     4 capture               desktop+mobile screenshots · palette/type/breakpoints · html/<slug>.html
+│     5 products → products.csv    WooCommerce import format
+│     ▼
+└─ RECONSTRUCT — dispatch the chosen sub-skill INLINE (shared context):
+      blocks+products → replicate-with-blocks   (core blocks + WooCommerce + QA ladder → run-report.json)
+      theme           → replicate-theme         (carry-and-scope islands + scoped CSS → compare → run-report-carry.json)
+```
+
+Capture is still shared across both paths, so the "try the other path with zero re-capture" property holds: re-running `/liberate <url>` after a full run hits the idempotent check, loads the cached inventory, and lands you straight back on the path question.
+
+Each sub-skill owns its own reconstruct → install → QA → report, plus its own budget guard (`checkBudget` in `src/lib/replicate/budget-guard.ts`) and run-report (`buildRunReport` in `src/lib/replicate/run-report.ts`). This skill's deliverable is the captured output directory + the dispatch; the chosen sub-skill produces the replica + its `run-report*.json`.
+
+---
+
+## Step-by-step workflow
+
+### Step 0 — Idempotent check (run first)
+
+Call `liberate_paths({ url })` to resolve the output directory (`siteDir`). Do not hardcode `output/<site>/` relative to cwd — the default output base is now `~/Studio/_liberations/<host>`. If extraction is already complete — any of `.discovery-complete`, a `session.json` stage past extraction, or all of `output.wxr` + `html/*.html` + `screenshots/manifest.json` present in the resolved `siteDir` — **skip Steps 1 and 3–6**, load the cached inventory (`session.json` / discovery output), and jump straight to the **Step 2 — Confirm + path checkpoint** below. Otherwise run Step 1, hit the checkpoint, then run Steps 3–6. (For a partial capture, prefer `resume: true`; see Resuming.)
+
+### Step 1 — Detect & discover
+
+1. Ask for the URL if not already provided.
+2. Call `liberate_detect` to identify the platform.
+3. Call `liberate_discover` to inventory the site. Show the counts and **platform features** to the operator.
+   - `platformFeatures` flags: stores, bookings, forms, members areas, scheduling, forums, events.
+   - Features marked `transferable: true` (e.g. stores) are handled during extraction.
+   - Features marked `transferable: false` include a `wpRecommendation` (suggested WP plugin).
+   - Narrate: "Detected Wix · 47 pages · 3 archetypes · 12 products · store (WooCommerce) · forms (WPForms recommended)."
+
+### Step 2 — Confirm + path checkpoint — MANDATORY HARD STOP (fires here, before any extraction)
+
+> **This checkpoint is NOT optional and NOT skippable, and it fires RIGHT HERE — immediately after discovery, before extraction/capture.** You ask **while the operator is still present and paying attention**; that is the whole point of placing it before the long deterministic extraction, not after. You **MUST** stop and ask the operator to choose the reconstruct path via **AskUserQuestion** before running Step 3 (extract) or anything downstream. There is no "default path." You do **not** auto-select on the operator's behalf, no matter how strong the inventory signal is — a recommendation is a hint inside the question, never a decision. Starting extraction (or dispatching a sub-skill) without having asked this question is a defect. The **only** thing that authorizes the rest of the run is the operator's answer to this AskUserQuestion.
+
+**Red flags — if you catch yourself thinking any of these, STOP and ask:**
+- "Discovery's done, I'll kick off extraction and ask about the path later." → No. Extraction is the expensive part; ask BEFORE it, while the operator is here.
+- "The platform clearly calls for blocks/theme, so I'll just run it." → No. Recommend *inside* the question; let them pick.
+- "They already said blocks last time / earlier in the convo." → A prior run's choice does not carry over; ask again.
+- "This is obviously a store, blocks is the only sensible path." → Still ask. The operator may want fidelity over editability.
+- "I'll extract first so the operator has more data when they decide." → Discovery already gives platform · counts · features — enough to choose. Don't burn extraction to defer the question.
+
+Show the discovery inventory (pages · archetypes · products · platform features) and a scope/cost/time estimate. Make a **platform-informed recommendation** (mark it `(Recommended)` as the first option), then call **AskUserQuestion** with these two options:
+
+1. **Migrate content into blocks + products** — WordPress-native blocks + navigation + WooCommerce product pages. Best launchpad for a redesign. (Reconstructs product pages.)
+2. **Theme replication** — carry-and-scope: highest-fidelity replica of the source, raw-HTML-editable (not block-editable). (Imports product *data*; product pages fall back to default WooCommerce, not a carried replica.)
+
+Recommendation examples: a store with many products → recommend (1); a fixed-layout Wix marketing site, no store, where pixel-fidelity matters → recommend (2). **The operator's selection is the sole go-ahead** (this replaces the old proceed/confirm gate). Only after they answer do you run Steps 3–6 (extraction/capture) and then Dispatch.
+
+### Step 3 — Extract
+
+Call `liberate_extract` with an appropriate `outputDir`. Narrate per-URL progress.
+
+**0 pages:** "No extractable pages found at `<url>`. The site may be behind auth or bot-protection — try CDP/admin extraction (`/diagnose`)." Stop.
+
+### Step 4 — Media dedup + upload
+
+Media references are deduped and uploaded to the WP media library. Uploaded URLs are the canonical media references used everywhere downstream (specs, templates, `post_content`).
+
+### Step 5 — Capture
+
+Runs automatically during or after extract: desktop+mobile screenshots, `palette.json` / `typography.json` / `breakpoints.json`, and `html/<slug>.html` per URL. Clustering in the blocks path runs off the already-saved `html/<slug>.html` — no re-navigation.
+
+**Capture scope depends on the path you just chose** (a second reason the checkpoint fires before capture, not after):
+
+- **blocks** → a *representative sample* is enough. The blocks path clusters off a sample of `html/<slug>.html` and live-fetches the rest on a cache miss, so partial capture is fine. Sample **across** archetypes (homepage + a few of each kind), not the first N sitemap URLs — and make sure the **homepage** is in the sample.
+- **theme** → the carry path reconstructs **every page individually from its own `html/<slug>.html`**, so capture **full HTML for every page in the carry set up front**. A sample forces a re-capture once `replicate-theme` runs. For a blog-dominant site where the theme replica carries only the custom/marketing pages (posts/news staying native), capture those custom pages in full and skip per-post capture — but you must know that *before* capturing, which is why the path is chosen first.
+
+Default concurrency: 6. Configure via `--screenshots-concurrency N` or `--concurrency N`.
+
+### Step 6 — Products → CSV
+
+If products were extracted, compile `products.jsonl` → `products.csv` (WooCommerce import format). Report: "Also extracted N products → products.csv."
+
+### Dispatch (inline)
+
+Both reconstruct sub-skills are `disable-model-invocation: true` by design — they only ever run from this front door (post-capture), never spontaneously. That means **the Skill tool cannot invoke them**: a `Skill({ skill: 'replicate-theme' })` call is rejected with `cannot be used with Skill tool due to disable-model-invocation`. So **dispatch = Read the chosen sub-skill's `SKILL.md` and execute its workflow inline in this same shared context** (each sub-skill reads the resolved output directory from disk — use the `siteDir` returned by `liberate_paths` — and owns its own install → QA → report):
+
+- blocks+products → read & follow `skills/replicate-with-blocks/SKILL.md`
+- theme replication → read & follow `skills/replicate-theme/SKILL.md`
+
+The reconstruct phase (clustering, foundations, theme, build, validate, install, visual-QA for blocks; carry-and-scope + compare for theme) lives **entirely in the dispatched sub-skill** — this front door ends here.
+
+
+---
+
+## Operator interaction states
+
+| Stage | State | Response |
+|---|---|---|
+| extraction | 0 pages | Stop + "No extractable pages found at `<url>`. Try CDP/admin extraction (`/diagnose`)." |
+| extraction | adapter fail | Log + pointer to `/diagnose` |
+| checkpoint | operator picks a path | Dispatch the chosen sub-skill (`replicate-with-blocks` / `replicate-theme`) inline |
+| reconstruct | gate fail · clusters failed · QA divergence · budget ceiling | Owned by the dispatched sub-skill — see its SKILL.md (`replicate-with-blocks`'s validate-artifacts + QA-ladder gates + budget guard; `replicate-theme`'s parity compare) |
+
+Progress is the agent's own narration — no Ink TUI in agent mode. The headless extraction CLI keeps its existing Ink surfaces (`discover.tsx`, `screenshot.tsx`).
+
+---
+
+## Run report (per path)
+
+Each reconstruct path emits its **own** report — `run-report.json` from `replicate-with-blocks`, `run-report-carry.json` from `replicate-theme` (each carries a `mode` field). The blocks-path `run-report.json` is verdict-first; read top-down to answer "is this good?":
+
+1. `verdict` — overall ✓ / ⚠ / ✗ + per-archetype.
+2. `summary` — clusters built/failed · pages composed/misfit · responsive pass/fail · sections divergent/accepted · pages unverified · provenance flags · fallback/low-confidence pages · est. cost/usage.
+3. `details[]` — per-cluster + per-page status, gate results, QA notes, operator-accepted divergences (with proof).
+
+The theme-path `run-report-carry.json` is parity-compare shaped — see `replicate-theme`.
+
+---
 
 ## Resuming
 
-If the user asks to resume a previous extraction (e.g. "resume", "continue where I left off", "it crashed"):
+If the user asks to resume (e.g. "resume", "continue", "it crashed"):
 
-1. Ask for the URL (if not provided) — the outputDir is derived from the URL
-2. Call `liberate_extract` with `resume: true` — this skips already-processed URLs
-3. If the extraction was already complete (`.discovery-complete` exists), skip straight to reporting results and offer to import
+1. Ask for the URL if not provided — `outputDir` is derived from it.
+2. Call `liberate_extract` with `resume: true` for extraction; `session.json` tracks stage so capture resumes where it stopped. Reconstruct resume (per-cluster build status, etc.) is the chosen sub-skill's concern.
+3. If extraction was already complete (`.discovery-complete` exists), skip straight to the **Step 2 — Confirm + path checkpoint** (the idempotent path) and offer to run a reconstruct path. If only discovery completed and the run stopped before the checkpoint, re-run discovery (cheap) and ask the path question — extraction must not start until the operator has chosen.
 
-The `resume` flag causes the extraction to:
-- Skip platform detection and discovery if a completed WXR already exists
-- Skip URLs that were already successfully processed (tracked in `extraction-log.jsonl`)
-- Rebuild media dedup hashes from existing files to avoid re-downloading
+The `resume` flag causes extraction to:
+- Skip platform detection/discovery if a completed WXR already exists
+- Skip URLs already successfully processed (tracked in `extraction-log.jsonl`)
+- Rebuild media dedup hashes from existing files
 - Append to the existing WXR rather than starting fresh
 
-## Products
+---
 
-Any platform may have e-commerce products. When products are detected during extraction:
+## Output-quality contract
 
-- Products are streamed to `products.jsonl` during extraction, then compiled into `products.csv` (WooCommerce import format) alongside the WXR
-- Report the product count to the user: "Also extracted N products → products.csv"
-- The CSV is ready for WooCommerce import via Products → Import in WP admin
+These guarantees are enforced by the reconstruct sub-skills (mainly `replicate-with-blocks`'s validate-artifacts + QA gates; alt-text + copyright apply to both paths):
+
+- A source section matching **no** catalog interaction-model maps to a **faithful generic** (`columns`/`group`) and is **flagged** in the run-report — never silently forced into a wrong-specific template.
+- Capture-health fallback pages (hero+gallery) and misfit pages routed to `compose-page-blocks` are labeled **low-confidence / fallback** in the run-report.
+- **Alt text:** carry the source's alt verbatim. Images with missing/empty alt are **flagged in run-report** for human fill — never AI-generated (provenance rule).
+- **Contrast:** the brightness rule guarantees legibility. The validate-artifacts gate **warns** on sub-WCAG-AA (4.5:1) text in the run-report. It does not hard-fail or auto-adjust — the source itself may fail AA, and faithfulness wins.
+- **Copyright:** third-party sites get the `style.css` "Benchmark reference only — not for publication." header.
+
+---
 
 ## Discoveries
 
-If you encounter something notable during extraction — a new API endpoint, a platform quirk, a workaround for blocked content, a better extraction technique — add an entry to `DISCOVERIES.md` at the top of the repo. Follow the format in the existing entries. This is how the tool gets smarter over time.
+If you encounter something notable during extraction — a new API endpoint, a platform quirk, a workaround for blocked content, a better extraction technique — add an entry to `DISCOVERIES.md` at the top of the repo.
+
+---
 
 ## Verification
 
@@ -59,26 +189,9 @@ After extraction completes, always run `liberate_verify` on the output directory
 - Media files on disk vs media attachments in the WXR
 - Redirect map completeness
 
-Show the user the verification report and flag anything that needs attention before importing.
+Report the verification results and flag anything that needs attention before importing.
 
-## WordPress Import
-
-If the environment provides an import skill (e.g. `import-liberated-data` in WordPress Studio), use `delegate: true` with both `liberate_setup` and `liberate_import`. The setup call returns requirements, the import call returns a structured manifest with file paths. Hand off to the environment's import skill to execute the actual import.
-
-If no environment import skill is available, use the built-in REST API import. Validate the WordPress connection with `liberate_setup` first:
-- Checks site reachability, REST API availability, and authentication
-- Returns step-by-step guidance if anything fails (e.g. how to create an Application Password)
-- Once setup passes, ask the user about author handling before calling `liberate_import`
-
-**Ask the user about authors:**
-- "Would you like to import the original content authors as WordPress users, or assign all content to your account?"
-- If they want authors: pass `importAuthors: true` to `liberate_import` — this creates WordPress user accounts for each author found in the WXR and assigns posts to them
-- If they want everything under their account: pass `importAuthors: false` (default) — all content is owned by the authenticated user
-
-If the user doesn't have a WordPress site yet, guide them:
-1. Create a WordPress site (wordpress.com, self-hosted, or WordPress Studio for local development)
-2. Generate an Application Password (WordPress Admin > Users > Profile > Application Passwords). On WordPress.com / wpcomstaging.com sites, generate it from the site's own wp-admin — the account-level one at wordpress.com/me/security/application-passwords only works for the WordPress.com public API, not the site-native /wp-json/wp/v2/ endpoint we use.
-3. Run `liberate_setup` to validate the connection
+---
 
 ## Platform-specific notes
 
@@ -93,8 +206,8 @@ Squarespace sites benefit significantly from **admin extraction via CDP**. Witho
    google-chrome --remote-debugging-port=9222
    ```
    (On macOS: `/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --remote-debugging-port=9222`)
-2. In that Chrome window, navigate to their Squarespace site and **log in to admin**
-3. Once logged in, run extraction with `--cdp-port 9222` (CLI) or `cdpPort: 9222` (MCP)
+2. In that Chrome window, navigate to their Squarespace site and **log in to admin**.
+3. Once logged in, run extraction with `--cdp-port 9222` (CLI) or `cdpPort: 9222` (MCP).
 
 The admin session gives the adapter access to:
 - Squarespace's admin API responses (richer metadata, structured content)
@@ -173,8 +286,12 @@ Pages use DOM-based extraction: strip `HEADER_SECTION`, `FOOTER_*`, cookie banne
 
 **v1 limitations:** No GoDaddy Online Store (OLS) product extraction yet — sites with a store are flagged, but products need a real store URL for testing before v1.1 ships.
 
+---
+
 ## General notes
 
-- The extraction produces a WXR file (WordPress import format) + a media directory + a redirect map
-- If the site has products, a `products.csv` (WooCommerce format) and `products.jsonl` are also produced
-- All content is imported as drafts — the user reviews and publishes manually
+- The extraction produces a WXR file (WordPress import format) + a media directory + a redirect map.
+- If the site has products, a `products.csv` (WooCommerce format) and `products.jsonl` are also produced.
+- All content is imported as **drafts by default** — the user reviews and publishes manually (the WXR a user imports into their production WordPress). This is `liberate_extract`'s `contentStatus` default (`'draft'`). **When building a replica/preview** (the design phase — a Studio replica whose nav must resolve), pass `contentStatus: 'publish'` to `liberate_extract`/`liberate_extract_one` so imported pages/posts are live instead of 404ing. Attachments always use WP's `inherit` regardless.
+- The WordPress import step supports `importAuthors: true` to create WP user accounts per author, or `importAuthors: false` (default) to assign all content to the authenticated user. Ask before importing.
+- If no environment import skill is available, validate the WordPress connection with `liberate_setup` first, then call `liberate_import` with REST API credentials. If the environment provides an import skill (e.g. `import-liberated-data`), use `delegate: true` with both `liberate_setup` and `liberate_import`.

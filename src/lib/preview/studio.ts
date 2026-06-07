@@ -1,12 +1,18 @@
 import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { resolve, basename, join, dirname } from 'node:path';
-import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { cpSync, existsSync, mkdirSync, copyFileSync, rmSync } from 'node:fs';
 import { persistBlueprint } from './blueprint-builder.js';
 import { buildMediaUrlMap, rewriteWxrAttachmentUrls } from './media-url-map.js';
-import type { StartPreviewResult } from './types.js';
+import { writeReplicaFilesToHost, validateReplicaInputs } from './replica-install.js';
+import {
+  readSiteMetaFromWxr,
+  wpOptionUpdatesForSiteMeta,
+  type SourceSiteMeta,
+} from './site-options.js';
+import type { ReplicaFile, ReplicaBlockPlugin, StartPreviewResult } from './types.js';
+import { resolveStudioRoot } from '../paths.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -64,7 +70,7 @@ export interface StudioSite {
 
 /**
  * Returns true if the `studio` CLI binary is reachable on PATH.
- * Fast-fails on any error so startPreview can fall through to Playground.
+ * Fast-fails on any error so callers can surface a clear 'install Studio' error.
  */
 export function isStudioAvailable(): boolean {
   try {
@@ -81,8 +87,13 @@ export function isStudioAvailable(): boolean {
  * until it's unique. Callers pass the current `studio site list` output so we
  * don't clobber user sites.
  */
-export function makeStudioSiteName(outputDir: string, existingNames: string[] = []): string {
-  const base = basename(resolve(outputDir))
+export function makeStudioSiteName(
+  outputDir: string,
+  existingNames: string[] = [],
+  explicitName?: string,
+): string {
+  const raw = explicitName && explicitName.trim() ? explicitName : basename(resolve(outputDir));
+  const base = raw
     .toLowerCase()
     .replace(/[^a-z0-9-]/g, '-')
     .replace(/-+/g, '-')
@@ -97,8 +108,26 @@ export function makeStudioSiteName(outputDir: string, existingNames: string[] = 
   return `${base}-${Date.now()}`;
 }
 
-function defaultStudioRoot(): string {
-  return process.env.STUDIO_SITES_DIR || join(homedir(), 'Studio');
+/**
+ * Resolve the on-disk WP root for a Studio site by probing its layout.
+ *
+ * Studio sites exist in two shapes:
+ *   - flat:   <sitePath>/wp-content          (current Studio versions)
+ *   - nested: <sitePath>/wordpress/wp-content (older layouts)
+ *
+ * Hardcoding `<sitePath>/wordpress` (the prior behavior in the theme-write
+ * step) wrote the replica theme into a phantom `wordpress/wp-content/themes/`
+ * dir on flat sites, so `wp theme activate` could not find it ("theme could not
+ * be found"). Probe instead — mirrors media-install.wpRootFor and the
+ * install-theme handler. Falls back to flat so a concrete error surfaces rather
+ * than silently writing to the wrong place.
+ */
+export function resolveStudioWpRoot(sitePath: string): string {
+  const resolved = resolve(sitePath);
+  if (existsSync(join(resolved, 'wp-content'))) return resolved;
+  const nested = join(resolved, 'wordpress');
+  if (existsSync(join(nested, 'wp-content'))) return nested;
+  return resolved;
 }
 
 async function listStudioSites(): Promise<StudioSite[]> {
@@ -117,6 +146,58 @@ async function studioWp(sitePath: string, args: string[]): Promise<string> {
     { timeout: 300_000, maxBuffer: 50 * 1024 * 1024 },
   );
   return stdout;
+}
+
+type StudioWpRunner = (sitePath: string, args: string[]) => Promise<string>;
+
+export async function updateStudioSiteOptions(
+  sitePath: string,
+  siteMeta: SourceSiteMeta | null | undefined,
+  runWp: StudioWpRunner = studioWp,
+): Promise<string[]> {
+  const warnings: string[] = [];
+  for (const [optionName, optionValue] of wpOptionUpdatesForSiteMeta(siteMeta)) {
+    try {
+      await runWp(sitePath, ['option', 'update', optionName, optionValue]);
+    } catch (err) {
+      warnings.push(`Site option "${optionName}" update failed: ${(err as Error).message.trim()}`);
+    }
+  }
+  return warnings;
+}
+
+/** WP-default demo content created by every fresh install, identified by slug. */
+export const WP_DEFAULT_CONTENT_SLUGS = ['hello-world', 'sample-page', 'privacy-policy'];
+
+/**
+ * Delete WP's default demo content (Hello world! post, Sample Page, the
+ * auto-drafted Privacy Policy) BEFORE importing the source WXR. Two reasons:
+ *  1. It pollutes a faithful replica (a replica reflects the SOURCE, not WP).
+ *  2. The default `privacy-policy` draft STEALS the slug, so the source's own
+ *     privacy page imports as `privacy-policy-2` — which then mismatches the
+ *     slug the reconstruct step targets, writing the reconstruction into the
+ *     wrong post. Clearing the defaults first lets source pages claim their
+ *     natural slugs. Best-effort + per-slug isolated: one failure never blocks
+ *     the import. Idempotent (a re-run finds nothing to delete).
+ */
+export async function deleteDefaultWpContent(
+  sitePath: string,
+  runWp: StudioWpRunner = studioWp,
+): Promise<string[]> {
+  const warnings: string[] = [];
+  for (const slug of WP_DEFAULT_CONTENT_SLUGS) {
+    try {
+      const out = await runWp(sitePath, [
+        'post', 'list', `--name=${slug}`, '--post_type=post,page',
+        '--post_status=any', '--field=ID', '--format=ids',
+      ]);
+      const ids = out.trim().split(/\s+/).filter(Boolean);
+      if (ids.length > 0) await runWp(sitePath, ['post', 'delete', ...ids, '--force']);
+    } catch (err) {
+      warnings.push(`WP-default cleanup for "${slug}" failed: ${(err as Error).message.trim()}`);
+    }
+  }
+  return warnings;
 }
 
 /**
@@ -219,6 +300,15 @@ export function stageArtifacts(outputDir: string, sitePath: string): {
 
 export interface StartStudioOpts {
   outputDir: string;
+  themeFiles?: ReplicaFile[];
+  blockPlugins?: ReplicaBlockPlugin[];
+  themeSlug?: string;
+  /**
+   * Explicit Studio site name (sanitized + uniqued). When omitted, derived
+   * from the outputDir basename. Lets the replica install path name the site
+   * `<siteSlug>-replica` independent of the output directory.
+   */
+  siteName?: string;
 }
 
 /**
@@ -247,8 +337,28 @@ export interface StartStudioOpts {
  * actually done and it's safe to open the browser / prompt for the real
  * WordPress import.
  */
+/**
+ * Studio-only preview entry point. Hard-requires Studio — no fallback.
+ * `isAvailable` is injectable for testing (defaults to the real check).
+ */
+export async function startPreview(
+  opts: StartStudioOpts,
+  isAvailable: () => boolean = isStudioAvailable,
+): Promise<StartPreviewResult> {
+  if (!isAvailable()) {
+    return {
+      status: 'failed',
+      error: 'Studio is required for preview/import. Install it from https://developer.wordpress.com/studio/',
+    };
+  }
+  return startStudioPreview(opts);
+}
+
 export async function startStudioPreview(opts: StartStudioOpts): Promise<StartPreviewResult> {
-  const blueprintPath = persistBlueprint(opts.outputDir, 'studio');
+  // Validate replica inputs up front — fail fast before creating a site.
+  validateReplicaInputs(opts.themeFiles, opts.blockPlugins, opts.themeSlug);
+
+  const blueprintPath = persistBlueprint(opts.outputDir);
   let existingSites: StudioSite[] = [];
   try {
     existingSites = await listStudioSites();
@@ -258,8 +368,8 @@ export async function startStudioPreview(opts: StartStudioOpts): Promise<StartPr
   }
   const existingNames = existingSites.map((s) => s.name);
   const existingPaths = new Set(existingSites.map((s) => resolve(s.path)));
-  const name = makeStudioSiteName(opts.outputDir, existingNames);
-  const sitePath = join(defaultStudioRoot(), name);
+  const name = makeStudioSiteName(opts.outputDir, existingNames, opts.siteName);
+  const sitePath = join(resolveStudioRoot(), name);
   const absOutput = resolve(opts.outputDir);
   const hasProducts = existsSync(join(absOutput, 'products.csv'));
 
@@ -273,7 +383,7 @@ export async function startStudioPreview(opts: StartStudioOpts): Promise<StartPr
   if (
     existsSync(resolvedSitePath) &&
     !existingPaths.has(resolvedSitePath) &&
-    resolvedSitePath.startsWith(resolve(defaultStudioRoot()) + '/')
+    resolvedSitePath.startsWith(resolve(resolveStudioRoot()) + '/')
   ) {
     rmSync(resolvedSitePath, { recursive: true, force: true });
   }
@@ -309,6 +419,10 @@ export async function startStudioPreview(opts: StartStudioOpts): Promise<StartPr
     const staged = stageArtifacts(opts.outputDir, sitePath);
 
     if (staged.wxrRelPath) {
+      // Clear WP-default demo content BEFORE import so source pages claim their
+      // natural slugs (esp. the default privacy-policy draft, which would force
+      // the source privacy page to import as privacy-policy-2). Best-effort.
+      warnings.push(...await deleteDefaultWpContent(sitePath));
       // File paths for the rewrite step are host paths (Node writes locally).
       const wxrHostPath = join(sitePath, staged.wxrRelPath);
       // Paths passed to `studio wp` must be VFS paths — Studio mounts the
@@ -354,6 +468,63 @@ export async function startStudioPreview(opts: StartStudioOpts): Promise<StartPr
       }
     }
 
+    // WooCommerce 8.x+ ships "Coming soon" mode ON by default (store-pages-only),
+    // which hides the shop + product pages behind a placeholder ("Great things are
+    // on the horizon…"). Disable it so the imported store actually renders. Only
+    // relevant when a store was installed; best-effort.
+    if (hasProducts) {
+      try {
+        await studioWp(sitePath, ['option', 'update', 'woocommerce_coming_soon', 'no']);
+      } catch (err) {
+        warnings.push(`Disable WooCommerce coming-soon failed: ${(err as Error).message.trim()}`);
+      }
+    }
+
+    warnings.push(...await updateStudioSiteOptions(sitePath, readSiteMetaFromWxr(opts.outputDir)));
+
+    // Replica theme + block plugin install. Happens after content import so
+    // wp-cli activate sees a fully-imported environment. Files are written
+    // directly to the host filesystem under the probed WP root; activation
+    // is via `studio wp` CLI. Failures here are NOT fatal to the imported
+    // content — surface as warnings and let the caller decide.
+    if (
+      (opts.themeFiles && opts.themeFiles.length > 0) ||
+      (opts.blockPlugins && opts.blockPlugins.length > 0)
+    ) {
+      const wpRoot = resolveStudioWpRoot(sitePath);
+      try {
+        const written = writeReplicaFilesToHost({
+          wpRoot,
+          themeSlug: opts.themeSlug,
+          themeFiles: opts.themeFiles,
+          blockPlugins: opts.blockPlugins,
+          // Bridge on-disk BINARY assets (self-hosted fonts, logo.png, icon SVGs)
+          // that string themeFiles[] can't carry — same as liberate_install_theme.
+          // Without this the replica renders with system fonts + a broken logo.
+          assetSourceDir: join(resolve(opts.outputDir), 'theme'),
+        });
+        for (const slug of written.pluginSlugs) {
+          try {
+            await studioWp(sitePath, ['plugin', 'activate', slug]);
+          } catch (err) {
+            warnings.push(`Plugin activate "${slug}" failed: ${(err as Error).message.trim()}`);
+          }
+        }
+        if (opts.themeFiles && opts.themeFiles.length > 0 && opts.themeSlug) {
+          try {
+            await studioWp(sitePath, ['theme', 'activate', opts.themeSlug]);
+          } catch (err) {
+            warnings.push(`Theme activate "${opts.themeSlug}" failed: ${(err as Error).message.trim()}`);
+          }
+        }
+      } catch (err) {
+        // Bubble up — file-write failures usually mean the site path is
+        // wrong, the slug is invalid, or someone tried path traversal. None
+        // are recoverable mid-flow.
+        throw new Error(`Replica install failed: ${(err as Error).message}`);
+      }
+    }
+
     const sites = await listStudioSites();
     const site = sites.find((s) => s.name === name);
     if (!site) {
@@ -366,6 +537,7 @@ export async function startStudioPreview(opts: StartStudioOpts): Promise<StartPr
       warnings,
       source: 'studio',
       siteName: site.name,
+      path: resolveStudioWpRoot(site.path),
     };
   } catch (err) {
     await removeStudioSite(sitePath);

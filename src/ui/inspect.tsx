@@ -3,7 +3,7 @@ import { render, useApp, Box, Text } from 'ink';
 import Spinner from 'ink-spinner';
 import { Header } from './header.js';
 import { platformColor, confidenceBadge, pluralize } from './format.js';
-import { detect, type FullDetectionResult } from '../lib/extraction/detect-platform.js';
+import { detect, type FullDetectionResult } from '../lib/detect-platform/index.js';
 import { fetchSitemap, classifyUrl } from '../lib/extraction/sitemap.js';
 
 export interface InspectProps {
@@ -43,12 +43,14 @@ function Inspect({ url, token }: InspectProps) {
         setCounts(c);
 
         // Phase 3: Probe sample pages (if adapter supports it)
-        const { shopifyAdapter } = await import('../adapters/shopify.js');
-        const { squarespaceAdapter } = await import('../adapters/squarespace.js');
-        const { webflowAdapter } = await import('../adapters/webflow.js');
-        const { wixAdapter } = await import('../adapters/wix.js');
-        const allAdapters = [shopifyAdapter, squarespaceAdapter, webflowAdapter, wixAdapter];
-        const adapter = allAdapters.find(a => a.id === det.platform);
+        const { defaultAdapter } = await import('../adapters/default/index.js');
+        const { shopifyAdapter } = await import('../adapters/shopify/index.js');
+        const { squarespaceAdapter } = await import('../adapters/squarespace/index.js');
+        const { webflowAdapter } = await import('../adapters/webflow/index.js');
+        const { wixAdapter } = await import('../adapters/wix/index.js');
+        const { resolveAdapter } = await import('../adapters/resolve-adapter.js');
+        const allAdapters = [defaultAdapter, shopifyAdapter, squarespaceAdapter, webflowAdapter, wixAdapter];
+        const adapter = resolveAdapter(allAdapters, det.platform);
 
         if (adapter && typeof adapter.probe === 'function' && urls.length > 0) {
           setPhase('probing');

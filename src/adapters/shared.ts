@@ -1,14 +1,16 @@
 import * as cheerio from 'cheerio';
-import type { WxrBuilder } from '../lib/extraction/wxr-builder.js';
-import type { ExtractionLog } from '../lib/extraction/extraction-log.js';
-import type { ImportSession } from '../lib/extraction/import-session.js';
+import type { NavLink } from '../lib/html-extract/index.js';
+import type { WxrBuilder, WxrItem } from '../lib/wxr/index.js';
+import type { ExtractionLog } from '../lib/resume-state/index.js';
+import type { ImportSession } from '../lib/resume-state/index.js';
 import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { classifyUrl } from '../lib/extraction/sitemap.js';
-import { downloadMedia } from '../lib/extraction/media.js';
-import { MediaStubStore } from '../lib/extraction/media-stubs.js';
-import type { WooProductCsvBuilder, WooProduct } from '../lib/import/woo-product-csv.js';
+import { downloadMedia, isFontUrl } from '../lib/media-fetch/index.js';
+import { MediaStubStore } from '../lib/resume-state/index.js';
+import type { WooProductCsvBuilder, WooProduct } from '../lib/woo-csv/index.js';
 import { AdaptiveTuner, TUNER_DEFAULTS } from '../lib/extraction/adaptive-tuner.js';
 import type { AdaptiveTunerConfig, TunerState } from '../lib/extraction/adaptive-tuner.js';
+import { claimSlug, pageSlugFromUrl } from '../lib/url/index.js';
 
 // ---------------------------------------------------------------------------
 // Strip non-content tags from HTML
@@ -26,68 +28,6 @@ function stripNonContentTags(html: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// Shared HTML extraction helpers — used by multiple adapters
-// ---------------------------------------------------------------------------
-
-export const IMAGE_EXTENSIONS = /\.(jpg|jpeg|png|gif|svg|webp|avif|ico|bmp|tiff)/i;
-
-export function extractMeta(html: string, property: string): string {
-  const $ = cheerio.load(html);
-  return $(`meta[property="${property}"]`).attr('content')
-    || $(`meta[name="${property}"]`).attr('content')
-    || '';
-}
-
-export function extractTitle(html: string): string {
-  const $ = cheerio.load(html);
-  return $('title').first().text().trim();
-}
-
-export function extractHeading(html: string): string {
-  const $ = cheerio.load(html);
-  const h1 = $('h1').first().text().trim();
-  if (h1) return h1;
-  return $('title').first().text().trim();
-}
-
-export function extractNavLinks(html: string, baseUrl: string): NavLink[] {
-  const $ = cheerio.load(html);
-  const links: NavLink[] = [];
-  const seen = new Set<string>();
-
-  $('nav a[href]').each((_, el) => {
-    const href = $(el).attr('href') || '';
-    const text = $(el).text().trim();
-    if (!text || seen.has(href)) return;
-    seen.add(href);
-
-    let fullHref = href;
-    if (href.startsWith('/')) {
-      try {
-        fullHref = new URL(href, baseUrl).href;
-      } catch {
-        fullHref = href;
-      }
-    }
-    links.push({ text, href: fullHref });
-  });
-
-  return links;
-}
-
-// ---------------------------------------------------------------------------
-// Shared slugify — used by all adapters
-// ---------------------------------------------------------------------------
-
-export function slugify(url: string): string {
-  try {
-    return new URL(url).pathname.replace(/^\//, '').replace(/\//g, '--') || 'homepage';
-  } catch {
-    return 'homepage';
-  }
-}
-
-// ---------------------------------------------------------------------------
 // Shared sleep helper
 // ---------------------------------------------------------------------------
 
@@ -96,62 +36,10 @@ export function sleep(ms: number): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Shared browser launcher (for adapters that need Playwright)
-// ---------------------------------------------------------------------------
-
-type PwBrowser = {
-  contexts(): Array<{ newPage(): Promise<unknown> }>;
-  newContext(opts?: Record<string, unknown>): Promise<{ newPage(): Promise<unknown> }>;
-  close(): Promise<void>;
-};
-
-export async function getPlaywright(): Promise<typeof import('playwright')> {
-  try {
-    return await import('playwright');
-  } catch {
-    throw new Error(
-      'Playwright is required but is not installed. ' +
-        'Run `npm install playwright` and `npx playwright install chromium` to set it up.'
-    );
-  }
-}
-
-export async function launchBrowser(opts: { cdpPort?: number; headed?: boolean }): Promise<{
-  browser: PwBrowser;
-  page: unknown;
-  close: () => Promise<void>;
-}> {
-  const pw = await getPlaywright();
-
-  let browser: PwBrowser;
-  let page: unknown;
-
-  if (opts.cdpPort) {
-    const raw = await pw.chromium.connectOverCDP(
-      `http://127.0.0.1:${opts.cdpPort}`
-    );
-    browser = raw as unknown as PwBrowser;
-    const ctx = browser.contexts()[0] || (await browser.newContext());
-    page = await ctx.newPage();
-  } else {
-    const raw = await pw.chromium.launch({ headless: !opts.headed });
-    browser = raw as unknown as PwBrowser;
-    const ctx = await browser.newContext();
-    page = await ctx.newPage();
-  }
-
-  return {
-    browser,
-    page,
-    close: () => browser.close(),
-  };
-}
-
-// ---------------------------------------------------------------------------
 // Generic product detection from HTML (JSON-LD Product schema)
 // ---------------------------------------------------------------------------
 
-export function extractProductFromHtml(html: string): WooProduct | null {
+export function extractProductFromHtml(html: string, sourceUrl: string): WooProduct | null {
   const $ = cheerio.load(html);
   const ldBlocks: string[] = [];
   $('script[type="application/ld+json"]').each((_, el) => {
@@ -179,6 +67,7 @@ export function extractProductFromHtml(html: string): WooProduct | null {
           sku: ld.sku || '',
           images,
           inStock: offers[0]?.availability?.includes('InStock') ?? true,
+          sourceUrl,
         };
       }
     } catch {
@@ -197,9 +86,145 @@ export interface InventoryUrl {
   type: string;
 }
 
-export interface NavLink {
-  text: string;
-  href: string;
+/**
+ * Cap a typed URL list to `limit` entries while keeping the sample
+ * *representative* across content types.
+ *
+ * A naive `urls.slice(0, limit)` follows sitemap/inventory order, which on
+ * multi-type sites (notably Shopify stores, where `/pages/*` sort before
+ * `/products/*`) can exhaust the cap on a single type and silently drop
+ * products entirely. A limited extraction of a *store* that contains zero
+ * products is not a useful sample.
+ *
+ * Strategy:
+ *   1. The homepage (if present) is always included first.
+ *   2. PINNED urls (e.g. primary-nav targets) come next — they MUST survive the
+ *      cap so the reconstructed menu never points at an uncaptured page.
+ *   3. The remaining slots are filled round-robin across the type buckets,
+ *      in each type's first-appearance order, so every content type that
+ *      exists gets proportional representation.
+ *   4. Relative order within a type is preserved.
+ *
+ * Returns exactly `min(limit, urls.length)` entries.
+ *
+ * @param pinnedUrls - Optional set of URL strings to prioritize immediately
+ *   after the homepage. Entries whose `.url` is in this set are pulled to the
+ *   front of the slice (in their original order) so a small `--limit` still
+ *   includes every primary-nav destination.
+ */
+export function stratifiedUrlSlice<T extends { type: string; url?: string }>(
+  urls: T[],
+  limit: number,
+  pinnedUrls?: Set<string>,
+): T[] {
+  if (limit < 0) return [];
+  if (urls.length <= limit) return urls.slice();
+  if (limit === 0) return [];
+
+  // Bucket by type, preserving first-appearance order of both types and members.
+  const buckets = new Map<string, T[]>();
+  for (const u of urls) {
+    const bucket = buckets.get(u.type);
+    if (bucket) bucket.push(u);
+    else buckets.set(u.type, [u]);
+  }
+
+  const result: T[] = [];
+  const taken = new Set<T>();
+
+  // 1. Homepage(s) first — the source's primary page anchors the design.
+  const homepageBucket = buckets.get('homepage');
+  if (homepageBucket) {
+    for (const u of homepageBucket) {
+      if (result.length >= limit) break;
+      result.push(u);
+      taken.add(u);
+    }
+    buckets.delete('homepage');
+  }
+
+  // 2. Pinned URLs (primary-nav targets) — pull them to the front, in original
+  //    order, so the cap can't strand a menu link on an uncaptured page. We
+  //    leave the taken entries in their type buckets and skip them in the
+  //    round-robin below via `taken`.
+  if (pinnedUrls && pinnedUrls.size > 0) {
+    for (const u of urls) {
+      if (result.length >= limit) break;
+      if (taken.has(u)) continue;
+      if (u.url && pinnedUrls.has(u.url)) {
+        result.push(u);
+        taken.add(u);
+      }
+    }
+  }
+
+  // 3. Round-robin across remaining type buckets until the limit is hit.
+  //    Skip entries already taken as pinned nav targets so they aren't
+  //    double-counted.
+  const cursors = new Map<string, number>();
+  for (const type of buckets.keys()) cursors.set(type, 0);
+  let progressed = true;
+  while (result.length < limit && progressed) {
+    progressed = false;
+    for (const [type, bucket] of buckets) {
+      if (result.length >= limit) break;
+      let idx = cursors.get(type)!;
+      // Advance past any pinned entries already in the result.
+      while (idx < bucket.length && taken.has(bucket[idx])) idx++;
+      if (idx < bucket.length) {
+        result.push(bucket[idx]);
+        taken.add(bucket[idx]);
+        cursors.set(type, idx + 1);
+        progressed = true;
+      } else {
+        cursors.set(type, idx);
+      }
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Resolve captured primary-nav hrefs to the matching inventory URL strings, so
+ * they can be pinned into a `--limit` slice. Matching is by same-origin
+ * pathname (ignoring trailing slash, query, hash): a nav href
+ * `https://site/pages/about-us` pins the inventory URL `https://site/pages/about-us`
+ * (or `.../about-us/`). Off-site nav hrefs match nothing and are omitted.
+ */
+export function navTargetInventoryUrls(
+  navigation: NavLink[],
+  inventory: Array<{ url: string }>,
+): Set<string> {
+  const pinned = new Set<string>();
+  if (navigation.length === 0) return pinned;
+
+  // Index inventory by normalized pathname → original URL.
+  const byPath = new Map<string, string>();
+  for (const inv of inventory) {
+    const p = normalizeUrlPath(inv.url);
+    if (p !== null && !byPath.has(p)) byPath.set(p, inv.url);
+  }
+
+  for (const nav of navigation) {
+    const p = normalizeUrlPath(nav.href);
+    if (p === null) continue;
+    const match = byPath.get(p);
+    if (match) pinned.add(match);
+  }
+  return pinned;
+}
+
+/** Normalize an absolute URL to its pathname without trailing slash / query / hash. Null if unparseable or root. */
+function normalizeUrlPath(raw: string): string | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    return null;
+  }
+  const stripped = parsed.pathname.replace(/\/+$/, '');
+  return stripped || null; // root → null (homepage handled separately)
 }
 
 export interface ExtractedPage {
@@ -222,6 +247,14 @@ export interface ExtractedPage {
   jsonLd?: unknown[];
 }
 
+export interface PageExtractedEvent {
+  url: string;
+  slug: string;
+  type: 'product' | 'post' | 'page' | 'homepage' | 'gallery' | 'event';
+  items: WxrItem[];
+  mediaUrls: string[];
+}
+
 export interface ExtractionLoopOpts {
   urls: InventoryUrl[];
   navigation: NavLink[];
@@ -239,6 +272,12 @@ export interface ExtractionLoopOpts {
   extractPage: (url: string) => Promise<ExtractedPage>;
   /** Optional platform-specific product extractor — called before the generic JSON-LD fallback */
   extractProduct?: (url: string, html: string) => WooProduct | null;
+  /**
+   * Optional streaming callback fired after one URL has been fetched,
+   * media-downloaded, and added to WXR/products. Used by watch mode to
+   * update the running preview without re-entering adapters one URL at a time.
+   */
+  onPageExtracted?: (event: PageExtractedEvent) => void | Promise<void>;
   /**
    * Cap the number of URLs to process. Useful for sampling a real extraction
    * (with full WXR output) without committing to the entire site. When unset,
@@ -276,6 +315,7 @@ export async function runExtractionLoop(opts: ExtractionLoopOpts): Promise<{
     session,
     extractPage,
     extractProduct,
+    onPageExtracted,
     limit,
     tunerConfig,
   } = opts;
@@ -339,19 +379,30 @@ export async function runExtractionLoop(opts: ExtractionLoopOpts): Promise<{
 
   // Determine which URLs to process
   const totalUrls = inventoryUrls.length;
-  let urls = inventoryUrls.map((u) => u.url);
+  let typedUrls = inventoryUrls.slice();
   let alreadyProcessed = 0;
   if (resume) {
     const processed = log.getProcessedUrls();
     alreadyProcessed = processed.size;
-    urls = urls.filter((u) => !processed.has(u));
+    typedUrls = typedUrls.filter((u) => !processed.has(u.url));
   }
   // Apply URL cap. Explicit `limit` wins over dryRun's implicit 3-URL cap so
   // a `--limit N` (with or without --dry-run) processes exactly N URLs.
+  // The cap is *stratified* across content types (see stratifiedUrlSlice) so a
+  // limited extraction of a multi-type site (e.g. a Shopify store) still
+  // includes products/posts rather than exhausting the budget on `/pages/*`.
+  //
+  // Primary-nav targets are PINNED into the slice so the reconstructed menu
+  // never points at a page the cap dropped. We match captured nav hrefs to
+  // inventory URLs by same-origin pathname (nav hrefs are absolutized in
+  // extractNavLinks; off-site nav links won't match any inventory URL and are
+  // simply not pinned).
+  const navTargetUrls = navTargetInventoryUrls(navigation, typedUrls);
   const effectiveLimit = limit ?? (dryRun ? 3 : undefined);
   if (effectiveLimit !== undefined && effectiveLimit >= 0) {
-    urls = urls.slice(0, effectiveLimit);
+    typedUrls = stratifiedUrlSlice(typedUrls, effectiveLimit, navTargetUrls);
   }
+  let urls = typedUrls.map((u) => u.url);
 
   if (urls.length === 0) {
     return { pagesExtracted: 0, postsExtracted: 0, productsExtracted: 0, failed: 0, mediaCollected: 0 };
@@ -364,6 +415,14 @@ export async function runExtractionLoop(opts: ExtractionLoopOpts): Promise<{
 
   // Track authors by name to avoid duplicates
   const authorSlugs = new Set<string>();
+
+  // Source-faithful page/post slug claiming. The loop is the SINGLE owner of
+  // the WP `post_name` so the redirect map and WXR slug never diverge: the
+  // adapter's `pageData.slug` (often `slugify(url)` = `pages--about-us`) is
+  // overridden with the last-path-segment slug (`about-us`), collision-suffixed.
+  // This is intentionally distinct from the screenshot/manifest `slugify`
+  // filename convention, which stays untouched.
+  const claimedSlugs = new Map<string, number>();
 
   const sendLog = (message: string) => {
     try {
@@ -433,6 +492,7 @@ export async function runExtractionLoop(opts: ExtractionLoopOpts): Promise<{
       const { url, pageData, error: fetchError } = fetchResults[j];
       const i = cursor + j; // running index for checkpoints
       const startMs = Date.now();
+      const itemCountBefore = wxr.items.length;
 
       if (fetchError || !pageData) {
         failed++;
@@ -460,6 +520,11 @@ export async function runExtractionLoop(opts: ExtractionLoopOpts): Promise<{
         const newMediaUrls: string[] = [];
         for (const mediaUrl of pageData.mediaUrls) {
           if (downloadedMediaUrls.has(mediaUrl)) continue;
+          // Fonts belong in the reconstructed theme's assets/fonts/, not the WP media
+          // library. Skip them here so they never enter the uploads/media pipeline (which
+          // would mangle their CSS url() into localhost-absolute uploads paths). The carry
+          // path self-hosts fonts independently (carry-fonts.ts).
+          if (isFontUrl(mediaUrl)) { downloadedMediaUrls.add(mediaUrl); continue; }
           // Respect persistent stub state: skip permanently-failed / ignored
           // URLs so resume runs don't burn cycles retrying them.
           if (mediaStubs && !mediaStubs.shouldAttempt(mediaUrl)) {
@@ -594,7 +659,7 @@ export async function runExtractionLoop(opts: ExtractionLoopOpts): Promise<{
       // Product detection — try platform-specific extractor, then generic JSON-LD
       if (isProduct && csvBuilder && !dryRun) {
         const product = extractProduct?.(url, pageData.content)
-          ?? extractProductFromHtml(pageData.content);
+          ?? extractProductFromHtml(pageData.content, url);
         if (product) {
           csvBuilder.addProduct(product);
           productsExtracted++;
@@ -602,6 +667,19 @@ export async function runExtractionLoop(opts: ExtractionLoopOpts): Promise<{
       }
 
       const cleanContent = stripNonContentTags(pageData.content);
+
+      // Derive the source-faithful WP slug from the URL (last path segment),
+      // collision-suffixed. Products are CSV-only (no WP post_name), so only
+      // claim for pages/posts. The claimed slug is authoritative for the WXR
+      // `post_name` and the redirect-map target.
+      //
+      // NOTE: `pageData.slug` (= `slugify(url)`, the `--`-joined path) is the
+      // SCREENSHOT/MANIFEST filename convention and MUST stay that way for the
+      // `onPageExtracted` callback and `log.logProcessed` below — the watch
+      // loop joins those back to `html/<slug>.html` + `screenshots/.../<slug>.png`.
+      const pageSlug = (isProduct && csvBuilder)
+        ? pageData.slug
+        : claimSlug(pageSlugFromUrl(url), claimedSlugs);
 
       // Register author if present
       let authorLogin: string | undefined;
@@ -618,7 +696,7 @@ export async function runExtractionLoop(opts: ExtractionLoopOpts): Promise<{
       } else if (isPost) {
         wxr.addPost({
           title: pageData.title,
-          slug: pageData.slug,
+          slug: pageSlug,
           content: cleanContent,
           excerpt: pageData.excerpt,
           date: pageData.date,
@@ -634,7 +712,7 @@ export async function runExtractionLoop(opts: ExtractionLoopOpts): Promise<{
       } else {
         wxr.addPage({
           title: pageData.title,
-          slug: pageData.slug,
+          slug: pageSlug,
           content: cleanContent,
           excerpt: pageData.excerpt,
           date: pageData.date,
@@ -651,11 +729,16 @@ export async function runExtractionLoop(opts: ExtractionLoopOpts): Promise<{
           wxr.flushItem(wxr.items[wxr.items.length - 1]);
         }
 
-        // Add redirect from original path to slug
+        // Add redirect (and source→local-permalink mapping) from the original
+        // source path to the local WP permalink. `to` is the pretty-permalink
+        // form `/<slug>/` so the nav-href remap (theme-scaffold) and WP's own
+        // trailing-slash permalinks agree. This redirect-map.json doubles as
+        // the source-URL → local-permalink map consumed by the header builder.
         try {
           const originalPath = new URL(url).pathname;
-          if (originalPath && originalPath !== '/' && originalPath !== `/${pageData.slug}`) {
-            wxr.addRedirect({ from: originalPath, to: `/${pageData.slug}` });
+          const localPermalink = `/${pageSlug}/`;
+          if (originalPath && originalPath !== '/' && originalPath !== localPermalink) {
+            wxr.addRedirect({ from: originalPath, to: localPermalink });
           }
         } catch {
           // URL parsing failed
@@ -684,6 +767,23 @@ export async function runExtractionLoop(opts: ExtractionLoopOpts): Promise<{
         sendLog(
           `  media: ${pageData.mediaUrls.length}, quality: ${pageData.qualityScore}, ${durationMs}ms`
         );
+      }
+
+      if (onPageExtracted) {
+        // Streaming consumers install media from MediaStubStore, so make the
+        // just-downloaded media visible on disk before firing the callback.
+        mediaStubs?.flush();
+        try {
+          await onPageExtracted({
+            url,
+            slug: pageData.slug,
+            type: urlType as PageExtractedEvent['type'],
+            items: wxr.items.slice(itemCountBefore),
+            mediaUrls: pageData.mediaUrls,
+          });
+        } catch (err) {
+          sendLog(`  [warn] onPageExtracted failed for ${url}: ${(err as Error).message}`);
+        }
       }
     }
 

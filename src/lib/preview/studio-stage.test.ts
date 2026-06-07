@@ -7,7 +7,7 @@ import { join } from 'node:path';
 // here we test it through the public interface the way it'll actually be used
 // by importing from the module. The module exports `stageArtifacts` for test
 // access explicitly.
-import { stageArtifacts, toVfsPath } from './studio.js';
+import { stageArtifacts, toVfsPath, updateStudioSiteOptions } from './studio.js';
 
 describe('toVfsPath', () => {
   it('prefixes site-relative paths with /wordpress', () => {
@@ -53,5 +53,32 @@ describe('stageArtifacts', () => {
     const staged = stageArtifacts(outDir, siteDir);
     expect(staged.hasMedia).toBe(true);
     expect(readFileSync(join(siteDir, 'wp-content/uploads/liberation/a.jpg'), 'utf8')).toBe('jpg-bytes');
+  });
+});
+
+describe('updateStudioSiteOptions', () => {
+  it('updates blogname and blogdescription through studio wp', async () => {
+    const calls: Array<{ sitePath: string; args: string[] }> = [];
+
+    const warnings = await updateStudioSiteOptions(
+      '/tmp/studio-site',
+      { title: 'Swift Lumber', tagline: 'Quality building materials' },
+      async (sitePath, args) => {
+        calls.push({ sitePath, args });
+        return '';
+      },
+    );
+
+    expect(warnings).toEqual([]);
+    expect(calls).toEqual([
+      {
+        sitePath: '/tmp/studio-site',
+        args: ['option', 'update', 'blogname', 'Swift Lumber'],
+      },
+      {
+        sitePath: '/tmp/studio-site',
+        args: ['option', 'update', 'blogdescription', 'Quality building materials'],
+      },
+    ]);
   });
 });

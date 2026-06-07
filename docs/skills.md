@@ -4,20 +4,27 @@ Skills are guided multi-step workflows available when using data-liberation-agen
 
 Skill definitions live in `skills/<name>/SKILL.md`.
 
-## /liberate
+## User-facing skills
 
-**Extract content from a closed web platform into a WordPress-compatible WXR file.**
+These are the skills you invoke directly in Claude Code (or another agent).
 
-Full extraction workflow:
+### /liberate
+
+**Front door — capture a site once, then choose the reconstruct path and dispatch the matching sub-skill.**
+
+Flow (idempotent — re-running on an already-captured site skips straight to the path choice):
 1. Detect the platform
 2. Discover all content (sitemap, navigation, platform features like stores/bookings/forms)
 3. Extract pages, posts, media, and products
-4. Verify the extraction (stale CDN URLs, failures, quality scores)
-5. Validate WordPress connection and import
+4. Capture screenshots, design tokens (palette, typography, breakpoints), and rendered HTML per URL
+5. Confirm + path checkpoint: show inventory + estimated scope/cost/time + a platform-informed recommendation, then choose the reconstruct path (picking one is the go-ahead):
+   - **blocks + products** → dispatch `/replicate-with-blocks` (editable block theme + WooCommerce)
+   - **theme replication** → dispatch `/replicate-theme` (high-fidelity carry-and-scope)
+6. The chosen sub-skill reconstructs, installs into a local WordPress site, and produces its own run-report
 
-Handles resume for interrupted extractions. Flags platform-specific features that won't transfer automatically (with WordPress plugin recommendations).
+Handles resume for interrupted runs. In agent mode, progress is the agent's own narration; the headless extraction CLI keeps its own Ink TUI. Flags platform-specific features that won't transfer automatically (with WordPress plugin recommendations).
 
-## /qa
+### /qa
 
 **Compare extracted WXR content against the original source site and fix discrepancies.**
 
@@ -31,7 +38,7 @@ QA workflow:
 
 Tiers: quick (fix critical only), standard (fix critical + warnings), exhaustive (fix all).
 
-## /diagnose
+### /diagnose
 
 **Debug failed or low-quality extractions by analyzing logs and probing the source site.**
 
@@ -44,7 +51,7 @@ Diagnostic workflow:
 6. Verify the fix improved results
 7. Document findings in DISCOVERIES.md
 
-## /adapt
+### /adapt
 
 **Build a new platform adapter to extract content from an unsupported platform.**
 
@@ -58,3 +65,24 @@ Adapter development workflow:
 7. Write tests with fixture data
 8. Manual verification with `--dry-run --verbose`
 9. Document in README.md and DISCOVERIES.md
+
+## Orchestration-internal skills
+
+The following skills are invoked **only by the orchestrator**, not by users — invoking them directly mid-session conflicts with the orchestrator's state. They are marked `disable-model-invocation` so they don't surface in `/`-discovery.
+
+**The two reconstruct paths** `/liberate` dispatches to (the choice offered at the path checkpoint):
+
+- **`replicate-with-blocks`** — block reconstruct: design-foundations → theme → clustering → section extraction → builder fan-out → assemble → validate → install → visual-QA loop → `run-report.json`. Editable WordPress block theme + WooCommerce.
+- **`replicate-theme`** — carry-and-scope reconstruct: carries source markup into `core/html` islands, scopes the source CSS, installs a `<site>-carry` theme, compares → `run-report-carry.json`. High-fidelity, non-block-editable.
+
+**The helper skills** these (and `design-qa`) call:
+
+| Skill | Purpose |
+|---|---|
+| `design-foundations` | Analyze captured tokens + rep HTML + screenshots → `design-foundation.json` + frozen `design.md` brief |
+| `creating-themes` | Scaffold `theme.json`, `style.css`, `functions.php`, parts, base templates, self-hosted fonts |
+| `generating-patterns` | Builder (fanned out per cluster rep) → section layout skeletons as strings |
+| `compose-page-blocks` | Misfit pages only — full page HTML/content → block `post_content` markup when deterministic slot-fill can't map cleanly |
+| `design-qa` | Visual QA loop: replica vs source screenshots → A/B/C classification + fix directives + `run-report.json` |
+| `editing-themes` / `editing-blocks` / `creating-blocks` | Apply QA fix directives to theme files or emit new embedded blocks |
+| `testing-*` | Gate checks (build, validate-artifacts, responsiveness) run by the orchestrator at checkpoints |

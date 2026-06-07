@@ -2,8 +2,8 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { WxrBuilder } from '../src/lib/extraction/wxr-builder.js';
-import { readWxr } from '../src/lib/extraction/wxr-reader.js';
+import { WxrBuilder } from '../src/lib/wxr/index.js';
+import { readWxr } from '../src/lib/wxr/index.js';
 
 describe('WXR Reader — round-trip', () => {
   let tmpDir: string;
@@ -121,7 +121,7 @@ describe('WXR Reader — round-trip', () => {
       });
     });
 
-    const pages = data.items.filter((i) => i.type === 'page') as import('../src/lib/extraction/wxr-builder.js').PageItem[];
+    const pages = data.items.filter((i) => i.type === 'page') as import('../src/lib/wxr/index.js').PageItem[];
     expect(pages).toHaveLength(2);
 
     expect(pages[0]).toMatchObject({
@@ -168,7 +168,7 @@ describe('WXR Reader — round-trip', () => {
       });
     });
 
-    const post = data.items.find((i) => i.type === 'post') as import('../src/lib/extraction/wxr-builder.js').PostItem;
+    const post = data.items.find((i) => i.type === 'post') as import('../src/lib/wxr/index.js').PostItem;
     expect(post).toBeDefined();
     expect(post.title).toBe('Hello World');
     expect(post.slug).toBe('hello-world');
@@ -249,7 +249,7 @@ describe('WXR Reader — round-trip', () => {
       });
     });
 
-    const menuItems = data.items.filter((i) => i.type === 'nav_menu_item') as import('../src/lib/extraction/wxr-builder.js').MenuItem[];
+    const menuItems = data.items.filter((i) => i.type === 'nav_menu_item') as import('../src/lib/wxr/index.js').MenuItem[];
     expect(menuItems).toHaveLength(2);
     expect(menuItems[0]).toMatchObject({
       title: 'Home',
@@ -284,7 +284,7 @@ describe('WXR Reader — round-trip', () => {
     const data = buildAndRead((wxr) => {
       wxr.addPost({ title: 'Bare Post', slug: 'bare-post' });
     });
-    const post = data.items.find((i) => i.type === 'post') as import('../src/lib/extraction/wxr-builder.js').PostItem;
+    const post = data.items.find((i) => i.type === 'post') as import('../src/lib/wxr/index.js').PostItem;
     expect(post).toMatchObject({
       title: 'Bare Post',
       slug: 'bare-post',
@@ -304,7 +304,7 @@ describe('WXR Reader — round-trip', () => {
     const data = buildAndRead((wxr) => {
       wxr.addPage({ title: 'Dated', slug: 'dated', content: '<p>x</p>', date: '2024-12-25T18:30:45Z' });
     });
-    const page = data.items.find((i) => i.type === 'page') as import('../src/lib/extraction/wxr-builder.js').PageItem;
+    const page = data.items.find((i) => i.type === 'page') as import('../src/lib/wxr/index.js').PageItem;
     expect(page.date).toBe('2024-12-25T18:30:45.000Z');
   });
 
@@ -334,7 +334,7 @@ describe('WXR Reader — round-trip', () => {
   </channel>
 </rss>`);
     const data = readWxr(wxrPath);
-    const post = data.items.find((i) => i.type === 'post') as import('../src/lib/extraction/wxr-builder.js').PostItem;
+    const post = data.items.find((i) => i.type === 'post') as import('../src/lib/wxr/index.js').PostItem;
     expect(post.date).toBe('');
   });
 });
