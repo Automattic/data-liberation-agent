@@ -202,3 +202,39 @@ describe('buildPageReconstruction', () => {
     expect(r.postContent).toContain('href="/about-us"');
   });
 });
+
+describe('buildPageReconstruction — converted-heading provenance', () => {
+  it('passes the gate when a converted section emits a heading not in s.headings', () => {
+    // rawHandler faithfully emits sub-headings the structured extraction never
+    // captured as s.headings (verified: 6 of 16 on a real page). The converted
+    // branch registers the converted markup's OWN <h>/<p> visible text into the
+    // gate corpus so those sub-headings don't trip the provenance check.
+    const markup =
+      '<!-- wp:heading --><h2>Known Heading</h2><!-- /wp:heading -->\n' +
+      '<!-- wp:paragraph --><p>Some captured body copy.</p><!-- /wp:paragraph -->\n' +
+      '<!-- wp:heading {"level":3} --><h3>Surprise Subheading</h3><!-- /wp:heading -->';
+    const result = buildPageReconstruction(
+      [
+        section({
+          headings: ['Known Heading'],       // captured corpus: ONE heading only
+          headingSizes: [28],
+          bodyText: ['Some captured body copy.'],
+          sectionHtml:
+            '<h2>Known Heading</h2><p>Some captured body copy.</p><h3>Surprise Subheading</h3>',
+        }),
+      ],
+      {
+        slug: 'about',
+        title: 'About',
+        themeSlug: 'demo-replica',
+        convertedSections: new Map([[0, { markup, wpHtmlResidue: 0 }]]),
+      },
+    );
+    // 'Surprise Subheading' was NOT in s.headings, but the converted branch
+    // registered it from the markup's <h3> — so the gate must not reject it.
+    expect(result.gate.ok).toBe(true);
+    expect(result.postContent).toContain('Surprise Subheading');
+    // The converted path emits native blocks — no core/html fallback island.
+    expect(result.postContent).not.toContain('<!-- wp:html');
+  });
+});
