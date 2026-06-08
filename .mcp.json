@@ -2,8 +2,8 @@
   "mcpServers": {
     "data-liberation": {
       "command": "npx",
-      "args": ["tsx", "${CLAUDE_PLUGIN_ROOT}/src/mcp-server.ts"],
-      "cwd": "${CLAUDE_PLUGIN_ROOT}"
+      "args": ["tsx", "${CLAUDE_PLUGIN_ROOT:-.}/src/mcp-server.ts"],
+      "cwd": "${CLAUDE_PLUGIN_ROOT:-.}"
     }
   }
 }
