@@ -484,4 +484,29 @@ describe('buildCarryThemeFiles — mobile viewport scaling (non-responsive Wix o
     // a responsive / other-platform carry keeps its carried template byte-for-byte
     expect(pick(files, 'templates/page-about.html')).toContain('name="viewport"');
   });
+
+  it('scopes the width=320 viewport to the mobile-canvas pages (native/non-canvas pages stay device-width)', () => {
+    // Hybrid carry: one page carries a mobile canvas, another (scaffolded) does not. The
+    // viewport swap must gate on the canvas page, so native blog contexts (is_single/is_home/
+    // is_archive) and non-canvas pages fall through to device-width — matching VP_TOGGLE_CSS's
+    // :has() scope (otherwise native blog pages render zoomed at a 320 viewport on mobile).
+    const files = buildCarryThemeFiles({
+      themeName: 'Acme Carry',
+      chromeVariants: oneVariant(
+        '<!-- wp:html --><header id="H">n</header><!-- /wp:html -->',
+        '<!-- wp:html --><footer id="F">f</footer><!-- /wp:html -->',
+      ),
+      siteCss: '',
+      pages: [
+        page({ slug: 'about', scaffold: scaffoldWithViewport, pageCss: '', mobile: { docUrl: '/m/about.html', height: 4000 } }),
+        page({ slug: 'plain', scaffold: { openWrap: '<div id="x">', midBefore: '', midAfter: '', closeWrap: '</div>' }, pageCss: '' }),
+      ],
+    });
+    const fn = pick(files, 'functions.php');
+    const vp = fn.slice(fn.indexOf('}, 10, 2 );')); // the viewport block, after the KSES filter
+    expect(vp).toContain('wp_is_mobile() && (');   // scoped, not global
+    expect(vp).toContain("is_page( 'about' )");     // the mobile-canvas page is in the gate
+    expect(vp).not.toContain("'plain'");            // the non-canvas page is excluded
+    expect(vp).toContain('width=device-width');     // non-matching pages fall to device-width
+  });
 });

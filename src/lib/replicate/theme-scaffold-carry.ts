@@ -436,17 +436,23 @@ function functionsPhp(pages: CarryPage[], bodyClasses: string[], mobileViewport:
   // Non-responsive (classic/adaptive) source mobile layout is a FIXED-width canvas (carried
   // as the .lib-carry-vp-mobile iframe). The source scales it to fill via a width=320 viewport
   // on mobile user-agents; WordPress's default width=device-width leaves it un-scaled (gap on
-  // wide phones). Mirror the source ONLY for these carries: width=320 on mobile, else
-  // device-width. Core registers _block_template_viewport_meta_tag during template-canvas setup
-  // (AFTER this file loads), so a top-level remove_action misses it — remove it from inside
-  // wp_head at priority -1 (before core's 0), then emit ours.
+  // wide phones). Mirror the source — but SCOPE width=320 to the mobile-canvas pages (those
+  // with a captured mobile DOM), so native blog contexts (is_single/is_home/is_archive) and
+  // non-canvas pages stay device-width, matching VP_TOGGLE_CSS's :has(.lib-carry-vp-mobile)
+  // scope. Core registers _block_template_viewport_meta_tag during template-canvas setup (AFTER
+  // this file loads), so a top-level remove_action misses it — remove it from inside wp_head at
+  // priority -1 (before core's 0), then emit ours.
+  const mobileCanvasCond = pages
+    .filter((p) => p.mobile)
+    .map(pageCondition)
+    .join(' || ');
   const mobileViewportBlock = mobileViewport
     ? `
 add_action( 'wp_head', function () {
     remove_action( 'wp_head', '_block_template_viewport_meta_tag', 0 );
 }, -1 );
 add_action( 'wp_head', function () {
-    echo wp_is_mobile()
+    echo ( wp_is_mobile() && ( ${mobileCanvasCond} ) )
         ? '<meta name="viewport" content="width=320, user-scalable=yes" id="libCarryMobileViewport">' . "\\n"
         : '<meta name="viewport" content="width=device-width, initial-scale=1">' . "\\n";
 }, 1 );
