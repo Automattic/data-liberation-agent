@@ -28,11 +28,14 @@ const LENGTH_PROPS = new Set(['font-size', 'line-height', 'letter-spacing', 'mar
 
 function diverges(prop: string, built: string, source: string): boolean {
   if (built === source) return false;
-  if (LENGTH_PROPS.has(prop)) {
+  // Single-value lengths get a 0.5px epsilon (sub-pixel rounding). Multi-value
+  // shorthands (e.g. `margin: 10px 20px`) fall through to exact match — parseFloat
+  // would only read the first value and miss asymmetric drift.
+  if (LENGTH_PROPS.has(prop) && !/\s/.test(built.trim()) && !/\s/.test(source.trim())) {
     const a = parseFloat(built), b = parseFloat(source);
     if (Number.isFinite(a) && Number.isFinite(b)) return Math.abs(a - b) > 0.5;
   }
-  return true; // enumerated/color/etc: exact match required
+  return true; // multi-value/enumerated/color: exact match required
 }
 
 /** Key built rows via the SAME chromeKey used at capture time (so keys match by construction). */
@@ -72,8 +75,13 @@ export function diffChromeFidelity(source: ChromeFidelity, built: BuiltChrome): 
   return { corrections, unmatched, droppedChrome };
 }
 
+/** Stable marker prefixing the appended correction block — lets the driver strip a
+ *  prior block before re-appending so re-runs stay idempotent (no accumulation). */
+export const CHROME_CORRECTION_MARKER = '/* carry-chrome-audit: corrections copied from the source render */';
+
 export function emitChromeCorrectionCss(corrections: ChromeCorrection[], scope: string): string {
   if (corrections.length === 0) return '';
-  const rules = corrections.map((c) => `:where(${scope}) ${c.selector}{${c.property}:${c.to}!important} /* was ${c.from} */`);
-  return `\n/* carry-chrome-audit: corrections copied from the source render */\n${rules.join('\n')}\n`;
+  // Escape any `*/` in the prior value so a pathological computed value can't break the CSS comment.
+  const rules = corrections.map((c) => `:where(${scope}) ${c.selector}{${c.property}:${c.to}!important} /* was ${c.from.replace(/\*\//g, '* /')} */`);
+  return `\n${CHROME_CORRECTION_MARKER}\n${rules.join('\n')}\n`;
 }

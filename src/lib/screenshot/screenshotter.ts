@@ -425,7 +425,9 @@ async function capturePerViewport(args: CapturePerViewportArgs): Promise<void> {
     // carry-vs-source fidelity audits. A failure here MUST NOT break the
     // screenshot run — the try/catch ensures this is never propagated.
     try {
-      const n = await captureChromeFidelity(page, url, outputDir, CHROME_AUDIT_PROPERTIES);
+      // Write into the screenshots dir — where the audit driver reads it from
+      // (readChromeFidelity(join(outputDir, 'screenshots'))). Must stay in sync.
+      const n = await captureChromeFidelity(page, url, join(outputDir, 'screenshots'), CHROME_AUDIT_PROPERTIES);
       console.info(`[chrome-fidelity] ${url} -> ${n} elements`);
     } catch (err) {
       console.error(`[chrome-fidelity] skipped ${url}: ${err instanceof Error ? err.message : String(err)}`);

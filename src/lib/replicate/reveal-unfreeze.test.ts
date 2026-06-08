@@ -44,4 +44,21 @@ describe('appendRevealUnfreeze', () => {
     const css = `.in{opacity:0;transition:opacity .3s}`;
     expect(appendRevealUnfreeze('', css, '<div class="section-inner">x</div>', 'body.lib-carry-site')).toBe('');
   });
+
+  it('emits the COMPOUND hide selector, never a bare layout co-class', () => {
+    // `.container.scroll-trigger{opacity:0}` must un-freeze only the compound-matched
+    // element — emitting a standalone `.container{transform:none}` would null transforms
+    // on every layout container site-wide.
+    const css = `.container.scroll-trigger{opacity:0;transition:opacity .5s}`;
+    const out = appendRevealUnfreeze('', css, '<div class="container scroll-trigger">x</div>', 'body.lib-carry-site');
+    expect(out).toMatch(/\.container\.scroll-trigger\s*\{/); // full compound selector
+    expect(out).not.toMatch(/:where\([^)]*\)\s+\.container\s*\{/); // no bare-.container override
+  });
+
+  it('does not un-freeze when only part of a compound gate selector is present', () => {
+    // The rule only matches elements with BOTH classes; if the DOM has just one,
+    // nothing is gated, so no override.
+    const css = `.container.scroll-trigger{opacity:0;transition:opacity .5s}`;
+    expect(appendRevealUnfreeze('', css, '<div class="container">x</div>', 'body.lib-carry-site')).toBe('');
+  });
 });

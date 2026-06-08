@@ -230,7 +230,11 @@ export async function extractBuiltChromeRows(
 
         // Build region-root anchor selector: tag + first class (if any).
         // E.g. 'footer.footer', 'header.site-header', 'nav' (no class).
-        const firstClass = root.classList.length > 0 ? root.classList[0] : '';
+        // Only use the class when it's a safe CSS identifier — class names can
+        // legally contain metacharacters ({ } : >) that would corrupt the emitted
+        // selector in site.css; fall back to the bare tag in that case.
+        const rawFirstClass = root.classList.length > 0 ? root.classList[0] : '';
+        const firstClass = /^[A-Za-z_-][\w-]*$/.test(rawFirstClass) ? rawFirstClass : '';
         const anchor = firstClass ? `${realTag}.${firstClass}` : realTag;
 
         let count = 0;

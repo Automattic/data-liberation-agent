@@ -29,6 +29,7 @@ import {
   buildBuiltChrome,
   diffChromeFidelity,
   emitChromeCorrectionCss,
+  CHROME_CORRECTION_MARKER,
 } from '../src/lib/replicate/carry-chrome-audit.js';
 import { CHROME_AUDIT_PROPERTIES } from '../src/lib/replicate/chrome-audit-types.js';
 import {
@@ -171,7 +172,14 @@ async function main(): Promise<void> {
   const css = emitChromeCorrectionCss(res.corrections, 'body.lib-carry-site');
   if (css) {
     const currentCss = readFileSync(siteCssPath, 'utf8');
-    writeFileSync(siteCssPath, currentCss + css);
+    // Idempotent: strip any prior audit block (always appended last) so re-running
+    // the audit replaces it instead of accumulating duplicate correction blocks.
+    const markerIdx = currentCss.indexOf(CHROME_CORRECTION_MARKER);
+    const base = markerIdx >= 0 ? currentCss.slice(0, markerIdx).replace(/\n+$/, '') : currentCss;
+    // Atomic write (tmp+rename) — a crash mid-write must not corrupt site.css.
+    const cssTmp = `${siteCssPath}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
+    writeFileSync(cssTmp, base + css);
+    renameSync(cssTmp, siteCssPath);
     console.log(`Appended ${res.corrections.length} correction(s) to ${siteCssPath}`);
   }
 

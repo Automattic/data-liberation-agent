@@ -28,15 +28,27 @@ import selectorParser from 'postcss-selector-parser';
  */
 const HIDDEN_OPACITY_RE = /opacity\s*:\s*(?:0?\.0\d*|0(?:\.0+)?)(?![.0-9])/i;
 
+/** A source hide rule that gates a JS-reveal entrance. */
+export interface RevealGateRule {
+  /** The rule's ORIGINAL (un-scoped) selector part, e.g. `.scroll-trigger.animate--slide-in`. */
+  selector: string;
+  /** The class tokens in that selector — used as a DOM-presence gate. */
+  classes: string[];
+}
+
 /**
- * Classes whose rule sets a hidden initial reveal state (opacity≈0 / visibility:hidden
- * / display:none) AND look animation-driven (transition / animation / transform present,
- * or an `--offscreen` / `:not()` reveal pattern). Returns bare class names (no dot).
+ * Hide rules that gate a JS-reveal entrance: a hidden initial state (opacity≈0 /
+ * visibility:hidden / display:none) AND animation-driven (transition / animation /
+ * transform present, or an `--offscreen` / `:not()` reveal pattern). Returns each
+ * rule's ORIGINAL selector part + its class tokens, so the un-freeze override can
+ * target the exact gated elements (the full compound selector) instead of each
+ * class in isolation — forcing the end-state on a bare layout co-class (e.g.
+ * `.container` in `.container.scroll-trigger`) would null its transforms site-wide.
  *
- * Hover/focus rules are excluded — they don't represent a frozen hidden-by-default state.
+ * Hover/focus rules are excluded — they describe an interactive state, not a gate.
  */
-export function detectRevealGateClasses(css: string): string[] {
-  const gates = new Set<string>();
+export function detectRevealGateRules(css: string): RevealGateRule[] {
+  const rules: RevealGateRule[] = [];
   let root: postcss.Root;
   try {
     root = postcss.parse(css);
@@ -71,26 +83,41 @@ export function detectRevealGateClasses(css: string): string[] {
     // frozen entrance gate.
     if (/:hover|:focus/i.test(rule.selector)) return;
 
-    // A compound selector (e.g. `.a.b{opacity:0}`) yields BOTH `a` and `b`. This
-    // is intentionally over-broad: forcing the revealed end-state on either class
-    // is safe for a static carry (no JS means no state ever toggles them back).
-    selectorParser((sels) => {
-      sels.walkClasses((c) => {
-        gates.add(c.value);
-      });
-    }).processSync(rule.selector);
+    // One entry per comma-separated selector part, carrying its class tokens.
+    for (const part of rule.selectors) {
+      const classes: string[] = [];
+      try {
+        selectorParser((sels) => {
+          sels.walkClasses((c) => {
+            classes.push(c.value);
+          });
+        }).processSync(part);
+      } catch {
+        continue;
+      }
+      if (classes.length === 0) continue;
+      rules.push({ selector: part.trim(), classes });
+    }
   });
 
+  return rules;
+}
+
+/** Back-compat: the flat set of gate class names across all detected gate rules. */
+export function detectRevealGateClasses(css: string): string[] {
+  const gates = new Set<string>();
+  for (const r of detectRevealGateRules(css)) for (const c of r.classes) gates.add(c);
   return [...gates];
 }
 
 /**
- * Append a scoped end-state override for any JS-reveal gate class present in
- * `domHtml`. No-ops (returns `css` unchanged) when no detected gates appear in
- * the DOM.
+ * Append a scoped end-state override for each JS-reveal gate RULE whose elements
+ * exist in `domHtml`. Emits the rule's ORIGINAL (compound) selector so only the
+ * gated elements are un-frozen — never a bare co-class. No-ops (returns `css`
+ * unchanged) when no detected gate rule matches the DOM.
  *
  * @param css       The already-scoped, treeshaken sheet to augment.
- * @param sourceCss The original source CSS used to detect gate classes.
+ * @param sourceCss The original source CSS used to detect gate rules.
  * @param domHtml   The carried DOM the sheet styles (chrome or main region).
  * @param scope     The sheet's wrapper selector (e.g. `body.lib-carry-site`).
  */
@@ -106,12 +133,22 @@ export function appendRevealUnfreeze(
   // left and whitespace/quote/`>` on the right.
   const inDom = (g: string) =>
     new RegExp(`(?:^|[\\s"'])${g.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?=[\\s"'>])`).test(domHtml);
-  const gates = detectRevealGateClasses(sourceCss).filter(inDom);
-  if (gates.length === 0) return css;
 
-  const sel = gates.map((g) => `:where(${scope}) .${g}`).join(',\n');
+  const seen = new Set<string>();
+  const selectors: string[] = [];
+  for (const rule of detectRevealGateRules(sourceCss)) {
+    // Only un-freeze when EVERY class in the rule's selector is present in the DOM,
+    // so the compound selector actually matches a carried element (and we never
+    // emit an override targeting an unrelated layout co-class).
+    if (!rule.classes.every(inDom)) continue;
+    if (seen.has(rule.selector)) continue;
+    seen.add(rule.selector);
+    selectors.push(`:where(${scope}) ${rule.selector}`);
+  }
+  if (selectors.length === 0) return css;
+
   const override =
     `\n\n/* carry: un-freeze stripped JS-reveal entrance gates (opacity/visibility/transform initial state). */\n` +
-    `${sel}{opacity:1!important;visibility:visible!important;transform:none!important}\n`;
+    `${selectors.join(',\n')}{opacity:1!important;visibility:visible!important;transform:none!important}\n`;
   return css + override;
 }
