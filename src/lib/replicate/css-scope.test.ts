@@ -75,3 +75,35 @@ describe('scopeCss — combined-root + edge selectors', () => {
     expect(out).not.toContain('animation: spin 1s');
   });
 });
+
+describe('scopeCss rem-base preservation', () => {
+  it('keeps a root font-size anchored to :root, not the body wrapper', () => {
+    const out = scopeCss('html{font-size:62.5%;background:#fff}', { scope: 'body.lib-carry-site' });
+    // font-size must target the root so rem resolves to 10px
+    expect(out).toMatch(/:root\s*\{[^}]*font-size:\s*62\.5%/);
+    // non-root props on html still scope to the carried wrapper (don't repaint the whole page)
+    expect(out).toMatch(/:where\(body\.lib-carry-site\)\s*\{[^}]*background/);
+  });
+  it('does not emit a :root font-size when the source root is the 16px default (no rule)', () => {
+    const out = scopeCss('body{color:#111}', { scope: 'body.lib-carry-site' });
+    expect(out).not.toMatch(/:root\s*\{/);
+  });
+  it('leaves body rules scoping to the wrapper (unchanged behavior)', () => {
+    const out = scopeCss('body{margin:0}', { scope: 'body.lib-carry-site' });
+    expect(out).toMatch(/:where\(body\.lib-carry-site\)\s*\{[^}]*margin:\s*0/);
+    expect(out).not.toMatch(/:root\s*\{/);
+  });
+  it('hoists a :root font-size (not just html) to a :root rule', () => {
+    const out = scopeCss(':root{font-size:50%}', { scope: 'body.lib-carry-site' });
+    expect(out).toMatch(/:root\s*\{[^}]*font-size:\s*50%/);
+  });
+  it('does NOT hoist an @media-nested root font-size (keeps the breakpoint conditional)', () => {
+    const out = scopeCss('html{font-size:62.5%}@media (min-width:768px){html{font-size:18px}}', {
+      scope: 'body.lib-carry-site',
+    });
+    // the top-level root font-size still hoists to :root
+    expect(out).toMatch(/:root\s*\{[^}]*font-size:\s*62\.5%/);
+    // the responsive font-size stays inside the @media (not hoisted, @media not emptied)
+    expect(out).toMatch(/@media[^{]*\{[^}]*font-size:\s*18px/);
+  });
+});

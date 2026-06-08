@@ -11,6 +11,7 @@ export interface ScopeOpts {
 }
 
 const ROOTISH = new Set(['html', 'body', ':root']);
+const ROOT_ANCHOR = new Set(['html', ':root']);
 
 function scopeSelector(selector: string, scope: string): string {
   // Wrap the scope in :where() so it contributes ZERO specificity. The carried
@@ -44,6 +45,27 @@ function scopeSelector(selector: string, scope: string): string {
 
 export function scopeCss(css: string, opts: ScopeOpts): string {
   const root = postcss.parse(css);
+
+  // Hoist root font-size to a real :root rule so `rem` resolves correctly. The
+  // scoper otherwise rewrites html/:root -> :where(scope) (body), which silently
+  // breaks rem (rem is always root-relative). Only font-size needs the root anchor;
+  // other html/:root declarations still scope to the wrapper. A combined selector
+  // list like `html, .foo{font-size:..}` removes font-size from the whole rule
+  // (acceptable — this pattern doesn't occur in rem-base root CSS).
+  const rootFontSizes: string[] = [];
+  root.walkRules((rule: Rule) => {
+    // Only hoist TOP-LEVEL root font-size; leave @media/@supports/@keyframes-nested
+    // rules to the normal scoping pass so a responsive root-font-size breakpoint
+    // stays conditional instead of applying unconditionally.
+    if (rule.parent?.type !== 'root') return;
+    const isRootSel = rule.selectors.some((s) => ROOT_ANCHOR.has(s.trim()));
+    if (!isRootSel) return;
+    rule.walkDecls(/^font-size$/i, (decl) => {
+      rootFontSizes.push(decl.value.trim());
+      decl.remove();
+    });
+    if (rule.nodes.length === 0) rule.remove();
+  });
 
   root.walkRules((rule: Rule) => {
     if (
@@ -84,5 +106,8 @@ export function scopeCss(css: string, opts: ScopeOpts): string {
     });
   }
 
-  return root.toString();
+  const rootCss = rootFontSizes.length
+    ? `:root{font-size:${rootFontSizes[rootFontSizes.length - 1]}}\n`
+    : '';
+  return rootCss + root.toString();
 }

@@ -94,6 +94,23 @@ describe('buildRunReport — unassigned regions', () => {
   });
 });
 
+describe('buildRunReport — chrome-fidelity tallies', () => {
+  it('carries chromeCorrections + droppedChrome tallies; droppedChrome warns but never fails', () => {
+    const i = good();
+    i.chromeCorrections = 4;
+    i.droppedChrome = 1;
+    const r = buildRunReport(i);
+    expect(r.summary.chromeCorrections).toBe(4);
+    expect(r.summary.droppedChrome).toBe(1);
+    expect(r.verdict.overall).toBe('warn');
+  });
+  it('defaults chrome tallies to 0 when not provided', () => {
+    const r = buildRunReport(good());
+    expect(r.summary.chromeCorrections).toBe(0);
+    expect(r.summary.droppedChrome).toBe(0);
+  });
+});
+
 describe('buildRunReport — section parity gate (faithful recreation)', () => {
   it('back-compat: an otherwise-clean run with no pageParity still passes', () => {
     expect(buildRunReport(good()).verdict.overall).toBe('pass');
