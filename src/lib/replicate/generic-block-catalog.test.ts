@@ -97,3 +97,38 @@ describe('generic-block-catalog: lossless mixed content', () => {
     expect(run(once)).toBeNull();
   });
 });
+
+describe('generic-block-catalog: embeds (iframe -> core/embed)', () => {
+  it('converts a top-level provider iframe to core/embed', () => {
+    const out = run('<iframe src="https://www.youtube.com/embed/abc"></iframe>');
+    expect(out).not.toBeNull();
+    expect(out!).toContain('<!-- wp:embed');
+    expect(out!).toContain('"providerNameSlug":"youtube"');
+    expect(out!).toContain('wp-block-embed-youtube');
+    expect(validateBlockMarkup(out!)).toEqual([]);
+  });
+
+  it('converts a figure wrapping a provider iframe to core/embed', () => {
+    const out = run('<figure><iframe src="https://player.vimeo.com/video/1"></iframe></figure>');
+    expect(out).not.toBeNull();
+    expect(out!).toContain('<!-- wp:embed');
+    expect(out!).toContain('"providerNameSlug":"vimeo"');
+    expect(validateBlockMarkup(out!)).toEqual([]);
+  });
+
+  it('does not claim an unknown-provider iframe (leaves it for the caller)', () => {
+    expect(run('<iframe src="https://maps.example.com/embed?pb=1"></iframe>')).toBeNull();
+  });
+
+  it('does not swallow a paragraph that contains an iframe alongside real text', () => {
+    expect(run('<p>Watch <iframe src="https://www.youtube.com/embed/abc"></iframe> here</p>')).toBeNull();
+  });
+
+  it('is idempotent: skips input that already contains a wp:embed', () => {
+    const embedded =
+      '<!-- wp:embed {"url":"https://www.youtube.com/embed/abc","providerNameSlug":"youtube","responsive":true} -->\n' +
+      '<figure class="wp-block-embed"><div class="wp-block-embed__wrapper">https://www.youtube.com/embed/abc</div></figure>\n' +
+      '<!-- /wp:embed -->';
+    expect(run(embedded)).toBeNull();
+  });
+});

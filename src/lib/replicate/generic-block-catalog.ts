@@ -19,6 +19,7 @@ import type { CheerioAPI, Cheerio } from 'cheerio';
 import type { Element } from 'domhandler';
 import type { AdapterBlocks, BlockRecipeContext } from '../../adapters/page-actions.js';
 import { sanitize } from './html-fallback.js';
+import { guessEmbedProvider, buildEmbedBlock } from './embed-block.js';
 
 interface Converted {
   matched: boolean;
@@ -47,6 +48,10 @@ function genericHtmlToBlocks(html: string, ctx: BlockRecipeContext): string | nu
 }
 
 function convertElement($: CheerioAPI, el: Element, ctx: BlockRecipeContext): Converted {
+  // Embeds run first: a provider iframe is often wrapped in a figure/div that a
+  // later recipe (callout/media-text) could otherwise mis-claim.
+  const embed = tryEmbed($, el);
+  if (embed) return { matched: true, markup: embed };
   const details = tryDetails($, el, ctx);
   if (details) return { matched: true, markup: details };
   const callout = tryCallout($, el, ctx);
@@ -58,6 +63,38 @@ function convertElement($: CheerioAPI, el: Element, ctx: BlockRecipeContext): Co
   const mediaText = tryMediaText($, el, ctx);
   if (mediaText) return { matched: true, markup: mediaText };
   return { matched: false, markup: coreHtmlIsland($.html(el)) };
+}
+
+// --- provider iframe -> core/embed -------------------------------------------
+
+const EMBED_WRAPPER_TAGS = new Set(['figure', 'div', 'p', 'span']);
+
+function tryEmbed($: CheerioAPI, el: Element): string | null {
+  const $el = $(el);
+  let src: string | undefined;
+
+  if (el.tagName === 'iframe') {
+    src = $el.attr('src');
+  } else if (EMBED_WRAPPER_TAGS.has(el.tagName)) {
+    const iframes = $el.find('iframe');
+    if (iframes.length !== 1) return null;
+    // Only claim a thin wrapper around the iframe. If the wrapper carries its
+    // own text (e.g. a paragraph that merely contains an iframe), leave it for
+    // the caller so nothing is swallowed.
+    const clone = $el.clone();
+    clone.find('iframe').remove();
+    if (clone.text().trim()) return null;
+    src = iframes.first().attr('src');
+  } else {
+    return null;
+  }
+
+  if (!src || !/^https?:\/\//i.test(src)) return null;
+  // Known providers only: an unrecognised iframe is left untouched so the
+  // working embed survives (as a core/html island) rather than becoming a
+  // broken oEmbed that resolves to nothing.
+  if (!guessEmbedProvider(src)) return null;
+  return buildEmbedBlock(src);
 }
 
 // --- details / accordion -> core/details -------------------------------------
