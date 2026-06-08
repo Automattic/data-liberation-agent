@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
+import { faultpoint } from './faultpoint.js';
 
 export type MediaStatus = 'awaiting' | 'success' | 'error' | 'ignored';
 
@@ -206,6 +207,7 @@ export class MediaStubStore {
     mkdirSync(dirname(this.storePath), { recursive: true });
     const tmp = this.storePath + '.tmp';
     writeFileSync(tmp, JSON.stringify(this.data, null, 2));
+    faultpoint('media-stubs:mid-flush');
     renameSync(tmp, this.storePath);
     this.dirty = false;
   }
