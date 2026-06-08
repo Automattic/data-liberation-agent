@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, unlinkSync } from 'fs';
 import { join, dirname } from 'path';
+import { faultpoint } from './faultpoint.js';
 
 /**
  * Pipeline stage.
@@ -183,6 +184,7 @@ export class ImportSession {
 
   setCursor(key: string, value: unknown): void {
     this.data.cursors[key] = value;
+    faultpoint('import-session:cursor-before-save');
     this.save();
   }
 
@@ -194,6 +196,7 @@ export class ImportSession {
     this.data.updatedAt = new Date().toISOString();
     mkdirSync(dirname(this.sessionPath), { recursive: true });
     const tmp = this.sessionPath + '.tmp';
+    faultpoint('import-session:before-save');
     writeFileSync(tmp, JSON.stringify(this.data, null, 2));
     renameSync(tmp, this.sessionPath);
   }

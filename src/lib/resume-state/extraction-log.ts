@@ -1,5 +1,6 @@
 import { appendFileSync, readFileSync, writeFileSync, existsSync, unlinkSync } from 'fs';
 import { join } from 'path';
+import { faultpoint } from './faultpoint.js';
 
 export interface ProcessedEntry {
   url: string;
@@ -51,6 +52,7 @@ export class ExtractionLog {
       qualityScore: entry.qualityScore,
       timestamp: new Date().toISOString(),
     });
+    faultpoint('extraction-log:before-append');
     appendFileSync(this.logPath, line + '\n');
   }
 
