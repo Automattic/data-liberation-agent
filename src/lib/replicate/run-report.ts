@@ -24,6 +24,10 @@ export interface RunReportInput {
   htmlFallbackByReason?: Record<string, number>;
   /** Total source landmarks that weren't placed anywhere (body section, header, or footer). Warning-level. */
   unassignedRegions?: number;
+  /** Chrome-fidelity audit: CSS corrections auto-applied to site.css (display/opacity/text-decoration/etc.). Informational — never triggers warn. */
+  chromeCorrections?: number;
+  /** Chrome-fidelity audit: source chrome elements that didn't survive the carry. Warning-level — investigate. */
+  droppedChrome?: number;
   /** Per-page visual-parity records. When present, the verdict is gated on them: any
    *  unaccepted divergent section, or any reconstructed page with no sampled sections,
    *  is a HARD fail. Absent → parity gate off (back-compat). */
@@ -44,6 +48,8 @@ export interface RunReport {
     htmlFallbackSections: number;
     htmlFallbackByReason: Record<string, number>;
     unassignedRegions: number;
+    chromeCorrections: number;
+    droppedChrome: number;
     sectionsDivergent: number; sectionsAccepted: number; pagesParityUnverified: number;
     cost: { tokens?: number; subagents?: number; skillCalls?: number };
   };
@@ -83,7 +89,7 @@ export function buildRunReport(input: RunReportInput): RunReport {
   } else if (
     input.fallbackPages > 0 || input.pagesMisfit > 0 ||
     input.provenanceFlags > 0 || htmlFallbackSections > 0 || (input.knownGaps?.length ?? 0) > 0 ||
-    (input.unassignedRegions ?? 0) > 0
+    (input.unassignedRegions ?? 0) > 0 || (input.droppedChrome ?? 0) > 0
   ) {
     overall = 'warn';
   } else {
@@ -105,6 +111,8 @@ export function buildRunReport(input: RunReportInput): RunReport {
       htmlFallbackSections,
       htmlFallbackByReason: input.htmlFallbackByReason ?? {},
       unassignedRegions: input.unassignedRegions ?? 0,
+      chromeCorrections: input.chromeCorrections ?? 0,
+      droppedChrome: input.droppedChrome ?? 0,
       sectionsDivergent,
       sectionsAccepted,
       pagesParityUnverified,

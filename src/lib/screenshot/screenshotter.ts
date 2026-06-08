@@ -28,6 +28,8 @@ import { generateChromeCss, type BakedLayoutMap } from './fixups.js';
 import type { ExtractedNav } from './nav-extract.js';
 import { extractFull } from '../replicate/section-extract.js';
 import { SectionSpecsStore } from '../replicate/section-specs-store.js';
+import { captureChromeFidelity } from './capture-chrome-fidelity.js';
+import { CHROME_AUDIT_PROPERTIES } from '../replicate/chrome-audit-types.js';
 
 /**
  * Scroll offset multiplier for the scrolled-state screenshot: we scroll to
@@ -418,6 +420,17 @@ async function capturePerViewport(args: CapturePerViewportArgs): Promise<void> {
         timestamp: now(),
         attempt: 1,
       });
+    }
+    // Best-effort: capture source chrome computed-style fingerprint for later
+    // carry-vs-source fidelity audits. A failure here MUST NOT break the
+    // screenshot run — the try/catch ensures this is never propagated.
+    try {
+      // Write into the screenshots dir — where the audit driver reads it from
+      // (readChromeFidelity(join(outputDir, 'screenshots'))). Must stay in sync.
+      const n = await captureChromeFidelity(page, url, join(outputDir, 'screenshots'), CHROME_AUDIT_PROPERTIES);
+      console.info(`[chrome-fidelity] ${url} -> ${n} elements`);
+    } catch (err) {
+      console.error(`[chrome-fidelity] skipped ${url}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 

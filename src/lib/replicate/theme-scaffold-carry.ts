@@ -648,7 +648,21 @@ export function buildCarryThemeFiles(input: CarryThemeInput): ThemeFile[] {
     // Site-wide CSS — reset first (so source rules win the cascade), then the
     // chrome-wrapper rescue, then EVERY variant's carried chrome CSS (concatenated
     // upstream into siteCss; comp-id-scoped so variants never collide).
-    { path: 'assets/css/site.css', content: RESET + CHROME_RESCUE + BG_LAYER_CLICK_FIX + GALLERY_REFLOW + STORE_HEADER_RESCUE + VP_TOGGLE_CSS + input.siteCss },
+    {
+      path: 'assets/css/site.css',
+      content:
+        RESET +
+        CHROME_RESCUE +
+        BG_LAYER_CLICK_FIX +
+        GALLERY_REFLOW +
+        STORE_HEADER_RESCUE +
+        VP_TOGGLE_CSS +
+        input.siteCss +
+        buildWooBuyboxRemRestore({
+          hasProducts: input.hasProducts ?? false,
+          rootFontSizeApplied: /:root\s*\{[^}]*font-size/i.test(input.siteCss),
+        }),
+    },
     { path: 'templates/index.html', content: indexTemplate },
   ];
 
@@ -704,4 +718,28 @@ export function buildCarryThemeFiles(input: CarryThemeInput): ThemeFile[] {
   }
 
   return files;
+}
+
+// ---------------------------------------------------------------------------
+// WooCommerce buy-box rem restore
+// ---------------------------------------------------------------------------
+
+export interface WooRestoreOpts {
+  hasProducts: boolean;
+  rootFontSizeApplied: boolean;
+}
+
+/** WooCommerce buy-box blocks are WP additions designed for a 16px root; when the
+ *  carry adopts the source's non-default root (e.g. 62.5%), restore them to legible
+ *  rem sizes. Scoped to single-product so it never touches source content. */
+export function buildWooBuyboxRemRestore(opts: WooRestoreOpts): string {
+  if (!opts.hasProducts || !opts.rootFontSizeApplied) return '';
+  return (
+    '\n/* carry: keep WooCommerce buy-box legible under the source non-default root */\n' +
+    'body.single-product .wp-block-woocommerce-product-price,\n' +
+    'body.single-product .price{font-size:1.8rem!important}\n' +
+    'body.single-product .wc-block-components-product-summary,\n' +
+    'body.single-product .wc-block-components-product-summary p,\n' +
+    'body.single-product .wp-block-woocommerce-product-summary{font-size:1.6rem!important}\n'
+  );
 }

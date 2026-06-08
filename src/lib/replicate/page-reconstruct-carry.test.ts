@@ -143,6 +143,28 @@ describe('reconstructPageCarry', () => {
     expect(r.mainIsland).not.toContain('a"b.html');
   });
 
+  it('appendRevealUnfreeze: chromeCss gets opacity:1!important override for JS-freeze gate classes in the chrome DOM', () => {
+    // Fixture: header carries `scroll-trigger` (a JS IntersectionObserver gate whose
+    // initial CSS state is opacity:0). Carry strips scripts, so it would stay invisible
+    // without the un-freeze override. The source CSS has the gate rule; appendRevealUnfreeze
+    // detects it and appends a scoped `opacity:1!important` end-state rule.
+    const r = reconstructPageCarry({
+      slug: 'home',
+      bodyHtml:
+        '<header class="scroll-trigger h">NAV</header>' +
+        '<div class="content">C</div>' +
+        '<footer class="f">F</footer>',
+      css: '.scroll-trigger{opacity:0;transition:opacity 0.4s ease}',
+      specs: [],
+      mediaUrlMap: new Map(),
+    });
+    // The override must mention the gate class AND force the revealed end-state.
+    expect(r.chromeCss).toContain('scroll-trigger');
+    expect(r.chromeCss).toContain('opacity:1!important');
+    // Sanity: mainCss does NOT get the override — scroll-trigger is in the chrome DOM only.
+    expect(r.mainCss).not.toContain('opacity:1!important');
+  });
+
   it('rewrites media URLs in carried HTML', () => {
     const mediaUrlMap = new Map([['https://cdn.example.com/img.jpg', '/wp-content/uploads/img.jpg']]);
     const r = reconstructPageCarry({

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildCarryThemeFiles, type CarryThemeInput, type CarryPage } from './theme-scaffold-carry.js';
+import { buildCarryThemeFiles, buildWooBuyboxRemRestore, type CarryThemeInput, type CarryPage } from './theme-scaffold-carry.js';
 
 /** A single-variant chrome ('c0') so page-level tests stay terse. */
 function oneVariant(headerIsland = '', footerIsland = ''): CarryThemeInput['chromeVariants'] {
@@ -508,5 +508,54 @@ describe('buildCarryThemeFiles — mobile viewport scaling (non-responsive Wix o
     expect(vp).toContain("is_page( 'about' )");     // the mobile-canvas page is in the gate
     expect(vp).not.toContain("'plain'");            // the non-canvas page is excluded
     expect(vp).toContain('width=device-width');     // non-matching pages fall to device-width
+  });
+});
+
+describe('buildCarryThemeFiles — WC buy-box restore wired into site.css', () => {
+  const base: CarryThemeInput = {
+    themeName: 'Acme Carry',
+    chromeVariants: [{ key: 'c0', headerIsland: '', footerIsland: '' }],
+    siteCss: ':root{font-size:62.5%} body.lib-carry-site{margin:0}',
+    pages: [page({ slug: 'home', isHome: true, pageCss: '' })],
+    hasProducts: true,
+  };
+  const getSiteCss = (f: ReturnType<typeof buildCarryThemeFiles>) =>
+    f.find((x) => x.path === 'assets/css/site.css')?.content ?? '';
+
+  it('appends WC buy-box restore to site.css when hasProducts=true and siteCss contains :root font-size', () => {
+    const css = getSiteCss(buildCarryThemeFiles(base));
+    // The restore targets the buy-box blocks on single-product pages.
+    expect(css).toContain('wp-block-woocommerce-product-price');
+    expect(css).toContain('wc-block-components-product-summary');
+    // Must appear AFTER siteCss (restore lives at the end, after source CSS).
+    expect(css.indexOf('wp-block-woocommerce-product-price')).toBeGreaterThan(
+      css.indexOf('body.lib-carry-site{margin:0}'),
+    );
+  });
+
+  it('does NOT append WC restore when siteCss lacks a :root font-size (no rem mismatch)', () => {
+    const css = getSiteCss(
+      buildCarryThemeFiles({ ...base, siteCss: 'body.lib-carry-site{margin:0}' }),
+    );
+    expect(css).not.toContain('wp-block-woocommerce-product-price');
+  });
+
+  it('does NOT append WC restore when hasProducts is false', () => {
+    const css = getSiteCss(buildCarryThemeFiles({ ...base, hasProducts: false }));
+    expect(css).not.toContain('wp-block-woocommerce-product-price');
+  });
+});
+
+describe('buildWooBuyboxRemRestore', () => {
+  it('emits a scoped price/summary restore when products + non-default root', () => {
+    const css = buildWooBuyboxRemRestore({ hasProducts: true, rootFontSizeApplied: true });
+    expect(css).toMatch(/body\.single-product[^{]*\.wp-block-woocommerce-product-price[^{]*\{[^}]*font-size/);
+    expect(css).toMatch(/wc-block-components-product-summary/);
+  });
+  it('emits nothing without products', () => {
+    expect(buildWooBuyboxRemRestore({ hasProducts: false, rootFontSizeApplied: true })).toBe('');
+  });
+  it('emits nothing when the root is the default (no rem mismatch)', () => {
+    expect(buildWooBuyboxRemRestore({ hasProducts: true, rootFontSizeApplied: false })).toBe('');
   });
 });

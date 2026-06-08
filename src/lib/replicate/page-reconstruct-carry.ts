@@ -6,6 +6,7 @@ import { carryHtml } from './html-carry.js';
 import { scopeCss } from './css-scope.js';
 import { treeshakeCss } from './css-treeshake.js';
 import { appendNavRevealUnfreeze } from './nav-reveal-unfreeze.js';
+import { appendRevealUnfreeze } from './reveal-unfreeze.js';
 
 export interface ReconstructCarryInput {
   slug: string;
@@ -153,8 +154,13 @@ export function reconstructPageCarry(input: ReconstructCarryInput): ReconstructC
     const chromeDom = `${split.headerHtml}${split.footerHtml}`;
     const allCss = [input.css, carried.styleText].filter(Boolean).join('\n');
     const chromeCss = chromeDom
-      ? appendNavRevealUnfreeze(
-          treeshakeCss(scopeCss(allCss, { scope: SITE_SCOPE, scopeId: 'site', rewriteUrl }), chromeDom),
+      ? appendRevealUnfreeze(
+          appendNavRevealUnfreeze(
+            treeshakeCss(scopeCss(allCss, { scope: SITE_SCOPE, scopeId: 'site', rewriteUrl }), chromeDom),
+            chromeDom,
+            SITE_SCOPE,
+          ),
+          allCss,
           chromeDom,
           SITE_SCOPE,
         )
@@ -163,8 +169,13 @@ export function reconstructPageCarry(input: ReconstructCarryInput): ReconstructC
     // in the site-wide sheet, not duplicated per page.
     const mainDom =
       split.openWrap + split.midBefore + split.sectionsHtml.join('') + split.midAfter + split.closeWrap;
-    const mainCss = appendNavRevealUnfreeze(
-      treeshakeCss(scopeCss(allCss, { scope: pageScope, scopeId: input.slug, rewriteUrl }), mainDom),
+    const mainCss = appendRevealUnfreeze(
+      appendNavRevealUnfreeze(
+        treeshakeCss(scopeCss(allCss, { scope: pageScope, scopeId: input.slug, rewriteUrl }), mainDom),
+        mainDom,
+        pageScope,
+      ),
+      allCss,
       mainDom,
       pageScope,
     );
@@ -202,15 +213,25 @@ export function reconstructPageCarry(input: ReconstructCarryInput): ReconstructC
   const chromeDom = `${header.html}${footer.html}`;
   const chromeCombined = [input.css, header.styleText, footer.styleText].filter(Boolean).join('\n');
   const chromeCss = chromeDom
-    ? appendNavRevealUnfreeze(
-        treeshakeCss(scopeCss(chromeCombined, { scope: SITE_SCOPE, scopeId: 'site', rewriteUrl }), chromeDom),
+    ? appendRevealUnfreeze(
+        appendNavRevealUnfreeze(
+          treeshakeCss(scopeCss(chromeCombined, { scope: SITE_SCOPE, scopeId: 'site', rewriteUrl }), chromeDom),
+          chromeDom,
+          SITE_SCOPE,
+        ),
+        chromeCombined,
         chromeDom,
         SITE_SCOPE,
       )
     : '';
   const mainCombined = [input.css, main.styleText].filter(Boolean).join('\n');
-  const mainCss = appendNavRevealUnfreeze(
-    treeshakeCss(scopeCss(mainCombined, { scope: pageScope, scopeId: input.slug, rewriteUrl }), main.html),
+  const mainCss = appendRevealUnfreeze(
+    appendNavRevealUnfreeze(
+      treeshakeCss(scopeCss(mainCombined, { scope: pageScope, scopeId: input.slug, rewriteUrl }), main.html),
+      main.html,
+      pageScope,
+    ),
+    mainCombined,
     main.html,
     pageScope,
   );
