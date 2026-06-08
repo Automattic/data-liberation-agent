@@ -424,3 +424,64 @@ describe('buildCarryThemeFiles — WooCommerce store templates', () => {
     expect(find(files, 'templates/archive-product.html')).toBeUndefined();
   });
 });
+
+describe('buildCarryThemeFiles — mobile viewport scaling (non-responsive Wix only)', () => {
+  // Non-responsive (classic/adaptive) Wix mobile is a FIXED 320px canvas, carried as the
+  // .lib-carry-vp-mobile iframe (CarryPage.mobile is set). The live site scales that canvas
+  // to fill the phone via a width=320 viewport on mobile UAs; WordPress's default
+  // width=device-width leaves it un-scaled (white gap on wide phones). The theme must mirror
+  // Wix — but ONLY when a page actually carries that fixed mobile canvas (responsive sites and
+  // other platforms never set `mobile`, and forcing width=320 there would shrink/break them).
+  const scaffoldWithViewport = {
+    openWrap:
+      '<meta name="viewport" content="width=device-width, initial-scale=1" id="wixDesktopViewport">\n<div id="SITE_CONTAINER">',
+    midBefore: '<div id="inner">',
+    midAfter: '</div>',
+    closeWrap: '</div>',
+  };
+  const build = (withMobile: boolean) =>
+    buildCarryThemeFiles({
+      themeName: 'Acme Carry',
+      chromeVariants: oneVariant(
+        '<!-- wp:html --><header id="H">nav</header><!-- /wp:html -->',
+        '<!-- wp:html --><footer id="F">foot</footer><!-- /wp:html -->',
+      ),
+      siteCss: '',
+      pages: [
+        page({
+          slug: 'about',
+          isHome: false,
+          scaffold: scaffoldWithViewport,
+          pageCss: '',
+          ...(withMobile ? { mobile: { docUrl: '/wp-content/uploads/_carry-mobile/about.html', height: 4000 } } : {}),
+        }),
+      ],
+    });
+  const pick = (files: ReturnType<typeof build>, p: string) => files.find((f) => f.path === p)?.content ?? '';
+
+  it('functions.php swaps to a width=320 viewport on mobile UAs when a page carries a mobile canvas', () => {
+    const fn = pick(build(true), 'functions.php');
+    expect(fn).toContain('wp_is_mobile()');
+    expect(fn).toContain('width=320');
+    // Core registers _block_template_viewport_meta_tag during template-canvas setup (AFTER
+    // functions.php loads, priority 0), so it must be removed from INSIDE wp_head (priority -1).
+    expect(fn).toContain("remove_action( 'wp_head', '_block_template_viewport_meta_tag', 0 )");
+  });
+
+  it('strips the carried <meta viewport> from the template when a page carries a mobile canvas (a later body meta would otherwise override ours)', () => {
+    const tpl = pick(build(true), 'templates/page-about.html');
+    expect(tpl).not.toContain('name="viewport"');
+    expect(tpl).not.toContain('wixDesktopViewport');
+    expect(tpl).toContain('id="SITE_CONTAINER"'); // the rest of the carried wrapper survives
+  });
+
+  it('does NOT touch the viewport (functions.php or templates) when no page carries a mobile canvas', () => {
+    const files = build(false);
+    const fn = pick(files, 'functions.php');
+    expect(fn).not.toContain('wp_is_mobile()');
+    expect(fn).not.toContain('width=320');
+    expect(fn).not.toContain('_block_template_viewport_meta_tag');
+    // a responsive / other-platform carry keeps its carried template byte-for-byte
+    expect(pick(files, 'templates/page-about.html')).toContain('name="viewport"');
+  });
+});

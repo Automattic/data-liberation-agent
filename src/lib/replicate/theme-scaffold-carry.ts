@@ -403,7 +403,17 @@ function sanitizeBodyClass(cls: string): string | null {
   return /^[a-zA-Z][\w-]{0,60}$/.test(cls) ? cls : null;
 }
 
-function functionsPhp(pages: CarryPage[], bodyClasses: string[]): string {
+/**
+ * Strip any carried `<meta name="viewport">` — a `<head>` element wrongly carried into the
+ * page BODY via the scaffold's openWrap. Left in, a later in-body viewport meta overrides
+ * the theme's own head viewport (browsers apply the last one), defeating the mobile-canvas
+ * viewport swap. Only applied to mobile-canvas carries (see buildCarryThemeFiles).
+ */
+function stripViewportMeta(html: string): string {
+  return html.replace(/<meta\b[^>]*\bname=["']viewport["'][^>]*>\s*/gi, '');
+}
+
+function functionsPhp(pages: CarryPage[], bodyClasses: string[], mobileViewport: boolean): string {
   // body_class filter: always add lib-carry-site; replicate the source body classes
   // (so body-state-gated carried rules behave like the source); add per-page class.
   const sourceBodyCases = bodyClasses
@@ -422,6 +432,26 @@ function functionsPhp(pages: CarryPage[], bodyClasses: string[]): string {
         `    if ( ${pageCondition(p)} ) { wp_enqueue_style( 'lib-carry-page-${p.slug}', get_stylesheet_directory_uri() . '/assets/css/page-${p.slug}.css', array( 'lib-carry-site' ), '1.0.0' ); }`,
     )
     .join('\n');
+
+  // Non-responsive (classic/adaptive) source mobile layout is a FIXED-width canvas (carried
+  // as the .lib-carry-vp-mobile iframe). The source scales it to fill via a width=320 viewport
+  // on mobile user-agents; WordPress's default width=device-width leaves it un-scaled (gap on
+  // wide phones). Mirror the source ONLY for these carries: width=320 on mobile, else
+  // device-width. Core registers _block_template_viewport_meta_tag during template-canvas setup
+  // (AFTER this file loads), so a top-level remove_action misses it — remove it from inside
+  // wp_head at priority -1 (before core's 0), then emit ours.
+  const mobileViewportBlock = mobileViewport
+    ? `
+add_action( 'wp_head', function () {
+    remove_action( 'wp_head', '_block_template_viewport_meta_tag', 0 );
+}, -1 );
+add_action( 'wp_head', function () {
+    echo wp_is_mobile()
+        ? '<meta name="viewport" content="width=320, user-scalable=yes" id="libCarryMobileViewport">' . "\\n"
+        : '<meta name="viewport" content="width=device-width, initial-scale=1">' . "\\n";
+}, 1 );
+`
+    : '';
 
   return `<?php
 add_filter( 'body_class', function( $classes ) {
@@ -443,7 +473,7 @@ add_filter( 'wp_kses_allowed_html', function( $tags, $context ) {
     }
     return $tags;
 }, 10, 2 );
-`;
+${mobileViewportBlock}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -455,6 +485,17 @@ add_filter( 'wp_kses_allowed_html', function( $tags, $context ) {
  * Returns an array of `{path, content}` — the caller writes them to disk.
  */
 export function buildCarryThemeFiles(input: CarryThemeInput): ThemeFile[] {
+  // Non-responsive (classic/adaptive) Wix carries a FIXED-width mobile canvas as a
+  // .lib-carry-vp-mobile iframe (CarryPage.mobile). Only such carries need the width=320
+  // mobile-viewport swap + the carried-viewport-meta strip; a responsive or non-Wix carry
+  // never sets `mobile`, so its theme stays byte-identical (the "only when necessary" gate).
+  const hasMobileCanvas = input.pages.some((p) => p.mobile);
+  const pages = hasMobileCanvas
+    ? input.pages.map((p) =>
+        p.scaffold ? { ...p, scaffold: { ...p.scaffold, openWrap: stripViewportMeta(p.scaffold.openWrap) } } : p,
+      )
+    : input.pages;
+
   // Block themes do NOT auto-enqueue style.css on the front end — it's only the
   // theme-header file. So the reset must ride the enqueued site.css instead, and
   // it goes FIRST so the carried source CSS overrides it (the reset must lose the
@@ -473,7 +514,7 @@ export function buildCarryThemeFiles(input: CarryThemeInput): ThemeFile[] {
   // otherwise become a grid/flex item of the source layout and displace the
   // carried chrome. `display:contents` makes that wrapper box-less so the real
   // <header>/<footer> stay where the source put them. (No-op when no parts.)
-  const usesScaffold = input.pages.some((p) => p.scaffold);
+  const usesScaffold = pages.some((p) => p.scaffold);
   const CHROME_RESCUE = usesScaffold ? '.wp-block-template-part{display:contents}\n' : '';
 
   // Wix paints every section/page background as DECORATIVE layers — `[data-hook="bgLayers"]`
@@ -588,7 +629,7 @@ export function buildCarryThemeFiles(input: CarryThemeInput): ThemeFile[] {
 
   // index.html (required fallback) reuses the home page's scaffold + chrome so it
   // renders correctly; falls back to the legacy shell when no scaffold exists.
-  const homePage = input.pages.find((p) => p.isHome);
+  const homePage = pages.find((p) => p.isHome);
   const homeSlugs = slugsFor(homePage?.chromeKey ?? input.chromeVariants[0]?.key ?? '');
   const indexTemplate = homePage?.scaffold
     ? scaffoldedTemplate(homePage.scaffold, homeSlugs, homePage.mobile)
@@ -597,7 +638,7 @@ export function buildCarryThemeFiles(input: CarryThemeInput): ThemeFile[] {
   const files: ThemeFile[] = [
     { path: 'style.css', content: styleCssHeader(input.themeName) },
     { path: 'theme.json', content: JSON.stringify(themeJson, null, 2) },
-    { path: 'functions.php', content: functionsPhp(input.pages, input.bodyClasses ?? []) },
+    { path: 'functions.php', content: functionsPhp(pages, input.bodyClasses ?? [], hasMobileCanvas) },
     // Site-wide CSS — reset first (so source rules win the cascade), then the
     // chrome-wrapper rescue, then EVERY variant's carried chrome CSS (concatenated
     // upstream into siteCss; comp-id-scoped so variants never collide).
@@ -615,7 +656,7 @@ export function buildCarryThemeFiles(input: CarryThemeInput): ThemeFile[] {
   // Per-page CSS + template files. Posts share ONE single.html; the per-post body
   // class + enqueued page-<slug>.css still scope each post's carried CSS.
   let emittedSingle = false;
-  for (const p of input.pages) {
+  for (const p of pages) {
     files.push({ path: `assets/css/page-${p.slug}.css`, content: p.pageCss });
     const slugs = slugsFor(p.chromeKey);
     if (p.isHome) {
@@ -636,7 +677,7 @@ export function buildCarryThemeFiles(input: CarryThemeInput): ThemeFile[] {
   // posts (single.html), the posts page (home.html) and date/term archives (archive.html)
   // render properly. index.html is left as the homepage fallback. The carried-post case
   // (posts in the carry set) keeps its own single.html via the loop above.
-  const nativeBlog = input.nativeBlog ?? !input.pages.some((p) => p.postType === 'post');
+  const nativeBlog = input.nativeBlog ?? !pages.some((p) => p.postType === 'post');
   if (nativeBlog) {
     const sc = homePage?.scaffold;
     files.push({ path: 'templates/single.html', content: nativeBlogTemplate(NATIVE_SINGLE_MIDDLE, homeSlugs, sc) });
