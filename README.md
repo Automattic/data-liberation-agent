@@ -28,65 +28,38 @@ This tool extracts all content from closed platforms — posts, pages, media, na
 
 All eight platforms have MCP adapters with full extraction support including products (exported as WooCommerce-compatible CSV). Sites matching none of them fall back to a generic `default` adapter that renders each page in a headless browser and extracts the main content, media, and any JSON-LD products — best-effort, since it can't key off platform-specific markup. GoDaddy Websites & Marketing is pages + blog only in v1; GoDaddy Online Store (OLS) product support is planned for v1.1.
 
-## Screenshots
-
-Capture full-page + scrolled-state screenshots (desktop 1440×900 + mobile 390×844) plus rendered HTML and site-analysis metadata (palette, typography) for every URL on a site. Useful for pre-liberation analysis and feeding AI design-system tools.
-
-Standalone:
-
-```bash
-data-liberation screenshot https://example.com --output ~/Studio/_liberations/example.com
-```
-
-Screenshots run automatically at the end of `data-liberation <url>` extracts. Results land under `<outputDir>/screenshots/` alongside a `manifest.json` keyed by URL — the join back to `output.wxr` and `products.jsonl` happens on the filesystem, not via WordPress postmeta. Pass `--no-screenshots` to skip them:
-
-```bash
-data-liberation https://example.com                          # default: ~/Studio/_liberations/example.com
-data-liberation https://example.com --no-screenshots         # skip screenshots
-```
-
-Output lives at `<outputDir>/screenshots/{desktop,mobile}/<slug>.png` (fullpage + `.scrolled.png` variants) and `<outputDir>/html/<slug>.html`. See `<outputDir>/screenshots/manifest.json` for the URL → files join table.
-
-Options:
-- `--limit N` — cap to first N URLs
-- `--types page,post,product` — filter by URL type
-- `--concurrency N` — parallel captures (default 6, max 10)
-- `--browser-restart-every N` — restart Chromium every N URLs (default 100)
-- `--cdp-port <n>` — connect to existing Chrome session (for authenticated sites)
-- `--force` — re-capture even if output files already exist
-- `--urls-file <path>` — read URLs from a file instead of fetching the sitemap
-
 ## Getting started — agent-first
 
-The front door is `/liberate` inside Claude Code (or Codex). One command runs the full pipeline: extraction + block-theme design + local WordPress preview.
+data-liberation-agent is built to be driven by an AI agent. The front door is the `liberate` skill: one command runs the full pipeline — detect the platform, inventory every page/post/product, extract content and media, capture screenshots and design tokens, then reconstruct the site as an editable WordPress block theme and import it into a local WordPress preview.
+
+> **Studio required for preview/import.** Install [Automattic Studio](https://developer.wordpress.com/studio/) before running `/data-liberation:liberate`. Extraction itself needs no WordPress.
+
+### Claude Code
+
+Install from the marketplace:
 
 ```bash
-# 1. Install the plugin
-claude plugin install data-liberation
+claude plugin marketplace add Automattic/data-liberation-agent
+claude plugin install data-liberation@data-liberation
+```
 
-# 2. In Claude Code, run:
+Or from a local checkout (for development on the plugin itself):
+
+```bash
+cd data-liberation-agent
+claude plugin marketplace add .
+claude plugin install data-liberation@data-liberation
+```
+
+Then, in Claude Code:
+
+```
 /liberate https://your-site.com
 ```
 
 What you'll see: the agent detects the platform, inventories all pages/posts/products, pauses to confirm scope and estimated time, then extracts content and media. It then drives the design phase — clustering page layouts, building a responsive block theme that mirrors your source site's structure and visual style, and importing everything into Automattic Studio. When it finishes you get a local preview URL and a `run-report.json` summarizing what was built, what's faithful, and any gaps.
 
-> **Studio required for preview/import.** Install at https://developer.wordpress.com/studio/ before running `/liberate`. Extraction itself needs no WordPress.
-
 The result is a responsive, editable WordPress block theme — not a static copy.
-
-### Claude Code (plugin install)
-
-```bash
-# From the marketplace
-claude plugin marketplace add Automattic/data-liberation-agent
-claude plugin install data-liberation
-
-# Or from the git checkout
-cd data-liberation-agent
-claude --add-plugin .
-```
-
-Available skills: `/liberate` (front door — capture, then choose the reconstruct path), `/replicate-with-blocks` + `/replicate-theme` (the two reconstruct paths `/liberate` dispatches to), `/qa`, `/diagnose`, `/adapt`. See [docs/skills.md](./docs/skills.md).
 
 ### Codex
 
@@ -95,7 +68,13 @@ cd data-liberation-agent
 codex
 ```
 
-The `.codex-plugin/plugin.json` and `.mcp.json` register the MCP server and skills automatically. `/liberate` runs sequentially on Codex (the builder fan-out step degrades to a sequential loop).
+The `.codex-plugin/plugin.json` and `.mcp.json` register the MCP server and skills automatically. The `liberate` flow runs sequentially on Codex (the builder fan-out step degrades to a sequential loop).
+
+Then in Codex:
+
+```
+$liberate https://your-site.com
+```
 
 ### Gemini CLI
 
@@ -106,6 +85,8 @@ gemini extension link .
 
 ### Any MCP client
 
+Run the MCP server over stdio:
+
 ```bash
 npx tsx src/mcp-server.ts
 
@@ -114,54 +95,40 @@ npx tsx src/mcp-server.ts
 npm run mcp
 ```
 
-Stdio transport. Exposes 11 tools: `liberate_detect`, `liberate_discover`, `liberate_inspect`, `liberate_extract`, `liberate_status`, `liberate_qa`, `liberate_map_apis`, `liberate_probe`, `liberate_verify`, `liberate_setup`, and `liberate_import`.
+It exposes **34 tools**. The ones you'll call directly for a deterministic extract → QA → import flow:
 
-## Headless / CI (extraction only)
-
-The `data-liberation` CLI handles the deterministic extraction stages — detect, discover, extract, screenshot, and import. It does **not** run the design/replica phase; that requires an agent context. Use the CLI for CI pipelines, batch migrations, or when you only need a WXR + media.
-
-```bash
-# 1. Install
-npm install
-
-# 2. Extract a site (produces WXR + media + screenshots; no design phase)
-npm run liberate -- https://yoursite.com
-
-# 3. Re-open the local preview later (Studio required)
-npm run liberate -- preview ~/Studio/_liberations/yoursite.com --open
-
-# 4. Inspect before extracting
-npm run inspect -- https://yoursite.com
-
-# 5. Verify extraction quality
-npm run verify -- ~/Studio/_liberations/yoursite.com
-
-# 6. Validate WordPress connection
-npm run setup -- --site your-wp-site.wordpress.com --username you --token YOUR_APP_PASSWORD
-
-# 7. Import WXR to WordPress
-npm run liberate -- import ~/Studio/_liberations/yoursite.com/output.wxr --site your-wp-site --username you --token YOUR_APP_PASSWORD
-```
-
-Full CLI reference: [docs/cli.md](./docs/cli.md).
+`liberate_detect`, `liberate_discover`, `liberate_inspect`, `liberate_extract`, `liberate_screenshot`, `liberate_status`, `liberate_qa`, `liberate_verify`, `liberate_setup`, and `liberate_import` — plus `liberate_paths` (resolve the output directory) and `liberate_probe` / `liberate_map_apis` (browser-based diagnostics). The remaining tools drive the design/reconstruction phase and are orchestrated by the skills rather than called by hand. Full reference with parameters: [docs/mcp.md](./docs/mcp.md).
 
 ## Output
 
-A successful extraction produces in `~/Studio/_liberations/<host>/` (default; override with `--output` or `DLA_OUTPUT_DIR`):
+A successful run produces, in `~/Studio/_liberations/<host>/` (the default for the `liberate` flow; set the `DLA_OUTPUT_DIR` environment variable to change it, or pass `outputDir` when calling the MCP tools — `liberate_paths` reports the resolved path):
 
 - `~/Studio/_liberations/<host>/`
    - `output.wxr` — WordPress eXtended RSS file, ready to import via WordPress Admin > Tools > Import
    - `media/` — downloaded images and attachments with local paths rewritten in the WXR
    - `redirect-map.json` — old platform paths mapped to new WordPress slugs
-   - `extraction-log.jsonl` — per-URL extraction log (atomic dedupe for `--resume`)
-   - `session.json` — pipeline stage, captured CLI opts, per-entity progress counters, and adapter pagination cursors
+   - `extraction-log.jsonl` — per-URL extraction log (atomic dedupe for resume)
+   - `session.json` — pipeline stage, captured opts, per-entity progress counters, and adapter pagination cursors
    - `media-stubs.json` — per-asset download status so permanently-broken URLs stop retrying across resume runs
    - `products.csv` — WooCommerce-compatible product CSV (if the site has e-commerce)
    - `products.jsonl` — raw product data streamed during extraction
 
+## Screenshots & design tokens
+
+The `liberate` flow captures, for every URL, full-page + scrolled-state screenshots (desktop 1440×900 and mobile 390×844), the rendered HTML, and site-wide design tokens — used by the reconstruction phase and handy for feeding AI design-system tools. Via raw MCP this is the `liberate_screenshot` tool (or `screenshots: true` on `liberate_extract`).
+
+Artifacts land under the output directory:
+
+- `screenshots/{desktop,mobile}/<slug>.png` (plus `.scrolled.png` post-scroll variants)
+- `html/<slug>.html` — rendered HTML per URL
+- `screenshots/manifest.json` — the URL → files join table
+- `palette.json`, `typography.json`, `breakpoints.json` — aggregated per-site design tokens
+
+The join back to `output.wxr` and `products.jsonl` happens on the filesystem via `manifest.json`, keyed by URL — nothing is written into WordPress postmeta.
+
 ## Additional documentation
 
-* [CLI commands](/docs/cli.md)
+* [How it works](/docs/how-it-works.md)
 * [AI agent commands](/docs/commands.md)
 * [AI skills](/docs/skills.md)
 * [MCP server tools](/docs/mcp.md)
