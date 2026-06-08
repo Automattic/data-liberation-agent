@@ -247,6 +247,10 @@ export function assembleCarryTheme(input: AssembleInput): AssembleOutput {
   // vanishes on a white store page), falling back to any page that yields one. Only
   // when the run has products; otherwise no store templates are emitted.
   let storeHeaderIsland = '';
+  // The page whose island the store header was carved from — its per-page CSS styles that
+  // header. Passed to the scaffold so functions.php reapplies that CSS on WooCommerce
+  // (block-rendered, island-less) templates. See CarryThemeInput.storeChromeDonorSlug.
+  let storeChromeDonorSlug = '';
   if (input.hasProducts) {
     const ordered = [...recos.filter((x) => !x.p.isHome), ...recos.filter((x) => x.p.isHome)];
     for (const cand of ordered) {
@@ -255,7 +259,10 @@ export function assembleCarryTheme(input: AssembleInput): AssembleOutput {
       // the region, then fall back to the body.
       storeHeaderIsland =
         extractStoreHeaderIsland(cand.r.headerIsland) || extractStoreHeaderIsland(cand.r.mainIsland);
-      if (storeHeaderIsland) break;
+      if (storeHeaderIsland) {
+        storeChromeDonorSlug = cand.p.slug;
+        break;
+      }
     }
   }
 
@@ -266,6 +273,7 @@ export function assembleCarryTheme(input: AssembleInput): AssembleOutput {
     bodyClasses,
     pages: scaffoldPages,
     storeHeaderIsland,
+    storeChromeDonorSlug,
     hasProducts: input.hasProducts,
     themeJsonPalette: input.themeJsonPalette,
     themeJsonFontFamilies: input.themeJsonFontFamilies,

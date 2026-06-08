@@ -124,6 +124,18 @@ export interface CarryThemeInput {
   /** True when the run produced WooCommerce products — gates the store templates. */
   hasProducts?: boolean;
   /**
+   * Slug of the donor page whose carried per-page CSS styles the dedicated store header
+   * (`header-store`). Block-rendered WooCommerce templates (single-product / archive-product)
+   * have NO carried island, so they never hit an `is_page()`/`is_front_page()` branch — and on
+   * Shopify-family sources the store header's rich styling rides in the donor page's CSS, not
+   * the global site.css (the header wasn't split into a chrome region). functions.php reapplies
+   * this page's body class + CSS on `is_woocommerce()` contexts so the store chrome matches the
+   * rest of the site. The CSS is `:where()`-zero-specificity, so it styles the carried chrome
+   * but loses to WooCommerce's own block CSS on the product body (no bleed). Set by
+   * reconstruct-pages-carry when it carves the store header; absent → no reapply branch.
+   */
+  storeChromeDonorSlug?: string;
+  /**
    * Captured design tokens registered in theme.json (`settings.color.palette` /
    * `settings.typography.fontFamilies`) so the product-marketing core blocks resolve
    * their color/font token references. Same slugs the reconstruction maps to — built by
@@ -413,7 +425,12 @@ function stripViewportMeta(html: string): string {
   return html.replace(/<meta\b[^>]*\bname=["']viewport["'][^>]*>\s*/gi, '');
 }
 
-function functionsPhp(pages: CarryPage[], bodyClasses: string[], mobileViewport: boolean): string {
+function functionsPhp(
+  pages: CarryPage[],
+  bodyClasses: string[],
+  mobileViewport: boolean,
+  storeChromeDonorSlug: string,
+): string {
   // body_class filter: always add lib-carry-site; replicate the source body classes
   // (so body-state-gated carried rules behave like the source); add per-page class.
   const sourceBodyCases = bodyClasses
@@ -432,6 +449,23 @@ function functionsPhp(pages: CarryPage[], bodyClasses: string[], mobileViewport:
         `    if ( ${pageCondition(p)} ) { wp_enqueue_style( 'lib-carry-page-${p.slug}', get_stylesheet_directory_uri() . '/assets/css/page-${p.slug}.css', array( 'lib-carry-site' ), '1.0.0' ); }`,
     )
     .join('\n');
+
+  // Block-rendered WooCommerce templates (single-product / archive-product) have NO carried
+  // per-page island, so they never match an is_page()/is_front_page() branch and would render
+  // the dedicated header-store part with only the shared site.css. On Shopify-family sources the
+  // header rides inline in each page island (its full styling lives in that page's CSS), so
+  // reapply the DONOR page's class + CSS on every is_woocommerce() context. (`:where()`-zero-
+  // specificity, so it styles the carried store chrome but loses to WooCommerce's block CSS on
+  // the product body — no bleed.) No-op when no store header was isolated (donor slug empty).
+  const storeChromeCond = "function_exists( 'is_woocommerce' ) && is_woocommerce()";
+  const storeBodyCase = storeChromeDonorSlug
+    ? `    if ( ${storeChromeCond} ) { $classes[] = 'lib-carry-page-${storeChromeDonorSlug}'; }`
+    : '';
+  const storeEnqueue = storeChromeDonorSlug
+    ? `    if ( ${storeChromeCond} ) { wp_enqueue_style( 'lib-carry-page-${storeChromeDonorSlug}', get_stylesheet_directory_uri() . '/assets/css/page-${storeChromeDonorSlug}.css', array( 'lib-carry-site' ), '1.0.0' ); }`
+    : '';
+  const bodyCasesAll = [bodyCases, storeBodyCase].filter(Boolean).join('\n');
+  const enqueueAll = [enqueue, storeEnqueue].filter(Boolean).join('\n');
 
   // Non-responsive (classic/adaptive) source mobile layout is a FIXED-width canvas (carried
   // as the .lib-carry-vp-mobile iframe). The source scales it to fill via a width=320 viewport
@@ -462,13 +496,13 @@ add_action( 'wp_head', function () {
   return `<?php
 add_filter( 'body_class', function( $classes ) {
     $classes[] = 'lib-carry-site';
-${sourceBodyCases ? sourceBodyCases + '\n' : ''}${bodyCases}
+${sourceBodyCases ? sourceBodyCases + '\n' : ''}${bodyCasesAll}
     return $classes;
 } );
 
 add_action( 'wp_enqueue_scripts', function() {
     wp_enqueue_style( 'lib-carry-site', get_stylesheet_directory_uri() . '/assets/css/site.css', array(), '1.0.0' );
-${enqueue}
+${enqueueAll}
 } );
 
 // Allow the dual-viewport mobile-DOM <iframe> (carried mobile layout) through KSES
@@ -644,7 +678,7 @@ export function buildCarryThemeFiles(input: CarryThemeInput): ThemeFile[] {
   const files: ThemeFile[] = [
     { path: 'style.css', content: styleCssHeader(input.themeName) },
     { path: 'theme.json', content: JSON.stringify(themeJson, null, 2) },
-    { path: 'functions.php', content: functionsPhp(pages, input.bodyClasses ?? [], hasMobileCanvas) },
+    { path: 'functions.php', content: functionsPhp(pages, input.bodyClasses ?? [], hasMobileCanvas, input.storeChromeDonorSlug ?? '') },
     // Site-wide CSS — reset first (so source rules win the cascade), then the
     // chrome-wrapper rescue, then EVERY variant's carried chrome CSS (concatenated
     // upstream into siteCss; comp-id-scoped so variants never collide).
