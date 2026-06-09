@@ -36,6 +36,7 @@ import type { CheerioAPI, Cheerio } from 'cheerio';
 import type { Element } from 'domhandler';
 import type { AdapterBlocks, BlockRecipeContext } from '../page-actions.js';
 import { sanitize } from '../../lib/replicate/html-fallback.js';
+import { buildEmbedBlock } from '../../lib/replicate/embed-block.js';
 
 const SQS_BLOCK_MARKER = /\bsqs-block\b/;
 
@@ -120,29 +121,9 @@ function emitEmbed(_$: CheerioAPI, node: Cheerio<Element>): string | null {
   const iframe = node.find('iframe').first();
   const url = iframe.attr('src') || node.find('a[href]').first().attr('href') || '';
   if (!/^https?:\/\//.test(url)) return null;
-  const provider = guessEmbedProvider(url);
-  // The url sits inside the block-comment JSON, so it must be JSON-escaped, NOT
-  // HTML-escaped — escapeAttr would turn `?a=1&b=2` into `&amp;`, which json_decode
-  // reads literally and breaks oEmbed resolution. JSON.stringify emits the quotes.
-  const attrs = provider
-    ? `{"url":${JSON.stringify(url)},"type":"video","providerNameSlug":"${provider}","responsive":true}`
-    : `{"url":${JSON.stringify(url)},"responsive":true}`;
-  return (
-    `<!-- wp:embed ${attrs} -->\n` +
-    `<figure class="wp-block-embed${provider ? ` is-provider-${provider} wp-block-embed-${provider}` : ''} wp-embed-aspect-16-9 wp-has-aspect-ratio">` +
-    `<div class="wp-block-embed__wrapper">\n${url}\n</div></figure>\n` +
-    `<!-- /wp:embed -->`
-  );
-}
-
-function guessEmbedProvider(url: string): string | null {
-  if (/youtube\.com|youtu\.be/i.test(url)) return 'youtube';
-  if (/vimeo\.com/i.test(url)) return 'vimeo';
-  if (/twitter\.com|x\.com/i.test(url)) return 'twitter';
-  if (/instagram\.com/i.test(url)) return 'instagram';
-  if (/soundcloud\.com/i.test(url)) return 'soundcloud';
-  if (/spotify\.com/i.test(url)) return 'spotify';
-  return null;
+  // Provider detection + embed markup are shared with the generic block catalog
+  // (src/lib/replicate/embed-block.ts) so coverage stays in one place.
+  return buildEmbedBlock(url);
 }
 
 function emitQuote(_$: CheerioAPI, node: Cheerio<Element>): string | null {
