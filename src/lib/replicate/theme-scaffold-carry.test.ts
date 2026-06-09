@@ -101,6 +101,13 @@ describe('buildCarryThemeFiles', () => {
     expect(css).toContain('.lib-carry-vp-desktop .header.header--middle-left');
     expect(css).toMatch(/\.lib-carry-vp-desktop[^}]*\.header[^}]*display:grid!important/);
     expect(css).toMatch(/\.lib-carry-vp-desktop \.header__icons\{display:flex!important/);
+    // The header PART wrapper is force-shown — carried `header{display:none!important}` matches the
+    // injected <header class="wp-block-template-part"> wrapper; a tag+class selector out-specifies it.
+    expect(css).toContain('header.wp-block-template-part{display:block!important}');
+    // Header-group containers are force-shown (must win over a competing display:none from page CSS).
+    expect(css).toMatch(/\.lib-carry-vp-desktop sticky-header[^}]*display:block!important/);
+    // …but the interactive drawers are NOT force-shown (they must stay hidden when closed).
+    expect(css).not.toContain('cart-drawer{display:block!important');
     // Never scoped outside the store-header wrapper (must not touch content-page islands).
     expect(css).not.toMatch(/(^|[^-])body\.lib-carry-site \.header\{display:grid/);
   });
@@ -358,14 +365,14 @@ describe('buildCarryThemeFiles — native blog templates (hybrid carry)', () => 
     expect(pick(files, 'templates/single.html')).toBe('');
   });
 
-  it('SPIKE: native blog templates render the carved store header (+ donor CSS) when one exists', () => {
+  it('native blog + index templates render the carved store header (styled globally via siteCss) when one exists', () => {
     // Without a store header the native templates keep the (possibly empty) home header part.
     const noStore = build([page({ slug: 'home', isHome: true, scaffold, pageCss: '' })]);
     expect(pick(noStore, 'templates/single.html')).toContain('"slug":"header"');
     expect(pick(noStore, 'templates/single.html')).not.toContain('header-store');
 
     // With a carved store header, the island-less native templates render IT instead, so blog
-    // pages get real chrome; functions.php reapplies the donor CSS on native contexts too.
+    // pages get real chrome — styled by the GLOBAL chrome CSS (no per-page donor-CSS reapply).
     const withStore = buildCarryThemeFiles({
       themeName: 'Acme Carry',
       chromeVariants: oneVariant(
@@ -377,7 +384,6 @@ describe('buildCarryThemeFiles — native blog templates (hybrid carry)', () => 
       hasProducts: true,
       storeHeaderIsland:
         '<!-- wp:html -->\n<div class="lib-carry-vp-desktop"><header class="section-header">NAV</header></div>\n<!-- /wp:html -->',
-      storeChromeDonorSlug: 'home',
     });
     const pickWith = (p: string) => withStore.find((f) => f.path === p)?.content ?? '';
     expect(pickWith('templates/single.html')).toContain('"slug":"header-store"');
@@ -387,8 +393,9 @@ describe('buildCarryThemeFiles — native blog templates (hybrid carry)', () => 
     expect(pickWith('templates/single.html')).toContain('"slug":"footer"');
     // the index.html fallback (404 / search) also renders the store header
     expect(pickWith('templates/index.html')).toContain('"slug":"header-store"');
-    // donor CSS reapply now covers every island-less view (not is_page / not is_front_page)
-    expect(pickWith('functions.php')).toMatch(/! is_page\(\) && ! is_front_page\(\)/);
+    // no per-page donor-CSS reapply branch any more (the header is globally styled via siteCss)
+    expect(pickWith('functions.php')).not.toContain('is_woocommerce');
+    expect(pickWith('functions.php')).not.toContain('! is_page()');
   });
 });
 
@@ -457,48 +464,14 @@ describe('buildCarryThemeFiles — WooCommerce store templates', () => {
     expect(find(files, 'templates/archive-product.html')).toBeUndefined();
   });
 
-  it('reapplies the donor page class + CSS on island-less views so block-rendered store/blog pages get the carried chrome styling', () => {
-    // Block-rendered store templates (and, when no post is carried, the native blog/index views)
-    // have no carried island, so they never match an is_page()/is_front_page() branch. The donor
-    // page (whose island the store header was carved from) holds the header's full styling in its
-    // per-page CSS — reapply it on every island-less view (! is_page() && ! is_front_page()).
-    const files = buildCarryThemeFiles({
-      ...base,
-      pages: [
-        page({ slug: 'home', isHome: true, pageCss: '' }),
-        page({ slug: 'about', isHome: false, pageCss: 'body.lib-carry-page-about{}' }),
-      ],
-      hasProducts: true,
-      storeHeaderIsland: STORE_HEADER,
-      storeChromeDonorSlug: 'about',
-    });
-    const fn = find(files, 'functions.php')!;
-    expect(fn).toMatch(/! is_front_page\(\) \) \{ \$classes\[\] = 'lib-carry-page-about'/);
-    expect(fn).toMatch(/! is_front_page\(\) \) \{ wp_enqueue_style\( 'lib-carry-page-about'[^\n]*page-about\.css/);
-  });
-
-  it('narrows the reapply to is_woocommerce() (not the island-less predicate) when a post is carried', () => {
-    // A carried post means native blog templates are NOT emitted, so only the WooCommerce store
-    // templates render the store header. The broad ! is_page() predicate would then wrongly load
-    // the donor CSS on the carried post (which has its own island + per-page CSS).
-    const files = buildCarryThemeFiles({
-      ...base,
-      pages: [
-        page({ slug: 'home', isHome: true, pageCss: '' }),
-        page({ slug: 'my-post', postType: 'post', pageCss: '' }),
-      ],
-      hasProducts: true,
-      storeHeaderIsland: STORE_HEADER,
-      storeChromeDonorSlug: 'home',
-    });
-    const fn = find(files, 'functions.php')!;
-    expect(fn).toContain("function_exists( 'is_woocommerce' ) && is_woocommerce() ) { $classes[] = 'lib-carry-page-home'");
-    expect(fn).not.toContain('! is_page()');
-  });
-
-  it('omits the is_woocommerce() reapply branch when no store-header donor was isolated (back-compat)', () => {
+  it('emits NO per-page donor-CSS reapply branch — the store chrome is styled globally via siteCss', () => {
+    // The header now splits into the chrome region (chromeCss → siteCss) and is force-shown by
+    // STORE_HEADER_RESCUE, so the dedicated header-store part is styled site-wide. The retired
+    // #76/#77 workaround left no is_woocommerce() / ! is_page() reapply branch in functions.php.
     const fn = find(buildCarryThemeFiles({ ...base, hasProducts: true, storeHeaderIsland: STORE_HEADER }), 'functions.php')!;
     expect(fn).not.toContain('is_woocommerce');
+    expect(fn).not.toContain('! is_page()');
+    expect(fn).not.toContain('storeChromeDonorSlug');
   });
 });
 

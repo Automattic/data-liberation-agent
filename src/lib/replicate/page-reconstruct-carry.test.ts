@@ -177,4 +177,35 @@ describe('reconstructPageCarry', () => {
     expect(r.mainIsland).toContain('/wp-content/uploads/img.jpg');
     expect(r.mainIsland).not.toContain('cdn.example.com');
   });
+
+  it('Shopify Dawn: lifts a header with nested <header-*> custom elements into the GLOBAL chrome sheet, not the per-page sheet', () => {
+    // Before the balancedSpan custom-element fix this header never balanced, so it stayed in the
+    // main DOM and its CSS landed in the per-page mainCss (styled only on its own page). It must
+    // now split into the header part and globalize via chromeCss (site-wide), like the footer does.
+    const r = reconstructPageCarry({
+      slug: 'home',
+      isHome: true,
+      bodyHtml:
+        '<div class="section-header"><sticky-header>' +
+        '<header class="header header--middle-left">' +
+        '<header-drawer><details><summary>Menu</summary></details></header-drawer>' +
+        '<nav class="header__inline-menu">Shop</nav>' +
+        '</header></sticky-header></div>' +
+        '<main><section class="hero">Hi</section></main>' +
+        '<footer class="f">F</footer>',
+      css: '.header__inline-menu{display:flex} .hero{color:red}',
+      specs: [],
+      mediaUrlMap: new Map(),
+    });
+    expect(r.splitChrome).toBe(true);
+    // the real <header> (with its custom elements) is lifted into the header part…
+    expect(r.headerIsland).toContain('class="header header--middle-left"');
+    expect(r.headerIsland).toContain('<header-drawer');
+    // …its CSS globalizes: site-scoped in chromeCss, and ABSENT from the per-page mainCss…
+    expect(r.chromeCss).toContain(':where(body.lib-carry-site) .header__inline-menu');
+    expect(r.mainCss).not.toContain('header__inline-menu');
+    // …and the header is gone from the content island (no duplication), content stays per-page.
+    expect(r.mainIsland).not.toContain('header__inline-menu');
+    expect(r.mainCss).toContain(':where(body.lib-carry-site.lib-carry-page-home) .hero');
+  });
 });

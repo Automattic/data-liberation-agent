@@ -226,4 +226,53 @@ describe('assembleCarryTheme', () => {
     expect(out.warnings).toHaveLength(0);
     expect(out.themeFiles.some((f) => f.path === 'templates/single-product.html')).toBe(false);
   });
+
+  it('carves header-store from the nav the MOST pages share, not the first page in list order', () => {
+    // A site with sectional navs: one odd page (nav-alpha, FIRST in list order) and two pages
+    // sharing nav-beta. The store header must be the dominant nav-beta. The beta pages have
+    // DIFFERENT footers on purpose: the variant map keys on header+footer combined (each beta
+    // page is its own 1-member variant there), so ranking must use a HEADER-ONLY signature —
+    // combined-variant frequency would tie everything at 1 and fall back to list order (alpha).
+    const page = (slug: string, nav: string, footer: string) => ({
+      slug,
+      title: slug,
+      bodyHtml:
+        `<header class="hdr"><nav class="${nav}"><a href="/a">A</a></nav></header>` +
+        `<main><section class="s">${slug}</section></main>` +
+        `<footer class="${footer}">F</footer>`,
+      css: '',
+    });
+    const out = assembleCarryTheme({
+      themeName: 'Acme Carry',
+      hasProducts: true,
+      pages: [page('odd-one', 'nav-alpha', 'ft'), page('b1', 'nav-beta', 'ft-1'), page('b2', 'nav-beta', 'ft-2')],
+      mediaUrlMap: new Map(),
+    });
+    const store = out.themeFiles.find((f) => f.path === 'parts/header-store.html')?.content ?? '';
+    expect(store).toContain('nav-beta');
+    expect(store).not.toContain('nav-alpha');
+  });
+
+  it('still prefers an interior header over the home header when frequencies tie', () => {
+    // Home headers are often transparent overlays that vanish on a white store page — on a
+    // frequency tie (1 vs 1 here) the interior page must still win.
+    const page = (slug: string, nav: string, isHome?: boolean) => ({
+      slug,
+      title: slug,
+      isHome,
+      bodyHtml:
+        `<header class="hdr"><nav class="${nav}"><a href="/a">A</a></nav></header>` +
+        `<main><section class="s">${slug}</section></main><footer class="ft">F</footer>`,
+      css: '',
+    });
+    const out = assembleCarryTheme({
+      themeName: 'Acme Carry',
+      hasProducts: true,
+      pages: [page('home', 'nav-home', true), page('inner', 'nav-int')],
+      mediaUrlMap: new Map(),
+    });
+    const store = out.themeFiles.find((f) => f.path === 'parts/header-store.html')?.content ?? '';
+    expect(store).toContain('nav-int');
+    expect(store).not.toContain('nav-home');
+  });
 });
