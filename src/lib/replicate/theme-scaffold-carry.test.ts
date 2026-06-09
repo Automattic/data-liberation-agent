@@ -423,6 +423,30 @@ describe('buildCarryThemeFiles — WooCommerce store templates', () => {
     expect(find(files, 'templates/single-product.html')).toBeUndefined();
     expect(find(files, 'templates/archive-product.html')).toBeUndefined();
   });
+
+  it('reapplies the donor page class + CSS on is_woocommerce() contexts so block-rendered store pages get the carried chrome styling', () => {
+    // Block-rendered single-product / archive-product templates have no carried island, so they
+    // never match an is_page()/is_front_page() branch. The donor page (whose island the store
+    // header was carved from) holds the header's full styling in its per-page CSS — reapply it.
+    const files = buildCarryThemeFiles({
+      ...base,
+      pages: [
+        page({ slug: 'home', isHome: true, pageCss: '' }),
+        page({ slug: 'about', isHome: false, pageCss: 'body.lib-carry-page-about{}' }),
+      ],
+      hasProducts: true,
+      storeHeaderIsland: STORE_HEADER,
+      storeChromeDonorSlug: 'about',
+    });
+    const fn = find(files, 'functions.php')!;
+    expect(fn).toMatch(/is_woocommerce\(\)[^\n]*\$classes\[\] = 'lib-carry-page-about'/);
+    expect(fn).toMatch(/is_woocommerce\(\)[^\n]*wp_enqueue_style\( 'lib-carry-page-about'[^\n]*page-about\.css/);
+  });
+
+  it('omits the is_woocommerce() reapply branch when no store-header donor was isolated (back-compat)', () => {
+    const fn = find(buildCarryThemeFiles({ ...base, hasProducts: true, storeHeaderIsland: STORE_HEADER }), 'functions.php')!;
+    expect(fn).not.toContain('is_woocommerce');
+  });
 });
 
 describe('buildCarryThemeFiles — mobile viewport scaling (non-responsive Wix only)', () => {
