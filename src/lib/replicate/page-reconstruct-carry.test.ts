@@ -143,26 +143,27 @@ describe('reconstructPageCarry', () => {
     expect(r.mainIsland).not.toContain('a"b.html');
   });
 
-  it('appendRevealUnfreeze: chromeCss gets opacity:1!important override for JS-freeze gate classes in the chrome DOM', () => {
-    // Fixture: header carries `scroll-trigger` (a JS IntersectionObserver gate whose
-    // initial CSS state is opacity:0). Carry strips scripts, so it would stay invisible
-    // without the un-freeze override. The source CSS has the gate rule; appendRevealUnfreeze
-    // detects it and appends a scoped `opacity:1!important` end-state rule.
+  it('scroll-trigger gates are STRIPPED from the carried DOM (chrome and main) — no unfreeze override needed', () => {
+    // Fixture: header AND a content section carry `scroll-trigger` (a JS
+    // IntersectionObserver gate whose initial CSS state is opacity:0). carryHtml now
+    // drops the hook class itself — stronger than the former chrome-only
+    // opacity:1!important override, because it also un-gates MAIN-content sections
+    // (where the override never applied; the getsnooz islands shipped 12 frozen ones).
     const r = reconstructPageCarry({
       slug: 'home',
       bodyHtml:
         '<header class="scroll-trigger h">NAV</header>' +
-        '<div class="content">C</div>' +
+        '<div class="content scroll-trigger animate--slide-in">C</div>' +
         '<footer class="f">F</footer>',
       css: '.scroll-trigger{opacity:0;transition:opacity 0.4s ease}',
       specs: [],
       mediaUrlMap: new Map(),
     });
-    // The override must mention the gate class AND force the revealed end-state.
-    expect(r.chromeCss).toContain('scroll-trigger');
-    expect(r.chromeCss).toContain('opacity:1!important');
-    // Sanity: mainCss does NOT get the override — scroll-trigger is in the chrome DOM only.
-    expect(r.mainCss).not.toContain('opacity:1!important');
+    // The gate class is gone from every carried region, so the source's
+    // `.scroll-trigger{opacity:0}` rule can never match the emitted DOM.
+    expect(r.mainIsland).not.toContain('scroll-trigger');
+    expect(r.mainIsland).toContain('animate--slide-in');
+    expect(r.mainIsland).toContain('C');
   });
 
   it('rewrites media URLs in carried HTML', () => {

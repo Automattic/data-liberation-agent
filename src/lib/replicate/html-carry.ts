@@ -109,6 +109,22 @@ export function carryHtml(regionHtml: string, opts: CarryOpts): CarryResult {
     }
   });
 
+  // Strip Shopify Dawn's `scroll-trigger` / `scroll-trigger--*` hook classes.
+  // They gate `.scroll-trigger.animate--X{opacity:0}` reveal animations that a
+  // JS-stripped carry can never fire, leaving the gated sections (footer
+  // columns, newsletter, content rows) permanently invisible. Dropping the hook
+  // class (not the CSS) un-gates the reveal while leaving non-Dawn sites
+  // untouched (the class simply doesn't occur).
+  $('[class*="scroll-trigger"]').each((_, el) => {
+    const cls = $(el).attr('class') ?? '';
+    const cleaned = cls
+      .split(/\s+/)
+      .filter((c) => c && c !== 'scroll-trigger' && !c.startsWith('scroll-trigger--'))
+      .join(' ');
+    if (cleaned) $(el).attr('class', cleaned);
+    else $(el).removeAttr('class');
+  });
+
   // Strip javascript:/vbscript: hrefs (leading whitespace allowed) — the
   // element + its text are kept, only the dangerous navigation target is dropped.
   $('a[href]').each((_, el) => {
