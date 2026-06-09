@@ -556,9 +556,18 @@ export function buildCarryThemeFiles(input: CarryThemeInput): ThemeFile[] {
   // intent for the store header. All selectors key off Dawn's `header__*` / `header--*`
   // BEM classes (and `.announcement-bar`), so they are a NO-OP on themes that lack them.
   // The fully general fix (any theme) is a computed-style-inlined header snapshot; this is
-  // the pragmatic rescue for the common Shopify-Dawn case. Scoped to `.lib-carry-vp-desktop`
-  // (the store-header wrapper) so it never touches content-page islands.
-  const sh = 'body.lib-carry-site .lib-carry-vp-desktop';
+  // the pragmatic rescue for the common Shopify-Dawn case. Scoped to two wrappers, neither of
+  // which ever contains a content-page island (islands are post_content):
+  //   - `.lib-carry-vp-desktop` — the store-header part's own wrapper
+  //   - `.wp-block-template-part` — the PER-PAGE header parts. Page templates render these
+  //     with `tagName:div` (box-less via display:contents), so the tag+class wrapper rescue
+  //     below never fires for them; without this scope the carried Dawn
+  //     `header/#shopify-section-header{display:none!important}` rules hide the whole lifted
+  //     header on every content page + front page (getsnooz dogfood finding, 2026-06-09).
+  const scopes = ['body.lib-carry-site .lib-carry-vp-desktop', 'body.lib-carry-site .wp-block-template-part'];
+  /** Expand each selector under both rescue scopes: both('a','b') → 'S1 a,S2 a,S1 b,S2 b'. */
+  const both = (...sels: string[]): string =>
+    sels.flatMap((sel) => scopes.map((s) => `${s} ${sel}`)).join(',');
   const STORE_HEADER_RESCUE =
     // Header PART VISIBILITY (the actual blocker for lifting the header into global chrome). The
     // store/native header part renders as `<header class="wp-block-template-part">` (tagName:header).
@@ -571,15 +580,15 @@ export function buildCarryThemeFiles(input: CarryThemeInput): ThemeFile[] {
     // Then keep the header GROUP CONTAINERS inside it visible (the same `:where()` zero-spec problem
     // can hit `<sticky-header>` and the section wrappers). NOT the interactive drawers
     // (header-drawer / menu-drawer / cart-drawer) — those must stay hidden when closed.
-    `${sh} sticky-header,${sh} .header-wrapper,${sh} .shopify-section-group-header-group{display:block!important}\n` +
-    `${sh} .announcement-bar svg,${sh} .announcement-bar__message svg,${sh} .announcement-bar__link svg{width:1.2rem;height:auto;display:inline-block;vertical-align:middle}\n` +
+    `${both('sticky-header', '.header-wrapper', '.shopify-section-group-header-group')}{display:block!important}\n` +
+    `${both('.announcement-bar svg', '.announcement-bar__message svg', '.announcement-bar__link svg')}{width:1.2rem;height:auto;display:inline-block;vertical-align:middle}\n` +
     // Restore the header grid (logo | nav | icons). Scoped to Dawn's header-layout
     // modifiers so it never forces grid on an unrelated `.header` element.
-    `${sh} .header.header--top-left,${sh} .header.header--top-center,${sh} .header.header--middle-left,${sh} .header.header--middle-center,${sh} .header.header--mobile-center,${sh} .header.header--mobile-left{display:grid!important}\n` +
-    `${sh} .header__icons{display:flex!important;align-items:center}\n` +
+    `${both('.header.header--top-left', '.header.header--top-center', '.header.header--middle-left', '.header.header--middle-center', '.header.header--mobile-center', '.header.header--mobile-left')}{display:grid!important}\n` +
+    `${both('.header__icons')}{display:flex!important;align-items:center}\n` +
     // Nav links: drop the generic `.link` underline and restore Dawn's nav size.
-    `${sh} .header__menu-item{font-size:1.4rem;text-decoration:none}\n` +
-    `${sh} .header__inline-menu .list-menu__item{text-decoration:none}\n`;
+    `${both('.header__menu-item')}{font-size:1.4rem;text-decoration:none}\n` +
+    `${both('.header__inline-menu .list-menu__item')}{text-decoration:none}\n`;
 
   // Dual-viewport toggle for classic/adaptive Wix mobile-DOM carry. When a page
   // emits a dual island (desktop content in `.lib-carry-vp-desktop` + a

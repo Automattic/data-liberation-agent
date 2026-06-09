@@ -100,15 +100,20 @@ describe('buildCarryThemeFiles', () => {
     // grid/flex/nav rules; reassert them scoped to the store-header wrapper.
     expect(css).toContain('.lib-carry-vp-desktop .header.header--middle-left');
     expect(css).toMatch(/\.lib-carry-vp-desktop[^}]*\.header[^}]*display:grid!important/);
-    expect(css).toMatch(/\.lib-carry-vp-desktop \.header__icons\{display:flex!important/);
+    expect(css).toMatch(/\.lib-carry-vp-desktop \.header__icons[^}]*\{display:flex!important/);
     // The header PART wrapper is force-shown — carried `header{display:none!important}` matches the
     // injected <header class="wp-block-template-part"> wrapper; a tag+class selector out-specifies it.
     expect(css).toContain('header.wp-block-template-part{display:block!important}');
     // Header-group containers are force-shown (must win over a competing display:none from page CSS).
     expect(css).toMatch(/\.lib-carry-vp-desktop sticky-header[^}]*display:block!important/);
+    // The SAME rescues fire inside per-page header parts (tagName:div wrappers — display:contents,
+    // so the header.wp-block-template-part wrapper rescue can't reach them; without this scope the
+    // carried Dawn header{display:none!important} hides the lifted header on every content page).
+    expect(css).toMatch(/\.wp-block-template-part sticky-header[^}]*display:block!important/);
+    expect(css).toMatch(/\.wp-block-template-part \.header\.header--middle-left[^}]*\{display:grid!important/);
     // …but the interactive drawers are NOT force-shown (they must stay hidden when closed).
     expect(css).not.toContain('cart-drawer{display:block!important');
-    // Never scoped outside the store-header wrapper (must not touch content-page islands).
+    // Never scoped outside the rescue wrappers (must not touch content-page islands).
     expect(css).not.toMatch(/(^|[^-])body\.lib-carry-site \.header\{display:grid/);
   });
 
