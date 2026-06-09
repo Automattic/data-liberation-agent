@@ -37,3 +37,18 @@ describe('applyBlockRecipe', () => {
     expect(out).not.toContain('onclick');
   });
 });
+
+describe('applyBlockRecipe: universal generic catalog', () => {
+  it('converts a generic wrapper even when the adapter has no blocks', () => {
+    const out = applyBlockRecipe('<details><summary>Q</summary><p>A</p></details>', undefined, CTX);
+    expect(out).not.toBeNull();
+    expect(out).toContain('<!-- wp:details -->');
+  });
+
+  it('an adapter htmlToBlocks result still wins over the generic catalog', () => {
+    const blocks: AdapterBlocks = { htmlToBlocks: () => '<!-- wp:paragraph -->\n<p>adapter</p>\n<!-- /wp:paragraph -->' };
+    const out = applyBlockRecipe('<details><summary>Q</summary><p>A</p></details>', blocks, CTX);
+    expect(out).toContain('adapter');
+    expect(out).not.toContain('wp:details');
+  });
+});

@@ -3,6 +3,7 @@ import type { CheerioAPI } from 'cheerio';
 import type { Element } from 'domhandler';
 import type { AdapterBlocks, BlockRecipe, BlockRecipeContext } from '../../adapters/page-actions.js';
 import { sanitize } from './html-fallback.js';
+import { genericBlockCatalog } from './generic-block-catalog.js';
 
 /**
  * Seam 2: turn platform-structured source HTML into Gutenberg block markup via
@@ -12,12 +13,18 @@ import { sanitize } from './html-fallback.js';
  * floor (nothing is ever dropped). Called ONLY on the blocks reconstruct path.
  */
 export function applyBlockRecipe(html: string, blocks: AdapterBlocks | undefined, ctx: BlockRecipeContext): string | null {
-  if (!blocks) return null;
-  if (blocks.htmlToBlocks) {
+  if (blocks?.htmlToBlocks) {
     const out = blocks.htmlToBlocks(html, ctx);
     if (out != null && out.trim()) return out;
   }
-  if (blocks.recipes && blocks.recipes.length > 0) return composeFromRecipes(html, blocks.recipes, ctx);
+  if (blocks?.recipes && blocks.recipes.length > 0) {
+    const out = composeFromRecipes(html, blocks.recipes, ctx);
+    if (out != null && out.trim()) return out;
+  }
+  // Universal generic catalog — last attempt before the caller's core/html floor.
+  // Runs even when the adapter declares no blocks, so every adapter benefits.
+  const generic = genericBlockCatalog.htmlToBlocks!(html, ctx);
+  if (generic != null && generic.trim()) return generic;
   return null;
 }
 

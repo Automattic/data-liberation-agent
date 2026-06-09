@@ -106,6 +106,17 @@ describe('squarespace blocks recipe (htmlToBlocks)', () => {
     expect(out).toContain('wp-block-embed-youtube');
   });
 
+  it('emits a rich (not video) embed for a Twitter/X embed-block', () => {
+    const html = `
+      <div class="sqs-block embed-block">
+        <iframe src="https://twitter.com/a/status/1"></iframe>
+      </div>`;
+    const out = toBlocks(html);
+    expect(out).toContain('"providerNameSlug":"twitter"');
+    expect(out).toContain('"type":"rich"');
+    expect(out).not.toContain('wp-embed-aspect');
+  });
+
   it('drops spacer-block entirely', () => {
     const html = `
       <div class="sqs-block image-block">
