@@ -430,6 +430,7 @@ function functionsPhp(
   bodyClasses: string[],
   mobileViewport: boolean,
   storeChromeDonorSlug: string,
+  nativeStoreChrome: boolean,
 ): string {
   // body_class filter: always add lib-carry-site; replicate the source body classes
   // (so body-state-gated carried rules behave like the source); add per-page class.
@@ -457,7 +458,14 @@ function functionsPhp(
   // reapply the DONOR page's class + CSS on every is_woocommerce() context. (`:where()`-zero-
   // specificity, so it styles the carried store chrome but loses to WooCommerce's block CSS on
   // the product body — no bleed.) No-op when no store header was isolated (donor slug empty).
-  const storeChromeCond = "function_exists( 'is_woocommerce' ) && is_woocommerce()";
+  // Reapply the donor chrome CSS on templates that render the dedicated header-store part with no
+  // carried island. When native blog templates use it too (nativeStoreChrome), that is EVERY
+  // non-content, non-home view — product/shop, blog post/index/archive, search, 404 (index.html
+  // fallback) — i.e. anything that is not an is_page() content island or the is_front_page() home.
+  // Otherwise (posts are carried) only the WooCommerce store templates use it.
+  const storeChromeCond = nativeStoreChrome
+    ? "! is_page() && ! is_front_page()"
+    : "function_exists( 'is_woocommerce' ) && is_woocommerce()";
   const storeBodyCase = storeChromeDonorSlug
     ? `    if ( ${storeChromeCond} ) { $classes[] = 'lib-carry-page-${storeChromeDonorSlug}'; }`
     : '';
@@ -667,18 +675,31 @@ export function buildCarryThemeFiles(input: CarryThemeInput): ThemeFile[] {
     themeJson.templateParts = tp;
   }
 
-  // index.html (required fallback) reuses the home page's scaffold + chrome so it
-  // renders correctly; falls back to the legacy shell when no scaffold exists.
+  // Island-less templates (native blog single/home/archive + the index.html fallback) have NO
+  // carried island; on Shopify-family carries the home-variant header part is empty, so they
+  // render with no nav/logo. When a populated store header was carved, render IT on them (SPIKE
+  // — branch spike/carry-real-header-parts). `nativeStoreChrome` ties the two halves together:
+  // functions.php only reapplies the donor chrome CSS on those contexts when they use the header.
   const homePage = pages.find((p) => p.isHome);
   const homeSlugs = slugsFor(homePage?.chromeKey ?? input.chromeVariants[0]?.key ?? '');
-  const indexTemplate = homePage?.scaffold
-    ? scaffoldedTemplate(homePage.scaffold, homeSlugs, homePage.mobile)
-    : pageTemplate(homeSlugs);
+  const nativeBlog = input.nativeBlog ?? !pages.some((p) => p.postType === 'post');
+  const useStoreHeader = (input.hasProducts ?? false) && !!input.storeHeaderIsland;
+  const nativeStoreChrome = nativeBlog && useStoreHeader;
+  const storeHeaderSlugs: ChromeSlugs = { header: STORE_HEADER_SLUG, footer: homeSlugs.footer };
+
+  // index.html (required fallback — also serves 404 / search when those templates are absent).
+  // With a carved store header, render real chrome + a recent-posts loop; else reuse the home
+  // page's scaffold/shell (legacy behavior).
+  const indexTemplate = useStoreHeader
+    ? nativeBlogTemplate(nativeQueryLoop(NATIVE_HOME_TITLE), storeHeaderSlugs)
+    : homePage?.scaffold
+      ? scaffoldedTemplate(homePage.scaffold, homeSlugs, homePage.mobile)
+      : pageTemplate(homeSlugs);
 
   const files: ThemeFile[] = [
     { path: 'style.css', content: styleCssHeader(input.themeName) },
     { path: 'theme.json', content: JSON.stringify(themeJson, null, 2) },
-    { path: 'functions.php', content: functionsPhp(pages, input.bodyClasses ?? [], hasMobileCanvas, input.storeChromeDonorSlug ?? '') },
+    { path: 'functions.php', content: functionsPhp(pages, input.bodyClasses ?? [], hasMobileCanvas, input.storeChromeDonorSlug ?? '', nativeStoreChrome) },
     // Site-wide CSS — reset first (so source rules win the cascade), then the
     // chrome-wrapper rescue, then EVERY variant's carried chrome CSS (concatenated
     // upstream into siteCss; comp-id-scoped so variants never collide).
@@ -731,12 +752,14 @@ export function buildCarryThemeFiles(input: CarryThemeInput): ThemeFile[] {
   // posts (single.html), the posts page (home.html) and date/term archives (archive.html)
   // render properly. index.html is left as the homepage fallback. The carried-post case
   // (posts in the carry set) keeps its own single.html via the loop above.
-  const nativeBlog = input.nativeBlog ?? !pages.some((p) => p.postType === 'post');
   if (nativeBlog) {
-    const sc = homePage?.scaffold;
-    files.push({ path: 'templates/single.html', content: nativeBlogTemplate(NATIVE_SINGLE_MIDDLE, homeSlugs, sc) });
-    files.push({ path: 'templates/home.html', content: nativeBlogTemplate(nativeQueryLoop(NATIVE_HOME_TITLE), homeSlugs, sc) });
-    files.push({ path: 'templates/archive.html', content: nativeBlogTemplate(nativeQueryLoop(NATIVE_ARCHIVE_TITLE), homeSlugs, sc) });
+    // Island-less: with a carved store header, render it (clean header → main → footer, no home
+    // scaffold) so blog pages get real chrome; else keep the home scaffold's (maybe empty) header.
+    const nativeSlugs: ChromeSlugs = useStoreHeader ? storeHeaderSlugs : homeSlugs;
+    const sc = useStoreHeader ? undefined : homePage?.scaffold;
+    files.push({ path: 'templates/single.html', content: nativeBlogTemplate(NATIVE_SINGLE_MIDDLE, nativeSlugs, sc) });
+    files.push({ path: 'templates/home.html', content: nativeBlogTemplate(nativeQueryLoop(NATIVE_HOME_TITLE), nativeSlugs, sc) });
+    files.push({ path: 'templates/archive.html', content: nativeBlogTemplate(nativeQueryLoop(NATIVE_ARCHIVE_TITLE), nativeSlugs, sc) });
   }
 
   // WooCommerce store templates. Product + shop/category-archive pages have NO carried
