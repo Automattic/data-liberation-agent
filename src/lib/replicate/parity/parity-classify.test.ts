@@ -57,6 +57,32 @@ describe('classifyDivergences', () => {
     const input = [d({ prop: 'paddingTop', source: '10px', replica: '0px' }), d({})];
     expect(classifyDivergences(input)).toEqual(classifyDivergences([...input]));
   });
+
+  it('routes unsafe selectors to unresolved (never emit broken css)', () => {
+    const plan = classifyDivergences([
+      d({ match: '#weird:id[0]' }), // ':' in an id → invalid css if emitted
+      d({ match: '#foo.bar[0]' }), // literal '.' in an id → silently wrong target (#foo with class bar)
+    ]);
+    expect(plan.overrides).toEqual([]);
+    expect(plan.unresolved).toHaveLength(2);
+    expect(plan.unresolved.map((u) => u.cause)).toEqual(['unsafe-selector', 'unsafe-selector']);
+  });
+
+  it('keeps BEM class chains patchable (dots in class selectors are legitimate)', () => {
+    const plan = classifyDivergences([d({ match: 'div.a.b--x[0]' })]);
+    expect(plan.unresolved).toEqual([]);
+    expect(plan.overrides).toEqual([
+      expect.objectContaining({ selector: 'div.a.b--x', occurrence: 0 }),
+    ]);
+  });
+
+  it('routes occurrence>0 to unresolved as occurrence-ambiguous (overrides mirror emitted css)', () => {
+    const plan = classifyDivergences([d({ match: 'section.hero[2]' })]);
+    expect(plan.overrides).toEqual([]);
+    expect(plan.unresolved).toEqual([
+      expect.objectContaining({ cause: 'occurrence-ambiguous', match: 'section.hero[2]' }),
+    ]);
+  });
 });
 
 describe('renderPatchCss', () => {
@@ -83,5 +109,9 @@ describe('divergenceFingerprint', () => {
     const b = [...a].reverse();
     expect(divergenceFingerprint(a)).toBe(divergenceFingerprint(b));
     expect(divergenceFingerprint(a)).not.toBe(divergenceFingerprint([d({})]));
+  });
+
+  it('changes when only the replica-side value changes', () => {
+    expect(divergenceFingerprint([d({})])).not.toBe(divergenceFingerprint([d({ replica: '4px' })]));
   });
 });

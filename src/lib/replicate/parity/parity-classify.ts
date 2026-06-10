@@ -70,6 +70,23 @@ function splitMatch(match: string): { selector: string; occurrence: number } {
   return m ? { selector: m[1], occurrence: Number(m[2]) } : { selector: match, occurrence: 0 };
 }
 
+/** Live-DOM ids can carry characters that make an emitted selector invalid
+ * css (#weird:id) or a silently wrong target (#foo[data] — the greedy
+ * splitMatch keeps the bracket in the selector). Escaping has spec edge
+ * cases — reject deterministically instead; rejected divergences are
+ * reported, never emitted. */
+const UNSAFE_IN_SELECTOR = /[:\[\]{}()"'\\]/;
+
+function selectorIsSafe(sel: string): boolean {
+  if (UNSAFE_IN_SELECTOR.test(sel)) return false;
+  // '#foo.bar' passes the char class but is semantically wrong: the source id
+  // is the literal 'foo.bar', while emitted css would target id 'foo' with
+  // class 'bar'. Ids must be standalone; class-chain selectors (tag.a.b)
+  // keep their dots legitimately.
+  if (sel.startsWith('#') && sel.slice(1).includes('.')) return false;
+  return true;
+}
+
 export function classifyDivergences(divergences: Divergence[]): RepairPlan {
   const overrides = new Map<string, PatchOverride>();
   const unresolved: UnresolvedDivergence[] = [];
@@ -84,11 +101,24 @@ export function classifyDivergences(divergences: Divergence[]): RepairPlan {
       unresolved.push({ ...div, cause: productCause });
       continue;
     }
+    const { selector, occurrence } = splitMatch(div.match);
+    if (!selectorIsSafe(selector)) {
+      unresolved.push({ ...div, cause: 'unsafe-selector' });
+      continue;
+    }
     if (!PATCHABLE.has(div.prop)) {
       unresolved.push({ ...div, cause: 'unpatchable-prop' });
       continue;
     }
-    const { selector, occurrence } = splitMatch(div.match);
+    // NOTE: occurrence > 0 needs :nth structural targeting we cannot derive
+    // deterministically from the identity key alone — occurrence 0 is the
+    // only emittable target (the common case). Routing higher occurrences
+    // here keeps plan.overrides an honest mirror of what renderPatchCss
+    // emits.
+    if (occurrence !== 0) {
+      unresolved.push({ ...div, cause: 'occurrence-ambiguous' });
+      continue;
+    }
     const key = `${selector}|${occurrence}|${div.prop}|${div.source}`;
     const existing = overrides.get(key);
     if (existing) {
@@ -121,11 +151,9 @@ export function renderPatchCss(plan: RepairPlan): string {
   const bare: string[] = [];
   const mobile: string[] = [];
   const desktop: string[] = [];
+  // Everything in plan.overrides is emitted — classification already routed
+  // unemittable divergences (unsafe selectors, occurrence > 0) to unresolved.
   for (const o of plan.overrides) {
-    // NOTE: occurrence > 0 needs :nth structural targeting we cannot derive
-    // deterministically from the identity key alone — scope to occurrence 0
-    // (the common case); others stay reported via the plan they came from.
-    if (o.occurrence !== 0) continue;
     const rule = `${o.selector} { ${o.prop}: ${o.value}; }`;
     const both = o.viewports.length === 2;
     if (both) bare.push(rule);
@@ -144,7 +172,10 @@ export function renderPatchCss(plan: RepairPlan): string {
 }
 
 /** Order-insensitive fingerprint of a divergence set — the loop's convergence
- * test (same fingerprint two rounds running → stop; patching is not helping). */
+ * test (same fingerprint two rounds running → stop; patching is not helping).
+ * Known limitation: the loop compares against the LAST round only, so an
+ * oscillation cycle longer than 1 round is not detected here — maxRounds is
+ * the bound that catches it. */
 export function divergenceFingerprint(divergences: Divergence[]): string {
   const keys = divergences
     .map((d) => `${d.match}|${d.viewport}|${d.kind}|${d.prop}|${d.source}|${d.replica}`)
