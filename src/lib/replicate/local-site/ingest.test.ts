@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
-import { ingestLocalSite } from './ingest.js';
+import { ingestLocalSite, slugFromRelPath } from './ingest.js';
 
 const FIXTURE_TMP = join(process.cwd(), '.tmp-test');
 
@@ -15,6 +15,16 @@ function makeSite(files: Record<string, string>): string {
   }
   return dir;
 }
+
+describe('slugFromRelPath', () => {
+  it('derives stable slugs from relative paths', () => {
+    expect(slugFromRelPath('index.html')).toBe('home');
+    expect(slugFromRelPath('about.html')).toBe('about');
+    expect(slugFromRelPath('blog/p.html')).toBe('blog-p');
+    expect(slugFromRelPath('blog/index.html')).toBe('blog');
+    expect(slugFromRelPath('blog/Index.html')).toBe('blog');
+  });
+});
 
 describe('ingestLocalSite', () => {
   it('enumerates html pages, derives slugs, extracts titles', () => {
@@ -38,6 +48,37 @@ describe('ingestLocalSite', () => {
     const dir = makeSite({ 'styles.css': 'body{}' });
     try {
       expect(() => ingestLocalSite(dir)).toThrow(/no html pages/i);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('throws on a slug collision between distinct files', () => {
+    const dir = makeSite({
+      'blog/p.html': '<html><head><title>Post</title></head><body><main>a</main></body></html>',
+      'blog-p.html': '<html><head><title>Other</title></head><body><main>b</main></body></html>',
+    });
+    try {
+      expect(() => ingestLocalSite(dir)).toThrow(/slug collision/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('skips symlinked entries (including cycles) without crashing', () => {
+    const dir = makeSite({
+      'index.html': '<html><head><title>Home</title></head><body><main>hi</main></body></html>',
+    });
+    try {
+      try {
+        // Circular link: dir/loop → .. (the parent contains dir itself).
+        symlinkSync('..', join(dir, 'loop'));
+      } catch {
+        // Platform forbids symlink creation — the cycle assertion is moot;
+        // ingest of the real files below still verifies.
+      }
+      const site = ingestLocalSite(dir);
+      expect(site.pages.map((p) => p.slug)).toEqual(['home']);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

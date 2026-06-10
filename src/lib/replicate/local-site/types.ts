@@ -1,5 +1,3 @@
-import type { CheerioAPI } from 'cheerio';
-
 export type SectionRole = 'body' | 'header' | 'nav' | 'footer';
 
 export interface LocalPage {
@@ -38,5 +36,3 @@ export interface NormalizeReportEntry {
   /** 1 = clean deterministic mapping; <1 = a fallback was used. */
   confidence: number;
 }
-
-export type { CheerioAPI };
