@@ -134,7 +134,15 @@ function parseGoogleFontFaces(css: string): ParsedGoogleFace[] {
 // Filename + download
 // ---------------------------------------------------------------------------
 
-function faceFileName(face: { family: string; weight: string; style: string; format: string }): string {
+/** Filename = sanitized URL basename. gstatic paths end in a unique hash per
+ * subset file, so every unicode-range subset keeps its own file — replacing
+ * the old family-weight naming that collapsed subsets onto one file and
+ * measurably changed glyph metrics (walrus parity probe: Fraunces 337px vs
+ * 284px for the same string). */
+function faceFileName(face: { family: string; weight: string; style: string; format: string; src: string }): string {
+  const base = face.src.split('?')[0].split('#')[0].split('/').pop() ?? '';
+  const sanitized = base.replace(/[^A-Za-z0-9._-]+/g, '');
+  if (sanitized && /\.[a-z0-9]+$/i.test(sanitized)) return sanitized;
   const stem = face.family.replace(/[^A-Za-z0-9]+/g, '');
   const italic = face.style === 'italic' ? '-italic' : '';
   const ext = face.format === 'woff' ? 'woff' : 'woff2';
@@ -151,6 +159,11 @@ export interface SelfHostGoogleFontsOpts {
 
 export interface SelfHostGoogleFontsResult {
   faces: LocalFontFace[];
+  /** The fetched Google CSS, verbatim (all subset @font-face blocks with their
+   * unicode-range descriptors intact), with each downloaded face URL rewritten
+   * to its theme-relative local path. Splicing THIS into the carried stylesheet
+   * reproduces the source's exact font set — metrics-identical rendering. */
+  localizedCss: string;
   errors: Array<{ url: string; error: string }>;
 }
 
@@ -168,11 +181,11 @@ export async function selfHostGoogleFonts(
   const destDir = join(opts.themeDir, fontsSubdir);
   const faces: LocalFontFace[] = [];
   const errors: SelfHostGoogleFontsResult['errors'] = [];
-  // css2 emits one @font-face per unicode-range SUBSET (latin, latin-ext, …)
-  // with identical family/weight/style — they'd all map to the same fileName.
-  // Keep only the first (Google orders the broadest/latin subsets usefully);
-  // without this, later subsets reuse the first file and push duplicate faces.
-  const seenFiles = new Set<string>();
+  const localizedParts: string[] = [];
+  // Dedup by source URL across css files — same subset referenced twice
+  // downloads (and localizes) once. Subsets themselves are all KEPT: each
+  // unicode-range file has distinct metrics-relevant content.
+  const downloaded = new Map<string, string>(); // src url → localPath
 
   for (const cssUrl of cssUrls) {
     let css: string;
@@ -188,32 +201,43 @@ export async function selfHostGoogleFonts(
       continue;
     }
 
+    let localized = css;
     for (const parsed of parseGoogleFontFaces(css)) {
-      const fileName = faceFileName(parsed);
-      if (seenFiles.has(fileName)) continue;
-      seenFiles.add(fileName);
-      const localPath = `${fontsSubdir}/${fileName}`;
-      const destFile = join(destDir, fileName);
       try {
-        // The face src comes from a THIRD-PARTY response body (the fetched
-        // CSS), not from the trusted local site — guard it before fetching.
-        // Throws SsrfBlockedError on private/internal hosts → errors[].
-        assertPublicHttpUrl(parsed.src);
-        if (!existsSync(destFile)) {
-          const res = await fetchFn(parsed.src, {
-            headers: { 'User-Agent': WOFF2_UA },
-            signal: AbortSignal.timeout(opts.timeoutMs ?? 30_000),
-          });
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
-          mkdirSync(destDir, { recursive: true });
-          writeFileSync(destFile, Buffer.from(await res.arrayBuffer()));
+        let localPath = downloaded.get(parsed.src);
+        if (!localPath) {
+          // The face src comes from a THIRD-PARTY response body (the fetched
+          // CSS), not from the trusted local site — guard it before fetching.
+          // Throws SsrfBlockedError on private/internal hosts → errors[].
+          assertPublicHttpUrl(parsed.src);
+          const fileName = faceFileName(parsed);
+          localPath = `${fontsSubdir}/${fileName}`;
+          const destFile = join(destDir, fileName);
+          if (!existsSync(destFile)) {
+            const res = await fetchFn(parsed.src, {
+              headers: { 'User-Agent': WOFF2_UA },
+              signal: AbortSignal.timeout(opts.timeoutMs ?? 30_000),
+            });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            mkdirSync(destDir, { recursive: true });
+            writeFileSync(destFile, Buffer.from(await res.arrayBuffer()));
+          }
+          downloaded.set(parsed.src, localPath);
+          faces.push({ ...parsed, localPath });
         }
-        faces.push({ ...parsed, localPath });
+        // Rewrite this face's URL in the verbatim css (all occurrences).
+        // The localized css is consumed from assets/css/source.css, so the
+        // url must be relative to THAT file's directory (../fonts/<file>),
+        // while LocalFontFace.localPath stays theme-root-relative for the
+        // scaffold's style.css emission.
+        const cssRelative = localPath.replace(/^assets\//, '../');
+        localized = localized.split(parsed.src).join(cssRelative);
       } catch (err) {
         errors.push({ url: parsed.src, error: (err as Error).message });
       }
     }
+    localizedParts.push(localized);
   }
 
-  return { faces, errors };
+  return { faces, localizedCss: localizedParts.join('\n\n'), errors };
 }

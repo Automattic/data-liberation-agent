@@ -31,7 +31,7 @@ import { captureScreenshots } from '../../lib/screenshot/screenshotter.js';
 import { compareScreenshotDirs } from '../../lib/screenshot/compare.js';
 import { buildLocalFoundation, extractCssColors, type PaletteAgg, type TypographyAgg, type BreakpointsAgg } from '../../lib/replicate/local-theme/foundation.js';
 import { extractGoogleFontCssUrls, selfHostGoogleFonts } from '../../lib/replicate/local-theme/google-fonts.js';
-import { collectSourceAssets } from '../../lib/replicate/local-theme/source-assets.js';
+import { collectSourceAssets, WP_COMPAT_CSS } from '../../lib/replicate/local-theme/source-assets.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -107,6 +107,7 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
   let capturedFonts: Parameters<typeof assembleLocalTheme>[0]['capturedFonts'];
   let footerBgToken: string | undefined;
   let footerTextToken: string | undefined;
+  let localizedFontCss = '';
   let designCaptured = false;
   const sourceCaptureDir = join(outputDir, 'source');
 
@@ -164,6 +165,11 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
       if (fontCssUrls.length > 0) {
         const hosted = await selfHostGoogleFonts(fontCssUrls, { themeDir: join(outputDir, 'theme') });
         capturedFonts = hosted.faces;
+        // Verbatim Google css (all unicode-range subsets, URLs localized) —
+        // spliced into the carried stylesheet so glyph metrics match the
+        // source exactly (the old one-file-per-weight collapse measurably
+        // narrowed Fraunces/Work Sans and shifted every wrap point).
+        localizedFontCss = hosted.localizedCss;
         for (const e of hosted.errors) warnings.push(`font self-host failed: ${e.url}: ${e.error}`);
       }
 
@@ -181,8 +187,14 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
   let carrySourceAssets: { css: string; js: string } | undefined;
   if (carryCss || carryJs) {
     const assets = collectSourceAssets(dir, site.pages.map((p) => ({ relPath: p.relPath, html: p.html })));
+    // Splice the localized Google-font css (verbatim subsets, local URLs)
+    // right after the compat layer — same cascade position the stripped
+    // @import occupied, so font resolution matches the source byte-for-byte.
+    const cssWithFonts = localizedFontCss
+      ? assets.css.replace(WP_COMPAT_CSS, WP_COMPAT_CSS + localizedFontCss + '\n\n')
+      : assets.css;
     carrySourceAssets = {
-      css: carryCss ? assets.css : '',
+      css: carryCss ? cssWithFonts : '',
       js: carryJs ? assets.js : '',
     };
   }

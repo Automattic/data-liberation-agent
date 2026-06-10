@@ -100,17 +100,25 @@ describe('selfHostGoogleFonts', () => {
       expect(result.errors).toEqual([]);
       expect(result.faces).toHaveLength(1);
       expect(result.faces[0].weight).toBe('100');
-      expect(result.faces[0].localPath).toBe('assets/fonts/Fraunces-100.woff2');
+      // Filenames are now the gstatic URL basename (unique per subset file).
+      expect(result.faces[0].localPath).toBe('assets/fonts/variable.woff2');
       expect(result.faces[0].localPath).not.toContain(' ');
       expect(existsSync(join(themeDir, result.faces[0].localPath))).toBe(true);
+      // The localized css keeps the block verbatim with the URL rewritten
+      // relative to assets/css/source.css.
+      expect(result.localizedCss).toContain('font-weight: 100 900');
+      expect(result.localizedCss).toContain('url(../fonts/variable.woff2)');
+      expect(result.localizedCss).not.toContain('gstatic.com');
     } finally {
       rmSync(themeDir, { recursive: true, force: true });
     }
   });
 
-  it('dedupes unicode-range subset blocks sharing family/weight to one face + one file', async () => {
+  it('keeps every unicode-range subset as its own localized file (metrics parity)', async () => {
     // Real css2 responses emit one @font-face PER SUBSET (latin, latin-ext, ...)
-    // with identical family/weight/style but distinct gstatic URLs.
+    // with identical family/weight/style but distinct gstatic URLs. Collapsing
+    // them to one file measurably changed glyph metrics (walrus probe:
+    // Fraunces 337px vs 284px) — every subset must survive verbatim.
     const SUBSET_CSS = `
 /* latin-ext */
 @font-face {
@@ -141,9 +149,16 @@ describe('selfHostGoogleFonts', () => {
     try {
       const result = await selfHostGoogleFonts([CSS2_URL], { themeDir, fetchImpl });
       expect(result.errors).toEqual([]);
-      expect(result.faces).toHaveLength(1);
-      expect(fontFetches).toHaveLength(1); // one download, not one per subset
-      expect(readdirSync(join(themeDir, 'assets/fonts'))).toEqual(['Fraunces-400.woff2']);
+      expect(result.faces).toHaveLength(2);          // one per subset file
+      expect(fontFetches).toHaveLength(2);           // each distinct URL downloaded
+      expect(readdirSync(join(themeDir, 'assets/fonts')).sort()).toEqual(['latin-ext.woff2', 'latin.woff2']);
+      // Verbatim localization: both blocks survive with unicode-range intact
+      // and URLs rewritten relative to assets/css/source.css.
+      expect(result.localizedCss).toContain('unicode-range: U+0100-024F');
+      expect(result.localizedCss).toContain('unicode-range: U+0000-00FF');
+      expect(result.localizedCss).toContain('url(../fonts/latin.woff2)');
+      expect(result.localizedCss).toContain('url(../fonts/latin-ext.woff2)');
+      expect(result.localizedCss).not.toContain('gstatic.com');
     } finally {
       rmSync(themeDir, { recursive: true, force: true });
     }
