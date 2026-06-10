@@ -255,12 +255,13 @@ export function emitSectionBlocks(section: Section): { markup: string; confidenc
   // keep matching the block DOM — core/group supports semantic tagNames and
   // serializes <section class="wp-block-group …"> (stage 1d parity).
   const tagPair = '"tagName":"section"';
-  // layout:default (flow): constrained injects a per-container max-width onto
-  // children (theme contentSize) that fought the source's own main{max-width}
-  // and wrapped lines early. The carried source CSS owns layout; flow adds no
-  // injected width or gap rules of consequence.
-  const layoutPair = '"layout":{"type":"default"}';
-  const attrs = blockAttrs([anchorPair, tagPair, layoutPair], cls);
+  // NO layout attribute at all: any layout type (constrained OR flow) makes WP
+  // emit per-container css — child max-widths, margin zeroing, blockGap — that
+  // fights the carried source rhythm (probe: replica h1 margin-bottom forced to
+  // 0, uniform 24px gaps replacing the source's 16px/1.5em cadence). Without
+  // the attr there is no is-layout-* class and no injected rules; the source
+  // stylesheet owns spacing entirely.
+  const attrs = blockAttrs([anchorPair, tagPair], cls);
   const divCls = ['wp-block-group', cls].filter(Boolean).join(' ');
   const markup =
     `<!-- wp:group${attrs} -->\n` +

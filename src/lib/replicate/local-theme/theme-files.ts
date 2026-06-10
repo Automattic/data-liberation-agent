@@ -58,9 +58,9 @@ export interface AssembleLocalThemeOpts {
 function noTitleTemplate(): string {
   return (
     `<!-- wp:template-part {"slug":"header","tagName":"header"} /-->\n\n` +
-    `<!-- wp:group {"tagName":"main","layout":{"type":"default"}} -->\n` +
+    `<!-- wp:group {"tagName":"main"} -->\n` +
     `<main class="wp-block-group">\n` +
-    `<!-- wp:post-content {"layout":{"type":"default"}} /-->\n` +
+    `<!-- wp:post-content /-->\n` +
     `</main>\n` +
     `<!-- /wp:group -->\n\n` +
     `<!-- wp:template-part {"slug":"footer","tagName":"footer"} /-->\n`
