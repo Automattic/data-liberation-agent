@@ -4,6 +4,7 @@ import * as cheerio from 'cheerio';
 import type { CheerioAPI } from 'cheerio';
 import { isTag, isText } from 'domhandler';
 import type { Element } from 'domhandler';
+import { escapeHtml } from './emit-blocks.js';
 import type { Section, SectionRole } from '../local-site/types.js';
 
 /** Non-rendering top-level tags that never become body sections. */
@@ -84,10 +85,13 @@ export function segmentPage(html: string): Section[] {
     } else if (isText(node)) {
       const text = node.data.trim();
       if (!text) continue;
-      // Wrap RAW text so the emitter has an element to map; the emitter
-      // re-parses and escapes on extraction (probed end-to-end: < & " survive
-      // correctly escaped in the final block markup).
-      const html = `<p>${text}</p>`;
+      // node.data is entity-DECODED — wrap it RE-ESCAPED so tag-shaped display
+      // text (a source showing "&lt;b&gt;bold&lt;/b&gt;") stays literal text
+      // when the emitter re-parses the wrapper, instead of becoming real
+      // markup (or, for "<script>…", getting eaten entirely). The emitter
+      // decodes and re-escapes on extraction, so the final block markup is
+      // identical for plain text and correct for tag-shaped text.
+      const html = `<p>${escapeHtml(text)}</p>`;
       sections.push({ id: hashId(html, ordinal), role: 'body', html });
       ordinal += 1;
     }

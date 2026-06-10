@@ -92,4 +92,17 @@ describe('composePage', () => {
     expect(blockMarkupRoundtrips(postContent).ok).toBe(true);
     expect(postContent).toContain('Tom &amp; Jerry &lt;3 &quot;quotes&quot; here');
   });
+
+  it('keeps tag-shaped loose display text literal (no re-parse into real markup)', () => {
+    const withTagText: LocalPage = {
+      ...page,
+      html: '<body><main>see &lt;b&gt;bold&lt;/b&gt;<section id="s"><p>x</p></section></main></body>',
+    };
+    const { postContent } = composePage(withTagText);
+    expect(blockMarkupRoundtrips(postContent).ok).toBe(true);
+    // The source DISPLAYS the text "<b>bold</b>" — it must survive as literal
+    // escaped text, not get re-parsed into an actual bold element.
+    expect(postContent).toContain('see &lt;b&gt;bold&lt;/b&gt;');
+    expect(postContent).not.toContain('<b>bold</b>');
+  });
 });
