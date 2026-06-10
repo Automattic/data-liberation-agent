@@ -110,6 +110,18 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
   let designCaptured = false;
   const sourceCaptureDir = join(outputDir, 'source');
 
+  // Deterministic parity captures: the source's reveal animations (html.js
+  // opacity/translate transitions) race the screenshot on BOTH sides, jittering
+  // pixelmatch scores run-to-run. Freeze all animation and force the revealed
+  // end-state symmetrically — the comparison measures design, not motion timing.
+  const freezeMotion = async (page: import('playwright').Page): Promise<void> => {
+    await page.addStyleTag({
+      content:
+        '*,*::before,*::after{transition:none!important;animation:none!important}' +
+        'html.js section{opacity:1!important;transform:none!important}',
+    });
+  };
+
   if (!skipDesign) {
     let server: Awaited<ReturnType<typeof startStaticServer>> | undefined;
     try {
@@ -123,6 +135,7 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
         primaryUrl: server.url,
         captureDesign: true,
         concurrency: 2,
+        prepareCapture: freezeMotion,
       });
       const readJson = <T>(name: string): T =>
         JSON.parse(readFileSync(join(sourceCaptureDir, name), 'utf8')) as T;
@@ -314,7 +327,13 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
       const replicaUrls = installed
         .filter((p) => p.postId != null)
         .map((p) => (p.slug === plan.homeSlug ? `${wpUrl}/` : `${wpUrl}/${p.slug}/`));
-      await captureScreenshots({ urls: replicaUrls, outputDir: replicaCaptureDir, primaryUrl: wpUrl, concurrency: 2 });
+      await captureScreenshots({
+        urls: replicaUrls,
+        outputDir: replicaCaptureDir,
+        primaryUrl: wpUrl,
+        concurrency: 2,
+        prepareCapture: freezeMotion,
+      });
       const comparison = await compareScreenshotDirs({
         originDir: join(sourceCaptureDir, 'screenshots'),
         replicaDir: join(replicaCaptureDir, 'screenshots'),
