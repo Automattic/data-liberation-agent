@@ -68,8 +68,21 @@ function noTitleTemplate(): string {
 /** functions.php block appended in carry mode — enqueue source assets after
  * the theme stylesheet + global styles, and add the html.js gate the source
  * reveal scripts expect. Priority 20 ensures it lands AFTER the default
- * wp_enqueue_scripts (10) and global styles injected by the block editor. */
-function carryEnqueueBlock(themeSlug: string): string {
+ * wp_enqueue_scripts (10) and global styles injected by the block editor.
+ *
+ * The html.js gate is emitted ONLY when source JS is actually carried
+ * (emitHtmlJsGate): reveal-gated source CSS hides sections behind html.js
+ * and relies on a source script (observer) to reveal them — adding the class
+ * with no script present would leave that content permanently hidden. */
+function carryEnqueueBlock(themeSlug: string, emitHtmlJsGate: boolean): string {
+  const htmlJsBlock = emitHtmlJsGate
+    ? `
+// Source reveal scripts gate on html.js (no-JS visitors keep content visible).
+add_action( 'wp_head', function () {
+    echo "<script>document.documentElement.classList.add('js');</script>";
+}, 0 );
+`
+    : '';
   return `
 // Stage 1d carry: the source site's own CSS/JS, adapted for the block DOM.
 // Enqueued at priority 20 so it lands AFTER global styles + theme style.
@@ -83,12 +96,7 @@ add_action( 'wp_enqueue_scripts', function () {
         wp_enqueue_script( '${themeSlug}-source', get_theme_file_uri( 'assets/js/source.js' ), array(), (string) filemtime( $js ), true );
     }
 }, 20 );
-
-// Source reveal scripts gate on html.js (no-JS visitors keep content visible).
-add_action( 'wp_head', function () {
-    echo "<script>document.documentElement.classList.add('js');</script>";
-}, 0 );
-`;
+${htmlJsBlock}`;
 }
 
 export function assembleLocalTheme(opts: AssembleLocalThemeOpts): ReplicaFile[] {
@@ -163,12 +171,13 @@ export function assembleLocalTheme(opts: AssembleLocalThemeOpts): ReplicaFile[] 
     }
 
     // 3. Append the enqueue block to functions.php (file_exists guards make
-    //    it safe even when only one of the two assets is non-empty).
+    //    it safe even when only one of the two assets is non-empty). The
+    //    html.js gate ships only alongside actual source JS (hasJS).
     const fIdx = withTemplates.findIndex((f) => f.relativePath === 'functions.php');
     if (fIdx >= 0) {
       withTemplates[fIdx] = {
         ...withTemplates[fIdx],
-        content: withTemplates[fIdx].content + carryEnqueueBlock(opts.themeSlug),
+        content: withTemplates[fIdx].content + carryEnqueueBlock(opts.themeSlug, hasJS),
       };
     }
   }

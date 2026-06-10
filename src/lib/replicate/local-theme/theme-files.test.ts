@@ -152,5 +152,27 @@ describe('assembleLocalTheme', () => {
       jsOnlyFiles.find((f) => f.relativePath === 'theme.json')?.content ?? '{}',
     ) as { styles?: unknown };
     expect(themeJson.styles).toBeDefined(); // styles kept — no css carry
+    // Symmetric lock: JS IS carried here, so the html.js gate must be present.
+    const fns = jsOnlyFiles.find((f) => f.relativePath === 'functions.php')?.content ?? '';
+    expect(fns).toContain("classList.add('js')");
+  });
+
+  it('css-only carry: no js file and NO html.js gate (gated CSS must not hide content)', () => {
+    // js: '' → no source script ships, so nothing would ever reveal sections
+    // that reveal-gated source CSS hides behind html.js. Emitting the gate
+    // anyway would permanently blank above-fold content.
+    const cssOnlyFiles = assembleLocalTheme({
+      siteTitle: 'Acme Co',
+      themeSlug: 'acme-local',
+      headerPart: HEADER,
+      footerPart: FOOTER,
+      carrySourceAssets: { css: '.html.js .s{opacity:0}', js: '' },
+    });
+    expect(cssOnlyFiles.some((f) => f.relativePath === 'assets/js/source.js')).toBe(false);
+    expect(cssOnlyFiles.some((f) => f.relativePath === 'assets/css/source.css')).toBe(true);
+    const fns = cssOnlyFiles.find((f) => f.relativePath === 'functions.php')?.content ?? '';
+    expect(fns).not.toContain("classList.add('js')");
+    // The CSS enqueue itself still lands.
+    expect(fns).toContain('assets/css/source.css');
   });
 });
