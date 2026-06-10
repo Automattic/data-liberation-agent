@@ -31,6 +31,11 @@ export const WP_COMPAT_CSS = `/* wp-compat: neutralize WP wrapper interference f
    had) and wraps tables in a margined <figure>. Zero-spec so source rules win. */
 :where(.wp-block-site-title) { margin: 0; }
 :where(figure.wp-block-table) { margin: 0; }
+/* Structural transparency for core/navigation: the source styles nav > a
+   directly, while WP renders nav > ul > li > a. Collapsing the list boxes
+   makes the anchors direct flex items of <nav>, so the source nav rules
+   (display/gap/wrap) drive the exact same geometry. */
+:where(nav.wp-block-navigation ul, nav.wp-block-navigation li) { display: contents; }
 `;
 
 const GOOGLE_IMPORT_RE = /@import\s+url\(\s*['"]?https:\/\/fonts\.googleapis\.com[^)]*\)\s*;?/g;

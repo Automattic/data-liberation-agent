@@ -128,10 +128,15 @@ function emitChild($: CheerioAPI, el: Element): ChildResult {
     const cls = classNameOf($el);
     const buttonAttrs = blockAttrs([], cls);
     const divCls = ['wp-block-button', cls].filter(Boolean).join(' ');
+    // Source classes ride on the INNER anchor too: the source styles the
+    // anchor itself (a.button { … }), so carried CSS must match the real <a>.
+    // (Supersedes the earlier wrapper-only rule, which was tokens-path
+    // reasoning — under carry, anchor selectors are the parity mechanism.)
+    const aCls = ['wp-block-button__link', 'wp-element-button', cls].filter(Boolean).join(' ');
     return {
       markup:
         `<!-- wp:buttons -->\n<div class="wp-block-buttons">` +
-        `<!-- wp:button${buttonAttrs} -->\n<div class="${escapeHtml(divCls)}"><a class="wp-block-button__link wp-element-button" href="${href}">${label}</a></div>\n<!-- /wp:button -->` +
+        `<!-- wp:button${buttonAttrs} -->\n<div class="${escapeHtml(divCls)}"><a class="${escapeHtml(aCls)}" href="${href}">${label}</a></div>\n<!-- /wp:button -->` +
         `</div>\n<!-- /wp:buttons -->`,
       clean: true,
     };

@@ -187,9 +187,10 @@ describe('emitSectionBlocks', () => {
     expect(markup).toContain('"className":"pic"');
     expect(markup).toContain('"className":"list-x"');
     expect(markup).toContain('"className":"button cta"');     // on wp:button
-    // Inner <a> keeps WP's own classes ONLY — source classes live on the
-    // wrapper div, never on the anchor (purity lock).
-    expect(markup).not.toMatch(/button cta[^"]*" href/);
+    // Stage 1d: source classes ride the INNER anchor too — the source styles
+    // a.button{…} directly, so carried CSS must match the real <a>. WP's own
+    // classes stay first (serializer shape).
+    expect(markup).toContain('class="wp-block-button__link wp-element-button button cta" href');
   });
 
   it('escapes double quotes in class attrs landing in HTML', () => {
