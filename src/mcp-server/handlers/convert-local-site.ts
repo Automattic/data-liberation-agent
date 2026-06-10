@@ -29,7 +29,7 @@ import { installPost } from '../../lib/streaming/post-install.js';
 import { startStaticServer } from '../../lib/replicate/local-site/static-server.js';
 import { captureScreenshots } from '../../lib/screenshot/screenshotter.js';
 import { compareScreenshotDirs } from '../../lib/screenshot/compare.js';
-import { buildLocalFoundation, type PaletteAgg, type TypographyAgg, type BreakpointsAgg } from '../../lib/replicate/local-theme/foundation.js';
+import { buildLocalFoundation, extractCssColors, type PaletteAgg, type TypographyAgg, type BreakpointsAgg } from '../../lib/replicate/local-theme/foundation.js';
 import { extractGoogleFontCssUrls, selfHostGoogleFonts } from '../../lib/replicate/local-theme/google-fonts.js';
 
 const execFileAsync = promisify(execFile);
@@ -120,20 +120,27 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
       });
       const readJson = <T>(name: string): T =>
         JSON.parse(readFileSync(join(sourceCaptureDir, name), 'utf8')) as T;
-      const local = buildLocalFoundation({
-        palette: readJson<PaletteAgg>('palette.json'),
-        typography: readJson<TypographyAgg>('typography.json'),
-        breakpoints: readJson<BreakpointsAgg>('breakpoints.json'),
-      });
-      foundation = local.foundation;
-      footerBgToken = local.footerBgToken;
-      footerTextToken = local.footerTextToken;
-
-      // Google Fonts: scan each page's HTML plus any .css files in the site dir.
+      // Source CSS/HTML text serves two consumers: hex-literal accent
+      // candidates for the foundation (the aggregator samples CONTAINER
+      // backgrounds only, so an accent living on a.button never reaches
+      // palette.json — but we own the authored CSS) and Google-Fonts css2
+      // link discovery below.
       const cssSources = site.pages.map((p) => p.html);
       for (const f of readdirSync(dir)) {
         if (f.endsWith('.css')) cssSources.push(readFileSync(join(dir, f), 'utf8'));
       }
+      const local = buildLocalFoundation(
+        {
+          palette: readJson<PaletteAgg>('palette.json'),
+          typography: readJson<TypographyAgg>('typography.json'),
+          breakpoints: readJson<BreakpointsAgg>('breakpoints.json'),
+        },
+        { cssColors: extractCssColors(cssSources) },
+      );
+      foundation = local.foundation;
+      footerBgToken = local.footerBgToken;
+      footerTextToken = local.footerTextToken;
+
       const fontCssUrls = extractGoogleFontCssUrls(cssSources);
       if (fontCssUrls.length > 0) {
         const hosted = await selfHostGoogleFonts(fontCssUrls, { themeDir: join(outputDir, 'theme') });

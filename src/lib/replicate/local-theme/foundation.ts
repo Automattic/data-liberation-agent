@@ -65,11 +65,38 @@ function hexToHsl(hex: string): { h: number; s: number; l: number } | null {
 
 const URL_FLOOR_PCT = 0.5;
 
-export function buildLocalFoundation(aggs: {
-  palette: PaletteAgg;
-  typography: TypographyAgg;
-  breakpoints: BreakpointsAgg;
-}): LocalFoundationResult {
+export interface CssColorCount {
+  hex: string;
+  count: number;
+}
+
+/** Count hex color literals (#rgb/#rrggbb, normalized to 6-digit lowercase) in CSS text, ordered desc by occurrences. */
+export function extractCssColors(cssSources: string[]): CssColorCount[] {
+  const counts = new Map<string, number>();
+  // 6-digit alternative first so #aabbcc isn't half-eaten as the 3-digit form;
+  // the trailing \b rejects 4/8-digit (alpha) hexes and longer idents. Raw
+  // matches — comments are NOT stripped: deterministic, and a stray commented
+  // literal only inflates a candidate count, never invents a color.
+  const re = /#([0-9a-f]{6}|[0-9a-f]{3})\b/gi;
+  for (const src of cssSources) {
+    for (const m of src.matchAll(re)) {
+      const raw = m[1].toLowerCase();
+      const hex = raw.length === 3 ? `#${raw[0]}${raw[0]}${raw[1]}${raw[1]}${raw[2]}${raw[2]}` : `#${raw}`;
+      counts.set(hex, (counts.get(hex) ?? 0) + 1);
+    }
+  }
+  // Stable sort: count desc; ties keep first-seen order (Map preserves insertion).
+  return [...counts.entries()].map(([hex, count]) => ({ hex, count })).sort((a, b) => b.count - a.count);
+}
+
+export function buildLocalFoundation(
+  aggs: {
+    palette: PaletteAgg;
+    typography: TypographyAgg;
+    breakpoints: BreakpointsAgg;
+  },
+  opts?: { cssColors?: CssColorCount[] },
+): LocalFoundationResult {
   const { palette, typography, breakpoints } = aggs;
   const floor = Math.max(1, Math.ceil((palette.sampledUrls || 1) * URL_FLOOR_PCT));
   const usable = palette.colors
@@ -95,14 +122,35 @@ export function buildLocalFoundation(aggs: {
   const surfaceColor = isDark ? darkest : lightest;
   const textColor = isDark ? lightest : darkest;
 
+  // Accent gate: saturated, mid-lightness, not one of the chosen poles.
+  const accentGate = (c: { hex: string; hsl: { h: number; s: number; l: number } }): boolean =>
+    c.hsl.s >= 0.35 &&
+    c.hsl.l >= 0.25 &&
+    c.hsl.l <= 0.7 &&
+    c.hex.toLowerCase() !== darkest.toLowerCase() &&
+    c.hex.toLowerCase() !== lightest.toLowerCase();
+
+  // CSS-literal candidates supplement the ACCENT pick only: the screenshot
+  // aggregator samples CONTAINER backgrounds (body/header/main/footer/section/
+  // div), so an accent living purely on small elements (a.button) never
+  // reaches palette.json — but on the owned-source path the designer's palette
+  // is literal in styles.css. Literals bypass the urls floor (authored, not
+  // sampled noise) yet rank AFTER every aggregate candidate: a sampled color
+  // was actually rendered, a literal might be dead code. Surface/text poles,
+  // breakpoints, and families stay aggregate-only — containers capture those.
+  const cssCandidates = (opts?.cssColors ?? [])
+    .map((c) => ({ hex: c.hex, count: c.count, hsl: hexToHsl(c.hex) }))
+    .filter((c): c is { hex: string; count: number; hsl: { h: number; s: number; l: number } } => c.hsl !== null);
+
   // Fallback `?? textColor` keeps the accent CONTRASTING the surface on both
   // orientations: light sites textColor === darkest (same pick as before);
   // dark monochrome sites would otherwise get accent === page bg — and the
   // button (bg=accent, text=surface pole) would render invisible.
   const accent =
-    usable
-      .filter((c) => c.hsl.s >= 0.35 && c.hsl.l >= 0.25 && c.hsl.l <= 0.7 && c.hex !== darkest && c.hex !== lightest)
-      .sort((a, b) => b.count - a.count)[0]?.hex ?? textColor;
+    [
+      ...usable.filter(accentGate).sort((a, b) => b.count - a.count),
+      ...cssCandidates.filter(accentGate).sort((a, b) => b.count - a.count),
+    ][0]?.hex ?? textColor;
 
   const topFamily = (selector: string): string | undefined =>
     typography.bySelector[selector]?.slice().sort((a, b) => b.urls - a.urls)[0]?.fontFamily;

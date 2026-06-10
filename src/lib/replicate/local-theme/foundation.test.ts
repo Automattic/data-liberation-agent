@@ -1,6 +1,6 @@
 // src/lib/replicate/local-theme/foundation.test.ts
 import { describe, it, expect } from 'vitest';
-import { buildLocalFoundation } from './foundation.js';
+import { buildLocalFoundation, extractCssColors } from './foundation.js';
 
 const palette = {
   version: 1 as const,
@@ -131,5 +131,86 @@ describe('buildLocalFoundation', () => {
     expect(empty.foundation.color?.text?.default?.value).toBe('#111111');
     expect(empty.foundation.color?.surface?.base?.value).toBe('#ffffff');
     expect(empty.foundation.typography?.families?.body?.value).toBe('system-ui, sans-serif');
+  });
+
+  it('picks a css-literal accent when the aggregator only saw container poles', () => {
+    // Walrus-real shape: the screenshot aggregator samples CONTAINER
+    // backgrounds, so the coral that lives only on a.button never reaches
+    // palette.json — but it is literal in the authored CSS.
+    const real = buildLocalFoundation(
+      {
+        palette: {
+          version: 1,
+          sampledUrls: 1,
+          colors: [
+            { hex: '#f7f2e9', count: 2, urls: 1 }, // cream containers
+            { hex: '#0e2a30', count: 1, urls: 1 }, // ink footer band
+          ],
+        },
+        typography: { version: 1, sampledUrls: 1, bySelector: {} },
+        breakpoints: { version: 1, sampledUrls: 1, minWidth: [], maxWidth: [] },
+      },
+      {
+        cssColors: [
+          { hex: '#e2573b', count: 6 }, // coral — saturated, not a pole
+          { hex: '#135e6b', count: 4 }, // teal — l=0.247, below gate
+          { hex: '#f7f2e9', count: 9 }, // cream — lightest pole, excluded
+        ],
+      },
+    );
+    expect(real.foundation.color?.accent?.primary?.value).toBe('#e2573b');
+    expect(real.foundation.components?.button?.background).toBe('#e2573b');
+  });
+
+  it('prefers an aggregate-sampled accent over css literals', () => {
+    const r = buildLocalFoundation(
+      {
+        palette: {
+          version: 1,
+          sampledUrls: 4,
+          colors: [
+            { hex: '#f7f2e9', count: 400, urls: 4 },
+            { hex: '#0e2a30', count: 380, urls: 4 },
+            { hex: '#d04030', count: 50, urls: 4 }, // sampled saturated — actually rendered
+          ],
+        },
+        typography: { version: 1, sampledUrls: 4, bySelector: {} },
+        breakpoints: { version: 1, sampledUrls: 4, minWidth: [], maxWidth: [] },
+      },
+      { cssColors: [{ hex: '#00aa88', count: 100 }] }, // literal, higher count — still loses
+    );
+    expect(r.foundation.color?.accent?.primary?.value).toBe('#d04030');
+  });
+
+  it('keeps the textColor fallback when neither aggregates nor css literals are saturated', () => {
+    const r = buildLocalFoundation(
+      {
+        palette: {
+          version: 1,
+          sampledUrls: 4,
+          colors: [
+            { hex: '#0a0a0a', count: 400, urls: 4 },
+            { hex: '#2a2a2a', count: 100, urls: 4 },
+          ],
+        },
+        typography: { version: 1, sampledUrls: 4, bySelector: {} },
+        breakpoints: { version: 1, sampledUrls: 4, minWidth: [], maxWidth: [] },
+      },
+      { cssColors: [{ hex: '#333333', count: 8 }] }, // achromatic literal — no candidate
+    );
+    expect(r.foundation.color?.accent?.primary?.value).toBe('#2a2a2a'); // textColor pole
+  });
+});
+
+describe('extractCssColors', () => {
+  it('counts and normalizes hex literals, ordered desc by occurrences', () => {
+    expect(extractCssColors(['a{color:#E2573B} .x{background:#e2573b} .y{border-color:#fff}'])).toEqual([
+      { hex: '#e2573b', count: 2 },
+      { hex: '#ffffff', count: 1 },
+    ]);
+  });
+
+  it('returns empty for sources without hex literals', () => {
+    expect(extractCssColors(['body{color:red}', ''])).toEqual([]);
   });
 });
