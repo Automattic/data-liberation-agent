@@ -94,12 +94,16 @@ function makeSite(): string {
     // Footer anchor sits INSIDE the <p> — bare-<a> direct children hit emitChild's
     // catch-all downgrade (href dropped; known limitation, tracked separately) and
     // would mask the permalink-rewrite wiring this fixture exists to prove.
-    '<html><head><title>Home</title></head><body><header><nav><a href="about.html">About</a></nav></header><main><section id="hero"><h1>Hi</h1></section></main><footer><p>foot <a href="about.html">About</a></p></footer></body></html>',
+    // Stage 1d: includes <link> + <script> so collectSourceAssets has linked assets to carry.
+    '<html><head><title>Home</title><link rel="stylesheet" href="styles.css"></head><body><header><nav><a href="about.html">About</a></nav></header><main><section id="hero"><h1>Hi</h1></section></main><footer><p>foot <a href="about.html">About</a></p></footer><script src="site.js"></script></body></html>',
   );
   writeFileSync(
     join(dir, 'about.html'),
     '<html><head><title>About</title></head><body><main><section id="who"><h2>Who</h2><p>Us</p></section></main></body></html>',
   );
+  // Stage 1d carry: linked CSS + JS the collector picks up from the index.html document order.
+  writeFileSync(join(dir, 'styles.css'), 'body { background: #f7f2e9; }\n.hero h1 { font-size: 4rem; }');
+  writeFileSync(join(dir, 'site.js'), "document.documentElement.classList.add('js');");
   return dir;
 }
 
@@ -263,6 +267,51 @@ describe('convertLocalSiteHandler', () => {
     expect(res.isError).toBe(true);
   });
 
+  it('carries source css/js into the installed theme by default', async () => {
+    const dir = makeSite(); // includes styles.css + site.js
+    const sitePath = makeStudioSite();
+    const outDir = mkdtempSync(join(FIXTURE_TMP, 'cls-carry-'));
+    try {
+      const res = await convertLocalSiteHandler(
+        { dir, studioSitePath: sitePath, outputDir: outDir, themeSlug: 'acme-local', skipDesign: true },
+        ctx,
+      );
+      expect(res.isError).toBeFalsy();
+      const summary = JSON.parse(res.content[0].text) as { carried: { css: boolean; js: boolean } };
+      expect(summary.carried).toEqual({ css: true, js: true });
+      const themeDir = join(sitePath, 'wp-content', 'themes', 'acme-local');
+      expect(existsSync(join(themeDir, 'assets', 'css', 'source.css'))).toBe(true);
+      expect(existsSync(join(themeDir, 'assets', 'js', 'source.js'))).toBe(true);
+      // carry mode strips theme.json styles — source CSS is the design authority
+      const themeJson = JSON.parse(readFileSync(join(themeDir, 'theme.json'), 'utf8')) as { styles?: unknown };
+      expect(themeJson.styles).toBeUndefined();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(sitePath, { recursive: true, force: true });
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
+  it('carryCss false skips the carry (tokens-only theme)', async () => {
+    const dir = makeSite();
+    const sitePath = makeStudioSite();
+    const outDir = mkdtempSync(join(FIXTURE_TMP, 'cls-nocarry-'));
+    try {
+      const res = await convertLocalSiteHandler(
+        { dir, studioSitePath: sitePath, outputDir: outDir, themeSlug: 'acme-local', skipDesign: true, carryCss: false },
+        ctx,
+      );
+      expect(res.isError).toBeFalsy();
+      const summary = JSON.parse(res.content[0].text) as { carried: { css: boolean; js: boolean } };
+      expect(summary.carried.css).toBe(false);
+      expect(existsSync(join(sitePath, 'wp-content', 'themes', 'acme-local', 'assets', 'css', 'source.css'))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(sitePath, { recursive: true, force: true });
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
   it('runs design capture + compare and reports parity', async () => {
     const dir = makeSite();
     const sitePath = makeStudioSite();
@@ -274,7 +323,13 @@ describe('convertLocalSiteHandler', () => {
       );
       expect(res.isError).toBeFalsy();
       const summary = JSON.parse(res.content[0].text) as {
-        parity?: { avgDesktop: number; avgMobile: number; pages: unknown[] };
+        parity?: {
+          floor: number;
+          allPass: boolean;
+          avgDesktop: number;
+          avgMobile: number;
+          pages: Array<{ pathname: string; desktop: number | null; mobile: number | null; passes: boolean }>;
+        };
         designCaptured?: boolean;
       };
       expect(summary.designCaptured).toBe(true);
@@ -293,6 +348,12 @@ describe('convertLocalSiteHandler', () => {
       ) as { settings?: { color?: { palette?: Array<{ slug: string; color: string }> } } };
       expect((themeJson.settings?.color?.palette ?? []).some((p) => p.color === '#e2573b')).toBe(true);
       expect(existsSync(join(outDir, 'parity-report.json'))).toBe(true);
+      // Parity floor verdict (stage 1d): mock scores 0.91/0.88/0.95/0.9 are all below
+      // the 0.99 floor — every page reports passes:false and allPass is false.
+      expect(summary.parity?.floor).toBe(0.99);
+      expect(summary.parity?.allPass).toBe(false);
+      expect(summary.parity?.pages.every((p) => typeof p.passes === 'boolean')).toBe(true);
+      expect(summary.parity?.pages.every((p) => p.passes === false)).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
       rmSync(sitePath, { recursive: true, force: true });

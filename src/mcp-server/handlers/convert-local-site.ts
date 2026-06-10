@@ -31,6 +31,7 @@ import { captureScreenshots } from '../../lib/screenshot/screenshotter.js';
 import { compareScreenshotDirs } from '../../lib/screenshot/compare.js';
 import { buildLocalFoundation, extractCssColors, type PaletteAgg, type TypographyAgg, type BreakpointsAgg } from '../../lib/replicate/local-theme/foundation.js';
 import { extractGoogleFontCssUrls, selfHostGoogleFonts } from '../../lib/replicate/local-theme/google-fonts.js';
+import { collectSourceAssets } from '../../lib/replicate/local-theme/source-assets.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -62,6 +63,11 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
 
   const skipDesign = args.skipDesign === true;
   const skipCompare = args.skipCompare === true;
+  // Stage 1d: carry the source site's own CSS/JS into the theme so the class-
+  // preserving block DOM renders under the designer's stylesheet. Default ON
+  // (identical replication goal); pass carryCss:false / carryJs:false to opt out.
+  const carryCss = args.carryCss !== false;
+  const carryJs = args.carryJs !== false;
   // Replica base URL: explicit arg wins; otherwise auto-resolved AFTER theme
   // activation via `wp option get siteurl` (see below) — Studio assigns random
   // ports per site, so a hardcoded default would capture the WRONG site and
@@ -171,8 +177,20 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
     textToken: footerTextToken,
   });
 
+  // Stage 1d: collect source CSS/JS from disk (link-driven, document order).
+  // Runs regardless of skipDesign — assets live on disk, no Playwright needed.
+  // When both flags are off, carrySourceAssets stays undefined (tokens-only theme).
+  let carrySourceAssets: { css: string; js: string } | undefined;
+  if (carryCss || carryJs) {
+    const assets = collectSourceAssets(dir, site.pages.map((p) => ({ relPath: p.relPath, html: p.html })));
+    carrySourceAssets = {
+      css: carryCss ? assets.css : '',
+      js: carryJs ? assets.js : '',
+    };
+  }
+
   // Theme assembly + write + activate.
-  const themeFiles = assembleLocalTheme({ siteTitle, themeSlug, headerPart, footerPart, foundation, capturedFonts });
+  const themeFiles = assembleLocalTheme({ siteTitle, themeSlug, headerPart, footerPart, foundation, capturedFonts, carrySourceAssets });
   let themeWritten = 0;
   try {
     // assetSourceDir carries downloaded fonts (woff2) into the live theme so the
@@ -274,7 +292,16 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
   // parent hierarchy mirroring relPath (later stage). Nested pages appear in
   // source capture but produce missing-replica rows in the comparison output —
   // visible, not silent.
-  let parity: { avgDesktop: number; avgMobile: number; pages: Array<{ pathname: string; desktop: number | null; mobile: number | null }> } | undefined;
+  const PARITY_FLOOR = 0.99;
+  let parity:
+    | {
+        floor: number;
+        allPass: boolean;
+        avgDesktop: number;
+        avgMobile: number;
+        pages: Array<{ pathname: string; desktop: number | null; mobile: number | null; passes: boolean }>;
+      }
+    | undefined;
   if (!skipDesign && !skipCompare && designCaptured) {
     try {
       const replicaCaptureDir = join(outputDir, 'replica');
@@ -289,14 +316,22 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
       const scores = (v: 'desktop' | 'mobile'): number[] =>
         comparison.results.map((r) => r[v]?.score).filter((s): s is number => typeof s === 'number');
       const avg = (xs: number[]): number => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0);
+      const parityPages = comparison.results.map((r) => {
+        const d = r.desktop?.score ?? null;
+        const m = r.mobile?.score ?? null;
+        return {
+          pathname: r.pathname,
+          desktop: d,
+          mobile: m,
+          passes: d !== null && m !== null && d >= PARITY_FLOOR && m >= PARITY_FLOOR,
+        };
+      });
       parity = {
+        floor: PARITY_FLOOR,
+        allPass: parityPages.every((p) => p.passes),
         avgDesktop: avg(scores('desktop')),
         avgMobile: avg(scores('mobile')),
-        pages: comparison.results.map((r) => ({
-          pathname: r.pathname,
-          desktop: r.desktop?.score ?? null,
-          mobile: r.mobile?.score ?? null,
-        })),
+        pages: parityPages,
       };
       // Atomic write (tmp + rename) mirrors normalize-report convention.
       const reportPath = join(outputDir, 'parity-report.json');
@@ -307,6 +342,12 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
       warnings.push(`compare failed: ${(err as Error).message}`);
     }
   }
+
+  // Truthful carry summary: css=true only when the CSS file was actually written;
+  // js=true only when the JS file was actually written. WP_COMPAT_CSS is always
+  // non-empty so carryCss:true always yields css:true when the flag is on.
+  const carriedCss = carryCss && (carrySourceAssets?.css ?? '').trim().length > 0;
+  const carriedJs = carryJs && (carrySourceAssets?.js ?? '').trim().length > 0;
 
   return ctx.textResult({
     pages: plan.items.length,
@@ -319,6 +360,7 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
     themeWritten,
     frontPageSet,
     designCaptured,
+    carried: { css: carriedCss, js: carriedJs },
     ...(parity !== undefined ? { parity } : {}),
     warnings,
   });

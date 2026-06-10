@@ -685,6 +685,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           skipDesign: { type: 'boolean', description: 'Skip source design capture (tokens/fonts) and compare; theme uses default styling.' },
           skipCompare: { type: 'boolean', description: 'Skip the WP-replica screenshot + parity compare stage.' },
           wpUrl: { type: 'string', description: 'Base URL for replica capture. Default: auto-resolved via wp option get siteurl (Studio assigns random ports); explicit value overrides.' },
+          carryCss: { type: 'boolean', description: 'Carry the source stylesheet into the theme (adapted for the block DOM). Default true — the stage-1d parity mechanism; tokens-only theming when false.' },
+          carryJs: { type: 'boolean', description: 'Carry the source scripts into the theme (enqueued footer, html.js gate added). Default true for identical replication.' },
         },
         required: ['dir', 'studioSitePath'],
       },
