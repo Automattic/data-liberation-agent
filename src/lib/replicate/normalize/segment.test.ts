@@ -66,6 +66,18 @@ describe('segmentPage', () => {
     expect(navs[0].html).toContain('main-nav');
   });
 
+  it('avoids dedup suffix collision with a pre-existing literal id', () => {
+    const html = `<main>
+      <section id="card-2"><p>Literal</p></section>
+      <section class="card"><p>One</p></section>
+      <section class="card"><p>Two</p></section>
+    </main>`;
+    const body = segmentPage(html).filter((s) => s.role === 'body');
+    // The second class-derived "card" must skip the taken "card-2" slot.
+    expect(body.map((s) => s.id)).toEqual(['card-2', 'card', 'card-3']);
+    expect(new Set(body.map((s) => s.id)).size).toBe(body.length);
+  });
+
   it('emits <main> itself as one body section when it has only loose children', () => {
     const html = '<body><main><h1>Welcome</h1><p>Intro para</p></main></body>';
     const body = segmentPage(html).filter((s) => s.role === 'body');

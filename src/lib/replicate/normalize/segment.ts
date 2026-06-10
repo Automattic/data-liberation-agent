@@ -72,13 +72,22 @@ export function segmentPage(html: string): Section[] {
   // Dedup duplicate body-section ids with ordinal suffixes (deterministic,
   // DOM order — matches the media filename-collision convention). Two
   // class="card" sections are normal; a silent pageContent[id] overwrite
-  // downstream is not.
+  // downstream is not. The `used` set is seeded with ALL body ids so a
+  // generated suffix never collides with a pre-existing literal id (e.g. a
+  // source <section id="card-2"> alongside two class="card" sections).
+  const used = new Set(sections.filter((s) => s.role === 'body').map((s) => s.id));
   const seen = new Map<string, number>();
   for (const s of sections) {
     if (s.role !== 'body') continue;
     const count = (seen.get(s.id) ?? 0) + 1;
     seen.set(s.id, count);
-    if (count > 1) s.id = `${s.id}-${count}`;
+    if (count > 1) {
+      let n = count;
+      let candidate = `${s.id}-${n}`;
+      while (used.has(candidate)) candidate = `${s.id}-${++n}`;
+      used.add(candidate);
+      s.id = candidate;
+    }
   }
 
   return sections;
