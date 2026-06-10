@@ -13,6 +13,7 @@
 //
 import { buildThemeScaffold } from '../theme-scaffold.js';
 import type { ReplicaFile } from '../../preview/types.js';
+import type { LocalFontFace } from '../font-capture.js';
 
 /** Minimal foundation — all DesignFoundation fields are optional; this sets
  *  just enough for buildThemeScaffold to emit a valid theme.json palette/font
@@ -31,6 +32,14 @@ export interface AssembleLocalThemeOpts {
   themeSlug: string;
   headerPart: string;
   footerPart: string;
+  /** Captured design foundation (from buildLocalFoundation). Defaults to the minimal foundation. */
+  foundation?: Parameters<typeof buildThemeScaffold>[0]['foundation'];
+  /** Self-hosted fonts captured from the source site — emitted as @font-face + theme.json fontFamilies. */
+  capturedFonts?: LocalFontFace[];
+  /** Footer background token slug (e.g. 'surface-inverse'). Defaults to scaffold's own default. */
+  footerBgToken?: string;
+  /** Footer text color token slug (e.g. 'text-inverse'). Defaults to scaffold's own default. */
+  footerTextToken?: string;
 }
 
 /** No-title page template: header part → post-content → footer part.
@@ -51,9 +60,12 @@ function noTitleTemplate(): string {
 
 export function assembleLocalTheme(opts: AssembleLocalThemeOpts): ReplicaFile[] {
   const base = buildThemeScaffold({
-    foundation: DEFAULT_LOCAL_FOUNDATION,
+    foundation: opts.foundation ?? DEFAULT_LOCAL_FOUNDATION,
     themeSlug: opts.themeSlug,
     siteTitle: opts.siteTitle,
+    capturedFonts: opts.capturedFonts,
+    footerBgToken: opts.footerBgToken,
+    footerTextToken: opts.footerTextToken,
   });
 
   // Swap scaffold-generated chrome parts with the locally-built versions.
