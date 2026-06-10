@@ -2,8 +2,12 @@
 import { createHash } from 'node:crypto';
 import * as cheerio from 'cheerio';
 import type { CheerioAPI } from 'cheerio';
+import { isTag, isText } from 'domhandler';
 import type { Element } from 'domhandler';
 import type { Section, SectionRole } from '../local-site/types.js';
+
+/** Non-rendering top-level tags that never become body sections. */
+const SKIP_TAGS = new Set(['script', 'style', 'link', 'template', 'noscript']);
 
 /** Slugify a short text run for use in an id. */
 function textSlug(text: string): string {
@@ -13,6 +17,12 @@ function textSlug(text: string): string {
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
     .slice(0, 40);
+}
+
+/** Hash-branch id — shared by stableId's fallback and synthetic text sections. */
+function hashId(html: string, ordinal: number): string {
+  const hash = createHash('sha1').update(html).digest('hex').slice(0, 8);
+  return `section-${hash}-${ordinal}`;
 }
 
 /**
@@ -29,20 +39,23 @@ function stableId($: CheerioAPI, el: Element, ordinal: number): string {
   if (slug) return slug;
   const cls = ($el.attr('class') ?? '').split(/\s+/).filter(Boolean)[0];
   if (cls) return cls;
-  const hash = createHash('sha1')
-    .update($.html(el) ?? '')
-    .digest('hex')
-    .slice(0, 8);
-  return `section-${hash}-${ordinal}`;
+  return hashId($.html(el) ?? '', ordinal);
 }
 
 export function segmentPage(html: string): Section[] {
   const $ = cheerio.load(html);
   const sections: Section[] = [];
 
+  // Track the exact elements captured as chrome so the body iteration (which
+  // walks ALL top-level nodes when there is no <main>) never double-captures
+  // them as body sections.
+  const chromeEls = new Set<Element>();
   const pushChrome = (selector: string, role: SectionRole): void => {
     const el = $(selector).first();
-    if (el.length) sections.push({ id: role, role, html: $.html(el) ?? '' });
+    if (el.length) {
+      chromeEls.add(el.get(0) as Element);
+      sections.push({ id: role, role, html: $.html(el) ?? '' });
+    }
   };
   // Strict body-direct landmarks only. A comma-fallback (bare `header`) would
   // grab nested landmarks — e.g. an <article>'s own <header> — misclassifying
@@ -55,18 +68,30 @@ export function segmentPage(html: string): Section[] {
 
   const main = $('main').first();
   const container = main.length ? main : $('body');
+  // One uniform rule: EVERY top-level node of the container becomes a body
+  // section — wrapper elements (section/article/div) AND loose content
+  // (figure/h1/p/img/table/…) AND nonempty text nodes. The old
+  // children('section, article, div') filter silently dropped mixed loose
+  // children with no diagnostic ("body = top-level children of main",
+  // never-lose-content).
   let ordinal = 0;
-  container.children('section, article, div').each((_, el) => {
-    sections.push({ id: stableId($, el as Element, ordinal), role: 'body', html: $.html(el) ?? '' });
-    ordinal += 1;
-  });
-
-  // No-silent-content-loss fallback: a <main> whose children are all loose
-  // content (h1/p/img — no section/article/div wrappers) matched nothing
-  // above. Emit <main> itself as ONE body section rather than dropping the
-  // page body. Only the main-exists case; a wrapper-less <body> stays as-is.
-  if (ordinal === 0 && main.length && container.children().length > 0) {
-    sections.push({ id: stableId($, main.get(0) as Element, 0), role: 'body', html: $.html(main) ?? '' });
+  for (const node of container.contents().get()) {
+    if (isTag(node)) {
+      if (SKIP_TAGS.has(node.tagName?.toLowerCase() ?? '')) continue;
+      if (chromeEls.has(node)) continue; // already captured as chrome
+      sections.push({ id: stableId($, node, ordinal), role: 'body', html: $.html(node) ?? '' });
+      ordinal += 1;
+    } else if (isText(node)) {
+      const text = node.data.trim();
+      if (!text) continue;
+      // Wrap RAW text so the emitter has an element to map; the emitter
+      // re-parses and escapes on extraction (probed end-to-end: < & " survive
+      // correctly escaped in the final block markup).
+      const html = `<p>${text}</p>`;
+      sections.push({ id: hashId(html, ordinal), role: 'body', html });
+      ordinal += 1;
+    }
+    // Comments and other node types: skipped.
   }
 
   // Dedup duplicate body-section ids with ordinal suffixes (deterministic,

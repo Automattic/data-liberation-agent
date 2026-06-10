@@ -78,11 +78,40 @@ describe('segmentPage', () => {
     expect(new Set(body.map((s) => s.id)).size).toBe(body.length);
   });
 
-  it('emits <main> itself as one body section when it has only loose children', () => {
+  it('captures loose <main> children as individual body sections', () => {
     const html = '<body><main><h1>Welcome</h1><p>Intro para</p></main></body>';
     const body = segmentPage(html).filter((s) => s.role === 'body');
-    expect(body).toHaveLength(1);
+    expect(body).toHaveLength(2);
     expect(body[0].html).toContain('<h1>Welcome</h1>');
-    expect(body[0].html).toContain('<p>Intro para</p>');
+    expect(body[1].html).toContain('<p>Intro para</p>');
+  });
+
+  it('captures mixed top-level main children (wrappers AND loose elements)', () => {
+    const html = `<main>
+      <section id="intro"><p>Sec text</p></section>
+      <figure><img src="photo.jpg" alt="P"/></figure>
+      <h1>Page Title</h1>
+    </main>`;
+    const body = segmentPage(html).filter((s) => s.role === 'body');
+    expect(body).toHaveLength(3);
+    expect(body[0].id).toBe('intro');
+    expect(body[0].html).toContain('Sec text');
+    expect(body[1].html).toContain('photo.jpg');
+    expect(body[2].html).toContain('Page Title');
+  });
+
+  it('wraps a loose top-level text node as a paragraph section', () => {
+    const html = '<main>Hello<section id="s"><p>S text</p></section></main>';
+    const body = segmentPage(html).filter((s) => s.role === 'body');
+    expect(body).toHaveLength(2);
+    expect(body[0].html).toBe('<p>Hello</p>');
+    expect(body[1].id).toBe('s');
+  });
+
+  it('skips non-rendering top-level tags (script/style)', () => {
+    const html =
+      '<main><script>var x=1;</script><style>.a{color:red}</style><section id="s"><p>S text</p></section></main>';
+    const body = segmentPage(html).filter((s) => s.role === 'body');
+    expect(body.map((s) => s.id)).toEqual(['s']);
   });
 });

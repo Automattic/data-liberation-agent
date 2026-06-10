@@ -55,15 +55,41 @@ describe('composePage', () => {
     expect(postContent).not.toContain('FooterOnly');
   });
 
-  it('composes the main-fallback section for a <main> with only loose content', () => {
+  it('composes loose <main> content — each loose child becomes its own section', () => {
     const loose: LocalPage = {
       ...page,
       html: '<body><main><h1>Loose Heading</h1><p>Loose para</p></main></body>',
     };
     const { postContent, report } = composePage(loose);
     expect(blockMarkupRoundtrips(postContent).ok).toBe(true);
-    expect(report).toHaveLength(1);
+    expect(report).toHaveLength(2);
     expect(postContent).toContain('Loose Heading');
     expect(postContent).toContain('Loose para');
+  });
+
+  it('preserves mixed top-level children end-to-end (section + figure + heading)', () => {
+    const mixed: LocalPage = {
+      ...page,
+      html:
+        '<body><main><section id="intro"><p>Sec text</p></section>' +
+        '<figure><img src="photo.jpg" alt="P"/></figure>' +
+        '<h1>Page Title</h1></main></body>',
+    };
+    const { postContent, report } = composePage(mixed);
+    expect(blockMarkupRoundtrips(postContent).ok).toBe(true);
+    expect(report).toHaveLength(3);
+    expect(postContent).toContain('Sec text');
+    expect(postContent).toContain('photo.jpg');
+    expect(postContent).toContain('Page Title');
+  });
+
+  it('preserves a loose text node end-to-end with escaping intact', () => {
+    const withText: LocalPage = {
+      ...page,
+      html: '<body><main>Tom &amp; Jerry &lt;3 "quotes" here<section id="s"><p>x</p></section></main></body>',
+    };
+    const { postContent } = composePage(withText);
+    expect(blockMarkupRoundtrips(postContent).ok).toBe(true);
+    expect(postContent).toContain('Tom &amp; Jerry &lt;3 &quot;quotes&quot; here');
   });
 });

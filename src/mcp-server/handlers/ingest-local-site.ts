@@ -11,6 +11,7 @@ import { mkdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Handler } from '../handler-types.js';
 import { validateOutputDir } from '../../lib/screenshot/output-layout.js';
+import { composedSidecarPath } from '../../lib/streaming/block-markup-validate.js';
 import { ingestLocalSite } from '../../lib/replicate/local-site/ingest.js';
 import { composePage } from '../../lib/replicate/normalize/compose-page.js';
 import type { NormalizeReportEntry } from '../../lib/replicate/local-site/types.js';
@@ -35,8 +36,7 @@ export const ingestLocalSiteHandler: Handler = async (args, ctx) => {
     return ctx.errorResult(`ingest failed: ${(err as Error).message}`);
   }
 
-  const composedDir = join(outputDir, 'composed');
-  mkdirSync(composedDir, { recursive: true });
+  mkdirSync(join(outputDir, 'composed'), { recursive: true });
 
   const entries: Array<NormalizeReportEntry & { slug: string }> = [];
   const failedPages: Array<{ slug: string; error: string }> = [];
@@ -48,7 +48,7 @@ export const ingestLocalSiteHandler: Handler = async (args, ctx) => {
     try {
       const { postContent, report } = composePage(page);
       if (postContent === '' && report.length === 0) emptyPages.push(page.slug);
-      writeFileSync(join(composedDir, `${page.slug}.blocks.html`), postContent);
+      writeFileSync(composedSidecarPath(outputDir, page.slug), postContent);
       for (const r of report) entries.push({ ...r, slug: page.slug });
     } catch (err) {
       failedPages.push({ slug: page.slug, error: (err as Error).message });
@@ -56,7 +56,7 @@ export const ingestLocalSiteHandler: Handler = async (args, ctx) => {
   }
 
   // Atomic write (tmp + rename) — a crash mid-write must not leave a torn
-  // normalize-report.json behind. composedDir's recursive mkdir above already
+  // normalize-report.json behind. The composed/ recursive mkdir above already
   // guarantees outputDir exists.
   const reportPath = join(outputDir, 'normalize-report.json');
   const tmpPath = `${reportPath}.tmp.${process.pid}`;
