@@ -92,4 +92,65 @@ describe('assembleLocalTheme', () => {
     // Default-foundation accent must flow through — locks the fallback path live.
     expect(themeJson.settings?.color?.palette?.find((p) => p.slug === 'accent-primary')?.color).toBe('#0066cc');
   });
+
+  it('carry mode adds source assets, strips theme.json styles, and enqueues last', () => {
+    const carryFiles = assembleLocalTheme({
+      siteTitle: 'Acme Co',
+      themeSlug: 'acme-local',
+      headerPart: HEADER,
+      footerPart: FOOTER,
+      carrySourceAssets: { css: '/* compat */ body{background:#fff}', js: "console.log('x')" },
+    });
+    const paths = carryFiles.map((f) => f.relativePath);
+    expect(paths).toContain('assets/css/source.css');
+    expect(paths).toContain('assets/js/source.js');
+    expect(carryFiles.find((f) => f.relativePath === 'assets/css/source.css')?.content).toContain('background:#fff');
+    const themeJson = JSON.parse(carryFiles.find((f) => f.relativePath === 'theme.json')?.content ?? '{}') as {
+      styles?: unknown;
+      settings?: unknown;
+    };
+    expect(themeJson.styles).toBeUndefined(); // interference stripped
+    expect(themeJson.settings).toBeDefined(); // editor UX kept
+    // Lint lock: stripped theme.json must still pass activation-gate invariants.
+    expect(lintThemeJson(JSON.parse(carryFiles.find((f) => f.relativePath === 'theme.json')?.content ?? '{}')).ok).toBe(true);
+    const fns = carryFiles.find((f) => f.relativePath === 'functions.php')?.content ?? '';
+    expect(fns).toContain('assets/css/source.css');
+    expect(fns).toContain('assets/js/source.js');
+    expect(fns).toContain("documentElement.classList.add('js')"); // html.js gate snippet
+    // Carry enqueue must appear AFTER the theme style (priority 20, dependency on theme handle).
+    expect(fns.indexOf('source.css')).toBeGreaterThan(fns.indexOf('get_stylesheet_uri'));
+    // Dependency array must reference the correct theme style handle.
+    expect(fns).toContain("array( 'acme-local-style' )");
+  });
+
+  it('without carry mode, no source assets and styles kept (existing behavior)', () => {
+    const noCarryFiles = assembleLocalTheme({
+      siteTitle: 'Acme Co',
+      themeSlug: 'acme-local',
+      headerPart: HEADER,
+      footerPart: FOOTER,
+    });
+    expect(noCarryFiles.some((f) => f.relativePath === 'assets/css/source.css')).toBe(false);
+    const themeJson = JSON.parse(
+      noCarryFiles.find((f) => f.relativePath === 'theme.json')?.content ?? '{}',
+    ) as { styles?: unknown };
+    expect(themeJson.styles).toBeDefined();
+  });
+
+  it('js-only carry: adds source.js, does not add source.css, does not strip theme.json styles', () => {
+    // css: '' → css is empty → skip css file, keep theme.json styles intact
+    const jsOnlyFiles = assembleLocalTheme({
+      siteTitle: 'Acme Co',
+      themeSlug: 'acme-local',
+      headerPart: HEADER,
+      footerPart: FOOTER,
+      carrySourceAssets: { css: '', js: "console.log('x')" },
+    });
+    expect(jsOnlyFiles.some((f) => f.relativePath === 'assets/css/source.css')).toBe(false);
+    expect(jsOnlyFiles.some((f) => f.relativePath === 'assets/js/source.js')).toBe(true);
+    const themeJson = JSON.parse(
+      jsOnlyFiles.find((f) => f.relativePath === 'theme.json')?.content ?? '{}',
+    ) as { styles?: unknown };
+    expect(themeJson.styles).toBeDefined(); // styles kept — no css carry
+  });
 });

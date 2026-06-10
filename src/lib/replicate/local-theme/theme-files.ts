@@ -27,6 +27,13 @@ const DEFAULT_LOCAL_FOUNDATION = {
   typography: { families: { body: { value: 'system-ui, sans-serif' } } },
 };
 
+export interface CarrySourceAssets {
+  /** Compat layer + adapted source CSS (from collectSourceAssets). Empty string = no CSS carry. */
+  css: string;
+  /** Source JS concatenated (from collectSourceAssets). Empty string = no JS carry. */
+  js: string;
+}
+
 export interface AssembleLocalThemeOpts {
   siteTitle: string;
   themeSlug: string;
@@ -36,6 +43,10 @@ export interface AssembleLocalThemeOpts {
   foundation?: Parameters<typeof buildThemeScaffold>[0]['foundation'];
   /** Self-hosted fonts captured from the source site — emitted as @font-face + theme.json fontFamilies. */
   capturedFonts?: LocalFontFace[];
+  /** Stage 1d: carry the source site's CSS/JS into the theme. When set and css is
+   * non-empty, theme.json `styles` is stripped (source CSS is the design authority;
+   * settings stay for editor pickers). Each asset file is written only when non-empty. */
+  carrySourceAssets?: CarrySourceAssets;
 }
 
 /** No-title page template: header part → post-content → footer part.
@@ -52,6 +63,32 @@ function noTitleTemplate(): string {
     `<!-- /wp:group -->\n\n` +
     `<!-- wp:template-part {"slug":"footer","tagName":"footer"} /-->\n`
   );
+}
+
+/** functions.php block appended in carry mode — enqueue source assets after
+ * the theme stylesheet + global styles, and add the html.js gate the source
+ * reveal scripts expect. Priority 20 ensures it lands AFTER the default
+ * wp_enqueue_scripts (10) and global styles injected by the block editor. */
+function carryEnqueueBlock(themeSlug: string): string {
+  return `
+// Stage 1d carry: the source site's own CSS/JS, adapted for the block DOM.
+// Enqueued at priority 20 so it lands AFTER global styles + theme style.
+add_action( 'wp_enqueue_scripts', function () {
+    $css = get_theme_file_path( 'assets/css/source.css' );
+    if ( file_exists( $css ) ) {
+        wp_enqueue_style( '${themeSlug}-source', get_theme_file_uri( 'assets/css/source.css' ), array( '${themeSlug}-style' ), (string) filemtime( $css ) );
+    }
+    $js = get_theme_file_path( 'assets/js/source.js' );
+    if ( file_exists( $js ) ) {
+        wp_enqueue_script( '${themeSlug}-source', get_theme_file_uri( 'assets/js/source.js' ), array(), (string) filemtime( $js ), true );
+    }
+}, 20 );
+
+// Source reveal scripts gate on html.js (no-JS visitors keep content visible).
+add_action( 'wp_head', function () {
+    echo "<script>document.documentElement.classList.add('js');</script>";
+}, 0 );
+`;
 }
 
 export function assembleLocalTheme(opts: AssembleLocalThemeOpts): ReplicaFile[] {
@@ -97,5 +134,44 @@ export function assembleLocalTheme(opts: AssembleLocalThemeOpts): ReplicaFile[] 
   // emitted when reconstructedPages has isHome: true — which this call omits),
   // so no duplicate path is introduced.
   withTemplates.push({ relativePath: 'templates/front-page.html', content: template });
+
+  // Stage 1d carry: wire source CSS/JS into the theme so the class-preserving
+  // block DOM renders under the designer's own stylesheet.
+  if (opts.carrySourceAssets) {
+    const { css, js } = opts.carrySourceAssets;
+    const hasCSS = css.trim().length > 0;
+    const hasJS = js.trim().length > 0;
+
+    // 1. Strip theme.json styles — source CSS is the design authority. Strip
+    //    ONLY when CSS is non-empty: if only JS is carried the token-based
+    //    styles remain the layout layer. Trailing newline preserved (convention).
+    if (hasCSS) {
+      const idx = withTemplates.findIndex((f) => f.relativePath === 'theme.json');
+      if (idx >= 0) {
+        const parsed = JSON.parse(withTemplates[idx].content) as Record<string, unknown>;
+        delete parsed.styles;
+        withTemplates[idx] = { ...withTemplates[idx], content: JSON.stringify(parsed, null, 2) + '\n' };
+      }
+    }
+
+    // 2. Emit asset files — each file only when its content is non-empty.
+    if (hasCSS) {
+      withTemplates.push({ relativePath: 'assets/css/source.css', content: css });
+    }
+    if (hasJS) {
+      withTemplates.push({ relativePath: 'assets/js/source.js', content: js });
+    }
+
+    // 3. Append the enqueue block to functions.php (file_exists guards make
+    //    it safe even when only one of the two assets is non-empty).
+    const fIdx = withTemplates.findIndex((f) => f.relativePath === 'functions.php');
+    if (fIdx >= 0) {
+      withTemplates[fIdx] = {
+        ...withTemplates[fIdx],
+        content: withTemplates[fIdx].content + carryEnqueueBlock(opts.themeSlug),
+      };
+    }
+  }
+
   return withTemplates;
 }
