@@ -10,6 +10,9 @@ import { PNG } from 'pngjs';
 export interface DiffRegion {
   /** Logical (CSS) px, top-of-capture origin. */
   top: number;
+  /** Bounded by viewport.height / scale: compare.ts crops both PNGs to the
+   * common top-viewport region before pixelmatch, so regions never reference
+   * below-the-fold content — consistent with what the score measures. */
   bottom: number;
   left: number;
   right: number;
@@ -27,6 +30,11 @@ export interface DiffRegionOpts {
 }
 
 function isMismatch(data: Buffer | Uint8Array, i: number): boolean {
+  // Saturated red = pixelmatch mismatch. g < 100 also excludes the yellow
+  // (255,255,0) anti-aliasing markers pixelmatch paints, which are not
+  // mismatches. The alpha guard is belt-and-braces beyond the color check:
+  // pixelmatch never emits transparent red (output alpha is always 255), so
+  // it only screens out corrupt/uninitialized buffer data.
   return data[i] > 200 && data[i + 1] < 100 && data[i + 2] < 100 && data[i + 3] > 0;
 }
 
