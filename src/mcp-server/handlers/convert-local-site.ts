@@ -15,6 +15,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { Handler } from '../handler-types.js';
 import { ingestLocalSiteHandler } from './ingest-local-site.js';
+import { themeCacheFlushCommands } from './install-theme.js';
 import { ingestLocalSite } from '../../lib/replicate/local-site/ingest.js';
 import { buildNavGraph } from '../../lib/replicate/local-site/nav-graph.js';
 import { segmentPage } from '../../lib/replicate/normalize/segment.js';
@@ -55,8 +56,21 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
   // Stage 1a: ingest + compose sidecars + normalize-report (reuse the handler verbatim).
   const ingestRes = await ingestLocalSiteHandler({ dir, outputDir }, ctx);
   if (ingestRes.isError) return ingestRes;
+  // Forward stage-1a quality signals into the final summary, nested under one
+  // `ingest` key so the two summaries' field shapes can't collide.
+  const ingestSummary = JSON.parse(ingestRes.content[0].text) as {
+    lowConfidence: number;
+    failedPageCount: number;
+    failedPagesList: Array<{ slug: string; error: string }>;
+  };
+  const ingest = {
+    lowConfidence: ingestSummary.lowConfidence,
+    failedPageCount: ingestSummary.failedPageCount,
+    failedPagesList: ingestSummary.failedPagesList,
+  };
 
-  // Site model for chrome + page plan (cheap re-ingest; deterministic).
+  // Second ingest is deterministic + cheap (same dir, no writes between); the
+  // handler call above already surfaced any slug-collision error.
   const site = ingestLocalSite(dir);
   const siteTitle = (args.siteTitle as string | undefined) ?? site.pages.find((p) => p.slug === 'home')?.title ?? 'Local Site';
   const themeSlug = (args.themeSlug as string | undefined) ?? 'local-site-theme';
@@ -81,6 +95,17 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
     await studioWp(studioSitePath, ['theme', 'activate', themeSlug]);
   } catch (err) {
     warnings.push(`theme activate failed: ${(err as Error).message}`);
+  }
+  // Flush caches so the freshly-written templates + customTemplates register
+  // immediately (install-theme.ts precedent: block themes cache template
+  // resolution and the patterns file list; without a flush the just-activated
+  // theme can serve stale/empty versions). Best-effort — warn, never fatal.
+  for (const wpArgs of themeCacheFlushCommands()) {
+    try {
+      await studioWp(studioSitePath, wpArgs);
+    } catch (err) {
+      warnings.push(`cache flush failed (${wpArgs.slice(0, 2).join(' ')}): ${(err as Error).message}`);
+    }
   }
 
   // Pages from sidecars (installPost is idempotent via _source_url meta).
@@ -129,6 +154,7 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
     failedInstalls,
     missingSidecars: plan.missingSidecars,
     emptySidecars,
+    ingest,
     themeSlug,
     themeWritten,
     frontPageSet,
