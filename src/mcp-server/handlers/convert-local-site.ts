@@ -221,7 +221,21 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
   });
 
   // Theme assembly + write + activate.
-  const themeFiles = assembleLocalTheme({ siteTitle, themeSlug, headerPart, footerPart, foundation, capturedFonts, carrySourceAssets });
+  // In carry mode the localized Google css inside source.css is the SOLE font
+  // authority — passing capturedFonts too makes the scaffold's style.css emit
+  // range-less duplicate faces pointing at single subset files; Chromium then
+  // resolves ch against a face whose '0' glyph is absent (spec fallback 0.5em),
+  // shrinking every ch-based max-width (walrus: 62ch = 527px vs 655px) while
+  // text still shapes correctly via the next face. One authority, no overlap.
+  const themeFiles = assembleLocalTheme({
+    siteTitle,
+    themeSlug,
+    headerPart,
+    footerPart,
+    foundation,
+    capturedFonts: chromeCarried ? undefined : capturedFonts,
+    carrySourceAssets,
+  });
   let themeWritten = 0;
   try {
     // assetSourceDir carries downloaded fonts (woff2) into the live theme so the
