@@ -49,6 +49,22 @@ describe('buildHeaderPart', () => {
   });
 });
 
+describe('buildHeaderPart (inNav preference)', () => {
+  it('prefers in-nav links so a brand anchor cannot hijack the home label', () => {
+    const nav: NavLink[] = [
+      { fromSlug: 'home', toSlug: 'home', label: 'Brand Co' },                 // header brand anchor
+      { fromSlug: 'home', toSlug: 'home', label: 'Home', inNav: true },        // real nav link
+      { fromSlug: 'home', toSlug: 'about', label: 'About', inNav: true },
+      { fromSlug: 'home', toSlug: 'services', label: 'inline services link' }, // body link
+    ];
+    const html = buildHeaderPart('Brand Co', nav, ['home', 'about', 'services']);
+    expect(html).toContain('{"label":"Home","url":"/"}');
+    expect(html).toContain('{"label":"About","url":"/about/"}');
+    expect(html).not.toContain('Brand Co","url":"/"');          // brand label not used for a link
+    expect(html).not.toContain('inline services link');          // body links excluded when nav links exist
+  });
+});
+
 describe('buildFooterPart', () => {
   it('renders the captured footer section as blocks', () => {
     const footer: Section = { id: 'footer', role: 'footer', html: '<footer><p>All rights reserved</p></footer>' };
@@ -70,5 +86,18 @@ describe('buildFooterPart', () => {
     const html = buildFooterPart(null, 'Acme Co');
     expect(blockMarkupRoundtrips(html).ok).toBe(true);
     expect(html).toContain('Acme Co');
+  });
+
+  it('rewrites internal footer hrefs to WP permalinks', () => {
+    const footer: Section = {
+      id: 'footer',
+      role: 'footer',
+      html: '<footer><p><a href="about.html">About us</a> · <a href="index.html">Home</a> · <a href="https://x.com">Ext</a></p></footer>',
+    };
+    const html = buildFooterPart(footer, 'Acme Co', { pageSlugs: ['home', 'about'] });
+    expect(html).toContain('href="/about/"');
+    expect(html).toContain('href="/"');
+    expect(html).toContain('https://x.com'); // external untouched
+    expect(html).not.toContain('about.html');
   });
 });

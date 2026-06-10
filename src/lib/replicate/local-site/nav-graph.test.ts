@@ -72,4 +72,19 @@ describe('buildNavGraph', () => {
     expect(links).toContainEqual({ fromSlug: 'home', toSlug: 'about-us', label: 'About' });
     expect(links).toContainEqual({ fromSlug: 'home', toSlug: 'about-us', label: 'About raw' });
   });
+
+  it('marks links inside a <nav> element with inNav', () => {
+    const s = site([
+      {
+        slug: 'home',
+        relPath: 'index.html',
+        html: '<header><a class="brand" href="index.html">Brand Co</a><nav><a href="index.html">Home</a><a href="about.html">About</a></nav></header>',
+      },
+      { slug: 'about', relPath: 'about.html', html: '' },
+    ]);
+    const links = buildNavGraph(s);
+    expect(links.find((l) => l.label === 'Brand Co')?.inNav).toBeFalsy();
+    expect(links.find((l) => l.label === 'Home')?.inNav).toBe(true);
+    expect(links.find((l) => l.label === 'About')?.inNav).toBe(true);
+  });
 });

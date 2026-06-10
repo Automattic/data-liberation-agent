@@ -20,6 +20,8 @@ export interface NavLink {
   fromSlug: string;
   toSlug: string;
   label: string;
+  /** True when the anchor sits inside a <nav> element — preferred for menus. */
+  inNav?: boolean;
 }
 
 export interface Section {

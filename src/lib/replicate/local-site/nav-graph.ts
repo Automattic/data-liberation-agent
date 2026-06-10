@@ -36,7 +36,9 @@ export function buildNavGraph(site: LocalSite): NavLink[] {
       if (!href || isExternal(href)) return;
       const toSlug = slugFromRelPath(resolveHrefToRelPath(href, page.relPath));
       if (!knownSlugs.has(toSlug)) return;
-      links.push({ fromSlug: page.slug, toSlug, label: $(el).text().trim() });
+      const link: NavLink = { fromSlug: page.slug, toSlug, label: $(el).text().trim() };
+      if ($(el).closest('nav').length > 0) link.inNav = true;
+      links.push(link);
     });
   }
   return links;

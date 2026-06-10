@@ -15,7 +15,9 @@
 // so each direct child becomes its own block. Bare-<a> href loss inside
 // emitChild remains a known limitation (tracked separately).
 //
+import * as cheerio from 'cheerio';
 import { emitSectionBlocks, escapeHtml } from '../normalize/emit-blocks.js';
+import { slugFromRelPath } from '../local-site/ingest.js';
 import type { NavLink, Section } from '../local-site/types.js';
 
 /** "/": home; otherwise "/<slug>/" — matches the WP page permalinks created in page-plan. */
@@ -33,15 +35,19 @@ function attrJson(value: string): string {
 }
 
 /**
- * Pick the nav links to render: the home page's outgoing internal links
- * (deduped by target, first label wins, self-link to home allowed), or —
- * when home has none — one link per non-home page (label = title-cased slug).
+ * Pick the nav links to render: when the home page has edges marked inNav (from
+ * a <nav> element), use ONLY those — a header brand anchor or body link must not
+ * hijack a menu slot (walrus E2E regression: brand label replaced "Home"). Falls
+ * back to all home edges when none are marked inNav, then to one link per
+ * non-home page (label = title-cased slug) when home has no outgoing links.
  */
 export function selectNavLinks(nav: NavLink[], pageSlugs: string[]): Array<{ label: string; url: string }> {
   const fromHome = nav.filter((l) => l.fromSlug === 'home');
+  // Prefer real <nav> links — brand anchors and body links are excluded when inNav edges exist.
+  const pool = fromHome.some((l) => l.inNav) ? fromHome.filter((l) => l.inNav) : fromHome;
   const seen = new Set<string>();
   const links: Array<{ label: string; url: string }> = [];
-  for (const l of fromHome) {
+  for (const l of pool) {
     if (seen.has(l.toSlug)) continue;
     seen.add(l.toSlug);
     links.push({ label: l.label || l.toSlug, url: slugToUrl(l.toSlug) });
@@ -67,16 +73,47 @@ export function buildHeaderPart(siteTitle: string, nav: NavLink[], pageSlugs: st
   );
 }
 
-export function buildFooterPart(footer: Section | null, siteTitle: string): string {
+export interface FooterPartOpts {
+  /** Site page slugs — internal footer hrefs are rewritten to /slug/ permalinks. */
+  pageSlugs?: string[];
+}
+
+/**
+ * Rewrite internal hrefs in footer HTML to WP permalink form (/slug/).
+ * External hrefs (protocol, //, #) are left untouched. Unknown slugs are
+ * left untouched. Runs on the raw footer HTML (before <footer>→<div> rename).
+ */
+function rewriteInternalHrefs(html: string, pageSlugs: string[]): string {
+  const $ = cheerio.load(html);
+  const known = new Set(pageSlugs);
+  $('a[href]').each((_, el) => {
+    const raw = $(el).attr('href') ?? '';
+    if (!raw || /^[a-z]+:/i.test(raw) || raw.startsWith('//') || raw.startsWith('#')) return;
+    let cleaned = raw.split(/[?#]/)[0];
+    try {
+      cleaned = decodeURIComponent(cleaned);
+    } catch {
+      // Malformed escape sequence — keep raw value.
+    }
+    const slug = slugFromRelPath(cleaned.replace(/^\.\//, '').replace(/^\//, ''));
+    if (!known.has(slug)) return;
+    $(el).attr('href', slugToUrl(slug));
+  });
+  return $('body').html() ?? html;
+}
+
+export function buildFooterPart(footer: Section | null, siteTitle: string, opts: FooterPartOpts = {}): string {
   if (footer) {
     // <footer> root won't match emitSectionBlocks' 'section,article,main,div' selector
     // → container falls to $('body') and the whole footer collapses into one catch-all
     // paragraph (hrefs lost, content blob-merged). Renaming the root to <div> makes
     // each direct child emit as its own block. Bare-<a> href loss remains a known
     // emitChild limitation (tracked separately).
+    let html = footer.html;
+    if (opts.pageSlugs?.length) html = rewriteInternalHrefs(html, opts.pageSlugs);
     const normalized = {
       ...footer,
-      html: footer.html.replace(/^<footer(\b[^>]*>)/i, '<div$1').replace(/<\/footer>\s*$/i, '</div>'),
+      html: html.replace(/^<footer(\b[^>]*>)/i, '<div$1').replace(/<\/footer>\s*$/i, '</div>'),
     };
     return emitSectionBlocks(normalized).markup;
   }
