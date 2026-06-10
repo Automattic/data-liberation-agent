@@ -36,10 +36,6 @@ export interface AssembleLocalThemeOpts {
   foundation?: Parameters<typeof buildThemeScaffold>[0]['foundation'];
   /** Self-hosted fonts captured from the source site — emitted as @font-face + theme.json fontFamilies. */
   capturedFonts?: LocalFontFace[];
-  /** Footer background token slug (e.g. 'surface-inverse'). Defaults to scaffold's own default. */
-  footerBgToken?: string;
-  /** Footer text color token slug (e.g. 'text-inverse'). Defaults to scaffold's own default. */
-  footerTextToken?: string;
 }
 
 /** No-title page template: header part → post-content → footer part.
@@ -59,13 +55,15 @@ function noTitleTemplate(): string {
 }
 
 export function assembleLocalTheme(opts: AssembleLocalThemeOpts): ReplicaFile[] {
+  // NOTE: buildThemeScaffold's footerBgToken/footerTextToken opts are NOT
+  // passed here — they only style the scaffold's OWN parts/footer.html, which
+  // we unconditionally swap with opts.footerPart below. Footer band styling
+  // belongs in buildFooterPart (chrome-parts.ts bgToken/textToken).
   const base = buildThemeScaffold({
     foundation: opts.foundation ?? DEFAULT_LOCAL_FOUNDATION,
     themeSlug: opts.themeSlug,
     siteTitle: opts.siteTitle,
     capturedFonts: opts.capturedFonts,
-    footerBgToken: opts.footerBgToken,
-    footerTextToken: opts.footerTextToken,
   });
 
   // Swap scaffold-generated chrome parts with the locally-built versions.

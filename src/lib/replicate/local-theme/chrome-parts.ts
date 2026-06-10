@@ -76,6 +76,38 @@ export function buildHeaderPart(siteTitle: string, nav: NavLink[], pageSlugs: st
 export interface FooterPartOpts {
   /** Site page slugs — internal footer hrefs are rewritten to /slug/ permalinks. */
   pageSlugs?: string[];
+  /** theme.json palette slug applied as the footer wrapper background (e.g. 'surface-inverse'). */
+  bgToken?: string;
+  /** theme.json palette slug applied as the footer wrapper text color (e.g. 'text-inverse'). */
+  textToken?: string;
+}
+
+/**
+ * Wrap footer markup in a token-styled full-width group. The theme scaffold's
+ * own footerBgToken/footerTextToken opts are inert for the local path (we swap
+ * parts/footer.html with OUR part unconditionally), so the band styling must
+ * live on the part we build. No tokens → markup returned unchanged. Class
+ * emission follows the @wordpress/blocks canonical serialized order
+ * (has-<text>-color has-<bg>-background-color has-text-color has-background —
+ * same shape as theme-scaffold's footer groups) so editor re-serialization
+ * keeps the styling (block-fixer canonicalization constraint).
+ */
+function wrapFooterGroup(inner: string, opts: FooterPartOpts): string {
+  if (!opts.bgToken && !opts.textToken) return inner;
+  const attrs: string[] = ['"align":"full"'];
+  if (opts.bgToken) attrs.push(`"backgroundColor":"${opts.bgToken}"`);
+  if (opts.textToken) attrs.push(`"textColor":"${opts.textToken}"`);
+  attrs.push('"layout":{"type":"constrained"}', '"style":{"spacing":{"padding":{"top":"2.5rem","bottom":"2.5rem"}}}');
+  const classes = ['wp-block-group', 'alignfull'];
+  if (opts.textToken) classes.push(`has-${opts.textToken}-color`);
+  if (opts.bgToken) classes.push(`has-${opts.bgToken}-background-color`);
+  if (opts.textToken) classes.push('has-text-color');
+  if (opts.bgToken) classes.push('has-background');
+  return (
+    `<!-- wp:group {${attrs.join(',')}} -->\n` +
+    `<div class="${classes.join(' ')}" style="padding-top:2.5rem;padding-bottom:2.5rem">${inner}</div>\n` +
+    `<!-- /wp:group -->`
+  );
 }
 
 /**
@@ -117,13 +149,14 @@ export function buildFooterPart(footer: Section | null, siteTitle: string, opts:
       ...footer,
       html: html.replace(/^<footer(\b[^>]*>)/i, '<div$1').replace(/<\/footer>\s*$/i, '</div>'),
     };
-    return emitSectionBlocks(normalized).markup;
+    return wrapFooterGroup(emitSectionBlocks(normalized).markup, opts);
   }
-  return (
+  return wrapFooterGroup(
     `<!-- wp:group {"align":"full","layout":{"type":"constrained"},"style":{"spacing":{"padding":{"top":"2rem","bottom":"2rem"}}}} -->\n` +
-    `<div class="wp-block-group alignfull" style="padding-top:2rem;padding-bottom:2rem">` +
-    `<!-- wp:paragraph {"align":"center"} -->\n<p class="has-text-align-center">${escapeHtml(siteTitle)}</p>\n<!-- /wp:paragraph -->` +
-    `</div>\n` +
-    `<!-- /wp:group -->`
+      `<div class="wp-block-group alignfull" style="padding-top:2rem;padding-bottom:2rem">` +
+      `<!-- wp:paragraph {"align":"center"} -->\n<p class="has-text-align-center">${escapeHtml(siteTitle)}</p>\n<!-- /wp:paragraph -->` +
+      `</div>\n` +
+      `<!-- /wp:group -->`,
+    opts,
   );
 }

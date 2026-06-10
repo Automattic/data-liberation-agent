@@ -53,7 +53,7 @@ describe('assembleLocalTheme', () => {
     );
   });
 
-  it('passes a provided foundation + fonts + footer tokens to the scaffold', () => {
+  it('passes a provided foundation + fonts to the scaffold', () => {
     const files = assembleLocalTheme({
       siteTitle: 'Acme Co',
       themeSlug: 'acme-local',
@@ -71,8 +71,6 @@ describe('assembleLocalTheme', () => {
       capturedFonts: [
         { family: 'Fraunces', src: 'https://x/f.woff2', format: 'woff2', weight: '900', style: 'normal', localPath: 'assets/fonts/Fraunces-900.woff2' },
       ],
-      footerBgToken: 'surface-inverse',
-      footerTextToken: 'text-inverse',
     });
     const themeJson = JSON.parse(files.find((f) => f.relativePath === 'theme.json')?.content ?? '{}') as {
       settings?: { color?: { palette?: Array<{ slug: string; color: string }> }; typography?: { fontFamilies?: Array<{ slug: string }> } };
@@ -88,6 +86,10 @@ describe('assembleLocalTheme', () => {
 
   it('still defaults to the minimal foundation when none provided', () => {
     const files = assembleLocalTheme({ siteTitle: 'Acme Co', themeSlug: 'acme-local', headerPart: HEADER, footerPart: FOOTER });
-    expect(files.some((f) => f.relativePath === 'theme.json')).toBe(true);
+    const themeJson = JSON.parse(files.find((f) => f.relativePath === 'theme.json')?.content ?? '{}') as {
+      settings?: { color?: { palette?: Array<{ slug: string; color: string }> } };
+    };
+    // Default-foundation accent must flow through — locks the fallback path live.
+    expect(themeJson.settings?.color?.palette?.find((p) => p.slug === 'accent-primary')?.color).toBe('#0066cc');
   });
 });

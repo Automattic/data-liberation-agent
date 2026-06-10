@@ -100,4 +100,37 @@ describe('buildFooterPart', () => {
     expect(html).toContain('https://x.com'); // external untouched
     expect(html).not.toContain('about.html');
   });
+
+  it('wraps the captured footer in a token-styled full-width group when tokens are provided', () => {
+    const footer: Section = {
+      id: 'footer',
+      role: 'footer',
+      html: '<footer><p><a href="about.html">About us</a> · <a href="https://x.com">Ext</a></p></footer>',
+    };
+    const html = buildFooterPart(footer, 'Acme', { pageSlugs: ['home', 'about'], bgToken: 'surface-inverse', textToken: 'text-inverse' });
+    expect(blockMarkupRoundtrips(html).ok).toBe(true);
+    expect(html).toContain('"backgroundColor":"surface-inverse"');
+    expect(html).toContain('"textColor":"text-inverse"');
+    // WP-canonical serialized color classes (text class, bg class, then flags).
+    expect(html).toContain('has-text-inverse-color has-surface-inverse-background-color has-text-color has-background');
+    expect(html).toContain('About us');       // inner footer content still present
+    expect(html).toContain('href="/about/"'); // hrefs still rewritten
+  });
+
+  it('styles the default footer too when tokens are provided', () => {
+    const html = buildFooterPart(null, 'Acme Co', { bgToken: 'surface-inverse', textToken: 'text-inverse' });
+    expect(blockMarkupRoundtrips(html).ok).toBe(true);
+    expect(html).toContain('has-surface-inverse-background-color');
+    expect(html).toContain('Acme Co');
+  });
+
+  it('emits no token wrapper when no tokens are provided (output unchanged)', () => {
+    const footer: Section = { id: 'footer', role: 'footer', html: '<footer><p>plain</p></footer>' };
+    const captured = buildFooterPart(footer, 'Acme Co');
+    expect(captured).not.toContain('has-background');
+    expect(captured).not.toContain('"backgroundColor"');
+    const dflt = buildFooterPart(null, 'Acme Co');
+    expect(dflt).not.toContain('has-background');
+    expect(dflt).not.toContain('"backgroundColor"');
+  });
 });
