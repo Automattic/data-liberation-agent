@@ -7,13 +7,13 @@
 // Footer = the captured footer Section rendered through the stage-1a block
 // emitter, falling back to a minimal credit line.
 //
-// PROBE RESULT (emitSectionBlocks footer-root behavior):
-// When section.html has a <footer> root, the selector 'section, article, main, div'
-// does NOT match it → container falls back to $('body') → <footer> element is
-// iterated as a body child → emitChild downgrades it to a paragraph of its text
-// (confidence=0, text preserved, output non-empty). Branch taken: NO wrapping —
-// call emitSectionBlocks(footer) directly. The test's `toContain('All rights
-// reserved')` passes because the downgraded paragraph preserves the text.
+// FOOTER EMISSION (probe + review follow-up):
+// emitSectionBlocks' root selector 'section, article, main, div' does NOT match
+// a <footer> root — container falls back to $('body') and the WHOLE footer
+// collapses into one catch-all paragraph (content blob-merged, hrefs lost).
+// buildFooterPart therefore renames the root <footer> → <div> before emitting,
+// so each direct child becomes its own block. Bare-<a> href loss inside
+// emitChild remains a known limitation (tracked separately).
 //
 import { emitSectionBlocks, escapeHtml } from '../normalize/emit-blocks.js';
 import type { NavLink, Section } from '../local-site/types.js';
@@ -25,13 +25,17 @@ function slugToUrl(slug: string): string {
 
 /** JSON-string-escape for embedding label/url inside block attribute JSON. */
 function attrJson(value: string): string {
-  return JSON.stringify(value);
+  // WP serializer convention: escape '--' as JSON unicode escapes (u002d u002d)
+  // so '-->' sequences can't terminate the surrounding block-comment delimiter
+  // (and our local blockMarkupRoundtrips validator doesn't false-fail).
+  // JSON.parse restores the literal '--' when WP reads the attributes.
+  return JSON.stringify(value).replace(/--/g, '\\u002d\\u002d');
 }
 
 /**
  * Pick the nav links to render: the home page's outgoing internal links
  * (deduped by target, first label wins, self-link to home allowed), or —
- * when home has none — one link per non-home page (label = slug).
+ * when home has none — one link per non-home page (label = title-cased slug).
  */
 export function selectNavLinks(nav: NavLink[], pageSlugs: string[]): Array<{ label: string; url: string }> {
   const fromHome = nav.filter((l) => l.fromSlug === 'home');
@@ -43,7 +47,10 @@ export function selectNavLinks(nav: NavLink[], pageSlugs: string[]): Array<{ lab
     links.push({ label: l.label || l.toSlug, url: slugToUrl(l.toSlug) });
   }
   if (links.length > 0) return links;
-  return pageSlugs.filter((s) => s !== 'home').map((s) => ({ label: s.charAt(0).toUpperCase() + s.slice(1), url: slugToUrl(s) }));
+  return pageSlugs.filter((s) => s !== 'home').map((s) => ({
+    label: s.split('-').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' '),
+    url: slugToUrl(s),
+  }));
 }
 
 export function buildHeaderPart(siteTitle: string, nav: NavLink[], pageSlugs: string[]): string {
@@ -62,10 +69,16 @@ export function buildHeaderPart(siteTitle: string, nav: NavLink[], pageSlugs: st
 
 export function buildFooterPart(footer: Section | null, siteTitle: string): string {
   if (footer) {
-    // emitSectionBlocks with a <footer> root: the selector 'section, article, main, div'
-    // does not match <footer>, so container falls back to $('body') and the footer
-    // element is downgraded to a paragraph (text preserved). Acceptable — no wrapping.
-    return emitSectionBlocks(footer).markup;
+    // <footer> root won't match emitSectionBlocks' 'section,article,main,div' selector
+    // → container falls to $('body') and the whole footer collapses into one catch-all
+    // paragraph (hrefs lost, content blob-merged). Renaming the root to <div> makes
+    // each direct child emit as its own block. Bare-<a> href loss remains a known
+    // emitChild limitation (tracked separately).
+    const normalized = {
+      ...footer,
+      html: footer.html.replace(/^<footer(\b[^>]*>)/i, '<div$1').replace(/<\/footer>\s*$/i, '</div>'),
+    };
+    return emitSectionBlocks(normalized).markup;
   }
   return (
     `<!-- wp:group {"align":"full","layout":{"type":"constrained"},"style":{"spacing":{"padding":{"top":"2rem","bottom":"2rem"}}}} -->\n` +

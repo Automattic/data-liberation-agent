@@ -35,6 +35,18 @@ describe('buildHeaderPart', () => {
     const html = buildHeaderPart('Acme Co', nav, ['home']);
     expect(html).toContain('{"label":"Home","url":"/"}');
   });
+
+  it('sanitizes labels that contain --> (would break block comment boundary)', () => {
+    const nav: NavLink[] = [{ fromSlug: 'home', toSlug: 'faq', label: 'FAQ-->Answers' }];
+    const html = buildHeaderPart('Acme Co', nav, ['home', 'faq']);
+    expect(blockMarkupRoundtrips(html).ok).toBe(true);
+    expect(html).not.toContain('FAQ-->Answers');
+  });
+
+  it('title-cases hyphenated slugs in the fallback nav', () => {
+    const html = buildHeaderPart('Acme Co', [], ['home', 'about-us']);
+    expect(html).toContain('{"label":"About Us","url":"/about-us/"}');
+  });
 });
 
 describe('buildFooterPart', () => {
@@ -43,6 +55,15 @@ describe('buildFooterPart', () => {
     const html = buildFooterPart(footer, 'Acme Co');
     expect(blockMarkupRoundtrips(html).ok).toBe(true);
     expect(html).toContain('All rights reserved');
+  });
+
+  it('emits footer direct children as separate blocks (not one merged blob)', () => {
+    const footer: Section = { id: 'footer', role: 'footer', html: '<footer><p>Copyright 2024 Acme</p><p>All rights reserved</p></footer>' };
+    const html = buildFooterPart(footer, 'Acme Co');
+    expect(blockMarkupRoundtrips(html).ok).toBe(true);
+    expect(html).toContain('Copyright 2024 Acme');
+    expect(html).toContain('All rights reserved');
+    expect((html.match(/<!-- wp:paragraph -->/g) ?? []).length).toBeGreaterThanOrEqual(2);
   });
 
   it('emits a minimal default footer when no footer section exists', () => {
