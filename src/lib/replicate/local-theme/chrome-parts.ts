@@ -161,7 +161,9 @@ export function buildFooterPart(footer: Section | null, siteTitle: string, opts:
       ...footer,
       html: html.replace(/^<footer(\b[^>]*>)/i, '<div$1').replace(/<\/footer>\s*$/i, '</div>'),
     };
-    return wrapFooterGroup(emitSectionBlocks(normalized).markup, opts);
+    // wrapper:'div' — footer content is chrome, not a body section; the section
+    // tag would attract the carried source's section margin rules (+88px).
+    return wrapFooterGroup(emitSectionBlocks(normalized, { wrapper: 'div' }).markup, opts);
   }
   return wrapFooterGroup(
     `<!-- wp:group {"align":"full","layout":{"type":"constrained"},"style":{"spacing":{"padding":{"top":"2rem","bottom":"2rem"}}}} -->\n` +

@@ -219,7 +219,15 @@ function emitChild($: CheerioAPI, el: Element): ChildResult {
   return { markup: paragraphBlock(escapeHtml($el.text().trim())), clean: false };
 }
 
-export function emitSectionBlocks(section: Section): { markup: string; confidence: number } {
+export interface EmitSectionOpts {
+  /** Wrapper element for the group. Body sections default to 'section' so
+   * carried source `section { … }` rules keep matching; chrome consumers
+   * (footer part) pass 'div' — a footer's content is NOT a body section and
+   * must not attract section margins (walrus probe: +88px inside footer). */
+  wrapper?: 'section' | 'div';
+}
+
+export function emitSectionBlocks(section: Section, opts: EmitSectionOpts = {}): { markup: string; confidence: number } {
   const $ = cheerio.load(section.html);
   // Include 'main' so that segmentPage's main-fallback case (which emits a
   // <main> outerHTML as one Section) resolves its container correctly.
@@ -261,11 +269,13 @@ export function emitSectionBlocks(section: Section): { markup: string; confidenc
   // 0, uniform 24px gaps replacing the source's 16px/1.5em cadence). Without
   // the attr there is no is-layout-* class and no injected rules; the source
   // stylesheet owns spacing entirely.
-  const attrs = blockAttrs([anchorPair, tagPair], cls);
+  const wrapper = opts.wrapper ?? 'section';
+  const wrapperPairs = wrapper === 'section' ? [anchorPair, tagPair] : [anchorPair];
+  const attrs = blockAttrs(wrapperPairs, cls);
   const divCls = ['wp-block-group', cls].filter(Boolean).join(' ');
   const markup =
     `<!-- wp:group${attrs} -->\n` +
-    `<section id="${escapeHtml(section.id)}" class="${escapeHtml(divCls)}">${inner}</section>\n` +
+    `<${wrapper} id="${escapeHtml(section.id)}" class="${escapeHtml(divCls)}">${inner}</${wrapper}>\n` +
     `<!-- /wp:group -->`;
   const confidence = total === 0 ? 0 : 1 - downgrades / total;
   return { markup, confidence };
