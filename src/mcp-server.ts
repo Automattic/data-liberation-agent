@@ -46,6 +46,7 @@ import { compareHandler } from './mcp-server/handlers/compare.js';
 import { clusterPagesHandler } from './mcp-server/handlers/cluster-pages.js';
 import { sectionExtractHandler } from './mcp-server/handlers/section-extract.js';
 import { composeInstantiateHandler } from './mcp-server/handlers/compose-instantiate.js';
+import { ingestLocalSiteHandler } from './mcp-server/handlers/ingest-local-site.js';
 import { validateArtifactsHandler } from './mcp-server/handlers/validate-artifacts.js';
 import { NEW_TOOL_SCHEMAS } from './mcp-server/handlers/tool-schemas.js';
 
@@ -655,6 +656,19 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: ['originDir', 'replicaDir'],
       },
     },
+    {
+      name: 'liberate_ingest_local_site',
+      description:
+        'Stage 1a of the owned-source path: ingest a local static-site directory (HTML/CSS/JS) and normalize each page into validated native Gutenberg block markup. Writes <outputDir>/composed/<slug>.blocks.html sidecars + <outputDir>/normalize-report.json. No Playwright/Studio. Downstream theme-scaffold/install/compare stages consume the sidecars.',
+      inputSchema: {
+        type: 'object' as const,
+        properties: {
+          dir: { type: 'string', description: 'Absolute path to the local static-site directory to ingest.' },
+          outputDir: { type: 'string', description: 'Liberation output directory for composed sidecars + normalize-report.json. Defaults to `dir`.' },
+        },
+        required: ['dir'],
+      },
+    },
     ...(JSON.parse(JSON.stringify(
       Object.entries(NEW_TOOL_SCHEMAS).map(([name, def]) => ({ name, ...def })),
     )) as Array<{ name: string; description: string; inputSchema: { type: 'object'; [k: string]: unknown } }>),
@@ -693,6 +707,7 @@ const handlers: Record<string, Handler> = {
   liberate_cluster_pages: clusterPagesHandler,
   liberate_section_extract: sectionExtractHandler,
   liberate_compose_instantiate: composeInstantiateHandler,
+  liberate_ingest_local_site: ingestLocalSiteHandler,
   liberate_validate_artifacts: validateArtifactsHandler,
   liberate_reconstruct_pages: reconstructPagesHandler,
   liberate_reconstruct_pages_carry: reconstructPagesCarryHandler,
