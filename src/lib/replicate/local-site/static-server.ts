@@ -69,6 +69,26 @@ export function resolveRequestPath(root: string, rawPath: string): string | null
     const idx = resolve(root, 'index.html');
     if (existsSync(idx)) return idx;
   }
+  // Relative-asset fallback for clean URLs: a page served at /contact/ whose
+  // HTML says href="styles.css" requests /contact/styles.css — under the
+  // original .html serving that path meant <page dir>/styles.css. Re-resolve
+  // ASSET paths (non-.html, has an extension) by progressively stripping
+  // leading segments until a real file is found. Each candidate re-passes the
+  // sandbox guard.
+  const ext = extname(noSlash);
+  if (ext && ext !== '.html' && ext !== '.htm') {
+    const segs = noSlash.split('/');
+    for (let i = 1; i < segs.length; i++) {
+      const candidate = resolve(root, segs.slice(i).join('/'));
+      if (
+        candidate.startsWith(resolve(root) + '/') &&
+        existsSync(candidate) &&
+        statSync(candidate).isFile()
+      ) {
+        return candidate;
+      }
+    }
+  }
   return null;
 }
 

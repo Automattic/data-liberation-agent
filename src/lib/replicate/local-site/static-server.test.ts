@@ -119,3 +119,23 @@ describe('resolveRequestPath', () => {
     }
   });
 });
+
+describe('relative-asset fallback under clean URLs', () => {
+  it('resolves /about/styles.css to the root styles.css (relative href from a clean URL)', async () => {
+    const dir = makeSite();
+    try {
+      server = await startStaticServer(dir);
+      const res = await fetch(`${server.url}/about/styles.css`);
+      expect(res.status).toBe(200);
+      expect(await res.text()).toContain('color:red');
+      // nested page asset: /blog/post/styles.css → root styles.css too
+      const nested = await fetch(`${server.url}/blog/post/styles.css`);
+      expect(nested.status).toBe(200);
+      // html paths never use the fallback (clean-URL semantics preserved)
+      const html = await fetch(`${server.url}/about/index.html`);
+      expect(html.status).toBe(404);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
