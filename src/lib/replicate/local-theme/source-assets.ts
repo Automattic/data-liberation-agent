@@ -36,6 +36,12 @@ export const WP_COMPAT_CSS = `/* wp-compat: neutralize WP wrapper interference f
    makes the anchors direct flex items of <nav>, so the source nav rules
    (display/gap/wrap) drive the exact same geometry. */
 :where(nav.wp-block-navigation ul, nav.wp-block-navigation li) { display: contents; }
+/* WP sets .wp-block-post-content{display:flow-root}, which BLOCKS the
+   margin collapse the source layout relies on (last section margin-bottom
+   collapsing with the footer margin-top — walrus probe: footer sat 88px
+   lower). Class-level specificity is required to beat WP's own class rule;
+   safe because no source stylesheet targets a wp-* class. */
+.wp-block-post-content { display: block; }
 `;
 
 const GOOGLE_IMPORT_RE = /@import\s+url\(\s*['"]?https:\/\/fonts\.googleapis\.com[^)]*\)\s*;?/g;
