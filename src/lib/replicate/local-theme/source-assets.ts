@@ -28,9 +28,11 @@ export const WP_COMPAT_CSS = `/* wp-compat: neutralize WP wrapper interference f
    elements, so the defaults already match. */
 :where(body) { margin: 0; }
 /* WP renders site-title as a <p> (default margins the source brand <a> never
-   had) and wraps tables in a margined <figure>. Zero-spec so source rules win. */
+   had) and wraps tables in a margined <figure>. Zero-spec so source rules win.
+   The table figure is emitted CLASSLESS (block-library's .wp-block-table
+   td/th rules would out-rank source element rules), so target it via :has. */
 :where(.wp-block-site-title) { margin: 0; }
-:where(figure.wp-block-table) { margin: 0; }
+:where(figure:has(> table)) { margin: 0; }
 /* Structural transparency for core/navigation: the source styles nav > a
    directly, while WP renders nav > ul > li > a. Collapsing the list boxes
    makes the anchors direct flex items of <nav>, so the source nav rules

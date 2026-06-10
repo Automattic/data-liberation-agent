@@ -246,6 +246,6 @@ it('emits source tables as core/table preserving rows, header, and class', () =>
   expect(markup).toContain('<thead><tr><th>Service</th><th>Price</th></tr></thead>');
   expect(markup).toContain('<td>Quick Splash</td><td>45 clams</td>');
   expect(markup).toContain('<td>Glacier Glow</td>');
-  expect(markup).toContain('class="wp-block-table price-table"');
+  expect(markup).toContain('<figure class="price-table"><table>'); // classless of wp-block-table: block-library td/th rules would out-rank source element rules
   expect(confidence).toBe(1); // native mapping, no downgrade
 });

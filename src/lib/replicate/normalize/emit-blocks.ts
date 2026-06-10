@@ -192,11 +192,19 @@ function emitChild($: CheerioAPI, el: Element): ChildResult {
     }
     const bodyRows = bodyRowEls.map((r) => rowHtml(r as Element));
     const attrs = blockAttrs([], cls);
-    const figCls = ['wp-block-table', cls].filter(Boolean).join(' ');
+    // DELIBERATELY no wp-block-table class on the figure: block-library's
+    // `.wp-block-table td/th { border/padding }` class rules out-rank the
+    // source's element rules (td, th { … }) and inflate every row — there is
+    // no specificity slot that beats the WP class yet defers to the source
+    // element selectors. Without the class the WP table css never matches and
+    // the source owns the table entirely. Editor re-save restores the class
+    // (documented canonicalization drift, accepted for parity).
+    const figCls = cls;
+    const figAttr = figCls ? ` class="${escapeHtml(figCls)}"` : '';
     const thead = headRows.length ? `<thead>${headRows.join('')}</thead>` : '';
     const tbody = `<tbody>${bodyRows.join('')}</tbody>`;
     return {
-      markup: `<!-- wp:table${attrs} -->\n<figure class="${escapeHtml(figCls)}"><table>${thead}${tbody}</table></figure>\n<!-- /wp:table -->`,
+      markup: `<!-- wp:table${attrs} -->\n<figure${figAttr}><table>${thead}${tbody}</table></figure>\n<!-- /wp:table -->`,
       clean: true,
     };
   }

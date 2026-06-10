@@ -59,7 +59,7 @@ describe('collectSourceAssets', () => {
     try {
       const assets = collectSourceAssets(dir, [{ relPath: 'index.html', html: '' }]);
       expect(assets.cssFiles).toEqual(['theme.css', 'overrides.css']);
-      expect(assets.css.indexOf('blue')).toBeLessThan(assets.css.indexOf('red'));
+      expect(assets.css.indexOf('color:blue')).toBeLessThan(assets.css.indexOf('color:red')); // exact tokens: compat comments legitimately contain prose like 'rendered'
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
