@@ -328,7 +328,8 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
       });
       parity = {
         floor: PARITY_FLOOR,
-        allPass: parityPages.every((p) => p.passes),
+        // Guard the vacuous case: zero compared pages must not report success.
+        allPass: parityPages.length > 0 && parityPages.every((p) => p.passes),
         avgDesktop: avg(scores('desktop')),
         avgMobile: avg(scores('mobile')),
         pages: parityPages,
