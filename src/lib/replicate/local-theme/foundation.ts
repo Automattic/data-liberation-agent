@@ -80,23 +80,29 @@ export function buildLocalFoundation(aggs: {
   const darkest = byLightness[0]?.hex ?? '#111111';
   const lightest = byLightness[byLightness.length - 1]?.hex ?? '#ffffff';
 
-  // The dominant (highest-count) color approximates the page background — the
-  // aggregator ranks by sampled coverage, and the background out-covers text.
-  // When it is dark, the site is dark-themed: surface gets the dark pole and
-  // text the light pole (otherwise the theme silently inverts dark sites,
-  // bg→text). A median over the top colors is deliberately NOT used: on dark
-  // sites the light text + accent colors jointly outweigh the background and
-  // pull the median light (e.g. the dark fixture in foundation.test.ts).
-  // Empty `usable` → dominant undefined → light default (0.5 ≥ 0.4).
+  // The dominant (highest-count) color approximates the page background. The
+  // palette aggregator counts ELEMENT background-colors — text colors are
+  // never sampled — and the body/page background is the most-counted element
+  // bg. When it is dark, the site is dark-themed: surface gets the dark pole
+  // and text the light pole (otherwise the theme silently inverts dark sites,
+  // bg→text). A median over the top colors is deliberately NOT used: light
+  // card/section backgrounds can jointly out-count the page background by
+  // element count and pull the median light (e.g. the dark fixture in
+  // foundation.test.ts). Empty `usable` → dominant undefined → light default
+  // (0.5 ≥ 0.4).
   const byCount = [...usable].sort((a, b) => b.count - a.count);
   const isDark = (byCount[0]?.hsl.l ?? 0.5) < 0.4;
   const surfaceColor = isDark ? darkest : lightest;
   const textColor = isDark ? lightest : darkest;
 
+  // Fallback `?? textColor` keeps the accent CONTRASTING the surface on both
+  // orientations: light sites textColor === darkest (same pick as before);
+  // dark monochrome sites would otherwise get accent === page bg — and the
+  // button (bg=accent, text=surface pole) would render invisible.
   const accent =
     usable
       .filter((c) => c.hsl.s >= 0.35 && c.hsl.l >= 0.25 && c.hsl.l <= 0.7 && c.hex !== darkest && c.hex !== lightest)
-      .sort((a, b) => b.count - a.count)[0]?.hex ?? darkest;
+      .sort((a, b) => b.count - a.count)[0]?.hex ?? textColor;
 
   const topFamily = (selector: string): string | undefined =>
     typography.bySelector[selector]?.slice().sort((a, b) => b.urls - a.urls)[0]?.fontFamily;

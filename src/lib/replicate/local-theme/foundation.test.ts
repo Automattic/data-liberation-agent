@@ -103,6 +103,24 @@ describe('buildLocalFoundation', () => {
     expect(JSON.stringify(mono.foundation)).not.toContain('NaN');
   });
 
+  it('keeps button contrast on dark monochrome palettes', () => {
+    const mono = buildLocalFoundation({
+      palette: {
+        version: 1,
+        sampledUrls: 4,
+        colors: [
+          { hex: '#0a0a0a', count: 400, urls: 4 }, // page bg — dominant, dark
+          { hex: '#2a2a2a', count: 100, urls: 4 }, // raised card bg
+        ],
+      },
+      typography: { version: 1, sampledUrls: 4, bySelector: {} },
+      breakpoints: { version: 1, sampledUrls: 4, minWidth: [], maxWidth: [] },
+    });
+    const button = mono.foundation.components?.button;
+    expect(button?.background).toBeTruthy();
+    expect(button?.background).not.toBe(button?.text); // invisible-button regression lock
+  });
+
   it('falls back sanely on empty aggregates', () => {
     const empty = buildLocalFoundation({
       palette: { version: 1, sampledUrls: 0, colors: [] },
