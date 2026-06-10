@@ -12,6 +12,7 @@ export interface ComposePageResult {
 
 export function composePage(page: LocalPage): ComposePageResult {
   const bodySections = segmentPage(page.html).filter((s) => s.role === 'body');
+  // Genuinely empty page: nothing to validate, skip the roundtrip gate.
   if (bodySections.length === 0) return { postContent: '', report: [] };
 
   const skeleton: LayoutSkeleton = { sections: [] };
@@ -26,6 +27,11 @@ export function composePage(page: LocalPage): ComposePageResult {
   }
 
   const composed = composeInstantiate(skeleton, pageContent, {});
+  // Unreachable today (every slot is filled with non-empty group markup) —
+  // fence against future composeInstantiate changes causing silent partial loss.
+  if (composed.misfit) {
+    throw new Error(`compose mismatch for "${page.slug}": ${JSON.stringify(composed.sanity)}`);
+  }
   // Strip composeInstantiate's "<!-- section:type -->" marker lines; keep only block markup.
   const postContent = composed.postContent
     .split('\n')
