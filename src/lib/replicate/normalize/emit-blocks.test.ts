@@ -99,6 +99,18 @@ describe('emitSectionBlocks', () => {
     expect(blockMarkupRoundtrips(markup).ok).toBe(true);
   });
 
+  it('unwraps non-allowlisted inline wrappers, preserving nested links', () => {
+    const section = {
+      id: 's',
+      role: 'body' as const,
+      html: '<section><p>Visit <span><a href="/shop.html">the shop</a></span> today</p></section>',
+    };
+    const { markup, confidence } = emitSectionBlocks(section);
+    expect(markup).toContain('Visit <a href="/shop.html">the shop</a> today');
+    expect(confidence).toBe(1);
+    expect(blockMarkupRoundtrips(markup).ok).toBe(true);
+  });
+
   it('uses <main> as the container root (segmentPage main-fallback sections)', () => {
     const section = { id: 'm', role: 'body' as const, html: '<main><h1>T</h1><p>Body</p></main>' };
     const { markup, confidence } = emitSectionBlocks(section);

@@ -21,8 +21,9 @@ const INLINE_ALLOWED = new Set(['a', 'strong', 'em', 'b', 'i', 'br']);
 /**
  * Serialize an element's inline content: allowed inline tags kept (anchors
  * keep only an escaped href — other attributes dropped), text nodes escaped,
- * anything else flattened to its escaped text. Links are content ("never
- * lose source content") — a paragraph's <a href> must survive emission.
+ * any other tag transparently unwrapped (recursed) so nested allowed tags
+ * survive. Links are content ("never lose source content") — a paragraph's
+ * <a href> must survive emission, even wrapped in a <span>.
  */
 function inlineHtml($: CheerioAPI, el: Element): string {
   let out = '';
@@ -44,7 +45,9 @@ function inlineHtml($: CheerioAPI, el: Element): string {
           out += `<${tag}>${inner}</${tag}>`;
         }
       } else {
-        out += escapeHtml($(node).text());
+        // Transparent unwrap: recurse so nested allowed tags (e.g. a link
+        // inside a <span>) survive instead of flattening to bare text.
+        out += inlineHtml($, node);
       }
     }
   }
