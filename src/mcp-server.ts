@@ -47,6 +47,7 @@ import { clusterPagesHandler } from './mcp-server/handlers/cluster-pages.js';
 import { sectionExtractHandler } from './mcp-server/handlers/section-extract.js';
 import { composeInstantiateHandler } from './mcp-server/handlers/compose-instantiate.js';
 import { ingestLocalSiteHandler } from './mcp-server/handlers/ingest-local-site.js';
+import { convertLocalSiteHandler } from './mcp-server/handlers/convert-local-site.js';
 import { validateArtifactsHandler } from './mcp-server/handlers/validate-artifacts.js';
 import { NEW_TOOL_SCHEMAS } from './mcp-server/handlers/tool-schemas.js';
 
@@ -669,6 +670,22 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: ['dir'],
       },
     },
+    {
+      name: 'liberate_convert_local_site',
+      description:
+        'Stage 1b of the owned-source path: full local-static-site → live Studio site. Reuses liberate_ingest_local_site (sidecars + normalize-report), assembles the local block theme (core/navigation header from the nav graph, captured footer, no-title page templates), writes + activates it, creates WP Pages from the sidecars (idempotent via _source_url), sets the front page, and assigns the page-local template. Compare/parity is a later stage.',
+      inputSchema: {
+        type: 'object' as const,
+        properties: {
+          dir: { type: 'string', description: 'Absolute path to the local static-site directory.' },
+          studioSitePath: { type: 'string', description: 'Studio site path on host (e.g. ~/Studio/my-site — the dir studio site list prints, not wp-root).' },
+          outputDir: { type: 'string', description: 'Liberation output dir for sidecars + reports. Defaults to `dir`.' },
+          themeSlug: { type: 'string', description: 'Theme slug (kebab-case). Default: local-site-theme.' },
+          siteTitle: { type: 'string', description: 'Site title for header/footer. Default: home page <title>.' },
+        },
+        required: ['dir', 'studioSitePath'],
+      },
+    },
     ...(JSON.parse(JSON.stringify(
       Object.entries(NEW_TOOL_SCHEMAS).map(([name, def]) => ({ name, ...def })),
     )) as Array<{ name: string; description: string; inputSchema: { type: 'object'; [k: string]: unknown } }>),
@@ -708,6 +725,7 @@ const handlers: Record<string, Handler> = {
   liberate_section_extract: sectionExtractHandler,
   liberate_compose_instantiate: composeInstantiateHandler,
   liberate_ingest_local_site: ingestLocalSiteHandler,
+  liberate_convert_local_site: convertLocalSiteHandler,
   liberate_validate_artifacts: validateArtifactsHandler,
   liberate_reconstruct_pages: reconstructPagesHandler,
   liberate_reconstruct_pages_carry: reconstructPagesCarryHandler,
