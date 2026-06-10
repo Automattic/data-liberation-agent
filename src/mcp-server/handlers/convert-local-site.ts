@@ -23,6 +23,7 @@ import { buildHeaderPart, buildFooterPart } from '../../lib/replicate/local-them
 import { assembleLocalTheme } from '../../lib/replicate/local-theme/theme-files.js';
 import { buildPagePlan } from '../../lib/replicate/local-theme/page-plan.js';
 import { writeReplicaFilesToHost } from '../../lib/preview/replica-install.js';
+import { wpOptionUpdatesForSiteMeta } from '../../lib/preview/site-options.js';
 import { installPost } from '../../lib/streaming/post-install.js';
 
 const execFileAsync = promisify(execFile);
@@ -105,6 +106,17 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
       await studioWp(studioSitePath, wpArgs);
     } catch (err) {
       warnings.push(`cache flush failed (${wpArgs.slice(0, 2).join(' ')}): ${(err as Error).message}`);
+    }
+  }
+  // The header's core/site-title renders the blogname option — without this
+  // the converted site shows the Studio default name, not the ingested title.
+  // wpOptionUpdatesForSiteMeta normalizes + skips empty titles (no tagline
+  // source in the local-site path, so this emits exactly the blogname update).
+  for (const [option, value] of wpOptionUpdatesForSiteMeta({ title: siteTitle })) {
+    try {
+      await studioWp(studioSitePath, ['option', 'update', option, value]);
+    } catch (err) {
+      warnings.push(`${option} set failed: ${(err as Error).message}`);
     }
   }
 

@@ -112,10 +112,13 @@ describe('convertLocalSiteHandler', () => {
       // pages installed via installPost with synthetic source urls
       expect(installedPosts.map((p) => p.slug).sort()).toEqual(['about', 'home']);
       expect(installedPosts[0].sourceUrl.startsWith('local-site:')).toBe(true);
-      // studio wp called for: theme activate, cache flush, front page options, template meta
+      // studio wp called for: theme activate, cache flush, blogname, front page options, template meta
       const flat = execCalls.map((c) => c.join(' '));
       expect(flat.some((c) => c.includes('theme activate acme-local'))).toBe(true);
       expect(flat.some((c) => c.includes('cache flush'))).toBe(true);
+      // core/site-title in the header renders the blogname option — it must be
+      // set to the ingested title or the site shows the Studio default name.
+      expect(flat.some((c) => c.includes('option update blogname Acme'))).toBe(true);
       expect(flat.some((c) => c.includes('option update show_on_front page'))).toBe(true);
       expect(flat.some((c) => c.includes('option update page_on_front'))).toBe(true);
       expect(flat.some((c) => c.includes('_wp_page_template page-local'))).toBe(true);
