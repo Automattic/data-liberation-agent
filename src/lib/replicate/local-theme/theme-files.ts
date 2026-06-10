@@ -70,9 +70,12 @@ export function assembleLocalTheme(opts: AssembleLocalThemeOpts): ReplicaFile[] 
     const parsed = JSON.parse(f.content) as Record<string, unknown> & {
       customTemplates?: Array<{ name: string; title: string; postTypes?: string[] }>;
     };
-    const customTemplates = parsed.customTemplates ?? [];
-    customTemplates.push({ name: 'page-local', title: 'Local Page (no title)', postTypes: ['page'] });
-    return { ...f, content: JSON.stringify({ ...parsed, customTemplates }, null, 2) };
+    const customTemplates = [
+      ...(parsed.customTemplates ?? []),
+      { name: 'page-local', title: 'Local Page (no title)', postTypes: ['page'] },
+    ];
+    // Trailing newline matches the scaffold's theme.json emit convention.
+    return { ...f, content: JSON.stringify({ ...parsed, customTemplates }, null, 2) + '\n' };
   });
 
   const template = noTitleTemplate();

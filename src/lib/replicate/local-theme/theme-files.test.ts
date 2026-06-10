@@ -1,6 +1,7 @@
 // src/lib/replicate/local-theme/theme-files.test.ts
 import { describe, it, expect } from 'vitest';
 import { assembleLocalTheme } from './theme-files.js';
+import { lintThemeJson } from '../theme-json-lint.js';
 
 const HEADER = '<!-- wp:site-title {"level":0} /-->';
 const FOOTER = '<!-- wp:paragraph -->\n<p>foot</p>\n<!-- /wp:paragraph -->';
@@ -30,15 +31,25 @@ describe('assembleLocalTheme', () => {
     }
   });
 
-  it('registers page-local in theme.json customTemplates', () => {
-    const themeJson = JSON.parse(files.find((f) => f.relativePath === 'theme.json')?.content ?? '{}') as {
+  it('registers page-local in theme.json customTemplates and stays lint-clean', () => {
+    const tj = files.find((f) => f.relativePath === 'theme.json');
+    const themeJson = JSON.parse(tj?.content ?? '{}') as {
       customTemplates?: Array<{ name: string }>;
     };
     expect(themeJson.customTemplates?.some((t) => t.name === 'page-local')).toBe(true);
+    // Lint lock: the customTemplates rewrite must not break the activation-gate
+    // invariants (version 3, $schema, spacingScale traps).
+    expect(lintThemeJson(JSON.parse(tj?.content ?? '{}')).ok).toBe(true);
   });
 
   it('produces unique relativePaths (no duplicates from the swap)', () => {
     const paths = files.map((f) => f.relativePath);
     expect(new Set(paths).size).toBe(paths.length);
+  });
+
+  it('front-page.html is byte-identical to page-local.html (single no-title shape)', () => {
+    expect(files.find((f) => f.relativePath === 'templates/front-page.html')?.content).toBe(
+      files.find((f) => f.relativePath === 'templates/page-local.html')?.content,
+    );
   });
 });
