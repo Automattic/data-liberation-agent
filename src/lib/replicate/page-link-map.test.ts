@@ -38,3 +38,40 @@ describe('buildPageLinkMap', () => {
     }
   });
 });
+
+describe('buildPageLinkMap product entries (products.jsonl)', () => {
+  it('maps /products/<handle> to the predicted local /product/<slug>/ permalink', () => {
+    const dir = mkdtempSync(join(process.cwd(), '.tmp-test-linkmap-prod-'));
+    try {
+      writeFileSync(join(dir, 'redirect-map.json'), JSON.stringify([{ from: '/about', to: '/about/' }]));
+      writeFileSync(
+        join(dir, 'products.jsonl'),
+        [
+          JSON.stringify({ name: 'Dream Fan & Bundle', sku: 'parent-1', sourceUrl: 'https://shop.acme.test/products/dream-fan-machine' }),
+          JSON.stringify({ name: 'Dream Fan & Bundle', sku: 'variant-no-url' }),
+          'not-json',
+        ].join('\n'),
+      );
+      const map = buildPageLinkMap(dir, ['https://shop.acme.test/']);
+      // sanitize_title prediction: '&' dropped, spaces hyphenated
+      expect(map.get('/products/dream-fan-machine')).toBe('/product/dream-fan-bundle/');
+      // absolute same-site key works for products too
+      expect(map.get('shop.acme.test/products/dream-fan-machine')).toBe('/product/dream-fan-bundle/');
+      // page entries unaffected
+      expect(map.get('/about')).toBe('/about/');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('no products.jsonl → no product entries, map otherwise intact', () => {
+    const dir = mkdtempSync(join(process.cwd(), '.tmp-test-linkmap-noprod-'));
+    try {
+      writeFileSync(join(dir, 'redirect-map.json'), JSON.stringify([{ from: '/about', to: '/about/' }]));
+      const map = buildPageLinkMap(dir, ['https://acme.test/']);
+      expect(map.get('/about')).toBe('/about/');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

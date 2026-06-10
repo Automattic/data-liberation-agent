@@ -35,7 +35,11 @@ export interface DeepRegionSplit {
 
 /** Find the balanced span [start, end) of the FIRST (or LAST) `<tag …>…</tag>`. */
 function balancedSpan(html: string, tag: string, which: 'first' | 'last'): [number, number] | null {
-  const open = new RegExp(`<${tag}\\b[^>]*>`, 'gi');
+  // `(?![\w-])` after the tag name so a custom element whose name STARTS with the tag
+  // (Shopify Dawn's `<header-drawer>` / `<header-menu>`) is not counted as a `<tag>` open.
+  // `</header-drawer>` never matches the close below, so a `\b`-based open would inflate the
+  // depth and the real `<header>` span would never balance — silently losing the whole header.
+  const open = new RegExp(`<${tag}(?![\\w-])[^>]*>`, 'gi');
   const close = new RegExp(`</${tag}\\s*>`, 'gi');
   // Tokenize opens/closes in order, track depth, collect every balanced top span.
   const toks: Array<{ i: number; end: number; open: boolean }> = [];
@@ -81,6 +85,49 @@ function findChrome(html: string, opts: { tag: 'header' | 'footer'; id: string; 
   return balancedSpan(html, opts.tag, opts.which);
 }
 
+/** Index just past the `</div>` that balances the `<div` whose `<` is at `start` (div-depth). */
+function divSpanEnd(html: string, start: number): number {
+  const re = /<div(?![\w-])|<\/div\s*>/gi;
+  re.lastIndex = start;
+  let depth = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html))) {
+    if (m[0][1] === '/') {
+      if (--depth === 0) return m.index + m[0].length;
+    } else depth++;
+  }
+  return html.length;
+}
+
+/**
+ * The Shopify header is a GROUP of sibling sections — an announcement/utility bar then the nav
+ * header, all marked `.shopify-section-group-header-group`. The bare `<header>` drops the
+ * announcement bar AND the section-wrapper context its CSS relies on. When the located `<header>`
+ * sits inside such a group, extend the span to the full CONTIGUOUS group run so the whole header
+ * travels as one chrome region (→ globalizes via chromeCss, lifts out of content as a unit).
+ * Falls back to the bare `<header>` span when no group marker is present (non-Shopify).
+ */
+function extendToHeaderGroup(html: string, header: [number, number]): [number, number] {
+  const MARK = 'shopify-section-group-header-group';
+  let firstStart = -1;
+  let lastEnd = -1;
+  let from = 0;
+  for (;;) {
+    const mi = html.indexOf(MARK, from);
+    if (mi < 0) break;
+    const lt = html.lastIndexOf('<', mi);
+    if (lt < 0) break;
+    const end = divSpanEnd(html, lt);
+    if (firstStart < 0) firstStart = lt;
+    else if (html.slice(lastEnd, lt).trim() !== '') break; // a non-group element breaks the run
+    lastEnd = end;
+    from = end;
+  }
+  // Only adopt the group span when it actually wraps the located <header>.
+  if (firstStart >= 0 && firstStart <= header[0] && lastEnd >= header[1]) return [firstStart, lastEnd];
+  return header;
+}
+
 /** Top-level `<section>` spans within a fragment (depth-counted; sections don't self-nest the page level). */
 function topLevelSections(html: string): Array<[number, number]> {
   const re = /<\/?section\b[^>]*>/gi;
@@ -113,7 +160,9 @@ export function splitRegionsDeep(bodyHtml: string): DeepRegionSplit {
     closeWrap: '',
   };
 
-  const header = findChrome(bodyHtml, { tag: 'header', id: 'SITE_HEADER', which: 'first' });
+  const headerEl = findChrome(bodyHtml, { tag: 'header', id: 'SITE_HEADER', which: 'first' });
+  // Extend a bare <header> to its full Shopify header group (announcement + nav) when present.
+  const header = headerEl ? extendToHeaderGroup(bodyHtml, headerEl) : null;
   const footer = findChrome(bodyHtml, { tag: 'footer', id: 'SITE_FOOTER', which: 'last' });
   if (!header && !footer) return empty;
 

@@ -41,6 +41,7 @@ export function buildPageLinkMap(outputDir: string, pageSourceUrls: string[]): I
   } catch {
     /* best-effort — fall back to a root-only map */
   }
+  redirectMap = redirectMap.concat(productRedirectEntries(outputDir));
   const origins = new Set<string>();
   for (const url of pageSourceUrls) {
     try {
@@ -50,4 +51,61 @@ export function buildPageLinkMap(outputDir: string, pageSourceUrls: string[]): I
     }
   }
   return buildInternalLinkMap(redirectMap, { siteOrigins: [...origins] });
+}
+
+/**
+ * Product source URLs → local WooCommerce permalinks, derived from
+ * `<outputDir>/products.jsonl`. The extraction's redirect-map only covers
+ * pages/posts (products import separately via CSV, so their WP slugs don't
+ * exist at extraction time) — without these entries every carried
+ * `/products/<handle>` href passes through to the LIVE source site (getsnooz
+ * dogfood finding, 2026-06-09: 425 product refs left absolute).
+ *
+ * The local slug is predicted with WordPress's `sanitize_title` semantics over
+ * the product NAME — the same value the WooCommerce CSV importer slugs. A
+ * collision-uniquified slug (`-2`) on import can still 404; verify post-build.
+ * Only parent rows carry `sourceUrl` (variant rows don't), so the map stays
+ * one-entry-per-product.
+ */
+function productRedirectEntries(outputDir: string): RedirectMapEntry[] {
+  const out: RedirectMapEntry[] = [];
+  try {
+    const p = join(resolve(outputDir), 'products.jsonl');
+    if (!existsSync(p)) return out;
+    const seen = new Set<string>();
+    for (const line of readFileSync(p, 'utf8').split('\n')) {
+      if (!line.trim()) continue;
+      let row: { sourceUrl?: string; name?: string };
+      try {
+        row = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (!row.sourceUrl || !row.name) continue;
+      let fromPath: string;
+      try {
+        fromPath = new URL(row.sourceUrl).pathname;
+      } catch {
+        continue;
+      }
+      const slug = wcSlugFromName(row.name);
+      if (!slug || seen.has(fromPath)) continue;
+      seen.add(fromPath);
+      out.push({ from: fromPath, to: `/product/${slug}/` });
+    }
+  } catch {
+    /* best-effort — products simply stay unrewritten */
+  }
+  return out;
+}
+
+/** WP `sanitize_title` approximation: lowercase, strip accents/symbols, hyphenate. */
+function wcSlugFromName(name: string): string {
+  return name
+    .normalize('NFKD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+    .replace(/['"‘’“”]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
 }

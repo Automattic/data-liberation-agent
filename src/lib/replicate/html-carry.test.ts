@@ -126,3 +126,21 @@ describe('carryHtml', () => {
     expect(html).toContain('object-fit: cover');
   });
 });
+
+describe('carryHtml scroll-trigger un-gating (Shopify Dawn)', () => {
+  it('strips scroll-trigger + scroll-trigger--* hook classes, keeps the rest', () => {
+    const { html } = carryHtml(
+      '<div class="footer-block scroll-trigger animate--slide-in scroll-trigger--offscreen"><p>Newsletter</p></div>',
+      {},
+    );
+    expect(html).not.toContain('scroll-trigger');
+    expect(html).toContain('class="footer-block animate--slide-in"');
+    expect(html).toContain('<p>Newsletter</p>');
+  });
+
+  it('removes the class attribute entirely when scroll-trigger was its only class', () => {
+    const { html } = carryHtml('<section class="scroll-trigger"><p>Body</p></section>', {});
+    expect(html).not.toContain('class=');
+    expect(html).toContain('<p>Body</p>');
+  });
+});

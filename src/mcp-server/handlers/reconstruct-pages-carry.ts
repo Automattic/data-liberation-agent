@@ -247,22 +247,35 @@ export function assembleCarryTheme(input: AssembleInput): AssembleOutput {
   // vanishes on a white store page), falling back to any page that yields one. Only
   // when the run has products; otherwise no store templates are emitted.
   let storeHeaderIsland = '';
-  // The page whose island the store header was carved from — its per-page CSS styles that
-  // header. Passed to the scaffold so functions.php reapplies that CSS on WooCommerce
-  // (block-rendered, island-less) templates. See CarryThemeInput.storeChromeDonorSlug.
-  let storeChromeDonorSlug = '';
   if (input.hasProducts) {
-    const ordered = [...recos.filter((x) => !x.p.isHome), ...recos.filter((x) => x.p.isHome)];
+    // Smartest-match: carve from the header the MOST pages share (the site's "default" nav)
+    // rather than whichever page happens to come first — on a site with sectional navs the
+    // dominant one wins. Frequency is ranked by a HEADER-ONLY canonical signature: the variant
+    // map keys on header+footer combined, which would undercount a header shared across pages
+    // whose footers differ. Pages with no split-out header rank 0 (their inline-header fallback
+    // is weaker signal than a real region). Interior pages still outrank the home page, and the
+    // sort is stable, so original page order breaks remaining ties.
+    const headerSigOf = new Map<(typeof recos)[number], string>();
+    for (const x of recos) {
+      if (x.r.headerIsland) headerSigOf.set(x, chromeSignature(x.r.headerIsland, ''));
+    }
+    const headerFreq = new Map<string, number>();
+    for (const sig of headerSigOf.values()) headerFreq.set(sig, (headerFreq.get(sig) ?? 0) + 1);
+    const freq = (x: (typeof recos)[number]): number => {
+      const sig = headerSigOf.get(x);
+      return sig ? headerFreq.get(sig) ?? 0 : 0;
+    };
+    const ordered = [...recos].sort((a, b) => {
+      const homeRank = Number(a.p.isHome ?? false) - Number(b.p.isHome ?? false);
+      if (homeRank !== 0) return homeRank;
+      return freq(b) - freq(a);
+    });
     for (const cand of ordered) {
-      // The header may be a split-out region (headerIsland) on clean-semantic sites, or
-      // ride inline in the main island (Shopify — the splitter didn't lift it). Prefer
-      // the region, then fall back to the body.
+      // The header may be a split-out region (headerIsland — now incl. the full Shopify header
+      // group), or ride inline in the main island. Prefer the region, then fall back to the body.
       storeHeaderIsland =
         extractStoreHeaderIsland(cand.r.headerIsland) || extractStoreHeaderIsland(cand.r.mainIsland);
-      if (storeHeaderIsland) {
-        storeChromeDonorSlug = cand.p.slug;
-        break;
-      }
+      if (storeHeaderIsland) break;
     }
   }
 
@@ -273,7 +286,6 @@ export function assembleCarryTheme(input: AssembleInput): AssembleOutput {
     bodyClasses,
     pages: scaffoldPages,
     storeHeaderIsland,
-    storeChromeDonorSlug,
     hasProducts: input.hasProducts,
     themeJsonPalette: input.themeJsonPalette,
     themeJsonFontFamilies: input.themeJsonFontFamilies,

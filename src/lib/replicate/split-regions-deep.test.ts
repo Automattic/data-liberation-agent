@@ -58,3 +58,89 @@ describe('splitRegionsDeep', () => {
     expect(r3.sectionsHtml).toHaveLength(1);
   });
 });
+
+// Shopify Dawn (and other component themes) nest CUSTOM ELEMENTS whose tag name starts
+// with the chrome tag — `<header-drawer>`, `<header-menu>` — INSIDE the real `<header>`.
+// Their opening tags must not be counted as `<header>` opens: `</header-drawer>` never
+// matches `</header>`, so a naive `<header\b` open inflates the depth and the real
+// `<header>` span never balances → the whole header is lost into per-page content.
+describe('splitRegionsDeep — header with nested <header-*> custom elements (Shopify Dawn)', () => {
+  const DAWN_BODY =
+    '<div class="shopify-section announcement-bar-section"><div class="utility-bar">Sale</div></div>' +
+    '<div class="shopify-section section-header"><sticky-header>' +
+    '<header class="header header--middle-left">' +
+    '<header-drawer data-breakpoint="tablet"><details><summary>Menu</summary></details></header-drawer>' +
+    '<a class="header__heading-link">Logo</a>' +
+    '<nav class="header__inline-menu"><header-menu><details><summary>Shop</summary></details></header-menu></nav>' +
+    '</header>' +
+    '</sticky-header></div>' +
+    '<main><section>content</section></main>' +
+    '<footer class="footer">foot</footer>';
+  const r = splitRegionsDeep(DAWN_BODY);
+
+  it('isolates the real <header> as one balanced span despite the custom elements', () => {
+    expect(r.found).toBe(true);
+    expect(r.headerHtml.startsWith('<header class="header header--middle-left">')).toBe(true);
+    expect(r.headerHtml.endsWith('</header>')).toBe(true);
+    // the custom elements are captured INSIDE the header span, not treated as header opens
+    expect(r.headerHtml).toContain('<header-drawer');
+    expect(r.headerHtml).toContain('<header-menu>');
+    // and the span stops at the real </header> — it must not swallow main/footer
+    expect(r.headerHtml).not.toContain('<main>');
+    expect(r.headerHtml).not.toContain('<footer');
+  });
+
+  it('keeps the footer + content sections out of the header', () => {
+    expect(r.footerHtml).toBe('<footer class="footer">foot</footer>');
+    expect(r.sectionsHtml.join('')).toContain('<section>content</section>');
+  });
+
+  it('is byte-lossless', () => {
+    const recon =
+      r.openWrap + r.headerHtml + r.midBefore + r.sectionsHtml.join('') + r.midAfter + r.footerHtml + r.closeWrap;
+    expect(recon).toBe(DAWN_BODY);
+  });
+});
+
+// The Shopify header is a GROUP of sibling sections (`.shopify-section-group-header-group`):
+// an announcement/utility bar then the nav header. The bare <header> drops the announcement
+// + the section wrapper context its CSS relies on, so the whole contiguous group must be the
+// chrome region — then it globalizes (chromeCss) and lifts out of content as one unit.
+describe('splitRegionsDeep — Shopify header group (announcement + header) as one chrome region', () => {
+  const DAWN_GROUP_BODY =
+    '<div id="shopify-section-ann" class="shopify-section shopify-section-group-header-group announcement-bar-section"><div class="utility-bar">Recall info</div></div>' +
+    '\n' +
+    '<div id="shopify-section-hdr" class="shopify-section shopify-section-group-header-group section-header"><sticky-header>' +
+    '<header class="header header--middle-left">' +
+    '<header-drawer><details><summary>Menu</summary></details></header-drawer>' +
+    '<nav class="header__inline-menu">Shop</nav>' +
+    '</header>' +
+    '</sticky-header></div>' +
+    '<main><section>content</section></main>' +
+    '<footer class="footer">foot</footer>';
+  const r = splitRegionsDeep(DAWN_GROUP_BODY);
+
+  it('extends the header region across the full contiguous .shopify-section-group-header-group run', () => {
+    expect(r.found).toBe(true);
+    // headerHtml spans the announcement section THROUGH the header section …
+    expect(r.headerHtml).toContain('announcement-bar-section');
+    expect(r.headerHtml).toContain('Recall info');
+    expect(r.headerHtml).toContain('<header class="header');
+    // … and stops before the content/footer
+    expect(r.headerHtml).not.toContain('<main>');
+    expect(r.headerHtml).not.toContain('<footer');
+    // the announcement bar is no longer stranded in openWrap (it's part of the chrome region)
+    expect(r.openWrap).not.toContain('announcement-bar-section');
+  });
+
+  it('keeps content + footer out of the header region', () => {
+    expect(r.footerHtml).toBe('<footer class="footer">foot</footer>');
+    expect(r.sectionsHtml.join('')).toContain('<section>content</section>');
+  });
+
+  it('is byte-lossless', () => {
+    const recon =
+      r.openWrap + r.headerHtml + r.midBefore + r.sectionsHtml.join('') + r.midAfter + r.footerHtml + r.closeWrap;
+    expect(recon).toBe(DAWN_GROUP_BODY);
+  });
+});

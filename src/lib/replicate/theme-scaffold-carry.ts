@@ -124,18 +124,6 @@ export interface CarryThemeInput {
   /** True when the run produced WooCommerce products — gates the store templates. */
   hasProducts?: boolean;
   /**
-   * Slug of the donor page whose carried per-page CSS styles the dedicated store header
-   * (`header-store`). Block-rendered WooCommerce templates (single-product / archive-product)
-   * have NO carried island, so they never hit an `is_page()`/`is_front_page()` branch — and on
-   * Shopify-family sources the store header's rich styling rides in the donor page's CSS, not
-   * the global site.css (the header wasn't split into a chrome region). functions.php reapplies
-   * this page's body class + CSS on `is_woocommerce()` contexts so the store chrome matches the
-   * rest of the site. The CSS is `:where()`-zero-specificity, so it styles the carried chrome
-   * but loses to WooCommerce's own block CSS on the product body (no bleed). Set by
-   * reconstruct-pages-carry when it carves the store header; absent → no reapply branch.
-   */
-  storeChromeDonorSlug?: string;
-  /**
    * Captured design tokens registered in theme.json (`settings.color.palette` /
    * `settings.typography.fontFamilies`) so the product-marketing core blocks resolve
    * their color/font token references. Same slugs the reconstruction maps to — built by
@@ -425,13 +413,7 @@ function stripViewportMeta(html: string): string {
   return html.replace(/<meta\b[^>]*\bname=["']viewport["'][^>]*>\s*/gi, '');
 }
 
-function functionsPhp(
-  pages: CarryPage[],
-  bodyClasses: string[],
-  mobileViewport: boolean,
-  storeChromeDonorSlug: string,
-  nativeStoreChrome: boolean,
-): string {
+function functionsPhp(pages: CarryPage[], bodyClasses: string[], mobileViewport: boolean): string {
   // body_class filter: always add lib-carry-site; replicate the source body classes
   // (so body-state-gated carried rules behave like the source); add per-page class.
   const sourceBodyCases = bodyClasses
@@ -450,30 +432,6 @@ function functionsPhp(
         `    if ( ${pageCondition(p)} ) { wp_enqueue_style( 'lib-carry-page-${p.slug}', get_stylesheet_directory_uri() . '/assets/css/page-${p.slug}.css', array( 'lib-carry-site' ), '1.0.0' ); }`,
     )
     .join('\n');
-
-  // Block-rendered WooCommerce templates (single-product / archive-product) have NO carried
-  // per-page island, so they never match an is_page()/is_front_page() branch and would render
-  // the dedicated header-store part with only the shared site.css. On Shopify-family sources the
-  // header rides inline in each page island (its full styling lives in that page's CSS), so
-  // reapply the DONOR page's class + CSS on every is_woocommerce() context. (`:where()`-zero-
-  // specificity, so it styles the carried store chrome but loses to WooCommerce's block CSS on
-  // the product body — no bleed.) No-op when no store header was isolated (donor slug empty).
-  // Reapply the donor chrome CSS on templates that render the dedicated header-store part with no
-  // carried island. When native blog templates use it too (nativeStoreChrome), that is EVERY
-  // non-content, non-home view — product/shop, blog post/index/archive, search, 404 (index.html
-  // fallback) — i.e. anything that is not an is_page() content island or the is_front_page() home.
-  // Otherwise (posts are carried) only the WooCommerce store templates use it.
-  const storeChromeCond = nativeStoreChrome
-    ? "! is_page() && ! is_front_page()"
-    : "function_exists( 'is_woocommerce' ) && is_woocommerce()";
-  const storeBodyCase = storeChromeDonorSlug
-    ? `    if ( ${storeChromeCond} ) { $classes[] = 'lib-carry-page-${storeChromeDonorSlug}'; }`
-    : '';
-  const storeEnqueue = storeChromeDonorSlug
-    ? `    if ( ${storeChromeCond} ) { wp_enqueue_style( 'lib-carry-page-${storeChromeDonorSlug}', get_stylesheet_directory_uri() . '/assets/css/page-${storeChromeDonorSlug}.css', array( 'lib-carry-site' ), '1.0.0' ); }`
-    : '';
-  const bodyCasesAll = [bodyCases, storeBodyCase].filter(Boolean).join('\n');
-  const enqueueAll = [enqueue, storeEnqueue].filter(Boolean).join('\n');
 
   // Non-responsive (classic/adaptive) source mobile layout is a FIXED-width canvas (carried
   // as the .lib-carry-vp-mobile iframe). The source scales it to fill via a width=320 viewport
@@ -504,13 +462,13 @@ add_action( 'wp_head', function () {
   return `<?php
 add_filter( 'body_class', function( $classes ) {
     $classes[] = 'lib-carry-site';
-${sourceBodyCases ? sourceBodyCases + '\n' : ''}${bodyCasesAll}
+${sourceBodyCases ? sourceBodyCases + '\n' : ''}${bodyCases}
     return $classes;
 } );
 
 add_action( 'wp_enqueue_scripts', function() {
     wp_enqueue_style( 'lib-carry-site', get_stylesheet_directory_uri() . '/assets/css/site.css', array(), '1.0.0' );
-${enqueueAll}
+${enqueue}
 } );
 
 // Allow the dual-viewport mobile-DOM <iframe> (carried mobile layout) through KSES
@@ -598,18 +556,39 @@ export function buildCarryThemeFiles(input: CarryThemeInput): ThemeFile[] {
   // intent for the store header. All selectors key off Dawn's `header__*` / `header--*`
   // BEM classes (and `.announcement-bar`), so they are a NO-OP on themes that lack them.
   // The fully general fix (any theme) is a computed-style-inlined header snapshot; this is
-  // the pragmatic rescue for the common Shopify-Dawn case. Scoped to `.lib-carry-vp-desktop`
-  // (the store-header wrapper) so it never touches content-page islands.
-  const sh = 'body.lib-carry-site .lib-carry-vp-desktop';
+  // the pragmatic rescue for the common Shopify-Dawn case. Scoped to two wrappers, neither of
+  // which ever contains a content-page island (islands are post_content):
+  //   - `.lib-carry-vp-desktop` — the store-header part's own wrapper
+  //   - `.wp-block-template-part` — the PER-PAGE header parts. Page templates render these
+  //     with `tagName:div` (box-less via display:contents), so the tag+class wrapper rescue
+  //     below never fires for them; without this scope the carried Dawn
+  //     `header/#shopify-section-header{display:none!important}` rules hide the whole lifted
+  //     header on every content page + front page (getsnooz dogfood finding, 2026-06-09).
+  const scopes = ['body.lib-carry-site .lib-carry-vp-desktop', 'body.lib-carry-site .wp-block-template-part'];
+  /** Expand each selector under both rescue scopes: both('a','b') → 'S1 a,S2 a,S1 b,S2 b'. */
+  const both = (...sels: string[]): string =>
+    sels.flatMap((sel) => scopes.map((s) => `${s} ${sel}`)).join(',');
   const STORE_HEADER_RESCUE =
-    `${sh} .announcement-bar svg,${sh} .announcement-bar__message svg,${sh} .announcement-bar__link svg{width:1.2rem;height:auto;display:inline-block;vertical-align:middle}\n` +
+    // Header PART VISIBILITY (the actual blocker for lifting the header into global chrome). The
+    // store/native header part renders as `<header class="wp-block-template-part">` (tagName:header).
+    // Carried Dawn CSS includes a `header{display:none!important}` rule (a source no-JS / section-hide
+    // pattern), scoped `:where(body.lib-carry-site)` — zero specificity but `!important` — which
+    // MATCHES that injected wrapper `<header>` and hides the ENTIRE part (dragging everything to 0px,
+    // even though the inner `.header` is force-gridded below). Force the part wrapper visible with a
+    // tag+class selector (higher specificity than the bare `header`, so it wins among !important).
+    `body.lib-carry-site header.wp-block-template-part{display:block!important}\n` +
+    // Then keep the header GROUP CONTAINERS inside it visible (the same `:where()` zero-spec problem
+    // can hit `<sticky-header>` and the section wrappers). NOT the interactive drawers
+    // (header-drawer / menu-drawer / cart-drawer) — those must stay hidden when closed.
+    `${both('sticky-header', '.header-wrapper', '.shopify-section-group-header-group')}{display:block!important}\n` +
+    `${both('.announcement-bar svg', '.announcement-bar__message svg', '.announcement-bar__link svg')}{width:1.2rem;height:auto;display:inline-block;vertical-align:middle}\n` +
     // Restore the header grid (logo | nav | icons). Scoped to Dawn's header-layout
     // modifiers so it never forces grid on an unrelated `.header` element.
-    `${sh} .header.header--top-left,${sh} .header.header--top-center,${sh} .header.header--middle-left,${sh} .header.header--middle-center,${sh} .header.header--mobile-center,${sh} .header.header--mobile-left{display:grid!important}\n` +
-    `${sh} .header__icons{display:flex!important;align-items:center}\n` +
+    `${both('.header.header--top-left', '.header.header--top-center', '.header.header--middle-left', '.header.header--middle-center', '.header.header--mobile-center', '.header.header--mobile-left')}{display:grid!important}\n` +
+    `${both('.header__icons')}{display:flex!important;align-items:center}\n` +
     // Nav links: drop the generic `.link` underline and restore Dawn's nav size.
-    `${sh} .header__menu-item{font-size:1.4rem;text-decoration:none}\n` +
-    `${sh} .header__inline-menu .list-menu__item{text-decoration:none}\n`;
+    `${both('.header__menu-item')}{font-size:1.4rem;text-decoration:none}\n` +
+    `${both('.header__inline-menu .list-menu__item')}{text-decoration:none}\n`;
 
   // Dual-viewport toggle for classic/adaptive Wix mobile-DOM carry. When a page
   // emits a dual island (desktop content in `.lib-carry-vp-desktop` + a
@@ -676,15 +655,14 @@ export function buildCarryThemeFiles(input: CarryThemeInput): ThemeFile[] {
   }
 
   // Island-less templates (native blog single/home/archive + the index.html fallback) have NO
-  // carried island; on Shopify-family carries the home-variant header part is empty, so they
-  // render with no nav/logo. When a populated store header was carved, render IT on them (SPIKE
-  // — branch spike/carry-real-header-parts). `nativeStoreChrome` ties the two halves together:
-  // functions.php only reapplies the donor chrome CSS on those contexts when they use the header.
+  // carried island; on Shopify-family carries the per-page header part is empty, so they would
+  // render with no nav/logo. When a populated store header was carved, render IT on them — it is
+  // styled by the GLOBAL chrome CSS (siteCss), since the header now splits into the chrome region
+  // (see split-regions-deep), so no per-page donor CSS is needed.
   const homePage = pages.find((p) => p.isHome);
   const homeSlugs = slugsFor(homePage?.chromeKey ?? input.chromeVariants[0]?.key ?? '');
   const nativeBlog = input.nativeBlog ?? !pages.some((p) => p.postType === 'post');
   const useStoreHeader = (input.hasProducts ?? false) && !!input.storeHeaderIsland;
-  const nativeStoreChrome = nativeBlog && useStoreHeader;
   const storeHeaderSlugs: ChromeSlugs = { header: STORE_HEADER_SLUG, footer: homeSlugs.footer };
 
   // index.html (required fallback — also serves 404 / search when those templates are absent).
@@ -699,7 +677,7 @@ export function buildCarryThemeFiles(input: CarryThemeInput): ThemeFile[] {
   const files: ThemeFile[] = [
     { path: 'style.css', content: styleCssHeader(input.themeName) },
     { path: 'theme.json', content: JSON.stringify(themeJson, null, 2) },
-    { path: 'functions.php', content: functionsPhp(pages, input.bodyClasses ?? [], hasMobileCanvas, input.storeChromeDonorSlug ?? '', nativeStoreChrome) },
+    { path: 'functions.php', content: functionsPhp(pages, input.bodyClasses ?? [], hasMobileCanvas) },
     // Site-wide CSS — reset first (so source rules win the cascade), then the
     // chrome-wrapper rescue, then EVERY variant's carried chrome CSS (concatenated
     // upstream into siteCss; comp-id-scoped so variants never collide).
