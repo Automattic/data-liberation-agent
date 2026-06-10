@@ -26,6 +26,7 @@ function listHtmlFiles(root: string): string[] {
 export function slugFromRelPath(relPath: string): string {
   const noExt = relPath.replace(/\.html?$/i, '');
   const parts = noExt.split(sep).filter(Boolean);
+  if (parts.length === 0) return 'home';
   const last = parts[parts.length - 1];
   if (last.toLowerCase() === 'index') {
     return parts.length === 1 ? 'home' : parts.slice(0, -1).join('-').toLowerCase();

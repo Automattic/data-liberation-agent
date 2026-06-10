@@ -24,6 +24,10 @@ describe('slugFromRelPath', () => {
     expect(slugFromRelPath('blog/index.html')).toBe('blog');
     expect(slugFromRelPath('blog/Index.html')).toBe('blog');
   });
+
+  it('falls back to "home" for an empty path', () => {
+    expect(slugFromRelPath('')).toBe('home');
+  });
 });
 
 describe('ingestLocalSite', () => {
