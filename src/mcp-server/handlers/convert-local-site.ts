@@ -2,14 +2,15 @@
 //
 // liberate_convert_local_site
 // ===========================
-// Stage 1b of the owned-source path: take a local static site through to a
-// LIVE Studio site — reuse stage 1a (ingest → composed sidecars), assemble
-// the local block theme (nav-graph header, captured footer, no-title page
-// templates), write + activate it, create WP Pages from the sidecars
-// (idempotent via _source_url), set the front page, and assign the
-// page-local template. Compare/parity wiring is stage 1c.
+// Stage 1b+1c of the owned-source path: take a local static site through to a
+// LIVE Studio site — reuse stage 1a (ingest → composed sidecars), optionally
+// capture the source site's design tokens + screenshots, assemble the local
+// block theme (nav-graph header, captured footer, foundation-styled, no-title
+// page templates), write + activate it, create WP Pages from the sidecars
+// (idempotent via _source_url), set the front page, assign the page-local
+// template, optionally capture the WP replica and score parity.
 //
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, readdirSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -25,6 +26,11 @@ import { buildPagePlan } from '../../lib/replicate/local-theme/page-plan.js';
 import { writeReplicaFilesToHost } from '../../lib/preview/replica-install.js';
 import { wpOptionUpdatesForSiteMeta } from '../../lib/preview/site-options.js';
 import { installPost } from '../../lib/streaming/post-install.js';
+import { startStaticServer } from '../../lib/replicate/local-site/static-server.js';
+import { captureScreenshots } from '../../lib/screenshot/screenshotter.js';
+import { compareScreenshotDirs } from '../../lib/screenshot/compare.js';
+import { buildLocalFoundation, type PaletteAgg, type TypographyAgg, type BreakpointsAgg } from '../../lib/replicate/local-theme/foundation.js';
+import { extractGoogleFontCssUrls, selfHostGoogleFonts } from '../../lib/replicate/local-theme/google-fonts.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -54,6 +60,12 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
   const wpRoot = resolveWpRoot(studioSitePath);
   if (!wpRoot) return ctx.errorResult(`no wp-content found under ${studioSitePath} (or its wordpress/ subdir)`);
 
+  const skipDesign = args.skipDesign === true;
+  const skipCompare = args.skipCompare === true;
+  const wpUrl = ((args.wpUrl as string | undefined) ?? 'http://localhost:8889').replace(/\/$/, '');
+
+  const warnings: string[] = [];
+
   // Stage 1a: ingest + compose sidecars + normalize-report (reuse the handler verbatim).
   const ingestRes = await ingestLocalSiteHandler({ dir, outputDir }, ctx);
   if (ingestRes.isError) return ingestRes;
@@ -76,22 +88,93 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
   const siteTitle = (args.siteTitle as string | undefined) ?? site.pages.find((p) => p.slug === 'home')?.title ?? 'Local Site';
   const themeSlug = (args.themeSlug as string | undefined) ?? 'local-site-theme';
 
+  // Stage 1c — Design capture (unless skipDesign): serve the local site over
+  // HTTP, run the screenshot pipeline to collect palette/typography/breakpoints
+  // aggregates, build a deterministic design foundation, and self-host any
+  // Google Fonts found in the source HTML/CSS. Failures here degrade to a
+  // warning and fall back to the default foundation — never abort.
+  let foundation: Parameters<typeof assembleLocalTheme>[0]['foundation'];
+  let capturedFonts: Parameters<typeof assembleLocalTheme>[0]['capturedFonts'];
+  let footerBgToken: string | undefined;
+  let footerTextToken: string | undefined;
+  let designCaptured = false;
+  const sourceCaptureDir = join(outputDir, 'source');
+
+  if (!skipDesign) {
+    let server: Awaited<ReturnType<typeof startStaticServer>> | undefined;
+    try {
+      server = await startStaticServer(dir);
+      // Use relPath-based URLs so nested pages resolve: slug-based pageUrl('blog-post')
+      // would 404 on a source that has blog/post.html (Task-1 review C1).
+      const sourceUrls = site.pages.map((p) => server!.urlForPage(p.relPath));
+      await captureScreenshots({
+        urls: sourceUrls,
+        outputDir: sourceCaptureDir,
+        primaryUrl: server.url,
+        captureDesign: true,
+        concurrency: 2,
+      });
+      const readJson = <T>(name: string): T =>
+        JSON.parse(readFileSync(join(sourceCaptureDir, name), 'utf8')) as T;
+      const local = buildLocalFoundation({
+        palette: readJson<PaletteAgg>('palette.json'),
+        typography: readJson<TypographyAgg>('typography.json'),
+        breakpoints: readJson<BreakpointsAgg>('breakpoints.json'),
+      });
+      foundation = local.foundation;
+      footerBgToken = local.footerBgToken;
+      footerTextToken = local.footerTextToken;
+
+      // Google Fonts: scan each page's HTML plus any .css files in the site dir.
+      const cssSources = site.pages.map((p) => p.html);
+      for (const f of readdirSync(dir)) {
+        if (f.endsWith('.css')) cssSources.push(readFileSync(join(dir, f), 'utf8'));
+      }
+      const fontCssUrls = extractGoogleFontCssUrls(cssSources);
+      if (fontCssUrls.length > 0) {
+        const hosted = await selfHostGoogleFonts(fontCssUrls, { themeDir: join(outputDir, 'theme') });
+        capturedFonts = hosted.faces;
+        for (const e of hosted.errors) warnings.push(`font self-host failed: ${e.url}: ${e.error}`);
+      }
+
+      designCaptured = true;
+    } catch (err) {
+      warnings.push(`design capture failed (default styling used): ${(err as Error).message}`);
+    } finally {
+      await server?.close();
+    }
+  }
+
   // Chrome: nav from the graph; footer from the home page's captured footer section.
   const nav = buildNavGraph(site);
   const home = site.pages.find((p) => p.slug === 'home') ?? site.pages[0];
   const footerSection = segmentPage(home.html).find((s) => s.role === 'footer') ?? null;
   const headerPart = buildHeaderPart(siteTitle, nav, site.pages.map((p) => p.slug));
-  const footerPart = buildFooterPart(footerSection, siteTitle, { pageSlugs: site.pages.map((p) => p.slug) });
+  // Footer tokens (bgToken/textToken) come from the foundation — they style the
+  // wrapper group in the footer part we build here. The assembleLocalTheme
+  // passthrough was proven inert (we swap parts/footer.html unconditionally),
+  // so tokens live exclusively on the part built by buildFooterPart.
+  const footerPart = buildFooterPart(footerSection, siteTitle, {
+    pageSlugs: site.pages.map((p) => p.slug),
+    bgToken: footerBgToken,
+    textToken: footerTextToken,
+  });
 
   // Theme assembly + write + activate.
-  const themeFiles = assembleLocalTheme({ siteTitle, themeSlug, headerPart, footerPart });
+  const themeFiles = assembleLocalTheme({ siteTitle, themeSlug, headerPart, footerPart, foundation, capturedFonts });
   let themeWritten = 0;
   try {
-    themeWritten = writeReplicaFilesToHost({ wpRoot, themeSlug, themeFiles }).themeWritten;
+    // assetSourceDir carries downloaded fonts (woff2) into the live theme so the
+    // install is self-contained without a separate binary-copy step.
+    themeWritten = writeReplicaFilesToHost({
+      wpRoot,
+      themeSlug,
+      themeFiles,
+      assetSourceDir: join(outputDir, 'theme'),
+    }).themeWritten;
   } catch (err) {
     return ctx.errorResult(`theme write failed: ${(err as Error).message}`);
   }
-  const warnings: string[] = [];
   try {
     await studioWp(studioSitePath, ['theme', 'activate', themeSlug]);
   } catch (err) {
@@ -160,6 +243,49 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
     }
   }
 
+  // Stage 1c — Compare: capture the WP replica and score parity against the
+  // source screenshots. Skipped when skipDesign or skipCompare, or when design
+  // capture failed (no source screenshots to compare against).
+  // KNOWN LIMITATION (flat sites unaffected): nested pages compare-join by
+  // pathname will miss — source serves /blog/post/ (relPath) while the WP
+  // permalink is /blog-post/ (joined slug). Real fix = create WP pages with
+  // parent hierarchy mirroring relPath (later stage). Nested pages appear in
+  // source capture but produce missing-replica rows in the comparison output —
+  // visible, not silent.
+  let parity: { avgDesktop: number; avgMobile: number; pages: Array<{ pathname: string; desktop: number | null; mobile: number | null }> } | undefined;
+  if (!skipDesign && !skipCompare && designCaptured) {
+    try {
+      const replicaCaptureDir = join(outputDir, 'replica');
+      const replicaUrls = installed
+        .filter((p) => p.postId != null)
+        .map((p) => (p.slug === plan.homeSlug ? `${wpUrl}/` : `${wpUrl}/${p.slug}/`));
+      await captureScreenshots({ urls: replicaUrls, outputDir: replicaCaptureDir, primaryUrl: wpUrl, concurrency: 2 });
+      const comparison = await compareScreenshotDirs({
+        originDir: join(sourceCaptureDir, 'screenshots'),
+        replicaDir: join(replicaCaptureDir, 'screenshots'),
+      });
+      const scores = (v: 'desktop' | 'mobile'): number[] =>
+        comparison.results.map((r) => r[v]?.score).filter((s): s is number => typeof s === 'number');
+      const avg = (xs: number[]): number => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0);
+      parity = {
+        avgDesktop: avg(scores('desktop')),
+        avgMobile: avg(scores('mobile')),
+        pages: comparison.results.map((r) => ({
+          pathname: r.pathname,
+          desktop: r.desktop?.score ?? null,
+          mobile: r.mobile?.score ?? null,
+        })),
+      };
+      // Atomic write (tmp + rename) mirrors normalize-report convention.
+      const reportPath = join(outputDir, 'parity-report.json');
+      const tmp = `${reportPath}.tmp.${process.pid}`;
+      writeFileSync(tmp, JSON.stringify({ schema: 1, comparison, parity }, null, 2) + '\n');
+      renameSync(tmp, reportPath);
+    } catch (err) {
+      warnings.push(`compare failed: ${(err as Error).message}`);
+    }
+  }
+
   return ctx.textResult({
     pages: plan.items.length,
     installed: installed.length,
@@ -170,6 +296,8 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
     themeSlug,
     themeWritten,
     frontPageSet,
+    designCaptured,
+    ...(parity !== undefined ? { parity } : {}),
     warnings,
   });
 };

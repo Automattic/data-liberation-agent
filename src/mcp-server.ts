@@ -673,7 +673,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'liberate_convert_local_site',
       description:
-        'Stage 1b of the owned-source path: full local-static-site → live Studio site. Reuses liberate_ingest_local_site (sidecars + normalize-report), assembles the local block theme (core/navigation header from the nav graph, captured footer, no-title page templates), writes + activates it, creates WP Pages from the sidecars (idempotent via _source_url), sets the front page, and assigns the page-local template. Compare/parity is a later stage.',
+        'Stage 1b+1c of the owned-source path: full local-static-site → live Studio site. Reuses liberate_ingest_local_site (sidecars + normalize-report), optionally captures the source design (palette/typography/screenshots) and self-hosts Google Fonts, assembles the local block theme (core/navigation header from the nav graph, foundation-styled footer, no-title page templates), writes + activates it, creates WP Pages from the sidecars (idempotent via _source_url), sets the front page, assigns the page-local template, and optionally captures the WP replica + scores parity.',
       inputSchema: {
         type: 'object' as const,
         properties: {
@@ -682,6 +682,9 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           outputDir: { type: 'string', description: 'Liberation output dir for sidecars + reports. Defaults to `dir`.' },
           themeSlug: { type: 'string', description: 'Theme slug (kebab-case). Default: local-site-theme.' },
           siteTitle: { type: 'string', description: 'Site title for header/footer. Default: home page <title>.' },
+          skipDesign: { type: 'boolean', description: 'Skip source design capture (tokens/fonts) and compare; theme uses default styling.' },
+          skipCompare: { type: 'boolean', description: 'Skip the WP-replica screenshot + parity compare stage.' },
+          wpUrl: { type: 'string', description: 'Base URL of the running Studio site for replica capture. Default: http://localhost:8889.' },
         },
         required: ['dir', 'studioSitePath'],
       },

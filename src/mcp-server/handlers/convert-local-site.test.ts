@@ -9,6 +9,40 @@ import type { HandlerContext, ToolResult } from '../handler-types.js';
 // - post-install installPost → page creation (it shells out internally)
 // Per-test failure injection: a test sets execFailFor / installFailFor;
 // beforeEach resets both so tests stay independent.
+
+// Heavy design-capture + compare seams — mocked at the module level so the
+// handler never invokes Playwright or the pixel-matcher in unit tests.
+// capturedRuns tracks calls so tests can assert on source + replica invocations.
+const capturedRuns: Array<{ urls: string[]; outputDir: string }> = [];
+vi.mock('../../lib/screenshot/screenshotter.js', () => ({
+  captureScreenshots: vi.fn(async (opts: { urls: string[]; outputDir: string }) => {
+    capturedRuns.push({ urls: opts.urls, outputDir: opts.outputDir });
+    // Fabricate aggregate files the handler reads after source capture.
+    const { mkdirSync: md, writeFileSync: wf } = await import('node:fs');
+    const { join: j } = await import('node:path');
+    md(j(opts.outputDir, 'screenshots'), { recursive: true });
+    wf(j(opts.outputDir, 'palette.json'), JSON.stringify({ version: 1, sampledUrls: 1, colors: [{ hex: '#0e2a30', count: 10, urls: 1 }, { hex: '#f7f2e9', count: 9, urls: 1 }, { hex: '#e2573b', count: 5, urls: 1 }] }));
+    wf(j(opts.outputDir, 'typography.json'), JSON.stringify({ version: 1, sampledUrls: 1, bySelector: { body: [{ fontFamily: 'X', fontSize: '16px', fontWeight: '400', lineHeight: '24px', urls: 1 }] } }));
+    wf(j(opts.outputDir, 'breakpoints.json'), JSON.stringify({ version: 1, sampledUrls: 1, minWidth: [], maxWidth: [] }));
+    wf(j(opts.outputDir, 'screenshots', 'manifest.json'), JSON.stringify({ version: 1, entries: {} }));
+    return { captured: opts.urls.length, failed: 0, skipped: 0, browserRestarts: 0, durationMs: 0, manifestPath: j(opts.outputDir, 'screenshots', 'manifest.json') };
+  }),
+}));
+vi.mock('../../lib/screenshot/compare.js', () => ({
+  compareScreenshotDirs: vi.fn(async () => ({
+    version: 1,
+    comparedAt: 'TEST',
+    results: [
+      { pathname: '/', originUrl: 'o', replicaUrl: 'r', desktop: { status: 'ok', score: 0.91 }, mobile: { status: 'ok', score: 0.88 } },
+      { pathname: '/about/', originUrl: 'o', replicaUrl: 'r', desktop: { status: 'ok', score: 0.95 }, mobile: { status: 'ok', score: 0.9 } },
+    ],
+  })),
+}));
+vi.mock('../../lib/replicate/local-theme/google-fonts.js', async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  selfHostGoogleFonts: vi.fn(async () => ({ faces: [], errors: [] })),
+}));
+
 const execCalls: string[][] = [];
 let execFailFor: string | null = null;
 vi.mock('node:child_process', async (importOriginal) => {
@@ -83,6 +117,7 @@ function makeStudioSite(): string {
 beforeEach(() => {
   execCalls.length = 0;
   installedPosts.length = 0;
+  capturedRuns.length = 0;
   execFailFor = null;
   installFailFor = null;
 });
@@ -94,7 +129,7 @@ describe('convertLocalSiteHandler', () => {
     const outDir = mkdtempSync(join(FIXTURE_TMP, 'cls-out-'));
     try {
       const res = await convertLocalSiteHandler(
-        { dir, studioSitePath: sitePath, outputDir: outDir, themeSlug: 'acme-local', siteTitle: 'Acme' },
+        { dir, studioSitePath: sitePath, outputDir: outDir, themeSlug: 'acme-local', siteTitle: 'Acme', skipDesign: true },
         ctx,
       );
       expect(res.isError).toBeFalsy();
@@ -143,7 +178,7 @@ describe('convertLocalSiteHandler', () => {
     execFailFor = 'theme activate';
     try {
       const res = await convertLocalSiteHandler(
-        { dir, studioSitePath: sitePath, outputDir: outDir, themeSlug: 'acme-local', siteTitle: 'Acme' },
+        { dir, studioSitePath: sitePath, outputDir: outDir, themeSlug: 'acme-local', siteTitle: 'Acme', skipDesign: true },
         ctx,
       );
       expect(res.isError).toBeFalsy();
@@ -165,7 +200,7 @@ describe('convertLocalSiteHandler', () => {
     installFailFor = 'about';
     try {
       const res = await convertLocalSiteHandler(
-        { dir, studioSitePath: sitePath, outputDir: outDir, themeSlug: 'acme-local', siteTitle: 'Acme' },
+        { dir, studioSitePath: sitePath, outputDir: outDir, themeSlug: 'acme-local', siteTitle: 'Acme', skipDesign: true },
         ctx,
       );
       expect(res.isError).toBeFalsy();
@@ -188,7 +223,7 @@ describe('convertLocalSiteHandler', () => {
     const outDir = mkdtempSync(join(FIXTURE_TMP, 'cls-out-'));
     try {
       const res = await convertLocalSiteHandler(
-        { dir, studioSitePath: sitePath, outputDir: outDir, themeSlug: 'acme-local' },
+        { dir, studioSitePath: sitePath, outputDir: outDir, themeSlug: 'acme-local', skipDesign: true },
         ctx,
       );
       expect(res.isError).toBeFalsy();
@@ -220,5 +255,54 @@ describe('convertLocalSiteHandler', () => {
   it('errors when dir is missing', async () => {
     const res = await convertLocalSiteHandler({ studioSitePath: '/x' }, ctx);
     expect(res.isError).toBe(true);
+  });
+
+  it('runs design capture + compare and reports parity', async () => {
+    const dir = makeSite();
+    const sitePath = makeStudioSite();
+    const outDir = mkdtempSync(join(FIXTURE_TMP, 'cls-design-'));
+    try {
+      const res = await convertLocalSiteHandler(
+        { dir, studioSitePath: sitePath, outputDir: outDir, themeSlug: 'acme-local', siteTitle: 'Acme' },
+        ctx,
+      );
+      expect(res.isError).toBeFalsy();
+      const summary = JSON.parse(res.content[0].text) as {
+        parity?: { avgDesktop: number; avgMobile: number; pages: unknown[] };
+        designCaptured?: boolean;
+      };
+      expect(summary.designCaptured).toBe(true);
+      expect(summary.parity?.avgDesktop).toBeCloseTo(0.93, 2);
+      expect(summary.parity?.pages).toHaveLength(2);
+      expect(capturedRuns).toHaveLength(2);                       // source + replica
+      expect(capturedRuns[0].urls.some((u) => u.endsWith('/about/'))).toBe(true); // clean URLs
+      expect(existsSync(join(outDir, 'parity-report.json'))).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(sitePath, { recursive: true, force: true });
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
+  it('skipDesign skips capture/compare and uses the default foundation', async () => {
+    const dir = makeSite();
+    const sitePath = makeStudioSite();
+    const outDir = mkdtempSync(join(FIXTURE_TMP, 'cls-skip-'));
+    try {
+      const before = capturedRuns.length;
+      const res = await convertLocalSiteHandler(
+        { dir, studioSitePath: sitePath, outputDir: outDir, skipDesign: true },
+        ctx,
+      );
+      expect(res.isError).toBeFalsy();
+      const summary = JSON.parse(res.content[0].text) as { designCaptured?: boolean; parity?: unknown };
+      expect(summary.designCaptured).toBe(false);
+      expect(summary.parity).toBeUndefined();
+      expect(capturedRuns.length).toBe(before);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(sitePath, { recursive: true, force: true });
+      rmSync(outDir, { recursive: true, force: true });
+    }
   });
 });
