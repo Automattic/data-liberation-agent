@@ -17,7 +17,7 @@ describe('composePage', () => {
     expect(blockMarkupRoundtrips(postContent).ok).toBe(true);
     expect(report.map((r) => r.sectionId)).toEqual(['hero', 'cta']);
     expect(report.every((r) => r.confidence === 1)).toBe(true);
-    expect(postContent).toContain('<h1>Hi</h1>');
+    expect(postContent).toContain('<h1 class="wp-block-heading">Hi</h1>');
   });
 
   it('returns empty content + empty report for a page with no body sections', () => {

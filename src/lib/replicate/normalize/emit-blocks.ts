@@ -1,6 +1,6 @@
 // src/lib/replicate/normalize/emit-blocks.ts
 import * as cheerio from 'cheerio';
-import type { CheerioAPI } from 'cheerio';
+import type { CheerioAPI, Cheerio } from 'cheerio';
 import { isTag, isText } from 'domhandler';
 import type { Element } from 'domhandler';
 import type { Section } from '../local-site/types.js';
@@ -11,6 +11,23 @@ export function escapeHtml(text: string): string {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+/** JSON-encode a block-attribute string with WP's '--' escaping so values can
+ * never terminate the surrounding block comment. Shared by all emitters. */
+export function attrJson(value: string): string {
+  return JSON.stringify(value).replace(/--/g, '\\u002d\\u002d');
+}
+
+/** class attr of an element as a single className string ('' when none). */
+function classNameOf($el: Cheerio<Element>): string {
+  return ($el.attr('class') ?? '').split(/\s+/).filter(Boolean).join(' ');
+}
+
+/** Build the {…} attr fragment merging optional className into existing pairs. */
+function blockAttrs(pairs: string[], className: string): string {
+  const all = className ? [...pairs, `"className":${attrJson(className)}`] : pairs;
+  return all.length ? ` {${all.join(',')}}` : '';
 }
 
 const HEADING = /^h([1-6])$/;
@@ -38,11 +55,13 @@ function inlineHtml($: CheerioAPI, el: Element): string {
       }
       if (INLINE_ALLOWED.has(tag)) {
         const inner = inlineHtml($, node);
+        const cls = ($(node).attr('class') ?? '').trim();
+        const clsAttr = cls ? ` class="${escapeHtml(cls)}"` : '';
         if (tag === 'a') {
           const href = escapeHtml($(node).attr('href') ?? '');
-          out += `<a href="${href}">${inner}</a>`;
+          out += `<a${clsAttr} href="${href}">${inner}</a>`;
         } else {
-          out += `<${tag}>${inner}</${tag}>`;
+          out += `<${tag}${clsAttr}>${inner}</${tag}>`;
         }
       } else {
         // Transparent unwrap: recurse so nested allowed tags (e.g. a link
@@ -57,7 +76,10 @@ function inlineHtml($: CheerioAPI, el: Element): string {
 function imageBlock($: CheerioAPI, imgEl: Element): string {
   const src = escapeHtml($(imgEl).attr('src') ?? '');
   const alt = escapeHtml($(imgEl).attr('alt') ?? '');
-  return `<!-- wp:image -->\n<figure class="wp-block-image"><img src="${src}" alt="${alt}"/></figure>\n<!-- /wp:image -->`;
+  const cls = classNameOf($(imgEl));
+  const attrs = blockAttrs([], cls);
+  const figCls = ['wp-block-image', cls].filter(Boolean).join(' ');
+  return `<!-- wp:image${attrs} -->\n<figure class="${figCls}"><img src="${src}" alt="${alt}"/></figure>\n<!-- /wp:image -->`;
 }
 
 function paragraphBlock(inner: string): string {
@@ -77,16 +99,22 @@ function emitChild($: CheerioAPI, el: Element): ChildResult {
   const h = HEADING.exec(tag);
   if (h) {
     const level = Number(h[1]);
-    const attrs = level === 2 ? '' : ` {"level":${level}}`;
+    const cls = classNameOf($el);
+    const attrs = blockAttrs(level === 2 ? [] : [`"level":${level}`], cls);
+    const htmlCls = ['wp-block-heading', cls].filter(Boolean).join(' ');
     const inner = inlineHtml($, el).trim();
     return {
-      markup: `<!-- wp:heading${attrs} -->\n<h${level}>${inner}</h${level}>\n<!-- /wp:heading -->`,
+      markup: `<!-- wp:heading${attrs} -->\n<h${level} class="${htmlCls}">${inner}</h${level}>\n<!-- /wp:heading -->`,
       clean: true,
     };
   }
 
   if (tag === 'p') {
-    return { markup: paragraphBlock(inlineHtml($, el).trim()), clean: true };
+    const cls = classNameOf($el);
+    const attrs = blockAttrs([], cls);
+    const inner = inlineHtml($, el).trim();
+    const open = cls ? `<p class="${cls}">` : '<p>';
+    return { markup: `<!-- wp:paragraph${attrs} -->\n${open}${inner}</p>\n<!-- /wp:paragraph -->`, clean: true };
   }
 
   if (tag === 'img') {
@@ -97,10 +125,13 @@ function emitChild($: CheerioAPI, el: Element): ChildResult {
     const href = escapeHtml($el.attr('href') ?? '');
     // Button labels are plain text — no inline markup inside the link.
     const label = escapeHtml($el.text().trim());
+    const cls = classNameOf($el);
+    const buttonAttrs = blockAttrs([], cls);
+    const divCls = ['wp-block-button', cls].filter(Boolean).join(' ');
     return {
       markup:
         `<!-- wp:buttons -->\n<div class="wp-block-buttons">` +
-        `<!-- wp:button -->\n<div class="wp-block-button"><a class="wp-block-button__link wp-element-button" href="${href}">${label}</a></div>\n<!-- /wp:button -->` +
+        `<!-- wp:button${buttonAttrs} -->\n<div class="${divCls}"><a class="wp-block-button__link wp-element-button" href="${href}">${label}</a></div>\n<!-- /wp:button -->` +
         `</div>\n<!-- /wp:buttons -->`,
       clean: true,
     };
@@ -112,10 +143,13 @@ function emitChild($: CheerioAPI, el: Element): ChildResult {
       .map((_, li) => `<!-- wp:list-item -->\n<li>${inlineHtml($, li).trim()}</li>\n<!-- /wp:list-item -->`)
       .get()
       .join('\n');
-    const ordered = tag === 'ol' ? ' {"ordered":true}' : '';
+    const cls = classNameOf($el);
+    const orderedPairs = tag === 'ol' ? ['"ordered":true'] : [];
+    const listAttrs = blockAttrs(orderedPairs, cls);
     const ulTag = tag === 'ol' ? 'ol' : 'ul';
+    const listCls = ['wp-block-list', cls].filter(Boolean).join(' ');
     return {
-      markup: `<!-- wp:list${ordered} -->\n<${ulTag} class="wp-block-list">${items}</${ulTag}>\n<!-- /wp:list -->`,
+      markup: `<!-- wp:list${listAttrs} -->\n<${ulTag} class="${listCls}">${items}</${ulTag}>\n<!-- /wp:list -->`,
       clean: true,
     };
   }
@@ -168,9 +202,14 @@ export function emitSectionBlocks(section: Section): { markup: string; confidenc
   }
 
   const inner = childMarkup.join('\n');
+  const cls = (section.classes ?? []).join(' ');
+  const anchorPair = `"anchor":${attrJson(section.id)}`;
+  const layoutPair = '"layout":{"type":"constrained"}';
+  const attrs = blockAttrs([anchorPair, layoutPair], cls);
+  const divCls = ['wp-block-group', cls].filter(Boolean).join(' ');
   const markup =
-    `<!-- wp:group {"layout":{"type":"constrained"}} -->\n` +
-    `<div class="wp-block-group">${inner}</div>\n` +
+    `<!-- wp:group${attrs} -->\n` +
+    `<div id="${escapeHtml(section.id)}" class="${divCls}">${inner}</div>\n` +
     `<!-- /wp:group -->`;
   const confidence = total === 0 ? 0 : 1 - downgrades / total;
   return { markup, confidence };

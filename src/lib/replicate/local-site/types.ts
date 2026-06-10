@@ -30,6 +30,9 @@ export interface Section {
   role: SectionRole;
   /** outerHTML of the section element. */
   html: string;
+  /** The source element's class list, in order — preserved onto the emitted
+   * block wrapper so carried source CSS keeps matching (stage 1d). */
+  classes?: string[];
 }
 
 export interface NormalizeReportEntry {

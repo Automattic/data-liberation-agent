@@ -114,4 +114,11 @@ describe('segmentPage', () => {
     const body = segmentPage(html).filter((s) => s.role === 'body');
     expect(body.map((s) => s.id)).toEqual(['s']);
   });
+
+  it('captures the section class list', () => {
+    const html = '<main><section id="hero" class="hero splash"><h1>Hi</h1></section><div class="cards"><p>x</p></div></main>';
+    const sections = segmentPage(html).filter((s) => s.role === 'body');
+    expect(sections[0].classes).toEqual(['hero', 'splash']);
+    expect(sections[1].classes).toEqual(['cards']);
+  });
 });

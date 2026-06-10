@@ -50,12 +50,15 @@ export function segmentPage(html: string): Section[] {
   // Track the exact elements captured as chrome so the body iteration (which
   // walks ALL top-level nodes when there is no <main>) never double-captures
   // them as body sections.
+  const classesOf = (el: ReturnType<typeof $>): string[] =>
+    (el.attr('class') ?? '').split(/\s+/).filter(Boolean);
+
   const chromeEls = new Set<Element>();
   const pushChrome = (selector: string, role: SectionRole): void => {
     const el = $(selector).first();
     if (el.length) {
       chromeEls.add(el.get(0) as Element);
-      sections.push({ id: role, role, html: $.html(el) ?? '' });
+      sections.push({ id: role, role, html: $.html(el) ?? '', classes: classesOf(el) });
     }
   };
   // Strict body-direct landmarks only. A comma-fallback (bare `header`) would
@@ -80,7 +83,7 @@ export function segmentPage(html: string): Section[] {
     if (isTag(node)) {
       if (SKIP_TAGS.has(node.tagName?.toLowerCase() ?? '')) continue;
       if (chromeEls.has(node)) continue; // already captured as chrome
-      sections.push({ id: stableId($, node, ordinal), role: 'body', html: $.html(node) ?? '' });
+      sections.push({ id: stableId($, node, ordinal), role: 'body', html: $.html(node) ?? '', classes: classesOf($(node)) });
       ordinal += 1;
     } else if (isText(node)) {
       const text = node.data.trim();
@@ -92,7 +95,7 @@ export function segmentPage(html: string): Section[] {
       // decodes and re-escapes on extraction, so the final block markup is
       // identical for plain text and correct for tag-shaped text.
       const html = `<p>${escapeHtml(text)}</p>`;
-      sections.push({ id: hashId(html, ordinal), role: 'body', html });
+      sections.push({ id: hashId(html, ordinal), role: 'body', html, classes: [] });
       ordinal += 1;
     }
     // Comments and other node types: skipped.

@@ -23,7 +23,7 @@ describe('emitSectionBlocks', () => {
     const { markup, confidence } = emitSectionBlocks(section);
     expect(blockMarkupRoundtrips(markup).ok).toBe(true);
     expect(markup).toContain('<!-- wp:heading');
-    expect(markup).toContain('<h1>Welcome</h1>');
+    expect(markup).toContain('<h1 class="wp-block-heading">Welcome</h1>');
     expect(markup).toContain('<!-- wp:paragraph');
     expect(markup).toContain('<!-- wp:buttons');
     expect(confidence).toBe(1);
@@ -115,7 +115,7 @@ describe('emitSectionBlocks', () => {
     const section = { id: 'm', role: 'body' as const, html: '<main><h1>T</h1><p>Body</p></main>' };
     const { markup, confidence } = emitSectionBlocks(section);
     expect(markup).toContain('<!-- wp:heading');
-    expect(markup).toContain('<h1>T</h1>');
+    expect(markup).toContain('<h1 class="wp-block-heading">T</h1>');
     expect(markup).toContain('<p>Body</p>');
     expect(confidence).toBe(1);
     expect(blockMarkupRoundtrips(markup).ok).toBe(true);
@@ -142,8 +142,8 @@ describe('emitSectionBlocks', () => {
     const { markup } = emitSectionBlocks(section);
     expect(markup).toContain('<!-- wp:heading {"level":3} -->');
     expect(markup).toContain('<!-- wp:heading -->');
-    expect(markup).toContain('<h3>Three</h3>');
-    expect(markup).toContain('<h2>Two</h2>');
+    expect(markup).toContain('<h3 class="wp-block-heading">Three</h3>');
+    expect(markup).toContain('<h2 class="wp-block-heading">Two</h2>');
     expect(blockMarkupRoundtrips(markup).ok).toBe(true);
   });
 
@@ -155,5 +155,55 @@ describe('emitSectionBlocks', () => {
     expect((markup.match(/<!-- wp:paragraph -->/g) ?? []).length).toBe(2);
     expect(confidence).toBe(1);
     expect(blockMarkupRoundtrips(markup).ok).toBe(true);
+  });
+
+  it('preserves section id and classes on the group wrapper', () => {
+    const section = {
+      id: 'hero',
+      role: 'body' as const,
+      classes: ['hero', 'splash'],
+      html: '<section id="hero" class="hero splash"><h1>Welcome</h1></section>',
+    };
+    const { markup } = emitSectionBlocks(section);
+    expect(blockMarkupRoundtrips(markup).ok).toBe(true);
+    expect(markup).toContain('"className":"hero splash"');
+    expect(markup).toContain('"anchor":"hero"');
+    expect(markup).toContain('class="wp-block-group hero splash"');
+    expect(markup).toContain('id="hero"');
+  });
+
+  it('preserves child element classes on emitted blocks', () => {
+    const section = {
+      id: 's',
+      role: 'body' as const,
+      classes: [],
+      html: '<section><h2 class="section-title">T</h2><p class="lede">x</p><img class="pic" src="a.png" alt=""/><ul class="list-x"><li>i</li></ul><a class="button cta" href="/x/">Go</a></section>',
+    };
+    const { markup } = emitSectionBlocks(section);
+    expect(blockMarkupRoundtrips(markup).ok).toBe(true);
+    expect(markup).toContain('"className":"section-title"');
+    expect(markup).toContain('class="wp-block-heading section-title"');
+    expect(markup).toContain('"className":"lede"');
+    expect(markup).toContain('"className":"pic"');
+    expect(markup).toContain('"className":"list-x"');
+    expect(markup).toContain('"className":"button cta"');     // on wp:button
+  });
+
+  it('keeps class on allowed inline tags', () => {
+    const section = {
+      id: 's', role: 'body' as const, classes: [],
+      html: '<section><p>see <a class="inline-link" href="/a/">it</a> <strong class="hot">now</strong></p></section>',
+    };
+    const { markup } = emitSectionBlocks(section);
+    expect(markup).toContain('<a class="inline-link" href="/a/">it</a>');
+    expect(markup).toContain('<strong class="hot">now</strong>');
+  });
+
+  it('escapes -- in class names for block-comment safety', () => {
+    const section = { id: 's', role: 'body' as const, classes: ['mod--wide'], html: '<section class="mod--wide"><p>x</p></section>' };
+    const { markup } = emitSectionBlocks(section);
+    expect(blockMarkupRoundtrips(markup).ok).toBe(true);
+    expect(markup).toContain('\\u002d\\u002d');           // attr JSON escaped
+    expect(markup).toContain('class="wp-block-group mod--wide"'); // literal in HTML (safe outside comments)
   });
 });
