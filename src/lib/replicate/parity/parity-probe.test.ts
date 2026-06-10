@@ -59,6 +59,25 @@ describe('compareSnapshots', () => {
     ]);
   });
 
+  it('occurrence indices are document-order global, so asymmetric region windows join correctly', () => {
+    // Source side intersected cards 1,2 of three; replica side cards 0,1.
+    // Because SNAPSHOT_FN counts EVERY qualifying element in document order
+    // (emitting only intersecting ones), the [n] keys are truthful: card[1]
+    // pairs with card[1] and the only divergence is the structural missing
+    // card[2]. Region-local counting would mis-pair src card[1]<->rep card[0]
+    // and src card[2]<->rep card[1], producing spurious prop divergences.
+    const base = snap({});
+    const src = [snap({ match: 'div.card[1]' }), snap({ match: 'div.card[2]' })];
+    const rep = [
+      snap({ match: 'div.card[0]', props: { ...base.props, fontSize: '20px' } }),
+      snap({ match: 'div.card[1]' }),
+    ];
+    const d = compareSnapshots(src, rep, 'desktop');
+    expect(d).toEqual([
+      expect.objectContaining({ kind: 'missing', match: 'div.card[2]' }),
+    ]);
+  });
+
   it('is deterministic: output order follows source order', () => {
     const a = snap({ match: 'p.lede[0]' });
     const b = snap({ match: 'section.cards[0]' });

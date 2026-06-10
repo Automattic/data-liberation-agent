@@ -102,6 +102,13 @@ export function compareSnapshots(
 // Playwright capture (thin)
 // ---------------------------------------------------------------------------
 
+/** Freeze-motion css — measure under the SAME frozen conditions the capture
+ * used (probe-state == capture-state). The probe owns this; the handler's
+ * freezeMotion prepareCapture imports it rather than duplicating the bytes. */
+export const FREEZE_MOTION_CSS =
+  '*,*::before,*::after{transition:none!important;animation:none!important}' +
+  'html.js section{opacity:1!important;transform:none!important}';
+
 const NAME_POLYFILL = `
   if (typeof globalThis.__name === 'undefined') {
     globalThis.__name = function (fn) { return fn; };
@@ -120,7 +127,6 @@ const SNAPSHOT_FN = `(args) => {
     const rect = el.getBoundingClientRect();
     const abs = { top: rect.top + window.scrollY, bottom: rect.bottom + window.scrollY };
     if (rect.width === 0 && rect.height === 0) continue;
-    if (!intersects(abs)) continue;
     const tag = el.tagName.toLowerCase();
     if (tag === 'html' || tag === 'body') continue;
     const id = el.getAttribute('id');
@@ -131,6 +137,10 @@ const SNAPSHOT_FN = `(args) => {
     const base = id ? '#' + id : tag + '.' + own.join('.');
     const n = counters.get(base) || 0;
     counters.set(base, n + 1);
+    // Count EVERY qualifying element in document order, EMIT only the
+    // intersecting ones — counting global keeps occurrence indices stable
+    // across asymmetric region shapes on both sides.
+    if (!intersects(abs)) continue;
     const cs = getComputedStyle(el);
     const props = {};
     for (const p of battery) props[p] = cs[p];
@@ -138,7 +148,7 @@ const SNAPSHOT_FN = `(args) => {
       match: base + '[' + n + ']',
       rect: { top: Math.round(abs.top), left: Math.round(rect.left), width: Math.round(rect.width), height: Math.round(rect.height) },
       props,
-      replicaOnlyClasses: all.filter((c) => /^(wp-|is-|has-)/.test(c)),
+      replicaOnlyClasses: all.filter((c) => /^(wp-|is-|has-)/.test(c) || c === 'alignfull' || c === 'alignwide'),
     });
   }
   return out;
@@ -178,11 +188,7 @@ export async function probePair(opts: ProbePairOpts): Promise<Divergence[]> {
     const grab = async (url: string): Promise<ElementSnapshot[]> => {
       await page.goto(url, { waitUntil: 'networkidle' });
       await page.evaluate('document.fonts.ready');
-      await page.addStyleTag({
-        content:
-          '*,*::before,*::after{transition:none!important;animation:none!important}' +
-          'html.js section{opacity:1!important;transform:none!important}',
-      });
+      await page.addStyleTag({ content: FREEZE_MOTION_CSS });
       return snapshotPage(page, opts.regions);
     };
     const source = await grab(opts.sourceUrl);

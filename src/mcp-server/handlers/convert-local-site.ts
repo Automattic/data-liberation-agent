@@ -32,6 +32,7 @@ import { compareScreenshotDirs } from '../../lib/screenshot/compare.js';
 import { buildLocalFoundation, extractCssColors, type PaletteAgg, type TypographyAgg, type BreakpointsAgg } from '../../lib/replicate/local-theme/foundation.js';
 import { extractGoogleFontCssUrls, selfHostGoogleFonts } from '../../lib/replicate/local-theme/google-fonts.js';
 import { collectSourceAssets, WP_COMPAT_CSS } from '../../lib/replicate/local-theme/source-assets.js';
+import { FREEZE_MOTION_CSS } from '../../lib/replicate/parity/parity-probe.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -115,12 +116,9 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
   // opacity/translate transitions) race the screenshot on BOTH sides, jittering
   // pixelmatch scores run-to-run. Freeze all animation and force the revealed
   // end-state symmetrically — the comparison measures design, not motion timing.
+  // Shared with the parity probe so probe-state == capture-state.
   const freezeMotion = async (page: import('playwright').Page): Promise<void> => {
-    await page.addStyleTag({
-      content:
-        '*,*::before,*::after{transition:none!important;animation:none!important}' +
-        'html.js section{opacity:1!important;transform:none!important}',
-    });
+    await page.addStyleTag({ content: FREEZE_MOTION_CSS });
   };
 
   if (!skipDesign) {
