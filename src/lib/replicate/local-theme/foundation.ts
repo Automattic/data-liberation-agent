@@ -80,6 +80,19 @@ export function buildLocalFoundation(aggs: {
   const darkest = byLightness[0]?.hex ?? '#111111';
   const lightest = byLightness[byLightness.length - 1]?.hex ?? '#ffffff';
 
+  // The dominant (highest-count) color approximates the page background — the
+  // aggregator ranks by sampled coverage, and the background out-covers text.
+  // When it is dark, the site is dark-themed: surface gets the dark pole and
+  // text the light pole (otherwise the theme silently inverts dark sites,
+  // bg→text). A median over the top colors is deliberately NOT used: on dark
+  // sites the light text + accent colors jointly outweigh the background and
+  // pull the median light (e.g. the dark fixture in foundation.test.ts).
+  // Empty `usable` → dominant undefined → light default (0.5 ≥ 0.4).
+  const byCount = [...usable].sort((a, b) => b.count - a.count);
+  const isDark = (byCount[0]?.hsl.l ?? 0.5) < 0.4;
+  const surfaceColor = isDark ? darkest : lightest;
+  const textColor = isDark ? lightest : darkest;
+
   const accent =
     usable
       .filter((c) => c.hsl.s >= 0.35 && c.hsl.l >= 0.25 && c.hsl.l <= 0.7 && c.hex !== darkest && c.hex !== lightest)
@@ -99,13 +112,15 @@ export function buildLocalFoundation(aggs: {
   return {
     foundation: {
       color: {
-        surface: { base: { value: lightest }, inverse: { value: darkest } },
-        text: { default: { value: darkest }, inverse: { value: lightest } },
+        // surface.inverse is the footer band — it CONTRASTS the page, so it
+        // takes the text pole; text.inverse takes the surface pole.
+        surface: { base: { value: surfaceColor }, inverse: { value: textColor } },
+        text: { default: { value: textColor }, inverse: { value: surfaceColor } },
         accent: { primary: { value: accent } },
       },
       typography: { families: { body: { value: bodyFamily }, display: { value: displayFamily } } },
       breakpoints: { md, lg, xl },
-      components: { button: { background: accent, text: lightest, radius: '999px' } },
+      components: { button: { background: accent, text: surfaceColor, radius: '999px' } },
     },
     footerBgToken: 'surface-inverse',
     footerTextToken: 'text-inverse',

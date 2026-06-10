@@ -54,13 +54,64 @@ describe('buildLocalFoundation', () => {
     expect(JSON.stringify(foundation)).not.toContain('#00ff00');
   });
 
+  it('orients surface/text for dark sites (dominant dark background)', () => {
+    const dark = buildLocalFoundation({
+      palette: {
+        version: 1,
+        sampledUrls: 4,
+        colors: [
+          { hex: '#1a1a1a', count: 400, urls: 4 }, // near-black bg — dominant
+          { hex: '#f0f0f0', count: 350, urls: 4 }, // near-white text
+          { hex: '#4ea1ff', count: 80, urls: 4 },  // blue accent
+        ],
+      },
+      typography,
+      breakpoints,
+    });
+    expect(dark.foundation.color?.surface?.base?.value).toBe('#1a1a1a');
+    expect(dark.foundation.color?.text?.default?.value).toBe('#f0f0f0');
+    expect(dark.foundation.color?.accent?.primary?.value).toBe('#4ea1ff');
+    // contrast partners: footer band contrasts the page
+    expect(dark.foundation.color?.surface?.inverse?.value).toBe('#f0f0f0');
+    expect(dark.foundation.color?.text?.inverse?.value).toBe('#1a1a1a');
+  });
+
+  it('handles an achromatic palette without NaN or throw', () => {
+    const mono = buildLocalFoundation({
+      palette: {
+        version: 1,
+        sampledUrls: 4,
+        colors: [
+          { hex: '#ffffff', count: 300, urls: 4 },
+          { hex: '#000000', count: 200, urls: 4 },
+          { hex: '#808080', count: 100, urls: 4 },
+        ],
+      },
+      typography: { version: 1, sampledUrls: 4, bySelector: {} },
+      breakpoints: { version: 1, sampledUrls: 4, minWidth: [], maxWidth: [] },
+    });
+    const color = mono.foundation.color;
+    for (const v of [
+      color?.surface?.base?.value,
+      color?.surface?.inverse?.value,
+      color?.text?.default?.value,
+      color?.text?.inverse?.value,
+      color?.accent?.primary?.value,
+    ]) {
+      expect(v).toBeDefined();
+    }
+    expect(JSON.stringify(mono.foundation)).not.toContain('NaN');
+  });
+
   it('falls back sanely on empty aggregates', () => {
     const empty = buildLocalFoundation({
       palette: { version: 1, sampledUrls: 0, colors: [] },
       typography: { version: 1, sampledUrls: 0, bySelector: {} },
       breakpoints: { version: 1, sampledUrls: 0, minWidth: [], maxWidth: [] },
     });
-    expect(empty.foundation.color?.text?.default?.value).toBeTruthy();   // defaults
-    expect(empty.foundation.typography?.families?.body?.value).toBeTruthy();
+    // Empty usable → light-default orientation with pinned defaults.
+    expect(empty.foundation.color?.text?.default?.value).toBe('#111111');
+    expect(empty.foundation.color?.surface?.base?.value).toBe('#ffffff');
+    expect(empty.foundation.typography?.families?.body?.value).toBe('system-ui, sans-serif');
   });
 });
