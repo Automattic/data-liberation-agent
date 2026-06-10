@@ -154,6 +154,48 @@ function emitChild($: CheerioAPI, el: Element): ChildResult {
     };
   }
 
+  if (tag === 'table') {
+    // core/table: rebuild thead/tbody rows with text-only cells (inline markup
+    // inside cells flattens to text — matches the emitter's v1 cell model).
+    // Source `table {}` / `th, td {}` element rules keep applying; the source
+    // table class rides along via className.
+    const cls = classNameOf($el);
+    const rowHtml = (rowEl: Element): string => {
+      const cells = $(rowEl)
+        .children('th, td')
+        .map((_, c) => {
+          const cellTag = (c as Element).tagName?.toLowerCase() === 'th' ? 'th' : 'td';
+          return `<${cellTag}>${escapeHtml($(c).text().trim())}</${cellTag}>`;
+        })
+        .get()
+        .join('');
+      return `<tr>${cells}</tr>`;
+    };
+    const headRows = $el.find('thead tr').map((_, r) => rowHtml(r as Element)).get();
+    // cheerio normalizes bare <tr> children into an implicit <tbody>, so a
+    // source table with no explicit <thead> lands its header row here too —
+    // promote a leading all-<th> row to thead (matches WP's table block shape).
+    let bodyRowEls = $el.find('tbody tr').toArray();
+    if (bodyRowEls.length === 0) bodyRowEls = $el.find('tr').toArray();
+    if (headRows.length === 0 && bodyRowEls.length > 0) {
+      const first = bodyRowEls[0];
+      const firstIsHeader = $(first).children('td').length === 0 && $(first).children('th').length > 0;
+      if (firstIsHeader) {
+        headRows.push(rowHtml(first as Element));
+        bodyRowEls = bodyRowEls.slice(1);
+      }
+    }
+    const bodyRows = bodyRowEls.map((r) => rowHtml(r as Element));
+    const attrs = blockAttrs([], cls);
+    const figCls = ['wp-block-table', cls].filter(Boolean).join(' ');
+    const thead = headRows.length ? `<thead>${headRows.join('')}</thead>` : '';
+    const tbody = `<tbody>${bodyRows.join('')}</tbody>`;
+    return {
+      markup: `<!-- wp:table${attrs} -->\n<figure class="${escapeHtml(figCls)}"><table>${thead}${tbody}</table></figure>\n<!-- /wp:table -->`,
+      clean: true,
+    };
+  }
+
   // Rescue img descendants before the catch-all downgrade — an unknown
   // wrapper (e.g. <figure>) flattened to a text paragraph would silently
   // lose its image URLs ("never lose source content").

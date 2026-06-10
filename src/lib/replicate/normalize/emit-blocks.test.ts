@@ -232,3 +232,19 @@ it('emits the section wrapper as a semantic <section> with tagName attr (carry p
   expect(markup).toContain('</section>');
   expect(blockMarkupRoundtrips(markup).ok).toBe(true);
 });
+
+it('emits source tables as core/table preserving rows, header, and class', () => {
+  const section = {
+    id: 'prices', role: 'body' as const, classes: [],
+    html: '<section><table class="price-table"><tr><th>Service</th><th>Price</th></tr><tr><td>Quick Splash</td><td>45 clams</td></tr><tr><td>Glacier Glow</td><td>150 clams</td></tr></table></section>',
+  };
+  const { markup, confidence } = emitSectionBlocks(section);
+  expect(blockMarkupRoundtrips(markup).ok).toBe(true);
+  expect(markup).toContain('<!-- wp:table');
+  expect(markup).toContain('"className":"price-table"');
+  expect(markup).toContain('<thead><tr><th>Service</th><th>Price</th></tr></thead>');
+  expect(markup).toContain('<td>Quick Splash</td><td>45 clams</td>');
+  expect(markup).toContain('<td>Glacier Glow</td>');
+  expect(markup).toContain('class="wp-block-table price-table"');
+  expect(confidence).toBe(1); // native mapping, no downgrade
+});

@@ -25,6 +25,10 @@ export const WP_COMPAT_CSS = `/* wp-compat: neutralize WP wrapper interference f
 :where(body .is-layout-constrained) > * { margin-block-start: 0; margin-block-end: 0; }
 :where(body .is-layout-flow) > * { margin-block-start: 0; margin-block-end: 0; }
 :where(body) { margin: 0; }
+/* WP renders site-title as a <p> (default margins the source brand <a> never
+   had) and wraps tables in a margined <figure>. Zero-spec so source rules win. */
+:where(.wp-block-site-title) { margin: 0; }
+:where(figure.wp-block-table) { margin: 0; }
 `;
 
 const GOOGLE_IMPORT_RE = /@import\s+url\(\s*['"]?https:\/\/fonts\.googleapis\.com[^)]*\)\s*;?/g;
