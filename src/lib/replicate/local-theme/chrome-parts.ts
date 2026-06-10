@@ -50,15 +50,33 @@ export function selectNavLinks(nav: NavLink[], pageSlugs: string[]): Array<{ lab
   }));
 }
 
-export function buildHeaderPart(siteTitle: string, nav: NavLink[], pageSlugs: string[]): string {
+export interface HeaderPartOpts {
+  /** Stage 1d carry mode: emit BARE site-title + navigation with no styled
+   * wrapper — the template part's own <header> element carries the source
+   * `header { … }` layout rules (flex/padding), so our decorative wrapper
+   * would fight them. Default false (tokens path keeps the styled wrapper). */
+  plain?: boolean;
+}
+
+export function buildHeaderPart(
+  siteTitle: string,
+  nav: NavLink[],
+  pageSlugs: string[],
+  opts: HeaderPartOpts = {},
+): string {
   const links = selectNavLinks(nav, pageSlugs)
     .map((l) => `<!-- wp:navigation-link {"label":${attrJson(l.label)},"url":${attrJson(l.url)}} /-->`)
     .join('\n');
+  const siteTitleBlock = `<!-- wp:site-title {"level":0,"className":"brand"} /-->`;
+  const navBlock = `<!-- wp:navigation {"overlayMenu":"mobile","layout":{"type":"flex"}} -->\n${links}\n<!-- /wp:navigation -->`;
+  if (opts.plain) {
+    return `${siteTitleBlock}\n${navBlock}`;
+  }
   return (
     `<!-- wp:group {"align":"full","layout":{"type":"flex","justifyContent":"space-between"},"style":{"spacing":{"padding":{"top":"1rem","bottom":"1rem","left":"1.5rem","right":"1.5rem"}}}} -->\n` +
     `<div class="wp-block-group alignfull" style="padding-top:1rem;padding-right:1.5rem;padding-bottom:1rem;padding-left:1.5rem">` +
-    `<!-- wp:site-title {"level":0,"className":"brand"} /-->\n` +
-    `<!-- wp:navigation {"overlayMenu":"mobile","layout":{"type":"flex"}} -->\n${links}\n<!-- /wp:navigation -->` +
+    `${siteTitleBlock}\n` +
+    navBlock +
     `</div>\n` +
     `<!-- /wp:group -->`
   );

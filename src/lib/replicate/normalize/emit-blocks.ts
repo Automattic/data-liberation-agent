@@ -204,12 +204,16 @@ export function emitSectionBlocks(section: Section): { markup: string; confidenc
   const inner = childMarkup.join('\n');
   const cls = (section.classes ?? []).join(' ');
   const anchorPair = `"anchor":${attrJson(section.id)}`;
+  // tagName:section so carried source CSS element-selectors (section { … })
+  // keep matching the block DOM — core/group supports semantic tagNames and
+  // serializes <section class="wp-block-group …"> (stage 1d parity).
+  const tagPair = '"tagName":"section"';
   const layoutPair = '"layout":{"type":"constrained"}';
-  const attrs = blockAttrs([anchorPair, layoutPair], cls);
+  const attrs = blockAttrs([anchorPair, tagPair, layoutPair], cls);
   const divCls = ['wp-block-group', cls].filter(Boolean).join(' ');
   const markup =
     `<!-- wp:group${attrs} -->\n` +
-    `<div id="${escapeHtml(section.id)}" class="${escapeHtml(divCls)}">${inner}</div>\n` +
+    `<section id="${escapeHtml(section.id)}" class="${escapeHtml(divCls)}">${inner}</section>\n` +
     `<!-- /wp:group -->`;
   const confidence = total === 0 ? 0 : 1 - downgrades / total;
   return { markup, confidence };

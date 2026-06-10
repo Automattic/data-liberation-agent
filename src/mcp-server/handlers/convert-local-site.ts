@@ -162,21 +162,6 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
     }
   }
 
-  // Chrome: nav from the graph; footer from the home page's captured footer section.
-  const nav = buildNavGraph(site);
-  const home = site.pages.find((p) => p.slug === 'home') ?? site.pages[0];
-  const footerSection = segmentPage(home.html).find((s) => s.role === 'footer') ?? null;
-  const headerPart = buildHeaderPart(siteTitle, nav, site.pages.map((p) => p.slug));
-  // Footer tokens (bgToken/textToken) come from the foundation — they style the
-  // wrapper group in the footer part we build here. The assembleLocalTheme
-  // passthrough was proven inert (we swap parts/footer.html unconditionally),
-  // so tokens live exclusively on the part built by buildFooterPart.
-  const footerPart = buildFooterPart(footerSection, siteTitle, {
-    pageSlugs: site.pages.map((p) => p.slug),
-    bgToken: footerBgToken,
-    textToken: footerTextToken,
-  });
-
   // Stage 1d: collect source CSS/JS from disk (link-driven, document order).
   // Runs regardless of skipDesign — assets live on disk, no Playwright needed.
   // When both flags are off, carrySourceAssets stays undefined (tokens-only theme).
@@ -188,6 +173,27 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
       js: carryJs ? assets.js : '',
     };
   }
+  // The carried stylesheet is the design authority for chrome too: plain parts
+  // (bare blocks, no styled wrappers/tokens) so the source `header{}`/`footer{}`
+  // rules — which match the template parts' real <header>/<footer> elements —
+  // drive layout instead of fighting our decoration.
+  const chromeCarried = !!carrySourceAssets?.css.trim() && carryCss;
+
+  // Chrome: nav from the graph; footer from the home page's captured footer section.
+  const nav = buildNavGraph(site);
+  const home = site.pages.find((p) => p.slug === 'home') ?? site.pages[0];
+  const footerSection = segmentPage(home.html).find((s) => s.role === 'footer') ?? null;
+  const headerPart = buildHeaderPart(siteTitle, nav, site.pages.map((p) => p.slug), { plain: chromeCarried });
+  // Footer tokens (bgToken/textToken) come from the foundation — they style the
+  // wrapper group in the footer part we build here. The assembleLocalTheme
+  // passthrough was proven inert (we swap parts/footer.html unconditionally),
+  // so tokens live exclusively on the part built by buildFooterPart. In carry
+  // mode the tokens are omitted — source footer{} rules style the part.
+  const footerPart = buildFooterPart(footerSection, siteTitle, {
+    pageSlugs: site.pages.map((p) => p.slug),
+    bgToken: chromeCarried ? undefined : footerBgToken,
+    textToken: chromeCarried ? undefined : footerTextToken,
+  });
 
   // Theme assembly + write + activate.
   const themeFiles = assembleLocalTheme({ siteTitle, themeSlug, headerPart, footerPart, foundation, capturedFonts, carrySourceAssets });

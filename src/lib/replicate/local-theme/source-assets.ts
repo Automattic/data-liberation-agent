@@ -20,6 +20,7 @@ import { join } from 'node:path';
 export const WP_COMPAT_CSS = `/* wp-compat: neutralize WP wrapper interference for carried source CSS */
 .wp-block-template-part { display: contents; }
 :where(body .is-layout-constrained) > * { margin-block-start: 0; margin-block-end: 0; }
+:where(body .is-layout-flow) > * { margin-block-start: 0; margin-block-end: 0; }
 :where(body) { margin: 0; }
 `;
 

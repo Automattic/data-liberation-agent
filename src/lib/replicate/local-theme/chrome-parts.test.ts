@@ -134,3 +134,14 @@ describe('buildFooterPart', () => {
     expect(dflt).not.toContain('"backgroundColor"');
   });
 });
+
+describe('buildHeaderPart plain mode (carry)', () => {
+  it('emits bare site-title + navigation without the styled wrapper', () => {
+    const html = buildHeaderPart('Acme Co', [], ['home', 'about'], { plain: true });
+    expect(blockMarkupRoundtrips(html).ok).toBe(true);
+    expect(html).toContain('wp:site-title');
+    expect(html).toContain('wp:navigation');
+    expect(html).not.toContain('wp:group');       // no decorative wrapper
+    expect(html).not.toContain('padding-top');     // no inline styling
+  });
+});

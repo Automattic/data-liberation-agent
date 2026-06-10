@@ -223,3 +223,12 @@ describe('emitSectionBlocks', () => {
     expect(markup).toContain('class="wp-block-group mod--wide"'); // literal in HTML (safe outside comments)
   });
 });
+
+it('emits the section wrapper as a semantic <section> with tagName attr (carry parity)', () => {
+  const section = { id: 'hero', role: 'body' as const, classes: ['hero'], html: '<section id="hero" class="hero"><h1>Hi</h1></section>' };
+  const { markup } = emitSectionBlocks(section);
+  expect(markup).toContain('"tagName":"section"');
+  expect(markup).toContain('<section id="hero" class="wp-block-group hero">');
+  expect(markup).toContain('</section>');
+  expect(blockMarkupRoundtrips(markup).ok).toBe(true);
+});
