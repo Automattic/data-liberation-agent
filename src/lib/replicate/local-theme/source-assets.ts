@@ -36,8 +36,12 @@ export const WP_COMPAT_CSS = `/* wp-compat: neutralize WP wrapper interference f
 /* Structural transparency for core/navigation: the source styles nav > a
    directly, while WP renders nav > ul > li > a. Collapsing the list boxes
    makes the anchors direct flex items of <nav>, so the source nav rules
-   (display/gap/wrap) drive the exact same geometry. */
-:where(nav.wp-block-navigation ul, nav.wp-block-navigation li) { display: contents; }
+   (display/gap/wrap/justify) drive the exact same geometry. Class-level
+   specificity is required — block-library sets display:flex on these at
+   (0,1,0)+ and a zero-spec :where loses (probe: anchors stayed inside the
+   ul, justify-content flex-start left-packed the rows). Safe: source
+   stylesheets never target wp-* classes. */
+nav.wp-block-navigation ul, nav.wp-block-navigation li { display: contents; }
 /* WP sets .wp-block-post-content{display:flow-root}, which BLOCKS the
    margin collapse the source layout relies on (last section margin-bottom
    collapsing with the footer margin-top — walrus probe: footer sat 88px
