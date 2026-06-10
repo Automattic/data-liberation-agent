@@ -684,7 +684,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           siteTitle: { type: 'string', description: 'Site title for header/footer. Default: home page <title>.' },
           skipDesign: { type: 'boolean', description: 'Skip source design capture (tokens/fonts) and compare; theme uses default styling.' },
           skipCompare: { type: 'boolean', description: 'Skip the WP-replica screenshot + parity compare stage.' },
-          wpUrl: { type: 'string', description: 'Base URL of the running Studio site for replica capture. Default: http://localhost:8889.' },
+          wpUrl: { type: 'string', description: 'Base URL for replica capture. Default: auto-resolved via wp option get siteurl (Studio assigns random ports); explicit value overrides.' },
         },
         required: ['dir', 'studioSitePath'],
       },

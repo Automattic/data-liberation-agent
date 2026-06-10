@@ -62,7 +62,11 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
 
   const skipDesign = args.skipDesign === true;
   const skipCompare = args.skipCompare === true;
-  const wpUrl = ((args.wpUrl as string | undefined) ?? 'http://localhost:8889').replace(/\/$/, '');
+  // Replica base URL: explicit arg wins; otherwise auto-resolved AFTER theme
+  // activation via `wp option get siteurl` (see below) — Studio assigns random
+  // ports per site, so a hardcoded default would capture the WRONG site and
+  // report silently bogus parity.
+  let wpUrl = (args.wpUrl as string | undefined)?.replace(/\/$/, '');
 
   const warnings: string[] = [];
 
@@ -179,6 +183,17 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
     await studioWp(studioSitePath, ['theme', 'activate', themeSlug]);
   } catch (err) {
     warnings.push(`theme activate failed: ${(err as Error).message}`);
+  }
+  // Resolve the replica base URL now that the site is known reachable
+  // (activation just ran against it). Failure degrades to the conventional
+  // wp-env default with a warning — never aborts.
+  if (!wpUrl) {
+    try {
+      wpUrl = (await studioWp(studioSitePath, ['option', 'get', 'siteurl'])).trim().replace(/\/$/, '');
+    } catch (err) {
+      wpUrl = 'http://localhost:8889';
+      warnings.push(`siteurl resolve failed, using ${wpUrl}: ${(err as Error).message}`);
+    }
   }
   // Flush caches so the freshly-written templates + customTemplates register
   // immediately (install-theme.ts precedent: block themes cache template

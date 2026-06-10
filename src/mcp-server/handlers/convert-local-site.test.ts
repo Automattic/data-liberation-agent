@@ -51,11 +51,15 @@ vi.mock('node:child_process', async (importOriginal) => {
     ...actual,
     execFile: vi.fn((cmd: string, args: string[], _opts: unknown, cb: (e: Error | null, r: { stdout: string; stderr: string }) => void) => {
       execCalls.push([cmd, ...args]);
-      if (execFailFor && [cmd, ...args].join(' ').includes(execFailFor)) {
+      const joined = [cmd, ...args].join(' ');
+      if (execFailFor && joined.includes(execFailFor)) {
         cb(new Error(`synthetic exec failure: ${execFailFor}`), { stdout: '', stderr: '' });
         return;
       }
-      cb(null, { stdout: '', stderr: '' });
+      // Studio assigns random ports — the handler resolves the replica base URL
+      // via `wp option get siteurl`; a distinctive port here lets tests assert
+      // the RESOLVED url (not a hardcoded default) drives replica capture.
+      cb(null, { stdout: joined.includes('option get siteurl') ? 'http://localhost:7777\n' : '', stderr: '' });
     }),
   };
 });
@@ -72,6 +76,8 @@ vi.mock('../../lib/streaming/post-install.js', () => ({
 }));
 
 import { convertLocalSiteHandler } from './convert-local-site.js';
+// Resolves to the vi.mock above — imported so tests can inject one-shot failures.
+import { captureScreenshots } from '../../lib/screenshot/screenshotter.js';
 
 const FIXTURE_TMP = join(process.cwd(), '.tmp-test');
 
@@ -276,7 +282,44 @@ describe('convertLocalSiteHandler', () => {
       expect(summary.parity?.pages).toHaveLength(2);
       expect(capturedRuns).toHaveLength(2);                       // source + replica
       expect(capturedRuns[0].urls.some((u) => u.endsWith('/about/'))).toBe(true); // clean URLs
+      // replica capture targets the studio-resolved siteurl (mock returns :7777),
+      // NOT a hardcoded default port — wrong port = capture of the wrong site.
+      expect(capturedRuns[1].urls.length).toBeGreaterThan(0);
+      expect(capturedRuns[1].urls.every((u) => u.startsWith('http://localhost:7777'))).toBe(true);
+      // foundation → assemble → install end-to-end: the mock aggregates' accent
+      // color lands in the INSTALLED theme.json palette.
+      const themeJson = JSON.parse(
+        readFileSync(join(sitePath, 'wp-content', 'themes', 'acme-local', 'theme.json'), 'utf8'),
+      ) as { settings?: { color?: { palette?: Array<{ slug: string; color: string }> } } };
+      expect((themeJson.settings?.color?.palette ?? []).some((p) => p.color === '#e2573b')).toBe(true);
       expect(existsSync(join(outDir, 'parity-report.json'))).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(sitePath, { recursive: true, force: true });
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
+  it('degrades to a warning (not isError) when design capture fails', async () => {
+    const dir = makeSite();
+    const sitePath = makeStudioSite();
+    const outDir = mkdtempSync(join(FIXTURE_TMP, 'cls-capfail-'));
+    vi.mocked(captureScreenshots).mockRejectedValueOnce(new Error('boom'));
+    try {
+      const res = await convertLocalSiteHandler(
+        { dir, studioSitePath: sitePath, outputDir: outDir, themeSlug: 'acme-local', siteTitle: 'Acme' },
+        ctx,
+      );
+      expect(res.isError).toBeFalsy();
+      const summary = JSON.parse(res.content[0].text) as {
+        designCaptured?: boolean; parity?: unknown; warnings: string[]; installed: number;
+      };
+      expect(summary.designCaptured).toBe(false);
+      expect(summary.warnings.some((w) => w.includes('design capture failed'))).toBe(true);
+      expect(summary.parity).toBeUndefined();
+      // theme still written (default foundation) and pages still installed
+      expect(existsSync(join(sitePath, 'wp-content', 'themes', 'acme-local', 'theme.json'))).toBe(true);
+      expect(summary.installed).toBe(2);
     } finally {
       rmSync(dir, { recursive: true, force: true });
       rmSync(sitePath, { recursive: true, force: true });
