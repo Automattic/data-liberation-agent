@@ -22,16 +22,35 @@ function listHtmlFiles(root: string): string[] {
   return out;
 }
 
-/** relPath → slug: "index.html" → "home"; "about.html" → "about"; "blog/p.html" → "blog-p". */
+/** One path segment → slug-safe: lowercase, [^a-z0-9-] runs → '-', collapse '--', trim edge dashes. */
+function sanitizeSegment(seg: string): string {
+  return seg
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, '-')
+    .replace(/-{2,}/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+/** Sanitize per-segment BEFORE joining so '-' keeps its separator semantics; drop
+ *  segments that sanitize away entirely (no stray '--' across the join). */
+function joinSlugSegments(parts: string[]): string {
+  return parts.map(sanitizeSegment).filter(Boolean).join('-');
+}
+
+/** relPath → slug: "index.html" → "home"; "about us.html" → "about-us"; "blog/p.html" → "blog-p". */
 export function slugFromRelPath(relPath: string): string {
   const noExt = relPath.replace(/\.html?$/i, '');
   const parts = noExt.split(sep).filter(Boolean);
   if (parts.length === 0) return 'home';
   const last = parts[parts.length - 1];
   if (last.toLowerCase() === 'index') {
-    return parts.length === 1 ? 'home' : parts.slice(0, -1).join('-').toLowerCase();
+    if (parts.length === 1) return 'home';
+    return joinSlugSegments(parts.slice(0, -1)) || 'home';
   }
-  return parts.join('-').toLowerCase();
+  // `|| 'home'` guards a path whose every segment sanitizes away (e.g. "###.html")
+  // from producing an empty slug (→ empty artifact filenames), matching the
+  // empty-path fallback; a duplicate trips ingest's loud slug-collision check.
+  return joinSlugSegments(parts) || 'home';
 }
 
 export function ingestLocalSite(root: string): LocalSite {

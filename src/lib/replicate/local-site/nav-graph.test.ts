@@ -58,4 +58,18 @@ describe('buildNavGraph', () => {
     const links = buildNavGraph(s);
     expect(links).toContainEqual({ fromSlug: 'blog-post', toSlug: 'about', label: 'About' });
   });
+
+  it('resolves percent-encoded and raw-space hrefs to pages with sanitized slugs', () => {
+    const s = site([
+      {
+        slug: 'home',
+        relPath: 'index.html',
+        html: '<a href="about%20us.html">About</a><a href="about us.html">About raw</a>',
+      },
+      { slug: 'about-us', relPath: 'about us.html', html: '<p>hi</p>' },
+    ]);
+    const links = buildNavGraph(s);
+    expect(links).toContainEqual({ fromSlug: 'home', toSlug: 'about-us', label: 'About' });
+    expect(links).toContainEqual({ fromSlug: 'home', toSlug: 'about-us', label: 'About raw' });
+  });
 });

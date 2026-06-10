@@ -10,7 +10,14 @@ function isExternal(href: string): boolean {
 
 /** Resolve a raw internal href against the linking page's relPath → site-root-relative path. */
 function resolveHrefToRelPath(href: string, fromRelPath: string): string {
-  const cleaned = href.split(/[?#]/)[0];
+  let cleaned = href.split(/[?#]/)[0];
+  // Percent-encoded internal hrefs ("about%20us.html") must decode before
+  // slugging so they match the slug derived from the on-disk filename.
+  try {
+    cleaned = decodeURIComponent(cleaned);
+  } catch {
+    // Malformed escape sequence — resolve the raw href as-is.
+  }
   if (!cleaned || cleaned === '/') return 'index.html';
   if (cleaned.startsWith('/')) return cleaned.slice(1); // root-relative
   // Relative href: resolve against the linking page's directory. Paths that

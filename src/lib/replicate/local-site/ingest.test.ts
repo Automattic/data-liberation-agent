@@ -28,6 +28,12 @@ describe('slugFromRelPath', () => {
   it('falls back to "home" for an empty path', () => {
     expect(slugFromRelPath('')).toBe('home');
   });
+
+  it('sanitizes segments to slug-safe characters', () => {
+    expect(slugFromRelPath('about us.html')).toBe('about-us');
+    expect(slugFromRelPath('café.html')).toBe('caf');
+    expect(slugFromRelPath('my blog/some post.html')).toBe('my-blog-some-post');
+  });
 });
 
 describe('ingestLocalSite', () => {
