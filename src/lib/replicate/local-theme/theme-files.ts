@@ -158,8 +158,17 @@ export function assembleLocalTheme(opts: AssembleLocalThemeOpts): ReplicaFile[] 
     if (hasCSS) {
       const idx = withTemplates.findIndex((f) => f.relativePath === 'theme.json');
       if (idx >= 0) {
-        const parsed = JSON.parse(withTemplates[idx].content) as Record<string, unknown>;
+        const parsed = JSON.parse(withTemplates[idx].content) as Record<string, unknown> & {
+          settings?: Record<string, unknown> & { spacing?: Record<string, unknown> };
+        };
         delete parsed.styles;
+        // blockGap:null disables WP's layout-support emission wholesale —
+        // the injected :where(.is-layout-flow) child margin-zeroing + uniform
+        // gap rules override the UA-default margins the source rhythm relies
+        // on (probe: replica h1 margin-bottom forced to 0). Layout supports
+        // apply flow by DEFAULT even with no layout attr, so this is the only
+        // reliable off switch.
+        parsed.settings = { ...(parsed.settings ?? {}), spacing: { ...(parsed.settings?.spacing ?? {}), blockGap: null } };
         withTemplates[idx] = { ...withTemplates[idx], content: JSON.stringify(parsed, null, 2) + '\n' };
       }
     }
