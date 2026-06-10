@@ -53,6 +53,18 @@ describe('buildPagePlan', () => {
     }
   });
 
+  it('sets homeSlug null and includes home in missingSidecars when home sidecar is missing', () => {
+    const out = makeSidecars(['about']); // no home sidecar
+    try {
+      const plan = buildPagePlan(site, out);
+      expect(plan.homeSlug).toBeNull();
+      expect(plan.missingSidecars).toContain('home');
+      expect(plan.items.map((i) => i.slug)).toEqual(['about']);
+    } finally {
+      rmSync(out, { recursive: true, force: true });
+    }
+  });
+
   it('uses the slug as title when the page <title> is empty', () => {
     const out = makeSidecars(['home', 'about']);
     const untitled: LocalSite = { ...site, pages: site.pages.map((p) => ({ ...p, title: '' })) };

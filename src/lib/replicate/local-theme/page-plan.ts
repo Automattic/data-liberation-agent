@@ -17,6 +17,7 @@ export interface PagePlan {
   missingSidecars: string[];
 }
 
+// Note: stability depends on site.root being stable. Moving the ingest dir breaks this key — re-running from a new path creates duplicate WP pages.
 export function localSourceUrl(siteRoot: string, slug: string): string {
   return `local-site:${siteRoot}#${slug}`;
 }
@@ -47,6 +48,7 @@ export function buildPagePlan(site: LocalSite, outputDir: string): PagePlan {
       sourceUrl: localSourceUrl(site.root, page.slug),
     });
   }
+  // 'home' is the canonical slug: slugFromRelPath normalizes index.html → 'home'
   const homeSlug = items.some((i) => i.slug === 'home') ? 'home' : null;
   return { items, homeSlug, missingSidecars };
 }
