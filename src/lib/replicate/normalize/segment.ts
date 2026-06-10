@@ -58,6 +58,8 @@ export function segmentPage(html: string): Section[] {
     const el = $(selector).first();
     if (el.length) {
       chromeEls.add(el.get(0) as Element);
+      // classes unused by the native-block header path (buildHeaderPart builds
+      // its own); footer path consumes them.
       sections.push({ id: role, role, html: $.html(el) ?? '', classes: classesOf(el) });
     }
   };

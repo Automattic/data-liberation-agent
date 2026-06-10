@@ -79,7 +79,7 @@ function imageBlock($: CheerioAPI, imgEl: Element): string {
   const cls = classNameOf($(imgEl));
   const attrs = blockAttrs([], cls);
   const figCls = ['wp-block-image', cls].filter(Boolean).join(' ');
-  return `<!-- wp:image${attrs} -->\n<figure class="${figCls}"><img src="${src}" alt="${alt}"/></figure>\n<!-- /wp:image -->`;
+  return `<!-- wp:image${attrs} -->\n<figure class="${escapeHtml(figCls)}"><img src="${src}" alt="${alt}"/></figure>\n<!-- /wp:image -->`;
 }
 
 function paragraphBlock(inner: string): string {
@@ -104,7 +104,7 @@ function emitChild($: CheerioAPI, el: Element): ChildResult {
     const htmlCls = ['wp-block-heading', cls].filter(Boolean).join(' ');
     const inner = inlineHtml($, el).trim();
     return {
-      markup: `<!-- wp:heading${attrs} -->\n<h${level} class="${htmlCls}">${inner}</h${level}>\n<!-- /wp:heading -->`,
+      markup: `<!-- wp:heading${attrs} -->\n<h${level} class="${escapeHtml(htmlCls)}">${inner}</h${level}>\n<!-- /wp:heading -->`,
       clean: true,
     };
   }
@@ -113,7 +113,7 @@ function emitChild($: CheerioAPI, el: Element): ChildResult {
     const cls = classNameOf($el);
     const attrs = blockAttrs([], cls);
     const inner = inlineHtml($, el).trim();
-    const open = cls ? `<p class="${cls}">` : '<p>';
+    const open = cls ? `<p class="${escapeHtml(cls)}">` : '<p>';
     return { markup: `<!-- wp:paragraph${attrs} -->\n${open}${inner}</p>\n<!-- /wp:paragraph -->`, clean: true };
   }
 
@@ -131,7 +131,7 @@ function emitChild($: CheerioAPI, el: Element): ChildResult {
     return {
       markup:
         `<!-- wp:buttons -->\n<div class="wp-block-buttons">` +
-        `<!-- wp:button${buttonAttrs} -->\n<div class="${divCls}"><a class="wp-block-button__link wp-element-button" href="${href}">${label}</a></div>\n<!-- /wp:button -->` +
+        `<!-- wp:button${buttonAttrs} -->\n<div class="${escapeHtml(divCls)}"><a class="wp-block-button__link wp-element-button" href="${href}">${label}</a></div>\n<!-- /wp:button -->` +
         `</div>\n<!-- /wp:buttons -->`,
       clean: true,
     };
@@ -149,7 +149,7 @@ function emitChild($: CheerioAPI, el: Element): ChildResult {
     const ulTag = tag === 'ol' ? 'ol' : 'ul';
     const listCls = ['wp-block-list', cls].filter(Boolean).join(' ');
     return {
-      markup: `<!-- wp:list${listAttrs} -->\n<${ulTag} class="${listCls}">${items}</${ulTag}>\n<!-- /wp:list -->`,
+      markup: `<!-- wp:list${listAttrs} -->\n<${ulTag} class="${escapeHtml(listCls)}">${items}</${ulTag}>\n<!-- /wp:list -->`,
       clean: true,
     };
   }
@@ -209,7 +209,7 @@ export function emitSectionBlocks(section: Section): { markup: string; confidenc
   const divCls = ['wp-block-group', cls].filter(Boolean).join(' ');
   const markup =
     `<!-- wp:group${attrs} -->\n` +
-    `<div id="${escapeHtml(section.id)}" class="${divCls}">${inner}</div>\n` +
+    `<div id="${escapeHtml(section.id)}" class="${escapeHtml(divCls)}">${inner}</div>\n` +
     `<!-- /wp:group -->`;
   const confidence = total === 0 ? 0 : 1 - downgrades / total;
   return { markup, confidence };

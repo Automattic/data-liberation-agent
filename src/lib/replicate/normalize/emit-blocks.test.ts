@@ -187,6 +187,22 @@ describe('emitSectionBlocks', () => {
     expect(markup).toContain('"className":"pic"');
     expect(markup).toContain('"className":"list-x"');
     expect(markup).toContain('"className":"button cta"');     // on wp:button
+    // Inner <a> keeps WP's own classes ONLY — source classes live on the
+    // wrapper div, never on the anchor (purity lock).
+    expect(markup).not.toMatch(/button cta[^"]*" href/);
+  });
+
+  it('escapes double quotes in class attrs landing in HTML', () => {
+    const section = {
+      id: 's',
+      role: 'body' as const,
+      classes: [],
+      html: `<section><p class='a"b'>x</p></section>`,
+    };
+    const { markup } = emitSectionBlocks(section);
+    expect(markup).toContain('class="a&quot;b"');
+    expect(markup).not.toContain('class="a"b"');
+    expect(blockMarkupRoundtrips(markup).ok).toBe(true);
   });
 
   it('keeps class on allowed inline tags', () => {
