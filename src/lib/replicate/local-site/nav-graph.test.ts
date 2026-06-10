@@ -87,4 +87,15 @@ describe('buildNavGraph', () => {
     expect(links.find((l) => l.label === 'Home')?.inNav).toBe(true);
     expect(links.find((l) => l.label === 'About')?.inNav).toBe(true);
   });
+
+  it('does not mark footer <nav> links as inNav', () => {
+    const s = site([
+      { slug: 'home', relPath: 'index.html', html: '<header><nav><a href="index.html">Home</a><a href="about.html">About</a></nav></header><footer><nav><a href="privacy.html">Privacy</a></nav></footer>' },
+      { slug: 'about', relPath: 'about.html', html: '' },
+      { slug: 'privacy', relPath: 'privacy.html', html: '' },
+    ]);
+    const links = buildNavGraph(s);
+    expect(links.find((l) => l.label === 'Privacy')?.inNav).toBeFalsy();
+    expect(links.find((l) => l.label === 'Home')?.inNav).toBe(true);
+  });
 });

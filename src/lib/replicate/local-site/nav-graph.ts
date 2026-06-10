@@ -37,7 +37,9 @@ export function buildNavGraph(site: LocalSite): NavLink[] {
       const toSlug = slugFromRelPath(resolveHrefToRelPath(href, page.relPath));
       if (!knownSlugs.has(toSlug)) return;
       const link: NavLink = { fromSlug: page.slug, toSlug, label: $(el).text().trim() };
-      if ($(el).closest('nav').length > 0) link.inNav = true;
+      // Footer-nested navs (Privacy/Terms legal menus) must not enter the
+      // header menu pool; body-direct <nav> sites still mark normally.
+      if ($(el).closest('nav').length > 0 && $(el).closest('footer').length === 0) link.inNav = true;
       links.push(link);
     });
   }

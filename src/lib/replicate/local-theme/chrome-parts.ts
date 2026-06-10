@@ -82,6 +82,8 @@ export interface FooterPartOpts {
  * Rewrite internal hrefs in footer HTML to WP permalink form (/slug/).
  * External hrefs (protocol, //, #) are left untouched. Unknown slugs are
  * left untouched. Runs on the raw footer HTML (before <footer>→<div> rename).
+ * Assumes a root-level footer page: ".." segments resolve via slugFromRelPath's
+ * sanitize; nested-page footers would need nav-graph's resolveHrefToRelPath.
  */
 function rewriteInternalHrefs(html: string, pageSlugs: string[]): string {
   const $ = cheerio.load(html);

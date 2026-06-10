@@ -81,7 +81,7 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
   const home = site.pages.find((p) => p.slug === 'home') ?? site.pages[0];
   const footerSection = segmentPage(home.html).find((s) => s.role === 'footer') ?? null;
   const headerPart = buildHeaderPart(siteTitle, nav, site.pages.map((p) => p.slug));
-  const footerPart = buildFooterPart(footerSection, siteTitle);
+  const footerPart = buildFooterPart(footerSection, siteTitle, { pageSlugs: site.pages.map((p) => p.slug) });
 
   // Theme assembly + write + activate.
   const themeFiles = assembleLocalTheme({ siteTitle, themeSlug, headerPart, footerPart });

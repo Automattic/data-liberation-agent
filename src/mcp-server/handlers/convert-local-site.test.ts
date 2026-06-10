@@ -1,6 +1,6 @@
 // src/mcp-server/handlers/convert-local-site.test.ts
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { HandlerContext, ToolResult } from '../handler-types.js';
 
@@ -51,7 +51,10 @@ function makeSite(): string {
   const dir = mkdtempSync(join(FIXTURE_TMP, 'cls-site-'));
   writeFileSync(
     join(dir, 'index.html'),
-    '<html><head><title>Home</title></head><body><header><nav><a href="about.html">About</a></nav></header><main><section id="hero"><h1>Hi</h1></section></main><footer><p>foot</p></footer></body></html>',
+    // Footer anchor sits INSIDE the <p> — bare-<a> direct children hit emitChild's
+    // catch-all downgrade (href dropped; known limitation, tracked separately) and
+    // would mask the permalink-rewrite wiring this fixture exists to prove.
+    '<html><head><title>Home</title></head><body><header><nav><a href="about.html">About</a></nav></header><main><section id="hero"><h1>Hi</h1></section></main><footer><p>foot <a href="about.html">About</a></p></footer></body></html>',
   );
   writeFileSync(
     join(dir, 'about.html'),
@@ -109,6 +112,10 @@ describe('convertLocalSiteHandler', () => {
       // theme written into the studio site
       expect(existsSync(join(sitePath, 'wp-content', 'themes', 'acme-local', 'theme.json'))).toBe(true);
       expect(existsSync(join(sitePath, 'wp-content', 'themes', 'acme-local', 'templates', 'page-local.html'))).toBe(true);
+      // footer hrefs rewritten to WP permalinks (source-relative about.html 404s on WP)
+      const footerHtml = readFileSync(join(sitePath, 'wp-content', 'themes', 'acme-local', 'parts', 'footer.html'), 'utf8');
+      expect(footerHtml).toContain('href="/about/"');
+      expect(footerHtml).not.toContain('about.html');
       // pages installed via installPost with synthetic source urls
       expect(installedPosts.map((p) => p.slug).sort()).toEqual(['about', 'home']);
       expect(installedPosts[0].sourceUrl.startsWith('local-site:')).toBe(true);
