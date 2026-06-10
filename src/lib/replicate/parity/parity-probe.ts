@@ -1,0 +1,194 @@
+// src/lib/replicate/parity/parity-probe.ts
+//
+// Dual-side computed-style probe for the deterministic repair loop. The carry
+// pipeline preserves source ids/classes onto the block DOM, so elements MATCH
+// by selector on both sides — divergence detection is measurement, not vision.
+// compareSnapshots is pure (unit-tested on literals); the Playwright capture
+// is a thin wrapper. evaluate() closures run under tsx (the MCP server), so
+// pages get the string-form __name polyfill (same as screenshotter.ts).
+//
+import type { Browser, Page } from 'playwright';
+import type { DiffRegion } from './diff-regions.js';
+
+export const PROP_BATTERY = [
+  'display',
+  'position',
+  'marginTop',
+  'marginBottom',
+  'marginLeft',
+  'marginRight',
+  'paddingTop',
+  'paddingBottom',
+  'paddingLeft',
+  'paddingRight',
+  'maxWidth',
+  'fontSize',
+  'fontFamily',
+  'fontWeight',
+  'lineHeight',
+  'letterSpacing',
+  'textTransform',
+  'color',
+  'backgroundColor',
+  'gap',
+  'justifyContent',
+  'flexWrap',
+  'borderBottomWidth',
+] as const;
+
+export interface ElementSnapshot {
+  /** Deterministic identity: '#id' or 'tag.cls1.cls2[occurrenceIndex]'. */
+  match: string;
+  rect: { top: number; left: number; width: number; height: number };
+  props: Record<string, string>;
+  /** Classes present on the replica element but absent from the match key —
+   * wp-* contributions; the classifier uses these for cause attribution. */
+  replicaOnlyClasses: string[];
+}
+
+export type ViewportId = 'desktop' | 'mobile';
+
+export interface Divergence {
+  match: string;
+  viewport: ViewportId;
+  kind: 'prop' | 'rect' | 'missing';
+  prop: string;
+  source: string;
+  replica: string;
+  replicaOnlyClasses: string[];
+}
+
+const RECT_TOLERANCE = 2;
+
+/** Pure comparator — source order preserved, deterministic. */
+export function compareSnapshots(
+  source: ElementSnapshot[],
+  replica: ElementSnapshot[],
+  viewport: ViewportId,
+): Divergence[] {
+  const byMatch = new Map(replica.map((s) => [s.match, s]));
+  const out: Divergence[] = [];
+  for (const s of source) {
+    const r = byMatch.get(s.match);
+    if (!r) {
+      out.push({ match: s.match, viewport, kind: 'missing', prop: 'element', source: 'present', replica: 'absent', replicaOnlyClasses: [] });
+      continue;
+    }
+    for (const prop of PROP_BATTERY) {
+      const sv = s.props[prop];
+      const rv = r.props[prop];
+      if (sv !== undefined && rv !== undefined && sv !== rv) {
+        out.push({ match: s.match, viewport, kind: 'prop', prop, source: sv, replica: rv, replicaOnlyClasses: r.replicaOnlyClasses });
+      }
+    }
+    for (const axis of ['top', 'left', 'width', 'height'] as const) {
+      if (Math.abs(s.rect[axis] - r.rect[axis]) > RECT_TOLERANCE) {
+        out.push({
+          match: s.match,
+          viewport,
+          kind: 'rect',
+          prop: axis,
+          source: String(s.rect[axis]),
+          replica: String(r.rect[axis]),
+          replicaOnlyClasses: r.replicaOnlyClasses,
+        });
+      }
+    }
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Playwright capture (thin)
+// ---------------------------------------------------------------------------
+
+const NAME_POLYFILL = `
+  if (typeof globalThis.__name === 'undefined') {
+    globalThis.__name = function (fn) { return fn; };
+  }
+`;
+
+// String-form function: bypasses tsx's keepNames transform entirely.
+// Evaluated in-browser — must be self-contained (no closure captures).
+// Identity classes exclude wp-*/is-*/has-*/alignfull/alignwide (WP-added).
+const SNAPSHOT_FN = `(args) => {
+  const { regions, battery } = args;
+  const intersects = (r) => regions.some((g) => r.top <= g.bottom && r.bottom >= g.top);
+  const counters = new Map();
+  const out = [];
+  for (const el of Array.from(document.querySelectorAll('[id], [class]'))) {
+    const rect = el.getBoundingClientRect();
+    const abs = { top: rect.top + window.scrollY, bottom: rect.bottom + window.scrollY };
+    if (rect.width === 0 && rect.height === 0) continue;
+    if (!intersects(abs)) continue;
+    const tag = el.tagName.toLowerCase();
+    if (tag === 'html' || tag === 'body') continue;
+    const id = el.getAttribute('id');
+    // Identity classes: source-authored only — wp-*, is-*, has-* are WP-added.
+    const all = (el.getAttribute('class') || '').split(/\\s+/).filter(Boolean);
+    const own = all.filter((c) => !/^(wp-|is-|has-|alignfull|alignwide)/.test(c));
+    if (!id && own.length === 0) continue;
+    const base = id ? '#' + id : tag + '.' + own.join('.');
+    const n = counters.get(base) || 0;
+    counters.set(base, n + 1);
+    const cs = getComputedStyle(el);
+    const props = {};
+    for (const p of battery) props[p] = cs[p];
+    out.push({
+      match: base + '[' + n + ']',
+      rect: { top: Math.round(abs.top), left: Math.round(rect.left), width: Math.round(rect.width), height: Math.round(rect.height) },
+      props,
+      replicaOnlyClasses: all.filter((c) => /^(wp-|is-|has-)/.test(c)),
+    });
+  }
+  return out;
+}`;
+
+export async function snapshotPage(page: Page, regions: DiffRegion[]): Promise<ElementSnapshot[]> {
+  // String-form function: bypasses tsx's keepNames transform entirely.
+  return (await page.evaluate(`(${SNAPSHOT_FN})(${JSON.stringify({ regions, battery: PROP_BATTERY })})`)) as ElementSnapshot[];
+}
+
+export interface ProbePairOpts {
+  browser: Browser;
+  sourceUrl: string;
+  replicaUrl: string;
+  viewport: ViewportId;
+  regions: DiffRegion[];
+}
+
+const VIEWPORTS: Record<ViewportId, { width: number; height: number; mobile: boolean }> = {
+  desktop: { width: 1440, height: 900, mobile: false },
+  mobile: { width: 390, height: 844, mobile: true },
+};
+
+const MOBILE_UA =
+  'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1';
+
+/** Probe both sides for one viewport. Deterministic given stable pages. */
+export async function probePair(opts: ProbePairOpts): Promise<Divergence[]> {
+  const vp = VIEWPORTS[opts.viewport];
+  const context = await opts.browser.newContext({
+    viewport: { width: vp.width, height: vp.height },
+    ...(vp.mobile ? { isMobile: true, hasTouch: true, userAgent: MOBILE_UA } : {}),
+  });
+  await context.addInitScript(NAME_POLYFILL);
+  try {
+    const page = await context.newPage();
+    const grab = async (url: string): Promise<ElementSnapshot[]> => {
+      await page.goto(url, { waitUntil: 'networkidle' });
+      await page.evaluate('document.fonts.ready');
+      await page.addStyleTag({
+        content:
+          '*,*::before,*::after{transition:none!important;animation:none!important}' +
+          'html.js section{opacity:1!important;transform:none!important}',
+      });
+      return snapshotPage(page, opts.regions);
+    };
+    const source = await grab(opts.sourceUrl);
+    const replica = await grab(opts.replicaUrl);
+    return compareSnapshots(source, replica, opts.viewport);
+  } finally {
+    await context.close();
+  }
+}

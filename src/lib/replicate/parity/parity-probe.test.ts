@@ -1,0 +1,78 @@
+// src/lib/replicate/parity/parity-probe.test.ts
+import { describe, it, expect } from 'vitest';
+import { compareSnapshots, PROP_BATTERY, type ElementSnapshot } from './parity-probe.js';
+
+const snap = (over: Partial<ElementSnapshot>): ElementSnapshot => ({
+  match: 'section.hero[0]',
+  rect: { top: 100, left: 20, width: 350, height: 200 },
+  props: {
+    display: 'block',
+    marginBottom: '88px',
+    fontSize: '17px',
+    fontFamily: '"Work Sans", sans-serif',
+    maxWidth: '655px',
+  },
+  replicaOnlyClasses: [],
+  ...over,
+});
+
+describe('compareSnapshots', () => {
+  it('reports prop divergences for matched elements', () => {
+    const d = compareSnapshots(
+      [snap({})],
+      [snap({ props: { ...snap({}).props, marginBottom: '0px' }, replicaOnlyClasses: ['is-layout-flow'] })],
+      'desktop',
+    );
+    expect(d).toEqual([
+      {
+        match: 'section.hero[0]',
+        viewport: 'desktop',
+        kind: 'prop',
+        prop: 'marginBottom',
+        source: '88px',
+        replica: '0px',
+        replicaOnlyClasses: ['is-layout-flow'],
+      },
+    ]);
+  });
+
+  it('reports rect divergences beyond tolerance as structural', () => {
+    const d = compareSnapshots(
+      [snap({})],
+      [snap({ rect: { top: 160, left: 20, width: 350, height: 200 } })],
+      'mobile',
+    );
+    expect(d).toEqual([
+      expect.objectContaining({ kind: 'rect', prop: 'top', source: '100', replica: '160' }),
+    ]);
+  });
+
+  it('tolerates sub-threshold rect noise (2px)', () => {
+    const d = compareSnapshots([snap({})], [snap({ rect: { top: 101, left: 21, width: 351, height: 199 } })], 'desktop');
+    expect(d).toEqual([]);
+  });
+
+  it('reports unmatched elements as structural missing', () => {
+    const d = compareSnapshots([snap({})], [], 'desktop');
+    expect(d).toEqual([
+      expect.objectContaining({ kind: 'missing', match: 'section.hero[0]' }),
+    ]);
+  });
+
+  it('is deterministic: output order follows source order', () => {
+    const a = snap({ match: 'p.lede[0]' });
+    const b = snap({ match: 'section.cards[0]' });
+    const reps = [
+      snap({ match: 'section.cards[0]', props: { ...b.props, fontSize: '18px' } }),
+      snap({ match: 'p.lede[0]', props: { ...a.props, fontSize: '19px' } }),
+    ];
+    const d = compareSnapshots([a, b], reps, 'desktop');
+    expect(d.map((x) => x.match)).toEqual(['p.lede[0]', 'section.cards[0]']);
+  });
+
+  it('battery covers the session-proven divergence axes', () => {
+    for (const p of ['display', 'marginTop', 'marginBottom', 'maxWidth', 'fontSize', 'fontFamily', 'gap', 'justifyContent', 'flexWrap', 'paddingTop', 'paddingBottom', 'color', 'backgroundColor', 'textTransform', 'lineHeight']) {
+      expect(PROP_BATTERY).toContain(p);
+    }
+  });
+});
