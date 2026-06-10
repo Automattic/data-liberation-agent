@@ -52,13 +52,15 @@ export interface AssembleLocalThemeOpts {
 /** No-title page template: header part → post-content → footer part.
  *  Sidecar markup already contains its own <h1>, so wp:post-title is omitted
  *  to avoid duplicating the hero heading. Used for both page-local and
- *  front-page templates. */
+ *  front-page templates. Layout is default (flow) — constrained would inject
+ *  a contentSize max-width onto children that fights the carried source
+ *  main{max-width} rule (stage 1d parity); the source CSS owns layout. */
 function noTitleTemplate(): string {
   return (
     `<!-- wp:template-part {"slug":"header","tagName":"header"} /-->\n\n` +
-    `<!-- wp:group {"tagName":"main","layout":{"type":"constrained"}} -->\n` +
+    `<!-- wp:group {"tagName":"main","layout":{"type":"default"}} -->\n` +
     `<main class="wp-block-group">\n` +
-    `<!-- wp:post-content {"layout":{"type":"constrained"}} /-->\n` +
+    `<!-- wp:post-content {"layout":{"type":"default"}} /-->\n` +
     `</main>\n` +
     `<!-- /wp:group -->\n\n` +
     `<!-- wp:template-part {"slug":"footer","tagName":"footer"} /-->\n`

@@ -21,9 +21,11 @@ export const WP_COMPAT_CSS = `/* wp-compat: neutralize WP wrapper interference f
 /* NOTE deliberately NO .wp-block-template-part{display:contents} here: our
    parts use tagName header/footer, so the wrapper IS the semantic element —
    display:contents would destroy the box that source header{}/footer{} rules
-   lay out (class specificity beats the element selector regardless of order). */
-:where(body .is-layout-constrained) > * { margin-block-start: 0; margin-block-end: 0; }
-:where(body .is-layout-flow) > * { margin-block-start: 0; margin-block-end: 0; }
+   lay out (class specificity beats the element selector regardless of order).
+   NOTE also deliberately NO blanket child-margin zeroing: the source relies on
+   browser-default element margins (p, h1-h6, ul) — zeroing layout children
+   collapsed the source's vertical rhythm. Blocks render as the same semantic
+   elements, so the defaults already match. */
 :where(body) { margin: 0; }
 /* WP renders site-title as a <p> (default margins the source brand <a> never
    had) and wraps tables in a margined <figure>. Zero-spec so source rules win. */

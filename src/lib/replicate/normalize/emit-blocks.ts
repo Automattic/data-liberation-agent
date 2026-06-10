@@ -250,7 +250,11 @@ export function emitSectionBlocks(section: Section): { markup: string; confidenc
   // keep matching the block DOM — core/group supports semantic tagNames and
   // serializes <section class="wp-block-group …"> (stage 1d parity).
   const tagPair = '"tagName":"section"';
-  const layoutPair = '"layout":{"type":"constrained"}';
+  // layout:default (flow): constrained injects a per-container max-width onto
+  // children (theme contentSize) that fought the source's own main{max-width}
+  // and wrapped lines early. The carried source CSS owns layout; flow adds no
+  // injected width or gap rules of consequence.
+  const layoutPair = '"layout":{"type":"default"}';
   const attrs = blockAttrs([anchorPair, tagPair, layoutPair], cls);
   const divCls = ['wp-block-group', cls].filter(Boolean).join(' ');
   const markup =
