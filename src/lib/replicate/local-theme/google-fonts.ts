@@ -18,6 +18,7 @@
 import { mkdirSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { LocalFontFace } from '../font-capture.js';
+import { assertPublicHttpUrl } from '../../media-fetch/index.js';
 
 // Matches all https://fonts.googleapis.com/css or css2 query-string URLs found in
 // href attributes, @import rules, or bare text. Handles HTML-encoded & (&amp;).
@@ -83,6 +84,11 @@ function pickBestUrl(srcDecl: string): { url: string; format: string } | null {
   return candidates[0];
 }
 
+// Variable-axis css2 responses declare weight RANGES ("100 900"); the \d{3}
+// match deliberately collapses them to the FIRST value. Discrete-weight
+// requests (the common css2 form) emit one block per weight, so the collapse
+// is rare in practice — and it keeps spaces out of faceFileName. Do not
+// "fix" this to preserve the range: a space would land in the filename.
 function normalizeWeight(raw: string): string {
   const v = raw.trim().toLowerCase();
   if (v === 'normal') return '400';
@@ -162,6 +168,11 @@ export async function selfHostGoogleFonts(
   const destDir = join(opts.themeDir, fontsSubdir);
   const faces: LocalFontFace[] = [];
   const errors: SelfHostGoogleFontsResult['errors'] = [];
+  // css2 emits one @font-face per unicode-range SUBSET (latin, latin-ext, …)
+  // with identical family/weight/style — they'd all map to the same fileName.
+  // Keep only the first (Google orders the broadest/latin subsets usefully);
+  // without this, later subsets reuse the first file and push duplicate faces.
+  const seenFiles = new Set<string>();
 
   for (const cssUrl of cssUrls) {
     let css: string;
@@ -179,9 +190,15 @@ export async function selfHostGoogleFonts(
 
     for (const parsed of parseGoogleFontFaces(css)) {
       const fileName = faceFileName(parsed);
+      if (seenFiles.has(fileName)) continue;
+      seenFiles.add(fileName);
       const localPath = `${fontsSubdir}/${fileName}`;
       const destFile = join(destDir, fileName);
       try {
+        // The face src comes from a THIRD-PARTY response body (the fetched
+        // CSS), not from the trusted local site — guard it before fetching.
+        // Throws SsrfBlockedError on private/internal hosts → errors[].
+        assertPublicHttpUrl(parsed.src);
         if (!existsSync(destFile)) {
           const res = await fetchFn(parsed.src, {
             headers: { 'User-Agent': WOFF2_UA },

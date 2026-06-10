@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mkdtempSync, mkdirSync, rmSync, existsSync, readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { extractGoogleFontCssUrls, selfHostGoogleFonts } from './google-fonts.js';
 
@@ -74,6 +74,104 @@ describe('selfHostGoogleFonts', () => {
       const result = await selfHostGoogleFonts([CSS2_URL], { themeDir, fetchImpl });
       expect(result.faces).toEqual([]);
       expect(result.errors.length).toBe(2);
+    } finally {
+      rmSync(themeDir, { recursive: true, force: true });
+    }
+  });
+
+  it('collapses variable-font weight ranges to the first value (space-free filename)', async () => {
+    // Variable-axis css2 responses declare `font-weight: 100 900` on one block.
+    const VARIABLE_CSS = `
+@font-face {
+  font-family: 'Fraunces';
+  font-style: normal;
+  font-weight: 100 900;
+  src: url(https://fonts.gstatic.com/s/fraunces/v1/variable.woff2) format('woff2');
+}
+`;
+    mkdirSync(FIXTURE_TMP, { recursive: true });
+    const themeDir = mkdtempSync(join(FIXTURE_TMP, 'fonts-var-'));
+    const fetchImpl = (async (url: string | URL) => {
+      if (String(url).startsWith('https://fonts.googleapis.com')) return new Response(VARIABLE_CSS, { status: 200 });
+      return new Response(new Uint8Array([0x77, 0x4f, 0x46, 0x32]), { status: 200 });
+    }) as typeof fetch;
+    try {
+      const result = await selfHostGoogleFonts([CSS2_URL], { themeDir, fetchImpl });
+      expect(result.errors).toEqual([]);
+      expect(result.faces).toHaveLength(1);
+      expect(result.faces[0].weight).toBe('100');
+      expect(result.faces[0].localPath).toBe('assets/fonts/Fraunces-100.woff2');
+      expect(result.faces[0].localPath).not.toContain(' ');
+      expect(existsSync(join(themeDir, result.faces[0].localPath))).toBe(true);
+    } finally {
+      rmSync(themeDir, { recursive: true, force: true });
+    }
+  });
+
+  it('dedupes unicode-range subset blocks sharing family/weight to one face + one file', async () => {
+    // Real css2 responses emit one @font-face PER SUBSET (latin, latin-ext, ...)
+    // with identical family/weight/style but distinct gstatic URLs.
+    const SUBSET_CSS = `
+/* latin-ext */
+@font-face {
+  font-family: 'Fraunces';
+  font-style: normal;
+  font-weight: 400;
+  src: url(https://fonts.gstatic.com/s/fraunces/v1/latin-ext.woff2) format('woff2');
+  unicode-range: U+0100-024F;
+}
+/* latin */
+@font-face {
+  font-family: 'Fraunces';
+  font-style: normal;
+  font-weight: 400;
+  src: url(https://fonts.gstatic.com/s/fraunces/v1/latin.woff2) format('woff2');
+  unicode-range: U+0000-00FF;
+}
+`;
+    mkdirSync(FIXTURE_TMP, { recursive: true });
+    const themeDir = mkdtempSync(join(FIXTURE_TMP, 'fonts-subset-'));
+    const fontFetches: string[] = [];
+    const fetchImpl = (async (url: string | URL) => {
+      const u = String(url);
+      if (u.startsWith('https://fonts.googleapis.com')) return new Response(SUBSET_CSS, { status: 200 });
+      fontFetches.push(u);
+      return new Response(new Uint8Array([0x77, 0x4f, 0x46, 0x32]), { status: 200 });
+    }) as typeof fetch;
+    try {
+      const result = await selfHostGoogleFonts([CSS2_URL], { themeDir, fetchImpl });
+      expect(result.errors).toEqual([]);
+      expect(result.faces).toHaveLength(1);
+      expect(fontFetches).toHaveLength(1); // one download, not one per subset
+      expect(readdirSync(join(themeDir, 'assets/fonts'))).toEqual(['Fraunces-400.woff2']);
+    } finally {
+      rmSync(themeDir, { recursive: true, force: true });
+    }
+  });
+
+  it('blocks private/internal face URLs (SSRF guard) without fetching them', async () => {
+    const EVIL_CSS = `
+@font-face {
+  font-family: 'Evil';
+  font-style: normal;
+  font-weight: 400;
+  src: url(http://169.254.169.254/x.woff2) format('woff2');
+}
+`;
+    mkdirSync(FIXTURE_TMP, { recursive: true });
+    const themeDir = mkdtempSync(join(FIXTURE_TMP, 'fonts-ssrf-'));
+    const fetchedUrls: string[] = [];
+    const fetchImpl = (async (url: string | URL) => {
+      fetchedUrls.push(String(url));
+      if (String(url).startsWith('https://fonts.googleapis.com')) return new Response(EVIL_CSS, { status: 200 });
+      return new Response(new Uint8Array([0x77, 0x4f, 0x46, 0x32]), { status: 200 });
+    }) as typeof fetch;
+    try {
+      const result = await selfHostGoogleFonts([CSS2_URL], { themeDir, fetchImpl });
+      expect(result.faces).toEqual([]);
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0].url).toBe('http://169.254.169.254/x.woff2');
+      expect(fetchedUrls).toEqual([CSS2_URL]); // the face URL was never fetched
     } finally {
       rmSync(themeDir, { recursive: true, force: true });
     }
