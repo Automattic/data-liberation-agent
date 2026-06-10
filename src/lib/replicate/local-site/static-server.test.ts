@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { startStaticServer, type StaticServer } from './static-server.js';
+import { startStaticServer, resolveRequestPath, type StaticServer } from './static-server.js';
 
 const FIXTURE_TMP = join(process.cwd(), '.tmp-test');
 
@@ -68,6 +68,52 @@ describe('startStaticServer', () => {
       server = await startStaticServer(dir);
       expect(server.pageUrl('home')).toBe(`${server.url}/`);
       expect(server.pageUrl('about')).toBe(`${server.url}/about/`);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('maps relPaths to clean URLs via urlForPage (nested pages resolve)', async () => {
+    const dir = makeSite();
+    try {
+      server = await startStaticServer(dir);
+      expect(server.urlForPage('index.html')).toBe(`${server.url}/`);
+      expect(server.urlForPage('about.html')).toBe(`${server.url}/about/`);
+      expect(server.urlForPage('blog/post.html')).toBe(`${server.url}/blog/post/`);
+      expect(server.urlForPage('blog/index.html')).toBe(`${server.url}/blog/`);
+      // the nested URL it emits actually serves the right file
+      const res = await fetch(server.urlForPage('blog/post.html'));
+      expect(res.status).toBe(200);
+      expect(await res.text()).toContain('post');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('survives malformed percent-encoding with a 404', async () => {
+    const dir = makeSite();
+    try {
+      server = await startStaticServer(dir);
+      const { request } = await import('node:http');
+      const rawGet = (path: string) =>
+        new Promise<number>((resolve) => {
+          const req = request({ host: '127.0.0.1', port: server!.port, path }, (r) => resolve(r.statusCode ?? 0));
+          req.end();
+        });
+      expect(await rawGet('/%zz')).toBe(404); // malformed → 404, no crash
+      const after = await fetch(`${server.url}/about/`); // server still alive
+      expect(after.status).toBe(200);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('resolveRequestPath', () => {
+  it('returns null on malformed percent-encoding', () => {
+    const dir = makeSite();
+    try {
+      expect(resolveRequestPath(dir, '/%zz')).toBe(null);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

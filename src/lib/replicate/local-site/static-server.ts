@@ -9,7 +9,7 @@
 //
 import { createServer, type Server } from 'node:http';
 import { existsSync, readFileSync, statSync } from 'node:fs';
-import { join, normalize, resolve, extname } from 'node:path';
+import { join, normalize, resolve, extname, sep } from 'node:path';
 
 export interface StaticServer {
   url: string;
@@ -17,6 +17,13 @@ export interface StaticServer {
   close(): Promise<void>;
   /** Clean URL for a page slug: home → "<url>/", about → "<url>/about/". */
   pageUrl(slug: string): string;
+  /**
+   * Clean URL for a page's source relPath — preserves nesting so the URL
+   * actually resolves: "blog/post.html" → "<url>/blog/post/" (whereas
+   * pageUrl on the flattened slug "blog-post" would 404). "index.html" →
+   * "<url>/", "blog/index.html" → "<url>/blog/".
+   */
+  urlForPage(relPath: string): string;
 }
 
 const MIME: Record<string, string> = {
@@ -28,14 +35,21 @@ const MIME: Record<string, string> = {
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
   '.webp': 'image/webp',
+  '.gif': 'image/gif',
   '.ico': 'image/x-icon',
+  '.json': 'application/json',
   '.woff2': 'font/woff2',
   '.woff': 'font/woff',
 };
 
 /** Resolve a request path to an on-disk file inside root, or null. */
 export function resolveRequestPath(root: string, rawPath: string): string | null {
-  const cleaned = decodeURIComponent(rawPath.split(/[?#]/)[0]);
+  let cleaned: string;
+  try {
+    cleaned = decodeURIComponent(rawPath.split(/[?#]/)[0]);
+  } catch {
+    return null; // malformed encoding → 404
+  }
   const rel = normalize(cleaned).replace(/^\/+/, '');
   const abs = resolve(root, rel);
   if (abs !== resolve(root) && !abs.startsWith(resolve(root) + '/')) return null; // traversal
@@ -80,6 +94,15 @@ export function startStaticServer(root: string): Promise<StaticServer> {
         port,
         close: () => new Promise<void>((r) => server.close(() => r())),
         pageUrl: (slug: string) => (slug === 'home' ? `${url}/` : `${url}/${slug}/`),
+        urlForPage: (relPath: string) => {
+          const noExt = relPath.replace(/\.html?$/i, '');
+          const parts = noExt.split(sep).filter(Boolean);
+          const last = parts[parts.length - 1]?.toLowerCase();
+          if (last === 'index') {
+            return parts.length <= 1 ? `${url}/` : `${url}/${parts.slice(0, -1).join('/')}/`;
+          }
+          return parts.length === 0 ? `${url}/` : `${url}/${parts.join('/')}/`;
+        },
       });
     });
   });
