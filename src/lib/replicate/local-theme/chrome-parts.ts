@@ -68,10 +68,13 @@ export function buildHeaderPart(
     .map((l) => `<!-- wp:navigation-link {"label":${attrJson(l.label)},"url":${attrJson(l.url)}} /-->`)
     .join('\n');
   const siteTitleBlock = `<!-- wp:site-title {"level":0,"className":"brand"} /-->`;
-  const navBlock = `<!-- wp:navigation {"overlayMenu":"mobile","layout":{"type":"flex"}} -->\n${links}\n<!-- /wp:navigation -->`;
   if (opts.plain) {
-    return `${siteTitleBlock}\n${navBlock}`;
+    // overlayMenu:never — mirror the source exactly (its nav has no JS menu;
+    // links simply wrap on small screens under the carried source CSS).
+    const plainNav = `<!-- wp:navigation {"overlayMenu":"never","layout":{"type":"flex"}} -->\n${links}\n<!-- /wp:navigation -->`;
+    return `${siteTitleBlock}\n${plainNav}`;
   }
+  const navBlock = `<!-- wp:navigation {"overlayMenu":"mobile","layout":{"type":"flex"}} -->\n${links}\n<!-- /wp:navigation -->`;
   return (
     `<!-- wp:group {"align":"full","layout":{"type":"flex","justifyContent":"space-between"},"style":{"spacing":{"padding":{"top":"1rem","bottom":"1rem","left":"1.5rem","right":"1.5rem"}}}} -->\n` +
     `<div class="wp-block-group alignfull" style="padding-top:1rem;padding-right:1.5rem;padding-bottom:1rem;padding-left:1.5rem">` +

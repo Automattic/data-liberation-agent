@@ -143,5 +143,6 @@ describe('buildHeaderPart plain mode (carry)', () => {
     expect(html).toContain('wp:navigation');
     expect(html).not.toContain('wp:group');       // no decorative wrapper
     expect(html).not.toContain('padding-top');     // no inline styling
+    expect(html).toContain('"overlayMenu":"never"'); // mirror source: no JS menu
   });
 });
