@@ -26,6 +26,7 @@ import { buildPagePlan } from '../../lib/replicate/local-theme/page-plan.js';
 import { writeReplicaFilesToHost } from '../../lib/preview/replica-install.js';
 import { wpOptionUpdatesForSiteMeta } from '../../lib/preview/site-options.js';
 import { installPost } from '../../lib/streaming/post-install.js';
+import { finalizeSite } from '../../lib/streaming/site-finalize.js';
 import { startStaticServer } from '../../lib/replicate/local-site/static-server.js';
 import { captureScreenshots } from '../../lib/screenshot/screenshotter.js';
 import { SCREENSHOT_DEVICE_SCALE_FACTOR } from '../../lib/screenshot/types.js';
@@ -279,18 +280,6 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
       warnings.push(`cache flush failed (${wpArgs.slice(0, 2).join(' ')}): ${(err as Error).message}`);
     }
   }
-  // The header's core/site-title renders the blogname option — without this
-  // the converted site shows the Studio default name, not the ingested title.
-  // wpOptionUpdatesForSiteMeta normalizes + skips empty titles (no tagline
-  // source in the local-site path, so this emits exactly the blogname update).
-  for (const [option, value] of wpOptionUpdatesForSiteMeta({ title: siteTitle })) {
-    try {
-      await studioWp(studioSitePath, ['option', 'update', option, value]);
-    } catch (err) {
-      warnings.push(`${option} set failed: ${(err as Error).message}`);
-    }
-  }
-
   // Pages from sidecars (installPost is idempotent via _source_url meta).
   const plan = buildPagePlan(site, outputDir);
   const emptySidecars = plan.items.filter((i) => !i.content.trim()).map((i) => i.slug);
@@ -309,25 +298,66 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
     }
   }
 
-  // Front page + per-page template assignment (after theme activation so the
-  // page-local customTemplate is registered).
+  // Site finalize — blogname option, per-page _wp_page_template assigns, and
+  // the front-page pair — consolidated into ONE `wp eval-file` round-trip
+  // (site-finalize.ts). Studio's IPC layer flakes on bursts of individual
+  // argv `studio wp` commands ("No activity for 120s") while eval-file calls
+  // (the installPost shape: one IPC slot, values via JSON file) succeed
+  // reliably. On a fresh site a dropped blogname (site-title block renders
+  // the wrong brand) or template assign (wrong template) is a STRUCTURAL
+  // parity failure the repair loop cannot fix — these writes ride the
+  // reliable channel. studioWp stays for activate + cache-flush (constant-arg
+  // calls that never flaked).
+  // Runs AFTER theme activation (the page-local customTemplate must be
+  // registered before _wp_page_template assignment resolves) and AFTER the
+  // installPost loop (it needs the postIds).
   let frontPageSet = false;
-  for (const p of installed) {
-    if (p.postId == null) continue;
-    try {
-      await studioWp(studioSitePath, ['post', 'meta', 'update', String(p.postId), '_wp_page_template', 'page-local']);
-    } catch (err) {
-      warnings.push(`template assign failed for ${p.slug}: ${(err as Error).message}`);
+  {
+    // The header's core/site-title renders the blogname option — without this
+    // the converted site shows the Studio default name, not the ingested title.
+    // wpOptionUpdatesForSiteMeta normalizes + skips empty titles (no tagline
+    // source in the local-site path, so this emits exactly the blogname update).
+    const finalizeOptions: Record<string, string> = {};
+    for (const [option, value] of wpOptionUpdatesForSiteMeta({ title: siteTitle })) {
+      finalizeOptions[option] = value;
     }
-  }
-  const homeInstall = installed.find((p) => p.slug === plan.homeSlug);
-  if (homeInstall?.postId != null) {
+    const templateAssigns = installed
+      .filter((p) => p.postId != null)
+      .map((p) => ({ postId: p.postId as number, slug: p.slug, template: 'page-local' }));
+    const homeInstall = installed.find((p) => p.slug === plan.homeSlug);
+    const frontPageId = homeInstall?.postId != null ? homeInstall.postId : undefined;
     try {
-      await studioWp(studioSitePath, ['option', 'update', 'show_on_front', 'page']);
-      await studioWp(studioSitePath, ['option', 'update', 'page_on_front', String(homeInstall.postId)]);
-      frontPageSet = true;
+      const finalize = await finalizeSite({
+        payload: {
+          options: finalizeOptions,
+          templateAssigns,
+          ...(frontPageId !== undefined ? { frontPageId } : {}),
+        },
+        studioSitePath,
+      });
+      frontPageSet = finalize.applied.frontPage;
+      // Per-item failures map to the SAME warning prefixes the old per-command
+      // path emitted, so existing log greps and tests keep working.
+      for (const e of finalize.errors) {
+        if (e.item.startsWith('option:')) {
+          warnings.push(`${e.item.slice('option:'.length)} set failed: ${e.error}`);
+        } else if (e.item.startsWith('template:')) {
+          warnings.push(`template assign failed for ${e.item.slice('template:'.length)}: ${e.error}`);
+        } else if (e.item === 'frontPage') {
+          warnings.push(`front page set failed: ${e.error}`);
+        } else {
+          warnings.push(`site finalize ${e.item} failed: ${e.error}`);
+        }
+      }
     } catch (err) {
-      warnings.push(`front page set failed: ${(err as Error).message}`);
+      // Whole-call failure (exec/timeout/garbage stdout): one warning listing
+      // everything that was attempted; frontPageSet stays false.
+      const attempted = [
+        ...Object.keys(finalizeOptions).map((o) => `option ${o}`),
+        ...templateAssigns.map((t) => `template ${t.slug}`),
+        ...(frontPageId !== undefined ? ['front page'] : []),
+      ];
+      warnings.push(`site finalize failed (attempted: ${attempted.join(', ')}): ${(err as Error).message}`);
     }
   }
 

@@ -116,6 +116,40 @@ vi.mock('../../lib/streaming/post-install.js', () => ({
   }),
 }));
 
+// Site-finalize seam (mirrors the installPost mock): the handler consolidates
+// blogname + _wp_page_template assigns + the front-page pair into ONE
+// finalizeSite eval-file call (Studio IPC flakes on bursts of argv commands).
+// finalizeCalls captures payloads for assertions; finalizeResultOverride lets
+// a test inject per-item errors or a whole-call rejection.
+interface FinalizePayloadLike {
+  options: Record<string, string>;
+  templateAssigns: Array<{ postId: number; slug: string; template: string }>;
+  frontPageId?: number;
+}
+interface FinalizeResultLike {
+  ok: boolean;
+  applied: { options: string[]; templates: number[]; frontPage: boolean };
+  errors: Array<{ item: string; error: string }>;
+}
+const finalizeCalls: Array<{ payload: FinalizePayloadLike; studioSitePath: string }> = [];
+let finalizeResultOverride: ((payload: FinalizePayloadLike) => Promise<FinalizeResultLike>) | null = null;
+vi.mock('../../lib/streaming/site-finalize.js', () => ({
+  finalizeSite: vi.fn(async ({ payload, studioSitePath }: { payload: FinalizePayloadLike; studioSitePath: string }) => {
+    finalizeCalls.push({ payload, studioSitePath });
+    if (finalizeResultOverride) return finalizeResultOverride(payload);
+    // Default: everything in the payload applied successfully.
+    return {
+      ok: true,
+      applied: {
+        options: Object.keys(payload.options),
+        templates: payload.templateAssigns.map((t) => t.postId),
+        frontPage: payload.frontPageId !== undefined,
+      },
+      errors: [],
+    };
+  }),
+}));
+
 import { convertLocalSiteHandler } from './convert-local-site.js';
 // Resolves to the vi.mock above — imported so tests can inject one-shot failures.
 import { captureScreenshots } from '../../lib/screenshot/screenshotter.js';
@@ -183,8 +217,10 @@ beforeEach(() => {
   execCalls.length = 0;
   installedPosts.length = 0;
   capturedRuns.length = 0;
+  finalizeCalls.length = 0;
   execFailFor = null;
   installFailFor = null;
+  finalizeResultOverride = null;
   // Repair seam: reset per-test; repair tests set these before calling handler.
   repairReplicaManifestEntries = {};
   repairDiffPng = null;
@@ -226,16 +262,26 @@ describe('convertLocalSiteHandler', () => {
       // pages installed via installPost with synthetic source urls
       expect(installedPosts.map((p) => p.slug).sort()).toEqual(['about', 'home']);
       expect(installedPosts[0].sourceUrl.startsWith('local-site:')).toBe(true);
-      // studio wp called for: theme activate, cache flush, blogname, front page options, template meta
+      // studio wp argv calls remain ONLY for activate + cache flush (constant-arg
+      // commands); blogname/template/front-page ride the finalize eval-file call.
       const flat = execCalls.map((c) => c.join(' '));
       expect(flat.some((c) => c.includes('theme activate acme-local'))).toBe(true);
       expect(flat.some((c) => c.includes('cache flush'))).toBe(true);
-      // core/site-title in the header renders the blogname option — it must be
-      // set to the ingested title or the site shows the Studio default name.
-      expect(flat.some((c) => c.includes('option update blogname Acme'))).toBe(true);
-      expect(flat.some((c) => c.includes('option update show_on_front page'))).toBe(true);
-      expect(flat.some((c) => c.includes('option update page_on_front'))).toBe(true);
-      expect(flat.some((c) => c.includes('_wp_page_template page-local'))).toBe(true);
+      expect(flat.some((c) => c.includes('option update blogname'))).toBe(false);
+      expect(flat.some((c) => c.includes('_wp_page_template'))).toBe(false);
+      // ONE consolidated finalize call carries blogname + template assigns +
+      // front page (core/site-title renders blogname — wrong value = wrong brand).
+      expect(finalizeCalls).toHaveLength(1);
+      const { payload } = finalizeCalls[0];
+      expect(payload.options).toEqual({ blogname: 'Acme' });
+      const assigns = [...payload.templateAssigns].sort((a, b) => a.slug.localeCompare(b.slug));
+      expect(assigns.map((a) => ({ slug: a.slug, template: a.template }))).toEqual([
+        { slug: 'about', template: 'page-local' },
+        { slug: 'home', template: 'page-local' },
+      ]);
+      // frontPageId is the HOME page's postId.
+      const homeAssign = payload.templateAssigns.find((a) => a.slug === 'home');
+      expect(payload.frontPageId).toBe(homeAssign?.postId);
     } finally {
       rmSync(dir, { recursive: true, force: true });
       rmSync(sitePath, { recursive: true, force: true });
@@ -302,9 +348,78 @@ describe('convertLocalSiteHandler', () => {
       const summary = JSON.parse(res.content[0].text) as { installed: number; frontPageSet: boolean };
       expect(summary.installed).toBe(1);
       expect(summary.frontPageSet).toBe(false);
-      const flat = execCalls.map((c) => c.join(' '));
-      expect(flat.some((c) => c.includes('page_on_front'))).toBe(false);
-      expect(flat.some((c) => c.includes('show_on_front'))).toBe(false);
+      // No home page → the finalize payload carries NO frontPageId (and the
+      // mock's applied.frontPage=false flows into frontPageSet above).
+      expect(finalizeCalls).toHaveLength(1);
+      expect(finalizeCalls[0].payload.frontPageId).toBeUndefined();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(sitePath, { recursive: true, force: true });
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
+  it('maps per-item finalize errors to the per-command warning prefixes', async () => {
+    const dir = makeSite();
+    const sitePath = makeStudioSite();
+    const outDir = mkdtempSync(join(FIXTURE_TMP, 'cls-finerr-'));
+    // Per-item granularity: blogname + the about template fail, front page
+    // succeeds — frontPageSet must still come from applied.frontPage.
+    finalizeResultOverride = async (payload) => ({
+      ok: false,
+      applied: {
+        options: [],
+        templates: payload.templateAssigns.filter((t) => t.slug !== 'about').map((t) => t.postId),
+        frontPage: true,
+      },
+      errors: [
+        { item: 'option:blogname', error: 'option verify failed after update_option' },
+        { item: 'template:about', error: 'meta verify failed after update_post_meta' },
+      ],
+    });
+    try {
+      const res = await convertLocalSiteHandler(
+        { dir, studioSitePath: sitePath, outputDir: outDir, themeSlug: 'acme-local', siteTitle: 'Acme', skipDesign: true },
+        ctx,
+      );
+      expect(res.isError).toBeFalsy();
+      const summary = JSON.parse(res.content[0].text) as { frontPageSet: boolean; warnings: string[] };
+      // Same prefixes the old per-command path emitted (log greps keep working).
+      expect(summary.warnings).toContain('blogname set failed: option verify failed after update_option');
+      expect(summary.warnings).toContain('template assign failed for about: meta verify failed after update_post_meta');
+      expect(summary.frontPageSet).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(sitePath, { recursive: true, force: true });
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
+  it('degrades a whole-call finalize failure to one warning and frontPageSet=false', async () => {
+    const dir = makeSite();
+    const sitePath = makeStudioSite();
+    const outDir = mkdtempSync(join(FIXTURE_TMP, 'cls-finfail-'));
+    // Transport-level failure (IPC timeout / garbage stdout) → finalizeSite rejects.
+    finalizeResultOverride = async () => {
+      throw new Error('Timeout waiting for response to message wp-cli-command: No activity for 120s');
+    };
+    try {
+      const res = await convertLocalSiteHandler(
+        { dir, studioSitePath: sitePath, outputDir: outDir, themeSlug: 'acme-local', siteTitle: 'Acme', skipDesign: true },
+        ctx,
+      );
+      expect(res.isError).toBeFalsy();
+      const summary = JSON.parse(res.content[0].text) as { frontPageSet: boolean; warnings: string[]; installed: number };
+      expect(summary.frontPageSet).toBe(false);
+      expect(summary.installed).toBe(2); // pages still installed — finalize failure never aborts
+      const finalizeWarnings = summary.warnings.filter((w) => w.startsWith('site finalize failed'));
+      expect(finalizeWarnings).toHaveLength(1);
+      // The single warning lists everything that was attempted.
+      expect(finalizeWarnings[0]).toContain('option blogname');
+      expect(finalizeWarnings[0]).toContain('template home');
+      expect(finalizeWarnings[0]).toContain('template about');
+      expect(finalizeWarnings[0]).toContain('front page');
+      expect(finalizeWarnings[0]).toContain('No activity for 120s');
     } finally {
       rmSync(dir, { recursive: true, force: true });
       rmSync(sitePath, { recursive: true, force: true });
