@@ -327,9 +327,8 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
     // assetSourceDir carries downloaded fonts (woff2) into the live theme so the
     // install is self-contained without a separate binary-copy step.
     // nativeBehaviors ships the static dla-interactivity block plugin alongside
-    // the theme. Accepted v1 trade-off (user decision 2026-06-11): the editor
-    // shows a missing-block placeholder for dla/* sections (no editor script);
-    // the frontend renders + behaves fully.
+    // the theme. editorScript is build-less (global wp packages) and preserves
+    // saved source HTML; frontend behavior still rides viewScriptModule.
     // Accepted residue: a later CARRY re-convert leaves the plugin active with
     // zero dla/* blocks on any page — viewScriptModule enqueues per-render
     // only (no module loads, no behavior), but the registered block style

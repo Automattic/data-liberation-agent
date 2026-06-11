@@ -5,10 +5,11 @@
 // ReplicaBlockPlugin consumed by the existing writeReplicaFilesToHost plugin
 // path + `wp plugin activate`.
 //
-// No build step (verified against WP 7.0 core): block.json viewScriptModule +
-// hand-written ESM view.js. THE LOAD-BEARING DETAIL is view.asset.php — module
-// dependencies come ONLY from that sibling file; without it the frontend
-// import map omits @wordpress/interactivity and the bare import fails.
+// No build step (verified against WP 7.0 core): block.json editorScript +
+// viewScriptModule. editor.js uses global wp packages; view.js is hand-written
+// ESM. THE LOAD-BEARING DETAIL for view.js is view.asset.php — module
+// dependencies come ONLY from that sibling file; without it the frontend import
+// map omits @wordpress/interactivity and the bare import fails.
 //
 // Behavior params (IO threshold, animation, scroll offset, active classes,
 // autoplay interval) arrive via data-wp-context on the EMITTED MARKUP
@@ -45,6 +46,95 @@ add_action( 'init', function () {
 const VIEW_ASSET_PHP = `<?php return array( 'dependencies' => array( '@wordpress/interactivity' ), 'version' => '1.0.0' );
 `;
 
+const EDITOR_ASSET_PHP = `<?php return array( 'dependencies' => array( 'wp-blocks', 'wp-block-editor', 'wp-element' ), 'version' => '1.0.0' );
+`;
+
+function contentAttribute(selector: string): { type: string; source: string; selector: string } {
+  return { type: 'string', source: 'html', selector };
+}
+
+function editorJs(kind: 'reveal' | 'sticky' | 'tabs' | 'slider' | 'modal'): string {
+  const blockName = `dla/${kind}`;
+  const baseClass = `wp-block-dla-${kind}`;
+  const tagName = kind === 'sticky' ? 'div' : 'section';
+  return `( function ( blocks, blockEditor, element ) {
+\tvar el = element.createElement;
+\tvar RawHTML = element.RawHTML;
+\tvar blockName = '${blockName}';
+\tvar baseClass = '${baseClass}';
+\tvar tagName = '${tagName}';
+
+\tfunction joinClasses() {
+\t\treturn Array.prototype.slice.call( arguments ).filter( Boolean ).join( ' ' );
+\t}
+
+\tfunction safeJson( value ) {
+\t\treturn JSON.stringify( value ).replace( /--/g, '\\\\u002d\\\\u002d' ).replace( /'/g, '\\\\u0027' );
+\t}
+
+\tfunction content( attributes ) {
+\t\treturn attributes.content ? el( RawHTML, { children: attributes.content } ) : null;
+\t}
+
+\tfunction wrapperProps( attributes ) {
+\t\tvar props = {
+\t\t\tclassName: joinClasses( baseClass, attributes.className ),
+\t\t};
+\t\tif ( attributes.anchor ) props.id = attributes.anchor;
+\t\tif ( blockName === 'dla/reveal' ) {
+\t\t\tprops.style = {
+\t\t\t\t'--dla-reveal-y': attributes.translateY || '18px',
+\t\t\t\t'--dla-reveal-ms': ( attributes.durationMs || 600 ) + 'ms',
+\t\t\t};
+\t\t\tprops[ 'data-wp-interactive' ] = 'dla/reveal';
+\t\t\tprops[ 'data-wp-context' ] = safeJson( {
+\t\t\t\tvisible: false,
+\t\t\t\tthreshold: attributes.threshold || 0.12,
+\t\t\t} );
+\t\t\tprops[ 'data-wp-init' ] = 'callbacks.init';
+\t\t\tprops[ 'data-wp-class--is-visible' ] = 'context.visible';
+\t\t} else if ( blockName === 'dla/sticky' ) {
+\t\t\tprops.style = { display: 'none' };
+\t\t\tprops[ 'data-wp-interactive' ] = 'dla/sticky';
+\t\t\tprops[ 'data-wp-context' ] = safeJson( {
+\t\t\t\ttoggleClass: attributes.toggleClass || 'is-scrolled',
+\t\t\t\toffset: attributes.offset || 8,
+\t\t\t} );
+\t\t\tprops[ 'data-wp-init' ] = 'callbacks.init';
+\t\t} else if ( blockName === 'dla/tabs' ) {
+\t\t\tprops[ 'data-wp-interactive' ] = 'dla/tabs';
+\t\t\tprops[ 'data-wp-context' ] = safeJson( {
+\t\t\t\tactiveClass: attributes.activeClass || 'is-active',
+\t\t\t} );
+\t\t\tprops[ 'data-wp-init' ] = 'callbacks.init';
+\t\t} else if ( blockName === 'dla/slider' ) {
+\t\t\tvar ctx = { activeClass: attributes.activeClass || 'is-current' };
+\t\t\tif ( attributes.intervalMs ) ctx.intervalMs = attributes.intervalMs;
+\t\t\tprops[ 'data-wp-interactive' ] = 'dla/slider';
+\t\t\tprops[ 'data-wp-context' ] = safeJson( ctx );
+\t\t\tprops[ 'data-wp-init' ] = 'callbacks.init';
+\t\t} else if ( blockName === 'dla/modal' ) {
+\t\t\tprops[ 'data-wp-interactive' ] = 'dla/modal';
+\t\t\tprops[ 'data-wp-init' ] = 'callbacks.init';
+\t\t}
+\t\treturn props;
+\t}
+
+\tblocks.registerBlockType( '${blockName}', {
+\t\tedit: function ( props ) {
+\t\t\tvar attributes = props.attributes;
+\t\t\tvar blockProps = blockEditor.useBlockProps( wrapperProps( attributes ) );
+\t\t\treturn el( tagName, blockProps, content( attributes ) );
+\t\t},
+\t\tsave: function ( props ) {
+\t\t\tvar attributes = props.attributes;
+\t\t\treturn el( tagName, wrapperProps( attributes ), content( attributes ) );
+\t\t},
+\t} );
+} )( window.wp.blocks, window.wp.blockEditor, window.wp.element );
+`;
+}
+
 const REVEAL_BLOCK_JSON =
   JSON.stringify(
     {
@@ -61,7 +151,9 @@ const REVEAL_BLOCK_JSON =
         threshold: { type: 'number', default: 0.12 },
         translateY: { type: 'string', default: '18px' },
         durationMs: { type: 'number', default: 600 },
+        content: contentAttribute('.wp-block-dla-reveal'),
       },
+      editorScript: 'file:./editor.js',
       viewScriptModule: 'file:./view.js',
       style: 'file:./style.css',
     },
@@ -149,7 +241,9 @@ const STICKY_BLOCK_JSON =
         className: { type: 'string' },
         toggleClass: { type: 'string', default: 'is-scrolled' },
         offset: { type: 'number', default: 8 },
+        content: contentAttribute('.wp-block-dla-sticky'),
       },
+      editorScript: 'file:./editor.js',
       viewScriptModule: 'file:./view.js',
     },
     null,
@@ -193,7 +287,9 @@ const TABS_BLOCK_JSON =
         anchor: { type: 'string' },
         className: { type: 'string' },
         activeClass: { type: 'string', default: 'is-active' },
+        content: contentAttribute('.wp-block-dla-tabs'),
       },
+      editorScript: 'file:./editor.js',
       viewScriptModule: 'file:./view.js',
     },
     null,
@@ -260,7 +356,9 @@ const SLIDER_BLOCK_JSON =
         className: { type: 'string' },
         activeClass: { type: 'string', default: 'is-current' },
         intervalMs: { type: 'number' },
+        content: contentAttribute('.wp-block-dla-slider'),
       },
+      editorScript: 'file:./editor.js',
       viewScriptModule: 'file:./view.js',
     },
     null,
@@ -321,7 +419,9 @@ const MODAL_BLOCK_JSON =
       attributes: {
         anchor: { type: 'string' },
         className: { type: 'string' },
+        content: contentAttribute('.wp-block-dla-modal'),
       },
+      editorScript: 'file:./editor.js',
       viewScriptModule: 'file:./view.js',
     },
     null,
@@ -364,19 +464,29 @@ export function buildInteractivityPlugin(): ReplicaBlockPlugin {
     files: [
       { relativePath: 'plugin.php', content: PLUGIN_PHP },
       { relativePath: 'blocks/reveal/block.json', content: REVEAL_BLOCK_JSON },
+      { relativePath: 'blocks/reveal/editor.js', content: editorJs('reveal') },
+      { relativePath: 'blocks/reveal/editor.asset.php', content: EDITOR_ASSET_PHP },
       { relativePath: 'blocks/reveal/view.js', content: REVEAL_VIEW_JS },
       { relativePath: 'blocks/reveal/view.asset.php', content: VIEW_ASSET_PHP },
       { relativePath: 'blocks/reveal/style.css', content: REVEAL_STYLE_CSS },
       { relativePath: 'blocks/sticky/block.json', content: STICKY_BLOCK_JSON },
+      { relativePath: 'blocks/sticky/editor.js', content: editorJs('sticky') },
+      { relativePath: 'blocks/sticky/editor.asset.php', content: EDITOR_ASSET_PHP },
       { relativePath: 'blocks/sticky/view.js', content: STICKY_VIEW_JS },
       { relativePath: 'blocks/sticky/view.asset.php', content: VIEW_ASSET_PHP },
       { relativePath: 'blocks/tabs/block.json', content: TABS_BLOCK_JSON },
+      { relativePath: 'blocks/tabs/editor.js', content: editorJs('tabs') },
+      { relativePath: 'blocks/tabs/editor.asset.php', content: EDITOR_ASSET_PHP },
       { relativePath: 'blocks/tabs/view.js', content: TABS_VIEW_JS },
       { relativePath: 'blocks/tabs/view.asset.php', content: VIEW_ASSET_PHP },
       { relativePath: 'blocks/slider/block.json', content: SLIDER_BLOCK_JSON },
+      { relativePath: 'blocks/slider/editor.js', content: editorJs('slider') },
+      { relativePath: 'blocks/slider/editor.asset.php', content: EDITOR_ASSET_PHP },
       { relativePath: 'blocks/slider/view.js', content: SLIDER_VIEW_JS },
       { relativePath: 'blocks/slider/view.asset.php', content: VIEW_ASSET_PHP },
       { relativePath: 'blocks/modal/block.json', content: MODAL_BLOCK_JSON },
+      { relativePath: 'blocks/modal/editor.js', content: editorJs('modal') },
+      { relativePath: 'blocks/modal/editor.asset.php', content: EDITOR_ASSET_PHP },
       { relativePath: 'blocks/modal/view.js', content: MODAL_VIEW_JS },
       { relativePath: 'blocks/modal/view.asset.php', content: VIEW_ASSET_PHP },
     ],

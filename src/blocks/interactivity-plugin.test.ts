@@ -13,19 +13,29 @@ describe('buildInteractivityPlugin', () => {
     // view modules only toggle source-authored classes.
     expect(paths).toEqual([
       'blocks/modal/block.json',
+      'blocks/modal/editor.asset.php',
+      'blocks/modal/editor.js',
       'blocks/modal/view.asset.php',
       'blocks/modal/view.js',
       'blocks/reveal/block.json',
+      'blocks/reveal/editor.asset.php',
+      'blocks/reveal/editor.js',
       'blocks/reveal/style.css',
       'blocks/reveal/view.asset.php',
       'blocks/reveal/view.js',
       'blocks/slider/block.json',
+      'blocks/slider/editor.asset.php',
+      'blocks/slider/editor.js',
       'blocks/slider/view.asset.php',
       'blocks/slider/view.js',
       'blocks/sticky/block.json',
+      'blocks/sticky/editor.asset.php',
+      'blocks/sticky/editor.js',
       'blocks/sticky/view.asset.php',
       'blocks/sticky/view.js',
       'blocks/tabs/block.json',
+      'blocks/tabs/editor.asset.php',
+      'blocks/tabs/editor.js',
       'blocks/tabs/view.asset.php',
       'blocks/tabs/view.js',
       'plugin.php',
@@ -47,11 +57,18 @@ describe('buildInteractivityPlugin', () => {
     const reveal = JSON.parse(files['blocks/reveal/block.json']);
     expect(reveal.name).toBe('dla/reveal');
     expect(reveal.supports.interactivity).toBe(true);
+    expect(reveal.editorScript).toBe('file:./editor.js');
     expect(reveal.viewScriptModule).toBe('file:./view.js');
     expect(reveal.style).toBe('file:./style.css');
+    expect(reveal.attributes.content).toEqual({
+      type: 'string',
+      source: 'html',
+      selector: '.wp-block-dla-reveal',
+    });
     const sticky = JSON.parse(files['blocks/sticky/block.json']);
     expect(sticky.name).toBe('dla/sticky');
     expect(sticky.supports.interactivity).toBe(true);
+    expect(sticky.editorScript).toBe('file:./editor.js');
   });
 
   it('tabs/slider/modal block.json: interactivity support + viewScriptModule, NO style', () => {
@@ -59,21 +76,27 @@ describe('buildInteractivityPlugin', () => {
     const tabs = JSON.parse(files['blocks/tabs/block.json']);
     expect(tabs.name).toBe('dla/tabs');
     expect(tabs.supports.interactivity).toBe(true);
+    expect(tabs.editorScript).toBe('file:./editor.js');
     expect(tabs.viewScriptModule).toBe('file:./view.js');
     expect(tabs.style).toBeUndefined();
     expect(tabs.attributes.activeClass.default).toBe('is-active');
+    expect(tabs.attributes.content.selector).toBe('.wp-block-dla-tabs');
     const slider = JSON.parse(files['blocks/slider/block.json']);
     expect(slider.name).toBe('dla/slider');
     expect(slider.supports.interactivity).toBe(true);
+    expect(slider.editorScript).toBe('file:./editor.js');
     expect(slider.viewScriptModule).toBe('file:./view.js');
     expect(slider.style).toBeUndefined();
     expect(slider.attributes.activeClass.default).toBe('is-current');
     expect(slider.attributes.intervalMs.type).toBe('number');
+    expect(slider.attributes.content.selector).toBe('.wp-block-dla-slider');
     const modal = JSON.parse(files['blocks/modal/block.json']);
     expect(modal.name).toBe('dla/modal');
     expect(modal.supports.interactivity).toBe(true);
+    expect(modal.editorScript).toBe('file:./editor.js');
     expect(modal.viewScriptModule).toBe('file:./view.js');
     expect(modal.style).toBeUndefined();
+    expect(modal.attributes.content.selector).toBe('.wp-block-dla-modal');
   });
 
   it('view.asset.php declares the interactivity module dependency (import-map requirement)', () => {
@@ -86,6 +109,36 @@ describe('buildInteractivityPlugin', () => {
       'blocks/modal/view.asset.php',
     ]) {
       expect(files[p]).toContain(`'dependencies' => array( '@wordpress/interactivity' )`);
+    }
+  });
+
+  it('editor.asset.php declares classic editor dependencies for build-less editorScript files', () => {
+    const files = byPath(buildInteractivityPlugin().files);
+    for (const p of [
+      'blocks/reveal/editor.asset.php',
+      'blocks/sticky/editor.asset.php',
+      'blocks/tabs/editor.asset.php',
+      'blocks/slider/editor.asset.php',
+      'blocks/modal/editor.asset.php',
+    ]) {
+      expect(files[p]).toContain(`'wp-blocks'`);
+      expect(files[p]).toContain(`'wp-block-editor'`);
+      expect(files[p]).toContain(`'wp-element'`);
+    }
+  });
+
+  it('editor.js registers each block with globals only and preserves saved HTML content', () => {
+    const files = byPath(buildInteractivityPlugin().files);
+    for (const name of ['reveal', 'sticky', 'tabs', 'slider', 'modal']) {
+      const js = files[`blocks/${name}/editor.js`];
+      expect(js).toContain(`registerBlockType( 'dla/${name}'`);
+      expect(js).toContain('window.wp.blocks');
+      expect(js).toContain('window.wp.blockEditor');
+      expect(js).toContain('window.wp.element');
+      expect(js).toContain('RawHTML');
+      expect(js).toContain('attributes.content');
+      expect(js).not.toContain('import ');
+      expect(js).not.toContain('InnerBlocks');
     }
   });
 
