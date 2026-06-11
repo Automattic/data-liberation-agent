@@ -3,6 +3,7 @@
 // liberation good?". Order: verdict → summary → details. Responsiveness is the
 // HARD gate (fail); fallbacks/misfits/provenance flags are warnings.
 import { deriveSectionParityStatus, type SectionParity } from './section-parity.js';
+import type { StyleAuditResult } from './style-audit.js';
 
 export interface ClusterReport { key: string; representative: string; built: boolean; gatePassed: boolean; }
 export interface ArchetypeResponsive { archetype: string; responsive: boolean; }
@@ -28,6 +29,9 @@ export interface RunReportInput {
   chromeCorrections?: number;
   /** Chrome-fidelity audit: source chrome elements that didn't survive the carry. Warning-level — investigate. */
   droppedChrome?: number;
+  /** Style-usage audit (blocks path): supports-vs-css dial. INFORMATIONAL —
+   * never a verdict input; a low percent is a posture observation. */
+  styleAudit?: StyleAuditResult;
   /** Per-page visual-parity records. When present, the verdict is gated on them: any
    *  unaccepted divergent section, or any reconstructed page with no sampled sections,
    *  is a HARD fail. Absent → parity gate off (back-compat). */
@@ -50,6 +54,7 @@ export interface RunReport {
     unassignedRegions: number;
     chromeCorrections: number;
     droppedChrome: number;
+    styleAudit: StyleAuditResult | null;
     sectionsDivergent: number; sectionsAccepted: number; pagesParityUnverified: number;
     cost: { tokens?: number; subagents?: number; skillCalls?: number };
   };
@@ -113,6 +118,7 @@ export function buildRunReport(input: RunReportInput): RunReport {
       unassignedRegions: input.unassignedRegions ?? 0,
       chromeCorrections: input.chromeCorrections ?? 0,
       droppedChrome: input.droppedChrome ?? 0,
+      styleAudit: input.styleAudit ?? null,
       sectionsDivergent,
       sectionsAccepted,
       pagesParityUnverified,

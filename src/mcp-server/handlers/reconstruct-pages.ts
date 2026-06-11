@@ -44,6 +44,7 @@ import { reconcileRegions, type PlacedRegion, type RegionSelectionReport } from 
 import { slugify } from '../../lib/url/index.js';
 import { planPageTemplates, reconcileReplicaTemplates, mergeCustomTemplates, variantTemplateSlug, type TemplateVariant } from '../../lib/replicate/page-template-plan.js';
 import { patchWxrTemplatesFile, type WxrTemplatePatchInput } from '../../lib/replicate/wxr-template-patch.js';
+import { auditStyleUsage } from '../../lib/replicate/style-audit.js';
 import { buildPageTemplate } from '../../lib/replicate/reconstruct-pages.js';
 
 const execFileAsync = promisify(execFile);
@@ -519,6 +520,33 @@ export const reconstructPagesHandler: Handler = async (args, ctx) => {
     diagnostics: allFallbackDiagnostics,
   });
 
+  // Style-usage audit (BDC adoption, blocks path only): supports-vs-css dial
+  // over the final page markup + the live theme's css budget. WARNING-level
+  // tally — mirrors htmlFallbackByReason: surfaced in the textResult (and the
+  // run-report via RunReportInput.styleAudit), never a verdict input. Theme
+  // css = every .css under the live theme root, path-sorted (deterministic);
+  // unreadable theme dir degrades to an empty budget, never aborts.
+  const readThemeCss = (root: string): string => {
+    const cssFiles: string[] = [];
+    const walk = (dir: string): void => {
+      for (const name of readdirSync(dir, { withFileTypes: true })) {
+        const full = join(dir, name.name);
+        if (name.isDirectory()) walk(full);
+        else if (name.name.endsWith('.css')) cssFiles.push(full);
+      }
+    };
+    try {
+      walk(root);
+      return cssFiles.sort().map((f) => readFileSync(f, 'utf8')).join('\n');
+    } catch {
+      return '';
+    }
+  };
+  const styleAudit = auditStyleUsage(
+    wxrInputs.map((w) => ({ slug: w.slug, markup: w.content })),
+    readThemeCss(themeRoot),
+  );
+
   // Region audit (#2): reconcile each page's source landmark census against what
   // was placed (body section selectors + chrome presence). Chrome is site-level —
   // derived once from the homepage's served HTML (same extractor theme-scaffold uses).
@@ -563,6 +591,7 @@ export const reconstructPagesHandler: Handler = async (args, ctx) => {
     htmlFallbackSections,
     htmlFallbackByReason,
     unassignedRegions,
+    styleAudit,
     specsFromCache,
     specsFromLive,
     extractErrors,
