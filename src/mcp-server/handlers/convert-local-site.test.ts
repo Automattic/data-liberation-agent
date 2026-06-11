@@ -269,6 +269,8 @@ describe('convertLocalSiteHandler', () => {
       expect(flat.some((c) => c.includes('cache flush'))).toBe(true);
       expect(flat.some((c) => c.includes('option update blogname'))).toBe(false);
       expect(flat.some((c) => c.includes('_wp_page_template'))).toBe(false);
+      expect(flat.some((c) => c.includes('show_on_front'))).toBe(false);
+      expect(flat.some((c) => c.includes('page_on_front'))).toBe(false);
       // ONE consolidated finalize call carries blogname + template assigns +
       // front page (core/site-title renders blogname — wrong value = wrong brand).
       expect(finalizeCalls).toHaveLength(1);

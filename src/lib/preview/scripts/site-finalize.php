@@ -63,11 +63,17 @@ $errors  = array();
 // Option updates. update_option returns false BOTH on failure and when the
 // stored value already equals the new one — verify by reading back instead of
 // trusting the boolean (idempotent re-runs must not report errors).
+// The readback compares against sanitize_option($name, $value) — the SAME
+// pre-storage oracle update_option applies (blogname/blogdescription run
+// esc_html via the sanitize_option_{$name} filters, so raw "Tusk & Whisker"
+// stores as "Tusk &amp; Whisker"; comparing the stored value to the RAW
+// payload value would false-positive on every title containing & < > " ').
+// _wp_specialchars doesn't double-encode, so re-runs stay idempotent.
 $options = isset($payload['options']) && is_array($payload['options']) ? $payload['options'] : array();
 foreach ($options as $name => $value) {
     try {
         update_option($name, $value);
-        if (get_option($name) === $value) {
+        if (get_option($name) === sanitize_option($name, $value)) {
             $applied['options'][] = $name;
         } else {
             $errors[] = array('item' => 'option:' . $name, 'error' => 'option verify failed after update_option');
