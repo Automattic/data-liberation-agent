@@ -72,15 +72,19 @@ export const ingestLocalSiteHandler: Handler = async (args, ctx) => {
   const entries: Array<NormalizeReportEntry & { slug: string }> = [];
   const failedPages: Array<{ slug: string; error: string }> = [];
   const emptyPages: string[] = [];
+  // Warning-level block-contract issues (emitter-bug dial — see block-contract.ts).
+  const contractIssues: Array<{ slug: string; code: string; blockName: string; detail: string }> = [];
 
   for (const page of site.pages) {
     // Per-page isolation: one bad page (roundtrip failure / compose misfit)
     // must not abort the whole ingest — record it and keep going.
     try {
-      const { postContent, report } = composePage(page, { reveal, detectSection, native: nativeBehaviors });
+      const composed = composePage(page, { reveal, detectSection, native: nativeBehaviors });
+      const { postContent, report } = composed;
       if (postContent === '' && report.length === 0) emptyPages.push(page.slug);
       writeFileSync(composedSidecarPath(outputDir, page.slug), postContent);
       for (const r of report) entries.push({ ...r, slug: page.slug });
+      for (const issue of composed.contractIssues) contractIssues.push({ slug: page.slug, ...issue });
     } catch (err) {
       failedPages.push({ slug: page.slug, error: (err as Error).message });
     }
@@ -117,7 +121,7 @@ export const ingestLocalSiteHandler: Handler = async (args, ctx) => {
   try {
     writeFileSync(
       tmpPath,
-      JSON.stringify({ schema: NORMALIZE_REPORT_SCHEMA, site: dir, entries, failedPages, emptyPages }, null, 2),
+      JSON.stringify({ schema: NORMALIZE_REPORT_SCHEMA, site: dir, entries, failedPages, emptyPages, contractIssues }, null, 2),
     );
     renameSync(tmpPath, reportPath);
   } catch (err) {
@@ -133,6 +137,7 @@ export const ingestLocalSiteHandler: Handler = async (args, ctx) => {
     failedPagesList: failedPages,
     emptyPages,
     reportPath,
+    contractIssues: contractIssues.length,
     // Standalone observability (key absent when the flag is off): what
     // detection found + per-kind section counts from the compose reports.
     // No artifact write here — behavior-gaps.json belongs to the convert stage.

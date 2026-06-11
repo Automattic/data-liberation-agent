@@ -40,8 +40,12 @@ describe('ingestLocalSiteHandler', () => {
       const summary = JSON.parse(res.content[0].text) as { pages: number };
       expect(summary.pages).toBe(1);
       expect(existsSync(join(outDir, 'composed', 'home.blocks.html'))).toBe(true);
-      const report = JSON.parse(readFileSync(join(outDir, 'normalize-report.json'), 'utf8')) as { entries: unknown[] };
+      const report = JSON.parse(readFileSync(join(outDir, 'normalize-report.json'), 'utf8')) as { entries: unknown[]; contractIssues: unknown[] };
       expect(report.entries.length).toBe(1);
+      // Block-contract issues ride the report as a warning-level array
+      // (empty on clean output) + a count in the summary.
+      expect(report.contractIssues).toEqual([]);
+      expect((JSON.parse(res.content[0].text) as { contractIssues: number }).contractIssues).toBe(0);
     } finally {
       rmSync(siteDir, { recursive: true, force: true });
       rmSync(outDir, { recursive: true, force: true });

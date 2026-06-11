@@ -1,5 +1,6 @@
 // src/lib/replicate/normalize/compose-page.ts
 import { composeInstantiate, type LayoutSkeleton } from '../compose-instantiate.js';
+import { validateBlockContract, type BlockContractIssue } from '../block-contract.js';
 import { blockMarkupRoundtrips } from '../../streaming/block-markup-validate.js';
 import { segmentPage } from './segment.js';
 import { emitSectionBlocks } from './emit-blocks.js';
@@ -8,6 +9,9 @@ import type { LocalPage, NormalizeReportEntry, RevealBehavior, Section, SectionB
 export interface ComposePageResult {
   postContent: string;
   report: NormalizeReportEntry[];
+  /** Registered-metadata contract issues (WARNING-level — the emitter is
+   * contract-clean by construction; non-empty = an emitter bug to fix). */
+  contractIssues: BlockContractIssue[];
 }
 
 export interface ComposePageOpts {
@@ -40,7 +44,7 @@ export function composePage(page: LocalPage, opts: ComposePageOpts = {}): Compos
       return opts.reveal ? { ...s, behavior: opts.reveal } : s;
     });
   // Genuinely empty page: nothing to validate, skip the roundtrip gate.
-  if (bodySections.length === 0) return { postContent: '', report: [] };
+  if (bodySections.length === 0) return { postContent: '', report: [], contractIssues: [] };
 
   const skeleton: LayoutSkeleton = { sections: [] };
   const pageContent: Record<string, string> = {};
@@ -79,5 +83,7 @@ export function composePage(page: LocalPage, opts: ComposePageOpts = {}): Compos
   if (!check.ok) {
     throw new Error(`composed markup for "${page.slug}" failed roundtrip: ${check.reason}`);
   }
-  return { postContent, report };
+  // Warning-level sibling of the roundtrip gate: emitted attrs vs registered
+  // core metadata (never throws; dla/* + core/html allowlisted in the check).
+  return { postContent, report, contractIssues: validateBlockContract(postContent) };
 }

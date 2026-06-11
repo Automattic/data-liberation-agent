@@ -215,3 +215,15 @@ describe('composePage carry path (native unset): verbatim group wrappers', () =>
     expect(blockMarkupRoundtrips(postContent).ok).toBe(true);
   });
 });
+
+describe('composePage block-contract issues (warning-level)', () => {
+  it('exposes contractIssues ([] on clean output — the emitter is contract-clean by construction)', () => {
+    const { contractIssues } = composePage(page);
+    expect(contractIssues).toEqual([]);
+  });
+
+  it('empty page returns an empty contractIssues array too', () => {
+    const empty: LocalPage = { ...page, html: '<body><main></main></body>' };
+    expect(composePage(empty).contractIssues).toEqual([]);
+  });
+});

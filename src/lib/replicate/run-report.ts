@@ -32,6 +32,9 @@ export interface RunReportInput {
   /** Style-usage audit (blocks path): supports-vs-css dial. INFORMATIONAL —
    * never a verdict input; a low percent is a posture observation. */
   styleAudit?: StyleAuditResult;
+  /** Registered-metadata block-contract issue count (emitter-bug dial).
+   * WARNING-level observability only — never a verdict input. */
+  contractIssues?: number;
   /** Per-page visual-parity records. When present, the verdict is gated on them: any
    *  unaccepted divergent section, or any reconstructed page with no sampled sections,
    *  is a HARD fail. Absent → parity gate off (back-compat). */
@@ -55,6 +58,7 @@ export interface RunReport {
     chromeCorrections: number;
     droppedChrome: number;
     styleAudit: StyleAuditResult | null;
+    contractIssues: number;
     sectionsDivergent: number; sectionsAccepted: number; pagesParityUnverified: number;
     cost: { tokens?: number; subagents?: number; skillCalls?: number };
   };
@@ -119,6 +123,7 @@ export function buildRunReport(input: RunReportInput): RunReport {
       chromeCorrections: input.chromeCorrections ?? 0,
       droppedChrome: input.droppedChrome ?? 0,
       styleAudit: input.styleAudit ?? null,
+      contractIssues: input.contractIssues ?? 0,
       sectionsDivergent,
       sectionsAccepted,
       pagesParityUnverified,

@@ -195,3 +195,12 @@ describe('styleAudit pass-through (informational tally)', () => {
     expect(r.verdict.overall).toBe('pass');
   });
 });
+
+describe('contractIssues pass-through (informational tally)', () => {
+  it('count passes into summary without changing the verdict; absent defaults to 0', () => {
+    const r = buildRunReport({ ...good(), contractIssues: 3 });
+    expect(r.summary.contractIssues).toBe(3);
+    expect(r.verdict.overall).toBe('pass');
+    expect(buildRunReport(good()).summary.contractIssues).toBe(0);
+  });
+});
