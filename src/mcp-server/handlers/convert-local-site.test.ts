@@ -1011,6 +1011,59 @@ describe('convertLocalSiteHandler', () => {
     }
   });
 
+  it('nativeBehaviors: deletes a stale source.js left by a PRIOR carry convert', async () => {
+    const dir = makeBehaviorSite();
+    const sitePath = makeStudioSite();
+    const outDir = mkdtempSync(join(FIXTURE_TMP, 'cls-nbstale-'));
+    // Pre-seed the live theme with a prior carry run's source.js —
+    // writeReplicaFilesToHost overwrites but never deletes, and the enqueue
+    // guard makes any leftover ACTIVE (E2E: old source JS re-armed alongside
+    // the Interactivity blocks).
+    const themeDir = join(sitePath, 'wp-content', 'themes', 'acme-local');
+    mkdirSync(join(themeDir, 'assets', 'js'), { recursive: true });
+    writeFileSync(join(themeDir, 'assets', 'js', 'source.js'), '/* stale prior-run carry js */');
+    try {
+      const res = await convertLocalSiteHandler(
+        { dir, studioSitePath: sitePath, outputDir: outDir, themeSlug: 'acme-local', siteTitle: 'Acme', skipDesign: true, nativeBehaviors: true },
+        ctx,
+      );
+      expect(res.isError).toBeFalsy();
+      // Stale js deleted (this run carries no js)…
+      expect(existsSync(join(themeDir, 'assets', 'js', 'source.js'))).toBe(false);
+      // …while this run's own carried css stays (carryCss default on).
+      expect(existsSync(join(themeDir, 'assets', 'css', 'source.css'))).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(sitePath, { recursive: true, force: true });
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
+  it('default carry re-convert keeps source.js (overwrite, never delete) (regression)', async () => {
+    const dir = makeSite();
+    const sitePath = makeStudioSite();
+    const outDir = mkdtempSync(join(FIXTURE_TMP, 'cls-restale-'));
+    const themeDir = join(sitePath, 'wp-content', 'themes', 'acme-local');
+    mkdirSync(join(themeDir, 'assets', 'js'), { recursive: true });
+    writeFileSync(join(themeDir, 'assets', 'js', 'source.js'), '/* stale prior-run carry js */');
+    try {
+      const res = await convertLocalSiteHandler(
+        { dir, studioSitePath: sitePath, outputDir: outDir, themeSlug: 'acme-local', siteTitle: 'Acme', skipDesign: true },
+        ctx,
+      );
+      expect(res.isError).toBeFalsy();
+      // Default carry writes its own source.js over the stale one — present,
+      // with THIS run's content.
+      const js = readFileSync(join(themeDir, 'assets', 'js', 'source.js'), 'utf8');
+      expect(js).not.toContain('stale prior-run carry js');
+      expect(js.length).toBeGreaterThan(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(sitePath, { recursive: true, force: true });
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
   it('default (no flag): no behaviors key, no plugin, carried js intact (regression)', async () => {
     const dir = makeSite();
     const sitePath = makeStudioSite();

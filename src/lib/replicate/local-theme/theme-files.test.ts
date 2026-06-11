@@ -157,7 +157,7 @@ describe('assembleLocalTheme', () => {
     expect(fns).toContain("classList.add('js')");
   });
 
-  it('carry mode enqueues parity-patch.css after the source style (file_exists-guarded)', () => {
+  it('carry mode enqueues parity-patch.css after the source style (mtime-guarded)', () => {
     const files = assembleLocalTheme({ siteTitle: 'A', themeSlug: 'a-local', headerPart: HEADER, footerPart: FOOTER, carrySourceAssets: { css: 'body{}', js: '' } });
     const fns = files.find((f) => f.relativePath === 'functions.php')?.content ?? '';
     expect(fns).toContain('assets/css/parity-patch.css');
@@ -174,8 +174,33 @@ describe('assembleLocalTheme', () => {
     // exists, else the always-registered theme style handle. A hardcoded -source
     // dep would be UNREGISTERED in js-only carry and WP would silently drop the
     // patch — the repair loop could never converge.
-    expect(fns).toContain("$deps = file_exists( $css ) ? array( 'a-local-source' ) : array( 'a-local-style' );");
+    expect(fns).toContain("$deps = false !== $css_mtime ? array( 'a-local-source' ) : array( 'a-local-style' );");
     expect(fns).toMatch(/parity-patch\.css' \), \$deps,/);
+  });
+
+  it('enqueue guards tolerate realpath-cache stat lies (@filemtime, no page-output warnings)', () => {
+    // PHP's realpath cache keeps file_exists() TRUE for up to 120s after a
+    // deletion while filemtime() stat-fails — the bare call printed a PHP
+    // warning INTO the served page. The truthful guard is one suppressed
+    // stat: @filemtime + false !== check, reused for the enqueue version.
+    const files = assembleLocalTheme({ siteTitle: 'A', themeSlug: 'a-local', headerPart: HEADER, footerPart: FOOTER, carrySourceAssets: { css: 'body{}', js: 'x()' } });
+    const fns = files.find((f) => f.relativePath === 'functions.php')?.content ?? '';
+    expect(fns).toContain('$css_mtime = @filemtime( $css );');
+    expect(fns).toContain('if ( false !== $css_mtime ) {');
+    expect(fns).toContain('$js_mtime = @filemtime( $js );');
+    expect(fns).toContain('if ( false !== $js_mtime ) {');
+    expect(fns).toContain('$patch_mtime = @filemtime( $patch );');
+    expect(fns).toContain('if ( false !== $patch_mtime ) {');
+    expect(fns).toContain('(string) $css_mtime');
+    expect(fns).toContain('(string) $js_mtime');
+    expect(fns).toContain('(string) $patch_mtime');
+    // The lying guard forms must be gone from the carry block. (Locks use the
+    // carry block's spaced style — the scaffold base legitimately keeps its own
+    // unspaced file_exists($style_path)/filemtime($gs_path) calls.)
+    expect(fns).not.toContain('if ( file_exists( $css ) )');
+    expect(fns).not.toContain('if ( file_exists( $js ) )');
+    expect(fns).not.toContain('if ( file_exists( $patch ) )');
+    expect(fns).not.toContain('(string) filemtime( $');
   });
 
   it('css-only carry: no js file and NO html.js gate (gated CSS must not hide content)', () => {

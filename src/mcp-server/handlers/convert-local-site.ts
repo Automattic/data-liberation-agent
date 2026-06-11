@@ -289,6 +289,13 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
     capturedFonts: chromeCarried ? undefined : capturedFonts,
     carrySourceAssets,
   });
+  // Truthful carry flags (also gate the repair loop + summary below): css=true
+  // only when the CSS file is actually written; js=true only when the JS file
+  // is actually written. WP_COMPAT_CSS is always non-empty so carryCss:true
+  // always yields css:true when the flag is on.
+  const carriedCss = carryCss && (carrySourceAssets?.css ?? '').trim().length > 0;
+  const carriedJs = carryJs && (carrySourceAssets?.js ?? '').trim().length > 0;
+
   let themeWritten = 0;
   try {
     // assetSourceDir carries downloaded fonts (woff2) into the live theme so the
@@ -306,6 +313,27 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
     }).themeWritten;
   } catch (err) {
     return ctx.errorResult(`theme write failed: ${(err as Error).message}`);
+  }
+  // Stale carry assets from a PRIOR convert: writeReplicaFilesToHost never
+  // deletes — it only writes this run's files — and functions.php's enqueue
+  // guard makes any leftover ACTIVE. Under nativeBehaviors a stale source.js
+  // re-armed the OLD source JS alongside the Interactivity blocks (E2E:
+  // double drivers, gap behaviors leaked back). Deleting the file the current
+  // run did NOT carry is the designed off-switch.
+  {
+    const liveThemeRoot = join(wpRoot, 'wp-content', 'themes', themeSlug);
+    try {
+      if (!carriedJs) {
+        const staleJs = join(liveThemeRoot, 'assets', 'js', 'source.js');
+        if (existsSync(staleJs)) unlinkSync(staleJs);
+      }
+      if (!carriedCss) {
+        const staleCss = join(liveThemeRoot, 'assets', 'css', 'source.css');
+        if (existsSync(staleCss)) unlinkSync(staleCss);
+      }
+    } catch (err) {
+      warnings.push(`stale carry asset cleanup failed: ${(err as Error).message}`);
+    }
   }
   try {
     await studioWp(studioSitePath, ['theme', 'activate', themeSlug]);
@@ -493,13 +521,6 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
       warnings.push(`compare failed: ${(err as Error).message}`);
     }
   }
-
-  // Truthful carry summary (also gates the repair loop below): css=true only when
-  // the CSS file was actually written; js=true only when the JS file was actually
-  // written. WP_COMPAT_CSS is always non-empty so carryCss:true always yields
-  // css:true when the flag is on.
-  const carriedCss = carryCss && (carrySourceAssets?.css ?? '').trim().length > 0;
-  const carriedJs = carryJs && (carrySourceAssets?.js ?? '').trim().length > 0;
 
   // Stage 1e — Deterministic parity repair loop (bounded, no AI).
   // Measure → classify → patch → re-capture → re-compare; stop on allPass,

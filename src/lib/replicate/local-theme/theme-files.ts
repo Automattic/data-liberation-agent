@@ -88,19 +88,26 @@ add_action( 'wp_head', function () {
   return `
 // Stage 1d carry: the source site's own CSS/JS, adapted for the block DOM.
 // Enqueued at priority 20 so it lands AFTER global styles + theme style.
+// Guards are @filemtime (not file_exists): PHP's realpath cache keeps
+// file_exists() TRUE for up to 120s after a deletion while the stat fails,
+// and the bare filemtime() printed a warning INTO the served page. One
+// suppressed stat is the truthful existence check AND the enqueue version.
 add_action( 'wp_enqueue_scripts', function () {
     $css = get_theme_file_path( 'assets/css/source.css' );
-    if ( file_exists( $css ) ) {
-        wp_enqueue_style( '${themeSlug}-source', get_theme_file_uri( 'assets/css/source.css' ), array( '${themeSlug}-style' ), (string) filemtime( $css ) );
+    $css_mtime = @filemtime( $css );
+    if ( false !== $css_mtime ) {
+        wp_enqueue_style( '${themeSlug}-source', get_theme_file_uri( 'assets/css/source.css' ), array( '${themeSlug}-style' ), (string) $css_mtime );
     }
     $js = get_theme_file_path( 'assets/js/source.js' );
-    if ( file_exists( $js ) ) {
-        wp_enqueue_script( '${themeSlug}-source', get_theme_file_uri( 'assets/js/source.js' ), array(), (string) filemtime( $js ), true );
+    $js_mtime = @filemtime( $js );
+    if ( false !== $js_mtime ) {
+        wp_enqueue_script( '${themeSlug}-source', get_theme_file_uri( 'assets/js/source.js' ), array(), (string) $js_mtime, true );
     }
     $patch = get_theme_file_path( 'assets/css/parity-patch.css' );
-    if ( file_exists( $patch ) ) {
-        $deps = file_exists( $css ) ? array( '${themeSlug}-source' ) : array( '${themeSlug}-style' );
-        wp_enqueue_style( '${themeSlug}-parity-patch', get_theme_file_uri( 'assets/css/parity-patch.css' ), $deps, (string) filemtime( $patch ) );
+    $patch_mtime = @filemtime( $patch );
+    if ( false !== $patch_mtime ) {
+        $deps = false !== $css_mtime ? array( '${themeSlug}-source' ) : array( '${themeSlug}-style' );
+        wp_enqueue_style( '${themeSlug}-parity-patch', get_theme_file_uri( 'assets/css/parity-patch.css' ), $deps, (string) $patch_mtime );
     }
 }, 20 );
 ${htmlJsBlock}`;
@@ -186,7 +193,7 @@ export function assembleLocalTheme(opts: AssembleLocalThemeOpts): ReplicaFile[] 
       withTemplates.push({ relativePath: 'assets/js/source.js', content: js });
     }
 
-    // 3. Append the enqueue block to functions.php (file_exists guards make
+    // 3. Append the enqueue block to functions.php (@filemtime guards make
     //    it safe even when only one of the two assets is non-empty). The
     //    html.js gate ships only alongside actual source JS (hasJS).
     const fIdx = withTemplates.findIndex((f) => f.relativePath === 'functions.php');
