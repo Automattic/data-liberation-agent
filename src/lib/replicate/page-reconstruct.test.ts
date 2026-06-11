@@ -1329,6 +1329,32 @@ describe('reconstructPagePattern — promoted-heading body echo', () => {
     expect(r.body.match(/Ambiguous Line/g)).toHaveLength(2);
   });
 
+  it('keeps a genuine duplicate whose text carries an HTML entity (& vs &amp;)', () => {
+    // Captured heading/body are DECODED DOM text; sectionHtml carries entities.
+    // A raw-substring count finds 0 occurrences of "Food & Drink" in the encoded
+    // source and would drop the genuine twice-rendered paragraph.
+    const s = section({
+      headings: ['Food & Drink'],
+      bodyText: ['Food & Drink'],
+      sectionHtml: '<section><h2>Food &amp; Drink</h2><p>Food &amp; Drink</p></section>',
+    });
+    const r = reconstructPagePattern([s], opts);
+    expect(r.body.match(/Food &amp; Drink/g)).toHaveLength(2);
+  });
+
+  it('still drops an entity-bearing promoted echo shown once in the source', () => {
+    const s = section({
+      headings: ['Tools & Tips'],
+      bodyText: ['Tools & Tips', 'A real supporting paragraph.'],
+      sectionHtml:
+        '<section><p class="font_2"><span>Tools &amp; Tips</span></p>' +
+        '<p>A real supporting paragraph.</p></section>',
+    });
+    const r = reconstructPagePattern([s], opts);
+    expect(r.body.match(/Tools &amp; Tips/g)).toHaveLength(1);
+    expect(r.body).toContain('A real supporting paragraph.');
+  });
+
   it('keeps echo-drop arrays index-aligned (surviving paragraph keeps its own typography)', () => {
     const s = section({
       headings: ['Promoted Headline'],

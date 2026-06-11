@@ -29,17 +29,23 @@ const ALLOWED_KEYS = new Set(['patterns', 'sitewideFlags', 'notes', 'blockStyleV
 const VARIATION_SLUG_RE = /^lib-[a-z0-9][a-z0-9-]*$/;
 
 export function recoverJsonObject(input: string): string | undefined {
-  // The rescan-after-unclosed-brace loop is O(n²) worst case (e.g. '{{{{…');
-  // model output is context-bounded, but cap defensively so a pathological
-  // response can't stall the pipeline.
+  // The rescan-after-unclosed-brace loop is O(n²) worst case (e.g. '{{{{…').
+  // The length cap bounds n but not n² (500k of braces is still ~1.25e11
+  // steps), so a total-work budget bounds the scan absolutely: a real
+  // prose-wrapped envelope closes its braces and never gets near it; a
+  // pathological all-brace input bails with whatever was recovered so far.
   if (input.length > 500_000) input = input.slice(0, 500_000);
+  const WORK_BUDGET = 10_000_000;
+  let work = 0;
   let best: string | undefined;
   let i = 0;
   while (i < input.length) {
-    if (input[i] !== '{') { i++; continue; }
+    if (work > WORK_BUDGET) return best;
+    if (input[i] !== '{') { i++; work++; continue; }
     let depth = 0, inString = false, escape = false;
     let j = i;
     for (; j < input.length; j++) {
+      work++;
       const c = input[j]!;
       if (escape) { escape = false; continue; }
       if (inString) {

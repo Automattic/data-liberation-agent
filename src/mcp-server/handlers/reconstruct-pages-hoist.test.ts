@@ -185,13 +185,15 @@ describe('liberate_reconstruct_pages variation hoisting', () => {
     expect(text).toContain('"variationsHoisted": 1');
     expect(text).toContain('"variationInstances": 3');
 
-    // (e) the written pattern-file copies carry the SAME decided swaps as the
-    // hoisted post_content: is-style class present, original style JSON gone.
+    // (e) the written pattern-file copies stay PRE-hoist: patterns never pass
+    // block-fixer canonicalization, so a comment-attr-only swap would leave
+    // them editor-invalid (is-style attrs over pre-hoist inline HTML). They
+    // keep the original style attrs — internally consistent and editor-valid.
     for (const root of [fx.themeRoot, fx.outThemeRoot]) {
       for (const slug of ['home', 'about']) {
         const pattern = readFileSync(join(root, 'patterns', `page-${slug}.php`), 'utf8');
-        expect(pattern).toContain('is-style-lib-group-');
-        expect(pattern).not.toContain(STYLE_ATTRS);
+        expect(pattern).toContain(STYLE_ATTRS);
+        expect(pattern).not.toContain('is-style-lib-group-');
       }
     }
   });

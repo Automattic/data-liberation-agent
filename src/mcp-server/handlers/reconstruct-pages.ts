@@ -48,7 +48,7 @@ import { slugify } from '../../lib/url/index.js';
 import { planPageTemplates, reconcileReplicaTemplates, mergeCustomTemplates, variantTemplateSlug, type TemplateVariant } from '../../lib/replicate/page-template-plan.js';
 import { patchWxrTemplatesFile, type WxrTemplatePatchInput } from '../../lib/replicate/wxr-template-patch.js';
 import { buildPageTemplate } from '../../lib/replicate/reconstruct-pages.js';
-import { applyHoistSwaps, hoistVariations, type HoistedVariation } from '../../lib/replicate/variation-hoist.js';
+import { hoistVariations, type HoistedVariation } from '../../lib/replicate/variation-hoist.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -531,20 +531,18 @@ export const reconstructPagesHandler: Handler = async (args, ctx) => {
 
   // Phase B: write + canonicalize + install (existing logic, over hoisted markup).
   for (const { p, built, markup } of builtPages) {
-    // The pattern file (patterns/page-<slug>.php) embeds the SAME block markup
-    // as the page's post_content, built PRE-hoist (header + PHP-asset-ref body;
-    // toPostContent only swaps PHP asset refs for literal URLs in inner HTML —
-    // block comment attrs are identical between the two forms). Re-apply the
-    // ALREADY-DECIDED hoist swaps so the pattern copy doesn't structurally
-    // diverge from the hoisted post_content. Never re-run constellation
-    // counting here — pattern copies must not double instance counts.
-    const files = hoistedVariations.length > 0
-      ? built.files.map((f) =>
-          f.path === `patterns/page-${p.slug}.php`
-            ? { ...f, content: applyHoistSwaps(f.content, hoistedVariations) }
-            : f,
-        )
-      : built.files;
+    // The pattern file (patterns/page-<slug>.php) is deliberately written
+    // PRE-hoist. Hoist swaps are comment-attr-only edits; post_content is
+    // reconciled by the block-fixer canonicalization (parse→createBlock→
+    // serialize regenerates the inner HTML from the attrs), but pattern files
+    // never pass through the fixer — a swapped pattern would carry is-style
+    // attrs over pre-hoist inline-styled inner HTML, permanently editor-invalid
+    // on theme reinstall / pattern rescan. Pre-hoist patterns are internally
+    // consistent (style attrs + matching inline HTML) and editor-valid; they
+    // just diverge from the hoisted post_content, which is the canonical copy.
+    // Re-apply swaps here ONLY once pattern markup is also canonicalized
+    // (applyHoistSwaps in variation-hoist.ts exists for exactly that).
+    const files = built.files;
     // Write to the live theme AND the on-disk output/<site>/theme copy.
     for (const root of [themeRoot, outThemeDir]) {
       for (const f of files) {

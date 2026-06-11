@@ -200,6 +200,27 @@ describe('downloadMedia — SVG raster sibling + risky scan', () => {
     expect(basename(res.rasterPath as string)).toBe('logo-2.png');
   });
 
+  it('a byte-identical deduped SVG inherits the ORIGINAL download’s raster fields', async () => {
+    tmp = mkdtempSync(join(process.cwd(), '.tmp-test-media-'));
+    const seenNames = new Map<string, number>();
+    const seenHashes = new Map<string, string>();
+    // Claim shared.png first so the original SVG's sibling suffix-bumps to -2 —
+    // the exact case where install-time basename derivation would pick the
+    // wrong (unrelated) file if the deduped stub stayed raster-blind.
+    global.fetch = vi.fn(async () => stubResponse('image/png')) as unknown as typeof fetch;
+    await downloadMedia('https://cdn.example.com/shared.png', tmp, seenNames, seenHashes, { svgRaster: true });
+    global.fetch = vi.fn(async () => stubResponse('image/svg+xml', riskySvg)) as unknown as typeof fetch;
+    const original = await downloadMedia('https://cdn.example.com/shared.svg', tmp, seenNames, seenHashes, { svgRaster: true });
+    expect(basename(original.rasterPath as string)).toBe('shared-2.png');
+    // Same SVG bytes under a different URL → dedup hit → SAME raster fields.
+    global.fetch = vi.fn(async () => stubResponse('image/svg+xml', riskySvg)) as unknown as typeof fetch;
+    const dup = await downloadMedia('https://cdn.example.com/other/shared.svg', tmp, seenNames, seenHashes, { svgRaster: true });
+    expect(dup.bytes).toBe(0); // dedup hit
+    expect(dup.localPath).toBe(original.localPath);
+    expect(dup.rasterPath).toBe(original.rasterPath);
+    expect(dup.svgRisky).toBe(true);
+  });
+
   it('records rasterError and still succeeds when rasterization fails', async () => {
     tmp = mkdtempSync(join(process.cwd(), '.tmp-test-media-'));
     vi.mocked(rasterizeSvg).mockResolvedValueOnce({ ok: false, error: 'chromium exploded' });

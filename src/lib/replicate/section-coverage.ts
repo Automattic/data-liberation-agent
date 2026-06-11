@@ -54,8 +54,10 @@ const TEXT_FLOOR = 0.5;
  * markup. Empty captured content is "fully covered" (nothing to lose).
  */
 /** Fold typographic glyph variants + collapse whitespace + lowercase. Mirrors the
- *  provenance gate's glyph-folding so converted-path coverage agrees with it. */
-function foldText(s: string): string {
+ *  provenance gate's glyph-folding so converted-path coverage agrees with it.
+ *  Exported for page-reconstruct's promoted-heading echo check, which must fold
+ *  the same way so the two source-text comparisons agree. */
+export function foldText(s: string): string {
   return s
     .replace(/[\u2018\u2019\u201b]/g, "'") // left/right single quotes, high-reversed-9
     .replace(/[\u201c\u201d]/g, '"') // left/right double quotes

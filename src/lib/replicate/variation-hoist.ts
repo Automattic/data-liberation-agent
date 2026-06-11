@@ -7,7 +7,15 @@
 // editor-native named styles. Exact-constellation match only (no subset
 // merging). Fail-open everywhere: anything unparseable is left untouched.
 // See docs/superpowers/specs/2026-06-10-neptune-best-parts-design.md (section D).
+import { serializeBlockAttrs } from './form-blocks.js';
+
 export const HOIST_MIN_INSTANCES = 3;
+
+/** Slugs become theme file names (<theme>/styles/blocks/<slug>.json) AND
+ *  is-style-* classNames — both demand a tight charset. Style keys come from
+ *  markup JSON, so guard rather than trust (a hostile/odd key must not become
+ *  a path segment). Mirrors builder-envelope's VARIATION_SLUG_RE. */
+const HOIST_SLUG_RE = /^lib-[a-z0-9][a-z0-9-]*$/;
 
 export interface HoistedVariation {
   slug: string;
@@ -120,6 +128,9 @@ export function hoistVariations(pagesIn: HoistPage[], opts: { minInstances?: num
     const styles = sample.attrs.style as Record<string, unknown>;
     const shortName = sample.blockName.split('/')[1]!;
     let slug = 'lib-' + shortName + '-' + styleGroupsSlugPart(styles);
+    // Fail-open: a constellation whose derived slug fails the charset guard
+    // (an unexpected style key) is simply not hoisted — never a bad filename.
+    if (!HOIST_SLUG_RE.test(slug)) continue;
     let n = 2;
     while (usedSlugs.has(slug)) slug = 'lib-' + shortName + '-' + styleGroupsSlugPart(styles) + '-' + n++;
     usedSlugs.add(slug);
@@ -143,13 +154,17 @@ export function hoistVariations(pagesIn: HoistPage[], opts: { minInstances?: num
   return { pages, variations };
 }
 
-/** Swap one styled block's attrs JSON for the is-style-* form, in place. */
+/** Swap one styled block's attrs JSON for the is-style-* form, in place.
+ *  Re-serialize through serializeBlockAttrs, NOT plain JSON.stringify: the
+ *  original attrs may carry @wordpress/blocks comment-safe escapes
+ *  (unicode-escaped `--`) that JSON.parse decoded — re-emitting them raw
+ *  could terminate the surrounding HTML comment delimiter. */
 function applyAttrEdit(markup: string, hit: BlockHit, slug: string): string {
   const attrs = { ...hit.attrs };
   delete attrs.style;
   const existing = typeof attrs.className === 'string' ? attrs.className + ' ' : '';
   attrs.className = existing + 'is-style-' + slug;
-  return markup.slice(0, hit.attrStart) + JSON.stringify(attrs) + markup.slice(hit.attrEnd + 1);
+  return markup.slice(0, hit.attrStart) + serializeBlockAttrs(attrs) + markup.slice(hit.attrEnd + 1);
 }
 
 /**
@@ -161,6 +176,12 @@ function applyAttrEdit(markup: string, hit: BlockHit, slug: string): string {
  * constellation match a variation decided by `hoistVariations` are swapped,
  * so pattern copies can never inflate counts or mint new variations.
  * Fail-open like the hoist itself: no matches → markup returned unchanged.
+ *
+ * NOTE: currently unused by the reconstruct handler — pattern files are
+ * written PRE-hoist because they never pass block-fixer canonicalization, and
+ * a comment-attr-only swap without it leaves the pattern editor-invalid
+ * (is-style attrs over pre-hoist inline HTML). Wire this back in only
+ * together with pattern canonicalization.
  */
 export function applyHoistSwaps(markup: string, variations: HoistedVariation[]): string {
   if (variations.length === 0) return markup;

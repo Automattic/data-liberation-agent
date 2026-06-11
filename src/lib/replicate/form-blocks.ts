@@ -74,8 +74,10 @@ const FIELD_BLOCK_BY_KIND: Partial<Record<SectionSpecFormField['kind'], string>>
  * `serializeAttributes`: JSON with the characters that could terminate the
  * comment delimiter (or smuggle markup) unicode-escaped. Keeps a crafted
  * source label (e.g. containing `-->`) from breaking out of the comment.
+ * Exported for variation-hoist, which rewrites existing comment attrs and must
+ * not lose this escaping (JSON.parse decodes `--` to literal `--`).
  */
-function serializeBlockAttrs(attrs: Record<string, unknown>): string {
+export function serializeBlockAttrs(attrs: Record<string, unknown>): string {
   return JSON.stringify(attrs)
     .replace(/--/g, '\\u002d\\u002d')
     .replace(/</g, '\\u003c')

@@ -29,7 +29,8 @@
 import type { SectionSpec, SectionSpecImage, SectionSpecIcon, SectionSpecCell } from './section-extract.js';
 import { nearestToken, brightness, type PaletteToken } from './footer-color.js';
 import type { ExtractedReview } from './review-extract.js';
-import { measureSectionCoverage, measureConvertedCoverage } from './section-coverage.js';
+import * as cheerio from 'cheerio';
+import { measureSectionCoverage, measureConvertedCoverage, foldText } from './section-coverage.js';
 import { buildHtmlFallbackBlock, selectIslandSource } from './html-fallback.js';
 import { rewriteMediaUrls } from '../streaming/media-url-rewrite.js';
 import { hasUnmigratedRemoteAsset, scanForInjection } from './validate-artifacts.js';
@@ -1618,8 +1619,14 @@ export function reconstructPagePattern(
     }
     const srcHtml = s.sectionHtml ?? s.styledHtml;
     if (srcHtml && (out.bodyText ?? []).length && out.headings.length) {
-      const srcText = normalizeCopy(srcHtml.replace(/<[^>]*>/g, ' ')).toLowerCase();
-      const headingSet = new Set(out.headings.map((h) => normalizeCopy(h).toLowerCase()));
+      // Compare against the DECODED source text (cheerio) with the same glyph
+      // folding as the coverage gates: headings/bodyText are decoded DOM
+      // captures ("Food & Drink") while raw sectionHtml carries entities
+      // ("Food &amp; Drink") — a raw-substring count reads every such text as
+      // absent (count 0) and would drop a genuine duplicate. Same bug class
+      // the coverage gate fixed in 0d35541.
+      const srcText = foldText(cheerio.load(srcHtml, null, false).root().text());
+      const headingSet = new Set(out.headings.map((h) => foldText(h)));
       const countOccurrences = (needle: string): number => {
         if (!needle) return 0;
         let count = 0;
@@ -1627,8 +1634,12 @@ export function reconstructPagePattern(
         return count;
       };
       const keep = (out.bodyText ?? []).map((b) => {
-        const n = normalizeCopy(b).toLowerCase();
-        return !(headingSet.has(n) && countOccurrences(n) <= 1);
+        const n = foldText(b);
+        // Drop ONLY the verified promoted-echo case: the text matches a heading
+        // AND appears exactly once in the source. Count 0 means the comparison
+        // failed to find it at all — can't verify → keep (never guess toward
+        // dropping).
+        return !(headingSet.has(n) && countOccurrences(n) === 1);
       });
       if (keep.includes(false)) {
         const filterAligned = <T>(arr: T[]): T[] => arr.filter((_, i) => keep[i] !== false);

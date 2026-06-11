@@ -7,6 +7,11 @@ export const refineReportHandler: Handler = async (args, ctx) => {
   const outputDir = args.outputDir as string | undefined;
   const slug = args.slug as string | undefined;
   if (!outputDir || !slug) return ctx.errorResult('outputDir and slug are required');
+  // The slug becomes a path segment under refine/ — reject separators and
+  // dot-traversal so a malformed slug can't walk outside the output dir.
+  if (!/^[a-z0-9][a-z0-9._-]*$/i.test(slug) || slug.includes('..')) {
+    return ctx.errorResult(`Invalid slug "${slug}" — expected a plain page slug (letters/digits/dot/dash/underscore).`);
+  }
 
   const dir = join(outputDir, 'refine', slug);
   if (!existsSync(dir)) return ctx.errorResult(`No refine reports at ${dir} — match-section must write refine/<slug>/<sectionIndex>.json before validation.`);

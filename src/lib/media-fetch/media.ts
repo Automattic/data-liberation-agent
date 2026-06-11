@@ -211,6 +211,15 @@ async function fetchMediaResponse(rawUrl: string): Promise<Response> {
   throw new Error(`too many redirects (> ${MAX_REDIRECTS})`);
 }
 
+/**
+ * Raster outcome per downloaded SVG local path, so a later byte-identical
+ * duplicate (content-hash dedup) can inherit the ORIGINAL's PNG-sibling fields
+ * instead of leaving its stub raster-blind. Module-level on purpose: the
+ * seenHashes map is caller-owned and string-valued, and entries are a few
+ * hundred bytes per unique SVG per process — bounded by run size.
+ */
+const svgExtrasByLocalPath = new Map<string, Pick<DownloadResult, 'svgRisky' | 'rasterPath' | 'rasterError'>>();
+
 export async function downloadMedia(
   url: string,
   outputDir: string,
@@ -302,11 +311,16 @@ export async function downloadMedia(
       const hash = createHash('sha256').update(fileBytes).digest('hex');
       const existing = seenHashes.get(hash);
       if (existing) {
-        // Duplicate — remove the new file and return the existing path. No
+        // Duplicate — remove the new file and return the existing path. No NEW
         // raster needed: the first download of these bytes already produced
-        // the PNG sibling (recorded on the original URL's stub).
+        // the PNG sibling — carry its raster fields onto THIS result too, so
+        // the deduped URL's stub records the REAL sibling path. (Install-time
+        // basename derivation cannot be trusted instead: a name collision can
+        // suffix-bump the original's sibling to `-2.png`, and deriving
+        // `<base>.png` then silently picks up an unrelated asset's file.)
         try { unlinkSync(destPath); } catch { /* ignore */ }
-        return { url, localPath: existing, filename: basename(existing), error: null, bytes: 0 };
+        const original = svgExtrasByLocalPath.get(existing);
+        return { url, localPath: existing, filename: basename(existing), error: null, bytes: 0, ...original };
       }
       seenHashes.set(hash, destPath);
     }
@@ -333,6 +347,9 @@ export async function downloadMedia(
       } catch (rasterErr) {
         svgExtras = { rasterError: (rasterErr as Error).message };
       }
+      // Remember the raster outcome by local path so a later byte-identical
+      // duplicate (dedup hit above) inherits the original's sibling fields.
+      if (svgExtras) svgExtrasByLocalPath.set(destPath, svgExtras);
     }
 
     const bytes = statSync(destPath).size;
