@@ -104,12 +104,26 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
     lowConfidence: number;
     failedPageCount: number;
     failedPagesList: Array<{ slug: string; error: string }>;
+    behaviors?: { reveal: boolean; tabs: number; slider: number; modal: number; gaps: number };
   };
   const ingest = {
     lowConfidence: ingestSummary.lowConfidence,
     failedPageCount: ingestSummary.failedPageCount,
     failedPagesList: ingestSummary.failedPagesList,
   };
+  // Per-kind section counts from the ingest summary — derived there from the
+  // compose REPORTS (single source of truth; this handler never re-runs the
+  // per-section detection). Fired kinds feed the residue claiming below so
+  // their driver js stops inflating gaps.
+  const kindCounts = {
+    tabs: ingestSummary.behaviors?.tabs ?? 0,
+    slider: ingestSummary.behaviors?.slider ?? 0,
+    modal: ingestSummary.behaviors?.modal ?? 0,
+  };
+  const sectionKinds = new Set<'tabs' | 'slider' | 'modal'>();
+  if (kindCounts.tabs > 0) sectionKinds.add('tabs');
+  if (kindCounts.slider > 0) sectionKinds.add('slider');
+  if (kindCounts.modal > 0) sectionKinds.add('modal');
 
   // Second ingest is deterministic + cheap (same dir, no writes between); the
   // handler call above already surfaced any slug-collision error.
@@ -222,8 +236,13 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
     // Detection runs on the RAW collected strings — assets.css includes the
     // prepended WP_COMPAT_CSS, which is detection-immune (no html.js section
     // gate, no scroll-listener patterns; reviewer-verified). Mirrors the
-    // ingest handler's detection exactly (same pure fn, same inputs).
-    behaviors = nativeBehaviors ? detectBehaviors({ css: assets.css, js: assets.js }) : undefined;
+    // ingest handler's FINAL detection pass exactly (same pure fn, same
+    // inputs, same sectionKinds — derived from the ingest summary above,
+    // which exists before this runs), so the two stages cannot disagree and
+    // the fired kinds' driver js is claimed out of the gap report here too.
+    behaviors = nativeBehaviors
+      ? detectBehaviors({ css: assets.css, js: assets.js }, { sectionKinds })
+      : undefined;
   }
 
   // Behavior gaps artifact: every uncatalogued source-JS pattern, reported
@@ -759,9 +778,20 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
     designCaptured,
     carried: { css: carriedCss, js: carriedJs },
     // Key OMITTED entirely when the flag is off — default summary stays byte-stable.
-    // sticky reports EMISSION (stickyEmitted), not detection — see the header-part site.
+    // sticky reports EMISSION (stickyEmitted), not detection — see the header-part
+    // site. tabs/slider/modal are per-section counts forwarded from the ingest
+    // summary (compose reports = single source of truth).
     ...(behaviors !== undefined
-      ? { behaviors: { reveal: !!behaviors.reveal, sticky: stickyEmitted, gaps: behaviors.gaps.length } }
+      ? {
+          behaviors: {
+            reveal: !!behaviors.reveal,
+            sticky: stickyEmitted,
+            tabs: kindCounts.tabs,
+            slider: kindCounts.slider,
+            modal: kindCounts.modal,
+            gaps: behaviors.gaps.length,
+          },
+        }
       : {}),
     ...(parity !== undefined ? { parity } : {}),
     warnings,

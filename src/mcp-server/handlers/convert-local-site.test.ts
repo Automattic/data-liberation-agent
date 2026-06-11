@@ -921,6 +921,106 @@ describe('convertLocalSiteHandler', () => {
     return dir;
   }
 
+  /** Fixture bearing ALL catalog patterns: reveal + sticky (global), tabs
+   * (services), slider (index), modal (contact), plus the nav-highlight gap. */
+  function makeAllBehaviorsSite(): string {
+    mkdirSync(FIXTURE_TMP, { recursive: true });
+    const dir = mkdtempSync(join(FIXTURE_TMP, 'cls-allbehave-'));
+    writeFileSync(
+      join(dir, 'index.html'),
+      '<html><head><title>Home</title><link rel="stylesheet" href="styles.css"></head><body>' +
+        '<header><nav><a href="services.html">Services</a></nav></header><main>' +
+        '<section id="hero"><h1>Hi</h1></section>' +
+        '<section id="quotes"><div class="track">' +
+        '<figure class="slide is-current"><blockquote>One</blockquote></figure>' +
+        '<figure class="slide"><blockquote>Two</blockquote></figure></div>' +
+        '<button class="prev">Prev</button><button class="next">Next</button></section>' +
+        '</main><script src="site.js"></script></body></html>',
+    );
+    writeFileSync(
+      join(dir, 'services.html'),
+      '<html><head><title>Services</title><link rel="stylesheet" href="styles.css"></head><body><main>' +
+        '<section id="plans"><div role="tablist">' +
+        '<button role="tab" aria-selected="true" aria-controls="p-a" class="tab is-active">A</button>' +
+        '<button role="tab" aria-selected="false" aria-controls="p-b" class="tab">B</button></div>' +
+        '<div role="tabpanel" id="p-a"><p>Alpha</p></div>' +
+        '<div role="tabpanel" id="p-b" hidden><p>Beta</p></div></section>' +
+        '</main><script src="site.js"></script></body></html>',
+    );
+    writeFileSync(
+      join(dir, 'contact.html'),
+      '<html><head><title>Contact</title></head><body><main>' +
+        '<section id="book"><button class="open-details">Details</button>' +
+        '<dialog aria-modal="true"><p>Info</p><button class="close">Close</button></dialog></section>' +
+        '</main></body></html>',
+    );
+    writeFileSync(
+      join(dir, 'styles.css'),
+      'html.js section { opacity: 0; transform: translateY(18px); transition: opacity 600ms ease, transform 600ms ease; }\n' +
+        'html.js section.is-visible { opacity: 1; transform: none; }\n' +
+        'header.is-scrolled { box-shadow: 0 2px 12px rgba(0,0,0,0.08); }\n',
+    );
+    writeFileSync(
+      join(dir, 'site.js'),
+      'const obs = new IntersectionObserver((entries) => {\n' +
+        "  entries.forEach((e) => e.isIntersecting && e.target.classList.add('is-visible'));\n" +
+        '}, { threshold: 0.12 });\n' +
+        "document.querySelectorAll('section').forEach((s) => obs.observe(s));\n" +
+        "window.addEventListener('scroll', () => {\n" +
+        "  document.querySelector('header').classList.toggle('is-scrolled', window.scrollY > 24);\n" +
+        '});\n' +
+        'document.querySelectorAll(\'[role="tab"]\').forEach((t) => t.addEventListener(\'click\', () => {\n' +
+        "  t.classList.add('is-active');\n" +
+        '}));\n' +
+        'setInterval(() => { advance(); }, 6000);\n' +
+        "document.querySelector('.next').addEventListener('click', () => {\n" +
+        "  document.querySelector('.slide.is-current').classList.remove('is-current');\n" +
+        '});\n' +
+        "document.querySelector('.open-details').addEventListener('click', () => {\n" +
+        "  document.querySelector('dialog').showModal();\n" +
+        '});\n' +
+        "document.querySelectorAll('nav a').forEach((a) => {\n" +
+        "  if (a.getAttribute('href') === location.pathname) a.style.color = 'red';\n" +
+        '});\n',
+    );
+    return dir;
+  }
+
+  it('nativeBehaviors: per-section counts in the summary + fired-kind drivers claimed out of gaps', async () => {
+    const dir = makeAllBehaviorsSite();
+    const sitePath = makeStudioSite();
+    const outDir = mkdtempSync(join(FIXTURE_TMP, 'cls-nball-'));
+    try {
+      const res = await convertLocalSiteHandler(
+        { dir, studioSitePath: sitePath, outputDir: outDir, themeSlug: 'acme-local', siteTitle: 'Acme', skipDesign: true, nativeBehaviors: true },
+        ctx,
+      );
+      expect(res.isError).toBeFalsy();
+      const summary = JSON.parse(res.content[0].text) as {
+        behaviors?: { reveal: boolean; sticky: boolean; tabs: number; slider: number; modal: number; gaps: number };
+      };
+      expect(summary.behaviors).toEqual({ reveal: true, sticky: true, tabs: 1, slider: 1, modal: 1, gaps: 1 });
+      // Sidecars carry the per-section wrappers (verbatim inner).
+      expect(readFileSync(join(outDir, 'composed', 'services.blocks.html'), 'utf8')).toContain('data-wp-interactive="dla/tabs"');
+      expect(readFileSync(join(outDir, 'composed', 'home.blocks.html'), 'utf8')).toContain('data-wp-interactive="dla/slider"');
+      expect(readFileSync(join(outDir, 'composed', 'contact.blocks.html'), 'utf8')).toContain('data-wp-interactive="dla/modal"');
+      // Claiming: the fired kinds' driver js is OUT of the gap report — only
+      // the nav-highlight residue remains.
+      const gaps = JSON.parse(readFileSync(join(outDir, 'behavior-gaps.json'), 'utf8')) as {
+        gaps: Array<{ jsExcerpt: string }>;
+      };
+      expect(gaps.gaps).toHaveLength(1);
+      expect(gaps.gaps[0].jsExcerpt).toContain('location.pathname');
+      expect(gaps.gaps[0].jsExcerpt).not.toContain('showModal');
+      expect(gaps.gaps[0].jsExcerpt).not.toContain('setInterval');
+      expect(gaps.gaps[0].jsExcerpt).not.toContain('role="tab"');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(sitePath, { recursive: true, force: true });
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
   it('nativeBehaviors: forces carryJs off, installs + activates the plugin, writes behavior-gaps', async () => {
     const dir = makeBehaviorSite();
     const sitePath = makeStudioSite();
@@ -936,7 +1036,7 @@ describe('convertLocalSiteHandler', () => {
         behaviors?: { reveal: boolean; sticky: boolean; gaps: number };
       };
       expect(summary.carried.js).toBe(false); // source js NOT carried
-      expect(summary.behaviors).toEqual({ reveal: true, sticky: true, gaps: 1 });
+      expect(summary.behaviors).toEqual({ reveal: true, sticky: true, tabs: 0, slider: 0, modal: 0, gaps: 1 });
       const themeDir = join(sitePath, 'wp-content', 'themes', 'acme-local');
       // No carried source.js in the live theme — the blocks replace it.
       expect(existsSync(join(themeDir, 'assets', 'js', 'source.js'))).toBe(false);
@@ -1001,7 +1101,7 @@ describe('convertLocalSiteHandler', () => {
         behaviors?: { reveal: boolean; sticky: boolean; gaps: number };
         warnings: string[];
       };
-      expect(summary.behaviors).toEqual({ reveal: true, sticky: false, gaps: 1 });
+      expect(summary.behaviors).toEqual({ reveal: true, sticky: false, tabs: 0, slider: 0, modal: 0, gaps: 1 });
       expect(summary.warnings).toContain('sticky behavior detected but not emitted (requires carried chrome header)');
       expect(readFileSync(join(sitePath, 'wp-content', 'themes', 'acme-local', 'parts', 'header.html'), 'utf8')).not.toContain('dla/sticky');
     } finally {

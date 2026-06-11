@@ -179,7 +179,51 @@ describe('ingestLocalSiteHandler', () => {
       // Standalone observability: the summary surfaces what detection found
       // (no artifact write — behavior-gaps.json stays the convert stage's).
       const summary = JSON.parse(res.content[0].text) as { behaviors?: { reveal: boolean; gaps: number } };
-      expect(summary.behaviors).toEqual({ reveal: true, gaps: 0 });
+      expect(summary.behaviors).toEqual({ reveal: true, tabs: 0, slider: 0, modal: 0, gaps: 0 });
+    } finally {
+      rmSync(siteDir, { recursive: true, force: true });
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
+  it('nativeBehaviors: per-section detection tags tabs sidecars and counts ride the summary', async () => {
+    mkdirSync(FIXTURE_TMP, { recursive: true });
+    const siteDir = mkdtempSync(join(FIXTURE_TMP, 'site-nbtabs-'));
+    const outDir = mkdtempSync(join(FIXTURE_TMP, 'out-nbtabs-'));
+    writeFileSync(
+      join(siteDir, 'index.html'),
+      '<html><head><link rel="stylesheet" href="styles.css"></head><body><main>' +
+        '<section id="hero"><h1>Hi</h1></section>' +
+        '<section id="plans"><div role="tablist">' +
+        '<button role="tab" aria-selected="true" aria-controls="p-a" class="tab is-active">A</button>' +
+        '<button role="tab" aria-selected="false" aria-controls="p-b" class="tab">B</button></div>' +
+        '<div role="tabpanel" id="p-a"><p>Alpha</p></div>' +
+        '<div role="tabpanel" id="p-b" hidden><p>Beta</p></div></section>' +
+        '</main><script src="site.js"></script></body></html>',
+    );
+    writeFileSync(
+      join(siteDir, 'styles.css'),
+      'html.js section { opacity: 0; transform: translateY(18px); transition: opacity 600ms ease, transform 600ms ease; }',
+    );
+    writeFileSync(
+      join(siteDir, 'site.js'),
+      "const obs = new IntersectionObserver((es) => es.forEach((e) => e.isIntersecting && e.target.classList.add('is-visible')), { threshold: 0.12 });\n" +
+        "document.querySelectorAll('section').forEach((s) => obs.observe(s));\n" +
+        "document.querySelectorAll('[role=\"tab\"]').forEach((t) => t.addEventListener('click', () => {\n" +
+        "  t.classList.add('is-active');\n" +
+        '}));\n',
+    );
+    try {
+      const res = await ingestLocalSiteHandler({ dir: siteDir, outputDir: outDir, nativeBehaviors: true }, ctx);
+      expect(res.isError).toBeFalsy();
+      const sidecar = readFileSync(join(outDir, 'composed', 'home.blocks.html'), 'utf8');
+      expect(sidecar).toContain('data-wp-interactive="dla/tabs"'); // specific section
+      expect(sidecar).toContain('data-wp-interactive="dla/reveal"'); // uniform fallback
+      expect(sidecar).toContain('role="tab"'); // verbatim inner
+      // Counts from the compose reports; the tabs driver js is CLAIMED once
+      // its section fired, so it does not inflate gaps.
+      const summary = JSON.parse(res.content[0].text) as { behaviors?: Record<string, unknown> };
+      expect(summary.behaviors).toEqual({ reveal: true, tabs: 1, slider: 0, modal: 0, gaps: 0 });
     } finally {
       rmSync(siteDir, { recursive: true, force: true });
       rmSync(outDir, { recursive: true, force: true });
@@ -200,7 +244,7 @@ describe('ingestLocalSiteHandler', () => {
       expect(sidecar).not.toContain('dla/reveal');
       // No-match shape: key present (flag on), nothing found.
       const summary = JSON.parse(res.content[0].text) as { behaviors?: { reveal: boolean; gaps: number } };
-      expect(summary.behaviors).toEqual({ reveal: false, gaps: 0 });
+      expect(summary.behaviors).toEqual({ reveal: false, tabs: 0, slider: 0, modal: 0, gaps: 0 });
     } finally {
       rmSync(siteDir, { recursive: true, force: true });
       rmSync(outDir, { recursive: true, force: true });

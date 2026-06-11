@@ -14,9 +14,18 @@ import { validateOutputDir } from '../../lib/screenshot/output-layout.js';
 import { composedSidecarPath } from '../../lib/streaming/block-markup-validate.js';
 import { ingestLocalSite } from '../../lib/replicate/local-site/ingest.js';
 import { composePage } from '../../lib/replicate/normalize/compose-page.js';
-import { detectBehaviors } from '../../lib/replicate/normalize/detect-behaviors.js';
+import {
+  detectBehaviors,
+  detectSectionBehavior,
+  type BehaviorSourceAssets,
+} from '../../lib/replicate/normalize/detect-behaviors.js';
 import { collectSourceAssets } from '../../lib/replicate/local-theme/source-assets.js';
-import type { DetectedBehaviors, NormalizeReportEntry, RevealBehavior } from '../../lib/replicate/local-site/types.js';
+import type {
+  NormalizeReportEntry,
+  RevealBehavior,
+  Section,
+  SectionBehavior,
+} from '../../lib/replicate/local-site/types.js';
 
 const NORMALIZE_REPORT_SCHEMA = 1;
 
@@ -39,19 +48,25 @@ export const ingestLocalSiteHandler: Handler = async (args, ctx) => {
     return ctx.errorResult(`ingest failed: ${(err as Error).message}`);
   }
 
-  // nativeBehaviors: detect catalog behaviors in the source assets and tag
-  // every body section with the reveal (ComposePageOpts → dla/reveal wrappers
-  // in the sidecars). Detection consumes the RAW collected css — assets.css
-  // has WP_COMPAT_CSS prepended, which is detection-immune (no html.js
-  // section gate, no scroll-listener patterns). The convert handler re-runs
-  // the same pure detection for sticky/gaps/plugin wiring — identical inputs,
-  // identical result (deterministic), so the two stages cannot disagree.
-  let behaviors: DetectedBehaviors | undefined;
+  // nativeBehaviors: detect catalog behaviors in the source assets, tag every
+  // body section with the reveal, and run the per-section DOM-pattern callback
+  // (tabs/slider/modal — compose-page inversion: it gains no detection
+  // imports, the callback closes over the assets). Detection consumes the RAW
+  // collected css — assets.css has WP_COMPAT_CSS prepended, which is
+  // detection-immune (no html.js section gate, no scroll-listener patterns).
+  // The convert handler re-runs the same pure detection for sticky/gaps/
+  // plugin wiring — identical inputs, identical result (deterministic), so
+  // the two stages cannot disagree.
+  let assetSlice: BehaviorSourceAssets | undefined;
+  let reveal: RevealBehavior | undefined;
+  let detectSection: ((s: Section) => SectionBehavior | undefined) | undefined;
   if (nativeBehaviors) {
     const assets = collectSourceAssets(dir, site.pages.map((p) => ({ relPath: p.relPath, html: p.html })));
-    behaviors = detectBehaviors({ css: assets.css, js: assets.js });
+    assetSlice = { css: assets.css, js: assets.js };
+    const slice = assetSlice;
+    reveal = detectBehaviors(slice).reveal;
+    detectSection = (s) => detectSectionBehavior(s.html, slice);
   }
-  const reveal: RevealBehavior | undefined = behaviors?.reveal;
 
   mkdirSync(join(outputDir, 'composed'), { recursive: true });
 
@@ -63,13 +78,35 @@ export const ingestLocalSiteHandler: Handler = async (args, ctx) => {
     // Per-page isolation: one bad page (roundtrip failure / compose misfit)
     // must not abort the whole ingest — record it and keep going.
     try {
-      const { postContent, report } = composePage(page, { reveal });
+      const { postContent, report } = composePage(page, { reveal, detectSection });
       if (postContent === '' && report.length === 0) emptyPages.push(page.slug);
       writeFileSync(composedSidecarPath(outputDir, page.slug), postContent);
       for (const r of report) entries.push({ ...r, slug: page.slug });
     } catch (err) {
       failedPages.push({ slug: page.slug, error: (err as Error).message });
     }
+  }
+
+  // Per-kind counts come from the compose REPORTS (single source of truth —
+  // no re-detection drift), then the global detection RE-RUNS with the fired
+  // kinds so their driver js is claimed out of the gap residue. The second
+  // pass is pure + regex-fast and deterministic (same strings in → same
+  // reveal/sticky out); only residue claiming differs, and sectionKinds can
+  // only exist AFTER compose produced the reports — hence two passes.
+  let behaviorsSummary:
+    | { reveal: boolean; tabs: number; slider: number; modal: number; gaps: number }
+    | undefined;
+  if (nativeBehaviors && assetSlice) {
+    const countOf = (kind: string): number => entries.filter((e) => e.blockType === `dla/${kind}`).length;
+    const tabs = countOf('tabs');
+    const slider = countOf('slider');
+    const modal = countOf('modal');
+    const sectionKinds = new Set<'tabs' | 'slider' | 'modal'>();
+    if (tabs > 0) sectionKinds.add('tabs');
+    if (slider > 0) sectionKinds.add('slider');
+    if (modal > 0) sectionKinds.add('modal');
+    const final = detectBehaviors(assetSlice, { sectionKinds });
+    behaviorsSummary = { reveal: !!final.reveal, tabs, slider, modal, gaps: final.gaps.length };
   }
 
   // Atomic write (tmp + rename) — a crash mid-write must not leave a torn
@@ -97,10 +134,8 @@ export const ingestLocalSiteHandler: Handler = async (args, ctx) => {
     emptyPages,
     reportPath,
     // Standalone observability (key absent when the flag is off): what
-    // detection found. No artifact write here — behavior-gaps.json belongs
-    // to the convert stage.
-    ...(behaviors !== undefined
-      ? { behaviors: { reveal: !!behaviors.reveal, gaps: behaviors.gaps.length } }
-      : {}),
+    // detection found + per-kind section counts from the compose reports.
+    // No artifact write here — behavior-gaps.json belongs to the convert stage.
+    ...(behaviorsSummary !== undefined ? { behaviors: behaviorsSummary } : {}),
   });
 };

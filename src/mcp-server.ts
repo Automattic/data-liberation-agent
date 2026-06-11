@@ -666,7 +666,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         properties: {
           dir: { type: 'string', description: 'Absolute path to the local static-site directory to ingest.' },
           outputDir: { type: 'string', description: 'Liberation output directory for composed sidecars + normalize-report.json. Defaults to `dir`.' },
-          nativeBehaviors: { type: 'boolean', description: 'Detect catalog behaviors (reveal) in the source css/js and emit dla/reveal Interactivity wrappers in the sidecars instead of core/group. liberate_convert_local_site threads its own flag through here.' },
+          nativeBehaviors: { type: 'boolean', description: 'Detect catalog behaviors in the source css/js and emit dla/* Interactivity wrappers in the sidecars instead of core/group: uniform dla/reveal plus per-section DOM patterns (dla/tabs, dla/slider, dla/modal — verbatim inner markup). liberate_convert_local_site threads its own flag through here.' },
         },
         required: ['dir'],
       },
@@ -688,7 +688,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           wpUrl: { type: 'string', description: 'Base URL for replica capture. Default: auto-resolved via wp option get siteurl (Studio assigns random ports); explicit value overrides.' },
           carryCss: { type: 'boolean', description: 'Carry the source stylesheet into the theme (adapted for the block DOM). Default true — the stage-1d parity mechanism; tokens-only theming when false.' },
           carryJs: { type: 'boolean', description: 'Carry the source scripts into the theme (enqueued footer, html.js gate added). Default true for identical replication.' },
-          nativeBehaviors: { type: 'boolean', description: 'Replace carried source JS with native Interactivity blocks (reveal, sticky); unmapped behaviors land in behavior-gaps.json. Forces carryJs off.' },
+          nativeBehaviors: { type: 'boolean', description: 'Replace carried source JS with native Interactivity blocks (reveal, sticky, plus per-section tabs/slider/modal with verbatim inner markup); unmapped behaviors land in behavior-gaps.json. Forces carryJs off.' },
           repair: { type: 'boolean', description: 'Deterministic parity repair loop: diff regions → computed-style probe → generated parity-patch.css → re-compare, bounded. Default true. No AI involved.' },
           maxRepairRounds: { type: 'number', description: 'Max repair rounds (0-5). Default 2. Loop also stops early on allPass or an unchanged divergence fingerprint.' },
         },
