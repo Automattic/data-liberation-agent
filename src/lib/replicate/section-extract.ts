@@ -1369,6 +1369,25 @@ export async function extractFull(
         const r = el.getBoundingClientRect();
         return r.width > 0 && r.height > 0;
       };
+      // Chrome-bound exclusion for BODY-section candidates. A header's mega-menu
+      // dropdown (e.g. Shopify Dawn's #MegaMenu-Content-N) hides via
+      // visibility/opacity — NOT display:none — so offsetParent stays non-null and
+      // isVisible() passes; on a page whose real body is thin it then wins a band
+      // and renders a junk product strip atop every reconstructed page. Body
+      // sections must never come from inside header/footer/nav (chrome is
+      // supplied by the theme scaffold parts), and never from a subtree an
+      // author marked aria-hidden (closed drawers/modals). The landmark elements
+      // THEMSELVES stay eligible — stripChrome removes those downstream, and the
+      // landmark census records them — only their DESCENDANTS are excluded.
+      const CHROME_SELECTOR =
+        'header, footer, nav, [role="banner"], [role="contentinfo"], [role="navigation"]';
+      const isChromeDescendant = (el: Element): boolean => {
+        const hit = el.closest(CHROME_SELECTOR);
+        return hit !== null && hit !== el;
+      };
+      const isHiddenOverlay = (el: Element): boolean => el.closest('[aria-hidden="true"]') !== null;
+      const isExcludedBodyCandidate = (el: Element): boolean =>
+        isChromeDescendant(el) || isHiddenOverlay(el);
       const selectorPartsOf = (el: Element) => {
         const tag = el.tagName.toLowerCase();
         let nth = 1;
@@ -1425,6 +1444,7 @@ export async function extractFull(
         'main > section, main > article, section, header, footer, nav, article, aside, [role="region"], [role="banner"], [role="contentinfo"], [role="navigation"]';
       const semanticCandidates = Array.from(document.querySelectorAll(SEMANTIC_SELECTOR)).filter((el) => {
         if (!isVisible(el)) return false;
+        if (isExcludedBodyCandidate(el)) return false;
         const r = el.getBoundingClientRect();
         if (r.height < 200 || r.width < 600) return false;
         if (el === document.body || el === document.documentElement) return false;
@@ -1476,6 +1496,7 @@ export async function extractFull(
       const collectBandCandidates = (): Element[] =>
         Array.from(document.body.querySelectorAll('*')).filter((el) => {
           if (!isVisible(el)) return false;
+          if (isExcludedBodyCandidate(el)) return false;
           const r = el.getBoundingClientRect();
           if (r.height < 200 || r.width < 600) return false;
           if (el.querySelectorAll('img').length === 0 && (el.textContent || '').trim().length < 20) return false;
@@ -1560,6 +1581,7 @@ export async function extractFull(
         // section tiling (a div-only page-builder export).
         const tileEls = Array.from(document.querySelectorAll('section'))
           .filter((el) => isVisible(el))
+          .filter((el) => !isExcludedBodyCandidate(el))
           .filter((el) => {
             const r = el.getBoundingClientRect();
             return r.width >= 600 && r.height >= 80;
@@ -3172,6 +3194,72 @@ export async function extractFull(
 // shared connectBrowser helper (same as screenshotter.ts), navigates, settles,
 // triggers lazy-load, runs extractFull, then tears down. Same-origin enforced.
 // ---------------------------------------------------------------------------
+
+/**
+ * Walk a SAVED settled-HTML capture (`<outputDir>/html/<slug>.html`) instead of
+ * re-navigating the live site. The saved file is the serialized post-settle DOM
+ * from the screenshot phase — the same page state the source screenshots show —
+ * so specs derived from it stay coherent with screenshots/manifest and are
+ * immune to live-site drift, carousel/slide nondeterminism, and headless
+ * hydration differences (the failure mode: a schema bump invalidates every
+ * cached spec and the live re-capture days later disagrees with every other
+ * artifact). Scripts are stripped before render (same policy as the
+ * segmentation fixture harness): the DOM is already the rendered state, and
+ * re-running the builder runtime would re-hydrate/mutate it. Subresources
+ * (CSS/images) still load over the network so computed styles are real.
+ *
+ * The document is served via route-fulfill at the ORIGINAL url so
+ * document.baseURI is the source origin and relative hrefs/srcs resolve
+ * exactly as they did at capture time.
+ */
+export async function extractFullFromSavedHtml(
+  html: string,
+  url: string,
+  mediaMap: Record<string, string>,
+  opts: { timeoutMs?: number; settleMs?: number } = {},
+): Promise<{ specs: SectionSpec[]; landmarks: SourceLandmark[] }> {
+  enforceSameOrigin(url, [url]);
+  const stripped = html.replace(/<script[\s\S]*?<\/script>/gi, '');
+
+  const pw = await getPlaywright();
+  const browser = await pw.chromium.launch({ headless: true });
+  const context = await browser.newContext({
+    viewport: { width: 1440, height: 900 },
+    deviceScaleFactor: 1,
+    ignoreHTTPSErrors: true,
+  });
+  await context.addInitScript(`
+    if (typeof globalThis.__name === 'undefined') {
+      globalThis.__name = function (fn) { return fn; };
+    }
+  `);
+
+  try {
+    const page = await context.newPage();
+    const docUrl = new URL(url).href;
+    await page.route('**/*', (route) => {
+      if (route.request().url() === docUrl) {
+        return route.fulfill({ contentType: 'text/html; charset=utf-8', body: stripped });
+      }
+      return route.continue();
+    });
+    await page.goto(docUrl, { waitUntil: 'load', timeout: 30_000 });
+    await waitForStable(page, opts.settleMs ?? 500);
+    await triggerLazyLoad(page);
+    return await extractFull(page, mediaMap, opts.timeoutMs ?? 15_000);
+  } finally {
+    try {
+      await context.close();
+    } catch {
+      /* best-effort */
+    }
+    try {
+      await browser.close();
+    } catch {
+      /* best-effort */
+    }
+  }
+}
 
 export async function extractFullFromUrl(
   url: string,

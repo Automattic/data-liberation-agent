@@ -22,8 +22,8 @@ import { existsSync, mkdirSync, writeFileSync, readFileSync, renameSync, readdir
 import { basename, dirname, join, resolve } from 'node:path';
 import type { PaletteToken } from '../../lib/replicate/footer-color.js';
 import type { FontFamilyToken } from '../../lib/replicate/page-reconstruct.js';
-import { extractFullFromUrl, rewriteThroughMediaMap } from '../../lib/replicate/section-extract.js';
-import type { SectionSpec } from '../../lib/replicate/section-extract.js';
+import { extractFullFromSavedHtml, extractFullFromUrl, rewriteThroughMediaMap } from '../../lib/replicate/section-extract.js';
+import type { SectionSpec, SourceLandmark } from '../../lib/replicate/section-extract.js';
 import { SectionSpecsStore } from '../../lib/replicate/section-specs-store.js';
 import { buildPageReconstruction } from '../../lib/replicate/reconstruct-pages.js';
 import { buildPageLinkMap } from '../../lib/replicate/page-link-map.js';
@@ -256,6 +256,7 @@ export const reconstructPagesHandler: Handler = async (args, ctx) => {
   const srcUrls = new Set<string>();
   const extractErrors: Array<{ slug: string; error: string }> = [];
   let specsFromCache = 0;
+  let specsFromSavedHtml = 0;
   let specsFromLive = 0;
   for (const p of pages) {
     try {
@@ -263,10 +264,33 @@ export const reconstructPagesHandler: Handler = async (args, ctx) => {
       if (specs) {
         specsFromCache++;
       } else {
-        const live = await extractFullFromUrl(p.sourceUrl, {});
-        specs = live.specs;
-        specsStore.set(p.sourceUrl, live.specs, live.landmarks); // cache specs + census for the next run
-        specsFromLive++;
+        // Cache miss (or refresh). Prefer walking the SAVED settled HTML from the
+        // screenshot phase — it is the same page state the source screenshots
+        // show, so specs stay coherent with every other artifact. A live
+        // re-navigation (the old behavior) sees the site DAYS later, headless,
+        // without the adapter capture seam — after a schema bump it silently
+        // re-captured every page through that weaker path and the whole run
+        // degraded. Live extract remains the fallback when no snapshot exists
+        // (or it yields nothing).
+        const savedHtmlPath = join(resolve(outputDir), 'html', `${slugify(p.sourceUrl)}.html`);
+        let extracted: { specs: SectionSpec[]; landmarks: SourceLandmark[] } | null = null;
+        if (existsSync(savedHtmlPath)) {
+          try {
+            const fromSnapshot = await extractFullFromSavedHtml(readFileSync(savedHtmlPath, 'utf8'), p.sourceUrl, {});
+            if (fromSnapshot.specs.length > 0) {
+              extracted = fromSnapshot;
+              specsFromSavedHtml++;
+            }
+          } catch (err) {
+            console.error(`[reconstruct] saved-HTML extract failed for ${p.slug} (falling back to live): ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }
+        if (!extracted) {
+          extracted = await extractFullFromUrl(p.sourceUrl, {});
+          specsFromLive++;
+        }
+        specs = extracted.specs;
+        specsStore.set(p.sourceUrl, extracted.specs, extracted.landmarks); // cache specs + census for the next run
       }
       specsByPage.set(p.slug, specs);
       collectSourceUrls(specs, srcUrls);
@@ -715,6 +739,7 @@ export const reconstructPagesHandler: Handler = async (args, ctx) => {
     jetpackWarning,
     assetsTriaged: triageRemoved.length,
     specsFromCache,
+    specsFromSavedHtml,
     specsFromLive,
     extractErrors,
     pagesReconstructed: reconstructed,
