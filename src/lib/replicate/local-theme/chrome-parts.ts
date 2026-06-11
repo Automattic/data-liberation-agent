@@ -19,6 +19,7 @@ import * as cheerio from 'cheerio';
 import type { Element } from 'domhandler';
 import { emitSectionBlocks, escapeHtml, attrJson } from '../normalize/emit-blocks.js';
 import { slugFromRelPath } from '../local-site/ingest.js';
+import { rewriteInternalHrefs } from '../local-site/href-rewrite.js';
 import type { NavLink, Section, StickyBehavior } from '../local-site/types.js';
 
 /** "/": home; otherwise "/<slug>/" — matches the WP page permalinks created in page-plan. */
@@ -155,31 +156,8 @@ function wrapFooterGroup(inner: string, opts: FooterPartOpts): string {
   );
 }
 
-/**
- * Rewrite internal hrefs in footer HTML to WP permalink form (/slug/).
- * External hrefs (protocol, //, #) are left untouched. Unknown slugs are
- * left untouched. Runs on the raw footer HTML (before <footer>→<div> rename).
- * Assumes a root-level footer page: ".." segments resolve via slugFromRelPath's
- * sanitize; nested-page footers would need nav-graph's resolveHrefToRelPath.
- */
-function rewriteInternalHrefs(html: string, pageSlugs: string[]): string {
-  const $ = cheerio.load(html);
-  const known = new Set(pageSlugs);
-  $('a[href]').each((_, el) => {
-    const raw = $(el).attr('href') ?? '';
-    if (!raw || /^[a-z]+:/i.test(raw) || raw.startsWith('//') || raw.startsWith('#')) return;
-    let cleaned = raw.split(/[?#]/)[0];
-    try {
-      cleaned = decodeURIComponent(cleaned);
-    } catch {
-      // Malformed escape sequence — keep raw value.
-    }
-    const slug = slugFromRelPath(cleaned.replace(/^\.\//, '').replace(/^\//, ''));
-    if (!known.has(slug)) return;
-    $(el).attr('href', slugToUrl(slug));
-  });
-  return $('body').html() ?? html;
-}
+// rewriteInternalHrefs moved to local-site/href-rewrite.ts (shared with the
+// page-body emission pass and the runtime link-shim map) — re-imported above.
 
 export function buildFooterPart(footer: Section | null, siteTitle: string, opts: FooterPartOpts = {}): string {
   if (footer) {

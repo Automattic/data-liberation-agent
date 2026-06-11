@@ -28,6 +28,7 @@ import { wpOptionUpdatesForSiteMeta } from '../../lib/preview/site-options.js';
 import { installPost } from '../../lib/streaming/post-install.js';
 import { finalizeSite } from '../../lib/streaming/site-finalize.js';
 import { startStaticServer } from '../../lib/replicate/local-site/static-server.js';
+import { rewriteInternalLinksInJs } from '../../lib/replicate/local-site/href-rewrite.js';
 import { captureScreenshots } from '../../lib/screenshot/screenshotter.js';
 import { SCREENSHOT_DEVICE_SCALE_FACTOR } from '../../lib/screenshot/types.js';
 import { compareScreenshotDirs } from '../../lib/screenshot/compare.js';
@@ -242,7 +243,10 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
         : assets.css;
       carrySourceAssets = {
         css: carryCss ? cssWithFonts : '',
-        js: carryJs ? assets.js : '',
+        // The carried JS is OURS to adapt at build time: internal page refs
+        // in quoted literals ({ href:'shop.html' } nav arrays) become /slug/
+        // permalinks ONCE, in the bundle — this is a WordPress site now.
+        js: carryJs ? rewriteInternalLinksInJs(assets.js, site.pages) : '',
       };
     }
     // Detection runs on the RAW collected strings — assets.css includes the

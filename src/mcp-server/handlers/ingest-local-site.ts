@@ -79,7 +79,13 @@ export const ingestLocalSiteHandler: Handler = async (args, ctx) => {
     // Per-page isolation: one bad page (roundtrip failure / compose misfit)
     // must not abort the whole ingest — record it and keep going.
     try {
-      const composed = composePage(page, { reveal, detectSection, native: nativeBehaviors });
+      const composed = composePage(page, {
+        reveal,
+        detectSection,
+        native: nativeBehaviors,
+        // Internal .html hrefs in page bodies → /slug/ permalinks at emission.
+        pageSlugs: site.pages.map((sp) => sp.slug),
+      });
       const { postContent, report } = composed;
       if (postContent === '' && report.length === 0) emptyPages.push(page.slug);
       writeFileSync(composedSidecarPath(outputDir, page.slug), postContent);

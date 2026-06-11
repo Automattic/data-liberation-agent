@@ -3,6 +3,7 @@ import { composeInstantiate, type LayoutSkeleton } from '../compose-instantiate.
 import { validateBlockContract, type BlockContractIssue } from '../block-contract.js';
 import { blockMarkupRoundtrips } from '../../streaming/block-markup-validate.js';
 import { segmentPage } from './segment.js';
+import { rewriteInternalHrefs } from '../local-site/href-rewrite.js';
 import { emitSectionBlocks } from './emit-blocks.js';
 import type { LocalPage, NormalizeReportEntry, RevealBehavior, Section, SectionBehavior } from '../local-site/types.js';
 
@@ -31,11 +32,20 @@ export interface ComposePageOpts {
    * rides a plain core/group wrapper (no plugin dependency; the carried
    * source JS drives the intact DOM). reveal is caller-gated to native. */
   native?: boolean;
+  /** Site page slugs: internal hrefs (shop.html, ./shop.html, /shop.html) in
+   * the page body are rewritten to WP permalink form (/shop/) BEFORE
+   * segmentation, so every emitted anchor — buttons, inline links, verbatim
+   * sections — links to the live page instead of a dead .html path. JS-
+   * rendered links are the runtime click shim's job (theme-files). */
+  pageSlugs?: string[];
 }
 
 export function composePage(page: LocalPage, opts: ComposePageOpts = {}): ComposePageResult {
   const native = opts.native === true;
-  const bodySections = segmentPage(page.html)
+  const sourceHtml = opts.pageSlugs?.length
+    ? rewriteInternalHrefs(page.html, opts.pageSlugs)
+    : page.html;
+  const bodySections = segmentPage(sourceHtml)
     .filter((s) => s.role === 'body')
     .map((s) => {
       const sectionBehavior = opts.detectSection?.(s);
