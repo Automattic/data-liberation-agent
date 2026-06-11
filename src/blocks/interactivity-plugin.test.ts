@@ -60,11 +60,9 @@ describe('buildInteractivityPlugin', () => {
     expect(reveal.editorScript).toBe('file:./editor.js');
     expect(reveal.viewScriptModule).toBe('file:./view.js');
     expect(reveal.style).toBe('file:./style.css');
-    expect(reveal.attributes.content).toEqual({
-      type: 'string',
-      source: 'html',
-      selector: '.wp-block-dla-reveal',
-    });
+    // reveal has NO content attribute — its inner is nested BLOCKS, owned by
+    // InnerBlocks (html-sourcing would see only inter-placeholder whitespace).
+    expect(reveal.attributes.content).toBeUndefined();
     const sticky = JSON.parse(files['blocks/sticky/block.json']);
     expect(sticky.name).toBe('dla/sticky');
     expect(sticky.supports.interactivity).toBe(true);
@@ -138,8 +136,36 @@ describe('buildInteractivityPlugin', () => {
       expect(js).toContain('RawHTML');
       expect(js).toContain('attributes.content');
       expect(js).not.toContain('import ');
-      expect(js).not.toContain('InnerBlocks');
     }
+  });
+
+  it('reveal editor.js uses InnerBlocks (nested-block inner); verbatim kinds never do', () => {
+    const files = byPath(buildInteractivityPlugin().files);
+    const reveal = files['blocks/reveal/editor.js'];
+    // edit renders editable children; save re-emits them — html-sourcing
+    // cannot see nested block comments (review finding: empty canvas +
+    // destructive Block Recovery without this).
+    expect(reveal).toContain('blockEditor.InnerBlocks');
+    expect(reveal).toContain('InnerBlocks.Content');
+    for (const name of ['sticky', 'tabs', 'slider', 'modal']) {
+      // isReveal is false for these — the InnerBlocks branch is dead code by
+      // the shared template, and the runtime path is RawHTML content.
+      expect(files[`blocks/${name}/editor.js`]).toContain(`var isReveal = blockName === 'dla/reveal';`);
+    }
+  });
+
+  it('editor.js guards falsy-legitimate numeric attrs and editor-only pointer events', () => {
+    const files = byPath(buildInteractivityPlugin().files);
+    const reveal = files['blocks/reveal/editor.js'];
+    // typeof checks, NOT ||: threshold 0 / offset 0 / durationMs 0 are real
+    // source values; || drift would invalidate the block (review finding).
+    expect(reveal).toContain("typeof value === 'number'");
+    expect(reveal).toContain('numberOr( attributes.threshold, 0.12 )');
+    expect(reveal).toContain("numberOr( attributes.durationMs, 600 ) + 'ms'");
+    expect(files['blocks/sticky/editor.js']).toContain('numberOr( attributes.offset, 8 )');
+    // RawHTML preview sits behind pointer-events:none in EDIT only.
+    expect(files['blocks/tabs/editor.js']).toContain("pointerEvents: 'none'");
+    expect(files['blocks/tabs/editor.js']).toContain('savedContent');
   });
 
   it('reveal view.js: store namespace, IO from context, is-visible class, no html.js global', () => {

@@ -57,6 +57,15 @@ function editorJs(kind: 'reveal' | 'sticky' | 'tabs' | 'slider' | 'modal'): stri
   const blockName = `dla/${kind}`;
   const baseClass = `wp-block-dla-${kind}`;
   const tagName = kind === 'sticky' ? 'div' : 'section';
+  // reveal's inner is NESTED BLOCK COMMENTS (the emitter converts children to
+  // core blocks), so html-sourced content cannot see it — the post parser
+  // excises inner-block regions from innerHTML. reveal therefore uses
+  // InnerBlocks (children natively editable; save = InnerBlocks.Content);
+  // tabs/slider/modal wrap VERBATIM html (block-shaped comments stripped at
+  // emission) where html-sourcing is exactly right. Editor preview renders
+  // unstyled-but-structured (source CSS is not loaded in the editor iframe) —
+  // accepted; RawHTML sits behind pointer-events:none so live anchors in the
+  // verbatim markup cannot navigate the editor frame.
   return `( function ( blocks, blockEditor, element ) {
 \tvar el = element.createElement;
 \tvar RawHTML = element.RawHTML;
@@ -73,7 +82,20 @@ function editorJs(kind: 'reveal' | 'sticky' | 'tabs' | 'slider' | 'modal'): stri
 \t}
 
 \tfunction content( attributes ) {
+\t\tif ( ! attributes.content ) return null;
+\t\t// pointer-events:none in EDIT only — save() never calls this wrapper.
+\t\treturn el( 'div', { style: { pointerEvents: 'none' } }, el( RawHTML, { children: attributes.content } ) );
+\t}
+
+\tfunction savedContent( attributes ) {
 \t\treturn attributes.content ? el( RawHTML, { children: attributes.content } ) : null;
+\t}
+
+\tfunction numberOr( value, fallback ) {
+\t\t// NOT ||: threshold 0 / offset 0 / durationMs 0 are legitimate source
+\t\t// values — a || fallback would drift save() from the emitted markup and
+\t\t// invalidate the block.
+\t\treturn typeof value === 'number' ? value : fallback;
 \t}
 
 \tfunction wrapperProps( attributes ) {
@@ -84,12 +106,12 @@ function editorJs(kind: 'reveal' | 'sticky' | 'tabs' | 'slider' | 'modal'): stri
 \t\tif ( blockName === 'dla/reveal' ) {
 \t\t\tprops.style = {
 \t\t\t\t'--dla-reveal-y': attributes.translateY || '18px',
-\t\t\t\t'--dla-reveal-ms': ( attributes.durationMs || 600 ) + 'ms',
+\t\t\t\t'--dla-reveal-ms': numberOr( attributes.durationMs, 600 ) + 'ms',
 \t\t\t};
 \t\t\tprops[ 'data-wp-interactive' ] = 'dla/reveal';
 \t\t\tprops[ 'data-wp-context' ] = safeJson( {
 \t\t\t\tvisible: false,
-\t\t\t\tthreshold: attributes.threshold || 0.12,
+\t\t\t\tthreshold: numberOr( attributes.threshold, 0.12 ),
 \t\t\t} );
 \t\t\tprops[ 'data-wp-init' ] = 'callbacks.init';
 \t\t\tprops[ 'data-wp-class--is-visible' ] = 'context.visible';
@@ -98,7 +120,7 @@ function editorJs(kind: 'reveal' | 'sticky' | 'tabs' | 'slider' | 'modal'): stri
 \t\t\tprops[ 'data-wp-interactive' ] = 'dla/sticky';
 \t\t\tprops[ 'data-wp-context' ] = safeJson( {
 \t\t\t\ttoggleClass: attributes.toggleClass || 'is-scrolled',
-\t\t\t\toffset: attributes.offset || 8,
+\t\t\t\toffset: numberOr( attributes.offset, 8 ),
 \t\t\t} );
 \t\t\tprops[ 'data-wp-init' ] = 'callbacks.init';
 \t\t} else if ( blockName === 'dla/tabs' ) {
@@ -120,15 +142,23 @@ function editorJs(kind: 'reveal' | 'sticky' | 'tabs' | 'slider' | 'modal'): stri
 \t\treturn props;
 \t}
 
+\tvar isReveal = blockName === 'dla/reveal';
+
 \tblocks.registerBlockType( '${blockName}', {
 \t\tedit: function ( props ) {
 \t\t\tvar attributes = props.attributes;
 \t\t\tvar blockProps = blockEditor.useBlockProps( wrapperProps( attributes ) );
+\t\t\tif ( isReveal ) {
+\t\t\t\treturn el( tagName, blockProps, el( blockEditor.InnerBlocks ) );
+\t\t\t}
 \t\t\treturn el( tagName, blockProps, content( attributes ) );
 \t\t},
 \t\tsave: function ( props ) {
 \t\t\tvar attributes = props.attributes;
-\t\t\treturn el( tagName, wrapperProps( attributes ), content( attributes ) );
+\t\t\tif ( isReveal ) {
+\t\t\t\treturn el( tagName, wrapperProps( attributes ), el( blockEditor.InnerBlocks.Content ) );
+\t\t\t}
+\t\t\treturn el( tagName, wrapperProps( attributes ), savedContent( attributes ) );
 \t\t},
 \t} );
 } )( window.wp.blocks, window.wp.blockEditor, window.wp.element );
@@ -148,10 +178,12 @@ const REVEAL_BLOCK_JSON =
       attributes: {
         anchor: { type: 'string' },
         className: { type: 'string' },
+        // NO content attribute: reveal's inner is nested BLOCKS (heading/
+        // paragraph children) — InnerBlocks owns them; html-sourcing would
+        // capture only the whitespace between inner-block placeholders.
         threshold: { type: 'number', default: 0.12 },
         translateY: { type: 'string', default: '18px' },
         durationMs: { type: 'number', default: 600 },
-        content: contentAttribute('.wp-block-dla-reveal'),
       },
       editorScript: 'file:./editor.js',
       viewScriptModule: 'file:./view.js',
