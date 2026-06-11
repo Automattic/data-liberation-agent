@@ -304,6 +304,12 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
     // the theme. Accepted v1 trade-off (user decision 2026-06-11): the editor
     // shows a missing-block placeholder for dla/* sections (no editor script);
     // the frontend renders + behaves fully.
+    // Accepted residue: a later CARRY re-convert leaves the plugin active with
+    // zero dla/* blocks on any page — viewScriptModule enqueues per-render
+    // only (no module loads, no behavior), but the registered block style
+    // ships ~400B of inert reveal CSS globally under WP's default block-asset
+    // loading (every selector requires the absent dla-reveal-js gate; zero
+    // visual effect). Accepted over auto-deactivation.
     themeWritten = writeReplicaFilesToHost({
       wpRoot,
       themeSlug,

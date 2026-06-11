@@ -97,6 +97,11 @@ describe('buildInteractivityPlugin', () => {
     const revealJs = files['blocks/reveal/view.js'];
     expect(revealJs).toContain('init()');
     expect(revealJs).toContain('ctx.visible');
+    // The gate class is the last silently-breakable cross-module name: a
+    // view.js rename keeps style.css + FREEZE_MOTION_CSS consistent with each
+    // other while the gate never arms — reveal degrades to always-visible and
+    // parity cannot catch it (always-visible == the forced capture state).
+    expect(revealJs).toContain("classList.add( 'dla-reveal-js' )");
     const stickyJs = files['blocks/sticky/view.js'];
     expect(stickyJs).toContain('ctx.toggleClass');
     expect(stickyJs).toContain('ctx.offset');
