@@ -18,11 +18,19 @@ export interface ComposePageOpts {
   /** B1: per-section DOM-pattern detection callback (inversion — compose-page
    * gains no detection imports; the handler closes over the source assets).
    * A specific behavior (tabs/slider/modal) beats the uniform reveal: one
-   * behavior per section (the wrapper block is singular). */
+   * behavior per section (the wrapper block is singular). Runs on BOTH paths
+   * — tagging guarantees verbatim inner (content survival); `native` decides
+   * the wrapper. */
   detectSection?: (s: Section) => SectionBehavior | undefined;
+  /** nativeBehaviors path marker. true → tagged sections emit the dla/<kind>
+   * directive wrapper; false/absent (carry/default) → the SAME verbatim inner
+   * rides a plain core/group wrapper (no plugin dependency; the carried
+   * source JS drives the intact DOM). reveal is caller-gated to native. */
+  native?: boolean;
 }
 
 export function composePage(page: LocalPage, opts: ComposePageOpts = {}): ComposePageResult {
+  const native = opts.native === true;
   const bodySections = segmentPage(page.html)
     .filter((s) => s.role === 'body')
     .map((s) => {
@@ -39,14 +47,19 @@ export function composePage(page: LocalPage, opts: ComposePageOpts = {}): Compos
   const report: NormalizeReportEntry[] = [];
 
   for (const section of bodySections) {
-    const { markup, confidence } = emitSectionBlocks(section);
+    const { markup, confidence } = emitSectionBlocks(section, {
+      behaviorWrapper: native ? 'dla' : 'group',
+    });
     skeleton.sections.push({ type: 'content', slots: [section.id] });
     pageContent[section.id] = markup;
-    report.push({
-      sectionId: section.id,
-      blockType: section.behavior ? `dla/${section.behavior.kind}` : 'group',
-      confidence,
-    });
+    // blockType reflects the WRAPPER EMITTED: carry-tagged sections wrap as
+    // plain groups (per-kind counts stay native-only by construction). The
+    // reveal branch always emits dla/reveal — reveal is caller-gated to native.
+    const blockType =
+      section.behavior && (native || section.behavior.kind === 'reveal')
+        ? `dla/${section.behavior.kind}`
+        : 'group';
+    report.push({ sectionId: section.id, blockType, confidence });
   }
 
   const composed = composeInstantiate(skeleton, pageContent, {});

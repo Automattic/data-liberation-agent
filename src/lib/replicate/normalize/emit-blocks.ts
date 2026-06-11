@@ -233,6 +233,20 @@ export interface EmitSectionOpts {
    * (footer part) pass 'div' — a footer's content is NOT a body section and
    * must not attract section margins (walrus probe: +88px inside footer). */
   wrapper?: 'section' | 'div';
+  /** Wrapper for behavior-tagged (tabs/slider/modal) sections. 'dla'
+   * (default, nativeBehaviors path) = the custom Interactivity block with
+   * root directives; 'group' (carry/default path) = a plain core/group around
+   * the SAME verbatim inner — content survival with no plugin dependency, the
+   * carried source JS drives the intact DOM. */
+  behaviorWrapper?: 'dla' | 'group';
+}
+
+/** Fail-closed insurance shared by both verbatim wrappers: an inner HTML
+ * comment SHAPED like a block delimiter would confuse the WP parser (pair
+ * form throws at the roundtrip gate; void form silently re-parents). Strip
+ * just those; plain comments stay (realistic exposure ~0, research-verified). */
+function stripBlockShapedComments(html: string): string {
+  return html.replace(/<!--\s*\/?wp:[\s\S]*?-->/g, '');
 }
 
 /**
@@ -247,14 +261,9 @@ export interface EmitSectionOpts {
 function verbatimBehaviorMarkup(
   section: Section,
   b: TabsBehavior | SliderBehavior | ModalBehavior,
-  rawInner: string,
+  inner: string,
 ): string {
   const cls = (section.classes ?? []).join(' ');
-  // Fail-closed insurance: a verbatim HTML comment SHAPED like a block
-  // delimiter would confuse the WP parser (pair form throws at the roundtrip
-  // gate; void form silently re-parents). Strip just those; plain comments
-  // stay (realistic exposure ~0, research-verified).
-  const inner = rawInner.replace(/<!--\s*\/?wp:[\s\S]*?-->/g, '');
   const pairs = [`"anchor":${attrJson(section.id)}`];
   const ctxPairs: string[] = [];
   if (b.kind === 'tabs' || b.kind === 'slider') {
@@ -292,15 +301,32 @@ export function emitSectionBlocks(section: Section, opts: EmitSectionOpts = {}):
 
   // B1 verbatim-wrap: a tabs/slider/modal section SKIPS the emitChild
   // conversion entirely — interactive scaffolding (role/aria attrs, buttons,
-  // panels, slides) must survive byte-true so source CSS and the imperative
-  // view.js keep matching; the conversion pipeline would downgrade it
-  // ("never lose source content"). confidence 1: nothing is converted, so
-  // nothing can degrade. Editor shows the accepted missing-block placeholder
-  // either way (B2). Like the reveal branch, opts.wrapper is deliberately
-  // ignored (behavior tags only arrive on body sections).
+  // panels, slides) must survive byte-true so source CSS and the driving JS
+  // keep matching; the conversion pipeline would downgrade it ("never lose
+  // source content" — carry E2E: tab/panel ids went structurally MISSING).
+  // confidence 1: nothing is converted, so nothing can degrade. Like the
+  // reveal branch, opts.wrapper is deliberately ignored (behavior tags only
+  // arrive on body sections).
   if (section.behavior && section.behavior.kind !== 'reveal') {
+    const inner = stripBlockShapedComments(container.html() ?? '');
+    if ((opts.behaviorWrapper ?? 'dla') === 'group') {
+      // Carry/default path: SAME verbatim inner, plain core/group wrapper —
+      // no directives, no plugin dependency; the carried source JS drives the
+      // intact DOM. The editor sees a group whose inner is not block markup —
+      // same accepted-trade-off class as the native missing-block placeholder.
+      const cls = (section.classes ?? []).join(' ');
+      const attrs = blockAttrs([`"anchor":${attrJson(section.id)}`, '"tagName":"section"'], cls);
+      const divCls = ['wp-block-group', cls].filter(Boolean).join(' ');
+      return {
+        markup:
+          `<!-- wp:group${attrs} -->\n` +
+          `<section id="${escapeHtml(section.id)}" class="${escapeHtml(divCls)}">${inner}</section>\n` +
+          `<!-- /wp:group -->`,
+        confidence: 1,
+      };
+    }
     return {
-      markup: verbatimBehaviorMarkup(section, section.behavior, container.html() ?? ''),
+      markup: verbatimBehaviorMarkup(section, section.behavior, inner),
       confidence: 1,
     };
   }

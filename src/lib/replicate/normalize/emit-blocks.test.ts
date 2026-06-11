@@ -407,3 +407,60 @@ describe('verbatim behavior wrappers (tabs/slider/modal)', () => {
     expect(plain.markup).not.toContain('dla/');
   });
 });
+
+describe('verbatim behavior sections on the carry path (behaviorWrapper: group)', () => {
+  const TABS_HTML =
+    '<section id="plans" class="pricing"><div role="tablist">' +
+    '<button role="tab" aria-selected="true" aria-controls="p-a" class="tab is-active">A</button>' +
+    '<button role="tab" aria-selected="false" aria-controls="p-b" class="tab">B</button></div>' +
+    '<div role="tabpanel" id="p-a"><p>Alpha</p></div>' +
+    '<div role="tabpanel" id="p-b" hidden><p>Beta</p></div></section>';
+  const tabsSection = {
+    id: 'plans',
+    role: 'body' as const,
+    classes: ['pricing'],
+    html: TABS_HTML,
+    behavior: { kind: 'tabs' as const, activeClass: 'is-active' },
+  };
+
+  it('carry mode: plain group wrapper, VERBATIM inner, no directives, no plugin dependency', () => {
+    const { markup, confidence } = emitSectionBlocks(tabsSection, { behaviorWrapper: 'group' });
+    expect(confidence).toBe(1);
+    expect(markup).toMatch(/^<!-- wp:group \{/);
+    expect(markup).toContain('"anchor":"plans"');
+    expect(markup).toContain('"tagName":"section"');
+    expect(markup).toContain('"className":"pricing"');
+    expect(markup).toContain('<section id="plans" class="wp-block-group pricing">');
+    // Interactive scaffolding survives byte-true — the carried source JS
+    // drives this intact DOM (the emitChild path destroyed it: E2E unresolved
+    // missing #tab-*/#panel-* structural divergences).
+    const expectedInner = cheerio.load(TABS_HTML)('section').first().html() ?? '';
+    const m = /class="wp-block-group pricing">([\s\S]*)<\/section>\n<!-- \/wp:group -->$/.exec(markup);
+    expect(m?.[1]).toBe(expectedInner);
+    expect(markup).toContain('role="tab"');
+    expect(markup).not.toContain('data-wp-interactive');
+    expect(markup).not.toContain('dla/');
+    expect(markup).not.toContain('wp:heading');
+    expect(blockMarkupRoundtrips(markup).ok).toBe(true);
+  });
+
+  it('carry mode still strips block-delimiter-shaped inner comments', () => {
+    const section = {
+      id: 'notes',
+      role: 'body' as const,
+      classes: [],
+      html: '<section id="notes"><p>before</p><!-- wp:fake --><!-- /wp:fake --><!-- note --><p>after</p></section>',
+      behavior: { kind: 'tabs' as const, activeClass: 'is-active' },
+    };
+    const { markup } = emitSectionBlocks(section, { behaviorWrapper: 'group' });
+    expect(markup).not.toContain('wp:fake');
+    expect(markup).toContain('<!-- note -->');
+    expect(blockMarkupRoundtrips(markup).ok).toBe(true);
+  });
+
+  it('default mode stays dla (regression)', () => {
+    const { markup } = emitSectionBlocks(tabsSection);
+    expect(markup).toMatch(/^<!-- wp:dla\/tabs \{/);
+    expect(markup).toContain('data-wp-interactive="dla/tabs"');
+  });
+});

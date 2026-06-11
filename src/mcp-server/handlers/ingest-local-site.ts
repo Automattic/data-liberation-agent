@@ -48,24 +48,23 @@ export const ingestLocalSiteHandler: Handler = async (args, ctx) => {
     return ctx.errorResult(`ingest failed: ${(err as Error).message}`);
   }
 
-  // nativeBehaviors: detect catalog behaviors in the source assets, tag every
-  // body section with the reveal, and run the per-section DOM-pattern callback
-  // (tabs/slider/modal — compose-page inversion: it gains no detection
-  // imports, the callback closes over the assets). Detection consumes the RAW
-  // collected css — assets.css has WP_COMPAT_CSS prepended, which is
-  // detection-immune (no html.js section gate, no scroll-listener patterns).
-  // The convert handler re-runs the same pure detection for sticky/gaps/
-  // plugin wiring — identical inputs, identical result (deterministic), so
-  // the two stages cannot disagree.
-  let assetSlice: BehaviorSourceAssets | undefined;
+  // Per-section DOM-pattern detection runs on BOTH paths (pure + regex-fast):
+  // a tagged section keeps its inner VERBATIM — content survival is path-
+  // independent (carry E2E: emitChild destroyed tab/panel scaffolding and the
+  // carried source JS had nothing to drive). `native` only decides the
+  // WRAPPER: dla/<kind> directives (nativeBehaviors) vs a plain core/group.
+  // reveal stays flag-gated — it changes visuals via the plugin, which the
+  // carry path never installs. Detection consumes the RAW collected css —
+  // assets.css has WP_COMPAT_CSS prepended, which is detection-immune (no
+  // html.js section gate, no scroll-listener patterns). The convert handler
+  // re-runs the same pure detection for sticky/gaps/plugin wiring —
+  // identical inputs, identical result (deterministic).
+  const assets = collectSourceAssets(dir, site.pages.map((p) => ({ relPath: p.relPath, html: p.html })));
+  const assetSlice: BehaviorSourceAssets = { css: assets.css, js: assets.js };
+  const detectSection = (s: Section): SectionBehavior | undefined => detectSectionBehavior(s.html, assetSlice);
   let reveal: RevealBehavior | undefined;
-  let detectSection: ((s: Section) => SectionBehavior | undefined) | undefined;
   if (nativeBehaviors) {
-    const assets = collectSourceAssets(dir, site.pages.map((p) => ({ relPath: p.relPath, html: p.html })));
-    assetSlice = { css: assets.css, js: assets.js };
-    const slice = assetSlice;
-    reveal = detectBehaviors(slice).reveal;
-    detectSection = (s) => detectSectionBehavior(s.html, slice);
+    reveal = detectBehaviors(assetSlice).reveal;
   }
 
   mkdirSync(join(outputDir, 'composed'), { recursive: true });
@@ -78,7 +77,7 @@ export const ingestLocalSiteHandler: Handler = async (args, ctx) => {
     // Per-page isolation: one bad page (roundtrip failure / compose misfit)
     // must not abort the whole ingest — record it and keep going.
     try {
-      const { postContent, report } = composePage(page, { reveal, detectSection });
+      const { postContent, report } = composePage(page, { reveal, detectSection, native: nativeBehaviors });
       if (postContent === '' && report.length === 0) emptyPages.push(page.slug);
       writeFileSync(composedSidecarPath(outputDir, page.slug), postContent);
       for (const r of report) entries.push({ ...r, slug: page.slug });
@@ -96,8 +95,9 @@ export const ingestLocalSiteHandler: Handler = async (args, ctx) => {
   let behaviorsSummary:
     | { reveal: boolean; tabs: number; slider: number; modal: number; gaps: number }
     | undefined;
-  if (nativeBehaviors && assetSlice) {
-    const countOf = (kind: string): number => entries.filter((e) => e.blockType === `dla/${kind}`).length;
+  if (nativeBehaviors) {
+    const countOf = (kind: 'tabs' | 'slider' | 'modal'): number =>
+      entries.filter((e) => e.blockType === `dla/${kind}`).length;
     const tabs = countOf('tabs');
     const slider = countOf('slider');
     const modal = countOf('modal');

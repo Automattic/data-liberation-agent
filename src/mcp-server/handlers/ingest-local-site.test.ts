@@ -279,4 +279,46 @@ describe('ingestLocalSiteHandler', () => {
       rmSync(outDir, { recursive: true, force: true });
     }
   });
+
+  it('carry ingest (no flag): interactive scaffolding survives VERBATIM in a group wrapper', async () => {
+    mkdirSync(FIXTURE_TMP, { recursive: true });
+    const siteDir = mkdtempSync(join(FIXTURE_TMP, 'site-carrytabs-'));
+    const outDir = mkdtempSync(join(FIXTURE_TMP, 'out-carrytabs-'));
+    // Tabs DOM pattern + its JS driver, flag OFF: the carry path must keep the
+    // scaffolding byte-true (emitChild's catch-all destroyed it — carry E2E
+    // unresolved missing tab/panel structural divergences) inside a plain
+    // group wrapper with no plugin dependency.
+    writeFileSync(
+      join(siteDir, 'index.html'),
+      '<html><head></head><body><main>' +
+        '<section id="plans"><div role="tablist">' +
+        '<button role="tab" aria-selected="true" aria-controls="p-a" class="tab is-active">A</button>' +
+        '<button role="tab" aria-selected="false" aria-controls="p-b" class="tab">B</button></div>' +
+        '<div role="tabpanel" id="p-a"><p>Alpha</p></div>' +
+        '<div role="tabpanel" id="p-b" hidden><p>Beta</p></div></section>' +
+        '</main><script src="site.js"></script></body></html>',
+    );
+    writeFileSync(
+      join(siteDir, 'site.js'),
+      'document.querySelectorAll(\'[role="tab"]\').forEach((t) => t.addEventListener(\'click\', () => {\n' +
+        "  t.classList.add('is-active');\n" +
+        '}));\n',
+    );
+    try {
+      const res = await ingestLocalSiteHandler({ dir: siteDir, outputDir: outDir }, ctx);
+      expect(res.isError).toBeFalsy();
+      const sidecar = readFileSync(join(outDir, 'composed', 'home.blocks.html'), 'utf8');
+      expect(sidecar).toContain('role="tab"');
+      expect(sidecar).toContain('aria-controls="p-a"');
+      expect(sidecar).toContain('wp:group');
+      expect(sidecar).not.toContain('dla/');
+      expect(sidecar).not.toContain('data-wp-interactive');
+      // Summary stays flag-gated.
+      const summary = JSON.parse(res.content[0].text) as { behaviors?: unknown };
+      expect(summary.behaviors).toBeUndefined();
+    } finally {
+      rmSync(siteDir, { recursive: true, force: true });
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
 });
