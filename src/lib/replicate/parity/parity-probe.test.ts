@@ -1,6 +1,6 @@
 // src/lib/replicate/parity/parity-probe.test.ts
 import { describe, it, expect } from 'vitest';
-import { compareSnapshots, PROP_BATTERY, type ElementSnapshot } from './parity-probe.js';
+import { compareSnapshots, FREEZE_MOTION_CSS, PROP_BATTERY, type ElementSnapshot } from './parity-probe.js';
 
 const snap = (over: Partial<ElementSnapshot>): ElementSnapshot => ({
   match: 'section.hero[0]',
@@ -93,5 +93,17 @@ describe('compareSnapshots', () => {
     for (const p of ['display', 'marginTop', 'marginBottom', 'maxWidth', 'fontSize', 'fontFamily', 'gap', 'justifyContent', 'flexWrap', 'paddingTop', 'paddingBottom', 'color', 'backgroundColor', 'textTransform', 'lineHeight']) {
       expect(PROP_BATTERY).toContain(p);
     }
+  });
+});
+
+describe('FREEZE_MOTION_CSS', () => {
+  it('force-reveals BOTH reveal gates: source html.js AND the dla/reveal replica gate', () => {
+    // Capture-state symmetry: the source hides sections behind html.js, the
+    // nativeBehaviors replica behind .dla-reveal-js .wp-block-dla-reveal —
+    // both must be forced to the revealed end-state or below-fold sections
+    // race the IO at capture time and understate scores asymmetrically.
+    expect(FREEZE_MOTION_CSS).toContain('html.js section{opacity:1!important;transform:none!important}');
+    expect(FREEZE_MOTION_CSS).toContain('.dla-reveal-js .wp-block-dla-reveal{opacity:1!important;transform:none!important}');
+    expect(FREEZE_MOTION_CSS).toContain('transition:none!important;animation:none!important');
   });
 });

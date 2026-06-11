@@ -984,6 +984,33 @@ describe('convertLocalSiteHandler', () => {
     }
   });
 
+  it('sticky detected but chrome not carried: reports sticky:false + a warning (honesty)', async () => {
+    const dir = makeBehaviorSite();
+    const sitePath = makeStudioSite();
+    const outDir = mkdtempSync(join(FIXTURE_TMP, 'cls-nbsticky-'));
+    try {
+      // carryCss:false → chromeCarried false → header is NOT plain → the
+      // dla/sticky state block never emits. The summary must report what
+      // LANDED, not what detection found.
+      const res = await convertLocalSiteHandler(
+        { dir, studioSitePath: sitePath, outputDir: outDir, themeSlug: 'acme-local', siteTitle: 'Acme', skipDesign: true, nativeBehaviors: true, carryCss: false },
+        ctx,
+      );
+      expect(res.isError).toBeFalsy();
+      const summary = JSON.parse(res.content[0].text) as {
+        behaviors?: { reveal: boolean; sticky: boolean; gaps: number };
+        warnings: string[];
+      };
+      expect(summary.behaviors).toEqual({ reveal: true, sticky: false, gaps: 1 });
+      expect(summary.warnings).toContain('sticky behavior detected but not emitted (requires carried chrome header)');
+      expect(readFileSync(join(sitePath, 'wp-content', 'themes', 'acme-local', 'parts', 'header.html'), 'utf8')).not.toContain('dla/sticky');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(sitePath, { recursive: true, force: true });
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
   it('default (no flag): no behaviors key, no plugin, carried js intact (regression)', async () => {
     const dir = makeSite();
     const sitePath = makeStudioSite();

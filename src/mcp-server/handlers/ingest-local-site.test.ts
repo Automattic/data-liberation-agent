@@ -176,6 +176,10 @@ describe('ingestLocalSiteHandler', () => {
         entries: Array<{ blockType: string }>;
       };
       expect(report.entries.every((e) => e.blockType === 'dla/reveal')).toBe(true);
+      // Standalone observability: the summary surfaces what detection found
+      // (no artifact write — behavior-gaps.json stays the convert stage's).
+      const summary = JSON.parse(res.content[0].text) as { behaviors?: { reveal: boolean; gaps: number } };
+      expect(summary.behaviors).toEqual({ reveal: true, gaps: 0 });
     } finally {
       rmSync(siteDir, { recursive: true, force: true });
       rmSync(outDir, { recursive: true, force: true });
@@ -194,6 +198,9 @@ describe('ingestLocalSiteHandler', () => {
       const sidecar = readFileSync(join(outDir, 'composed', 'home.blocks.html'), 'utf8');
       expect(sidecar).toContain('wp:group');
       expect(sidecar).not.toContain('dla/reveal');
+      // No-match shape: key present (flag on), nothing found.
+      const summary = JSON.parse(res.content[0].text) as { behaviors?: { reveal: boolean; gaps: number } };
+      expect(summary.behaviors).toEqual({ reveal: false, gaps: 0 });
     } finally {
       rmSync(siteDir, { recursive: true, force: true });
       rmSync(outDir, { recursive: true, force: true });
@@ -220,6 +227,9 @@ describe('ingestLocalSiteHandler', () => {
       const sidecar = readFileSync(join(outDir, 'composed', 'home.blocks.html'), 'utf8');
       expect(sidecar).toContain('wp:group');
       expect(sidecar).not.toContain('dla/reveal');
+      // Flag off → key absent (default summary byte-stable).
+      const summary = JSON.parse(res.content[0].text) as { behaviors?: unknown };
+      expect(summary.behaviors).toBeUndefined();
     } finally {
       rmSync(siteDir, { recursive: true, force: true });
       rmSync(outDir, { recursive: true, force: true });

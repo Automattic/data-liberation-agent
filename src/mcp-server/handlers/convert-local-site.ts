@@ -251,6 +251,13 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
   const footerSection = segmentPage(home.html).find((s) => s.role === 'footer') ?? null;
   // Sticky rides the header part in plain (carry) mode only — buildHeaderPart
   // ignores it otherwise (tokens path has no carried chrome to toggle).
+  // Honesty: when detection found sticky but chrome is not carried, the state
+  // block never lands — warn, and the summary reports what LANDED (sticky:
+  // stickyEmitted), not what detection found.
+  const stickyEmitted = !!behaviors?.sticky && chromeCarried;
+  if (behaviors?.sticky && !chromeCarried) {
+    warnings.push('sticky behavior detected but not emitted (requires carried chrome header)');
+  }
   const headerPart = buildHeaderPart(siteTitle, nav, site.pages.map((p) => p.slug), {
     plain: chromeCarried,
     ...(behaviors?.sticky ? { sticky: behaviors.sticky } : {}),
@@ -725,8 +732,9 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
     designCaptured,
     carried: { css: carriedCss, js: carriedJs },
     // Key OMITTED entirely when the flag is off — default summary stays byte-stable.
+    // sticky reports EMISSION (stickyEmitted), not detection — see the header-part site.
     ...(behaviors !== undefined
-      ? { behaviors: { reveal: !!behaviors.reveal, sticky: !!behaviors.sticky, gaps: behaviors.gaps.length } }
+      ? { behaviors: { reveal: !!behaviors.reveal, sticky: stickyEmitted, gaps: behaviors.gaps.length } }
       : {}),
     ...(parity !== undefined ? { parity } : {}),
     warnings,

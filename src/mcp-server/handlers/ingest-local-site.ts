@@ -16,7 +16,7 @@ import { ingestLocalSite } from '../../lib/replicate/local-site/ingest.js';
 import { composePage } from '../../lib/replicate/normalize/compose-page.js';
 import { detectBehaviors } from '../../lib/replicate/normalize/detect-behaviors.js';
 import { collectSourceAssets } from '../../lib/replicate/local-theme/source-assets.js';
-import type { NormalizeReportEntry, RevealBehavior } from '../../lib/replicate/local-site/types.js';
+import type { DetectedBehaviors, NormalizeReportEntry, RevealBehavior } from '../../lib/replicate/local-site/types.js';
 
 const NORMALIZE_REPORT_SCHEMA = 1;
 
@@ -46,11 +46,12 @@ export const ingestLocalSiteHandler: Handler = async (args, ctx) => {
   // section gate, no scroll-listener patterns). The convert handler re-runs
   // the same pure detection for sticky/gaps/plugin wiring — identical inputs,
   // identical result (deterministic), so the two stages cannot disagree.
-  let reveal: RevealBehavior | undefined;
+  let behaviors: DetectedBehaviors | undefined;
   if (nativeBehaviors) {
     const assets = collectSourceAssets(dir, site.pages.map((p) => ({ relPath: p.relPath, html: p.html })));
-    reveal = detectBehaviors({ css: assets.css, js: assets.js }).reveal;
+    behaviors = detectBehaviors({ css: assets.css, js: assets.js });
   }
+  const reveal: RevealBehavior | undefined = behaviors?.reveal;
 
   mkdirSync(join(outputDir, 'composed'), { recursive: true });
 
@@ -95,5 +96,11 @@ export const ingestLocalSiteHandler: Handler = async (args, ctx) => {
     failedPagesList: failedPages,
     emptyPages,
     reportPath,
+    // Standalone observability (key absent when the flag is off): what
+    // detection found. No artifact write here — behavior-gaps.json belongs
+    // to the convert stage.
+    ...(behaviors !== undefined
+      ? { behaviors: { reveal: !!behaviors.reveal, gaps: behaviors.gaps.length } }
+      : {}),
   });
 };

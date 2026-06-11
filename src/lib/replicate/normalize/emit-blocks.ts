@@ -273,7 +273,9 @@ export function emitSectionBlocks(section: Section, opts: EmitSectionOpts = {}):
   // identity classes (carried css keeps matching, stage 1d constraints:
   // NO layout attribute, tagName stays section). Behavior params ride
   // data-wp-context (runtime) + inline custom properties (css animation),
-  // both per-site; the plugin files (src/blocks/) are static.
+  // both per-site; the plugin files (src/blocks/) are static. Deliberately
+  // ignores opts.wrapper — behavior tags only arrive on body sections, which
+  // use the default <section> wrapper (chrome consumers never tag).
   if (section.behavior?.kind === 'reveal') {
     const b = section.behavior;
     const pairs = [

@@ -107,7 +107,11 @@ export function compareSnapshots(
  * freezeMotion prepareCapture imports it rather than duplicating the bytes. */
 export const FREEZE_MOTION_CSS =
   '*,*::before,*::after{transition:none!important;animation:none!important}' +
-  'html.js section{opacity:1!important;transform:none!important}';
+  'html.js section{opacity:1!important;transform:none!important}' +
+  // nativeBehaviors replica gate: force-reveal dla/reveal sections so below-
+  // fold IO timing can't race the capture. Inert on non-behavior runs (the
+  // .dla-reveal-js class only exists when the reveal view module ran).
+  '.dla-reveal-js .wp-block-dla-reveal{opacity:1!important;transform:none!important}';
 
 const NAME_POLYFILL = `
   if (typeof globalThis.__name === 'undefined') {
