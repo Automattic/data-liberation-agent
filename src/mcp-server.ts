@@ -687,6 +687,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           wpUrl: { type: 'string', description: 'Base URL for replica capture. Default: auto-resolved via wp option get siteurl (Studio assigns random ports); explicit value overrides.' },
           carryCss: { type: 'boolean', description: 'Carry the source stylesheet into the theme (adapted for the block DOM). Default true — the stage-1d parity mechanism; tokens-only theming when false.' },
           carryJs: { type: 'boolean', description: 'Carry the source scripts into the theme (enqueued footer, html.js gate added). Default true for identical replication.' },
+          repair: { type: 'boolean', description: 'Deterministic parity repair loop: diff regions → computed-style probe → generated parity-patch.css → re-compare, bounded. Default true. No AI involved.' },
+          maxRepairRounds: { type: 'number', description: 'Max repair rounds (0-5). Default 2. Loop also stops early on allPass or an unchanged divergence fingerprint.' },
         },
         required: ['dir', 'studioSitePath'],
       },

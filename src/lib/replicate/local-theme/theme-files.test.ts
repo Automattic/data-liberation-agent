@@ -157,6 +157,14 @@ describe('assembleLocalTheme', () => {
     expect(fns).toContain("classList.add('js')");
   });
 
+  it('carry mode enqueues parity-patch.css after the source style (file_exists-guarded)', () => {
+    const files = assembleLocalTheme({ siteTitle: 'A', themeSlug: 'a-local', headerPart: HEADER, footerPart: FOOTER, carrySourceAssets: { css: 'body{}', js: '' } });
+    const fns = files.find((f) => f.relativePath === 'functions.php')?.content ?? '';
+    expect(fns).toContain('assets/css/parity-patch.css');
+    expect(fns).toContain("array( 'a-local-source' )"); // dep: after source css
+    expect(fns.indexOf('parity-patch')).toBeGreaterThan(fns.indexOf('source.css'));
+  });
+
   it('css-only carry: no js file and NO html.js gate (gated CSS must not hide content)', () => {
     // js: '' → no source script ships, so nothing would ever reveal sections
     // that reveal-gated source CSS hides behind html.js. Emitting the gate

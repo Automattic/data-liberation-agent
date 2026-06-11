@@ -32,7 +32,9 @@ import { compareScreenshotDirs } from '../../lib/screenshot/compare.js';
 import { buildLocalFoundation, extractCssColors, type PaletteAgg, type TypographyAgg, type BreakpointsAgg } from '../../lib/replicate/local-theme/foundation.js';
 import { extractGoogleFontCssUrls, selfHostGoogleFonts } from '../../lib/replicate/local-theme/google-fonts.js';
 import { collectSourceAssets, WP_COMPAT_CSS } from '../../lib/replicate/local-theme/source-assets.js';
-import { FREEZE_MOTION_CSS } from '../../lib/replicate/parity/parity-probe.js';
+import { FREEZE_MOTION_CSS, probePair, type Divergence } from '../../lib/replicate/parity/parity-probe.js';
+import { extractDiffRegions } from '../../lib/replicate/parity/diff-regions.js';
+import { classifyDivergences, renderPatchCss, divergenceFingerprint, type UnresolvedDivergence, type PatchOverride, type RepairPlan } from '../../lib/replicate/parity/parity-classify.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -64,6 +66,8 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
 
   const skipDesign = args.skipDesign === true;
   const skipCompare = args.skipCompare === true;
+  const repair = args.repair !== false;
+  const maxRepairRounds = Math.min(Math.max(Number(args.maxRepairRounds ?? 2), 0), 5);
   // Stage 1d: carry the source site's own CSS/JS into the theme so the class-
   // preserving block DOM renders under the designer's stylesheet. Default ON
   // (identical replication goal); pass carryCss:false / carryJs:false to opt out.
@@ -336,6 +340,11 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
   // source capture but produce missing-replica rows in the comparison output —
   // visible, not silent.
   const PARITY_FLOOR = 0.99;
+  // Hoisted so the repair loop can re-capture and re-compare without recomputing.
+  const replicaCaptureDir = join(outputDir, 'replica');
+  const replicaUrls = installed
+    .filter((p) => p.postId != null)
+    .map((p) => (p.slug === plan.homeSlug ? `${wpUrl}/` : `${wpUrl}/${p.slug}/`));
   let parity:
     | {
         floor: number;
@@ -343,14 +352,11 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
         avgDesktop: number;
         avgMobile: number;
         pages: Array<{ pathname: string; desktop: number | null; mobile: number | null; passes: boolean }>;
+        repair?: { rounds: number; overrides: number; unresolved: UnresolvedDivergence[]; converged: boolean };
       }
     | undefined;
   if (!skipDesign && !skipCompare && designCaptured) {
     try {
-      const replicaCaptureDir = join(outputDir, 'replica');
-      const replicaUrls = installed
-        .filter((p) => p.postId != null)
-        .map((p) => (p.slug === plan.homeSlug ? `${wpUrl}/` : `${wpUrl}/${p.slug}/`));
       await captureScreenshots({
         urls: replicaUrls,
         outputDir: replicaCaptureDir,
@@ -391,6 +397,193 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
     } catch (err) {
       warnings.push(`compare failed: ${(err as Error).message}`);
     }
+  }
+
+  // Stage 1e — Deterministic parity repair loop (bounded, no AI).
+  // Measure → classify → patch → re-capture → re-compare; stop on allPass,
+  // maxRepairRounds, or unchanged divergence fingerprint (stuck). Every failure
+  // degrades to a warning — the loop never aborts the conversion.
+  if (repair && parity && !parity.allPass && maxRepairRounds > 0) {
+    let rounds = 0;
+    let lastFingerprint: string | undefined;
+    let converged = false;
+    const allOverrides = new Map<string, PatchOverride>();
+    let allUnresolved: UnresolvedDivergence[] = [];
+
+    // TypeScript needs a local non-nullable reference for the loop (parity is
+    // let and may be reassigned inside, preventing narrowing in the while cond).
+    let currentParity = parity;
+
+    while (!currentParity.allPass && rounds < maxRepairRounds) {
+      const failingPages = currentParity.pages.filter((fp) => !fp.passes);
+
+      // 1. Read replica manifest to resolve pathname → slug for diff-PNG paths.
+      const manifestByPathname = new Map<string, string>();
+      try {
+        const manifestPath = join(replicaCaptureDir, 'screenshots', 'manifest.json');
+        if (existsSync(manifestPath)) {
+          const m = JSON.parse(readFileSync(manifestPath, 'utf8')) as {
+            version: 1;
+            entries: Record<string, { slug: string }>;
+          };
+          for (const [url, entry] of Object.entries(m.entries)) {
+            try { manifestByPathname.set(new URL(url).pathname, entry.slug); } catch { /* skip */ }
+          }
+        }
+      } catch (err) {
+        warnings.push(`repair round ${rounds}: manifest read failed: ${(err as Error).message}`);
+        break;
+      }
+
+      // 2. Probe both sides for each failing page × viewport.
+      const roundDivergences: Divergence[] = [];
+      let repairServer: Awaited<ReturnType<typeof startStaticServer>> | undefined;
+      let repairBrowser: import('playwright').Browser | undefined;
+      let probeOk = true;
+      try {
+        repairServer = await startStaticServer(dir);
+        const { chromium } = await import('playwright');
+        repairBrowser = await chromium.launch();
+
+        for (const failPage of failingPages) {
+          const slug = manifestByPathname.get(failPage.pathname);
+          if (!slug) continue;
+
+          const sitePg = site.pages.find((sp) => {
+            const rUrl = sp.slug === plan.homeSlug ? `${wpUrl}/` : `${wpUrl}/${sp.slug}/`;
+            return new URL(rUrl).pathname === failPage.pathname;
+          });
+          if (!sitePg) continue;
+
+          for (const vp of ['desktop', 'mobile'] as const) {
+            const score = failPage[vp];
+            if (score !== null && score >= PARITY_FLOOR) continue; // this viewport passes
+
+            const diffPath = join(replicaCaptureDir, 'screenshots', 'diff', `${slug}.${vp}.diff.png`);
+            if (!existsSync(diffPath)) continue;
+
+            let regions: ReturnType<typeof extractDiffRegions>;
+            try {
+              regions = extractDiffRegions(readFileSync(diffPath), { scale: vp === 'desktop' ? 0.7 : 1 });
+            } catch { continue; }
+
+            if (regions.length === 0) continue;
+
+            const sourceUrl = repairServer.urlForPage(sitePg.relPath);
+            const replicaUrl = sitePg.slug === plan.homeSlug ? `${wpUrl}/` : `${wpUrl}/${sitePg.slug}/`;
+            try {
+              const divs = await probePair({ browser: repairBrowser, sourceUrl, replicaUrl, viewport: vp, regions });
+              roundDivergences.push(...divs);
+            } catch (err) {
+              warnings.push(`repair round ${rounds}: probe ${failPage.pathname} ${vp}: ${(err as Error).message}`);
+            }
+          }
+        }
+      } catch (err) {
+        warnings.push(`repair round ${rounds}: probe setup failed: ${(err as Error).message}`);
+        probeOk = false;
+      } finally {
+        await repairBrowser?.close();
+        await repairServer?.close();
+      }
+
+      if (!probeOk) break;
+
+      // 3. Classify + fingerprint (order-insensitive; same input → same bytes).
+      const classifyResult = classifyDivergences(roundDivergences);
+      const fp = divergenceFingerprint(roundDivergences);
+      if (fp === lastFingerprint) {
+        // Patching is not helping — stop and report.
+        allUnresolved = classifyResult.unresolved;
+        break;
+      }
+      lastFingerprint = fp;
+
+      // Accumulate overrides across rounds (union; later rounds can add viewports).
+      for (const o of classifyResult.overrides) {
+        const key = `${o.selector}|${o.occurrence}|${o.prop}`;
+        const existing = allOverrides.get(key);
+        if (existing) {
+          for (const v of o.viewports) {
+            if (!existing.viewports.includes(v)) existing.viewports.push(v);
+          }
+        } else {
+          allOverrides.set(key, { ...o, viewports: [...o.viewports] });
+        }
+      }
+      allUnresolved = classifyResult.unresolved;
+
+      // 4. Render byte-stable patch from the accumulated union of overrides.
+      const mergedPlan: RepairPlan = {
+        overrides: [...allOverrides.values()].sort(
+          (a, b) => a.selector.localeCompare(b.selector) || a.prop.localeCompare(b.prop),
+        ),
+        unresolved: allUnresolved,
+      };
+      const patchCss = renderPatchCss(mergedPlan);
+
+      // 5. Write patch into live theme + output dir (atomic).
+      try {
+        writeReplicaFilesToHost({
+          wpRoot,
+          themeSlug,
+          themeFiles: [{ relativePath: 'assets/css/parity-patch.css', content: patchCss }],
+        });
+        const patchOut = join(outputDir, 'parity-patch.css');
+        const patchTmp = `${patchOut}.tmp.${process.pid}`;
+        writeFileSync(patchTmp, patchCss);
+        renameSync(patchTmp, patchOut);
+      } catch (err) {
+        warnings.push(`repair round ${rounds}: patch write failed: ${(err as Error).message}`);
+        break;
+      }
+
+      // 6. Re-capture replica (force regenerates pngs) → re-compare.
+      try {
+        await captureScreenshots({
+          urls: replicaUrls,
+          outputDir: replicaCaptureDir,
+          primaryUrl: wpUrl,
+          concurrency: 2,
+          prepareCapture: freezeMotion,
+          force: true,
+        });
+        const comparison2 = await compareScreenshotDirs({
+          originDir: join(sourceCaptureDir, 'screenshots'),
+          replicaDir: join(replicaCaptureDir, 'screenshots'),
+        });
+        const parityPages2 = comparison2.results.map((r) => {
+          const d = r.desktop?.score ?? null;
+          const m = r.mobile?.score ?? null;
+          return {
+            pathname: r.pathname,
+            desktop: d,
+            mobile: m,
+            passes: d !== null && m !== null && d >= PARITY_FLOOR && m >= PARITY_FLOOR,
+          };
+        });
+        currentParity = {
+          ...currentParity,
+          allPass: parityPages2.length > 0 && parityPages2.every((p) => p.passes),
+          pages: parityPages2,
+        };
+      } catch (err) {
+        warnings.push(`repair round ${rounds}: re-compare failed: ${(err as Error).message}`);
+        break;
+      }
+
+      rounds++;
+
+      if (currentParity.allPass) {
+        converged = true;
+        break;
+      }
+    }
+
+    parity = {
+      ...currentParity,
+      repair: { rounds, overrides: allOverrides.size, unresolved: allUnresolved, converged },
+    };
   }
 
   // Truthful carry summary: css=true only when the CSS file was actually written;

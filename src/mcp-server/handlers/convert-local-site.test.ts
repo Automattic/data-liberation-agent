@@ -2,6 +2,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { PNG } from 'pngjs';
 import type { HandlerContext, ToolResult } from '../handler-types.js';
 
 // Mock BOTH exec seams before importing the handler:
@@ -13,10 +14,19 @@ import type { HandlerContext, ToolResult } from '../handler-types.js';
 // Heavy design-capture + compare seams — mocked at the module level so the
 // handler never invokes Playwright or the pixel-matcher in unit tests.
 // capturedRuns tracks calls so tests can assert on source + replica invocations.
-const capturedRuns: Array<{ urls: string[]; outputDir: string }> = [];
+// force is tracked so repair-loop tests can assert re-capture uses force:true.
+const capturedRuns: Array<{ urls: string[]; outputDir: string; force?: boolean }> = [];
+
+// Repair-loop fixture seam: set per-test; cleared in beforeEach.
+// When repairReplicaManifestEntries is non-empty, the captureScreenshots mock
+// writes a proper manifest (pathname→slug) + red-pixel diff PNGs for the replica
+// capture, so the repair loop can read them without real Playwright/pixelmatch.
+let repairReplicaManifestEntries: Record<string, { slug: string }> = {};
+let repairDiffPng: Buffer | null = null;
+
 vi.mock('../../lib/screenshot/screenshotter.js', () => ({
-  captureScreenshots: vi.fn(async (opts: { urls: string[]; outputDir: string }) => {
-    capturedRuns.push({ urls: opts.urls, outputDir: opts.outputDir });
+  captureScreenshots: vi.fn(async (opts: { urls: string[]; outputDir: string; force?: boolean }) => {
+    capturedRuns.push({ urls: opts.urls, outputDir: opts.outputDir, force: opts.force });
     // Fabricate aggregate files the handler reads after source capture.
     const { mkdirSync: md, writeFileSync: wf } = await import('node:fs');
     const { join: j } = await import('node:path');
@@ -24,7 +34,21 @@ vi.mock('../../lib/screenshot/screenshotter.js', () => ({
     wf(j(opts.outputDir, 'palette.json'), JSON.stringify({ version: 1, sampledUrls: 1, colors: [{ hex: '#0e2a30', count: 10, urls: 1 }, { hex: '#f7f2e9', count: 9, urls: 1 }, { hex: '#e2573b', count: 5, urls: 1 }] }));
     wf(j(opts.outputDir, 'typography.json'), JSON.stringify({ version: 1, sampledUrls: 1, bySelector: { body: [{ fontFamily: 'X', fontSize: '16px', fontWeight: '400', lineHeight: '24px', urls: 1 }] } }));
     wf(j(opts.outputDir, 'breakpoints.json'), JSON.stringify({ version: 1, sampledUrls: 1, minWidth: [], maxWidth: [] }));
-    wf(j(opts.outputDir, 'screenshots', 'manifest.json'), JSON.stringify({ version: 1, entries: {} }));
+    // Replica captures: write a proper manifest + diff PNGs when the repair seam is active.
+    const hasRepairEntries = Object.keys(repairReplicaManifestEntries).length > 0;
+    if (hasRepairEntries && opts.outputDir.endsWith('/replica')) {
+      wf(j(opts.outputDir, 'screenshots', 'manifest.json'), JSON.stringify({ version: 1, entries: repairReplicaManifestEntries }));
+      if (repairDiffPng) {
+        md(j(opts.outputDir, 'screenshots', 'diff'), { recursive: true });
+        for (const entry of Object.values(repairReplicaManifestEntries)) {
+          for (const vp of ['desktop', 'mobile']) {
+            wf(j(opts.outputDir, 'screenshots', 'diff', `${entry.slug}.${vp}.diff.png`), repairDiffPng);
+          }
+        }
+      }
+    } else {
+      wf(j(opts.outputDir, 'screenshots', 'manifest.json'), JSON.stringify({ version: 1, entries: {} }));
+    }
     return { captured: opts.urls.length, failed: 0, skipped: 0, browserRestarts: 0, durationMs: 0, manifestPath: j(opts.outputDir, 'screenshots', 'manifest.json') };
   }),
 }));
@@ -42,6 +66,23 @@ vi.mock('../../lib/replicate/local-theme/google-fonts.js', async (importOriginal
   ...(await importOriginal<object>()),
   selfHostGoogleFonts: vi.fn(async () => ({ faces: [], errors: [] })),
 }));
+
+// Repair-loop seam: mock probePair (heavy Playwright + CSS snapshot) while keeping
+// FREEZE_MOTION_CSS real so the handler's freezeMotion helper stays functional.
+vi.mock('../../lib/replicate/parity/parity-probe.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../lib/replicate/parity/parity-probe.js')>();
+  return { ...actual, probePair: vi.fn(async () => []) };
+});
+
+// Repair-loop seam: stub chromium.launch so the loop never opens a real browser.
+// probePair is mocked so the browser stub only needs close() in the finally block.
+vi.mock('playwright', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('playwright')>();
+  return {
+    ...actual,
+    chromium: { ...actual.chromium, launch: vi.fn(async () => ({ close: vi.fn(async () => {}) })) },
+  };
+});
 
 const execCalls: string[][] = [];
 let execFailFor: string | null = null;
@@ -78,6 +119,9 @@ vi.mock('../../lib/streaming/post-install.js', () => ({
 import { convertLocalSiteHandler } from './convert-local-site.js';
 // Resolves to the vi.mock above — imported so tests can inject one-shot failures.
 import { captureScreenshots } from '../../lib/screenshot/screenshotter.js';
+// Resolved vi.mocked instances for per-test once-value injection.
+import { compareScreenshotDirs } from '../../lib/screenshot/compare.js';
+import { probePair } from '../../lib/replicate/parity/parity-probe.js';
 
 const FIXTURE_TMP = join(process.cwd(), '.tmp-test');
 
@@ -124,12 +168,30 @@ function makeStudioSite(): string {
   return sitePath;
 }
 
+// Base compareScreenshotDirs result — re-established each test so once-values
+// from repair tests don't leak (repair tests chain mockResolvedValueOnce on top).
+const BASE_COMPARE_RESULT = {
+  version: 1,
+  comparedAt: 'TEST',
+  results: [
+    { pathname: '/', originUrl: 'o', replicaUrl: 'r', desktop: { status: 'ok', score: 0.91 }, mobile: { status: 'ok', score: 0.88 } },
+    { pathname: '/about/', originUrl: 'o', replicaUrl: 'r', desktop: { status: 'ok', score: 0.95 }, mobile: { status: 'ok', score: 0.9 } },
+  ],
+};
+
 beforeEach(() => {
   execCalls.length = 0;
   installedPosts.length = 0;
   capturedRuns.length = 0;
   execFailFor = null;
   installFailFor = null;
+  // Repair seam: reset per-test; repair tests set these before calling handler.
+  repairReplicaManifestEntries = {};
+  repairDiffPng = null;
+  // Reset + re-establish base for compare and probePair so unconsumed once-values
+  // from a failing repair test can't bleed into subsequent tests.
+  vi.mocked(compareScreenshotDirs).mockReset().mockResolvedValue(BASE_COMPARE_RESULT as unknown as Awaited<ReturnType<typeof compareScreenshotDirs>>);
+  vi.mocked(probePair).mockReset().mockResolvedValue([]);
 });
 
 describe('convertLocalSiteHandler', () => {
@@ -318,7 +380,9 @@ describe('convertLocalSiteHandler', () => {
     const outDir = mkdtempSync(join(FIXTURE_TMP, 'cls-design-'));
     try {
       const res = await convertLocalSiteHandler(
-        { dir, studioSitePath: sitePath, outputDir: outDir, themeSlug: 'acme-local', siteTitle: 'Acme' },
+        // repair:false: keeps capturedRuns at 2 (source+replica); this test does
+        // not exercise the repair loop — see the dedicated repair-loop tests below.
+        { dir, studioSitePath: sitePath, outputDir: outDir, themeSlug: 'acme-local', siteTitle: 'Acme', repair: false },
         ctx,
       );
       expect(res.isError).toBeFalsy();
@@ -403,6 +467,161 @@ describe('convertLocalSiteHandler', () => {
       expect(summary.designCaptured).toBe(false);
       expect(summary.parity).toBeUndefined();
       expect(capturedRuns.length).toBe(before);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(sitePath, { recursive: true, force: true });
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
+  // ---------------------------------------------------------------------------
+  // Repair loop tests (Task 4)
+  // ---------------------------------------------------------------------------
+
+  /** Tiny red-pixel diff PNG: 10×100, row 20 fully red — gives 1 DiffRegion. */
+  function makeRedDiffPng(): Buffer {
+    const png = new PNG({ width: 10, height: 100 });
+    png.data.fill(255); // white, alpha 255
+    for (let x = 0; x < 10; x++) {
+      const i = (20 * 10 + x) * 4;
+      png.data[i] = 255; png.data[i + 1] = 0; png.data[i + 2] = 0; png.data[i + 3] = 255;
+    }
+    return PNG.sync.write(png);
+  }
+
+  const FAIL_COMPARE = {
+    version: 1 as const, comparedAt: 'TEST',
+    results: [{ pathname: '/', originUrl: 'o', replicaUrl: 'http://localhost:7777/', desktop: { status: 'ok', score: 0.85 }, mobile: { status: 'ok', score: 0.8 } }],
+  };
+  const PASS_COMPARE = {
+    version: 1 as const, comparedAt: 'TEST',
+    results: [{ pathname: '/', originUrl: 'o', replicaUrl: 'http://localhost:7777/', desktop: { status: 'ok', score: 1.0 }, mobile: { status: 'ok', score: 1.0 } }],
+  };
+  const MARGIN_DIV = {
+    match: 'section.hero[0]', viewport: 'desktop' as const, kind: 'prop' as const,
+    prop: 'marginBottom', source: '88px', replica: '0px', replicaOnlyClasses: ['wp-block-group'],
+  };
+
+  it('repair loop patches, re-compares, and converges', async () => {
+    const dir = makeSite();
+    const sitePath = makeStudioSite();
+    const outDir = mkdtempSync(join(FIXTURE_TMP, 'cls-repair-'));
+    try {
+      // Arm the replica fixture seam: the captureScreenshots mock writes a proper
+      // manifest (pathname→slug) + red-pixel diff PNGs for both viewports.
+      repairReplicaManifestEntries = { 'http://localhost:7777/': { slug: 'home' } };
+      repairDiffPng = makeRedDiffPng();
+      // round 0: failing compare → triggers repair; round 1: passing → converged.
+      vi.mocked(compareScreenshotDirs)
+        .mockResolvedValueOnce(FAIL_COMPARE as unknown as Awaited<ReturnType<typeof compareScreenshotDirs>>)
+        .mockResolvedValueOnce(PASS_COMPARE as unknown as Awaited<ReturnType<typeof compareScreenshotDirs>>);
+      // probePair: desktop → 1 marginBottom divergence; mobile falls back to [] (base).
+      vi.mocked(probePair).mockResolvedValueOnce([MARGIN_DIV]);
+
+      const res = await convertLocalSiteHandler(
+        { dir, studioSitePath: sitePath, outputDir: outDir, themeSlug: 'acme-local', siteTitle: 'Acme' },
+        ctx,
+      );
+      expect(res.isError).toBeFalsy();
+      const summary = JSON.parse(res.content[0].text) as {
+        parity?: {
+          repair?: { rounds: number; overrides: number; unresolved: unknown[]; converged: boolean };
+          allPass: boolean;
+        };
+        warnings: string[];
+      };
+      // Repair completed in 1 round with 1 override (marginBottom) and converged.
+      expect(summary.parity?.repair?.rounds).toBe(1);
+      expect(summary.parity?.repair?.overrides).toBe(1);
+      expect(summary.parity?.repair?.converged).toBe(true);
+      expect(summary.parity?.repair?.unresolved).toHaveLength(0);
+      expect(summary.parity?.allPass).toBe(true);
+      // parity-patch.css written into the live theme with the source-measured value.
+      const themePatchPath = join(sitePath, 'wp-content', 'themes', 'acme-local', 'assets', 'css', 'parity-patch.css');
+      expect(existsSync(themePatchPath)).toBe(true);
+      expect(readFileSync(themePatchPath, 'utf8')).toContain('margin-bottom: 88px');
+      // parity-patch.css also copied to outputDir (atomic rename convention).
+      const outPatchPath = join(outDir, 'parity-patch.css');
+      expect(existsSync(outPatchPath)).toBe(true);
+      expect(readFileSync(outPatchPath, 'utf8')).toContain('margin-bottom: 88px');
+      // captureScreenshots: source (0) + replica round-0 (1) + repair re-capture (2).
+      expect(capturedRuns).toHaveLength(3);
+      // Re-capture must use force:true so pngs regenerate over the stale round-0 files.
+      expect(capturedRuns[2].force).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(sitePath, { recursive: true, force: true });
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
+  it('repair loop stops on unchanged fingerprint and reports unresolved (stuck)', async () => {
+    const dir = makeSite();
+    const sitePath = makeStudioSite();
+    const outDir = mkdtempSync(join(FIXTURE_TMP, 'cls-stuck-'));
+    try {
+      repairReplicaManifestEntries = { 'http://localhost:7777/': { slug: 'home' } };
+      repairDiffPng = makeRedDiffPng();
+      // Compare always failing — repair loop never reaches allPass.
+      vi.mocked(compareScreenshotDirs)
+        .mockResolvedValueOnce(FAIL_COMPARE as unknown as Awaited<ReturnType<typeof compareScreenshotDirs>>)
+        .mockResolvedValueOnce(FAIL_COMPARE as unknown as Awaited<ReturnType<typeof compareScreenshotDirs>>);
+      // probePair always returns the same divergence — fingerprint is stable →
+      // loop detects it has stopped making progress and breaks.
+      vi.mocked(probePair)
+        .mockResolvedValueOnce([MARGIN_DIV])   // round 0 desktop
+        .mockResolvedValueOnce([])             // round 0 mobile
+        .mockResolvedValueOnce([MARGIN_DIV])   // round 1 desktop (fingerprint check)
+        .mockResolvedValueOnce([]);            // round 1 mobile
+
+      const res = await convertLocalSiteHandler(
+        { dir, studioSitePath: sitePath, outputDir: outDir, themeSlug: 'acme-local', siteTitle: 'Acme' },
+        ctx,
+      );
+      expect(res.isError).toBeFalsy();
+      const summary = JSON.parse(res.content[0].text) as {
+        parity?: { repair?: { rounds: number; converged: boolean; unresolved: unknown[] }; allPass: boolean };
+        warnings: string[];
+      };
+      // Loop ran 1 complete round (wrote patch + re-compared), then detected the
+      // same fingerprint on round 2's probe and broke before writing a second patch.
+      expect(summary.parity?.repair?.rounds).toBe(1);
+      expect(summary.parity?.repair?.converged).toBe(false);
+      expect(summary.parity?.allPass).toBe(false);
+      // captureScreenshots: source + replica + 1 repair re-capture (no 2nd one — broke
+      // before the re-capture on round 2).
+      expect(capturedRuns).toHaveLength(3);
+      // No infinite loop: exactly 4 probePair calls across 2 probe rounds.
+      expect(vi.mocked(probePair).mock.calls).toHaveLength(4);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(sitePath, { recursive: true, force: true });
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
+  it('repair:false skips the loop entirely', async () => {
+    const dir = makeSite();
+    const sitePath = makeStudioSite();
+    const outDir = mkdtempSync(join(FIXTURE_TMP, 'cls-norepair-'));
+    try {
+      // compare returns failing scores (base mock) but repair is off.
+      const res = await convertLocalSiteHandler(
+        { dir, studioSitePath: sitePath, outputDir: outDir, themeSlug: 'acme-local', siteTitle: 'Acme', repair: false },
+        ctx,
+      );
+      expect(res.isError).toBeFalsy();
+      const summary = JSON.parse(res.content[0].text) as {
+        parity?: { repair?: unknown; allPass: boolean };
+        warnings: string[];
+      };
+      // Repair field is absent — loop was never entered.
+      expect(summary.parity?.repair).toBeUndefined();
+      expect(summary.parity?.allPass).toBe(false); // base compare has scores < 0.99
+      // probePair must never be called when repair:false.
+      expect(vi.mocked(probePair).mock.calls).toHaveLength(0);
+      // captureScreenshots: source + replica only (no re-capture).
+      expect(capturedRuns).toHaveLength(2);
     } finally {
       rmSync(dir, { recursive: true, force: true });
       rmSync(sitePath, { recursive: true, force: true });
