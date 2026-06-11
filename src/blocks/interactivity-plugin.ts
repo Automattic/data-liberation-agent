@@ -290,6 +290,13 @@ store( 'dla/slider', {
 			};
 			ref.querySelector( '.next, [data-next]' )?.addEventListener( 'click', () => go( idx + 1 ) );
 			ref.querySelector( '.prev, [data-prev]' )?.addEventListener( 'click', () => go( idx - 1 ) );
+			// Keyboard: arrows operate the slider whenever focus is inside it (the
+			// prev/next buttons are already focusable; no tabindex injection — the
+			// verbatim inner markup must stay untouched).
+			ref.addEventListener( 'keydown', ( e ) => {
+				if ( e.key === 'ArrowRight' ) go( idx + 1 );
+				else if ( e.key === 'ArrowLeft' ) go( idx - 1 );
+			} );
 			const reduced = window.matchMedia( '(prefers-reduced-motion: reduce)' ).matches;
 			if ( ctx.intervalMs && ! reduced ) {
 				let timer = setInterval( () => go( idx + 1 ), ctx.intervalMs );
@@ -322,10 +329,12 @@ const MODAL_BLOCK_JSON =
   ) + '\n';
 
 // Native <dialog> semantics carry the a11y load (Esc close, focus trap,
-// ::backdrop). withSyncEvent on the backdrop click: data-wp event handlers
-// are async-scheduled by default and dialog.close() relies on synchronous
-// event semantics (WP 7.0 exports withSyncEvent from the interactivity
-// module — verified against a live install).
+// ::backdrop). withSyncEvent precision: it opts DIRECTIVE handlers
+// (data-wp-on--*) out of async scheduling — this listener is a plain
+// addEventListener inside init, which is already synchronous, so the wrapper
+// passes through inert. Kept deliberately: it becomes load-bearing if this
+// wiring ever moves to a data-wp-on--click directive (WP 7.0 exports it from
+// the interactivity module — verified against a live install).
 const MODAL_VIEW_JS = `import { store, getElement, withSyncEvent } from '@wordpress/interactivity';
 
 store( 'dla/modal', {

@@ -183,5 +183,20 @@ describe('buildInteractivityPlugin', () => {
     const revealCss = files['blocks/reveal/style.css'];
     expect(revealCss).toContain('--dla-reveal-y');
     expect(revealCss).toContain('--dla-reveal-ms');
+    // B1 blocks: the same init() rename hole — data-wp-init="callbacks.init"
+    // in the emitted markup silently no-ops if a view.js renames the callback.
+    for (const name of ['tabs', 'slider', 'modal']) {
+      expect(files[`blocks/${name}/view.js`]).toContain('init()');
+    }
+  });
+
+  it('slider view.js is keyboard-operable (spec §6 a11y: ArrowLeft/Right)', () => {
+    const js = byPath(buildInteractivityPlugin().files)['blocks/slider/view.js'];
+    expect(js).toContain("e.key === 'ArrowRight'");
+    expect(js).toContain("e.key === 'ArrowLeft'");
+    // Delegated on the block root — arrows work wherever focus lands inside
+    // the slider (prev/next buttons are already focusable); no tabindex is
+    // injected into the verbatim inner markup.
+    expect(js).toContain("ref.addEventListener( 'keydown'");
   });
 });
