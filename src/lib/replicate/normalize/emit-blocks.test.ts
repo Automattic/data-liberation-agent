@@ -1,5 +1,6 @@
 // src/lib/replicate/normalize/emit-blocks.test.ts
 import { describe, it, expect } from 'vitest';
+import * as cheerio from 'cheerio';
 import { emitSectionBlocks, escapeHtml } from './emit-blocks.js';
 import { blockMarkupRoundtrips } from '../../streaming/block-markup-validate.js';
 
@@ -292,5 +293,117 @@ describe('reveal wrapper swap', () => {
   it('reveal markup round-trips through the block balance gate', () => {
     const { markup } = emitSectionBlocks(section);
     expect(blockMarkupRoundtrips(markup).ok).toBe(true);
+  });
+});
+
+describe('verbatim behavior wrappers (tabs/slider/modal)', () => {
+  const TABS_HTML =
+    '<section id="plans" class="pricing"><div role="tablist">' +
+    '<button role="tab" aria-selected="true" aria-controls="p-a" class="tab is-active">A</button>' +
+    '<button role="tab" aria-selected="false" aria-controls="p-b" class="tab">B</button></div>' +
+    '<div role="tabpanel" id="p-a"><p>Alpha</p></div>' +
+    '<div role="tabpanel" id="p-b" hidden><p>Beta</p></div></section>';
+  const tabsSection = {
+    id: 'plans',
+    role: 'body' as const,
+    classes: ['pricing'],
+    html: TABS_HTML,
+    behavior: { kind: 'tabs' as const, activeClass: 'is-active' },
+  };
+
+  it('tabs: custom wrapper with root directives and VERBATIM inner (no conversion)', () => {
+    const { markup, confidence } = emitSectionBlocks(tabsSection);
+    expect(confidence).toBe(1);
+    expect(markup).toMatch(/^<!-- wp:dla\/tabs \{/);
+    expect(markup).toContain('"anchor":"plans"');
+    expect(markup).toContain('"activeClass":"is-active"');
+    expect(markup).toContain('"className":"pricing"');
+    expect(markup).toContain(
+      `<section id="plans" class="wp-block-dla-tabs pricing" data-wp-interactive="dla/tabs" data-wp-context='{"activeClass":"is-active"}' data-wp-init="callbacks.init">`,
+    );
+    // Inner is BYTE-EQUAL to the source section's inner (cheerio-normalized) —
+    // the emitChild conversion pipeline is skipped entirely.
+    const expectedInner = cheerio.load(TABS_HTML)('section').first().html() ?? '';
+    expect(expectedInner.length).toBeGreaterThan(0);
+    const m = /data-wp-init="callbacks\.init">([\s\S]*)<\/section>\n<!-- \/wp:dla\/tabs -->$/.exec(markup);
+    expect(m?.[1]).toBe(expectedInner);
+    expect(markup).toContain('role="tab"');
+    expect(markup).not.toContain('wp:heading');
+    expect(markup).not.toContain('wp:paragraph');
+    expect(blockMarkupRoundtrips(markup).ok).toBe(true);
+  });
+
+  it('strips block-delimiter-shaped inner comments, keeps plain ones (fail-closed insurance)', () => {
+    const html =
+      '<section id="notes"><p>before</p><!-- wp:fake --><!-- /wp:fake --><!-- note --><p>after</p></section>';
+    const section = {
+      id: 'notes',
+      role: 'body' as const,
+      classes: [],
+      html,
+      behavior: { kind: 'tabs' as const, activeClass: 'is-active' },
+    };
+    const { markup } = emitSectionBlocks(section);
+    expect(markup).not.toContain('wp:fake');
+    expect(markup).toContain('<!-- note -->');
+    expect(markup).toContain('<p>before</p>');
+    expect(markup).toContain('<p>after</p>');
+    expect(blockMarkupRoundtrips(markup).ok).toBe(true);
+  });
+
+  const SLIDER_HTML =
+    '<section id="quotes"><div class="track">' +
+    '<figure class="slide is-current"><blockquote>One</blockquote></figure>' +
+    '<figure class="slide"><blockquote>Two</blockquote></figure></div>' +
+    '<button class="prev">Prev</button><button class="next">Next</button></section>';
+
+  it('slider: context carries intervalMs only when autoplay was detected', () => {
+    const base = { id: 'quotes', role: 'body' as const, classes: [], html: SLIDER_HTML };
+    const auto = emitSectionBlocks({
+      ...base,
+      behavior: { kind: 'slider' as const, activeClass: 'is-current', intervalMs: 6000 },
+    }).markup;
+    expect(auto).toMatch(/^<!-- wp:dla\/slider \{/);
+    expect(auto).toContain(`data-wp-context='{"activeClass":"is-current","intervalMs":6000}'`);
+    expect(auto).toContain('"intervalMs":6000'); // comment attrs too
+    expect(auto).toContain('class="wp-block-dla-slider"');
+    expect(auto).toContain('<figure class="slide is-current">'); // verbatim slides
+    expect(blockMarkupRoundtrips(auto).ok).toBe(true);
+    const manual = emitSectionBlocks({
+      ...base,
+      behavior: { kind: 'slider' as const, activeClass: 'is-current' },
+    }).markup;
+    expect(manual).toContain(`data-wp-context='{"activeClass":"is-current"}'`);
+    expect(manual).not.toContain('intervalMs');
+  });
+
+  const MODAL_HTML =
+    '<section id="book"><button class="open-details">Details</button>' +
+    '<dialog aria-modal="true"><p>Info</p><button class="close">Close</button></dialog></section>';
+
+  it('modal: empty context emits NO data-wp-context attribute at all (locked)', () => {
+    const section = {
+      id: 'book',
+      role: 'body' as const,
+      classes: [],
+      html: MODAL_HTML,
+      behavior: { kind: 'modal' as const },
+    };
+    const { markup, confidence } = emitSectionBlocks(section);
+    expect(confidence).toBe(1);
+    expect(markup).toMatch(/^<!-- wp:dla\/modal \{"anchor":"book"\} -->/);
+    expect(markup).toContain(
+      '<section id="book" class="wp-block-dla-modal" data-wp-interactive="dla/modal" data-wp-init="callbacks.init">',
+    );
+    expect(markup).not.toContain('data-wp-context');
+    expect(markup).toContain('<dialog aria-modal="true">');
+    expect(markup).toContain('</dialog>');
+    expect(blockMarkupRoundtrips(markup).ok).toBe(true);
+  });
+
+  it('untagged section with the same markup still emits core/group (regression)', () => {
+    const plain = emitSectionBlocks({ id: 'plans', role: 'body' as const, classes: ['pricing'], html: TABS_HTML });
+    expect(plain.markup).toMatch(/^<!-- wp:group \{/);
+    expect(plain.markup).not.toContain('dla/');
   });
 });

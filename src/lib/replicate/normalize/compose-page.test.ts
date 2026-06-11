@@ -2,7 +2,7 @@
 import { describe, it, expect } from 'vitest';
 import { composePage } from './compose-page.js';
 import { blockMarkupRoundtrips } from '../../streaming/block-markup-validate.js';
-import type { LocalPage } from '../local-site/types.js';
+import type { LocalPage, Section, SectionBehavior } from '../local-site/types.js';
 
 const page: LocalPage = {
   relPath: 'index.html',
@@ -131,5 +131,55 @@ describe('composePage reveal tagging (nativeBehaviors)', () => {
     expect(composePage(page, {})).toEqual(bare);
     expect(bare.postContent).not.toContain('dla/reveal');
     expect(bare.report.map((r) => r.blockType)).toEqual(['group', 'group']);
+  });
+});
+
+describe('composePage per-section behavior tagging (detectSection)', () => {
+  const reveal = { kind: 'reveal' as const, threshold: 0.2, translateY: '12px', durationMs: 500 };
+  const tabsPage: LocalPage = {
+    relPath: 'plans.html',
+    slug: 'plans-page',
+    title: 'Plans',
+    html:
+      '<body><main><section id="plans"><div role="tablist">' +
+      '<button role="tab" aria-selected="true" aria-controls="p-a" class="tab is-active">A</button>' +
+      '<button role="tab" aria-selected="false" aria-controls="p-b" class="tab">B</button></div>' +
+      '<div role="tabpanel" id="p-a"><p>Alpha</p></div>' +
+      '<div role="tabpanel" id="p-b" hidden><p>Beta</p></div></section>' +
+      '<section id="cta"><p>More</p></section></main></body>',
+  };
+  const tagPlans = (s: Section): SectionBehavior | undefined =>
+    s.id === 'plans' ? { kind: 'tabs', activeClass: 'is-active' } : undefined;
+
+  it('specific section behavior beats uniform reveal (precedence) and reports dla/<kind>', () => {
+    const { postContent, report } = composePage(tabsPage, { reveal, detectSection: tagPlans });
+    expect(report.map((r) => [r.sectionId, r.blockType])).toEqual([
+      ['plans', 'dla/tabs'],
+      ['cta', 'dla/reveal'],
+    ]);
+    expect(postContent).toContain('data-wp-interactive="dla/tabs"');
+    expect(postContent).toContain('data-wp-interactive="dla/reveal"');
+    expect(postContent).toContain('role="tab"'); // verbatim inner survived compose
+  });
+
+  it('roundtrip gate accepts verbatim inner through the compose pipeline (explicit lock)', () => {
+    const { postContent } = composePage(tabsPage, { reveal, detectSection: tagPlans });
+    expect(blockMarkupRoundtrips(postContent).ok).toBe(true);
+  });
+
+  it('callback returning undefined everywhere changes nothing (regression)', () => {
+    expect(composePage(tabsPage, { reveal, detectSection: () => undefined })).toEqual(
+      composePage(tabsPage, { reveal }),
+    );
+    expect(composePage(tabsPage, { detectSection: () => undefined })).toEqual(composePage(tabsPage));
+  });
+
+  it('detectSection without reveal: only the matched section is tagged, others stay group', () => {
+    const { postContent, report } = composePage(tabsPage, { detectSection: tagPlans });
+    expect(report.map((r) => [r.sectionId, r.blockType])).toEqual([
+      ['plans', 'dla/tabs'],
+      ['cta', 'group'],
+    ]);
+    expect(postContent).toContain('wp:group');
   });
 });

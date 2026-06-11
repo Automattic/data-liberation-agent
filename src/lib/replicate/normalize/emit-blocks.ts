@@ -3,7 +3,7 @@ import * as cheerio from 'cheerio';
 import type { CheerioAPI, Cheerio } from 'cheerio';
 import { isTag, isText } from 'domhandler';
 import type { Element } from 'domhandler';
-import type { Section } from '../local-site/types.js';
+import type { ModalBehavior, Section, SliderBehavior, TabsBehavior } from '../local-site/types.js';
 
 export function escapeHtml(text: string): string {
   return text
@@ -235,6 +235,51 @@ export interface EmitSectionOpts {
   wrapper?: 'section' | 'div';
 }
 
+/**
+ * B1 verbatim-wrap (tabs/slider/modal): the custom Interactivity wrapper
+ * around the section's UNCONVERTED inner HTML. Root directives only —
+ * view.js wires the verbatim descendants imperatively from callbacks.init
+ * (the dla/sticky precedent), so no descendant directives are injected.
+ * Context keys match the landed view.js reads: tabs {activeClass}, slider
+ * {activeClass, intervalMs?}, modal EMPTY (no data-wp-context attribute at
+ * all — native <dialog> semantics need no params).
+ */
+function verbatimBehaviorMarkup(
+  section: Section,
+  b: TabsBehavior | SliderBehavior | ModalBehavior,
+  rawInner: string,
+): string {
+  const cls = (section.classes ?? []).join(' ');
+  // Fail-closed insurance: a verbatim HTML comment SHAPED like a block
+  // delimiter would confuse the WP parser (pair form throws at the roundtrip
+  // gate; void form silently re-parents). Strip just those; plain comments
+  // stay (realistic exposure ~0, research-verified).
+  const inner = rawInner.replace(/<!--\s*\/?wp:[\s\S]*?-->/g, '');
+  const pairs = [`"anchor":${attrJson(section.id)}`];
+  const ctxPairs: string[] = [];
+  if (b.kind === 'tabs' || b.kind === 'slider') {
+    pairs.push(`"activeClass":${attrJson(b.activeClass)}`);
+    ctxPairs.push(`"activeClass":${attrJson(b.activeClass)}`);
+    if (b.kind === 'slider' && b.intervalMs !== undefined) {
+      pairs.push(`"intervalMs":${JSON.stringify(b.intervalMs)}`);
+      ctxPairs.push(`"intervalMs":${JSON.stringify(b.intervalMs)}`);
+    }
+  }
+  const attrs = blockAttrs(pairs, cls);
+  // The context JSON sits in a single-quoted HTML attribute: attrJson covers
+  // the kses '--' trap; the ' escape is belt-and-braces (classes are
+  // capture-constrained upstream) — mirrors the sticky state block.
+  const ctx = ctxPairs.length ? `{${ctxPairs.join(',')}}`.replace(/'/g, '\\u0027') : '';
+  const ctxAttr = ctx ? ` data-wp-context='${ctx}'` : '';
+  const wrapCls = [`wp-block-dla-${b.kind}`, cls].filter(Boolean).join(' ');
+  return (
+    `<!-- wp:dla/${b.kind}${attrs} -->\n` +
+    `<section id="${escapeHtml(section.id)}" class="${escapeHtml(wrapCls)}"` +
+    ` data-wp-interactive="dla/${b.kind}"${ctxAttr} data-wp-init="callbacks.init">${inner}</section>\n` +
+    `<!-- /wp:dla/${b.kind} -->`
+  );
+}
+
 export function emitSectionBlocks(section: Section, opts: EmitSectionOpts = {}): { markup: string; confidence: number } {
   const $ = cheerio.load(section.html);
   // Include 'main' so that segmentPage's main-fallback case (which emits a
@@ -244,6 +289,22 @@ export function emitSectionBlocks(section: Section, opts: EmitSectionOpts = {}):
   // emitChild on the whole <main> element, which downgrades to a paragraph.
   const root = $('section, article, main, div').first();
   const container = root.length ? root : $('body');
+
+  // B1 verbatim-wrap: a tabs/slider/modal section SKIPS the emitChild
+  // conversion entirely — interactive scaffolding (role/aria attrs, buttons,
+  // panels, slides) must survive byte-true so source CSS and the imperative
+  // view.js keep matching; the conversion pipeline would downgrade it
+  // ("never lose source content"). confidence 1: nothing is converted, so
+  // nothing can degrade. Editor shows the accepted missing-block placeholder
+  // either way (B2). Like the reveal branch, opts.wrapper is deliberately
+  // ignored (behavior tags only arrive on body sections).
+  if (section.behavior && section.behavior.kind !== 'reveal') {
+    return {
+      markup: verbatimBehaviorMarkup(section, section.behavior, container.html() ?? ''),
+      confidence: 1,
+    };
+  }
+
   const childMarkup: string[] = [];
   let downgrades = 0;
   let total = 0;
