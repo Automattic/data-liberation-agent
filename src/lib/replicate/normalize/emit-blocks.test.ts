@@ -520,3 +520,42 @@ describe('slider context intervalMs gate (B2 review residual)', () => {
     expect(markup).not.toContain('intervalMs');
   });
 });
+
+describe('structural wrapper preservation (owned-source bodies)', () => {
+  it('a classless wrapper div with element children recurses instead of text-downgrading', () => {
+    const section = {
+      id: 'story',
+      role: 'body' as const,
+      html: '<section id="story"><div class="wrap"><h2 class="h-lg">Title</h2><p class="lead">Body copy.</p></div></section>',
+    };
+    const { markup } = emitSectionBlocks(section);
+    // Wrapper survives with its class (source .wrap rules keep matching)…
+    expect(markup).toContain('class="wp-block-group wrap"');
+    // …and the children emit through their REAL branches, not a text blob.
+    expect(markup).toContain('<!-- wp:heading');
+    expect(markup).toContain('<h2 class="wp-block-heading h-lg">Title</h2>');
+    expect(markup).toContain('<p class="lead">Body copy.</p>');
+  });
+
+  it('inline style attrs survive on section and wrapper elements (grid/padding layouts)', () => {
+    const section = {
+      id: 'intro',
+      role: 'body' as const,
+      html: '<section id="intro" style="padding-top:56px"><div class="wrap" style="display:grid;gap:24px"><p>A</p><p>B</p></div></section>',
+    };
+    const { markup } = emitSectionBlocks(section);
+    expect(markup).toContain('<section id="intro" class="wp-block-group" style="padding-top:56px">');
+    expect(markup).toContain('style="display:grid;gap:24px"');
+  });
+
+  it('a true text leaf still downgrades to a paragraph', () => {
+    const section = {
+      id: 's',
+      role: 'body' as const,
+      html: '<section id="s"><div class="badge">Leaf text only</div></section>',
+    };
+    const { markup, confidence } = emitSectionBlocks(section);
+    expect(markup).toContain('Leaf text only');
+    expect(confidence).toBeLessThan(1);
+  });
+});

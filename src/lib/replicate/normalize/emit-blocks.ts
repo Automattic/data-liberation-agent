@@ -209,30 +209,37 @@ function emitChild($: CheerioAPI, el: Element): ChildResult {
     };
   }
 
-  // Id-bearing unknown wrappers survive as anchored group divs with their
-  // children recursed — NOT text-downgraded. JS-rendered sites hang runtime
-  // mounts off ids (`<div id="newestGrid">` filled by a carried mount script);
-  // the downgrade destroyed the id, so the carried JS had nothing to target
-  // (maison-clouet dogfood). Empty mounts stay empty (and clean: nothing was
-  // lost); populated ones recurse through the normal emitters.
+  // Structural wrapper preservation: unknown wrappers that carry an id OR
+  // have element children survive as group divs — id, classes, AND inline
+  // style attr intact — with children recursed through the normal emitters.
+  // The owned-source contracts all depend on it: ids are JS mount targets
+  // (`<div id="newestGrid">` filled by a carried mount script), classes are
+  // the carried-CSS selectors (.wrap layout containers), and inline styles
+  // hold per-element grid/padding the source authored directly (maison-clouet
+  // dogfood: text-downgrading .wrap wrappers mushed entire designed pages
+  // into paragraph runs). The style attr rides the ELEMENT only (not block
+  // attrs) — same accepted editor-resave drift as the classless table figure.
+  // Empty id-mounts stay empty (and clean: nothing was lost).
   const elId = $el.attr('id');
-  if (elId) {
-    const childResults = $el
-      .children()
-      .toArray()
-      .map((c) => emitChild($, c));
+  const elementChildren = $el.children().toArray();
+  if (elId || elementChildren.length > 0) {
+    const childResults = elementChildren.map((c) => emitChild($, c));
     const inner = childResults.map((r) => r.markup).filter(Boolean).join('\n');
     const looseText = $el.clone().children().remove().end().text().trim();
     const loosePara = looseText && childResults.length === 0 ? paragraphBlock(escapeHtml(looseText)) : '';
     const cls = classNameOf($el);
-    const wrapPairs = [`"anchor":${attrJson(elId)}`, '"tagName":"div"'];
+    const styleAttr = $el.attr('style')?.trim();
+    const wrapPairs = ['"tagName":"div"'];
+    if (elId) wrapPairs.unshift(`"anchor":${attrJson(elId)}`);
     const wrapAttrs = blockAttrs(wrapPairs, cls);
     const divCls = ['wp-block-group', cls].filter(Boolean).join(' ');
     const body = [inner, loosePara].filter(Boolean).join('\n');
+    const idPart = elId ? ` id="${escapeHtml(elId)}"` : '';
+    const stylePart = styleAttr ? ` style="${escapeHtml(styleAttr)}"` : '';
     return {
       markup:
         `<!-- wp:group ${wrapAttrs} -->\n` +
-        `<div id="${escapeHtml(elId)}" class="${escapeHtml(divCls)}">${body ? `\n${body}\n` : ''}</div>\n` +
+        `<div${idPart} class="${escapeHtml(divCls)}"${stylePart}>${body ? `\n${body}\n` : ''}</div>\n` +
         `<!-- /wp:group -->`,
       clean: childResults.every((r) => r.clean) && !(looseText && childResults.length > 0),
     };
@@ -444,9 +451,15 @@ export function emitSectionBlocks(section: Section, opts: EmitSectionOpts = {}):
   const wrapperPairs = wrapper === 'section' ? [anchorPair, tagPair] : [anchorPair];
   const attrs = blockAttrs(wrapperPairs, cls);
   const divCls = ['wp-block-group', cls].filter(Boolean).join(' ');
+  // The section's own inline style attr survives on the ELEMENT (not as block
+  // attrs) — owned sources author per-section padding/grid inline
+  // (style="padding-top:56px"), and dropping it collapses the vertical rhythm.
+  // Same accepted editor-resave drift as the classless table figure.
+  const sectionStyle = container.attr('style')?.trim();
+  const stylePart = sectionStyle ? ` style="${escapeHtml(sectionStyle)}"` : '';
   const markup =
     `<!-- wp:group${attrs} -->\n` +
-    `<${wrapper} id="${escapeHtml(section.id)}" class="${escapeHtml(divCls)}">${inner}</${wrapper}>\n` +
+    `<${wrapper} id="${escapeHtml(section.id)}" class="${escapeHtml(divCls)}"${stylePart}>${inner}</${wrapper}>\n` +
     `<!-- /wp:group -->`;
   return { markup, confidence };
 }
