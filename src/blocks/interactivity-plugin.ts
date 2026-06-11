@@ -97,11 +97,22 @@ store( 'dla/reveal', {
 // Hidden state is gated on .dla-reveal-js (module ran) AND :not(.is-visible).
 // Animation params are the catalog defaults; per-site params ride the emitted
 // markup's inline custom properties (--dla-reveal-y / --dla-reveal-ms).
+//
+// The transition rides the TARGET state (.is-visible) only: the gate class
+// lands at MODULE time (post-first-paint — a block can't inject head-inline
+// scripts the way the source site did), so a base-rule transition ANIMATED
+// below-fold sections visible→hidden on gate arrival (a 600ms fade-OUT flash;
+// probe caught opacity 0.0088 mid-fade). State-scoped, gate arrival snaps
+// them hidden instantly, while the 0→1 reveal still animates because the
+// transition is active on the state being ENTERED. Residual: a brief
+// flash-of-visible BEFORE the module runs is unavoidable without a
+// head-inline script — accepted v1 (matches the no-JS-resilient SSR-first
+// posture: content is visible until JS proves it can reveal it).
 const REVEAL_STYLE_CSS = `.dla-reveal-js .wp-block-dla-reveal:not(.is-visible) {
 	opacity: 0;
 	transform: translateY( var( --dla-reveal-y, 18px ) );
 }
-.dla-reveal-js .wp-block-dla-reveal {
+.dla-reveal-js .wp-block-dla-reveal.is-visible {
 	transition: opacity var( --dla-reveal-ms, 600ms ) ease, transform var( --dla-reveal-ms, 600ms ) ease;
 }
 @media (prefers-reduced-motion: reduce) {
@@ -109,7 +120,7 @@ const REVEAL_STYLE_CSS = `.dla-reveal-js .wp-block-dla-reveal:not(.is-visible) {
 		opacity: 1;
 		transform: none;
 	}
-	.dla-reveal-js .wp-block-dla-reveal {
+	.dla-reveal-js .wp-block-dla-reveal.is-visible {
 		transition: none;
 	}
 }

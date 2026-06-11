@@ -63,6 +63,18 @@ describe('buildInteractivityPlugin', () => {
     expect(css).not.toMatch(/(^|[\s,{])section[\s.,{:]/);
   });
 
+  it('reveal style.css: transition rides the is-visible state only (no post-load fade-out flash)', () => {
+    // The gate class lands at MODULE time (post-first-paint): a transition on
+    // the BASE rule ANIMATED below-fold sections visible→hidden when the gate
+    // arrived (probe: opacity 0.0088 mid-fade on a below-fold section). State-
+    // scoped, hide snaps instantly and only the 0→1 reveal animates.
+    const css = byPath(buildInteractivityPlugin().files)['blocks/reveal/style.css'];
+    expect(css).toContain('.dla-reveal-js .wp-block-dla-reveal.is-visible');
+    expect(css).toMatch(/\.wp-block-dla-reveal\.is-visible \{\n\ttransition: opacity/);
+    // No bare base rule — nothing may transition on gate-class arrival.
+    expect(css).not.toMatch(/\.wp-block-dla-reveal \{/);
+  });
+
   it('sticky view.js toggles the configured class on the closest header', () => {
     const js = byPath(buildInteractivityPlugin().files)['blocks/sticky/view.js'];
     expect(js).toContain(`store( 'dla/sticky'`);
