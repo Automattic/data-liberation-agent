@@ -34,9 +34,11 @@ export interface Section {
    * block wrapper so carried source CSS keeps matching (stage 1d). */
   classes?: string[];
   /** nativeBehaviors: when set, the emitter swaps the core/group wrapper for
-   * the matching custom Interactivity block (dla/reveal). Section-level only;
-   * chrome behaviors (sticky) ride HeaderPartOpts instead. */
-  behavior?: RevealBehavior;
+   * the matching custom Interactivity block (dla/<kind>). Section-level only;
+   * chrome behaviors (sticky) ride HeaderPartOpts instead. reveal is uniform
+   * (every body section); tabs/slider/modal are DOM-pattern-detected per
+   * section and take precedence over reveal (one behavior per section). */
+  behavior?: SectionBehavior;
 }
 
 export interface NormalizeReportEntry {
@@ -63,6 +65,27 @@ export interface StickyBehavior {
   /** scrollY threshold (px) parsed from source JS; default 8. */
   offset: number;
 }
+
+export interface TabsBehavior {
+  kind: 'tabs';
+  /** Source-authored class the JS toggles on the active tab. */
+  activeClass: string;
+}
+
+export interface SliderBehavior {
+  kind: 'slider';
+  /** Source-authored class marking the active slide. */
+  activeClass: string;
+  /** Autoplay interval parsed from setInterval(..., N); absent = no autoplay. */
+  intervalMs?: number;
+}
+
+export interface ModalBehavior {
+  kind: 'modal';
+}
+
+/** Per-section behavior tag — the emitter swaps the wrapper block by kind. */
+export type SectionBehavior = RevealBehavior | TabsBehavior | SliderBehavior | ModalBehavior;
 
 /** Non-catalog source JS behavior — reported, never guessed (spec §6 fallback). */
 export interface BehaviorGap {

@@ -92,3 +92,94 @@ describe('detectBehaviors', () => {
     expect(detectBehaviors({ css: '', js: '// license header only' })).toEqual({ gaps: [] });
   });
 });
+
+// --- B1: per-section DOM-pattern detection -----------------------------------
+
+import { detectSectionBehavior } from './detect-behaviors.js';
+
+const TABS_HTML = `<section id="plans"><div role="tablist">
+  <button role="tab" aria-selected="true" aria-controls="p-a" class="tab is-active">A</button>
+  <button role="tab" aria-selected="false" aria-controls="p-b" class="tab">B</button></div>
+  <div role="tabpanel" id="p-a"><p>Alpha</p></div>
+  <div role="tabpanel" id="p-b" hidden><p>Beta</p></div></section>`;
+const TABS_JS = `document.querySelectorAll('[role="tab"]').forEach((t) => t.addEventListener('click', () => {
+  document.querySelectorAll('[role="tab"]').forEach((o) => o.classList.remove('is-active'));
+  t.classList.add('is-active');
+}));`;
+const SLIDER_HTML = `<section id="quotes"><div class="track">
+  <figure class="slide is-current"><blockquote>One</blockquote></figure>
+  <figure class="slide"><blockquote>Two</blockquote></figure></div>
+  <button class="prev">Prev</button><button class="next">Next</button></section>`;
+const SLIDER_JS = `setInterval(() => { advance(); }, 6000);
+document.querySelector('.next').addEventListener('click', () => {
+  document.querySelector('.slide.is-current').classList.remove('is-current');
+});`;
+const MODAL_HTML = `<section id="book"><button class="open-details">Details</button>
+  <dialog aria-modal="true"><p>Info</p><button class="close">Close</button></dialog></section>`;
+const MODAL_JS = `document.querySelector('.open-details').addEventListener('click', () => {
+  document.querySelector('dialog').showModal();
+});`;
+
+describe('detectSectionBehavior', () => {
+  it('detects tabs from role pattern + click driver', () => {
+    const b = detectSectionBehavior(TABS_HTML, { css: '', js: TABS_JS });
+    expect(b).toEqual({ kind: 'tabs', activeClass: 'is-active' });
+  });
+
+  it('tabs requires the JS driver (static tablist alone stays untagged)', () => {
+    expect(detectSectionBehavior(TABS_HTML, { css: '', js: '' })).toBeUndefined();
+  });
+
+  it('detects slider with interval + active class', () => {
+    const b = detectSectionBehavior(SLIDER_HTML, { css: '', js: SLIDER_JS });
+    expect(b).toEqual({ kind: 'slider', activeClass: 'is-current', intervalMs: 6000 });
+  });
+
+  it('slider without autoplay omits intervalMs', () => {
+    const js = `document.querySelector('.next').addEventListener('click', () => {
+      document.querySelector('.slide.is-current').classList.remove('is-current'); });`;
+    expect(detectSectionBehavior(SLIDER_HTML, { css: '', js })).toEqual({
+      kind: 'slider',
+      activeClass: 'is-current',
+    });
+  });
+
+  it('detects modal from dialog + showModal driver', () => {
+    expect(detectSectionBehavior(MODAL_HTML, { css: '', js: MODAL_JS })).toEqual({ kind: 'modal' });
+  });
+
+  it('modal requires showModal/open driver', () => {
+    expect(detectSectionBehavior(MODAL_HTML, { css: '', js: '' })).toBeUndefined();
+  });
+
+  it('plain section detects nothing', () => {
+    expect(
+      detectSectionBehavior('<section id="s"><p>hi</p></section>', { css: '', js: TABS_JS }),
+    ).toBeUndefined();
+  });
+});
+
+describe('detectBehaviors sectionKinds claiming', () => {
+  it('claims tabs/slider/modal driver js only when their kind fired', () => {
+    const js = TABS_JS + '\n' + SLIDER_JS + '\n' + MODAL_JS + '\n' + GAP_JS;
+    // Without sectionKinds: all three drivers are residue alongside the gap.
+    const without = detectBehaviors({ css: '', js });
+    expect(without.gaps).toHaveLength(1);
+    expect(without.gaps[0].jsExcerpt).toContain('[role="tab"]');
+    // With all three kinds detected: only the nav-highlight gap remains.
+    const withKinds = detectBehaviors(
+      { css: '', js },
+      { sectionKinds: new Set(['tabs', 'slider', 'modal']) },
+    );
+    expect(withKinds.gaps).toHaveLength(1);
+    expect(withKinds.gaps[0].jsExcerpt).toContain('location.pathname');
+    expect(withKinds.gaps[0].jsExcerpt).not.toContain('showModal');
+  });
+
+  it('a kind absent from sectionKinds leaves its driver in the gap report', () => {
+    const js = MODAL_JS + '\n' + GAP_JS;
+    const d = detectBehaviors({ css: '', js }, { sectionKinds: new Set(['tabs']) });
+    expect(d.gaps).toHaveLength(1);
+    expect(d.gaps[0].jsExcerpt).toContain('showModal');
+  });
+});

@@ -12,11 +12,16 @@
 // Unclaimed statements with meaningful (comment-stripped, above-floor) code
 // collapse into ONE `uncatalogued-js` gap with an excerpt — coarse by design;
 // no precise JS slicing is attempted.
+import * as cheerio from 'cheerio';
 import type {
   BehaviorGap,
   DetectedBehaviors,
+  ModalBehavior,
   RevealBehavior,
+  SectionBehavior,
+  SliderBehavior,
   StickyBehavior,
+  TabsBehavior,
 } from '../local-site/types.js';
 
 /** Minimal structural slice of local-theme SourceAssets — a full SourceAssets
@@ -54,6 +59,21 @@ const TOGGLE_CLASS_RE = /classList\.toggle\(\s*['"]([a-zA-Z0-9_-]+)['"]/;
 const SCROLL_OFFSET_RE = /scrollY\s*>\s*([0-9]+)/;
 
 const DEFAULT_STICKY_OFFSET = 8;
+
+// --- B1 per-section behaviors (tabs / slider / modal) -------------------------
+// DOM-pattern-first (spec §4b) over the SECTION's own markup, confirmed by a
+// JS driver in the global source JS (the Plan A both-halves rule: a static
+// pattern without its driver renders its authored state — wrapping it with
+// behavior would CHANGE appearance).
+const CLICK_LISTENER_RE = /addEventListener\s*\(\s*['"]click['"]/;
+const TAB_DRIVER_RE = /\[role=["']tab["']\]/;
+const SHOW_MODAL_RE = /\.showModal\s*\(/;
+const SET_INTERVAL_RE = /setInterval\s*\([^,]*,\s*([0-9]+)\s*\)/;
+/** Slider control wiring: '.next'/'.prev' selectors or data attrs. */
+const SLIDER_CONTROL_RE = /['"][^'"]*\.(?:next|prev)['"]|\[data-(?:next|prev)\]/;
+/** Every classList mutation in the js, in source order — candidates for the
+ * source-authored active class; filtered by presence in the section markup. */
+const CLASS_MUTATION_RE = /classList\.(?:add|remove|toggle)\(\s*['"]([a-zA-Z0-9_-]+)['"]/g;
 
 const EXCERPT_MAX = 200;
 /** Residue below this many comment-stripped chars (total) is noise — license
@@ -215,11 +235,100 @@ function detectSticky(css: string, stickyJs: string): StickyBehavior | undefined
   return { kind: 'sticky', toggleClass, offset };
 }
 
+/** First js classList-mutation class that exists as a class IN the section
+ * markup — ties the driver to THIS section's elements (a tabs section ignores
+ * another section's slider class and vice versa). */
+function activeClassFor($: cheerio.CheerioAPI, js: string): string | undefined {
+  for (const m of js.matchAll(CLASS_MUTATION_RE)) {
+    if ($(`.${m[1]}`).length > 0) return m[1];
+  }
+  return undefined;
+}
+
+/** True when some parent in the section has ≥2 element children sharing a
+ * class — the structural carousel signal (a track of same-class slides). */
+function hasSlideGroup($: cheerio.CheerioAPI): boolean {
+  let found = false;
+  $('*').each((_, el) => {
+    if (found) return;
+    const counts = new Map<string, number>();
+    $(el)
+      .children('[class]')
+      .each((__, child) => {
+        for (const c of ($(child).attr('class') ?? '').split(/\s+/).filter(Boolean)) {
+          const n = (counts.get(c) ?? 0) + 1;
+          counts.set(c, n);
+          if (n >= 2) found = true;
+        }
+      });
+  });
+  return found;
+}
+
+/**
+ * Per-section detection (B1): DOM pattern in the section markup AND a js
+ * driver in the global source. Dispatch order modal → tabs → slider:
+ * most-specific DOM signal first (a tablist also has same-class children;
+ * order keeps it from misreading as a slider).
+ */
+export function detectSectionBehavior(
+  sectionHtml: string,
+  assets: BehaviorSourceAssets,
+): SectionBehavior | undefined {
+  const $ = cheerio.load(sectionHtml);
+  // modal: dialog (or aria-modal) + a trigger button + a showModal driver.
+  if ($('dialog, [aria-modal="true"]').length > 0 && $('button').length > 0) {
+    if (SHOW_MODAL_RE.test(assets.js)) return { kind: 'modal' } satisfies ModalBehavior;
+    return undefined;
+  }
+  // tabs: the full role triad + a click driver that touches [role=tab].
+  if (
+    $('[role="tablist"]').length > 0 &&
+    $('[role="tab"]').length >= 2 &&
+    $('[role="tabpanel"]').length >= 2
+  ) {
+    if (!TAB_DRIVER_RE.test(assets.js) || !CLICK_LISTENER_RE.test(assets.js)) return undefined;
+    const activeClass = activeClassFor($, assets.js) ?? 'is-active';
+    return { kind: 'tabs', activeClass } satisfies TabsBehavior;
+  }
+  // slider: a same-class slide group + controls/autoplay driver, with the
+  // active class proven against this section's markup (the js-driver half).
+  if (hasSlideGroup($)) {
+    const hasControls = SLIDER_CONTROL_RE.test(assets.js);
+    const intervalMatch = SET_INTERVAL_RE.exec(assets.js);
+    if (!hasControls && !intervalMatch) return undefined;
+    const activeClass = activeClassFor($, assets.js);
+    if (!activeClass) return undefined;
+    const slider: SliderBehavior = { kind: 'slider', activeClass };
+    if (intervalMatch) slider.intervalMs = Number(intervalMatch[1]);
+    return slider;
+  }
+  return undefined;
+}
+
+/** Claiming predicates for the per-section kinds — used ONLY for residue
+ * accounting, gated on the kinds the handler actually detected (never-guess:
+ * an undetected kind's driver js stays in the gap report). */
+const SECTION_DRIVER_RES: Record<'tabs' | 'slider' | 'modal', RegExp[]> = {
+  tabs: [TAB_DRIVER_RE],
+  slider: [/setInterval\s*\(/, SLIDER_CONTROL_RE],
+  modal: [SHOW_MODAL_RE, /\bdialog\b/],
+};
+
+export interface DetectBehaviorsOpts {
+  /** Per-section kinds that fired (from compose reports) — their driver
+   * statements are claimed out of the gap residue. */
+  sectionKinds?: Set<'tabs' | 'slider' | 'modal'>;
+}
+
 /**
  * Detect Plan A catalog behaviors in the concatenated source assets.
  * `reveal`/`sticky` keys are present ONLY when detected; `gaps` always is.
  */
-export function detectBehaviors({ css, js }: BehaviorSourceAssets): DetectedBehaviors {
+export function detectBehaviors(
+  { css, js }: BehaviorSourceAssets,
+  opts: DetectBehaviorsOpts = {},
+): DetectedBehaviors {
   const statements = splitTopLevelStatements(js);
 
   // Detect against ONLY the driver statements so params (threshold, toggle
@@ -236,11 +345,21 @@ export function detectBehaviors({ css, js }: BehaviorSourceAssets): DetectedBeha
   const sticky = detectSticky(css, stickyJs);
 
   // A statement is claimed only by a DETECTED behavior — driver JS whose CSS
-  // half is missing stays residue, so the gap report still surfaces it.
+  // half is missing stays residue, so the gap report still surfaces it. The
+  // per-section kinds (tabs/slider/modal) are claimed only when the handler
+  // says their pattern fired somewhere (opts.sectionKinds).
+  const kinds = opts.sectionKinds ?? new Set<never>();
+  const isSectionDriverStatement = (code: string): boolean => {
+    for (const kind of kinds) {
+      if (SECTION_DRIVER_RES[kind].some((re) => re.test(code))) return true;
+    }
+    return false;
+  };
   const residue = statements.filter(
     (s) =>
       !(reveal && isRevealDriverStatement(s.code)) &&
-      !(sticky && isStickyDriverStatement(s.code)),
+      !(sticky && isStickyDriverStatement(s.code)) &&
+      !isSectionDriverStatement(s.code),
   );
   const residueCodeChars = residue.reduce((sum, s) => sum + s.code.length, 0);
   const gaps: BehaviorGap[] =
