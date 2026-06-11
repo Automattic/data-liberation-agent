@@ -1,17 +1,23 @@
 // src/blocks/interactivity-plugin.ts
 //
-// Custom Interactivity-API blocks as DATA (spec §6, Plan A: reveal + sticky).
-// buildInteractivityPlugin() returns a ReplicaBlockPlugin consumed by the
-// existing writeReplicaFilesToHost plugin path + `wp plugin activate`.
+// Custom Interactivity-API blocks as DATA (spec §6 — Plan A: reveal + sticky;
+// B1: tabs + slider + modal). buildInteractivityPlugin() returns a
+// ReplicaBlockPlugin consumed by the existing writeReplicaFilesToHost plugin
+// path + `wp plugin activate`.
 //
 // No build step (verified against WP 7.0 core): block.json viewScriptModule +
 // hand-written ESM view.js. THE LOAD-BEARING DETAIL is view.asset.php — module
 // dependencies come ONLY from that sibling file; without it the frontend
 // import map omits @wordpress/interactivity and the bare import fails.
 //
-// Behavior params (IO threshold, animation, scroll offset) arrive via
-// data-wp-context on the EMITTED MARKUP (emit-blocks/chrome-parts), not via
-// these static files — one plugin serves every site.
+// Behavior params (IO threshold, animation, scroll offset, active classes,
+// autoplay interval) arrive via data-wp-context on the EMITTED MARKUP
+// (emit-blocks/chrome-parts), not via these static files — one plugin serves
+// every site. The B1 blocks (tabs/slider/modal) wrap VERBATIM source markup
+// and drive behavior by toggling SOURCE-AUTHORED classes via the
+// imperative-from-init pattern (root data-wp-init, plain DOM wiring — the
+// dla/sticky precedent); they ship NO style.css because source CSS owns all
+// visuals.
 //
 import type { ReplicaBlockPlugin } from '../lib/preview/types.js';
 
@@ -20,7 +26,7 @@ export const PLUGIN_SLUG = 'dla-interactivity';
 const PLUGIN_PHP = `<?php
 /**
  * Plugin Name: DLA Interactivity Blocks
- * Description: Native Interactivity API blocks emitted by the data-liberation local-site converter (reveal, sticky).
+ * Description: Native Interactivity API blocks emitted by the data-liberation local-site converter (reveal, sticky, tabs, slider, modal).
  * Version: 1.0.0
  * Requires at least: 6.7
  */
@@ -30,6 +36,9 @@ defined( 'ABSPATH' ) || exit;
 add_action( 'init', function () {
     register_block_type( __DIR__ . '/blocks/reveal' );
     register_block_type( __DIR__ . '/blocks/sticky' );
+    register_block_type( __DIR__ . '/blocks/tabs' );
+    register_block_type( __DIR__ . '/blocks/slider' );
+    register_block_type( __DIR__ . '/blocks/modal' );
 } );
 `;
 
@@ -170,6 +179,176 @@ store( 'dla/sticky', {
 } );
 `;
 
+const TABS_BLOCK_JSON =
+  JSON.stringify(
+    {
+      $schema: 'https://schemas.wp.org/trunk/block.json',
+      apiVersion: 3,
+      name: 'dla/tabs',
+      title: 'Tabs Section',
+      category: 'design',
+      description: 'Tabbed section (verbatim source markup; toggles the source-authored active class).',
+      supports: { interactivity: true, html: false },
+      attributes: {
+        anchor: { type: 'string' },
+        className: { type: 'string' },
+        activeClass: { type: 'string', default: 'is-active' },
+      },
+      viewScriptModule: 'file:./view.js',
+    },
+    null,
+    '\t',
+  ) + '\n';
+
+// Imperative-from-init (the dla/sticky precedent): root-only data-wp-init,
+// plain DOM wiring inside callbacks.init — the verbatim inner markup stays
+// untouched (no descendant-directive injection). Source markup is the initial
+// state; select() normalizes roving tabindex/aria from it.
+const TABS_VIEW_JS = `import { store, getContext, getElement } from '@wordpress/interactivity';
+
+store( 'dla/tabs', {
+	callbacks: {
+		init() {
+			const ctx = getContext();
+			const { ref } = getElement();
+			const activeClass = ctx.activeClass ?? 'is-active';
+			const tabs = Array.from( ref.querySelectorAll( '[role="tab"]' ) );
+			const panels = Array.from( ref.querySelectorAll( '[role="tabpanel"]' ) );
+			const panelFor = ( tab, i ) => {
+				const id = tab.getAttribute( 'aria-controls' );
+				return ( id && ref.querySelector( '#' + CSS.escape( id ) ) ) || panels[ i ] || null;
+			};
+			const select = ( idx ) => {
+				tabs.forEach( ( t, i ) => {
+					const on = i === idx;
+					t.classList.toggle( activeClass, on );
+					t.setAttribute( 'aria-selected', on ? 'true' : 'false' );
+					t.tabIndex = on ? 0 : -1;
+					const p = panelFor( t, i );
+					if ( p ) p.hidden = ! on;
+				} );
+			};
+			tabs.forEach( ( t, i ) => {
+				t.addEventListener( 'click', () => select( i ) );
+				t.addEventListener( 'keydown', ( e ) => {
+					if ( e.key !== 'ArrowRight' && e.key !== 'ArrowLeft' ) return;
+					const next = ( i + ( e.key === 'ArrowRight' ? 1 : tabs.length - 1 ) ) % tabs.length;
+					select( next );
+					tabs[ next ].focus();
+				} );
+			} );
+			// Source markup is the initial state; normalize roving tabindex from it.
+			const initial = tabs.findIndex( ( t ) => t.getAttribute( 'aria-selected' ) === 'true' );
+			select( initial >= 0 ? initial : 0 );
+		},
+	},
+} );
+`;
+
+const SLIDER_BLOCK_JSON =
+  JSON.stringify(
+    {
+      $schema: 'https://schemas.wp.org/trunk/block.json',
+      apiVersion: 3,
+      name: 'dla/slider',
+      title: 'Slider Section',
+      category: 'design',
+      description: 'Carousel section (verbatim source markup; moves the source-authored active class).',
+      supports: { interactivity: true, html: false },
+      attributes: {
+        anchor: { type: 'string' },
+        className: { type: 'string' },
+        activeClass: { type: 'string', default: 'is-current' },
+        intervalMs: { type: 'number' },
+      },
+      viewScriptModule: 'file:./view.js',
+    },
+    null,
+    '\t',
+  ) + '\n';
+
+// Slide list derived STRUCTURALLY: the siblings of the element currently
+// carrying activeClass (source markup is the initial state) — no slide-class
+// name list. Autoplay only when the emitted context set intervalMs AND the
+// visitor does not prefer reduced motion; pointer hover pauses it.
+const SLIDER_VIEW_JS = `import { store, getContext, getElement } from '@wordpress/interactivity';
+
+store( 'dla/slider', {
+	callbacks: {
+		init() {
+			const ctx = getContext();
+			const { ref } = getElement();
+			const activeClass = ctx.activeClass ?? 'is-current';
+			const current = ref.querySelector( '.' + CSS.escape( activeClass ) );
+			const list = current ? Array.from( current.parentElement.children ) : [];
+			if ( list.length < 2 ) return;
+			let idx = list.indexOf( current );
+			const go = ( n ) => {
+				list[ idx ].classList.remove( activeClass );
+				idx = ( n + list.length ) % list.length;
+				list[ idx ].classList.add( activeClass );
+			};
+			ref.querySelector( '.next, [data-next]' )?.addEventListener( 'click', () => go( idx + 1 ) );
+			ref.querySelector( '.prev, [data-prev]' )?.addEventListener( 'click', () => go( idx - 1 ) );
+			const reduced = window.matchMedia( '(prefers-reduced-motion: reduce)' ).matches;
+			if ( ctx.intervalMs && ! reduced ) {
+				let timer = setInterval( () => go( idx + 1 ), ctx.intervalMs );
+				ref.addEventListener( 'pointerenter', () => clearInterval( timer ) );
+				ref.addEventListener( 'pointerleave', () => { timer = setInterval( () => go( idx + 1 ), ctx.intervalMs ); } );
+			}
+		},
+	},
+} );
+`;
+
+const MODAL_BLOCK_JSON =
+  JSON.stringify(
+    {
+      $schema: 'https://schemas.wp.org/trunk/block.json',
+      apiVersion: 3,
+      name: 'dla/modal',
+      title: 'Modal Section',
+      category: 'design',
+      description: 'Section with a native dialog modal (verbatim source markup; showModal/close wiring).',
+      supports: { interactivity: true, html: false },
+      attributes: {
+        anchor: { type: 'string' },
+        className: { type: 'string' },
+      },
+      viewScriptModule: 'file:./view.js',
+    },
+    null,
+    '\t',
+  ) + '\n';
+
+// Native <dialog> semantics carry the a11y load (Esc close, focus trap,
+// ::backdrop). withSyncEvent on the backdrop click: data-wp event handlers
+// are async-scheduled by default and dialog.close() relies on synchronous
+// event semantics (WP 7.0 exports withSyncEvent from the interactivity
+// module — verified against a live install).
+const MODAL_VIEW_JS = `import { store, getElement, withSyncEvent } from '@wordpress/interactivity';
+
+store( 'dla/modal', {
+	callbacks: {
+		init() {
+			const { ref } = getElement();
+			const dialog = ref.querySelector( 'dialog' );
+			if ( ! dialog ) return;
+			// Trigger: first button OUTSIDE the dialog within the section.
+			const trigger = Array.from( ref.querySelectorAll( 'button' ) ).find( ( b ) => ! dialog.contains( b ) );
+			trigger?.addEventListener( 'click', () => dialog.showModal() );
+			// Close: any [data-close]/.close button inside; backdrop click closes.
+			dialog.querySelectorAll( '[data-close], .close' ).forEach( ( b ) =>
+				b.addEventListener( 'click', () => dialog.close() )
+			);
+			dialog.addEventListener( 'click', withSyncEvent( ( e ) => {
+				if ( e.target === dialog ) dialog.close(); // backdrop — Esc is native <dialog>
+			} ) );
+		},
+	},
+} );
+`;
+
 export function buildInteractivityPlugin(): ReplicaBlockPlugin {
   return {
     slug: PLUGIN_SLUG,
@@ -182,6 +361,15 @@ export function buildInteractivityPlugin(): ReplicaBlockPlugin {
       { relativePath: 'blocks/sticky/block.json', content: STICKY_BLOCK_JSON },
       { relativePath: 'blocks/sticky/view.js', content: STICKY_VIEW_JS },
       { relativePath: 'blocks/sticky/view.asset.php', content: VIEW_ASSET_PHP },
+      { relativePath: 'blocks/tabs/block.json', content: TABS_BLOCK_JSON },
+      { relativePath: 'blocks/tabs/view.js', content: TABS_VIEW_JS },
+      { relativePath: 'blocks/tabs/view.asset.php', content: VIEW_ASSET_PHP },
+      { relativePath: 'blocks/slider/block.json', content: SLIDER_BLOCK_JSON },
+      { relativePath: 'blocks/slider/view.js', content: SLIDER_VIEW_JS },
+      { relativePath: 'blocks/slider/view.asset.php', content: VIEW_ASSET_PHP },
+      { relativePath: 'blocks/modal/block.json', content: MODAL_BLOCK_JSON },
+      { relativePath: 'blocks/modal/view.js', content: MODAL_VIEW_JS },
+      { relativePath: 'blocks/modal/view.asset.php', content: VIEW_ASSET_PHP },
     ],
   };
 }

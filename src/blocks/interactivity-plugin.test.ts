@@ -5,26 +5,40 @@ const byPath = (files: Array<{ relativePath: string; content: string }>) =>
   Object.fromEntries(files.map((f) => [f.relativePath, f.content]));
 
 describe('buildInteractivityPlugin', () => {
-  it('emits the full file set for both blocks', () => {
+  it('emits the full file set for all five blocks', () => {
     const plugin = buildInteractivityPlugin();
     expect(plugin.slug).toBe(PLUGIN_SLUG);
     const paths = plugin.files.map((f) => f.relativePath).sort();
+    // NO style.css for tabs/slider/modal — source CSS owns all visuals; the
+    // view modules only toggle source-authored classes.
     expect(paths).toEqual([
+      'blocks/modal/block.json',
+      'blocks/modal/view.asset.php',
+      'blocks/modal/view.js',
       'blocks/reveal/block.json',
       'blocks/reveal/style.css',
       'blocks/reveal/view.asset.php',
       'blocks/reveal/view.js',
+      'blocks/slider/block.json',
+      'blocks/slider/view.asset.php',
+      'blocks/slider/view.js',
       'blocks/sticky/block.json',
       'blocks/sticky/view.asset.php',
       'blocks/sticky/view.js',
+      'blocks/tabs/block.json',
+      'blocks/tabs/view.asset.php',
+      'blocks/tabs/view.js',
       'plugin.php',
     ]);
   });
 
-  it('plugin.php registers both block dirs and nothing else dynamic', () => {
+  it('plugin.php registers all five block dirs and nothing else dynamic', () => {
     const php = byPath(buildInteractivityPlugin().files)['plugin.php'];
     expect(php).toContain(`register_block_type( __DIR__ . '/blocks/reveal' )`);
     expect(php).toContain(`register_block_type( __DIR__ . '/blocks/sticky' )`);
+    expect(php).toContain(`register_block_type( __DIR__ . '/blocks/tabs' )`);
+    expect(php).toContain(`register_block_type( __DIR__ . '/blocks/slider' )`);
+    expect(php).toContain(`register_block_type( __DIR__ . '/blocks/modal' )`);
     expect(php).toContain('Plugin Name:');
   });
 
@@ -40,9 +54,37 @@ describe('buildInteractivityPlugin', () => {
     expect(sticky.supports.interactivity).toBe(true);
   });
 
+  it('tabs/slider/modal block.json: interactivity support + viewScriptModule, NO style', () => {
+    const files = byPath(buildInteractivityPlugin().files);
+    const tabs = JSON.parse(files['blocks/tabs/block.json']);
+    expect(tabs.name).toBe('dla/tabs');
+    expect(tabs.supports.interactivity).toBe(true);
+    expect(tabs.viewScriptModule).toBe('file:./view.js');
+    expect(tabs.style).toBeUndefined();
+    expect(tabs.attributes.activeClass.default).toBe('is-active');
+    const slider = JSON.parse(files['blocks/slider/block.json']);
+    expect(slider.name).toBe('dla/slider');
+    expect(slider.supports.interactivity).toBe(true);
+    expect(slider.viewScriptModule).toBe('file:./view.js');
+    expect(slider.style).toBeUndefined();
+    expect(slider.attributes.activeClass.default).toBe('is-current');
+    expect(slider.attributes.intervalMs.type).toBe('number');
+    const modal = JSON.parse(files['blocks/modal/block.json']);
+    expect(modal.name).toBe('dla/modal');
+    expect(modal.supports.interactivity).toBe(true);
+    expect(modal.viewScriptModule).toBe('file:./view.js');
+    expect(modal.style).toBeUndefined();
+  });
+
   it('view.asset.php declares the interactivity module dependency (import-map requirement)', () => {
     const files = byPath(buildInteractivityPlugin().files);
-    for (const p of ['blocks/reveal/view.asset.php', 'blocks/sticky/view.asset.php']) {
+    for (const p of [
+      'blocks/reveal/view.asset.php',
+      'blocks/sticky/view.asset.php',
+      'blocks/tabs/view.asset.php',
+      'blocks/slider/view.asset.php',
+      'blocks/modal/view.asset.php',
+    ]) {
       expect(files[p]).toContain(`'dependencies' => array( '@wordpress/interactivity' )`);
     }
   });
@@ -80,6 +122,39 @@ describe('buildInteractivityPlugin', () => {
     expect(js).toContain(`store( 'dla/sticky'`);
     expect(js).toContain(`closest( 'header' )`);
     expect(js).toContain('scrollY');
+  });
+
+  it('tabs view.js: store namespace, role queries, source class + aria wiring, arrow keys', () => {
+    const js = byPath(buildInteractivityPlugin().files)['blocks/tabs/view.js'];
+    expect(js).toContain(`store( 'dla/tabs'`);
+    expect(js).toContain('ctx.activeClass');
+    expect(js).toContain(`'[role="tab"]'`);
+    expect(js).toContain(`'[role="tabpanel"]'`);
+    expect(js).toContain('aria-selected');
+    expect(js).toContain('aria-controls');
+    expect(js).toContain('ArrowRight');
+    expect(js).toContain('ArrowLeft');
+  });
+
+  it('slider view.js: store namespace, structural slide list, reduced-motion-guarded autoplay', () => {
+    const js = byPath(buildInteractivityPlugin().files)['blocks/slider/view.js'];
+    expect(js).toContain(`store( 'dla/slider'`);
+    expect(js).toContain('ctx.activeClass');
+    expect(js).toContain('ctx.intervalMs');
+    expect(js).toContain('setInterval');
+    expect(js).toContain(`matchMedia( '(prefers-reduced-motion`);
+    expect(js).toContain('.next, [data-next]');
+    expect(js).toContain('.prev, [data-prev]');
+  });
+
+  it('modal view.js: store namespace, native dialog wiring, sync backdrop close', () => {
+    const js = byPath(buildInteractivityPlugin().files)['blocks/modal/view.js'];
+    expect(js).toContain(`store( 'dla/modal'`);
+    expect(js).toContain('showModal');
+    expect(js).toContain('withSyncEvent');
+    expect(js).toContain(`querySelector( 'dialog' )`);
+    expect(js).toContain('[data-close], .close');
+    expect(js).toContain('dialog.close()');
   });
 
   it('is deterministic — two builds emit identical bytes', () => {
