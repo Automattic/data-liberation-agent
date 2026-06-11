@@ -13,6 +13,37 @@ describe('measureSectionCoverage', () => {
     expect(cov.lost).toBe(false);
   });
 
+  it('counts entity-escaped text as covered (& → &amp;)', () => {
+    // The structured renderers emit captured text through escapeHtml, so the
+    // markup carries &amp;/&#039;/&quot; where the captured text has &/'/" —
+    // a raw substring match reads every such text as MISSING and a section
+    // whose texts ALL contain an escapable char measures 0% and islands.
+    const cov = measureSectionCoverage(
+      { texts: ['Pets & Our Mental Health'], imageUrls: [] },
+      '<h3 class="wp-block-heading">Pets &amp; Our Mental Health</h3>',
+    );
+    expect(cov.textCoverage).toBe(1);
+    expect(cov.lost).toBe(false);
+  });
+
+  it("counts entity-escaped apostrophes as covered (' → &#039;)", () => {
+    const cov = measureSectionCoverage(
+      { texts: ["World Men's Day"], imageUrls: [] },
+      '<h2>World Men&#039;s Day</h2>',
+    );
+    expect(cov.textCoverage).toBe(1);
+    expect(cov.lost).toBe(false);
+  });
+
+  it('folds typographic glyph variants (curly captured vs straight emitted)', () => {
+    const cov = measureSectionCoverage(
+      { texts: ['Don’t worry — be happy'], imageUrls: [] },
+      '<p>Don&#039;t worry - be happy</p>',
+    );
+    expect(cov.textCoverage).toBe(1);
+    expect(cov.lost).toBe(false);
+  });
+
   it('flags lost when a captured image is missing from the render (media-first)', () => {
     const cov = measureSectionCoverage(
       { texts: ['Gallery'], imageUrls: ['/wp-content/uploads/a.jpg', '/wp-content/uploads/b.jpg'] },
