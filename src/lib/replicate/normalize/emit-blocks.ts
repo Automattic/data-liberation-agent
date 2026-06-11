@@ -296,6 +296,10 @@ export function emitSectionBlocks(section: Section, opts: EmitSectionOpts = {}):
   // DEVIATION from plan: plan's selector was 'section, article, div' — that
   // misses <main>, causing the fallback section to hit $('body') and then
   // emitChild on the whole <main> element, which downgrades to a paragraph.
+  // TODO(root mis-slice hardening): tag-agnostic resolution — $('body')
+  // .children().first() — so a section rooted in a NON-listed tag (e.g.
+  // <aside>) resolves to itself instead of a nested descendant; pre-existing
+  // limitation shared by all branches, higher stakes for verbatim sections.
   const root = $('section, article, main, div').first();
   const container = root.length ? root : $('body');
 

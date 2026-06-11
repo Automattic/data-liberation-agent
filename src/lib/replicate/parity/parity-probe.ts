@@ -119,6 +119,22 @@ export const FREEZE_MOTION_CSS =
   // stay immune even if a future capture path skips page-helpers.
   'html{scroll-behavior:auto!important}';
 
+/** Clear every pending window interval — the JS sibling of FREEZE_MOTION_CSS.
+ * CSS freezing cannot reach setInterval class-movers (slider autoplay,
+ * tickers): source and replica timers start at their own load instants, so a
+ * settle that crosses the interval boundary on ONE side flips the active
+ * slide and diffs the section (same race class as the reveal/IO capture fix).
+ * Injected AFTER the freeze style on both capture and probe pages — kills
+ * autoplay identically on BOTH sides. Behavior verification lives in the
+ * behavior probe, which asserts autoplay explicitly on live pages WITHOUT
+ * the freeze. String-form evaluate (tsx __name gotcha): self-contained, no
+ * closure captures. The trick: setInterval returns a monotonically increasing
+ * id, so allocating one top id bounds every live timer below it. */
+export const CLEAR_INTERVALS_SCRIPT = `(() => {
+  const top = window.setInterval(() => {}, 9999);
+  for (let i = top; i >= 0; i--) window.clearInterval(i);
+})()`;
+
 const NAME_POLYFILL = `
   if (typeof globalThis.__name === 'undefined') {
     globalThis.__name = function (fn) { return fn; };
@@ -199,6 +215,10 @@ export async function probePair(opts: ProbePairOpts): Promise<Divergence[]> {
       await page.goto(url, { waitUntil: 'networkidle' });
       await page.evaluate('document.fonts.ready');
       await page.addStyleTag({ content: FREEZE_MOTION_CSS });
+      // An interval-moved active class between the source and replica grabs
+      // would diff class-dependent props — same determinism contract as the
+      // capture side (probe-state == capture-state).
+      await page.evaluate(CLEAR_INTERVALS_SCRIPT);
       return snapshotPage(page, opts.regions);
     };
     const source = await grab(opts.sourceUrl);

@@ -1,6 +1,6 @@
 // src/lib/replicate/parity/parity-probe.test.ts
 import { describe, it, expect } from 'vitest';
-import { compareSnapshots, FREEZE_MOTION_CSS, PROP_BATTERY, type ElementSnapshot } from './parity-probe.js';
+import { CLEAR_INTERVALS_SCRIPT, compareSnapshots, FREEZE_MOTION_CSS, PROP_BATTERY, type ElementSnapshot } from './parity-probe.js';
 
 const snap = (over: Partial<ElementSnapshot>): ElementSnapshot => ({
   match: 'section.hero[0]',
@@ -112,5 +112,19 @@ describe('FREEZE_MOTION_CSS', () => {
     // skips page-helpers measures under instant scroll (walrus probe: the
     // restore glide left y=4 + is-scrolled at snap time → 32px header ghost).
     expect(FREEZE_MOTION_CSS).toContain('html{scroll-behavior:auto!important}');
+  });
+});
+
+describe('CLEAR_INTERVALS_SCRIPT', () => {
+  it('clears every pending interval (JS autoplay determinism at capture)', () => {
+    // FREEZE_MOTION_CSS kills CSS motion but not setInterval class-movers
+    // (slider autoplay, tickers): source and replica timers start at their own
+    // load instants, so a settle crossing the interval boundary on ONE side
+    // flips the active slide — the same race class as the reveal/IO fix.
+    // The script allocates a top id and clears every id at or below it.
+    expect(CLEAR_INTERVALS_SCRIPT).toContain('setInterval');
+    expect(CLEAR_INTERVALS_SCRIPT).toContain('clearInterval');
+    // String-form evaluate (tsx __name gotcha): self-contained IIFE.
+    expect(CLEAR_INTERVALS_SCRIPT.trim().startsWith('(() => {')).toBe(true);
   });
 });

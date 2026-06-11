@@ -37,7 +37,7 @@ import { collectSourceAssets, WP_COMPAT_CSS } from '../../lib/replicate/local-th
 import { detectBehaviors } from '../../lib/replicate/normalize/detect-behaviors.js';
 import { buildInteractivityPlugin, PLUGIN_SLUG } from '../../blocks/interactivity-plugin.js';
 import type { DetectedBehaviors } from '../../lib/replicate/local-site/types.js';
-import { FREEZE_MOTION_CSS, probePair, type Divergence } from '../../lib/replicate/parity/parity-probe.js';
+import { CLEAR_INTERVALS_SCRIPT, FREEZE_MOTION_CSS, probePair, type Divergence } from '../../lib/replicate/parity/parity-probe.js';
 import { extractDiffRegions } from '../../lib/replicate/parity/diff-regions.js';
 import { classifyDivergences, renderPatchCss, divergenceFingerprint, type UnresolvedDivergence, type PatchOverride, type RepairPlan } from '../../lib/replicate/parity/parity-classify.js';
 
@@ -151,6 +151,13 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
   // Shared with the parity probe so probe-state == capture-state.
   const freezeMotion = async (page: import('playwright').Page): Promise<void> => {
     await page.addStyleTag({ content: FREEZE_MOTION_CSS });
+    // Kill JS autoplay/tickers identically on BOTH sides: css freezing cannot
+    // reach setInterval class-movers, and source/replica timers start at their
+    // own load instants — a settle crossing the interval boundary on one side
+    // flips the active slide (slider autoplay). Behavior verification lives in
+    // the behavior probe, which asserts autoplay on live pages WITHOUT the
+    // freeze. String-form evaluate (tsx __name gotcha).
+    await page.evaluate(CLEAR_INTERVALS_SCRIPT);
   };
 
   if (!skipDesign) {
