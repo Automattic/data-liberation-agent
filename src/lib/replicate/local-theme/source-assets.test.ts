@@ -97,3 +97,46 @@ describe('collectSourceAssets', () => {
     }
   });
 });
+
+describe('collectSourceAssets: inline scripts (JS-rendered sites)', () => {
+  it('carries inline script bodies wrapped in per-chunk try/catch IIFEs, after linked js', () => {
+    const dir = mkdtempSync(join(FIXTURE_TMP, 'sa-inline-'));
+    try {
+      writeFileSync(join(dir, 'app.js'), 'window.app = true;');
+      const html = `<html><body><script src="app.js"></script><script>mountGrid('#grid', items(4));</script></body></html>`;
+      writeFileSync(join(dir, 'index.html'), html);
+      const out = collectSourceAssets(dir, [{ relPath: 'index.html', html }]);
+      expect(out.js).toContain('window.app = true;');
+      expect(out.js).toContain("mountGrid('#grid', items(4));");
+      // Per-chunk isolation: a page-scoped mount call missing its target on
+      // another page must not break the rest of the carried bundle.
+      expect(out.js).toContain('try {');
+      expect(out.js).toContain('} catch');
+      // Linked js precedes inline mounts (document order within the page).
+      expect(out.js.indexOf('window.app')).toBeLessThan(out.js.indexOf('mountGrid'));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('dedupes identical inline scripts across pages and skips src-bearing tags', () => {
+    const dir = mkdtempSync(join(FIXTURE_TMP, 'sa-inline2-'));
+    try {
+      writeFileSync(join(dir, 'lib.js'), 'lib();');
+      const inline = `<script>initChrome();</script>`;
+      const a = `<html><body><script src="lib.js"></script>${inline}</body></html>`;
+      const b = `<html><body><script src="lib.js"></script>${inline}<script>pageOnly();</script></body></html>`;
+      writeFileSync(join(dir, 'a.html'), a);
+      writeFileSync(join(dir, 'b.html'), b);
+      const out = collectSourceAssets(dir, [
+        { relPath: 'a.html', html: a },
+        { relPath: 'b.html', html: b },
+      ]);
+      expect((out.js.match(/initChrome\(\);/g) ?? []).length).toBe(1);
+      expect(out.js).toContain('pageOnly();');
+      expect((out.js.match(/lib\(\);/g) ?? []).length).toBe(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

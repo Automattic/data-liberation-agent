@@ -209,6 +209,35 @@ function emitChild($: CheerioAPI, el: Element): ChildResult {
     };
   }
 
+  // Id-bearing unknown wrappers survive as anchored group divs with their
+  // children recursed — NOT text-downgraded. JS-rendered sites hang runtime
+  // mounts off ids (`<div id="newestGrid">` filled by a carried mount script);
+  // the downgrade destroyed the id, so the carried JS had nothing to target
+  // (maison-clouet dogfood). Empty mounts stay empty (and clean: nothing was
+  // lost); populated ones recurse through the normal emitters.
+  const elId = $el.attr('id');
+  if (elId) {
+    const childResults = $el
+      .children()
+      .toArray()
+      .map((c) => emitChild($, c));
+    const inner = childResults.map((r) => r.markup).filter(Boolean).join('\n');
+    const looseText = $el.clone().children().remove().end().text().trim();
+    const loosePara = looseText && childResults.length === 0 ? paragraphBlock(escapeHtml(looseText)) : '';
+    const cls = classNameOf($el);
+    const wrapPairs = [`"anchor":${attrJson(elId)}`, '"tagName":"div"'];
+    const wrapAttrs = blockAttrs(wrapPairs, cls);
+    const divCls = ['wp-block-group', cls].filter(Boolean).join(' ');
+    const body = [inner, loosePara].filter(Boolean).join('\n');
+    return {
+      markup:
+        `<!-- wp:group ${wrapAttrs} -->\n` +
+        `<div id="${escapeHtml(elId)}" class="${escapeHtml(divCls)}">${body ? `\n${body}\n` : ''}</div>\n` +
+        `<!-- /wp:group -->`,
+      clean: childResults.every((r) => r.clean) && !(looseText && childResults.length > 0),
+    };
+  }
+
   // Rescue img descendants before the catch-all downgrade — an unknown
   // wrapper (e.g. <figure>) flattened to a text paragraph would silently
   // lose its image URLs ("never lose source content").
@@ -269,7 +298,12 @@ function verbatimBehaviorMarkup(
   if (b.kind === 'tabs' || b.kind === 'slider') {
     pairs.push(`"activeClass":${attrJson(b.activeClass)}`);
     ctxPairs.push(`"activeClass":${attrJson(b.activeClass)}`);
-    if (b.kind === 'slider' && b.intervalMs !== undefined) {
+    // TRUTHY gate (not !== undefined): detection can yield intervalMs 0
+    // (SET_INTERVAL_RE matches setInterval(poll, 0) anywhere in source js);
+    // view.js treats 0 as no-autoplay and the editor save() omits falsy
+    // intervalMs — emitting 0 here would drift save() from this markup and
+    // invalidate the block (B2 review residual).
+    if (b.kind === 'slider' && b.intervalMs) {
       pairs.push(`"intervalMs":${JSON.stringify(b.intervalMs)}`);
       ctxPairs.push(`"intervalMs":${JSON.stringify(b.intervalMs)}`);
     }

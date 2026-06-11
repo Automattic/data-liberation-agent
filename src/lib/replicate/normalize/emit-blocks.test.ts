@@ -464,3 +464,59 @@ describe('verbatim behavior sections on the carry path (behaviorWrapper: group)'
     expect(markup).toContain('data-wp-interactive="dla/tabs"');
   });
 });
+
+describe('id-preserving unknown wrappers (JS-rendered sites)', () => {
+  it('an unknown div WITH id becomes an anchored group div with recursed children', () => {
+    const section = {
+      id: 'arrivals',
+      role: 'body' as const,
+      html: '<section id="arrivals"><h2>Just landed</h2><div id="newestGrid" class="obj-grid"><p>One</p><p>Two</p></div></section>',
+    };
+    const { markup } = emitSectionBlocks(section);
+    // The mount wrapper survives with its id (carried JS re-renders into it).
+    expect(markup).toContain('"anchor":"newestGrid"');
+    expect(markup).toContain('<div id="newestGrid" class="wp-block-group obj-grid">');
+    expect(markup).toContain('"tagName":"div"');
+    // Children recurse through the normal emitters, not a text downgrade.
+    expect(markup).toContain('<!-- wp:paragraph -->');
+    expect(markup).toContain('One');
+  });
+
+  it('an EMPTY mount div with id is preserved as an empty anchored group', () => {
+    const section = {
+      id: 'arrivals',
+      role: 'body' as const,
+      html: '<section id="arrivals"><h2>Just landed</h2><div id="newestGrid" class="obj-grid obj-grid--4"></div></section>',
+    };
+    const { markup, confidence } = emitSectionBlocks(section);
+    expect(markup).toContain('"anchor":"newestGrid"');
+    expect(markup).toContain('<div id="newestGrid" class="wp-block-group obj-grid obj-grid--4"></div>');
+    expect(confidence).toBe(1); // structural preservation, nothing lost
+  });
+
+  it('an unknown div WITHOUT id keeps the existing downgrade path (regression)', () => {
+    const section = {
+      id: 's',
+      role: 'body' as const,
+      html: '<section id="s"><div class="mystery">Loose text</div></section>',
+    };
+    const { markup, confidence } = emitSectionBlocks(section);
+    expect(markup).toContain('Loose text');
+    expect(markup).not.toContain('"anchor":"mystery"');
+    expect(confidence).toBeLessThan(1);
+  });
+});
+
+describe('slider context intervalMs gate (B2 review residual)', () => {
+  it('intervalMs 0 is never emitted into context (editor save omits it too)', () => {
+    const section = {
+      id: 'quotes',
+      role: 'body' as const,
+      html: '<section id="quotes"><div class="track"><figure class="slide is-current"><p>A</p></figure><figure class="slide"><p>B</p></figure></div></section>',
+      behavior: { kind: 'slider' as const, activeClass: 'is-current', intervalMs: 0 },
+    };
+    const { markup } = emitSectionBlocks(section);
+    expect(markup).toContain('data-wp-interactive="dla/slider"');
+    expect(markup).not.toContain('intervalMs');
+  });
+});

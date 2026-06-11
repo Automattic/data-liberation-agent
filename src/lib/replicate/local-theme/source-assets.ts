@@ -139,6 +139,25 @@ export function collectSourceAssets(
     }
   }
 
+  // Inline <script> blocks (no src) — JS-rendered sites put their MOUNT calls
+  // here (`mountGrid('#grid', …)` at body end), and dropping them leaves the
+  // carried linked libraries with nothing to invoke them (maison-clouet
+  // dogfood: grids stayed empty). Page-scoped like inline styles, so each
+  // chunk is isolated in a try/catch IIFE: a mount call whose target only
+  // exists on ONE page must not throw and kill the rest of the bundle on the
+  // others. Appended AFTER linked js (document order within a page — mounts
+  // follow the libraries they call).
+  const seenInlineJs = new Set<string>();
+  for (const html of pageHtmls) {
+    for (const m of html.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/gi)) {
+      const body = m[1].trim();
+      if (body && !seenInlineJs.has(body)) {
+        seenInlineJs.add(body);
+        jsParts.push(`(function () { try {\n${body}\n} catch (e) { /* page-scoped inline chunk */ } })();`);
+      }
+    }
+  }
+
   // Strip Google-Fonts @imports AFTER concat: WP_COMPAT_CSS contains no @imports
   // so startsWith(WP_COMPAT_CSS) is preserved; Google imports only exist in cssParts.
   const css = (WP_COMPAT_CSS + cssParts.join('\n\n')).replace(GOOGLE_IMPORT_RE, '');
