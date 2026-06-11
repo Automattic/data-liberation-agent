@@ -235,11 +235,24 @@ function detectSticky(css: string, stickyJs: string): StickyBehavior | undefined
   return { kind: 'sticky', toggleClass, offset };
 }
 
-/** First js classList-mutation class that exists as a class IN the section
- * markup — ties the driver to THIS section's elements (a tabs section ignores
- * another section's slider class and vice versa). */
-function activeClassFor($: cheerio.CheerioAPI, js: string): string | undefined {
-  for (const m of js.matchAll(CLASS_MUTATION_RE)) {
+/** First classList-mutation class that exists as a class IN the section
+ * markup, scanning ONLY statements that match the kind's own driver regexes —
+ * double tie (driver statement AND section markup). A whole-js scan was
+ * defeated by one stray class: a static `is-active` badge in a card section
+ * plus an unrelated `setInterval(updateClock, 1000)` produced a false slider
+ * that would reshuffle real content every second (review probe E). Scoping
+ * the class search to driver statements removes both that and the
+ * cross-section wrong-param capture (probe B). */
+function activeClassFor(
+  $: cheerio.CheerioAPI,
+  js: string,
+  driverRes: RegExp[],
+): string | undefined {
+  const driverJs = splitTopLevelStatements(js)
+    .filter((s) => driverRes.some((re) => re.test(s.code)))
+    .map((s) => s.code)
+    .join('\n');
+  for (const m of driverJs.matchAll(CLASS_MUTATION_RE)) {
     if ($(`.${m[1]}`).length > 0) return m[1];
   }
   return undefined;
@@ -277,6 +290,12 @@ export function detectSectionBehavior(
 ): SectionBehavior | undefined {
   const $ = cheerio.load(sectionHtml);
   // modal: dialog (or aria-modal) + a trigger button + a showModal driver.
+  // Driverless dialog returns undefined EARLY (no fall-through to tabs/
+  // slider): early-return fails toward UNTAGGED — the static markup renders
+  // its authored state — whereas falling through could mis-tag the section.
+  // Rare loss case (decorative driverless dialog suppressing real tabs in
+  // the SAME section) stays honest: the tabs driver js lands in the gap
+  // report when tabs fired nowhere else.
   if ($('dialog, [aria-modal="true"]').length > 0 && $('button').length > 0) {
     if (SHOW_MODAL_RE.test(assets.js)) return { kind: 'modal' } satisfies ModalBehavior;
     return undefined;
@@ -288,16 +307,17 @@ export function detectSectionBehavior(
     $('[role="tabpanel"]').length >= 2
   ) {
     if (!TAB_DRIVER_RE.test(assets.js) || !CLICK_LISTENER_RE.test(assets.js)) return undefined;
-    const activeClass = activeClassFor($, assets.js) ?? 'is-active';
+    const activeClass = activeClassFor($, assets.js, [TAB_DRIVER_RE]) ?? 'is-active';
     return { kind: 'tabs', activeClass } satisfies TabsBehavior;
   }
   // slider: a same-class slide group + controls/autoplay driver, with the
-  // active class proven against this section's markup (the js-driver half).
+  // active class proven against BOTH a slider-driver statement and this
+  // section's markup (the double tie — see activeClassFor).
   if (hasSlideGroup($)) {
     const hasControls = SLIDER_CONTROL_RE.test(assets.js);
     const intervalMatch = SET_INTERVAL_RE.exec(assets.js);
     if (!hasControls && !intervalMatch) return undefined;
-    const activeClass = activeClassFor($, assets.js);
+    const activeClass = activeClassFor($, assets.js, [SLIDER_CONTROL_RE, SET_INTERVAL_RE]);
     if (!activeClass) return undefined;
     const slider: SliderBehavior = { kind: 'slider', activeClass };
     if (intervalMatch) slider.intervalMs = Number(intervalMatch[1]);
@@ -309,10 +329,15 @@ export function detectSectionBehavior(
 /** Claiming predicates for the per-section kinds — used ONLY for residue
  * accounting, gated on the kinds the handler actually detected (never-guess:
  * an undetected kind's driver js stays in the gap report). */
+/** NOTE bounded over-claim (mirrors OBSERVE_CALL_RE's accepted narrowness):
+ * once slider fires, a bystander `setInterval(updateClock, 1000)` statement
+ * is claimed too — the gap COUNT survives, its content is partial. Modal
+ * claiming is showModal-only (a bare "dialog" mention proved too broad —
+ * review probe F claimed an analytics string). */
 const SECTION_DRIVER_RES: Record<'tabs' | 'slider' | 'modal', RegExp[]> = {
   tabs: [TAB_DRIVER_RE],
   slider: [/setInterval\s*\(/, SLIDER_CONTROL_RE],
-  modal: [SHOW_MODAL_RE, /\bdialog\b/],
+  modal: [SHOW_MODAL_RE],
 };
 
 export interface DetectBehaviorsOpts {

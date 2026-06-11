@@ -183,3 +183,22 @@ describe('detectBehaviors sectionKinds claiming', () => {
     expect(d.gaps[0].jsExcerpt).toContain('showModal');
   });
 });
+
+describe('driver-scoped activeClass tie (review probes B + E)', () => {
+  it('stray static class + unrelated interval do not produce a false slider', () => {
+    const cardHtml = `<section id="cards"><div class="grid">
+      <div class="card">A <span class="is-active">badge</span></div>
+      <div class="card">B</div></div></section>`;
+    const js = TABS_JS + `\nsetInterval(updateClock, 1000);`;
+    expect(detectSectionBehavior(cardHtml, { css: '', js })).toBeUndefined();
+  });
+
+  it('tabs section with a stray slider class still reads its own driver class', () => {
+    const tabsWithStray = TABS_HTML.replace('<p>Alpha</p>', '<p class="is-current">Alpha</p>');
+    const js = SLIDER_JS + '\n' + TABS_JS; // slider mutations FIRST in source order
+    expect(detectSectionBehavior(tabsWithStray, { css: '', js })).toEqual({
+      kind: 'tabs',
+      activeClass: 'is-active',
+    });
+  });
+});
