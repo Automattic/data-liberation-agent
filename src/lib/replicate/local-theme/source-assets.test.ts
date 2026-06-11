@@ -140,3 +140,42 @@ describe('collectSourceAssets: inline scripts (JS-rendered sites)', () => {
     }
   });
 });
+
+describe('collectSourceAssets: unlinked fallback gating (stale-revision pollution)', () => {
+  it('skips unlinked top-level css/js when LINKED assets exist (reports them)', () => {
+    const dir = mkdtempSync(join(FIXTURE_TMP, 'sa-stale-'));
+    try {
+      mkdirSync(join(dir, 'assets'), { recursive: true });
+      writeFileSync(join(dir, 'assets', 'site.css'), '.display{color:#1c2733}');
+      writeFileSync(join(dir, 'style.css'), '.display{color:#f3ecdd}'); // stale variant
+      writeFileSync(join(dir, 'assets', 'site.js'), 'live();');
+      writeFileSync(join(dir, 'old.js'), 'stale();');
+      const html = `<html><head><link rel="stylesheet" href="assets/site.css"></head><body><script src="assets/site.js"></script></body></html>`;
+      writeFileSync(join(dir, 'index.html'), html);
+      const out = collectSourceAssets(dir, [{ relPath: 'index.html', html }]);
+      expect(out.css).toContain('#1c2733');
+      expect(out.css).not.toContain('#f3ecdd');
+      expect(out.js).toContain('live();');
+      expect(out.js).not.toContain('stale();');
+      expect(out.skippedUnlinked).toEqual(['old.js', 'style.css']);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('still falls back to unlinked assets when NO linked ones exist (regression)', () => {
+    const dir = mkdtempSync(join(FIXTURE_TMP, 'sa-nofall-'));
+    try {
+      writeFileSync(join(dir, 'style.css'), 'body{margin:0}');
+      writeFileSync(join(dir, 'app.js'), 'boot();');
+      const html = `<html><body><p>hi</p></body></html>`;
+      writeFileSync(join(dir, 'index.html'), html);
+      const out = collectSourceAssets(dir, [{ relPath: 'index.html', html }]);
+      expect(out.css).toContain('margin:0');
+      expect(out.js).toContain('boot();');
+      expect(out.skippedUnlinked).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

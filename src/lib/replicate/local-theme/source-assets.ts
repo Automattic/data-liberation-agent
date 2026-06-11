@@ -60,6 +60,9 @@ export interface SourceAssets {
   /** Relative paths (subdir-aware) in concatenation order. */
   cssFiles: string[];
   jsFiles: string[];
+  /** Top-level files SKIPPED because linked assets exist (stale-revision
+   * protection — see the pass-2 comment). Surface as a warning upstream. */
+  skippedUnlinked: string[];
 }
 
 export function collectSourceAssets(
@@ -113,12 +116,31 @@ export function collectSourceAssets(
 
   // Pass 2: top-level unlinked .css/.js fallback (alphabetical, skip already
   // linked) — catches assets the capture saved but no surviving page references.
+  // GATED per type on pass 1 finding NOTHING: when linked assets exist, an
+  // unlinked top-level file is working clutter (maison-clouet: a stale
+  // style.css revision appended AFTER the real assets/site.css won the cascade
+  // and repainted the replica with rules the source never loads). Skipped
+  // files are reported so the handler can surface them.
+  const skippedUnlinked: string[] = [];
+  // Snapshot the LINKED counts before the loop — the gate must not trip on
+  // fallback files added by this very loop (multiple unlinked files in the
+  // no-linked case all collect, as before).
+  const linkedCssCount = cssFiles.length;
+  const linkedJsCount = jsFiles.length;
   for (const name of readdirSync(dir).sort()) {
     if (name.endsWith('.css') && !seenCss.has(name)) {
+      if (linkedCssCount > 0) {
+        skippedUnlinked.push(name);
+        continue;
+      }
       seenCss.add(name);
       cssFiles.push(name);
       cssParts.push(readFileSync(join(dir, name), 'utf8'));
     } else if (name.endsWith('.js') && !seenJs.has(name)) {
+      if (linkedJsCount > 0) {
+        skippedUnlinked.push(name);
+        continue;
+      }
       seenJs.add(name);
       jsFiles.push(name);
       jsParts.push(readFileSync(join(dir, name), 'utf8'));
@@ -161,5 +183,5 @@ export function collectSourceAssets(
   // Strip Google-Fonts @imports AFTER concat: WP_COMPAT_CSS contains no @imports
   // so startsWith(WP_COMPAT_CSS) is preserved; Google imports only exist in cssParts.
   const css = (WP_COMPAT_CSS + cssParts.join('\n\n')).replace(GOOGLE_IMPORT_RE, '');
-  return { css, js: jsParts.join('\n\n'), cssFiles, jsFiles };
+  return { css, js: jsParts.join('\n\n'), cssFiles, jsFiles, skippedUnlinked };
 }

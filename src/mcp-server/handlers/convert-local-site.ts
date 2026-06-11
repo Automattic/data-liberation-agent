@@ -228,6 +228,11 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
   let behaviors: DetectedBehaviors | undefined;
   if (carryCss || carryJs || nativeBehaviors) {
     const assets = collectSourceAssets(dir, site.pages.map((p) => ({ relPath: p.relPath, html: p.html })));
+    if (assets.skippedUnlinked.length > 0) {
+      warnings.push(
+        `unlinked top-level assets skipped (linked assets exist; stale-revision protection): ${assets.skippedUnlinked.join(', ')}`,
+      );
+    }
     if (carryCss || carryJs) {
       // Splice the localized Google-font css (verbatim subsets, local URLs)
       // right after the compat layer — same cascade position the stripped
