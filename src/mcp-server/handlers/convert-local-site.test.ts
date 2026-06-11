@@ -672,6 +672,65 @@ describe('convertLocalSiteHandler', () => {
     }
   });
 
+  it('repair loop: height-only failure breaks without clobbering a prior patch and is reported', async () => {
+    const dir = makeSite();
+    const sitePath = makeStudioSite();
+    const outDir = mkdtempSync(join(FIXTURE_TMP, 'cls-heightonly-'));
+    try {
+      repairReplicaManifestEntries = { 'http://localhost:7777/': { slug: 'home' } };
+      repairDiffPng = makeRedDiffPng();
+      // A prior run left a WORKING patch in the live theme — the height-only
+      // round must NOT overwrite it with empty bytes.
+      const themePatchPath = join(sitePath, 'wp-content', 'themes', 'acme-local', 'assets', 'css', 'parity-patch.css');
+      mkdirSync(join(sitePath, 'wp-content', 'themes', 'acme-local', 'assets', 'css'), { recursive: true });
+      writeFileSync(themePatchPath, 'section.hero { margin-bottom: 88px; }\n');
+      // Perfect pixel scores both viewports; desktop fails ONLY on height —
+      // the dropped content sits below the min-crop, so there are no diff
+      // pixels and nothing for the probe to measure.
+      const HEIGHT_ONLY_COMPARE = {
+        version: 1 as const, comparedAt: 'TEST',
+        results: [{
+          pathname: '/', originUrl: 'o', replicaUrl: 'http://localhost:7777/',
+          desktop: { status: 'ok', score: 1.0, heightDelta: 40, heightPass: false },
+          mobile: { status: 'ok', score: 1.0, heightDelta: 0, heightPass: true },
+        }],
+      };
+      vi.mocked(compareScreenshotDirs)
+        .mockResolvedValueOnce(HEIGHT_ONLY_COMPARE as unknown as Awaited<ReturnType<typeof compareScreenshotDirs>>);
+
+      const res = await convertLocalSiteHandler(
+        { dir, studioSitePath: sitePath, outputDir: outDir, themeSlug: 'acme-local', siteTitle: 'Acme' },
+        ctx,
+      );
+      expect(res.isError).toBeFalsy();
+      const summary = JSON.parse(res.content[0].text) as {
+        parity?: {
+          allPass: boolean;
+          repair?: { rounds: number; overrides: number; converged: boolean; heightOnly?: string[] };
+        };
+        warnings: string[];
+      };
+      // The page fails (height folds into passes) but nothing is probeable.
+      expect(summary.parity?.allPass).toBe(false);
+      expect(vi.mocked(probePair)).not.toHaveBeenCalled();
+      // Loop broke before the patch write: the prior working patch survives
+      // and no empty patch lands in outputDir.
+      expect(readFileSync(themePatchPath, 'utf8')).toContain('margin-bottom: 88px');
+      expect(existsSync(join(outDir, 'parity-patch.css'))).toBe(false);
+      // Honest reporting: zero completed rounds, the failure named explicitly.
+      expect(summary.parity?.repair?.converged).toBe(false);
+      expect(summary.parity?.repair?.rounds).toBe(0);
+      expect(summary.parity?.repair?.heightOnly).toEqual(['/ desktop']);
+      expect(summary.warnings.some((w) => w.includes('height-only'))).toBe(true);
+      // No wasted re-capture: source (0) + replica round-0 (1) only.
+      expect(capturedRuns).toHaveLength(2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(sitePath, { recursive: true, force: true });
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
   it('repair loop stops on unchanged fingerprint and reports unresolved (stuck)', async () => {
     const dir = makeSite();
     const sitePath = makeStudioSite();

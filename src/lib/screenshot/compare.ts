@@ -47,7 +47,11 @@ export interface ViewportScore {
   heightPass?: boolean;
 }
 
-/** Default height-gate tolerance (px) — BDC survey co-gate value. */
+/** Default height-gate tolerance (px) — BDC survey co-gate value.
+ * NOTE: measured in CAPTURE-space px (the decoded PNG heights), so the
+ * effective CSS-px tolerance varies with deviceScaleFactor: desktop captures
+ * at 0.7 → ~11.4 CSS px, mobile at 1.0 → 8 CSS px. Acceptable asymmetry;
+ * callers needing a uniform CSS tolerance can pass maxHeightDelta scaled. */
 export const DEFAULT_MAX_HEIGHT_DELTA = 8;
 
 export interface ComparisonResult {

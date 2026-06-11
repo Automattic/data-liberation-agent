@@ -653,6 +653,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           replicaDir: { type: 'string', description: 'Replica screenshots dir, same layout. comparison.json + diff/ are written here.' },
           viewports: { type: 'array', items: { type: 'string', enum: ['desktop', 'mobile'] }, description: 'Viewports to score. Default: both.' },
           diffOutputDir: { type: 'string', description: 'Where to write diff PNGs. Default: <replicaDir>/diff.' },
+          floor: { type: 'number', description: 'Pass/fail score floor used for repair-tasks.json records. Default 0.99.' },
+          maxHeightDelta: { type: 'number', description: 'Height-gate tolerance in capture px (pre-crop |originH - replicaH|). Default 8.' },
         },
         required: ['originDir', 'replicaDir'],
       },

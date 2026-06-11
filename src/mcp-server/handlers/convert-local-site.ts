@@ -506,8 +506,15 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
         allPass: boolean;
         avgDesktop: number;
         avgMobile: number;
-        pages: Array<{ pathname: string; desktop: number | null; mobile: number | null; passes: boolean }>;
-        repair?: { rounds: number; overrides: number; unresolved: UnresolvedDivergence[]; converged: boolean };
+        pages: Array<{
+          pathname: string;
+          desktop: number | null;
+          mobile: number | null;
+          desktopHeightPass?: boolean;
+          mobileHeightPass?: boolean;
+          passes: boolean;
+        }>;
+        repair?: { rounds: number; overrides: number; unresolved: UnresolvedDivergence[]; converged: boolean; heightOnly?: string[] };
       }
     | undefined;
   if (!skipDesign && !skipCompare && designCaptured) {
@@ -533,11 +540,15 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
           pathname: r.pathname,
           desktop: d,
           mobile: m,
+          // heightPass carried per viewport so the repair loop can tell a
+          // height-only failure (no diff pixels inside the cropped diff —
+          // nothing probeable) apart from a pixel failure it can patch.
+          desktopHeightPass: r.desktop?.heightPass,
+          mobileHeightPass: r.mobile?.heightPass,
           // Height gate folds INTO passes (`!== false` keeps older
           // comparison.json / mocks without the field passing — production
-          // scoring always sets it on ok viewports). A height-fail page that
-          // enters the repair loop is correct behavior: its divergences
-          // classify structural (missing elements) → reported, not patched.
+          // scoring always sets it on ok viewports). Height-only failures are
+          // surfaced by the repair loop as repair.heightOnly, never patched.
           passes:
             d !== null && m !== null && d >= PARITY_FLOOR && m >= PARITY_FLOOR &&
             r.desktop?.heightPass !== false && r.mobile?.heightPass !== false,
@@ -577,6 +588,11 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
     let converged = false;
     const allOverrides = new Map<string, PatchOverride>();
     let allUnresolved: UnresolvedDivergence[] = [];
+    // Height-only failures: score ≥ floor but heightPass false — the missing
+    // content lives BELOW the min-crop, so the diff PNG carries no red pixels
+    // and the probe has nothing to measure. Reported, never patched.
+    // Replacement semantics (current state), like allUnresolved.
+    let heightOnly: string[] = [];
 
     // TypeScript needs a local non-nullable reference for the loop (parity is
     // let and may be reassigned inside, preventing narrowing in the while cond).
@@ -584,6 +600,7 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
 
     while (!currentParity.allPass && rounds < maxRepairRounds) {
       const failingPages = currentParity.pages.filter((fp) => !fp.passes);
+      heightOnly = []; // rebuilt each round — reflects the CURRENT failing set
 
       // 1. Read replica manifest to resolve pathname → slug for diff-PNG paths.
       const manifestByPathname = new Map<string, string>();
@@ -625,7 +642,15 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
 
           for (const vp of ['desktop', 'mobile'] as const) {
             const score = failPage[vp];
-            if (score !== null && score >= PARITY_FLOOR) continue; // this viewport passes
+            const vpHeightPass = vp === 'desktop' ? failPage.desktopHeightPass : failPage.mobileHeightPass;
+            if (score !== null && score >= PARITY_FLOOR) {
+              // Pixel-passing viewport. If it failed ONLY on height, record it:
+              // the dropped content sits below the min-crop, the diff PNG has
+              // no red pixels, and the probe would measure nothing — patching
+              // cannot help; the failure must still be visible in the summary.
+              if (vpHeightPass === false) heightOnly.push(`${failPage.pathname} ${vp}`);
+              continue;
+            }
 
             const diffPath = join(replicaCaptureDir, 'screenshots', 'diff', `${slug}.${vp}.diff.png`);
             if (!existsSync(diffPath)) continue;
@@ -705,6 +730,19 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
         ),
         unresolved: allUnresolved,
       };
+      // Nothing deterministically patchable: height-only failures yield no
+      // diff pixels (content below the crop), structural-only rounds yield no
+      // overrides. Writing here would CLOBBER a prior run's working patch with
+      // empty bytes, and the forced re-capture would be pure waste — break and
+      // report instead (heightOnly + unresolved carry the honest reasons).
+      if (mergedPlan.overrides.length === 0) {
+        if (heightOnly.length > 0) {
+          warnings.push(
+            `repair: height-only failures (content lost below the crop; not deterministically patchable): ${heightOnly.join(', ')}`,
+          );
+        }
+        break;
+      }
       const patchCss = renderPatchCss(mergedPlan);
 
       // 5. Write patch into live theme + output dir (atomic).
@@ -744,6 +782,9 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
             pathname: r.pathname,
             desktop: d,
             mobile: m,
+            // Carried so the NEXT round can still tell height-only failures apart.
+            desktopHeightPass: r.desktop?.heightPass,
+            mobileHeightPass: r.mobile?.heightPass,
             // Same heightPass fold as round 0 (see the parityPages comment).
             passes:
               d !== null && m !== null && d >= PARITY_FLOOR && m >= PARITY_FLOOR &&
@@ -778,7 +819,16 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
 
     parity = {
       ...currentParity,
-      repair: { rounds, overrides: allOverrides.size, unresolved: allUnresolved, converged },
+      repair: {
+        rounds,
+        overrides: allOverrides.size,
+        unresolved: allUnresolved,
+        converged,
+        // Present only when height-only failures exist — pages the loop can
+        // never fix (no probeable diff pixels); the honest companion to
+        // converged:false in that case.
+        ...(heightOnly.length > 0 ? { heightOnly } : {}),
+      },
     };
   }
 
