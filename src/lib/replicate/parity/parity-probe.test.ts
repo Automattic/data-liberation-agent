@@ -106,4 +106,11 @@ describe('FREEZE_MOTION_CSS', () => {
     expect(FREEZE_MOTION_CSS).toContain('.dla-reveal-js .wp-block-dla-reveal{opacity:1!important;transform:none!important}');
     expect(FREEZE_MOTION_CSS).toContain('transition:none!important;animation:none!important');
   });
+
+  it('neutralizes css smooth-scroll so captures/probes cannot race a scroll glide', () => {
+    // Belt to the helpers' explicit-instant scrollTo: even a capture path that
+    // skips page-helpers measures under instant scroll (walrus probe: the
+    // restore glide left y=4 + is-scrolled at snap time → 32px header ghost).
+    expect(FREEZE_MOTION_CSS).toContain('html{scroll-behavior:auto!important}');
+  });
 });

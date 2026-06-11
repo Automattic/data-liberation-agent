@@ -89,6 +89,21 @@ describe('triggerLazyLoad', () => {
     expect(page.evaluate).toHaveBeenCalled();
   });
 
+  it('all in-page scrollTo calls are explicit-instant (smooth-scroll glide immunity)', async () => {
+    // html{scroll-behavior:smooth} makes a bare scrollTo GLIDE: the restore
+    // scrollTo(0,0) was still mid-glide (y=4, is-scrolled on) when the snap
+    // fired — scroll-reactive chrome captured compressed. Explicit
+    // behavior:'instant' overrides the css per spec. Lock all three call
+    // sites (step loop, bottom jump, top restore) via the evaluate-arg source.
+    const page = makePage();
+    await triggerLazyLoad(page as never);
+    const sources = page.evaluate.mock.calls.map((c) => String(c[0])).join('\n');
+    const instants = sources.match(/behavior:\s*['"]instant['"]/g) ?? [];
+    expect(instants.length).toBeGreaterThanOrEqual(3);
+    // No bare two-arg form may remain — it would re-inherit the css behavior.
+    expect(sources).not.toContain('scrollTo(0,');
+  });
+
   it('does not throw on networkidle hang', async () => {
     const page = makePage();
     page.waitForLoadState = vi.fn().mockRejectedValue(new Error('timeout'));

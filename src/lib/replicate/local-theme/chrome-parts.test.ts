@@ -158,6 +158,10 @@ describe('buildHeaderPart sticky state block (nativeBehaviors)', () => {
     expect(html).toContain('data-wp-interactive="dla/sticky"');
     expect(html).toContain(`data-wp-context='{"toggleClass":"is-scrolled","offset":24}'`);
     expect(html).toContain('data-wp-init="callbacks.init"');
+    // LAYOUT-INERT: display:none removes the marker from the header's flex
+    // layout — without it the empty div is a third space-between item and the
+    // nav redistributes to center (walrus probe: source navX 1023 vs 639).
+    expect(html).toContain('<div class="wp-block-dla-sticky" style="display:none"');
     // After the nav, not inside it.
     expect(html.indexOf('wp:dla/sticky')).toBeGreaterThan(html.indexOf('<!-- /wp:navigation -->'));
     expect(html).toMatch(/<!-- \/wp:dla\/sticky -->$/);

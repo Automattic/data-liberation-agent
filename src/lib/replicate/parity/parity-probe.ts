@@ -111,7 +111,13 @@ export const FREEZE_MOTION_CSS =
   // nativeBehaviors replica gate: force-reveal dla/reveal sections so below-
   // fold IO timing can't race the capture. Inert on non-behavior runs (the
   // .dla-reveal-js class only exists when the reveal view module ran).
-  '.dla-reveal-js .wp-block-dla-reveal{opacity:1!important;transform:none!important}';
+  '.dla-reveal-js .wp-block-dla-reveal{opacity:1!important;transform:none!important}' +
+  // Neutralize css smooth-scroll: a bare scrollTo on a scroll-behavior:smooth
+  // site GLIDES and races the snap (walrus probe: the restore was still at
+  // y=4 with the is-scrolled header compressed when the screenshot fired).
+  // Belt to the helpers' explicit-instant scrollTo — parity captures/probes
+  // stay immune even if a future capture path skips page-helpers.
+  'html{scroll-behavior:auto!important}';
 
 const NAME_POLYFILL = `
   if (typeof globalThis.__name === 'undefined') {

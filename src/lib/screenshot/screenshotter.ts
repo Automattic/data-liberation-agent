@@ -377,7 +377,10 @@ async function capturePerViewport(args: CapturePerViewportArgs): Promise<void> {
         // Page is shorter than scroll-offset + viewport. No distinct scrolled
         // state to capture. Skip silently (not a failure).
       } else {
-        await page.evaluate((y: number) => window.scrollTo(0, y), scrollY);
+        // Explicit-instant: css scroll-behavior:smooth would GLIDE here and
+        // the snap would clip mid-glide at the wrong scroll origin (see
+        // page-helpers triggerLazyLoad for the full smooth-scroll rationale).
+        await page.evaluate((y: number) => window.scrollTo({ top: y, left: 0, behavior: 'instant' }), scrollY);
         // Plain viewport-sized screenshot of the now-scrolled page.
         // fullPage:false captures the current viewport — no clip needed.
         // (A clip would have to be inside the 0..viewport.height image, not at

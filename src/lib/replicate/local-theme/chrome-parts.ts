@@ -77,9 +77,13 @@ function stickyStateBlock(sticky: StickyBehavior): string {
     /'/g,
     '\\u0027',
   );
+  // display:none keeps the marker OUT of the header's flex layout (a 0x0 div
+  // still counts as a justify-content:space-between item — walrus: nav pushed
+  // from x=1023 to 639); iAPI hydration is a DOM walk and the view listener is
+  // on window with closest('header'), both visibility-independent.
   return (
     `\n<!-- wp:dla/sticky ${json} -->\n` +
-    `<div class="wp-block-dla-sticky" data-wp-interactive="dla/sticky"` +
+    `<div class="wp-block-dla-sticky" style="display:none" data-wp-interactive="dla/sticky"` +
     ` data-wp-context='${json}' data-wp-init="callbacks.init"></div>\n` +
     `<!-- /wp:dla/sticky -->`
   );
