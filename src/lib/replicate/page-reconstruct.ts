@@ -992,7 +992,11 @@ function renderReviewGrid(s: SectionSpec): BlockOut {
 /** A responsive wp:gallery grid of WP-library images. A single flex `columns`
  *  row gives every image 1/N width (25 images → unreadable thumbnails); a gallery
  *  block wraps to a fixed column count at a sensible size. */
-function galleryBlock(images: SectionSpecImage[], out: BlockOut): string {
+function galleryBlock(
+  images: SectionSpecImage[],
+  out: BlockOut,
+  opts: { sectionHeight?: number } = {},
+): string {
   const usable = images.filter((im) => isWpUrl(im.url));
   if (usable.length === 0) return '';
   const cols = Math.min(4, usable.length);
@@ -1029,6 +1033,24 @@ function galleryBlock(images: SectionSpecImage[], out: BlockOut): string {
       `<!-- /wp:image -->`
     );
   });
+  // Strip vs wrapping grid DEFERS TO THE SOURCE: a gallery whose section is
+  // tall enough for several item rows (height ≥ 2× the computed row height)
+  // wraps in the source — render it as a wrapping CROPPED grid; a scroller
+  // would hide everything past the right edge. A single-row gallery is the
+  // page-builder carousel shape — render the scroller strip. No/zero section
+  // height (supplementary strips inside mixed sections, old specs) keeps the
+  // scroller (back-compat).
+  const multiRow = !!(opts.sectionHeight && rowH && opts.sectionHeight >= rowH * 2);
+  if (multiRow) {
+    // imageCrop:true / is-cropped: in the wrapping grid, core's uniform-cell
+    // crop (object-fit:cover) reproduces the source's even rows; each item
+    // still carries its explicit size so the block-fixer keeps the dimensions.
+    return (
+      `<!-- wp:gallery {"columns":${cols},"imageCrop":true,"linkTo":"none","sizeSlug":"large"} -->\n` +
+      `<figure class="wp-block-gallery has-nested-images columns-${cols} is-cropped">\n${figures.join('\n')}\n</figure>\n` +
+      `<!-- /wp:gallery -->`
+    );
+  }
   // is-gallery-scroller turns the grid into a horizontal swipe/scroll-navigable
   // strip with snap points (theme CSS) — page builders show galleries as a
   // carousel; WP core has no native carousel block, and this needs no JS/plugin.
@@ -1053,7 +1075,7 @@ function renderImageRow(s: SectionSpec): BlockOut {
   const parts: string[] = [];
   s.headings.forEach((h, i) => parts.push(headingBlock(h, out, { level: 2, center: centerOf(s), sizePx: s.headingSizes?.[i], fontFamily: s.headingFamilies?.[i] || undefined, lineHeight: s.headingLineHeights?.[i] })));
   (s.bodyText ?? []).forEach((b, i) => parts.push(paragraphBlock(b, out, { center: centerOf(s), sizePx: s.bodyTextSizes?.[i], fontFamily: s.bodyFamilies?.[i] || undefined, lineHeight: s.bodyLineHeights?.[i] })));
-  const gallery = galleryBlock(s.images, out);
+  const gallery = galleryBlock(s.images, out, { sectionHeight: s.height });
   if (gallery) parts.push(gallery);
   out.markup = wrapSection(parts.filter(Boolean), { wide: '1100px', raised: isTintedSection(s), bgColor: s.backgroundColor, ...sectionPad(s) });
   return out;
@@ -1304,6 +1326,17 @@ function renderCellGrid(s: SectionSpec, ctx: RenderCtx): BlockOut {
     const kept = parts.filter(Boolean);
     if (!kept.length) continue;
     cols.push(column(cardToken ? [cardGroup(kept, cardToken, cardDark, c.radius ?? 0, c.padding ?? null)] : kept));
+  }
+  // Section-level images no cell claimed: a page-builder photo|card column-strip
+  // captures its photo COLUMN as a section-level (often background-kind) image,
+  // not as any cell's image — the grid would silently drop it and the coverage
+  // gate would then demote the whole section to an island. Render each as its
+  // own image column so the photo stays a real grid column.
+  const claimedImageUrls = new Set(cells.map((c) => c.image?.url).filter(Boolean));
+  for (const im of s.images ?? []) {
+    if (claimedImageUrls.has(im.url)) continue;
+    if (!isWpUrl(im.url) || Math.min(im.width || 0, im.height || 0) < MIN_CELL_IMAGE_PX) continue;
+    cols.push(column([imageBlock(im, out, `cell-media#${s.sectionIndex}`, { rounded: true })]));
   }
   // A source band whose captured container spans ~the full viewport is a
   // full-bleed card row (the cards touch the edges, flush) — reproduce that
@@ -1562,20 +1595,53 @@ export function reconstructPagePattern(
   const famTokens = opts.fontFamilies ?? [];
   const resolveFamilies = (names?: string[]): string[] | undefined =>
     names ? names.map((n) => nearestFamily(n, famTokens) ?? '') : undefined;
-  // Resolve captured font-family names to theme tokens. We do NOT drop a bodyText
-  // paragraph that matches a heading: heading tags (<h1>–<h6>) and <p>/<li> are
-  // DISJOINT selectors capturing only VISIBLE elements, so an exact text match
-  // means the source genuinely renders BOTH (e.g. a 34px subheading AND an 18px
-  // paragraph of the same copy) — dropping the paragraph loses real content.
+  // Resolve captured font-family names to theme tokens. A bodyText paragraph
+  // matching a heading is usually genuine (heading tags and <p>/<li> are
+  // disjoint selectors, e.g. a 34px subheading AND an 18px paragraph of the
+  // same copy) — EXCEPT when the heading was PROMOTED from a styled <p>
+  // (page-builders mark headlines as ≥28px paragraphs): then heading and body
+  // captured the SAME element and the replica would show the line twice. The
+  // two cases are distinguishable from the section's source HTML: the text
+  // appearing ONCE means promoted-echo (drop the body copy), twice means
+  // genuine duplicate (keep — never-lose-source-content). No sectionHtml →
+  // can't verify → keep (back-compat, never guess toward dropping).
   const body = stripChrome(sections).map((s) => {
     const headFamSlugs = resolveFamilies(s.headingFamilies);
     const bodyFamSlugs = resolveFamilies(s.bodyFamilies);
-    if (!headFamSlugs && !bodyFamSlugs) return s;
-    return {
-      ...s,
-      ...(headFamSlugs ? { headingFamilies: headFamSlugs } : {}),
-      ...(bodyFamSlugs ? { bodyFamilies: bodyFamSlugs } : {}),
-    };
+    let out = s;
+    if (headFamSlugs || bodyFamSlugs) {
+      out = {
+        ...out,
+        ...(headFamSlugs ? { headingFamilies: headFamSlugs } : {}),
+        ...(bodyFamSlugs ? { bodyFamilies: bodyFamSlugs } : {}),
+      };
+    }
+    const srcHtml = s.sectionHtml ?? s.styledHtml;
+    if (srcHtml && (out.bodyText ?? []).length && out.headings.length) {
+      const srcText = normalizeCopy(srcHtml.replace(/<[^>]*>/g, ' ')).toLowerCase();
+      const headingSet = new Set(out.headings.map((h) => normalizeCopy(h).toLowerCase()));
+      const countOccurrences = (needle: string): number => {
+        if (!needle) return 0;
+        let count = 0;
+        for (let i = srcText.indexOf(needle); i !== -1; i = srcText.indexOf(needle, i + needle.length)) count++;
+        return count;
+      };
+      const keep = (out.bodyText ?? []).map((b) => {
+        const n = normalizeCopy(b).toLowerCase();
+        return !(headingSet.has(n) && countOccurrences(n) <= 1);
+      });
+      if (keep.includes(false)) {
+        const filterAligned = <T>(arr: T[]): T[] => arr.filter((_, i) => keep[i] !== false);
+        out = {
+          ...out,
+          bodyText: (out.bodyText ?? []).filter((_, i) => keep[i]),
+          ...(out.bodyTextSizes ? { bodyTextSizes: filterAligned(out.bodyTextSizes) } : {}),
+          ...(out.bodyFamilies ? { bodyFamilies: filterAligned(out.bodyFamilies) } : {}),
+          ...(out.bodyLineHeights ? { bodyLineHeights: filterAligned(out.bodyLineHeights) } : {}),
+        };
+      }
+    }
+    return out;
   });
   const expectedText: string[] = [];
   const bodyText: string[] = [];
@@ -1685,6 +1751,32 @@ export function reconstructPagePattern(
       const keepLabel = dropOncePerSubmit(submitBudget());
       const keepButton = dropOncePerSubmit(submitBudget());
       const keepCellButton = dropOncePerSubmit(submitBudget());
+      // Field-label echo cells: the walk also re-captures the form's own FIELD
+      // labels as content cells (heading = the label, body = the required-"*"
+      // marker). Left in, ≥2 such cells route the section to the CELL GRID,
+      // which ignores s.images — the dropped photo then trips the coverage
+      // island and the live jetpack form is discarded with the structured
+      // render. A cell is the field's echo ONLY when it carries nothing real
+      // beyond the label (no image/icon/button, body all marker noise); a
+      // genuine content cell sharing a field's label survives. Budgeted per
+      // field occurrence, same rationale as the submit suppression.
+      const fieldBudget = new Map<string, number>();
+      for (const f of s.forms ?? []) {
+        for (const fld of f.fields) {
+          const k = normalizeCopy(fld.label).toLowerCase();
+          fieldBudget.set(k, (fieldBudget.get(k) ?? 0) + 1);
+        }
+      }
+      const cellIsFieldEcho = (c: NonNullable<SectionSpec['cells']>[number]): boolean => {
+        if (!c.heading || c.image || c.icon || c.button) return false;
+        if ((c.body ?? []).some((b) => /[a-z0-9]/i.test(normalizeCopy(b)))) return false;
+        const k = normalizeCopy(c.heading).toLowerCase();
+        const left = fieldBudget.get(k) ?? 0;
+        if (left <= 0) return false;
+        fieldBudget.set(k, left - 1);
+        return true;
+      };
+      const cellsSansFieldEchoes = s.cells?.filter((c) => !cellIsFieldEcho(c));
       renderSpec = {
         ...s,
         buttonLabels: (s.buttonLabels ?? []).filter(keepLabel),
@@ -1692,9 +1784,9 @@ export function reconstructPagePattern(
         // Cells path: the cell grid renders cell.button directly, escaping the
         // array filters above — null out ONE cell.button per submit label so the
         // homepage form band doesn't render a dead CTA twin above the live form.
-        ...(s.cells
+        ...(cellsSansFieldEchoes
           ? {
-              cells: s.cells.map((c) => {
+              cells: cellsSansFieldEchoes.map((c) => {
                 if (!(c.button && !keepCellButton(c.button))) return c;
                 // This cell IS the form's submit, re-captured by the walk. Drop
                 // the dead button — and when the walk ALSO echoed the button's
@@ -1738,7 +1830,37 @@ export function reconstructPagePattern(
       texts: [...s.headings, ...(s.bodyText ?? []), ...(s.buttonLabels ?? [])],
       imageUrls: (s.images ?? []).map((im) => im.url).filter(Boolean),
     };
-    const cov = measureSectionCoverage(captured, out.markup);
+    let cov = measureSectionCoverage(captured, out.markup);
+    // Media recovery: when the loss includes ONLY recoverable images — local
+    // uploads URLs at/above the decorative floor that a renderer path simply
+    // didn't place (cell grid ignoring section images, lead-photo threshold,
+    // cover paths) — append them as image blocks inside the section instead of
+    // demoting it to an island. The island gives up block editability AND mobile
+    // reflow (fixed-width source snapshot) for what is just an unplaced photo.
+    // Re-measure after appending: a section that ALSO lost text still islands.
+    if (cov.lost && cov.missingImages.length > 0) {
+      const recoverable = cov.missingImages.map((url) => (s.images ?? []).find((im) => im.url === url)).filter(
+        (im): im is SectionSpecImage =>
+          !!im && isWpUrl(im.url) && Math.min(im.width || 0, im.height || 0) >= MIN_CELL_IMAGE_PX,
+      );
+      if (recoverable.length === cov.missingImages.length) {
+        const recovered = recoverable
+          .map((im) => imageBlock(im, out, `recovered#${s.sectionIndex}`, { align: centerOf(s) ? 'center' : null, rounded: true }))
+          .filter(Boolean);
+        const SECTION_CLOSE = '</section>\n<!-- /wp:group -->';
+        const augmented = out.markup.endsWith(SECTION_CLOSE)
+          ? out.markup.slice(0, -SECTION_CLOSE.length) + recovered.join('\n') + '\n' + SECTION_CLOSE
+          : (out.markup ? out.markup + '\n\n' : '') + recovered.join('\n');
+        const reMeasured = measureSectionCoverage(captured, augmented);
+        if (!reMeasured.lost) {
+          out.markup = augmented;
+          cov = reMeasured;
+          out.flags.push(
+            `media-recovered#${s.sectionIndex}: appended ${recovered.length} dropped image(s) as blocks (island averted)`,
+          );
+        }
+      }
+    }
     if (cov.lost && (s.styledHtml || s.sectionHtml)) {
       // Blocks path: give the adapter's block recipe first crack at the source
       // HTML before falling back to the opaque core/html island. The recipe is

@@ -133,3 +133,47 @@ describe('extractFullFromSavedHtml', () => {
     expect(img?.url).toBe('https://example.com/assets/pic.png');
   }, 60_000);
 });
+
+describe('extractFull — span-wrapped semantic headings (rich-text pattern)', () => {
+  // Page builders (Wix rich-text) wrap EVERY heading's text in a <span>:
+  // <h1><span>GALLERY</span></h1>. The heading collector's direct-text-node
+  // requirement dropped any such heading under the 28px styled-text floor —
+  // the swiftlumber projects GALLERY eyebrow (16px h1) vanished from every
+  // capture and had to be hand-restored. Semantic h1–h6 must qualify by their
+  // textContent; the inner span must not double-capture.
+  const RICH_TEXT_FIXTURE = `<!doctype html><html><head><style>
+    * { margin: 0; }
+    body { width: 1440px; font-family: sans-serif; }
+    .band { width: 1440px; height: 480px; background: #def; }
+    .eyebrow { font-size: 16px; letter-spacing: 2px; }
+    .headline { font-size: 54px; }
+  </style></head><body>
+    <main>
+      <section class="band">
+        <h1 class="eyebrow"><span>FICTIONAL GALLERY</span></h1>
+        <p class="headline"><span>We Forge Fictional Things</span></p>
+        <p>Supporting prose long enough to make this band count as content.</p>
+      </section>
+    </main>
+  </body></html>`;
+
+  it('captures a sub-28px span-wrapped h1 as a heading', async () => {
+    const specs = await walk(RICH_TEXT_FIXTURE);
+    const headings = specs.flatMap((s) => s.headings);
+    expect(headings).toContain('FICTIONAL GALLERY');
+  }, 60_000);
+
+  it('does not double-capture a big styled span inside an already-captured heading', async () => {
+    const specs = await walk(`<!doctype html><html><head><style>
+      * { margin: 0; } body { width: 1440px; font-family: sans-serif; }
+      .band { width: 1440px; height: 480px; background: #fed; }
+    </style></head><body><main>
+      <section class="band">
+        <h2><span style="font-size:54px">One Big Fictional Headline</span></h2>
+        <p>Prose so the band qualifies as a content section for the walk.</p>
+      </section>
+    </main></body></html>`);
+    const headings = specs.flatMap((s) => s.headings);
+    expect(headings.filter((h) => h === 'One Big Fictional Headline')).toHaveLength(1);
+  }, 60_000);
+});

@@ -115,10 +115,12 @@ async function updatePagePostContent(
   slug: string,
   isHome: boolean,
   content: string,
-): Promise<{ contentOk: boolean; id: string }> {
+  backupDir: string | null,
+): Promise<{ contentOk: boolean; id: string; backedUp: boolean }> {
   const wp = (extra: string[]) =>
     execFileAsync('studio', ['wp', '--path', studioSitePath, ...extra], { timeout: 120_000, maxBuffer: 50 * 1024 * 1024 });
   let id = '';
+  let backedUp = false;
   try {
     if (isHome) {
       const { stdout } = await wp(['option', 'get', 'page_on_front']);
@@ -128,7 +130,24 @@ async function updatePagePostContent(
       const { stdout } = await wp(['post', 'list', '--post_type=page', `--name=${slug}`, '--field=ID', '--format=ids']);
       id = stdout.trim().split(/\s+/)[0] || '';
     }
-    if (!id) return { contentOk: false, id: '' };
+    if (!id) return { contentOk: false, id: '', backedUp };
+    // Overwrite guard: a reconstruct may clobber operator/hand-fixed content
+    // (the page's CURRENT post_content is the only copy — patterns are stale
+    // mirrors). Save it to a per-run timestamped dir BEFORE the update so an
+    // accepted state is always restorable. Best-effort: a backup failure must
+    // not block the update, but it is logged.
+    if (backupDir) {
+      try {
+        const { stdout: prev } = await wp(['post', 'get', id, '--field=post_content']);
+        if (prev.trim()) {
+          mkdirSync(backupDir, { recursive: true });
+          writeFileSync(join(backupDir, `${slug}.html`), prev);
+          backedUp = true;
+        }
+      } catch (err) {
+        console.error(`[reconstruct] post_content backup failed for slug="${slug}": ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
     if (isHome) {
       // Make this page the static front page so `/` renders the homepage
       // reconstruction (front-page.html) instead of the blog index. Best-effort
@@ -148,10 +167,10 @@ async function updatePagePostContent(
     // (after forcePatternRescan registers the variant customTemplates) — WP rejects
     // a page_template that isn't yet registered in theme.json.
     await wp(['post', 'update', id, `--post_content=${content}`]);
-    return { contentOk: true, id };
+    return { contentOk: true, id, backedUp };
   } catch (err) {
     console.error(`[reconstruct] post update failed for slug="${slug}": ${err instanceof Error ? err.message : String(err)}`);
-    return { contentOk: false, id: '' };
+    return { contentOk: false, id: '', backedUp };
   }
 }
 
@@ -387,6 +406,15 @@ export const reconstructPagesHandler: Handler = async (args, ctx) => {
   const wxrInputs: WxrTemplatePatchInput[] = [];
   const pageIdBySlug = new Map<string, string>();
   let assignmentFailures = 0;
+  // Overwrite guard: each run backs up every page's pre-update post_content into
+  // its own timestamped dir (NOT a single overwritten dir — consecutive runs must
+  // not destroy the only copy of an accepted state).
+  const postContentBackupDir = join(
+    resolve(outputDir),
+    '.post-content-prev',
+    new Date().toISOString().replace(/[:.]/g, '-'),
+  );
+  let postContentBackups = 0;
   // Phase A: build + gate every page FIRST (no writes yet). Variation hoisting
   // needs the full page set at once (site-wide constellation counting), and the
   // hoisted markup must be what the block-fixer canonicalization sees — the
@@ -538,8 +566,9 @@ export const reconstructPagesHandler: Handler = async (args, ctx) => {
     // to a post-loop pass (after the variant customTemplates register).
     const fixResult = (await blockFixer.fix([markup]))[0];
     const finalContent = fixResult?.html ?? markup;
-    const upd = await updatePagePostContent(studioSitePath, p.slug, p.isHome ?? false, finalContent);
+    const upd = await updatePagePostContent(studioSitePath, p.slug, p.isHome ?? false, finalContent, postContentBackupDir);
     const postUpdated = upd.contentOk;
+    if (upd.backedUp) postContentBackups++;
     if (upd.id) pageIdBySlug.set(p.slug, upd.id);
     plannedPages.push({ slug: p.slug, isHome: p.isHome ?? false, variant: built.variant });
     wxrInputs.push({ slug: p.slug, content: finalContent, templateSlug: collapseTemplates && !(p.isHome ?? false) ? variantTemplateSlug(built.variant.key) : null });
@@ -741,6 +770,8 @@ export const reconstructPagesHandler: Handler = async (args, ctx) => {
     specsFromCache,
     specsFromSavedHtml,
     specsFromLive,
+    postContentBackups,
+    postContentBackupDir: postContentBackups > 0 ? postContentBackupDir : null,
     extractErrors,
     pagesReconstructed: reconstructed,
     pageTemplates: pageTemplatesWritten,

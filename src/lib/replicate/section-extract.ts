@@ -1902,17 +1902,34 @@ export async function extractFull(
 
         const descendants = Array.from(el.querySelectorAll('*')).filter(isVisible);
 
-        // headings: semantic h1-h6 OR styled text >= 28px
+        // headings: semantic h1-h6 OR styled text >= 28px.
+        // Semantic h-tags qualify by their full textContent, NOT a direct
+        // text-node child: page-builder rich text (Wix) wraps every heading's
+        // text in a <span> (`<h1><span>GALLERY</span></h1>`), so a direct-text
+        // requirement silently drops every semantic heading below the 28px
+        // styled-text floor (a 16px eyebrow h1 vanished from every capture).
+        // The containment guard keeps a big styled span INSIDE an already-
+        // captured heading from double-capturing the same text (ancestors come
+        // first in document order, so checking the candidate's ancestors works).
         const headingEls: Element[] = [];
         let maxHeadingPx = 0;
         for (const d of descendants) {
           const tag = d.tagName.toLowerCase();
           const size = parseFloat(getComputedStyle(d).fontSize) || 0;
+          const insideCaptured = headingEls.some((h) => h !== d && h.contains(d));
+          if (insideCaptured) continue;
+          if (HEADING_TAGS.test(tag)) {
+            if ((d.textContent || '').trim().length > 2) {
+              headingEls.push(d);
+              if (size > maxHeadingPx) maxHeadingPx = size;
+            }
+            continue;
+          }
           const ownText = Array.from(d.childNodes).some(
             (n) => n.nodeType === 3 && (n.nodeValue || '').trim().length > 2,
           );
           if (!ownText) continue;
-          if (HEADING_TAGS.test(tag) || (size >= 28 && (d.textContent || '').trim().length < 120)) {
+          if (size >= 28 && (d.textContent || '').trim().length < 120) {
             headingEls.push(d);
             if (size > maxHeadingPx) maxHeadingPx = size;
           }
