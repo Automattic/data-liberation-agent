@@ -881,4 +881,132 @@ describe('convertLocalSiteHandler', () => {
       rmSync(outDir, { recursive: true, force: true });
     }
   });
+
+  // ---------------------------------------------------------------------------
+  // nativeBehaviors tests (interactivity blocks)
+  // ---------------------------------------------------------------------------
+
+  /** Fixture whose css/js trigger reveal + sticky + exactly ONE gap — same
+   * fictional shapes as detect-behaviors.test.ts (nav-highlight = the gap). */
+  function makeBehaviorSite(): string {
+    mkdirSync(FIXTURE_TMP, { recursive: true });
+    const dir = mkdtempSync(join(FIXTURE_TMP, 'cls-behave-'));
+    writeFileSync(
+      join(dir, 'index.html'),
+      '<html><head><title>Home</title><link rel="stylesheet" href="styles.css"></head><body><header><nav><a href="about.html">About</a></nav></header><main><section id="hero"><h1>Hi</h1></section></main><script src="site.js"></script></body></html>',
+    );
+    writeFileSync(
+      join(dir, 'about.html'),
+      '<html><head><title>About</title></head><body><main><section id="who"><h2>Who</h2><p>Us</p></section></main></body></html>',
+    );
+    writeFileSync(
+      join(dir, 'styles.css'),
+      'html.js section { opacity: 0; transform: translateY(18px); transition: opacity 600ms ease, transform 600ms ease; }\n' +
+        'html.js section.is-visible { opacity: 1; transform: none; }\n' +
+        'header.is-scrolled { box-shadow: 0 2px 12px rgba(0,0,0,0.08); }\n',
+    );
+    writeFileSync(
+      join(dir, 'site.js'),
+      'const obs = new IntersectionObserver((entries) => {\n' +
+        "  entries.forEach((e) => e.isIntersecting && e.target.classList.add('is-visible'));\n" +
+        '}, { threshold: 0.12 });\n' +
+        "document.querySelectorAll('section').forEach((s) => obs.observe(s));\n" +
+        "window.addEventListener('scroll', () => {\n" +
+        "  document.querySelector('header').classList.toggle('is-scrolled', window.scrollY > 24);\n" +
+        '});\n' +
+        "document.querySelectorAll('nav a').forEach((a) => {\n" +
+        "  if (a.getAttribute('href') === location.pathname) a.style.color = 'red';\n" +
+        '});\n',
+    );
+    return dir;
+  }
+
+  it('nativeBehaviors: forces carryJs off, installs + activates the plugin, writes behavior-gaps', async () => {
+    const dir = makeBehaviorSite();
+    const sitePath = makeStudioSite();
+    const outDir = mkdtempSync(join(FIXTURE_TMP, 'cls-nb-'));
+    try {
+      const res = await convertLocalSiteHandler(
+        { dir, studioSitePath: sitePath, outputDir: outDir, themeSlug: 'acme-local', siteTitle: 'Acme', skipDesign: true, nativeBehaviors: true },
+        ctx,
+      );
+      expect(res.isError).toBeFalsy();
+      const summary = JSON.parse(res.content[0].text) as {
+        carried: { css: boolean; js: boolean };
+        behaviors?: { reveal: boolean; sticky: boolean; gaps: number };
+      };
+      expect(summary.carried.js).toBe(false); // source js NOT carried
+      expect(summary.behaviors).toEqual({ reveal: true, sticky: true, gaps: 1 });
+      const themeDir = join(sitePath, 'wp-content', 'themes', 'acme-local');
+      // No carried source.js in the live theme — the blocks replace it.
+      expect(existsSync(join(themeDir, 'assets', 'js', 'source.js'))).toBe(false);
+      // Reveal threads through ingest → sidecar markup.
+      expect(readFileSync(join(outDir, 'composed', 'home.blocks.html'), 'utf8')).toContain('wp:dla/reveal');
+      // Sticky state block lands in the (plain carry) header part.
+      expect(readFileSync(join(themeDir, 'parts', 'header.html'), 'utf8')).toContain('wp:dla/sticky');
+      // Plugin written to the host (real writeReplicaFilesToHost) + activated.
+      expect(existsSync(join(sitePath, 'wp-content', 'plugins', 'dla-interactivity', 'plugin.php'))).toBe(true);
+      expect(existsSync(join(sitePath, 'wp-content', 'plugins', 'dla-interactivity', 'blocks', 'reveal', 'view.asset.php'))).toBe(true);
+      const flat = execCalls.map((c) => c.join(' '));
+      expect(flat.some((c) => c.includes('plugin activate dla-interactivity'))).toBe(true);
+      // Gaps artifact written atomically next to the other reports.
+      const gaps = JSON.parse(readFileSync(join(outDir, 'behavior-gaps.json'), 'utf8')) as {
+        schema: number; site: string; gaps: Array<{ pattern: string; jsExcerpt: string }>;
+      };
+      expect(gaps.schema).toBe(1);
+      expect(gaps.gaps).toHaveLength(1);
+      expect(gaps.gaps[0].pattern).toBe('uncatalogued-js');
+      expect(gaps.gaps[0].jsExcerpt).toContain('location.pathname');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(sitePath, { recursive: true, force: true });
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
+  it('nativeBehaviors + explicit carryJs:true keeps carryJs off and warns', async () => {
+    const dir = makeBehaviorSite();
+    const sitePath = makeStudioSite();
+    const outDir = mkdtempSync(join(FIXTURE_TMP, 'cls-nbwarn-'));
+    try {
+      const res = await convertLocalSiteHandler(
+        { dir, studioSitePath: sitePath, outputDir: outDir, themeSlug: 'acme-local', siteTitle: 'Acme', skipDesign: true, nativeBehaviors: true, carryJs: true },
+        ctx,
+      );
+      expect(res.isError).toBeFalsy();
+      const summary = JSON.parse(res.content[0].text) as { carried: { js: boolean }; warnings: string[] };
+      expect(summary.carried.js).toBe(false);
+      expect(summary.warnings.join('\n')).toContain('nativeBehaviors forces carryJs off');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(sitePath, { recursive: true, force: true });
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
+  it('default (no flag): no behaviors key, no plugin, carried js intact (regression)', async () => {
+    const dir = makeSite();
+    const sitePath = makeStudioSite();
+    const outDir = mkdtempSync(join(FIXTURE_TMP, 'cls-nbdefault-'));
+    try {
+      const res = await convertLocalSiteHandler(
+        { dir, studioSitePath: sitePath, outputDir: outDir, themeSlug: 'acme-local', siteTitle: 'Acme', skipDesign: true },
+        ctx,
+      );
+      expect(res.isError).toBeFalsy();
+      const summary = JSON.parse(res.content[0].text) as {
+        behaviors?: unknown; carried: { js: boolean };
+      };
+      expect(summary.behaviors).toBeUndefined();
+      expect(summary.carried.js).toBe(true);
+      expect(existsSync(join(sitePath, 'wp-content', 'plugins', 'dla-interactivity'))).toBe(false);
+      expect(existsSync(join(outDir, 'behavior-gaps.json'))).toBe(false);
+      const flat = execCalls.map((c) => c.join(' '));
+      expect(flat.some((c) => c.includes('plugin activate'))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(sitePath, { recursive: true, force: true });
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
 });

@@ -75,4 +75,21 @@ describe('buildInteractivityPlugin', () => {
     const b = buildInteractivityPlugin();
     expect(JSON.stringify(a)).toBe(JSON.stringify(b));
   });
+
+  it('locks the cross-file contract names the emitter targets (rename = instant failure)', () => {
+    // These names are consumed by the EMITTED markup (emit-blocks/chrome-parts:
+    // data-wp-init="callbacks.init", data-wp-context keys, inline custom
+    // properties). A silent rename here would no-op on the frontend with zero
+    // unit-test signal — lock them.
+    const files = byPath(buildInteractivityPlugin().files);
+    const revealJs = files['blocks/reveal/view.js'];
+    expect(revealJs).toContain('init()');
+    expect(revealJs).toContain('ctx.visible');
+    const stickyJs = files['blocks/sticky/view.js'];
+    expect(stickyJs).toContain('ctx.toggleClass');
+    expect(stickyJs).toContain('ctx.offset');
+    const revealCss = files['blocks/reveal/style.css'];
+    expect(revealCss).toContain('--dla-reveal-y');
+    expect(revealCss).toContain('--dla-reveal-ms');
+  });
 });

@@ -12,9 +12,11 @@ vi.mock('../../lib/replicate/normalize/compose-page.js', async (importOriginal) 
   const actual = await importOriginal<typeof import('../../lib/replicate/normalize/compose-page.js')>();
   return {
     ...actual,
-    composePage: (page: Parameters<typeof actual.composePage>[0]) => {
-      if (page.slug === 'boom') throw new Error('synthetic compose failure');
-      return actual.composePage(page);
+    // Forward ALL args — the wrapper must not drop the ComposePageOpts second
+    // param (reveal tagging would silently vanish in these tests otherwise).
+    composePage: (...cpArgs: Parameters<typeof actual.composePage>) => {
+      if (cpArgs[0].slug === 'boom') throw new Error('synthetic compose failure');
+      return actual.composePage(...cpArgs);
     },
   };
 });
@@ -140,6 +142,84 @@ describe('ingestLocalSiteHandler', () => {
       expect(readFileSync(join(outDir, 'composed', 'bare.blocks.html'), 'utf8')).toBe('');
       const report = JSON.parse(readFileSync(join(outDir, 'normalize-report.json'), 'utf8')) as { emptyPages: string[] };
       expect(report.emptyPages).toEqual(['bare']);
+    } finally {
+      rmSync(siteDir, { recursive: true, force: true });
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
+  it('nativeBehaviors: detects reveal from source assets and tags sidecar sections', async () => {
+    mkdirSync(FIXTURE_TMP, { recursive: true });
+    const siteDir = mkdtempSync(join(FIXTURE_TMP, 'site-nb-'));
+    const outDir = mkdtempSync(join(FIXTURE_TMP, 'out-nb-'));
+    writeFileSync(
+      join(siteDir, 'index.html'),
+      '<html><head><link rel="stylesheet" href="styles.css"></head><body><main><section id="hero"><h1>Hi</h1></section></main><script src="site.js"></script></body></html>',
+    );
+    writeFileSync(
+      join(siteDir, 'styles.css'),
+      'html.js section { opacity: 0; transform: translateY(18px); transition: opacity 600ms ease, transform 600ms ease; }',
+    );
+    writeFileSync(
+      join(siteDir, 'site.js'),
+      "const obs = new IntersectionObserver((es) => es.forEach((e) => e.isIntersecting && e.target.classList.add('is-visible')), { threshold: 0.12 });\n" +
+        "document.querySelectorAll('section').forEach((s) => obs.observe(s));\n",
+    );
+    try {
+      const res = await ingestLocalSiteHandler({ dir: siteDir, outputDir: outDir, nativeBehaviors: true }, ctx);
+      expect(res.isError).toBeFalsy();
+      const sidecar = readFileSync(join(outDir, 'composed', 'home.blocks.html'), 'utf8');
+      expect(sidecar).toContain('wp:dla/reveal');
+      expect(sidecar).toContain('data-wp-interactive="dla/reveal"');
+      expect(sidecar).not.toContain('wp:group');
+      const report = JSON.parse(readFileSync(join(outDir, 'normalize-report.json'), 'utf8')) as {
+        entries: Array<{ blockType: string }>;
+      };
+      expect(report.entries.every((e) => e.blockType === 'dla/reveal')).toBe(true);
+    } finally {
+      rmSync(siteDir, { recursive: true, force: true });
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
+  it('nativeBehaviors with no catalog match leaves sections as group', async () => {
+    mkdirSync(FIXTURE_TMP, { recursive: true });
+    const siteDir = mkdtempSync(join(FIXTURE_TMP, 'site-nbnone-'));
+    const outDir = mkdtempSync(join(FIXTURE_TMP, 'out-nbnone-'));
+    // No reveal css gate, no observer js — detection finds nothing to map.
+    writeFileSync(join(siteDir, 'index.html'), '<body><main><section id="hero"><h1>Hi</h1></section></main></body>');
+    try {
+      const res = await ingestLocalSiteHandler({ dir: siteDir, outputDir: outDir, nativeBehaviors: true }, ctx);
+      expect(res.isError).toBeFalsy();
+      const sidecar = readFileSync(join(outDir, 'composed', 'home.blocks.html'), 'utf8');
+      expect(sidecar).toContain('wp:group');
+      expect(sidecar).not.toContain('dla/reveal');
+    } finally {
+      rmSync(siteDir, { recursive: true, force: true });
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
+  it('default ingest (no flag) never tags (regression)', async () => {
+    mkdirSync(FIXTURE_TMP, { recursive: true });
+    const siteDir = mkdtempSync(join(FIXTURE_TMP, 'site-nboff-'));
+    const outDir = mkdtempSync(join(FIXTURE_TMP, 'out-nboff-'));
+    // Source HAS the reveal patterns, but the flag is off — no detection runs.
+    writeFileSync(
+      join(siteDir, 'index.html'),
+      '<html><head><link rel="stylesheet" href="styles.css"></head><body><main><section id="hero"><h1>Hi</h1></section></main><script src="site.js"></script></body></html>',
+    );
+    writeFileSync(join(siteDir, 'styles.css'), 'html.js section { opacity: 0; }');
+    writeFileSync(
+      join(siteDir, 'site.js'),
+      "const obs = new IntersectionObserver((es) => es.forEach((e) => e.target.classList.add('is-visible')));\ndocument.querySelectorAll('section').forEach((s) => obs.observe(s));\n",
+    );
+    try {
+      const res = await ingestLocalSiteHandler({ dir: siteDir, outputDir: outDir }, ctx);
+      expect(res.isError).toBeFalsy();
+      const sidecar = readFileSync(join(outDir, 'composed', 'home.blocks.html'), 'utf8');
+      expect(sidecar).toContain('wp:group');
+      expect(sidecar).not.toContain('dla/reveal');
     } finally {
       rmSync(siteDir, { recursive: true, force: true });
       rmSync(outDir, { recursive: true, force: true });

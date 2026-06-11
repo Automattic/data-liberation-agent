@@ -10,7 +10,7 @@
 // (idempotent via _source_url), set the front page, assign the page-local
 // template, optionally capture the WP replica and score parity.
 //
-import { existsSync, readFileSync, writeFileSync, readdirSync, renameSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, readdirSync, renameSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -34,6 +34,9 @@ import { compareScreenshotDirs } from '../../lib/screenshot/compare.js';
 import { buildLocalFoundation, extractCssColors, type PaletteAgg, type TypographyAgg, type BreakpointsAgg } from '../../lib/replicate/local-theme/foundation.js';
 import { extractGoogleFontCssUrls, selfHostGoogleFonts } from '../../lib/replicate/local-theme/google-fonts.js';
 import { collectSourceAssets, WP_COMPAT_CSS } from '../../lib/replicate/local-theme/source-assets.js';
+import { detectBehaviors } from '../../lib/replicate/normalize/detect-behaviors.js';
+import { buildInteractivityPlugin, PLUGIN_SLUG } from '../../blocks/interactivity-plugin.js';
+import type { DetectedBehaviors } from '../../lib/replicate/local-site/types.js';
 import { FREEZE_MOTION_CSS, probePair, type Divergence } from '../../lib/replicate/parity/parity-probe.js';
 import { extractDiffRegions } from '../../lib/replicate/parity/diff-regions.js';
 import { classifyDivergences, renderPatchCss, divergenceFingerprint, type UnresolvedDivergence, type PatchOverride, type RepairPlan } from '../../lib/replicate/parity/parity-classify.js';
@@ -74,7 +77,6 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
   // preserving block DOM renders under the designer's stylesheet. Default ON
   // (identical replication goal); pass carryCss:false / carryJs:false to opt out.
   const carryCss = args.carryCss !== false;
-  const carryJs = args.carryJs !== false;
   // Replica base URL: explicit arg wins; otherwise auto-resolved AFTER theme
   // activation via `wp option get siteurl` (see below) — Studio assigns random
   // ports per site, so a hardcoded default would capture the WRONG site and
@@ -83,8 +85,18 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
 
   const warnings: string[] = [];
 
-  // Stage 1a: ingest + compose sidecars + normalize-report (reuse the handler verbatim).
-  const ingestRes = await ingestLocalSiteHandler({ dir, outputDir }, ctx);
+  // nativeBehaviors replaces carried source JS with Interactivity blocks —
+  // both at once would double-drive every behavior (double-init sliders,
+  // re-animating reveals). Explicit carryJs:true is overridden, loudly.
+  const nativeBehaviors = args.nativeBehaviors === true;
+  if (nativeBehaviors && args.carryJs === true) {
+    warnings.push('nativeBehaviors forces carryJs off (carried source JS would double-drive block behaviors)');
+  }
+  const carryJs = nativeBehaviors ? false : args.carryJs !== false;
+
+  // Stage 1a: ingest + compose sidecars + normalize-report (reuse the handler
+  // verbatim; nativeBehaviors makes it tag sidecar sections with dla/reveal).
+  const ingestRes = await ingestLocalSiteHandler({ dir, outputDir, nativeBehaviors }, ctx);
   if (ingestRes.isError) return ingestRes;
   // Forward stage-1a quality signals into the final summary, nested under one
   // `ingest` key so the two summaries' field shapes can't collide.
@@ -188,19 +200,44 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
   // Stage 1d: collect source CSS/JS from disk (link-driven, document order).
   // Runs regardless of skipDesign — assets live on disk, no Playwright needed.
   // When both flags are off, carrySourceAssets stays undefined (tokens-only theme).
+  // nativeBehaviors also needs the collected assets (detection input) even when
+  // nothing is carried, without turning carrySourceAssets into a defined-but-
+  // empty object (that would change theme assembly).
   let carrySourceAssets: { css: string; js: string } | undefined;
-  if (carryCss || carryJs) {
+  let behaviors: DetectedBehaviors | undefined;
+  if (carryCss || carryJs || nativeBehaviors) {
     const assets = collectSourceAssets(dir, site.pages.map((p) => ({ relPath: p.relPath, html: p.html })));
-    // Splice the localized Google-font css (verbatim subsets, local URLs)
-    // right after the compat layer — same cascade position the stripped
-    // @import occupied, so font resolution matches the source byte-for-byte.
-    const cssWithFonts = localizedFontCss
-      ? assets.css.replace(WP_COMPAT_CSS, WP_COMPAT_CSS + localizedFontCss + '\n\n')
-      : assets.css;
-    carrySourceAssets = {
-      css: carryCss ? cssWithFonts : '',
-      js: carryJs ? assets.js : '',
-    };
+    if (carryCss || carryJs) {
+      // Splice the localized Google-font css (verbatim subsets, local URLs)
+      // right after the compat layer — same cascade position the stripped
+      // @import occupied, so font resolution matches the source byte-for-byte.
+      const cssWithFonts = localizedFontCss
+        ? assets.css.replace(WP_COMPAT_CSS, WP_COMPAT_CSS + localizedFontCss + '\n\n')
+        : assets.css;
+      carrySourceAssets = {
+        css: carryCss ? cssWithFonts : '',
+        js: carryJs ? assets.js : '',
+      };
+    }
+    // Detection runs on the RAW collected strings — assets.css includes the
+    // prepended WP_COMPAT_CSS, which is detection-immune (no html.js section
+    // gate, no scroll-listener patterns; reviewer-verified). Mirrors the
+    // ingest handler's detection exactly (same pure fn, same inputs).
+    behaviors = nativeBehaviors ? detectBehaviors({ css: assets.css, js: assets.js }) : undefined;
+  }
+
+  // Behavior gaps artifact: every uncatalogued source-JS pattern, reported
+  // (never guessed). Atomic tmp+rename like the sibling reports.
+  if (behaviors) {
+    const gapsPath = join(outputDir, 'behavior-gaps.json');
+    const gapsTmp = `${gapsPath}.tmp.${process.pid}`;
+    try {
+      writeFileSync(gapsTmp, JSON.stringify({ schema: 1, site: dir, gaps: behaviors.gaps }, null, 2) + '\n');
+      renameSync(gapsTmp, gapsPath);
+    } catch (err) {
+      try { unlinkSync(gapsTmp); } catch { /* ignore */ }
+      warnings.push(`behavior-gaps write failed: ${(err as Error).message}`);
+    }
   }
   // The carried stylesheet is the design authority for chrome too: plain parts
   // (bare blocks, no styled wrappers/tokens) so the source `header{}`/`footer{}`
@@ -212,7 +249,12 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
   const nav = buildNavGraph(site);
   const home = site.pages.find((p) => p.slug === 'home') ?? site.pages[0];
   const footerSection = segmentPage(home.html).find((s) => s.role === 'footer') ?? null;
-  const headerPart = buildHeaderPart(siteTitle, nav, site.pages.map((p) => p.slug), { plain: chromeCarried });
+  // Sticky rides the header part in plain (carry) mode only — buildHeaderPart
+  // ignores it otherwise (tokens path has no carried chrome to toggle).
+  const headerPart = buildHeaderPart(siteTitle, nav, site.pages.map((p) => p.slug), {
+    plain: chromeCarried,
+    ...(behaviors?.sticky ? { sticky: behaviors.sticky } : {}),
+  });
   // Footer tokens (bgToken/textToken) come from the foundation — they style the
   // wrapper group in the footer part we build here. The assembleLocalTheme
   // passthrough was proven inert (we swap parts/footer.html unconditionally),
@@ -244,11 +286,16 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
   try {
     // assetSourceDir carries downloaded fonts (woff2) into the live theme so the
     // install is self-contained without a separate binary-copy step.
+    // nativeBehaviors ships the static dla-interactivity block plugin alongside
+    // the theme. Accepted v1 trade-off (user decision 2026-06-11): the editor
+    // shows a missing-block placeholder for dla/* sections (no editor script);
+    // the frontend renders + behaves fully.
     themeWritten = writeReplicaFilesToHost({
       wpRoot,
       themeSlug,
       themeFiles,
       assetSourceDir: join(outputDir, 'theme'),
+      ...(nativeBehaviors ? { blockPlugins: [buildInteractivityPlugin()] } : {}),
     }).themeWritten;
   } catch (err) {
     return ctx.errorResult(`theme write failed: ${(err as Error).message}`);
@@ -257,6 +304,16 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
     await studioWp(studioSitePath, ['theme', 'activate', themeSlug]);
   } catch (err) {
     warnings.push(`theme activate failed: ${(err as Error).message}`);
+  }
+  // The dla/* blocks must be registered server-side before any page renders
+  // them (SSR directive processing rides supports.interactivity). Mirrors the
+  // theme-activate degrade-to-warning contract.
+  if (nativeBehaviors) {
+    try {
+      await studioWp(studioSitePath, ['plugin', 'activate', PLUGIN_SLUG]);
+    } catch (err) {
+      warnings.push(`plugin activate failed for ${PLUGIN_SLUG}: ${(err as Error).message}`);
+    }
   }
   // Resolve the replica base URL now that the site is known reachable
   // (activation just ran against it). Failure degrades to the conventional
@@ -667,6 +724,10 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
     frontPageSet,
     designCaptured,
     carried: { css: carriedCss, js: carriedJs },
+    // Key OMITTED entirely when the flag is off — default summary stays byte-stable.
+    ...(behaviors !== undefined
+      ? { behaviors: { reveal: !!behaviors.reveal, sticky: !!behaviors.sticky, gaps: behaviors.gaps.length } }
+      : {}),
     ...(parity !== undefined ? { parity } : {}),
     warnings,
   });

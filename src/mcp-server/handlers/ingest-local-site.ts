@@ -14,13 +14,16 @@ import { validateOutputDir } from '../../lib/screenshot/output-layout.js';
 import { composedSidecarPath } from '../../lib/streaming/block-markup-validate.js';
 import { ingestLocalSite } from '../../lib/replicate/local-site/ingest.js';
 import { composePage } from '../../lib/replicate/normalize/compose-page.js';
-import type { NormalizeReportEntry } from '../../lib/replicate/local-site/types.js';
+import { detectBehaviors } from '../../lib/replicate/normalize/detect-behaviors.js';
+import { collectSourceAssets } from '../../lib/replicate/local-theme/source-assets.js';
+import type { NormalizeReportEntry, RevealBehavior } from '../../lib/replicate/local-site/types.js';
 
 const NORMALIZE_REPORT_SCHEMA = 1;
 
 export const ingestLocalSiteHandler: Handler = async (args, ctx) => {
   const dir = args.dir as string | undefined;
   const outputDir = (args.outputDir as string | undefined) ?? dir;
+  const nativeBehaviors = args.nativeBehaviors === true;
   if (!dir) return ctx.errorResult('dir is required');
   if (!outputDir) return ctx.errorResult('outputDir is required');
   try {
@@ -36,6 +39,19 @@ export const ingestLocalSiteHandler: Handler = async (args, ctx) => {
     return ctx.errorResult(`ingest failed: ${(err as Error).message}`);
   }
 
+  // nativeBehaviors: detect catalog behaviors in the source assets and tag
+  // every body section with the reveal (ComposePageOpts → dla/reveal wrappers
+  // in the sidecars). Detection consumes the RAW collected css — assets.css
+  // has WP_COMPAT_CSS prepended, which is detection-immune (no html.js
+  // section gate, no scroll-listener patterns). The convert handler re-runs
+  // the same pure detection for sticky/gaps/plugin wiring — identical inputs,
+  // identical result (deterministic), so the two stages cannot disagree.
+  let reveal: RevealBehavior | undefined;
+  if (nativeBehaviors) {
+    const assets = collectSourceAssets(dir, site.pages.map((p) => ({ relPath: p.relPath, html: p.html })));
+    reveal = detectBehaviors({ css: assets.css, js: assets.js }).reveal;
+  }
+
   mkdirSync(join(outputDir, 'composed'), { recursive: true });
 
   const entries: Array<NormalizeReportEntry & { slug: string }> = [];
@@ -46,7 +62,7 @@ export const ingestLocalSiteHandler: Handler = async (args, ctx) => {
     // Per-page isolation: one bad page (roundtrip failure / compose misfit)
     // must not abort the whole ingest — record it and keep going.
     try {
-      const { postContent, report } = composePage(page);
+      const { postContent, report } = composePage(page, { reveal });
       if (postContent === '' && report.length === 0) emptyPages.push(page.slug);
       writeFileSync(composedSidecarPath(outputDir, page.slug), postContent);
       for (const r of report) entries.push({ ...r, slug: page.slug });
