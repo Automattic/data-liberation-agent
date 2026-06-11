@@ -533,7 +533,14 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
           pathname: r.pathname,
           desktop: d,
           mobile: m,
-          passes: d !== null && m !== null && d >= PARITY_FLOOR && m >= PARITY_FLOOR,
+          // Height gate folds INTO passes (`!== false` keeps older
+          // comparison.json / mocks without the field passing — production
+          // scoring always sets it on ok viewports). A height-fail page that
+          // enters the repair loop is correct behavior: its divergences
+          // classify structural (missing elements) → reported, not patched.
+          passes:
+            d !== null && m !== null && d >= PARITY_FLOOR && m >= PARITY_FLOOR &&
+            r.desktop?.heightPass !== false && r.mobile?.heightPass !== false,
         };
       });
       parity = {
@@ -737,7 +744,10 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
             pathname: r.pathname,
             desktop: d,
             mobile: m,
-            passes: d !== null && m !== null && d >= PARITY_FLOOR && m >= PARITY_FLOOR,
+            // Same heightPass fold as round 0 (see the parityPages comment).
+            passes:
+              d !== null && m !== null && d >= PARITY_FLOOR && m >= PARITY_FLOOR &&
+              r.desktop?.heightPass !== false && r.mobile?.heightPass !== false,
           };
         });
         // Recompute the averages from THIS round's scores — carrying the

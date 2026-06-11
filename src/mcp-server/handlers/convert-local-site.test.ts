@@ -824,6 +824,41 @@ describe('convertLocalSiteHandler', () => {
     }
   });
 
+  it('height-gate failure folds into passes: perfect score + heightPass:false fails the page', async () => {
+    const dir = makeSite();
+    const sitePath = makeStudioSite();
+    const outDir = mkdtempSync(join(FIXTURE_TMP, 'cls-heightfail-'));
+    try {
+      // Score 1.0 on both viewports but the desktop height gate failed -- the
+      // min-crop hid a 300px height loss. passes must AND in heightPass.
+      vi.mocked(compareScreenshotDirs).mockResolvedValueOnce({
+        version: 1,
+        comparedAt: 'TEST',
+        results: [{
+          pathname: '/',
+          originUrl: 'o',
+          replicaUrl: 'r',
+          desktop: { status: 'ok', score: 1.0, heightDelta: 300, heightPass: false },
+          mobile: { status: 'ok', score: 1.0, heightDelta: 0, heightPass: true },
+        }],
+      } as unknown as Awaited<ReturnType<typeof compareScreenshotDirs>>);
+      const res = await convertLocalSiteHandler(
+        { dir, studioSitePath: sitePath, outputDir: outDir, themeSlug: 'acme-local', siteTitle: 'Acme', repair: false },
+        ctx,
+      );
+      expect(res.isError).toBeFalsy();
+      const summary = JSON.parse(res.content[0].text) as {
+        parity?: { allPass: boolean; pages: Array<{ passes: boolean }> };
+      };
+      expect(summary.parity?.pages[0].passes).toBe(false);
+      expect(summary.parity?.allPass).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(sitePath, { recursive: true, force: true });
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
   it('repair:false skips the loop entirely', async () => {
     const dir = makeSite();
     const sitePath = makeStudioSite();
