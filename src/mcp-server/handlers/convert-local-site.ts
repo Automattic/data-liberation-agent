@@ -20,7 +20,7 @@ import { themeCacheFlushCommands } from './install-theme.js';
 import { ingestLocalSite } from '../../lib/replicate/local-site/ingest.js';
 import { buildNavGraph } from '../../lib/replicate/local-site/nav-graph.js';
 import { segmentPage } from '../../lib/replicate/normalize/segment.js';
-import { buildHeaderPart, buildFooterPart } from '../../lib/replicate/local-theme/chrome-parts.js';
+import { buildHeaderPart, buildFooterPart, findChromeMounts, mountPartMarkup } from '../../lib/replicate/local-theme/chrome-parts.js';
 import { assembleLocalTheme } from '../../lib/replicate/local-theme/theme-files.js';
 import { buildPagePlan } from '../../lib/replicate/local-theme/page-plan.js';
 import { writeReplicaFilesToHost } from '../../lib/preview/replica-install.js';
@@ -271,10 +271,22 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
   // drive layout instead of fighting our decoration.
   const chromeCarried = !!carrySourceAssets?.css.trim() && carryCss;
 
+  // Truthful carry flags, hoisted above the chrome build: mount detection
+  // needs to know whether source JS is actually carried (an empty mount with
+  // no JS to fill it = blank chrome).
+  const carriedCss = carryCss && (carrySourceAssets?.css ?? '').trim().length > 0;
+  const carriedJs = carryJs && (carrySourceAssets?.js ?? '').trim().length > 0;
+
   // Chrome: nav from the graph; footer from the home page's captured footer section.
   const nav = buildNavGraph(site);
   const home = site.pages.find((p) => p.slug === 'home') ?? site.pages[0];
   const footerSection = segmentPage(home.html).find((s) => s.role === 'footer') ?? null;
+  // JS-rendered chrome: when the source mounts header/footer into empty
+  // id-divs at runtime (renderHeader() into <div id="siteHeader">), the parts
+  // become the VERBATIM mounts and the carried source JS renders chrome on
+  // both sides — the JS stays the single source of truth. Gated on carried JS
+  // (no JS = nothing would ever fill the mount).
+  const mounts = chromeCarried && carriedJs ? findChromeMounts(home.html) : {};
   // Sticky rides the header part in plain (carry) mode only — buildHeaderPart
   // ignores it otherwise (tokens path has no carried chrome to toggle).
   // Honesty: when detection found sticky but chrome is not carried, the state
@@ -284,20 +296,24 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
   if (behaviors?.sticky && !chromeCarried) {
     warnings.push('sticky behavior detected but not emitted (requires carried chrome header)');
   }
-  const headerPart = buildHeaderPart(siteTitle, nav, site.pages.map((p) => p.slug), {
-    plain: chromeCarried,
-    ...(behaviors?.sticky ? { sticky: behaviors.sticky } : {}),
-  });
+  const headerPart = mounts.header
+    ? mountPartMarkup(mounts.header, stickyEmitted ? behaviors?.sticky : undefined)
+    : buildHeaderPart(siteTitle, nav, site.pages.map((p) => p.slug), {
+        plain: chromeCarried,
+        ...(behaviors?.sticky ? { sticky: behaviors.sticky } : {}),
+      });
   // Footer tokens (bgToken/textToken) come from the foundation — they style the
   // wrapper group in the footer part we build here. The assembleLocalTheme
   // passthrough was proven inert (we swap parts/footer.html unconditionally),
   // so tokens live exclusively on the part built by buildFooterPart. In carry
   // mode the tokens are omitted — source footer{} rules style the part.
-  const footerPart = buildFooterPart(footerSection, siteTitle, {
-    pageSlugs: site.pages.map((p) => p.slug),
-    bgToken: chromeCarried ? undefined : footerBgToken,
-    textToken: chromeCarried ? undefined : footerTextToken,
-  });
+  const footerPart = mounts.footer
+    ? mountPartMarkup(mounts.footer)
+    : buildFooterPart(footerSection, siteTitle, {
+        pageSlugs: site.pages.map((p) => p.slug),
+        bgToken: chromeCarried ? undefined : footerBgToken,
+        textToken: chromeCarried ? undefined : footerTextToken,
+      });
 
   // Theme assembly + write + activate.
   // In carry mode the localized Google css inside source.css is the SOLE font
@@ -314,13 +330,17 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
     foundation,
     capturedFonts: chromeCarried ? undefined : capturedFonts,
     carrySourceAssets,
+    // Source body data-* attrs by permalink pathname — replayed by the
+    // wp_body_open shim so carried JS keyed on body[data-*] behaves
+    // identically (active-nav etc.). Only pages that HAVE attrs contribute.
+    bodyDataByPath: Object.fromEntries(
+      site.pages
+        .filter((p) => p.bodyData)
+        .map((p) => [p.slug === home.slug ? '/' : `/${p.slug}/`, p.bodyData!]),
+    ),
   });
-  // Truthful carry flags (also gate the repair loop + summary below): css=true
-  // only when the CSS file is actually written; js=true only when the JS file
-  // is actually written. WP_COMPAT_CSS is always non-empty so carryCss:true
-  // always yields css:true when the flag is on.
-  const carriedCss = carryCss && (carrySourceAssets?.css ?? '').trim().length > 0;
-  const carriedJs = carryJs && (carrySourceAssets?.js ?? '').trim().length > 0;
+  // (carriedCss/carriedJs are hoisted above the chrome build — they also gate
+  // the repair loop + summary below.)
 
   let themeWritten = 0;
   try {

@@ -9,6 +9,10 @@ export interface LocalPage {
   html: string;
   /** <title> text, trimmed; "" when absent. */
   title: string;
+  /** body data-* attributes (keys WITHOUT the data- prefix) — JS-rendered
+   * sites key runtime behavior off them; replayed by the theme's
+   * wp_body_open shim. Absent when the body carries none. */
+  bodyData?: Record<string, string>;
 }
 
 export interface LocalSite {

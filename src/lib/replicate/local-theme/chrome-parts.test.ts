@@ -1,6 +1,6 @@
 // src/lib/replicate/local-theme/chrome-parts.test.ts
 import { describe, it, expect } from 'vitest';
-import { buildHeaderPart, buildFooterPart } from './chrome-parts.js';
+import { buildHeaderPart, buildFooterPart, findChromeMounts, mountPartMarkup } from './chrome-parts.js';
 import { blockMarkupRoundtrips } from '../../streaming/block-markup-validate.js';
 import type { NavLink, Section } from '../local-site/types.js';
 
@@ -181,5 +181,43 @@ describe('buildHeaderPart sticky state block (nativeBehaviors)', () => {
     const html = buildHeaderPart('Acme Co', [], ['home', 'about'], { sticky });
     expect(html).not.toContain('dla/sticky');
     expect(blockMarkupRoundtrips(html).ok).toBe(true);
+  });
+});
+
+describe('findChromeMounts (JS-rendered chrome)', () => {
+  const PAGE = `<html><body><div class="page-wrap">
+    <div id="siteHeader"></div>
+    <main><section id="hero"><h1>Hi</h1></section></main>
+    <div id="siteFooter"></div>
+  </div></body></html>`;
+
+  it('finds empty id-divs before and after main (through wrappers)', () => {
+    const m = findChromeMounts(PAGE);
+    expect(m.header).toEqual({ id: 'siteHeader', classes: [] });
+    expect(m.footer).toEqual({ id: 'siteFooter', classes: [] });
+  });
+
+  it('ignores populated divs and divs inside main', () => {
+    const html = `<html><body>
+      <div id="topBanner"><p>Sale!</p></div>
+      <main><div id="inMain"></div><p>x</p></main>
+    </body></html>`;
+    const m = findChromeMounts(html);
+    expect(m.header).toBeUndefined();
+    expect(m.footer).toBeUndefined();
+  });
+
+  it('returns empty when there is no main', () => {
+    expect(findChromeMounts('<html><body><div id="a"></div></body></html>')).toEqual({});
+  });
+});
+
+describe('mountPartMarkup', () => {
+  it('emits an anchored empty group div the carried JS can render into', () => {
+    const markup = mountPartMarkup({ id: 'siteHeader', classes: ['chrome'] });
+    expect(markup).toContain('"anchor":"siteHeader"');
+    expect(markup).toContain('"tagName":"div"');
+    expect(markup).toContain('<div id="siteHeader" class="wp-block-group chrome"></div>');
+    expect(markup).not.toContain('wp:html');
   });
 });

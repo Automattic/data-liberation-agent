@@ -47,6 +47,12 @@ export interface AssembleLocalThemeOpts {
    * non-empty, theme.json `styles` is stripped (source CSS is the design authority;
    * settings stay for editor pickers). Each asset file is written only when non-empty. */
   carrySourceAssets?: CarrySourceAssets;
+  /** Source body data-* attributes per permalink pathname (keys WITHOUT the
+   * data- prefix). Replayed by a wp_body_open shim before any deferred script
+   * runs — JS-rendered sites key behavior off them (body[data-page] active
+   * nav). Emitted only inside the carry block (the attrs matter to carried
+   * source JS). */
+  bodyDataByPath?: Record<string, Record<string, string>>;
 }
 
 /** No-title page template: header part → post-content → footer part.
@@ -76,7 +82,11 @@ function noTitleTemplate(): string {
  * (emitHtmlJsGate): reveal-gated source CSS hides sections behind html.js
  * and relies on a source script (observer) to reveal them — adding the class
  * with no script present would leave that content permanently hidden. */
-function carryEnqueueBlock(themeSlug: string, emitHtmlJsGate: boolean): string {
+function carryEnqueueBlock(
+  themeSlug: string,
+  emitHtmlJsGate: boolean,
+  bodyDataByPath?: Record<string, Record<string, string>>,
+): string {
   const htmlJsBlock = emitHtmlJsGate
     ? `
 // Source reveal scripts gate on html.js (no-JS visitors keep content visible).
@@ -85,6 +95,19 @@ add_action( 'wp_head', function () {
 }, 0 );
 `
     : '';
+  // Replay the SOURCE body data-* attributes (keys stored bare) by pathname,
+  // at wp_body_open — before any deferred script runs — so carried source JS
+  // that keys off body[data-*] (active-nav, page modes) behaves identically.
+  // JSON is <-escaped so no value can close the script tag.
+  const bodyDataBlock =
+    bodyDataByPath && Object.keys(bodyDataByPath).length > 0
+      ? `
+// JS-rendered source: replay body data-* attributes per pathname.
+add_action( 'wp_body_open', function () {
+    echo '<script>(function(){var m=${JSON.stringify(bodyDataByPath).replace(/</g, '\\u003c').replace(/'/g, "\\'")};var d=m[location.pathname];if(d){for(var k in d){document.body.setAttribute("data-"+k,d[k]);}}})();</script>';
+} );
+`
+      : '';
   return `
 // Stage 1d carry: the source site's own CSS/JS, adapted for the block DOM.
 // Enqueued at priority 20 so it lands AFTER global styles + theme style.
@@ -110,7 +133,7 @@ add_action( 'wp_enqueue_scripts', function () {
         wp_enqueue_style( '${themeSlug}-parity-patch', get_theme_file_uri( 'assets/css/parity-patch.css' ), $deps, (string) $patch_mtime );
     }
 }, 20 );
-${htmlJsBlock}`;
+${htmlJsBlock}${bodyDataBlock}`;
 }
 
 export function assembleLocalTheme(opts: AssembleLocalThemeOpts): ReplicaFile[] {
@@ -200,7 +223,7 @@ export function assembleLocalTheme(opts: AssembleLocalThemeOpts): ReplicaFile[] 
     if (fIdx >= 0) {
       withTemplates[fIdx] = {
         ...withTemplates[fIdx],
-        content: withTemplates[fIdx].content + carryEnqueueBlock(opts.themeSlug, hasJS),
+        content: withTemplates[fIdx].content + carryEnqueueBlock(opts.themeSlug, hasJS, opts.bodyDataByPath),
       };
     }
   }

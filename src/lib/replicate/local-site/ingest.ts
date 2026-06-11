@@ -60,11 +60,20 @@ export function ingestLocalSite(root: string): LocalSite {
     const html = readFileSync(full, 'utf8');
     const $ = cheerio.load(html);
     const relPath = relative(root, full);
+    // body data-* attributes: JS-rendered sites key runtime behavior off them
+    // (<body data-page="shop"> drives active-nav). Captured bare (no "data-"
+    // prefix) so the theme's wp_body_open shim can replay them per pathname.
+    const bodyData: Record<string, string> = {};
+    const bodyAttrs = $('body').attr() ?? {};
+    for (const [k, v] of Object.entries(bodyAttrs)) {
+      if (k.startsWith('data-')) bodyData[k.slice('data-'.length)] = v;
+    }
     return {
       relPath,
       slug: slugFromRelPath(relPath),
       html,
       title: $('title').first().text().trim(),
+      ...(Object.keys(bodyData).length > 0 ? { bodyData } : {}),
     };
   });
   pages.sort((a, b) => a.slug.localeCompare(b.slug));

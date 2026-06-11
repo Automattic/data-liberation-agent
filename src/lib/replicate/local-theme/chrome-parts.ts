@@ -16,6 +16,7 @@
 // emitChild remains a known limitation (tracked separately).
 //
 import * as cheerio from 'cheerio';
+import type { Element } from 'domhandler';
 import { emitSectionBlocks, escapeHtml, attrJson } from '../normalize/emit-blocks.js';
 import { slugFromRelPath } from '../local-site/ingest.js';
 import type { NavLink, Section, StickyBehavior } from '../local-site/types.js';
@@ -204,5 +205,71 @@ export function buildFooterPart(footer: Section | null, siteTitle: string, opts:
       `</div>\n` +
       `<!-- /wp:group -->`,
     opts,
+  );
+}
+
+// --- JS-rendered chrome mounts ------------------------------------------------
+//
+// JS-rendered sites ship EMPTY id-divs the runtime fills (renderHeader() into
+// <div id="siteHeader">). Those mounts sit OUTSIDE <main> (often nested in a
+// page wrapper), so segmentation never sees them as chrome and the carried JS
+// has no target in the replica. When found, the header/footer PARTS become the
+// verbatim mounts — the carried source JS then renders chrome at runtime on
+// both sides (philosophy: the source JS is MAINTAINED as the behavior layer;
+// the block layout preserves the DOM contract it targets).
+
+export interface ChromeMount {
+  id: string;
+  classes: string[];
+}
+
+export interface ChromeMounts {
+  header?: ChromeMount;
+  footer?: ChromeMount;
+}
+
+/** Empty (no element children, no text) id-bearing div outside <main>:
+ * last one before main = header mount, first one after = footer mount. */
+export function findChromeMounts(html: string): ChromeMounts {
+  const $ = cheerio.load(html);
+  const main = $('main').first();
+  if (main.length === 0) return {};
+  const all = $('*').toArray() as Element[];
+  const mainIdx = all.indexOf(main.get(0)!);
+  const out: ChromeMounts = {};
+  for (const el of all) {
+    if (el.tagName !== 'div') continue;
+    const $el = $(el);
+    const id = $el.attr('id');
+    if (!id) continue;
+    if (main.length && ($.contains(main.get(0)!, el) || main.get(0) === el)) continue;
+    if ($el.children().length > 0 || $el.text().trim()) continue; // populated = content, not a mount
+    const idx = all.indexOf(el);
+    const classes = ($el.attr('class') ?? '').split(/\s+/).filter(Boolean);
+    if (idx < mainIdx) {
+      out.header = { id, classes }; // keep overwriting — LAST before main is closest
+    } else if (!out.footer) {
+      out.footer = { id, classes }; // FIRST after main
+    }
+  }
+  return out;
+}
+
+/** The mount as a part: an anchored EMPTY group div (NOT wp:html — the theme
+ * policy check rejects custom-html blocks in theme files). Carried JS renders
+ * into it by id; the extra wp-block-group class is inert to source CSS. The
+ * optional sticky state block rides the header mount exactly as it rides the
+ * plain built header (its view.js climbs closest('header') — the part
+ * wrapper). */
+export function mountPartMarkup(mount: ChromeMount, sticky?: StickyBehavior): string {
+  const cls = mount.classes.join(' ');
+  const pairs = [`"anchor":${attrJson(mount.id)}`, '"tagName":"div"'];
+  if (cls) pairs.push(`"className":${attrJson(cls)}`);
+  const divCls = ['wp-block-group', cls].filter(Boolean).join(' ');
+  const stickyBlock = sticky ? `\n${stickyStateBlock(sticky)}` : '';
+  return (
+    `<!-- wp:group {${pairs.join(',')}} -->\n` +
+    `<div id="${escapeHtml(mount.id)}" class="${escapeHtml(divCls)}"></div>\n` +
+    `<!-- /wp:group -->${stickyBlock}`
   );
 }

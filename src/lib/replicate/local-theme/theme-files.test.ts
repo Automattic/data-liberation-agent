@@ -222,3 +222,33 @@ describe('assembleLocalTheme', () => {
     expect(fns).toContain('assets/css/source.css');
   });
 });
+
+describe('body-data replay shim (JS-rendered sites)', () => {
+  it('emits a wp_body_open script replaying data-* attrs by pathname', () => {
+    const files = assembleLocalTheme({
+      siteTitle: 'T',
+      themeSlug: 't',
+      headerPart: 'H',
+      footerPart: 'F',
+      carrySourceAssets: { css: 'body{}', js: 'x();' },
+      bodyDataByPath: { '/': { page: 'home' }, '/shop/': { page: 'shop' } },
+    });
+    const fn = files.find((f) => f.relativePath === 'functions.php')!.content;
+    expect(fn).toContain('wp_body_open');
+    expect(fn).toContain('"/shop/":{"page":"shop"}');
+    expect(fn).toContain('setAttribute');
+    // </script>-safe: the JSON is < -escaped so a value can never close the tag.
+    expect(fn).not.toContain('</script></script>');
+  });
+
+  it('no shim without bodyDataByPath (regression)', () => {
+    const files = assembleLocalTheme({
+      siteTitle: 'T',
+      themeSlug: 't',
+      headerPart: 'H',
+      footerPart: 'F',
+      carrySourceAssets: { css: 'body{}', js: 'x();' },
+    });
+    expect(files.find((f) => f.relativePath === 'functions.php')!.content).not.toContain('wp_body_open');
+  });
+});
