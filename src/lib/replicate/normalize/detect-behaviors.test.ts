@@ -72,4 +72,23 @@ describe('detectBehaviors', () => {
   it('empty source: nothing detected, no gaps', () => {
     expect(detectBehaviors({ css: '', js: '' })).toEqual({ gaps: [] });
   });
+
+  it('reads reveal params from the gate rule, not earlier decoy rules', () => {
+    const decoyCss =
+      `nav a { transition: color 160ms ease; transform: translateY(4px); }` + REVEAL_CSS;
+    const d = detectBehaviors({ css: decoyCss, js: REVEAL_JS });
+    expect(d.reveal).toEqual({ kind: 'reveal', threshold: 0.12, translateY: '18px', durationMs: 600 });
+  });
+
+  it('regex literals containing quotes do not swallow gap statements', () => {
+    const js = `const re = /['"]/;\n` + REVEAL_JS + `rogueTicker.start({ speedMs: 80 });`;
+    const d = detectBehaviors({ css: REVEAL_CSS, js });
+    expect(d.reveal?.kind).toBe('reveal');
+    expect(d.gaps).toHaveLength(1);
+    expect(d.gaps[0].jsExcerpt).toContain('rogueTicker.start');
+  });
+
+  it('comment-only js is noise, not a gap', () => {
+    expect(detectBehaviors({ css: '', js: '// license header only' })).toEqual({ gaps: [] });
+  });
 });
