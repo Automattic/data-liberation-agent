@@ -146,3 +146,36 @@ describe('buildHeaderPart plain mode (carry)', () => {
     expect(html).toContain('"overlayMenu":"never"'); // mirror source: no JS menu
   });
 });
+
+describe('buildHeaderPart sticky state block (nativeBehaviors)', () => {
+  const sticky = { kind: 'sticky' as const, toggleClass: 'is-scrolled', offset: 24 };
+
+  it('plain + sticky appends the dla/sticky state block after the nav', () => {
+    const html = buildHeaderPart('Acme Co', [], ['home', 'about'], { plain: true, sticky });
+    expect(blockMarkupRoundtrips(html).ok).toBe(true);
+    expect(html).toContain('<!-- wp:dla/sticky {"toggleClass":"is-scrolled","offset":24} -->');
+    expect(html).toContain('class="wp-block-dla-sticky"');
+    expect(html).toContain('data-wp-interactive="dla/sticky"');
+    expect(html).toContain(`data-wp-context='{"toggleClass":"is-scrolled","offset":24}'`);
+    expect(html).toContain('data-wp-init="callbacks.init"');
+    // After the nav, not inside it.
+    expect(html.indexOf('wp:dla/sticky')).toBeGreaterThan(html.indexOf('<!-- /wp:navigation -->'));
+    expect(html).toMatch(/<!-- \/wp:dla\/sticky -->$/);
+  });
+
+  it('plain without sticky is byte-identical to the pre-sticky shape (regression)', () => {
+    const html = buildHeaderPart('Acme Co', [], ['home', 'about'], { plain: true });
+    expect(html).toBe(
+      `<!-- wp:site-title {"level":0,"className":"brand"} /-->\n` +
+        `<!-- wp:navigation {"overlayMenu":"never","layout":{"type":"flex"}} -->\n` +
+        `<!-- wp:navigation-link {"label":"About","url":"/about/"} /-->\n` +
+        `<!-- /wp:navigation -->`,
+    );
+  });
+
+  it('non-plain mode ignores sticky (tokens path has no carry chrome)', () => {
+    const html = buildHeaderPart('Acme Co', [], ['home', 'about'], { sticky });
+    expect(html).not.toContain('dla/sticky');
+    expect(blockMarkupRoundtrips(html).ok).toBe(true);
+  });
+});

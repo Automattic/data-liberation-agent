@@ -266,6 +266,42 @@ export function emitSectionBlocks(section: Section, opts: EmitSectionOpts = {}):
 
   const inner = childMarkup.join('\n');
   const cls = (section.classes ?? []).join(' ');
+  const confidence = total === 0 ? 0 : 1 - downgrades / total;
+
+  // nativeBehaviors: a tagged section swaps core/group for the custom
+  // Interactivity wrapper. SAME inner markup, same semantic <section> +
+  // identity classes (carried css keeps matching, stage 1d constraints:
+  // NO layout attribute, tagName stays section). Behavior params ride
+  // data-wp-context (runtime) + inline custom properties (css animation),
+  // both per-site; the plugin files (src/blocks/) are static.
+  if (section.behavior?.kind === 'reveal') {
+    const b = section.behavior;
+    const pairs = [
+      `"anchor":${attrJson(section.id)}`,
+      `"threshold":${JSON.stringify(b.threshold)}`,
+      `"translateY":${attrJson(b.translateY)}`,
+      `"durationMs":${JSON.stringify(b.durationMs)}`,
+    ];
+    const attrs = blockAttrs(pairs, cls);
+    // The context JSON sits in a single-quoted HTML attribute: numbers and
+    // booleans only, so no single quote can break out; the '--' escape mirrors
+    // attrJson (kses -- trap) — a number cannot contain '--' today, but the
+    // contract is enforced here so a future string key cannot regress it.
+    const ctx = `{"visible":false,"threshold":${JSON.stringify(b.threshold)}}`.replace(
+      /--/g,
+      '\\u002d\\u002d',
+    );
+    const wrapCls = ['wp-block-dla-reveal', cls].filter(Boolean).join(' ');
+    const markup =
+      `<!-- wp:dla/reveal${attrs} -->\n` +
+      `<section id="${escapeHtml(section.id)}" class="${escapeHtml(wrapCls)}"` +
+      ` style="--dla-reveal-y:${escapeHtml(b.translateY)};--dla-reveal-ms:${b.durationMs}ms"` +
+      ` data-wp-interactive="dla/reveal" data-wp-context='${ctx}'` +
+      ` data-wp-init="callbacks.init" data-wp-class--is-visible="context.visible">${inner}</section>\n` +
+      `<!-- /wp:dla/reveal -->`;
+    return { markup, confidence };
+  }
+
   const anchorPair = `"anchor":${attrJson(section.id)}`;
   // tagName:section so carried source CSS element-selectors (section { … })
   // keep matching the block DOM — core/group supports semantic tagNames and
@@ -285,6 +321,5 @@ export function emitSectionBlocks(section: Section, opts: EmitSectionOpts = {}):
     `<!-- wp:group${attrs} -->\n` +
     `<${wrapper} id="${escapeHtml(section.id)}" class="${escapeHtml(divCls)}">${inner}</${wrapper}>\n` +
     `<!-- /wp:group -->`;
-  const confidence = total === 0 ? 0 : 1 - downgrades / total;
   return { markup, confidence };
 }

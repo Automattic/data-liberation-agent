@@ -106,3 +106,30 @@ describe('composePage', () => {
     expect(postContent).not.toContain('<b>bold</b>');
   });
 });
+
+describe('composePage reveal tagging (nativeBehaviors)', () => {
+  const reveal = { kind: 'reveal' as const, threshold: 0.2, translateY: '12px', durationMs: 500 };
+
+  it('wraps every body section in wp:dla/reveal and reports the block type', () => {
+    const { postContent, report } = composePage(page, { reveal });
+    expect((postContent.match(/<!-- wp:dla\/reveal \{/g) ?? []).length).toBe(2);
+    expect((postContent.match(/<!-- \/wp:dla\/reveal -->/g) ?? []).length).toBe(2);
+    expect(postContent).toContain('data-wp-interactive="dla/reveal"');
+    expect(postContent).toContain('"threshold":0.2');
+    expect(postContent).not.toContain('wp:group');
+    expect(report.map((r) => r.blockType)).toEqual(['dla/reveal', 'dla/reveal']);
+    expect(report.map((r) => r.sectionId)).toEqual(['hero', 'cta']);
+  });
+
+  it('roundtrip gate accepts the custom dla/reveal delimiter (explicit lock)', () => {
+    const { postContent } = composePage(page, { reveal });
+    expect(blockMarkupRoundtrips(postContent).ok).toBe(true);
+  });
+
+  it('default call (no opts) is identical to explicit empty opts and keeps group wrappers (regression)', () => {
+    const bare = composePage(page);
+    expect(composePage(page, {})).toEqual(bare);
+    expect(bare.postContent).not.toContain('dla/reveal');
+    expect(bare.report.map((r) => r.blockType)).toEqual(['group', 'group']);
+  });
+});

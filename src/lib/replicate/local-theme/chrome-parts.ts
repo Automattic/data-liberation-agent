@@ -18,7 +18,7 @@
 import * as cheerio from 'cheerio';
 import { emitSectionBlocks, escapeHtml, attrJson } from '../normalize/emit-blocks.js';
 import { slugFromRelPath } from '../local-site/ingest.js';
-import type { NavLink, Section } from '../local-site/types.js';
+import type { NavLink, Section, StickyBehavior } from '../local-site/types.js';
 
 /** "/": home; otherwise "/<slug>/" — matches the WP page permalinks created in page-plan. */
 function slugToUrl(slug: string): string {
@@ -56,6 +56,33 @@ export interface HeaderPartOpts {
    * `header { … }` layout rules (flex/padding), so our decorative wrapper
    * would fight them. Default false (tokens path keeps the styled wrapper). */
   plain?: boolean;
+  /** nativeBehaviors: append the dla/sticky state block after the nav (plain
+   * carry mode only — the tokens path has no carried chrome to toggle). Zero
+   * visual footprint: an empty marker div whose view.js climbs
+   * closest('header'), so the toggled class lands on the template-part
+   * <header> wrapper the carried `header.<class>` rules target. */
+  sticky?: StickyBehavior;
+}
+
+/**
+ * Empty marker block carrying the sticky scroll state (Interactivity API).
+ * The JSON rides BOTH the comment attrs and the single-quoted data-wp-context
+ * attribute: attrJson covers the kses '--' trap (toggleClass may legally
+ * contain '--'); the ' escape keeps a pathological single quote from
+ * breaking out of the attribute (detection constrains toggleClass to
+ * [a-zA-Z0-9_-]+ — this is belt-and-braces).
+ */
+function stickyStateBlock(sticky: StickyBehavior): string {
+  const json = `{"toggleClass":${attrJson(sticky.toggleClass)},"offset":${JSON.stringify(sticky.offset)}}`.replace(
+    /'/g,
+    '\\u0027',
+  );
+  return (
+    `\n<!-- wp:dla/sticky ${json} -->\n` +
+    `<div class="wp-block-dla-sticky" data-wp-interactive="dla/sticky"` +
+    ` data-wp-context='${json}' data-wp-init="callbacks.init"></div>\n` +
+    `<!-- /wp:dla/sticky -->`
+  );
 }
 
 export function buildHeaderPart(
@@ -72,7 +99,8 @@ export function buildHeaderPart(
     // overlayMenu:never — mirror the source exactly (its nav has no JS menu;
     // links simply wrap on small screens under the carried source CSS).
     const plainNav = `<!-- wp:navigation {"overlayMenu":"never","layout":{"type":"flex"}} -->\n${links}\n<!-- /wp:navigation -->`;
-    return `${siteTitleBlock}\n${plainNav}`;
+    const sticky = opts.sticky ? stickyStateBlock(opts.sticky) : '';
+    return `${siteTitleBlock}\n${plainNav}${sticky}`;
   }
   const navBlock = `<!-- wp:navigation {"overlayMenu":"mobile","layout":{"type":"flex"}} -->\n${links}\n<!-- /wp:navigation -->`;
   return (

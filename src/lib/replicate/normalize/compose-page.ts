@@ -3,15 +3,24 @@ import { composeInstantiate, type LayoutSkeleton } from '../compose-instantiate.
 import { blockMarkupRoundtrips } from '../../streaming/block-markup-validate.js';
 import { segmentPage } from './segment.js';
 import { emitSectionBlocks } from './emit-blocks.js';
-import type { LocalPage, NormalizeReportEntry } from '../local-site/types.js';
+import type { LocalPage, NormalizeReportEntry, RevealBehavior } from '../local-site/types.js';
 
 export interface ComposePageResult {
   postContent: string;
   report: NormalizeReportEntry[];
 }
 
-export function composePage(page: LocalPage): ComposePageResult {
-  const bodySections = segmentPage(page.html).filter((s) => s.role === 'body');
+export interface ComposePageOpts {
+  /** nativeBehaviors: tag every body section with the detected reveal. The
+   * source observed document.querySelectorAll('section') — all sections —
+   * so tagging is uniform, mirroring source semantics exactly. */
+  reveal?: RevealBehavior;
+}
+
+export function composePage(page: LocalPage, opts: ComposePageOpts = {}): ComposePageResult {
+  const bodySections = segmentPage(page.html)
+    .filter((s) => s.role === 'body')
+    .map((s) => (opts.reveal ? { ...s, behavior: opts.reveal } : s));
   // Genuinely empty page: nothing to validate, skip the roundtrip gate.
   if (bodySections.length === 0) return { postContent: '', report: [] };
 
@@ -23,7 +32,7 @@ export function composePage(page: LocalPage): ComposePageResult {
     const { markup, confidence } = emitSectionBlocks(section);
     skeleton.sections.push({ type: 'content', slots: [section.id] });
     pageContent[section.id] = markup;
-    report.push({ sectionId: section.id, blockType: 'group', confidence });
+    report.push({ sectionId: section.id, blockType: section.behavior ? 'dla/reveal' : 'group', confidence });
   }
 
   const composed = composeInstantiate(skeleton, pageContent, {});

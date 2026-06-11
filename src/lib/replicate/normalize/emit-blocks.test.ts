@@ -249,3 +249,48 @@ it('emits source tables as core/table preserving rows, header, and class', () =>
   expect(markup).toContain('<figure class="price-table"><table>'); // classless of wp-block-table: block-library td/th rules would out-rank source element rules
   expect(confidence).toBe(1); // native mapping, no downgrade
 });
+
+describe('reveal wrapper swap', () => {
+  const section = {
+    id: 'story',
+    role: 'body' as const,
+    html: '<section id="story" class="intro"><h2>Tale</h2><p>Once.</p></section>',
+    classes: ['intro'],
+    behavior: { kind: 'reveal' as const, threshold: 0.25, translateY: '24px', durationMs: 450 },
+  };
+
+  it('emits dla/reveal wrapper with context directives + inline animation vars', () => {
+    const { markup, confidence } = emitSectionBlocks(section);
+    expect(confidence).toBe(1);
+    // Comment delimiter: custom block, attrJson-escaped attributes.
+    expect(markup).toMatch(/^<!-- wp:dla\/reveal \{/);
+    expect(markup).toContain('"threshold":0.25');
+    expect(markup).toContain('"anchor":"story"');
+    expect(markup).toContain('"className":"intro"');
+    // Wrapper element: same semantic <section>, source identity preserved,
+    // block class + directives + per-site animation custom properties.
+    expect(markup).toContain('<section id="story"');
+    expect(markup).toContain('class="wp-block-dla-reveal intro"');
+    expect(markup).toContain('data-wp-interactive="dla/reveal"');
+    expect(markup).toContain('data-wp-init="callbacks.init"');
+    expect(markup).toContain('data-wp-class--is-visible="context.visible"');
+    expect(markup).toContain('style="--dla-reveal-y:24px;--dla-reveal-ms:450ms"');
+    // data-wp-context JSON must ride attrJson escaping (kses -- trap).
+    expect(markup).toContain('data-wp-context=');
+    expect(markup).toContain('"threshold":0.25');
+    // Children unchanged.
+    expect(markup).toContain('<h2 class="wp-block-heading">Tale</h2>');
+    expect(markup).toMatch(/<!-- \/wp:dla\/reveal -->$/);
+  });
+
+  it('untagged section still emits core/group (regression)', () => {
+    const { markup } = emitSectionBlocks({ ...section, behavior: undefined });
+    expect(markup).toMatch(/^<!-- wp:group \{/);
+    expect(markup).not.toContain('dla/reveal');
+  });
+
+  it('reveal markup round-trips through the block balance gate', () => {
+    const { markup } = emitSectionBlocks(section);
+    expect(blockMarkupRoundtrips(markup).ok).toBe(true);
+  });
+});
