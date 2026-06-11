@@ -2,13 +2,25 @@ import { describe, it, expect } from 'vitest';
 import { buildHtmlFallbackBlock, isWpLayoutMarkup, selectIslandSource } from './html-fallback.js';
 import { scanForInjection } from './validate-artifacts.js';
 import { buildInternalLinkMap } from '../streaming/internal-link-rewrite.js';
+import {
+  PIPELINE_ISLAND_OPENER,
+  containsUnmarkedCustomHtmlBlock,
+} from '../wordpress/block-policy.js';
 
 describe('buildHtmlFallbackBlock', () => {
-  it('wraps the sanitized section in a core/html block', () => {
+  it('wraps the sanitized section in a MARKED core/html block', () => {
     const out = buildHtmlFallbackBlock('<section><h2>Our story</h2></section>', {});
-    expect(out.startsWith('<!-- wp:html -->')).toBe(true);
+    expect(out.startsWith(PIPELINE_ISLAND_OPENER)).toBe(true);
     expect(out.trimEnd().endsWith('<!-- /wp:html -->')).toBe(true);
     expect(out).toContain('<h2>Our story</h2>');
+  });
+
+  it('the emitted island bears the pipeline marker the install-time wp:html ban recognizes', () => {
+    const out = buildHtmlFallbackBlock('<section><p>Copy</p></section>', {});
+    // Marked island → NOT flagged as a hand-authored Custom HTML block.
+    expect(containsUnmarkedCustomHtmlBlock(out)).toBe(false);
+    // A bare (legacy / hand-authored) island IS flagged.
+    expect(containsUnmarkedCustomHtmlBlock('<!-- wp:html -->\n<div>x</div>\n<!-- /wp:html -->')).toBe(true);
   });
 
   it('strips <script>, <style>, inline on*= handlers, and <?php so it passes the injection gate', () => {

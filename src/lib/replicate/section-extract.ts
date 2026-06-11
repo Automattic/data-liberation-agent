@@ -597,6 +597,52 @@ export interface SectionSpecButton {
   iconAfter?: boolean;
 }
 
+/**
+ * One recognized field of a captured source form. The browser walk emits raw
+ * field records (tag/type/label/geometry); classification into these shapes
+ * happens in Node via the pure `buildSectionForms` — same split as
+ * `buildSelector`/`filterIconCandidate`. Consumed by the blocks reconstruction
+ * to emit `jetpack/field-*` blocks in place of the source form.
+ */
+export interface SectionSpecFormField {
+  kind:
+    | 'text'
+    | 'name'
+    | 'email'
+    | 'tel'
+    | 'url'
+    | 'number'
+    | 'date'
+    | 'checkbox'
+    | 'radio'
+    | 'select'
+    | 'textarea'
+    | 'file'
+    | 'hidden'
+    | 'consent';
+  /** Resolved label: <label for> text → aria-label → name attr (humanized) →
+   *  placeholder → the kind itself. Never empty. */
+  label: string;
+  /** required attribute OR a visible `*` marker in the label text. */
+  required: boolean;
+  placeholder?: string;
+  defaultValue?: string;
+  /** Choice labels for select / radio / checkbox groups, in source order. */
+  options?: string[];
+  /** Quantized share of the form row this field occupies — fields whose boxes
+   *  share a row (top within ±8px) split it (2-up → 50/50). Absent on hidden
+   *  fields (no geometry). */
+  widthPct?: 25 | 50 | 75 | 100;
+}
+
+/** A captured source form: its recognized fields + the submit button label.
+ *  A form with ZERO recognized fields is omitted entirely (the section falls
+ *  back to today's island behavior). Optional for back-compat. */
+export interface SectionSpecForm {
+  fields: SectionSpecFormField[];
+  submitLabel: string;
+}
+
 export interface SectionSpecCell {
   /** The cell's title — its largest-font text node, or null when no clear title. */
   heading: string | null;
@@ -780,6 +826,14 @@ export interface SectionSpec {
    */
   cells?: SectionSpecCell[];
   /**
+   * Source forms whose box falls in this section's Y-band, with recognized
+   * fields classified (kind/label/required/options/width) and the submit label
+   * captured. The blocks reconstruction emits these as `jetpack/contact-form`
+   * in place of the dead source form. Present only when a form with at least
+   * one recognized field was found. Optional for back-compat.
+   */
+  forms?: SectionSpecForm[];
+  /**
    * Sanitizable source outerHTML of the section, for the coverage-gated
    * `core/html` verbatim fallback (see section-coverage.ts / html-fallback.ts).
    * Present only when the section's HTML fit under SECTION_HTML_FALLBACK_CAP —
@@ -860,6 +914,44 @@ interface RawSection {
   cells?: RawCell[];
   /** Structured button capture (built into SectionSpec.buttons in Node). */
   buttons?: RawButton[];
+  /** Raw per-form capture (classified into SectionSpec.forms in Node). */
+  forms?: RawForm[];
+}
+
+/** Raw per-field capture from the browser walk (classified into
+ *  SectionSpecFormField by the pure `buildSectionForms` in Node). The walk only
+ *  resolves what NEEDS the live document (the <label for>/wrapping-label text);
+ *  every policy decision (kind, label chain, grouping, width) lives in Node so
+ *  it's testable without a browser. */
+export interface RawFormField {
+  /** Lowercased tag: 'input' | 'select' | 'textarea'. */
+  tag: string;
+  /** Lowercased `type` attribute ('' when absent — an input defaults to text). */
+  typeAttr: string;
+  nameAttr: string;
+  ariaLabel: string;
+  /** Text of the matching <label for=…> / wrapping <label>, resolved in-browser. */
+  labelText: string;
+  placeholder: string;
+  /** `value` attribute (inputs) / textContent (textarea). */
+  value: string;
+  required: boolean;
+  /** <option> texts in source order (select only). */
+  optionTexts: string[];
+  /** Absolute page Y of the field box — row grouping for widthPct. 0 for hidden. */
+  rectTop: number;
+  /** Pixel width of the field box. Used by `buildSectionForms` to compute
+   *  proportional widthPct shares within a row (quantized to nearest 25|50|75|100).
+   *  Falls back to equal split when zero or absent for any row member. */
+  rectWidth: number;
+}
+
+/** Raw per-form capture from the browser walk. */
+export interface RawForm {
+  fields: RawFormField[];
+  /** Buttons inside the form, in document order. `isSubmit` = input[type=submit]
+   *  or a <button> whose type is submit/absent. */
+  submitCandidates: Array<{ isSubmit: boolean; text: string }>;
 }
 
 /** Raw per-button capture from the browser walk (shaped into SectionSpecButton in Node). */
@@ -965,6 +1057,234 @@ export function filterIconCandidate(c: {
   return { kind: 'glyph', glyph, fontFamily: c.fontFamily, width: w, height: h };
 }
 
+// ---------------------------------------------------------------------------
+// buildSectionForms — PURE form-field classifier (unit-tested without a
+// browser). The DOM walk only emits plain raw records; all policy lives here:
+// kind classification, the label chain, radio/checkbox group collapsing,
+// required detection, row-geometry width quantization, submit-label choice.
+// ---------------------------------------------------------------------------
+
+/** input `type` values we can map to a Jetpack form field ('' = default text). */
+const RECOGNIZED_INPUT_TYPES = new Set([
+  '',
+  'text',
+  'email',
+  'tel',
+  'phone', // non-standard but real: Wix emits type="phone" for telephone fields
+  'url',
+  'number',
+  'date',
+  'checkbox',
+  'radio',
+  'hidden',
+  'file',
+]);
+/** A text input whose label/name reads as a person-name field. */
+const NAME_FIELD_RE = /^(full |first |last )?name$/i;
+/** A lone checkbox whose label reads as a terms/consent agreement. */
+const CONSENT_RE = /terms|consent|privacy|agree/i;
+/** Same-row tolerance (px) for widthPct row grouping. */
+const FORM_ROW_TOLERANCE_PX = 8;
+
+/** "first_name" / "companySize" / "classes[]" → "First name" / "Company size" / "Classes". */
+function humanizeFieldName(name: string): string {
+  const words = name
+    .replace(/\[\]/g, '')
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/[_\-.[\]]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+  return words ? words.charAt(0).toUpperCase() + words.slice(1) : '';
+}
+
+/** Strip a trailing required marker / colon from a label ("Phone *" → "Phone"). */
+function cleanLabel(label: string): string {
+  const cleaned = label.replace(/\s*[*:]+\s*$/, '').trim();
+  return cleaned || label.trim();
+}
+
+/** Label chain: labelText → ariaLabel → name attr (humanized) → placeholder → kind. */
+function resolveFieldLabel(f: RawFormField, kind: SectionSpecFormField['kind']): string {
+  if (f.labelText.trim()) return cleanLabel(f.labelText);
+  if (f.ariaLabel.trim()) return cleanLabel(f.ariaLabel);
+  const humanized = humanizeFieldName(f.nameAttr);
+  if (humanized) return humanized;
+  if (f.placeholder.trim()) return f.placeholder.trim();
+  return kind.charAt(0).toUpperCase() + kind.slice(1);
+}
+
+/** Quantize 100/rowSize to the nearest of 25|50|75|100 (rowSize > 4 → 25). */
+function quantizeRowWidth(rowSize: number): 25 | 50 | 75 | 100 {
+  if (rowSize > 4) return 25;
+  const exact = 100 / rowSize;
+  const steps: Array<25 | 50 | 75 | 100> = [25, 50, 75, 100];
+  let best: 25 | 50 | 75 | 100 = 100;
+  let bestDist = Infinity;
+  for (const s of steps) {
+    const d = Math.abs(s - exact);
+    if (d < bestDist) {
+      bestDist = d;
+      best = s;
+    }
+  }
+  return best;
+}
+
+/** Quantize a fractional share (0–1) to the nearest of 25|50|75|100 (min 25). */
+function quantizeSharePct(share: number): 25 | 50 | 75 | 100 {
+  const pct = share * 100;
+  const steps: Array<25 | 50 | 75 | 100> = [25, 50, 75, 100];
+  let best: 25 | 50 | 75 | 100 = 25;
+  let bestDist = Infinity;
+  for (const s of steps) {
+    const d = Math.abs(s - pct);
+    if (d < bestDist) {
+      bestDist = d;
+      best = s;
+    }
+  }
+  return best;
+}
+
+/** Assign widthPct to a row of fields. When all members have a positive
+ *  rectWidth, compute each field's proportional share and quantize to the
+ *  nearest of 25|50|75|100. Fall back to the equal-split (quantizeRowWidth)
+ *  when ANY member is missing a width (0 or absent).
+ *
+ *  NOTE: each field quantizes INDEPENDENTLY, so a 3+-field unequal row can
+ *  sum past 100 (e.g. 40/40/20 → 50/50/25 = 125). No sum repair on purpose:
+ *  Jetpack's flex-basis layout WRAPS the overflowing field onto a new visual
+ *  row rather than clipping it — accepted behavior. */
+function assignRowWidths(
+  idxs: number[],
+  rectWidthsByIdx: Map<number, number>,
+  fields: SectionSpecFormField[],
+): void {
+  const widths = idxs.map((i) => rectWidthsByIdx.get(i) ?? 0);
+  const total = widths.reduce((a, b) => a + b, 0);
+  if (total > 0 && widths.every((w) => w > 0)) {
+    // Proportional split: each field gets its share quantized to nearest 25.
+    for (let j = 0; j < idxs.length; j++) {
+      fields[idxs[j]!]!.widthPct = quantizeSharePct(widths[j]! / total);
+    }
+  } else {
+    // Fall back to equal split (current behavior) when widths are missing/zero.
+    const pct = quantizeRowWidth(idxs.length);
+    for (const i of idxs) fields[i]!.widthPct = pct;
+  }
+}
+
+export function buildSectionForms(rawForms: RawForm[]): SectionSpecForm[] {
+  const out: SectionSpecForm[] = [];
+  for (const raw of rawForms) {
+    // Recognized raw fields only (a password/search/submit input is skipped).
+    const recognized = raw.fields.filter((f) => {
+      if (f.tag === 'select' || f.tag === 'textarea') return true;
+      return f.tag === 'input' && RECOGNIZED_INPUT_TYPES.has(f.typeAttr);
+    });
+
+    // Classify in source order, collapsing shared-name radio/checkbox groups
+    // into ONE field whose options are the member labels (source order).
+    const fields: SectionSpecFormField[] = [];
+    /** Parallel rectTop per emitted field (null = hidden, excluded from rows). */
+    const tops: Array<number | null> = [];
+    /** Captured pixel width per emitted field index; 0 when unavailable. */
+    const rectWidthsByIdx = new Map<number, number>();
+    const groupedNames = new Set<string>();
+    for (const f of recognized) {
+      const isGroupable = f.tag === 'input' && (f.typeAttr === 'radio' || f.typeAttr === 'checkbox');
+      if (isGroupable && f.nameAttr) {
+        if (groupedNames.has(f.nameAttr)) continue; // already collapsed into its group
+        const members = recognized.filter(
+          (m) => m.tag === 'input' && m.typeAttr === f.typeAttr && m.nameAttr === f.nameAttr,
+        );
+        if (members.length > 1) {
+          groupedNames.add(f.nameAttr);
+          const options = members.map((m) =>
+            m.labelText.trim() ? cleanLabel(m.labelText) : m.value.trim() || cleanLabel(m.ariaLabel) || m.nameAttr,
+          );
+          rectWidthsByIdx.set(fields.length, f.rectWidth);
+          fields.push({
+            kind: f.typeAttr as 'radio' | 'checkbox',
+            label: humanizeFieldName(f.nameAttr) || resolveFieldLabel(f, f.typeAttr as 'radio' | 'checkbox'),
+            required: members.some((m) => m.required || /\*/.test(m.labelText)),
+            options,
+          });
+          tops.push(Math.round(f.rectTop));
+          continue;
+        }
+      }
+
+      let kind: SectionSpecFormField['kind'];
+      if (f.tag === 'select') kind = 'select';
+      else if (f.tag === 'textarea') kind = 'textarea';
+      else if (f.typeAttr === 'checkbox') kind = 'checkbox'; // consent check below, after label resolves
+      else if (f.typeAttr === '' || f.typeAttr === 'text') kind = 'text';
+      else if (f.typeAttr === 'phone') kind = 'tel'; // Wix's non-standard type="phone" → telephone
+      else kind = f.typeAttr as SectionSpecFormField['kind'];
+
+      const label = resolveFieldLabel(f, kind);
+      if (kind === 'checkbox' && CONSENT_RE.test(label)) kind = 'consent';
+      if (kind === 'text' && (NAME_FIELD_RE.test(label) || NAME_FIELD_RE.test(humanizeFieldName(f.nameAttr)))) {
+        kind = 'name';
+      }
+
+      const field: SectionSpecFormField = {
+        kind,
+        label,
+        required: f.required || /\*/.test(f.labelText),
+      };
+      if (f.placeholder.trim()) field.placeholder = f.placeholder.trim();
+      // Default value: meaningful for text-likes + hidden; a checkbox/radio/file
+      // `value` attr is the SUBMIT value, not a user-facing default.
+      if (f.value.trim() && kind !== 'checkbox' && kind !== 'consent' && kind !== 'radio' && kind !== 'file' && kind !== 'select') {
+        field.defaultValue = f.value.trim();
+      }
+      if (kind === 'select') {
+        const options = f.optionTexts.map((o) => o.trim()).filter(Boolean);
+        if (options.length > 0) field.options = options;
+      }
+      rectWidthsByIdx.set(fields.length, f.rectWidth);
+      fields.push(field);
+      tops.push(kind === 'hidden' ? null : Math.round(f.rectTop));
+    }
+
+    if (fields.length === 0) continue; // zero recognized fields → omit the form
+
+    // widthPct from row geometry: fields whose top is within ±8px share a row;
+    // Hidden fields (null top) have no geometry and get no widthPct.
+    // NOTE: within a row, each field's share is computed from captured rectWidth
+    // (proportional split, quantized to nearest 25|50|75|100). Falls back to equal
+    // split (100/rowSize) when ANY row member has a missing/zero rectWidth.
+    const rows = new Map<number, number[]>(); // anchor top → field indexes
+    for (let i = 0; i < fields.length; i++) {
+      const top = tops[i];
+      if (top === null) continue;
+      let anchor: number | undefined;
+      for (const a of rows.keys()) {
+        if (Math.abs(a - top) <= FORM_ROW_TOLERANCE_PX) {
+          anchor = a;
+          break;
+        }
+      }
+      if (anchor === undefined) rows.set(top, [i]);
+      else rows.get(anchor)!.push(i);
+    }
+    for (const idxs of rows.values()) {
+      assignRowWidths(idxs, rectWidthsByIdx, fields);
+    }
+
+    // Submit label: first [type=submit] with text → last button with text → 'Submit'.
+    const submitHit = raw.submitCandidates.find((c) => c.isSubmit && c.text.trim());
+    const lastWithText = [...raw.submitCandidates].reverse().find((c) => c.text.trim());
+    const submitLabel = (submitHit ?? lastWithText)?.text.trim() || 'Submit';
+
+    out.push({ fields, submitLabel });
+  }
+  return out;
+}
+
 /** Derive a coarse motion class from the raw signals (spec "Motion profile"). */
 function deriveMotionClass(signals: string[]): SectionSpecMotion['motionClass'] {
   if (signals.includes('marquee-like')) return 'marquee';
@@ -1049,6 +1369,25 @@ export async function extractFull(
         const r = el.getBoundingClientRect();
         return r.width > 0 && r.height > 0;
       };
+      // Chrome-bound exclusion for BODY-section candidates. A header's mega-menu
+      // dropdown (e.g. Shopify Dawn's #MegaMenu-Content-N) hides via
+      // visibility/opacity — NOT display:none — so offsetParent stays non-null and
+      // isVisible() passes; on a page whose real body is thin it then wins a band
+      // and renders a junk product strip atop every reconstructed page. Body
+      // sections must never come from inside header/footer/nav (chrome is
+      // supplied by the theme scaffold parts), and never from a subtree an
+      // author marked aria-hidden (closed drawers/modals). The landmark elements
+      // THEMSELVES stay eligible — stripChrome removes those downstream, and the
+      // landmark census records them — only their DESCENDANTS are excluded.
+      const CHROME_SELECTOR =
+        'header, footer, nav, [role="banner"], [role="contentinfo"], [role="navigation"]';
+      const isChromeDescendant = (el: Element): boolean => {
+        const hit = el.closest(CHROME_SELECTOR);
+        return hit !== null && hit !== el;
+      };
+      const isHiddenOverlay = (el: Element): boolean => el.closest('[aria-hidden="true"]') !== null;
+      const isExcludedBodyCandidate = (el: Element): boolean =>
+        isChromeDescendant(el) || isHiddenOverlay(el);
       const selectorPartsOf = (el: Element) => {
         const tag = el.tagName.toLowerCase();
         let nth = 1;
@@ -1105,6 +1444,7 @@ export async function extractFull(
         'main > section, main > article, section, header, footer, nav, article, aside, [role="region"], [role="banner"], [role="contentinfo"], [role="navigation"]';
       const semanticCandidates = Array.from(document.querySelectorAll(SEMANTIC_SELECTOR)).filter((el) => {
         if (!isVisible(el)) return false;
+        if (isExcludedBodyCandidate(el)) return false;
         const r = el.getBoundingClientRect();
         if (r.height < 200 || r.width < 600) return false;
         if (el === document.body || el === document.documentElement) return false;
@@ -1156,6 +1496,7 @@ export async function extractFull(
       const collectBandCandidates = (): Element[] =>
         Array.from(document.body.querySelectorAll('*')).filter((el) => {
           if (!isVisible(el)) return false;
+          if (isExcludedBodyCandidate(el)) return false;
           const r = el.getBoundingClientRect();
           if (r.height < 200 || r.width < 600) return false;
           if (el.querySelectorAll('img').length === 0 && (el.textContent || '').trim().length < 20) return false;
@@ -1240,6 +1581,7 @@ export async function extractFull(
         // section tiling (a div-only page-builder export).
         const tileEls = Array.from(document.querySelectorAll('section'))
           .filter((el) => isVisible(el))
+          .filter((el) => !isExcludedBodyCandidate(el))
           .filter((el) => {
             const r = el.getBoundingClientRect();
             return r.width >= 600 && r.height >= 80;
@@ -1560,17 +1902,34 @@ export async function extractFull(
 
         const descendants = Array.from(el.querySelectorAll('*')).filter(isVisible);
 
-        // headings: semantic h1-h6 OR styled text >= 28px
+        // headings: semantic h1-h6 OR styled text >= 28px.
+        // Semantic h-tags qualify by their full textContent, NOT a direct
+        // text-node child: page-builder rich text (Wix) wraps every heading's
+        // text in a <span> (`<h1><span>GALLERY</span></h1>`), so a direct-text
+        // requirement silently drops every semantic heading below the 28px
+        // styled-text floor (a 16px eyebrow h1 vanished from every capture).
+        // The containment guard keeps a big styled span INSIDE an already-
+        // captured heading from double-capturing the same text (ancestors come
+        // first in document order, so checking the candidate's ancestors works).
         const headingEls: Element[] = [];
         let maxHeadingPx = 0;
         for (const d of descendants) {
           const tag = d.tagName.toLowerCase();
           const size = parseFloat(getComputedStyle(d).fontSize) || 0;
+          const insideCaptured = headingEls.some((h) => h !== d && h.contains(d));
+          if (insideCaptured) continue;
+          if (HEADING_TAGS.test(tag)) {
+            if ((d.textContent || '').trim().length > 2) {
+              headingEls.push(d);
+              if (size > maxHeadingPx) maxHeadingPx = size;
+            }
+            continue;
+          }
           const ownText = Array.from(d.childNodes).some(
             (n) => n.nodeType === 3 && (n.nodeValue || '').trim().length > 2,
           );
           if (!ownText) continue;
-          if (HEADING_TAGS.test(tag) || (size >= 28 && (d.textContent || '').trim().length < 120)) {
+          if (size >= 28 && (d.textContent || '').trim().length < 120) {
             headingEls.push(d);
             if (size > maxHeadingPx) maxHeadingPx = size;
           }
@@ -1909,6 +2268,94 @@ export async function extractFull(
           })
           .filter((b) => b.label || b.icon)
           .slice(0, 12);
+
+        // ---- form capture (raw; classified in Node via buildSectionForms) ----
+        // A form belongs to this section when its box's vertical CENTER falls in
+        // the section's Y-band [top, bottom) — the same geometry rule the
+        // sibling background/<img> scans above use — so forms rendered in
+        // sibling stacking layers (page builders) still attach to the right
+        // band. The walk emits PLAIN records only; the one thing resolved here
+        // is the <label for>/wrapping-label text, which needs the live document.
+        const rawForms: Array<{
+          fields: Array<{
+            tag: string;
+            typeAttr: string;
+            nameAttr: string;
+            ariaLabel: string;
+            labelText: string;
+            placeholder: string;
+            value: string;
+            required: boolean;
+            optionTexts: string[];
+            rectTop: number;
+            rectWidth: number;
+          }>;
+          submitCandidates: Array<{ isSubmit: boolean; text: string }>;
+        }> = [];
+        for (const fo of Array.from(document.querySelectorAll('form'))) {
+          if (!isVisible(fo)) continue;
+          const fr = fo.getBoundingClientRect();
+          const fcy = fr.top + window.scrollY + fr.height / 2;
+          if (fcy < top || fcy >= bottom) continue;
+          const fields = Array.from(fo.querySelectorAll('input, select, textarea'))
+            .slice(0, 60)
+            .map((fe) => {
+              const ftag = fe.tagName.toLowerCase();
+              const typeAttr = (fe.getAttribute('type') || '').toLowerCase();
+              // <label for=…> lookup, falling back to a wrapping <label> — must
+              // happen IN the browser (needs document access).
+              let labelText = '';
+              const fid = fe.getAttribute('id');
+              if (fid) {
+                const lab = document.querySelector(`label[for="${CSS.escape(fid)}"]`);
+                if (lab) labelText = (lab.textContent || '').replace(/\s+/g, ' ').trim();
+              }
+              if (!labelText) {
+                const wrap = fe.closest('label');
+                if (wrap) labelText = (wrap.textContent || '').replace(/\s+/g, ' ').trim();
+              }
+              const fr2 = fe.getBoundingClientRect();
+              const value =
+                ftag === 'textarea' ? (fe.textContent || '').trim() : fe.getAttribute('value') || '';
+              return {
+                tag: ftag,
+                typeAttr,
+                nameAttr: fe.getAttribute('name') || '',
+                ariaLabel: fe.getAttribute('aria-label') || '',
+                labelText: labelText.slice(0, 200),
+                placeholder: fe.getAttribute('placeholder') || '',
+                value: value.slice(0, 200),
+                required: fe.hasAttribute('required') || fe.getAttribute('aria-required') === 'true',
+                optionTexts:
+                  ftag === 'select'
+                    ? Array.from((fe as HTMLSelectElement).options)
+                        .map((o) => (o.textContent || '').trim())
+                        .filter(Boolean)
+                        .slice(0, 50)
+                    : [],
+                rectTop: typeAttr === 'hidden' ? 0 : Math.round(fr2.top + window.scrollY),
+                rectWidth: Math.round(fr2.width),
+              };
+            });
+          const submitCandidates = Array.from(
+            fo.querySelectorAll('button, input[type="submit"]'),
+          )
+            .slice(0, 8)
+            .map((sb) => {
+              const stag = sb.tagName.toLowerCase();
+              const stype = (sb.getAttribute('type') || '').toLowerCase();
+              return {
+                // <button> defaults to type=submit when the attr is absent.
+                isSubmit: stag === 'input' ? true : stype === 'submit' || stype === '',
+                text: (stag === 'input'
+                  ? sb.getAttribute('value') || ''
+                  : (sb.textContent || '').replace(/\s+/g, ' ').trim()
+                ).slice(0, 80),
+              };
+            });
+          rawForms.push({ fields, submitCandidates });
+          if (rawForms.length >= 6) break;
+        }
 
         // repeated direct-child units (cards / columns / rows)
         // Use the tightest content wrapper whose direct children form a UNIFORM
@@ -2536,6 +2983,7 @@ export async function extractFull(
           sectionHtml,
           styledHtml,
           cells,
+          forms: rawForms,
           selectorParts: selectorPartsOf(el),
         };
       };
@@ -2669,6 +3117,11 @@ export async function extractFull(
       if (meaningful.length >= 2) cells = meaningful;
     }
 
+    // Classify raw form captures into SectionSpecForm[] (pure, unit-tested).
+    // Forms with zero recognized fields vanish here — the section then keeps
+    // today's island behavior.
+    const forms = buildSectionForms((rr as unknown as { forms?: RawForm[] }).forms ?? []);
+
     return {
       sectionIndex: i,
       selector: buildSelector((rr as unknown as { selectorParts: SelectorParts }).selectorParts),
@@ -2728,6 +3181,7 @@ export async function extractFull(
       ...(reviews ? { reviews } : {}),
       ...(faqs ? { faqs } : {}),
       ...(cells ? { cells } : {}),
+      ...(forms.length > 0 ? { forms } : {}),
       // Persist the section's source HTML for the verbatim fallback ONLY when it
       // fit under the cap — an over-cap section yields truncated (invalid) markup
       // and is therefore not fallback-eligible.
@@ -2757,6 +3211,72 @@ export async function extractFull(
 // shared connectBrowser helper (same as screenshotter.ts), navigates, settles,
 // triggers lazy-load, runs extractFull, then tears down. Same-origin enforced.
 // ---------------------------------------------------------------------------
+
+/**
+ * Walk a SAVED settled-HTML capture (`<outputDir>/html/<slug>.html`) instead of
+ * re-navigating the live site. The saved file is the serialized post-settle DOM
+ * from the screenshot phase — the same page state the source screenshots show —
+ * so specs derived from it stay coherent with screenshots/manifest and are
+ * immune to live-site drift, carousel/slide nondeterminism, and headless
+ * hydration differences (the failure mode: a schema bump invalidates every
+ * cached spec and the live re-capture days later disagrees with every other
+ * artifact). Scripts are stripped before render (same policy as the
+ * segmentation fixture harness): the DOM is already the rendered state, and
+ * re-running the builder runtime would re-hydrate/mutate it. Subresources
+ * (CSS/images) still load over the network so computed styles are real.
+ *
+ * The document is served via route-fulfill at the ORIGINAL url so
+ * document.baseURI is the source origin and relative hrefs/srcs resolve
+ * exactly as they did at capture time.
+ */
+export async function extractFullFromSavedHtml(
+  html: string,
+  url: string,
+  mediaMap: Record<string, string>,
+  opts: { timeoutMs?: number; settleMs?: number } = {},
+): Promise<{ specs: SectionSpec[]; landmarks: SourceLandmark[] }> {
+  enforceSameOrigin(url, [url]);
+  const stripped = html.replace(/<script[\s\S]*?<\/script>/gi, '');
+
+  const pw = await getPlaywright();
+  const browser = await pw.chromium.launch({ headless: true });
+  const context = await browser.newContext({
+    viewport: { width: 1440, height: 900 },
+    deviceScaleFactor: 1,
+    ignoreHTTPSErrors: true,
+  });
+  await context.addInitScript(`
+    if (typeof globalThis.__name === 'undefined') {
+      globalThis.__name = function (fn) { return fn; };
+    }
+  `);
+
+  try {
+    const page = await context.newPage();
+    const docUrl = new URL(url).href;
+    await page.route('**/*', (route) => {
+      if (route.request().url() === docUrl) {
+        return route.fulfill({ contentType: 'text/html; charset=utf-8', body: stripped });
+      }
+      return route.continue();
+    });
+    await page.goto(docUrl, { waitUntil: 'load', timeout: 30_000 });
+    await waitForStable(page, opts.settleMs ?? 500);
+    await triggerLazyLoad(page);
+    return await extractFull(page, mediaMap, opts.timeoutMs ?? 15_000);
+  } finally {
+    try {
+      await context.close();
+    } catch {
+      /* best-effort */
+    }
+    try {
+      await browser.close();
+    } catch {
+      /* best-effort */
+    }
+  }
+}
 
 export async function extractFullFromUrl(
   url: string,

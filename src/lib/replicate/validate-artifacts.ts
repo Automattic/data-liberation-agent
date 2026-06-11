@@ -113,9 +113,17 @@ const BODY_COPY_CONTAINMENT_THRESHOLD = 0.8;
  * Used to exempt verbatim islands from the text-PROVENANCE trace (their content
  * is source-verbatim by construction); injection + structure checks still run
  * on the full markup, so this never weakens the security boundary.
+ *
+ * The opener may carry attribute JSON — pipeline coverage islands are marked
+ * with `{"metadata":{"name":"lib-coverage-island"}}` (see block-policy.ts /
+ * html-fallback.ts) — so the opener is matched up to its `-->` rather than
+ * requiring the bare legacy form.
  */
 function stripHtmlFallbackBlocks(markup: string): string {
-  return markup.replace(/<!--\s*wp:html\s*-->[\s\S]*?<!--\s*\/wp:html\s*-->/g, '');
+  return markup.replace(
+    /<!--\s*wp:html(?:\s+\{[\s\S]*?\})?\s*-->[\s\S]*?<!--\s*\/wp:html\s*-->/g,
+    '',
+  );
 }
 
 export function scanForInjection(markup: string): string[] {

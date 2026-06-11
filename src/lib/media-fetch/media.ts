@@ -9,6 +9,7 @@ import {
   MAX_REDIRECTS,
 } from './safe-fetch.js';
 import { Transform } from 'stream';
+import { isRiskySvg, rasterizeSvg } from './svg-raster.js';
 
 export interface DownloadResult {
   url: string;
@@ -16,6 +17,23 @@ export interface DownloadResult {
   filename: string | null;
   error: string | null;
   bytes: number;
+  /** True when a fetched SVG contains <use>/<defs> (Safe SVG sanitizer risk). Only set with opts.svgRaster. */
+  svgRisky?: boolean;
+  /** Local path of the rasterized PNG sibling for a fetched SVG. Only set with opts.svgRaster. */
+  rasterPath?: string;
+  /** Why PNG rasterization failed (non-fatal — the SVG download itself succeeded). */
+  rasterError?: string;
+}
+
+export interface DownloadMediaOpts {
+  /**
+   * Rasterize a PNG sibling (and run the risky <use>/<defs> scan) for fetched
+   * SVGs. Opt-in: only the media-LIBRARY download path (extraction loop in
+   * adapters/shared.ts) wants this — theme-asset/CSS fetchers (carry paths,
+   * watch-runner) bypass the WP media library and must not pay a Chromium
+   * launch per run.
+   */
+  svgRaster?: boolean;
 }
 
 export function safeFilename(filename: string, seenNames: Map<string, number>): string {
@@ -193,11 +211,21 @@ async function fetchMediaResponse(rawUrl: string): Promise<Response> {
   throw new Error(`too many redirects (> ${MAX_REDIRECTS})`);
 }
 
+/**
+ * Raster outcome per downloaded SVG local path, so a later byte-identical
+ * duplicate (content-hash dedup) can inherit the ORIGINAL's PNG-sibling fields
+ * instead of leaving its stub raster-blind. Module-level on purpose: the
+ * seenHashes map is caller-owned and string-valued, and entries are a few
+ * hundred bytes per unique SVG per process — bounded by run size.
+ */
+const svgExtrasByLocalPath = new Map<string, Pick<DownloadResult, 'svgRisky' | 'rasterPath' | 'rasterError'>>();
+
 export async function downloadMedia(
   url: string,
   outputDir: string,
   seenNames: Map<string, number>,
   seenHashes?: Map<string, string>,
+  opts?: DownloadMediaOpts,
 ): Promise<DownloadResult> {
   try {
     // assertPublicHttpUrl (inside fetchMediaResponse) is the SSRF gate; parse
@@ -275,20 +303,57 @@ export async function downloadMedia(
       throw streamErr;
     }
 
-    // Deduplicate byte-identical files by content hash
+    // Deduplicate byte-identical files by content hash. The buffer is kept so
+    // the SVG raster step below can scan it without a second disk read.
+    let fileBytes: Buffer | null = null;
     if (seenHashes) {
-      const hash = createHash('sha256').update(readFileSync(destPath)).digest('hex');
+      fileBytes = readFileSync(destPath);
+      const hash = createHash('sha256').update(fileBytes).digest('hex');
       const existing = seenHashes.get(hash);
       if (existing) {
-        // Duplicate — remove the new file and return the existing path
+        // Duplicate — remove the new file and return the existing path. No NEW
+        // raster needed: the first download of these bytes already produced
+        // the PNG sibling — carry its raster fields onto THIS result too, so
+        // the deduped URL's stub records the REAL sibling path. (Install-time
+        // basename derivation cannot be trusted instead: a name collision can
+        // suffix-bump the original's sibling to `-2.png`, and deriving
+        // `<base>.png` then silently picks up an unrelated asset's file.)
         try { unlinkSync(destPath); } catch { /* ignore */ }
-        return { url, localPath: existing, filename: basename(existing), error: null, bytes: 0 };
+        const original = svgExtrasByLocalPath.get(existing);
+        return { url, localPath: existing, filename: basename(existing), error: null, bytes: 0, ...original };
       }
       seenHashes.set(hash, destPath);
     }
 
+    // SVG survival (opt-in, media-library path only): scan for Safe-SVG-risky
+    // <use>/<defs> constructs and rasterize a PNG sibling that install-time
+    // routing can substitute when the SVG can't land in the library. Wrapped
+    // so NO failure here (read, scan, raster) can fail the completed fetch.
+    let svgExtras: Pick<DownloadResult, 'svgRisky' | 'rasterPath' | 'rasterError'> | undefined;
+    if (opts?.svgRaster && extname(filename).toLowerCase() === '.svg') {
+      try {
+        const svgBytes = fileBytes ?? readFileSync(destPath);
+        const svgRisky = isRiskySvg(svgBytes);
+        // Sibling name: same basename + .png, deduped through the shared
+        // seenNames map so a DIFFERENT asset already named `<base>.png` pushes
+        // the sibling to the standard -2 suffix.
+        const ext = extname(filename);
+        const pngFilename = safeFilename(`${filename.slice(0, -ext.length)}.png`, seenNames);
+        const pngPath = resolveMediaPath(pngFilename, outputDir);
+        const raster = await rasterizeSvg(destPath, pngPath);
+        svgExtras = raster.ok
+          ? { svgRisky, rasterPath: pngPath }
+          : { svgRisky, rasterError: raster.error };
+      } catch (rasterErr) {
+        svgExtras = { rasterError: (rasterErr as Error).message };
+      }
+      // Remember the raster outcome by local path so a later byte-identical
+      // duplicate (dedup hit above) inherits the original's sibling fields.
+      if (svgExtras) svgExtrasByLocalPath.set(destPath, svgExtras);
+    }
+
     const bytes = statSync(destPath).size;
-    return { url, localPath: destPath, filename, error: null, bytes };
+    return { url, localPath: destPath, filename, error: null, bytes, ...svgExtras };
   } catch (err) {
     return { url, localPath: null, filename: null, error: (err as Error).message, bytes: 0 };
   }

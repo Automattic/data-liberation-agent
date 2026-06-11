@@ -37,6 +37,7 @@ import type { Element } from 'domhandler';
 import type { AdapterBlocks, BlockRecipeContext } from '../page-actions.js';
 import { sanitize } from '../../lib/replicate/html-fallback.js';
 import { buildEmbedBlock } from '../../lib/replicate/embed-block.js';
+import { PIPELINE_ISLAND_OPENER } from '../../lib/wordpress/block-policy.js';
 
 const SQS_BLOCK_MARKER = /\bsqs-block\b/;
 
@@ -165,7 +166,9 @@ function emitHtmlBlock($: CheerioAPI, node: Cheerio<Element>): string | null {
       const innerHtml = ($el.html() || '').trim();
       if (innerHtml) out.push(`<!-- wp:paragraph -->\n<p>${innerHtml}</p>\n<!-- /wp:paragraph -->`);
     } else {
-      out.push(`<!-- wp:html -->\n${sanitize($.html(el))}\n<!-- /wp:html -->`);
+      // Pipeline-marked island (same opener as buildHtmlFallbackBlock) so the
+      // degraded element passes the install-time wp:html ban on theme reinstall.
+      out.push(`${PIPELINE_ISLAND_OPENER}\n${sanitize($.html(el))}\n<!-- /wp:html -->`);
     }
   });
   if (out.length === 0) {
@@ -178,7 +181,7 @@ function emitHtmlBlock($: CheerioAPI, node: Cheerio<Element>): string | null {
 function emitFallback($: CheerioAPI, node: Cheerio<Element>): string | null {
   const inner = $.html(node);
   if (!inner.trim()) return null;
-  return `<!-- wp:html -->\n${sanitize(inner)}\n<!-- /wp:html -->`;
+  return `${PIPELINE_ISLAND_OPENER}\n${sanitize(inner)}\n<!-- /wp:html -->`;
 }
 
 function escapeAttr(s: string): string {

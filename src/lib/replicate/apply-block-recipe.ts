@@ -4,6 +4,7 @@ import type { Element } from 'domhandler';
 import type { AdapterBlocks, BlockRecipe, BlockRecipeContext } from '../../adapters/page-actions.js';
 import { sanitize } from './html-fallback.js';
 import { genericBlockCatalog } from './generic-block-catalog.js';
+import { PIPELINE_ISLAND_OPENER } from '../wordpress/block-policy.js';
 
 /**
  * Seam 2: turn platform-structured source HTML into Gutenberg block markup via
@@ -74,8 +75,10 @@ function emitRecipeBlock($: CheerioAPI, el: Element, recipe: BlockRecipe, ctx: B
 }
 
 // Strip active/unsafe content (script/style/php/comments/on*) before wrapping
-// raw source HTML in a core/html island — matches buildHtmlFallbackBlock so a
-// recipe island degrades gracefully instead of failing the whole page at the gate.
-function coreHtmlIsland(html: string): string { return `<!-- wp:html -->\n${sanitize(html)}\n<!-- /wp:html -->`; }
+// raw source HTML in a core/html island — matches buildHtmlFallbackBlock (same
+// sanitize, same PIPELINE_ISLAND_OPENER marker) so a recipe island degrades
+// gracefully instead of failing the whole page at the gate, and passes the
+// install-time wp:html ban on theme reinstall.
+function coreHtmlIsland(html: string): string { return `${PIPELINE_ISLAND_OPENER}\n${sanitize(html)}\n<!-- /wp:html -->`; }
 function escapeAttr(s: string): string { return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
 function escapeHtml(s: string): string { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }

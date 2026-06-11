@@ -614,13 +614,16 @@ describe('reconstructPagePattern', () => {
   });
 
   it('skips a decorative (sub-200px) lead image in a text band but keeps a real photo', () => {
-    // A 144x144 quote-mark glyph must NOT become the hero lead image...
+    // A 144x144 quote-mark glyph must NOT become the hero lead image — but it is
+    // still source content, so media recovery appends it as a small image block
+    // at its natural size instead of dropping it (never-lose-source-content).
     const deco = reconstructPagePattern(
       [section({ interactionModel: 'cover-with-headline', headings: ['Hero'], images: [{ url: `${WP}quote.png`, sourceUrl: `${WP}quote.png`, alt: '', kind: 'img', width: 144, height: 144 }] })],
       opts,
     );
-    expect(deco.php).not.toContain('quote.png');
-    expect(deco.expectedAssets).not.toContain(`${WP}quote.png`);
+    expect(deco.php).not.toContain('wp-block-cover__image-background'); // never the cover/lead
+    expect(deco.php).toContain('quote.png'); // recovered as a small image block
+    expect(deco.provenanceFlags.some((f) => /media-recovered#0/.test(f))).toBe(true);
     // ...but a real 800x800 photo is rendered.
     const photo = reconstructPagePattern(
       [section({ interactionModel: 'cover-with-headline', headings: ['Hero'], images: [img(`${WP}hero.jpg`, 'Hero')] })],
@@ -759,10 +762,13 @@ describe('reconstructPagePattern', () => {
       ],
       opts,
     );
-    // Two-column band with the real photo (not the 144px glyph) in the media column.
+    // Two-column band with the real photo (not the 144px glyph) in the media column;
+    // the glyph is still recovered as a small trailing image block (source content).
     expect(withPhoto.php).toContain('<!-- wp:columns');
     expect(withPhoto.php).toContain(`${WP}hero.jpg`);
-    expect(withPhoto.php).not.toContain('quote.png');
+    const mediaColumn = withPhoto.php.slice(0, withPhoto.php.indexOf('<!-- /wp:columns -->'));
+    expect(mediaColumn).not.toContain('quote.png'); // never in the media column
+    expect(withPhoto.provenanceFlags.some((f) => /media-recovered#0/.test(f))).toBe(true);
     // A photo-less cover (e.g. a text sale banner) stays a centered text band.
     const banner = reconstructPagePattern(
       [section({ interactionModel: 'cover-with-headline', headings: ['SUMMER SALE'], images: [] })],
@@ -989,15 +995,15 @@ describe('reconstructPagePattern — coverage-gated core/html fallback', () => {
   const opts = { patternSlug: 'demo-replica/page-x', title: 'Page — X' };
 
   it('emits a verbatim core/html island when the structured render drops a captured image', () => {
-    // A 150px image is below MIN_LEAD_IMAGE_PX (200), so renderTextBand drops it —
+    // A 60px glyph is below the 90px media-recovery floor, so it cannot be recovered —
     // a silent content loss. With sectionHtml present, we fall back to the island.
     const s = section({
       headings: ['Our Story'],
-      images: [{ url: '/wp-content/uploads/team.jpg', sourceUrl: 'https://cdn.test/team.jpg', alt: '', kind: 'img', width: 150, height: 150 }],
+      images: [{ url: '/wp-content/uploads/team.jpg', sourceUrl: 'https://cdn.test/team.jpg', alt: '', kind: 'img', width: 60, height: 60 }],
       sectionHtml: '<section><h2>Our Story</h2><img src="/wp-content/uploads/team.jpg" alt=""/></section>',
     } as Partial<SectionSpec>);
     const r = reconstructPagePattern([s], opts);
-    expect(r.body).toContain('<!-- wp:html -->');
+    expect(r.body).toContain('<!-- wp:html {"metadata":{"name":"lib-coverage-island"}} -->');
     expect(r.body).toContain('/wp-content/uploads/team.jpg'); // the dropped image is preserved
     expect(r.provenanceFlags.some((f) => /html-fallback#0/.test(f))).toBe(true);
   });
@@ -1009,7 +1015,7 @@ describe('reconstructPagePattern — coverage-gated core/html fallback', () => {
       sectionHtml: '<section><h2>Our Story</h2><img src="/wp-content/uploads/big.jpg"/></section>',
     } as Partial<SectionSpec>);
     const r = reconstructPagePattern([s], opts);
-    expect(r.body).not.toContain('<!-- wp:html -->');
+    expect(r.body).not.toContain('<!-- wp:html');
     expect(r.provenanceFlags.some((f) => /html-fallback/.test(f))).toBe(false);
   });
 
@@ -1018,7 +1024,7 @@ describe('reconstructPagePattern — coverage-gated core/html fallback', () => {
     // snapshot — R4b emits THAT (renders styled), not the bare sectionHtml.
     const s = section({
       headings: ['Our Story'],
-      images: [{ url: '/wp-content/uploads/team.jpg', sourceUrl: 'https://cdn.test/team.jpg', alt: '', kind: 'img', width: 150, height: 150 }],
+      images: [{ url: '/wp-content/uploads/team.jpg', sourceUrl: 'https://cdn.test/team.jpg', alt: '', kind: 'img', width: 60, height: 60 }],
       sectionHtml: '<section><h2>Our Story</h2><img src="/wp-content/uploads/team.jpg" alt=""/></section>',
       styledHtml:
         '<section style="display:flex;background-color:rgb(10,20,30)">' +
@@ -1026,7 +1032,7 @@ describe('reconstructPagePattern — coverage-gated core/html fallback', () => {
         '<img style="width:150px;height:150px" src="/wp-content/uploads/team.jpg" alt=""/></section>',
     } as Partial<SectionSpec>);
     const r = reconstructPagePattern([s], opts);
-    expect(r.body).toContain('<!-- wp:html -->');
+    expect(r.body).toContain('<!-- wp:html {"metadata":{"name":"lib-coverage-island"}} -->');
     // The STYLED snapshot is what shipped — inline styles preserved verbatim.
     expect(r.body).toContain('display:flex');
     expect(r.body).toContain('color:rgb(255,255,255)');
@@ -1039,20 +1045,20 @@ describe('reconstructPagePattern — coverage-gated core/html fallback', () => {
   it('does NOT fall back when the section is lossy but has no sectionHtml (ineligible)', () => {
     const s = section({
       headings: ['Our Story'],
-      images: [{ url: '/wp-content/uploads/team.jpg', sourceUrl: 'https://cdn.test/team.jpg', alt: '', kind: 'img', width: 150, height: 150 }],
+      images: [{ url: '/wp-content/uploads/team.jpg', sourceUrl: 'https://cdn.test/team.jpg', alt: '', kind: 'img', width: 60, height: 60 }],
       // no sectionHtml → not fallback-eligible (e.g. over-cap / truncated)
     } as Partial<SectionSpec>);
     const r = reconstructPagePattern([s], opts);
-    expect(r.body).not.toContain('<!-- wp:html -->');
+    expect(r.body).not.toContain('<!-- wp:html');
   });
 
   it('blocks path: fires adapter recipe before the core/html island when adapterBlocks is supplied', () => {
-    // A 150px image is below MIN_LEAD_IMAGE_PX (200), so renderTextBand drops it —
+    // A 60px glyph is below the 90px media-recovery floor, so it cannot be recovered —
     // triggering the lost-coverage branch. The adapter recipe matches <img> and
     // emits a core/image block — it should win over the core/html fallback island.
     const s = section({
       headings: ['Our Story'],
-      images: [{ url: '/wp-content/uploads/team.jpg', sourceUrl: 'https://cdn.test/team.jpg', alt: '', kind: 'img', width: 150, height: 150 }],
+      images: [{ url: '/wp-content/uploads/team.jpg', sourceUrl: 'https://cdn.test/team.jpg', alt: '', kind: 'img', width: 60, height: 60 }],
       sectionHtml: '<img src="https://cdn.test/team.jpg" alt="a"/>',
     } as Partial<SectionSpec>);
     const r = reconstructPagePattern([s], {
@@ -1062,7 +1068,7 @@ describe('reconstructPagePattern — coverage-gated core/html fallback', () => {
       sourceUrl: 'https://example.com/page',
     });
     expect(r.body).toContain('<!-- wp:image -->');
-    expect(r.body).not.toContain('<!-- wp:html -->');
+    expect(r.body).not.toContain('<!-- wp:html');
     expect(r.provenanceFlags.some((f) => f.includes('adapter-recipe#'))).toBe(true);
     expect(r.provenanceFlags.some((f) => f.includes('html-fallback'))).toBe(false);
   });
@@ -1072,7 +1078,7 @@ describe('reconstructPagePattern — coverage-gated core/html fallback', () => {
     // the html-fallback island, not an adapter-recipe block.
     const s = section({
       headings: ['Our Story'],
-      images: [{ url: '/wp-content/uploads/team.jpg', sourceUrl: 'https://cdn.test/team.jpg', alt: '', kind: 'img', width: 150, height: 150 }],
+      images: [{ url: '/wp-content/uploads/team.jpg', sourceUrl: 'https://cdn.test/team.jpg', alt: '', kind: 'img', width: 60, height: 60 }],
       sectionHtml: '<img src="https://cdn.test/team.jpg" alt="a"/>',
     } as Partial<SectionSpec>);
     const r = reconstructPagePattern([s], {
@@ -1080,9 +1086,77 @@ describe('reconstructPagePattern — coverage-gated core/html fallback', () => {
       title: 'Page — X',
       // no adapterBlocks — carry/theme path
     });
-    expect(r.body).toContain('<!-- wp:html -->');
+    expect(r.body).toContain('<!-- wp:html {"metadata":{"name":"lib-coverage-island"}} -->');
     expect(r.provenanceFlags.some((f) => f.includes('html-fallback'))).toBe(true);
     expect(r.provenanceFlags.some((f) => f.includes('adapter-recipe#'))).toBe(false);
+  });
+});
+
+describe('reconstructPagePattern — section-level media recovery (no island for recoverable media)', () => {
+  const opts = { patternSlug: 'demo-replica/page-x', title: 'Page — X' };
+
+  it('cell grid renders an unclaimed section-level background image as its own column', () => {
+    // The Wix photo|card column-strip shape: heading-only cells route the section
+    // to the cell grid, but the photo column is captured as a SECTION-level
+    // background image no cell claims — it must land as an image column, not
+    // drop and island the whole section.
+    const headingOnly = (heading: string) => ({ heading, body: [], image: null, icon: null, button: null });
+    const s = section({
+      interactionModel: 'static',
+      headings: ['Step 1', 'Check out my site'],
+      images: [
+        { url: `${WP}step-photo.jpg`, sourceUrl: 'https://cdn.test/step-photo.jpg', alt: 'desk', kind: 'background', width: 810, height: 362 },
+      ],
+      sectionHtml: '<section><h3>Step 1</h3><h3>Check out my site</h3><img src="/wp-content/uploads/2026/05/step-photo.jpg"/></section>',
+    }) as SectionSpec & { cells: unknown[] };
+    s.layout = { ...s.layout, columnCount: 3 };
+    s.cells = [headingOnly('Step 1'), headingOnly('Check out my site')];
+    const r = reconstructPagePattern([s as SectionSpec], opts);
+    expect(r.body).not.toContain('<!-- wp:html');
+    expect(r.body).toContain('step-photo.jpg');
+    // photo column joins the two card columns
+    expect((r.body.match(/<!-- wp:column\b/g) || []).length).toBe(3);
+    expect(r.provenanceFlags.some((f) => f.includes('html-fallback'))).toBe(false);
+  });
+
+  it('recovers a dropped local image at the coverage gate instead of islanding (text intact)', () => {
+    // A 150px image is below MIN_LEAD_IMAGE_PX (200) so renderTextBand drops it,
+    // but it has a local uploads URL and is above the decorative floor (90) —
+    // append it as an image block rather than demoting the section to an island.
+    const s = section({
+      headings: ['Our Story'],
+      images: [{ url: '/wp-content/uploads/team.jpg', sourceUrl: 'https://cdn.test/team.jpg', alt: '', kind: 'img', width: 150, height: 150 }],
+      sectionHtml: '<section><h2>Our Story</h2><img src="/wp-content/uploads/team.jpg" alt=""/></section>',
+    } as Partial<SectionSpec>);
+    const r = reconstructPagePattern([s], opts);
+    expect(r.body).not.toContain('<!-- wp:html');
+    expect(r.body).toContain('/wp-content/uploads/team.jpg');
+    expect(r.provenanceFlags.some((f) => /media-recovered#0/.test(f))).toBe(true);
+    expect(r.provenanceFlags.some((f) => f.includes('html-fallback'))).toBe(false);
+  });
+
+  it('does NOT recover a remote-CDN image — the section still islands', () => {
+    // A non-uploads URL cannot be emitted as a block image (the gate bans remote
+    // CDN URLs), so the island remains the only loss-free form.
+    const s = section({
+      headings: ['Our Story'],
+      images: [{ url: 'https://cdn.test/photo.jpg', sourceUrl: 'https://cdn.test/photo.jpg', alt: '', kind: 'img', width: 800, height: 600 }],
+      sectionHtml: '<section><h2>Our Story</h2><img src="https://cdn.test/photo.jpg"/></section>',
+    } as Partial<SectionSpec>);
+    const r = reconstructPagePattern([s], opts);
+    expect(r.body).toContain('<!-- wp:html {"metadata":{"name":"lib-coverage-island"}} -->');
+    expect(r.provenanceFlags.some((f) => /media-recovered/.test(f))).toBe(false);
+  });
+
+  it('does NOT recover a sub-90px decorative glyph — the section still islands', () => {
+    const s = section({
+      headings: ['Our Story'],
+      images: [{ url: '/wp-content/uploads/glyph.png', sourceUrl: 'https://cdn.test/glyph.png', alt: '', kind: 'img', width: 60, height: 60 }],
+      sectionHtml: '<section><h2>Our Story</h2><img src="/wp-content/uploads/glyph.png"/></section>',
+    } as Partial<SectionSpec>);
+    const r = reconstructPagePattern([s], opts);
+    expect(r.body).toContain('<!-- wp:html {"metadata":{"name":"lib-coverage-island"}} -->');
+    expect(r.provenanceFlags.some((f) => /media-recovered/.test(f))).toBe(false);
   });
 });
 
@@ -1160,5 +1234,354 @@ describe('reconstructPagePattern — converted-sections (HTML→blocks) branch',
       '<!-- wp:code --><pre class="wp-block-code"><code>Hello {{ name }}</code></pre><!-- /wp:code -->';
     const r = reconstructPagePattern([s], { ...opts, convertedSections: conv(markup) });
     expect(r.provenanceFlags.some((f) => f.startsWith('html-to-blocks#0'))).toBe(false);
+  });
+});
+
+describe('reconstructPagePattern — gallery strip vs wrapping grid', () => {
+  const opts = { patternSlug: 'demo-replica/page-g', title: 'G' };
+  const imgs = (n: number, w: number, h: number) =>
+    Array.from({ length: n }, (_, i) => ({
+      url: `${WP}shot-${i}.jpg`,
+      sourceUrl: `${WP}shot-${i}.jpg`,
+      alt: '',
+      kind: 'img' as const,
+      width: w,
+      height: h,
+    }));
+
+  it('renders a multi-row source gallery as a wrapping CROPPED grid (no scroller)', () => {
+    // The projects-page shape: 25 items ~238px tall inside an ~1800px section —
+    // the source wraps over many rows. A horizontal scroller here hides ~80% of
+    // the photos past the right edge.
+    const s = section({
+      interactionModel: 'gallery',
+      height: 1802,
+      images: imgs(25, 318, 238),
+    });
+    const r = reconstructPagePattern([s], opts);
+    expect(r.body).toContain('"imageCrop":true');
+    expect(r.body).toContain('is-cropped');
+    expect(r.body).not.toContain('is-gallery-scroller');
+  });
+
+  it('renders a single-row source gallery as the horizontal scroller strip', () => {
+    // The homepage shape: 25 items ~510px tall inside a ~586px section — one
+    // visual row the source presents as a swipeable strip.
+    const s = section({
+      interactionModel: 'gallery',
+      height: 586,
+      images: imgs(25, 680, 510),
+    });
+    const r = reconstructPagePattern([s], opts);
+    expect(r.body).toContain('is-gallery-scroller');
+    expect(r.body).not.toContain('is-cropped');
+  });
+
+  it('defaults to the scroller when the section height is missing/zero (back-compat)', () => {
+    const s = section({
+      interactionModel: 'gallery',
+      height: 0,
+      images: imgs(8, 600, 400),
+    });
+    const r = reconstructPagePattern([s], opts);
+    expect(r.body).toContain('is-gallery-scroller');
+  });
+});
+
+describe('reconstructPagePattern — promoted-heading body echo', () => {
+  const opts = { patternSlug: 'demo-replica/page-x', title: 'X' };
+
+  it('drops a bodyText echo of a heading when the source section shows the text ONCE (promoted styled <p>)', () => {
+    // Wix marks a headline as a styled <p>: the walk promotes it to a heading
+    // (≥28px) AND captures it as body — same element, captured twice. The
+    // source renders it once, so the replica must too.
+    const s = section({
+      headings: ['Connect With Our Fictional Yard'],
+      bodyText: ['Connect With Our Fictional Yard', 'A real supporting paragraph.'],
+      sectionHtml:
+        '<section><p class="font_2"><span>Connect With Our Fictional Yard</span></p>' +
+        '<p>A real supporting paragraph.</p></section>',
+    });
+    const r = reconstructPagePattern([s], opts);
+    expect(r.body.match(/Connect With Our Fictional Yard/g)).toHaveLength(1);
+    expect(r.body).toContain('A real supporting paragraph.');
+  });
+
+  it('keeps the paragraph when the source genuinely renders the text twice', () => {
+    // The about-us case: a heading AND a separate paragraph with identical copy,
+    // both visible in the source — dropping the paragraph loses real content.
+    const s = section({
+      headings: ['Three Years Later'],
+      bodyText: ['Three Years Later'],
+      sectionHtml:
+        '<section><h2>Three Years Later</h2><p>Three Years Later</p></section>',
+    });
+    const r = reconstructPagePattern([s], opts);
+    expect(r.body.match(/Three Years Later/g)).toHaveLength(2);
+  });
+
+  it('keeps the paragraph when sectionHtml is unavailable (back-compat: never guess, never drop)', () => {
+    const s = section({
+      headings: ['Ambiguous Line'],
+      bodyText: ['Ambiguous Line'],
+    });
+    const r = reconstructPagePattern([s], opts);
+    expect(r.body.match(/Ambiguous Line/g)).toHaveLength(2);
+  });
+
+  it('keeps a genuine duplicate whose text carries an HTML entity (& vs &amp;)', () => {
+    // Captured heading/body are DECODED DOM text; sectionHtml carries entities.
+    // A raw-substring count finds 0 occurrences of "Food & Drink" in the encoded
+    // source and would drop the genuine twice-rendered paragraph.
+    const s = section({
+      headings: ['Food & Drink'],
+      bodyText: ['Food & Drink'],
+      sectionHtml: '<section><h2>Food &amp; Drink</h2><p>Food &amp; Drink</p></section>',
+    });
+    const r = reconstructPagePattern([s], opts);
+    expect(r.body.match(/Food &amp; Drink/g)).toHaveLength(2);
+  });
+
+  it('still drops an entity-bearing promoted echo shown once in the source', () => {
+    const s = section({
+      headings: ['Tools & Tips'],
+      bodyText: ['Tools & Tips', 'A real supporting paragraph.'],
+      sectionHtml:
+        '<section><p class="font_2"><span>Tools &amp; Tips</span></p>' +
+        '<p>A real supporting paragraph.</p></section>',
+    });
+    const r = reconstructPagePattern([s], opts);
+    expect(r.body.match(/Tools &amp; Tips/g)).toHaveLength(1);
+    expect(r.body).toContain('A real supporting paragraph.');
+  });
+
+  it('keeps echo-drop arrays index-aligned (surviving paragraph keeps its own typography)', () => {
+    const s = section({
+      headings: ['Promoted Headline'],
+      bodyText: ['Promoted Headline', 'Styled survivor.'],
+      bodyTextSizes: [34, 19],
+      sectionHtml: '<section><p>Promoted Headline</p><p>Styled survivor.</p></section>',
+    });
+    const r = reconstructPagePattern([s], opts);
+    // The survivor renders with ITS size (19px), not the dropped echo's 34px.
+    expect(r.body).toMatch(/19px[^<]*<\/p>|19px[^>]*>Styled survivor\./);
+    expect(r.body).not.toContain('34px');
+    expect(r.body.match(/Promoted Headline/g)).toHaveLength(1);
+  });
+});
+
+describe('reconstructPagePattern — captured forms → jetpack blocks', () => {
+  const opts = { patternSlug: 'demo-replica/page-contact', title: 'Contact' };
+  const contactForm = {
+    fields: [
+      { kind: 'name' as const, label: 'Full name', required: true, widthPct: 50 as const },
+      { kind: 'email' as const, label: 'Email address', required: true, widthPct: 50 as const },
+      { kind: 'select' as const, label: 'Topic', required: false, options: ['Billing', 'Support'] },
+      { kind: 'textarea' as const, label: 'Message', required: false },
+      { kind: 'hidden' as const, label: 'Campaign id', required: false },
+    ],
+    submitLabel: 'Send Message',
+  };
+
+  it('emits a jetpack/contact-form INSIDE the section group, after the section text', () => {
+    const s = section({
+      headings: ['Get in Touch'],
+      bodyText: ['Drop us a line and our fictional team will reply.'],
+      forms: [contactForm],
+    });
+    const r = reconstructPagePattern([s], opts);
+    const open = r.body.indexOf('<!-- wp:jetpack/contact-form ');
+    expect(open).toBeGreaterThan(-1);
+    // Inside the section wrapper: the form opens BEFORE the section's close.
+    expect(open).toBeLessThan(r.body.lastIndexOf('</section>'));
+    // After the section's text content.
+    expect(open).toBeGreaterThan(r.body.indexOf('Get in Touch'));
+    // Field blocks + the core/button submit (current Jetpack form-editor
+    // grammar — jetpack/button is connection-gated and renders empty on
+    // unconnected installs) are present; banned shapes absent.
+    expect(r.body).toContain('wp:jetpack/field-name');
+    expect(r.body).toContain('wp:jetpack/field-email');
+    expect(r.body).toContain('wp:jetpack/field-select');
+    expect(r.body).toContain('wp:jetpack/field-textarea');
+    expect(r.body).toContain('form-button-submit is-submit');
+    expect(r.body).toContain('>Send Message</button>');
+    expect(r.body).not.toContain('jetpack/button');
+    expect(r.body).not.toContain('wp:columns');
+  });
+
+  it('registers emitted labels/options/submit with the provenance corpus; skipped fields flag only', () => {
+    const s = section({ headings: ['Get in Touch'], forms: [contactForm] });
+    const r = reconstructPagePattern([s], opts);
+    for (const t of ['Full name', 'Email address', 'Topic', 'Billing', 'Support', 'Message', 'Send Message']) {
+      expect(r.expectedText).toContain(t);
+    }
+    // The hidden field emits no text → not registered, but flagged for provenance.
+    expect(r.expectedText).not.toContain('Campaign id');
+    expect(r.provenanceFlags.some((f) => f.startsWith('form-field-skipped#') && f.includes('Campaign id'))).toBe(true);
+  });
+
+  it('suppresses the duplicate CTA whose label is the form submit (walk captures the submit twice)', () => {
+    const s = section({
+      headings: ['Get in Touch'],
+      buttonLabels: ['Send Message'],
+      forms: [contactForm],
+    });
+    const r = reconstructPagePattern([s], opts);
+    // ONE Send Message — the live form submit; no dead twin CTA.
+    expect(r.body.match(/Send Message/g)).toHaveLength(1);
+    expect(r.body).toContain('form-button-submit is-submit');
+  });
+
+  it('suppression is count-based: a second identically-labeled source CTA survives', () => {
+    const s = section({
+      headings: ['Get in Touch'],
+      buttonLabels: ['Send Message', 'Send Message'], // submit re-capture + a REAL second button
+      forms: [contactForm],
+    });
+    const r = reconstructPagePattern([s], opts);
+    // Two Send Message total: the surviving legit CTA + the form submit's inner HTML.
+    expect(r.body.match(/Send Message/g)).toHaveLength(2);
+    // Exactly ONE live submit; the survivor renders as a normal section CTA
+    // (a plain core button without the submit classes), alongside the form.
+    expect(r.body.match(/<button type="submit"/g)).toHaveLength(1);
+    expect(r.body).toContain('wp:button');
+  });
+
+  it('cells path: the form submit re-captured as a cell.button is suppressed (no dead twin above the live form)', () => {
+    // A homepage subscribe band that routes to the CELL GRID: >=2 cells with
+    // heading+body, one cell carrying the form's own submit as its button.
+    const s = section({
+      interactionModel: 'columns',
+      headings: ['Stay in the Loop'],
+      forms: [{ fields: [{ kind: 'email' as const, label: 'Email', required: true }], submitLabel: 'Join' }],
+    }) as SectionSpec;
+    s.cells = [
+      { heading: 'Newsletter', body: ['Fictional monthly digest.'], image: null, icon: null, button: 'Join' },
+      { heading: 'No Spam', body: ['Unsubscribe anytime.'], image: null, icon: null, button: null },
+    ];
+    const r = reconstructPagePattern([s], opts);
+    // ONE Join — the live form submit; the cell's dead twin is suppressed.
+    expect(r.body.match(/>Join</g)).toHaveLength(1);
+    expect(r.body).toContain('form-button-submit is-submit');
+    // The grid itself still rendered (cell headings survive).
+    expect(r.body).toContain('Newsletter');
+    expect(r.body).toContain('No Spam');
+  });
+
+  it('cells path: a heading that merely echoes the suppressed submit (walk double-capture) is dropped with it; a same-label heading in another cell survives', () => {
+    // The corneliusholmes homepage shape: the subscribe band's submit widget is
+    // captured as a cell whose heading AND button are both the submit text —
+    // the heading is the button's own text node, not separate source content.
+    const s = section({
+      interactionModel: 'columns',
+      headings: [],
+      forms: [{ fields: [{ kind: 'email' as const, label: 'Email', required: true }], submitLabel: 'Join' }],
+    }) as SectionSpec;
+    s.cells = [
+      { heading: 'Subscribe to my newsletter', body: ['Fictional monthly digest.'], image: null, icon: null, button: null },
+      { heading: 'Join', body: [], image: null, icon: null, button: 'Join' }, // the submit, double-captured
+      { heading: 'Join', body: ['A genuine standalone Join heading.'], image: null, icon: null, button: null },
+    ];
+    const r = reconstructPagePattern([s], opts);
+    // Join renders exactly twice: the live submit + the genuine third-cell heading.
+    expect(r.body.match(/>Join</g)).toHaveLength(2);
+    expect(r.body.match(/<button type="submit"/g)).toHaveLength(1);
+    expect(r.body).toContain('A genuine standalone Join heading.');
+    expect(r.body).toContain('Subscribe to my newsletter');
+  });
+
+  it('cells path: cells that re-capture the form FIELD labels are suppressed (photo + live form render, not a label grid)', () => {
+    // The swiftlumber talk-to-us shape: a contact hero (form left | photo
+    // right) whose walk re-captured the form's own field labels as content
+    // cells (heading = the label, body = the required "*" marker). Unsuppressed,
+    // those cells route the section to the CELL GRID, which drops the photo —
+    // the coverage gate then islands the section and the live form is lost.
+    const wpImg = `${WP}facility-flag.png`;
+    const s = section({
+      interactionModel: 'cover-with-headline',
+      headings: ['Talk To Our Fictional Team'],
+      bodyText: ['Connect with our fictional yard today.'],
+      images: [img(wpImg, 'flag at the yard entrance')],
+      mediaLayout: 'image-right',
+      forms: [
+        {
+          fields: [
+            { kind: 'name' as const, label: 'First name', required: true, widthPct: 50 as const },
+            { kind: 'name' as const, label: 'Last name', required: true, widthPct: 50 as const },
+            { kind: 'email' as const, label: 'Email', required: true },
+            { kind: 'textarea' as const, label: 'How can we help?', required: true },
+          ],
+          submitLabel: 'Submit',
+        },
+      ],
+    }) as SectionSpec;
+    s.cells = [
+      { heading: 'First name', body: ['*'], image: null, icon: null, button: null },
+      { heading: 'Last name', body: ['*'], image: null, icon: null, button: null },
+    ];
+    const r = reconstructPagePattern([s], opts);
+    // The photo renders natively — the section did NOT collapse to a label grid.
+    expect(r.body).toContain(wpImg);
+    expect(r.provenanceFlags.some((f) => f.includes('html-fallback'))).toBe(false);
+    // The live jetpack form is present; labels live in the field attrs only.
+    expect(r.body).toContain('wp:jetpack/contact-form');
+    expect(r.body.match(/First name/g)).toHaveLength(1);
+    expect(r.body).not.toMatch(/<h3[^>]*>First name/);
+  });
+
+  it('cells path: a field-label cell carrying REAL extra content survives field suppression', () => {
+    // A genuine content cell that happens to share a field's label (e.g. an
+    // "Email" help card next to the form) is NOT the walk's field echo — it
+    // carries its own body copy — so it must keep rendering.
+    const s = section({
+      interactionModel: 'columns',
+      headings: ['Reach Us'],
+      forms: [{ fields: [{ kind: 'email' as const, label: 'Email', required: true }], submitLabel: 'Send' }],
+    }) as SectionSpec;
+    s.cells = [
+      { heading: 'Email', body: ['Our fictional inbox is open around the clock.'], image: null, icon: null, button: null },
+      { heading: 'Phone', body: ['Call the fictional front desk.'], image: null, icon: null, button: null },
+    ];
+    const r = reconstructPagePattern([s], opts);
+    expect(r.body).toContain('Our fictional inbox is open around the clock.');
+    expect(r.body).toContain('Call the fictional front desk.');
+  });
+
+  it('cells path suppression is count-based: a second same-label cell button survives', () => {
+    const s = section({
+      interactionModel: 'columns',
+      headings: ['Stay in the Loop'],
+      forms: [{ fields: [{ kind: 'email' as const, label: 'Email', required: true }], submitLabel: 'Join' }],
+    }) as SectionSpec;
+    s.cells = [
+      { heading: 'Newsletter', body: ['Fictional monthly digest.'], image: null, icon: null, button: 'Join' },
+      { heading: 'Community', body: ['A real second Join CTA.'], image: null, icon: null, button: 'Join' },
+    ];
+    const r = reconstructPagePattern([s], opts);
+    // Two Join total: the surviving legit cell CTA + the live form submit.
+    expect(r.body.match(/>Join</g)).toHaveLength(2);
+    expect(r.body.match(/<button type="submit"/g)).toHaveLength(1);
+  });
+
+  it('is deterministic — two runs are byte-identical', () => {
+    const make = () => reconstructPagePattern([section({ headings: ['Get in Touch'], forms: [contactForm] })], opts);
+    expect(make().php).toBe(make().php);
+  });
+
+  it('emits no jetpack markup for sections without forms', () => {
+    const r = reconstructPagePattern([section({ headings: ['Plain Band'] })], opts);
+    expect(r.body).not.toContain('jetpack/');
+  });
+
+  it('does NOT double the form when the section falls back to a core/html island (v1: island keeps the verbatim source form)', () => {
+    const s = section({
+      headings: ['Get in Touch'],
+      images: [img('https://cdn.example.test/never-migrated.jpg')], // non-WP image → dropped → island
+      sectionHtml: '<section><h2>Get in Touch</h2><form><input type="email"/></form></section>',
+      forms: [contactForm],
+    });
+    const r = reconstructPagePattern([s], opts);
+    expect(r.provenanceFlags.some((f) => f.includes('html-fallback'))).toBe(true);
+    expect(r.body).not.toContain('jetpack/contact-form');
   });
 });

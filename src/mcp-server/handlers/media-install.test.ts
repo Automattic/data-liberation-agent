@@ -1,8 +1,18 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { wpRootFor } from './media-install.js';
+
+vi.mock('../../lib/streaming/media-install.js', () => ({
+  installMediaForUrl: vi.fn().mockResolvedValue({
+    installed: [],
+    skipped: [],
+    errors: [],
+    svg: { svgUploaded: 1, svgSubstituted: 2, svgFailed: 0, safeSvgEnsured: true },
+  }),
+}));
+
+import { wpRootFor, mediaInstallHandler } from './media-install.js';
 
 describe('wpRootFor — Studio layout detection', () => {
   let root: string;
@@ -33,4 +43,28 @@ describe('wpRootFor — Studio layout detection', () => {
     expect(wpRootFor({ kind: 'studio', sitePath })).not.toBe(join(sitePath, 'wordpress'));
   });
 
+});
+
+describe('mediaInstallHandler — SVG tally surfacing', () => {
+  it('includes the svg routing tally from the installer result', async () => {
+    const sitePath = mkdtempSync(join(tmpdir(), 'media-install-handler-'));
+    mkdirSync(join(sitePath, 'wp-content'), { recursive: true });
+    try {
+      const ctx = {
+        adapters: [],
+        findAdapter: () => null,
+        textResult: (data: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(data) }] }),
+        errorResult: (message: string) => ({ content: [{ type: 'text' as const, text: message }], isError: true }),
+        server: {} as never,
+      };
+      const result = await mediaInstallHandler(
+        { outputDir: '/tmp/out', url: 'https://example.com/', target: { kind: 'studio', sitePath } },
+        ctx,
+      );
+      const parsed = JSON.parse(result.content[0].text);
+      expect(parsed.svg).toEqual({ svgUploaded: 1, svgSubstituted: 2, svgFailed: 0, safeSvgEnsured: true });
+    } finally {
+      rmSync(sitePath, { recursive: true, force: true });
+    }
+  });
 });

@@ -20,6 +20,7 @@ import type { Element } from 'domhandler';
 import type { AdapterBlocks, BlockRecipeContext } from '../../adapters/page-actions.js';
 import { sanitize } from './html-fallback.js';
 import { guessEmbedProvider, buildEmbedBlock } from './embed-block.js';
+import { PIPELINE_ISLAND_OPENER } from '../wordpress/block-policy.js';
 
 interface Converted {
   matched: boolean;
@@ -242,8 +243,10 @@ function tryMediaText($: CheerioAPI, el: Element, ctx: BlockRecipeContext): stri
 
 // --- shared helpers ----------------------------------------------------------
 
+// Pipeline-marked island (same opener as buildHtmlFallbackBlock) so degraded
+// siblings pass the install-time wp:html ban on theme reinstall.
 function coreHtmlIsland(html: string): string {
-  return `<!-- wp:html -->\n${sanitize(html)}\n<!-- /wp:html -->`;
+  return `${PIPELINE_ISLAND_OPENER}\n${sanitize(html)}\n<!-- /wp:html -->`;
 }
 function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');

@@ -13,7 +13,7 @@ import { mkdirSync, writeFileSync, existsSync, readdirSync, statSync, copyFileSy
 import { dirname, join, normalize, relative } from 'node:path';
 import type { ReplicaFile, ReplicaBlockPlugin } from './types.js';
 import {
-  containsCustomHtmlBlock,
+  containsUnmarkedCustomHtmlBlock,
   customHtmlBlockError,
 } from '../wordpress/block-policy.js';
 
@@ -99,6 +99,25 @@ export function sanitizeReplicaFile(file: ReplicaFile): ReplicaFile {
   };
 }
 
+// Legacy pipeline-pattern acceptance (pre-marker themes): pattern files the
+// reconstruction pipeline emitted before coverage islands carried the
+// PIPELINE_ISLAND_OPENER marker contain BARE `<!-- wp:html -->` islands. Those
+// files are recognizable by shape: they live under `patterns/` and open with
+// the pipeline's pattern-file doc-comment header, which always carries
+// `* Inserter: false` (patterns are template plumbing, hidden from the
+// inserter — not something a hand-authored, user-facing pattern uses). The
+// header is matched with the same tempered-dot idiom as scanForInjection's
+// SANCTIONED_HEADER so the match can't escape the first doc comment. This is
+// a quality gate, not a security boundary against the operator — see
+// block-policy.ts.
+const PIPELINE_PATTERN_HEADER_RE =
+  /^\uFEFF?\s*<\?php\s*\/\*\*(?:(?!\*\/)[\s\S])*\*\s*Inserter:\s*false(?:(?!\*\/)[\s\S])*\*\/\s*\?>/;
+
+function isPipelinePatternFile(relativePath: string, content: string): boolean {
+  const rel = safeRelativePath(relativePath).replace(/\\/g, '/');
+  return rel.startsWith('patterns/') && PIPELINE_PATTERN_HEADER_RE.test(content);
+}
+
 /** Throw if any file in the set fails validation. Run BEFORE writing anything. */
 export function validateReplicaInputs(
   themeFiles: ReplicaFile[] | undefined,
@@ -111,7 +130,12 @@ export function validateReplicaInputs(
     for (const original of themeFiles) {
       const f = sanitizeReplicaFile(original);
       safeRelativePath(f.relativePath);
-      if (containsCustomHtmlBlock(f.content)) {
+      // wp:html is banned in generated theme files EXCEPT for pipeline-emitted
+      // coverage islands: blocks bearing the PIPELINE_ISLAND_OPENER marker
+      // pass anywhere; bare islands pass only inside pipeline-emitted pattern
+      // files (legacy themes reconstructed before the marker existed). Any
+      // other Custom HTML block is treated as hand-authored and rejected.
+      if (containsUnmarkedCustomHtmlBlock(f.content) && !isPipelinePatternFile(f.relativePath, f.content)) {
         throw new Error(customHtmlBlockError(`Theme file ${f.relativePath}`));
       }
     }

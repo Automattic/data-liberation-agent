@@ -91,6 +91,10 @@ export const mediaInstallHandler: Handler = async (args, ctx) => {
       skipped: result.skipped.length,
       errors: result.errors.length,
     },
+    // SVG routing tally (svg survival): how many SVG-origin assets uploaded
+    // as SVG vs. were substituted with their PNG raster sibling, plus whether
+    // safe-svg was auto-ensured for this batch.
+    svg: result.svg,
     installed: result.installed,
     skipped: result.skipped,
     errors: result.errors,

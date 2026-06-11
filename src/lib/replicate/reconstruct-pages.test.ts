@@ -176,12 +176,13 @@ describe('buildPageReconstruction', () => {
     const mediaUrlMap = new Map([['https://cdn.test/team.jpg', '/wp-content/uploads/team.jpg']]);
     const lossy = section({
       headings: ['Our Story'],
-      // 150px image is below the lead-image threshold → dropped by the structured render.
-      images: [{ url: '/wp-content/uploads/team.jpg', sourceUrl: 'https://cdn.test/team.jpg', alt: '', kind: 'img', width: 150, height: 150 }],
+      // 60px glyph is below the 90px media-recovery floor → cannot be recovered,
+      // so the structured render's drop demotes the section to the island.
+      images: [{ url: '/wp-content/uploads/team.jpg', sourceUrl: 'https://cdn.test/team.jpg', alt: '', kind: 'img', width: 60, height: 60 }],
       sectionHtml: '<section><h2>Our Story</h2><img src="https://cdn.test/team.jpg" alt=""/></section>',
     } as Partial<SectionSpec>);
     const r = buildPageReconstruction([lossy], { ...base, slug: 'story', mediaUrlMap });
-    expect(r.postContent).toContain('<!-- wp:html -->');
+    expect(r.postContent).toContain('<!-- wp:html {"metadata":{"name":"lib-coverage-island"}} -->');
     expect(r.postContent).toContain('/wp-content/uploads/team.jpg'); // island media rewritten to local
     expect(r.postContent).not.toContain('cdn.test'); // source CDN URL gone
     expect(r.fallbackSections).toBe(1);

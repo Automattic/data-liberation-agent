@@ -49,18 +49,15 @@ export interface CoverageResult {
  *  CSS — see the file header. Missing images trip the fallback independently. */
 const TEXT_FLOOR = 0.5;
 
-/** Collapse whitespace + case-fold so trivial reflow doesn't read as a loss. */
-function normalize(s: string): string {
-  return s.replace(/\s+/g, ' ').trim().toLowerCase();
-}
-
 /**
  * Measure coverage of a section's captured content against its rendered block
  * markup. Empty captured content is "fully covered" (nothing to lose).
  */
 /** Fold typographic glyph variants + collapse whitespace + lowercase. Mirrors the
- *  provenance gate's glyph-folding so converted-path coverage agrees with it. */
-function foldText(s: string): string {
+ *  provenance gate's glyph-folding so converted-path coverage agrees with it.
+ *  Exported for page-reconstruct's promoted-heading echo check, which must fold
+ *  the same way so the two source-text comparisons agree. */
+export function foldText(s: string): string {
   return s
     .replace(/[\u2018\u2019\u201b]/g, "'") // left/right single quotes, high-reversed-9
     .replace(/[\u201c\u201d]/g, '"') // left/right double quotes
@@ -106,9 +103,17 @@ export function measureSectionCoverage(
   captured: CapturedSectionContent,
   renderedMarkup: string,
 ): CoverageResult {
-  const haystack = normalize(renderedMarkup);
+  // Match captured text against the markup's DECODED text content, not the raw
+  // markup string: the structured renderers emit text through escapeHtml, so the
+  // markup carries &amp;/&#039;/&quot; where the captured text has &/'/". A raw
+  // substring match read every such text as missing — a section whose texts ALL
+  // contained an escapable char measured 0% and was demoted to an island the
+  // render never warranted. cheerio decodes entities (and drops block comments);
+  // foldText absorbs typographic glyph variants, mirroring the converted-path
+  // check below so the two coverage measures agree.
+  const haystack = foldText(cheerio.load(renderedMarkup, null, false).root().text());
 
-  const texts = captured.texts.map(normalize).filter((t) => t.length > 0);
+  const texts = captured.texts.map(foldText).filter((t) => t.length > 0);
   const present = texts.filter((t) => haystack.includes(t)).length;
   const textCoverage = texts.length === 0 ? 1 : present / texts.length;
 

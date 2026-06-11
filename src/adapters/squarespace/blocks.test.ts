@@ -143,7 +143,7 @@ describe('squarespace blocks recipe (htmlToBlocks)', () => {
       <div class="sqs-block-content"><p>preserved content</p></div>
     </div>`;
     const out = toBlocks(html);
-    expect(out).toContain('<!-- wp:html -->');
+    expect(out).toContain('<!-- wp:html {"metadata":{"name":"lib-coverage-island"}} -->');
     expect(out).toContain('preserved content');
   });
 
