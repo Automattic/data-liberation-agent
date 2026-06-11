@@ -60,6 +60,60 @@ describe('MediaStubStore — port-independent localUrl', () => {
     );
   });
 
+  it('parses a pre-SVG-raster stub file without the new optional fields (back-compat)', () => {
+    const dir = setup('backcompat');
+    // Exact shape an older run persisted — no rasterPath/svgRisky/rasterError.
+    writeFileSync(
+      join(dir, 'media-stubs.json'),
+      JSON.stringify({
+        version: 1,
+        stubs: {
+          'https://cdn.example/old-logo.svg': {
+            status: 'success',
+            attempts: 1,
+            localPath: 'media/old-logo.svg',
+            updatedAt: '2026-01-01T00:00:00.000Z',
+          },
+        },
+      }),
+    );
+    const store = MediaStubStore.load(dir);
+    const stub = store.get('https://cdn.example/old-logo.svg');
+    expect(stub?.status).toBe('success');
+    expect(stub?.localPath).toBe('media/old-logo.svg');
+    expect(stub?.rasterPath).toBeUndefined();
+    expect(stub?.svgRisky).toBeUndefined();
+    expect(stub?.rasterError).toBeUndefined();
+    expect(store.shouldAttempt('https://cdn.example/old-logo.svg')).toBe(false);
+  });
+
+  it('round-trips the SVG raster fields through save/load', () => {
+    const dir = setup('raster-roundtrip');
+    const store = MediaStubStore.load(dir);
+    store.markSuccess('https://cdn.example/logo.svg', 'media/logo.svg', {
+      rasterPath: 'media/logo.png',
+      svgRisky: true,
+    });
+    store.markSuccess('https://cdn.example/plain.svg', 'media/plain.svg', {
+      svgRisky: false,
+      rasterError: 'chromium decode failed',
+    });
+    store.flush();
+
+    const reloaded = MediaStubStore.load(dir);
+    expect(reloaded.get('https://cdn.example/logo.svg')).toMatchObject({
+      status: 'success',
+      localPath: 'media/logo.svg',
+      rasterPath: 'media/logo.png',
+      svgRisky: true,
+    });
+    expect(reloaded.get('https://cdn.example/plain.svg')).toMatchObject({
+      svgRisky: false,
+      rasterError: 'chromium decode failed',
+    });
+    expect(reloaded.get('https://cdn.example/plain.svg')?.rasterPath).toBeUndefined();
+  });
+
   it('load heals a pre-existing absolute localUrl from an older Studio site/port', () => {
     const dir = setup('heal');
     // Simulate media-stubs.json written by a prior run on a DIFFERENT port (8884).

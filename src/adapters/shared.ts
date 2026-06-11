@@ -5,7 +5,7 @@ import type { ExtractionLog } from '../lib/resume-state/index.js';
 import type { ImportSession } from '../lib/resume-state/index.js';
 import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { classifyUrl } from '../lib/extraction/sitemap.js';
-import { downloadMedia, isFontUrl } from '../lib/media-fetch/index.js';
+import { closeSvgRasterizer, downloadMedia, isFontUrl } from '../lib/media-fetch/index.js';
 import { MediaStubStore } from '../lib/resume-state/index.js';
 import type { WooProductCsvBuilder, WooProduct } from '../lib/woo-csv/index.js';
 import { AdaptiveTuner, TUNER_DEFAULTS } from '../lib/extraction/adaptive-tuner.js';
@@ -293,13 +293,27 @@ export interface ExtractionLoopOpts {
 // Shared extraction loop — iterate-extract-flush pattern
 // ---------------------------------------------------------------------------
 
-export async function runExtractionLoop(opts: ExtractionLoopOpts): Promise<{
+export interface ExtractionLoopResult {
   pagesExtracted: number;
   postsExtracted: number;
   productsExtracted: number;
   failed: number;
   mediaCollected: number;
-}> {
+}
+
+export async function runExtractionLoop(opts: ExtractionLoopOpts): Promise<ExtractionLoopResult> {
+  // The SVG rasterizer's shared Chromium is lazily launched inside the media
+  // download loop; close it on ALL exit paths — the MCP server is a long-lived
+  // process, so a throw mid-loop would otherwise leak the Chromium child for
+  // the lifetime of the server. (No-op when the run fetched no SVGs.)
+  try {
+    return await runExtractionLoopInner(opts);
+  } finally {
+    await closeSvgRasterizer();
+  }
+}
+
+async function runExtractionLoopInner(opts: ExtractionLoopOpts): Promise<ExtractionLoopResult> {
   const {
     urls: inventoryUrls,
     navigation,
@@ -560,7 +574,10 @@ export async function runExtractionLoop(opts: ExtractionLoopOpts): Promise<{
           const chunk = newMediaUrls.slice(mBatch, mBatch + mediaConcurrency);
           const mediaBatchStart = Date.now();
           const results = await Promise.all(
-            chunk.map((mediaUrl) => downloadMedia(mediaUrl, mediaDir, seenMediaNames, seenMediaHashes)
+            // svgRaster: this is the media-LIBRARY path, so fetched SVGs get a
+            // PNG sibling + risky scan for install-time routing (fonts never
+            // reach here — isFontUrl filtered them above).
+            chunk.map((mediaUrl) => downloadMedia(mediaUrl, mediaDir, seenMediaNames, seenMediaHashes, { svgRaster: true })
               .then((r) => ({ mediaUrl, ...r })))
           );
           const mediaBatchElapsed = (Date.now() - mediaBatchStart) / 1000;
@@ -618,7 +635,13 @@ export async function runExtractionLoop(opts: ExtractionLoopOpts): Promise<{
               if (result.error) {
                 mediaStubs.markFailure(result.mediaUrl, result.error);
               } else if (result.localPath) {
-                mediaStubs.markSuccess(result.mediaUrl, result.localPath);
+                // Carry the SVG raster fields (PNG sibling path, risky scan,
+                // raster error) onto the stub — install-time routing reads them.
+                const svgExtra =
+                  result.svgRisky !== undefined || result.rasterPath || result.rasterError
+                    ? { svgRisky: result.svgRisky, rasterPath: result.rasterPath, rasterError: result.rasterError }
+                    : undefined;
+                mediaStubs.markSuccess(result.mediaUrl, result.localPath, svgExtra);
               }
             }
           }

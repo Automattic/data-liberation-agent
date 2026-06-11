@@ -70,11 +70,11 @@ Read each skill's SKILL.md before using it.
 | `design-qa` | Step 7 — visual QA loop after install |
 | `editing-themes` | Step 7 — apply fix directives from `design-qa` |
 
-## The 7-step flow
+## The 8-step flow
 
 > **Page path is deterministic-first.** `liberate_reconstruct_pages` (Step 5) is the PRIMARY, self-contained page path: it captures each page's OWN computed-style specs, reconstructs gated block markup, and installs per-page patterns + templates. It does **not** consume `cluster-map.json` or the Step 3/4 spec+builder artifacts. So in the default flow:
 > - **Step 2 (cluster) is INFORMATIONAL** — it surfaces sitewide-shared chrome and an archetype map for the run-report, but does not gate reconstruction. Where the layout signature is unreliable (e.g. Wix serves CSS cross-origin, collapsing nearly every page to one signature) clustering is near-useless — that's expected, and fine; `reconstruct_pages` still works per-page.
-> - **Steps 3–4 (per-cluster specs → `generating-patterns` builder fan-out) are SUPPLEMENTARY.** Skip the fan-out when `reconstruct_pages` covers every page (the default). Reach for it only when reconstruct leaves a real gap (a bespoke section it can't map) or is unavailable (legacy `compose-instantiate` path).
+> - **Steps 3–4 (per-cluster specs → `generating-patterns` builder fan-out) are SUPPLEMENTARY.** Skip the fan-out when `reconstruct_pages` covers every page (the default). Reach for it only when reconstruct leaves a real gap (a bespoke section it can't map) or is unavailable (legacy `compose-instantiate` path). Step 3.5 (asset triage) applies to the primary path and is NOT supplementary.
 > - Header/footer chrome comes from `liberate_theme_scaffold` (Step 1), not the builders.
 
 ### Step 1 — Foundation + theme scaffold
@@ -128,6 +128,16 @@ Spec files are the contract between extraction and pattern generation. Each spec
 **Missing-media:** if a spec's image slot has no local/WP-library URL (capture failed), the builder must emit a sized placeholder and add a `details.provenanceFlags` entry — NOT substitute an unrelated photo. A non-zero provenance count is a `warn`, not a silent pass. The extractor now captures page-builder CDN imagery (Replo `assets.replocdn.com`, etc.) regardless of host/extension, so genuine misses should be rare.
 
 Sitewide-shared sections (header, footer, a recurring CTA band that appears identically across clusters) are identified here and built once — deduplicated before builder dispatch.
+
+### Step 3.5 — Asset triage (decorative imagery → structural intent)
+
+Classify decorative-looking assets BEFORE reconstruction so the builder expresses them structurally instead of emitting broken/cluttered images.
+
+1. Candidates are deterministic — pipe a short script to `npx tsx --input-type=module` (from the repo root): `import { selectTriageCandidates } from './src/lib/replicate/triage-candidates.js'` over every captured page's SectionSpecs (`<outputDir>/sections/<slug>.json`). Zero candidates → skip this step entirely.
+2. For EACH candidate, LOOK at it (fetch the asset file, or crop the section screenshot at the candidate's position). Classify:
+   - `keep` — real content: logo, illustration, product shot, photo, meaningful icon. When in doubt, KEEP (never-lose-source-content).
+   - `decoration` — divider line, ornament, gradient stripe, background blob. Write a 1-sentence description of what the visual IS (e.g. "thin full-width horizontal rule between sections") — downstream uses it to pick a structural replacement (`wp:separator` / parent `border.*` / parent `background`); `wp:html` is banned.
+3. Write `<outputDir>/asset-triage.json` atomically (tmp + rename): `{"schema":1,"site":"<origin>","entries":[{"url","sectionSelector","verdict","description"}]}`. COPY `url` and `sectionSelector` VERBATIM from the `selectTriageCandidates` output — the downstream join is exact-string on both fields; rewriting, normalizing, or trimming either breaks the match silently. The reconstruct handler consumes the file automatically; absent file = no behavior change. Capture-once: an existing file is reused on re-runs — delete it to re-triage.
 
 ### Step 4 — Build (fan-out) — SUPPLEMENTARY (skip when `reconstruct_pages` covers all pages)
 
@@ -230,7 +240,7 @@ Verify: `themeWritten > 0` and `warnings` empty. Capture the replica URL.
 - **Static front page.** `liberate_reconstruct_pages` sets `show_on_front=page` + `page_on_front` to the `isHome` page. Confirm `wp option get show_on_front` == `page`; otherwise `/` renders the blog index, not the homepage reconstruction.
 - **WP-default junk + slug collisions.** A fresh WP install ships `Sample Page`, a `Hello world!` post, and an auto-drafted `Privacy Policy`. The default `privacy-policy` draft STEALS the slug, forcing the source privacy page to import as `privacy-policy-2` — which then mismatches the `slug` you pass to `reconstruct_pages` (it would write the reconstruction into the wrong post). `startStudioPreview` deletes these defaults before import; if you import some other way, delete them first (`wp post delete` by slug `sample-page`/`hello-world`/`privacy-policy`) and confirm imported pages kept their source slugs (`wp post list --post_type=page --fields=ID,post_name`).
 
-**QA:** invoke `design-qa`. It captures replica desktop + mobile screenshots, pairs them with source screenshots, runs the responsiveness gate (390px — HARD: no horizontal overflow, sections reflow), and produces qualitative observations + A/B/C classification per archetype representative.
+**QA:** run `liberate_compare` to write comparison.json (v2) with per-viewport height metrics, then invoke `design-qa` with the replica screenshots directory passed as `replicaShotsDir` so the parity gate can use the comparison data. `design-qa` captures replica desktop + mobile screenshots, pairs them with source screenshots, runs the responsiveness gate (390px — HARD: no horizontal overflow, sections reflow), and produces qualitative observations + A/B/C classification per archetype representative.
 
 - **Responsiveness gate is hard.** A theme that overflows at 390px fails, full stop.
 - **Grade EVERY page, not just one representative per archetype** — the user sees every page, and a cluster's non-rep members can differ sharply from its rep. QA must screenshot + classify each reconstructed page.
@@ -316,3 +326,4 @@ Read these when the relevant step comes up — not all are needed on every run:
 - **`skills/design-foundations/references/design-brief.md`** — the `design.md` 10-section template; what each section fills from, lifecycle. Read in step 1 if `design-foundations` is being invoked.
 - **`skills/design-foundations/references/theme-tokens.md`** — token-role → theme.json mapping detail. Read in step 1 when token mapping is ambiguous.
 - **`skills/design-qa/references/visual-qa.md`** — QA loop mechanics, failure classes A/B/C, iteration budget, run-report output. Read in step 7 before invoking `design-qa`.
+- **`skills/replicate-with-blocks/styling-priority.md`** — the preset→patch→instance→variation→layout→CSS cascade, the structured-props cheat sheet, and the hard bans (no raw style="" attrs, no invented className CSS hooks). Applies to native block output; core/html islands exempt.

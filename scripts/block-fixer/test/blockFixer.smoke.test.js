@@ -73,6 +73,109 @@ test('fixBlocksInTemplate handles heading + paragraph composition', () => {
   assert.ok(result.html.includes('Body text.'));
 });
 
+test('fixBlocksInTemplate preserves comment attrs through invalid-block recovery (variation hoist)', () => {
+  // A "hoisted" block: the comment attrs carry a style-variation className
+  // (is-style-lib-*) while the inner HTML still has the pre-hoist inline
+  // style + style-derived classes. The block is INVALID vs save(); recovery
+  // must keep the comment attrs verbatim (like WP editor recovery), not
+  // re-derive className from the stale HTML.
+  const input =
+    '<!-- wp:heading {"className":"is-style-lib-heading-typography","textColor":"text-default","fontFamily":"body"} -->\n' +
+    '<h2 class="has-text-default-color has-text-color has-body-font-family" style="font-size:36px">Sample Heading</h2>\n' +
+    '<!-- /wp:heading -->';
+  const result = fixBlocksInTemplate(input);
+
+  // Comment attrs survive.
+  const commentMatch = /<!-- wp:heading (\{[^\n]*\}) -->/.exec(result.html);
+  assert.ok(commentMatch, 'heading block comment with attrs is present');
+  const attrs = JSON.parse(commentMatch[1]);
+  assert.strictEqual(attrs.className, 'is-style-lib-heading-typography');
+  assert.strictEqual(attrs.textColor, 'text-default');
+  assert.strictEqual(attrs.fontFamily, 'body');
+
+  // Inner HTML is regenerated: is-style class lands in the element class
+  // list, content is preserved, and the pre-hoist inline style residue is gone.
+  const h2Match = /<h2([^>]*)>Sample Heading<\/h2>/.exec(result.html);
+  assert.ok(h2Match, 'heading element with content is present');
+  assert.ok(
+    /class="[^"]*\bis-style-lib-heading-typography\b[^"]*"/.test(h2Match[1]),
+    'is-style class is in the element class list',
+  );
+  assert.ok(!/style="/.test(h2Match[1]), 'no inline style residue');
+});
+
+test('fixBlocksInTemplate preserves comment attrs on invalid nested blocks', () => {
+  const input =
+    '<!-- wp:group {"layout":{"type":"constrained"}} -->\n' +
+    '<div class="wp-block-group">\n' +
+    '<!-- wp:paragraph {"className":"is-style-lib-paragraph-typography"} -->\n' +
+    '<p style="line-height:1.8">Nested body text.</p>\n' +
+    '<!-- /wp:paragraph -->\n' +
+    '</div>\n' +
+    '<!-- /wp:group -->';
+  const result = fixBlocksInTemplate(input);
+  assert.ok(
+    result.html.includes('"className":"is-style-lib-paragraph-typography"'),
+    'nested comment className survives',
+  );
+  assert.ok(
+    /<p[^>]*\bis-style-lib-paragraph-typography\b[^>]*>Nested body text\.<\/p>/.test(
+      result.html,
+    ),
+    'nested element carries the is-style class',
+  );
+  assert.ok(
+    !/<p[^>]*style="/.test(result.html),
+    'nested inline style residue removed',
+  );
+});
+
+test('fixBlocksInTemplate passes jetpack/contact-form (unknown block) through grammar-identical', () => {
+  // jetpack/* blocks are NOT in the fixer's registry (registerCoreBlocks only).
+  // Unknown blocks MUST pass through grammar-preserved: same block names, same
+  // comment attrs, same inner content — the forms emission (form-blocks.ts)
+  // depends on this (post_content runs through fix() before install).
+  // The submit is a core/button in canonical save form (the current Jetpack
+  // form-editor grammar — form-blocks.ts emits exactly this shape so the
+  // fixer round-trip is a no-op on it).
+  const submitButton =
+    '<!-- wp:button {"tagName":"button","type":"submit","lock":{"remove":true},"className":"form-button-submit is-submit","metadata":{"name":"Submit button"}} -->\n' +
+    '<div class="wp-block-button form-button-submit is-submit"><button type="submit" class="wp-block-button__link wp-element-button">Send Message</button></div>\n' +
+    '<!-- /wp:button -->';
+  const input =
+    '<!-- wp:jetpack/contact-form {"style":{"spacing":{"padding":{"top":"16px","right":"16px","bottom":"16px","left":"16px"}}}} -->\n' +
+    '<div class="wp-block-jetpack-contact-form">\n' +
+    '<!-- wp:jetpack/field-name {"label":"Full name","required":true,"width":50} /-->\n' +
+    '<!-- wp:jetpack/field-email {"label":"Email address","required":true,"width":50} /-->\n' +
+    submitButton + '\n' +
+    '</div>\n' +
+    '<!-- /wp:jetpack/contact-form -->';
+  const result = fixBlocksInTemplate(input);
+
+  // Grammar-identical: every block delimiter + its attrs survive verbatim.
+  assert.ok(
+    result.html.includes('<!-- wp:jetpack/contact-form {"style":{"spacing":{"padding":{"top":"16px","right":"16px","bottom":"16px","left":"16px"}}}} -->'),
+    'wrapper comment + attrs preserved',
+  );
+  assert.ok(result.html.includes('<!-- /wp:jetpack/contact-form -->'), 'wrapper close preserved');
+  assert.ok(
+    result.html.includes('<!-- wp:jetpack/field-name {"label":"Full name","required":true,"width":50} /-->'),
+    'field-name self-closing block + attrs preserved',
+  );
+  assert.ok(
+    result.html.includes('<!-- wp:jetpack/field-email {"label":"Email address","required":true,"width":50} /-->'),
+    'field-email self-closing block + attrs preserved',
+  );
+  // The core/button submit round-trips byte-identically (it is canonical
+  // save markup, and core/button IS in the fixer registry) — the captured
+  // label and the type/className wiring Contact_Form keys off must survive.
+  assert.ok(result.html.includes(submitButton), 'core/button submit round-trips byte-identical');
+  assert.ok(result.html.includes('<div class="wp-block-jetpack-contact-form">'), 'inner container preserved');
+  // Nothing reinterpreted the unknown blocks into other shapes.
+  assert.ok(!result.html.includes('jetpack/button'), 'no jetpack/button (connection-gated, renders empty unconnected)');
+  assert.ok(!result.html.includes('wp:columns'), 'no wp:columns substitution');
+});
+
 test('fixBlocksInTemplate returns input unchanged on parse error', () => {
   const input = '<!-- wp:bogus-block-name-that-does-not-exist --><div>oops</div>';
   const result = fixBlocksInTemplate(input);

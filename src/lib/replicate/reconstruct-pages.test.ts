@@ -181,7 +181,7 @@ describe('buildPageReconstruction', () => {
       sectionHtml: '<section><h2>Our Story</h2><img src="https://cdn.test/team.jpg" alt=""/></section>',
     } as Partial<SectionSpec>);
     const r = buildPageReconstruction([lossy], { ...base, slug: 'story', mediaUrlMap });
-    expect(r.postContent).toContain('<!-- wp:html -->');
+    expect(r.postContent).toContain('<!-- wp:html {"metadata":{"name":"lib-coverage-island"}} -->');
     expect(r.postContent).toContain('/wp-content/uploads/team.jpg'); // island media rewritten to local
     expect(r.postContent).not.toContain('cdn.test'); // source CDN URL gone
     expect(r.fallbackSections).toBe(1);

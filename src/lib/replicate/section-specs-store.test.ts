@@ -53,6 +53,12 @@ describe('SectionSpecsStore', () => {
     }
   });
 
+  it('schema is at v8+ (forms[] capture) so pre-forms caches invalidate', () => {
+    // v8 added SectionSpec.forms[] — a v7 cache lacks them and would silently
+    // drop every captured form, so the constant must never regress below 8.
+    expect(SECTION_SPECS_SCHEMA).toBeGreaterThanOrEqual(8);
+  });
+
   it('returns null (cache miss) when the file was written under an older schema', () => {
     const dir = mkdtempSync(join(TMP_ROOT, 'out-'));
     try {

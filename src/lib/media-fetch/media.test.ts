@@ -1,8 +1,22 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync, existsSync } from 'fs';
-import { join } from 'path';
+import { mkdtempSync, rmSync, existsSync, writeFileSync } from 'fs';
+import { join, basename } from 'path';
 import { sanitizeMediaFilename, deriveFilenameFromUrl, downloadMedia, upgradeMediaUrl, isFontUrl } from './media.js';
 import { Readable } from 'stream';
+
+// The fetch-time SVG raster wiring is tested with the rasterizer mocked —
+// the real-Chromium render path is covered in svg-raster.test.ts.
+vi.mock('./svg-raster.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./svg-raster.js')>();
+  return {
+    ...actual,
+    rasterizeSvg: vi.fn(async (_svgPath: string, pngPath: string) => {
+      writeFileSync(pngPath, 'fake-png-bytes');
+      return { ok: true as const, width: 1024, height: 512 };
+    }),
+  };
+});
+import { rasterizeSvg } from './svg-raster.js';
 
 describe('isFontUrl', () => {
   it('detects font files by extension (woff2/woff/ttf/otf/eot), with query/fragment', () => {
@@ -131,6 +145,82 @@ describe('downloadMedia — extension-less page-builder CDN URLs', () => {
     const res = await downloadMedia('https://assets.replocdn.com/projects/p/redirect', tmp, new Map());
     expect(res.localPath).toBeNull();
     expect(res.error).toMatch(/non-image content-type/);
+  });
+});
+
+describe('downloadMedia — SVG raster sibling + risky scan', () => {
+  let tmp: string;
+  const realFetch = global.fetch;
+  afterEach(() => {
+    global.fetch = realFetch;
+    vi.mocked(rasterizeSvg).mockClear();
+    if (tmp && existsSync(tmp)) rmSync(tmp, { recursive: true, force: true });
+  });
+
+  const riskySvg = '<svg xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="g"/></defs><use href="#g"/></svg>';
+  const plainSvg = '<svg xmlns="http://www.w3.org/2000/svg"><rect width="10" height="10"/></svg>';
+
+  it('rasterizes a PNG sibling and flags a risky SVG when svgRaster is enabled', async () => {
+    tmp = mkdtempSync(join(process.cwd(), '.tmp-test-media-'));
+    global.fetch = vi.fn(async () => stubResponse('image/svg+xml', riskySvg)) as unknown as typeof fetch;
+    const res = await downloadMedia('https://cdn.example.com/logo.svg', tmp, new Map(), undefined, { svgRaster: true });
+    expect(res.error).toBeNull();
+    expect(res.svgRisky).toBe(true);
+    expect(res.rasterPath).toBe(join(tmp, 'logo.png'));
+    expect(existsSync(res.rasterPath as string)).toBe(true);
+    expect(res.rasterError).toBeUndefined();
+  });
+
+  it('marks a plain SVG svgRisky:false but still produces the PNG sibling', async () => {
+    tmp = mkdtempSync(join(process.cwd(), '.tmp-test-media-'));
+    global.fetch = vi.fn(async () => stubResponse('image/svg+xml', plainSvg)) as unknown as typeof fetch;
+    const res = await downloadMedia('https://cdn.example.com/icon.svg', tmp, new Map(), undefined, { svgRaster: true });
+    expect(res.svgRisky).toBe(false);
+    expect(res.rasterPath).toBe(join(tmp, 'icon.png'));
+  });
+
+  it('covers extension-less URLs whose content-type is image/svg+xml', async () => {
+    tmp = mkdtempSync(join(process.cwd(), '.tmp-test-media-'));
+    global.fetch = vi.fn(async () => stubResponse('image/svg+xml', riskySvg)) as unknown as typeof fetch;
+    const res = await downloadMedia('https://assets.replocdn.com/projects/p/bare-id', tmp, new Map(), undefined, { svgRaster: true });
+    expect(res.filename).toMatch(/\.svg$/);
+    expect(res.svgRisky).toBe(true);
+    expect(res.rasterPath).toMatch(/\.png$/);
+  });
+
+  it('suffixes the PNG sibling (-2) when its name collides with a different asset', async () => {
+    tmp = mkdtempSync(join(process.cwd(), '.tmp-test-media-'));
+    const seenNames = new Map<string, number>();
+    // A real PNG named logo.png downloads first and claims the name…
+    global.fetch = vi.fn(async () => stubResponse('image/png')) as unknown as typeof fetch;
+    await downloadMedia('https://cdn.example.com/logo.png', tmp, seenNames, undefined, { svgRaster: true });
+    // …so the SVG's raster sibling must take the -2 suffix.
+    global.fetch = vi.fn(async () => stubResponse('image/svg+xml', plainSvg)) as unknown as typeof fetch;
+    const res = await downloadMedia('https://cdn.example.com/logo.svg', tmp, seenNames, undefined, { svgRaster: true });
+    expect(basename(res.rasterPath as string)).toBe('logo-2.png');
+  });
+
+  it('records rasterError and still succeeds when rasterization fails', async () => {
+    tmp = mkdtempSync(join(process.cwd(), '.tmp-test-media-'));
+    vi.mocked(rasterizeSvg).mockResolvedValueOnce({ ok: false, error: 'chromium exploded' });
+    global.fetch = vi.fn(async () => stubResponse('image/svg+xml', plainSvg)) as unknown as typeof fetch;
+    const res = await downloadMedia('https://cdn.example.com/sad.svg', tmp, new Map(), undefined, { svgRaster: true });
+    expect(res.error).toBeNull();
+    expect(res.localPath).toBeTruthy();
+    expect(res.rasterError).toBe('chromium exploded');
+    expect(res.rasterPath).toBeUndefined();
+  });
+
+  it('does NOT rasterize when svgRaster is off (default) or for non-SVG files', async () => {
+    tmp = mkdtempSync(join(process.cwd(), '.tmp-test-media-'));
+    global.fetch = vi.fn(async () => stubResponse('image/svg+xml', riskySvg)) as unknown as typeof fetch;
+    const offRes = await downloadMedia('https://cdn.example.com/default.svg', tmp, new Map());
+    expect(offRes.rasterPath).toBeUndefined();
+    expect(offRes.svgRisky).toBeUndefined();
+    global.fetch = vi.fn(async () => stubResponse('image/png')) as unknown as typeof fetch;
+    const pngRes = await downloadMedia('https://cdn.example.com/photo.png', tmp, new Map(), undefined, { svgRaster: true });
+    expect(pngRes.rasterPath).toBeUndefined();
+    expect(vi.mocked(rasterizeSvg)).toHaveBeenCalledTimes(0);
   });
 });
 

@@ -47,6 +47,7 @@ import { clusterPagesHandler } from './mcp-server/handlers/cluster-pages.js';
 import { sectionExtractHandler } from './mcp-server/handlers/section-extract.js';
 import { composeInstantiateHandler } from './mcp-server/handlers/compose-instantiate.js';
 import { validateArtifactsHandler } from './mcp-server/handlers/validate-artifacts.js';
+import { refineReportHandler } from './mcp-server/handlers/refine-report.js';
 import { NEW_TOOL_SCHEMAS } from './mcp-server/handlers/tool-schemas.js';
 
 // Static adapter imports — add new adapters here (alphabetical)
@@ -428,6 +429,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: 'boolean',
             description: 'Collapse per-page templates into variant-keyed templates + _wp_page_template assignments (default true). false = one template per page (legacy).',
           },
+          variationHoist: { type: 'boolean', description: 'Hoist recurring instance-style constellations into theme block-style variations (default true). Set false to disable (escape hatch).' },
           pages: {
             type: 'array',
             description: 'Content pages to reconstruct. Reconstruct every page (not just cluster reps).',
@@ -641,9 +643,21 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: 'liberate_refine_report',
+      description: 'Validate refine coverage for one page: reads <outputDir>/refine/<slug>/*.json (one file per section, written by match-section) and enforces that EVERY finding id appears in exactly one of applied[]/skipped[]. Fails loudly, naming unaccounted IDs. match-page must not mark a page done until this passes.',
+      inputSchema: {
+        type: 'object' as const,
+        properties: {
+          outputDir: { type: 'string', description: 'Liberation output directory (contains refine/<slug>/ written by match-section).' },
+          slug: { type: 'string', description: 'Page slug whose refine/<slug>/ directory to validate.' },
+        },
+        required: ['outputDir', 'slug'],
+      },
+    },
+    {
       name: 'liberate_compare',
       description:
-        'Pixel-parity scorer (fixed viewport). Joins an origin screenshots dir to a replica screenshots dir by URL pathname, crops both full-page PNGs to the top 1440×900 / 390×844 region, and returns per-pathname desktop/mobile similarity scores (1 − diffPixels/total). Writes comparison.json + diff PNGs into the replica dir. Both dirs must have the standard layout: manifest.json + desktop/<slug>.png + mobile/<slug>.png.',
+        'Pixel-parity scorer (fixed viewport). Joins an origin screenshots dir to a replica screenshots dir by URL pathname, crops both full-page PNGs to the top 1440×900 / 390×844 region, and returns per-pathname desktop/mobile similarity scores (1 − diffPixels/total). Writes comparison.json (v2 with originHeight/replicaHeight/heightMismatchRatio per viewport) + diff PNGs into the replica dir. Writes magenta-padded .padded.png diff when height mismatch exceeds 2%. Both dirs must have the standard layout: manifest.json + desktop/<slug>.png + mobile/<slug>.png.',
       inputSchema: {
         type: 'object' as const,
         properties: {
@@ -685,6 +699,7 @@ const handlers: Record<string, Handler> = {
   liberate_qa: qaHandler,
   liberate_replicate_inventory: replicateInventoryHandler,
   liberate_replicate_verify: replicateVerifyHandler,
+  liberate_refine_report: refineReportHandler,
   liberate_screenshot: screenshotHandler,
   liberate_setup: setupHandler,
   liberate_paths: pathsHandler,

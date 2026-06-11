@@ -46,6 +46,24 @@ export interface MediaStub {
    * runs, leaving `post_content` referencing remote CDN URLs.
    */
   localUrl?: string;
+  /**
+   * Local path of the rasterized PNG sibling produced at fetch time for an
+   * SVG asset (`svg-raster.ts`). Install-time routing substitutes this PNG
+   * when the SVG is risky or its upload fails. Absent on non-SVG stubs and on
+   * stubs written before SVG rasterization existed (back-compat).
+   */
+  rasterPath?: string;
+  /**
+   * True when the fetched SVG contains `<use>`/`<defs>` constructs that Safe
+   * SVG's sanitizer is known to mangle — install routing prefers the PNG
+   * sibling for these. Absent on old/non-SVG stubs.
+   */
+  svgRisky?: boolean;
+  /**
+   * Error message when PNG rasterization of a fetched SVG failed. Non-fatal:
+   * the SVG itself still downloaded fine and continues alone.
+   */
+  rasterError?: string;
 }
 
 interface StoreData {
@@ -114,12 +132,17 @@ export class MediaStubStore {
    */
   private dirty = false;
 
-  markSuccess(url: string, localPath: string): void {
+  markSuccess(
+    url: string,
+    localPath: string,
+    extra?: Pick<MediaStub, 'rasterPath' | 'svgRisky' | 'rasterError'>,
+  ): void {
     const prev = this.data.stubs[url];
     this.data.stubs[url] = {
       status: 'success',
       attempts: (prev?.attempts || 0) + 1,
       localPath,
+      ...extra,
       updatedAt: new Date().toISOString(),
     };
     this.dirty = true;

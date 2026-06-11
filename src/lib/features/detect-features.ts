@@ -68,7 +68,7 @@ const FEATURE_RULES: FeatureRule[] = [
     ],
     platforms: ['squarespace', 'webflow', 'wix'],
     transferable: false,
-    wpRecommendation: 'WPForms or Gravity Forms plugin',
+    wpRecommendation: 'Jetpack Forms (auto-installed when forms are detected)',
   },
   {
     id: 'members',

@@ -35,6 +35,7 @@ import { rewriteMediaUrls } from '../streaming/media-url-rewrite.js';
 import { hasUnmigratedRemoteAsset, scanForInjection } from './validate-artifacts.js';
 import { applyBlockRecipe } from './apply-block-recipe.js';
 import { buildFallbackDiagnostic, type FallbackDiagnostic } from './fallback-diagnostic.js';
+import { formToBlocks, SKIPPED_FIELD_KINDS } from './form-blocks.js';
 
 /**
  * A source-VERBATIM FAQ question/answer pair. The renderer emits these as a
@@ -1510,6 +1511,38 @@ function renderSection(s: SectionSpecWithFaqs, ctx: RenderCtx): BlockOut {
 }
 
 /**
+ * Render a section's captured forms (F2) as jetpack/contact-form markup,
+ * register the EMITTED fields' labels/options + the submit label with the
+ * provenance corpus, and flag skipped fields (file/hidden — they emit no text,
+ * so there is nothing for the gate to trace; the flag records the gap).
+ *
+ * Corpus note: the DOM walk's bodyText captures only visible <p>/<li> text, so
+ * form <label> text is NOT already in the captured corpus — it must be
+ * registered here. (The page gate compares emitted visible text against THIS
+ * result's expectedText∪bodyText; the labels also render front-side via
+ * Jetpack's server render, so verification can find them on the page.)
+ */
+function renderSectionForms(s: SectionSpec, expectedText: string[], flags: string[]): string {
+  if (!s.forms || s.forms.length === 0) return '';
+  const parts: string[] = [];
+  for (const form of s.forms) {
+    const fb = formToBlocks(form);
+    parts.push(fb.markup);
+    for (const f of form.fields) {
+      if (SKIPPED_FIELD_KINDS.has(f.kind)) continue;
+      expectedText.push(f.label, ...(f.options ?? []));
+    }
+    expectedText.push(form.submitLabel);
+    for (const sk of fb.skipped) {
+      flags.push(
+        'form-field-skipped#' + s.sectionIndex + ': ' + sk.kind + ' field "' + sk.label + '" has no Jetpack form equivalent',
+      );
+    }
+  }
+  return parts.join('\n');
+}
+
+/**
  * Reconstruct a full page pattern from its captured section specs.
  * Chrome (header/footer/nav) is stripped; only page-body sections are rendered.
  */
@@ -1605,12 +1638,95 @@ export function reconstructPagePattern(
             `html-to-blocks#${s.sectionIndex}: converted native blocks ` +
               `(0 wp:html, text ${Math.round(cov.textCoverage * 100)}%)`,
           );
+          // Captured forms still emit on the converted path: rawHandler turns the
+          // source <form> into inert paragraphs (or drops the inputs), so the
+          // LIVE jetpack/contact-form is appended after the converted blocks.
+          const convFormBlock = renderSectionForms(s, expectedText, provenanceFlags);
+          if (convFormBlock) sectionMarkup.push(convFormBlock);
           continue;
         }
       }
     }
 
-    const out = renderSection(s, ctx);
+    // Captured forms (F2): placement decision (v1) — each form renders AFTER the
+    // section's text content, INSIDE the section group (faithful to the dominant
+    // contact-section shape: copy above, form below; no geometric interleaving).
+    // The walk's button capture re-captures the form's own <button type=submit>
+    // as a section CTA, so rendering buttonLabels verbatim would put a dead
+    // core/button twin next to the live form submit — for form sections only,
+    // suppress ONE CTA occurrence per form submit label (count-based: each form
+    // contributes exactly one submit, so a SECOND identically-labeled source
+    // button is legitimate content and survives). Coverage still sees the label:
+    // it lives in the submit button's saved inner HTML, which the raw-markup
+    // haystack includes.
+    let renderSpec = s;
+    if (s.forms && s.forms.length > 0) {
+      // One suppression budget per array: buttonLabels, buttons, AND cells[]
+      // all capture the SAME source buttons (a form section that routes to the
+      // cell grid carries its submit as a cell.button too), so each array gets
+      // its own count of the submits.
+      const submitBudget = (): Map<string, number> => {
+        const m = new Map<string, number>();
+        for (const f of s.forms ?? []) {
+          const k = normalizeCopy(f.submitLabel).toLowerCase();
+          m.set(k, (m.get(k) ?? 0) + 1);
+        }
+        return m;
+      };
+      const dropOncePerSubmit = (m: Map<string, number>) => (label: string) => {
+        const k = normalizeCopy(label).toLowerCase();
+        const left = m.get(k) ?? 0;
+        if (left > 0) {
+          m.set(k, left - 1);
+          return false; // the form's own submit, re-captured as a CTA — suppress
+        }
+        return true;
+      };
+      const keepLabel = dropOncePerSubmit(submitBudget());
+      const keepButton = dropOncePerSubmit(submitBudget());
+      const keepCellButton = dropOncePerSubmit(submitBudget());
+      renderSpec = {
+        ...s,
+        buttonLabels: (s.buttonLabels ?? []).filter(keepLabel),
+        ...(s.buttons ? { buttons: s.buttons.filter((b) => keepButton(b.label)) } : {}),
+        // Cells path: the cell grid renders cell.button directly, escaping the
+        // array filters above — null out ONE cell.button per submit label so the
+        // homepage form band doesn't render a dead CTA twin above the live form.
+        ...(s.cells
+          ? {
+              cells: s.cells.map((c) => {
+                if (!(c.button && !keepCellButton(c.button))) return c;
+                // This cell IS the form's submit, re-captured by the walk. Drop
+                // the dead button — and when the walk ALSO echoed the button's
+                // text as the cell's heading (the largest-font text node of a
+                // submit-widget cell is the button itself), drop that too: the
+                // source shows the label once, so the replica must not render
+                // an h3 twin above the live form. Tightly scoped to the
+                // suppressed cell + identical text — a genuine same-label
+                // heading elsewhere in the grid is untouched.
+                const headingEchoesButton =
+                  c.heading != null && normalizeCopy(c.heading).toLowerCase() === normalizeCopy(c.button).toLowerCase();
+                return { ...c, button: null, ...(headingEchoesButton ? { heading: null } : {}) };
+              }),
+            }
+          : {}),
+      };
+    }
+    const out = renderSection(renderSpec, ctx);
+    const formBlock = renderSectionForms(s, out.expectedText, out.flags);
+    if (formBlock) {
+      // Embed inside the section wrapper when the renderer produced the standard
+      // group shape; otherwise (cover/empty) append after it. NOTE: if the
+      // coverage gate below still islands this section, the island's verbatim
+      // source HTML carries the (dead) source form — the jetpack form is NOT
+      // also emitted there, deliberately, so the page never shows two forms.
+      const SECTION_CLOSE = '</section>\n<!-- /wp:group -->';
+      out.markup = out.markup.endsWith(SECTION_CLOSE)
+        ? out.markup.slice(0, -SECTION_CLOSE.length) + formBlock + '\n' + SECTION_CLOSE
+        : out.markup
+          ? out.markup + '\n\n' + formBlock
+          : formBlock;
+    }
 
     // Coverage-gated verbatim fallback: if the structured render dropped captured
     // content (media-first rule) and the section's source HTML is available, emit

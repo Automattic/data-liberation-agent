@@ -8,7 +8,15 @@
 // CSS property order) can still fail WordPress's block validator.
 //
 
-const { parse, serialize, createBlock } = require('@wordpress/blocks');
+const {
+  parse,
+  serialize,
+  createBlock,
+  getBlockAttributes,
+} = require('@wordpress/blocks');
+const {
+  parse: parseBlockGrammar,
+} = require('@wordpress/block-serialization-default-parser');
 const { registerCoreBlocks } = require('@wordpress/block-library');
 const { fixNestedParagraphs } = require('./paragraphFixer');
 
@@ -26,12 +34,56 @@ function initializeBlockRegistry() {
   }
 }
 
-function fixBlockRecursively(block) {
+// Did parse() alter or drop any attribute the document's comment delimiter
+// declared? Comment attrs are plain JSON, so stringify equality is exact.
+function commentAttrsAltered(parsedAttrs, rawAttrs) {
+  return Object.keys(rawAttrs).some(
+    (key) => JSON.stringify(parsedAttrs[key]) !== JSON.stringify(rawAttrs[key]),
+  );
+}
+
+//
+// Comment-delimiter attrs are authoritative (this mirrors what WordPress
+// persists for the block). parse() can silently lose them on two paths:
+//
+//   1. Invalid blocks: built-in "validation fixes" (fixCustomClassname /
+//      ariaLabel / anchor) re-derive those attrs from the STALE inner HTML —
+//      deleting author-intent values that only exist in the comment attrs
+//      (e.g. a hoisted "is-style-lib-*" className whose inner HTML still
+//      carries the pre-hoist inline styles).
+//   2. Deprecation hijack: an eligible deprecated version (core/paragraph)
+//      can "successfully migrate" the block — marking it VALID while eating
+//      comment attrs absent from the deprecated schema (className,
+//      fontFamily) and swallowing the whole outer markup into `content`.
+//
+// `rawBlock` is this block's counterpart from the grammar-level parser
+// (verbatim comment attrs, untouched by either path). When parse() altered
+// any declared attr, re-derive the attribute set from the original inner
+// HTML + raw comment attrs via getBlockAttributes() — the same call
+// parse() itself makes BEFORE validation fixes / deprecations run. Sourced
+// attributes (content etc.) never appear in comment attrs, so author intent
+// can't clobber them; createBlock() drops keys unknown to the current schema.
+//
+function fixBlockRecursively(block, rawBlock) {
   const fixedInnerBlocks = [];
 
   if (block.innerBlocks && block.innerBlocks.length > 0) {
+    const rawInner = (rawBlock && rawBlock.innerBlocks) || [];
+    let rawIndex = 0;
     for (const innerBlock of block.innerBlocks) {
-      const result = fixBlockRecursively(innerBlock);
+      // Align the raw pointer: parse() drops raw nodes that produce no block
+      // (whitespace-only freeform, unregistered types), so pair strictly by
+      // block name and skip raw nodes that have no parsed counterpart. If
+      // alignment is lost we simply stop pairing — same behavior as before.
+      while (
+        rawIndex < rawInner.length &&
+        rawInner[rawIndex].blockName !== innerBlock.name
+      ) {
+        rawIndex++;
+      }
+      const rawInnerBlock =
+        rawIndex < rawInner.length ? rawInner[rawIndex++] : undefined;
+      const result = fixBlockRecursively(innerBlock, rawInnerBlock);
       fixedInnerBlocks.push(result.block);
     }
   }
@@ -40,9 +92,22 @@ function fixBlockRecursively(block) {
     return { block, wasFixed: false };
   }
 
+  let attributes = block.attributes;
+  const rawCommentAttrs =
+    (rawBlock && rawBlock.blockName === block.name && rawBlock.attrs) ||
+    (block.__unstableBlockSource && block.__unstableBlockSource.attrs) ||
+    null;
+  if (rawCommentAttrs && commentAttrsAltered(block.attributes, rawCommentAttrs)) {
+    const sourceHtml =
+      typeof block.originalContent === 'string'
+        ? block.originalContent
+        : ((rawBlock && rawBlock.innerHTML) || '');
+    attributes = getBlockAttributes(block.name, sourceHtml, rawCommentAttrs);
+  }
+
   const fixedBlock = createBlock(
     block.name,
-    block.attributes,
+    attributes,
     fixedInnerBlocks.length > 0 ? fixedInnerBlocks : undefined,
   );
 
@@ -55,6 +120,9 @@ function fixBlocksInTemplate(htmlContent) {
   try {
     const preFixedContent = fixNestedParagraphs(htmlContent);
     const blocks = parse(preFixedContent);
+    // Grammar-level parse of the same content: verbatim comment attrs,
+    // untouched by validation fixes or deprecation migrations.
+    const rawBlocks = parseBlockGrammar(preFixedContent);
 
     const fixedIssues = [];
     const collectIssues = (blockList) => {
@@ -99,7 +167,18 @@ function fixBlocksInTemplate(htmlContent) {
     };
     collectIssues(blocks);
 
-    const fixedBlocks = blocks.map((block) => fixBlockRecursively(block).block);
+    let rawIndex = 0;
+    const fixedBlocks = blocks.map((block) => {
+      while (
+        rawIndex < rawBlocks.length &&
+        rawBlocks[rawIndex].blockName !== block.name
+      ) {
+        rawIndex++;
+      }
+      const rawBlock =
+        rawIndex < rawBlocks.length ? rawBlocks[rawIndex++] : undefined;
+      return fixBlockRecursively(block, rawBlock).block;
+    });
 
     let fixedHtml = serialize(fixedBlocks);
 

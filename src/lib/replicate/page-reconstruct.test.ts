@@ -997,7 +997,7 @@ describe('reconstructPagePattern — coverage-gated core/html fallback', () => {
       sectionHtml: '<section><h2>Our Story</h2><img src="/wp-content/uploads/team.jpg" alt=""/></section>',
     } as Partial<SectionSpec>);
     const r = reconstructPagePattern([s], opts);
-    expect(r.body).toContain('<!-- wp:html -->');
+    expect(r.body).toContain('<!-- wp:html {"metadata":{"name":"lib-coverage-island"}} -->');
     expect(r.body).toContain('/wp-content/uploads/team.jpg'); // the dropped image is preserved
     expect(r.provenanceFlags.some((f) => /html-fallback#0/.test(f))).toBe(true);
   });
@@ -1009,7 +1009,7 @@ describe('reconstructPagePattern — coverage-gated core/html fallback', () => {
       sectionHtml: '<section><h2>Our Story</h2><img src="/wp-content/uploads/big.jpg"/></section>',
     } as Partial<SectionSpec>);
     const r = reconstructPagePattern([s], opts);
-    expect(r.body).not.toContain('<!-- wp:html -->');
+    expect(r.body).not.toContain('<!-- wp:html');
     expect(r.provenanceFlags.some((f) => /html-fallback/.test(f))).toBe(false);
   });
 
@@ -1026,7 +1026,7 @@ describe('reconstructPagePattern — coverage-gated core/html fallback', () => {
         '<img style="width:150px;height:150px" src="/wp-content/uploads/team.jpg" alt=""/></section>',
     } as Partial<SectionSpec>);
     const r = reconstructPagePattern([s], opts);
-    expect(r.body).toContain('<!-- wp:html -->');
+    expect(r.body).toContain('<!-- wp:html {"metadata":{"name":"lib-coverage-island"}} -->');
     // The STYLED snapshot is what shipped — inline styles preserved verbatim.
     expect(r.body).toContain('display:flex');
     expect(r.body).toContain('color:rgb(255,255,255)');
@@ -1043,7 +1043,7 @@ describe('reconstructPagePattern — coverage-gated core/html fallback', () => {
       // no sectionHtml → not fallback-eligible (e.g. over-cap / truncated)
     } as Partial<SectionSpec>);
     const r = reconstructPagePattern([s], opts);
-    expect(r.body).not.toContain('<!-- wp:html -->');
+    expect(r.body).not.toContain('<!-- wp:html');
   });
 
   it('blocks path: fires adapter recipe before the core/html island when adapterBlocks is supplied', () => {
@@ -1062,7 +1062,7 @@ describe('reconstructPagePattern — coverage-gated core/html fallback', () => {
       sourceUrl: 'https://example.com/page',
     });
     expect(r.body).toContain('<!-- wp:image -->');
-    expect(r.body).not.toContain('<!-- wp:html -->');
+    expect(r.body).not.toContain('<!-- wp:html');
     expect(r.provenanceFlags.some((f) => f.includes('adapter-recipe#'))).toBe(true);
     expect(r.provenanceFlags.some((f) => f.includes('html-fallback'))).toBe(false);
   });
@@ -1080,7 +1080,7 @@ describe('reconstructPagePattern — coverage-gated core/html fallback', () => {
       title: 'Page — X',
       // no adapterBlocks — carry/theme path
     });
-    expect(r.body).toContain('<!-- wp:html -->');
+    expect(r.body).toContain('<!-- wp:html {"metadata":{"name":"lib-coverage-island"}} -->');
     expect(r.provenanceFlags.some((f) => f.includes('html-fallback'))).toBe(true);
     expect(r.provenanceFlags.some((f) => f.includes('adapter-recipe#'))).toBe(false);
   });
@@ -1160,5 +1160,164 @@ describe('reconstructPagePattern — converted-sections (HTML→blocks) branch',
       '<!-- wp:code --><pre class="wp-block-code"><code>Hello {{ name }}</code></pre><!-- /wp:code -->';
     const r = reconstructPagePattern([s], { ...opts, convertedSections: conv(markup) });
     expect(r.provenanceFlags.some((f) => f.startsWith('html-to-blocks#0'))).toBe(false);
+  });
+});
+
+describe('reconstructPagePattern — captured forms → jetpack blocks', () => {
+  const opts = { patternSlug: 'demo-replica/page-contact', title: 'Contact' };
+  const contactForm = {
+    fields: [
+      { kind: 'name' as const, label: 'Full name', required: true, widthPct: 50 as const },
+      { kind: 'email' as const, label: 'Email address', required: true, widthPct: 50 as const },
+      { kind: 'select' as const, label: 'Topic', required: false, options: ['Billing', 'Support'] },
+      { kind: 'textarea' as const, label: 'Message', required: false },
+      { kind: 'hidden' as const, label: 'Campaign id', required: false },
+    ],
+    submitLabel: 'Send Message',
+  };
+
+  it('emits a jetpack/contact-form INSIDE the section group, after the section text', () => {
+    const s = section({
+      headings: ['Get in Touch'],
+      bodyText: ['Drop us a line and our fictional team will reply.'],
+      forms: [contactForm],
+    });
+    const r = reconstructPagePattern([s], opts);
+    const open = r.body.indexOf('<!-- wp:jetpack/contact-form ');
+    expect(open).toBeGreaterThan(-1);
+    // Inside the section wrapper: the form opens BEFORE the section's close.
+    expect(open).toBeLessThan(r.body.lastIndexOf('</section>'));
+    // After the section's text content.
+    expect(open).toBeGreaterThan(r.body.indexOf('Get in Touch'));
+    // Field blocks + the core/button submit (current Jetpack form-editor
+    // grammar — jetpack/button is connection-gated and renders empty on
+    // unconnected installs) are present; banned shapes absent.
+    expect(r.body).toContain('wp:jetpack/field-name');
+    expect(r.body).toContain('wp:jetpack/field-email');
+    expect(r.body).toContain('wp:jetpack/field-select');
+    expect(r.body).toContain('wp:jetpack/field-textarea');
+    expect(r.body).toContain('form-button-submit is-submit');
+    expect(r.body).toContain('>Send Message</button>');
+    expect(r.body).not.toContain('jetpack/button');
+    expect(r.body).not.toContain('wp:columns');
+  });
+
+  it('registers emitted labels/options/submit with the provenance corpus; skipped fields flag only', () => {
+    const s = section({ headings: ['Get in Touch'], forms: [contactForm] });
+    const r = reconstructPagePattern([s], opts);
+    for (const t of ['Full name', 'Email address', 'Topic', 'Billing', 'Support', 'Message', 'Send Message']) {
+      expect(r.expectedText).toContain(t);
+    }
+    // The hidden field emits no text → not registered, but flagged for provenance.
+    expect(r.expectedText).not.toContain('Campaign id');
+    expect(r.provenanceFlags.some((f) => f.startsWith('form-field-skipped#') && f.includes('Campaign id'))).toBe(true);
+  });
+
+  it('suppresses the duplicate CTA whose label is the form submit (walk captures the submit twice)', () => {
+    const s = section({
+      headings: ['Get in Touch'],
+      buttonLabels: ['Send Message'],
+      forms: [contactForm],
+    });
+    const r = reconstructPagePattern([s], opts);
+    // ONE Send Message — the live form submit; no dead twin CTA.
+    expect(r.body.match(/Send Message/g)).toHaveLength(1);
+    expect(r.body).toContain('form-button-submit is-submit');
+  });
+
+  it('suppression is count-based: a second identically-labeled source CTA survives', () => {
+    const s = section({
+      headings: ['Get in Touch'],
+      buttonLabels: ['Send Message', 'Send Message'], // submit re-capture + a REAL second button
+      forms: [contactForm],
+    });
+    const r = reconstructPagePattern([s], opts);
+    // Two Send Message total: the surviving legit CTA + the form submit's inner HTML.
+    expect(r.body.match(/Send Message/g)).toHaveLength(2);
+    // Exactly ONE live submit; the survivor renders as a normal section CTA
+    // (a plain core button without the submit classes), alongside the form.
+    expect(r.body.match(/<button type="submit"/g)).toHaveLength(1);
+    expect(r.body).toContain('wp:button');
+  });
+
+  it('cells path: the form submit re-captured as a cell.button is suppressed (no dead twin above the live form)', () => {
+    // A homepage subscribe band that routes to the CELL GRID: >=2 cells with
+    // heading+body, one cell carrying the form's own submit as its button.
+    const s = section({
+      interactionModel: 'columns',
+      headings: ['Stay in the Loop'],
+      forms: [{ fields: [{ kind: 'email' as const, label: 'Email', required: true }], submitLabel: 'Join' }],
+    }) as SectionSpec;
+    s.cells = [
+      { heading: 'Newsletter', body: ['Fictional monthly digest.'], image: null, icon: null, button: 'Join' },
+      { heading: 'No Spam', body: ['Unsubscribe anytime.'], image: null, icon: null, button: null },
+    ];
+    const r = reconstructPagePattern([s], opts);
+    // ONE Join — the live form submit; the cell's dead twin is suppressed.
+    expect(r.body.match(/>Join</g)).toHaveLength(1);
+    expect(r.body).toContain('form-button-submit is-submit');
+    // The grid itself still rendered (cell headings survive).
+    expect(r.body).toContain('Newsletter');
+    expect(r.body).toContain('No Spam');
+  });
+
+  it('cells path: a heading that merely echoes the suppressed submit (walk double-capture) is dropped with it; a same-label heading in another cell survives', () => {
+    // The corneliusholmes homepage shape: the subscribe band's submit widget is
+    // captured as a cell whose heading AND button are both the submit text —
+    // the heading is the button's own text node, not separate source content.
+    const s = section({
+      interactionModel: 'columns',
+      headings: [],
+      forms: [{ fields: [{ kind: 'email' as const, label: 'Email', required: true }], submitLabel: 'Join' }],
+    }) as SectionSpec;
+    s.cells = [
+      { heading: 'Subscribe to my newsletter', body: ['Fictional monthly digest.'], image: null, icon: null, button: null },
+      { heading: 'Join', body: [], image: null, icon: null, button: 'Join' }, // the submit, double-captured
+      { heading: 'Join', body: ['A genuine standalone Join heading.'], image: null, icon: null, button: null },
+    ];
+    const r = reconstructPagePattern([s], opts);
+    // Join renders exactly twice: the live submit + the genuine third-cell heading.
+    expect(r.body.match(/>Join</g)).toHaveLength(2);
+    expect(r.body.match(/<button type="submit"/g)).toHaveLength(1);
+    expect(r.body).toContain('A genuine standalone Join heading.');
+    expect(r.body).toContain('Subscribe to my newsletter');
+  });
+
+  it('cells path suppression is count-based: a second same-label cell button survives', () => {
+    const s = section({
+      interactionModel: 'columns',
+      headings: ['Stay in the Loop'],
+      forms: [{ fields: [{ kind: 'email' as const, label: 'Email', required: true }], submitLabel: 'Join' }],
+    }) as SectionSpec;
+    s.cells = [
+      { heading: 'Newsletter', body: ['Fictional monthly digest.'], image: null, icon: null, button: 'Join' },
+      { heading: 'Community', body: ['A real second Join CTA.'], image: null, icon: null, button: 'Join' },
+    ];
+    const r = reconstructPagePattern([s], opts);
+    // Two Join total: the surviving legit cell CTA + the live form submit.
+    expect(r.body.match(/>Join</g)).toHaveLength(2);
+    expect(r.body.match(/<button type="submit"/g)).toHaveLength(1);
+  });
+
+  it('is deterministic — two runs are byte-identical', () => {
+    const make = () => reconstructPagePattern([section({ headings: ['Get in Touch'], forms: [contactForm] })], opts);
+    expect(make().php).toBe(make().php);
+  });
+
+  it('emits no jetpack markup for sections without forms', () => {
+    const r = reconstructPagePattern([section({ headings: ['Plain Band'] })], opts);
+    expect(r.body).not.toContain('jetpack/');
+  });
+
+  it('does NOT double the form when the section falls back to a core/html island (v1: island keeps the verbatim source form)', () => {
+    const s = section({
+      headings: ['Get in Touch'],
+      images: [img('https://cdn.example.test/never-migrated.jpg')], // non-WP image → dropped → island
+      sectionHtml: '<section><h2>Get in Touch</h2><form><input type="email"/></form></section>',
+      forms: [contactForm],
+    });
+    const r = reconstructPagePattern([s], opts);
+    expect(r.provenanceFlags.some((f) => f.includes('html-fallback'))).toBe(true);
+    expect(r.body).not.toContain('jetpack/contact-form');
   });
 });

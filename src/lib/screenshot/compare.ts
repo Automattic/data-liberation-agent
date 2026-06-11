@@ -20,6 +20,15 @@ import { PNG } from 'pngjs';
 import pixelmatch from 'pixelmatch';
 import { type ViewportId } from './output-layout.js';
 import { DEFAULT_VIEWPORTS } from './types.js';
+import { padToMatchDecoded } from './png-pad.js';
+
+// Cheap gate before paid agent calls (Neptune analog: PIXEL_DIFF_THRESHOLD).
+// A page passes the parity gate ONLY when score >= PARITY_GATE_SCORE AND
+// heightMismatchRatio <= HEIGHT_MISMATCH_THRESHOLD on every scored viewport —
+// a high crop score with a height mismatch is exactly the artifact case
+// (lazy-load short capture) and must NOT pass.
+export const PARITY_GATE_SCORE = 0.995;
+export const HEIGHT_MISMATCH_THRESHOLD = 0.02;
 
 export type { ViewportId };
 
@@ -38,6 +47,23 @@ export interface ViewportScore {
   height?: number;
   diffPixels?: number;
   totalPixels?: number;
+  /** Full decoded image heights (px) — crop-independent. v2 fields. */
+  originHeight?: number;
+  replicaHeight?: number;
+  /** |originHeight − replicaHeight| / originHeight (0 when originHeight is 0). */
+  heightMismatchRatio?: number;
+  /** Written only when heightMismatchRatio > HEIGHT_MISMATCH_THRESHOLD. */
+  paddedDiffPath?: string;
+  /**
+   * Full-canvas score: 1 − diffPixels/totalPixels over BOTH FULL images,
+   * padded to a common canvas (padToMatchDecoded) — sees below the fold that
+   * the crop `score` is blind to. Magenta-padded regions count as diff by
+   * construction, so a shorter replica is penalized — intended. The crop
+   * `score` stays the comparable historical metric; do not mix the two.
+   * Present on every status:'ok' pair. Additive optional field — does not
+   * bump the comparison.json version.
+   */
+  fullPageScore?: number;
 }
 
 export interface ComparisonResult {
@@ -49,7 +75,8 @@ export interface ComparisonResult {
 }
 
 export interface ComparisonFile {
-  version: 1;
+  /** Stays 2: `fullPageScore` is an additive optional ViewportScore field, not a format break. */
+  version: 2;
   comparedAt: string;
   results: ComparisonResult[];
 }
@@ -111,6 +138,10 @@ export function scoreViewportPair(
     return { status: 'decode-error', score: null };
   }
 
+  const originHeight = oImg.height;
+  const replicaHeight = rImg.height;
+  const heightMismatchRatio = originHeight === 0 ? 0 : Math.abs(originHeight - replicaHeight) / originHeight;
+
   const w = Math.min(oImg.width, rImg.width, dim.w);
   const h = Math.min(oImg.height, rImg.height, dim.h);
   if (w <= 0 || h <= 0) return { status: 'dim-mismatch', score: null };
@@ -129,7 +160,35 @@ export function scoreViewportPair(
     writeFileSync(diffPath, PNG.sync.write(diff));
   }
 
-  return { status: 'ok', score, diffPath, width: w, height: h, diffPixels, totalPixels: total };
+  // Full-canvas score (fullPageScore): pad both FULL images to a common
+  // canvas and pixelmatch the whole thing. When heights match, padToMatchDecoded
+  // returns the originals unchanged (no padding, direct full-height match).
+  // ONE pixelmatch pass serves both the score and the padded-diff artifact:
+  // when the artifact is due (mismatch > threshold AND a diffPath was given)
+  // we allocate its PNG as the pixelmatch output; otherwise output is null
+  // (pixelmatch accepts null and skips diff rendering).
+  const padded = padToMatchDecoded(oImg, rImg);
+  const fullW = padded.canvas.width;
+  const fullH = padded.canvas.height;
+  const writePaddedArtifact = heightMismatchRatio > HEIGHT_MISMATCH_THRESHOLD && diffPath !== undefined;
+  const padDiff = writePaddedArtifact ? new PNG({ width: fullW, height: fullH }) : null;
+  const fullDiffPixels = pixelmatch(padded.aImg.data, padded.bImg.data, padDiff ? padDiff.data : null, fullW, fullH, { threshold: 0.1, includeAA: false });
+  const fullPageScore = 1 - fullDiffPixels / (fullW * fullH);
+
+  let paddedDiffPath: string | undefined;
+  if (padDiff && diffPath !== undefined) {
+    // Suffix-swap only when diffPath follows the *.diff.png convention;
+    // append otherwise so a no-match replace can never silently overwrite
+    // the crop diff at the same path.
+    paddedDiffPath = diffPath.endsWith('.diff.png')
+      ? diffPath.slice(0, -'.diff.png'.length) + '.padded.png'
+      : diffPath + '.padded.png';
+    // No mkdirSync needed: the crop diff write above already created
+    // diffPath's dir, and paddedDiffPath shares that dirname by construction.
+    writeFileSync(paddedDiffPath, PNG.sync.write(padDiff));
+  }
+
+  return { status: 'ok', score, diffPath, width: w, height: h, diffPixels, totalPixels: total, originHeight, replicaHeight, heightMismatchRatio, paddedDiffPath, fullPageScore };
 }
 
 export async function compareScreenshotDirs(opts: CompareOpts): Promise<ComparisonFile> {
@@ -158,7 +217,7 @@ export async function compareScreenshotDirs(opts: CompareOpts): Promise<Comparis
     }
     results.push(result);
   }
-  const out: ComparisonFile = { version: 1, comparedAt: new Date().toISOString(), results };
+  const out: ComparisonFile = { version: 2, comparedAt: new Date().toISOString(), results };
   const comparisonPath = join(opts.replicaDir, 'comparison.json');
   const comparisonTmp = comparisonPath + '.tmp';
   writeFileSync(comparisonTmp, JSON.stringify(out, null, 2));

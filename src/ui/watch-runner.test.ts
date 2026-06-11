@@ -76,6 +76,7 @@ describe('shouldHoldPostFlushForMediaInstall', () => {
       installed: [],
       skipped: [],
       errors: [{ sourceUrl: 'https://cdn/a.jpg', error: 'studio failed' }],
+      svg: { svgUploaded: 0, svgSubstituted: 0, svgFailed: 0, safeSvgEnsured: false },
     })).toBe(true);
   });
 
@@ -84,6 +85,7 @@ describe('shouldHoldPostFlushForMediaInstall', () => {
       installed: [{ sourceUrl: 'https://cdn/a.jpg', postId: 1, localUrl: 'http://local/a.jpg', localPath: 'a.jpg' }],
       skipped: [],
       errors: [],
+      svg: { svgUploaded: 0, svgSubstituted: 0, svgFailed: 0, safeSvgEnsured: false },
     })).toBe(false);
   });
 });
