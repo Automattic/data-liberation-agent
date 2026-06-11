@@ -99,7 +99,8 @@ add_action( 'wp_enqueue_scripts', function () {
     }
     $patch = get_theme_file_path( 'assets/css/parity-patch.css' );
     if ( file_exists( $patch ) ) {
-        wp_enqueue_style( '${themeSlug}-parity-patch', get_theme_file_uri( 'assets/css/parity-patch.css' ), array( '${themeSlug}-source' ), (string) filemtime( $patch ) );
+        $deps = file_exists( $css ) ? array( '${themeSlug}-source' ) : array( '${themeSlug}-style' );
+        wp_enqueue_style( '${themeSlug}-parity-patch', get_theme_file_uri( 'assets/css/parity-patch.css' ), $deps, (string) filemtime( $patch ) );
     }
 }, 20 );
 ${htmlJsBlock}`;

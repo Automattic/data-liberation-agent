@@ -28,6 +28,7 @@ import { wpOptionUpdatesForSiteMeta } from '../../lib/preview/site-options.js';
 import { installPost } from '../../lib/streaming/post-install.js';
 import { startStaticServer } from '../../lib/replicate/local-site/static-server.js';
 import { captureScreenshots } from '../../lib/screenshot/screenshotter.js';
+import { SCREENSHOT_DEVICE_SCALE_FACTOR } from '../../lib/screenshot/types.js';
 import { compareScreenshotDirs } from '../../lib/screenshot/compare.js';
 import { buildLocalFoundation, extractCssColors, type PaletteAgg, type TypographyAgg, type BreakpointsAgg } from '../../lib/replicate/local-theme/foundation.js';
 import { extractGoogleFontCssUrls, selfHostGoogleFonts } from '../../lib/replicate/local-theme/google-fonts.js';
@@ -399,11 +400,24 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
     }
   }
 
+  // Truthful carry summary (also gates the repair loop below): css=true only when
+  // the CSS file was actually written; js=true only when the JS file was actually
+  // written. WP_COMPAT_CSS is always non-empty so carryCss:true always yields
+  // css:true when the flag is on.
+  const carriedCss = carryCss && (carrySourceAssets?.css ?? '').trim().length > 0;
+  const carriedJs = carryJs && (carrySourceAssets?.js ?? '').trim().length > 0;
+
   // Stage 1e — Deterministic parity repair loop (bounded, no AI).
   // Measure → classify → patch → re-capture → re-compare; stop on allPass,
   // maxRepairRounds, or unchanged divergence fingerprint (stuck). Every failure
   // degrades to a warning — the loop never aborts the conversion.
-  if (repair && parity && !parity.allPass && maxRepairRounds > 0) {
+  // REQUIRES carried source css: the parity-patch enqueue rides the carry block
+  // in functions.php, so without it the patch file would be written but never
+  // loaded — the loop would burn every round with zero on-page effect.
+  if (repair && parity && !parity.allPass && maxRepairRounds > 0 && !carriedCss) {
+    warnings.push('repair skipped: requires carried source css (carryCss)');
+  }
+  if (repair && parity && !parity.allPass && maxRepairRounds > 0 && carriedCss) {
     let rounds = 0;
     let lastFingerprint: string | undefined;
     let converged = false;
@@ -464,7 +478,11 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
 
             let regions: ReturnType<typeof extractDiffRegions>;
             try {
-              regions = extractDiffRegions(readFileSync(diffPath), { scale: vp === 'desktop' ? 0.7 : 1 });
+              // Same per-viewport scale the screenshotter applied when writing the
+              // pngs (screenshotter.ts deviceScaleFactor) — png px → logical px.
+              regions = extractDiffRegions(readFileSync(diffPath), {
+                scale: vp === 'desktop' ? SCREENSHOT_DEVICE_SCALE_FACTOR : 1,
+              });
             } catch { continue; }
 
             if (regions.length === 0) continue;
@@ -497,14 +515,22 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
         // WAS generated and applied but left the divergence set unchanged, so
         // downstream reads this as converged:false with overrides > 0 — the
         // patch-generated-but-ineffective signal.
+        // Replacement (not union): currently-blocking only — pages that
+        // converged in earlier rounds drop out, unlike the override union.
         allUnresolved = classifyResult.unresolved;
         break;
       }
       lastFingerprint = fp;
 
       // Accumulate overrides across rounds (union; later rounds can add viewports).
+      // The key includes the VALUE (mirrors classify's keying): a prop diverging
+      // to different source values per viewport (hero font-size 64px desktop /
+      // 32px mobile) must stay TWO overrides so renderPatchCss emits per-viewport
+      // media rules — a value-less key would collapse them into one bare rule
+      // applying the desktop value to mobile. Source values are stable across
+      // rounds (static source pages), so same-viewport key conflicts can't arise.
       for (const o of classifyResult.overrides) {
-        const key = `${o.selector}|${o.occurrence}|${o.prop}`;
+        const key = `${o.selector}|${o.occurrence}|${o.prop}|${o.value}`;
         const existing = allOverrides.get(key);
         if (existing) {
           for (const v of o.viewports) {
@@ -514,6 +540,8 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
           allOverrides.set(key, { ...o, viewports: [...o.viewports] });
         }
       }
+      // REPLACEMENT (not union) is deliberate: currently-blocking only — pages
+      // that converged in earlier rounds drop out, unlike the override union.
       allUnresolved = classifyResult.unresolved;
 
       // 4. Render byte-stable patch from the accumulated union of overrides.
@@ -596,12 +624,6 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
       repair: { rounds, overrides: allOverrides.size, unresolved: allUnresolved, converged },
     };
   }
-
-  // Truthful carry summary: css=true only when the CSS file was actually written;
-  // js=true only when the JS file was actually written. WP_COMPAT_CSS is always
-  // non-empty so carryCss:true always yields css:true when the flag is on.
-  const carriedCss = carryCss && (carrySourceAssets?.css ?? '').trim().length > 0;
-  const carriedJs = carryJs && (carrySourceAssets?.js ?? '').trim().length > 0;
 
   return ctx.textResult({
     pages: plan.items.length,

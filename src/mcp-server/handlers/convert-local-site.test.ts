@@ -658,6 +658,55 @@ describe('convertLocalSiteHandler', () => {
     }
   });
 
+  it('repair loop keeps per-viewport source values distinct in the union (no value collapse)', async () => {
+    const dir = makeSite();
+    const sitePath = makeStudioSite();
+    const outDir = mkdtempSync(join(FIXTURE_TMP, 'cls-vpvalues-'));
+    try {
+      repairReplicaManifestEntries = { 'http://localhost:7777/': { slug: 'home' } };
+      repairDiffPng = makeRedDiffPng();
+      vi.mocked(compareScreenshotDirs)
+        .mockResolvedValueOnce(FAIL_COMPARE as unknown as Awaited<ReturnType<typeof compareScreenshotDirs>>)
+        .mockResolvedValueOnce(PASS_COMPARE as unknown as Awaited<ReturnType<typeof compareScreenshotDirs>>);
+      // SAME selector|occurrence|prop diverging to DIFFERENT source values per
+      // viewport (responsive hero type scale). classify keys on the source value
+      // too, yielding TWO overrides; the cross-round union must NOT collapse them
+      // into one bare rule that forces the desktop value onto mobile.
+      const FONT_DESK = {
+        match: 'section.hero[0]', viewport: 'desktop' as const, kind: 'prop' as const,
+        prop: 'fontSize', source: '64px', replica: '40px', replicaOnlyClasses: [],
+      };
+      const FONT_MOB = {
+        match: 'section.hero[0]', viewport: 'mobile' as const, kind: 'prop' as const,
+        prop: 'fontSize', source: '32px', replica: '40px', replicaOnlyClasses: [],
+      };
+      vi.mocked(probePair)
+        .mockResolvedValueOnce([FONT_DESK])  // round 0 desktop
+        .mockResolvedValueOnce([FONT_MOB]);  // round 0 mobile
+
+      const res = await convertLocalSiteHandler(
+        { dir, studioSitePath: sitePath, outputDir: outDir, themeSlug: 'acme-local', siteTitle: 'Acme' },
+        ctx,
+      );
+      expect(res.isError).toBeFalsy();
+      const summary = JSON.parse(res.content[0].text) as {
+        parity?: { repair?: { rounds: number; overrides: number; converged: boolean } };
+      };
+      expect(summary.parity?.repair?.overrides).toBe(2);
+      expect(summary.parity?.repair?.converged).toBe(true);
+      const patch = readFileSync(join(sitePath, 'wp-content', 'themes', 'acme-local', 'assets', 'css', 'parity-patch.css'), 'utf8');
+      // Each viewport keeps ITS source value inside its media block…
+      expect(patch).toContain('@media (min-width: 768px) {\n  section.hero { font-size: 64px; }\n}');
+      expect(patch).toContain('@media (max-width: 767px) {\n  section.hero { font-size: 32px; }\n}');
+      // …and no bare (viewport-unscoped) rule leaks the desktop value to mobile.
+      expect(patch).not.toMatch(/^section\.hero/m);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(sitePath, { recursive: true, force: true });
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
   it('repair:false skips the loop entirely', async () => {
     const dir = makeSite();
     const sitePath = makeStudioSite();
@@ -680,6 +729,35 @@ describe('convertLocalSiteHandler', () => {
       expect(vi.mocked(probePair).mock.calls).toHaveLength(0);
       // captureScreenshots: source + replica only (no re-capture).
       expect(capturedRuns).toHaveLength(2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(sitePath, { recursive: true, force: true });
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
+  it('repair skips with a warning when source css is not carried (patch would never load)', async () => {
+    const dir = makeSite();
+    const sitePath = makeStudioSite();
+    const outDir = mkdtempSync(join(FIXTURE_TMP, 'cls-skipcarry-'));
+    try {
+      // Failing compare (base mock) + repair default ON, but carryCss:false means
+      // functions.php never enqueues parity-patch.css — looping would burn every
+      // round with zero on-page effect, so the handler must skip with a warning.
+      const res = await convertLocalSiteHandler(
+        { dir, studioSitePath: sitePath, outputDir: outDir, themeSlug: 'acme-local', siteTitle: 'Acme', carryCss: false },
+        ctx,
+      );
+      expect(res.isError).toBeFalsy();
+      const summary = JSON.parse(res.content[0].text) as {
+        parity?: { repair?: unknown };
+        warnings: string[];
+      };
+      expect(summary.warnings).toContain('repair skipped: requires carried source css (carryCss)');
+      expect(summary.parity?.repair).toBeUndefined();
+      // The loop never ran: no probes, no re-capture.
+      expect(vi.mocked(probePair).mock.calls).toHaveLength(0);
+      expect(capturedRuns).toHaveLength(2); // source + replica only
     } finally {
       rmSync(dir, { recursive: true, force: true });
       rmSync(sitePath, { recursive: true, force: true });

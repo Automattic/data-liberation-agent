@@ -165,6 +165,19 @@ describe('assembleLocalTheme', () => {
     expect(fns.indexOf('parity-patch')).toBeGreaterThan(fns.indexOf('source.css'));
   });
 
+  it('patch enqueue dep falls back to the theme style handle when source.css is absent (js-only carry)', () => {
+    const files = assembleLocalTheme({ siteTitle: 'A', themeSlug: 'a-local', headerPart: HEADER, footerPart: FOOTER, carrySourceAssets: { css: '', js: 'x()' } });
+    const fns = files.find((f) => f.relativePath === 'functions.php')?.content ?? '';
+    // Patch enqueue still present without css carry…
+    expect(fns).toContain("'a-local-parity-patch'");
+    // …and the dep is decided at runtime: the source handle only when source.css
+    // exists, else the always-registered theme style handle. A hardcoded -source
+    // dep would be UNREGISTERED in js-only carry and WP would silently drop the
+    // patch — the repair loop could never converge.
+    expect(fns).toContain("$deps = file_exists( $css ) ? array( 'a-local-source' ) : array( 'a-local-style' );");
+    expect(fns).toMatch(/parity-patch\.css' \), \$deps,/);
+  });
+
   it('css-only carry: no js file and NO html.js gate (gated CSS must not hide content)', () => {
     // js: '' → no source script ships, so nothing would ever reveal sections
     // that reveal-gated source CSS hides behind html.js. Emitting the gate
