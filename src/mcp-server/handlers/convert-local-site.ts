@@ -493,7 +493,10 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
       const classifyResult = classifyDivergences(roundDivergences);
       const fp = divergenceFingerprint(roundDivergences);
       if (fp === lastFingerprint) {
-        // Patching is not helping — stop and report.
+        // Patching is not helping — stop and report. The previous round's patch
+        // WAS generated and applied but left the divergence set unchanged, so
+        // downstream reads this as converged:false with overrides > 0 — the
+        // patch-generated-but-ineffective signal.
         allUnresolved = classifyResult.unresolved;
         break;
       }
@@ -562,9 +565,17 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
             passes: d !== null && m !== null && d >= PARITY_FLOOR && m >= PARITY_FLOOR,
           };
         });
+        // Recompute the averages from THIS round's scores — carrying the
+        // round-0 averages forward would report stale numbers after the patch
+        // improved (or changed) the comparison.
+        const r2scores = (k: 'desktop' | 'mobile'): number[] =>
+          parityPages2.map((p) => p[k]).filter((s): s is number => s !== null);
+        const r2avg = (xs: number[]): number => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0);
         currentParity = {
           ...currentParity,
           allPass: parityPages2.length > 0 && parityPages2.every((p) => p.passes),
+          avgDesktop: r2avg(r2scores('desktop')),
+          avgMobile: r2avg(r2scores('mobile')),
           pages: parityPages2,
         };
       } catch (err) {

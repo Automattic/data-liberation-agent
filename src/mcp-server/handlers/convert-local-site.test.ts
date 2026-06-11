@@ -600,6 +600,64 @@ describe('convertLocalSiteHandler', () => {
     }
   });
 
+  it('repair loop retains earlier-round overrides in the patch (union across rounds)', async () => {
+    const dir = makeSite();
+    const sitePath = makeStudioSite();
+    const outDir = mkdtempSync(join(FIXTURE_TMP, 'cls-union-'));
+    try {
+      repairReplicaManifestEntries = { 'http://localhost:7777/': { slug: 'home' } };
+      repairDiffPng = makeRedDiffPng();
+      // 3 compares: round-0 initial FAIL → after round-0 patch FAIL → after round-1 patch PASS.
+      vi.mocked(compareScreenshotDirs)
+        .mockResolvedValueOnce(FAIL_COMPARE as unknown as Awaited<ReturnType<typeof compareScreenshotDirs>>)
+        .mockResolvedValueOnce(FAIL_COMPARE as unknown as Awaited<ReturnType<typeof compareScreenshotDirs>>)
+        .mockResolvedValueOnce(PASS_COMPARE as unknown as Awaited<ReturnType<typeof compareScreenshotDirs>>);
+      // Round 0 yields overrides A (margin-bottom) + B (font-size); round 1 yields
+      // C (different selector|prop key). Different divergence sets → different
+      // fingerprints, so the loop continues rather than breaking as stuck.
+      const DIV_B = {
+        match: 'p.lede[0]', viewport: 'desktop' as const, kind: 'prop' as const,
+        prop: 'fontSize', source: '17px', replica: '14px', replicaOnlyClasses: [],
+      };
+      const DIV_C = {
+        match: 'div.cards[0]', viewport: 'desktop' as const, kind: 'prop' as const,
+        prop: 'paddingTop', source: '24px', replica: '0px', replicaOnlyClasses: ['wp-block-columns'],
+      };
+      vi.mocked(probePair)
+        .mockResolvedValueOnce([MARGIN_DIV, DIV_B])  // round 0 desktop → A + B
+        .mockResolvedValueOnce([])                   // round 0 mobile
+        .mockResolvedValueOnce([DIV_C]);             // round 1 desktop → C (mobile falls to base [])
+
+      const res = await convertLocalSiteHandler(
+        { dir, studioSitePath: sitePath, outputDir: outDir, themeSlug: 'acme-local', siteTitle: 'Acme', maxRepairRounds: 2 },
+        ctx,
+      );
+      expect(res.isError).toBeFalsy();
+      const summary = JSON.parse(res.content[0].text) as {
+        parity?: {
+          repair?: { rounds: number; overrides: number; converged: boolean };
+          allPass: boolean; avgDesktop: number; avgMobile: number;
+        };
+      };
+      expect(summary.parity?.repair?.rounds).toBe(2);
+      expect(summary.parity?.repair?.overrides).toBe(3);
+      expect(summary.parity?.repair?.converged).toBe(true);
+      // The round-2 patch (final write into the live theme) must contain the UNION:
+      // A and B retained from round 1, C added — not replaced by C alone.
+      const patch = readFileSync(join(sitePath, 'wp-content', 'themes', 'acme-local', 'assets', 'css', 'parity-patch.css'), 'utf8');
+      expect(patch).toContain('margin-bottom: 88px');  // A retained
+      expect(patch).toContain('font-size: 17px');      // B retained
+      expect(patch).toContain('padding-top: 24px');    // C added
+      // Averages reflect the FINAL round's compare (PASS_COMPARE = 1.0), not round 0.
+      expect(summary.parity?.avgDesktop).toBe(1.0);
+      expect(summary.parity?.avgMobile).toBe(1.0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(sitePath, { recursive: true, force: true });
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
   it('repair:false skips the loop entirely', async () => {
     const dir = makeSite();
     const sitePath = makeStudioSite();
