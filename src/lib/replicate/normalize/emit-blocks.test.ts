@@ -61,6 +61,48 @@ describe('emitSectionBlocks', () => {
     expect(markup).toContain('style="max-width:46ch"');
   });
 
+  it('preserves inline span class hooks in heading rich text (source styling)', () => {
+    // The source styles inline runs via span classes (.it = italic display
+    // face); unwrapping them to bare text drops the styling.
+    const section = { id: 'h', role: 'body' as const, html: '<section><h1>Scent, <span class="it">poured by hand.</span></h1></section>' };
+    const { markup } = emitSectionBlocks(section);
+    expect(blockMarkupRoundtrips(markup).ok).toBe(true);
+    expect(markup).toContain('<span class="it">poured by hand.</span>');
+  });
+
+  it('emits an inline-only wrapper (kicker) as inline content — no inner paragraph, span classes kept', () => {
+    // <span class="kicker"><span class="num">01</span> Made</span>: recursing
+    // turned the inner span into a classless block <p>01</p> (lost .num color +
+    // added UA paragraph margin → vertical reflow). Inline content must survive.
+    const section = {
+      id: 'k',
+      role: 'body' as const,
+      html: '<section><div><span class="kicker"><span class="num">01</span> Made here</span><h1>T</h1></div></section>',
+    };
+    const { markup } = emitSectionBlocks(section);
+    expect(blockMarkupRoundtrips(markup).ok).toBe(true);
+    expect(markup).toContain('class="wp-block-group kicker"');
+    expect(markup).toContain('<span class="num">01</span>');
+    // The kicker body is inline — no paragraph block wrapping "01".
+    expect(markup).not.toContain('<p>01</p>');
+  });
+
+  it('does NOT inline-collapse a wrapper whose inline child contains block descendants (card link)', () => {
+    // A block-level <a> wrapping divs (a card link) is inline-tagged but
+    // structurally block — collapsing it to inline destroys the inner divs
+    // (the .ph image placeholder). It must recurse and keep the structure.
+    const section = {
+      id: 'card',
+      role: 'body' as const,
+      html: '<section><div class="wrap"><a href="/x/"><div class="ph ph--t2"><span class="ph__tag">cap</span></div><div><h3>Title</h3></div></a></div></section>',
+    };
+    const { markup } = emitSectionBlocks(section);
+    expect(blockMarkupRoundtrips(markup).ok).toBe(true);
+    // The .ph placeholder div survives (not flattened to its inner span).
+    expect(markup).toContain('class="wp-block-group ph ph--t2"');
+    expect(markup).toContain('<!-- wp:heading');
+  });
+
   it('flags confidence < 1 when an unrecognized child is downgraded to a paragraph', () => {
     const section = { id: 's', role: 'body' as const, html: '<section><figure>weird</figure></section>' };
     const { confidence } = emitSectionBlocks(section);

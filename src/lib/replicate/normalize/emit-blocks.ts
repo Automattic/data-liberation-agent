@@ -32,8 +32,10 @@ function blockAttrs(pairs: string[], className: string): string {
 
 const HEADING = /^h([1-6])$/;
 
-/** Inline tags preserved verbatim in rich-text content (a keeps only an escaped href). */
-const INLINE_ALLOWED = new Set(['a', 'strong', 'em', 'b', 'i', 'br']);
+/** Inline tags preserved verbatim in rich-text content (a keeps only an escaped
+ * href; span keeps its class — owned sources use span class hooks like .num /
+ * .it as styling anchors, so unwrapping them to bare text drops source styling). */
+const INLINE_ALLOWED = new Set(['a', 'strong', 'em', 'b', 'i', 'br', 'span']);
 
 /**
  * Serialize an element's inline content: allowed inline tags kept (anchors
@@ -53,15 +55,23 @@ function inlineHtml($: CheerioAPI, el: Element): string {
         out += '<br/>';
         continue;
       }
-      if (INLINE_ALLOWED.has(tag)) {
+      const cls = ($(node).attr('class') ?? '').trim();
+      const styleA = ($(node).attr('style') ?? '').trim();
+      // A <span> with NEITHER class nor style carries no styling info — keep
+      // unwrapping it so nested content (links) survives without a noise
+      // wrapper. A span with a class (.num/.it) or inline style (color hooks)
+      // is a source styling anchor and is preserved verbatim.
+      if (tag === 'span' && !cls && !styleA) {
+        out += inlineHtml($, node);
+      } else if (INLINE_ALLOWED.has(tag)) {
         const inner = inlineHtml($, node);
-        const cls = ($(node).attr('class') ?? '').trim();
         const clsAttr = cls ? ` class="${escapeHtml(cls)}"` : '';
         if (tag === 'a') {
           const href = escapeHtml($(node).attr('href') ?? '');
           out += `<a${clsAttr} href="${href}">${inner}</a>`;
         } else {
-          out += `<${tag}${clsAttr}>${inner}</${tag}>`;
+          const styleAttr = styleA ? ` style="${escapeHtml(styleA)}"` : '';
+          out += `<${tag}${clsAttr}${styleAttr}>${inner}</${tag}>`;
         }
       } else {
         // Transparent unwrap: recurse so nested allowed tags (e.g. a link
@@ -233,17 +243,44 @@ function emitChild($: CheerioAPI, el: Element): ChildResult {
   const elId = $el.attr('id');
   const elementChildren = $el.children().toArray();
   if (elId || elementChildren.length > 0) {
-    const childResults = elementChildren.map((c) => emitChild($, c));
-    const inner = childResults.map((r) => r.markup).filter(Boolean).join('\n');
-    const looseText = $el.clone().children().remove().end().text().trim();
-    const loosePara = looseText && childResults.length === 0 ? paragraphBlock(escapeHtml(looseText)) : '';
+    // Inline-only content (kicker label runs: <span class="num">01</span> · …)
+    // is serialized VERBATIM as inline markup, not recursed: recursion downgrades
+    // each inline <span> to a classless block <p> — dropping the source class
+    // (.num color) AND adding UA paragraph margins, which reflows the page
+    // vertically (maison kicker: h1 pushed down 28px on mobile). The group div
+    // keeps the source class so `.kicker{display:inline-flex}` still renders it.
+    // A child counts as inline ONLY if it is an inline tag AND carries no
+    // block-level descendants — a block-containing <a> (a card link wrapping
+    // divs) is inline-tagged but structurally block, and serializing it inline
+    // would destroy its block descendants (the .ph image placeholder).
+    const isInlineSafe = (c: Element): boolean => {
+      const t = (c.tagName ?? '').toLowerCase();
+      if (!INLINE_ALLOWED.has(t)) return false;
+      return $(c)
+        .find('*')
+        .toArray()
+        .every((d) => INLINE_ALLOWED.has(((d as Element).tagName ?? '').toLowerCase()));
+    };
+    const allInline = elementChildren.length > 0 && elementChildren.every((c) => isInlineSafe(c as Element));
+    let body: string;
+    let clean: boolean;
+    if (allInline) {
+      body = inlineHtml($, el).trim();
+      clean = true;
+    } else {
+      const childResults = elementChildren.map((c) => emitChild($, c));
+      const inner = childResults.map((r) => r.markup).filter(Boolean).join('\n');
+      const looseText = $el.clone().children().remove().end().text().trim();
+      const loosePara = looseText && childResults.length === 0 ? paragraphBlock(escapeHtml(looseText)) : '';
+      body = [inner, loosePara].filter(Boolean).join('\n');
+      clean = childResults.every((r) => r.clean) && !(looseText && childResults.length > 0);
+    }
     const cls = classNameOf($el);
     const styleAttr = $el.attr('style')?.trim();
     const wrapPairs = ['"tagName":"div"'];
     if (elId) wrapPairs.unshift(`"anchor":${attrJson(elId)}`);
     const wrapAttrs = blockAttrs(wrapPairs, cls);
     const divCls = ['wp-block-group', cls].filter(Boolean).join(' ');
-    const body = [inner, loosePara].filter(Boolean).join('\n');
     const idPart = elId ? ` id="${escapeHtml(elId)}"` : '';
     const stylePart = styleAttr ? ` style="${escapeHtml(styleAttr)}"` : '';
     return {
@@ -251,7 +288,7 @@ function emitChild($: CheerioAPI, el: Element): ChildResult {
         `<!-- wp:group ${wrapAttrs} -->\n` +
         `<div${idPart} class="${escapeHtml(divCls)}"${stylePart}>${body ? `\n${body}\n` : ''}</div>\n` +
         `<!-- /wp:group -->`,
-      clean: childResults.every((r) => r.clean) && !(looseText && childResults.length > 0),
+      clean,
     };
   }
 
