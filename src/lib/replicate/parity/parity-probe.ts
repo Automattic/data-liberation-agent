@@ -56,29 +56,39 @@ export interface Divergence {
   source: string;
   replica: string;
   replicaOnlyClasses: string[];
+  /** Source pathname this divergence was measured on (e.g. '/', '/scent/').
+   * Threaded from probePair so the classifier can detect page-conflicts —
+   * the SAME selector|prop|viewport carrying different source values across
+   * pages cannot be expressed as one global patch rule. Absent for pure-unit
+   * divergences (back-compat: a lone single-page run has no conflict). */
+  page?: string;
 }
 
 const RECT_TOLERANCE = 2;
 
-/** Pure comparator — source order preserved, deterministic. */
+/** Pure comparator — source order preserved, deterministic. `page` (optional)
+ * stamps each divergence with the source pathname it was measured on so the
+ * classifier can detect cross-page conflicts. */
 export function compareSnapshots(
   source: ElementSnapshot[],
   replica: ElementSnapshot[],
   viewport: ViewportId,
+  page?: string,
 ): Divergence[] {
   const byMatch = new Map(replica.map((s) => [s.match, s]));
   const out: Divergence[] = [];
+  const stamp = page !== undefined ? { page } : {};
   for (const s of source) {
     const r = byMatch.get(s.match);
     if (!r) {
-      out.push({ match: s.match, viewport, kind: 'missing', prop: 'element', source: 'present', replica: 'absent', replicaOnlyClasses: [] });
+      out.push({ match: s.match, viewport, kind: 'missing', prop: 'element', source: 'present', replica: 'absent', replicaOnlyClasses: [], ...stamp });
       continue;
     }
     for (const prop of PROP_BATTERY) {
       const sv = s.props[prop];
       const rv = r.props[prop];
       if (sv !== undefined && rv !== undefined && sv !== rv) {
-        out.push({ match: s.match, viewport, kind: 'prop', prop, source: sv, replica: rv, replicaOnlyClasses: r.replicaOnlyClasses });
+        out.push({ match: s.match, viewport, kind: 'prop', prop, source: sv, replica: rv, replicaOnlyClasses: r.replicaOnlyClasses, ...stamp });
       }
     }
     for (const axis of ['top', 'left', 'width', 'height'] as const) {
@@ -91,6 +101,7 @@ export function compareSnapshots(
           source: String(s.rect[axis]),
           replica: String(r.rect[axis]),
           replicaOnlyClasses: r.replicaOnlyClasses,
+          ...stamp,
         });
       }
     }
@@ -191,6 +202,9 @@ export interface ProbePairOpts {
   replicaUrl: string;
   viewport: ViewportId;
   regions: DiffRegion[];
+  /** Source pathname identity for cross-page conflict detection (e.g. '/scent/').
+   * Defaults to the sourceUrl's pathname when omitted. */
+  page?: string;
 }
 
 const VIEWPORTS: Record<ViewportId, { width: number; height: number; mobile: boolean }> = {
@@ -223,7 +237,17 @@ export async function probePair(opts: ProbePairOpts): Promise<Divergence[]> {
     };
     const source = await grab(opts.sourceUrl);
     const replica = await grab(opts.replicaUrl);
-    return compareSnapshots(source, replica, opts.viewport);
+    // Page identity: explicit opt, else the source URL's pathname (so the
+    // classifier can detect the same selector measured differently per page).
+    let pageId = opts.page;
+    if (pageId === undefined) {
+      try {
+        pageId = new URL(opts.sourceUrl).pathname;
+      } catch {
+        pageId = opts.sourceUrl;
+      }
+    }
+    return compareSnapshots(source, replica, opts.viewport, pageId);
   } finally {
     await context.close();
   }

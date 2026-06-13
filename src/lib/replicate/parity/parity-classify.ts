@@ -91,6 +91,11 @@ export function classifyDivergences(divergences: Divergence[]): RepairPlan {
   const overrides = new Map<string, PatchOverride>();
   const unresolved: UnresolvedDivergence[] = [];
 
+  // First pass: gate. Non-candidates route to unresolved immediately;
+  // candidates (prop-kind, patchable, safe selector, occurrence 0) are
+  // collected so page-conflict detection can run BEFORE any override is
+  // emitted.
+  const candidates: Array<{ div: Divergence; selector: string; occurrence: number }> = [];
   for (const div of divergences) {
     if (div.kind !== 'prop') {
       unresolved.push({ ...div, cause: 'structural' });
@@ -119,6 +124,40 @@ export function classifyDivergences(divergences: Divergence[]): RepairPlan {
       unresolved.push({ ...div, cause: 'occurrence-ambiguous' });
       continue;
     }
+    candidates.push({ div, selector, occurrence });
+  }
+
+  // Page-conflict detection. The patch selector space is page-blind: a global
+  // rule `selector { prop: value }` (optionally inside one media query) cannot
+  // hold two values. One element has exactly one computed value per viewport,
+  // so the SAME selector|occurrence|prop|viewport carrying DIFFERENT source
+  // values can ONLY arise across pages (different page heroes sharing a class).
+  // Emitting both yields last-wins paint — the maison scent-hero navy-on-navy
+  // bug. Route every conflicting tuple to unresolved 'page-conflict' (honest,
+  // no wrong paint). Keyed per VIEWPORT so a clean breakpoint still patches
+  // even when the other viewport conflicts; legitimate desktop≠mobile values
+  // live in distinct media queries and never collide.
+  const sourcesByTuple = new Map<string, Set<string>>();
+  for (const c of candidates) {
+    const tuple = `${c.selector}|${c.occurrence}|${c.div.prop}|${c.div.viewport}`;
+    let set = sourcesByTuple.get(tuple);
+    if (!set) {
+      set = new Set();
+      sourcesByTuple.set(tuple, set);
+    }
+    set.add(c.div.source);
+  }
+  const conflictTuples = new Set(
+    [...sourcesByTuple.entries()].filter(([, s]) => s.size > 1).map(([t]) => t),
+  );
+
+  for (const c of candidates) {
+    const { div, selector, occurrence } = c;
+    const tuple = `${selector}|${occurrence}|${div.prop}|${div.viewport}`;
+    if (conflictTuples.has(tuple)) {
+      unresolved.push({ ...div, cause: 'page-conflict' });
+      continue;
+    }
     const key = `${selector}|${occurrence}|${div.prop}|${div.source}`;
     const existing = overrides.get(key);
     if (existing) {
@@ -141,6 +180,76 @@ export function classifyDivergences(divergences: Divergence[]): RepairPlan {
   // Deterministic viewport order.
   for (const o of sorted) o.viewports.sort();
   return { overrides: sorted, unresolved };
+}
+
+export interface PageConflict {
+  selector: string;
+  occurrence: number;
+  prop: string;
+  viewport: ViewportId;
+  /** The distinct source values that collided on this viewport. */
+  values: string[];
+}
+
+const ALL_VIEWPORTS: ViewportId[] = ['desktop', 'mobile'];
+
+/**
+ * Cross-round union safety net. The per-round classifier already suppresses
+ * within-round page-conflicts, but the repair loop UNIONS overrides across
+ * rounds, and pages fail at different times: a page that passes round 1 (no
+ * override) can BREAK under round 1's global patch and emit a conflicting
+ * value in round 2 — reintroducing two `selector { prop: value }` rules that
+ * last-wins-collide (the maison scent-hero bug across rounds).
+ *
+ * Group by selector|occurrence|prop; per VIEWPORT, gather the distinct values
+ * among overrides whose viewports include it. A viewport with >1 distinct
+ * value is unpatchable globally — strip THAT viewport from every override in
+ * the group (an override left with no viewports is dropped). Per-viewport so a
+ * clean breakpoint survives even when the other collides. Deterministic:
+ * stable group order, stable viewport order, no mutation of inputs.
+ */
+export function suppressPageConflicts(overrides: PatchOverride[]): {
+  overrides: PatchOverride[];
+  conflicts: PageConflict[];
+} {
+  const groups = new Map<string, PatchOverride[]>();
+  for (const o of overrides) {
+    const gk = `${o.selector}|${o.occurrence}|${o.prop}`;
+    const arr = groups.get(gk);
+    if (arr) arr.push(o);
+    else groups.set(gk, [o]);
+  }
+
+  const conflicts: PageConflict[] = [];
+  const out: PatchOverride[] = [];
+  for (const [, group] of groups) {
+    // Which viewports collide within this selector|occurrence|prop group?
+    const collidingViewports = new Set<ViewportId>();
+    for (const vp of ALL_VIEWPORTS) {
+      const values = new Set<string>();
+      for (const o of group) if (o.viewports.includes(vp)) values.add(o.value);
+      if (values.size > 1) {
+        collidingViewports.add(vp);
+        conflicts.push({
+          selector: group[0].selector,
+          occurrence: group[0].occurrence,
+          prop: group[0].prop,
+          viewport: vp,
+          values: [...values].sort(),
+        });
+      }
+    }
+    if (collidingViewports.size === 0) {
+      out.push(...group);
+      continue;
+    }
+    // Strip the colliding viewports from each override; keep what survives.
+    for (const o of group) {
+      const kept = o.viewports.filter((vp) => !collidingViewports.has(vp));
+      if (kept.length > 0) out.push({ ...o, viewports: kept });
+    }
+  }
+  return { overrides: out, conflicts };
 }
 
 const MOBILE_MEDIA = '@media (max-width: 767px)';

@@ -40,7 +40,7 @@ import { buildInteractivityPlugin, PLUGIN_SLUG } from '../../blocks/interactivit
 import type { DetectedBehaviors } from '../../lib/replicate/local-site/types.js';
 import { CLEAR_INTERVALS_SCRIPT, FREEZE_MOTION_CSS, probePair, type Divergence } from '../../lib/replicate/parity/parity-probe.js';
 import { extractDiffRegions } from '../../lib/replicate/parity/diff-regions.js';
-import { classifyDivergences, renderPatchCss, divergenceFingerprint, type UnresolvedDivergence, type PatchOverride, type RepairPlan } from '../../lib/replicate/parity/parity-classify.js';
+import { classifyDivergences, renderPatchCss, divergenceFingerprint, suppressPageConflicts, type UnresolvedDivergence, type PatchOverride, type RepairPlan } from '../../lib/replicate/parity/parity-classify.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -752,10 +752,23 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
       allUnresolved = classifyResult.unresolved;
 
       // 4. Render byte-stable patch from the accumulated union of overrides.
-      const mergedPlan: RepairPlan = {
-        overrides: [...allOverrides.values()].sort(
+      // Cross-round safety net: the union can accumulate two values for the
+      // same selector|prop|viewport when pages fail in DIFFERENT rounds (one
+      // converges, then breaks under the other's global patch). The per-round
+      // classifier only sees one round at a time, so suppress page-conflicts
+      // over the whole union here — honest report, no last-wins paint.
+      const suppressed = suppressPageConflicts(
+        [...allOverrides.values()].sort(
           (a, b) => a.selector.localeCompare(b.selector) || a.prop.localeCompare(b.prop),
         ),
+      );
+      for (const c of suppressed.conflicts) {
+        warnings.push(
+          `repair: page-conflict (unpatchable globally) ${c.selector} ${c.prop} ${c.viewport}: ${c.values.join(' vs ')}`,
+        );
+      }
+      const mergedPlan: RepairPlan = {
+        overrides: suppressed.overrides,
         unresolved: allUnresolved,
       };
       // Nothing deterministically patchable: height-only failures yield no
