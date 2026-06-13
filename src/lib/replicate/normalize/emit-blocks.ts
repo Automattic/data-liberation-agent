@@ -96,6 +96,15 @@ function emitChild($: CheerioAPI, el: Element): ChildResult {
   const tag = el.tagName?.toLowerCase() ?? '';
   const $el = $(el);
 
+  // Source inline style is per-instance authority — the owned source overrides
+  // class defaults inline (h1.display is a big clamp default, each heading
+  // dials it down inline; dropping it makes every heading fall back to the
+  // default and reflow). Carried verbatim on the element; the frontend serves
+  // the saved markup as-is (no canonicalization on this path), so it renders
+  // exactly. Round-trip-validated alongside the rest of the block markup.
+  const inlineStyle = $el.attr('style')?.trim();
+  const stylePart = inlineStyle ? ` style="${escapeHtml(inlineStyle)}"` : '';
+
   const h = HEADING.exec(tag);
   if (h) {
     const level = Number(h[1]);
@@ -104,7 +113,7 @@ function emitChild($: CheerioAPI, el: Element): ChildResult {
     const htmlCls = ['wp-block-heading', cls].filter(Boolean).join(' ');
     const inner = inlineHtml($, el).trim();
     return {
-      markup: `<!-- wp:heading${attrs} -->\n<h${level} class="${escapeHtml(htmlCls)}">${inner}</h${level}>\n<!-- /wp:heading -->`,
+      markup: `<!-- wp:heading${attrs} -->\n<h${level} class="${escapeHtml(htmlCls)}"${stylePart}>${inner}</h${level}>\n<!-- /wp:heading -->`,
       clean: true,
     };
   }
@@ -113,7 +122,8 @@ function emitChild($: CheerioAPI, el: Element): ChildResult {
     const cls = classNameOf($el);
     const attrs = blockAttrs([], cls);
     const inner = inlineHtml($, el).trim();
-    const open = cls ? `<p class="${escapeHtml(cls)}">` : '<p>';
+    const clsPart = cls ? ` class="${escapeHtml(cls)}"` : '';
+    const open = `<p${clsPart}${stylePart}>`;
     return { markup: `<!-- wp:paragraph${attrs} -->\n${open}${inner}</p>\n<!-- /wp:paragraph -->`, clean: true };
   }
 

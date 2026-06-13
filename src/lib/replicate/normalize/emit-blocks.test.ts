@@ -44,6 +44,23 @@ describe('emitSectionBlocks', () => {
     expect(blockMarkupRoundtrips(markup).ok).toBe(true);
   });
 
+  it('preserves the source inline style on headings and paragraphs (per-instance authority)', () => {
+    // The source authors per-heading size/margin inline (h1.display class is a
+    // big default, overridden per instance) — dropping it makes every heading
+    // fall back to the class default and reflow (maison h1.display 104 vs 136).
+    const section = {
+      id: 'hero',
+      role: 'body' as const,
+      html:
+        '<section><h1 class="display" style="margin:20px 0 0;font-size:clamp(3rem,9vw,6.5rem)">Scent</h1>' +
+        '<p class="lead" style="max-width:46ch">Made to order.</p></section>',
+    };
+    const { markup } = emitSectionBlocks(section);
+    expect(blockMarkupRoundtrips(markup).ok).toBe(true);
+    expect(markup).toContain('style="margin:20px 0 0;font-size:clamp(3rem,9vw,6.5rem)"');
+    expect(markup).toContain('style="max-width:46ch"');
+  });
+
   it('flags confidence < 1 when an unrecognized child is downgraded to a paragraph', () => {
     const section = { id: 's', role: 'body' as const, html: '<section><figure>weird</figure></section>' };
     const { confidence } = emitSectionBlocks(section);
