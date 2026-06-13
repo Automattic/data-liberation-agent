@@ -13,7 +13,7 @@
 // the html.js class snippet so source reveal-gates behave as authored.
 //
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, posix } from 'node:path';
 
 /** Neutralize WP-injected wrappers so source layout selectors keep working.
  * Prepended (lowest precedence) — source rules always win over it. */
@@ -52,6 +52,26 @@ nav.wp-block-navigation ul, nav.wp-block-navigation li { display: contents; }
 
 const GOOGLE_IMPORT_RE = /@import\s+url\(\s*['"]?https:\/\/fonts\.googleapis\.com[^)]*\)\s*;?/g;
 
+/** Image url() targets we localize. Fonts (woff2/woff/ttf/otf/eot) are owned by
+ * the font pipeline (google-fonts.ts / @font-face self-host) and deliberately
+ * NOT touched here — they already resolve via the assets/fonts/ structural
+ * parallel. Data URIs and remote URLs are left verbatim. */
+const IMAGE_EXT_RE = /\.(jpe?g|png|gif|webp|avif|svg|bmp|ico)$/i;
+/** Conservative url() matcher: optional matching quote, no embedded ')' — so a
+ * data: URI with internal parens (the SVG-noise filter) never matches as a
+ * whole and is left verbatim. */
+const CSS_URL_RE = /url\(\s*(['"]?)([^'")]+)\1\s*\)/gi;
+
+/** One source image referenced from carried CSS that must be copied into the
+ * theme so its rewritten relative url() resolves. */
+export interface MediaAsset {
+  /** Absolute path to the source file on disk. */
+  srcAbs: string;
+  /** Theme-relative destination (e.g. assets/css/media/plate.jpg) — sits next
+   * to the carried source.css so the rewritten `url(media/<name>)` resolves. */
+  themeRel: string;
+}
+
 export interface SourceAssets {
   /** Compat layer + all source CSS (linked files in DOCUMENT order, then unlinked top-level fallback, then inline <style> blocks). */
   css: string;
@@ -63,6 +83,67 @@ export interface SourceAssets {
   /** Top-level files SKIPPED because linked assets exist (stale-revision
    * protection — see the pass-2 comment). Surface as a warning upstream. */
   skippedUnlinked: string[];
+  /** Image files referenced via CSS url() that the handler must copy into the
+   * theme (the css urls are already rewritten to point at them). */
+  mediaAssets: MediaAsset[];
+}
+
+/** Theme subdir (relative to assets/css/source.css) holding carried CSS images. */
+const MEDIA_SUBDIR = 'media';
+
+/**
+ * Rewrite relative image url() refs in each CSS part to point at a flat media/
+ * dir beside the carried stylesheet, returning the source→theme copy list.
+ * Pure except for existsSync (a ref to a missing file is left verbatim — we
+ * never fabricate an asset). url()s are resolved per the part's SOURCE dir
+ * (a relative img/ means different files in assets/site.css vs a root inline
+ * style), then flattened to a single basename (collision-suffixed) so one
+ * predictable media/ dir holds them all. Fonts, data URIs, and remote URLs
+ * are untouched.
+ */
+export function localizeCssImages(
+  parts: Array<{ css: string; baseDir: string }>,
+  dir: string,
+): { parts: string[]; mediaAssets: MediaAsset[] } {
+  const bySrc = new Map<string, string>(); // srcAbs → assigned basename
+  const usedNames = new Set<string>();
+  const mediaAssets: MediaAsset[] = [];
+
+  const assign = (srcAbs: string, rawName: string): string => {
+    const existing = bySrc.get(srcAbs);
+    if (existing) return existing;
+    let name = rawName;
+    if (usedNames.has(name)) {
+      const dot = name.lastIndexOf('.');
+      const stem = dot > 0 ? name.slice(0, dot) : name;
+      const ext = dot > 0 ? name.slice(dot) : '';
+      let n = 2;
+      while (usedNames.has(`${stem}-${n}${ext}`)) n++;
+      name = `${stem}-${n}${ext}`;
+    }
+    usedNames.add(name);
+    bySrc.set(srcAbs, name);
+    mediaAssets.push({ srcAbs, themeRel: `assets/css/${MEDIA_SUBDIR}/${name}` });
+    return name;
+  };
+
+  const outParts = parts.map(({ css, baseDir }) =>
+    css.replace(CSS_URL_RE, (whole, _q: string, raw: string) => {
+      if (/^(https?:)?\/\//i.test(raw) || raw.startsWith('data:') || raw.startsWith('#')) return whole;
+      const cleaned = raw.split(/[?#]/)[0];
+      if (!IMAGE_EXT_RE.test(cleaned)) return whole; // fonts + non-image left verbatim
+      // Resolve relative to the part's source dir; leading-slash = site root.
+      const within = cleaned.startsWith('/')
+        ? posix.normalize(cleaned.slice(1))
+        : posix.normalize(posix.join(baseDir, cleaned));
+      if (within.startsWith('..')) return whole; // never escape the source root
+      const srcAbs = join(dir, within);
+      if (!existsSync(srcAbs)) return whole; // missing → leave as authored
+      const name = assign(srcAbs, posix.basename(within));
+      return `url(${MEDIA_SUBDIR}/${name})`;
+    }),
+  );
+  return { parts: outParts, mediaAssets };
 }
 
 export function collectSourceAssets(
@@ -71,7 +152,10 @@ export function collectSourceAssets(
 ): SourceAssets {
   const cssFiles: string[] = [];
   const jsFiles: string[] = [];
-  const cssParts: string[] = [];
+  // Each CSS part carries the SOURCE dir it came from so relative image url()s
+  // resolve correctly (a bare `img/x.jpg` means assets/img/x.jpg in
+  // assets/site.css but img/x.jpg in a root inline style).
+  const cssParts: Array<{ css: string; baseDir: string }> = [];
   const jsParts: string[] = [];
 
   // Pass 1: linked assets in DOCUMENT order — the page's <link rel=stylesheet>
@@ -81,12 +165,12 @@ export function collectSourceAssets(
   const seenCss = new Set<string>();
   const seenJs = new Set<string>();
   const seenInline = new Set<string>();
-  const pageHtmls: string[] = [];
+  const pageHtmls: Array<{ html: string; relPath: string }> = [];
   for (const page of pages) {
     const html =
       page.html ||
       (existsSync(join(dir, page.relPath)) ? readFileSync(join(dir, page.relPath), 'utf8') : '');
-    pageHtmls.push(html);
+    pageHtmls.push({ html, relPath: page.relPath });
     for (const m of html.matchAll(/<link[^>]+rel=["']?stylesheet["']?[^>]*>/gi)) {
       const hrefMatch = m[0].match(/href=["']([^"']+)|href=([^\s>]+)/i);
       const href = hrefMatch?.[1] ?? hrefMatch?.[2];
@@ -97,7 +181,7 @@ export function collectSourceAssets(
       const absPath = join(dir, rel);
       if (existsSync(absPath)) {
         cssFiles.push(rel);
-        cssParts.push(readFileSync(absPath, 'utf8'));
+        cssParts.push({ css: readFileSync(absPath, 'utf8'), baseDir: posix.dirname(rel) });
       }
     }
     for (const m of html.matchAll(/<script[^>]+src=["']([^"']+)|<script[^>]+src=([^\s>]+)/gi)) {
@@ -135,7 +219,7 @@ export function collectSourceAssets(
       }
       seenCss.add(name);
       cssFiles.push(name);
-      cssParts.push(readFileSync(join(dir, name), 'utf8'));
+      cssParts.push({ css: readFileSync(join(dir, name), 'utf8'), baseDir: '.' });
     } else if (name.endsWith('.js') && !seenJs.has(name)) {
       if (linkedJsCount > 0) {
         skippedUnlinked.push(name);
@@ -151,12 +235,12 @@ export function collectSourceAssets(
   // NOTE: a page-scoped inline style becomes GLOBAL in the carried bundle —
   // acceptable while captured sites' inline rules are page-prefixed or
   // idempotent; revisit if a page-specific rule leaks across pages.
-  for (const html of pageHtmls) {
+  for (const { html, relPath } of pageHtmls) {
     for (const m of html.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/gi)) {
       const body = m[1].trim();
       if (body && !seenInline.has(body)) {
         seenInline.add(body);
-        cssParts.push(body);
+        cssParts.push({ css: body, baseDir: posix.dirname(relPath) });
       }
     }
   }
@@ -170,7 +254,7 @@ export function collectSourceAssets(
   // others. Appended AFTER linked js (document order within a page — mounts
   // follow the libraries they call).
   const seenInlineJs = new Set<string>();
-  for (const html of pageHtmls) {
+  for (const { html } of pageHtmls) {
     for (const m of html.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/gi)) {
       const body = m[1].trim();
       if (body && !seenInlineJs.has(body)) {
@@ -180,8 +264,11 @@ export function collectSourceAssets(
     }
   }
 
-  // Strip Google-Fonts @imports AFTER concat: WP_COMPAT_CSS contains no @imports
-  // so startsWith(WP_COMPAT_CSS) is preserved; Google imports only exist in cssParts.
-  const css = (WP_COMPAT_CSS + cssParts.join('\n\n')).replace(GOOGLE_IMPORT_RE, '');
-  return { css, js: jsParts.join('\n\n'), cssFiles, jsFiles, skippedUnlinked };
+  // Localize relative image url()s (copy list returned for the handler to carry
+  // into the theme) BEFORE concat, so each part resolves against its own source
+  // dir. Then strip Google-Fonts @imports: WP_COMPAT_CSS contains no @imports so
+  // startsWith(WP_COMPAT_CSS) is preserved; Google imports only exist in cssParts.
+  const { parts: localizedParts, mediaAssets } = localizeCssImages(cssParts, dir);
+  const css = (WP_COMPAT_CSS + localizedParts.join('\n\n')).replace(GOOGLE_IMPORT_RE, '');
+  return { css, js: jsParts.join('\n\n'), cssFiles, jsFiles, skippedUnlinked, mediaAssets };
 }

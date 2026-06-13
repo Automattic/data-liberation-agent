@@ -98,6 +98,70 @@ describe('collectSourceAssets', () => {
   });
 });
 
+describe('collectSourceAssets: CSS url() image localization', () => {
+  it('rewrites relative image url()s and lists the assets to carry (resolved per source file dir)', () => {
+    mkdirSync(FIXTURE_TMP, { recursive: true });
+    const dir = mkdtempSync(join(FIXTURE_TMP, 'sa-img-'));
+    mkdirSync(join(dir, 'assets', 'img'), { recursive: true });
+    // The css lives in assets/, so url(img/plate.jpg) resolves to assets/img/plate.jpg.
+    writeFileSync(join(dir, 'index.html'), '<html><head><link rel="stylesheet" href="assets/site.css"></head><body><p>x</p></body></html>');
+    writeFileSync(
+      join(dir, 'assets', 'site.css'),
+      `.ph{ background:url(img/plate.jpg) center/cover; }\n` +
+        `@font-face{ src:url(../fonts/x.woff2); }\n` +
+        `.noise{ background:url("data:image/svg+xml,%3Csvg%3E"); }\n` +
+        `.cdn{ background:url(https://cdn.example.com/y.png); }`,
+    );
+    writeFileSync(join(dir, 'assets', 'img', 'plate.jpg'), 'JPEGBYTES');
+    try {
+      const assets = collectSourceAssets(dir, [{ relPath: 'index.html', html: '' }]);
+      // Image rewritten to sit next to the carried css (assets/css/source.css → media/).
+      expect(assets.css).toContain('url(media/plate.jpg)');
+      expect(assets.css).not.toContain('url(img/plate.jpg)');
+      // Fonts, data URIs, and remote URLs are untouched.
+      expect(assets.css).toContain('url(../fonts/x.woff2)');
+      expect(assets.css).toContain('data:image/svg+xml');
+      expect(assets.css).toContain('https://cdn.example.com/y.png');
+      // The asset copy list points at the real source file and the theme dest.
+      expect(assets.mediaAssets).toEqual([
+        { srcAbs: join(dir, 'assets', 'img', 'plate.jpg'), themeRel: 'assets/css/media/plate.jpg' },
+      ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('leaves a missing image url() untouched and carries nothing for it', () => {
+    mkdirSync(FIXTURE_TMP, { recursive: true });
+    const dir = mkdtempSync(join(FIXTURE_TMP, 'sa-img-missing-'));
+    writeFileSync(join(dir, 'index.html'), '<html><head><link rel="stylesheet" href="site.css"></head><body><p>x</p></body></html>');
+    writeFileSync(join(dir, 'site.css'), '.ph{ background:url(img/gone.jpg); }');
+    try {
+      const assets = collectSourceAssets(dir, [{ relPath: 'index.html', html: '' }]);
+      expect(assets.css).toContain('url(img/gone.jpg)'); // can't localize → leave as authored
+      expect(assets.mediaAssets).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('dedupes one source image referenced from multiple rules to a single carried asset', () => {
+    mkdirSync(FIXTURE_TMP, { recursive: true });
+    const dir = mkdtempSync(join(FIXTURE_TMP, 'sa-img-dedup-'));
+    mkdirSync(join(dir, 'img'), { recursive: true });
+    writeFileSync(join(dir, 'index.html'), '<html><head><link rel="stylesheet" href="site.css"></head><body><p>x</p></body></html>');
+    writeFileSync(join(dir, 'site.css'), '.a{ background:url(img/p.jpg); }\n.b{ background:url(img/p.jpg); }');
+    writeFileSync(join(dir, 'img', 'p.jpg'), 'BYTES');
+    try {
+      const assets = collectSourceAssets(dir, [{ relPath: 'index.html', html: '' }]);
+      expect(assets.mediaAssets).toHaveLength(1);
+      expect((assets.css.match(/url\(media\/p\.jpg\)/g) ?? [])).toHaveLength(2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('collectSourceAssets: inline scripts (JS-rendered sites)', () => {
   it('carries inline script bodies wrapped in per-chunk try/catch IIFEs, after linked js', () => {
     const dir = mkdtempSync(join(FIXTURE_TMP, 'sa-inline-'));

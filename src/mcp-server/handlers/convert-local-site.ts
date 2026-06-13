@@ -10,8 +10,8 @@
 // (idempotent via _source_url), set the front page, assign the page-local
 // template, optionally capture the WP replica and score parity.
 //
-import { existsSync, readFileSync, writeFileSync, readdirSync, renameSync, unlinkSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, readFileSync, writeFileSync, readdirSync, renameSync, unlinkSync, mkdirSync, copyFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { Handler } from '../handler-types.js';
@@ -248,6 +248,22 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
         // permalinks ONCE, in the bundle — this is a WordPress site now.
         js: carryJs ? rewriteInternalLinksInJs(assets.js, site.pages) : '',
       };
+      // Carry the CSS-referenced images (background url()s the carried css now
+      // points at as media/<name>) into the on-disk theme dir so assetSourceDir
+      // copies them into the live theme — without them the rewritten url()s 404
+      // and bg-image placeholders render empty (maison scent hero). Best-effort:
+      // a copy failure degrades to a warning, never aborts the conversion.
+      if (carryCss) {
+        for (const m of assets.mediaAssets) {
+          try {
+            const dest = join(outputDir, 'theme', m.themeRel);
+            mkdirSync(dirname(dest), { recursive: true });
+            copyFileSync(m.srcAbs, dest);
+          } catch (err) {
+            warnings.push(`carry media ${m.themeRel}: ${(err as Error).message}`);
+          }
+        }
+      }
     }
     // Detection runs on the RAW collected strings — assets.css includes the
     // prepended WP_COMPAT_CSS, which is detection-immune (no html.js section
