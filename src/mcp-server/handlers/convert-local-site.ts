@@ -32,6 +32,8 @@ import { rewriteInternalLinksInJs } from '../../lib/replicate/local-site/href-re
 import { captureScreenshots } from '../../lib/screenshot/screenshotter.js';
 import { SCREENSHOT_DEVICE_SCALE_FACTOR } from '../../lib/screenshot/types.js';
 import { compareScreenshotDirs } from '../../lib/screenshot/compare.js';
+import { openEditorSession, scoreEditorSurface, type EditorSurfacePage } from '../../lib/preview/editor-preview.js';
+import { composedSidecarPath } from '../../lib/streaming/block-markup-validate.js';
 import { buildLocalFoundation, extractCssColors, type PaletteAgg, type TypographyAgg, type BreakpointsAgg } from '../../lib/replicate/local-theme/foundation.js';
 import { extractGoogleFontCssUrls, selfHostGoogleFonts } from '../../lib/replicate/local-theme/google-fonts.js';
 import { collectSourceAssets, WP_COMPAT_CSS } from '../../lib/replicate/local-theme/source-assets.js';
@@ -72,6 +74,13 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
 
   const skipDesign = args.skipDesign === true;
   const skipCompare = args.skipCompare === true;
+  // BDC Task 5 editor-fidelity surface (MEASURE-ONLY, opt-in). Renders each
+  // installed page's markup in the live block editor and scores the canvas vs
+  // the source screenshot. Needs a logged-in editor: creds via env
+  // (WP_ADMIN_PASS, optional WP_ADMIN_USER) — never args (no secrets in the
+  // tool payload). Carry output is warn-only (the editor lacks the carried
+  // source CSS), so it never flips the verdict here.
+  const editorSurface = args.editorSurface === true;
   const repair = args.repair !== false;
   const maxRepairRounds = Math.min(Math.max(Number(args.maxRepairRounds ?? 2), 0), 5);
   // Stage 1d: carry the source site's own CSS/JS into the theme so the class-
@@ -889,9 +898,86 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
     };
   }
 
+  // Stage 1f — Editor-fidelity surface (BDC Task 5, opt-in, measure-only).
+  // Renders each installed page's emitted markup in the live block editor and
+  // scores the canvas vs the source desktop screenshot. Warn-level for this
+  // carry path (editor lacks the carried source CSS): metric only, no verdict
+  // change. Degrades to a warning on any failure (creds/render/Studio).
+  let editorReport: { scored: number; skipped: number; avgEditorScore: number | null; repairTasks: number } | undefined;
+  if (editorSurface) {
+    const pass = process.env.WP_ADMIN_PASS;
+    if (!pass) {
+      warnings.push('editorSurface skipped: set WP_ADMIN_PASS (editor login credential) in the environment');
+    } else if (!wpUrl) {
+      warnings.push('editorSurface skipped: replica wpUrl not resolved');
+    } else {
+      try {
+        // Resolve source desktop screenshots via the source manifest (pathname → slug → png).
+        const srcManifest = new Map<string, string>();
+        try {
+          const mp = join(sourceCaptureDir, 'screenshots', 'manifest.json');
+          if (existsSync(mp)) {
+            const m = JSON.parse(readFileSync(mp, 'utf8')) as { entries?: Record<string, { slug: string }> };
+            for (const [url, e] of Object.entries(m.entries ?? {})) {
+              try { srcManifest.set(new URL(url).pathname, e.slug); } catch { /* skip */ }
+            }
+          }
+        } catch { /* best-effort */ }
+        const editorPages: EditorSurfacePage[] = [];
+        for (const inst of installed) {
+          const sp = site.pages.find((p) => p.slug === inst.slug);
+          if (!sp) continue;
+          let markup = '';
+          try { markup = readFileSync(composedSidecarPath(outputDir, inst.slug), 'utf8'); } catch { continue; }
+          if (!markup.trim()) continue;
+          // The static server clean-URLs align source pathnames with WP
+          // permalinks, so the source manifest keys on the SAME pathname (/ or
+          // /slug/) — not the source .html relPath.
+          const pathname = sp.slug === plan.homeSlug ? '/' : `/${sp.slug}/`;
+          const srcSlug = srcManifest.get(pathname);
+          const srcShot = srcSlug ? join(sourceCaptureDir, 'screenshots', 'desktop', `${srcSlug}.png`) : null;
+          editorPages.push({
+            pathname,
+            slug: inst.slug,
+            markup,
+            blocksPath: false, // carry path → warn-only
+            sourceShotDesktop: srcShot && existsSync(srcShot) ? srcShot : null,
+          });
+        }
+        const session = await openEditorSession({
+          wpUrl,
+          sitePath: studioSitePath,
+          username: process.env.WP_ADMIN_USER ?? 'admin',
+          password: pass,
+        });
+        let surface;
+        try {
+          surface = await scoreEditorSurface({ session, pages: editorPages, floor: PARITY_FLOOR, diffDir: join(replicaCaptureDir, 'screenshots') });
+        } finally {
+          await session.close();
+        }
+        const scored = surface.results.filter((r) => r.editorScore !== null);
+        const avg = scored.length > 0 ? scored.reduce((s, r) => s + (r.editorScore ?? 0), 0) / scored.length : null;
+        editorReport = {
+          scored: scored.length,
+          skipped: surface.results.length - scored.length,
+          avgEditorScore: avg,
+          repairTasks: surface.repairTasks.length,
+        };
+        const erPath = join(outputDir, 'editor-report.json');
+        const erTmp = `${erPath}.tmp.${process.pid}`;
+        writeFileSync(erTmp, JSON.stringify({ schema: 1, surface: 'editor', results: surface.results, repairTasks: surface.repairTasks }, null, 2) + '\n');
+        renameSync(erTmp, erPath);
+      } catch (err) {
+        warnings.push(`editorSurface failed: ${(err as Error).message}`);
+      }
+    }
+  }
+
   return ctx.textResult({
     pages: plan.items.length,
     installed: installed.length,
+    ...(editorReport !== undefined ? { editorSurface: editorReport } : {}),
     failedInstalls,
     missingSidecars: plan.missingSidecars,
     emptySidecars,

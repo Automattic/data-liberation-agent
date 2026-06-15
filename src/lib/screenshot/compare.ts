@@ -159,8 +159,9 @@ export function scoreViewportPair(
 // ---------------------------------------------------------------------------
 
 export interface RepairTask {
-  /** Which comparison surface produced the failure (editor surface arrives later). */
-  surface: 'frontend';
+  /** Which comparison surface produced the failure. `editor` records are built
+   * by editor-preview.buildEditorRepairTask (BDC Task 5 editor surface). */
+  surface: 'frontend' | 'editor';
   pathname: string;
   viewport: ViewportId;
   /** height = the gate caught pre-crop height loss (takes precedence — the
