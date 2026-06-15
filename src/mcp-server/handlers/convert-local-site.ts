@@ -257,7 +257,7 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
         outputDir: sourceCaptureDir,
         primaryUrl: server.url,
         captureDesign: true,
-        concurrency: 2,
+        concurrency: 6, // worker-pool capture (screenshotter drains a shared cursor)
         prepareCapture: freezeMotion,
       });
       const readJson = <T>(name: string): T =>
@@ -727,7 +727,7 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
         urls: replicaUrls,
         outputDir: replicaCaptureDir,
         primaryUrl: wpUrl,
-        concurrency: 2,
+        concurrency: 6, // worker-pool capture (screenshotter drains a shared cursor)
         prepareCapture: freezeMotion,
       });
       const comparison = await compareScreenshotDirs({
@@ -984,7 +984,7 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
           urls: replicaUrls,
           outputDir: replicaCaptureDir,
           primaryUrl: wpUrl,
-          concurrency: 2,
+          concurrency: 6, // worker-pool capture (screenshotter drains a shared cursor)
           prepareCapture: freezeMotion,
           force: true,
         });
