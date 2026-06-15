@@ -87,6 +87,28 @@ export interface MountSpec {
   wrapperClass?: string;
 }
 
+/**
+ * The card render spec: a faithful skeleton of the source's per-item card markup
+ * (e.g. maison's `objCard`) with `data-dla-*` binding directives that the
+ * deterministic renderer (TS mirror + generated PHP) fills from a DataItem.
+ *
+ * Directives (each removed from the output after it's applied):
+ *  - `data-dla-text="<expr>"`        — set the element's text to <expr>
+ *  - `data-dla-attr="<a>:<expr>,…"`  — set attribute(s) from comma-separated pairs
+ *  - `data-dla-class="<expr>"`       — append the resolved class token(s)
+ *  - `data-dla-if="<cond>"`          — drop the element unless <cond> holds
+ *
+ * <expr> grammar: `'literal'` | `id` | `title` | `content` | `cat.slug` |
+ *   `cat.label` | `meta.<key>` | `gallery.<n>.caption` | `map.<name>.<expr>`
+ * <cond> grammar: `<expr>` (non-empty) | `<expr>=='lit'` | `<expr>!='lit'`
+ */
+export interface DataCard {
+  /** Skeleton card HTML (one item → one card) carrying data-dla-* directives. */
+  template: string;
+  /** Named lookup tables referenced by `map.<name>.<expr>` (e.g. CAT_TONE). */
+  maps: Record<string, Record<string, string>>;
+}
+
 /** The full model the agent skill emits and the deterministic src consumes. */
 export interface DataModel {
   cpt: DataCpt;
@@ -94,8 +116,10 @@ export interface DataModel {
   fields: DataField[];
   items: DataItem[];
   mounts: MountSpec[];
+  /** Per-item card render spec (drives the dla/data-card dynamic block). */
+  card?: DataCard;
   /** Schema version so persisted data-model.json invalidates on shape change. */
   schema: number;
 }
 
-export const DATA_MODEL_SCHEMA = 1;
+export const DATA_MODEL_SCHEMA = 2;
