@@ -228,11 +228,23 @@ function dla_card_block_render_${model.cpt.slug}( $attributes, $content, $block 
     }
     if ( ! $post_id ) { return ''; }
     $item = dla_card_build_item_${model.cpt.slug}( $post_id );
-    return dla_card_render_${model.cpt.slug}(
+    $html = dla_card_render_${model.cpt.slug}(
         constant( 'DLA_CARD_TEMPLATE_${model.cpt.slug}' ),
         dla_card_maps_${model.cpt.slug}(),
         $item
     );
+
+    // Per-card JSON data island so client JS (e.g. the detail modal) can read
+    // the WordPress-driven record from the DOM instead of a stale source array.
+    $island = $item;
+    $island['termLabels'] = array();
+    foreach ( $item['terms'] as $slug ) {
+        $island['termLabels'][ $slug ] = dla_card_term_label_${model.cpt.slug}( $slug );
+    }
+    $script = '<script type="application/json" class="dla-item" data-id="'
+        . esc_attr( $item['id'] ) . '">' . wp_json_encode( $island ) . '</script>';
+
+    return $html . $script;
 }
 
 add_action( 'init', function () {
