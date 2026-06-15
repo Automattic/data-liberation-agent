@@ -8,6 +8,21 @@ describe('DLA_ITEM_HELPER_JS', () => {
     expect(DLA_ITEM_HELPER_JS).toContain('.dla-item[data-id=');
     expect(DLA_ITEM_HELPER_JS).toContain('JSON.parse');
   });
+
+  it('flattens meta keys to the top level so source modal field reads keep working', () => {
+    // Evaluate the helper against a fake DOM island and assert flattening.
+    const island = { id: 'x', title: 'T', meta: { price: 9, story: 's' }, gallery: [] };
+    const fn = new Function(
+      'document',
+      'window',
+      `${DLA_ITEM_HELPER_JS}\nreturn window.dlaItem('x');`,
+    );
+    const fakeDoc = { querySelector: () => ({ textContent: JSON.stringify(island) }) };
+    const out = fn(fakeDoc, {}) as Record<string, unknown>;
+    expect(out.price).toBe(9);
+    expect(out.story).toBe('s');
+    expect(out.title).toBe('T');
+  });
 });
 
 describe('rebindArrayLookups', () => {

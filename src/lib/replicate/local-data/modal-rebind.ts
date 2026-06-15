@@ -17,13 +17,22 @@
 // is source-specific and authored by the model-local-data skill; this module
 // owns only the generic, deterministic plumbing.
 
-/** Generic island reader injected into the carried theme JS (frontend). */
+/** Generic island reader injected into the carried theme JS (frontend).
+ * Returns the parsed island with its `meta` fields ALSO flattened to the top
+ * level, so a source modal that read `o.price` / `o.story` off the original data
+ * object keeps working when the model's meta keys mirror those source names. */
 export const DLA_ITEM_HELPER_JS = `/* dla: read a WordPress-driven card record from its DOM data island */
 window.dlaItem = function (id) {
   var sel = '.dla-item[data-id="' + (window.CSS && CSS.escape ? CSS.escape(id) : id) + '"]';
   var el = document.querySelector(sel);
   if (!el) { return null; }
-  try { return JSON.parse(el.textContent); } catch (e) { return null; }
+  try {
+    var d = JSON.parse(el.textContent);
+    if (d && d.meta && typeof d.meta === 'object') {
+      for (var k in d.meta) { if (!(k in d)) { d[k] = d.meta[k]; } }
+    }
+    return d;
+  } catch (e) { return null; }
 };`;
 
 export interface RebindResult {
