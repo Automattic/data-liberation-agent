@@ -40,6 +40,7 @@ import { injectQueryLoops } from '../../lib/replicate/local-data/inject-query-lo
 import { buildQueryLoop } from '../../lib/replicate/local-data/query-loop.js';
 import { neutralizeDataMounts } from '../../lib/replicate/local-data/neutralize-mounts.js';
 import { rebindArrayLookups, DLA_ITEM_HELPER_JS } from '../../lib/replicate/local-data/modal-rebind.js';
+import { validateDataModel } from '../../lib/replicate/local-data/validate-model.js';
 import { InstanceStyleSheet, mergeInstanceStyleCss } from '../../lib/replicate/normalize/instance-styles.js';
 import { composedSidecarPath, instanceStylesPath } from '../../lib/streaming/block-markup-validate.js';
 import { buildLocalFoundation, extractCssColors, type PaletteAgg, type TypographyAgg, type BreakpointsAgg } from '../../lib/replicate/local-theme/foundation.js';
@@ -149,7 +150,25 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
       try {
         const m = JSON.parse(readFileSync(p, 'utf8')) as DataModel;
         if (m && m.cpt?.slug && Array.isArray(m.mounts)) {
-          dataModel = m;
+          // Validate the agent-authored model before it drives anything; on
+          // errors, SKIP the data path (don't install a broken type or clobber
+          // content) — warn-only, never aborts the conversion. (validator + report
+          // adopted from wordpress-block-design-compiler's content-modeling.)
+          const report = validateDataModel(m);
+          try {
+            const reportDir = join(outputDir, 'reports');
+            mkdirSync(reportDir, { recursive: true });
+            writeFileSync(join(reportDir, 'data-model-validation.json'), JSON.stringify(report, null, 2));
+          } catch {
+            /* report write is best-effort */
+          }
+          for (const w of report.warnings) warnings.push(`data-model warning: ${w}`);
+          if (report.valid) {
+            dataModel = m;
+          } else {
+            for (const e of report.errors) warnings.push(`data-model ERROR: ${e}`);
+            warnings.push(`data-model.json invalid (${report.errors.length} error(s)) — data path skipped; see reports/data-model-validation.json`);
+          }
         } else {
           warnings.push(`data-model.json at ${p} is missing cpt/mounts — ignored`);
         }
@@ -569,8 +588,11 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
   if (dataModel) {
     try {
       const di = await installLocalData({ model: dataModel, studioSitePath, wpRoot });
+      const guards =
+        (di.skippedModified ? `, ${di.skippedModified} skipped (edited in wp-admin)` : '') +
+        (di.collisions ? `, ${di.collisions} slug-collision(s)` : '');
       warnings.push(
-        `data: ${di.inserted} inserted, ${di.updated} updated, ${di.terms} term(s); mu-plugins ${di.muPlugins.join(', ')}`,
+        `data: ${di.inserted} inserted, ${di.updated} updated, ${di.terms} term(s)${guards}; mu-plugins ${di.muPlugins.join(', ')}`,
       );
     } catch (err) {
       warnings.push(`data install failed: ${(err as Error).message}`);

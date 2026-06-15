@@ -17,6 +17,7 @@ const MODEL: DataModel = {
   fields: [
     { key: 'price_eur', type: 'integer' },
     { key: 'dimensions', type: 'string' },
+    { key: 'contact', type: 'string', format: 'email', label: 'Contact Email' },
   ],
   items: [],
   mounts: [],
@@ -43,14 +44,28 @@ describe('buildCptMuPlugin', () => {
     expect(php).toContain("'name'          => 'Categories'");
   });
 
-  it('registers each field as REST-exposed single post meta', () => {
+  it('registers each field as single post meta with type + sanitize callback', () => {
     const php = buildCptMuPlugin(MODEL);
     expect(php).toContain("register_post_meta( 'objet', 'price_eur'");
-    expect(php).toContain("'type'         => 'integer'");
+    expect(php).toContain("'type'              => 'integer'");
     expect(php).toContain("register_post_meta( 'objet', 'dimensions'");
-    expect(php).toContain("'type'         => 'string'");
-    expect(php).toContain("'single'       => true");
-    expect(php).toContain("'show_in_rest' => true");
+    expect(php).toContain("'type'              => 'string'");
+    expect(php).toContain("'single'           => true");
+    // every field wires the shared sanitize helper with its type + format
+    expect(php).toContain('function dla_cpt_sanitize_objet( $value, $type, $format )');
+    expect(php).toContain("dla_cpt_sanitize_objet( $value, 'integer', '' )");
+  });
+
+  it('emits a typed REST schema + sanitize for a formatted (email) field', () => {
+    const php = buildCptMuPlugin(MODEL);
+    expect(php).toContain("register_post_meta( 'objet', 'contact'");
+    expect(php).toContain("'show_in_rest'     => array( 'schema' => array( 'type' => 'string', 'format' => 'email' ) )");
+    expect(php).toContain("'description'       => 'Contact Email'");
+    expect(php).toContain("dla_cpt_sanitize_objet( $value, 'string', 'email' )");
+    // sanitize helper routes email/url/textarea
+    expect(php).toContain('sanitize_email( $value )');
+    expect(php).toContain('esc_url_raw( $value )');
+    expect(php).toContain('sanitize_textarea_field( $value )');
   });
 
   it('guards direct access and is init-hooked (runs every request)', () => {

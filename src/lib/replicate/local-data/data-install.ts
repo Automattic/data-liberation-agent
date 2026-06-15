@@ -106,6 +106,10 @@ export interface InstallDataResult {
   muPlugins: string[];
   inserted: number;
   updated: number;
+  /** Posts left untouched because a human edited them after the last import. */
+  skippedModified: number;
+  /** Items whose slug was already owned by a non-DLA post. */
+  collisions: number;
   terms: number;
   /** Raw wp-cli stdout (for diagnostics). */
   raw: string;
@@ -143,7 +147,14 @@ export async function installLocalData(opts: InstallDataOpts): Promise<InstallDa
   if (!match) {
     throw new Error(`install-data.php produced no JSON result: ${raw.slice(0, 400)}`);
   }
-  const parsed = JSON.parse(match[0]) as { inserted?: number; updated?: number; terms?: number; error?: string };
+  const parsed = JSON.parse(match[0]) as {
+    inserted?: number;
+    updated?: number;
+    skippedModified?: number;
+    collisions?: number;
+    terms?: number;
+    error?: string;
+  };
   if (parsed.error) {
     throw new Error(`install-data.php error: ${parsed.error}`);
   }
@@ -151,6 +162,8 @@ export async function installLocalData(opts: InstallDataOpts): Promise<InstallDa
     muPlugins,
     inserted: parsed.inserted ?? 0,
     updated: parsed.updated ?? 0,
+    skippedModified: parsed.skippedModified ?? 0,
+    collisions: parsed.collisions ?? 0,
     terms: parsed.terms ?? 0,
     raw,
   };

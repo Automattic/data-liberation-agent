@@ -8,6 +8,11 @@
  *   - terms matched/created by slug within the taxonomy.
  *   - posts matched by `_dla_item_id` meta (the stable source id); existing
  *     posts are updated in place, never duplicated.
+ *   - a post a human edited in wp-admin AFTER our last import is NOT clobbered
+ *     (modified-since-import guard via `_dla_imported_at`); reported as skipped.
+ *   - a non-DLA post already occupying the item's slug is left alone and
+ *     reported as a collision rather than overwritten.
+ * (idempotency hardening adopted from wordpress-block-design-compiler's seeder.)
  *
  * Requires the generated CPT mu-plugin to be installed FIRST so the post type +
  * taxonomy are registered when this runs (mu-plugins always load under wp-cli).
@@ -67,11 +72,14 @@ foreach ( ( isset( $data['terms'] ) ? $data['terms'] : array() ) as $t ) {
 	}
 }
 
-// 2) Items (idempotent by _dla_item_id).
-$inserted = 0;
-$updated  = 0;
+// 2) Items (idempotent by _dla_item_id, with edit + collision guards).
+$inserted         = 0;
+$updated          = 0;
+$skipped_modified = 0;
+$collisions       = 0;
 foreach ( ( isset( $data['items'] ) ? $data['items'] : array() ) as $item ) {
 	if ( empty( $item['id'] ) ) { continue; }
+	$slug = sanitize_title( $item['id'] );
 
 	$found = get_posts( array(
 		'post_type'        => $cpt,
@@ -83,22 +91,39 @@ foreach ( ( isset( $data['items'] ) ? $data['items'] : array() ) as $item ) {
 		'suppress_filters' => false,
 	) );
 
-	$postarr = array(
-		'post_type'    => $cpt,
-		'post_status'  => 'publish',
-		'post_title'   => isset( $item['title'] ) ? $item['title'] : '',
-		'post_content' => isset( $item['content'] ) ? $item['content'] : '',
-	);
-
+	$is_update = false;
 	if ( ! empty( $found ) ) {
-		$postarr['ID'] = (int) $found[0];
-		$post_id       = wp_update_post( $postarr, true );
-		$is_update     = true;
+		$post_id  = (int) $found[0];
+		$imported = (int) get_post_meta( $post_id, '_dla_imported_at', true );
+		$modified = (int) get_post_modified_time( 'U', true, $post_id );
+		// Edited in wp-admin after our last import (>5s buffer) → don't clobber.
+		if ( $imported && $modified > $imported + 5 ) {
+			$skipped_modified++;
+			continue;
+		}
+		$res = wp_update_post( array(
+			'ID'           => $post_id,
+			'post_title'   => isset( $item['title'] ) ? $item['title'] : '',
+			'post_content' => isset( $item['content'] ) ? $item['content'] : '',
+		), true );
+		if ( is_wp_error( $res ) ) { continue; }
+		$is_update = true;
 	} else {
-		$post_id   = wp_insert_post( $postarr, true );
-		$is_update = false;
+		// Slug-collision: a non-DLA post already owns this slug → leave it.
+		$collision = get_page_by_path( $slug, OBJECT, $cpt );
+		if ( $collision && get_post_meta( $collision->ID, '_dla_item_id', true ) !== $item['id'] ) {
+			$collisions++;
+			continue;
+		}
+		$post_id = wp_insert_post( array(
+			'post_type'    => $cpt,
+			'post_status'  => 'publish',
+			'post_name'    => $slug,
+			'post_title'   => isset( $item['title'] ) ? $item['title'] : '',
+			'post_content' => isset( $item['content'] ) ? $item['content'] : '',
+		), true );
+		if ( is_wp_error( $post_id ) || ! $post_id ) { continue; }
 	}
-	if ( is_wp_error( $post_id ) || ! $post_id ) { continue; }
 
 	update_post_meta( $post_id, '_dla_item_id', $item['id'] );
 	if ( isset( $item['gallery'] ) && is_array( $item['gallery'] ) ) {
@@ -114,7 +139,17 @@ foreach ( ( isset( $data['items'] ) ? $data['items'] : array() ) as $item ) {
 		wp_set_object_terms( $post_id, array_values( $item['terms'] ), $tax, false );
 	}
 
+	// Stamp the import time LAST so it's newer than the writes above (the
+	// modified-since guard compares against this on the next run).
+	update_post_meta( $post_id, '_dla_imported_at', time() );
+
 	if ( $is_update ) { $updated++; } else { $inserted++; }
 }
 
-echo json_encode( array( 'inserted' => $inserted, 'updated' => $updated, 'terms' => $terms_done ) );
+echo json_encode( array(
+	'inserted'        => $inserted,
+	'updated'         => $updated,
+	'skippedModified' => $skipped_modified,
+	'collisions'      => $collisions,
+	'terms'           => $terms_done,
+) );

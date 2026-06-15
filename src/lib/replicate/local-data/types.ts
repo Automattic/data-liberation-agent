@@ -8,12 +8,24 @@
 // deterministic src consumes it to install the CPT, insert posts, and emit
 // class-faithful core/query loops in place of the mounts.
 
+/** Coarse meta-value type for sanitization + REST registration. */
+export type DataFieldType = 'string' | 'integer' | 'number' | 'boolean';
+
+/** Sub-type of a string field, driving the sanitize callback. */
+export type DataFieldFormat = 'email' | 'url' | 'textarea' | 'date';
+
 /** A custom-field definition on the CPT (stored as post meta). */
 export interface DataField {
   /** Meta key, e.g. 'price_eur'. */
   key: string;
   /** Coarse type for sanitization + REST registration. */
-  type: 'string' | 'integer' | 'number' | 'boolean';
+  type: DataFieldType;
+  /** Optional string sub-format → a stricter sanitize callback (email/url/etc.). */
+  format?: DataFieldFormat;
+  /** Optional human label (admin/REST); defaults to a title-cased key. */
+  label?: string;
+  /** Whether the field is required (advisory; surfaced by the validator). */
+  required?: boolean;
 }
 
 /** A taxonomy bound to the CPT. */

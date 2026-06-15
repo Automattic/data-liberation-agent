@@ -78,7 +78,7 @@ describe('installLocalData', () => {
     const calls: { file: string; args: string[] }[] = [];
     const exec: ExecFn = async (file, args) => {
       calls.push({ file, args });
-      return { stdout: 'some log noise\n{"inserted":2,"updated":0,"terms":2}\n', stderr: '' };
+      return { stdout: 'some log noise\n{"inserted":2,"updated":0,"skippedModified":1,"collisions":0,"terms":2}\n', stderr: '' };
     };
 
     const res = await installLocalData({
@@ -91,6 +91,8 @@ describe('installLocalData', () => {
 
     expect(res.inserted).toBe(2);
     expect(res.terms).toBe(2);
+    expect(res.skippedModified).toBe(1);
+    expect(res.collisions).toBe(0);
     expect(res.muPlugins).toHaveLength(2);
     // mu-plugins landed under the WP root
     expect(existsSync(join(sitePath, 'wordpress', 'wp-content', 'mu-plugins', cptMuPluginFilename(MODEL)))).toBe(true);

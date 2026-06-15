@@ -13,30 +13,66 @@ function php(s: string): string {
   return `'${s.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
 }
 
-/** Map a DataField type to the WP register_post_meta `type`. */
-function metaType(t: 'string' | 'integer' | 'number' | 'boolean'): string {
-  return t; // WP accepts 'string' | 'integer' | 'number' | 'boolean' verbatim
+/** A PHP-safe identifier fragment from a slug (for the sanitize fn name). */
+function phpId(slug: string): string {
+  const id = slug.replace(/[^A-Za-z0-9_]/g, '_');
+  return /^[A-Za-z_]/.test(id) ? id : `dla_${id}`;
+}
+
+/** REST `show_in_rest` value for a field: a typed schema when a string format
+ * maps to a standard REST format, else bare true. */
+function restSchema(f: DataModel['fields'][number]): string {
+  const restFormat = f.format === 'email' ? 'email' : f.format === 'url' ? 'uri' : '';
+  if (f.type === 'string' && restFormat) {
+    return `array( 'schema' => array( 'type' => 'string', 'format' => ${php(restFormat)} ) )`;
+  }
+  return 'true';
 }
 
 /**
  * Build the mu-plugin PHP source registering the model's CPT, taxonomy, and
  * per-field post meta. Deterministic + idempotent (WP register_* are safe to
  * call every init). The plugin slug/text is derived from the CPT slug.
+ *
+ * Each meta field gets a per-type/format sanitize_callback and (for email/url
+ * string fields) a typed REST schema, so values are coerced/cleaned on write
+ * and self-describe over REST — adopted from wordpress-block-design-compiler's
+ * content-model sanitization.
  */
 export function buildCptMuPlugin(model: DataModel): string {
   const { cpt, taxonomy, fields } = model;
   const supports = `array( ${cpt.supports.map((s) => php(s)).join(', ')} )`;
+  const fn = `dla_cpt_sanitize_${phpId(cpt.slug)}`;
 
   const metaRegistrations = fields
-    .map(
-      (f) =>
+    .map((f) => {
+      const desc = f.label ? `\n        'description'       => ${php(f.label)},` : '';
+      return (
         `    register_post_meta( ${php(cpt.slug)}, ${php(f.key)}, array(\n` +
-        `        'type'         => ${php(metaType(f.type))},\n` +
-        `        'single'       => true,\n` +
-        `        'show_in_rest' => true,\n` +
-        `    ) );`,
-    )
+        `        'type'              => ${php(f.type)},\n` +
+        `        'single'           => true,\n` +
+        `        'show_in_rest'     => ${restSchema(f)},` +
+        desc +
+        `\n        'sanitize_callback' => function ( $value ) { return ${fn}( $value, ${php(f.type)}, ${php(f.format ?? '')} ); },\n` +
+        `    ) );`
+      );
+    })
     .join('\n');
+
+  // Shared sanitize helper (mirrors the DataField type/format contract).
+  const sanitizeFn = `function ${fn}( $value, $type, $format ) {
+    switch ( $type ) {
+        case 'boolean': return rest_sanitize_boolean( $value );
+        case 'integer': return intval( $value );
+        case 'number':  return is_numeric( $value ) ? (float) $value : 0;
+        case 'string':
+        default:
+            if ( 'email' === $format )    return sanitize_email( $value );
+            if ( 'url' === $format )      return esc_url_raw( $value );
+            if ( 'textarea' === $format ) return sanitize_textarea_field( $value );
+            return sanitize_text_field( $value );
+    }
+}`;
 
   return `<?php
 /**
@@ -47,6 +83,8 @@ export function buildCptMuPlugin(model: DataModel): string {
  */
 
 if ( ! defined( 'ABSPATH' ) ) { exit; }
+
+${sanitizeFn}
 
 add_action( 'init', function () {
     register_post_type( ${php(cpt.slug)}, array(
