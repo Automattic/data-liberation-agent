@@ -45,6 +45,15 @@ Ask for the **source directory** if not given. Then derive (let the operator ove
 - `studioSitePath` — `~/Studio/<slug>` for a fresh site (must NOT collide with an existing unrelated site unless you intend to reuse it). Confirm the chosen path with the operator before creating.
 - `outputDir` — liberation artifacts (sidecars, reports, screenshots). Default `~/Studio/_liberations/<slug>` or a run-local dir.
 
+### Step 0b — WordPress-driven data (conditional)
+
+If the source renders its main content from **JavaScript data** (an empty `<div id="…">` filled at runtime by a mount call over an in-file array, e.g. a catalog/listing/gallery) rather than static HTML, those grids would be **empty in the block editor** on a straight carry. In that case, first produce the data model:
+
+- Dispatch the **`model-local-data`** skill via a subagent (so the nested skill runs to completion without interrupting this workflow), pointing it at the source dir + output dir. It reads the source JS and writes `<outputDir>/data-model.json` (a CPT + taxonomy + native query loops + a faithful card render).
+- When that file exists, the convert step below **auto-activates** the data path: it registers the CPT, inserts the items, replaces the empty mounts with `core/query` loops (editable/analyzable in the editor), and neutralizes the JS data-mounts + rebinds the modal to per-card DOM islands — while keeping styling/animation/filter JS.
+
+Skip this step when the content is static HTML (no JS data array). Pass `dataModel: false` to the convert call to force the data path off even if a model file is present.
+
 ### Step 1 — Convert (one command)
 
 Call `liberate_convert_local_site` with `createSite: true`:
