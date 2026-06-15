@@ -47,6 +47,12 @@ export interface AssembleLocalThemeOpts {
    * non-empty, theme.json `styles` is stripped (source CSS is the design authority;
    * settings stay for editor pickers). Each asset file is written only when non-empty. */
   carrySourceAssets?: CarrySourceAssets;
+  /** Per-instance lib-i<hash> rules (from ingest's instance-styles.css, merged
+   * with chrome rules) for inline styles carried as classes. Written to
+   * assets/css/instance-styles.css and loaded on BOTH the frontend and the
+   * editor canvas. Empty/absent → no file, no enqueue. Only meaningful when
+   * carrySourceAssets carries CSS. */
+  instanceStylesCss?: string;
   /** Source body data-* attributes per permalink pathname (keys WITHOUT the
    * data- prefix). Replayed by a wp_body_open shim before any deferred script
    * runs — JS-rendered sites key behavior off them (body[data-page] active
@@ -115,6 +121,10 @@ add_action( 'wp_body_open', function () {
 // file_exists() TRUE for up to 120s after a deletion while the stat fails,
 // and the bare filemtime() printed a warning INTO the served page. One
 // suppressed stat is the truthful existence check AND the enqueue version.
+//
+// Cascade order is load-bearing: theme style → source.css → instance-styles.css
+// (per-instance lib-i rules override class defaults; equal specificity, later
+// wins) → parity-patch.css (final deterministic fixes).
 add_action( 'wp_enqueue_scripts', function () {
     $css = get_theme_file_path( 'assets/css/source.css' );
     $css_mtime = @filemtime( $css );
@@ -126,13 +136,37 @@ add_action( 'wp_enqueue_scripts', function () {
     if ( false !== $js_mtime ) {
         wp_enqueue_script( '${themeSlug}-source', get_theme_file_uri( 'assets/js/source.js' ), array(), (string) $js_mtime, true );
     }
+    $inst = get_theme_file_path( 'assets/css/instance-styles.css' );
+    $inst_mtime = @filemtime( $inst );
+    if ( false !== $inst_mtime ) {
+        $inst_deps = false !== $css_mtime ? array( '${themeSlug}-source' ) : array( '${themeSlug}-style' );
+        wp_enqueue_style( '${themeSlug}-instance', get_theme_file_uri( 'assets/css/instance-styles.css' ), $inst_deps, (string) $inst_mtime );
+    }
     $patch = get_theme_file_path( 'assets/css/parity-patch.css' );
     $patch_mtime = @filemtime( $patch );
     if ( false !== $patch_mtime ) {
-        $deps = false !== $css_mtime ? array( '${themeSlug}-source' ) : array( '${themeSlug}-style' );
+        if ( false !== $inst_mtime ) {
+            $deps = array( '${themeSlug}-instance' );
+        } elseif ( false !== $css_mtime ) {
+            $deps = array( '${themeSlug}-source' );
+        } else {
+            $deps = array( '${themeSlug}-style' );
+        }
         wp_enqueue_style( '${themeSlug}-parity-patch', get_theme_file_uri( 'assets/css/parity-patch.css' ), $deps, (string) $patch_mtime );
     }
 }, 20 );
+// Editor parity: load the SAME carried frontend CSS into the block-editor
+// canvas iframe so blocks render styled in the editor (matching the frontend),
+// not as unstyled defaults. add_editor_style takes theme-relative paths in
+// cascade order; file_exists guards keep it safe when an asset is absent.
+add_action( 'after_setup_theme', function () {
+    add_theme_support( 'editor-styles' );
+    foreach ( array( 'assets/css/source.css', 'assets/css/instance-styles.css', 'assets/css/parity-patch.css' ) as $rel ) {
+        if ( file_exists( get_theme_file_path( $rel ) ) ) {
+            add_editor_style( $rel );
+        }
+    }
+} );
 ${htmlJsBlock}${bodyDataBlock}`;
 }
 
@@ -214,6 +248,13 @@ export function assembleLocalTheme(opts: AssembleLocalThemeOpts): ReplicaFile[] 
     }
     if (hasJS) {
       withTemplates.push({ relativePath: 'assets/js/source.js', content: js });
+    }
+    // Per-instance lib-i rules ride a sibling asset (loaded after source.css on
+    // both the frontend and the editor canvas). Only when CSS is carried — the
+    // rules are meaningless without the source stylesheet they refine.
+    const instanceCss = (opts.instanceStylesCss ?? '').trim();
+    if (hasCSS && instanceCss.length > 0) {
+      withTemplates.push({ relativePath: 'assets/css/instance-styles.css', content: instanceCss + '\n' });
     }
 
     // 3. Append the enqueue block to functions.php (@filemtime guards make

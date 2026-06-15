@@ -5,6 +5,7 @@ import { blockMarkupRoundtrips } from '../../streaming/block-markup-validate.js'
 import { segmentPage } from './segment.js';
 import { rewriteInternalHrefs } from '../local-site/href-rewrite.js';
 import { emitSectionBlocks } from './emit-blocks.js';
+import type { InstanceStyleSheet } from './instance-styles.js';
 import type { LocalPage, NormalizeReportEntry, RevealBehavior, Section, SectionBehavior } from '../local-site/types.js';
 
 export interface ComposePageResult {
@@ -38,6 +39,12 @@ export interface ComposePageOpts {
    * sections — links to the live page instead of a dead .html path. JS-
    * rendered links are the runtime click shim's job (theme-files). */
   pageSlugs?: string[];
+  /** Shared instance-style sheet: per-element inline `style=` is carried as a
+   * lib-i<hash> class + a stylesheet rule registered here (fixer-safe), instead
+   * of an inline style attr the block fixer would strip. The caller (ingest)
+   * passes one sheet across all pages so identical declarations dedupe, then
+   * emits sheet.toCss() into the carried instance-styles.css. */
+  instanceStyles?: InstanceStyleSheet;
 }
 
 export function composePage(page: LocalPage, opts: ComposePageOpts = {}): ComposePageResult {
@@ -63,6 +70,7 @@ export function composePage(page: LocalPage, opts: ComposePageOpts = {}): Compos
   for (const section of bodySections) {
     const { markup, confidence } = emitSectionBlocks(section, {
       behaviorWrapper: native ? 'dla' : 'group',
+      instanceStyles: opts.instanceStyles,
     });
     skeleton.sections.push({ type: 'content', slots: [section.id] });
     pageContent[section.id] = markup;

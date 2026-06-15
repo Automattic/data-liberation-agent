@@ -11,9 +11,11 @@ import { mkdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Handler } from '../handler-types.js';
 import { validateOutputDir } from '../../lib/screenshot/output-layout.js';
-import { composedSidecarPath } from '../../lib/streaming/block-markup-validate.js';
+import { composedSidecarPath, instanceStylesPath } from '../../lib/streaming/block-markup-validate.js';
+import { BlockFixerClient } from '../../lib/streaming/block-fixer-client.js';
 import { ingestLocalSite } from '../../lib/replicate/local-site/ingest.js';
 import { composePage } from '../../lib/replicate/normalize/compose-page.js';
+import { InstanceStyleSheet } from '../../lib/replicate/normalize/instance-styles.js';
 import {
   detectBehaviors,
   detectSectionBehavior,
@@ -75,25 +77,63 @@ export const ingestLocalSiteHandler: Handler = async (args, ctx) => {
   // Warning-level block-contract issues (emitter-bug dial — see block-contract.ts).
   const contractIssues: Array<{ slug: string; code: string; blockName: string; detail: string }> = [];
 
-  for (const page of site.pages) {
-    // Per-page isolation: one bad page (roundtrip failure / compose misfit)
-    // must not abort the whole ingest — record it and keep going.
-    try {
-      const composed = composePage(page, {
-        reveal,
-        detectSection,
-        native: nativeBehaviors,
-        // Internal .html hrefs in page bodies → /slug/ permalinks at emission.
-        pageSlugs: site.pages.map((sp) => sp.slug),
-      });
-      const { postContent, report } = composed;
-      if (postContent === '' && report.length === 0) emptyPages.push(page.slug);
-      writeFileSync(composedSidecarPath(outputDir, page.slug), postContent);
-      for (const r of report) entries.push({ ...r, slug: page.slug });
-      for (const issue of composed.contractIssues) contractIssues.push({ slug: page.slug, ...issue });
-    } catch (err) {
-      failedPages.push({ slug: page.slug, error: (err as Error).message });
+  // One sheet across all pages: per-element inline styles are carried as
+  // lib-i<hash> classes (fixer-safe) + deduped stylesheet rules emitted to
+  // composed/instance-styles.css, which the convert stage ships + enqueues on
+  // BOTH the frontend and the editor canvas.
+  const instanceStyles = new InstanceStyleSheet();
+
+  // Canonicalize each page's composed markup through @wordpress/blocks (the
+  // real block save() functions) before writing the sidecar, so the carried
+  // blocks validate cleanly in the editor (no recovery / "unexpected content").
+  // Best-effort: fix() passes the markup through unchanged if the sidecar can't
+  // start — the markup is already emitted fixer-valid by construction.
+  const blockFixer = new BlockFixerClient();
+  await blockFixer.start().catch(() => {
+    /* best-effort — fix() passes through if the server didn't start */
+  });
+
+  try {
+    for (const page of site.pages) {
+      // Per-page isolation: one bad page (roundtrip failure / compose misfit)
+      // must not abort the whole ingest — record it and keep going.
+      try {
+        const composed = composePage(page, {
+          reveal,
+          detectSection,
+          native: nativeBehaviors,
+          // Internal .html hrefs in page bodies → /slug/ permalinks at emission.
+          pageSlugs: site.pages.map((sp) => sp.slug),
+          instanceStyles,
+        });
+        const { postContent, report } = composed;
+        if (postContent === '' && report.length === 0) emptyPages.push(page.slug);
+        const fixed = (await blockFixer.fix([postContent]))[0];
+        const finalContent = fixed?.html ?? postContent;
+        writeFileSync(composedSidecarPath(outputDir, page.slug), finalContent);
+        for (const r of report) entries.push({ ...r, slug: page.slug });
+        for (const issue of composed.contractIssues) contractIssues.push({ slug: page.slug, ...issue });
+      } catch (err) {
+        failedPages.push({ slug: page.slug, error: (err as Error).message });
+      }
     }
+  } finally {
+    await blockFixer.stop().catch(() => {
+      /* best-effort cleanup */
+    });
+  }
+
+  // Persist the carried instance-style rules (atomic tmp+rename) for the convert
+  // stage. Always written (empty file when nothing was carried) so convert has a
+  // deterministic read target; an empty sheet emits no rules.
+  const instanceCssPath = instanceStylesPath(outputDir);
+  const instanceCssTmp = `${instanceCssPath}.tmp.${process.pid}`;
+  try {
+    writeFileSync(instanceCssTmp, instanceStyles.toCss());
+    renameSync(instanceCssTmp, instanceCssPath);
+  } catch (err) {
+    try { unlinkSync(instanceCssTmp); } catch { /* ignore */ }
+    return ctx.errorResult(`failed to write instance-styles.css: ${(err as Error).message}`);
   }
 
   // Per-kind counts come from the compose REPORTS (single source of truth —
@@ -144,6 +184,8 @@ export const ingestLocalSiteHandler: Handler = async (args, ctx) => {
     emptyPages,
     reportPath,
     contractIssues: contractIssues.length,
+    // Per-instance inline styles carried as lib-i classes + rules (editor-valid).
+    instanceStyleRules: instanceStyles.size,
     // Standalone observability (key absent when the flag is off): what
     // detection found + per-kind section counts from the compose reports.
     // No artifact write here — behavior-gaps.json belongs to the convert stage.

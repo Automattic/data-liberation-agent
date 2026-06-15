@@ -8,6 +8,22 @@ import type { HandlerContext, ToolResult } from '../handler-types.js';
 // via html input today (it only throws on roundtrip failure / compose misfit),
 // so the failure leg is simulated — the mock throws for the sentinel slug
 // "boom" and delegates to the real implementation for every other page.
+// Passthrough the block fixer: ingest tests assert composition + artifacts, not
+// @wordpress/blocks canonicalization (covered by the fixer's own tests). The
+// real client spawns a jsdom HTTP subprocess (~2.5s/test + parallel-run
+// flakiness); the stub keeps these tests fast and deterministic, and passthrough
+// means each sidecar equals its composed markup (matches the empty-sidecar etc.
+// assertions below).
+vi.mock('../../lib/streaming/block-fixer-client.js', () => ({
+  BlockFixerClient: class {
+    async start(): Promise<void> {}
+    async stop(): Promise<void> {}
+    async fix(items: string[]): Promise<Array<{ html: string; changed: boolean; fixedIssues: string[] }>> {
+      return items.map((html) => ({ html, changed: false, fixedIssues: [] }));
+    }
+  },
+}));
+
 vi.mock('../../lib/replicate/normalize/compose-page.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../lib/replicate/normalize/compose-page.js')>();
   return {

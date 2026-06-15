@@ -24,6 +24,21 @@ const capturedRuns: Array<{ urls: string[]; outputDir: string; force?: boolean }
 let repairReplicaManifestEntries: Record<string, { slug: string }> = {};
 let repairDiffPng: Buffer | null = null;
 
+// Passthrough the block fixer: convert calls the real ingest handler, which now
+// canonicalizes each page through a jsdom HTTP subprocess (~2.5s/test + parallel
+// flakiness). These tests assert orchestration, not @wordpress/blocks
+// canonicalization (covered by blockFixer.smoke.test.js); the stub keeps the
+// suite fast + deterministic. Passthrough → sidecars equal the composed markup.
+vi.mock('../../lib/streaming/block-fixer-client.js', () => ({
+  BlockFixerClient: class {
+    async start(): Promise<void> {}
+    async stop(): Promise<void> {}
+    async fix(items: string[]): Promise<Array<{ html: string; changed: boolean; fixedIssues: string[] }>> {
+      return items.map((html) => ({ html, changed: false, fixedIssues: [] }));
+    }
+  },
+}));
+
 vi.mock('../../lib/screenshot/screenshotter.js', () => ({
   captureScreenshots: vi.fn(async (opts: { urls: string[]; outputDir: string; force?: boolean }) => {
     capturedRuns.push({ urls: opts.urls, outputDir: opts.outputDir, force: opts.force });

@@ -17,6 +17,7 @@
 //
 import * as cheerio from 'cheerio';
 import type { Element } from 'domhandler';
+import type { InstanceStyleSheet } from '../normalize/instance-styles.js';
 import { emitSectionBlocks, escapeHtml, attrJson } from '../normalize/emit-blocks.js';
 import { slugFromRelPath } from '../local-site/ingest.js';
 import { rewriteInternalHrefs } from '../local-site/href-rewrite.js';
@@ -126,6 +127,10 @@ export interface FooterPartOpts {
   bgToken?: string;
   /** theme.json palette slug applied as the footer wrapper text color (e.g. 'text-inverse'). */
   textToken?: string;
+  /** Shared instance-style sheet: footer element inline styles are carried as
+   * lib-i<hash> classes + rules here (same sheet as the page bodies, so the
+   * footer's rules land in the SAME carried instance-styles.css). */
+  instanceStyles?: InstanceStyleSheet;
 }
 
 /**
@@ -174,7 +179,10 @@ export function buildFooterPart(footer: Section | null, siteTitle: string, opts:
     };
     // wrapper:'div' — footer content is chrome, not a body section; the section
     // tag would attract the carried source's section margin rules (+88px).
-    return wrapFooterGroup(emitSectionBlocks(normalized, { wrapper: 'div' }).markup, opts);
+    return wrapFooterGroup(
+      emitSectionBlocks(normalized, { wrapper: 'div', instanceStyles: opts.instanceStyles }).markup,
+      opts,
+    );
   }
   return wrapFooterGroup(
     `<!-- wp:group {"align":"full","layout":{"type":"constrained"},"style":{"spacing":{"padding":{"top":"2rem","bottom":"2rem"}}}} -->\n` +

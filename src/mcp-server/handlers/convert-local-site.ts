@@ -33,7 +33,8 @@ import { captureScreenshots } from '../../lib/screenshot/screenshotter.js';
 import { SCREENSHOT_DEVICE_SCALE_FACTOR } from '../../lib/screenshot/types.js';
 import { compareScreenshotDirs } from '../../lib/screenshot/compare.js';
 import { openEditorSession, scoreEditorSurface, type EditorSurfacePage } from '../../lib/preview/editor-preview.js';
-import { composedSidecarPath } from '../../lib/streaming/block-markup-validate.js';
+import { InstanceStyleSheet, mergeInstanceStyleCss } from '../../lib/replicate/normalize/instance-styles.js';
+import { composedSidecarPath, instanceStylesPath } from '../../lib/streaming/block-markup-validate.js';
 import { buildLocalFoundation, extractCssColors, type PaletteAgg, type TypographyAgg, type BreakpointsAgg } from '../../lib/replicate/local-theme/foundation.js';
 import { extractGoogleFontCssUrls, selfHostGoogleFonts } from '../../lib/replicate/local-theme/google-fonts.js';
 import { collectSourceAssets, WP_COMPAT_CSS } from '../../lib/replicate/local-theme/source-assets.js';
@@ -341,13 +342,35 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
   // passthrough was proven inert (we swap parts/footer.html unconditionally),
   // so tokens live exclusively on the part built by buildFooterPart. In carry
   // mode the tokens are omitted — source footer{} rules style the part.
+  // Chrome (footer) per-instance inline styles ride the SAME lib-i mechanism as
+  // page bodies, collected into their own sheet here (the body sheet lives in
+  // the ingest stage). Merged with the body rules below into one carried
+  // instance-styles.css so footer lib-i classes resolve.
+  const chromeInstanceStyles = new InstanceStyleSheet();
   const footerPart = mounts.footer
     ? mountPartMarkup(mounts.footer)
     : buildFooterPart(footerSection, siteTitle, {
         pageSlugs: site.pages.map((p) => p.slug),
         bgToken: chromeCarried ? undefined : footerBgToken,
         textToken: chromeCarried ? undefined : footerTextToken,
+        instanceStyles: chromeInstanceStyles,
       });
+
+  // Merge the page-body lib-i rules (written by ingest to composed/
+  // instance-styles.css) with the chrome rules just collected. Only when CSS is
+  // carried — the rules refine the carried source stylesheet. Empty → undefined
+  // (no asset, no enqueue).
+  let instanceStylesCss: string | undefined;
+  if (carriedCss) {
+    let bodyInstanceCss = '';
+    try {
+      bodyInstanceCss = readFileSync(instanceStylesPath(outputDir), 'utf8');
+    } catch {
+      /* no body instance styles (none carried) */
+    }
+    const merged = mergeInstanceStyleCss(bodyInstanceCss, chromeInstanceStyles.toCss());
+    instanceStylesCss = merged.length > 0 ? merged : undefined;
+  }
 
   // Theme assembly + write + activate.
   // In carry mode the localized Google css inside source.css is the SOLE font
@@ -364,6 +387,7 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
     foundation,
     capturedFonts: chromeCarried ? undefined : capturedFonts,
     carrySourceAssets,
+    instanceStylesCss,
     // Source body data-* attrs by permalink pathname — replayed by the
     // wp_body_open shim so carried JS keyed on body[data-*] behaves
     // identically (active-nav etc.). Only pages that HAVE attrs contribute.

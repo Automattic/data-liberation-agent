@@ -170,11 +170,13 @@ describe('assembleLocalTheme', () => {
     const fns = files.find((f) => f.relativePath === 'functions.php')?.content ?? '';
     // Patch enqueue still present without css carry…
     expect(fns).toContain("'a-local-parity-patch'");
-    // …and the dep is decided at runtime: the source handle only when source.css
-    // exists, else the always-registered theme style handle. A hardcoded -source
-    // dep would be UNREGISTERED in js-only carry and WP would silently drop the
-    // patch — the repair loop could never converge.
-    expect(fns).toContain("$deps = false !== $css_mtime ? array( 'a-local-source' ) : array( 'a-local-style' );");
+    // …and the dep is decided at runtime via if/elseif/else: instance-styles
+    // when present, else source.css, else the always-registered theme style
+    // handle. A hardcoded -source dep would be UNREGISTERED in js-only carry and
+    // WP would silently drop the patch — the repair loop could never converge.
+    expect(fns).toContain("$deps = array( 'a-local-instance' );"); // when instance-styles exist
+    expect(fns).toContain("$deps = array( 'a-local-source' );"); // elseif source.css exists
+    expect(fns).toContain("$deps = array( 'a-local-style' );"); // else: always-registered theme style
     expect(fns).toMatch(/parity-patch\.css' \), \$deps,/);
   });
 
@@ -220,6 +222,74 @@ describe('assembleLocalTheme', () => {
     expect(fns).not.toContain("classList.add('js')");
     // The CSS enqueue itself still lands.
     expect(fns).toContain('assets/css/source.css');
+  });
+});
+
+describe('instance-styles carry (per-instance lib-i rules)', () => {
+  const HEADER = '<!-- wp:template-part {"slug":"header"} /-->';
+  const FOOTER = '<!-- wp:template-part {"slug":"footer"} /-->';
+
+  it('writes assets/css/instance-styles.css and enqueues it after source.css (cascade order)', () => {
+    const files = assembleLocalTheme({
+      siteTitle: 'A',
+      themeSlug: 'a-local',
+      headerPart: HEADER,
+      footerPart: FOOTER,
+      carrySourceAssets: { css: 'body{}', js: '' },
+      instanceStylesCss: '.lib-iabc123{font-size:clamp(3rem,9vw,6.5rem)}',
+    });
+    const asset = files.find((f) => f.relativePath === 'assets/css/instance-styles.css');
+    expect(asset?.content).toContain('.lib-iabc123{font-size:clamp(3rem,9vw,6.5rem)}');
+    const fns = files.find((f) => f.relativePath === 'functions.php')?.content ?? '';
+    expect(fns).toContain("'a-local-instance'");
+    expect(fns).toContain('assets/css/instance-styles.css');
+    // Cascade order: instance after source, parity after instance.
+    expect(fns.indexOf('instance-styles.css')).toBeGreaterThan(fns.indexOf('source.css'));
+    expect(fns.indexOf('parity-patch.css')).toBeGreaterThan(fns.indexOf('instance-styles.css'));
+    // Instance dep: after source.css.
+    expect(fns).toContain("$inst_deps = false !== $css_mtime ? array( 'a-local-source' )");
+  });
+
+  it('add_editor_style loads the carried frontend CSS into the editor canvas (source+instance+parity)', () => {
+    const files = assembleLocalTheme({
+      siteTitle: 'A',
+      themeSlug: 'a-local',
+      headerPart: HEADER,
+      footerPart: FOOTER,
+      carrySourceAssets: { css: 'body{}', js: '' },
+      instanceStylesCss: '.lib-iabc123{max-width:46ch}',
+    });
+    const fns = files.find((f) => f.relativePath === 'functions.php')?.content ?? '';
+    expect(fns).toContain('add_editor_style');
+    expect(fns).toContain("add_theme_support( 'editor-styles' )");
+    expect(fns).toContain("'assets/css/source.css', 'assets/css/instance-styles.css', 'assets/css/parity-patch.css'");
+    // Guarded so an absent asset is skipped, not fatal.
+    expect(fns).toContain('if ( file_exists( get_theme_file_path( $rel ) ) )');
+  });
+
+  it('no instanceStylesCss → no asset file, but add_editor_style still loads source.css', () => {
+    const files = assembleLocalTheme({
+      siteTitle: 'A',
+      themeSlug: 'a-local',
+      headerPart: HEADER,
+      footerPart: FOOTER,
+      carrySourceAssets: { css: 'body{}', js: '' },
+    });
+    expect(files.some((f) => f.relativePath === 'assets/css/instance-styles.css')).toBe(false);
+    const fns = files.find((f) => f.relativePath === 'functions.php')?.content ?? '';
+    expect(fns).toContain('add_editor_style'); // editor parity is unconditional in carry
+  });
+
+  it('instance-styles is not written without a CSS carry (rules refine the source sheet)', () => {
+    const files = assembleLocalTheme({
+      siteTitle: 'A',
+      themeSlug: 'a-local',
+      headerPart: HEADER,
+      footerPart: FOOTER,
+      carrySourceAssets: { css: '', js: 'x()' },
+      instanceStylesCss: '.lib-iabc123{max-width:46ch}',
+    });
+    expect(files.some((f) => f.relativePath === 'assets/css/instance-styles.css')).toBe(false);
   });
 });
 

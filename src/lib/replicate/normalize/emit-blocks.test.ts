@@ -2,6 +2,7 @@
 import { describe, it, expect } from 'vitest';
 import * as cheerio from 'cheerio';
 import { emitSectionBlocks, escapeHtml } from './emit-blocks.js';
+import { InstanceStyleSheet } from './instance-styles.js';
 import { blockMarkupRoundtrips } from '../../streaming/block-markup-validate.js';
 
 describe('escapeHtml', () => {
@@ -44,10 +45,13 @@ describe('emitSectionBlocks', () => {
     expect(blockMarkupRoundtrips(markup).ok).toBe(true);
   });
 
-  it('preserves the source inline style on headings and paragraphs (per-instance authority)', () => {
+  it('carries per-instance heading/paragraph inline style as a lib-i class + rule (fixer-safe)', () => {
     // The source authors per-heading size/margin inline (h1.display class is a
     // big default, overridden per instance) — dropping it makes every heading
     // fall back to the class default and reflow (maison h1.display 104 vs 136).
+    // The fixer strips inline style= from core blocks, so the style is carried
+    // as a lib-i<hash> class + a stylesheet rule instead (editor-valid).
+    const sheet = new InstanceStyleSheet();
     const section = {
       id: 'hero',
       role: 'body' as const,
@@ -55,10 +59,16 @@ describe('emitSectionBlocks', () => {
         '<section><h1 class="display" style="margin:20px 0 0;font-size:clamp(3rem,9vw,6.5rem)">Scent</h1>' +
         '<p class="lead" style="max-width:46ch">Made to order.</p></section>',
     };
-    const { markup } = emitSectionBlocks(section);
+    const { markup } = emitSectionBlocks(section, { instanceStyles: sheet });
     expect(blockMarkupRoundtrips(markup).ok).toBe(true);
-    expect(markup).toContain('style="margin:20px 0 0;font-size:clamp(3rem,9vw,6.5rem)"');
-    expect(markup).toContain('style="max-width:46ch"');
+    // No inline style attr survives on the elements.
+    expect(markup).not.toContain('style="margin');
+    expect(markup).not.toContain('style="max-width');
+    // The heading carries source class + a lib-i class; the rule holds the decls.
+    expect(markup).toMatch(/<h1 class="wp-block-heading display lib-i[0-9a-f]{10}">/);
+    expect(markup).toMatch(/<p class="lead lib-i[0-9a-f]{10}">/);
+    expect(sheet.toCss()).toContain('margin:20px 0 0;font-size:clamp(3rem,9vw,6.5rem)');
+    expect(sheet.toCss()).toContain('max-width:46ch');
   });
 
   it('preserves inline span class hooks in heading rich text (source styling)', () => {
@@ -82,6 +92,9 @@ describe('emitSectionBlocks', () => {
     const { markup } = emitSectionBlocks(section);
     expect(blockMarkupRoundtrips(markup).ok).toBe(true);
     expect(markup).toContain('class="wp-block-group kicker"');
+    // The inline body rides a core/html inner block (fixer-safe — a core/group
+    // strips raw inline content; core/html preserves it and renders inline).
+    expect(markup).toContain('<!-- wp:html -->');
     expect(markup).toContain('<span class="num">01</span>');
     // The kicker body is inline — no paragraph block wrapping "01".
     expect(markup).not.toContain('<p>01</p>');
@@ -490,11 +503,14 @@ describe('verbatim behavior sections on the carry path (behaviorWrapper: group)'
     expect(markup).toContain('"tagName":"section"');
     expect(markup).toContain('"className":"pricing"');
     expect(markup).toContain('<section id="plans" class="wp-block-group pricing">');
-    // Interactive scaffolding survives byte-true — the carried source JS
-    // drives this intact DOM (the emitChild path destroyed it: E2E unresolved
-    // missing #tab-*/#panel-* structural divergences).
+    // Interactive scaffolding survives byte-true inside a core/html inner block
+    // (fixer-safe — a bare core/group would strip the raw scaffolding) — the
+    // carried source JS drives this intact DOM (the emitChild path destroyed it:
+    // E2E unresolved missing #tab-*/#panel-* structural divergences).
     const expectedInner = cheerio.load(TABS_HTML)('section').first().html() ?? '';
-    const m = /class="wp-block-group pricing">([\s\S]*)<\/section>\n<!-- \/wp:group -->$/.exec(markup);
+    const m = /class="wp-block-group pricing">\n<!-- wp:html -->\n([\s\S]*)\n<!-- \/wp:html -->\n<\/section>\n<!-- \/wp:group -->$/.exec(
+      markup,
+    );
     expect(m?.[1]).toBe(expectedInner);
     expect(markup).toContain('role="tab"');
     expect(markup).not.toContain('data-wp-interactive');
@@ -596,15 +612,20 @@ describe('structural wrapper preservation (owned-source bodies)', () => {
     expect(markup).toContain('<p class="lead">Body copy.</p>');
   });
 
-  it('inline style attrs survive on section and wrapper elements (grid/padding layouts)', () => {
+  it('carries section and wrapper inline styles as lib-i classes + rules (grid/padding, fixer-safe)', () => {
+    const sheet = new InstanceStyleSheet();
     const section = {
       id: 'intro',
       role: 'body' as const,
       html: '<section id="intro" style="padding-top:56px"><div class="wrap" style="display:grid;gap:24px"><p>A</p><p>B</p></div></section>',
     };
-    const { markup } = emitSectionBlocks(section);
-    expect(markup).toContain('<section id="intro" class="wp-block-group" style="padding-top:56px">');
-    expect(markup).toContain('style="display:grid;gap:24px"');
+    const { markup } = emitSectionBlocks(section, { instanceStyles: sheet });
+    expect(blockMarkupRoundtrips(markup).ok).toBe(true);
+    expect(markup).not.toContain('style=');
+    expect(markup).toMatch(/<section id="intro" class="wp-block-group lib-i[0-9a-f]{10}">/);
+    expect(markup).toMatch(/class="wp-block-group wrap lib-i[0-9a-f]{10}"/);
+    expect(sheet.toCss()).toContain('padding-top:56px');
+    expect(sheet.toCss()).toContain('display:grid;gap:24px');
   });
 
   it('a true text leaf still downgrades to a paragraph', () => {

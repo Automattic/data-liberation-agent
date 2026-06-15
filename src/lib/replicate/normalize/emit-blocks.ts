@@ -4,6 +4,7 @@ import type { CheerioAPI, Cheerio } from 'cheerio';
 import { isTag, isText } from 'domhandler';
 import type { Element } from 'domhandler';
 import type { ModalBehavior, Section, SliderBehavior, TabsBehavior } from '../local-site/types.js';
+import { InstanceStyleSheet } from './instance-styles.js';
 
 export function escapeHtml(text: string): string {
   return text
@@ -28,6 +29,30 @@ function classNameOf($el: Cheerio<Element>): string {
 function blockAttrs(pairs: string[], className: string): string {
   const all = className ? [...pairs, `"className":${attrJson(className)}`] : pairs;
   return all.length ? ` {${all.join(',')}}` : '';
+}
+
+/** className for an element WITH its per-instance inline style folded in: source
+ * classes plus a deterministic `lib-i<hash>` class registered in the sheet when
+ * the element has an inline `style=`. The inline style is NEVER emitted as a
+ * `style=` attr — @wordpress/blocks canonicalization (the fixer) strips inline
+ * style from core blocks (core/heading allows only [class]) and silently drops
+ * the source's per-instance design. The lib-i class + carried stylesheet rule
+ * is fixer-safe and renders identically. */
+function classNameWithInstance($el: Cheerio<Element>, sheet: InstanceStyleSheet): string {
+  const base = classNameOf($el);
+  const instance = sheet.classFor($el.attr('style'));
+  return [base, instance].filter(Boolean).join(' ');
+}
+
+/** Wrap RAW (non-block) inner HTML in a core/html block so it can live inside a
+ * core/group without the fixer deleting it: core/group expects inner BLOCKS, so
+ * raw inline content (kicker span runs, verbatim interactive scaffolding) placed
+ * directly inside the group div is "unexpected content" and gets stripped on a
+ * fixer/editor pass. core/html is freeform — its content survives verbatim and
+ * renders inline on the frontend exactly as authored. Empty inner → '' (an
+ * empty group, nothing to wrap). */
+function htmlBlock(inner: string): string {
+  return inner ? `<!-- wp:html -->\n${inner}\n<!-- /wp:html -->` : '';
 }
 
 const HEADING = /^h([1-6])$/;
@@ -102,38 +127,36 @@ interface ChildResult {
 }
 
 /** Map a single child element to a core block. clean=false when downgraded. */
-function emitChild($: CheerioAPI, el: Element): ChildResult {
+function emitChild($: CheerioAPI, el: Element, sheet: InstanceStyleSheet): ChildResult {
   const tag = el.tagName?.toLowerCase() ?? '';
   const $el = $(el);
 
   // Source inline style is per-instance authority — the owned source overrides
   // class defaults inline (h1.display is a big clamp default, each heading
   // dials it down inline; dropping it makes every heading fall back to the
-  // default and reflow). Carried verbatim on the element; the frontend serves
-  // the saved markup as-is (no canonicalization on this path), so it renders
-  // exactly. Round-trip-validated alongside the rest of the block markup.
-  const inlineStyle = $el.attr('style')?.trim();
-  const stylePart = inlineStyle ? ` style="${escapeHtml(inlineStyle)}"` : '';
+  // default and reflow). It is carried as a lib-i<hash> class + a stylesheet
+  // rule (classNameWithInstance) rather than an inline style= attr, because the
+  // block fixer strips inline style from core blocks; the class is fixer-safe.
 
   const h = HEADING.exec(tag);
   if (h) {
     const level = Number(h[1]);
-    const cls = classNameOf($el);
+    const cls = classNameWithInstance($el, sheet);
     const attrs = blockAttrs(level === 2 ? [] : [`"level":${level}`], cls);
     const htmlCls = ['wp-block-heading', cls].filter(Boolean).join(' ');
     const inner = inlineHtml($, el).trim();
     return {
-      markup: `<!-- wp:heading${attrs} -->\n<h${level} class="${escapeHtml(htmlCls)}"${stylePart}>${inner}</h${level}>\n<!-- /wp:heading -->`,
+      markup: `<!-- wp:heading${attrs} -->\n<h${level} class="${escapeHtml(htmlCls)}">${inner}</h${level}>\n<!-- /wp:heading -->`,
       clean: true,
     };
   }
 
   if (tag === 'p') {
-    const cls = classNameOf($el);
+    const cls = classNameWithInstance($el, sheet);
     const attrs = blockAttrs([], cls);
     const inner = inlineHtml($, el).trim();
     const clsPart = cls ? ` class="${escapeHtml(cls)}"` : '';
-    const open = `<p${clsPart}${stylePart}>`;
+    const open = `<p${clsPart}>`;
     return { markup: `<!-- wp:paragraph${attrs} -->\n${open}${inner}</p>\n<!-- /wp:paragraph -->`, clean: true };
   }
 
@@ -145,7 +168,7 @@ function emitChild($: CheerioAPI, el: Element): ChildResult {
     const href = escapeHtml($el.attr('href') ?? '');
     // Button labels are plain text — no inline markup inside the link.
     const label = escapeHtml($el.text().trim());
-    const cls = classNameOf($el);
+    const cls = classNameWithInstance($el, sheet);
     const buttonAttrs = blockAttrs([], cls);
     const divCls = ['wp-block-button', cls].filter(Boolean).join(' ');
     // Source classes ride on the INNER anchor too: the source styles the
@@ -168,7 +191,7 @@ function emitChild($: CheerioAPI, el: Element): ChildResult {
       .map((_, li) => `<!-- wp:list-item -->\n<li>${inlineHtml($, li).trim()}</li>\n<!-- /wp:list-item -->`)
       .get()
       .join('\n');
-    const cls = classNameOf($el);
+    const cls = classNameWithInstance($el, sheet);
     const orderedPairs = tag === 'ol' ? ['"ordered":true'] : [];
     const listAttrs = blockAttrs(orderedPairs, cls);
     const ulTag = tag === 'ol' ? 'ol' : 'ul';
@@ -265,28 +288,32 @@ function emitChild($: CheerioAPI, el: Element): ChildResult {
     let body: string;
     let clean: boolean;
     if (allInline) {
-      body = inlineHtml($, el).trim();
+      // Inline body rides a core/html INNER block: placed raw inside the group
+      // the fixer would delete it (core/group expects inner BLOCKS); core/html
+      // preserves it verbatim and renders the spans inline (.num/.ph__tag).
+      body = htmlBlock(inlineHtml($, el).trim());
       clean = true;
     } else {
-      const childResults = elementChildren.map((c) => emitChild($, c));
+      const childResults = elementChildren.map((c) => emitChild($, c, sheet));
       const inner = childResults.map((r) => r.markup).filter(Boolean).join('\n');
       const looseText = $el.clone().children().remove().end().text().trim();
       const loosePara = looseText && childResults.length === 0 ? paragraphBlock(escapeHtml(looseText)) : '';
       body = [inner, loosePara].filter(Boolean).join('\n');
       clean = childResults.every((r) => r.clean) && !(looseText && childResults.length > 0);
     }
-    const cls = classNameOf($el);
-    const styleAttr = $el.attr('style')?.trim();
+    // Wrapper inline style (per-element grid/padding the source authored
+    // directly) rides a lib-i<hash> class + stylesheet rule, not a style= attr
+    // the fixer would strip.
+    const cls = classNameWithInstance($el, sheet);
     const wrapPairs = ['"tagName":"div"'];
     if (elId) wrapPairs.unshift(`"anchor":${attrJson(elId)}`);
     const wrapAttrs = blockAttrs(wrapPairs, cls);
     const divCls = ['wp-block-group', cls].filter(Boolean).join(' ');
     const idPart = elId ? ` id="${escapeHtml(elId)}"` : '';
-    const stylePart = styleAttr ? ` style="${escapeHtml(styleAttr)}"` : '';
     return {
       markup:
         `<!-- wp:group ${wrapAttrs} -->\n` +
-        `<div${idPart} class="${escapeHtml(divCls)}"${stylePart}>${body ? `\n${body}\n` : ''}</div>\n` +
+        `<div${idPart} class="${escapeHtml(divCls)}">${body ? `\n${body}\n` : ''}</div>\n` +
         `<!-- /wp:group -->`,
       clean,
     };
@@ -322,6 +349,12 @@ export interface EmitSectionOpts {
    * the SAME verbatim inner — content survival with no plugin dependency, the
    * carried source JS drives the intact DOM. */
   behaviorWrapper?: 'dla' | 'group';
+  /** Shared instance-style sheet (carry path): per-element inline `style=` is
+   * hashed into a `lib-i<hash>` class registered here and emitted as a carried
+   * stylesheet rule, instead of a fixer-invalid inline style attr. Omit and a
+   * local sheet is used (returned on the result; callers that don't carry CSS
+   * discard it). Pass a shared sheet to dedupe rules across sections/pages. */
+  instanceStyles?: InstanceStyleSheet;
 }
 
 /** Fail-closed insurance shared by both verbatim wrappers: an inner HTML
@@ -377,7 +410,11 @@ function verbatimBehaviorMarkup(
   );
 }
 
-export function emitSectionBlocks(section: Section, opts: EmitSectionOpts = {}): { markup: string; confidence: number } {
+export function emitSectionBlocks(
+  section: Section,
+  opts: EmitSectionOpts = {},
+): { markup: string; confidence: number; instanceStyles: InstanceStyleSheet } {
+  const sheet = opts.instanceStyles ?? new InstanceStyleSheet();
   const $ = cheerio.load(section.html);
   // Include 'main' so that segmentPage's main-fallback case (which emits a
   // <main> outerHTML as one Section) resolves its container correctly.
@@ -404,22 +441,26 @@ export function emitSectionBlocks(section: Section, opts: EmitSectionOpts = {}):
     if ((opts.behaviorWrapper ?? 'dla') === 'group') {
       // Carry/default path: SAME verbatim inner, plain core/group wrapper —
       // no directives, no plugin dependency; the carried source JS drives the
-      // intact DOM. The editor sees a group whose inner is not block markup —
-      // same accepted-trade-off class as the native missing-block placeholder.
+      // intact DOM. The verbatim inner rides a core/html INNER block so it
+      // survives the fixer (core/group expects inner BLOCKS — raw scaffolding
+      // placed directly inside the group div is stripped as unexpected content).
       const cls = (section.classes ?? []).join(' ');
       const attrs = blockAttrs([`"anchor":${attrJson(section.id)}`, '"tagName":"section"'], cls);
       const divCls = ['wp-block-group', cls].filter(Boolean).join(' ');
+      const wrapped = htmlBlock(inner);
       return {
         markup:
           `<!-- wp:group${attrs} -->\n` +
-          `<section id="${escapeHtml(section.id)}" class="${escapeHtml(divCls)}">${inner}</section>\n` +
+          `<section id="${escapeHtml(section.id)}" class="${escapeHtml(divCls)}">${wrapped ? `\n${wrapped}\n` : ''}</section>\n` +
           `<!-- /wp:group -->`,
         confidence: 1,
+        instanceStyles: sheet,
       };
     }
     return {
       markup: verbatimBehaviorMarkup(section, section.behavior, inner),
       confidence: 1,
+      instanceStyles: sheet,
     };
   }
 
@@ -432,7 +473,7 @@ export function emitSectionBlocks(section: Section, opts: EmitSectionOpts = {}):
   for (const node of container.contents().get()) {
     if (isTag(node)) {
       total += 1;
-      const res = emitChild($, node);
+      const res = emitChild($, node, sheet);
       if (!res.clean) downgrades += 1;
       childMarkup.push(res.markup);
     } else if (isText(node)) {
@@ -480,7 +521,7 @@ export function emitSectionBlocks(section: Section, opts: EmitSectionOpts = {}):
       ` data-wp-interactive="dla/reveal" data-wp-context='${ctx}'` +
       ` data-wp-init="callbacks.init" data-wp-class--is-visible="context.visible">${inner}</section>\n` +
       `<!-- /wp:dla/reveal -->`;
-    return { markup, confidence };
+    return { markup, confidence, instanceStyles: sheet };
   }
 
   const anchorPair = `"anchor":${attrJson(section.id)}`;
@@ -495,18 +536,17 @@ export function emitSectionBlocks(section: Section, opts: EmitSectionOpts = {}):
   // the attr there is no is-layout-* class and no injected rules; the source
   // stylesheet owns spacing entirely.
   const wrapper = opts.wrapper ?? 'section';
+  // The section's own inline style (owned sources author per-section
+  // padding/grid inline) rides a lib-i<hash> class + carried rule, folded into
+  // the section classes — not a style= attr the fixer would strip.
+  const sectionInstance = sheet.classFor(container.attr('style'));
+  const wrapperCls = [cls, sectionInstance].filter(Boolean).join(' ');
   const wrapperPairs = wrapper === 'section' ? [anchorPair, tagPair] : [anchorPair];
-  const attrs = blockAttrs(wrapperPairs, cls);
-  const divCls = ['wp-block-group', cls].filter(Boolean).join(' ');
-  // The section's own inline style attr survives on the ELEMENT (not as block
-  // attrs) — owned sources author per-section padding/grid inline
-  // (style="padding-top:56px"), and dropping it collapses the vertical rhythm.
-  // Same accepted editor-resave drift as the classless table figure.
-  const sectionStyle = container.attr('style')?.trim();
-  const stylePart = sectionStyle ? ` style="${escapeHtml(sectionStyle)}"` : '';
+  const attrs = blockAttrs(wrapperPairs, wrapperCls);
+  const divCls = ['wp-block-group', wrapperCls].filter(Boolean).join(' ');
   const markup =
     `<!-- wp:group${attrs} -->\n` +
-    `<${wrapper} id="${escapeHtml(section.id)}" class="${escapeHtml(divCls)}"${stylePart}>${inner}</${wrapper}>\n` +
+    `<${wrapper} id="${escapeHtml(section.id)}" class="${escapeHtml(divCls)}">${inner}</${wrapper}>\n` +
     `<!-- /wp:group -->`;
-  return { markup, confidence };
+  return { markup, confidence, instanceStyles: sheet };
 }
