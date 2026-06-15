@@ -11,7 +11,7 @@
 // template, optionally capture the WP replica and score parity.
 //
 import { existsSync, readFileSync, writeFileSync, readdirSync, renameSync, unlinkSync, mkdirSync, copyFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { Handler } from '../handler-types.js';
@@ -33,6 +33,7 @@ import { captureScreenshots } from '../../lib/screenshot/screenshotter.js';
 import { SCREENSHOT_DEVICE_SCALE_FACTOR } from '../../lib/screenshot/types.js';
 import { compareScreenshotDirs } from '../../lib/screenshot/compare.js';
 import { openEditorSession, scoreEditorSurface, type EditorSurfacePage } from '../../lib/preview/editor-preview.js';
+import { ensureStudioSite } from '../../lib/preview/studio-site.js';
 import { InstanceStyleSheet, mergeInstanceStyleCss } from '../../lib/replicate/normalize/instance-styles.js';
 import { composedSidecarPath, instanceStylesPath } from '../../lib/streaming/block-markup-validate.js';
 import { buildLocalFoundation, extractCssColors, type PaletteAgg, type TypographyAgg, type BreakpointsAgg } from '../../lib/replicate/local-theme/foundation.js';
@@ -70,8 +71,36 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
   if (!studioSitePath) return ctx.errorResult('studioSitePath is required');
   if (!outputDir) return ctx.errorResult('outputDir is required');
 
-  const wpRoot = resolveWpRoot(studioSitePath);
-  if (!wpRoot) return ctx.errorResult(`no wp-content found under ${studioSitePath} (or its wordpress/ subdir)`);
+  const warnings: string[] = [];
+
+  // createSite: provision the Studio target itself when absent, so this single
+  // command drives everything (create site -> convert -> theme + live site) —
+  // the local-static-site analog of the /liberate WP-target setup. Idempotent:
+  // an existing site at studioSitePath is reused untouched. Admin creds come
+  // from env (never the tool payload); omitted -> Studio auto-generates them.
+  const createSite = args.createSite === true;
+  let wpRoot = resolveWpRoot(studioSitePath);
+  if (!wpRoot && createSite) {
+    const siteName =
+      (args.siteTitle as string | undefined) ?? (basename(studioSitePath.replace(/\/+$/, '')) || 'Local Site');
+    try {
+      const provisioned = await ensureStudioSite({
+        name: siteName,
+        sitePath: studioSitePath,
+        adminUser: process.env.WP_ADMIN_USER,
+        adminPassword: process.env.WP_ADMIN_PASS,
+      });
+      wpRoot = provisioned.wpRoot;
+      if (provisioned.created) warnings.push(`created Studio site "${siteName}" at ${studioSitePath}`);
+    } catch (err) {
+      return ctx.errorResult(`failed to create Studio site at ${studioSitePath}: ${(err as Error).message}`);
+    }
+  }
+  if (!wpRoot) {
+    return ctx.errorResult(
+      `no wp-content found under ${studioSitePath} (or its wordpress/ subdir) — pass createSite:true to provision a fresh Studio site`,
+    );
+  }
 
   const skipDesign = args.skipDesign === true;
   const skipCompare = args.skipCompare === true;
@@ -93,8 +122,6 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
   // ports per site, so a hardcoded default would capture the WRONG site and
   // report silently bogus parity.
   let wpUrl = (args.wpUrl as string | undefined)?.replace(/\/$/, '');
-
-  const warnings: string[] = [];
 
   // nativeBehaviors replaces carried source JS with Interactivity blocks —
   // both at once would double-drive every behavior (double-init sliders,

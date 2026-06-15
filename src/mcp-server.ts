@@ -682,6 +682,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         properties: {
           dir: { type: 'string', description: 'Absolute path to the local static-site directory.' },
           studioSitePath: { type: 'string', description: 'Studio site path on host (e.g. ~/Studio/my-site — the dir studio site list prints, not wp-root).' },
+          createSite: { type: 'boolean', description: 'Provision the Studio site via `studio site create` when none exists at studioSitePath (idempotent — an existing site is reused). Default false (errors if the site is absent). Admin creds via env WP_ADMIN_USER/WP_ADMIN_PASS; omitted → Studio auto-generates.' },
           outputDir: { type: 'string', description: 'Liberation output dir for sidecars + reports. Defaults to `dir`.' },
           themeSlug: { type: 'string', description: 'Theme slug (kebab-case). Default: local-site-theme.' },
           siteTitle: { type: 'string', description: 'Site title for header/footer. Default: home page <title>.' },
