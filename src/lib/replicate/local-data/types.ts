@@ -118,6 +118,12 @@ export interface DataModel {
   mounts: MountSpec[];
   /** Per-item card render spec (drives the dla/data-card dynamic block). */
   card?: DataCard;
+  /**
+   * Source-JS array identifiers that held the item data (e.g. ['OBJETS']).
+   * Their `.find(x => x.id === …)` lookups are rebound to the WP data islands
+   * so the kept modal/interaction JS reads WordPress-driven data.
+   */
+  sourceArrays?: string[];
   /** Schema version so persisted data-model.json invalidates on shape change. */
   schema: number;
 }

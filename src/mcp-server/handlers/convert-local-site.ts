@@ -34,6 +34,12 @@ import { SCREENSHOT_DEVICE_SCALE_FACTOR } from '../../lib/screenshot/types.js';
 import { compareScreenshotDirs } from '../../lib/screenshot/compare.js';
 import { openEditorSession, scoreEditorSurface, type EditorSurfacePage } from '../../lib/preview/editor-preview.js';
 import { ensureStudioSite } from '../../lib/preview/studio-site.js';
+import type { DataModel } from '../../lib/replicate/local-data/types.js';
+import { installLocalData } from '../../lib/replicate/local-data/data-install.js';
+import { injectQueryLoops } from '../../lib/replicate/local-data/inject-query-loops.js';
+import { buildQueryLoop } from '../../lib/replicate/local-data/query-loop.js';
+import { neutralizeDataMounts } from '../../lib/replicate/local-data/neutralize-mounts.js';
+import { rebindArrayLookups, DLA_ITEM_HELPER_JS } from '../../lib/replicate/local-data/modal-rebind.js';
 import { InstanceStyleSheet, mergeInstanceStyleCss } from '../../lib/replicate/normalize/instance-styles.js';
 import { composedSidecarPath, instanceStylesPath } from '../../lib/streaming/block-markup-validate.js';
 import { buildLocalFoundation, extractCssColors, type PaletteAgg, type TypographyAgg, type BreakpointsAgg } from '../../lib/replicate/local-theme/foundation.js';
@@ -131,6 +137,28 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
     warnings.push('nativeBehaviors forces carryJs off (carried source JS would double-drive block behaviors)');
   }
   const carryJs = nativeBehaviors ? false : args.carryJs !== false;
+
+  // WordPress-driven data path: when a data-model.json is present (authored by
+  // the model-local-data skill), the source's JS-mounted card grids become a
+  // real CPT + native query loops while the styling/animation/modal JS stays.
+  // Gate is the file's presence; pass dataModel:false to force it off.
+  let dataModel: DataModel | undefined;
+  if (args.dataModel !== false) {
+    for (const p of [join(outputDir, 'data-model.json'), join(dir, 'data-model.json')]) {
+      if (!existsSync(p)) continue;
+      try {
+        const m = JSON.parse(readFileSync(p, 'utf8')) as DataModel;
+        if (m && m.cpt?.slug && Array.isArray(m.mounts)) {
+          dataModel = m;
+        } else {
+          warnings.push(`data-model.json at ${p} is missing cpt/mounts — ignored`);
+        }
+      } catch (err) {
+        warnings.push(`data-model.json parse failed (${p}): ${(err as Error).message}`);
+      }
+      break;
+    }
+  }
 
   // Stage 1a: ingest + compose sidecars + normalize-report (reuse the handler
   // verbatim; nativeBehaviors makes it tag sidecar sections with dla/reveal).
@@ -278,12 +306,24 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
       const cssWithFonts = localizedFontCss
         ? assets.css.replace(WP_COMPAT_CSS, WP_COMPAT_CSS + localizedFontCss + '\n\n')
         : assets.css;
+      // The carried JS is OURS to adapt at build time: internal page refs
+      // in quoted literals ({ href:'shop.html' } nav arrays) become /slug/
+      // permalinks ONCE, in the bundle — this is a WordPress site now.
+      let carriedJs = carryJs ? rewriteInternalLinksInJs(assets.js, site.pages) : '';
+      // WordPress-driven data: the grids are now server-rendered query loops, so
+      // drop the JS data-mount calls and rebind the source array lookups (the
+      // modal) onto the per-card DOM data islands; keep everything else.
+      if (carriedJs && dataModel) {
+        const neutralized = neutralizeDataMounts(carriedJs, dataModel.mounts.map((m) => m.selector));
+        const rebound = rebindArrayLookups(neutralized.js, dataModel.sourceArrays ?? []);
+        carriedJs = `${rebound.js}\n${DLA_ITEM_HELPER_JS}\n`;
+        warnings.push(
+          `data: neutralized ${neutralized.removed} mount call(s), rebound ${rebound.rewritten} lookup(s)`,
+        );
+      }
       carrySourceAssets = {
         css: carryCss ? cssWithFonts : '',
-        // The carried JS is OURS to adapt at build time: internal page refs
-        // in quoted literals ({ href:'shop.html' } nav arrays) become /slug/
-        // permalinks ONCE, in the bundle — this is a WordPress site now.
-        js: carryJs ? rewriteInternalLinksInJs(assets.js, site.pages) : '',
+        js: carriedJs,
       };
       // Carry the CSS-referenced images (background url()s the carried css now
       // points at as media/<name>) into the on-disk theme dir so assetSourceDir
@@ -387,15 +427,29 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
   // instance-styles.css) with the chrome rules just collected. Only when CSS is
   // carried — the rules refine the carried source stylesheet. Empty → undefined
   // (no asset, no enqueue).
+  // Query-loop li-flatten rules so the carried grid CSS + client-side filter
+  // keep binding to .obj-card through the post-template <li> wrappers. Depends
+  // only on the mount ids, so it's computed independent of injection.
+  const dataCss = dataModel
+    ? dataModel.mounts
+        .map((m) => buildQueryLoop(m).css)
+        .filter(Boolean)
+        .join('\n')
+    : '';
   let instanceStylesCss: string | undefined;
-  if (carriedCss) {
-    let bodyInstanceCss = '';
-    try {
-      bodyInstanceCss = readFileSync(instanceStylesPath(outputDir), 'utf8');
-    } catch {
-      /* no body instance styles (none carried) */
+  {
+    const chunks: string[] = [];
+    if (carriedCss) {
+      let bodyInstanceCss = '';
+      try {
+        bodyInstanceCss = readFileSync(instanceStylesPath(outputDir), 'utf8');
+      } catch {
+        /* no body instance styles (none carried) */
+      }
+      chunks.push(bodyInstanceCss, chromeInstanceStyles.toCss());
     }
-    const merged = mergeInstanceStyleCss(bodyInstanceCss, chromeInstanceStyles.toCss());
+    if (dataCss) chunks.push(dataCss);
+    const merged = mergeInstanceStyleCss(...chunks);
     instanceStylesCss = merged.length > 0 ? merged : undefined;
   }
 
@@ -508,6 +562,21 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
       warnings.push(`cache flush failed (${wpArgs.slice(0, 2).join(' ')}): ${(err as Error).message}`);
     }
   }
+  // WordPress-driven data: write the CPT + data-card mu-plugins and insert the
+  // taxonomy terms + content items (idempotent by _dla_item_id) BEFORE pages so
+  // the query loops have posts to render. Failures are non-fatal (the page still
+  // installs; the loop just renders empty).
+  if (dataModel) {
+    try {
+      const di = await installLocalData({ model: dataModel, studioSitePath, wpRoot });
+      warnings.push(
+        `data: ${di.inserted} inserted, ${di.updated} updated, ${di.terms} term(s); mu-plugins ${di.muPlugins.join(', ')}`,
+      );
+    } catch (err) {
+      warnings.push(`data install failed: ${(err as Error).message}`);
+    }
+  }
+
   // Pages from sidecars (installPost is idempotent via _source_url meta).
   const plan = buildPagePlan(site, outputDir);
   const emptySidecars = plan.items.filter((i) => !i.content.trim()).map((i) => i.slug);
@@ -515,7 +584,16 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
   const failedInstalls: Array<{ slug: string; error: string }> = [];
   for (const item of plan.items) {
     try {
-      const res = await installPost({ item, outputDir, studioSitePath });
+      // Splice query loops into the page where empty JS-mounts were.
+      let contentOverride: string | undefined;
+      if (dataModel) {
+        const inj = injectQueryLoops(item.content, dataModel.mounts);
+        if (inj.injected.length > 0) {
+          contentOverride = inj.markup;
+          warnings.push(`data: ${item.slug} → query loop(s) for ${inj.injected.join(', ')}`);
+        }
+      }
+      const res = await installPost({ item, outputDir, studioSitePath, contentOverride });
       if (!res || res.action === 'error') {
         failedInstalls.push({ slug: item.slug, error: res?.error ?? 'unsupported item' });
       } else {
