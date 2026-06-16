@@ -34,6 +34,7 @@ import {
   type LocalFontFace,
 } from './font-capture.js';
 import { assertNoInjection } from './validate-artifacts.js';
+import { buildThemeHeader, registerThemeBlocksPhp, slugify } from './theme-php.js';
 
 export interface ThemeScaffoldOpts {
   /** Required — the parsed design-foundation.json. */
@@ -338,21 +339,20 @@ function buildStyleCss(args: { themeName: string; themeSlug: string; themeDescri
   // Self-hosted source fonts (captured @font-face rules → local assets/fonts/).
   const fontFaceCss = buildFontFaceCss(args.capturedFonts ?? []);
   // Standard WordPress theme header; required keys: Theme Name, Version, Text Domain.
-  return `/*
-Theme Name: ${args.themeName}
-Theme URI: https://github.com/Automattic/data-liberation-agent
-Author: data-liberation
-Description: ${args.themeDescription}
-Version: 0.1.0
-Requires at least: 6.5
-Tested up to: 6.5
-Requires PHP: 8.0
-License: GPL-2.0-or-later
-License URI: https://www.gnu.org/licenses/gpl-2.0.html
-Text Domain: ${args.themeSlug}
-Tags: block-theme, full-site-editing
-*/
-
+  return buildThemeHeader([
+    ['Theme Name', args.themeName],
+    ['Theme URI', 'https://github.com/Automattic/data-liberation-agent'],
+    ['Author', 'data-liberation'],
+    ['Description', args.themeDescription],
+    ['Version', '0.1.0'],
+    ['Requires at least', '6.5'],
+    ['Tested up to', '6.5'],
+    ['Requires PHP', '8.0'],
+    ['License', 'GPL-2.0-or-later'],
+    ['License URI', 'https://www.gnu.org/licenses/gpl-2.0.html'],
+    ['Text Domain', args.themeSlug],
+    ['Tags', 'block-theme, full-site-editing'],
+  ]) + `
 /*
  * Responsive-content guard. Imported page/post content (carried from the
  * source platform — Shopify/Replo, Wix, Squarespace, etc.) frequently ships its
@@ -778,10 +778,6 @@ function buildFontFamilies(
   return out;
 }
 
-function slugify(s: string): string {
-  return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-}
-
 /** Slug of the body family entry (first entry conventionally has slug "body"). */
 function bodyFamilySlug(fams: FontFamilyEntry[]): string {
   const body = fams.find((e) => e.slug === 'body');
@@ -965,13 +961,7 @@ add_action('wp_enqueue_scripts', function () {
  * build/ since the streaming flow has no wp-scripts step. Skipped
  * silently when the directory is empty.
  */
-add_action('init', function () {
-    foreach ((array) glob(get_theme_file_path('blocks/*/build')) as $build_dir) {
-        if ($build_dir && file_exists(trailingslashit($build_dir) . 'block.json')) {
-            register_block_type($build_dir);
-        }
-    }
-});
+${registerThemeBlocksPhp()}
 `;
 }
 
