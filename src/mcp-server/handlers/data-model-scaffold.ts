@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
-import { join, extname } from 'node:path';
+import { join, extname, normalize, isAbsolute, relative, resolve } from 'node:path';
 import * as cheerio from 'cheerio';
 import type { Handler } from '../handler-types.js';
 import { scaffoldDataModel } from '../../lib/replicate/local-data/scaffold-model.js';
@@ -38,6 +38,35 @@ function extractInlineScripts(htmlFiles: Array<{ name: string; text: string }>):
   return scripts;
 }
 
+/** Resolve a card href to a local page's HTML within `dir`. Guards path escape + unreadable files. */
+function makeResolvePage(dir: string): (href: string) => string | null {
+  return (href: string): string | null => {
+    if (!href || /^(https?:|mailto:|tel:|#|javascript:)/i.test(href)) return null;
+    const clean = decodeURIComponent(href.split(/[?#]/)[0]);
+    if (!clean || isAbsolute(clean)) return null;
+    const normalizedDir = normalize(resolve(dir));
+    const resolved = normalize(join(normalizedDir, clean));
+    if (!resolved.startsWith(normalizedDir)) return null;
+    const insideDir = relative(normalizedDir, resolved);
+    if (insideDir.startsWith('..') || isAbsolute(insideDir)) return null;
+    if (!/\.html?$/i.test(resolved)) return null;
+    try {
+      return existsSync(resolved) ? readFileSync(resolved, 'utf8') : null;
+    } catch {
+      return null;
+    }
+  };
+}
+
+function promoteHtmlCardResolvedContent(result: ReturnType<typeof scaffoldDataModel>): ReturnType<typeof scaffoldDataModel> {
+  if (result.discovered.source !== 'html-cards') return result;
+  for (const item of result.model.items) {
+    const resolvedContent = item.meta.content;
+    if (typeof resolvedContent === 'string' && resolvedContent.trim()) item.content = resolvedContent;
+  }
+  return result;
+}
+
 export const dataModelScaffoldHandler: Handler = async (args, ctx) => {
   const dir = args.dir as string | undefined;
   const outputDir = (args.outputDir as string | undefined) ?? dir;
@@ -59,13 +88,19 @@ export const dataModelScaffoldHandler: Handler = async (args, ctx) => {
       goodJs.push(file.text);
     }
 
-    const result = scaffoldDataModel({ html, js: [...goodJs, ...inlineJs].join('\n'), skippedFiles });
+    const result = promoteHtmlCardResolvedContent(scaffoldDataModel({
+      html,
+      js: [...goodJs, ...inlineJs].join('\n'),
+      skippedFiles,
+      resolvePage: makeResolvePage(dir),
+    }));
     mkdirSync(outputDir, { recursive: true });
     writeFileSync(join(outputDir, 'data-model.draft.json'), JSON.stringify(result.model, null, 2), 'utf8');
     console.error(`[data-model] ${JSON.stringify({
       tool: 'scaffold',
       dir,
       ok: true,
+      source: result.discovered.source,
       items: result.model.items.length,
       todos: result.skillTodos.length,
       arrays: result.discovered.arrays,
