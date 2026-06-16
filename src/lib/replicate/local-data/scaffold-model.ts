@@ -18,6 +18,7 @@ import { syntheticCardAnchor } from './synthetic-anchor.js';
 
 export interface ScaffoldInput {
   html: string;
+  htmlFiles?: Array<{ name: string; text: string }>;
   js: string;
   skippedFiles?: string[];
   /** Resolve a card link href → linked local page HTML (handler-injected). */
@@ -34,7 +35,7 @@ const scalar = (value: unknown): value is string | number | boolean => ['string'
 const NEWEST_STYLE_SIGNALS = ['newest', 'recent', 'latest'];
 
 type BaseDiscovered = Omit<ScaffoldResult['discovered'], 'source'>;
-type BuildMount = DiscoveredMount & Pick<MountSpec, 'sourceSelector'>;
+type BuildMount = DiscoveredMount & Pick<MountSpec, 'sourceSelector' | 'sourcePage'>;
 
 interface BuildModelFromRecordsOpts {
   records: Array<Record<string, unknown>>;
@@ -83,13 +84,26 @@ export function scaffoldDataModel(input: ScaffoldInput): ScaffoldResult {
     });
   }
 
-  const grids = discoverHtmlCards(input.html, { resolvePage: input.resolvePage });
-  const usableGrids = grids.filter((grid) => grid.records.length >= 1);
+  const discoveredGrids = input.htmlFiles?.length
+    ? input.htmlFiles.flatMap((file) =>
+        discoverHtmlCards(file.text, { resolvePage: input.resolvePage }).map((grid, gi) => ({
+          grid,
+          disambiguator: `${file.name}:${gi}`,
+          sourcePage: file.name,
+        }))
+      )
+    : discoverHtmlCards(input.html, { resolvePage: input.resolvePage }).map((grid, i) => ({
+        grid,
+        disambiguator: String(i),
+        sourcePage: undefined,
+      }));
+  const usableGrids = discoveredGrids.filter(({ grid }) => grid.records.length >= 1);
   if (usableGrids.length > 0) {
-    const records = usableGrids.flatMap((grid) => grid.records);
-    const cardMounts: BuildMount[] = usableGrids.map((grid, i) => ({
-      selector: `#${syntheticCardAnchor(grid.containerSelector, String(i))}`,
+    const records = usableGrids.flatMap(({ grid }) => grid.records);
+    const cardMounts: BuildMount[] = usableGrids.map(({ grid, disambiguator, sourcePage }) => ({
+      selector: `#${syntheticCardAnchor(grid.containerSelector, disambiguator)}`,
       sourceSelector: grid.containerSelector,
+      ...(sourcePage ? { sourcePage } : {}),
       sourceCall: `html-cards:${grid.containerSelector}`,
       perPageHint: undefined,
       confidence: 'high',
@@ -102,10 +116,10 @@ export function scaffoldDataModel(input: ScaffoldInput): ScaffoldResult {
       idLookupNames: [],
       source: 'html-cards',
       cardTemplateTodoEvidence: undefined,
-      deterministicCard: usableGrids[0].cardTemplate,
+      deterministicCard: usableGrids[0].grid.cardTemplate,
       discovered: {
         ...discovered,
-        unmatchedContainers: grids.filter((grid) => grid.records.length === 0).map((grid) => grid.containerSelector),
+        unmatchedContainers: discoveredGrids.filter(({ grid }) => grid.records.length === 0).map(({ grid }) => grid.containerSelector),
       },
       todos,
     });
@@ -190,6 +204,7 @@ function buildModelFromRecords(opts: BuildModelFromRecordsOpts): ScaffoldResult 
       query: { postType: cptSlug, perPage, orderBy: 'date', order: orderDecision.order },
       wrapperClass: mount.wrapperClass,
       ...(mount.sourceSelector ? { sourceSelector: mount.sourceSelector } : {}),
+      ...(mount.sourcePage ? { sourcePage: mount.sourcePage } : {}),
     });
   }
 

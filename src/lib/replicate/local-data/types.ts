@@ -104,6 +104,8 @@ export interface MountSpec {
    * for the JS-mount path (whose `selector` is already the source #id).
    */
   sourceSelector?: string;
+  /** Static-HTML-card path only: source HTML filename used to scope neutralization per page. */
+  sourcePage?: string;
 }
 
 /**

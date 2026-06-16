@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync
 import { join } from 'node:path';
 import { ingestLocalSiteHandler } from './ingest-local-site.js';
 import type { HandlerContext, ToolResult } from '../handler-types.js';
+import type { MountSpec } from '../../lib/replicate/local-data/types.js';
 
 // Per-page isolation: composePage has no externally-triggerable failure path
 // via html input today (it only throws on roundtrip failure / compose misfit),
@@ -100,6 +101,49 @@ describe('ingestLocalSiteHandler', () => {
       };
       expect(report.failedPages).toEqual([]);
       expect(report.emptyPages).toEqual([]);
+    } finally {
+      rmSync(siteDir, { recursive: true, force: true });
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
+  it('filters static-card mounts to their source page before neutralizing', async () => {
+    mkdirSync(FIXTURE_TMP, { recursive: true });
+    const siteDir = mkdtempSync(join(FIXTURE_TMP, 'site-card-scope-'));
+    const outDir = mkdtempSync(join(FIXTURE_TMP, 'out-card-scope-'));
+    const mount: MountSpec = {
+      selector: '#dla-cards-index',
+      sourceSelector: '.ledger-grid',
+      sourcePage: 'index.html',
+      sourceCall: 'html-cards:.ledger-grid',
+      query: { postType: 'post', perPage: -1, orderBy: 'date', order: 'ASC' },
+    };
+    writeFileSync(
+      join(siteDir, 'index.html'),
+      '<body><main><section><h1>Journal</h1><div class="ledger-grid">' +
+        '<article><h2><a href="p1.html">Alpha</a></h2><p>Alpha card text long enough.</p></article>' +
+        '<article><h2><a href="p2.html">Beta</a></h2><p>Beta card text long enough.</p></article>' +
+        '<article><h2><a href="p3.html">Gamma</a></h2><p>Gamma card text long enough.</p></article>' +
+        '</div></section></main></body>',
+    );
+    writeFileSync(
+      join(siteDir, 'about.html'),
+      '<body><main><section><h1>About</h1><div class="ledger-grid">' +
+        '<article><h2>Mission</h2><p>Studio mission text that should remain prose.</p></article>' +
+        '<article><h2>Process</h2><p>Studio process text that should remain prose.</p></article>' +
+        '<article><h2>Team</h2><p>Studio team text that should remain prose.</p></article>' +
+        '</div></section></main></body>',
+    );
+    try {
+      const res = await ingestLocalSiteHandler({ dir: siteDir, outputDir: outDir, cardMounts: [mount] }, ctx);
+      expect(res.isError).toBeFalsy();
+      const homeSidecar = readFileSync(join(outDir, 'composed', 'home.blocks.html'), 'utf8');
+      const aboutSidecar = readFileSync(join(outDir, 'composed', 'about.blocks.html'), 'utf8');
+      expect(homeSidecar).toContain('id="dla-cards-index"');
+      expect(aboutSidecar).not.toContain('id="dla-cards-index"');
+      expect(aboutSidecar).toContain('Mission');
+      expect(aboutSidecar).toContain('Process');
+      expect(aboutSidecar).toContain('Team');
     } finally {
       rmSync(siteDir, { recursive: true, force: true });
       rmSync(outDir, { recursive: true, force: true });

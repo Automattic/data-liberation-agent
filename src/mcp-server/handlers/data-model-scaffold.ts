@@ -81,6 +81,7 @@ export const dataModelScaffoldHandler: Handler = async (args, ctx) => {
 
     const result = scaffoldDataModel({
       html,
+      htmlFiles,
       js: [...goodJs, ...inlineJs].join('\n'),
       skippedFiles,
       resolvePage: makeResolvePage(dir),
