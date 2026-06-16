@@ -18,8 +18,12 @@ The single front door for the **owned local-source** path: a directory of HTML/C
 │
 ├─ resolve inputs: source dir · site name · theme slug · Studio site path · output dir
 │
+├─ if JS-data path: start these together, then wait for both:
+│     ├─ background provision: studio site create --path <studioSitePath> --start --skip-browser --skip-log-details
+│     └─ model-local-data subagent → <outputDir>/data-model.json
+│
 └─ liberate_convert_local_site({ dir, studioSitePath, createSite:true, … })  ── one command, drives everything:
-      1 createSite      studio site create (fresh WP+SQLite, started)  — skipped if the site already exists (idempotent)
+      1 createSite      studio site create (fresh WP+SQLite, started)  — skipped if the site already exists or was already provisioned (idempotent)
       2 ingest          source HTML → native block sidecars (roundtrip-validated) + per-instance lib-i styles
       3 block-fixer     canonicalize each page through @wordpress/blocks (editor-valid markup)
       4 design capture  serve source over HTTP → palette/typography/breakpoints + self-host Google fonts
@@ -50,9 +54,17 @@ Ask for the **source directory** if not given. Then derive (let the operator ove
 If the source renders its main content from **JavaScript data** (an empty `<div id="…">` filled at runtime by a mount call over an in-file array, e.g. a catalog/listing/gallery) rather than static HTML, those grids would be **empty in the block editor** on a straight carry. In that case, first produce the data model:
 
 - Dispatch the **`model-local-data`** skill via a subagent (so the nested skill runs to completion without interrupting this workflow), pointing it at the source dir + output dir. It reads the source JS and writes `<outputDir>/data-model.json` (a CPT + taxonomy + native query loops + a faithful card render).
-- When that file exists, the convert step below **auto-activates** the data path: it registers the CPT, inserts the items, replaces the empty mounts with `core/query` loops (editable/analyzable in the editor), and neutralizes the JS data-mounts + rebinds the modal to per-card DOM islands — while keeping styling/animation/filter JS.
+- At the same time, start Studio provisioning in the background:
 
-Skip this step when the content is static HTML (no JS data array). Pass `dataModel: false` to the convert call to force the data path off even if a model file is present.
+  ```
+  studio site create --path <studioSitePath> --start --skip-browser --skip-log-details
+  ```
+
+  Start this right after resolving inputs and dispatching the data-model fill. Wait for BOTH the background provisioning command and the `model-local-data` subagent to finish before Step 1.
+- When that file exists, the convert step below **auto-activates** the data path: it registers the CPT, inserts the items, replaces the empty mounts with `core/query` loops (editable/analyzable in the editor), and neutralizes the JS data-mounts + rebinds the modal to per-card DOM islands — while keeping styling/animation/filter JS.
+- Step 1 still calls `liberate_convert_local_site` with `createSite: true`. The convert handler is idempotent, so it reuses the already-provisioned site and skips re-provisioning; behavior is unchanged, only the orchestration order and wall-clock time change.
+
+Skip this step when the content is static HTML (no JS data array). There is no AI fill to overlap, so do not pre-provision; let Step 1 provision the site as it does today. Pass `dataModel: false` to the convert call to force the data path off even if a model file is present.
 
 ### Step 1 — Convert (one command)
 
@@ -107,3 +119,5 @@ To start completely fresh, point at a new `studioSitePath` (or delete the old si
 - This path needs **Studio installed** and the `studio` CLI on PATH (`studio site create` provisions WP + SQLite and starts the site on a Studio-assigned port; the convert auto-resolves the live URL via `wp option get siteurl`).
 - The source is trusted (owned). There is no platform adapter, no network extraction, no products path — it's structure + design carry.
 - The theme is a real block theme: pages are block-editable, the carried CSS is the design authority, and per-instance source styles ride fixer-safe `lib-i` classes (so editor saves don't drop them). Carried CSS is also loaded into the editor canvas (`add_editor_style`).
+- Measured timing: a fresh convert with provisioning took about 3m36s, while reusing an already-provisioned site took about 2m. On the JS-data path, overlapping the background `studio site create` with the model fill hides roughly 1.5m of fixed provisioning cost.
+- Deeper overlap of ingest or design capture would require splitting the convert handler. Keep this workflow to the provisioning overlap unless that handler split exists.
