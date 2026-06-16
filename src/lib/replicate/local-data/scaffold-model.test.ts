@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { scaffoldDataModel } from './scaffold-model.js';
+import { discoverHtmlCards } from './discover-html-cards.js'; // ensure import resolves in test scope if needed
 
 const HTML = `<main><div class="obj-grid obj-grid--4" id="newestGrid"></div></main>`;
 const JS = `
@@ -141,5 +142,52 @@ describe('scaffoldDataModel', () => {
     expect(result.model.mounts.map((mount) => mount.selector).sort()).toEqual(['#archiveGrid', '#featuredGrid', '#marketGrid']);
     expect(result.discovered.unmatchedContainers?.sort()).toEqual(['#emptyFilterSlot', '#emptyFooterSlot', '#emptyModalSlot', '#emptyPromoSlot']);
     expect(result.discovered.arrays.map((array) => array.name)).toEqual(expect.arrayContaining(['OBJET_CATS', 'OBJETS', 'NAV']));
+  });
+});
+
+const CARD_HTML = `
+<main>
+  <div class="cluster">
+    <article class="tile"><div class="thumb"><img src="a.png"></div>
+      <div class="meat"><a class="kicker" href="cat-news.html">News</a>
+      <h3><a href="p1.html">Alpha</a></h3><p>Body alpha here, long enough.</p><time>Jan 1, 2024</time></div></article>
+    <article class="tile"><div class="thumb"><img src="b.png"></div>
+      <div class="meat"><a class="kicker" href="cat-news.html">News</a>
+      <h3><a href="p2.html">Beta</a></h3><p>Body beta here, long enough.</p><time>Jan 2, 2024</time></div></article>
+    <article class="tile"><div class="thumb"><img src="c.png"></div>
+      <div class="meat"><a class="kicker" href="cat-reviews.html">Reviews</a>
+      <h3><a href="p3.html">Gamma</a></h3><p>Body gamma here, long enough.</p><time>Jan 3, 2024</time></div></article>
+  </div>
+</main>`;
+
+describe('scaffoldDataModel — records-source chain', () => {
+  it('reports source=js-array and ignores HTML cards when a JS array exists', () => {
+    const js = `const ITEMS=[{id:'a',title:'A',cat:'x'},{id:'b',title:'B',cat:'y'}]; mountGrid('#grid', ITEMS);`;
+    const r = scaffoldDataModel({ html: `<div id="grid"></div>${CARD_HTML}`, js });
+    expect(r.discovered.source).toBe('js-array');
+    expect(r.model.items).toHaveLength(2); // the JS records, not the 3 cards
+  });
+
+  it('falls back to HTML cards (core post + native category) when no JS array exists', () => {
+    const r = scaffoldDataModel({ html: CARD_HTML, js: '' });
+    expect(r.discovered.source).toBe('html-cards');
+    expect(r.model.items).toHaveLength(3);
+    expect(r.model.items.map((i) => i.title)).toEqual(['Alpha', 'Beta', 'Gamma']);
+    // core post + native category (DECISION 3)
+    expect(r.model.cpt.slug).toBe('post');
+    expect(r.model.taxonomy.slug).toBe('category');
+    expect(r.model.taxonomy.terms.map((t) => t.slug).sort()).toEqual(['news', 'reviews']);
+    // mounts carry the original container selector + a synthetic #id (DECISION 1)
+    expect(r.model.mounts[0].selector).toMatch(/^#dla-cards-/);
+    expect(r.model.mounts[0].sourceSelector).toBeTruthy();
+    // deterministic template means NO card.template todo
+    expect(r.skillTodos.some((t) => t.path === 'card.template')).toBe(false);
+    expect(r.model.card?.template).toContain('data-dla-text');
+  });
+
+  it('reports source=none when neither yields records', () => {
+    const r = scaffoldDataModel({ html: '<main><p>just prose</p></main>', js: '' });
+    expect(r.discovered.source).toBe('none');
+    expect(r.model.items).toHaveLength(0);
   });
 });

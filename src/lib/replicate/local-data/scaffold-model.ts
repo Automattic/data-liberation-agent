@@ -1,6 +1,7 @@
 import { runInNewContext } from 'node:vm';
 import { DATA_MODEL_SCHEMA, type DataModel, type DataItem, type MountSpec } from './types.js';
 import { validateDataModel } from './validate-model.js';
+import { discoverHtmlCards } from './discover-html-cards.js';
 import {
   discoverDataArrays,
   discoverIdLookups,
@@ -13,11 +14,14 @@ import {
 } from './discover-js-data.js';
 import { inferFields } from './infer-fields.js';
 import type { DiscoveredArrayInfo, ScaffoldResult, ScaffoldTodo } from './scaffold-types.js';
+import { syntheticCardAnchor } from './synthetic-anchor.js';
 
 export interface ScaffoldInput {
   html: string;
   js: string;
   skippedFiles?: string[];
+  /** Resolve a card link href → linked local page HTML (handler-injected). */
+  resolvePage?: (href: string) => string | null;
 }
 
 const MAX_FALLBACK_ARRAY_CHARS = 200_000;
@@ -28,6 +32,22 @@ const singular = (value: string): string => value.replace(/s$/i, '');
 const titleCase = (value: string): string => value.replace(/[-_]+/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase()).trim();
 const scalar = (value: unknown): value is string | number | boolean => ['string', 'number', 'boolean'].includes(typeof value);
 const NEWEST_STYLE_SIGNALS = ['newest', 'recent', 'latest'];
+
+type BaseDiscovered = Omit<ScaffoldResult['discovered'], 'source'>;
+type BuildMount = DiscoveredMount & Pick<MountSpec, 'sourceSelector'>;
+
+interface BuildModelFromRecordsOpts {
+  records: Array<Record<string, unknown>>;
+  typeName?: string;
+  coreType?: 'post';
+  mounts: BuildMount[];
+  idLookupNames: string[];
+  source: Extract<ScaffoldResult['discovered']['source'], 'js-array' | 'html-cards'>;
+  cardTemplateTodoEvidence?: string;
+  deterministicCard?: string;
+  discovered: BaseDiscovered;
+  todos: ScaffoldTodo[];
+}
 
 export function scaffoldDataModel(input: ScaffoldInput): ScaffoldResult {
   const todos: ScaffoldTodo[] = [];
@@ -49,20 +69,64 @@ export function scaffoldDataModel(input: ScaffoldInput): ScaffoldResult {
   };
   const primary = choosePrimaryArray(arrays, idLookupNames, discoveredMounts);
 
-  if (!primary?.records) {
-    const empty = emptyModel();
-    todos.push({
-      path: 'items',
-      instruction: 'No static data array literal was found (data may be fetched or built procedurally). Author items[] and the model by hand from the source.',
-      evidence: arrays[0]?.evidence ?? '(no array-like declarations found)',
+  if (primary?.records) {
+    return buildModelFromRecords({
+      records: primary.records,
+      typeName: primary.name,
+      mounts: discoveredMounts,
+      idLookupNames,
+      source: 'js-array',
+      cardTemplateTodoEvidence: extractCardFn(input.js),
+      deterministicCard: undefined,
+      discovered,
+      todos,
     });
-    return { model: empty, skillTodos: todos, discovered, validation: validateDataModel(empty) };
   }
 
-  const records = primary.records;
+  const grids = discoverHtmlCards(input.html, { resolvePage: input.resolvePage });
+  const usableGrids = grids.filter((grid) => grid.records.length >= 1);
+  if (usableGrids.length > 0) {
+    const records = usableGrids.flatMap((grid) => grid.records);
+    const cardMounts: BuildMount[] = usableGrids.map((grid, i) => ({
+      selector: `#${syntheticCardAnchor(grid.containerSelector, String(i))}`,
+      sourceSelector: grid.containerSelector,
+      sourceCall: `html-cards:${grid.containerSelector}`,
+      perPageHint: undefined,
+      confidence: 'high',
+      evidence: grid.evidence,
+    }));
+    return buildModelFromRecords({
+      records,
+      coreType: 'post',
+      mounts: cardMounts,
+      idLookupNames: [],
+      source: 'html-cards',
+      cardTemplateTodoEvidence: undefined,
+      deterministicCard: usableGrids[0].cardTemplate,
+      discovered: {
+        ...discovered,
+        unmatchedContainers: grids.filter((grid) => grid.records.length === 0).map((grid) => grid.containerSelector),
+      },
+      todos,
+    });
+  }
+
+  const empty = emptyModel();
+  todos.push({
+    path: 'items',
+    instruction: 'No static data array literal and no repeated content-card grid were found. Author items[] and the model by hand from the source.',
+    evidence: arrays[0]?.evidence ?? '(no array-like declarations or card grids found)',
+  });
+  return { model: empty, skillTodos: todos, discovered: { ...discovered, source: 'none' }, validation: validateDataModel(empty) };
+}
+
+function buildModelFromRecords(opts: BuildModelFromRecordsOpts): ScaffoldResult {
+  const { records, todos } = opts;
   const inferred = inferFields(records);
-  const typeNoun = singular(primary.name === '(anonymous)' ? 'item' : primary.name).toLowerCase();
-  const cptSlug = slugify(typeNoun) || 'item';
+  const corePost = opts.coreType === 'post';
+  const sourceName = opts.typeName ?? 'item';
+  const typeNoun = singular(sourceName === '(anonymous)' ? 'item' : sourceName).toLowerCase();
+  const cptSlug = corePost ? 'post' : slugify(typeNoun) || 'item';
 
   const termSet = new Map<string, string>();
   if (inferred.termKey) {
@@ -101,7 +165,7 @@ export function scaffoldDataModel(input: ScaffoldInput): ScaffoldResult {
   });
 
   const mounts: MountSpec[] = [];
-  for (const mount of discoveredMounts) {
+  for (const mount of opts.mounts) {
     if (mount.confidence !== 'high' || !mount.sourceCall) continue;
     const index = mounts.length;
     const perPage = mount.perPageHint ?? -1;
@@ -118,14 +182,17 @@ export function scaffoldDataModel(input: ScaffoldInput): ScaffoldResult {
       sourceCall: mount.sourceCall,
       query: { postType: cptSlug, perPage, orderBy: 'date', order: orderDecision.order },
       wrapperClass: mount.wrapperClass,
+      ...(mount.sourceSelector ? { sourceSelector: mount.sourceSelector } : {}),
     });
   }
 
-  todos.unshift({
-    path: 'card.template',
-    instruction: 'Author card.template: rewrite the source per-item card function into a single-root skeleton with data-dla-* bindings (data-dla-text/attr/class/if), preserving the source classes. Reference: id, title, content, cat.slug, cat.label, meta.<key>, gallery.<n>.caption, map.<name>.<expr>. Add any value-keyed lookups to card.maps.',
-    evidence: extractCardFn(input.js),
-  });
+  if (opts.cardTemplateTodoEvidence) {
+    todos.unshift({
+      path: 'card.template',
+      instruction: 'Author card.template: rewrite the source per-item card function into a single-root skeleton with data-dla-* bindings (data-dla-text/attr/class/if), preserving the source classes. Reference: id, title, content, cat.slug, cat.label, meta.<key>, gallery.<n>.caption, map.<name>.<expr>. Add any value-keyed lookups to card.maps.',
+      evidence: opts.cardTemplateTodoEvidence,
+    });
+  }
 
   if (inferred.confidence.id === 'low') {
     todos.push({
@@ -150,23 +217,30 @@ export function scaffoldDataModel(input: ScaffoldInput): ScaffoldResult {
   }
 
   const model: DataModel = {
-    cpt: {
-      slug: cptSlug,
-      singular: titleCase(typeNoun),
-      plural: titleCase((primary.name === '(anonymous)' ? 'items' : primary.name).toLowerCase()),
-      public: true,
-      supports: ['title', 'editor', 'custom-fields'],
+    cpt: corePost
+      ? { slug: 'post', singular: 'Post', plural: 'Posts', public: true, supports: ['title', 'editor', 'thumbnail', 'custom-fields'] }
+      : {
+          slug: cptSlug,
+          singular: titleCase(typeNoun),
+          plural: titleCase((sourceName === '(anonymous)' ? 'items' : sourceName).toLowerCase()),
+          public: true,
+          supports: ['title', 'editor', 'custom-fields'],
+        },
+    taxonomy: {
+      slug: corePost ? 'category' : `${cptSlug}_cat`,
+      label: 'Categories',
+      hierarchical: true,
+      terms: [...termSet].map(([slug, label]) => ({ slug, label })),
     },
-    taxonomy: { slug: `${cptSlug}_cat`, label: 'Categories', hierarchical: true, terms: [...termSet].map(([slug, label]) => ({ slug, label })) },
     fields: inferred.fields,
     items,
     mounts,
-    card: { template: '', maps: {} },
-    sourceArrays: [...new Set([...idLookupNames, primary.name].filter((name) => name && name !== '(anonymous)'))],
+    card: { template: opts.deterministicCard ?? '', maps: {} },
+    sourceArrays: corePost ? [] : [...new Set([...opts.idLookupNames, sourceName].filter((name) => name && name !== '(anonymous)'))],
     schema: DATA_MODEL_SCHEMA,
   };
 
-  return { model, skillTodos: todos, discovered, validation: validateDataModel(model) };
+  return { model, skillTodos: todos, discovered: { ...opts.discovered, source: opts.source }, validation: validateDataModel(model) };
 }
 
 function choosePrimaryArray(
