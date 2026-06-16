@@ -19,14 +19,12 @@
 // Auth: the editor is login-gated. Credentials arrive via opts (never hardcoded
 // / committed); the handler/driver sources them from the environment.
 //
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Browser, Page, Frame } from 'playwright';
 import { scoreViewportPair, type ViewportScore, type RepairTask, type ViewportId } from '../screenshot/compare.js';
-
-const execFileAsync = promisify(execFile);
+import { studioWp as studioWpExec } from './studio.js';
+import { connectBrowser } from '../browser-kit/index.js';
 
 // ---------------------------------------------------------------------------
 // Pure helpers (hermetically tested)
@@ -104,12 +102,10 @@ export interface EditorSession {
   close(): Promise<void>;
 }
 
+/** Thin trimming wrapper over the shared Studio wp-cli exec — short commands,
+ * so the 60s/10MB envelope rather than the 5min/50MB default. */
 async function studioWp(sitePath: string, args: string[]): Promise<string> {
-  const { stdout } = await execFileAsync('studio', ['wp', '--path', sitePath, ...args], {
-    timeout: 60_000,
-    maxBuffer: 10 * 1024 * 1024,
-  });
-  return stdout.trim();
+  return (await studioWpExec(sitePath, args, { timeout: 60_000, maxBuffer: 10 * 1024 * 1024 })).trim();
 }
 
 /** Log in ONCE and return a session that can render many markup strings (the
@@ -120,8 +116,7 @@ export async function openEditorSession(opts: EditorSessionOpts): Promise<Editor
   let browser = opts.browser;
   let ownsBrowser = false;
   if (!browser) {
-    const { chromium } = await import('playwright');
-    browser = await chromium.launch();
+    browser = await connectBrowser({});
     ownsBrowser = true;
   }
   const context = await browser.newContext({ viewport });

@@ -35,6 +35,7 @@ import { reconcileCarryIslands } from '../../lib/replicate/carry-page-list.js';
 import { installRunMediaMap } from '../../lib/replicate/run-media-map.js';
 import type { InternalLinkMap } from '../../lib/streaming/internal-link-rewrite.js';
 import { deriveInstallThemeSlug } from './install-theme.js';
+import { studioWpRoot } from '../../lib/preview/studio-site.js';
 
 // ---------------------------------------------------------------------------
 // Pure helper types + implementation (unit-tested)
@@ -312,15 +313,6 @@ interface PageArg {
   htmlSlug?: string;
 }
 
-/** Resolve the WP root by probing for wp-content (flat vs nested Studio layout). */
-function resolveWpRoot(studioSitePath: string): string | null {
-  const sitePath = resolve(studioSitePath);
-  if (existsSync(join(sitePath, 'wp-content'))) return sitePath;
-  const nested = join(sitePath, 'wordpress');
-  if (existsSync(join(nested, 'wp-content'))) return nested;
-  return null;
-}
-
 export const reconstructPagesCarryHandler: Handler = async (args, ctx) => {
   const outputDir = args.outputDir as string | undefined;
   const studioSitePath = args.studioSitePath as string | undefined;
@@ -338,7 +330,7 @@ export const reconstructPagesCarryHandler: Handler = async (args, ctx) => {
     );
   }
 
-  const wpRoot = resolveWpRoot(studioSitePath);
+  const wpRoot = studioWpRoot(studioSitePath);
   if (!wpRoot) {
     return ctx.errorResult(`studioSitePath has no wp-content: ${studioSitePath}`);
   }

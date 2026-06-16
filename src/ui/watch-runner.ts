@@ -23,6 +23,7 @@ import { buildThemeScaffold } from '../lib/replicate/theme-scaffold.js';
 import { assembleDesignTheme } from '../lib/preview/assemble-design-theme.js';
 import { extractThemeChromeFromHtml, type ThemeChromeEvidence } from '../lib/replicate/source-chrome.js';
 import { writeReplicaFilesToHost } from '../lib/preview/replica-install.js';
+import { studioWpRoot } from '../lib/preview/studio-site.js';
 import { heuristicBlocks } from '../lib/streaming/heuristic-blocks.js';
 import { sanitizeSourceHtml } from '../lib/streaming/html-sanitize.js';
 import { extractContentRegion } from '../lib/streaming/content-region.js';
@@ -1068,15 +1069,6 @@ function deriveThemeSlug(outDir: string): string {
   const base = basename(outDir).toLowerCase();
   const sanitized = base.replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
   return sanitized ? `${sanitized}-replica` : 'site-replica';
-}
-
-/** Detect the wp-content root inside a Studio site (flat or nested). */
-function studioWpRoot(studioSitePath: string): string | null {
-  const root = resolve(studioSitePath);
-  if (existsSync(join(root, 'wp-content'))) return root;
-  const nested = join(root, 'wordpress');
-  if (existsSync(join(nested, 'wp-content'))) return nested;
-  return null;
 }
 
 export function shouldPrioritizeThemeScaffoldDrain(
