@@ -89,4 +89,19 @@ describe('buildCptMuPlugin', () => {
     expect(php).toContain("'public'       => false");
     expect(php).toContain("'has_archive'  => false");
   });
+
+  it('skips registering built-in post/category but still registers meta', () => {
+    const model = {
+      cpt: { slug: 'post', singular: 'Post', plural: 'Posts', public: true, supports: ['title', 'editor', 'custom-fields'] },
+      taxonomy: { slug: 'category', label: 'Categories', hierarchical: true, terms: [] },
+      fields: [{ key: 'image', type: 'string' as const, format: 'url' as const }],
+      items: [],
+      mounts: [],
+      schema: 2,
+    };
+    const php = buildCptMuPlugin(model);
+    expect(php).not.toContain("register_post_type( 'post'");
+    expect(php).not.toContain("register_taxonomy( 'category'");
+    expect(php).toContain("register_post_meta( 'post', 'image'");
+  });
 });

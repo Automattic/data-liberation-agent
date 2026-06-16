@@ -38,6 +38,10 @@ function restSchema(f: DataModel['fields'][number]): string {
  */
 export function buildCptMuPlugin(model: DataModel): string {
   const { cpt, taxonomy, fields } = model;
+  const BUILTIN_TYPES = new Set(['post', 'page', 'attachment']);
+  const BUILTIN_TAX = new Set(['category', 'post_tag']);
+  const registerType = !BUILTIN_TYPES.has(cpt.slug);
+  const registerTax = !BUILTIN_TAX.has(taxonomy.slug);
   const supports = `array( ${cpt.supports.map((s) => php(s)).join(', ')} )`;
   const fn = `dla_cpt_sanitize_${phpId(cpt.slug)}`;
 
@@ -71,6 +75,33 @@ export function buildCptMuPlugin(model: DataModel): string {
     }
 }`;
 
+  const typeRegistration = `    register_post_type( ${php(cpt.slug)}, array(
+        'labels'       => array(
+            'name'          => ${php(cpt.plural)},
+            'singular_name' => ${php(cpt.singular)},
+        ),
+        'public'       => ${cpt.public ? 'true' : 'false'},
+        'has_archive'  => ${cpt.public ? 'true' : 'false'},
+        'show_in_rest' => true,
+        'supports'     => ${supports},
+        'menu_icon'    => 'dashicons-archive',
+    ) );`;
+
+  const taxRegistration = `    register_taxonomy( ${php(taxonomy.slug)}, ${php(cpt.slug)}, array(
+        'labels'            => array(
+            'name'          => ${php(taxonomy.label)},
+            'singular_name' => ${php(taxonomy.label)},
+        ),
+        'public'            => true,
+        'hierarchical'      => ${taxonomy.hierarchical ? 'true' : 'false'},
+        'show_in_rest'      => true,
+        'show_admin_column' => true,
+    ) );`;
+
+  const initBody = [registerType ? typeRegistration : '', registerTax ? taxRegistration : '', metaRegistrations]
+    .filter(Boolean)
+    .join('\n\n');
+
   return `<?php
 /**
  * Plugin Name: DLA Data — ${cpt.plural}
@@ -84,30 +115,7 @@ if ( ! defined( 'ABSPATH' ) ) { exit; }
 ${sanitizeFn}
 
 add_action( 'init', function () {
-    register_post_type( ${php(cpt.slug)}, array(
-        'labels'       => array(
-            'name'          => ${php(cpt.plural)},
-            'singular_name' => ${php(cpt.singular)},
-        ),
-        'public'       => ${cpt.public ? 'true' : 'false'},
-        'has_archive'  => ${cpt.public ? 'true' : 'false'},
-        'show_in_rest' => true,
-        'supports'     => ${supports},
-        'menu_icon'    => 'dashicons-archive',
-    ) );
-
-    register_taxonomy( ${php(taxonomy.slug)}, ${php(cpt.slug)}, array(
-        'labels'            => array(
-            'name'          => ${php(taxonomy.label)},
-            'singular_name' => ${php(taxonomy.label)},
-        ),
-        'public'            => true,
-        'hierarchical'      => ${taxonomy.hierarchical ? 'true' : 'false'},
-        'show_in_rest'      => true,
-        'show_admin_column' => true,
-    ) );
-
-${metaRegistrations}
+${initBody}
 } );
 `;
 }
