@@ -325,11 +325,6 @@ function tryMediaText($: CheerioAPI, el: Element, ctx: BlockRecipeContext): stri
 function coreHtmlIsland(html: string): string {
   return `<!-- wp:html -->\n${sanitize(html)}\n<!-- /wp:html -->`;
 }
-function escapeHtml(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-function escapeAttr(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
+import { escapeHtmlText as escapeHtml, escapeHtmlAttr as escapeAttr } from '../html-escape.js';
 
 export const genericBlockCatalog: AdapterBlocks = { htmlToBlocks: genericHtmlToBlocks };

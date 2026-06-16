@@ -12,10 +12,7 @@
 // two implementations cannot silently drift.
 import type { DataModel } from './types.js';
 
-/** PHP single-quoted string literal. */
-function php(s: string): string {
-  return `'${s.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
-}
+import { phpLiteral as php } from './string-utils.js';
 
 /** Render a JS map as a PHP associative-array body (key => value pairs). */
 function phpAssoc(obj: Record<string, string>, indent: string): string {

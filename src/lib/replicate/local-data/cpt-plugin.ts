@@ -8,10 +8,7 @@
 // query loop + bindings can see the data.
 import type { DataModel } from './types.js';
 
-/** PHP single-quoted string literal with ' and \ escaped. */
-function php(s: string): string {
-  return `'${s.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
-}
+import { phpLiteral as php } from './string-utils.js';
 
 /** A PHP-safe identifier fragment from a slug (for the sanitize fn name). */
 function phpId(slug: string): string {

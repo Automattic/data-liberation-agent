@@ -20,13 +20,8 @@ import type { Element } from 'domhandler';
 import type { InstanceStyleSheet } from '../normalize/instance-styles.js';
 import { emitSectionBlocks, escapeHtml, attrJson } from '../normalize/emit-blocks.js';
 import { slugFromRelPath } from '../local-site/ingest.js';
-import { rewriteInternalHrefs } from '../local-site/href-rewrite.js';
+import { rewriteInternalHrefs, slugToUrl } from '../local-site/href-rewrite.js';
 import type { NavLink, Section, StickyBehavior } from '../local-site/types.js';
-
-/** "/": home; otherwise "/<slug>/" — matches the WP page permalinks created in page-plan. */
-function slugToUrl(slug: string): string {
-  return slug === 'home' ? '/' : `/${slug}/`;
-}
 
 /**
  * Pick the nav links to render: when the home page has edges marked inNav (from

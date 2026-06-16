@@ -27,8 +27,7 @@
 //   node scripts/generate-block-attrs-snapshot.mjs
 import { readFileSync } from 'node:fs';
 import { parse } from '@wordpress/block-serialization-default-parser';
-
-type ParsedBlock = ReturnType<typeof parse>[number];
+import { walkBlocks, type ParsedBlock } from './block-tree.js';
 
 interface BlockAttrsSnapshot {
   __generated: string;
@@ -64,16 +63,6 @@ function isAllowlisted(blockName: string, allowlist: string[]): boolean {
   return allowlist.some((entry) =>
     entry.endsWith('/') ? blockName.startsWith(entry) : blockName === entry,
   );
-}
-
-function walk(blocks: ParsedBlock[], allowlist: string[], issues: BlockContractIssue[]): void {
-  for (const b of blocks) {
-    // blockName null = freeform — the roundtrip oracle's domain.
-    if (b.blockName !== null) {
-      checkBlock(b, allowlist, issues);
-    }
-    if (b.innerBlocks && b.innerBlocks.length > 0) walk(b.innerBlocks, allowlist, issues);
-  }
 }
 
 function checkBlock(b: ParsedBlock, allowlist: string[], issues: BlockContractIssue[]): void {
@@ -122,7 +111,7 @@ export function validateBlockContract(
   const allowlist = opts.allowlist ?? DEFAULT_ALLOWLIST;
   const issues: BlockContractIssue[] = [];
   try {
-    walk(parse(markup), allowlist, issues);
+    walkBlocks(parse(markup), (b) => checkBlock(b, allowlist, issues));
   } catch {
     // A parser blowup must not fail the caller — the roundtrip oracle is the
     // structural gate; the contract check is a best-effort warning layer.

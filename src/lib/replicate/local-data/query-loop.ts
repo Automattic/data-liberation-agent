@@ -36,11 +36,7 @@ export interface QueryLoopResult {
   css: string;
 }
 
-/** The id half of a `#foo` selector, or null for non-id selectors. */
-function anchorFromSelector(selector: string): string | null {
-  const m = /^#([\w-]+)$/.exec(selector.trim());
-  return m ? m[1] : null;
-}
+import { anchorId as anchorFromSelector } from './string-utils.js';
 
 /** Lowercase the model's ASC/DESC into the query block's asc/desc. */
 function normalizeOrder(order: 'ASC' | 'DESC' | undefined): 'asc' | 'desc' {

@@ -10,8 +10,7 @@
 // the validate-block-markup oracle uses, so the walk sees exactly what
 // WordPress would parse. Warning-level tally only; never a verdict input.
 import { parse } from '@wordpress/block-serialization-default-parser';
-
-type ParsedBlock = ReturnType<typeof parse>[number];
+import { walkBlocks } from './block-tree.js';
 
 export interface StyleAuditResult {
   /** 0-100: styledViaSupports / total real blocks (0 when no blocks). */
@@ -64,26 +63,6 @@ function isSupportStyled(attrs: Record<string, unknown>): boolean {
   return false;
 }
 
-function walkBlocks(
-  blocks: ParsedBlock[],
-  state: { total: number; styled: number; histogram: Record<string, number> },
-): void {
-  for (const b of blocks) {
-    // blockName null = freeform whitespace between delimiters — not a block.
-    if (b.blockName !== null) {
-      state.total += 1;
-      const attrs = (b.attrs ?? {}) as Record<string, unknown>;
-      if (isSupportStyled(attrs)) {
-        state.styled += 1;
-      }
-      for (const path of flattenStylePaths(attrs.style)) {
-        state.histogram[path] = (state.histogram[path] ?? 0) + 1;
-      }
-    }
-    if (b.innerBlocks && b.innerBlocks.length > 0) walkBlocks(b.innerBlocks, state);
-  }
-}
-
 /** Comment-stripped `}` count — see the cssRules doc for the stated naivety. */
 function countCssRules(css: string): number {
   const stripped = css.replace(/\/\*[\s\S]*?\*\//g, '');
@@ -100,7 +79,16 @@ export function auditStyleUsage(
 ): StyleAuditResult {
   const state = { total: 0, styled: 0, histogram: {} as Record<string, number> };
   for (const page of pages) {
-    walkBlocks(parse(page.markup), state);
+    walkBlocks(parse(page.markup), (b) => {
+      state.total += 1;
+      const attrs = (b.attrs ?? {}) as Record<string, unknown>;
+      if (isSupportStyled(attrs)) {
+        state.styled += 1;
+      }
+      for (const path of flattenStylePaths(attrs.style)) {
+        state.histogram[path] = (state.histogram[path] ?? 0) + 1;
+      }
+    });
   }
   const supportStyledPercent = state.total === 0 ? 0 : Math.round((state.styled / state.total) * 100);
   return {

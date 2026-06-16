@@ -1514,15 +1514,4 @@ function escapeAttr(s: string): string {
   return escapeHtml(s);
 }
 
-function escapeHtml(s: string): string {
-  return s.replace(/[&<>"']/g, (ch) => {
-    switch (ch) {
-      case '&': return '&amp;';
-      case '<': return '&lt;';
-      case '>': return '&gt;';
-      case '"': return '&quot;';
-      case "'": return '&#39;';
-      default: return ch;
-    }
-  });
-}
+import { escapeHtml } from '../html-escape.js';

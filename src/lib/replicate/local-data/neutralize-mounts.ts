@@ -11,10 +11,7 @@
 // FUNCTION definition is left intact (harmless if unused; other code may call
 // it), only the data-filling invocations go.
 
-/** Escape a string for use as a literal inside a RegExp. */
-function escapeRe(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
+import { escapeRegExp as escapeRe } from './string-utils.js';
 
 export interface NeutralizeResult {
   js: string;

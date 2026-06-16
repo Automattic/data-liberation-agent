@@ -6,14 +6,7 @@ import { upgradeIsteamUrl } from './media.js';
 // HTML escaping helpers
 // ---------------------------------------------------------------------------
 
-export function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
+export { escapeHtml } from '../../lib/html-escape.js';
 
 export function escapeAttr(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;');

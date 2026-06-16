@@ -77,5 +77,4 @@ function emitRecipeBlock($: CheerioAPI, el: Element, recipe: BlockRecipe, ctx: B
 // raw source HTML in a core/html island — matches buildHtmlFallbackBlock so a
 // recipe island degrades gracefully instead of failing the whole page at the gate.
 function coreHtmlIsland(html: string): string { return `<!-- wp:html -->\n${sanitize(html)}\n<!-- /wp:html -->`; }
-function escapeAttr(s: string): string { return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
-function escapeHtml(s: string): string { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+import { escapeHtmlText as escapeHtml, escapeHtmlAttr as escapeAttr } from '../html-escape.js';

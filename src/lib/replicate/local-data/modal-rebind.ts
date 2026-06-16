@@ -41,10 +41,7 @@ export interface RebindResult {
   rewritten: number;
 }
 
-/** Escape a string for use inside a RegExp. */
-function escapeRe(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
+import { escapeRegExp as escapeRe } from './string-utils.js';
 
 /**
  * Rewrite `<arrayName>.find( <p> => <p>.id === <expr> )` into

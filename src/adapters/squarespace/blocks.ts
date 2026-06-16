@@ -185,8 +185,6 @@ function escapeAttr(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-function escapeHtml(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
+import { escapeHtmlText as escapeHtml } from '../../lib/html-escape.js';
 
 export const blocks: AdapterBlocks = { htmlToBlocks: squarespaceHtmlToGutenberg };

@@ -27,16 +27,7 @@ export interface InjectQueryLoopsResult {
   css: string;
 }
 
-/** The id half of a `#foo` selector, or null. */
-function anchorId(selector: string): string | null {
-  const m = /^#([\w-]+)$/.exec(selector.trim());
-  return m ? m[1] : null;
-}
-
-/** Escape a string for use inside a RegExp. */
-function escapeRe(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
+import { anchorId, escapeRegExp as escapeRe } from './string-utils.js';
 
 /**
  * Replace each mount's empty anchor-group in `markup` with its query loop.

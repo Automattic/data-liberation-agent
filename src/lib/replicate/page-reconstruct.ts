@@ -142,14 +142,8 @@ export interface ReconstructResult {
 // the way into block markup so a stray "<" / "&" / quote in captured copy can't
 // break the block comment or inject markup.
 // ---------------------------------------------------------------------------
-export function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;');
-}
+import { escapeHtml } from '../html-escape.js';
+export { escapeHtml };
 
 /** Collapse whitespace; drop zero-width + soft-hyphen noise. Keeps copy verbatim. */
 export function normalizeCopy(s: string): string {

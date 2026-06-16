@@ -6,13 +6,8 @@ import type { Element } from 'domhandler';
 import type { ModalBehavior, Section, SliderBehavior, TabsBehavior } from '../local-site/types.js';
 import { InstanceStyleSheet } from './instance-styles.js';
 
-export function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
+import { escapeHtmlAttr as escapeHtml } from '../../html-escape.js';
+export { escapeHtml };
 
 /** JSON-encode a block-attribute string with WP's '--' escaping so values can
  * never terminate the surrounding block comment. Shared by all emitters. */
