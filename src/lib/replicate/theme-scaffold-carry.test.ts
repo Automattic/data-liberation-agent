@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildCarryThemeFiles, buildWooBuyboxRemRestore, type CarryThemeInput, type CarryPage } from './theme-scaffold-carry.js';
+import { buildCarryThemeFiles, buildWooBuyboxRemRestore, editorScopeCss, type CarryThemeInput, type CarryPage } from './theme-scaffold-carry.js';
 
 /** A single-variant chrome ('c0') so page-level tests stay terse. */
 function oneVariant(headerIsland = '', footerIsland = ''): CarryThemeInput['chromeVariants'] {
@@ -580,7 +580,7 @@ describe('buildCarryThemeFiles — mobile viewport scaling (non-responsive Wix o
       ],
     });
     const fn = pick(files, 'functions.php');
-    const vp = fn.slice(fn.indexOf('}, 10, 2 );')); // the viewport block, after the KSES filter
+    const vp = fn.slice(fn.indexOf("remove_action( 'wp_head', '_block_template_viewport_meta_tag'")); // the viewport block
     expect(vp).toContain('wp_is_mobile() && (');   // scoped, not global
     expect(vp).toContain("is_page( 'about' )");     // the mobile-canvas page is in the gate
     expect(vp).not.toContain("'plain'");            // the non-canvas page is excluded
@@ -634,5 +634,69 @@ describe('buildWooBuyboxRemRestore', () => {
   });
   it('emits nothing when the root is the default (no rem mismatch)', () => {
     expect(buildWooBuyboxRemRestore({ hasProducts: true, rootFontSizeApplied: false })).toBe('');
+  });
+});
+
+describe('editorScopeCss', () => {
+  it('neutralizes the :where(body.lib-carry-site) site scope to bare body', () => {
+    expect(editorScopeCss(':where(body.lib-carry-site) .ph{color:red}')).toBe('body .ph{color:red}');
+  });
+  it('neutralizes the bare body.lib-carry-site reset and descendant scopes', () => {
+    expect(editorScopeCss('body.lib-carry-site{margin:0}')).toBe('body{margin:0}');
+    expect(editorScopeCss('body.lib-carry-site .x{a:b}')).toBe('body .x{a:b}');
+  });
+  it('neutralizes per-page scopes (both bare and :where forms)', () => {
+    expect(editorScopeCss('body.lib-carry-page-home .x{a:b}')).toBe('body .x{a:b}');
+    expect(editorScopeCss(':where(body.lib-carry-page-the-shop) .y{c:d}')).toBe('body .y{c:d}');
+  });
+  it('leaves unscoped rules untouched', () => {
+    expect(editorScopeCss('.ph{color:red}')).toBe('.ph{color:red}');
+  });
+});
+
+describe('buildCarryThemeFiles — block-editor canvas styling', () => {
+  const files = buildCarryThemeFiles({
+    themeName: 'Acme Carry',
+    chromeVariants: oneVariant(
+      '<!-- wp:html -->\n<header>H</header>\n<!-- /wp:html -->',
+      '<!-- wp:html -->\n<footer>F</footer>\n<!-- /wp:html -->',
+    ),
+    siteCss: ':where(body.lib-carry-site) .chrome{color:red}',
+    pages: [
+      page({ slug: 'home', isHome: true, pageCss: 'body.lib-carry-page-home .x{a:b}' }),
+      page({ slug: 'the-shop', pageCss: 'body.lib-carry-page-the-shop .y{c:d}' }),
+    ],
+  });
+  const byPath = (p: string) => files.find((f) => f.path === p)?.content ?? '';
+
+  it('emits a global editor-site.css and per-page editor CSS files', () => {
+    const paths = files.map((f) => f.path);
+    expect(paths).toContain('assets/css/editor-site.css');
+    expect(paths).toContain('assets/css/editor-page-home.css');
+    expect(paths).toContain('assets/css/editor-page-the-shop.css');
+  });
+
+  it('editor CSS is scope-neutralized while the front-end CSS keeps the carry scope', () => {
+    const editorSite = byPath('assets/css/editor-site.css');
+    expect(editorSite).toContain('body .chrome{color:red}');
+    expect(editorSite).not.toContain('lib-carry-site');
+
+    const editorPage = byPath('assets/css/editor-page-the-shop.css');
+    expect(editorPage).toBe('body .y{c:d}');
+    expect(editorPage).not.toContain('lib-carry-page');
+
+    // Front-end files are untouched (no fidelity change).
+    expect(byPath('assets/css/site.css')).toContain('lib-carry-site');
+    expect(byPath('assets/css/page-the-shop.css')).toContain('lib-carry-page-the-shop');
+  });
+
+  it('functions.php wires add_editor_style + per-page block_editor_settings_all map', () => {
+    const fn = byPath('functions.php');
+    expect(fn).toContain("add_theme_support( 'editor-styles' )");
+    expect(fn).toContain("add_editor_style( 'assets/css/editor-site.css' )");
+    expect(fn).toContain("block_editor_settings_all");
+    expect(fn).toContain("'home' => 'assets/css/editor-page-home.css'");
+    expect(fn).toContain("'the-shop' => 'assets/css/editor-page-the-shop.css'");
+    expect(fn).toContain('$context->post->post_name');
   });
 });

@@ -425,6 +425,27 @@ function stripViewportMeta(html: string): string {
   return html.replace(/<meta\b[^>]*\bname=["']viewport["'][^>]*>\s*/gi, '');
 }
 
+/**
+ * Neutralize the carry CSS scope (`body.lib-carry-site` / `body.lib-carry-page-<slug>`)
+ * down to a bare `body` so the stylesheet can be loaded into the BLOCK-EDITOR canvas.
+ *
+ * The front-end carry CSS is zero-specificity scoped under `:where(body.lib-carry-site)`
+ * (and per-page `body.lib-carry-page-<slug>`) to preserve the source cascade and prevent
+ * cross-page bleed. The editor canvas iframe body carries NEITHER class — WordPress's
+ * `add_editor_style` / `block_editor_settings_all` pipeline scopes editor CSS to
+ * `.editor-styles-wrapper` by rewriting the leading `body` selector. Mapping the carry
+ * scope back to `body` lets that rewrite land the rules on the canvas. Editor-only: the
+ * emitted front-end `site.css` / `page-<slug>.css` are left untouched, so this can never
+ * change front-end fidelity.
+ */
+export function editorScopeCss(css: string): string {
+  return css
+    .replace(/:where\(\s*body\.lib-carry-site\s*\)/g, 'body')
+    .replace(/:where\(\s*body\.lib-carry-page-[\w-]+\s*\)/g, 'body')
+    .replace(/body\.lib-carry-site\b/g, 'body')
+    .replace(/body\.lib-carry-page-[\w-]+/g, 'body');
+}
+
 function functionsPhp(
   pages: CarryPage[],
   bodyClasses: string[],
@@ -501,6 +522,47 @@ add_action( 'wp_head', function () {
 `
     : '';
 
+  // Editor parity: load the carried design into the block-editor canvas iframe so
+  // the core/html islands render styled in the editor (not as unstyled defaults).
+  // The GLOBAL editor-site.css (scope-neutralized site.css) rides add_editor_style
+  // for every editor (post + Site Editor). Each page's island styling is injected
+  // per-edited-post via block_editor_settings_all, keyed by post_name → slug, so a
+  // post editor only ever loads ITS page's CSS (no cross-page bleed, matching the
+  // front-end's per-page enqueue). editorPageMap is the slug→file lookup.
+  const editorPageMap = pages
+    .map((p) => `        '${p.slug}' => 'assets/css/editor-page-${p.slug}.css',`)
+    .join('\n');
+  const editorStyleBlock = `
+add_action( 'after_setup_theme', function () {
+    add_theme_support( 'editor-styles' );
+    if ( file_exists( get_theme_file_path( 'assets/css/editor-site.css' ) ) ) {
+        add_editor_style( 'assets/css/editor-site.css' );
+    }
+} );
+
+add_filter( 'block_editor_settings_all', function( $settings, $context ) {
+    $map = array(
+${editorPageMap}
+    );
+    if ( empty( $context->post ) || ! isset( $map[ $context->post->post_name ] ) ) {
+        return $settings;
+    }
+    $path = get_theme_file_path( $map[ $context->post->post_name ] );
+    if ( ! file_exists( $path ) ) {
+        return $settings;
+    }
+    $css = file_get_contents( $path );
+    if ( false === $css ) {
+        return $settings;
+    }
+    if ( ! isset( $settings['styles'] ) || ! is_array( $settings['styles'] ) ) {
+        $settings['styles'] = array();
+    }
+    $settings['styles'][] = array( 'css' => $css );
+    return $settings;
+}, 10, 2 );
+`;
+
   return `<?php
 add_filter( 'body_class', function( $classes ) {
     $classes[] = 'lib-carry-site';
@@ -521,7 +583,7 @@ add_filter( 'wp_kses_allowed_html', function( $tags, $context ) {
     }
     return $tags;
 }, 10, 2 );
-${mobileViewportBlock}`;
+${editorStyleBlock}${mobileViewportBlock}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -696,28 +758,31 @@ export function buildCarryThemeFiles(input: CarryThemeInput): ThemeFile[] {
       ? scaffoldedTemplate(homePage.scaffold, homeSlugs, homePage.mobile)
       : pageTemplate(homeSlugs);
 
+  // Site-wide CSS — reset first (so source rules win the cascade), then the
+  // chrome-wrapper rescue, then EVERY variant's carried chrome CSS (concatenated
+  // upstream into siteCss; comp-id-scoped so variants never collide).
+  const siteCss =
+    RESET +
+    CHROME_RESCUE +
+    BG_LAYER_CLICK_FIX +
+    GALLERY_REFLOW +
+    STORE_HEADER_RESCUE +
+    VP_TOGGLE_CSS +
+    input.siteCss +
+    buildWooBuyboxRemRestore({
+      hasProducts: input.hasProducts ?? false,
+      rootFontSizeApplied: /:root\s*\{[^}]*font-size/i.test(input.siteCss),
+    });
+
   const files: ThemeFile[] = [
     { path: 'style.css', content: styleCssHeader(input.themeName) },
     { path: 'theme.json', content: JSON.stringify(themeJson, null, 2) },
     { path: 'functions.php', content: functionsPhp(pages, input.bodyClasses ?? [], hasMobileCanvas, input.storeChromeDonorSlug ?? '', nativeStoreChrome) },
-    // Site-wide CSS — reset first (so source rules win the cascade), then the
-    // chrome-wrapper rescue, then EVERY variant's carried chrome CSS (concatenated
-    // upstream into siteCss; comp-id-scoped so variants never collide).
-    {
-      path: 'assets/css/site.css',
-      content:
-        RESET +
-        CHROME_RESCUE +
-        BG_LAYER_CLICK_FIX +
-        GALLERY_REFLOW +
-        STORE_HEADER_RESCUE +
-        VP_TOGGLE_CSS +
-        input.siteCss +
-        buildWooBuyboxRemRestore({
-          hasProducts: input.hasProducts ?? false,
-          rootFontSizeApplied: /:root\s*\{[^}]*font-size/i.test(input.siteCss),
-        }),
-    },
+    { path: 'assets/css/site.css', content: siteCss },
+    // Editor-only mirror of site.css: carry scope neutralized to `body` so the
+    // block-editor canvas (scoped to .editor-styles-wrapper) renders the global
+    // carried design. Loaded via add_editor_style; front-end site.css is untouched.
+    { path: 'assets/css/editor-site.css', content: editorScopeCss(siteCss) },
     { path: 'templates/index.html', content: indexTemplate },
   ];
 
@@ -733,6 +798,10 @@ export function buildCarryThemeFiles(input: CarryThemeInput): ThemeFile[] {
   let emittedSingle = false;
   for (const p of pages) {
     files.push({ path: `assets/css/page-${p.slug}.css`, content: p.pageCss });
+    // Editor-only mirror of the per-page CSS (scope neutralized to `body`).
+    // block_editor_settings_all injects ONLY the edited page's file into the
+    // canvas, so each post editor renders its island styled without cross-bleed.
+    files.push({ path: `assets/css/editor-page-${p.slug}.css`, content: editorScopeCss(p.pageCss) });
     const slugs = slugsFor(p.chromeKey);
     if (p.isHome) {
       files.push({ path: 'templates/front-page.html', content: templateFor(p, slugs) });
