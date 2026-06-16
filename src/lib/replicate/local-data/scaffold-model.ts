@@ -7,6 +7,7 @@ import {
   discoverMounts,
   parseProgram,
   walk,
+  type Confidence,
   type DiscoveredArray,
   type DiscoveredMount,
 } from './discover-js-data.js';
@@ -26,6 +27,7 @@ const slugify = (value: string): string => value.toLowerCase().replace(/[^a-z0-9
 const singular = (value: string): string => value.replace(/s$/i, '');
 const titleCase = (value: string): string => value.replace(/[-_]+/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase()).trim();
 const scalar = (value: unknown): value is string | number | boolean => ['string', 'number', 'boolean'].includes(typeof value);
+const NEWEST_STYLE_SIGNALS = ['newest', 'recent', 'latest'];
 
 export function scaffoldDataModel(input: ScaffoldInput): ScaffoldResult {
   const todos: ScaffoldTodo[] = [];
@@ -102,15 +104,19 @@ export function scaffoldDataModel(input: ScaffoldInput): ScaffoldResult {
   for (const mount of discoveredMounts) {
     if (mount.confidence !== 'high' || !mount.sourceCall) continue;
     const index = mounts.length;
-    todos.push({
-      path: `mounts[${index}].query.order`,
-      instruction: `Confirm ordering/perPage for ${mount.selector}; source call: "${mount.sourceCall}". Default applied: date/DESC. Adjust to match the source's selection semantics.`,
-      evidence: mount.evidence,
-    });
+    const perPage = mount.perPageHint ?? -1;
+    const orderDecision = orderForMount(mount, perPage);
+    if (orderDecision.confidence === 'low') {
+      todos.push({
+        path: `mounts[${index}].query.order`,
+        instruction: `Confirm ordering/perPage for ${mount.selector}; source call: "${mount.sourceCall}". Default applied: date/DESC. Adjust to match the source's selection semantics.`,
+        evidence: mount.evidence,
+      });
+    }
     mounts.push({
       selector: mount.selector,
       sourceCall: mount.sourceCall,
-      query: { postType: cptSlug, perPage: mount.perPageHint ?? -1, orderBy: 'date', order: 'DESC' },
+      query: { postType: cptSlug, perPage, orderBy: 'date', order: orderDecision.order },
       wrapperClass: mount.wrapperClass,
     });
   }
@@ -186,6 +192,25 @@ function containsIdentifier(source: string, identifier: string): boolean {
   if (!/^[A-Za-z_$][\w$]*$/.test(identifier)) return false;
   const escaped = identifier.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   return new RegExp(`(^|[^A-Za-z0-9_$])${escaped}($|[^A-Za-z0-9_$])`).test(source);
+}
+
+function orderForMount(mount: DiscoveredMount, perPage: number): { order: NonNullable<MountSpec['query']['order']>; confidence: Confidence } {
+  if (mount.perPageHint === undefined || perPage === -1) return { order: 'ASC', confidence: 'high' };
+  if (hasNewestStyleSignal(mount.sourceCall ?? '')) return { order: 'DESC', confidence: 'high' };
+  return { order: 'DESC', confidence: 'low' };
+}
+
+function hasNewestStyleSignal(sourceCall: string): boolean {
+  const tokens = sourceCall.match(/[A-Za-z][A-Za-z0-9_$]*/g) ?? [];
+  return tokens.some((token) => NEWEST_STYLE_SIGNALS.some((signal) => tokenHasOrderSignal(token, signal)));
+}
+
+function tokenHasOrderSignal(token: string, signal: string): boolean {
+  const lower = token.toLowerCase();
+  if (lower === signal) return true;
+  if (!lower.startsWith(signal)) return false;
+  const next = token[signal.length];
+  return Boolean(next && /[A-Z0-9_$]/.test(next));
 }
 
 function emptyModel(): DataModel {

@@ -29,11 +29,43 @@ describe('scaffoldDataModel', () => {
     expect(discovered.arrays.find((a) => a.name === 'OBJETS')?.recordCount).toBe(2);
   });
 
-  it('leaves card.template empty with a todo, and a query-order todo', () => {
+  it('leaves card.template empty with a todo', () => {
     const { model, skillTodos } = scaffoldDataModel({ html: HTML, js: JS });
     expect(model.card?.template).toBe('');
     expect(skillTodos.some((t) => t.path === 'card.template')).toBe(true);
-    expect(skillTodos.some((t) => t.path.startsWith('mounts[0].query.order'))).toBe(true);
+  });
+
+  it('derives mount order confidence from per-page and source-call signals', () => {
+    const html = `
+      <main>
+        <div class="obj-grid" id="allGrid"></div>
+        <div class="obj-grid" id="newestGrid"></div>
+        <div class="obj-grid" id="featuredGrid"></div>
+      </main>
+    `;
+    const js = `
+      const OBJETS = [
+        { id: 'opaline-1965', title: 'Opaline Vase', story: 'A sufficiently long provenance description that reads as body content here.', category: 'glass', price: 120 },
+        { id: 'boutis-quilt', title: 'Boutis Coverlet', story: 'Another long provenance description well past the content length threshold value.', category: 'textiles', price: 240 },
+      ];
+      mountGrid('#allGrid', OBJETS);
+      mountGrid('#newestGrid', newestObjets(4));
+      mountGrid('#featuredGrid', OBJETS, 3);
+    `;
+
+    const { model, skillTodos } = scaffoldDataModel({ html, js });
+
+    expect(model.mounts[0].selector).toBe('#allGrid');
+    expect(model.mounts[0].query).toMatchObject({ perPage: -1, order: 'ASC' });
+    expect(skillTodos.some((t) => t.path === 'mounts[0].query.order')).toBe(false);
+
+    expect(model.mounts[1].selector).toBe('#newestGrid');
+    expect(model.mounts[1].query).toMatchObject({ perPage: 4, order: 'DESC' });
+    expect(skillTodos.some((t) => t.path === 'mounts[1].query.order')).toBe(false);
+
+    expect(model.mounts[2].selector).toBe('#featuredGrid');
+    expect(model.mounts[2].query).toMatchObject({ perPage: 3, order: 'DESC' });
+    expect(skillTodos.some((t) => t.path === 'mounts[2].query.order')).toBe(true);
   });
 
   it('emits an items[].id todo when id inference is low-confidence', () => {
