@@ -26,69 +26,23 @@ If the source content is static HTML (no JS data array), this skill does not app
 
 ---
 
-## What to produce
+## How to produce it (scaffold-first)
 
-Write **`<outputDir>/data-model.json`** (fall back to `<source-dir>/data-model.json`) matching `DataModel` in `src/lib/replicate/local-data/types.ts`. Shape:
+1. **Run the deterministic scaffold.** Call `liberate_data_model_scaffold({ dir: "<source-dir>", outputDir: "<output-dir>" })`. It writes `<output-dir>/data-model.draft.json` (a partial `DataModel`) and returns `{ model, skillTodos, discovered, validation }`. The scaffold has already extracted every record verbatim (`items[]`), enumerated `taxonomy.terms` and `fields[]`, linked the `mounts[]`, and set `sourceArrays`. The `discovered` summary lists which arrays were found/rejected — if your data array is missing there, see the manual fallback.
 
-```jsonc
-{
-  "schema": 2,
-  "cpt":      { "slug": "objet", "singular": "Objet", "plural": "Objets",
-                "public": true, "supports": ["title","editor","custom-fields"] },
-  "taxonomy": { "slug": "objet_cat", "label": "Categories", "hierarchical": true,
-                "terms": [ { "slug": "glass", "label": "Glass" }, … ] },
-  "fields":   [ { "key": "price_eur", "type": "integer" },
-                { "key": "status", "type": "string" }, … ],
-  "items":    [ { "id": "opaline-1965", "title": "…", "content": "…",
-                  "terms": ["glass"], "meta": { "price_eur": 120, … },
-                  "gallery": [ { "caption": "…", "url": "…?" } ] }, … ],
-  "mounts":   [ { "selector": "#newestGrid",
-                  "sourceCall": "mountGrid('#newestGrid', newestObjets(4))",
-                  "query": { "postType": "objet", "perPage": 4, "orderBy": "date", "order": "DESC" },
-                  "wrapperClass": "obj-grid obj-grid--4" }, … ],
-  "card":     { "template": "<article class=\"obj-card\" …> … </article>",
-                "maps": { "CAT_TONE": { "glass": "ph--t3", … } } },
-  "sourceArrays": ["OBJETS"]
-}
-```
+2. **Resolve ONLY the `skillTodos`.** Each has a `path`, `instruction`, and source `evidence`. Do not re-author filled slots. Typical todos:
+   - **`card.template`** (always present) — rewrite the per-item card function (in `evidence`) into a single-root skeleton with `data-dla-*` bindings preserving the source classes. Grammar: `data-dla-text/attr/class/if`; `<expr>` = `'lit'` | `id` | `title` | `content` | `cat.slug` | `cat.label` | `meta.<key>` | `gallery.<n>.caption` | `map.<name>.<expr>`; `<cond>` = `<expr>` | `<expr>=='lit'` | `<expr>!='lit'`. Add value-keyed lookups (e.g. `CAT_TONE`) to `card.maps`.
+   - **`mounts[i].query.order`** — confirm/adjust ordering + `perPage` (scaffold defaults to date/DESC).
+   - **`items[].id` / `items[].title` / `taxonomy`** — low-confidence role guesses; confirm or correct. If a value belongs in `meta`, move it (never drop it).
+   - **`mounts[i]`** — an orphan container; confirm it is content-driven or remove it.
+   - **`items`** (only when no static array was found) — author the model by hand from the source.
 
-### How to fill each part
+3. **Validate and write.** Re-check that every `map.<name>`/`meta.<key>` the template references exists, item count == array length, terms == the source's category set. Write the resolved model to `<output-dir>/data-model.json`. `liberate_convert_local_site` auto-activates the data path when that file is present.
 
-1. **Read the data array.** Find the in-file array(s) of records and the per-item id. Each record → one `items[]` entry: copy the id verbatim, the human title, optional long body → `content`, the category → `terms` (slugs), every other field → `meta` (numbers stay numbers), and any image list → `gallery` (caption per tile; `url` only if real files exist). **Never drop or summarize a record or a field** — reproduce them all.
+## Manual fallback (if the scaffold tool is unavailable)
 
-2. **Derive the CPT + taxonomy.** Choose a singular slug for the type (the record noun). The grouping field (category/kind/collection) becomes the taxonomy; enumerate **all** its terms (slug + label). List every per-item field in `fields[]` with a coarse type (`string`/`integer`/`number`/`boolean`).
+If `liberate_data_model_scaffold` is not registered (e.g. the MCP server hasn't restarted to pick it up) or errors, author `data-model.json` by hand: read the source JS, copy every record into `items[]` (id/title/content → as appropriate, category → `terms`, other fields → `meta`, image lists → `gallery`), enumerate `taxonomy.terms`, list `fields[]`, map each empty mount container to a `query`, author `card.template` with the `data-dla-*` grammar above, and set `sourceArrays`. Never drop or summarize a record or field.
 
-3. **Map the mounts.** For each empty container filled by JS: record its `selector` (the `#id`), the original `sourceCall` (provenance), and a `query` (postType = the CPT; `perPage` = the count the call requested, or `-1` for "all"; `order`/`orderBy` to match the source ordering — e.g. "newest" = `date`/`DESC`). `wrapperClass` = the container's own classes (the grid CSS hook).
+## Faithfulness rules
 
-4. **Author the card template.** Take the source's per-item card function (e.g. `objCard(o)`) and rewrite its markup as a static skeleton where every dynamic piece is a `data-dla-*` binding (the directives are applied by the renderer and removed from output):
-
-   - `data-dla-text="<expr>"` — set the element's text.
-   - `data-dla-attr="<name>:<expr>,<name2>:<expr2>"` — set attribute(s).
-   - `data-dla-class="<expr>"` — append the resolved class token(s).
-   - `data-dla-if="<cond>"` — drop the element unless the condition holds (use two variants for either/or, e.g. a normal vs struck price).
-
-   **`<expr>` grammar:** `'literal'` · `id` · `title` · `content` · `cat.slug` · `cat.label` · `meta.<key>` · `gallery.<n>.caption` · `map.<name>.<expr>`
-   **`<cond>` grammar:** `<expr>` (non-empty) · `<expr>=='lit'` · `<expr>!='lit'`
-
-   Any value-keyed lookup the source did (e.g. `CAT_TONE[o.category]`) becomes a `maps` table referenced by `map.<name>.<expr>`. Keep the source's class names and structure exactly so the carried CSS keeps binding. (A literal prefix like `€` can be a static text node with a bound child span.)
-
-5. **List `sourceArrays`.** The JS array identifier(s) the detail modal looks items up in (e.g. `["OBJETS"]`). The converter rebinds `ARR.find(x => x.id === id)` → `window.dlaItem(id)` (reads the per-card DOM island); everything else in the modal stays. If there's no modal lookup, use `[]`.
-
----
-
-## Verify before handing off
-
-- The model parses as JSON and every `items[]` record has an `id` that matches what the modal looks up by.
-- `card.template` is a single root element, uses only the grammar above, and preserves the source card's classes/structure.
-- Every `map.<name>` referenced in the template exists in `card.maps`; every `meta.<key>` referenced exists in `fields`.
-- Counts match the source: items count == array length; taxonomy terms == the source's category list.
-
-Then write `data-model.json` and tell the caller it's ready — `liberate_convert_local_site` auto-activates the data path when the file is present.
-
----
-
-## Notes
-
-- **Do not over-reach:** only model containers that are genuinely JS-data-rendered. A filter button bar built from a small config array (not content) can stay as JS.
-- **Faithfulness:** the card render runs server-side (frontend AND the block-editor query-loop preview), so the binding must reproduce the source card markup exactly — that is what makes the grid non-empty and analyzable in the editor.
-- **Honest gaps:** if a field can't be cleanly mapped (e.g. derived-at-runtime values), record what you did and surface the gap rather than inventing data.
+- Never drop or summarize a record or field. The card render runs server-side (frontend AND the editor query-loop preview), so the binding must reproduce the source card markup exactly. Surface honest gaps rather than inventing data.
