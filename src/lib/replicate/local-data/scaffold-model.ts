@@ -20,6 +20,7 @@ export interface ScaffoldInput {
 }
 
 const MAX_FALLBACK_ARRAY_CHARS = 200_000;
+const MAX_RECORDS = 5_000;
 
 const slugify = (value: string): string => value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 const singular = (value: string): string => value.replace(/s$/i, '');
@@ -269,7 +270,7 @@ function evalStaticArray(
   if (!isStaticLiteral(node)) return { confidence: 'low', evidence };
   try {
     const records = runInNewContext(`(${slice})`, Object.create(null), { timeout: 1000 }) as Array<Record<string, unknown>>;
-    if (!Array.isArray(records)) return { confidence: 'low', evidence };
+    if (!Array.isArray(records) || records.length > MAX_RECORDS) return { confidence: 'low', evidence };
     return { records, confidence: 'high', evidence };
   } catch (error) {
     return { confidence: 'low', evidence: `${(error as Error).message} :: ${evidence}` };

@@ -28,13 +28,13 @@ If the source content is static HTML (no JS data array), this skill does not app
 
 ## How to produce it (scaffold-first)
 
-1. **Run the deterministic scaffold.** Call `liberate_data_model_scaffold({ dir: "<source-dir>", outputDir: "<output-dir>" })`. It writes `<output-dir>/data-model.draft.json` (a partial `DataModel`) and returns `{ model, skillTodos, discovered, validation }`. The scaffold has already extracted every record verbatim (`items[]`), enumerated `taxonomy.terms` and `fields[]`, linked the `mounts[]`, and set `sourceArrays`. The `discovered` summary lists which arrays were found/rejected — if your data array is missing there, see the manual fallback.
+1. **Run the deterministic scaffold.** Call `liberate_data_model_scaffold({ dir: "<source-dir>", outputDir: "<output-dir>" })`. It writes `<output-dir>/data-model.draft.json` (a partial `DataModel`) and returns `{ model, skillTodos, discovered, validation }`. The scaffold has already extracted every record verbatim (`items[]`), enumerated `taxonomy.terms` and `fields[]`, linked the `mounts[]`, and set `sourceArrays`. The `discovered` summary lists which arrays were found/rejected and records dropped low-confidence/orphan containers under `discovered.unmatchedContainers` — if your data array is missing there, see the manual fallback.
 
 2. **Resolve ONLY the `skillTodos`.** Each has a `path`, `instruction`, and source `evidence`. Do not re-author filled slots. Typical todos:
    - **`card.template`** (always present) — rewrite the per-item card function (in `evidence`) into a single-root skeleton with `data-dla-*` bindings preserving the source classes. Grammar: `data-dla-text/attr/class/if`; `<expr>` = `'lit'` | `id` | `title` | `content` | `cat.slug` | `cat.label` | `meta.<key>` | `gallery.<n>.caption` | `map.<name>.<expr>`; `<cond>` = `<expr>` | `<expr>=='lit'` | `<expr>!='lit'`. Add value-keyed lookups (e.g. `CAT_TONE`) to `card.maps`.
-   - **`mounts[i].query.order`** — confirm/adjust ordering + `perPage` (scaffold defaults to date/DESC).
+   - **`mounts[i].query.order`** — confirm/adjust ordering + `perPage` (scaffold defaults to date/DESC). A full/all/complete catalog grid usually renders in source array order, so set `order: 'ASC'`; use `DESC` only for newest/recent/latest grids.
    - **`items[].id` / `items[].title` / `taxonomy`** — low-confidence role guesses; confirm or correct. If a value belongs in `meta`, move it (never drop it).
-   - **`mounts[i]`** — an orphan container; confirm it is content-driven or remove it.
+   - **`discovered.unmatchedContainers`** — check these low-confidence/orphan containers for any dropped grid before converting; add missing mounts only when the source proves they are content-driven.
    - **`items`** (only when no static array was found) — author the model by hand from the source.
 
 3. **Validate and write.** Re-check that every `map.<name>`/`meta.<key>` the template references exists, item count == array length, terms == the source's category set. Write the resolved model to `<output-dir>/data-model.json`. `liberate_convert_local_site` auto-activates the data path when that file is present.

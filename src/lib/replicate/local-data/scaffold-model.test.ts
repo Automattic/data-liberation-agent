@@ -92,9 +92,7 @@ describe('scaffoldDataModel', () => {
       mountGrid('#marketGrid', OBJETS.map(objetCard));
     `;
 
-    const result = scaffoldDataModel({ html, js }) as ReturnType<typeof scaffoldDataModel> & {
-      discovered: ReturnType<typeof scaffoldDataModel>['discovered'] & { unmatchedContainers?: string[] };
-    };
+    const result = scaffoldDataModel({ html, js });
 
     expect(result.model.cpt.slug).toBe('objet');
     expect(result.model.items.map((item) => item.id)).toEqual([

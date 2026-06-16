@@ -17,6 +17,10 @@ export interface DiscoveredArrayInfo {
 export interface ScaffoldResult {
   model: DataModel;
   skillTodos: ScaffoldTodo[];
-  discovered: { arrays: DiscoveredArrayInfo[]; skippedFiles: string[] };
+  discovered: {
+    arrays: DiscoveredArrayInfo[];
+    skippedFiles: string[];
+    unmatchedContainers?: string[];
+  };
   validation: ValidateModelResult;
 }
