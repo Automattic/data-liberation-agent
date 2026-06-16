@@ -1,5 +1,6 @@
 import { existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, extname } from 'node:path';
+import * as cheerio from 'cheerio';
 import type { Handler } from '../handler-types.js';
 import { scaffoldDataModel } from '../../lib/replicate/local-data/scaffold-model.js';
 import { parseProgram } from '../../lib/replicate/local-data/discover-js-data.js';
@@ -20,6 +21,23 @@ function readFiles(dir: string, exts: string[]): Array<{ name: string; text: str
   return out;
 }
 
+function extractInlineScripts(htmlFiles: Array<{ name: string; text: string }>): string[] {
+  const scripts: string[] = [];
+  for (const file of htmlFiles) {
+    try {
+      const $ = cheerio.load(file.text);
+      $('script').each((_, element) => {
+        if ($(element).attr('src') !== undefined) return;
+        const text = $(element).text();
+        if (text.trim()) scripts.push(text);
+      });
+    } catch {
+      // Inline extraction is best-effort; malformed HTML should not abort scaffolding.
+    }
+  }
+  return scripts;
+}
+
 export const dataModelScaffoldHandler: Handler = async (args, ctx) => {
   const dir = args.dir as string | undefined;
   const outputDir = (args.outputDir as string | undefined) ?? dir;
@@ -27,8 +45,10 @@ export const dataModelScaffoldHandler: Handler = async (args, ctx) => {
   if (!outputDir) return ctx.errorResult('outputDir is required');
   const start = Date.now();
   try {
-    const html = readFiles(dir, ['.html', '.htm']).map((file) => file.text).join('\n');
+    const htmlFiles = readFiles(dir, ['.html', '.htm']);
+    const html = htmlFiles.map((file) => file.text).join('\n');
     const jsFiles = [...readFiles(join(dir, 'assets'), ['.js']), ...readFiles(dir, ['.js'])];
+    const inlineJs = extractInlineScripts(htmlFiles);
     const skippedFiles: string[] = [];
     const goodJs: string[] = [];
     for (const file of jsFiles) {
@@ -39,7 +59,7 @@ export const dataModelScaffoldHandler: Handler = async (args, ctx) => {
       goodJs.push(file.text);
     }
 
-    const result = scaffoldDataModel({ html, js: goodJs.join('\n'), skippedFiles });
+    const result = scaffoldDataModel({ html, js: [...goodJs, ...inlineJs].join('\n'), skippedFiles });
     mkdirSync(outputDir, { recursive: true });
     writeFileSync(join(outputDir, 'data-model.draft.json'), JSON.stringify(result.model, null, 2), 'utf8');
     console.error(`[data-model] ${JSON.stringify({

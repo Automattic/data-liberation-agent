@@ -30,4 +30,24 @@ describe('dataModelScaffoldHandler', () => {
       rmSync(out, { recursive: true, force: true });
     }
   });
+
+  it('scaffolds inline script data arrays and mount calls from HTML files', async () => {
+    mkdirSync(TMP, { recursive: true });
+    const dir = mkdtempSync(join(TMP, 'dms-inline-'));
+    const out = mkdtempSync(join(TMP, 'dms-inline-out-'));
+    try {
+      writeFileSync(
+        join(dir, 'shop.html'),
+        `<div id="grid"></div><script>const ITEMS=[{id:'a',title:'A',cat:'x'},{id:'b',title:'B',cat:'y'}]; mountGrid('#grid', ITEMS); function open(i){return ITEMS.find(x=>x.id===i);}</script>`
+      );
+      const res = await dataModelScaffoldHandler({ dir, outputDir: out }, ctx);
+      expect(res.isError).toBeFalsy();
+      const data = JSON.parse(res.content[0].text) as { model: { items: unknown[]; mounts: Array<{ selector: string }> } };
+      expect(data.model.items).toHaveLength(2);
+      expect(data.model.mounts.map((mount) => mount.selector)).toContain('#grid');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(out, { recursive: true, force: true });
+    }
+  });
 });
