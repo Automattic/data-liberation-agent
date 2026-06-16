@@ -16,6 +16,8 @@ import { BlockFixerClient } from '../../lib/streaming/block-fixer-client.js';
 import { ingestLocalSite } from '../../lib/replicate/local-site/ingest.js';
 import { composePage } from '../../lib/replicate/normalize/compose-page.js';
 import { InstanceStyleSheet } from '../../lib/replicate/normalize/instance-styles.js';
+import { neutralizeStaticCards } from '../../lib/replicate/local-data/neutralize-static-cards.js';
+import type { MountSpec } from '../../lib/replicate/local-data/types.js';
 import {
   detectBehaviors,
   detectSectionBehavior,
@@ -35,6 +37,7 @@ export const ingestLocalSiteHandler: Handler = async (args, ctx) => {
   const dir = args.dir as string | undefined;
   const outputDir = (args.outputDir as string | undefined) ?? dir;
   const nativeBehaviors = args.nativeBehaviors === true;
+  const cardMounts = (args.cardMounts as MountSpec[] | undefined) ?? [];
   if (!dir) return ctx.errorResult('dir is required');
   if (!outputDir) return ctx.errorResult('outputDir is required');
   try {
@@ -98,7 +101,9 @@ export const ingestLocalSiteHandler: Handler = async (args, ctx) => {
       // Per-page isolation: one bad page (roundtrip failure / compose misfit)
       // must not abort the whole ingest — record it and keep going.
       try {
-        const composed = composePage(page, {
+        const neutralized = cardMounts.length > 0 ? neutralizeStaticCards(page.html, cardMounts) : undefined;
+        const composeInput = neutralized?.stamped.length ? { ...page, html: neutralized.html } : page;
+        const composed = composePage(composeInput, {
           reveal,
           detectSection,
           native: nativeBehaviors,

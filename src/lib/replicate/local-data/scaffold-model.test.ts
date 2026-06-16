@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest';
 import { scaffoldDataModel } from './scaffold-model.js';
-import { discoverHtmlCards } from './discover-html-cards.js'; // ensure import resolves in test scope if needed
 
 const HTML = `<main><div class="obj-grid obj-grid--4" id="newestGrid"></div></main>`;
 const JS = `

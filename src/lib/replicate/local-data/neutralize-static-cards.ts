@@ -10,6 +10,10 @@ export interface NeutralizeStaticCardsResult {
   stamped: string[];
 }
 
+function isFullHtmlDocument(html: string): boolean {
+  return /<html[\s>]/i.test(html) && /<body[\s>]/i.test(html);
+}
+
 /**
  * For each static-card mount (carrying `sourceSelector`) whose container resolves
  * in `html`: empty the card-signature children (the dominant repeated child shape),
@@ -17,7 +21,7 @@ export interface NeutralizeStaticCardsResult {
  * Pure + best-effort: a mount whose container/anchor can't be resolved is skipped.
  */
 export function neutralizeStaticCards(html: string, mounts: MountSpec[]): NeutralizeStaticCardsResult {
-  const $ = cheerio.load(html, undefined, false);
+  const $ = isFullHtmlDocument(html) ? cheerio.load(html) : cheerio.load(html, undefined, false);
   const stamped: string[] = [];
   for (const mount of mounts) {
     if (!mount.sourceSelector) continue;
@@ -52,5 +56,5 @@ export function neutralizeStaticCards(html: string, mounts: MountSpec[]): Neutra
     $(container).attr('id', id);
     stamped.push(mount.selector);
   }
-  return { html: $.html(), stamped };
+  return { html: stamped.length > 0 ? $.html() : html, stamped };
 }

@@ -181,7 +181,8 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
 
   // Stage 1a: ingest + compose sidecars + normalize-report (reuse the handler
   // verbatim; nativeBehaviors makes it tag sidecar sections with dla/reveal).
-  const ingestRes = await ingestLocalSiteHandler({ dir, outputDir, nativeBehaviors }, ctx);
+  const cardMounts = dataModel?.mounts.filter((m) => m.sourceSelector) ?? [];
+  const ingestRes = await ingestLocalSiteHandler({ dir, outputDir, nativeBehaviors, cardMounts }, ctx);
   if (ingestRes.isError) return ingestRes;
   // Forward stage-1a quality signals into the final summary, nested under one
   // `ingest` key so the two summaries' field shapes can't collide.
