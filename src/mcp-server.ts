@@ -37,6 +37,7 @@ import { reconstructPagesHandler } from './mcp-server/handlers/reconstruct-pages
 import { reconstructPagesCarryHandler } from './mcp-server/handlers/reconstruct-pages-carry.js';
 import { blockifyWxrHandler } from './mcp-server/handlers/blockify-wxr.js';
 import { screenshotHandler } from './mcp-server/handlers/screenshot.js';
+import { dataModelScaffoldHandler } from './mcp-server/handlers/data-model-scaffold.js';
 import { designFoundationScaffoldHandler } from './mcp-server/handlers/design-foundation-scaffold.js';
 import { designFoundationValidateHandler } from './mcp-server/handlers/design-foundation-validate.js';
 import { designFoundationSaveHandler } from './mcp-server/handlers/design-foundation-save.js';
@@ -499,6 +500,19 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: 'liberate_data_model_scaffold',
+      description:
+        'Deterministic pre-pass for the JS-data path: reads an owned local site dir, discovers record arrays / mount containers / id-lookups by AST (resilient to malformed/vendored JS files), infers field roles, and writes a PARTIAL data-model.draft.json. Returns { model, skillTodos, discovered, validation }. The model-local-data skill fills only the skillTodos (card.template, ambiguous ordering, low-confidence role guesses), then writes the final data-model.json. Run before liberate_convert_local_site when the source renders content from a JS data array.',
+      inputSchema: {
+        type: 'object' as const,
+        properties: {
+          dir: { type: 'string', description: 'Absolute path to the local static-site directory.' },
+          outputDir: { type: 'string', description: 'Where data-model.draft.json is written. Defaults to dir.' },
+        },
+        required: ['dir'],
+      },
+    },
+    {
       name: 'liberate_design_foundation_scaffold',
       description:
         'Runs the deterministic scaffold on a liberation output directory: reads palette.json / typography.json / breakpoints.json / screenshots/manifest.json from SP1 output, applies pure rules (darkest high-frequency → text.default, lightest → surface.base, breakpoint tier mapping, gradient regex extraction from html/*.html), and returns a PartialDesignFoundation. Empty role slots are left for the design-foundations skill to assign. Emits skillTodos listing every path the skill must fill. The design-foundations skill may additionally read computed-styles.json for HTML/CSS role assignment.',
@@ -708,6 +722,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
 /** Tool name → handler module. */
 const handlers: Record<string, Handler> = {
   liberate_compare: compareHandler,
+  liberate_data_model_scaffold: dataModelScaffoldHandler,
   liberate_design_foundation_save: designFoundationSaveHandler,
   liberate_design_foundation_scaffold: designFoundationScaffoldHandler,
   liberate_design_foundation_validate: designFoundationValidateHandler,
