@@ -47,4 +47,69 @@ describe('scaffoldDataModel', () => {
     expect(model.items).toEqual([]);
     expect(skillTodos.some((t) => t.path === 'items')).toBe(true);
   });
+
+  it('chooses the content array over config arrays and filters orphan containers out of mounts', () => {
+    const html = `
+      <main>
+        <div class="obj-grid obj-grid--featured" id="featuredGrid"></div>
+        <div class="obj-grid obj-grid--archive" id="archiveGrid"></div>
+        <div class="obj-grid obj-grid--market" id="marketGrid"></div>
+        <div id="emptyFilterSlot"></div>
+        <div id="emptyModalSlot"></div>
+        <div id="emptyPromoSlot"></div>
+        <div id="emptyFooterSlot"></div>
+        <div id="notEmpty"><span>static</span></div>
+      </main>
+    `;
+    const js = `
+      const OBJET_CATS = [
+        { id: 'all', label: 'Everything' },
+        { id: 'glass', label: 'Glass' },
+        { id: 'textiles', label: 'Textiles' },
+        { id: 'lighting', label: 'Lighting' },
+        { id: 'ceramics', label: 'Ceramics' },
+        { id: 'prints', label: 'Prints' },
+        { id: 'metal', label: 'Metal' },
+      ];
+      const OBJETS = [
+        { id: 'opaline-1965', title: 'Opaline Vase', story: 'A sufficiently long provenance description that reads as body content here.', category: 'glass', price: 120 },
+        { id: 'boutis-quilt', title: 'Boutis Coverlet', story: 'Another long provenance description well past the content length threshold value.', category: 'textiles', price: 240 },
+        { id: 'anglepoise-1934', title: 'Anglepoise Lamp', story: 'Collected from a small atelier with enough narrative body text to become content.', category: 'lighting', price: 410 },
+        { id: 'raku-bowl', title: 'Raku Bowl', story: 'Smoke-fired ceramic with a long descriptive note about condition and origin.', category: 'ceramics', price: 95 },
+        { id: 'atelier-print', title: 'Atelier Print', story: 'Numbered print with framing notes and enough prose to be imported as content.', category: 'prints', price: 180 },
+        { id: 'brass-candlestick', title: 'Brass Candlestick', story: 'Patinated brass object with a durable story field for the scaffold body.', category: 'metal', price: 75 },
+        { id: 'murano-dish', title: 'Murano Dish', story: 'Layered glass dish with source copy that should stay attached to the item.', category: 'glass', price: 130 },
+        { id: 'linen-panel', title: 'Linen Panel', story: 'Handwoven panel with source copy that should become item content.', category: 'textiles', price: 205 },
+      ];
+      const NAV = [
+        { id: 'home', label: 'Home', href: '/' },
+        { id: 'shop', label: 'Shop', href: '/shop' },
+      ];
+      function objetCard(o){ return '<article class="obj-card"></article>'; }
+      function openObjet(id){ return OBJETS.find((objet) => objet.id === id); }
+      mountGrid('#featuredGrid', OBJETS, 3);
+      mountGrid('#archiveGrid', OBJETS.filter((objet) => objet.category !== 'lighting'));
+      mountGrid('#marketGrid', OBJETS.map(objetCard));
+    `;
+
+    const result = scaffoldDataModel({ html, js }) as ReturnType<typeof scaffoldDataModel> & {
+      discovered: ReturnType<typeof scaffoldDataModel>['discovered'] & { unmatchedContainers?: string[] };
+    };
+
+    expect(result.model.cpt.slug).toBe('objet');
+    expect(result.model.items.map((item) => item.id)).toEqual([
+      'opaline-1965',
+      'boutis-quilt',
+      'anglepoise-1934',
+      'raku-bowl',
+      'atelier-print',
+      'brass-candlestick',
+      'murano-dish',
+      'linen-panel',
+    ]);
+    expect(result.model.taxonomy.terms.length).toBeGreaterThanOrEqual(5);
+    expect(result.model.mounts.map((mount) => mount.selector).sort()).toEqual(['#archiveGrid', '#featuredGrid', '#marketGrid']);
+    expect(result.discovered.unmatchedContainers?.sort()).toEqual(['#emptyFilterSlot', '#emptyFooterSlot', '#emptyModalSlot', '#emptyPromoSlot']);
+    expect(result.discovered.arrays.map((array) => array.name)).toEqual(expect.arrayContaining(['OBJET_CATS', 'OBJETS', 'NAV']));
+  });
 });

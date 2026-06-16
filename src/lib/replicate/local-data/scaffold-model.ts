@@ -8,6 +8,7 @@ import {
   parseProgram,
   walk,
   type DiscoveredArray,
+  type DiscoveredMount,
 } from './discover-js-data.js';
 import { inferFields } from './infer-fields.js';
 import type { DiscoveredArrayInfo, ScaffoldResult, ScaffoldTodo } from './scaffold-types.js';
@@ -28,14 +29,22 @@ const scalar = (value: unknown): value is string | number | boolean => ['string'
 export function scaffoldDataModel(input: ScaffoldInput): ScaffoldResult {
   const todos: ScaffoldTodo[] = [];
   const arrays = discoverScaffoldArrays(input.js);
+  const idLookupNames = discoverIdLookups(input.js);
+  const discoveredMounts = discoverMounts(input.html, input.js);
   const discoveredArrays: DiscoveredArrayInfo[] = arrays.map((array) => ({
     name: array.name,
     confidence: array.confidence,
     recordCount: array.records?.length,
     reason: array.confidence === 'low' ? array.evidence.slice(0, 120) : undefined,
   }));
-  const discovered = { arrays: discoveredArrays, skippedFiles: input.skippedFiles ?? [] };
-  const primary = arrays.find((array) => array.records?.length);
+  const discovered = {
+    arrays: discoveredArrays,
+    skippedFiles: input.skippedFiles ?? [],
+    unmatchedContainers: discoveredMounts
+      .filter((mount) => mount.confidence === 'low' || !mount.sourceCall)
+      .map((mount) => mount.selector),
+  };
+  const primary = choosePrimaryArray(arrays, idLookupNames, discoveredMounts);
 
   if (!primary?.records) {
     const empty = emptyModel();
@@ -88,26 +97,22 @@ export function scaffoldDataModel(input: ScaffoldInput): ScaffoldResult {
     };
   });
 
-  const mounts: MountSpec[] = discoverMounts(input.html, input.js).map((mount, index) => {
-    if (mount.confidence === 'low' || !mount.sourceCall) {
-      todos.push({
-        path: `mounts[${index}]`,
-        instruction: `Empty container ${mount.selector} had no clear mount call. Confirm it is content-driven (not a filter bar / static slot) and set its query, or remove it.`,
-        evidence: mount.evidence,
-      });
-    }
+  const mounts: MountSpec[] = [];
+  for (const mount of discoveredMounts) {
+    if (mount.confidence !== 'high' || !mount.sourceCall) continue;
+    const index = mounts.length;
     todos.push({
       path: `mounts[${index}].query.order`,
-      instruction: `Confirm ordering/perPage for ${mount.selector}; source call: "${mount.sourceCall ?? '(none)'}". Default applied: date/DESC. Adjust to match the source's selection semantics.`,
+      instruction: `Confirm ordering/perPage for ${mount.selector}; source call: "${mount.sourceCall}". Default applied: date/DESC. Adjust to match the source's selection semantics.`,
       evidence: mount.evidence,
     });
-    return {
+    mounts.push({
       selector: mount.selector,
-      sourceCall: mount.sourceCall ?? '',
+      sourceCall: mount.sourceCall,
       query: { postType: cptSlug, perPage: mount.perPageHint ?? -1, orderBy: 'date', order: 'DESC' },
       wrapperClass: mount.wrapperClass,
-    };
-  });
+    });
+  }
 
   todos.unshift({
     path: 'card.template',
@@ -150,11 +155,36 @@ export function scaffoldDataModel(input: ScaffoldInput): ScaffoldResult {
     items,
     mounts,
     card: { template: '', maps: {} },
-    sourceArrays: [...new Set([...discoverIdLookups(input.js), primary.name].filter((name) => name && name !== '(anonymous)'))],
+    sourceArrays: [...new Set([...idLookupNames, primary.name].filter((name) => name && name !== '(anonymous)'))],
     schema: DATA_MODEL_SCHEMA,
   };
 
   return { model, skillTodos: todos, discovered, validation: validateDataModel(model) };
+}
+
+function choosePrimaryArray(
+  arrays: DiscoveredArray[],
+  idLookupNames: string[],
+  mounts: DiscoveredMount[]
+): DiscoveredArray | undefined {
+  const candidates = arrays.filter((array) => array.records?.length);
+  if (candidates.length === 0) return undefined;
+
+  const idLookupSet = new Set(idLookupNames);
+  const byIdLookup = candidates.find((array) => idLookupSet.has(array.name));
+  if (byIdLookup) return byIdLookup;
+
+  const sourceCalls = mounts.map((mount) => mount.sourceCall).filter((sourceCall): sourceCall is string => Boolean(sourceCall));
+  const byMountSource = candidates.find((array) => sourceCalls.some((sourceCall) => containsIdentifier(sourceCall, array.name)));
+  if (byMountSource) return byMountSource;
+
+  return candidates.reduce((best, array) => ((array.records?.length ?? 0) > (best.records?.length ?? 0) ? array : best));
+}
+
+function containsIdentifier(source: string, identifier: string): boolean {
+  if (!/^[A-Za-z_$][\w$]*$/.test(identifier)) return false;
+  const escaped = identifier.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(^|[^A-Za-z0-9_$])${escaped}($|[^A-Za-z0-9_$])`).test(source);
 }
 
 function emptyModel(): DataModel {
