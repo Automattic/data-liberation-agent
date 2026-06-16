@@ -184,6 +184,22 @@ describe('scaffoldDataModel — records-source chain', () => {
     expect(r.model.card?.template).toContain('data-dla-text');
   });
 
+  it('uses resolved card page bodies as post content without registering content meta', () => {
+    const r = scaffoldDataModel({
+      html: CARD_HTML,
+      js: '',
+      resolvePage: (href) => `<main><article><p>FULL BODY ${href}</p></article></main>`,
+    });
+
+    expect(r.discovered.source).toBe('html-cards');
+    expect(r.model.items[0].content).toContain('FULL BODY p1.html');
+    expect(r.model.items[0].content).not.toContain('Body alpha here, long enough.');
+    expect(r.model.items[1].content).toContain('FULL BODY p2.html');
+    expect(r.model.fields.map((field) => field.key)).not.toContain('content');
+    expect(r.model.fields.map((field) => field.key)).toContain('excerpt');
+    expect(r.model.items[0].meta.excerpt).toContain('Body alpha here, long enough.');
+  });
+
   it('reports source=none when neither yields records', () => {
     const r = scaffoldDataModel({ html: '<main><p>just prose</p></main>', js: '' });
     expect(r.discovered.source).toBe('none');

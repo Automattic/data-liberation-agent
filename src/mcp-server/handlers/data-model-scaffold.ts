@@ -58,15 +58,6 @@ function makeResolvePage(dir: string): (href: string) => string | null {
   };
 }
 
-function promoteHtmlCardResolvedContent(result: ReturnType<typeof scaffoldDataModel>): ReturnType<typeof scaffoldDataModel> {
-  if (result.discovered.source !== 'html-cards') return result;
-  for (const item of result.model.items) {
-    const resolvedContent = item.meta.content;
-    if (typeof resolvedContent === 'string' && resolvedContent.trim()) item.content = resolvedContent;
-  }
-  return result;
-}
-
 export const dataModelScaffoldHandler: Handler = async (args, ctx) => {
   const dir = args.dir as string | undefined;
   const outputDir = (args.outputDir as string | undefined) ?? dir;
@@ -88,12 +79,12 @@ export const dataModelScaffoldHandler: Handler = async (args, ctx) => {
       goodJs.push(file.text);
     }
 
-    const result = promoteHtmlCardResolvedContent(scaffoldDataModel({
+    const result = scaffoldDataModel({
       html,
       js: [...goodJs, ...inlineJs].join('\n'),
       skippedFiles,
       resolvePage: makeResolvePage(dir),
-    }));
+    });
     mkdirSync(outputDir, { recursive: true });
     writeFileSync(join(outputDir, 'data-model.draft.json'), JSON.stringify(result.model, null, 2), 'utf8');
     console.error(`[data-model] ${JSON.stringify({

@@ -1,5 +1,5 @@
 import { runInNewContext } from 'node:vm';
-import { DATA_MODEL_SCHEMA, type DataModel, type DataItem, type MountSpec } from './types.js';
+import { DATA_MODEL_SCHEMA, type DataModel, type DataField, type DataItem, type MountSpec } from './types.js';
 import { validateDataModel } from './validate-model.js';
 import { discoverHtmlCards } from './discover-html-cards.js';
 import {
@@ -122,8 +122,15 @@ export function scaffoldDataModel(input: ScaffoldInput): ScaffoldResult {
 
 function buildModelFromRecords(opts: BuildModelFromRecordsOpts): ScaffoldResult {
   const { records, todos } = opts;
-  const inferred = inferFields(records);
   const corePost = opts.coreType === 'post';
+  const inferredBase = inferFields(records);
+  const inferred = corePost && records.some((record) => Object.prototype.hasOwnProperty.call(record, 'content'))
+    ? {
+        ...inferredBase,
+        contentKey: 'content',
+        fields: fieldsWithRestoredContentMeta(records, inferredBase).filter((field) => field.key !== 'content'),
+      }
+    : inferredBase;
   const sourceName = opts.typeName ?? 'item';
   const typeNoun = singular(sourceName === '(anonymous)' ? 'item' : sourceName).toLowerCase();
   const cptSlug = corePost ? 'post' : slugify(typeNoun) || 'item';
@@ -241,6 +248,33 @@ function buildModelFromRecords(opts: BuildModelFromRecordsOpts): ScaffoldResult 
   };
 
   return { model, skillTodos: todos, discovered: { ...opts.discovered, source: opts.source }, validation: validateDataModel(model) };
+}
+
+function fieldsWithRestoredContentMeta(records: Array<Record<string, unknown>>, inferred: ReturnType<typeof inferFields>): DataField[] {
+  const fields = [...inferred.fields];
+  if (inferred.contentKey && inferred.contentKey !== 'content' && !fields.some((field) => field.key === inferred.contentKey)) {
+    fields.push(dataFieldForKey(records, inferred.contentKey));
+  }
+  const keyOrder = new Map(recordKeys(records).map((key, index) => [key, index] as const));
+  return fields.sort((a, b) => (keyOrder.get(a.key) ?? Number.MAX_SAFE_INTEGER) - (keyOrder.get(b.key) ?? Number.MAX_SAFE_INTEGER));
+}
+
+function recordKeys(records: Array<Record<string, unknown>>): string[] {
+  return [...new Set(records.flatMap((record) => Object.keys(record)))];
+}
+
+function dataFieldForKey(records: Array<Record<string, unknown>>, key: string): DataField {
+  const fieldValues = records.map((record) => record[key]).filter((value) => value !== undefined);
+  if (fieldValues.length > 0 && fieldValues.every((value) => typeof value === 'boolean')) return { key, type: 'boolean' };
+  if (fieldValues.length > 0 && fieldValues.every((value) => typeof value === 'number')) {
+    return { key, type: fieldValues.every((value) => Number.isInteger(value)) ? 'integer' : 'number' };
+  }
+  const stringValues = fieldValues.filter((value) => typeof value === 'string') as string[];
+  if (stringValues.length > 0 && stringValues.every((value) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(value))) return { key, type: 'string', format: 'email' };
+  if (stringValues.length > 0 && stringValues.every((value) => /^https?:\/\//.test(value))) return { key, type: 'string', format: 'url' };
+  if (stringValues.length > 0 && stringValues.every((value) => /^\d{4}-\d{2}-\d{2}/.test(value))) return { key, type: 'string', format: 'date' };
+  if (stringValues.some((value) => value.length >= 60)) return { key, type: 'string', format: 'textarea' };
+  return { key, type: 'string' };
 }
 
 function choosePrimaryArray(
