@@ -97,6 +97,13 @@ export interface MountSpec {
   };
   /** Wrapper class(es) on the mount div (carried CSS hooks, e.g. 'obj-grid obj-grid--4'). */
   wrapperClass?: string;
+  /**
+   * Static-HTML-card path only: the ORIGINAL container selector in the source
+   * DOM. The ingest neutralizer locates this element, empties its card children,
+   * and stamps `selector`'s synthetic #id so injectQueryLoops matches. Undefined
+   * for the JS-mount path (whose `selector` is already the source #id).
+   */
+  sourceSelector?: string;
 }
 
 /**

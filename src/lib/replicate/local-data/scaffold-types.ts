@@ -18,6 +18,8 @@ export interface ScaffoldResult {
   model: DataModel;
   skillTodos: ScaffoldTodo[];
   discovered: {
+    /** Which records source fired. 'none' = neither JS arrays nor HTML cards yielded records. */
+    source: 'js-array' | 'html-cards' | 'none';
     arrays: DiscoveredArrayInfo[];
     skippedFiles: string[];
     unmatchedContainers?: string[];
