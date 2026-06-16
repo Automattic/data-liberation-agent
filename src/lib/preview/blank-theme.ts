@@ -27,6 +27,7 @@
 //
 import { LIBRARY_CDN_ALLOWLIST } from '../screenshot/js-aggregator.js';
 import type { ReplicaFile } from './types.js';
+import { buildThemeHeader } from '../replicate/theme-php.js';
 
 export interface BlankThemeOpts {
   themeSlug: string;
@@ -58,12 +59,11 @@ export interface BlankThemeOpts {
 export function buildBlankTheme(opts: BlankThemeOpts): ReplicaFile[] {
   const { themeSlug, hasJs, headLinks, headerBlockMarkup, footerHtml, hasChromeCss, hasDesignCapture } = opts;
 
-  const styleCss = `/*
-Theme Name: DLA Replica (${themeSlug})
-Description: Blank companion theme for html-first design replication. Carried CSS lives in site.css.
-Version: 1.0.0
-*/
-`;
+  const styleCss = buildThemeHeader([
+    ['Theme Name', `DLA Replica (${themeSlug})`],
+    ['Description', 'Blank companion theme for html-first design replication. Carried CSS lives in site.css.'],
+    ['Version', '1.0.0'],
+  ]);
 
   const fontEnqueues = headLinks
     .map((href, i) => `  wp_enqueue_style('dla-font-${i}', ${phpString(href)}, array(), null);`)
