@@ -11,15 +11,33 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { homedir } from 'node:os';
+import { join, resolve } from 'node:path';
 
 const execFileAsync = promisify(execFile);
 
+/** Expand a leading `~` / `~/` to the user's home dir.
+ * `path.resolve` treats `~` as a literal path segment (so `~/Studio/x` becomes
+ * `<cwd>/~/Studio/x`), but the `studio` CLI DOES expand it — so a tilde site
+ * path created on disk by Studio was never found by the fs-side probe. Callers
+ * that hand a `~`-path to both the shell and Node fs must expand it for the fs
+ * side. Only bare `~` and `~/...` are handled; `~user` homes are not resolvable
+ * here and are returned unchanged. */
+export function expandTilde(p: string): string {
+  if (p === '~') return homedir();
+  if (p.startsWith('~/')) return join(homedir(), p.slice(2));
+  return p;
+}
+
 /** Studio layouts: wp-content at the site root or under a wordpress/ subdir.
- * Returns the WP root (the dir containing wp-content) or null when absent. */
+ * Returns the WP root (the dir containing wp-content) or null when absent.
+ * The canonical Studio wp-root probe — handlers and the watch runner import
+ * this rather than re-deriving the flat-vs-nested logic. */
 export function studioWpRoot(studioSitePath: string): string | null {
-  if (existsSync(join(studioSitePath, 'wp-content'))) return studioSitePath;
-  if (existsSync(join(studioSitePath, 'wordpress', 'wp-content'))) return join(studioSitePath, 'wordpress');
+  const root = resolve(expandTilde(studioSitePath));
+  if (existsSync(join(root, 'wp-content'))) return root;
+  const nested = join(root, 'wordpress');
+  if (existsSync(join(nested, 'wp-content'))) return nested;
   return null;
 }
 

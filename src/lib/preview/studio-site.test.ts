@@ -1,10 +1,29 @@
 // src/lib/preview/studio-site.test.ts
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { ensureStudioSite, studioWpRoot, type ExecFn } from './studio-site.js';
+import { ensureStudioSite, expandTilde, studioWpRoot, type ExecFn } from './studio-site.js';
 
 const TMP = join(process.cwd(), '.tmp-test');
+
+describe('expandTilde', () => {
+  it('expands a bare ~ to the home dir', () => {
+    expect(expandTilde('~')).toBe(homedir());
+  });
+
+  it('expands a leading ~/ to the home dir', () => {
+    expect(expandTilde('~/Studio/maison-clouet')).toBe(join(homedir(), 'Studio/maison-clouet'));
+  });
+
+  it('leaves absolute paths untouched', () => {
+    expect(expandTilde('/Users/matt/Studio/x')).toBe('/Users/matt/Studio/x');
+  });
+
+  it('does NOT expand ~user (only ~ or ~/ — username homes are not resolvable here)', () => {
+    expect(expandTilde('~bob/Studio')).toBe('~bob/Studio');
+  });
+});
 
 describe('studioWpRoot', () => {
   let dir: string;
@@ -26,6 +45,17 @@ describe('studioWpRoot', () => {
 
   it('returns null when no wp-content exists', () => {
     expect(studioWpRoot(dir)).toBeNull();
+  });
+
+  it('expands a leading ~ before probing (regression: literal ~ never has wp-content)', () => {
+    // The convert-local-site bug: a ~/Studio/... path resolved to <cwd>/~/Studio/...
+    // (path.resolve treats ~ as a literal segment), so the post-create wp-content
+    // probe always missed even though `studio site create` made the real dir.
+    // The test temp dir lives under cwd, which is under $HOME, so it has a tilde form.
+    expect(dir.startsWith(homedir() + '/')).toBe(true); // precondition for the tilde form
+    mkdirSync(join(dir, 'wp-content'), { recursive: true });
+    const tildePath = '~' + dir.slice(homedir().length); // e.g. ~/projects/.../.tmp-test/studio-xxx
+    expect(studioWpRoot(tildePath)).toBe(dir);
   });
 });
 

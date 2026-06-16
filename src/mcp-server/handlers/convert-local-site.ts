@@ -11,9 +11,7 @@
 // template, optionally capture the WP replica and score parity.
 //
 import { existsSync, readFileSync, writeFileSync, readdirSync, renameSync, unlinkSync, mkdirSync, copyFileSync } from 'node:fs';
-import { basename, dirname, join } from 'node:path';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
+import { basename, dirname, join, resolve } from 'node:path';
 import type { Handler } from '../handler-types.js';
 import { ingestLocalSiteHandler } from './ingest-local-site.js';
 import { themeCacheFlushCommands } from './install-theme.js';
@@ -33,7 +31,9 @@ import { captureScreenshots } from '../../lib/screenshot/screenshotter.js';
 import { SCREENSHOT_DEVICE_SCALE_FACTOR } from '../../lib/screenshot/types.js';
 import { compareScreenshotDirs } from '../../lib/screenshot/compare.js';
 import { openEditorSession, scoreEditorSurface, type EditorSurfacePage } from '../../lib/preview/editor-preview.js';
-import { ensureStudioSite } from '../../lib/preview/studio-site.js';
+import { ensureStudioSite, expandTilde, studioWpRoot } from '../../lib/preview/studio-site.js';
+import { studioWp as studioWpExec } from '../../lib/preview/studio.js';
+import { connectBrowser } from '../../lib/browser-kit/index.js';
 import type { DataModel } from '../../lib/replicate/local-data/types.js';
 import { installLocalData } from '../../lib/replicate/local-data/data-install.js';
 import { injectQueryLoops } from '../../lib/replicate/local-data/inject-query-loops.js';
@@ -53,30 +53,30 @@ import { CLEAR_INTERVALS_SCRIPT, FREEZE_MOTION_CSS, probePair, type Divergence }
 import { extractDiffRegions } from '../../lib/replicate/parity/diff-regions.js';
 import { classifyDivergences, renderPatchCss, divergenceFingerprint, suppressPageConflicts, type UnresolvedDivergence, type PatchOverride, type RepairPlan } from '../../lib/replicate/parity/parity-classify.js';
 
-const execFileAsync = promisify(execFile);
-
-/** Studio layouts: wp-content at the site root or under wordpress/. */
-function resolveWpRoot(studioSitePath: string): string | null {
-  if (existsSync(join(studioSitePath, 'wp-content'))) return studioSitePath;
-  if (existsSync(join(studioSitePath, 'wordpress', 'wp-content'))) return join(studioSitePath, 'wordpress');
-  return null;
-}
-
+/** Thin trimming wrapper over the shared Studio wp-cli exec — these are short
+ * commands, so the 60s/10MB envelope rather than the 5min/50MB default. */
 async function studioWp(sitePath: string, wpArgs: string[]): Promise<string> {
-  const { stdout } = await execFileAsync('studio', ['wp', '--path', sitePath, ...wpArgs], {
-    timeout: 60_000,
-    maxBuffer: 10 * 1024 * 1024,
-  });
-  return stdout.trim();
+  return (await studioWpExec(sitePath, wpArgs, { timeout: 60_000, maxBuffer: 10 * 1024 * 1024 })).trim();
 }
 
 export const convertLocalSiteHandler: Handler = async (args, ctx) => {
   const dir = args.dir as string | undefined;
-  const studioSitePath = args.studioSitePath as string | undefined;
+  const studioSitePathArg = args.studioSitePath as string | undefined;
   const outputDir = (args.outputDir as string | undefined) ?? dir;
   if (!dir) return ctx.errorResult('dir is required');
-  if (!studioSitePath) return ctx.errorResult('studioSitePath is required');
+  if (!studioSitePathArg) return ctx.errorResult('studioSitePath is required');
   if (!outputDir) return ctx.errorResult('outputDir is required');
+
+  // Belt-and-suspenders: normalize the Studio site path to a single absolute
+  // path at the entry, so NO downstream code path (CLI `--path` args, the
+  // `.dla-scripts` host writes that feed `wp eval-file`, the wp-root probe) can
+  // ever see a bare `~`. `path.resolve` treats `~` as a literal segment, so an
+  // un-expanded `~/Studio/x` scatters host files into a junk `<cwd>/~/Studio/x`
+  // dir while `studio` itself DOES expand the tilde — the two disagree and every
+  // eval-file install fails ("does not exist"). Expanding + resolving once here
+  // closes that whole class of bug no matter which downstream step grows a new
+  // path use. The skill documents `~/Studio/<slug>` as the canonical input.
+  const studioSitePath = resolve(expandTilde(studioSitePathArg));
 
   const warnings: string[] = [];
 
@@ -86,7 +86,7 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
   // an existing site at studioSitePath is reused untouched. Admin creds come
   // from env (never the tool payload); omitted -> Studio auto-generates them.
   const createSite = args.createSite === true;
-  let wpRoot = resolveWpRoot(studioSitePath);
+  let wpRoot = studioWpRoot(studioSitePath);
   if (!wpRoot && createSite) {
     const siteName =
       (args.siteTitle as string | undefined) ?? (basename(studioSitePath.replace(/\/+$/, '')) || 'Local Site');
@@ -831,8 +831,7 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
       let probeOk = true;
       try {
         repairServer = await startStaticServer(dir);
-        const { chromium } = await import('playwright');
-        repairBrowser = await chromium.launch();
+        repairBrowser = await connectBrowser({});
 
         for (const failPage of failingPages) {
           const slug = manifestByPathname.get(failPage.pathname);

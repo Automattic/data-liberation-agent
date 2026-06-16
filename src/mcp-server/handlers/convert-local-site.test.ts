@@ -1,6 +1,7 @@
 // src/mcp-server/handlers/convert-local-site.test.ts
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { PNG } from 'pngjs';
 import type { HandlerContext, ToolResult } from '../handler-types.js';
@@ -303,6 +304,47 @@ describe('convertLocalSiteHandler', () => {
       rmSync(dir, { recursive: true, force: true });
       rmSync(sitePath, { recursive: true, force: true });
       rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
+  it('normalizes a ~ studioSitePath to an absolute path at entry (belt-and-suspenders)', async () => {
+    // Regression: a `~/Studio/x` site path (the canonical input the skill
+    // documents) must be expanded ONCE at the handler entry so no downstream
+    // path use — the studio CLI `--path`, the `.dla-scripts` host writes feeding
+    // `wp eval-file`, the wp-root probe — ever sees a bare `~`. `path.resolve`
+    // treats `~` as a literal segment, so an un-normalized tilde scattered the
+    // install scripts into a junk `<cwd>/~/Studio/x` dir while `studio` expanded
+    // the real path → every eval-file install failed with "does not exist".
+    const dir = makeSite();
+    const sitePath = makeStudioSite(); // absolute temp dir, under cwd (=> under $HOME)
+    const outDir = mkdtempSync(join(FIXTURE_TMP, 'cls-out-'));
+    // Precondition: the fixture tree is under $HOME, so it has a tilde form.
+    expect(sitePath.startsWith(homedir() + '/')).toBe(true);
+    const tildePath = '~' + sitePath.slice(homedir().length);
+    const junkTildeDir = join(process.cwd(), '~');
+    try {
+      const res = await convertLocalSiteHandler(
+        { dir, studioSitePath: tildePath, outputDir: outDir, themeSlug: 'acme-local', siteTitle: 'Acme', skipDesign: true },
+        ctx,
+      );
+      expect(res.isError).toBeFalsy();
+      // No studio CLI call may carry a literal `~` argument.
+      const tildeArgs = execCalls.filter((c) => c.some((a) => typeof a === 'string' && a.includes('~')));
+      expect(tildeArgs).toEqual([]);
+      // Every `--path` passed to studio must be the resolved ABSOLUTE site dir.
+      const pathArgs = execCalls.flatMap((c) => {
+        const i = c.indexOf('--path');
+        return i >= 0 ? [c[i + 1]] : [];
+      });
+      expect(pathArgs.length).toBeGreaterThan(0);
+      for (const p of pathArgs) expect(p).toBe(sitePath);
+      // Direct proof of the actual bug: no literal-`~` junk dir in cwd.
+      expect(existsSync(junkTildeDir)).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(sitePath, { recursive: true, force: true });
+      rmSync(outDir, { recursive: true, force: true });
+      rmSync(junkTildeDir, { recursive: true, force: true });
     }
   });
 
