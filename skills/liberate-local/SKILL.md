@@ -18,7 +18,7 @@ The single front door for the **owned local-source** path: a directory of HTML/C
 │
 ├─ resolve inputs: source dir · site name · theme slug · Studio site path · output dir
 │
-├─ if JS-data path: start these together, then wait for both:
+├─ if JS-data OR static content cards: start these together, then wait for both:
 │     ├─ background provision: studio site create --path <studioSitePath> --start --skip-browser --skip-log-details
 │     └─ model-local-data subagent → <outputDir>/data-model.json
 │
@@ -51,9 +51,9 @@ Ask for the **source directory** if not given. Then derive (let the operator ove
 
 ### Step 0b — WordPress-driven data (conditional)
 
-If the source renders its main content from **JavaScript data** (an empty `<div id="…">` filled at runtime by a mount call over an in-file array, e.g. a catalog/listing/gallery) rather than static HTML, those grids would be **empty in the block editor** on a straight carry. In that case, first produce the data model:
+If the source renders its main content from **JavaScript data** (an empty `<div id="…">` filled at runtime by a mount call over an in-file array, e.g. a catalog/listing/gallery) or from repeated **static-HTML content cards** (post-preview cards on index/archive pages), those grids would be **empty or non-native in the block editor** on a straight carry. In that case, first produce the data model:
 
-- Dispatch the **`model-local-data`** skill via a subagent (so the nested skill runs to completion without interrupting this workflow), pointing it at the source dir + output dir. It reads the source JS and writes `<outputDir>/data-model.json` (a CPT + taxonomy + native query loops + a faithful card render).
+- Dispatch the **`model-local-data`** skill via a subagent (so the nested skill runs to completion without interrupting this workflow), pointing it at the source dir + output dir. It runs the scaffold to decide the source: `js-array`, `html-cards`, or `none`. For JS arrays it reads the source JS; for static content cards the scaffold's records come from `discoverHtmlCards`. It writes `<outputDir>/data-model.json` (posts/taxonomy + native query loops + a faithful card render).
 - At the same time, start Studio provisioning in the background:
 
   ```
@@ -61,10 +61,10 @@ If the source renders its main content from **JavaScript data** (an empty `<div 
   ```
 
   Start this right after resolving inputs and dispatching the data-model fill. Wait for BOTH the background provisioning command and the `model-local-data` subagent to finish before Step 1.
-- When that file exists, the convert step below **auto-activates** the data path: it registers the CPT, inserts the items, replaces the empty mounts with `core/query` loops (editable/analyzable in the editor), and neutralizes the JS data-mounts + rebinds the modal to per-card DOM islands — while keeping styling/animation/filter JS.
+- When that file exists, the convert step below **auto-activates** the data path: it inserts the items, registers any needed custom type/taxonomy, replaces the mounts/card containers with `core/query` loops (editable/analyzable in the editor), and neutralizes the JS data-mounts or static card container + rebinds any modal to per-card DOM islands — while keeping styling/animation/filter JS.
 - Step 1 still calls `liberate_convert_local_site` with `createSite: true`. The convert handler is idempotent, so it reuses the already-provisioned site and skips re-provisioning; behavior is unchanged, only the orchestration order and wall-clock time change.
 
-Skip this step when the content is static HTML (no JS data array). There is no AI fill to overlap, so do not pre-provision; let Step 1 provision the site as it does today. Pass `dataModel: false` to the convert call to force the data path off even if a model file is present.
+Run the scaffold to decide. If `discovered.source` is `none`, fall through to the pure carry path (today's behavior): do not use a data model, pass `dataModel: false` to the convert call to force the data path off even if a model file is present, and let Step 1 provision or reuse the site idempotently.
 
 ### Step 1 — Convert (one command)
 
