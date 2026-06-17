@@ -105,6 +105,10 @@ export function scaffoldDataModel(input: ScaffoldInput): ScaffoldResult {
       sourceSelector: grid.containerSelector,
       ...(sourcePage ? { sourcePage } : {}),
       sourceCall: `html-cards:${grid.containerSelector}`,
+      // Carry the source grid container's class onto the query loop's
+      // post-template so the carried layout CSS keeps the cards in a grid
+      // (without it the post-template falls back to vertical flow).
+      ...(grid.containerClass ? { wrapperClass: grid.containerClass } : {}),
       perPageHint: undefined,
       confidence: 'high',
       evidence: grid.evidence,

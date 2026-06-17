@@ -246,6 +246,9 @@ describe('scaffoldDataModel — records-source chain', () => {
     // mounts carry the original container selector + a synthetic #id (DECISION 1)
     expect(r.model.mounts[0].selector).toMatch(/^#dla-cards-/);
     expect(r.model.mounts[0].sourceSelector).toBeTruthy();
+    // mounts carry the source grid container's class so the query loop's
+    // post-template keeps the source grid layout CSS (else cards stack vertically)
+    expect(r.model.mounts[0].wrapperClass).toBe('cluster');
     // deterministic template means NO card.template todo
     expect(r.skillTodos.some((t) => t.path === 'card.template')).toBe(false);
     expect(r.model.card?.template).toContain('data-dla-text');

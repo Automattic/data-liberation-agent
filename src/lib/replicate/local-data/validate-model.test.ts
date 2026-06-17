@@ -28,14 +28,31 @@ describe('validateDataModel', () => {
     expect(r.counts).toEqual({ fields: 2, items: 1, terms: 2, mounts: 1 });
   });
 
-  it('rejects reserved + malformed cpt/taxonomy slugs', () => {
+  it('rejects truly-reserved + malformed cpt/taxonomy slugs', () => {
     const r = validateDataModel(model({
-      cpt: { slug: 'post', singular: 'P', plural: 'P', public: true, supports: [] },
+      cpt: { slug: 'wp_template', singular: 'P', plural: 'P', public: true, supports: [] },
       taxonomy: { slug: 'Category!', label: '', hierarchical: true, terms: [] },
     }));
     expect(r.valid).toBe(false);
     expect(r.errors.some((e) => /reserved/.test(e))).toBe(true);
     expect(r.errors.some((e) => /lowercase/.test(e))).toBe(true);
+  });
+
+  it('accepts core built-in post/category as reuse targets (static-HTML-card path)', () => {
+    const r = validateDataModel(model({
+      cpt: { slug: 'post', singular: 'Post', plural: 'Posts', public: true, supports: ['title', 'editor', 'thumbnail'] },
+      taxonomy: {
+        slug: 'category', label: 'Categories', hierarchical: true,
+        terms: [{ slug: 'glass', label: 'Glass' }, { slug: 'textiles', label: 'Textiles' }],
+      },
+      mounts: [{ selector: '#g', sourceCall: '', query: { postType: 'post', perPage: 4 } }],
+    }));
+    expect(r.valid).toBe(true);
+    expect(r.errors).toEqual([]);
+    expect(r.warnings).toEqual(expect.arrayContaining([
+      expect.stringMatching(/cpt\.slug "post" targets a WordPress built-in/),
+      expect.stringMatching(/taxonomy\.slug "category" targets a WordPress built-in/),
+    ]));
   });
 
   it('flags duplicate field keys, item ids, and term slugs', () => {

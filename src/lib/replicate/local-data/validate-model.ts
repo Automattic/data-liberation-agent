@@ -18,10 +18,18 @@ const POST_TYPE_MAX = 20;
 const TAXONOMY_MAX = 32;
 const FIELD_TYPES: ReadonlySet<DataFieldType> = new Set(['string', 'integer', 'number', 'boolean']);
 const FIELD_FORMATS: ReadonlySet<DataFieldFormat> = new Set(['email', 'url', 'textarea', 'date']);
+// WordPress built-ins the data path can legitimately TARGET (e.g. the
+// static-HTML-card path maps to core post + category). cpt-plugin.ts skips
+// registration for exactly these, so naming them is intentional, not a
+// collision — must mirror BUILTIN_TYPES / BUILTIN_TAX there.
+const USABLE_BUILTIN_TYPES = new Set(['post', 'page', 'attachment']);
+const USABLE_BUILTIN_TAXONOMIES = new Set(['category', 'post_tag']);
+// Reserved internal types/taxonomies a model can NEVER register or reuse —
+// naming one is always an authoring error.
 const RESERVED_POST_TYPES = new Set([
-  'post', 'page', 'attachment', 'revision', 'nav_menu_item', 'wp_block', 'wp_template', 'wp_template_part',
+  'revision', 'nav_menu_item', 'wp_block', 'wp_template', 'wp_template_part',
 ]);
-const RESERVED_TAXONOMIES = new Set(['category', 'post_tag', 'nav_menu', 'link_category', 'post_format']);
+const RESERVED_TAXONOMIES = new Set(['nav_menu', 'link_category', 'post_format']);
 
 export interface ValidateModelResult {
   valid: boolean;
@@ -66,6 +74,7 @@ export function validateDataModel(model: DataModel): ValidateModelResult {
   } else {
     checkSlug(cpt.slug, 'cpt', POST_TYPE_MAX, errors);
     if (RESERVED_POST_TYPES.has(cpt.slug)) errors.push(`cpt.slug is reserved by WordPress: ${cpt.slug}`);
+    else if (USABLE_BUILTIN_TYPES.has(cpt.slug)) warnings.push(`cpt.slug "${cpt.slug}" targets a WordPress built-in type; it will be reused, not registered.`);
   }
 
   // Taxonomy
@@ -76,6 +85,7 @@ export function validateDataModel(model: DataModel): ValidateModelResult {
   } else {
     checkSlug(tax.slug, 'taxonomy', TAXONOMY_MAX, errors);
     if (RESERVED_TAXONOMIES.has(tax.slug)) errors.push(`taxonomy.slug is reserved by WordPress: ${tax.slug}`);
+    else if (USABLE_BUILTIN_TAXONOMIES.has(tax.slug)) warnings.push(`taxonomy.slug "${tax.slug}" targets a WordPress built-in taxonomy; it will be reused, not registered.`);
     for (const t of tax.terms ?? []) {
       if (!t.slug) errors.push('taxonomy term is missing a slug.');
       else if (termSlugs.has(t.slug)) errors.push(`duplicate taxonomy term slug: ${t.slug}`);

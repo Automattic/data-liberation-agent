@@ -36,6 +36,14 @@ const DATE_RE = /\b(\d{4}-\d{2}-\d{2}|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct
 export interface DiscoveredCardGrid {
   /** The grid container → becomes a mount / core/query loop. Unique in the document. */
   containerSelector: string;
+  /**
+   * The container's own class attribute (verbatim), carried onto the query
+   * loop's post-template so the source's layout CSS (e.g. a `display:grid`
+   * rule on `.bp-featured`) keeps laying the cards out. Class-agnostic: we
+   * carry whatever classes the source container has rather than matching any.
+   * Empty string when the container has no class.
+   */
+  containerClass: string;
   /** One per card, in document order. Shape the scaffold's records pipeline consumes. */
   records: Array<Record<string, unknown>>;
   /** Diffed skeleton with data-dla-* bindings (deterministic). */
@@ -319,11 +327,14 @@ function buildGrid(
   signature: string,
   opts: DiscoverHtmlCardsOptions
 ): DiscoveredCardGrid {
-  const containerSelector = uniqueSelector($, safeGridContainer($, cards));
+  const container = safeGridContainer($, cards);
+  const containerSelector = uniqueSelector($, container);
+  const containerClass = ($(container).attr('class') ?? '').trim();
   const richCards = cards.filter((c) => isRichCard($, c));
   if (richCards.length < MIN_CARDS) {
     return {
       containerSelector,
+      containerClass,
       records: [],
       cardTemplate: '',
       confidence: 'low',
@@ -367,6 +378,7 @@ function buildGrid(
   const template = buildCardTemplate($, richCards[0], fields[0]);
   return {
     containerSelector,
+    containerClass,
     records,
     cardTemplate: template,
     confidence: titlesOk && template ? 'high' : 'low',

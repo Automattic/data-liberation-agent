@@ -366,6 +366,25 @@ describe('discoverHtmlCards — field roles', () => {
   });
 });
 
+describe('discoverHtmlCards — container class capture', () => {
+  // The grid container's own class must be surfaced verbatim so the scaffold can
+  // carry it onto the query-loop post-template (keeps the source's grid CSS).
+  const GRID_WITH_CONTAINER_CLASS = `
+<main><section><div class="post-grid post-grid--3">
+  <article class="card"><div class="m"><a href="1.html"><img src="1.png" alt=""></a></div>
+    <div class="b"><a class="cat" href="x.html">News</a><h3><a href="1.html">Card one title</a></h3><p>Body of card one here.</p></div></article>
+  <article class="card"><div class="m"><a href="2.html"><img src="2.png" alt=""></a></div>
+    <div class="b"><a class="cat" href="x.html">News</a><h3><a href="2.html">Card two title</a></h3><p>Body of card two here.</p></div></article>
+  <article class="card"><div class="m"><a href="3.html"><img src="3.png" alt=""></a></div>
+    <div class="b"><a class="cat" href="x.html">News</a><h3><a href="3.html">Card three title</a></h3><p>Body of card three here.</p></div></article>
+</div></section></main>`;
+
+  it('surfaces the grid container class verbatim', () => {
+    const [grid] = discoverHtmlCards(GRID_WITH_CONTAINER_CLASS);
+    expect(grid.containerClass).toBe('post-grid post-grid--3');
+  });
+});
+
 describe('discoverHtmlCards — deterministic template', () => {
   it('annotates the source card with data-dla-* bindings, preserving classes', () => {
     const [grid] = discoverHtmlCards(MIXED_DEPTH_GRID);
