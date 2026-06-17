@@ -14,7 +14,13 @@ import { existsSync, readFileSync, writeFileSync, readdirSync, renameSync, unlin
 import { basename, dirname, join, resolve } from 'node:path';
 import type { Handler } from '../handler-types.js';
 import { ingestLocalSiteHandler } from './ingest-local-site.js';
-import { JETPACK_FORMS_PLUGIN_INSTALL, jetpackFormsPluginInstallWarning, shouldInstallJetpackFormsPlugin } from './convert-local-site-jetpack-contract.js';
+import {
+  JETPACK_FORMS_MODULE_ACTIVATE,
+  JETPACK_FORMS_PLUGIN_INSTALL,
+  jetpackFormsModuleActivateWarning,
+  jetpackFormsPluginInstallWarning,
+  shouldInstallJetpackFormsPlugin,
+} from './convert-local-site-jetpack-contract.js';
 import { themeCacheFlushCommands } from './install-theme.js';
 import { ingestLocalSite } from '../../lib/replicate/local-site/ingest.js';
 import { buildNavGraph } from '../../lib/replicate/local-site/nav-graph.js';
@@ -625,6 +631,11 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
   if (shouldInstallJetpackFormsPlugin(formsConverted)) {
     try {
       await studioWp(studioSitePath, JETPACK_FORMS_PLUGIN_INSTALL.wpArgs);
+      try {
+        await studioWp(studioSitePath, JETPACK_FORMS_MODULE_ACTIVATE.wpArgs);
+      } catch (err) {
+        warnings.push(jetpackFormsModuleActivateWarning(err as Error));
+      }
     } catch (err) {
       warnings.push(jetpackFormsPluginInstallWarning(err as Error));
     }

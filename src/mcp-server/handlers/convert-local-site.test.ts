@@ -6,7 +6,11 @@ import { join } from 'node:path';
 import { PNG } from 'pngjs';
 import type { HandlerContext, ToolResult } from '../handler-types.js';
 import { JETPACK_FORM_PARITY_CSS } from '../../lib/replicate/local-theme/jetpack-form-parity-contract.js';
-import { JETPACK_FORMS_PLUGIN_INSTALL } from './convert-local-site-jetpack-contract.js';
+import {
+  JETPACK_FORMS_COMMAND_SEQUENCE,
+  JETPACK_FORMS_MODULE_ACTIVATE,
+  JETPACK_FORMS_PLUGIN_INSTALL,
+} from './convert-local-site-jetpack-contract.js';
 
 // Mock BOTH exec seams before importing the handler:
 // - node:child_process execFile → studio wp activation/option/meta commands
@@ -624,7 +628,7 @@ describe('convertLocalSiteHandler', () => {
     }
   });
 
-  it('installs and activates Jetpack when forms were converted', async () => {
+  it('installs and activates Jetpack and the contact-form module when forms were converted', async () => {
     const dir = makeFormSite();
     const sitePath = makeStudioSite();
     const outDir = mkdtempSync(join(FIXTURE_TMP, 'cls-form-jetpack-out-'));
@@ -637,10 +641,7 @@ describe('convertLocalSiteHandler', () => {
       expect(buildJetpackFormParityCssMock).toHaveBeenCalledTimes(1);
       const calls = buildJetpackFormParityCssMock.mock.calls as unknown as Array<[{ formsConverted: number }]>;
       expect(calls[0][0].formsConverted).toBeGreaterThanOrEqual(1);
-      expect(jetpackInstallCalls().map(wpArgsForExecCall)).toEqual([
-        Array.from(JETPACK_FORMS_PLUGIN_INSTALL.wpArgs),
-      ]);
-      expect(jetpackWpCalls()).toEqual(jetpackInstallCalls());
+      expect(jetpackWpCalls().map(wpArgsForExecCall)).toEqual(JETPACK_FORMS_COMMAND_SEQUENCE.map((wpArgs) => Array.from(wpArgs)));
     } finally {
       rmSync(dir, { recursive: true, force: true });
       rmSync(sitePath, { recursive: true, force: true });
@@ -681,9 +682,34 @@ describe('convertLocalSiteHandler', () => {
       const summary = JSON.parse(res.content[0].text) as { installed: number; warnings: string[] };
       expect(summary.installed).toBe(1);
       expect(jetpackInstallCalls()).toHaveLength(1);
+      expect(jetpackWpCalls().map(wpArgsForExecCall)).toEqual([Array.from(JETPACK_FORMS_PLUGIN_INSTALL.wpArgs)]);
       const warning = summary.warnings.find((w) => w.includes('Jetpack') && w.includes('WordPress.com connection'));
       expect(warning).toContain(JETPACK_FORMS_PLUGIN_INSTALL.warningPrefix);
       expect(warning).toContain(JETPACK_FORMS_PLUGIN_INSTALL.localFormsNote);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(sitePath, { recursive: true, force: true });
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
+  it('continues with a warning when Jetpack contact-form module activation fails', async () => {
+    const dir = makeFormSite();
+    const sitePath = makeStudioSite();
+    const outDir = mkdtempSync(join(FIXTURE_TMP, 'cls-form-jetpack-module-fail-out-'));
+    execFailFor = JETPACK_FORMS_MODULE_ACTIVATE.wpArgs.join(' ');
+    try {
+      const res = await convertLocalSiteHandler(
+        { dir, studioSitePath: sitePath, outputDir: outDir, themeSlug: 'acme-local', siteTitle: 'Acme', skipDesign: true },
+        ctx,
+      );
+      expect(res.isError).toBeFalsy();
+      const summary = JSON.parse(res.content[0].text) as { installed: number; warnings: string[] };
+      expect(summary.installed).toBe(1);
+      expect(jetpackWpCalls().map(wpArgsForExecCall)).toEqual(JETPACK_FORMS_COMMAND_SEQUENCE.map((wpArgs) => Array.from(wpArgs)));
+      const warning = summary.warnings.find((w) => w.includes(JETPACK_FORMS_MODULE_ACTIVATE.warningPrefix));
+      expect(warning).toContain(JETPACK_FORMS_MODULE_ACTIVATE.warningPrefix);
+      expect(warning).toContain(JETPACK_FORMS_MODULE_ACTIVATE.localFormsNote);
     } finally {
       rmSync(dir, { recursive: true, force: true });
       rmSync(sitePath, { recursive: true, force: true });
