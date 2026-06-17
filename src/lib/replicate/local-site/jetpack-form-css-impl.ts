@@ -22,6 +22,17 @@ type PostcssParent = Rule['parent'] | Document;
 
 const FORM_CONTEXTS = ['.wp-block-jetpack-contact-form', '.jetpack-contact-form-container'] as const;
 const JETPACK_FORM_SELECTOR = '.contact-form.commentsblock.jetpack-contact-form__form';
+export const JETPACK_FORM_PARITY_NEVER_CARRY_PROPERTIES: ReadonlySet<string> = new Set([
+  'display',
+  'visibility',
+  'position',
+  'opacity',
+  'transform',
+  'float',
+  'clip',
+  'clip-path',
+  'z-index',
+]);
 
 const FORM_TARGETS = [
   ...FORM_CONTEXTS,
