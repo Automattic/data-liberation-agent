@@ -210,6 +210,79 @@ describe('emitSectionBlocks', () => {
     expect(blockMarkupRoundtrips(markup).ok).toBe(true);
   });
 
+  it('emits nested lists inside the parent list item without flattening links', () => {
+    const section = {
+      id: 's',
+      role: 'body' as const,
+      html:
+        '<section><ul><li>Subjects<ul><li><a href="/community.html">Community</a></li><li><a href="/guides.html">Guides</a></li></ul></li></ul></section>',
+    };
+
+    const { markup, confidence } = emitSectionBlocks(section);
+    const parentLabelIndex = markup.indexOf('<li>Subjects');
+    const nestedListIndex = markup.indexOf('<!-- wp:list -->', parentLabelIndex + 1);
+    const nestedListCloseIndex = markup.indexOf('<!-- /wp:list -->', nestedListIndex);
+    const parentItemCloseIndex = markup.indexOf('<!-- /wp:list-item -->', nestedListCloseIndex);
+
+    expect(parentLabelIndex).toBeGreaterThanOrEqual(0);
+    expect(nestedListIndex).toBeGreaterThan(parentLabelIndex);
+    expect(parentItemCloseIndex).toBeGreaterThan(nestedListIndex);
+    expect((markup.match(/<!-- wp:list -->/g) ?? []).length).toBe(2);
+    expect((markup.match(/<!-- wp:list-item -->/g) ?? []).length).toBe(3);
+    expect(markup).toContain('<a href="/community.html">Community</a>');
+    expect(markup).toContain('<a href="/guides.html">Guides</a>');
+    expect(confidence).toBe(1);
+    expect(blockMarkupRoundtrips(markup).ok).toBe(true);
+  });
+
+  it('keeps a dropdown button label while preserving its nested submenu list', () => {
+    const section = {
+      id: 's',
+      role: 'body' as const,
+      html:
+        '<section><ul><li><button>Subjects<svg><title>Open submenu</title></svg></button><ul><li><a href="/community.html">Community</a></li></ul></li></ul></section>',
+    };
+
+    const { markup, confidence } = emitSectionBlocks(section);
+    const parentLabelIndex = markup.indexOf('<li>Subjects');
+    const nestedListIndex = markup.indexOf('<!-- wp:list -->', parentLabelIndex + 1);
+    const nestedListCloseIndex = markup.indexOf('<!-- /wp:list -->', nestedListIndex);
+    const parentItemCloseIndex = markup.indexOf('<!-- /wp:list-item -->', nestedListCloseIndex);
+
+    expect(parentLabelIndex).toBeGreaterThanOrEqual(0);
+    expect(nestedListIndex).toBeGreaterThan(parentLabelIndex);
+    expect(parentItemCloseIndex).toBeGreaterThan(nestedListIndex);
+    expect(markup).toContain('<a href="/community.html">Community</a>');
+    expect(markup).not.toContain('Open submenu');
+    expect(confidence).toBe(1);
+    expect(blockMarkupRoundtrips(markup).ok).toBe(true);
+  });
+
+  it('keeps flat list emission unchanged when no nested list exists', () => {
+    const section = {
+      id: 's',
+      role: 'body' as const,
+      html: '<section><ul><li>One</li><li><a href="/two.html">Two</a></li></ul></section>',
+    };
+
+    const { markup, confidence } = emitSectionBlocks(section);
+
+    expect(markup).toBe(
+      '<!-- wp:group {"anchor":"s","tagName":"section"} -->\n' +
+        '<section id="s" class="wp-block-group"><!-- wp:list -->\n' +
+        '<ul class="wp-block-list"><!-- wp:list-item -->\n' +
+        '<li>One</li>\n' +
+        '<!-- /wp:list-item -->\n' +
+        '<!-- wp:list-item -->\n' +
+        '<li><a href="/two.html">Two</a></li>\n' +
+        '<!-- /wp:list-item --></ul>\n' +
+        '<!-- /wp:list --></section>\n' +
+        '<!-- /wp:group -->',
+    );
+    expect(confidence).toBe(1);
+    expect(blockMarkupRoundtrips(markup).ok).toBe(true);
+  });
+
   it('emits level attr for non-h2 headings only', () => {
     const section = { id: 's', role: 'body' as const, html: '<section><h3>Three</h3><h2>Two</h2></section>' };
     const { markup } = emitSectionBlocks(section);

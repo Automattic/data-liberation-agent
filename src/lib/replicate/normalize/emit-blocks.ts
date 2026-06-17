@@ -116,6 +116,39 @@ function paragraphBlock(inner: string): string {
   return `<!-- wp:paragraph -->\n<p>${inner}</p>\n<!-- /wp:paragraph -->`;
 }
 
+function listItemBlock($: CheerioAPI, li: Element, sheet: InstanceStyleSheet): string {
+  const $li = $(li);
+  const nestedLists = $li.children('ul, ol').toArray() as Element[];
+  if (nestedLists.length === 0) {
+    return `<!-- wp:list-item -->\n<li>${inlineHtml($, li).trim()}</li>\n<!-- /wp:list-item -->`;
+  }
+
+  const leadingClone = $li.clone();
+  leadingClone.children('ul, ol').remove();
+  leadingClone.find('button svg').remove();
+  const leadingEl = leadingClone.get(0);
+  const leading = leadingEl && isTag(leadingEl) ? inlineHtml($, leadingEl).trim() : '';
+  const nested = nestedLists.map((nestedList) => listBlock($, nestedList, sheet)).join('\n');
+  const body = [leading, nested].filter(Boolean).join('\n');
+  return `<!-- wp:list-item -->\n<li>${body}</li>\n<!-- /wp:list-item -->`;
+}
+
+function listBlock($: CheerioAPI, listEl: Element, sheet: InstanceStyleSheet): string {
+  const tag = listEl.tagName?.toLowerCase() ?? '';
+  const $list = $(listEl);
+  const items = $list
+    .children('li')
+    .map((_, li) => listItemBlock($, li as Element, sheet))
+    .get()
+    .join('\n');
+  const cls = classNameWithInstance($list, sheet);
+  const orderedPairs = tag === 'ol' ? ['"ordered":true'] : [];
+  const listAttrs = blockAttrs(orderedPairs, cls);
+  const ulTag = tag === 'ol' ? 'ol' : 'ul';
+  const listCls = ['wp-block-list', cls].filter(Boolean).join(' ');
+  return `<!-- wp:list${listAttrs} -->\n<${ulTag} class="${escapeHtml(listCls)}">${items}</${ulTag}>\n<!-- /wp:list -->`;
+}
+
 interface ChildResult {
   markup: string;
   clean: boolean;
@@ -181,20 +214,7 @@ function emitChild($: CheerioAPI, el: Element, sheet: InstanceStyleSheet): Child
   }
 
   if (tag === 'ul' || tag === 'ol') {
-    const items = $el
-      .children('li')
-      .map((_, li) => `<!-- wp:list-item -->\n<li>${inlineHtml($, li).trim()}</li>\n<!-- /wp:list-item -->`)
-      .get()
-      .join('\n');
-    const cls = classNameWithInstance($el, sheet);
-    const orderedPairs = tag === 'ol' ? ['"ordered":true'] : [];
-    const listAttrs = blockAttrs(orderedPairs, cls);
-    const ulTag = tag === 'ol' ? 'ol' : 'ul';
-    const listCls = ['wp-block-list', cls].filter(Boolean).join(' ');
-    return {
-      markup: `<!-- wp:list${listAttrs} -->\n<${ulTag} class="${escapeHtml(listCls)}">${items}</${ulTag}>\n<!-- /wp:list -->`,
-      clean: true,
-    };
+    return { markup: listBlock($, el, sheet), clean: true };
   }
 
   if (tag === 'table') {
