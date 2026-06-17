@@ -402,8 +402,13 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
   // Chrome: nav from the graph; footer from the home page's captured footer section.
   const nav = buildNavGraph(site);
   const home = site.pages.find((p) => p.slug === 'home') ?? site.pages[0];
-  const footerSection = segmentPage(home.html).find((s) => s.role === 'footer') ?? null;
-  const headerSection = segmentPage(home.html).find((s) => s.role === 'header') ?? null;
+  const homeSegments = segmentPage(home.html);
+  const footerSection = homeSegments.find((s) => s.role === 'footer') ?? null;
+  // No <header>? A top-level <nav> is the de-facto header (common on one-pagers:
+  // a fixed `<nav id="nav">` with logo + links). Carry it so the real header
+  // survives instead of falling back to a default empty core/navigation.
+  const headerSection =
+    homeSegments.find((s) => s.role === 'header') ?? homeSegments.find((s) => s.role === 'nav') ?? null;
   const slugifyLabel = (s: string): string =>
     s.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
   const labelToUrl = (label: string): string | undefined => {
