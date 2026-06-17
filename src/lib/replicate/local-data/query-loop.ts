@@ -18,12 +18,16 @@
 // `display:contents` so the .obj-card itself becomes the grid item — emitted as
 // the result `css` and folded into the theme's parity stylesheet.
 import type { MountSpec } from './types.js';
+import { anchorId as anchorFromSelector } from './string-utils.js';
 
 /** The dynamic block name that renders one CPT post as a source-faithful card. */
 export const DATA_CARD_BLOCK = 'dla/data-card';
 
 /** WP query loop perPage cannot express "all"; clamp the model's -1 sentinel. */
 const ALL_POSTS_PER_PAGE = 100;
+
+/** Keep the featured column loop's queryId distinct from page-level loop ids. */
+const FEATURED_COLUMN_QUERY_ID_OFFSET = 100000;
 
 export interface QueryLoopResult {
   /** Serialized block markup that replaces the empty mount <div>. */
@@ -36,11 +40,61 @@ export interface QueryLoopResult {
   css: string;
 }
 
-import { anchorId as anchorFromSelector } from './string-utils.js';
-
 /** Lowercase the model's ASC/DESC into the query block's asc/desc. */
 function normalizeOrder(order: 'ASC' | 'DESC' | undefined): 'asc' | 'desc' {
   return order === 'ASC' ? 'asc' : 'desc';
+}
+
+interface QueryBlockOpts {
+  anchor?: string | null;
+  perPage: number;
+  offset: number;
+  postType: string;
+  order: 'ASC' | 'DESC' | undefined;
+  orderBy: 'date' | 'title' | 'menu_order' | undefined;
+  queryId: number;
+  postTemplateClassName?: string;
+  variant?: string;
+}
+
+function blockAttrs(attrs: Record<string, unknown>): string {
+  return Object.keys(attrs).length > 0 ? ` ${JSON.stringify(attrs)}` : '';
+}
+
+function groupClassAttr(className: string | undefined): string {
+  return className ? `wp-block-group ${className}` : 'wp-block-group';
+}
+
+function buildSingleQueryLoop(opts: QueryBlockOpts): string {
+  const perPage = opts.perPage === -1 ? ALL_POSTS_PER_PAGE : opts.perPage;
+
+  // Mirror WP's query-attribute key order so the markup reads like editor output.
+  const query: Record<string, unknown> = {
+    perPage,
+    pages: 0,
+    offset: opts.offset,
+    postType: opts.postType,
+    order: normalizeOrder(opts.order),
+    orderBy: opts.orderBy ?? 'date',
+    inherit: false,
+  };
+
+  const queryAttrs: Record<string, unknown> = { queryId: opts.queryId, query };
+  if (opts.anchor) queryAttrs.anchor = opts.anchor;
+
+  const idAttr = opts.anchor ? ` id="${opts.anchor}"` : '';
+  const templateAttrs = opts.postTemplateClassName
+    ? ` ${JSON.stringify({ className: opts.postTemplateClassName })}`
+    : '';
+  const dataCardAttrs = opts.variant ? ` ${JSON.stringify({ variant: opts.variant })}` : '';
+
+  return (
+    `<!-- wp:query ${JSON.stringify(queryAttrs)} -->\n` +
+    `<div class="wp-block-query"${idAttr}><!-- wp:post-template${templateAttrs} -->\n` +
+    `<!-- wp:${DATA_CARD_BLOCK}${dataCardAttrs} /-->\n` +
+    `<!-- /wp:post-template --></div>\n` +
+    `<!-- /wp:query -->`
+  );
 }
 
 /**
@@ -50,35 +104,69 @@ function normalizeOrder(order: 'ASC' | 'DESC' | undefined): 'asc' | 'desc' {
  */
 export function buildQueryLoop(mount: MountSpec, queryId = 0): QueryLoopResult {
   const anchor = anchorFromSelector(mount.selector);
-  const perPage =
-    mount.query.perPage === -1 ? ALL_POSTS_PER_PAGE : mount.query.perPage;
 
-  // Mirror WP's query-attribute key order so the markup reads like editor output.
-  const query: Record<string, unknown> = {
-    perPage,
-    pages: 0,
+  if (mount.featured) {
+    const outerAttrs: Record<string, unknown> = {};
+    if (anchor) outerAttrs.anchor = anchor;
+    outerAttrs.tagName = 'div';
+    if (mount.wrapperClass) outerAttrs.className = mount.wrapperClass;
+
+    const outerIdAttr = anchor ? ` id="${anchor}"` : '';
+    const outerClassAttr = groupClassAttr(mount.wrapperClass);
+    const columnAttrs: Record<string, unknown> = {};
+    if (mount.featured.columnWrapperClass) {
+      columnAttrs.className = mount.featured.columnWrapperClass;
+    }
+    const columnClassAttr = groupClassAttr(mount.featured.columnWrapperClass);
+
+    const leadLoop = buildSingleQueryLoop({
+      perPage: mount.featured.leadPerPage,
+      offset: 0,
+      postType: mount.query.postType,
+      order: mount.query.order,
+      orderBy: mount.query.orderBy,
+      queryId,
+    });
+
+    const columnLoop = buildSingleQueryLoop({
+      perPage: mount.featured.columnPerPage,
+      offset: mount.featured.leadPerPage,
+      postType: mount.query.postType,
+      order: mount.query.order,
+      orderBy: mount.query.orderBy,
+      queryId: queryId + FEATURED_COLUMN_QUERY_ID_OFFSET,
+      variant: mount.featured.variant,
+    });
+
+    const markup =
+      `<!-- wp:group${blockAttrs(outerAttrs)} -->\n` +
+      `<div${outerIdAttr} class="${outerClassAttr}">` +
+      `${leadLoop}\n` +
+      `<!-- wp:group${blockAttrs(columnAttrs)} -->\n` +
+      `<div class="${columnClassAttr}">${columnLoop}</div>\n` +
+      `<!-- /wp:group -->` +
+      `</div>\n` +
+      `<!-- /wp:group -->`;
+
+    const css = anchor
+      ? `#${anchor} .wp-block-query,\n` +
+        `#${anchor} .wp-block-post-template{display:contents}\n` +
+        `#${anchor} .wp-block-post-template > li{display:contents}`
+      : '';
+
+    return { markup, css };
+  }
+
+  const markup = buildSingleQueryLoop({
+    anchor,
+    perPage: mount.query.perPage,
     offset: 0,
     postType: mount.query.postType,
-    order: normalizeOrder(mount.query.order),
-    orderBy: mount.query.orderBy ?? 'date',
-    inherit: false,
-  };
-
-  const queryAttrs: Record<string, unknown> = { queryId, query };
-  if (anchor) queryAttrs.anchor = anchor;
-
-  const idAttr = anchor ? ` id="${anchor}"` : '';
-
-  const templateAttrs = mount.wrapperClass
-    ? ` ${JSON.stringify({ className: mount.wrapperClass })}`
-    : '';
-
-  const markup =
-    `<!-- wp:query ${JSON.stringify(queryAttrs)} -->\n` +
-    `<div class="wp-block-query"${idAttr}><!-- wp:post-template${templateAttrs} -->\n` +
-    `<!-- wp:${DATA_CARD_BLOCK} /-->\n` +
-    `<!-- /wp:post-template --></div>\n` +
-    `<!-- /wp:query -->`;
+    order: mount.query.order,
+    orderBy: mount.query.orderBy,
+    queryId,
+    postTemplateClassName: mount.wrapperClass,
+  });
 
   // Flatten the post-template <li> so the .obj-card is the direct grid item:
   // keeps the carried grid CSS and the client-side filter (.obj-card.hidden)

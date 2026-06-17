@@ -1,6 +1,7 @@
 // src/lib/replicate/local-data/query-loop.test.ts
 import { describe, it, expect } from 'vitest';
 import { parse } from '@wordpress/block-serialization-default-parser';
+import { blockMarkupRoundtrips } from '../../streaming/block-markup-validate.js';
 import { buildQueryLoop, DATA_CARD_BLOCK } from './query-loop.js';
 import type { MountSpec } from './types.js';
 
@@ -17,6 +18,26 @@ const SHOP: MountSpec = {
   query: { postType: 'objet', perPage: -1, orderBy: 'date', order: 'ASC' },
   wrapperClass: 'obj-grid obj-grid--4',
 };
+
+const FEATURED: MountSpec = {
+  selector: '#m0',
+  sourceCall: "mountGrid('#m0', ITEMS)",
+  query: { postType: 'objet', perPage: 4, orderBy: 'date', order: 'DESC' },
+  wrapperClass: 'feat-grid',
+  featured: {
+    columnWrapperClass: 'col-wrap',
+    leadPerPage: 1,
+    columnPerPage: 3,
+    variant: 'row',
+  },
+};
+
+const EXPECTED_NEWEST_MARKUP =
+  `<!-- wp:query {"queryId":0,"query":{"perPage":4,"pages":0,"offset":0,"postType":"objet","order":"desc","orderBy":"date","inherit":false},"anchor":"newestGrid"} -->\n` +
+  `<div class="wp-block-query" id="newestGrid"><!-- wp:post-template {"className":"obj-grid obj-grid--4"} -->\n` +
+  `<!-- wp:${DATA_CARD_BLOCK} /-->\n` +
+  `<!-- /wp:post-template --></div>\n` +
+  `<!-- /wp:query -->`;
 
 describe('buildQueryLoop', () => {
   it('emits a core/query > core/post-template > dla/data-card tree', () => {
@@ -73,5 +94,47 @@ describe('buildQueryLoop', () => {
     expect(r.markup).not.toContain('"anchor"');
     expect(r.markup).toContain('<div class="wp-block-query">');
     expect(r.css).toBe('');
+  });
+
+  it('keeps non-featured output byte-identical', () => {
+    expect(buildQueryLoop(NEWEST)).toEqual({
+      markup: EXPECTED_NEWEST_MARKUP,
+      css: '#newestGrid .wp-block-post-template > li{display:contents}',
+    });
+  });
+
+  it('emits a featured two-loop composite inside the mount group', () => {
+    const { markup, css } = buildQueryLoop(FEATURED);
+
+    expect(markup).toContain('<div id="m0" class="wp-block-group feat-grid">');
+    expect(markup).toContain('<div class="wp-block-group col-wrap">');
+
+    const queryIds = [...markup.matchAll(/"queryId":(\d+)/g)].map((m) => Number(m[1]));
+    expect(queryIds).toHaveLength(2);
+    expect(new Set(queryIds).size).toBe(2);
+
+    expect(markup).toContain('"perPage":1,"pages":0,"offset":0');
+    expect(markup).toContain('"perPage":3,"pages":0,"offset":1');
+    expect(markup).toContain(`<!-- wp:${DATA_CARD_BLOCK} /-->`);
+    expect(markup).toContain(`<!-- wp:${DATA_CARD_BLOCK} {"variant":"row"} /-->`);
+
+    expect(css).toBe(
+      '#m0 .wp-block-query,\n' +
+      '#m0 .wp-block-post-template{display:contents}\n' +
+      '#m0 .wp-block-post-template > li{display:contents}',
+    );
+    expect(blockMarkupRoundtrips(markup).ok).toBe(true);
+  });
+
+  it('omits extra featured group classes when source classes are empty', () => {
+    const { markup } = buildQueryLoop({
+      ...FEATURED,
+      wrapperClass: '',
+      featured: { ...FEATURED.featured!, columnWrapperClass: '' },
+    });
+
+    expect(markup).toContain('<div id="m0" class="wp-block-group">');
+    expect(markup).toContain('<div class="wp-block-group">');
+    expect(markup).not.toContain('class="wp-block-group "');
   });
 });
