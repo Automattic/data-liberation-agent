@@ -48,6 +48,22 @@ export interface DiscoveredCardGrid {
   records: Array<Record<string, unknown>>;
   /** Diffed skeleton with data-dla-* bindings (deterministic). */
   cardTemplate: string;
+  /**
+   * Present when the grid is a "featured" layout: one (or few) lead card(s) as
+   * direct children of the container + the remaining cards nested under a single
+   * common wrapper element. Drives a two-loop reconstruction downstream. Absent
+   * for uniform grids.
+   */
+  featured?: {
+    /** Cards that are direct children of the container (the lead group), in doc order. Count = the lead/column offset boundary. */
+    leadCount: number;
+    /** The common wrapper element's verbatim class attribute (carried CSS hook for the column layout); '' if none. */
+    columnWrapperClass: string;
+    /** data-dla-* template built from the FIRST lead card (typically carries the excerpt). */
+    leadTemplate: string;
+    /** data-dla-* template built from the FIRST column (row) card (typically omits the excerpt; carries the row modifier class verbatim). */
+    rowTemplate: string;
+  };
   confidence: 'high' | 'low';
   /** Human-readable note: why it qualified / which roles were ambiguous. */
   evidence: string;
@@ -319,6 +335,36 @@ function buildCardTemplate($: CheerioAPI, card: Element, fields: CardFields): st
   return ($c.html(root) ?? '').trim();
 }
 
+function detectFeaturedGrid(
+  $: CheerioAPI,
+  container: Element,
+  richCards: Element[]
+): DiscoveredCardGrid['featured'] | undefined {
+  const leadCards = richCards.filter((card) => card.parent === container);
+  const rest = richCards.filter((card) => card.parent !== container);
+  const byParent = new Map<Element, Element[]>();
+  for (const card of rest) {
+    const parent = card.parent as Element | null;
+    if (!parent || parent.type !== 'tag') continue;
+    const group = byParent.get(parent) ?? [];
+    group.push(card);
+    byParent.set(parent, group);
+  }
+  if (leadCards.length < 1 || byParent.size !== 1) return undefined;
+  const [[wrapper, columnCards]] = [...byParent.entries()];
+  if (columnCards.length < 2) return undefined;
+  if (leadCards.length + columnCards.length !== richCards.length) return undefined;
+  if (!isDescendant(wrapper, container)) return undefined;
+  if (richCards.includes(wrapper)) return undefined;
+
+  return {
+    leadCount: leadCards.length,
+    columnWrapperClass: ($(wrapper).attr('class') ?? '').trim(),
+    leadTemplate: buildCardTemplate($, leadCards[0], extractCardFields($, leadCards[0], 0)),
+    rowTemplate: buildCardTemplate($, columnCards[0], extractCardFields($, columnCards[0], 0)),
+  };
+}
+
 // --- assembly -------------------------------------------------------------
 
 function buildGrid(
@@ -376,11 +422,13 @@ function buildGrid(
   const sharedNote = sharedTargets.length ? ` shared-target(single-template)=${sharedTargets.join(',')}` : '';
   const titlesOk = fields.every((f) => f.title);
   const template = buildCardTemplate($, richCards[0], fields[0]);
+  const featured = detectFeaturedGrid($, container, richCards);
   return {
     containerSelector,
     containerClass,
     records,
     cardTemplate: template,
+    ...(featured ? { featured } : {}),
     confidence: titlesOk && template ? 'high' : 'low',
     evidence: `signature=${signature} cards=${richCards.length} roles=title,excerpt,image,category,date,link${sharedNote}`,
   };

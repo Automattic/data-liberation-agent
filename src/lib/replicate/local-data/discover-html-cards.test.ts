@@ -259,6 +259,26 @@ const GENERIC_LIST_PAGE = `
   </ul>
 </main>`;
 
+const UNIFORM_DIRECT_GRID_PAGE = `
+<main>
+  <section>
+    <div class="lattice-frame">
+      ${[1, 2, 3].map(
+        (index) => `
+        <article class="story-shell story-shell--plain">
+          <div class="story-visual"><a href="plain-${index}.html"><img src="plain-${index}.png" alt=""></a></div>
+          <div class="story-copy">
+            <a href="archive.html">Plain ${index}</a>
+            <h3><a href="plain-${index}.html">Uniform card ${index}</a></h3>
+            <p>Uniform card ${index} excerpt with enough detail to qualify as rich content.</p>
+            <time>Feb ${String(index).padStart(2, '0')}, 2024</time>
+          </div>
+        </article>`
+      ).join('')}
+    </div>
+  </section>
+</main>`;
+
 describe('structuralSignature', () => {
   it('is class-agnostic: tag + sorted direct-child tag names', () => {
     const $ = cheerio.load(`<article class="x"><div></div><span></span></article>`);
@@ -382,6 +402,33 @@ describe('discoverHtmlCards — container class capture', () => {
   it('surfaces the grid container class verbatim', () => {
     const [grid] = discoverHtmlCards(GRID_WITH_CONTAINER_CLASS);
     expect(grid.containerClass).toBe('post-grid post-grid--3');
+  });
+});
+
+describe('discoverHtmlCards — featured layout descriptor', () => {
+  it('detects one direct lead card plus row cards under one wrapper', () => {
+    const [grid] = discoverHtmlCards(MIXED_DEPTH_GRID);
+
+    expect(grid.featured).toBeDefined();
+    expect(grid.featured?.leadCount).toBe(1);
+    expect(grid.featured?.columnWrapperClass).toBe('column');
+    expect(grid.featured?.leadTemplate).toContain('data-dla-text="content"');
+    expect(grid.featured?.rowTemplate).not.toContain('data-dla-text="content"');
+    expect(grid.featured?.rowTemplate).toContain('class="tile tile--row"');
+  });
+
+  it('does not mark a uniform direct-child grid as featured', () => {
+    const [grid] = discoverHtmlCards(UNIFORM_DIRECT_GRID_PAGE);
+
+    expect(grid.featured).toBeUndefined();
+  });
+
+  it('detects featured sections in the baseplate-shaped fixture', () => {
+    const featuredGrids = discoverHtmlCards(BASEPLATE_SHAPED_PAGE).filter((grid) => grid.featured);
+
+    expect(featuredGrids).toHaveLength(2);
+    expect(featuredGrids.every((grid) => grid.featured?.leadCount === 1)).toBe(true);
+    expect(featuredGrids.every((grid) => grid.featured?.columnWrapperClass === 'column')).toBe(true);
   });
 });
 
