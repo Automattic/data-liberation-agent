@@ -17,7 +17,7 @@
 //     │  clusterToGrids: group by parent, lift lone cards into the nested grid
 //     ▼                                   they share an ancestor with (mixed depth)
 //   grid (cards + container)
-//     │  richness gate (heading + image|link|structured text + text) → reject nav/footer/pagination
+//     │  richness gate (heading + image|link + text) → reject nav/footer/pagination
 //     ▼
 //   sibling-diff → fields (title/excerpt/image/category/date/link + synth id)
 //     │  deterministic data-dla-* template from card[0]'s own markup
@@ -31,9 +31,7 @@ import { extractMainContent } from '../../../adapters/default/content.js';
 /** Minimum sibling cards for a run to count as a grid. */
 const MIN_CARDS = 3;
 const CATEGORY_MAX_LEN = 30;
-const STRUCTURED_TEXT_MIN_LEN = 2;
 const DATE_RE = /\b(\d{4}-\d{2}-\d{2}|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,2},?\s*\d{4}|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,2})\b/i;
-const PRICE_RE = /\b(?:[$€£¥]\s*\d|\d+(?:[.,]\d{2})?\s*(?:usd|eur|gbp|cad|aud|jpy))\b/i;
 
 export interface DiscoveredCardGrid {
   /** The grid container → becomes a mount / core/query loop. Unique in the document. */
@@ -209,7 +207,7 @@ function slugify(value: string): string {
 
 // --- richness gate --------------------------------------------------------
 
-/** A card is content-rich iff: heading-like AND (image OR text-link OR structured text) AND non-trivial text. */
+/** A card is content-rich iff: heading-like AND (image OR text-link) AND non-trivial text. */
 function isRichCard($: CheerioAPI, el: Element): boolean {
   const $el = $(el);
   const hasHeading =
@@ -219,38 +217,8 @@ function isRichCard($: CheerioAPI, el: Element): boolean {
     $el.find('img[src],source[srcset]').length > 0 ||
     Boolean($el.find('[style*="background-image" i]').attr('style'));
   const textLink = $el.find('a[href]').toArray().some((a) => $(a).text().trim().length > 0);
-  const hasMultipleTextChildren = structuredTextChildren($, el).length >= 2;
   const textLen = $el.text().replace(/\s+/g, ' ').trim().length;
-  return hasHeading && (hasImage || textLink || hasMultipleTextChildren) && textLen >= 20;
-}
-
-function structuredTextChildren($: CheerioAPI, el: Element): string[] {
-  const seen = new Set<string>();
-  for (const node of $(el).find('*').toArray() as Element[]) {
-    const text = ownText($, node);
-    if (!isSupportingTextElement($, node, text)) continue;
-    seen.add(text.toLowerCase());
-  }
-  return [...seen];
-}
-
-function ownText($: CheerioAPI, el: Element): string {
-  return $(el)
-    .contents()
-    .toArray()
-    .filter((node) => node.type === 'text')
-    .map((node) => (node as { data?: string }).data ?? '')
-    .join(' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function isSupportingTextElement($: CheerioAPI, el: Element, text: string): boolean {
-  if (text.length < STRUCTURED_TEXT_MIN_LEN) return false;
-  const $el = $(el);
-  if ($el.is('h1,h2,h3,h4,h5,h6,a,button,script,style,noscript')) return false;
-  if ($el.closest('h1,h2,h3,h4,h5,h6,a,button').length > 0) return false;
-  return true;
+  return hasHeading && (hasImage || textLink) && textLen >= 20;
 }
 
 // --- field/role extraction ------------------------------------------------
@@ -279,35 +247,6 @@ function categoryAnchorScore($: CheerioAPI, el: Element): number {
   return $el.is('[class*="cat" i],[class*="tag" i]') || $el.closest('[class*="cat" i],[class*="tag" i]').length > 0 ? 1 : 0;
 }
 
-function comesBeforeIn(nodes: Element[], a: Element, b: Element): boolean {
-  const ai = nodes.indexOf(a);
-  const bi = nodes.indexOf(b);
-  return ai >= 0 && bi >= 0 && ai < bi;
-}
-
-function textCategory($: CheerioAPI, el: Element, title: string): string {
-  const $el = $(el);
-  const nodes = $el.find('*').toArray() as Element[];
-  const heading = $el.find('h1,h2,h3,h4,h5,h6').first()[0] as Element | undefined;
-  const candidates = nodes
-    .map((node, order) => {
-      const text = ownText($, node);
-      const beforeHeading = heading ? comesBeforeIn(nodes, node, heading) : false;
-      return { node, text, order, beforeHeading };
-    })
-    .filter(({ node, text }) => {
-      if (!isSupportingTextElement($, node, text)) return false;
-      if (text === title || text.length > CATEGORY_MAX_LEN || DATE_RE.test(text) || PRICE_RE.test(text)) return false;
-      return true;
-    })
-    .sort((a, b) => {
-      if (a.beforeHeading !== b.beforeHeading) return a.beforeHeading ? -1 : 1;
-      if (a.beforeHeading && b.beforeHeading) return b.order - a.order;
-      return a.order - b.order;
-    });
-  return candidates[0]?.text ?? '';
-}
-
 function extractCardFields($: CheerioAPI, el: Element, index: number): CardFields {
   const $el = $(el);
   const title = firstHeadingText($el);
@@ -331,7 +270,7 @@ function extractCardFields($: CheerioAPI, el: Element, index: number): CardField
     }))
     .filter((a) => a.text && a.text !== title && a.href !== link && a.text.length <= CATEGORY_MAX_LEN)
     .sort((a, b) => b.score - a.score || a.order - b.order);
-  const category = categoryCandidates[0]?.text ?? textCategory($, el, title);
+  const category = categoryCandidates[0]?.text ?? '';
   const id = slugify(title) || slugify(link.replace(/\.[a-z]+$/i, '')) || `card-${index + 1}`;
   return { id, title, excerpt, image, category, date, link, meta: {} };
 }
@@ -357,9 +296,9 @@ function buildCardTemplate($: CheerioAPI, card: Element, fields: CardFields): st
   // category → cat.label
   if (fields.category) {
     const catNode = root
-      .find('a[href],*')
+      .find('a[href]')
       .toArray()
-      .find((n) => ownText($c, n as Element) === fields.category || $c(n).text().replace(/\s+/g, ' ').trim() === fields.category);
+      .find((n) => $c(n).text().replace(/\s+/g, ' ').trim() === fields.category);
     if (catNode) $c(catNode).attr('data-dla-text', 'cat.label').text('');
   }
   // date → meta.date
@@ -484,37 +423,6 @@ function selectCardLevelCandidates($: CheerioAPI, candidates: RichCandidate[]): 
   const dropCandidates = new Set<RichCandidate>();
   const dropSignatures = new Set<string>();
   const groups = groupRichCandidates(candidates);
-  const summaries = candidates.map((candidate) => {
-    const container = safeGridContainer($, candidate.richCards);
-    return {
-      candidate,
-      container,
-      density: directSiblingDensity($, container, candidate.richCards),
-    };
-  });
-  for (const outer of summaries) {
-    if (!$(outer.container).is(UNSAFE_MOUNT_CONTAINER_SELECTOR)) continue;
-    const safePeer = summaries.find(
-      (inner) =>
-        inner !== outer &&
-        !$(inner.container).is(UNSAFE_MOUNT_CONTAINER_SELECTOR) &&
-        inner.candidate.richCards.length >= outer.candidate.richCards.length &&
-        inner.density >= outer.density
-    );
-    if (safePeer) dropCandidates.add(outer.candidate);
-  }
-  for (const outer of summaries) {
-    for (const inner of summaries) {
-      if (outer === inner) continue;
-      if (!isDescendant(inner.container, outer.container)) continue;
-      if (inner.candidate.richCards.length <= outer.candidate.richCards.length) continue;
-      if (inner.density < outer.density) continue;
-      if ($(inner.container).is(UNSAFE_MOUNT_CONTAINER_SELECTOR)) continue;
-      if ($(outer.container).is(UNSAFE_MOUNT_CONTAINER_SELECTOR) || inner.density >= 1) {
-        dropCandidates.add(outer.candidate);
-      }
-    }
-  }
   for (const outer of candidates) {
     for (const inner of groups) {
       if (outer.sig === inner.sig) continue;
@@ -537,13 +445,6 @@ function selectCardLevelCandidates($: CheerioAPI, candidates: RichCandidate[]): 
     }
   }
   return candidates.filter((candidate) => !dropCandidates.has(candidate) && !dropSignatures.has(candidate.sig));
-}
-
-function directSiblingDensity($: CheerioAPI, container: Element, cards: Element[]): number {
-  const children = $(container).children().toArray() as Element[];
-  if (children.length === 0) return 0;
-  const directCards = cards.filter((card) => card.parent === container).length;
-  return directCards / children.length;
 }
 
 function safeGridContainer($: CheerioAPI, cards: Element[]): Element {
