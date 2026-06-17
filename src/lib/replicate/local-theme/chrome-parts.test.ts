@@ -68,6 +68,18 @@ describe('buildHeaderPart (inNav preference)', () => {
 });
 
 describe('buildCarriedHeaderPart', () => {
+  const navHeader: Section = {
+    id: 'header',
+    role: 'header',
+    classes: ['bp-header'],
+    html:
+      '<header class="bp-header"><nav><ul>' +
+      '<li><a href="archive.html">Subjects</a></li>' +
+      '<li><a href="archive.html">Community</a></li>' +
+      '<li><a href="page.html">About</a></li>' +
+      '</ul></nav></header>',
+  };
+
   it('preserves the source root class while renaming the literal header tag away', () => {
     const header: Section = {
       id: 'header',
@@ -108,6 +120,32 @@ describe('buildCarriedHeaderPart', () => {
     expect(html).toContain('bp-header');
     expect(html).not.toContain('wp:html');
     expect(() => validateReplicaInputs([{ relativePath: 'parts/header.html', content: html }], undefined, 'acme-local')).not.toThrow();
+  });
+
+  it('uses resolved link labels for carried header nav targets', () => {
+    const html = buildCarriedHeaderPart(navHeader, {
+      pageSlugs: ['home', 'archive', 'page'],
+      labelToUrl: (label) => {
+        const key = label.toLowerCase().trim();
+        if (key === 'community') return '/category/community/';
+        if (key === 'about') return '/about/';
+        return undefined;
+      },
+    });
+    expect(blockMarkupRoundtrips(html).ok).toBe(true);
+    expect(html).toContain('href="/archive/"');
+    expect(html).toContain('href="/category/community/"');
+    expect(html).toContain('href="/about/"');
+    expect(html).not.toContain('href="page.html"');
+  });
+
+  it('keeps carried header nav targets on rewritten source hrefs without a label resolver', () => {
+    const html = buildCarriedHeaderPart(navHeader, { pageSlugs: ['home', 'archive', 'page'] });
+    expect(blockMarkupRoundtrips(html).ok).toBe(true);
+    expect(html).toContain('href="/archive/"');
+    expect(html).toContain('href="/page/"');
+    expect(html).not.toContain('href="/category/community/"');
+    expect(html).not.toContain('href="/about/"');
   });
 
   it('adds root inline styles to the provided instance stylesheet', () => {

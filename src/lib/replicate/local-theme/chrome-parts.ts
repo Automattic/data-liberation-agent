@@ -117,10 +117,25 @@ export function buildHeaderPart(
 
 export function buildCarriedHeaderPart(
   header: Section,
-  opts: { pageSlugs?: string[]; instanceStyles?: InstanceStyleSheet; sticky?: StickyBehavior } = {},
+  opts: {
+    pageSlugs?: string[];
+    instanceStyles?: InstanceStyleSheet;
+    sticky?: StickyBehavior;
+    labelToUrl?: (label: string, sourceHref: string) => string | undefined;
+  } = {},
 ): string {
   let html = header.html;
   if (opts.pageSlugs?.length) html = rewriteInternalHrefs(html, opts.pageSlugs);
+  if (opts.labelToUrl) {
+    const $ = cheerio.load(html);
+    $('a[href]').each((_, el) => {
+      const label = $(el).text().trim();
+      const href = $(el).attr('href') ?? '';
+      const resolved = opts.labelToUrl?.(label, href);
+      if (resolved) $(el).attr('href', resolved);
+    });
+    html = $('body').html() ?? html;
+  }
   const normalized = {
     ...header,
     html: html.replace(/^<header(\b[^>]*>)/i, '<div$1').replace(/<\/header>\s*$/i, '</div>'),

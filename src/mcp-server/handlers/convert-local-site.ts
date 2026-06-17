@@ -26,7 +26,7 @@ import { wpOptionUpdatesForSiteMeta } from '../../lib/preview/site-options.js';
 import { installPost } from '../../lib/streaming/post-install.js';
 import { finalizeSite } from '../../lib/streaming/site-finalize.js';
 import { startStaticServer } from '../../lib/replicate/local-site/static-server.js';
-import { rewriteInternalLinksInJs } from '../../lib/replicate/local-site/href-rewrite.js';
+import { rewriteInternalLinksInJs, slugToUrl } from '../../lib/replicate/local-site/href-rewrite.js';
 import { captureScreenshots } from '../../lib/screenshot/screenshotter.js';
 import { SCREENSHOT_DEVICE_SCALE_FACTOR } from '../../lib/screenshot/types.js';
 import { compareScreenshotDirs } from '../../lib/screenshot/compare.js';
@@ -404,6 +404,18 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
   const home = site.pages.find((p) => p.slug === 'home') ?? site.pages[0];
   const footerSection = segmentPage(home.html).find((s) => s.role === 'footer') ?? null;
   const headerSection = segmentPage(home.html).find((s) => s.role === 'header') ?? null;
+  const slugifyLabel = (s: string): string =>
+    s.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  const labelToUrl = (label: string): string | undefined => {
+    const key = slugifyLabel(label);
+    if (!key) return undefined;
+    if (dataModel) {
+      const term = dataModel.taxonomy.terms.find((t) => t.slug === key || slugifyLabel(t.label) === key);
+      if (term) return `/${dataModel.taxonomy.slug}/${term.slug}/`;
+    }
+    const page = site.pages.find((p) => p.slug === key || slugifyLabel(p.title) === key);
+    return page ? slugToUrl(page.slug) : undefined;
+  };
   // JS-rendered chrome: when the source mounts header/footer into empty
   // id-divs at runtime (renderHeader() into <div id="siteHeader">), the parts
   // become the VERBATIM mounts and the carried source JS renders chrome on
@@ -423,7 +435,12 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
   const headerPart = mounts.header
     ? mountPartMarkup(mounts.header, stickyEmitted ? behaviors?.sticky : undefined)
     : (chromeCarried && headerSection)
-      ? buildCarriedHeaderPart(headerSection, { pageSlugs: site.pages.map((p) => p.slug), instanceStyles: chromeInstanceStyles, ...(stickyEmitted ? { sticky: behaviors!.sticky } : {}) })
+      ? buildCarriedHeaderPart(headerSection, {
+          pageSlugs: site.pages.map((p) => p.slug),
+          instanceStyles: chromeInstanceStyles,
+          labelToUrl,
+          ...(stickyEmitted ? { sticky: behaviors!.sticky } : {}),
+        })
       : buildHeaderPart(siteTitle, nav, site.pages.map((p) => p.slug), {
           plain: chromeCarried,
           ...(behaviors?.sticky ? { sticky: behaviors.sticky } : {}),
