@@ -106,4 +106,31 @@ describe('validateDataModel', () => {
     }));
     expect(r.warnings.some((w) => /undeclared meta key: nope/.test(w))).toBe(true);
   });
+
+  it('accepts card variants and featured mount metadata', () => {
+    const r = validateDataModel(model({
+      mounts: [{
+        selector: '#g',
+        sourceCall: 'html-cards:.g',
+        query: { postType: 'objet', perPage: 4 },
+        featured: {
+          columnWrapperClass: 'rows',
+          leadPerPage: 1,
+          columnPerPage: 3,
+          variant: 'row',
+        },
+      }],
+      card: {
+        template: '<article data-dla-class="map.TONE.cat.slug" data-dla-text="meta.price_eur"></article>',
+        maps: { TONE: { glass: 't' } },
+        variants: {
+          row: '<article class="row" data-dla-text="meta.price_eur"></article>',
+        },
+      },
+    }));
+
+    expect(r.valid).toBe(true);
+    expect(r.errors).toEqual([]);
+    expect(r.warnings).toEqual([]);
+  });
 });

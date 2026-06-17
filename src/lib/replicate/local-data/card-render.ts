@@ -77,8 +77,9 @@ export function evalCond(cond: string, ctx: CardRenderContext): boolean {
  * Conditionals are resolved first (outermost wins; a dropped element takes its
  * subtree), then text / attribute / class bindings.
  */
-export function renderCard(ctx: CardRenderContext): string {
-  const $ = load(ctx.card.template, null, false);
+export function renderCard(ctx: CardRenderContext, variant?: string): string {
+  const template = (variant && ctx.card.variants?.[variant]) || ctx.card.template;
+  const $ = load(template, null, false);
 
   // data-dla-if: resolve one at a time so removing a parent invalidates its
   // (now-detached) descendants instead of us binding into dead nodes.

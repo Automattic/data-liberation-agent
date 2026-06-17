@@ -106,6 +106,19 @@ export interface MountSpec {
   sourceSelector?: string;
   /** Static-HTML-card path only: source HTML filename used to scope neutralization per page. */
   sourcePage?: string;
+  /**
+   * Static-HTML-card "featured" layout: this mount renders as TWO query loops —
+   * a lead loop (perPage=leadPerPage, offset=0, base card template) and a column
+   * loop (perPage=columnPerPage, offset=leadPerPage, card `variant`) nested in a
+   * wrapper carrying `columnWrapperClass`. Absent → single uniform loop. (B3 consumes this.)
+   */
+  featured?: {
+    columnWrapperClass: string;
+    leadPerPage: number;
+    columnPerPage: number;
+    /** card variant name the column loop's data-card renders (e.g. 'row'). */
+    variant: string;
+  };
 }
 
 /**
@@ -128,6 +141,8 @@ export interface DataCard {
   template: string;
   /** Named lookup tables referenced by `map.<name>.<expr>` (e.g. CAT_TONE). */
   maps: Record<string, Record<string, string>>;
+  /** Named alternate templates (e.g. {row: "<row card skeleton>"}) the dla/data-card block renders when its `variant` attribute names one. Absent → only the base `template`. */
+  variants?: Record<string, string>;
 }
 
 /** The full model the agent skill emits and the deterministic src consumes. */
@@ -149,4 +164,4 @@ export interface DataModel {
   schema: number;
 }
 
-export const DATA_MODEL_SCHEMA = 2;
+export const DATA_MODEL_SCHEMA = 3;

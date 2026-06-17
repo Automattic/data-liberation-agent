@@ -50,6 +50,22 @@ function checkSlug(value: string, kind: string, max: number, errors: string[]): 
   if (!SLUG_RE.test(value)) errors.push(`${kind} slug must be lowercase letters/numbers/-/_ : ${value}`);
 }
 
+function validateCardTemplateRefs(
+  tpl: string,
+  maps: Record<string, Record<string, string>>,
+  fieldKeys: Set<string>,
+  errors: string[],
+  warnings: string[],
+  label: string
+): void {
+  for (const mref of tpl.matchAll(/map\.([A-Za-z0-9_]+)\./g)) {
+    if (!(mref[1] in maps)) errors.push(`${label} references undefined map: ${mref[1]}`);
+  }
+  for (const fref of tpl.matchAll(/meta\.([A-Za-z0-9_]+)/g)) {
+    if (!fieldKeys.has(fref[1])) warnings.push(`${label} references undeclared meta key: ${fref[1]}`);
+  }
+}
+
 /**
  * Validate a DataModel. Pure (no IO) — returns errors/warnings/counts. The
  * model is treated as untrusted (agent-authored); every cross-reference is
@@ -126,17 +142,30 @@ export function validateDataModel(model: DataModel): ValidateModelResult {
     if (cpt?.slug && m.query?.postType && m.query.postType !== cpt.slug) {
       warnings.push(`mount ${m.selector} queries postType "${m.query.postType}" ≠ cpt.slug "${cpt.slug}".`);
     }
+    if (m.featured) {
+      if (typeof m.featured.columnWrapperClass !== 'string') errors.push(`mount ${m.selector} featured.columnWrapperClass must be a string.`);
+      if (!Number.isInteger(m.featured.leadPerPage) || m.featured.leadPerPage < 1) errors.push(`mount ${m.selector} featured.leadPerPage must be a positive integer.`);
+      if (!Number.isInteger(m.featured.columnPerPage) || m.featured.columnPerPage < 0) errors.push(`mount ${m.selector} featured.columnPerPage must be a non-negative integer.`);
+      if (!m.featured.variant || typeof m.featured.variant !== 'string') errors.push(`mount ${m.selector} featured.variant is required.`);
+    }
   }
 
   // Card template references (every map.<name> and meta.<key> used must exist).
-  if (model.card?.template) {
-    const tpl = model.card.template;
+  if (model.card) {
     const maps = model.card.maps ?? {};
-    for (const mref of tpl.matchAll(/map\.([A-Za-z0-9_]+)\./g)) {
-      if (!(mref[1] in maps)) errors.push(`card template references undefined map: ${mref[1]}`);
-    }
-    for (const fref of tpl.matchAll(/meta\.([A-Za-z0-9_]+)/g)) {
-      if (!fieldKeys.has(fref[1])) warnings.push(`card template references undeclared meta key: ${fref[1]}`);
+    if (model.card.template) validateCardTemplateRefs(model.card.template, maps, fieldKeys, errors, warnings, 'card template');
+    if (model.card.variants !== undefined) {
+      if (!model.card.variants || typeof model.card.variants !== 'object' || Array.isArray(model.card.variants)) {
+        errors.push('card.variants must be an object of template strings.');
+      } else {
+        for (const [name, tpl] of Object.entries(model.card.variants)) {
+          if (typeof tpl !== 'string') {
+            errors.push(`card variant ${name} must be a string.`);
+            continue;
+          }
+          validateCardTemplateRefs(tpl, maps, fieldKeys, errors, warnings, `card variant ${name}`);
+        }
+      }
     }
   }
 

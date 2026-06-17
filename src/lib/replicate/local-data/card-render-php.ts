@@ -22,6 +22,14 @@ function phpAssoc(obj: Record<string, string>, indent: string): string {
   return rows.join('\n');
 }
 
+/** Render variant template map entries as nowdocs, with stable key ordering. */
+function phpTemplateAssoc(obj: Record<string, string>, indent: string): string {
+  return Object.entries(obj)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([k, v], i) => `${indent}${php(k)} => <<<'DLAVAR${i}'\n${v.trim()}\nDLAVAR${i}\n${indent},`)
+    .join('\n');
+}
+
 /** Conventional mu-plugin filename for the card block. */
 export function dataCardPluginFilename(model: DataModel): string {
   return `dla-data-${model.cpt.slug}-card.php`;
@@ -46,6 +54,7 @@ export function buildDataCardPlugin(model: DataModel): string {
         `        ${php(name)} => array(\n${phpAssoc(table, '            ')}\n        ),`,
     )
     .join('\n');
+  const variantsBody = phpTemplateAssoc(card.variants ?? {}, '        ');
 
   const labelsBody = phpAssoc(termLabels, '        ');
   const fieldsBody = fieldKeys.map((k) => `        ${php(k)},`).join('\n');
@@ -60,6 +69,7 @@ export function buildDataCardPlugin(model: DataModel): string {
     category: 'theme',
     icon: 'id-alt',
     usesContext: [ 'postId' ],
+    attributes: { variant: { type: 'string', default: '' } },
     edit: function( props ) {
       return element.createElement( ServerSideRender, {
         block: 'dla/data-card',
@@ -85,6 +95,13 @@ define( 'DLA_CARD_TEMPLATE_${model.cpt.slug}', <<<'DLATPL'
 ${card.template.trim()}
 DLATPL
 );
+
+/** Named alternate card templates keyed by dla/data-card variant. */
+function dla_card_variants_${model.cpt.slug}() {
+    return array(
+${variantsBody}
+    );
+}
 
 /** Named lookup tables referenced by the card template's map.<name>.<expr>. */
 function dla_card_maps_${model.cpt.slug}() {
@@ -225,8 +242,13 @@ function dla_card_block_render_${model.cpt.slug}( $attributes, $content, $block 
     }
     if ( ! $post_id ) { return ''; }
     $item = dla_card_build_item_${model.cpt.slug}( $post_id );
+    $variant = isset( $attributes['variant'] ) ? (string) $attributes['variant'] : '';
+    $variants = dla_card_variants_${model.cpt.slug}();
+    $template = ( '' !== $variant && isset( $variants[ $variant ] ) )
+        ? $variants[ $variant ]
+        : constant( 'DLA_CARD_TEMPLATE_${model.cpt.slug}' );
     $html = dla_card_render_${model.cpt.slug}(
-        constant( 'DLA_CARD_TEMPLATE_${model.cpt.slug}' ),
+        $template,
         dla_card_maps_${model.cpt.slug}(),
         $item
     );
@@ -248,6 +270,9 @@ add_action( 'init', function () {
     register_block_type( 'dla/data-card', array(
         'api_version'     => 3,
         'uses_context'    => array( 'postId' ),
+        'attributes'      => array(
+            'variant' => array( 'type' => 'string', 'default' => '' ),
+        ),
         'render_callback' => 'dla_card_block_render_${model.cpt.slug}',
     ) );
 } );

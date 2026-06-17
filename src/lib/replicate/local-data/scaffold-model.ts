@@ -35,7 +35,7 @@ const scalar = (value: unknown): value is string | number | boolean => ['string'
 const NEWEST_STYLE_SIGNALS = ['newest', 'recent', 'latest'];
 
 type BaseDiscovered = Omit<ScaffoldResult['discovered'], 'source'>;
-type BuildMount = DiscoveredMount & Pick<MountSpec, 'sourceSelector' | 'sourcePage'>;
+type BuildMount = DiscoveredMount & Pick<MountSpec, 'sourceSelector' | 'sourcePage' | 'featured'>;
 
 interface BuildModelFromRecordsOpts {
   records: Array<Record<string, unknown>>;
@@ -46,6 +46,7 @@ interface BuildModelFromRecordsOpts {
   source: Extract<ScaffoldResult['discovered']['source'], 'js-array' | 'html-cards'>;
   cardTemplateTodoEvidence?: string;
   deterministicCard?: string;
+  deterministicCardVariants?: Record<string, string>;
   discovered: BaseDiscovered;
   todos: ScaffoldTodo[];
 }
@@ -100,6 +101,7 @@ export function scaffoldDataModel(input: ScaffoldInput): ScaffoldResult {
   const usableGrids = discoveredGrids.filter(({ grid }) => grid.records.length >= 1);
   if (usableGrids.length > 0) {
     const records = dedupeRecordsById(usableGrids.flatMap(({ grid }) => grid.records));
+    const firstFeaturedGrid = usableGrids.find(({ grid }) => grid.featured);
     const cardMounts: BuildMount[] = usableGrids.map(({ grid, disambiguator, sourcePage }) => ({
       selector: `#${syntheticCardAnchor(grid.containerSelector, disambiguator)}`,
       sourceSelector: grid.containerSelector,
@@ -117,6 +119,14 @@ export function scaffoldDataModel(input: ScaffoldInput): ScaffoldResult {
       // structure misaligns from the first grid down (baseplate: 13365px vs
       // the source's 3104px). Ordering stays document-order (see orderForMount).
       perPageHint: grid.records.length,
+      ...(grid.featured ? {
+        featured: {
+          columnWrapperClass: grid.featured.columnWrapperClass,
+          leadPerPage: grid.featured.leadCount,
+          columnPerPage: grid.records.length - grid.featured.leadCount,
+          variant: 'row',
+        },
+      } : {}),
       confidence: 'high',
       evidence: grid.evidence,
     }));
@@ -128,6 +138,7 @@ export function scaffoldDataModel(input: ScaffoldInput): ScaffoldResult {
       source: 'html-cards',
       cardTemplateTodoEvidence: undefined,
       deterministicCard: usableGrids[0].grid.cardTemplate,
+      deterministicCardVariants: firstFeaturedGrid?.grid.featured ? { row: firstFeaturedGrid.grid.featured.rowTemplate } : undefined,
       discovered: {
         ...discovered,
         unmatchedContainers: discoveredGrids.filter(({ grid }) => grid.records.length === 0).map(({ grid }) => grid.containerSelector),
@@ -216,6 +227,7 @@ function buildModelFromRecords(opts: BuildModelFromRecordsOpts): ScaffoldResult 
       wrapperClass: mount.wrapperClass,
       ...(mount.sourceSelector ? { sourceSelector: mount.sourceSelector } : {}),
       ...(mount.sourcePage ? { sourcePage: mount.sourcePage } : {}),
+      ...(mount.featured ? { featured: mount.featured } : {}),
     });
   }
 
@@ -268,7 +280,7 @@ function buildModelFromRecords(opts: BuildModelFromRecordsOpts): ScaffoldResult 
     fields: inferred.fields,
     items,
     mounts,
-    card: { template: opts.deterministicCard ?? '', maps: {} },
+    card: { template: opts.deterministicCard ?? '', maps: {}, ...(opts.deterministicCardVariants ? { variants: opts.deterministicCardVariants } : {}) },
     sourceArrays: corePost ? [] : [...new Set([...opts.idLookupNames, sourceName].filter((name) => name && name !== '(anonymous)'))],
     schema: DATA_MODEL_SCHEMA,
   };

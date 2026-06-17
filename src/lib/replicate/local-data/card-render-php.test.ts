@@ -40,6 +40,12 @@ const CARD: DataCard = {
       <button class="more" data-dla-attr="data-more:id">More</button>
     </div>
   </article>`,
+  variants: {
+    row: `<article class="card-row" data-dla-attr="data-id:id">
+      <h4 class="card-row__title" data-dla-text="title"></h4>
+      <span class="card-row__price" data-dla-text="meta.price"></span>
+    </article>`,
+  },
 };
 
 const MODEL: DataModel = {
@@ -69,6 +75,12 @@ function canon(html: string): string {
   return $.html().replace(/\s+/g, ' ').replace(/>\s+</g, '><').trim();
 }
 
+function canonCard(html: string): string {
+  const $ = load(html, null, false);
+  $('script.dla-item').remove();
+  return $.html().replace(/\s+/g, ' ').replace(/>\s+</g, '><').trim();
+}
+
 function phpAvailable(): boolean {
   try {
     execFileSync('php', ['-v'], { stdio: 'ignore' });
@@ -89,6 +101,8 @@ describe('buildDataCardPlugin (string)', () => {
   it('bakes the template (nowdoc), maps, term labels and field list', () => {
     const code = buildDataCardPlugin(MODEL);
     expect(code).toContain("DLA_CARD_TEMPLATE_widget");
+    expect(code).toContain('function dla_card_variants_widget()');
+    expect(code).toContain("'row' =>");
     expect(code).toContain("'TONE' => array(");
     expect(code).toContain("'round' => 'tone-a'");
     expect(code).toContain("'round' => 'Round Things'"); // term label
@@ -100,6 +114,13 @@ describe('buildDataCardPlugin (string)', () => {
     expect(code).toContain('enqueue_block_editor_assets');
     expect(code).toContain('wp.serverSideRender');
     expect(code).toContain('blocks.registerBlockType('); // baked editor JS (quotes escaped)
+    expect(code).toContain("attributes: { variant: { type: \\'string\\', default: \\'\\' } }");
+  });
+
+  it('registers the variant attribute for SSR', () => {
+    const code = buildDataCardPlugin(MODEL);
+    expect(code).toContain("'attributes'      => array(");
+    expect(code).toContain("'variant' => array( 'type' => 'string', 'default' => '' )");
   });
 
   it('throws without a card spec', () => {
@@ -112,7 +133,7 @@ describe('buildDataCardPlugin (string)', () => {
 });
 
 describe.skipIf(!phpAvailable())('card render parity (PHP vs TS)', () => {
-  it('PHP render matches the TS mirror for every status variant', () => {
+  it('PHP render matches the TS mirror for base, row variant, and unknown fallback', () => {
     const dir = mkdtempSync(join(process.cwd(), '.tmp-test', 'cardphp-'));
     try {
       const pluginPath = join(dir, 'plugin.php');
@@ -127,17 +148,37 @@ function register_block_type() {}
 function wp_register_script() {}
 function wp_enqueue_script() {}
 function wp_add_inline_script() {}
+function is_wp_error( $value ) { return false; }
+function get_post_meta( $post_id, $key, $single = true ) {
+    global $item;
+    if ( '_dla_item_id' === $key ) { return $item['id']; }
+    if ( '_dla_gallery' === $key ) { return $item['gallery']; }
+    return isset( $item['meta'][ $key ] ) ? $item['meta'][ $key ] : '';
+}
+function wp_get_post_terms( $post_id, $taxonomy, $args = array() ) {
+    global $item;
+    return $item['terms'];
+}
+function get_the_title( $post_id ) { global $item; return $item['title']; }
+function get_post_field( $field, $post_id ) { global $item; return isset( $item['content'] ) ? $item['content'] : ''; }
+function get_the_ID() { return 1; }
+function esc_attr( $value ) { return htmlspecialchars( (string) $value, ENT_QUOTES ); }
+function wp_json_encode( $value ) { return json_encode( $value ); }
 require $argv[1];
-$item = json_decode($argv[2], true);
-echo dla_card_render_widget( constant('DLA_CARD_TEMPLATE_widget'), dla_card_maps_widget(), $item );
+$item = json_decode( $argv[2], true );
+$variant = $argv[3];
+$block = (object) array( 'context' => array( 'postId' => 1 ) );
+echo dla_card_block_render_widget( array( 'variant' => $variant ), '', $block );
 `,
       );
       for (const item of ITEMS) {
-        const phpOut = execFileSync('php', [harness, pluginPath, JSON.stringify(item)], {
-          encoding: 'utf8',
-        });
-        const tsOut = renderCard(ctx(item));
-        expect(canon(phpOut), `parity for ${item.id}`).toBe(canon(tsOut));
+        for (const variant of ['', 'row', 'missing']) {
+          const phpOut = execFileSync('php', [harness, pluginPath, JSON.stringify(item), variant], {
+            encoding: 'utf8',
+          });
+          const tsOut = renderCard(ctx(item), variant);
+          expect(canonCard(phpOut), `parity for ${item.id} variant ${variant || '(base)'}`).toBe(canon(tsOut));
+        }
       }
     } finally {
       rmSync(dir, { recursive: true, force: true });

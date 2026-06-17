@@ -161,6 +161,36 @@ const CARD_HTML = `
   </div>
 </main>`;
 
+const FEATURED_CARD_HTML = `
+<main>
+  <section>
+    <div class="feature-shell">
+      <article class="story story--lead">
+        <div class="visual"><a href="lead.html"><img src="lead.png" alt=""></a></div>
+        <div class="copy">
+          <a class="topic" href="archive.html">Letters</a>
+          <h3><a href="lead.html">Lead dispatch</a></h3>
+          <p>Lead dispatch excerpt with enough detail to qualify as a rich card.</p>
+          <time>Mar 01, 2024</time>
+        </div>
+      </article>
+      <div class="story-column">
+        ${[1, 2, 3].map(
+          (index) => `
+          <article class="story story--row">
+            <div class="visual"><a href="row-${index}.html"><img src="row-${index}.png" alt=""></a></div>
+            <div class="copy">
+              <a class="topic" href="archive.html">Notes</a>
+              <h3><a href="row-${index}.html">Row dispatch ${index}</a></h3>
+              <time>Mar 0${index + 1}, 2024</time>
+            </div>
+          </article>`
+        ).join('')}
+      </div>
+    </div>
+  </section>
+</main>`;
+
 const STACKED_SINGLE_CARD_TITLES = ['Stacked card One', 'Stacked card Two', 'Stacked card Three'];
 const STACKED_SINGLE_CARD_HEADINGS = ['Featured', 'Popular', 'Latest'];
 const STACKED_SINGLE_CARD_CATEGORIES = ['Alpha', 'Beta', 'Gamma'];
@@ -257,6 +287,36 @@ describe('scaffoldDataModel — records-source chain', () => {
     // deterministic template means NO card.template todo
     expect(r.skillTodos.some((t) => t.path === 'card.template')).toBe(false);
     expect(r.model.card?.template).toContain('data-dla-text');
+    expect(r.model.card).not.toHaveProperty('variants');
+    expect(r.model.mounts[0]).not.toHaveProperty('featured');
+  });
+
+  it('wires featured HTML-card grids into row card variants and mount metadata', () => {
+    const r = scaffoldDataModel({ html: FEATURED_CARD_HTML, js: '' });
+
+    expect(r.discovered.source).toBe('html-cards');
+    expect(r.model.items.map((item) => item.title)).toEqual([
+      'Lead dispatch',
+      'Row dispatch 1',
+      'Row dispatch 2',
+      'Row dispatch 3',
+    ]);
+    expect(r.model.card?.template).toContain('story--lead');
+    expect(r.model.card?.variants?.row).toContain('story--row');
+    expect(r.model.card?.variants?.row).not.toContain('data-dla-text="content"');
+    expect(r.model.mounts[0].featured).toEqual({
+      columnWrapperClass: 'story-column',
+      leadPerPage: 1,
+      columnPerPage: 3,
+      variant: 'row',
+    });
+  });
+
+  it('does not add variants or featured metadata for uniform-only HTML-card grids', () => {
+    const r = scaffoldDataModel({ html: CARD_HTML, js: '' });
+
+    expect(r.model.card).not.toHaveProperty('variants');
+    expect(r.model.mounts.every((mount) => !('featured' in mount))).toBe(true);
   });
 
   it('uses resolved card page bodies as post content without registering content meta', () => {

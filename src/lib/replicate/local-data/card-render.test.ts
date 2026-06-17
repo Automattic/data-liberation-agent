@@ -34,6 +34,17 @@ const CARD: DataCard = {
   </article>`,
 };
 
+const CARD_WITH_ROW_VARIANT: DataCard = {
+  ...CARD,
+  variants: {
+    row: `
+    <article class="card-row" data-dla-attr="data-id:id">
+      <h4 class="card-row__title" data-dla-text="title"></h4>
+      <span class="card-row__price" data-dla-text="meta.price"></span>
+    </article>`,
+  },
+};
+
 const ITEM: DataItem = {
   id: 'gizmo-7',
   title: 'The Gizmo',
@@ -118,5 +129,23 @@ describe('renderCard', () => {
     const html = renderCard(ctx({ title: '<script>x</script>' }));
     expect(html).not.toContain('<script>x');
     expect(html).toContain('&lt;script&gt;');
+  });
+
+  it('renders a named variant and falls back to the base template when absent or unknown', () => {
+    const variantCtx = { ...ctx(), card: CARD_WITH_ROW_VARIANT };
+
+    const row = load(renderCard(variantCtx, 'row'), null, false);
+    expect(row('.card-row').length).toBe(1);
+    expect(row('.card-row').attr('data-id')).toBe('gizmo-7');
+    expect(row('.card-row__title').text()).toBe('The Gizmo');
+    expect(row('.card-row__price').text()).toBe('42');
+
+    const base = load(renderCard(variantCtx), null, false);
+    expect(base('.card').length).toBe(1);
+    expect(base('.card-row').length).toBe(0);
+
+    const unknown = load(renderCard(variantCtx, 'missing'), null, false);
+    expect(unknown('.card').length).toBe(1);
+    expect(unknown('.card-row').length).toBe(0);
   });
 });
