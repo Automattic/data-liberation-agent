@@ -1,7 +1,9 @@
 // src/lib/replicate/local-theme/chrome-parts.test.ts
 import { describe, it, expect } from 'vitest';
-import { buildHeaderPart, buildFooterPart, findChromeMounts, mountPartMarkup } from './chrome-parts.js';
+import { buildHeaderPart, buildCarriedHeaderPart, buildFooterPart, findChromeMounts, mountPartMarkup } from './chrome-parts.js';
 import { blockMarkupRoundtrips } from '../../streaming/block-markup-validate.js';
+import { InstanceStyleSheet } from '../normalize/instance-styles.js';
+import { validateReplicaInputs } from '../../preview/replica-install.js';
 import type { NavLink, Section } from '../local-site/types.js';
 
 const NAV: NavLink[] = [
@@ -62,6 +64,78 @@ describe('buildHeaderPart (inNav preference)', () => {
     expect(html).toContain('{"label":"About","url":"/about/"}');
     expect(html).not.toContain('Brand Co","url":"/"');          // brand label not used for a link
     expect(html).not.toContain('inline services link');          // body links excluded when nav links exist
+  });
+});
+
+describe('buildCarriedHeaderPart', () => {
+  it('preserves the source root class while renaming the literal header tag away', () => {
+    const header: Section = {
+      id: 'header',
+      role: 'header',
+      classes: ['bp-header'],
+      html: '<header class="bp-header"><p>Brand</p></header>',
+    };
+    const html = buildCarriedHeaderPart(header);
+    expect(blockMarkupRoundtrips(html).ok).toBe(true);
+    expect(html).toContain('class="wp-block-group bp-header"');
+    expect(html).not.toMatch(/<header\b/i);
+    expect(html).not.toContain('</header>');
+  });
+
+  it('rewrites internal header hrefs to WordPress permalinks', () => {
+    const header: Section = {
+      id: 'header',
+      role: 'header',
+      classes: ['bp-header'],
+      html: '<header class="bp-header"><p><a href="reviews.html">Reviews</a></p></header>',
+    };
+    const html = buildCarriedHeaderPart(header, { pageSlugs: ['home', 'reviews'] });
+    expect(blockMarkupRoundtrips(html).ok).toBe(true);
+    expect(html).toContain('href="/reviews/"');
+    expect(html).not.toContain('reviews.html');
+  });
+
+  it('keeps nav-shaped carried headers valid for theme files', () => {
+    const header: Section = {
+      id: 'header',
+      role: 'header',
+      classes: ['bp-header'],
+      html: '<header class="bp-header"><nav><a href="reviews.html">Reviews</a></nav></header>',
+    };
+    const html = buildCarriedHeaderPart(header, { pageSlugs: ['home', 'reviews'] });
+    expect(blockMarkupRoundtrips(html).ok).toBe(true);
+    expect(html).toContain('href="/reviews/"');
+    expect(html).toContain('bp-header');
+    expect(html).not.toContain('wp:html');
+    expect(() => validateReplicaInputs([{ relativePath: 'parts/header.html', content: html }], undefined, 'acme-local')).not.toThrow();
+  });
+
+  it('adds root inline styles to the provided instance stylesheet', () => {
+    const sheet = new InstanceStyleSheet();
+    const header: Section = {
+      id: 'header',
+      role: 'header',
+      classes: ['bp-header'],
+      html: '<header class="bp-header" style="display:flex; gap: 12px"><p>Brand</p></header>',
+    };
+    const html = buildCarriedHeaderPart(header, { instanceStyles: sheet });
+    expect(html).toMatch(/class="wp-block-group bp-header lib-i[0-9a-f]{10}"/);
+    expect(sheet.toCss()).toContain('{display:flex;gap:12px}');
+  });
+
+  it('appends the sticky state block when sticky behavior is provided', () => {
+    const header: Section = {
+      id: 'header',
+      role: 'header',
+      classes: ['bp-header'],
+      html: '<header class="bp-header"><p>Brand</p></header>',
+    };
+    const html = buildCarriedHeaderPart(header, {
+      sticky: { kind: 'sticky', toggleClass: 'is-scrolled', offset: 24 },
+    });
+    expect(blockMarkupRoundtrips(html).ok).toBe(true);
+    expect(html).toContain('<!-- wp:dla/sticky {"toggleClass":"is-scrolled","offset":24} -->');
+    expect(html.indexOf('wp:dla/sticky')).toBeGreaterThan(html.indexOf('<!-- /wp:group -->'));
   });
 });
 

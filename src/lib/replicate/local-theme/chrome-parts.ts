@@ -115,6 +115,22 @@ export function buildHeaderPart(
   );
 }
 
+export function buildCarriedHeaderPart(
+  header: Section,
+  opts: { pageSlugs?: string[]; instanceStyles?: InstanceStyleSheet; sticky?: StickyBehavior } = {},
+): string {
+  let html = header.html;
+  if (opts.pageSlugs?.length) html = rewriteInternalHrefs(html, opts.pageSlugs);
+  const normalized = {
+    ...header,
+    html: html.replace(/^<header(\b[^>]*>)/i, '<div$1').replace(/<\/header>\s*$/i, '</div>'),
+  };
+  const sticky = opts.sticky ? `\n${stickyStateBlock(opts.sticky)}` : '';
+  const markup = emitSectionBlocks(normalized, { wrapper: 'div', instanceStyles: opts.instanceStyles }).markup
+    .replace(/<!-- wp:html -->\n?([\s\S]*?)\n?<!-- \/wp:html -->/g, (_match, inner: string) => inner.trim());
+  return markup + sticky;
+}
+
 export interface FooterPartOpts {
   /** Site page slugs — internal footer hrefs are rewritten to /slug/ permalinks. */
   pageSlugs?: string[];
