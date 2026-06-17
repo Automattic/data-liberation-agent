@@ -204,6 +204,27 @@ const WRAPPER_WITH_INDEPENDENT_GRID_PAGE = `
   </div>
 </main>`;
 
+const GENERIC_LIST_TITLES = Array.from({ length: 4 }, (_, i) => `Generic list card ${i + 1}`);
+const GENERIC_LIST_PAGE = `
+<main>
+  <ul>
+    ${GENERIC_LIST_TITLES.map(
+      (title, i) => `
+      <li class="shape-${i + 1}">
+        <div class="media-${i + 1}">
+          <a href="list-${i + 1}.html"><img src="list-${i + 1}.png" alt=""></a>
+        </div>
+        <div class="copy-${i + 1}">
+          <a href="archive.html">Topic ${i + 1}</a>
+          <h3><a href="list-${i + 1}.html">${title}</a></h3>
+          <p>Excerpt for ${title} with enough detail to qualify as a rich content card.</p>
+          <span>Jan ${String(i + 1).padStart(2, '0')}, 2024</span>
+        </div>
+      </li>`
+    ).join('')}
+  </ul>
+</main>`;
+
 describe('structuralSignature', () => {
   it('is class-agnostic: tag + sorted direct-child tag names', () => {
     const $ = cheerio.load(`<article class="x"><div></div><span></span></article>`);
@@ -257,6 +278,16 @@ describe('discoverHtmlCards — candidate clustering', () => {
     expect(records).toHaveLength(12);
     expect(WRAPPER_WITH_INDEPENDENT_TITLES.every((title) => titles.includes(title))).toBe(true);
     expect(titles.some((title) => WRAPPER_WITH_INDEPENDENT_HEADINGS.includes(title))).toBe(false);
+  });
+
+  it('detects arbitrary list-item cards without article tags or semantic class names', () => {
+    const grids = discoverHtmlCards(GENERIC_LIST_PAGE);
+    const records = grids.flatMap((grid) => grid.records);
+    const titles = records.map((record) => String(record.title));
+
+    expect(records).toHaveLength(4);
+    expect(GENERIC_LIST_TITLES.every((title) => titles.includes(title))).toBe(true);
+    expect(grids.every((grid) => grid.containerSelector.endsWith('ul:nth-of-type(1)'))).toBe(true);
   });
 });
 
