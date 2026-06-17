@@ -80,6 +80,14 @@ describe('resolveExpr', () => {
     expect(resolveExpr('cat.label', c)).toBe('');
     expect(resolveExpr('map.TONE.cat.slug', c)).toBe('');
   });
+
+  it('permalink / cat.url resolve off the render item (empty when absent)', () => {
+    const c = ctx({ permalink: 'https://x.test/?p=7', catUrl: 'https://x.test/cat/round/' });
+    expect(resolveExpr('permalink', c)).toBe('https://x.test/?p=7');
+    expect(resolveExpr('cat.url', c)).toBe('https://x.test/cat/round/');
+    expect(resolveExpr('permalink', ctx())).toBe(''); // not set → empty, not undefined
+    expect(resolveExpr('cat.url', ctx())).toBe('');
+  });
 });
 
 describe('evalCond', () => {

@@ -62,6 +62,12 @@ export interface DataItem {
   gallery: DataGalleryImage[];
   /** Optional long body -> post_content (e.g. the 'story' field may double as content). */
   content?: string;
+  /** Render-only: this post's permalink, populated per-post at render time
+   * (PHP get_permalink). Lets a card link to its own post instead of the
+   * source mockup's static detail href. */
+  permalink?: string;
+  /** Render-only: the first term's archive URL (PHP get_term_link). */
+  catUrl?: string;
 }
 
 /** The CPT definition. */

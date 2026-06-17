@@ -334,6 +334,27 @@ function buildCardTemplate($: CheerioAPI, card: Element, fields: CardFields): st
     const img = root.find('img[src]').first();
     if (img.length) img.attr('data-dla-attr', 'src:meta.image').removeAttr('src');
   }
+  // Append a binding to an element's data-dla-attr (preserving any existing one).
+  const addAttr = (node: cheerio.Cheerio<Element>, spec: string): void => {
+    const prev = node.attr('data-dla-attr');
+    node.attr('data-dla-attr', prev ? `${prev},${spec}` : spec);
+  };
+  // Post-detail links → this post's permalink. The source mockup points every
+  // card at one static detail page (fields.link); rebind every anchor that
+  // targets it so each card links to its own post.
+  if (fields.link) {
+    root
+      .find('a[href]')
+      .toArray()
+      .forEach((n) => {
+        if (($c(n).attr('href') ?? '') === fields.link) addAttr($c(n), 'href:permalink');
+      });
+  }
+  // Category anchor → its term archive (was a static archive href).
+  if (fields.category) {
+    const cat = root.find('[data-dla-text="cat.label"]').first();
+    if (cat.length && cat.is('a[href]')) addAttr(cat, 'href:cat.url');
+  }
   return ($c.html(root) ?? '').trim();
 }
 

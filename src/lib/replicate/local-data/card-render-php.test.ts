@@ -162,6 +162,8 @@ function wp_get_post_terms( $post_id, $taxonomy, $args = array() ) {
 function get_the_title( $post_id ) { global $item; return $item['title']; }
 function get_post_field( $field, $post_id ) { global $item; return isset( $item['content'] ) ? $item['content'] : ''; }
 function get_the_ID() { return 1; }
+function get_permalink( $post_id ) { return 'https://example.test/?p=' . (int) $post_id; }
+function get_term_link( $term, $tax ) { return 'https://example.test/cat/' . $term . '/'; }
 function esc_attr( $value ) { return htmlspecialchars( (string) $value, ENT_QUOTES ); }
 function wp_json_encode( $value ) { return json_encode( $value ); }
 require $argv[1];

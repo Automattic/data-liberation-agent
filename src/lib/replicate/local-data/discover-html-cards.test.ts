@@ -529,3 +529,41 @@ describe('discoverHtmlCards — scaffold fidelity', () => {
     expect(model.items.some((item) => String(item.meta.date ?? '').includes('2024'))).toBe(true);
   });
 });
+
+describe('discoverHtmlCards — link bindings (permalink + category url)', () => {
+  it('rebinds post-detail anchors to href:permalink and the category anchor to href:cat.url', () => {
+    // Each card links to its OWN detail page (story-N) + a category page. The
+    // derived template must rebind those static hrefs to dynamic bindings so the
+    // live card links to its post and term archive, not the source mockup pages.
+    const page = `
+      <main><div class="grid">
+        <article class="card">
+          <div class="thumb"><a href="story-1.html"><img src="a.png" alt=""></a></div>
+          <a class="kicker" href="cat-news.html">News</a>
+          <h3><a href="story-1.html">First headline here is long enough</a></h3>
+          <p>Some excerpt text that is sufficiently long to register.</p>
+        </article>
+        <article class="card">
+          <div class="thumb"><a href="story-2.html"><img src="b.png" alt=""></a></div>
+          <a class="kicker" href="cat-guides.html">Guides</a>
+          <h3><a href="story-2.html">Second headline here is also long</a></h3>
+          <p>Another excerpt that is also sufficiently long to register here.</p>
+        </article>
+        <article class="card">
+          <div class="thumb"><a href="story-3.html"><img src="c.png" alt=""></a></div>
+          <a class="kicker" href="cat-news.html">News</a>
+          <h3><a href="story-3.html">Third headline here is long too</a></h3>
+          <p>Yet another excerpt long enough to be a real excerpt field here.</p>
+        </article>
+      </div></main>`;
+    const grids = discoverHtmlCards(page);
+    expect(grids.length).toBeGreaterThan(0);
+    const tpl = grids[0].cardTemplate;
+    // post-detail anchors (thumb + title) bound to the permalink
+    expect(tpl).toContain('href:permalink');
+    // category anchor bound to its term archive
+    expect(tpl).toContain('href:cat.url');
+    // the static mockup hrefs are no longer the only thing driving the links
+    expect((tpl.match(/href:permalink/g) ?? []).length).toBeGreaterThanOrEqual(1);
+  });
+});

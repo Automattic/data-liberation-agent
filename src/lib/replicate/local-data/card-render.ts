@@ -42,6 +42,10 @@ export function resolveExpr(
   if (e === 'content') return item.content ?? '';
   if (e === 'cat.slug') return item.terms[0] ?? '';
   if (e === 'cat.label') return item.terms[0] ? termLabel(taxonomy, item.terms[0]) : '';
+  // permalink/cat.url are populated per-post at render (PHP: get_permalink /
+  // get_term_link); the TS mirror reads them off the item for preview/parity.
+  if (e === 'permalink') return item.permalink ?? '';
+  if (e === 'cat.url') return item.catUrl ?? '';
 
   const meta = /^meta\.(.+)$/.exec(e);
   if (meta) {

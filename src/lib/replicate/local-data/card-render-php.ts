@@ -129,13 +129,22 @@ ${fieldsBody}
     $terms = wp_get_post_terms( $post_id, ${php(taxSlug)}, array( 'fields' => 'slugs' ) );
     if ( is_wp_error( $terms ) ) { $terms = array(); }
     $gallery = get_post_meta( $post_id, '_dla_gallery', true );
+    // The source mockup points every card at one static detail page; the live
+    // card must link to THIS post's permalink (and its term archive) instead.
+    $cat_url = '';
+    if ( isset( $terms[0] ) ) {
+        $link = get_term_link( $terms[0], ${php(taxSlug)} );
+        if ( ! is_wp_error( $link ) ) { $cat_url = $link; }
+    }
     return array(
-        'id'      => (string) get_post_meta( $post_id, '_dla_item_id', true ),
-        'title'   => get_the_title( $post_id ),
-        'content' => get_post_field( 'post_content', $post_id ),
-        'terms'   => array_values( $terms ),
-        'meta'    => $meta,
-        'gallery' => is_array( $gallery ) ? $gallery : array(),
+        'id'        => (string) get_post_meta( $post_id, '_dla_item_id', true ),
+        'title'     => get_the_title( $post_id ),
+        'content'   => get_post_field( 'post_content', $post_id ),
+        'terms'     => array_values( $terms ),
+        'meta'      => $meta,
+        'gallery'   => is_array( $gallery ) ? $gallery : array(),
+        'permalink' => (string) get_permalink( $post_id ),
+        'cat_url'   => (string) $cat_url,
     );
 }
 
@@ -148,6 +157,8 @@ function dla_card_resolve_${model.cpt.slug}( $expr, $item, $maps ) {
     if ( 'content' === $e ) { return (string) ( isset( $item['content'] ) ? $item['content'] : '' ); }
     if ( 'cat.slug' === $e ) { return (string) ( isset( $item['terms'][0] ) ? $item['terms'][0] : '' ); }
     if ( 'cat.label' === $e ) { return isset( $item['terms'][0] ) ? dla_card_term_label_${model.cpt.slug}( $item['terms'][0] ) : ''; }
+    if ( 'permalink' === $e ) { return (string) ( isset( $item['permalink'] ) ? $item['permalink'] : '' ); }
+    if ( 'cat.url' === $e ) { return (string) ( isset( $item['cat_url'] ) ? $item['cat_url'] : '' ); }
     if ( preg_match( '/^meta\\.(.+)$/', $e, $m ) ) {
         $v = isset( $item['meta'][ $m[1] ] ) ? $item['meta'][ $m[1] ] : '';
         if ( is_bool( $v ) ) { return $v ? '1' : ''; }
