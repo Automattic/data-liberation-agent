@@ -123,6 +123,8 @@ function carryDeclarations(rule: Rule, kind: TargetKind): CarryDeclaration[] {
 }
 
 function isCarryProperty(prop: string, kind: TargetKind): boolean {
+  if (JETPACK_FORM_PARITY_NEVER_CARRY_PROPERTIES.has(prop)) return false;
+
   if (
     prop === 'color' ||
     prop === 'height' ||

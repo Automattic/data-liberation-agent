@@ -131,7 +131,7 @@ describe('buildJetpackFormParityCssImpl', () => {
     expect(css).toContain(
       '.wp-block-jetpack-contact-form .contact-form.commentsblock.jetpack-contact-form__form',
     );
-    expect(css).toContain('display:grid');
+    expect(css).not.toContain('display:grid');
     expect(css).toContain('gap:18px');
     expect(css).toContain('max-width:42rem');
     expect(css).toContain('margin:0 auto');
@@ -164,6 +164,144 @@ describe('buildJetpackFormParityCssImpl', () => {
     expect(css).toContain('background:#2255aa');
     expect(css).toContain('border-radius:4px');
     expect(css).not.toContain('.wp-block-jetpack-contact-form{background:#2255aa');
+  });
+
+  it('never carries visibility or layout-state declarations into Jetpack selectors', () => {
+    const { css } = buildJetpackFormParityCssImpl({
+      formsConverted: 1,
+      sourceCss: `
+        .form-success {
+          display: none;
+          visibility: hidden;
+          position: absolute;
+          opacity: 0;
+          transform: translateY(16px);
+          float: left;
+          clip: rect(0 0 0 0);
+          clip-path: inset(50%);
+          z-index: 10;
+          margin: 0 auto;
+          max-width: 42rem;
+          color: #223344;
+          background-color: #fff;
+          box-shadow: 0 1px 2px rgba(0,0,0,.2);
+        }
+
+        .form-group {
+          display: grid;
+          visibility: hidden;
+          position: relative;
+          opacity: 0;
+          transform: scale(.95);
+          float: none;
+          clip: auto;
+          clip-path: none;
+          z-index: 1;
+          gap: 8px;
+          margin-bottom: 12px;
+          padding: 4px;
+          border: 1px solid #ccddee;
+        }
+
+        .form-input {
+          display: none;
+          visibility: hidden;
+          position: absolute;
+          opacity: 0;
+          transform: translateX(-8px);
+          float: right;
+          clip: rect(1px 1px 1px 1px);
+          clip-path: inset(1px);
+          z-index: 2;
+          border-radius: 6px;
+          padding: 10px 12px;
+          font-size: 16px;
+          color: #111;
+          background: #fafafa;
+        }
+
+        .form-label {
+          display: block;
+          visibility: hidden;
+          position: relative;
+          opacity: 0;
+          transform: translateY(4px);
+          float: none;
+          clip: auto;
+          clip-path: none;
+          z-index: 3;
+          margin-bottom: 6px;
+          font-weight: 700;
+          color: #333;
+        }
+
+        .form-submit {
+          display: inline-block;
+          visibility: hidden;
+          position: relative;
+          opacity: 0;
+          transform: translateY(4px);
+          float: none;
+          clip: auto;
+          clip-path: none;
+          z-index: 4;
+          background: #111;
+          color: #fff;
+          border-radius: 999px;
+          padding: 10px 24px;
+          text-transform: uppercase;
+        }
+
+        .contact-form input:focus {
+          display: none;
+          visibility: hidden;
+          position: absolute;
+          opacity: 0;
+          transform: scale(.95);
+          float: none;
+          clip: auto;
+          clip-path: none;
+          z-index: 5;
+          border-color: #0055ff;
+          box-shadow: 0 0 0 3px rgba(0,85,255,.2);
+          outline: none;
+        }
+      `,
+    });
+
+    for (const prop of [
+      'display',
+      'visibility',
+      'position',
+      'opacity',
+      'transform',
+      'float',
+      'clip',
+      'clip-path',
+      'z-index',
+    ]) {
+      expect(css).not.toMatch(new RegExp(`(?:^|[;{])${prop}:`));
+    }
+
+    expect(css).toContain('margin:0 auto');
+    expect(css).toContain('max-width:42rem');
+    expect(css).toContain('color:#223344');
+    expect(css).toContain('background-color:#fff');
+    expect(css).toContain('box-shadow:0 1px 2px rgba(0,0,0,.2)');
+    expect(css).toContain('gap:8px');
+    expect(css).toContain('margin-bottom:12px');
+    expect(css).toContain('padding:4px');
+    expect(css).toContain('border:1px solid #ccddee');
+    expect(css).toContain('border-radius:6px');
+    expect(css).toContain('padding:10px 12px');
+    expect(css).toContain('font-size:16px');
+    expect(css).toContain('background:#fafafa');
+    expect(css).toContain('font-weight:700');
+    expect(css).toContain('background:#111');
+    expect(css).toContain('border-radius:999px');
+    expect(css).toContain('text-transform:uppercase');
+    expect(css).toContain('border-color:#0055ff');
+    expect(css).toContain('outline:none');
   });
 
   it('returns empty CSS when no forms were converted', () => {
