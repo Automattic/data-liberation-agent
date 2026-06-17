@@ -500,12 +500,25 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
   // resolves ch against a face whose '0' glyph is absent (spec fallback 0.5em),
   // shrinking every ch-based max-width (walrus: 62ch = 527px vs 655px) while
   // text still shapes correctly via the next face. One authority, no overlap.
+  // Source <main> class → carried onto post-content so body-layout rules that
+  // key off it survive — notably an inter-section blockGap (a
+  // `.<main-class> > * + * { margin-top }` rule). Without it the page sections
+  // butt together (vertical rhythm collapses). Usually consistent across pages;
+  // first match wins.
+  const mainClass = (() => {
+    for (const p of [home, ...site.pages]) {
+      const m = p?.html?.match(/<main\b[^>]*\bclass="([^"]+)"/i);
+      if (m) return m[1];
+    }
+    return undefined;
+  })();
   const themeFiles = assembleLocalTheme({
     siteTitle,
     themeSlug,
     headerPart,
     footerPart,
     foundation,
+    mainClass,
     capturedFonts: chromeCarried ? undefined : capturedFonts,
     carrySourceAssets,
     instanceStylesCss,

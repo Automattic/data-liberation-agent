@@ -31,6 +31,18 @@ describe('assembleLocalTheme', () => {
     }
   });
 
+  it('carries the source <main> class onto post-content (body blockGap rules survive)', () => {
+    const withMain = assembleLocalTheme({ siteTitle: 'Acme', themeSlug: 'acme-local', headerPart: HEADER, footerPart: FOOTER, mainClass: 'page-sections' });
+    for (const t of ['templates/page-local.html', 'templates/front-page.html']) {
+      const content = withMain.find((f) => f.relativePath === t)?.content ?? '';
+      expect(content).toContain('<!-- wp:post-content {"className":"page-sections"} /-->');
+    }
+    // default (no mainClass): bare post-content, unchanged
+    const t = files.find((f) => f.relativePath === 'templates/front-page.html')?.content ?? '';
+    expect(t).toContain('<!-- wp:post-content /-->');
+    expect(t).not.toContain('className');
+  });
+
   it('registers page-local in theme.json customTemplates and stays lint-clean', () => {
     const tj = files.find((f) => f.relativePath === 'theme.json');
     const themeJson = JSON.parse(tj?.content ?? '{}') as {

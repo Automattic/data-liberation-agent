@@ -59,6 +59,10 @@ export interface AssembleLocalThemeOpts {
    * nav). Emitted only inside the carry block (the attrs matter to carried
    * source JS). */
   bodyDataByPath?: Record<string, Record<string, string>>;
+  /** Source <main> element class (e.g. a "page-sections" class). Applied to the
+   * page templates' core/post-content so source body-layout rules that key off
+   * it (notably a `> * + *` blockGap between page sections) keep matching. */
+  mainClass?: string;
 }
 
 /** No-title page template: header part → post-content → footer part.
@@ -67,12 +71,20 @@ export interface AssembleLocalThemeOpts {
  *  front-page templates. Layout is default (flow) — constrained would inject
  *  a contentSize max-width onto children that fights the carried source
  *  main{max-width} rule (stage 1d parity); the source CSS owns layout. */
-function noTitleTemplate(): string {
+function noTitleTemplate(mainClass?: string): string {
+  // Carry the source <main> class onto the post-content wrapper: source body
+  // layout rules key off it (e.g. a `.<main-class> > * + * { margin-top }`
+  // blockGap between page sections). The sections render as post-content's
+  // DIRECT children, so the class must sit on post-content (not the <main>
+  // group, whose only child is post-content) for the child-combinator to match.
+  const postContent = mainClass
+    ? `<!-- wp:post-content {"className":${JSON.stringify(mainClass)}} /-->`
+    : `<!-- wp:post-content /-->`;
   return (
     `<!-- wp:template-part {"slug":"header","tagName":"header"} /-->\n\n` +
     `<!-- wp:group {"tagName":"main"} -->\n` +
     `<main class="wp-block-group">\n` +
-    `<!-- wp:post-content /-->\n` +
+    `${postContent}\n` +
     `</main>\n` +
     `<!-- /wp:group -->\n\n` +
     `<!-- wp:template-part {"slug":"footer","tagName":"footer"} /-->\n`
@@ -204,7 +216,7 @@ export function assembleLocalTheme(opts: AssembleLocalThemeOpts): ReplicaFile[] 
     return { ...f, content: JSON.stringify({ ...parsed, customTemplates }, null, 2) + '\n' };
   });
 
-  const template = noTitleTemplate();
+  const template = noTitleTemplate(opts.mainClass);
   // page-local: the selectable per-page template assigned via _wp_page_template.
   withTemplates.push({ relativePath: 'templates/page-local.html', content: template });
   // front-page.html: WP serves this at the site root when static front page is set;

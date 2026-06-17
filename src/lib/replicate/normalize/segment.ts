@@ -37,7 +37,15 @@ function stableId($: CheerioAPI, el: Element, ordinal: number): string {
   if (existing) return existing;
   const heading = $el.find('h1,h2,h3').first().text();
   const slug = heading.trim() ? textSlug(heading) : '';
-  if (slug) return slug;
+  if (slug) {
+    // Don't let the section anchor collide with a DESCENDANT id — a source
+    // <h2 id="features">Features</h2> yields slug "features", which would
+    // duplicate the heading's own id. Beyond invalid HTML, the duplicate shadows
+    // the heading for any #id-keyed lookup: a parity/diff pass probing source
+    // #features (the heading) but replica #features (the section) patches the
+    // wrong element (e.g. forcing display/margin), collapsing the section.
+    return $el.find(`[id="${slug}"]`).length > 0 ? `${slug}-section` : slug;
+  }
   const cls = ($el.attr('class') ?? '').split(/\s+/).filter(Boolean)[0];
   if (cls) return cls;
   return hashId($.html(el) ?? '', ordinal);

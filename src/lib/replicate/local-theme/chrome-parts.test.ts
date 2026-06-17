@@ -194,6 +194,27 @@ describe('buildFooterPart', () => {
     expect((html.match(/<!-- wp:paragraph -->/g) ?? []).length).toBeGreaterThanOrEqual(2);
   });
 
+  it('preserves an inline-svg signup badge + form verbatim (not a stripped group)', () => {
+    const footer: Section = {
+      id: 'footer',
+      role: 'footer',
+      html:
+        '<footer><section class="signup"><div class="signup__card">' +
+        '<svg class="signup__icon" viewBox="0 0 24 24"><path d="M2 2h20v20H2Z" fill="#abc"/><path d="M6 6h12v12H6Z" fill="#123"/></svg>' +
+        '<div class="signup__text"><h2>Subscribe</h2></div>' +
+        '<form class="signup__form"><input class="email-field" type="email"/><button type="submit">Sign Up</button></form>' +
+        '</div></section></footer>',
+    };
+    const html = buildFooterPart(footer, 'Acme Co');
+    expect(html).toContain('class="signup__icon"');
+    expect(html).toContain('<path'); // the svg paths survive (badge actually renders)
+    expect(html).toContain('<svg');
+    expect(html).toContain('<input'); // signup form survives
+    // the island is unwrapped to raw HTML — no custom-html block in the theme file
+    expect(html).not.toContain('<!-- wp:html -->');
+    expect(html).not.toContain('wp-block-group signup__icon'); // NOT downgraded to a group
+  });
+
   it('emits a minimal default footer when no footer section exists', () => {
     const html = buildFooterPart(null, 'Acme Co');
     expect(blockMarkupRoundtrips(html).ok).toBe(true);

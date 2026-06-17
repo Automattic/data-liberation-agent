@@ -141,8 +141,15 @@ export function buildCarriedHeaderPart(
     html: html.replace(/^<header(\b[^>]*>)/i, '<div$1').replace(/<\/header>\s*$/i, '</div>'),
   };
   const sticky = opts.sticky ? `\n${stickyStateBlock(opts.sticky)}` : '';
-  const markup = emitSectionBlocks(normalized, { wrapper: 'div', instanceStyles: opts.instanceStyles }).markup
-    .replace(/<!-- wp:html -->\n?([\s\S]*?)\n?<!-- \/wp:html -->/g, (_match, inner: string) => inner.trim());
+  // verbatimInteractive: the header's button-toggled dropdown nav + any inline
+  // -svg icons survive as core/html islands, which the unwrap below turns into
+  // raw markup — preserving the <button>/<svg>/has-children classes the carried
+  // CSS (:hover/.is-open) + source JS toggle key off.
+  const markup = emitSectionBlocks(normalized, {
+    wrapper: 'div',
+    instanceStyles: opts.instanceStyles,
+    verbatimInteractive: true,
+  }).markup.replace(/<!-- wp:html -->\n?([\s\S]*?)\n?<!-- \/wp:html -->/g, (_match, inner: string) => inner.trim());
   return markup + sticky;
 }
 
@@ -205,10 +212,17 @@ export function buildFooterPart(footer: Section | null, siteTitle: string, opts:
     };
     // wrapper:'div' — footer content is chrome, not a body section; the section
     // tag would attract the carried source's section margin rules (+88px).
-    return wrapFooterGroup(
-      emitSectionBlocks(normalized, { wrapper: 'div', instanceStyles: opts.instanceStyles }).markup,
-      opts,
-    );
+    // verbatimInteractive + island-unwrap (same as the header part): a footer
+    // may carry an inline-svg badge and a signup form — block conversion would
+    // turn the <svg> into an empty core/group and drop its <path>s. The unwrap
+    // turns the island into raw markup so the theme-file policy sees plain HTML
+    // (no custom-html block).
+    const inner = emitSectionBlocks(normalized, {
+      wrapper: 'div',
+      instanceStyles: opts.instanceStyles,
+      verbatimInteractive: true,
+    }).markup.replace(/<!-- wp:html -->\n?([\s\S]*?)\n?<!-- \/wp:html -->/g, (_m, x: string) => x.trim());
+    return wrapFooterGroup(inner, opts);
   }
   return wrapFooterGroup(
     `<!-- wp:group {"align":"full","layout":{"type":"constrained"},"style":{"spacing":{"padding":{"top":"2rem","bottom":"2rem"}}}} -->\n` +

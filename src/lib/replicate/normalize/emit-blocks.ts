@@ -154,10 +154,51 @@ interface ChildResult {
   clean: boolean;
 }
 
-/** Map a single child element to a core block. clean=false when downgraded. */
-function emitChild($: CheerioAPI, el: Element, sheet: InstanceStyleSheet): ChildResult {
+/** An interactive/icon subtree the block conversion cannot represent without
+ * loss: a <button>-toggled dropdown nav, a search/form control, or an inline
+ * <svg> icon. core/list strips `button svg` + unwraps the <button> to bare
+ * text + drops the <li> class; the structural-wrapper recursion downgrades a
+ * bare <svg>/<input> to an empty paragraph. Detection searches descendants so
+ * the HIGHEST enclosing element is caught (whole nav, whole form). */
+const INTERACTIVE_TAGS = new Set(['button', 'input', 'select', 'textarea', 'svg']);
+function isInteractiveSubtree($: CheerioAPI, el: Element): boolean {
+  const tag = el.tagName?.toLowerCase() ?? '';
+  if (INTERACTIVE_TAGS.has(tag)) return true;
+  return $(el).find('button, input, select, textarea, svg').length > 0;
+}
+
+/** An EMPTY element that carries a class is a pure styling hook — a CSS
+ * background logo/icon (`<a class="brand-logo">` filled by background:url(svg)),
+ * a divider, a spacer. The normal emitters downgrade it to an empty <p>,
+ * dropping the class and killing the visual. Preserve it verbatim so the
+ * class (and the carried CSS that paints it) survives. */
+function isStylingHook($: CheerioAPI, el: Element): boolean {
+  const $el = $(el);
+  // id-bearing empty elements are JS/query-loop MOUNTS (`<div id="latestGrid"
+  // class="…"></div>`), handled by the structural-wrapper branch as an empty
+  // anchor-group that injectQueryLoops replaces — islandifying them would break
+  // that splice. Only classed, id-less empties are styling hooks.
+  if ($el.attr('id')) return false;
+  if (!($el.attr('class') ?? '').trim()) return false;
+  return $el.children().length === 0 && !$el.text().trim();
+}
+
+/** Map a single child element to a core block. clean=false when downgraded.
+ * vi (verbatimInteractive) routes interactive subtrees to a verbatim core/html
+ * island instead of the lossy list/group path — passed only by the carried
+ * chrome parts, where the island is later unwrapped to raw HTML. */
+function emitChild($: CheerioAPI, el: Element, sheet: InstanceStyleSheet, vi = false): ChildResult {
   const tag = el.tagName?.toLowerCase() ?? '';
   const $el = $(el);
+
+  // verbatimInteractive (chrome carry): keep the whole interactive subtree
+  // byte-true as a core/html island so the carried CSS (:hover/.is-open) and
+  // site JS (button toggles, submenu reveal) keep matching the real DOM. The
+  // chrome part unwraps the island to raw markup; theme policy then sees plain
+  // HTML, not a custom-html block. "never lose source content".
+  if (vi && (isInteractiveSubtree($, el) || isStylingHook($, el))) {
+    return { markup: htmlBlock(($.html(el) ?? '').trim()), clean: true };
+  }
 
   // Source inline style is per-instance authority — the owned source overrides
   // class defaults inline (h1.display is a big clamp default, each heading
@@ -309,7 +350,7 @@ function emitChild($: CheerioAPI, el: Element, sheet: InstanceStyleSheet): Child
       body = htmlBlock(inlineHtml($, el).trim());
       clean = true;
     } else {
-      const childResults = elementChildren.map((c) => emitChild($, c, sheet));
+      const childResults = elementChildren.map((c) => emitChild($, c, sheet, vi));
       const inner = childResults.map((r) => r.markup).filter(Boolean).join('\n');
       const looseText = $el.clone().children().remove().end().text().trim();
       const loosePara = looseText && childResults.length === 0 ? paragraphBlock(escapeHtml(looseText)) : '';
@@ -370,6 +411,12 @@ export interface EmitSectionOpts {
    * local sheet is used (returned on the result; callers that don't carry CSS
    * discard it). Pass a shared sheet to dedupe rules across sections/pages. */
   instanceStyles?: InstanceStyleSheet;
+  /** Carried-chrome path: emit interactive subtrees (button-dropdown navs,
+   * search/forms, inline-svg icons) VERBATIM as core/html islands rather than
+   * converting to core/list|group, which silently drops <button>/<svg>/controls
+   * and the <li> classes the carried CSS + JS key off. The chrome parts unwrap
+   * the islands to raw HTML. Default false (body sections blockify normally). */
+  verbatimInteractive?: boolean;
 }
 
 /** Fail-closed insurance shared by both verbatim wrappers: an inner HTML
@@ -479,6 +526,7 @@ export function emitSectionBlocks(
     };
   }
 
+  const vi = opts.verbatimInteractive ?? false;
   const childMarkup: string[] = [];
   let downgrades = 0;
   let total = 0;
@@ -488,7 +536,7 @@ export function emitSectionBlocks(
   for (const node of container.contents().get()) {
     if (isTag(node)) {
       total += 1;
-      const res = emitChild($, node, sheet);
+      const res = emitChild($, node, sheet, vi);
       if (!res.clean) downgrades += 1;
       childMarkup.push(res.markup);
     } else if (isText(node)) {

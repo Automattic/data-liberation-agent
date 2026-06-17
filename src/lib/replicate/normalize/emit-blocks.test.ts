@@ -712,3 +712,104 @@ describe('structural wrapper preservation (owned-source bodies)', () => {
     expect(confidence).toBeLessThan(1);
   });
 });
+
+describe('emitSectionBlocks verbatimInteractive (chrome carry)', () => {
+  // A button-toggled dropdown nav: the source carries the interactive structure
+  // (<button> + inline <svg> chevron + a .menu-item--has-children class) that the
+  // carried CSS (:hover/.is-open) and the source JS toggle key off. core/list
+  // cannot represent it — listItemBlock strips `button svg`, unwraps the <button>
+  // to bare text, and drops the <li> class. verbatimInteractive keeps the whole
+  // subtree as a core/html island so the chrome part can emit it verbatim.
+  const navHtml =
+    '<section id="hdr"><ul class="site-menu">' +
+    '<li><a href="/home.html">Home</a></li>' +
+    '<li class="menu-item--has-children">' +
+    '<button type="button" aria-expanded="false">More ' +
+    '<svg viewBox="0 0 10 6" aria-hidden="true"><path d="m1 1 4 4 4-4"/></svg></button>' +
+    '<ul class="submenu"><li><a href="/a.html">Docs</a></li></ul>' +
+    '</li></ul></section>';
+
+  it('default (off): drops the button, chevron svg, and has-children class', () => {
+    const { markup } = emitSectionBlocks({ id: 'hdr', role: 'body' as const, html: navHtml });
+    expect(markup).not.toContain('<button');
+    expect(markup).not.toContain('<svg');
+    expect(markup).not.toContain('menu-item--has-children');
+  });
+
+  it('on: preserves the button, chevron svg, has-children class, and submenu', () => {
+    const { markup } = emitSectionBlocks(
+      { id: 'hdr', role: 'body' as const, html: navHtml },
+      { verbatimInteractive: true },
+    );
+    expect(markup).toContain('menu-item--has-children');
+    expect(markup).toContain('<button');
+    expect(markup).toContain('<svg');
+    expect(markup).toContain('submenu');
+    // a plain (non-interactive) sibling link still rides through
+    expect(markup).toContain('Home');
+    // the interactive list rides a core/html island
+    expect(markup).toContain('<!-- wp:html -->');
+    expect(blockMarkupRoundtrips(markup).ok).toBe(true);
+  });
+
+  it('on: preserves an inline-svg search form verbatim', () => {
+    const formHtml =
+      '<section id="hero"><form class="site-search" role="search">' +
+      '<svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="9" cy="9" r="6"/></svg>' +
+      '<input class="search-field" type="search" name="s" placeholder="Search…"/>' +
+      '</form></section>';
+    const { markup } = emitSectionBlocks(
+      { id: 'hero', role: 'body' as const, html: formHtml },
+      { verbatimInteractive: true },
+    );
+    expect(markup).toContain('<form');
+    expect(markup).toContain('class="site-search"');
+    expect(markup).toContain('<svg');
+    expect(markup).toContain('class="search-field"');
+  });
+
+  it('on: preserves an EMPTY classed element (CSS-background logo hook)', () => {
+    // A logo is often an empty <a class="brand-logo"> filled by CSS
+    // background:url(logo.svg). The normal path downgrades an empty element to
+    // <p></p>, dropping the class and killing the logo. verbatimInteractive
+    // keeps the classed anchor.
+    const html =
+      '<section id="hdr">' +
+      '<a class="brand-logo" href="/" aria-label="Home"></a>' +
+      '<ul class="site-menu"><li><a href="/home.html">Home</a></li></ul>' +
+      '</section>';
+    const off = emitSectionBlocks({ id: 'hdr', role: 'body' as const, html });
+    expect(off.markup).not.toContain('brand-logo'); // control: dropped without the opt
+
+    const { markup } = emitSectionBlocks(
+      { id: 'hdr', role: 'body' as const, html },
+      { verbatimInteractive: true },
+    );
+    expect(markup).toContain('class="brand-logo"');
+    expect(markup).toContain('aria-label="Home"');
+  });
+
+  it('on: an empty id-bearing MOUNT div stays an anchor-group (not an island)', () => {
+    // A query-loop mount is `<div id="latestGrid" class="card-grid"></div>`.
+    // injectQueryLoops replaces the empty anchor-group by id — islandifying it
+    // would break that splice, so styling-hook preservation must skip ids.
+    const html = '<section id="s"><div id="latestGrid" class="card-grid"></div></section>';
+    const { markup } = emitSectionBlocks(
+      { id: 's', role: 'body' as const, html },
+      { verbatimInteractive: true },
+    );
+    expect(markup).toContain('"anchor":"latestGrid"');
+    expect(markup).toContain('<div id="latestGrid"');
+    expect(markup).not.toContain('<!-- wp:html -->');
+  });
+
+  it('on: a plain link list is unaffected (still core/list, editable)', () => {
+    const plain = '<section id="f"><ul class="footer-menu"><li><a href="/a.html">A</a></li><li><a href="/b.html">B</a></li></ul></section>';
+    const { markup } = emitSectionBlocks(
+      { id: 'f', role: 'body' as const, html: plain },
+      { verbatimInteractive: true },
+    );
+    expect(markup).toContain('<!-- wp:list');
+    expect(markup).not.toContain('<!-- wp:html -->');
+  });
+});

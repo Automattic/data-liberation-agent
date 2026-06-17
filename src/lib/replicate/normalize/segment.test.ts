@@ -56,6 +56,16 @@ describe('segmentPage', () => {
     expect(body.map((s) => s.id)).toEqual(['about-us']);
   });
 
+  it('avoids a section id that collides with a descendant heading id', () => {
+    // <h2 id="features"> would make slug "features" duplicate the heading's own id.
+    const html = '<main><section><h2 id="features">Features</h2><p>x</p></section></main>';
+    const body = segmentPage(html).filter((s) => s.role === 'body');
+    expect(body[0].id).toBe('features-section');
+    // no descendant collision → plain heading slug
+    const html2 = '<main><section><h2>Features</h2><p>x</p></section></main>';
+    expect(segmentPage(html2).filter((s) => s.role === 'body')[0].id).toBe('features');
+  });
+
   it('captures a body-direct nav as a chrome section', () => {
     const html = `<body>
       <nav id="main-nav"><a href="a.html">A</a></nav>

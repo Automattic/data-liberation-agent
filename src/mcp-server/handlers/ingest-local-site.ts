@@ -111,6 +111,11 @@ export const ingestLocalSiteHandler: Handler = async (args, ctx) => {
           // Internal .html hrefs in page bodies → /slug/ permalinks at emission.
           pageSlugs: site.pages.map((sp) => sp.slug),
           instanceStyles,
+          // Carry fidelity: keep inline-svg icons (search magnifier, card/meta
+          // glyphs), button menus, and empty CSS-background hooks verbatim —
+          // the block conversion otherwise silently drops them. Query-loop
+          // mounts are excluded (id-bearing), so the data path is unaffected.
+          verbatimInteractive: true,
         });
         const { postContent, report } = composed;
         if (postContent === '' && report.length === 0) emptyPages.push(page.slug);

@@ -45,6 +45,12 @@ export interface ComposePageOpts {
    * passes one sheet across all pages so identical declarations dedupe, then
    * emits sheet.toCss() into the carried instance-styles.css. */
   instanceStyles?: InstanceStyleSheet;
+  /** Carry path: preserve interactive subtrees (search/forms, button menus,
+   * inline-svg icons) and empty CSS-background hooks VERBATIM as core/html
+   * islands instead of letting the block conversion drop the <svg>/controls/
+   * classes. Query-loop MOUNTS (empty id-bearing divs) are excluded — they
+   * still emit as anchor-groups for injectQueryLoops. Default false. */
+  verbatimInteractive?: boolean;
 }
 
 export function composePage(page: LocalPage, opts: ComposePageOpts = {}): ComposePageResult {
@@ -71,6 +77,7 @@ export function composePage(page: LocalPage, opts: ComposePageOpts = {}): Compos
     const { markup, confidence } = emitSectionBlocks(section, {
       behaviorWrapper: native ? 'dla' : 'group',
       instanceStyles: opts.instanceStyles,
+      verbatimInteractive: opts.verbatimInteractive,
     });
     skeleton.sections.push({ type: 'content', slots: [section.id] });
     pageContent[section.id] = markup;
