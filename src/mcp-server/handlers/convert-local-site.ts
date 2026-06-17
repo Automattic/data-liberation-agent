@@ -46,6 +46,8 @@ import { composedSidecarPath, instanceStylesPath } from '../../lib/streaming/blo
 import { buildLocalFoundation, extractCssColors, type PaletteAgg, type TypographyAgg, type BreakpointsAgg } from '../../lib/replicate/local-theme/foundation.js';
 import { extractGoogleFontCssUrls, selfHostGoogleFonts } from '../../lib/replicate/local-theme/google-fonts.js';
 import { collectSourceAssets, WP_COMPAT_CSS } from '../../lib/replicate/local-theme/source-assets.js';
+import { buildJetpackFormParityCss } from '../../lib/replicate/local-site/jetpack-form-css.js';
+import { JETPACK_FORM_PARITY_CSS } from '../../lib/replicate/local-theme/jetpack-form-parity-contract.js';
 import { detectBehaviors } from '../../lib/replicate/normalize/detect-behaviors.js';
 import { buildInteractivityPlugin, PLUGIN_SLUG } from '../../blocks/interactivity-plugin.js';
 import type { DetectedBehaviors } from '../../lib/replicate/local-site/types.js';
@@ -57,6 +59,18 @@ import { classifyDivergences, renderPatchCss, divergenceFingerprint, suppressPag
  * commands, so the 60s/10MB envelope rather than the 5min/50MB default. */
 async function studioWp(sitePath: string, wpArgs: string[]): Promise<string> {
   return (await studioWpExec(sitePath, wpArgs, { timeout: 60_000, maxBuffer: 10 * 1024 * 1024 })).trim();
+}
+
+function writeAtomicTextFile(path: string, content: string): void {
+  mkdirSync(dirname(path), { recursive: true });
+  const tmp = `${path}.tmp.${process.pid}`;
+  try {
+    writeFileSync(tmp, content);
+    renameSync(tmp, path);
+  } catch (err) {
+    try { unlinkSync(tmp); } catch { /* ignore */ }
+    throw err;
+  }
 }
 
 export const convertLocalSiteHandler: Handler = async (args, ctx) => {
@@ -190,8 +204,10 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
     lowConfidence: number;
     failedPageCount: number;
     failedPagesList: Array<{ slug: string; error: string }>;
+    formsConverted?: number;
     behaviors?: { reveal: boolean; tabs: number; slider: number; modal: number; gaps: number };
   };
+  const formsConverted = ingestSummary.formsConverted ?? 0;
   const ingest = {
     lowConfidence: ingestSummary.lowConfidence,
     failedPageCount: ingestSummary.failedPageCount,
@@ -398,6 +414,15 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
   // no JS to fill it = blank chrome).
   const carriedCss = carryCss && (carrySourceAssets?.css ?? '').trim().length > 0;
   const carriedJs = carryJs && (carrySourceAssets?.js ?? '').trim().length > 0;
+  let jetpackFormParityCss: string | undefined;
+  if (formsConverted >= 1) {
+    const built = buildJetpackFormParityCss({
+      sourceCss: carrySourceAssets?.css ?? '',
+      formsConverted,
+    });
+    const css = built.css.trim();
+    if (css.length > 0) jetpackFormParityCss = css;
+  }
 
   // Chrome: nav from the graph; footer from the home page's captured footer section.
   const nav = buildNavGraph(site);
@@ -527,6 +552,7 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
     capturedFonts: chromeCarried ? undefined : capturedFonts,
     carrySourceAssets,
     instanceStylesCss,
+    jetpackFormParityCss,
     // Source body data-* attrs by permalink pathname — replayed by the
     // wp_body_open shim so carried JS keyed on body[data-*] behaves
     // identically (active-nav etc.). Only pages that HAVE attrs contribute.
@@ -561,6 +587,13 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
     }).themeWritten;
   } catch (err) {
     return ctx.errorResult(`theme write failed: ${(err as Error).message}`);
+  }
+  if (jetpackFormParityCss) {
+    try {
+      writeAtomicTextFile(join(outputDir, JETPACK_FORM_PARITY_CSS.outputFileName), jetpackFormParityCss + '\n');
+    } catch (err) {
+      warnings.push(`jetpack form parity css mirror write failed: ${(err as Error).message}`);
+    }
   }
   // Stale carry assets from a PRIOR convert: writeReplicaFilesToHost never
   // deletes — it only writes this run's files — and functions.php's enqueue
