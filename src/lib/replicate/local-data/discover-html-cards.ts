@@ -31,7 +31,7 @@ import { extractMainContent } from '../../../adapters/default/content.js';
 /** Minimum sibling cards for a run to count as a grid. */
 const MIN_CARDS = 3;
 const CATEGORY_MAX_LEN = 30;
-const DATE_RE = /\b(\d{4}-\d{2}-\d{2}|(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,2},?\s*\d{0,4})\b/i;
+const DATE_RE = /\b(\d{4}-\d{2}-\d{2}|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,2},?\s*\d{4}|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,2})\b/i;
 
 export interface DiscoveredCardGrid {
   /** The grid container → becomes a mount / core/query loop. Unique in the document. */
@@ -59,6 +59,21 @@ interface CardFields {
   date: string;
   link: string;
   meta: Record<string, string>;
+}
+
+interface Candidate {
+  cards: Element[];
+  sig: string;
+}
+
+interface RichCandidate extends Candidate {
+  richCards: Element[];
+}
+
+interface RichCandidateGroup {
+  sig: string;
+  candidates: RichCandidate[];
+  richCards: Element[];
 }
 
 /** Structural signature: tag + sorted direct-child element tag names. CLASS-AGNOSTIC. */
@@ -211,6 +226,11 @@ function imageUrl($el: Cheerio<Element>): string {
   return m ? m[1] : '';
 }
 
+function categoryAnchorScore($: CheerioAPI, el: Element): number {
+  const $el = $(el);
+  return $el.is('[class*="cat" i],[class*="tag" i]') || $el.closest('[class*="cat" i],[class*="tag" i]').length > 0 ? 1 : 0;
+}
+
 function extractCardFields($: CheerioAPI, el: Element, index: number): CardFields {
   const $el = $(el);
   const title = firstHeadingText($el);
@@ -223,13 +243,19 @@ function extractCardFields($: CheerioAPI, el: Element, index: number): CardField
   const time = $el.find('time').first().text().trim();
   const date = (time || ($el.text().match(DATE_RE)?.[0] ?? '')).trim();
   // Category: a short label anchor that is NOT the title/link target.
-  const category =
-    $el
-      .find('a[href]')
-      .toArray()
-      .map((a) => ({ href: $(a).attr('href') ?? '', text: $(a).text().replace(/\s+/g, ' ').trim() }))
-      .find((a) => a.text && a.text !== title && a.href !== link && a.text.length <= CATEGORY_MAX_LEN)?.text ?? '';
-  const id = slugify(link.replace(/\.[a-z]+$/i, '')) || slugify(title) || `card-${index + 1}`;
+  const categoryCandidates = $el
+    .find('a[href]')
+    .toArray()
+    .map((a, order) => ({
+      href: $(a).attr('href') ?? '',
+      text: $(a).text().replace(/\s+/g, ' ').trim(),
+      order,
+      score: categoryAnchorScore($, a as Element),
+    }))
+    .filter((a) => a.text && a.text !== title && a.href !== link && a.text.length <= CATEGORY_MAX_LEN)
+    .sort((a, b) => b.score - a.score || a.order - b.order);
+  const category = categoryCandidates[0]?.text ?? '';
+  const id = slugify(title) || slugify(link.replace(/\.[a-z]+$/i, '')) || `card-${index + 1}`;
   return { id, title, excerpt, image, category, date, link, meta: {} };
 }
 
@@ -340,6 +366,62 @@ function buildGrid(
   };
 }
 
+function groupRichCandidates(candidates: RichCandidate[]): RichCandidateGroup[] {
+  const bySig = new Map<string, RichCandidateGroup>();
+  for (const candidate of candidates) {
+    const group = bySig.get(candidate.sig) ?? { sig: candidate.sig, candidates: [], richCards: [] };
+    group.candidates.push(candidate);
+    for (const card of candidate.richCards) {
+      if (!group.richCards.includes(card)) group.richCards.push(card);
+    }
+    bySig.set(candidate.sig, group);
+  }
+  return [...bySig.values()];
+}
+
+function containmentCounts(outerCards: Element[], innerCards: Element[]): number[] {
+  return outerCards.map((outerCard) => innerCards.filter((innerCard) => isDescendant(innerCard, outerCard)).length);
+}
+
+function isOneToOneCardPartRelation($: CheerioAPI, outerCards: Element[], innerCards: Element[]): boolean {
+  let coveredOuterCount = 0;
+  for (const outerCard of outerCards) {
+    const contained = innerCards.filter((innerCard) => isDescendant(innerCard, outerCard));
+    if (contained.length === 0) continue;
+    if (contained.length !== 1) return false;
+    const outerTitle = firstHeadingText($(outerCard));
+    const innerTitle = firstHeadingText($(contained[0]));
+    if (outerTitle && innerTitle && outerTitle !== innerTitle) return false;
+    coveredOuterCount += 1;
+  }
+  return coveredOuterCount >= MIN_CARDS;
+}
+
+function selectCardLevelCandidates($: CheerioAPI, candidates: RichCandidate[]): RichCandidate[] {
+  const dropCandidates = new Set<RichCandidate>();
+  const dropSignatures = new Set<string>();
+  const groups = groupRichCandidates(candidates);
+  for (const outer of candidates) {
+    for (const inner of groups) {
+      if (outer.sig === inner.sig) continue;
+      const counts = containmentCounts(outer.richCards, inner.richCards);
+      if (counts.every((count) => count >= MIN_CARDS)) dropCandidates.add(outer);
+    }
+  }
+  for (const outer of groups) {
+    for (const inner of groups) {
+      if (outer === inner) continue;
+      const counts = containmentCounts(outer.richCards, inner.richCards);
+      const covered = counts.reduce((sum, count) => sum + count, 0);
+      if (covered !== inner.richCards.length) continue;
+      if (isOneToOneCardPartRelation($, outer.richCards, inner.richCards)) {
+        dropSignatures.add(inner.sig);
+      }
+    }
+  }
+  return candidates.filter((candidate) => !dropCandidates.has(candidate) && !dropSignatures.has(candidate.sig));
+}
+
 export function discoverHtmlCards(html: string, opts: DiscoverHtmlCardsOptions = {}): DiscoveredCardGrid[] {
   const $ = cheerio.load(html);
   const body = $('body')[0] as Element | undefined;
@@ -353,26 +435,20 @@ export function discoverHtmlCards(html: string, opts: DiscoverHtmlCardsOptions =
     bySig.set(sig, list);
   }
   // Collect candidate grids across every frequent signature.
-  const candidates: Array<{ cards: Element[]; sig: string }> = [];
+  const candidates: Candidate[] = [];
   for (const [sig, els] of bySig) {
     if (els.length < MIN_CARDS) continue;
     for (const gridCards of clusterToGrids($, els)) {
       if (gridCards.length >= MIN_CARDS) candidates.push({ cards: gridCards, sig });
     }
   }
-  // Drop NESTED candidates: a repeated inner structure (e.g. each card's content
-  // wrapper) is itself a frequent signature. A candidate is "inner" when every
-  // one of its cards is a descendant of some card in another candidate — keep the
-  // OUTERMOST grid only. (Structural, class-agnostic.)
-  const outer = candidates.filter(
-    (cand, i) =>
-      !candidates.some(
-        (other, j) => j !== i && cand.cards.every((c) => other.cards.some((o) => isDescendant(c, o)))
-      )
-  );
+  const richCandidates = candidates
+    .map((candidate) => ({ ...candidate, richCards: candidate.cards.filter((card) => isRichCard($, card)) }))
+    .filter((candidate) => candidate.richCards.length >= MIN_CARDS);
+  const cardLevel = selectCardLevelCandidates($, richCandidates);
 
   const out: DiscoveredCardGrid[] = [];
-  for (const { cards, sig } of outer) {
+  for (const { cards, sig } of cardLevel) {
     const grid = buildGrid($, cards, sig, opts);
     if (grid.records.length > 0) out.push(grid);
   }

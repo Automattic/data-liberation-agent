@@ -99,7 +99,7 @@ export function scaffoldDataModel(input: ScaffoldInput): ScaffoldResult {
       }));
   const usableGrids = discoveredGrids.filter(({ grid }) => grid.records.length >= 1);
   if (usableGrids.length > 0) {
-    const records = usableGrids.flatMap(({ grid }) => grid.records);
+    const records = dedupeRecordsById(usableGrids.flatMap(({ grid }) => grid.records));
     const cardMounts: BuildMount[] = usableGrids.map(({ grid, disambiguator, sourcePage }) => ({
       selector: `#${syntheticCardAnchor(grid.containerSelector, disambiguator)}`,
       sourceSelector: grid.containerSelector,
@@ -263,6 +263,20 @@ function buildModelFromRecords(opts: BuildModelFromRecordsOpts): ScaffoldResult 
   };
 
   return { model, skillTodos: todos, discovered: { ...opts.discovered, source: opts.source }, validation: validateDataModel(model) };
+}
+
+function dedupeRecordsById(records: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+  const seen = new Set<string>();
+  const out: Array<Record<string, unknown>> = [];
+  for (const record of records) {
+    const id = record.id;
+    if (typeof id === 'string' && id) {
+      if (seen.has(id)) continue;
+      seen.add(id);
+    }
+    out.push(record);
+  }
+  return out;
 }
 
 function fieldsWithRestoredContentMeta(records: Array<Record<string, unknown>>, inferred: ReturnType<typeof inferFields>): DataField[] {
