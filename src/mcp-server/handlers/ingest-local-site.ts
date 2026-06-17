@@ -8,7 +8,7 @@
 // the composed sidecars.
 //
 import { mkdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { join } from 'node:path';
 import type { Handler } from '../handler-types.js';
 import { validateOutputDir } from '../../lib/screenshot/output-layout.js';
 import { composedSidecarPath, instanceStylesPath } from '../../lib/streaming/block-markup-validate.js';
@@ -101,7 +101,7 @@ export const ingestLocalSiteHandler: Handler = async (args, ctx) => {
       // Per-page isolation: one bad page (roundtrip failure / compose misfit)
       // must not abort the whole ingest — record it and keep going.
       try {
-        const pageCardMounts = cardMounts.filter((m) => !m.sourcePage || basename(m.sourcePage) === basename(page.relPath));
+        const pageCardMounts = cardMounts.filter((m) => !m.sourcePage || m.sourcePage === page.relPath);
         const neutralized = pageCardMounts.length > 0 ? neutralizeStaticCards(page.html, pageCardMounts) : undefined;
         const composeInput = neutralized?.stamped.length ? { ...page, html: neutralized.html } : page;
         const composed = composePage(composeInput, {

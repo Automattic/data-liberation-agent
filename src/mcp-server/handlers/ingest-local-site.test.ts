@@ -150,6 +150,50 @@ describe('ingestLocalSiteHandler', () => {
     }
   });
 
+  it('does not apply a top-level index mount to a nested same-basename page', async () => {
+    mkdirSync(FIXTURE_TMP, { recursive: true });
+    const siteDir = mkdtempSync(join(FIXTURE_TMP, 'site-card-basename-'));
+    const outDir = mkdtempSync(join(FIXTURE_TMP, 'out-card-basename-'));
+    const mount: MountSpec = {
+      selector: '#dla-cards-index',
+      sourceSelector: '.ledger-grid',
+      sourcePage: 'index.html',
+      sourceCall: 'html-cards:.ledger-grid',
+      query: { postType: 'post', perPage: -1, orderBy: 'date', order: 'ASC' },
+    };
+    mkdirSync(join(siteDir, 'blog'), { recursive: true });
+    writeFileSync(
+      join(siteDir, 'index.html'),
+      '<body><main><section><h1>Journal</h1><div class="ledger-grid">' +
+        '<article><h2><a href="p1.html">Alpha</a></h2><p>Alpha card text long enough.</p></article>' +
+        '<article><h2><a href="p2.html">Beta</a></h2><p>Beta card text long enough.</p></article>' +
+        '<article><h2><a href="p3.html">Gamma</a></h2><p>Gamma card text long enough.</p></article>' +
+        '</div></section></main></body>',
+    );
+    writeFileSync(
+      join(siteDir, 'blog', 'index.html'),
+      '<body><main><section><h1>Blog</h1><div class="ledger-grid">' +
+        '<article><h2>Nested Editorial Alpha</h2><p>Nested editorial alpha must survive untouched.</p></article>' +
+        '<article><h2>Nested Editorial Beta</h2><p>Nested editorial beta must survive untouched.</p></article>' +
+        '<article><h2>Nested Editorial Gamma</h2><p>Nested editorial gamma must survive untouched.</p></article>' +
+        '</div></section></main></body>',
+    );
+    try {
+      const res = await ingestLocalSiteHandler({ dir: siteDir, outputDir: outDir, cardMounts: [mount] }, ctx);
+      expect(res.isError).toBeFalsy();
+      const homeSidecar = readFileSync(join(outDir, 'composed', 'home.blocks.html'), 'utf8');
+      const blogSidecar = readFileSync(join(outDir, 'composed', 'blog.blocks.html'), 'utf8');
+      expect(homeSidecar).toContain('id="dla-cards-index"');
+      expect(blogSidecar).not.toContain('id="dla-cards-index"');
+      expect(blogSidecar).toContain('Nested Editorial Alpha');
+      expect(blogSidecar).toContain('Nested editorial beta must survive untouched.');
+      expect(blogSidecar).toContain('Nested Editorial Gamma');
+    } finally {
+      rmSync(siteDir, { recursive: true, force: true });
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
   it('isolates a per-page compose failure: other pages still compose', async () => {
     mkdirSync(FIXTURE_TMP, { recursive: true });
     const siteDir = mkdtempSync(join(FIXTURE_TMP, 'site3-'));
