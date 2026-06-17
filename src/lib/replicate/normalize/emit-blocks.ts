@@ -206,6 +206,11 @@ function containsMount($: CheerioAPI, el: Element): boolean {
     });
 }
 
+function containsConvertibleJetpackForm($: CheerioAPI, el: Element, sheet: InstanceStyleSheet): boolean {
+  if ((el.tagName ?? '').toLowerCase() === 'form') return false;
+  return ($(el).find('form').toArray() as Element[]).some((form) => emitJetpackForm($, form, sheet) !== null);
+}
+
 /** Map a single child element to a core block. clean=false when downgraded.
  * vi (verbatimInteractive) routes interactive subtrees to a verbatim core/html
  * island instead of the lossy list/group path — passed only by the carried
@@ -221,13 +226,19 @@ function emitChild($: CheerioAPI, el: Element, sheet: InstanceStyleSheet, opts: 
       return { markup: emitted.markup, clean: true };
     }
   }
+  const shouldRecurseForJetpackForm = opts.jetpackForms && containsConvertibleJetpackForm($, el, sheet);
 
   // verbatimInteractive (chrome carry): keep the whole interactive subtree
   // byte-true as a core/html island so the carried CSS (:hover/.is-open) and
   // site JS (button toggles, submenu reveal) keep matching the real DOM. The
   // chrome part unwraps the island to raw markup; theme policy then sees plain
   // HTML, not a custom-html block. "never lose source content".
-  if (opts.verbatimInteractive && !containsMount($, el) && (isInteractiveSubtree($, el) || isStylingHook($, el))) {
+  if (
+    opts.verbatimInteractive &&
+    !shouldRecurseForJetpackForm &&
+    !containsMount($, el) &&
+    (isInteractiveSubtree($, el) || isStylingHook($, el))
+  ) {
     return { markup: htmlBlock(($.html(el) ?? '').trim()), clean: true };
   }
 

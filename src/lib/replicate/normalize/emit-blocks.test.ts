@@ -713,6 +713,117 @@ describe('structural wrapper preservation (owned-source bodies)', () => {
   });
 });
 
+describe('emitSectionBlocks jetpackForms', () => {
+  const contactFormHtml =
+    '<section id="contact"><form class="contact-form" action="/contact" method="post">' +
+    '<label>Email</label>' +
+    '<input type="email" name="email" required placeholder="you@example.com"/>' +
+    '<button type="submit">Send</button>' +
+    '</form></section>';
+
+  it('defaults off, so an eligible form still uses the existing verbatimInteractive island', () => {
+    const { markup, formsConverted } = emitSectionBlocks(
+      { id: 'contact', role: 'body' as const, html: contactFormHtml },
+      { verbatimInteractive: true },
+    );
+
+    expect(markup).toContain('<!-- wp:html -->');
+    expect(markup).toContain('<form class="contact-form"');
+    expect(markup).not.toContain('wp:jetpack/contact-form');
+    expect(formsConverted).toBe(0);
+    expect(blockMarkupRoundtrips(markup).ok).toBe(true);
+  });
+
+  it('on: converts an eligible form before verbatimInteractive can island it', () => {
+    const { markup, formsConverted } = emitSectionBlocks(
+      { id: 'contact', role: 'body' as const, html: contactFormHtml },
+      { jetpackForms: true, verbatimInteractive: true },
+    );
+
+    expect(markup).toContain('<!-- wp:jetpack/contact-form');
+    expect(markup).toContain('<!-- wp:jetpack/field-email');
+    expect(markup).toContain('<!-- wp:jetpack/button');
+    expect(markup).not.toContain('<!-- wp:html -->');
+    expect(markup).not.toContain('<form class="contact-form"');
+    expect(formsConverted).toBe(1);
+    expect(blockMarkupRoundtrips(markup).ok).toBe(true);
+  });
+
+  it('on: leaves a search-only form on the verbatimInteractive fallback path', () => {
+    const searchFormHtml =
+      '<section id="search"><form class="site-search" role="search" action="/">' +
+      '<input class="search-field" type="search" name="s" placeholder="Search"/>' +
+      '<button type="submit">Search</button>' +
+      '</form></section>';
+    const { markup, formsConverted } = emitSectionBlocks(
+      { id: 'search', role: 'body' as const, html: searchFormHtml },
+      { jetpackForms: true, verbatimInteractive: true },
+    );
+
+    expect(markup).toContain('<!-- wp:html -->');
+    expect(markup).toContain('<form class="site-search"');
+    expect(markup).toContain('type="search"');
+    expect(markup).not.toContain('wp:jetpack/contact-form');
+    expect(formsConverted).toBe(0);
+    expect(blockMarkupRoundtrips(markup).ok).toBe(true);
+  });
+
+  it('on: preserves wrapper siblings while converting a nested form', () => {
+    const html =
+      '<section id="contact"><div class="shell">' +
+      '<h2>Talk to us</h2>' +
+      '<form class="contact-form"><label>Email</label><input type="email" name="email"/><button>Send</button></form>' +
+      '</div></section>';
+    const { markup, formsConverted } = emitSectionBlocks(
+      { id: 'contact', role: 'body' as const, html },
+      { jetpackForms: true, verbatimInteractive: true },
+    );
+
+    expect(markup).toContain('Talk to us');
+    expect(markup).toContain('class="wp-block-group shell"');
+    expect(markup).toContain('wp:jetpack/contact-form');
+    expect(markup).not.toContain('<form class="contact-form"');
+    expect(formsConverted).toBe(1);
+    expect(blockMarkupRoundtrips(markup).ok).toBe(true);
+  });
+
+  it('on: preserves visual wrapper siblings while converting a nested form', () => {
+    const html =
+      '<section id="contact"><div class="shell">' +
+      '<img src="hero.jpg" alt="Hero">' +
+      '<form class="contact-form"><label>Email</label><input type="email" name="email"/><button>Send</button></form>' +
+      '</div></section>';
+    const { markup, formsConverted } = emitSectionBlocks(
+      { id: 'contact', role: 'body' as const, html },
+      { jetpackForms: true, verbatimInteractive: true },
+    );
+
+    expect(markup).toContain('hero.jpg');
+    expect(markup).toContain('wp:jetpack/contact-form');
+    expect(markup).not.toContain('<form class="contact-form"');
+    expect(formsConverted).toBe(1);
+    expect(blockMarkupRoundtrips(markup).ok).toBe(true);
+  });
+
+  it('on: preserves empty styling-hook siblings while converting a nested form', () => {
+    const html =
+      '<section id="contact"><div class="shell">' +
+      '<span class="icon"></span>' +
+      '<form class="contact-form"><label>Email</label><input type="email" name="email"/><button>Send</button></form>' +
+      '</div></section>';
+    const { markup, formsConverted } = emitSectionBlocks(
+      { id: 'contact', role: 'body' as const, html },
+      { jetpackForms: true, verbatimInteractive: true },
+    );
+
+    expect(markup).toContain('class="icon"');
+    expect(markup).toContain('wp:jetpack/contact-form');
+    expect(markup).not.toContain('<form class="contact-form"');
+    expect(formsConverted).toBe(1);
+    expect(blockMarkupRoundtrips(markup).ok).toBe(true);
+  });
+});
+
 describe('emitSectionBlocks verbatimInteractive (chrome carry)', () => {
   // A button-toggled dropdown nav: the source carries the interactive structure
   // (<button> + inline <svg> chevron + a .menu-item--has-children class) that the
