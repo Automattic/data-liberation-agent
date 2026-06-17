@@ -72,6 +72,27 @@ foreach ( ( isset( $data['terms'] ) ? $data['terms'] : array() ) as $t ) {
 	}
 }
 
+// 1b) Remove WordPress's seeded default content ("Hello world!" post + "Sample
+// Page" page) so it can't surface as a stray first card in the query loops
+// (loops order by date ASC, and the seeds predate every imported post, so they
+// would lead every grid). Only UN-managed seeds are trashed: a real data item
+// that legitimately owns one of these slugs carries `_dla_item_id` and is left
+// untouched. Trashed (not force-deleted) so it stays recoverable, and idempotent
+// — once trashed, get_page_by_path no longer returns it on later runs. Runs
+// BEFORE the item insert so an item that wants the slug isn't blocked as a
+// collision by the lingering seed.
+$defaults_trashed = 0;
+$seed_defaults    = array(
+	array( 'slug' => 'hello-world', 'type' => 'post' ),
+	array( 'slug' => 'sample-page', 'type' => 'page' ),
+);
+foreach ( $seed_defaults as $seed ) {
+	$seed_post = get_page_by_path( $seed['slug'], OBJECT, $seed['type'] );
+	if ( $seed_post && '' === (string) get_post_meta( $seed_post->ID, '_dla_item_id', true ) ) {
+		if ( wp_trash_post( $seed_post->ID ) ) { $defaults_trashed++; }
+	}
+}
+
 // 2) Items (idempotent by _dla_item_id, with edit + collision guards).
 $inserted         = 0;
 $updated          = 0;
@@ -152,4 +173,5 @@ echo json_encode( array(
 	'skippedModified' => $skipped_modified,
 	'collisions'      => $collisions,
 	'terms'           => $terms_done,
+	'defaultsTrashed' => $defaults_trashed,
 ) );

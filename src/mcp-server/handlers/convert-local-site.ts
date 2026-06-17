@@ -591,7 +591,8 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
       const di = await installLocalData({ model: dataModel, studioSitePath, wpRoot });
       const guards =
         (di.skippedModified ? `, ${di.skippedModified} skipped (edited in wp-admin)` : '') +
-        (di.collisions ? `, ${di.collisions} slug-collision(s)` : '');
+        (di.collisions ? `, ${di.collisions} slug-collision(s)` : '') +
+        (di.defaultsTrashed ? `, ${di.defaultsTrashed} WP seed default(s) trashed` : '');
       warnings.push(
         `data: ${di.inserted} inserted, ${di.updated} updated, ${di.terms} term(s)${guards}; mu-plugins ${di.muPlugins.join(', ')}`,
       );

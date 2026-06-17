@@ -111,6 +111,9 @@ export interface InstallDataResult {
   /** Items whose slug was already owned by a non-DLA post. */
   collisions: number;
   terms: number;
+  /** WordPress seed defaults ("Hello world!" / "Sample Page") trashed so they
+   *  don't pollute the query loops. */
+  defaultsTrashed: number;
   /** Raw wp-cli stdout (for diagnostics). */
   raw: string;
 }
@@ -153,6 +156,7 @@ export async function installLocalData(opts: InstallDataOpts): Promise<InstallDa
     skippedModified?: number;
     collisions?: number;
     terms?: number;
+    defaultsTrashed?: number;
     error?: string;
   };
   if (parsed.error) {
@@ -165,6 +169,7 @@ export async function installLocalData(opts: InstallDataOpts): Promise<InstallDa
     skippedModified: parsed.skippedModified ?? 0,
     collisions: parsed.collisions ?? 0,
     terms: parsed.terms ?? 0,
+    defaultsTrashed: parsed.defaultsTrashed ?? 0,
     raw,
   };
 }
