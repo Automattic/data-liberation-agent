@@ -18,7 +18,7 @@ import { themeCacheFlushCommands } from './install-theme.js';
 import { ingestLocalSite } from '../../lib/replicate/local-site/ingest.js';
 import { buildNavGraph } from '../../lib/replicate/local-site/nav-graph.js';
 import { segmentPage } from '../../lib/replicate/normalize/segment.js';
-import { buildHeaderPart, buildFooterPart, findChromeMounts, mountPartMarkup } from '../../lib/replicate/local-theme/chrome-parts.js';
+import { buildHeaderPart, buildCarriedHeaderPart, buildFooterPart, findChromeMounts, mountPartMarkup } from '../../lib/replicate/local-theme/chrome-parts.js';
 import { assembleLocalTheme } from '../../lib/replicate/local-theme/theme-files.js';
 import { buildPagePlan } from '../../lib/replicate/local-theme/page-plan.js';
 import { writeReplicaFilesToHost } from '../../lib/preview/replica-install.js';
@@ -403,6 +403,7 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
   const nav = buildNavGraph(site);
   const home = site.pages.find((p) => p.slug === 'home') ?? site.pages[0];
   const footerSection = segmentPage(home.html).find((s) => s.role === 'footer') ?? null;
+  const headerSection = segmentPage(home.html).find((s) => s.role === 'header') ?? null;
   // JS-rendered chrome: when the source mounts header/footer into empty
   // id-divs at runtime (renderHeader() into <div id="siteHeader">), the parts
   // become the VERBATIM mounts and the carried source JS renders chrome on
@@ -418,12 +419,15 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
   if (behaviors?.sticky && !chromeCarried) {
     warnings.push('sticky behavior detected but not emitted (requires carried chrome header)');
   }
+  const chromeInstanceStyles = new InstanceStyleSheet();
   const headerPart = mounts.header
     ? mountPartMarkup(mounts.header, stickyEmitted ? behaviors?.sticky : undefined)
-    : buildHeaderPart(siteTitle, nav, site.pages.map((p) => p.slug), {
-        plain: chromeCarried,
-        ...(behaviors?.sticky ? { sticky: behaviors.sticky } : {}),
-      });
+    : (chromeCarried && headerSection)
+      ? buildCarriedHeaderPart(headerSection, { pageSlugs: site.pages.map((p) => p.slug), instanceStyles: chromeInstanceStyles, ...(stickyEmitted ? { sticky: behaviors!.sticky } : {}) })
+      : buildHeaderPart(siteTitle, nav, site.pages.map((p) => p.slug), {
+          plain: chromeCarried,
+          ...(behaviors?.sticky ? { sticky: behaviors.sticky } : {}),
+        });
   // Footer tokens (bgToken/textToken) come from the foundation — they style the
   // wrapper group in the footer part we build here. The assembleLocalTheme
   // passthrough was proven inert (we swap parts/footer.html unconditionally),
@@ -433,7 +437,6 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
   // page bodies, collected into their own sheet here (the body sheet lives in
   // the ingest stage). Merged with the body rules below into one carried
   // instance-styles.css so footer lib-i classes resolve.
-  const chromeInstanceStyles = new InstanceStyleSheet();
   const footerPart = mounts.footer
     ? mountPartMarkup(mounts.footer)
     : buildFooterPart(footerSection, siteTitle, {

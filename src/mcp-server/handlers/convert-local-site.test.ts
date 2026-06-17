@@ -201,6 +201,21 @@ function makeSite(): string {
   return dir;
 }
 
+function makeCarriedHeaderSite(): string {
+  mkdirSync(FIXTURE_TMP, { recursive: true });
+  const dir = mkdtempSync(join(FIXTURE_TMP, 'cls-carried-header-'));
+  writeFileSync(
+    join(dir, 'index.html'),
+    '<html><head><title>Home</title><link rel="stylesheet" href="styles.css"></head><body><header class="bp-header"><p><a href="reviews.html">Reviews</a></p></header><main><section id="hero"><h1>Hi</h1></section></main></body></html>',
+  );
+  writeFileSync(
+    join(dir, 'reviews.html'),
+    '<html><head><title>Reviews</title></head><body><main><section id="reviews"><h2>Reviews</h2><p>Five stars.</p></section></main></body></html>',
+  );
+  writeFileSync(join(dir, 'styles.css'), '.bp-header { display: flex; gap: 1rem; }');
+  return dir;
+}
+
 /** Like makeSite but WITHOUT index.html — no 'home' slug, so no front page. */
 function makeSiteNoHome(): string {
   mkdirSync(FIXTURE_TMP, { recursive: true });
@@ -521,6 +536,29 @@ describe('convertLocalSiteHandler', () => {
       // carry mode strips theme.json styles — source CSS is the design authority
       const themeJson = JSON.parse(readFileSync(join(themeDir, 'theme.json'), 'utf8')) as { styles?: unknown };
       expect(themeJson.styles).toBeUndefined();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(sitePath, { recursive: true, force: true });
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
+  it('carries a static source header part when chrome is carried', async () => {
+    const dir = makeCarriedHeaderSite();
+    const sitePath = makeStudioSite();
+    const outDir = mkdtempSync(join(FIXTURE_TMP, 'cls-carried-header-out-'));
+    try {
+      const res = await convertLocalSiteHandler(
+        { dir, studioSitePath: sitePath, outputDir: outDir, themeSlug: 'acme-local', siteTitle: 'Acme', skipDesign: true },
+        ctx,
+      );
+      expect(res.isError).toBeFalsy();
+      const headerHtml = readFileSync(join(sitePath, 'wp-content', 'themes', 'acme-local', 'parts', 'header.html'), 'utf8');
+      expect(headerHtml).toContain('bp-header');
+      expect(headerHtml).toContain('href="/reviews/"');
+      expect(headerHtml).not.toContain('wp:site-title');
+      expect(headerHtml).not.toContain('wp:navigation');
+      expect(headerHtml).not.toMatch(/<header\b/i);
     } finally {
       rmSync(dir, { recursive: true, force: true });
       rmSync(sitePath, { recursive: true, force: true });
