@@ -12,12 +12,13 @@
 // wp-cli (which rejects host paths) can read them from the mounted site dir.
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdirSync, writeFileSync, copyFileSync } from 'node:fs';
-import { join, resolve, dirname } from 'node:path';
+import { mkdirSync, writeFileSync, copyFileSync, statSync } from 'node:fs';
+import { join, resolve, dirname, sep, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { DataModel } from './types.js';
 import { buildCptMuPlugin, cptMuPluginFilename } from './cpt-plugin.js';
 import { buildDataCardPlugin, dataCardPluginFilename } from './card-render-php.js';
+import { installMediaFiles, type MediaFile, type MediaFilesResult } from '../../streaming/media-install.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -90,12 +91,75 @@ export function writeDataMuPlugins(wpRoot: string, model: DataModel): string[] {
   return written;
 }
 
+const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.avif']);
+
+export function collectModelImages(model: DataModel, sourceDir: string): Array<{ relPath: string; absPath: string }> {
+  const sourceRoot = resolve(sourceDir);
+  const insidePrefix = sourceRoot.endsWith(sep) ? sourceRoot : `${sourceRoot}${sep}`;
+  const seen = new Set<string>();
+  const images: Array<{ relPath: string; absPath: string }> = [];
+
+  const consider = (value: string) => {
+    const relPath = normalizeModelMediaPath(value);
+    if (!relPath || seen.has(relPath)) return;
+
+    const absPath = resolve(sourceRoot, relPath);
+    if (!absPath.startsWith(insidePrefix)) return;
+    if (!IMAGE_EXTENSIONS.has(extname(absPath).toLowerCase())) return;
+
+    try {
+      if (!statSync(absPath).isFile()) return;
+    } catch {
+      return;
+    }
+
+    seen.add(relPath);
+    images.push({ relPath, absPath });
+  };
+
+  for (const item of model.items) {
+    for (const value of Object.values(item.meta)) {
+      if (typeof value === 'string') consider(value);
+    }
+    for (const image of item.gallery ?? []) {
+      if (typeof image.url === 'string') consider(image.url);
+    }
+  }
+
+  return images;
+}
+
+function normalizeModelMediaPath(value: string): string {
+  return value.replace(/^(?:\.\/)+/, '');
+}
+
+function rewriteModelMediaUrls(model: DataModel, relToLocalUrl: Map<string, string>): void {
+  if (relToLocalUrl.size === 0) return;
+
+  for (const item of model.items) {
+    for (const [key, value] of Object.entries(item.meta)) {
+      if (typeof value !== 'string') continue;
+      const localUrl = relToLocalUrl.get(normalizeModelMediaPath(value));
+      if (localUrl) item.meta[key] = localUrl;
+    }
+    for (const image of item.gallery ?? []) {
+      if (typeof image.url !== 'string') continue;
+      const localUrl = relToLocalUrl.get(normalizeModelMediaPath(image.url));
+      if (localUrl) image.url = localUrl;
+    }
+  }
+}
+
 export interface InstallDataOpts {
   model: DataModel;
   /** Studio site path on host (e.g. ~/Studio/maison). */
   studioSitePath: string;
   /** WP root (dir containing wp-content); usually resolved from studioSitePath. */
   wpRoot: string;
+  /** Local static site source directory; used to import card/gallery images. */
+  sourceDir?: string;
+  /** Injected media installer for tests. */
+  _installMedia?: typeof installMediaFiles;
   /** Injected exec for tests. */
   exec?: ExecFn;
   /** Injected unique suffix for the payload filename (tests pass a fixed value). */
@@ -114,6 +178,10 @@ export interface InstallDataResult {
   /** WordPress seed defaults ("Hello world!" / "Sample Page") trashed so they
    *  don't pollute the query loops. */
   defaultsTrashed: number;
+  /** Source-local card/gallery images imported into WP media. */
+  mediaInstalled: number;
+  /** Non-fatal media import errors; source paths are left unchanged. */
+  mediaErrors: Array<{ sourceUrl: string; error: string }>;
   /** Raw wp-cli stdout (for diagnostics). */
   raw: string;
 }
@@ -127,6 +195,30 @@ export async function installLocalData(opts: InstallDataOpts): Promise<InstallDa
   const exec = opts.exec ?? (execFileAsync as unknown as ExecFn);
 
   const muPlugins = writeDataMuPlugins(wpRoot, model);
+  let mediaInstalled = 0;
+  const mediaErrors: MediaFilesResult['errors'] = [];
+
+  if (opts.sourceDir) {
+    const images = collectModelImages(model, opts.sourceDir);
+    if (images.length > 0) {
+      const files: MediaFile[] = images.map((image) => ({
+        absPath: image.absPath,
+        sourceUrl: image.relPath,
+      }));
+      try {
+        const media = await (opts._installMedia ?? installMediaFiles)({ files, wpRoot });
+        mediaInstalled = media.installed.length;
+        mediaErrors.push(...media.errors);
+        rewriteModelMediaUrls(
+          model,
+          new Map(media.installed.map((entry) => [entry.sourceUrl, entry.localUrl])),
+        );
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        mediaErrors.push(...images.map((image) => ({ sourceUrl: image.relPath, error: message })));
+      }
+    }
+  }
 
   // Stage script + payload under the mounted site dir.
   const scriptsDir = join(studioSitePath, SCRIPTS_SUBDIR);
@@ -170,6 +262,8 @@ export async function installLocalData(opts: InstallDataOpts): Promise<InstallDa
     collisions: parsed.collisions ?? 0,
     terms: parsed.terms ?? 0,
     defaultsTrashed: parsed.defaultsTrashed ?? 0,
+    mediaInstalled,
+    mediaErrors,
     raw,
   };
 }

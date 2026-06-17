@@ -29,7 +29,7 @@ import { dirname, join, resolve } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
-import { MediaStubStore, type MediaStub } from '../resume-state/index.js';
+import { MediaStubStore } from '../resume-state/index.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -71,6 +71,23 @@ export interface MediaInstallResult {
   errors: Array<{ sourceUrl: string; error: string }>;
 }
 
+export interface MediaFile {
+  absPath: string;
+  sourceUrl: string;
+}
+
+export interface MediaFilesResult {
+  installed: Array<{ sourceUrl: string; postId: number; localUrl: string }>;
+  errors: Array<{ sourceUrl: string; error: string }>;
+}
+
+export interface MediaFilesInstallOpts {
+  files: MediaFile[];
+  wpRoot: string;
+  _studioBin?: string;
+  _execFile?: (file: string, args: readonly string[]) => Promise<{ stdout: string; stderr: string }>;
+}
+
 interface PayloadEntry {
   filename: string;
   year: string;
@@ -97,15 +114,96 @@ interface PhpResponse {
   errors: PhpErrorEntry[];
 }
 
+export async function installMediaFiles(opts: MediaFilesInstallOpts): Promise<MediaFilesResult> {
+  const result: MediaFilesResult = { installed: [], errors: [] };
+  const pending: Array<{ file: MediaFile; entry: PayloadEntry }> = [];
+
+  for (const file of opts.files) {
+    let mtime: Date;
+    try {
+      mtime = statSync(file.absPath).mtime;
+    } catch {
+      result.errors.push({ sourceUrl: file.sourceUrl, error: 'source file is missing or unstattable' });
+      continue;
+    }
+
+    const filename = basenameOf(file.absPath);
+    const year = String(mtime.getFullYear()).padStart(4, '0');
+    const month = String(mtime.getMonth() + 1).padStart(2, '0');
+    pending.push({ file, entry: { filename, year, month, sourceUrl: file.sourceUrl } });
+  }
+
+  if (pending.length === 0) {
+    return result;
+  }
+
+  // Copy each file into the running site's uploads dir before wp_insert_attachment.
+  const uploadsRoot = join(resolve(opts.wpRoot), 'wp-content', 'uploads');
+  for (const item of pending) {
+    const destDir = join(uploadsRoot, item.entry.year, item.entry.month);
+    const destPath = join(destDir, item.entry.filename);
+    try {
+      mkdirSync(destDir, { recursive: true });
+      if (!existsSync(destPath)) {
+        copyFileSync(item.file.absPath, destPath);
+      }
+    } catch (err) {
+      result.errors.push({ sourceUrl: item.file.sourceUrl, error: `copy: ${(err as Error).message}` });
+    }
+  }
+
+  const copied = pending.filter(
+    (p) => !result.errors.find((e) => e.sourceUrl === p.file.sourceUrl),
+  );
+  if (copied.length === 0) {
+    return result;
+  }
+
+  let scriptOut: { stdout: string; resultHostPath: string };
+  try {
+    scriptOut = await installViaStudio(opts, copied.map((p) => p.entry));
+  } catch (err) {
+    for (const item of copied) {
+      result.errors.push({
+        sourceUrl: item.file.sourceUrl,
+        error: `wp eval-file install-media.php failed: ${formatExecError(err)}`,
+      });
+    }
+    return result;
+  }
+
+  const parsed = parsePhpResponse(scriptOut.stdout, scriptOut.resultHostPath);
+  if (!parsed) {
+    for (const item of copied) {
+      result.errors.push({
+        sourceUrl: item.file.sourceUrl,
+        error: 'install-media.php produced no parseable JSON response',
+      });
+    }
+    return result;
+  }
+
+  for (const ok of parsed.results) {
+    result.installed.push({
+      sourceUrl: ok.sourceUrl,
+      postId: ok.postId,
+      localUrl: ok.localUrl,
+    });
+  }
+  for (const fail of parsed.errors) {
+    result.errors.push({ sourceUrl: fail.sourceUrl, error: fail.error });
+  }
+
+  return result;
+}
+
 /** Single entry-point. Always opens MediaStubStore in-place. */
 export async function installMediaForUrl(opts: MediaInstallOpts): Promise<MediaInstallResult> {
   const result: MediaInstallResult = { installed: [], skipped: [], errors: [] };
   const stubs = MediaStubStore.load(opts.outputDir);
   const mediaDir = join(resolve(opts.outputDir), 'media');
 
-  // 1. Walk every stub and bucket it: ready-to-install, already-done,
-  // not-locally-downloaded, etc.
-  const pending: Array<{ url: string; stub: MediaStub; entry: PayloadEntry; absPath: string }> = [];
+  const pending: MediaFile[] = [];
   for (const [url, stub] of stubs.list()) {
     if (stub.status !== 'success' || !stub.localPath) {
       result.skipped.push({ sourceUrl: url, reason: 'no-local-file' });
@@ -129,6 +227,7 @@ export async function installMediaForUrl(opts: MediaInstallOpts): Promise<MediaI
       }
       continue;
     }
+
     // Resolve the canonical filename. localPath may be absolute (older
     // adapters) or just a basename — handle both. Source-of-truth is
     // <outputDir>/media/<basename>.
@@ -138,81 +237,28 @@ export async function installMediaForUrl(opts: MediaInstallOpts): Promise<MediaI
       result.skipped.push({ sourceUrl: url, reason: 'no-local-file' });
       continue;
     }
-
-    let mtime: Date;
     try {
-      mtime = statSync(absPath).mtime;
+      statSync(absPath);
     } catch {
-      // Treat unstattable files as missing — should be rare; surfaces as
-      // a skip rather than a hard failure.
       result.skipped.push({ sourceUrl: url, reason: 'no-local-file' });
       continue;
     }
-    const year = String(mtime.getFullYear()).padStart(4, '0');
-    const month = String(mtime.getMonth() + 1).padStart(2, '0');
 
-    pending.push({ url, stub, entry: { filename, year, month, sourceUrl: url }, absPath });
+    pending.push({ absPath, sourceUrl: url });
   }
 
   if (pending.length === 0) {
     return result;
   }
 
-  // 2. Copy each pending file into the running site's uploads dir.
-  // This must happen BEFORE the PHP script runs — wp_insert_attachment
-  // requires the file to exist on disk to compute metadata.
-  const uploadsRoot = join(resolve(opts.wpRoot), 'wp-content', 'uploads');
-  for (const item of pending) {
-    const destDir = join(uploadsRoot, item.entry.year, item.entry.month);
-    const destPath = join(destDir, item.entry.filename);
-    try {
-      mkdirSync(destDir, { recursive: true });
-      // Idempotent: if the file is already in place, skip the copy.
-      if (!existsSync(destPath)) {
-        copyFileSync(item.absPath, destPath);
-      }
-    } catch (err) {
-      result.errors.push({ sourceUrl: item.url, error: `copy: ${(err as Error).message}` });
-    }
-  }
+  const fileResult = await installMediaFiles({
+    files: pending,
+    wpRoot: opts.wpRoot,
+    _studioBin: opts._studioBin,
+    _execFile: opts._execFile,
+  });
 
-  // Drop any items whose copy failed before invoking PHP.
-  const installedFiles = pending.filter(
-    (p) => !result.errors.find((e) => e.sourceUrl === p.url),
-  );
-  if (installedFiles.length === 0) {
-    return result;
-  }
-
-  // 3. Stage payload + invoke wp eval-file.
-  let scriptOut: { stdout: string; resultHostPath: string };
-  try {
-    scriptOut = await installViaStudio(opts, installedFiles.map((p) => p.entry));
-  } catch (err) {
-    // The shell-level failure means none of the entries got registered.
-    // Each pending entry surfaces as an error so the caller can retry.
-    for (const item of installedFiles) {
-      result.errors.push({
-        sourceUrl: item.url,
-        error: `wp eval-file install-media.php failed: ${formatExecError(err)}`,
-      });
-    }
-    return result;
-  }
-
-  // 4. Parse the script's response and reconcile with the stub store.
-  const parsed = parsePhpResponse(scriptOut.stdout, scriptOut.resultHostPath);
-  if (!parsed) {
-    for (const item of installedFiles) {
-      result.errors.push({
-        sourceUrl: item.url,
-        error: 'install-media.php produced no parseable JSON response',
-      });
-    }
-    return result;
-  }
-
-  for (const ok of parsed.results) {
+  for (const ok of fileResult.installed) {
     if (typeof ok.postId === 'number' && ok.postId > 0) {
       stubs.recordWpPostId(ok.sourceUrl, ok.postId);
     }
@@ -231,14 +277,12 @@ export async function installMediaForUrl(opts: MediaInstallOpts): Promise<MediaI
       localPath: stub?.localPath ?? '',
     });
   }
-  for (const fail of parsed.errors) {
-    result.errors.push({ sourceUrl: fail.sourceUrl, error: fail.error });
-  }
+  result.errors.push(...fileResult.errors);
 
   return result;
 }
 
-async function installViaStudio(opts: MediaInstallOpts, entries: PayloadEntry[]): Promise<{ stdout: string; resultHostPath: string }> {
+async function installViaStudio(opts: MediaFilesInstallOpts, entries: PayloadEntry[]): Promise<{ stdout: string; resultHostPath: string }> {
   // The PHP script must be readable inside Studio's VFS. Studio mounts the
   // *site* directory at /wordpress. Studio sites exist in two layouts:
   //   - flat:   <site>/wp-content

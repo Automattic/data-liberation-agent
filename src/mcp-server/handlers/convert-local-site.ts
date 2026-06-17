@@ -608,13 +608,16 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
   // installs; the loop just renders empty).
   if (dataModel) {
     try {
-      const di = await installLocalData({ model: dataModel, studioSitePath, wpRoot });
+      const di = await installLocalData({ model: dataModel, studioSitePath, wpRoot, sourceDir: dir });
       const guards =
         (di.skippedModified ? `, ${di.skippedModified} skipped (edited in wp-admin)` : '') +
         (di.collisions ? `, ${di.collisions} slug-collision(s)` : '') +
         (di.defaultsTrashed ? `, ${di.defaultsTrashed} WP seed default(s) trashed` : '');
+      for (const mediaError of di.mediaErrors) {
+        warnings.push(`data media: ${mediaError.sourceUrl}: ${mediaError.error}`);
+      }
       warnings.push(
-        `data: ${di.inserted} inserted, ${di.updated} updated, ${di.terms} term(s)${guards}; mu-plugins ${di.muPlugins.join(', ')}`,
+        `data: ${di.inserted} inserted, ${di.updated} updated, ${di.terms} term(s), ${di.mediaInstalled} media item(s) installed${guards}; mu-plugins ${di.muPlugins.join(', ')}`,
       );
     } catch (err) {
       warnings.push(`data install failed: ${(err as Error).message}`);

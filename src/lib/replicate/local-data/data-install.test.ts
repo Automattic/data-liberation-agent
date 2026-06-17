@@ -1,9 +1,10 @@
 // src/lib/replicate/local-data/data-install.test.ts
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, existsSync, readFileSync, mkdirSync } from 'node:fs';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { mkdtempSync, rmSync, existsSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   buildDataPayload,
+  collectModelImages,
   writeDataMuPlugins,
   installLocalData,
   type ExecFn,
@@ -39,6 +40,41 @@ beforeEach(() => {
   root = mkdtempSync(join(process.cwd(), '.tmp-test', 'datainstall-'));
 });
 afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+describe('collectModelImages', () => {
+  it('keeps existing image files and rejects html, traversal, and missing paths', () => {
+    const sourceDir = join(root, 'source');
+    mkdirSync(join(sourceDir, 'assets'), { recursive: true });
+    writeFileSync(join(sourceDir, 'assets', 'photo-card.PNG'), Buffer.from('fictional image'));
+    writeFileSync(join(sourceDir, 'page.html'), '<main>fictional page</main>');
+    writeFileSync(join(root, 'secret.png'), Buffer.from('not in source'));
+
+    const model: DataModel = {
+      ...MODEL,
+      items: [
+        {
+          id: 'fictional-item',
+          title: 'Fictional Item',
+          terms: ['glass'],
+          meta: {
+            image: './assets/photo-card.PNG',
+            link: 'page.html',
+            traversal: '../secret.png',
+            missing: 'assets/missing.webp',
+          },
+          gallery: [
+            { caption: 'duplicate', url: 'assets/photo-card.PNG' },
+            { caption: 'html', url: 'page.html' },
+          ],
+        },
+      ],
+    };
+
+    expect(collectModelImages(model, sourceDir)).toEqual([
+      { relPath: 'assets/photo-card.PNG', absPath: join(sourceDir, 'assets', 'photo-card.PNG') },
+    ]);
+  });
+});
 
 describe('buildDataPayload', () => {
   it('flattens the model into the eval-file payload shape', () => {
@@ -115,5 +151,60 @@ describe('installLocalData', () => {
     await expect(
       installLocalData({ model: MODEL, studioSitePath: sitePath, wpRoot: join(sitePath, 'wordpress'), exec }),
     ).rejects.toThrow(/post type not registered/);
+  });
+
+  it('installs source-local card images and rewrites payload media URLs', async () => {
+    const sourceDir = join(root, 'source');
+    mkdirSync(join(sourceDir, 'assets'), { recursive: true });
+    writeFileSync(join(sourceDir, 'assets', 'x.png'), Buffer.from('fictional card image'));
+
+    const sitePath = join(root, 'site3');
+    const wpRoot = join(sitePath, 'wordpress');
+    mkdirSync(wpRoot, { recursive: true });
+    const model: DataModel = {
+      ...MODEL,
+      items: [
+        {
+          id: 'fictional-card',
+          title: 'Fictional Card',
+          terms: ['glass'],
+          meta: { image: 'assets/x.png', link: 'page.html' },
+          gallery: [{ caption: 'front', url: './assets/x.png' }],
+          content: 'fictional content',
+        },
+      ],
+    };
+
+    let payload: ReturnType<typeof buildDataPayload> | undefined;
+    const exec: ExecFn = async () => {
+      payload = JSON.parse(
+        readFileSync(join(sitePath, '.dla-scripts', 'install-data-media.json'), 'utf8'),
+      ) as ReturnType<typeof buildDataPayload>;
+      return { stdout: '{"inserted":1,"updated":0,"skippedModified":0,"collisions":0,"terms":1}', stderr: '' };
+    };
+    const installMedia = vi.fn().mockResolvedValue({
+      installed: [{ sourceUrl: 'assets/x.png', postId: 7, localUrl: '/wp-content/uploads/2026/06/x.png' }],
+      errors: [],
+    });
+
+    const res = await installLocalData({
+      model,
+      studioSitePath: sitePath,
+      wpRoot,
+      sourceDir,
+      _installMedia: installMedia,
+      exec,
+      uniqueSuffix: 'media',
+    });
+
+    expect(installMedia).toHaveBeenCalledWith({
+      files: [{ absPath: join(sourceDir, 'assets', 'x.png'), sourceUrl: 'assets/x.png' }],
+      wpRoot,
+    });
+    expect(payload?.items[0].meta.image).toBe('/wp-content/uploads/2026/06/x.png');
+    expect(payload?.items[0].meta.link).toBe('page.html');
+    expect(payload?.items[0].gallery[0].url).toBe('/wp-content/uploads/2026/06/x.png');
+    expect(res.mediaInstalled).toBe(1);
+    expect(res.mediaErrors).toEqual([]);
   });
 });
