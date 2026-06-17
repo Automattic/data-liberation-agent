@@ -976,7 +976,13 @@ add_action('init', function () {
 }
 
 function slugToPhp(slug: string): string {
-  return slug.replace(/-/g, '_');
+  // Derive a VALID PHP identifier from the theme slug for the generated
+  // function name. PHP identifiers match [a-zA-Z_][a-zA-Z0-9_]* — replace any
+  // non-word char (not just '-') and prefix a leading digit, so a slug like
+  // "7-acme-theme" yields "_7_acme_theme" instead of an unparseable
+  // `function 7_acme_theme_setup()`.
+  const ident = slug.replace(/[^a-zA-Z0-9_]/g, '_');
+  return /^[0-9]/.test(ident) ? `_${ident}` : ident;
 }
 
 // -- assets/gallery-scroller.js ----------------------------------------------

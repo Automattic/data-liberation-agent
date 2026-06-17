@@ -188,6 +188,15 @@ describe('buildThemeScaffold', () => {
     expect(fnPhp).toContain('after_setup_theme');
   });
 
+  it('functions.php derives a VALID php function name from a digit-leading slug', () => {
+    const files = buildThemeScaffold({ foundation: FOUNDATION_FIXTURE, themeSlug: '7-acme-theme' });
+    const fnPhp = files.find((f) => f.relativePath === 'functions.php')!.content;
+    // a leading digit is illegal in a PHP identifier — must be prefixed
+    expect(fnPhp).not.toMatch(/function\s+\d/);
+    expect(fnPhp).toContain('function _7_acme_theme_setup()');
+    expect(fnPhp).toContain("add_action('after_setup_theme', '_7_acme_theme_setup')");
+  });
+
   it('functions.php enqueues style.css on the front end (block themes do not auto-load it)', () => {
     const files = buildThemeScaffold({ foundation: FOUNDATION_FIXTURE, themeSlug: 'getsnooz-com-replica' });
     const fnPhp = files.find((f) => f.relativePath === 'functions.php')!.content;
