@@ -183,6 +183,22 @@ function isStylingHook($: CheerioAPI, el: Element): boolean {
   return $el.children().length === 0 && !$el.text().trim();
 }
 
+/** Does this subtree CONTAIN an empty id-bearing div — a query-loop/JS mount?
+ * Islandifying an ancestor (because it also holds an inline <svg> — e.g. a
+ * section whose pagination nav carries arrow icons) would trap the mount in raw
+ * HTML where injectQueryLoops can't find the anchor-group, leaving the loop
+ * empty. So such a subtree must stay structured; its interactive descendants
+ * (the pagination icons) islandify individually on recursion instead. */
+function containsMount($: CheerioAPI, el: Element): boolean {
+  return $(el)
+    .find('[id]')
+    .toArray()
+    .some((d) => {
+      const $d = $(d as Element);
+      return $d.children().length === 0 && !$d.text().trim();
+    });
+}
+
 /** Map a single child element to a core block. clean=false when downgraded.
  * vi (verbatimInteractive) routes interactive subtrees to a verbatim core/html
  * island instead of the lossy list/group path — passed only by the carried
@@ -196,7 +212,7 @@ function emitChild($: CheerioAPI, el: Element, sheet: InstanceStyleSheet, vi = f
   // site JS (button toggles, submenu reveal) keep matching the real DOM. The
   // chrome part unwraps the island to raw markup; theme policy then sees plain
   // HTML, not a custom-html block. "never lose source content".
-  if (vi && (isInteractiveSubtree($, el) || isStylingHook($, el))) {
+  if (vi && !containsMount($, el) && (isInteractiveSubtree($, el) || isStylingHook($, el))) {
     return { markup: htmlBlock(($.html(el) ?? '').trim()), clean: true };
   }
 

@@ -803,6 +803,29 @@ describe('emitSectionBlocks verbatimInteractive (chrome carry)', () => {
     expect(markup).not.toContain('<!-- wp:html -->');
   });
 
+  it('on: does NOT islandify a wrapper holding a mount + an inline-svg sibling (mount stays injectable)', () => {
+    // A grid section: an empty id-bearing mount (the query-loop target) next to a
+    // pagination nav whose arrows are inline <svg>. Islandifying the wrapper would
+    // trap the mount in raw HTML so injectQueryLoops can't replace it. The wrapper
+    // must stay structured (mount → anchor-group); the pagination islandifies alone.
+    const html =
+      '<section id="s"><div class="wide">' +
+      '<h2>Latest</h2>' +
+      '<div class="card-grid" id="latestGrid"></div>' +
+      '<nav class="pager"><a href="#"><svg viewBox="0 0 8 8"><path d="M0 0h8v8H0Z"/></svg></a></nav>' +
+      '</div></section>';
+    const { markup } = emitSectionBlocks(
+      { id: 's', role: 'body' as const, html },
+      { verbatimInteractive: true },
+    );
+    // mount survives as an anchor-group injectQueryLoops can target
+    expect(markup).toContain('"anchor":"latestGrid"');
+    expect(markup).toContain('<div id="latestGrid"');
+    // the pagination svg is still preserved (its own island)
+    expect(markup).toContain('<svg');
+    expect(markup).toContain('<!-- wp:html -->');
+  });
+
   it('on: a plain link list is unaffected (still core/list, editable)', () => {
     const plain = '<section id="f"><ul class="footer-menu"><li><a href="/a.html">A</a></li><li><a href="/b.html">B</a></li></ul></section>';
     const { markup } = emitSectionBlocks(
