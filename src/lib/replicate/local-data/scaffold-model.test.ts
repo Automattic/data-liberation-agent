@@ -227,11 +227,23 @@ const SAME_TITLE_DUPLICATE_ID_HTML = `
 </main>`;
 
 describe('scaffoldDataModel — records-source chain', () => {
-  it('reports source=js-array and ignores HTML cards when a JS array exists', () => {
+  it('reports source=html-cards when render-ready HTML cards coexist with a JS array', () => {
     const js = `const ITEMS=[{id:'a',title:'A',cat:'x'},{id:'b',title:'B',cat:'y'}]; mountGrid('#grid', ITEMS);`;
     const r = scaffoldDataModel({ html: `<div id="grid"></div>${CARD_HTML}`, js });
+    expect(r.discovered.source).toBe('html-cards');
+    expect(r.model.items.map((item) => item.title)).toEqual(['Alpha', 'Beta', 'Gamma']);
+    expect(r.model.card?.template).toContain('data-dla-text');
+    expect(r.skillTodos.some((t) => t.path === 'card.template')).toBe(false);
+  });
+
+  it('keeps source=js-array for an empty-div JS mount with no baked cards', () => {
+    const js = `const ITEMS=[{id:'a',title:'A',cat:'x'},{id:'b',title:'B',cat:'y'}]; mountGrid('#grid', ITEMS);`;
+    const r = scaffoldDataModel({ html: '<main><div id="grid"></div></main>', js });
     expect(r.discovered.source).toBe('js-array');
-    expect(r.model.items).toHaveLength(2); // the JS records, not the 3 cards
+    expect(r.model.items).toHaveLength(2);
+    expect(r.model.mounts[0].selector).toBe('#grid');
+    expect(r.model.card?.template).toBe('');
+    expect(r.skillTodos.some((t) => t.path === 'card.template')).toBe(true);
   });
 
   it('falls back to HTML cards (core post + native category) when no JS array exists', () => {

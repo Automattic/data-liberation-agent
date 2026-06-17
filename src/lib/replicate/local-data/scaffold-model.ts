@@ -69,21 +69,6 @@ export function scaffoldDataModel(input: ScaffoldInput): ScaffoldResult {
       .map((mount) => mount.selector),
   };
   const primary = choosePrimaryArray(arrays, idLookupNames, discoveredMounts);
-
-  if (primary?.records) {
-    return buildModelFromRecords({
-      records: primary.records,
-      typeName: primary.name,
-      mounts: discoveredMounts,
-      idLookupNames,
-      source: 'js-array',
-      cardTemplateTodoEvidence: extractCardFn(input.js),
-      deterministicCard: undefined,
-      discovered,
-      todos,
-    });
-  }
-
   const discoveredGrids = input.htmlFiles?.length
     ? input.htmlFiles.flatMap((file) =>
         discoverHtmlCards(file.text, { resolvePage: input.resolvePage }).map((grid, gi) => ({
@@ -98,9 +83,11 @@ export function scaffoldDataModel(input: ScaffoldInput): ScaffoldResult {
         sourcePage: undefined,
       }));
   const usableGrids = discoveredGrids.filter(({ grid }) => grid.records.length >= 1);
-  if (usableGrids.length > 0) {
-    const records = dedupeRecordsById(usableGrids.flatMap(({ grid }) => grid.records));
-    const cardMounts: BuildMount[] = usableGrids.map(({ grid, disambiguator, sourcePage }) => ({
+  const renderReadyGrids = usableGrids.filter(({ grid }) => grid.confidence === 'high' && grid.cardTemplate.trim());
+  const htmlCardGrids = renderReadyGrids.length > 0 ? renderReadyGrids : primary?.records ? [] : usableGrids;
+  if (htmlCardGrids.length > 0) {
+    const records = dedupeRecordsById(htmlCardGrids.flatMap(({ grid }) => grid.records));
+    const cardMounts: BuildMount[] = htmlCardGrids.map(({ grid, disambiguator, sourcePage }) => ({
       selector: `#${syntheticCardAnchor(grid.containerSelector, disambiguator)}`,
       sourceSelector: grid.containerSelector,
       ...(sourcePage ? { sourcePage } : {}),
@@ -120,11 +107,25 @@ export function scaffoldDataModel(input: ScaffoldInput): ScaffoldResult {
       idLookupNames: [],
       source: 'html-cards',
       cardTemplateTodoEvidence: undefined,
-      deterministicCard: usableGrids[0].grid.cardTemplate,
+      deterministicCard: htmlCardGrids[0].grid.cardTemplate,
       discovered: {
         ...discovered,
         unmatchedContainers: discoveredGrids.filter(({ grid }) => grid.records.length === 0).map(({ grid }) => grid.containerSelector),
       },
+      todos,
+    });
+  }
+
+  if (primary?.records) {
+    return buildModelFromRecords({
+      records: primary.records,
+      typeName: primary.name,
+      mounts: discoveredMounts,
+      idLookupNames,
+      source: 'js-array',
+      cardTemplateTodoEvidence: extractCardFn(input.js),
+      deterministicCard: undefined,
+      discovered,
       todos,
     });
   }

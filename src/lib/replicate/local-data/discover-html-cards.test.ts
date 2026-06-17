@@ -259,6 +259,57 @@ const GENERIC_LIST_PAGE = `
   </ul>
 </main>`;
 
+const IMAGELESS_LINKLESS_TITLES = ['Sorgue Candle', 'Linen Coverlet', 'Brass Lamp'];
+const IMAGELESS_LINKLESS_CATEGORIES = ['Scent', 'Textiles', 'Lighting'];
+
+function imagelessLinklessCard(index: number): string {
+  return `
+    <article>
+      <div>${IMAGELESS_LINKLESS_CATEGORIES[index]}</div>
+      <h3>${IMAGELESS_LINKLESS_TITLES[index]}</h3>
+      <div>
+        <span>EUR ${42 + index}</span>
+        <button>Tell me more</button>
+      </div>
+    </article>`;
+}
+
+const IMAGELESS_LINKLESS_CARD_GRID = `
+<main>
+  <div>
+    ${IMAGELESS_LINKLESS_TITLES.map((_, index) => imagelessLinklessCard(index)).join('')}
+  </div>
+</main>`;
+
+const PROSE_BAND_HEADINGS = ['Band Alpha', 'Band Beta', 'Band Gamma'];
+const PROSE_BAND_CARD_TITLES = Array.from({ length: 6 }, (_, i) => `Dense card ${i + 1}`);
+
+function proseBand(title: string, index: number): string {
+  return `
+    <section>
+      <h2>${title}</h2>
+      <p>Long-form prose band ${index + 1} with a <a href="band-${index + 1}.html">story link</a> and enough text to look substantial.</p>
+    </section>`;
+}
+
+function proseBandGridCard(title: string, index: number): string {
+  return `
+    <article>
+      <div>Gallery</div>
+      <h3><a href="dense-${index + 1}.html">${title}</a></h3>
+      <p>Excerpt for ${title} with enough detail to qualify as a repeated content card.</p>
+      <a href="dense-${index + 1}.html">Read more</a>
+    </article>`;
+}
+
+const CARD_GRID_WITH_PROSE_BANDS = `
+<main>
+  ${PROSE_BAND_HEADINGS.map((title, index) => proseBand(title, index)).join('')}
+  <div>
+    ${PROSE_BAND_CARD_TITLES.map((title, index) => proseBandGridCard(title, index)).join('')}
+  </div>
+</main>`;
+
 describe('structuralSignature', () => {
   it('is class-agnostic: tag + sorted direct-child tag names', () => {
     const $ = cheerio.load(`<article class="x"><div></div><span></span></article>`);
@@ -335,11 +386,33 @@ describe('discoverHtmlCards — candidate clustering', () => {
     expect(GENERIC_LIST_TITLES.every((title) => titles.includes(title))).toBe(true);
     expect(grids.every((grid) => grid.containerSelector.endsWith('ul:nth-of-type(1)'))).toBe(true);
   });
+
+  it('selects a card grid alongside repeated heading-bearing prose bands', () => {
+    const grids = discoverHtmlCards(CARD_GRID_WITH_PROSE_BANDS);
+    const records = grids.flatMap((grid) => grid.records);
+    const titles = records.map((record) => String(record.title));
+    const $ = cheerio.load(CARD_GRID_WITH_PROSE_BANDS);
+
+    expect(grids).toHaveLength(1);
+    expect(titles).toEqual(PROSE_BAND_CARD_TITLES);
+    expect(titles.some((title) => PROSE_BAND_HEADINGS.includes(title))).toBe(false);
+    expect(grids.every((grid) => !$(grid.containerSelector).is('main,section'))).toBe(true);
+  });
 });
 
 describe('discoverHtmlCards — richness gate', () => {
   it('rejects nav link lists and footer link columns (no heading+image+text)', () => {
     expect(discoverHtmlCards(NAV_AND_FOOTER)).toHaveLength(0);
+  });
+
+  it('accepts image-less, link-less structured content cards', () => {
+    const grids = discoverHtmlCards(IMAGELESS_LINKLESS_CARD_GRID);
+    const records = grids.flatMap((grid) => grid.records);
+
+    expect(grids).toHaveLength(1);
+    expect(records.map((record) => record.title)).toEqual(IMAGELESS_LINKLESS_TITLES);
+    expect(records.map((record) => record.category)).toEqual(IMAGELESS_LINKLESS_CATEGORIES);
+    expect(grids[0].cardTemplate).toContain('data-dla-');
   });
 });
 
