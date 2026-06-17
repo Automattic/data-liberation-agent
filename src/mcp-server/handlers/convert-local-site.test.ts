@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { PNG } from 'pngjs';
 import type { HandlerContext, ToolResult } from '../handler-types.js';
 import { JETPACK_FORM_PARITY_CSS } from '../../lib/replicate/local-theme/jetpack-form-parity-contract.js';
+import { JETPACK_FORMS_PLUGIN_INSTALL } from './convert-local-site-jetpack-contract.js';
 
 // Mock BOTH exec seams before importing the handler:
 // - node:child_process execFile → studio wp activation/option/meta commands
@@ -256,6 +257,23 @@ function makeStudioSite(): string {
   const sitePath = mkdtempSync(join(FIXTURE_TMP, 'cls-studio-'));
   mkdirSync(join(sitePath, 'wp-content'), { recursive: true });
   return sitePath;
+}
+
+function wpArgsForExecCall(call: string[]): string[] {
+  const pathIndex = call.indexOf('--path');
+  return pathIndex >= 0 ? call.slice(pathIndex + 2) : [];
+}
+
+function jetpackWpCalls(): string[][] {
+  return execCalls.filter((call) => wpArgsForExecCall(call).some((arg) => arg.toLowerCase().includes('jetpack')));
+}
+
+function jetpackInstallCalls(): string[][] {
+  const expected = Array.from(JETPACK_FORMS_PLUGIN_INSTALL.wpArgs);
+  return execCalls.filter((call) => {
+    const wpArgs = wpArgsForExecCall(call);
+    return wpArgs.length === expected.length && expected.every((arg, index) => wpArgs[index] === arg);
+  });
 }
 
 // Base compareScreenshotDirs result — re-established each test so once-values
@@ -599,6 +617,73 @@ describe('convertLocalSiteHandler', () => {
       expect(fns).toContain(
         "'assets/css/source.css', 'assets/css/instance-styles.css', 'assets/css/jetpack-form-parity.css', 'assets/css/parity-patch.css'",
       );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(sitePath, { recursive: true, force: true });
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
+  it('installs and activates Jetpack when forms were converted', async () => {
+    const dir = makeFormSite();
+    const sitePath = makeStudioSite();
+    const outDir = mkdtempSync(join(FIXTURE_TMP, 'cls-form-jetpack-out-'));
+    try {
+      const res = await convertLocalSiteHandler(
+        { dir, studioSitePath: sitePath, outputDir: outDir, themeSlug: 'acme-local', siteTitle: 'Acme', skipDesign: true },
+        ctx,
+      );
+      expect(res.isError).toBeFalsy();
+      expect(buildJetpackFormParityCssMock).toHaveBeenCalledTimes(1);
+      const calls = buildJetpackFormParityCssMock.mock.calls as unknown as Array<[{ formsConverted: number }]>;
+      expect(calls[0][0].formsConverted).toBeGreaterThanOrEqual(1);
+      expect(jetpackInstallCalls().map(wpArgsForExecCall)).toEqual([
+        Array.from(JETPACK_FORMS_PLUGIN_INSTALL.wpArgs),
+      ]);
+      expect(jetpackWpCalls()).toEqual(jetpackInstallCalls());
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(sitePath, { recursive: true, force: true });
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not issue Jetpack wp-cli commands when no forms were converted', async () => {
+    const dir = makeSite();
+    const sitePath = makeStudioSite();
+    const outDir = mkdtempSync(join(FIXTURE_TMP, 'cls-no-form-jetpack-out-'));
+    try {
+      const res = await convertLocalSiteHandler(
+        { dir, studioSitePath: sitePath, outputDir: outDir, themeSlug: 'acme-local', siteTitle: 'Acme', skipDesign: true },
+        ctx,
+      );
+      expect(res.isError).toBeFalsy();
+      expect(buildJetpackFormParityCssMock).not.toHaveBeenCalled();
+      expect(jetpackWpCalls()).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(sitePath, { recursive: true, force: true });
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
+  it('continues with a warning when Jetpack install and activation fails', async () => {
+    const dir = makeFormSite();
+    const sitePath = makeStudioSite();
+    const outDir = mkdtempSync(join(FIXTURE_TMP, 'cls-form-jetpack-fail-out-'));
+    execFailFor = JETPACK_FORMS_PLUGIN_INSTALL.wpArgs.join(' ');
+    try {
+      const res = await convertLocalSiteHandler(
+        { dir, studioSitePath: sitePath, outputDir: outDir, themeSlug: 'acme-local', siteTitle: 'Acme', skipDesign: true },
+        ctx,
+      );
+      expect(res.isError).toBeFalsy();
+      const summary = JSON.parse(res.content[0].text) as { installed: number; warnings: string[] };
+      expect(summary.installed).toBe(1);
+      expect(jetpackInstallCalls()).toHaveLength(1);
+      const warning = summary.warnings.find((w) => w.includes('Jetpack') && w.includes('WordPress.com connection'));
+      expect(warning).toContain(JETPACK_FORMS_PLUGIN_INSTALL.warningPrefix);
+      expect(warning).toContain(JETPACK_FORMS_PLUGIN_INSTALL.localFormsNote);
     } finally {
       rmSync(dir, { recursive: true, force: true });
       rmSync(sitePath, { recursive: true, force: true });

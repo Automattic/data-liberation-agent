@@ -14,6 +14,7 @@ import { existsSync, readFileSync, writeFileSync, readdirSync, renameSync, unlin
 import { basename, dirname, join, resolve } from 'node:path';
 import type { Handler } from '../handler-types.js';
 import { ingestLocalSiteHandler } from './ingest-local-site.js';
+import { JETPACK_FORMS_PLUGIN_INSTALL, jetpackFormsPluginInstallWarning, shouldInstallJetpackFormsPlugin } from './convert-local-site-jetpack-contract.js';
 import { themeCacheFlushCommands } from './install-theme.js';
 import { ingestLocalSite } from '../../lib/replicate/local-site/ingest.js';
 import { buildNavGraph } from '../../lib/replicate/local-site/nav-graph.js';
@@ -57,8 +58,8 @@ import { classifyDivergences, renderPatchCss, divergenceFingerprint, suppressPag
 
 /** Thin trimming wrapper over the shared Studio wp-cli exec — these are short
  * commands, so the 60s/10MB envelope rather than the 5min/50MB default. */
-async function studioWp(sitePath: string, wpArgs: string[]): Promise<string> {
-  return (await studioWpExec(sitePath, wpArgs, { timeout: 60_000, maxBuffer: 10 * 1024 * 1024 })).trim();
+async function studioWp(sitePath: string, wpArgs: readonly string[]): Promise<string> {
+  return (await studioWpExec(sitePath, [...wpArgs], { timeout: 60_000, maxBuffer: 10 * 1024 * 1024 })).trim();
 }
 
 function writeAtomicTextFile(path: string, content: string): void {
@@ -620,6 +621,13 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
     await studioWp(studioSitePath, ['theme', 'activate', themeSlug]);
   } catch (err) {
     warnings.push(`theme activate failed: ${(err as Error).message}`);
+  }
+  if (shouldInstallJetpackFormsPlugin(formsConverted)) {
+    try {
+      await studioWp(studioSitePath, JETPACK_FORMS_PLUGIN_INSTALL.wpArgs);
+    } catch (err) {
+      warnings.push(jetpackFormsPluginInstallWarning(err as Error));
+    }
   }
   // The dla/* blocks must be registered server-side before any page renders
   // them (SSR directive processing rides supports.interactivity). Mirrors the
