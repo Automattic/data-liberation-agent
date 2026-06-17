@@ -246,6 +246,11 @@ describe('scaffoldDataModel — records-source chain', () => {
     // mounts carry the original container selector + a synthetic #id (DECISION 1)
     expect(r.model.mounts[0].selector).toMatch(/^#dla-cards-/);
     expect(r.model.mounts[0].sourceSelector).toBeTruthy();
+    // perPage = the count of cards baked into the source grid (3 here), in
+    // document order (ASC) — NOT -1 (all) and NOT reordered to date/DESC. A
+    // curated source grid stays its own size instead of rendering the full pool.
+    expect(r.model.mounts[0].query).toMatchObject({ perPage: 3, order: 'ASC' });
+    expect(r.skillTodos.some((t) => t.path.startsWith('mounts[') && t.path.endsWith('.query.order'))).toBe(false);
     // mounts carry the source grid container's class so the query loop's
     // post-template keeps the source grid layout CSS (else cards stack vertically)
     expect(r.model.mounts[0].wrapperClass).toBe('cluster');

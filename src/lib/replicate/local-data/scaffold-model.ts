@@ -109,7 +109,14 @@ export function scaffoldDataModel(input: ScaffoldInput): ScaffoldResult {
       // post-template so the carried layout CSS keeps the cards in a grid
       // (without it the post-template falls back to vertical flow).
       ...(grid.containerClass ? { wrapperClass: grid.containerClass } : {}),
-      perPageHint: undefined,
+      // perPage = the number of cards baked into THIS source grid, so the query
+      // loop renders the same count page-1 as the source (a curated 5-card
+      // "featured" strip and a 9-card index grid stay distinct). Without it
+      // every loop defaults to -1 (all posts), so each grid renders the full
+      // pool — the page balloons to several times the source height and the
+      // structure misaligns from the first grid down (baseplate: 13365px vs
+      // the source's 3104px). Ordering stays document-order (see orderForMount).
+      perPageHint: grid.records.length,
       confidence: 'high',
       evidence: grid.evidence,
     }));
@@ -349,6 +356,11 @@ function containsIdentifier(source: string, identifier: string): boolean {
 }
 
 function orderForMount(mount: DiscoveredMount, perPage: number): { order: NonNullable<MountSpec['query']['order']>; confidence: Confidence } {
+  // Static HTML cards are baked into the page in document order; the query loop
+  // preserves that order (ASC by insertion). perPageHint here constrains the
+  // COUNT only — it must not flip these mounts to date-DESC (which would reorder
+  // the cards against the source and emit a spurious low-confidence order todo).
+  if (mount.sourceCall?.startsWith('html-cards:')) return { order: 'ASC', confidence: 'high' };
   if (mount.perPageHint === undefined || perPage === -1) return { order: 'ASC', confidence: 'high' };
   if (hasNewestStyleSignal(mount.sourceCall ?? '')) return { order: 'DESC', confidence: 'high' };
   return { order: 'DESC', confidence: 'low' };
