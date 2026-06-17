@@ -74,6 +74,17 @@ describe('buildCptMuPlugin', () => {
     expect(php).toContain("add_action( 'init', function () {");
   });
 
+  it('registers a query-loop render filter for DLA term-slug attrs', () => {
+    const php = buildCptMuPlugin(MODEL);
+
+    expect(php).toContain("add_filter( 'query_loop_block_query_vars'");
+    expect(php).toContain("parsed_block['attrs']");
+    expect(php).toContain("dlaTermSlug");
+    expect(php).toContain("dlaTaxonomy");
+    expect(php).toContain("'field'    => 'slug'");
+    expect(php).toContain("tax_query");
+  });
+
   it('escapes single quotes in labels (no PHP breakout)', () => {
     const php = buildCptMuPlugin({ ...MODEL, cpt: { ...MODEL.cpt, plural: "O'Briens" } });
     expect(php).toContain("\\'Briens");

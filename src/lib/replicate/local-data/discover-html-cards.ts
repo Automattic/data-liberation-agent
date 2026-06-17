@@ -63,6 +63,8 @@ export interface DiscoveredCardGrid {
     leadTemplate: string;
     /** data-dla-* template built from the FIRST column (row) card (typically omits the excerpt; carries the row modifier class verbatim). */
     rowTemplate: string;
+    /** Slugified category shared by ALL cards in the section (lead + column); set only when homogeneous. Drives a per-section term filter. Absent when the section mixes categories. */
+    termSlug?: string;
   };
   confidence: 'high' | 'low';
   /** Human-readable note: why it qualified / which roles were ambiguous. */
@@ -357,11 +359,20 @@ function detectFeaturedGrid(
   if (!isDescendant(wrapper, container)) return undefined;
   if (richCards.includes(wrapper)) return undefined;
 
+  const sectionTermSlugs = [...leadCards, ...columnCards]
+    .map((card) => slugify(extractCardFields($, card, 0).category))
+    .filter(Boolean);
+  const termSlug =
+    sectionTermSlugs.length > 0 && sectionTermSlugs.every((slug) => slug === sectionTermSlugs[0])
+      ? sectionTermSlugs[0]
+      : undefined;
+
   return {
     leadCount: leadCards.length,
     columnWrapperClass: ($(wrapper).attr('class') ?? '').trim(),
     leadTemplate: buildCardTemplate($, leadCards[0], extractCardFields($, leadCards[0], 0)),
     rowTemplate: buildCardTemplate($, columnCards[0], extractCardFields($, columnCards[0], 0)),
+    ...(termSlug ? { termSlug } : {}),
   };
 }
 

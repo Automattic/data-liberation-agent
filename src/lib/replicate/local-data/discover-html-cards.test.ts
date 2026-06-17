@@ -47,6 +47,38 @@ const MIXED_DEPTH_GRID = `
   </section>
 </main>`;
 
+function featuredGridWithCategories(categories: [string, string, string, string]): string {
+  return `
+<main>
+  <section>
+    <div class="cluster">
+      <article class="tile tile--big">
+        <div class="thumb"><a href="story-1.html"><img src="a.png" alt=""></a></div>
+        <div class="meat">
+          <a class="kicker" href="cat-${categories[0].toLowerCase()}.html">${categories[0]}</a>
+          <h3><a href="story-1.html">Lead feature story</a></h3>
+          <p>An excerpt of the lead story that is reasonably long.</p>
+          <time>Dec 22, 2023</time>
+        </div>
+      </article>
+      <div class="column">
+        ${[1, 2, 3].map(
+          (index) => `
+          <article class="tile tile--row">
+            <div class="thumb"><a href="story-${index + 1}.html"><img src="${index + 1}.png" alt=""></a></div>
+            <div class="meat">
+              <a class="kicker" href="cat-${categories[index].toLowerCase()}.html">${categories[index]}</a>
+              <h3><a href="story-${index + 1}.html">Feature row ${index}</a></h3>
+              <time>Dec ${20 - index}, 2023</time>
+            </div>
+          </article>`
+        ).join('')}
+      </div>
+    </div>
+  </section>
+</main>`;
+}
+
 const NAV_AND_FOOTER = `
 <body>
   <nav><ul>
@@ -429,6 +461,18 @@ describe('discoverHtmlCards — featured layout descriptor', () => {
     expect(featuredGrids).toHaveLength(2);
     expect(featuredGrids.every((grid) => grid.featured?.leadCount === 1)).toBe(true);
     expect(featuredGrids.every((grid) => grid.featured?.columnWrapperClass === 'column')).toBe(true);
+  });
+
+  it('sets a term slug when every featured card has the same category', () => {
+    const [grid] = discoverHtmlCards(featuredGridWithCategories(['Reviews', 'Reviews', 'Reviews', 'Reviews']));
+
+    expect(grid.featured?.termSlug).toBe('reviews');
+  });
+
+  it('does not set a term slug when featured cards mix categories', () => {
+    const [grid] = discoverHtmlCards(featuredGridWithCategories(['Reviews', 'News', 'Reviews', 'Reviews']));
+
+    expect(grid.featured?.termSlug).toBeUndefined();
   });
 });
 

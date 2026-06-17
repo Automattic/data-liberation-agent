@@ -191,6 +191,38 @@ const FEATURED_CARD_HTML = `
   </section>
 </main>`;
 
+function featuredCardHtmlWithCategories(categories: [string, string, string, string]): string {
+  return `
+<main>
+  <section>
+    <div class="feature-shell">
+      <article class="story story--lead">
+        <div class="visual"><a href="lead.html"><img src="lead.png" alt=""></a></div>
+        <div class="copy">
+          <a class="topic" href="archive.html">${categories[0]}</a>
+          <h3><a href="lead.html">Lead dispatch</a></h3>
+          <p>Lead dispatch excerpt with enough detail to qualify as a rich card.</p>
+          <time>Mar 01, 2024</time>
+        </div>
+      </article>
+      <div class="story-column">
+        ${[1, 2, 3].map(
+          (index) => `
+          <article class="story story--row">
+            <div class="visual"><a href="row-${index}.html"><img src="row-${index}.png" alt=""></a></div>
+            <div class="copy">
+              <a class="topic" href="archive.html">${categories[index]}</a>
+              <h3><a href="row-${index}.html">Row dispatch ${index}</a></h3>
+              <time>Mar 0${index + 1}, 2024</time>
+            </div>
+          </article>`
+        ).join('')}
+      </div>
+    </div>
+  </section>
+</main>`;
+}
+
 const STACKED_SINGLE_CARD_TITLES = ['Stacked card One', 'Stacked card Two', 'Stacked card Three'];
 const STACKED_SINGLE_CARD_HEADINGS = ['Featured', 'Popular', 'Latest'];
 const STACKED_SINGLE_CARD_CATEGORIES = ['Alpha', 'Beta', 'Gamma'];
@@ -310,6 +342,28 @@ describe('scaffoldDataModel — records-source chain', () => {
       columnPerPage: 3,
       variant: 'row',
     });
+  });
+
+  it('threads homogeneous featured category term metadata onto the mount', () => {
+    const r = scaffoldDataModel({
+      html: featuredCardHtmlWithCategories(['Reviews', 'Reviews', 'Reviews', 'Reviews']),
+      js: '',
+    });
+
+    expect(r.model.mounts[0].featured).toMatchObject({
+      termSlug: 'reviews',
+      taxonomy: 'category',
+    });
+  });
+
+  it('does not thread term metadata onto mixed featured mounts', () => {
+    const r = scaffoldDataModel({
+      html: featuredCardHtmlWithCategories(['Reviews', 'News', 'Reviews', 'Reviews']),
+      js: '',
+    });
+
+    expect(r.model.mounts[0].featured).not.toHaveProperty('termSlug');
+    expect(r.model.mounts[0].featured).not.toHaveProperty('taxonomy');
   });
 
   it('does not add variants or featured metadata for uniform-only HTML-card grids', () => {

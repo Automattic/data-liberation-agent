@@ -118,6 +118,10 @@ export interface MountSpec {
     columnPerPage: number;
     /** card variant name the column loop's data-card renders (e.g. 'row'). */
     variant: string;
+    /** Per-section taxonomy term-slug filter (set when the source section is category-homogeneous). Both loops of the section filter to it. */
+    termSlug?: string;
+    /** Taxonomy slug for the term filter (set together with termSlug). */
+    taxonomy?: string;
   };
 }
 

@@ -32,6 +32,15 @@ const FEATURED: MountSpec = {
   },
 };
 
+const FEATURED_WITH_TERM: MountSpec = {
+  ...FEATURED,
+  featured: {
+    ...FEATURED.featured!,
+    termSlug: 'reviews',
+    taxonomy: 'category',
+  },
+};
+
 const EXPECTED_NEWEST_MARKUP =
   `<!-- wp:query {"queryId":0,"query":{"perPage":4,"pages":0,"offset":0,"postType":"objet","order":"desc","orderBy":"date","inherit":false},"anchor":"newestGrid"} -->\n` +
   `<div class="wp-block-query" id="newestGrid"><!-- wp:post-template {"className":"obj-grid obj-grid--4"} -->\n` +
@@ -123,6 +132,22 @@ describe('buildQueryLoop', () => {
       '#m0 .wp-block-post-template{display:contents}\n' +
       '#m0 .wp-block-post-template > li{display:contents}',
     );
+    expect(blockMarkupRoundtrips(markup).ok).toBe(true);
+  });
+
+  it('adds term filter attrs to both featured query blocks when the section is homogeneous', () => {
+    const { markup } = buildQueryLoop(FEATURED_WITH_TERM);
+
+    expect([...markup.matchAll(/"dlaTermSlug":"reviews"/g)]).toHaveLength(2);
+    expect([...markup.matchAll(/"dlaTaxonomy":"category"/g)]).toHaveLength(2);
+    expect(blockMarkupRoundtrips(markup).ok).toBe(true);
+  });
+
+  it('omits term filter attrs from featured query blocks without a term slug', () => {
+    const { markup } = buildQueryLoop(FEATURED);
+
+    expect(markup).not.toContain('dlaTermSlug');
+    expect(markup).not.toContain('dlaTaxonomy');
     expect(blockMarkupRoundtrips(markup).ok).toBe(true);
   });
 

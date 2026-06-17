@@ -55,6 +55,8 @@ interface QueryBlockOpts {
   queryId: number;
   postTemplateClassName?: string;
   variant?: string;
+  dlaTermSlug?: string;
+  dlaTaxonomy?: string;
 }
 
 function blockAttrs(attrs: Record<string, unknown>): string {
@@ -81,6 +83,10 @@ function buildSingleQueryLoop(opts: QueryBlockOpts): string {
 
   const queryAttrs: Record<string, unknown> = { queryId: opts.queryId, query };
   if (opts.anchor) queryAttrs.anchor = opts.anchor;
+  if (opts.dlaTaxonomy && opts.dlaTermSlug) {
+    queryAttrs.dlaTaxonomy = opts.dlaTaxonomy;
+    queryAttrs.dlaTermSlug = opts.dlaTermSlug;
+  }
 
   const idAttr = opts.anchor ? ` id="${opts.anchor}"` : '';
   const templateAttrs = opts.postTemplateClassName
@@ -118,6 +124,10 @@ export function buildQueryLoop(mount: MountSpec, queryId = 0): QueryLoopResult {
       columnAttrs.className = mount.featured.columnWrapperClass;
     }
     const columnClassAttr = groupClassAttr(mount.featured.columnWrapperClass);
+    const termFilter =
+      mount.featured.termSlug && mount.featured.taxonomy
+        ? { dlaTermSlug: mount.featured.termSlug, dlaTaxonomy: mount.featured.taxonomy }
+        : {};
 
     const leadLoop = buildSingleQueryLoop({
       perPage: mount.featured.leadPerPage,
@@ -126,6 +136,7 @@ export function buildQueryLoop(mount: MountSpec, queryId = 0): QueryLoopResult {
       order: mount.query.order,
       orderBy: mount.query.orderBy,
       queryId,
+      ...termFilter,
     });
 
     const columnLoop = buildSingleQueryLoop({
@@ -136,6 +147,7 @@ export function buildQueryLoop(mount: MountSpec, queryId = 0): QueryLoopResult {
       orderBy: mount.query.orderBy,
       queryId: queryId + FEATURED_COLUMN_QUERY_ID_OFFSET,
       variant: mount.featured.variant,
+      ...termFilter,
     });
 
     const markup =

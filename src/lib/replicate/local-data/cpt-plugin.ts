@@ -117,6 +117,19 @@ ${sanitizeFn}
 add_action( 'init', function () {
 ${initBody}
 } );
+
+add_filter( 'query_loop_block_query_vars', function ( $query, $block ) {
+    $attrs = isset( $block->parsed_block['attrs'] ) ? $block->parsed_block['attrs'] : array();
+    if ( empty( $attrs['dlaTermSlug'] ) || empty( $attrs['dlaTaxonomy'] ) ) { return $query; }
+    $tax = (array) ( isset( $query['tax_query'] ) ? $query['tax_query'] : array() );
+    $tax[] = array(
+        'taxonomy' => sanitize_key( $attrs['dlaTaxonomy'] ),
+        'field'    => 'slug',
+        'terms'    => array( sanitize_title( $attrs['dlaTermSlug'] ) ),
+    );
+    $query['tax_query'] = $tax;
+    return $query;
+}, 10, 2 );
 `;
 }
 

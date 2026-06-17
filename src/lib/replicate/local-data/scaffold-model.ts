@@ -33,6 +33,7 @@ const singular = (value: string): string => value.replace(/s$/i, '');
 const titleCase = (value: string): string => value.replace(/[-_]+/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase()).trim();
 const scalar = (value: unknown): value is string | number | boolean => ['string', 'number', 'boolean'].includes(typeof value);
 const NEWEST_STYLE_SIGNALS = ['newest', 'recent', 'latest'];
+const taxonomySlugFor = (corePost: boolean, cptSlug: string): string => corePost ? 'category' : `${cptSlug}_cat`;
 
 type BaseDiscovered = Omit<ScaffoldResult['discovered'], 'source'>;
 type BuildMount = DiscoveredMount & Pick<MountSpec, 'sourceSelector' | 'sourcePage' | 'featured'>;
@@ -102,6 +103,7 @@ export function scaffoldDataModel(input: ScaffoldInput): ScaffoldResult {
   if (usableGrids.length > 0) {
     const records = dedupeRecordsById(usableGrids.flatMap(({ grid }) => grid.records));
     const firstFeaturedGrid = usableGrids.find(({ grid }) => grid.featured);
+    const htmlCardsTaxonomySlug = taxonomySlugFor(true, 'post');
     const cardMounts: BuildMount[] = usableGrids.map(({ grid, disambiguator, sourcePage }) => ({
       selector: `#${syntheticCardAnchor(grid.containerSelector, disambiguator)}`,
       sourceSelector: grid.containerSelector,
@@ -125,6 +127,7 @@ export function scaffoldDataModel(input: ScaffoldInput): ScaffoldResult {
           leadPerPage: grid.featured.leadCount,
           columnPerPage: grid.records.length - grid.featured.leadCount,
           variant: 'row',
+          ...(grid.featured.termSlug ? { termSlug: grid.featured.termSlug, taxonomy: htmlCardsTaxonomySlug } : {}),
         },
       } : {}),
       confidence: 'high',
@@ -170,6 +173,7 @@ function buildModelFromRecords(opts: BuildModelFromRecordsOpts): ScaffoldResult 
   const sourceName = opts.typeName ?? 'item';
   const typeNoun = singular(sourceName === '(anonymous)' ? 'item' : sourceName).toLowerCase();
   const cptSlug = corePost ? 'post' : slugify(typeNoun) || 'item';
+  const taxonomySlug = taxonomySlugFor(corePost, cptSlug);
 
   const termSet = new Map<string, string>();
   if (inferred.termKey) {
@@ -272,7 +276,7 @@ function buildModelFromRecords(opts: BuildModelFromRecordsOpts): ScaffoldResult 
           supports: ['title', 'editor', 'custom-fields'],
         },
     taxonomy: {
-      slug: corePost ? 'category' : `${cptSlug}_cat`,
+      slug: taxonomySlug,
       label: 'Categories',
       hierarchical: true,
       terms: [...termSet].map(([slug, label]) => ({ slug, label })),
