@@ -266,17 +266,30 @@ function buildModelFromRecords(opts: BuildModelFromRecordsOpts): ScaffoldResult 
 }
 
 function dedupeRecordsById(records: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
-  const seen = new Set<string>();
+  const seen = new Map<string, Record<string, unknown>>();
   const out: Array<Record<string, unknown>> = [];
   for (const record of records) {
     const id = record.id;
     if (typeof id === 'string' && id) {
-      if (seen.has(id)) continue;
-      seen.add(id);
+      const kept = seen.get(id);
+      if (kept) {
+        const keptTitle = recordTitle(kept);
+        const droppedTitle = recordTitle(record);
+        if (keptTitle !== droppedTitle) {
+          console.warn(`[local-data] dropping duplicate card id "${id}" (title "${droppedTitle}") - shared id/idempotency key`);
+        }
+        continue;
+      }
+      seen.set(id, record);
     }
     out.push(record);
   }
   return out;
+}
+
+function recordTitle(record: Record<string, unknown>): string {
+  const title = record.title;
+  return title == null ? '' : String(title);
 }
 
 function fieldsWithRestoredContentMeta(records: Array<Record<string, unknown>>, inferred: ReturnType<typeof inferFields>): DataField[] {

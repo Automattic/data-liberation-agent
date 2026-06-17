@@ -14,6 +14,26 @@ const PAGE = `<main><section><div class="grid">
   <article><h3>Three</h3><img src="c.png"></article>
 </div></section></main>`;
 
+const LANDMARK_PAGE = `<!doctype html>
+<html>
+  <body>
+    <main>
+      <section>
+        <h2>Featured</h2>
+        <article><h3>One</h3><p>First article content survives.</p></article>
+      </section>
+      <section>
+        <h2>Popular</h2>
+        <article><h3>Two</h3><p>Second article content survives.</p></article>
+      </section>
+      <section>
+        <h2>Latest</h2>
+        <article><h3>Three</h3><p>Third article content survives.</p></article>
+      </section>
+    </main>
+  </body>
+</html>`;
+
 describe('neutralizeStaticCards', () => {
   it('stamps the synthetic id and empties the card children', () => {
     const m = mount('#dla-cards-x', 'main > section:nth-of-type(1) > div:nth-of-type(1)');
@@ -45,5 +65,20 @@ describe('neutralizeStaticCards', () => {
     const js: MountSpec = { selector: '#grid', sourceCall: 'mountGrid', query: { postType: 'x', perPage: -1 } };
     const { stamped } = neutralizeStaticCards(PAGE, [js]);
     expect(stamped).toEqual([]);
+  });
+
+  it('skips top-level landmark mounts without emptying the page body', () => {
+    const m = mount('#dla-cards-main', 'main');
+    const result = neutralizeStaticCards(LANDMARK_PAGE, [m]);
+    const $ = cheerio.load(result.html);
+
+    expect(result.stamped).not.toContain('#dla-cards-main');
+    expect(result.skipped).toContain('#dla-cards-main');
+    expect($('#dla-cards-main').length).toBe(0);
+    expect($('main section')).toHaveLength(3);
+    expect($('main article')).toHaveLength(3);
+    expect($('main').text()).toContain('One');
+    expect($('main').text()).toContain('Two');
+    expect($('main').text()).toContain('Three');
   });
 });

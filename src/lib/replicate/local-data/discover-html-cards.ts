@@ -76,6 +76,10 @@ interface RichCandidateGroup {
   richCards: Element[];
 }
 
+type OneToOneNestingClassification = 'part' | 'wrapper' | 'none';
+
+const UNSAFE_MOUNT_CONTAINER_SELECTOR = 'html,body,main,section';
+
 /** Structural signature: tag + sorted direct-child element tag names. CLASS-AGNOSTIC. */
 export function structuralSignature($: CheerioAPI, el: Element): string {
   const childTags = $(el)
@@ -218,6 +222,10 @@ function firstHeadingText($el: Cheerio<Element>): string {
   return titled.text().replace(/\s+/g, ' ').trim();
 }
 
+function ownHeadingText($: CheerioAPI, el: Element): string {
+  return $(el).children('h1,h2,h3,h4,h5,h6').first().text().replace(/\s+/g, ' ').trim();
+}
+
 function imageUrl($el: Cheerio<Element>): string {
   const img = $el.find('img[src]').first().attr('src');
   if (img) return img;
@@ -311,7 +319,7 @@ function buildGrid(
   signature: string,
   opts: DiscoverHtmlCardsOptions
 ): DiscoveredCardGrid {
-  const containerSelector = uniqueSelector($, cards[0].parent as Element);
+  const containerSelector = uniqueSelector($, safeGridContainer($, cards));
   const richCards = cards.filter((c) => isRichCard($, c));
   if (richCards.length < MIN_CARDS) {
     return {
@@ -383,18 +391,20 @@ function containmentCounts(outerCards: Element[], innerCards: Element[]): number
   return outerCards.map((outerCard) => innerCards.filter((innerCard) => isDescendant(innerCard, outerCard)).length);
 }
 
-function isOneToOneCardPartRelation($: CheerioAPI, outerCards: Element[], innerCards: Element[]): boolean {
+function classifyOneToOneNesting($: CheerioAPI, outerCards: Element[], innerCards: Element[]): OneToOneNestingClassification {
   let coveredOuterCount = 0;
+  let sawDifferentHeadings = false;
   for (const outerCard of outerCards) {
     const contained = innerCards.filter((innerCard) => isDescendant(innerCard, outerCard));
     if (contained.length === 0) continue;
-    if (contained.length !== 1) return false;
+    if (contained.length !== 1) return 'none';
     const outerTitle = firstHeadingText($(outerCard));
     const innerTitle = firstHeadingText($(contained[0]));
-    if (outerTitle && innerTitle && outerTitle !== innerTitle) return false;
+    if (outerTitle && innerTitle && outerTitle !== innerTitle) sawDifferentHeadings = true;
     coveredOuterCount += 1;
   }
-  return coveredOuterCount >= MIN_CARDS;
+  if (coveredOuterCount < MIN_CARDS || coveredOuterCount !== innerCards.length) return 'none';
+  return sawDifferentHeadings ? 'wrapper' : 'part';
 }
 
 function selectCardLevelCandidates($: CheerioAPI, candidates: RichCandidate[]): RichCandidate[] {
@@ -414,12 +424,34 @@ function selectCardLevelCandidates($: CheerioAPI, candidates: RichCandidate[]): 
       const counts = containmentCounts(outer.richCards, inner.richCards);
       const covered = counts.reduce((sum, count) => sum + count, 0);
       if (covered !== inner.richCards.length) continue;
-      if (isOneToOneCardPartRelation($, outer.richCards, inner.richCards)) {
+      const classification = classifyOneToOneNesting($, outer.richCards, inner.richCards);
+      if (classification === 'part') {
         dropSignatures.add(inner.sig);
+      } else if (classification === 'wrapper') {
+        outer.candidates.forEach((candidate) => dropCandidates.add(candidate));
       }
     }
   }
   return candidates.filter((candidate) => !dropCandidates.has(candidate) && !dropSignatures.has(candidate.sig));
+}
+
+function safeGridContainer($: CheerioAPI, cards: Element[]): Element {
+  const parent = cards[0].parent as Element | null;
+  if (parent && parent.type === 'tag' && !$(parent).is(UNSAFE_MOUNT_CONTAINER_SELECTOR)) return parent;
+  if (shouldUseCardRootFallback($, cards)) return cards[0];
+  return parent ?? cards[0];
+}
+
+function shouldUseCardRootFallback($: CheerioAPI, cards: Element[]): boolean {
+  if (cards.length < MIN_CARDS || cards[0].tagName?.toLowerCase() !== 'article') return false;
+  const parents = [...new Set(cards.map((card) => card.parent as Element | null).filter((parent): parent is Element => Boolean(parent)))];
+  if (parents.length < MIN_CARDS || parents.some((parent) => parent.tagName?.toLowerCase() !== 'section')) return false;
+  if (parents.some((parent) => cards.filter((card) => card.parent === parent).length !== 1)) return false;
+  return cards.some((card) => {
+    const wrapperHeading = ownHeadingText($, card.parent as Element);
+    const cardHeading = firstHeadingText($(card));
+    return Boolean(wrapperHeading && cardHeading && wrapperHeading !== cardHeading);
+  });
 }
 
 export function discoverHtmlCards(html: string, opts: DiscoverHtmlCardsOptions = {}): DiscoveredCardGrid[] {

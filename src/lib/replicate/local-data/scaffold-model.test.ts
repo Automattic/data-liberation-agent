@@ -1,4 +1,6 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+import * as cheerio from 'cheerio';
+import { neutralizeStaticCards } from './neutralize-static-cards.js';
 import { scaffoldDataModel } from './scaffold-model.js';
 
 const HTML = `<main><div class="obj-grid obj-grid--4" id="newestGrid"></div></main>`;
@@ -159,6 +161,71 @@ const CARD_HTML = `
   </div>
 </main>`;
 
+const STACKED_SINGLE_CARD_TITLES = ['Stacked card One', 'Stacked card Two', 'Stacked card Three'];
+const STACKED_SINGLE_CARD_HEADINGS = ['Featured', 'Popular', 'Latest'];
+const STACKED_SINGLE_CARD_CATEGORIES = ['Alpha', 'Beta', 'Gamma'];
+
+function stackedSingleCard(index: number): string {
+  const title = STACKED_SINGLE_CARD_TITLES[index];
+  const category = STACKED_SINGLE_CARD_CATEGORIES[index];
+  return `
+    <article>
+      <div class="m"><a href="single.html"><img src="x.png" alt=""></a></div>
+      <div class="b">
+        <a class="c" href="archive.html">${category}</a>
+        <h3><a href="single.html">${title}</a></h3>
+        <p>Excerpt for ${title} with enough text to qualify as a rich card.</p>
+        <span>Jan 0${index + 1}, 2024</span>
+      </div>
+    </article>`;
+}
+
+const STACKED_SINGLE_CARD_BANDS = `<!doctype html>
+<html>
+  <body>
+    <main>
+      ${STACKED_SINGLE_CARD_HEADINGS.map(
+        (heading, index) => `
+        <section>
+          <h2>${heading}</h2>
+          ${stackedSingleCard(index)}
+        </section>`
+      ).join('')}
+    </main>
+  </body>
+</html>`;
+
+function duplicateSlugCard(title: string, date: string): string {
+  return `
+    <article>
+      <div><a href="${title}.html"><img src="${title}.png" alt=""></a></div>
+      <div>
+        <a href="archive.html">Updates</a>
+        <h3><a href="${title}.html">${title}</a></h3>
+        <p>Excerpt for ${title} with enough detail to qualify as static-card content.</p>
+        <span>${date}</span>
+      </div>
+    </article>`;
+}
+
+const DUPLICATE_ID_HTML = `
+<main>
+  <div>
+    ${duplicateSlugCard('Alpha!', 'Jan 01, 2024')}
+    ${duplicateSlugCard('Alpha?', 'Jan 02, 2024')}
+    ${duplicateSlugCard('Beta', 'Jan 03, 2024')}
+  </div>
+</main>`;
+
+const SAME_TITLE_DUPLICATE_ID_HTML = `
+<main>
+  <div>
+    ${duplicateSlugCard('Alpha!', 'Jan 01, 2024')}
+    ${duplicateSlugCard('Alpha!', 'Jan 02, 2024')}
+    ${duplicateSlugCard('Beta', 'Jan 03, 2024')}
+  </div>
+</main>`;
+
 describe('scaffoldDataModel — records-source chain', () => {
   it('reports source=js-array and ignores HTML cards when a JS array exists', () => {
     const js = `const ITEMS=[{id:'a',title:'A',cat:'x'},{id:'b',title:'B',cat:'y'}]; mountGrid('#grid', ITEMS);`;
@@ -204,5 +271,42 @@ describe('scaffoldDataModel — records-source chain', () => {
     const r = scaffoldDataModel({ html: '<main><p>just prose</p></main>', js: '' });
     expect(r.discovered.source).toBe('none');
     expect(r.model.items).toHaveLength(0);
+  });
+
+  it('preserves stacked single-card band content when neutralizing discovered mounts', () => {
+    const result = scaffoldDataModel({
+      html: '',
+      htmlFiles: [{ name: 'index.html', text: STACKED_SINGLE_CARD_BANDS }],
+      js: '',
+    });
+    const titles = result.model.items.map((item) => item.title);
+
+    expect(result.discovered.source).toBe('html-cards');
+    expect(result.model.items).toHaveLength(3);
+    expect(titles).toEqual(expect.arrayContaining(STACKED_SINGLE_CARD_TITLES));
+    expect(titles.some((title) => STACKED_SINGLE_CARD_HEADINGS.includes(title))).toBe(false);
+
+    const neutralized = neutralizeStaticCards(STACKED_SINGLE_CARD_BANDS, result.model.mounts);
+    const $ = cheerio.load(neutralized.html);
+    const text = $('body').text();
+
+    for (const title of STACKED_SINGLE_CARD_TITLES) expect(text).toContain(title);
+  });
+
+  it('warns only when dropping duplicate html-card ids with different titles', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      scaffoldDataModel({ html: DUPLICATE_ID_HTML, js: '' });
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0]?.[0]).toContain('[local-data] dropping duplicate card id "alpha"');
+      expect(warn.mock.calls[0]?.[0]).toContain('title "Alpha?"');
+
+      warn.mockClear();
+      scaffoldDataModel({ html: SAME_TITLE_DUPLICATE_ID_HTML, js: '' });
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
   });
 });

@@ -8,7 +8,13 @@ export interface NeutralizeStaticCardsResult {
   html: string;
   /** Mount selectors (#id) that were stamped onto a container in this page. */
   stamped: string[];
+  /** Mount selectors (#id) skipped because neutralization would target an unsafe container. */
+  skipped?: string[];
 }
+
+const LANDMARK_CONTAINER_TAGS = new Set(['html', 'body', 'main']);
+const CARD_ROOT_CONTAINER_TAGS = new Set(['article']);
+const MIN_REPEATED_CARD_SIGNATURE_COUNT = 3;
 
 function isFullHtmlDocument(html: string): boolean {
   return /<html[\s>]/i.test(html) && /<body[\s>]/i.test(html);
@@ -23,6 +29,7 @@ function isFullHtmlDocument(html: string): boolean {
 export function neutralizeStaticCards(html: string, mounts: MountSpec[]): NeutralizeStaticCardsResult {
   const $ = isFullHtmlDocument(html) ? cheerio.load(html) : cheerio.load(html, undefined, false);
   const stamped: string[] = [];
+  const skipped: string[] = [];
   for (const mount of mounts) {
     if (!mount.sourceSelector) continue;
     const id = anchorId(mount.selector);
@@ -34,19 +41,17 @@ export function neutralizeStaticCards(html: string, mounts: MountSpec[]): Neutra
       continue;
     }
     if (!container) continue;
-    const childEls = $(container).children().toArray() as Element[];
-    const freq = new Map<string, number>();
-    for (const c of childEls) {
-      const sig = structuralSignature($, c);
-      freq.set(sig, (freq.get(sig) ?? 0) + 1);
+    const tagName = container.tagName?.toLowerCase();
+    if (tagName && (LANDMARK_CONTAINER_TAGS.has(tagName) || CARD_ROOT_CONTAINER_TAGS.has(tagName))) {
+      skipped.push(mount.selector);
+      continue;
+    }
+    const cardSig = safeCardSignature($, container);
+    if (!cardSig) {
+      skipped.push(mount.selector);
+      continue;
     }
     const allDesc = $(container).find('*').toArray() as Element[];
-    for (const c of allDesc) {
-      const sig = structuralSignature($, c);
-      freq.set(sig, (freq.get(sig) ?? 0) + 1);
-    }
-    const cardSig = [...freq.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
-    if (!cardSig) continue;
     for (const el of allDesc) {
       if (structuralSignature($, el) === cardSig) $(el).remove();
     }
@@ -56,5 +61,22 @@ export function neutralizeStaticCards(html: string, mounts: MountSpec[]): Neutra
     $(container).attr('id', id);
     stamped.push(mount.selector);
   }
-  return { html: stamped.length > 0 ? $.html() : html, stamped };
+  return { html: stamped.length > 0 ? $.html() : html, stamped, skipped };
+}
+
+function safeCardSignature($: cheerio.CheerioAPI, container: Element): string | undefined {
+  const direct = repeatedSignature($, $(container).children().toArray() as Element[]);
+  if (direct) return direct;
+
+  return repeatedSignature($, $(container).find('article').toArray() as Element[]);
+}
+
+function repeatedSignature($: cheerio.CheerioAPI, elements: Element[]): string | undefined {
+  const freq = new Map<string, number>();
+  for (const el of elements) {
+    const sig = structuralSignature($, el);
+    freq.set(sig, (freq.get(sig) ?? 0) + 1);
+  }
+  const [sig, count] = [...freq.entries()].sort((a, b) => b[1] - a[1])[0] ?? [];
+  return typeof sig === 'string' && count >= MIN_REPEATED_CARD_SIGNATURE_COUNT ? sig : undefined;
 }

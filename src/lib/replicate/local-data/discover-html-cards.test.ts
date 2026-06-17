@@ -167,6 +167,40 @@ const ONE_PER_SECTION_PAGE = `
   ).join('')}
 </main>`;
 
+const STACKED_SINGLE_CARD_TITLES = ['Stacked card One', 'Stacked card Two', 'Stacked card Three'];
+const STACKED_SINGLE_CARD_HEADINGS = ['Featured', 'Popular', 'Latest'];
+const STACKED_SINGLE_CARD_CATEGORIES = ['Alpha', 'Beta', 'Gamma'];
+
+function stackedSingleCard(index: number): string {
+  const title = STACKED_SINGLE_CARD_TITLES[index];
+  const category = STACKED_SINGLE_CARD_CATEGORIES[index];
+  return `
+    <article>
+      <div class="m"><a href="single.html"><img src="x.png" alt=""></a></div>
+      <div class="b">
+        <a class="c" href="archive.html">${category}</a>
+        <h3><a href="single.html">${title}</a></h3>
+        <p>Excerpt for ${title} with enough text to qualify as a rich card.</p>
+        <span>Jan 0${index + 1}, 2024</span>
+      </div>
+    </article>`;
+}
+
+const STACKED_SINGLE_CARD_BANDS = `<!doctype html>
+<html>
+  <body>
+    <main>
+      ${STACKED_SINGLE_CARD_HEADINGS.map(
+        (heading, index) => `
+        <section>
+          <h2>${heading}</h2>
+          ${stackedSingleCard(index)}
+        </section>`
+      ).join('')}
+    </main>
+  </body>
+</html>`;
+
 const WRAPPER_WITH_INDEPENDENT_TITLES = Array.from({ length: 12 }, (_, i) => `Independent mix card ${i + 1}`);
 const WRAPPER_WITH_INDEPENDENT_HEADINGS = ['Wrapper Alpha', 'Wrapper Beta', 'Wrapper Gamma'];
 
@@ -268,6 +302,18 @@ describe('discoverHtmlCards — candidate clustering', () => {
     const titles = grids.flatMap((grid) => grid.records.map((record) => String(record.title)));
 
     expect(ONE_PER_SECTION_ARTICLE_TITLES.every((title) => titles.includes(title))).toBe(true);
+  });
+
+  it('selects real cards from stacked single-card bands (case D)', () => {
+    const grids = discoverHtmlCards(STACKED_SINGLE_CARD_BANDS);
+    const records = grids.flatMap((grid) => grid.records);
+    const titles = records.map((record) => String(record.title));
+    const $ = cheerio.load(STACKED_SINGLE_CARD_BANDS);
+
+    expect(records).toHaveLength(3);
+    expect(titles).toEqual(expect.arrayContaining(STACKED_SINGLE_CARD_TITLES));
+    expect(titles.some((title) => STACKED_SINGLE_CARD_HEADINGS.includes(title))).toBe(false);
+    expect(grids.every((grid) => !$(grid.containerSelector).is('html,body,main,section'))).toBe(true);
   });
 
   it('drops wrapper candidates even when matching article cards also appear in an independent grid', () => {
