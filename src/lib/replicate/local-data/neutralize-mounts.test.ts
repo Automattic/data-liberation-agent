@@ -46,4 +46,30 @@ describe('neutralizeDataMounts', () => {
     expect(removed).toBe(0);
     expect(out).toBe(js);
   });
+
+  it('does NOT break a method-chain member carrying the selector (no orphaned receiver)', () => {
+    // The selector literal also appears inside a kept chained query; neutralizing
+    // the method call would orphan `document.`/`.forEach` and break the bundle.
+    const js = [
+      "function mountEmbeds(){",
+      "  document.querySelectorAll('[data-objet-embed]').forEach(node => { render(node); });",
+      "}",
+      "mountEmbeds();",
+    ].join('\n');
+    const { js: out, removed } = neutralizeDataMounts(js, ['[data-objet-embed]']);
+    expect(removed).toBe(0); // chain member is not a receiver-less statement call
+    expect(out).toBe(js); // left verbatim
+    expect(out).not.toContain('neutralized');
+  });
+
+  it('neutralizes the receiver-less statement but spares a same-selector chain member', () => {
+    const js = [
+      "mountGrid('#shopGrid', OBJETS);",
+      "document.querySelectorAll('#shopGrid .obj-card').forEach(c => c.classList.add('in'));",
+    ].join('\n');
+    const { js: out, removed } = neutralizeDataMounts(js, ['#shopGrid']);
+    expect(removed).toBe(1); // only the mountGrid statement
+    expect(out).not.toContain("mountGrid('#shopGrid'");
+    expect(out).toContain("document.querySelectorAll('#shopGrid .obj-card')"); // chain query kept intact
+  });
 });

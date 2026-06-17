@@ -25,14 +25,24 @@ export interface NeutralizeResult {
  * non-greedily up to the closing `)` and optional `;`, on the assumption mount
  * calls don't nest braces/semicolons in their arguments (true for the
  * `mountGrid('#sel', dataExpr())` shape). Returns the cleaned JS + a count.
+ *
+ * Only receiver-less calls are neutralized (the `mountGrid(...)` shape). A
+ * method-chain member that happens to carry the same selector literal —
+ * `document.querySelectorAll('[data-objet-embed]').forEach(...)` in the kept
+ * embed/filter code — is LEFT INTACT: replacing just the method call with a
+ * comment would orphan its `document.` receiver and `.forEach` suffix, a syntax
+ * error that takes the entire carried bundle (chrome rendering and all) down
+ * with it. The negative lookbehind `(?<![.\w$])` is what enforces "statement
+ * call, not chain member"; such chained queries run harmlessly client-side
+ * post-injection.
  */
 export function neutralizeDataMounts(js: string, selectors: string[]): NeutralizeResult {
   let out = js;
   let removed = 0;
   for (const sel of selectors) {
-    // ident ( ...no ; { } ... '#sel' ...no ; { } ... ) optional ;
+    // (not . or ident char) ident ( ...no ; { } ... '#sel' ...no ; { } ... ) optional ;
     const re = new RegExp(
-      `[\\w$]+\\s*\\([^;{}]*['"]${escapeRe(sel)}['"][^;{}]*\\)\\s*;?`,
+      `(?<![.\\w$])[\\w$]+\\s*\\([^;{}]*['"]${escapeRe(sel)}['"][^;{}]*\\)\\s*;?`,
       'g',
     );
     out = out.replace(re, () => {
