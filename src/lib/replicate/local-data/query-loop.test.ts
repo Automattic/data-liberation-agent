@@ -135,11 +135,24 @@ describe('buildQueryLoop', () => {
     expect(blockMarkupRoundtrips(markup).ok).toBe(true);
   });
 
-  it('adds term filter attrs to both featured query blocks when the section is homogeneous', () => {
+  it('adds term filter attrs to both featured post-template blocks when the section is homogeneous', () => {
     const { markup } = buildQueryLoop(FEATURED_WITH_TERM);
 
-    expect([...markup.matchAll(/"dlaTermSlug":"reviews"/g)]).toHaveLength(2);
-    expect([...markup.matchAll(/"dlaTaxonomy":"category"/g)]).toHaveLength(2);
+    const queryOpenings = [...markup.matchAll(/<!-- wp:query \{[^\n]+ -->/g)].map((m) => m[0]);
+    const templateOpenings = [...markup.matchAll(/<!-- wp:post-template(?: \{[^\n]+)? -->/g)].map(
+      (m) => m[0],
+    );
+
+    expect(queryOpenings).toHaveLength(2);
+    expect(templateOpenings).toHaveLength(2);
+    for (const opening of queryOpenings) {
+      expect(opening).not.toContain('dlaTermSlug');
+      expect(opening).not.toContain('dlaTaxonomy');
+    }
+    for (const opening of templateOpenings) {
+      expect(opening).toContain('"dlaTermSlug":"reviews"');
+      expect(opening).toContain('"dlaTaxonomy":"category"');
+    }
     expect(blockMarkupRoundtrips(markup).ok).toBe(true);
   });
 

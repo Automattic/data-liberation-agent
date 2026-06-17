@@ -83,15 +83,16 @@ function buildSingleQueryLoop(opts: QueryBlockOpts): string {
 
   const queryAttrs: Record<string, unknown> = { queryId: opts.queryId, query };
   if (opts.anchor) queryAttrs.anchor = opts.anchor;
+
+  const postTemplateAttrsObj: Record<string, unknown> = {};
+  if (opts.postTemplateClassName) postTemplateAttrsObj.className = opts.postTemplateClassName;
   if (opts.dlaTaxonomy && opts.dlaTermSlug) {
-    queryAttrs.dlaTaxonomy = opts.dlaTaxonomy;
-    queryAttrs.dlaTermSlug = opts.dlaTermSlug;
+    postTemplateAttrsObj.dlaTaxonomy = opts.dlaTaxonomy;
+    postTemplateAttrsObj.dlaTermSlug = opts.dlaTermSlug;
   }
 
   const idAttr = opts.anchor ? ` id="${opts.anchor}"` : '';
-  const templateAttrs = opts.postTemplateClassName
-    ? ` ${JSON.stringify({ className: opts.postTemplateClassName })}`
-    : '';
+  const templateAttrs = blockAttrs(postTemplateAttrsObj);
   const dataCardAttrs = opts.variant ? ` ${JSON.stringify({ variant: opts.variant })}` : '';
 
   return (
