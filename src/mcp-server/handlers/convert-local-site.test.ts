@@ -237,6 +237,41 @@ function makeCarriedHeaderSite(): string {
   return dir;
 }
 
+function makeHeaderWithOverlayMountSite(): string {
+  mkdirSync(FIXTURE_TMP, { recursive: true });
+  const dir = mkdtempSync(join(FIXTURE_TMP, 'cls-header-overlay-mount-'));
+  writeFileSync(
+    join(dir, 'index.html'),
+    '<html><head><title>Home</title><link rel="stylesheet" href="styles.css"></head><body>' +
+      '<header class="site-header"><nav><a href="intro.html">Intro</a><a href="api.html">API</a></nav></header>' +
+      '<div id="nav-overlay" aria-hidden="true"></div>' +
+      '<main><section id="overview"><h1>Overview</h1><p>Welcome.</p></section></main>' +
+      '<script src="site.js"></script>' +
+      '</body></html>',
+  );
+  writeFileSync(join(dir, 'intro.html'), '<html><head><title>Intro</title></head><body><main><section id="intro"><h1>Intro</h1></section></main></body></html>');
+  writeFileSync(join(dir, 'api.html'), '<html><head><title>API</title></head><body><main><section id="api"><h1>API</h1></section></main></body></html>');
+  writeFileSync(join(dir, 'styles.css'), '.site-header { display: flex; gap: 1rem; } #nav-overlay { position: fixed; inset: 0; }');
+  writeFileSync(join(dir, 'site.js'), "document.documentElement.classList.add('js-ready');");
+  return dir;
+}
+
+function makeEmptyHeaderMountOnlySite(): string {
+  mkdirSync(FIXTURE_TMP, { recursive: true });
+  const dir = mkdtempSync(join(FIXTURE_TMP, 'cls-empty-header-mount-'));
+  writeFileSync(
+    join(dir, 'index.html'),
+    '<html><head><title>Home</title><link rel="stylesheet" href="styles.css"></head><body>' +
+      '<div id="siteHeader" class="runtime-header"></div>' +
+      '<main><section id="hero"><h1>Hi</h1></section></main>' +
+      '<script src="site.js"></script>' +
+      '</body></html>',
+  );
+  writeFileSync(join(dir, 'styles.css'), '.runtime-header { min-height: 1px; }');
+  writeFileSync(join(dir, 'site.js'), "document.getElementById('siteHeader')?.setAttribute('data-rendered', '1');");
+  return dir;
+}
+
 function makeSideRailSite(): string {
   mkdirSync(FIXTURE_TMP, { recursive: true });
   const dir = mkdtempSync(join(FIXTURE_TMP, 'cls-side-rail-'));
@@ -258,6 +293,65 @@ function makeSideRailSite(): string {
     '<html><head><title>API</title></head><body><main><section id="api"><h1>API</h1></section></main></body></html>',
   );
   writeFileSync(join(dir, 'styles.css'), '.docs-sidebar { position: sticky; top: 0; }');
+  return dir;
+}
+
+function makeHeaderOverlaySideRailSite(): string {
+  mkdirSync(FIXTURE_TMP, { recursive: true });
+  const dir = mkdtempSync(join(FIXTURE_TMP, 'cls-header-overlay-side-rail-'));
+  writeFileSync(
+    join(dir, 'index.html'),
+    '<html><head><title>Home</title><link rel="stylesheet" href="styles.css"></head><body>' +
+      '<header class="site-header"><nav><a href="intro.html">Docs Home</a><a href="api.html">API Home</a></nav></header>' +
+      '<div id="nav-overlay" aria-hidden="true"></div>' +
+      '<div class="docs-layout"><aside id="sidebar" class="docs-sidebar"><nav>' +
+      '<a href="intro.html">Intro</a><a href="api.html">API</a>' +
+      '</nav></aside><main><section id="overview"><h1>Overview</h1><p>Welcome.</p></section></main></div>' +
+      '<script src="site.js"></script>' +
+      '</body></html>',
+  );
+  writeFileSync(join(dir, 'intro.html'), '<html><head><title>Intro</title></head><body><main><section id="intro"><h1>Intro</h1></section></main></body></html>');
+  writeFileSync(join(dir, 'api.html'), '<html><head><title>API</title></head><body><main><section id="api"><h1>API</h1></section></main></body></html>');
+  writeFileSync(join(dir, 'styles.css'), '.site-header { display: flex; } .docs-sidebar { position: sticky; top: 0; }');
+  writeFileSync(join(dir, 'site.js'), "document.documentElement.classList.add('js-ready');");
+  return dir;
+}
+
+function makeNavOverlayMountSite(): string {
+  mkdirSync(FIXTURE_TMP, { recursive: true });
+  const dir = mkdtempSync(join(FIXTURE_TMP, 'cls-nav-overlay-mount-'));
+  writeFileSync(
+    join(dir, 'index.html'),
+    '<html><head><title>Home</title><link rel="stylesheet" href="styles.css"></head><body>' +
+      '<nav id="primary-nav"><a href="intro.html">Intro</a><a href="api.html">API</a></nav>' +
+      '<div id="nav-overlay" aria-hidden="true"></div>' +
+      '<main><section id="overview"><h1>Overview</h1><p>Welcome.</p></section></main>' +
+      '<script src="site.js"></script>' +
+      '</body></html>',
+  );
+  writeFileSync(join(dir, 'intro.html'), '<html><head><title>Intro</title></head><body><main><section id="intro"><h1>Intro</h1></section></main></body></html>');
+  writeFileSync(join(dir, 'api.html'), '<html><head><title>API</title></head><body><main><section id="api"><h1>API</h1></section></main></body></html>');
+  writeFileSync(join(dir, 'styles.css'), '#primary-nav { display: flex; gap: 1rem; }');
+  writeFileSync(join(dir, 'site.js'), "document.documentElement.classList.add('js-ready');");
+  return dir;
+}
+
+function makeHeaderWithDroppedStandaloneNavSite(): string {
+  mkdirSync(FIXTURE_TMP, { recursive: true });
+  const dir = mkdtempSync(join(FIXTURE_TMP, 'cls-header-dropped-standalone-nav-'));
+  writeFileSync(
+    join(dir, 'index.html'),
+    '<html><head><title>Home</title><link rel="stylesheet" href="styles.css"></head><body>' +
+      '<header class="site-header"><nav><a href="about.html">Header About</a><a href="docs.html">Header Docs</a></nav></header>' +
+      '<nav id="standalone-nav"><a href="intro.html">Standalone Intro</a><a href="api.html">Standalone API</a></nav>' +
+      '<main><section id="hero"><h1>Hi</h1><p>Body content survives.</p></section></main>' +
+      '</body></html>',
+  );
+  writeFileSync(join(dir, 'about.html'), '<html><head><title>About</title></head><body><main><section id="about"><h1>About</h1></section></main></body></html>');
+  writeFileSync(join(dir, 'docs.html'), '<html><head><title>Docs</title></head><body><main><section id="docs"><h1>Docs</h1></section></main></body></html>');
+  writeFileSync(join(dir, 'intro.html'), '<html><head><title>Intro</title></head><body><main><section id="intro"><h1>Intro</h1></section></main></body></html>');
+  writeFileSync(join(dir, 'api.html'), '<html><head><title>API</title></head><body><main><section id="api"><h1>API</h1></section></main></body></html>');
+  writeFileSync(join(dir, 'styles.css'), '.site-header { display: flex; gap: 1rem; } #standalone-nav { display: flex; gap: 1rem; }');
   return dir;
 }
 
@@ -935,6 +1029,50 @@ describe('convertLocalSiteHandler', () => {
     }
   });
 
+  it('prefers a contentful source header over an empty aria-hidden mount', async () => {
+    const dir = makeHeaderWithOverlayMountSite();
+    const sitePath = makeStudioSite();
+    const outDir = mkdtempSync(join(FIXTURE_TMP, 'cls-header-overlay-mount-out-'));
+    try {
+      const res = await convertLocalSiteHandler(
+        { dir, studioSitePath: sitePath, outputDir: outDir, themeSlug: 'acme-local', siteTitle: 'Acme', skipDesign: true },
+        ctx,
+      );
+      expect(res.isError).toBeFalsy();
+      const headerHtml = readFileSync(join(sitePath, 'wp-content', 'themes', 'acme-local', 'parts', 'header.html'), 'utf8');
+      expect(headerHtml).toContain('site-header');
+      expect(headerHtml).toContain('Intro');
+      expect(headerHtml).toContain('API');
+      expect(headerHtml).not.toContain('nav-overlay');
+      expect(headerHtml).not.toContain('wp:site-title');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(sitePath, { recursive: true, force: true });
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
+  it('preserves the empty header mount path when no real source header exists', async () => {
+    const dir = makeEmptyHeaderMountOnlySite();
+    const sitePath = makeStudioSite();
+    const outDir = mkdtempSync(join(FIXTURE_TMP, 'cls-empty-header-mount-out-'));
+    try {
+      const res = await convertLocalSiteHandler(
+        { dir, studioSitePath: sitePath, outputDir: outDir, themeSlug: 'acme-local', siteTitle: 'Acme', skipDesign: true },
+        ctx,
+      );
+      expect(res.isError).toBeFalsy();
+      const headerHtml = readFileSync(join(sitePath, 'wp-content', 'themes', 'acme-local', 'parts', 'header.html'), 'utf8');
+      expect(headerHtml).toContain('"anchor":"siteHeader"');
+      expect(headerHtml).toContain('<div id="siteHeader" class="wp-block-group runtime-header"></div>');
+      expect(headerHtml).not.toContain('wp:site-title');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(sitePath, { recursive: true, force: true });
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
   it('carries a layout-level side rail into the source header part', async () => {
     const dir = makeSideRailSite();
     const sitePath = makeStudioSite();
@@ -960,6 +1098,29 @@ describe('convertLocalSiteHandler', () => {
     }
   });
 
+  it('carries a recognized layout rail into the rendered header part when a real header beats an empty mount', async () => {
+    const dir = makeHeaderOverlaySideRailSite();
+    const sitePath = makeStudioSite();
+    const outDir = mkdtempSync(join(FIXTURE_TMP, 'cls-header-overlay-side-rail-out-'));
+    try {
+      const res = await convertLocalSiteHandler(
+        { dir, studioSitePath: sitePath, outputDir: outDir, themeSlug: 'acme-local', siteTitle: 'Acme', skipDesign: true },
+        ctx,
+      );
+      expect(res.isError).toBeFalsy();
+      const headerHtml = readFileSync(join(sitePath, 'wp-content', 'themes', 'acme-local', 'parts', 'header.html'), 'utf8');
+      expect(headerHtml).toContain('site-header');
+      expect(headerHtml).toContain('docs-sidebar');
+      expect(headerHtml).toContain('Intro');
+      expect(headerHtml).toContain('API');
+      expect(headerHtml).not.toContain('nav-overlay');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(sitePath, { recursive: true, force: true });
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
   it('does not fold a standalone body-direct nav into the carried header part', async () => {
     const dir = makeHeaderWithStandaloneNavSite();
     const sitePath = makeStudioSite();
@@ -975,6 +1136,140 @@ describe('convertLocalSiteHandler', () => {
       expect(headerHtml).toContain('Header About');
       expect(headerHtml).not.toContain('standalone-nav');
       expect(headerHtml).not.toContain('Standalone Nav');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(sitePath, { recursive: true, force: true });
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
+  it('bases local region audit on rendered header markup when chrome intent is dropped', async () => {
+    const dir = makeNavOverlayMountSite();
+    const sitePath = makeStudioSite();
+    const outDir = mkdtempSync(join(FIXTURE_TMP, 'cls-region-audit-rendered-drop-out-'));
+    try {
+      const res = await convertLocalSiteHandler(
+        {
+          dir,
+          studioSitePath: sitePath,
+          outputDir: outDir,
+          themeSlug: 'acme-local',
+          siteTitle: 'Acme',
+          skipDesign: true,
+          failOnConservationRailDrop: true,
+        },
+        ctx,
+      );
+      expect(res.isError).toBe(true);
+      const summary = JSON.parse(res.content[0].text) as {
+        conservation: { ok: boolean; status: string; unassignedRegions: number; hardFailRegions: number };
+      };
+      expect(summary.conservation).toMatchObject({
+        ok: false,
+        status: 'fail',
+        unassignedRegions: 1,
+        hardFailRegions: 1,
+      });
+      const report = JSON.parse(readFileSync(join(outDir, 'region-audit.json'), 'utf8')) as {
+        pages: Array<{ assignments: Array<{ landmark: { selector: string; role: string }; kind: string }> }>;
+      };
+      expect(report.pages[0].assignments).toContainEqual({
+        landmark: expect.objectContaining({ selector: 'nav#primary-nav', role: 'nav' }),
+        kind: 'unassigned',
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(sitePath, { recursive: true, force: true });
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not let a rendered header mask a separate dropped standalone nav in region audit', async () => {
+    const dir = makeHeaderWithDroppedStandaloneNavSite();
+    const sitePath = makeStudioSite();
+    const outDir = mkdtempSync(join(FIXTURE_TMP, 'cls-region-audit-rendered-header-dropped-nav-out-'));
+    try {
+      const res = await convertLocalSiteHandler(
+        {
+          dir,
+          studioSitePath: sitePath,
+          outputDir: outDir,
+          themeSlug: 'acme-local',
+          siteTitle: 'Acme',
+          skipDesign: true,
+          failOnConservationRailDrop: true,
+        },
+        ctx,
+      );
+      expect(res.isError).toBe(true);
+      const summary = JSON.parse(res.content[0].text) as {
+        conservation: { ok: boolean; status: string; unassignedRegions: number; hardFailRegions: number };
+      };
+      expect(summary.conservation).toMatchObject({
+        ok: false,
+        status: 'fail',
+        unassignedRegions: 1,
+        hardFailRegions: 1,
+      });
+      const headerHtml = readFileSync(join(sitePath, 'wp-content', 'themes', 'acme-local', 'parts', 'header.html'), 'utf8');
+      expect(headerHtml).toContain('site-header');
+      expect(headerHtml).not.toContain('standalone-nav');
+      const report = JSON.parse(readFileSync(join(outDir, 'region-audit.json'), 'utf8')) as {
+        pages: Array<{ assignments: Array<{ landmark: { selector: string; role: string }; kind: string }> }>;
+      };
+      expect(report.pages[0].assignments).toContainEqual({
+        landmark: expect.objectContaining({ selector: 'header.site-header', role: 'header' }),
+        kind: 'header_part',
+      });
+      expect(report.pages[0].assignments).toContainEqual({
+        landmark: expect.objectContaining({ selector: 'nav#standalone-nav', role: 'nav' }),
+        kind: 'unassigned',
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(sitePath, { recursive: true, force: true });
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
+  it('bases local region audit on rendered header markup when carried chrome is present', async () => {
+    const dir = makeHeaderOverlaySideRailSite();
+    const sitePath = makeStudioSite();
+    const outDir = mkdtempSync(join(FIXTURE_TMP, 'cls-region-audit-rendered-present-out-'));
+    try {
+      const res = await convertLocalSiteHandler(
+        {
+          dir,
+          studioSitePath: sitePath,
+          outputDir: outDir,
+          themeSlug: 'acme-local',
+          siteTitle: 'Acme',
+          skipDesign: true,
+          failOnConservationRailDrop: true,
+        },
+        ctx,
+      );
+      expect(res.isError).toBeFalsy();
+      const summary = JSON.parse(res.content[0].text) as {
+        conservation: { ok: boolean; status: string; unassignedRegions: number; hardFailRegions: number };
+      };
+      expect(summary.conservation).toMatchObject({
+        ok: true,
+        status: 'pass',
+        unassignedRegions: 0,
+        hardFailRegions: 0,
+      });
+      const report = JSON.parse(readFileSync(join(outDir, 'region-audit.json'), 'utf8')) as {
+        pages: Array<{ assignments: Array<{ landmark: { selector: string; role: string }; kind: string }> }>;
+      };
+      expect(report.pages[0].assignments).toContainEqual({
+        landmark: expect.objectContaining({ selector: 'header.site-header', role: 'header' }),
+        kind: 'header_part',
+      });
+      expect(report.pages[0].assignments).toContainEqual({
+        landmark: expect.objectContaining({ selector: 'aside#sidebar.docs-sidebar', role: 'aside' }),
+        kind: 'header_part',
+      });
     } finally {
       rmSync(dir, { recursive: true, force: true });
       rmSync(sitePath, { recursive: true, force: true });
