@@ -174,6 +174,17 @@ function isInteractiveSubtree($: CheerioAPI, el: Element): boolean {
   return $(el).find('button, input, select, textarea, svg').length > 0;
 }
 
+/** A `<a class="btn|button">` CTA — the native-button emitter (the `tag === 'a'`
+ * branch below) keys off this same class signal. It is detected here too so the
+ * structural-wrapper branch can recognize a wrapper of pure CTAs and recurse
+ * them into core/button instead of freezing them in a verbatim core/html island
+ * (the inline-safe short-circuit otherwise swallows a lone wrapped button). */
+const BUTTON_CLASS_RE = /\b(button|btn)\b/i;
+function isButtonAnchor($: CheerioAPI, el: Element): boolean {
+  if ((el.tagName ?? '').toLowerCase() !== 'a') return false;
+  return BUTTON_CLASS_RE.test($(el).attr('class') ?? '');
+}
+
 /** An EMPTY element that carries a class is a pure styling hook — a CSS
  * background logo/icon (`<a class="brand-logo">` filled by background:url(svg)),
  * a divider, a spacer. The normal emitters downgrade it to an empty <p>,
@@ -275,17 +286,25 @@ function emitChild($: CheerioAPI, el: Element, sheet: InstanceStyleSheet, opts: 
     return { markup: imageBlock($, el), clean: true };
   }
 
-  if (tag === 'a' && /\b(button|btn)\b/i.test($el.attr('class') ?? '')) {
+  if (tag === 'a' && isButtonAnchor($, el)) {
     const href = escapeHtml($el.attr('href') ?? '');
     // Button labels are plain text — no inline markup inside the link.
     const label = escapeHtml($el.text().trim());
     const cls = classNameWithInstance($el, sheet);
-    const buttonAttrs = blockAttrs([], cls);
-    const divCls = ['wp-block-button', cls].filter(Boolean).join(' ');
-    // Source classes ride on the INNER anchor too: the source styles the
-    // anchor itself (a.button { … }), so carried CSS must match the real <a>.
-    // (Supersedes the earlier wrapper-only rule, which was tokens-path
-    // reasoning — under carry, anchor selectors are the parity mechanism.)
+    // The source button class + a `lib-cta` marker ride core/button's className
+    // ATTRIBUTE, so canonicalization (@wordpress/blocks) keeps them on the
+    // .wp-block-button WRAPPER — the only place a custom class survives the
+    // fixer (it strips arbitrary classes off the inner __link anchor). The
+    // carried source `.btn`/`.btn-*` rules therefore style the wrapper pill;
+    // `lib-cta` scopes the WP_COMPAT reset that strips the inner anchor's own
+    // default WP button chrome (fill bg + padding) so it doesn't paint a second
+    // pill inside the source one.
+    const buttonCls = [cls, 'lib-cta'].filter(Boolean).join(' ');
+    const buttonAttrs = blockAttrs([], buttonCls);
+    const divCls = ['wp-block-button', buttonCls].filter(Boolean).join(' ');
+    // Source class is also written to the inner anchor for the pre-fixer sidecar
+    // (a.button { … } sites) even though canonicalization later drops it — the
+    // surviving styling is the wrapper class above + the lib-cta reset.
     const aCls = ['wp-block-button__link', 'wp-element-button', cls].filter(Boolean).join(' ');
     return {
       markup:
@@ -383,9 +402,15 @@ function emitChild($: CheerioAPI, el: Element, sheet: InstanceStyleSheet, opts: 
         .every((d) => INLINE_ALLOWED.has(((d as Element).tagName ?? '').toLowerCase()));
     };
     const allInline = elementChildren.length > 0 && elementChildren.every((c) => isInlineSafe(c as Element));
+    // A wrapper whose children are ALL button-anchors is a CTA row, not inline
+    // content to freeze: recurse so each anchor reaches the core/button emitter
+    // (otherwise allInline traps the lone wrapped button in a verbatim html
+    // island). Mixed wrappers (button + spans/text) keep the inline path so
+    // their span class hooks survive verbatim — only pure-CTA wrappers divert.
+    const allButtons = elementChildren.length > 0 && elementChildren.every((c) => isButtonAnchor($, c as Element));
     let body: string;
     let clean: boolean;
-    if (allInline) {
+    if (allInline && !allButtons) {
       // Inline body rides a core/html INNER block: placed raw inside the group
       // the fixer would delete it (core/group expects inner BLOCKS); core/html
       // preserves it verbatim and renders the spans inline (.num/.ph__tag).

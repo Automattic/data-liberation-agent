@@ -48,6 +48,24 @@ nav.wp-block-navigation ul, nav.wp-block-navigation li { display: contents; }
    lower). Class-level specificity is required to beat WP's own class rule;
    safe because no source stylesheet targets a wp-* class. */
 .wp-block-post-content { display: block; }
+/* core/button renders TWO boxes: the source button class lands on the
+   .wp-block-button WRAPPER (core/button stores className there; the fixer
+   strips it off the inner link), so the carried .btn/.btn-* rules style the
+   wrapper pill — while WP still paints the inner .wp-block-button__link with
+   its own default button chrome (fill bg + padding + radius), a second pill
+   inside the source one. Strip the inner link's box so the carried wrapper
+   style renders once. The lib-cta marker (emit-blocks) scopes this to carried
+   buttons so genuine native core/button blocks keep their chrome; class-level
+   specificity beats WP's :where()/global-styles button defaults, and source
+   stylesheets never target wp-* classes. */
+.wp-block-button.lib-cta > .wp-block-button__link {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  border-radius: inherit;
+  color: inherit;
+  text-decoration: none;
+}
 `;
 
 const GOOGLE_IMPORT_RE = /@import\s+url\(\s*['"]?https:\/\/fonts\.googleapis\.com[^)]*\)\s*;?/g;

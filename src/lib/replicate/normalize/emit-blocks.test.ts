@@ -332,11 +332,52 @@ describe('emitSectionBlocks', () => {
     expect(markup).toContain('"className":"lede"');
     expect(markup).toContain('"className":"pic"');
     expect(markup).toContain('"className":"list-x"');
-    expect(markup).toContain('"className":"button cta"');     // on wp:button
-    // Stage 1d: source classes ride the INNER anchor too — the source styles
-    // a.button{…} directly, so carried CSS must match the real <a>. WP's own
-    // classes stay first (serializer shape).
+    expect(markup).toContain('"className":"button cta lib-cta"'); // wrapper attr + lib-cta marker
+    // Source classes ride the INNER anchor too for the pre-fixer sidecar; WP's
+    // own classes stay first (serializer shape). Canonicalization later drops
+    // the anchor's source class — the surviving styling is the wrapper className
+    // above + the lib-cta-scoped inner-anchor reset in WP_COMPAT_CSS.
     expect(markup).toContain('class="wp-block-button__link wp-element-button button cta" href');
+  });
+
+  it('emits a native button when a button-anchor is the lone child of a wrapper div', () => {
+    // Source wraps each CTA alone in a container (.ticket-footer > a.btn). The
+    // wrapper's only child is inline-safe, which short-circuited the whole inner
+    // into a verbatim core/html island — bypassing the button converter. A
+    // wrapper whose element children are ALL button-anchors must recurse so each
+    // anchor reaches the core/button emitter.
+    const section = {
+      id: 's',
+      role: 'body' as const,
+      classes: [],
+      html: '<section><div class="ticket-footer"><a href="#register" class="btn btn-forest">Register</a></div></section>',
+    };
+    const { markup } = emitSectionBlocks(section);
+    expect(blockMarkupRoundtrips(markup).ok).toBe(true);
+    // The wrapper survives as a group carrying its source class.
+    expect(markup).toContain('class="wp-block-group ticket-footer"');
+    // The CTA is a native button, not a frozen verbatim html island.
+    expect(markup).toContain('<!-- wp:button');
+    expect(markup).toContain('class="wp-block-button__link wp-element-button btn btn-forest" href="#register"');
+    expect(markup).not.toMatch(/<!-- wp:html -->\s*<a [^>]*class="btn/);
+    // The source class + lib-cta marker ride the className ATTRIBUTE so they
+    // survive canonicalization on the .wp-block-button wrapper (the fixer keeps
+    // className there); lib-cta scopes the WP_COMPAT inner-anchor reset.
+    expect(markup).toContain('"className":"btn btn-forest lib-cta"');
+    expect(markup).toContain('<div class="wp-block-button btn btn-forest lib-cta">');
+  });
+
+  it('emits native buttons for a wrapper holding multiple button-anchors', () => {
+    const section = {
+      id: 's',
+      role: 'body' as const,
+      classes: [],
+      html: '<section><div class="cta-row"><a class="btn" href="/a/">A</a><a class="btn" href="/b/">B</a></div></section>',
+    };
+    const { markup } = emitSectionBlocks(section);
+    expect(blockMarkupRoundtrips(markup).ok).toBe(true);
+    expect(markup.match(/<!-- wp:button /g)?.length).toBe(2);
+    expect(markup).not.toContain('<!-- wp:html -->');
   });
 
   it('escapes double quotes in class attrs landing in HTML', () => {

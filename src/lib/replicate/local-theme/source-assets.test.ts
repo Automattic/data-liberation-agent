@@ -15,6 +15,16 @@ function makeSite(): string {
   return dir;
 }
 
+describe('WP_COMPAT_CSS', () => {
+  it('strips the inner core/button link chrome for carried (lib-cta) buttons so the wrapper pill renders once', () => {
+    expect(WP_COMPAT_CSS).toContain('.wp-block-button.lib-cta > .wp-block-button__link');
+    // The reset must zero the box that would paint a second pill.
+    const rule = WP_COMPAT_CSS.slice(WP_COMPAT_CSS.indexOf('.wp-block-button.lib-cta'));
+    expect(rule).toMatch(/background:\s*transparent/);
+    expect(rule).toMatch(/padding:\s*0/);
+  });
+});
+
 describe('collectSourceAssets', () => {
   it('concatenates css (linked + inline) with google imports stripped and compat layer prepended', () => {
     const dir = makeSite();
