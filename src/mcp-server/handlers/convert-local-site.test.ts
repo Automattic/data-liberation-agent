@@ -297,6 +297,34 @@ function makeInteriorRailLeakSite(): string {
   return dir;
 }
 
+function makeHomeComplementaryRailSite(): string {
+  mkdirSync(FIXTURE_TMP, { recursive: true });
+  const dir = mkdtempSync(join(FIXTURE_TMP, 'cls-home-complementary-rail-'));
+  writeFileSync(
+    join(dir, 'index.html'),
+    '<html><head><title>Home</title></head><body>' +
+      '<div role="complementary" id="docs-rail"><a href="intro.html">Intro</a><a href="api.html">API</a></div>' +
+      '<main><section id="home-copy"><h1>Home</h1><p>The home body remains installed.</p></section></main>' +
+      '</body></html>',
+  );
+  writeFileSync(join(dir, 'intro.html'), '<html><head><title>Intro</title></head><body><main><section id="intro"><h1>Intro</h1></section></main></body></html>');
+  writeFileSync(join(dir, 'api.html'), '<html><head><title>API</title></head><body><main><section id="api"><h1>API</h1></section></main></body></html>');
+  return dir;
+}
+
+function makeHomePlainAsideSite(): string {
+  mkdirSync(FIXTURE_TMP, { recursive: true });
+  const dir = mkdtempSync(join(FIXTURE_TMP, 'cls-home-plain-aside-'));
+  writeFileSync(
+    join(dir, 'index.html'),
+    '<html><head><title>Home</title></head><body>' +
+      '<aside id="promo-note">This aside is standalone source text, but it is not a nav or complementary rail.</aside>' +
+      '<main><section id="home-copy"><h1>Home</h1><p>The home body remains installed.</p></section></main>' +
+      '</body></html>',
+  );
+  return dir;
+}
+
 function makeFormSite(): string {
   mkdirSync(FIXTURE_TMP, { recursive: true });
   const dir = mkdtempSync(join(FIXTURE_TMP, 'cls-form-'));
@@ -387,7 +415,14 @@ describe('convertLocalSiteHandler', () => {
     const outDir = mkdtempSync(join(FIXTURE_TMP, 'cls-out-'));
     try {
       const res = await convertLocalSiteHandler(
-        { dir, studioSitePath: sitePath, outputDir: outDir, themeSlug: 'acme-local', siteTitle: 'Acme', skipDesign: true },
+        {
+          dir,
+          studioSitePath: sitePath,
+          outputDir: outDir,
+          themeSlug: 'acme-local',
+          siteTitle: 'Acme',
+          skipDesign: true,
+        },
         ctx,
       );
       expect(res.isError).toBeFalsy();
@@ -489,7 +524,14 @@ describe('convertLocalSiteHandler', () => {
     execFailFor = 'theme activate';
     try {
       const res = await convertLocalSiteHandler(
-        { dir, studioSitePath: sitePath, outputDir: outDir, themeSlug: 'acme-local', siteTitle: 'Acme', skipDesign: true },
+        {
+          dir,
+          studioSitePath: sitePath,
+          outputDir: outDir,
+          themeSlug: 'acme-local',
+          siteTitle: 'Acme',
+          skipDesign: true,
+        },
         ctx,
       );
       expect(res.isError).toBeFalsy();
@@ -511,7 +553,14 @@ describe('convertLocalSiteHandler', () => {
     installFailFor = 'about';
     try {
       const res = await convertLocalSiteHandler(
-        { dir, studioSitePath: sitePath, outputDir: outDir, themeSlug: 'acme-local', siteTitle: 'Acme', skipDesign: true },
+        {
+          dir,
+          studioSitePath: sitePath,
+          outputDir: outDir,
+          themeSlug: 'acme-local',
+          siteTitle: 'Acme',
+          skipDesign: true,
+        },
         ctx,
       );
       expect(res.isError).toBeFalsy();
@@ -943,6 +992,119 @@ describe('convertLocalSiteHandler', () => {
           reason: 'actionable_region_unplaced',
         },
       ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(sitePath, { recursive: true, force: true });
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
+  it('reports local region-audit conservation as warn by default without changing install summary fields', async () => {
+    const dir = makeHomeComplementaryRailSite();
+    const sitePath = makeStudioSite();
+    const outDir = mkdtempSync(join(FIXTURE_TMP, 'cls-region-audit-warn-out-'));
+    try {
+      const res = await convertLocalSiteHandler(
+        {
+          dir,
+          studioSitePath: sitePath,
+          outputDir: outDir,
+          themeSlug: 'acme-local',
+          siteTitle: 'Acme',
+          skipDesign: true,
+          carryCss: false,
+        },
+        ctx,
+      );
+      expect(res.isError).toBeFalsy();
+      const summary = JSON.parse(res.content[0].text) as {
+        pages: number;
+        installed: number;
+        themeSlug: string;
+        frontPageSet: boolean;
+        conservationLeaks: { count: number; artifact: string };
+        conservation: { ok: boolean; status: string; unassignedRegions: number; hardFailRegions: number; artifact: string };
+      };
+      expect(summary.pages).toBe(3);
+      expect(summary.installed).toBe(3);
+      expect(summary.themeSlug).toBe('acme-local');
+      expect(summary.frontPageSet).toBe(true);
+      expect(summary.conservationLeaks.artifact).toBe(join(outDir, 'conservation-leaks.json'));
+      expect(summary.conservation.status).toBe('warn');
+      expect(summary.conservation.ok).toBe(true);
+      expect(summary.conservation.unassignedRegions).toBe(1);
+      expect(summary.conservation.hardFailRegions).toBe(0);
+      expect(summary.conservation.artifact).toBe(join(outDir, 'region-audit.json'));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(sitePath, { recursive: true, force: true });
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
+  it('hard-fails only an opt-in unassigned real rail', async () => {
+    const dir = makeHomeComplementaryRailSite();
+    const sitePath = makeStudioSite();
+    const outDir = mkdtempSync(join(FIXTURE_TMP, 'cls-region-audit-fail-out-'));
+    try {
+      const res = await convertLocalSiteHandler(
+        {
+          dir,
+          studioSitePath: sitePath,
+          outputDir: outDir,
+          themeSlug: 'acme-local',
+          siteTitle: 'Acme',
+          skipDesign: true,
+          carryCss: false,
+          failOnConservationRailDrop: true,
+        },
+        ctx,
+      );
+      expect(res.isError).toBe(true);
+      const summary = JSON.parse(res.content[0].text) as {
+        conservation: { ok: boolean; status: string; unassignedRegions: number; hardFailRegions: number };
+      };
+      expect(summary.conservation).toMatchObject({
+        ok: false,
+        status: 'fail',
+        unassignedRegions: 1,
+        hardFailRegions: 1,
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(sitePath, { recursive: true, force: true });
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not hard-fail an unassigned plain aside outside the hard-fail role set', async () => {
+    const dir = makeHomePlainAsideSite();
+    const sitePath = makeStudioSite();
+    const outDir = mkdtempSync(join(FIXTURE_TMP, 'cls-region-audit-aside-out-'));
+    try {
+      const res = await convertLocalSiteHandler(
+        {
+          dir,
+          studioSitePath: sitePath,
+          outputDir: outDir,
+          themeSlug: 'acme-local',
+          siteTitle: 'Acme',
+          skipDesign: true,
+          carryCss: false,
+          failOnConservationRailDrop: true,
+        },
+        ctx,
+      );
+      expect(res.isError).toBeFalsy();
+      const summary = JSON.parse(res.content[0].text) as {
+        conservation: { ok: boolean; status: string; unassignedRegions: number; hardFailRegions: number };
+      };
+      expect(summary.conservation).toMatchObject({
+        ok: true,
+        status: 'warn',
+        unassignedRegions: 1,
+        hardFailRegions: 0,
+      });
     } finally {
       rmSync(dir, { recursive: true, force: true });
       rmSync(sitePath, { recursive: true, force: true });

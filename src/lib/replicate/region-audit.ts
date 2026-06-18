@@ -26,15 +26,20 @@ export interface RegionSelectionReport {
 }
 
 const ACTIONABLE_TEXT_MIN = 24;
+const ACTIONABLE_LINK_MIN = 2;
 
 function classify(l: SourceLandmark, placed: PlacedRegion[]): RegionAssignmentKind {
-  if (l.textLength < ACTIONABLE_TEXT_MIN && l.mediaCount === 0) return 'non_actionable';
+  if (l.textLength < ACTIONABLE_TEXT_MIN && l.mediaCount === 0 && (l.linkCount ?? 0) < ACTIONABLE_LINK_MIN) return 'non_actionable';
   const hasHeader = placed.some((p) => p.kind === 'header_part');
   const hasFooter = placed.some((p) => p.kind === 'footer_part');
   const bodySelectors = new Set(placed.filter((p) => p.kind === 'page_body_section').map((p) => p.selector));
   if ((l.role === 'header' || l.role === 'nav') && hasHeader) return 'header_part';
   if (l.role === 'footer' && hasFooter) return 'footer_part';
   if (l.role === 'main' || l.role === 'article') return bodySelectors.size > 0 ? 'page_body_section' : 'unassigned';
+  if (l.role === 'aside' || l.role === 'complementary') {
+    const placedLandmark = placed.find((p) => p.role === l.role);
+    if (placedLandmark) return placedLandmark.kind;
+  }
   if (bodySelectors.has(l.selector)) return 'page_body_section';
   return 'unassigned';
 }

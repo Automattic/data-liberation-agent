@@ -57,9 +57,19 @@ import { buildJetpackFormParityCss } from '../../lib/replicate/local-site/jetpac
 import { JETPACK_FORM_PARITY_CSS } from '../../lib/replicate/local-theme/jetpack-form-parity-contract.js';
 import { detectBehaviors } from '../../lib/replicate/normalize/detect-behaviors.js';
 import { checkConservationLeaks } from '../../lib/replicate/normalize/conservation-check.js';
+import { extractSourceLandmarksFromHtml, landmarkRoleForHtmlRoot, selectorForHtmlRoot } from '../../lib/replicate/region-census.js';
+import { reconcileRegions, type PlacedRegion } from '../../lib/replicate/region-audit.js';
 import { buildInteractivityPlugin, PLUGIN_SLUG } from '../../blocks/interactivity-plugin.js';
 import type { DetectedBehaviors, Section } from '../../lib/replicate/local-site/types.js';
 import type { ConservationLeak } from '../../lib/replicate/normalize/conservation-leak.js';
+import {
+  LOCAL_CONSERVATION_HARD_FAIL_ARG,
+  LOCAL_CONSERVATION_HARD_FAIL_ROLES,
+  LOCAL_CONSERVATION_RAIL_LINK_THRESHOLD,
+  LOCAL_CONSERVATION_REPORT_SCHEMA,
+  type LocalConservationRegionAudit,
+  type LocalConservationSummary,
+} from './convert-local-site-conservation-contract.js';
 import { CLEAR_INTERVALS_SCRIPT, FREEZE_MOTION_CSS, probePair, type Divergence } from '../../lib/replicate/parity/parity-probe.js';
 import { extractDiffRegions } from '../../lib/replicate/parity/diff-regions.js';
 import { classifyDivergences, renderPatchCss, divergenceFingerprint, suppressPageConflicts, type UnresolvedDivergence, type PatchOverride, type RepairPlan } from '../../lib/replicate/parity/parity-classify.js';
@@ -93,6 +103,26 @@ function combineCarriedHeaderChrome(header: Section, extraChrome: Section[]): Se
     ...header,
     html: `<div class="dla-carried-header-chrome">${html}</div>`,
     classes: ['dla-carried-header-chrome'],
+  };
+}
+
+function isPlacedRegionRole(role: string | undefined): role is NonNullable<PlacedRegion['role']> {
+  return role === 'header' || role === 'nav' || role === 'footer' || role === 'aside' || role === 'complementary';
+}
+
+function chromePlacedRegion(section: Section, kind: 'header_part' | 'footer_part'): PlacedRegion {
+  const role = landmarkRoleForHtmlRoot(section.html);
+  return {
+    kind,
+    selector: selectorForHtmlRoot(section.html),
+    ...(isPlacedRegionRole(role) ? { role } : {}),
+  };
+}
+
+function bodyPlacedRegion(section: Section): PlacedRegion {
+  return {
+    kind: 'page_body_section',
+    selector: selectorForHtmlRoot(section.html),
   };
 }
 
@@ -157,6 +187,7 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
   const editorSurface = args.editorSurface === true;
   const repair = args.repair !== false;
   const maxRepairRounds = Math.min(Math.max(Number(args.maxRepairRounds ?? 2), 0), 5);
+  const failOnConservationRailDrop = args[LOCAL_CONSERVATION_HARD_FAIL_ARG] === true;
   // Stage 1d: carry the source site's own CSS/JS into the theme so the class-
   // preserving block DOM renders under the designer's stylesheet. Default ON
   // (identical replication goal); pass carryCss:false / carryJs:false to opt out.
@@ -741,6 +772,51 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
   } catch (err) {
     warnings.push(`conservation leaks report write failed: ${(err as Error).message}`);
   }
+  const localRegionReportPath = join(outputDir, 'region-audit.json');
+  const localCensus = extractSourceLandmarksFromHtml(home.html);
+  const localPlacedRegions: PlacedRegion[] = [
+    ...homeSegments.filter((s) => s.role === 'body').map(bodyPlacedRegion),
+  ];
+  if (headerSection && headerSection.chromeSource !== 'layout-rail') {
+    localPlacedRegions.push(chromePlacedRegion(headerSection, 'header_part'));
+  }
+  if (footerSection) localPlacedRegions.push(chromePlacedRegion(footerSection, 'footer_part'));
+  if (chromeCarried && carriedHeaderSection) {
+    for (const rail of homeSegments.filter((s) => s.chromeSource === 'layout-rail')) {
+      localPlacedRegions.push(chromePlacedRegion(rail, 'header_part'));
+    }
+  }
+  const localRegionReport = reconcileRegions(localCensus, localPlacedRegions, home.slug, home.relPath);
+  const candidateHardFailRegions = localRegionReport.unassignedRegions.filter(
+    (region) =>
+      (LOCAL_CONSERVATION_HARD_FAIL_ROLES as readonly string[]).includes(region.role) &&
+      (region.linkCount ?? 0) >= LOCAL_CONSERVATION_RAIL_LINK_THRESHOLD,
+  );
+  const hardFailRegions = failOnConservationRailDrop ? candidateHardFailRegions : [];
+  const conservation: LocalConservationSummary = {
+    ok: hardFailRegions.length === 0,
+    status: hardFailRegions.length > 0 ? 'fail' : localRegionReport.counts.unassigned > 0 ? 'warn' : 'pass',
+    unassignedRegions: localRegionReport.counts.unassigned,
+    hardFailRegions: hardFailRegions.length,
+    artifact: localRegionReportPath,
+    railHardFail: {
+      enabled: failOnConservationRailDrop,
+      roles: LOCAL_CONSERVATION_HARD_FAIL_ROLES,
+      minLinks: LOCAL_CONSERVATION_RAIL_LINK_THRESHOLD,
+    },
+  };
+  try {
+    const regionAudit: LocalConservationRegionAudit = {
+      schema: LOCAL_CONSERVATION_REPORT_SCHEMA,
+      site: dir,
+      pages: [localRegionReport],
+      unassignedRegions: localRegionReport.counts.unassigned,
+      hardFailRegions,
+    };
+    writeAtomicTextFile(localRegionReportPath, JSON.stringify(regionAudit, null, 2) + '\n');
+  } catch (err) {
+    warnings.push(`region audit write failed: ${(err as Error).message}`);
+  }
   const installed: Array<{ slug: string; postId: number | null }> = [];
   const failedInstalls: Array<{ slug: string; error: string }> = [];
   for (const item of plan.items) {
@@ -1263,7 +1339,7 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
     }
   }
 
-  return ctx.textResult({
+  const result = ctx.textResult({
     pages: plan.items.length,
     installed: installed.length,
     ...(editorReport !== undefined ? { editorSurface: editorReport } : {}),
@@ -1280,6 +1356,7 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
       count: conservationLeaks.length,
       artifact: conservationReportPath,
     },
+    conservation,
     // Key OMITTED entirely when the flag is off — default summary stays byte-stable.
     // sticky reports EMISSION (stickyEmitted), not detection — see the header-part
     // site. tabs/slider/modal are per-section counts forwarded from the ingest
@@ -1299,4 +1376,6 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
     ...(parity !== undefined ? { parity } : {}),
     warnings,
   });
+  if (conservation.status === 'fail') result.isError = true;
+  return result;
 };

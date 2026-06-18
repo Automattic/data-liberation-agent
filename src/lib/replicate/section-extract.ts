@@ -2574,6 +2574,7 @@ export async function extractFull(
         selectorParts: selectorPartsOf(el),
         textLength: (el.textContent || '').replace(/\s+/g, ' ').trim().length,
         mediaCount: el.querySelectorAll('img,video,picture').length,
+        linkCount: el.querySelectorAll('a[href]').length,
       }));
       const rows = deduped.slice(0, 25).map((entry, i) => buildSection(entry, i));
       return { rows, landmarks };
@@ -2759,6 +2760,7 @@ export async function extractFull(
     selector: buildSelector(l.selectorParts as SelectorParts),
     textLength: l.textLength,
     mediaCount: l.mediaCount,
+    linkCount: l.linkCount,
   }));
   return { specs, landmarks };
 }

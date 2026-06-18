@@ -36,6 +36,29 @@ describe('reconcileRegions', () => {
     expect(r.unassignedRegions).toEqual([]);
   });
 
+  it('assigns aside and complementary landmarks when their placement is present', () => {
+    const census = [
+      L({ role: 'aside', tag: 'aside', selector: 'aside#rail', textLength: 80, mediaCount: 0 }),
+      L({ role: 'complementary', tag: 'div', selector: 'div#tools', textLength: 80, mediaCount: 0 }),
+    ];
+    const r = reconcileRegions(census, [
+      { kind: 'header_part', role: 'aside' },
+      { kind: 'header_part', role: 'complementary' },
+    ]);
+    expect(r.unassignedRegions).toEqual([]);
+    expect(r.assignments.map((a) => a.kind)).toEqual(['header_part', 'header_part']);
+  });
+
+  it('reports aside and complementary landmarks as unassigned when placed nowhere', () => {
+    const census = [
+      L({ role: 'aside', tag: 'aside', selector: 'aside#rail', textLength: 80, mediaCount: 0 }),
+      L({ role: 'complementary', tag: 'div', selector: 'div#tools', textLength: 80, mediaCount: 0 }),
+    ];
+    const r = reconcileRegions(census, []);
+    expect(r.unassignedRegions.map((x) => x.role)).toEqual(['aside', 'complementary']);
+    expect(r.counts.unassigned).toBe(2);
+  });
+
   // Regression: a source page with a real nav whose content was DROPPED by the
   // build (chrome extraction yielded no header → no header_part placed) must
   // surface the nav as the one unassigned region, while the placed main + footer

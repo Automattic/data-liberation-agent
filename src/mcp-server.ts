@@ -709,6 +709,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           dataModel: { type: 'boolean', description: 'WordPress-driven data path: when a data-model.json (from the model-local-data skill) is present in outputDir/dir, register a CPT+taxonomy via generated mu-plugins, insert items idempotently, and replace empty JS-mount grids with native core/query loops (dla/data-card cards) while neutralizing the JS data-mounts and rebinding modal lookups to per-card DOM islands. Default on when the file exists; pass false to force off.' },
           repair: { type: 'boolean', description: 'Deterministic parity repair loop: diff regions → computed-style probe → generated parity-patch.css → re-compare, bounded. Default true. No AI involved.' },
           maxRepairRounds: { type: 'number', description: 'Max repair rounds (0-5). Default 2. Loop also stops early on allPass or an unchanged divergence fingerprint.' },
+          failOnConservationRailDrop: { type: 'boolean', description: 'Opt-in hard fail for local region-audit conservation: when true, unassigned nav/complementary rails with at least two links set isError. Default false (warn-only).' },
         },
         required: ['dir', 'studioSitePath'],
       },
