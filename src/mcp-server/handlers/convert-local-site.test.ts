@@ -31,6 +31,7 @@ const capturedRuns: Array<{ urls: string[]; outputDir: string; force?: boolean }
 let repairReplicaManifestEntries: Record<string, { slug: string }> = {};
 let repairDiffPng: Buffer | null = null;
 const buildJetpackFormParityCssMock = vi.hoisted(() => vi.fn(() => ({ css: '' })));
+const regionCensusFailure = vi.hoisted(() => ({ throwOnExtract: false }));
 
 // Passthrough the block fixer: convert calls the real ingest handler, which now
 // canonicalizes each page through a jsdom HTTP subprocess (~2.5s/test + parallel
@@ -92,6 +93,16 @@ vi.mock('../../lib/replicate/local-theme/google-fonts.js', async (importOriginal
 vi.mock('../../lib/replicate/local-site/jetpack-form-css.js', () => ({
   buildJetpackFormParityCss: buildJetpackFormParityCssMock,
 }));
+vi.mock('../../lib/replicate/region-census.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../lib/replicate/region-census.js')>();
+  return {
+    ...actual,
+    extractSourceLandmarksFromHtml: (html: string) => {
+      if (regionCensusFailure.throwOnExtract) throw new Error('synthetic region census failure');
+      return actual.extractSourceLandmarksFromHtml(html);
+    },
+  };
+});
 
 // Repair-loop seam: mock probePair (heavy Playwright + CSS snapshot) while keeping
 // FREEZE_MOTION_CSS real so the handler's freezeMotion helper stays functional.
@@ -312,6 +323,23 @@ function makeHomeComplementaryRailSite(): string {
   return dir;
 }
 
+function makeRepeatedComplementaryBodySite(): string {
+  mkdirSync(FIXTURE_TMP, { recursive: true });
+  const dir = mkdtempSync(join(FIXTURE_TMP, 'cls-repeated-complementary-body-'));
+  writeFileSync(
+    join(dir, 'index.html'),
+    '<html><head><title>Home</title></head><body>' +
+      '<div role="complementary"><section><h2>First rail</h2><a href="intro.html">Intro</a><a href="api.html">API</a></section></div>' +
+      '<div role="complementary"><section><h2>Second rail</h2><a href="intro.html">Intro</a><a href="contact.html">Contact</a></section></div>' +
+      '<section><h1>Home</h1><p>The home body remains installed.</p></section>' +
+      '</body></html>',
+  );
+  writeFileSync(join(dir, 'intro.html'), '<html><head><title>Intro</title></head><body><section><h1>Intro</h1></section></body></html>');
+  writeFileSync(join(dir, 'api.html'), '<html><head><title>API</title></head><body><section><h1>API</h1></section></body></html>');
+  writeFileSync(join(dir, 'contact.html'), '<html><head><title>Contact</title></head><body><section><h1>Contact</h1></section></body></html>');
+  return dir;
+}
+
 function makeHomePlainAsideSite(): string {
   mkdirSync(FIXTURE_TMP, { recursive: true });
   const dir = mkdtempSync(join(FIXTURE_TMP, 'cls-home-plain-aside-'));
@@ -401,6 +429,7 @@ beforeEach(() => {
   // Repair seam: reset per-test; repair tests set these before calling handler.
   repairReplicaManifestEntries = {};
   repairDiffPng = null;
+  regionCensusFailure.throwOnExtract = false;
   // Reset + re-establish base for compare and probePair so unconsumed once-values
   // from a failing repair test can't bleed into subsequent tests.
   vi.mocked(compareScreenshotDirs).mockReset().mockResolvedValue(BASE_COMPARE_RESULT as unknown as Awaited<ReturnType<typeof compareScreenshotDirs>>);
@@ -1106,6 +1135,86 @@ describe('convertLocalSiteHandler', () => {
         hardFailRegions: 0,
       });
     } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(sitePath, { recursive: true, force: true });
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not hard-fail a placed repeated classless complementary landmark with a positional selector', async () => {
+    const dir = makeRepeatedComplementaryBodySite();
+    const sitePath = makeStudioSite();
+    const outDir = mkdtempSync(join(FIXTURE_TMP, 'cls-region-audit-positional-out-'));
+    try {
+      const res = await convertLocalSiteHandler(
+        {
+          dir,
+          studioSitePath: sitePath,
+          outputDir: outDir,
+          themeSlug: 'acme-local',
+          siteTitle: 'Acme',
+          skipDesign: true,
+          failOnConservationRailDrop: true,
+        },
+        ctx,
+      );
+      expect(res.isError).toBeFalsy();
+      const summary = JSON.parse(res.content[0].text) as {
+        conservation: { ok: boolean; status: string; unassignedRegions: number; hardFailRegions: number };
+      };
+      expect(summary.conservation).toMatchObject({
+        ok: true,
+        status: 'pass',
+        unassignedRegions: 0,
+        hardFailRegions: 0,
+      });
+      const report = JSON.parse(readFileSync(join(outDir, 'region-audit.json'), 'utf8')) as {
+        pages: Array<{ assignments: Array<{ landmark: { selector: string; role: string }; kind: string }> }>;
+      };
+      const complementaryAssignments = report.pages[0].assignments.filter((a) => a.landmark.role === 'complementary');
+      expect(complementaryAssignments.map((a) => [a.landmark.selector, a.kind])).toEqual([
+        ['div:nth-of-type(1)', 'page_body_section'],
+        ['div:nth-of-type(2)', 'page_body_section'],
+      ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(sitePath, { recursive: true, force: true });
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
+  it('degrades local region-audit census failures to a warning without failing conversion', async () => {
+    const dir = makeHomeComplementaryRailSite();
+    const sitePath = makeStudioSite();
+    const outDir = mkdtempSync(join(FIXTURE_TMP, 'cls-region-audit-throw-out-'));
+    regionCensusFailure.throwOnExtract = true;
+    try {
+      const res = await convertLocalSiteHandler(
+        {
+          dir,
+          studioSitePath: sitePath,
+          outputDir: outDir,
+          themeSlug: 'acme-local',
+          siteTitle: 'Acme',
+          skipDesign: true,
+          failOnConservationRailDrop: true,
+        },
+        ctx,
+      );
+      expect(res.isError).toBeFalsy();
+      const summary = JSON.parse(res.content[0].text) as {
+        conservation: { ok: boolean; status: string; unassignedRegions: number; hardFailRegions: number };
+        warnings: string[];
+      };
+      expect(summary.conservation).toMatchObject({
+        ok: true,
+        status: 'pass',
+        unassignedRegions: 0,
+        hardFailRegions: 0,
+      });
+      expect(summary.warnings).toContain('region audit failed: synthetic region census failure');
+    } finally {
+      regionCensusFailure.throwOnExtract = false;
       rmSync(dir, { recursive: true, force: true });
       rmSync(sitePath, { recursive: true, force: true });
       rmSync(outDir, { recursive: true, force: true });

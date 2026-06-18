@@ -59,6 +59,38 @@ describe('reconcileRegions', () => {
     expect(r.counts.unassigned).toBe(2);
   });
 
+  it('does not assign a dropped complementary rail to an unrelated roleless normalized body placement', () => {
+    const census = [
+      L({
+        role: 'complementary',
+        tag: 'div',
+        selector: 'div:nth-of-type(2)',
+        textLength: 80,
+        mediaCount: 0,
+        linkCount: 2,
+      }),
+    ];
+    const r = reconcileRegions(census, [{ kind: 'page_body_section', selector: 'div:nth-of-type(1)' }]);
+    expect(r.assignments[0].kind).toBe('unassigned');
+    expect(r.unassignedRegions.map((x) => x.selector)).toEqual(['div:nth-of-type(2)']);
+  });
+
+  it('keeps exact selector body-section joins for roleless placed complementary regions', () => {
+    const census = [
+      L({
+        role: 'complementary',
+        tag: 'div',
+        selector: 'div:nth-of-type(2)',
+        textLength: 80,
+        mediaCount: 0,
+        linkCount: 2,
+      }),
+    ];
+    const r = reconcileRegions(census, [{ kind: 'page_body_section', selector: 'div:nth-of-type(2)' }]);
+    expect(r.assignments[0].kind).toBe('page_body_section');
+    expect(r.unassignedRegions).toEqual([]);
+  });
+
   // Regression: a source page with a real nav whose content was DROPPED by the
   // build (chrome extraction yielded no header → no header_part placed) must
   // surface the nav as the one unassigned region, while the placed main + footer

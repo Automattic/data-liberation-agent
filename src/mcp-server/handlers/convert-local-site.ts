@@ -12,6 +12,10 @@
 //
 import { existsSync, readFileSync, writeFileSync, readdirSync, renameSync, unlinkSync, mkdirSync, copyFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
+import * as cheerio from 'cheerio';
+import type { CheerioAPI } from 'cheerio';
+import { isTag } from 'domhandler';
+import type { Element as DomElement } from 'domhandler';
 import type { Handler } from '../handler-types.js';
 import { ingestLocalSiteHandler } from './ingest-local-site.js';
 import {
@@ -59,6 +63,7 @@ import { detectBehaviors } from '../../lib/replicate/normalize/detect-behaviors.
 import { checkConservationLeaks } from '../../lib/replicate/normalize/conservation-check.js';
 import { extractSourceLandmarksFromHtml, landmarkRoleForHtmlRoot, selectorForHtmlRoot } from '../../lib/replicate/region-census.js';
 import { reconcileRegions, type PlacedRegion } from '../../lib/replicate/region-audit.js';
+import { buildSelector, type SelectorParts } from '../../lib/replicate/section-selector.js';
 import { buildInteractivityPlugin, PLUGIN_SLUG } from '../../blocks/interactivity-plugin.js';
 import type { DetectedBehaviors, Section } from '../../lib/replicate/local-site/types.js';
 import type { ConservationLeak } from '../../lib/replicate/normalize/conservation-leak.js';
@@ -110,19 +115,63 @@ function isPlacedRegionRole(role: string | undefined): role is NonNullable<Place
   return role === 'header' || role === 'nav' || role === 'footer' || role === 'aside' || role === 'complementary';
 }
 
-function chromePlacedRegion(section: Section, kind: 'header_part' | 'footer_part'): PlacedRegion {
+function selectorPartsForElement($: CheerioAPI, el: DomElement): SelectorParts {
+  const tag = el.tagName.toLowerCase();
+  let nthOfType = 1;
+  for (let prev = el.prev; prev; prev = prev.prev) {
+    if (isTag(prev) && (prev as DomElement).tagName?.toLowerCase() === tag) nthOfType += 1;
+  }
+  const $el = $(el);
+  return {
+    tag,
+    id: ($el.attr('id') ?? '').trim() || null,
+    classes: ($el.attr('class') ?? '').split(/\s+/).filter(Boolean),
+    nthOfType,
+  };
+}
+
+function createSourceSelectorResolver(sourceHtml: string): (rootHtml: string) => string | undefined {
+  const $source = cheerio.load(sourceHtml);
+  const used = new Set<DomElement>();
+  return (rootHtml: string): string | undefined => {
+    const $fragment = cheerio.load(rootHtml);
+    const root = $fragment('body').children().first().get(0) ?? $fragment.root().children().first().get(0);
+    if (!root || !isTag(root)) return selectorForHtmlRoot(rootHtml);
+    const rootHtmlCanonical = $fragment.html(root);
+    const tag = (root as DomElement).tagName.toLowerCase();
+    const candidates = $source(tag).toArray().filter((node): node is DomElement => isTag(node));
+    for (const candidate of candidates) {
+      if (used.has(candidate)) continue;
+      if ($source.html(candidate) !== rootHtmlCanonical) continue;
+      used.add(candidate);
+      return buildSelector(selectorPartsForElement($source, candidate));
+    }
+    return selectorForHtmlRoot(rootHtml);
+  };
+}
+
+function chromePlacedRegion(
+  section: Section,
+  kind: 'header_part' | 'footer_part',
+  resolveSelector: (rootHtml: string) => string | undefined = selectorForHtmlRoot,
+): PlacedRegion {
   const role = landmarkRoleForHtmlRoot(section.html);
   return {
     kind,
-    selector: selectorForHtmlRoot(section.html),
+    selector: resolveSelector(section.html),
     ...(isPlacedRegionRole(role) ? { role } : {}),
   };
 }
 
-function bodyPlacedRegion(section: Section): PlacedRegion {
+function bodyPlacedRegion(
+  section: Section,
+  resolveSelector: (rootHtml: string) => string | undefined = selectorForHtmlRoot,
+): PlacedRegion {
+  const role = landmarkRoleForHtmlRoot(section.html);
   return {
     kind: 'page_body_section',
-    selector: selectorForHtmlRoot(section.html),
+    selector: resolveSelector(section.html),
+    ...(isPlacedRegionRole(role) ? { role } : {}),
   };
 }
 
@@ -773,49 +822,68 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
     warnings.push(`conservation leaks report write failed: ${(err as Error).message}`);
   }
   const localRegionReportPath = join(outputDir, 'region-audit.json');
-  const localCensus = extractSourceLandmarksFromHtml(home.html);
-  const localPlacedRegions: PlacedRegion[] = [
-    ...homeSegments.filter((s) => s.role === 'body').map(bodyPlacedRegion),
-  ];
-  if (headerSection && headerSection.chromeSource !== 'layout-rail') {
-    localPlacedRegions.push(chromePlacedRegion(headerSection, 'header_part'));
-  }
-  if (footerSection) localPlacedRegions.push(chromePlacedRegion(footerSection, 'footer_part'));
-  if (chromeCarried && carriedHeaderSection) {
-    for (const rail of homeSegments.filter((s) => s.chromeSource === 'layout-rail')) {
-      localPlacedRegions.push(chromePlacedRegion(rail, 'header_part'));
-    }
-  }
-  const localRegionReport = reconcileRegions(localCensus, localPlacedRegions, home.slug, home.relPath);
-  const candidateHardFailRegions = localRegionReport.unassignedRegions.filter(
-    (region) =>
-      (LOCAL_CONSERVATION_HARD_FAIL_ROLES as readonly string[]).includes(region.role) &&
-      (region.linkCount ?? 0) >= LOCAL_CONSERVATION_RAIL_LINK_THRESHOLD,
-  );
-  const hardFailRegions = failOnConservationRailDrop ? candidateHardFailRegions : [];
-  const conservation: LocalConservationSummary = {
-    ok: hardFailRegions.length === 0,
-    status: hardFailRegions.length > 0 ? 'fail' : localRegionReport.counts.unassigned > 0 ? 'warn' : 'pass',
-    unassignedRegions: localRegionReport.counts.unassigned,
-    hardFailRegions: hardFailRegions.length,
+  const safeConservationSummary = (): LocalConservationSummary => ({
+    ok: true,
+    status: 'pass',
+    unassignedRegions: 0,
+    hardFailRegions: 0,
     artifact: localRegionReportPath,
     railHardFail: {
       enabled: failOnConservationRailDrop,
       roles: LOCAL_CONSERVATION_HARD_FAIL_ROLES,
       minLinks: LOCAL_CONSERVATION_RAIL_LINK_THRESHOLD,
     },
-  };
+  });
+  let conservation = safeConservationSummary();
   try {
-    const regionAudit: LocalConservationRegionAudit = {
-      schema: LOCAL_CONSERVATION_REPORT_SCHEMA,
-      site: dir,
-      pages: [localRegionReport],
+    const resolveHomeSelector = createSourceSelectorResolver(home.html);
+    const localCensus = extractSourceLandmarksFromHtml(home.html);
+    const localPlacedRegions: PlacedRegion[] = [
+      ...homeSegments.filter((s) => s.role === 'body').map((s) => bodyPlacedRegion(s, resolveHomeSelector)),
+    ];
+    if (headerSection && headerSection.chromeSource !== 'layout-rail') {
+      localPlacedRegions.push(chromePlacedRegion(headerSection, 'header_part', resolveHomeSelector));
+    }
+    if (footerSection) localPlacedRegions.push(chromePlacedRegion(footerSection, 'footer_part', resolveHomeSelector));
+    if (chromeCarried && carriedHeaderSection) {
+      for (const rail of homeSegments.filter((s) => s.chromeSource === 'layout-rail')) {
+        localPlacedRegions.push(chromePlacedRegion(rail, 'header_part', resolveHomeSelector));
+      }
+    }
+    const localRegionReport = reconcileRegions(localCensus, localPlacedRegions, home.slug, home.relPath);
+    const candidateHardFailRegions = localRegionReport.unassignedRegions.filter(
+      (region) =>
+        (LOCAL_CONSERVATION_HARD_FAIL_ROLES as readonly string[]).includes(region.role) &&
+        (region.linkCount ?? 0) >= LOCAL_CONSERVATION_RAIL_LINK_THRESHOLD,
+    );
+    const hardFailRegions = failOnConservationRailDrop ? candidateHardFailRegions : [];
+    conservation = {
+      ok: hardFailRegions.length === 0,
+      status: hardFailRegions.length > 0 ? 'fail' : localRegionReport.counts.unassigned > 0 ? 'warn' : 'pass',
       unassignedRegions: localRegionReport.counts.unassigned,
-      hardFailRegions,
+      hardFailRegions: hardFailRegions.length,
+      artifact: localRegionReportPath,
+      railHardFail: {
+        enabled: failOnConservationRailDrop,
+        roles: LOCAL_CONSERVATION_HARD_FAIL_ROLES,
+        minLinks: LOCAL_CONSERVATION_RAIL_LINK_THRESHOLD,
+      },
     };
-    writeAtomicTextFile(localRegionReportPath, JSON.stringify(regionAudit, null, 2) + '\n');
+    try {
+      const regionAudit: LocalConservationRegionAudit = {
+        schema: LOCAL_CONSERVATION_REPORT_SCHEMA,
+        site: dir,
+        pages: [localRegionReport],
+        unassignedRegions: localRegionReport.counts.unassigned,
+        hardFailRegions,
+      };
+      writeAtomicTextFile(localRegionReportPath, JSON.stringify(regionAudit, null, 2) + '\n');
+    } catch (err) {
+      warnings.push(`region audit write failed: ${(err as Error).message}`);
+    }
   } catch (err) {
-    warnings.push(`region audit write failed: ${(err as Error).message}`);
+    warnings.push(`region audit failed: ${(err as Error).message}`);
+    conservation = safeConservationSummary();
   }
   const installed: Array<{ slug: string; postId: number | null }> = [];
   const failedInstalls: Array<{ slug: string; error: string }> = [];
