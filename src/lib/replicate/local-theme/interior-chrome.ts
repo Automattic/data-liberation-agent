@@ -10,4 +10,10 @@ export interface InteriorChromeTemplate {
   partSlug: string;
   /** Block markup written to parts/<partSlug>.html. */
   partMarkup: string;
+  /** Source layout wrapper tag around the rail and <main>, when one exists. */
+  layoutWrapperTag?: string;
+  /** Source layout wrapper classes, in order. */
+  layoutWrapperClasses?: string[];
+  /** Source position of the rail relative to <main> inside the layout wrapper. */
+  layoutWrapperRailPosition?: 'beforeMain' | 'afterMain';
 }
