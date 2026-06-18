@@ -273,6 +273,30 @@ function makeHeaderWithStandaloneNavSite(): string {
   return dir;
 }
 
+function makeInteriorRailLeakSite(): string {
+  mkdirSync(FIXTURE_TMP, { recursive: true });
+  const dir = mkdtempSync(join(FIXTURE_TMP, 'cls-conservation-leak-'));
+  writeFileSync(
+    join(dir, 'index.html'),
+    '<html><head><title>Home</title><link rel="stylesheet" href="styles.css"></head><body>' +
+      '<header id="site-header"><nav><a href="reference.html">Reference</a></nav></header>' +
+      '<main><section id="home-copy"><h1>Home</h1><p>The home body is present in the emitted page content.</p></section></main>' +
+      '</body></html>',
+  );
+  writeFileSync(
+    join(dir, 'reference.html'),
+    '<html><head><title>Reference</title><link rel="stylesheet" href="styles.css"></head><body>' +
+      '<header id="site-header"><nav><a href="index.html">Home</a></nav></header>' +
+      '<div class="layout">' +
+      '<aside id="reference-rail" class="side-rail"><nav><a href="setup.html">Setup</a><a href="api.html">API</a></nav></aside>' +
+      '<main><section id="reference-copy"><h1>Reference</h1><p>The reference body is present in the emitted page content.</p></section></main>' +
+      '</div>' +
+      '</body></html>',
+  );
+  writeFileSync(join(dir, 'styles.css'), '.site-header { display: flex; } .side-rail { position: sticky; top: 0; }');
+  return dir;
+}
+
 function makeFormSite(): string {
   mkdirSync(FIXTURE_TMP, { recursive: true });
   const dir = mkdtempSync(join(FIXTURE_TMP, 'cls-form-'));
@@ -873,6 +897,52 @@ describe('convertLocalSiteHandler', () => {
       expect(headerHtml).toContain('Header About');
       expect(headerHtml).not.toContain('standalone-nav');
       expect(headerHtml).not.toContain('Standalone Nav');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(sitePath, { recursive: true, force: true });
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
+  it('reports conservation leaks in textResult and artifact without changing install results', async () => {
+    const dir = makeInteriorRailLeakSite();
+    const sitePath = makeStudioSite();
+    const outDir = mkdtempSync(join(FIXTURE_TMP, 'cls-conservation-leak-out-'));
+    try {
+      const res = await convertLocalSiteHandler(
+        { dir, studioSitePath: sitePath, outputDir: outDir, themeSlug: 'acme-local', siteTitle: 'Acme', skipDesign: true },
+        ctx,
+      );
+      expect(res.isError).toBeFalsy();
+      const summary = JSON.parse(res.content[0].text) as {
+        pages: number;
+        installed: number;
+        themeSlug: string;
+        frontPageSet: boolean;
+        conservationLeaks: { count: number; artifact: string };
+      };
+      expect(summary.pages).toBe(2);
+      expect(summary.installed).toBe(2);
+      expect(summary.themeSlug).toBe('acme-local');
+      expect(summary.frontPageSet).toBe(true);
+      expect(summary.conservationLeaks.count).toBe(1);
+      expect(summary.conservationLeaks.artifact).toBe(join(outDir, 'conservation-leaks.json'));
+
+      const report = JSON.parse(readFileSync(join(outDir, 'conservation-leaks.json'), 'utf8')) as {
+        schema: number;
+        site: string;
+        leaks: Array<{ selector: string; role: string; pageSlug: string; reason: string }>;
+      };
+      expect(report.schema).toBe(1);
+      expect(report.site).toBe(dir);
+      expect(report.leaks).toEqual([
+        {
+          selector: 'aside#reference-rail.side-rail',
+          role: 'aside',
+          pageSlug: 'reference',
+          reason: 'actionable_region_unplaced',
+        },
+      ]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
       rmSync(sitePath, { recursive: true, force: true });

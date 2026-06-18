@@ -56,8 +56,10 @@ import { collectSourceAssets, WP_COMPAT_CSS } from '../../lib/replicate/local-th
 import { buildJetpackFormParityCss } from '../../lib/replicate/local-site/jetpack-form-css.js';
 import { JETPACK_FORM_PARITY_CSS } from '../../lib/replicate/local-theme/jetpack-form-parity-contract.js';
 import { detectBehaviors } from '../../lib/replicate/normalize/detect-behaviors.js';
+import { checkConservationLeaks } from '../../lib/replicate/normalize/conservation-check.js';
 import { buildInteractivityPlugin, PLUGIN_SLUG } from '../../blocks/interactivity-plugin.js';
 import type { DetectedBehaviors, Section } from '../../lib/replicate/local-site/types.js';
+import type { ConservationLeak } from '../../lib/replicate/normalize/conservation-leak.js';
 import { CLEAR_INTERVALS_SCRIPT, FREEZE_MOTION_CSS, probePair, type Divergence } from '../../lib/replicate/parity/parity-probe.js';
 import { extractDiffRegions } from '../../lib/replicate/parity/diff-regions.js';
 import { classifyDivergences, renderPatchCss, divergenceFingerprint, suppressPageConflicts, type UnresolvedDivergence, type PatchOverride, type RepairPlan } from '../../lib/replicate/parity/parity-classify.js';
@@ -717,6 +719,28 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
   // Pages from sidecars (installPost is idempotent via _source_url meta).
   const plan = buildPagePlan(site, outputDir);
   const emptySidecars = plan.items.filter((i) => !i.content.trim()).map((i) => i.slug);
+  const conservationLeaks: ConservationLeak[] = [];
+  for (const item of plan.items) {
+    const page = site.pages.find((p) => p.slug === item.slug);
+    if (!page) continue;
+    conservationLeaks.push(
+      ...checkConservationLeaks({
+        pageSlug: item.slug,
+        sourceHtml: page.html,
+        postContent: item.content,
+        partMarkup: [headerPart, footerPart],
+      }),
+    );
+  }
+  const conservationReportPath = join(outputDir, 'conservation-leaks.json');
+  try {
+    writeAtomicTextFile(
+      conservationReportPath,
+      JSON.stringify({ schema: 1, site: dir, leaks: conservationLeaks }, null, 2) + '\n',
+    );
+  } catch (err) {
+    warnings.push(`conservation leaks report write failed: ${(err as Error).message}`);
+  }
   const installed: Array<{ slug: string; postId: number | null }> = [];
   const failedInstalls: Array<{ slug: string; error: string }> = [];
   for (const item of plan.items) {
@@ -1252,6 +1276,10 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
     frontPageSet,
     designCaptured,
     carried: { css: carriedCss, js: carriedJs },
+    conservationLeaks: {
+      count: conservationLeaks.length,
+      artifact: conservationReportPath,
+    },
     // Key OMITTED entirely when the flag is off — default summary stays byte-stable.
     // sticky reports EMISSION (stickyEmitted), not detection — see the header-part
     // site. tabs/slider/modal are per-section counts forwarded from the ingest
