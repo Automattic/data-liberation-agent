@@ -77,7 +77,7 @@ describe('validateReplicaInputs', () => {
     ).toThrow(/path traversal/);
   });
 
-  it('rejects Custom HTML blocks in generated theme files', () => {
+  it('rejects hand-authored Custom HTML blocks in generated theme files', () => {
     expect(() =>
       validateReplicaInputs([
         {
@@ -85,6 +85,53 @@ describe('validateReplicaInputs', () => {
           content: '<!-- wp:html --><style>.x{color:red}</style><div>Contact</div><!-- /wp:html -->',
         },
       ], undefined, 'foo'),
+    ).toThrow(/Custom HTML/);
+  });
+
+  // The pipeline's pattern-file header, as emitted by reconstructPagePattern.
+  const PIPELINE_HEADER =
+    '<?php\n/**\n * Title: Home\n * Slug: demo-replica/page-home\n * Categories: featured\n * Inserter: false\n */\n?>\n';
+  const MARKED_ISLAND =
+    '<!-- wp:html {"metadata":{"name":"lib-coverage-island"}} -->\n<section><p>Verbatim copy</p></section>\n<!-- /wp:html -->';
+  const BARE_ISLAND = '<!-- wp:html -->\n<section><p>Verbatim copy</p></section>\n<!-- /wp:html -->';
+
+  it('accepts a pipeline-marked coverage island (theme reinstall)', () => {
+    expect(() =>
+      validateReplicaInputs(
+        [{ relativePath: 'patterns/page-home.php', content: PIPELINE_HEADER + MARKED_ISLAND }],
+        undefined,
+        'foo',
+      ),
+    ).not.toThrow();
+  });
+
+  it('accepts a LEGACY bare island inside a pipeline-emitted pattern file (pre-marker themes)', () => {
+    expect(() =>
+      validateReplicaInputs(
+        [{ relativePath: 'patterns/page-home.php', content: PIPELINE_HEADER + BARE_ISLAND }],
+        undefined,
+        'foo',
+      ),
+    ).not.toThrow();
+  });
+
+  it('rejects a bare island in a non-pattern file even when the pipeline header is present', () => {
+    expect(() =>
+      validateReplicaInputs(
+        [{ relativePath: 'templates/page.php', content: PIPELINE_HEADER + BARE_ISLAND }],
+        undefined,
+        'foo',
+      ),
+    ).toThrow(/Custom HTML/);
+  });
+
+  it('rejects a mixed file: one marked island plus one bare wp:html outside a pipeline pattern', () => {
+    expect(() =>
+      validateReplicaInputs(
+        [{ relativePath: 'parts/footer.html', content: MARKED_ISLAND + '\n' + BARE_ISLAND }],
+        undefined,
+        'foo',
+      ),
     ).toThrow(/Custom HTML/);
   });
 });

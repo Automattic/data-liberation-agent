@@ -383,6 +383,30 @@ describe('validateArtifacts — core/html fallback islands', () => {
     expect(r.ok).toBe(true);
   });
 
+  it('exempts a MARKED pipeline island (attrs on the opener) from the provenance trace', () => {
+    // Coverage islands now carry the lib-coverage-island metadata marker in the
+    // opening delimiter — the provenance exemption must match attrs-bearing
+    // openers, not just the bare legacy form.
+    const input: ArtifactInput = {
+      patterns: [{
+        slug: 'site/section-1',
+        php:
+          `<!-- wp:html {"metadata":{"name":"lib-coverage-island"}} -->\n` +
+          `<section><h2>An entirely uncaptured headline</h2>` +
+          `<p>This paragraph was never recorded in the structured spec corpus.</p></section>\n` +
+          `<!-- /wp:html -->`,
+        spec: {
+          interactionModel: 'static',
+          expectedText: ['Some unrelated captured heading'],
+          bodyText: ['Some unrelated captured body copy that differs entirely'],
+          expectedAssets: [],
+        },
+      }],
+    };
+    const r = validateArtifacts(input);
+    expect(r.ok).toBe(true);
+  });
+
   it('still rejects a <script> inside a core/html island (injection scan applies)', () => {
     const input: ArtifactInput = {
       patterns: [{

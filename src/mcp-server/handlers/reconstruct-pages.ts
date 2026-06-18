@@ -18,10 +18,12 @@
 
 import { existsSync, mkdirSync, writeFileSync, readFileSync, renameSync, readdirSync, rmSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import type { PaletteToken } from '../../lib/replicate/footer-color.js';
 import type { FontFamilyToken } from '../../lib/replicate/page-reconstruct.js';
-import { extractFullFromUrl, rewriteThroughMediaMap } from '../../lib/replicate/section-extract.js';
-import type { SectionSpec } from '../../lib/replicate/section-extract.js';
+import { extractFullFromSavedHtml, extractFullFromUrl, rewriteThroughMediaMap } from '../../lib/replicate/section-extract.js';
+import type { SectionSpec, SourceLandmark } from '../../lib/replicate/section-extract.js';
 import { SectionSpecsStore } from '../../lib/replicate/section-specs-store.js';
 import { buildPageReconstruction } from '../../lib/replicate/reconstruct-pages.js';
 import { buildPageLinkMap } from '../../lib/replicate/page-link-map.js';
@@ -38,7 +40,10 @@ import { studioWp } from '../../lib/preview/studio.js';
 import type { Handler } from '../handler-types.js';
 import { detect } from '../../lib/detect-platform/index.js';
 import { ImportSession } from '../../lib/resume-state/index.js';
-import type { FallbackDiagnostic } from '../../lib/replicate/fallback-diagnostic.js';
+import { buildTriageRemovalDiagnostic, type FallbackDiagnostic } from '../../lib/replicate/fallback-diagnostic.js';
+import { loadAssetTriage, applyAssetTriage, type AssetRemoval } from '../../lib/replicate/asset-triage.js';
+import { selectorKey } from '../../lib/replicate/triage-candidates.js';
+import { ensurePlugin, type ExecFn } from '../../lib/preview/ensure-plugin.js';
 import { extractThemeChromeFromHtml } from '../../lib/replicate/source-chrome.js';
 import { reconcileRegions, type PlacedRegion, type RegionSelectionReport } from '../../lib/replicate/region-audit.js';
 import { slugify } from '../../lib/url/index.js';
@@ -46,6 +51,9 @@ import { planPageTemplates, reconcileReplicaTemplates, mergeCustomTemplates, var
 import { patchWxrTemplatesFile, type WxrTemplatePatchInput } from '../../lib/replicate/wxr-template-patch.js';
 import { auditStyleUsage } from '../../lib/replicate/style-audit.js';
 import { buildPageTemplate } from '../../lib/replicate/reconstruct-pages.js';
+import { hoistVariations, type HoistedVariation } from '../../lib/replicate/variation-hoist.js';
+
+const execFileAsync = promisify(execFile);
 
 function writeJsonArtifact(path: string, data: unknown): void {
   const tmp = `${path}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
@@ -109,9 +117,13 @@ async function updatePagePostContent(
   slug: string,
   isHome: boolean,
   content: string,
-): Promise<{ contentOk: boolean; id: string }> {
+  backupDir: string | null,
+): Promise<{ contentOk: boolean; id: string; backedUp: boolean }> {
   const wpOpts = { timeout: 120_000, maxBuffer: 50 * 1024 * 1024 };
+  const wp = (extra: string[]) =>
+    execFileAsync('studio', ['wp', '--path', studioSitePath, ...extra], wpOpts);
   let id = '';
+  let backedUp = false;
   try {
     if (isHome) {
       const stdout = await studioWp(studioSitePath, ['option', 'get', 'page_on_front'], wpOpts);
@@ -121,7 +133,24 @@ async function updatePagePostContent(
       const stdout = await studioWp(studioSitePath, ['post', 'list', '--post_type=page', `--name=${slug}`, '--field=ID', '--format=ids'], wpOpts);
       id = stdout.trim().split(/\s+/)[0] || '';
     }
-    if (!id) return { contentOk: false, id: '' };
+    if (!id) return { contentOk: false, id: '', backedUp };
+    // Overwrite guard: a reconstruct may clobber operator/hand-fixed content
+    // (the page's CURRENT post_content is the only copy — patterns are stale
+    // mirrors). Save it to a per-run timestamped dir BEFORE the update so an
+    // accepted state is always restorable. Best-effort: a backup failure must
+    // not block the update, but it is logged.
+    if (backupDir) {
+      try {
+        const { stdout: prev } = await wp(['post', 'get', id, '--field=post_content']);
+        if (prev.trim()) {
+          mkdirSync(backupDir, { recursive: true });
+          writeFileSync(join(backupDir, `${slug}.html`), prev);
+          backedUp = true;
+        }
+      } catch (err) {
+        console.error(`[reconstruct] post_content backup failed for slug="${slug}": ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
     if (isHome) {
       // Make this page the static front page so `/` renders the homepage
       // reconstruction (front-page.html) instead of the blog index. Best-effort
@@ -141,10 +170,10 @@ async function updatePagePostContent(
     // (after forcePatternRescan registers the variant customTemplates) — WP rejects
     // a page_template that isn't yet registered in theme.json.
     await studioWp(studioSitePath, ['post', 'update', id, `--post_content=${content}`], wpOpts);
-    return { contentOk: true, id };
+    return { contentOk: true, id, backedUp };
   } catch (err) {
     console.error(`[reconstruct] post update failed for slug="${slug}": ${err instanceof Error ? err.message : String(err)}`);
-    return { contentOk: false, id: '' };
+    return { contentOk: false, id: '', backedUp };
   }
 }
 
@@ -240,6 +269,7 @@ export const reconstructPagesHandler: Handler = async (args, ctx) => {
   const srcUrls = new Set<string>();
   const extractErrors: Array<{ slug: string; error: string }> = [];
   let specsFromCache = 0;
+  let specsFromSavedHtml = 0;
   let specsFromLive = 0;
   for (const p of pages) {
     try {
@@ -247,15 +277,72 @@ export const reconstructPagesHandler: Handler = async (args, ctx) => {
       if (specs) {
         specsFromCache++;
       } else {
-        const live = await extractFullFromUrl(p.sourceUrl, {});
-        specs = live.specs;
-        specsStore.set(p.sourceUrl, live.specs, live.landmarks); // cache specs + census for the next run
-        specsFromLive++;
+        // Cache miss (or refresh). Prefer walking the SAVED settled HTML from the
+        // screenshot phase — it is the same page state the source screenshots
+        // show, so specs stay coherent with every other artifact. A live
+        // re-navigation (the old behavior) sees the site DAYS later, headless,
+        // without the adapter capture seam — after a schema bump it silently
+        // re-captured every page through that weaker path and the whole run
+        // degraded. Live extract remains the fallback when no snapshot exists
+        // (or it yields nothing).
+        const savedHtmlPath = join(resolve(outputDir), 'html', `${slugify(p.sourceUrl)}.html`);
+        let extracted: { specs: SectionSpec[]; landmarks: SourceLandmark[] } | null = null;
+        if (existsSync(savedHtmlPath)) {
+          try {
+            const fromSnapshot = await extractFullFromSavedHtml(readFileSync(savedHtmlPath, 'utf8'), p.sourceUrl, {});
+            if (fromSnapshot.specs.length > 0) {
+              extracted = fromSnapshot;
+              specsFromSavedHtml++;
+            }
+          } catch (err) {
+            console.error(`[reconstruct] saved-HTML extract failed for ${p.slug} (falling back to live): ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }
+        if (!extracted) {
+          extracted = await extractFullFromUrl(p.sourceUrl, {});
+          specsFromLive++;
+        }
+        specs = extracted.specs;
+        specsStore.set(p.sourceUrl, extracted.specs, extracted.landmarks); // cache specs + census for the next run
       }
       specsByPage.set(p.slug, specs);
       collectSourceUrls(specs, srcUrls);
     } catch (err) {
       extractErrors.push({ slug: p.slug, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
+  // 1.5. Forms → Jetpack (F2): when ANY page's specs carry captured forms, the
+  // reconstruction will emit jetpack/contact-form markup — ensure Jetpack is
+  // installed + active FIRST so those blocks render (and submissions land in
+  // the local feedback CPT) the moment post_content is written. Best-effort:
+  // a failure degrades to a result-text warning (the markup still emits and
+  // starts working once Jetpack is installed manually) — never fatal.
+  let jetpackEnsured = false;
+  let jetpackWarning: string | undefined;
+  if ([...specsByPage.values()].some((specs) => specs.some((s) => s.forms?.length))) {
+    const wpExec: ExecFn = (sitePath, wpArgs) =>
+      execFileAsync('studio', ['wp', '--path', sitePath, ...wpArgs], { timeout: 300_000, maxBuffer: 16 * 1024 * 1024 }).then(
+        (o) => o.stdout,
+      );
+    const ensured = await ensurePlugin(studioSitePath, 'jetpack', wpExec);
+    if (ensured.ok) {
+      jetpackEnsured = true;
+      // An installed-but-unconnected Jetpack starts with ALL modules inactive —
+      // the contact-form blocks then render an empty wrapper (no fields, no
+      // submit). Activate the module explicitly; `wp jetpack module activate`
+      // on an already-active module is a no-op success (verified), so this is
+      // idempotent. Failure folds into jetpackWarning (non-fatal, same policy
+      // as the ensure itself).
+      try {
+        await wpExec(studioSitePath, ['jetpack', 'module', 'activate', 'contact-form']);
+      } catch (err) {
+        jetpackWarning = `Jetpack contact-form module activation failed (form blocks will render empty until the module is activated): ${err instanceof Error ? err.message : String(err)}`;
+        console.error(`[reconstruct] ${jetpackWarning}`);
+      }
+    } else {
+      jetpackWarning = `Jetpack auto-install failed (form blocks will not render until Jetpack is installed): ${ensured.error}`;
+      console.error(`[reconstruct] ${jetpackWarning}`);
     }
   }
 
@@ -313,11 +400,53 @@ export const reconstructPagesHandler: Handler = async (args, ctx) => {
   const wxrInputs: WxrTemplatePatchInput[] = [];
   const pageIdBySlug = new Map<string, string>();
   let assignmentFailures = 0;
+  // Overwrite guard: each run backs up every page's pre-update post_content into
+  // its own timestamped dir (NOT a single overwritten dir — consecutive runs must
+  // not destroy the only copy of an accepted state).
+  const postContentBackupDir = join(
+    resolve(outputDir),
+    '.post-content-prev',
+    new Date().toISOString().replace(/[:.]/g, '-'),
+  );
+  let postContentBackups = 0;
+  // Phase A: build + gate every page FIRST (no writes yet). Variation hoisting
+  // needs the full page set at once (site-wide constellation counting), and the
+  // hoisted markup must be what the block-fixer canonicalization sees — the
+  // fixer's parse→createBlock→serialize regenerates inner HTML from the comment
+  // attrs, so a comment-attr-only hoist is only safe BEFORE canonicalization.
+  const builtPages: Array<{ p: PageArg; built: ReturnType<typeof buildPageReconstruction>; markup: string }> = [];
+  // Asset triage (Neptune #7): when the triage skill stage wrote
+  // <outputDir>/asset-triage.json, decoration-verdict images are removed from
+  // each page's specs BEFORE any consumer sees them. The apply must run BEFORE
+  // applyMediaMap: triage entries join on the capture-time image URL, which the
+  // media map rewrites to the local WP URL. Absent/malformed file → null →
+  // zero behavior change (fail-open). Removals are recorded into
+  // fallback-diagnostics.json (reasonCode: decorative_asset_triaged).
+  type TriageRemovalRecord = { page: string; slug: string; sectionIndex: number; interactionModel: string; removal: AssetRemoval };
+  const assetTriage = loadAssetTriage(resolve(outputDir));
+  const triageRemoved: TriageRemovalRecord[] = [];
   for (const p of pages) {
-    const specs = specsByPage.get(p.slug);
-    if (!specs) {
+    const rawSpecs = specsByPage.get(p.slug);
+    if (!rawSpecs) {
       report.push({ slug: p.slug, ok: false, reason: 'extraction-failed' });
       continue;
+    }
+    let specs = rawSpecs;
+    if (assetTriage !== null) {
+      const applied = applyAssetTriage(rawSpecs, assetTriage);
+      specs = applied.specs;
+      for (const r of applied.removed) {
+        // The removal's selector always joins back to a spec (the image was
+        // filtered FROM that spec), so the find is total in practice.
+        const sec = rawSpecs.find((s) => selectorKey(s) === r.sectionSelector);
+        triageRemoved.push({
+          page: p.sourceUrl,
+          slug: p.slug,
+          sectionIndex: sec?.sectionIndex ?? -1,
+          interactionModel: sec ? String(sec.interactionModel) : 'unknown',
+          removal: r,
+        });
+      }
     }
     applyMediaMap(specs, mediaMap);
     // Pre-resolve general HTML→blocks conversions for this page's semantic sections
@@ -340,9 +469,77 @@ export const reconstructPagesHandler: Handler = async (args, ctx) => {
       report.push({ slug: p.slug, ok: false, reason: 'gate-failed', gateErrors: built.gate.errors });
       continue;
     }
+    builtPages.push({ p, built, markup: built.postContent });
+  }
+
+  // Variation hoist (Neptune #6): identical instance `style` constellations
+  // recurring ≥3× across the page set become theme block-style variations
+  // (<theme>/styles/blocks/lib-*.json) and the instances swap to is-style-*
+  // classes. Comment-attr-only edits; rendered CSS identical by construction.
+  // Default ON; `variationHoist: false` is the escape hatch. Fail-open: any
+  // error keeps the un-hoisted markup and surfaces a warning in the result.
+  let variationsHoisted = 0;
+  let variationInstances = 0;
+  let hoistWarning: string | undefined;
+  // Variations the hoist DECIDED — Phase B re-applies exactly these swaps to the
+  // pattern-file copies of the markup (never re-counts constellations there).
+  let hoistedVariations: HoistedVariation[] = [];
+  if (args.variationHoist !== false && builtPages.length > 0) {
+    if (!blockFixer.isReady) {
+      // The hoist edits block COMMENT ATTRS only; the emitter's inline-styled
+      // inner HTML is reconciled by the fixer's parse→createBlock→serialize.
+      // With the fixer down, fix() is an identity passthrough — hoisting would
+      // ship post_content whose comment attrs contradict the inner HTML (editor
+      // "invalid content"). Skip rather than desync.
+      hoistWarning = 'skipped: block-fixer unavailable (comment-attr edits require canonicalization)';
+      console.error(`[reconstruct] variation hoist ${hoistWarning}`);
+    } else {
+      try {
+        const hoisted = hoistVariations(builtPages.map((b) => ({ slug: b.p.slug, markup: b.markup })));
+        if (hoisted.variations.length > 0) {
+          // Dual-write like every other theme artifact: live theme + output copy.
+          for (const root of [themeRoot, outThemeDir]) {
+            const stylesDir = join(root, 'styles', 'blocks');
+            mkdirSync(stylesDir, { recursive: true });
+            for (const v of hoisted.variations) {
+              // `version` is REQUIRED: WP_Theme_JSON treats a versionless
+              // partial as schema v1 and the migration strips every 6.6+ key
+              // (slug/blockTypes/styles) — wp_register_block_style_variations_
+              // from_theme_json_partials then skips the variation entirely
+              // (empty blockTypes), so the is-style-lib-* CSS never emits.
+              writeJsonArtifact(join(stylesDir, `${v.slug}.json`), { version: 3, slug: v.slug, title: v.title, blockTypes: v.blockTypes, styles: v.styles });
+            }
+          }
+          // hoistVariations preserves input order and length — swap each page's markup in place.
+          hoisted.pages.forEach((hp, i) => { builtPages[i].markup = hp.markup; });
+          hoistedVariations = hoisted.variations;
+          variationsHoisted = hoisted.variations.length;
+          variationInstances = hoisted.variations.reduce((n, v) => n + v.count, 0);
+        }
+      } catch (err) {
+        hoistWarning = `variation hoist failed (continuing un-hoisted): ${err instanceof Error ? err.message : String(err)}`;
+        console.error(`[reconstruct] ${hoistWarning}`);
+      }
+    }
+  }
+
+  // Phase B: write + canonicalize + install (existing logic, over hoisted markup).
+  for (const { p, built, markup } of builtPages) {
+    // The pattern file (patterns/page-<slug>.php) is deliberately written
+    // PRE-hoist. Hoist swaps are comment-attr-only edits; post_content is
+    // reconciled by the block-fixer canonicalization (parse→createBlock→
+    // serialize regenerates the inner HTML from the attrs), but pattern files
+    // never pass through the fixer — a swapped pattern would carry is-style
+    // attrs over pre-hoist inline-styled inner HTML, permanently editor-invalid
+    // on theme reinstall / pattern rescan. Pre-hoist patterns are internally
+    // consistent (style attrs + matching inline HTML) and editor-valid; they
+    // just diverge from the hoisted post_content, which is the canonical copy.
+    // Re-apply swaps here ONLY once pattern markup is also canonicalized
+    // (applyHoistSwaps in variation-hoist.ts exists for exactly that).
+    const files = built.files;
     // Write to the live theme AND the on-disk output/<site>/theme copy.
     for (const root of [themeRoot, outThemeDir]) {
-      for (const f of built.files) {
+      for (const f of files) {
         const full = join(root, f.path);
         const dir = dirname(full);
         if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
@@ -359,10 +556,11 @@ export const reconstructPagesHandler: Handler = async (args, ctx) => {
     // WP page a real editable block page: write it into post_content (rendered via
     // the template's wp:post-content). The _wp_page_template assignment is deferred
     // to a post-loop pass (after the variant customTemplates register).
-    const fixResult = (await blockFixer.fix([built.postContent]))[0];
-    const finalContent = fixResult?.html ?? built.postContent;
-    const upd = await updatePagePostContent(studioSitePath, p.slug, p.isHome ?? false, finalContent);
+    const fixResult = (await blockFixer.fix([markup]))[0];
+    const finalContent = fixResult?.html ?? markup;
+    const upd = await updatePagePostContent(studioSitePath, p.slug, p.isHome ?? false, finalContent, postContentBackupDir);
     const postUpdated = upd.contentOk;
+    if (upd.backedUp) postContentBackups++;
     if (upd.id) pageIdBySlug.set(p.slug, upd.id);
     plannedPages.push({ slug: p.slug, isHome: p.isHome ?? false, variant: built.variant });
     wxrInputs.push({ slug: p.slug, content: finalContent, templateSlug: collapseTemplates && !(p.isHome ?? false) ? variantTemplateSlug(built.variant.key) : null });
@@ -495,15 +693,19 @@ export const reconstructPagesHandler: Handler = async (args, ctx) => {
   // Site-level count of sections emitted as verbatim core/html islands — feeds the
   // run-report's warning-level htmlFallbackSections so QA can upgrade each to blocks.
   const htmlFallbackSections = report.reduce((n, r) => n + ((r.fallbackSections as number) ?? 0), 0);
-  const allFallbackDiagnostics = report.flatMap((r) => (r.fallbackDiagnostics as FallbackDiagnostic[] | undefined) ?? []);
-  const htmlFallbackByReason = allFallbackDiagnostics.reduce<Record<string, number>>((acc, d) => {
+  const islandDiagnostics = report.flatMap((r) => (r.fallbackDiagnostics as FallbackDiagnostic[] | undefined) ?? []);
+  // htmlFallbackByReason counts ISLAND fallbacks only; triage removals are
+  // appended to the artifact as their own warning-level records (they are not
+  // core/html islands and must not inflate the island tallies).
+  const htmlFallbackByReason = islandDiagnostics.reduce<Record<string, number>>((acc, d) => {
     acc[d.reasonCode] = (acc[d.reasonCode] ?? 0) + 1;
     return acc;
   }, {});
+  const triageDiagnostics = triageRemoved.map((t, i) => buildTriageRemovalDiagnostic({ ...t, ordinal: i }));
   writeJsonArtifact(join(resolve(outputDir), 'fallback-diagnostics.json'), {
     schema: 1,
     site: basename(resolve(outputDir)),
-    diagnostics: allFallbackDiagnostics,
+    diagnostics: [...islandDiagnostics, ...triageDiagnostics],
   });
 
   // Style-usage audit (BDC adoption, blocks path only): supports-vs-css dial
@@ -578,8 +780,17 @@ export const reconstructPagesHandler: Handler = async (args, ctx) => {
     htmlFallbackByReason,
     unassignedRegions,
     styleAudit,
+    variationsHoisted,
+    variationInstances,
+    hoistWarning,
+    jetpackEnsured,
+    jetpackWarning,
+    assetsTriaged: triageRemoved.length,
     specsFromCache,
+    specsFromSavedHtml,
     specsFromLive,
+    postContentBackups,
+    postContentBackupDir: postContentBackups > 0 ? postContentBackupDir : null,
     extractErrors,
     pagesReconstructed: reconstructed,
     pageTemplates: pageTemplatesWritten,
@@ -591,7 +802,11 @@ export const reconstructPagesHandler: Handler = async (args, ctx) => {
     summary: `${reconstructed} pages → ${pageTemplatesWritten} reconstructed templates`
       + (wxrUnmatched.length ? ` · ⚠ ${wxrUnmatched.length} WXR-unmatched (${wxrUnmatched.join(', ')})` : '')
       + (assignmentFailures ? ` · ⚠ ${assignmentFailures} assignment failures` : '')
-      + (collapseError ? ` · ⚠ collapse error: ${collapseError}` : ''),
+      + (collapseError ? ` · ⚠ collapse error: ${collapseError}` : '')
+      + (variationsHoisted ? ` · ${variationsHoisted} style variations hoisted (${variationInstances} instances)` : '')
+      + (hoistWarning ? ` · ⚠ ${hoistWarning}` : '')
+      + (jetpackEnsured ? ' · Jetpack ensured (forms detected)' : '')
+      + (jetpackWarning ? ` · ⚠ ${jetpackWarning}` : ''),
     pages: report,
   });
 };

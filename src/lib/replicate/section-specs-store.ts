@@ -43,8 +43,11 @@ import type { SectionSpec, SourceLandmark } from './section-extract.js';
 // snapshot powering the R4b deterministic styled-island floor. Older caches lack
 // it → invalidate + re-extract so the floor renders styled, not bare.
 // v7: + SectionSpec.selector and a landmarks census (region audit #2)
-// v8: SourceLandmark adds aside/complementary roles and optional linkCount.
-export const SECTION_SPECS_SCHEMA = 8;
+// v8: + SectionSpec.forms[] capture (recognized source form fields + submit
+// label, classified by buildSectionForms) — powers the jetpack/contact-form
+// emission. Older caches lack it → invalidate + re-extract.
+// v9: SourceLandmark adds aside/complementary roles and optional linkCount.
+export const SECTION_SPECS_SCHEMA = 9;
 
 interface SectionSpecsFile {
   schema: number;

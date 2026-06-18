@@ -87,7 +87,7 @@ describe('generic-block-catalog: lossless mixed content', () => {
       '<div class="weird-widget" data-x="1"><span>keep me</span></div>';
     const out = run(html)!;
     expect(out).toContain('<!-- wp:details -->');
-    expect(out).toContain('<!-- wp:html -->'); // the unknown widget survives losslessly
+    expect(out).toContain('<!-- wp:html {"metadata":{"name":"lib-coverage-island"}} -->'); // the unknown widget survives losslessly
     expect(out).toContain('keep me');
     expect(validateBlockMarkup(out)).toEqual([]);
   });

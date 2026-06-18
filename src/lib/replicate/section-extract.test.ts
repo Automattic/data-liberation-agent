@@ -5,11 +5,17 @@ import {
   filterIconCandidate,
   isIconFontFamily,
   rewriteThroughMediaMap,
+  buildSectionForms,
   MAX_SVG_MARKUP_BYTES,
   MIN_ICON_PX,
   MAX_ICON_PX,
 } from './section-extract.js';
-import type { SectionFeatures, SectionChildFeature } from './section-extract.js';
+import type {
+  SectionFeatures,
+  SectionChildFeature,
+  RawForm,
+  RawFormField,
+} from './section-extract.js';
 
 const HTML = `<!doctype html><html><body>
   <section><h1>Welcome</h1><a class="button">Call us</a></section>
@@ -498,5 +504,282 @@ describe('filterIconCandidate', () => {
     expect(
       filterIconCandidate({ kind: 'svg', markup: '<svg></svg>', width: 16, height: 48 }),
     ).not.toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildSectionForms — pure form classifier (the policy extractFull applies in
+// Node over the raw form records collected by the DOM walk — same split as
+// filterIconCandidate / buildSelector: browser emits plain parts, Node builds).
+// All fixture data is fictional (Bluebird Pottery Studio).
+// ---------------------------------------------------------------------------
+
+/** Minimal RawFormField with sane defaults; override per-test. */
+function rfield(over: Partial<RawFormField> = {}): RawFormField {
+  return {
+    tag: 'input',
+    typeAttr: 'text',
+    nameAttr: '',
+    ariaLabel: '',
+    labelText: '',
+    placeholder: '',
+    value: '',
+    required: false,
+    optionTexts: [],
+    rectTop: 100,
+    rectWidth: 320,
+    ...over,
+  };
+}
+
+function rform(fields: RawFormField[], submitCandidates: RawForm['submitCandidates'] = []): RawForm {
+  return { fields, submitCandidates };
+}
+
+describe('buildSectionForms', () => {
+  it('resolves the label chain: labelText → ariaLabel → name (humanized) → placeholder → kind', () => {
+    const [form] = buildSectionForms([
+      rform([
+        rfield({ labelText: 'Your Message', ariaLabel: 'msg', nameAttr: 'msg', placeholder: 'Type here', rectTop: 100 }),
+        rfield({ ariaLabel: 'Workshop topic', nameAttr: 'topic', placeholder: 'Topic', rectTop: 160 }),
+        rfield({ nameAttr: 'company_size', placeholder: 'e.g. 10', rectTop: 220 }),
+        rfield({ placeholder: 'e.g. blue glaze', rectTop: 280 }),
+        rfield({ typeAttr: 'email', rectTop: 340 }),
+      ]),
+    ]);
+    expect(form.fields.map((f) => f.label)).toEqual([
+      'Your Message',
+      'Workshop topic',
+      'Company size',
+      'e.g. blue glaze',
+      'Email',
+    ]);
+  });
+
+  it('marks required via the attribute OR a * marker in the label text (marker stripped)', () => {
+    const [form] = buildSectionForms([
+      rform([
+        rfield({ labelText: 'Phone *', typeAttr: 'tel', rectTop: 100 }),
+        rfield({ labelText: 'Glaze color', required: true, rectTop: 160 }),
+        rfield({ labelText: 'Studio notes', rectTop: 220 }),
+      ]),
+    ]);
+    expect(form.fields[0].required).toBe(true);
+    expect(form.fields[0].label).toBe('Phone');
+    expect(form.fields[1].required).toBe(true);
+    expect(form.fields[2].required).toBe(false);
+  });
+
+  it('classifies email / tel / select / textarea / date / file / hidden kinds', () => {
+    const [form] = buildSectionForms([
+      rform([
+        rfield({ typeAttr: 'email', labelText: 'Email', rectTop: 100 }),
+        rfield({ typeAttr: 'tel', labelText: 'Phone', rectTop: 160 }),
+        rfield({
+          tag: 'select',
+          typeAttr: '',
+          labelText: 'Kiln size',
+          optionTexts: ['Small', 'Medium', 'Large'],
+          rectTop: 220,
+        }),
+        rfield({ tag: 'textarea', typeAttr: '', labelText: 'Message', rectTop: 280 }),
+        rfield({ typeAttr: 'date', labelText: 'Pickup date', rectTop: 340 }),
+        rfield({ typeAttr: 'file', labelText: 'Sketch upload', rectTop: 400 }),
+        rfield({ typeAttr: 'hidden', nameAttr: 'studio_ref', value: 'bluebird-7', rectTop: 0, rectWidth: 0 }),
+      ]),
+    ]);
+    expect(form.fields.map((f) => f.kind)).toEqual([
+      'email',
+      'tel',
+      'select',
+      'textarea',
+      'date',
+      'file',
+      'hidden',
+    ]);
+    // select options preserved in source order
+    expect(form.fields[2].options).toEqual(['Small', 'Medium', 'Large']);
+    // hidden keeps its default value but never gets a widthPct
+    expect(form.fields[6].defaultValue).toBe('bluebird-7');
+    expect(form.fields[6].widthPct).toBeUndefined();
+  });
+
+  it('maps the non-standard type="phone" (Wix telephone fields) to the tel kind', () => {
+    const [form] = buildSectionForms([
+      rform([
+        rfield({ typeAttr: 'phone', labelText: 'Phone', rectTop: 100 }),
+        rfield({ typeAttr: 'email', labelText: 'Email', rectTop: 160 }),
+      ]),
+    ]);
+    expect(form.fields.map((f) => f.kind)).toEqual(['tel', 'email']);
+    expect(form.fields[0].label).toBe('Phone');
+  });
+
+  it('collapses a shared-name radio group into ONE field with options in source order', () => {
+    const [form] = buildSectionForms([
+      rform([
+        rfield({ typeAttr: 'radio', nameAttr: 'kiln_type', labelText: 'Gas', value: 'gas', rectTop: 100 }),
+        rfield({ typeAttr: 'radio', nameAttr: 'kiln_type', labelText: 'Electric', value: 'electric', rectTop: 130 }),
+        rfield({ typeAttr: 'radio', nameAttr: 'kiln_type', labelText: 'Wood', value: 'wood', rectTop: 160 }),
+      ]),
+    ]);
+    expect(form.fields).toHaveLength(1);
+    expect(form.fields[0].kind).toBe('radio');
+    expect(form.fields[0].options).toEqual(['Gas', 'Electric', 'Wood']);
+  });
+
+  it('collapses a shared-name checkbox group into one checkbox field with options', () => {
+    const [form] = buildSectionForms([
+      rform([
+        rfield({ typeAttr: 'checkbox', nameAttr: 'classes[]', labelText: 'Wheel throwing', rectTop: 100 }),
+        rfield({ typeAttr: 'checkbox', nameAttr: 'classes[]', labelText: 'Hand building', rectTop: 130 }),
+      ]),
+    ]);
+    expect(form.fields).toHaveLength(1);
+    expect(form.fields[0].kind).toBe('checkbox');
+    expect(form.fields[0].options).toEqual(['Wheel throwing', 'Hand building']);
+  });
+
+  it('detects a consent checkbox via terms/consent/privacy/agree label wording', () => {
+    const [form] = buildSectionForms([
+      rform([
+        rfield({ typeAttr: 'checkbox', labelText: 'I agree to the privacy policy', rectTop: 100 }),
+        rfield({ typeAttr: 'checkbox', labelText: 'Send me the newsletter', rectTop: 140 }),
+      ]),
+    ]);
+    expect(form.fields[0].kind).toBe('consent');
+    expect(form.fields[1].kind).toBe('checkbox');
+  });
+
+  it('applies the name heuristic to text inputs by label or name attr', () => {
+    const [form] = buildSectionForms([
+      rform([
+        rfield({ labelText: 'Full Name', rectTop: 100 }),
+        rfield({ nameAttr: 'name', rectTop: 160 }),
+        rfield({ labelText: 'Last name *', rectTop: 220 }),
+        rfield({ labelText: 'Company name', rectTop: 280 }),
+      ]),
+    ]);
+    expect(form.fields.map((f) => f.kind)).toEqual(['name', 'name', 'name', 'text']);
+  });
+
+  it('assigns widthPct 50/50 to a 2-up row (rectTop within ±8px) and 100 to a full row', () => {
+    const [form] = buildSectionForms([
+      rform([
+        rfield({ labelText: 'First name', rectTop: 100 }),
+        rfield({ labelText: 'Last name', rectTop: 104 }), // same row, within ±8px
+        rfield({ tag: 'textarea', typeAttr: '', labelText: 'Message', rectTop: 200 }),
+      ]),
+    ]);
+    expect(form.fields[0].widthPct).toBe(50);
+    expect(form.fields[1].widthPct).toBe(50);
+    expect(form.fields[2].widthPct).toBe(100);
+  });
+
+  it('quantizes a 3-up row to 25 (100/3 = 33.3 → nearest of 25|50|75|100)', () => {
+    const [form] = buildSectionForms([
+      rform([
+        rfield({ labelText: 'City', rectTop: 100 }),
+        rfield({ labelText: 'State', rectTop: 103 }),
+        rfield({ labelText: 'Zip', rectTop: 106 }),
+      ]),
+    ]);
+    expect(form.fields.map((f) => f.widthPct)).toEqual([25, 25, 25]);
+  });
+
+  it('caps rows wider than 4 fields at 25', () => {
+    const [form] = buildSectionForms([
+      rform([1, 2, 3, 4, 5].map((i) => rfield({ labelText: `Digit ${i}`, rectTop: 100 + i }))),
+    ]);
+    expect(form.fields.every((f) => f.widthPct === 25)).toBe(true);
+  });
+
+  it('omits a form with zero recognized fields entirely', () => {
+    const out = buildSectionForms([
+      rform(
+        [rfield({ typeAttr: 'password', labelText: 'Password' }), rfield({ typeAttr: 'search' })],
+        [{ isSubmit: true, text: 'Log in' }],
+      ),
+    ]);
+    expect(out).toEqual([]);
+  });
+
+  it('picks the submit label from [type=submit], else the last button, else "Submit"', () => {
+    const fields = [rfield({ typeAttr: 'email', labelText: 'Email' })];
+    const [a] = buildSectionForms([
+      rform(fields, [
+        { isSubmit: false, text: 'Clear' },
+        { isSubmit: true, text: 'Send Inquiry' },
+      ]),
+    ]);
+    expect(a.submitLabel).toBe('Send Inquiry');
+    const [b] = buildSectionForms([
+      rform(fields, [
+        { isSubmit: false, text: 'Back' },
+        { isSubmit: false, text: 'Continue' },
+      ]),
+    ]);
+    expect(b.submitLabel).toBe('Continue');
+    const [c] = buildSectionForms([rform(fields)]);
+    expect(c.submitLabel).toBe('Submit');
+  });
+
+  it('keeps placeholder and default value on recognized fields', () => {
+    const [form] = buildSectionForms([
+      rform([
+        rfield({ typeAttr: 'email', labelText: 'Email', placeholder: 'you@example.com', value: 'potter@example.com' }),
+      ]),
+    ]);
+    expect(form.fields[0].placeholder).toBe('you@example.com');
+    expect(form.fields[0].defaultValue).toBe('potter@example.com');
+  });
+
+  // Proportional form widths (FF3): rectWidth drives widthPct within a row.
+  it('70/30 rectWidth row → widthPct 75/25', () => {
+    const [form] = buildSectionForms([
+      rform([
+        rfield({ labelText: 'Studio name', rectTop: 100, rectWidth: 700 }),
+        rfield({ labelText: 'Ext', rectTop: 102, rectWidth: 300 }),
+      ]),
+    ]);
+    expect(form.fields[0].widthPct).toBe(75); // 70% → nearest 25 = 75
+    expect(form.fields[1].widthPct).toBe(25); // 30% → nearest 25 = 25
+  });
+
+  it('60/40 rectWidth row → widthPct 50/50', () => {
+    const [form] = buildSectionForms([
+      rform([
+        rfield({ labelText: 'City', rectTop: 100, rectWidth: 600 }),
+        rfield({ labelText: 'Zip', rectTop: 101, rectWidth: 400 }),
+      ]),
+    ]);
+    expect(form.fields[0].widthPct).toBe(50); // 60% → nearest 25 = 50
+    expect(form.fields[1].widthPct).toBe(50); // 40% → nearest 25 = 50
+  });
+
+  it('40/40/20 row → 50/50/25 (sum 125 — Jetpack wraps the overflow, accepted)', () => {
+    // Independent nearest-25 quantization can push a 3+-field unequal row's
+    // sum past 100. No sum repair: Jetpack's flex-basis layout wraps the
+    // overflowing field to a new visual row rather than clipping it.
+    const [form] = buildSectionForms([
+      rform([
+        rfield({ labelText: 'First name', rectTop: 100, rectWidth: 400 }),
+        rfield({ labelText: 'Last name', rectTop: 102, rectWidth: 400 }),
+        rfield({ labelText: 'Suffix', rectTop: 104, rectWidth: 200 }),
+      ]),
+    ]);
+    expect(form.fields.map((f) => f.widthPct)).toEqual([50, 50, 25]);
+  });
+
+  it('zero-width member falls back to equal split', () => {
+    const [form] = buildSectionForms([
+      rform([
+        rfield({ labelText: 'First', rectTop: 100, rectWidth: 320 }),
+        rfield({ labelText: 'Last', rectTop: 100, rectWidth: 0 }),
+      ]),
+    ]);
+    // any zero → equal split: 2 fields → 50/50
+    expect(form.fields[0].widthPct).toBe(50);
+    expect(form.fields[1].widthPct).toBe(50);
   });
 });

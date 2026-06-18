@@ -9,7 +9,19 @@ mkdirSync(FIXTURE_TMP, { recursive: true });
 
 interface SetupOpts {
   /** Stubs to seed; key is sourceUrl, value defines status + localPath relative to outputDir/media. */
-  stubs: Array<{ url: string; filename: string; bytes?: Buffer; alreadyInstalled?: number; status?: 'success' | 'error' | 'awaiting' }>;
+  stubs: Array<{
+    url: string;
+    filename: string;
+    bytes?: Buffer;
+    alreadyInstalled?: number;
+    status?: 'success' | 'error' | 'awaiting';
+    /** Record `svgRisky` on the stub (SVG survival routing). */
+    svgRisky?: boolean;
+    /** Write this PNG into media/ AND record it as the stub's rasterPath. */
+    rasterFilename?: string;
+    /** Write this PNG into media/ WITHOUT recording rasterPath (dedup-guard scenario). */
+    sidecarPng?: string;
+  }>;
 }
 
 function setup(opts: SetupOpts) {
@@ -24,7 +36,18 @@ function setup(opts: SetupOpts) {
     const filePath = join(outputDir, 'media', s.filename);
     if (status === 'success') {
       writeFileSync(filePath, s.bytes ?? Buffer.from('fake'));
-      store.markSuccess(s.url, filePath);
+      let extra: { rasterPath?: string; svgRisky?: boolean } | undefined;
+      if (s.rasterFilename) {
+        const rasterPath = join(outputDir, 'media', s.rasterFilename);
+        writeFileSync(rasterPath, Buffer.from('fake-png'));
+        extra = { rasterPath, svgRisky: s.svgRisky };
+      } else if (s.svgRisky !== undefined) {
+        extra = { svgRisky: s.svgRisky };
+      }
+      if (s.sidecarPng) {
+        writeFileSync(join(outputDir, 'media', s.sidecarPng), Buffer.from('fake-png'));
+      }
+      store.markSuccess(s.url, filePath, extra);
       if (s.alreadyInstalled !== undefined) {
         store.recordWpPostId(s.url, s.alreadyInstalled);
       }
@@ -35,6 +58,18 @@ function setup(opts: SetupOpts) {
   }
   store.flush();
   return { outputDir, wpRoot };
+}
+
+/** Read back the JSON payload staged for a given eval-file exec call. */
+function readStagedPayload(outputDir: string, args: string[]): Array<{ filename: string; sourceUrl: string }> {
+  const vfsPath = args[args.indexOf('eval-file') + 2] as string;
+  const name = vfsPath.split('/').pop()!;
+  return JSON.parse(readFileSync(join(outputDir, 'site', '.dla-scripts', 'payloads', name), 'utf8'));
+}
+
+/** All exec calls that are wp-cli `plugin …` invocations (ensurePlugin traffic). */
+function pluginCalls(exec: ReturnType<typeof vi.fn>): string[][] {
+  return exec.mock.calls.filter(([, args]) => (args as string[]).includes('plugin')).map(([, args]) => args as string[]);
 }
 
 const SUCCESS_RESPONSE = (entries: Array<{ sourceUrl: string; filename: string; postId: number; localUrl: string; reused?: boolean }>) =>
@@ -460,6 +495,309 @@ describe('installMediaForUrl', () => {
       expect(result.installed).toHaveLength(1);
       expect(result.errors).toHaveLength(1);
       expect(result.errors[0].sourceUrl).toBe('https://cdn/b.jpg');
+    } finally {
+      rmSync(outputDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('installMediaForUrl — SVG routing (svg survival)', () => {
+  it('substitutes the PNG sibling for risky SVGs without touching safe-svg', async () => {
+    const { outputDir, wpRoot } = setup({
+      stubs: [{ url: 'https://cdn/logo.svg', filename: 'logo.svg', svgRisky: true, rasterFilename: 'logo.png' }],
+    });
+    try {
+      const exec = vi.fn().mockImplementation(async (_bin: string, args: string[]) => {
+        if (args.includes('eval-file')) {
+          return {
+            stdout: SUCCESS_RESPONSE([
+              { sourceUrl: 'https://cdn/logo.svg', filename: 'logo.png', postId: 5, localUrl: 'http://wp/uploads/2026/06/logo.png' },
+            ]),
+            stderr: '',
+          };
+        }
+        return { stdout: '', stderr: '' };
+      });
+
+      const result = await installMediaForUrl({ outputDir, url: 'https://example.com/page', wpRoot, _execFile: exec });
+
+      // No SVG left in the batch → no ensurePlugin traffic at all.
+      expect(pluginCalls(exec)).toHaveLength(0);
+      expect(exec).toHaveBeenCalledTimes(1);
+      const payload = readStagedPayload(outputDir, exec.mock.calls[0][1] as string[]);
+      expect(payload).toHaveLength(1);
+      expect(payload[0].filename).toBe('logo.png');
+      expect(payload[0].sourceUrl).toBe('https://cdn/logo.svg');
+      expect(result.errors).toEqual([]);
+      expect(result.installed).toHaveLength(1);
+      expect(result.svg).toEqual({ svgUploaded: 0, svgSubstituted: 1, svgFailed: 0, safeSvgEnsured: false });
+    } finally {
+      rmSync(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps clean SVGs as SVG and ensures safe-svg exactly once before the batch', async () => {
+    const { outputDir, wpRoot } = setup({
+      stubs: [
+        { url: 'https://cdn/a.svg', filename: 'a.svg' },
+        { url: 'https://cdn/b.svg', filename: 'b.svg' },
+      ],
+    });
+    try {
+      const exec = vi.fn().mockImplementation(async (_bin: string, args: string[]) => {
+        if (args.includes('eval-file')) {
+          return {
+            stdout: SUCCESS_RESPONSE([
+              { sourceUrl: 'https://cdn/a.svg', filename: 'a.svg', postId: 1, localUrl: 'http://wp/uploads/2026/06/a.svg' },
+              { sourceUrl: 'https://cdn/b.svg', filename: 'b.svg', postId: 2, localUrl: 'http://wp/uploads/2026/06/b.svg' },
+            ]),
+            stderr: '',
+          };
+        }
+        return { stdout: '', stderr: '' };
+      });
+
+      const result = await installMediaForUrl({ outputDir, url: 'https://example.com/page', wpRoot, _execFile: exec });
+
+      // ensurePlugin ran once (one is-installed probe) and BEFORE the eval-file batch.
+      const isInstalledCalls = exec.mock.calls.filter(([, args]) => (args as string[]).includes('is-installed'));
+      expect(isInstalledCalls).toHaveLength(1);
+      expect((isInstalledCalls[0][1] as string[])).toContain('safe-svg');
+      const firstPluginIdx = exec.mock.calls.findIndex(([, args]) => (args as string[]).includes('plugin'));
+      const evalIdx = exec.mock.calls.findIndex(([, args]) => (args as string[]).includes('eval-file'));
+      expect(firstPluginIdx).toBeGreaterThanOrEqual(0);
+      expect(firstPluginIdx).toBeLessThan(evalIdx);
+
+      const payload = readStagedPayload(outputDir, exec.mock.calls[evalIdx][1] as string[]);
+      expect(payload.map((p) => p.filename).sort()).toEqual(['a.svg', 'b.svg']);
+      expect(result.errors).toEqual([]);
+      expect(result.svg).toEqual({ svgUploaded: 2, svgSubstituted: 0, svgFailed: 0, safeSvgEnsured: true });
+    } finally {
+      rmSync(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  it('risky deduped SVG (no rasterPath) substitutes the on-disk PNG sibling via the dedup guard', async () => {
+    // Byte-duplicate SVG URLs dedupe at fetch: the stub points at the
+    // ORIGINAL's localPath but carries no rasterPath of its own. The
+    // original's sibling lives at exactly localPath with .svg → .png.
+    const { outputDir, wpRoot } = setup({
+      stubs: [{ url: 'https://cdn/dup.svg', filename: 'shared.svg', svgRisky: true, sidecarPng: 'shared.png' }],
+    });
+    try {
+      const exec = vi.fn().mockImplementation(async (_bin: string, args: string[]) => {
+        if (args.includes('eval-file')) {
+          return {
+            stdout: SUCCESS_RESPONSE([
+              { sourceUrl: 'https://cdn/dup.svg', filename: 'shared.png', postId: 8, localUrl: 'http://wp/uploads/2026/06/shared.png' },
+            ]),
+            stderr: '',
+          };
+        }
+        return { stdout: '', stderr: '' };
+      });
+
+      const result = await installMediaForUrl({ outputDir, url: 'https://example.com/page', wpRoot, _execFile: exec });
+
+      const payload = readStagedPayload(outputDir, exec.mock.calls[0][1] as string[]);
+      expect(payload[0].filename).toBe('shared.png');
+      expect(pluginCalls(exec)).toHaveLength(0);
+      expect(result.svg).toEqual({ svgUploaded: 0, svgSubstituted: 1, svgFailed: 0, safeSvgEnsured: false });
+    } finally {
+      rmSync(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  it('clean deduped SVG stays SVG even when a PNG sibling exists on disk', async () => {
+    const { outputDir, wpRoot } = setup({
+      stubs: [{ url: 'https://cdn/dup2.svg', filename: 'icon.svg', sidecarPng: 'icon.png' }],
+    });
+    try {
+      const exec = vi.fn().mockImplementation(async (_bin: string, args: string[]) => {
+        if (args.includes('eval-file')) {
+          return {
+            stdout: SUCCESS_RESPONSE([
+              { sourceUrl: 'https://cdn/dup2.svg', filename: 'icon.svg', postId: 3, localUrl: 'http://wp/uploads/2026/06/icon.svg' },
+            ]),
+            stderr: '',
+          };
+        }
+        return { stdout: '', stderr: '' };
+      });
+
+      const result = await installMediaForUrl({ outputDir, url: 'https://example.com/page', wpRoot, _execFile: exec });
+
+      const evalCall = exec.mock.calls.find(([, args]) => (args as string[]).includes('eval-file'))!;
+      const payload = readStagedPayload(outputDir, evalCall[1] as string[]);
+      expect(payload[0].filename).toBe('icon.svg');
+      expect(result.svg).toEqual({ svgUploaded: 1, svgSubstituted: 0, svgFailed: 0, safeSvgEnsured: true });
+    } finally {
+      rmSync(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  it('ensurePlugin failure → mass PNG substitution + error stub for SVGs without raster', async () => {
+    const { outputDir, wpRoot } = setup({
+      stubs: [
+        { url: 'https://cdn/c.svg', filename: 'c.svg', rasterFilename: 'c.png' },
+        { url: 'https://cdn/d.svg', filename: 'd.svg' },
+      ],
+    });
+    try {
+      const exec = vi.fn().mockImplementation(async (_bin: string, args: string[]) => {
+        if (args.includes('plugin')) throw new Error('no network');
+        if (args.includes('eval-file')) {
+          return {
+            stdout: SUCCESS_RESPONSE([
+              { sourceUrl: 'https://cdn/c.svg', filename: 'c.png', postId: 6, localUrl: 'http://wp/uploads/2026/06/c.png' },
+            ]),
+            stderr: '',
+          };
+        }
+        return { stdout: '', stderr: '' };
+      });
+
+      const result = await installMediaForUrl({ outputDir, url: 'https://example.com/page', wpRoot, _execFile: exec });
+
+      const evalCall = exec.mock.calls.find(([, args]) => (args as string[]).includes('eval-file'))!;
+      const payload = readStagedPayload(outputDir, evalCall[1] as string[]);
+      expect(payload.map((p) => p.filename)).toEqual(['c.png']);
+      expect(result.installed).toHaveLength(1);
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0].sourceUrl).toBe('https://cdn/d.svg');
+      expect(result.errors[0].error).toMatch(/safe-svg unavailable and no raster fallback/);
+      expect(result.svg).toEqual({ svgUploaded: 0, svgSubstituted: 1, svgFailed: 1, safeSvgEnsured: false });
+    } finally {
+      rmSync(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  it('retries a per-file SVG insert failure once with the PNG sibling', async () => {
+    const { outputDir, wpRoot } = setup({
+      stubs: [{ url: 'https://cdn/e.svg', filename: 'e.svg', rasterFilename: 'e.png' }],
+    });
+    try {
+      let evalCalls = 0;
+      const exec = vi.fn().mockImplementation(async (_bin: string, args: string[]) => {
+        if (args.includes('eval-file')) {
+          evalCalls += 1;
+          if (evalCalls === 1) {
+            return {
+              stdout: 'DLA_INSTALL_MEDIA_JSON_BEGIN\n' + JSON.stringify({
+                results: [],
+                errors: [{ sourceUrl: 'https://cdn/e.svg', filename: 'e.svg', error: 'svg_mime_rejected: image/svg+xml is not allowed on this site (Safe SVG inactive)' }],
+              }) + '\nDLA_INSTALL_MEDIA_JSON_END\n',
+              stderr: '',
+            };
+          }
+          return {
+            stdout: SUCCESS_RESPONSE([
+              { sourceUrl: 'https://cdn/e.svg', filename: 'e.png', postId: 9, localUrl: 'http://wp/uploads/2026/06/e.png' },
+            ]),
+            stderr: '',
+          };
+        }
+        return { stdout: '', stderr: '' };
+      });
+
+      const result = await installMediaForUrl({ outputDir, url: 'https://example.com/page', wpRoot, _execFile: exec });
+
+      expect(evalCalls).toBe(2);
+      const evalArgList = exec.mock.calls.filter(([, args]) => (args as string[]).includes('eval-file'));
+      const retryPayload = readStagedPayload(outputDir, evalArgList[1][1] as string[]);
+      expect(retryPayload.map((p) => p.filename)).toEqual(['e.png']);
+      expect(result.errors).toEqual([]);
+      expect(result.installed).toHaveLength(1);
+      expect(result.installed[0].postId).toBe(9);
+      expect(result.svg).toEqual({ svgUploaded: 0, svgSubstituted: 1, svgFailed: 0, safeSvgEnsured: true });
+      // The PNG was copied into uploads for the retry batch.
+      const store = MediaStubStore.load(outputDir);
+      expect(store.get('https://cdn/e.svg')?.wpPostId).toBe(9);
+    } finally {
+      rmSync(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  it('a failed PNG retry surfaces as svgFailed with a retry-tagged error', async () => {
+    const { outputDir, wpRoot } = setup({
+      stubs: [{ url: 'https://cdn/f.svg', filename: 'f.svg', rasterFilename: 'f.png' }],
+    });
+    try {
+      let evalCalls = 0;
+      const exec = vi.fn().mockImplementation(async (_bin: string, args: string[]) => {
+        if (args.includes('eval-file')) {
+          evalCalls += 1;
+          const failure = evalCalls === 1
+            ? { sourceUrl: 'https://cdn/f.svg', filename: 'f.svg', error: 'svg_mime_rejected: nope' }
+            : { sourceUrl: 'https://cdn/f.svg', filename: 'f.png', error: 'wp_insert_attachment returned 0' };
+          return {
+            stdout: 'DLA_INSTALL_MEDIA_JSON_BEGIN\n' + JSON.stringify({ results: [], errors: [failure] }) + '\nDLA_INSTALL_MEDIA_JSON_END\n',
+            stderr: '',
+          };
+        }
+        return { stdout: '', stderr: '' };
+      });
+
+      const result = await installMediaForUrl({ outputDir, url: 'https://example.com/page', wpRoot, _execFile: exec });
+
+      expect(evalCalls).toBe(2);
+      expect(result.installed).toEqual([]);
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0].error).toMatch(/svg png retry/);
+      expect(result.svg).toEqual({ svgUploaded: 0, svgSubstituted: 0, svgFailed: 1, safeSvgEnsured: true });
+    } finally {
+      rmSync(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  it('a per-file SVG failure with no raster fallback stays an error (no retry batch)', async () => {
+    const { outputDir, wpRoot } = setup({
+      stubs: [{ url: 'https://cdn/g.svg', filename: 'g.svg' }],
+    });
+    try {
+      let evalCalls = 0;
+      const exec = vi.fn().mockImplementation(async (_bin: string, args: string[]) => {
+        if (args.includes('eval-file')) {
+          evalCalls += 1;
+          return {
+            stdout: 'DLA_INSTALL_MEDIA_JSON_BEGIN\n' + JSON.stringify({
+              results: [],
+              errors: [{ sourceUrl: 'https://cdn/g.svg', filename: 'g.svg', error: 'svg_mime_rejected: nope' }],
+            }) + '\nDLA_INSTALL_MEDIA_JSON_END\n',
+            stderr: '',
+          };
+        }
+        return { stdout: '', stderr: '' };
+      });
+
+      const result = await installMediaForUrl({ outputDir, url: 'https://example.com/page', wpRoot, _execFile: exec });
+
+      expect(evalCalls).toBe(1);
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0].error).toMatch(/svg_mime_rejected/);
+      expect(result.svg).toEqual({ svgUploaded: 0, svgSubstituted: 0, svgFailed: 1, safeSvgEnsured: true });
+    } finally {
+      rmSync(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  it('non-SVG batches never touch the plugin CLI and report a zero tally', async () => {
+    const { outputDir, wpRoot } = setup({
+      stubs: [{ url: 'https://cdn/a.jpg', filename: 'a.jpg' }],
+    });
+    try {
+      const exec = vi.fn().mockResolvedValue({
+        stdout: SUCCESS_RESPONSE([
+          { sourceUrl: 'https://cdn/a.jpg', filename: 'a.jpg', postId: 42, localUrl: 'http://wp/uploads/2024/01/a.jpg' },
+        ]),
+        stderr: '',
+      });
+
+      const result = await installMediaForUrl({ outputDir, url: 'https://example.com/page', wpRoot, _execFile: exec });
+
+      expect(exec).toHaveBeenCalledTimes(1);
+      expect(pluginCalls(exec)).toHaveLength(0);
+      expect(result.svg).toEqual({ svgUploaded: 0, svgSubstituted: 0, svgFailed: 0, safeSvgEnsured: false });
     } finally {
       rmSync(outputDir, { recursive: true, force: true });
     }

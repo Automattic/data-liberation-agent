@@ -95,7 +95,7 @@ npx tsx src/mcp-server.ts
 npm run mcp
 ```
 
-It exposes **34 tools**. The ones you'll call directly for a deterministic extract → QA → import flow:
+It exposes **35 tools**. The ones you'll call directly for a deterministic extract → QA → import flow:
 
 `liberate_detect`, `liberate_discover`, `liberate_inspect`, `liberate_extract`, `liberate_screenshot`, `liberate_status`, `liberate_qa`, `liberate_verify`, `liberate_setup`, and `liberate_import` — plus `liberate_paths` (resolve the output directory) and `liberate_probe` / `liberate_map_apis` (browser-based diagnostics). The remaining tools drive the design/reconstruction phase and are orchestrated by the skills rather than called by hand. Full reference with parameters: [docs/mcp.md](./docs/mcp.md).
 

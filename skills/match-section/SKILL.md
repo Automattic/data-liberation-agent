@@ -26,6 +26,27 @@ This is an eyes-on loop, not a one-shot emit. Apply → render → **look at bot
 
 Everything else you READ yourself from the captured data below.
 
+## The refine report — your audit trail (MANDATORY)
+
+You own ONE file: `<outputDir>/refine/<slug>/<sectionIndex>.json`. Write it atomically (write `<file>.tmp`, then rename). Shape:
+
+```json
+{
+  "schema": 1, "slug": "<page slug>", "sourceUrl": "<source URL>", "index": <sectionIndex>,
+  "findings": [{ "id": "kebab-stable-id", "region": "human label", "severity": "high|medium|low", "description": "design shows X, replica shows Y", "block_change": "wp:paragraph → wp:heading level=2 (or null)", "style_change": "fontSize → preset:large (or null)", "affects_layout": true }],
+  "applied": [{ "id": "...", "summary": "what you changed" }],
+  "skipped": [{ "id": "...", "reason": "one sentence" }]
+}
+```
+
+Work in three phases:
+
+**Phase 1 — DIAGNOSE (no edits).** Look at source vs built side-by-side. Write EVERY visible difference as a finding — wrong color, size, spacing, alignment, dropped media, wrong width, layout overrun. Ids are kebab-case, unique, stable on re-runs (`hero-heading-size`, not `finding-1`). Populate `block_change` whenever a block swap/attribute change is implied, `style_change` whenever a measurable style value is implied — a finding with neither is acceptable only for free-form content differences. Write the report file with `applied: []`, `skipped: []` BEFORE touching markup.
+
+**Phase 2 — FIX (the eyes-on loop, unchanged).** Apply → render → look at both → iterate, exactly as described below.
+
+**Phase 3 — ACCOUNT.** Update the report: every finding id lands in exactly one of `applied` (with a summary of the actual change) or `skipped` (with a one-sentence reason — "within font-substitution tolerance" is legal; silence is not). Then call `liberate_refine_report {outputDir, slug}`. If it fails, fix the accounting (or the section) — a section with unaccounted findings is NOT done.
+
 ## The captured data — this is your fuel. Read ALL of it for the section.
 
 For section index `i` of the page:
@@ -41,6 +62,7 @@ For section index `i` of the page:
 2. **`outputDir/design-foundation.json`** — the theme's semantic tokens (color roles, type families, spacing). Prefer a token slug when the captured value maps to one; use an explicit value when it does not.
 3. **`outputDir/theme/theme.json`** — the registered `fontFamilies` slugs, `fontSizes`, `color.palette` slugs you can reference.
 4. **Source section image** — the cropped source screenshot for this section (see "Looking", below).
+5. **`<outputDir>/asset-triage.json` (when present)** — decoration entries for your section explain imagery that was deliberately NOT emitted — the `description` tells you what the visual was. Reproduce its intent STRUCTURALLY (`wp:separator`, parent border, background color/gradient) per styling-priority.md; do not re-add the image, and do not flag its absence as a parity gap.
 
 If a value is missing from the spec, get it from `styledHtml`. Do not guess.
 
@@ -68,6 +90,10 @@ The section's blocks live in the page's `post_content` and in `outputDir/theme/t
 | columnCount | a `core/columns` with that many `core/column` (do NOT flatten) |
 | cover image focal point | inline `style="object-position:X% Y%"` DIRECTLY on the `<img>` tag — NOT `focalPoint` block JSON. Static-HTML patterns bypass server-side cover rendering, so `focalPoint` JSON does nothing; the inline `object-position` is what actually moves the crop. |
 
+**Styling decisions:** follow `skills/replicate-with-blocks/styling-priority.md` — the preset→patch→instance→variation→layout→CSS cascade, the structured-props cheat sheet, and the hard bans (no raw style="" attrs, no invented className CSS hooks). Native blocks only; core/html islands are exempt.
+
+**Existing block style variations — inventory first.** Before emitting ANY new style, list `<studioSitePath>/wp-content/themes/<themeSlug>/styles/blocks/*.json`. Each file is a registered variation (`slug`, `title`, `blockTypes`, `styles`). When one matches what the section needs, REUSE it: apply `is-style-<slug>` on the block. NEVER redeclare an existing slug, never invent an `is-style-*` class with no backing file. New variations follow styling-priority.md option 5 (recurring + nameable only) and are written as a new `styles/blocks/<slug>.json` file (slug `lib-` prefixed) plus the class on each claiming block.
+
 **Preserve ALL content** — every heading, paragraph, list item, button, image the source shows ([[feedback_never_lose_source_content]]). Never drop an image to "simplify."
 
 ## Render your change
@@ -86,6 +112,7 @@ After editing the section's markup:
 
    A composition difference that comes from the SOURCE's pre-cropped CDN asset (e.g. a Wix image served pre-cropped at a width you don't have the exact pixels for) is NOT a markup bug — note it as residual, don't chase it with markup changes.
 3. **Read BOTH images** (Read tool on the two PNGs). Put them next to each other in your reasoning.
+   **Diff-image hygiene:** a `.diff.png` / `.padded.png` marks WHERE pixels differ — never read a color, font, or size from it. Red is the difference marker; magenta (in `.padded.png`) means one side has no content at that location (layout overrun — high severity). Read every actual value from the SOURCE screenshot.
 4. **Name every difference** — bluntly, itemized ([[feedback_honest_visual_assessment]]): background color? section padding (too tight / too loose)? heading size? line-height (cramped/overlapping)? body font wrong face? alignment (centered vs left)? full-bleed vs boxed? column count flattened? missing image? button style?
 5. If ANY real difference remains → fix it in the markup (map back to the table above, pulling exact values from the spec / `styledHtml`), re-render, re-look. Loop.
 6. Only when the two images are **visually identical** (modulo font-substitution + minor text reflow) do you finish this section.

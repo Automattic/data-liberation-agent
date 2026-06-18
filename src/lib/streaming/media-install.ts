@@ -29,7 +29,8 @@ import { dirname, join, resolve } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
-import { MediaStubStore } from '../resume-state/index.js';
+import { MediaStubStore, type MediaStub } from '../resume-state/index.js';
+import { ensurePlugin, type ExecFn } from '../preview/ensure-plugin.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -52,6 +53,9 @@ const STUDIO_VFS_ROOT = '/wordpress';
 const SCRIPTS_SUBDIR = '.dla-scripts';
 const PAYLOADS_SUBDIR = '.dla-scripts/payloads';
 
+/** Monotonic per-process payload counter — see payloadFilename below. */
+let payloadSeq = 0;
+
 export interface MediaInstallOpts {
   /** Liberation output directory containing media/ and media-stubs.json. */
   outputDir: string;
@@ -65,10 +69,23 @@ export interface MediaInstallOpts {
   _execFile?: (file: string, args: readonly string[]) => Promise<{ stdout: string; stderr: string }>;
 }
 
+/** Install-time SVG routing tally (svg survival, F1). */
+export interface SvgInstallTally {
+  /** SVG-origin assets that landed in the library as SVG. */
+  svgUploaded: number;
+  /** SVG-origin assets that landed as their rasterized PNG sibling. */
+  svgSubstituted: number;
+  /** SVG-origin assets that failed to land at all. */
+  svgFailed: number;
+  /** True when ensurePlugin('safe-svg') ran and succeeded for this batch. */
+  safeSvgEnsured: boolean;
+}
+
 export interface MediaInstallResult {
   installed: Array<{ sourceUrl: string; postId: number; localUrl: string; localPath: string }>;
   skipped: Array<{ sourceUrl: string; reason: 'already-installed' | 'no-local-file' | 'no-stub' }>;
   errors: Array<{ sourceUrl: string; error: string }>;
+  svg: SvgInstallTally;
 }
 
 export interface MediaFile {
@@ -93,6 +110,21 @@ interface PayloadEntry {
   year: string;
   month: string;
   sourceUrl: string;
+}
+
+interface PendingItem {
+  url: string;
+  stub: MediaStub;
+  entry: PayloadEntry;
+  absPath: string;
+  /** Set when the stub's local file is an SVG — drives install-time routing. */
+  svgOrigin?: boolean;
+  /** Resolved absolute path of the PNG raster sibling (stub field or dedup-guard derivation). */
+  rasterAbs?: string | null;
+  /** True once the entry was rerouted to upload the PNG instead of the SVG. */
+  substituted?: boolean;
+  /** Dropped from the batch entirely (safe-svg unavailable + no raster fallback). */
+  dropped?: boolean;
 }
 
 interface PhpResultEntry {
@@ -199,11 +231,18 @@ export async function installMediaFiles(opts: MediaFilesInstallOpts): Promise<Me
 
 /** Single entry-point. Always opens MediaStubStore in-place. */
 export async function installMediaForUrl(opts: MediaInstallOpts): Promise<MediaInstallResult> {
-  const result: MediaInstallResult = { installed: [], skipped: [], errors: [] };
+  const result: MediaInstallResult = {
+    installed: [],
+    skipped: [],
+    errors: [],
+    svg: { svgUploaded: 0, svgSubstituted: 0, svgFailed: 0, safeSvgEnsured: false },
+  };
   const stubs = MediaStubStore.load(opts.outputDir);
   const mediaDir = join(resolve(opts.outputDir), 'media');
 
-  const pending: MediaFile[] = [];
+  // 1. Walk every stub and bucket it: ready-to-install, already-done,
+  // not-locally-downloaded, etc.
+  const pending: PendingItem[] = [];
   for (const [url, stub] of stubs.list()) {
     if (stub.status !== 'success' || !stub.localPath) {
       result.skipped.push({ sourceUrl: url, reason: 'no-local-file' });
@@ -237,28 +276,182 @@ export async function installMediaForUrl(opts: MediaInstallOpts): Promise<MediaI
       result.skipped.push({ sourceUrl: url, reason: 'no-local-file' });
       continue;
     }
+    let mtime: Date;
     try {
-      statSync(absPath);
+      mtime = statSync(absPath).mtime;
     } catch {
+      // Treat unstattable files as missing — should be rare; surfaces as
+      // a skip rather than a hard failure.
       result.skipped.push({ sourceUrl: url, reason: 'no-local-file' });
       continue;
     }
+    const year = String(mtime.getFullYear()).padStart(4, '0');
+    const month = String(mtime.getMonth() + 1).padStart(2, '0');
 
-    pending.push({ absPath, sourceUrl: url });
+    pending.push({ url, stub, entry: { filename, year, month, sourceUrl: url }, absPath });
   }
 
   if (pending.length === 0) {
     return result;
   }
 
-  const fileResult = await installMediaFiles({
-    files: pending,
-    wpRoot: opts.wpRoot,
-    _studioBin: opts._studioBin,
-    _execFile: opts._execFile,
-  });
+  // 1.5 SVG routing (svg survival, F1). Default WP rejects image/svg+xml, so
+  // before the PHP batch each SVG-origin item is routed:
+  //   - risky SVG (Safe SVG's sanitizer would mangle its <use>/<defs> graph)
+  //     with a PNG raster sibling → upload the PNG instead;
+  //   - any SVG still in the batch → ensurePlugin('safe-svg') ONCE first;
+  //     when that fails, fall back to PNG for every SVG that has a raster and
+  //     error-stub the rest.
+  const svgItems = pending.filter((p) => /\.svg$/i.test(p.entry.filename));
+  for (const item of svgItems) {
+    item.svgOrigin = true;
+    item.rasterAbs = resolveRasterAbs(item.stub, mediaDir);
+    if (item.stub.svgRisky === true && item.rasterAbs) {
+      substituteRaster(item);
+    }
+  }
+  const svgStillInBatch = svgItems.filter((p) => !p.substituted);
+  if (svgStillInBatch.length > 0) {
+    const ensured = await ensurePlugin(
+      studioSitePathForWpRoot(opts.wpRoot),
+      'safe-svg',
+      wpExecFor(opts),
+    );
+    if (ensured.ok) {
+      result.svg.safeSvgEnsured = true;
+    } else {
+      for (const item of svgStillInBatch) {
+        if (item.rasterAbs) {
+          substituteRaster(item);
+        } else {
+          item.dropped = true;
+          result.errors.push({
+            sourceUrl: item.url,
+            error: `safe-svg unavailable and no raster fallback (${ensured.error})`,
+          });
+        }
+      }
+    }
+  }
+  const batch = pending.filter((p) => !p.dropped);
+  if (batch.length === 0) {
+    finalizeSvgTally(result, svgItems);
+    return result;
+  }
 
-  for (const ok of fileResult.installed) {
+  // 2. Copy each pending file into the running site's uploads dir.
+  // This must happen BEFORE the PHP script runs — wp_insert_attachment
+  // requires the file to exist on disk to compute metadata.
+  const uploadsRoot = join(resolve(opts.wpRoot), 'wp-content', 'uploads');
+  for (const item of batch) {
+    const destDir = join(uploadsRoot, item.entry.year, item.entry.month);
+    const destPath = join(destDir, item.entry.filename);
+    try {
+      mkdirSync(destDir, { recursive: true });
+      // Idempotent: if the file is already in place, skip the copy.
+      if (!existsSync(destPath)) {
+        copyFileSync(item.absPath, destPath);
+      }
+    } catch (err) {
+      result.errors.push({ sourceUrl: item.url, error: `copy: ${(err as Error).message}` });
+    }
+  }
+
+  // Drop any items whose copy failed before invoking PHP.
+  const installedFiles = batch.filter(
+    (p) => !result.errors.find((e) => e.sourceUrl === p.url),
+  );
+  if (installedFiles.length === 0) {
+    finalizeSvgTally(result, svgItems);
+    return result;
+  }
+
+  // 3. Stage payload + invoke wp eval-file.
+  let scriptOut: { stdout: string; resultHostPath: string };
+  try {
+    scriptOut = await installViaStudio(opts, installedFiles.map((p) => p.entry));
+  } catch (err) {
+    // The shell-level failure means none of the entries got registered.
+    // Each pending entry surfaces as an error so the caller can retry.
+    for (const item of installedFiles) {
+      result.errors.push({
+        sourceUrl: item.url,
+        error: `wp eval-file install-media.php failed: ${formatExecError(err)}`,
+      });
+    }
+    finalizeSvgTally(result, svgItems);
+    return result;
+  }
+
+  // 4. Parse the script's response and reconcile with the stub store.
+  const parsed = parsePhpResponse(scriptOut.stdout, scriptOut.resultHostPath);
+  if (!parsed) {
+    for (const item of installedFiles) {
+      result.errors.push({
+        sourceUrl: item.url,
+        error: 'install-media.php produced no parseable JSON response',
+      });
+    }
+    finalizeSvgTally(result, svgItems);
+    return result;
+  }
+
+  // 4.5 Per-file SVG retry: an SVG that PHP rejected per-file (e.g. the
+  // svg_mime_rejected marker when Safe SVG didn't take) gets ONE retry as its
+  // PNG sibling in a second mini-batch. Everything else flows straight through
+  // as an error.
+  const phpResults: PhpResultEntry[] = [...parsed.results];
+  const retryable: PendingItem[] = [];
+  for (const fail of parsed.errors) {
+    const item = installedFiles.find((p) => p.url === fail.sourceUrl);
+    if (item?.svgOrigin && !item.substituted && item.rasterAbs) {
+      retryable.push(item);
+    } else {
+      result.errors.push({ sourceUrl: fail.sourceUrl, error: fail.error });
+    }
+  }
+  if (retryable.length > 0) {
+    const copied: PendingItem[] = [];
+    for (const item of retryable) {
+      substituteRaster(item);
+      try {
+        const destDir = join(uploadsRoot, item.entry.year, item.entry.month);
+        mkdirSync(destDir, { recursive: true });
+        const destPath = join(destDir, item.entry.filename);
+        if (!existsSync(destPath)) {
+          copyFileSync(item.absPath, destPath);
+        }
+        copied.push(item);
+      } catch (err) {
+        result.errors.push({ sourceUrl: item.url, error: `svg png retry copy: ${(err as Error).message}` });
+      }
+    }
+    if (copied.length > 0) {
+      try {
+        const retryOut = await installViaStudio(opts, copied.map((p) => p.entry));
+        const parsedRetry = parsePhpResponse(retryOut.stdout, retryOut.resultHostPath);
+        if (parsedRetry) {
+          phpResults.push(...parsedRetry.results);
+          for (const fail of parsedRetry.errors) {
+            result.errors.push({ sourceUrl: fail.sourceUrl, error: `svg png retry: ${fail.error}` });
+          }
+        } else {
+          for (const item of copied) {
+            result.errors.push({
+              sourceUrl: item.url,
+              error: 'svg png retry: install-media.php produced no parseable JSON response',
+            });
+          }
+        }
+      } catch (err) {
+        for (const item of copied) {
+          result.errors.push({ sourceUrl: item.url, error: `svg png retry failed: ${formatExecError(err)}` });
+        }
+      }
+    }
+  }
+
+  for (const ok of phpResults) {
     if (typeof ok.postId === 'number' && ok.postId > 0) {
       stubs.recordWpPostId(ok.sourceUrl, ok.postId);
     }
@@ -277,12 +470,64 @@ export async function installMediaForUrl(opts: MediaInstallOpts): Promise<MediaI
       localPath: stub?.localPath ?? '',
     });
   }
-  result.errors.push(...fileResult.errors);
-
+  finalizeSvgTally(result, svgItems);
   return result;
 }
 
-async function installViaStudio(opts: MediaFilesInstallOpts, entries: PayloadEntry[]): Promise<{ stdout: string; resultHostPath: string }> {
+/**
+ * Resolve the absolute on-disk path of an SVG stub's PNG raster sibling.
+ * Primary source is the `rasterPath` recorded at fetch time. Dedup guard:
+ * byte-duplicate SVG URLs dedupe at fetch, so a deduped URL's stub points at
+ * the ORIGINAL's localPath but carries no rasterPath of its own — the
+ * original's sibling lives at exactly localPath with `.svg` → `.png` (modulo
+ * the rare `-N` collision suffix, in which case we miss and the SVG continues
+ * alone).
+ */
+function resolveRasterAbs(stub: MediaStub, mediaDir: string): string | null {
+  if (stub.rasterPath) {
+    const abs = join(mediaDir, basenameOf(stub.rasterPath));
+    if (existsSync(abs)) return abs;
+    return existsSync(stub.rasterPath) ? stub.rasterPath : null;
+  }
+  if (stub.localPath && /\.svg$/i.test(stub.localPath)) {
+    const abs = join(mediaDir, basenameOf(stub.localPath).replace(/\.svg$/i, '.png'));
+    return existsSync(abs) ? abs : null;
+  }
+  return null;
+}
+
+/** Reroute a pending SVG item to upload its PNG raster sibling instead. */
+function substituteRaster(item: PendingItem): void {
+  item.entry.filename = basenameOf(item.rasterAbs!);
+  item.absPath = item.rasterAbs!;
+  item.substituted = true;
+}
+
+/**
+ * Count each SVG-origin item exactly once: installed-as-SVG, installed-as-PNG,
+ * or failed. Called on every post-routing exit path so the tally is accurate
+ * even when the batch aborts early.
+ */
+function finalizeSvgTally(result: MediaInstallResult, svgItems: PendingItem[]): void {
+  for (const item of svgItems) {
+    const ok = result.installed.some((i) => i.sourceUrl === item.url);
+    if (!ok) result.svg.svgFailed += 1;
+    else if (item.substituted) result.svg.svgSubstituted += 1;
+    else result.svg.svgUploaded += 1;
+  }
+}
+
+/**
+ * Adapt this module's injected exec into ensurePlugin's StudioWpRunner shape
+ * (`studio wp --path <sitePath> <...args>` → stdout).
+ */
+function wpExecFor(opts: MediaInstallOpts): ExecFn {
+  const studioBin = opts._studioBin ?? 'studio';
+  const exec = opts._execFile ?? defaultExec;
+  return (sitePath, args) => exec(studioBin, ['wp', '--path', sitePath, ...args]).then((o) => o.stdout);
+}
+
+async function installViaStudio(opts: Pick<MediaFilesInstallOpts, 'wpRoot' | '_studioBin' | '_execFile'>, entries: PayloadEntry[]): Promise<{ stdout: string; resultHostPath: string }> {
   // The PHP script must be readable inside Studio's VFS. Studio mounts the
   // *site* directory at /wordpress. Studio sites exist in two layouts:
   //   - flat:   <site>/wp-content
@@ -298,7 +543,10 @@ async function installViaStudio(opts: MediaFilesInstallOpts, entries: PayloadEnt
   const scriptHostPath = join(scriptsDir, 'install-media.php');
   copyFileSync(INSTALL_MEDIA_SCRIPT, scriptHostPath);
 
-  const payloadFilename = `install-media-${Date.now()}-${process.pid}.json`;
+  // Sequence suffix: the SVG retry mini-batch can fire within the same
+  // millisecond as the main batch — Date.now()+pid alone would collide and
+  // overwrite the first payload + sidecar result file.
+  const payloadFilename = `install-media-${Date.now()}-${process.pid}-${++payloadSeq}.json`;
   const payloadHostPath = join(payloadsDir, payloadFilename);
   writeFileSync(payloadHostPath, JSON.stringify(entries), 'utf8');
 

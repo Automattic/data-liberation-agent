@@ -19,6 +19,7 @@ Reaching design parity by improvising per-section edits is slow, inconsistent, a
 ## Inputs
 
 `outputDir` (e.g. `~/Studio/_liberations/example.com`), `studioSitePath`, `themeSlug`, page `slug` + `sourceUrl`, `previewUrl` (e.g. `http://localhost:8881`; front page renders at `/`). Captured specs: `outputDir/sections/<slug>.json` → `sections[]` (ordered by `top`; each carries `top`, `height`, `backgroundColor`, `layout.padTopPx/padBottomPx/gap`, `fullBleed`, `headingSizes`/`headingLineHeights`/`headingFamilies`, `bodyTextSizes`/`bodyLineHeights`/`bodyFamilies`, `cells`, `textAlign`, plus `styledHtml` — the computed-style oracle). Source screenshot: `outputDir/screenshots/desktop/<slug>.png` (read its real width with `identify`; compare at THAT width).
+- `replicaShotsDir` — the replica screenshots directory holding `comparison.json` (v2) and the `diff/` artifacts; used by the Phase-1 parity gate.
 
 **CRITICAL — compare against the SOURCE SCREENSHOT, not the captured numbers.** The captured `SectionSpec` values (`headingSizes`, `padTopPx`, `height`, …) are measured at the **1440px desktop capture**; the page renders and is compared at the source screenshot width (often **1008px**), and the deterministic emitter scales type/spacing by `vw`/`clamp`. So built `26px` is a captured `36px` scaled at 1008 — NOT a divergence. Diffing built-render against captured-@1440 numbers produces all false positives and causes thrash. The TRUTH for visual parity is **built render vs source render at the same width** (pixels vs pixels). Use the captured numbers only as the values to APPLY in Phase 2, never as the comparison target.
 
@@ -47,12 +48,16 @@ If `<outputDir>/parity-log.json` is present, run BEFORE the fresh assessment: fo
 
 ## PHASE 1 — Batch assessment (ALWAYS do this first; one pass)
 
+**Parity gate (run FIRST, before any per-section work):** read `<replicaShotsDir>/comparison.json` (version 2). For each page: if every scored viewport has `status:"ok"`, `score >= 0.995` (PARITY_GATE_SCORE), AND `heightMismatchRatio <= 0.02` (HEIGHT_MISMATCH_THRESHOLD), the page is ALREADY AT PARITY — skip it entirely (no section assessment, no match-section dispatch) and log `gate-skip: <slug> score=<s> hmr=<r>`. A high score with `heightMismatchRatio > 0.02` does NOT pass — that combination is the short-capture artifact; treat the height mismatch itself as a high-severity finding and proceed with assessment. When the file is version 1 (no mismatch fields), the gate is score-only — never assume missing fields mean zero mismatch. If comparison.json is absent (compare never ran), there is no gate — assess every page. When `fullPageScore` is present AND the heights match (`originHeight === replicaHeight`), prefer it over the crop score for the gate decision (same 0.995 bar) — it sees below the fold. When the heights differ, gate on the crop score + `heightMismatchRatio` as above: `fullPageScore` counts the magenta padding as diff by construction, so even a benign sub-threshold height delta (the 32px admin-bar artifact ≈ 0.6% on a long page) caps it below 0.995 and would make the gate-skip permanently unreachable.
+
 1. Read the source screenshot width: `identify -format "%w" outputDir/screenshots/desktop/<slug>.png`. Render the built page ONCE at THAT width: `npx tsx scripts/_shot.ts "<previewUrl>/<slug>/?v=1" outputDir/screenshots/built-<slug>.png <srcWidth>` (it scrolls to settle lazy images; do not use the Playwright MCP screenshot — it times out on tall pages).
 2. Get the built band boundaries: `browser_navigate` at `<srcWidth>×900`, then `browser_evaluate` to list the band container's children (the `.entry-content`/`.wp-block-post-content` children — a MIX of `<div class="wp-block-cover">` heroes and `<section class="wp-block-group">` bands) with each one's `getBoundingClientRect()` top + height. That gives N built bands in document order.
 3. For EACH band, crop the SAME vertical range from BOTH the source screenshot and the built screenshot (`magick <img> -crop <W>x<H>+0+<top> +repage out.png`; source band tops scale from the built tops by the page-height ratio, or detect bg-color band boundaries) and READ the two crops side by side. Flag the band DIVERGENT on the axes you can SEE: background color, heading size/weight relative to the band, body text size, alignment (centered vs left), inter-element spacing, full-bleed vs boxed, dropped media/content, button style. This is a visual judgement per band, not a number diff.
 4. **Print the per-band verdict table** (band → divergent axes, or DONE). Bands that look identical are DONE — do not touch them.
 
 This whole phase is ONE render + N band crops. It replaces eyeballing the whole page and guessing, and it does NOT chase captured @1440 numbers.
+
+**Diff-image hygiene:** a `.diff.png` / `.padded.png` marks WHERE pixels differ — never read a color, font, or size from it. Red is the difference marker; magenta (in `.padded.png`) means one side has no content at that location (layout overrun — high severity). Read every actual value from the SOURCE screenshot.
 
 ## PHASE 2 — Iterate divergent sections (worst-first)
 
@@ -73,5 +78,6 @@ Mechanics for applying + rendering are in `skills/match-section/SKILL.md` (BACK 
 - Total cycles spent (so a runaway is visible).
 - **`<outputDir>/parity-log.json`** written with one entry per fix (the replayable record).
 - **Promote-to-emitter backlog:** the list of `promoteToEmitter` notes — the recurring, rule-shaped divergences that should graduate into the extractor/emitter (and then leave the log).
+- Before declaring done any page where at least one section was dispatched to match-section: `liberate_refine_report {outputDir, slug}` must pass for that page. A failed coverage check reopens the page — dispatch match-section to fix the accounting. Pages with zero match-section dispatches (gate-skipped, or all bands matched at assessment) have no refine/<slug>/ directory and are exempt — do NOT call the tool for them.
 
 Never report the page MATCHED without having cropped source+built per band and looked at both. The parity log is what makes this sustainable: a future reconstruct (done for its own reason) regenerates the deterministic baseline, Phase 0 replays the log onto it, and anything that has since been encoded into the emitter is simply dropped from the log.

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { PNG } from 'pngjs';
-import { buildRepairTasks, compareScreenshotDirs, scoreViewportPair, type ComparisonResult, type ViewportScore } from './compare.js';
+import { buildRepairTasks, compareScreenshotDirs, scoreViewportPair, PARITY_GATE_SCORE, HEIGHT_MISMATCH_THRESHOLD, type ComparisonResult, type ViewportScore } from './compare.js';
 
 const TMP = join(process.cwd(), '.tmp-test', 'compare');
 
@@ -160,7 +160,7 @@ describe('compareScreenshotDirs', () => {
     expect(existsSync(d.diffPath!)).toBe(true);
     expect(existsSync(join(replica, 'comparison.json'))).toBe(true);
     const onDisk = JSON.parse(readFileSync(join(replica, 'comparison.json'), 'utf8'));
-    expect(onDisk.version).toBe(1);
+    expect(onDisk.version).toBe(2);
     expect(onDisk.results[0].desktop.score).toBeCloseTo(d.score!, 5);
   });
 });
@@ -242,5 +242,159 @@ describe('buildRepairTasks', () => {
       { floor: 0.99 },
     );
     expect(tasks).toEqual([]);
+  });
+});
+
+describe('compare v2 — height-mismatch signal + padded diff + gate consts', () => {
+  beforeEach(() => rmSync(TMP, { recursive: true, force: true }));
+  afterEach(() => rmSync(TMP, { recursive: true, force: true }));
+
+  it('scoreViewportPair: origin 1440×900 vs replica 1440×450 has status ok, originHeight 900, replicaHeight 450, heightMismatchRatio ~0.5', () => {
+    const oPath = join(TMP, 'hm', 'origin.png');
+    const rPath = join(TMP, 'hm', 'replica.png');
+    writeSolidPng(oPath, 1440, 900, [50, 100, 150, 255]);
+    writeSolidPng(rPath, 1440, 450, [50, 100, 150, 255]);
+    const result = scoreViewportPair(oPath, rPath, 'desktop');
+    expect(result.status).toBe('ok');
+    expect(result.originHeight).toBe(900);
+    expect(result.replicaHeight).toBe(450);
+    expect(result.heightMismatchRatio).toBeCloseTo(0.5, 5);
+  });
+
+  it('scoreViewportPair: height-mismatched pair writes paddedDiffPath and the file exists', () => {
+    const oPath = join(TMP, 'hm2', 'origin.png');
+    const rPath = join(TMP, 'hm2', 'replica.png');
+    const diffPath = join(TMP, 'hm2', 'out.diff.png');
+    writeSolidPng(oPath, 1440, 900, [10, 20, 30, 255]);
+    writeSolidPng(rPath, 1440, 450, [10, 20, 30, 255]);
+    const result = scoreViewportPair(oPath, rPath, 'desktop', diffPath);
+    expect(result.paddedDiffPath).toBe(join(TMP, 'hm2', 'out.padded.png'));
+    expect(existsSync(result.paddedDiffPath!)).toBe(true);
+    // The padded band (y > 450: origin content vs magenta fill) must register
+    // as a diff — pixelmatch paints differing pixels red [255, 0, 0, 255].
+    const padDiff = PNG.sync.read(readFileSync(result.paddedDiffPath!));
+    expect(padDiff.height).toBe(900);
+    const i = (700 * padDiff.width + 720) * 4; // pixel at (720, 700), inside the padded band
+    const px = [padDiff.data[i], padDiff.data[i + 1], padDiff.data[i + 2], padDiff.data[i + 3]];
+    expect(px).toEqual([255, 0, 0, 255]);
+  });
+
+  it('scoreViewportPair: a diffPath without the .diff.png suffix gets .padded.png APPENDED (never overwrites the crop diff)', () => {
+    const oPath = join(TMP, 'hm3', 'origin.png');
+    const rPath = join(TMP, 'hm3', 'replica.png');
+    const diffPath = join(TMP, 'hm3', 'out.png');
+    writeSolidPng(oPath, 1440, 900, [10, 20, 30, 255]);
+    writeSolidPng(rPath, 1440, 450, [10, 20, 30, 255]);
+    const result = scoreViewportPair(oPath, rPath, 'desktop', diffPath);
+    expect(result.paddedDiffPath).toBe(join(TMP, 'hm3', 'out.png.padded.png'));
+    expect(existsSync(diffPath)).toBe(true);
+    expect(existsSync(result.paddedDiffPath!)).toBe(true);
+    // Distinct files with distinct content: crop diff is 450px tall, padded diff 900px.
+    expect(readFileSync(diffPath).equals(readFileSync(result.paddedDiffPath!))).toBe(false);
+  });
+
+  it('scoreViewportPair: identical origin vs itself has heightMismatchRatio 0 and paddedDiffPath undefined', () => {
+    const oPath = join(TMP, 'same', 'origin.png');
+    const diffPath = join(TMP, 'same', 'out.diff.png');
+    writeSolidPng(oPath, 1440, 900, [80, 80, 80, 255]);
+    const result = scoreViewportPair(oPath, oPath, 'desktop', diffPath);
+    expect(result.heightMismatchRatio).toBe(0);
+    expect(result.paddedDiffPath).toBeUndefined();
+  });
+
+  // (compareScreenshotDirs version:2 is asserted by the comparison.json test above)
+
+  it('exported PARITY_GATE_SCORE === 0.995 and HEIGHT_MISMATCH_THRESHOLD === 0.02', () => {
+    expect(PARITY_GATE_SCORE).toBe(0.995);
+    expect(HEIGHT_MISMATCH_THRESHOLD).toBe(0.02);
+  });
+});
+
+describe('fullPageScore — full-canvas score closes the top-viewport blind spot', () => {
+  beforeEach(() => rmSync(TMP, { recursive: true, force: true }));
+  afterEach(() => rmSync(TMP, { recursive: true, force: true }));
+
+  /** Write a PNG split into a top band and a bottom band of different colors. */
+  function writeTwoBandPng(path: string, w: number, h: number, splitY: number, top: [number, number, number, number], bottom: [number, number, number, number]) {
+    const png = new PNG({ width: w, height: h });
+    for (let y = 0; y < h; y++) {
+      const c = y < splitY ? top : bottom;
+      for (let x = 0; x < w; x++) {
+        const o = (y * w + x) * 4;
+        png.data[o] = c[0]; png.data[o + 1] = c[1]; png.data[o + 2] = c[2]; png.data[o + 3] = c[3];
+      }
+    }
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, PNG.sync.write(png));
+  }
+
+  it('equal-height identical pair: fullPageScore is 1.0 and equals the crop score', () => {
+    const oPath = join(TMP, 'fp1', 'origin.png');
+    const rPath = join(TMP, 'fp1', 'replica.png');
+    writeSolidPng(oPath, 1440, 900, [42, 42, 42, 255]);
+    writeSolidPng(rPath, 1440, 900, [42, 42, 42, 255]);
+    const result = scoreViewportPair(oPath, rPath, 'desktop');
+    expect(result.status).toBe('ok');
+    expect(result.fullPageScore).toBe(1);
+    expect(result.fullPageScore).toBe(result.score);
+  });
+
+  it('THE blind spot: pair differing ONLY below the 900px fold has crop score 1.0 BUT fullPageScore < 1', () => {
+    const oPath = join(TMP, 'fp2', 'origin.png');
+    const rPath = join(TMP, 'fp2', 'replica.png');
+    // 1440×1800: identical top 900px, completely different bottom 900px.
+    writeTwoBandPng(oPath, 1440, 1800, 900, [10, 20, 30, 255], [10, 20, 30, 255]);
+    writeTwoBandPng(rPath, 1440, 1800, 900, [10, 20, 30, 255], [240, 240, 240, 255]);
+    const result = scoreViewportPair(oPath, rPath, 'desktop');
+    expect(result.status).toBe('ok');
+    expect(result.score).toBe(1);                       // crop sees only the fold — blind
+    expect(result.fullPageScore).toBeDefined();
+    expect(result.fullPageScore!).toBeLessThan(1);      // full canvas sees the difference
+    expect(result.fullPageScore!).toBeCloseTo(0.5, 2);  // ~half the canvas differs
+  });
+
+  it('mismatched-height pair: fullPageScore present, < 1 (padding penalty), and consistent with the padded artifact diffPixels', () => {
+    const oPath = join(TMP, 'fp3', 'origin.png');
+    const rPath = join(TMP, 'fp3', 'replica.png');
+    const diffPath = join(TMP, 'fp3', 'out.diff.png');
+    writeSolidPng(oPath, 1440, 900, [10, 20, 30, 255]);
+    writeSolidPng(rPath, 1440, 450, [10, 20, 30, 255]);
+    const result = scoreViewportPair(oPath, rPath, 'desktop', diffPath);
+    expect(result.fullPageScore).toBeDefined();
+    expect(result.fullPageScore!).toBeLessThan(1);
+    // Consistency: the score must come from the SAME pixelmatch pass that
+    // painted the padded artifact — red [255,0,0,255] pixels ARE diffPixels.
+    const padDiff = PNG.sync.read(readFileSync(result.paddedDiffPath!));
+    let red = 0;
+    for (let i = 0; i < padDiff.width * padDiff.height; i++) {
+      const o = i * 4;
+      if (padDiff.data[o] === 255 && padDiff.data[o + 1] === 0 && padDiff.data[o + 2] === 0 && padDiff.data[o + 3] === 255) red++;
+    }
+    expect(result.fullPageScore!).toBeCloseTo(1 - red / (padDiff.width * padDiff.height), 10);
+  });
+
+  it('mismatched-height pair WITHOUT diffPath still computes fullPageScore (no artifact, null pixelmatch output)', () => {
+    const oPath = join(TMP, 'fp4', 'origin.png');
+    const rPath = join(TMP, 'fp4', 'replica.png');
+    writeSolidPng(oPath, 1440, 900, [10, 20, 30, 255]);
+    writeSolidPng(rPath, 1440, 450, [10, 20, 30, 255]);
+    const result = scoreViewportPair(oPath, rPath, 'desktop');
+    expect(result.paddedDiffPath).toBeUndefined();
+    expect(result.fullPageScore).toBeDefined();
+    expect(result.fullPageScore!).toBeLessThan(1);
+    expect(result.fullPageScore!).toBeCloseTo(0.5, 2);  // magenta-padded half counts as diff
+  });
+
+  it('non-ok statuses omit fullPageScore', () => {
+    const rPath = join(TMP, 'fp5', 'replica.png');
+    writeSolidPng(rPath, 1440, 900, [1, 2, 3, 255]);
+    const missing = scoreViewportPair(join(TMP, 'fp5', 'nope.png'), rPath, 'desktop');
+    expect(missing.status).toBe('missing-origin');
+    expect(missing.fullPageScore).toBeUndefined();
+    const corrupt = join(TMP, 'fp5', 'corrupt.png');
+    writeFileSync(corrupt, 'not a png');
+    const decodeErr = scoreViewportPair(corrupt, rPath, 'desktop');
+    expect(decodeErr.status).toBe('decode-error');
+    expect(decodeErr.fullPageScore).toBeUndefined();
   });
 });

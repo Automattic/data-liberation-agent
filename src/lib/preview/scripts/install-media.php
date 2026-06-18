@@ -155,6 +155,21 @@ foreach ( $entries as $entry ) {
 		? (string) $entry['mimeType']
 		: ( wp_check_filetype( $filename )['type'] ?: 'application/octet-stream' );
 
+	// SVG MIME rejection marker. Default WP disallows image/svg+xml, so
+	// wp_check_filetype() yields no type for .svg unless a plugin (Safe SVG)
+	// has allowed it — the octet-stream fallback above would then insert a
+	// broken attachment. Emit a DISTINCT per-file error instead so the TS
+	// layer (media-install.ts) can retry this one file with its rasterized
+	// PNG sibling in a second mini-batch.
+	if ( 'application/octet-stream' === $mime_type && preg_match( '/\.svg$/i', $filename ) ) {
+		$errors[] = array(
+			'sourceUrl' => $source_url,
+			'filename'  => $filename,
+			'error'     => 'svg_mime_rejected: image/svg+xml is not an allowed MIME type on this site (Safe SVG inactive)',
+		);
+		continue;
+	}
+
 	$title = isset( $entry['title'] ) && '' !== $entry['title']
 		? (string) $entry['title']
 		: pathinfo( $filename, PATHINFO_FILENAME );

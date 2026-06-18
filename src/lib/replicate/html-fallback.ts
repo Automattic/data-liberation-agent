@@ -17,6 +17,7 @@
 import { rewriteMediaUrls } from '../streaming/media-url-rewrite.js';
 import { rewriteInternalLinks, type InternalLinkMap } from '../streaming/internal-link-rewrite.js';
 import { scanForInjection } from './validate-artifacts.js';
+import { PIPELINE_ISLAND_OPENER } from '../wordpress/block-policy.js';
 
 export interface HtmlFallbackOpts {
   /** Source media URL -> local upload URL (same map the block path uses). */
@@ -74,6 +75,14 @@ export function selectIslandSource(
  * Build a sanitized, URL-rewritten `core/html` block from a section's source
  * outerHTML. Throws if sanitization left any injection vector (defensive — a bad
  * island must never silently ship past the gate).
+ *
+ * The opening delimiter carries the PIPELINE_ISLAND_OPENER marker
+ * (`metadata.name = "lib-coverage-island"`): install-time validation
+ * (validateReplicaInputs) rejects hand-authored wp:html in theme files but
+ * accepts pipeline-emitted coverage islands by this marker, so a
+ * previously-reconstructed theme can be reinstalled. The marker is markup-only
+ * (a WP-supported block attribute) — it also labels the island in the editor
+ * List View.
  */
 export function buildHtmlFallbackBlock(sectionHtml: string, opts: HtmlFallbackOpts = {}): string {
   let inner = sanitize(sectionHtml);
@@ -85,5 +94,5 @@ export function buildHtmlFallbackBlock(sectionHtml: string, opts: HtmlFallbackOp
     throw new Error(`html-fallback sanitization left injection vectors: ${violations.join('; ')}`);
   }
 
-  return `<!-- wp:html -->\n${inner.trim()}\n<!-- /wp:html -->`;
+  return `${PIPELINE_ISLAND_OPENER}\n${inner.trim()}\n<!-- /wp:html -->`;
 }

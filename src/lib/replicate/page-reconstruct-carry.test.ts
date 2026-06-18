@@ -143,26 +143,27 @@ describe('reconstructPageCarry', () => {
     expect(r.mainIsland).not.toContain('a"b.html');
   });
 
-  it('appendRevealUnfreeze: chromeCss gets opacity:1!important override for JS-freeze gate classes in the chrome DOM', () => {
-    // Fixture: header carries `scroll-trigger` (a JS IntersectionObserver gate whose
-    // initial CSS state is opacity:0). Carry strips scripts, so it would stay invisible
-    // without the un-freeze override. The source CSS has the gate rule; appendRevealUnfreeze
-    // detects it and appends a scoped `opacity:1!important` end-state rule.
+  it('scroll-trigger gates are STRIPPED from the carried DOM (chrome and main) — no unfreeze override needed', () => {
+    // Fixture: header AND a content section carry `scroll-trigger` (a JS
+    // IntersectionObserver gate whose initial CSS state is opacity:0). carryHtml now
+    // drops the hook class itself — stronger than the former chrome-only
+    // opacity:1!important override, because it also un-gates MAIN-content sections
+    // (where the override never applied; the getsnooz islands shipped 12 frozen ones).
     const r = reconstructPageCarry({
       slug: 'home',
       bodyHtml:
         '<header class="scroll-trigger h">NAV</header>' +
-        '<div class="content">C</div>' +
+        '<div class="content scroll-trigger animate--slide-in">C</div>' +
         '<footer class="f">F</footer>',
       css: '.scroll-trigger{opacity:0;transition:opacity 0.4s ease}',
       specs: [],
       mediaUrlMap: new Map(),
     });
-    // The override must mention the gate class AND force the revealed end-state.
-    expect(r.chromeCss).toContain('scroll-trigger');
-    expect(r.chromeCss).toContain('opacity:1!important');
-    // Sanity: mainCss does NOT get the override — scroll-trigger is in the chrome DOM only.
-    expect(r.mainCss).not.toContain('opacity:1!important');
+    // The gate class is gone from every carried region, so the source's
+    // `.scroll-trigger{opacity:0}` rule can never match the emitted DOM.
+    expect(r.mainIsland).not.toContain('scroll-trigger');
+    expect(r.mainIsland).toContain('animate--slide-in');
+    expect(r.mainIsland).toContain('C');
   });
 
   it('rewrites media URLs in carried HTML', () => {
@@ -176,5 +177,36 @@ describe('reconstructPageCarry', () => {
     });
     expect(r.mainIsland).toContain('/wp-content/uploads/img.jpg');
     expect(r.mainIsland).not.toContain('cdn.example.com');
+  });
+
+  it('Shopify Dawn: lifts a header with nested <header-*> custom elements into the GLOBAL chrome sheet, not the per-page sheet', () => {
+    // Before the balancedSpan custom-element fix this header never balanced, so it stayed in the
+    // main DOM and its CSS landed in the per-page mainCss (styled only on its own page). It must
+    // now split into the header part and globalize via chromeCss (site-wide), like the footer does.
+    const r = reconstructPageCarry({
+      slug: 'home',
+      isHome: true,
+      bodyHtml:
+        '<div class="section-header"><sticky-header>' +
+        '<header class="header header--middle-left">' +
+        '<header-drawer><details><summary>Menu</summary></details></header-drawer>' +
+        '<nav class="header__inline-menu">Shop</nav>' +
+        '</header></sticky-header></div>' +
+        '<main><section class="hero">Hi</section></main>' +
+        '<footer class="f">F</footer>',
+      css: '.header__inline-menu{display:flex} .hero{color:red}',
+      specs: [],
+      mediaUrlMap: new Map(),
+    });
+    expect(r.splitChrome).toBe(true);
+    // the real <header> (with its custom elements) is lifted into the header part…
+    expect(r.headerIsland).toContain('class="header header--middle-left"');
+    expect(r.headerIsland).toContain('<header-drawer');
+    // …its CSS globalizes: site-scoped in chromeCss, and ABSENT from the per-page mainCss…
+    expect(r.chromeCss).toContain(':where(body.lib-carry-site) .header__inline-menu');
+    expect(r.mainCss).not.toContain('header__inline-menu');
+    // …and the header is gone from the content island (no duplication), content stays per-page.
+    expect(r.mainIsland).not.toContain('header__inline-menu');
+    expect(r.mainCss).toContain(':where(body.lib-carry-site.lib-carry-page-home) .hero');
   });
 });

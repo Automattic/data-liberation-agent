@@ -69,6 +69,16 @@ export class BlockFixerClient {
   }
 
   /**
+   * True once /health flipped green — fix()/rawConvert() will reach the
+   * server instead of falling back to identity passthrough. Callers whose
+   * edits REQUIRE canonicalization (e.g. comment-attr-only rewrites that
+   * desync from emitter inner HTML) must check this before editing.
+   */
+  get isReady(): boolean {
+    return this.ready;
+  }
+
+  /**
    * Spawn the fix-server subprocess and wait for /health.
    * Idempotent — repeated calls return the same in-flight promise.
    * Resolves on success; rejects only if the subprocess can't be
