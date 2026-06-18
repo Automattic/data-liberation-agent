@@ -1,11 +1,15 @@
 ---
 name: liberate-local
-description: Front door for OWNED LOCAL static sites — point it at a directory of hand-authored / Claude-generated HTML+CSS+JS and it stands up a fresh WordPress Studio site and converts the source into a native block theme + live editable pages, carrying the source's own CSS/JS for identical parity. The local-source analog of /liberate: no extraction (the source is already on disk), no platform detection — it provisions the Studio target itself (studio site create), processes the HTML/CSS/JS, then builds the theme and the site. One command drives everything. Use when the user has a local folder of static-site files (not a live URL) they want as a real WordPress site.
+user-invocable: false
+disable-model-invocation: true
+description: The OWNED LOCAL static-site path of /liberate — dispatched inline by `/liberate` when its input is a local directory (not a URL). Point it at a directory of hand-authored / Claude-generated HTML+CSS+JS and it stands up a fresh WordPress Studio site and converts the source into a native block theme + live editable pages, carrying the source's own CSS/JS for identical parity. The local-source analog of the URL path: no extraction (the source is already on disk), no platform detection — it provisions the Studio target itself (studio site create), processes the HTML/CSS/JS, then builds the theme and the site. One command drives everything. Hidden from autocomplete and runs only via the `/liberate` front door; not directly user-invokable.
 ---
 
 # Liberate a local static site
 
-The single front door for the **owned local-source** path: a directory of HTML/CSS/JS → a live WordPress Studio site running a native block theme that carries the source's own design. Unlike `/liberate` (which detects a remote platform and extracts over the network), this path has the source on disk already, so it skips detect/discover/extract entirely and goes straight to: **provision the Studio site → process the source → build the theme + pages → capture → parity compare → deterministic repair.**
+> **Dispatched by `/liberate`.** This is the local-directory branch of the `/liberate` front door, not a standalone entry point — it is `user-invocable: false` (hidden from the user's autocomplete) and `disable-model-invocation: true` (the Skill tool can't invoke it). Instead, `/liberate <dir>` reads & follows this SKILL.md inline (see `skills/liberate/SKILL.md` → "Step R — Route on input type"). The steps below run in that shared context.
+
+The **owned local-source** path: a directory of HTML/CSS/JS → a live WordPress Studio site running a native block theme that carries the source's own design. Unlike the URL path of `/liberate` (which detects a remote platform and extracts over the network), this path has the source on disk already, so it skips detect/discover/extract entirely and goes straight to: **provision the Studio site → process the source → build the theme + pages → capture → parity compare → deterministic repair.**
 
 `liberate_convert_local_site` is the one command that drives all of it (with `createSite: true` it provisions the Studio target too). This skill is the thin front door that resolves inputs, runs that command, and reports.
 
