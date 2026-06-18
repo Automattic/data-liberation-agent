@@ -14,7 +14,7 @@ export interface RegionAssignment { landmark: SourceLandmark; kind: RegionAssign
 export interface PlacedRegion {
   kind: 'page_body_section' | 'header_part' | 'footer_part';
   selector?: string;
-  role?: 'header' | 'nav' | 'footer';
+  role?: 'header' | 'nav' | 'footer' | 'aside' | 'complementary';
 }
 
 export interface RegionSelectionReport {
