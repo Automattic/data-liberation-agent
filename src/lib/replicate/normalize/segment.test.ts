@@ -76,6 +76,56 @@ describe('segmentPage', () => {
     expect(navs[0].html).toContain('main-nav');
   });
 
+  it('recognizes a layout-level aside rail outside content as chrome', () => {
+    const html = `<body>
+      <div class="docs-layout">
+        <aside class="docs-sidebar"><nav><a href="intro.html">Intro</a><a href="api.html">API</a></nav></aside>
+        <main><section id="overview"><h1>Overview</h1></section></main>
+      </div>
+    </body>`;
+    const sections = segmentPage(html);
+    const rails = sections.filter((s) => s.role === 'nav' && s.id === 'docs-sidebar');
+    expect(rails).toHaveLength(1);
+    expect(rails[0].html).toContain('docs-sidebar');
+    expect(rails[0].html).toContain('api.html');
+    expect(sections.filter((s) => s.role === 'body').map((s) => s.id)).toEqual(['overview']);
+  });
+
+  it('keeps a pull-quote aside inside article body content', () => {
+    const html = `<body>
+      <main><article class="post"><p>Body copy</p><aside class="pull-quote">Pull quote</aside></article></main>
+    </body>`;
+    const sections = segmentPage(html);
+    expect(sections.find((s) => s.role === 'nav')).toBeUndefined();
+    const body = sections.filter((s) => s.role === 'body');
+    expect(body).toHaveLength(1);
+    expect(body[0].html).toContain('pull-quote');
+  });
+
+  it('recognizes role complementary outside content when actionable', () => {
+    const html = `<body>
+      <div class="layout">
+        <div role="complementary" class="resource-rail">
+          <a href="guide.html">Guide</a><a href="reference.html">Reference</a>
+        </div>
+        <main><section id="article"><h1>Article</h1></section></main>
+      </div>
+    </body>`;
+    const rails = segmentPage(html).filter((s) => s.role === 'nav' && s.id === 'resource-rail');
+    expect(rails).toHaveLength(1);
+    expect(rails[0].html).toContain('role="complementary"');
+  });
+
+  it('does not over-capture a short decorative aside as chrome', () => {
+    const html = `<body>
+      <aside class="badge">New</aside>
+      <main><section id="content"><h1>Content</h1></section></main>
+    </body>`;
+    const sections = segmentPage(html);
+    expect(sections.find((s) => s.role === 'nav')).toBeUndefined();
+    expect(sections.filter((s) => s.role === 'body').map((s) => s.id)).toEqual(['content']);
+  });
+
   it('avoids dedup suffix collision with a pre-existing literal id', () => {
     const html = `<main>
       <section id="card-2"><p>Literal</p></section>

@@ -57,7 +57,7 @@ import { buildJetpackFormParityCss } from '../../lib/replicate/local-site/jetpac
 import { JETPACK_FORM_PARITY_CSS } from '../../lib/replicate/local-theme/jetpack-form-parity-contract.js';
 import { detectBehaviors } from '../../lib/replicate/normalize/detect-behaviors.js';
 import { buildInteractivityPlugin, PLUGIN_SLUG } from '../../blocks/interactivity-plugin.js';
-import type { DetectedBehaviors } from '../../lib/replicate/local-site/types.js';
+import type { DetectedBehaviors, Section } from '../../lib/replicate/local-site/types.js';
 import { CLEAR_INTERVALS_SCRIPT, FREEZE_MOTION_CSS, probePair, type Divergence } from '../../lib/replicate/parity/parity-probe.js';
 import { extractDiffRegions } from '../../lib/replicate/parity/diff-regions.js';
 import { classifyDivergences, renderPatchCss, divergenceFingerprint, suppressPageConflicts, type UnresolvedDivergence, type PatchOverride, type RepairPlan } from '../../lib/replicate/parity/parity-classify.js';
@@ -78,6 +78,20 @@ function writeAtomicTextFile(path: string, content: string): void {
     try { unlinkSync(tmp); } catch { /* ignore */ }
     throw err;
   }
+}
+
+function normalizeHeaderRoot(html: string): string {
+  return html.replace(/^<header(\b[^>]*>)/i, '<div$1').replace(/<\/header>\s*$/i, '</div>');
+}
+
+function combineCarriedHeaderChrome(header: Section, extraChrome: Section[]): Section {
+  if (extraChrome.length === 0) return header;
+  const html = [normalizeHeaderRoot(header.html), ...extraChrome.map((s) => s.html)].join('\n');
+  return {
+    ...header,
+    html: `<div class="dla-carried-header-chrome">${html}</div>`,
+    classes: ['dla-carried-header-chrome'],
+  };
 }
 
 export const convertLocalSiteHandler: Handler = async (args, ctx) => {
@@ -441,6 +455,12 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
   // survives instead of falling back to a default empty core/navigation.
   const headerSection =
     homeSegments.find((s) => s.role === 'header') ?? homeSegments.find((s) => s.role === 'nav') ?? null;
+  const carriedHeaderSection = headerSection
+    ? combineCarriedHeaderChrome(
+        headerSection,
+        homeSegments.filter((s) => s.role === 'nav' && s !== headerSection),
+      )
+    : null;
   const slugifyLabel = (s: string): string =>
     s.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
   const labelToUrl = (label: string): string | undefined => {
@@ -471,8 +491,8 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
   const chromeInstanceStyles = new InstanceStyleSheet();
   const headerPart = mounts.header
     ? mountPartMarkup(mounts.header, stickyEmitted ? behaviors?.sticky : undefined)
-    : (chromeCarried && headerSection)
-      ? buildCarriedHeaderPart(headerSection, {
+    : (chromeCarried && carriedHeaderSection)
+      ? buildCarriedHeaderPart(carriedHeaderSection, {
           pageSlugs: site.pages.map((p) => p.slug),
           instanceStyles: chromeInstanceStyles,
           labelToUrl,

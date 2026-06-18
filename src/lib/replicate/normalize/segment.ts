@@ -1,7 +1,7 @@
 // src/lib/replicate/normalize/segment.ts
 import { createHash } from 'node:crypto';
 import * as cheerio from 'cheerio';
-import type { CheerioAPI } from 'cheerio';
+import type { Cheerio, CheerioAPI } from 'cheerio';
 import { isTag, isText } from 'domhandler';
 import type { Element } from 'domhandler';
 import { escapeHtml } from './emit-blocks.js';
@@ -9,6 +9,10 @@ import type { Section, SectionRole } from '../local-site/types.js';
 
 /** Non-rendering top-level tags that never become body sections. */
 const SKIP_TAGS = new Set(['script', 'style', 'link', 'template', 'noscript']);
+const LANDMARK_TAGS = new Set(['main', 'nav', 'header', 'footer', 'section', 'article']);
+const CONTENT_LANDMARK_TAGS = new Set(['main', 'article', 'section']);
+const CHROME_LANDMARK_TAGS = new Set(['header', 'nav', 'footer']);
+const ACTIONABLE_TEXT_MIN = 24;
 
 /** Slugify a short text run for use in an id. */
 function textSlug(text: string): string {
@@ -51,6 +55,38 @@ function stableId($: CheerioAPI, el: Element, ordinal: number): string {
   return hashId($.html(el) ?? '', ordinal);
 }
 
+function roleOf($el: Cheerio<Element>): string {
+  return ($el.attr('role') ?? '').trim().toLowerCase();
+}
+
+function nearestLandmarkAncestor(el: Element): string | null {
+  for (let a = el.parent; a && a.type === 'tag'; a = a.parent) {
+    const tag = (a as Element).tagName?.toLowerCase() ?? '';
+    if (LANDMARK_TAGS.has(tag)) return tag;
+  }
+  return null;
+}
+
+function isActionableComplementary($: CheerioAPI, el: Element): boolean {
+  const $el = $(el);
+  const textLength = $el.text().replace(/\s+/g, ' ').trim().length;
+  const linkCount = $el.find('a[href]').length;
+  return textLength >= ACTIONABLE_TEXT_MIN || linkCount >= 2;
+}
+
+function isLayoutChromeCandidate($: CheerioAPI, el: Element): boolean {
+  const $el = $(el);
+  const tag = el.tagName?.toLowerCase() ?? '';
+  const role = roleOf($el);
+  const isNav = tag === 'nav' || role === 'navigation';
+  const isComplementary = tag === 'aside' || role === 'complementary';
+  if (!isNav && !isComplementary) return false;
+  const nearest = nearestLandmarkAncestor(el);
+  if (nearest && CONTENT_LANDMARK_TAGS.has(nearest)) return false;
+  if (nearest && CHROME_LANDMARK_TAGS.has(nearest)) return false;
+  return isNav || isActionableComplementary($, el);
+}
+
 export function segmentPage(html: string): Section[] {
   const $ = cheerio.load(html);
   const sections: Section[] = [];
@@ -79,6 +115,21 @@ export function segmentPage(html: string): Section[] {
   pushChrome('body > header', 'header');
   pushChrome('body > nav', 'nav');
   pushChrome('body > footer', 'footer');
+
+  let layoutChromeOrdinal = 0;
+  for (const el of $('body').find('aside, nav, [role]').toArray() as Element[]) {
+    if (chromeEls.has(el)) continue;
+    if (($(el).parents().toArray() as Element[]).some((parent) => chromeEls.has(parent))) continue;
+    if (!isLayoutChromeCandidate($, el)) continue;
+    chromeEls.add(el);
+    sections.push({
+      id: stableId($, el, layoutChromeOrdinal),
+      role: 'nav',
+      html: $.html(el) ?? '',
+      classes: classesOf($(el)),
+    });
+    layoutChromeOrdinal += 1;
+  }
 
   const main = $('main').first();
   const container = main.length ? main : $('body');
