@@ -153,6 +153,19 @@ export function buildCarriedHeaderPart(
   return markup + sticky;
 }
 
+export function buildCarriedSidebarPart(
+  sidebar: Section,
+  opts: {
+    pageSlugs?: string[];
+  } = {},
+): string {
+  let html = sidebar.html;
+  if (opts.pageSlugs?.length) html = rewriteInternalHrefs(html, opts.pageSlugs);
+  // Preserve source chrome structure: docs sidebars often carry a `.sidebar-nav`
+  // nav plus a per-page `.toc-list`; block emission flattens plain nav wrappers.
+  return html.trim();
+}
+
 export interface FooterPartOpts {
   /** Site page slugs — internal footer hrefs are rewritten to /slug/ permalinks. */
   pageSlugs?: string[];

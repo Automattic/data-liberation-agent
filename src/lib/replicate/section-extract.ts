@@ -803,7 +803,7 @@ export interface SectionSpec {
 /** A top-level source landmark, for the region audit (#2). Collected in the same
  *  browser walk as the sections so its selector matches theirs by construction. */
 export interface SourceLandmark {
-  role: 'main' | 'nav' | 'header' | 'footer' | 'section' | 'article';
+  role: 'main' | 'nav' | 'header' | 'footer' | 'section' | 'article' | 'aside' | 'complementary';
   tag: string;
   /** buildSelector(parts), built Node-side. */
   selector: string;
@@ -811,6 +811,8 @@ export interface SourceLandmark {
   textLength: number;
   /** Foreground media count (img/video/picture) — actionability signal. */
   mediaCount: number;
+  /** Anchor count inside the landmark — real-rail signal for conservation hard gates. */
+  linkCount?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -2548,21 +2550,31 @@ export async function extractFull(
         | 'inherited'
         | null;
 
-      const LANDMARK_TAGS = ['main', 'nav', 'header', 'footer', 'section', 'article'];
-      const landmarkEls = Array.from(document.querySelectorAll(LANDMARK_TAGS.join(',')))
+      const LANDMARK_TAGS = ['main', 'nav', 'header', 'footer', 'section', 'article', 'aside'];
+      const LANDMARK_ROLE_SELECTORS = ['[role="complementary"]'];
+      const LANDMARK_SELECTOR = [...LANDMARK_TAGS, ...LANDMARK_ROLE_SELECTORS].join(',');
+      const roleOfLandmark = (el: Element) => {
+        const ariaRole = (el.getAttribute('role') || '').trim().toLowerCase();
+        if (ariaRole === 'complementary') return 'complementary';
+        return el.tagName.toLowerCase();
+      };
+      const isLandmarkElement = (el: Element) =>
+        LANDMARK_TAGS.includes(el.tagName.toLowerCase()) || roleOfLandmark(el) === 'complementary';
+      const landmarkEls = Array.from(document.querySelectorAll(LANDMARK_SELECTOR))
         .filter((el) => {
           for (let a = el.parentElement; a; a = a.parentElement) {
-            if (LANDMARK_TAGS.includes(a.tagName.toLowerCase())) return false; // nested → skip
+            if (isLandmarkElement(a)) return false; // nested → skip
           }
           return true;
         })
         .filter(isVisible);
       const landmarks = landmarkEls.map((el) => ({
-        role: el.tagName.toLowerCase(),
+        role: roleOfLandmark(el),
         tag: el.tagName.toLowerCase(),
         selectorParts: selectorPartsOf(el),
         textLength: (el.textContent || '').replace(/\s+/g, ' ').trim().length,
         mediaCount: el.querySelectorAll('img,video,picture').length,
+        linkCount: el.querySelectorAll('a[href]').length,
       }));
       const rows = deduped.slice(0, 25).map((entry, i) => buildSection(entry, i));
       return { rows, landmarks };
@@ -2748,6 +2760,7 @@ export async function extractFull(
     selector: buildSelector(l.selectorParts as SelectorParts),
     textLength: l.textLength,
     mediaCount: l.mediaCount,
+    linkCount: l.linkCount,
   }));
   return { specs, landmarks };
 }

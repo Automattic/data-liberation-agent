@@ -12,6 +12,10 @@
 //
 import { existsSync, readFileSync, writeFileSync, readdirSync, renameSync, unlinkSync, mkdirSync, copyFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
+import * as cheerio from 'cheerio';
+import type { CheerioAPI } from 'cheerio';
+import { isTag } from 'domhandler';
+import type { Element as DomElement } from 'domhandler';
 import type { Handler } from '../handler-types.js';
 import { ingestLocalSiteHandler } from './ingest-local-site.js';
 import {
@@ -25,8 +29,9 @@ import { themeCacheFlushCommands } from './install-theme.js';
 import { ingestLocalSite } from '../../lib/replicate/local-site/ingest.js';
 import { buildNavGraph } from '../../lib/replicate/local-site/nav-graph.js';
 import { segmentPage } from '../../lib/replicate/normalize/segment.js';
-import { buildHeaderPart, buildCarriedHeaderPart, buildFooterPart, findChromeMounts, mountPartMarkup } from '../../lib/replicate/local-theme/chrome-parts.js';
+import { buildHeaderPart, buildCarriedHeaderPart, buildCarriedSidebarPart, buildFooterPart, findChromeMounts, mountPartMarkup } from '../../lib/replicate/local-theme/chrome-parts.js';
 import { assembleLocalTheme } from '../../lib/replicate/local-theme/theme-files.js';
+import type { InteriorChromeTemplate } from '../../lib/replicate/local-theme/interior-chrome.js';
 import { buildPagePlan } from '../../lib/replicate/local-theme/page-plan.js';
 import { writeReplicaFilesToHost } from '../../lib/preview/replica-install.js';
 import { wpOptionUpdatesForSiteMeta } from '../../lib/preview/site-options.js';
@@ -56,11 +61,31 @@ import { collectSourceAssets, WP_COMPAT_CSS } from '../../lib/replicate/local-th
 import { buildJetpackFormParityCss } from '../../lib/replicate/local-site/jetpack-form-css.js';
 import { JETPACK_FORM_PARITY_CSS } from '../../lib/replicate/local-theme/jetpack-form-parity-contract.js';
 import { detectBehaviors } from '../../lib/replicate/normalize/detect-behaviors.js';
+import { checkConservationLeaks } from '../../lib/replicate/normalize/conservation-check.js';
+import { extractSourceLandmarksFromHtml, landmarkRoleForHtmlRoot, selectorForHtmlRoot } from '../../lib/replicate/region-census.js';
+import { reconcileRegions, type PlacedRegion, type RegionSelectionReport } from '../../lib/replicate/region-audit.js';
+import { buildSelector, type SelectorParts } from '../../lib/replicate/section-selector.js';
+import type { SourceLandmark } from '../../lib/replicate/section-extract.js';
 import { buildInteractivityPlugin, PLUGIN_SLUG } from '../../blocks/interactivity-plugin.js';
-import type { DetectedBehaviors } from '../../lib/replicate/local-site/types.js';
+import type { DetectedBehaviors, Section } from '../../lib/replicate/local-site/types.js';
+import type { ConservationLeak } from '../../lib/replicate/normalize/conservation-leak.js';
+import {
+  LOCAL_CONSERVATION_HARD_FAIL_ARG,
+  LOCAL_CONSERVATION_HARD_FAIL_ROLES,
+  LOCAL_CONSERVATION_RAIL_LINK_THRESHOLD,
+  LOCAL_CONSERVATION_REPORT_SCHEMA,
+  type LocalConservationRegionAudit,
+  type LocalConservationSummary,
+} from './convert-local-site-conservation-contract.js';
 import { CLEAR_INTERVALS_SCRIPT, FREEZE_MOTION_CSS, probePair, type Divergence } from '../../lib/replicate/parity/parity-probe.js';
 import { extractDiffRegions } from '../../lib/replicate/parity/diff-regions.js';
 import { classifyDivergences, renderPatchCss, divergenceFingerprint, suppressPageConflicts, type UnresolvedDivergence, type PatchOverride, type RepairPlan } from '../../lib/replicate/parity/parity-classify.js';
+
+type LayoutRailSection = Section & {
+  layoutWrapperTag?: string;
+  layoutWrapperClasses?: string[];
+  layoutWrapperRailPosition?: 'beforeMain' | 'afterMain';
+};
 
 /** Thin trimming wrapper over the shared Studio wp-cli exec — these are short
  * commands, so the 60s/10MB envelope rather than the 5min/50MB default. */
@@ -78,6 +103,201 @@ function writeAtomicTextFile(path: string, content: string): void {
     try { unlinkSync(tmp); } catch { /* ignore */ }
     throw err;
   }
+}
+
+function normalizeRegionText(text: string): string {
+  return text.replace(/\s+/g, ' ').trim();
+}
+
+function firstHtmlElement($: CheerioAPI): DomElement | null {
+  const el = $('body').children().first().get(0) ?? $.root().children().first().get(0);
+  return el && isTag(el) ? (el as DomElement) : null;
+}
+
+function normalizeHeaderRoot(html: string): string {
+  return html.replace(/^<header(\b[^>]*>)/i, '<div$1').replace(/<\/header>\s*$/i, '</div>');
+}
+
+function combineCarriedHeaderChrome(header: Section, extraChrome: Section[]): Section {
+  if (extraChrome.length === 0) return header;
+  const html = [normalizeHeaderRoot(header.html), ...extraChrome.map((s) => s.html)].join('\n');
+  return {
+    ...header,
+    html: `<div class="dla-carried-header-chrome">${html}</div>`,
+    classes: ['dla-carried-header-chrome'],
+  };
+}
+
+function hasRenderableRootContent(html: string): boolean {
+  const $ = cheerio.load(html);
+  const root = firstHtmlElement($);
+  const scope = root ? $(root) : $('body');
+  const rootTag = root?.tagName?.toLowerCase() ?? '';
+  const rootIsRenderable = ['a', 'button', 'input', 'select', 'textarea', 'img', 'picture', 'video', 'svg', 'canvas'].includes(rootTag);
+  return (
+    normalizeRegionText(scope.text()).length > 0 ||
+    rootIsRenderable ||
+    scope.find('a[href],button,input,select,textarea,img,picture,video,svg,canvas').length > 0
+  );
+}
+
+function shouldPreferCarriedHeaderOverMount(header: Section | null, carriedHeader: Section | null): boolean {
+  // Empty JS mounts remain valid when no real source header exists. A contentful
+  // <header> plus folded layout rails is stronger evidence than an empty overlay div.
+  return !!header && header.role === 'header' && !!carriedHeader && hasRenderableRootContent(carriedHeader.html);
+}
+
+function isPlacedRegionRole(role: string | undefined): role is NonNullable<PlacedRegion['role']> {
+  return role === 'header' || role === 'nav' || role === 'footer' || role === 'aside' || role === 'complementary';
+}
+
+function selectorPartsForElement($: CheerioAPI, el: DomElement): SelectorParts {
+  const tag = el.tagName.toLowerCase();
+  let nthOfType = 1;
+  for (let prev = el.prev; prev; prev = prev.prev) {
+    if (isTag(prev) && (prev as DomElement).tagName?.toLowerCase() === tag) nthOfType += 1;
+  }
+  const $el = $(el);
+  return {
+    tag,
+    id: ($el.attr('id') ?? '').trim() || null,
+    classes: ($el.attr('class') ?? '').split(/\s+/).filter(Boolean),
+    nthOfType,
+  };
+}
+
+function createSourceSelectorResolver(sourceHtml: string): (rootHtml: string) => string | undefined {
+  const $source = cheerio.load(sourceHtml);
+  const used = new Set<DomElement>();
+  return (rootHtml: string): string | undefined => {
+    const $fragment = cheerio.load(rootHtml);
+    const root = $fragment('body').children().first().get(0) ?? $fragment.root().children().first().get(0);
+    if (!root || !isTag(root)) return selectorForHtmlRoot(rootHtml);
+    const rootHtmlCanonical = $fragment.html(root);
+    const tag = (root as DomElement).tagName.toLowerCase();
+    const candidates = $source(tag).toArray().filter((node): node is DomElement => isTag(node));
+    for (const candidate of candidates) {
+      if (used.has(candidate)) continue;
+      if ($source.html(candidate) !== rootHtmlCanonical) continue;
+      used.add(candidate);
+      return buildSelector(selectorPartsForElement($source, candidate));
+    }
+    return selectorForHtmlRoot(rootHtml);
+  };
+}
+
+function chromePlacedRegion(
+  section: Section,
+  kind: 'header_part' | 'footer_part',
+  resolveSelector: (rootHtml: string) => string | undefined = selectorForHtmlRoot,
+): PlacedRegion {
+  const role = landmarkRoleForHtmlRoot(section.html);
+  return {
+    kind,
+    selector: resolveSelector(section.html),
+    ...(isPlacedRegionRole(role) ? { role } : {}),
+  };
+}
+
+function bodyPlacedRegion(
+  section: Section,
+  resolveSelector: (rootHtml: string) => string | undefined = selectorForHtmlRoot,
+): PlacedRegion {
+  const role = landmarkRoleForHtmlRoot(section.html);
+  return {
+    kind: 'page_body_section',
+    selector: resolveSelector(section.html),
+    ...(isPlacedRegionRole(role) ? { role } : {}),
+  };
+}
+
+function sourceIdsForHtml(html: string): string[] {
+  const $ = cheerio.load(html);
+  const ids: string[] = [];
+  const root = firstHtmlElement($);
+  if (root) {
+    const rootId = ($(root).attr('id') ?? '').trim();
+    if (rootId) ids.push(rootId);
+  }
+  $('[id]').each((_, el) => {
+    const id = ($(el).attr('id') ?? '').trim();
+    if (id && !ids.includes(id)) ids.push(id);
+  });
+  return ids;
+}
+
+function renderedPartContainsSourceSection(section: Section, renderedPart: string): boolean {
+  if (!renderedPart.trim()) return false;
+  const $source = cheerio.load(section.html);
+  const root = firstHtmlElement($source);
+  const scope = root ? $source(root) : $source('body');
+  const rootClasses = root ? ($source(root).attr('class') ?? '').split(/\s+/).filter(Boolean) : [];
+  const $rendered = cheerio.load(renderedPart);
+  const renderedText = normalizeRegionText($rendered.text());
+  const renderedIds = new Set<string>();
+  $rendered('[id]').each((_, el) => {
+    const id = ($rendered(el).attr('id') ?? '').trim();
+    if (id) renderedIds.add(id);
+  });
+  const renderedClasses = new Set<string>();
+  $rendered('[class]').each((_, el) => {
+    for (const cls of ($rendered(el).attr('class') ?? '').split(/\s+/).filter(Boolean)) renderedClasses.add(cls);
+  });
+
+  const ids = sourceIdsForHtml(section.html);
+  if (ids.some((id) => renderedIds.has(id) || renderedPart.includes(`"anchor":${JSON.stringify(id)}`))) return true;
+  if (renderedPart.includes(`"anchor":${JSON.stringify(section.id)}`)) return true;
+  if (rootClasses.some((cls) => renderedClasses.has(cls))) return true;
+  if (ids.length > 0 || rootClasses.length > 0) return false;
+
+  const linkLabels = $source('a[href]').toArray()
+    .map((el) => normalizeRegionText($source(el).text()))
+    .filter(Boolean);
+  if (linkLabels.length > 0 && linkLabels.every((label) => renderedText.includes(label))) return true;
+
+  const sourceText = normalizeRegionText(scope.text());
+  return sourceText.length >= 24 && renderedText.includes(sourceText);
+}
+
+function localRenderedPlacedRegionsForLandmark(landmark: SourceLandmark, placed: PlacedRegion[]): PlacedRegion[] {
+  const body = placed.filter((p) => p.kind === 'page_body_section');
+  const chrome = placed.filter((p) => {
+    if (p.kind === 'page_body_section') return false;
+    if (p.selector === landmark.selector) return true;
+    return p.selector === undefined && (p.role === undefined || p.role === landmark.role);
+  });
+  return [...body, ...chrome];
+}
+
+function reconcileLocalRenderedRegions(
+  census: SourceLandmark[],
+  placed: PlacedRegion[],
+  page: string,
+  entryUrl: string,
+): RegionSelectionReport {
+  const assignments = census.map((landmark) =>
+    reconcileRegions(
+      [landmark],
+      localRenderedPlacedRegionsForLandmark(landmark, placed),
+      page,
+      entryUrl,
+    ).assignments[0],
+  );
+  const sourceLandmarks: Record<string, number> = {};
+  for (const landmark of census) sourceLandmarks[landmark.role] = (sourceLandmarks[landmark.role] ?? 0) + 1;
+  const unassignedRegions = assignments.filter((a) => a.kind === 'unassigned').map((a) => a.landmark);
+  return {
+    page,
+    entryUrl,
+    assignments,
+    unassignedRegions,
+    counts: {
+      sourceLandmarks,
+      assigned: assignments.filter((a) => ['page_body_section', 'header_part', 'footer_part'].includes(a.kind)).length,
+      unassigned: unassignedRegions.length,
+      nonActionable: assignments.filter((a) => a.kind === 'non_actionable').length,
+    },
+  };
 }
 
 export const convertLocalSiteHandler: Handler = async (args, ctx) => {
@@ -141,6 +361,7 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
   const editorSurface = args.editorSurface === true;
   const repair = args.repair !== false;
   const maxRepairRounds = Math.min(Math.max(Number(args.maxRepairRounds ?? 2), 0), 5);
+  const failOnConservationRailDrop = args[LOCAL_CONSERVATION_HARD_FAIL_ARG] === true;
   // Stage 1d: carry the source site's own CSS/JS into the theme so the class-
   // preserving block DOM renders under the designer's stylesheet. Default ON
   // (identical replication goal); pass carryCss:false / carryJs:false to opt out.
@@ -433,6 +654,7 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
 
   // Chrome: nav from the graph; footer from the home page's captured footer section.
   const nav = buildNavGraph(site);
+  const pageSlugs = site.pages.map((p) => p.slug);
   const home = site.pages.find((p) => p.slug === 'home') ?? site.pages[0];
   const homeSegments = segmentPage(home.html);
   const footerSection = homeSegments.find((s) => s.role === 'footer') ?? null;
@@ -441,6 +663,12 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
   // survives instead of falling back to a default empty core/navigation.
   const headerSection =
     homeSegments.find((s) => s.role === 'header') ?? homeSegments.find((s) => s.role === 'nav') ?? null;
+  const carriedHeaderSection = headerSection
+    ? combineCarriedHeaderChrome(
+        headerSection,
+        homeSegments.filter((s) => s.chromeSource === 'layout-rail' && s !== headerSection),
+      )
+    : null;
   const slugifyLabel = (s: string): string =>
     s.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
   const labelToUrl = (label: string): string | undefined => {
@@ -469,19 +697,30 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
     warnings.push('sticky behavior detected but not emitted (requires carried chrome header)');
   }
   const chromeInstanceStyles = new InstanceStyleSheet();
-  const headerPart = mounts.header
-    ? mountPartMarkup(mounts.header, stickyEmitted ? behaviors?.sticky : undefined)
-    : (chromeCarried && headerSection)
-      ? buildCarriedHeaderPart(headerSection, {
-          pageSlugs: site.pages.map((p) => p.slug),
-          instanceStyles: chromeInstanceStyles,
-          labelToUrl,
-          ...(stickyEmitted ? { sticky: behaviors!.sticky } : {}),
-        })
-      : buildHeaderPart(siteTitle, nav, site.pages.map((p) => p.slug), {
-          plain: chromeCarried,
-          ...(behaviors?.sticky ? { sticky: behaviors.sticky } : {}),
-        });
+  const preferCarriedHeader = chromeCarried && shouldPreferCarriedHeaderOverMount(headerSection, carriedHeaderSection);
+  let headerPart: string;
+  if (preferCarriedHeader && carriedHeaderSection) {
+    headerPart = buildCarriedHeaderPart(carriedHeaderSection, {
+      pageSlugs,
+      instanceStyles: chromeInstanceStyles,
+      labelToUrl,
+      ...(stickyEmitted ? { sticky: behaviors!.sticky } : {}),
+    });
+  } else if (mounts.header) {
+    headerPart = mountPartMarkup(mounts.header, stickyEmitted ? behaviors?.sticky : undefined);
+  } else if (chromeCarried && carriedHeaderSection) {
+    headerPart = buildCarriedHeaderPart(carriedHeaderSection, {
+      pageSlugs,
+      instanceStyles: chromeInstanceStyles,
+      labelToUrl,
+      ...(stickyEmitted ? { sticky: behaviors!.sticky } : {}),
+    });
+  } else {
+    headerPart = buildHeaderPart(siteTitle, nav, pageSlugs, {
+      plain: chromeCarried,
+      ...(behaviors?.sticky ? { sticky: behaviors.sticky } : {}),
+    });
+  }
   // Footer tokens (bgToken/textToken) come from the foundation — they style the
   // wrapper group in the footer part we build here. The assembleLocalTheme
   // passthrough was proven inert (we swap parts/footer.html unconditionally),
@@ -494,11 +733,34 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
   const footerPart = mounts.footer
     ? mountPartMarkup(mounts.footer)
     : buildFooterPart(footerSection, siteTitle, {
-        pageSlugs: site.pages.map((p) => p.slug),
+        pageSlugs,
         bgToken: chromeCarried ? undefined : footerBgToken,
         textToken: chromeCarried ? undefined : footerTextToken,
         instanceStyles: chromeInstanceStyles,
       });
+
+  const interiorChromeBySlug = new Map<string, InteriorChromeTemplate>();
+  for (const page of site.pages) {
+    if (page.slug === home.slug) continue;
+    const rails = segmentPage(page.html).filter((s) => s.chromeSource === 'layout-rail') as LayoutRailSection[];
+    if (rails.length === 0) continue;
+    const templateSlug = page.slug.replace(/[^a-z0-9_-]+/gi, '-').replace(/^-+|-+$/g, '') || 'page';
+    const partMarkup = rails.map((rail) => buildCarriedSidebarPart(rail, { pageSlugs })).join('\n');
+    const layoutWrapperRail = rails.find((rail) => rail.layoutWrapperTag && rail.layoutWrapperRailPosition);
+    interiorChromeBySlug.set(page.slug, {
+      templateName: `page-local-${templateSlug}-chrome`,
+      templateTitle: `Local Page Chrome (${page.title || page.slug})`,
+      partSlug: `interior-chrome-${templateSlug}`,
+      partMarkup,
+      ...(layoutWrapperRail
+        ? {
+            layoutWrapperTag: layoutWrapperRail.layoutWrapperTag,
+            layoutWrapperClasses: layoutWrapperRail.layoutWrapperClasses ?? [],
+            layoutWrapperRailPosition: layoutWrapperRail.layoutWrapperRailPosition,
+          }
+        : {}),
+    });
+  }
 
   // Merge the page-body lib-i rules (written by ingest to composed/
   // instance-styles.css) with the chrome rules just collected. Only when CSS is
@@ -560,6 +822,7 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
     carrySourceAssets,
     instanceStylesCss,
     jetpackFormParityCss,
+    interiorChromeTemplates: [...interiorChromeBySlug.values()],
     // Source body data-* attrs by permalink pathname — replayed by the
     // wp_body_open shim so carried JS keyed on body[data-*] behaves
     // identically (active-nav etc.). Only pages that HAVE attrs contribute.
@@ -697,6 +960,99 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
   // Pages from sidecars (installPost is idempotent via _source_url meta).
   const plan = buildPagePlan(site, outputDir);
   const emptySidecars = plan.items.filter((i) => !i.content.trim()).map((i) => i.slug);
+  const conservationLeaks: ConservationLeak[] = [];
+  for (const item of plan.items) {
+    const page = site.pages.find((p) => p.slug === item.slug);
+    if (!page) continue;
+    const interiorChrome = interiorChromeBySlug.get(item.slug);
+    conservationLeaks.push(
+      ...checkConservationLeaks({
+        pageSlug: item.slug,
+        sourceHtml: page.html,
+        postContent: item.content,
+        partMarkup: [headerPart, footerPart, ...(interiorChrome ? [interiorChrome.partMarkup] : [])],
+      }),
+    );
+  }
+  const conservationReportPath = join(outputDir, 'conservation-leaks.json');
+  try {
+    writeAtomicTextFile(
+      conservationReportPath,
+      JSON.stringify({ schema: 1, site: dir, leaks: conservationLeaks }, null, 2) + '\n',
+    );
+  } catch (err) {
+    warnings.push(`conservation leaks report write failed: ${(err as Error).message}`);
+  }
+  const localRegionReportPath = join(outputDir, 'region-audit.json');
+  const safeConservationSummary = (): LocalConservationSummary => ({
+    ok: true,
+    status: 'pass',
+    unassignedRegions: 0,
+    hardFailRegions: 0,
+    artifact: localRegionReportPath,
+    railHardFail: {
+      enabled: failOnConservationRailDrop,
+      roles: LOCAL_CONSERVATION_HARD_FAIL_ROLES,
+      minLinks: LOCAL_CONSERVATION_RAIL_LINK_THRESHOLD,
+    },
+  });
+  let conservation = safeConservationSummary();
+  try {
+    const resolveHomeSelector = createSourceSelectorResolver(home.html);
+    const localCensus = extractSourceLandmarksFromHtml(home.html);
+    const localPlacedRegions: PlacedRegion[] = [
+      ...homeSegments.filter((s) => s.role === 'body').map((s) => bodyPlacedRegion(s, resolveHomeSelector)),
+    ];
+    if (
+      headerSection &&
+      headerSection.chromeSource !== 'layout-rail' &&
+      renderedPartContainsSourceSection(headerSection, headerPart)
+    ) {
+      localPlacedRegions.push(chromePlacedRegion(headerSection, 'header_part', resolveHomeSelector));
+    }
+    if (footerSection && renderedPartContainsSourceSection(footerSection, footerPart)) {
+      localPlacedRegions.push(chromePlacedRegion(footerSection, 'footer_part', resolveHomeSelector));
+    }
+    for (const rail of homeSegments.filter((s) => s.chromeSource === 'layout-rail')) {
+      if (renderedPartContainsSourceSection(rail, headerPart)) {
+        localPlacedRegions.push(chromePlacedRegion(rail, 'header_part', resolveHomeSelector));
+      }
+    }
+    const localRegionReport = reconcileLocalRenderedRegions(localCensus, localPlacedRegions, home.slug, home.relPath);
+    const candidateHardFailRegions = localRegionReport.unassignedRegions.filter(
+      (region) =>
+        (LOCAL_CONSERVATION_HARD_FAIL_ROLES as readonly string[]).includes(region.role) &&
+        (region.linkCount ?? 0) >= LOCAL_CONSERVATION_RAIL_LINK_THRESHOLD,
+    );
+    const hardFailRegions = failOnConservationRailDrop ? candidateHardFailRegions : [];
+    conservation = {
+      ok: hardFailRegions.length === 0,
+      status: hardFailRegions.length > 0 ? 'fail' : localRegionReport.counts.unassigned > 0 ? 'warn' : 'pass',
+      unassignedRegions: localRegionReport.counts.unassigned,
+      hardFailRegions: hardFailRegions.length,
+      artifact: localRegionReportPath,
+      railHardFail: {
+        enabled: failOnConservationRailDrop,
+        roles: LOCAL_CONSERVATION_HARD_FAIL_ROLES,
+        minLinks: LOCAL_CONSERVATION_RAIL_LINK_THRESHOLD,
+      },
+    };
+    try {
+      const regionAudit: LocalConservationRegionAudit = {
+        schema: LOCAL_CONSERVATION_REPORT_SCHEMA,
+        site: dir,
+        pages: [localRegionReport],
+        unassignedRegions: localRegionReport.counts.unassigned,
+        hardFailRegions,
+      };
+      writeAtomicTextFile(localRegionReportPath, JSON.stringify(regionAudit, null, 2) + '\n');
+    } catch (err) {
+      warnings.push(`region audit write failed: ${(err as Error).message}`);
+    }
+  } catch (err) {
+    warnings.push(`region audit failed: ${(err as Error).message}`);
+    conservation = safeConservationSummary();
+  }
   const installed: Array<{ slug: string; postId: number | null }> = [];
   const failedInstalls: Array<{ slug: string; error: string }> = [];
   for (const item of plan.items) {
@@ -746,7 +1102,11 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
     }
     const templateAssigns = installed
       .filter((p) => p.postId != null)
-      .map((p) => ({ postId: p.postId as number, slug: p.slug, template: 'page-local' }));
+      .map((p) => ({
+        postId: p.postId as number,
+        slug: p.slug,
+        template: interiorChromeBySlug.get(p.slug)?.templateName ?? 'page-local',
+      }));
     const homeInstall = installed.find((p) => p.slug === plan.homeSlug);
     const frontPageId = homeInstall?.postId != null ? homeInstall.postId : undefined;
     try {
@@ -1219,7 +1579,7 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
     }
   }
 
-  return ctx.textResult({
+  const result = ctx.textResult({
     pages: plan.items.length,
     installed: installed.length,
     ...(editorReport !== undefined ? { editorSurface: editorReport } : {}),
@@ -1232,6 +1592,11 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
     frontPageSet,
     designCaptured,
     carried: { css: carriedCss, js: carriedJs },
+    conservationLeaks: {
+      count: conservationLeaks.length,
+      artifact: conservationReportPath,
+    },
+    conservation,
     // Key OMITTED entirely when the flag is off — default summary stays byte-stable.
     // sticky reports EMISSION (stickyEmitted), not detection — see the header-part
     // site. tabs/slider/modal are per-section counts forwarded from the ingest
@@ -1251,4 +1616,6 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
     ...(parity !== undefined ? { parity } : {}),
     warnings,
   });
+  if (conservation.status === 'fail') result.isError = true;
+  return result;
 };

@@ -14,7 +14,9 @@
 import { buildThemeScaffold } from '../theme-scaffold.js';
 import type { ReplicaFile } from '../../preview/types.js';
 import type { LocalFontFace } from '../font-capture.js';
+import { escapeHtml } from '../normalize/emit-blocks.js';
 import { JETPACK_FORM_PARITY_CSS } from './jetpack-form-parity-contract.js';
+import type { InteriorChromeTemplate } from './interior-chrome.js';
 
 /** Minimal foundation — all DesignFoundation fields are optional; this sets
  *  just enough for buildThemeScaffold to emit a valid theme.json palette/font
@@ -68,6 +70,8 @@ export interface AssembleLocalThemeOpts {
    * page templates' core/post-content so source body-layout rules that key off
    * it (notably a `> * + *` blockGap between page sections) keep matching. */
   mainClass?: string;
+  /** Page-scoped chrome parts/templates for rails that are absent from home. */
+  interiorChromeTemplates?: InteriorChromeTemplate[];
 }
 
 /** No-title page template: header part → post-content → footer part.
@@ -76,7 +80,7 @@ export interface AssembleLocalThemeOpts {
  *  front-page templates. Layout is default (flow) — constrained would inject
  *  a contentSize max-width onto children that fights the carried source
  *  main{max-width} rule (stage 1d parity); the source CSS owns layout. */
-function noTitleTemplate(mainClass?: string): string {
+function noTitleTemplate(mainClass?: string, interiorChrome?: InteriorChromeTemplate): string {
   // Carry the source <main> class onto the post-content wrapper: source body
   // layout rules key off it (e.g. a `.<main-class> > * + * { margin-top }`
   // blockGap between page sections). The sections render as post-content's
@@ -85,13 +89,41 @@ function noTitleTemplate(mainClass?: string): string {
   const postContent = mainClass
     ? `<!-- wp:post-content {"className":${JSON.stringify(mainClass)}} /-->`
     : `<!-- wp:post-content /-->`;
-  return (
-    `<!-- wp:template-part {"slug":"header","tagName":"header"} /-->\n\n` +
+  const sidebarPart = interiorChrome?.partSlug
+    ? `<!-- wp:template-part {"slug":${JSON.stringify(interiorChrome.partSlug)},"tagName":"aside"} /-->\n\n`
+    : '';
+  const mainGroup =
     `<!-- wp:group {"tagName":"main"} -->\n` +
     `<main class="wp-block-group">\n` +
     `${postContent}\n` +
     `</main>\n` +
-    `<!-- /wp:group -->\n\n` +
+    `<!-- /wp:group -->\n\n`;
+  const headerPart = `<!-- wp:template-part {"slug":"header","tagName":"header"} /-->\n\n`;
+  const footerPart = `<!-- wp:template-part {"slug":"footer","tagName":"footer"} /-->\n`;
+  const wrapperTag = interiorChrome?.layoutWrapperTag?.trim();
+  if (interiorChrome && sidebarPart && wrapperTag) {
+    const wrapperClasses = (interiorChrome.layoutWrapperClasses ?? []).filter(Boolean).join(' ').trim();
+    const wrapperAttrs = wrapperClasses ? { tagName: wrapperTag, className: wrapperClasses } : { tagName: wrapperTag };
+    const wrapperClassAttr = ['wp-block-group', wrapperClasses].filter(Boolean).join(' ');
+    const wrappedContent =
+      interiorChrome.layoutWrapperRailPosition === 'afterMain'
+        ? mainGroup + sidebarPart
+        : sidebarPart + mainGroup;
+    const wrapperClassValue = escapeHtml(wrapperClassAttr);
+    return (
+      headerPart +
+      `<!-- wp:group ${JSON.stringify(wrapperAttrs)} -->\n` +
+      `<${wrapperTag} class="${wrapperClassValue}">\n` +
+      wrappedContent +
+      `</${wrapperTag}>\n` +
+      `<!-- /wp:group -->\n\n` +
+      footerPart
+    );
+  }
+  return (
+    headerPart +
+    sidebarPart +
+    mainGroup +
     `<!-- wp:template-part {"slug":"footer","tagName":"footer"} /-->\n`
   );
 }
@@ -257,6 +289,11 @@ export function assembleLocalTheme(opts: AssembleLocalThemeOpts): ReplicaFile[] 
     const customTemplates = [
       ...(parsed.customTemplates ?? []),
       { name: 'page-local', title: 'Local Page (no title)', postTypes: ['page'] },
+      ...(opts.interiorChromeTemplates ?? []).map((t) => ({
+        name: t.templateName,
+        title: t.templateTitle,
+        postTypes: ['page'],
+      })),
     ];
     // Trailing newline matches the scaffold's theme.json emit convention.
     return { ...f, content: JSON.stringify({ ...parsed, customTemplates }, null, 2) + '\n' };
@@ -265,6 +302,13 @@ export function assembleLocalTheme(opts: AssembleLocalThemeOpts): ReplicaFile[] 
   const template = noTitleTemplate(opts.mainClass);
   // page-local: the selectable per-page template assigned via _wp_page_template.
   withTemplates.push({ relativePath: 'templates/page-local.html', content: template });
+  for (const interior of opts.interiorChromeTemplates ?? []) {
+    withTemplates.push({ relativePath: `parts/${interior.partSlug}.html`, content: interior.partMarkup });
+    withTemplates.push({
+      relativePath: `templates/${interior.templateName}.html`,
+      content: noTitleTemplate(opts.mainClass, interior),
+    });
+  }
   // front-page.html: WP serves this at the site root when static front page is set;
   // same shape ensures the home page also uses the no-title layout.
   // buildThemeScaffold does NOT emit front-page.html with a minimal call (only
