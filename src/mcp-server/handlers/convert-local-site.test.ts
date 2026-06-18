@@ -250,6 +250,29 @@ function makeSideRailSite(): string {
   return dir;
 }
 
+function makeHeaderWithStandaloneNavSite(): string {
+  mkdirSync(FIXTURE_TMP, { recursive: true });
+  const dir = mkdtempSync(join(FIXTURE_TMP, 'cls-standalone-nav-'));
+  writeFileSync(
+    join(dir, 'index.html'),
+    '<html><head><title>Home</title><link rel="stylesheet" href="styles.css"></head><body>' +
+      '<header class="site-header"><p><a href="about.html">Header About</a></p></header>' +
+      '<nav id="standalone-nav"><a href="standalone.html">Standalone Nav</a></nav>' +
+      '<main><section id="hero"><h1>Hi</h1></section></main>' +
+      '</body></html>',
+  );
+  writeFileSync(
+    join(dir, 'about.html'),
+    '<html><head><title>About</title></head><body><main><section id="about"><h1>About</h1></section></main></body></html>',
+  );
+  writeFileSync(
+    join(dir, 'standalone.html'),
+    '<html><head><title>Standalone</title></head><body><main><section id="standalone"><h1>Standalone</h1></section></main></body></html>',
+  );
+  writeFileSync(join(dir, 'styles.css'), '.site-header { display: flex; gap: 1rem; }');
+  return dir;
+}
+
 function makeFormSite(): string {
   mkdirSync(FIXTURE_TMP, { recursive: true });
   const dir = mkdtempSync(join(FIXTURE_TMP, 'cls-form-'));
@@ -828,6 +851,28 @@ describe('convertLocalSiteHandler', () => {
       const homeBody = readFileSync(join(outDir, 'composed', 'home.blocks.html'), 'utf8');
       expect(homeBody).toContain('Overview');
       expect(homeBody).not.toContain('docs-sidebar');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(sitePath, { recursive: true, force: true });
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not fold a standalone body-direct nav into the carried header part', async () => {
+    const dir = makeHeaderWithStandaloneNavSite();
+    const sitePath = makeStudioSite();
+    const outDir = mkdtempSync(join(FIXTURE_TMP, 'cls-standalone-nav-out-'));
+    try {
+      const res = await convertLocalSiteHandler(
+        { dir, studioSitePath: sitePath, outputDir: outDir, themeSlug: 'acme-local', siteTitle: 'Acme', skipDesign: true },
+        ctx,
+      );
+      expect(res.isError).toBeFalsy();
+      const headerHtml = readFileSync(join(sitePath, 'wp-content', 'themes', 'acme-local', 'parts', 'header.html'), 'utf8');
+      expect(headerHtml).toContain('site-header');
+      expect(headerHtml).toContain('Header About');
+      expect(headerHtml).not.toContain('standalone-nav');
+      expect(headerHtml).not.toContain('Standalone Nav');
     } finally {
       rmSync(dir, { recursive: true, force: true });
       rmSync(sitePath, { recursive: true, force: true });

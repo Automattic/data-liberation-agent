@@ -11,6 +11,7 @@ import type { Section, SectionRole } from '../local-site/types.js';
 const SKIP_TAGS = new Set(['script', 'style', 'link', 'template', 'noscript']);
 const LANDMARK_TAGS = new Set(['main', 'nav', 'header', 'footer', 'section', 'article']);
 const CONTENT_LANDMARK_TAGS = new Set(['main', 'article', 'section']);
+const CONTENT_LANDMARK_ROLES = new Set(['main', 'article', 'region']);
 const CHROME_LANDMARK_TAGS = new Set(['header', 'nav', 'footer']);
 const ACTIONABLE_TEXT_MIN = 24;
 
@@ -67,11 +68,27 @@ function nearestLandmarkAncestor(el: Element): string | null {
   return null;
 }
 
+function hasContentLandmarkAncestor($: CheerioAPI, el: Element): boolean {
+  for (let a = el.parent; a && a.type === 'tag'; a = a.parent) {
+    const ancestor = a as Element;
+    const tag = ancestor.tagName?.toLowerCase() ?? '';
+    if (CONTENT_LANDMARK_TAGS.has(tag) || CONTENT_LANDMARK_ROLES.has(roleOf($(ancestor)))) return true;
+  }
+  return false;
+}
+
 function isActionableComplementary($: CheerioAPI, el: Element): boolean {
   const $el = $(el);
   const textLength = $el.text().replace(/\s+/g, ' ').trim().length;
   const linkCount = $el.find('a[href]').length;
   return textLength >= ACTIONABLE_TEXT_MIN || linkCount >= 2;
+}
+
+function hasContentLandmarkDescendant($: CheerioAPI, el: Element): boolean {
+  return ($(el).find('main,article,section,[role]').toArray() as Element[]).some((child) => {
+    const tag = child.tagName?.toLowerCase() ?? '';
+    return CONTENT_LANDMARK_TAGS.has(tag) || CONTENT_LANDMARK_ROLES.has(roleOf($(child)));
+  });
 }
 
 function isLayoutChromeCandidate($: CheerioAPI, el: Element): boolean {
@@ -81,6 +98,8 @@ function isLayoutChromeCandidate($: CheerioAPI, el: Element): boolean {
   const isNav = tag === 'nav' || role === 'navigation';
   const isComplementary = tag === 'aside' || role === 'complementary';
   if (!isNav && !isComplementary) return false;
+  if (hasContentLandmarkAncestor($, el)) return false;
+  if (hasContentLandmarkDescendant($, el)) return false;
   const nearest = nearestLandmarkAncestor(el);
   if (nearest && CONTENT_LANDMARK_TAGS.has(nearest)) return false;
   if (nearest && CHROME_LANDMARK_TAGS.has(nearest)) return false;
@@ -122,12 +141,15 @@ export function segmentPage(html: string): Section[] {
     if (($(el).parents().toArray() as Element[]).some((parent) => chromeEls.has(parent))) continue;
     if (!isLayoutChromeCandidate($, el)) continue;
     chromeEls.add(el);
+    const $el = $(el);
     sections.push({
       id: stableId($, el, layoutChromeOrdinal),
       role: 'nav',
+      chromeSource: 'layout-rail',
       html: $.html(el) ?? '',
-      classes: classesOf($(el)),
+      classes: classesOf($el),
     });
+    $el.remove();
     layoutChromeOrdinal += 1;
   }
 

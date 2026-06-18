@@ -458,7 +458,7 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
   const carriedHeaderSection = headerSection
     ? combineCarriedHeaderChrome(
         headerSection,
-        homeSegments.filter((s) => s.role === 'nav' && s !== headerSection),
+        homeSegments.filter((s) => s.chromeSource === 'layout-rail' && s !== headerSection),
       )
     : null;
   const slugifyLabel = (s: string): string =>

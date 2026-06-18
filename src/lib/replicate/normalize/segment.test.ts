@@ -91,6 +91,77 @@ describe('segmentPage', () => {
     expect(sections.filter((s) => s.role === 'body').map((s) => s.id)).toEqual(['overview']);
   });
 
+  it('removes a captured layout rail from no-main wrapper body sections', () => {
+    const html = `<body>
+      <div class="layout">
+        <aside class="sidebar"><nav><a href="intro.html">Intro</a><a href="api.html">API</a></nav></aside>
+        <div class="content"><h1>Guide</h1><p>Read the docs.</p></div>
+      </div>
+    </body>`;
+    const sections = segmentPage(html);
+    const rails = sections.filter((s) => s.role === 'nav' && s.id === 'sidebar');
+    expect(rails).toHaveLength(1);
+    expect(rails[0].chromeSource).toBe('layout-rail');
+    const body = sections.filter((s) => s.role === 'body');
+    expect(body).toHaveLength(1);
+    expect(body[0].html).toContain('content');
+    expect(body[0].html).toContain('Guide');
+    expect(body[0].html).not.toContain('sidebar');
+    expect(body[0].html).not.toContain('intro.html');
+    expect(body[0].html).not.toContain('api.html');
+  });
+
+  it('does not remove a layout wrapper that contains content landmarks', () => {
+    const html = `<body>
+      <aside class="docs-shell">
+        <nav id="rail-nav"><a href="intro.html">Intro</a><a href="api.html">API</a></nav>
+        <main><section id="guide"><h1>Guide</h1><p>Read the docs.</p></section></main>
+      </aside>
+    </body>`;
+    const sections = segmentPage(html);
+    const rails = sections.filter((s) => s.role === 'nav');
+    expect(rails).toHaveLength(1);
+    expect(rails[0].id).toBe('rail-nav');
+    const body = sections.filter((s) => s.role === 'body');
+    expect(body).toHaveLength(1);
+    expect(body[0].html).toContain('Read the docs.');
+    expect(body[0].html).not.toContain('intro.html');
+    expect(body[0].html).not.toContain('api.html');
+  });
+
+  it('does not remove a role wrapper that contains aria content landmarks', () => {
+    const html = `<body>
+      <div role="complementary" class="docs-shell">
+        <nav id="rail-nav"><a href="intro.html">Intro</a><a href="api.html">API</a></nav>
+        <div role="main"><div id="guide"><h1>Guide</h1><p>Read the docs.</p></div></div>
+      </div>
+    </body>`;
+    const sections = segmentPage(html);
+    const rails = sections.filter((s) => s.role === 'nav');
+    expect(rails).toHaveLength(1);
+    expect(rails[0].id).toBe('rail-nav');
+    const body = sections.filter((s) => s.role === 'body');
+    expect(body).toHaveLength(1);
+    expect(body[0].html).toContain('Read the docs.');
+    expect(body[0].html).not.toContain('intro.html');
+    expect(body[0].html).not.toContain('api.html');
+  });
+
+  it('keeps navigation inside aria content landmarks as body content', () => {
+    const html = `<body>
+      <div role="main" class="article-shell">
+        <nav id="local-toc"><a href="#one">One</a><a href="#two">Two</a></nav>
+        <div class="content"><h1>Guide</h1><p>Read the docs.</p></div>
+      </div>
+    </body>`;
+    const sections = segmentPage(html);
+    expect(sections.find((s) => s.role === 'nav')).toBeUndefined();
+    const body = sections.filter((s) => s.role === 'body');
+    expect(body).toHaveLength(1);
+    expect(body[0].html).toContain('local-toc');
+    expect(body[0].html).toContain('Read the docs.');
+  });
+
   it('keeps a pull-quote aside inside article body content', () => {
     const html = `<body>
       <main><article class="post"><p>Body copy</p><aside class="pull-quote">Pull quote</aside></article></main>

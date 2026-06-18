@@ -7,13 +7,14 @@ import { defineConfig, configDefaults } from 'vitest/config';
 //     package's own `.js` smoke tests (which depend on block-fixer's private
 //     node_modules, e.g. @wordpress/blocks) out of the root gate, while allowing
 //     `vitest --dir <subtree>` gates to scan tests below that subtree.
-//   - exclude: the manual live-network canaries (test/canary/**) — they hit real
-//     third-party sites and are run by hand via `npx vitest run test/canary/...`.
+//   - exclude: nested worktrees plus the manual live-network canaries
+//     (test/canary/**) — canaries hit real third-party sites and are run by hand
+//     via `npx vitest run test/canary/...`.
 //   - globalSetup: the age-gated `.tmp-test` cleanup.
 export default defineConfig({
   test: {
     globalSetup: ['./vitest.global-setup.ts'],
     include: ['**/*.test.ts'],
-    exclude: [...configDefaults.exclude, 'test/canary/**'],
+    exclude: [...configDefaults.exclude, '**/worktrees/**', '**/.claude/**', 'test/canary/**'],
   },
 });
