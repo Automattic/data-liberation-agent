@@ -1,16 +1,18 @@
 ---
 name: liberate
-description: Front door for the whole migration — detect → discover, then ALWAYS stop and ask the operator (AskUserQuestion) which reconstruct path to take (blocks+products, or theme replication) BEFORE running extraction/capture, then dispatch the matching sub-skill. The path question is a mandatory, non-skippable gate that fires right after discovery while the operator is still present — never auto-select, never defer it past extraction. Idempotent: re-running on an already-captured site skips straight to the path question.
+description: Front door for the whole migration. FIRST routes on input type — a local directory of owned HTML/CSS/JS takes the local carry-to-block-theme path (dispatches liberate-local inline; no platform detection, no network extraction, no path checkpoint), while a URL takes the remote path: detect → discover, then ALWAYS stop and ask the operator (AskUserQuestion) which reconstruct path to take (blocks+products, or theme replication) BEFORE running extraction/capture, then dispatch the matching sub-skill. On the URL path the path question is a mandatory, non-skippable gate that fires right after discovery while the operator is still present — never auto-select, never defer it past extraction. Idempotent: re-running on an already-captured site skips straight to the path question (URL) or re-converts deterministically (local).
 ---
 
 # Liberate a website
 
-The single front door for the whole migration pipeline. It captures the site **once** (detect → discover → extract → capture → products), then asks which reconstruct path to take and **dispatches the matching sub-skill inline** (shared context):
+The single front door for the whole migration pipeline. **It first routes on the input type:**
 
-- **`replicate-with-blocks`** — project the source onto editable WordPress core blocks + WooCommerce. Best launchpad for a redesign.
-- **`replicate-theme`** — carry the source markup near-verbatim + scope its own CSS into a high-fidelity, non-block-editable theme.
+- **A URL** (a live site you don't control) → the remote path: capture the site **once** (detect → discover → extract → capture → products), then ask which reconstruct path to take and **dispatch the matching sub-skill inline** (shared context):
+  - **`replicate-with-blocks`** — project the source onto editable WordPress core blocks + WooCommerce. Best launchpad for a redesign.
+  - **`replicate-theme`** — carry the source markup near-verbatim + scope its own CSS into a high-fidelity, non-block-editable theme.
+- **A local directory** (a folder of owned HTML/CSS/JS you authored or Claude generated) → the **local** path: there is nothing to detect or extract, so it skips straight to provisioning a fresh WordPress Studio site and carrying the source into a native block theme. This path is owned entirely by **`liberate-local`**, which this skill **dispatches inline** (read & follow `skills/liberate-local/SKILL.md`). There is no platform detection, no network extraction, and no path checkpoint — the local source IS the design authority, so the path is always carry-to-block-theme.
 
-Each sub-skill owns its own reconstruct → install → QA → report; this skill owns capture + the path decision. **Idempotent:** re-running `/liberate <url>` on an already-captured site skips straight to the path question (so you can try the other path later with zero re-capture).
+On the URL path, each reconstruct sub-skill owns its own reconstruct → install → QA → report; this skill owns capture + the path decision. **Idempotent:** re-running `/liberate <url>` on an already-captured site skips straight to the path question (so you can try the other path later with zero re-capture); re-running `/liberate <dir>` re-converts the local site deterministically.
 
 **Headless extraction-only (CI/batch):** `data-liberation <url>` runs steps 1–5 (capture only). The reconstruct (blocks or theme) is agent-only, via the dispatched sub-skill.
 
@@ -19,7 +21,14 @@ Each sub-skill owns its own reconstruct → install → QA → report; this skil
 ## Pipeline overview
 
 ```
-/liberate <url>   ── front door, shared context ────────────────────────────────
+/liberate <input>   ── front door, shared context ──────────────────────────────
+│
+├─ ROUTE ON INPUT TYPE  ◀── do this FIRST, before anything else
+│     ├─ <input> resolves to an existing LOCAL DIRECTORY?
+│     │     └─ YES → dispatch liberate-local INLINE (read & follow its SKILL.md) → DONE
+│     │              (provision Studio → ingest → build theme → install → compare → repair;
+│     │               no detect/discover/extract, no path checkpoint)
+│     └─ otherwise treat as a URL ▼
 │
 ├─ idempotent check: extraction already on disk?  (.discovery-complete / session.json stage / output.wxr + html/* + manifest.json)
 │     ├─ YES → load cached inventory ──────────────────────────────────────┐
@@ -52,7 +61,18 @@ Each sub-skill owns its own reconstruct → install → QA → report, plus its 
 
 ## Step-by-step workflow
 
-### Step 0 — Idempotent check (run first)
+### Step R — Route on input type (run before everything)
+
+Before any detection, idempotent check, or extraction, decide which path the input takes:
+
+- **Local directory** — if the input resolves to an **existing local directory** (an absolute or relative filesystem path to a folder of owned HTML/CSS/JS), take the **local** path. Dispatch `liberate-local` inline: **read & follow `skills/liberate-local/SKILL.md`** in this same shared context. That sub-skill owns the entire local pipeline (resolve inputs → optional data-model → `liberate_convert_local_site` → parity report). When it returns, you are done — **do not** run any of the URL steps below (no detect, no discover, no extraction, no path checkpoint).
+- **URL** — anything else (a `http(s)://` URL, or a bare host like `example.com`) takes the **URL** path: continue to Step 0. If the input has no scheme and is not a directory, treat it as a URL and normalize it (prepend `https://`).
+
+Disambiguation rule when it's genuinely unclear: a value that **exists on disk as a directory** is local; otherwise it's a URL. A path that doesn't exist as a directory and looks like a host/URL is a URL — don't error, treat it as remote.
+
+`liberate-local` is `user-invocable: false` (hidden from the user's autocomplete) and `disable-model-invocation: true`, so it only ever runs via this front door — the Skill tool will reject a direct `Skill({ skill: 'liberate-local' })` call. Dispatch = read its `SKILL.md` and execute its workflow inline.
+
+### Step 0 — Idempotent check (run first, URL path)
 
 Call `liberate_paths({ url })` to resolve the output directory (`siteDir`). Do not hardcode `output/<site>/` relative to cwd — the default output base is now `~/Studio/_liberations/<host>`. If extraction is already complete — any of `.discovery-complete`, a `session.json` stage past extraction, or all of `output.wxr` + `html/*.html` + `screenshots/manifest.json` present in the resolved `siteDir` — **skip Steps 1 and 3–6**, load the cached inventory (`session.json` / discovery output), and jump straight to the **Step 2 — Confirm + path checkpoint** below. Otherwise run Step 1, hit the checkpoint, then run Steps 3–6. (For a partial capture, prefer `resume: true`; see Resuming.)
 
@@ -111,7 +131,7 @@ If products were extracted, compile `products.jsonl` → `products.csv` (WooComm
 
 ### Dispatch (inline)
 
-Both reconstruct sub-skills are `disable-model-invocation: true` by design — they only ever run from this front door (post-capture), never spontaneously. That means **the Skill tool cannot invoke them**: a `Skill({ skill: 'replicate-theme' })` call is rejected with `cannot be used with Skill tool due to disable-model-invocation`. So **dispatch = Read the chosen sub-skill's `SKILL.md` and execute its workflow inline in this same shared context** (each sub-skill reads the resolved output directory from disk — use the `siteDir` returned by `liberate_paths` — and owns its own install → QA → report):
+All three sub-skills this front door dispatches — the two reconstruct skills here plus `liberate-local` (dispatched earlier, at Step R, for the local path) — are `disable-model-invocation: true` by design, so they only ever run from this front door, never spontaneously. That means **the Skill tool cannot invoke them**: a `Skill({ skill: 'replicate-theme' })` call is rejected with `cannot be used with Skill tool due to disable-model-invocation`. So **dispatch = Read the chosen sub-skill's `SKILL.md` and execute its workflow inline in this same shared context** (each sub-skill reads the resolved output directory from disk — use the `siteDir` returned by `liberate_paths` — and owns its own install → QA → report):
 
 - blocks+products → read & follow `skills/replicate-with-blocks/SKILL.md`
 - theme replication → read & follow `skills/replicate-theme/SKILL.md`
@@ -125,6 +145,7 @@ The reconstruct phase (clustering, foundations, theme, build, validate, install,
 
 | Stage | State | Response |
 |---|---|---|
+| routing | input is a local directory | Dispatch `liberate-local` inline (read & follow its SKILL.md); skip all URL steps |
 | extraction | 0 pages | Stop + "No extractable pages found at `<url>`. Try CDP/admin extraction (`/diagnose`)." |
 | extraction | adapter fail | Log + pointer to `/diagnose` |
 | checkpoint | operator picks a path | Dispatch the chosen sub-skill (`replicate-with-blocks` / `replicate-theme`) inline |

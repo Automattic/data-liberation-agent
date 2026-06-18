@@ -65,11 +65,10 @@ describe('themeCacheFlushCommands', () => {
     // Regression guard: a newly-added per-page pattern stays UNregistered (its
     // wp:pattern renders empty) unless this DB-backed transient is cleared —
     // `cache flush` alone does not remove it on a non-persistent object cache.
-    const dbQuery = cmds.find((c) => c[0] === 'db' && c[1] === 'query');
-    expect(dbQuery).toBeDefined();
-    expect(dbQuery![2]).toContain('_transient_wp_theme_files_patterns-%');
-    expect(dbQuery![2]).toContain('_transient_timeout_wp_theme_files_patterns-%');
-    expect(dbQuery![2].startsWith('DELETE FROM wp_options')).toBe(true);
+    const purge = cmds.find((c) => c[0] === 'eval');
+    expect(purge).toBeDefined();
+    expect(purge![1]).toContain('_transient_wp_theme_files_patterns-%');
+    expect(purge![1]).toContain('_transient_timeout_wp_theme_files_patterns-%');
   });
 
   it('also purges the SITE-transient pattern-file cache (single-site stores it as _site_transient_)', () => {
@@ -79,14 +78,25 @@ describe('themeCacheFlushCommands', () => {
     // `_site_transient_` row — so a freshly-added per-page pattern resolves to
     // an EMPTY wp:pattern (blank page body) until the TTL lapses. Both prefixes
     // must be deleted.
-    const dbQuery = cmds.find((c) => c[0] === 'db' && c[1] === 'query');
-    expect(dbQuery![2]).toContain('_site_transient_wp_theme_files_patterns-%');
-    expect(dbQuery![2]).toContain('_site_transient_timeout_wp_theme_files_patterns-%');
+    const purge = cmds.find((c) => c[0] === 'eval');
+    expect(purge![1]).toContain('_site_transient_wp_theme_files_patterns-%');
+    expect(purge![1]).toContain('_site_transient_timeout_wp_theme_files_patterns-%');
+  });
+
+  it('runs the purge through $wpdb via `wp eval`, NOT `wp db query` (MySQL-only — fails on Studio SQLite)', () => {
+    // Regression guard for the cache-flush-failed warning on every convert: `wp
+    // db query` shells out to the mysql binary and dies with "Undefined constant
+    // DB_HOST" on Studio's SQLite. `wp eval` runs the DELETE through $wpdb, which
+    // is the SQLite drop-in on Studio and MySQL elsewhere — driver-agnostic.
+    expect(cmds.some((c) => c[0] === 'db' && c[1] === 'query')).toBe(false);
+    const purge = cmds.find((c) => c[0] === 'eval');
+    expect(purge![1]).toContain('$wpdb');
+    expect(purge![1]).toContain('{$wpdb->options}'); // respects the table prefix
   });
 
   it('runs the pattern-file purge LAST (after cache flush, so it is not re-populated)', () => {
-    const dbIdx = cmds.findIndex((c) => c[0] === 'db');
+    const evalIdx = cmds.findIndex((c) => c[0] === 'eval');
     const flushIdx = cmds.findIndex((c) => c[0] === 'cache');
-    expect(dbIdx).toBeGreaterThan(flushIdx);
+    expect(evalIdx).toBeGreaterThan(flushIdx);
   });
 });

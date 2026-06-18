@@ -420,3 +420,18 @@ describe('validateArtifacts — core/html fallback islands', () => {
     expect(r.errors.some((e) => /script/i.test(e.message))).toBe(true);
   });
 });
+
+describe('validateArtifacts — block contract (warning-level)', () => {
+  it('flags an invented attr as a warning without failing the gate', () => {
+    const input = base();
+    input.patterns[0].php = `<!-- wp:heading {"glow":true} --><h2 class="wp-block-heading">Our Services</h2><!-- /wp:heading -->`;
+    const r = validateArtifacts(input);
+    expect(r.ok).toBe(true); // contract issues are warnings, never gate failures
+    expect(r.warnings.some((w) => w.message.includes('block contract') && w.message.includes('glow'))).toBe(true);
+  });
+
+  it('a clean pattern emits no contract warnings', () => {
+    const r = validateArtifacts(base());
+    expect(r.warnings.filter((w) => w.message.includes('block contract'))).toEqual([]);
+  });
+});

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { PNG } from 'pngjs';
-import { compareScreenshotDirs, scoreViewportPair, PARITY_GATE_SCORE, HEIGHT_MISMATCH_THRESHOLD } from './compare.js';
+import { buildRepairTasks, compareScreenshotDirs, scoreViewportPair, PARITY_GATE_SCORE, HEIGHT_MISMATCH_THRESHOLD, type ComparisonResult, type ViewportScore } from './compare.js';
 
 const TMP = join(process.cwd(), '.tmp-test', 'compare');
 
@@ -162,6 +162,86 @@ describe('compareScreenshotDirs', () => {
     const onDisk = JSON.parse(readFileSync(join(replica, 'comparison.json'), 'utf8'));
     expect(onDisk.version).toBe(2);
     expect(onDisk.results[0].desktop.score).toBeCloseTo(d.score!, 5);
+  });
+});
+
+describe('height-delta co-gate', () => {
+  beforeEach(() => rmSync(TMP, { recursive: true, force: true }));
+  afterEach(() => rmSync(TMP, { recursive: true, force: true }));
+
+  it('reports heightDelta from PRE-crop dimensions and fails the gate beyond the default 8px', async () => {
+    const origin = join(TMP, 'origin');
+    const replica = join(TMP, 'replica');
+    // Identical content inside the cropped region — the min-crop comparison
+    // HIDES the 40px height loss (score stays 1); heightDelta is the gate
+    // that surfaces it.
+    buildDir(origin, 'https://origin.test/h', 'h', { w: 1440, h: 940, color: [7, 7, 7, 255] });
+    buildDir(replica, 'http://localhost:8881/h', 'h', { w: 1440, h: 900, color: [7, 7, 7, 255] });
+    const result = await compareScreenshotDirs({ originDir: origin, replicaDir: replica });
+    const d = result.results[0].desktop;
+    expect(d.status).toBe('ok');
+    expect(d.score).toBe(1);
+    expect(d.heightDelta).toBe(40);
+    expect(d.heightPass).toBe(false);
+  });
+
+  it('equal heights pass: heightDelta 0, heightPass true', async () => {
+    const origin = join(TMP, 'origin');
+    const replica = join(TMP, 'replica');
+    buildDir(origin, 'https://origin.test/eq', 'eq', { w: 1440, h: 900, color: [7, 7, 7, 255] });
+    buildDir(replica, 'http://localhost:8881/eq', 'eq', { w: 1440, h: 900, color: [7, 7, 7, 255] });
+    const result = await compareScreenshotDirs({ originDir: origin, replicaDir: replica });
+    const d = result.results[0].desktop;
+    expect(d.heightDelta).toBe(0);
+    expect(d.heightPass).toBe(true);
+  });
+
+  it('maxHeightDelta opt widens the gate', async () => {
+    const origin = join(TMP, 'origin');
+    const replica = join(TMP, 'replica');
+    buildDir(origin, 'https://origin.test/w', 'w', { w: 1440, h: 940, color: [7, 7, 7, 255] });
+    buildDir(replica, 'http://localhost:8881/w', 'w', { w: 1440, h: 900, color: [7, 7, 7, 255] });
+    const result = await compareScreenshotDirs({ originDir: origin, replicaDir: replica, maxHeightDelta: 50 });
+    expect(result.results[0].desktop.heightDelta).toBe(40);
+    expect(result.results[0].desktop.heightPass).toBe(true);
+  });
+});
+
+describe('buildRepairTasks', () => {
+  const vp = (over: Partial<ViewportScore>): ViewportScore => ({
+    status: 'ok', score: 1, heightDelta: 0, heightPass: true, ...over,
+  });
+  const res = (over: Partial<ComparisonResult>): ComparisonResult => ({
+    pathname: '/p', originUrl: 'o', replicaUrl: 'r', desktop: vp({}), mobile: vp({}), ...over,
+  });
+
+  it('passing pages emit no tasks', () => {
+    expect(buildRepairTasks([res({})], { floor: 0.99 })).toEqual([]);
+  });
+
+  it('a sub-floor score emits a mismatch task for the failing viewport only', () => {
+    const tasks = buildRepairTasks([res({ desktop: vp({ score: 0.8 }) })], { floor: 0.99 });
+    expect(tasks).toEqual([
+      { surface: 'frontend', pathname: '/p', viewport: 'desktop', kind: 'mismatch', score: 0.8, heightDelta: 0 },
+    ]);
+  });
+
+  it('a height failure emits kind height and takes precedence over a co-failing score', () => {
+    const tasks = buildRepairTasks(
+      [res({ mobile: vp({ score: 0.5, heightDelta: 300, heightPass: false }) })],
+      { floor: 0.99 },
+    );
+    expect(tasks).toEqual([
+      { surface: 'frontend', pathname: '/p', viewport: 'mobile', kind: 'height', score: 0.5, heightDelta: 300 },
+    ]);
+  });
+
+  it('non-ok viewports emit no tasks (their failure rides the status field)', () => {
+    const tasks = buildRepairTasks(
+      [res({ desktop: { status: 'missing-replica', score: null } })],
+      { floor: 0.99 },
+    );
+    expect(tasks).toEqual([]);
   });
 });
 

@@ -55,6 +55,8 @@ function convertElement($: CheerioAPI, el: Element, ctx: BlockRecipeContext): Co
   if (embed) return { matched: true, markup: embed };
   const details = tryDetails($, el, ctx);
   if (details) return { matched: true, markup: details };
+  const detailsPairs = tryDetailsPairs($, el, ctx);
+  if (detailsPairs) return { matched: true, markup: detailsPairs };
   const callout = tryCallout($, el, ctx);
   if (callout) return { matched: true, markup: callout };
   const pull = tryPullquote($, el);
@@ -136,6 +138,48 @@ function recurseInner(html: string, ctx: BlockRecipeContext): string {
   return clean ? clean : '';
 }
 
+// --- heading + hidden-content pairs -> core/details (BDC ladder) -------------
+//
+// Disclosure evidence is REQUIRED: every content node must be hidden ([hidden],
+// aria-hidden="true", or display:none) — a visible heading+div pair is normal
+// page structure, and claiming it would change appearance. All headings must
+// pair (no orphans), so partial matches fall through untouched.
+
+const HEADING_TAGS = new Set(['h1', 'h2', 'h3', 'h4', 'h5', 'h6']);
+
+function isHiddenContent($: CheerioAPI, el: Element): boolean {
+  const $el = $(el);
+  return (
+    $el.attr('hidden') !== undefined ||
+    $el.attr('aria-hidden') === 'true' ||
+    /display\s*:\s*none/.test($el.attr('style') ?? '')
+  );
+}
+
+function tryDetailsPairs($: CheerioAPI, el: Element, ctx: BlockRecipeContext): string | null {
+  const kids = $(el).children().toArray();
+  if (kids.length < 2 || kids.length % 2 !== 0) return null;
+  const pairs: Array<{ summary: string; bodyHtml: string }> = [];
+  for (let i = 0; i < kids.length; i += 2) {
+    const head = kids[i];
+    const body = kids[i + 1];
+    if (!HEADING_TAGS.has(head.tagName)) return null;
+    if (HEADING_TAGS.has(body.tagName) || !isHiddenContent($, body)) return null;
+    const summary = $(head).text().trim();
+    if (!summary) return null;
+    pairs.push({ summary, bodyHtml: $(body).html() ?? '' });
+  }
+  if (pairs.length === 0) return null;
+  return pairs
+    .map(
+      (p) =>
+        `<!-- wp:details -->\n` +
+        `<details class="wp-block-details"><summary>${escapeHtml(p.summary)}</summary>${recurseInner(p.bodyHtml, ctx)}</details>\n` +
+        `<!-- /wp:details -->`,
+    )
+    .join('\n\n');
+}
+
 // --- callout / card / notice / alert -> core/group --------------------------
 
 const CALLOUT_RE = /\b(callout|notice|alert|card)\b/;
@@ -213,10 +257,44 @@ function tryButtons($: CheerioAPI, el: Element): string | null {
 // --- media + text -> core/media-text -----------------------------------------
 
 const MEDIA_TEXT_RE = /\b(media-text|media-object|image-text|text-image)\b/;
+// Structural matching needs LAYOUT EVIDENCE on top of the two-child shape —
+// claiming a stacked [image, text] wrapper as media-text would CHANGE the
+// layout to side-by-side (BDC ladder: never guess geometry). Evidence = a
+// row-ish class name or an inline flex/grid display.
+const LAYOUT_HINT_CLASS_RE = /\b(split(?:-\w+)?|two-col(?:umn)?s?|cols?-2|grid|row|flex)\b/;
+const LAYOUT_HINT_STYLE_RE = /display\s*:\s*(flex|grid)\b/;
+
+function isMediaChild($: CheerioAPI, el: Element): boolean {
+  if (el.tagName === 'img' || el.tagName === 'picture' || el.tagName === 'figure') {
+    return $(el).find('img').length > 0 || el.tagName === 'img';
+  }
+  // An element that is just a thin image holder (one img, no own text).
+  return $(el).find('img').length === 1 && !$(el).text().trim();
+}
 
 function tryMediaText($: CheerioAPI, el: Element, ctx: BlockRecipeContext): string | null {
   const $el = $(el);
-  if (!MEDIA_TEXT_RE.test($el.attr('class') || '')) return null;
+  const classNamed = MEDIA_TEXT_RE.test($el.attr('class') || '');
+
+  // Structural route (BDC ladder): exactly two element children — one media,
+  // one text — plus layout evidence; media order decides mediaPosition.
+  let mediaOnRight = false;
+  if (!classNamed) {
+    const kids = $el.children().toArray();
+    if (kids.length !== 2) return null;
+    const hasLayoutHint =
+      LAYOUT_HINT_CLASS_RE.test($el.attr('class') || '') ||
+      LAYOUT_HINT_STYLE_RE.test($el.attr('style') || '');
+    if (!hasLayoutHint) return null;
+    const [first, second] = kids;
+    const firstIsMedia = isMediaChild($, first);
+    const secondIsMedia = isMediaChild($, second);
+    if (firstIsMedia === secondIsMedia) return null; // need exactly one media side
+    const textChild = firstIsMedia ? second : first;
+    if ($(textChild).find('img').length > 0) return null; // text side must be image-free
+    mediaOnRight = secondIsMedia;
+  }
+
   const img = $el.find('img').first();
   if (img.length === 0) return null;
   const rawSrc = img.attr('src') || '';
@@ -225,15 +303,17 @@ function tryMediaText($: CheerioAPI, el: Element, ctx: BlockRecipeContext): stri
   const alt = img.attr('alt') || '';
   const textNode = $el.children().toArray().find((c) => {
     const t = c.tagName;
-    return t && t !== 'figure' && t !== 'img' && t !== 'picture';
+    return t && t !== 'figure' && t !== 'img' && t !== 'picture' && $(c).find('img').length === 0;
   });
   const textHtml = textNode ? ($(textNode).html() ?? '') : '';
   const innerText =
     recurseInner(textHtml, ctx).trim() ||
     `<!-- wp:paragraph -->\n<p>${escapeHtml($el.text().trim())}</p>\n<!-- /wp:paragraph -->`;
+  const attrs = mediaOnRight ? `{"mediaType":"image","mediaPosition":"right"}` : `{"mediaType":"image"}`;
+  const cls = `wp-block-media-text is-stacked-on-mobile${mediaOnRight ? ' has-media-on-the-right' : ''}`;
   return (
-    `<!-- wp:media-text {"mediaType":"image"} -->\n` +
-    `<div class="wp-block-media-text is-stacked-on-mobile">` +
+    `<!-- wp:media-text ${attrs} -->\n` +
+    `<div class="${cls}">` +
     `<figure class="wp-block-media-text__media"><img src="${escapeAttr(src)}" alt="${escapeAttr(alt)}"/></figure>` +
     `<div class="wp-block-media-text__content">${innerText}</div>` +
     `</div>\n` +
@@ -248,11 +328,6 @@ function tryMediaText($: CheerioAPI, el: Element, ctx: BlockRecipeContext): stri
 function coreHtmlIsland(html: string): string {
   return `${PIPELINE_ISLAND_OPENER}\n${sanitize(html)}\n<!-- /wp:html -->`;
 }
-function escapeHtml(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-function escapeAttr(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
+import { escapeHtmlText as escapeHtml, escapeHtmlAttr as escapeAttr } from '../html-escape.js';
 
 export const genericBlockCatalog: AdapterBlocks = { htmlToBlocks: genericHtmlToBlocks };

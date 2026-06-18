@@ -46,7 +46,8 @@ import type { SectionSpec, SourceLandmark } from './section-extract.js';
 // v8: + SectionSpec.forms[] capture (recognized source form fields + submit
 // label, classified by buildSectionForms) — powers the jetpack/contact-form
 // emission. Older caches lack it → invalidate + re-extract.
-export const SECTION_SPECS_SCHEMA = 8;
+// v9: SourceLandmark adds aside/complementary roles and optional linkCount.
+export const SECTION_SPECS_SCHEMA = 9;
 
 interface SectionSpecsFile {
   schema: number;

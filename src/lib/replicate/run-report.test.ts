@@ -169,3 +169,38 @@ describe('buildRunReport — section parity gate (faithful recreation)', () => {
     expect(r.summary.sectionsAccepted).toBe(1);
   });
 });
+
+describe('styleAudit pass-through (informational tally)', () => {
+  const audit = {
+    supportStyledPercent: 62,
+    styledViaSupports: 31,
+    styledViaCss: 19,
+    stylePathHistogram: { 'typography.fontSize': 12 },
+    cssBytes: 2048,
+    cssRules: 40,
+  };
+
+  it('passes the audit into summary; absent input reports null', () => {
+    const withAudit = buildRunReport({ ...good(), styleAudit: audit });
+    expect(withAudit.summary.styleAudit).toEqual(audit);
+    const without = buildRunReport(good());
+    expect(without.summary.styleAudit).toBeNull();
+  });
+
+  it('never changes the verdict (a low supports percent is a dial, not a gate)', () => {
+    const r = buildRunReport({
+      ...good(),
+      styleAudit: { ...audit, supportStyledPercent: 0, styledViaSupports: 0, styledViaCss: 50 },
+    });
+    expect(r.verdict.overall).toBe('pass');
+  });
+});
+
+describe('contractIssues pass-through (informational tally)', () => {
+  it('count passes into summary without changing the verdict; absent defaults to 0', () => {
+    const r = buildRunReport({ ...good(), contractIssues: 3 });
+    expect(r.summary.contractIssues).toBe(3);
+    expect(r.verdict.overall).toBe('pass');
+    expect(buildRunReport(good()).summary.contractIssues).toBe(0);
+  });
+});

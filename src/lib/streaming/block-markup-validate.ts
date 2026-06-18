@@ -83,6 +83,13 @@ export function composedSidecarPath(outputDir: string, slug: string): string {
   return join(outputDir, 'composed', `${slug}.blocks.html`);
 }
 
+/** Carried per-instance styles emitted by the normalize pass (ingest) and read
+ * by the theme assembler (convert): `<outputDir>/composed/instance-styles.css`.
+ * Holds the `.lib-i<hash>{…}` rules for inline styles carried as classes. */
+export function instanceStylesPath(outputDir: string): string {
+  return join(outputDir, 'composed', 'instance-styles.css');
+}
+
 /** Count opening block comments (excluding closing) — same heuristic both handlers use. */
 export function countBlocks(markup: string): number {
   return (markup.match(/<!--\s*wp:[^/][^>]*-->/g) ?? []).length;

@@ -47,6 +47,13 @@ export interface ViewportScore {
   height?: number;
   diffPixels?: number;
   totalPixels?: number;
+  /** |originHeight − replicaHeight| on the PRE-crop full-page dimensions —
+   * the min-crop comparison HIDES height loss (identical top regions score 1
+   * while the replica dropped content); this is the co-gate that surfaces it.
+   * Set when status === 'ok'. */
+  heightDelta?: number;
+  /** heightDelta <= maxHeightDelta (default 8). Folds INTO page verdicts. */
+  heightPass?: boolean;
   /** Full decoded image heights (px) — crop-independent. v2 fields. */
   originHeight?: number;
   replicaHeight?: number;
@@ -65,6 +72,13 @@ export interface ViewportScore {
    */
   fullPageScore?: number;
 }
+
+/** Default height-gate tolerance (px) — BDC survey co-gate value.
+ * NOTE: measured in CAPTURE-space px (the decoded PNG heights), so the
+ * effective CSS-px tolerance varies with deviceScaleFactor: desktop captures
+ * at 0.7 → ~11.4 CSS px, mobile at 1.0 → 8 CSS px. Acceptable asymmetry;
+ * callers needing a uniform CSS tolerance can pass maxHeightDelta scaled. */
+export const DEFAULT_MAX_HEIGHT_DELTA = 8;
 
 export interface ComparisonResult {
   pathname: string;
@@ -86,6 +100,8 @@ export interface CompareOpts {
   replicaDir: string;
   viewports?: ViewportId[];       // default both
   diffOutputDir?: string;        // default <replicaDir>/diff
+  /** Height-gate tolerance in px (default DEFAULT_MAX_HEIGHT_DELTA = 8). */
+  maxHeightDelta?: number;
 }
 
 interface ManifestEntryLite { slug: string }
@@ -125,6 +141,7 @@ export function scoreViewportPair(
   replicaPngPath: string,
   viewport: ViewportId,
   diffPath?: string,
+  maxHeightDelta: number = DEFAULT_MAX_HEIGHT_DELTA,
 ): ViewportScore {
   if (!existsSync(originPngPath)) return { status: 'missing-origin', score: null };
   if (!existsSync(replicaPngPath)) return { status: 'missing-replica', score: null };
@@ -138,6 +155,10 @@ export function scoreViewportPair(
     return { status: 'decode-error', score: null };
   }
 
+  // Height gate: measured on the PRE-crop full-page dimensions — the min-crop
+  // below makes the pixel score blind to height loss by construction.
+  const heightDelta = Math.abs(oImg.height - rImg.height);
+  const heightPass = heightDelta <= maxHeightDelta;
   const originHeight = oImg.height;
   const replicaHeight = rImg.height;
   const heightMismatchRatio = originHeight === 0 ? 0 : Math.abs(originHeight - replicaHeight) / originHeight;
@@ -188,7 +209,61 @@ export function scoreViewportPair(
     writeFileSync(paddedDiffPath, PNG.sync.write(padDiff));
   }
 
-  return { status: 'ok', score, diffPath, width: w, height: h, diffPixels, totalPixels: total, originHeight, replicaHeight, heightMismatchRatio, paddedDiffPath, fullPageScore };
+  return { status: 'ok', score, diffPath, width: w, height: h, diffPixels, totalPixels: total, heightDelta, heightPass, originHeight, replicaHeight, heightMismatchRatio, paddedDiffPath, fullPageScore };
+}
+
+// ---------------------------------------------------------------------------
+// Structured repair tasks (BDC survey adoption — measurement only)
+// ---------------------------------------------------------------------------
+
+export interface RepairTask {
+  /** Which comparison surface produced the failure. `editor` records are built
+   * by editor-preview.buildEditorRepairTask (BDC Task 5 editor surface). */
+  surface: 'frontend' | 'editor';
+  pathname: string;
+  viewport: ViewportId;
+  /** height = the gate caught pre-crop height loss (takes precedence — the
+   * loss usually CAUSES the pixel mismatch, mirroring the repo's media-first
+   * precedence in fallback diagnostics); mismatch = sub-floor pixel score. */
+  kind: 'height' | 'mismatch';
+  score: number | null;
+  heightDelta: number | null;
+}
+
+export interface BuildRepairTasksOpts {
+  /** Pixel-score floor a viewport must meet (repo convention 0.99). */
+  floor?: number;
+}
+
+/**
+ * Pure: one task per failing OK viewport. Non-ok viewports (missing/decode/
+ * dim-mismatch) emit NO task — their failure already rides the status field
+ * loudly; tasks are for pages that RENDERED but diverge.
+ */
+export function buildRepairTasks(
+  results: ComparisonResult[],
+  opts: BuildRepairTasksOpts = {},
+): RepairTask[] {
+  const floor = opts.floor ?? 0.99;
+  const tasks: RepairTask[] = [];
+  for (const r of results) {
+    for (const vp of ['desktop', 'mobile'] as ViewportId[]) {
+      const v = r[vp];
+      if (v.status !== 'ok') continue;
+      const heightFail = v.heightPass === false;
+      const scoreFail = v.score !== null && v.score < floor;
+      if (!heightFail && !scoreFail) continue;
+      tasks.push({
+        surface: 'frontend',
+        pathname: r.pathname,
+        viewport: vp,
+        kind: heightFail ? 'height' : 'mismatch',
+        score: v.score,
+        heightDelta: v.heightDelta ?? null,
+      });
+    }
+  }
+  return tasks;
 }
 
 export async function compareScreenshotDirs(opts: CompareOpts): Promise<ComparisonFile> {
@@ -213,7 +288,7 @@ export async function compareScreenshotDirs(opts: CompareOpts): Promise<Comparis
       const oPath = join(opts.originDir, vp, `${o.slug}.png`);
       const rPath = join(opts.replicaDir, vp, `${r.slug}.png`);
       const diffPath = join(diffDir, `${r.slug}.${vp}.diff.png`);
-      result[vp] = scoreViewportPair(oPath, rPath, vp, diffPath);
+      result[vp] = scoreViewportPair(oPath, rPath, vp, diffPath, opts.maxHeightDelta);
     }
     results.push(result);
   }

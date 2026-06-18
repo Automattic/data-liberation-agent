@@ -100,6 +100,14 @@ export async function waitForAnimations(page: Page, timeoutMs: number = 2_000): 
  * finish. Without this the header is captured faded — the root cause of "blank"
  * Wix nav captures (verified: header section opacity 1 at load → 0 after a bare
  * lazy scroll → back to 1 after scrollTo(0,0)+scroll-event).
+ *
+ * EVERY scrollTo here is explicit-instant (`behavior: 'instant'` overrides css
+ * `html{scroll-behavior:smooth}` per spec). A smooth-scroll site turns a bare
+ * scrollTo into a GLIDE that races the capture: the walrus probe measured the
+ * restore at scrollY 4 with the is-scrolled header still compressed (h:52)
+ * 400ms after scrollTo(0,0)+dispatch — the glide finished DURING the
+ * screenshot (after-snap: y 0, h:84), so scroll-reactive chrome captured
+ * nondeterministically (32 css px header ghost on the replica side).
  */
 export async function triggerLazyLoad(page: Page): Promise<void> {
   try {
@@ -108,10 +116,10 @@ export async function triggerLazyLoad(page: Page): Promise<void> {
       const pauseMs = 200;
       const total = document.documentElement.scrollHeight;
       for (let y = 0; y < total; y += step) {
-        window.scrollTo(0, y);
+        window.scrollTo({ top: y, left: 0, behavior: 'instant' });
         await new Promise((r) => setTimeout(r, pauseMs));
       }
-      window.scrollTo(0, total);
+      window.scrollTo({ top: total, left: 0, behavior: 'instant' });
     });
     try {
       await page.waitForLoadState('networkidle', { timeout: 5_000 });
@@ -125,7 +133,7 @@ export async function triggerLazyLoad(page: Page): Promise<void> {
     // Return to top AND fire a scroll event so scroll-reactive headers recompute
     // their at-top (un-faded) state — scrollTo alone doesn't trigger their handler.
     await page.evaluate(() => {
-      window.scrollTo(0, 0);
+      window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
       window.dispatchEvent(new Event('scroll'));
     });
     // Scroll handlers are throttled/debounced (~200ms observed on Wix), so the

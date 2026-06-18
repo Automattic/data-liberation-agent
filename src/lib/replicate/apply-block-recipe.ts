@@ -80,5 +80,4 @@ function emitRecipeBlock($: CheerioAPI, el: Element, recipe: BlockRecipe, ctx: B
 // gracefully instead of failing the whole page at the gate, and passes the
 // install-time wp:html ban on theme reinstall.
 function coreHtmlIsland(html: string): string { return `${PIPELINE_ISLAND_OPENER}\n${sanitize(html)}\n<!-- /wp:html -->`; }
-function escapeAttr(s: string): string { return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
-function escapeHtml(s: string): string { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+import { escapeHtmlText as escapeHtml, escapeHtmlAttr as escapeAttr } from '../html-escape.js';

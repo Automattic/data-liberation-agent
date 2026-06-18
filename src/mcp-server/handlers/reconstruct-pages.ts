@@ -16,10 +16,10 @@
 // the end so freshly-written patterns register immediately.
 //
 
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import { existsSync, mkdirSync, writeFileSync, readFileSync, renameSync, readdirSync, rmSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import type { PaletteToken } from '../../lib/replicate/footer-color.js';
 import type { FontFamilyToken } from '../../lib/replicate/page-reconstruct.js';
 import { extractFullFromSavedHtml, extractFullFromUrl, rewriteThroughMediaMap } from '../../lib/replicate/section-extract.js';
@@ -35,6 +35,8 @@ import { downloadSectionMedia } from '../../lib/replicate/download-section-media
 import { MediaStubStore } from '../../lib/resume-state/index.js';
 import { deriveInstallThemeSlug } from './install-theme.js';
 import { themeCacheFlushCommands } from './install-theme.js';
+import { studioWpRoot } from '../../lib/preview/studio-site.js';
+import { studioWp } from '../../lib/preview/studio.js';
 import type { Handler } from '../handler-types.js';
 import { detect } from '../../lib/detect-platform/index.js';
 import { ImportSession } from '../../lib/resume-state/index.js';
@@ -47,6 +49,7 @@ import { reconcileRegions, type PlacedRegion, type RegionSelectionReport } from 
 import { slugify } from '../../lib/url/index.js';
 import { planPageTemplates, reconcileReplicaTemplates, mergeCustomTemplates, variantTemplateSlug, type TemplateVariant } from '../../lib/replicate/page-template-plan.js';
 import { patchWxrTemplatesFile, type WxrTemplatePatchInput } from '../../lib/replicate/wxr-template-patch.js';
+import { auditStyleUsage } from '../../lib/replicate/style-audit.js';
 import { buildPageTemplate } from '../../lib/replicate/reconstruct-pages.js';
 import { hoistVariations, type HoistedVariation } from '../../lib/replicate/variation-hoist.js';
 
@@ -71,18 +74,17 @@ interface PageArg {
  * we bounce through a fallback. Best-effort — a brief window renders the fallback.
  */
 async function forcePatternRescan(studioSitePath: string, themeSlug: string): Promise<void> {
-  const wp = (extra: string[]) =>
-    execFileAsync('studio', ['wp', '--path', studioSitePath, ...extra], { timeout: 120_000, maxBuffer: 16 * 1024 * 1024 });
+  const wpOpts = { timeout: 120_000, maxBuffer: 16 * 1024 * 1024 };
   let bounced = false;
   try {
-    const { stdout } = await wp(['theme', 'list', '--field=name']);
+    const stdout = await studioWp(studioSitePath, ['theme', 'list', '--field=name'], wpOpts);
     const fallback = stdout
       .split('\n')
       .map((s) => s.trim())
       .filter(Boolean)
       .find((t) => t !== themeSlug);
     if (!fallback) return; // only one theme installed — nothing to bounce through
-    await wp(['theme', 'activate', fallback]);
+    await studioWp(studioSitePath, ['theme', 'activate', fallback], wpOpts);
     bounced = true;
   } catch {
     return; // couldn't switch away — the replica theme is still active, no harm
@@ -93,7 +95,7 @@ async function forcePatternRescan(studioSitePath: string, themeSlug: string): Pr
   if (bounced) {
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
-        await wp(['theme', 'activate', themeSlug]);
+        await studioWp(studioSitePath, ['theme', 'activate', themeSlug], wpOpts);
         return;
       } catch {
         /* retry */
@@ -117,17 +119,18 @@ async function updatePagePostContent(
   content: string,
   backupDir: string | null,
 ): Promise<{ contentOk: boolean; id: string; backedUp: boolean }> {
+  const wpOpts = { timeout: 120_000, maxBuffer: 50 * 1024 * 1024 };
   const wp = (extra: string[]) =>
-    execFileAsync('studio', ['wp', '--path', studioSitePath, ...extra], { timeout: 120_000, maxBuffer: 50 * 1024 * 1024 });
+    execFileAsync('studio', ['wp', '--path', studioSitePath, ...extra], wpOpts);
   let id = '';
   let backedUp = false;
   try {
     if (isHome) {
-      const { stdout } = await wp(['option', 'get', 'page_on_front']);
+      const stdout = await studioWp(studioSitePath, ['option', 'get', 'page_on_front'], wpOpts);
       id = stdout.trim();
     }
     if (!id || id === '0') {
-      const { stdout } = await wp(['post', 'list', '--post_type=page', `--name=${slug}`, '--field=ID', '--format=ids']);
+      const stdout = await studioWp(studioSitePath, ['post', 'list', '--post_type=page', `--name=${slug}`, '--field=ID', '--format=ids'], wpOpts);
       id = stdout.trim().split(/\s+/)[0] || '';
     }
     if (!id) return { contentOk: false, id: '', backedUp };
@@ -154,8 +157,8 @@ async function updatePagePostContent(
       // + idempotent (no-op when already set); the content update is the primary
       // goal, so a front-page failure must not abort it.
       try {
-        await wp(['option', 'update', 'show_on_front', 'page']);
-        await wp(['option', 'update', 'page_on_front', id]);
+        await studioWp(studioSitePath, ['option', 'update', 'show_on_front', 'page'], wpOpts);
+        await studioWp(studioSitePath, ['option', 'update', 'page_on_front', id], wpOpts);
       } catch {
         /* best-effort */
       }
@@ -166,7 +169,7 @@ async function updatePagePostContent(
     // NOTE: `_wp_page_template` assignment happens in a SEPARATE post-loop pass
     // (after forcePatternRescan registers the variant customTemplates) — WP rejects
     // a page_template that isn't yet registered in theme.json.
-    await wp(['post', 'update', id, `--post_content=${content}`]);
+    await studioWp(studioSitePath, ['post', 'update', id, `--post_content=${content}`], wpOpts);
     return { contentOk: true, id, backedUp };
   } catch (err) {
     console.error(`[reconstruct] post update failed for slug="${slug}": ${err instanceof Error ? err.message : String(err)}`);
@@ -205,15 +208,6 @@ function readThemeFontFamilies(themeJsonPath: string): FontFamilyToken[] {
   }
 }
 
-/** Resolve the WP root by probing for wp-content (flat vs nested Studio layout). */
-function resolveWpRoot(studioSitePath: string): string | null {
-  const sitePath = resolve(studioSitePath);
-  if (existsSync(join(sitePath, 'wp-content'))) return sitePath;
-  const nested = join(sitePath, 'wordpress');
-  if (existsSync(join(nested, 'wp-content'))) return nested;
-  return null;
-}
-
 /** Rewrite a spec's captured image URLs (foreground, background, and cell images)
  *  through the CDN→WP media map so reconstruction references the WP library. */
 function applyMediaMap(specs: SectionSpec[], mediaMap: Record<string, string>): void {
@@ -244,7 +238,7 @@ export const reconstructPagesHandler: Handler = async (args, ctx) => {
     return ctx.errorResult('liberate_reconstruct_pages requires a non-empty `pages` array ({slug, sourceUrl, title, isHome?}).');
   }
 
-  const wpRoot = resolveWpRoot(studioSitePath);
+  const wpRoot = studioWpRoot(studioSitePath);
   if (!wpRoot) return ctx.errorResult(`studioSitePath has no wp-content: ${studioSitePath}`);
   const themeSlug = (args.themeSlug as string | undefined) ?? deriveInstallThemeSlug(outputDir);
   const themeRoot = join(wpRoot, 'wp-content', 'themes', themeSlug);
@@ -664,7 +658,7 @@ export const reconstructPagesHandler: Handler = async (args, ctx) => {
   // 4. Flush caches so the freshly-written patterns register immediately.
   for (const wpArgs of themeCacheFlushCommands()) {
     try {
-      await execFileAsync('studio', ['wp', '--path', studioSitePath, ...wpArgs], { timeout: 300_000, maxBuffer: 50 * 1024 * 1024 });
+      await studioWp(studioSitePath, wpArgs);
     } catch {
       /* best-effort */
     }
@@ -681,15 +675,14 @@ export const reconstructPagesHandler: Handler = async (args, ctx) => {
   // Studio _wp_page_template assignment — AFTER forcePatternRescan so the variant
   // customTemplates are registered (WP rejects an unregistered page_template).
   {
-    const studioWp = (extra: string[]) =>
-      execFileAsync('studio', ['wp', '--path', studioSitePath, ...extra], { timeout: 120_000, maxBuffer: 50 * 1024 * 1024 });
+    const wpOpts = { timeout: 120_000, maxBuffer: 50 * 1024 * 1024 };
     for (const pp of plannedPages) {
       if (pp.isHome) continue;
       const id = pageIdBySlug.get(pp.slug);
       if (!id) continue;
       try {
-        if (collapseTemplates) await studioWp(['post', 'update', id, `--page_template=${variantTemplateSlug(pp.variant.key)}`]);
-        else await studioWp(['post', 'meta', 'delete', id, '_wp_page_template']).catch(() => {}); // clear on toggle-off
+        if (collapseTemplates) await studioWp(studioSitePath, ['post', 'update', id, `--page_template=${variantTemplateSlug(pp.variant.key)}`], wpOpts);
+        else await studioWp(studioSitePath, ['post', 'meta', 'delete', id, '_wp_page_template'], wpOpts).catch(() => {}); // clear on toggle-off
       } catch (err) {
         if (collapseTemplates) { assignmentFailures++; console.error(`[reconstruct] assign failed slug="${pp.slug}": ${err instanceof Error ? err.message : String(err)}`); }
       }
@@ -714,6 +707,33 @@ export const reconstructPagesHandler: Handler = async (args, ctx) => {
     site: basename(resolve(outputDir)),
     diagnostics: [...islandDiagnostics, ...triageDiagnostics],
   });
+
+  // Style-usage audit (BDC adoption, blocks path only): supports-vs-css dial
+  // over the final page markup + the live theme's css budget. WARNING-level
+  // tally — mirrors htmlFallbackByReason: surfaced in the textResult (and the
+  // run-report via RunReportInput.styleAudit), never a verdict input. Theme
+  // css = every .css under the live theme root, path-sorted (deterministic);
+  // unreadable theme dir degrades to an empty budget, never aborts.
+  const readThemeCss = (root: string): string => {
+    const cssFiles: string[] = [];
+    const walk = (dir: string): void => {
+      for (const name of readdirSync(dir, { withFileTypes: true })) {
+        const full = join(dir, name.name);
+        if (name.isDirectory()) walk(full);
+        else if (name.name.endsWith('.css')) cssFiles.push(full);
+      }
+    };
+    try {
+      walk(root);
+      return cssFiles.sort().map((f) => readFileSync(f, 'utf8')).join('\n');
+    } catch {
+      return '';
+    }
+  };
+  const styleAudit = auditStyleUsage(
+    wxrInputs.map((w) => ({ slug: w.slug, markup: w.content })),
+    readThemeCss(themeRoot),
+  );
 
   // Region audit (#2): reconcile each page's source landmark census against what
   // was placed (body section selectors + chrome presence). Chrome is site-level —
@@ -759,6 +779,7 @@ export const reconstructPagesHandler: Handler = async (args, ctx) => {
     htmlFallbackSections,
     htmlFallbackByReason,
     unassignedRegions,
+    styleAudit,
     variationsHoisted,
     variationInstances,
     hoistWarning,

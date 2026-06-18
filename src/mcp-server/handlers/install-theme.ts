@@ -18,8 +18,6 @@
 // register_block_type errored — file was written but plugin didn't load).
 //
 
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import { existsSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import {
@@ -28,8 +26,7 @@ import {
 } from '../../lib/preview/replica-install.js';
 import type { ReplicaFile, ReplicaBlockPlugin } from '../../lib/preview/types.js';
 import type { Handler } from '../handler-types.js';
-
-const execFileAsync = promisify(execFile);
+import { studioWp } from '../../lib/preview/studio.js';
 
 interface InstallThemeArgs {
   outputDir?: string;
@@ -188,8 +185,9 @@ export const installThemeHandler: Handler = async (args, ctx) => {
  * Three steps, each best-effort:
  *   1. `transient delete --all` — clears DB-backed transients broadly.
  *   2. `cache flush` — clears the runtime object cache.
- *   3. `db query DELETE ... wp_theme_files_patterns-*` — the load-bearing step
- *      for RE-installs. `WP_Theme::get_block_patterns()` memoizes the theme's
+ *   3. `eval $wpdb->query(DELETE ... wp_theme_files_patterns-*)` — the
+ *      load-bearing step for RE-installs (run via $wpdb, not `db query`, which
+ *      is MySQL-only and fails on Studio's SQLite). `WP_Theme::get_block_patterns()` memoizes the theme's
  *      `patterns/*.php` file list in the `wp_theme_files_patterns-<hash>`
  *      transient. On a non-persistent object cache (Studio's SQLite), `cache
  *      flush` does NOT remove that DB-backed transient, so a newly-added pattern
@@ -214,22 +212,21 @@ export function themeCacheFlushCommands(): string[][] {
     // timeout) so the next request re-scans the patterns directory and
     // registers the just-installed pattern. Without the `_site_transient_`
     // variant the freshly-reconstructed page renders a blank pattern.
+    //
+    // Run the DELETE through `wp eval` (i.e. $wpdb), NOT `wp db query`: the
+    // latter shells out to the mysql client and dies with `Undefined constant
+    // DB_HOST` on Studio's SQLite, so the load-bearing purge silently failed on
+    // every convert (the recurring "cache flush failed (db query)" warning).
+    // $wpdb routes through the SQLite drop-in on Studio and MySQL elsewhere, so
+    // this is driver-agnostic. `{$wpdb->options}` respects the table prefix.
     [
-      'db',
-      'query',
-      "DELETE FROM wp_options WHERE option_name LIKE '_transient_wp_theme_files_patterns-%' " +
+      'eval',
+      'global $wpdb; $wpdb->query("DELETE FROM {$wpdb->options} WHERE ' +
+        "option_name LIKE '_transient_wp_theme_files_patterns-%' " +
         "OR option_name LIKE '_transient_timeout_wp_theme_files_patterns-%' " +
         "OR option_name LIKE '_site_transient_wp_theme_files_patterns-%' " +
-        "OR option_name LIKE '_site_transient_timeout_wp_theme_files_patterns-%'",
+        "OR option_name LIKE '_site_transient_timeout_wp_theme_files_patterns-%\");",
     ],
   ];
 }
 
-async function studioWp(sitePath: string, wpArgs: string[]): Promise<string> {
-  const { stdout } = await execFileAsync(
-    'studio',
-    ['wp', '--path', sitePath, ...wpArgs],
-    { timeout: 300_000, maxBuffer: 50 * 1024 * 1024 },
-  );
-  return stdout;
-}

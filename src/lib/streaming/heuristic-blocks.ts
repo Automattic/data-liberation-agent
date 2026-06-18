@@ -34,12 +34,7 @@ export interface HeuristicResult {
 
 const ALLOWED_TEXTISH = new Set(['p', 'h2', 'h3']);
 
-function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
-}
+import { escapeHtmlText as escapeHtml } from '../html-escape.js';
 
 function paragraphBlock(html: string): string {
   return `<!-- wp:paragraph -->\n<p>${html}</p>\n<!-- /wp:paragraph -->`;

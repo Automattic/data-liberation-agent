@@ -37,6 +37,7 @@ import { reconstructPagesHandler } from './mcp-server/handlers/reconstruct-pages
 import { reconstructPagesCarryHandler } from './mcp-server/handlers/reconstruct-pages-carry.js';
 import { blockifyWxrHandler } from './mcp-server/handlers/blockify-wxr.js';
 import { screenshotHandler } from './mcp-server/handlers/screenshot.js';
+import { dataModelScaffoldHandler } from './mcp-server/handlers/data-model-scaffold.js';
 import { designFoundationScaffoldHandler } from './mcp-server/handlers/design-foundation-scaffold.js';
 import { designFoundationValidateHandler } from './mcp-server/handlers/design-foundation-validate.js';
 import { designFoundationSaveHandler } from './mcp-server/handlers/design-foundation-save.js';
@@ -46,6 +47,8 @@ import { compareHandler } from './mcp-server/handlers/compare.js';
 import { clusterPagesHandler } from './mcp-server/handlers/cluster-pages.js';
 import { sectionExtractHandler } from './mcp-server/handlers/section-extract.js';
 import { composeInstantiateHandler } from './mcp-server/handlers/compose-instantiate.js';
+import { ingestLocalSiteHandler } from './mcp-server/handlers/ingest-local-site.js';
+import { convertLocalSiteHandler } from './mcp-server/handlers/convert-local-site.js';
 import { validateArtifactsHandler } from './mcp-server/handlers/validate-artifacts.js';
 import { refineReportHandler } from './mcp-server/handlers/refine-report.js';
 import { NEW_TOOL_SCHEMAS } from './mcp-server/handlers/tool-schemas.js';
@@ -499,6 +502,19 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: 'liberate_data_model_scaffold',
+      description:
+        'Deterministic pre-pass for the JS-data path: reads an owned local site dir, discovers record arrays / mount containers / id-lookups by AST (resilient to malformed/vendored JS files), infers field roles, and writes a PARTIAL data-model.draft.json. Returns { model, skillTodos, discovered, validation }. The model-local-data skill fills only the skillTodos (card.template, ambiguous ordering, low-confidence role guesses), then writes the final data-model.json. Run before liberate_convert_local_site when the source renders content from a JS data array.',
+      inputSchema: {
+        type: 'object' as const,
+        properties: {
+          dir: { type: 'string', description: 'Absolute path to the local static-site directory.' },
+          outputDir: { type: 'string', description: 'Where data-model.draft.json is written. Defaults to dir.' },
+        },
+        required: ['dir'],
+      },
+    },
+    {
       name: 'liberate_design_foundation_scaffold',
       description:
         'Runs the deterministic scaffold on a liberation output directory: reads palette.json / typography.json / breakpoints.json / screenshots/manifest.json from SP1 output, applies pure rules (darkest high-frequency → text.default, lightest → surface.base, breakpoint tier mapping, gradient regex extraction from html/*.html), and returns a PartialDesignFoundation. Empty role slots are left for the design-foundations skill to assign. Emits skillTodos listing every path the skill must fill. The design-foundations skill may additionally read computed-styles.json for HTML/CSS role assignment.',
@@ -665,8 +681,51 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           replicaDir: { type: 'string', description: 'Replica screenshots dir, same layout. comparison.json + diff/ are written here.' },
           viewports: { type: 'array', items: { type: 'string', enum: ['desktop', 'mobile'] }, description: 'Viewports to score. Default: both.' },
           diffOutputDir: { type: 'string', description: 'Where to write diff PNGs. Default: <replicaDir>/diff.' },
+          floor: { type: 'number', description: 'Pass/fail score floor used for repair-tasks.json records. Default 0.99.' },
+          maxHeightDelta: { type: 'number', description: 'Height-gate tolerance in capture px (pre-crop |originH - replicaH|). Default 8.' },
         },
         required: ['originDir', 'replicaDir'],
+      },
+    },
+    {
+      name: 'liberate_ingest_local_site',
+      description:
+        'Stage 1a of the owned-source path: ingest a local static-site directory (HTML/CSS/JS) and normalize each page into validated native Gutenberg block markup. Writes <outputDir>/composed/<slug>.blocks.html sidecars + <outputDir>/normalize-report.json. No Playwright/Studio. Downstream theme-scaffold/install/compare stages consume the sidecars.',
+      inputSchema: {
+        type: 'object' as const,
+        properties: {
+          dir: { type: 'string', description: 'Absolute path to the local static-site directory to ingest.' },
+          outputDir: { type: 'string', description: 'Liberation output directory for composed sidecars + normalize-report.json. Defaults to `dir`.' },
+          nativeBehaviors: { type: 'boolean', description: 'Detect catalog behaviors in the source css/js and emit dla/* Interactivity wrappers in the sidecars instead of core/group: uniform dla/reveal plus per-section DOM patterns (dla/tabs, dla/slider, dla/modal — verbatim inner markup). liberate_convert_local_site threads its own flag through here.' },
+        },
+        required: ['dir'],
+      },
+    },
+    {
+      name: 'liberate_convert_local_site',
+      description:
+        'Stage 1b+1c of the owned-source path: full local-static-site → live Studio site. Reuses liberate_ingest_local_site (sidecars + normalize-report), optionally captures the source design (palette/typography/screenshots) and self-hosts Google Fonts, assembles the local block theme (core/navigation header from the nav graph, foundation-styled footer, no-title page templates), writes + activates it, creates WP Pages from the sidecars (idempotent via _source_url), sets the front page, assigns the page-local template, and optionally captures the WP replica + scores parity.',
+      inputSchema: {
+        type: 'object' as const,
+        properties: {
+          dir: { type: 'string', description: 'Absolute path to the local static-site directory.' },
+          studioSitePath: { type: 'string', description: 'Studio site path on host (e.g. ~/Studio/my-site — the dir studio site list prints, not wp-root).' },
+          createSite: { type: 'boolean', description: 'Provision the Studio site via `studio site create` when none exists at studioSitePath (idempotent — an existing site is reused). Default false (errors if the site is absent). Admin creds via env WP_ADMIN_USER/WP_ADMIN_PASS; omitted → Studio auto-generates.' },
+          outputDir: { type: 'string', description: 'Liberation output dir for sidecars + reports. Defaults to `dir`.' },
+          themeSlug: { type: 'string', description: 'Theme slug (kebab-case). Default: local-site-theme.' },
+          siteTitle: { type: 'string', description: 'Site title for header/footer. Default: home page <title>.' },
+          skipDesign: { type: 'boolean', description: 'Skip source design capture (tokens/fonts) and compare; theme uses default styling.' },
+          skipCompare: { type: 'boolean', description: 'Skip the WP-replica screenshot + parity compare stage.' },
+          wpUrl: { type: 'string', description: 'Base URL for replica capture. Default: auto-resolved via wp option get siteurl (Studio assigns random ports); explicit value overrides.' },
+          carryCss: { type: 'boolean', description: 'Carry the source stylesheet into the theme (adapted for the block DOM). Default true — the stage-1d parity mechanism; tokens-only theming when false.' },
+          carryJs: { type: 'boolean', description: 'Carry the source scripts into the theme (enqueued footer, html.js gate added). Default true for identical replication.' },
+          nativeBehaviors: { type: 'boolean', description: 'Replace carried source JS with native Interactivity blocks (reveal, sticky, plus per-section tabs/slider/modal with verbatim inner markup); unmapped behaviors land in behavior-gaps.json. Forces carryJs off.' },
+          dataModel: { type: 'boolean', description: 'WordPress-driven data path: when a data-model.json (from the model-local-data skill) is present in outputDir/dir, register a CPT+taxonomy via generated mu-plugins, insert items idempotently, and replace empty JS-mount grids with native core/query loops (dla/data-card cards) while neutralizing the JS data-mounts and rebinding modal lookups to per-card DOM islands. Default on when the file exists; pass false to force off.' },
+          repair: { type: 'boolean', description: 'Deterministic parity repair loop: diff regions → computed-style probe → generated parity-patch.css → re-compare, bounded. Default true. No AI involved.' },
+          maxRepairRounds: { type: 'number', description: 'Max repair rounds (0-5). Default 2. Loop also stops early on allPass or an unchanged divergence fingerprint.' },
+          failOnConservationRailDrop: { type: 'boolean', description: 'Opt-in hard fail for local region-audit conservation: when true, unassigned nav/complementary rails with at least two links set isError. Default false (warn-only).' },
+        },
+        required: ['dir', 'studioSitePath'],
       },
     },
     ...(JSON.parse(JSON.stringify(
@@ -678,6 +737,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
 /** Tool name → handler module. */
 const handlers: Record<string, Handler> = {
   liberate_compare: compareHandler,
+  liberate_data_model_scaffold: dataModelScaffoldHandler,
   liberate_design_foundation_save: designFoundationSaveHandler,
   liberate_design_foundation_scaffold: designFoundationScaffoldHandler,
   liberate_design_foundation_validate: designFoundationValidateHandler,
@@ -708,6 +768,8 @@ const handlers: Record<string, Handler> = {
   liberate_cluster_pages: clusterPagesHandler,
   liberate_section_extract: sectionExtractHandler,
   liberate_compose_instantiate: composeInstantiateHandler,
+  liberate_ingest_local_site: ingestLocalSiteHandler,
+  liberate_convert_local_site: convertLocalSiteHandler,
   liberate_validate_artifacts: validateArtifactsHandler,
   liberate_reconstruct_pages: reconstructPagesHandler,
   liberate_reconstruct_pages_carry: reconstructPagesCarryHandler,

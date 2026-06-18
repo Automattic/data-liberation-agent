@@ -119,6 +119,26 @@ After editing the section's markup:
 
 **Do not rationalize a miss.** "Close enough", "known gap", "the source is just different" are not finishes — fix it or, if you genuinely cannot (a true WP rendering constraint), report it explicitly with both images, do not silently ship it.
 
+## Repair order — attack diffs in this sequence
+
+When you name multiple differences, fix them in this order. Each rung's diffs usually CAUSE the rungs below it (wrong macro layout shifts everything downstream, so fixing a font-size first just gets undone) — climbing in order converges; jumping around oscillates.
+
+1. **Content** — is everything the source shows actually present? A dropped image/heading/list-item/button is the first thing to restore ([[feedback_never_lose_source_content]]). Never proceed past a content gap.
+2. **Semantics** — right block for the role (heading is a heading, list is a list, columns are columns — not a flattened stack). Wrong structure can't be styled into parity.
+3. **Macro layout** — section width (full-bleed vs constrained), column count, media-vs-text order, major padding bands. The page's vertical rhythm rides on these.
+4. **Responsive** — does it hold at the compare width AND reflow sanely narrower? Fixed dimensions that only work at 1440 belong here (see scale, below).
+5. **Editor drift** — if an `editor-report.json` / editorScore surface flags this page, the markup renders differently in the block editor than on the frontend (block recovery, save-validation drift). Reconcile both surfaces — a block that's invalid in the editor is not done even if the frontend looks right.
+6. **Scale** — per-axis sizing: font-size, line-height (always carried WITH the size), letter-spacing, gap. Convert fixed `minHeight`/`height` captured at ≈1440 to `vw` so they scale.
+7. **Polish** — color exactness, focal point, button treatment, the last sub-pixel spacing.
+
+## Anti-gaming rules — what "done" is NOT
+
+The diff score is a proxy for fidelity, not the goal. A change that improves the number while degrading the truth is a regression, not progress:
+
+- **Never hide a source-visible element to improve the diff.** Deleting/`display:none`-ing content that the source shows lowers the pixel delta and destroys fidelity — the exact opposite of the job. If an element is hard to match, match it; do not make it disappear.
+- **A repair that regresses another surface reverts.** If closing the frontend diff worsens the editor surface (or mobile, or another section), it is not a fix — back it out and find one that holds on every surface. Don't trade one surface's score for another's.
+- **Blocked ≠ done.** A genuine WP rendering constraint you cannot close is REPORTED (RESIDUAL, with both images + the reason), never silently shipped as MATCHED. "Blocked" and "matched" are different statuses — conflating them launders a gap into a pass.
+
 ## Output
 
 Report: the section, the iterations you ran, the diffs you closed each round (before→after), the final source-vs-built crops, and STATUS = MATCHED (visually identical) / RESIDUAL (list the exact remaining differences + why you could not close them — for the operator). Never report MATCHED without having looked at both images in the final iteration.

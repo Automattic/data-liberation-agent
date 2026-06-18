@@ -11,6 +11,7 @@
 //   patterns[] ──▶ for each: drift ✓ · security ✓ · provenance ✓ · structure ✓ ──▶ { ok, errors[], warnings[] }
 //
 import { validateBlockMarkup } from './validate-block-markup.js';
+import { validateBlockContract } from './block-contract.js';
 const ALLOWED_INTERACTION_MODELS = new Set([
   'static', 'gallery', 'media-text', 'columns', 'cover-with-headline',
   'animated-cover', 'logo-strip', 'testimonial', 'cta', 'blog-card-grid',
@@ -235,6 +236,14 @@ export function validateArtifacts(input: ArtifactInput): ValidationReport {
     // unclosed/mismatched delimiter (which the parser silently re-parents) or a
     // freeform/bad-attrs leak fails the gate instead of shipping broken blocks.
     for (const violation of validateBlockMarkup(p.php)) fail(violation);
+
+    // --- contract: emitted attrs vs registered core metadata (WARNING-level) ---
+    // Invented core blocks/attrs and out-of-allowlist group tagNames are OUR
+    // emitter bugs, surfaced beside the structural gate but never failing it
+    // (trust-source posture; dla/* + core/html allowlisted in the check).
+    for (const issue of validateBlockContract(p.php)) {
+      warnings.push({ slug: p.slug, message: `block contract: ${issue.code} ${issue.blockName} — ${issue.detail}` });
+    }
 
     // --- provenance: emitted copy must trace to the captured source ---
     //

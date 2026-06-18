@@ -377,7 +377,10 @@ async function capturePerViewport(args: CapturePerViewportArgs): Promise<void> {
         // Page is shorter than scroll-offset + viewport. No distinct scrolled
         // state to capture. Skip silently (not a failure).
       } else {
-        await page.evaluate((y: number) => window.scrollTo(0, y), scrollY);
+        // Explicit-instant: css scroll-behavior:smooth would GLIDE here and
+        // the snap would clip mid-glide at the wrong scroll origin (see
+        // page-helpers triggerLazyLoad for the full smooth-scroll rationale).
+        await page.evaluate((y: number) => window.scrollTo({ top: y, left: 0, behavior: 'instant' }), scrollY);
         // Plain viewport-sized screenshot of the now-scrolled page.
         // fullPage:false captures the current viewport — no clip needed.
         // (A clip would have to be inside the 0..viewport.height image, not at
@@ -871,14 +874,30 @@ export async function captureScreenshots(opts: ScreenshotOpts): Promise<Screensh
   };
 
   try {
-    // --- batch loop with browser restart at batch boundaries -------------
-    for (let i = 0; i < urls.length; i += concurrency) {
-      const batch = urls.slice(i, i + concurrency);
-      await Promise.all(batch.map((u) => processUrl(u)));
-      urlsSinceRestart += batch.length;
+    // --- worker pool with browser restart at segment boundaries ----------
+    // URLs are processed in segments of browserRestartEvery; WITHIN a segment a
+    // continuous pool of `concurrency` workers drains a shared cursor, so a slow
+    // page never stalls the others (the old slice loop waited for the slowest
+    // URL in every group of `concurrency` before starting the next group). The
+    // browser is restarted only between segments to bound memory, preserving the
+    // restart-every-N invariant while keeping each worker on a stable browser.
+    const segSize = browserRestartEvery > 0 ? browserRestartEvery : urls.length;
+    for (let segStart = 0; segStart < urls.length; segStart += segSize) {
+      const segment = urls.slice(segStart, segStart + segSize);
+      let cursor = 0;
+      const worker = async (): Promise<void> => {
+        // `cursor++` is atomic on JS's single-threaded loop: each worker claims a
+        // distinct index synchronously before awaiting, so no URL runs twice.
+        for (let idx = cursor++; idx < segment.length; idx = cursor++) {
+          await processUrl(segment[idx]);
+        }
+      };
+      const poolSize = Math.max(1, Math.min(concurrency, segment.length));
+      await Promise.all(Array.from({ length: poolSize }, () => worker()));
+      urlsSinceRestart += segment.length;
 
-      const moreWork = i + concurrency < urls.length;
-      if (moreWork && urlsSinceRestart >= browserRestartEvery) {
+      const moreWork = segStart + segSize < urls.length;
+      if (moreWork) {
         sendLog(server, `[restart] closing browser after ${urlsSinceRestart} URLs`);
         try { await browser.close(); } catch { /* best-effort */ }
         browser = await connectBrowser({ cdpPort: opts.cdpPort }) as unknown as Browser;

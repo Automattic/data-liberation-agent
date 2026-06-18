@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { resolveStudioWpRoot } from './studio.js';
 
@@ -43,5 +44,11 @@ describe('resolveStudioWpRoot', () => {
   it('falls back to the flat sitePath when neither layout exists', () => {
     const site = makeSite();
     expect(resolveStudioWpRoot(site)).toBe(site);
+  });
+
+  it('expands a leading ~ in the flat fallback (no literal ~ segment downstream)', () => {
+    // Regression: the non-null fallback must not emit a <cwd>/~/... path that
+    // would break `wp theme activate`. ~/x with no wp-content → $HOME/x.
+    expect(resolveStudioWpRoot('~/Studio/no-such-site')).toBe(join(homedir(), 'Studio/no-such-site'));
   });
 });

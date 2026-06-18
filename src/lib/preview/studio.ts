@@ -13,6 +13,7 @@ import {
 } from './site-options.js';
 import type { ReplicaFile, ReplicaBlockPlugin, StartPreviewResult } from './types.js';
 import { resolveStudioRoot } from '../paths.js';
+import { expandTilde, studioWpRoot } from './studio-site.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -123,11 +124,10 @@ export function makeStudioSiteName(
  * than silently writing to the wrong place.
  */
 export function resolveStudioWpRoot(sitePath: string): string {
-  const resolved = resolve(sitePath);
-  if (existsSync(join(resolved, 'wp-content'))) return resolved;
-  const nested = join(resolved, 'wordpress');
-  if (existsSync(join(nested, 'wp-content'))) return nested;
-  return resolved;
+  // Non-null variant of studioWpRoot: falls back to the (resolved) flat path so
+  // a concrete "theme could not be found" error surfaces downstream rather than
+  // a null deref here.
+  return studioWpRoot(sitePath) ?? resolve(expandTilde(sitePath));
 }
 
 async function listStudioSites(): Promise<StudioSite[]> {
@@ -139,11 +139,22 @@ async function listStudioSites(): Promise<StudioSite[]> {
   return JSON.parse(trimmed) as StudioSite[];
 }
 
-async function studioWp(sitePath: string, args: string[]): Promise<string> {
+/**
+ * Run `studio wp --path <sitePath> <args>` and return raw stdout. The single
+ * Studio wp-cli exec wrapper — handlers import this instead of re-spelling the
+ * `execFileAsync('studio', ['wp', '--path', …])` boilerplate. Timeout/buffer
+ * default to the long-running 5min/50MB envelope; callers running short or
+ * large-output commands override via opts.
+ */
+export async function studioWp(
+  sitePath: string,
+  args: string[],
+  opts: { timeout?: number; maxBuffer?: number } = {},
+): Promise<string> {
   const { stdout } = await execFileAsync(
     'studio',
     ['wp', '--path', sitePath, ...args],
-    { timeout: 300_000, maxBuffer: 50 * 1024 * 1024 },
+    { timeout: opts.timeout ?? 300_000, maxBuffer: opts.maxBuffer ?? 50 * 1024 * 1024 },
   );
   return stdout;
 }

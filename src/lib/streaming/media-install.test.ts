@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync, utimesSync } from 'node:fs';
 import { join } from 'node:path';
-import { installMediaForUrl } from './media-install.js';
+import { installMediaFiles, installMediaForUrl } from './media-install.js';
 import { MediaStubStore } from '../resume-state/index.js';
 
 const FIXTURE_TMP = join(process.cwd(), '.tmp-test');
@@ -77,6 +77,55 @@ const SUCCESS_RESPONSE = (entries: Array<{ sourceUrl: string; filename: string; 
     results: entries.map((e) => ({ ...e, reused: e.reused ?? false })),
     errors: [],
   })}\nDLA_INSTALL_MEDIA_JSON_END\nMore noise after\n`;
+
+describe('installMediaFiles', () => {
+  it('copies caller-supplied files into uploads and returns parsed installs', async () => {
+    const root = mkdtempSync(join(FIXTURE_TMP, 'mi-files-'));
+    const sourceDir = join(root, 'source', 'assets', 'media');
+    const wpRoot = join(root, 'site', 'wordpress');
+    mkdirSync(sourceDir, { recursive: true });
+    mkdirSync(wpRoot, { recursive: true });
+    const absPath = join(sourceDir, 'card-aurora.png');
+    writeFileSync(absPath, Buffer.from('fictional image'));
+    const stamp = new Date(2026, 5, 9, 12, 0, 0);
+    utimesSync(absPath, stamp, stamp);
+
+    try {
+      const exec = vi.fn().mockResolvedValue({
+        stdout: SUCCESS_RESPONSE([
+          {
+            sourceUrl: 'assets/media/card-aurora.png',
+            filename: 'card-aurora.png',
+            postId: 17,
+            localUrl: 'https://studio.test/wp-content/uploads/2026/06/card-aurora.png',
+          },
+        ]),
+        stderr: '',
+      });
+
+      const result = await installMediaFiles({
+        files: [{ absPath, sourceUrl: 'assets/media/card-aurora.png' }],
+        wpRoot,
+        _execFile: exec,
+      });
+
+      expect(result).toEqual({
+        installed: [
+          {
+            sourceUrl: 'assets/media/card-aurora.png',
+            postId: 17,
+            localUrl: 'https://studio.test/wp-content/uploads/2026/06/card-aurora.png',
+          },
+        ],
+        errors: [],
+      });
+      expect(existsSync(join(wpRoot, 'wp-content', 'uploads', '2026', '06', 'card-aurora.png'))).toBe(true);
+      expect(exec).toHaveBeenCalledTimes(1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
 
 describe('installMediaForUrl', () => {
   it('copies media into wpRoot uploads, runs PHP, and records wpPostId', async () => {

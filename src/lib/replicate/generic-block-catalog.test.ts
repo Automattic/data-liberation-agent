@@ -132,3 +132,48 @@ describe('generic-block-catalog: embeds (iframe -> core/embed)', () => {
     expect(run(embedded)).toBeNull();
   });
 });
+
+describe('generic-block-catalog: structural media-text (BDC ladder)', () => {
+  it('claims a layout-hinted two-child [image, text] wrapper without a media-text class', () => {
+    const html = `<div class="split-row"><figure><img src="/walrus-spa.jpg" alt="Spa"></figure><div><h3>Soak first</h3><p>Warm saltwater opens the whiskers.</p></div></div>`;
+    const out = run(html);
+    expect(out).toContain('wp:media-text');
+    expect(out).toContain('wp-block-media-text__media');
+    expect(out).toContain('Soak first');
+    expect(out).not.toContain('"mediaPosition":"right"');
+  });
+
+  it('text-first order emits mediaPosition right + the matching class', () => {
+    const html = `<div class="two-col"><div><h3>Polish</h3><p>Tusk wax, two coats.</p></div><figure><img src="/tusk.jpg" alt="Tusk"></figure></div>`;
+    const out = run(html);
+    expect(out).toContain('"mediaPosition":"right"');
+    expect(out).toContain('has-media-on-the-right');
+  });
+
+  it('inline flex style counts as layout evidence', () => {
+    const html = `<div style="display:flex; gap:2rem"><img src="/kelp.jpg" alt="Kelp"><div><p>Kelp scrub basics.</p></div></div>`;
+    const out = run(html);
+    expect(out).toContain('wp:media-text');
+  });
+
+  it('a stacked two-child wrapper WITHOUT layout evidence is not claimed (no side-by-side guess)', () => {
+    const html = `<div class="feature"><img src="/molt.jpg" alt="Molt"><div><p>Molt care.</p></div></div>`;
+    expect(run(html)).toBeNull();
+  });
+});
+
+describe('generic-block-catalog: structural details pairs (BDC ladder)', () => {
+  it('converts heading + hidden-content pairs to one core/details each', () => {
+    const html = `<div class="qa"><h3>Do walruses like baths?</h3><div hidden><p>They insist on them.</p></div><h3>How long is a session?</h3><div hidden><p>One tide, give or take.</p></div></div>`;
+    const out = run(html);
+    expect(out).toContain('wp:details');
+    expect((out?.match(/<!-- wp:details -->/g) ?? []).length).toBe(2);
+    expect(out).toContain('<summary>Do walruses like baths?</summary>');
+    expect(out).toContain('One tide, give or take.');
+  });
+
+  it('heading pairs whose content is NOT hidden stay unclaimed (no disclosure evidence)', () => {
+    const html = `<div class="qa"><h3>Visible heading</h3><div><p>Visible body.</p></div></div>`;
+    expect(run(html)).toBeNull();
+  });
+});
