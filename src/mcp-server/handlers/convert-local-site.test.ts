@@ -32,6 +32,17 @@ let repairReplicaManifestEntries: Record<string, { slug: string }> = {};
 let repairDiffPng: Buffer | null = null;
 const buildJetpackFormParityCssMock = vi.hoisted(() => vi.fn(() => ({ css: '' })));
 const regionCensusFailure = vi.hoisted(() => ({ throwOnExtract: false }));
+const assembleLocalThemeCalls = vi.hoisted(
+  () =>
+    [] as Array<{
+      interiorChromeTemplates?: Array<{
+        partSlug: string;
+        layoutWrapperTag?: string;
+        layoutWrapperClasses?: string[];
+        layoutWrapperRailPosition?: 'beforeMain' | 'afterMain';
+      }>;
+    }>,
+);
 
 // Passthrough the block fixer: convert calls the real ingest handler, which now
 // canonicalizes each page through a jsdom HTTP subprocess (~2.5s/test + parallel
@@ -90,6 +101,16 @@ vi.mock('../../lib/replicate/local-theme/google-fonts.js', async (importOriginal
   ...(await importOriginal<object>()),
   selfHostGoogleFonts: vi.fn(async () => ({ faces: [], errors: [] })),
 }));
+vi.mock('../../lib/replicate/local-theme/theme-files.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../lib/replicate/local-theme/theme-files.js')>();
+  return {
+    ...actual,
+    assembleLocalTheme: (opts: Parameters<typeof actual.assembleLocalTheme>[0]) => {
+      assembleLocalThemeCalls.push(opts);
+      return actual.assembleLocalTheme(opts);
+    },
+  };
+});
 vi.mock('../../lib/replicate/local-site/jetpack-form-css.js', () => ({
   buildJetpackFormParityCss: buildJetpackFormParityCssMock,
 }));
@@ -442,6 +463,56 @@ function makeInteriorChromeRailSite(): string {
   return dir;
 }
 
+function makeInteriorLayoutWrapperRailSite(): string {
+  mkdirSync(FIXTURE_TMP, { recursive: true });
+  const dir = mkdtempSync(join(FIXTURE_TMP, 'cls-interior-layout-wrapper-'));
+  const header = '<header id="site-header"><nav><a href="index.html">Home</a><a href="intro.html">Intro</a></nav></header>';
+  writeFileSync(
+    join(dir, 'index.html'),
+    '<html><head><title>Home</title><link rel="stylesheet" href="styles.css"></head><body>' +
+      header +
+      '<main><section id="home-copy"><h1>Home</h1><p>Home body.</p></section></main>' +
+      '</body></html>',
+  );
+  writeFileSync(
+    join(dir, 'intro.html'),
+    '<html><head><title>Intro</title><link rel="stylesheet" href="styles.css"></head><body>' +
+      header +
+      '<div class="docs-grid content-shell">' +
+      '<aside id="docs-rail" class="sidebar"><nav><a href="intro.html">Intro</a><a href="api.html">API</a></nav></aside>' +
+      '<main><section id="intro-copy"><h1>Intro</h1><p>The intro body is present.</p></section></main>' +
+      '</div>' +
+      '</body></html>',
+  );
+  writeFileSync(join(dir, 'styles.css'), '.docs-grid { display: grid; grid-template-columns: 16rem 1fr; } .sidebar { position: sticky; top: 0; }');
+  return dir;
+}
+
+function makeInteriorRailWithoutSharedWrapperSite(): string {
+  mkdirSync(FIXTURE_TMP, { recursive: true });
+  const dir = mkdtempSync(join(FIXTURE_TMP, 'cls-interior-flat-rail-'));
+  const header = '<header id="site-header"><nav><a href="index.html">Home</a><a href="intro.html">Intro</a></nav></header>';
+  writeFileSync(
+    join(dir, 'index.html'),
+    '<html><head><title>Home</title><link rel="stylesheet" href="styles.css"></head><body>' +
+      header +
+      '<main><section id="home-copy"><h1>Home</h1><p>Home body.</p></section></main>' +
+      '</body></html>',
+  );
+  writeFileSync(
+    join(dir, 'intro.html'),
+    '<html><head><title>Intro</title><link rel="stylesheet" href="styles.css"></head><body>' +
+      header +
+      '<div class="rail-shell">' +
+      '<aside id="docs-rail" class="sidebar"><nav><a href="intro.html">Intro</a><a href="api.html">API</a></nav></aside>' +
+      '</div>' +
+      '<main><section id="intro-copy"><h1>Intro</h1><p>The intro body is present.</p></section></main>' +
+      '</body></html>',
+  );
+  writeFileSync(join(dir, 'styles.css'), '.rail-shell { display: contents; } .sidebar { position: sticky; top: 0; }');
+  return dir;
+}
+
 function makeHomeComplementaryRailSite(): string {
   mkdirSync(FIXTURE_TMP, { recursive: true });
   const dir = mkdtempSync(join(FIXTURE_TMP, 'cls-home-complementary-rail-'));
@@ -560,6 +631,7 @@ beforeEach(() => {
   execFailFor = null;
   installFailFor = null;
   finalizeResultOverride = null;
+  assembleLocalThemeCalls.length = 0;
   // Repair seam: reset per-test; repair tests set these before calling handler.
   repairReplicaManifestEntries = {};
   repairDiffPng = null;
@@ -1420,6 +1492,59 @@ describe('convertLocalSiteHandler', () => {
         leaks: Array<{ pageSlug: string; selector: string }>;
       };
       expect(report.leaks).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(sitePath, { recursive: true, force: true });
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
+  it('threads source layout wrapper metadata for interior layout rails', async () => {
+    const dir = makeInteriorLayoutWrapperRailSite();
+    const sitePath = makeStudioSite();
+    const outDir = mkdtempSync(join(FIXTURE_TMP, 'cls-interior-layout-wrapper-out-'));
+    try {
+      const res = await convertLocalSiteHandler(
+        { dir, studioSitePath: sitePath, outputDir: outDir, themeSlug: 'acme-local', siteTitle: 'Acme', skipDesign: true },
+        ctx,
+      );
+      expect(res.isError).toBeFalsy();
+
+      const templates = assembleLocalThemeCalls[0].interiorChromeTemplates ?? [];
+      const intro = templates.find((t) => t.partSlug === 'interior-chrome-intro');
+      expect(intro).toMatchObject({
+        layoutWrapperTag: 'div',
+        layoutWrapperClasses: ['docs-grid', 'content-shell'],
+        layoutWrapperRailPosition: 'beforeMain',
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(sitePath, { recursive: true, force: true });
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
+  it('leaves interior layout rail metadata unset when the rail parent does not contain main', async () => {
+    const dir = makeInteriorRailWithoutSharedWrapperSite();
+    const sitePath = makeStudioSite();
+    const outDir = mkdtempSync(join(FIXTURE_TMP, 'cls-interior-flat-rail-out-'));
+    try {
+      const res = await convertLocalSiteHandler(
+        { dir, studioSitePath: sitePath, outputDir: outDir, themeSlug: 'acme-local', siteTitle: 'Acme', skipDesign: true },
+        ctx,
+      );
+      expect(res.isError).toBeFalsy();
+
+      const templates = assembleLocalThemeCalls[0].interiorChromeTemplates ?? [];
+      const intro = templates.find((t) => t.partSlug === 'interior-chrome-intro');
+      expect(intro).toMatchObject({ partSlug: 'interior-chrome-intro' });
+      expect(intro?.layoutWrapperTag).toBeUndefined();
+      expect(intro?.layoutWrapperClasses).toBeUndefined();
+      expect(intro?.layoutWrapperRailPosition).toBeUndefined();
+
+      const template = readFileSync(join(sitePath, 'wp-content', 'themes', 'acme-local', 'templates', 'page-local-intro-chrome.html'), 'utf8');
+      expect(template).toContain('wp:template-part {"slug":"interior-chrome-intro","tagName":"aside"}');
+      expect(template).not.toContain('rail-shell');
     } finally {
       rmSync(dir, { recursive: true, force: true });
       rmSync(sitePath, { recursive: true, force: true });

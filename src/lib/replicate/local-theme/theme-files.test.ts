@@ -87,6 +87,76 @@ describe('assembleLocalTheme', () => {
     expect(lintThemeJson(JSON.parse(withInterior.find((f) => f.relativePath === 'theme.json')?.content ?? '{}')).ok).toBe(true);
   });
 
+  it('wraps interior chrome rail and main in the source layout wrapper without changing home templates', () => {
+    const withInterior = assembleLocalTheme({
+      siteTitle: 'Acme',
+      themeSlug: 'acme-local',
+      headerPart: HEADER,
+      footerPart: FOOTER,
+      interiorChromeTemplates: [
+        {
+          templateName: 'page-local-docs-chrome',
+          templateTitle: 'Local Page Chrome (Docs)',
+          partSlug: 'interior-chrome-docs',
+          partMarkup: '<aside class="sidebar"><nav>Docs</nav></aside>',
+          layoutWrapperTag: 'div',
+          layoutWrapperClasses: ['docs-grid'],
+          layoutWrapperRailPosition: 'beforeMain',
+        },
+      ],
+    });
+
+    const interiorTemplate = withInterior.find((f) => f.relativePath === 'templates/page-local-docs-chrome.html')?.content ?? '';
+    const headerIndex = interiorTemplate.indexOf('wp:template-part {"slug":"header","tagName":"header"}');
+    const wrapperIndex = interiorTemplate.indexOf('<!-- wp:group {"tagName":"div","className":"docs-grid"} -->');
+    const sidebarIndex = interiorTemplate.indexOf('wp:template-part {"slug":"interior-chrome-docs","tagName":"aside"}');
+    const mainIndex = interiorTemplate.indexOf('<!-- wp:group {"tagName":"main"} -->');
+    const wrapperCloseIndex = interiorTemplate.lastIndexOf('<!-- /wp:group -->');
+    const footerIndex = interiorTemplate.indexOf('wp:template-part {"slug":"footer","tagName":"footer"}');
+
+    expect([headerIndex, wrapperIndex, sidebarIndex, mainIndex, wrapperCloseIndex, footerIndex].every((idx) => idx >= 0)).toBe(true);
+    expect(headerIndex).toBeLessThan(wrapperIndex);
+    expect(wrapperIndex).toBeLessThan(sidebarIndex);
+    expect(sidebarIndex).toBeLessThan(mainIndex);
+    expect(mainIndex).toBeLessThan(wrapperCloseIndex);
+    expect(wrapperCloseIndex).toBeLessThan(footerIndex);
+    expect(interiorTemplate).toContain('<div class="wp-block-group docs-grid">');
+    expect(interiorTemplate).toContain('</div>');
+    expect(withInterior.find((f) => f.relativePath === 'templates/page-local.html')?.content).not.toContain('docs-grid');
+    expect(withInterior.find((f) => f.relativePath === 'templates/front-page.html')?.content).not.toContain('docs-grid');
+  });
+
+  it('preserves source rail position inside the interior layout wrapper', () => {
+    const withInterior = assembleLocalTheme({
+      siteTitle: 'Acme',
+      themeSlug: 'acme-local',
+      headerPart: HEADER,
+      footerPart: FOOTER,
+      interiorChromeTemplates: [
+        {
+          templateName: 'page-local-reference-chrome',
+          templateTitle: 'Local Page Chrome (Reference)',
+          partSlug: 'interior-chrome-reference',
+          partMarkup: '<aside class="sidebar"><nav>Reference</nav></aside>',
+          layoutWrapperTag: 'div',
+          layoutWrapperClasses: ['reference-grid'],
+          layoutWrapperRailPosition: 'afterMain',
+        },
+      ],
+    });
+
+    const interiorTemplate = withInterior.find((f) => f.relativePath === 'templates/page-local-reference-chrome.html')?.content ?? '';
+    const wrapperIndex = interiorTemplate.indexOf('<!-- wp:group {"tagName":"div","className":"reference-grid"} -->');
+    const mainIndex = interiorTemplate.indexOf('<!-- wp:group {"tagName":"main"} -->');
+    const sidebarIndex = interiorTemplate.indexOf('wp:template-part {"slug":"interior-chrome-reference","tagName":"aside"}');
+    const wrapperCloseIndex = interiorTemplate.lastIndexOf('<!-- /wp:group -->');
+
+    expect([wrapperIndex, mainIndex, sidebarIndex, wrapperCloseIndex].every((idx) => idx >= 0)).toBe(true);
+    expect(wrapperIndex).toBeLessThan(mainIndex);
+    expect(mainIndex).toBeLessThan(sidebarIndex);
+    expect(sidebarIndex).toBeLessThan(wrapperCloseIndex);
+  });
+
   it('produces unique relativePaths (no duplicates from the swap)', () => {
     const paths = files.map((f) => f.relativePath);
     expect(new Set(paths).size).toBe(paths.length);

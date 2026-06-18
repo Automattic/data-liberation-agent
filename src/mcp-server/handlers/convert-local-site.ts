@@ -81,6 +81,12 @@ import { CLEAR_INTERVALS_SCRIPT, FREEZE_MOTION_CSS, probePair, type Divergence }
 import { extractDiffRegions } from '../../lib/replicate/parity/diff-regions.js';
 import { classifyDivergences, renderPatchCss, divergenceFingerprint, suppressPageConflicts, type UnresolvedDivergence, type PatchOverride, type RepairPlan } from '../../lib/replicate/parity/parity-classify.js';
 
+type LayoutRailSection = Section & {
+  layoutWrapperTag?: string;
+  layoutWrapperClasses?: string[];
+  layoutWrapperRailPosition?: 'beforeMain' | 'afterMain';
+};
+
 /** Thin trimming wrapper over the shared Studio wp-cli exec — these are short
  * commands, so the 60s/10MB envelope rather than the 5min/50MB default. */
 async function studioWp(sitePath: string, wpArgs: readonly string[]): Promise<string> {
@@ -736,15 +742,23 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
   const interiorChromeBySlug = new Map<string, InteriorChromeTemplate>();
   for (const page of site.pages) {
     if (page.slug === home.slug) continue;
-    const rails = segmentPage(page.html).filter((s) => s.chromeSource === 'layout-rail');
+    const rails = segmentPage(page.html).filter((s) => s.chromeSource === 'layout-rail') as LayoutRailSection[];
     if (rails.length === 0) continue;
     const templateSlug = page.slug.replace(/[^a-z0-9_-]+/gi, '-').replace(/^-+|-+$/g, '') || 'page';
     const partMarkup = rails.map((rail) => buildCarriedSidebarPart(rail, { pageSlugs })).join('\n');
+    const layoutWrapperRail = rails.find((rail) => rail.layoutWrapperTag && rail.layoutWrapperRailPosition);
     interiorChromeBySlug.set(page.slug, {
       templateName: `page-local-${templateSlug}-chrome`,
       templateTitle: `Local Page Chrome (${page.title || page.slug})`,
       partSlug: `interior-chrome-${templateSlug}`,
       partMarkup,
+      ...(layoutWrapperRail
+        ? {
+            layoutWrapperTag: layoutWrapperRail.layoutWrapperTag,
+            layoutWrapperClasses: layoutWrapperRail.layoutWrapperClasses ?? [],
+            layoutWrapperRailPosition: layoutWrapperRail.layoutWrapperRailPosition,
+          }
+        : {}),
     });
   }
 

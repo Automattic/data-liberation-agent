@@ -15,6 +15,14 @@ const CONTENT_LANDMARK_ROLES = new Set(['main', 'article', 'region']);
 const CHROME_LANDMARK_TAGS = new Set(['header', 'nav', 'footer']);
 const ACTIONABLE_TEXT_MIN = 24;
 
+type LayoutWrapperRailPosition = 'beforeMain' | 'afterMain';
+
+interface LayoutRailWrapperMetadata {
+  layoutWrapperTag: string;
+  layoutWrapperClasses: string[];
+  layoutWrapperRailPosition: LayoutWrapperRailPosition;
+}
+
 /** Slugify a short text run for use in an id. */
 function textSlug(text: string): string {
   return text
@@ -58,6 +66,10 @@ function stableId($: CheerioAPI, el: Element, ordinal: number): string {
 
 function roleOf($el: Cheerio<Element>): string {
   return ($el.attr('role') ?? '').trim().toLowerCase();
+}
+
+function classList($el: { attr(name: string): string | undefined }): string[] {
+  return ($el.attr('class') ?? '').split(/\s+/).filter(Boolean);
 }
 
 function nearestLandmarkAncestor(el: Element): string | null {
@@ -106,6 +118,27 @@ function isLayoutChromeCandidate($: CheerioAPI, el: Element): boolean {
   return isNav || isActionableComplementary($, el);
 }
 
+function findLayoutRailWrapper($: CheerioAPI, rail: Element): LayoutRailWrapperMetadata | null {
+  if (!rail.parent || !isTag(rail.parent)) return null;
+  const parent = rail.parent as Element;
+  const tag = parent.tagName?.toLowerCase() ?? '';
+  if (!tag || tag === 'body' || tag === 'html') return null;
+
+  const pageMain = $('main').first().get(0);
+  if (!pageMain || !isTag(pageMain)) return null;
+
+  const descendants = $(parent).find('*').toArray() as Element[];
+  const railIndex = descendants.findIndex((node) => node === rail);
+  const mainIndex = descendants.findIndex((node) => node === pageMain);
+  if (railIndex < 0 || mainIndex < 0 || railIndex === mainIndex) return null;
+
+  return {
+    layoutWrapperTag: tag,
+    layoutWrapperClasses: classList($(parent)),
+    layoutWrapperRailPosition: railIndex < mainIndex ? 'beforeMain' : 'afterMain',
+  };
+}
+
 export function segmentPage(html: string): Section[] {
   const $ = cheerio.load(html);
   const sections: Section[] = [];
@@ -114,7 +147,7 @@ export function segmentPage(html: string): Section[] {
   // walks ALL top-level nodes when there is no <main>) never double-captures
   // them as body sections.
   const classesOf = (el: ReturnType<typeof $>): string[] =>
-    (el.attr('class') ?? '').split(/\s+/).filter(Boolean);
+    classList(el);
 
   const chromeEls = new Set<Element>();
   const pushChrome = (selector: string, role: SectionRole): void => {
@@ -142,13 +175,15 @@ export function segmentPage(html: string): Section[] {
     if (!isLayoutChromeCandidate($, el)) continue;
     chromeEls.add(el);
     const $el = $(el);
-    sections.push({
+    const section: Section & Partial<LayoutRailWrapperMetadata> = {
       id: stableId($, el, layoutChromeOrdinal),
       role: 'nav',
       chromeSource: 'layout-rail',
       html: $.html(el) ?? '',
       classes: classesOf($el),
-    });
+    };
+    Object.assign(section, findLayoutRailWrapper($, el) ?? {});
+    sections.push(section);
     $el.remove();
     layoutChromeOrdinal += 1;
   }
