@@ -55,6 +55,38 @@ describe('assembleLocalTheme', () => {
     expect(lintThemeJson(JSON.parse(tj?.content ?? '{}')).ok).toBe(true);
   });
 
+  it('adds page-scoped interior chrome templates without changing home templates', () => {
+    const withInterior = assembleLocalTheme({
+      siteTitle: 'Acme',
+      themeSlug: 'acme-local',
+      headerPart: HEADER,
+      footerPart: FOOTER,
+      interiorChromeTemplates: [
+        {
+          templateName: 'page-local-intro-chrome',
+          templateTitle: 'Local Page Chrome (Intro)',
+          partSlug: 'interior-chrome-intro',
+          partMarkup: '<aside id="sidebar" class="sidebar"><nav class="sidebar-nav">Intro</nav></aside>',
+        },
+      ],
+    });
+    const themeJson = JSON.parse(withInterior.find((f) => f.relativePath === 'theme.json')?.content ?? '{}') as {
+      customTemplates?: Array<{ name: string; title: string; postTypes?: string[] }>;
+    };
+    expect(themeJson.customTemplates).toContainEqual({
+      name: 'page-local-intro-chrome',
+      title: 'Local Page Chrome (Intro)',
+      postTypes: ['page'],
+    });
+    expect(withInterior.find((f) => f.relativePath === 'parts/interior-chrome-intro.html')?.content).toContain('sidebar-nav');
+    const interiorTemplate = withInterior.find((f) => f.relativePath === 'templates/page-local-intro-chrome.html')?.content ?? '';
+    expect(interiorTemplate).toContain('wp:template-part {"slug":"interior-chrome-intro","tagName":"aside"}');
+    expect(interiorTemplate).toContain('<!-- wp:post-content /-->');
+    expect(withInterior.find((f) => f.relativePath === 'templates/page-local.html')?.content).not.toContain('interior-chrome-intro');
+    expect(withInterior.find((f) => f.relativePath === 'templates/front-page.html')?.content).not.toContain('interior-chrome-intro');
+    expect(lintThemeJson(JSON.parse(withInterior.find((f) => f.relativePath === 'theme.json')?.content ?? '{}')).ok).toBe(true);
+  });
+
   it('produces unique relativePaths (no duplicates from the swap)', () => {
     const paths = files.map((f) => f.relativePath);
     expect(new Set(paths).size).toBe(paths.length);

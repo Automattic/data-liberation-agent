@@ -141,14 +141,14 @@ vi.mock('node:child_process', async (importOriginal) => {
     }),
   };
 });
-const installedPosts: Array<{ slug: string; sourceUrl: string }> = [];
+const installedPosts: Array<{ slug: string; sourceUrl: string; content: string }> = [];
 let installFailFor: string | null = null;
 vi.mock('../../lib/streaming/post-install.js', () => ({
-  installPost: vi.fn(async ({ item }: { item: { slug: string; sourceUrl: string } }) => {
+  installPost: vi.fn(async ({ item }: { item: { slug: string; sourceUrl: string; content: string } }) => {
     if (installFailFor && item.slug === installFailFor) {
       throw new Error(`synthetic install failure: ${item.slug}`);
     }
-    installedPosts.push({ slug: item.slug, sourceUrl: item.sourceUrl });
+    installedPosts.push({ slug: item.slug, sourceUrl: item.sourceUrl, content: item.content });
     return { sourceUrl: item.sourceUrl, postId: installedPosts.length, action: 'inserted' as const };
   }),
 }));
@@ -392,13 +392,53 @@ function makeInteriorRailLeakSite(): string {
     join(dir, 'reference.html'),
     '<html><head><title>Reference</title><link rel="stylesheet" href="styles.css"></head><body>' +
       '<header id="site-header"><nav><a href="index.html">Home</a></nav></header>' +
+      '<nav id="reference-rail" class="side-rail"><a href="setup.html">Setup</a><a href="api.html">API</a></nav>' +
       '<div class="layout">' +
-      '<aside id="reference-rail" class="side-rail"><nav><a href="setup.html">Setup</a><a href="api.html">API</a></nav></aside>' +
       '<main><section id="reference-copy"><h1>Reference</h1><p>The reference body is present in the emitted page content.</p></section></main>' +
       '</div>' +
       '</body></html>',
   );
   writeFileSync(join(dir, 'styles.css'), '.site-header { display: flex; } .side-rail { position: sticky; top: 0; }');
+  return dir;
+}
+
+function makeInteriorChromeRailSite(): string {
+  mkdirSync(FIXTURE_TMP, { recursive: true });
+  const dir = mkdtempSync(join(FIXTURE_TMP, 'cls-interior-chrome-rail-'));
+  const header = '<header id="site-header" class="site-header"><nav><a href="index.html">Home</a><a href="intro.html">Intro</a><a href="api.html">API</a></nav></header>';
+  const sidebar = (toc: string) =>
+    '<aside id="sidebar" class="sidebar">' +
+    '<nav class="sidebar-nav"><a href="intro.html">Intro</a><a href="api.html">API</a></nav>' +
+    `<ol class="toc-list"><li><a href="#start">${toc}</a></li></ol>` +
+    '</aside>';
+  writeFileSync(
+    join(dir, 'index.html'),
+    '<html><head><title>Home</title><link rel="stylesheet" href="styles.css"></head><body>' +
+      header +
+      '<main><section id="home-copy"><h1>Home</h1><p>The home body is present.</p></section></main>' +
+      '</body></html>',
+  );
+  writeFileSync(
+    join(dir, 'intro.html'),
+    '<html><head><title>Intro</title><link rel="stylesheet" href="styles.css"></head><body>' +
+      header +
+      '<div class="docs-layout">' +
+      sidebar('Intro start') +
+      '<main><section id="intro-copy"><h1>Intro</h1><p>The intro body is present.</p></section></main>' +
+      '</div>' +
+      '</body></html>',
+  );
+  writeFileSync(
+    join(dir, 'api.html'),
+    '<html><head><title>API</title><link rel="stylesheet" href="styles.css"></head><body>' +
+      header +
+      '<div class="docs-layout">' +
+      sidebar('API start') +
+      '<main><section id="api-copy"><h1>API</h1><p>The API body is present.</p></section></main>' +
+      '</div>' +
+      '</body></html>',
+  );
+  writeFileSync(join(dir, 'styles.css'), '.site-header { display: flex; } .sidebar { position: fixed; top: 0; } .sidebar-nav { display: grid; }');
   return dir;
 }
 
@@ -1310,12 +1350,76 @@ describe('convertLocalSiteHandler', () => {
       expect(report.site).toBe(dir);
       expect(report.leaks).toEqual([
         {
-          selector: 'aside#reference-rail.side-rail',
-          role: 'aside',
+          selector: 'nav#reference-rail.side-rail',
+          role: 'nav',
           pageSlug: 'reference',
           reason: 'actionable_region_unplaced',
         },
       ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(sitePath, { recursive: true, force: true });
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
+  it('renders interior-only layout rails as page-scoped theme chrome and clears their leak', async () => {
+    const dir = makeInteriorChromeRailSite();
+    const sitePath = makeStudioSite();
+    const outDir = mkdtempSync(join(FIXTURE_TMP, 'cls-interior-chrome-rail-out-'));
+    try {
+      const res = await convertLocalSiteHandler(
+        { dir, studioSitePath: sitePath, outputDir: outDir, themeSlug: 'acme-local', siteTitle: 'Acme', skipDesign: true },
+        ctx,
+      );
+      expect(res.isError).toBeFalsy();
+      const summary = JSON.parse(res.content[0].text) as {
+        conservationLeaks: { count: number; artifact: string };
+      };
+      expect(summary.conservationLeaks.count).toBe(0);
+
+      const themeDir = join(sitePath, 'wp-content', 'themes', 'acme-local');
+      const headerHtml = readFileSync(join(themeDir, 'parts', 'header.html'), 'utf8');
+      expect(headerHtml).toContain('site-header');
+      expect(headerHtml).not.toContain('sidebar-nav');
+
+      const introPart = readFileSync(join(themeDir, 'parts', 'interior-chrome-intro.html'), 'utf8');
+      const apiPart = readFileSync(join(themeDir, 'parts', 'interior-chrome-api.html'), 'utf8');
+      expect(introPart).toContain('class="sidebar"');
+      expect(introPart).toContain('class="sidebar-nav"');
+      expect(introPart).toContain('href="/api/"');
+      expect(introPart).toContain('Intro start');
+      expect(introPart).not.toContain('API start');
+      expect(apiPart).toContain('API start');
+      expect(apiPart).not.toContain('Intro start');
+
+      const introTemplate = readFileSync(join(themeDir, 'templates', 'page-local-intro-chrome.html'), 'utf8');
+      const apiTemplate = readFileSync(join(themeDir, 'templates', 'page-local-api-chrome.html'), 'utf8');
+      expect(introTemplate).toContain('wp:template-part {"slug":"interior-chrome-intro","tagName":"aside"}');
+      expect(apiTemplate).toContain('wp:template-part {"slug":"interior-chrome-api","tagName":"aside"}');
+      expect(readFileSync(join(themeDir, 'templates', 'front-page.html'), 'utf8')).not.toContain('interior-chrome');
+      expect(readFileSync(join(themeDir, 'templates', 'page-local.html'), 'utf8')).not.toContain('interior-chrome');
+
+      const assigns = [...finalizeCalls[0].payload.templateAssigns].sort((a, b) => a.slug.localeCompare(b.slug));
+      expect(assigns.map((a) => ({ slug: a.slug, template: a.template }))).toEqual([
+        { slug: 'api', template: 'page-local-api-chrome' },
+        { slug: 'home', template: 'page-local' },
+        { slug: 'intro', template: 'page-local-intro-chrome' },
+      ]);
+
+      const introPost = installedPosts.find((p) => p.slug === 'intro')?.content ?? '';
+      const apiPost = installedPosts.find((p) => p.slug === 'api')?.content ?? '';
+      expect(introPost).toContain('The intro body is present.');
+      expect(introPost).not.toContain('sidebar-nav');
+      expect(introPost).not.toContain('Intro start');
+      expect(apiPost).toContain('The API body is present.');
+      expect(apiPost).not.toContain('sidebar-nav');
+      expect(apiPost).not.toContain('API start');
+
+      const report = JSON.parse(readFileSync(join(outDir, 'conservation-leaks.json'), 'utf8')) as {
+        leaks: Array<{ pageSlug: string; selector: string }>;
+      };
+      expect(report.leaks).toEqual([]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
       rmSync(sitePath, { recursive: true, force: true });

@@ -29,8 +29,9 @@ import { themeCacheFlushCommands } from './install-theme.js';
 import { ingestLocalSite } from '../../lib/replicate/local-site/ingest.js';
 import { buildNavGraph } from '../../lib/replicate/local-site/nav-graph.js';
 import { segmentPage } from '../../lib/replicate/normalize/segment.js';
-import { buildHeaderPart, buildCarriedHeaderPart, buildFooterPart, findChromeMounts, mountPartMarkup } from '../../lib/replicate/local-theme/chrome-parts.js';
+import { buildHeaderPart, buildCarriedHeaderPart, buildCarriedSidebarPart, buildFooterPart, findChromeMounts, mountPartMarkup } from '../../lib/replicate/local-theme/chrome-parts.js';
 import { assembleLocalTheme } from '../../lib/replicate/local-theme/theme-files.js';
+import type { InteriorChromeTemplate } from '../../lib/replicate/local-theme/interior-chrome.js';
 import { buildPagePlan } from '../../lib/replicate/local-theme/page-plan.js';
 import { writeReplicaFilesToHost } from '../../lib/preview/replica-install.js';
 import { wpOptionUpdatesForSiteMeta } from '../../lib/preview/site-options.js';
@@ -647,6 +648,7 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
 
   // Chrome: nav from the graph; footer from the home page's captured footer section.
   const nav = buildNavGraph(site);
+  const pageSlugs = site.pages.map((p) => p.slug);
   const home = site.pages.find((p) => p.slug === 'home') ?? site.pages[0];
   const homeSegments = segmentPage(home.html);
   const footerSection = homeSegments.find((s) => s.role === 'footer') ?? null;
@@ -693,7 +695,7 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
   let headerPart: string;
   if (preferCarriedHeader && carriedHeaderSection) {
     headerPart = buildCarriedHeaderPart(carriedHeaderSection, {
-      pageSlugs: site.pages.map((p) => p.slug),
+      pageSlugs,
       instanceStyles: chromeInstanceStyles,
       labelToUrl,
       ...(stickyEmitted ? { sticky: behaviors!.sticky } : {}),
@@ -702,13 +704,13 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
     headerPart = mountPartMarkup(mounts.header, stickyEmitted ? behaviors?.sticky : undefined);
   } else if (chromeCarried && carriedHeaderSection) {
     headerPart = buildCarriedHeaderPart(carriedHeaderSection, {
-      pageSlugs: site.pages.map((p) => p.slug),
+      pageSlugs,
       instanceStyles: chromeInstanceStyles,
       labelToUrl,
       ...(stickyEmitted ? { sticky: behaviors!.sticky } : {}),
     });
   } else {
-    headerPart = buildHeaderPart(siteTitle, nav, site.pages.map((p) => p.slug), {
+    headerPart = buildHeaderPart(siteTitle, nav, pageSlugs, {
       plain: chromeCarried,
       ...(behaviors?.sticky ? { sticky: behaviors.sticky } : {}),
     });
@@ -725,11 +727,26 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
   const footerPart = mounts.footer
     ? mountPartMarkup(mounts.footer)
     : buildFooterPart(footerSection, siteTitle, {
-        pageSlugs: site.pages.map((p) => p.slug),
+        pageSlugs,
         bgToken: chromeCarried ? undefined : footerBgToken,
         textToken: chromeCarried ? undefined : footerTextToken,
         instanceStyles: chromeInstanceStyles,
       });
+
+  const interiorChromeBySlug = new Map<string, InteriorChromeTemplate>();
+  for (const page of site.pages) {
+    if (page.slug === home.slug) continue;
+    const rails = segmentPage(page.html).filter((s) => s.chromeSource === 'layout-rail');
+    if (rails.length === 0) continue;
+    const templateSlug = page.slug.replace(/[^a-z0-9_-]+/gi, '-').replace(/^-+|-+$/g, '') || 'page';
+    const partMarkup = rails.map((rail) => buildCarriedSidebarPart(rail, { pageSlugs })).join('\n');
+    interiorChromeBySlug.set(page.slug, {
+      templateName: `page-local-${templateSlug}-chrome`,
+      templateTitle: `Local Page Chrome (${page.title || page.slug})`,
+      partSlug: `interior-chrome-${templateSlug}`,
+      partMarkup,
+    });
+  }
 
   // Merge the page-body lib-i rules (written by ingest to composed/
   // instance-styles.css) with the chrome rules just collected. Only when CSS is
@@ -791,6 +808,7 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
     carrySourceAssets,
     instanceStylesCss,
     jetpackFormParityCss,
+    interiorChromeTemplates: [...interiorChromeBySlug.values()],
     // Source body data-* attrs by permalink pathname — replayed by the
     // wp_body_open shim so carried JS keyed on body[data-*] behaves
     // identically (active-nav etc.). Only pages that HAVE attrs contribute.
@@ -932,12 +950,13 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
   for (const item of plan.items) {
     const page = site.pages.find((p) => p.slug === item.slug);
     if (!page) continue;
+    const interiorChrome = interiorChromeBySlug.get(item.slug);
     conservationLeaks.push(
       ...checkConservationLeaks({
         pageSlug: item.slug,
         sourceHtml: page.html,
         postContent: item.content,
-        partMarkup: [headerPart, footerPart],
+        partMarkup: [headerPart, footerPart, ...(interiorChrome ? [interiorChrome.partMarkup] : [])],
       }),
     );
   }
@@ -1069,7 +1088,11 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
     }
     const templateAssigns = installed
       .filter((p) => p.postId != null)
-      .map((p) => ({ postId: p.postId as number, slug: p.slug, template: 'page-local' }));
+      .map((p) => ({
+        postId: p.postId as number,
+        slug: p.slug,
+        template: interiorChromeBySlug.get(p.slug)?.templateName ?? 'page-local',
+      }));
     const homeInstall = installed.find((p) => p.slug === plan.homeSlug);
     const frontPageId = homeInstall?.postId != null ? homeInstall.postId : undefined;
     try {

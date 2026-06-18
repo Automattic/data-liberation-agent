@@ -15,6 +15,7 @@ import { buildThemeScaffold } from '../theme-scaffold.js';
 import type { ReplicaFile } from '../../preview/types.js';
 import type { LocalFontFace } from '../font-capture.js';
 import { JETPACK_FORM_PARITY_CSS } from './jetpack-form-parity-contract.js';
+import type { InteriorChromeTemplate } from './interior-chrome.js';
 
 /** Minimal foundation — all DesignFoundation fields are optional; this sets
  *  just enough for buildThemeScaffold to emit a valid theme.json palette/font
@@ -68,6 +69,8 @@ export interface AssembleLocalThemeOpts {
    * page templates' core/post-content so source body-layout rules that key off
    * it (notably a `> * + *` blockGap between page sections) keep matching. */
   mainClass?: string;
+  /** Page-scoped chrome parts/templates for rails that are absent from home. */
+  interiorChromeTemplates?: InteriorChromeTemplate[];
 }
 
 /** No-title page template: header part → post-content → footer part.
@@ -76,7 +79,7 @@ export interface AssembleLocalThemeOpts {
  *  front-page templates. Layout is default (flow) — constrained would inject
  *  a contentSize max-width onto children that fights the carried source
  *  main{max-width} rule (stage 1d parity); the source CSS owns layout. */
-function noTitleTemplate(mainClass?: string): string {
+function noTitleTemplate(mainClass?: string, sidebarPartSlug?: string): string {
   // Carry the source <main> class onto the post-content wrapper: source body
   // layout rules key off it (e.g. a `.<main-class> > * + * { margin-top }`
   // blockGap between page sections). The sections render as post-content's
@@ -85,8 +88,12 @@ function noTitleTemplate(mainClass?: string): string {
   const postContent = mainClass
     ? `<!-- wp:post-content {"className":${JSON.stringify(mainClass)}} /-->`
     : `<!-- wp:post-content /-->`;
+  const sidebarPart = sidebarPartSlug
+    ? `<!-- wp:template-part {"slug":${JSON.stringify(sidebarPartSlug)},"tagName":"aside"} /-->\n\n`
+    : '';
   return (
     `<!-- wp:template-part {"slug":"header","tagName":"header"} /-->\n\n` +
+    sidebarPart +
     `<!-- wp:group {"tagName":"main"} -->\n` +
     `<main class="wp-block-group">\n` +
     `${postContent}\n` +
@@ -257,6 +264,11 @@ export function assembleLocalTheme(opts: AssembleLocalThemeOpts): ReplicaFile[] 
     const customTemplates = [
       ...(parsed.customTemplates ?? []),
       { name: 'page-local', title: 'Local Page (no title)', postTypes: ['page'] },
+      ...(opts.interiorChromeTemplates ?? []).map((t) => ({
+        name: t.templateName,
+        title: t.templateTitle,
+        postTypes: ['page'],
+      })),
     ];
     // Trailing newline matches the scaffold's theme.json emit convention.
     return { ...f, content: JSON.stringify({ ...parsed, customTemplates }, null, 2) + '\n' };
@@ -265,6 +277,13 @@ export function assembleLocalTheme(opts: AssembleLocalThemeOpts): ReplicaFile[] 
   const template = noTitleTemplate(opts.mainClass);
   // page-local: the selectable per-page template assigned via _wp_page_template.
   withTemplates.push({ relativePath: 'templates/page-local.html', content: template });
+  for (const interior of opts.interiorChromeTemplates ?? []) {
+    withTemplates.push({ relativePath: `parts/${interior.partSlug}.html`, content: interior.partMarkup });
+    withTemplates.push({
+      relativePath: `templates/${interior.templateName}.html`,
+      content: noTitleTemplate(opts.mainClass, interior.partSlug),
+    });
+  }
   // front-page.html: WP serves this at the site root when static front page is set;
   // same shape ensures the home page also uses the no-title layout.
   // buildThemeScaffold does NOT emit front-page.html with a minimal call (only
