@@ -2,6 +2,7 @@
 import { describe, it, expect } from 'vitest';
 import { assembleLocalTheme } from './theme-files.js';
 import { lintThemeJson } from '../theme-json-lint.js';
+import { JETPACK_FORM_PARITY_CSS } from './jetpack-form-parity-contract.js';
 
 const HEADER = '<!-- wp:site-title {"level":0} /-->';
 const FOOTER = '<!-- wp:paragraph -->\n<p>foot</p>\n<!-- /wp:paragraph -->';
@@ -302,6 +303,52 @@ describe('instance-styles carry (per-instance lib-i rules)', () => {
       instanceStylesCss: '.lib-iabc123{max-width:46ch}',
     });
     expect(files.some((f) => f.relativePath === 'assets/css/instance-styles.css')).toBe(false);
+  });
+});
+
+describe('Jetpack form parity CSS carry', () => {
+  it('writes the contract asset and loads it after source/instance styles but before parity-patch', () => {
+    const files = assembleLocalTheme({
+      siteTitle: 'A',
+      themeSlug: 'a-local',
+      headerPart: HEADER,
+      footerPart: FOOTER,
+      carrySourceAssets: { css: 'body{}', js: '' },
+      instanceStylesCss: '.lib-iabc123{max-width:46ch}',
+      jetpackFormParityCss: '.wp-block-jetpack-contact-form{gap:1rem}',
+    });
+    expect(files.find((f) => f.relativePath === JETPACK_FORM_PARITY_CSS.themeRelativePath)?.content).toBe(
+      '.wp-block-jetpack-contact-form{gap:1rem}\n',
+    );
+
+    const fns = files.find((f) => f.relativePath === 'functions.php')?.content ?? '';
+    const sourceIdx = fns.indexOf("wp_enqueue_style( 'a-local-source'");
+    const instanceIdx = fns.indexOf("wp_enqueue_style( 'a-local-instance'");
+    const jetpackIdx = fns.indexOf("wp_enqueue_style( 'a-local-jetpack-form-parity'");
+    const patchIdx = fns.indexOf("wp_enqueue_style( 'a-local-parity-patch'");
+    expect([sourceIdx, instanceIdx, jetpackIdx, patchIdx].every((idx) => idx >= 0)).toBe(true);
+    expect(sourceIdx).toBeLessThan(instanceIdx);
+    expect(instanceIdx).toBeLessThan(jetpackIdx);
+    expect(jetpackIdx).toBeLessThan(patchIdx);
+    expect(fns).toContain("$jetpack_deps = array( 'a-local-instance' );");
+    expect(fns).toContain("$deps = array( 'a-local-jetpack-form-parity' );");
+    expect(fns).toContain(
+      "'assets/css/source.css', 'assets/css/instance-styles.css', 'assets/css/jetpack-form-parity.css', 'assets/css/parity-patch.css'",
+    );
+  });
+
+  it('does not write or enqueue Jetpack form parity CSS when the stylesheet is empty', () => {
+    const files = assembleLocalTheme({
+      siteTitle: 'A',
+      themeSlug: 'a-local',
+      headerPart: HEADER,
+      footerPart: FOOTER,
+      carrySourceAssets: { css: 'body{}', js: '' },
+      jetpackFormParityCss: '   ',
+    });
+    expect(files.some((f) => f.relativePath === JETPACK_FORM_PARITY_CSS.themeRelativePath)).toBe(false);
+    const fns = files.find((f) => f.relativePath === 'functions.php')?.content ?? '';
+    expect(fns).not.toContain('jetpack-form-parity');
   });
 });
 

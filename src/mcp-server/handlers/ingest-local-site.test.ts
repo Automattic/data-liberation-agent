@@ -69,6 +69,40 @@ describe('ingestLocalSiteHandler', () => {
     }
   });
 
+  it('converts local contact forms to Jetpack form blocks and reports formsConverted', async () => {
+    mkdirSync(FIXTURE_TMP, { recursive: true });
+    const siteDir = mkdtempSync(join(FIXTURE_TMP, 'site-form-'));
+    const outDir = mkdtempSync(join(FIXTURE_TMP, 'out-form-'));
+    writeFileSync(
+      join(siteDir, 'index.html'),
+      '<body><main><section id="contact"><h1>Contact</h1>' +
+        '<form id="contact-form" class="contact-form" action="/contact" method="post">' +
+        '<label for="contact-name">Name</label>' +
+        '<input id="contact-name" name="name" autocomplete="name" type="text" required placeholder="Jane Doe">' +
+        '<label for="contact-email">Email</label>' +
+        '<input id="contact-email" name="email" type="email" required placeholder="jane@example.com">' +
+        '<label for="contact-message">Message</label>' +
+        '<textarea id="contact-message" name="message" required placeholder="How can we help?"></textarea>' +
+        '<button type="submit">Send message</button>' +
+        '</form></section></main></body>',
+    );
+    try {
+      const res = await ingestLocalSiteHandler({ dir: siteDir, outputDir: outDir }, ctx);
+      expect(res.isError).toBeFalsy();
+      const sidecar = readFileSync(join(outDir, 'composed', 'home.blocks.html'), 'utf8');
+      expect(sidecar).toContain('wp:jetpack/contact-form');
+      expect(sidecar).not.toContain('<!-- wp:html -->');
+      expect(sidecar).not.toMatch(
+        /<!-- wp:html -->\s*<form\b[^>]*(?:id="contact-form"|class="contact-form")[\s\S]*?<!-- \/wp:html -->/,
+      );
+      const summary = JSON.parse(res.content[0].text) as { formsConverted: number };
+      expect(summary.formsConverted).toBeGreaterThanOrEqual(1);
+    } finally {
+      rmSync(siteDir, { recursive: true, force: true });
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
   it('returns an error result for a dir with no html', async () => {
     mkdirSync(FIXTURE_TMP, { recursive: true });
     const siteDir = mkdtempSync(join(FIXTURE_TMP, 'empty-'));

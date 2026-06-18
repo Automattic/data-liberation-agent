@@ -11,6 +11,7 @@ import type { LocalPage, NormalizeReportEntry, RevealBehavior, Section, SectionB
 export interface ComposePageResult {
   postContent: string;
   report: NormalizeReportEntry[];
+  formsConverted: number;
   /** Registered-metadata contract issues (WARNING-level — the emitter is
    * contract-clean by construction; non-empty = an emitter bug to fix). */
   contractIssues: BlockContractIssue[];
@@ -51,6 +52,9 @@ export interface ComposePageOpts {
    * classes. Query-loop MOUNTS (empty id-bearing divs) are excluded — they
    * still emit as anchor-groups for injectQueryLoops. Default false. */
   verbatimInteractive?: boolean;
+  /** Local compose path: convert eligible source forms into Jetpack Forms blocks.
+   * Default false so existing non-local callers remain byte-identical. */
+  jetpackForms?: boolean;
 }
 
 export function composePage(page: LocalPage, opts: ComposePageOpts = {}): ComposePageResult {
@@ -67,18 +71,21 @@ export function composePage(page: LocalPage, opts: ComposePageOpts = {}): Compos
       return opts.reveal ? { ...s, behavior: opts.reveal } : s;
     });
   // Genuinely empty page: nothing to validate, skip the roundtrip gate.
-  if (bodySections.length === 0) return { postContent: '', report: [], contractIssues: [] };
+  if (bodySections.length === 0) return { postContent: '', report: [], formsConverted: 0, contractIssues: [] };
 
   const skeleton: LayoutSkeleton = { sections: [] };
   const pageContent: Record<string, string> = {};
   const report: NormalizeReportEntry[] = [];
+  let formsConverted = 0;
 
   for (const section of bodySections) {
-    const { markup, confidence } = emitSectionBlocks(section, {
+    const { markup, confidence, formsConverted: sectionFormsConverted } = emitSectionBlocks(section, {
       behaviorWrapper: native ? 'dla' : 'group',
       instanceStyles: opts.instanceStyles,
       verbatimInteractive: opts.verbatimInteractive,
+      jetpackForms: opts.jetpackForms,
     });
+    formsConverted += sectionFormsConverted;
     skeleton.sections.push({ type: 'content', slots: [section.id] });
     pageContent[section.id] = markup;
     // blockType reflects the WRAPPER EMITTED: carry-tagged sections wrap as
@@ -110,5 +117,5 @@ export function composePage(page: LocalPage, opts: ComposePageOpts = {}): Compos
   }
   // Warning-level sibling of the roundtrip gate: emitted attrs vs registered
   // core metadata (never throws; dla/* + core/html allowlisted in the check).
-  return { postContent, report, contractIssues: validateBlockContract(postContent) };
+  return { postContent, report, formsConverted, contractIssues: validateBlockContract(postContent) };
 }

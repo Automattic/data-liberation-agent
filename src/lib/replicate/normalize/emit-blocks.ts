@@ -5,6 +5,7 @@ import { isTag, isText } from 'domhandler';
 import type { Element } from 'domhandler';
 import type { ModalBehavior, Section, SliderBehavior, TabsBehavior } from '../local-site/types.js';
 import { InstanceStyleSheet } from './instance-styles.js';
+import { emitJetpackForm } from './jetpack-form.js';
 
 import { escapeHtmlAttr as escapeHtml } from '../../html-escape.js';
 export { escapeHtml };
@@ -154,6 +155,12 @@ interface ChildResult {
   clean: boolean;
 }
 
+interface EmitChildOpts {
+  verbatimInteractive?: boolean;
+  jetpackForms?: boolean;
+  onJetpackForm?: (fieldCount: number) => void;
+}
+
 /** An interactive/icon subtree the block conversion cannot represent without
  * loss: a <button>-toggled dropdown nav, a search/form control, or an inline
  * <svg> icon. core/list strips `button svg` + unwraps the <button> to bare
@@ -199,20 +206,39 @@ function containsMount($: CheerioAPI, el: Element): boolean {
     });
 }
 
+function containsConvertibleJetpackForm($: CheerioAPI, el: Element, sheet: InstanceStyleSheet): boolean {
+  if ((el.tagName ?? '').toLowerCase() === 'form') return false;
+  return ($(el).find('form').toArray() as Element[]).some((form) => emitJetpackForm($, form, sheet) !== null);
+}
+
 /** Map a single child element to a core block. clean=false when downgraded.
  * vi (verbatimInteractive) routes interactive subtrees to a verbatim core/html
  * island instead of the lossy list/group path — passed only by the carried
  * chrome parts, where the island is later unwrapped to raw HTML. */
-function emitChild($: CheerioAPI, el: Element, sheet: InstanceStyleSheet, vi = false): ChildResult {
+function emitChild($: CheerioAPI, el: Element, sheet: InstanceStyleSheet, opts: EmitChildOpts = {}): ChildResult {
   const tag = el.tagName?.toLowerCase() ?? '';
   const $el = $(el);
+
+  if (opts.jetpackForms) {
+    const emitted = emitJetpackForm($, el, sheet);
+    if (emitted) {
+      opts.onJetpackForm?.(emitted.fieldCount);
+      return { markup: emitted.markup, clean: true };
+    }
+  }
+  const shouldRecurseForJetpackForm = opts.jetpackForms && containsConvertibleJetpackForm($, el, sheet);
 
   // verbatimInteractive (chrome carry): keep the whole interactive subtree
   // byte-true as a core/html island so the carried CSS (:hover/.is-open) and
   // site JS (button toggles, submenu reveal) keep matching the real DOM. The
   // chrome part unwraps the island to raw markup; theme policy then sees plain
   // HTML, not a custom-html block. "never lose source content".
-  if (vi && !containsMount($, el) && (isInteractiveSubtree($, el) || isStylingHook($, el))) {
+  if (
+    opts.verbatimInteractive &&
+    !shouldRecurseForJetpackForm &&
+    !containsMount($, el) &&
+    (isInteractiveSubtree($, el) || isStylingHook($, el))
+  ) {
     return { markup: htmlBlock(($.html(el) ?? '').trim()), clean: true };
   }
 
@@ -366,7 +392,7 @@ function emitChild($: CheerioAPI, el: Element, sheet: InstanceStyleSheet, vi = f
       body = htmlBlock(inlineHtml($, el).trim());
       clean = true;
     } else {
-      const childResults = elementChildren.map((c) => emitChild($, c, sheet, vi));
+      const childResults = elementChildren.map((c) => emitChild($, c, sheet, opts));
       const inner = childResults.map((r) => r.markup).filter(Boolean).join('\n');
       const looseText = $el.clone().children().remove().end().text().trim();
       const loosePara = looseText && childResults.length === 0 ? paragraphBlock(escapeHtml(looseText)) : '';
@@ -433,6 +459,9 @@ export interface EmitSectionOpts {
    * and the <li> classes the carried CSS + JS key off. The chrome parts unwrap
    * the islands to raw HTML. Default false (body sections blockify normally). */
   verbatimInteractive?: boolean;
+  /** Local compose path: convert eligible source forms to Jetpack Forms blocks
+   * before the verbatim-interactive fallback. Default false. */
+  jetpackForms?: boolean;
 }
 
 /** Fail-closed insurance shared by both verbatim wrappers: an inner HTML
@@ -491,9 +520,10 @@ function verbatimBehaviorMarkup(
 export function emitSectionBlocks(
   section: Section,
   opts: EmitSectionOpts = {},
-): { markup: string; confidence: number; instanceStyles: InstanceStyleSheet } {
+): { markup: string; confidence: number; instanceStyles: InstanceStyleSheet; formsConverted: number } {
   const sheet = opts.instanceStyles ?? new InstanceStyleSheet();
   const $ = cheerio.load(section.html);
+  let formsConverted = 0;
   // Include 'main' so that segmentPage's main-fallback case (which emits a
   // <main> outerHTML as one Section) resolves its container correctly.
   // DEVIATION from plan: plan's selector was 'section, article, div' — that
@@ -533,16 +563,24 @@ export function emitSectionBlocks(
           `<!-- /wp:group -->`,
         confidence: 1,
         instanceStyles: sheet,
+        formsConverted,
       };
     }
     return {
       markup: verbatimBehaviorMarkup(section, section.behavior, inner),
       confidence: 1,
       instanceStyles: sheet,
+      formsConverted,
     };
   }
 
-  const vi = opts.verbatimInteractive ?? false;
+  const childOpts: EmitChildOpts = {
+    verbatimInteractive: opts.verbatimInteractive ?? false,
+    jetpackForms: opts.jetpackForms ?? false,
+    onJetpackForm: () => {
+      formsConverted += 1;
+    },
+  };
   const childMarkup: string[] = [];
   let downgrades = 0;
   let total = 0;
@@ -552,7 +590,7 @@ export function emitSectionBlocks(
   for (const node of container.contents().get()) {
     if (isTag(node)) {
       total += 1;
-      const res = emitChild($, node, sheet, vi);
+      const res = emitChild($, node, sheet, childOpts);
       if (!res.clean) downgrades += 1;
       childMarkup.push(res.markup);
     } else if (isText(node)) {
@@ -600,7 +638,7 @@ export function emitSectionBlocks(
       ` data-wp-interactive="dla/reveal" data-wp-context='${ctx}'` +
       ` data-wp-init="callbacks.init" data-wp-class--is-visible="context.visible">${inner}</section>\n` +
       `<!-- /wp:dla/reveal -->`;
-    return { markup, confidence, instanceStyles: sheet };
+    return { markup, confidence, instanceStyles: sheet, formsConverted };
   }
 
   const anchorPair = `"anchor":${attrJson(section.id)}`;
@@ -627,5 +665,5 @@ export function emitSectionBlocks(
     `<!-- wp:group${attrs} -->\n` +
     `<${wrapper} id="${escapeHtml(section.id)}" class="${escapeHtml(divCls)}">${inner}</${wrapper}>\n` +
     `<!-- /wp:group -->`;
-  return { markup, confidence, instanceStyles: sheet };
+  return { markup, confidence, instanceStyles: sheet, formsConverted };
 }

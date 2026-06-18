@@ -14,6 +14,7 @@
 import { buildThemeScaffold } from '../theme-scaffold.js';
 import type { ReplicaFile } from '../../preview/types.js';
 import type { LocalFontFace } from '../font-capture.js';
+import { JETPACK_FORM_PARITY_CSS } from './jetpack-form-parity-contract.js';
 
 /** Minimal foundation — all DesignFoundation fields are optional; this sets
  *  just enough for buildThemeScaffold to emit a valid theme.json palette/font
@@ -53,6 +54,10 @@ export interface AssembleLocalThemeOpts {
    * editor canvas. Empty/absent → no file, no enqueue. Only meaningful when
    * carrySourceAssets carries CSS. */
   instanceStylesCss?: string;
+  /** Jetpack form parity rules derived from carried source CSS. Written and
+   * enqueued only when non-empty, after source/instance CSS and before the
+   * deterministic parity patch. */
+  jetpackFormParityCss?: string;
   /** Source body data-* attributes per permalink pathname (keys WITHOUT the
    * data- prefix). Replayed by a wp_body_open shim before any deferred script
    * runs — JS-rendered sites key behavior off them (body[data-page] active
@@ -104,6 +109,7 @@ function carryEnqueueBlock(
   themeSlug: string,
   emitHtmlJsGate: boolean,
   bodyDataByPath?: Record<string, Record<string, string>>,
+  includeJetpackFormParity = false,
 ): string {
   const htmlJsBlock = emitHtmlJsGate
     ? `
@@ -126,6 +132,51 @@ add_action( 'wp_body_open', function () {
 } );
 `
       : '';
+  const jetpackPath = JETPACK_FORM_PARITY_CSS.themeRelativePath;
+  const jetpackHandle = `${themeSlug}-${JETPACK_FORM_PARITY_CSS.frontendHandleSuffix}`;
+  const jetpackEnqueueBlock = includeJetpackFormParity
+    ? `
+    $jetpack_form = get_theme_file_path( '${jetpackPath}' );
+    $jetpack_form_mtime = @filemtime( $jetpack_form );
+    if ( false !== $jetpack_form_mtime ) {
+        if ( false !== $inst_mtime ) {
+            $jetpack_deps = array( '${themeSlug}-instance' );
+        } elseif ( false !== $css_mtime ) {
+            $jetpack_deps = array( '${themeSlug}-source' );
+        } else {
+            $jetpack_deps = array( '${themeSlug}-style' );
+        }
+        wp_enqueue_style( '${jetpackHandle}', get_theme_file_uri( '${jetpackPath}' ), $jetpack_deps, (string) $jetpack_form_mtime );
+    }
+`
+    : '';
+  const patchDepsBlock = includeJetpackFormParity
+    ? `        if ( false !== $jetpack_form_mtime ) {
+            $deps = array( '${jetpackHandle}' );
+        } elseif ( false !== $inst_mtime ) {
+            $deps = array( '${themeSlug}-instance' );
+        } elseif ( false !== $css_mtime ) {
+            $deps = array( '${themeSlug}-source' );
+        } else {
+            $deps = array( '${themeSlug}-style' );
+        }`
+    : `        if ( false !== $inst_mtime ) {
+            $deps = array( '${themeSlug}-instance' );
+        } elseif ( false !== $css_mtime ) {
+            $deps = array( '${themeSlug}-source' );
+        } else {
+            $deps = array( '${themeSlug}-style' );
+        }`;
+  const editorStylePaths = [
+    'assets/css/source.css',
+    'assets/css/instance-styles.css',
+    ...(includeJetpackFormParity ? [JETPACK_FORM_PARITY_CSS.editorStylePath] : []),
+    'assets/css/parity-patch.css',
+  ];
+  const cascadeComment = includeJetpackFormParity
+    ? `// wins) → jetpack-form-parity.css (form-specific carried CSS bridge) →
+// parity-patch.css (final deterministic fixes).`
+    : `// wins) → parity-patch.css (final deterministic fixes).`;
   return `
 // Stage 1d carry: the source site's own CSS/JS, adapted for the block DOM.
 // Enqueued at priority 20 so it lands AFTER global styles + theme style.
@@ -136,7 +187,7 @@ add_action( 'wp_body_open', function () {
 //
 // Cascade order is load-bearing: theme style → source.css → instance-styles.css
 // (per-instance lib-i rules override class defaults; equal specificity, later
-// wins) → parity-patch.css (final deterministic fixes).
+${cascadeComment}
 add_action( 'wp_enqueue_scripts', function () {
     $css = get_theme_file_path( 'assets/css/source.css' );
     $css_mtime = @filemtime( $css );
@@ -154,16 +205,11 @@ add_action( 'wp_enqueue_scripts', function () {
         $inst_deps = false !== $css_mtime ? array( '${themeSlug}-source' ) : array( '${themeSlug}-style' );
         wp_enqueue_style( '${themeSlug}-instance', get_theme_file_uri( 'assets/css/instance-styles.css' ), $inst_deps, (string) $inst_mtime );
     }
+${jetpackEnqueueBlock}
     $patch = get_theme_file_path( 'assets/css/parity-patch.css' );
     $patch_mtime = @filemtime( $patch );
     if ( false !== $patch_mtime ) {
-        if ( false !== $inst_mtime ) {
-            $deps = array( '${themeSlug}-instance' );
-        } elseif ( false !== $css_mtime ) {
-            $deps = array( '${themeSlug}-source' );
-        } else {
-            $deps = array( '${themeSlug}-style' );
-        }
+${patchDepsBlock}
         wp_enqueue_style( '${themeSlug}-parity-patch', get_theme_file_uri( 'assets/css/parity-patch.css' ), $deps, (string) $patch_mtime );
     }
 }, 20 );
@@ -173,7 +219,7 @@ add_action( 'wp_enqueue_scripts', function () {
 // cascade order; file_exists guards keep it safe when an asset is absent.
 add_action( 'after_setup_theme', function () {
     add_theme_support( 'editor-styles' );
-    foreach ( array( 'assets/css/source.css', 'assets/css/instance-styles.css', 'assets/css/parity-patch.css' ) as $rel ) {
+    foreach ( array( ${editorStylePaths.map((p) => `'${p}'`).join(', ')} ) as $rel ) {
         if ( file_exists( get_theme_file_path( $rel ) ) ) {
             add_editor_style( $rel );
         }
@@ -226,10 +272,14 @@ export function assembleLocalTheme(opts: AssembleLocalThemeOpts): ReplicaFile[] 
   // so no duplicate path is introduced.
   withTemplates.push({ relativePath: 'templates/front-page.html', content: template });
 
+  const jetpackFormParityCss = (opts.jetpackFormParityCss ?? '').trim();
+  const hasJetpackFormParityCss = jetpackFormParityCss.length > 0;
+
   // Stage 1d carry: wire source CSS/JS into the theme so the class-preserving
-  // block DOM renders under the designer's own stylesheet.
-  if (opts.carrySourceAssets) {
-    const { css, js } = opts.carrySourceAssets;
+  // block DOM renders under the designer's own stylesheet. Jetpack form parity
+  // CSS rides the same cascade block when present.
+  if (opts.carrySourceAssets || hasJetpackFormParityCss) {
+    const { css, js } = opts.carrySourceAssets ?? { css: '', js: '' };
     const hasCSS = css.trim().length > 0;
     const hasJS = js.trim().length > 0;
 
@@ -261,6 +311,9 @@ export function assembleLocalTheme(opts: AssembleLocalThemeOpts): ReplicaFile[] 
     if (hasJS) {
       withTemplates.push({ relativePath: 'assets/js/source.js', content: js });
     }
+    if (hasJetpackFormParityCss) {
+      withTemplates.push({ relativePath: JETPACK_FORM_PARITY_CSS.themeRelativePath, content: jetpackFormParityCss + '\n' });
+    }
     // Per-instance lib-i rules ride a sibling asset (loaded after source.css on
     // both the frontend and the editor canvas). Only when CSS is carried — the
     // rules are meaningless without the source stylesheet they refine.
@@ -276,7 +329,14 @@ export function assembleLocalTheme(opts: AssembleLocalThemeOpts): ReplicaFile[] 
     if (fIdx >= 0) {
       withTemplates[fIdx] = {
         ...withTemplates[fIdx],
-        content: withTemplates[fIdx].content + carryEnqueueBlock(opts.themeSlug, hasJS, opts.bodyDataByPath),
+        content:
+          withTemplates[fIdx].content +
+          carryEnqueueBlock(
+            opts.themeSlug,
+            hasJS,
+            opts.carrySourceAssets ? opts.bodyDataByPath : undefined,
+            hasJetpackFormParityCss,
+          ),
       };
     }
   }

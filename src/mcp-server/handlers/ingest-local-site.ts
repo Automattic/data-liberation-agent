@@ -77,6 +77,7 @@ export const ingestLocalSiteHandler: Handler = async (args, ctx) => {
   const entries: Array<NormalizeReportEntry & { slug: string }> = [];
   const failedPages: Array<{ slug: string; error: string }> = [];
   const emptyPages: string[] = [];
+  let formsConverted = 0;
   // Warning-level block-contract issues (emitter-bug dial — see block-contract.ts).
   const contractIssues: Array<{ slug: string; code: string; blockName: string; detail: string }> = [];
 
@@ -116,7 +117,9 @@ export const ingestLocalSiteHandler: Handler = async (args, ctx) => {
           // the block conversion otherwise silently drops them. Query-loop
           // mounts are excluded (id-bearing), so the data path is unaffected.
           verbatimInteractive: true,
+          jetpackForms: true,
         });
+        formsConverted += composed.formsConverted;
         const { postContent, report } = composed;
         if (postContent === '' && report.length === 0) emptyPages.push(page.slug);
         const fixed = (await blockFixer.fix([postContent]))[0];
@@ -195,6 +198,7 @@ export const ingestLocalSiteHandler: Handler = async (args, ctx) => {
     emptyPages,
     reportPath,
     contractIssues: contractIssues.length,
+    formsConverted,
     // Per-instance inline styles carried as lib-i classes + rules (editor-valid).
     instanceStyleRules: instanceStyles.size,
     // Standalone observability (key absent when the flag is off): what
