@@ -209,11 +209,14 @@ vi.mock('../../lib/streaming/site-finalize.js', () => ({
 }));
 
 import { convertLocalSiteHandler } from './convert-local-site.js';
+import { ingestLocalSiteHandler } from './ingest-local-site.js';
 // Resolves to the vi.mock above — imported so tests can inject one-shot failures.
 import { captureScreenshots } from '../../lib/screenshot/screenshotter.js';
 // Resolved vi.mocked instances for per-test once-value injection.
 import { compareScreenshotDirs } from '../../lib/screenshot/compare.js';
 import { probePair } from '../../lib/replicate/parity/parity-probe.js';
+import { composedSidecarPath } from '../../lib/streaming/block-markup-validate.js';
+import { EDITABLE_PLUGIN_SLUG } from '../../blocks/editable-html-plugin.js';
 
 const FIXTURE_TMP = join(process.cwd(), '.tmp-test');
 
@@ -240,6 +243,18 @@ function makeSite(): string {
   // Stage 1d carry: linked CSS + JS the collector picks up from the index.html document order.
   writeFileSync(join(dir, 'styles.css'), 'body { background: #f7f2e9; }\n.hero h1 { font-size: 4rem; }');
   writeFileSync(join(dir, 'site.js'), "document.documentElement.classList.add('js');");
+  return dir;
+}
+
+function makeEditableIslandSite(): string {
+  mkdirSync(FIXTURE_TMP, { recursive: true });
+  const dir = mkdtempSync(join(FIXTURE_TMP, 'cls-editable-'));
+  writeFileSync(
+    join(dir, 'index.html'),
+    '<html><head><title>Editable</title></head><body><main>' +
+      '<section id="cards"><div class="card"><svg viewBox="0 0 1 1"><path d="M0 0"/></svg><p>Hi</p></div></section>' +
+      '</main></body></html>',
+  );
   return dir;
 }
 
@@ -644,6 +659,47 @@ beforeEach(() => {
 });
 
 describe('convertLocalSiteHandler', () => {
+  it('editableIslands: ingest converts text islands into bindable blocks', async () => {
+    const dir = makeEditableIslandSite();
+    const outDir = mkdtempSync(join(FIXTURE_TMP, 'cls-editable-out-'));
+    try {
+      const res = await ingestLocalSiteHandler({ dir, outputDir: outDir, editableIslands: true }, ctx);
+      expect(res.isError).toBeFalsy();
+      const summary = JSON.parse(res.content[0].text) as { islandsConverted?: number };
+      expect(summary.islandsConverted).toBeGreaterThan(0);
+
+      const sidecar = readFileSync(composedSidecarPath(outDir, 'home'), 'utf8');
+      expect(sidecar).toContain('<!-- wp:dla/editable-html ');
+      expect(sidecar).toContain('<p>Hi</p>');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
+  it('editableIslands: convert ships and activates the bindable plugin when islands convert', async () => {
+    const dir = makeEditableIslandSite();
+    const sitePath = makeStudioSite();
+    const outDir = mkdtempSync(join(FIXTURE_TMP, 'cls-editable-convert-'));
+    try {
+      const res = await convertLocalSiteHandler(
+        { dir, studioSitePath: sitePath, outputDir: outDir, themeSlug: 'acme-local', siteTitle: 'Acme', skipDesign: true, editableIslands: true },
+        ctx,
+      );
+      expect(res.isError).toBeFalsy();
+      const summary = JSON.parse(res.content[0].text) as { islandsConverted?: number };
+      expect(summary.islandsConverted).toBeGreaterThan(0);
+      expect(existsSync(join(sitePath, 'wp-content', 'plugins', EDITABLE_PLUGIN_SLUG, 'plugin.php'))).toBe(true);
+      expect(existsSync(join(sitePath, 'wp-content', 'plugins', EDITABLE_PLUGIN_SLUG, 'blocks', 'editable-html', 'editor.js'))).toBe(true);
+      const flat = execCalls.map((c) => c.join(' '));
+      expect(flat.some((c) => c.includes(`plugin activate ${EDITABLE_PLUGIN_SLUG}`))).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(sitePath, { recursive: true, force: true });
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
   it('runs the full pipeline: sidecars → theme files on disk → pages installed → front page set', async () => {
     const dir = makeSite();
     const sitePath = makeStudioSite();

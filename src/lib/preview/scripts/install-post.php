@@ -102,7 +102,10 @@ if (!empty($existing)) {
         $update['post_date'] = $post_data['date'];
     }
 
-    $result = wp_update_post($update, true);
+    // wp_update_post() runs wp_unslash() internally, so slash first or it
+    // strips backslashes from block-attribute JSON (e.g. dla/editable-html's
+    // `frame` escapes \n and -), invalidating the block in the editor.
+    $result = wp_update_post(wp_slash($update), true);
     if (is_wp_error($result)) {
         echo json_encode(array(
             'post_id' => null,
@@ -131,7 +134,10 @@ $postarr = array(
     'meta_input'   => $base_meta,
 );
 
-$id = wp_insert_post($postarr, true, true);
+// wp_slash() before insert: wp_insert_post() unslashes internally, which would
+// otherwise strip backslashes from block-attribute JSON (dla/editable-html
+// `frame`), invalidating the block. Slash→unslash is identity for plain text.
+$id = wp_insert_post(wp_slash($postarr), true, true);
 if (is_wp_error($id)) {
     echo json_encode(array(
         'post_id' => null,

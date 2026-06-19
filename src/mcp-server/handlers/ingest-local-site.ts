@@ -15,6 +15,7 @@ import { composedSidecarPath, instanceStylesPath } from '../../lib/streaming/blo
 import { BlockFixerClient } from '../../lib/streaming/block-fixer-client.js';
 import { ingestLocalSite } from '../../lib/replicate/local-site/ingest.js';
 import { composePage } from '../../lib/replicate/normalize/compose-page.js';
+import { makeIslandsEditable } from '../../lib/replicate/normalize/make-islands-editable.js';
 import { InstanceStyleSheet } from '../../lib/replicate/normalize/instance-styles.js';
 import { neutralizeStaticCards } from '../../lib/replicate/local-data/neutralize-static-cards.js';
 import type { MountSpec } from '../../lib/replicate/local-data/types.js';
@@ -37,6 +38,7 @@ export const ingestLocalSiteHandler: Handler = async (args, ctx) => {
   const dir = args.dir as string | undefined;
   const outputDir = (args.outputDir as string | undefined) ?? dir;
   const nativeBehaviors = args.nativeBehaviors === true;
+  const editableIslands = args.editableIslands === true;
   const cardMounts = (args.cardMounts as MountSpec[] | undefined) ?? [];
   if (!dir) return ctx.errorResult('dir is required');
   if (!outputDir) return ctx.errorResult('outputDir is required');
@@ -78,6 +80,7 @@ export const ingestLocalSiteHandler: Handler = async (args, ctx) => {
   const failedPages: Array<{ slug: string; error: string }> = [];
   const emptyPages: string[] = [];
   let formsConverted = 0;
+  let islandsConverted = 0;
   // Warning-level block-contract issues (emitter-bug dial — see block-contract.ts).
   const contractIssues: Array<{ slug: string; code: string; blockName: string; detail: string }> = [];
 
@@ -120,7 +123,13 @@ export const ingestLocalSiteHandler: Handler = async (args, ctx) => {
           jetpackForms: true,
         });
         formsConverted += composed.formsConverted;
-        const { postContent, report } = composed;
+        let { postContent } = composed;
+        const { report } = composed;
+        if (editableIslands) {
+          const editable = makeIslandsEditable(postContent);
+          postContent = editable.content;
+          islandsConverted += editable.converted;
+        }
         if (postContent === '' && report.length === 0) emptyPages.push(page.slug);
         const fixed = (await blockFixer.fix([postContent]))[0];
         const finalContent = fixed?.html ?? postContent;
@@ -199,6 +208,7 @@ export const ingestLocalSiteHandler: Handler = async (args, ctx) => {
     reportPath,
     contractIssues: contractIssues.length,
     formsConverted,
+    ...(editableIslands ? { islandsConverted } : {}),
     // Per-instance inline styles carried as lib-i classes + rules (editor-valid).
     instanceStyleRules: instanceStyles.size,
     // Standalone observability (key absent when the flag is off): what
