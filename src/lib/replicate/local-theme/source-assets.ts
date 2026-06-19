@@ -51,16 +51,19 @@ nav.wp-block-navigation ul, nav.wp-block-navigation li { display: contents; }
 /* core/button renders TWO boxes: the source button class lands on the
    .wp-block-button WRAPPER (core/button stores className there; the fixer
    strips it off the inner link), so the carried .btn/.btn-* rules style the
-   wrapper pill — while WP still paints the inner .wp-block-button__link with
-   its own default button chrome (fill bg + padding + radius), a second pill
-   inside the source one. Strip the inner link's box so the carried wrapper
-   style renders once. The lib-cta marker (emit-blocks) scopes this to carried
+   wrapper pill — while the inner .wp-block-button__link still carries BOTH WP's
+   default button chrome (fill bg + padding + radius) AND the carried source
+   button class the emitter writes onto the link (a .btn box-shadow of 6px 6px 0
+   ink casts a hard offset shadow behind the label — the double-border bug). Strip the
+   inner link's whole box (incl. box-shadow) so the carried wrapper style renders
+   once. The lib-cta marker (emit-blocks) scopes this to carried
    buttons so genuine native core/button blocks keep their chrome; class-level
    specificity beats WP's :where()/global-styles button defaults, and source
    stylesheets never target wp-* classes. */
 .wp-block-button.lib-cta > .wp-block-button__link {
   background: transparent;
   border: 0;
+  box-shadow: none;
   padding: 0;
   border-radius: inherit;
   color: inherit;

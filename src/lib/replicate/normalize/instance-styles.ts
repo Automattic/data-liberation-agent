@@ -73,6 +73,12 @@ export class InstanceStyleSheet {
    * Emit the stylesheet: one rule per unique declaration set, sorted by class
    * for byte-stable output (so re-runs produce an identical instance-styles.css
    * and don't churn the theme / bust caches needlessly).
+   *
+   * No `!important`: the carried sheet is enqueued AFTER the source stylesheet
+   * (theme-files cascade order), so a `lib-i` rule already outranks a competing
+   * source single-class rule (e.g. an inline `background:…` override of
+   * `.sticker{background:…}`) on load order. `!important` is reserved for cases
+   * where that genuinely doesn't suffice (a higher-specificity source selector).
    */
   toCss(): string {
     return [...this.rules.entries()]

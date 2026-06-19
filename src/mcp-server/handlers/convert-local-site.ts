@@ -439,6 +439,7 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
     failedPagesList: Array<{ slug: string; error: string }>;
     formsConverted?: number;
     islandsConverted?: number;
+    stylingDrops?: number;
     behaviors?: { reveal: boolean; tabs: number; slider: number; modal: number; gaps: number };
   };
   const formsConverted = ingestSummary.formsConverted ?? 0;
@@ -447,6 +448,9 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
     lowConfidence: ingestSummary.lowConfidence,
     failedPageCount: ingestSummary.failedPageCount,
     failedPagesList: ingestSummary.failedPagesList,
+    // Styling-conservation: sections whose conversion dropped a source class
+    // (detail in normalize-report.json). 0 = every source class survived.
+    stylingDrops: ingestSummary.stylingDrops ?? 0,
   };
   // Per-kind section counts from the ingest summary — derived there from the
   // compose REPORTS (single source of truth; this handler never re-runs the
