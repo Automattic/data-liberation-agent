@@ -38,7 +38,9 @@ export const ingestLocalSiteHandler: Handler = async (args, ctx) => {
   const dir = args.dir as string | undefined;
   const outputDir = (args.outputDir as string | undefined) ?? dir;
   const nativeBehaviors = args.nativeBehaviors === true;
-  const editableIslands = args.editableIslands === true;
+  // Default ON: core/html islands convert to in-canvas dla/editable-html (visible + styled
+  // in the editor). Opt OUT with editableIslands:false to force plain core/html.
+  const editableIslands = args.editableIslands !== false;
   const cardMounts = (args.cardMounts as MountSpec[] | undefined) ?? [];
   if (!dir) return ctx.errorResult('dir is required');
   if (!outputDir) return ctx.errorResult('outputDir is required');

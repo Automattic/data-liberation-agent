@@ -44,6 +44,9 @@ import { buildTriageRemovalDiagnostic, type FallbackDiagnostic } from '../../lib
 import { loadAssetTriage, applyAssetTriage, type AssetRemoval } from '../../lib/replicate/asset-triage.js';
 import { selectorKey } from '../../lib/replicate/triage-candidates.js';
 import { ensurePlugin, type ExecFn } from '../../lib/preview/ensure-plugin.js';
+import { makeIslandsEditable } from '../../lib/replicate/normalize/make-islands-editable.js';
+import { buildEditableHtmlPlugin } from '../../blocks/editable-html-plugin.js';
+import { writeReplicaFilesToHost } from '../../lib/preview/replica-install.js';
 import { extractThemeChromeFromHtml } from '../../lib/replicate/source-chrome.js';
 import { reconcileRegions, type PlacedRegion, type RegionSelectionReport } from '../../lib/replicate/region-audit.js';
 import { slugify } from '../../lib/url/index.js';
@@ -265,6 +268,11 @@ export const reconstructPagesHandler: Handler = async (args, ctx) => {
   const specsStore = SectionSpecsStore.load(outputDir);
   const refresh = args.refresh === true;
   const collapseTemplates = (args.collapseTemplates ?? true) === true;
+  // Default ON: the coverage-gated core/html fallback islands convert to in-canvas
+  // dla/editable-html, so unblockifiable sections are still visible + styled + editable
+  // in the block editor. Opt OUT with editableIslands:false to keep plain core/html.
+  const editableIslands = args.editableIslands !== false;
+  let islandsConverted = 0;
   const specsByPage = new Map<string, SectionSpec[]>();
   const srcUrls = new Set<string>();
   const extractErrors: Array<{ slug: string; error: string }> = [];
@@ -556,8 +564,18 @@ export const reconstructPagesHandler: Handler = async (args, ctx) => {
     // WP page a real editable block page: write it into post_content (rendered via
     // the template's wp:post-content). The _wp_page_template assignment is deferred
     // to a post-loop pass (after the variant customTemplates register).
-    const fixResult = (await blockFixer.fix([markup]))[0];
-    const finalContent = fixResult?.html ?? markup;
+    // Convert the coverage-gated core/html fallback islands to in-canvas
+    // dla/editable-html BEFORE canonicalization, so the block-fixer regenerates their
+    // save() output and they validate cleanly in the editor (the plugin is shipped +
+    // activated after the loop when any island converts). Native blocks are untouched.
+    let islandMarkup = markup;
+    if (editableIslands) {
+      const ed = makeIslandsEditable(islandMarkup);
+      islandsConverted += ed.converted;
+      islandMarkup = ed.content;
+    }
+    const fixResult = (await blockFixer.fix([islandMarkup]))[0];
+    const finalContent = fixResult?.html ?? islandMarkup;
     const upd = await updatePagePostContent(studioSitePath, p.slug, p.isHome ?? false, finalContent, postContentBackupDir);
     const postUpdated = upd.contentOk;
     if (upd.backedUp) postContentBackups++;
@@ -577,6 +595,20 @@ export const reconstructPagesHandler: Handler = async (args, ctx) => {
       postContentUpdated: postUpdated,
       blocksFixed: fixResult?.changed ?? false,
     });
+  }
+
+  // Ship + activate the editable-html block plugin once, when any fallback island
+  // converted. Mirrors the carry path; best-effort activation (markup is already shipped).
+  let editableHtmlPluginSlug: string | undefined;
+  if (editableIslands && islandsConverted > 0) {
+    const plugin = buildEditableHtmlPlugin();
+    writeReplicaFilesToHost({ wpRoot, blockPlugins: [plugin] });
+    editableHtmlPluginSlug = plugin.slug;
+    try {
+      await studioWp(studioSitePath, ['plugin', 'activate', plugin.slug]);
+    } catch (err) {
+      console.error(`[reconstruct] editable-html plugin activate failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   // ---- Template collapse (post-loop) -----------------------------------------
@@ -778,6 +810,8 @@ export const reconstructPagesHandler: Handler = async (args, ctx) => {
     mediaInstalled: mediaResult.installed.length,
     htmlFallbackSections,
     htmlFallbackByReason,
+    islandsConverted,
+    editableHtmlPluginSlug,
     unassignedRegions,
     styleAudit,
     variationsHoisted,

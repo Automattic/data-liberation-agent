@@ -60,14 +60,20 @@ async function main(): Promise<void> {
     textResult: (o: unknown) => ({ _data: o }),
     errorResult: (msg: string) => { throw new Error(`handler error: ${msg}`); },
   } as unknown as Parameters<typeof reconstructPagesCarryHandler>[1];
+  // Default ON: emit carried bodies as the in-canvas `dla/editable-html` block (visible +
+  // styled + editable in the block editor) instead of a sandboxed `core/html` island.
+  // Front-end output is byte-identical. Ships + activates the block plugin. Opt OUT with
+  // EDITABLE_ISLANDS=0 (or false) to force plain core/html.
+  const editableIslands = ! /^(0|false)$/i.test(process.env.EDITABLE_ISLANDS ?? '');
   const res = (await reconstructPagesCarryHandler(
-    { outputDir, studioSitePath, themeName, pages: list.pages } as unknown as Parameters<typeof reconstructPagesCarryHandler>[0],
+    { outputDir, studioSitePath, themeName, pages: list.pages, editableIslands } as unknown as Parameters<typeof reconstructPagesCarryHandler>[0],
     ctx,
-  )) as { _data: { themeSlug: string; mediaInstalled: number; mediaErrors: unknown[]; fetchErrors: unknown[]; missingMediaDownloaded?: number; missingMediaFailed?: unknown[]; fontsLocalized?: number; fontsFailed?: unknown[]; residualCdnAssets?: number; residualCdnByHost?: Record<string, number>; residualCdnSamples?: string[]; pages: Array<{ slug: string; postContent: string }> } };
+  )) as { _data: { themeSlug: string; mediaInstalled: number; mediaErrors: unknown[]; fetchErrors: unknown[]; missingMediaDownloaded?: number; missingMediaFailed?: unknown[]; fontsLocalized?: number; fontsFailed?: unknown[]; residualCdnAssets?: number; residualCdnByHost?: Record<string, number>; residualCdnSamples?: string[]; islandsConverted?: number; editableHtmlPluginSlug?: string; pages: Array<{ slug: string; postContent: string }> } };
   const data = res._data;
   console.log(`theme: ${data.themeSlug}  media: ${data.mediaInstalled}  mediaErrors: ${data.mediaErrors.length}  fetchErrors: ${data.fetchErrors.length}  missingMediaDownloaded: ${data.missingMediaDownloaded ?? 0}  fontsLocalized: ${data.fontsLocalized ?? 0}`);
   if (data.missingMediaFailed?.length) console.log('  missingMediaFailed:', JSON.stringify(data.missingMediaFailed));
   if (data.fontsFailed?.length) console.log('  fontsFailed:', JSON.stringify(data.fontsFailed));
+  if (editableIslands) console.log(`editable islands: converted=${data.islandsConverted ?? 0}  plugin=${data.editableHtmlPluginSlug ?? '(none)'}`);
   const residual = data.residualCdnAssets ?? 0;
   console.log(`self-host audit: residualCdnAssets=${residual}${residual ? `  byHost=${JSON.stringify(data.residualCdnByHost)}` : ' ✓'}`);
   if (residual) console.log('  residualCdnSamples:', JSON.stringify(data.residualCdnSamples));
@@ -93,7 +99,11 @@ foreach ($slugs as $slug) {
   $content = file_get_contents($file);
   $posts = get_posts(['name'=>$slug,'post_type'=>['page','post'],'post_status'=>'any','numberposts'=>1]);
   if (empty($posts)) { echo "NO POST $slug\\n"; continue; }
-  $r = wp_update_post(['ID'=>$posts[0]->ID,'post_content'=>$content,'post_status'=>'publish'], true);
+  // wp_slash: wp_update_post() unslashes post_content, which would strip the backslashes
+  // in dla/editable-html's frame-attr JSON (e.g. the -- escape for "--"),
+  // corrupting the block attributes -> "invalid content" in the editor. Slash so the DB
+  // write round-trips byte-exact. (Mirrors the install-post.php/install-data.php fix.)
+  $r = wp_update_post(wp_slash(['ID'=>$posts[0]->ID,'post_content'=>$content,'post_status'=>'publish']), true);
   if (is_wp_error($r)) echo "ERR $slug: ".$r->get_error_message()."\\n";
   else echo "OK $slug id=".$posts[0]->ID." bytes=".strlen($content)."\\n";
 }

@@ -453,7 +453,11 @@ describe('ingestLocalSiteHandler', () => {
       expect(sidecar).toContain('role="tab"');
       expect(sidecar).toContain('aria-controls="p-a"');
       expect(sidecar).toContain('wp:group');
-      expect(sidecar).not.toContain('dla/');
+      // editable-html islands are the default now: the verbatim interactive scaffolding
+      // survives inside a dla/editable-html block (static save = byte-identical HTML), so
+      // role/aria above are still present. nativeBehaviors stays flag-gated: no behavior blocks.
+      expect(sidecar).not.toContain('dla/reveal');
+      expect(sidecar).not.toContain('dla/sticky');
       expect(sidecar).not.toContain('data-wp-interactive');
       // Summary stays flag-gated.
       const summary = JSON.parse(res.content[0].text) as { behaviors?: unknown };

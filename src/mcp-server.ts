@@ -433,6 +433,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             description: 'Collapse per-page templates into variant-keyed templates + _wp_page_template assignments (default true). false = one template per page (legacy).',
           },
           variationHoist: { type: 'boolean', description: 'Hoist recurring instance-style constellations into theme block-style variations (default true). Set false to disable (escape hatch).' },
+          editableIslands: { type: 'boolean', description: 'Convert the coverage-gated core/html fallback islands into in-canvas dla/editable-html blocks (visible + styled + text/image-editable in the block editor; ships + activates the block plugin). Default true. Set false to keep plain core/html.' },
           pages: {
             type: 'array',
             description: 'Content pages to reconstruct. Reconstruct every page (not just cluster reps).',
@@ -461,6 +462,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           studioSitePath: { type: 'string', description: 'On-disk path to the running Studio site (e.g. ~/Studio/example-com).' },
           themeName: { type: 'string', description: 'Display name for the carry theme (default: "Liberated (Carry)").' },
           islandsOutDir: { type: 'string', description: 'When set, write each carried island to <islandsOutDir>/<slug>.html and return its path + byte count instead of inline postContent. Use this from MCP to avoid the response-size cap (islands are whole page bodies). Omit to get postContent inline (the tsx driver default).' },
+          editableIslands: { type: 'boolean', description: 'Emit carried bodies as in-canvas dla/editable-html blocks (visible + styled + text/image-editable in the block editor) instead of sandboxed core/html islands. Front-end output is byte-identical (static save). Ships + activates the block plugin. Default true; set false to force plain core/html.' },
           pages: {
             type: 'array',
             description: 'Content pages to carry and scope. Pass every page in the site for full coverage.',
@@ -720,7 +722,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           carryCss: { type: 'boolean', description: 'Carry the source stylesheet into the theme (adapted for the block DOM). Default true — the stage-1d parity mechanism; tokens-only theming when false.' },
           carryJs: { type: 'boolean', description: 'Carry the source scripts into the theme (enqueued footer, html.js gate added). Default true for identical replication.' },
           nativeBehaviors: { type: 'boolean', description: 'Replace carried source JS with native Interactivity blocks (reveal, sticky, plus per-section tabs/slider/modal with verbatim inner markup); unmapped behaviors land in behavior-gaps.json. Forces carryJs off.' },
-          editableIslands: { type: 'boolean', description: 'Convert carried core/html islands into editable dla/editable-html blocks (text+image bindable, static-save, render-anywhere). Default off.' },
+          editableIslands: { type: 'boolean', description: 'Convert carried core/html islands into editable dla/editable-html blocks (text+image bindable, static-save, render-anywhere). Default true; set false to force plain core/html.' },
           dataModel: { type: 'boolean', description: 'WordPress-driven data path: when a data-model.json (from the model-local-data skill) is present in outputDir/dir, register a CPT+taxonomy via generated mu-plugins, insert items idempotently, and replace empty JS-mount grids with native core/query loops (dla/data-card cards) while neutralizing the JS data-mounts and rebinding modal lookups to per-card DOM islands. Default on when the file exists; pass false to force off.' },
           repair: { type: 'boolean', description: 'Deterministic parity repair loop: diff regions → computed-style probe → generated parity-patch.css → re-compare, bounded. Default true. No AI involved.' },
           maxRepairRounds: { type: 'number', description: 'Max repair rounds (0-5). Default 2. Loop also stops early on allPass or an unchanged divergence fingerprint.' },
