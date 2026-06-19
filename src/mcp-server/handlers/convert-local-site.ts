@@ -29,7 +29,7 @@ import { themeCacheFlushCommands } from './install-theme.js';
 import { ingestLocalSite } from '../../lib/replicate/local-site/ingest.js';
 import { buildNavGraph } from '../../lib/replicate/local-site/nav-graph.js';
 import { segmentPage } from '../../lib/replicate/normalize/segment.js';
-import { buildHeaderPart, buildCarriedHeaderPart, buildCarriedSidebarPart, buildFooterPart, findChromeMounts, mountPartMarkup } from '../../lib/replicate/local-theme/chrome-parts.js';
+import { buildHeaderPart, buildCarriedHeaderPart, buildCarriedSidebarPart, buildFooterPart, findChromeMounts, mountPartMarkup, combineCarriedHeaderChrome } from '../../lib/replicate/local-theme/chrome-parts.js';
 import { assembleLocalTheme } from '../../lib/replicate/local-theme/theme-files.js';
 import type { InteriorChromeTemplate } from '../../lib/replicate/local-theme/interior-chrome.js';
 import { buildPagePlan } from '../../lib/replicate/local-theme/page-plan.js';
@@ -114,20 +114,6 @@ function normalizeRegionText(text: string): string {
 function firstHtmlElement($: CheerioAPI): DomElement | null {
   const el = $('body').children().first().get(0) ?? $.root().children().first().get(0);
   return el && isTag(el) ? (el as DomElement) : null;
-}
-
-function normalizeHeaderRoot(html: string): string {
-  return html.replace(/^<header(\b[^>]*>)/i, '<div$1').replace(/<\/header>\s*$/i, '</div>');
-}
-
-function combineCarriedHeaderChrome(header: Section, extraChrome: Section[]): Section {
-  if (extraChrome.length === 0) return header;
-  const html = [normalizeHeaderRoot(header.html), ...extraChrome.map((s) => s.html)].join('\n');
-  return {
-    ...header,
-    html: `<div class="dla-carried-header-chrome">${html}</div>`,
-    classes: ['dla-carried-header-chrome'],
-  };
 }
 
 function hasRenderableRootContent(html: string): boolean {

@@ -1,6 +1,6 @@
 // src/lib/replicate/local-theme/chrome-parts.test.ts
 import { describe, it, expect } from 'vitest';
-import { buildHeaderPart, buildCarriedHeaderPart, buildFooterPart, findChromeMounts, mountPartMarkup } from './chrome-parts.js';
+import { buildHeaderPart, buildCarriedHeaderPart, buildFooterPart, findChromeMounts, mountPartMarkup, combineCarriedHeaderChrome } from './chrome-parts.js';
 import { blockMarkupRoundtrips } from '../../streaming/block-markup-validate.js';
 import { InstanceStyleSheet } from '../normalize/instance-styles.js';
 import { validateReplicaInputs } from '../../preview/replica-install.js';
@@ -174,6 +174,31 @@ describe('buildCarriedHeaderPart', () => {
     expect(blockMarkupRoundtrips(html).ok).toBe(true);
     expect(html).toContain('<!-- wp:dla/sticky {"toggleClass":"is-scrolled","offset":24} -->');
     expect(html.indexOf('wp:dla/sticky')).toBeGreaterThan(html.indexOf('<!-- /wp:group -->'));
+  });
+
+  it('preserves a carried off-canvas mobile menu wrapper class after header chrome is combined', () => {
+    const header: Section = {
+      id: 'header',
+      role: 'header',
+      classes: ['bp-header'],
+      html: '<header class="bp-header"><a href="index.html">Baseplate</a></header>',
+    };
+    const overlay: Section = {
+      id: 'bp-mobile-menu',
+      role: 'nav',
+      chromeSource: 'layout-rail',
+      classes: ['bp-mobile-menu'],
+      html:
+        '<div class="bp-mobile-menu">' +
+        '<div class="bp-mobile-menu__bar"><button type="button" aria-label="Close"><svg viewBox="0 0 10 10"><path d="M1 1l8 8"/></svg></button></div>' +
+        '<div class="bp-mobile-menu__body"><nav aria-label="Primary mobile"><ul class="bp-mobile-menu__nav"><li><a href="about.html">About</a></li></ul></nav></div>' +
+        '</div>',
+    };
+    const combined = combineCarriedHeaderChrome(header, [overlay]);
+    const html = buildCarriedHeaderPart(combined, { pageSlugs: ['home', 'about'] });
+    expect(html).toContain('class="bp-mobile-menu"');
+    expect(html).toContain('bp-mobile-menu__nav');
+    expect(html).toContain('href="/about/"');
   });
 });
 

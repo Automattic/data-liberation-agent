@@ -91,6 +91,67 @@ describe('segmentPage', () => {
     expect(sections.filter((s) => s.role === 'body').map((s) => s.id)).toEqual(['overview']);
   });
 
+  it('captures an off-canvas mobile menu wrapper around a layout nav as chrome', () => {
+    const html = `<body>
+      <header class="bp-header"><a href="index.html">Baseplate</a></header>
+      <div class="bp-mobile-menu">
+        <div class="bp-mobile-menu__bar"><button type="button" aria-label="Close">Close</button></div>
+        <div class="bp-mobile-menu__body">
+          <nav aria-label="Primary mobile">
+            <ul class="bp-mobile-menu__nav"><li><a href="about.html">About</a></li></ul>
+          </nav>
+          <a href="#subscribe">Subscribe</a>
+        </div>
+      </div>
+      <main><section id="overview"><h1>Overview</h1></section></main>
+    </body>`;
+    const sections = segmentPage(html);
+    const rails = sections.filter((s) => s.role === 'nav' && s.chromeSource === 'layout-rail');
+    expect(rails).toHaveLength(1);
+    expect(rails[0].html).toContain('class="bp-mobile-menu"');
+    expect(rails[0].html).toContain('bp-mobile-menu__nav');
+    expect(rails[0].classes).toContain('bp-mobile-menu');
+    expect(sections.filter((s) => s.role === 'body').some((s) => s.html.includes('bp-mobile-menu'))).toBe(false);
+  });
+
+  it('does not promote a no-main nav rail wrapper that also contains body content', () => {
+    const html = `<body>
+      <div class="layout">
+        <nav class="site-nav"><a href="intro.html">Intro</a><a href="api.html">API</a></nav>
+        <div class="content"><h1>Guide</h1><p>Read the docs.</p></div>
+      </div>
+    </body>`;
+    const sections = segmentPage(html);
+    const rails = sections.filter((s) => s.role === 'nav' && s.chromeSource === 'layout-rail');
+    expect(rails).toHaveLength(1);
+    expect(rails[0].id).toBe('site-nav');
+    expect(rails[0].html).toContain('site-nav');
+    expect(rails[0].html).not.toContain('content');
+    const body = sections.filter((s) => s.role === 'body');
+    expect(body).toHaveLength(1);
+    expect(body[0].html).toContain('content');
+    expect(body[0].html).toContain('Guide');
+    expect(body[0].html).not.toContain('site-nav');
+  });
+
+  it('does not promote a no-main nav rail wrapper that also contains a form', () => {
+    const html = `<body>
+      <div class="layout">
+        <nav class="site-nav"><a href="intro.html">Intro</a><a href="api.html">API</a></nav>
+        <form id="lead"><input name="email" type="email"/></form>
+      </div>
+    </body>`;
+    const sections = segmentPage(html);
+    const rails = sections.filter((s) => s.role === 'nav' && s.chromeSource === 'layout-rail');
+    expect(rails).toHaveLength(1);
+    expect(rails[0].id).toBe('site-nav');
+    expect(rails[0].html).not.toContain('lead');
+    const body = sections.filter((s) => s.role === 'body');
+    expect(body).toHaveLength(1);
+    expect(body[0].html).toContain('lead');
+    expect(body[0].html).not.toContain('site-nav');
+  });
+
   it('removes a captured layout rail from no-main wrapper body sections', () => {
     const html = `<body>
       <div class="layout">

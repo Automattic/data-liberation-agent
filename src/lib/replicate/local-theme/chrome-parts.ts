@@ -87,6 +87,20 @@ function stickyStateBlock(sticky: StickyBehavior): string {
   );
 }
 
+function normalizeHeaderRoot(html: string): string {
+  return html.replace(/^<header(\b[^>]*>)/i, '<div$1').replace(/<\/header>\s*$/i, '</div>');
+}
+
+export function combineCarriedHeaderChrome(header: Section, extraChrome: Section[]): Section {
+  if (extraChrome.length === 0) return header;
+  const html = [normalizeHeaderRoot(header.html), ...extraChrome.map((s) => s.html)].join('\n');
+  return {
+    ...header,
+    html: `<div class="dla-carried-header-chrome">${html}</div>`,
+    classes: ['dla-carried-header-chrome'],
+  };
+}
+
 export function buildHeaderPart(
   siteTitle: string,
   nav: NavLink[],
