@@ -15,8 +15,20 @@ describe('makeIslandsEditable', () => {
     expect(blockMarkupRoundtrips(content).ok).toBe(true);
   });
 
-  it('leaves a textless (svg-only) core/html island as core/html', () => {
+  it('converts a textless (svg-only, zero-binding) core/html island — editable-html is the default island', () => {
+    // Even with no bindable leaves, a core/html island renders unstyled in the editor's
+    // SandBox; converting to the in-canvas block is the whole point, so it must convert too.
     const input = '<!-- wp:html -->\n<span class="icon"><svg><path d="M0 0"/></svg></span>\n<!-- /wp:html -->';
+    const { content, converted } = makeIslandsEditable(input);
+    expect(converted).toBe(1);
+    expect(content).toContain('<!-- wp:dla/editable-html ');
+    expect(content).not.toContain('<!-- wp:html -->');
+    expect(content).toContain('<span class="icon"><svg><path d="M0 0"/></svg></span>');
+    expect(blockMarkupRoundtrips(content).ok).toBe(true);
+  });
+
+  it('leaves a core/html island that wraps nested block delimiters untouched (safety guard)', () => {
+    const input = '<!-- wp:html -->\n<div><!-- wp:paragraph --><p>x</p><!-- /wp:paragraph --></div>\n<!-- /wp:html -->';
     const { content, converted } = makeIslandsEditable(input);
     expect(converted).toBe(0);
     expect(content).toBe(input);

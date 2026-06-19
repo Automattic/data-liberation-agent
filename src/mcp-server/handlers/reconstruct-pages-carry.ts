@@ -336,10 +336,11 @@ export const reconstructPagesCarryHandler: Handler = async (args, ctx) => {
   const outputDir = args.outputDir as string | undefined;
   const studioSitePath = args.studioSitePath as string | undefined;
   const pages = args.pages as PageArg[] | undefined;
-  // Opt-in: emit carried bodies as the in-canvas `dla/editable-html` block instead of
-  // a sandboxed `core/html` island, so the styled markup is visible (and editable) in
-  // the block editor. Front-end output is byte-identical (static save).
-  const editableIslands = args.editableIslands === true;
+  // Default: emit carried bodies as the in-canvas `dla/editable-html` block instead of a
+  // sandboxed `core/html` island, so the styled markup is visible (and editable) in the
+  // block editor. Front-end output is byte-identical (static save). Opt OUT with
+  // editableIslands:false to force plain core/html.
+  const editableIslands = args.editableIslands !== false;
 
   if (!outputDir) {
     return ctx.errorResult('liberate_reconstruct_pages_carry requires `outputDir`.');

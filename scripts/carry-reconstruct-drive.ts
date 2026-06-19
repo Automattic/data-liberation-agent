@@ -60,10 +60,11 @@ async function main(): Promise<void> {
     textResult: (o: unknown) => ({ _data: o }),
     errorResult: (msg: string) => { throw new Error(`handler error: ${msg}`); },
   } as unknown as Parameters<typeof reconstructPagesCarryHandler>[1];
-  // Opt-in via EDITABLE_ISLANDS=1: emit carried bodies as the in-canvas `dla/editable-html`
-  // block (visible + styled + editable in the block editor) instead of a sandboxed `core/html`
-  // island. Front-end output is byte-identical. Ships + activates the block plugin.
-  const editableIslands = /^(1|true)$/i.test(process.env.EDITABLE_ISLANDS ?? '');
+  // Default ON: emit carried bodies as the in-canvas `dla/editable-html` block (visible +
+  // styled + editable in the block editor) instead of a sandboxed `core/html` island.
+  // Front-end output is byte-identical. Ships + activates the block plugin. Opt OUT with
+  // EDITABLE_ISLANDS=0 (or false) to force plain core/html.
+  const editableIslands = ! /^(0|false)$/i.test(process.env.EDITABLE_ISLANDS ?? '');
   const res = (await reconstructPagesCarryHandler(
     { outputDir, studioSitePath, themeName, pages: list.pages, editableIslands } as unknown as Parameters<typeof reconstructPagesCarryHandler>[0],
     ctx,

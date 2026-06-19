@@ -29,10 +29,14 @@ export function makeIslandsEditable(postContent: string): { content: string; con
 
   walkBlocks(parse(postContent), (block) => {
     if (block.blockName !== 'core/html') return;
+    // Safety guard ONLY: a core/html that wraps nested block delimiters is not a raw HTML
+    // island — frame-flattening it would corrupt the inner blocks. Skip those. Every other
+    // core/html island converts (editable-html is the default island representation), even
+    // ones with no bindable leaves (svg/decorative): they still render unstyled inside the
+    // editor's core/html SandBox, which is exactly what converting to the in-canvas block fixes.
     if (containsBlockDelimiter(block.innerHTML)) return;
 
     const island = analyzeIsland(block.innerHTML);
-    if (island.bindingCount === 0) return;
 
     // Carry the source island's block metadata (e.g. metadata.name — the editor label)
     // onto the editable block so the named islands keep their names in List View.

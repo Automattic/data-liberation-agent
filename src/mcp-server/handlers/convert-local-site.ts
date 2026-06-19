@@ -377,7 +377,9 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
   // both at once would double-drive every behavior (double-init sliders,
   // re-animating reveals). Explicit carryJs:true is overridden, loudly.
   const nativeBehaviors = args.nativeBehaviors === true;
-  const editableIslands = args.editableIslands === true;
+  // Default ON: core/html islands convert to in-canvas dla/editable-html (visible + styled
+  // in the editor). Opt OUT with editableIslands:false to force plain core/html.
+  const editableIslands = args.editableIslands !== false;
   if (nativeBehaviors && args.carryJs === true) {
     warnings.push('nativeBehaviors forces carryJs off (carried source JS would double-drive block behaviors)');
   }
