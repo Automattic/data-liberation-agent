@@ -461,6 +461,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           studioSitePath: { type: 'string', description: 'On-disk path to the running Studio site (e.g. ~/Studio/example-com).' },
           themeName: { type: 'string', description: 'Display name for the carry theme (default: "Liberated (Carry)").' },
           islandsOutDir: { type: 'string', description: 'When set, write each carried island to <islandsOutDir>/<slug>.html and return its path + byte count instead of inline postContent. Use this from MCP to avoid the response-size cap (islands are whole page bodies). Omit to get postContent inline (the tsx driver default).' },
+          editableIslands: { type: 'boolean', description: 'Emit carried bodies as in-canvas dla/editable-html blocks (visible + styled + text/image-editable in the block editor) instead of sandboxed core/html islands. Front-end output is byte-identical (static save). Ships + activates the block plugin. Default off.' },
           pages: {
             type: 'array',
             description: 'Content pages to carry and scope. Pass every page in the site for full coverage.',

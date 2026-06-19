@@ -39,6 +39,10 @@ import { installRunMediaMap } from '../../lib/replicate/run-media-map.js';
 import type { InternalLinkMap } from '../../lib/streaming/internal-link-rewrite.js';
 import { deriveInstallThemeSlug } from './install-theme.js';
 import { studioWpRoot } from '../../lib/preview/studio-site.js';
+import { makeIslandsEditable } from '../../lib/replicate/normalize/make-islands-editable.js';
+import { buildEditableHtmlPlugin } from '../../blocks/editable-html-plugin.js';
+import { writeReplicaFilesToHost } from '../../lib/preview/replica-install.js';
+import { BlockFixerClient } from '../../lib/streaming/block-fixer-client.js';
 
 // ---------------------------------------------------------------------------
 // Pure helper types + implementation (unit-tested)
@@ -332,6 +336,10 @@ export const reconstructPagesCarryHandler: Handler = async (args, ctx) => {
   const outputDir = args.outputDir as string | undefined;
   const studioSitePath = args.studioSitePath as string | undefined;
   const pages = args.pages as PageArg[] | undefined;
+  // Opt-in: emit carried bodies as the in-canvas `dla/editable-html` block instead of
+  // a sandboxed `core/html` island, so the styled markup is visible (and editable) in
+  // the block editor. Front-end output is byte-identical (static save).
+  const editableIslands = args.editableIslands === true;
 
   if (!outputDir) {
     return ctx.errorResult('liberate_reconstruct_pages_carry requires `outputDir`.');
@@ -581,13 +589,62 @@ export const reconstructPagesCarryHandler: Handler = async (args, ctx) => {
   // assembly repoints them to the installed DESKTOP local copy of the same media-id via the
   // run media map. Mobile shows the desktop crop, but every image is self-hosted (zero
   // source-CDN dependency) — see carry-responsive-assemble.ts.
-  const finalPages = wxrPages.map((w) => ({
+  let finalPages = wxrPages.map((w) => ({
     slug: w.slug,
     title: w.title,
     isHome: w.isHome,
     postType: w.postType,
     postContent: assembleResponsiveMobile(w.postContent, responsiveImages, mediaUrlMap),
   }));
+
+  // Editor visibility (opt-in). A carried body emits as one `core/html` island, which
+  // the block editor renders inside an isolated SandBox <iframe> — so it shows unstyled
+  // (the theme's editor stylesheets can't reach the sandbox) and only behind the
+  // HTML/Preview toggle. Converting each island to `dla/editable-html` re-emits the SAME
+  // source-faithful markup (static save = serializeFrame(frame), byte-identical on the
+  // front end) as a block that renders directly in the editor CANVAS, where the descoped
+  // editor CSS (add_editor_style / block_editor_settings_all, keyed on `:where(body)` +
+  // id/attr selectors) applies — so the styled HTML is visible and text/image-editable.
+  // Ships + activates the block plugin once when any island converts.
+  let islandsConverted = 0;
+  let editableHtmlPluginSlug: string | undefined;
+  if (editableIslands) {
+    // Canonicalize each converted page through @wordpress/blocks (real save() funcs)
+    // so the dla/editable-html markup matches its save output byte-for-byte and validates
+    // cleanly in the editor (no "unexpected/invalid content" recovery). Best-effort: if the
+    // sidecar can't start, fix() passes the markup through unchanged.
+    const blockFixer = new BlockFixerClient();
+    await blockFixer.start().catch(() => {
+      /* best-effort — fix() passes through if the server didn't start */
+    });
+    try {
+      const fixedPages: typeof finalPages = [];
+      for (const p of finalPages) {
+        const r = makeIslandsEditable(p.postContent);
+        islandsConverted += r.converted;
+        const fixed = (await blockFixer.fix([r.content]))[0];
+        fixedPages.push({ ...p, postContent: fixed?.html ?? r.content });
+      }
+      finalPages = fixedPages;
+    } finally {
+      await blockFixer.stop().catch(() => {
+        /* best-effort cleanup */
+      });
+    }
+    if (islandsConverted > 0) {
+      const plugin = buildEditableHtmlPlugin();
+      writeReplicaFilesToHost({ wpRoot, blockPlugins: [plugin] });
+      editableHtmlPluginSlug = plugin.slug;
+      try {
+        await execFileAsync('studio', ['wp', '--path', studioSitePath, 'plugin', 'activate', plugin.slug], {
+          timeout: 120_000,
+          maxBuffer: 16 * 1024 * 1024,
+        });
+      } catch (e) {
+        console.error(`[reconstruct-carry] editable-html plugin activate failed: ${(e as Error).message}`);
+      }
+    }
+  }
 
   // Self-hosting assertion: after all media/font/link localization, scan the assembled
   // islands + theme CSS/parts for any asset ref still pointing at an external host. A
@@ -652,6 +709,8 @@ export const reconstructPagesCarryHandler: Handler = async (args, ctx) => {
     residualCdnAssets: cdnAudit.refs.length,
     residualCdnByHost: cdnAudit.byHost,
     residualCdnSamples: cdnAudit.samples,
+    islandsConverted,
+    editableHtmlPluginSlug,
     islandsDir: islandsOutDir ? resolve(islandsOutDir) : undefined,
     pages: pagesResult,
   });

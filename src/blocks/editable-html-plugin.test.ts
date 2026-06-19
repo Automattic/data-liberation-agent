@@ -74,6 +74,17 @@ describe('buildEditableHtmlPlugin', () => {
     const editor = byPath(buildEditableHtmlPlugin().files)['blocks/editable-html/editor.js'];
     expect(() => new Function(editor)).not.toThrow();
   });
+
+  it('preserves class as a real attribute on custom elements (React drops className on custom tags)', () => {
+    // Wix <wow-image> & friends are custom elements: React assigns `className` as a JS
+    // property that does NOT reflect to the `class` attribute, so carried CSS (image
+    // sizing + absolute bg-layer positioning) silently no-ops in the editor canvas.
+    // attrsToProps must take the tag and emit `class` directly for hyphenated tags.
+    const editor = byPath(buildEditableHtmlPlugin().files)['blocks/editable-html/editor.js'];
+    expect(editor).toContain("tag.indexOf( '-' )");
+    expect(editor).toContain("props[ 'class' ] = value");
+    expect(editor).toContain('attrsToProps( node.attrs, node.tag )');
+  });
 });
 
 describe('editable-html serializer parity', () => {

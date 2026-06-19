@@ -69,11 +69,18 @@ function editorJs(): string {
 \t\t}, {} );
 \t}
 
-\tfunction attrsToProps( attrs ) {
+\tfunction attrsToProps( attrs, tag ) {
+\t\t// Custom elements (hyphenated tags, e.g. Wix <wow-image>): React assigns
+\t\t// \`className\` as a JS PROPERTY, which does NOT reflect to the \`class\` ATTRIBUTE
+\t\t// on a custom element — so CSS selectors / getComputedStyle never see the class
+\t\t// and the carried styling (sizing, absolute positioning of bg-layer images) is
+\t\t// lost in the editor canvas. Pass \`class\` as a real attribute for custom elements
+\t\t// (React forwards string-valued unknown props on custom elements verbatim).
+\t\tvar isCustom = !! tag && tag.indexOf( '-' ) > 0;
 \t\tvar props = {};
 \t\tObject.keys( attrs || {} ).forEach( function ( key ) {
 \t\t\tvar value = attrs[ key ];
-\t\t\tif ( key === 'class' ) props.className = value;
+\t\t\tif ( key === 'class' ) { if ( isCustom ) props[ 'class' ] = value; else props.className = value; }
 \t\t\telse if ( key === 'for' ) props.htmlFor = value;
 \t\t\telse if ( key === 'style' ) props.style = parseStyle( value );
 \t\t\telse props[ key ] = value;
@@ -106,12 +113,12 @@ function editorJs(): string {
 \t\t\t\treturn options.editable ? el( 'div', { key: key, style: { pointerEvents: 'none' } }, raw ) : raw;
 \t\t\t}
 \t\t\tif ( node.kind === 'element' ) {
-\t\t\t\tvar props = withKey( attrsToProps( node.attrs ), key );
+\t\t\t\tvar props = withKey( attrsToProps( node.attrs, node.tag ), key );
 \t\t\t\treturn el.apply( null, [ node.tag, props ].concat( renderFrame( node.children, options ) ) );
 \t\t\t}
 \t\t\tif ( node.kind === 'bindText' ) {
 \t\t\t\tif ( options.editable ) {
-\t\t\t\t\treturn el( RichText, Object.assign( withKey( attrsToProps( node.attrs ), key ), {
+\t\t\t\t\treturn el( RichText, Object.assign( withKey( attrsToProps( node.attrs, node.tag ), key ), {
 \t\t\t\t\t\ttagName: node.tag,
 \t\t\t\t\t\tvalue: node.html || '',
 \t\t\t\t\t\tonChange: function ( html ) {
@@ -119,7 +126,7 @@ function editorJs(): string {
 \t\t\t\t\t\t},
 \t\t\t\t\t} ) );
 \t\t\t\t}
-\t\t\t\treturn el( node.tag, withKey( attrsToProps( node.attrs ), key ), el( RichText.Content, { value: node.html || '' } ) );
+\t\t\t\treturn el( node.tag, withKey( attrsToProps( node.attrs, node.tag ), key ), el( RichText.Content, { value: node.html || '' } ) );
 \t\t\t}
 \t\t\tif ( node.kind === 'bindImage' ) {
 \t\t\t\tif ( options.editable ) {

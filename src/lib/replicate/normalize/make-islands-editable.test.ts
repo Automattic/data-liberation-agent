@@ -27,6 +27,21 @@ describe('makeIslandsEditable', () => {
     expect(makeIslandsEditable(input).content).toBe(input);
   });
 
+  it('converts an ATTRIBUTED core/html island (the carry path names islands via metadata)', () => {
+    // The carry path emits `<!-- wp:html {"metadata":{"name":"…"}} -->`; a bare-delimiter
+    // reconstruction never matched, so converted stayed 0 (the carried bodies wouldn't
+    // become editable). originalHtmlBlock must reconstruct the attrs to match.
+    const input = '<!-- wp:html {"metadata":{"name":"Hero"}} -->\n<p>Body text</p>\n<!-- /wp:html -->';
+    const { content, converted } = makeIslandsEditable(input);
+    expect(converted).toBe(1);
+    expect(content).toContain('<!-- wp:dla/editable-html ');
+    expect(content).not.toContain('<!-- wp:html ');
+    expect(content).toContain('<p>Body text</p>');
+    // the island's metadata.name (editor label) is carried onto the editable block
+    expect(content).toContain('"metadata":{"name":"Hero"}');
+    expect(blockMarkupRoundtrips(content).ok).toBe(true);
+  });
+
   it('preserves literal dollar replacement tokens in converted core/html islands', () => {
     const input = '<!-- wp:html -->\n<p>Literal $$, $&amp;, $`, and $&#39; tokens</p>\n<!-- /wp:html -->';
     const { content, converted } = makeIslandsEditable(input);

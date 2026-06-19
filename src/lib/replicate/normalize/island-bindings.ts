@@ -371,9 +371,17 @@ function attrJsonValue(value: unknown): string {
   return JSON.stringify(value).replace(/--/g, '\\u002d\\u002d');
 }
 
-export function emitEditableBlock(island: IslandBindings): string {
+export function emitEditableBlock(
+  island: IslandBindings,
+  metadata?: Record<string, unknown>,
+): string {
+  // Preserve the source island's block `metadata` (notably `metadata.name`, the editor
+  // List View / block label the carry path sets via `<!-- wp:html {"metadata":{"name"…}} -->`).
+  // `metadata` is editor-only (not part of save() output), so it doesn't affect validation.
+  const attrs: Record<string, unknown> = { frame: island.frame };
+  if (metadata && Object.keys(metadata).length > 0) attrs.metadata = metadata;
   return (
-    `<!-- wp:dla/editable-html {"frame":${attrJsonValue(island.frame)}} -->\n` +
+    `<!-- wp:dla/editable-html ${attrJsonValue(attrs)} -->\n` +
     `${serializeFrame(island.frame)}\n` +
     '<!-- /wp:dla/editable-html -->'
   );
