@@ -78,13 +78,13 @@ function inlineHtml($: CheerioAPI, el: Element): string {
       }
       const cls = ($(node).attr('class') ?? '').trim();
       const styleA = ($(node).attr('style') ?? '').trim();
-      // A <span> with NEITHER class nor style carries no styling info — keep
-      // unwrapping it so nested content (links) survives without a noise
-      // wrapper. A span with a class (.num/.it) or inline style (color hooks)
-      // is a source styling anchor and is preserved verbatim.
-      if (tag === 'span' && !cls && !styleA) {
-        out += inlineHtml($, node);
-      } else if (INLINE_ALLOWED.has(tag)) {
+      // Keep every allowed inline tag verbatim — INCLUDING a classless, styleless
+      // <span>. A bare span looks inert but contextual source selectors target it
+      // (`.pull span{color:…}`, `.marquee span{…}`); unwrapping it drops that
+      // styling. Spans carrying a class (.num/.it) or inline style are styling
+      // anchors and are likewise preserved. Keeping the wrapper never loses nested
+      // content — a link inside the span still survives.
+      if (INLINE_ALLOWED.has(tag)) {
         const inner = inlineHtml($, node);
         const clsAttr = cls ? ` class="${escapeHtml(cls)}"` : '';
         if (tag === 'a') {
@@ -104,10 +104,16 @@ function inlineHtml($: CheerioAPI, el: Element): string {
   return out;
 }
 
-function imageBlock($: CheerioAPI, imgEl: Element): string {
+function imageBlock($: CheerioAPI, imgEl: Element, sheet: InstanceStyleSheet): string {
   const src = escapeHtml($(imgEl).attr('src') ?? '');
   const alt = escapeHtml($(imgEl).attr('alt') ?? '');
-  const cls = classNameOf($(imgEl));
+  // Fold the img's source class AND its inline style (a background backdrop,
+  // aspect-ratio, object-fit…) into the className: classNameWithInstance hashes
+  // the inline style into a lib-i class + carried rule. A raw style= attr would
+  // be stripped by the fixer (core/image keeps only [class]); the class survives.
+  // The rule lands on the wp-block-image figure, which wraps the img tightly, so
+  // a carried `background` paints exactly behind the image.
+  const cls = classNameWithInstance($(imgEl), sheet);
   const attrs = blockAttrs([], cls);
   const figCls = ['wp-block-image', cls].filter(Boolean).join(' ');
   return `<!-- wp:image${attrs} -->\n<figure class="${escapeHtml(figCls)}"><img src="${src}" alt="${alt}"/></figure>\n<!-- /wp:image -->`;
@@ -119,9 +125,15 @@ function paragraphBlock(inner: string): string {
 
 function listItemBlock($: CheerioAPI, li: Element, sheet: InstanceStyleSheet): string {
   const $li = $(li);
+  // Preserve the <li> class (+ per-instance inline style) — owned sources hang
+  // styling/animation hooks on list items (a .reveal scroll animation); core/
+  // list-item carries a className, so the carried CSS keeps matching.
+  const cls = classNameWithInstance($li, sheet);
+  const attrs = blockAttrs([], cls);
+  const clsPart = cls ? ` class="${escapeHtml(cls)}"` : '';
   const nestedLists = $li.children('ul, ol').toArray() as Element[];
   if (nestedLists.length === 0) {
-    return `<!-- wp:list-item -->\n<li>${inlineHtml($, li).trim()}</li>\n<!-- /wp:list-item -->`;
+    return `<!-- wp:list-item${attrs} -->\n<li${clsPart}>${inlineHtml($, li).trim()}</li>\n<!-- /wp:list-item -->`;
   }
 
   const leadingClone = $li.clone();
@@ -131,7 +143,7 @@ function listItemBlock($: CheerioAPI, li: Element, sheet: InstanceStyleSheet): s
   const leading = leadingEl && isTag(leadingEl) ? inlineHtml($, leadingEl).trim() : '';
   const nested = nestedLists.map((nestedList) => listBlock($, nestedList, sheet)).join('\n');
   const body = [leading, nested].filter(Boolean).join('\n');
-  return `<!-- wp:list-item -->\n<li>${body}</li>\n<!-- /wp:list-item -->`;
+  return `<!-- wp:list-item${attrs} -->\n<li${clsPart}>${body}</li>\n<!-- /wp:list-item -->`;
 }
 
 function listBlock($: CheerioAPI, listEl: Element, sheet: InstanceStyleSheet): string {
@@ -283,7 +295,7 @@ function emitChild($: CheerioAPI, el: Element, sheet: InstanceStyleSheet, opts: 
   }
 
   if (tag === 'img') {
-    return { markup: imageBlock($, el), clean: true };
+    return { markup: imageBlock($, el, sheet), clean: true };
   }
 
   if (tag === 'a' && isButtonAnchor($, el)) {
@@ -448,7 +460,7 @@ function emitChild($: CheerioAPI, el: Element, sheet: InstanceStyleSheet, opts: 
   const imgs = $el.find('img');
   if (imgs.length > 0) {
     const imgMarkup = imgs
-      .map((_, imgEl) => imageBlock($, imgEl))
+      .map((_, imgEl) => imageBlock($, imgEl, sheet))
       .get()
       .join('\n');
     const text = escapeHtml($el.text().trim());
@@ -456,8 +468,39 @@ function emitChild($: CheerioAPI, el: Element, sheet: InstanceStyleSheet, opts: 
     return { markup: imgMarkup + textPara, clean: false };
   }
 
-  // Fallback: downgrade unknown element to a paragraph of its text.
-  return { markup: paragraphBlock(escapeHtml($el.text().trim())), clean: false };
+  // Leaf element (no element children, no id) reached the fallback. Preserve its
+  // styling instead of flattening to a bare <p>, which silently drops the class
+  // the carried CSS targets (`.stat .stat-num`, `.quote .quote-by`), the element
+  // tag a selector targets (`.gallery figcaption`), and any inline style.
+  const text = $el.text().trim();
+  if (tag === 'div' || tag === 'span') {
+    if (text) {
+      // Generic text container with content → a core/paragraph carrying the
+      // source class + a per-instance style class. Class-targeted CSS matches the
+      // className; the <p> tag is immaterial (the source styles by class, not
+      // element). Nested inline markup (a <strong>/<a>) survives via inlineHtml.
+      // Stays natively editable.
+      const cls = classNameWithInstance($el, sheet);
+      const attrs = blockAttrs([], cls);
+      const clsPart = cls ? ` class="${escapeHtml(cls)}"` : '';
+      return {
+        markup: `<!-- wp:paragraph${attrs} -->\n<p${clsPart}>${inlineHtml($, el).trim()}</p>\n<!-- /wp:paragraph -->`,
+        clean: true,
+      };
+    }
+    // An EMPTY classed div/span is a CSS-painted styling hook (a decorative
+    // overlay, a divider, a spacer): preserve it verbatim so the class — and the
+    // carried rule that paints it — survives. Empty + classless → nothing to keep.
+    const verbatimHook = ($el.attr('class') ?? '').trim() ? ($.html(el) ?? '').trim() : '';
+    if (verbatimHook) return { markup: htmlBlock(verbatimHook), clean: true };
+    return { markup: paragraphBlock(escapeHtml(text)), clean: false };
+  }
+  // A semantic leaf (figcaption, cite, time, address, small…): the source may
+  // select it by ELEMENT, so a <p> would break the selector. Preserve it verbatim
+  // (tag + class + inline style + inline content) as an html island.
+  const verbatim = ($.html(el) ?? '').trim();
+  if (verbatim) return { markup: htmlBlock(verbatim), clean: true };
+  return { markup: paragraphBlock(escapeHtml(text)), clean: false };
 }
 
 export interface EmitSectionOpts {

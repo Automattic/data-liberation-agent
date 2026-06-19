@@ -5,6 +5,7 @@ import { blockMarkupRoundtrips } from '../../streaming/block-markup-validate.js'
 import { segmentPage } from './segment.js';
 import { rewriteInternalHrefs } from '../local-site/href-rewrite.js';
 import { emitSectionBlocks } from './emit-blocks.js';
+import { findDroppedClasses, type SectionStylingDrop } from './styling-conservation.js';
 import type { InstanceStyleSheet } from './instance-styles.js';
 import type { LocalPage, NormalizeReportEntry, RevealBehavior, Section, SectionBehavior } from '../local-site/types.js';
 
@@ -15,6 +16,10 @@ export interface ComposePageResult {
   /** Registered-metadata contract issues (WARNING-level — the emitter is
    * contract-clean by construction; non-empty = an emitter bug to fix). */
   contractIssues: BlockContractIssue[];
+  /** Source CSS classes that did NOT survive a section's block conversion
+   * (WARNING-level styling-conservation diagnostic). Empty on a clean page;
+   * non-empty = a dropped styling hook the carried CSS targeted. */
+  stylingDrops: SectionStylingDrop[];
 }
 
 export interface ComposePageOpts {
@@ -71,11 +76,13 @@ export function composePage(page: LocalPage, opts: ComposePageOpts = {}): Compos
       return opts.reveal ? { ...s, behavior: opts.reveal } : s;
     });
   // Genuinely empty page: nothing to validate, skip the roundtrip gate.
-  if (bodySections.length === 0) return { postContent: '', report: [], formsConverted: 0, contractIssues: [] };
+  if (bodySections.length === 0)
+    return { postContent: '', report: [], formsConverted: 0, contractIssues: [], stylingDrops: [] };
 
   const skeleton: LayoutSkeleton = { sections: [] };
   const pageContent: Record<string, string> = {};
   const report: NormalizeReportEntry[] = [];
+  const stylingDrops: SectionStylingDrop[] = [];
   let formsConverted = 0;
 
   for (const section of bodySections) {
@@ -86,6 +93,13 @@ export function composePage(page: LocalPage, opts: ComposePageOpts = {}): Compos
       jetpackForms: opts.jetpackForms,
     });
     formsConverted += sectionFormsConverted;
+    // Styling-conservation: surface any source class the conversion dropped
+    // (the carried CSS that targeted it no longer matches). Warning-level.
+    // Sections converted to a Jetpack Form are SKIPPED — their source form
+    // structure (form-card/field/field-row/…) is intentionally replaced by the
+    // Jetpack block markup, so those drops are by-design, not lost styling.
+    const droppedClasses = sectionFormsConverted > 0 ? [] : findDroppedClasses(section.html, markup);
+    if (droppedClasses.length > 0) stylingDrops.push({ sectionId: section.id, droppedClasses });
     skeleton.sections.push({ type: 'content', slots: [section.id] });
     pageContent[section.id] = markup;
     // blockType reflects the WRAPPER EMITTED: carry-tagged sections wrap as
@@ -117,5 +131,5 @@ export function composePage(page: LocalPage, opts: ComposePageOpts = {}): Compos
   }
   // Warning-level sibling of the roundtrip gate: emitted attrs vs registered
   // core metadata (never throws; dla/* + core/html allowlisted in the check).
-  return { postContent, report, formsConverted, contractIssues: validateBlockContract(postContent) };
+  return { postContent, report, formsConverted, contractIssues: validateBlockContract(postContent), stylingDrops };
 }

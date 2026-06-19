@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import * as cheerio from 'cheerio';
 import type { Cheerio, CheerioAPI } from 'cheerio';
 import { isTag, isText } from 'domhandler';
-import type { Element } from 'domhandler';
+import type { AnyNode, Element } from 'domhandler';
 import { escapeHtml } from './emit-blocks.js';
 import type { Section, SectionRole } from '../local-site/types.js';
 
@@ -188,16 +188,35 @@ export function segmentPage(html: string): Section[] {
     layoutChromeOrdinal += 1;
   }
 
-  const main = $('main').first();
-  const container = main.length ? main : $('body');
-  // One uniform rule: EVERY top-level node of the container becomes a body
-  // section — wrapper elements (section/article/div) AND loose content
-  // (figure/h1/p/img/table/…) AND nonempty text nodes. The old
-  // children('section, article, div') filter silently dropped mixed loose
-  // children with no diagnostic ("body = top-level children of main",
-  // never-lose-content).
+  // Body content = EVERY top-level node — wrapper elements (section/article/div)
+  // AND loose content (figure/h1/p/img/…) AND nonempty text nodes. When a <main>
+  // exists its CHILDREN are the body (the <main> wrapper is unwrapped); loose
+  // body-level SIBLINGS of <main> are carried TOO (a .grain overlay before
+  // <header>, a sticky .marquee between header and main) — neither chrome nor
+  // inside <main>, they were previously dropped. The <main> expands in place even
+  // when nested in a layout wrapper, so the wrapper still yields main's children,
+  // not the wrapper itself. No <main> → every top-level body node is a section.
+  const mainEl = $('main').first().get(0) ?? null;
+  // True when a body-level node IS <main> or is an ANCESTOR of it (the layout
+  // wrapper holding <main>): that slot expands to main's own children.
+  const isMainSlot = (node: Element): boolean => {
+    if (!mainEl) return false;
+    if (node === mainEl) return true;
+    for (let p = mainEl.parent; p && isTag(p); p = p.parent) if (p === node) return true;
+    return false;
+  };
+  // Flatten body's top-level nodes in DOM order, expanding the <main> slot to its
+  // own children in place. Loose siblings keep their position relative to main.
+  const bodyNodes: AnyNode[] = [];
+  for (const node of $('body').contents().get()) {
+    if (isTag(node) && isMainSlot(node)) {
+      for (const child of $(mainEl as Element).contents().get()) bodyNodes.push(child);
+    } else {
+      bodyNodes.push(node);
+    }
+  }
   let ordinal = 0;
-  for (const node of container.contents().get()) {
+  for (const node of bodyNodes) {
     if (isTag(node)) {
       if (SKIP_TAGS.has(node.tagName?.toLowerCase() ?? '')) continue;
       if (chromeEls.has(node)) continue; // already captured as chrome

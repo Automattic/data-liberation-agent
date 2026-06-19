@@ -116,8 +116,12 @@ describe('emitSectionBlocks', () => {
     expect(markup).toContain('<!-- wp:heading');
   });
 
-  it('flags confidence < 1 when an unrecognized child is downgraded to a paragraph', () => {
-    const section = { id: 's', role: 'body' as const, html: '<section><figure>weird</figure></section>' };
+  it('flags confidence < 1 when a child loses content (loose text beside elements is dropped)', () => {
+    // A wrapper mixing element children with stray loose text drops that text
+    // (only a childless wrapper emits its loose text) — a genuine loss the
+    // confidence signal surfaces. (A styling-bearing leaf is now preserved
+    // losslessly and no longer lowers confidence — see the nested-leaf suite.)
+    const section = { id: 's', role: 'body' as const, html: '<section><div><h3>Kept</h3> dropped stray text</div></section>' };
     const { confidence } = emitSectionBlocks(section);
     expect(confidence).toBeLessThan(1);
   });
@@ -145,7 +149,7 @@ describe('emitSectionBlocks', () => {
     expect(blockMarkupRoundtrips(markup).ok).toBe(true);
   });
 
-  it('rescues img descendants of an unknown wrapper instead of dropping them', () => {
+  it('converts a figure (img + figcaption) without loss: image block + preserved caption', () => {
     const section = {
       id: 's',
       role: 'body' as const,
@@ -154,8 +158,10 @@ describe('emitSectionBlocks', () => {
     const { markup, confidence } = emitSectionBlocks(section);
     expect(markup).toContain('<!-- wp:image');
     expect(markup).toContain('pic.png');
-    expect(markup).toContain('Cap text');
-    expect(confidence).toBeLessThan(1);
+    // figcaption is element-targeted CSS (.gallery figcaption{}) — kept verbatim,
+    // not flattened to a class-less <p>, so the figure converts losslessly.
+    expect(markup).toContain('<figcaption>Cap text</figcaption>');
+    expect(confidence).toBe(1);
     expect(blockMarkupRoundtrips(markup).ok).toBe(true);
   });
 
@@ -173,10 +179,13 @@ describe('emitSectionBlocks', () => {
   });
 
   it('unwraps non-allowlisted inline wrappers, preserving nested links', () => {
+    // A non-allowlisted inline tag (here <u>) is transparently unwrapped so its
+    // nested link survives. (A classless <span> is now KEPT, not unwrapped — it
+    // anchors contextual `.parent span` CSS; see the nested-leaf suite.)
     const section = {
       id: 's',
       role: 'body' as const,
-      html: '<section><p>Visit <span><a href="/shop.html">the shop</a></span> today</p></section>',
+      html: '<section><p>Visit <u><a href="/shop.html">the shop</a></u> today</p></section>',
     };
     const { markup, confidence } = emitSectionBlocks(section);
     expect(markup).toContain('Visit <a href="/shop.html">the shop</a> today');
@@ -683,16 +692,18 @@ describe('id-preserving unknown wrappers (JS-rendered sites)', () => {
     expect(confidence).toBe(1); // structural preservation, nothing lost
   });
 
-  it('an unknown div WITHOUT id keeps the existing downgrade path (regression)', () => {
+  it('an unknown classed div WITHOUT id becomes a paragraph that keeps its class (not a group anchor)', () => {
     const section = {
       id: 's',
       role: 'body' as const,
       html: '<section id="s"><div class="mystery">Loose text</div></section>',
     };
     const { markup, confidence } = emitSectionBlocks(section);
-    expect(markup).toContain('Loose text');
+    // Class-bearing leaf → core/paragraph carrying the class (carried CSS keeps
+    // matching), NOT a group with an id anchor (no id present).
+    expect(markup).toContain('<p class="mystery">Loose text</p>');
     expect(markup).not.toContain('"anchor":"mystery"');
-    expect(confidence).toBeLessThan(1);
+    expect(confidence).toBe(1);
   });
 });
 
@@ -742,15 +753,18 @@ describe('structural wrapper preservation (owned-source bodies)', () => {
     expect(sheet.toCss()).toContain('display:grid;gap:24px');
   });
 
-  it('a true text leaf still downgrades to a paragraph', () => {
+  it('a true text leaf becomes a paragraph that keeps its class (not a structural group)', () => {
     const section = {
       id: 's',
       role: 'body' as const,
       html: '<section id="s"><div class="badge">Leaf text only</div></section>',
     };
     const { markup, confidence } = emitSectionBlocks(section);
-    expect(markup).toContain('Leaf text only');
-    expect(confidence).toBeLessThan(1);
+    // A childless leaf is NOT promoted to a group; it becomes a paragraph that
+    // carries its source class (previously dropped to a bare <p>).
+    expect(markup).toContain('<p class="badge">Leaf text only</p>');
+    expect(markup).not.toContain('wp-block-group badge');
+    expect(confidence).toBe(1);
   });
 });
 
@@ -881,11 +895,13 @@ describe('emitSectionBlocks verbatimInteractive (chrome carry)', () => {
     '<ul class="submenu"><li><a href="/a.html">Docs</a></li></ul>' +
     '</li></ul></section>';
 
-  it('default (off): drops the button, chevron svg, and has-children class', () => {
+  it('default (off): drops the button + chevron svg, but keeps the list-item class', () => {
     const { markup } = emitSectionBlocks({ id: 'hdr', role: 'body' as const, html: navHtml });
     expect(markup).not.toContain('<button');
     expect(markup).not.toContain('<svg');
-    expect(markup).not.toContain('menu-item--has-children');
+    // The list-item CLASS now survives (a carried-CSS styling hook) even though
+    // the interactive button/svg still need verbatimInteractive to be preserved.
+    expect(markup).toContain('menu-item--has-children');
   });
 
   it('on: preserves the button, chevron svg, has-children class, and submenu', () => {
@@ -922,16 +938,20 @@ describe('emitSectionBlocks verbatimInteractive (chrome carry)', () => {
 
   it('on: preserves an EMPTY classed element (CSS-background logo hook)', () => {
     // A logo is often an empty <a class="brand-logo"> filled by CSS
-    // background:url(logo.svg). The normal path downgrades an empty element to
-    // <p></p>, dropping the class and killing the logo. verbatimInteractive
-    // keeps the classed anchor.
+    // background:url(logo.svg). Both paths keep the classed anchor: the body path
+    // preserves an empty classed styling hook verbatim, and verbatimInteractive
+    // keeps it as part of the byte-true interactive subtree.
     const html =
       '<section id="hdr">' +
       '<a class="brand-logo" href="/" aria-label="Home"></a>' +
       '<ul class="site-menu"><li><a href="/home.html">Home</a></li></ul>' +
       '</section>';
     const off = emitSectionBlocks({ id: 'hdr', role: 'body' as const, html });
-    expect(off.markup).not.toContain('brand-logo'); // control: dropped without the opt
+    // The body path now ALSO preserves an empty classed styling hook verbatim
+    // (the overlay/logo case — see the nested-leaf suite), so the class survives
+    // even without the opt. verbatimInteractive additionally keeps interactive
+    // subtrees (the nav) byte-true.
+    expect(off.markup).toContain('brand-logo');
 
     const { markup } = emitSectionBlocks(
       { id: 'hdr', role: 'body' as const, html },
@@ -986,5 +1006,111 @@ describe('emitSectionBlocks verbatimInteractive (chrome carry)', () => {
     );
     expect(markup).toContain('<!-- wp:list');
     expect(markup).not.toContain('<!-- wp:html -->');
+  });
+});
+
+describe('emitSectionBlocks — nested leaf styling preservation', () => {
+  it('keeps a nested leaf div class on a core/paragraph (class-targeted CSS)', () => {
+    // <div class="stat-num">12k</div> inside a .stat group is class-targeted
+    // (.stat .stat-num{}). It must keep its class, not flatten to a bare <p>.
+    const section = {
+      id: 'stats',
+      role: 'body' as const,
+      html: '<section><div class="stat"><div class="stat-num">12k</div><div class="stat-label">Members</div></div></section>',
+    };
+    const { markup } = emitSectionBlocks(section);
+    expect(blockMarkupRoundtrips(markup).ok).toBe(true);
+    expect(markup).toContain('<p class="stat-num">12k</p>');
+    expect(markup).toContain('<p class="stat-label">Members</p>');
+  });
+
+  it('keeps a nested leaf span class on a core/paragraph (e.g. a quote attribution)', () => {
+    const section = {
+      id: 'quote',
+      role: 'body' as const,
+      html: '<section><blockquote class="quote"><p>A fine review.</p><span class="quote-by">— A Patron</span></blockquote></section>',
+    };
+    const { markup } = emitSectionBlocks(section);
+    expect(blockMarkupRoundtrips(markup).ok).toBe(true);
+    expect(markup).toContain('<p class="quote-by">— A Patron</p>');
+  });
+
+  it('carries a nested leaf inline style as a lib-i class (not a stripped style= attr)', () => {
+    const sheet = new InstanceStyleSheet();
+    const section = {
+      id: 's',
+      role: 'body' as const,
+      html: '<section><div class="badge"><div class="tag" style="color:var(--hot)">New</div></div></section>',
+    };
+    const { markup } = emitSectionBlocks(section, { instanceStyles: sheet });
+    expect(blockMarkupRoundtrips(markup).ok).toBe(true);
+    expect(markup).toMatch(/<p class="tag lib-i[0-9a-f]{10}">New<\/p>/);
+    expect(markup).not.toContain('style="color');
+    expect(sheet.toCss()).toContain('color:var(--hot)');
+  });
+
+  it('preserves a nested semantic leaf tag verbatim (element-targeted CSS survives)', () => {
+    // .gallery figcaption{} targets the ELEMENT (no class) — flattening to <p>
+    // would break it. Keep the figcaption tag via a verbatim html island.
+    const section = {
+      id: 'gallery',
+      role: 'body' as const,
+      html: '<section><figure><img src="a.jpg" alt="A"><figcaption>Caption text</figcaption></figure></section>',
+    };
+    const { markup } = emitSectionBlocks(section);
+    expect(blockMarkupRoundtrips(markup).ok).toBe(true);
+    expect(markup).toContain('<figcaption>Caption text</figcaption>');
+  });
+
+  it('preserves an empty classed styling-hook element (decorative CSS-painted overlay)', () => {
+    // <div class="overlay"></div> is painted entirely by CSS — a bare empty <p>
+    // drops the class and kills the visual. Keep it verbatim.
+    const section = {
+      id: 's',
+      role: 'body' as const,
+      html: '<section><div class="overlay"></div></section>',
+    };
+    const { markup } = emitSectionBlocks(section);
+    expect(blockMarkupRoundtrips(markup).ok).toBe(true);
+    expect(markup).toContain('<div class="overlay"></div>');
+  });
+
+  it('keeps a classless <span> inside rich text so contextual ".parent span" CSS survives', () => {
+    const section = {
+      id: 's',
+      role: 'body' as const,
+      html: '<section><p class="pull">We <span>start</span> arguments.</p></section>',
+    };
+    const { markup } = emitSectionBlocks(section);
+    expect(blockMarkupRoundtrips(markup).ok).toBe(true);
+    expect(markup).toContain('We <span>start</span> arguments.');
+  });
+
+  it('preserves a list-item class on core/list-item (e.g. a reveal hook)', () => {
+    // <li class="reveal"> drove a scroll animation; listItemBlock dropped the
+    // class, flattening to a bare <li> (the carried .reveal rule stops matching).
+    const section = {
+      id: 's',
+      role: 'body' as const,
+      html: '<section><ol class="manifesto"><li class="reveal">One</li><li class="reveal">Two</li></ol></section>',
+    };
+    const { markup } = emitSectionBlocks(section);
+    expect(blockMarkupRoundtrips(markup).ok).toBe(true);
+    expect(markup).toContain('<li class="reveal">One</li>');
+    expect(markup).toContain('<li class="reveal">Two</li>');
+  });
+
+  it('carries an <img> inline style as a lib-i class + rule (fixer-safe)', () => {
+    const sheet = new InstanceStyleSheet();
+    const section = {
+      id: 's',
+      role: 'body' as const,
+      html: '<section><img src="a.svg" alt="A" style="background:var(--ink)"></section>',
+    };
+    const { markup } = emitSectionBlocks(section, { instanceStyles: sheet });
+    expect(blockMarkupRoundtrips(markup).ok).toBe(true);
+    expect(markup).toMatch(/wp-block-image lib-i[0-9a-f]{10}/);
+    expect(markup).not.toContain('style="background');
+    expect(sheet.toCss()).toContain('background:var(--ink)');
   });
 });

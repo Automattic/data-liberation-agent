@@ -187,14 +187,17 @@ describe('segmentPage', () => {
     expect(rails[0].html).toContain('role="complementary"');
   });
 
-  it('does not over-capture a short decorative aside as chrome', () => {
+  it('does not over-capture a short decorative aside as chrome (it becomes loose body content)', () => {
     const html = `<body>
       <aside class="badge">New</aside>
       <main><section id="content"><h1>Content</h1></section></main>
     </body>`;
     const sections = segmentPage(html);
+    // The aside is NOT chrome (not a nav/rail)...
     expect(sections.find((s) => s.role === 'nav')).toBeUndefined();
-    expect(sections.filter((s) => s.role === 'body').map((s) => s.id)).toEqual(['content']);
+    // ...but as a loose body-level sibling of <main> it is carried as body
+    // content (never-lose-content), not dropped.
+    expect(sections.filter((s) => s.role === 'body').map((s) => s.id)).toEqual(['badge', 'content']);
   });
 
   it('avoids dedup suffix collision with a pre-existing literal id', () => {
@@ -251,5 +254,37 @@ describe('segmentPage', () => {
     const sections = segmentPage(html).filter((s) => s.role === 'body');
     expect(sections[0].classes).toEqual(['hero', 'splash']);
     expect(sections[1].classes).toEqual(['cards']);
+  });
+
+  it('captures loose body siblings outside <main> (decorative/sticky bars) as body sections', () => {
+    // A .grain overlay before <header> and a sticky .marquee between header and
+    // <main> are body-level siblings of <main> — carry them, do not drop them.
+    const html = `<body>
+      <div class="grain" aria-hidden="true"></div>
+      <header id="masthead"><nav><a href="x.html">X</a></nav></header>
+      <div class="marquee"><span>Ticker</span></div>
+      <main>
+        <section id="hero"><h1>Hi</h1></section>
+      </main>
+      <footer><p>(c)</p></footer>
+    </body>`;
+    const sections = segmentPage(html);
+    expect(sections.find((s) => s.role === 'header')).toBeTruthy();
+    expect(sections.find((s) => s.role === 'footer')).toBeTruthy();
+    const body = sections.filter((s) => s.role === 'body');
+    // DOM order: grain + marquee (both before <main>) then main's hero.
+    expect(body.map((s) => s.id)).toEqual(['grain', 'marquee', 'hero']);
+    expect(body.find((s) => s.id === 'marquee')?.html).toContain('Ticker');
+  });
+
+  it('captures a loose body sibling AND still expands a wrapped <main> in place', () => {
+    // The loose-sibling capture must descend to <main>'s children when main is
+    // nested in a layout wrapper — emit the hero, not the whole .page wrapper.
+    const html = `<body>
+      <div class="marquee"><span>Ticker</span></div>
+      <div class="page"><main><section id="hero"><h1>Hi</h1></section></main></div>
+    </body>`;
+    const body = segmentPage(html).filter((s) => s.role === 'body');
+    expect(body.map((s) => s.id)).toEqual(['marquee', 'hero']);
   });
 });
