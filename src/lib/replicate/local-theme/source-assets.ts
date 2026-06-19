@@ -90,6 +90,14 @@ export interface MediaAsset {
   themeRel: string;
 }
 
+/** One HTML <img src> reference carried from a source page into the theme. */
+export interface ImgAssetRef {
+  /** Exact src string as authored in the page HTML (e.g. "assets/logo.svg"). */
+  ref: string;
+  /** Theme-relative destination the file was copied to (e.g. assets/img/logo.svg). */
+  themeRel: string;
+}
+
 export interface SourceAssets {
   /** Compat layer + all source CSS (linked files in DOCUMENT order, then unlinked top-level fallback, then inline <style> blocks). */
   css: string;
@@ -104,6 +112,14 @@ export interface SourceAssets {
   /** Image files referenced via CSS url() that the handler must copy into the
    * theme (the css urls are already rewritten to point at them). */
   mediaAssets: MediaAsset[];
+  /** Image files referenced via HTML <img src> that the handler must copy into
+   * the theme. Unlike CSS images these are NOT pre-rewritten (post_content has
+   * no carried-stylesheet anchor) — the handler repoints each <img> using the
+   * per-page rewrite list below. */
+  imgAssets: MediaAsset[];
+  /** Per source page (keyed by relPath): the exact <img src> ref strings found
+   * and the theme-relative path each was carried to, for the handler's rewrite. */
+  imgRewritesByPage: Record<string, ImgAssetRef[]>;
 }
 
 /** Theme subdir (relative to assets/css/source.css) holding carried CSS images. */
@@ -162,6 +178,104 @@ export function localizeCssImages(
     }),
   );
   return { parts: outParts, mediaAssets };
+}
+
+/** Inline <script> bodies are carried into the concatenated bundle ONLY when
+ * they are executable JS — type absent/empty, a JS MIME, or `module`. Data
+ * blocks (`application/ld+json` SEO, `application/json`, `importmap`,
+ * `speculationrules`, `text/*` microtemplates) are NOT JS: concatenating one
+ * injects a parse-time SyntaxError that aborts the ENTIRE bundle (the per-chunk
+ * try/catch catches RUNTIME throws only, never parse errors), silently killing
+ * every carried behavior — reveal, nav, accordions. So they are skipped. */
+const EXECUTABLE_INLINE_JS_TYPES = new Set([
+  'text/javascript',
+  'application/javascript',
+  'application/x-javascript',
+  'text/ecmascript',
+  'application/ecmascript',
+  'module',
+]);
+function isExecutableInlineScript(openTagAttrs: string): boolean {
+  const m = openTagAttrs.match(/\btype\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i);
+  if (!m) return true; // no type attribute → classic JS
+  const type = (m[1] ?? m[2] ?? m[3] ?? '').trim().toLowerCase();
+  if (type === '') return true; // type="" is classic JS per the HTML spec
+  return EXECUTABLE_INLINE_JS_TYPES.has(type);
+}
+
+/** Theme subdir (relative to the theme root) holding carried HTML <img> assets. */
+const IMG_SUBDIR = 'assets/img';
+
+/** Harvest LOCAL <img src> image references from each page's HTML, returning the
+ * copy-list (unique source files → a flat assets/img/<name>, collision-suffixed)
+ * and a per-page rewrite list (exact ref string → themeRel). The handler copies
+ * the files into the theme and repoints each <img src> at the theme URL — HTML
+ * <img>s, unlike CSS url()s, have no carried stylesheet to anchor a relative
+ * path against, so they need an absolute theme URL. Remote (http/protocol-
+ * relative), data:, fragment, and missing refs are left verbatim (never
+ * fabricated). */
+export function collectHtmlImages(
+  pageHtmls: Array<{ html: string; relPath: string }>,
+  dir: string,
+): { imgAssets: MediaAsset[]; rewritesByPage: Record<string, ImgAssetRef[]> } {
+  const bySrc = new Map<string, string>(); // srcAbs → assigned basename
+  const usedNames = new Set<string>();
+  const imgAssets: MediaAsset[] = [];
+  const rewritesByPage: Record<string, ImgAssetRef[]> = {};
+
+  const assign = (srcAbs: string, rawName: string): string => {
+    const existing = bySrc.get(srcAbs);
+    if (existing) return existing;
+    let name = rawName;
+    if (usedNames.has(name)) {
+      const dot = name.lastIndexOf('.');
+      const stem = dot > 0 ? name.slice(0, dot) : name;
+      const ext = dot > 0 ? name.slice(dot) : '';
+      let n = 2;
+      while (usedNames.has(`${stem}-${n}${ext}`)) n++;
+      name = `${stem}-${n}${ext}`;
+    }
+    usedNames.add(name);
+    bySrc.set(srcAbs, name);
+    imgAssets.push({ srcAbs, themeRel: `${IMG_SUBDIR}/${name}` });
+    return name;
+  };
+
+  for (const { html, relPath } of pageHtmls) {
+    const baseDir = posix.dirname(relPath);
+    const seenRefs = new Set<string>();
+    const list: ImgAssetRef[] = [];
+    // `\ssrc` (whitespace-anchored) so `data-src` / `xlink:href` never match.
+    for (const m of html.matchAll(/<img\b[^>]*?\ssrc\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))/gi)) {
+      const ref = (m[1] ?? m[2] ?? m[3] ?? '').trim();
+      if (!ref || seenRefs.has(ref)) continue;
+      if (/^(?:https?:)?\/\//i.test(ref) || ref.startsWith('data:') || ref.startsWith('#')) continue;
+      const cleaned = ref.split(/[?#]/)[0];
+      const within = cleaned.startsWith('/')
+        ? posix.normalize(cleaned.slice(1))
+        : posix.normalize(posix.join(baseDir, cleaned));
+      if (within.startsWith('..')) continue; // never escape the source root
+      const srcAbs = join(dir, within);
+      if (!existsSync(srcAbs)) continue; // missing → leave as authored
+      seenRefs.add(ref);
+      const name = assign(srcAbs, posix.basename(within));
+      list.push({ ref, themeRel: `${IMG_SUBDIR}/${name}` });
+    }
+    if (list.length > 0) rewritesByPage[relPath] = list;
+  }
+  return { imgAssets, rewritesByPage };
+}
+
+/** Repoint carried <img src> refs at the theme-carried copies. Pure string
+ * replacement bounded by the surrounding quote so a path token can't match
+ * inside another attribute; safe because the refs are literal source paths. */
+export function rewriteHtmlImageSrcs(html: string, refs: ImgAssetRef[], themeSlug: string): string {
+  let out = html;
+  for (const { ref, themeRel } of refs) {
+    const themeUrl = `/wp-content/themes/${themeSlug}/${themeRel}`;
+    out = out.split(`"${ref}"`).join(`"${themeUrl}"`).split(`'${ref}'`).join(`'${themeUrl}'`);
+  }
+  return out;
 }
 
 export function collectSourceAssets(
@@ -273,8 +387,11 @@ export function collectSourceAssets(
   // follow the libraries they call).
   const seenInlineJs = new Set<string>();
   for (const { html } of pageHtmls) {
-    for (const m of html.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/gi)) {
-      const body = m[1].trim();
+    for (const m of html.matchAll(/<script(?![^>]*\bsrc=)([^>]*)>([\s\S]*?)<\/script>/gi)) {
+      // Skip non-JS <script> data blocks (JSON-LD, importmaps, templates): a
+      // parse error in one aborts the whole concatenated bundle.
+      if (!isExecutableInlineScript(m[1])) continue;
+      const body = m[2].trim();
       if (body && !seenInlineJs.has(body)) {
         seenInlineJs.add(body);
         jsParts.push(`(function () { try {\n${body}\n} catch (e) { /* page-scoped inline chunk */ } })();`);
@@ -288,5 +405,16 @@ export function collectSourceAssets(
   // startsWith(WP_COMPAT_CSS) is preserved; Google imports only exist in cssParts.
   const { parts: localizedParts, mediaAssets } = localizeCssImages(cssParts, dir);
   const css = (WP_COMPAT_CSS + localizedParts.join('\n\n')).replace(GOOGLE_IMPORT_RE, '');
-  return { css, js: jsParts.join('\n\n'), cssFiles, jsFiles, skippedUnlinked, mediaAssets };
+  // Carry HTML <img> assets too (content images the CSS pass never sees).
+  const { imgAssets, rewritesByPage: imgRewritesByPage } = collectHtmlImages(pageHtmls, dir);
+  return {
+    css,
+    js: jsParts.join('\n\n'),
+    cssFiles,
+    jsFiles,
+    skippedUnlinked,
+    mediaAssets,
+    imgAssets,
+    imgRewritesByPage,
+  };
 }

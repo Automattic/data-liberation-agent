@@ -45,6 +45,7 @@ import { compareScreenshotDirs } from '../../lib/screenshot/compare.js';
 import { openEditorSession, scoreEditorSurface, type EditorSurfacePage } from '../../lib/preview/editor-preview.js';
 import { ensureStudioSite, expandTilde, studioWpRoot } from '../../lib/preview/studio-site.js';
 import { studioWp as studioWpExec } from '../../lib/preview/studio.js';
+import { ensurePlugin } from '../../lib/preview/ensure-plugin.js';
 import { connectBrowser } from '../../lib/browser-kit/index.js';
 import type { DataModel } from '../../lib/replicate/local-data/types.js';
 import { installLocalData } from '../../lib/replicate/local-data/data-install.js';
@@ -57,7 +58,7 @@ import { InstanceStyleSheet, mergeInstanceStyleCss } from '../../lib/replicate/n
 import { composedSidecarPath, instanceStylesPath } from '../../lib/streaming/block-markup-validate.js';
 import { buildLocalFoundation, extractCssColors, type PaletteAgg, type TypographyAgg, type BreakpointsAgg } from '../../lib/replicate/local-theme/foundation.js';
 import { extractGoogleFontCssUrls, selfHostGoogleFonts } from '../../lib/replicate/local-theme/google-fonts.js';
-import { collectSourceAssets, WP_COMPAT_CSS } from '../../lib/replicate/local-theme/source-assets.js';
+import { collectSourceAssets, rewriteHtmlImageSrcs, WP_COMPAT_CSS, type ImgAssetRef } from '../../lib/replicate/local-theme/source-assets.js';
 import { buildJetpackFormParityCss } from '../../lib/replicate/local-site/jetpack-form-css.js';
 import { JETPACK_FORM_PARITY_CSS } from '../../lib/replicate/local-theme/jetpack-form-parity-contract.js';
 import { detectBehaviors } from '../../lib/replicate/normalize/detect-behaviors.js';
@@ -562,12 +563,32 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
   // empty object (that would change theme assembly).
   let carrySourceAssets: { css: string; js: string } | undefined;
   let behaviors: DetectedBehaviors | undefined;
+  // Carried HTML <img> assets (content images) — repointed at the theme copies
+  // in the install loop; any SVG among them arms the safe-svg install below.
+  let imgRewritesByPage: Record<string, ImgAssetRef[]> = {};
+  let carriedImgCount = 0;
+  let svgCarried = false;
   if (carryCss || carryJs || nativeBehaviors) {
     const assets = collectSourceAssets(dir, site.pages.map((p) => ({ relPath: p.relPath, html: p.html })));
     if (assets.skippedUnlinked.length > 0) {
       warnings.push(
         `unlinked top-level assets skipped (linked assets exist; stale-revision protection): ${assets.skippedUnlinked.join(', ')}`,
       );
+    }
+    // Carry HTML <img> assets (content images: svg/png/jpg…) into the theme so
+    // the rewritten <img src> theme URLs resolve. Independent of carryCss — these
+    // are content, not design. Best-effort: a copy failure degrades to a warning.
+    imgRewritesByPage = assets.imgRewritesByPage;
+    for (const m of assets.imgAssets) {
+      try {
+        const dest = join(outputDir, 'theme', m.themeRel);
+        mkdirSync(dirname(dest), { recursive: true });
+        copyFileSync(m.srcAbs, dest);
+        carriedImgCount++;
+        if (/\.svg$/i.test(m.themeRel)) svgCarried = true;
+      } catch (err) {
+        warnings.push(`carry img ${m.themeRel}: ${(err as Error).message}`);
+      }
     }
     if (carryCss || carryJs) {
       // Splice the localized Google-font css (verbatim subsets, local URLs)
@@ -925,6 +946,23 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
       warnings.push(`plugin activate failed for ${slug}: ${(err as Error).message}`);
     }
   }
+  // SVGs ride into the theme as static assets (they render without a plugin),
+  // but install safe-svg whenever SVGs are present so the user can UPLOAD/replace
+  // them via the media library + block editor — the any-liberate-path "SVGs
+  // detected → safe-svg" rule (parity with the remote media-install path).
+  // Best-effort; a failure never aborts the conversion.
+  let safeSvgEnsured = false;
+  if (svgCarried) {
+    const ensured = await ensurePlugin(studioSitePath, 'safe-svg', studioWp);
+    if (ensured.ok) safeSvgEnsured = true;
+    else warnings.push(`safe-svg install failed: ${ensured.error}`);
+  }
+  if (carriedImgCount > 0) {
+    warnings.push(
+      `carried ${carriedImgCount} HTML <img> asset(s) into the theme` +
+        (svgCarried ? ` (safe-svg ${safeSvgEnsured ? 'ensured' : 'NOT installed'})` : ''),
+    );
+  }
   // Resolve the replica base URL now that the site is known reachable
   // (activation just ran against it). Failure degrades to the conventional
   // wp-env default with a warning — never aborts.
@@ -1077,6 +1115,13 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
           contentOverride = inj.markup;
           warnings.push(`data: ${item.slug} → query loop(s) for ${inj.injected.join(', ')}`);
         }
+      }
+      // Repoint carried <img src> at the theme-carried asset copies (else the
+      // source-relative paths 404 against the WP page permalink).
+      const imgPage = site.pages.find((p) => p.slug === item.slug);
+      const imgRefs = imgPage ? imgRewritesByPage[imgPage.relPath] : undefined;
+      if (imgRefs && imgRefs.length > 0) {
+        contentOverride = rewriteHtmlImageSrcs(contentOverride ?? item.content, imgRefs, themeSlug);
       }
       const res = await installPost({ item, outputDir, studioSitePath, contentOverride });
       if (!res || res.action === 'error') {
