@@ -122,11 +122,13 @@ foreach ( ( isset( $data['items'] ) ? $data['items'] : array() ) as $item ) {
 			$skipped_modified++;
 			continue;
 		}
-		$res = wp_update_post( array(
+		// wp_slash(): wp_update_post() unslashes internally; without this it
+		// strips backslashes from any block-attribute JSON in post_content.
+		$res = wp_update_post( wp_slash( array(
 			'ID'           => $post_id,
 			'post_title'   => isset( $item['title'] ) ? $item['title'] : '',
 			'post_content' => isset( $item['content'] ) ? $item['content'] : '',
-		), true );
+		) ), true );
 		if ( is_wp_error( $res ) ) { continue; }
 		$is_update = true;
 	} else {
@@ -136,24 +138,29 @@ foreach ( ( isset( $data['items'] ) ? $data['items'] : array() ) as $item ) {
 			$collisions++;
 			continue;
 		}
-		$post_id = wp_insert_post( array(
+		// wp_slash(): wp_insert_post() unslashes internally; without this it
+		// strips backslashes from any block-attribute JSON in post_content.
+		$post_id = wp_insert_post( wp_slash( array(
 			'post_type'    => $cpt,
 			'post_status'  => 'publish',
 			'post_name'    => $slug,
 			'post_title'   => isset( $item['title'] ) ? $item['title'] : '',
 			'post_content' => isset( $item['content'] ) ? $item['content'] : '',
-		), true );
+		) ), true );
 		if ( is_wp_error( $post_id ) || ! $post_id ) { continue; }
 	}
 
-	update_post_meta( $post_id, '_dla_item_id', $item['id'] );
+	// wp_slash() meta values: update_post_meta() unslashes internally, so
+	// backslash-bearing values (e.g. JSON or escaped text in custom meta) would
+	// otherwise be corrupted. slash->unslash is identity for plain values.
+	update_post_meta( $post_id, '_dla_item_id', wp_slash( $item['id'] ) );
 	if ( isset( $item['gallery'] ) && is_array( $item['gallery'] ) ) {
-		update_post_meta( $post_id, '_dla_gallery', $item['gallery'] );
+		update_post_meta( $post_id, '_dla_gallery', wp_slash( $item['gallery'] ) );
 	}
 	$meta = isset( $item['meta'] ) && is_array( $item['meta'] ) ? $item['meta'] : array();
 	foreach ( $fields as $key ) {
 		if ( array_key_exists( $key, $meta ) ) {
-			update_post_meta( $post_id, $key, $meta[ $key ] );
+			update_post_meta( $post_id, $key, wp_slash( $meta[ $key ] ) );
 		}
 	}
 	if ( isset( $item['terms'] ) && is_array( $item['terms'] ) ) {

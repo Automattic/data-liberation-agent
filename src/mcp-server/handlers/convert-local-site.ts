@@ -66,7 +66,8 @@ import { extractSourceLandmarksFromHtml, landmarkRoleForHtmlRoot, selectorForHtm
 import { reconcileRegions, type PlacedRegion, type RegionSelectionReport } from '../../lib/replicate/region-audit.js';
 import { buildSelector, type SelectorParts } from '../../lib/replicate/section-selector.js';
 import type { SourceLandmark } from '../../lib/replicate/section-extract.js';
-import { buildInteractivityPlugin, PLUGIN_SLUG } from '../../blocks/interactivity-plugin.js';
+import { buildInteractivityPlugin } from '../../blocks/interactivity-plugin.js';
+import { buildEditableHtmlPlugin } from '../../blocks/editable-html-plugin.js';
 import type { DetectedBehaviors, Section } from '../../lib/replicate/local-site/types.js';
 import type { ConservationLeak } from '../../lib/replicate/normalize/conservation-leak.js';
 import {
@@ -376,6 +377,7 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
   // both at once would double-drive every behavior (double-init sliders,
   // re-animating reveals). Explicit carryJs:true is overridden, loudly.
   const nativeBehaviors = args.nativeBehaviors === true;
+  const editableIslands = args.editableIslands === true;
   if (nativeBehaviors && args.carryJs === true) {
     warnings.push('nativeBehaviors forces carryJs off (carried source JS would double-drive block behaviors)');
   }
@@ -424,7 +426,7 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
   // Stage 1a: ingest + compose sidecars + normalize-report (reuse the handler
   // verbatim; nativeBehaviors makes it tag sidecar sections with dla/reveal).
   const cardMounts = dataModel?.mounts.filter((m) => m.sourceSelector) ?? [];
-  const ingestRes = await ingestLocalSiteHandler({ dir, outputDir, nativeBehaviors, cardMounts }, ctx);
+  const ingestRes = await ingestLocalSiteHandler({ dir, outputDir, nativeBehaviors, editableIslands, cardMounts }, ctx);
   if (ingestRes.isError) return ingestRes;
   // Forward stage-1a quality signals into the final summary, nested under one
   // `ingest` key so the two summaries' field shapes can't collide.
@@ -433,9 +435,11 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
     failedPageCount: number;
     failedPagesList: Array<{ slug: string; error: string }>;
     formsConverted?: number;
+    islandsConverted?: number;
     behaviors?: { reveal: boolean; tabs: number; slider: number; modal: number; gaps: number };
   };
   const formsConverted = ingestSummary.formsConverted ?? 0;
+  const islandsConverted = ingestSummary.islandsConverted ?? 0;
   const ingest = {
     lowConfidence: ingestSummary.lowConfidence,
     failedPageCount: ingestSummary.failedPageCount,
@@ -836,6 +840,7 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
   // the repair loop + summary below.)
 
   let themeWritten = 0;
+  let pluginSlugs: string[] = [];
   try {
     // assetSourceDir carries downloaded fonts (woff2) into the live theme so the
     // install is self-contained without a separate binary-copy step.
@@ -848,13 +853,19 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
     // ships ~400B of inert reveal CSS globally under WP's default block-asset
     // loading (every selector requires the absent dla-reveal-js gate; zero
     // visual effect). Accepted over auto-deactivation.
-    themeWritten = writeReplicaFilesToHost({
+    const blockPlugins = [
+      ...(nativeBehaviors ? [buildInteractivityPlugin()] : []),
+      ...(editableIslands && islandsConverted > 0 ? [buildEditableHtmlPlugin()] : []),
+    ];
+    const written = writeReplicaFilesToHost({
       wpRoot,
       themeSlug,
       themeFiles,
       assetSourceDir: join(outputDir, 'theme'),
-      ...(nativeBehaviors ? { blockPlugins: [buildInteractivityPlugin()] } : {}),
-    }).themeWritten;
+      ...(blockPlugins.length > 0 ? { blockPlugins } : {}),
+    });
+    themeWritten = written.themeWritten;
+    pluginSlugs = written.pluginSlugs;
   } catch (err) {
     return ctx.errorResult(`theme write failed: ${(err as Error).message}`);
   }
@@ -903,14 +914,13 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
       warnings.push(jetpackFormsPluginInstallWarning(err as Error));
     }
   }
-  // The dla/* blocks must be registered server-side before any page renders
-  // them (SSR directive processing rides supports.interactivity). Mirrors the
-  // theme-activate degrade-to-warning contract.
-  if (nativeBehaviors) {
+  // The custom dla/* blocks must be registered before page render/editor open.
+  // Mirrors the theme-activate degrade-to-warning contract.
+  for (const slug of pluginSlugs) {
     try {
-      await studioWp(studioSitePath, ['plugin', 'activate', PLUGIN_SLUG]);
+      await studioWp(studioSitePath, ['plugin', 'activate', slug]);
     } catch (err) {
-      warnings.push(`plugin activate failed for ${PLUGIN_SLUG}: ${(err as Error).message}`);
+      warnings.push(`plugin activate failed for ${slug}: ${(err as Error).message}`);
     }
   }
   // Resolve the replica base URL now that the site is known reachable
@@ -1587,6 +1597,7 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
     missingSidecars: plan.missingSidecars,
     emptySidecars,
     ingest,
+    ...(editableIslands ? { islandsConverted } : {}),
     themeSlug,
     themeWritten,
     frontPageSet,

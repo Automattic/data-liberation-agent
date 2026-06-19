@@ -88,6 +88,7 @@ liberate_convert_local_site({
 - **createSite** runs `studio site create` only when no WP install exists at `studioSitePath` — a re-run reuses the site (and re-converts idempotently). Admin creds come from env `WP_ADMIN_USER` / `WP_ADMIN_PASS`; omit them and Studio auto-generates (fine for convert-only).
 - **carryCss / carryJs** default ON — the source's own stylesheet + scripts are carried into the theme (the parity mechanism). Pass `false` for a tokens-only theme.
 - **nativeBehaviors** (opt-in) swaps carried JS for native Interactivity blocks (reveal/sticky/tabs/slider/modal); unmapped behaviors land in `behavior-gaps.json`. Default OFF (maintain the source JS).
+- **editableIslands** (opt-in) converts carried `core/html` islands into editable `dla/editable-html` blocks (text+image bindable, static-save, render-anywhere). Default OFF.
 - **editorSurface** (opt-in) also scores each page in the live block editor canvas — needs `WP_ADMIN_PASS` in env; warn-only for carry (it does not flip the verdict).
 
 Narrate progress. On `isError`, surface the message (a missing source dir, a Studio create failure, a roundtrip/compose failure per page) and stop.
