@@ -377,9 +377,21 @@ describe('instance-styles carry (per-instance lib-i rules)', () => {
     const fns = files.find((f) => f.relativePath === 'functions.php')?.content ?? '';
     expect(fns).toContain('add_editor_style');
     expect(fns).toContain("add_theme_support( 'editor-styles' )");
-    expect(fns).toContain("'assets/css/source.css', 'assets/css/instance-styles.css', 'assets/css/parity-patch.css'");
+    expect(fns).toContain(
+      "'assets/css/source.css', 'assets/css/instance-styles.css', 'assets/css/parity-patch.css', 'assets/css/editor-reveal-reset.css'",
+    );
     // Guarded so an absent asset is skipped, not fatal.
     expect(fns).toContain('if ( file_exists( get_theme_file_path( $rel ) ) )');
+    // The editor reveal-reset ships as a theme file and forces carried
+    // scroll-reveal blocks visible in the editor canvas...
+    const reset = files.find((f) => f.relativePath === 'assets/css/editor-reveal-reset.css');
+    expect(reset?.content).toContain('opacity: 1 !important');
+    expect(reset?.content).toContain('.reveal');
+    // ...but it is EDITOR-ONLY: never wp_enqueue_style'd on the front end (so the
+    // live reveal animation is untouched). The frontend enqueue block precedes
+    // the after_setup_theme (editor) block in functions.php.
+    const frontendEnqueues = fns.slice(0, fns.indexOf("add_action( 'after_setup_theme'"));
+    expect(frontendEnqueues).not.toContain('editor-reveal-reset');
   });
 
   it('no instanceStylesCss → no asset file, but add_editor_style still loads source.css', () => {

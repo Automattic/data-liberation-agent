@@ -2,7 +2,7 @@
 import { describe, it, expect } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { collectSourceAssets, WP_COMPAT_CSS } from './source-assets.js';
+import { collectSourceAssets, rewriteHtmlImageSrcs, WP_COMPAT_CSS } from './source-assets.js';
 
 const FIXTURE_TMP = join(process.cwd(), '.tmp-test');
 
@@ -251,5 +251,92 @@ describe('collectSourceAssets: unlinked fallback gating (stale-revision pollutio
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('collectSourceAssets: non-JS <script> blocks (bundle-poisoning guard)', () => {
+  it('does NOT carry application/ld+json into the JS bundle, keeping it parseable', () => {
+    const dir = mkdtempSync(join(FIXTURE_TMP, 'sa-ldjson-'));
+    try {
+      writeFileSync(join(dir, 'app.js'), "document.querySelectorAll('.reveal');");
+      const html =
+        '<html><head>' +
+        '<script type="application/ld+json">{ "@context": "https://schema.org", "@type": "HairSalon" }</script>' +
+        '</head><body><p>x</p>' +
+        '<script src="app.js"></script>' +
+        '<script>initReveal();</script>' +
+        '</body></html>';
+      writeFileSync(join(dir, 'index.html'), html);
+      const out = collectSourceAssets(dir, [{ relPath: 'index.html', html }]);
+      // JSON-LD must NOT leak into the bundle (concatenated it is a syntax error
+      // that kills every carried behavior — the live regression we are guarding).
+      expect(out.js).not.toContain('@context');
+      expect(out.js).not.toContain('schema.org');
+      // Real JS (linked + classic inline) still carried.
+      expect(out.js).toContain("document.querySelectorAll('.reveal')");
+      expect(out.js).toContain('initReveal();');
+      // The whole bundle parses as JS.
+      expect(() => new Function(out.js)).not.toThrow();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('skips importmap/application/json but carries module + classic inline JS', () => {
+    const dir = mkdtempSync(join(FIXTURE_TMP, 'sa-types-'));
+    try {
+      const html =
+        '<html><body>' +
+        '<script type="importmap">{ "imports": {} }</script>' +
+        '<script type="application/json">{ "k": 1 }</script>' +
+        '<script type="module">globalThis.mod = 1;</script>' +
+        '<script type="text/javascript">classic();</script>' +
+        '</body></html>';
+      writeFileSync(join(dir, 'index.html'), html);
+      const out = collectSourceAssets(dir, [{ relPath: 'index.html', html }]);
+      expect(out.js).toContain('globalThis.mod = 1;');
+      expect(out.js).toContain('classic();');
+      expect(out.js).not.toContain('"imports"');
+      expect(out.js).not.toContain('"k": 1');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('collectSourceAssets: HTML <img> asset carry', () => {
+  it('harvests local <img src> files into imgAssets + per-page rewrites; skips remote/data/missing/data-src', () => {
+    const dir = mkdtempSync(join(FIXTURE_TMP, 'sa-htmlimg-'));
+    try {
+      mkdirSync(join(dir, 'assets'), { recursive: true });
+      writeFileSync(join(dir, 'assets', 'logo.svg'), '<svg/>');
+      const html =
+        '<html><body>' +
+        '<img src="assets/logo.svg" alt="logo">' +
+        '<img data-src="assets/logo.svg" src="assets/logo.svg">' + // dedup; data-src ignored
+        '<img src="https://cdn.example.com/x.png">' + // remote → skip
+        '<img src="data:image/svg+xml,%3Csvg%3E">' + // data → skip
+        '<img src="assets/missing.svg">' + // missing → skip
+        '</body></html>';
+      writeFileSync(join(dir, 'index.html'), html);
+      const out = collectSourceAssets(dir, [{ relPath: 'index.html', html }]);
+      expect(out.imgAssets).toEqual([
+        { srcAbs: join(dir, 'assets', 'logo.svg'), themeRel: 'assets/img/logo.svg' },
+      ]);
+      expect(out.imgRewritesByPage['index.html']).toEqual([
+        { ref: 'assets/logo.svg', themeRel: 'assets/img/logo.svg' },
+      ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('rewriteHtmlImageSrcs repoints carried refs at the theme URL (both quote styles)', () => {
+    const refs = [{ ref: 'assets/logo.svg', themeRel: 'assets/img/logo.svg' }];
+    const html = '<img src="assets/logo.svg"><img src=\'assets/logo.svg\'>';
+    expect(rewriteHtmlImageSrcs(html, refs, 'my-theme')).toBe(
+      '<img src="/wp-content/themes/my-theme/assets/img/logo.svg">' +
+        '<img src=\'/wp-content/themes/my-theme/assets/img/logo.svg\'>',
+    );
   });
 });

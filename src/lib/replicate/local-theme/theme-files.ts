@@ -204,6 +204,9 @@ add_action( 'wp_body_open', function () {
     'assets/css/instance-styles.css',
     ...(includeJetpackFormParity ? [JETPACK_FORM_PARITY_CSS.editorStylePath] : []),
     'assets/css/parity-patch.css',
+    // LAST so it wins: force carried scroll-reveal initial-hidden states visible
+    // in the editor canvas (which can't run the reveal JS). Editor-only.
+    'assets/css/editor-reveal-reset.css',
   ];
   const cascadeComment = includeJetpackFormParity
     ? `// wins) → jetpack-form-parity.css (form-specific carried CSS bridge) →
@@ -259,6 +262,28 @@ add_action( 'after_setup_theme', function () {
 } );
 ${htmlJsBlock}${bodyDataBlock}`;
 }
+
+/** Editor-only CSS: the block-editor canvas renders blocks statically and never
+ * runs the source's scroll-reveal JS, so any carried animate-in initial-hidden
+ * state (opacity:0 + a JS-toggled class) would leave blocks invisible and
+ * uneditable. Force the common reveal/fade/animate patterns visible. Added via
+ * add_editor_style ONLY (never enqueued on the front end), so the live reveal
+ * animation is untouched. `!important` beats the carried (non-important) rules. */
+export const EDITOR_REVEAL_RESET_CSS = `/* editor-reveal-reset.css — add_editor_style ONLY; never a front-end style. */
+.reveal,
+[class*="reveal"],
+[class*="fade-in"],
+[class*="fadein"],
+[class*="animate"],
+[class*="aos-"],
+[data-aos] {
+  opacity: 1 !important;
+  transform: none !important;
+  visibility: visible !important;
+  animation: none !important;
+  transition: none !important;
+}
+`;
 
 export function assembleLocalTheme(opts: AssembleLocalThemeOpts): ReplicaFile[] {
   // NOTE: buildThemeScaffold's footerBgToken/footerTextToken opts are NOT
@@ -351,6 +376,10 @@ export function assembleLocalTheme(opts: AssembleLocalThemeOpts): ReplicaFile[] 
     // 2. Emit asset files — each file only when its content is non-empty.
     if (hasCSS) {
       withTemplates.push({ relativePath: 'assets/css/source.css', content: css });
+      // Editor-only reveal reset (add_editor_style list above; NOT enqueued on
+      // the front end), so blocks hidden by carried scroll-reveal CSS stay
+      // visible + editable in the block editor while the live animation runs.
+      withTemplates.push({ relativePath: 'assets/css/editor-reveal-reset.css', content: EDITOR_REVEAL_RESET_CSS });
     }
     if (hasJS) {
       withTemplates.push({ relativePath: 'assets/js/source.js', content: js });
