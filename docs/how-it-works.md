@@ -1,614 +1,369 @@
 # Data Liberation — How It Works
 
-> A conceptual walkthrough of the `data-liberation-agent` pipeline: what happens, in what order, which steps are deterministic code vs. AI judgment, and the two reconstruction pathways. Written for understanding the *shape* of the system, not the code.
+> A plain-English tour of how `data-liberation-agent` turns a site on a closed platform into a WordPress site you own. It covers *what* happens and *why*, in order, and where the work is done by predictable code versus AI judgment. It's about the shape of the system, not the code. Exact tool and file names live in the **"Under the hood"** asides so they stay out of the way.
 
 ---
 
-## The one-paragraph mental model
+## The big idea
 
-Data Liberation takes a live site on a **closed platform** (Wix, Squarespace, Shopify, Webflow, GoDaddy, Hostinger, HubSpot, Weebly) and turns it into a **WordPress site you own** — content as importable WXR, products as WooCommerce CSV, and the *look* of the site rebuilt as a WordPress block theme. It does this in two big movements: a **deterministic extraction** phase that faithfully pulls content, media, and design measurements out of the source (no AI, fully reproducible, resumable), and a **hybrid reconstruction** phase that rebuilds the site's pages — deterministic code emits the structure and the AI closes the visual-parity gap, with **measured gates** keeping both honest. Between the two sits a single operator decision — *which* reconstruct path to take — and it is asked **early**, right after the cheap discovery step and **before** the expensive extraction, so the choice is made while the operator is still at the keyboard.
+You point the tool at a site built on a closed platform — Wix, Squarespace, Shopify, Webflow, GoDaddy, Hostinger, HubSpot, or Weebly — and it hands you back a WordPress site you control: the words and images as a standard import file, the products as a WooCommerce spreadsheet, and the *look* of the site rebuilt as a WordPress theme.
 
-The guiding principle the whole system is built around: **never lose or invent source content.** Text is carried verbatim or placeholdered — never paraphrased — and a provenance gate hard-fails anything that doesn't trace back to what was actually captured.
+It works in two movements:
+
+1. **Extraction** pulls the content, media, and design measurements out of the source. This part is pure, predictable code — no AI. Run it twice and you get the same result, and you can stop and resume it any time.
+2. **Reconstruction** rebuilds the pages as a real WordPress site. Code lays down the structure and content, AI closes the gap on how it *looks*, and automated checks keep both honest.
+
+In between sits one decision only a person can make — *how* to rebuild the site — and the tool asks it early, right after a quick survey and before the slow extraction work, so you're still at the keyboard when it matters.
+
+One rule sits above everything: **never lose or invent content.** Real text is copied word-for-word or left as a clearly marked placeholder — never reworded — and a check rejects anything that can't be traced back to what was actually on the source page.
 
 ---
 
-## The two phases and the central boundary
+## Two phases, one boundary
 
 ```
-┌─────────────────────────── PHASE 1: EXTRACTION ───────────────────────────┐
-│  100% DETERMINISTIC — reproducible, resumable, no AI in the loop           │
-│  Detect → Discover                                                         │
-└────────────────────────────────────────────────────────────────────────────┘
-                                    ↓
-        ╔══════════════ PATH CHECKPOINT (operator, MANDATORY) ═══════════════╗
-        ║  Fires AFTER discovery, BEFORE extraction — a non-skippable hard    ║
-        ║  stop. Show inventory + recommendation, AskUserQuestion:            ║
-        ║  blocks+products vs theme replication. Never auto-select.           ║
-        ║  The operator's answer is the ONLY thing that authorizes the rest.  ║
-        ╚════════════════════════════════════════════════════════════════════╝
-                                    ↓
-┌──────────────── PHASE 1 (cont.): EXTRACTION — after the path is chosen ────┐
-│  100% DETERMINISTIC — reproducible, resumable, no AI in the loop           │
-│  Extract → Media → Capture                                                 │
-│  Produces: output.wxr, products.csv, media/, screenshots, design tokens,  │
-│            per-section specs   (capture is SHARED by both paths)           │
-└────────────────────────────────────────────────────────────────────────────┘
-                                    ↓
-┌────────────────────────── PHASE 2: RECONSTRUCTION ────────────────────────┐
-│  HYBRID — deterministic emitter + AI polish, behind measured gates        │
-│  Dispatch the chosen sub-skill inline:                                     │
-│  Design foundation → Theme → Cluster → Section specs → BUILD (AI fan-out) │
-│  → Assemble/reconstruct → Validate (GATE) → Install → Visual-QA loop      │
-│  Produces: a running WordPress block theme that matches the source        │
-└────────────────────────────────────────────────────────────────────────────┘
+┌─────────────── PHASE 1 · EXTRACTION ───────────────┐
+│  Predictable code — same result every time, resumable │
+│  Detect → Discover                                   │
+└──────────────────────────────────────────────────────┘
+                        ↓
+   ╔══════ YOU CHOOSE HOW TO REBUILD (required) ══════╗
+   ║  A hard stop after the quick survey, before the   ║
+   ║  slow work. The tool shows what it found and a    ║
+   ║  recommendation, then waits for your answer.      ║
+   ║  It never picks for you.                           ║
+   ╚═══════════════════════════════════════════════════╝
+                        ↓
+┌─────────── PHASE 1 (cont.) — after you choose ───────┐
+│  Extract → Download media → Capture (screenshots +    │
+│  measurements). Capture feeds every rebuild path.     │
+└──────────────────────────────────────────────────────┘
+                        ↓
+┌─────────────── PHASE 2 · RECONSTRUCTION ─────────────┐
+│  Code builds structure + content; AI closes the visual │
+│  gap; checks verify both. Produces a running WP site.  │
+└──────────────────────────────────────────────────────┘
 ```
 
-**The single most important idea in the whole system is the deterministic/AI boundary.** Everything that *can* be done by deterministic code *is*. AI is reserved for the parts that genuinely need judgment or "eyes on the rendered result":
+The most important idea in the whole system is the line between **predictable code** and **AI judgment**:
 
-- **Deterministic** = anything where there's a correct answer derivable from the source: what platform this is, which URLs exist, what the page text/media/prices are, what colors/fonts/breakpoints the CSS uses, where the section boundaries fall, how to emit a column layout into block markup, whether emitted text traces back to the source, whether the page reflows on mobile.
-- **AI-driven** = anything requiring interpretation or visual comparison: inferring a coherent *design system* from raw measurements, building a block pattern that captures a section's intent, looking at "source vs. built" side-by-side and iterating until they match, deciding how to rebuild a genuinely bespoke section.
+- **Code handles anything with a correct, lookup-able answer:** which platform this is, which pages exist, the text/images/prices on a page, the colors/fonts/breakpoints in the CSS, where each section starts and stops, how to turn a column layout into block markup, whether the output reflows on a phone, and whether every word traces back to the source.
+- **AI handles anything needing interpretation or a look at the result:** turning raw color measurements into a coherent design system, building a section that captures the *intent* of the original, comparing source and rebuild side-by-side and nudging until they match, and rebuilding a genuinely one-off section.
 
-The system is best described as **"deterministic emitter + AI polish."** Code gets the structure and content right; AI closes the visual gap; gates verify both.
+In one line: **code gets the structure and content right, AI closes the visual gap, and checks verify both.** Throughout this doc, ⚙️ marks a step done by code and 🤖 marks a step done by AI.
 
 ---
 
-## Three ways to invoke it
+## Three ways to run it
 
-All three share the same `src/lib/` and `src/adapters/` core.
+All three share the same core code.
 
-1. **Agent-first `/liberate` skill (the primary runtime).** A Claude Code / Codex agent runs the pipeline end-to-end. `/liberate` is the **single front door**: it detects + discovers, then **stops at a mandatory path checkpoint** to ask the operator which reconstruct path to take, *then* captures the site once (the rest of Phase 1) and **dispatches the matching sub-skill inline** (shared context). The path question fires before extraction so the operator chooses while still present. This is the intended main path — *AI agents are the runtime*, and the AI stages ship as **skills**, not as model calls baked into `src/`.
-2. **CLI (`data-liberation <url>`).** Headless, CI-friendly. Runs the deterministic extraction phase **only** (Phase 1 capture; screenshots by default, `--no-screenshots` to skip). The reconstruct (Phase 2 — blocks or theme) is agent-only; there is no headless rebuild.
-3. **MCP server.** Exposes the deterministic operations as `liberate_*` tools that any MCP client (or the skills) call. *Caveat:* the MCP server is one long-lived process — editing `src/` does not hot-reload it, so a newly-added tool (e.g. `liberate_reconstruct_pages_carry`) is missing until the server restarts.
+- **The `/liberate` skill — the main way.** An AI agent runs the whole pipeline: it surveys the site, stops to ask you how to rebuild it, then does the extraction and hands off to the matching rebuild path. This is the intended path — the agent *is* the runtime, and each AI step ships as a skill rather than as model calls baked into the code.
+- **The command line (`data-liberation <url>`).** Headless and CI-friendly. It runs the extraction half only (screenshots included by default). Rebuilding is agent-only; there is no headless rebuild.
+- **The MCP server.** Exposes each predictable step as a tool that the skills — or any MCP client — can call.
 
-> **Two reconstruct paths from a live platform.** Right after discovery (and before extraction), `/liberate` branches at a mandatory operator checkpoint to one of two reconstruct sub-skills:
-> - **`replicate-with-blocks`** — the block path (editable core blocks + WooCommerce).
-> - **`replicate-theme`** — the carry-and-scope path (high-fidelity). The carried body lands in editable `dla/editable-html` islands by default — text/image-editable in-canvas, but not decomposed into core blocks. Its code and artifacts are namespaced `carry`: `output-carry.wxr`, the `<site>-carry` theme, `liberate_reconstruct_pages_carry`.
->
-> Both sub-skills are `disable-model-invocation: true` — `/liberate` dispatches them inline; users don't invoke them directly.
->
-> **A third path for sources you already own.** When the input isn't a live closed platform but a **local directory of HTML files you control**, the **owned local-site convert** path (`liberate_convert_local_site`, driven by the `liberate-local` skill) reconstructs it directly into a native WP block theme — it has no platform to detect/discover and skips Phase 1's live extraction/capture entirely. See [Pathway C](#pathway-c--owned-local-site-convert-liberate_convert_local_site).
+> **Under the hood:** tools are named `liberate_*` (e.g. `liberate_detect`, `liberate_extract`). The MCP server is one long-lived process, so editing the source doesn't hot-reload it — a newly added tool only appears after a restart. The shared core lives in `src/lib/` and `src/adapters/`.
+
+There are **three rebuild paths**. Two start from a live platform and are chosen at the checkpoint inside `/liberate`; the third starts from files you already have on disk. They're covered in [Phase 2](#phase-2--reconstruction).
 
 ---
 
-# PHASE 1 — Extraction (deterministic)
+# Phase 1 — Extraction
 
-This phase is a clean, reproducible state machine. It can be killed and resumed at any point. Nothing here calls an LLM.
+This half is a clean, restartable state machine. Nothing here calls an AI. Stop it whenever you like and it picks up where it left off (see [Resume & state](#resume--state)). It runs five steps: the first two are a cheap survey, then it pauses for your decision, then the three expensive steps run.
 
-The run is tracked by an `ImportSession` stage machine that moves through:
+> **Under the hood:** progress is tracked by an `ImportSession` that moves through `discovering → [you choose] → extracting → downloading-media → screenshotting → finalizing → complete` (any stage can fall to `error`). The headless CLI skips the pause and runs straight through.
 
-```
-initial → discovering → [PATH CHECKPOINT] → extracting → downloading-media → screenshotting → finalizing → complete
-                                                                                    ↘ error (from any stage)
-```
+### 1. Detect — which platform is this? ⚙️
 
-The one human-in-the-loop gate in this otherwise-deterministic phase sits **between `discovering` and `extracting`**: `/liberate` stops and asks the operator which reconstruct path to take before any extraction runs (see [The path checkpoint](#the-path-checkpoint-operator-decision)). The headless CLI has no such gate — it just runs the deterministic stages straight through.
+The tool identifies the platform with a layered fingerprint, most-confident signal first: the URL pattern (e.g. a `*.myshopify.com` address), then the HTTP response headers, then markers in the HTML (CDN hostnames, platform JavaScript), and finally a few fallback probes. It judges by domain and fingerprint, never by guessing from the URL path.
 
-### Step 1 — Detect (`liberate_detect`)
-Identify which closed platform the URL belongs to. Done by a **layered fingerprint**, in confidence order:
-1. **URL patterns** (e.g. `*.wixsite.com`, `*.myshopify.com`) — highest confidence.
-2. **HTTP headers** (e.g. `X-Wix-Request-Id`, `X-Powered-By: Webflow`).
-3. **HTML source markers** (CDN hostnames like `wixstatic.com`, platform JS globals).
-4. **Path probes** (fallback HEAD requests to platform-specific admin paths).
+> **Under the hood:** `liberate_detect` → `{ platform, confidence, signals }`.
 
-Detection is **domain-level + fingerprint**, deliberately *not* path-based. Output: `{ platform, confidence, signals }`.
+### 2. Discover — what pages exist? ⚙️
 
-### Step 2 — Discover (`liberate_discover`)
-Build the inventory: walk the sitemap, read navigation, collect every URL and classify it. The **URL classifier** assigns each URL one of: `homepage`, `post`, `product`, `gallery`, `event`, `page`. Output is a full URL list with per-type counts, the site's nav structure, and site metadata (title, tagline, language).
+The tool builds an inventory: it walks the sitemap, reads the navigation, and collects every URL, sorting each into a type — homepage, post, product, gallery, event, or page. The result is the full page list with counts per type, the nav structure, and basic site info (title, tagline, language).
 
-> **Discovery is where Phase 1 pauses for the operator.** Detect + discover are cheap and already yield everything the path recommendation needs (platform · page/product counts · features), so the **path checkpoint fires right here** — before the expensive Extract → Media → Capture run. See [The path checkpoint](#the-path-checkpoint-operator-decision). Steps 3–5 below only run *after* the operator has chosen.
+This is the point where Phase 1 pauses for you. Detect and discover are cheap and already tell the tool everything it needs to recommend a rebuild path, so the choice comes *now*, before the slow work. See [Choosing how to rebuild](#choosing-how-to-rebuild).
 
-### Step 3 — Extract (`liberate_extract`)
-The heart of extraction. For each URL, the matching **platform adapter** fetches and parses the page into structured content (title, slug, body, excerpt, date, media references, categories/tags, author, detected type). This runs through a **shared extraction loop** that handles:
+> **Under the hood:** `liberate_discover`.
 
-- **Slug claiming** — derive the WordPress `post_name` from the URL; collision-suffix duplicates (`-2`, `-3`).
-- **Concurrent fetch, sequential write** — pages are fetched in parallel batches, but written to the WXR sequentially for consistency. An adaptive tuner adjusts page delay and media concurrency from observed timing.
-- **Stratified limiting** — when `--limit N` is set, it round-robins across content types so products don't starve out pages, and pins primary-nav targets in so the reconstructed menu doesn't break.
-- **Streaming output** — content can be flushed per-URL so the WXR doesn't balloon in memory.
+### 3. Extract — pull the content ⚙️
 
-The output is assembled by the **WXR builder** targeting **WXR 1.2** spec compliance: pages, posts, products, attachments, nav menu items, categories, tags, authors.
+For each page, the platform's **adapter** fetches and parses it into clean, structured content: title, slug, body, excerpt, date, image references, categories and tags, author, and type. A shared loop handles the cross-cutting concerns:
 
-**Platform-specific note — Shopify has two tiers.** Without an admin token, products come from the public JSON API. *With* an admin token, it uses the **Shopify Admin GraphQL API** (pinned to `2025-04`) for richer product data — resumable via stored cursors, idempotent on product handles, with a fallback to the JSON path on any GraphQL failure.
+- **Naming** — derive each page's WordPress slug from its URL, adding a numeric suffix if two collide.
+- **Fetch in parallel, write in order** — pages download in batches but are written sequentially for a consistent file, with timing-based throttling that adapts as it goes.
+- **Fair limiting** — when you cap the number of pages, it spreads the cap across content types so products don't crowd out pages, and always keeps the main-nav pages so the rebuilt menu still works.
+- **Streaming** — content can be flushed per page so memory stays flat on big sites.
 
-### Step 4 — Media (download + dedup)
-Every referenced image/PDF is downloaded, **hash-deduplicated**, and saved locally. Filename collisions get numeric suffixes (not hashes). Each asset's status is tracked in a media store (`success`/`error`/`ignored`) with a retry cap, so media survives mid-run crashes and resumes cleanly. Later phases rewrite source-CDN URLs to the local/WP-library copies through a CDN→local map. The local copies are recorded **root-relative** (`/wp-content/uploads/…`), not as absolute `localhost:<port>` URLs, so the mapping survives the replica being served from a different WordPress site/port — an absolute URL from a prior run's site would 404 when reused.
+The result is a standard WordPress import file covering pages, posts, products, attachments, menus, categories, tags, and authors.
 
-### Step 5 — Capture (`liberate_screenshot`) — *this is what makes design rebuild possible*
-This phase is the bridge from "content" to "design." For each page it:
+**Shopify is a special case.** Without an admin token, products come from Shopify's public API. *With* one, the tool uses Shopify's richer admin API — resumable, safe to re-run, and falling back to the public API if anything goes wrong.
 
-- Renders the page in a real browser (Playwright) at **desktop (1440×900) and mobile** viewports, after **dismissing overlays** (cookie/consent banners) and triggering lazy-load.
-- Saves a full-page screenshot plus a **post-scroll** capture (`<slug>.scrolled.png`) — short pages skip the scrolled shot silently.
-- Optionally saves the **rendered HTML** to `html/<slug>.html`.
-- Runs `extractFull` on the settled desktop page to produce a **`SectionSpec[]`** — the page broken into sections, each with its computed styles, geometry, interaction model (hero/cover, columns, gallery, review-grid, price-list, product-card-row, …), brightness, media URLs, and a compact CSS **`selector`** that locates it back in the source DOM (a stable per-section identifier). The same browser walk also records a top-level **landmark census** (`main`/`nav`/`header`/`footer`). Both the specs and the census are cached per-URL under `sections/<slug>.json` (capture-once, schema-versioned) and feed the reconstruction-phase diagnostics below.
-- Aggregates **site-wide design tokens** across all pages: `palette.json` (dominant colors), `typography.json` (font metrics per selector), `breakpoints.json` (the `@media` widths the site actually uses), plus CSS variables.
+> **Under the hood:** `liberate_extract` → `output.wxr` (WXR 1.2). Shopify's admin path uses the Admin GraphQL API pinned to `2025-04`, paginating via stored cursors and tracking emitted handles for idempotent output.
 
-The join from content back to design is **filesystem-only**, via `screenshots/manifest.json` mapping each URL → its files. Nothing is injected into the WXR — downstream tooling correlates by URL.
+### 4. Download media — grab every image ⚙️
 
-Capture defaults: concurrency 6, browser restarts every 100 URLs to bound memory, and **same-origin enforcement** — every captured URL must share the origin of the entry URL.
+Every referenced image and PDF is downloaded once, de-duplicated, and saved locally (colliding filenames get a numeric suffix). Each asset's status is tracked with a retry cap so media survives a crash and resumes cleanly. Later steps swap the source's CDN links for the local copies.
 
-> **Everything above is deterministic.** Given the same source site, you get the same WXR, the same media, the same screenshots, the same section specs. This is the reproducible foundation the AI phase builds on.
+> **Under the hood:** statuses live in `media-stubs.json`; local copies are recorded **root-relative** (`/wp-content/uploads/…`), not as `localhost:<port>` URLs, so the mapping still works when the rebuild is served from a different site or port.
+
+### 5. Capture — photograph and measure every page ⚙️
+
+This is the bridge from "content" to "design," and it's what makes rebuilding the *look* possible. For each page, the tool:
+
+- opens it in a real browser at desktop (1440×900) and phone sizes, dismisses cookie banners, and lets lazy images load;
+- saves full-page screenshots, plus a scrolled-down shot for long pages;
+- optionally saves the rendered HTML;
+- breaks the page into **sections** and records each one's styling, size, role (hero, columns, gallery, review grid, price list, product row, …), brightness, images, and a pointer back to where it lives in the original page;
+- notes the page's structural landmarks (header, nav, main, footer);
+- and rolls up **site-wide design tokens**: the dominant colors, the fonts in use, and the screen widths the site's CSS actually responds to.
+
+Nothing from this step is written into the content file. Instead a manifest maps each URL to its screenshots and measurements, and later tooling matches them up by URL.
+
+> **Under the hood:** `liberate_screenshot` (Playwright). The per-section measurements are a `SectionSpec[]`, each with a CSS `selector` back into the source DOM; they plus the landmark census are cached per page at `sections/<slug>.json` (capture-once, schema-versioned). Tokens land in `palette.json`, `typography.json`, `breakpoints.json`; the URL join is `screenshots/manifest.json`. Defaults: 6 pages at a time, the browser restarts every 100 pages to bound memory, and every captured URL must share the entry URL's origin.
+
+> **Everything in Phase 1 is deterministic.** The same source site gives you the same content, media, screenshots, and measurements every time. That reproducible foundation is what the AI half builds on.
 
 ---
 
-# PHASE 2 — Reconstruction (hybrid: deterministic emitter + AI polish)
+# Phase 2 — Reconstruction
 
-Now the captured artifacts become a living WordPress site. This is where AI enters — but tightly fenced by measured gates. The **path that gets here was already chosen** back at the checkpoint (which fired between discovery and extraction); Phase 2 proper begins when `/liberate` **dispatches the chosen sub-skill inline** after capture.
+Now the captured material becomes a living WordPress site. This is where AI enters — but always fenced in by checks that *measure* rather than eyeball. The path was already chosen back at the checkpoint; Phase 2 simply runs the rebuild path you picked.
 
-### The path checkpoint (operator decision)
+## Choosing how to rebuild
 
-> **This checkpoint fires after discovery and BEFORE extraction — it is a mandatory, non-skippable hard stop, not an after-capture confirmation.** It's placed early on purpose: discovery is cheap and already yields the inventory the recommendation needs, so the operator commits the path *before* the long extraction runs — while they still have attention. (Earlier versions asked this after capture; that was wrong — it either wasted the extraction or fired once the operator had walked away.)
+After the survey (detect + discover) and **before** the slow extraction, the tool stops and asks you how to rebuild. This is a required, non-skippable decision — your answer is the only thing that authorizes the rest of the run. It's placed early on purpose: the survey already gives the tool what it needs to recommend a path, so you commit while you're still paying attention rather than after a long extraction has finished (or after you've walked away).
 
-The front door shows the discovery inventory + a scope/cost estimate + a **platform-informed recommendation**, then asks the operator (via `AskUserQuestion`) to pick one of **two reconstruct paths**. The recommendation is a hint *inside* the question (marked `(Recommended)`), **never** an auto-selection — no matter how strong the platform signal, `/liberate` does not choose on the operator's behalf. *The operator's answer is the sole go-ahead* — it replaces the old proceed/confirm gate, and starting extraction without it is a defect. Only after the operator chooses does `/liberate` run the rest of Phase 1 (extract → media → capture → products) and then dispatch the matching sub-skill inline (shared context); each sub-skill reads the resolved output directory from disk and owns its own reconstruct → install → QA → report (plus its own budget guard and `run-report*.json`).
+The tool shows what it found, a rough scope/cost estimate, and a platform-informed recommendation, then asks you to pick. The recommendation is only a hint — even with a strong signal, the tool never chooses for you.
 
-| Operator picks | Dispatches | What you get | Products |
+| You pick | You get | Products |
+|---|---|---|
+| **Blocks + products** | Editable WordPress blocks, navigation, and WooCommerce — the best starting point for a redesign | Product **pages** rebuilt |
+| **Theme replication** | The highest-fidelity visual copy of the source | Product **data** imported; product pages use the default WooCommerce layout |
+
+A rough rule: a store with lots of products leans toward **blocks**; a fixed-layout marketing site with no store, where pixel-fidelity matters most, leans toward **theme replication**. The choice costs nothing to change — capture is reusable, so re-running `/liberate` on an already-captured site jumps straight back to this question and you can try the other path without re-capturing.
+
+> **Under the hood:** the question is an `AskUserQuestion` with the recommended option marked `(Recommended)`. "Blocks + products" dispatches the `replicate-with-blocks` skill ([Path A](#path-a--blocks-replicate-with-blocks)); "theme replication" dispatches `replicate-theme` ([Path B](#path-b--theme-replication-replicate-theme)). Both run inline (shared context) and own their rebuild → install → QA → report. The third path, [Path C](#path-c--convert-a-site-you-already-own-liberate_convert_local_site), is a separate entry point for files you already have, not an option at this checkpoint.
+
+## Editable HTML islands — a building block all three paths share
+
+Sometimes a chunk of the original page has no clean equivalent in WordPress blocks. Rather than lose it, the tool carries that chunk's HTML across nearly verbatim. Such a chunk is called an **island**. The theme-replication path is islands by design; the blocks path only drops to an island when rebuilding a section properly would lose content.
+
+The old way to carry an island was a plain HTML block, but that has a real downside: WordPress renders it in a sealed-off frame in the editor, so it shows up unstyled and can only be edited through a raw-HTML toggle — effectively invisible on the canvas. So now **every island becomes an editable block instead**, by default, on all three paths.
+
+That editable block:
+
+- **Shows up styled, right on the editor canvas** — and it's listed by name in the editor's outline.
+- **Is actually editable:** you can edit its text, swap its images, or open a sidebar panel to edit the raw HTML directly.
+- **Outputs the exact original HTML** on the front end — byte-for-byte. The conversion only changes what the *editor* shows, never what visitors see.
+
+What it is **not**: an island is still one HTML block, not a tidy tree of column/cover/gallery blocks. (Breaking a section into real blocks is what the blocks path does *before* it would ever fall back to an island.)
+
+> **Under the hood:** the block is `dla/editable-html`, shipped as a tiny build-less plugin (`dla-editable-html`) that's installed and activated once per run when any island converts. Its content is a "frame" model that splits the HTML into static parts, never-touch raw subtrees (SVG, scripts), and editable text/image leaves; the same serializer runs in the block's save and in the server, which is why the front-end output is identical by construction. Only true raw-HTML islands convert — one wrapping nested block markup is left alone. Opt out with `editableIslands: false` (or `EDITABLE_ISLANDS=0` on the carry driver) to keep plain HTML blocks.
+
+## Path A — Blocks (`replicate-with-blocks`) · ⚙️ + 🤖
+
+**Goal:** rebuild the site as *editable* WordPress blocks — columns, groups, cover images, galleries — styled by the theme, so you get a real, maintainable site rather than a frozen snapshot. This path leans on code for structure and AI for judgment.
+
+The backbone is deterministic. A code emitter rebuilds **every** page from that page's own measurements, so the two AI-heavy steps are optional helpers, not load-bearing: grouping pages by layout is just informational, and the AI "builder" fan-out is skipped unless a section is genuinely too bespoke for the emitter to handle. Header and footer come from the theme, not the builders.
+
+The path runs roughly these steps:
+
+**6. Design foundation 🤖** — Read the captured colors, fonts, and breakpoints and infer a coherent *design system*: which color is the brand primary, the type scale, the spacing. This is the one place raw measurements become design *intent* ("this green is the brand color," not "this hex appears 40 times"). The result is frozen as a site-wide brief that every later step defers to. *Why AI:* grouping near-identical greens into one brand color is interpretation, not lookup. Code pre-fills the obvious roles first so the AI only fills the genuinely interpretive gaps.
+
+**7. Create the theme ⚙️** — Translate that frozen brief into a scaffolded WordPress block theme: settings, styles, templates, and self-hosted fonts, including templates that give imported posts and pages a proper title. A mechanical translation, checked by a lint gate.
+
+**8. Group pages by layout ⚙️ *(informational)*** — Cluster pages that share the same sequence of section types, so a layout could be built once and reused. It's exact-match and it gates nothing; where a platform makes layouts look identical, it simply doesn't matter.
+
+**9. Detailed section specs ⚙️ *(helper)*** — For a representative page of each group, write out per-section specs (role, verbatim text, images, background) that act as the strict contract for the AI builders — they may only use what's in the spec.
+
+**10. Build patterns 🤖 *(helper, off by default)*** — When needed, an AI builder reads the brief plus a section's spec and produces a block layout with the content filled in. Builders run in parallel, each in its own workspace. **The hard rule:** every visible word is copied verbatim or left as a placeholder — never reworded. Reworded copy fails the gate later.
+
+**11. Assemble the pages ⚙️** — The heart of the path. For every page, the emitter turns its measured sections into real blocks, fills them with the exact source text, and styles them with the design-system tokens (not hardcoded colors, so the editor doesn't fight them). If rebuilding a section properly would drop content, that section falls back to an [editable island](#editable-html-islands--a-building-block-all-three-paths-share) instead — faithful, just not broken into blocks — and flags itself for follow-up. Whether a section spans the full width or sits in a column **follows the source**.
+
+> **Under the hood:** `liberate_reconstruct_pages` writes `patterns/page-<slug>.php` plus collapsed templates registered in the theme, and patches `output.wxr` to match. Two warning-level diagnostics make the fallbacks actionable without blocking install: `fallback-diagnostics.json` (one record per island — why it fell back, with a suggested fix) and `region-audit.json` (reconciles the source's landmarks against what was placed, flagging any whole landmark — e.g. a dropped `<nav>` — that survived nowhere).
+
+**12. Validate ⚙️ — the hard gate.** Nothing installs unless it passes. It checks that all source text is properly escaped, that there's no injected PHP/JavaScript/event-handler code, that every word traces back to the source (the anti-invention check), that no link still points at the source CDN, and that the block markup is valid. A second check re-parses the markup with WordPress's own parser to confirm it round-trips.
+
+**13. Install ⚙️** — Write the theme into a local WordPress (Studio), import the content and products, activate the theme, set the front page. Now there's a running site to look at.
+
+> **Under the hood:** `liberate_install_theme` / `liberate_import` / `liberate_preview`. A media-heavy import can trip Studio's ~120-second silence timeout (it looks like a database error); the fix is a per-item heartbeat in the importer, and some flows install media separately.
+
+**14. Visual QA loop 🤖 + ⚙️** — The closing loop that makes the result actually *look right*. It screenshots the rebuilt site and runs three checks: a **responsiveness gate** (no horizontal overflow, sections reflow on a phone — failure stops the run), a **visual-parity gate** that *measures* each section against the source (background-color difference, column count, images present, styled-vs-unstyled) and backs every verdict with the evidence behind it, and **accessibility checks** that warn but don't block. The measured results produce the run's verdict.
+
+When a section is off, the tool tries the cheapest fix first and escalates:
+
+| Rung | Fix | By |
+|------|-----|----|
+| **R1** | Tweak the CSS/theme (a band color, some spacing) | 🤖 small |
+| **R2** | Rebuild the block markup from the spec (restore flattened columns) | 🤖 |
+| **R3** | Re-measure the section — the spec itself was wrong | ⚙️ |
+| **R4a** | AI rebuild from richer inputs (source + styled HTML, screenshots, tokens), which must pass four gates including a re-measured match | 🤖 |
+| **R4b** | Last resort: carry the section as a styled [editable island](#editable-html-islands--a-building-block-all-three-paths-share) — pixel-faithful, just not broken into blocks | ⚙️ |
+
+After about five attempts on one section, a circuit-breaker stops and asks you what to do (spend more, accept the gap, or abandon it). The system refuses to quietly ship a degraded section as if it matched — accepting a known gap is an explicit human decision.
+
+## Path B — Theme replication (`replicate-theme`) · ⚙️ (🤖)
+
+**Goal:** the closest possible visual copy, accepting that the page body stays as one [editable island](#editable-html-islands--a-building-block-all-three-paths-share) rather than a tree of blocks (still text- and image-editable on the canvas, just not decomposed). Instead of rebuilding each page as blocks, this path carries the source's own rendered HTML across nearly verbatim and re-uses the source's own CSS, scoped so it can't leak between pages.
+
+It does **not** capture — it relies on a `/liberate` run having already captured the site. If the inputs are missing it stops and tells you to run `/liberate <url>` first, rather than silently re-capturing.
+
+Roughly, for each page it: carries the header, body, and footer across as islands; scopes the source CSS (site-wide for shared chrome, per-page for the body) and trims unused rules; rewrites internal links to local ones; and self-hosts every image so nothing still loads from the source CDN. It then writes a genuine WordPress block theme, swaps each page's content into the import file, and activates everything.
+
+> **Under the hood:** `liberate_reconstruct_pages_carry` writes the `<site>-carry` theme and `output-carry.wxr`. Provisioning uses a media-free slimmed import to dodge the Studio timeout, then installs media separately. Link rewriting and media self-hosting reuse the same shared helpers as Path A. Parity is scored by `liberate_compare` into `run-report-carry.json`.
+
+**What this path does well:** images are self-hosted, internal links work locally, blog posts are carried too, and the output is a real block theme. The body is the only carried island.
+
+**Where it still struggles** (these get stated honestly in the report, never dressed up as success):
+
+- **Missing section background fills (Wix)** — currently the biggest remaining gap. Background colors that Wix paints via JavaScript don't make it into the carried CSS, so some bands render white.
+- **Scale offset (Wix)** — carried layouts can render a bit larger than the source (Wix's sizing is JavaScript-driven). Once the dominant issue, now mostly fixed by smarter CSS scoping and matching the source's body classes (desktop parity rose from ~0.72 to ~0.88, mobile from ~0.62 to ~0.73).
+- **No animations** — scripts are stripped, so carousels and scroll effects don't move.
+- **Some background images in CSS files** can still point at the source if their URL doesn't match cleanly.
+- **Sites with no real header/footer tags** (common on Wix/Squarespace) can't be split into separate header/footer parts; the whole body rides in one island.
+
+## Path C — Convert a site you already own (`liberate_convert_local_site`) · ⚙️ (🤖)
+
+**Goal:** turn a static or JavaScript site **you already own** — a folder of HTML files — into a native WordPress block theme. This is a **separate entry point**, not a choice at the rebuild checkpoint: there's no platform to detect, and it skips Phase 1's live extraction and capture entirely. Because you own the source, the strict anti-invention check (built for scraping a closed platform) relaxes — but a **conservation check** still guards against silently dropping the source's own styling or content.
+
+Unlike theme replication, this path's *first* choice is real blocks, not islands — it only drops to an editable island when a section won't map cleanly. It runs in four stages:
+
+1. **Ingest ⚙️** — walk the folder's HTML files, derive stable names (and refuse to overwrite on a name clash), build a navigation graph from the internal links, and split each page into chrome (header/nav/footer) and body sections.
+2. **Emit blocks ⚙️** — map each element to the matching core block (headings, paragraphs, images, buttons, lists) wrapped in groups; anything unrecognized degrades to a paragraph and lowers a confidence score so the downgrade is visible. A section that won't map cleanly becomes an editable island. The assembled page must pass a block round-trip check.
+3. **Build the theme + carry the source styling ⚙️** — write a real block theme with a header derived from the nav graph, a design foundation inferred from the source's own CSS, and title-bearing page templates. Then carry the designer's own stylesheet and scripts so the class-preserving blocks render under the original CSS. (Optionally, scroll/sticky behaviors can be rebuilt as native interactive blocks instead of carrying the JavaScript — you get one or the other, not both.)
+4. **Install + verify ⚙️ (AI optional)** — provision the Studio site, write and activate the theme, create the pages (safe to re-run), and set the front page. Optionally screenshot and score parity, with a repair loop. A conservation check flags any class-level styling or content that got dropped.
+
+**Optional extras** kick in only when their inputs are present: HTML forms can be converted to Jetpack forms, and a data model can turn JavaScript-mounted card grids into a real custom post type with native query loops (validated, and skipped rather than aborted if the model is bad).
+
+This path is **heavily deterministic** — a code-driven conversion plus the carried CSS, with no AI fan-out by default. AI enters only through the orchestrating skill and the optional data model.
+
+> **Under the hood:** `liberate_convert_local_site` (with `liberate_ingest_local_site` underneath), driven by the `liberate-local` skill. The conservation check writes `normalize-report.json`.
+
+## Which path should I use?
+
+| | **Blocks** (`replicate-with-blocks`) | **Theme replication** (`replicate-theme`) | **Local convert** (`liberate_convert_local_site`) |
 |---|---|---|---|
-| **Migrate content into blocks + products** | **`replicate-with-blocks`** (Pathway A) | Editable WordPress core blocks + navigation + WooCommerce; best launchpad for a redesign | Product **pages reconstructed** |
-| **Theme replication** | **`replicate-theme`** (Pathway B) | Highest-fidelity carry-and-scope replica; body carried as editable `dla/editable-html` islands (text/image-editable in-canvas), **not** decomposed into core blocks | Product **data** imported; product pages fall back to default WooCommerce (no carried replica) |
+| Starts from | A live platform (via `/liberate`) | A live platform (via `/liberate`) | A folder of HTML you own |
+| Output | Editable WordPress blocks + theme styling | One editable island per page + the source's own CSS | Native blocks (islands only where a section won't map) + carried CSS |
+| Editable in WP? | **Yes** — real blocks | **Yes** — text/image edits on the island, not broken into blocks | **Yes** — blocks, with island fallbacks |
+| Visual fidelity | High, and guaranteed to reflow on phones | Very high on desktop, but inherits source quirks | High — class-preserving blocks under the source's own CSS |
+| Phone reflow | Guaranteed by a hard gate | Whatever the source CSS does | Whatever the source CSS does |
+| Products | Product pages rebuilt | Product data only; default product layout | n/a (optional custom post type via a data model) |
+| Code/AI | ⚙️ emit + 🤖 polish, gated | ⚙️ carry + 🤖 comparison | ⚙️ convert + carried CSS (🤖 optional) |
+| Best for | A real WordPress site you'll keep editing | A pixel-faithful copy / comparison baseline | Migrating a static site you own into editable WordPress |
 
-*Recommendation heuristic:* a store with many products → lean blocks (1); a fixed-layout Wix marketing site with no store where pixel-fidelity matters → lean theme (2). The choice is **reversible at zero cost**: capture is idempotent, so re-running `/liberate <url>` on an already-captured site skips straight back to this checkpoint — you can try the other path later without re-capturing.
-
-### Editable HTML islands (`dla/editable-html`) — a cross-cutting default
-
-Both pathways (and the owned-local-site convert path, `liberate_convert_local_site`) lean on **HTML islands** — chunks of source markup carried near-verbatim when there's no clean structured-block representation. The carry path bodies are islands by design; the block path drops to an island only when a structured render would lose content.
-
-Historically an island was a plain `core/html` block. That has a real cost in the editor: `core/html` renders inside an **isolated SandBox iframe**, so the carried markup shows up **unstyled** and only behind the HTML/Preview toggle — invisible and uneditable on the canvas. So as of the latest changes, **every HTML island converts to an editable `dla/editable-html` block by default**, across all three reconstruct paths (carry, block, local).
-
-What `dla/editable-html` is:
-
-- **A build-less Gutenberg block** shipped as a tiny plugin (`dla-editable-html`) — registered, activated **once** per run when any island converts; no webpack/`@wordpress/scripts` step.
-- Its content is a **frame model** (`FrameNode[]`): a byte-faithful parse of the carried HTML into static text, verbatim `raw` subtrees (svg / scripts / interactive controls, never touched), plain `element` nodes, and **bindable leaves** — `bindText` (editable via `RichText`) and `bindImage` (editable via `MediaUpload`). The frame is stored as a block attribute.
-- **Static save = byte-identical front end.** The block's `save()` is `RawHTML(serializeFrame(frame))`, and the server emitter embeds the *same* serializer source — so the front-end output is identical to the original carried HTML by construction. The conversion changes only what the *editor* shows.
-- **In-canvas + editable:** the carried markup renders styled on the canvas (named in List View via the carried island metadata), its prose is text-editable, its images are swappable, and a sidebar **"HTML Source"** panel lets you edit the raw markup and re-derive the bindable regions on Apply.
-
-What it is **not:** the island is *not decomposed into core blocks* — it's one editable HTML block, not a column/cover/gallery tree. (Decomposing into core blocks is what Pathway A's structured emitter does *before* it would ever fall back to an island.)
-
-**Mechanics & guardrails:**
-- Conversion runs **before** the block-fixer canonicalization, so the converted blocks validate cleanly.
-- **Only** raw-HTML islands convert: a `core/html` that wraps nested `wp:` block delimiters is skipped (frame-flattening it would corrupt the inner blocks).
-- Opt out per call with `editableIslands: false` (or `EDITABLE_ISLANDS=0` on the carry driver) to keep plain `core/html`.
-- Install-time `wp_slash()` on `post_content` keeps WordPress's internal `wp_unslash` from stripping the backslashes in the frame-attribute JSON (which would otherwise invalidate the block in the editor).
-
-The rest of this section refers to "HTML islands" generically; unless you've opted out, each one is a `dla/editable-html` block.
-
-## Pathway A — Block reconstruction (`replicate-with-blocks`)
-
-**Goal:** rebuild the site as *editable* WordPress core blocks (columns, groups, cover, gallery, …) styled by theme tokens — so the result is a real, maintainable WordPress site, not a frozen snapshot. Dispatched by `/liberate`, or run standalone to re-theme an already-extracted site. The steps below all live inside `replicate-with-blocks` (a seven-step flow, broken out finer here); it delegates judgment to the sub-skills (`design-foundations`, `creating-themes`, `generating-patterns`, `design-qa`) and determinism to MCP tools.
-
-> **The page path is deterministic-first.** Step 11 (`liberate_reconstruct_pages`) is the primary, **self-contained** page emitter — it captures each page's *own* specs and renders them, independent of clustering and the AI fan-out. So **clustering (Step 8) is informational** — it surfaces shared chrome and an archetype map but gates nothing; where layout signatures are unreliable (e.g. Wix serving CSS cross-origin collapses nearly every page to one signature) it simply doesn't matter. And the **AI builder fan-out (Steps 9–10) is supplementary** — skipped by default, run only when reconstruct can't map a genuinely bespoke section. Header/footer chrome comes from the theme scaffold (Step 7), not the builders.
-
-### Step 6 — Design foundation  🤖 AI
-Read the captured palette, typography, and breakpoints and **infer a coherent design system** — semantic color roles, type scale, spacing — written to `design-foundation.json` + a human-readable `design.md`. This is the one place raw measurements become *design intent* (e.g. "this green is the brand primary," not just "this hex appears 40 times"). The foundation is then **frozen** as a site-wide brief; later stages defer to it rather than re-deriving styling per page.
-
-A deterministic **scaffold** pre-fills the unambiguous roles first (lightest/darkest high-frequency palette colors → `surface.base`/`text.default`); the AI fills the interpretive remainder. A named `:root` CSS variable may *override* those palette picks only when it's backed by a real cross-page frequency signal (≥2 sampled pages) — so a single-page sample (e.g. a Wix site serving its CSS cross-origin, where only one same-origin page is readable) can't let a low-confidence component token like `--wst-button-color-text-secondary` clobber the page's true white/black. It can still *fill* a role the palette left empty.
-
-*Why AI here:* clustering colors and naming roles is interpretation, not lookup. Raw measurements alone conflate (e.g. several near-greens that are really one brand color).
-
-### Step 7 — Create theme  ⚙️ Deterministic
-Map the frozen foundation into a scaffolded block theme: `theme.json`, `style.css`, `functions.php`, template-part skeletons, base templates, self-hosted fonts. Base templates include `single.html` (post title + date + featured image + content) and a generic `page.html` fallback, so imported posts/pages render **with a title** instead of falling through `index.html` titleless. This is a mechanical translation from foundation → theme files, audited by a `theme.json` lint gate.
-
-### Step 8 — Cluster pages (`liberate_cluster_pages`)  ⚙️ Deterministic — *informational*
-Group pages that share a layout. Each page has a **layout signature** (its ordered sequence of section types + structural attributes); pages with **identical signatures** join one cluster. This is exact-match, not fuzzy. The point: build each distinct layout once, then apply it to all its members. Output: `cluster-map.json`.
-
-### Step 9 — Section extraction (`liberate_section_extract`)  ⚙️ Deterministic (browser-eval) — *supplementary*
-For each cluster's **representative** page, produce detailed per-section specs (`specs/<rep>/section-<n>-<type>.md`) from computed styles + geometry: the interaction model, verbatim text, media URLs, background/brightness. These spec files are the **contract** between extraction and the AI builders — the builders are only allowed to use what's in them.
-
-### Step 10 — BUILD: pattern generation (`generating-patterns`)  🤖 AI, fanned out — *supplementary (skipped by default)*
-For each cluster representative, an AI **builder subagent** reads the design brief + section specs + a catalog of section→block templates, and emits a **WordPress block pattern** — layout skeleton with content slots filled from the spec. Builders run **in parallel** (concurrency-capped, ~4–6 on Claude Code; sequential on other runtimes), each in its own isolated workspace so file writes don't collide, returning a structured JSON envelope of patterns + flags + notes. Progress is checkpointed by cluster-group so a crash resumes at the next unbuilt cluster.
-
-**The cardinal rule, enforced here:** all visible prose is **source-verbatim or placeholdered, never paraphrased.** Paraphrased body copy hard-fails the validation gate downstream.
-
-*Why AI here:* mapping a captured section to the right combination of blocks that expresses its intent is design judgment. The deterministic emitter (next step) gets structure right but a builder produces the richer, intentional pattern.
-
-### Step 11 — Assemble / reconstruct pages (`liberate_reconstruct_pages`)  ⚙️ Deterministic
-This is the deterministic **emitter** at the core of the hybrid. For **every** content page (not just representatives), it reads that page's **own** section specs and renders them to core blocks via per-interaction-model renderers (`renderCover`, `renderColumns`, `renderReviewGrid`, `renderProductCardRow`, …). It fills content slots with **verbatim** spec text, applies **design-foundation tokens** (color slugs and font families — never inlined hex/px, so the editor's canonicalization doesn't fight it), installs the page's media into the WP library, and rewrites image URLs through the media map. Output: `patterns/page-<slug>.php` + collapsed variant templates (`templates/page-replica[-<key>].html`) registered in `theme.json customTemplates` and assigned per page via `_wp_page_template`; `output.wxr` is patched to match. Pass `collapseTemplates:false` to fall back to one `templates/page-<slug>.html` per page (legacy).
-
-A built-in **content-loss guard**: if a structured render would drop content or coverage falls below a text floor, that section falls back to emitting sanitized **source HTML as an HTML island** instead — faithful, and by default an *editable* `dla/editable-html` block (see [Editable HTML islands](#editable-html-islands-dlaeditable-html--a-cross-cutting-default)) rather than a sandboxed `core/html`, though not decomposed into core blocks — and flags itself.
-
-Two **warning-level diagnostic artifacts** make those flags machine-actionable (neither blocks install):
-
-- **`fallback-diagnostics.json`** — one structured record per HTML island, keyed by the section's `selector`: *why* it fell back (`dropped_images` vs `text_coverage_below_floor`), a `suggestedRepairClass`, and source/emitted previews — so the QA loop (or an agent) can triage and upgrade each island back to blocks rather than just seeing a count.
-- **`region-audit.json`** — a **structural** completeness check that the verbatim/provenance content-diff misses: it reconciles each page's source landmark census (`main`/`nav`/`header`/`footer`) against what the build actually placed — body sections by `selector`, chrome by role — and lists any **`unassignedRegions`** (an actionable source landmark that survived nowhere, e.g. a dropped `<nav>`). This catches a whole landmark vanishing, which item-level text/media diffing under-weights.
-
-> The full-width vs. constrained layout decision **defers to the source**: a section carrying a large image spanning ≥92% of the viewport marks the page full-bleed; otherwise constrained.
-
-### Step 12 — Validate (`liberate_validate_artifacts`)  ⚙️ Deterministic — **HARD GATE**
-The trust boundary. Nothing installs unless it passes. It asserts:
-- **Escaping** — all source-derived text is properly escaped (`esc_html`/`esc_attr`/`esc_url`).
-- **No injection** — no raw `<?php`, `<script>`, or `on*=` handlers (PHP-injection + XSS defense).
-- **Provenance** — every emitted text string is a **subset of captured source text**. This is what catches *invented* prose — the anti-hallucination gate.
-- **No remote URLs** — every asset reference is a WP-library or theme asset, nothing left pointing at the source CDN.
-- **No unresolved placeholders**, block-comment-valid markup, no design drift.
-
-A validation backstop also exists as a **block-markup oracle** (the real WordPress block parser) confirming the markup round-trips.
-
-### Step 13 — Install (`liberate_install_theme`, `liberate_import`, `liberate_preview`)  ⚙️ Deterministic
-Write the theme into a local WordPress (Studio), import the WXR content and products CSV, activate the theme, set the front page, flush rewrites. Now there's a running site to look at.
-
-> *Operational gotcha:* a media-heavy WXR can trip Studio's ~120s import-silence timeout (looks like a "DB connection" error). The fix is a per-item heartbeat in the importer; some flows slim attachments out of the WXR and install media separately.
-
-### Step 14 — Visual-QA loop (`design-qa`)  🤖 AI + ⚙️ measured gates
-The closing loop that actually makes the result *look right*. It screenshots the rebuilt site (desktop + mobile) and runs three layers:
-
-1. **Responsiveness gate (HARD, deterministic).** No horizontal overflow, sections reflow at 390px, nothing stuck past the fold. Fail = stop.
-2. **Visual-parity gate (HARD, *measured* — not vibes).** Per-section parity records: background color delta (ΔE2000, threshold ~10), column-count match, media present, "is this an unstyled island where there should be a styled layout." **Every record carries the sampled evidence backing it** — spec-captured values are ground truth; vision is fallback only. These records produce the run's verdict in `run-report.json` (✓ / ⚠ / ✗).
-3. **Accessibility checks** (contrast, alt text) — warn, don't block.
-
-When a section diverges, it climbs an **escalation ladder**, cheapest fix first:
-
-| Rung | What it does | Det/AI |
-|------|--------------|--------|
-| **R1** | CSS/theme tweak (band color, spacing) via `editing-themes` | 🤖 small |
-| **R2** | Rebuild the block markup from spec (restore flattened columns/grids) via `editing-blocks` | 🤖 |
-| **R3** | Re-extract the section spec (the spec itself was wrong — "Class A") | ⚙️ |
-| **R4a** | AI canonical-block rebuild from richer inputs (source HTML, styled HTML, screenshots, spec, tokens) via `rebuild-section` — must pass 4 gates: block oracle, canonicalization round-trip, re-measured parity = match, no content loss | 🤖 |
-| **R4b** | Deterministic **styled-island floor**: carry verbatim source HTML as an island with scoped CSS — pixel-faithful, and by default an editable `dla/editable-html` block (text/images editable in-canvas) rather than a sandboxed `core/html`, but not decomposed into core blocks. The last resort for genuinely bespoke sections | ⚙️ |
-
-After ~5 rungs on a section, a **circuit-breaker** stops and asks the operator (raise budget / accept the divergence / abandon). Divergences get classified — **Class A** (spec wrong), **Class B** (template dropped info), **Class C** (a real WordPress rendering constraint that simply can't be matched, which a human accepts). The system refuses to silently ship a flattened result as if it were a match — a "known gap" must be explicitly accepted.
+**An honest note on blocks vs. theme replication:** which one "wins" depends on the site. On dynamic (Wix/JavaScript) sites the pixel comparison is often a *tie within measurement noise* — re-screenshotting the *same* built site can swing the score by more than the gap between paths. But not always: on one recent Wix site theme replication beat blocks decisively (homepage 0.995 vs. 0.26). So the reports separate **correctness wins** (self-hosted media, working local links, posts rendering — each verifiable) from **pixel-score wins** (sometimes real, sometimes noise). Theme replication doubles as a fidelity ceiling that calibrates how good the blocks rebuild is.
 
 ---
 
-## Pathway B — Carry-and-scope (`replicate-theme`)
+## Resume & state
 
-**Goal:** maximum *visual* fidelity, accepting that the page is **not decomposed into core blocks** (it's carried as HTML islands — by default the editable `dla/editable-html` kind, so the body is text/image-editable in-canvas even though it isn't a column/cover/gallery tree). Dispatched by `/liberate` when the operator picks "theme replication." It does **not** capture — it has a strict **entry contract**: capture already happened in `/liberate`, so if the carry inputs are missing it STOPs and tells the operator to run `/liberate <url>` first (a capture gap to surface, never silently re-run).
+Extraction is built to survive crashes. A few files cooperate, all written under one lock:
 
-Instead of re-emitting the page as core blocks, the carry path **carries the source's rendered HTML near-verbatim** into HTML islands (converted to editable `dla/editable-html` blocks by default; see [Editable HTML islands](#editable-html-islands-dlaeditable-html--a-cross-cutting-default)) and **scopes the source's own CSS** under per-site / per-page body-class wrappers. Conceptually:
-
-1. **Resolve run + build page list** (⚙️) — read `screenshots/manifest.json` + `output.wxr` to enumerate every page **and post** (`{slug, sourceUrl, title, isHome?, postType?, htmlSlug?}`); join posts to their captured `post--<name>.html` files.
-2. **Provision the Studio site** (⚙️) — `liberate_preview` creates a Studio site named plainly `<site>` (the `-carry` suffix is on the *theme*, not the site). Provisions from a **media-free slimmed WXR** (drop `attachment` items) to dodge Studio's ~120s import-silence timeout; media is installed separately next.
-3. **Carry-and-scope reconstruct** (⚙️, `liberate_reconstruct_pages_carry`) — for each page: load `html/<slug>.html`, `collectCss`, split header/main/footer, carry each region verbatim into an HTML island (converted to an editable `dla/editable-html` block by default — opt out with `editableIslands:false` / `EDITABLE_ISLANDS=0`; the `dla-editable-html` plugin is shipped + activated once when any island converts), **scope the CSS** (chrome → site-wide `body.lib-carry-site`; main → per-page `body.lib-carry-site.lib-carry-page-<slug>`), **tree-shake** against the carried DOM, **rewrite internal links** to local permalinks (shared `buildPageLinkMap`), and **self-host media** — install the run's assets and rewrite carried `<img>`/`srcset`/`url()` to the local WP library (shared `installRunMediaMap`). Writes a **real FSE block theme** (`wp_is_block_theme()` → true) to `<site>-carry/` with `parts/header.html`, `parts/footer.html`, `templates/` (incl. `single.html` for posts), per-page CSS, and a `functions.php` with `is_front_page()`/`is_page()`/`is_single()` body-class + enqueue conditions.
-4. **Build `output-carry.wxr`** (⚙️) — copy the *full* `output.wxr` and, per page/post, replace only that item's `<content:encoded>` with its island (matched by `<wp:post_name>`), via a small auditable per-item transform (not a greedy regex). Verify the item count + XML round-trip.
-5. **Content swap + activate** (⚙️) — don't re-import (the importer skips existing GUIDs); instead `studio wp eval-file` a script that finds each post by `post_name` across `['page','post']` and `wp_update_post`s its content. Activate the carry theme, set the static front page, flush rewrites.
-6. **Parity comparison** (🤖 + measured, `liberate_compare`) — screenshot the carry site (desktop + mobile) and compare against the source screenshots, emitting `run-report-carry.json`. Then the **honest visual pass**: crop source vs built for the 2–3 worst pages, read both, and itemize the real gaps.
-
-**What the carry path handles cleanly:** media is self-hosted (no source-CDN dependency); internal links are rewritten to local permalinks; **posts are carried** (scoped via `is_single()` through a shared `single.html`); it produces a genuine FSE block theme (only the page/post *body* is the single carried island — an editable `dla/editable-html` block by default); classic-Wix mobile DOM is carried in a viewport-isolated iframe and Wix pro-galleries reflow to a mobile grid.
-
-**Where the carry path still struggles (state these in the report, don't let them masquerade as success):**
-- **Missing Wix section background-fills** — *the dominant remaining gap on the latest Wix eval* (corneliusholmes, 2026-06-04). Section-level background colors/gradients that Wix applies via JS or non-carried wrappers don't make it into the scoped CSS, so bands that should be filled render transparent/white. This now outweighs scale-offset as the top carry fidelity issue.
-- **Wix scale offset** — previously the dominant gap, now **substantially mitigated**. Carried Wix layouts render *larger* than the source at the same width (Wix's responsive scaling is JS-driven and absent in static carry), pushing content below the fold. Largely closed by `:where()` scoping (desktop ~0.72→0.88) and replicating the source's body classes to unlock reflow (mobile ~0.62→0.73).
-- **Dynamic behavior dropped** — scripts stripped, so carousels/menus/scroll effects don't animate.
-- **CSS-file `url()` backgrounds** rewrite only on exact map-key matches; relative/query-string `url()`s can still point at the source.
-- **Non-semantic chrome** — sites without `<header>`/`<footer>` tags (many Wix/Squarespace) get no separate header/footer parts; the whole body rides in one island.
-
----
-
-## Pathway C — Owned local-site convert (`liberate_convert_local_site`)
-
-**Goal:** turn a static/JS site **you already own** — a local directory of HTML files — into a native WordPress block theme. This is a **different entry point**, not a branch of the `/liberate` platform checkpoint: there's no closed platform to detect or discover, and it skips Phase 1's live extraction/capture-from-platform entirely. It's MCP-driven (`liberate_convert_local_site`, with `liberate_ingest_local_site` underneath) and orchestrated by the **`liberate-local`** skill. Because you own the source, the anti-hallucination provenance gate (aimed at a closed platform's captured text) relaxes — but a **conservation check** guards against silently dropping the source's own styling/content.
-
-Unlike the carry path, this path's *first* choice is **native core blocks**, not islands — it only drops to an editable HTML island when a section won't map cleanly. Conceptually it runs in four stages:
-
-1. **Ingest** (⚙️, `liberate_ingest_local_site` — "stage 1a") — recursively enumerate the directory's `.html`/`.htm` files, derive stable slugs (throw on collision rather than silently overwrite), build a **nav graph from internal links**, and **segment** each page into chrome (`header`/`nav`/`footer`) + stable-id body sections.
-2. **Emit native blocks** (⚙️) — for each body section, map each child element to a canonical core block (`h1`–`h6` → `core/heading`, `p` → `core/paragraph`, `img` → `core/image`, `.button`/`.btn` → `core/buttons`, `ul`/`ol` → `core/list`), wrapped in a `core/group`; unmapped elements fall back to a paragraph (a per-section **confidence** drops below 1 to flag the downgrade). Pages assemble via `composeInstantiate` behind a **block-markup round-trip gate**. A section that won't map cleanly drops to an **editable `dla/editable-html` island** (the same default island conversion as the other paths).
-3. **Scaffold theme + carry source CSS/JS** (⚙️, "stages 1c–1d") — `assembleLocalTheme` writes a real FSE block theme: a **nav-graph-derived header part**, captured footer, **foundation styling** inferred from the source's own CSS (`buildLocalFoundation` — palette/type), and no-title page templates. Then it **carries the designer's own stylesheet and scripts** (`carryCss`/`carryJs`, both default on) so the class-preserving block DOM renders under the source's CSS. `nativeBehaviors:true` instead **replaces** carried JS with Interactivity-API blocks (`dla/reveal`, `dla/sticky`); the two are mutually exclusive (`carryJs` is forced off, loudly).
-4. **Install + verify** (⚙️ + optional 🤖) — provision/locate the Studio site, write + activate the theme, create WP Pages from the composed sidecars (**idempotent** via `_source_url` meta), set the front page, assign per-page templates. Optionally capture the source's design tokens/screenshots and the WP replica and **score parity** (`skipCompare:false`), with a CP4 **repair loop** (`maxRepairRounds`, default 2). A **conservation check** (`checkConservationLeaks` → `normalize-report.json`) flags class-level styling/content loss, and the region audit catches dropped landmarks.
-
-**Optional capabilities** (off unless the inputs are present): HTML forms convert to **Jetpack forms** (with parity CSS + conditional plugin install); a `data-model.json` (authored by a `model-local-data` skill) turns JS-mounted card grids into a real **CPT + native query loops** (validated, warn-only — a bad model skips the data path rather than aborting).
-
-**Det/AI split:** heavily **deterministic** — a code-driven convert plus the carried source CSS, with no builder fan-out by default. AI enters only through the orchestrating skill and the optional model-authored `data-model.json`.
-
-### Choosing a pathway
-
-| | **Block path** (`replicate-with-blocks`) | **Carry path** (`replicate-theme`) | **Local convert** (`liberate_convert_local_site`) |
-|---|---|---|---|
-| Input | Live closed platform (via `/liberate`) | Live closed platform (via `/liberate`) | A local directory of HTML you own |
-| Output | Editable WP core blocks + theme tokens | Editable `dla/editable-html` islands + scoped source CSS (real FSE theme shell) | Native core blocks (islands only where a section won't map) + carried source CSS, in an FSE theme |
-| Editable in WP editor? | **Yes** (decomposed into core blocks) | **Yes**, in-canvas text/image edits via `dla/editable-html` (not decomposed into core blocks) | **Yes** (core blocks; island fallbacks are `dla/editable-html`) |
-| Visual fidelity | High, *responsive-guaranteed* | Very high on desktop, but inherits source quirks (missing Wix section bg-fills; scale-offset, now mostly mitigated) | High — class-preserving blocks under the source's own carried CSS |
-| Responsiveness | Hard gate guarantees mobile reflow | Whatever the source's static/scoped CSS does | Whatever the source's carried CSS does |
-| Products | Product pages reconstructed | Product **data** only; pages fall back to default WooCommerce | n/a (no platform commerce; optional CPT + query loops via `data-model.json`) |
-| Report | `run-report.json` (verdict-first) | `run-report-carry.json` (parity-compare shaped) | `normalize-report.json` (conservation) + optional parity compare |
-| Best for | A real WordPress site you'll keep editing | Pixel-faithful replica / A/B comparison against the source | Migrating a hand-built / static site you own into editable WordPress |
-| Det/AI split | Deterministic emit + AI polish, gated | Deterministic carry + AI comparison | Deterministic convert + carried CSS (AI optional) |
-
-**Honest finding:** the carry-vs-block gap is site-dependent. On some dynamic (Wix/JS) sites the pixel A/B is a **tie within capture noise** — re-capturing the *same* built site can move the overall score ±0.02 and swing individual dynamic pages (blog feeds, galleries) 0.10–0.12 from lazy-load/animation timing, a spread that can *exceed* the gap. But it is **not always a tie**: on the latest Wix eval (corneliusholmes, 2026-06-04) the carry path beat blocks decisively — homepage **0.995 vs 0.26**, desktop average **0.969** — a margin far outside capture noise. So report the carry path's wins as **correctness wins** (self-hosted media, local links, posts rendering — each verified visually/by HTTP) separately from **pixel-score wins** (sometimes within noise, sometimes a clear lead). It serves as a **fidelity ceiling / comparison baseline** that calibrates how good the block path's rebuild is.
-
----
-
-## Resume & state — why a run can always be killed and restarted
-
-Extraction is built to survive crashes. Several files cooperate, all written under a single extraction lockfile:
-
-- **`extraction-log.jsonl`** — append-only, the source of truth for "did we already process this URL."
-- **`session.json`** — the stage, original options, per-entity counts, and adapter pagination cursors. Single-writer, atomic rename; a corrupt file is preserved as `.corrupt.<ts>`, never silently deleted.
+- **`extraction-log.jsonl`** — the source of truth for "have we already done this URL?" (append-only).
+- **`session.json`** — the current stage, options, and counts. A corrupt copy is preserved, never silently deleted.
 - **`media-stubs.json`** — per-asset status with a retry cap.
-- **`products.jsonl`** — streaming product output that *appends* on resume.
+- **`products.jsonl`** — product output that *appends* on resume.
+- **`sections/<slug>.json`** — the cached per-page measurements, so the expensive browser step doesn't re-run; the rebuild reads this and only re-measures on a miss.
 
-Plus a per-URL **`sections/<slug>.json`** cache (capture-once, schema-versioned) so the expensive browser section-extract doesn't re-run on resume — the reconstruction phase reads this cache and only falls back to a live extract on a miss.
-
-This is why the whole thing is restartable: the deterministic phase records exactly what it has done, and the reconstruction phase checkpoints by cluster-group.
-
----
-
-## The fidelity contract (the thing it's most opinionated about)
-
-Three mechanisms, layered, enforce "faithful, nothing lost, nothing invented":
-
-1. **Verbatim-or-placeholder** — builders may never paraphrase source prose.
-2. **Provenance gate** — emitted text must be a subset of captured source text; invented prose hard-fails before install.
-3. **Measured parity + content-coverage** — a section that drops content or fails a *measured* parity check is caught, and either escalated up the ladder or dropped to a faithful (if non-editable) styled island, with the gap explicitly recorded — never silently flattened and shipped as a match.
-
-This is a deliberate stance: the system would rather *show you an honest gap* than quietly degrade fidelity.
+That's why a run can always be killed and restarted: extraction records exactly what it has done, and the rebuild checkpoints as it goes.
 
 ---
 
-## Quick reference — artifacts in the output directory
+## The fidelity contract
 
-> The default output base is `~/Studio/_liberations/<host>`. Override with the `DLA_OUTPUT_DIR` env var or the `outputDir` arg to the MCP tools (the `--output <dir>` CLI flag also works). Use `liberate_paths` to resolve the actual path at runtime.
+Three layered rules enforce "faithful, nothing lost, nothing invented":
 
-| File / dir | Phase | What it is |
+1. **Verbatim or placeholder** — builders never reword source prose.
+2. **Provenance** — every emitted word must trace back to captured source text; invented prose fails before install.
+3. **Measured parity + coverage** — a section that drops content or fails a *measured* check is caught and either fixed up the ladder or carried as a faithful island, with the gap recorded. It is never quietly flattened and shipped as a match.
+
+The stance is deliberate: the system would rather **show you an honest gap** than quietly degrade quality.
+
+---
+
+## Quick reference — files in the output directory
+
+> The default output folder is `~/Studio/_liberations/<host>`. Override it with the `DLA_OUTPUT_DIR` env var, the `outputDir` tool argument, or the `--output` CLI flag. Run `liberate_paths` to resolve the real path.
+
+| File / folder | When | What it is |
 |---|---|---|
 | `output.wxr` | Extract | WordPress import file (pages/posts/products/media/menus) |
 | `products.csv` / `products.jsonl` | Extract | WooCommerce product import |
 | `media/` + `media-stubs.json` | Media | Downloaded assets + per-asset status |
-| `extraction-log.jsonl`, `session.json` | Resume | What's processed + run state |
-| `redirect-map.json` | Extract | Old URL → new slug mapping |
-| `screenshots/{desktop,mobile}/*.png` | Capture | Full-page + scrolled renders |
-| `screenshots/manifest.json` | Capture | URL → files join (the only content↔design link) |
-| `html/<slug>.html` | Capture | Rendered source HTML (feeds the carry path + fallbacks) |
+| `extraction-log.jsonl`, `session.json` | Resume | What's done + run state |
+| `redirect-map.json` | Extract | Old URL → new slug |
+| `screenshots/` + `manifest.json` | Capture | Page renders + the URL→files join |
+| `html/<slug>.html` | Capture | Rendered source HTML (feeds the carry path) |
 | `palette.json`, `typography.json`, `breakpoints.json` | Capture | Aggregated design tokens |
-| `sections/<slug>.json` | Capture | Cached per-page section specs (each carries a `selector`) + top-level landmark census |
-| `design-foundation.json` + `design.md` | 🤖 Foundation | Inferred design system (frozen brief) — block path |
-| `theme/` | Theme | The generated block theme (block path) |
-| `<site>-carry` theme + `output-carry.wxr` | Theme | The carry-and-scope theme + content-swapped WXR (carry path) |
-| `cluster-map.json` | Cluster | Pages grouped by layout signature |
-| `specs/<rep>/section-*.md` | Section extract | Per-section contract for builders |
-| `patterns/page-<slug>.php`, `templates/*.html` | Assemble | Reconstructed page markup |
-| `fallback-diagnostics.json` | Assemble | Structured records of coverage-gated HTML islands (selector · reason · suggested repair) — block path, warning-level |
-| `dla-editable-html` plugin | Assemble / Theme | Build-less block plugin shipped + activated once when any HTML island converts to `dla/editable-html` (all paths) |
-| `region-audit.json` | Assemble | Source landmark census reconciled vs placed; lists dropped (`unassigned`) regions — block path, warning-level |
-| `normalize-report.json` | Local convert | Per-section confidence + class-level conservation leaks (local-site convert path) |
-| `run-report.json` (block) / `run-report-carry.json` (carry) | QA | Verdict + per-section parity records |
+| `sections/<slug>.json` | Capture | Cached per-page section measurements + landmarks |
+| `design-foundation.json` + `design.md` 🤖 | Foundation | The inferred design system (blocks path) |
+| `theme/` | Theme | The generated block theme (blocks path) |
+| `<site>-carry` + `output-carry.wxr` | Theme | The theme-replication theme + content-swapped import |
+| `cluster-map.json` | Cluster | Pages grouped by layout |
+| `specs/<rep>/section-*.md` | Section specs | The builder contract |
+| `patterns/`, `templates/` | Assemble | Rebuilt page markup |
+| `fallback-diagnostics.json` | Assemble | Why each island fell back (blocks path, warning) |
+| `region-audit.json` | Assemble | Dropped landmarks (blocks path, warning) |
+| `dla-editable-html` plugin | Assemble/Theme | The editable-island block, shipped when any island converts |
+| `normalize-report.json` | Local convert | Per-section confidence + dropped styling/content |
+| `run-report.json` / `run-report-carry.json` | QA | Verdict + per-section parity |
 
 ---
 
-## Stage-at-a-glance: deterministic vs AI
+## Stage at a glance — code vs. AI
 
-| Stage | Tool / skill | Det / AI |
+| Stage | Tool / skill | Code/AI |
 |---|---|---|
 | Detect platform | `liberate_detect` | ⚙️ |
 | Discover URLs | `liberate_discover` | ⚙️ |
 | Extract content | `liberate_extract` | ⚙️ |
 | Download media | (media install) | ⚙️ |
-| Capture screenshots + specs + tokens | `liberate_screenshot` | ⚙️ |
-| Infer design system | `design-foundations` | 🤖 |
-| Scaffold theme | `creating-themes` | ⚙️ |
-| Cluster pages *(informational)* | `liberate_cluster_pages` | ⚙️ |
-| Extract section specs *(supplementary)* | `liberate_section_extract` | ⚙️ |
-| Build patterns (fan-out) *(supplementary)* | `generating-patterns` | 🤖 |
-| Reconstruct pages *(primary page path)* | `liberate_reconstruct_pages` | ⚙️ |
+| Capture screenshots + measurements | `liberate_screenshot` | ⚙️ |
+| Infer the design system | `design-foundations` | 🤖 |
+| Scaffold the theme | `creating-themes` | ⚙️ |
+| Group pages by layout *(informational)* | `liberate_cluster_pages` | ⚙️ |
+| Detailed section specs *(helper)* | `liberate_section_extract` | ⚙️ |
+| Build patterns *(helper)* | `generating-patterns` | 🤖 |
+| Assemble pages *(main blocks path)* | `liberate_reconstruct_pages` | ⚙️ |
 | Validate (gate) | `liberate_validate_artifacts` | ⚙️ |
 | Install + import | `liberate_install_theme`, `liberate_import` | ⚙️ |
-| Visual QA + escalation | `design-qa`, `match-page`, `match-section`, `rebuild-section` | 🤖 + measured ⚙️ |
-| Carry-and-scope reconstruct | `liberate_reconstruct_pages_carry` | ⚙️ |
-| Carry parity comparison | `liberate_compare` | 🤖 + measured ⚙️ |
-| Ingest owned local site | `liberate_ingest_local_site` | ⚙️ |
-| Convert owned local site → theme | `liberate_convert_local_site`, `liberate-local` | ⚙️ (AI optional) |
+| Visual QA + escalation | `design-qa`, `match-page`, `match-section`, `rebuild-section` | 🤖 + ⚙️ |
+| Carry-and-scope rebuild | `liberate_reconstruct_pages_carry` | ⚙️ |
+| Parity comparison | `liberate_compare` | 🤖 + ⚙️ |
+| Convert a local site | `liberate_convert_local_site`, `liberate-local` | ⚙️ (AI optional) |
 
 ---
 
-## Skills and the design patterns they use
+## How the AI steps are built (skills & patterns)
 
-The AI side of the pipeline ships as **Claude Code skills**, and each skill is composed from reusable *skill-patterns* — behavioral techniques for grounding, critique, control, and composition (catalog: [skillpatterns.ai](https://skillpatterns.ai/)). Listing the patterns a skill uses is the fastest way to understand *how it thinks*, not just what it does. Below, **clear-fit** patterns (the mechanism is actually present in the SKILL.md) are listed per skill, grouped by role; plausible/partial ones are folded into the cross-cutting notes.
+The AI half ships as Claude Code **skills**, each assembled from reusable *skill-patterns* — named techniques for staying grounded, self-critical, and composable (full catalog: [skillpatterns.ai](https://skillpatterns.ai/)). A handful of patterns do most of the work:
 
-### Orchestrators (drive the whole flow)
+- **Tool offloading is everywhere.** Whenever a skill calls a `liberate_*` tool or a shared helper instead of redoing the logic itself, it's handing predictable work to code and saving its own attention for judgment. This *is* the code/AI boundary, expressed as a habit.
+- **The QA skills lean hardest on honesty.** `design-qa`, `match-section`, `match-page`, `rebuild-section`, and `qa` all share "measure, don't assert; lead with what's wrong" — built from *Prove it works*, *Gap-to-target scoring*, and *Anti-sycophancy*.
+- **The orchestrators own composition.** `liberate`, `replicate-with-blocks`, `replicate-theme`, and `match-page` are built from *Decomposition*, *Skill chaining*, *Specialist fan-out*, *Circuit breaker*, and *Externalized working state*. `liberate` adds *Bounded option generation* + *Human in the loop* for the rebuild-path choice.
+- **The theme/block skills share conventions.** `creating-themes`, `editing-themes`, `editing-blocks`, and `generating-patterns` cluster on *Scoped conventions*, *Trusted sources*, and *Scope guardrails*.
+- **Memory is a file.** *Long-term memory* shows up as `DISCOVERIES.md`, the running log of platform quirks the skills append to.
 
-#### `liberate`
-*Front door: detect → discover, then a **mandatory path checkpoint** (before extraction) that dispatches a reconstruct sub-skill; capture (extract → media → capture → products) runs after the path is chosen.*
-
-- [Decomposition](https://skillpatterns.ai/patterns/decomposition/) — detect → discover → **path checkpoint** → extract → media → capture → products → dispatch
-- [Bounded option generation](https://skillpatterns.ai/patterns/bounded-option-generation/) — the checkpoint offers two distinct reconstruct paths with explicit trade-offs
-- [Human in the loop](https://skillpatterns.ai/patterns/human-in-the-loop/) — the path checkpoint is a non-skippable hard stop fired *before* extraction (never auto-selected); "picking a path IS the go-ahead"; drafts-by-default import; ask before importing authors
-- [Decision capture](https://skillpatterns.ai/patterns/decision-capture/) — shows inventory + scope/cost estimate + a platform-informed recommendation
-- [Skill chaining](https://skillpatterns.ai/patterns/skill-chaining/) — dispatches `replicate-with-blocks` or `replicate-theme` inline (shared context)
-- [Tool offloading](https://skillpatterns.ai/patterns/tool-offloading/) — capture stages are `liberate_*` MCP calls (`liberate_detect`/`_discover`/`_extract`/`_verify`)
-- [Externalized working state](https://skillpatterns.ai/patterns/externalized-working-state/) — Step-0 idempotent check (`.discovery-complete` / `session.json` / `output.wxr`) skips re-capture; `resume:true`
-- [Prove it works](https://skillpatterns.ai/patterns/prove-it-works/) — always run `liberate_verify` after extraction (stale CDN URLs, failed pages, media gaps)
-- [Graceful degradation](https://skillpatterns.ai/patterns/graceful-degradation/) — 0 pages → point to `/diagnose`; GraphQL→JSON fallback; capture-health fallback pages flagged
-- [Long-term memory](https://skillpatterns.ai/patterns/long-term-memory/) — notable findings logged to `DISCOVERIES.md`
-- [Trusted sources](https://skillpatterns.ai/patterns/trusted-sources/) — alt text carried verbatim, flagged for human fill, never AI-generated (provenance)
-- [Scoped conventions](https://skillpatterns.ai/patterns/scoped-conventions/) — per-platform setup (Squarespace CDP, Shopify two-tier admin, Webflow token, GoDaddy W+M, Wix)
-
-#### `replicate-with-blocks`
-*Block path (dispatched by `liberate`): spec → fan-out → assemble → validate → install → QA. Editable core blocks + WooCommerce.*
-
-- [Role priming](https://skillpatterns.ai/patterns/role-priming/) — "you are a design sub-orchestrator"
-- [Decomposition](https://skillpatterns.ai/patterns/decomposition/) — explicit 7-step flow
-- [Skill chaining](https://skillpatterns.ai/patterns/skill-chaining/) — per-step sub-skill table (foundations, themes, patterns, qa, editing-themes)
-- [Specialist fan-out](https://skillpatterns.ai/patterns/specialist-fan-out/) — one builder per cluster representative, concurrency-capped ~4–6
-- [Tool offloading](https://skillpatterns.ai/patterns/tool-offloading/) — MCP-tools table, "use these rather than reimplementing in Bash"
-- [Schema-locked output](https://skillpatterns.ai/patterns/schema-locked-output/) — `parseBuilderEnvelope`, theme.json schema-v3 build gate
-- [Encoded reasoning](https://skillpatterns.ai/patterns/encoded-reasoning/) — `liberate_validate_artifacts` trust boundary
-- [Prove it works](https://skillpatterns.ai/patterns/prove-it-works/) — "never claim a match you haven't measured"
-- [Anti-sycophancy](https://skillpatterns.ai/patterns/anti-sycophancy/) — "'close enough' is a STOP sign"; under-claim, never over-claim
-- [Circuit breaker](https://skillpatterns.ai/patterns/circuit-breaker/) — "3 iterations is a checkpoint, not an exit"
-- [Externalized working state](https://skillpatterns.ai/patterns/externalized-working-state/) — write-then-mark resume in `session.json`
-- [Graceful degradation](https://skillpatterns.ai/patterns/graceful-degradation/) — coverage-gated verbatim HTML-island fallback (editable `dla/editable-html` by default)
-- [Failure mode preloading](https://skillpatterns.ai/patterns/failure-mode-preloading/) — extensive Anti-patterns section (flattening, hallucinated tokens, page-list nav)
-- [Trusted sources](https://skillpatterns.ai/patterns/trusted-sources/) — "trust design-foundation.json, don't reinterpret palette"
-- [Scope guardrails](https://skillpatterns.ai/patterns/scope-guardrails/) — "content transformation is out of scope"; entry contract STOPs if capture missing
-- [Capability detection](https://skillpatterns.ai/patterns/capability-detection/) — "on Codex/Gemini run sequentially"
-- [Gap-to-target scoring](https://skillpatterns.ai/patterns/gap-to-target-scoring/) — R1→R4 escalation ladder, re-measure until it matches
-
-#### `replicate-theme`
-*Carry path (dispatched by `liberate`): carry source HTML into editable `dla/editable-html` islands + scope source CSS. High-fidelity; in-canvas text/image-editable, not decomposed into core blocks.*
-
-- [Role priming](https://skillpatterns.ai/patterns/role-priming/) — "you are the carry-and-scope reconstruct orchestrator"
-- [Decision capture](https://skillpatterns.ai/patterns/decision-capture/) — "what you are trading"; "known limitations — state these in the report"
-- [Scope guardrails](https://skillpatterns.ai/patterns/scope-guardrails/) — entry contract: STOP if capture missing (don't self-capture); carry the body as an island, don't decompose it into core blocks (it still becomes an editable `dla/editable-html` block by default)
-- [Skill chaining](https://skillpatterns.ai/patterns/skill-chaining/) — reuses the shared install/import/compare MCP tools
-- [Tool offloading](https://skillpatterns.ai/patterns/tool-offloading/) — `liberate_reconstruct_pages_carry`, shared `buildPageLinkMap` / `installRunMediaMap`
-- [Prove it works](https://skillpatterns.ai/patterns/prove-it-works/) — verify fixes landed: local nav hrefs, `wp-content/uploads` srcs, rewritten URLs return HTTP 200
-- [Anti-sycophancy](https://skillpatterns.ai/patterns/anti-sycophancy/) — "itemize real differences bluntly BEFORE claiming a win"
-- [Confidence calibration](https://skillpatterns.ai/patterns/confidence-calibration/) — separate correctness wins from within-noise pixel wins; report the multi-capture spread
-- [Graceful degradation](https://skillpatterns.ai/patterns/graceful-degradation/) — media-free slimmed WXR to dodge the import timeout; chrome-less sites → one island
-- [Failure mode preloading](https://skillpatterns.ai/patterns/failure-mode-preloading/) — named known limitations (missing Wix section bg-fills, scale-offset, `url()` backgrounds) watched, not shipped as wins
-- [Long-term memory](https://skillpatterns.ai/patterns/long-term-memory/) — encodes persisted cross-run findings (the honesty bar, the Studio import-timeout workaround)
-
-#### `match-page`
-*Whole-page parity orchestration with a replayable log.*
-
-- [Decomposition](https://skillpatterns.ai/patterns/decomposition/) — replay → batch-assess → iterate divergent bands
-- [Externalized working state](https://skillpatterns.ai/patterns/externalized-working-state/) — `parity-log.json` survives a reconstruct
-- [Long-term memory](https://skillpatterns.ai/patterns/long-term-memory/) — replays logged intents onto a new build
-- [Skill chaining](https://skillpatterns.ai/patterns/skill-chaining/) — dispatches `match-section` per divergent band
-- [Specialist fan-out](https://skillpatterns.ai/patterns/specialist-fan-out/) — per-band `match-section` subagents
-- [Prove it works](https://skillpatterns.ai/patterns/prove-it-works/) — crop source+built per band and look before reporting MATCHED
-- [Circuit breaker](https://skillpatterns.ai/patterns/circuit-breaker/) — "≤3 fix cycles per band"; whole-page cap
-- [Self-tuning](https://skillpatterns.ai/patterns/self-tuning/) — `promoteToEmitter` graduates recurring fixes into the emitter
-- [Failure mode preloading](https://skillpatterns.ai/patterns/failure-mode-preloading/) — the @1440 false-positive trap (compare the screenshot, not the numbers)
-- [Schema-locked output](https://skillpatterns.ai/patterns/schema-locked-output/) — explicit `parity-log.json` entry schema
-
-### Builders & emitters (produce the markup / design system)
-
-#### `design-foundations`
-*Infer the semantic design system from captures.*
-
-- [Schema-locked output](https://skillpatterns.ai/patterns/schema-locked-output/) — must pass `liberate_design_foundation_validate {ok:true}`
-- [Tool offloading](https://skillpatterns.ai/patterns/tool-offloading/) — mandatory validate MCP call; consumes the deterministic scaffold
-- [Signal vs. noise](https://skillpatterns.ai/patterns/signal-noise-pre-commitment/) — "HTML/CSS first, screenshots only for ambiguity"
-- [Trusted sources](https://skillpatterns.ai/patterns/trusted-sources/) — "browser-computed CSS is the source of truth"
-- [Decision capture](https://skillpatterns.ai/patterns/decision-capture/) — every filled role needs an evidence entry; `openQuestions[]`
-- [Confidence calibration](https://skillpatterns.ai/patterns/confidence-calibration/) — leave a slot `null` rather than guess; flag ties
-- [Failure mode preloading](https://skillpatterns.ai/patterns/failure-mode-preloading/) — known scaffold-pollution failure modes, corrected every run
-- [Exemplars over instruction](https://skillpatterns.ai/patterns/exemplars-over-instruction/) — worked input→output example with good vs bad evidence
-- [Encoded reasoning](https://skillpatterns.ai/patterns/encoded-reasoning/) — Anti-patterns ("skipping validate", "hallucinating tokens") as self-checks
-- [Graceful degradation](https://skillpatterns.ai/patterns/graceful-degradation/) — uncapturable fonts auto-substitute, recorded as an openQuestion
-- [Progressive disclosure](https://skillpatterns.ai/patterns/progressive-disclosure/) — escalating evidence ladder (aggregates → HTML → screenshots)
-
-#### `generating-patterns`
-*Builder subagent: section specs → one block pattern.*
-
-- [Trusted sources](https://skillpatterns.ai/patterns/trusted-sources/) — "where the source text lives, in order: `spec.headings` … `spec.bodyText`"
-- [Anti-sycophancy](https://skillpatterns.ai/patterns/anti-sycophancy/) — "⛔ ALL copy is source-verbatim or placeholdered — NEVER paraphrased"
-- [Encoded reasoning](https://skillpatterns.ai/patterns/encoded-reasoning/) — "enforced by `liberate_validate_artifacts` — you may not bypass the gate"
-- [Schema-locked output](https://skillpatterns.ai/patterns/schema-locked-output/) — structured return envelope; malformed = builder failure
-- [Graceful degradation](https://skillpatterns.ai/patterns/graceful-degradation/) — sized placeholder + flag for missing media, never substitute
-- [Failure mode preloading](https://skillpatterns.ai/patterns/failure-mode-preloading/) — the getsnooz invented-testimonials post-mortem
-- [Scoped conventions](https://skillpatterns.ai/patterns/scoped-conventions/) — pattern-file PHP header spec, slug/category conventions
-- [Exemplars over instruction](https://skillpatterns.ai/patterns/exemplars-over-instruction/) — layout examples (hero split, Z-pattern, 3-column grid, FAQ)
-
-#### `compose-page-blocks`
-*Misfit-page fallback: rendered HTML → `post_content`.*
-
-- [Schema-locked output](https://skillpatterns.ai/patterns/schema-locked-output/) — output must round-trip `parse_blocks()`
-- [Encoded reasoning](https://skillpatterns.ai/patterns/encoded-reasoning/) — `output-verify.ts` discards any hallucinated phrase
-- [Anti-sycophancy](https://skillpatterns.ai/patterns/anti-sycophancy/) — copy must be reproduced VERBATIM, never reworded
-- [Scope guardrails](https://skillpatterns.ai/patterns/scope-guardrails/) — "you are NOT generating a theme"; no inline colors / `wp:html` mirrors
-- [Failure mode preloading](https://skillpatterns.ai/patterns/failure-mode-preloading/) — anti-patterns (HTML-only reading, invented tokens, over-emitting)
-- [Trusted sources](https://skillpatterns.ai/patterns/trusted-sources/) — read the source HTML to ground each section in real markup
-- [Graceful degradation](https://skillpatterns.ai/patterns/graceful-degradation/) — `[copy not captured]` placeholder when text is missing
-- [Tool offloading](https://skillpatterns.ai/patterns/tool-offloading/) — deterministic `heuristic-blocks.ts` runs first; you're skipped for trivial shapes
-
-#### `creating-themes`
-*Scaffold a block theme from the foundation.*
-
-- [Scoped conventions](https://skillpatterns.ai/patterns/scoped-conventions/) — theme.json v3, FSE file structure, `enqueue_block_assets`
-- [Trusted sources](https://skillpatterns.ai/patterns/trusted-sources/) — read `references/block-html.md` first (REQUIRED)
-- [Scope guardrails](https://skillpatterns.ai/patterns/scope-guardrails/) — creating vs modifying; minimal template set
-- [Graceful degradation](https://skillpatterns.ai/patterns/graceful-degradation/) — font substitution, "never a bare `sans-serif`"
-- [Exemplars over instruction](https://skillpatterns.ai/patterns/exemplars-over-instruction/) — concrete style.css header, fonts snippet, landing-page examples
-
-### Visual-parity & QA (keep the result honest)
-
-#### `design-qa`
-*Post-install QA loop: responsiveness + measured parity + escalation.*
-
-- [Anti-sycophancy](https://skillpatterns.ai/patterns/anti-sycophancy/) — banned phrases ("looks good", "close enough") as STOP signs
-- [Prove it works](https://skillpatterns.ai/patterns/prove-it-works/) — "a 'match' requires measured evidence per section; no evidence ⇒ `fail (unverified)`"
-- [Gap-to-target scoring](https://skillpatterns.ai/patterns/gap-to-target-scoring/) — 0–10, "what a 10 looks like", re-score before→after
-- [Encoded reasoning](https://skillpatterns.ai/patterns/encoded-reasoning/) — `SectionParity` five-signal rubric; verdict re-derives from records
-- [Schema-locked output](https://skillpatterns.ai/patterns/schema-locked-output/) — per-URL JSON contract; `passed` is the computed run-report verdict
-- [Circuit breaker](https://skillpatterns.ai/patterns/circuit-breaker/) — ladder/cost ceiling → stop-and-ask the operator
-- [Human in the loop](https://skillpatterns.ai/patterns/human-in-the-loop/) — only operator `acceptance: {by:'human', proof}` ships a divergent section
-- [Specialist fan-out](https://skillpatterns.ai/patterns/specialist-fan-out/) — R4a dispatches editing-themes / editing-blocks / rebuild-section subagents
-- [Tool offloading](https://skillpatterns.ai/patterns/tool-offloading/) — `liberate_replicate_verify`, `evaluateResponsive`, `liberate_compare`
-- [Stakes-scaled rigor](https://skillpatterns.ai/patterns/stakes-scaled-rigor/) — hard parity gates vs soft a11y warnings
-- [Failure mode preloading](https://skillpatterns.ai/patterns/failure-mode-preloading/) — vision must catch what gates can't (semantic misclass, unstyled islands)
-
-#### `match-section`
-*Per-section eyes-on apply→render→look→fix loop.*
-
-- [Role priming](https://skillpatterns.ai/patterns/role-priming/) — "you are the per-section executor"
-- [Prove it works](https://skillpatterns.ai/patterns/prove-it-works/) — "Looking — the gate. You MUST do this every iteration"
-- [Anti-sycophancy](https://skillpatterns.ai/patterns/anti-sycophancy/) — "'close enough' / 'known gap' are not finishes"
-- [Trusted sources](https://skillpatterns.ai/patterns/trusted-sources/) — "`styledHtml` is your fidelity oracle — don't guess"
-- [Tool offloading](https://skillpatterns.ai/patterns/tool-offloading/) — Playwright render + crop loop
-- [Failure mode preloading](https://skillpatterns.ai/patterns/failure-mode-preloading/) — fixed-dimension / lazy-image / pre-crop traps
-- [Disconfirmation](https://skillpatterns.ai/patterns/disconfirmation/) — "name every difference bluntly; lead with what's WRONG"
-- [Scope guardrails](https://skillpatterns.ai/patterns/scope-guardrails/) — stay generic, never hardcode a site's colors/fonts/filenames
-
-#### `rebuild-section`
-*R4a: rebuild one section into canonical editable blocks.*
-
-- [Role priming](https://skillpatterns.ai/patterns/role-priming/) — "dispatched for one section; your job is R4a"
-- [Encoded reasoning](https://skillpatterns.ai/patterns/encoded-reasoning/) — four acceptance gates (oracle, round-trip, parity, coverage)
-- [Prove it works](https://skillpatterns.ai/patterns/prove-it-works/) — "you cannot self-accept — acceptance is the measured re-score"
-- [Schema-locked output](https://skillpatterns.ai/patterns/schema-locked-output/) — output must survive a `@wordpress/blocks` round-trip
-- [Anti-sycophancy](https://skillpatterns.ai/patterns/anti-sycophancy/) — "never ship a flatten or unstyled island as a 'known gap'"
-- [Graceful degradation](https://skillpatterns.ai/patterns/graceful-degradation/) — falling to R4b is "the correct outcome, not a failure"
-- [Trusted sources](https://skillpatterns.ai/patterns/trusted-sources/) — read `styledHtml` for layout, source HTML for exact content
-- [Failure mode preloading](https://skillpatterns.ai/patterns/failure-mode-preloading/) — the divergence-signal list tells you exactly what's wrong
-- [Scope guardrails](https://skillpatterns.ai/patterns/scope-guardrails/) — "reproduce the source; do not invent content or redesign"
-
-#### `qa`
-*Compare extracted WXR vs source, score, fix loop.*
-
-- [Decomposition](https://skillpatterns.ai/patterns/decomposition/) — seven phases (Initialize → … → Final Report)
-- [Gap-to-target scoring](https://skillpatterns.ai/patterns/gap-to-target-scoring/) — 0–100 weighted health score, before→after delta
-- [Tool offloading](https://skillpatterns.ai/patterns/tool-offloading/) — `runQa` / `readWxr` / `diffContent` from `src/lib/`
-- [Prove it works](https://skillpatterns.ai/patterns/prove-it-works/) — "re-run comparison; if a fix made things worse, revert"
-- [Stakes-scaled rigor](https://skillpatterns.ai/patterns/stakes-scaled-rigor/) — Quick / Standard / Exhaustive tiers tune which grades get fixed
-- [Circuit breaker](https://skillpatterns.ai/patterns/circuit-breaker/) — "after every 5 fixes evaluate; hard cap 20 attempts"
-- [Human in the loop](https://skillpatterns.ai/patterns/human-in-the-loop/) — "show the report first; ask before applying fixes"
-- [Schema-locked output](https://skillpatterns.ai/patterns/schema-locked-output/) — `QaResult` structure; `qa-log.jsonl`
-- [Skill chaining](https://skillpatterns.ai/patterns/skill-chaining/) — escalates to `/diagnose` ("QA finds symptoms; diagnose finds the cause")
-- [Long-term memory](https://skillpatterns.ai/patterns/long-term-memory/) — platform content-loss patterns → `DISCOVERIES.md`
-
-### Platform & maintenance
-
-#### `adapt`
-*Build a new platform adapter for an unsupported platform.*
-
-- [Decomposition](https://skillpatterns.ai/patterns/decomposition/) — Recon → Build → Register → Test → Document
-- [Scoped conventions](https://skillpatterns.ai/patterns/scoped-conventions/) — the `PlatformAdapter` contract (`id`/`detect`/`discover`/`extract`)
-- [Trusted sources](https://skillpatterns.ai/patterns/trusted-sources/) — "read `webflow.ts` as the simplest reference"
-- [Tool offloading](https://skillpatterns.ai/patterns/tool-offloading/) — `liberate_map_apis`, `liberate_probe` for API discovery
-- [Disconfirmation](https://skillpatterns.ai/patterns/disconfirmation/) — dry-run verify: are titles correct? is content complete?
-- [Long-term memory](https://skillpatterns.ai/patterns/long-term-memory/) — add a `DISCOVERIES.md` entry for what you learned
-- [Clarification gate](https://skillpatterns.ai/patterns/clarification-gate/) — "ask the user for a live site URL to reverse-engineer against"
-
-#### `diagnose`
-*Debug failed or low-quality extractions.*
-
-- [Decomposition](https://skillpatterns.ai/patterns/decomposition/) — Triage → Investigate → Fix → Verify → Document
-- [Tool offloading](https://skillpatterns.ai/patterns/tool-offloading/) — "start with `liberate_verify`" (replaces manual log grepping)
-- [Signal vs. noise](https://skillpatterns.ai/patterns/signal-noise-pre-commitment/) — "read the logs first — don't guess"
-- [Disconfirmation](https://skillpatterns.ai/patterns/disconfirmation/) — "probe before fixing; don't mask failures"
-- [Prove it works](https://skillpatterns.ai/patterns/prove-it-works/) — re-extract + `/qa`, compare failure counts before/after
-- [Stakes-scaled rigor](https://skillpatterns.ai/patterns/stakes-scaled-rigor/) — "one fix at a time; change one thing, re-test"
-- [Skill chaining](https://skillpatterns.ai/patterns/skill-chaining/) — escalates to/from `/qa`
-- [Long-term memory](https://skillpatterns.ai/patterns/long-term-memory/) — platform quirks → `DISCOVERIES.md`
-- [Exemplars over instruction](https://skillpatterns.ai/patterns/exemplars-over-instruction/) — error→cause→fix tables
-
-#### `editing-themes`
-*Minimal, targeted edits to an existing block theme.*
-
-- [Scope guardrails](https://skillpatterns.ai/patterns/scope-guardrails/) — "NEVER recreate/overwrite files the user didn't ask for; never rewrite theme.json/functions.php"
-- [Scoped conventions](https://skillpatterns.ai/patterns/scoped-conventions/) — update theme.json not raw CSS; register template parts
-- [Trusted sources](https://skillpatterns.ai/patterns/trusted-sources/) — read `creating-themes/references/block-html.md` first
-- [Characterization baseline](https://skillpatterns.ai/patterns/characterization-baseline/) — read theme.json/style.css/functions.php before editing; verify templates still resolve after
-
-#### `editing-blocks`
-*Minimal, targeted edits to an existing block.*
-
-- [Scope guardrails](https://skillpatterns.ai/patterns/scope-guardrails/) — "don't convert static/dynamic or change the block name/slug unless asked"
-- [Scoped conventions](https://skillpatterns.ai/patterns/scoped-conventions/) — keep block.json/edit.js/save.js (or render.php) in sync; plain-JS-not-Interactivity rule
-- [Trusted sources](https://skillpatterns.ai/patterns/trusted-sources/) — read `references/` (artefact-templates, inner-blocks, interactivity-api) first
-- [Characterization baseline](https://skillpatterns.ai/patterns/characterization-baseline/) — read all block files before editing; verify it still registers and renders after
-
-### Cross-cutting observations
-
-- **The QA/parity family** (`design-qa`, `match-section`, `match-page`, `rebuild-section`, `qa`) is where `Prove it works` + `Gap-to-target scoring` + `Anti-sycophancy` cluster hardest — all share the "measure, don't assert; lead with what's wrong" discipline.
-- **The orchestrators** (`liberate`, `replicate-with-blocks`, `replicate-theme`, `match-page`) own the composition patterns: `Decomposition` + `Skill chaining` + `Specialist fan-out` + `Circuit breaker` + `Externalized working state`. `liberate` is the front door (discover → path choice → capture → dispatch → `Bounded option generation` + `Human in the loop`, the choice gated *before* extraction); the two reconstruct sub-skills do the heavy lifting.
-- **The WP-generic creating/editing skills** (`creating-themes`, `editing-themes`, `editing-blocks`, `generating-patterns`) form the `Scoped conventions` + `Trusted sources` (a `references/` dir) + `Scope guardrails` cluster.
-- **`Tool offloading` is near-universal** — every skill that calls a `liberate_*` MCP tool or a `src/lib/` helper rather than reimplementing the logic is offloading deterministic work to keep judgment in the context window. This *is* the deterministic/AI boundary expressed as a pattern.
-- **`Long-term memory`** surfaces as `DISCOVERIES.md` writes — the in-repo log of platform quirks and extraction techniques the orchestrators append to.
+| Skill | Role | What it does | Key patterns |
+|---|---|---|---|
+| `liberate` | Orchestrator | Front door: survey → ask how to rebuild → extract → dispatch | Decomposition, Bounded option generation, Human in the loop |
+| `replicate-with-blocks` | Orchestrator | The blocks path, end to end | Specialist fan-out, Schema-locked output, Gap-to-target scoring |
+| `replicate-theme` | Orchestrator | The theme-replication path | Decision capture, Anti-sycophancy, Confidence calibration |
+| `liberate-local` | Orchestrator | Convert a folder you own into a block theme | Decomposition, Tool offloading, Scope guardrails |
+| `match-page` | Orchestrator | Whole-page parity with a replayable log | Externalized working state, Self-tuning, Circuit breaker |
+| `design-foundations` | Builder | Infer the design system from captures | Schema-locked output, Confidence calibration, Trusted sources |
+| `generating-patterns` | Builder | One section spec → one block pattern | Trusted sources, Anti-sycophancy, Exemplars over instruction |
+| `compose-page-blocks` | Builder | Misfit-page fallback: HTML → page content | Schema-locked output, Encoded reasoning, Scope guardrails |
+| `creating-themes` | Builder | Scaffold a block theme from the foundation | Scoped conventions, Trusted sources, Scope guardrails |
+| `design-qa` | QA | Post-install responsiveness + parity + escalation | Prove it works, Stakes-scaled rigor, Human in the loop |
+| `match-section` | QA | Per-section apply → render → look → fix | Prove it works, Disconfirmation, Failure mode preloading |
+| `rebuild-section` | QA | Rebuild one section into editable blocks (R4a) | Encoded reasoning, Schema-locked output, Graceful degradation |
+| `qa` | QA | Compare extracted content vs. source and fix | Gap-to-target scoring, Circuit breaker, Human in the loop |
+| `adapt` | Platform | Build an adapter for a new platform | Decomposition, Scoped conventions, Clarification gate |
+| `diagnose` | Maintenance | Debug failed or low-quality extractions | Signal vs. noise, Disconfirmation, Prove it works |
+| `editing-themes` | Maintenance | Minimal, targeted edits to a block theme | Scope guardrails, Characterization baseline |
+| `editing-blocks` | Maintenance | Minimal, targeted edits to a block | Scope guardrails, Characterization baseline |
