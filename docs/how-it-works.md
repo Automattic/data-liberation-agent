@@ -60,11 +60,13 @@ All three share the same `src/lib/` and `src/adapters/` core.
 2. **CLI (`data-liberation <url>`).** Headless, CI-friendly. Runs the deterministic extraction phase **only** (Phase 1 capture; screenshots by default, `--no-screenshots` to skip). The reconstruct (Phase 2 — blocks or theme) is agent-only; there is no headless rebuild.
 3. **MCP server.** Exposes the deterministic operations as `liberate_*` tools that any MCP client (or the skills) call. *Caveat:* the MCP server is one long-lived process — editing `src/` does not hot-reload it, so a newly-added tool (e.g. `liberate_reconstruct_pages_carry`) is missing until the server restarts.
 
-> **Two reconstruct paths.** Right after discovery (and before extraction), `/liberate` branches at a mandatory operator checkpoint to one of two reconstruct sub-skills:
+> **Two reconstruct paths from a live platform.** Right after discovery (and before extraction), `/liberate` branches at a mandatory operator checkpoint to one of two reconstruct sub-skills:
 > - **`replicate-with-blocks`** — the block path (editable core blocks + WooCommerce).
-> - **`replicate-theme`** — the carry-and-scope path (high-fidelity, non-block-editable). Its code and artifacts are namespaced `carry`: `output-carry.wxr`, the `<site>-carry` theme, `liberate_reconstruct_pages_carry`.
+> - **`replicate-theme`** — the carry-and-scope path (high-fidelity). The carried body lands in editable `dla/editable-html` islands by default — text/image-editable in-canvas, but not decomposed into core blocks. Its code and artifacts are namespaced `carry`: `output-carry.wxr`, the `<site>-carry` theme, `liberate_reconstruct_pages_carry`.
 >
 > Both sub-skills are `disable-model-invocation: true` — `/liberate` dispatches them inline; users don't invoke them directly.
+>
+> **A third path for sources you already own.** When the input isn't a live closed platform but a **local directory of HTML files you control**, the **owned local-site convert** path (`liberate_convert_local_site`, driven by the `liberate-local` skill) reconstructs it directly into a native WP block theme — it has no platform to detect/discover and skips Phase 1's live extraction/capture entirely. See [Pathway C](#pathway-c--owned-local-site-convert-liberate_convert_local_site).
 
 ---
 
@@ -140,9 +142,32 @@ The front door shows the discovery inventory + a scope/cost estimate + a **platf
 | Operator picks | Dispatches | What you get | Products |
 |---|---|---|---|
 | **Migrate content into blocks + products** | **`replicate-with-blocks`** (Pathway A) | Editable WordPress core blocks + navigation + WooCommerce; best launchpad for a redesign | Product **pages reconstructed** |
-| **Theme replication** | **`replicate-theme`** (Pathway B) | Highest-fidelity carry-and-scope replica; raw-HTML-editable, **not** block-editable | Product **data** imported; product pages fall back to default WooCommerce (no carried replica) |
+| **Theme replication** | **`replicate-theme`** (Pathway B) | Highest-fidelity carry-and-scope replica; body carried as editable `dla/editable-html` islands (text/image-editable in-canvas), **not** decomposed into core blocks | Product **data** imported; product pages fall back to default WooCommerce (no carried replica) |
 
 *Recommendation heuristic:* a store with many products → lean blocks (1); a fixed-layout Wix marketing site with no store where pixel-fidelity matters → lean theme (2). The choice is **reversible at zero cost**: capture is idempotent, so re-running `/liberate <url>` on an already-captured site skips straight back to this checkpoint — you can try the other path later without re-capturing.
+
+### Editable HTML islands (`dla/editable-html`) — a cross-cutting default
+
+Both pathways (and the owned-local-site convert path, `liberate_convert_local_site`) lean on **HTML islands** — chunks of source markup carried near-verbatim when there's no clean structured-block representation. The carry path bodies are islands by design; the block path drops to an island only when a structured render would lose content.
+
+Historically an island was a plain `core/html` block. That has a real cost in the editor: `core/html` renders inside an **isolated SandBox iframe**, so the carried markup shows up **unstyled** and only behind the HTML/Preview toggle — invisible and uneditable on the canvas. So as of the latest changes, **every HTML island converts to an editable `dla/editable-html` block by default**, across all three reconstruct paths (carry, block, local).
+
+What `dla/editable-html` is:
+
+- **A build-less Gutenberg block** shipped as a tiny plugin (`dla-editable-html`) — registered, activated **once** per run when any island converts; no webpack/`@wordpress/scripts` step.
+- Its content is a **frame model** (`FrameNode[]`): a byte-faithful parse of the carried HTML into static text, verbatim `raw` subtrees (svg / scripts / interactive controls, never touched), plain `element` nodes, and **bindable leaves** — `bindText` (editable via `RichText`) and `bindImage` (editable via `MediaUpload`). The frame is stored as a block attribute.
+- **Static save = byte-identical front end.** The block's `save()` is `RawHTML(serializeFrame(frame))`, and the server emitter embeds the *same* serializer source — so the front-end output is identical to the original carried HTML by construction. The conversion changes only what the *editor* shows.
+- **In-canvas + editable:** the carried markup renders styled on the canvas (named in List View via the carried island metadata), its prose is text-editable, its images are swappable, and a sidebar **"HTML Source"** panel lets you edit the raw markup and re-derive the bindable regions on Apply.
+
+What it is **not:** the island is *not decomposed into core blocks* — it's one editable HTML block, not a column/cover/gallery tree. (Decomposing into core blocks is what Pathway A's structured emitter does *before* it would ever fall back to an island.)
+
+**Mechanics & guardrails:**
+- Conversion runs **before** the block-fixer canonicalization, so the converted blocks validate cleanly.
+- **Only** raw-HTML islands convert: a `core/html` that wraps nested `wp:` block delimiters is skipped (frame-flattening it would corrupt the inner blocks).
+- Opt out per call with `editableIslands: false` (or `EDITABLE_ISLANDS=0` on the carry driver) to keep plain `core/html`.
+- Install-time `wp_slash()` on `post_content` keeps WordPress's internal `wp_unslash` from stripping the backslashes in the frame-attribute JSON (which would otherwise invalidate the block in the editor).
+
+The rest of this section refers to "HTML islands" generically; unless you've opted out, each one is a `dla/editable-html` block.
 
 ## Pathway A — Block reconstruction (`replicate-with-blocks`)
 
@@ -176,11 +201,11 @@ For each cluster representative, an AI **builder subagent** reads the design bri
 ### Step 11 — Assemble / reconstruct pages (`liberate_reconstruct_pages`)  ⚙️ Deterministic
 This is the deterministic **emitter** at the core of the hybrid. For **every** content page (not just representatives), it reads that page's **own** section specs and renders them to core blocks via per-interaction-model renderers (`renderCover`, `renderColumns`, `renderReviewGrid`, `renderProductCardRow`, …). It fills content slots with **verbatim** spec text, applies **design-foundation tokens** (color slugs and font families — never inlined hex/px, so the editor's canonicalization doesn't fight it), installs the page's media into the WP library, and rewrites image URLs through the media map. Output: `patterns/page-<slug>.php` + collapsed variant templates (`templates/page-replica[-<key>].html`) registered in `theme.json customTemplates` and assigned per page via `_wp_page_template`; `output.wxr` is patched to match. Pass `collapseTemplates:false` to fall back to one `templates/page-<slug>.html` per page (legacy).
 
-A built-in **content-loss guard**: if a structured render would drop content or coverage falls below a text floor, that section falls back to emitting sanitized **source HTML as a `core/html` island** instead — faithful but not block-editable — and flags itself.
+A built-in **content-loss guard**: if a structured render would drop content or coverage falls below a text floor, that section falls back to emitting sanitized **source HTML as an HTML island** instead — faithful, and by default an *editable* `dla/editable-html` block (see [Editable HTML islands](#editable-html-islands-dlaeditable-html--a-cross-cutting-default)) rather than a sandboxed `core/html`, though not decomposed into core blocks — and flags itself.
 
 Two **warning-level diagnostic artifacts** make those flags machine-actionable (neither blocks install):
 
-- **`fallback-diagnostics.json`** — one structured record per `core/html` island, keyed by the section's `selector`: *why* it fell back (`dropped_images` vs `text_coverage_below_floor`), a `suggestedRepairClass`, and source/emitted previews — so the QA loop (or an agent) can triage and upgrade each island back to blocks rather than just seeing a count.
+- **`fallback-diagnostics.json`** — one structured record per HTML island, keyed by the section's `selector`: *why* it fell back (`dropped_images` vs `text_coverage_below_floor`), a `suggestedRepairClass`, and source/emitted previews — so the QA loop (or an agent) can triage and upgrade each island back to blocks rather than just seeing a count.
 - **`region-audit.json`** — a **structural** completeness check that the verbatim/provenance content-diff misses: it reconciles each page's source landmark census (`main`/`nav`/`header`/`footer`) against what the build actually placed — body sections by `selector`, chrome by role — and lists any **`unassignedRegions`** (an actionable source landmark that survived nowhere, e.g. a dropped `<nav>`). This catches a whole landmark vanishing, which item-level text/media diffing under-weights.
 
 > The full-width vs. constrained layout decision **defers to the source**: a section carrying a large image spanning ≥92% of the viewport marks the page full-bleed; otherwise constrained.
@@ -215,7 +240,7 @@ When a section diverges, it climbs an **escalation ladder**, cheapest fix first:
 | **R2** | Rebuild the block markup from spec (restore flattened columns/grids) via `editing-blocks` | 🤖 |
 | **R3** | Re-extract the section spec (the spec itself was wrong — "Class A") | ⚙️ |
 | **R4a** | AI canonical-block rebuild from richer inputs (source HTML, styled HTML, screenshots, spec, tokens) via `rebuild-section` — must pass 4 gates: block oracle, canonicalization round-trip, re-measured parity = match, no content loss | 🤖 |
-| **R4b** | Deterministic **styled-island floor**: carry verbatim source HTML as a `core/html` island with scoped CSS — pixel-faithful but not block-editable. The last resort for genuinely bespoke sections | ⚙️ |
+| **R4b** | Deterministic **styled-island floor**: carry verbatim source HTML as an island with scoped CSS — pixel-faithful, and by default an editable `dla/editable-html` block (text/images editable in-canvas) rather than a sandboxed `core/html`, but not decomposed into core blocks. The last resort for genuinely bespoke sections | ⚙️ |
 
 After ~5 rungs on a section, a **circuit-breaker** stops and asks the operator (raise budget / accept the divergence / abandon). Divergences get classified — **Class A** (spec wrong), **Class B** (template dropped info), **Class C** (a real WordPress rendering constraint that simply can't be matched, which a human accepts). The system refuses to silently ship a flattened result as if it were a match — a "known gap" must be explicitly accepted.
 
@@ -223,18 +248,18 @@ After ~5 rungs on a section, a **circuit-breaker** stops and asks the operator (
 
 ## Pathway B — Carry-and-scope (`replicate-theme`)
 
-**Goal:** maximum *visual* fidelity, accepting that the result is **not** block-editable. Dispatched by `/liberate` when the operator picks "theme replication." It does **not** capture — it has a strict **entry contract**: capture already happened in `/liberate`, so if the carry inputs are missing it STOPs and tells the operator to run `/liberate <url>` first (a capture gap to surface, never silently re-run).
+**Goal:** maximum *visual* fidelity, accepting that the page is **not decomposed into core blocks** (it's carried as HTML islands — by default the editable `dla/editable-html` kind, so the body is text/image-editable in-canvas even though it isn't a column/cover/gallery tree). Dispatched by `/liberate` when the operator picks "theme replication." It does **not** capture — it has a strict **entry contract**: capture already happened in `/liberate`, so if the carry inputs are missing it STOPs and tells the operator to run `/liberate <url>` first (a capture gap to surface, never silently re-run).
 
-Instead of re-emitting the page as core blocks, the carry path **carries the source's rendered HTML near-verbatim** into `core/html` islands and **scopes the source's own CSS** under per-site / per-page body-class wrappers. Conceptually:
+Instead of re-emitting the page as core blocks, the carry path **carries the source's rendered HTML near-verbatim** into HTML islands (converted to editable `dla/editable-html` blocks by default; see [Editable HTML islands](#editable-html-islands-dlaeditable-html--a-cross-cutting-default)) and **scopes the source's own CSS** under per-site / per-page body-class wrappers. Conceptually:
 
 1. **Resolve run + build page list** (⚙️) — read `screenshots/manifest.json` + `output.wxr` to enumerate every page **and post** (`{slug, sourceUrl, title, isHome?, postType?, htmlSlug?}`); join posts to their captured `post--<name>.html` files.
 2. **Provision the Studio site** (⚙️) — `liberate_preview` creates a Studio site named plainly `<site>` (the `-carry` suffix is on the *theme*, not the site). Provisions from a **media-free slimmed WXR** (drop `attachment` items) to dodge Studio's ~120s import-silence timeout; media is installed separately next.
-3. **Carry-and-scope reconstruct** (⚙️, `liberate_reconstruct_pages_carry`) — for each page: load `html/<slug>.html`, `collectCss`, split header/main/footer, carry each region verbatim into a `core/html` island, **scope the CSS** (chrome → site-wide `body.lib-carry-site`; main → per-page `body.lib-carry-site.lib-carry-page-<slug>`), **tree-shake** against the carried DOM, **rewrite internal links** to local permalinks (shared `buildPageLinkMap`), and **self-host media** — install the run's assets and rewrite carried `<img>`/`srcset`/`url()` to the local WP library (shared `installRunMediaMap`). Writes a **real FSE block theme** (`wp_is_block_theme()` → true) to `<site>-carry/` with `parts/header.html`, `parts/footer.html`, `templates/` (incl. `single.html` for posts), per-page CSS, and a `functions.php` with `is_front_page()`/`is_page()`/`is_single()` body-class + enqueue conditions.
+3. **Carry-and-scope reconstruct** (⚙️, `liberate_reconstruct_pages_carry`) — for each page: load `html/<slug>.html`, `collectCss`, split header/main/footer, carry each region verbatim into an HTML island (converted to an editable `dla/editable-html` block by default — opt out with `editableIslands:false` / `EDITABLE_ISLANDS=0`; the `dla-editable-html` plugin is shipped + activated once when any island converts), **scope the CSS** (chrome → site-wide `body.lib-carry-site`; main → per-page `body.lib-carry-site.lib-carry-page-<slug>`), **tree-shake** against the carried DOM, **rewrite internal links** to local permalinks (shared `buildPageLinkMap`), and **self-host media** — install the run's assets and rewrite carried `<img>`/`srcset`/`url()` to the local WP library (shared `installRunMediaMap`). Writes a **real FSE block theme** (`wp_is_block_theme()` → true) to `<site>-carry/` with `parts/header.html`, `parts/footer.html`, `templates/` (incl. `single.html` for posts), per-page CSS, and a `functions.php` with `is_front_page()`/`is_page()`/`is_single()` body-class + enqueue conditions.
 4. **Build `output-carry.wxr`** (⚙️) — copy the *full* `output.wxr` and, per page/post, replace only that item's `<content:encoded>` with its island (matched by `<wp:post_name>`), via a small auditable per-item transform (not a greedy regex). Verify the item count + XML round-trip.
 5. **Content swap + activate** (⚙️) — don't re-import (the importer skips existing GUIDs); instead `studio wp eval-file` a script that finds each post by `post_name` across `['page','post']` and `wp_update_post`s its content. Activate the carry theme, set the static front page, flush rewrites.
 6. **Parity comparison** (🤖 + measured, `liberate_compare`) — screenshot the carry site (desktop + mobile) and compare against the source screenshots, emitting `run-report-carry.json`. Then the **honest visual pass**: crop source vs built for the 2–3 worst pages, read both, and itemize the real gaps.
 
-**What the carry path handles cleanly:** media is self-hosted (no source-CDN dependency); internal links are rewritten to local permalinks; **posts are carried** (scoped via `is_single()` through a shared `single.html`); it produces a genuine FSE block theme (only the page/post *body* is the single `core/html` island); classic-Wix mobile DOM is carried in a viewport-isolated iframe and Wix pro-galleries reflow to a mobile grid.
+**What the carry path handles cleanly:** media is self-hosted (no source-CDN dependency); internal links are rewritten to local permalinks; **posts are carried** (scoped via `is_single()` through a shared `single.html`); it produces a genuine FSE block theme (only the page/post *body* is the single carried island — an editable `dla/editable-html` block by default); classic-Wix mobile DOM is carried in a viewport-isolated iframe and Wix pro-galleries reflow to a mobile grid.
 
 **Where the carry path still struggles (state these in the report, don't let them masquerade as success):**
 - **Missing Wix section background-fills** — *the dominant remaining gap on the latest Wix eval* (corneliusholmes, 2026-06-04). Section-level background colors/gradients that Wix applies via JS or non-carried wrappers don't make it into the scoped CSS, so bands that should be filled render transparent/white. This now outweighs scale-offset as the top carry fidelity issue.
@@ -243,18 +268,36 @@ Instead of re-emitting the page as core blocks, the carry path **carries the sou
 - **CSS-file `url()` backgrounds** rewrite only on exact map-key matches; relative/query-string `url()`s can still point at the source.
 - **Non-semantic chrome** — sites without `<header>`/`<footer>` tags (many Wix/Squarespace) get no separate header/footer parts; the whole body rides in one island.
 
+---
+
+## Pathway C — Owned local-site convert (`liberate_convert_local_site`)
+
+**Goal:** turn a static/JS site **you already own** — a local directory of HTML files — into a native WordPress block theme. This is a **different entry point**, not a branch of the `/liberate` platform checkpoint: there's no closed platform to detect or discover, and it skips Phase 1's live extraction/capture-from-platform entirely. It's MCP-driven (`liberate_convert_local_site`, with `liberate_ingest_local_site` underneath) and orchestrated by the **`liberate-local`** skill. Because you own the source, the anti-hallucination provenance gate (aimed at a closed platform's captured text) relaxes — but a **conservation check** guards against silently dropping the source's own styling/content.
+
+Unlike the carry path, this path's *first* choice is **native core blocks**, not islands — it only drops to an editable HTML island when a section won't map cleanly. Conceptually it runs in four stages:
+
+1. **Ingest** (⚙️, `liberate_ingest_local_site` — "stage 1a") — recursively enumerate the directory's `.html`/`.htm` files, derive stable slugs (throw on collision rather than silently overwrite), build a **nav graph from internal links**, and **segment** each page into chrome (`header`/`nav`/`footer`) + stable-id body sections.
+2. **Emit native blocks** (⚙️) — for each body section, map each child element to a canonical core block (`h1`–`h6` → `core/heading`, `p` → `core/paragraph`, `img` → `core/image`, `.button`/`.btn` → `core/buttons`, `ul`/`ol` → `core/list`), wrapped in a `core/group`; unmapped elements fall back to a paragraph (a per-section **confidence** drops below 1 to flag the downgrade). Pages assemble via `composeInstantiate` behind a **block-markup round-trip gate**. A section that won't map cleanly drops to an **editable `dla/editable-html` island** (the same default island conversion as the other paths).
+3. **Scaffold theme + carry source CSS/JS** (⚙️, "stages 1c–1d") — `assembleLocalTheme` writes a real FSE block theme: a **nav-graph-derived header part**, captured footer, **foundation styling** inferred from the source's own CSS (`buildLocalFoundation` — palette/type), and no-title page templates. Then it **carries the designer's own stylesheet and scripts** (`carryCss`/`carryJs`, both default on) so the class-preserving block DOM renders under the source's CSS. `nativeBehaviors:true` instead **replaces** carried JS with Interactivity-API blocks (`dla/reveal`, `dla/sticky`); the two are mutually exclusive (`carryJs` is forced off, loudly).
+4. **Install + verify** (⚙️ + optional 🤖) — provision/locate the Studio site, write + activate the theme, create WP Pages from the composed sidecars (**idempotent** via `_source_url` meta), set the front page, assign per-page templates. Optionally capture the source's design tokens/screenshots and the WP replica and **score parity** (`skipCompare:false`), with a CP4 **repair loop** (`maxRepairRounds`, default 2). A **conservation check** (`checkConservationLeaks` → `normalize-report.json`) flags class-level styling/content loss, and the region audit catches dropped landmarks.
+
+**Optional capabilities** (off unless the inputs are present): HTML forms convert to **Jetpack forms** (with parity CSS + conditional plugin install); a `data-model.json` (authored by a `model-local-data` skill) turns JS-mounted card grids into a real **CPT + native query loops** (validated, warn-only — a bad model skips the data path rather than aborting).
+
+**Det/AI split:** heavily **deterministic** — a code-driven convert plus the carried source CSS, with no builder fan-out by default. AI enters only through the orchestrating skill and the optional model-authored `data-model.json`.
+
 ### Choosing a pathway
 
-| | **Block path** (`replicate-with-blocks`) | **Carry path** (`replicate-theme`) |
-|---|---|---|
-| Output | Editable WP core blocks + theme tokens | `core/html` islands + scoped source CSS (real FSE theme shell) |
-| Editable in WP editor? | **Yes** | No (raw-HTML editable only) |
-| Visual fidelity | High, *responsive-guaranteed* | Very high on desktop, but inherits source quirks (missing Wix section bg-fills; scale-offset, now mostly mitigated) |
-| Responsiveness | Hard gate guarantees mobile reflow | Whatever the source's static/scoped CSS does |
-| Products | Product pages reconstructed | Product **data** only; pages fall back to default WooCommerce |
-| Report | `run-report.json` (verdict-first) | `run-report-carry.json` (parity-compare shaped) |
-| Best for | A real WordPress site you'll keep editing | Pixel-faithful replica / A/B comparison against the source |
-| Det/AI split | Deterministic emit + AI polish, gated | Deterministic carry + AI comparison |
+| | **Block path** (`replicate-with-blocks`) | **Carry path** (`replicate-theme`) | **Local convert** (`liberate_convert_local_site`) |
+|---|---|---|---|
+| Input | Live closed platform (via `/liberate`) | Live closed platform (via `/liberate`) | A local directory of HTML you own |
+| Output | Editable WP core blocks + theme tokens | Editable `dla/editable-html` islands + scoped source CSS (real FSE theme shell) | Native core blocks (islands only where a section won't map) + carried source CSS, in an FSE theme |
+| Editable in WP editor? | **Yes** (decomposed into core blocks) | **Yes**, in-canvas text/image edits via `dla/editable-html` (not decomposed into core blocks) | **Yes** (core blocks; island fallbacks are `dla/editable-html`) |
+| Visual fidelity | High, *responsive-guaranteed* | Very high on desktop, but inherits source quirks (missing Wix section bg-fills; scale-offset, now mostly mitigated) | High — class-preserving blocks under the source's own carried CSS |
+| Responsiveness | Hard gate guarantees mobile reflow | Whatever the source's static/scoped CSS does | Whatever the source's carried CSS does |
+| Products | Product pages reconstructed | Product **data** only; pages fall back to default WooCommerce | n/a (no platform commerce; optional CPT + query loops via `data-model.json`) |
+| Report | `run-report.json` (verdict-first) | `run-report-carry.json` (parity-compare shaped) | `normalize-report.json` (conservation) + optional parity compare |
+| Best for | A real WordPress site you'll keep editing | Pixel-faithful replica / A/B comparison against the source | Migrating a hand-built / static site you own into editable WordPress |
+| Det/AI split | Deterministic emit + AI polish, gated | Deterministic carry + AI comparison | Deterministic convert + carried CSS (AI optional) |
 
 **Honest finding:** the carry-vs-block gap is site-dependent. On some dynamic (Wix/JS) sites the pixel A/B is a **tie within capture noise** — re-capturing the *same* built site can move the overall score ±0.02 and swing individual dynamic pages (blog feeds, galleries) 0.10–0.12 from lazy-load/animation timing, a spread that can *exceed* the gap. But it is **not always a tie**: on the latest Wix eval (corneliusholmes, 2026-06-04) the carry path beat blocks decisively — homepage **0.995 vs 0.26**, desktop average **0.969** — a margin far outside capture noise. So report the carry path's wins as **correctness wins** (self-hosted media, local links, posts rendering — each verified visually/by HTTP) separately from **pixel-score wins** (sometimes within noise, sometimes a clear lead). It serves as a **fidelity ceiling / comparison baseline** that calibrates how good the block path's rebuild is.
 
@@ -309,8 +352,10 @@ This is a deliberate stance: the system would rather *show you an honest gap* th
 | `cluster-map.json` | Cluster | Pages grouped by layout signature |
 | `specs/<rep>/section-*.md` | Section extract | Per-section contract for builders |
 | `patterns/page-<slug>.php`, `templates/*.html` | Assemble | Reconstructed page markup |
-| `fallback-diagnostics.json` | Assemble | Structured records of coverage-gated `core/html` islands (selector · reason · suggested repair) — block path, warning-level |
+| `fallback-diagnostics.json` | Assemble | Structured records of coverage-gated HTML islands (selector · reason · suggested repair) — block path, warning-level |
+| `dla-editable-html` plugin | Assemble / Theme | Build-less block plugin shipped + activated once when any HTML island converts to `dla/editable-html` (all paths) |
 | `region-audit.json` | Assemble | Source landmark census reconciled vs placed; lists dropped (`unassigned`) regions — block path, warning-level |
+| `normalize-report.json` | Local convert | Per-section confidence + class-level conservation leaks (local-site convert path) |
 | `run-report.json` (block) / `run-report-carry.json` (carry) | QA | Verdict + per-section parity records |
 
 ---
@@ -335,6 +380,8 @@ This is a deliberate stance: the system would rather *show you an honest gap* th
 | Visual QA + escalation | `design-qa`, `match-page`, `match-section`, `rebuild-section` | 🤖 + measured ⚙️ |
 | Carry-and-scope reconstruct | `liberate_reconstruct_pages_carry` | ⚙️ |
 | Carry parity comparison | `liberate_compare` | 🤖 + measured ⚙️ |
+| Ingest owned local site | `liberate_ingest_local_site` | ⚙️ |
+| Convert owned local site → theme | `liberate_convert_local_site`, `liberate-local` | ⚙️ (AI optional) |
 
 ---
 
@@ -374,7 +421,7 @@ The AI side of the pipeline ships as **Claude Code skills**, and each skill is c
 - [Anti-sycophancy](https://skillpatterns.ai/patterns/anti-sycophancy/) — "'close enough' is a STOP sign"; under-claim, never over-claim
 - [Circuit breaker](https://skillpatterns.ai/patterns/circuit-breaker/) — "3 iterations is a checkpoint, not an exit"
 - [Externalized working state](https://skillpatterns.ai/patterns/externalized-working-state/) — write-then-mark resume in `session.json`
-- [Graceful degradation](https://skillpatterns.ai/patterns/graceful-degradation/) — coverage-gated `core/html` verbatim fallback
+- [Graceful degradation](https://skillpatterns.ai/patterns/graceful-degradation/) — coverage-gated verbatim HTML-island fallback (editable `dla/editable-html` by default)
 - [Failure mode preloading](https://skillpatterns.ai/patterns/failure-mode-preloading/) — extensive Anti-patterns section (flattening, hallucinated tokens, page-list nav)
 - [Trusted sources](https://skillpatterns.ai/patterns/trusted-sources/) — "trust design-foundation.json, don't reinterpret palette"
 - [Scope guardrails](https://skillpatterns.ai/patterns/scope-guardrails/) — "content transformation is out of scope"; entry contract STOPs if capture missing
@@ -382,11 +429,11 @@ The AI side of the pipeline ships as **Claude Code skills**, and each skill is c
 - [Gap-to-target scoring](https://skillpatterns.ai/patterns/gap-to-target-scoring/) — R1→R4 escalation ladder, re-measure until it matches
 
 #### `replicate-theme`
-*Carry path (dispatched by `liberate`): carry source HTML into `core/html` islands + scope source CSS. High-fidelity, non-block-editable.*
+*Carry path (dispatched by `liberate`): carry source HTML into editable `dla/editable-html` islands + scope source CSS. High-fidelity; in-canvas text/image-editable, not decomposed into core blocks.*
 
 - [Role priming](https://skillpatterns.ai/patterns/role-priming/) — "you are the carry-and-scope reconstruct orchestrator"
 - [Decision capture](https://skillpatterns.ai/patterns/decision-capture/) — "what you are trading"; "known limitations — state these in the report"
-- [Scope guardrails](https://skillpatterns.ai/patterns/scope-guardrails/) — entry contract: STOP if capture missing (don't self-capture); don't convert islands to blocks
+- [Scope guardrails](https://skillpatterns.ai/patterns/scope-guardrails/) — entry contract: STOP if capture missing (don't self-capture); carry the body as an island, don't decompose it into core blocks (it still becomes an editable `dla/editable-html` block by default)
 - [Skill chaining](https://skillpatterns.ai/patterns/skill-chaining/) — reuses the shared install/import/compare MCP tools
 - [Tool offloading](https://skillpatterns.ai/patterns/tool-offloading/) — `liberate_reconstruct_pages_carry`, shared `buildPageLinkMap` / `installRunMediaMap`
 - [Prove it works](https://skillpatterns.ai/patterns/prove-it-works/) — verify fixes landed: local nav hrefs, `wp-content/uploads` srcs, rewritten URLs return HTTP 200
