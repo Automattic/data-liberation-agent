@@ -18,10 +18,14 @@ function makeSite(): string {
 describe('WP_COMPAT_CSS', () => {
   it('strips the inner core/button link chrome for carried (lib-cta) buttons so the wrapper pill renders once', () => {
     expect(WP_COMPAT_CSS).toContain('.wp-block-button.lib-cta > .wp-block-button__link');
-    // The reset must zero the box that would paint a second pill.
+    // The reset must zero the box that would paint a second pill — INCLUDING the
+    // box-shadow. A carried `.btn{box-shadow:6px 6px 0 ink}` left on the inner
+    // link casts a hard offset shadow behind the label that reads as a second
+    // border around the text (the double-border bug).
     const rule = WP_COMPAT_CSS.slice(WP_COMPAT_CSS.indexOf('.wp-block-button.lib-cta'));
     expect(rule).toMatch(/background:\s*transparent/);
     expect(rule).toMatch(/padding:\s*0/);
+    expect(rule).toMatch(/box-shadow:\s*none/);
   });
 });
 

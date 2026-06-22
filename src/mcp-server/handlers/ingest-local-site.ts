@@ -32,7 +32,8 @@ import type {
   SectionBehavior,
 } from '../../lib/replicate/local-site/types.js';
 
-const NORMALIZE_REPORT_SCHEMA = 1;
+// v2: the report envelope gained `stylingDrops` (styling-conservation diagnostic).
+const NORMALIZE_REPORT_SCHEMA = 2;
 
 export const ingestLocalSiteHandler: Handler = async (args, ctx) => {
   const dir = args.dir as string | undefined;
@@ -85,6 +86,9 @@ export const ingestLocalSiteHandler: Handler = async (args, ctx) => {
   let islandsConverted = 0;
   // Warning-level block-contract issues (emitter-bug dial — see block-contract.ts).
   const contractIssues: Array<{ slug: string; code: string; blockName: string; detail: string }> = [];
+  // Warning-level styling-conservation drops: source classes a section's block
+  // conversion dropped (the carried CSS that targeted them no longer matches).
+  const stylingDrops: Array<{ slug: string; sectionId: string; droppedClasses: string[] }> = [];
 
   // One sheet across all pages: per-element inline styles are carried as
   // lib-i<hash> classes (fixer-safe) + deduped stylesheet rules emitted to
@@ -138,6 +142,7 @@ export const ingestLocalSiteHandler: Handler = async (args, ctx) => {
         writeFileSync(composedSidecarPath(outputDir, page.slug), finalContent);
         for (const r of report) entries.push({ ...r, slug: page.slug });
         for (const issue of composed.contractIssues) contractIssues.push({ slug: page.slug, ...issue });
+        for (const drop of composed.stylingDrops) stylingDrops.push({ slug: page.slug, ...drop });
       } catch (err) {
         failedPages.push({ slug: page.slug, error: (err as Error).message });
       }
@@ -192,7 +197,7 @@ export const ingestLocalSiteHandler: Handler = async (args, ctx) => {
   try {
     writeFileSync(
       tmpPath,
-      JSON.stringify({ schema: NORMALIZE_REPORT_SCHEMA, site: dir, entries, failedPages, emptyPages, contractIssues }, null, 2),
+      JSON.stringify({ schema: NORMALIZE_REPORT_SCHEMA, site: dir, entries, failedPages, emptyPages, contractIssues, stylingDrops }, null, 2),
     );
     renameSync(tmpPath, reportPath);
   } catch (err) {
@@ -209,6 +214,9 @@ export const ingestLocalSiteHandler: Handler = async (args, ctx) => {
     emptyPages,
     reportPath,
     contractIssues: contractIssues.length,
+    // Styling-conservation: sections whose conversion dropped a source class
+    // (detail in normalize-report.json). 0 = every source class survived.
+    stylingDrops: stylingDrops.length,
     formsConverted,
     ...(editableIslands ? { islandsConverted } : {}),
     // Per-instance inline styles carried as lib-i classes + rules (editor-valid).

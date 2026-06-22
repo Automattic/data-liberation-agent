@@ -227,3 +227,36 @@ describe('composePage block-contract issues (warning-level)', () => {
     expect(composePage(empty).contractIssues).toEqual([]);
   });
 });
+
+describe('composePage styling-conservation (dropped source classes)', () => {
+  it('reports no dropped classes when source classes survive the conversion', () => {
+    const p: LocalPage = {
+      ...page,
+      html: '<body><main><section id="s"><div class="stat"><div class="stat-num">12k</div></div></section></main></body>',
+    };
+    expect(composePage(p).stylingDrops).toEqual([]);
+  });
+
+  it('flags a dropped source class with its section id (inline <code> unwrapped in rich text)', () => {
+    const p: LocalPage = {
+      ...page,
+      html: '<body><main><section id="s"><p>hi <code class="bar">x</code></p></section></main></body>',
+    };
+    expect(composePage(p).stylingDrops).toEqual([{ sectionId: 's', droppedClasses: ['bar'] }]);
+  });
+
+  it('does not flag classes dropped by an intentional form→Jetpack conversion', () => {
+    const p: LocalPage = {
+      ...page,
+      html: '<body><main><section id="contact"><form class="form-card"><div class="field"><input type="email" name="email" placeholder="x"></div></form></section></main></body>',
+    };
+    const { stylingDrops, formsConverted } = composePage(p, { jetpackForms: true });
+    expect(formsConverted).toBeGreaterThan(0); // the form actually converted
+    expect(stylingDrops).toEqual([]); // form-card/field are intentionally replaced by Jetpack markup
+  });
+
+  it('empty page returns an empty stylingDrops array', () => {
+    const empty: LocalPage = { ...page, html: '<body><main></main></body>' };
+    expect(composePage(empty).stylingDrops).toEqual([]);
+  });
+});
