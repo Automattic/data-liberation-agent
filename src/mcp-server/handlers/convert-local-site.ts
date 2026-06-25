@@ -58,7 +58,7 @@ import { InstanceStyleSheet, mergeInstanceStyleCss } from '../../lib/replicate/n
 import { composedSidecarPath, instanceStylesPath } from '../../lib/streaming/block-markup-validate.js';
 import { buildLocalFoundation, extractCssColors, type PaletteAgg, type TypographyAgg, type BreakpointsAgg } from '../../lib/replicate/local-theme/foundation.js';
 import { extractGoogleFontCssUrls, selfHostGoogleFonts } from '../../lib/replicate/local-theme/google-fonts.js';
-import { collectSourceAssets, rewriteHtmlImageSrcs, WP_COMPAT_CSS, type ImgAssetRef } from '../../lib/replicate/local-theme/source-assets.js';
+import { collectSourceAssets, rewriteHtmlImageSrcs, WP_COMPAT_CSS, type ImgAssetRef } from '@automattic/blocks-engine/theme';
 import { buildJetpackFormParityCss } from '../../lib/replicate/local-site/jetpack-form-css.js';
 import { JETPACK_FORM_PARITY_CSS } from '../../lib/replicate/local-theme/jetpack-form-parity-contract.js';
 import { detectBehaviors } from '../../lib/replicate/normalize/detect-behaviors.js';

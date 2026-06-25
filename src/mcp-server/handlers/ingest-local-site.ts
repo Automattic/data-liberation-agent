@@ -24,7 +24,7 @@ import {
   detectSectionBehavior,
   type BehaviorSourceAssets,
 } from '../../lib/replicate/normalize/detect-behaviors.js';
-import { collectSourceAssets } from '../../lib/replicate/local-theme/source-assets.js';
+import { collectSourceAssets } from '@automattic/blocks-engine/theme';
 import type {
   NormalizeReportEntry,
   RevealBehavior,
