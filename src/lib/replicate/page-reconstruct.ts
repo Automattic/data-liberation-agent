@@ -36,12 +36,13 @@ import {
   measureConvertedCoverage,
   foldText,
   selectIslandSource,
+  formToBlocks,
+  SKIPPED_FIELD_KINDS,
 } from '@automattic/blocks-engine/theme';
 import { rewriteMediaUrls } from '../streaming/media-url-rewrite.js';
 import { hasUnmigratedRemoteAsset, scanForInjection } from './validate-artifacts.js';
 import { applyBlockRecipe } from './apply-block-recipe.js';
 import { buildFallbackDiagnostic, type FallbackDiagnostic } from './fallback-diagnostic.js';
-import { formToBlocks, SKIPPED_FIELD_KINDS } from './form-blocks.js';
 
 /**
  * A source-VERBATIM FAQ question/answer pair. The renderer emits these as a
