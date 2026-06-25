@@ -38,11 +38,12 @@ import {
   selectIslandSource,
   formToBlocks,
   SKIPPED_FIELD_KINDS,
+  buildFallbackDiagnostic,
+  type FallbackDiagnostic,
 } from '@automattic/blocks-engine/theme';
 import { rewriteMediaUrls } from '../streaming/media-url-rewrite.js';
 import { hasUnmigratedRemoteAsset, scanForInjection } from './validate-artifacts.js';
 import { applyBlockRecipe } from './apply-block-recipe.js';
-import { buildFallbackDiagnostic, type FallbackDiagnostic } from './fallback-diagnostic.js';
 
 /**
  * A source-VERBATIM FAQ question/answer pair. The renderer emits these as a

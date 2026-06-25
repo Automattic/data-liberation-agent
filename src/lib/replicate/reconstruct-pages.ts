@@ -20,7 +20,7 @@ import { validateArtifacts, type ValidationReport } from './validate-artifacts.j
 import { rewriteInternalLinks, type InternalLinkMap } from '../streaming/internal-link-rewrite.js';
 import type { SectionSpec } from './section-extract.js';
 import type { PaletteToken } from './footer-color.js';
-import type { FallbackDiagnostic } from './fallback-diagnostic.js';
+import type { FallbackDiagnostic } from '@automattic/blocks-engine/theme';
 import { computeTemplateVariant, type TemplateVariant } from './page-template-plan.js';
 
 /** A theme file to write, path relative to the theme root. */

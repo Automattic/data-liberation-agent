@@ -40,7 +40,7 @@ import { studioWp } from '../../lib/preview/studio.js';
 import type { Handler } from '../handler-types.js';
 import { detect } from '../../lib/detect-platform/index.js';
 import { ImportSession } from '../../lib/resume-state/index.js';
-import { buildTriageRemovalDiagnostic, type FallbackDiagnostic } from '../../lib/replicate/fallback-diagnostic.js';
+import { buildTriageRemovalDiagnostic, type FallbackDiagnostic } from '@automattic/blocks-engine/theme';
 import { loadAssetTriage, applyAssetTriage, type AssetRemoval } from '../../lib/replicate/asset-triage.js';
 import { selectorKey } from '../../lib/replicate/triage-candidates.js';
 import { ensurePlugin, type ExecFn } from '../../lib/preview/ensure-plugin.js';
