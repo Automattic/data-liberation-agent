@@ -97,9 +97,8 @@ vi.mock('../../lib/screenshot/compare.js', () => ({
     ],
   })),
 }));
-vi.mock('../../lib/replicate/local-theme/google-fonts.js', async (importOriginal) => ({
-  ...(await importOriginal<object>()),
-  selfHostGoogleFonts: vi.fn(async () => ({ faces: [], errors: [] })),
+vi.mock('../../lib/replicate/local-theme/google-fonts.js', () => ({
+  selfHostGoogleFonts: vi.fn(async () => ({ faces: [], localizedCss: '', errors: [] })),
 }));
 vi.mock('../../lib/replicate/local-theme/theme-files.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../lib/replicate/local-theme/theme-files.js')>();
