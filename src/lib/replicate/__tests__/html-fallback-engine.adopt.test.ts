@@ -12,8 +12,6 @@ import {
   containsUnmarkedCustomHtmlBlock,
 } from '../../wordpress/block-policy.js';
 
-const FALLBACK_NAME = ['html', 'fallback'].join('-');
-
 describe('blocks-engine coverage island adoption', () => {
   it('wraps sanitized source in the DLA golden pipeline-marked block', () => {
     const out = buildHtmlFallbackBlock('<section><h2>Our story</h2></section>', {});
@@ -65,7 +63,7 @@ describe('blocks-engine coverage island adoption', () => {
 
   it('preserves the defensive throw when sanitization leaves an injection vector', () => {
     expect(() => buildHtmlFallbackBlock('<section><img/src=x/onerror=alert(1)></section>')).toThrow(
-      `${FALLBACK_NAME} sanitization left injection vectors: inline event handler attribute (on*=) in markup (not allowed)`,
+      'html-fallback sanitization left injection vectors: inline event handler attribute (on*=) in markup (not allowed)',
     );
   });
 

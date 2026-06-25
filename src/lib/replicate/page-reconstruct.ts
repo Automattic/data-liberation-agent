@@ -43,8 +43,6 @@ import { applyBlockRecipe } from './apply-block-recipe.js';
 import { buildFallbackDiagnostic, type FallbackDiagnostic } from './fallback-diagnostic.js';
 import { formToBlocks, SKIPPED_FIELD_KINDS } from './form-blocks.js';
 
-const FALLBACK_PROVENANCE_BASE = ['html', 'fallback'].join('-');
-
 /**
  * A source-VERBATIM FAQ question/answer pair. The renderer emits these as a
  * `wp:details` accordion (faithful to the source's expand/collapse UX). FAQ
@@ -1898,14 +1896,12 @@ export function reconstructPagePattern(
       // responsive sectionHtml (theme styles their classes); non-WP keep the
       // styledHtml snapshot, where the inlined dims are load-bearing. `tier`
       // drives the provenance: `responsive`/`styled` are NOT bare divergences;
-      // only `verbatim` (the bare provenance prefix) is the unstyled signal.
+      // only `verbatim` (bare `html-fallback#`) is the unstyled signal.
       const { source, tier } = selectIslandSource(s);
       const island = buildHtmlFallbackBlock(source, { mediaUrlMap: opts.mediaUrlMap });
-      const provenancePrefix =
-        tier === 'verbatim' ? FALLBACK_PROVENANCE_BASE : `${FALLBACK_PROVENANCE_BASE}-${tier}`;
       sectionMarkup.push(island);
       provenanceFlags.push(
-        `${provenancePrefix}#${s.sectionIndex}: structured render dropped content ` +
+        `html-fallback${tier === 'verbatim' ? '' : `-${tier}`}#${s.sectionIndex}: structured render dropped content ` +
           `(${cov.missingImages.length} images missing, text ${Math.round(cov.textCoverage * 100)}%) — ` +
           `emitted ${tier} core/html`,
       );
