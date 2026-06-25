@@ -35,6 +35,8 @@ const regionCensusFailure = vi.hoisted(() => ({ throwOnExtract: false }));
 const assembleLocalThemeCalls = vi.hoisted(
   () =>
     [] as Array<{
+      mainClass?: string;
+      mainWrapperClass?: string;
       interiorChromeTemplates?: Array<{
         partSlug: string;
         layoutWrapperTag?: string;
@@ -242,6 +244,27 @@ function makeSite(): string {
   // Stage 1d carry: linked CSS + JS the collector picks up from the index.html document order.
   writeFileSync(join(dir, 'styles.css'), 'body { background: #f7f2e9; }\n.hero h1 { font-size: 4rem; }');
   writeFileSync(join(dir, 'site.js'), "document.documentElement.classList.add('js');");
+  return dir;
+}
+
+function makeFixedSidebarOffsetSite(): string {
+  mkdirSync(FIXTURE_TMP, { recursive: true });
+  const dir = mkdtempSync(join(FIXTURE_TMP, 'cls-fixed-sidebar-offset-'));
+  writeFileSync(
+    join(dir, 'index.html'),
+    '<html><head><title>Docs</title><link rel="stylesheet" href="styles.css"></head><body>' +
+      '<div class="layout"><aside class="sidebar"><nav><a href="about.html">About</a></nav></aside>' +
+      '<div class="main-area"><main class="content"><section id="hero"><h1>Docs</h1><p>Welcome.</p></section></main></div></div>' +
+      '</body></html>',
+  );
+  writeFileSync(
+    join(dir, 'about.html'),
+    '<html><head><title>About</title></head><body><main><section id="about"><h1>About</h1></section></main></body></html>',
+  );
+  writeFileSync(
+    join(dir, 'styles.css'),
+    '.layout{display:flex}.sidebar{position:fixed;width:268px}.main-area{margin-left:268px}',
+  );
   return dir;
 }
 
@@ -759,6 +782,33 @@ describe('convertLocalSiteHandler', () => {
       // frontPageId is the HOME page's postId.
       const homeAssign = payload.templateAssigns.find((a) => a.slug === 'home');
       expect(payload.frontPageId).toBe(homeAssign?.postId);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(sitePath, { recursive: true, force: true });
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
+  it('threads fixed-sidebar layout offset wrapper detection into DLA template assembly', async () => {
+    const dir = makeFixedSidebarOffsetSite();
+    const sitePath = makeStudioSite();
+    const outDir = mkdtempSync(join(FIXTURE_TMP, 'cls-fixed-sidebar-offset-out-'));
+    try {
+      const res = await convertLocalSiteHandler(
+        {
+          dir,
+          studioSitePath: sitePath,
+          outputDir: outDir,
+          themeSlug: 'docs-local',
+          siteTitle: 'Docs',
+          skipDesign: true,
+        },
+        ctx,
+      );
+
+      expect(res.isError).toBeFalsy();
+      expect(assembleLocalThemeCalls.some((call) => call.mainWrapperClass === 'main-area')).toBe(true);
+      expect(assembleLocalThemeCalls.some((call) => call.mainClass === 'content')).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
       rmSync(sitePath, { recursive: true, force: true });

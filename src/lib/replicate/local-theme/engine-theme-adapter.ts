@@ -69,6 +69,7 @@ export interface DlaLocalPageThemeOptions {
   siteTitle: string;
   themeSlug: string;
   mainClass?: string;
+  mainWrapperClass?: string;
   interiorChromeTemplates?: InteriorChromeTemplate[];
   carrySourceAssets?: CarrySourceAssets;
   instanceStylesCss?: string;
@@ -241,6 +242,7 @@ function buildDlaLocalThemeFiles(options: DlaLocalPageThemeOptions): ReplicaFile
     headerPart: '',
     footerPart: '',
     mainClass: options.mainClass,
+    mainWrapperClass: options.mainWrapperClass,
     interiorChromeTemplates: options.interiorChromeTemplates ?? [],
     carrySourceAssets: options.carrySourceAssets,
     instanceStylesCss: options.instanceStylesCss,

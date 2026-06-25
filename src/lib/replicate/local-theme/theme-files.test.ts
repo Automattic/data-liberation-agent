@@ -44,6 +44,37 @@ describe('assembleLocalTheme', () => {
     expect(t).not.toContain('className');
   });
 
+  it('carries the layout offset wrapper class onto the main group separately from post-content mainClass', () => {
+    const withWrapper = assembleLocalTheme({
+      siteTitle: 'Acme',
+      themeSlug: 'acme-local',
+      headerPart: HEADER,
+      footerPart: FOOTER,
+      mainClass: 'content',
+      mainWrapperClass: 'main-area',
+    });
+
+    for (const t of ['templates/page-local.html', 'templates/front-page.html']) {
+      const content = withWrapper.find((f) => f.relativePath === t)?.content ?? '';
+      expect(content).toContain('<!-- wp:group {"tagName":"main","className":"main-area"} -->');
+      expect(content).toContain('<main class="wp-block-group main-area">');
+      expect(content).toContain('<!-- wp:post-content {"className":"content"} /-->');
+    }
+  });
+
+  it('keeps no-wrapper template markup byte-identical when mainWrapperClass is absent', () => {
+    const content = files.find((f) => f.relativePath === 'templates/front-page.html')?.content ?? '';
+    expect(content).toBe(
+      '<!-- wp:template-part {"slug":"header","tagName":"header"} /-->\n\n' +
+      '<!-- wp:group {"tagName":"main"} -->\n' +
+      '<main class="wp-block-group">\n' +
+      '<!-- wp:post-content /-->\n' +
+      '</main>\n' +
+      '<!-- /wp:group -->\n\n' +
+      '<!-- wp:template-part {"slug":"footer","tagName":"footer"} /-->\n'
+    );
+  });
+
   it('registers page-local in theme.json customTemplates and stays lint-clean', () => {
     const tj = files.find((f) => f.relativePath === 'theme.json');
     const themeJson = JSON.parse(tj?.content ?? '{}') as {

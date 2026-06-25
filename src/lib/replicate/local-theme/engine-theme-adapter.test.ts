@@ -3,6 +3,7 @@ import { foundation, type ThemeBuildResult } from '@automattic/blocks-engine/the
 import {
   buildDlaFunctionsPhpContent,
   engineThemeResultToHostFiles,
+  refineEngineThemeForDlaLocalPages,
   translateDlaFoundationToEngine,
 } from './engine-theme-adapter.js';
 import type { BreakpointsAgg, PaletteAgg, TypographyAgg } from './foundation.js';
@@ -152,5 +153,18 @@ describe('engine theme host integration', () => {
     expect(hostFiles.assetFiles).toEqual(['assets/css/theme.css', 'assets/logo.png']);
     expect(hostFiles.themeFiles.map((file) => file.relativePath)).not.toContain('assets/logo.png');
     expect(hostFiles.writtenThemeFiles).toContain('functions.php');
+  });
+
+  it('refines visible templates with mainWrapperClass on the main group and mainClass on post-content', async () => {
+    const refined = await refineEngineThemeForDlaLocalPages(engineResult().model, {
+      siteTitle: 'Acme',
+      themeSlug: 'acme-local',
+      mainClass: 'content',
+      mainWrapperClass: 'main-area',
+    });
+
+    expect(refined.templates['front-page.html']).toContain('<!-- wp:group {"tagName":"main","className":"main-area"} -->');
+    expect(refined.templates['front-page.html']).toContain('<main class="wp-block-group main-area">');
+    expect(refined.templates['front-page.html']).toContain('<!-- wp:post-content {"className":"content"} /-->');
   });
 });

@@ -70,6 +70,9 @@ export interface AssembleLocalThemeOpts {
    * page templates' core/post-content so source body-layout rules that key off
    * it (notably a `> * + *` blockGap between page sections) keep matching. */
   mainClass?: string;
+  /** Source layout-offset ancestor class. Applied to the page templates' <main>
+   * group so fixed/sticky rail gutter rules keep matching. */
+  mainWrapperClass?: string;
   /** Page-scoped chrome parts/templates for rails that are absent from home. */
   interiorChromeTemplates?: InteriorChromeTemplate[];
 }
@@ -80,7 +83,7 @@ export interface AssembleLocalThemeOpts {
  *  front-page templates. Layout is default (flow) — constrained would inject
  *  a contentSize max-width onto children that fights the carried source
  *  main{max-width} rule (stage 1d parity); the source CSS owns layout. */
-function noTitleTemplate(mainClass?: string, interiorChrome?: InteriorChromeTemplate): string {
+function noTitleTemplate(mainClass?: string, interiorChrome?: InteriorChromeTemplate, mainWrapperClass?: string): string {
   // Carry the source <main> class onto the post-content wrapper: source body
   // layout rules key off it (e.g. a `.<main-class> > * + * { margin-top }`
   // blockGap between page sections). The sections render as post-content's
@@ -92,9 +95,13 @@ function noTitleTemplate(mainClass?: string, interiorChrome?: InteriorChromeTemp
   const sidebarPart = interiorChrome?.partSlug
     ? `<!-- wp:template-part {"slug":${JSON.stringify(interiorChrome.partSlug)},"tagName":"aside"} /-->\n\n`
     : '';
+  const mainGroupAttrs = mainWrapperClass
+    ? { tagName: 'main', className: mainWrapperClass }
+    : { tagName: 'main' };
+  const mainGroupClass = ['wp-block-group', mainWrapperClass].filter(Boolean).join(' ');
   const mainGroup =
-    `<!-- wp:group {"tagName":"main"} -->\n` +
-    `<main class="wp-block-group">\n` +
+    `<!-- wp:group ${JSON.stringify(mainGroupAttrs)} -->\n` +
+    `<main class="${escapeHtml(mainGroupClass)}">\n` +
     `${postContent}\n` +
     `</main>\n` +
     `<!-- /wp:group -->\n\n`;
@@ -324,14 +331,14 @@ export function assembleLocalTheme(opts: AssembleLocalThemeOpts): ReplicaFile[] 
     return { ...f, content: JSON.stringify({ ...parsed, customTemplates }, null, 2) + '\n' };
   });
 
-  const template = noTitleTemplate(opts.mainClass);
+  const template = noTitleTemplate(opts.mainClass, undefined, opts.mainWrapperClass);
   // page-local: the selectable per-page template assigned via _wp_page_template.
   withTemplates.push({ relativePath: 'templates/page-local.html', content: template });
   for (const interior of opts.interiorChromeTemplates ?? []) {
     withTemplates.push({ relativePath: `parts/${interior.partSlug}.html`, content: interior.partMarkup });
     withTemplates.push({
       relativePath: `templates/${interior.templateName}.html`,
-      content: noTitleTemplate(opts.mainClass, interior),
+      content: noTitleTemplate(opts.mainClass, interior, opts.mainWrapperClass),
     });
   }
   // front-page.html: WP serves this at the site root when static front page is set;

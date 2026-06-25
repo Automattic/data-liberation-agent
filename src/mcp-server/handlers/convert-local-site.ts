@@ -56,6 +56,7 @@ import type { PaletteAgg, TypographyAgg, BreakpointsAgg } from '../../lib/replic
 import { selfHostGoogleFonts } from '../../lib/replicate/local-theme/google-fonts.js';
 import {
   collectSourceAssets,
+  detectLayoutOffsetWrapper,
   extractGoogleFontCssUrls,
   rewriteHtmlImageSrcs,
   siteToTheme,
@@ -735,6 +736,7 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
     }
     return undefined;
   })();
+  const mainWrapperClass = detectLayoutOffsetWrapper(home.html, carrySourceAssets?.css ?? '');
   const bodyDataByPath = Object.fromEntries(
     site.pages
       .filter((p) => p.bodyData)
@@ -765,6 +767,7 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
             siteTitle,
             themeSlug,
             mainClass,
+            mainWrapperClass,
             interiorChromeTemplates,
             carrySourceAssets,
             instanceStylesCss,
@@ -813,6 +816,7 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
       siteTitle,
       themeSlug,
       mainClass,
+      mainWrapperClass,
       interiorChromeTemplates,
       carrySourceAssets,
       instanceStylesCss,
