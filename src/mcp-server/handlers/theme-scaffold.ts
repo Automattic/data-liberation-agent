@@ -18,10 +18,10 @@
 import { existsSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import type { Handler } from '../handler-types.js';
+import { parseCapturedFontFaces, consolidateFontFaces, matchCapturedFamily } from '@automattic/blocks-engine/theme';
 import { buildThemeScaffold } from '../../lib/replicate/theme-scaffold.js';
 import { lintThemeJson } from '../../lib/replicate/theme-json-lint.js';
 import { extractThemeChromeFromHtml } from '../../lib/replicate/source-chrome.js';
-import { parseFontFaces, consolidateFontFaces, matchCapturedFamily } from '../../lib/replicate/font-capture.js';
 import { downloadFonts } from '../../lib/replicate/font-capture-download.js';
 import { findFreeReplacement, fallbackReplacement, firstFamilyToken } from '../../lib/replicate/font-substitution.js';
 import { downloadReplacementFont } from '../../lib/replicate/font-substitution-download.js';
@@ -216,7 +216,7 @@ export const themeScaffoldHandler: Handler = async (args, ctx) => {
   if (html) {
     // Consolidate per-weight family aliases (e.g. Replo's duplicate Larsseit
     // declarations) BEFORE download so we fetch one file per real weight.
-    const parsed = consolidateFontFaces(parseFontFaces(html));
+    const parsed = consolidateFontFaces(parseCapturedFontFaces(html));
     if (parsed.length > 0) {
       const result = await downloadFonts(parsed, { themeDir, baseUrl: sourceUrl });
       capturedFonts = result.faces;

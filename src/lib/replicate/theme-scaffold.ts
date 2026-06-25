@@ -28,11 +28,11 @@ import type { ReplicaFile } from '../preview/types.js';
 import type { ThemeChromeEvidence, ThemeChromeLink } from './source-chrome.js';
 import {
   buildFontFaceCss,
-  buildThemeFontFamilies,
   matchCapturedFamily,
   consolidateFontFaces,
   type LocalFontFace,
-} from './font-capture.js';
+} from '@automattic/blocks-engine/theme';
+import { buildThemeFontFamilies } from './font-capture.js';
 import { assertNoInjection } from './validate-artifacts.js';
 import { buildThemeHeader, registerThemeBlocksPhp, slugify } from './theme-php.js';
 
