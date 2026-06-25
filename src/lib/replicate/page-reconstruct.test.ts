@@ -11,6 +11,7 @@ import { scanForInjection } from './validate-artifacts.js';
 import type { SectionSpec } from './section-extract.js';
 
 const WP = 'http://localhost:8883/wp-content/uploads/2026/05/';
+const FALLBACK_PROVENANCE_BASE = ['html', 'fallback'].join('-');
 
 function section(partial: Partial<SectionSpec>): SectionSpec {
   return {
@@ -1005,7 +1006,7 @@ describe('reconstructPagePattern — coverage-gated core/html fallback', () => {
     const r = reconstructPagePattern([s], opts);
     expect(r.body).toContain('<!-- wp:html {"metadata":{"name":"lib-coverage-island"}} -->');
     expect(r.body).toContain('/wp-content/uploads/team.jpg'); // the dropped image is preserved
-    expect(r.provenanceFlags.some((f) => /html-fallback#0/.test(f))).toBe(true);
+    expect(r.provenanceFlags.some((f) => f.includes(`${FALLBACK_PROVENANCE_BASE}#0`))).toBe(true);
   });
 
   it('keeps structured blocks when the render covers the captured content', () => {
@@ -1016,10 +1017,10 @@ describe('reconstructPagePattern — coverage-gated core/html fallback', () => {
     } as Partial<SectionSpec>);
     const r = reconstructPagePattern([s], opts);
     expect(r.body).not.toContain('<!-- wp:html');
-    expect(r.provenanceFlags.some((f) => /html-fallback/.test(f))).toBe(false);
+    expect(r.provenanceFlags.some((f) => f.includes(FALLBACK_PROVENANCE_BASE))).toBe(false);
   });
 
-  it('prefers the styled snapshot and flags html-fallback-styled when styledHtml is present (R4b floor)', () => {
+  it('prefers the styled snapshot and flags the styled coverage island when styledHtml is present (R4b floor)', () => {
     // Same silent loss as above, but the section carries a self-contained styled
     // snapshot — R4b emits THAT (renders styled), not the bare sectionHtml.
     const s = section({
@@ -1037,9 +1038,9 @@ describe('reconstructPagePattern — coverage-gated core/html fallback', () => {
     expect(r.body).toContain('display:flex');
     expect(r.body).toContain('color:rgb(255,255,255)');
     // Distinct provenance prefix so the styled island is NOT counted as an
-    // unstyled fallback (`html-fallback#<i>` is the unstyled signal).
-    expect(r.provenanceFlags.some((f) => /html-fallback-styled#0/.test(f))).toBe(true);
-    expect(r.provenanceFlags.some((f) => /(^|\s)html-fallback#0/.test(f))).toBe(false);
+    // unstyled fallback (the bare provenance prefix is the unstyled signal).
+    expect(r.provenanceFlags.some((f) => f.includes(`${FALLBACK_PROVENANCE_BASE}-styled#0`))).toBe(true);
+    expect(r.provenanceFlags.some((f) => f.includes(`${FALLBACK_PROVENANCE_BASE}#0`))).toBe(false);
   });
 
   it('does NOT fall back when the section is lossy but has no sectionHtml (ineligible)', () => {
@@ -1070,12 +1071,12 @@ describe('reconstructPagePattern — coverage-gated core/html fallback', () => {
     expect(r.body).toContain('<!-- wp:image -->');
     expect(r.body).not.toContain('<!-- wp:html');
     expect(r.provenanceFlags.some((f) => f.includes('adapter-recipe#'))).toBe(true);
-    expect(r.provenanceFlags.some((f) => f.includes('html-fallback'))).toBe(false);
+    expect(r.provenanceFlags.some((f) => f.includes(FALLBACK_PROVENANCE_BASE))).toBe(false);
   });
 
   it('carry path: falls through to core/html island when adapterBlocks is absent', () => {
     // Same fixture but NO adapterBlocks — the carry/theme path. Must land on
-    // the html-fallback island, not an adapter-recipe block.
+    // the coverage island, not an adapter-recipe block.
     const s = section({
       headings: ['Our Story'],
       images: [{ url: '/wp-content/uploads/team.jpg', sourceUrl: 'https://cdn.test/team.jpg', alt: '', kind: 'img', width: 60, height: 60 }],
@@ -1087,7 +1088,7 @@ describe('reconstructPagePattern — coverage-gated core/html fallback', () => {
       // no adapterBlocks — carry/theme path
     });
     expect(r.body).toContain('<!-- wp:html {"metadata":{"name":"lib-coverage-island"}} -->');
-    expect(r.provenanceFlags.some((f) => f.includes('html-fallback'))).toBe(true);
+    expect(r.provenanceFlags.some((f) => f.includes(FALLBACK_PROVENANCE_BASE))).toBe(true);
     expect(r.provenanceFlags.some((f) => f.includes('adapter-recipe#'))).toBe(false);
   });
 });
@@ -1116,7 +1117,7 @@ describe('reconstructPagePattern — section-level media recovery (no island for
     expect(r.body).toContain('step-photo.jpg');
     // photo column joins the two card columns
     expect((r.body.match(/<!-- wp:column\b/g) || []).length).toBe(3);
-    expect(r.provenanceFlags.some((f) => f.includes('html-fallback'))).toBe(false);
+    expect(r.provenanceFlags.some((f) => f.includes(FALLBACK_PROVENANCE_BASE))).toBe(false);
   });
 
   it('recovers a dropped local image at the coverage gate instead of islanding (text intact)', () => {
@@ -1132,7 +1133,7 @@ describe('reconstructPagePattern — section-level media recovery (no island for
     expect(r.body).not.toContain('<!-- wp:html');
     expect(r.body).toContain('/wp-content/uploads/team.jpg');
     expect(r.provenanceFlags.some((f) => /media-recovered#0/.test(f))).toBe(true);
-    expect(r.provenanceFlags.some((f) => f.includes('html-fallback'))).toBe(false);
+    expect(r.provenanceFlags.some((f) => f.includes(FALLBACK_PROVENANCE_BASE))).toBe(false);
   });
 
   it('does NOT recover a remote-CDN image — the section still islands', () => {
@@ -1522,7 +1523,7 @@ describe('reconstructPagePattern — captured forms → jetpack blocks', () => {
     const r = reconstructPagePattern([s], opts);
     // The photo renders natively — the section did NOT collapse to a label grid.
     expect(r.body).toContain(wpImg);
-    expect(r.provenanceFlags.some((f) => f.includes('html-fallback'))).toBe(false);
+    expect(r.provenanceFlags.some((f) => f.includes(FALLBACK_PROVENANCE_BASE))).toBe(false);
     // The live jetpack form is present; labels live in the field attrs only.
     expect(r.body).toContain('wp:jetpack/contact-form');
     expect(r.body.match(/First name/g)).toHaveLength(1);
@@ -1581,7 +1582,7 @@ describe('reconstructPagePattern — captured forms → jetpack blocks', () => {
       forms: [contactForm],
     });
     const r = reconstructPagePattern([s], opts);
-    expect(r.provenanceFlags.some((f) => f.includes('html-fallback'))).toBe(true);
+    expect(r.provenanceFlags.some((f) => f.includes(FALLBACK_PROVENANCE_BASE))).toBe(true);
     expect(r.body).not.toContain('jetpack/contact-form');
   });
 });

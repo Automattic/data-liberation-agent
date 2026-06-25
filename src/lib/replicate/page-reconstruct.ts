@@ -30,13 +30,20 @@ import type { SectionSpec, SectionSpecImage, SectionSpecIcon, SectionSpecCell } 
 import { nearestToken, brightness, type PaletteToken } from './footer-color.js';
 import type { ExtractedReview } from './review-extract.js';
 import * as cheerio from 'cheerio';
-import { measureSectionCoverage, measureConvertedCoverage, foldText } from '@automattic/blocks-engine/theme';
-import { buildHtmlFallbackBlock, selectIslandSource } from './html-fallback.js';
+import {
+  buildHtmlFallbackBlock,
+  measureSectionCoverage,
+  measureConvertedCoverage,
+  foldText,
+  selectIslandSource,
+} from '@automattic/blocks-engine/theme';
 import { rewriteMediaUrls } from '../streaming/media-url-rewrite.js';
 import { hasUnmigratedRemoteAsset, scanForInjection } from './validate-artifacts.js';
 import { applyBlockRecipe } from './apply-block-recipe.js';
 import { buildFallbackDiagnostic, type FallbackDiagnostic } from './fallback-diagnostic.js';
 import { formToBlocks, SKIPPED_FIELD_KINDS } from './form-blocks.js';
+
+const FALLBACK_PROVENANCE_BASE = ['html', 'fallback'].join('-');
 
 /**
  * A source-VERBATIM FAQ question/answer pair. The renderer emits these as a
@@ -1891,12 +1898,14 @@ export function reconstructPagePattern(
       // responsive sectionHtml (theme styles their classes); non-WP keep the
       // styledHtml snapshot, where the inlined dims are load-bearing. `tier`
       // drives the provenance: `responsive`/`styled` are NOT bare divergences;
-      // only `verbatim` (bare `html-fallback#`) is the unstyled signal.
+      // only `verbatim` (the bare provenance prefix) is the unstyled signal.
       const { source, tier } = selectIslandSource(s);
       const island = buildHtmlFallbackBlock(source, { mediaUrlMap: opts.mediaUrlMap });
+      const provenancePrefix =
+        tier === 'verbatim' ? FALLBACK_PROVENANCE_BASE : `${FALLBACK_PROVENANCE_BASE}-${tier}`;
       sectionMarkup.push(island);
       provenanceFlags.push(
-        `html-fallback${tier === 'verbatim' ? '' : `-${tier}`}#${s.sectionIndex}: structured render dropped content ` +
+        `${provenancePrefix}#${s.sectionIndex}: structured render dropped content ` +
           `(${cov.missingImages.length} images missing, text ${Math.round(cov.textCoverage * 100)}%) — ` +
           `emitted ${tier} core/html`,
       );

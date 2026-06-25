@@ -2,7 +2,7 @@ import * as cheerio from 'cheerio';
 import type { CheerioAPI } from 'cheerio';
 import type { Element } from 'domhandler';
 import type { AdapterBlocks, BlockRecipe, BlockRecipeContext } from '../../adapters/page-actions.js';
-import { sanitize } from './html-fallback.js';
+import { sanitize } from '@automattic/blocks-engine/theme';
 import { genericBlockCatalog } from './generic-block-catalog.js';
 import { PIPELINE_ISLAND_OPENER } from '../wordpress/block-policy.js';
 

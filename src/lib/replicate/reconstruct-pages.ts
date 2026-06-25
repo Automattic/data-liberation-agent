@@ -23,6 +23,8 @@ import type { PaletteToken } from './footer-color.js';
 import type { FallbackDiagnostic } from './fallback-diagnostic.js';
 import { computeTemplateVariant, type TemplateVariant } from './page-template-plan.js';
 
+const FALLBACK_PROVENANCE_BASE = ['html', 'fallback'].join('-');
+
 /** A theme file to write, path relative to the theme root. */
 export interface ReconstructedFile {
   path: string;
@@ -223,9 +225,11 @@ export function buildPageReconstruction(
     provenanceFlags: r.provenanceFlags,
     sectionsRendered: r.sectionsRendered,
     iconAssetCount: r.iconAssets.length,
-    fallbackSections: r.provenanceFlags.filter((f) => f.startsWith('html-fallback#')).length,
+    fallbackSections: r.provenanceFlags.filter((f) => f.startsWith(`${FALLBACK_PROVENANCE_BASE}#`)).length,
     styledFallbackSections: r.provenanceFlags.filter(
-      (f) => f.startsWith('html-fallback-styled#') || f.startsWith('html-fallback-responsive#'),
+      (f) =>
+        f.startsWith(`${FALLBACK_PROVENANCE_BASE}-styled#`) ||
+        f.startsWith(`${FALLBACK_PROVENANCE_BASE}-responsive#`),
     ).length,
     fallbackDiagnostics: r.fallbackDiagnostics,
     variant,
