@@ -2,9 +2,9 @@ import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, existsSync, readFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { downloadFonts } from './font-capture-download.js';
-import type { ParsedFontFace } from './font-capture.js';
+import type { CapturedParsedFontFace } from '@automattic/blocks-engine/theme';
 
-const FACES: ParsedFontFace[] = [
+const FACES: CapturedParsedFontFace[] = [
   { family: 'Larsseit', src: 'https://cdn.shopify.com/Larsseit-Regular.woff', format: 'woff', weight: '400', style: 'normal' },
   { family: 'Larsseit Bold', src: 'https://cdn.shopify.com/Larsseit-Bold.woff', format: 'woff', weight: '700', style: 'normal' },
 ];
@@ -55,7 +55,7 @@ describe('downloadFonts', () => {
   it('reuses one file for duplicate URLs', async () => {
     let calls = 0;
     const fakeFetch = (async () => { calls++; return { ok: true, status: 200, arrayBuffer: async () => new TextEncoder().encode('x').buffer }; }) as unknown as typeof fetch;
-    const dupes: ParsedFontFace[] = [FACES[0], { ...FACES[0] }];
+    const dupes: CapturedParsedFontFace[] = [FACES[0], { ...FACES[0] }];
     const { faces } = await downloadFonts(dupes, { themeDir: dir, fetchImpl: fakeFetch });
     expect(faces).toHaveLength(2);
     expect(calls).toBe(1);
@@ -64,7 +64,7 @@ describe('downloadFonts', () => {
   it('records an error (does not throw) for an internal-host font src — SSRF guard', async () => {
     let calls = 0;
     const fakeFetch = (async () => { calls++; return { ok: true, status: 200, arrayBuffer: async () => new TextEncoder().encode('x').buffer }; }) as unknown as typeof fetch;
-    const internal: ParsedFontFace[] = [
+    const internal: CapturedParsedFontFace[] = [
       { family: 'Evil', src: 'http://169.254.169.254/x.woff2', format: 'woff2', weight: '400', style: 'normal' },
     ];
     const { faces, errors } = await downloadFonts(internal, { themeDir: dir, fetchImpl: fakeFetch });

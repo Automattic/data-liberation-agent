@@ -13,7 +13,7 @@
 //
 import { buildThemeScaffold } from '../theme-scaffold.js';
 import type { ReplicaFile } from '../../preview/types.js';
-import type { LocalFontFace } from '../font-capture.js';
+import type { LocalFontFace } from '@automattic/blocks-engine/theme';
 import { escapeHtml } from '../normalize/emit-blocks.js';
 import { JETPACK_FORM_PARITY_CSS } from './jetpack-form-parity-contract.js';
 import type { InteriorChromeTemplate } from './interior-chrome.js';

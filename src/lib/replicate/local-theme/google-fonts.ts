@@ -17,7 +17,7 @@
 //
 import { mkdirSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
-import type { LocalFontFace } from '../font-capture.js';
+import type { LocalFontFace } from '@automattic/blocks-engine/theme';
 import { assertPublicHttpUrl } from '../../media-fetch/index.js';
 
 // Chrome UA so Google serves woff2 (not woff/ttf fallbacks).
