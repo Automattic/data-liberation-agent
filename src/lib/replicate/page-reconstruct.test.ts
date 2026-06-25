@@ -1,12 +1,14 @@
 import { describe, it, expect } from 'vitest';
 import {
   reconstructPagePattern,
-  stripChrome,
   escapeHtml,
+} from './page-reconstruct.js';
+import {
   normalizeCopy,
   sanitizePatternHeaderField,
+  stripChrome,
   sanitizeSvgAsset,
-} from './page-reconstruct.js';
+} from '@automattic/blocks-engine/theme';
 import { scanForInjection } from './validate-artifacts.js';
 import type { SectionSpec } from './section-extract.js';
 

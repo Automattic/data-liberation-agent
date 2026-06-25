@@ -15,12 +15,12 @@
 // The MCP handler (liberate_reconstruct_pages) composes this with extraction,
 // media install, and the Studio write/flush; this part is pure + unit-tested.
 
-import { reconstructPagePattern, type FontFamilyToken } from './page-reconstruct.js';
+import { reconstructPagePattern } from './page-reconstruct.js';
 import { validateArtifacts, type ValidationReport } from './validate-artifacts.js';
 import { rewriteInternalLinks, type InternalLinkMap } from '../streaming/internal-link-rewrite.js';
 import type { SectionSpec } from './section-extract.js';
 import type { PaletteToken } from './footer-color.js';
-import type { FallbackDiagnostic } from '@automattic/blocks-engine/theme';
+import type { FallbackDiagnostic, FontFamilyToken } from '@automattic/blocks-engine/theme';
 import { computeTemplateVariant, type TemplateVariant } from './page-template-plan.js';
 
 /** A theme file to write, path relative to the theme root. */

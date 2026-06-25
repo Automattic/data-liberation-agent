@@ -21,7 +21,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { PaletteToken } from '../../lib/replicate/footer-color.js';
-import type { FontFamilyToken } from '../../lib/replicate/page-reconstruct.js';
+import type { FontFamilyToken } from '@automattic/blocks-engine/theme';
 import { extractFullFromSavedHtml, extractFullFromUrl, rewriteThroughMediaMap } from '../../lib/replicate/section-extract.js';
 import type { SectionSpec, SourceLandmark } from '../../lib/replicate/section-extract.js';
 import { SectionSpecsStore } from '../../lib/replicate/section-specs-store.js';
