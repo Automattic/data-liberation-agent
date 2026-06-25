@@ -1107,6 +1107,12 @@ describe('convertLocalSiteHandler', () => {
       const themeDir = join(sitePath, 'wp-content', 'themes', 'acme-local');
       expect(existsSync(join(themeDir, 'assets', 'css', 'source.css'))).toBe(true);
       expect(existsSync(join(themeDir, 'assets', 'js', 'source.js'))).toBe(true);
+      expect(readFileSync(join(themeDir, 'assets', 'css', 'source.css'), 'utf8')).toContain(
+        'body { background: #f7f2e9; }',
+      );
+      expect(readFileSync(join(themeDir, 'style.css'), 'utf8')).not.toContain(
+        'body { background: #f7f2e9; }',
+      );
       // carry mode strips theme.json styles — source CSS is the design authority
       const themeJson = JSON.parse(readFileSync(join(themeDir, 'theme.json'), 'utf8')) as { styles?: unknown };
       expect(themeJson.styles).toBeUndefined();

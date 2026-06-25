@@ -753,6 +753,7 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
       ...(foundationTranslation ? { foundationAggregates: foundationTranslation.foundationAggregates } : {}),
       fetchImpl: dlaSafeFetch,
       coverageFloor: 0,
+      carrySourceCss: false,
       hooks: {
         onFoundation: async (tokens: FoundationTokens): Promise<FoundationTokens> =>
           foundationTranslation?.tokens ?? tokens,
