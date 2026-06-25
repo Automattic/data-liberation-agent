@@ -766,6 +766,72 @@ describe('convertLocalSiteHandler', () => {
     }
   });
 
+  it('siteToTheme rewire handler shape keeps DLA page content authoritative', async () => {
+    const dir = makeSite();
+    const sitePath = makeStudioSite();
+    const outDir = mkdtempSync(join(FIXTURE_TMP, 'cls-sitetotheme-shape-out-'));
+    try {
+      const res = await convertLocalSiteHandler(
+        {
+          dir,
+          studioSitePath: sitePath,
+          outputDir: outDir,
+          themeSlug: 'acme-local',
+          siteTitle: 'Acme',
+          skipDesign: true,
+        },
+        ctx,
+      );
+      expect(res.isError).toBeFalsy();
+      const summary = JSON.parse(res.content[0].text) as Record<string, unknown>;
+      expect(Object.keys(summary).sort()).toEqual([
+        'carried',
+        'conservation',
+        'conservationLeaks',
+        'designCaptured',
+        'emptySidecars',
+        'failedInstalls',
+        'frontPageSet',
+        'ingest',
+        'installed',
+        'islandsConverted',
+        'missingSidecars',
+        'pages',
+        'themeSlug',
+        'themeWritten',
+        'warnings',
+      ]);
+
+      const themeDir = join(sitePath, 'wp-content', 'themes', 'acme-local');
+      const frontPageTemplate = readFileSync(join(themeDir, 'templates', 'front-page.html'), 'utf8');
+      const pageLocalTemplate = readFileSync(join(themeDir, 'templates', 'page-local.html'), 'utf8');
+      expect(frontPageTemplate).toContain('wp:post-content');
+      expect(pageLocalTemplate).toContain('wp:post-content');
+      expect(frontPageTemplate).not.toContain('<h1>Hi</h1>');
+      expect(pageLocalTemplate).not.toContain('<h1>Hi</h1>');
+
+      const themeJson = JSON.parse(readFileSync(join(themeDir, 'theme.json'), 'utf8')) as {
+        customTemplates?: Array<{ name: string }>;
+      };
+      expect(themeJson.customTemplates?.map((entry) => entry.name)).toContain('page-local');
+      expect(existsSync(join(outDir, 'theme', 'functions.php'))).toBe(true);
+      expect(existsSync(join(themeDir, 'functions.php'))).toBe(true);
+      const homeContent = installedPosts.find((post) => post.slug === 'home')?.content ?? '';
+      expect(homeContent).toContain('wp:heading');
+      expect(homeContent).toContain('Hi');
+
+      const assigns = [...finalizeCalls[0].payload.templateAssigns].sort((a, b) => a.slug.localeCompare(b.slug));
+      expect(assigns.map((a) => ({ slug: a.slug, template: a.template }))).toEqual([
+        { slug: 'about', template: 'page-local' },
+        { slug: 'home', template: 'page-local' },
+      ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(sitePath, { recursive: true, force: true });
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
   it('normalizes a ~ studioSitePath to an absolute path at entry (belt-and-suspenders)', async () => {
     // Regression: a `~/Studio/x` site path (the canonical input the skill
     // documents) must be expanded ONCE at the handler entry so no downstream
@@ -1240,6 +1306,27 @@ describe('convertLocalSiteHandler', () => {
     }
   });
 
+  it('does not emit an empty header mount when source js is not carried', async () => {
+    const dir = makeEmptyHeaderMountOnlySite();
+    const sitePath = makeStudioSite();
+    const outDir = mkdtempSync(join(FIXTURE_TMP, 'cls-empty-header-mount-no-js-out-'));
+    try {
+      const res = await convertLocalSiteHandler(
+        { dir, studioSitePath: sitePath, outputDir: outDir, themeSlug: 'acme-local', siteTitle: 'Acme', skipDesign: true, carryJs: false },
+        ctx,
+      );
+      expect(res.isError).toBeFalsy();
+      const headerHtml = readFileSync(join(sitePath, 'wp-content', 'themes', 'acme-local', 'parts', 'header.html'), 'utf8');
+      expect(headerHtml).not.toContain('"anchor":"siteHeader"');
+      expect(headerHtml).not.toContain('<div id="siteHeader"');
+      expect(headerHtml).toContain('wp:site-title');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(sitePath, { recursive: true, force: true });
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
   it('carries a layout-level side rail into the source header part', async () => {
     const dir = makeSideRailSite();
     const sitePath = makeStudioSite();
@@ -1310,7 +1397,7 @@ describe('convertLocalSiteHandler', () => {
     }
   });
 
-  it('bases local region audit on rendered header markup when chrome intent is dropped', async () => {
+  it('bases local region audit on engine-refined header markup when source nav chrome is preserved', async () => {
     const dir = makeNavOverlayMountSite();
     const sitePath = makeStudioSite();
     const outDir = mkdtempSync(join(FIXTURE_TMP, 'cls-region-audit-rendered-drop-out-'));
@@ -1327,22 +1414,24 @@ describe('convertLocalSiteHandler', () => {
         },
         ctx,
       );
-      expect(res.isError).toBe(true);
+      expect(res.isError).toBeFalsy();
       const summary = JSON.parse(res.content[0].text) as {
         conservation: { ok: boolean; status: string; unassignedRegions: number; hardFailRegions: number };
       };
       expect(summary.conservation).toMatchObject({
-        ok: false,
-        status: 'fail',
-        unassignedRegions: 1,
-        hardFailRegions: 1,
+        ok: true,
+        status: 'pass',
+        unassignedRegions: 0,
+        hardFailRegions: 0,
       });
+      const headerHtml = readFileSync(join(sitePath, 'wp-content', 'themes', 'acme-local', 'parts', 'header.html'), 'utf8');
+      expect(headerHtml).toContain('primary-nav');
       const report = JSON.parse(readFileSync(join(outDir, 'region-audit.json'), 'utf8')) as {
         pages: Array<{ assignments: Array<{ landmark: { selector: string; role: string }; kind: string }> }>;
       };
       expect(report.pages[0].assignments).toContainEqual({
         landmark: expect.objectContaining({ selector: 'nav#primary-nav', role: 'nav' }),
-        kind: 'unassigned',
+        kind: 'header_part',
       });
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -1607,7 +1696,7 @@ describe('convertLocalSiteHandler', () => {
     }
   });
 
-  it('reports local region-audit conservation as warn by default without changing install summary fields', async () => {
+  it('reports local region-audit conservation as pass without changing install summary fields', async () => {
     const dir = makeHomeComplementaryRailSite();
     const sitePath = makeStudioSite();
     const outDir = mkdtempSync(join(FIXTURE_TMP, 'cls-region-audit-warn-out-'));
@@ -1638,9 +1727,9 @@ describe('convertLocalSiteHandler', () => {
       expect(summary.themeSlug).toBe('acme-local');
       expect(summary.frontPageSet).toBe(true);
       expect(summary.conservationLeaks.artifact).toBe(join(outDir, 'conservation-leaks.json'));
-      expect(summary.conservation.status).toBe('warn');
+      expect(summary.conservation.status).toBe('pass');
       expect(summary.conservation.ok).toBe(true);
-      expect(summary.conservation.unassignedRegions).toBe(1);
+      expect(summary.conservation.unassignedRegions).toBe(0);
       expect(summary.conservation.hardFailRegions).toBe(0);
       expect(summary.conservation.artifact).toBe(join(outDir, 'region-audit.json'));
     } finally {
@@ -1650,7 +1739,7 @@ describe('convertLocalSiteHandler', () => {
     }
   });
 
-  it('hard-fails only an opt-in unassigned real rail', async () => {
+  it('does not hard-fail an opt-in rail that the engine-refined theme preserves', async () => {
     const dir = makeHomeComplementaryRailSite();
     const sitePath = makeStudioSite();
     const outDir = mkdtempSync(join(FIXTURE_TMP, 'cls-region-audit-fail-out-'));
@@ -1668,15 +1757,15 @@ describe('convertLocalSiteHandler', () => {
         },
         ctx,
       );
-      expect(res.isError).toBe(true);
+      expect(res.isError).toBeFalsy();
       const summary = JSON.parse(res.content[0].text) as {
         conservation: { ok: boolean; status: string; unassignedRegions: number; hardFailRegions: number };
       };
       expect(summary.conservation).toMatchObject({
-        ok: false,
-        status: 'fail',
-        unassignedRegions: 1,
-        hardFailRegions: 1,
+        ok: true,
+        status: 'pass',
+        unassignedRegions: 0,
+        hardFailRegions: 0,
       });
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -1685,7 +1774,7 @@ describe('convertLocalSiteHandler', () => {
     }
   });
 
-  it('does not hard-fail an unassigned plain aside outside the hard-fail role set', async () => {
+  it('does not hard-fail a placed plain aside outside the hard-fail role set', async () => {
     const dir = makeHomePlainAsideSite();
     const sitePath = makeStudioSite();
     const outDir = mkdtempSync(join(FIXTURE_TMP, 'cls-region-audit-aside-out-'));
@@ -1709,8 +1798,8 @@ describe('convertLocalSiteHandler', () => {
       };
       expect(summary.conservation).toMatchObject({
         ok: true,
-        status: 'warn',
-        unassignedRegions: 1,
+        status: 'pass',
+        unassignedRegions: 0,
         hardFailRegions: 0,
       });
     } finally {
