@@ -1,4 +1,4 @@
-import { canonicalizeInstanceIds } from './chrome-canonicalize.js';
+import { canonicalizeInstanceIds } from '@automattic/blocks-engine/theme';
 
 /**
  * Matches a single class TOKEN (the whole token, anchored) when it is volatile
