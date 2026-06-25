@@ -835,7 +835,7 @@ export interface SectionSpec {
   forms?: SectionSpecForm[];
   /**
    * Sanitizable source outerHTML of the section, for the coverage-gated
-   * `core/html` verbatim fallback (see section-coverage.ts / html-fallback.ts).
+   * `core/html` verbatim fallback (see html-fallback.ts and engine coverage helpers).
    * Present only when the section's HTML fit under SECTION_HTML_FALLBACK_CAP —
    * truncated markup can't be safely emitted, so an over-cap section is simply
    * not fallback-eligible.

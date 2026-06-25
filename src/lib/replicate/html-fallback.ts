@@ -1,7 +1,7 @@
 //
 // Verbatim core/html fallback
 // ===========================
-// When a section's structured render drops content (see section-coverage.ts),
+// When a section's structured render drops content (see engine coverage helpers),
 // we emit the section's source outerHTML VERBATIM as a `core/html` block rather
 // than ship the lossy blocks — mirroring h2bc's "unsupported -> core/html"
 // model. The tradeoff: that one section loses block-editability/theming, but

@@ -5,7 +5,7 @@
 // media; repair = recover_dropped_media" — readable by the reconstruction agent.
 // Pure; warning-level. See 2026-06-04-section-identifiers-design.md.
 import type { SectionSpec } from './section-extract.js';
-import type { CoverageResult } from './section-coverage.js';
+import type { CoverageResult } from '@automattic/blocks-engine/theme';
 import type { AssetRemoval } from './asset-triage.js';
 
 export type FallbackReasonCode = 'dropped_images' | 'text_coverage_below_floor' | 'decorative_asset_triaged';

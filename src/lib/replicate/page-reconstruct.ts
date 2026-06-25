@@ -30,7 +30,7 @@ import type { SectionSpec, SectionSpecImage, SectionSpecIcon, SectionSpecCell } 
 import { nearestToken, brightness, type PaletteToken } from './footer-color.js';
 import type { ExtractedReview } from './review-extract.js';
 import * as cheerio from 'cheerio';
-import { measureSectionCoverage, measureConvertedCoverage, foldText } from './section-coverage.js';
+import { measureSectionCoverage, measureConvertedCoverage, foldText } from '@automattic/blocks-engine/theme';
 import { buildHtmlFallbackBlock, selectIslandSource } from './html-fallback.js';
 import { rewriteMediaUrls } from '../streaming/media-url-rewrite.js';
 import { hasUnmigratedRemoteAsset, scanForInjection } from './validate-artifacts.js';
@@ -1694,7 +1694,7 @@ export function reconstructPagePattern(
           texts: [...s.headings, ...(s.bodyText ?? []), ...(s.buttonLabels ?? [])],
           imageUrls: (s.images ?? []).map((im) => im.url).filter(Boolean),
         };
-        const cov = measureConvertedCoverage(captured, markup);
+        const cov = measureConvertedCoverage({ text: captured.texts, images: captured.imageUrls }, markup);
         if (!cov.lost) {
           sectionMarkup.push(markup);
           // Register the converted section's OWN <h>/<p> visible text into the gate
@@ -1835,7 +1835,7 @@ export function reconstructPagePattern(
       texts: [...s.headings, ...(s.bodyText ?? []), ...(s.buttonLabels ?? [])],
       imageUrls: (s.images ?? []).map((im) => im.url).filter(Boolean),
     };
-    let cov = measureSectionCoverage(captured, out.markup);
+    let cov = measureSectionCoverage({ text: captured.texts, images: captured.imageUrls }, out.markup);
     // Media recovery: when the loss includes ONLY recoverable images — local
     // uploads URLs at/above the decorative floor that a renderer path simply
     // didn't place (cell grid ignoring section images, lead-photo threshold,
@@ -1856,7 +1856,7 @@ export function reconstructPagePattern(
         const augmented = out.markup.endsWith(SECTION_CLOSE)
           ? out.markup.slice(0, -SECTION_CLOSE.length) + recovered.join('\n') + '\n' + SECTION_CLOSE
           : (out.markup ? out.markup + '\n\n' : '') + recovered.join('\n');
-        const reMeasured = measureSectionCoverage(captured, augmented);
+        const reMeasured = measureSectionCoverage({ text: captured.texts, images: captured.imageUrls }, augmented);
         if (!reMeasured.lost) {
           out.markup = augmented;
           cov = reMeasured;
