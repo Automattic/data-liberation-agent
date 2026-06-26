@@ -759,7 +759,10 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
       coverageFloor: 0,
       carrySourceCss: false,
       // Local-convert installs page bodies from DLA ingest; engine page-markup
-      // hoisting would emit orphaned lib-*.json block styles.
+      // hoisting would emit orphaned lib-*.json block styles. This is
+      // intentional and correct, not a band-aid: local emit-blocks already
+      // dedupes element-layer instance styles as lib-i, so engine variation
+      // hoist would be a redundant second dedup whose output is orphaned.
       variationHoist: false,
       hooks: {
         onFoundation: async (tokens: FoundationTokens): Promise<FoundationTokens> =>
