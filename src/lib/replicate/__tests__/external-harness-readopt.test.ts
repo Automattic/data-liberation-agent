@@ -179,4 +179,31 @@ describe('external reconstruct harness re-adoption', () => {
       expect(snapshotSurface(result)).toMatchSnapshot();
     });
   }
+
+  it('derives the hero-cover signal from adapter-replaced fallback markup', () => {
+    const result = buildPageReconstruction(
+      [
+        section({
+          headings: ['Recipe Hero'],
+          images: [img(`${WP}team.jpg`, { sourceUrl: 'https://cdn.test/team.jpg', width: 60, height: 60 })],
+          sectionHtml: '<div data-hero-recipe><h1>Recipe Hero</h1></div>',
+        }),
+      ],
+      {
+        themeSlug: 'demo-replica',
+        title: 'Adapter Cover',
+        slug: 'adapter-cover',
+        isHome: true,
+        adapterBlocks: {
+          htmlToBlocks: () =>
+            '<!-- wp:cover {"url":"/wp-content/uploads/2026/06/hero.jpg"} -->\n' +
+            '<div class="wp-block-cover"><span aria-hidden="true" class="wp-block-cover__background has-background-dim"></span><div class="wp-block-cover__inner-container"></div></div>\n' +
+            '<!-- /wp:cover -->',
+        },
+      },
+    );
+
+    expect(result.postContent.trimStart()).toMatch(/^<!-- wp:cover\b/);
+    expect(result.variant.overlayHeader).toBe(true);
+  });
 });
