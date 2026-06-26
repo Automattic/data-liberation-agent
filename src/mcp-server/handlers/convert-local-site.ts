@@ -58,20 +58,24 @@ import {
   collectSourceAssets,
   detectLayoutOffsetWrapper,
   extractGoogleFontCssUrls,
+  extractSourceLandmarksFromHtml,
+  landmarkRoleForHtmlRoot,
+  reconcileRegions,
   rewriteHtmlImageSrcs,
+  selectorForHtmlRoot,
   siteToTheme,
   WP_COMPAT_CSS,
   type AssetVerdicts,
   type FoundationTokens,
   type ImgAssetRef,
+  type PlacedRegion,
+  type RegionSelectionReport,
   type ThemeModel,
 } from '@automattic/blocks-engine/theme';
 import { buildJetpackFormParityCss } from '../../lib/replicate/local-site/jetpack-form-css.js';
 import { JETPACK_FORM_PARITY_CSS } from '../../lib/replicate/local-theme/jetpack-form-parity-contract.js';
 import { detectBehaviors } from '../../lib/replicate/normalize/detect-behaviors.js';
 import { checkConservationLeaks } from '../../lib/replicate/normalize/conservation-check.js';
-import { extractSourceLandmarksFromHtml, landmarkRoleForHtmlRoot, selectorForHtmlRoot } from '../../lib/replicate/region-census.js';
-import { reconcileRegions, type PlacedRegion, type RegionSelectionReport } from '../../lib/replicate/region-audit.js';
 import { buildSelector, type SelectorParts } from '../../lib/replicate/section-selector.js';
 import type { SourceLandmark } from '../../lib/replicate/section-extract.js';
 import { buildInteractivityPlugin } from '../../blocks/interactivity-plugin.js';

@@ -115,8 +115,8 @@ vi.mock('../../lib/replicate/local-theme/theme-files.js', async (importOriginal)
 vi.mock('../../lib/replicate/local-site/jetpack-form-css.js', () => ({
   buildJetpackFormParityCss: buildJetpackFormParityCssMock,
 }));
-vi.mock('../../lib/replicate/region-census.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../lib/replicate/region-census.js')>();
+vi.mock('@automattic/blocks-engine/theme', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@automattic/blocks-engine/theme')>();
   return {
     ...actual,
     extractSourceLandmarksFromHtml: (html: string) => {

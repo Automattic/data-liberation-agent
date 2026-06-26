@@ -40,7 +40,15 @@ import { studioWp } from '../../lib/preview/studio.js';
 import type { Handler } from '../handler-types.js';
 import { detect } from '../../lib/detect-platform/index.js';
 import { ImportSession } from '../../lib/resume-state/index.js';
-import { buildTriageRemovalDiagnostic, type FallbackDiagnostic } from '@automattic/blocks-engine/theme';
+import {
+  buildTriageRemovalDiagnostic,
+  hoistVariations,
+  reconcileRegions,
+  type FallbackDiagnostic,
+  type HoistedVariation,
+  type PlacedRegion,
+  type RegionSelectionReport,
+} from '@automattic/blocks-engine/theme';
 import { loadAssetTriage, applyAssetTriage, type AssetRemoval } from '../../lib/replicate/asset-triage.js';
 import { selectorKey } from '../../lib/replicate/triage-candidates.js';
 import { ensurePlugin, type ExecFn } from '../../lib/preview/ensure-plugin.js';
@@ -48,13 +56,11 @@ import { makeIslandsEditable } from '../../lib/replicate/normalize/make-islands-
 import { buildEditableHtmlPlugin } from '../../blocks/editable-html-plugin.js';
 import { writeReplicaFilesToHost } from '../../lib/preview/replica-install.js';
 import { extractThemeChromeFromHtml } from '../../lib/replicate/source-chrome.js';
-import { reconcileRegions, type PlacedRegion, type RegionSelectionReport } from '../../lib/replicate/region-audit.js';
 import { slugify } from '../../lib/url/index.js';
 import { planPageTemplates, reconcileReplicaTemplates, mergeCustomTemplates, variantTemplateSlug, type TemplateVariant } from '../../lib/replicate/page-template-plan.js';
 import { patchWxrTemplatesFile, type WxrTemplatePatchInput } from '../../lib/replicate/wxr-template-patch.js';
 import { auditStyleUsage } from '../../lib/replicate/style-audit.js';
 import { buildPageTemplate } from '../../lib/replicate/reconstruct-pages.js';
-import { hoistVariations, type HoistedVariation } from '@automattic/blocks-engine/theme';
 
 const execFileAsync = promisify(execFile);
 

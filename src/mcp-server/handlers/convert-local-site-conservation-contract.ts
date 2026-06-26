@@ -1,4 +1,4 @@
-import type { RegionSelectionReport } from '../../lib/replicate/region-audit.js';
+import type { RegionSelectionReport } from '@automattic/blocks-engine/theme';
 import type { SourceLandmark } from '../../lib/replicate/section-extract.js';
 
 export const LOCAL_CONSERVATION_REPORT_SCHEMA = 1;
