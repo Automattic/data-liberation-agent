@@ -54,7 +54,7 @@ import { planPageTemplates, reconcileReplicaTemplates, mergeCustomTemplates, var
 import { patchWxrTemplatesFile, type WxrTemplatePatchInput } from '../../lib/replicate/wxr-template-patch.js';
 import { auditStyleUsage } from '../../lib/replicate/style-audit.js';
 import { buildPageTemplate } from '../../lib/replicate/reconstruct-pages.js';
-import { hoistVariations, type HoistedVariation } from '../../lib/replicate/variation-hoist.js';
+import { hoistVariations, type HoistedVariation } from '@automattic/blocks-engine/theme';
 
 const execFileAsync = promisify(execFile);
 
@@ -543,7 +543,7 @@ export const reconstructPagesHandler: Handler = async (args, ctx) => {
     // consistent (style attrs + matching inline HTML) and editor-valid; they
     // just diverge from the hoisted post_content, which is the canonical copy.
     // Re-apply swaps here ONLY once pattern markup is also canonicalized
-    // (applyHoistSwaps in variation-hoist.ts exists for exactly that).
+    // (applyHoistSwaps from the engine variation hoist helper exists for exactly that).
     const files = built.files;
     // Write to the live theme AND the on-disk output/<site>/theme copy.
     for (const root of [themeRoot, outThemeDir]) {

@@ -64,6 +64,7 @@ function engineResult(overrides: Partial<ThemeBuildResult> = {}): ThemeBuildResu
     ],
     tallies: {},
     warnings: [],
+    diagnostics: { regionAudit: [] },
     ...overrides,
   };
 }
