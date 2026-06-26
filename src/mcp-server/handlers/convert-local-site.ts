@@ -758,6 +758,9 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
       fetchImpl: dlaSafeFetch,
       coverageFloor: 0,
       carrySourceCss: false,
+      // Local-convert installs page bodies from DLA ingest; engine page-markup
+      // hoisting would emit orphaned lib-*.json block styles.
+      variationHoist: false,
       hooks: {
         onFoundation: async (tokens: FoundationTokens): Promise<FoundationTokens> =>
           foundationTranslation?.tokens ?? tokens,

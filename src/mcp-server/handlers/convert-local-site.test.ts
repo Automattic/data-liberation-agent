@@ -119,6 +119,7 @@ vi.mock('@automattic/blocks-engine/theme', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@automattic/blocks-engine/theme')>();
   return {
     ...actual,
+    siteToTheme: vi.fn(async (...args: Parameters<typeof actual.siteToTheme>) => actual.siteToTheme(...args)),
     extractSourceLandmarksFromHtml: (html: string) => {
       if (regionCensusFailure.throwOnExtract) throw new Error('synthetic region census failure');
       return actual.extractSourceLandmarksFromHtml(html);
@@ -218,6 +219,7 @@ import { compareScreenshotDirs } from '../../lib/screenshot/compare.js';
 import { probePair } from '../../lib/replicate/parity/parity-probe.js';
 import { composedSidecarPath } from '../../lib/streaming/block-markup-validate.js';
 import { EDITABLE_PLUGIN_SLUG } from '../../blocks/editable-html-plugin.js';
+import { siteToTheme } from '@automattic/blocks-engine/theme';
 
 const FIXTURE_TMP = join(process.cwd(), '.tmp-test');
 
@@ -677,6 +679,7 @@ beforeEach(() => {
   // from a failing repair test can't bleed into subsequent tests.
   vi.mocked(compareScreenshotDirs).mockReset().mockResolvedValue(BASE_COMPARE_RESULT as unknown as Awaited<ReturnType<typeof compareScreenshotDirs>>);
   vi.mocked(probePair).mockReset().mockResolvedValue([]);
+  vi.mocked(siteToTheme).mockClear();
   buildJetpackFormParityCssMock.mockReset().mockReturnValue({ css: '' });
 });
 
@@ -816,7 +819,7 @@ describe('convertLocalSiteHandler', () => {
     }
   });
 
-  it('siteToTheme rewire handler shape keeps DLA page content authoritative', async () => {
+  it('siteToTheme rewire handler shape disables engine variation hoist and keeps DLA page content authoritative', async () => {
     const dir = makeSite();
     const sitePath = makeStudioSite();
     const outDir = mkdtempSync(join(FIXTURE_TMP, 'cls-sitetotheme-shape-out-'));
@@ -833,6 +836,13 @@ describe('convertLocalSiteHandler', () => {
         ctx,
       );
       expect(res.isError).toBeFalsy();
+      expect(vi.mocked(siteToTheme)).toHaveBeenCalledTimes(1);
+      const [, siteToThemeOptions] = vi.mocked(siteToTheme).mock.calls[0]!;
+      expect(siteToThemeOptions).toMatchObject({
+        coverageFloor: 0,
+        carrySourceCss: false,
+        variationHoist: false,
+      });
       const summary = JSON.parse(res.content[0].text) as Record<string, unknown>;
       expect(Object.keys(summary).sort()).toEqual([
         'carried',
