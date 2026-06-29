@@ -26,9 +26,7 @@
   "dependencies": {
     "@automattic/blocks-engine": "^0.1.0",
     "@modelcontextprotocol/sdk": "^1.27.0",
-    "@types/papaparse": "^5.5.2",
     "@wordpress/block-serialization-default-parser": "^5.47.0",
-    "@wp-playground/cli": "^3.1.20",
     "acorn": "^8.17.0",
     "cheerio": "^1.2.0",
     "domhandler": "^5.0.3",
@@ -45,6 +43,7 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@types/papaparse": "^5.5.2",
     "@types/pixelmatch": "^5.2.6",
     "@types/pngjs": "^6.0.5",
     "@types/react": "^19.2.14",
