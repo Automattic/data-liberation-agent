@@ -27,10 +27,6 @@ import {
 } from './convert-local-site-jetpack-contract.js';
 import { themeCacheFlushCommands } from './install-theme.js';
 import { ingestLocalSite } from '../../lib/replicate/local-site/ingest.js';
-import { buildNavGraph } from '../../lib/replicate/local-site/nav-graph.js';
-import { segmentPage } from '../../lib/replicate/normalize/segment.js';
-import { buildHeaderPart, buildCarriedHeaderPart, buildCarriedSidebarPart, buildFooterPart, findChromeMounts, mountPartMarkup } from '../../lib/replicate/local-theme/chrome-parts.js';
-import { assembleLocalTheme } from '../../lib/replicate/local-theme/theme-files.js';
 import type { InteriorChromeTemplate } from '../../lib/replicate/local-theme/interior-chrome.js';
 import { buildPagePlan } from '../../lib/replicate/local-theme/page-plan.js';
 import { writeReplicaFilesToHost } from '../../lib/preview/replica-install.js';
@@ -38,7 +34,7 @@ import { wpOptionUpdatesForSiteMeta } from '../../lib/preview/site-options.js';
 import { installPost } from '../../lib/streaming/post-install.js';
 import { finalizeSite } from '../../lib/streaming/site-finalize.js';
 import { startStaticServer } from '../../lib/replicate/local-site/static-server.js';
-import { rewriteInternalLinksInJs, slugToUrl } from '../../lib/replicate/local-site/href-rewrite.js';
+import { rewriteInternalLinksInJs } from '../../lib/replicate/local-site/href-rewrite.js';
 import { captureScreenshots } from '../../lib/screenshot/screenshotter.js';
 import { SCREENSHOT_DEVICE_SCALE_FACTOR } from '../../lib/screenshot/types.js';
 import { compareScreenshotDirs } from '../../lib/screenshot/compare.js';
@@ -54,23 +50,49 @@ import { buildQueryLoop } from '../../lib/replicate/local-data/query-loop.js';
 import { neutralizeDataMounts } from '../../lib/replicate/local-data/neutralize-mounts.js';
 import { rebindArrayLookups, DLA_ITEM_HELPER_JS } from '../../lib/replicate/local-data/modal-rebind.js';
 import { validateDataModel } from '../../lib/replicate/local-data/validate-model.js';
-import { InstanceStyleSheet, mergeInstanceStyleCss } from '../../lib/replicate/normalize/instance-styles.js';
+import { mergeInstanceStyleCss } from '../../lib/replicate/normalize/instance-styles.js';
 import { composedSidecarPath, instanceStylesPath } from '../../lib/streaming/block-markup-validate.js';
-import { buildLocalFoundation, extractCssColors, type PaletteAgg, type TypographyAgg, type BreakpointsAgg } from '../../lib/replicate/local-theme/foundation.js';
-import { extractGoogleFontCssUrls, selfHostGoogleFonts } from '../../lib/replicate/local-theme/google-fonts.js';
-import { collectSourceAssets, rewriteHtmlImageSrcs, WP_COMPAT_CSS, type ImgAssetRef } from '../../lib/replicate/local-theme/source-assets.js';
+import type { PaletteAgg, TypographyAgg, BreakpointsAgg } from '../../lib/replicate/local-theme/foundation.js';
+import { selfHostGoogleFonts } from '../../lib/replicate/local-theme/google-fonts.js';
+import {
+  collectSourceAssets,
+  detectLayoutOffsetWrapper,
+  extractGoogleFontCssUrls,
+  extractSourceLandmarksFromHtml,
+  landmarkRoleForHtmlRoot,
+  reconcileRegions,
+  rewriteHtmlImageSrcs,
+  selectorForHtmlRoot,
+  siteToTheme,
+  WP_COMPAT_CSS,
+  type AssetVerdicts,
+  type FoundationTokens,
+  type ImgAssetRef,
+  type PlacedRegion,
+  type RegionSelectionReport,
+  type ThemeModel,
+} from '@automattic/blocks-engine/theme';
 import { buildJetpackFormParityCss } from '../../lib/replicate/local-site/jetpack-form-css.js';
 import { JETPACK_FORM_PARITY_CSS } from '../../lib/replicate/local-theme/jetpack-form-parity-contract.js';
 import { detectBehaviors } from '../../lib/replicate/normalize/detect-behaviors.js';
 import { checkConservationLeaks } from '../../lib/replicate/normalize/conservation-check.js';
-import { extractSourceLandmarksFromHtml, landmarkRoleForHtmlRoot, selectorForHtmlRoot } from '../../lib/replicate/region-census.js';
-import { reconcileRegions, type PlacedRegion, type RegionSelectionReport } from '../../lib/replicate/region-audit.js';
 import { buildSelector, type SelectorParts } from '../../lib/replicate/section-selector.js';
 import type { SourceLandmark } from '../../lib/replicate/section-extract.js';
 import { buildInteractivityPlugin } from '../../blocks/interactivity-plugin.js';
 import { buildEditableHtmlPlugin } from '../../blocks/editable-html-plugin.js';
 import type { DetectedBehaviors, Section } from '../../lib/replicate/local-site/types.js';
 import type { ConservationLeak } from '../../lib/replicate/normalize/conservation-leak.js';
+import { safeFetch } from '../../lib/media-fetch/index.js';
+import {
+  buildDlaFunctionsPhpContent,
+  buildDlaInteriorChromeTemplates,
+  buildDlaThemeSupplementFiles,
+  engineThemeResultToHostFiles,
+  localThemeAuditSections,
+  refineEngineThemeForDlaLocalPages,
+  translateDlaFoundationToEngine,
+  type EngineFoundationTranslation,
+} from '../../lib/replicate/local-theme/engine-theme-adapter.js';
 import {
   LOCAL_CONSERVATION_HARD_FAIL_ARG,
   LOCAL_CONSERVATION_HARD_FAIL_ROLES,
@@ -83,16 +105,43 @@ import { CLEAR_INTERVALS_SCRIPT, FREEZE_MOTION_CSS, probePair, type Divergence }
 import { extractDiffRegions } from '../../lib/replicate/parity/diff-regions.js';
 import { classifyDivergences, renderPatchCss, divergenceFingerprint, suppressPageConflicts, type UnresolvedDivergence, type PatchOverride, type RepairPlan } from '../../lib/replicate/parity/parity-classify.js';
 
-type LayoutRailSection = Section & {
-  layoutWrapperTag?: string;
-  layoutWrapperClasses?: string[];
-  layoutWrapperRailPosition?: 'beforeMain' | 'afterMain';
-};
-
 /** Thin trimming wrapper over the shared Studio wp-cli exec — these are short
  * commands, so the 60s/10MB envelope rather than the 5min/50MB default. */
 async function studioWp(sitePath: string, wpArgs: readonly string[]): Promise<string> {
   return (await studioWpExec(sitePath, [...wpArgs], { timeout: 60_000, maxBuffer: 10 * 1024 * 1024 })).trim();
+}
+
+async function dlaSafeFetch(input: Parameters<typeof fetch>[0] | URL, init?: Parameters<typeof fetch>[1]): Promise<Response> {
+  const headers = headersRecord(init?.headers ?? requestHeaders(input));
+  const result = await safeFetch(fetchInputUrl(input), {
+    ...(headers ? { headers } : {}),
+  });
+  return new Response(Uint8Array.from(result.body).buffer, {
+    status: result.status,
+    headers: result.headers,
+  });
+}
+
+function fetchInputUrl(input: Parameters<typeof fetch>[0] | URL): string {
+  if (typeof input === 'string') return input;
+  if (input instanceof URL) return input.toString();
+  if (typeof Request !== 'undefined' && input instanceof Request) return input.url;
+  return String(input);
+}
+
+function requestHeaders(input: Parameters<typeof fetch>[0] | URL): HeadersInit | undefined {
+  if (typeof Request !== 'undefined' && input instanceof Request) return input.headers;
+  return undefined;
+}
+
+function headersRecord(init: HeadersInit | undefined): Record<string, string> | undefined {
+  if (!init) return undefined;
+  const headers = new Headers(init);
+  const out: Record<string, string> = {};
+  headers.forEach((value, key) => {
+    out[key] = value;
+  });
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 function writeAtomicTextFile(path: string, content: string): void {
@@ -114,39 +163,6 @@ function normalizeRegionText(text: string): string {
 function firstHtmlElement($: CheerioAPI): DomElement | null {
   const el = $('body').children().first().get(0) ?? $.root().children().first().get(0);
   return el && isTag(el) ? (el as DomElement) : null;
-}
-
-function normalizeHeaderRoot(html: string): string {
-  return html.replace(/^<header(\b[^>]*>)/i, '<div$1').replace(/<\/header>\s*$/i, '</div>');
-}
-
-function combineCarriedHeaderChrome(header: Section, extraChrome: Section[]): Section {
-  if (extraChrome.length === 0) return header;
-  const html = [normalizeHeaderRoot(header.html), ...extraChrome.map((s) => s.html)].join('\n');
-  return {
-    ...header,
-    html: `<div class="dla-carried-header-chrome">${html}</div>`,
-    classes: ['dla-carried-header-chrome'],
-  };
-}
-
-function hasRenderableRootContent(html: string): boolean {
-  const $ = cheerio.load(html);
-  const root = firstHtmlElement($);
-  const scope = root ? $(root) : $('body');
-  const rootTag = root?.tagName?.toLowerCase() ?? '';
-  const rootIsRenderable = ['a', 'button', 'input', 'select', 'textarea', 'img', 'picture', 'video', 'svg', 'canvas'].includes(rootTag);
-  return (
-    normalizeRegionText(scope.text()).length > 0 ||
-    rootIsRenderable ||
-    scope.find('a[href],button,input,select,textarea,img,picture,video,svg,canvas').length > 0
-  );
-}
-
-function shouldPreferCarriedHeaderOverMount(header: Section | null, carriedHeader: Section | null): boolean {
-  // Empty JS mounts remain valid when no real source header exists. A contentful
-  // <header> plus folded layout rails is stronger evidence than an empty overlay div.
-  return !!header && header.role === 'header' && !!carriedHeader && hasRenderableRootContent(carriedHeader.html);
 }
 
 function isPlacedRegionRole(role: string | undefined): role is NonNullable<PlacedRegion['role']> {
@@ -477,10 +493,7 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
   // aggregates, build a deterministic design foundation, and self-host any
   // Google Fonts found in the source HTML/CSS. Failures here degrade to a
   // warning and fall back to the default foundation — never abort.
-  let foundation: Parameters<typeof assembleLocalTheme>[0]['foundation'];
-  let capturedFonts: Parameters<typeof assembleLocalTheme>[0]['capturedFonts'];
-  let footerBgToken: string | undefined;
-  let footerTextToken: string | undefined;
+  let foundationTranslation: EngineFoundationTranslation | undefined;
   let localizedFontCss = '';
   let designCaptured = false;
   const sourceCaptureDir = join(outputDir, 'source');
@@ -527,22 +540,16 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
       for (const f of readdirSync(dir)) {
         if (f.endsWith('.css')) cssSources.push(readFileSync(join(dir, f), 'utf8'));
       }
-      const local = buildLocalFoundation(
-        {
-          palette: readJson<PaletteAgg>('palette.json'),
-          typography: readJson<TypographyAgg>('typography.json'),
-          breakpoints: readJson<BreakpointsAgg>('breakpoints.json'),
-        },
-        { cssColors: extractCssColors(cssSources) },
-      );
-      foundation = local.foundation;
-      footerBgToken = local.footerBgToken;
-      footerTextToken = local.footerTextToken;
+      foundationTranslation = translateDlaFoundationToEngine({
+        palette: readJson<PaletteAgg>('palette.json'),
+        typography: readJson<TypographyAgg>('typography.json'),
+        breakpoints: readJson<BreakpointsAgg>('breakpoints.json'),
+        cssSources,
+      });
 
       const fontCssUrls = extractGoogleFontCssUrls(cssSources);
       if (fontCssUrls.length > 0) {
         const hosted = await selfHostGoogleFonts(fontCssUrls, { themeDir: join(outputDir, 'theme') });
-        capturedFonts = hosted.faces;
         // Verbatim Google css (all unicode-range subsets, URLs localized) —
         // spliced into the carried stylesheet so glyph metrics match the
         // source exactly (the old one-file-per-weight collapse measurably
@@ -662,12 +669,6 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
       warnings.push(`behavior-gaps write failed: ${(err as Error).message}`);
     }
   }
-  // The carried stylesheet is the design authority for chrome too: plain parts
-  // (bare blocks, no styled wrappers/tokens) so the source `header{}`/`footer{}`
-  // rules — which match the template parts' real <header>/<footer> elements —
-  // drive layout instead of fighting our decoration.
-  const chromeCarried = !!carrySourceAssets?.css.trim() && carryCss;
-
   // Truthful carry flags, hoisted above the chrome build: mount detection
   // needs to know whether source JS is actually carried (an empty mount with
   // no JS to fill it = blank chrome).
@@ -683,115 +684,12 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
     if (css.length > 0) jetpackFormParityCss = css;
   }
 
-  // Chrome: nav from the graph; footer from the home page's captured footer section.
-  const nav = buildNavGraph(site);
-  const pageSlugs = site.pages.map((p) => p.slug);
   const home = site.pages.find((p) => p.slug === 'home') ?? site.pages[0];
-  const homeSegments = segmentPage(home.html);
-  const footerSection = homeSegments.find((s) => s.role === 'footer') ?? null;
-  // No <header>? A top-level <nav> is the de-facto header (common on one-pagers:
-  // a fixed `<nav id="nav">` with logo + links). Carry it so the real header
-  // survives instead of falling back to a default empty core/navigation.
-  const headerSection =
-    homeSegments.find((s) => s.role === 'header') ?? homeSegments.find((s) => s.role === 'nav') ?? null;
-  const carriedHeaderSection = headerSection
-    ? combineCarriedHeaderChrome(
-        headerSection,
-        homeSegments.filter((s) => s.chromeSource === 'layout-rail' && s !== headerSection),
-      )
-    : null;
-  const slugifyLabel = (s: string): string =>
-    s.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-  const labelToUrl = (label: string): string | undefined => {
-    const key = slugifyLabel(label);
-    if (!key) return undefined;
-    if (dataModel) {
-      const term = dataModel.taxonomy.terms.find((t) => t.slug === key || slugifyLabel(t.label) === key);
-      if (term) return `/${dataModel.taxonomy.slug}/${term.slug}/`;
-    }
-    const page = site.pages.find((p) => p.slug === key || slugifyLabel(p.title) === key);
-    return page ? slugToUrl(page.slug) : undefined;
-  };
-  // JS-rendered chrome: when the source mounts header/footer into empty
-  // id-divs at runtime (renderHeader() into <div id="siteHeader">), the parts
-  // become the VERBATIM mounts and the carried source JS renders chrome on
-  // both sides — the JS stays the single source of truth. Gated on carried JS
-  // (no JS = nothing would ever fill the mount).
-  const mounts = chromeCarried && carriedJs ? findChromeMounts(home.html) : {};
-  // Sticky rides the header part in plain (carry) mode only — buildHeaderPart
-  // ignores it otherwise (tokens path has no carried chrome to toggle).
-  // Honesty: when detection found sticky but chrome is not carried, the state
-  // block never lands — warn, and the summary reports what LANDED (sticky:
-  // stickyEmitted), not what detection found.
-  const stickyEmitted = !!behaviors?.sticky && chromeCarried;
-  if (behaviors?.sticky && !chromeCarried) {
+  const stickyEmitted = !!behaviors?.sticky && carriedCss;
+  if (behaviors?.sticky && !stickyEmitted) {
     warnings.push('sticky behavior detected but not emitted (requires carried chrome header)');
   }
-  const chromeInstanceStyles = new InstanceStyleSheet();
-  const preferCarriedHeader = chromeCarried && shouldPreferCarriedHeaderOverMount(headerSection, carriedHeaderSection);
-  let headerPart: string;
-  if (preferCarriedHeader && carriedHeaderSection) {
-    headerPart = buildCarriedHeaderPart(carriedHeaderSection, {
-      pageSlugs,
-      instanceStyles: chromeInstanceStyles,
-      labelToUrl,
-      ...(stickyEmitted ? { sticky: behaviors!.sticky } : {}),
-    });
-  } else if (mounts.header) {
-    headerPart = mountPartMarkup(mounts.header, stickyEmitted ? behaviors?.sticky : undefined);
-  } else if (chromeCarried && carriedHeaderSection) {
-    headerPart = buildCarriedHeaderPart(carriedHeaderSection, {
-      pageSlugs,
-      instanceStyles: chromeInstanceStyles,
-      labelToUrl,
-      ...(stickyEmitted ? { sticky: behaviors!.sticky } : {}),
-    });
-  } else {
-    headerPart = buildHeaderPart(siteTitle, nav, pageSlugs, {
-      plain: chromeCarried,
-      ...(behaviors?.sticky ? { sticky: behaviors.sticky } : {}),
-    });
-  }
-  // Footer tokens (bgToken/textToken) come from the foundation — they style the
-  // wrapper group in the footer part we build here. The assembleLocalTheme
-  // passthrough was proven inert (we swap parts/footer.html unconditionally),
-  // so tokens live exclusively on the part built by buildFooterPart. In carry
-  // mode the tokens are omitted — source footer{} rules style the part.
-  // Chrome (footer) per-instance inline styles ride the SAME lib-i mechanism as
-  // page bodies, collected into their own sheet here (the body sheet lives in
-  // the ingest stage). Merged with the body rules below into one carried
-  // instance-styles.css so footer lib-i classes resolve.
-  const footerPart = mounts.footer
-    ? mountPartMarkup(mounts.footer)
-    : buildFooterPart(footerSection, siteTitle, {
-        pageSlugs,
-        bgToken: chromeCarried ? undefined : footerBgToken,
-        textToken: chromeCarried ? undefined : footerTextToken,
-        instanceStyles: chromeInstanceStyles,
-      });
-
-  const interiorChromeBySlug = new Map<string, InteriorChromeTemplate>();
-  for (const page of site.pages) {
-    if (page.slug === home.slug) continue;
-    const rails = segmentPage(page.html).filter((s) => s.chromeSource === 'layout-rail') as LayoutRailSection[];
-    if (rails.length === 0) continue;
-    const templateSlug = page.slug.replace(/[^a-z0-9_-]+/gi, '-').replace(/^-+|-+$/g, '') || 'page';
-    const partMarkup = rails.map((rail) => buildCarriedSidebarPart(rail, { pageSlugs })).join('\n');
-    const layoutWrapperRail = rails.find((rail) => rail.layoutWrapperTag && rail.layoutWrapperRailPosition);
-    interiorChromeBySlug.set(page.slug, {
-      templateName: `page-local-${templateSlug}-chrome`,
-      templateTitle: `Local Page Chrome (${page.title || page.slug})`,
-      partSlug: `interior-chrome-${templateSlug}`,
-      partMarkup,
-      ...(layoutWrapperRail
-        ? {
-            layoutWrapperTag: layoutWrapperRail.layoutWrapperTag,
-            layoutWrapperClasses: layoutWrapperRail.layoutWrapperClasses ?? [],
-            layoutWrapperRailPosition: layoutWrapperRail.layoutWrapperRailPosition,
-          }
-        : {}),
-    });
-  }
+  const interiorChromeBySlug = buildDlaInteriorChromeTemplates(site, home.slug);
 
   // Merge the page-body lib-i rules (written by ingest to composed/
   // instance-styles.css) with the chrome rules just collected. Only when CSS is
@@ -816,7 +714,7 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
       } catch {
         /* no body instance styles (none carried) */
       }
-      chunks.push(bodyInstanceCss, chromeInstanceStyles.toCss());
+      chunks.push(bodyInstanceCss);
     }
     if (dataCss) chunks.push(dataCss);
     const merged = mergeInstanceStyleCss(...chunks);
@@ -842,27 +740,60 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
     }
     return undefined;
   })();
-  const themeFiles = assembleLocalTheme({
-    siteTitle,
-    themeSlug,
-    headerPart,
-    footerPart,
-    foundation,
-    mainClass,
-    capturedFonts: chromeCarried ? undefined : capturedFonts,
-    carrySourceAssets,
-    instanceStylesCss,
-    jetpackFormParityCss,
-    interiorChromeTemplates: [...interiorChromeBySlug.values()],
-    // Source body data-* attrs by permalink pathname — replayed by the
-    // wp_body_open shim so carried JS keyed on body[data-*] behaves
-    // identically (active-nav etc.). Only pages that HAVE attrs contribute.
-    bodyDataByPath: Object.fromEntries(
-      site.pages
-        .filter((p) => p.bodyData)
-        .map((p) => [p.slug === home.slug ? '/' : `/${p.slug}/`, p.bodyData!]),
-    ),
-  });
+  const mainWrapperClass = detectLayoutOffsetWrapper(home.html, carrySourceAssets?.css ?? '');
+  const bodyDataByPath = Object.fromEntries(
+    site.pages
+      .filter((p) => p.bodyData)
+      .map((p) => [p.slug === home.slug ? '/' : `/${p.slug}/`, p.bodyData!]),
+  );
+  const interiorChromeTemplates = [...interiorChromeBySlug.values()];
+  let engineResult: Awaited<ReturnType<typeof siteToTheme>>;
+  let headerPart = '';
+  let footerPart = '';
+  try {
+    engineResult = await siteToTheme(dir, {
+      outDir: join(outputDir, 'theme'),
+      themeMeta: { slug: themeSlug, name: siteTitle },
+      ...(foundationTranslation ? { foundationAggregates: foundationTranslation.foundationAggregates } : {}),
+      fetchImpl: dlaSafeFetch,
+      coverageFloor: 0,
+      carrySourceCss: false,
+      // Local-convert installs page bodies from DLA ingest; engine page-markup
+      // hoisting would emit orphaned lib-*.json block styles. This is
+      // intentional and correct, not a band-aid: local emit-blocks already
+      // dedupes element-layer instance styles as lib-i, so engine variation
+      // hoist would be a redundant second dedup whose output is orphaned.
+      variationHoist: false,
+      hooks: {
+        onFoundation: async (tokens: FoundationTokens): Promise<FoundationTokens> =>
+          foundationTranslation?.tokens ?? tokens,
+        onSection: async (section) => section,
+        onAssets: async (inventory): Promise<AssetVerdicts> => ({
+          keep: inventory.assets.map((asset) => asset.relPath),
+          decoration: [],
+        }),
+        onRefine: async (theme: ThemeModel): Promise<ThemeModel> =>
+          refineEngineThemeForDlaLocalPages(theme, {
+            site,
+            siteTitle,
+            themeSlug,
+            mainClass,
+            mainWrapperClass,
+            interiorChromeTemplates,
+            carrySourceAssets,
+            instanceStylesCss,
+            jetpackFormParityCss,
+            allowSourceChromeMounts: carriedCss && carriedJs,
+            ...(stickyEmitted ? { sticky: behaviors!.sticky } : {}),
+          }),
+      },
+    });
+    headerPart = engineResult.model.parts['header.html'] ?? '';
+    footerPart = engineResult.model.parts['footer.html'] ?? '';
+    for (const warning of engineResult.warnings) warnings.push(warning);
+  } catch (err) {
+    return ctx.errorResult(`theme build failed: ${(err as Error).message}`);
+  }
   // (carriedCss/carriedJs are hoisted above the chrome build — they also gate
   // the repair loop + summary below.)
 
@@ -884,11 +815,31 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
       ...(nativeBehaviors ? [buildInteractivityPlugin()] : []),
       ...(editableIslands && islandsConverted > 0 ? [buildEditableHtmlPlugin()] : []),
     ];
+    const functionsPhp = buildDlaFunctionsPhpContent({
+      siteTitle,
+      themeSlug,
+      carrySourceAssets,
+      instanceStylesCss,
+      jetpackFormParityCss,
+      bodyDataByPath,
+    });
+    const extraThemeFiles = buildDlaThemeSupplementFiles({
+      siteTitle,
+      themeSlug,
+      mainClass,
+      mainWrapperClass,
+      interiorChromeTemplates,
+      carrySourceAssets,
+      instanceStylesCss,
+      jetpackFormParityCss,
+    });
+    writeAtomicTextFile(join(engineResult.outDir, 'functions.php'), functionsPhp);
+    const hostFiles = engineThemeResultToHostFiles(engineResult, { functionsPhp, extraThemeFiles });
     const written = writeReplicaFilesToHost({
       wpRoot,
       themeSlug,
-      themeFiles,
-      assetSourceDir: join(outputDir, 'theme'),
+      themeFiles: hostFiles.themeFiles,
+      assetSourceDir: hostFiles.assetSourceDir,
       ...(blockPlugins.length > 0 ? { blockPlugins } : {}),
     });
     themeWritten = written.themeWritten;
@@ -1054,8 +1005,14 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
   try {
     const resolveHomeSelector = createSourceSelectorResolver(home.html);
     const localCensus = extractSourceLandmarksFromHtml(home.html);
+    const homeSections = localThemeAuditSections(home.html);
+    const headerSection =
+      homeSections.find((s) => s.role === 'header') ?? homeSections.find((s) => s.role === 'nav') ?? null;
+    const footerSection = homeSections.find((s) => s.role === 'footer') ?? null;
     const localPlacedRegions: PlacedRegion[] = [
-      ...homeSegments.filter((s) => s.role === 'body').map((s) => bodyPlacedRegion(s, resolveHomeSelector)),
+      ...homeSections
+        .filter((s) => s.role === 'body' && s.chromeSource !== 'layout-rail')
+        .map((s) => bodyPlacedRegion(s, resolveHomeSelector)),
     ];
     if (
       headerSection &&
@@ -1067,7 +1024,7 @@ export const convertLocalSiteHandler: Handler = async (args, ctx) => {
     if (footerSection && renderedPartContainsSourceSection(footerSection, footerPart)) {
       localPlacedRegions.push(chromePlacedRegion(footerSection, 'footer_part', resolveHomeSelector));
     }
-    for (const rail of homeSegments.filter((s) => s.chromeSource === 'layout-rail')) {
+    for (const rail of homeSections.filter((s) => s.chromeSource === 'layout-rail')) {
       if (renderedPartContainsSourceSection(rail, headerPart)) {
         localPlacedRegions.push(chromePlacedRegion(rail, 'header_part', resolveHomeSelector));
       }

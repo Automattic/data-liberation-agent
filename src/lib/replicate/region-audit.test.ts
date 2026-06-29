@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { reconcileRegions } from './region-audit.js';
+import { reconcileRegions } from '@automattic/blocks-engine/theme';
 import type { SourceLandmark } from './section-extract.js';
 
 const L = (o: Partial<SourceLandmark>): SourceLandmark =>

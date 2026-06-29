@@ -11,7 +11,7 @@
 import type { SectionSpec } from './section-extract.js';
 import type { RawConvertResult } from '../streaming/block-fixer-client.js';
 import { isSemanticHtml } from './semantic-html.js';
-import { sanitize } from './html-fallback.js';
+import { sanitize } from '@automattic/blocks-engine/theme';
 
 export interface RawConverter {
   rawConvert(items: string[]): Promise<RawConvertResult[]>;

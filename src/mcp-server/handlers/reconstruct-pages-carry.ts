@@ -24,7 +24,7 @@ import {
   type CarryPage,
   type ChromeVariant,
 } from '../../lib/replicate/theme-scaffold-carry.js';
-import { chromeSignature, stripActiveNavState } from '../../lib/replicate/chrome-canonicalize.js';
+import { chromeSignature, stripActiveNavState } from '@automattic/blocks-engine/theme';
 import { assembleResponsiveMobile } from '../../lib/replicate/carry-responsive-assemble.js';
 import { fetchMissingCarriedMedia } from '../../lib/replicate/carry-missing-media.js';
 import { localizeCarryFonts } from '../../lib/replicate/carry-fonts.js';

@@ -1,7 +1,7 @@
 import { describe, it, expect, afterAll } from 'vitest';
 import { mkdtempSync, rmSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { stripUnusedFontFaces, localizeCarryFonts, stripCssSourceMaps } from './carry-fonts.js';
+import { localizeCarryFonts } from './carry-fonts.js';
 
 function tmp(): string {
   const root = join(process.cwd(), '.tmp-test');
@@ -21,37 +21,6 @@ const unusedFace = `@font-face{font-family:'madefor-display';src:url(${UNUSED_SR
 const usageRule = `.title{font-family:'libre baskerville',serif}`;
 
 const okFetch = (async () => ({ ok: true, status: 200, arrayBuffer: async () => new TextEncoder().encode('FONT').buffer })) as unknown as typeof fetch;
-
-describe('stripUnusedFontFaces', () => {
-  it('drops @font-face whose family is not applied anywhere, keeps used ones', () => {
-    const css = `${usedFace}${unusedFace}${usageRule}`;
-    const usage = `${usageRule}`; // usage text (CSS minus @font-face)
-    const out = stripUnusedFontFaces(css, usage);
-    expect(out.stripped).toBe(1);
-    expect(out.css).toContain("font-family:'libre baskerville'"); // used face kept
-    expect(out.css).not.toContain('madefor-display'); // unused face removed entirely
-    expect(out.keptUrls).toEqual([USED_SRC]);
-  });
-
-  it('detects var-based usage: family named only inside a --font_N token still counts as used', () => {
-    const css = `${usedFace}:root{--font_2:normal normal bold 48px/1.2em 'libre baskerville',serif}.h{font-family:var(--font_2)}`;
-    const usage = `:root{--font_2:normal normal bold 48px/1.2em 'libre baskerville',serif}.h{font-family:var(--font_2)}`;
-    const out = stripUnusedFontFaces(css, usage);
-    expect(out.stripped).toBe(0);
-    expect(out.keptUrls).toEqual([USED_SRC]);
-  });
-});
-
-describe('stripCssSourceMaps', () => {
-  it('removes dev-only /*# sourceMappingURL=...*/ CDN comments, keeps real CSS', () => {
-    const css = `.a{color:red}\n/*# sourceMappingURL=https://static.parastorage.com/x/main.css.map*/\n.b{color:blue}`;
-    const out = stripCssSourceMaps(css);
-    expect(out).not.toContain('parastorage.com');
-    expect(out).not.toContain('sourceMappingURL');
-    expect(out).toContain('.a{color:red}');
-    expect(out).toContain('.b{color:blue}');
-  });
-});
 
 describe('localizeCarryFonts', () => {
   it('strips sourceMappingURL comments from CSS so no CDN URL survives even with no fonts', async () => {

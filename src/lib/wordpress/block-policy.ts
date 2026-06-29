@@ -12,7 +12,7 @@ export function customHtmlBlockError(context: string): string {
 // Pipeline-emitted coverage islands
 // ---------------------------------
 // The reconstruction pipeline legitimately emits `core/html` fallback islands
-// when a section's structured render drops content (html-fallback.ts). Those
+// when a section's structured render drops content (engine coverage island). Those
 // islands carry a deterministic `metadata.name` marker in the block delimiter
 // so the install-time wp:html ban can tell them apart from hand-authored
 // Custom HTML blocks. This is a QUALITY gate, not a security boundary against

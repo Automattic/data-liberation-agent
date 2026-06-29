@@ -2,8 +2,7 @@ import * as cheerio from 'cheerio';
 import type { CheerioAPI } from 'cheerio';
 import type { Element } from 'domhandler';
 import { buildSelector } from '../section-selector.js';
-import type { Section } from '../local-site/types.js';
-import { segmentPage } from './segment.js';
+import { segmentPage, type Section } from '@automattic/blocks-engine/theme';
 import type { ConservationLeak, ConservationLeakRole } from './conservation-leak.js';
 
 // Keep in lockstep with region-audit.ts. Exported for tests and future slice-3 reuse.

@@ -2,12 +2,14 @@
 import { composeInstantiate, type LayoutSkeleton } from '../compose-instantiate.js';
 import { validateBlockContract, type BlockContractIssue } from '../block-contract.js';
 import { blockMarkupRoundtrips } from '../../streaming/block-markup-validate.js';
-import { segmentPage } from './segment.js';
+import { segmentPage, type Section as EngineSection } from '@automattic/blocks-engine/theme';
 import { rewriteInternalHrefs } from '../local-site/href-rewrite.js';
 import { emitSectionBlocks } from './emit-blocks.js';
 import { findDroppedClasses, type SectionStylingDrop } from './styling-conservation.js';
 import type { InstanceStyleSheet } from './instance-styles.js';
-import type { LocalPage, NormalizeReportEntry, RevealBehavior, Section, SectionBehavior } from '../local-site/types.js';
+import type { LocalPage, NormalizeReportEntry, RevealBehavior, SectionBehavior } from '../local-site/types.js';
+
+type ComposeSection = EngineSection & { behavior?: SectionBehavior };
 
 export interface ComposePageResult {
   postContent: string;
@@ -33,7 +35,7 @@ export interface ComposePageOpts {
    * behavior per section (the wrapper block is singular). Runs on BOTH paths
    * — tagging guarantees verbatim inner (content survival); `native` decides
    * the wrapper. */
-  detectSection?: (s: Section) => SectionBehavior | undefined;
+  detectSection?: (s: EngineSection) => SectionBehavior | undefined;
   /** nativeBehaviors path marker. true → tagged sections emit the dla/<kind>
    * directive wrapper; false/absent (carry/default) → the SAME verbatim inner
    * rides a plain core/group wrapper (no plugin dependency; the carried
@@ -67,9 +69,9 @@ export function composePage(page: LocalPage, opts: ComposePageOpts = {}): Compos
   const sourceHtml = opts.pageSlugs?.length
     ? rewriteInternalHrefs(page.html, opts.pageSlugs)
     : page.html;
-  const bodySections = segmentPage(sourceHtml)
+  const bodySections: ComposeSection[] = segmentPage(sourceHtml)
     .filter((s) => s.role === 'body')
-    .map((s) => {
+    .map((s): ComposeSection => {
       const sectionBehavior = opts.detectSection?.(s);
       // Specific per-section behavior beats the uniform reveal (one wrapper).
       if (sectionBehavior) return { ...s, behavior: sectionBehavior };

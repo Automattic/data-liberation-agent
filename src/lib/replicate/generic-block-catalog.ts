@@ -18,7 +18,7 @@ import * as cheerio from 'cheerio';
 import type { CheerioAPI, Cheerio } from 'cheerio';
 import type { Element } from 'domhandler';
 import type { AdapterBlocks, BlockRecipeContext } from '../../adapters/page-actions.js';
-import { sanitize } from './html-fallback.js';
+import { sanitize } from '@automattic/blocks-engine/theme';
 import { guessEmbedProvider, buildEmbedBlock } from './embed-block.js';
 import { PIPELINE_ISLAND_OPENER } from '../wordpress/block-policy.js';
 

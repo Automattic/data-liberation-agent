@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { extractSourceLandmarksFromHtml } from './region-census.js';
+import { extractSourceLandmarksFromHtml } from '@automattic/blocks-engine/theme';
 
 describe('extractSourceLandmarksFromHtml', () => {
   it('includes body-level aside and complementary landmarks but excludes nested-in-content aside', () => {

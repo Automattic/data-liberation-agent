@@ -117,7 +117,7 @@ const BODY_COPY_CONTAINMENT_THRESHOLD = 0.8;
  *
  * The opener may carry attribute JSON — pipeline coverage islands are marked
  * with `{"metadata":{"name":"lib-coverage-island"}}` (see block-policy.ts /
- * html-fallback.ts) — so the opener is matched up to its `-->` rather than
+ * the engine coverage island) — so the opener is matched up to its `-->` rather than
  * requiring the bare legacy form.
  */
 function stripHtmlFallbackBlocks(markup: string): string {

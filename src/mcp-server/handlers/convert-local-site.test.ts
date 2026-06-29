@@ -35,6 +35,8 @@ const regionCensusFailure = vi.hoisted(() => ({ throwOnExtract: false }));
 const assembleLocalThemeCalls = vi.hoisted(
   () =>
     [] as Array<{
+      mainClass?: string;
+      mainWrapperClass?: string;
       interiorChromeTemplates?: Array<{
         partSlug: string;
         layoutWrapperTag?: string;
@@ -97,9 +99,8 @@ vi.mock('../../lib/screenshot/compare.js', () => ({
     ],
   })),
 }));
-vi.mock('../../lib/replicate/local-theme/google-fonts.js', async (importOriginal) => ({
-  ...(await importOriginal<object>()),
-  selfHostGoogleFonts: vi.fn(async () => ({ faces: [], errors: [] })),
+vi.mock('../../lib/replicate/local-theme/google-fonts.js', () => ({
+  selfHostGoogleFonts: vi.fn(async () => ({ faces: [], localizedCss: '', errors: [] })),
 }));
 vi.mock('../../lib/replicate/local-theme/theme-files.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../lib/replicate/local-theme/theme-files.js')>();
@@ -114,10 +115,11 @@ vi.mock('../../lib/replicate/local-theme/theme-files.js', async (importOriginal)
 vi.mock('../../lib/replicate/local-site/jetpack-form-css.js', () => ({
   buildJetpackFormParityCss: buildJetpackFormParityCssMock,
 }));
-vi.mock('../../lib/replicate/region-census.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../lib/replicate/region-census.js')>();
+vi.mock('@automattic/blocks-engine/theme', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@automattic/blocks-engine/theme')>();
   return {
     ...actual,
+    siteToTheme: vi.fn(async (...args: Parameters<typeof actual.siteToTheme>) => actual.siteToTheme(...args)),
     extractSourceLandmarksFromHtml: (html: string) => {
       if (regionCensusFailure.throwOnExtract) throw new Error('synthetic region census failure');
       return actual.extractSourceLandmarksFromHtml(html);
@@ -217,6 +219,7 @@ import { compareScreenshotDirs } from '../../lib/screenshot/compare.js';
 import { probePair } from '../../lib/replicate/parity/parity-probe.js';
 import { composedSidecarPath } from '../../lib/streaming/block-markup-validate.js';
 import { EDITABLE_PLUGIN_SLUG } from '../../blocks/editable-html-plugin.js';
+import { siteToTheme } from '@automattic/blocks-engine/theme';
 
 const FIXTURE_TMP = join(process.cwd(), '.tmp-test');
 
@@ -243,6 +246,27 @@ function makeSite(): string {
   // Stage 1d carry: linked CSS + JS the collector picks up from the index.html document order.
   writeFileSync(join(dir, 'styles.css'), 'body { background: #f7f2e9; }\n.hero h1 { font-size: 4rem; }');
   writeFileSync(join(dir, 'site.js'), "document.documentElement.classList.add('js');");
+  return dir;
+}
+
+function makeFixedSidebarOffsetSite(): string {
+  mkdirSync(FIXTURE_TMP, { recursive: true });
+  const dir = mkdtempSync(join(FIXTURE_TMP, 'cls-fixed-sidebar-offset-'));
+  writeFileSync(
+    join(dir, 'index.html'),
+    '<html><head><title>Docs</title><link rel="stylesheet" href="styles.css"></head><body>' +
+      '<div class="layout"><aside class="sidebar"><nav><a href="about.html">About</a></nav></aside>' +
+      '<div class="main-area"><main class="content"><section id="hero"><h1>Docs</h1><p>Welcome.</p></section></main></div></div>' +
+      '</body></html>',
+  );
+  writeFileSync(
+    join(dir, 'about.html'),
+    '<html><head><title>About</title></head><body><main><section id="about"><h1>About</h1></section></main></body></html>',
+  );
+  writeFileSync(
+    join(dir, 'styles.css'),
+    '.layout{display:flex}.sidebar{position:fixed;width:268px}.main-area{margin-left:268px}',
+  );
   return dir;
 }
 
@@ -655,6 +679,7 @@ beforeEach(() => {
   // from a failing repair test can't bleed into subsequent tests.
   vi.mocked(compareScreenshotDirs).mockReset().mockResolvedValue(BASE_COMPARE_RESULT as unknown as Awaited<ReturnType<typeof compareScreenshotDirs>>);
   vi.mocked(probePair).mockReset().mockResolvedValue([]);
+  vi.mocked(siteToTheme).mockClear();
   buildJetpackFormParityCssMock.mockReset().mockReturnValue({ css: '' });
 });
 
@@ -760,6 +785,106 @@ describe('convertLocalSiteHandler', () => {
       // frontPageId is the HOME page's postId.
       const homeAssign = payload.templateAssigns.find((a) => a.slug === 'home');
       expect(payload.frontPageId).toBe(homeAssign?.postId);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(sitePath, { recursive: true, force: true });
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
+  it('threads fixed-sidebar layout offset wrapper detection into DLA template assembly', async () => {
+    const dir = makeFixedSidebarOffsetSite();
+    const sitePath = makeStudioSite();
+    const outDir = mkdtempSync(join(FIXTURE_TMP, 'cls-fixed-sidebar-offset-out-'));
+    try {
+      const res = await convertLocalSiteHandler(
+        {
+          dir,
+          studioSitePath: sitePath,
+          outputDir: outDir,
+          themeSlug: 'docs-local',
+          siteTitle: 'Docs',
+          skipDesign: true,
+        },
+        ctx,
+      );
+
+      expect(res.isError).toBeFalsy();
+      expect(assembleLocalThemeCalls.some((call) => call.mainWrapperClass === 'main-area')).toBe(true);
+      expect(assembleLocalThemeCalls.some((call) => call.mainClass === 'content')).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(sitePath, { recursive: true, force: true });
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
+  it('siteToTheme rewire handler shape disables engine variation hoist and keeps DLA page content authoritative', async () => {
+    const dir = makeSite();
+    const sitePath = makeStudioSite();
+    const outDir = mkdtempSync(join(FIXTURE_TMP, 'cls-sitetotheme-shape-out-'));
+    try {
+      const res = await convertLocalSiteHandler(
+        {
+          dir,
+          studioSitePath: sitePath,
+          outputDir: outDir,
+          themeSlug: 'acme-local',
+          siteTitle: 'Acme',
+          skipDesign: true,
+        },
+        ctx,
+      );
+      expect(res.isError).toBeFalsy();
+      expect(vi.mocked(siteToTheme)).toHaveBeenCalledTimes(1);
+      const [, siteToThemeOptions] = vi.mocked(siteToTheme).mock.calls[0]!;
+      expect(siteToThemeOptions).toMatchObject({
+        coverageFloor: 0,
+        carrySourceCss: false,
+        variationHoist: false,
+      });
+      const summary = JSON.parse(res.content[0].text) as Record<string, unknown>;
+      expect(Object.keys(summary).sort()).toEqual([
+        'carried',
+        'conservation',
+        'conservationLeaks',
+        'designCaptured',
+        'emptySidecars',
+        'failedInstalls',
+        'frontPageSet',
+        'ingest',
+        'installed',
+        'islandsConverted',
+        'missingSidecars',
+        'pages',
+        'themeSlug',
+        'themeWritten',
+        'warnings',
+      ]);
+
+      const themeDir = join(sitePath, 'wp-content', 'themes', 'acme-local');
+      const frontPageTemplate = readFileSync(join(themeDir, 'templates', 'front-page.html'), 'utf8');
+      const pageLocalTemplate = readFileSync(join(themeDir, 'templates', 'page-local.html'), 'utf8');
+      expect(frontPageTemplate).toContain('wp:post-content');
+      expect(pageLocalTemplate).toContain('wp:post-content');
+      expect(frontPageTemplate).not.toContain('<h1>Hi</h1>');
+      expect(pageLocalTemplate).not.toContain('<h1>Hi</h1>');
+
+      const themeJson = JSON.parse(readFileSync(join(themeDir, 'theme.json'), 'utf8')) as {
+        customTemplates?: Array<{ name: string }>;
+      };
+      expect(themeJson.customTemplates?.map((entry) => entry.name)).toContain('page-local');
+      expect(existsSync(join(outDir, 'theme', 'functions.php'))).toBe(true);
+      expect(existsSync(join(themeDir, 'functions.php'))).toBe(true);
+      const homeContent = installedPosts.find((post) => post.slug === 'home')?.content ?? '';
+      expect(homeContent).toContain('wp:heading');
+      expect(homeContent).toContain('Hi');
+
+      const assigns = [...finalizeCalls[0].payload.templateAssigns].sort((a, b) => a.slug.localeCompare(b.slug));
+      expect(assigns.map((a) => ({ slug: a.slug, template: a.template }))).toEqual([
+        { slug: 'about', template: 'page-local' },
+        { slug: 'home', template: 'page-local' },
+      ]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
       rmSync(sitePath, { recursive: true, force: true });
@@ -992,6 +1117,12 @@ describe('convertLocalSiteHandler', () => {
       const themeDir = join(sitePath, 'wp-content', 'themes', 'acme-local');
       expect(existsSync(join(themeDir, 'assets', 'css', 'source.css'))).toBe(true);
       expect(existsSync(join(themeDir, 'assets', 'js', 'source.js'))).toBe(true);
+      expect(readFileSync(join(themeDir, 'assets', 'css', 'source.css'), 'utf8')).toContain(
+        'body { background: #f7f2e9; }',
+      );
+      expect(readFileSync(join(themeDir, 'style.css'), 'utf8')).not.toContain(
+        'body { background: #f7f2e9; }',
+      );
       // carry mode strips theme.json styles — source CSS is the design authority
       const themeJson = JSON.parse(readFileSync(join(themeDir, 'theme.json'), 'utf8')) as { styles?: unknown };
       expect(themeJson.styles).toBeUndefined();
@@ -1241,6 +1372,27 @@ describe('convertLocalSiteHandler', () => {
     }
   });
 
+  it('does not emit an empty header mount when source js is not carried', async () => {
+    const dir = makeEmptyHeaderMountOnlySite();
+    const sitePath = makeStudioSite();
+    const outDir = mkdtempSync(join(FIXTURE_TMP, 'cls-empty-header-mount-no-js-out-'));
+    try {
+      const res = await convertLocalSiteHandler(
+        { dir, studioSitePath: sitePath, outputDir: outDir, themeSlug: 'acme-local', siteTitle: 'Acme', skipDesign: true, carryJs: false },
+        ctx,
+      );
+      expect(res.isError).toBeFalsy();
+      const headerHtml = readFileSync(join(sitePath, 'wp-content', 'themes', 'acme-local', 'parts', 'header.html'), 'utf8');
+      expect(headerHtml).not.toContain('"anchor":"siteHeader"');
+      expect(headerHtml).not.toContain('<div id="siteHeader"');
+      expect(headerHtml).toContain('wp:site-title');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(sitePath, { recursive: true, force: true });
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
   it('carries a layout-level side rail into the source header part', async () => {
     const dir = makeSideRailSite();
     const sitePath = makeStudioSite();
@@ -1311,7 +1463,7 @@ describe('convertLocalSiteHandler', () => {
     }
   });
 
-  it('bases local region audit on rendered header markup when chrome intent is dropped', async () => {
+  it('bases local region audit on engine-refined header markup when source nav chrome is preserved', async () => {
     const dir = makeNavOverlayMountSite();
     const sitePath = makeStudioSite();
     const outDir = mkdtempSync(join(FIXTURE_TMP, 'cls-region-audit-rendered-drop-out-'));
@@ -1328,22 +1480,24 @@ describe('convertLocalSiteHandler', () => {
         },
         ctx,
       );
-      expect(res.isError).toBe(true);
+      expect(res.isError).toBeFalsy();
       const summary = JSON.parse(res.content[0].text) as {
         conservation: { ok: boolean; status: string; unassignedRegions: number; hardFailRegions: number };
       };
       expect(summary.conservation).toMatchObject({
-        ok: false,
-        status: 'fail',
-        unassignedRegions: 1,
-        hardFailRegions: 1,
+        ok: true,
+        status: 'pass',
+        unassignedRegions: 0,
+        hardFailRegions: 0,
       });
+      const headerHtml = readFileSync(join(sitePath, 'wp-content', 'themes', 'acme-local', 'parts', 'header.html'), 'utf8');
+      expect(headerHtml).toContain('primary-nav');
       const report = JSON.parse(readFileSync(join(outDir, 'region-audit.json'), 'utf8')) as {
         pages: Array<{ assignments: Array<{ landmark: { selector: string; role: string }; kind: string }> }>;
       };
       expect(report.pages[0].assignments).toContainEqual({
         landmark: expect.objectContaining({ selector: 'nav#primary-nav', role: 'nav' }),
-        kind: 'unassigned',
+        kind: 'header_part',
       });
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -1608,7 +1762,7 @@ describe('convertLocalSiteHandler', () => {
     }
   });
 
-  it('reports local region-audit conservation as warn by default without changing install summary fields', async () => {
+  it('reports local region-audit conservation as pass without changing install summary fields', async () => {
     const dir = makeHomeComplementaryRailSite();
     const sitePath = makeStudioSite();
     const outDir = mkdtempSync(join(FIXTURE_TMP, 'cls-region-audit-warn-out-'));
@@ -1639,9 +1793,9 @@ describe('convertLocalSiteHandler', () => {
       expect(summary.themeSlug).toBe('acme-local');
       expect(summary.frontPageSet).toBe(true);
       expect(summary.conservationLeaks.artifact).toBe(join(outDir, 'conservation-leaks.json'));
-      expect(summary.conservation.status).toBe('warn');
+      expect(summary.conservation.status).toBe('pass');
       expect(summary.conservation.ok).toBe(true);
-      expect(summary.conservation.unassignedRegions).toBe(1);
+      expect(summary.conservation.unassignedRegions).toBe(0);
       expect(summary.conservation.hardFailRegions).toBe(0);
       expect(summary.conservation.artifact).toBe(join(outDir, 'region-audit.json'));
     } finally {
@@ -1651,7 +1805,7 @@ describe('convertLocalSiteHandler', () => {
     }
   });
 
-  it('hard-fails only an opt-in unassigned real rail', async () => {
+  it('does not hard-fail an opt-in rail that the engine-refined theme preserves', async () => {
     const dir = makeHomeComplementaryRailSite();
     const sitePath = makeStudioSite();
     const outDir = mkdtempSync(join(FIXTURE_TMP, 'cls-region-audit-fail-out-'));
@@ -1669,15 +1823,15 @@ describe('convertLocalSiteHandler', () => {
         },
         ctx,
       );
-      expect(res.isError).toBe(true);
+      expect(res.isError).toBeFalsy();
       const summary = JSON.parse(res.content[0].text) as {
         conservation: { ok: boolean; status: string; unassignedRegions: number; hardFailRegions: number };
       };
       expect(summary.conservation).toMatchObject({
-        ok: false,
-        status: 'fail',
-        unassignedRegions: 1,
-        hardFailRegions: 1,
+        ok: true,
+        status: 'pass',
+        unassignedRegions: 0,
+        hardFailRegions: 0,
       });
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -1686,7 +1840,7 @@ describe('convertLocalSiteHandler', () => {
     }
   });
 
-  it('does not hard-fail an unassigned plain aside outside the hard-fail role set', async () => {
+  it('does not hard-fail a placed plain aside outside the hard-fail role set', async () => {
     const dir = makeHomePlainAsideSite();
     const sitePath = makeStudioSite();
     const outDir = mkdtempSync(join(FIXTURE_TMP, 'cls-region-audit-aside-out-'));
@@ -1710,8 +1864,8 @@ describe('convertLocalSiteHandler', () => {
       };
       expect(summary.conservation).toMatchObject({
         ok: true,
-        status: 'warn',
-        unassignedRegions: 1,
+        status: 'pass',
+        unassignedRegions: 0,
         hardFailRegions: 0,
       });
     } finally {

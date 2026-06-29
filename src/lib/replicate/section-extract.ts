@@ -835,7 +835,7 @@ export interface SectionSpec {
   forms?: SectionSpecForm[];
   /**
    * Sanitizable source outerHTML of the section, for the coverage-gated
-   * `core/html` verbatim fallback (see section-coverage.ts / html-fallback.ts).
+   * `core/html` verbatim fallback (see engine coverage helpers).
    * Present only when the section's HTML fit under SECTION_HTML_FALLBACK_CAP —
    * truncated markup can't be safely emitted, so an over-cap section is simply
    * not fallback-eligible.
@@ -846,7 +846,7 @@ export interface SectionSpec {
    * element's relevant computed styles inlined onto a `style` attribute, so it
    * renders faithfully with NO external CSS, NO cascade to reconstruct, and NO
    * `:root` vars to scope. Powers the R4b deterministic styled-island floor (see
-   * the section-rebuild R4 design + html-fallback.ts): when present, the
+   * the section-rebuild R4 design + engine coverage island): when present, the
    * coverage-gated fallback prefers this over the unstyled `sectionHtml` so a
    * CSS-layout section renders styled instead of bare. Captured once during the
    * fidelity walk; subject to the same SECTION_HTML_FALLBACK_CAP as sectionHtml.

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { extractGoogleFontCssUrls, selfHostGoogleFonts } from './google-fonts.js';
+import { selfHostGoogleFonts } from './google-fonts.js';
 
 const FIXTURE_TMP = join(process.cwd(), '.tmp-test');
 
@@ -21,18 +21,6 @@ const GOOGLE_CSS = `
   src: url(https://fonts.gstatic.com/s/fraunces/v1/abc900.woff2) format('woff2');
 }
 `;
-
-describe('extractGoogleFontCssUrls', () => {
-  it('finds css2 urls in <link> tags and CSS @import', () => {
-    const html = `<link rel="stylesheet" href="${CSS2_URL}">`;
-    const css = `@import url('${CSS2_URL}'); body { color: red; }`;
-    expect(extractGoogleFontCssUrls([html, css])).toEqual([CSS2_URL]); // deduped
-  });
-
-  it('returns empty for sources without google fonts', () => {
-    expect(extractGoogleFontCssUrls(['<link href="styles.css">', 'body{}'])).toEqual([]);
-  });
-});
 
 describe('selfHostGoogleFonts', () => {
   it('fetches css, downloads woff2 faces into themeDir, returns LocalFontFaces', async () => {

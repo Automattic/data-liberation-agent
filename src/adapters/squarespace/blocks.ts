@@ -35,7 +35,7 @@ import * as cheerio from 'cheerio';
 import type { CheerioAPI, Cheerio } from 'cheerio';
 import type { Element } from 'domhandler';
 import type { AdapterBlocks, BlockRecipeContext } from '../page-actions.js';
-import { sanitize } from '../../lib/replicate/html-fallback.js';
+import { sanitize } from '@automattic/blocks-engine/theme';
 import { buildEmbedBlock } from '../../lib/replicate/embed-block.js';
 import { PIPELINE_ISLAND_OPENER } from '../../lib/wordpress/block-policy.js';
 

@@ -101,7 +101,7 @@ export interface SectionParityMetrics {
   sourceHasMedia: boolean;          // spec.images.length > 0
   replicaHasMedia: boolean;         // measured: <img> or background-image present in the section
   sourceIsCssLayout: boolean;       // spec.columnCount >= 2 || (spec.cells?.length ?? 0) >= 2
-  isHtmlFallback: boolean;          // a provenance flag `html-fallback#<i>` exists for this section
+  isHtmlFallback: boolean;          // a provenance flag for the unstyled coverage island exists
   sectionPresentInReplica: boolean; // the replica rendered a section at this index
 }
 
@@ -112,7 +112,7 @@ export interface SourceSectionDescriptor {
   backgroundColor: string;   // spec.backgroundColor
   hasMedia: boolean;         // spec.images.length > 0
   isCssLayout: boolean;      // columnCount >= 2 || cells >= 2
-  isHtmlFallback: boolean;   // a provenance flag `html-fallback#<i>` exists for this section
+  isHtmlFallback: boolean;   // a provenance flag for the unstyled coverage island exists
 }
 
 /** Replica-side measurement read from the live DOM (see `verify.ts`). */

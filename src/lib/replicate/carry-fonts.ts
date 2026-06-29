@@ -21,26 +21,11 @@
  */
 import { mkdirSync, writeFileSync, existsSync, copyFileSync } from 'node:fs';
 import { join, relative, dirname } from 'node:path';
+import { stripCssSourceMaps, stripUnusedCarryFontFaces } from '@automattic/blocks-engine/theme';
 import { safeFetch } from '../media-fetch/index.js';
 
-const FONT_EXT = /\.(woff2|woff|ttf|otf|eot)(?:[?#]|$)/i;
 // @font-face has no nested braces, so [^{}]* safely bounds one block (multi-line ok).
 const FONT_FACE_BLOCK = /@font-face\s*\{[^{}]*\}/gi;
-const URL_IN_DECL = /url\(\s*(['"]?)([^'")]+?)\1\s*\)/gi;
-const FAMILY_DECL = /font-family\s*:\s*(['"]?)([^;'"}]+)\1/i;
-
-/** Extract the font src URLs from an @font-face block body (remote or font-ext, never data:). */
-function fontUrlsInBlock(block: string): string[] {
-  const urls: string[] = [];
-  const re = new RegExp(URL_IN_DECL.source, 'gi');
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(block)) !== null) {
-    const v = m[2].trim();
-    if (v.startsWith('data:')) continue;
-    if (/^(https?:)?\/\//i.test(v) || FONT_EXT.test(v)) urls.push(v);
-  }
-  return urls;
-}
 
 export interface StripResult {
   /** CSS with unused @font-face blocks removed. */
@@ -49,37 +34,6 @@ export interface StripResult {
   keptUrls: string[];
   /** Number of @font-face blocks removed. */
   stripped: number;
-}
-
-/**
- * Pure: remove every @font-face whose family is not mentioned in `usageText` (the CSS
- * with @font-face blocks elided, where fonts are actually applied — literal `font-family`
- * + Wix `--font_N` tokens). Returns the cleaned CSS and the kept faces' src URLs.
- */
-export function stripUnusedFontFaces(css: string, usageText: string): StripResult {
-  const usage = usageText.toLowerCase();
-  const keptUrls = new Set<string>();
-  let stripped = 0;
-  const out = css.replace(FONT_FACE_BLOCK, (block) => {
-    const fam = FAMILY_DECL.exec(block);
-    const family = fam ? fam[2].trim() : null;
-    const used = family != null && family.length > 0 && usage.includes(family.toLowerCase());
-    if (used) {
-      for (const u of fontUrlsInBlock(block)) keptUrls.add(u);
-      return block;
-    }
-    stripped++;
-    return '';
-  });
-  return { css: out, keptUrls: [...keptUrls], stripped };
-}
-
-/**
- * Remove dev-only CSS sourceMappingURL comments (often CDN URLs) — inert for rendering,
- * and the sourcemap won't exist in the carry, so dropping them is lossless.
- */
-export function stripCssSourceMaps(css: string): string {
-  return css.replace(/\/\*#?\s*sourceMappingURL=[^*]*\*\//gi, '');
 }
 
 /** Stable, collision-free local filename from a font URL (full path, sanitized). */
@@ -127,7 +81,7 @@ export async function localizeCarryFonts(
   const keptUrls = new Set<string>();
   let fontFacesStripped = 0;
   for (const f of cssFiles) {
-    const r = stripUnusedFontFaces(f.content, usageText);
+    const r = stripUnusedCarryFontFaces(f.content, usageText);
     strippedByPath.set(f.path, stripCssSourceMaps(r.css));
     r.keptUrls.forEach((u) => keptUrls.add(u));
     fontFacesStripped += r.stripped;

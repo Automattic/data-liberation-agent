@@ -61,6 +61,8 @@ What you'll see: the agent detects the platform, inventories all pages/posts/pro
 
 The result is a responsive, editable WordPress block theme — not a static copy.
 
+Note: the engine CLI / `siteToTheme` consumes static source directories; liberating an external dynamic site still starts with DLA's Playwright capture, which feeds captured SectionSpecs into the engine.
+
 ### Codex
 
 ```bash

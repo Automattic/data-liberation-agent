@@ -1,6 +1,6 @@
 // src/lib/replicate/variation-hoist.test.ts
 import { describe, it, expect } from 'vitest';
-import { applyHoistSwaps, hoistVariations, HOIST_MIN_INSTANCES } from './variation-hoist.js';
+import { applyHoistSwaps, hoistVariations, HOIST_MIN_INSTANCES } from '@automattic/blocks-engine/theme';
 
 const styleA = '{"style":{"color":{"background":"#102030"},"spacing":{"padding":{"top":"24px","bottom":"24px"}}}}';
 const groupWith = (attrs: string) =>

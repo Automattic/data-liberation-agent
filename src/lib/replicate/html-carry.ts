@@ -1,7 +1,7 @@
 //
 // Carry-and-scope HTML sanitizer
 // ================================
-// Unlike `html-fallback.ts` (which strips ALL CSS and returns a bare
+// Unlike the engine coverage island (which strips ALL CSS and returns a bare
 // `core/html` block), `carryHtml` preserves class names and structure so
 // that scoped CSS generated from the source can still match selectors.
 // It EXTRACTS inline `<style>` blocks (returned separately for scoping),

@@ -17,29 +17,14 @@
 //
 import { mkdirSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
-import type { LocalFontFace } from '../font-capture.js';
+import type { LocalFontFace } from '@automattic/blocks-engine/theme';
 import { assertPublicHttpUrl } from '../../media-fetch/index.js';
-
-// Matches all https://fonts.googleapis.com/css or css2 query-string URLs found in
-// href attributes, @import rules, or bare text. Handles HTML-encoded & (&amp;).
-const GOOGLE_CSS_RE = /https:\/\/fonts\.googleapis\.com\/css2?\?[^"'\s)]+/g;
 
 // Chrome UA so Google serves woff2 (not woff/ttf fallbacks).
 const WOFF2_UA =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
 
 const FONT_EXTENSIONS = new Set(['woff2', 'woff', 'ttf', 'otf', 'eot']);
-
-/** Find unique Google-Fonts css/css2 URLs across html/css source strings (deduped). */
-export function extractGoogleFontCssUrls(sources: string[]): string[] {
-  const found = new Set<string>();
-  for (const src of sources) {
-    for (const m of src.matchAll(GOOGLE_CSS_RE)) {
-      found.add(m[0].replace(/&amp;/g, '&'));
-    }
-  }
-  return [...found];
-}
 
 // ---------------------------------------------------------------------------
 // Local @font-face parser (mirrors parseFontFaces logic; no gstatic filter)

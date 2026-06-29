@@ -13,7 +13,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { PaletteToken } from './footer-color.js';
-import type { FontFamilyToken } from './page-reconstruct.js';
+import type { FontFamilyToken } from '@automattic/blocks-engine/theme';
 
 export interface CarryDesignTokens {
   /** {slug, hex} for reconstructPagePattern color mapping. */

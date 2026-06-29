@@ -11,7 +11,12 @@
 
 import { mkdirSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { absolutizeFontUrl, fontFilename, type ParsedFontFace, type LocalFontFace } from './font-capture.js';
+import {
+  absolutizeFontUrl,
+  fontFilename,
+  type CapturedParsedFontFace,
+  type LocalFontFace,
+} from '@automattic/blocks-engine/theme';
 import { safeFetch } from '../media-fetch/index.js';
 
 export interface DownloadFontsOpts {
@@ -31,7 +36,7 @@ export interface DownloadFontsResult {
   /** Successfully downloaded faces with their theme-relative local paths. */
   faces: LocalFontFace[];
   /** Faces that failed to download, with the error message. */
-  errors: Array<{ face: ParsedFontFace; error: string }>;
+  errors: Array<{ face: CapturedParsedFontFace; error: string }>;
 }
 
 /**
@@ -40,7 +45,7 @@ export interface DownloadFontsResult {
  * @font-face CSS / theme.json) plus any failures.
  */
 export async function downloadFonts(
-  parsed: ParsedFontFace[],
+  parsed: CapturedParsedFontFace[],
   opts: DownloadFontsOpts,
 ): Promise<DownloadFontsResult> {
   const fontsSubdir = opts.fontsSubdir ?? 'assets/fonts';

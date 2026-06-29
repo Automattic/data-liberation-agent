@@ -25,8 +25,9 @@
 // theme.json (see theme-scaffold-carry) and the caller passes the same tokens here.
 //
 import { rewriteThroughMediaMap, type SectionSpec } from './section-extract.js';
-import { reconstructPagePattern, type FontFamilyToken } from './page-reconstruct.js';
+import { reconstructPagePattern } from './page-reconstruct.js';
 import type { PaletteToken } from './footer-color.js';
+import type { FontFamilyToken } from '@automattic/blocks-engine/theme';
 
 /** Shape of a persisted `sections/<slug>.json` capture (see SectionSpecsStore). */
 export interface SectionSpecFile {
