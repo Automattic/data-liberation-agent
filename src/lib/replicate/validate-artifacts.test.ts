@@ -144,6 +144,30 @@ describe('validateArtifacts — provenance evasions (regression)', () => {
     }] });
     expect(r.ok).toBe(false);
   });
+
+  it('passes a heading that differs from its source entry only by inter-segment whitespace', () => {
+    // The engine's native reconstruction emits adjacent inline nodes (e.g. an
+    // email <span> followed by a phone <span>) with a normalized space between
+    // them, while the captured spec concatenated the same two nodes with NO
+    // separator. Same source text, different whitespace — must NOT fail.
+    const r = validateArtifacts({ patterns: [{
+      slug: 'site/section-1',
+      php: `<!-- wp:heading --><h2>dsm@swiftlumber.com 251-446-4123</h2><!-- /wp:heading -->`,
+      spec: { interactionModel: 'cta', expectedText: ['dsm@swiftlumber.com251-446-4123'], expectedAssets: [] },
+    }] });
+    expect(r.ok).toBe(true);
+  });
+
+  it('still rejects scattered words even under whitespace-insensitive matching', () => {
+    // Guard: the whitespace fallback must not let "win award" stitch across two
+    // separate entries (the cross-entry rejection above must survive).
+    const r = validateArtifacts({ patterns: [{
+      slug: 'site/section-1',
+      php: `<!-- wp:heading --><h2>Win Award</h2><!-- /wp:heading -->`,
+      spec: { interactionModel: 'cta', expectedText: ['we win', 'award every year'], expectedAssets: [] },
+    }] });
+    expect(r.ok).toBe(false);
+  });
 });
 
 describe('validateArtifacts — body-copy provenance (paraphrase hard-fails)', () => {
