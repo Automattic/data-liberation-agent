@@ -1137,17 +1137,39 @@ describe('reconstructPagePattern — section-level media recovery (no island for
     expect(r.provenanceFlags.some((f) => f.includes('html-fallback'))).toBe(false);
   });
 
-  it('does NOT recover a remote-CDN image — the section still islands', () => {
-    // A non-uploads URL cannot be emitted as a block image (the gate bans remote
-    // CDN URLs), so the island remains the only loss-free form.
+  it('renders a native missing-media placeholder for an un-migrated remote-CDN image (no leak, no island)', () => {
+    // Under the structured strategy the section renders natively. A non-uploads
+    // image URL cannot ship (the gate bans remote CDN URLs), so it becomes a
+    // native missing-media placeholder rather than leaking the URL — the heading
+    // survives, there is no remote URL, and no verbatim island.
     const s = section({
       headings: ['Our Story'],
       images: [{ url: 'https://cdn.test/photo.jpg', sourceUrl: 'https://cdn.test/photo.jpg', alt: '', kind: 'img', width: 800, height: 600 }],
       sectionHtml: '<section><h2>Our Story</h2><img src="https://cdn.test/photo.jpg"/></section>',
     } as Partial<SectionSpec>);
     const r = reconstructPagePattern([s], opts);
-    expect(r.body).toContain('<!-- wp:html {"metadata":{"name":"lib-coverage-island"}} -->');
+    expect(r.body).not.toContain('cdn.test'); // no remote URL leak
+    expect(r.body).toContain('Our Story'); // heading preserved
     expect(r.provenanceFlags.some((f) => /media-recovered/.test(f))).toBe(false);
+  });
+
+  it('rewrites a native wp:image remote src via mediaUrlMap (no remote leak past the gate)', () => {
+    // The engine's native reconstruction emits the source <img src> verbatim
+    // (a remote CDN variant URL), which it does NOT route through mediaUrlMap —
+    // only the island path does. reconstructPagePattern must apply a media
+    // post-pass so the migrated upload URL replaces the remote one; otherwise a
+    // hasUnmigratedRemoteAsset gate failure ships on every native image page.
+    const remote =
+      'https://static.wixstatic.com/media/abc123~mv2.jpg/v1/fill/w_680,h_510,q_90/abc123~mv2.jpg';
+    const s = section({
+      headings: ['Our Team'],
+      images: [{ url: remote, sourceUrl: remote, alt: '', kind: 'img', width: 680, height: 510 }],
+      sectionHtml: `<section><h2>Our Team</h2><img src="${remote}" alt=""/></section>`,
+    } as Partial<SectionSpec>);
+    const mediaUrlMap = new Map([[remote, '/wp-content/uploads/2026/06/abc123.jpg']]);
+    const r = reconstructPagePattern([s], { ...opts, mediaUrlMap });
+    expect(r.body).toContain('/wp-content/uploads/2026/06/abc123.jpg');
+    expect(r.body).not.toContain('static.wixstatic.com');
   });
 
   it('does NOT recover a sub-90px decorative glyph — the section still islands', () => {
@@ -1575,15 +1597,19 @@ describe('reconstructPagePattern — captured forms → jetpack blocks', () => {
     expect(r.body).not.toContain('jetpack/');
   });
 
-  it('does NOT double the form when the section falls back to a core/html island (v1: island keeps the verbatim source form)', () => {
+  it('renders the captured form once as a native jetpack/contact-form (no island doubling)', () => {
+    // Under the structured strategy the section renders natively, so the captured
+    // form becomes a single jetpack/contact-form. There is no verbatim island, so
+    // the historical island+jetpack double-form risk does not arise; the
+    // un-migrated image degrades to a native missing-media placeholder.
     const s = section({
       headings: ['Get in Touch'],
-      images: [img('https://cdn.example.test/never-migrated.jpg')], // non-WP image → dropped → island
+      images: [img('https://cdn.example.test/never-migrated.jpg')], // un-migrated image → native placeholder
       sectionHtml: '<section><h2>Get in Touch</h2><form><input type="email"/></form></section>',
       forms: [contactForm],
     });
     const r = reconstructPagePattern([s], opts);
-    expect(r.provenanceFlags.some((f) => f.includes('html-fallback'))).toBe(true);
-    expect(r.body).not.toContain('jetpack/contact-form');
+    expect(r.body).not.toContain('lib-coverage-island'); // native, not islanded
+    expect((r.body.match(/<!-- wp:jetpack\/contact-form/g) || []).length).toBe(1); // exactly one form (opening delimiter)
   });
 });

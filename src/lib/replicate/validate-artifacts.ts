@@ -282,6 +282,15 @@ export function validateArtifacts(input: ArtifactInput): ValidationReport {
       const inSingleEntry = allowedEntries.some((e) => e.includes(h));
       if (inSingleEntry) continue;
       if (matchesConsecutiveEntries(h, allowedEntries)) continue;
+      // Whitespace-insensitive fallback: the engine's native reconstruction
+      // emits adjacent inline nodes (e.g. an email <span> next to a phone
+      // <span>) separated by a normalized space, while the captured spec may
+      // have concatenated the same nodes with NO separator — same source text,
+      // different inter-segment whitespace. Compare with all whitespace stripped
+      // so the two reconcile. This stays per-ENTRY (it never joins entries), so
+      // the cross-entry "win award" rejection above is preserved.
+      const hTight = h.replace(/\s+/g, '');
+      if (allowedEntries.some((e) => e.replace(/\s+/g, '').includes(hTight))) continue;
       fail(`heading "${h}" not found in source spec (provenance)`);
     }
 

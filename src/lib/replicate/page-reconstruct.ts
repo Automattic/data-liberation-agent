@@ -31,6 +31,8 @@ import type { PaletteToken } from './footer-color.js';
 import {
   type FallbackDiagnostic,
   reconstructNativeAggregate,
+  rewriteMediaUrls,
+  structuredStrategy,
   sanitizePatternHeaderField,
   type FontFamilyToken,
   type NativeSectionDecision,
@@ -173,7 +175,16 @@ export function reconstructPagePattern(
     '\n' +
     ' * Categories: featured\n * Inserter: false\n */\n?>\n';
 
-  const bodyMarkup = sectionMarkup.join('\n\n') + '\n';
+  // Media post-pass: the engine's native reconstruction emits source <img src>
+  // / url() verbatim (the source CDN/variant URL) and routes ONLY island media
+  // through mediaUrlMap — so a native wp:image keeps its remote URL and trips
+  // the hasUnmigratedRemoteAsset gate. Rewrite the assembled body against the
+  // run's source→upload map so migrated images resolve locally. Island URLs are
+  // already local (not source keys) → no-op, so this is safe to apply globally.
+  const rawBodyMarkup = sectionMarkup.join('\n\n') + '\n';
+  const bodyMarkup = opts.mediaUrlMap
+    ? rewriteMediaUrls(rawBodyMarkup, opts.mediaUrlMap)
+    : rawBodyMarkup;
   const effectiveFallbackDiagnostics = recipeApplied ? fallbackDiagnostics : aggregate.fallbackDiagnostics;
   const heroIsCover = sectionMarkup.length > 0 && /^\s*<!-- wp:cover\b/.test(sectionMarkup[0]);
   return {
@@ -192,6 +203,12 @@ export function reconstructPagePattern(
 
 function renderOptionsFrom(opts: ReconstructOptions): SectionRenderOptions {
   return {
+    // The blocks reconstruct path carries NO source CSS, so it must select the
+    // interpretive structured strategy — clean, theme-styled canonical blocks built
+    // from the SectionSpec (renderCover/renderCardGrid/…), self-contained and not
+    // dependent on carried source classes. The engine default (preserve-dom) is for
+    // the carried-CSS paths (local-convert, theme-carry) and would render unstyled here.
+    strategy: structuredStrategy,
     ...(opts.mediaUrlMap ? { mediaUrlMap: opts.mediaUrlMap } : {}),
     ...(opts.convertedSections ? { convertedSections: opts.convertedSections } : {}),
     ...(opts.paletteTokens ? { paletteTokens: opts.paletteTokens } : {}),
