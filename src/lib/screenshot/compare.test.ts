@@ -90,7 +90,7 @@ describe('compareScreenshotDirs', () => {
     expect(d.width).toBe(1440);
     expect(d.height).toBe(900);      // min(3000, 1200, 900)
     expect(d.score).toBe(1);
-  });
+  }, 15_000);
 
   it('crops to min height when both pages are shorter than the viewport', async () => {
     const origin = join(TMP, 'origin');

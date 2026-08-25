@@ -6,7 +6,7 @@ first, then drills into the real machinery — every lesson cites real source fi
 repo-relative path.
 
 **The links below render the styled pages** via [htmlpreview.github.io](https://htmlpreview.github.io)
-(GitHub itself shows `.html` as source). They resolve once these docs are on `main`. For full
+(GitHub itself shows `.html` as source). They resolve once these docs are on `trunk`. For full
 interactivity (the quizzes) or offline reading, clone the repo and open
 [`index.html`](./index.html) in a browser. If GitHub Pages is enabled for the repo, the course
 also renders at its Pages URL.
