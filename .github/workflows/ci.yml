@@ -19,5 +19,6 @@ jobs:
       - run: npm ci --ignore-scripts
       - run: npm test
       - run: npm run build
+      - run: npm run test:package
       - name: Verify committed bundles
         run: git diff --exit-code -- dist
