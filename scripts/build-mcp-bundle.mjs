@@ -2,8 +2,7 @@
 // driver scripts (dist/scripts/<name>.mjs) into self-contained artifacts.
 //
 // Why: the Claude/Codex plugin installer copies this package's files into
-// ~/.claude/plugins/cache/... WITHOUT node_modules — and inside the Studio npm
-// workspace the dependencies are hoisted to the repo root anyway — so a
+// ~/.claude/plugins/cache/... WITHOUT node_modules, so a
 // `npx tsx src/mcp-server.ts` entry has nothing to import once installed as a
 // plugin. The bundles inline every dependency so `.mcp.json` can point a bare
 // `node` at the server bundle and `scripts/run.mjs` can run the drivers. The
