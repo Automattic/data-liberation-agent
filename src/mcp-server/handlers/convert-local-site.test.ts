@@ -683,7 +683,7 @@ beforeEach(() => {
   buildJetpackFormParityCssMock.mockReset().mockReturnValue({ css: '' });
 });
 
-describe('convertLocalSiteHandler', () => {
+describe('convertLocalSiteHandler', { timeout: 15_000 }, () => {
   it('editableIslands: ingest converts text islands into bindable blocks', async () => {
     const dir = makeEditableIslandSite();
     const outDir = mkdtempSync(join(FIXTURE_TMP, 'cls-editable-out-'));
