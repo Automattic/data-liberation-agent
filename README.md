@@ -70,7 +70,7 @@ cd data-liberation-agent
 codex
 ```
 
-The `.codex-plugin/plugin.json` and `.mcp.json` register the MCP server and skills automatically. The `liberate` flow runs sequentially on Codex (the builder fan-out step degrades to a sequential loop).
+The `.codex-plugin/plugin.json` and `.mcp.codex.json` register the MCP server and skills automatically (Codex does not expand `${CLAUDE_PLUGIN_ROOT}`, so it uses a plugin-root-relative config instead of `.mcp.json`). The `liberate` flow runs sequentially on Codex (the builder fan-out step degrades to a sequential loop).
 
 Then in Codex:
 
@@ -96,6 +96,12 @@ npx tsx src/mcp-server.ts
 
 npm run mcp
 ```
+
+> **First-time browser setup.** Extraction/capture uses Playwright's Chromium. It is no longer installed automatically on `npm install` — run it once explicitly:
+>
+> ```bash
+> npm run setup:browser
+> ```
 
 It exposes **35 tools**. The ones you'll call directly for a deterministic extract → QA → import flow:
 

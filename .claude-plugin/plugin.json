@@ -23,8 +23,5 @@
     "wordpress",
     "wxr"
   ],
-  "mcp": {
-    "command": "npx",
-    "args": ["tsx", "src/mcp-server.ts"]
-  }
+  "mcpServers": "./.mcp.json"
 }
