@@ -1,6 +1,9 @@
 import type { ExtractedNav } from './nav-extract.js';
 import type { UrlType } from '../extraction/sitemap.js';
-import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
+
+export interface CaptureLogSink {
+	sendLoggingMessage( message: { level: 'info'; data: string } ): void | Promise< void >;
+}
 
 export interface Viewport {
 	id: 'desktop' | 'mobile';
@@ -45,7 +48,7 @@ export interface ScreenshotOpts {
 	captureImages?: boolean;
 	evaluateTimeoutMs?: number; // default: 5_000
 	settleMs?: number; // default: 1_000
-	server?: Server;
+	server?: CaptureLogSink;
 	verbose?: boolean;
 	/** Reject non-public requests and redirect targets during browser capture. */
 	publicUrlsOnly?: boolean;
