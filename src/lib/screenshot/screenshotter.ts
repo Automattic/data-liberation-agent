@@ -27,13 +27,13 @@ import { analyzePage } from './site-analysis.js';
 import {
 	DEFAULT_VIEWPORTS,
 	SCREENSHOT_DEVICE_SCALE_FACTOR,
+	type CaptureLogSink,
 	type ScreenshotOpts,
 	type ScreenshotResult,
 	type Viewport,
 } from './types.js';
 import type { GeometryCapture } from './layout-geometry-proof.js';
 import type { ExtractedNav } from './nav-extract.js';
-import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import type { Browser, BrowserContext, Page } from 'playwright';
 
 /**
@@ -111,7 +111,7 @@ async function withScreenshotTimeout< T >( p: Promise< T >, ms: number ): Promis
 }
 
 /** Best-effort log forwarder — never throws into the capture loop. */
-function sendLog( server: Server | undefined, message: string ): void {
+function sendLog( server: CaptureLogSink | undefined, message: string ): void {
 	if ( ! server ) return;
 	try {
 		void server.sendLoggingMessage( { level: 'info', data: message } );
