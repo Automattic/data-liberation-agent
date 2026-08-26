@@ -10,12 +10,15 @@ const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const scratch = mkdtempSync(join(tmpdir(), 'data-liberation-package-'));
 const consumerDir = join(scratch, 'consumer');
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+const COMMAND_TIMEOUT_MS = 180_000;
+const MCP_TIMEOUT_MS = 30_000;
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
     cwd: repoRoot,
     encoding: 'utf8',
     maxBuffer: 20 * 1024 * 1024,
+    timeout: COMMAND_TIMEOUT_MS,
     ...options,
   });
   if (result.error) throw result.error;
@@ -25,6 +28,20 @@ function run(command, args, options = {}) {
     throw new Error(`${command} ${args.join(' ')} failed with exit code ${result.status}`);
   }
   return result;
+}
+
+async function withDeadline(promise, label, timeoutMs = MCP_TIMEOUT_MS) {
+  let timer;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} exceeded ${timeoutMs}ms`)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 try {
@@ -71,14 +88,14 @@ try {
     stderr: 'inherit',
   });
   const client = new Client({ name: 'package-smoke', version: '1.0.0' }, { capabilities: {} });
-  await client.connect(transport);
   try {
-    const tools = await client.listTools();
+    await withDeadline(client.connect(transport), 'Installed MCP server connection');
+    const tools = await withDeadline(client.listTools(), 'Installed MCP server tool listing');
     if (!tools.tools.some((tool) => tool.name === 'liberate_capture')) {
       throw new Error('Installed MCP server does not expose liberate_capture.');
     }
   } finally {
-    await client.close();
+    await withDeadline(client.close(), 'Installed MCP server shutdown', 10_000);
   }
 
   process.stdout.write('Installed package CLI, capture engine, MCP server, skills, and drivers are ready.\n');
