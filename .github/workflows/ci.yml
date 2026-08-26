@@ -43,4 +43,5 @@ jobs:
             echo "Skills invoke drivers with no committed bundle: ${missing_drivers}"
             exit 1
           fi
+      - run: npm run test:package
       - run: npm test
