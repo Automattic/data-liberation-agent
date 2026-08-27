@@ -23,6 +23,7 @@ if (args[0] === 'mcp') {
 
   Usage:
     data-liberation <url>              Liberate a website into a portable HTML site
+    data-liberation publish <dir>      Publish a liberated site (--to spacefast)
     data-liberation extract <url>      Extract content into a WXR file (WordPress path)
     data-liberation inspect <url>      Inspect a site before extraction
     data-liberation import <wxr-file>  Import WXR file to WordPress
@@ -40,6 +41,11 @@ if (args[0] === 'mcp') {
     --resume             Reuse artifacts already on disk instead of recapturing
     --screenshots        Also capture full-page + scrolled PNG screenshots
     --no-serve           Write the site and exit without serving it locally
+
+  Publish options:
+    --to <target>        Where to publish. Targets: spacefast (default)
+    --token <token>      Publish into your own account (or SPACEFAST_TOKEN).
+                         Without it the publish is anonymous and returns a claim link.
 
   Extract options:
     --output <dir>       Output directory (default: ~/data-liberation/<hostname>; override with --output or DLA_OUTPUT_DIR)
@@ -275,6 +281,42 @@ if (args[0] === 'mcp') {
 
   const { runImport } = await import('./ui/import.js');
   runImport({ wxrFile, site: site as string, username: username as string, token: token as string, dryRun, delay, verbose, only, importAuthors });
+} else if (args[0] === 'publish') {
+  const directory = args[1];
+  if (!directory || directory.startsWith('-')) {
+    console.error('Error: directory required. Usage: data-liberation publish <dir> [--to <target>]');
+    process.exit(1);
+  }
+
+  const { publishSite } = await import('./ui/publish.js');
+  const { PublishError } = await import('./lib/publish/index.js');
+  try {
+    const result = await publishSite({
+      directory,
+      target: getArg('--to') ?? 'spacefast',
+      token: getArg('--token') ?? process.env.SPACEFAST_TOKEN ?? undefined,
+      log: (message) => process.stderr.write(`${message}\n`),
+    });
+
+    console.log(`Published ${result.files} files to ${result.target}.`);
+    console.log(`Live: ${result.liveUrl}`);
+    if (result.versionUrl) console.log(`Version: ${result.versionUrl}`);
+    if (result.private) {
+      console.log('This space is private by default, so the live URL returns 403 until access is granted.');
+    }
+    if (result.claim) {
+      console.log(`Claim it to keep it: ${result.claim.url}`);
+      if (result.claim.expiresAt) console.log(`Claim expires: ${result.claim.expiresAt}`);
+    }
+    for (const note of result.notes) console.log(`Note: ${note}`);
+  } catch (error) {
+    if (error instanceof PublishError) {
+      console.error(error.message);
+      if (error.requestId) console.error(`Request ID: ${error.requestId}`);
+      process.exit(1);
+    }
+    throw error;
+  }
 } else if (args[0] === 'extract') {
   const url = args.slice(1).find((a: string) => !a.startsWith('-'));
   if (!url) {
