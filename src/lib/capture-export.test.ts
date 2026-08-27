@@ -1711,6 +1711,37 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		);
 	} );
 
+	it( 'drops leftover remote asset requests while keeping editorial links', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-self-contain-export-' ) );
+		dirs.push( outputDir );
+		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
+		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
+		writeFileSync(
+			join( outputDir, 'html', 'homepage.html' ),
+			'<html><head><link rel="canonical" href="https://example.com/"><link rel="preconnect" href="https://siteassets.example.com"><link rel="dns-prefetch" href="//cdn.example"><link rel="stylesheet" href="https://runtime.example/theme.css"><style>.x{background:url("https://runtime.example/bg.jpg")}</style></head><body><a href="https://external.example/about">About</a></body></html>'
+		);
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( {
+				version: 1,
+				entries: { 'https://example.com/': { html: 'html/homepage.html' } },
+			} )
+		);
+		exportWebsiteCapture( {
+			outputDir,
+			sourceUrl: 'https://example.com/',
+			platform: 'fake',
+			summary: {},
+			failures: [],
+		} );
+		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
+		expect( html ).not.toContain( 'siteassets.example.com' );
+		expect( html ).not.toContain( 'runtime.example' );
+		expect( html ).not.toContain( 'cdn.example' );
+		expect( html ).toContain( 'href="https://example.com/"' );
+		expect( html ).toContain( 'href="https://external.example/about"' );
+	} );
+
 	it( 'keeps portable media within the artifact capacity left after routes and resources', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-budget-' ) );
 		dirs.push( outputDir );

@@ -21,6 +21,7 @@ import {
 	buildLayoutGeometryProof,
 	type GeometryCapture,
 } from './screenshot/layout-geometry-proof.js';
+import { selfContainWebsite } from './self-contain.js';
 import { rewriteMediaUrls } from './streaming/media-url-rewrite.js';
 import type { InteractionStatesReport } from './screenshot/interaction-capture.js';
 import type { CapturedResourceManifest } from './screenshot/resource-capture.js';
@@ -1511,6 +1512,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		entry.identityHtmlPath = `${ htmlPath }.identity`;
 		writeFileSync( entry.identityHtmlPath, identityHtml );
 	}
+	selfContainWebsite( websiteDir );
 
 	const geometryCaptureOmissions: Record< string, number > = {};
 	const geometryInputs = function* () {
