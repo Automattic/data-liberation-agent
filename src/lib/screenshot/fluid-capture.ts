@@ -7,7 +7,7 @@
 // replaces the runtime-written inline pixels, which is what lets the liberated
 // copy keep reflowing after that runtime is stripped.
 //
-import { learnFluidModel, type FluidModel, type GeometrySample } from './fluid-model.js';
+import { breakpointsFrom, learnFluidModel, type FluidModel, type GeometrySample } from './fluid-model.js';
 import type { Page } from 'playwright';
 
 /** Marks elements across viewport changes; removed before serialization. */
@@ -32,6 +32,12 @@ export interface FluidLearningResult {
 	unmodelled: number;
 	/** Widths where some element changed its sizing rule. */
 	breakpoints: number[];
+	/**
+	 * Width at which this document stops shrinking — the widest floor among
+	 * learned `max(floor, k*vw)` models. Below it the layout overflows rather
+	 * than adapting, which makes it the source's own switching point.
+	 */
+	canvasFloor: number | null;
 	byKind: Record< string, number >;
 }
 
@@ -67,7 +73,7 @@ export async function learnAndApplyFluidGeometry(
 	);
 
 	if ( tagged === 0 ) {
-		return { applied: 0, unmodelled: 0, breakpoints: [], byKind: {} };
+		return { applied: 0, unmodelled: 0, breakpoints: [], canvasFloor: null, byKind: {} };
 	}
 
 	// key: `${id}:${property}` -> observations across widths
@@ -118,6 +124,7 @@ export async function learnAndApplyFluidGeometry(
 	const learned: Array< { id: string; property: string; css: string } > = [];
 	const byKind: Record< string, number > = {};
 	const breakpoints = new Set< number >();
+	let canvasFloor: number | null = null;
 	let unmodelled = 0;
 
 	for ( const [ key, samples ] of observations ) {
@@ -128,8 +135,13 @@ export async function learnAndApplyFluidGeometry(
 			// Leaving the frozen value is the honest outcome: a wrong formula
 			// would be worse than an admittedly fixed one.
 			unmodelled++;
-			for ( const sample of model.samples ) breakpoints.add( sample.viewport );
+			// Only the widths where the rule actually changed are breakpoints;
+			// every sampled width is not evidence of anything.
+			for ( const width of breakpointsFrom( model.samples ) ) breakpoints.add( width );
 			continue;
+		}
+		if ( model.kind === 'floored' && property === 'width' ) {
+			canvasFloor = Math.max( canvasFloor ?? 0, model.floor );
 		}
 		learned.push( { id, property, css: model.css } );
 	}
@@ -160,5 +172,11 @@ export async function learnAndApplyFluidGeometry(
 		{ attribute: ID_ATTRIBUTE }
 	);
 
-	return { applied: learned.length, unmodelled, breakpoints: [ ...breakpoints ].sort( ( a, b ) => a - b ), byKind };
+	return {
+		applied: learned.length,
+		unmodelled,
+		breakpoints: [ ...breakpoints ].sort( ( a, b ) => a - b ),
+		canvasFloor,
+		byKind,
+	};
 }

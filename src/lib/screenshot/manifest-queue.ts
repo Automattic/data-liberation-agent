@@ -24,6 +24,8 @@ export interface ManifestEntry {
     applied: number;
     unmodelled: number;
     breakpoints: number[];
+    /** Width below which this document stops adapting; drives the switch point. */
+    canvasFloor?: number | null;
     byKind: Record<string, number>;
   };
   capturedAt: string;

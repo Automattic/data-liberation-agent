@@ -605,6 +605,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 				applied: learned.applied,
 				unmodelled: learned.unmodelled,
 				breakpoints: learned.breakpoints,
+				canvasFloor: learned.canvasFloor,
 				byKind: learned.byKind,
 			};
 		} catch ( error ) {
