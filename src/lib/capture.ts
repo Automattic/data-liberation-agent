@@ -23,6 +23,8 @@ export interface CaptureOptions {
 	outputDir: string;
 	resume?: boolean;
 	captureImages?: boolean;
+	/** Learn responsive sizing by sweeping widths instead of freezing one. */
+	learnFluid?: boolean;
 	onProgress?: ( progress: CaptureProgress ) => void;
 }
 
@@ -154,9 +156,13 @@ export async function captureWebsite(
 		outputDir,
 		primaryUrl: sourceUrl,
 		captureImages: options.captureImages === true,
+		learnFluid: options.learnFluid === true,
 		force: options.resume !== true,
 		removeSelectors: adapter.capture?.removeSelectors,
 		prepareCapture: adapter.capture?.prepare,
+		...( adapter.capture?.responsiveImages
+			? { collectResponsiveImages: adapter.capture.responsiveImages.bind( adapter.capture ) }
+			: {} ),
 		publicUrlsOnly: true,
 		onProgress: ( current, total, url ) => progress( { phase: 'capturing', current, total, url } ),
 	} );
