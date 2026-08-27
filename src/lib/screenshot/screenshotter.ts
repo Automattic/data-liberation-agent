@@ -16,6 +16,7 @@ import { countBodyTags, isStackingArtifact } from './document-integrity.js';
 import { collectMobileChromeLayout } from './dom-capture.js';
 import { generateChromeCss, type BakedLayoutMap } from './fixups.js';
 import { sanitizeFrozenHtml } from './freeze.js';
+import { learnAndApplyFluidGeometry } from './fluid-capture.js';
 import { captureTriggeredDialogs } from './interaction-capture.js';
 import { JsAggregator } from './js-aggregator.js';
 import { ManifestQueue, type ManifestEntry, type FailureEntry } from './manifest-queue.js';
@@ -141,6 +142,8 @@ interface DesignCaptureContext {
 
 interface CapturePerViewportArgs {
 	page: Page;
+	learnFluid?: boolean;
+	fluidWidths?: number[];
 	removeSelectors?: string[];
 	prepareCapture?: (
 		page: import('playwright').Page,
@@ -582,6 +585,36 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 				viewport: viewport.id,
 				stage: /screenshot timeout/.test( msg ) ? 'screenshot-timeout' : 'screenshot-fullpage',
 				error: msg,
+				timestamp: now(),
+				attempt: 1,
+			} );
+		}
+	}
+
+	// Seam 1b: replace runtime-computed pixel geometry with the relationship the
+	// source actually obeys, learned by resizing while its runtime still runs.
+	// Must happen after removals (so stripped chrome is never modelled) and
+	// before serialization (so the learned CSS is what gets written).
+	if ( isDesktop && plan.captureHtml && args.learnFluid ) {
+		try {
+			const learned = await learnAndApplyFluidGeometry( page, {
+				...( args.fluidWidths ? { widths: args.fluidWidths } : {} ),
+				settleMs: Math.max( args.settleMs, 800 ),
+			} );
+			entry.fluid = {
+				applied: learned.applied,
+				unmodelled: learned.unmodelled,
+				breakpoints: learned.breakpoints,
+				byKind: learned.byKind,
+			};
+		} catch ( error ) {
+			// Never fail a capture over the optimization: a frozen copy still
+			// beats no copy, and the diagnostics record that it stayed frozen.
+			failures.push( {
+				url,
+				viewport: viewport.id,
+				stage: 'content',
+				error: `fluid learning failed: ${ error instanceof Error ? error.message : String( error ) }`,
 				timestamp: now(),
 				attempt: 1,
 			} );
@@ -1214,6 +1247,8 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 					resourceStore,
 					publicUrlsOnly: opts.publicUrlsOnly ?? false,
 					removeSelectors: opts.removeSelectors,
+					...( opts.learnFluid ? { learnFluid: true } : {} ),
+					...( opts.fluidWidths ? { fluidWidths: opts.fluidWidths } : {} ),
 					prepareCapture: opts.prepareCapture,
 				} );
 			} catch ( err ) {
