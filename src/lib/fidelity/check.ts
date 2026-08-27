@@ -5,10 +5,11 @@
 // freeze we already shipped once.
 //
 import { existsSync, readFileSync, statSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { chromium, type Page } from 'playwright';
 import { startStaticServer } from '../replicate/local-site/static-server.js';
 import { DEFAULT_SWEEP_WIDTHS } from '../screenshot/fluid-capture.js';
+import { writePixelEvidence } from './evidence.js';
 import { scoreReport, scoreViewport, type LayoutObservation, type ViewportScore } from './score.js';
 
 /**
@@ -24,7 +25,12 @@ export type ObservePair = (
 	sourceUrl: string,
 	localUrl: string,
 	viewport: number
-) => Promise< { source: LayoutObservation; liberated: LayoutObservation } >;
+) => Promise< {
+	source: LayoutObservation;
+	liberated: LayoutObservation;
+	sourcePng?: Buffer;
+	liberatedPng?: Buffer;
+} >;
 
 export interface FidelityCheckOptions {
 	directory: string;
@@ -32,6 +38,8 @@ export interface FidelityCheckOptions {
 	/** Pathnames to check, e.g. `/` and `/about/`. Default: homepage only. */
 	routes?: string[];
 	settleMs?: number;
+	/** Write source/liberated/diff PNGs. Never used as pass/fail. */
+	screenshots?: boolean;
 	log?: ( ( message: string ) => void ) | undefined;
 	observe?: ObservePair;
 }
@@ -138,10 +146,17 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 		observe = async ( sourceHref, localHref, viewport ) => {
 			if ( ! page ) throw new Error( 'browser page missing' );
 			await page.setViewportSize( { width: viewport, height: 900 } );
-			return {
-				source: await observePage( page, sourceHref, viewport, settleMs, null ),
-				liberated: await observePage( page, localHref, viewport, settleMs, new URL( localHref ).origin ),
-			};
+			const source = await observePage( page, sourceHref, viewport, settleMs, null );
+			const sourcePng = options.screenshots ? await page.screenshot() : undefined;
+			const liberated = await observePage(
+				page,
+				localHref,
+				viewport,
+				settleMs,
+				new URL( localHref ).origin
+			);
+			const liberatedPng = options.screenshots ? await page.screenshot() : undefined;
+			return { source, liberated, sourcePng, liberatedPng };
 		};
 	}
 
@@ -153,9 +168,21 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 				route.startsWith( '/' ) ? route : `/${ route }`
 			}`;
 			for ( const width of widths ) {
-				log( `[check] ${ route } @ ${ width }px` );
+				log( `[compare] ${ route } @ ${ width }px` );
 				const pair = await observe( sourceHref, localHref, width );
-				scores.push( scoreViewport( pair.source, pair.liberated ) );
+				const score = scoreViewport( pair.source, pair.liberated );
+				if ( pair.sourcePng && pair.liberatedPng ) {
+					const evidenceDir = join( dirname( receiptPath ), 'compare', String( width ) );
+					const evidence = writePixelEvidence( evidenceDir, pair.sourcePng, pair.liberatedPng );
+					if ( 'score' in evidence ) {
+						score.notes.push(
+							`pixel ${ evidence.score.toFixed( 4 ) } (evidence, not a gate) → ${ evidence.diffPath }`
+						);
+					} else {
+						score.notes.push( evidence.error );
+					}
+				}
+				scores.push( score );
 			}
 		}
 	} finally {

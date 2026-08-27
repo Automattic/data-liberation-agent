@@ -1,6 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { PNG } from 'pngjs';
 import { afterEach, describe, expect, it } from 'vitest';
 import { checkFidelity, checkWidthsFor, resolveCheckDirectory } from './check.js';
 import type { LayoutObservation } from './score.js';
@@ -85,5 +86,29 @@ describe( 'checkFidelity', () => {
 		} );
 		expect( report.pass ).toBe( false );
 		expect( report.failed ).toBe( 1 );
+	} );
+
+	it( 'records a pixel score as evidence without letting it fail the gate', async () => {
+		const black = new PNG( { width: 4, height: 4 } );
+		const white = new PNG( { width: 4, height: 4 } );
+		for ( let i = 0; i < black.data.length; i += 4 ) {
+			black.data[ i + 3 ] = 255;
+			white.data[ i ] = 255;
+			white.data[ i + 1 ] = 255;
+			white.data[ i + 2 ] = 255;
+			white.data[ i + 3 ] = 255;
+		}
+		const report = await checkFidelity( {
+			directory: liberatedRun(),
+			widths: [ 1600 ],
+			observe: async ( _source, _local, viewport ) => ( {
+				source: obs( viewport ),
+				liberated: obs( viewport ),
+				sourcePng: PNG.sync.write( black ),
+				liberatedPng: PNG.sync.write( white ),
+			} ),
+		} );
+		expect( report.pass ).toBe( true );
+		expect( report.scores[ 0 ]?.notes.join( ' ' ) ).toMatch( /evidence, not a gate/ );
 	} );
 } );
