@@ -50,6 +50,11 @@ if (args[0] === 'mcp') {
     --token <token>      Publish into your own account (or SPACEFAST_TOKEN).
                          Without it the publish is anonymous and returns a claim link.
 
+  Publish options:
+    --to <target>        Where to publish. Targets: spacefast (default)
+    --token <token>      Publish into your own account (or SPACEFAST_TOKEN).
+                         Without it the publish is anonymous and returns a claim link.
+
   Extract options:
     --output <dir>       Output directory (default: ~/data-liberation/<hostname>; override with --output or DLA_OUTPUT_DIR)
     --dry-run            Extract 2-3 pages and report without writing WXR
