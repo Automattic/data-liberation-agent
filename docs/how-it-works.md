@@ -287,7 +287,7 @@ The stance is deliberate: the system would rather **show you an honest gap** tha
 
 ## Quick reference — files in the output directory
 
-> The default output folder is `~/Studio/_liberations/<host>`. Override it with the `DLA_OUTPUT_DIR` env var, the `outputDir` tool argument, or the `--output` CLI flag. Run `liberate_paths` to resolve the real path.
+> The default output folder is `~/data-liberation/<host>`. Override it with the `DLA_OUTPUT_DIR` env var, the `outputDir` tool argument, or the `--output` CLI flag. Run `liberate_paths` to resolve the real path.
 
 | File / folder | When | What it is |
 |---|---|---|

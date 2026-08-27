@@ -29,7 +29,7 @@ Ask for or detect:
 
 | Parameter | How to find it |
 |-----------|---------------|
-| Output directory | Call `liberate_paths({ url })` to resolve `siteDir`; default base is `~/Studio/_liberations/<host>` |
+| Output directory | Call `liberate_paths({ url })` to resolve `siteDir`; default base is `~/data-liberation/<host>` |
 | WXR file | `output.wxr` in the output directory |
 | Extraction log | `extraction-log.jsonl` in the output directory |
 | Source URL | From the WXR's `<link>` element or ask the user |

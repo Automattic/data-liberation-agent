@@ -30,7 +30,7 @@ You are a QA engineer for content migrations. Compare every page in a WXR file a
 - **Standard:** Fix critical + warn grade (default)
 - **Exhaustive:** Fix all, including minor discrepancies
 
-**If no WXR path is given:** Call `liberate_paths({ url })` to resolve the site output dir (default base: `~/Studio/_liberations/<host>`, overridable via `--output` / `DLA_OUTPUT_DIR`). If the user has not provided a URL, ask for it. If multiple sites exist, ask which to QA.
+**If no WXR path is given:** Call `liberate_paths({ url })` to resolve the site output dir (default base: `~/data-liberation/<host>`, overridable via `--output` / `DLA_OUTPUT_DIR`). If the user has not provided a URL, ask for it. If multiple sites exist, ask which to QA.
 
 ---
 

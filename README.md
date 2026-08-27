@@ -1,14 +1,24 @@
 # data-liberation-agent
 
-Extract content from closed web platforms into WordPress-compatible WXR files.
+Liberate any website into a complete, portable HTML site.
 
 ## The problem
 
-Closed platforms make it hard to leave. Wix has no HTML export and caps RSS at 20 posts. JavaScript-rendered content and limited APIs leave your site data locked inside.
+Closed platforms make it hard to leave. Wix has no HTML export and caps RSS at 20 posts. JavaScript-rendered content and limited APIs leave your site locked inside.
 
 ## The solution
 
-This tool extracts all content from closed platforms — posts, pages, media, navigation, redirects, products — and produces a standard WordPress WXR file ready to import.
+Point it at a URL and get your site back as plain files:
+
+```bash
+data-liberation https://example.com/
+```
+
+Every retained route is liberated into a directory of HTML, CSS, media, and fonts, with references rewritten so navigation works locally. It runs on its own, and the command serves it so you can click through it immediately.
+
+**HTML is the contract.** The liberated site is the deliverable — not an intermediate format on the way to somewhere else, and not tied to any destination.
+
+**WordPress is one option, not the assumption.** If you want the site rebuilt in WordPress, the agent skills reconstruct it as editable blocks + WooCommerce or as a high-fidelity theme replica. That step is optional and runs after liberation, from the same local copy, without touching the network again.
 
 **Where to host WordPress**: If your current provider also offers WordPress, you can move to WordPress and stay with them. WordPress.com is another option: the $4/mo Personal plan now supports plugins and themes, and the [WordPress.com MCP integration](https://wordpress.com/blog/2026/03/20/ai-agent-manage-content/) gives AI agents direct write access.
 
@@ -30,9 +40,9 @@ All eight platforms have MCP adapters with full extraction support including pro
 
 ## Getting started — agent-first
 
-data-liberation-agent is built to be driven by an AI agent. The front door is the `liberate` skill: one command runs the full pipeline — detect the platform, inventory every page/post/product, extract content and media, capture screenshots and design tokens, then reconstruct the site as an editable WordPress block theme and import it into a local WordPress preview.
+data-liberation-agent is also built to be driven by an AI agent. The front door is the `liberate` skill: detect the platform, inventory every page/post/product, liberate the whole site into portable HTML, and serve the result. If you then ask for WordPress, it reconstructs the site as an editable block theme or a high-fidelity replica and imports it into a local WordPress preview.
 
-> **Studio required for preview/import.** Install [Automattic Studio](https://developer.wordpress.com/studio/) before running `/data-liberation:liberate`. Extraction itself needs no WordPress.
+> **Studio is only needed for the optional WordPress preview/import.** Liberating a site needs no WordPress at all. Install [Automattic Studio](https://developer.wordpress.com/studio/) before asking for a WordPress reconstruct.
 
 ### Claude Code
 
@@ -109,9 +119,9 @@ It exposes MCP tools for deterministic capture and extract → QA → import wor
 
 ## Output
 
-A successful run produces, in `~/Studio/_liberations/<host>/` (the default for the `liberate` flow; set the `DLA_OUTPUT_DIR` environment variable to change it, or pass `outputDir` when calling the MCP tools — `liberate_paths` reports the resolved path):
+A successful run produces, in `~/data-liberation/<host>/` (the default for the `liberate` flow; set the `DLA_OUTPUT_DIR` environment variable to change it, or pass `outputDir` when calling the MCP tools — `liberate_paths` reports the resolved path):
 
-- `~/Studio/_liberations/<host>/`
+- `~/data-liberation/<host>/`
    - `output.wxr` — WordPress eXtended RSS file, ready to import via WordPress Admin > Tools > Import
    - `media/` — downloaded images and attachments with local paths rewritten in the WXR
    - `redirect-map.json` — old platform paths mapped to new WordPress slugs

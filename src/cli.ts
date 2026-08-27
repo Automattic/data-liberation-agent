@@ -36,13 +36,13 @@ if (args[0] === 'mcp') {
     data-liberation --version          Show version
 
   Liberate options:
-    --output <dir>       Output base directory (default: <Studio root>/_liberations; override with --output or DLA_OUTPUT_DIR)
+    --output <dir>       Output base directory (default: ~/data-liberation; override with --output or DLA_OUTPUT_DIR)
     --resume             Reuse artifacts already on disk instead of recapturing
     --screenshots        Also capture full-page + scrolled PNG screenshots
     --no-serve           Write the site and exit without serving it locally
 
   Extract options:
-    --output <dir>       Output directory (default: <Studio root>/_liberations/<hostname>; override with --output or DLA_OUTPUT_DIR)
+    --output <dir>       Output directory (default: ~/data-liberation/<hostname>; override with --output or DLA_OUTPUT_DIR)
     --dry-run            Extract 2-3 pages and report without writing WXR
     --limit <N>          Cap extraction to the first N URLs (writes a real WXR)
     --resume             Resume a previous extraction
@@ -86,7 +86,7 @@ if (args[0] === 'mcp') {
     --non-interactive    Skip the post-preview import nudge
 
   Screenshot options:
-    --output <dir>         Output directory (default: <Studio root>/_liberations/<hostname>; override with --output or DLA_OUTPUT_DIR)
+    --output <dir>         Output directory (default: ~/data-liberation/<hostname>; override with --output or DLA_OUTPUT_DIR)
     --types <list>         Comma-separated: page,post,product,homepage,gallery,event
     --limit <N>            Cap to first N URLs
     --concurrency <N>      Parallel captures (default 6, max 10)

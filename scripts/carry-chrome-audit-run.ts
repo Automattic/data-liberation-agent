@@ -11,7 +11,7 @@
  *   node scripts/run.mjs carry-chrome-audit-run <outputDir> <builtBaseUrl> <studioSitePath>
  *
  * Arguments:
- *   outputDir       — extraction output dir, e.g. ~/Studio/_liberations/example.com
+ *   outputDir       — extraction output dir, e.g. ~/data-liberation/example.com
  *   builtBaseUrl    — Studio carry site base URL, e.g. http://localhost:8881
  *   studioSitePath  — on-disk Studio site path, e.g. ~/Studio/example-com-carry
  *
@@ -60,7 +60,7 @@ if (!outputDir || !builtBaseUrl || !studioSitePath) {
 /**
  * Derive the carry theme slug from the outputDir (mirrors the reconstruction
  * handler: sanitize the basename, append -replica, strip -replica, append -carry).
- * E.g. ~/Studio/_liberations/example.com → example-com-carry
+ * E.g. ~/data-liberation/example.com → example-com-carry
  */
 function deriveCarryThemeSlug(dir: string): string {
   const base = basename(dir).toLowerCase();

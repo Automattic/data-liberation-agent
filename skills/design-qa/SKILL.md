@@ -36,7 +36,7 @@ This discipline overrides any urge to wrap up. Under-claiming and continuing to 
 The orchestrator passes you:
 
 - `replicaBaseUrl` — the running replica WP install URL.
-- `outputDir` — the resolved site output dir (e.g. `~/Studio/_liberations/example.com`); contains source screenshots and manifest.
+- `outputDir` — the resolved site output dir (e.g. `~/data-liberation/example.com`); contains source screenshots and manifest.
 - `archetypeReps` — map of archetype → representative URL paths (one per archetype, from `liberate_replicate_inventory`).
 
 ## Workflow

@@ -51,7 +51,7 @@ Ask for the **source directory** if not given. Then derive (let the operator ove
 - `themeSlug` — kebab-case, e.g. `basename(dir)` → `maison-clouet`.
 - `siteTitle` — the home page `<title>`, or a name the operator gives.
 - `studioSitePath` — `~/Studio/<slug>` for a fresh site (must NOT collide with an existing unrelated site unless you intend to reuse it). Confirm the chosen path with the operator before creating.
-- `outputDir` — liberation artifacts (sidecars, reports, screenshots). Default `~/Studio/_liberations/<slug>` or a run-local dir.
+- `outputDir` — liberation artifacts (sidecars, reports, screenshots). Default `~/data-liberation/<slug>` or a run-local dir.
 
 ### Step 0b — WordPress-driven data (conditional)
 
