@@ -10,7 +10,15 @@ import { chromium, type Page } from 'playwright';
 import { startStaticServer } from '../replicate/local-site/static-server.js';
 import { DEFAULT_SWEEP_WIDTHS } from '../screenshot/fluid-capture.js';
 import { writePixelEvidence } from './evidence.js';
-import { scoreReport, scoreViewport, type LayoutObservation, type ViewportScore } from './score.js';
+import {
+	scoreReport,
+	scoreViewport,
+	type HashTarget,
+	type LayoutObservation,
+	type ViewportScore,
+} from './score.js';
+
+const MAX_ROUTE_CHECKS = 32;
 
 /**
  * Widths the learning sweep does not visit. 1600 and 1728 sit above the
@@ -107,10 +115,85 @@ async function observePage(
 	try {
 		await page.goto( url, { waitUntil: 'domcontentloaded', timeout: 60_000 } ).catch( () => {} );
 		await page.waitForTimeout( settleMs );
-		const measured = await page.evaluate( () => {
+		const measured = await page.evaluate( async ( clickUnresolved: boolean ) => {
 			const images = [ ...document.querySelectorAll( 'img' ) ]
 				.map( ( image ) => image.getBoundingClientRect() )
 				.filter( ( rect ) => rect.width > 50 && rect.height > 50 );
+			const hashTargets: { fragment: string; resolved: boolean }[] = [];
+			const internalPaths: string[] = [];
+			const seen = new Set< string >();
+			for ( const link of document.querySelectorAll< HTMLAnchorElement >( 'a[href]' ) ) {
+				const href = link.getAttribute( 'href' ) ?? '';
+				if ( ! href || href === '#' ) continue;
+				let target: URL;
+				try {
+					target = new URL( href, location.href );
+				} catch {
+					continue;
+				}
+				if ( target.origin !== location.origin ) continue;
+				if ( target.hash ) {
+					let fragment: string;
+					try {
+						fragment = decodeURIComponent( target.hash.slice( 1 ) );
+					} catch {
+						continue;
+					}
+					if ( ! fragment || seen.has( `#${ fragment }` ) ) continue;
+					seen.add( `#${ fragment }` );
+					const exists = !!(
+						document.getElementById( fragment ) ||
+						document.querySelector( `[name="${ CSS.escape( fragment ) }"]` )
+					);
+					hashTargets.push( { fragment, resolved: exists } );
+				}
+				if (
+					target.pathname &&
+					target.pathname !== location.pathname &&
+					! seen.has( target.pathname )
+				) {
+					seen.add( target.pathname );
+					internalPaths.push( target.pathname );
+				}
+			}
+
+			if ( clickUnresolved ) {
+				const original = { x: scrollX, y: scrollY };
+				let clicks = 0;
+				for ( const target of hashTargets ) {
+					if ( target.resolved || clicks >= 8 ) continue;
+					const trigger = [ ...document.querySelectorAll< HTMLAnchorElement >( 'a[href]' ) ].find(
+						( link ) => {
+							try {
+								return (
+									decodeURIComponent( new URL( link.href, location.href ).hash.slice( 1 ) ) ===
+									target.fragment
+								);
+							} catch {
+								return false;
+							}
+						}
+					);
+					if ( ! trigger || trigger.getClientRects().length === 0 ) continue;
+					clicks++;
+					trigger.click();
+					let previous = scrollY;
+					let stable = 0;
+					for ( let attempt = 0; attempt < 40 && stable < 4; attempt++ ) {
+						await new Promise( ( resolve ) => setTimeout( resolve, 50 ) );
+						if ( Math.abs( scrollY - previous ) < 1 ) stable++;
+						else stable = 0;
+						previous = scrollY;
+					}
+					if ( Math.abs( scrollY - original.y ) > 4 ) target.resolved = true;
+					const root = document.documentElement;
+					const behavior = root.style.scrollBehavior;
+					root.style.scrollBehavior = 'auto';
+					window.scrollTo( original.x, original.y );
+					root.style.scrollBehavior = behavior;
+				}
+			}
+
 			return {
 				title: document.title,
 				textChars: ( document.body?.innerText ?? '' ).replace( /\s+/g, ' ' ).trim().length,
@@ -119,9 +202,30 @@ async function observePage(
 					: null,
 				docWidth: document.documentElement.scrollWidth,
 				overflow: document.documentElement.scrollWidth > window.innerWidth,
+				hashTargets,
+				internalPaths,
 			};
-		} );
-		return { viewport, ...measured, externalHosts: [ ...external ].sort() };
+		}, ! localOrigin );
+
+		const internalMissing: string[] = [];
+		if ( localOrigin ) {
+			for ( const path of measured.internalPaths.slice( 0, MAX_ROUTE_CHECKS ) ) {
+				const response = await page.request.get( `${ localOrigin }${ path }`, { timeout: 10_000 } );
+				if ( ! response.ok() ) internalMissing.push( path );
+			}
+		}
+
+		return {
+			viewport,
+			title: measured.title,
+			textChars: measured.textChars,
+			widestImage: measured.widestImage,
+			docWidth: measured.docWidth,
+			overflow: measured.overflow,
+			externalHosts: [ ...external ].sort(),
+			hashTargets: measured.hashTargets as HashTarget[],
+			internalMissing,
+		};
 	} finally {
 		page.off( 'request', onRequest );
 	}
