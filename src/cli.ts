@@ -19,10 +19,11 @@ if (args[0] === 'mcp') {
   console.log('0.1.0');
 } else if (args[0] === '--help' || args.length === 0) {
   console.log(`
-  data-liberation — Extract content from closed web platforms into WXR files
+  data-liberation — Liberate any website into a complete, portable HTML site
 
   Usage:
-    data-liberation <url>              Extract content from a website
+    data-liberation <url>              Liberate a website into a portable HTML site
+    data-liberation extract <url>      Extract content into a WXR file (WordPress path)
     data-liberation inspect <url>      Inspect a site before extraction
     data-liberation import <wxr-file>  Import WXR file to WordPress
     data-liberation qa <wxr-file>        Compare WXR against source site
@@ -33,6 +34,12 @@ if (args[0] === 'mcp') {
     data-liberation design-foundation <outputDir>  Build/validate design-foundation.json (agent fallback)
     data-liberation mcp                Start MCP server (stdio transport)
     data-liberation --version          Show version
+
+  Liberate options:
+    --output <dir>       Output base directory (default: <Studio root>/_liberations; override with --output or DLA_OUTPUT_DIR)
+    --resume             Reuse artifacts already on disk instead of recapturing
+    --screenshots        Also capture full-page + scrolled PNG screenshots
+    --no-serve           Write the site and exit without serving it locally
 
   Extract options:
     --output <dir>       Output directory (default: <Studio root>/_liberations/<hostname>; override with --output or DLA_OUTPUT_DIR)
@@ -268,10 +275,10 @@ if (args[0] === 'mcp') {
 
   const { runImport } = await import('./ui/import.js');
   runImport({ wxrFile, site: site as string, username: username as string, token: token as string, dryRun, delay, verbose, only, importAuthors });
-} else {
-  const url = args.find((a: string) => !a.startsWith('-'));
+} else if (args[0] === 'extract') {
+  const url = args.slice(1).find((a: string) => !a.startsWith('-'));
   if (!url) {
-    console.error('Error: URL required. Run with --help for usage.');
+    console.error('Error: URL required. Usage: data-liberation extract <url>');
     process.exit(1);
   }
 
@@ -339,5 +346,44 @@ if (args[0] === 'mcp') {
     // Legacy batch path. Pre-streaming behavior: discover → extract → screenshot.
     const { runDiscover } = await import('./ui/discover.js');
     runDiscover(url, { outputDir, dryRun, resume, verbose, delay, limit, token, cdpPort, adminToken, shopDomain, nonInteractive, screenshots, screenshotsConcurrency });
+  }
+} else {
+  // A bare URL means full-site HTML liberation: every retained route becomes a
+  // portable local site that runs on its own.
+  const url = args.find((a: string) => !a.startsWith('-'));
+  if (!url) {
+    console.error('Error: URL required. Run with --help for usage.');
+    process.exit(1);
+  }
+
+  const { liberateSite } = await import('./ui/liberate.js');
+  const result = await liberateSite({
+    url,
+    outputBase: getArg('--output') || resolveOutputBase(),
+    resume: args.includes('--resume'),
+    screenshots: args.includes('--screenshots'),
+    serve: !args.includes('--no-serve'),
+    log: (message) => process.stderr.write(`${message}\n`),
+  });
+
+  const notes = [
+    result.routesSkipped ? `${result.routesSkipped} reused` : '',
+    result.routesFailed ? `${result.routesFailed} failed` : '',
+  ].filter(Boolean);
+  console.log(
+    `Liberated ${result.routesCaptured + result.routesSkipped}/${result.routesDiscovered} routes` +
+      (notes.length ? ` (${notes.join(', ')})` : ''),
+  );
+  console.log(`Site: ${result.websiteDir}`);
+
+  const server = result.server;
+  if (server) {
+    console.log(`Serving: ${server.url}`);
+    console.log('Press Ctrl+C to stop.');
+    const stop = () => {
+      void server.close().then(() => process.exit(0));
+    };
+    process.once('SIGINT', stop);
+    process.once('SIGTERM', stop);
   }
 }
