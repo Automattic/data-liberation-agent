@@ -6,7 +6,12 @@
 //
 import { existsSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { findPublishTarget, publishTargetNames, type PublishResult } from '../lib/publish/index.js';
+import {
+	findPublishTarget,
+	PublishError,
+	publishTargetNames,
+	type PublishResult,
+} from '../lib/publish/index.js';
 
 export interface PublishCliOptions {
 	directory: string;
@@ -35,9 +40,12 @@ export function resolvePublishDirectory( directory: string ): string {
 export async function publishSite( options: PublishCliOptions ): Promise< PublishResult > {
 	const target = findPublishTarget( options.target );
 	if ( ! target ) {
-		throw new Error(
-			`Unknown publish target "${ options.target }". Available: ${ publishTargetNames().join( ', ' ) }.`
-		);
+		throw new PublishError( {
+			code: 'unknown_target',
+			message: `Unknown publish target "${ options.target }". Available: ${ publishTargetNames().join(
+				', '
+			) }.`,
+		} );
 	}
 	return target.publish( {
 		directory: resolvePublishDirectory( options.directory ),

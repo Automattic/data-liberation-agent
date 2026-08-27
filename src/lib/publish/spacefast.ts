@@ -15,6 +15,13 @@ import { createZipArchive, type ZipEntry } from './zip.js';
 import { PublishError, type PublishOptions, type PublishResult, type PublishTarget } from './types.js';
 
 const PUBLISH_ENDPOINT = 'https://api.spacefast.com/v1/publish';
+/**
+ * Preflight ceiling. A liberated site is a bounded set of pages and assets, so
+ * far more than this means the wrong directory was passed — publishing it would
+ * upload unintended files before anything complains.
+ */
+const MAX_FILES = 5_000;
+const MAX_BYTES = 250 * 1024 * 1024;
 /** Client attribution. Never required for a request to succeed. */
 const CLIENT = 'data-liberation/publish';
 
@@ -90,8 +97,19 @@ export const spacefastTarget: PublishTarget = {
 			} );
 		}
 
-		const archive = createZipArchive( entries );
 		const bytes = entries.reduce( ( total, entry ) => total + entry.contents.length, 0 );
+		if ( entries.length > MAX_FILES || bytes > MAX_BYTES ) {
+			throw new PublishError( {
+				code: 'directory_too_large',
+				message:
+					`Refusing to publish ${ options.directory }: ${ entries.length } files, ` +
+					`${ Math.round( bytes / 1024 / 1024 ) } MB. That is beyond what a liberated site ` +
+					`should be (limit ${ MAX_FILES } files, ${ Math.round( MAX_BYTES / 1024 / 1024 ) } MB). ` +
+					'Point publish at a liberated site directory rather than a parent folder.',
+			} );
+		}
+
+		const archive = createZipArchive( entries );
 		log( `[publish] ${ entries.length } files, ${ archive.length } bytes archived` );
 
 		const form = new FormData();
