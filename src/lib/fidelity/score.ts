@@ -20,6 +20,15 @@ export interface LayoutObservation {
 	overflow: boolean;
 	/** Hosts the page requested that are not the local copy. */
 	externalHosts: string[];
+	/** Same-page hash targets found on this document. */
+	hashTargets: HashTarget[];
+	/** Internal pathnames whose local copy 404s. Empty on the live source. */
+	internalMissing: string[];
+}
+
+export interface HashTarget {
+	fragment: string;
+	resolved: boolean;
 }
 
 export interface ViewportScore {
@@ -75,6 +84,37 @@ export function scoreViewport(
 	if ( liberated.externalHosts.length > 0 ) {
 		failures.push(
 			`copy requested ${ liberated.externalHosts.length } external host(s): ${ liberated.externalHosts
+				.slice( 0, 3 )
+				.join( ', ' ) }`
+		);
+	}
+
+	const copyUnresolved = liberated.hashTargets
+		.filter( ( target ) => ! target.resolved )
+		.map( ( target ) => target.fragment );
+	if ( copyUnresolved.length > 0 ) {
+		failures.push(
+			`nav ${ copyUnresolved.length } same-page anchor(s) missing: #${ copyUnresolved
+				.slice( 0, 3 )
+				.join( ' #' ) }`
+		);
+	} else {
+		const copyResolved = new Set(
+			liberated.hashTargets.filter( ( target ) => target.resolved ).map( ( target ) => target.fragment )
+		);
+		const lost = source.hashTargets
+			.filter( ( target ) => target.resolved && ! copyResolved.has( target.fragment ) )
+			.map( ( target ) => target.fragment );
+		if ( lost.length > 0 ) {
+			failures.push(
+				`nav ${ lost.length } same-page anchor(s) missing: #${ lost.slice( 0, 3 ).join( ' #' ) }`
+			);
+		}
+	}
+
+	if ( liberated.internalMissing.length > 0 ) {
+		failures.push(
+			`nav ${ liberated.internalMissing.length } internal link(s) 404: ${ liberated.internalMissing
 				.slice( 0, 3 )
 				.join( ', ' ) }`
 		);

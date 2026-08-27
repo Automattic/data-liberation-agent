@@ -31,6 +31,8 @@ const obs = ( viewport: number, extra: Partial< LayoutObservation > = {} ): Layo
 	docWidth: viewport,
 	overflow: false,
 	externalHosts: [],
+	hashTargets: [],
+	internalMissing: [],
 	...extra,
 } );
 

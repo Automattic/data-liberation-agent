@@ -9,6 +9,8 @@ const at = ( viewport: number, extra: Partial< LayoutObservation > = {} ): Layou
 	docWidth: viewport,
 	overflow: false,
 	externalHosts: [],
+	hashTargets: [],
+	internalMissing: [],
 	...extra,
 } );
 
@@ -41,6 +43,30 @@ describe( 'scoreViewport', () => {
 			at( 390, { docWidth: 980, overflow: true, widestImage: 980 } )
 		);
 		expect( score.pass ).toBe( true );
+	} );
+
+	it( 'fails when a same-page hash has no target in the copy', () => {
+		const score = scoreViewport(
+			at( 1440, { hashTargets: [ { fragment: 'team', resolved: true } ] } ),
+			at( 1440, { hashTargets: [ { fragment: 'team', resolved: false } ] } )
+		);
+		expect( score.pass ).toBe( false );
+		expect( score.failures[ 0 ] ).toMatch( /#team/ );
+	} );
+
+	it( 'fails when the source hash worked and the copy dropped it', () => {
+		const score = scoreViewport(
+			at( 1440, { hashTargets: [ { fragment: 'features', resolved: true } ] } ),
+			at( 1440 )
+		);
+		expect( score.pass ).toBe( false );
+		expect( score.failures[ 0 ] ).toMatch( /#features/ );
+	} );
+
+	it( 'fails when an internal path 404s in the copy', () => {
+		const score = scoreViewport( at( 1440 ), at( 1440, { internalMissing: [ '/about/' ] } ) );
+		expect( score.pass ).toBe( false );
+		expect( score.failures[ 0 ] ).toMatch( /\/about\// );
 	} );
 
 	it( 'fails when the copy still talks to the source CDN', () => {
