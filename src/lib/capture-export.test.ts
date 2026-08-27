@@ -172,6 +172,100 @@ describe( 'exportWebsiteCapture', () => {
 		);
 	} );
 
+	it( 'switches documents at the width the source stops adapting at, not a hardcoded one', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-detected-switch-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
+			mkdirSync( join( outputDir, path ), { recursive: true } );
+		writeFileSync(
+			join( outputDir, 'html', 'homepage.html' ),
+			'<html><head><style>.desktop{color:blue}</style></head><body><main>Desktop</main></body></html>'
+		);
+		writeFileSync(
+			join( outputDir, 'html-mobile', 'homepage.html' ),
+			'<html><head><style>.mobile{color:red}</style></head><body><main>Mobile</main></body></html>'
+		);
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( {
+				version: 1,
+				entries: {
+					'https://example.com/': {
+						html: 'html/homepage.html',
+						// Learned during capture: this document stops shrinking at 980px.
+						fluid: {
+							applied: 12,
+							unmodelled: 3,
+							breakpoints: [ 1024 ],
+							canvasFloor: 980,
+							byKind: { floored: 12, breakpoint: 3 },
+						},
+					},
+				},
+			} )
+		);
+
+		exportWebsiteCapture( {
+			outputDir,
+			sourceUrl: 'https://example.com/',
+			platform: 'fake',
+			summary: {},
+			failures: [],
+		} );
+
+		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
+		expect( html ).toContain( '@media(max-width:980px)' );
+		expect( html ).toContain( '<style media="(min-width:981px)">.desktop{color:blue}</style>' );
+		expect( html ).not.toContain( '768px' );
+		expect( html ).not.toContain( '769px' );
+
+		const profile = JSON.parse( readFileSync( join( outputDir, 'source-profile.json' ), 'utf8' ) );
+		expect( profile ).toMatchObject( {
+			schema: 'data-liberation/source-profile/v1',
+			variants: 'per-device',
+			geometry: 'mixed',
+			switchWidth: 980,
+			switchWidthSource: 'detected',
+			breakpoints: [ 1024 ],
+		} );
+	} );
+
+	it( 'falls back to the default switch width when nothing was detected', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-default-switch-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
+			mkdirSync( join( outputDir, path ), { recursive: true } );
+		writeFileSync(
+			join( outputDir, 'html', 'homepage.html' ),
+			'<html><head><style>.desktop{color:blue}</style></head><body><main>Desktop</main></body></html>'
+		);
+		writeFileSync(
+			join( outputDir, 'html-mobile', 'homepage.html' ),
+			'<html><head><style>.mobile{color:red}</style></head><body><main>Mobile</main></body></html>'
+		);
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( {
+				version: 1,
+				entries: { 'https://example.com/': { html: 'html/homepage.html' } },
+			} )
+		);
+
+		exportWebsiteCapture( {
+			outputDir,
+			sourceUrl: 'https://example.com/',
+			platform: 'fake',
+			summary: {},
+			failures: [],
+		} );
+
+		expect( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) ).toContain(
+			'@media(max-width:768px)'
+		);
+		const profile = JSON.parse( readFileSync( join( outputDir, 'source-profile.json' ), 'utf8' ) );
+		expect( profile ).toMatchObject( { switchWidth: null, switchWidthSource: 'default' } );
+	} );
+
 	it( 'binds viewport-scoped geometry identities to the exact marker-free responsive output', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-responsive-geometry-export-' ) );
 		dirs.push( outputDir );

@@ -40,6 +40,9 @@ if (args[0] === 'mcp') {
     --resume             Reuse artifacts already on disk instead of recapturing
     --screenshots        Also capture full-page + scrolled PNG screenshots
     --no-serve           Write the site and exit without serving it locally
+    --no-learn-fluid     Skip the width sweep and freeze the layout at one width.
+                         Learning is on by default: it keeps the copy reflowing
+                         like the source instead of pinning it to the capture width.
 
   Extract options:
     --output <dir>       Output directory (default: ~/data-liberation/<hostname>; override with --output or DLA_OUTPUT_DIR)
@@ -362,6 +365,7 @@ if (args[0] === 'mcp') {
     outputBase: getArg('--output') || resolveOutputBase(),
     resume: args.includes('--resume'),
     screenshots: args.includes('--screenshots'),
+    learnFluid: !args.includes('--no-learn-fluid'),
     serve: !args.includes('--no-serve'),
     log: (message) => process.stderr.write(`${message}\n`),
   });
