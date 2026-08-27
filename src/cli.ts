@@ -24,6 +24,7 @@ if (args[0] === 'mcp') {
   Usage:
     data-liberation <url>              Liberate a website into a portable HTML site
     data-liberation publish <dir>      Publish a liberated site (--to spacefast)
+    data-liberation compare <dir>      Compare a liberated copy to its source at unsampled widths
     data-liberation extract <url>      Extract content into a WXR file (WordPress path)
     data-liberation inspect <url>      Inspect a site before extraction
     data-liberation import <wxr-file>  Import WXR file to WordPress
@@ -50,10 +51,9 @@ if (args[0] === 'mcp') {
     --token <token>      Publish into your own account (or SPACEFAST_TOKEN).
                          Without it the publish is anonymous and returns a claim link.
 
-  Publish options:
-    --to <target>        Where to publish. Targets: spacefast (default)
-    --token <token>      Publish into your own account (or SPACEFAST_TOKEN).
-                         Without it the publish is anonymous and returns a claim link.
+  Compare options:
+    --screenshots        Write source/liberated/diff PNGs as evidence. Pixel score
+                         never decides pass/fail.
 
   Extract options:
     --output <dir>       Output directory (default: ~/data-liberation/<hostname>; override with --output or DLA_OUTPUT_DIR)
@@ -146,6 +146,26 @@ if (args[0] === 'mcp') {
   const { runQaUi } = await import('./ui/qa.js');
   runQaUi({ wxrFile, fix });
 
+} else if (args[0] === 'compare' || args[0] === 'check') {
+  const directory = args[1];
+  const second = args[2];
+  if (second && !second.startsWith('-')) {
+    const { compareScreenshotDirs } = await import('./lib/screenshot/compare.js');
+    const result = await compareScreenshotDirs({ originDir: directory, replicaDir: second });
+    for (const r of result.results) {
+      console.log(`${r.pathname}  desktop=${r.desktop.score?.toFixed(3) ?? r.desktop.status}  mobile=${r.mobile.score?.toFixed(3) ?? r.mobile.status}`);
+    }
+    console.log(`\nWrote ${join(second, 'comparison.json')}`);
+  } else {
+    if (!directory || directory.startsWith('-')) {
+      console.error('Error: directory required. Usage: data-liberation compare <dir> [--screenshots]');
+      process.exit(1);
+    }
+    const { runCompare } = await import('./ui/compare.js');
+    const report = await runCompare(directory, { screenshots: args.includes('--screenshots') });
+    process.exit(report.pass ? 0 : 1);
+  }
+
 } else if (args[0] === 'verify') {
   const outputDir = args[1] || getArg('--output') || resolveOutputBase();
   if (outputDir.startsWith('-')) {
@@ -215,21 +235,6 @@ if (args[0] === 'mcp') {
   await runScreenshotCli({
     url, output: output!, types, limit, concurrency, browserRestartEvery, cdpPort, force, verbose, urlsFile, nonInteractive,
   });
-
-} else if (args[0] === 'compare') {
-  // TODO: expose --viewports / --diff-output-dir flags (the MCP handler already supports them).
-  const originDir = args[1];
-  const replicaDir = args[2];
-  if (!originDir || !replicaDir || originDir.startsWith('-') || replicaDir.startsWith('-')) {
-    console.error('Error: usage: data-liberation compare <originScreenshotsDir> <replicaScreenshotsDir>');
-    process.exit(1);
-  }
-  const { compareScreenshotDirs } = await import('./lib/screenshot/compare.js');
-  const result = await compareScreenshotDirs({ originDir, replicaDir });
-  for (const r of result.results) {
-    console.log(`${r.pathname}  desktop=${r.desktop.score?.toFixed(3) ?? r.desktop.status}  mobile=${r.mobile.score?.toFixed(3) ?? r.mobile.status}`);
-  }
-  console.log(`\nWrote ${join(replicaDir, 'comparison.json')}`);
 
 } else if (args[0] === 'freeze-spike') {
   const originUrl = getArg('--origin-url');
