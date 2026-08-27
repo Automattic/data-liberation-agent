@@ -1,20 +1,27 @@
 ---
 name: liberate
-description: Front door for the whole migration. FIRST routes on input type — a local directory of owned HTML/CSS/JS takes the local carry-to-block-theme path (dispatches liberate-local inline; no platform detection, no network extraction, no path checkpoint), while a URL takes the remote path: detect → discover, then ALWAYS stop and ask the operator (AskUserQuestion) which reconstruct path to take (blocks+products, or theme replication) BEFORE running extraction/capture, then dispatch the matching sub-skill. On the URL path the path question is a mandatory, non-skippable gate that fires right after discovery while the operator is still present — never auto-select, never defer it past extraction. Idempotent: re-running on an already-captured site skips straight to the path question (URL) or re-converts deterministically (local).
+description: Front door for liberating a website. A URL becomes a complete, portable HTML site — detect, discover, liberate every route, then hand back a local copy that runs on its own. That portable site IS the deliverable; HTML is the contract. WordPress reconstruction (blocks+products or theme replication) is an OPTIONAL downstream step offered only when the operator asks for WordPress — never assumed, never required, never a precondition for liberating. A local directory of owned HTML/CSS/JS that the operator wants turned into a WordPress block theme dispatches liberate-local. Idempotent: re-running on an already-liberated site reuses what is on disk.
 ---
 
 # Liberate a website
 
-The single front door for the whole migration pipeline. **It first routes on the input type:**
+The front door for liberation. **Liberating a website means producing a complete, portable HTML copy of it** — every retained route, its CSS, assets, navigation, responsive behavior, and the client-side behavior it needs — in a directory that runs on its own.
 
-- **A URL** (a live site you don't control) → the remote path: capture the site **once** (detect → discover → extract → capture → products), then ask which reconstruct path to take and **dispatch the matching sub-skill inline** (shared context):
-  - **`replicate-with-blocks`** — project the source onto editable WordPress core blocks + WooCommerce. Best launchpad for a redesign.
-  - **`replicate-theme`** — carry the source markup near-verbatim + scope its own CSS into a high-fidelity, non-block-editable theme.
-- **A local directory** (a folder of owned HTML/CSS/JS you authored or Claude generated) → the **local** path: there is nothing to detect or extract, so it skips straight to provisioning a fresh WordPress Studio site and carrying the source into a native block theme. This path is owned entirely by **`liberate-local`**, which this skill **dispatches inline** (read & follow `skills/liberate-local/SKILL.md`). There is no platform detection, no network extraction, and no path checkpoint — the local source IS the design authority, so the path is always carry-to-block-theme.
+**HTML is the contract.** The liberated site is the deliverable. It is not an intermediate representation on the way to some other platform, and it does not assume any destination.
 
-On the URL path, each reconstruct sub-skill owns its own reconstruct → install → QA → report; this skill owns capture + the path decision. **Idempotent:** re-running `/liberate <url>` on an already-captured site skips straight to the path question (so you can try the other path later with zero re-capture); re-running `/liberate <dir>` re-converts the local site deterministically.
+**It routes on the input type:**
 
-**Headless extraction-only (CI/batch):** `data-liberation <url>` runs steps 1–5 (capture only). The reconstruct (blocks or theme) is agent-only, via the dispatched sub-skill.
+- **A URL** (a live site you don't control) → liberate it: detect → discover → liberate every route → serve the result locally. Stop there. That is a complete outcome.
+- **A local directory** (a folder of owned HTML/CSS/JS) → there is nothing to liberate; the operator already owns the source. This input only makes sense when they want it turned into a **WordPress block theme**, which is owned entirely by **`liberate-local`** (read & follow `skills/liberate-local/SKILL.md`).
+
+**WordPress is optional and downstream.** After a URL is liberated, the operator may want it reconstructed in WordPress. Offer that only when they ask for WordPress or have already said that WordPress is the destination. Two reconstruct paths exist:
+
+- **`replicate-with-blocks`** — project the source onto editable WordPress core blocks + WooCommerce. Best launchpad for a redesign.
+- **`replicate-theme`** — carry the source markup near-verbatim + scope its own CSS into a high-fidelity, non-block-editable theme.
+
+**Idempotent:** re-running `/liberate <url>` on an already-liberated site reuses what is on disk instead of re-hitting the network, so a later WordPress reconstruct costs nothing extra.
+
+**Headless (CI/batch):** `data-liberation <url>` performs the whole liberation and serves the result. `--no-serve` writes the site and exits. WordPress reconstruction is agent-only, via the sub-skills.
 
 ---
 
@@ -25,37 +32,36 @@ On the URL path, each reconstruct sub-skill owns its own reconstruct → install
 │
 ├─ ROUTE ON INPUT TYPE  ◀── do this FIRST, before anything else
 │     ├─ <input> resolves to an existing LOCAL DIRECTORY?
-│     │     └─ YES → dispatch liberate-local INLINE (read & follow its SKILL.md) → DONE
-│     │              (provision Studio → ingest → build theme → install → compare → repair;
-│     │               no detect/discover/extract, no path checkpoint)
+│     │     └─ YES → the operator owns this source; the only sensible job is
+│     │              WordPress theme conversion → dispatch liberate-local INLINE → DONE
 │     └─ otherwise treat as a URL ▼
 │
-├─ idempotent check: extraction already on disk?  (.discovery-complete / session.json stage / output.wxr + html/* + manifest.json)
-│     ├─ YES → load cached inventory ──────────────────────────────────────┐
+├─ idempotent check: already liberated on disk?  (website/ + capture-receipt.json / artifact.json)
+│     ├─ YES → reuse it ───────────────────────────────────────────────────┐
 │     └─ NO  → 1 detect → discover    platform · sitemap · features · archetype inventory (CHEAP)
 │                                                                           │
 │  ┌────────────────────────────────────────────────────────────────────────┘
 │  ▼
-├─ CONFIRM + PATH CHECKPOINT  ◀── MANDATORY HARD STOP, BEFORE EXTRACTION — never skip, never auto-select
-│     show discovery inventory + scope/cost estimate + the rule-based recommendation,
-│     then ALWAYS AskUserQuestion: blocks+products vs theme replication.
-│     The operator's answer is the ONLY thing that authorizes the rest of the run.
-│     Nothing expensive (extract/capture) runs until they have answered.
+├─ 2 LIBERATE  ── the deliverable ──────────────────────────────────────────────
+│     every retained route → hydrated HTML + CSS + assets, references rewritten
+│     local, navigation and anchors resolving locally
 │     ▼
-├─ EXTRACTION (deterministic — only after the path is chosen):
-│     2 extract               pages/posts/products content + media refs
-│     3 media: dedup+upload   → uploaded WP-library URLs (reused downstream)
-│     4 capture               desktop+mobile screenshots · palette/type/breakpoints · html/<slug>.html
-│     5 products → products.csv    WooCommerce import format
+├─ 3 SERVE + REPORT   runnable local copy · routes liberated/reused/failed ·
+│     unresolved dependencies · anything the source withheld
 │     ▼
-└─ RECONSTRUCT — dispatch the chosen sub-skill INLINE (shared context):
-      blocks+products → replicate-with-blocks   (core blocks + WooCommerce + QA ladder → run-report.json)
-      theme           → replicate-theme         (carry-and-scope islands + scoped CSS → compare → run-report-carry.json)
+│  ✅ DONE. The portable HTML site is a complete outcome. Stop here unless the
+│     operator wants another destination.
+│
+└─ OPTIONAL — WordPress destination, only when the operator asks for WordPress:
+      ask which reconstruct path (AskUserQuestion), then run the WordPress-path
+      steps (extract → media → products) and dispatch the chosen sub-skill INLINE:
+        blocks+products → replicate-with-blocks   (core blocks + WooCommerce + QA ladder → run-report.json)
+        theme           → replicate-theme         (carry-and-scope islands + scoped CSS → compare → run-report-carry.json)
 ```
 
-Capture is still shared across both paths, so the "try the other path with zero re-capture" property holds: re-running `/liberate <url>` after a full run hits the idempotent check, loads the cached inventory, and lands you straight back on the path question.
+Liberation output is shared across every downstream destination, so trying a different destination later never re-hits the network.
 
-Each sub-skill owns its own reconstruct → install → QA → report, plus its own budget guard (`checkBudget` in `src/lib/replicate/budget-guard.ts`) and run-report (`buildRunReport` in `src/lib/replicate/run-report.ts`). This skill's deliverable is the captured output directory + the dispatch; the chosen sub-skill produces the replica + its `run-report*.json`.
+Each reconstruct sub-skill owns its own reconstruct → install → QA → report, plus its own budget guard (`checkBudget` in `src/lib/replicate/budget-guard.ts`) and run-report (`buildRunReport` in `src/lib/replicate/run-report.ts`). This skill's deliverable is the liberated site; a chosen sub-skill produces the WordPress replica + its `run-report*.json`.
 
 ---
 
@@ -65,7 +71,7 @@ Each sub-skill owns its own reconstruct → install → QA → report, plus its 
 
 Before any detection, idempotent check, or extraction, decide which path the input takes:
 
-- **Local directory** — if the input resolves to an **existing local directory** (an absolute or relative filesystem path to a folder of owned HTML/CSS/JS), take the **local** path. Dispatch `liberate-local` inline: **read & follow `skills/liberate-local/SKILL.md`** in this same shared context. That sub-skill owns the entire local pipeline (resolve inputs → optional data-model → `liberate_convert_local_site` → parity report). When it returns, you are done — **do not** run any of the URL steps below (no detect, no discover, no extraction, no path checkpoint).
+- **Local directory** — if the input resolves to an **existing local directory** (an absolute or relative filesystem path to a folder of owned HTML/CSS/JS), there is nothing to liberate: the operator already has the source. The job is WordPress theme conversion, so dispatch `liberate-local` inline: **read & follow `skills/liberate-local/SKILL.md`** in this same shared context. That sub-skill owns the entire local pipeline (resolve inputs → optional data-model → `liberate_convert_local_site` → parity report). When it returns, you are done — **do not** run any of the URL steps below.
 - **URL** — anything else (a `http(s)://` URL, or a bare host like `example.com`) takes the **URL** path: continue to Step 0. If the input has no scheme and is not a directory, treat it as a URL and normalize it (prepend `https://`).
 
 Disambiguation rule when it's genuinely unclear: a value that **exists on disk as a directory** is local; otherwise it's a URL. A path that doesn't exist as a directory and looks like a host/URL is a URL — don't error, treat it as remote.
@@ -74,7 +80,7 @@ Disambiguation rule when it's genuinely unclear: a value that **exists on disk a
 
 ### Step 0 — Idempotent check (run first, URL path)
 
-Call `liberate_paths({ url })` to resolve the output directory (`siteDir`). Do not hardcode `output/<site>/` relative to cwd — the default output base is now `~/Studio/_liberations/<host>`. If extraction is already complete — any of `.discovery-complete`, a `session.json` stage past extraction, or all of `output.wxr` + `html/*.html` + `screenshots/manifest.json` present in the resolved `siteDir` — **skip Steps 1 and 3–6**, load the cached inventory (`session.json` / discovery output), and jump straight to the **Step 2 — Confirm + path checkpoint** below. Otherwise run Step 1, hit the checkpoint, then run Steps 3–6. (For a partial capture, prefer `resume: true`; see Resuming.)
+Call `liberate_paths({ url })` to resolve the output directory (`siteDir`). Do not hardcode `output/<site>/` relative to cwd — the default output base is `~/data-liberation/<host>`. If the site is already liberated — `website/` plus `capture-receipt.json` / `artifact.json` present in the resolved `siteDir` — **skip Steps 1 and 2**, report what is already on disk, and go straight to Step 3. For a partial run, prefer `resume: true` (see Resuming) so existing routes are reused instead of recaptured.
 
 ### Step 1 — Detect & discover
 
@@ -86,18 +92,33 @@ Call `liberate_paths({ url })` to resolve the output directory (`siteDir`). Do n
    - Features marked `transferable: false` include a `wpRecommendation` (suggested WP plugin).
    - Narrate: "Detected Wix · 47 pages · 3 archetypes · 12 products · store (WooCommerce) · forms (WPForms recommended)."
 
-### Step 2 — Confirm + path checkpoint — MANDATORY HARD STOP (fires here, before any extraction)
+### Step 2 — Liberate the site
 
-> **This checkpoint is NOT optional and NOT skippable, and it fires RIGHT HERE — immediately after discovery, before extraction/capture.** You ask **while the operator is still present and paying attention**; that is the whole point of placing it before the long deterministic extraction, not after. You **MUST** stop and ask the operator to choose the reconstruct path via **AskUserQuestion** before running Step 3 (extract) or anything downstream. There is no "default path." You do **not** auto-select on the operator's behalf, no matter how strong the inventory signal is — a recommendation is a hint inside the question, never a decision. Starting extraction (or dispatching a sub-skill) without having asked this question is a defect. The **only** thing that authorizes the rest of the run is the operator's answer to this AskUserQuestion.
+Call `liberate_capture` with the resolved `outputDir` (pass `resume: true` to reuse routes already on disk). Narrate per-route progress.
 
-**Red flags — if you catch yourself thinking any of these, STOP and ask:**
-- "Discovery's done, I'll kick off extraction and ask about the path later." → No. Extraction is the expensive part; ask BEFORE it, while the operator is here.
-- "The platform clearly calls for blocks/theme, so I'll just run it." → No. Recommend *inside* the question; let them pick.
-- "They already said blocks last time / earlier in the convo." → A prior run's choice does not carry over; ask again.
-- "This is obviously a store, blocks is the only sensible path." → Still ask. The operator may want fidelity over editability.
-- "I'll extract first so the operator has more data when they decide." → Discovery already gives platform · counts · features — enough to choose. Don't burn extraction to defer the question.
+This liberates every retained route into `<siteDir>/website/`: hydrated HTML, CSS, media, fonts, and required client runtime, with references rewritten to local paths so navigation and same-page anchors resolve inside the copy. It writes `capture-receipt.json` (routes, assets, layout geometry) and `diagnostics.json` (failures, unresolved dependencies) beside it.
 
-Show the discovery inventory (pages · archetypes · products · platform features) and a scope/cost/time estimate as a plain chat message, then call **AskUserQuestion**. **Theme replication is the default recommendation** — recommend **Blocks + products** only when the site is clearly a store, or when you have a strong, specific reason Blocks fits better. The question, labels, and descriptions below are **fixed copy — use them verbatim**: do not paraphrase, shorten, or restate the inventory inside them. List the recommended option first and append ` (Recommended)` to its label — that is the only allowed variation.
+**0 routes:** "Nothing could be liberated at `<url>`. The site may be behind auth or bot-protection — try CDP/admin access (`/diagnose`)." Stop.
+
+Liberate **every** route in the retained set. A representative sample is not a liberated site; sampling is only acceptable when the operator explicitly asks for a scoped subset, and you must say plainly that the result is partial.
+
+### Step 3 — Serve and report
+
+Serve the liberated site locally and give the operator the URL so they can click through it themselves.
+
+Report honestly, distinguishing outcomes that do not imply each other:
+
+- Routes liberated, reused, and failed, against routes discovered.
+- Unresolved dependencies and media from `diagnostics.json`.
+- Anything the source withheld (auth-gated, bot-blocked, or client-only behavior that did not survive).
+
+Do not describe a site as complete or one-for-one on the strength of route counts alone. Route coverage is not visual fidelity, and neither proves that interactive behavior survived.
+
+**This is the end of liberation.** The portable HTML site is a complete deliverable. Do not offer, assume, or start a WordPress reconstruct unless the operator asks for WordPress.
+
+### Optional — WordPress destination
+
+Run this **only** when the operator has asked for WordPress. Show the liberation inventory (pages · archetypes · products · platform features) plus a scope/cost/time estimate, then call **AskUserQuestion** to choose the reconstruct path. Recommend **Theme replication** by default; recommend **Blocks + products** when the site is clearly a store or you have a strong, specific reason. Use this copy verbatim, listing the recommended option first with ` (Recommended)` appended:
 
 - question: `How should the site be reconstructed in WordPress?`
 - option label: `Blocks + products`
@@ -105,36 +126,17 @@ Show the discovery inventory (pages · archetypes · products · platform featur
 - option label: `Theme replication`
   description: `Carry-and-scope: highest-fidelity replica of the source, raw-HTML-editable (not block-editable). (Imports product data; product pages fall back to default WooCommerce, not a carried replica.)`
 
-**The operator's selection is the sole go-ahead** (this replaces the old proceed/confirm gate). Only after they answer do you run Steps 3–6 (extraction/capture) and then Dispatch.
+Never auto-select the path. A recommendation belongs inside the question; the operator's answer is the only thing that authorizes the reconstruct.
 
-### Step 3 — Extract
+Then run the WordPress-path steps against the already-liberated site:
 
-Call `liberate_extract` with an appropriate `outputDir`. Narrate per-URL progress.
-
-**0 pages:** "No extractable pages found at `<url>`. The site may be behind auth or bot-protection — try CDP/admin extraction (`/diagnose`)." Stop.
-
-### Step 4 — Media dedup + upload
-
-Media references are deduped and uploaded to the WP media library. Uploaded URLs are the canonical media references used everywhere downstream (specs, templates, `post_content`).
-
-### Step 5 — Capture
-
-Runs automatically during or after extract: desktop+mobile screenshots, `palette.json` / `typography.json` / `breakpoints.json`, and `html/<slug>.html` per URL. Clustering in the blocks path runs off the already-saved `html/<slug>.html` — no re-navigation.
-
-**Capture scope depends on the path you just chose** (a second reason the checkpoint fires before capture, not after):
-
-- **blocks** → a *representative sample* is enough. The blocks path clusters off a sample of `html/<slug>.html` and live-fetches the rest on a cache miss, so partial capture is fine. Sample **across** archetypes (homepage + a few of each kind), not the first N sitemap URLs — and make sure the **homepage** is in the sample.
-- **theme** → the carry path reconstructs **every page individually from its own `html/<slug>.html`**, so capture **full HTML for every page in the carry set up front**. A sample forces a re-capture once `replicate-theme` runs. For a blog-dominant site where the theme replica carries only the custom/marketing pages (posts/news staying native), capture those custom pages in full and skip per-post capture — but you must know that *before* capturing, which is why the path is chosen first.
-
-Default concurrency: 6. Configure via `--screenshots-concurrency N` or `--concurrency N`.
-
-### Step 6 — Products → CSV
-
-If products were extracted, compile `products.jsonl` → `products.csv` (WooCommerce import format). Report: "Also extracted N products → products.csv."
+1. **Extract** — call `liberate_extract` with the same `outputDir` for pages/posts/products content and media refs, producing the WXR. Reuses the liberated HTML rather than re-hitting the network.
+2. **Media dedup + upload** — deduped and uploaded to the WP media library; the uploaded URLs are the canonical references downstream (specs, templates, `post_content`).
+3. **Products → CSV** — if products were extracted, compile `products.jsonl` → `products.csv` (WooCommerce import format). Report: "Also extracted N products → products.csv."
 
 ### Dispatch (inline)
 
-All three sub-skills this front door dispatches — the two reconstruct skills here plus `liberate-local` (dispatched earlier, at Step R, for the local path) — are `disable-model-invocation: true` by design, so they only ever run from this front door, never spontaneously. That means **the Skill tool cannot invoke them**: a `Skill({ skill: 'replicate-theme' })` call is rejected with `cannot be used with Skill tool due to disable-model-invocation`. So **dispatch = Read the chosen sub-skill's `SKILL.md` and execute its workflow inline in this same shared context** (each sub-skill reads the resolved output directory from disk — use the `siteDir` returned by `liberate_paths` — and owns its own install → QA → report):
+All three sub-skills this front door dispatches — the two reconstruct skills plus `liberate-local` (dispatched at Step R for the local-directory input) — are `disable-model-invocation: true` by design, so they only ever run from this front door, never spontaneously. That means **the Skill tool cannot invoke them**: a `Skill({ skill: 'replicate-theme' })` call is rejected with `cannot be used with Skill tool due to disable-model-invocation`. So **dispatch = Read the chosen sub-skill's `SKILL.md` and execute its workflow inline in this same shared context** (each sub-skill reads the resolved output directory from disk — use the `siteDir` returned by `liberate_paths` — and owns its own install → QA → report):
 
 - blocks+products → read & follow `skills/replicate-with-blocks/SKILL.md`
 - theme replication → read & follow `skills/replicate-theme/SKILL.md`
@@ -149,16 +151,20 @@ The reconstruct phase (clustering, foundations, theme, build, validate, install,
 | Stage | State | Response |
 |---|---|---|
 | routing | input is a local directory | Dispatch `liberate-local` inline (read & follow its SKILL.md); skip all URL steps |
-| extraction | 0 pages | Stop + "No extractable pages found at `<url>`. Try CDP/admin extraction (`/diagnose`)." |
-| extraction | adapter fail | Log + pointer to `/diagnose` |
-| checkpoint | operator picks a path | Dispatch the chosen sub-skill (`replicate-with-blocks` / `replicate-theme`) inline |
+| liberation | 0 routes | Stop + "Nothing could be liberated at `<url>`. Try CDP/admin access (`/diagnose`)." |
+| liberation | adapter fail | Log + pointer to `/diagnose` |
+| liberation | routes failed or dependencies unresolved | Report them plainly; do not claim a complete copy |
+| liberation | done | Serve the site, report coverage, and stop — WordPress is not implied |
+| WordPress (optional) | operator asked for WordPress and picked a path | Dispatch the chosen sub-skill (`replicate-with-blocks` / `replicate-theme`) inline |
 | reconstruct | gate fail · clusters failed · QA divergence · budget ceiling | Owned by the dispatched sub-skill — see its SKILL.md (`replicate-with-blocks`'s validate-artifacts + QA-ladder gates + budget guard; `replicate-theme`'s parity compare) |
 
-Progress is the agent's own narration — no Ink TUI in agent mode. The headless extraction CLI keeps its existing Ink surfaces (`discover.tsx`, `screenshot.tsx`).
+Progress is the agent's own narration — no Ink TUI in agent mode. The headless CLI keeps its existing Ink surfaces (`discover.tsx`, `screenshot.tsx`).
 
 ---
 
-## Run report (per path)
+## Run report (WordPress paths only)
+
+Liberation itself reports through `capture-receipt.json` + `diagnostics.json`. The reports below exist only when a WordPress reconstruct ran.
 
 Each reconstruct path emits its **own** report — `run-report.json` from `replicate-with-blocks`, `run-report-carry.json` from `replicate-theme` (each carries a `mode` field). The blocks-path `run-report.json` is verdict-first; read top-down to answer "is this good?":
 
@@ -175,10 +181,10 @@ The theme-path `run-report-carry.json` is parity-compare shaped — see `replica
 If the user asks to resume (e.g. "resume", "continue", "it crashed"):
 
 1. Ask for the URL if not provided — `outputDir` is derived from it.
-2. Call `liberate_extract` with `resume: true` for extraction; `session.json` tracks stage so capture resumes where it stopped. Reconstruct resume (per-cluster build status, etc.) is the chosen sub-skill's concern.
-3. If extraction was already complete (`.discovery-complete` exists), skip straight to the **Step 2 — Confirm + path checkpoint** (the idempotent path) and offer to run a reconstruct path. If only discovery completed and the run stopped before the checkpoint, re-run discovery (cheap) and ask the path question — extraction must not start until the operator has chosen.
+2. Call `liberate_capture` with `resume: true`; routes already on disk are reused instead of recaptured, so only the missing ones cost network time.
+3. If the site is already fully liberated, say so, serve it, and stop. Offer a WordPress reconstruct only if the operator asks for WordPress.
 
-The `resume` flag causes extraction to:
+On the optional WordPress path, `liberate_extract`'s `resume` flag causes extraction to:
 - Skip platform detection/discovery if a completed WXR already exists
 - Skip URLs already successfully processed (tracked in `extraction-log.jsonl`)
 - Rebuild media dedup hashes from existing files
@@ -186,7 +192,7 @@ The `resume` flag causes extraction to:
 
 ---
 
-## Output-quality contract
+## Output-quality contract (WordPress paths)
 
 These guarantees are enforced by the reconstruct sub-skills (mainly `replicate-with-blocks`'s validate-artifacts + QA gates; alt-text + copyright apply to both paths):
 
@@ -200,13 +206,15 @@ These guarantees are enforced by the reconstruct sub-skills (mainly `replicate-w
 
 ## Discoveries
 
-If you encounter something notable during extraction — a new API endpoint, a platform quirk, a workaround for blocked content, a better extraction technique — add an entry to `DISCOVERIES.md` at the top of the repo.
+If you encounter something notable while liberating — a new API endpoint, a platform quirk, a workaround for blocked content, a better acquisition technique — add an entry to `DISCOVERIES.md` at the top of the repo.
 
 ---
 
 ## Verification
 
-After extraction completes, always run `liberate_verify` on the output directory. This checks:
+After liberation, always read `diagnostics.json` and report failed routes, unresolved dependencies, and unresolved media. Click-through of the served copy is the operator's own check.
+
+On the optional WordPress path, also run `liberate_verify` on the output directory once extraction completes. This checks:
 - Stale CDN URLs still embedded in content (Shopify, Squarespace, Webflow, Wix CDN domains)
 - Failed page extractions and failed media downloads
 - Quality score breakdown (high/medium/low)
@@ -314,7 +322,9 @@ Pages use DOM-based extraction: strip `HEADER_SECTION`, `FOOTER_*`, cookie banne
 
 ## General notes
 
-- The extraction produces a WXR file (WordPress import format) + a media directory + a redirect map.
+- Liberation produces `website/` (the portable HTML site), `capture-receipt.json`, `diagnostics.json`, and `artifact.json` under the resolved `siteDir`. That directory is self-contained and needs no WordPress to open, serve, or inspect.
+- The notes below apply only to the optional WordPress path.
+- Extraction produces a WXR file (WordPress import format) + a media directory + a redirect map.
 - If the site has products, a `products.csv` (WooCommerce format) and `products.jsonl` are also produced.
 - All content is imported as **drafts by default** — the user reviews and publishes manually (the WXR a user imports into their production WordPress). This is `liberate_extract`'s `contentStatus` default (`'draft'`). **When building a replica/preview** (the design phase — a Studio replica whose nav must resolve), pass `contentStatus: 'publish'` to `liberate_extract`/`liberate_extract_one` so imported pages/posts are live instead of 404ing. Attachments always use WP's `inherit` regardless.
 - The WordPress import step supports `importAuthors: true` to create WP user accounts per author, or `importAuthors: false` (default) to assign all content to the authenticated user. Ask before importing.

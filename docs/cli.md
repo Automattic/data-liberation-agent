@@ -29,7 +29,7 @@ After extraction completes, the CLI prompts:
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `--output <dir>` | Output directory (base; a `<host>` subdirectory is created under it) | `~/Studio/_liberations` |
+| `--output <dir>` | Output directory (base; a `<host>` subdirectory is created under it) | `~/data-liberation` |
 | `--dry-run` | Extract 2-3 pages and report without writing WXR | off |
 | `--resume` | Resume a previous extraction, skipping already-processed URLs | off |
 | `--token <token>` | API token for platforms requiring auth (e.g. Webflow) | `LIBERATION_TOKEN` env var |
@@ -232,7 +232,7 @@ Capture full-page + scrolled-state screenshots (desktop 1440×900 + mobile 390×
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `--output <dir>` | Output directory | `~/Studio/_liberations/<hostname>` |
+| `--output <dir>` | Output directory | `~/data-liberation/<hostname>` |
 | `--types <list>` | Comma-separated URL types to capture: `page`, `post`, `product`, `homepage`, `gallery`, `event` | all |
 | `--limit <N>` | Cap to first N URLs | no cap |
 | `--concurrency <N>` | Parallel captures | 3 (max 10) |

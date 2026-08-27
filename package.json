@@ -1,7 +1,7 @@
 {
   "name": "data-liberation",
   "version": "0.1.0",
-  "description": "Extract content from closed web platforms into WordPress-compatible WXR files",
+  "description": "Liberate any website into a complete, portable HTML site",
   "type": "module",
   "bin": {
     "data-liberation": "./dist/cli.js"

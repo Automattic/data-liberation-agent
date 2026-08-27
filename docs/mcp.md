@@ -248,6 +248,6 @@ Resolve where liberation output lives for a given URL.
 |-----------|----------|-------------|
 | `url` | no | The website URL. When provided, `siteDir` is populated. |
 
-**Returns:** `{ base, siteDir? }`. `base` is the resolved output base (`~/Studio/_liberations` by default; overridable via the `DLA_OUTPUT_DIR` env var or `--output` on the CLI). `siteDir` is `base/<sanitized host+path>` when `url` is given.
+**Returns:** `{ base, siteDir? }`. `base` is the resolved output base (`~/data-liberation` by default; overridable via the `DLA_OUTPUT_DIR` env var or `--output` on the CLI). `siteDir` is `base/<sanitized host+path>` when `url` is given.
 
-Skills and agents MUST call this tool to locate liberation output instead of assuming `output/<site>/` relative to cwd. The default output base changed from `./output` (cwd-relative) to `~/Studio/_liberations` (user-owned, Studio-adjacent).
+Skills and agents MUST call this tool to locate liberation output instead of assuming `output/<site>/` relative to cwd. The default output base changed from `./output` (cwd-relative) to `~/data-liberation` (user-owned, Studio-adjacent).

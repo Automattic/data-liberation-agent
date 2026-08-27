@@ -1,6 +1,6 @@
 {
   "name": "data-liberation",
-  "description": "Extract content from closed web platforms (GoDaddy Websites & Marketing, Hostinger, HubSpot, Shopify, Squarespace, Webflow, Weebly, Wix) into WordPress-compatible WXR files. Inspect, extract, QA, and import to WordPress.",
+  "description": "Liberate any website (GoDaddy Websites & Marketing, Hostinger, HubSpot, Shopify, Squarespace, Webflow, Weebly, Wix, or any other site) into a complete, portable HTML site. Optionally reconstruct it in WordPress.",
   "version": "0.2.2",
   "author": {
     "name": "Automattic"
@@ -12,7 +12,7 @@
   "interface": {
     "displayName": "Data Liberation",
     "shortDescription": "Extract closed-platform sites into WordPress-compatible exports",
-    "longDescription": "Inspect, extract, QA, and import content from closed website platforms into WordPress-compatible WXR files.",
+    "longDescription": "Liberate a website into a complete, portable HTML site, then optionally inspect, QA, and reconstruct it in WordPress.",
     "developerName": "Automattic",
     "category": "Developer Tools",
     "capabilities": [
