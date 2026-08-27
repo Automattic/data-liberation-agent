@@ -28,6 +28,7 @@ if (args[0] === 'mcp') {
     data-liberation inspect <url>      Inspect a site before extraction
     data-liberation import <wxr-file>  Import WXR file to WordPress
     data-liberation qa <wxr-file>        Compare WXR against source site
+    data-liberation check <dir>          Compare a liberated copy to its source at unsampled widths
     data-liberation verify <output-dir>  Verify extraction results
     data-liberation setup                Validate WordPress connection
     data-liberation preview <outputDir>  Preview extraction in Studio
@@ -145,6 +146,16 @@ if (args[0] === 'mcp') {
 
   const { runQaUi } = await import('./ui/qa.js');
   runQaUi({ wxrFile, fix });
+
+} else if (args[0] === 'check') {
+  const directory = args[1];
+  if (!directory || directory.startsWith('-')) {
+    console.error('Error: directory required. Usage: data-liberation check <dir>');
+    process.exit(1);
+  }
+  const { runCheck } = await import('./ui/check.js');
+  const report = await runCheck(directory);
+  process.exit(report.pass ? 0 : 1);
 
 } else if (args[0] === 'verify') {
   const outputDir = args[1] || getArg('--output') || resolveOutputBase();
