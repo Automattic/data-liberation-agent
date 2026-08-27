@@ -144,6 +144,10 @@ interface CapturePerViewportArgs {
 	page: Page;
 	learnFluid?: boolean;
 	fluidWidths?: number[];
+	collectResponsiveImages?: (
+		page: import('playwright').Page,
+		ctx: import('../../adapters/page-actions.js').CaptureContext
+	) => Promise< Record< string, string > >;
 	removeSelectors?: string[];
 	prepareCapture?: (
 		page: import('playwright').Page,
@@ -163,7 +167,7 @@ interface CapturePerViewportArgs {
 	shouldAnalyze: boolean;
 	designCtx?: DesignCaptureContext; // present when design capture is enabled
 	outputDir: string;
-	/** Accumulates {wix-media-id → mobile-variant URL} from the mobile viewport, for
+	/** Accumulates {media id → mobile-variant URL} from the mobile viewport, for
 	 *  responsive-image carry. Mutated in place; written once after all captures. */
 	responsiveImages: Record< string, string >;
 	/** Accumulates {slug → mobile-DOM scrollHeight} from the mobile viewport, for the
@@ -524,24 +528,17 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	} );
 
 	// --- responsive image map (mobile only) -----------------------------------
-	// At the mobile viewport, Wix's <wow-image> JS has swapped each image to its
-	// mobile-cropped CDN variant. Record {media-id → mobile URL} so the alt
-	// reconstruct can serve the mobile crop via <picture> (no JS) on narrow
-	// viewports. Best-effort: a read failure must not fail the screenshot.
-	if ( ! isDesktop ) {
+	// Some platforms swap each image for a viewport-specific crop at runtime.
+	// Recording {media id → variant URL} lets the export serve that crop via
+	// <picture> with no JavaScript. Which URLs are variants is adapter
+	// knowledge (seam 2), so the capture path never learns a CDN's shape.
+	// Best-effort: a read failure must not fail the screenshot.
+	if ( ! isDesktop && args.collectResponsiveImages ) {
 		try {
-			const map = await page.evaluate( () => {
-				const out: Record< string, string > = {};
-				for ( const im of Array.from( document.querySelectorAll( 'img' ) ) ) {
-					const url = ( im as HTMLImageElement ).currentSrc || ( im as HTMLImageElement ).src || '';
-					const idm = /([a-z0-9]{4,12}_[a-z0-9]{24,48})/i.exec( url );
-					// Only Wix CDN fills (the JS-swapped responsive variants) are useful.
-					if ( idm && /static\.wixstatic\.com\/.+\/fill\/w_\d+,h_\d+/.test( url ) )
-						out[ idm[ 1 ].toLowerCase() ] = url;
-				}
-				return out;
-			} );
-			Object.assign( responsiveImages, map );
+			Object.assign(
+				responsiveImages,
+				await args.collectResponsiveImages( page, { url, viewport: 'mobile' } )
+			);
 		} catch {
 			/* best-effort — never block capture on the responsive-image probe */
 		}
@@ -1077,7 +1074,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	await manifest.init();
 	if ( force ) await manifest.resetFailures();
 
-	// Site-wide {wix-media-id → mobile-variant URL}, accumulated from each page's
+	// Site-wide {media id → mobile-variant URL}, accumulated from each page's
 	// mobile pass, written once at the end for the alt reconstruct to consume.
 	const responsiveImages: Record< string, string > = existsSync(
 		join( opts.outputDir, 'responsive-images.json' )
@@ -1248,6 +1245,9 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 					resourceStore,
 					publicUrlsOnly: opts.publicUrlsOnly ?? false,
 					removeSelectors: opts.removeSelectors,
+					...( opts.collectResponsiveImages
+						? { collectResponsiveImages: opts.collectResponsiveImages }
+						: {} ),
 					...( opts.learnFluid ? { learnFluid: true } : {} ),
 					...( opts.fluidWidths ? { fluidWidths: opts.fluidWidths } : {} ),
 					prepareCapture: opts.prepareCapture,

@@ -160,6 +160,9 @@ export async function captureWebsite(
 		force: options.resume !== true,
 		removeSelectors: adapter.capture?.removeSelectors,
 		prepareCapture: adapter.capture?.prepare,
+		...( adapter.capture?.responsiveImages
+			? { collectResponsiveImages: adapter.capture.responsiveImages.bind( adapter.capture ) }
+			: {} ),
 		publicUrlsOnly: true,
 		onProgress: ( current, total, url ) => progress( { phase: 'capturing', current, total, url } ),
 	} );

@@ -81,6 +81,14 @@ export interface ScreenshotOpts {
 	learnFluid?: boolean;
 	/** Widths to observe when learning. Defaults to DEFAULT_SWEEP_WIDTHS. */
 	fluidWidths?: number[];
+	/**
+	 * Adapter hook returning the viewport-specific image variants a platform's
+	 * runtime swapped in (seam 2). The capture path stays CDN-agnostic.
+	 */
+	collectResponsiveImages?: (
+		page: import('playwright').Page,
+		ctx: import('../../adapters/page-actions.js').CaptureContext
+	) => Promise< Record< string, string > >;
 	/** Adapter-declared selectors removed from each page before capture (seam 1). */
 	removeSelectors?: string[];
 	/** Adapter imperative capture hook, run after removeSelectors. Best-effort. */
