@@ -1,4 +1,5 @@
 import type { PlatformAdapter } from '../../types.js';
+import { capture } from './capture.js';
 import { discover } from './discover.js';
 import { extract } from './extract.js';
 
@@ -14,4 +15,6 @@ function detect(url: string): boolean {
   return /wixsite\.com|wix\.com/i.test(url);
 }
 
-export const wixAdapter: PlatformAdapter = { id: 'wix', detect, discover, extract };
+export { wixMediaVariant } from './capture.js';
+
+export const wixAdapter: PlatformAdapter = { id: 'wix', detect, discover, extract, capture };
