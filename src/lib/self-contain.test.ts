@@ -48,6 +48,15 @@ describe( 'self-contain', () => {
 		expect( html ).toContain( 'data:application/octet-stream;base64,' );
 	} );
 
+	it( 'drops 1x1 gif placeholders from srcset so the browser cannot pick them', () => {
+		const html = stripRemoteAssetRequests(
+			'<img width="2660" src="/files/hero.png" srcset="/media/hero-2660.png 2660w, data:image/gif;base64, R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs= 1536w, /media/hero-2048.png 2048w">'
+		);
+		expect( html ).not.toMatch( /srcset="[^"]*data:image\/gif/ );
+		expect( html ).toContain( 'srcset="/media/hero-2660.png 2660w, /media/hero-2048.png 2048w"' );
+		expect( html ).toContain( 'src="/files/hero.png"' );
+	} );
+
 	it( 'neutralizes leftover remote CSS urls without touching local ones', () => {
 		expect(
 			stripRemoteCssUrls(

@@ -32,13 +32,24 @@ export function stripRemoteCssUrls( css: string ): string {
 		);
 }
 
-function withoutRemoteSrcset( srcset: string ): string {
+const PLACEHOLDER_SRCSET_CANDIDATE =
+	/(?:,\s*)?data:image\/gif;base64,\s*[A-Za-z0-9+/=]+\s+\d+[wx]\b/gi;
+
+function withoutPoisonedSrcset( srcset: string ): string {
 	return srcset
+		.replace( PLACEHOLDER_SRCSET_CANDIDATE, '' )
+		.replace( /,\s*,/g, ', ' )
+		.replace( /^,\s*|,\s*$/g, '' )
+		.trim();
+}
+
+function withoutRemoteSrcset( srcset: string ): string {
+	return withoutPoisonedSrcset( srcset )
 		.split( ',' )
 		.map( ( candidate ) => candidate.trim() )
 		.filter( ( candidate ) => {
 			const url = candidate.split( /\s+/ )[ 0 ] ?? '';
-			return url && ! isRemoteAssetUrl( url );
+			return url && ! url.startsWith( 'data:' ) && ! isRemoteAssetUrl( url );
 		} )
 		.join( ', ' );
 }
@@ -68,6 +79,13 @@ export function stripRemoteAssetRequests( html: string ): string {
 		const kept = withoutRemoteSrcset( node.attr( 'srcset' ) ?? '' );
 		if ( kept ) node.attr( 'srcset', kept );
 		else node.removeAttr( 'srcset' );
+	} );
+	$( 'img' ).each( ( _, element ) => {
+		const node = $( element );
+		const src = node.attr( 'src' ) ?? '';
+		if ( ! src.startsWith( 'data:' ) ) return;
+		const fallback = ( node.attr( 'srcset' ) ?? '' ).trim().split( /\s+/ )[ 0 ];
+		if ( fallback && ! fallback.startsWith( 'data:' ) ) node.attr( 'src', fallback );
 	} );
 	$( 'style' ).each( ( _, element ) => {
 		const node = $( element );
