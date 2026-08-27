@@ -93,7 +93,7 @@ interface CaptureEntry {
 	slug: string;
 	url: string;
 	htmlPath: string;
-	/** The source served a distinct document under mobile emulation. */
+	/** The source served a structurally distinct document under mobile emulation. */
 	hasMobileDocument?: boolean;
 	identityHtmlPath?: string;
 	sections?: string;
@@ -370,6 +370,18 @@ function documentSwitchCss( switchWidth: number ): string {
  * site whose canvas floor is 980px puts the switch in the wrong place.
  */
 const DEFAULT_SWITCH_WIDTH = 768;
+
+/**
+ * Whether the source served a genuinely different document under mobile
+ * emulation, rather than the same one. Structural, so runtime ids and text
+ * differences do not masquerade as a second design.
+ */
+export function documentsDiffer( desktopHtml: string, mobileHtml: string ): boolean {
+	const desktopBody = /<body\b([^>]*)>([\s\S]*?)<\/body\s*>/i.exec( desktopHtml )?.[ 2 ];
+	const mobileBody = /<body\b([^>]*)>([\s\S]*?)<\/body\s*>/i.exec( mobileHtml )?.[ 2 ];
+	if ( desktopBody === undefined || mobileBody === undefined ) return false;
+	return responsiveBodySignature( desktopBody ) !== responsiveBodySignature( mobileBody );
+}
 
 function responsiveHtml(
 	desktopHtml: string,
@@ -1095,7 +1107,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 			slug: entry.slug ?? basename( entry.html, '.html' ),
 			url,
 			htmlPath: stagedHtmlPath,
-			hasMobileDocument: mobileHtml !== undefined,
+			hasMobileDocument: mobileHtml !== undefined && documentsDiffer( desktopHtml, mobileHtml ),
 			sections: entry.sections,
 			canonicalUrl: entry.metadata?.openGraph?.[ 'og:url' ] ?? openGraphUrl( html ),
 		} );
