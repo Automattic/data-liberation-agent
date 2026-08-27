@@ -75,7 +75,8 @@ export interface ScreenshotOpts {
 	 * Learn how the source sizes itself by sweeping viewport widths with its
 	 * runtime alive, then emit the learned CSS instead of the pixels that
 	 * runtime happened to compute at the capture width. Costs one sweep per
-	 * page. Default: false.
+	 * page — measured at roughly +12% capture time, since resizing an already
+	 * loaded page is far cheaper than navigating to it.
 	 */
 	learnFluid?: boolean;
 	/** Widths to observe when learning. Defaults to DEFAULT_SWEEP_WIDTHS. */

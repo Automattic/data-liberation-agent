@@ -20,7 +20,7 @@ export interface LiberateOptions {
 	screenshots?: boolean;
 	/** Serve the liberated site over HTTP. Default: true. */
 	serve?: boolean;
-	/** Learn responsive sizing across widths rather than freezing one. */
+	/** Learn responsive sizing across widths rather than freezing one. Default: true. */
 	learnFluid?: boolean;
 	log?: ( message: string ) => void;
 }
@@ -46,7 +46,7 @@ export async function liberateSite( options: LiberateOptions ): Promise< Liberat
 		outputDir,
 		resume: options.resume,
 		captureImages: options.screenshots,
-		learnFluid: options.learnFluid,
+		learnFluid: options.learnFluid !== false,
 		onProgress: ( progress ) => {
 			if ( progress.phase === 'capturing' && progress.total ) {
 				log(
