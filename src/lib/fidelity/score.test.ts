@@ -11,6 +11,7 @@ const at = ( viewport: number, extra: Partial< LayoutObservation > = {} ): Layou
 	externalHosts: [],
 	hashTargets: [],
 	internalMissing: [],
+	dialogs: [],
 	...extra,
 } );
 
@@ -67,6 +68,15 @@ describe( 'scoreViewport', () => {
 		const score = scoreViewport( at( 1440 ), at( 1440, { internalMissing: [ '/about/' ] } ) );
 		expect( score.pass ).toBe( false );
 		expect( score.failures[ 0 ] ).toMatch( /\/about\// );
+	} );
+
+	it( 'fails when a source dialog does not open in the copy', () => {
+		const score = scoreViewport(
+			at( 1440, { dialogs: [ { label: 'Menu', opened: true } ] } ),
+			at( 1440, { dialogs: [ { label: 'Menu', opened: false } ] } )
+		);
+		expect( score.pass ).toBe( false );
+		expect( score.failures[ 0 ] ).toMatch( /Menu/ );
 	} );
 
 	it( 'fails when the copy still talks to the source CDN', () => {

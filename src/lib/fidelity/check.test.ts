@@ -33,6 +33,7 @@ const obs = ( viewport: number, extra: Partial< LayoutObservation > = {} ): Layo
 	externalHosts: [],
 	hashTargets: [],
 	internalMissing: [],
+	dialogs: [],
 	...extra,
 } );
 
@@ -72,7 +73,7 @@ describe( 'checkFidelity', () => {
 				return { source: obs( viewport ), liberated: obs( viewport ) };
 			},
 		} );
-		expect( seen ).toEqual( [ 1600, 1728 ] );
+		expect( seen ).toEqual( [ 1600, 1728, 390 ] );
 		expect( report.pass ).toBe( true );
 		expect( report.sourceUrl ).toBe( 'https://example.com/' );
 	} );
