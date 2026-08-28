@@ -65,6 +65,45 @@ export interface FidelityReport {
 
 interface CaptureReceipt {
 	source?: { url?: string };
+	websiteRoot?: string;
+	routes?: Array< { url?: string; path?: string } >;
+}
+
+/**
+ * One spelling for a route in the copy, so `/about`, `/about/`, and
+ * `/about/index.html` are the same place. Extensions other than a directory
+ * index are left alone, because `/feed.xml` is a file rather than a directory.
+ */
+export function canonicalRoutePath( route: string ): string {
+	const path = route.replace( /\\/g, '/' ).replace( /^\/*/, '/' ).split( /[?#]/ )[ 0 ] ?? '/';
+	if ( path === '/index.html' ) return '/';
+	if ( path.endsWith( '/index.html' ) ) return path.slice( 0, -'index.html'.length );
+	if ( /\.[a-z0-9]+$/i.test( path ) ) return path;
+	return path.endsWith( '/' ) ? path : `${ path }/`;
+}
+
+/**
+ * Route in the copy → the source URL it was captured from.
+ *
+ * Only the receipt knows this mapping. A source captured at a subpath serves
+ * its entrypoint as the copy's `/`, so resolving a route against the source
+ * origin asks the live site for a page that was never captured — and a live
+ * site is entitled to answer that with a 404 the comparison then treats as
+ * the source of truth.
+ */
+export function routeSourceMap( receipt: CaptureReceipt ): Map< string, string > {
+	const websiteRoot = ( receipt.websiteRoot ?? 'website' ).replace( /\\/g, '/' ).replace( /\/*$/, '' );
+	const map = new Map< string, string >();
+	for ( const route of receipt.routes ?? [] ) {
+		if ( ! route?.url || ! route?.path ) continue;
+		const path = route.path.replace( /\\/g, '/' );
+		const relative =
+			websiteRoot && path.startsWith( `${ websiteRoot }/` )
+				? path.slice( websiteRoot.length + 1 )
+				: path;
+		map.set( canonicalRoutePath( `/${ relative.replace( /^\/*/, '' ) }` ), route.url );
+	}
+	return map;
 }
 
 export function resolveCheckDirectory( directory: string ): {
@@ -119,7 +158,7 @@ async function observePage(
 			const images = [ ...document.querySelectorAll( 'img' ) ]
 				.map( ( image ) => image.getBoundingClientRect() )
 				.filter( ( rect ) => rect.width > 50 && rect.height > 50 );
-			const hashTargets: { fragment: string; resolved: boolean }[] = [];
+			const hashTargets: { fragment: string; resolved: boolean; targets: number }[] = [];
 			const internalPaths: string[] = [];
 			const seen = new Set< string >();
 			for ( const link of document.querySelectorAll< HTMLAnchorElement >( 'a[href]' ) ) {
@@ -141,11 +180,11 @@ async function observePage(
 					}
 					if ( ! fragment || seen.has( `#${ fragment }` ) ) continue;
 					seen.add( `#${ fragment }` );
-					const exists = !!(
-						document.getElementById( fragment ) ||
-						document.querySelector( `[name="${ CSS.escape( fragment ) }"]` )
-					);
-					hashTargets.push( { fragment, resolved: exists } );
+					const targets = [ ...document.querySelectorAll( '[id],a[name]' ) ].filter(
+						( element ) =>
+							element.id === fragment || element.getAttribute( 'name' ) === fragment
+					).length;
+					hashTargets.push( { fragment, resolved: targets > 0, targets } );
 				}
 				if (
 					target.pathname &&
@@ -239,8 +278,17 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 	if ( ! sourceUrl ) throw new Error( `capture-receipt.json has no source.url: ${ receiptPath }` );
 
 	const widths = options.widths ?? checkWidthsFor();
-	const routes = options.routes ?? [ '/' ];
+	const routes = ( options.routes ?? [ '/' ] ).map( canonicalRoutePath );
 	const settleMs = options.settleMs ?? 4000;
+
+	const sources = routeSourceMap( receipt );
+	if ( ! sources.has( '/' ) ) sources.set( '/', sourceUrl );
+	for ( const route of routes ) {
+		if ( sources.has( route ) ) continue;
+		throw new Error(
+			`Route ${ route } was not captured. Captured routes: ${ [ ...sources.keys() ].join( ', ' ) }`
+		);
+	}
 
 	let observe = options.observe;
 	const server = observe ? null : await startStaticServer( websiteDir );
@@ -267,10 +315,8 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 	const scores: ViewportScore[] = [];
 	try {
 		for ( const route of routes ) {
-			const sourceHref = new URL( route, sourceUrl ).href;
-			const localHref = `${ server?.url ?? 'http://liberated.invalid' }${
-				route.startsWith( '/' ) ? route : `/${ route }`
-			}`;
+			const sourceHref = sources.get( route )!;
+			const localHref = `${ server?.url ?? 'http://liberated.invalid' }${ route }`;
 			for ( const width of widths ) {
 				log( `[compare] ${ route } @ ${ width }px` );
 				const pair = await observe( sourceHref, localHref, width );

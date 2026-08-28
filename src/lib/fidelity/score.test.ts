@@ -47,16 +47,33 @@ describe( 'scoreViewport', () => {
 
 	it( 'fails when a same-page hash has no target in the copy', () => {
 		const score = scoreViewport(
-			at( 1440, { hashTargets: [ { fragment: 'team', resolved: true } ] } ),
-			at( 1440, { hashTargets: [ { fragment: 'team', resolved: false } ] } )
+			at( 1440, { hashTargets: [ { fragment: 'team', resolved: true, targets: 1 } ] } ),
+			at( 1440, { hashTargets: [ { fragment: 'team', resolved: false, targets: 0 } ] } )
 		);
 		expect( score.pass ).toBe( false );
 		expect( score.failures[ 0 ] ).toMatch( /#team/ );
 	} );
 
+	it( 'fails when a hash resolves in the copy but to more places than the source', () => {
+		const score = scoreViewport(
+			at( 1440, { hashTargets: [ { fragment: 'about', resolved: true, targets: 1 } ] } ),
+			at( 1440, { hashTargets: [ { fragment: 'about', resolved: true, targets: 2 } ] } )
+		);
+		expect( score.pass ).toBe( false );
+		expect( score.failures[ 0 ] ).toMatch( /more than one target: #about/ );
+	} );
+
+	it( 'accepts a duplicate the source ships too', () => {
+		const score = scoreViewport(
+			at( 1440, { hashTargets: [ { fragment: 'about', resolved: true, targets: 2 } ] } ),
+			at( 1440, { hashTargets: [ { fragment: 'about', resolved: true, targets: 2 } ] } )
+		);
+		expect( score.pass ).toBe( true );
+	} );
+
 	it( 'fails when the source hash worked and the copy dropped it', () => {
 		const score = scoreViewport(
-			at( 1440, { hashTargets: [ { fragment: 'features', resolved: true } ] } ),
+			at( 1440, { hashTargets: [ { fragment: 'features', resolved: true, targets: 1 } ] } ),
 			at( 1440 )
 		);
 		expect( score.pass ).toBe( false );
