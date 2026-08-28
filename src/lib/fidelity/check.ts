@@ -9,8 +9,9 @@ import { dirname, join, resolve } from 'node:path';
 import { chromium, type Page } from 'playwright';
 import { startStaticServer } from '../replicate/local-site/static-server.js';
 import { DEFAULT_SWEEP_WIDTHS } from '../screenshot/fluid-capture.js';
-import { writePixelEvidence } from './evidence.js';
 import { runFidelityChecks } from './checks.js';
+import { writePixelEvidence } from './evidence.js';
+import { checkSelfConsistency, type SelfConsistencyReport } from './self-consistency.js';
 import {
 	scoreReport,
 	scoreViewport,
@@ -22,6 +23,9 @@ import {
 } from './score.js';
 
 const MAX_ROUTE_CHECKS = 32;
+
+/** Routes compared against the live source by default. Each costs a browser round trip. */
+const BROWSER_ROUTE_SAMPLE = 4;
 
 /**
  * Widths the learning sweep does not visit. 1600 and 1728 sit above the
@@ -49,18 +53,28 @@ export interface FidelityCheckOptions {
 	/** Pathnames to check, e.g. `/` and `/about/`. Default: homepage only. */
 	routes?: string[];
 	settleMs?: number;
+	/** How many routes to compare against the live source. */
+	sampleSize?: number;
 	/** Write source/liberated/diff PNGs. Never used as pass/fail. */
 	screenshots?: boolean;
 	log?: ( ( message: string ) => void ) | undefined;
 	observe?: ObservePair;
 }
 
+/** A score, told which route produced it. */
+export type RouteScore = ViewportScore & { route: string };
+
 export interface FidelityReport {
 	sourceUrl: string;
 	websiteDir: string;
 	widths: number[];
+	/** Routes actually measured. */
 	routes: string[];
-	scores: ViewportScore[];
+	/** Routes the capture retained. */
+	routesAvailable: number;
+	/** Offline checks over every route. */
+	selfConsistency: SelfConsistencyReport;
+	scores: RouteScore[];
 	pass: boolean;
 	failed: number;
 	passed: number;
@@ -77,6 +91,51 @@ interface CaptureReceipt {
  * `/about/index.html` are the same place. Extensions other than a directory
  * index are left alone, because `/feed.xml` is a file rather than a directory.
  */
+/** Route in the copy → its file, relative to the website directory. */
+export function routeFiles( receipt: CaptureReceipt ): Map< string, string > {
+	const websiteRoot = ( receipt.websiteRoot ?? 'website' ).replace( /\\/g, '/' ).replace( /\/*$/, '' );
+	const files = new Map< string, string >();
+	for ( const route of receipt.routes ?? [] ) {
+		if ( ! route?.url || ! route?.path ) continue;
+		const path = route.path.replace( /\\/g, '/' );
+		const relative =
+			websiteRoot && path.startsWith( `${ websiteRoot }/` )
+				? path.slice( websiteRoot.length + 1 )
+				: path;
+		files.set( canonicalRoutePath( `/${ relative.replace( /^\/*/, '' ) }` ), relative );
+	}
+	return files;
+}
+
+/**
+ * Pick `limit` routes spread evenly across the list, entrypoint first.
+ *
+ * Even spacing is the point. Taking the first N of an alphabetical list on a
+ * site with sixty posts and a shop page spends every check inside /blog/ and
+ * never reaches /shop/.
+ */
+export function spreadSample( routes: string[], limit: number ): string[] {
+	if ( limit <= 0 ) return [];
+	if ( routes.length <= limit ) return [ ...routes ];
+	const [ first, ...rest ] = routes as [ string, ...string[] ];
+	const picks = [ first ];
+	const take = limit - 1;
+	// Span both ends of the remainder. Stopping short leaves whatever sorts last
+	// — often the very sections a blog was burying — permanently unmeasured.
+	for ( let index = 0; index < take; index++ ) {
+		const position = take === 1 ? rest.length - 1 : Math.round( ( index * ( rest.length - 1 ) ) / ( take - 1 ) );
+		const candidate = rest[ position ];
+		if ( candidate && ! picks.includes( candidate ) ) picks.push( candidate );
+	}
+	return picks;
+}
+
+/** Filesystem-safe stem for a route, so per-route evidence cannot collide. */
+export function evidenceSlug( route: string ): string {
+	const slug = route.replace( /[^a-z0-9]+/gi, '-' ).replace( /^-+|-+$/g, '' );
+	return slug || 'index';
+}
+
 export function canonicalRoutePath( route: string ): string {
 	const path = route.replace( /\\/g, '/' ).replace( /^\/*/, '/' ).split( /[?#]/ )[ 0 ] ?? '/';
 	if ( path === '/index.html' ) return '/';
@@ -352,16 +411,37 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 	if ( ! sourceUrl ) throw new Error( `capture-receipt.json has no source.url: ${ receiptPath }` );
 
 	const widths = options.widths ?? checkWidthsFor();
-	const routes = ( options.routes ?? [ '/' ] ).map( canonicalRoutePath );
 	const settleMs = options.settleMs ?? 4000;
 
 	const sources = routeSourceMap( receipt );
 	if ( ! sources.has( '/' ) ) sources.set( '/', sourceUrl );
-	for ( const route of routes ) {
+
+	const captured = [ ...sources.keys() ].sort( ( left, right ) =>
+		left === '/' ? -1 : right === '/' ? 1 : left.localeCompare( right )
+	);
+	const requested = options.routes?.map( canonicalRoutePath );
+	for ( const route of requested ?? [] ) {
 		if ( sources.has( route ) ) continue;
 		throw new Error(
-			`Route ${ route } was not captured. Captured routes: ${ [ ...sources.keys() ].join( ', ' ) }`
+			`Route ${ route } was not captured. Captured routes: ${ captured.join( ', ' ) }`
 		);
+	}
+
+	// Tier one: every route, offline. Anchors, internal links and stray remote
+	// assets are pure functions of what is on disk, so there is no reason to
+	// sample them.
+	const selfConsistency = checkSelfConsistency( websiteDir, routeFiles( receipt ) );
+	log(
+		`[compare] self-consistency: ${ selfConsistency.routes } route(s), ${ selfConsistency.findings.length } finding(s)`
+	);
+
+	// Tier two: the live source, which costs a browser round trip per check, so
+	// it runs on a bounded sample. The entrypoint always leads; the rest are
+	// spread across the route list rather than taken in order, since ordered
+	// selection on a blog spends the whole budget inside /blog/.
+	const routes = requested ?? spreadSample( captured, options.sampleSize ?? BROWSER_ROUTE_SAMPLE );
+	if ( ! requested && routes.length < captured.length ) {
+		log( `[compare] source fidelity: sampling ${ routes.length } of ${ captured.length } route(s)` );
 	}
 
 	let observe = options.observe;
@@ -386,7 +466,7 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 		};
 	}
 
-	const scores: ViewportScore[] = [];
+	const scores: RouteScore[] = [];
 	try {
 		for ( const route of routes ) {
 			const sourceHref = sources.get( route )!;
@@ -394,7 +474,12 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 			for ( const width of widths ) {
 				log( `[compare] ${ route } @ ${ width }px` );
 				const pair = await observe( sourceHref, localHref, width );
-				const evidenceDir = join( dirname( receiptPath ), 'compare', String( width ) );
+				const evidenceDir = join(
+					dirname( receiptPath ),
+					'compare',
+					evidenceSlug( route ),
+					String( width )
+				);
 				// Every check, built-in and contributed, runs through the registry.
 				const checked = await runFidelityChecks( {
 					route,
@@ -405,7 +490,8 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 					candidate: pair.liberated,
 					evidenceDir,
 				} );
-				const score: ViewportScore = {
+				const score: RouteScore = {
+					route,
 					viewport: width,
 					pass: checked.failures.length === 0,
 					failures: checked.failures,
@@ -446,10 +532,10 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 					hashTargets: [],
 					internalMissing: [],
 				} );
-				const score = scoreViewport(
-					dialogOnly( pair.source ),
-					dialogOnly( pair.liberated )
-				);
+				const score = {
+					...scoreViewport( dialogOnly( pair.source ), dialogOnly( pair.liberated ) ),
+					route,
+				};
 				score.notes.push( 'interactivity' );
 				scores.push( score );
 			}
@@ -460,5 +546,15 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 	}
 
 	const summary = scoreReport( scores );
-	return { sourceUrl, websiteDir, widths, routes, scores, ...summary };
+	summary.pass = summary.pass && selfConsistency.pass;
+	return {
+		sourceUrl,
+		websiteDir,
+		widths,
+		routes,
+		routesAvailable: captured.length,
+		selfConsistency,
+		scores,
+		...summary,
+	};
 }

@@ -139,10 +139,112 @@ describe( 'checkFidelity', () => {
 			},
 		} );
 
-		expect( requested ).toEqual( [
-			'https://example.com/handbook/intro',
-			'https://example.com/handbook/intro',
-		] );
+		// Every pass asks for the captured page, however many passes there are.
+		// Pinning the exact call count is what broke when an interactivity pass
+		// was added; the intent is that no pass reaches for the origin root.
+		expect( requested.length ).toBeGreaterThan( 0 );
+		expect( [ ...new Set( requested ) ] ).toEqual( [ 'https://example.com/handbook/intro' ] );
+	} );
+
+	it( 'compares a small sample to the source while checking every route offline', async () => {
+		const dir = mkdtempSync( join( tmpdir(), 'dla-check-' ) );
+		dirs.push( dir );
+		for ( const sub of [ 'website', 'website/about', 'website/blog/a', 'website/blog/b' ] )
+			mkdirSync( join( dir, sub ), { recursive: true } );
+		const post = ( title: string, paragraphs: number ) =>
+			`<html><body><main><article><h1>${ title }</h1>${ '<p>copy</p>'.repeat(
+				paragraphs
+			) }</article></main></body></html>`;
+		writeFileSync(
+			join( dir, 'website', 'index.html' ),
+			'<html><body><header><nav></nav></header><main><section><h1>Home</h1></section></main></body></html>'
+		);
+		writeFileSync(
+			join( dir, 'website', 'about', 'index.html' ),
+			'<html><body><main><aside><p>About</p></aside><ul><li>x</li></ul></main></body></html>'
+		);
+		// Two posts on one template, differing only in how much copy they carry.
+		writeFileSync( join( dir, 'website', 'blog', 'a', 'index.html' ), post( 'A', 3 ) );
+		writeFileSync( join( dir, 'website', 'blog', 'b', 'index.html' ), post( 'B', 17 ) );
+		writeFileSync(
+			join( dir, 'capture-receipt.json' ),
+			JSON.stringify( {
+				source: { url: 'https://example.com/' },
+				websiteRoot: 'website',
+				routes: [
+					{ url: 'https://example.com/blog/b', path: 'website/blog/b/index.html' },
+					{ url: 'https://example.com/', path: 'website/index.html' },
+					{ url: 'https://example.com/about', path: 'website/about/index.html' },
+					{ url: 'https://example.com/blog/a', path: 'website/blog/a/index.html' },
+				],
+			} )
+		);
+
+		const seen: string[] = [];
+		const report = await checkFidelity( {
+			directory: dir,
+			widths: [ 1600 ],
+			observe: async ( sourceHref, _local, viewport ) => {
+				seen.push( sourceHref );
+				return { source: obs( viewport ), liberated: obs( viewport ) };
+			},
+		} );
+
+		// Small site: every route fits inside the sample.
+		expect( report.routesAvailable ).toBe( 4 );
+		expect( report.routes ).toEqual( [ '/', '/about/', '/blog/a/', '/blog/b/' ] );
+		expect( seen[ 0 ] ).toBe( 'https://example.com/' );
+		// Offline tier covers all of them regardless.
+		expect( report.selfConsistency.routes ).toBe( 4 );
+	} );
+
+	it( 'spreads the source sample so a large blog does not crowd out other pages', async () => {
+		const dir = mkdtempSync( join( tmpdir(), 'dla-check-' ) );
+		dirs.push( dir );
+		mkdirSync( join( dir, 'website', 'shop' ), { recursive: true } );
+		writeFileSync(
+			join( dir, 'website', 'index.html' ),
+			'<html><body><header><nav></nav></header><main><h1>Home</h1></main></body></html>'
+		);
+		// Sixty posts sort ahead of /shop/, so route-order selection never reached it.
+		const routes = [ { url: 'https://example.com/', path: 'website/index.html' } ];
+		for ( let index = 0; index < 60; index++ ) {
+			const slug = `blog/post-${ String( index ).padStart( 3, '0' ) }`;
+			mkdirSync( join( dir, 'website', slug ), { recursive: true } );
+			writeFileSync(
+				join( dir, 'website', slug, 'index.html' ),
+				`<html><body><main><article><h1>Post ${ index }</h1>${ '<p>copy</p>'.repeat(
+					index + 1
+				) }</article></main></body></html>`
+			);
+			routes.push( { url: `https://example.com/${ slug }`, path: `website/${ slug }/index.html` } );
+		}
+		writeFileSync(
+			join( dir, 'website', 'shop', 'index.html' ),
+			'<html><body><main><section><h2>Shop</h2><ul><li>item</li></ul></section><aside><form></form></aside></main></body></html>'
+		);
+		routes.push( { url: 'https://example.com/shop', path: 'website/shop/index.html' } );
+		writeFileSync(
+			join( dir, 'capture-receipt.json' ),
+			JSON.stringify( { source: { url: 'https://example.com/' }, websiteRoot: 'website', routes } )
+		);
+
+		const report = await checkFidelity( {
+			directory: dir,
+			widths: [ 1600 ],
+			observe: async ( _source, _local, viewport ) => ( {
+				source: obs( viewport ),
+				liberated: obs( viewport ),
+			} ),
+		} );
+
+		// Ordered selection spent every check inside /blog/; an even spread reaches /shop/.
+		expect( report.routesAvailable ).toBe( 62 );
+		expect( report.routes[ 0 ] ).toBe( '/' );
+		expect( report.routes ).toContain( '/shop/' );
+		expect( report.routes ).toHaveLength( 4 );
+		// And every one of the 62 routes was checked offline.
+		expect( report.selfConsistency.routes ).toBe( 62 );
 	} );
 
 	it( 'refuses to compare a route the capture never took', async () => {

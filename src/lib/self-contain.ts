@@ -5,7 +5,12 @@ import * as cheerio from 'cheerio';
 const EMPTY_CSS_URL = 'data:application/octet-stream;base64,';
 const TRANSPARENT_IMAGE = 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=';
 
-const ASSET_LINK_REL = /^(?:stylesheet|preload|prefetch|preconnect|dns-prefetch|prerender|modulepreload|manifest)$|(?:^|-)icon$/;
+/**
+ * `rel` values that make a `<link>` fetch something. `canonical` and
+ * `alternate` are metadata: they name a URL without requesting it, so a copy
+ * that still points at its origin there is not reaching out to the network.
+ */
+export const ASSET_LINK_REL = /^(?:stylesheet|preload|prefetch|preconnect|dns-prefetch|prerender|modulepreload|manifest)$|(?:^|-)icon$/;
 
 export function isRemoteAssetUrl( value: string ): boolean {
 	const url = value.trim().replace( /&amp;/g, '&' );

@@ -41,7 +41,9 @@ if (args[0] === 'mcp') {
     --output <dir>       Output base directory (default: ~/data-liberation; override with --output or DLA_OUTPUT_DIR)
     --resume             Reuse artifacts already on disk instead of recapturing
     --screenshots        Also capture full-page + scrolled PNG screenshots
-    --no-serve           Write the site and exit without serving it locally
+    --serve              Keep a local server running on the liberated site until
+                         interrupted, for browsing it. Liberation writes the site
+                         and exits without this.
     --no-learn-fluid     Skip the width sweep and freeze the layout at one width.
                          Learning is on by default: it keeps the copy reflowing
                          like the source instead of pinning it to the capture width.
@@ -418,7 +420,7 @@ if (args[0] === 'mcp') {
     resume: args.includes('--resume'),
     screenshots: args.includes('--screenshots'),
     learnFluid: !args.includes('--no-learn-fluid'),
-    serve: !args.includes('--no-serve'),
+    serve: args.includes('--serve'),
     log: (message) => process.stderr.write(`${message}\n`),
   });
 
@@ -441,5 +443,8 @@ if (args[0] === 'mcp') {
     };
     process.once('SIGINT', stop);
     process.once('SIGTERM', stop);
+  } else {
+    // Guidance goes to stderr so stdout stays the machine-readable result.
+    process.stderr.write(`Browse it: data-liberation ${url} --resume --serve\n`);
   }
 }
