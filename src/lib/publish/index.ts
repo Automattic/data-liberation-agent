@@ -9,6 +9,7 @@
 //
 import { spacefastTarget } from './spacefast.js';
 import type { PublishTarget } from './types.js';
+import { wpcomTarget } from './wpcom.js';
 
 const targets = new Map< string, PublishTarget >();
 
@@ -50,6 +51,7 @@ export function publishTargetNames(): string[] {
 
 // Built-ins go through the public API, exactly as an external target would.
 registerPublishTarget( spacefastTarget );
+registerPublishTarget( wpcomTarget );
 
 export { PublishError } from './types.js';
 export type { PublishOptions, PublishResult, PublishTarget } from './types.js';

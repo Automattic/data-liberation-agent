@@ -41,6 +41,6 @@ describe( 'publishSite', () => {
 	it( 'rejects an unknown target and names the ones that exist', async () => {
 		await expect(
 			publishSite( { directory: liberatedRun(), target: 'nowhere' } )
-		).rejects.toThrow( /Unknown publish target "nowhere"\. Available: spacefast\./ );
+		).rejects.toThrow( /Unknown publish target "nowhere"\. Available: spacefast, wpcom\./ );
 	} );
 } );

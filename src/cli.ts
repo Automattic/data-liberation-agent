@@ -23,7 +23,7 @@ if (args[0] === 'mcp') {
 
   Usage:
     data-liberation <url>              Liberate a website into a portable HTML site
-    data-liberation publish <dir>      Publish a liberated site (--to spacefast)
+    data-liberation publish <dir>      Publish a liberated site (--to spacefast or wpcom)
     data-liberation compare <dir>      Compare a liberated copy to its source at unsampled widths
     data-liberation extract <url>      Extract content into a WXR file (WordPress path)
     data-liberation inspect <url>      Inspect a site before extraction
@@ -49,8 +49,10 @@ if (args[0] === 'mcp') {
                          like the source instead of pinning it to the capture width.
 
   Publish options:
-    --to <target>        Where to publish. Targets: spacefast (default)
-    --token <token>      Publish into your own account (or SPACEFAST_TOKEN).
+    --to <target>        Where to publish. Targets: spacefast (default), wpcom
+    --site <site>        Destination WordPress.com site ID or domain for wpcom
+    --yes                Approve the exact WordPress.com import plan
+    --token <token>      Publish into your own account (or SPACEFAST_TOKEN/WPCOM_TOKEN).
                          Without it the publish is anonymous and returns a claim link.
 
   Compare options:
@@ -306,10 +308,13 @@ if (args[0] === 'mcp') {
   const { publishSite } = await import('./ui/publish.js');
   const { PublishError } = await import('./lib/publish/index.js');
   try {
+    const target = getArg('--to') ?? 'spacefast';
     const result = await publishSite({
       directory,
-      target: getArg('--to') ?? 'spacefast',
-      token: getArg('--token') ?? process.env.SPACEFAST_TOKEN ?? undefined,
+      target,
+      token: getArg('--token') ?? (target === 'wpcom' ? process.env.WPCOM_TOKEN : process.env.SPACEFAST_TOKEN) ?? undefined,
+      destination: getArg('--site') ?? undefined,
+      approve: args.includes('--yes'),
       log: (message) => process.stderr.write(`${message}\n`),
     });
 

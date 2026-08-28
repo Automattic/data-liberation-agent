@@ -3,8 +3,9 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { collectDirectoryEntries, spacefastTarget } from './spacefast.js';
+import { spacefastTarget } from './spacefast.js';
 import { PublishError } from './types.js';
+import { collectDirectoryEntries } from './zip.js';
 
 const dirs: string[] = [];
 
