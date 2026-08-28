@@ -29,7 +29,14 @@ describe( 'wixMediaVariant', () => {
 		expect( wixMediaVariant( 'https://cdn.example.com/v1/fill/w_390,h_844/photo.jpg' ) ).toBeNull();
 	} );
 
-	it( 'turns strip showcase items into a CSS slideshow of real images', () => {
+	it( 'ignores empty and local URLs', () => {
+		expect( wixMediaVariant( '' ) ).toBeNull();
+		expect( wixMediaVariant( '/media/local.avif' ) ).toBeNull();
+	} );
+} );
+
+describe( 'stripShowcaseMarkup', () => {
+	it( 'builds an inner CSS slideshow that fills the captured TPA host box', () => {
 		expect( wixStaticMediaUrl( '648e62_abc~mv2.jpg' ) ).toBe(
 			'https://static.wixstatic.com/media/648e62_abc~mv2.jpg'
 		);
@@ -40,17 +47,24 @@ describe( 'wixMediaVariant', () => {
 			],
 			{ width: 1340, height: 486 }
 		);
-		expect( html ).toContain( '/v1/fill/w_1340,h_486' );
-		expect( html ).toContain( 'class="dla-slideshow"' );
-		expect( html ).toContain( 'https://static.wixstatic.com/media/648e62_one.jpg' );
+		expect( html ).toContain(
+			'<img src="https://static.wixstatic.com/media/648e62_one.jpg/v1/fill/w_1340,h_486'
+		);
+		expect( html ).toContain(
+			'<img src="https://static.wixstatic.com/media/648e62_two.jpg/v1/fill/w_1340,h_486'
+		);
 		expect( html ).toContain( 'alt="One"' );
-		expect( html ).toContain( 'https://static.wixstatic.com/media/648e62_two.jpg' );
+		expect( html ).toContain( 'alt="Two"' );
+		expect( html ).toContain( 'class="dla-slideshow"' );
+		expect( html ).toMatch( /^<div class="dla-slideshow">/ );
 		expect( html ).not.toContain( '<iframe' );
+		expect( html ).not.toMatch( /style="[^"]*(?:width|height):\d+px/ );
+		expect( css ).toContain(
+			'.dla-slideshow{overflow:hidden;width:100%;height:100%;position:relative}'
+		);
+		expect( css ).toContain(
+			'.dla-slideshow-track{display:flex;height:100%;animation:dla-slideshow'
+		);
 		expect( css ).toContain( '@keyframes dla-slideshow' );
-	} );
-
-	it( 'ignores empty and local URLs', () => {
-		expect( wixMediaVariant( '' ) ).toBeNull();
-		expect( wixMediaVariant( '/media/local.avif' ) ).toBeNull();
 	} );
 } );

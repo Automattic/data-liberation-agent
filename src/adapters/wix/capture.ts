@@ -43,7 +43,7 @@ export function stripShowcaseMarkup(
 			return `<img src="${ escapeAttr( wixStaticMediaUrl( item.uri, { width, height } ) ) }" alt="${ alt }">`;
 		} )
 		.join( '' );
-	const html = `<div class="dla-slideshow" style="height:${ height }px"><div class="dla-slideshow-track">${ imgs }</div></div>`;
+	const html = `<div class="dla-slideshow"><div class="dla-slideshow-track">${ imgs }</div></div>`;
 	const step = 100 / count;
 	const hold = step * 0.8;
 	let frames = '';
@@ -54,7 +54,7 @@ export function stripShowcaseMarkup(
 	}
 	frames += '100%{transform:translateX(0)}';
 	const css =
-		'.dla-slideshow{overflow:hidden;width:100%;position:relative}' +
+		'.dla-slideshow{overflow:hidden;width:100%;height:100%;position:relative}' +
 		`.dla-slideshow-track{display:flex;height:100%;animation:dla-slideshow ${ count * 2 }s infinite}` +
 		'.dla-slideshow-track img{flex:0 0 100%;width:100%;height:100%;object-fit:cover}' +
 		`@keyframes dla-slideshow{${ frames }}` +
@@ -255,7 +255,10 @@ export const capture: AdapterCapture = {
 					const wrap = document.createElement( 'div' );
 					wrap.innerHTML = markup;
 					const slideshow = wrap.firstElementChild;
-					if ( slideshow ) host.replaceWith( slideshow );
+					if ( ! slideshow ) return;
+					const frame = host.querySelector( 'iframe, wix-iframe' );
+					if ( frame ) frame.replaceWith( slideshow );
+					else host.replaceChildren( slideshow );
 				},
 				{ compId: id, markup: html, stylesheet: css }
 			);
