@@ -139,10 +139,11 @@ describe( 'checkFidelity', () => {
 			},
 		} );
 
-		expect( requested ).toEqual( [
-			'https://example.com/handbook/intro',
-			'https://example.com/handbook/intro',
-		] );
+		// Every pass asks for the captured page, however many passes there are.
+		// Pinning the exact call count is what broke when an interactivity pass
+		// was added; the intent is that no pass reaches for the origin root.
+		expect( requested.length ).toBeGreaterThan( 0 );
+		expect( [ ...new Set( requested ) ] ).toEqual( [ 'https://example.com/handbook/intro' ] );
 	} );
 
 	it( 'refuses to compare a route the capture never took', async () => {

@@ -15,17 +15,17 @@ The CLI does the work. Your job is to run it, read what it reports, verify the r
 
 | Command | What it does |
 |---|---|
-| `data-liberation <url> --no-serve` | Detect the platform, discover routes, liberate every one, write the site |
+| `data-liberation <url>` | Detect the platform, discover routes, liberate every one, write the site |
 | `data-liberation compare <run-dir>` | Verify the copy against its live source. **This is the acceptance gate** |
 | `data-liberation publish <run-dir> --to <target>` | Put the copy on a live URL |
 
 ## Step 1 — Liberate
 
 ```bash
-data-liberation https://example.com/ --no-serve
+data-liberation https://example.com/
 ```
 
-Reports two lines:
+Writes the site and exits, reporting two lines:
 
 ```
 Liberated 12/12 routes (3 reused)
@@ -89,10 +89,12 @@ Publishing reads what is on disk, so a repaired copy or a different target can s
 ## Showing the copy to a human
 
 ```bash
-data-liberation https://example.com/
+data-liberation https://example.com/ --resume --serve
 ```
 
-Without `--no-serve` the command serves the copy and stays running until interrupted. Use it when someone wants to browse; use `--no-serve` whenever you need the command to return.
+`--serve` keeps a local server running on the copy until it is interrupted, so offer it when someone wants to browse the result. With `--resume` alongside it, the site is already on disk and the server comes up immediately. Every run that does not serve prints this same command on stderr.
+
+Run it only when a human is waiting for it, since the command holds until interrupted.
 
 ## What a run leaves behind
 
