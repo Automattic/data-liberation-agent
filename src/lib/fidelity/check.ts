@@ -13,6 +13,7 @@ import { writePixelEvidence } from './evidence.js';
 import {
 	scoreReport,
 	scoreViewport,
+	normalizeImageKey,
 	type DialogProbe,
 	type HashTarget,
 	type LayoutObservation,
@@ -156,9 +157,27 @@ async function observePage(
 		await page.goto( url, { waitUntil: 'domcontentloaded', timeout: 60_000 } ).catch( () => {} );
 		await page.waitForTimeout( settleMs );
 		const measured = await page.evaluate( async ( clickUnresolved: boolean ) => {
-			const images = [ ...document.querySelectorAll( 'img' ) ]
-				.map( ( image ) => image.getBoundingClientRect() )
-				.filter( ( rect ) => rect.width > 50 && rect.height > 50 );
+			// Images that occupy real layout space at this viewport: wider and
+			// taller than 50px (the same floor as widestImage) and not
+			// visibility:hidden, so tracking pixels and hidden decorations add
+			// no noise. opacity:0 is deliberately kept — a carousel's parked
+			// slides are transparent yet still hold the slideshow's layout
+			// box, and a copy that drops them all is exactly the regression
+			// the image-count gate exists to catch.
+			const images = [ ...document.querySelectorAll< HTMLImageElement >( 'img' ) ]
+				.map( ( image ) => ( {
+					rect: image.getBoundingClientRect(),
+					src: image.currentSrc || image.getAttribute( 'src' ) || '',
+					hidden: getComputedStyle( image ).visibility === 'hidden',
+				} ) )
+				.filter( ( { rect, hidden } ) => ! hidden && rect.width > 50 && rect.height > 50 )
+				.map( ( { rect, src } ) => ( {
+					key: src,
+					x: Math.round( rect.x ),
+					y: Math.round( rect.y ),
+					width: Math.round( rect.width ),
+					height: Math.round( rect.height ),
+				} ) );
 			const hashTargets: { fragment: string; resolved: boolean; targets: number }[] = [];
 			const internalPaths: string[] = [];
 			const seen = new Set< string >();
@@ -238,8 +257,9 @@ async function observePage(
 				title: document.title,
 				textChars: ( document.body?.innerText ?? '' ).replace( /\s+/g, ' ' ).trim().length,
 				widestImage: images.length
-					? Math.round( Math.max( ...images.map( ( rect ) => rect.width ) ) )
+					? Math.max( ...images.map( ( image ) => image.width ) )
 					: null,
+				images,
 				docWidth: document.documentElement.scrollWidth,
 				overflow: document.documentElement.scrollWidth > window.innerWidth,
 				hashTargets,
@@ -307,6 +327,10 @@ async function observePage(
 			title: measured.title,
 			textChars: measured.textChars,
 			widestImage: measured.widestImage,
+			images: measured.images.map( ( image ) => ( {
+				...image,
+				key: normalizeImageKey( image.key ),
+			} ) ),
 			docWidth: measured.docWidth,
 			overflow: measured.overflow,
 			externalHosts: [ ...external ].sort(),
@@ -391,6 +415,7 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 					title: 'x',
 					textChars: 0,
 					widestImage: null,
+					images: [],
 					overflow: false,
 					docWidth: 390,
 					externalHosts: [],
