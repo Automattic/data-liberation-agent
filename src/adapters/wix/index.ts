@@ -1,7 +1,6 @@
 import type { PlatformAdapter } from '../../types.js';
 import { capture } from './capture.js';
 import { discover } from './discover.js';
-import { extract } from './extract.js';
 
 // Re-export shared types so existing consumers still work
 export type { InventoryUrl } from '../shared.js';
@@ -17,4 +16,4 @@ function detect(url: string): boolean {
 
 export { wixMediaVariant } from './capture.js';
 
-export const wixAdapter: PlatformAdapter = { id: 'wix', detect, discover, extract, capture };
+export const wixAdapter: PlatformAdapter = { id: 'wix', detect, discover, capture };

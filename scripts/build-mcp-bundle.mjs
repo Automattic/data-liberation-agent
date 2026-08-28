@@ -38,17 +38,9 @@ const scriptsOutDir = resolve(pkgRoot, 'dist', 'scripts');
 
 // Every driver a shipped skill invokes through scripts/run.mjs. Adding a
 // `node scripts/run.mjs <name>` step to a SKILL.md means adding <name> here,
-// or the step only works in dev checkouts.
-const SKILL_DRIVERS = [
-  '_shot',
-  '_validate',
-  'carry-chrome-audit-run',
-  'carry-reconstruct-drive',
-  'carry-replica-shots',
-  'enrich-product-marketing',
-  'localize-native-post-media',
-  'triage-candidates',
-];
+// or the step only works in dev checkouts. The liberate skill drives the CLI
+// directly, so there are currently none.
+const SKILL_DRIVERS = [];
 
 /** Rewrite import.meta.url in first-party modules to the original file's URL,
  * expressed relative to the bundle so it survives being copied anywhere. */
