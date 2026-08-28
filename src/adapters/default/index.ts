@@ -1,6 +1,5 @@
 import type { PlatformAdapter } from '../../types.js';
 import { discoverDefault } from './discover.js';
-import { extractDefault } from './extract.js';
 
 export type { DefaultInventory, DefaultAdapterOpts } from './types.js';
 
@@ -11,5 +10,4 @@ export type { DefaultInventory, DefaultAdapterOpts } from './types.js';
 export const defaultAdapter: PlatformAdapter = {
   id: 'default',
   discover: discoverDefault,
-  extract: extractDefault,
 };

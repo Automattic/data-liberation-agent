@@ -1,7 +1,6 @@
 import type { PlatformAdapter } from '../../types.js';
 import { detection } from './detection.js';
 import { discover } from './discover.js';
-import { extract } from './extract.js';
 
 // ---------------------------------------------------------------------------
 // Re-exports
@@ -17,5 +16,4 @@ export const godaddyWmAdapter: PlatformAdapter = {
   id: 'godaddy-wm',
   detection,
   discover,
-  extract,
 };
