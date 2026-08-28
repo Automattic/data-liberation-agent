@@ -146,6 +146,83 @@ describe( 'checkFidelity', () => {
 		expect( [ ...new Set( requested ) ] ).toEqual( [ 'https://example.com/handbook/intro' ] );
 	} );
 
+	it( 'checks every retained route, entrypoint first, not just the homepage', async () => {
+		const dir = mkdtempSync( join( tmpdir(), 'dla-check-' ) );
+		dirs.push( dir );
+		for ( const sub of [ 'website', 'website/about', 'website/pricing' ] )
+			mkdirSync( join( dir, sub ), { recursive: true } );
+		for ( const page of [ 'index.html', 'about/index.html', 'pricing/index.html' ] )
+			writeFileSync( join( dir, 'website', page ), '<h1>Page</h1>' );
+		writeFileSync(
+			join( dir, 'capture-receipt.json' ),
+			JSON.stringify( {
+				source: { url: 'https://example.com/' },
+				websiteRoot: 'website',
+				routes: [
+					{ url: 'https://example.com/pricing', path: 'website/pricing/index.html' },
+					{ url: 'https://example.com/', path: 'website/index.html' },
+					{ url: 'https://example.com/about', path: 'website/about/index.html' },
+				],
+			} )
+		);
+
+		const seen: string[] = [];
+		const report = await checkFidelity( {
+			directory: dir,
+			widths: [ 1600 ],
+			observe: async ( sourceHref, _local, viewport ) => {
+				seen.push( sourceHref );
+				return { source: obs( viewport ), liberated: obs( viewport ) };
+			},
+		} );
+
+		expect( report.routes ).toEqual( [ '/', '/about/', '/pricing/' ] );
+		expect( report.routesAvailable ).toBe( 3 );
+		expect( seen[ 0 ] ).toBe( 'https://example.com/' );
+		expect( new Set( seen ) ).toEqual(
+			new Set( [
+				'https://example.com/',
+				'https://example.com/about',
+				'https://example.com/pricing',
+			] )
+		);
+		expect( new Set( report.scores.map( ( score ) => score.route ) ) ).toEqual(
+			new Set( [ '/', '/about/', '/pricing/' ] )
+		);
+	} );
+
+	it( 'reports the scope it actually measured when the route cap bites', async () => {
+		const dir = mkdtempSync( join( tmpdir(), 'dla-check-' ) );
+		dirs.push( dir );
+		mkdirSync( join( dir, 'website' ), { recursive: true } );
+		writeFileSync( join( dir, 'website', 'index.html' ), '<h1>Home</h1>' );
+		const routes = Array.from( { length: 40 }, ( _value, index ) => ( {
+			url: `https://example.com/p${ index }`,
+			path: `website/p${ index }/index.html`,
+		} ) );
+		writeFileSync(
+			join( dir, 'capture-receipt.json' ),
+			JSON.stringify( {
+				source: { url: 'https://example.com/' },
+				websiteRoot: 'website',
+				routes,
+			} )
+		);
+
+		const report = await checkFidelity( {
+			directory: dir,
+			widths: [ 1600 ],
+			observe: async ( _source, _local, viewport ) => ( {
+				source: obs( viewport ),
+				liberated: obs( viewport ),
+			} ),
+		} );
+
+		// 40 captured routes plus the synthesised entrypoint, capped at 32.
+		expect( report.routesAvailable ).toBe( 41 );
+		expect( report.routes ).toHaveLength( 32 );
+	} );
+
 	it( 'refuses to compare a route the capture never took', async () => {
 		await expect(
 			checkFidelity( {

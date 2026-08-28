@@ -55,12 +55,18 @@ export interface FidelityCheckOptions {
 	observe?: ObservePair;
 }
 
+/** A score, told which route produced it. */
+export type RouteScore = ViewportScore & { route: string };
+
 export interface FidelityReport {
 	sourceUrl: string;
 	websiteDir: string;
 	widths: number[];
+	/** Routes actually measured. */
 	routes: string[];
-	scores: ViewportScore[];
+	/** Routes the capture retained. Larger than `routes` only when the cap bit. */
+	routesAvailable: number;
+	scores: RouteScore[];
 	pass: boolean;
 	failed: number;
 	passed: number;
@@ -77,6 +83,12 @@ interface CaptureReceipt {
  * `/about/index.html` are the same place. Extensions other than a directory
  * index are left alone, because `/feed.xml` is a file rather than a directory.
  */
+/** Filesystem-safe stem for a route, so per-route evidence cannot collide. */
+export function evidenceSlug( route: string ): string {
+	const slug = route.replace( /[^a-z0-9]+/gi, '-' ).replace( /^-+|-+$/g, '' );
+	return slug || 'index';
+}
+
 export function canonicalRoutePath( route: string ): string {
 	const path = route.replace( /\\/g, '/' ).replace( /^\/*/, '/' ).split( /[?#]/ )[ 0 ] ?? '/';
 	if ( path === '/index.html' ) return '/';
@@ -352,15 +364,30 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 	if ( ! sourceUrl ) throw new Error( `capture-receipt.json has no source.url: ${ receiptPath }` );
 
 	const widths = options.widths ?? checkWidthsFor();
-	const routes = ( options.routes ?? [ '/' ] ).map( canonicalRoutePath );
 	const settleMs = options.settleMs ?? 4000;
 
 	const sources = routeSourceMap( receipt );
 	if ( ! sources.has( '/' ) ) sources.set( '/', sourceUrl );
-	for ( const route of routes ) {
+
+	// Every retained route, not just the homepage. A copy is claimed to preserve
+	// the whole site, so checking one page and reporting a pass describes the
+	// homepage while implying the site. The entrypoint leads so the most
+	// important failure surfaces first.
+	const captured = [ ...sources.keys() ].sort( ( left, right ) =>
+		left === '/' ? -1 : right === '/' ? 1 : left.localeCompare( right )
+	);
+	const requested = options.routes?.map( canonicalRoutePath );
+	for ( const route of requested ?? [] ) {
 		if ( sources.has( route ) ) continue;
 		throw new Error(
-			`Route ${ route } was not captured. Captured routes: ${ [ ...sources.keys() ].join( ', ' ) }`
+			`Route ${ route } was not captured. Captured routes: ${ captured.join( ', ' ) }`
+		);
+	}
+	const selected = requested ?? captured;
+	const routes = selected.slice( 0, MAX_ROUTE_CHECKS );
+	if ( selected.length > routes.length ) {
+		log(
+			`[compare] checking ${ routes.length } of ${ selected.length } routes (cap ${ MAX_ROUTE_CHECKS })`
 		);
 	}
 
@@ -386,7 +413,7 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 		};
 	}
 
-	const scores: ViewportScore[] = [];
+	const scores: RouteScore[] = [];
 	try {
 		for ( const route of routes ) {
 			const sourceHref = sources.get( route )!;
@@ -394,7 +421,12 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 			for ( const width of widths ) {
 				log( `[compare] ${ route } @ ${ width }px` );
 				const pair = await observe( sourceHref, localHref, width );
-				const evidenceDir = join( dirname( receiptPath ), 'compare', String( width ) );
+				const evidenceDir = join(
+					dirname( receiptPath ),
+					'compare',
+					evidenceSlug( route ),
+					String( width )
+				);
 				// Every check, built-in and contributed, runs through the registry.
 				const checked = await runFidelityChecks( {
 					route,
@@ -405,7 +437,8 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 					candidate: pair.liberated,
 					evidenceDir,
 				} );
-				const score: ViewportScore = {
+				const score: RouteScore = {
+					route,
 					viewport: width,
 					pass: checked.failures.length === 0,
 					failures: checked.failures,
@@ -446,10 +479,10 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 					hashTargets: [],
 					internalMissing: [],
 				} );
-				const score = scoreViewport(
-					dialogOnly( pair.source ),
-					dialogOnly( pair.liberated )
-				);
+				const score = {
+					...scoreViewport( dialogOnly( pair.source ), dialogOnly( pair.liberated ) ),
+					route,
+				};
 				score.notes.push( 'interactivity' );
 				scores.push( score );
 			}
@@ -460,5 +493,13 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 	}
 
 	const summary = scoreReport( scores );
-	return { sourceUrl, websiteDir, widths, routes, scores, ...summary };
+	return {
+		sourceUrl,
+		websiteDir,
+		widths,
+		routes,
+		routesAvailable: selected.length,
+		scores,
+		...summary,
+	};
 }
