@@ -99,26 +99,7 @@ try {
     throw new Error('Installed-package platform consumer check failed.');
   }
 
-  // The plugin runs a self-contained MCP bundle. Its registry is not the same
-  // module instance as dist/index.js, so external modules receive the active
-  // registry API from the loader rather than importing the package root.
-  const externalPlatformPath = join(consumerDir, 'external-platform.mjs');
-  writeFileSync(
-    externalPlatformPath,
-    [
-      'export default function ({ registerPlatform }) {',
-      '  registerPlatform({',
-      "    id: 'external-builder',",
-      '    detection: { urlPatterns: [/external-builder\\.example/i] },',
-      "    discover: async (url) => ({ urls: [{ url, type: 'homepage' }] }),",
-      '  });',
-      '}',
-    ].join('\n'),
-  );
-
   for (const relativePath of [
-    'dist/scripts/triage-candidates.mjs',
-    'scripts/block-fixer/fix-server.js',
     'scripts/run.mjs',
     'skills/liberate/SKILL.md',
   ]) {
@@ -131,30 +112,18 @@ try {
     command: process.execPath,
     args: [join(packageRoot, 'dist', 'mcp-server.bundle.mjs')],
     cwd: packageRoot,
-    env: {
-      ...process.env,
-      DATA_LIBERATION_PLATFORMS: externalPlatformPath,
-    },
     stderr: 'inherit',
   });
   const client = new Client({ name: 'package-smoke', version: '1.0.0' }, { capabilities: {} });
   try {
     await withDeadline(client.connect(transport), 'Installed MCP server connection');
     const tools = await withDeadline(client.listTools(), 'Installed MCP server tool listing');
-    if (!tools.tools.some((tool) => tool.name === 'liberate_capture')) {
-      throw new Error('Installed MCP server does not expose liberate_capture.');
-    }
-    const detected = await withDeadline(
-      client.callTool({
-        name: 'liberate_detect',
-        arguments: { url: 'https://site.external-builder.example/' },
-      }),
-      'Installed MCP external platform detection',
-    );
-    const detectionText = detected.content.find((item) => item.type === 'text')?.text;
-    const detection = JSON.parse(detectionText ?? '{}');
-    if (detection.platform !== 'external-builder') {
-      throw new Error('Bundled MCP did not use externally registered platform: ' + detectionText);
+    const offered = tools.tools.map((tool) => tool.name).sort();
+    const expected = ['compare', 'liberate', 'publish'];
+    if (offered.join() !== expected.join()) {
+      throw new Error(
+        `Installed MCP server offers [${offered}]; expected the product verbs [${expected}].`
+      );
     }
   } finally {
     await withDeadline(client.close(), 'Installed MCP server shutdown', 10_000);
