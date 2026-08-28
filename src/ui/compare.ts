@@ -5,6 +5,7 @@
 // and never decides pass/fail.
 //
 import { checkFidelity, type FidelityReport } from '../lib/fidelity/check.js';
+import { summariseFindings } from '../lib/fidelity/self-consistency.js';
 
 export async function runCompare(
 	directory: string,
@@ -16,6 +17,21 @@ export async function runCompare(
 		log: ( message ) => process.stderr.write( `${ message }\n` ),
 	} );
 
+	// Tier one, over every route.
+	const consistency = report.selfConsistency;
+	if ( consistency.pass ) {
+		process.stdout.write( `self-consistency ok across ${ consistency.routes } route(s)\n` );
+	} else {
+		for ( const group of summariseFindings( consistency.findings ) ) {
+			process.stdout.write(
+				`self-consistency FAIL ${ group.kind }: ${ group.routes } route(s) — ${ group.examples.join(
+					'; '
+				) }\n`
+			);
+		}
+	}
+
+	// Tier two, over the sampled routes.
 	for ( const score of report.scores ) {
 		const mark = score.pass ? 'ok' : 'FAIL';
 		process.stdout.write( `${ score.route } ${ score.viewport }px ${ mark }` );
@@ -25,15 +41,12 @@ export async function runCompare(
 	}
 
 	// Say what was measured, not just how it went. "Passed" over an unstated
-	// scope is how a homepage-only check gets read as a whole-site result.
-	const checked =
-		report.routes.length === report.routesAvailable
-			? `${ report.routes.length } route(s)`
-			: `${ report.routes.length } of ${ report.routesAvailable } route(s)`;
+	// scope is how a sampled check gets read as a whole-site result.
+	const scope = `${ consistency.routes } route(s) checked offline, ${ report.routes.length } of ${ report.routesAvailable } compared to source`;
 	process.stdout.write(
 		report.pass
-			? `Passed ${ report.passed } check(s) across ${ checked } against ${ report.sourceUrl }\n`
-			: `Failed ${ report.failed }/${ report.passed + report.failed } check(s) across ${ checked } against ${ report.sourceUrl }\n`
+			? `Passed: ${ scope }, against ${ report.sourceUrl }\n`
+			: `Failed ${ report.failed } source check(s) and ${ consistency.findings.length } offline finding(s): ${ scope }, against ${ report.sourceUrl }\n`
 	);
 	return report;
 }

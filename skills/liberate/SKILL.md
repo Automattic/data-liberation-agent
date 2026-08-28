@@ -45,15 +45,26 @@ The run directory is that path with `website` removed — pass it to `compare` a
 data-liberation compare <run-dir>
 ```
 
-Compares the live source against the copy at widths the capture never sampled, and checks that navigation resolves, that internal links land, and that the copy asks for nothing off its own origin.
+This runs two tiers, and the report says which found what.
+
+**Self-consistency, over every route, offline.** Does the copy work on its own terms — every same-page and cross-page anchor resolving to exactly one target, every internal link landing on a real file, no asset still pointing at the origin. This needs no browser and no network, so it covers the whole site in milliseconds.
+
+**Source fidelity, over a sample, in a browser.** Does the copy still match the original — text, geometry and reflow at widths the capture never sampled, and dialogs opening as the source opens them. Each check is a live round trip costing roughly 25 seconds, so it runs on the entrypoint plus a spread of other routes rather than all of them.
 
 **Exit 0 means accepted. Exit 1 means report it.** Each failure names what diverged:
 
 ```
-1600px FAIL: nav 5 same-page anchor(s) match more than one target: #introduction #methodology
+self-consistency FAIL anchor-ambiguous: 1 route(s) — / /index.html#introduction matches 2 targets
+/anchor/ 1600px FAIL: text 62 chars !== source 707
 ```
 
-Add `--screenshots` to write source, copy, and diff PNGs alongside the run. The pixel score is evidence for a human, and the pass or fail comes from the named checks.
+The closing line states the scope measured, and both tiers must pass:
+
+```
+Passed: 4 route(s) checked offline, 4 of 4 compared to source, against https://example.com/
+```
+
+When that line shows fewer routes compared than captured, source fidelity was sampled — say so when reporting, rather than describing the whole site as verified. Add `--screenshots` to write source, copy, and diff PNGs. The pixel score is evidence for a human; pass or fail comes from the named checks.
 
 ## Step 3 — Publish
 
