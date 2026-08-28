@@ -29,6 +29,10 @@ export interface LayoutObservation {
 export interface HashTarget {
 	fragment: string;
 	resolved: boolean;
+	/** Elements this fragment matches. More than one and the browser silently
+	 *  picks the first, which is how a per-device copy sends a mobile anchor to
+	 *  the hidden desktop section. */
+	targets: number;
 }
 
 export interface ViewportScore {
@@ -110,6 +114,23 @@ export function scoreViewport(
 				`nav ${ lost.length } same-page anchor(s) missing: #${ lost.slice( 0, 3 ).join( ' #' ) }`
 			);
 		}
+	}
+
+	// Resolving is not the same as resolving correctly. A fragment that matches
+	// more elements in the copy than in the source lands somewhere the source
+	// never sent it, and `getElementById` reports that as a success.
+	const sourceTargets = new Map(
+		source.hashTargets.map( ( target ) => [ target.fragment, target.targets ] )
+	);
+	const ambiguous = liberated.hashTargets
+		.filter( ( target ) => target.targets > Math.max( 1, sourceTargets.get( target.fragment ) ?? 1 ) )
+		.map( ( target ) => target.fragment );
+	if ( ambiguous.length > 0 ) {
+		failures.push(
+			`nav ${ ambiguous.length } same-page anchor(s) match more than one target: #${ ambiguous
+				.slice( 0, 3 )
+				.join( ' #' ) }`
+		);
 	}
 
 	if ( liberated.internalMissing.length > 0 ) {

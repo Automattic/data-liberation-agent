@@ -3,7 +3,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PNG } from 'pngjs';
 import { afterEach, describe, expect, it } from 'vitest';
-import { checkFidelity, checkWidthsFor, resolveCheckDirectory } from './check.js';
+import {
+	canonicalRoutePath,
+	checkFidelity,
+	checkWidthsFor,
+	resolveCheckDirectory,
+	routeSourceMap,
+} from './check.js';
 import type { LayoutObservation } from './score.js';
 
 const dirs: string[] = [];
@@ -56,6 +62,36 @@ describe( 'resolveCheckDirectory', () => {
 	} );
 } );
 
+describe( 'canonicalRoutePath', () => {
+	it( 'gives a directory index one spelling', () => {
+		for ( const route of [ '/', '/index.html' ] ) expect( canonicalRoutePath( route ) ).toBe( '/' );
+		for ( const route of [ '/about', '/about/', '/about/index.html' ] )
+			expect( canonicalRoutePath( route ) ).toBe( '/about/' );
+	} );
+
+	it( 'leaves a real file alone', () => {
+		expect( canonicalRoutePath( '/feed.xml' ) ).toBe( '/feed.xml' );
+		expect( canonicalRoutePath( 'blog/post.html' ) ).toBe( '/blog/post.html' );
+	} );
+} );
+
+describe( 'routeSourceMap', () => {
+	it( 'maps the copy back to the URLs it was captured from', () => {
+		expect( [
+			...routeSourceMap( {
+				websiteRoot: 'website',
+				routes: [
+					{ url: 'https://example.com/docs/start', path: 'website/index.html' },
+					{ url: 'https://example.com/docs/api', path: 'website/api/index.html' },
+				],
+			} ),
+		] ).toEqual( [
+			[ '/', 'https://example.com/docs/start' ],
+			[ '/api/', 'https://example.com/docs/api' ],
+		] );
+	} );
+} );
+
 describe( 'checkWidthsFor', () => {
 	it( 'drops widths the sweep already sampled', () => {
 		expect( checkWidthsFor( [ 1440, 1600, 1920 ] ) ).toEqual( [ 1728 ] );
@@ -75,6 +111,47 @@ describe( 'checkFidelity', () => {
 		expect( seen ).toEqual( [ 1600, 1728 ] );
 		expect( report.pass ).toBe( true );
 		expect( report.sourceUrl ).toBe( 'https://example.com/' );
+	} );
+
+	it( 'compares a subpath source against the page it captured, not the origin root', async () => {
+		const dir = mkdtempSync( join( tmpdir(), 'dla-check-' ) );
+		dirs.push( dir );
+		mkdirSync( join( dir, 'website' ), { recursive: true } );
+		writeFileSync( join( dir, 'website', 'index.html' ), '<h1>Home</h1>' );
+		writeFileSync(
+			join( dir, 'capture-receipt.json' ),
+			JSON.stringify( {
+				source: { url: 'https://example.com/handbook/intro' },
+				websiteRoot: 'website',
+				routes: [ { url: 'https://example.com/handbook/intro', path: 'website/index.html' } ],
+			} )
+		);
+
+		const requested: string[] = [];
+		await checkFidelity( {
+			directory: dir,
+			widths: [ 1600 ],
+			observe: async ( sourceHref, _local, viewport ) => {
+				requested.push( sourceHref );
+				return { source: obs( viewport ), liberated: obs( viewport ) };
+			},
+		} );
+
+		expect( requested ).toEqual( [ 'https://example.com/handbook/intro' ] );
+	} );
+
+	it( 'refuses to compare a route the capture never took', async () => {
+		await expect(
+			checkFidelity( {
+				directory: liberatedRun(),
+				routes: [ '/pricing' ],
+				widths: [ 1600 ],
+				observe: async ( _source, _local, viewport ) => ( {
+					source: obs( viewport ),
+					liberated: obs( viewport ),
+				} ),
+			} )
+		).rejects.toThrow( /was not captured/ );
 	} );
 
 	it( 'fails the report when any viewport freezes', async () => {
