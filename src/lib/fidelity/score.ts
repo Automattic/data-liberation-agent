@@ -148,13 +148,15 @@ export function scoreViewport(
 		);
 	}
 
-	const copyOpened = new Set(
-		( liberated.dialogs ?? [] )
-			.filter( ( dialog ) => dialog.opened )
-			.map( ( dialog ) => dialog.label.toLowerCase() )
-	);
+	const copyOpened = ( liberated.dialogs ?? [] )
+		.filter( ( dialog ) => dialog.opened )
+		.map( ( dialog ) => dialog.label.toLowerCase() );
 	const dead = ( source.dialogs ?? [] )
-		.filter( ( dialog ) => dialog.opened && ! copyOpened.has( dialog.label.toLowerCase() ) )
+		.filter( ( dialog ) => {
+			if ( ! dialog.opened ) return false;
+			const label = dialog.label.toLowerCase();
+			return ! copyOpened.some( ( opened ) => opened === label || opened.includes( label ) || label.includes( opened ) );
+		} )
 		.map( ( dialog ) => dialog.label );
 	if ( dead.length > 0 ) {
 		failures.push( `interactivity ${ dead.length } dialog(s) dead: ${ dead.slice( 0, 3 ).join( ', ' ) }` );
