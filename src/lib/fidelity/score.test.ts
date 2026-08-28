@@ -87,6 +87,14 @@ describe( 'scoreViewport', () => {
 		expect( score.failures[ 0 ] ).toMatch( /\/about\// );
 	} );
 
+	it( 'treats overlapping dialog labels as the same trigger', () => {
+		const score = scoreViewport(
+			at( 390, { dialogs: [ { label: 'Open Menu', opened: true } ] } ),
+			at( 390, { dialogs: [ { label: 'Open Menu Close Menu', opened: true } ] } )
+		);
+		expect( score.pass ).toBe( true );
+	} );
+
 	it( 'fails when a source dialog does not open in the copy', () => {
 		const score = scoreViewport(
 			at( 1440, { dialogs: [ { label: 'Menu', opened: true } ] } ),

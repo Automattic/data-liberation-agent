@@ -22,6 +22,7 @@ import {
 	type GeometryCapture,
 } from './screenshot/layout-geometry-proof.js';
 import { selfContainWebsite } from './self-contain.js';
+import { wireCapturedDialogs } from './static-dialogs.js';
 import { rewriteMediaUrls } from './streaming/media-url-rewrite.js';
 import type { InteractionStatesReport } from './screenshot/interaction-capture.js';
 import type { CapturedResourceManifest } from './screenshot/resource-capture.js';
@@ -99,6 +100,7 @@ interface CaptureEntry {
 	identityHtmlPath?: string;
 	sections?: string;
 	canonicalUrl?: string;
+	interactions?: InteractionStatesReport;
 }
 
 function isUsableSectionEvidence( sections: unknown ): sections is Record< string, unknown >[] {
@@ -1193,6 +1195,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 			hasMobileDocument: mobileHtml !== undefined && documentsDiffer( desktopHtml, mobileHtml ),
 			sections: entry.sections,
 			canonicalUrl: entry.metadata?.openGraph?.[ 'og:url' ] ?? openGraphUrl( html ),
+			interactions: entry.interactions,
 		} );
 		if ( entry.interactions?.schema === 'data-liberation/interaction-states/v1' ) {
 			interactionPages.push( entry.interactions );
@@ -1623,7 +1626,10 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 			),
 			resourceReplacements
 		);
-		const normalizedHtml = withoutGeometryIdentities( identityHtml );
+		const normalizedHtml = wireCapturedDialogs(
+			withoutGeometryIdentities( identityHtml ),
+			entry.interactions?.states ?? []
+		);
 		unresolvedAnchors.push( ...unresolvedCapturedAnchors( normalizedHtml, url ) );
 		writeFileSync( destination, normalizedHtml );
 		entry.identityHtmlPath = `${ htmlPath }.identity`;
