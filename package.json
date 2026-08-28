@@ -14,12 +14,8 @@
     "AGENTS.md",
     "CLAUDE.md",
     "GEMINI.md",
-    "agents/",
-    "commands/",
     "dist/",
-    "docs/",
     "gemini-extension.json",
-    "prompts/",
     "scripts/",
     "skills/",
     "src/"
