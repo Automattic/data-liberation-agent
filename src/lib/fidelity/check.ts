@@ -10,6 +10,7 @@ import { chromium, type Page } from 'playwright';
 import { startStaticServer } from '../replicate/local-site/static-server.js';
 import { DEFAULT_SWEEP_WIDTHS } from '../screenshot/fluid-capture.js';
 import { writePixelEvidence } from './evidence.js';
+import { runFidelityChecks } from './checks.js';
 import {
 	scoreReport,
 	scoreViewport,
@@ -393,9 +394,27 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 			for ( const width of widths ) {
 				log( `[compare] ${ route } @ ${ width }px` );
 				const pair = await observe( sourceHref, localHref, width );
-				const score = scoreViewport( pair.source, pair.liberated );
+				const evidenceDir = join( dirname( receiptPath ), 'compare', String( width ) );
+				// Every check, built-in and contributed, runs through the registry.
+				const checked = await runFidelityChecks( {
+					route,
+					viewport: width,
+					sourceUrl: sourceHref,
+					candidateUrl: localHref,
+					source: pair.source,
+					candidate: pair.liberated,
+					evidenceDir,
+				} );
+				const score: ViewportScore = {
+					viewport: width,
+					pass: checked.failures.length === 0,
+					failures: checked.failures,
+					notes: checked.notes,
+					source: pair.source,
+					liberated: pair.liberated,
+				};
+				for ( const artifact of checked.artifacts ) score.notes.push( `evidence → ${ artifact }` );
 				if ( pair.sourcePng && pair.liberatedPng ) {
-					const evidenceDir = join( dirname( receiptPath ), 'compare', String( width ) );
 					const evidence = writePixelEvidence( evidenceDir, pair.sourcePng, pair.liberatedPng );
 					if ( 'score' in evidence ) {
 						score.notes.push(
@@ -407,6 +426,11 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 				}
 				scores.push( score );
 			}
+			// The interactivity pass deliberately does not run the check registry.
+			// It blanks every field except dialogs so that one narrow question can
+			// be asked at a width the layout comparison does not cover, and handing
+			// a contributed check a synthetic observation would invite it to draw
+			// conclusions from values that were zeroed rather than measured.
 			if ( ! widths.includes( 390 ) ) {
 				log( `[compare] ${ route } @ 390px interactivity` );
 				const pair = await observe( sourceHref, localHref, 390 );
