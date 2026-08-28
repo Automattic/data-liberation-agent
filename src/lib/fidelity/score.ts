@@ -6,6 +6,22 @@
 // capture width certifies the exact failure mode. This compares at a width the
 // caller chose, and the check runner picks widths the sweep never sampled.
 //
+/**
+ * One image the page actually renders at this viewport: where it sits (the
+ * rounded box, in CSS pixels) plus a normalized source identity. The pair is
+ * the stable key — the copy hosts media under its own URLs, so the basename
+ * is the only identity that survives localization, and the box is what makes
+ * a loss nameable ("the slideshow at the top is gone", not "an image went
+ * missing somewhere").
+ */
+export interface RenderedImage {
+	key: string;
+	x: number;
+	y: number;
+	width: number;
+	height: number;
+}
+
 export interface LayoutObservation {
 	/** Viewport width the observation was taken at. */
 	viewport: number;
@@ -14,6 +30,9 @@ export interface LayoutObservation {
 	textChars: number;
 	/** Widest visible image, in CSS pixels. Null when none. */
 	widestImage: number | null;
+	/** Images rendering with real layout space at this viewport. Tracking
+	 *  pixels and hidden decorations are excluded by the observer. */
+	images: RenderedImage[];
 	/** documentElement.scrollWidth. */
 	docWidth: number;
 	/** True when the document is wider than the viewport. */
@@ -54,6 +73,56 @@ export interface ViewportScore {
 /** Image width may drift by a pixel of rounding; more than this is a freeze. */
 export const IMAGE_TOLERANCE_PX = 2;
 
+/**
+ * The copy may render this many fewer images than the source at a single
+ * viewport without failing. One is the largest drift still explained by
+ * known-benign causes: a carousel parked on a different slide between the two
+ * observations, or a single below-the-fold image only the live source
+ * hydrated with an intrinsic size inside the settle window. Real losses
+ * arrive in sets — the empty-slideshow regression dropped every slide (three
+ * or more) at once at every width — so more than one missing image at the
+ * same viewport is treated as content loss, not noise.
+ */
+export const MISSING_IMAGE_TOLERANCE = 1;
+
+/**
+ * Stable identity for one rendered image. The copy re-hosts media under its
+ * own URLs and WordPress appends collision and generated-size suffixes, so
+ * identity is the basename, lowercased, with query/hash and those suffixes
+ * stripped: `hero-2.jpg`, `hero-1024x576.jpg`, and `hero-scaled.jpg` are all
+ * `hero.jpg`. Inline and runtime-minted payloads collapse to a stable token
+ * because their URLs are not a comparable identity.
+ */
+export function normalizeImageKey( src: string ): string {
+	if ( ! src ) return '';
+	if ( src.startsWith( 'data:' ) ) return `data:${ src.slice( 5 ).split( ';' )[ 0 ] ?? '' }`;
+	if ( src.startsWith( 'blob:' ) ) return 'blob:';
+	const path = src.split( /[?#]/ )[ 0 ] ?? '';
+	const slash = path.lastIndexOf( '/' );
+	const name = ( slash >= 0 ? path.slice( slash + 1 ) : path ).toLowerCase();
+	const stripped = name.replace( /-(?:\d+x\d+|scaled|\d+)(?=\.[a-z0-9]+$)/, '' );
+	return stripped || name;
+}
+
+/**
+ * Source images with no copy counterpart, matched key-by-key as a multiset so
+ * a page using the same file twice must render it twice. Extra copy images
+ * are not the caller's problem: additions do not fail this gate.
+ */
+function missingRenderedImages( source: RenderedImage[], copy: RenderedImage[] ): RenderedImage[] {
+	const available = new Map< string, number >();
+	for ( const image of copy ) {
+		available.set( image.key, ( available.get( image.key ) ?? 0 ) + 1 );
+	}
+	const missing: RenderedImage[] = [];
+	for ( const image of source ) {
+		const left = available.get( image.key ) ?? 0;
+		if ( left > 0 ) available.set( image.key, left - 1 );
+		else missing.push( image );
+	}
+	return missing;
+}
+
 export function scoreViewport(
 	source: LayoutObservation,
 	liberated: LayoutObservation
@@ -86,6 +155,28 @@ export function scoreViewport(
 				liberated.widestImage - source.widestImage
 			})`
 		);
+	}
+
+	// The empty-slideshow gate: the widest image can survive (a header banner
+	// covers it) while an entire slideshow below it renders nothing. Counting
+	// what each side actually renders is the only way that regression fails.
+	const missingImages = missingRenderedImages( source.images, liberated.images );
+	if ( missingImages.length > MISSING_IMAGE_TOLERANCE ) {
+		failures.push(
+			`images ${ missingImages.length } of ${ source.images.length } missing: ${ missingImages
+				.slice( 0, 3 )
+				.map(
+					( image ) =>
+						`${ image.key } ${ image.width }x${ image.height } at (${ image.x },${ image.y })`
+				)
+				.join( '; ' ) }`
+		);
+	} else if ( missingImages.length > 0 ) {
+		notes.push( `images ${ missingImages.length } missing within tolerance` );
+	}
+	const matchedImages = source.images.length - missingImages.length;
+	if ( liberated.images.length > matchedImages ) {
+		notes.push( `images ${ liberated.images.length - matchedImages } extra in copy (not a failure)` );
 	}
 
 	if ( liberated.overflow && ! source.overflow ) {

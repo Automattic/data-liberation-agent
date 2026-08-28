@@ -34,6 +34,7 @@ const obs = ( viewport: number, extra: Partial< LayoutObservation > = {} ): Layo
 	title: 'Home',
 	textChars: 10,
 	widestImage: viewport,
+	images: [],
 	docWidth: viewport,
 	overflow: false,
 	externalHosts: [],
@@ -169,6 +170,23 @@ describe( 'checkFidelity', () => {
 		} );
 		expect( report.pass ).toBe( false );
 		expect( report.failed ).toBe( 1 );
+	} );
+
+	it( 'fails the report when the copy renders fewer images than the source', async () => {
+		const slides = ( viewport: number ) => [
+			{ key: 'slide-a.jpg', x: 0, y: 96, width: viewport, height: 600 },
+			{ key: 'slide-b.jpg', x: 0, y: 96, width: viewport, height: 600 },
+		];
+		const report = await checkFidelity( {
+			directory: liberatedRun(),
+			widths: [ 1600 ],
+			observe: async ( _source, _local, viewport ) => ( {
+				source: obs( viewport, { images: slides( viewport ) } ),
+				liberated: obs( viewport, { images: [] } ),
+			} ),
+		} );
+		expect( report.pass ).toBe( false );
+		expect( report.scores[ 0 ]?.failures[ 0 ] ).toMatch( /^images 2 of 2 missing: slide-a\.jpg/ );
 	} );
 
 	it( 'records a pixel score as evidence without letting it fail the gate', async () => {
