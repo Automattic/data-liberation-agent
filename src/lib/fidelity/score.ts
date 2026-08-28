@@ -24,6 +24,13 @@ export interface LayoutObservation {
 	hashTargets: HashTarget[];
 	/** Internal pathnames whose local copy 404s. Empty on the live source. */
 	internalMissing: string[];
+	/** Click-to-open dialogs/menus observed on this document. */
+	dialogs: DialogProbe[];
+}
+
+export interface DialogProbe {
+	label: string;
+	opened: boolean;
 }
 
 export interface HashTarget {
@@ -139,6 +146,18 @@ export function scoreViewport(
 				.slice( 0, 3 )
 				.join( ', ' ) }`
 		);
+	}
+
+	const copyOpened = new Set(
+		( liberated.dialogs ?? [] )
+			.filter( ( dialog ) => dialog.opened )
+			.map( ( dialog ) => dialog.label.toLowerCase() )
+	);
+	const dead = ( source.dialogs ?? [] )
+		.filter( ( dialog ) => dialog.opened && ! copyOpened.has( dialog.label.toLowerCase() ) )
+		.map( ( dialog ) => dialog.label );
+	if ( dead.length > 0 ) {
+		failures.push( `interactivity ${ dead.length } dialog(s) dead: ${ dead.slice( 0, 3 ).join( ', ' ) }` );
 	}
 
 	return {
