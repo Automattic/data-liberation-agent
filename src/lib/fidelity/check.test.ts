@@ -138,7 +138,10 @@ describe( 'checkFidelity', () => {
 			},
 		} );
 
-		expect( requested ).toEqual( [ 'https://example.com/handbook/intro' ] );
+		expect( requested ).toEqual( [
+			'https://example.com/handbook/intro',
+			'https://example.com/handbook/intro',
+		] );
 	} );
 
 	it( 'refuses to compare a route the capture never took', async () => {
