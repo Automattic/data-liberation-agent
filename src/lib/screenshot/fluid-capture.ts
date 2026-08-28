@@ -7,13 +7,19 @@
 // replaces the runtime-written inline pixels, which is what lets the liberated
 // copy keep reflowing after that runtime is stripped.
 //
-import { breakpointsFrom, learnFluidModel, type FluidModel, type GeometrySample } from './fluid-model.js';
+import {
+	breakpointsFrom,
+	learnFluidModel,
+	learnWidestFluidModel,
+	type FluidModel,
+	type GeometrySample,
+} from './fluid-model.js';
 import type { Page } from 'playwright';
 
 /** Marks elements across viewport changes; removed before serialization. */
 const ID_ATTRIBUTE = 'data-dla-fluid-id';
 /** Only geometry that a runtime plausibly derives from viewport width. */
-const LEARNABLE_PROPERTIES = [ 'width', 'height' ] as const;
+const LEARNABLE_PROPERTIES = [ 'width', 'height', 'top' ] as const;
 
 export type LearnableProperty = ( typeof LEARNABLE_PROPERTIES )[ number ];
 
@@ -64,7 +70,11 @@ export async function learnAndApplyFluidGeometry(
 			let index = 0;
 			for ( const element of document.querySelectorAll< HTMLElement >( '[style]' ) ) {
 				// Only elements a runtime sized in pixels are candidates.
-				if ( ! /\b(?:width|height)\s*:\s*\d/.test( element.getAttribute( 'style' ) ?? '' ) ) continue;
+				const style = element.getAttribute( 'style' ) ?? '';
+				const carriesPixelSize = /\b(?:width|height)\s*:\s*\d/.test( style );
+				const carriesCapturedAnchorTop =
+					element.hasAttribute( 'data-dla-anchor-target' ) && /\btop\s*:\s*\d/.test( style );
+				if ( ! carriesPixelSize && ! carriesCapturedAnchorTop ) continue;
 				element.setAttribute( attribute, String( index++ ) );
 			}
 			return index;
@@ -100,6 +110,18 @@ export async function learnAndApplyFluidGeometry(
 					const style = element.getAttribute( 'style' ) ?? '';
 					const values: Record< string, number | null > = {};
 					for ( const property of properties ) {
+						if ( property === 'top' && ! element.hasAttribute( 'data-dla-anchor-target' ) ) {
+							values[ property ] = null;
+							continue;
+						}
+						if ( property === 'top' ) {
+							const sourceId = element.getAttribute( 'data-dla-anchor-source-id' );
+							const source = sourceId ? document.getElementById( sourceId ) : null;
+							if ( source ) {
+								values[ property ] = source.getBoundingClientRect().top + window.scrollY;
+								continue;
+							}
+						}
 						const match = new RegExp( `(?:^|;)\\s*${ property }\\s*:\\s*(\\d+(?:\\.\\d+)?)px` ).exec( style );
 						values[ property ] = match ? Number( match[ 1 ] ) : null;
 					}
@@ -129,15 +151,16 @@ export async function learnAndApplyFluidGeometry(
 
 	for ( const [ key, samples ] of observations ) {
 		const [ id, property ] = key.split( ':' ) as [ string, LearnableProperty ];
-		const model: FluidModel = learnFluidModel( samples );
+		const wholeRangeModel = learnFluidModel( samples );
+		const model: FluidModel = learnWidestFluidModel( samples );
 		byKind[ model.kind ] = ( byKind[ model.kind ] ?? 0 ) + 1;
+		if ( wholeRangeModel.kind === 'breakpoint' ) {
+			for ( const width of breakpointsFrom( wholeRangeModel.samples ) ) breakpoints.add( width );
+		}
 		if ( model.kind === 'breakpoint' ) {
 			// Leaving the frozen value is the honest outcome: a wrong formula
 			// would be worse than an admittedly fixed one.
 			unmodelled++;
-			// Only the widths where the rule actually changed are breakpoints;
-			// every sampled width is not evidence of anything.
-			for ( const width of breakpointsFrom( model.samples ) ) breakpoints.add( width );
 			continue;
 		}
 		if ( model.kind === 'floored' && property === 'width' ) {

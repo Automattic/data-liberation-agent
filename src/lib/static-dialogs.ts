@@ -54,6 +54,7 @@ function findTriggers(
 			.replace( /\s+/g, ' ' )
 			.trim()
 			.toLowerCase();
+		if ( ! text ) return false;
 		return text.includes( label ) || label.includes( text );
 	} );
 }

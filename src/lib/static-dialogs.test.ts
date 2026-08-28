@@ -45,6 +45,15 @@ describe( 'wireCapturedDialogs', () => {
 		expect( html.match( /<details class="dla-disclosure">/g ) ).toHaveLength( 2 );
 	} );
 
+	it( 'does not turn an unlabeled logo control into the menu trigger', () => {
+		const html = wireCapturedDialogs(
+			'<html><head></head><body><a class="logo" role="button"><img alt="Homepage"></a><button>Open Menu</button></body></html>',
+			[ captured ]
+		);
+		expect( html.match( /<details class="dla-disclosure">/g ) ).toHaveLength( 1 );
+		expect( html ).toContain( '<a class="logo" role="button"><img alt="Homepage"></a>' );
+	} );
+
 	it( 'leaves the page alone when nothing was captured', () => {
 		const input = '<html><body><button>Open Menu</button></body></html>';
 		expect( wireCapturedDialogs( input, [] ) ).toBe( input );
