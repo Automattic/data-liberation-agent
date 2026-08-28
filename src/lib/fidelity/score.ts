@@ -86,12 +86,23 @@ export const IMAGE_TOLERANCE_PX = 2;
 export const MISSING_IMAGE_TOLERANCE = 1;
 
 /**
- * Stable identity for one rendered image. The copy re-hosts media under its
- * own URLs and WordPress appends collision and generated-size suffixes, so
- * identity is the basename, lowercased, with query/hash and those suffixes
- * stripped: `hero-2.jpg`, `hero-1024x576.jpg`, and `hero-scaled.jpg` are all
- * `hero.jpg`. Inline and runtime-minted payloads collapse to a stable token
- * because their URLs are not a comparable identity.
+ * Stable identity for one rendered image, built to survive localization.
+ *
+ * The identity has to hold across three renamings, because the source URL and
+ * the copy's URL are never the same string:
+ *
+ * - **Directory.** The copy re-hosts media under its own path, so only the
+ *   basename can contribute.
+ * - **Extension.** Capture negotiates image formats, so a source `.png` is
+ *   commonly served from the copy as `.avif`. Format is not identity.
+ * - **Separators and suffixes.** Wix media ids carry a `~` that localization
+ *   rewrites to `-`, and both WordPress and our own collision handling append
+ *   numeric and generated-size suffixes.
+ *
+ * So `…~mv2.png` on wixstatic and `…-mv2-2.avif` in the copy are one image,
+ * as are `hero.jpg`, `hero-2.jpg`, `hero-1024x576.jpg` and `hero-scaled.jpg`.
+ * Inline and runtime-minted payloads collapse to a stable token because their
+ * URLs are not a comparable identity.
  */
 export function normalizeImageKey( src: string ): string {
 	if ( ! src ) return '';
@@ -100,8 +111,10 @@ export function normalizeImageKey( src: string ): string {
 	const path = src.split( /[?#]/ )[ 0 ] ?? '';
 	const slash = path.lastIndexOf( '/' );
 	const name = ( slash >= 0 ? path.slice( slash + 1 ) : path ).toLowerCase();
-	const stripped = name.replace( /-(?:\d+x\d+|scaled|\d+)(?=\.[a-z0-9]+$)/, '' );
-	return stripped || name;
+	const stem = name.replace( /\.[a-z0-9]+$/, '' );
+	const folded = stem.replace( /~/g, '-' );
+	const stripped = folded.replace( /-(?:\d+x\d+|scaled|\d+)$/, '' );
+	return stripped || folded || name;
 }
 
 /**

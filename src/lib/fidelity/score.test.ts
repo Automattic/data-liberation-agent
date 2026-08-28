@@ -207,13 +207,30 @@ describe( 'normalizeImageKey', () => {
 	} );
 
 	it( 'strips WordPress collision and generated-size suffixes', () => {
-		expect( normalizeImageKey( '/wp-content/uploads/2026/08/hero-2.jpg' ) ).toBe( 'hero.jpg' );
-		expect( normalizeImageKey( 'https://a.example.com/img/hero-1024x576.jpg' ) ).toBe( 'hero.jpg' );
-		expect( normalizeImageKey( 'https://a.example.com/img/HERO-scaled.jpg' ) ).toBe( 'hero.jpg' );
+		expect( normalizeImageKey( '/wp-content/uploads/2026/08/hero-2.jpg' ) ).toBe( 'hero' );
+		expect( normalizeImageKey( 'https://a.example.com/img/hero-1024x576.jpg' ) ).toBe( 'hero' );
+		expect( normalizeImageKey( 'https://a.example.com/img/HERO-scaled.jpg' ) ).toBe( 'hero' );
+	} );
+
+	it( 'survives a re-encoded, tilde-folded Wix media id', () => {
+		// Measured on a live liberation: the source serves `~mv2.png` from
+		// wixstatic and the copy serves `-mv2-2.avif` from its own media
+		// directory. Matching on the filename reported every image both
+		// missing and extra at once.
+		const source =
+			'https://static.wixstatic.com/media/84770f_036df751d6ad458abdb34ad1da5a52fb~mv2.png/v1/fill/w_919,h_131/84770f_036df751d6ad458abdb34ad1da5a52fb~mv2.png';
+		const copy = 'http://127.0.0.1:53001/media/84770f_036df751d6ad458abdb34ad1da5a52fb-mv2-2.avif';
+		expect( normalizeImageKey( copy ) ).toBe( normalizeImageKey( source ) );
+	} );
+
+	it( 'treats a re-encoded image as the same image', () => {
+		expect( normalizeImageKey( 'https://a.example.com/img/hero.png' ) ).toBe(
+			normalizeImageKey( 'http://127.0.0.1:53001/media/hero.avif' )
+		);
 	} );
 
 	it( 'leaves meaningful name parts alone', () => {
-		expect( normalizeImageKey( 'https://a.example.com/img/hero-card.jpg' ) ).toBe( 'hero-card.jpg' );
+		expect( normalizeImageKey( 'https://a.example.com/img/hero-card.jpg' ) ).toBe( 'hero-card' );
 	} );
 
 	it( 'collapses inline payloads to a stable token', () => {
