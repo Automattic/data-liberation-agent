@@ -16,6 +16,52 @@ const WIX_FILL_VARIANT = /static\.wixstatic\.com\/.+\/fill\/w_\d+,h_\d+/;
  *
  * Pure, so the URL shape this depends on is testable without a browser.
  */
+export function wixStaticMediaUrl(
+	uri: string,
+	size?: { width: number; height: number }
+): string {
+	if ( /^https?:/i.test( uri ) ) return uri;
+	if ( ! size ) return `https://static.wixstatic.com/media/${ uri }`;
+	const file = uri.split( '/' ).pop() || uri;
+	return `https://static.wixstatic.com/media/${ uri }/v1/fill/w_${ Math.max( 1, Math.round( size.width ) ) },h_${ Math.max( 1, Math.round( size.height ) ) },al_c,q_85,enc_avif,quality_auto/${ file }`;
+}
+
+function escapeAttr( value: string ): string {
+	return value.replace( /&/g, '&amp;' ).replace( /"/g, '&quot;' ).replace( /</g, '&lt;' );
+}
+
+export function stripShowcaseMarkup(
+	items: Array< { uri: string; alt?: string; title?: string } >,
+	size: { width: number; height: number }
+): { html: string; css: string } {
+	const count = Math.max( items.length, 1 );
+	const height = Math.max( 1, Math.round( size.height ) );
+	const width = Math.max( 1, Math.round( size.width ) );
+	const imgs = items
+		.map( ( item ) => {
+			const alt = escapeAttr( item.alt || item.title || '' );
+			return `<img src="${ escapeAttr( wixStaticMediaUrl( item.uri, { width, height } ) ) }" alt="${ alt }">`;
+		} )
+		.join( '' );
+	const html = `<div class="dla-slideshow" style="height:${ height }px"><div class="dla-slideshow-track">${ imgs }</div></div>`;
+	const step = 100 / count;
+	const hold = step * 0.8;
+	let frames = '';
+	for ( let index = 0; index < count; index++ ) {
+		const start = index * step;
+		frames += `${ start }%{transform:translateX(-${ index * 100 }%)}`;
+		frames += `${ start + hold }%{transform:translateX(-${ index * 100 }%)}`;
+	}
+	frames += '100%{transform:translateX(0)}';
+	const css =
+		'.dla-slideshow{overflow:hidden;width:100%;position:relative}' +
+		`.dla-slideshow-track{display:flex;height:100%;animation:dla-slideshow ${ count * 2 }s infinite}` +
+		'.dla-slideshow-track img{flex:0 0 100%;width:100%;height:100%;object-fit:cover}' +
+		`@keyframes dla-slideshow{${ frames }}` +
+		'@media (prefers-reduced-motion:reduce){.dla-slideshow{overflow-x:auto;scroll-snap-type:x mandatory}.dla-slideshow-track{animation:none}.dla-slideshow-track img{scroll-snap-align:start}}';
+	return { html, css };
+}
+
 export function wixMediaVariant( url: string ): { id: string; url: string } | null {
 	if ( ! WIX_FILL_VARIANT.test( url ) ) return null;
 	const match = WIX_MEDIA_ID.exec( url );
@@ -141,6 +187,79 @@ export const capture: AdapterCapture = {
 			window.scrollTo( originalScroll.x, originalScroll.y );
 			root.style.scrollBehavior = scrollBehavior;
 		} );
+
+		const galleries = await page.evaluate( async () => {
+			const urls = [
+				...new Set(
+					performance
+						.getEntriesByType( 'resource' )
+						.map( ( entry ) => entry.name )
+						.filter( ( name ) => name.includes( '/pages/thunderbolt' ) )
+				),
+			];
+			const itemsByComp: Record< string, Array< { uri: string; alt?: string; title?: string } > > =
+				{};
+			for ( const url of urls ) {
+				try {
+					const data = ( await ( await fetch( url ) ).json() ) as {
+						props?: { tpa?: { tpaGalleriesImageItems?: Record< string, unknown > } };
+					};
+					const items = data.props?.tpa?.tpaGalleriesImageItems;
+					if ( ! items ) continue;
+					for ( const [ id, value ] of Object.entries( items ) ) {
+						if ( ! Array.isArray( value ) ) continue;
+						itemsByComp[ id ] = value.flatMap( ( entry ) => {
+							if ( ! entry || typeof entry !== 'object' ) return [];
+							const uri = ( entry as { uri?: unknown } ).uri;
+							if ( typeof uri !== 'string' || ! uri ) return [];
+							const alt = ( entry as { alt?: unknown } ).alt;
+							const title = ( entry as { title?: unknown } ).title;
+							return [
+								{
+									uri,
+									...( typeof alt === 'string' ? { alt } : {} ),
+									...( typeof title === 'string' ? { title } : {} ),
+								},
+							];
+						} );
+					}
+				} catch {
+					/* thunderbolt payloads that are not gallery JSON are ignored */
+				}
+			}
+			return itemsByComp;
+		} );
+
+		for ( const [ id, items ] of Object.entries( galleries ) ) {
+			if ( items.length === 0 ) continue;
+			const size = await page.evaluate( ( compId: string ) => {
+				const host = document.getElementById( compId );
+				if ( ! host ) return { width: 1340, height: 486 };
+				const box = host.getBoundingClientRect();
+				return {
+					width: Math.max( 1, Math.round( box.width ) ),
+					height: Math.max( 1, Math.round( box.height ) ),
+				};
+			}, id );
+			const { html, css } = stripShowcaseMarkup( items, size );
+			await page.evaluate(
+				( { compId, markup, stylesheet } ) => {
+					const host = document.getElementById( compId );
+					if ( ! host ) return;
+					if ( ! document.getElementById( 'dla-slideshow-css' ) ) {
+						const style = document.createElement( 'style' );
+						style.id = 'dla-slideshow-css';
+						style.textContent = stylesheet;
+						document.head.append( style );
+					}
+					const wrap = document.createElement( 'div' );
+					wrap.innerHTML = markup;
+					const slideshow = wrap.firstElementChild;
+					if ( slideshow ) host.replaceWith( slideshow );
+				},
+				{ compId: id, markup: html, stylesheet: css }
+			);
+		}
 	},
 
 	/**
