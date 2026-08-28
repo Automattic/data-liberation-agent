@@ -14,8 +14,8 @@ import {
 import { basename, dirname, extname, join, relative, resolve, sep } from 'node:path';
 import * as cheerio from 'cheerio';
 import { escapeHtmlAttr } from './html-escape.js';
+import { appendScrollDrivenAnimations } from './scroll-driven-animations.js';
 import { scopeCss } from './replicate/css-scope.js';
-import { appendScrollDrivenAnimations } from './replicate/paused-animation-drive.js';
 import { SectionSpecsStore } from './replicate/section-specs-store.js';
 import { MediaStubStore } from './resume-state/index.js';
 import {

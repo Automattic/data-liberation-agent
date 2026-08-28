@@ -6,10 +6,8 @@
  * attribute to switch the rule off. Capture strips scripts, so the authored
  * motion can never run: the animation stays parked and the page is static.
  *
- * `reveal-unfreeze.ts` handles the sibling case where the gate is a hidden
- * initial state on a hook class and the fix is to force the end state. This
- * module keeps the motion instead of discarding it, by rebinding the animation
- * to a scroll timeline so the browser drives it with no script.
+ * Rebinding the animation to a scroll timeline keeps the motion in the static
+ * HTML artifact while allowing the browser to drive it without script.
  */
 import postcss from 'postcss';
 

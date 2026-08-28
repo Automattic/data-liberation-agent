@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
 	appendScrollDrivenAnimations,
 	detectPausedAnimationRules,
-} from './paused-animation-drive.js';
+} from './scroll-driven-animations.js';
 
 const gatedEntrance = `
 @keyframes motion-floatIn { 0% { opacity: 0 } 100% { opacity: 1 } }
