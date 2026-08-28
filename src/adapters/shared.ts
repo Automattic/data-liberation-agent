@@ -4,10 +4,7 @@ import type { ExtractionLog } from '../lib/resume-state/index.js';
 import type { ImportSession } from '../lib/resume-state/index.js';
 import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { classifyUrl } from '../lib/extraction/sitemap.js';
-import { closeSvgRasterizer, downloadMedia, isFontUrl } from '../lib/media-fetch/index.js';
 import { MediaStubStore } from '../lib/resume-state/index.js';
-import { AdaptiveTuner, TUNER_DEFAULTS } from '../lib/extraction/adaptive-tuner.js';
-import type { AdaptiveTunerConfig, TunerState } from '../lib/extraction/adaptive-tuner.js';
 import { claimSlug, pageSlugFromUrl } from '../lib/url/index.js';
 import { withTimeout, TimeoutError } from '../lib/concurrency.js';
 
