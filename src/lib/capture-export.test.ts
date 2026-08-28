@@ -172,6 +172,56 @@ describe( 'exportWebsiteCapture', () => {
 		);
 	} );
 
+	it( 'keeps responsive runtime anchor targets unique and diagnoses unresolved fragments', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-responsive-anchor-export-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
+			mkdirSync( join( outputDir, path ), { recursive: true } );
+		writeFileSync(
+			join( outputDir, 'html', 'homepage.html' ),
+			'<html><body><a href="https://example.com/#features" data-dla-anchor-fragment="features">Features</a><a href="https://example.com/#missing" data-dla-anchor-fragment="missing" data-dla-anchor-unresolved="runtime scroll did not resolve to a section boundary">Missing</a><span id="features" data-dla-anchor-target="features"></span><section>Desktop features</section></body></html>'
+		);
+		writeFileSync(
+			join( outputDir, 'html-mobile', 'homepage.html' ),
+			'<html><body><a href="https://example.com/#features" data-dla-anchor-fragment="features">Features</a><span id="features" data-dla-anchor-target="features"></span><section>Mobile features</section></body></html>'
+		);
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( {
+				version: 1,
+				entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },
+			} )
+		);
+
+		exportWebsiteCapture( {
+			outputDir,
+			sourceUrl: 'https://example.com/',
+			platform: 'wix',
+			summary: {},
+			failures: [],
+		} );
+
+		const $ = cheerio.load( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) );
+		expect( $( '#features' ) ).toHaveLength( 1 );
+		expect( $( '#features--dla-mobile' ) ).toHaveLength( 1 );
+		expect( $( '.data-liberation-desktop-document a' ).first().attr( 'href' ) ).toBe(
+			'/index.html#features'
+		);
+		expect( $( '.data-liberation-mobile-document a' ).first().attr( 'href' ) ).toBe(
+			'/index.html#features--dla-mobile'
+		);
+		expect(
+			JSON.parse( readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' ) ).unresolvedAnchors
+		).toEqual( [
+			{
+				sourceUrl: 'https://example.com/',
+				fragment: 'missing',
+				targetCount: 0,
+				reason: 'runtime scroll did not resolve to a section boundary',
+			},
+		] );
+	} );
+
 	it( 'switches documents at the width the source stops adapting at, not a hardcoded one', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-detected-switch-' ) );
 		dirs.push( outputDir );
