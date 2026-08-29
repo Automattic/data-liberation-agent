@@ -18,6 +18,7 @@ import { generateChromeCss, type BakedLayoutMap } from './fixups.js';
 import { sanitizeFrozenHtml } from './freeze.js';
 import { learnAndApplyFluidGeometry } from './fluid-capture.js';
 import { captureTriggeredDialogs } from './interaction-capture.js';
+import { hydrateDisclosureContent } from './dynamic-content.js';
 import { JsAggregator } from './js-aggregator.js';
 import { ManifestQueue, type ManifestEntry, type FailureEntry } from './manifest-queue.js';
 import { validateOutputDir, planArtifacts, type ArtifactPlan } from './output-layout.js';
@@ -626,6 +627,15 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 				attempt: 1,
 			} );
 		}
+	}
+
+	if (
+		plan.captureHtml ||
+		plan.captureMobileHtml ||
+		plan.captureSections ||
+		plan.captureMobileSections
+	) {
+		await hydrateDisclosureContent( page );
 	}
 
 	// Seam 1b: replace runtime-computed pixel geometry with the relationship the
