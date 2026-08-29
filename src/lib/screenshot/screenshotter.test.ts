@@ -107,8 +107,10 @@ describe('captureScreenshots', () => {
 		};
 
 		await expect(capturePageHtml(page as never)).resolves.toContain('<video autoplay muted>');
-		expect(page.evaluate).toHaveBeenCalledOnce();
+		expect(page.evaluate).toHaveBeenCalledTimes(2);
 		expect(String(page.evaluate.mock.calls[0][0])).toContain('source.setAttribute(property');
+		expect(String(page.evaluate.mock.calls[0][0])).toContain('frame.getBoundingClientRect()');
+		expect(String(page.evaluate.mock.calls[1][0])).toContain('frame.removeAttribute(attribute)');
 	});
 
   it('captures two viewports and one HTML per URL', async () => {

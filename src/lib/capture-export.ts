@@ -144,6 +144,23 @@ const MAX_ARTIFACT_FILES = 5000;
 const MAX_ARTIFACT_TOTAL_BYTES = 192 * 1024 * 1024;
 const TRANSPARENT_IMAGE_DATA_URL = 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=';
 const MAX_DECLARATIVE_FORM_EMBEDS = 32;
+const VISUAL_IFRAME_EVIDENCE_ATTRIBUTES = {
+	src: 'data-dla-visual-iframe-src',
+	width: 'data-dla-visual-iframe-width',
+	height: 'data-dla-visual-iframe-height',
+};
+const VISUAL_IFRAME_ATTRIBUTES = new Set( [
+	'allow',
+	'allowfullscreen',
+	'class',
+	'height',
+	'loading',
+	'referrerpolicy',
+	'sandbox',
+	'src',
+	'title',
+	'width',
+] );
 const HUBSPOT_FORM_HOSTS = new Map( [
 	[ 'na1', 'js.hsforms.net' ],
 	[ 'eu1', 'js-eu1.hsforms.net' ],
@@ -1055,7 +1072,34 @@ function removeDanglingResourceReference( html: string, reference: string ): str
 function safeCapturedPageHtml( html: string ): string {
 	const $ = cheerio.load( html );
 	// Preserve rendered structure and author CSS, but never ship executable provider runtime.
-	$( 'script,noscript,iframe,object,embed,base' ).remove();
+	$( 'script,noscript,object,embed,base' ).remove();
+	$( 'iframe' ).each( ( _index, element ) => {
+		const node = $( element );
+		const source = node.attr( VISUAL_IFRAME_EVIDENCE_ATTRIBUTES.src ) ?? '';
+		const width = node.attr( VISUAL_IFRAME_EVIDENCE_ATTRIBUTES.width ) ?? '';
+		const height = node.attr( VISUAL_IFRAME_EVIDENCE_ATTRIBUTES.height ) ?? '';
+		let safeSource = false;
+		try {
+			const url = new URL( source );
+			safeSource = url.protocol === 'https:' && url.hostname !== '';
+		} catch {
+			// Unattested and malformed iframe sources are not portable.
+		}
+		if ( ! safeSource || ! /^[1-9]\d*$/.test( width ) || ! /^[1-9]\d*$/.test( height ) ) {
+			node.remove();
+			return;
+		}
+
+		for ( const attribute of Object.keys( 'attribs' in element ? element.attribs : {} ) ) {
+			if ( ! VISUAL_IFRAME_ATTRIBUTES.has( attribute.toLowerCase() ) ) {
+				node.removeAttr( attribute );
+			}
+		}
+		node.attr( 'src', source );
+		node.attr( 'width', width );
+		node.attr( 'height', height );
+		node.empty();
+	} );
 	$( 'meta[http-equiv]' ).each( ( _index, element ) => {
 		if ( ( $( element ).attr( 'http-equiv' ) ?? '' ).toLowerCase() === 'refresh' ) {
 			$( element ).remove();
