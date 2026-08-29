@@ -424,6 +424,48 @@ describe( 'exportWebsiteCapture', () => {
 		);
 	} );
 
+	it( 'preserves only capture-attested bounded HTTPS iframe surfaces', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-visual-iframe-export-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'screenshots' ] )
+			mkdirSync( join( outputDir, path ), { recursive: true } );
+		writeFileSync(
+			join( outputDir, 'html', 'homepage.html' ),
+			'<html><body><main>' +
+				'<iframe class="map" title="Map" src="https://source.example/wrong" width="100%" height="100%" allow="fullscreen" loading="lazy" sandbox="allow-scripts" referrerpolicy="no-referrer" allowfullscreen frameborder="0" onclick="steal()" srcdoc="<script>steal()</script>" data-dla-visual-iframe-src="https://maps.example/embed" data-dla-visual-iframe-width="1280" data-dla-visual-iframe-height="350"></iframe>' +
+				'<iframe src="https://hidden.example/embed" width="500" height="300"></iframe>' +
+				'<iframe src="javascript:steal()" data-dla-visual-iframe-src="javascript:steal()" data-dla-visual-iframe-width="500" data-dla-visual-iframe-height="300"></iframe>' +
+				'<iframe src="https://zero.example/embed" data-dla-visual-iframe-src="https://zero.example/embed" data-dla-visual-iframe-width="0" data-dla-visual-iframe-height="300"></iframe>' +
+			'</main></body></html>'
+		);
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( {
+				version: 1,
+				entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },
+			} )
+		);
+
+		exportWebsiteCapture( {
+			outputDir,
+			sourceUrl: 'https://example.com/',
+			platform: 'generic',
+			summary: {},
+			failures: [],
+		} );
+
+		const $ = cheerio.load( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) );
+		expect( $( 'iframe' ) ).toHaveLength( 1 );
+		expect( $( 'iframe' ).attr( 'src' ) ).toBe( 'https://maps.example/embed' );
+		expect( $( 'iframe' ).attr( 'width' ) ).toBe( '1280' );
+		expect( $( 'iframe' ).attr( 'height' ) ).toBe( '350' );
+		expect( $( 'iframe' ).attr( 'class' ) ).toBe( 'map' );
+		expect( $( 'iframe' ).attr( 'frameborder' ) ).toBeUndefined();
+		expect( $( 'iframe' ).attr( 'onclick' ) ).toBeUndefined();
+		expect( $( 'iframe' ).attr( 'srcdoc' ) ).toBeUndefined();
+		expect( $.html() ).not.toContain( 'data-dla-visual-iframe-' );
+	} );
+
 	it( 'rejects unsafe shared-style media attributes', () => {
 		expect( portableInlineStyle( ' media="screen & <style"', '.unsafe{}' ) ).toBeUndefined();
 		expect( portableInlineStyle( ' media="screen and (min-width: 1px)"', '.safe{}' ) ).toEqual( {

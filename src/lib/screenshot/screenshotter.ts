@@ -195,7 +195,12 @@ function navBackoffMs( attempt: number, retryAfter?: string ): number {
 }
 
 export async function capturePageHtml( page: Page ): Promise< string > {
-	await page.evaluate( () => {
+	const iframeEvidenceAttributes = {
+		src: 'data-dla-visual-iframe-src',
+		width: 'data-dla-visual-iframe-width',
+		height: 'data-dla-visual-iframe-height',
+	};
+	await page.evaluate( ( evidenceAttributes ) => {
 		for ( const media of document.querySelectorAll( 'audio, video' ) ) {
 			const source = media as HTMLMediaElement;
 			for ( const property of [ 'autoplay', 'loop', 'muted' ] as const ) {
@@ -205,8 +210,43 @@ export async function capturePageHtml( page: Page ): Promise< string > {
 				source.setAttribute( 'playsinline', '' );
 			}
 		}
-	} );
-	return page.content();
+		for ( const frame of document.querySelectorAll( 'iframe' ) ) {
+			for ( const attribute of Object.values( evidenceAttributes ) ) {
+				frame.removeAttribute( attribute );
+			}
+
+			let source: URL;
+			try {
+				source = new URL( frame.getAttribute( 'src' ) ?? '', document.baseURI );
+			} catch {
+				continue;
+			}
+			const bounds = frame.getBoundingClientRect();
+			const visible =
+				bounds.width > 0 &&
+				bounds.height > 0 &&
+				Number.isFinite( bounds.width ) &&
+				Number.isFinite( bounds.height ) &&
+				( typeof frame.checkVisibility !== 'function' ||
+					frame.checkVisibility( { checkOpacity: true, checkVisibilityCSS: true } ) );
+			if ( source.protocol !== 'https:' || ! source.hostname || ! visible ) continue;
+
+			frame.setAttribute( evidenceAttributes.src, source.href );
+			frame.setAttribute( evidenceAttributes.width, String( Math.max( 1, Math.round( bounds.width ) ) ) );
+			frame.setAttribute( evidenceAttributes.height, String( Math.max( 1, Math.round( bounds.height ) ) ) );
+		}
+	}, iframeEvidenceAttributes );
+	try {
+		return await page.content();
+	} finally {
+		await page.evaluate( ( evidenceAttributes ) => {
+			for ( const frame of document.querySelectorAll( 'iframe' ) ) {
+				for ( const attribute of Object.values( evidenceAttributes ) ) {
+					frame.removeAttribute( attribute );
+				}
+			}
+		}, iframeEvidenceAttributes );
+	}
 }
 
 export function geometryCandidateIsSafe( candidate: {
