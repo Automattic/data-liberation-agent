@@ -29,6 +29,35 @@ export interface PausedAnimationRule {
 const PAUSED_SHORTHAND_RE = /(?:^|[\s,])paused(?:$|[\s,])/i;
 
 /**
+ * The same keyword, for removal rather than detection.
+ *
+ * Deliberately a second constant. `PAUSED_SHORTHAND_RE` is used with `.test()`,
+ * and a `g`-flagged regex carries `lastIndex` between calls, so one shared
+ * global constant would make detection skip every other rule it is asked about.
+ *
+ * The delimiters are lookaround rather than consumed. An `animation` shorthand
+ * separates its layers with commas, so a pattern that consumes the character
+ * after `paused` deletes that separator and welds two layers into one — which
+ * is invalid, and a browser drops the whole declaration rather than part of it.
+ */
+const PAUSED_STRIP_RE = /(?<=^|[\s,])paused(?=$|[\s,])/gi;
+
+/**
+ * Remove the `paused` keyword from every layer of an `animation` shorthand.
+ *
+ * Every layer, because a multi-layer shorthand parks each one independently and
+ * a single leftover `paused` keeps that layer from ever running.
+ */
+export function withoutPausedKeyword( value: string ): string {
+	return value
+		.replace( PAUSED_STRIP_RE, '' )
+		// Tidy only what removal left behind: the gap where the keyword was.
+		.replace( /[ \t]{2,}/g, ' ' )
+		.replace( /[ \t]+,/g, ',' )
+		.trim();
+}
+
+/**
  * Infinite motion is ambience (spinners, marquees), not an entrance. Binding it
  * to a scroll timeline would make it stutter with the scroll position.
  */
@@ -91,7 +120,7 @@ export function detectPausedAnimationRules( css: string ): PausedAnimationRule[]
 			.map( ( declaration ) => {
 				if ( declaration.prop.toLowerCase() === 'animation-play-state' ) return '';
 				if ( declaration.prop.toLowerCase() === 'animation' ) {
-					return `animation:${ declaration.value.replace( PAUSED_SHORTHAND_RE, ' ' ) }`;
+					return `animation:${ withoutPausedKeyword( declaration.value ) }`;
 				}
 				return `${ declaration.prop }:${ declaration.value }`;
 			} )
