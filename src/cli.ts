@@ -51,6 +51,7 @@ if (args[0] === 'mcp') {
   Publish options:
     --to <target>        Where to publish. Targets: spacefast (default), wpcom
     --site <site>        Destination WordPress.com site ID or domain for wpcom
+    --session <id>       Resume an existing WordPress.com import session
     --yes                Approve the exact WordPress.com import plan
     --token <token>      Publish into your own account (or SPACEFAST_TOKEN/WPCOM_TOKEN).
                          Without it the publish is anonymous and returns a claim link.
@@ -315,6 +316,7 @@ if (args[0] === 'mcp') {
       token: getArg('--token') ?? (target === 'wpcom' ? process.env.WPCOM_TOKEN : process.env.SPACEFAST_TOKEN) ?? undefined,
       destination: getArg('--site') ?? undefined,
       approve: args.includes('--yes'),
+      session: getArg('--session') ?? undefined,
       log: (message) => process.stderr.write(`${message}\n`),
     });
 

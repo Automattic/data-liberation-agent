@@ -19,6 +19,7 @@ export interface PublishCliOptions {
 	token?: string | undefined;
 	destination?: string | undefined;
 	approve?: boolean | undefined;
+	session?: string | undefined;
 	log?: ( ( message: string ) => void ) | undefined;
 }
 
@@ -54,6 +55,7 @@ export async function publishSite( options: PublishCliOptions ): Promise< Publis
 		token: options.token,
 		destination: options.destination,
 		approve: options.approve,
+		session: options.session,
 		log: options.log,
 	} );
 }

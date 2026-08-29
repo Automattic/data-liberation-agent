@@ -109,6 +109,57 @@ describe( 'wpcomTarget', () => {
 		} ) ).rejects.toMatchObject( { code: 'approval_required' } );
 	} );
 
+	it( 'resumes a preview without creating or uploading another session', async () => {
+		const fetchMock = vi.fn( async ( input: string | URL | Request ) => {
+			const url = String( input );
+			if ( url.endsWith( '/abc123/approve' ) ) {
+				return json( { session_id: 'abc123', state: 'queued' } );
+			}
+			if ( url.endsWith( '/abc123' ) ) {
+				const statusCalls = fetchMock.mock.calls.filter( ( call ) => String( call[ 0 ] ).endsWith( '/abc123' ) );
+				return statusCalls.length === 1
+					? json( { session_id: 'abc123', state: 'preview_ready', plan_hash: 'plan-sha' } )
+					: json( {
+						session_id: 'abc123',
+						state: 'finished',
+						site_url: 'https://example.wordpress.com/',
+						receipt: { success: true },
+					} );
+			}
+			throw new Error( `Unexpected request: ${ url }` );
+		} );
+		vi.stubGlobal( 'fetch', fetchMock );
+
+		const result = await wpcomTarget.publish( {
+			directory: site(),
+			token: 'oauth-token',
+			destination: 'example.wordpress.com',
+			session: 'abc123',
+			approve: true,
+		} );
+
+		expect( result.liveUrl ).toBe( 'https://example.wordpress.com/' );
+		expect( fetchMock.mock.calls.some( ( call ) => String( call[ 0 ] ) === 'https://uploads.example/upload' ) ).toBe( false );
+		expect( fetchMock.mock.calls.some( ( call ) => String( call[ 0 ] ).endsWith( '/static-site-import-session' ) ) ).toBe( false );
+	} );
+
+	it( 'rejects resuming a session bound to another archive', async () => {
+		vi.stubGlobal( 'fetch', vi.fn( async () => json( {
+			session_id: 'abc123',
+			state: 'preview_ready',
+			source_digest: '0'.repeat( 64 ),
+			plan_hash: 'plan-sha',
+		} ) ) );
+
+		await expect( wpcomTarget.publish( {
+			directory: site(),
+			token: 'oauth-token',
+			destination: 'example.wordpress.com',
+			session: 'abc123',
+			approve: true,
+		} ) ).rejects.toMatchObject( { code: 'session_source_mismatch' } );
+	} );
+
 	it( 'requires a token and destination before reading the site', async () => {
 		await expect( wpcomTarget.publish( { directory: '/missing' } ) ).rejects.toMatchObject( {
 			code: 'token_required',

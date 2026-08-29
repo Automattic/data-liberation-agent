@@ -13,6 +13,8 @@ export interface PublishOptions {
 	destination?: string | undefined;
 	/** Approve a target's reviewed deployment plan when one is required. */
 	approve?: boolean | undefined;
+	/** Resume a target-specific publish session instead of creating another. */
+	session?: string | undefined;
 	log?: ( ( message: string ) => void ) | undefined;
 }
 

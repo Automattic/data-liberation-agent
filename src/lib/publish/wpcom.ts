@@ -9,6 +9,7 @@ const MAX_POLLS = 300;
 interface Session {
 	session_id: string;
 	state: string;
+	source_digest?: string;
 	plan_hash?: string;
 	site_url?: string;
 	receipt?: { success?: boolean; code?: string; [ key: string ]: unknown };
@@ -97,57 +98,102 @@ async function publishToWpcom( options: PublishOptions ): Promise< PublishResult
 	}
 	const archive = createZipArchive( entries );
 	const digest = createHash( 'sha256' ).update( archive ).digest( 'hex' );
-	options.log?.( `Creating WordPress.com import session for ${ options.destination }...` );
-	const session = await request< Session >( endpoint( options.destination ), options.token, {
-		method: 'POST',
-		body: JSON.stringify( {
-			source: {
-				type: 'artifact_upload',
-				sha256: digest,
-				bytes: archive.length,
-				files: entries.length,
-				entrypoint: 'index.html',
-			},
-		} ),
-	} );
-	if ( ! session.session_id || ! session.upload ) {
-		throw new PublishError( {
-			code: 'upload_grant_missing',
-			message: 'WordPress.com did not return an upload grant.',
+	let session: Session;
+	if ( options.session ) {
+		options.log?.( `Resuming WordPress.com import session ${ options.session }...` );
+		session = await request< Session >(
+			endpoint( options.destination, `/${ encodeURIComponent( options.session ) }` ),
+			options.token
+		);
+		if ( session.source_digest && session.source_digest !== digest ) {
+			throw new PublishError( {
+				code: 'session_source_mismatch',
+				message: `WordPress.com session ${ session.session_id } belongs to a different site archive.`,
+			} );
+		}
+	} else {
+		options.log?.( `Creating WordPress.com import session for ${ options.destination }...` );
+		session = await request< Session >( endpoint( options.destination ), options.token, {
+			method: 'POST',
+			body: JSON.stringify( {
+				source: {
+					type: 'artifact_upload',
+					sha256: digest,
+					bytes: archive.length,
+					files: entries.length,
+					entrypoint: 'index.html',
+				},
+			} ),
 		} );
 	}
 
-	options.log?.( `Uploading ${ entries.length } files (${ archive.length } archive bytes)...` );
-	await uploadArtifact( session.upload, archive );
-	await request< Session >(
-		endpoint( options.destination, `/${ encodeURIComponent( session.session_id ) }/upload-complete` ),
-		options.token,
-		{ method: 'POST', body: '{}' }
-	);
-
-	options.log?.( 'Waiting for the WordPress.com import plan...' );
-	const preview = await waitForState( options.destination, options.token, session.session_id, 'preview_ready' );
-	if ( ! preview.plan_hash ) {
+	if ( session.state === 'failed' ) {
 		throw new PublishError( {
-			code: 'plan_hash_missing',
-			message: 'WordPress.com preview did not return a plan hash.',
+			code: String( session.receipt?.code ?? 'wpcom_import_failed' ),
+			message: `WordPress.com import session ${ session.session_id } failed.`,
 		} );
 	}
-	if ( ! options.approve ) {
-		throw new PublishError( {
-			code: 'approval_required',
-			message: `WordPress.com plan ${ preview.plan_hash } is ready; rerun with --yes to approve it.`,
-		} );
+	if ( session.state === 'awaiting_upload' ) {
+		if ( ! session.upload ) {
+			const uploadGrant = await request< Session >(
+				endpoint( options.destination, `/${ encodeURIComponent( session.session_id ) }/upload-token` ),
+				options.token,
+				{ method: 'POST', body: '{}' }
+			);
+			session = { ...session, ...uploadGrant };
+		}
+		if ( ! session.upload ) {
+			throw new PublishError( {
+				code: 'upload_grant_missing',
+				message: 'WordPress.com did not return an upload grant.',
+			} );
+		}
+		options.log?.( `Uploading ${ entries.length } files (${ archive.length } archive bytes)...` );
+		await uploadArtifact( session.upload, archive );
+		const uploadComplete = await request< Session >(
+			endpoint( options.destination, `/${ encodeURIComponent( session.session_id ) }/upload-complete` ),
+			options.token,
+			{ method: 'POST', body: '{}' }
+		);
+		session = { ...session, ...uploadComplete };
 	}
 
-	options.log?.( `Approving WordPress.com import plan ${ preview.plan_hash }...` );
-	await request< Session >(
-		endpoint( options.destination, `/${ encodeURIComponent( session.session_id ) }/approve` ),
-		options.token,
-		{ method: 'POST', body: JSON.stringify( { plan_hash: preview.plan_hash } ) }
-	);
-	const finished = await waitForState( options.destination, options.token, session.session_id, 'finished' );
-	if ( ! finished.site_url || finished.receipt?.success !== true ) {
+	if ( [ 'capture_queued', 'artifact_queued', 'compiling' ].includes( session.state ) ) {
+		options.log?.( 'Waiting for the WordPress.com import plan...' );
+		session = await waitForState( options.destination, options.token, session.session_id, 'preview_ready' );
+	}
+	if ( session.state === 'preview_ready' ) {
+		if ( ! session.plan_hash ) {
+			throw new PublishError( {
+				code: 'plan_hash_missing',
+				message: 'WordPress.com preview did not return a plan hash.',
+			} );
+		}
+		if ( ! options.approve ) {
+			throw new PublishError( {
+				code: 'approval_required',
+				message: `WordPress.com plan ${ session.plan_hash } is ready; rerun with --session ${ session.session_id } --yes to approve it.`,
+			} );
+		}
+		options.log?.( `Approving WordPress.com import plan ${ session.plan_hash }...` );
+		const approved = await request< Session >(
+			endpoint( options.destination, `/${ encodeURIComponent( session.session_id ) }/approve` ),
+			options.token,
+			{ method: 'POST', body: JSON.stringify( { plan_hash: session.plan_hash } ) }
+		);
+		session = { ...session, ...approved };
+	}
+	if ( [ 'queued', 'applying' ].includes( session.state ) ) {
+		options.log?.( 'Waiting for the WordPress.com import to finish...' );
+		session = await waitForState( options.destination, options.token, session.session_id, 'finished' );
+	}
+	if ( session.state !== 'finished' ) {
+		throw new PublishError( {
+			code: 'invalid_session_state',
+			message: `WordPress.com import session ${ session.session_id } cannot continue from state ${ session.state }.`,
+		} );
+	}
+	if ( ! session.site_url || session.receipt?.success !== true ) {
 		throw new PublishError( {
 			code: 'receipt_incomplete',
 			message: 'WordPress.com returned an incomplete import receipt.',
@@ -156,7 +202,7 @@ async function publishToWpcom( options: PublishOptions ): Promise< PublishResult
 
 	return {
 		target: 'wpcom',
-		liveUrl: finished.site_url,
+		liveUrl: session.site_url,
 		files: entries.length,
 		bytes: archive.length,
 		notes: [ `session ${ session.session_id }`, `artifact sha256 ${ digest }` ],
