@@ -10,15 +10,8 @@ describe('squarespaceAdapter', () => {
     expect(squarespaceAdapter.id).toBe('squarespace');
   });
 
-  it('detects squarespace.com URLs', () => {
-    expect(squarespaceAdapter.detect('https://mysite.squarespace.com')).toBe(true);
-    expect(squarespaceAdapter.detect('https://www.squarespace.com/mysite')).toBe(true);
-  });
-
-  it('does not detect non-Squarespace URLs', () => {
-    expect(squarespaceAdapter.detect('https://www.example.com')).toBe(false);
-    expect(squarespaceAdapter.detect('https://mysite.wixsite.com/blog')).toBe(false);
-  });
+  // URL-pattern coverage lives in test/detect-platform.test.ts, which exercises
+  // the detector the pipeline actually calls.
 
   it('has discover method', () => {
     expect(typeof squarespaceAdapter.discover).toBe('function');

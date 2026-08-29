@@ -8,13 +8,8 @@ export type { WeeblyInventory, WeeblyAdapterOpts } from './types.js';
 // The adapter
 // ---------------------------------------------------------------------------
 
-function detect(url: string): boolean {
-  return /weebly\.com/i.test(url);
-}
-
 export const weeblyAdapter: PlatformAdapter = {
   id: 'weebly',
-  detect,
   discover: discoverWeebly,
   extract: extractWeebly,
 };

@@ -4,7 +4,6 @@ import type { PlatformAdapter } from '../types.js';
 
 const stub = (id: string): PlatformAdapter => ({
   id,
-  detect: () => false,
   discover: async () => ({}),
   extract: async () => ({}),
 });

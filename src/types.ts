@@ -3,9 +3,16 @@ import type { WxrBuilder } from './lib/wxr/index.js';
 import type { ExtractionLog } from './lib/resume-state/index.js';
 import type { AdapterCapture, AdapterBlocks } from './adapters/page-actions.js';
 
+/**
+ * A platform adapter contributes platform-specific knowledge to the pipeline.
+ * It does not identify its own platform: detection lives in
+ * `lib/detect-platform`, and `resolveAdapter` routes a detected platform id to
+ * the adapter that declares it. Keeping identification in one place is what
+ * stops a URL pattern from being defined twice and corrected once.
+ */
 export interface PlatformAdapter {
+  /** Platform id this adapter serves. Matched against the detection result. */
   id: string;
-  detect(url: string): boolean;
   discover(url: string, opts: Record<string, unknown>): Promise<unknown>;
   extract(
     inventory: unknown,

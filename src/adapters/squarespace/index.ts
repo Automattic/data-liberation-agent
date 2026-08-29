@@ -5,8 +5,4 @@ import { blocks } from './blocks.js';
 
 export type { SquarespaceInventory, SquarespaceAdapterOpts } from './types.js';
 
-function detect(url: string): boolean {
-  return /squarespace\.com/i.test(url);
-}
-
-export const squarespaceAdapter: PlatformAdapter = { id: 'squarespace', detect, discover, extract, blocks };
+export const squarespaceAdapter: PlatformAdapter = { id: 'squarespace', discover, extract, blocks };
