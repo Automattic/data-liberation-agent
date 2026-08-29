@@ -12,6 +12,7 @@ export const inspectHandler: Handler = async (args, ctx) => {
     sitemapFound: false,
     urlCount: 0,
     counts: {} as Record<string, number>,
+    probeResults: [],
     authRequired: false,
     extractionFeasibility: detection.platform === 'unknown' ? 'limited' : 'ready',
   };
@@ -26,6 +27,12 @@ export const inspectHandler: Handler = async (args, ctx) => {
     counts[type] = (counts[type] || 0) + 1;
   }
   result.counts = counts;
+
+  const adapter = ctx.findAdapter(detection.platform);
+  if (adapter && typeof adapter.probe === 'function') {
+    const opts = { token: args.token, cdpPort: args.cdpPort };
+    result.probeResults = await adapter.probe(args.url as string, urls.slice(0, 3), opts);
+  }
 
   const { detectFeatures } = await import('../../lib/features/detect-features.js');
   const featureUrls = urls.length > 0 ? urls : [args.url as string];

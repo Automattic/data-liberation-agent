@@ -20,6 +20,7 @@ export interface PlatformAdapter {
     opts: Record<string, unknown>,
     context: { log: ExtractionLog; server: Server }
   ): Promise<unknown>;
+  probe?(url: string, urls: string[], opts: Record<string, unknown>): Promise<unknown[]>;
   capture?: AdapterCapture;   // NEW (seam 1)
   blocks?: AdapterBlocks;     // NEW (seam 2)
 }

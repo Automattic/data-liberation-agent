@@ -55,7 +55,7 @@ Probe a site to assess extractability. Combines detection, sitemap scan, sample 
 | `token` | no | API token if needed |
 | `cdpPort` | no | CDP port for browser-based inspection |
 
-Returns: `platform`, `confidence`, `signals`, `sitemapFound`, `urlCount`, `counts` (by type), `platformFeatures`, `extractionFeasibility` (ready or limited).
+Returns: `platform`, `confidence`, `signals`, `sitemapFound`, `urlCount`, `counts` (by type), `probeResults` (sample page extractability), `platformFeatures`, `extractionFeasibility` (ready or limited).
 
 ### liberate_extract
 
