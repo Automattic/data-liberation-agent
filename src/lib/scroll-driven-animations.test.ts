@@ -18,6 +18,9 @@ describe( 'detectPausedAnimationRules', () => {
 	it( 'recovers a script-gated entrance without its state gate', () => {
 		const rules = detectPausedAnimationRules( gatedEntrance );
 		expect( rules ).toHaveLength( 1 );
+		expect( rules[ 0 ].sourceSelector ).toBe(
+			'#main :where(.comp-a):not([data-motion-enter="done"])'
+		);
 		expect( rules[ 0 ].selector ).toBe( '#main :where(.comp-a)' );
 		expect( rules[ 0 ].declarations ).toContain( 'motion-floatIn' );
 		expect( rules[ 0 ].declarations ).not.toContain( 'paused' );
@@ -51,11 +54,19 @@ describe( 'appendScrollDrivenAnimations', () => {
 		expect( out ).toContain( '@supports (animation-timeline: view())' );
 		expect( out ).toContain( 'animation-timeline:view()' );
 		expect( out ).toContain( 'animation-play-state:running' );
-		expect( out ).not.toContain( 'data-motion-enter' );
+		expect( out ).toContain( ':not([data-motion-enter="done"])' );
 	} );
 
 	it( 'returns the sheet unchanged when nothing is gated', () => {
 		const css = '.a{color:red}';
 		expect( appendScrollDrivenAnimations( css, '.a{color:red}' ) ).toBe( css );
+	} );
+
+	it( 'keeps the source completion gate on the self-driving rule', () => {
+		const out = appendScrollDrivenAnimations( '', gatedEntrance );
+		expect( out ).toContain(
+			'#main :where(.comp-a):not([data-motion-enter="done"]){'
+		);
+		expect( out ).not.toContain( '#main :where(.comp-a){' );
 	} );
 } );

@@ -13,6 +13,8 @@ import postcss from 'postcss';
 
 /** A paused, script-started animation rule recovered from the source CSS. */
 export interface PausedAnimationRule {
+	/** Original selector, including the runtime state gate. */
+	sourceSelector: string;
 	/** Original selector part, with any state-attribute gate removed. */
 	selector: string;
 	/** Declarations that reproduce the animation in a self-driving form. */
@@ -33,12 +35,9 @@ const PAUSED_SHORTHAND_RE = /(?:^|[\s,])paused(?:$|[\s,])/i;
 const INFINITE_RE = /(?:^|[\s,])infinite(?:$|[\s,])/i;
 
 /**
- * Strip a state-attribute gate such as `:not([data-motion-enter="done"])`.
- *
- * The gate exists to let runtime JS turn the animation off after it has played.
- * Captured DOM carries whatever state the page happened to be in, so the gate
- * would decide arbitrarily whether motion survives. Removing it makes the
- * rewritten rule depend on the element, not on captured runtime state.
+ * Return the element identity without a state-attribute gate such as
+ * `:not([data-motion-enter="done"])`. Detection exposes this normalized target
+ * while retaining the exact source selector for state-aware emission.
  */
 function withoutStateAttributeGate( selector: string ): string {
 	return selector.replace( /:not\(\s*\[[^\]]*\]\s*\)/gi, '' ).trim();
@@ -63,9 +62,9 @@ function isScriptGatedEntrance( declarations: postcss.Declaration[] ): boolean {
 /**
  * Recover every script-gated entrance animation in `css`.
  *
- * Rules are reported with their gate removed so a caller can re-emit them in a
- * self-driving form. Rules nested in `@keyframes` are skipped: their `paused`
- * text belongs to the animation being defined, not to an element.
+ * Rules report both the original pending-state selector and a normalized target
+ * with its gate removed. Rules nested in `@keyframes` are skipped: their
+ * `paused` text belongs to the animation being defined, not to an element.
  */
 export function detectPausedAnimationRules( css: string ): PausedAnimationRule[] {
 	let root: postcss.Root;
@@ -102,7 +101,7 @@ export function detectPausedAnimationRules( css: string ): PausedAnimationRule[]
 		for ( const part of rule.selectors ) {
 			const selector = withoutStateAttributeGate( part );
 			if ( selector === '' ) continue;
-			rules.push( { selector, declarations: carried.join( ';' ) } );
+			rules.push( { sourceSelector: part.trim(), selector, declarations: carried.join( ';' ) } );
 		}
 	} );
 
@@ -113,21 +112,22 @@ export function detectPausedAnimationRules( css: string ): PausedAnimationRule[]
  * Append self-driving equivalents for the script-gated entrance animations in
  * `sourceCss`. Returns `css` unchanged when there are none.
  *
- * The override binds each animation to the element's own view progress, so the
- * browser runs it as the element scrolls into view — the behaviour the stripped
- * script provided. It is wrapped in `@supports` so browsers without scroll
- * timelines keep the captured end state rather than parking at the first
+ * The override binds each pending animation to the element's own view progress,
+ * so the browser runs it as the element scrolls into view — the behaviour the
+ * stripped script provided. The source completion gate remains on the emitted
+ * selector so settled elements keep their captured end state. It is wrapped in
+ * `@supports` so browsers without scroll timelines do not park at the first
  * keyframe, which for an entrance is usually invisible.
  */
 export function appendScrollDrivenAnimations( css: string, sourceCss: string ): string {
 	const seen = new Set< string >();
 	const blocks: string[] = [];
 	for ( const rule of detectPausedAnimationRules( sourceCss ) ) {
-		const key = `${ rule.selector }\n${ rule.declarations }`;
+		const key = `${ rule.sourceSelector }\n${ rule.declarations }`;
 		if ( seen.has( key ) ) continue;
 		seen.add( key );
 		blocks.push(
-			`${ rule.selector }{${ rule.declarations };animation-play-state:running;animation-timeline:view();animation-range:entry 0% cover 40%}`
+			`${ rule.sourceSelector }{${ rule.declarations };animation-play-state:running;animation-timeline:view();animation-range:entry 0% cover 40%}`
 		);
 	}
 	if ( blocks.length === 0 ) return css;
