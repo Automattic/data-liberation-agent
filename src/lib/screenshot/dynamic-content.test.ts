@@ -220,6 +220,38 @@ describe('interaction + wait helpers (Phase 1/2, browser)', () => {
     await page.close();
   });
 
+  it('rescans for disclosures that become eligible during hydration', async () => {
+    const page = await browser.newPage();
+    await page.setContent(`
+      <button aria-expanded="false" aria-controls="answer-1">Question one?</button>
+      <div id="answer-1" role="region"></div>
+      <button aria-expanded="pending" aria-controls="answer-2">Question two?</button>
+      <div id="answer-2" role="region"></div>
+      <script>
+        const answers = { 'answer-1': 'First answer.', 'answer-2': 'Late answer.' };
+        document.querySelectorAll('button').forEach((button) => {
+          button.addEventListener('click', () => {
+            const opening = button.getAttribute('aria-expanded') === 'false';
+            button.setAttribute('aria-expanded', opening ? 'true' : 'false');
+            const panel = document.getElementById(button.getAttribute('aria-controls'));
+            panel.textContent = opening ? answers[panel.id] : '';
+            if (button.getAttribute('aria-controls') === 'answer-1') {
+              setTimeout(() => document.querySelector('[aria-controls="answer-2"]')
+                .setAttribute('aria-expanded', 'false'), 150);
+            }
+          });
+        });
+      </script>
+    `);
+
+    expect(await hydrateDisclosureContent(page)).toBe(2);
+    expect(await page.locator('[data-dla-hydrated-disclosure]').allTextContents()).toEqual([
+      'First answer.',
+      'Late answer.',
+    ]);
+    await page.close();
+  });
+
   it('waitForAppWidgets waits until a known widget populates', async () => {
     const page = await browser.newPage();
     // Loox-like container that fills in after 300ms.

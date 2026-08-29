@@ -78,42 +78,48 @@ export async function hydrateDisclosureContent(page: Page): Promise<number> {
       const hasContent = (element: Element) =>
         Boolean((element.textContent || '').trim()) ||
         Boolean(element.querySelector('img,video,audio,picture,svg,canvas'));
-      const candidates = Array.from(
-        document.querySelectorAll<HTMLElement>('[aria-expanded="false"][aria-controls]:not([aria-haspopup])'),
-      )
-        .map((trigger) => {
-          const id = trigger.getAttribute('aria-controls') || '';
-          const target = id ? document.getElementById(id) : null;
-          return target?.getAttribute('role') === 'region' ? { trigger, target } : null;
-        })
-        .filter((candidate): candidate is { trigger: HTMLElement; target: HTMLElement } =>
-          Boolean(candidate && !hasContent(candidate.target)),
+      let hydrated = 0;
+      for (let pass = 0; pass < 3 && hydrated < 32; pass++) {
+        const candidates = Array.from(
+          document.querySelectorAll<HTMLElement>('[aria-expanded="false"][aria-controls]:not([aria-haspopup])'),
         )
-        .slice(0, 32);
+          .map((trigger) => {
+            const id = trigger.getAttribute('aria-controls') || '';
+            const target = id ? document.getElementById(id) : null;
+            return target?.getAttribute('role') === 'region' ? { trigger, target } : null;
+          })
+          .filter((candidate): candidate is { trigger: HTMLElement; target: HTMLElement } =>
+            Boolean(candidate && !hasContent(candidate.target)),
+          )
+          .slice(0, 32 - hydrated);
+        if (candidates.length === 0) break;
 
-      const observed: Array<{ target: HTMLElement; content: string }> = [];
-      for (const { trigger, target } of candidates) {
-        trigger.click();
-        for (let attempt = 0; attempt < 20; attempt++) {
-          if (trigger.getAttribute('aria-expanded') === 'true' && hasContent(target)) break;
-          await wait(50);
-        }
-        if (trigger.getAttribute('aria-expanded') !== 'true' || !hasContent(target)) continue;
+        const observed: Array<{ target: HTMLElement; content: string }> = [];
+        for (const { trigger, target } of candidates) {
+          trigger.click();
+          for (let attempt = 0; attempt < 20; attempt++) {
+            if (trigger.getAttribute('aria-expanded') === 'true' && hasContent(target)) break;
+            await wait(50);
+          }
+          if (trigger.getAttribute('aria-expanded') !== 'true' || !hasContent(target)) continue;
 
-        const content = target.innerHTML;
-        trigger.click();
-        for (let attempt = 0; attempt < 10; attempt++) {
-          if (trigger.getAttribute('aria-expanded') === 'false') break;
+          const content = target.innerHTML;
+          trigger.click();
+          for (let attempt = 0; attempt < 10; attempt++) {
+            if (trigger.getAttribute('aria-expanded') === 'false') break;
+            await wait(50);
+          }
           await wait(50);
+          observed.push({ target, content });
         }
-        await wait(50);
-        observed.push({ target, content });
+        for (const { target, content } of observed) {
+          if (!hasContent(target)) target.innerHTML = content;
+          target.dataset.dlaHydratedDisclosure = 'true';
+        }
+        hydrated += observed.length;
+        await wait(100);
       }
-      for (const { target, content } of observed) {
-        if (!hasContent(target)) target.innerHTML = content;
-        target.dataset.dlaHydratedDisclosure = 'true';
-      }
-      return observed.length;
+      return hydrated;
     });
   } catch {
     return 0;
