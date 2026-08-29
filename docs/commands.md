@@ -9,7 +9,6 @@ Command definitions live in `commands/<name>.md`.
 Inspect a website before extraction. Reports:
 - Platform detection (GoDaddy Websites & Marketing, Hostinger, HubSpot, Shopify, Squarespace, Webflow, Weebly, Wix) with confidence level
 - URL inventory from sitemap with counts by type (pages, posts, products, galleries, events)
-- Sample page probes to test extractability
 - Platform feature flags (stores, bookings, forms, members, scheduling, forums, events) with transfer status and WordPress plugin recommendations
 
 MCP tool: `liberate_inspect` | CLI: `data-liberation inspect <url>`

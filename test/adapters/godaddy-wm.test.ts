@@ -12,10 +12,8 @@ describe('godaddyWmAdapter', () => {
     expect(godaddyWmAdapter.id).toBe('godaddy-wm');
   });
 
-  it('detect() returns false (URL-based detection N/A for custom domains)', () => {
-    expect(godaddyWmAdapter.detect('https://skywaydiner.com')).toBe(false);
-    expect(godaddyWmAdapter.detect('https://cruisewarehouse.com')).toBe(false);
-  });
+  // That W+M custom domains carry no URL signal is asserted in
+  // test/detect-platform.test.ts against the detector the pipeline calls.
 
   it('has discover and extract methods', () => {
     expect(typeof godaddyWmAdapter.discover).toBe('function');

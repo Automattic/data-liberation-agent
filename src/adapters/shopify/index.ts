@@ -17,14 +17,9 @@ export type { ShopifyAdapterOpts, ShopifyInventory } from './types.js';
 // Adapter assembly
 // ---------------------------------------------------------------------------
 
-function detect(url: string): boolean {
-  return /myshopify\.com|shopify\.com/i.test(url);
-}
-
 export const shopifyAdapter: PlatformAdapter = {
   id: 'shopify',
   capture,
-  detect,
   discover,
   extract,
 };

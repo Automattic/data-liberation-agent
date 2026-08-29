@@ -10,22 +10,8 @@ describe('shopifyAdapter', () => {
     expect(shopifyAdapter.id).toBe('shopify');
   });
 
-  it('detects myshopify.com URLs', () => {
-    expect(shopifyAdapter.detect('https://mystore.myshopify.com')).toBe(true);
-    expect(shopifyAdapter.detect('https://mystore.myshopify.com/blogs/news')).toBe(true);
-  });
-
-  it('detects shopify.com URLs', () => {
-    expect(shopifyAdapter.detect('https://shopify.com')).toBe(true);
-    expect(shopifyAdapter.detect('https://www.shopify.com/something')).toBe(true);
-  });
-
-  it('does not detect non-Shopify URLs', () => {
-    expect(shopifyAdapter.detect('https://www.example.com')).toBe(false);
-    expect(shopifyAdapter.detect('https://mysite.squarespace.com')).toBe(false);
-    expect(shopifyAdapter.detect('https://mysite.wixsite.com/blog')).toBe(false);
-    expect(shopifyAdapter.detect('https://mysite.webflow.io')).toBe(false);
-  });
+  // URL-pattern coverage lives in test/detect-platform.test.ts, which exercises
+  // the detector the pipeline actually calls.
 
   it('has discover method', () => {
     expect(typeof shopifyAdapter.discover).toBe('function');

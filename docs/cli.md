@@ -69,13 +69,12 @@ output/<site-hostname>/
 ### inspect
 
 ```bash
-data-liberation inspect <url> [--token <token>]
+data-liberation inspect <url>
 ```
 
 Pre-extraction site assessment. Reports:
 - Platform detection with confidence level and signals
 - Sitemap URL count with breakdown by type (pages, posts, products, galleries, events)
-- Sample page probes testing extractability (if the platform adapter supports probing)
 - Platform feature flags — stores, bookings, forms, members, scheduling, forums, events — with transfer status and WordPress plugin recommendations
 
 ### qa

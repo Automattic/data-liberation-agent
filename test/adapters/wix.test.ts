@@ -10,17 +10,8 @@ describe('wixAdapter', () => {
     expect(wixAdapter.id).toBe('wix');
   });
 
-  it('detects wixsite.com URLs', () => {
-    expect(wixAdapter.detect('https://mysite.wixsite.com/blog')).toBe(true);
-  });
-
-  it('detects wix.com URLs', () => {
-    expect(wixAdapter.detect('https://www.wix.com/mysite')).toBe(true);
-  });
-
-  it('does not detect non-Wix URLs', () => {
-    expect(wixAdapter.detect('https://www.example.com')).toBe(false);
-  });
+  // URL-pattern coverage lives in test/detect-platform.test.ts, which exercises
+  // the detector the pipeline actually calls.
 
   it('has discover method', () => {
     expect(typeof wixAdapter.discover).toBe('function');

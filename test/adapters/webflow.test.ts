@@ -10,21 +10,8 @@ describe('webflowAdapter', () => {
     expect(webflowAdapter.id).toBe('webflow');
   });
 
-  it('detects webflow.io URLs', () => {
-    expect(webflowAdapter.detect('https://mysite.webflow.io')).toBe(true);
-    expect(webflowAdapter.detect('https://example.webflow.io/blog')).toBe(true);
-  });
-
-  it('detects webflow.com URLs', () => {
-    expect(webflowAdapter.detect('https://webflow.com')).toBe(true);
-    expect(webflowAdapter.detect('https://www.webflow.com/made-in-webflow')).toBe(true);
-  });
-
-  it('does not detect non-Webflow URLs', () => {
-    expect(webflowAdapter.detect('https://www.example.com')).toBe(false);
-    expect(webflowAdapter.detect('https://mysite.squarespace.com')).toBe(false);
-    expect(webflowAdapter.detect('https://mysite.wixsite.com/blog')).toBe(false);
-  });
+  // URL-pattern coverage lives in test/detect-platform.test.ts, which exercises
+  // the detector the pipeline actually calls.
 
   it('has discover method', () => {
     expect(typeof webflowAdapter.discover).toBe('function');

@@ -11,10 +11,6 @@ export type { WixAdapterOpts, Inventory, CapturedApiCall, PageMeta, PageData } f
 export { isExecutionContextDestroyed, ROUTE_PIN_INIT_SCRIPT } from './runtime.js';
 export { extractGalleryFromHtml } from './gallery.js';
 
-function detect(url: string): boolean {
-  return /wixsite\.com|wix\.com/i.test(url);
-}
-
 export { wixMediaVariant } from './capture.js';
 
-export const wixAdapter: PlatformAdapter = { id: 'wix', detect, discover, extract, capture };
+export const wixAdapter: PlatformAdapter = { id: 'wix', discover, extract, capture };

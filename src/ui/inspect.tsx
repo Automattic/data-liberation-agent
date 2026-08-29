@@ -8,19 +8,17 @@ import { fetchSitemap, classifyUrl } from '../lib/extraction/sitemap.js';
 
 export interface InspectProps {
   url: string;
-  token: string | null;
 }
 
-type Phase = 'detecting' | 'scanning' | 'probing' | 'done' | 'error';
+type Phase = 'detecting' | 'scanning' | 'done' | 'error';
 
 
-function Inspect({ url, token }: InspectProps) {
+function Inspect({ url }: InspectProps) {
   const app = useApp();
   const [phase, setPhase] = useState<Phase>('detecting');
   const [detection, setDetection] = useState<FullDetectionResult | null>(null);
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [urlCount, setUrlCount] = useState(0);
-  const [probeResults, setProbeResults] = useState<unknown[]>([]);
   const [error, setError] = useState('');
 
   useEffect(() => {
@@ -41,22 +39,6 @@ function Inspect({ url, token }: InspectProps) {
           c[type] = (c[type] || 0) + 1;
         }
         setCounts(c);
-
-        // Phase 3: Probe sample pages (if adapter supports it)
-        const { defaultAdapter } = await import('../adapters/default/index.js');
-        const { shopifyAdapter } = await import('../adapters/shopify/index.js');
-        const { squarespaceAdapter } = await import('../adapters/squarespace/index.js');
-        const { webflowAdapter } = await import('../adapters/webflow/index.js');
-        const { wixAdapter } = await import('../adapters/wix/index.js');
-        const { resolveAdapter } = await import('../adapters/resolve-adapter.js');
-        const allAdapters = [defaultAdapter, shopifyAdapter, squarespaceAdapter, webflowAdapter, wixAdapter];
-        const adapter = resolveAdapter(allAdapters, det.platform);
-
-        if (adapter && typeof adapter.probe === 'function' && urls.length > 0) {
-          setPhase('probing');
-          const results = await adapter.probe(url, urls.slice(0, 3), { token: token ?? undefined });
-          setProbeResults(results);
-        }
 
         setPhase('done');
       } catch (err) {
@@ -134,33 +116,6 @@ function Inspect({ url, token }: InspectProps) {
         </Box>
       )}
 
-      {/* Probing */}
-      {phase === 'probing' && (
-        <Box marginTop={1}>
-          <Text color="yellow"><Spinner type="dots" /></Text>
-          <Text> Probing sample pages...</Text>
-        </Box>
-      )}
-
-      {/* Probe results */}
-      {probeResults.length > 0 && phase === 'done' && (
-        <Box flexDirection="column" marginTop={1}>
-          <Box>
-            <Text color="green">✓</Text>
-            <Text> Probed {probeResults.length} sample page{probeResults.length === 1 ? '' : 's'}</Text>
-          </Box>
-          <Box flexDirection="column" marginLeft={2} marginTop={1}>
-            {probeResults.map((r: any, i: number) => (
-              <Box key={i}>
-                <Text dimColor>  {r.url ? new URL(r.url).pathname : `page ${i + 1}`}: </Text>
-                <Text color={r.extractable ? 'green' : 'red'}>{r.extractable ? 'extractable' : 'blocked'}</Text>
-                {r.qualityScore && <Text dimColor> ({r.qualityScore})</Text>}
-              </Box>
-            ))}
-          </Box>
-        </Box>
-      )}
-
       {/* Feasibility summary */}
       {phase === 'done' && detection && (
         <Box marginTop={1}>
@@ -191,9 +146,9 @@ function Inspect({ url, token }: InspectProps) {
   );
 }
 
-export function runInspect(url: string, opts: Partial<InspectProps> = {}): void {
+export function runInspect(url: string): void {
   const { waitUntilExit } = render(
-    <Inspect url={url} token={opts.token || null} />,
+    <Inspect url={url} />,
   );
   waitUntilExit().catch((err: unknown) => {
     console.error(err);

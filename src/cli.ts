@@ -132,10 +132,8 @@ if (args[0] === 'mcp') {
     process.exit(1);
   }
 
-  const token = args.includes('--token') ? args[args.indexOf('--token') + 1] : process.env.LIBERATION_TOKEN || null;
-
   const { runInspect } = await import('./ui/inspect.js');
-  runInspect(url, { token });
+  runInspect(url);
 
 } else if (args[0] === 'qa') {
   const wxrFile = args[1] || getArg('--wxr');
