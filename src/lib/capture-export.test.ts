@@ -1935,6 +1935,58 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		expect( html ).toContain( 'href="https://external.example/about"' );
 	} );
 
+	it( 'does not treat the source root as a global media replacement', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-root-media-export-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'screenshots', 'media', 'resources/cdn' ] )
+			mkdirSync( join( outputDir, path ), { recursive: true } );
+		const sourceHtml = '<html><head><link rel="stylesheet" href="https://cdn.example/site.css"></head><body><img src="/"><p data-kind="image/x-icon">Icon</p><a href="/about/">About</a></body></html>';
+		writeFileSync( join( outputDir, 'html', 'homepage.html' ), sourceHtml );
+		writeFileSync( join( outputDir, 'media', 'homepage.jpg' ), 'not-an-image' );
+		writeFileSync(
+			join( outputDir, 'resources', 'cdn', 'site.css' ),
+			'.icon{background-image:url("data:image/svg+xml;base64,PHN2Zz4=")}'
+		);
+		writeFileSync(
+			join( outputDir, 'resources', 'manifest.json' ),
+			JSON.stringify( {
+				version: 1,
+				resources: {
+					'https://cdn.example/site.css': {
+						path: 'resources/cdn/site.css',
+						contentType: 'text/css',
+					},
+				},
+				failures: [],
+			} )
+		);
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( {
+				version: 1,
+				entries: { 'https://example.com/': { html: 'html/homepage.html' } },
+			} )
+		);
+		const media = MediaStubStore.load( outputDir );
+		media.markSuccess( 'https://example.com/', join( outputDir, 'media', 'homepage.jpg' ) );
+		media.flush();
+
+		exportWebsiteCapture( {
+			outputDir,
+			sourceUrl: 'https://example.com/',
+			platform: 'fake',
+			summary: {},
+			failures: [],
+		} );
+
+		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
+		const css = readFileSync( join( outputDir, 'website', 'cdn', 'site.css' ), 'utf8' );
+		expect( html ).toContain( 'data-kind="image/x-icon"' );
+		expect( html ).toContain( 'href="/about/"' );
+		expect( html ).not.toContain( 'https:https://' );
+		expect( css ).toContain( 'data:image/svg+xml;base64,PHN2Zz4=' );
+	} );
+
 	it( 'keeps portable media within the artifact capacity left after routes and resources', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-budget-' ) );
 		dirs.push( outputDir );

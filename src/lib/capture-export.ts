@@ -262,7 +262,9 @@ function replaceAll( content: string, replacements: Map< string, string > ): str
 		values.set( source, local );
 		values.set( source.replace( /&/g, '&amp;' ), local.replace( /&/g, '&amp;' ) );
 	}
-	const sources = [ ...values.keys() ].filter( Boolean ).sort( ( a, b ) => b.length - a.length );
+	const sources = [ ...values.keys() ]
+		.filter( ( source ) => source !== '' && source !== '/' )
+		.sort( ( a, b ) => b.length - a.length );
 	if ( sources.length === 0 ) return content;
 	const pattern = new RegExp(
 		sources.map( ( source ) => source.replace( /[.*+?^${}()|[\]\\]/g, '\\$&' ) ).join( '|' ),
