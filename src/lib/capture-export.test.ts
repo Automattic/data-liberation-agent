@@ -22,7 +22,7 @@ afterEach( () => {
 } );
 
 describe( 'exportWebsiteCapture', () => {
-	it( 'carries valid responsive section evidence in the portable artifact', () => {
+	it( 'carries bounded responsive section evidence in the portable artifact', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-semantic-export-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
@@ -43,9 +43,12 @@ describe( 'exportWebsiteCapture', () => {
 			headings: [ 'Tianna Wolfson' ],
 			images: [],
 			layout: {},
+			sectionHtml: `<section>${ 'source'.repeat( 100_000 ) }</section>`,
+			styledHtml: `<section style="color:red">${ 'styled'.repeat( 100_000 ) }</section>`,
 		} as never;
-		SectionSpecsStore.load( outputDir ).set( 'https://example.com/', [ spec ], [] );
-		SectionSpecsStore.loadMobile( outputDir ).set( 'https://example.com/', [ spec ], [] );
+		const specs = Array.from( { length: 5 }, () => spec );
+		SectionSpecsStore.load( outputDir ).set( 'https://example.com/', specs, [] );
+		SectionSpecsStore.loadMobile( outputDir ).set( 'https://example.com/', specs, [] );
 
 		exportWebsiteCapture( {
 			outputDir,
@@ -63,15 +66,25 @@ describe( 'exportWebsiteCapture', () => {
 			path: 'semantic-evidence.json',
 			page_count: 1,
 		} );
-		expect( evidence.pages[ 0 ] ).toMatchObject( {
-			path: 'website/index.html',
-			viewports: {
-				desktop: [ { headings: [ 'Tianna Wolfson' ] } ],
-				mobile: [ { headings: [ 'Tianna Wolfson' ] } ],
-			},
+		expect( evidence.pages[ 0 ].path ).toBe( 'website/index.html' );
+		expect( evidence.pages[ 0 ].viewports.desktop ).toHaveLength( 5 );
+		expect( evidence.pages[ 0 ].viewports.mobile ).toHaveLength( 5 );
+		expect( evidence.pages[ 0 ].viewports.desktop[ 0 ] ).toMatchObject( {
+			headings: [ 'Tianna Wolfson' ],
 		} );
-		expect( artifact.files.map( ( file: { path: string } ) => file.path ) ).toContain(
-			'semantic-evidence.json'
+		for ( const sections of Object.values( evidence.pages[ 0 ].viewports ) as Array<
+			Record< string, unknown >[]
+		> ) {
+			for ( const section of sections ) {
+				expect( section ).not.toHaveProperty( 'sectionHtml' );
+				expect( section ).not.toHaveProperty( 'styledHtml' );
+			}
+		}
+		const artifactEvidence = artifact.files.find(
+			( file: { path: string } ) => file.path === 'semantic-evidence.json'
+		);
+		expect( Buffer.byteLength( artifactEvidence.content ) ).toBeLessThanOrEqual(
+			artifact.compiler_limits.max_file_bytes
 		);
 	} );
 
