@@ -13,6 +13,7 @@ export function wireCapturedDialogs( html: string, states: CapturedDialogInterac
 	const $ = cheerio.load( html );
 	let wired = 0;
 	for ( const state of captured ) {
+		removeCapturedDialog( $, state.dialog?.selector );
 		const triggers = findTriggers( $, state.trigger );
 		triggers.each( ( _, element ) => {
 			const trigger = $( element );
@@ -37,6 +38,15 @@ export function wireCapturedDialogs( html: string, states: CapturedDialogInterac
 		$( 'head' ).append( `<style data-dla-disclosure="true">${ DISCLOSURE_CSS }</style>` );
 	}
 	return $.html();
+}
+
+function removeCapturedDialog( $: cheerio.CheerioAPI, selector: string | undefined ): void {
+	if ( ! selector ) return;
+	try {
+		$( selector ).not( 'details.dla-disclosure *' ).remove();
+	} catch {
+		// Invalid source selectors cannot safely identify a node to remove.
+	}
 }
 
 function findTriggers(
