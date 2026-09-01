@@ -967,15 +967,19 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		}
 	}
 
-	// Triggered dialogs are captured only after every baseline artifact so opening
-	// one cannot alter screenshots, section geometry, design sidecars, or page HTML.
-	if ( ! entry.interactions?.states.some( ( state ) => state.status === 'captured' ) ) {
+	// Dialogs are captured only after every baseline artifact so probing a close
+	// control or trigger cannot alter screenshots, geometry, sidecars, or page HTML.
+	if (
+		!entry.interactions?.states.some( ( state ) => state.status === 'captured' ) &&
+		!entry.interactions?.initialDialogs?.some( ( state ) => state.status === 'captured' )
+	) {
 		try {
 			const interactions = await captureTriggeredDialogs( page, url );
 			if (
-				interactions.states.length > 0 &&
+				( interactions.states.length > 0 || ( interactions.initialDialogs?.length ?? 0 ) > 0 ) &&
 				( ! entry.interactions ||
-					interactions.states.some( ( state ) => state.status === 'captured' ) )
+					interactions.states.some( ( state ) => state.status === 'captured' ) ||
+					interactions.initialDialogs?.some( ( state ) => state.status === 'captured' ) )
 			) {
 				entry.interactions = interactions;
 			}
