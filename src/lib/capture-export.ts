@@ -25,7 +25,11 @@ import {
 import { selfContainWebsite } from './self-contain.js';
 import { wireCapturedDialogs } from './static-dialogs.js';
 import { rewriteMediaUrls } from './streaming/media-url-rewrite.js';
-import type { InteractionStatesReport } from './screenshot/interaction-capture.js';
+import {
+	INTERACTION_STATES_SCHEMA,
+	LEGACY_INTERACTION_STATES_SCHEMA,
+	type InteractionStatesReport,
+} from './screenshot/interaction-capture.js';
 import type { CapturedResourceManifest } from './screenshot/resource-capture.js';
 
 export const CAPTURE_RECEIPT_SCHEMA = 'data-liberation/capture-receipt/v1';
@@ -1283,7 +1287,10 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 			canonicalUrl: entry.metadata?.openGraph?.[ 'og:url' ] ?? openGraphUrl( html ),
 			interactions: entry.interactions,
 		} );
-		if ( entry.interactions?.schema === 'data-liberation/interaction-states/v1' ) {
+		if (
+			entry.interactions?.schema === INTERACTION_STATES_SCHEMA ||
+			entry.interactions?.schema === LEGACY_INTERACTION_STATES_SCHEMA
+		) {
 			interactionPages.push( entry.interactions );
 		}
 	}
@@ -1714,7 +1721,8 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		);
 		const normalizedHtml = wireCapturedDialogs(
 			withoutGeometryIdentities( identityHtml ),
-			entry.interactions?.states ?? []
+			entry.interactions?.states ?? [],
+			entry.interactions?.initialDialogs ?? []
 		);
 		unresolvedAnchors.push( ...unresolvedCapturedAnchors( normalizedHtml, url ) );
 		writeFileSync( destination, normalizedHtml );
@@ -1776,6 +1784,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 	);
 
 	const interactionStates = interactionPages.flatMap( ( page ) => page.states );
+	const initialDialogs = interactionPages.flatMap( ( page ) => page.initialDialogs ?? [] );
 	const interactionSummary = {
 		candidate_count: interactionStates.length,
 		captured_count: interactionStates.filter( ( state ) => state.status === 'captured' ).length,
@@ -1784,6 +1793,11 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 			.length,
 		truncated_count: interactionStates.filter(
 			( state ) => state.status === 'captured' && state.dialog?.htmlTruncated
+		).length,
+		initial_dialog_count: initialDialogs.length,
+		initial_captured_count: initialDialogs.filter( ( state ) => state.status === 'captured' ).length,
+		initial_dismissal_verified_count: initialDialogs.filter(
+			( state ) => state.dismissal?.verified
 		).length,
 	};
 	const reportFiles = [ 'diagnostics.json', 'capture-receipt.json', 'layout-geometry-report.json' ];
