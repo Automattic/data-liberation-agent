@@ -549,7 +549,7 @@ function assembleResponsiveHtml(
 	return withMobileViewport( scopedStyles( desktopHtml, `(min-width:${ switchWidth + 1 }px)` ) )
 		.replace(
 			/<\/head\s*>/i,
-			`<style>${ RESPONSIVE_DOCUMENT_CSS }${ documentSwitchCss( switchWidth ) }</style>${ mobileStyles }</head>`
+			`${ mobileStyles }<style>${ RESPONSIVE_DOCUMENT_CSS }${ documentSwitchCss( switchWidth ) }</style></head>`
 		)
 		.replace(
 			/<body\b[^>]*>[\s\S]*?(<\/body\s*>)/i,
