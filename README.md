@@ -38,6 +38,10 @@ Every retained route is liberated into a directory of HTML, CSS, media, and font
 
 All eight platforms have MCP adapters with full extraction support including products (exported as WooCommerce-compatible CSV). Sites matching none of them fall back to a generic `default` adapter that renders each page in a headless browser and extracts the main content, media, and any JSON-LD products — best-effort, since it can't key off platform-specific markup. GoDaddy Websites & Marketing is pages + blog only in v1; GoDaddy Online Store (OLS) product support is planned for v1.1.
 
+### Custom platforms
+
+The platform layer is a public, registration-based API — platform ids are open strings, and a consumer-defined platform registers, auto-detects, discovers routes, and flows through capture orchestration without editing core. The generic fallback uses the same contract. See [Platform API](/docs/platform-api.md) for the contract, a runnable example (`docs/examples/custom-platform.mjs`), and the Claude Code `DATA_LIBERATION_PLATFORMS` boot hook.
+
 ## Getting started — agent-first
 
 data-liberation-agent is also built to be driven by an AI agent. The front door is the `liberate` skill: detect the platform, inventory every page/post/product, liberate the whole site into portable HTML, and serve the result. If you then ask for WordPress, it reconstructs the site as an editable block theme or a high-fidelity replica and imports it into a local WordPress preview.
@@ -147,6 +151,7 @@ The join back to `output.wxr` and `products.jsonl` happens on the filesystem via
 ## Additional documentation
 
 * [How it works](/docs/how-it-works.md)
+* [Platform API — custom platforms](/docs/platform-api.md)
 * [AI agent commands](/docs/commands.md)
 * [AI skills](/docs/skills.md)
 * [MCP server tools](/docs/mcp.md)

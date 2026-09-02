@@ -10,10 +10,14 @@ The `scripts/` directory contains legacy standalone extraction scripts (Squaresp
 
 ## Adding a New Platform
 
-1. Create `src/adapters/<platform>/` — a directory whose `index.ts` assembles and exports the `PlatformAdapter` (inline `detect` + `discover`/`extract` imported from focused siblings: `discover.ts`, `extract.ts`, `content.ts`, `media.ts`, `products.ts`, `types.ts`, …). Keep `index.ts` a thin assembler and re-export the adapter's public API from it so external imports only reference `<platform>/index.js`. See `src/adapters/webflow/` (smallest) or `src/adapters/shopify/` (fuller split) as references.
-2. Register it in `src/mcp-server.ts` (see the "Static adapter imports" comment) — import from `./adapters/<platform>/index.js`.
+The platform registry (`src/platform/`) is the single home for adapter registration AND automatic detection — never edit central signal tables or adapter arrays (there are none).
+
+1. Create `src/adapters/<platform>/` — a directory whose `index.ts` assembles and exports the `PlatformAdapter` (`discover`/`extract` imported from focused siblings: `discover.ts`, `extract.ts`, `content.ts`, `media.ts`, `products.ts`, `types.ts`, …) plus a `detection.ts` exporting the platform's `PlatformDetection` signals (urlPatterns / httpSignals / sourceSignals / pathProbes — see `src/adapters/wix/detection.ts`). Keep `index.ts` a thin assembler and re-export the adapter's public API from it so external imports only reference `<platform>/index.js`. See `src/adapters/webflow/` (smallest) or `src/adapters/shopify/` (fuller split) as references.
+2. Add ONE `registerPlatform(...)` line in `src/platform/builtins.ts` (the generic fallback registers there with `{ fallback: true }`).
 3. Add platform-specific barriers and workarounds as inline comments in the adapter
 4. Update the supported platforms table in `README.md`
+
+Third-party consumers register platforms through the same public API without touching core: `import { registerPlatform } from 'data-liberation'` (see `docs/platform-api.md`; the MCP server also boots modules named in `DATA_LIBERATION_PLATFORMS`). Duplicate ids and conflicting fallback registrations throw deterministically.
 
 Adapters produce structured content and call into `WxrBuilder`, `ExtractionLog`, `ImportSession`, `MediaStubStore`, and `media` utilities for output.
 

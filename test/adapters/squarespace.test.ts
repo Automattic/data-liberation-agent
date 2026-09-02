@@ -4,6 +4,7 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { squarespaceAdapter } from '../../src/adapters/squarespace/index.js';
 import { WxrBuilder } from '../../src/lib/wxr/index.js';
+import { detectFromUrl } from '../../src/lib/detect-platform/index.js';
 
 describe('squarespaceAdapter', () => {
   it('has id "squarespace"', () => {
@@ -11,13 +12,13 @@ describe('squarespaceAdapter', () => {
   });
 
   it('detects squarespace.com URLs', () => {
-    expect(squarespaceAdapter.detect('https://mysite.squarespace.com')).toBe(true);
-    expect(squarespaceAdapter.detect('https://www.squarespace.com/mysite')).toBe(true);
+    expect(detectFromUrl('https://mysite.squarespace.com')).toBe('squarespace');
+    expect(detectFromUrl('https://www.squarespace.com/mysite')).toBe('squarespace');
   });
 
   it('does not detect non-Squarespace URLs', () => {
-    expect(squarespaceAdapter.detect('https://www.example.com')).toBe(false);
-    expect(squarespaceAdapter.detect('https://mysite.wixsite.com/blog')).toBe(false);
+    expect(detectFromUrl('https://www.example.com')).toBeNull();
+    expect(detectFromUrl('https://mysite.wixsite.com/blog')).toBe('wix');
   });
 
   it('has discover method', () => {

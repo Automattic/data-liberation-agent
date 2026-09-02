@@ -4,6 +4,7 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { wixAdapter } from '../../src/adapters/wix/index.js';
 import { WxrBuilder } from '../../src/lib/wxr/index.js';
+import { detectFromUrl } from '../../src/lib/detect-platform/index.js';
 
 describe('wixAdapter', () => {
   it('has id "wix"', () => {
@@ -11,15 +12,15 @@ describe('wixAdapter', () => {
   });
 
   it('detects wixsite.com URLs', () => {
-    expect(wixAdapter.detect('https://mysite.wixsite.com/blog')).toBe(true);
+    expect(detectFromUrl('https://mysite.wixsite.com/blog')).toBe('wix');
   });
 
   it('detects wix.com URLs', () => {
-    expect(wixAdapter.detect('https://www.wix.com/mysite')).toBe(true);
+    expect(detectFromUrl('https://www.wix.com/mysite')).toBe('wix');
   });
 
   it('does not detect non-Wix URLs', () => {
-    expect(wixAdapter.detect('https://www.example.com')).toBe(false);
+    expect(detectFromUrl('https://www.example.com')).toBeNull();
   });
 
   it('has discover method', () => {

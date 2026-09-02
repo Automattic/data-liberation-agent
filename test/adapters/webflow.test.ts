@@ -4,6 +4,7 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { webflowAdapter } from '../../src/adapters/webflow/index.js';
 import { WxrBuilder } from '../../src/lib/wxr/index.js';
+import { detectFromUrl } from '../../src/lib/detect-platform/index.js';
 
 describe('webflowAdapter', () => {
   it('has id "webflow"', () => {
@@ -11,19 +12,19 @@ describe('webflowAdapter', () => {
   });
 
   it('detects webflow.io URLs', () => {
-    expect(webflowAdapter.detect('https://mysite.webflow.io')).toBe(true);
-    expect(webflowAdapter.detect('https://example.webflow.io/blog')).toBe(true);
+    expect(detectFromUrl('https://mysite.webflow.io')).toBe('webflow');
+    expect(detectFromUrl('https://example.webflow.io/blog')).toBe('webflow');
   });
 
   it('detects webflow.com URLs', () => {
-    expect(webflowAdapter.detect('https://webflow.com')).toBe(true);
-    expect(webflowAdapter.detect('https://www.webflow.com/made-in-webflow')).toBe(true);
+    expect(detectFromUrl('https://webflow.com')).toBe('webflow');
+    expect(detectFromUrl('https://www.webflow.com/made-in-webflow')).toBe('webflow');
   });
 
   it('does not detect non-Webflow URLs', () => {
-    expect(webflowAdapter.detect('https://www.example.com')).toBe(false);
-    expect(webflowAdapter.detect('https://mysite.squarespace.com')).toBe(false);
-    expect(webflowAdapter.detect('https://mysite.wixsite.com/blog')).toBe(false);
+    expect(detectFromUrl('https://www.example.com')).toBeNull();
+    expect(detectFromUrl('https://mysite.squarespace.com')).toBe('squarespace');
+    expect(detectFromUrl('https://mysite.wixsite.com/blog')).toBe('wix');
   });
 
   it('has discover method', () => {

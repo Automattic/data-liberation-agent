@@ -53,6 +53,7 @@ import { refineReportHandler } from './mcp-server/handlers/refine-report.js';
 import { NEW_TOOL_SCHEMAS } from './mcp-server/handlers/tool-schemas.js';
 
 import { adapters, findAdapter } from './adapters/index.js';
+import { loadExternalPlatforms } from './platform/load-external.js';
 
 function textResult(data: unknown): ToolResult {
   return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
@@ -88,7 +89,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
 	},
     {
       name: 'liberate_detect',
-      description: 'Detect the platform of a website (GoDaddy Websites & Marketing, Hostinger, HubSpot, Shopify, Squarespace, Webflow, Weebly, Wix, or unknown)',
+      description: 'Detect the platform of a website (built-ins: GoDaddy Websites & Marketing, Hostinger, HubSpot, Shopify, Squarespace, Webflow, Weebly, Wix; any custom platform registered through the Platform API; or unknown)',
       inputSchema: {
         type: 'object' as const,
         properties: {
@@ -791,6 +792,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
 
 async function main() {
+  // Consumer-defined platforms (DATA_LIBERATION_PLATFORMS) join the same
+  // registry as the built-ins before any tool call is served. A bad module is
+  // reported on stderr and skipped — it must not take the server down.
+  const external = await loadExternalPlatforms();
+  for (const { entry, error } of external.failed) {
+    console.error(`[platform] Failed to load external platform module ${entry}: ${error}`);
+  }
+  if (external.loaded.length > 0) {
+    console.error(`[platform] Loaded external platform modules: ${external.loaded.join(', ')}`);
+  }
+
   const transport = new StdioServerTransport();
 
   const shutdown = async () => {
