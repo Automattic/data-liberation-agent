@@ -246,7 +246,7 @@ describe( 'exportWebsiteCapture', () => {
 		);
 		writeFileSync(
 			join( outputDir, 'html-mobile', 'homepage.html' ),
-			'<html><head><style>.mobile{color:red}</style></head><body><main>Mobile</main></body></html>'
+			'<html><head><style>.mobile{color:red}:root .device-mobile-responsive.responsive{display:revert!important}</style></head><body class="device-mobile-responsive responsive"><main>Mobile</main></body></html>'
 		);
 		writeFileSync(
 			join( outputDir, 'screenshots', 'manifest.json' ),
@@ -279,6 +279,12 @@ describe( 'exportWebsiteCapture', () => {
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		expect( html ).toContain( '@media(max-width:980px)' );
 		expect( html ).toContain( '<style media="(min-width:981px)">.desktop{color:blue}</style>' );
+		const sourceVisibilityOverride = html.indexOf( 'display:revert!important' );
+		const authoritativeSwitch = html.lastIndexOf(
+			'.data-liberation-mobile-document{display:none!important}'
+		);
+		expect( sourceVisibilityOverride ).toBeGreaterThanOrEqual( 0 );
+		expect( authoritativeSwitch ).toBeGreaterThan( sourceVisibilityOverride );
 		expect( html ).not.toContain( '768px' );
 		expect( html ).not.toContain( '769px' );
 
@@ -573,6 +579,38 @@ describe( 'exportWebsiteCapture', () => {
 			'portalId=32'
 		);
 		expect( $( '.hs-form-frame' ).eq( 32 ).find( 'iframe' ) ).toHaveLength( 0 );
+	} );
+
+	it( 'removes a multiline media srcset URL containing an apostrophe without leaving a malformed reference', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-quoted-media-export-' ) );
+		dirs.push( outputDir );
+		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
+		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
+		const imageUrl = "https://static.wixstatic.com/media/Happy%20Women's%20Day.jpg";
+		writeFileSync(
+			join( outputDir, 'html', 'homepage.html' ),
+			`<html><body><img srcset="${ imageUrl } 1x,\n${ imageUrl } 2x"></body></html>`
+		);
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( {
+				version: 1,
+				entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },
+			} )
+		);
+		exportWebsiteCapture( {
+			outputDir,
+			sourceUrl: 'https://example.com/',
+			platform: 'generic',
+			summary: {},
+			failures: [],
+		} );
+
+		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
+		const $ = cheerio.load( html );
+		expect( $( 'img' ).attr( 'srcset' ) ).toBeUndefined();
+		expect( html ).not.toContain( "Women's%20Day.jpg" );
+		expect( html ).not.toContain( "R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs='s%20Day.jpg" );
 	} );
 
 	it( 'exports captured routes and localized media as a website directory', () => {
@@ -977,6 +1015,50 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		expect( result.error ).toBeUndefined();
 		expect( result.status, result.stderr ).toBe( 0 );
 	}, 70_000 );
+
+	it( 'compacts structured semantic evidence to fit the artifact file limit', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-compact-semantic-export-' ) );
+		dirs.push( outputDir );
+		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
+		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
+		writeFileSync( join( outputDir, 'html', 'homepage.html' ), '<main><h1>Home</h1></main>' );
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( {
+				version: 1,
+				entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },
+			} )
+		);
+		const spec = {
+			selector: 'main > section',
+			layout: { samples: Array.from( { length: 56_000 }, () => 0 ) },
+		} as never;
+		const specs = Array.from( { length: 5 }, () => spec );
+		SectionSpecsStore.load( outputDir ).set( 'https://example.com/', specs, [] );
+		SectionSpecsStore.loadMobile( outputDir ).set( 'https://example.com/', specs, [] );
+
+		exportWebsiteCapture( {
+			outputDir,
+			sourceUrl: 'https://example.com/',
+			platform: 'generic',
+			summary: {},
+			failures: [],
+		} );
+
+		const artifact = JSON.parse( readFileSync( join( outputDir, 'artifact.json' ), 'utf8' ) );
+		const evidence = JSON.parse(
+			readFileSync( join( outputDir, 'semantic-evidence.json' ), 'utf8' )
+		);
+		expect( Buffer.byteLength( JSON.stringify( evidence, null, 2 ) ) ).toBeGreaterThan(
+			artifact.compiler_limits.max_file_bytes
+		);
+		const artifactEvidence = artifact.files.find(
+			( file: { path: string } ) => file.path === 'semantic-evidence.json'
+		);
+		expect( Buffer.byteLength( artifactEvidence.content ) ).toBeLessThanOrEqual(
+			artifact.compiler_limits.max_file_bytes
+		);
+	} );
 
 	it( 'preserves the rendered authoring tree when section reconstruction lacks visual proof', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-' ) );
