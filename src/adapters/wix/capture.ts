@@ -72,6 +72,7 @@ export const WIX_CAPTURE_CHROME_SELECTOR =
 	'[id="WIX_ADS"], [id$="-hiddenA11ySubMenuIndication"], [id$="__more__"]';
 
 export const capture: AdapterCapture = {
+	removeSelectors: [ '[id="WIX_ADS"]', '[id$="-hiddenA11ySubMenuIndication"]' ],
 	/**
 	 * Wix resolves same-page anchors in its click runtime rather than with
 	 * authored `id` targets, so a captured copy has nowhere to scroll to once
