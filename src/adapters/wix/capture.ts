@@ -68,6 +68,9 @@ export function wixMediaVariant( url: string ): { id: string; url: string } | nu
 	return match ? { id: match[ 1 ]!.toLowerCase(), url } : null;
 }
 
+export const WIX_CAPTURE_CHROME_SELECTOR =
+	'[id="WIX_ADS"], [id$="-hiddenA11ySubMenuIndication"], [id$="__more__"]';
+
 export const capture: AdapterCapture = {
 	/**
 	 * Wix resolves same-page anchors in its click runtime rather than with
@@ -76,7 +79,9 @@ export const capture: AdapterCapture = {
 	 * fragment and leave a real target behind.
 	 */
 	prepare: async ( page ) => {
-		await page.evaluate( async () => {
+		await page.evaluate( async ( chromeSelector ) => {
+			for ( const chrome of document.querySelectorAll( chromeSelector ) ) chrome.remove();
+
 			const linksByFragment = new Map< string, HTMLAnchorElement[] >();
 			for ( const link of document.querySelectorAll< HTMLAnchorElement >( 'a[href]' ) ) {
 				let target: URL;
@@ -187,7 +192,7 @@ export const capture: AdapterCapture = {
 			root.style.scrollBehavior = 'auto';
 			window.scrollTo( originalScroll.x, originalScroll.y );
 			root.style.scrollBehavior = scrollBehavior;
-		} );
+		}, WIX_CAPTURE_CHROME_SELECTOR );
 
 		const galleries = await page.evaluate( async () => {
 			const urls = [
