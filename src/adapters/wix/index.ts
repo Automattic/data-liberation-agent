@@ -14,4 +14,4 @@ export { extractGalleryFromHtml } from './gallery.js';
 
 export { wixMediaVariant } from './capture.js';
 
-export const wixAdapter: PlatformAdapter = { id: 'wix', detection, discover, extract, capture };
+export const wixAdapter: PlatformAdapter = { id: 'wix', detection, discover, extract, liberation: capture };

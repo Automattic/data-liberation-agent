@@ -2,10 +2,10 @@
 
 Data Liberation's platform layer is a public, registration/composition API. A
 *Platform* owns its automatic-detection signals, must be able to discover a
-site's routes, and may optionally customize capture. Platform ids are **opaque
+site's routes, and may optionally customize how each page is liberated. Platform ids are **opaque
 strings** — there is no enum to extend and no core file to edit: you register a
 platform, and it immediately participates in automatic detection, adapter
-resolution, discovery, and capture orchestration alongside the built-ins.
+resolution, discovery, and liberation alongside the built-ins.
 
 The public import surface is the package root:
 
@@ -30,16 +30,16 @@ interface Platform {
   detection?: PlatformDetection;
   /** Inventory a site: sitemap/routes/navigation. THE required capability. */
   discover(url: string, opts: Record<string, unknown>): Promise<unknown>;
-  /** Optional capture-phase hooks. */
-  capture?: AdapterCapture;
+  /** Optional source-specific hooks applied during liberation. */
+  liberation?: LiberationHooks;
 }
 ```
 
-`AdapterCapture` (optional) mirrors the hooks built-in platforms use:
+`LiberationHooks` (optional) mirrors the hooks built-in platforms use:
 
 ```ts
-interface AdapterCapture {
-  /** CSS selectors removed from the live DOM before capture. */
+interface LiberationHooks {
+  /** CSS selectors removed before portable artifacts are produced. */
   removeSelectors?: string[];
   /** Imperative page prep (wait-for-app, conditional removal). Best-effort. */
   prepare?(page: Page, ctx: { url: string; viewport: 'desktop' | 'mobile' }): Promise<void>;
@@ -85,7 +85,7 @@ registerPlatform({
   id: 'acme-builder',
   detection: { /* … */ },
   discover: async (url, opts) => ({ /* inventory */ }),
-  capture: { removeSelectors: ['.acme-cookie-banner'] },
+  liberation: { removeSelectors: ['.acme-cookie-banner'] },
 });
 ```
 
@@ -107,7 +107,7 @@ The built-in generic fallback (`default`) is registered through this same API
 
 ## Discovery — the required capability
 
-`discover(url, opts)` returns a route inventory. The capture pipeline reads:
+`discover(url, opts)` returns a route inventory. The liberation pipeline reads:
 
 ```ts
 {
@@ -148,7 +148,7 @@ registerPlatform({
   async discover(url) {
     return { siteMeta: { title: 'Acme site' }, urls: [{ url, type: 'homepage' }] };
   },
-  capture: { removeSelectors: ['.acme-cookie-banner'] },
+  liberation: { removeSelectors: ['.acme-cookie-banner'] },
 });
 
 console.log(await detectPlatform('https://blog.acme-builder.example/'));
@@ -157,10 +157,9 @@ console.log(await detectPlatform('https://blog.acme-builder.example/'));
 
 </details>
 
-Once registered in-process, the platform flows through the main orchestration
-(`captureWebsite`, the `liberate_capture` MCP tool, the CLI) with no further
-wiring: detection selects it, `discover` supplies the routes, and its
-`capture` hooks reach the screenshot orchestrator.
+Once registered in-process, the platform flows through the main liberation
+workflow with no further wiring: detection selects it, `discover` supplies the
+routes, and its `liberation` hooks prepare source pages for the portable artifact.
 
 ## Claude Code consumer
 
@@ -188,7 +187,7 @@ config) at a module whose default initializer receives the active registry API:
 ```js
 // /abs/path/to/my-platforms/acme.mjs
 export default function ({ registerPlatform }) {
-  registerPlatform({ id: 'acme-builder', /* detection, discover, capture */ });
+  registerPlatform({ id: 'acme-builder', /* detection, discover, liberation */ });
 }
 ```
 
@@ -199,7 +198,7 @@ load a separate module instance.
 
 A failing module is reported on stderr and skipped; it never takes the server
 or the built-in platforms down. `liberate_detect` then reports custom
-platforms by id, and `liberate_capture` / `liberate_discover` route to them.
+platforms by id, and the MCP liberation and discovery workflows route to them.
 
 ## Adding a BUILT-IN platform (core contributor path)
 

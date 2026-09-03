@@ -34,8 +34,8 @@ registerPlatform( {
 			],
 		};
 	},
-	// Optional capture hooks — selectors stripped from the live DOM pre-capture.
-	capture: { removeSelectors: [ '.acme-cookie-banner' ] },
+	// Optional liberation hooks customize how the source page is prepared.
+	liberation: { removeSelectors: [ '.acme-cookie-banner' ] },
 } );
 
 // The custom platform joins the built-ins in the same registry.

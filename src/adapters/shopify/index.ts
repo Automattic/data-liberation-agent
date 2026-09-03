@@ -21,7 +21,7 @@ export type { ShopifyAdapterOpts, ShopifyInventory } from './types.js';
 export const shopifyAdapter: PlatformAdapter = {
   id: 'shopify',
   detection,
-  capture,
+  liberation: capture,
   discover,
   extract,
 };

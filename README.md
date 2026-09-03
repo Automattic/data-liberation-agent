@@ -40,7 +40,7 @@ All eight platforms have MCP adapters with full extraction support including pro
 
 ### Custom platforms
 
-The platform layer is a public, registration-based API — platform ids are open strings, and a consumer-defined platform registers, auto-detects, discovers routes, and flows through capture orchestration without editing core. The generic fallback uses the same contract. See [Platform API](/docs/platform-api.md) for the contract, a runnable example (`docs/examples/custom-platform.mjs`), and the Claude Code `DATA_LIBERATION_PLATFORMS` boot hook.
+The platform layer is a public, registration-based API — platform ids are open strings, and a consumer-defined platform registers, auto-detects, discovers routes, and applies source-specific liberation hooks without editing core. The generic fallback uses the same contract. See [Platform API](/docs/platform-api.md) for the contract, a runnable example (`docs/examples/custom-platform.mjs`), and the bundled MCP `DATA_LIBERATION_PLATFORMS` boot hook.
 
 ## Getting started — agent-first
 

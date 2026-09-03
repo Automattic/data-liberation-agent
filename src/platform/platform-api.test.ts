@@ -4,7 +4,7 @@
 // platform — built entirely outside core, registered through the package
 // entry (src/index.ts, the module `data-liberation` maps to for installed
 // consumers) — registers, auto-detects via its own signals, discovers routes,
-// and flows through the capture orchestration with its capture hooks intact.
+// and flows through liberation with its platform hooks intact.
 // No core file is modified by the "consumer" here; it only uses the public
 // exports.
 import { mkdirSync, rmSync } from 'node:fs';
@@ -46,7 +46,7 @@ const root = join( process.cwd(), '.tmp-test', 'platform-api' );
 const sourceUrl = 'https://blog.acme-builder.example/';
 
 // The consumer platform — detection signals in all four tiers + discover +
-// capture hooks, exactly as docs/platform-api.md documents them.
+// liberation hooks, exactly as docs/platform-api.md documents them.
 const acmePlatform = {
 	id,
 	detection: {
@@ -73,7 +73,7 @@ const acmePlatform = {
 		],
 		diagnostics: [],
 	} ) ),
-	capture: {
+	liberation: {
 		removeSelectors: [ '.acme-cookie-banner', '#acme-teaser' ],
 	},
 };
@@ -171,7 +171,7 @@ describe( 'consumer-defined platform (public Platform API)', () => {
 		expect( result.signals ).toContain( '/_acme/health probe' );
 	} );
 
-	it( 'resolves through the registry and flows through capture orchestration', async () => {
+	it( 'resolves through the registry and flows through liberation', async () => {
 		ensureRegistered();
 		expect( resolvePlatform( id ) ).toBe( acmePlatform );
 
@@ -187,9 +187,9 @@ describe( 'consumer-defined platform (public Platform API)', () => {
 			} ),
 		);
 
-		// The MAIN orchestration entry (liberate_capture / the CLI's capture
-		// path) — no core edit, no adapter shim: the custom platform is
-		// selected by detection and its discover/capture members are used.
+		// The current internal orchestration entry — no core edit, no adapter
+		// shim: detection selects the custom platform and uses its public
+		// discover/liberation members.
 		const result = await captureWebsite( { url: sourceUrl, outputDir: root } );
 
 		expect( acmePlatform.discover ).toHaveBeenCalledWith(
@@ -198,10 +198,10 @@ describe( 'consumer-defined platform (public Platform API)', () => {
 		);
 		expect( result.provenance.platform ).toBe( id );
 		expect( result.summary.routesDiscovered ).toBe( 2 ); // homepage + /pricing
-		// The platform's capture hooks reached the screenshot orchestrator.
+		// The platform's liberation hooks reached the internal browser orchestrator.
 		expect( captureScreenshotsMock ).toHaveBeenCalledWith(
 			expect.objectContaining( {
-				removeSelectors: acmePlatform.capture.removeSelectors,
+				removeSelectors: acmePlatform.liberation.removeSelectors,
 				primaryUrl: sourceUrl,
 			} ),
 		);

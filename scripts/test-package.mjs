@@ -81,7 +81,7 @@ try {
       "  id: 'acme-builder',",
       "  detection: { urlPatterns: [/acme-builder\\.example/i] },",
       "  discover: async (url) => ({ urls: [{ url, type: 'homepage' }] }),",
-      "  capture: { removeSelectors: ['.acme-cookie-banner'] },",
+      "  liberation: { removeSelectors: ['.acme-cookie-banner'] },",
       "});",
       "const detection = await detectPlatform('https://blog.acme-builder.example/');",
       "if (detection.platform !== 'acme-builder' || detection.confidence !== 'high') {",

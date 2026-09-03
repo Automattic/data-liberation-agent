@@ -2,12 +2,12 @@
 //
 // The public Platform contract. A Platform is the unit of extensibility for
 // Data Liberation: it owns its own automatic-detection signals, must be able
-// to discover a site's routes, and may optionally customize capture. Platform
+// to discover a site's routes, and may optionally customize liberation. Platform
 // ids are opaque strings — there is deliberately no platform enum.
 //
 // This module must stay dependency-free (types only) so consumers can import
 // the contract without pulling in adapter internals.
-import type { AdapterCapture } from '../adapters/page-actions.js';
+import type { LiberationHooks } from '../adapters/page-actions.js';
 
 /** URL substring/regex tested against the normalized site URL. */
 export type PlatformUrlSignal = RegExp;
@@ -77,8 +77,8 @@ export interface Platform {
 	detection?: PlatformDetection;
 	/** Inventory a site: sitemap/routes/navigation. Required. */
 	discover( url: string, opts: Record< string, unknown > ): Promise< unknown >;
-	/** Optional capture-phase hooks (DOM selectors removed pre-capture, …). */
-	capture?: AdapterCapture;
+	/** Optional platform-specific hooks applied while liberating each page. */
+	liberation?: LiberationHooks;
 }
 
 /** Options accepted by {@link registerPlatform}. */

@@ -106,6 +106,6 @@ describe( 'wix capture', () => {
 	} );
 
 	it( 'is attached to the adapter', () => {
-		expect( wixAdapter.capture ).toBe( capture );
+		expect( wixAdapter.liberation ).toBe( capture );
 	} );
 } );
