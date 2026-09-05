@@ -36,7 +36,7 @@ jobs:
           fi
       - name: Verify skill driver coverage
         run: |
-          missing_drivers=$(grep -rhoE 'run\.mjs [a-z0-9_-]+' skills commands 2>/dev/null | awk '{print $2}' | sort -u | while read -r name; do
+          missing_drivers=$(grep -rhoE 'run\.mjs [a-z0-9_-]+' skills 2>/dev/null | awk '{print $2}' | sort -u | while read -r name; do
             [[ -f "dist/scripts/${name}.mjs" ]] || echo "$name"
           done)
           if [[ -n "$missing_drivers" ]]; then

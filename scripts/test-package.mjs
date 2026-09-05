@@ -71,8 +71,6 @@ try {
   }
 
   for (const relativePath of [
-    'dist/scripts/triage-candidates.mjs',
-    'scripts/block-fixer/fix-server.js',
     'scripts/run.mjs',
     'skills/liberate/SKILL.md',
   ]) {
@@ -91,14 +89,18 @@ try {
   try {
     await withDeadline(client.connect(transport), 'Installed MCP server connection');
     const tools = await withDeadline(client.listTools(), 'Installed MCP server tool listing');
-    if (!tools.tools.some((tool) => tool.name === 'liberate_capture')) {
-      throw new Error('Installed MCP server does not expose liberate_capture.');
+    const offered = tools.tools.map((tool) => tool.name).sort();
+    const expected = ['compare', 'liberate', 'publish'];
+    if (offered.join() !== expected.join()) {
+      throw new Error(
+        `Installed MCP server offers [${offered}]; expected the product verbs [${expected}].`
+      );
     }
   } finally {
     await withDeadline(client.close(), 'Installed MCP server shutdown', 10_000);
   }
 
-  process.stdout.write('Installed package CLI, capture engine, MCP server, skills, and drivers are ready.\n');
+  process.stdout.write('Installed package CLI, capture engine, MCP server, and skill are ready.\n');
 } finally {
   rmSync(scratch, { recursive: true, force: true });
 }

@@ -9,23 +9,19 @@
   "files": [
     ".claude-plugin/",
     ".codex-plugin/",
-    ".mcp.json",
     ".mcp.codex.json",
+    ".mcp.json",
     "AGENTS.md",
     "CLAUDE.md",
     "GEMINI.md",
-    "agents/",
-    "commands/",
     "dist/",
     "docs/",
     "gemini-extension.json",
-    "prompts/",
     "scripts/",
     "skills/",
     "src/"
   ],
   "scripts": {
-    "import": "tsx src/cli.ts import",
     "build": "tsc && node scripts/copy-runtime-assets.mjs && node scripts/build-mcp-bundle.mjs",
     "build:mcp-bundle": "node scripts/build-mcp-bundle.mjs",
     "copy-runtime-assets": "node scripts/copy-runtime-assets.mjs",
@@ -33,12 +29,10 @@
     "test:package": "node scripts/test-package.mjs",
     "test:watch": "vitest",
     "mcp": "tsx src/mcp-server.ts",
-    "inspect": "tsx src/cli.ts inspect",
-    "qa": "tsx src/cli.ts qa",
-    "verify": "tsx src/cli.ts verify",
-    "setup": "tsx src/cli.ts setup",
     "liberate": "tsx src/cli.ts",
-    "setup:browser": "playwright install chromium"
+    "setup:browser": "playwright install chromium",
+    "compare": "tsx src/cli.ts compare",
+    "publish": "tsx src/cli.ts publish"
   },
   "engines": {
     "node": ">=22.0.0"
