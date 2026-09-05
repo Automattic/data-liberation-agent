@@ -30,8 +30,8 @@
 <h2>Platform edge</h2>
 <table>
   <tbody>
-    <tr><td><code>src/adapters/&lt;platform&gt;/</code></td><td>9 adapters: default, godaddy-wm, hostinger, hubspot, shopify, squarespace, webflow, weebly, wix.</td></tr>
-    <tr><td><code>src/adapters/resolve-adapter.ts</code></td><td>id → adapter, fallback to <code>default</code>.</td></tr>
+  <tr><td><code>src/adapters/&lt;platform&gt;/</code></td><td>9 adapters: default, godaddy-wm, hostinger, hubspot, shopify, squarespace, webflow, weebly, wix. Each declares its own <code>detection.ts</code> signals.</td></tr>
+  <tr><td><code>src/platform/</code></td><td>The public Platform API: registry (registerPlatform/resolvePlatform), built-in registration, external-module loader. One home for adapter + detection registration.</td></tr>
     <tr><td><code>src/adapters/page-actions.ts</code></td><td>The two opt-in seam types: <code>capture</code>, <code>blocks</code>.</td></tr>
     <tr><td><code>src/adapters/shared.ts</code></td><td>Shared adapter machinery (the big one).</td></tr>
   </tbody>

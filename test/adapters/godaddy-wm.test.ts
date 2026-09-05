@@ -4,6 +4,7 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { godaddyWmAdapter } from '../../src/adapters/godaddy-wm/index.js';
 import { WxrBuilder } from '../../src/lib/wxr/index.js';
+import { detectFromUrl } from '../../src/lib/detect-platform/index.js';
 import { ExtractionLog } from '../../src/lib/resume-state/index.js';
 import { parseSitemapXml } from '../../src/lib/extraction/sitemap.js';
 
@@ -12,9 +13,11 @@ describe('godaddyWmAdapter', () => {
     expect(godaddyWmAdapter.id).toBe('godaddy-wm');
   });
 
-  it('detect() returns false (URL-based detection N/A for custom domains)', () => {
-    expect(godaddyWmAdapter.detect('https://skywaydiner.com')).toBe(false);
-    expect(godaddyWmAdapter.detect('https://cruisewarehouse.com')).toBe(false);
+  it('declares no URL patterns (URL-based detection N/A for custom domains)', () => {
+    expect(detectFromUrl('https://skywaydiner.com')).toBeNull();
+    expect(detectFromUrl('https://cruisewarehouse.com')).toBeNull();
+    expect(godaddyWmAdapter.detection?.urlPatterns).toBeUndefined();
+    expect(godaddyWmAdapter.detection?.httpSignals?.length ?? 0).toBeGreaterThan(0);
   });
 
   it('has discover and extract methods', () => {

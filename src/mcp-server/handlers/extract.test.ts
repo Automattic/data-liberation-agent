@@ -113,7 +113,7 @@ describe( 'extractHandler — compact result', () => {
 
 	it( 'exports a portable website directory after screenshot capture', async () => {
 		const adapter = makeAdapter( 0 );
-		adapter.capture = {};
+		adapter.liberation = {};
 		const screenshotter = await import( '../../lib/screenshot/screenshotter.js' );
 		const captureSpy = vi
 			.spyOn( screenshotter, 'captureScreenshots' )

@@ -10,10 +10,14 @@ The `scripts/` directory contains legacy standalone extraction scripts (Squaresp
 
 ## Adding a New Platform
 
-1. Create `src/adapters/<platform>/` — a directory whose `index.ts` assembles and exports the `PlatformAdapter` (inline `detect` + `discover`/`extract` imported from focused siblings: `discover.ts`, `extract.ts`, `content.ts`, `media.ts`, `products.ts`, `types.ts`, …). Keep `index.ts` a thin assembler and re-export the adapter's public API from it so external imports only reference `<platform>/index.js`. See `src/adapters/webflow/` (smallest) or `src/adapters/shopify/` (fuller split) as references.
-2. Register it in `src/mcp-server.ts` (see the "Static adapter imports" comment) — import from `./adapters/<platform>/index.js`.
+The platform registry (`src/platform/`) is the single home for adapter registration AND automatic detection — never edit central signal tables or adapter arrays (there are none).
+
+1. Create `src/adapters/<platform>/` — a directory whose `index.ts` assembles and exports the `PlatformAdapter` (`discover`/`extract` imported from focused siblings: `discover.ts`, `extract.ts`, `content.ts`, `media.ts`, `products.ts`, `types.ts`, …) plus a `detection.ts` exporting the platform's `PlatformDetection` signals (urlPatterns / httpSignals / sourceSignals / pathProbes — see `src/adapters/wix/detection.ts`). Keep `index.ts` a thin assembler and re-export the adapter's public API from it so external imports only reference `<platform>/index.js`. See `src/adapters/webflow/` (smallest) or `src/adapters/shopify/` (fuller split) as references.
+2. Add ONE `registerPlatform(...)` line in `src/platform/builtins.ts` (the generic fallback registers there with `{ fallback: true }`).
 3. Add platform-specific barriers and workarounds as inline comments in the adapter
 4. Update the supported platforms table in `README.md`
+
+Third-party consumers register platforms through the same public API without touching core: `import { registerPlatform } from 'data-liberation'` (see `docs/platform-api.md`; the MCP server also boots modules named in `DATA_LIBERATION_PLATFORMS`). Duplicate ids and conflicting fallback registrations throw deterministically.
 
 Adapters produce structured content and call into `WxrBuilder`, `ExtractionLog`, `ImportSession`, `MediaStubStore`, and `media` utilities for output.
 
@@ -21,7 +25,7 @@ Adapters produce structured content and call into `WxrBuilder`, `ExtractionLog`,
 
 Both are opt-in, declared on the adapter object, and consumed by later pipeline stages — the stage subsystems (screenshotter, reconstructor) stay adapter-agnostic; the handlers that already resolve the adapter do the wiring. Types live in `src/adapters/page-actions.ts`.
 
-- **`capture?: AdapterCapture`** (seam 1) — `removeSelectors: string[]` (plus an optional imperative `prepare(page, ctx)`) removed from the live page in `screenshotter.ts` after settle and BEFORE screenshots / carried HTML / mobile carry / `SectionSpec` are captured, so one removal cleans every artifact. Best-effort (never fails capture). Put it in `<platform>/capture.ts`; example: `src/adapters/shopify/capture.ts` (strips `#upCart` + Klaviyo teaser chrome).
+- **`liberation?: LiberationHooks`** (seam 1) — `removeSelectors: string[]` (plus an optional imperative `prepare(page, ctx)`) removes source-platform chrome from the live page before portable HTML, screenshots, mobile variants, and `SectionSpec` evidence are produced, so one policy cleans every artifact. Best-effort. The current internal implementation lives in `<platform>/capture.ts`; example: `src/adapters/shopify/capture.ts` strips `#upCart` and Klaviyo teaser chrome.
 - **`blocks?: AdapterBlocks`** (seam 2) — a content→Gutenberg-blocks recipe (a declarative `recipes[]` table and/or a whole-body `htmlToBlocks(html, ctx)` fn). Applied ONLY on the blocks reconstruct path; the theme/carry path never invokes it. Two firing points, both blocks-path-gated: (a) per visual section in `page-reconstruct.ts`, before the `core/html` fallback island; (b) in BULK over post/page `content:encoded` bodies via the `liberate_blockify_wxr` tool (`src/lib/extraction/blockify-wxr.ts`), run after extraction and before import. Put the recipe in `<platform>/blocks.ts`; example: `src/adapters/squarespace/blocks.ts`.
 
 ## Resume State Files

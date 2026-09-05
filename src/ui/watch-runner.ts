@@ -43,14 +43,7 @@ import { WxrBuilder } from '../lib/wxr/index.js';
 import { ImportSession } from '../lib/resume-state/index.js';
 import { classifyUrl } from '../lib/extraction/sitemap.js';
 import type { PageExtractedEvent } from '../adapters/shared.js';
-import { godaddyWmAdapter } from '../adapters/godaddy-wm/index.js';
-import { hostingerAdapter } from '../adapters/hostinger/index.js';
-import { hubspotAdapter } from '../adapters/hubspot/index.js';
-import { shopifyAdapter } from '../adapters/shopify/index.js';
-import { squarespaceAdapter } from '../adapters/squarespace/index.js';
-import { webflowAdapter } from '../adapters/webflow/index.js';
-import { weeblyAdapter } from '../adapters/weebly/index.js';
-import { wixAdapter } from '../adapters/wix/index.js';
+import { findPlatform } from '../platform/registry.js';
 import type { PlatformAdapter } from '../types.js';
 import {
   resolveAgent,
@@ -127,19 +120,10 @@ export interface WatchEvents {
   onError?: (message: string) => void;
 }
 
-const ADAPTERS: PlatformAdapter[] = [
-  godaddyWmAdapter,
-  hostingerAdapter,
-  hubspotAdapter,
-  shopifyAdapter,
-  squarespaceAdapter,
-  webflowAdapter,
-  weeblyAdapter,
-  wixAdapter,
-];
-
+// Exact-id platform lookup from the shared registry — watch mode intentionally
+// does NOT fall back to the generic adapter (it needs a real extract path).
 function findAdapter(platform: string): PlatformAdapter | null {
-  return ADAPTERS.find((a) => a.id === platform) || null;
+  return findPlatform(platform) as PlatformAdapter | null;
 }
 
 export interface WatchOpts {

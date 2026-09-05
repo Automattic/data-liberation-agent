@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, mkdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -70,6 +70,52 @@ try {
     throw new Error('Installed capture engine does not export captureWebsite.');
   }
 
+  // Public Platform API — an installed consumer registers a custom platform,
+  // which must auto-detect through the package entry WITHOUT touching core,
+  // and the built-ins must register through the same seam.
+  writeFileSync(
+    join(consumerDir, 'platform-consumer.mjs'),
+    [
+      "import { registerPlatform, detectPlatform, registeredPlatforms } from 'data-liberation';",
+      "registerPlatform({",
+      "  id: 'acme-builder',",
+      "  detection: { urlPatterns: [/acme-builder\\.example/i] },",
+      "  discover: async (url) => ({ urls: [{ url, type: 'homepage' }] }),",
+      "  liberation: { removeSelectors: ['.acme-cookie-banner'] },",
+      "});",
+      "const detection = await detectPlatform('https://blog.acme-builder.example/');",
+      "if (detection.platform !== 'acme-builder' || detection.confidence !== 'high') {",
+      "  throw new Error('Custom platform did not auto-detect: ' + JSON.stringify(detection));",
+      "}",
+      "const ids = registeredPlatforms().map((p) => p.id);",
+      "if (!ids.includes('wix') || !ids.includes('default') || !ids.includes('acme-builder')) {",
+      "  throw new Error('Registry missing expected platforms: ' + ids.join(', '));",
+      "}",
+      "console.log('consumer platform registered, detected, and resolvable');",
+    ].join('\n'),
+  );
+  const consumer = run(process.execPath, ['platform-consumer.mjs'], { cwd: consumerDir });
+  if (!consumer.stdout.includes('consumer platform registered')) {
+    throw new Error('Installed-package platform consumer check failed.');
+  }
+
+  // The plugin runs a self-contained MCP bundle. Its registry is not the same
+  // module instance as dist/index.js, so external modules receive the active
+  // registry API from the loader rather than importing the package root.
+  const externalPlatformPath = join(consumerDir, 'external-platform.mjs');
+  writeFileSync(
+    externalPlatformPath,
+    [
+      'export default function ({ registerPlatform }) {',
+      '  registerPlatform({',
+      "    id: 'external-builder',",
+      '    detection: { urlPatterns: [/external-builder\\.example/i] },',
+      "    discover: async (url) => ({ urls: [{ url, type: 'homepage' }] }),",
+      '  });',
+      '}',
+    ].join('\n'),
+  );
+
   for (const relativePath of [
     'dist/scripts/triage-candidates.mjs',
     'scripts/block-fixer/fix-server.js',
@@ -85,6 +131,10 @@ try {
     command: process.execPath,
     args: [join(packageRoot, 'dist', 'mcp-server.bundle.mjs')],
     cwd: packageRoot,
+    env: {
+      ...process.env,
+      DATA_LIBERATION_PLATFORMS: externalPlatformPath,
+    },
     stderr: 'inherit',
   });
   const client = new Client({ name: 'package-smoke', version: '1.0.0' }, { capabilities: {} });
@@ -94,11 +144,23 @@ try {
     if (!tools.tools.some((tool) => tool.name === 'liberate_capture')) {
       throw new Error('Installed MCP server does not expose liberate_capture.');
     }
+    const detected = await withDeadline(
+      client.callTool({
+        name: 'liberate_detect',
+        arguments: { url: 'https://site.external-builder.example/' },
+      }),
+      'Installed MCP external platform detection',
+    );
+    const detectionText = detected.content.find((item) => item.type === 'text')?.text;
+    const detection = JSON.parse(detectionText ?? '{}');
+    if (detection.platform !== 'external-builder') {
+      throw new Error('Bundled MCP did not use externally registered platform: ' + detectionText);
+    }
   } finally {
     await withDeadline(client.close(), 'Installed MCP server shutdown', 10_000);
   }
 
-  process.stdout.write('Installed package CLI, capture engine, MCP server, skills, and drivers are ready.\n');
+  process.stdout.write('Installed package CLI, capture engine, Platform API, MCP server, skills, and drivers are ready.\n');
 } finally {
   rmSync(scratch, { recursive: true, force: true });
 }
