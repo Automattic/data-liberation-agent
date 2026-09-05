@@ -348,11 +348,11 @@ describe( 'exportWebsiteCapture', () => {
 			mkdirSync( join( outputDir, path ), { recursive: true } );
 		writeFileSync(
 			join( outputDir, 'html', 'homepage.html' ),
-			'<html><head><base href="https://evil.example/"><meta http-equiv="refresh" content="0;url=https://evil.example/"><link rel="stylesheet" href="https://cdn.example/site.css"><style>.desktop{display:block}</style></head><body class="desktop-body" style="margin:3px;padding:4px"><main><div data-dla-geometry-id="desktop-wrapper-0" onclick="discard()"><section data-dla-geometry-id="desktop-target-0">Desktop<a href="javascript:discard()">Unsafe</a><form action="https://evil.example/"><button formaction="javascript:discard()">Send</button></form><iframe src="https://evil.example/"></iframe></section></div><script>discard()</script></main></body></html>'
+			'<html><head><base href="https://evil.example/"><meta http-equiv="refresh" content="0;url=https://evil.example/"><link rel="stylesheet" href="https://cdn.example/site.css"><style>.desktop{display:block}</style></head><body class="responsive desktop-body" style="margin:3px;padding:4px"><main><div data-dla-geometry-id="desktop-wrapper-0" onclick="discard()"><section data-dla-geometry-id="desktop-target-0">Desktop<a href="javascript:discard()">Unsafe</a><form action="https://evil.example/"><button formaction="javascript:discard()">Send</button></form><iframe src="https://evil.example/"></iframe></section></div><script>discard()</script></main></body></html>'
 		);
 		writeFileSync(
 			join( outputDir, 'html-mobile', 'homepage.html' ),
-			'<html><head><style>.mobile{display:block}</style></head><body class="mobile-body" style="margin:5px;padding:6px"><main><div data-dla-geometry-id="mobile-wrapper-0"><section data-dla-geometry-id="mobile-target-0">Mobile</section></div></main></body></html>'
+			'<html><head><style>.mobile{display:block}</style></head><body class="responsive mobile-body" style="margin:5px;padding:6px"><main><div data-dla-geometry-id="mobile-wrapper-0"><section data-dla-geometry-id="mobile-target-0">Mobile</section></div></main></body></html>'
 		);
 		const observation = ( viewport: number, identity: string ) => ( {
 			wrapperIdentity: `${ identity }-wrapper-0`,
@@ -420,11 +420,12 @@ describe( 'exportWebsiteCapture', () => {
 		expect( html ).not.toContain( 'http-equiv="refresh"' );
 		expect( html ).not.toContain( 'javascript:' );
 		expect( html ).not.toContain( 'action="https://evil.example/' );
+		expect( html ).toContain( '<body class="responsive">' );
 		expect( html ).toContain(
-			'class="data-liberation-desktop-document desktop-body" style="margin:3px;padding:4px"'
+			'class="data-liberation-desktop-document responsive desktop-body" style="margin:3px;padding:4px"'
 		);
 		expect( html ).toContain(
-			'class="data-liberation-mobile-document mobile-body" style="margin:5px;padding:6px"'
+			'class="data-liberation-mobile-document responsive mobile-body" style="margin:5px;padding:6px"'
 		);
 		expect( html ).toContain( 'href="/cdn/site.css"' );
 		expect( artifact.layout_geometry_proof.reductions ).toHaveLength( 2 );

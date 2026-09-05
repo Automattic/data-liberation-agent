@@ -546,6 +546,19 @@ function assembleResponsiveHtml(
 			style ? ` style="${ escapeHtmlAttr( style ) }"` : ''
 		}`;
 	};
+	const bodyClasses = ( bodyAttributes: string ): string[] =>
+		( cheerio.load( `<body${ bodyAttributes }></body>` )( 'body' ).attr( 'class' ) ?? '' )
+			.split( /\s+/ )
+			.filter( Boolean );
+	const mobileBodyClasses = new Set( bodyClasses( mobileBodyMatch?.[ 1 ] ?? '' ) );
+	const sharedBodyClasses = [ ...new Set( bodyClasses( desktopBodyMatch?.[ 1 ] ?? '' ) ) ].filter(
+		( className ) => mobileBodyClasses.has( className )
+	);
+	const outerBody = `<body${
+		sharedBodyClasses.length > 0
+			? ` class="${ escapeHtmlAttr( sharedBodyClasses.join( ' ' ) ) }"`
+			: ''
+	}>`;
 	const responsiveBody = `<div ${ wrapperAttributes(
 		'data-liberation-desktop-document',
 		desktopBodyMatch?.[ 1 ] ?? ''
@@ -565,7 +578,7 @@ function assembleResponsiveHtml(
 			)
 			.replace(
 				/<body\b[^>]*>[\s\S]*?(<\/body\s*>)/i,
-				( _match, closingBody: string ) => `<body>${ responsiveBody }${ closingBody }`
+				( _match, closingBody: string ) => `${ outerBody }${ responsiveBody }${ closingBody }`
 			);
 	}
 	const mobileStyles = responsiveMobileStyles(
@@ -580,7 +593,7 @@ function assembleResponsiveHtml(
 		)
 		.replace(
 			/<body\b[^>]*>[\s\S]*?(<\/body\s*>)/i,
-			( _match, closingBody: string ) => `<body>${ responsiveBody }${ closingBody }`
+			( _match, closingBody: string ) => `${ outerBody }${ responsiveBody }${ closingBody }`
 		);
 }
 
