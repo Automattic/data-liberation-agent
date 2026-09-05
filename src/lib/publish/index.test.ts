@@ -25,8 +25,9 @@ afterEach( () => unregisterPublishTarget( 'acme' ) );
 describe( 'publish target registry', () => {
 	it( 'registers the built-in through the public API', () => {
 		// The built-in must not be privileged: it appears because it registered.
-		expect( publishTargetNames() ).toContain( 'spacefast' );
+		expect( publishTargetNames() ).toEqual( [ 'spacefast', 'wpcom' ] );
 		expect( findPublishTarget( 'spacefast' )?.name ).toBe( 'spacefast' );
+		expect( findPublishTarget( 'wpcom' )?.name ).toBe( 'wpcom' );
 	} );
 
 	it( 'accepts a target from outside this package', async () => {

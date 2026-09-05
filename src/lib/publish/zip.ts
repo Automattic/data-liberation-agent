@@ -10,11 +10,36 @@
 // directory entries. A liberated site is a flat set of file paths.
 //
 import { deflateRawSync } from 'node:zlib';
+import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { join, relative, sep } from 'node:path';
 
 export interface ZipEntry {
 	/** Archive-relative POSIX path. */
 	path: string;
 	contents: Buffer;
+}
+
+/** Collect every file under root as archive entries with POSIX-relative paths. */
+export function collectDirectoryEntries( root: string ): ZipEntry[] {
+	const entries: ZipEntry[] = [];
+	const walk = ( directory: string ): void => {
+		for ( const item of readdirSync( directory, { withFileTypes: true } ).sort( ( a, b ) =>
+			a.name.localeCompare( b.name )
+		) ) {
+			const absolute = join( directory, item.name );
+			if ( item.isDirectory() || ( item.isSymbolicLink() && statSync( absolute ).isDirectory() ) ) {
+				walk( absolute );
+				continue;
+			}
+			if ( ! item.isFile() && ! item.isSymbolicLink() ) continue;
+			entries.push( {
+				path: relative( root, absolute ).split( sep ).join( '/' ),
+				contents: readFileSync( absolute ),
+			} );
+		}
+	};
+	walk( root );
+	return entries;
 }
 
 const STORED = 0;

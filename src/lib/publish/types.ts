@@ -9,6 +9,12 @@ export interface PublishOptions {
 	directory: string;
 	/** Credential for an owned publish. Anonymous when omitted. */
 	token?: string | undefined;
+	/** Provider-specific destination identifier, such as a WordPress.com site. */
+	destination?: string | undefined;
+	/** Approve a target's reviewed deployment plan when one is required. */
+	approve?: boolean | undefined;
+	/** Resume a target-specific publish session instead of creating another. */
+	session?: string | undefined;
 	log?: ( ( message: string ) => void ) | undefined;
 }
 

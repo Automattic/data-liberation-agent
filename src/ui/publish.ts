@@ -17,6 +17,9 @@ export interface PublishCliOptions {
 	directory: string;
 	target: string;
 	token?: string | undefined;
+	destination?: string | undefined;
+	approve?: boolean | undefined;
+	session?: string | undefined;
 	log?: ( ( message: string ) => void ) | undefined;
 }
 
@@ -50,6 +53,9 @@ export async function publishSite( options: PublishCliOptions ): Promise< Publis
 	return target.publish( {
 		directory: resolvePublishDirectory( options.directory ),
 		token: options.token,
+		destination: options.destination,
+		approve: options.approve,
+		session: options.session,
 		log: options.log,
 	} );
 }
