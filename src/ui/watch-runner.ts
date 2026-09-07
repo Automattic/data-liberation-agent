@@ -1420,6 +1420,56 @@ function sha256Hex(text: string): string {
   return createHash('sha256').update(text).digest('hex');
 }
 
+/**
+ * Seed `mediaUrlMap` from the persisted media stubs. Called before any rewrite,
+ * on every flush, because the run-wide accumulator (populated incrementally in
+ * the per-URL extraction loop) can miss entries in two cases that bit us in
+ * production:
+ *   (1) URLs whose adapter.extract returned no new items (resume case,
+ *       extraction-log dedupe) — installMediaForUrl was gated on
+ *       `newItems.length > 0` so the call never ran for those URLs.
+ *   (2) Already-installed stubs that installMediaForUrl previously skipped
+ *       — they never appeared in `result.installed` so the run-wide map
+ *       lost their mapping after a crash + resume.
+ * Reading the persisted stubs makes both paths self-healing: the source of
+ * truth is what's actually on disk + registered in WP, not an in-memory
+ * accumulator that may have missed entries.
+ *
+ * Stubs whose recorded install does not hold for THIS site are skipped
+ * (`stubInstalledInSite`). media-stubs.json lives in the extraction output dir
+ * and survives a change of — or a rebuild of — the target site; a stub whose
+ * uploads file isn't on this site names a path that 404s, and seeding it would
+ * rewrite page markup to a dead image. Those are left out so the normal install
+ * path can re-create them.
+ */
+export async function refreshMediaUrlMapFromStubs(
+  outDir: string,
+  studioSitePath: string,
+  mediaUrlMap: Map<string, string>,
+): Promise<void> {
+  try {
+    const { MediaStubStore, stubInstalledInSite } = await import('../lib/resume-state/index.js');
+    const wpRoot = studioWpRoot(studioSitePath);
+    const stubs = MediaStubStore.load(outDir);
+    let added = 0;
+    for (const [sourceUrl, stub] of stubs.list()) {
+      if (stub.localUrl && stubInstalledInSite(stub, wpRoot) && !mediaUrlMap.has(sourceUrl)) {
+        mediaUrlMap.set(sourceUrl, stub.localUrl);
+        added += 1;
+      }
+    }
+    if (added > 0) {
+      appendWatchLog(outDir, {
+        event: 'media-url-map-refreshed',
+        addedFromStubs: added,
+        totalSize: mediaUrlMap.size,
+      });
+    }
+  } catch (err) {
+    appendWatchLog(outDir, { event: 'media-url-map-refresh-failed', error: (err as Error).message });
+  }
+}
+
 async function flushPendingImports(opts: {
   buffer: PendingImportsBuffer;
   outDir: string;
@@ -1458,38 +1508,7 @@ async function flushPendingImports(opts: {
   const foundationReady = existsSync(join(outDir, 'design-foundation.json'));
   const pending = buffer.listPending();
 
-  // Refresh mediaUrlMap from MediaStubStore before any rewrites. The run-wide
-  // accumulator (populated incrementally in the per-URL extraction loop) can
-  // miss entries in two cases that bit us in production:
-  //   (1) URLs whose adapter.extract returned no new items (resume case,
-  //       extraction-log dedupe) — installMediaForUrl was gated on
-  //       `newItems.length > 0` so the call never ran for those URLs.
-  //   (2) Already-installed stubs that installMediaForUrl previously skipped
-  //       — they never appeared in `result.installed` so the run-wide map
-  //       lost their mapping after a crash + resume.
-  // Reading the persisted stubs every flush makes both paths self-healing:
-  // the source-of-truth is what's actually on disk + registered in WP, not
-  // an in-memory accumulator that may have missed entries.
-  try {
-    const { MediaStubStore } = await import('../lib/resume-state/index.js');
-    const stubs = MediaStubStore.load(outDir);
-    let added = 0;
-    for (const [sourceUrl, stub] of stubs.list()) {
-      if (stub.localUrl && !mediaUrlMap.has(sourceUrl)) {
-        mediaUrlMap.set(sourceUrl, stub.localUrl);
-        added += 1;
-      }
-    }
-    if (added > 0) {
-      appendWatchLog(outDir, {
-        event: 'media-url-map-refreshed',
-        addedFromStubs: added,
-        totalSize: mediaUrlMap.size,
-      });
-    }
-  } catch (err) {
-    appendWatchLog(outDir, { event: 'media-url-map-refresh-failed', error: (err as Error).message });
-  }
+  await refreshMediaUrlMapFromStubs(outDir, studioSitePath, mediaUrlMap);
 
   // Hold everything when an agent is configured but the foundation hasn't
   // been generated yet. The whole point of the buffer is to install with

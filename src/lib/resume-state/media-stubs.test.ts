@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { MediaStubStore, toRootRelativeUploadUrl } from './media-stubs.js';
+import { MediaStubStore, stubInstalledInSite, toRootRelativeUploadUrl } from './media-stubs.js';
 
 // cwd-local tmp dir per CLAUDE.md guidance (no os.tmpdir, no output/ reads).
 const TMP_ROOT = join(process.cwd(), '.tmp-test', 'media-stubs');
@@ -40,6 +40,31 @@ describe('toRootRelativeUploadUrl', () => {
 
   it('is a no-op on empty input', () => {
     expect(toRootRelativeUploadUrl('')).toBe('');
+  });
+});
+
+describe('stubInstalledInSite', () => {
+  const base = { status: 'success' as const, attempts: 1, updatedAt: '2026-01-01T00:00:00.000Z' };
+
+  it('rejects a localUrl that traverses out of the site root', () => {
+    // localUrl comes back from install-media.php and is persisted verbatim;
+    // a value with `..` segments must not let an existence check be satisfied
+    // by a file outside the site being installed into.
+    const dir = setup('stub-in-site-traversal');
+    const wpRoot = join(dir, 'site');
+    mkdirSync(wpRoot, { recursive: true });
+    writeFileSync(join(dir, 'outside.jpg'), 'fake', 'utf8');
+
+    expect(
+      stubInstalledInSite(
+        { ...base, wpPostId: 1, wpRoot, localUrl: '/wp-content/uploads/../../../outside.jpg' },
+        wpRoot,
+      ),
+    ).toBe(false);
+  });
+
+  it('is false when no target site is known', () => {
+    expect(stubInstalledInSite({ ...base, wpPostId: 1, wpRoot: '/a' }, null)).toBe(false);
   });
 });
 

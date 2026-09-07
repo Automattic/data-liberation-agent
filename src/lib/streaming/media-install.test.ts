@@ -49,7 +49,7 @@ function setup(opts: SetupOpts) {
       }
       store.markSuccess(s.url, filePath, extra);
       if (s.alreadyInstalled !== undefined) {
-        store.recordWpPostId(s.url, s.alreadyInstalled);
+        store.recordWpPostId(s.url, s.alreadyInstalled, wpRoot);
       }
     } else if (status === 'error') {
       store.markFailure(s.url, 'test-error');
@@ -247,10 +247,14 @@ describe('installMediaForUrl', () => {
     mkdirSync(join(outputDir, 'media'), { recursive: true });
     const filePath = join(outputDir, 'media', 'a.jpg');
     writeFileSync(filePath, Buffer.from('fake'));
+    // The prior install left the file in this site's uploads — the shortcut is
+    // only honored when the localUrl it would surface actually resolves here.
+    mkdirSync(join(wpRoot, 'wp-content', 'uploads', '2024', '01'), { recursive: true });
+    writeFileSync(join(wpRoot, 'wp-content', 'uploads', '2024', '01', 'a.jpg'), Buffer.from('fake'));
 
     const store = MediaStubStore.load(outputDir);
     store.markSuccess('https://cdn/a.jpg', filePath);
-    store.recordWpPostId('https://cdn/a.jpg', 42);
+    store.recordWpPostId('https://cdn/a.jpg', 42, wpRoot);
     store.recordLocalUrl('https://cdn/a.jpg', 'http://localhost:8882/wp-content/uploads/2024/01/a.jpg');
     store.flush();
 

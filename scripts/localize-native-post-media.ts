@@ -21,7 +21,8 @@
 //
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { MediaStubStore } from '../src/lib/resume-state/index.js';
+import { MediaStubStore, stubInstalledInSite } from '../src/lib/resume-state/index.js';
+import { studioWpRoot } from '../src/lib/preview/studio-site.js';
 import { studioExecFileSync } from '../src/lib/studio-cli.js';
 
 const [outputDir, studioSitePath] = process.argv.slice(2);
@@ -34,19 +35,27 @@ if (!outputDir || !studioSitePath) {
 //    `localUrl` (e.g. http://localhost:8884/wp-content/uploads/2026/06/x.jpg) on each
 //    installed stub. Sort longest-source-first so a base URL can't mangle a longer
 //    variant (mirrors rewriteMediaUrls' ordering).
+//    Only stubs whose recorded install holds for THIS site are used: media-stubs.json
+//    lives in the extraction output dir and survives a change of (or a rebuild of) the
+//    target site, and this rewrites LIVE post_content — seeding a stale localUrl would
+//    replace a working CDN URL with a 404.
 const store = MediaStubStore.load(resolve(outputDir));
+const wpRoot = studioWpRoot(studioSitePath);
 const pairs: Array<[string, string]> = [];
 let successNoUrl = 0;
+let otherSite = 0;
 for (const [url, stub] of store.list()) {
   if (stub.status !== 'success') continue;
-  if (stub.localUrl) pairs.push([url, stub.localUrl]);
-  else successNoUrl++;
+  if (!stub.localUrl) successNoUrl++;
+  else if (!stubInstalledInSite(stub, wpRoot)) otherSite++;
+  else pairs.push([url, stub.localUrl]);
 }
 pairs.sort((a, b) => b[0].length - a[0].length);
 console.log(`media-stubs: ${pairs.length} source→local entries` +
-  (successNoUrl ? ` (${successNoUrl} success stubs have no localUrl — run the carry reconstruct/media-install first)` : ''));
+  (successNoUrl ? ` (${successNoUrl} success stubs have no localUrl — run the carry reconstruct/media-install first)` : '') +
+  (otherSite ? ` (${otherSite} skipped: recorded against a different/rebuilt site — re-run the media install for THIS site)` : ''));
 if (pairs.length === 0) {
-  console.error('No localUrl entries — the media install (carry reconstruct step 3) has not run for this site. Aborting.');
+  console.error('No usable localUrl entries — the media install (carry reconstruct step 3) has not run for this site. Aborting.');
   process.exit(1);
 }
 
