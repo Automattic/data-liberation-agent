@@ -4,6 +4,7 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { shopifyAdapter } from '../../src/adapters/shopify/index.js';
 import { WxrBuilder } from '../../src/lib/wxr/index.js';
+import { detectFromUrl } from '../../src/lib/detect-platform/index.js';
 
 describe('shopifyAdapter', () => {
   it('has id "shopify"', () => {
@@ -11,20 +12,20 @@ describe('shopifyAdapter', () => {
   });
 
   it('detects myshopify.com URLs', () => {
-    expect(shopifyAdapter.detect('https://mystore.myshopify.com')).toBe(true);
-    expect(shopifyAdapter.detect('https://mystore.myshopify.com/blogs/news')).toBe(true);
+    expect(detectFromUrl('https://mystore.myshopify.com')).toBe('shopify');
+    expect(detectFromUrl('https://mystore.myshopify.com/blogs/news')).toBe('shopify');
   });
 
   it('detects shopify.com URLs', () => {
-    expect(shopifyAdapter.detect('https://shopify.com')).toBe(true);
-    expect(shopifyAdapter.detect('https://www.shopify.com/something')).toBe(true);
+    expect(detectFromUrl('https://shopify.com')).toBe('shopify');
+    expect(detectFromUrl('https://www.shopify.com/something')).toBe('shopify');
   });
 
   it('does not detect non-Shopify URLs', () => {
-    expect(shopifyAdapter.detect('https://www.example.com')).toBe(false);
-    expect(shopifyAdapter.detect('https://mysite.squarespace.com')).toBe(false);
-    expect(shopifyAdapter.detect('https://mysite.wixsite.com/blog')).toBe(false);
-    expect(shopifyAdapter.detect('https://mysite.webflow.io')).toBe(false);
+    expect(detectFromUrl('https://www.example.com')).toBeNull();
+    expect(detectFromUrl('https://mysite.squarespace.com')).toBe('squarespace');
+    expect(detectFromUrl('https://mysite.wixsite.com/blog')).toBe('wix');
+    expect(detectFromUrl('https://mysite.webflow.io')).toBe('webflow');
   });
 
   it('has discover method', () => {

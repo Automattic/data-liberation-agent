@@ -34,8 +34,8 @@ export const screenshotHandler: Handler = async (args, ctx) => {
       force: args.force as boolean | undefined,
       verbose: args.verbose as boolean | undefined,
       captureImages: true,
-      removeSelectors: adapter?.capture?.removeSelectors,
-      prepareCapture: adapter?.capture?.prepare,
+      removeSelectors: adapter?.liberation?.removeSelectors,
+      prepareCapture: adapter?.liberation?.prepare,
       server: ctx.server,
     });
     return ctx.textResult(result);

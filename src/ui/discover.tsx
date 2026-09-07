@@ -8,16 +8,8 @@ import { detect, type FullDetectionResult } from '../lib/detect-platform/index.j
 import { fetchSitemap, classifyUrl } from '../lib/extraction/sitemap.js';
 import { WxrBuilder } from '../lib/wxr/index.js';
 import { ExtractionLog } from '../lib/resume-state/index.js';
-import { godaddyWmAdapter } from '../adapters/godaddy-wm/index.js';
-import { hostingerAdapter } from '../adapters/hostinger/index.js';
-import { hubspotAdapter } from '../adapters/hubspot/index.js';
-import { shopifyAdapter } from '../adapters/shopify/index.js';
-import { squarespaceAdapter } from '../adapters/squarespace/index.js';
-import { webflowAdapter } from '../adapters/webflow/index.js';
-import { weeblyAdapter } from '../adapters/weebly/index.js';
-import { wixAdapter, type Inventory } from '../adapters/wix/index.js';
-import { defaultAdapter } from '../adapters/default/index.js';
-import { resolveAdapter } from '../adapters/resolve-adapter.js';
+import { findAdapter } from '../adapters/index.js';
+import type { Inventory } from '../adapters/wix/index.js';
 import { mkdirSync, existsSync, writeFileSync, readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { autoPreview } from './preview.js';
@@ -73,12 +65,6 @@ interface ExtractionResult {
   wxrPath: string | null;
 }
 
-const adapters = [defaultAdapter, godaddyWmAdapter, hostingerAdapter, hubspotAdapter, shopifyAdapter, squarespaceAdapter, webflowAdapter, weeblyAdapter, wixAdapter];
-
-function findAdapter(platform: string) {
-  return resolveAdapter(adapters, platform);
-}
-
 
 function Liberate(props: LiberateProps & { onComplete?: (wxrPath: string | null) => void }) {
   const { url, outputDir, dryRun, resume, delay, verbose, token, cdpPort, adminToken, shopDomain, limit, screenshots, screenshotsConcurrency, onComplete } = props;
@@ -127,7 +113,7 @@ function Liberate(props: LiberateProps & { onComplete?: (wxrPath: string | null)
         setDetection(det);
 
         // Find adapter (falls back to the `default` adapter for unknown sites)
-        const adapter = resolveAdapter(adapters, det.platform);
+        const adapter = findAdapter(det.platform);
 
         if (!adapter) {
           // No adapter — fall back to sitemap-only discovery

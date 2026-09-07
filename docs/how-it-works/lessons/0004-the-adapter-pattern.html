@@ -78,11 +78,11 @@ that already resolved the adapter does the wiring. Types live in
   <thead><tr><th>Seam</th><th>Field</th><th>Fires where</th></tr></thead>
   <tbody>
     <tr>
-      <td><strong>Capture</strong></td>
-      <td><code>capture?: AdapterCapture</code></td>
-      <td>In <code>screenshotter.ts</code>, <em>before</em> screenshots/HTML/specs are
-      captured. <code>removeSelectors[]</code> strips platform chrome (e.g. Shopify's
-      <code>#upCart</code>) so one removal cleans every artifact. Best-effort.</td>
+      <td><strong>Liberation</strong></td>
+      <td><code>liberation?: LiberationHooks</code></td>
+      <td>Before portable HTML, screenshots, and source evidence are produced.
+      <code>removeSelectors[]</code> strips platform chrome (e.g. Shopify's
+      <code>#upCart</code>) so one policy cleans every artifact. Best-effort.</td>
     </tr>
     <tr>
       <td><strong>Blocks</strong></td>
