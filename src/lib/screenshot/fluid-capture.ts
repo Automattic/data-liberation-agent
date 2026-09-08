@@ -188,7 +188,11 @@ export async function learnAndApplyFluidGeometry(
 			);
 			if ( viewportOnly.kind !== 'breakpoint' ) fallbackCss = viewportOnly.css;
 		}
-		learned.push( { id, property, css: model.css, fallbackCss } );
+		// A captured runtime can give a parent a definite height that disappears
+		// when its scripts are removed. A viewport fit keeps a learned height
+		// definite in the static document instead of collapsing to 0px.
+		const css = property === 'height' && fallbackCss !== null ? fallbackCss : model.css;
+		learned.push( { id, property, css, fallbackCss } );
 	}
 
 	// Restore the capture viewport BEFORE writing the learned CSS. Returning to
