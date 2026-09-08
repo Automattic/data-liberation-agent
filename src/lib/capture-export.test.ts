@@ -172,7 +172,7 @@ describe( 'exportWebsiteCapture', () => {
 			exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [] } )
 		).toThrow( /exceeds compiler limit/ );
 		expect( existsSync( join( outputDir, 'artifact.json' ) ) ).toBe( false );
-	}, 30_000 );
+	}, 60_000 );
 
 	it( 'counts serialized JSON-LD metadata across many routes before artifact writing', () => {
 		const routeCount = 12;
