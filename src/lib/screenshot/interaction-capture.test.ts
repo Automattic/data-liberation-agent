@@ -187,27 +187,23 @@ describe( 'captureTriggeredDialogs', () => {
 				expect( await page.evaluate( () => document.activeElement?.tagName ) ).toBe( 'SUMMARY' );
 
 				await page.locator( 'input' ).focus();
-				const escaped = page.evaluate( () =>
-					new Promise<boolean>( ( resolve ) => {
-						document.addEventListener( 'keydown', ( event ) => resolve( event.defaultPrevented ), {
-							once: true,
-						} );
-					} )
-				);
+				await page.evaluate( () => {
+					document.addEventListener( 'keydown', ( event ) => {
+						document.body.dataset.escapePrevented = String( event.defaultPrevented );
+					}, { once: true } );
+				} );
 				await page.keyboard.press( 'Escape' );
-				expect( await escaped ).toBe( false );
+				expect( await page.locator( 'body' ).getAttribute( 'data-escape-prevented' ) ).toBe( 'false' );
 
 				await page.setContent( '<!doctype html><input aria-label="Normal page input">' );
-				const normalEscape = page.evaluate( () =>
-					new Promise<boolean>( ( resolve ) => {
-						document.addEventListener( 'keydown', ( event ) => resolve( event.defaultPrevented ), {
-							once: true,
-						} );
-					} )
-				);
+				await page.evaluate( () => {
+					document.addEventListener( 'keydown', ( event ) => {
+						document.body.dataset.escapePrevented = String( event.defaultPrevented );
+					}, { once: true } );
+				} );
 				await page.getByRole( 'textbox', { name: 'Normal page input' } ).focus();
 				await page.keyboard.press( 'Escape' );
-				expect( await normalEscape ).toBe( false );
+				expect( await page.locator( 'body' ).getAttribute( 'data-escape-prevented' ) ).toBe( 'false' );
 			} finally {
 				await browser.close();
 			}
