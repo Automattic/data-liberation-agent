@@ -25,6 +25,7 @@ import {
 import { selfContainWebsite } from './self-contain.js';
 import { wireCapturedDialogs } from './static-dialogs.js';
 import { rewriteMediaUrls } from './streaming/media-url-rewrite.js';
+import { capturedJsonLd, SOURCE_JSON_LD_SCHEMA, type SourceJsonLdDocument } from './json-ld-metadata.js';
 import {
 	INTERACTION_STATES_SCHEMA,
 	LEGACY_INTERACTION_STATES_SCHEMA,
@@ -105,6 +106,7 @@ interface CaptureEntry {
 	identityHtmlPath?: string;
 	sections?: string;
 	canonicalUrl?: string;
+	jsonLd?: SourceJsonLdDocument[];
 	interactions?: InteractionStatesReport;
 	styleHoistContext: StyleHoistContext;
 }
@@ -185,6 +187,23 @@ const HUBSPOT_FORM_HOSTS = new Map( [
 	[ 'na1', 'js.hsforms.net' ],
 	[ 'eu1', 'js-eu1.hsforms.net' ],
 ] );
+
+function sourceJsonLdMetadata(
+	documents: SourceJsonLdDocument[] | undefined
+): Record< string, unknown > | undefined {
+	if ( ! documents ) return undefined;
+	return {
+		json_ld: {
+			schema: SOURCE_JSON_LD_SCHEMA,
+			documents,
+		},
+	};
+}
+
+function serializedArtifactMetadataBytes( metadata: Record< string, unknown > | undefined ): number {
+	// This is the exact fragment appended to an artifact file object, including its key and comma.
+	return metadata ? Buffer.byteLength( `,"metadata":${ JSON.stringify( metadata ) }` ) : 0;
+}
 
 function pathWithin( root: string, candidate: string ): boolean {
 	const rel = relative( resolve( root ), resolve( candidate ) );
@@ -1120,21 +1139,25 @@ function capturedResources( outputDir: string ): CapturedResourceManifest {
 function preflightArtifactContents(
 	websiteDir: string,
 	routes: Array< { path: string } >,
+	routeJsonLd: Map< string, SourceJsonLdDocument[] >,
 	assets: Array< { path: string } >,
 	outputDir: string,
 	reportFiles: string[],
 	artifactTotalBytesLimit: number
 ): void {
-	const files = [
-		...routes.map( ( route ) => join( websiteDir, route.path.replace( /^website\//, '' ) ) ),
-		...assets.map( ( asset ) => join( websiteDir, asset.path.replace( /^website\//, '' ) ) ),
-		...reportFiles.map( ( report ) => join( outputDir, report ) ),
+	const files: Array< { path: string; metadata?: Record< string, unknown > } > = [
+		...routes.map( ( route ) => ( {
+			path: join( websiteDir, route.path.replace( /^website\//, '' ) ),
+			metadata: sourceJsonLdMetadata( routeJsonLd.get( route.path ) ),
+		} ) ),
+		...assets.map( ( asset ) => ( { path: join( websiteDir, asset.path.replace( /^website\//, '' ) ) } ) ),
+		...reportFiles.map( ( report ) => ( { path: join( outputDir, report ) } ) ),
 	];
 	let bytes = 0;
-	for ( const path of files ) {
-		const size = statSync( path ).size;
+	for ( const file of files ) {
+		const size = statSync( file.path ).size + serializedArtifactMetadataBytes( file.metadata );
 		if ( size > MAX_ARTIFACT_FILE_BYTES )
-			throw new Error( `Portable capture file "${ path }" exceeds compiler limit: ${ size } bytes.` );
+			throw new Error( `Portable capture file "${ file.path }" exceeds compiler limit: ${ size } bytes.` );
 		bytes += size;
 	}
 	if ( files.length > MAX_ARTIFACT_FILES || bytes > artifactTotalBytesLimit )
@@ -1546,6 +1569,11 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 			hasMobileDocument: mobileHtml !== undefined && documentsDiffer( desktopHtml, mobileHtml ),
 			sections: entry.sections,
 			canonicalUrl: entry.metadata?.openGraph?.[ 'og:url' ] ?? openGraphUrl( html ),
+			// JSON-LD scripts are intentionally excluded from portable HTML, so retain their parsed data separately.
+			jsonLd: (() => {
+				const document = capturedJsonLd( capturedHtml, url );
+				return document ? [ document ] : undefined;
+			} )(),
 			interactions: entry.interactions,
 			styleHoistContext,
 		} );
@@ -1596,6 +1624,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		if ( ! declaresCanonicalRoute( entry, claimed ) ) {
 			throw new Error( `Captured routes resolve to the same website path: ${ routePath }` );
 		}
+		if ( entry.jsonLd ) claimed.jsonLd = [ ...( claimed.jsonLd ?? [] ), ...entry.jsonLd ];
 		duplicateRoutes.push( {
 			url: entry.url,
 			canonicalUrl: claimed.url,
@@ -1688,7 +1717,10 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 	const resourceManifest = capturedResources( outputDir );
 	const potentialHoistedStyles = estimatedHoistedStyleArtifacts( retainedEntries );
 	const retainedRouteBytes = retainedEntries.reduce(
-		( total, entry ) => total + statSync( entry.htmlPath ).size,
+		( total, entry ) =>
+			total +
+			statSync( entry.htmlPath ).size +
+			serializedArtifactMetadataBytes( sourceJsonLdMetadata( entry.jsonLd ) ),
 		0
 	);
 	const desktopSectionsForReports = SectionSpecsStore.load( outputDir );
@@ -2020,8 +2052,9 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 	}
 
 	const routes: Array< { url: string; path: string } > = [];
+	const routeJsonLd = new Map< string, SourceJsonLdDocument[] >();
 	const portableRouteLinks = new Map< string, string >();
-	for ( const { url } of retainedEntries ) {
+	for ( const { url, jsonLd } of retainedEntries ) {
 		const routePath = routeOutputPath( url, options.sourceUrl, entrypointUrl ).replace(
 			/\\/g,
 			'/'
@@ -2029,6 +2062,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		const portablePath = `/${ routePath }`;
 		portableRouteLinks.set( normalizedUrl( url ), portablePath );
 		routes.push( { url, path: `website/${ routePath }` } );
+		if ( jsonLd ) routeJsonLd.set( `website/${ routePath }`, jsonLd );
 	}
 	for ( const [ aliasKey, routePath ] of canonicalRouteAliases ) {
 		if ( portableRouteLinks.has( aliasKey ) ) continue;
@@ -2070,10 +2104,14 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 			resourceReplacements,
 			rejectedReplacementKeys
 		);
-		const normalizedHtml = wireCapturedDialogs(
-			withoutGeometryIdentities( identityHtml ),
-			entry.interactions?.states ?? [],
-			entry.interactions?.initialDialogs ?? []
+		const normalizedHtml = rewriteCapturedRouteLinks(
+			wireCapturedDialogs(
+				withoutGeometryIdentities( identityHtml ),
+				entry.interactions?.states ?? [],
+				entry.interactions?.initialDialogs ?? []
+			),
+			url,
+			portableRouteLinks
 		);
 		unresolvedAnchors.push( ...unresolvedCapturedAnchors( normalizedHtml, url ) );
 		writeFileSync( destination, normalizedHtml );
@@ -2293,6 +2331,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 	preflightArtifactContents(
 		websiteDir,
 		routes,
+		routeJsonLd,
 		assets,
 		outputDir,
 		reportFiles,
@@ -2335,7 +2374,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		let firstFile = true;
 		let artifactFileCount = 0;
 		let artifactContentBytes = 0;
-		const writeArtifactFile = ( file: Record< string, string >, contentBytes: number ) => {
+		const writeArtifactFile = ( file: Record< string, unknown >, contentBytes: number ) => {
 			if ( contentBytes > MAX_ARTIFACT_FILE_BYTES ) {
 				throw new Error(
 					`Portable capture file "${ file.path }" exceeds compiler limit: ${ contentBytes } bytes.`
@@ -2360,13 +2399,15 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		for ( const route of orderedRoutes ) {
 			const relativePath = route.path.replace( /^website\//, '' );
 			const content = readFileSync( join( websiteDir, relativePath ), 'utf8' );
+			const metadata = sourceJsonLdMetadata( routeJsonLd.get( route.path ) );
 			writeArtifactFile(
 				{
 					path: route.path,
 					content,
 					encoding: 'utf8',
+					...( metadata ? { metadata } : {} ),
 				},
-				Buffer.byteLength( content )
+				Buffer.byteLength( content ) + serializedArtifactMetadataBytes( metadata )
 			);
 		}
 		for ( const asset of assets ) {

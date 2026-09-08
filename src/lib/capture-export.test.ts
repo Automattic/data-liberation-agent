@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import * as cheerio from 'cheerio';
 import { chromium } from 'playwright';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -22,7 +23,199 @@ afterEach( () => {
 	for ( const dir of dirs.splice( 0 ) ) rmSync( dir, { recursive: true, force: true } );
 } );
 
+function writeJsonLdCapture( outputDir: string, routeCount: number, pageTextBytes = 0 ): void {
+	mkdirSync( join( outputDir, 'html' ), { recursive: true } );
+	mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
+	const entries: Record< string, { html: string } > = {};
+	const jsonLd = JSON.stringify( { evidence: 'm'.repeat( 63 * 1024 ) } );
+	const jsonLdScripts = Array.from(
+		{ length: 4 },
+		() => `<script type="application/ld+json">${ jsonLd }</script>`
+	).join( '' );
+	for ( let index = 0; index < routeCount; index++ ) {
+		const slug = index === 0 ? 'homepage' : `page-${ index }`;
+		const url = index === 0 ? 'https://example.com/' : `https://example.com/page-${ index }`;
+		writeFileSync(
+			join( outputDir, 'html', `${ slug }.html` ),
+			`<main>${ 'x'.repeat( pageTextBytes ) }</main>${ jsonLdScripts }`
+		);
+		entries[ url ] = { html: `html/${ slug }.html` };
+	}
+	writeFileSync(
+		join( outputDir, 'screenshots', 'manifest.json' ),
+		JSON.stringify( { version: 1, entries } )
+	);
+}
+
+function artifactContentBytes( artifact: { files: Array< { content?: string; content_base64?: string } > } ): number {
+	return artifact.files.reduce(
+		( total, file ) =>
+			total +
+			( file.content_base64 === undefined
+				? Buffer.byteLength( file.content ?? '' )
+				: Buffer.from( file.content_base64, 'base64' ).length ),
+		0
+	);
+}
+
 describe( 'exportWebsiteCapture', () => {
+	it( 'preserves the 360 Chiropractic JSON-LD fixture as parsed source metadata', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-publication-export-' ) );
+		dirs.push( outputDir );
+		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
+		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
+		writeFileSync( join( outputDir, 'html', 'homepage.html' ), '<main><article>Ordinary article page</article></main>' );
+		writeFileSync(
+			join( outputDir, 'html', 'publication.html' ),
+			readFileSync( fileURLToPath( new URL( '../../test/fixtures/360chiro-publication-metadata.html', import.meta.url ) ), 'utf8' )
+		);
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( {
+				version: 1,
+				entries: {
+					'https://www.360chiro.co.uk/': { slug: 'homepage', html: 'html/homepage.html' },
+					'https://www.360chiro.co.uk/post/can-chiropractic-help-with-back-pain-360-chiro-clinic-sheffield': { slug: 'publication', html: 'html/publication.html' },
+				},
+			} )
+		);
+
+		exportWebsiteCapture( {
+			outputDir,
+			sourceUrl: 'https://www.360chiro.co.uk/',
+			platform: 'generic',
+			summary: {},
+			failures: [],
+		} );
+
+		const artifact = JSON.parse( readFileSync( join( outputDir, 'artifact.json' ), 'utf8' ) );
+		const publication = artifact.files.find(
+			( file: { path: string } ) =>
+				file.path ===
+				'website/post/can-chiropractic-help-with-back-pain-360-chiro-clinic-sheffield/index.html'
+		);
+		expect( publication.metadata.json_ld ).toEqual( {
+			schema: 'data-liberation/source-json-ld/v1',
+			documents: [ {
+				source_url: 'https://www.360chiro.co.uk/post/can-chiropractic-help-with-back-pain-360-chiro-clinic-sheffield',
+				aliases: {
+					canonical: 'https://www.360chiro.co.uk/post/can-chiropractic-help-with-back-pain-360-chiro-clinic-sheffield',
+					open_graph: 'https://www.360chiro.co.uk/post/can-chiropractic-help-with-back-pain-360-chiro-clinic-sheffield',
+				},
+				objects: [ {
+					'@context': 'https://schema.org', '@type': 'BlogPosting', datePublished: '2026-08-24T12:49:28.000Z', mainEntityOfPage: { '@id': 'https://www.360chiro.co.uk/post/can-chiropractic-help-with-back-pain-360-chiro-clinic-sheffield', url: 'https://www.360chiro.co.uk/post/can-chiropractic-help-with-back-pain-360-chiro-clinic-sheffield' }, url: 'https://www.360chiro.co.uk/post/can-chiropractic-help-with-back-pain-360-chiro-clinic-sheffield',
+				} ],
+				diagnostics: [],
+			} ],
+		} );
+		expect( JSON.stringify( publication.metadata ) ).not.toContain( 'post_type' );
+		expect( publication.content ).not.toContain( 'application/ld+json' );
+	} );
+
+	it( 'merges JSON-LD provenance from a discarded canonical alias', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-publication-alias-export-' ) );
+		dirs.push( outputDir );
+		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
+		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
+		writeFileSync( join( outputDir, 'html', 'homepage.html' ), '<main>Home</main>' );
+		writeFileSync(
+			join( outputDir, 'html', 'canonical.html' ),
+			'<main><article>Article-shaped canonical page</article></main>'
+		);
+		writeFileSync(
+			join( outputDir, 'html', 'alias.html' ),
+			'<link rel="canonical" href="https://example.com/post/identity"><meta property="og:url" content="https://example.com/post/identity"><script type="application/ld+json">{"@context":{"schema":"https://schema.org/"},"@graph":[{"@id":"#thing","@type":["Thing","CreativeWork"],"relatedTo":{"@id":"#other"}}]}</script><main>Alias</main>'
+		);
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( {
+				version: 1,
+				entries: {
+					'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' },
+					'https://example.com/post/identity': { slug: 'canonical', html: 'html/canonical.html' },
+					'https://example.com/post/identity/': { slug: 'alias', html: 'html/alias.html' },
+				},
+			} )
+		);
+
+		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [] } );
+
+		const artifact = JSON.parse( readFileSync( join( outputDir, 'artifact.json' ), 'utf8' ) );
+		const canonical = artifact.files.find(
+			( file: { path: string } ) => file.path === 'website/post/identity/index.html'
+		);
+		expect( canonical.metadata.json_ld.documents ).toHaveLength( 1 );
+		expect( canonical.metadata.json_ld.documents[ 0 ] ).toMatchObject( {
+			source_url: 'https://example.com/post/identity/',
+			aliases: { canonical: 'https://example.com/post/identity', open_graph: 'https://example.com/post/identity' },
+			objects: [ { '@context': { schema: 'https://schema.org/' }, '@graph': [ { '@id': '#thing', '@type': [ 'Thing', 'CreativeWork' ], relatedTo: { '@id': '#other' } } ] } ],
+		} );
+	} );
+
+	it( 'counts serialized JSON-LD metadata at the artifact file boundary', () => {
+		const calibrationDir = mkdtempSync( join( tmpdir(), 'dla-json-ld-file-calibration-' ) );
+		dirs.push( calibrationDir );
+		writeJsonLdCapture( calibrationDir, 1, 9 * 1024 * 1024 );
+		exportWebsiteCapture( { outputDir: calibrationDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [] } );
+		const calibratedFile = JSON.parse( readFileSync( join( calibrationDir, 'artifact.json' ), 'utf8' ) ).files.find(
+			( file: { path: string } ) => file.path === 'website/index.html'
+		);
+		const metadataBytes = Buffer.byteLength( `,"metadata":${ JSON.stringify( calibratedFile.metadata ) }` );
+		const targetContentBytes = 10 * 1024 * 1024 - metadataBytes + 1;
+		const pageTextBytes = 9 * 1024 * 1024 + targetContentBytes - Buffer.byteLength( calibratedFile.content );
+
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-json-ld-file-boundary-' ) );
+		dirs.push( outputDir );
+		writeJsonLdCapture( outputDir, 1, pageTextBytes );
+
+		expect( () =>
+			exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [] } )
+		).toThrow( /exceeds compiler limit/ );
+		expect( existsSync( join( outputDir, 'artifact.json' ) ) ).toBe( false );
+	}, 60_000 );
+
+	it( 'counts serialized JSON-LD metadata across many routes before artifact writing', () => {
+		const routeCount = 12;
+		const baselineDir = mkdtempSync( join( tmpdir(), 'dla-json-ld-total-baseline-' ) );
+		dirs.push( baselineDir );
+		writeJsonLdCapture( baselineDir, routeCount, 16 );
+		for ( let index = 0; index < routeCount; index++ ) {
+			const slug = index === 0 ? 'homepage' : `page-${ index }`;
+			writeFileSync( join( baselineDir, 'html', `${ slug }.html` ), '<main>xxxxxxxxxxxxxxxx</main>' );
+		}
+		exportWebsiteCapture( { outputDir: baselineDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [] } );
+		const baseline = JSON.parse( readFileSync( join( baselineDir, 'artifact.json' ), 'utf8' ) );
+
+		const metadataDir = mkdtempSync( join( tmpdir(), 'dla-json-ld-total-metadata-' ) );
+		dirs.push( metadataDir );
+		writeJsonLdCapture( metadataDir, routeCount, 16 );
+		exportWebsiteCapture( { outputDir: metadataDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [] } );
+		const withMetadata = JSON.parse( readFileSync( join( metadataDir, 'artifact.json' ), 'utf8' ) );
+		const metadataBytes = withMetadata.files.reduce(
+			( total: number, file: { metadata?: unknown } ) =>
+				total + ( file.metadata ? Buffer.byteLength( `,"metadata":${ JSON.stringify( file.metadata ) }` ) : 0 ),
+			0
+		);
+		expect( metadataBytes ).toBeGreaterThan( 2.5 * 1024 * 1024 );
+		const artifactTotalBytes = 1024 * 1024;
+		expect( artifactContentBytes( baseline ) ).toBeLessThanOrEqual( artifactTotalBytes );
+
+		const constrainedDir = mkdtempSync( join( tmpdir(), 'dla-json-ld-total-boundary-' ) );
+		dirs.push( constrainedDir );
+		writeJsonLdCapture( constrainedDir, routeCount, 16 );
+		expect( () =>
+			exportWebsiteCapture( {
+				outputDir: constrainedDir,
+				sourceUrl: 'https://example.com/',
+				platform: 'generic',
+				summary: {},
+				failures: [],
+				limits: { artifactTotalBytes },
+			} )
+		).toThrow( /before artifact writing/ );
+		expect( existsSync( join( constrainedDir, 'artifact.json' ) ) ).toBe( false );
+	} );
+
 	it( 'carries bounded responsive section evidence in the portable artifact', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-semantic-export-' ) );
 		dirs.push( outputDir );
@@ -665,7 +858,7 @@ describe( 'exportWebsiteCapture', () => {
 		expect( diagnostics.unresolvedDependencies ).toEqual( [] );
 	} );
 
-	it( 'exports captured routes and localized media as a website directory', () => {
+	it( 'exports captured routes and localized media as a website directory', async () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
@@ -674,7 +867,7 @@ describe( 'exportWebsiteCapture', () => {
 		mkdirSync( join( outputDir, 'media' ), { recursive: true } );
 		writeFileSync(
 			join( outputDir, 'html', 'homepage.html' ),
-			'<!doctype html><html><head><style>.desktop{color:blue}</style></head><body><a href="https://example.com/shop/about?from=home#team">About</a><a href="https://example.com/shop/missing">Missing</a><a href="https://external.example/about">External</a><img src="https://cdn.example/logo.png"><img src="https://cdn.example/logo-copy.png"><img src="https://cdn.example/avatar.png&amp;quot;"><img src="/hero.png?w=128" srcset="/hero.png?w=128 128w, /hero.png?w=4096 4096w"><picture><source media="(min-width: 751px)" srcset="https://cdn.example/responsive.png?w=1200"><img src="https://cdn.example/responsive.png?w=320"></picture><img src="https://static.wixstatic.com/media/hash~mv2.jpg/v1/fill/w_1034,h_1349,al_b,q_90/hash~mv2.jpg" srcset="https://static.wixstatic.com/media/hash~mv2.jpg/v1/fill/w_567,h_740,al_b,q_90,enc_avif,quality_auto/hash~mv2.jpg 1x, https://static.wixstatic.com/media/hash~mv2.jpg/v1/fill/w_1034,h_1349,al_b,q_90,enc_avif,quality_auto/hash~mv2.jpg 2x"><h1>Home</h1><p>$100.00</p><noscript><main>This site requires JavaScript</main></noscript></body></html>'
+			'<!doctype html><html><head><style>.desktop{color:blue}</style></head><body><button id="contact" aria-haspopup="dialog">Contact</button><a href="https://example.com/shop/about?from=home#team">About</a><a href="https://example.com/shop/missing">Missing</a><a href="https://external.example/about">External</a><img src="https://cdn.example/logo.png"><img src="https://cdn.example/logo-copy.png"><img src="https://cdn.example/avatar.png&amp;quot;"><img src="/hero.png?w=128" srcset="/hero.png?w=128 128w, /hero.png?w=4096 4096w"><picture><source media="(min-width: 751px)" srcset="https://cdn.example/responsive.png?w=1200"><img src="https://cdn.example/responsive.png?w=320"></picture><img src="https://static.wixstatic.com/media/hash~mv2.jpg/v1/fill/w_1034,h_1349,al_b,q_90/hash~mv2.jpg" srcset="https://static.wixstatic.com/media/hash~mv2.jpg/v1/fill/w_567,h_740,al_b,q_90,enc_avif,quality_auto/hash~mv2.jpg 1x, https://static.wixstatic.com/media/hash~mv2.jpg/v1/fill/w_1034,h_1349,al_b,q_90,enc_avif,quality_auto/hash~mv2.jpg 2x"><h1>Home</h1><p>$100.00</p><noscript><main>This site requires JavaScript</main></noscript></body></html>'
 		);
 		writeFileSync( join( outputDir, 'html', 'about.html' ), '<h1>About</h1>' );
 		writeFileSync(
@@ -708,6 +901,7 @@ describe( 'exportWebsiteCapture', () => {
 									trigger: {
 										selector: '#contact',
 										tag: 'button',
+										id: 'contact',
 										ariaHaspopup: 'dialog',
 										dataBindings: { 'data-modalid': 'contact' },
 									},
@@ -717,8 +911,8 @@ describe( 'exportWebsiteCapture', () => {
 										id: 'contact-dialog',
 										role: 'dialog',
 										ariaModal: true,
-										html: '<div id="contact-dialog" role="dialog"><form><input name="email"></form></div>',
-										htmlBytes: 83,
+										html: '<div id="contact-dialog" role="dialog"><nav><a href="https://example.com/shop/about?from=menu#team">About</a><a href="https://external.example/contact">External</a></nav><form><input name="email"></form></div>',
+										htmlBytes: 193,
 										htmlTruncated: false,
 									},
 								},
@@ -939,6 +1133,29 @@ describe( 'exportWebsiteCapture', () => {
 		expect( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) ).toContain(
 			'href="https://external.example/about"'
 		);
+		expect( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) ).toContain(
+			'href="/about/index.html?from=menu#team"'
+		);
+		expect( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) ).toContain(
+			'href="https://external.example/contact"'
+		);
+		const browser = await chromium.launch( { headless: true } );
+		try {
+			const page = await browser.newPage();
+			await page.setContent( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) );
+			const menu = page.locator( 'details.dla-disclosure:not(.dla-initial-dialog)' ).first();
+			await menu.locator( 'summary' ).evaluate( ( summary ) => ( summary as HTMLElement ).click() );
+			expect( await menu.evaluate( ( details ) => ( details as HTMLDetailsElement ).open ) ).toBe( true );
+			const menuLinks = menu.locator( '[role="dialog"] a' );
+			expect( await menuLinks.first().getAttribute( 'href' ) ).toBe(
+				'/about/index.html?from=menu#team'
+			);
+			expect( await menuLinks.nth( 1 ).getAttribute( 'href' ) ).toBe(
+				'https://external.example/contact'
+			);
+		} finally {
+			await browser.close();
+		}
 		expect( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) ).toContain(
 			'data:image/gif;base64,'
 		);
