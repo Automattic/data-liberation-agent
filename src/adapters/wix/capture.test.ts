@@ -1,7 +1,10 @@
 import { load } from 'cheerio';
+// @ts-expect-error jsdom is already a test dependency but publishes no declarations here.
+import { JSDOM } from 'jsdom';
 import { describe, expect, it } from 'vitest';
 import {
 	capture,
+	preserveWixSlideshowSlides,
 	stripShowcaseMarkup,
 	wixMediaVariant,
 	wixStaticMediaUrl,
@@ -94,6 +97,37 @@ describe( 'WIX_CAPTURE_CHROME_SELECTOR', () => {
 		expect( $( '#menu-hiddenA11ySubMenuIndication' ) ).toHaveLength( 0 );
 		expect( $( '#WIX_ADS' ) ).toHaveLength( 0 );
 		expect( $( '#authored-more' ).text() ).toBe( 'More' );
+	} );
+} );
+
+describe( 'preserveWixSlideshowSlides', () => {
+	it( 'keeps complete content from two runtime-mounted slideshow states in static HTML', () => {
+		const dom = new JSDOM( `<!doctype html><html><head></head><body>
+			<div class="wixui-slideshow"><button data-testid="nextButton">Next</button><div data-testid="slidesWrapper"><article><h2>First review</h2><p>First complete testimonial.</p><img src="first.jpg" alt="First"></article></div></div>
+		</body></html>` );
+		const originalDocument = globalThis.document;
+		Object.defineProperty( globalThis, 'document', { configurable: true, value: dom.window.document } );
+		try {
+			preserveWixSlideshowSlides( {
+				slideshowIndex: 0,
+				slides: [
+					'<article><h2>First review</h2><p>First complete testimonial.</p><img src="first.jpg" alt="First"></article>',
+					'<article><h2>Second review</h2><p>Second complete testimonial.</p><img src="second.jpg" alt="Second"></article>',
+				],
+			} );
+
+			const slides = dom.window.document.querySelectorAll( '[data-dla-captured-slide]' );
+			expect( slides ).toHaveLength( 2 );
+			expect( slides[ 0 ]?.textContent ).toContain( 'First complete testimonial.' );
+			expect( slides[ 1 ]?.textContent ).toContain( 'Second complete testimonial.' );
+			expect( slides[ 1 ]?.querySelector( 'img' )?.getAttribute( 'src' ) ).toBe( 'second.jpg' );
+			expect( slides[ 0 ]?.getAttribute( 'role' ) ).toBe( 'listitem' );
+			expect( dom.window.document.querySelector( '[data-testid="slidesWrapper"]' )?.getAttribute( 'role' ) ).toBe( 'list' );
+			expect( dom.window.document.querySelector( '.wixui-slideshow' )?.getAttribute( 'data-dla-captured-slideshow' ) ).toBe( 'true' );
+			expect( dom.window.document.querySelector( '#dla-wix-captured-slideshow-css' )?.textContent ).toContain( 'display:none!important' );
+		} finally {
+			Object.defineProperty( globalThis, 'document', { configurable: true, value: originalDocument } );
+		}
 	} );
 } );
 
