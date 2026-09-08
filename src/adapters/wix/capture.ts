@@ -159,6 +159,74 @@ export async function collectWixSlideshowSlides( page: Page ): Promise< void > {
 	}
 }
 
+/**
+ * Wix creates an overflow item and a mobile drawer only after its client
+ * runtime starts. A portable capture cannot retain that runtime, so settle the
+ * live menu into a static list of its authored destinations instead.
+ */
+export async function settleWixNavigation( viewport: 'desktop' | 'mobile' ): Promise< void > {
+	const waitForFrame = () =>
+		new Promise< void >( ( resolve ) =>
+			requestAnimationFrame( () => requestAnimationFrame( () => resolve() ) )
+		);
+	const visible = ( element: Element ) => {
+		const rect = element.getBoundingClientRect();
+		const style = getComputedStyle( element );
+		return (
+			rect.width > 0 &&
+			rect.height > 0 &&
+			style.display !== 'none' &&
+			style.visibility !== 'hidden'
+		);
+	};
+	const reveal = ( list: Element ) => {
+		for ( const item of list.querySelectorAll< HTMLElement >( ':scope > li' ) ) {
+			if ( ! item.querySelector( 'a[href]' ) ) continue;
+			item.removeAttribute( 'aria-hidden' );
+			for ( const property of [
+				'display',
+				'visibility',
+				'opacity',
+				'height',
+				'max-height',
+				'overflow',
+				'position',
+			] ) {
+				item.style.removeProperty( property );
+			}
+			for ( const descendant of item.querySelectorAll< HTMLElement >( '[tabindex="-1"]' ) )
+				descendant.removeAttribute( 'tabindex' );
+		}
+	};
+
+	if ( viewport === 'mobile' ) {
+		const toggle = document.querySelector< HTMLElement >( '#MENU_AS_CONTAINER_TOGGLE' );
+		if ( toggle && visible( toggle ) ) {
+			toggle.click();
+			await waitForFrame();
+			toggle.remove();
+		}
+		const lists = Array.from( document.querySelectorAll( 'header ul' ) );
+		lists.sort(
+			( left, right ) =>
+				right.querySelectorAll( 'a[href]' ).length - left.querySelectorAll( 'a[href]' ).length
+		);
+		if ( lists[ 0 ] ) reveal( lists[ 0 ] );
+		return;
+	}
+
+	const more = Array.from( document.querySelectorAll< HTMLElement >( 'li[id$="__more__"]' ) ).find(
+		visible
+	);
+	if ( ! more ) return;
+	const list = more.parentElement;
+	const trigger = more.querySelector< HTMLElement >( '[data-testid="linkElement"]' ) ?? more;
+	trigger.click();
+	await waitForFrame();
+	if ( list ) reveal( list );
+	more.remove();
+}
+
 export const capture: LiberationHooks = {
 	removeSelectors: [ '[id="WIX_ADS"]', '[id$="-hiddenA11ySubMenuIndication"]' ],
 	/**
@@ -168,6 +236,7 @@ export const capture: LiberationHooks = {
 	 * fragment and leave a real target behind.
 	 */
 	prepare: async ( page, ctx ) => {
+		await page.evaluate( settleWixNavigation, ctx.viewport );
 		await page.evaluate( async ( chromeSelector ) => {
 			for ( const chrome of document.querySelectorAll( chromeSelector ) ) chrome.remove();
 
