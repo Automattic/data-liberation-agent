@@ -1,17 +1,13 @@
 // src/adapters/index.ts
 //
-// Back-compat surface over the platform registry (src/platform/), preserved
-// until #119 removes the extract-era callers (mcp-server handlers, the CLI
-// UIs). The registry is the single source of truth for both adapter
-// resolution and automatic detection.
+// Compatibility surface over the platform registry. The registry remains the
+// single source of truth for both adapter resolution and automatic detection.
 import '../platform/builtins.js';
 import { registeredPlatforms, resolvePlatform } from '../platform/registry.js';
 import type { PlatformAdapter } from '../types.js';
 
 function registeredAdapters(): PlatformAdapter[] {
-  return registeredPlatforms().filter(
-    (p): p is PlatformAdapter => typeof (p as PlatformAdapter).extract === 'function',
-  );
+	return registeredPlatforms() as PlatformAdapter[];
 }
 
 /**
@@ -27,10 +23,8 @@ export const adapters: PlatformAdapter[] = registeredAdapters();
  * semantics (exact match first, then the registered fallback). Live against
  * the registry, so consumer-registered platforms resolve without core edits.
  *
- * NOTE: the PlatformAdapter cast is the legacy bridge — a custom platform
- * without `extract` still resolves here (capture only needs discover/capture
- * hooks); extract-era handlers would fail on it, which is the documented
- * behavior until #119 removes them.
+ * The PlatformAdapter cast preserves this historical import path while the
+ * public registry remains the authoritative platform contract.
  */
 export function findAdapter(platform: string): PlatformAdapter | null {
   return resolvePlatform(platform) as PlatformAdapter | null;
