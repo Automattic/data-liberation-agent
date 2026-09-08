@@ -4,6 +4,7 @@
 // path: recognising a platform's CDN is exactly what an adapter is for.
 //
 import type { LiberationHooks } from '../page-actions.js';
+import type { Page } from 'playwright';
 
 /** Wix media ids look like `8e80e7_a1b2…`, stable across crops of one asset. */
 const WIX_MEDIA_ID = /([a-z0-9]{4,12}_[a-z0-9]{24,48})/i;
@@ -263,6 +264,10 @@ export const capture: LiberationHooks = {
 			window.scrollTo( originalScroll.x, originalScroll.y );
 			root.style.scrollBehavior = scrollBehavior;
 		}, WIX_CAPTURE_CHROME_SELECTOR );
+
+		// The mobile document keeps Wix's native layout untouched. The desktop
+		// portable source carries the bounded, static record of its runtime states.
+		if ( ctx.viewport === 'desktop' ) await collectWixSlideshowSlides( page );
 
 		const galleries = await page.evaluate( async () => {
 			const urls = [
