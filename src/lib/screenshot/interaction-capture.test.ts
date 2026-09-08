@@ -132,6 +132,12 @@ describe( 'captureTriggeredDialogs', () => {
 						.locator( 'details.dla-disclosure[open] [role="dialog"] a[href="/about"]' )
 						.isVisible()
 				).toBe( true );
+				await page.keyboard.press( 'Escape' );
+				expect(
+					await page
+						.locator( 'details.dla-disclosure' )
+						.evaluate( ( element ) => ( element as HTMLDetailsElement ).open )
+				).toBe( false );
 				expect( await page.locator( '#no-op-menu' ).count() ).toBe( 1 );
 			} finally {
 				await browser.close();
