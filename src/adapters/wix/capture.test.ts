@@ -1,7 +1,9 @@
 import { load } from 'cheerio';
-import { describe, expect, it } from 'vitest';
+import { JSDOM } from 'jsdom';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
 	capture,
+	settleWixNavigation,
 	stripShowcaseMarkup,
 	wixMediaVariant,
 	wixStaticMediaUrl,
@@ -105,7 +107,57 @@ describe( 'wix capture', () => {
 		] );
 	} );
 
+	it( 'settles generated desktop overflow into reachable navigation links', async () => {
+		const dom = new JSDOM( `
+			<header><ul>
+				<li><a href="/">Home</a></li>
+				<li id="menu__more__"><div data-testid="linkElement">More</div></li>
+				<li aria-hidden="true" style="height:0;overflow:hidden;position:absolute"><a href="/contact/"><span tabindex="-1">Contact</span></a></li>
+			</ul></header>
+		` );
+		vi.stubGlobal( 'document', dom.window.document );
+		vi.stubGlobal( 'getComputedStyle', dom.window.getComputedStyle.bind( dom.window ) );
+		vi.stubGlobal( 'requestAnimationFrame', ( callback: FrameRequestCallback ) => setTimeout( callback, 0 ) as unknown as number );
+		vi.spyOn( dom.window.HTMLElement.prototype, 'getBoundingClientRect' ).mockReturnValue(
+			{ width: 10, height: 10 } as DOMRect
+		);
+		await settleWixNavigation( 'desktop' );
+
+		const contact = dom.window.document.querySelector( 'a[href="/contact/"]' )!;
+		expect( dom.window.document.querySelector( '#menu__more__' ) ).toBeNull();
+		expect( contact.closest( 'li' )?.getAttribute( 'aria-hidden' ) ).toBeNull();
+		expect( contact.closest( 'li' )?.getAttribute( 'style' ) ).toBe( '' );
+		expect( contact.querySelector( '[tabindex]' ) ).toBeNull();
+	} );
+
+	it( 'settles the mobile drawer into reachable navigation links', async () => {
+		const dom = new JSDOM( `
+			<header>
+				<button id="MENU_AS_CONTAINER_TOGGLE">Menu</button>
+				<ul><li aria-hidden="true" style="display:none"><a href="/contact/"><span tabindex="-1">Contact</span></a></li></ul>
+			</header>
+		` );
+		const toggle = dom.window.document.querySelector< HTMLButtonElement >( '#MENU_AS_CONTAINER_TOGGLE' )!;
+		const click = vi.spyOn( toggle, 'click' );
+		vi.stubGlobal( 'document', dom.window.document );
+		vi.stubGlobal( 'getComputedStyle', dom.window.getComputedStyle.bind( dom.window ) );
+		vi.stubGlobal( 'requestAnimationFrame', ( callback: FrameRequestCallback ) => setTimeout( callback, 0 ) as unknown as number );
+		vi.spyOn( dom.window.HTMLElement.prototype, 'getBoundingClientRect' ).mockReturnValue(
+			{ width: 10, height: 10 } as DOMRect
+		);
+		await settleWixNavigation( 'mobile' );
+
+		const contact = dom.window.document.querySelector( 'a[href="/contact/"]' )!;
+		expect( click ).toHaveBeenCalledOnce();
+		expect( dom.window.document.querySelector( '#MENU_AS_CONTAINER_TOGGLE' ) ).toBeNull();
+		expect( contact.closest( 'li' )?.getAttribute( 'aria-hidden' ) ).toBeNull();
+		expect( contact.closest( 'li' )?.getAttribute( 'style' ) ).toBe( '' );
+		expect( contact.querySelector( '[tabindex]' ) ).toBeNull();
+	} );
+
 	it( 'is attached to the adapter', () => {
 		expect( wixAdapter.liberation ).toBe( capture );
 	} );
 } );
+
+afterEach( () => vi.unstubAllGlobals() );
