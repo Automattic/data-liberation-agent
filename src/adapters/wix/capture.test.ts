@@ -3,6 +3,8 @@ import { JSDOM } from 'jsdom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
 	capture,
+	collectWixSlideshowSlides,
+	preserveWixSlideshowSlides,
 	settleWixNavigation,
 	stripShowcaseMarkup,
 	wixMediaVariant,

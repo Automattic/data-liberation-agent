@@ -72,6 +72,93 @@ export function wixMediaVariant( url: string ): { id: string; url: string } | nu
 export const WIX_CAPTURE_CHROME_SELECTOR =
 	'[id="WIX_ADS"], [id$="-hiddenA11ySubMenuIndication"], [id$="__more__"]';
 
+const WIX_SLIDESHOW_SELECTOR = '.wixui-slideshow';
+const WIX_SLIDESHOW_LIMIT = 4;
+const WIX_SLIDE_LIMIT = 6;
+
+/**
+ * Wix mounts only the active slide. Replace that transient state with the
+ * distinct states observed through its authored next control before serializing.
+ */
+export function preserveWixSlideshowSlides(
+	{ slideshowIndex, slides }: { slideshowIndex: number; slides: string[] }
+): void {
+	const slideshow = document.querySelectorAll< HTMLElement >( '.wixui-slideshow' )[ slideshowIndex ];
+	const wrapper = slideshow?.querySelector< HTMLElement >( '[data-testid="slidesWrapper"]' );
+	if ( ! slideshow || ! wrapper || slides.length < 2 ) return;
+
+	const fragment = document.createDocumentFragment();
+	for ( const [ index, html ] of slides.entries() ) {
+		const template = document.createElement( 'template' );
+		template.innerHTML = html;
+		const slide = template.content.firstElementChild;
+		if ( ! slide ) continue;
+		slide.setAttribute( 'data-dla-captured-slide', String( index ) );
+		fragment.append( slide );
+	}
+	if ( fragment.childElementCount < 2 ) return;
+
+	wrapper.replaceChildren( fragment );
+	slideshow.dataset.dlaCapturedSlideshow = 'true';
+	if ( ! document.getElementById( 'dla-wix-captured-slideshow-css' ) ) {
+		const style = document.createElement( 'style' );
+		style.id = 'dla-wix-captured-slideshow-css';
+		style.textContent =
+			'.wixui-slideshow[data-dla-captured-slideshow="true"] [data-testid="slidesWrapper"]>[data-dla-captured-slide]{display:none!important}' +
+			'.wixui-slideshow[data-dla-captured-slideshow="true"] [data-testid="slidesWrapper"]>[data-dla-captured-slide="0"]{display:block!important}';
+		document.head.append( style );
+	}
+}
+
+function snapshotWixSlide(
+	page: Page,
+	slideshowIndex: number
+): Promise< { html: string; key: string } | null > {
+	return page.evaluate( ( index ) => {
+		const slideshow = document.querySelectorAll< HTMLElement >( '.wixui-slideshow' )[ index ];
+		const slide = slideshow?.querySelector< HTMLElement >( '[data-testid="slidesWrapper"] > *' );
+		if ( ! slide ) return null;
+		const media = [ ...slide.querySelectorAll< HTMLImageElement >( 'img' ) ].map(
+			( image ) => image.currentSrc || image.src
+		);
+		return {
+			html: slide.outerHTML,
+			key: `${ slide.textContent?.replace( /\s+/g, ' ' ).trim() }\n${ media.join( '\n' ) }`,
+		};
+	}, slideshowIndex );
+}
+
+export async function collectWixSlideshowSlides( page: Page ): Promise< void > {
+	const count = await page.locator( WIX_SLIDESHOW_SELECTOR ).count();
+	for ( let slideshowIndex = 0; slideshowIndex < Math.min( count, WIX_SLIDESHOW_LIMIT ); slideshowIndex++ ) {
+		try {
+			const next = page
+				.locator( WIX_SLIDESHOW_SELECTOR )
+				.nth( slideshowIndex )
+				.locator( 'button[data-testid="nextButton"]' );
+			if ( await next.count() !== 1 ) continue;
+
+			const slides: string[] = [];
+			const seen = new Set< string >();
+			for ( let step = 0; step < WIX_SLIDE_LIMIT; step++ ) {
+				const snapshot = await snapshotWixSlide( page, slideshowIndex );
+				if ( ! snapshot || seen.has( snapshot.key ) ) break;
+				seen.add( snapshot.key );
+				slides.push( snapshot.html );
+				await next.click();
+				await page.waitForTimeout( 250 );
+			}
+			if ( slides.length > 1 ) {
+				// Playwright serializes this callback into the source page, where module
+				// bindings are unavailable.
+				await page.evaluate( preserveWixSlideshowSlides, { slideshowIndex, slides } );
+			}
+		} catch {
+			// One uncooperative Wix widget must not prevent capture of the others.
+		}
+	}
+}
+
 /**
  * Wix creates an overflow item and a mobile drawer only after its client
  * runtime starts. A portable capture cannot retain that runtime, so settle the
