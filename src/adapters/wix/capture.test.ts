@@ -1,7 +1,11 @@
 import { load } from 'cheerio';
+// @ts-expect-error jsdom is already a test dependency but publishes no declarations here.
+import { JSDOM } from 'jsdom';
 import { describe, expect, it } from 'vitest';
 import {
 	capture,
+	collectWixSlideshowSlides,
+	preserveWixSlideshowSlides,
 	stripShowcaseMarkup,
 	wixMediaVariant,
 	wixStaticMediaUrl,
@@ -94,6 +98,70 @@ describe( 'WIX_CAPTURE_CHROME_SELECTOR', () => {
 		expect( $( '#menu-hiddenA11ySubMenuIndication' ) ).toHaveLength( 0 );
 		expect( $( '#WIX_ADS' ) ).toHaveLength( 0 );
 		expect( $( '#authored-more' ).text() ).toBe( 'More' );
+	} );
+} );
+
+describe( 'preserveWixSlideshowSlides', () => {
+	it( 'keeps distinct runtime states while preserving their source semantics', () => {
+		const dom = new JSDOM( `<!doctype html><html><head></head><body>
+			<div class="wixui-slideshow"><div data-testid="slidesWrapper"><article role="region"><h2>First review</h2><p>First complete testimonial.</p><img src="first.jpg" alt="First"></article></div></div>
+		</body></html>` );
+		const originalDocument = globalThis.document;
+		Object.defineProperty( globalThis, 'document', { configurable: true, value: dom.window.document } );
+		try {
+			preserveWixSlideshowSlides( {
+				slideshowIndex: 0,
+				slides: [
+					'<article role="region"><h2>First review</h2><p>First complete testimonial.</p><img src="first.jpg" alt="First"></article>',
+					'<article role="region"><h2>Second review</h2><p>Second complete testimonial.</p><img src="second.jpg" alt="Second"></article>',
+				],
+			} );
+
+			const slides = dom.window.document.querySelectorAll( '[data-dla-captured-slide]' );
+			expect( slides ).toHaveLength( 2 );
+			expect( slides[ 0 ]?.textContent ).toContain( 'First complete testimonial.' );
+			expect( slides[ 1 ]?.textContent ).toContain( 'Second complete testimonial.' );
+			expect( slides[ 1 ]?.querySelector( 'img' )?.getAttribute( 'src' ) ).toBe( 'second.jpg' );
+			expect( slides[ 0 ]?.getAttribute( 'role' ) ).toBe( 'region' );
+			expect( dom.window.document.querySelector( '.wixui-slideshow' )?.getAttribute( 'data-dla-captured-slideshow' ) ).toBe( 'true' );
+			expect( dom.window.document.querySelector( '#dla-wix-captured-slideshow-css' )?.textContent ).toContain( 'display:none!important' );
+		} finally {
+			Object.defineProperty( globalThis, 'document', { configurable: true, value: originalDocument } );
+		}
+	} );
+} );
+
+describe( 'collectWixSlideshowSlides', () => {
+	it( 'stops at a repeated runtime state and installs the distinct snapshots', async () => {
+		let clicks = 0;
+		const next = { count: async () => 1, click: async () => void ( clicks++ ) };
+		const root = {
+			count: async () => 1,
+			nth: () => ( { locator: () => next } ),
+		};
+		const snapshots = [
+			{ html: '<article>First</article>', key: 'First' },
+			{ html: '<article>Second</article>', key: 'Second' },
+			{ html: '<article>First</article>', key: 'First' },
+		];
+		const calls: unknown[][] = [];
+		const page = {
+			locator: () => root,
+			evaluate: async ( fn: unknown, arg: unknown ) => {
+				calls.push( [ fn, arg ] );
+				return calls.length <= snapshots.length ? snapshots[ calls.length - 1 ] : undefined;
+			},
+			waitForTimeout: async () => undefined,
+		};
+
+		await collectWixSlideshowSlides( page as never );
+
+		expect( calls ).toHaveLength( 4 );
+		expect( calls[ 3 ]?.[ 1 ] ).toEqual( {
+			slideshowIndex: 0,
+			slides: [ '<article>First</article>', '<article>Second</article>' ],
+		} );
+		expect( clicks ).toBe( 2 );
 	} );
 } );
 
