@@ -173,6 +173,9 @@ describe( 'captureTriggeredDialogs', () => {
 				expect( await page.getByRole( 'link', { name: 'Home' } ).isVisible() ).toBe( true );
 				expect( await page.getByRole( 'link', { name: 'Get a Quote' } ).isVisible() ).toBe( true );
 				expect( await page.getByRole( 'link', { name: 'Contact' } ).isVisible() ).toBe( true );
+				await page.waitForFunction( () =>
+					document.querySelector( 'details.dla-disclosure > summary' )?.getAttribute( 'aria-label' ) === 'Close Menu'
+				);
 				expect( await summary.getAttribute( 'aria-label' ) ).toBe( 'Close Menu' );
 				await summary.click();
 				expect( await disclosure.evaluate( ( element ) => ( element as HTMLDetailsElement ).open ) ).toBe( false );

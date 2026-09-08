@@ -665,7 +665,7 @@ describe( 'exportWebsiteCapture', () => {
 		expect( diagnostics.unresolvedDependencies ).toEqual( [] );
 	} );
 
-	it( 'exports captured routes and localized media as a website directory', () => {
+	it( 'exports captured routes and localized media as a website directory', async () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
@@ -674,7 +674,7 @@ describe( 'exportWebsiteCapture', () => {
 		mkdirSync( join( outputDir, 'media' ), { recursive: true } );
 		writeFileSync(
 			join( outputDir, 'html', 'homepage.html' ),
-			'<!doctype html><html><head><style>.desktop{color:blue}</style></head><body><a href="https://example.com/shop/about?from=home#team">About</a><a href="https://example.com/shop/missing">Missing</a><a href="https://external.example/about">External</a><img src="https://cdn.example/logo.png"><img src="https://cdn.example/logo-copy.png"><img src="https://cdn.example/avatar.png&amp;quot;"><img src="/hero.png?w=128" srcset="/hero.png?w=128 128w, /hero.png?w=4096 4096w"><picture><source media="(min-width: 751px)" srcset="https://cdn.example/responsive.png?w=1200"><img src="https://cdn.example/responsive.png?w=320"></picture><img src="https://static.wixstatic.com/media/hash~mv2.jpg/v1/fill/w_1034,h_1349,al_b,q_90/hash~mv2.jpg" srcset="https://static.wixstatic.com/media/hash~mv2.jpg/v1/fill/w_567,h_740,al_b,q_90,enc_avif,quality_auto/hash~mv2.jpg 1x, https://static.wixstatic.com/media/hash~mv2.jpg/v1/fill/w_1034,h_1349,al_b,q_90,enc_avif,quality_auto/hash~mv2.jpg 2x"><h1>Home</h1><p>$100.00</p><noscript><main>This site requires JavaScript</main></noscript></body></html>'
+			'<!doctype html><html><head><style>.desktop{color:blue}</style></head><body><button id="contact" aria-haspopup="dialog">Contact</button><a href="https://example.com/shop/about?from=home#team">About</a><a href="https://example.com/shop/missing">Missing</a><a href="https://external.example/about">External</a><img src="https://cdn.example/logo.png"><img src="https://cdn.example/logo-copy.png"><img src="https://cdn.example/avatar.png&amp;quot;"><img src="/hero.png?w=128" srcset="/hero.png?w=128 128w, /hero.png?w=4096 4096w"><picture><source media="(min-width: 751px)" srcset="https://cdn.example/responsive.png?w=1200"><img src="https://cdn.example/responsive.png?w=320"></picture><img src="https://static.wixstatic.com/media/hash~mv2.jpg/v1/fill/w_1034,h_1349,al_b,q_90/hash~mv2.jpg" srcset="https://static.wixstatic.com/media/hash~mv2.jpg/v1/fill/w_567,h_740,al_b,q_90,enc_avif,quality_auto/hash~mv2.jpg 1x, https://static.wixstatic.com/media/hash~mv2.jpg/v1/fill/w_1034,h_1349,al_b,q_90,enc_avif,quality_auto/hash~mv2.jpg 2x"><h1>Home</h1><p>$100.00</p><noscript><main>This site requires JavaScript</main></noscript></body></html>'
 		);
 		writeFileSync( join( outputDir, 'html', 'about.html' ), '<h1>About</h1>' );
 		writeFileSync(
@@ -708,6 +708,7 @@ describe( 'exportWebsiteCapture', () => {
 									trigger: {
 										selector: '#contact',
 										tag: 'button',
+										id: 'contact',
 										ariaHaspopup: 'dialog',
 										dataBindings: { 'data-modalid': 'contact' },
 									},
@@ -717,8 +718,8 @@ describe( 'exportWebsiteCapture', () => {
 										id: 'contact-dialog',
 										role: 'dialog',
 										ariaModal: true,
-										html: '<div id="contact-dialog" role="dialog"><form><input name="email"></form></div>',
-										htmlBytes: 83,
+										html: '<div id="contact-dialog" role="dialog"><nav><a href="https://example.com/shop/about?from=menu#team">About</a><a href="https://external.example/contact">External</a></nav><form><input name="email"></form></div>',
+										htmlBytes: 193,
 										htmlTruncated: false,
 									},
 								},
@@ -939,6 +940,29 @@ describe( 'exportWebsiteCapture', () => {
 		expect( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) ).toContain(
 			'href="https://external.example/about"'
 		);
+		expect( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) ).toContain(
+			'href="/about/index.html?from=menu#team"'
+		);
+		expect( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) ).toContain(
+			'href="https://external.example/contact"'
+		);
+		const browser = await chromium.launch( { headless: true } );
+		try {
+			const page = await browser.newPage();
+			await page.setContent( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) );
+			const menu = page.locator( 'details.dla-disclosure:not(.dla-initial-dialog)' ).first();
+			await menu.locator( 'summary' ).evaluate( ( summary ) => ( summary as HTMLElement ).click() );
+			expect( await menu.evaluate( ( details ) => ( details as HTMLDetailsElement ).open ) ).toBe( true );
+			const menuLinks = menu.locator( '[role="dialog"] a' );
+			expect( await menuLinks.first().getAttribute( 'href' ) ).toBe(
+				'/about/index.html?from=menu#team'
+			);
+			expect( await menuLinks.nth( 1 ).getAttribute( 'href' ) ).toBe(
+				'https://external.example/contact'
+			);
+		} finally {
+			await browser.close();
+		}
 		expect( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) ).toContain(
 			'data:image/gif;base64,'
 		);
