@@ -71,7 +71,7 @@ describe( 'screenshot resource capture', () => {
 		mocks.captureDomDependencies.mockClear();
 		mocks.getReplayableResponse.mockReset();
 		const newContext = vi.fn().mockImplementation( async ( options: { viewport?: { width: number } } ) => ( {
-			newPage: vi.fn().mockResolvedValue( makePage( options.viewport?.width === 390 ) ),
+			newPage: vi.fn().mockResolvedValue( makePage( options.viewport?.width === 402 ) ),
 				addInitScript: vi.fn().mockResolvedValue( undefined ),
 				close: vi.fn().mockResolvedValue( undefined ),
 			} ) );
@@ -96,11 +96,13 @@ describe( 'screenshot resource capture', () => {
 			);
 			const mobileContext = newContext.mock.calls[ 1 ][ 0 ];
 			expect( mobileContext ).toMatchObject( {
-				viewport: { width: 390, height: 844 },
+				viewport: { width: 402, height: 681 },
+				screen: { width: 402, height: 874 },
 				deviceScaleFactor: 3,
 				isMobile: true,
 				hasTouch: true,
-				userAgent: expect.stringContaining( 'iPhone' ),
+				userAgent:
+					'Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.5 Mobile/15E148 Safari/604.1',
 			} );
 		} finally {
 			rmSync( outputDir, { recursive: true, force: true } );
@@ -132,7 +134,7 @@ describe( 'screenshot resource capture', () => {
 		( connectBrowser as ReturnType< typeof vi.fn > ).mockResolvedValue( {
 			newContext: vi.fn().mockImplementation( async ( options: { viewport?: { width: number } } ) => ( {
 				newPage: vi.fn().mockResolvedValue(
-					makePage( options.viewport?.width === 390, routedRequest )
+					makePage( options.viewport?.width === 402, routedRequest )
 				),
 				addInitScript: vi.fn().mockResolvedValue( undefined ),
 				close: vi.fn().mockResolvedValue( undefined ),

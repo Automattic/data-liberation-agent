@@ -74,7 +74,7 @@ describe( 'captureScreenshots interactions', () => {
 					return {
 						schema: 'data-liberation/interaction-states/v1',
 						sourceUrl,
-						viewport: { width: 390, height: 844 },
+						viewport: { width: 402, height: 681 },
 						capturedAt: '2026-08-25T00:00:00.000Z',
 						states: [
 							{
@@ -138,7 +138,7 @@ describe( 'captureScreenshots interactions', () => {
 					settleMs: 0,
 					captureImages: true,
 					viewports: viewportIds.map( ( id ) =>
-						id === 'mobile' ? { id, width: 390, height: 844 } : { id, width: 1440, height: 900 }
+						id === 'mobile' ? { id, width: 402, height: 681 } : { id, width: 1440, height: 900 }
 					),
 				} );
 
@@ -156,7 +156,7 @@ describe( 'captureScreenshots interactions', () => {
 					readFileSync( join( outputDir, 'screenshots', 'manifest.json' ), 'utf8' )
 				);
 				expect( manifest.entries[ 'https://example.com/tianna' ].interactions ).toMatchObject( {
-					viewport: { width: 390, height: 844 },
+					viewport: { width: 402, height: 681 },
 					states: [
 						{
 							status: 'captured',

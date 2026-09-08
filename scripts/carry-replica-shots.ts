@@ -1,7 +1,7 @@
 /**
  * Screenshot the LIVE carry site into a replica-dir matching the origin layout
  * (manifest.json + desktop/<slug>.png + mobile/<slug>.png) at the SAME device
- * scale as the source captures (desktop 1440@0.7, mobile source width@1.0), so
+ * scale as the source captures (desktop 1440@0.7, mobile iPhone 17@3), so
  * liberate_compare can join origin↔replica by pathname. Site-generic via argv.
  *
  * Navigation: maps each source pathname to the LOCAL permalink via redirect-map.json
@@ -14,7 +14,7 @@
  *   node scripts/run.mjs carry-replica-shots <originDir> <carryBaseUrl> <replicaDir> [concurrency]
  *   (concurrency defaults to 6; also settable via the CONCURRENCY env var)
  */
-import { chromium } from 'playwright';
+import { chromium, devices } from 'playwright';
 import { shimNames } from './_pw.js';
 import { mapPool } from '../src/lib/concurrency.js';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
@@ -77,25 +77,25 @@ async function settle(page: import('playwright').Page) {
 // the real limiter is browser-side render CPU — set the pool near the core count.
 // Override via 4th arg or CONCURRENCY env. Clamped to [1, 12]; default 6.
 const CONCURRENCY = Math.max(1, Math.min(12, Number(process.argv[5] ?? process.env.CONCURRENCY ?? 6) || 6));
-const MOBILE_UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1';
+const { defaultBrowserType: _defaultBrowserType, ...IPHONE_17_CONTEXT } = devices['iPhone 17'];
 
 type Vp = { vp: { width: number; height: number }; scale: number; dir: 'desktop' | 'mobile'; mobile: boolean };
 const VIEWPORTS: Vp[] = [
   { vp: { width: 1440, height: 900 }, scale: 0.7, dir: 'desktop', mobile: false },
-  { vp: { width: 390, height: 844 }, scale: 1, dir: 'mobile', mobile: true },
+  { vp: { width: 402, height: 681 }, scale: IPHONE_17_CONTEXT.deviceScaleFactor, dir: 'mobile', mobile: true },
 ];
 
 function sourceMobileWidth(slug: string): number {
   try {
-    // Mobile captures use scale 1, so the PNG width is the effective source
-    // viewport even when a site forces one through its viewport meta tag.
+    // Mobile captures use DPR 3, so convert the rendered PNG width back to
+    // the source's CSS viewport even when viewport metadata forces a width.
     const png = readFileSync(join(originDir, 'screenshots/mobile', `${slug}.png`));
-    const width = png.readUInt32BE(16);
+    const width = Math.round(png.readUInt32BE(16) / IPHONE_17_CONTEXT.deviceScaleFactor);
     if (width >= 240 && width <= 1024) return width;
   } catch {
     // Fall back to the standard capture viewport when source evidence is absent.
   }
-  return 390;
+  return 402;
 }
 
 async function run() {
@@ -122,7 +122,7 @@ async function run() {
     const pathname = new URL(w.url).pathname;
     const ctx = await browser.newContext(
       w.mobile
-        ? { viewport: w.vp, deviceScaleFactor: w.scale, isMobile: true, hasTouch: true, userAgent: MOBILE_UA }
+        ? { ...IPHONE_17_CONTEXT, viewport: w.vp, deviceScaleFactor: w.scale }
         : { viewport: w.vp, deviceScaleFactor: w.scale },
     );
     const page = await ctx.newPage();

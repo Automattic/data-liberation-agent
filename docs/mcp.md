@@ -96,7 +96,7 @@ Returns: `running` (boolean), `processed`, `failed` counts.
 
 ### liberate_screenshot
 
-Capture full-page + scrolled-state screenshots (desktop 1440×900 + mobile 390×844) plus rendered HTML for every URL on a site. Runs independently from extraction — useful for pre-liberation analysis or feeding downstream AI design-system tools. Also produces a site-analysis summary (palette, typography, metadata) sampled from representative pages.
+Capture full-page + scrolled-state screenshots (desktop 1440×900 + mobile iPhone 17 at 402×681) plus rendered HTML for every URL on a site. Runs independently from extraction — useful for pre-liberation analysis or feeding downstream AI design-system tools. Also produces a site-analysis summary (palette, typography, metadata) sampled from representative pages.
 
 | Parameter | Required | Description |
 |-----------|----------|-------------|

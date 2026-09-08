@@ -36,7 +36,7 @@ import {
 } from './types.js';
 import type { GeometryCapture } from './layout-geometry-proof.js';
 import type { ExtractedNav } from './nav-extract.js';
-import type { Browser, BrowserContext, Page } from 'playwright';
+import { devices, type Browser, type BrowserContext, type Page } from 'playwright';
 
 /**
  * Scroll offset multiplier for the scrolled-state screenshot: we scroll to
@@ -46,8 +46,7 @@ import type { Browser, BrowserContext, Page } from 'playwright';
  */
 const SCROLL_OFFSET_RATIO = 1.5;
 const ANALYSIS_SAMPLE_LIMIT = 1;
-const IPHONE_13_USER_AGENT =
-	'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1';
+const { defaultBrowserType: _defaultBrowserType, ...IPHONE_17_CONTEXT } = devices[ 'iPhone 17' ];
 
 /**
  * Per-URL capture pipeline:
@@ -1284,11 +1283,12 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 				// Mobile capture must use a real mobile browser identity because builders
 				// can select viewport metadata, navigation, and layout from it.
 				context = await browser.newContext( {
+					...( viewport.id === 'mobile' ? IPHONE_17_CONTEXT : {} ),
 					viewport: { width: viewport.width, height: viewport.height },
-					deviceScaleFactor: viewport.id === 'desktop' ? SCREENSHOT_DEVICE_SCALE_FACTOR : 3,
-					...( viewport.id === 'mobile'
-						? { isMobile: true, hasTouch: true, userAgent: IPHONE_13_USER_AGENT }
-						: {} ),
+					deviceScaleFactor:
+						viewport.id === 'desktop'
+							? SCREENSHOT_DEVICE_SCALE_FACTOR
+							: IPHONE_17_CONTEXT.deviceScaleFactor,
 					ignoreHTTPSErrors: true,
 				} );
 				// tsx/esbuild's keepNames transform wraps named const arrows with

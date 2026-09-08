@@ -21,7 +21,7 @@
 //
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import type { Browser, BrowserContext, Page } from 'playwright';
+import { devices, type Browser, type BrowserContext, type Page } from 'playwright';
 import { connectBrowser } from '../browser-kit/index.js';
 import { mapPool } from '../concurrency.js';
 import type { ReplicaSectionMeasure } from './section-parity.js';
@@ -173,8 +173,9 @@ export interface VerifyOpts {
 /** Viewport dimensions matched to the source screenshotter's defaults. */
 const VIEWPORT_DIMENSIONS: Record<Viewport, { width: number; height: number }> = {
   desktop: { width: 1280, height: 800 },
-  mobile: { width: 390, height: 844 },
+  mobile: { width: 402, height: 681 },
 };
+const { defaultBrowserType: _defaultBrowserType, ...IPHONE_17_CONTEXT } = devices['iPhone 17'];
 
 interface ManifestEntry {
   slug?: string;
@@ -343,7 +344,10 @@ export async function verifyReplica(opts: VerifyOpts): Promise<VerifyResult> {
         let context: BrowserContext | null = null;
         let page: Page | null = null;
         try {
-          context = await activeBrowser.newContext({ viewport: dimensions });
+          context = await activeBrowser.newContext({
+            ...(vp === 'mobile' ? IPHONE_17_CONTEXT : {}),
+            viewport: dimensions,
+          });
           // Polyfill tsx/esbuild's `__name` helper inside the page (mirrors section-extract):
           // a named function passed to `page.evaluate` (measureReplicaSectionsInBrowser) is
           // serialized WITH esbuild's `__name(fn,...)` instrumentation, which is undefined in
