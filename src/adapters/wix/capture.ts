@@ -204,7 +204,7 @@ export async function settleWixNavigation( viewport: 'desktop' | 'mobile' ): Pro
 		if ( toggle && visible( toggle ) ) {
 			toggle.click();
 			await waitForFrame();
-			toggle.remove();
+			// Retain the authored trigger so conversion can emit responsive navigation.
 		}
 		const lists = Array.from( document.querySelectorAll( 'header ul' ) );
 		lists.sort(

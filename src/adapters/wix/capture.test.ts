@@ -215,7 +215,7 @@ describe( 'wix capture', () => {
 
 		const contact = dom.window.document.querySelector( 'a[href="/contact/"]' )!;
 		expect( click ).toHaveBeenCalledOnce();
-		expect( dom.window.document.querySelector( '#MENU_AS_CONTAINER_TOGGLE' ) ).toBeNull();
+		expect( dom.window.document.querySelector( '#MENU_AS_CONTAINER_TOGGLE' ) ).toBe( toggle );
 		expect( contact.closest( 'li' )?.getAttribute( 'aria-hidden' ) ).toBeNull();
 		expect( contact.closest( 'li' )?.getAttribute( 'style' ) ).toBe( '' );
 		expect( contact.querySelector( '[tabindex]' ) ).toBeNull();
