@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as cheerio from 'cheerio';
+import { chromium } from 'playwright';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
 	CAPTURED_INTERACTIONS_SCHEMA,
@@ -1427,18 +1428,229 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		expect( html ).toContain( 'data-liberation-desktop-document' );
 		expect( html ).toContain( 'data-liberation-mobile-document' );
-		expect( html.match( /capture-[a-f0-9]{16}\.css/g ) ).toHaveLength( 2 );
+		expect( html.match( /capture-[a-f0-9]{64}\.css/g ) ).toHaveLength( 2 );
 		expect( html ).toContain( 'media="screen and (min-width: 1px)"' );
 		expect( html ).not.toContain( ':where(.data-liberation-mobile-document) .layout' );
 		const artifact = JSON.parse( readFileSync( join( outputDir, 'artifact.json' ), 'utf8' ) );
 		const stylesheets = artifact.files.filter( ( file: { path: string } ) =>
-			/^website\/assets\/css\/capture-[a-f0-9]{16}\.css$/.test( file.path )
+			/^website\/assets\/css\/capture-[a-f0-9]{64}\.css$/.test( file.path )
 		);
 		expect(
 			stylesheets.map( ( file: { content_base64: string } ) =>
 				Buffer.from( file.content_base64, 'base64' ).toString( 'utf8' )
 			)
 		).toContain( '.layout{display:grid}@media(max-width:600px){.layout{display:block}}' );
+	} );
+
+	it( 'hoists byte-identical safe styles across 186 documents without deleting local occurrences', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-style-hoist-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
+		const entries: Record< string, { html: string } > = {
+			'https://example.com/': { html: 'html/page-0.html' },
+		};
+		const repeated = '<style type="text/css" media="screen">.card{color:rgb(1, 2, 3)}</style>';
+		for ( let index = 0; index < 186; index++ ) {
+			const slug = `page-${ index }`;
+			writeFileSync(
+				join( outputDir, 'html', `${ slug }.html` ),
+				`<!doctype html><html><head>${ repeated }${ repeated }</head><body><p class="card">${ index }</p></body></html>`
+			);
+			entries[ index === 0 ? 'https://example.com/' : `https://example.com/${ slug }` ] = {
+				html: `html/${ slug }.html`,
+			};
+		}
+		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( { version: 1, entries } ) );
+
+		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'fake', summary: {}, failures: [] } );
+		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
+		expect( html.match( /<link rel="stylesheet" href="\/assets\/css\/capture-[a-f0-9]{64}\.css" media="screen">/g ) ).toHaveLength( 2 );
+		const stylesheets = JSON.parse( readFileSync( join( outputDir, 'artifact.json' ), 'utf8' ) ).files.filter(
+			( file: { path: string } ) => /^website\/assets\/css\/capture-[a-f0-9]{64}\.css$/.test( file.path )
+		);
+		expect( stylesheets ).toHaveLength( 1 );
+	} );
+
+	it( 'keeps unsafe and base-dependent styles inline with emitted diagnostics', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-style-hoist-diagnostics-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
+		const css = '<style>.hero{background:url("image.png")}</style><style nonce="runtime">.runtime{color:red}</style><style></style><style>.broken{background:url()}</style>';
+		writeFileSync( join( outputDir, 'html', 'homepage.html' ), `<html><head>${ css }</head><body><p class="hero runtime">Home</p></body></html>` );
+		writeFileSync( join( outputDir, 'html', 'about.html' ), `<html><head>${ css }</head><body><p class="hero runtime">About</p></body></html>` );
+		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( {
+			version: 1,
+			entries: {
+				'https://example.com/': { html: 'html/homepage.html' },
+				'https://example.com/about/': { html: 'html/about.html' },
+			},
+		} ) );
+		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'fake', summary: {}, failures: [] } );
+
+		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
+		expect( html ).toContain( 'nonce="runtime"' );
+		expect( html ).toContain( '<style>.hero{' );
+		const diagnostics = JSON.parse( readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' ) );
+		expect( diagnostics.styleHoist.diagnostics ).toEqual( expect.arrayContaining( [
+			expect.objectContaining( { reason: 'unsafe_attributes' } ),
+			expect.objectContaining( { reason: 'relative_css_url' } ),
+			expect.objectContaining( { reason: 'empty_style' } ),
+			expect.objectContaining( { reason: 'empty_css_url' } ),
+		] ) );
+		expect( JSON.parse( readFileSync( join( outputDir, 'artifact.json' ), 'utf8' ) ).reports ).toContain( 'diagnostics.json' );
+	} );
+
+	it( 'bounds unhoistable style diagnostics while retaining aggregate reasons', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-style-hoist-bounded-diagnostics-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
+		const styles = Array.from(
+			{ length: 12_000 },
+			( _value, index ) => `<style nonce="runtime-${ index }">.x${ index }{color:red}</style>`
+		).join( '' );
+		for ( const slug of [ 'homepage', 'about' ] )
+			writeFileSync( join( outputDir, 'html', `${ slug }.html` ), `<html><head>${ styles }</head><body></body></html>` );
+		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( {
+			version: 1,
+			entries: {
+				'https://example.com/': { html: 'html/homepage.html' },
+				'https://example.com/about': { html: 'html/about.html' },
+			},
+		} ) );
+
+		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'fake', summary: {}, failures: [] } );
+
+		const diagnostics = JSON.parse( readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' ) );
+		expect( diagnostics.styleHoist.diagnosticCounts.unsafe_attributes ).toBe( 24_000 );
+		expect( diagnostics.styleHoist.diagnosticsTruncated ).toBe( true );
+		expect( Buffer.byteLength( JSON.stringify( diagnostics.styleHoist ) ) ).toBeLessThanOrEqual( 32 * 1024 );
+		expect( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) ).toContain( 'nonce="runtime-0"' );
+	} );
+
+	it( 'retains base- and CSP-bearing document styles inline with their original attributes', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-style-hoist-policy-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
+		const baseDocument = '<html><head><base href="https://cdn.example/theme/"><style>.base{color:red}</style></head><body><p class="base">Base</p></body></html>';
+		const cspDocument = '<html><head><meta http-equiv="Content-Security-Policy" content="style-src \'nonce-runtime\'"><style nonce="runtime">.csp{color:blue}</style></head><body><p class="csp">CSP</p></body></html>';
+		writeFileSync( join( outputDir, 'html', 'homepage.html' ), baseDocument );
+		writeFileSync( join( outputDir, 'html', 'about.html' ), baseDocument );
+		writeFileSync( join( outputDir, 'html', 'csp.html' ), cspDocument );
+		writeFileSync( join( outputDir, 'html', 'csp-two.html' ), cspDocument );
+		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( {
+			version: 1,
+			entries: {
+				'https://example.com/': { html: 'html/homepage.html' },
+				'https://example.com/about': { html: 'html/about.html' },
+				'https://example.com/csp': { html: 'html/csp.html' },
+				'https://example.com/csp-two': { html: 'html/csp-two.html' },
+			},
+		} ) );
+		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'fake', summary: {}, failures: [] } );
+
+		const homepage = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
+		const csp = readFileSync( join( outputDir, 'website', 'csp', 'index.html' ), 'utf8' );
+		expect( homepage ).toContain( '<style>.base{color:red}</style>' );
+		expect( csp ).toContain( '<style nonce="runtime">.csp{color:blue}</style>' );
+		expect( homepage ).not.toContain( 'capture-' );
+		expect( csp ).not.toContain( 'capture-' );
+		const diagnostics = JSON.parse( readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' ) );
+		expect( diagnostics.styleHoist.diagnostics ).toEqual( expect.arrayContaining( [
+			expect.objectContaining( { reason: 'document_base' } ),
+			expect.objectContaining( { reason: 'content_security_policy' } ),
+		] ) );
+	} );
+
+	it( 'hoists only CSS URLs whose new stylesheet base preserves their semantics', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-style-hoist-url-kinds-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
+		const css = '<style>.safe{background:url("https://cdn.example/image.png"),url("/image.png"),url("data:image/gif;base64,AA==")}</style><style>.fragment{filter:url("#filter")}</style>';
+		writeFileSync( join( outputDir, 'html', 'homepage.html' ), `<html><head>${ css }</head><body><p>Home</p></body></html>` );
+		writeFileSync( join( outputDir, 'html', 'about.html' ), `<html><head>${ css }</head><body><p>About</p></body></html>` );
+		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( {
+			version: 1,
+			entries: {
+				'https://example.com/': { html: 'html/homepage.html' },
+				'https://example.com/about': { html: 'html/about.html' },
+			},
+		} ) );
+		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'fake', summary: {}, failures: [] } );
+
+		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
+		expect( html ).toContain( 'capture-' );
+		expect( html ).toContain( '<style>.fragment{filter:url("#filter")}</style>' );
+		const diagnostics = JSON.parse( readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' ) );
+		expect( diagnostics.styleHoist.diagnostics ).toEqual( expect.arrayContaining( [
+			expect.objectContaining( { reason: 'fragment_css_url' } ),
+		] ) );
+	} );
+
+	it( 'preserves computed cascade when shared styles are replaced in place', async () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-style-hoist-browser-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
+		const source = '<!doctype html><html><head><style>.target{color:red}</style><style>.target{color:blue}</style></head><body><p class="target">Text</p></body></html>';
+		for ( const slug of [ 'one', 'two' ] ) writeFileSync( join( outputDir, 'html', `${ slug }.html` ), source );
+		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( {
+			version: 1,
+			entries: {
+				'https://example.com/': { html: 'html/one.html' },
+				'https://example.com/one': { html: 'html/one.html' },
+				'https://example.com/two': { html: 'html/two.html' },
+			},
+		} ) );
+		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'fake', summary: {}, failures: [] } );
+
+		const browser = await chromium.launch();
+		try {
+			const original = await browser.newPage();
+			await original.setContent( source );
+			const expected = await original.locator( '.target' ).evaluate( ( element ) => getComputedStyle( element ).color );
+			const exported = await browser.newPage();
+			const exportedHtml = readFileSync( join( outputDir, 'website', 'one', 'index.html' ), 'utf8' );
+			expect( exportedHtml.match( /href="\/assets\/css\/capture-[a-f0-9]{64}\.css"/g ) ).toHaveLength( 2 );
+			await exported.route( 'https://portable.test/assets/css/**', ( route ) => {
+				const pathname = new URL( route.request().url() ).pathname.slice( 1 );
+				return route.fulfill( {
+					contentType: 'text/css',
+					body: readFileSync( join( outputDir, 'website', pathname ), 'utf8' ),
+				} );
+			} );
+			await exported.setContent( `<base href="https://portable.test/">${ exportedHtml }` );
+			expect( await exported.locator( '.target' ).evaluate( ( element ) => getComputedStyle( element ).color ) ).toBe( expected );
+		} finally {
+			await browser.close();
+		}
+	} );
+
+	it( 'retains repeated relative CSS inline in the browser', async () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-style-hoist-relative-browser-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
+		const source = '<!doctype html><html><head><style>.target{color:green;background-image:url("image.png")}</style></head><body><p class="target">Text</p></body></html>';
+		for ( const slug of [ 'one', 'two' ] ) writeFileSync( join( outputDir, 'html', `${ slug }.html` ), source );
+		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( {
+			version: 1,
+			entries: {
+				'https://example.com/': { html: 'html/one.html' },
+				'https://example.com/one': { html: 'html/one.html' },
+				'https://example.com/two': { html: 'html/two.html' },
+			},
+		} ) );
+		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'fake', summary: {}, failures: [] } );
+
+		const exportedHtml = readFileSync( join( outputDir, 'website', 'one', 'index.html' ), 'utf8' );
+		expect( exportedHtml ).toContain( '<style>.target{color:green;' );
+		expect( exportedHtml ).not.toContain( 'capture-' );
+		const browser = await chromium.launch();
+		try {
+			const page = await browser.newPage();
+			await page.setContent( `<base href="https://portable.test/one/">${ exportedHtml }` );
+			expect( await page.locator( '.target' ).evaluate( ( element ) => getComputedStyle( element ).color ) ).toBe( 'rgb(0, 128, 0)' );
+		} finally {
+			await browser.close();
+		}
 	} );
 
 	it( 'does not treat JavaScript url calls as CSS dependencies', () => {
@@ -2260,6 +2472,186 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 			url: 'https://cdn.example/second.png',
 			error: 'removed because the aggregate portable media limit was reached',
 		} );
+	} );
+
+	it( 'uses exact generated report bytes before writing the artifact', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-report-budget-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'screenshots', 'media' ] )
+			mkdirSync( join( outputDir, path ), { recursive: true } );
+		writeFileSync(
+			join( outputDir, 'html', 'homepage.html' ),
+			`<main>${ 'x'.repeat( 300 * 1024 ) }<img src="https://cdn.example/image.png"></main>`
+		);
+		writeFileSync( join( outputDir, 'media', 'image.png' ), Buffer.alloc( 170 * 1024, 1 ) );
+		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( {
+			version: 1,
+			entries: { 'https://example.com/': { html: 'html/homepage.html' } },
+		} ) );
+		const media = MediaStubStore.load( outputDir );
+		media.markSuccess( 'https://cdn.example/image.png', join( outputDir, 'media', 'image.png' ) );
+		media.flush();
+
+		const receiptPath = exportWebsiteCapture( {
+			outputDir,
+			sourceUrl: 'https://example.com/',
+			platform: 'fake',
+			summary: {},
+			failures: [],
+			limits: { artifactTotalBytes: 480 * 1024 },
+		} );
+
+		const receipt = JSON.parse( readFileSync( receiptPath, 'utf8' ) );
+		expect( receipt.portableMedia.selected_count ).toBe( 1 );
+		expect( existsSync( join( outputDir, 'diagnostics.json' ) ) ).toBe( true );
+		expect( existsSync( join( outputDir, 'source-profile.json' ) ) ).toBe( true );
+		const artifact = JSON.parse( readFileSync( join( outputDir, 'artifact.json' ), 'utf8' ) );
+		const totalBytes = artifact.files.reduce(
+			( total: number, file: { content?: string; content_base64?: string } ) =>
+				total +
+				( file.content_base64 !== undefined
+					? Buffer.from( file.content_base64, 'base64' ).length
+					: Buffer.byteLength( file.content ?? '' ) ),
+			0
+		);
+		expect( totalBytes ).toBeLessThanOrEqual( 480 * 1024 );
+	} );
+
+	it( 'exports exactly at the 5000-file boundary after reserving generated reports', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-file-boundary-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
+		const entries: Record< string, { html: string } > = {};
+		for ( let index = 0; index < 4_996; index++ ) {
+			const slug = `page-${ index }`;
+			writeFileSync( join( outputDir, 'html', `${ slug }.html` ), '<main>Page</main>' );
+			entries[ index === 0 ? 'https://example.com/' : `https://example.com/${ slug }` ] = {
+				html: `html/${ slug }.html`,
+			};
+		}
+		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( { version: 1, entries } ) );
+
+		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'fake', summary: {}, failures: [] } );
+
+		const artifact = JSON.parse( readFileSync( join( outputDir, 'artifact.json' ), 'utf8' ) );
+		expect( artifact.files ).toHaveLength( 5_000 );
+		expect( artifact.files.filter( ( file: { path: string } ) => file.path === 'diagnostics.json' ) ).toHaveLength( 1 );
+		expect( artifact.files.filter( ( file: { path: string } ) => file.path === 'source-profile.json' ) ).toHaveLength( 1 );
+	}, 60_000 );
+
+	it( 'reserves repeated hoisted stylesheets before allocating constrained artifact media', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-style-budget-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'screenshots', 'media' ] )
+			mkdirSync( join( outputDir, path ), { recursive: true } );
+		const sharedCss = `.shared{content:"${ 'x'.repeat( 80 * 1024 ) }"}`;
+		for ( const slug of [ 'homepage', 'about' ] )
+			writeFileSync(
+				join( outputDir, 'html', `${ slug }.html` ),
+				`<html><head><style>${ sharedCss }</style></head><body><p>${ 'x'.repeat( 50 * 1024 ) }</p><img src="https://cdn.example/image.png"></body></html>`
+			);
+		writeFileSync( join( outputDir, 'media', 'image.png' ), Buffer.alloc( 100 * 1024, 1 ) );
+		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( {
+			version: 1,
+			entries: {
+				'https://example.com/': { html: 'html/homepage.html' },
+				'https://example.com/about': { html: 'html/about.html' },
+			},
+		} ) );
+		const media = MediaStubStore.load( outputDir );
+		media.markSuccess( 'https://cdn.example/image.png', join( outputDir, 'media', 'image.png' ) );
+		media.flush();
+
+		const receiptPath = exportWebsiteCapture( {
+			outputDir,
+			sourceUrl: 'https://example.com/',
+			platform: 'fake',
+			summary: {},
+			failures: [],
+			limits: { artifactTotalBytes: 400 * 1024 },
+		} );
+		const receipt = JSON.parse( readFileSync( receiptPath, 'utf8' ) );
+		expect( receipt.portableMedia.selected_count ).toBe( 1 );
+		const artifact = JSON.parse( readFileSync( join( outputDir, 'artifact.json' ), 'utf8' ) );
+		expect( artifact.files.some( ( file: { path: string } ) => /assets\/css\/capture-/.test( file.path ) ) ).toBe( true );
+		const totalBytes = artifact.files.reduce(
+			( total: number, file: { content?: string; content_base64?: string } ) =>
+				total + ( file.content_base64 ? Buffer.from( file.content_base64, 'base64' ).length : Buffer.byteLength( file.content ?? '' ) ),
+			0
+		);
+		expect( totalBytes ).toBeLessThanOrEqual( 400 * 1024 );
+	} );
+
+	it( 'hoists repeated 80 KiB safe styles when the net artifact fits below the old inflated estimate', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-net-style-budget-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
+		const sharedCss = `.shared{content:"${ 'x'.repeat( 80 * 1024 ) }"}`;
+		for ( const slug of [ 'homepage', 'about' ] )
+			writeFileSync(
+				join( outputDir, 'html', `${ slug }.html` ),
+				`<html><head><style>${ sharedCss }</style></head><body><p>Page</p></body></html>`
+			);
+		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( {
+			version: 1,
+			entries: {
+				'https://example.com/': { html: 'html/homepage.html' },
+				'https://example.com/about': { html: 'html/about.html' },
+			},
+		} ) );
+
+		const limit = 170 * 1024;
+		const oldInflatedBytes =
+			Buffer.byteLength( readFileSync( join( outputDir, 'html', 'homepage.html' ), 'utf8' ) ) * 2 +
+			Buffer.byteLength( sharedCss );
+		expect( oldInflatedBytes ).toBeGreaterThan( limit );
+		exportWebsiteCapture( {
+			outputDir,
+			sourceUrl: 'https://example.com/',
+			platform: 'fake',
+			summary: {},
+			failures: [],
+			limits: { artifactTotalBytes: limit },
+		} );
+
+		const artifact = JSON.parse( readFileSync( join( outputDir, 'artifact.json' ), 'utf8' ) );
+		expect( artifact.files.some( ( file: { path: string } ) => /assets\/css\/capture-/.test( file.path ) ) ).toBe( true );
+		const artifactBytes = artifact.files.reduce(
+			( total: number, file: { content?: string; content_base64?: string } ) =>
+				total +
+				( file.content_base64
+					? Buffer.from( file.content_base64, 'base64' ).length
+					: Buffer.byteLength( file.content ?? '' ) ),
+			0
+		);
+		expect( artifactBytes ).toBeLessThan( limit );
+	} );
+
+	it( 'fails before artifact writing when dynamic report arrays exceed a tight total cap', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-report-preflight-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
+		const entries: Record< string, { html: string } > = {};
+		for ( let index = 0; index < 100; index++ ) {
+			const slug = `page-${ index }`;
+			writeFileSync( join( outputDir, 'html', `${ slug }.html` ), '<main>Page</main>' );
+			entries[ index === 0 ? 'https://example.com/' : `https://example.com/${ slug }` ] = {
+				html: `html/${ slug }.html`,
+			};
+		}
+		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( { version: 1, entries } ) );
+
+		expect( () =>
+			exportWebsiteCapture( {
+				outputDir,
+				sourceUrl: 'https://example.com/',
+				platform: 'fake',
+				summary: {},
+				failures: [],
+				limits: { artifactTotalBytes: 3 * 1024 },
+			} )
+		).toThrow( /before artifact writing/ );
+		expect( existsSync( join( outputDir, 'artifact.json' ) ) ).toBe( false );
 	} );
 
 	it( 'does not treat empty img src as page-URL media or rewrite every slash', () => {
