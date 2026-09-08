@@ -2104,10 +2104,14 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 			resourceReplacements,
 			rejectedReplacementKeys
 		);
-		const normalizedHtml = wireCapturedDialogs(
-			withoutGeometryIdentities( identityHtml ),
-			entry.interactions?.states ?? [],
-			entry.interactions?.initialDialogs ?? []
+		const normalizedHtml = rewriteCapturedRouteLinks(
+			wireCapturedDialogs(
+				withoutGeometryIdentities( identityHtml ),
+				entry.interactions?.states ?? [],
+				entry.interactions?.initialDialogs ?? []
+			),
+			url,
+			portableRouteLinks
 		);
 		unresolvedAnchors.push( ...unresolvedCapturedAnchors( normalizedHtml, url ) );
 		writeFileSync( destination, normalizedHtml );
