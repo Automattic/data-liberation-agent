@@ -738,6 +738,7 @@ function styleHoistReason(
 	const style = portableInlineStyle( attributes, css );
 	if ( style ) return cssReferenceReason( css );
 	const media = /\bmedia\s*=\s*(["'])(.*?)\1/i.exec( attributes )?.[ 2 ] ?? '';
+	// eslint-disable-next-line no-control-regex -- reject unprintable media attributes.
 	return /[\u0000-\u001f\u007f<>&]/.test( media ) ? 'invalid_media' : 'unsafe_attributes';
 }
 
