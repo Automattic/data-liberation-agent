@@ -1,180 +1,143 @@
 ---
 name: liberate
-description: Extract content from a closed web platform (GoDaddy Websites & Marketing, Hostinger, HubSpot, Shopify, Squarespace, Webflow, Weebly, Wix) into a WordPress-compatible WXR file
+description: Liberate a website into a complete, portable HTML site by driving the data-liberation CLI. A URL becomes a directory of HTML, CSS, assets, routes and navigation that runs on its own — that directory is the deliverable and HTML is the contract. Covers the whole job in three commands: liberate the site, verify the copy against its source, and publish it to a live URL.
 ---
 
 # Liberate a website
 
-Help the user extract their content from a closed web platform.
+**What you produce:** a directory that runs on its own — every retained route, its CSS, media, fonts, navigation, same-page anchors, and responsive behavior, with references rewritten to point inside the copy.
 
-## Workflow
+**HTML is the contract.** That directory is the deliverable, not an intermediate step toward a platform.
 
-1. Ask for the URL of the site to liberate (if not already provided)
-2. Call `liberate_detect` to identify the platform
-3. Call `liberate_discover` to inventory the site — show the counts and **platform features** to the user
-   - Discovery now returns `platformFeatures` — flags for stores, bookings, forms, members areas, scheduling, forums, and events
-   - Tell the user which features were detected and whether they transfer automatically
-   - Features marked `transferable: true` (like stores) are handled during extraction
-   - Features marked `transferable: false` include a `wpRecommendation` with a suggested WordPress plugin
-4. Confirm with the user before proceeding
-5. Call `liberate_extract` with an appropriate outputDir
-6. Call `liberate_verify` on the outputDir to check the extraction quality — report stale CDN URLs, failed pages, failed media, and quality scores
-7. If there are failures, offer to retry specific URLs or investigate
-8. When the user is ready to import:
-   - If the environment provides its own import mechanism (e.g. `import-liberated-data` skill, or `wp_cli` tool): call `liberate_setup` with `delegate: true`, then call `liberate_import` with `delegate: true` to get a structured import manifest. Hand off to the environment's import skill/tool.
-   - Otherwise: call `liberate_setup` with site/username/token to validate the REST API connection, then call `liberate_import` with REST API credentials
+The CLI does the work. Your job is to run it, read what it reports, verify the result, and tell the operator what they got.
 
-## Resuming
+## The whole surface
 
-If the user asks to resume a previous extraction (e.g. "resume", "continue where I left off", "it crashed"):
+| Command | What it does |
+|---|---|
+| `data-liberation <url>` | Detect the platform, discover routes, liberate every one, write the site |
+| `data-liberation compare <run-dir>` | Verify the copy against its live source. **This is the acceptance gate** |
+| `data-liberation publish <run-dir> --to <target>` | Put the copy on a live URL |
 
-1. Ask for the URL (if not provided) — the outputDir is derived from the URL
-2. Call `liberate_extract` with `resume: true` — this skips already-processed URLs
-3. If the extraction was already complete (`.discovery-complete` exists), skip straight to reporting results and offer to import
+## Step 1 — Liberate
 
-The `resume` flag causes the extraction to:
-- Skip platform detection and discovery if a completed WXR already exists
-- Skip URLs that were already successfully processed (tracked in `extraction-log.jsonl`)
-- Rebuild media dedup hashes from existing files to avoid re-downloading
-- Append to the existing WXR rather than starting fresh
+```bash
+data-liberation https://example.com/
+```
 
-## Products
+Writes the site and exits, reporting two lines:
 
-Any platform may have e-commerce products. When products are detected during extraction:
+```
+Liberated 12/12 routes (3 reused)
+Site: /Users/you/data-liberation/example.com/website
+```
 
-- Products are streamed to `products.jsonl` during extraction, then compiled into `products.csv` (WooCommerce import format) alongside the WXR
-- Report the product count to the user: "Also extracted N products → products.csv"
-- The CSV is ready for WooCommerce import via Products → Import in WP admin
+The run directory is that path with `website` removed — pass it to `compare` and `publish`.
 
-## Discoveries
+- `--output <dir>` chooses where the run lands. Default is `~/data-liberation/<host-slug>`.
+- `--resume` reuses what is already on disk and reports it as `reused`. Add it when re-running against a site you have already liberated; without it the run captures the source again.
+- `--screenshots` adds desktop and mobile PNGs when the operator wants visual evidence.
+- Leave fluid learning on. It is what keeps the copy reflowing like the source instead of freezing at one width.
 
-If you encounter something notable during extraction — a new API endpoint, a platform quirk, a workaround for blocked content, a better extraction technique — add an entry to `DISCOVERIES.md` at the top of the repo. Follow the format in the existing entries. This is how the tool gets smarter over time.
+## Step 2 — Verify
 
-## Verification
+```bash
+data-liberation compare <run-dir>
+```
 
-After extraction completes, always run `liberate_verify` on the output directory. This checks:
-- Stale CDN URLs still embedded in content (Shopify, Squarespace, Webflow, Wix CDN domains)
-- Failed page extractions and failed media downloads
-- Quality score breakdown (high/medium/low)
-- Media files on disk vs media attachments in the WXR
-- Redirect map completeness
+This runs two tiers, and the report says which found what.
 
-Show the user the verification report and flag anything that needs attention before importing.
+**Self-consistency, over every route, offline.** Does the copy work on its own terms — every same-page and cross-page anchor resolving to exactly one target, every internal link landing on a real file, no asset still pointing at the origin. This needs no browser and no network, so it covers the whole site in milliseconds.
 
-## WordPress Import
+**Source fidelity, over a sample, in a browser.** Does the copy still match the original — text, geometry and reflow at widths the capture never sampled, and dialogs opening as the source opens them. Each check is a live round trip costing roughly 25 seconds, so it runs on the entrypoint plus a spread of other routes rather than all of them.
 
-If the environment provides an import skill (e.g. `import-liberated-data` in WordPress Studio), use `delegate: true` with both `liberate_setup` and `liberate_import`. The setup call returns requirements, the import call returns a structured manifest with file paths. Hand off to the environment's import skill to execute the actual import.
+**Exit 0 means accepted. Exit 1 means report it.** Each failure names what diverged:
 
-If no environment import skill is available, use the built-in REST API import. Validate the WordPress connection with `liberate_setup` first:
-- Checks site reachability, REST API availability, and authentication
-- Returns step-by-step guidance if anything fails (e.g. how to create an Application Password)
-- Once setup passes, ask the user about author handling before calling `liberate_import`
+```
+self-consistency FAIL anchor-ambiguous: 1 route(s) — / /index.html#introduction matches 2 targets
+/anchor/ 1600px FAIL: text 62 chars !== source 707
+```
 
-**Ask the user about authors:**
-- "Would you like to import the original content authors as WordPress users, or assign all content to your account?"
-- If they want authors: pass `importAuthors: true` to `liberate_import` — this creates WordPress user accounts for each author found in the WXR and assigns posts to them
-- If they want everything under their account: pass `importAuthors: false` (default) — all content is owned by the authenticated user
+The closing line states the scope measured, and both tiers must pass:
 
-If the user doesn't have a WordPress site yet, guide them:
-1. Create a WordPress site (wordpress.com, self-hosted, or WordPress Studio for local development)
-2. Generate an Application Password (WordPress Admin > Users > Profile > Application Passwords). On WordPress.com / wpcomstaging.com sites, generate it from the site's own wp-admin — the account-level one at wordpress.com/me/security/application-passwords only works for the WordPress.com public API, not the site-native /wp-json/wp/v2/ endpoint we use.
-3. Run `liberate_setup` to validate the connection
+```
+Passed: 4 route(s) checked offline, 4 of 4 compared to source, against https://example.com/
+```
 
-## Platform-specific notes
+When that line shows fewer routes compared than captured, source fidelity was sampled — say so when reporting, rather than describing the whole site as verified. Add `--screenshots` to write source, copy, and diff PNGs. The pixel score is evidence for a human; pass or fail comes from the named checks.
 
-### Squarespace
+## Step 3 — Publish
 
-Squarespace sites benefit significantly from **admin extraction via CDP**. Without it, you only get public content — no drafts, no unlisted pages, and Squarespace 7.1 fluid engine sites often return empty content from the `?format=json` API.
+Run this when the operator asks for a live URL.
 
-**Guide the user through admin setup:**
+```bash
+data-liberation publish <run-dir> --to <target>
+```
 
-1. Ask the user to launch Chrome with remote debugging:
-   ```
-   google-chrome --remote-debugging-port=9222
-   ```
-   (On macOS: `/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --remote-debugging-port=9222`)
-2. In that Chrome window, navigate to their Squarespace site and **log in to admin**
-3. Once logged in, run extraction with `--cdp-port 9222` (CLI) or `cdpPort: 9222` (MCP)
+Ask the operator where it should go. `spacefast` is the default when `--to` is omitted. To see what a build actually offers, name a target that does not exist — the error lists the registered ones:
 
-The admin session gives the adapter access to:
-- Squarespace's admin API responses (richer metadata, structured content)
-- Draft and unlisted pages not visible publicly
-- `__NEXT_DATA__` hydration payloads on 7.1 sites
-- Automatic fallback to DOM extraction if JSON data is sparse
+```
+Unknown publish target "list". Available: spacefast.
+```
 
-**Always offer CDP-based extraction for Squarespace.** Public-only extraction works but produces lower quality results.
+A publish reports the same shape whichever target serves it:
 
-### Wix
+```
+Published 1 files to spacefast.
+Live: https://gzipped-nest.view.fast/
+Version: https://v1--gzipped-nest.view.fast/
+This space is private by default, so the live URL returns 403 until access is granted.
+Claim it to keep it: https://my.spacefast.com/claim#sfc_…
+Claim expires: 2026-08-28T06:58:13.658Z
+```
 
-Extraction uses Playwright (headless browser) to intercept Wix's internal API calls and extract window globals. This is slower but captures content that isn't available via HTTP alone. Large sites may take several minutes.
+Give the operator every line of that. **A claim link and its deadline matter most.** When a target publishes anonymously, the space belongs to nobody until it is claimed, and it can stay private meanwhile — the run above answers 403 to everyone until the operator acts on the link. Reporting the live URL alone would tell them the publish worked and leave them looking at an error.
 
-### Webflow
+`--token`, or the target's token environment variable such as `SPACEFAST_TOKEN`, publishes into an account they already own.
 
-Webflow requires a Webflow API token. Ask the user for their token and pass it via `--token` (CLI) or the `token` parameter (MCP).
+Publishing reads what is on disk, so a repaired copy or a different target can ship without touching the source site again.
 
-### Shopify
+## Showing the copy to a human
 
-Shopify has **two extraction tiers**. Always offer the richer one first and fall back only if the user can't produce an Admin API token.
+```bash
+data-liberation https://example.com/ --resume --serve
+```
 
-**Tier 1 — Public JSON API (no credentials)**
+`--serve` keeps a local server running on the copy until it is interrupted, so offer it when someone wants to browse the result. With `--resume` alongside it, the site is already on disk and the server comes up immediately. Every run that does not serve prints this same command on stderr.
 
-Works for any public Shopify storefront. Pulls pages, blog posts, and products via the public `/pages.json`, `/blogs.json`, and `/products.json` endpoints plus HTML fallback for theme-rendered content. No token needed. Product data is limited to what the public API exposes — you lose compareAtPrice sale semantics, real stock policy, cost of goods, variant images, and collections.
+Run it only when a human is waiting for it, since the command holds until interrupted.
 
-**Tier 2 — Admin GraphQL (richer product data)**
+## What a run leaves behind
 
-When the user has admin access to their store, offer to use Shopify's Admin GraphQL API. This yields:
-- `compareAtPrice` → proper sale/regular price mapping on simple + variable products
-- `inventoryPolicy` + `inventoryItem.tracked` → real stock status (oversell-aware)
-- `inventoryItem.unitCost` → cost of goods written to `meta:_wc_cog_cost`
-- `inventoryItem.measurement.weight` → unit-normalized weight (kg)
-- Variant-level images
-- Collections → WooCommerce categories
-- SEO metafields (`meta:_yoast_wpseo_title` / `_yoast_wpseo_metadesc`)
-- Cursor-based pagination with mid-run resume
+| Path | Contents |
+|---|---|
+| `website/` | The deliverable. Serve this directory anywhere |
+| `capture-receipt.json` | Source URL, route table mapping each page to the URL it came from, assets, profile |
+| `diagnostics.json` | Everything the source withheld or the capture could not resolve |
+| `source-profile.json` | Measured behavior: one document or per-device, declarative or runtime-written geometry, switch width |
 
-**Guide the user through admin setup:**
+## Reporting a run
 
-1. Direct them to Shopify Admin → **Settings → Apps and sales channels → Develop apps**.
-2. Create a new custom app (name it "Data Liberation" or similar).
-3. Under **Configuration → Admin API access scopes**, enable at minimum:
-   - `read_products` (required)
-   - `read_inventory` (for cost-of-goods + stock)
-   - `read_online_store_pages` / `read_online_store_navigation` (for pages)
-   - `read_content` (for blog articles)
-4. Click **Install app** to generate the Admin API access token — copy it immediately, Shopify only shows it once.
-5. Pass the token as `adminToken` (MCP) or via the adapter opts. **You do not need to ask the user for the shop domain** — `liberate_discover` auto-detects the `*.myshopify.com` hostname from the storefront HTML (`Shopify.shop` JS global) and stores it as `inventory.shopDomain`, even for sites served on custom domains.
+Give the operator:
 
-**When to use which tier:**
-- User has a Shopify login and some admin comfort → **prompt for Tier 2** and walk them through the custom app flow above
-- User just wants "get my stuff out" and doesn't want to touch admin → **Tier 1 is fine** but tell them upfront what they'll lose (sale pricing, cost of goods, richer categories)
-- User has a custom storefront domain (e.g. `shop.brand.com`) → Tier 2 still works because of auto-detection; do NOT ask them for the myshopify.com subdomain manually unless the detector failed
+1. Routes liberated, reused, and failed, from the CLI's own summary.
+2. The compare result per width, quoting any failure text verbatim.
+3. Any `diagnostics.json` key that came back non-empty, named and counted.
 
-**If `liberate_discover` did not populate `inventory.shopDomain`** (rare — the site may be behind Cloudflare or heavy bot protection that blocks HTML fetch), ask the user directly:
-"I couldn't auto-detect the myshopify.com subdomain. Can you paste the URL you see when you log into your Shopify admin? It looks like `https://admin.shopify.com/store/<name>` — the `<name>` is what I need."
+The keys worth surfacing are `failures`, `resourceFailures`, `unresolvedDependencies`, `unresolvedMedia`, `unresolvedAnchors`, `interactionFailures`, `excludedRoutes`, and `duplicateRoutes`.
 
-Pass the admin-resolved value as `shopDomain` alongside `adminToken`.
+## Reading a compare failure
 
-**GraphQL failures fall back to Tier 1 automatically** — if the token is wrong or the scopes are insufficient, the adapter logs a warning and continues with the public JSON path, so the user's extraction still produces output.
+| Failure text | Where to look |
+|---|---|
+| `widest image … Δ` or `doc width` | Geometry froze at the capture width — confirm fluid learning ran, in `source-profile.json` under `geometry` and `learned` |
+| `nav … same-page anchor(s) missing` or `match more than one target` | `diagnostics.unresolvedAnchors` names the fragment and the reason |
+| `copy requested N external host(s)` | `diagnostics.unresolvedDependencies` and `resourceFailures` |
+| `internal link(s) 404` | `diagnostics.excludedRoutes` and `duplicateRoutes`, plus the route table in the receipt |
+| `title … !== source` or `text … chars` | Compare the receipt's route table against the URL the source actually serves |
 
-### GoDaddy Websites & Marketing
+Report the failure and the matching diagnostics together, so the operator sees both the symptom and the evidence.
 
-Public-crawl adapter for GoDaddy's **legacy** Websites & Marketing platform (also called "Go Daddy Website Builder" in page sources). Not to be confused with the newer Airo AI Builder.
+## Done
 
-GoDaddy offers **no data export** from W+M — this adapter rescues content by crawling the public site. Detection looks for the `Go Daddy Website Builder` generator meta tag, the `img1.wsimg.com/isteam/` CDN pattern, and the `X-SiteId` header.
-
-Discovery fetches the three standard W+M sub-sitemaps individually so blog posts can be tagged precisely (W+M's `/news,-updates/f/<slug>` URL shape doesn't match the generic classifier):
-- `sitemap.website.xml` — pages
-- `sitemap.blog.xml` — blog posts
-- `sitemap.ols.xml` — products (**v1.1**, not yet implemented)
-
-**Blog post bodies are hydrated client-side from a `window._BLOG_DATA` JSON blob.** The adapter parses this blob and converts the Draft.js ContentState (`post.fullContent`) into HTML — preserving paragraphs, headings, lists, blockquotes, code blocks, links, and images. Title, publish date, categories, and featured image are also pulled from `_BLOG_DATA` rather than HTML meta tags (higher fidelity).
-
-Pages use DOM-based extraction: strip `HEADER_SECTION`, `FOOTER_*`, cookie banners, and the first-section title/image widgets (`*_SECTION_TITLE_RENDERED`, `*_IMAGE_RENDERED0`) which would otherwise duplicate the `<wp:post_title>` and media attachment.
-
-**v1 limitations:** No GoDaddy Online Store (OLS) product extraction yet — sites with a store are flagged, but products need a real store URL for testing before v1.1 ships.
-
-## General notes
-
-- The extraction produces a WXR file (WordPress import format) + a media directory + a redirect map
-- If the site has products, a `products.csv` (WooCommerce format) and `products.jsonl` are also produced
-- All content is imported as drafts — the user reviews and publishes manually
+A liberation is complete when `compare` exits 0 and the operator has the run directory, the route counts, and any unresolved entries. A live URL is complete when `publish` has reported it, along with the claim link when the publish was anonymous.

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { ExtractionLog } from '../src/lib/extraction/extraction-log.js';
+import { ExtractionLog } from '../src/lib/resume-state/index.js';
 
 describe('ExtractionLog', () => {
   let tempDir: string;
