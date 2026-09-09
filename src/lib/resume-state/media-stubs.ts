@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync } from 'fs';
-import { join, dirname } from 'path';
+import { join, dirname, resolve, sep } from 'path';
 import { faultpoint } from './faultpoint.js';
 
 export type MediaStatus = 'awaiting' | 'success' | 'error' | 'ignored';
@@ -21,6 +21,52 @@ export function toRootRelativeUploadUrl(url: string): string {
   const i = url.indexOf(marker);
   if (i <= 0) return url; // not an uploads URL, or already root-relative (marker at index 0)
   return url.slice(i);
+}
+
+/**
+ * Resolve a stub's root-relative `localUrl` (`/wp-content/uploads/...`) to its
+ * on-disk path under `wpRoot`. Returns null when the URL is absent, is not
+ * root-relative, or resolves outside `wpRoot` — a `localUrl` read back from
+ * media-stubs.json is untrusted input and must not be able to escape the site
+ * root via `..` segments.
+ */
+function stubUploadPath(localUrl: string | undefined, wpRoot: string): string | null {
+  if (!localUrl || !localUrl.startsWith('/')) return null;
+  const root = resolve(wpRoot);
+  const abs = resolve(join(root, localUrl.replace(/^\/+/, '')));
+  if (abs !== root && !abs.startsWith(root + sep)) return null;
+  return abs;
+}
+
+/**
+ * True when a stub's recorded install (`wpPostId`/`localUrl`) can be trusted for
+ * the WP site currently being installed into.
+ *
+ * Two independent guards, because they cover different failure modes:
+ *
+ *  - Provenance: a recorded `wpRoot` that names a DIFFERENT site means the
+ *    `wpPostId` describes an attachment this site never had.
+ *  - Presence: the recorded `localUrl` is what gets written into page markup,
+ *    so the file it names must actually be on this site's disk. A site deleted
+ *    and re-created under the same name lands back at the same path with empty
+ *    uploads — the path comparison alone still matches there, which is the
+ *    original bug.
+ *
+ * A stub with no recorded `wpRoot` (written before the field existed) is judged
+ * on presence alone: an uploads file sitting exactly where the stub says it is
+ * is evidence enough that the mapping resolves, and re-installing may not even
+ * be possible if `<outputDir>/media` has since been pruned.
+ */
+export function stubInstalledInSite(stub: MediaStub, wpRoot: string | null | undefined): boolean {
+  if (!wpRoot) return false;
+  if (stub.wpRoot && resolve(stub.wpRoot) !== resolve(wpRoot)) return false;
+  if (stub.localUrl) {
+    const abs = stubUploadPath(stub.localUrl, wpRoot);
+    return abs !== null && existsSync(abs);
+  }
+  // Nothing to verify on disk and nothing to rewrite into markup: the stamp is
+  // only as good as its provenance.
+  return Boolean(stub.wpRoot);
 }
 
 export interface MediaStub {
@@ -46,6 +92,16 @@ export interface MediaStub {
    * runs, leaving `post_content` referencing remote CDN URLs.
    */
   localUrl?: string;
+  /**
+   * Resolved WP root the attachment above was installed into. media-stubs.json
+   * lives in the EXTRACTION output dir, which can be re-run against a different
+   * WordPress site (rebuilt Studio replica, second site from the same
+   * extraction); `wpPostId`/`localUrl` only describe the site they were created
+   * in. Recorded alongside them so install can tell a valid stamp from a stale
+   * one. Absent on stubs written before this field existed; see
+   * `stubInstalledInSite` for how those are judged.
+   */
+  wpRoot?: string;
   /**
    * Local path of the rasterized PNG sibling produced at fetch time for an
    * SVG asset (`svg-raster.ts`). Install-time routing substitutes this PNG
@@ -182,13 +238,18 @@ export class MediaStubStore {
    * Persists immediately because subsequent calls rely on it for idempotency:
    * losing this between install and a follow-up call would re-insert the
    * attachment as a duplicate.
+   *
+   * `wpRoot` binds the id to the site it was created in — without it the same
+   * output dir re-run against a different site would trust an id that site
+   * never had (see `stubInstalledInSite`).
    */
-  recordWpPostId(url: string, postId: number): void {
+  recordWpPostId(url: string, postId: number, wpRoot?: string): void {
     const prev = this.data.stubs[url];
     if (!prev) return;
     this.data.stubs[url] = {
       ...prev,
       wpPostId: postId,
+      ...(wpRoot ? { wpRoot: resolve(wpRoot) } : {}),
       updatedAt: new Date().toISOString(),
     };
     this.save();

@@ -9,11 +9,14 @@ import {
   ensureFinalFoundationJudgment,
   markThemePieceHandled,
   parseThemePieceDoneMarker,
+  refreshMediaUrlMapFromStubs,
   shouldDeferFoundationJudgment,
   shouldHoldPostFlushForMediaInstall,
   shouldPrioritizeThemeScaffoldDrain,
   themePieceJudgmentsPending,
 } from './watch-runner.js';
+import { MediaStubStore } from '../lib/resume-state/index.js';
+import { studioWpRoot } from '../lib/preview/studio-site.js';
 
 const TMP_ROOT = join(process.cwd(), '.tmp-test', 'watch-runner');
 mkdirSync(TMP_ROOT, { recursive: true });
@@ -379,6 +382,120 @@ describe('ensureFinalFoundationJudgment', () => {
       };
 
       expect(ensureFinalFoundationJudgment([existing], outDir)).toEqual([existing]);
+    } finally {
+      rmSync(outDir, { recursive: true, force: true });
+      rmSync(studioSitePath, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('refreshMediaUrlMapFromStubs', () => {
+  /**
+   * Seed a stub recorded as installed into `wpRoot`, staging the uploads file
+   * on that site's disk the way a real install would. Passing null models a
+   * legacy stub written before wpRoot was recorded (nothing staged anywhere).
+   */
+  function seedStub(outDir: string, wpRoot: string | null) {
+    mkdirSync(join(outDir, 'media'), { recursive: true });
+    const localPath = join(outDir, 'media', 'a.jpg');
+    writeFileSync(localPath, 'fake', 'utf8');
+    if (wpRoot) {
+      mkdirSync(join(wpRoot, 'wp-content', 'uploads', '2024', '01'), { recursive: true });
+      writeFileSync(join(wpRoot, 'wp-content', 'uploads', '2024', '01', 'a.jpg'), 'fake', 'utf8');
+    }
+    const store = MediaStubStore.load(outDir);
+    store.markSuccess('https://cdn/a.jpg', localPath);
+    store.recordWpPostId('https://cdn/a.jpg', 42, wpRoot ?? undefined);
+    store.recordLocalUrl('https://cdn/a.jpg', '/wp-content/uploads/2024/01/a.jpg');
+    store.flush();
+  }
+
+  it('ignores a stub recorded for this site whose uploads file is gone', async () => {
+    // Site deleted and re-created under the same name: same path, empty
+    // uploads. The recorded wpRoot still matches, so only the on-disk check
+    // stops the map being seeded with a URL that now 404s.
+    const { outDir, studioSitePath } = makeDirs();
+    try {
+      const wpRoot = studioWpRoot(studioSitePath)!;
+      seedStub(outDir, wpRoot);
+      rmSync(join(wpRoot, 'wp-content', 'uploads'), { recursive: true, force: true });
+      const map = new Map<string, string>();
+
+      await refreshMediaUrlMapFromStubs(outDir, studioSitePath, map);
+
+      expect(map.size).toBe(0);
+    } finally {
+      rmSync(outDir, { recursive: true, force: true });
+      rmSync(studioSitePath, { recursive: true, force: true });
+    }
+  });
+
+  it('seeds the map from stubs installed into the site being written to', async () => {
+    const { outDir, studioSitePath } = makeDirs();
+    try {
+      seedStub(outDir, studioWpRoot(studioSitePath));
+      const map = new Map<string, string>();
+
+      await refreshMediaUrlMapFromStubs(outDir, studioSitePath, map);
+
+      expect(map.get('https://cdn/a.jpg')).toBe('/wp-content/uploads/2024/01/a.jpg');
+    } finally {
+      rmSync(outDir, { recursive: true, force: true });
+      rmSync(studioSitePath, { recursive: true, force: true });
+    }
+  });
+
+  it('ignores stubs installed into a different site (rebuilt/replaced replica)', async () => {
+    // The output dir is re-run against a new site: the persisted localUrl names
+    // an uploads path that does not exist here, so seeding it would rewrite the
+    // markup to a 404.
+    const { outDir, studioSitePath } = makeDirs();
+    const otherSite = makeDirs();
+    try {
+      seedStub(outDir, studioWpRoot(otherSite.studioSitePath));
+      const map = new Map<string, string>();
+
+      await refreshMediaUrlMapFromStubs(outDir, studioSitePath, map);
+
+      expect(map.size).toBe(0);
+    } finally {
+      rmSync(outDir, { recursive: true, force: true });
+      rmSync(studioSitePath, { recursive: true, force: true });
+      rmSync(otherSite.outDir, { recursive: true, force: true });
+      rmSync(otherSite.studioSitePath, { recursive: true, force: true });
+    }
+  });
+
+  it('ignores a legacy stub with no recorded site whose file is not here', async () => {
+    const { outDir, studioSitePath } = makeDirs();
+    try {
+      seedStub(outDir, null);
+      const map = new Map<string, string>();
+
+      await refreshMediaUrlMapFromStubs(outDir, studioSitePath, map);
+
+      expect(map.size).toBe(0);
+    } finally {
+      rmSync(outDir, { recursive: true, force: true });
+      rmSync(studioSitePath, { recursive: true, force: true });
+    }
+  });
+
+  it('seeds a legacy stub with no recorded site whose file IS here', async () => {
+    // Nothing identifies the site that stamped it, but the uploads file it
+    // names is on this site's disk — the mapping demonstrably resolves, and
+    // dropping it would leave the markup on its source CDN URL.
+    const { outDir, studioSitePath } = makeDirs();
+    try {
+      seedStub(outDir, null);
+      const wpRoot = studioWpRoot(studioSitePath)!;
+      mkdirSync(join(wpRoot, 'wp-content', 'uploads', '2024', '01'), { recursive: true });
+      writeFileSync(join(wpRoot, 'wp-content', 'uploads', '2024', '01', 'a.jpg'), 'fake', 'utf8');
+      const map = new Map<string, string>();
+
+      await refreshMediaUrlMapFromStubs(outDir, studioSitePath, map);
+
+      expect(map.get('https://cdn/a.jpg')).toBe('/wp-content/uploads/2024/01/a.jpg');
     } finally {
       rmSync(outDir, { recursive: true, force: true });
       rmSync(studioSitePath, { recursive: true, force: true });

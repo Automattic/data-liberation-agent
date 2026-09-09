@@ -16,7 +16,8 @@
 //     The script is idempotent: it checks `_wp_attached_file` first and
 //     re-uses an existing attachment ID when present.
 //   - Records the resulting post ID back into MediaStubStore via
-//     `recordWpPostId(url, postId)` so subsequent calls skip the URL.
+//     `recordWpPostId(url, postId, wpRoot)` so subsequent calls against that
+//     same site skip the URL.
 //
 // Scope:
 //   - Per the contract, this installs ALL pending media each call. The
@@ -29,7 +30,7 @@ import { dirname, join, resolve } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
-import { MediaStubStore, type MediaStub } from '../resume-state/index.js';
+import { MediaStubStore, stubInstalledInSite, type MediaStub } from '../resume-state/index.js';
 import { ensurePlugin, type ExecFn } from '../preview/ensure-plugin.js';
 import { studioExecFileAsync } from '../studio-cli.js';
 
@@ -249,7 +250,14 @@ export async function installMediaForUrl(opts: MediaInstallOpts): Promise<MediaI
       result.skipped.push({ sourceUrl: url, reason: 'no-local-file' });
       continue;
     }
-    if (typeof stub.wpPostId === 'number') {
+    // Only trust a recorded install that holds for THIS site — same wpRoot
+    // where recorded, and an uploads file actually sitting where the stub's
+    // localUrl says (a site deleted and re-created under the same name comes
+    // back at the same path with empty uploads, so the path alone proves
+    // nothing). Anything else falls through and installs for real: the uploads
+    // copy below is existsSync-guarded and install-media.php re-uses an
+    // existing attachment via `_wp_attached_file`, making the path idempotent.
+    if (typeof stub.wpPostId === 'number' && stubInstalledInSite(stub, opts.wpRoot)) {
       // Already-installed: surface the persisted localUrl in `installed`
       // so the run-wide rewrite map can be (re-)built from this call's
       // result alone, even on resume runs where the PHP script wouldn't
@@ -454,7 +462,7 @@ export async function installMediaForUrl(opts: MediaInstallOpts): Promise<MediaI
 
   for (const ok of phpResults) {
     if (typeof ok.postId === 'number' && ok.postId > 0) {
-      stubs.recordWpPostId(ok.sourceUrl, ok.postId);
+      stubs.recordWpPostId(ok.sourceUrl, ok.postId, opts.wpRoot);
     }
     if (ok.localUrl) {
       // Persist the localUrl to the stub so resume runs can rebuild the
