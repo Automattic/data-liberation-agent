@@ -9,8 +9,10 @@ import { chromium } from 'playwright';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
 	CAPTURED_INTERACTIONS_SCHEMA,
+	CAPTURED_SEMANTIC_EVIDENCE_SCHEMA,
 	CAPTURE_RECEIPT_SCHEMA,
 	exportWebsiteCapture,
+	INDEXED_SEMANTIC_EVIDENCE_SCHEMA,
 	portableInlineStyle,
 	WEBSITE_ARTIFACT_SCHEMA,
 } from './capture-export.js';
@@ -204,11 +206,11 @@ describe( 'exportWebsiteCapture', () => {
 		} );
 
 		const artifact = JSON.parse( readFileSync( join( outputDir, 'artifact.json' ), 'utf8' ) );
-		const evidence = JSON.parse(
-			readFileSync( join( outputDir, 'semantic-evidence.json' ), 'utf8' )
-		);
+		const index = JSON.parse( readFileSync( join( outputDir, 'semantic-evidence.index.json' ), 'utf8' ) );
+		const evidence = JSON.parse( readFileSync( join( outputDir, index.shards[ 0 ].path ), 'utf8' ) );
 		expect( artifact.semantic_evidence ).toMatchObject( {
-			path: 'semantic-evidence.json',
+			schema: INDEXED_SEMANTIC_EVIDENCE_SCHEMA,
+			index_path: 'semantic-evidence.index.json',
 			page_count: 1,
 		} );
 		expect( evidence.pages[ 0 ].path ).toBe( 'website/index.html' );
@@ -226,7 +228,7 @@ describe( 'exportWebsiteCapture', () => {
 			}
 		}
 		const artifactEvidence = artifact.files.find(
-			( file: { path: string } ) => file.path === 'semantic-evidence.json'
+			( file: { path: string } ) => file.path === 'semantic-evidence.index.json'
 		);
 		expect( Buffer.byteLength( artifactEvidence.content ) ).toBeLessThanOrEqual(
 			artifact.compiler_limits.max_file_bytes
@@ -262,8 +264,41 @@ describe( 'exportWebsiteCapture', () => {
 		const artifact = JSON.parse( readFileSync( join( outputDir, 'artifact.json' ), 'utf8' ) );
 		expect( artifact.semantic_evidence ).toBeUndefined();
 		expect( artifact.files.map( ( file: { path: string } ) => file.path ) ).not.toContain(
-			'semantic-evidence.json'
+			'semantic-evidence.index.json'
 		);
+	} );
+
+	it( 'measures UTF-8 semantic evidence shards at the exact file limit', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-semantic-byte-limit-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
+		writeFileSync( join( outputDir, 'html', 'homepage.html' ), '<main>Home</main>' );
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( { version: 1, entries: { 'https://example.com/': { html: 'html/homepage.html' } } } )
+		);
+		const maxFileBytes = 10 * 1024 * 1024;
+		const page = {
+			path: 'website/index.html',
+			url: 'https://example.com/',
+			viewports: { desktop: [ { selector: 'main', heading: '🍜', content: '' } ] },
+		};
+		const emptyBytes = Buffer.byteLength(
+			`${ JSON.stringify( { schema: INDEXED_SEMANTIC_EVIDENCE_SCHEMA, pages: [ page ] } ) }\n`
+		);
+		page.viewports.desktop[ 0 ].content = 'x'.repeat( maxFileBytes - emptyBytes );
+		SectionSpecsStore.load( outputDir ).set(
+			'https://example.com/',
+			page.viewports.desktop as never,
+			[]
+		);
+
+		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [] } );
+
+		const index = JSON.parse( readFileSync( join( outputDir, 'semantic-evidence.index.json' ), 'utf8' ) );
+		const shard = readFileSync( join( outputDir, index.shards[ 0 ].path ), 'utf8' );
+		expect( Buffer.byteLength( shard ) ).toBe( maxFileBytes );
+		expect( shard ).toContain( '🍜' );
 	} );
 
 	it( 'exports hash-bound geometry proof without runtime capture markers', () => {
@@ -1289,26 +1324,30 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		expect( result.status, result.stderr ).toBe( 0 );
 	}, 70_000 );
 
-	it( 'compacts structured semantic evidence to fit the artifact file limit', () => {
+	it( 'indexes and shards structured semantic evidence above the artifact file limit', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-compact-semantic-export-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
 		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
 		writeFileSync( join( outputDir, 'html', 'homepage.html' ), '<main><h1>Home</h1></main>' );
+		writeFileSync( join( outputDir, 'html', 'about.html' ), '<main><h1>About</h1></main>' );
 		writeFileSync(
 			join( outputDir, 'screenshots', 'manifest.json' ),
 			JSON.stringify( {
 				version: 1,
-				entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },
+				entries: {
+					'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' },
+					'https://example.com/about': { slug: 'about', html: 'html/about.html' },
+				},
 			} )
 		);
 		const spec = {
 			selector: 'main > section',
-			layout: { samples: Array.from( { length: 56_000 }, () => 0 ) },
+			headings: [ 'Caminos y sabores 🍜' ],
+			layout: { samples: Array.from( { length: 600_000 }, () => 'evidence' ) },
 		} as never;
-		const specs = Array.from( { length: 5 }, () => spec );
-		SectionSpecsStore.load( outputDir ).set( 'https://example.com/', specs, [] );
-		SectionSpecsStore.loadMobile( outputDir ).set( 'https://example.com/', specs, [] );
+		SectionSpecsStore.load( outputDir ).set( 'https://example.com/', [ spec ], [] );
+		SectionSpecsStore.load( outputDir ).set( 'https://example.com/about', [ spec ], [] );
 
 		exportWebsiteCapture( {
 			outputDir,
@@ -1319,18 +1358,79 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		} );
 
 		const artifact = JSON.parse( readFileSync( join( outputDir, 'artifact.json' ), 'utf8' ) );
-		const evidence = JSON.parse(
-			readFileSync( join( outputDir, 'semantic-evidence.json' ), 'utf8' )
+		const index = JSON.parse( readFileSync( join( outputDir, 'semantic-evidence.index.json' ), 'utf8' ) );
+		const shards = index.shards.map( ( shard: { path: string } ) =>
+			JSON.parse( readFileSync( join( outputDir, shard.path ), 'utf8' ) )
 		);
-		expect( Buffer.byteLength( JSON.stringify( evidence, null, 2 ) ) ).toBeGreaterThan(
+		expect( index.schema ).toBe( INDEXED_SEMANTIC_EVIDENCE_SCHEMA );
+		expect( shards ).toHaveLength( 2 );
+		const pages = shards.flatMap( ( shard: { pages: unknown[] } ) => shard.pages ) as Array< {
+			path: string;
+			viewports: { desktop: Array< { headings: string[] } > };
+		}>;
+		expect( pages.map( ( page ) => page.path ) ).toEqual( [
+			'website/index.html',
+			'website/about/index.html',
+		] );
+		expect( pages.map( ( page ) => page.viewports.desktop[ 0 ].headings ) ).toEqual( [
+			[ 'Caminos y sabores 🍜' ],
+			[ 'Caminos y sabores 🍜' ],
+		] );
+		expect( Buffer.byteLength( JSON.stringify( pages ) ) ).toBeGreaterThan(
 			artifact.compiler_limits.max_file_bytes
 		);
-		const artifactEvidence = artifact.files.find(
-			( file: { path: string } ) => file.path === 'semantic-evidence.json'
+		for ( const file of artifact.files as Array< { path: string; content: string } > )
+			expect( Buffer.byteLength( file.content ) ).toBeLessThanOrEqual(
+				artifact.compiler_limits.max_file_bytes
+			);
+		expect(
+			artifact.files.reduce(
+				( total: number, file: { content?: string; content_base64?: string } ) =>
+					total +
+					( file.content_base64 === undefined
+						? Buffer.byteLength( file.content ?? '' )
+						: Buffer.from( file.content_base64, 'base64' ).length ),
+				0
+			)
+		).toBeLessThanOrEqual( artifact.compiler_limits.max_total_bytes );
+		const first = [ index, ...shards ].map( ( value ) => JSON.stringify( value ) );
+		exportWebsiteCapture( {
+			outputDir,
+			sourceUrl: 'https://example.com/',
+			platform: 'generic',
+			summary: {},
+			failures: [],
+		} );
+		const repeatedIndex = JSON.parse( readFileSync( join( outputDir, 'semantic-evidence.index.json' ), 'utf8' ) );
+		const repeated = [
+			repeatedIndex,
+			...repeatedIndex.shards.map( ( shard: { path: string } ) =>
+				JSON.parse( readFileSync( join( outputDir, shard.path ), 'utf8' ) )
+			),
+		].map( ( value ) => JSON.stringify( value ) );
+		expect( repeated ).toEqual( first );
+	} );
+
+	it( 'retains persisted v1 semantic evidence while emitting indexed v2 metadata', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-legacy-semantic-export-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
+		writeFileSync( join( outputDir, 'html', 'homepage.html' ), '<main>Home</main>' );
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( { version: 1, entries: { 'https://example.com/': { html: 'html/homepage.html' } } } )
 		);
-		expect( Buffer.byteLength( artifactEvidence.content ) ).toBeLessThanOrEqual(
-			artifact.compiler_limits.max_file_bytes
-		);
+		const legacy = `${ JSON.stringify( {
+			schema: CAPTURED_SEMANTIC_EVIDENCE_SCHEMA,
+			pages: [ { path: 'website/index.html', url: 'https://example.com/', viewports: {} } ],
+		} ) }\n`;
+		writeFileSync( join( outputDir, 'semantic-evidence.json' ), legacy );
+
+		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [] } );
+
+		expect( readFileSync( join( outputDir, 'semantic-evidence.json' ), 'utf8' ) ).toBe( legacy );
+		const artifact = JSON.parse( readFileSync( join( outputDir, 'artifact.json' ), 'utf8' ) );
+		expect( artifact.semantic_evidence ).toBeUndefined();
 	} );
 
 	it( 'preserves the rendered authoring tree when section reconstruction lacks visual proof', () => {

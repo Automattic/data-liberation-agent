@@ -46,7 +46,9 @@ type ManifestEntryFluid =
 	| undefined;
 export const WEBSITE_ARTIFACT_SCHEMA = 'blocks-engine/php-transformer/site-artifact/v1';
 export const CAPTURED_INTERACTIONS_SCHEMA = 'data-liberation/captured-interactions/v1';
+/** Legacy aggregate evidence emitted by captures created before indexed shards. */
 export const CAPTURED_SEMANTIC_EVIDENCE_SCHEMA = 'data-liberation/captured-semantic-evidence/v1';
+export const INDEXED_SEMANTIC_EVIDENCE_SCHEMA = 'data-liberation/captured-semantic-evidence/v2';
 
 function withoutGeometryIdentities( html: string ): string {
 	return html.replace( /\sdata-dla-geometry-id=(?:"[^"]*"|'[^']*')/g, '' );
@@ -1082,9 +1084,59 @@ const ARTIFACT_REPORT_FILES = [
 	'diagnostics.json',
 	'capture-receipt.json',
 	'layout-geometry-report.json',
-	'semantic-evidence.json',
 	'interaction-states.json',
 ];
+
+interface SemanticEvidencePage {
+	path: string;
+	url: string;
+	viewports: Record< string, Record< string, unknown >[] >;
+}
+
+interface SemanticEvidenceArtifacts {
+	index: { path: string; content: string };
+	shards: Array< { path: string; content: string; pageCount: number } >;
+}
+
+function semanticEvidenceArtifacts( pages: SemanticEvidencePage[] ): SemanticEvidenceArtifacts {
+	const shards: SemanticEvidenceArtifacts[ 'shards' ] = [];
+	let shardPages: SemanticEvidencePage[] = [];
+	const shardContent = ( candidates: SemanticEvidencePage[] ) =>
+		`${ JSON.stringify( { schema: INDEXED_SEMANTIC_EVIDENCE_SCHEMA, pages: candidates } ) }\n`;
+	for ( const page of pages ) {
+		const single = shardContent( [ page ] );
+		if ( Buffer.byteLength( single ) > MAX_ARTIFACT_FILE_BYTES )
+			throw new Error(
+				`Semantic evidence page "${ page.path }" exceeds compiler file limit: ${ Buffer.byteLength( single ) } bytes.`
+			);
+		const candidate = shardContent( [ ...shardPages, page ] );
+		if ( shardPages.length > 0 && Buffer.byteLength( candidate ) > MAX_ARTIFACT_FILE_BYTES ) {
+			shards.push( {
+				path: `semantic-evidence/shard-${ String( shards.length + 1 ).padStart( 4, '0' ) }.json`,
+				content: shardContent( shardPages ),
+				pageCount: shardPages.length,
+			} );
+			shardPages = [ page ];
+		} else shardPages.push( page );
+	}
+	if ( shardPages.length > 0 )
+		shards.push( {
+			path: `semantic-evidence/shard-${ String( shards.length + 1 ).padStart( 4, '0' ) }.json`,
+			content: shardContent( shardPages ),
+			pageCount: shardPages.length,
+		} );
+	const index = {
+		path: 'semantic-evidence.index.json',
+		content: `${ JSON.stringify( {
+			schema: INDEXED_SEMANTIC_EVIDENCE_SCHEMA,
+			page_count: pages.length,
+			shards: shards.map( ( shard ) => ( { path: shard.path, page_count: shard.pageCount } ) ),
+		} ) }\n`,
+	};
+	if ( Buffer.byteLength( index.content ) > MAX_ARTIFACT_FILE_BYTES )
+		throw new Error( `Semantic evidence index exceeds compiler file limit: ${ Buffer.byteLength( index.content ) } bytes.` );
+	return { index, shards };
+}
 
 /** Bytes of report files already on disk that the artifact will carry alongside routes and assets. */
 function existingReportBytes( outputDir: string ): number {
@@ -1658,6 +1710,25 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		} );
 		canonicalRouteAliases.set( normalizedUrl( entry.url ), routePath );
 	}
+	const desktopSections = SectionSpecsStore.load( outputDir );
+	const mobileSections = SectionSpecsStore.loadMobile( outputDir );
+	const semanticPages: SemanticEvidencePage[] = retainedEntries.flatMap( ( entry ) => {
+		const desktop = desktopSections.get( entry.url );
+		if ( ! isUsableSectionEvidence( desktop ) ) return [];
+		const mobile = mobileSections.get( entry.url );
+		return [ {
+			path: `website/${ routeOutputPath( entry.url, options.sourceUrl, entrypointUrl ).replace( /\\/g, '/' ) }`,
+			url: entry.url,
+			viewports: {
+				desktop: semanticSectionEvidence( desktop ),
+				...( isUsableSectionEvidence( mobile )
+					? { mobile: semanticSectionEvidence( mobile ) }
+					: {} ),
+			},
+		} ];
+	} );
+	const semanticEvidence =
+		semanticPages.length > 0 ? semanticEvidenceArtifacts( semanticPages ) : undefined;
 	const mediaReplacements = new Map< string, string >();
 	const unresolvedMedia: Array< { url: string; error: string } > = [];
 	const assets: Array< { sourceUrl: string; path: string } > = [];
@@ -1746,15 +1817,10 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		( total, entry ) => total + statSync( entry.htmlPath ).size,
 		0
 	);
-	const desktopSectionsForReports = SectionSpecsStore.load( outputDir );
 	const generatedReportFileReserve =
 		4 +
 		Number( interactionPages.length > 0 ) +
-		Number(
-			retainedEntries.some( ( entry ) =>
-				isUsableSectionEvidence( desktopSectionsForReports.get( entry.url ) )
-			)
-		);
+		( semanticEvidence ? semanticEvidence.shards.length + 1 : 0 );
 	const baseArtifactFileCount = retainedEntries.length + generatedReportFileReserve;
 	if ( baseArtifactFileCount > MAX_ARTIFACT_FILES ) {
 		throw new Error(
@@ -1765,13 +1831,21 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		baseArtifactFileCount + potentialHoistedStyles.files <= MAX_ARTIFACT_FILES &&
 		potentialHoistedStyles.bytes +
 			capturedResourceBytes( outputDir, resourceManifest ) +
-			existingReportBytes( outputDir ) <=
+			existingReportBytes( outputDir ) +
+			( semanticEvidence
+				? Buffer.byteLength( semanticEvidence.index.content ) +
+				  semanticEvidence.shards.reduce( ( total, shard ) => total + Buffer.byteLength( shard.content ), 0 )
+				: 0 ) <=
 			artifactTotalBytesLimit;
 	const reservedHoistedStyleFiles = canHoistStyles ? potentialHoistedStyles.files : 0;
 	const reservedArtifactBytes =
 		( canHoistStyles ? potentialHoistedStyles.bytes : retainedRouteBytes ) +
 		capturedResourceBytes( outputDir, resourceManifest ) +
-		existingReportBytes( outputDir );
+		existingReportBytes( outputDir ) +
+		( semanticEvidence
+			? Buffer.byteLength( semanticEvidence.index.content ) +
+			  semanticEvidence.shards.reduce( ( total, shard ) => total + Buffer.byteLength( shard.content ), 0 )
+			: 0 );
 	const portableMediaBudget = Math.min(
 		portableMediaTotalBytesLimit,
 		Math.max( 0, artifactTotalBytesLimit - reservedArtifactBytes )
@@ -2216,38 +2290,14 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		).length,
 	};
 	const reportFiles = [ 'diagnostics.json', 'capture-receipt.json', 'layout-geometry-report.json' ];
-	const desktopSections = SectionSpecsStore.load( outputDir );
-	const mobileSections = SectionSpecsStore.loadMobile( outputDir );
-	const semanticPages = routes.flatMap( ( route ) => {
-		const desktop = desktopSections.get( route.url );
-		if ( ! isUsableSectionEvidence( desktop ) ) return [];
-		const mobile = mobileSections.get( route.url );
-		return [
-			{
-				path: route.path,
-				url: route.url,
-				viewports: {
-					desktop: semanticSectionEvidence( desktop ),
-					...( isUsableSectionEvidence( mobile )
-						? { mobile: semanticSectionEvidence( mobile ) }
-						: {} ),
-				},
-			},
-		];
-	} );
-	const semanticEvidence =
-		semanticPages.length > 0
-			? {
-					schema: CAPTURED_SEMANTIC_EVIDENCE_SCHEMA,
-					pages: semanticPages,
-			  }
-			: undefined;
 	if ( semanticEvidence ) {
-		writeFileSync(
-			join( outputDir, 'semantic-evidence.json' ),
-			`${ JSON.stringify( semanticEvidence ) }\n`
-		);
-		reportFiles.push( 'semantic-evidence.json' );
+		writeFileSync( join( outputDir, semanticEvidence.index.path ), semanticEvidence.index.content );
+		for ( const shard of semanticEvidence.shards ) {
+			const path = join( outputDir, shard.path );
+			mkdirSync( dirname( path ), { recursive: true } );
+			writeFileSync( path, shard.content );
+		}
+		reportFiles.push( semanticEvidence.index.path, ...semanticEvidence.shards.map( ( shard ) => shard.path ) );
 	}
 	if ( interactionPages.length > 0 ) {
 		writeFileSync(
@@ -2387,9 +2437,10 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 				...( semanticEvidence
 					? {
 							semantic_evidence: {
-								schema: CAPTURED_SEMANTIC_EVIDENCE_SCHEMA,
-								path: 'semantic-evidence.json',
+								schema: INDEXED_SEMANTIC_EVIDENCE_SCHEMA,
+								index_path: semanticEvidence.index.path,
 								page_count: semanticPages.length,
+								shard_count: semanticEvidence.shards.length,
 							},
 					  }
 					: {} ),
