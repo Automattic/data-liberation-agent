@@ -1863,10 +1863,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 	const copiedResources = new Set< string >();
 	const copyingResources = new Set< string >();
 	const resourceReplacements = new Map< string, string >();
-	const copyResource = (
-		dependency: PortableDependency,
-		sourceUrl: string
-	): boolean => {
+	const copyResource = ( dependency: PortableDependency, sourceUrl: string ): boolean => {
 		const resource = resourceManifest.resources[ dependency.url ];
 		if ( ! resource ) {
 			unresolvedDependencies.push( {
@@ -1904,12 +1901,12 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 			  uniqueAssetPath( requestedPath, contentHash, assetHashesByPath );
 		const destination = resolve( websiteDir, relativePath );
 		const portablePath = `/${ relativePath.replace( /\\/g, '/' ) }`;
-		resourceReplacements.set( dependency.reference, portablePath );
-		resourceReplacements.set( dependency.url, portablePath );
-		if ( ! isText && assetPathsByHash.has( contentHash ) ) return true;
-		if ( copiedResources.has( resource.path ) ) return true;
-		if ( copyingResources.has( resource.path ) ) return true;
+		const alreadyCopied =
+			( ! isText && assetPathsByHash.has( contentHash ) ) ||
+			copiedResources.has( resource.path ) ||
+			copyingResources.has( resource.path );
 		if (
+			! alreadyCopied &&
 			baseArtifactFileCount + reservedHoistedStyleFiles + assets.length >=
 			MAX_ARTIFACT_FILES
 		) {
@@ -1928,6 +1925,9 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 			} );
 			return false;
 		}
+		resourceReplacements.set( dependency.reference, portablePath );
+		resourceReplacements.set( dependency.url, portablePath );
+		if ( alreadyCopied ) return true;
 		mkdirSync( dirname( destination ), { recursive: true } );
 		copyingResources.add( resource.path );
 		if ( isText ) {
