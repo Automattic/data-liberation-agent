@@ -9,9 +9,7 @@
 // direct API path is complete, and the CLI is a 36 MB install that a single
 // publish does not justify.
 //
-import { readFileSync, readdirSync, statSync } from 'node:fs';
-import { join, relative, sep } from 'node:path';
-import { createZipArchive, type ZipEntry } from './zip.js';
+import { collectDirectoryEntries, createZipArchive } from './zip.js';
 import { PublishError, type PublishOptions, type PublishResult, type PublishTarget } from './types.js';
 
 const PUBLISH_ENDPOINT = 'https://api.spacefast.com/v1/publish';
@@ -41,30 +39,6 @@ interface SpacefastProblem {
 	title?: string;
 	detail?: string;
 	requestId?: string;
-}
-
-/** Collect every file under root as archive entries with POSIX-relative paths. */
-export function collectDirectoryEntries( root: string ): ZipEntry[] {
-	const entries: ZipEntry[] = [];
-	const walk = ( directory: string ): void => {
-		for ( const item of readdirSync( directory, { withFileTypes: true } ).sort( ( a, b ) =>
-			a.name.localeCompare( b.name )
-		) ) {
-			const absolute = join( directory, item.name );
-			// Resolve through symlinks so a linked asset publishes its bytes.
-			if ( item.isDirectory() || ( item.isSymbolicLink() && statSync( absolute ).isDirectory() ) ) {
-				walk( absolute );
-				continue;
-			}
-			if ( ! item.isFile() && ! item.isSymbolicLink() ) continue;
-			entries.push( {
-				path: relative( root, absolute ).split( sep ).join( '/' ),
-				contents: readFileSync( absolute ),
-			} );
-		}
-	};
-	walk( root );
-	return entries;
 }
 
 function problemFrom( status: number, body: string ): PublishError {
