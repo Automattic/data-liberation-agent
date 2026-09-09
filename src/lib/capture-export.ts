@@ -47,6 +47,99 @@ type ManifestEntryFluid =
 export const WEBSITE_ARTIFACT_SCHEMA = 'blocks-engine/php-transformer/site-artifact/v1';
 export const CAPTURED_INTERACTIONS_SCHEMA = 'data-liberation/captured-interactions/v1';
 export const CAPTURED_SEMANTIC_EVIDENCE_SCHEMA = 'data-liberation/captured-semantic-evidence/v1';
+export const CAPTURED_SEMANTIC_EVIDENCE_INDEX_SCHEMA =
+	'data-liberation/captured-semantic-evidence-index/v2';
+
+type SemanticEvidencePage = {
+	path: string;
+	url: string;
+	viewports: Record< string, Record< string, unknown >[] >;
+};
+
+type SemanticEvidenceExport = {
+	reportFiles: string[];
+	artifact: {
+		schema: string;
+		path: string;
+		page_count: number;
+		shards?: Array< { path: string; page_count: number; sha256: string } >;
+	};
+};
+
+function semanticEvidenceJson( pages: SemanticEvidencePage[] ): string {
+	return `${ JSON.stringify( { schema: CAPTURED_SEMANTIC_EVIDENCE_SCHEMA, pages } ) }\n`;
+}
+
+function writeSemanticEvidence(
+	outputDir: string,
+	pages: SemanticEvidencePage[]
+): SemanticEvidenceExport | undefined {
+	if ( pages.length === 0 ) return undefined;
+
+	const shardDir = join( outputDir, 'semantic-evidence' );
+	const shards: Array< { path: string; page_count: number; sha256: string } > = [];
+	let shardPages: SemanticEvidencePage[] = [];
+	const writeShard = () => {
+		const content = semanticEvidenceJson( shardPages );
+		const path = `semantic-evidence/${ String( shards.length + 1 ).padStart( 4, '0' ) }.json`;
+		mkdirSync( shardDir, { recursive: true } );
+		writeFileSync( join( outputDir, path ), content );
+		shards.push( {
+			path,
+			page_count: shardPages.length,
+			sha256: createHash( 'sha256' ).update( content ).digest( 'hex' ),
+		} );
+		shardPages = [];
+	};
+
+	for ( const page of pages ) {
+		const single = semanticEvidenceJson( [ page ] );
+		if ( Buffer.byteLength( single ) > MAX_SEMANTIC_EVIDENCE_FILE_BYTES ) {
+			throw new Error(
+				`Semantic evidence page "${ page.path }" exceeds compiler limit: ${ Buffer.byteLength( single ) } bytes.`
+			);
+		}
+		if (
+			shardPages.length > 0 &&
+			Buffer.byteLength( semanticEvidenceJson( [ ...shardPages, page ] ) ) >
+				MAX_SEMANTIC_EVIDENCE_FILE_BYTES
+		) {
+			writeShard();
+		}
+		shardPages.push( page );
+	}
+	if ( shards.length === 0 ) {
+		writeFileSync( join( outputDir, 'semantic-evidence.json' ), semanticEvidenceJson( shardPages ) );
+		return {
+			reportFiles: [ 'semantic-evidence.json' ],
+			artifact: {
+				schema: CAPTURED_SEMANTIC_EVIDENCE_SCHEMA,
+				path: 'semantic-evidence.json',
+				page_count: pages.length,
+			},
+		};
+	}
+	if ( shardPages.length > 0 ) writeShard();
+
+	const index = `${ JSON.stringify( {
+		schema: CAPTURED_SEMANTIC_EVIDENCE_INDEX_SCHEMA,
+		page_count: pages.length,
+		shards,
+	} ) }\n`;
+	if ( Buffer.byteLength( index ) > MAX_SEMANTIC_EVIDENCE_FILE_BYTES ) {
+		throw new Error( `Semantic evidence index exceeds compiler limit: ${ Buffer.byteLength( index ) } bytes.` );
+	}
+	writeFileSync( join( outputDir, 'semantic-evidence.json' ), index );
+	return {
+		reportFiles: [ 'semantic-evidence.json', ...shards.map( ( shard ) => shard.path ) ],
+		artifact: {
+			schema: CAPTURED_SEMANTIC_EVIDENCE_INDEX_SCHEMA,
+			path: 'semantic-evidence.json',
+			page_count: pages.length,
+			shards,
+		},
+	};
+}
 
 function withoutGeometryIdentities( html: string ): string {
 	return html.replace( /\sdata-dla-geometry-id=(?:"[^"]*"|'[^']*')/g, '' );
@@ -161,6 +254,8 @@ const MAX_PORTABLE_MEDIA_DIMENSION = 2048;
 const MAX_PORTABLE_MEDIA_TOTAL_BYTES = 160 * 1024 * 1024;
 const MAX_ARTIFACT_FILES = 5000;
 const MAX_ARTIFACT_FILE_BYTES = 10 * 1024 * 1024;
+// The packaged Blocks Engine normalizer currently admits at most 5 MiB per member.
+const MAX_SEMANTIC_EVIDENCE_FILE_BYTES = 5 * 1024 * 1024;
 const MAX_ARTIFACT_TOTAL_BYTES = 192 * 1024 * 1024;
 const STYLE_HOIST_DIAGNOSTIC_SAMPLE_BYTES = 31 * 1024;
 const TRANSPARENT_IMAGE_DATA_URL = 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=';
@@ -2218,7 +2313,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 	const reportFiles = [ 'diagnostics.json', 'capture-receipt.json', 'layout-geometry-report.json' ];
 	const desktopSections = SectionSpecsStore.load( outputDir );
 	const mobileSections = SectionSpecsStore.loadMobile( outputDir );
-	const semanticPages = routes.flatMap( ( route ) => {
+	const semanticPages: SemanticEvidencePage[] = routes.flatMap( ( route ) => {
 		const desktop = desktopSections.get( route.url );
 		if ( ! isUsableSectionEvidence( desktop ) ) return [];
 		const mobile = mobileSections.get( route.url );
@@ -2235,20 +2330,8 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 			},
 		];
 	} );
-	const semanticEvidence =
-		semanticPages.length > 0
-			? {
-					schema: CAPTURED_SEMANTIC_EVIDENCE_SCHEMA,
-					pages: semanticPages,
-			  }
-			: undefined;
-	if ( semanticEvidence ) {
-		writeFileSync(
-			join( outputDir, 'semantic-evidence.json' ),
-			`${ JSON.stringify( semanticEvidence ) }\n`
-		);
-		reportFiles.push( 'semantic-evidence.json' );
-	}
+	const semanticEvidence = writeSemanticEvidence( outputDir, semanticPages );
+	if ( semanticEvidence ) reportFiles.push( ...semanticEvidence.reportFiles );
 	if ( interactionPages.length > 0 ) {
 		writeFileSync(
 			join( outputDir, 'interaction-states.json' ),
@@ -2384,15 +2467,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 				root: 'website',
 				entrypoint: 'website/index.html',
 				...( geometry.proof ? { layout_geometry_proof: geometry.proof } : {} ),
-				...( semanticEvidence
-					? {
-							semantic_evidence: {
-								schema: CAPTURED_SEMANTIC_EVIDENCE_SCHEMA,
-								path: 'semantic-evidence.json',
-								page_count: semanticPages.length,
-							},
-					  }
-					: {} ),
+				...( semanticEvidence ? { semantic_evidence: semanticEvidence.artifact } : {} ),
 			} ).slice( 0, -1 ) },"files":[`
 		);
 

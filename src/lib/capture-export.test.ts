@@ -9,6 +9,7 @@ import { chromium } from 'playwright';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
 	CAPTURED_INTERACTIONS_SCHEMA,
+	CAPTURED_SEMANTIC_EVIDENCE_INDEX_SCHEMA,
 	CAPTURE_RECEIPT_SCHEMA,
 	exportWebsiteCapture,
 	portableInlineStyle,
@@ -231,6 +232,105 @@ describe( 'exportWebsiteCapture', () => {
 		expect( Buffer.byteLength( artifactEvidence.content ) ).toBeLessThanOrEqual(
 			artifact.compiler_limits.max_file_bytes
 		);
+	} );
+
+	it( 'shards large semantic evidence without losing pages or exceeding artifact limits', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-semantic-shards-' ) );
+		dirs.push( outputDir );
+		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
+		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
+		writeFileSync( join( outputDir, 'html', 'homepage.html' ), '<main>Homepage</main>' );
+		const routes = Array.from( { length: 3 }, ( _, index ) => {
+			const url = `https://example.com/page-${ index }`;
+			const html = `html/page-${ index }.html`;
+			writeFileSync( join( outputDir, html ), `<main>Page ${ index }</main>` );
+			SectionSpecsStore.load( outputDir ).set(
+				url,
+				[
+					{
+						selector: 'main',
+						layout: { retained: `${ index }-${ 'x'.repeat( 4 * 1024 * 1024 ) }` },
+					} as never,
+				],
+				[]
+			);
+			return [ url, { html } ];
+		} );
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( {
+				version: 1,
+				entries: {
+					'https://example.com/': { html: 'html/homepage.html' },
+					...Object.fromEntries( routes ),
+				},
+			} )
+		);
+
+		exportWebsiteCapture( {
+			outputDir,
+			sourceUrl: 'https://example.com/',
+			platform: 'generic',
+			summary: {},
+			failures: [],
+		} );
+
+		const artifact = JSON.parse( readFileSync( join( outputDir, 'artifact.json' ), 'utf8' ) );
+		const index = JSON.parse( readFileSync( join( outputDir, 'semantic-evidence.json' ), 'utf8' ) );
+		expect( index.schema ).toBe( CAPTURED_SEMANTIC_EVIDENCE_INDEX_SCHEMA );
+		expect( artifact.semantic_evidence.shards ).toHaveLength( 3 );
+		expect( artifact.files.map( ( file: { path: string } ) => file.path ) ).toEqual(
+			expect.arrayContaining( [
+				'semantic-evidence.json',
+				...index.shards.map( ( shard: { path: string } ) => shard.path ),
+			] )
+		);
+		const pages = index.shards.flatMap( ( shard: { path: string } ) => {
+			const content = readFileSync( join( outputDir, shard.path ), 'utf8' );
+			expect( Buffer.byteLength( content ) ).toBeLessThanOrEqual(
+				5 * 1024 * 1024
+			);
+			return JSON.parse( content ).pages;
+		} );
+		expect( pages.map( ( page: { path: string } ) => page.path ) ).toEqual(
+			Array.from( { length: 3 }, ( _, index ) => `website/page-${ index }/index.html` )
+		);
+		expect( pages.map( ( page: { viewports: { desktop: Array<{ layout: { retained: string } }> } } ) => page.viewports.desktop[ 0 ].layout.retained.length ) ).toEqual(
+			[ 4 * 1024 * 1024 + 2, 4 * 1024 * 1024 + 2, 4 * 1024 * 1024 + 2 ]
+		);
+		for ( const file of artifact.files ) {
+			expect( Buffer.byteLength( file.content ?? '' ) ).toBeLessThanOrEqual(
+				artifact.compiler_limits.max_file_bytes
+			);
+		}
+	} );
+
+	it( 'reports a single semantic evidence page that cannot fit in an artifact member', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-semantic-page-limit-' ) );
+		dirs.push( outputDir );
+		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
+		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
+		writeFileSync( join( outputDir, 'html', 'homepage.html' ), '<main>Oversized evidence</main>' );
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( { version: 1, entries: { 'https://example.com/': { html: 'html/homepage.html' } } } )
+		);
+		SectionSpecsStore.load( outputDir ).set(
+			'https://example.com/',
+			[ { selector: 'main', layout: { retained: 'x'.repeat( 11 * 1024 * 1024 ) } } as never ],
+			[]
+		);
+
+		expect( () =>
+			exportWebsiteCapture( {
+				outputDir,
+				sourceUrl: 'https://example.com/',
+				platform: 'generic',
+				summary: {},
+				failures: [],
+			} )
+		).toThrow( 'Semantic evidence page "website/index.html" exceeds compiler limit' );
+		expect( existsSync( join( outputDir, 'artifact.json' ) ) ).toBe( false );
 	} );
 
 	it( 'retains the HTML-only fallback when section evidence is invalid', () => {
