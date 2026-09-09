@@ -96,4 +96,23 @@ describe('Squarespace archive discovery', () => {
     expect(archiveRequests).toHaveLength(200);
     expect(inventory.urls.filter(({ type }) => type === 'post')).toHaveLength(200);
   });
+
+  it('ignores invalid JSON shapes and invalid archive entries without losing sitemap routes', async () => {
+    const empty = await squarespaceServer(() => ({ body: 'null' }));
+    await expect(discover(empty.url, {})).resolves.toMatchObject({
+      urls: expect.arrayContaining([{ url: `${empty.url}/about`, type: 'page' }]),
+    });
+
+    const mixed = await squarespaceServer(() => ({
+      body: JSON.stringify({
+        items: [null, 42, { urlId: 1, fullUrl: '/blog/bad' }, { urlId: 'valid', fullUrl: '/blog/valid' }],
+        pagination: { nextPageOffset: {} },
+      }),
+    }));
+    const inventory = await discover(mixed.url, {});
+    expect(inventory.urls.filter(({ type }) => type === 'post')).toEqual([
+      { url: `${mixed.url}/blog/valid`, type: 'post' },
+    ]);
+    expect(mixed.archiveRequests).toHaveLength(1);
+  });
 });

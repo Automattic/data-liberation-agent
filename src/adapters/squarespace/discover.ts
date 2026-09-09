@@ -9,8 +9,8 @@ const MAX_ARCHIVE_PAGES = 200;
 const BLOG_PREFIXES = ['/blog', '/journal', '/news', '/posts', '/stories'];
 
 interface ArchivePage {
-  items?: Array<{ urlId?: string; fullUrl?: string; addedOn?: number | string }>;
-  pagination?: { nextPage?: number | string; nextPageOffset?: number | string };
+  items?: Array<{ urlId?: string; fullUrl?: string; addedOn?: number | string } | null>;
+  pagination?: { nextPageOffset?: number | string };
 }
 
 function blogPrefixes(urls: InventoryUrl[]): string[] {
@@ -70,32 +70,31 @@ async function discoverArchiveUrls(siteUrl: string, prefix: string): Promise<str
     }
     if (!response.ok) break;
 
-    let archive: ArchivePage;
+    let archive: ArchivePage | null;
     try {
       archive = await response.json() as ArchivePage;
     } catch {
       break;
     }
-    if (!Array.isArray(archive.items) || archive.items.length === 0) break;
+    if (!archive || !Array.isArray(archive.items) || archive.items.length === 0) break;
 
     for (const item of archive.items) {
-      if (!item.urlId || seenUrlIds.has(item.urlId) || !item.fullUrl) continue;
+      if (!item || typeof item.urlId !== 'string' || !item.urlId || seenUrlIds.has(item.urlId) || typeof item.fullUrl !== 'string' || !item.fullUrl) continue;
       let itemUrl: URL;
       try {
         itemUrl = new URL(item.fullUrl, origin);
       } catch {
         continue;
       }
-      if (itemUrl.origin !== origin) continue;
+      if (itemUrl.origin !== origin || itemUrl.username || itemUrl.password) continue;
       seenUrlIds.add(item.urlId);
       itemUrl.hash = '';
       urls.push(itemUrl.href);
     }
 
     const next = archive.pagination?.nextPageOffset
-      ?? archive.pagination?.nextPage
       ?? archive.items[archive.items.length - 1]?.addedOn;
-    if (next === undefined || next === null || seenOffsets.has(String(next))) break;
+    if ((typeof next !== 'string' && typeof next !== 'number') || String(next).trim() === '' || (typeof next === 'number' && !Number.isFinite(next)) || seenOffsets.has(String(next))) break;
     seenOffsets.add(String(next));
     offset = next;
   }
