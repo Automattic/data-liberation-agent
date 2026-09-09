@@ -1,7 +1,14 @@
 #!/usr/bin/env node
 // src/cli.ts
+//
+// Three verbs: liberate a site, verify the copy, publish it.
+//
+import { createRequire } from 'node:module';
+import { resolveOutputBase } from './lib/paths.js';
 
 const args = process.argv.slice(2);
+const version = ( createRequire( import.meta.url )( '../package.json' ) as { version: string } )
+  .version;
 
 function getArg(name: string): string | null {
   const i = args.indexOf(name);
@@ -11,166 +18,133 @@ function getArg(name: string): string | null {
   return val;
 }
 
-if (args[0] === 'mcp') {
-  await import('./mcp-server.js');
-} else if (args[0] === '--version') {
-  console.log('0.1.0');
-} else if (args[0] === '--help' || args.length === 0) {
-  console.log(`
-  data-liberation — Extract content from closed web platforms into WXR files
+const HELP = `
+  data-liberation — Liberate any website into a complete, portable HTML site
 
   Usage:
-    data-liberation <url>              Extract content from a website
-    data-liberation inspect <url>      Inspect a site before extraction
-    data-liberation import <wxr-file>  Import WXR file to WordPress
-    data-liberation qa <wxr-file>        Compare WXR against source site
-    data-liberation verify <output-dir>  Verify extraction results
-    data-liberation setup                Validate WordPress connection
-    data-liberation preview <outputDir>  Preview extraction in WordPress Playground
+    data-liberation <url>              Liberate a website into a portable HTML site
+    data-liberation compare <dir>      Verify a liberated copy against its source
+    data-liberation publish <dir>      Publish a liberated site (--to spacefast)
     data-liberation mcp                Start MCP server (stdio transport)
     data-liberation --version          Show version
 
-  Extract options:
-    --output <dir>       Output directory (default: ./output)
-    --dry-run            Extract 2-3 pages and report without writing WXR
-    --limit <N>          Cap extraction to the first N URLs (writes a real WXR)
-    --resume             Resume a previous extraction
-    --token <token>      API token for platforms requiring auth (Webflow)
-    --delay <ms>         Delay between requests (default: 500)
-    --verbose            Detailed extraction logging
-    --non-interactive    Skip the post-extraction import prompt
-    --admin-token <tok>  Shopify Admin API token — enables richer product extraction
-                         via GraphQL (compareAtPrice, unitCost, inventoryPolicy, etc.)
-    --shop-domain <host> Shopify myshopify.com hostname — usually auto-detected
+  Liberate options:
+    --output <dir>       Output base directory (default: ~/data-liberation; override with --output or DLA_OUTPUT_DIR)
+    --resume             Reuse artifacts already on disk instead of recapturing
+    --screenshots        Also capture full-page + scrolled PNG screenshots
+    --serve              Keep a local server running on the liberated site until
+                         interrupted, for browsing it. Liberation writes the site
+                         and exits without this.
+    --no-learn-fluid     Skip the width sweep and freeze the layout at one width.
+                         Learning is on by default: it keeps the copy reflowing
+                         like the source instead of pinning it to the capture width.
 
-  Import options:
-    --site <domain>       WordPress site domain
-    --username <user>     WordPress username
-    --token <token>       Application password (or WP_APP_PASSWORD env var)
-    --dry-run             Preview without importing
-    --delay <ms>          Delay between requests (default: 500)
-    --verbose             Detailed logging
-    --only <type>         Only import specific type (categories, tags, media, pages, posts, comments, menus)
-    --import-authors      Create WordPress users for authors (default: all content owned by you)
+  Compare options:
+    --screenshots        Write source/liberated/diff PNGs as evidence. Pixel score
+                         never decides pass/fail.
 
-  Preview options:
-    --open               Open the preview URL in the default browser
-    --port <n>           Override the auto-picked port (9400-9499)
-    --non-interactive    Skip the post-preview import nudge
+  Publish options:
+    --to <target>        Where to publish. Targets: spacefast (default)
+    --token <token>      Publish into your own account (or SPACEFAST_TOKEN).
+                         Without it the publish is anonymous and returns a claim link.
 
   Environment:
-    LIBERATION_TOKEN     API token (alternative to --token flag for extraction)
-    SHOPIFY_ADMIN_TOKEN  Shopify Admin API token (alternative to --admin-token)
-    WP_APP_PASSWORD      WordPress application password (alternative to --token for import)
-`);
-} else if (args[0] === 'inspect') {
-  const url = args[1];
-  if (!url || url.startsWith('-')) {
-    console.error('Error: URL required. Usage: data-liberation inspect <url>');
+    DLA_OUTPUT_DIR       Default output base directory
+    SPACEFAST_TOKEN      Publish token for the spacefast target
+`;
+
+if (args[0] === 'mcp') {
+  await import('./mcp-server.js');
+} else if (args[0] === '--version') {
+  console.log(version);
+} else if (args[0] === '--help' || args.length === 0) {
+  console.log(HELP);
+} else if (args[0] === 'compare') {
+  const directory = args[1];
+  if (!directory || directory.startsWith('-')) {
+    console.error('Error: directory required. Usage: data-liberation compare <dir> [--screenshots]');
+    process.exit(1);
+  }
+  const { runCompare } = await import('./ui/compare.js');
+  const report = await runCompare(directory, { screenshots: args.includes('--screenshots') });
+  process.exit(report.pass ? 0 : 1);
+} else if (args[0] === 'publish') {
+  const directory = args[1];
+  if (!directory || directory.startsWith('-')) {
+    console.error('Error: directory required. Usage: data-liberation publish <dir> [--to <target>]');
     process.exit(1);
   }
 
-  const token = args.includes('--token') ? args[args.indexOf('--token') + 1] : process.env.LIBERATION_TOKEN || null;
+  const { publishSite } = await import('./ui/publish.js');
+  const { PublishError } = await import('./lib/publish/index.js');
+  try {
+    const result = await publishSite({
+      directory,
+      target: getArg('--to') ?? 'spacefast',
+      token: getArg('--token') ?? process.env.SPACEFAST_TOKEN ?? undefined,
+      log: (message) => process.stderr.write(`${message}\n`),
+    });
 
-  const { runInspect } = await import('./ui/inspect.js');
-  runInspect(url, { token });
-
-} else if (args[0] === 'qa') {
-  const wxrFile = args[1] || getArg('--wxr');
-  if (!wxrFile || wxrFile.startsWith('-')) {
-    console.error('Error: WXR file path required. Usage: data-liberation qa <wxr-file> [--fix]');
-    process.exit(1);
+    console.log(`Published ${result.files} files to ${result.target}.`);
+    console.log(`Live: ${result.liveUrl}`);
+    if (result.versionUrl) console.log(`Version: ${result.versionUrl}`);
+    if (result.private) {
+      console.log('This space is private by default, so the live URL returns 403 until access is granted.');
+    }
+    if (result.claim) {
+      console.log(`Claim it to keep it: ${result.claim.url}`);
+      if (result.claim.expiresAt) console.log(`Claim expires: ${result.claim.expiresAt}`);
+    }
+    for (const note of result.notes) console.log(`Note: ${note}`);
+  } catch (error) {
+    if (error instanceof PublishError) {
+      console.error(error.message);
+      if (error.requestId) console.error(`Request ID: ${error.requestId}`);
+      process.exit(1);
+    }
+    throw error;
   }
-  const fix = args.includes('--fix');
-
-  const { runQaUi } = await import('./ui/qa.js');
-  runQaUi({ wxrFile, fix });
-
-} else if (args[0] === 'verify') {
-  const outputDir = args[1] || getArg('--output') || './output';
-  if (outputDir.startsWith('-')) {
-    console.error('Error: output directory required. Usage: data-liberation verify <output-dir>');
-    process.exit(1);
-  }
-
-  const { runVerify } = await import('./ui/verify.js');
-  runVerify(outputDir);
-
-} else if (args[0] === 'setup') {
-  const site = getArg('--site');
-  const username = getArg('--username');
-  const token = getArg('--token') || process.env.WP_APP_PASSWORD || null;
-
-  const { runSetup } = await import('./ui/setup.js');
-  runSetup({ site: site ?? undefined, username: username ?? undefined, token: token ?? undefined });
-
-} else if (args[0] === 'preview') {
-  const outputDir = args[1];
-  if (!outputDir || outputDir.startsWith('-')) {
-    console.error('Error: outputDir required. Usage: data-liberation preview <outputDir> [--open] [--port <n>] [--non-interactive]');
-    process.exit(1);
-  }
-  const open = args.includes('--open');
-  const portArg = getArg('--port');
-  const port = portArg ? Number(portArg) : undefined;
-  const nonInteractive = args.includes('--non-interactive') || !process.stdout.isTTY;
-
-  const { runCliPreview } = await import('./ui/preview.js');
-  await runCliPreview({ outputDir, open, port, nonInteractive });
-
-} else if (args[0] === 'import') {
-  const wxrFile = args[1];
-  if (!wxrFile || wxrFile.startsWith('-')) {
-    console.error('Error: WXR file path required. Run with --help for usage.');
-    process.exit(1);
-  }
-
-  const site = getArg('--site');
-  const username = getArg('--username');
-  const token = getArg('--token') || process.env.WP_APP_PASSWORD || null;
-  const dryRun = args.includes('--dry-run');
-  const verbose = args.includes('--verbose');
-  const rawDelay = getArg('--delay') ? parseInt(getArg('--delay')!, 10) : 500;
-  const delay = Number.isNaN(rawDelay) ? 500 : rawDelay;
-  const only = getArg('--only');
-  const importAuthors = args.includes('--import-authors');
-
-  if (!site) {
-    console.error('Error: --site is required. Run with --help for usage.');
-    process.exit(1);
-  }
-  if (!username) {
-    console.error('Error: --username is required. Run with --help for usage.');
-    process.exit(1);
-  }
-  if (!token) {
-    console.error('Error: --token or WP_APP_PASSWORD env var is required. Run with --help for usage.');
-    process.exit(1);
-  }
-
-  const { runImport } = await import('./ui/import.js');
-  runImport({ wxrFile, site: site as string, username: username as string, token: token as string, dryRun, delay, verbose, only, importAuthors });
 } else {
+  // A bare URL means full-site HTML liberation: every retained route becomes a
+  // portable local site that runs on its own.
   const url = args.find((a: string) => !a.startsWith('-'));
   if (!url) {
     console.error('Error: URL required. Run with --help for usage.');
     process.exit(1);
   }
 
-  const outputDir = getArg('--output') || './output';
-  const dryRun = args.includes('--dry-run');
-  const resume = args.includes('--resume');
-  const verbose = args.includes('--verbose');
-  const rawDelay = getArg('--delay') ? parseInt(getArg('--delay')!, 10) : 500;
-  const delay = Number.isNaN(rawDelay) ? 500 : rawDelay;
-  const rawLimit = getArg('--limit') ? parseInt(getArg('--limit')!, 10) : null;
-  const limit = rawLimit !== null && !Number.isNaN(rawLimit) ? rawLimit : null;
-  const token = getArg('--token') || process.env.LIBERATION_TOKEN || null;
-  const cdpPort = getArg('--cdp-port') ? parseInt(getArg('--cdp-port')!, 10) : null;
-  const adminToken = getArg('--admin-token') || process.env.SHOPIFY_ADMIN_TOKEN || null;
-  const shopDomain = getArg('--shop-domain') || null;
-  const nonInteractive = args.includes('--non-interactive');
+  const { liberateSite } = await import('./ui/liberate.js');
+  const result = await liberateSite({
+    url,
+    outputBase: getArg('--output') || resolveOutputBase(),
+    resume: args.includes('--resume'),
+    screenshots: args.includes('--screenshots'),
+    learnFluid: !args.includes('--no-learn-fluid'),
+    serve: args.includes('--serve'),
+    log: (message) => process.stderr.write(`${message}\n`),
+  });
 
-  const { runDiscover } = await import('./ui/discover.js');
-  runDiscover(url, { outputDir, dryRun, resume, verbose, delay, limit, token, cdpPort, adminToken, shopDomain, nonInteractive });
+  const notes = [
+    result.routesSkipped ? `${result.routesSkipped} reused` : '',
+    result.routesFailed ? `${result.routesFailed} failed` : '',
+  ].filter(Boolean);
+  console.log(
+    `Liberated ${result.routesCaptured + result.routesSkipped}/${result.routesDiscovered} routes` +
+      (notes.length ? ` (${notes.join(', ')})` : ''),
+  );
+  console.log(`Site: ${result.websiteDir}`);
+
+  const server = result.server;
+  if (server) {
+    console.log(`Serving: ${server.url}`);
+    console.log('Press Ctrl+C to stop.');
+    const stop = () => {
+      void server.close().then(() => process.exit(0));
+    };
+    process.once('SIGINT', stop);
+    process.once('SIGTERM', stop);
+  } else {
+    // Guidance goes to stderr so stdout stays the machine-readable result.
+    process.stderr.write(`Browse it: data-liberation ${url} --resume --serve\n`);
+  }
 }
