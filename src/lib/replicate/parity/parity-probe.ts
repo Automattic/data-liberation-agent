@@ -7,7 +7,7 @@
 // is a thin wrapper. evaluate() closures run under tsx (the MCP server), so
 // pages get the string-form __name polyfill (same as screenshotter.ts).
 //
-import type { Browser, Page } from 'playwright';
+import { devices, type Browser, type Page } from 'playwright';
 import type { DiffRegion } from './diff-regions.js';
 
 export const PROP_BATTERY = [
@@ -209,18 +209,17 @@ export interface ProbePairOpts {
 
 const VIEWPORTS: Record<ViewportId, { width: number; height: number; mobile: boolean }> = {
   desktop: { width: 1440, height: 900, mobile: false },
-  mobile: { width: 390, height: 844, mobile: true },
+  mobile: { width: 402, height: 681, mobile: true },
 };
 
-const MOBILE_UA =
-  'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1';
+const { defaultBrowserType: _defaultBrowserType, ...IPHONE_17_CONTEXT } = devices['iPhone 17'];
 
 /** Probe both sides for one viewport. Deterministic given stable pages. */
 export async function probePair(opts: ProbePairOpts): Promise<Divergence[]> {
   const vp = VIEWPORTS[opts.viewport];
   const context = await opts.browser.newContext({
+    ...(vp.mobile ? IPHONE_17_CONTEXT : {}),
     viewport: { width: vp.width, height: vp.height },
-    ...(vp.mobile ? { isMobile: true, hasTouch: true, userAgent: MOBILE_UA } : {}),
   });
   await context.addInitScript(NAME_POLYFILL);
   try {

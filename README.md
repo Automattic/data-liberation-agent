@@ -137,7 +137,7 @@ A successful run produces, in `~/data-liberation/<host>/` (the default for the `
 
 ## Screenshots & design tokens
 
-The `liberate` flow captures, for every URL, full-page + scrolled-state screenshots (desktop 1440×900 and mobile 390×844), the rendered HTML, and site-wide design tokens — used by the reconstruction phase and handy for feeding AI design-system tools. Via raw MCP this is the `liberate_screenshot` tool (or `screenshots: true` on `liberate_extract`).
+The `liberate` flow captures, for every URL, full-page + scrolled-state screenshots (desktop 1440×900 and mobile iPhone 17 at 402×681), the rendered HTML, and site-wide design tokens — used by the reconstruction phase and handy for feeding AI design-system tools. Via raw MCP this is the `liberate_screenshot` tool (or `screenshots: true` on `liberate_extract`).
 
 Artifacts land under the output directory:
 

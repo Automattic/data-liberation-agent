@@ -226,7 +226,7 @@ Auto-runs after every `liberate <url>` extraction; the standalone
 data-liberation screenshot <url> [options]
 ```
 
-Capture full-page + scrolled-state screenshots (desktop 1440×900 + mobile 390×844) plus rendered HTML for every URL on a site. Runs independently from extraction — useful for pre-liberation analysis or downstream design-system synthesis. Also produces three per-site aggregated design-token files (`palette.json`, `typography.json`, `breakpoints.json`) sampled from every captured URL.
+Capture full-page + scrolled-state screenshots (desktop 1440×900 + mobile iPhone 17 at 402×681) plus rendered HTML for every URL on a site. Runs independently from extraction — useful for pre-liberation analysis or downstream design-system synthesis. Also produces three per-site aggregated design-token files (`palette.json`, `typography.json`, `breakpoints.json`) sampled from every captured URL.
 
 **Options:**
 

@@ -674,7 +674,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'liberate_compare',
       description:
-        'Pixel-parity scorer (fixed viewport). Joins an origin screenshots dir to a replica screenshots dir by URL pathname, crops both full-page PNGs to the top 1440×900 / 390×844 region, and returns per-pathname desktop/mobile similarity scores (1 − diffPixels/total). Writes comparison.json (v2 with originHeight/replicaHeight/heightMismatchRatio per viewport) + diff PNGs into the replica dir. Writes magenta-padded .padded.png diff when height mismatch exceeds 2%. Both dirs must have the standard layout: manifest.json + desktop/<slug>.png + mobile/<slug>.png.',
+        'Pixel-parity scorer (fixed viewport). Joins an origin screenshots dir to a replica screenshots dir by URL pathname, crops both full-page PNGs to the top 1440×900 / 402×681 region, and returns per-pathname desktop/mobile similarity scores (1 − diffPixels/total). Writes comparison.json (v2 with originHeight/replicaHeight/heightMismatchRatio per viewport) + diff PNGs into the replica dir. Writes magenta-padded .padded.png diff when height mismatch exceeds 2%. Both dirs must have the standard layout: manifest.json + desktop/<slug>.png + mobile/<slug>.png.',
       inputSchema: {
         type: 'object' as const,
         properties: {
