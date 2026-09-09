@@ -922,6 +922,44 @@ function srcsetReferences( srcset: string ): string[] {
 	return references;
 }
 
+function lazyImageResourceAliases( html: string, documentUrl: string ): Map< string, string > {
+	const aliases = new Map< string, string >();
+	const $ = cheerio.load( html );
+	$( 'img[src]' ).each( ( _index, element ) => {
+		const displayed = $( element ).attr( 'src' );
+		if ( ! displayed ) return;
+		let rendition: URL;
+		try {
+			rendition = new URL( displayed.replace( /&amp;/g, '&' ), documentUrl );
+		} catch {
+			return;
+		}
+		// A bare lazy source paired with `?format=<width>w` is an image-service
+		// rendition of this exact element, not a general query-string equivalence.
+		if (
+			rendition.searchParams.size !== 1 ||
+			! /^[1-9]\d*w$/.test( rendition.searchParams.get( 'format' ) ?? '' )
+		)
+			return;
+		for ( const attribute of [ 'data-src', 'data-image' ] ) {
+			const source = $( element ).attr( attribute );
+			if ( ! source ) continue;
+			try {
+				const identity = new URL( source.replace( /&amp;/g, '&' ), documentUrl );
+				if (
+					identity.origin === rendition.origin &&
+					identity.pathname === rendition.pathname &&
+					identity.search === ''
+				)
+					aliases.set( rendition.href, identity.href );
+			} catch {
+				// Invalid lazy attributes cannot establish a captured-resource identity.
+			}
+		}
+	} );
+	return aliases;
+}
+
 function capturedMediaReferences( entries: CaptureEntry[] ): Map< string, Set< string > > {
 	const pages = new Set(
 		entries.flatMap( ( entry ) => {
@@ -1863,8 +1901,13 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 	const copiedResources = new Set< string >();
 	const copyingResources = new Set< string >();
 	const resourceReplacements = new Map< string, string >();
-	const copyResource = ( dependency: PortableDependency, sourceUrl: string ): boolean => {
-		const resource = resourceManifest.resources[ dependency.url ];
+	const copyResource = (
+		dependency: PortableDependency,
+		sourceUrl: string,
+		lazyAlias?: string
+	): boolean => {
+		const resource = resourceManifest.resources[ dependency.url ] ??
+			( lazyAlias ? resourceManifest.resources[ lazyAlias ] : undefined );
 		if ( ! resource ) {
 			unresolvedDependencies.push( {
 				url: dependency.url,
@@ -1901,6 +1944,8 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 			  uniqueAssetPath( requestedPath, contentHash, assetHashesByPath );
 		const destination = resolve( websiteDir, relativePath );
 		const portablePath = `/${ relativePath.replace( /\\/g, '/' ) }`;
+		resourceReplacements.set( dependency.reference, portablePath );
+		resourceReplacements.set( dependency.url, portablePath );
 		if ( ! isText && assetPathsByHash.has( contentHash ) ) return true;
 		if ( copiedResources.has( resource.path ) ) return true;
 		if ( copyingResources.has( resource.path ) ) return true;
@@ -1923,9 +1968,6 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 			} );
 			return false;
 		}
-		resourceReplacements.set( dependency.reference, portablePath );
-		resourceReplacements.set( dependency.url, portablePath );
-
 		mkdirSync( dirname( destination ), { recursive: true } );
 		copyingResources.add( resource.path );
 		if ( isText ) {
@@ -1960,6 +2002,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 	};
 	for ( const entry of retainedEntries ) {
 		let html = readFileSync( entry.htmlPath, 'utf8' );
+		const lazyAliases = lazyImageResourceAliases( html, entry.url );
 		for ( const dependency of dependencyReferences( html, entry.url ) ) {
 			const mediaReplacement = mediaReplacements.get( dependency.reference );
 			if (
@@ -1968,7 +2011,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 				! /^(?:https?:)?\/\//i.test( mediaReplacement )
 			)
 				continue;
-			if ( copyResource( dependency, entry.url ) ) {
+			if ( copyResource( dependency, entry.url, lazyAliases.get( dependency.url ) ) ) {
 				// A browser-captured response is a faithful bounded fallback when the
 				// independent media fetch failed. Let its local replacement win.
 				if ( mediaReplacement === TRANSPARENT_IMAGE_DATA_URL ) {
