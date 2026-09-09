@@ -1,4 +1,5 @@
 import { fetchSitemap, classifyUrl } from '../../lib/extraction/sitemap.js';
+import { extractNavLinks } from '../../lib/html-extract/index.js';
 import type { InventoryUrl } from '../shared.js';
 import type { NavLink } from '../../lib/html-extract/index.js';
 import type { SquarespaceAdapterOpts, SquarespaceInventory } from './types.js';
@@ -121,10 +122,19 @@ export async function discover(url: string, opts: Record<string, unknown>): Prom
   // 2. Fetch sitemap
   const sitemapUrls = await fetchSitemap(url);
 
-  // 3. Extract navigation from the homepage JSON or sitemap
-  const navigation: NavLink[] = [];
-  // Squarespace JSON sometimes includes navigation in the website object;
-  // for now, we derive nav from the top-level sitemap pages.
+  // 3. Squarespace renders its primary navigation in the public homepage HTML.
+  // Admin discovery below supplements this list with published admin-only pages.
+  let navigation: NavLink[] = [];
+  try {
+    const homepageResp = await fetch(url, {
+      signal: AbortSignal.timeout(15_000),
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; DataLiberation/1.0)' },
+    });
+    if (homepageResp.ok) navigation = extractNavLinks(await homepageResp.text(), url);
+    else await homepageResp.body?.cancel();
+  } catch {
+    // Public navigation is best-effort; sitemap and optional admin discovery continue.
+  }
 
   // 4. Classify URLs — for Squarespace, we can probe each URL with ?format=json
   // to determine if it's a collection or item, but for the initial pass we use
