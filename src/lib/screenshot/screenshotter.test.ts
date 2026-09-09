@@ -2,6 +2,16 @@ import { describe, it, expect, vi } from 'vitest';
 import { mkdtempSync, readFileSync, existsSync, rmSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 
+const { learnAndApplyFluidGeometryMock } = vi.hoisted( () => ( {
+	learnAndApplyFluidGeometryMock: vi.fn( async () => ( {
+		applied: 0,
+		unmodelled: 0,
+		breakpoints: [],
+		canvasFloor: null,
+		byKind: {},
+	} ) ),
+} ) );
+
 // Use a cwd-local tmp dir so validateOutputDir (which rejects paths outside
 // cwd) accepts the test output directory.
 const LOCAL_TMP = join(process.cwd(), '.tmp-test');
@@ -20,6 +30,11 @@ vi.mock('../url/index.js', async (importOriginal) => {
 // Mock browser-kit so tests don't require real Chromium.
 vi.mock('../browser-kit/index.js', () => ({
   connectBrowser: vi.fn(),
+}));
+
+vi.mock('./fluid-capture.js', async (importOriginal) => ({
+	...( await importOriginal() as Record<string, unknown> ),
+	learnAndApplyFluidGeometry: learnAndApplyFluidGeometryMock,
 }));
 
 import { capturePageHtml, captureScreenshots, geometryCandidateIsSafe, getHomepageUrl } from './screenshotter.js';
@@ -102,13 +117,29 @@ describe('captureScreenshots', () => {
 
 	it('reflects property-only media state before serializing HTML', async () => {
 		const page = {
-			evaluate: vi.fn().mockResolvedValue(undefined),
+			evaluate: vi.fn().mockResolvedValue(false),
+			waitForTimeout: vi.fn(),
 			content: vi.fn().mockResolvedValue('<html><video autoplay muted></video></html>'),
 		};
 
 		await expect(capturePageHtml(page as never)).resolves.toContain('<video autoplay muted>');
-		expect(page.evaluate).toHaveBeenCalledOnce();
+		expect(page.evaluate).toHaveBeenCalledTimes(2);
 		expect(String(page.evaluate.mock.calls[0][0])).toContain('source.setAttribute(property');
+		expect(String(page.evaluate.mock.calls[0][0])).toContain('source.currentSrc || source.src');
+		expect(String(page.evaluate.mock.calls[0][0])).toContain('frame.getBoundingClientRect()');
+		expect(String(page.evaluate.mock.calls[1][0])).toContain('frame.removeAttribute(attribute)');
+	});
+
+	it('waits only while source-less video elements are pending runtime hydration', async () => {
+		const page = {
+			evaluate: vi.fn().mockResolvedValueOnce(true).mockResolvedValueOnce(false).mockResolvedValue(undefined),
+			waitForTimeout: vi.fn().mockResolvedValue(undefined),
+			content: vi.fn().mockResolvedValue('<html><video src="https://cdn.example.test/video.mp4"></video></html>'),
+		};
+
+		await capturePageHtml(page as never);
+		expect(page.waitForTimeout).toHaveBeenCalledTimes(1);
+		expect(page.waitForTimeout).toHaveBeenCalledWith(200);
 	});
 
   it('captures two viewports and one HTML per URL', async () => {
@@ -137,10 +168,11 @@ describe('captureScreenshots', () => {
     }
   });
 
-  it('captures the visual reference before serializing and analyzing settled HTML', async () => {
+  it('captures the prepared visual reference immediately before serializing HTML', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'ss-'));
     const pages: ReturnType<typeof makeGoodPage>[] = [];
     try {
+		learnAndApplyFluidGeometryMock.mockClear();
       (connectBrowser as ReturnType<typeof vi.fn>).mockResolvedValue(makeMockBrowser(() => {
         const page = makeGoodPage();
         pages.push(page);
@@ -152,8 +184,13 @@ describe('captureScreenshots', () => {
         concurrency: 1,
         settleMs: 0,
         captureImages: true,
+		learnFluid: true,
       });
       expect(pages).toHaveLength(2);
+	  expect(learnAndApplyFluidGeometryMock).toHaveBeenCalledTimes(1);
+	  expect(learnAndApplyFluidGeometryMock.mock.invocationCallOrder[0]).toBeLessThan(
+		pages[0].screenshot.mock.invocationCallOrder[0],
+	  );
       expect(pages[0].screenshot.mock.invocationCallOrder[0]).toBeLessThan(
         pages[0].content.mock.invocationCallOrder[0],
       );

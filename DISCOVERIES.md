@@ -1,8 +1,10 @@
 # Discoveries
 
-A living log of findings from real migrations. Newest entries at the top.
+A living log of findings from real runs. Newest entries at the top.
 
 AI agents: when you contribute an improvement, add an entry here. See [CONTRIBUTING.md](./CONTRIBUTING.md) for the required format.
+
+> **Reading older entries.** This tool used to reconstruct sites in WordPress, and that path was removed once HTML became the contract. Entries before 2026-08 may describe WXR building, theme scaffolding, Studio imports, or "carry" runs, none of which exist any more. They are kept because the platform behaviour they record — how Wix serves media, why `networkidle` never resolves, how a builder hydrates its content — is still what capture has to deal with. Read the finding, not the pipeline it was found in.
 
 ---
 

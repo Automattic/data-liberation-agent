@@ -70,6 +70,15 @@ export async function downloadCaptureSectionMedia(
 	outputDir: string,
 	urls: string[]
 ): Promise< number > {
+	const pageRoutes = new Set(
+		urls.flatMap( ( url ) => {
+			try {
+				return [ captureRouteKey( url ) ];
+			} catch {
+				return [];
+			}
+		} )
+	);
 	const sectionUrls: string[] = [];
 	for ( const store of [
 		SectionSpecsStore.load( outputDir ),
@@ -81,7 +90,14 @@ export async function downloadCaptureSectionMedia(
 					...( section.images ?? [] ),
 					...( section.cells ?? [] ).flatMap( ( cell ) => ( cell.image ? [ cell.image ] : [] ) ),
 				] ) {
-					sectionUrls.push( image.sourceUrl || image.url );
+					const mediaUrl = ( image.sourceUrl || image.url || '' ).trim();
+					if ( ! mediaUrl ) continue;
+					try {
+						if ( pageRoutes.has( captureRouteKey( mediaUrl ) ) ) continue;
+					} catch {
+						// Invalid media URLs are dropped by downloadSectionMedia.
+					}
+					sectionUrls.push( mediaUrl );
 				}
 			}
 		}
@@ -158,10 +174,10 @@ export async function captureWebsite(
 		captureImages: options.captureImages === true,
 		learnFluid: options.learnFluid !== false,
 		force: options.resume !== true,
-		removeSelectors: adapter.capture?.removeSelectors,
-		prepareCapture: adapter.capture?.prepare,
-		...( adapter.capture?.responsiveImages
-			? { collectResponsiveImages: adapter.capture.responsiveImages.bind( adapter.capture ) }
+		removeSelectors: adapter.liberation?.removeSelectors,
+		prepareCapture: adapter.liberation?.prepare,
+		...( adapter.liberation?.responsiveImages
+			? { collectResponsiveImages: adapter.liberation.responsiveImages.bind( adapter.liberation ) }
 			: {} ),
 		publicUrlsOnly: true,
 		onProgress: ( current, total, url ) => progress( { phase: 'capturing', current, total, url } ),

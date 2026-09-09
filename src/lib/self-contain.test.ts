@@ -50,11 +50,27 @@ describe( 'self-contain', () => {
 
 	it( 'drops 1x1 gif placeholders from srcset so the browser cannot pick them', () => {
 		const html = stripRemoteAssetRequests(
-			'<img width="2660" src="/files/hero.png" srcset="/media/hero-2660.png 2660w, data:image/gif;base64, R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs= 1536w, /media/hero-2048.png 2048w">'
+			'<img width="2660" src="/files/hero.png" srcset="/media/hero-2660.png 2660w, data:image/gif;base64, R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs= 1536w, /media/hero-2048.png 2048w"><source srcset="R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=">'
 		);
 		expect( html ).not.toMatch( /srcset="[^"]*data:image\/gif/ );
+		expect( html ).not.toContain( 'srcset="R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs="' );
 		expect( html ).toContain( 'srcset="/media/hero-2660.png 2660w, /media/hero-2048.png 2048w"' );
 		expect( html ).toContain( 'src="/files/hero.png"' );
+	} );
+
+	it( 'serializes local srcset URLs with Wix transform commas, spaces, and apostrophes', () => {
+		const url = "/external/v1/crop/x_59,y_0,w_3152,h_3152/fill/w_200,h_200/Happy Women's Day.jpg";
+		const html = stripRemoteAssetRequests( `<img srcset="${ url } 1x">` );
+		expect( html ).toContain( `srcset="${ url.replaceAll( ' ', '%20' ) } 1x"` );
+	} );
+
+	it( 'filters remote srcset candidates without corrupting local comma paths', () => {
+		const url = "/external/v1/crop/x_59,y_0,w_3152,h_3152/fill/w_200,h_200/Happy Women's Day.jpg";
+		const html = stripRemoteAssetRequests(
+			`<img srcset="https://cdn.example/remote.jpg 2x, ${ url } 1x">`
+		);
+		expect( html ).not.toContain( 'cdn.example' );
+		expect( html ).toContain( `srcset="${ url.replaceAll( ' ', '%20' ) } 1x"` );
 	} );
 
 	it( 'neutralizes leftover remote CSS urls without touching local ones', () => {

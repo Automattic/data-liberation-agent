@@ -1,7 +1,7 @@
 import type { PlatformAdapter } from '../../types.js';
 import { capture } from './capture.js';
+import { detection } from './detection.js';
 import { discover } from './discover.js';
-import { extract } from './extract.js';
 
 // ---------------------------------------------------------------------------
 // Re-exports — public API surface (importers use shopify/index.js by name)
@@ -9,7 +9,6 @@ import { extract } from './extract.js';
 
 export { extractShopDomain, scorePageQuality, extractShopifyMediaUrls } from './content.js';
 export type { QualitySignals } from './content.js';
-export { normalizeWeightToKg, shopifyProductToWoo, shopifyGraphqlProductToWoo } from './products.js';
 export type { ShopifyProductJson } from './types.js';
 export type { ShopifyAdapterOpts, ShopifyInventory } from './types.js';
 
@@ -19,7 +18,7 @@ export type { ShopifyAdapterOpts, ShopifyInventory } from './types.js';
 
 export const shopifyAdapter: PlatformAdapter = {
   id: 'shopify',
-  capture,
+  detection,
+  liberation: capture,
   discover,
-  extract,
 };

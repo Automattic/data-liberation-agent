@@ -29,11 +29,12 @@ describe( 'wireCapturedDialogs', () => {
 			[ captured ]
 		);
 		expect( html ).toContain( '<details class="dla-disclosure">' );
-		expect( html ).toContain( '<summary class="burger">' );
+		expect( html ).toContain( '<summary class="burger" data-dla-disclosure-label="Open Menu">' );
 		expect( html ).toContain( 'Open Menu' );
 		expect( html ).toContain( 'role="dialog"' );
 		expect( html ).toContain( 'href="/about"' );
 		expect( html ).toContain( 'data-dla-disclosure' );
+		expect( html ).toContain( 'data-dla-disclosure-runtime' );
 		expect( html ).not.toMatch( /<button[^>]*>Open Menu/ );
 	} );
 
@@ -45,6 +46,18 @@ describe( 'wireCapturedDialogs', () => {
 		expect( html.match( /<details class="dla-disclosure">/g ) ).toHaveLength( 2 );
 	} );
 
+	it( 'replaces the captured portal without retaining its closed source copy', () => {
+		const html = wireCapturedDialogs(
+			'<html><head></head><body><button>Open Menu</button><div id="menu" data-visible="false"><nav><a href="/stale">Stale menu</a></nav></div><div id="other-dialog">Keep me</div></body></html>',
+			[ captured ]
+		);
+		expect( html ).not.toContain( 'Stale menu' );
+		expect( html ).not.toContain( 'id="menu"' );
+		expect( html ).toContain( '<details class="dla-disclosure">' );
+		expect( html ).toContain( 'href="/about"' );
+		expect( html ).toContain( '<div id="other-dialog">Keep me</div>' );
+	} );
+
 	it( 'does not turn an unlabeled logo control into the menu trigger', () => {
 		const html = wireCapturedDialogs(
 			'<html><head></head><body><a class="logo" role="button"><img alt="Homepage"></a><button>Open Menu</button></body></html>',
@@ -52,6 +65,17 @@ describe( 'wireCapturedDialogs', () => {
 		);
 		expect( html.match( /<details class="dla-disclosure">/g ) ).toHaveLength( 1 );
 		expect( html ).toContain( '<a class="logo" role="button"><img alt="Homepage"></a>' );
+	} );
+
+	it( 'keeps global attributes without copying element-specific behavior to summary', () => {
+		const html = wireCapturedDialogs(
+			'<html><head></head><body><a class="menu" aria-label="Open Menu" data-menu="primary" href="/" target="_self" rel="home">Menu</a></body></html>',
+			[ captured ]
+		);
+		expect( html ).toContain(
+			'<summary class="menu" aria-label="Open Menu" data-menu="primary" data-dla-disclosure-label="Open Menu">Menu</summary>'
+		);
+		expect( html ).not.toMatch( /<summary[^>]+(?:href|target|rel)=/ );
 	} );
 
 	it( 'leaves the page alone when nothing was captured', () => {
