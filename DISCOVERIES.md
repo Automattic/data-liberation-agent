@@ -144,6 +144,16 @@ Ran the real `wixAdapter.extract` against just `https://www.swiftlumber.com/proj
 
 ---
 
+## 2026-05-28 — Squarespace blog archive `?format=json-pretty` recovers sitemap-missed routes
+
+**Found by:** Davi Pontes
+**During:** Migrating walkaboutchronicles.com, a 1,500+ post Squarespace 7.1 blog.
+**Type:** API endpoint
+
+Squarespace blog sections expose a paginated JSON feed at `<blog-prefix>?format=json-pretty[&offset=<addedOn>]`. Discovery recognizes date-based blog paths and conventional blog prefixes, then walks that feed to recover same-origin post URLs that the sitemap has not yet listed. The walker deduplicates by `urlId` and stops on empty or malformed responses, failed requests, repeated offsets, or a 200-page limit. Archive metadata remains outside the portable capture contract; each recovered route is captured normally.
+
+---
+
 ## 2026-05-28 — Squarespace public navigation was not discovered
 
 **Found by:** Davi Pontes
