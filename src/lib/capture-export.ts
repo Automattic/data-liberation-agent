@@ -1357,57 +1357,55 @@ function assetEvidence(
 			aliasesByPath.set( path, [ ...( aliasesByPath.get( path ) ?? [] ), url ] );
 	}
 	const sortedUrls = [ ...references.locations.keys() ].sort( ( left, right ) => left.localeCompare( right ) );
-	const records = sortedUrls
-		.slice( 0, MAX_ASSET_EVIDENCE_ASSETS )
-		.map( ( url ) => {
-			const stub = mediaStubs.get( url );
-			const resource = resourceManifest.resources[ url ];
-			const path = portablePaths.get( url );
-			const included = path !== undefined && existsSync( resolve( outputDir, path ) );
-			const resourcePath = resource ? resolve( outputDir, resource.path ) : undefined;
-			const retrieved = resourcePath
-				? pathWithin( outputDir, resourcePath ) && existsSync( resourcePath )
-				: stub?.status === 'success' && stub.localPath !== undefined && existsSync( stub.localPath );
-			const reportedSuccess = resource !== undefined || stub?.status === 'success';
-			const failure =
-				resourceManifest.failures.find( ( candidate ) => candidate.url === url )?.error ??
-				( stub?.status === 'error' ? stub.error : undefined ) ??
-				( reportedSuccess && !retrieved
-					? 'captured asset file is unavailable'
-					: retrieved && !included
-					? 'retrieved asset was not included in the portable website'
-					: undefined );
-			const retrieval: AssetEvidenceRecord[ 'retrieval' ] = retrieved
-				? 'retrieved'
-				: resourceManifest.failures.some( ( candidate ) => candidate.url === url ) || stub?.status === 'error'
-				? 'failed'
-				: 'unknown';
-			const outcome: AssetEvidenceRecord[ 'outcome' ] = included ? 'successful' : failure ? 'failed' : 'unknown';
-			const portable: AssetEvidenceRecord[ 'portable' ] = included
-				? 'included'
-				: retrieval === 'retrieved'
-				? 'excluded'
-				: 'not-included';
-			const indexed = references.locations.get( url )!;
-			const locations = indexed.references.sort(
-				( left, right ) =>
-					left.route.localeCompare( right.route ) ||
-					left.document.localeCompare( right.document ) ||
-					left.reference.localeCompare( right.reference )
-			);
-			return {
-				id: url,
-				sourceUrl: url,
-				outcome,
-				retrieval,
-				portable,
-				...( included && path ? { path, portableAssetId: path, portableAliases: aliasesByPath.get( path ) } : {} ),
-				...( outcome === 'failed' ? { error: failure } : {} ),
-				referenceCount: indexed.count,
-				referencesTruncated: indexed.count > MAX_ASSET_EVIDENCE_REFERENCES,
-				references: locations,
-			};
-		} );
+	const records = sortedUrls.map( ( url ) => {
+		const stub = mediaStubs.get( url );
+		const resource = resourceManifest.resources[ url ];
+		const path = portablePaths.get( url );
+		const included = path !== undefined && existsSync( resolve( outputDir, path ) );
+		const resourcePath = resource ? resolve( outputDir, resource.path ) : undefined;
+		const retrieved = resourcePath
+			? pathWithin( outputDir, resourcePath ) && existsSync( resourcePath )
+			: stub?.status === 'success' && stub.localPath !== undefined && existsSync( stub.localPath );
+		const reportedSuccess = resource !== undefined || stub?.status === 'success';
+		const failure =
+			resourceManifest.failures.find( ( candidate ) => candidate.url === url )?.error ??
+			( stub?.status === 'error' ? stub.error : undefined ) ??
+			( reportedSuccess && !retrieved
+				? 'captured asset file is unavailable'
+				: retrieved && !included
+				? 'retrieved asset was not included in the portable website'
+				: undefined );
+		const retrieval: AssetEvidenceRecord[ 'retrieval' ] = retrieved
+			? 'retrieved'
+			: resourceManifest.failures.some( ( candidate ) => candidate.url === url ) || stub?.status === 'error'
+			? 'failed'
+			: 'unknown';
+		const outcome: AssetEvidenceRecord[ 'outcome' ] = included ? 'successful' : failure ? 'failed' : 'unknown';
+		const portable: AssetEvidenceRecord[ 'portable' ] = included
+			? 'included'
+			: retrieval === 'retrieved'
+			? 'excluded'
+			: 'not-included';
+		const indexed = references.locations.get( url )!;
+		const locations = indexed.references.sort(
+			( left, right ) =>
+				left.route.localeCompare( right.route ) ||
+				left.document.localeCompare( right.document ) ||
+				left.reference.localeCompare( right.reference )
+		);
+		return {
+			id: url,
+			sourceUrl: url,
+			outcome,
+			retrieval,
+			portable,
+			...( included && path ? { path, portableAssetId: path, portableAliases: aliasesByPath.get( path ) } : {} ),
+			...( outcome === 'failed' ? { error: failure } : {} ),
+			referenceCount: indexed.count,
+			referencesTruncated: indexed.count > MAX_ASSET_EVIDENCE_REFERENCES,
+			references: locations,
+		};
+	} );
 	return {
 		assetCount: references.assetCount,
 		assetCountExact: references.assetCountExact,
