@@ -155,7 +155,6 @@ interface AssetEvidenceRecord {
 	portable: 'included' | 'excluded' | 'not-included';
 	path?: string;
 	portableAssetId?: string;
-	portableAliases?: string[];
 	error?: string;
 	referenceCount: number;
 	referencesTruncated: boolean;
@@ -1349,13 +1348,6 @@ function assetEvidence(
 	assetsTruncated: boolean;
 	assets: AssetEvidenceRecord[];
 } {
-	const aliasesByPath = new Map< string, string[] >();
-	for ( const url of references.locations.keys() ) {
-		const path = portablePaths.get( url );
-		if ( !path ) continue;
-		if ( existsSync( resolve( outputDir, path ) ) )
-			aliasesByPath.set( path, [ ...( aliasesByPath.get( path ) ?? [] ), url ] );
-	}
 	const sortedUrls = [ ...references.locations.keys() ].sort( ( left, right ) => left.localeCompare( right ) );
 	const records = sortedUrls.map( ( url ) => {
 		const stub = mediaStubs.get( url );
@@ -1399,7 +1391,7 @@ function assetEvidence(
 			outcome,
 			retrieval,
 			portable,
-			...( included && path ? { path, portableAssetId: path, portableAliases: aliasesByPath.get( path ) } : {} ),
+			...( included && path ? { path, portableAssetId: path } : {} ),
 			...( outcome === 'failed' ? { error: failure } : {} ),
 			referenceCount: indexed.count,
 			referencesTruncated: indexed.count > MAX_ASSET_EVIDENCE_REFERENCES,

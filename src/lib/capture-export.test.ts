@@ -922,7 +922,6 @@ describe( 'exportWebsiteCapture', () => {
 			portable: 'included',
 			path: 'website/media/shared.png',
 			portableAssetId: 'website/media/shared.png',
-			portableAliases: [ imageUrl ],
 			referenceCount: 2,
 			referencesTruncated: false,
 			references: [
@@ -1016,7 +1015,7 @@ describe( 'exportWebsiteCapture', () => {
 		} );
 	} );
 
-	it( 'reports deduplicated source URLs as aliases of one portable asset', () => {
+	it( 'groups two deduplicated source URLs by one portable asset ID', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-asset-evidence-dedup-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'media', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
@@ -1037,7 +1036,35 @@ describe( 'exportWebsiteCapture', () => {
 		const firstAsset = assets.find( ( asset: { sourceUrl: string } ) => asset.sourceUrl === first );
 		const secondAsset = assets.find( ( asset: { sourceUrl: string } ) => asset.sourceUrl === second );
 		expect( firstAsset.portableAssetId ).toBe( secondAsset.portableAssetId );
-		expect( firstAsset.portableAliases ).toEqual( [ first, second ] );
+		expect( assets.filter( ( asset: { portableAssetId?: string } ) => asset.portableAssetId === firstAsset.portableAssetId )
+			.map( ( asset: { sourceUrl: string } ) => asset.sourceUrl ) ).toEqual( [ first, second ] );
+	} );
+
+	it( 'serializes many deduplicated source URLs without repeated alias arrays', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-asset-evidence-linear-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'media', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
+		const sourceUrls = Array.from( { length: 200 }, ( _, index ) => `https://cdn.example/shared/${ index }.png` );
+		writeFileSync( join( outputDir, 'html/homepage.html' ), sourceUrls.map( ( url ) => `<img src="${ url }">` ).join( '' ) );
+		writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( { version: 1, entries: {
+			'https://example.com/': { html: 'html/homepage.html' },
+		} } ) );
+		const media = MediaStubStore.load( outputDir );
+		for ( const [ index, sourceUrl ] of sourceUrls.entries() ) {
+			const path = join( outputDir, 'media', `${ index }.png` );
+			writeFileSync( path, 'same bytes' );
+			media.markSuccess( sourceUrl, path );
+		}
+		media.flush();
+
+		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [] } );
+
+		const serialized = readFileSync( join( outputDir, 'asset-evidence.json' ), 'utf8' );
+		const evidence = JSON.parse( serialized );
+		expect( evidence.assets ).toHaveLength( sourceUrls.length );
+		expect( new Set( evidence.assets.map( ( asset: { portableAssetId: string } ) => asset.portableAssetId ) ) ).toHaveLength( 1 );
+		expect( serialized ).not.toContain( 'portableAliases' );
+		expect( serialized.length ).toBeLessThan( 150_000 );
 	} );
 
 	it( 'does not call a stale successful cache entry a successful portable transfer', () => {
