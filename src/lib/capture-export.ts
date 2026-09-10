@@ -34,6 +34,7 @@ export const SOURCE_PROFILE_SCHEMA = 'data-liberation/source-profile/v1';
 export const ASSET_EVIDENCE_SCHEMA = 'data-liberation/asset-evidence/v1';
 const MAX_ASSET_EVIDENCE_ASSETS = 10_000;
 const MAX_ASSET_EVIDENCE_REFERENCES = 100;
+const MAX_ASSET_EVIDENCE_CSS_RESOURCES_PER_ROUTE = 10_000;
 
 type ManifestEntryFluid =
 	| {
@@ -142,6 +143,7 @@ interface PortableDependency {
 interface AssetEvidenceReference {
 	route: string;
 	path: string;
+	document: 'desktop' | 'mobile' | 'css';
 	reference: string;
 }
 
@@ -149,7 +151,11 @@ interface AssetEvidenceRecord {
 	id: string;
 	sourceUrl: string;
 	outcome: 'successful' | 'failed' | 'unknown';
+	retrieval: 'retrieved' | 'failed' | 'unknown';
+	portable: 'included' | 'excluded' | 'not-included';
 	path?: string;
+	portableAssetId?: string;
+	portableAliases?: string[];
 	error?: string;
 	referenceCount: number;
 	referencesTruncated: boolean;
@@ -169,6 +175,7 @@ interface CaptureEntry {
 	slug: string;
 	url: string;
 	htmlPath: string;
+	evidenceDocuments: Array< { state: 'desktop' | 'mobile'; html: string } >;
 	/** The source served a structurally distinct document under mobile emulation. */
 	hasMobileDocument?: boolean;
 	identityHtmlPath?: string;
@@ -1264,70 +1271,149 @@ function dependencyReferences(
 	} );
 }
 
+interface AssetEvidenceReferences {
+	locations: Map< string, { count: number; references: AssetEvidenceReference[] } >;
+	assetCount: number;
+	assetCountExact: boolean;
+	totalReferenceCount: number;
+	documentCount: number;
+	cssResourcesTruncated: boolean;
+}
+
 function assetReferences(
 	entries: CaptureEntry[],
 	sourceUrl: string,
-	entrypointUrl: string
-): Map< string, Map< string, AssetEvidenceReference > > {
-	const references = new Map< string, Map< string, AssetEvidenceReference > >();
+	entrypointUrl: string,
+	resourceManifest: CapturedResourceManifest,
+	outputDir: string
+): AssetEvidenceReferences {
+	const locations = new Map< string, { count: number; references: AssetEvidenceReference[] } >();
+	let assetCount = 0;
+	let assetCountExact = true;
+	let totalReferenceCount = 0;
+	let documentCount = 0;
+	let cssResourcesTruncated = false;
+	const add = ( dependency: PortableDependency, location: AssetEvidenceReference ) => {
+		totalReferenceCount++;
+		let indexed = locations.get( dependency.url );
+		if ( !indexed ) {
+			if ( locations.size >= MAX_ASSET_EVIDENCE_ASSETS ) {
+				// Further URLs are deliberately not indexed: their identity would require an unbounded set.
+				assetCountExact = false;
+				assetCount = MAX_ASSET_EVIDENCE_ASSETS + 1;
+				return;
+			}
+			indexed = { count: 0, references: [] };
+			locations.set( dependency.url, indexed );
+			assetCount++;
+		}
+		indexed.count++;
+		if ( indexed.references.length < MAX_ASSET_EVIDENCE_REFERENCES ) indexed.references.push( location );
+	};
 	for ( const entry of entries ) {
 		const path = `website/${ routeOutputPath( entry.url, sourceUrl, entrypointUrl ).replace( /\\/g, '/' ) }`;
-		for ( const dependency of dependencyReferences( readFileSync( entry.htmlPath, 'utf8' ), entry.url ) ) {
-			const byLocation = references.get( dependency.url ) ?? new Map< string, AssetEvidenceReference >();
-			const location = { route: entry.url, path, reference: dependency.reference };
-			byLocation.set( `${ location.route }\n${ location.reference }`, location );
-			references.set( dependency.url, byLocation );
+		const visitedCss = new Set< string >();
+		const visit = ( dependency: PortableDependency, document: AssetEvidenceReference[ 'document' ] ) => {
+			add( dependency, { route: entry.url, path, document, reference: dependency.reference } );
+			if ( visitedCss.size >= MAX_ASSET_EVIDENCE_CSS_RESOURCES_PER_ROUTE ) {
+				cssResourcesTruncated = true;
+				return;
+			}
+			if ( visitedCss.has( dependency.url ) ) return;
+			const resource = resourceManifest.resources[ dependency.url ];
+			if ( !resource || !/text\/css/i.test( resource.contentType ) ) return;
+			const resourcePath = resolve( outputDir, resource.path );
+			if ( !pathWithin( outputDir, resourcePath ) || !existsSync( resourcePath ) ) return;
+			visitedCss.add( dependency.url );
+			for ( const nested of dependencyReferences( readFileSync( resourcePath, 'utf8' ), dependency.url, true ) )
+				visit( nested, 'css' );
+		};
+		for ( const source of entry.evidenceDocuments ) {
+			documentCount++;
+			for ( const dependency of dependencyReferences( source.html, entry.url ) ) visit( dependency, source.state );
 		}
 	}
-	return references;
+	return { locations, assetCount, assetCountExact, totalReferenceCount, documentCount, cssResourcesTruncated };
 }
 
 function assetEvidence(
-	references: Map< string, Map< string, AssetEvidenceReference > >,
+	references: AssetEvidenceReferences,
 	mediaStubs: MediaStubStore,
 	resourceManifest: CapturedResourceManifest,
-	portablePaths: Map< string, string >
-): { assetCount: number; assetsTruncated: boolean; assets: AssetEvidenceRecord[] } {
-	const failures = new Map< string, string >();
-	for ( const failure of resourceManifest.failures ) {
-		if ( !failures.has( failure.url ) ) failures.set( failure.url, failure.error );
+	portablePaths: Map< string, string >,
+	outputDir: string
+): {
+	assetCount: number;
+	assetCountExact: boolean;
+	totalReferenceCount: number;
+	assetsTruncated: boolean;
+	assets: AssetEvidenceRecord[];
+} {
+	const aliasesByPath = new Map< string, string[] >();
+	for ( const url of references.locations.keys() ) {
+		const path = portablePaths.get( url );
+		if ( !path ) continue;
+		if ( existsSync( resolve( outputDir, path ) ) )
+			aliasesByPath.set( path, [ ...( aliasesByPath.get( path ) ?? [] ), url ] );
 	}
-	const urls = new Set( [
-		...references.keys(),
-		...mediaStubs.list().map( ( [ url ] ) => url ),
-		...Object.keys( resourceManifest.resources ),
-		...failures.keys(),
-	] );
-	const records = [ ...urls ]
-		.sort( ( left, right ) => left.localeCompare( right ) )
+	const sortedUrls = [ ...references.locations.keys() ].sort( ( left, right ) => left.localeCompare( right ) );
+	const records = sortedUrls
+		.slice( 0, MAX_ASSET_EVIDENCE_ASSETS )
 		.map( ( url ) => {
 			const stub = mediaStubs.get( url );
 			const resource = resourceManifest.resources[ url ];
-			const failure = failures.get( url ) ?? ( stub?.status === 'error' ? stub.error : undefined );
-			const outcome: AssetEvidenceRecord[ 'outcome' ] = resource || stub?.status === 'success'
-				? 'successful'
-				: failure
+			const path = portablePaths.get( url );
+			const included = path !== undefined && existsSync( resolve( outputDir, path ) );
+			const resourcePath = resource ? resolve( outputDir, resource.path ) : undefined;
+			const retrieved = resourcePath
+				? pathWithin( outputDir, resourcePath ) && existsSync( resourcePath )
+				: stub?.status === 'success' && stub.localPath !== undefined && existsSync( stub.localPath );
+			const reportedSuccess = resource !== undefined || stub?.status === 'success';
+			const failure =
+				resourceManifest.failures.find( ( candidate ) => candidate.url === url )?.error ??
+				( stub?.status === 'error' ? stub.error : undefined ) ??
+				( reportedSuccess && !retrieved
+					? 'captured asset file is unavailable'
+					: retrieved && !included
+					? 'retrieved asset was not included in the portable website'
+					: undefined );
+			const retrieval: AssetEvidenceRecord[ 'retrieval' ] = retrieved
+				? 'retrieved'
+				: resourceManifest.failures.some( ( candidate ) => candidate.url === url ) || stub?.status === 'error'
 				? 'failed'
 				: 'unknown';
-			const locations = [ ...( references.get( url )?.values() ?? [] ) ].sort(
+			const outcome: AssetEvidenceRecord[ 'outcome' ] = included ? 'successful' : failure ? 'failed' : 'unknown';
+			const portable: AssetEvidenceRecord[ 'portable' ] = included
+				? 'included'
+				: retrieval === 'retrieved'
+				? 'excluded'
+				: 'not-included';
+			const indexed = references.locations.get( url )!;
+			const locations = indexed.references.sort(
 				( left, right ) =>
-					left.route.localeCompare( right.route ) || left.reference.localeCompare( right.reference )
+					left.route.localeCompare( right.route ) ||
+					left.document.localeCompare( right.document ) ||
+					left.reference.localeCompare( right.reference )
 			);
 			return {
 				id: url,
 				sourceUrl: url,
 				outcome,
-				...( portablePaths.has( url ) ? { path: portablePaths.get( url ) } : {} ),
+				retrieval,
+				portable,
+				...( included && path ? { path, portableAssetId: path, portableAliases: aliasesByPath.get( path ) } : {} ),
 				...( outcome === 'failed' ? { error: failure } : {} ),
-				referenceCount: locations.length,
-				referencesTruncated: locations.length > MAX_ASSET_EVIDENCE_REFERENCES,
-				references: locations.slice( 0, MAX_ASSET_EVIDENCE_REFERENCES ),
+				referenceCount: indexed.count,
+				referencesTruncated: indexed.count > MAX_ASSET_EVIDENCE_REFERENCES,
+				references: locations,
 			};
 		} );
 	return {
-		assetCount: records.length,
-		assetsTruncated: records.length > MAX_ASSET_EVIDENCE_ASSETS,
-		assets: records.slice( 0, MAX_ASSET_EVIDENCE_ASSETS ),
+		assetCount: references.assetCount,
+		assetCountExact: references.assetCountExact,
+		totalReferenceCount: references.totalReferenceCount,
+		assetsTruncated: !references.assetCountExact,
+		assets: records,
 	};
 }
 
@@ -1625,6 +1711,10 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 			slug: entry.slug ?? basename( entry.html, '.html' ),
 			url,
 			htmlPath: stagedHtmlPath,
+			evidenceDocuments: [
+				{ state: 'desktop', html: desktopHtml },
+				...( mobileHtml === undefined ? [] : [ { state: 'mobile' as const, html: mobileHtml } ] ),
+			],
 			hasMobileDocument: mobileHtml !== undefined && documentsDiffer( desktopHtml, mobileHtml ),
 			sections: entry.sections,
 			canonicalUrl: entry.metadata?.openGraph?.[ 'og:url' ] ?? openGraphUrl( html ),
@@ -1714,13 +1804,15 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 	const mediaReplacements = new Map< string, string >();
 	const unresolvedMedia: Array< { url: string; error: string } > = [];
 	const assets: Array< { sourceUrl: string; path: string } > = [];
+	const mediaStubs = MediaStubStore.load( outputDir );
+	const resourceManifest = capturedResources( outputDir );
 	const assetReferenceLocations = assetReferences(
 		retainedEntries,
 		options.sourceUrl,
-		entrypointUrl
+		entrypointUrl,
+		resourceManifest,
+		outputDir
 	);
-	const mediaStubs = MediaStubStore.load( outputDir );
-	const resourceManifest = capturedResources( outputDir );
 	const renderedMediaReferences = capturedMediaReferences( retainedEntries );
 	const mediaFamilies = new Map< string, MediaCandidate[] >();
 	const retainedMediaFamilies = retainedMediaReferencesByFamily( retainedEntries );
@@ -2288,7 +2380,8 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		assetReferenceLocations,
 		mediaStubs,
 		resourceManifest,
-		portablePathsBySource
+		portablePathsBySource,
+		outputDir
 	);
 	writeFileSync(
 		join( outputDir, 'asset-evidence.json' ),
@@ -2296,8 +2389,19 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 			{
 				schema: ASSET_EVIDENCE_SCHEMA,
 				assetCount: assetEvidenceReport.assetCount,
+				assetCountExact: assetEvidenceReport.assetCountExact,
+				totalReferenceCount: assetEvidenceReport.totalReferenceCount,
 				assetsTruncated: assetEvidenceReport.assetsTruncated,
 				referenceLimit: MAX_ASSET_EVIDENCE_REFERENCES,
+				coverage: {
+					retainedRouteCount: retainedEntries.length,
+					documentCount: assetReferenceLocations.documentCount,
+					assetLimit: MAX_ASSET_EVIDENCE_ASSETS,
+					assetSelection: 'first reachable source URLs in retained route traversal',
+					cssTraversal: 'reachable captured CSS resources only',
+					cssResourcesPerRouteLimit: MAX_ASSET_EVIDENCE_CSS_RESOURCES_PER_ROUTE,
+					cssResourcesTruncated: assetReferenceLocations.cssResourcesTruncated,
+				},
 				assets: assetEvidenceReport.assets,
 			},
 			null,
@@ -2317,6 +2421,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 				...( options.title ? { title: options.title } : {} ),
 				routes,
 				assets,
+				assetEvidence: { path: 'asset-evidence.json', schema: ASSET_EVIDENCE_SCHEMA },
 				portableMedia,
 				interactions: interactionSummary,
 				layoutGeometry: geometryReport,

@@ -918,12 +918,16 @@ describe( 'exportWebsiteCapture', () => {
 			id: imageUrl,
 			sourceUrl: imageUrl,
 			outcome: 'successful',
+			retrieval: 'retrieved',
+			portable: 'included',
 			path: 'website/media/shared.png',
+			portableAssetId: 'website/media/shared.png',
+			portableAliases: [ imageUrl ],
 			referenceCount: 2,
 			referencesTruncated: false,
 			references: [
-				{ route: 'https://example.com/', path: 'website/index.html', reference: imageUrl },
-				{ route: 'https://example.com/about', path: 'website/about/index.html', reference: imageUrl },
+				{ route: 'https://example.com/', path: 'website/index.html', document: 'desktop', reference: imageUrl },
+				{ route: 'https://example.com/about', path: 'website/about/index.html', document: 'desktop', reference: imageUrl },
 			],
 		} ] );
 	} );
@@ -956,15 +960,158 @@ describe( 'exportWebsiteCapture', () => {
 			id: imageUrl,
 			sourceUrl: imageUrl,
 			outcome: 'failed',
+			retrieval: 'failed',
+			portable: 'not-included',
 			error: 'HTTP 404',
 			referenceCount: 2,
 			referencesTruncated: false,
 			references: [
-				{ route: 'https://example.com/', path: 'website/index.html', reference: imageUrl },
-				{ route: 'https://example.com/about', path: 'website/about/index.html', reference: imageUrl },
+				{ route: 'https://example.com/', path: 'website/index.html', document: 'desktop', reference: imageUrl },
+				{ route: 'https://example.com/about', path: 'website/about/index.html', document: 'desktop', reference: imageUrl },
 			],
 		} ] );
 	} );
+
+	it( 'traces retained mobile documents and reachable CSS dependencies back to each route', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-asset-evidence-css-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'html-mobile', 'resources/css', 'resources/media', 'screenshots' ] )
+			mkdirSync( join( outputDir, path ), { recursive: true } );
+		const cssUrl = 'https://example.com/css/site.css';
+		const imageUrl = 'https://example.com/media/background.png';
+		const mobileUrl = 'https://cdn.example/mobile-only.png';
+		const missingFont = 'https://example.com/fonts/missing.woff2';
+		writeFileSync( join( outputDir, 'html', 'homepage.html' ), `<link rel="stylesheet" href="${ cssUrl }">` );
+		writeFileSync( join( outputDir, 'html', 'about.html' ), `<link rel="stylesheet" href="${ cssUrl }">` );
+		writeFileSync( join( outputDir, 'html-mobile', 'homepage.html' ), `<img src="${ mobileUrl }">` );
+		writeFileSync( join( outputDir, 'resources/css/site.css' ), `body{background:url("${ imageUrl }")}@font-face{src:url("${ missingFont }")}` );
+		writeFileSync( join( outputDir, 'resources/media/background.png' ), 'image' );
+		writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( { version: 1, entries: {
+			'https://example.com/': { html: 'html/homepage.html' },
+			'https://example.com/about': { html: 'html/about.html' },
+		} } ) );
+		writeFileSync( join( outputDir, 'resources/manifest.json' ), JSON.stringify( { version: 1, resources: {
+			[ cssUrl ]: { path: 'resources/css/site.css', contentType: 'text/css' },
+			[ imageUrl ]: { path: 'resources/media/background.png', contentType: 'image/png' },
+		}, failures: [ { url: missingFont, error: 'HTTP 404' } ] } ) );
+		const media = MediaStubStore.load( outputDir );
+		writeFileSync( join( outputDir, 'mobile.png' ), 'mobile' );
+		media.markSuccess( mobileUrl, join( outputDir, 'mobile.png' ) );
+		media.flush();
+
+		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [] } );
+
+		const evidence = JSON.parse( readFileSync( join( outputDir, 'asset-evidence.json' ), 'utf8' ) );
+		expect( evidence.coverage ).toMatchObject( { documentCount: 3, cssTraversal: 'reachable captured CSS resources only' } );
+		expect( evidence.assets.find( ( asset: { sourceUrl: string } ) => asset.sourceUrl === mobileUrl ) ).toMatchObject( {
+			outcome: 'successful', references: [ expect.objectContaining( { document: 'mobile' } ) ],
+		} );
+		for ( const sourceUrl of [ imageUrl, missingFont ] ) {
+			const asset = evidence.assets.find( ( candidate: { sourceUrl: string } ) => candidate.sourceUrl === sourceUrl );
+			expect( asset.references ).toHaveLength( 2 );
+			expect( asset.references.every( ( reference: { document: string } ) => reference.document === 'css' ) ).toBe( true );
+		}
+		expect( evidence.assets.find( ( asset: { sourceUrl: string } ) => asset.sourceUrl === missingFont ) ).toMatchObject( {
+			outcome: 'failed', retrieval: 'failed', portable: 'not-included',
+		} );
+	} );
+
+	it( 'reports deduplicated source URLs as aliases of one portable asset', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-asset-evidence-dedup-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'media', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
+		const first = 'https://cdn.example/one.png';
+		const second = 'https://cdn.example/two.png';
+		writeFileSync( join( outputDir, 'html/homepage.html' ), `<img src="${ first }"><img src="${ second }">` );
+		writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( { version: 1, entries: { 'https://example.com/': { html: 'html/homepage.html' } } } ) );
+		writeFileSync( join( outputDir, 'media/one.png' ), 'same bytes' );
+		writeFileSync( join( outputDir, 'media/two.png' ), 'same bytes' );
+		const media = MediaStubStore.load( outputDir );
+		media.markSuccess( first, join( outputDir, 'media/one.png' ) );
+		media.markSuccess( second, join( outputDir, 'media/two.png' ) );
+		media.flush();
+
+		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [] } );
+
+		const assets = JSON.parse( readFileSync( join( outputDir, 'asset-evidence.json' ), 'utf8' ) ).assets;
+		const firstAsset = assets.find( ( asset: { sourceUrl: string } ) => asset.sourceUrl === first );
+		const secondAsset = assets.find( ( asset: { sourceUrl: string } ) => asset.sourceUrl === second );
+		expect( firstAsset.portableAssetId ).toBe( secondAsset.portableAssetId );
+		expect( firstAsset.portableAliases ).toEqual( [ first, second ] );
+	} );
+
+	it( 'does not call a stale successful cache entry a successful portable transfer', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-asset-evidence-stale-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
+		const imageUrl = 'https://cdn.example/missing-local.png';
+		writeFileSync( join( outputDir, 'html/homepage.html' ), `<img src="${ imageUrl }">` );
+		writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( { version: 1, entries: { 'https://example.com/': { html: 'html/homepage.html' } } } ) );
+		const media = MediaStubStore.load( outputDir );
+		media.markSuccess( imageUrl, join( outputDir, 'gone.png' ) );
+		media.flush();
+
+		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [] } );
+
+		const asset = JSON.parse( readFileSync( join( outputDir, 'asset-evidence.json' ), 'utf8' ) ).assets[ 0 ];
+		expect( asset ).toMatchObject( { outcome: 'failed', retrieval: 'unknown', portable: 'not-included' } );
+	} );
+
+	it( 'counts every retained reference while bounding emitted reference locations', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-asset-evidence-bounds-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'media', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
+		const imageUrl = 'https://cdn.example/shared.png';
+		const entries: Record< string, { html: string } > = {};
+		for ( let index = 0; index < 101; index++ ) {
+			const name = `${ index }.html`;
+			writeFileSync( join( outputDir, 'html', name ), `<img src="${ imageUrl }">` );
+			entries[ `https://example.com/${ index }` ] = { html: `html/${ name}` };
+		}
+		writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( { version: 1, entries } ) );
+		writeFileSync( join( outputDir, 'media/shared.png' ), 'shared' );
+		const media = MediaStubStore.load( outputDir );
+		media.markSuccess( imageUrl, join( outputDir, 'media/shared.png' ) );
+		media.flush();
+
+		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/0', platform: 'generic', summary: {}, failures: [] } );
+
+		const evidence = JSON.parse( readFileSync( join( outputDir, 'asset-evidence.json' ), 'utf8' ) );
+		expect( evidence ).toMatchObject( { assetCount: 1, totalReferenceCount: 101, referenceLimit: 100 } );
+		expect( evidence.assets[ 0 ] ).toMatchObject( { referenceCount: 101, referencesTruncated: true } );
+		expect( evidence.assets[ 0 ].references ).toHaveLength( 100 );
+	} );
+
+	it( 'bounds retained asset evidence while reporting a non-exact asset lower bound', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-asset-evidence-asset-bounds-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
+		const imageUrls = Array.from(
+			{ length: 10_001 },
+			( _, index ) => `https://cdn.example/${ String( index ).padStart( 5, '0' ) }.png`
+		);
+		writeFileSync( join( outputDir, 'html/homepage.html' ), imageUrls.map( ( url ) => `<img src="${ url }">` ).join( '' ) );
+		writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( {
+			version: 1,
+			entries: { 'https://example.com/': { html: 'html/homepage.html' } },
+		} ) );
+
+		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [] } );
+
+		const evidence = JSON.parse( readFileSync( join( outputDir, 'asset-evidence.json' ), 'utf8' ) );
+		expect( evidence ).toMatchObject( {
+			assetCount: 10_001,
+			assetCountExact: false,
+			totalReferenceCount: 10_001,
+			assetsTruncated: true,
+			coverage: {
+				assetLimit: 10_000,
+				assetSelection: 'first reachable source URLs in retained route traversal',
+			},
+		} );
+		expect( evidence.assets ).toHaveLength( 10_000 );
+		expect( evidence.assets.map( ( asset: { sourceUrl: string } ) => asset.sourceUrl ) ).toEqual( imageUrls.slice( 0, 10_000 ) );
+	}, 120_000 );
 
 	it( 'exports captured routes and localized media as a website directory', async () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-' ) );
