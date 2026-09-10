@@ -31,6 +31,9 @@ import type { CapturedResourceManifest } from './screenshot/resource-capture.js'
 
 export const CAPTURE_RECEIPT_SCHEMA = 'data-liberation/capture-receipt/v1';
 export const SOURCE_PROFILE_SCHEMA = 'data-liberation/source-profile/v1';
+export const ASSET_EVIDENCE_SCHEMA = 'data-liberation/asset-evidence/v1';
+const MAX_ASSET_EVIDENCE_ASSETS = 10_000;
+const MAX_ASSET_EVIDENCE_REFERENCES = 100;
 
 type ManifestEntryFluid =
 	| {
@@ -134,6 +137,23 @@ interface PortableDependency {
 	reference: string;
 	url: string;
 	kind: 'resource' | 'media' | 'css';
+}
+
+interface AssetEvidenceReference {
+	route: string;
+	path: string;
+	reference: string;
+}
+
+interface AssetEvidenceRecord {
+	id: string;
+	sourceUrl: string;
+	outcome: 'successful' | 'failed' | 'unknown';
+	path?: string;
+	error?: string;
+	referenceCount: number;
+	referencesTruncated: boolean;
+	references: AssetEvidenceReference[];
 }
 
 interface MediaCandidate {
@@ -1244,6 +1264,73 @@ function dependencyReferences(
 	} );
 }
 
+function assetReferences(
+	entries: CaptureEntry[],
+	sourceUrl: string,
+	entrypointUrl: string
+): Map< string, Map< string, AssetEvidenceReference > > {
+	const references = new Map< string, Map< string, AssetEvidenceReference > >();
+	for ( const entry of entries ) {
+		const path = `website/${ routeOutputPath( entry.url, sourceUrl, entrypointUrl ).replace( /\\/g, '/' ) }`;
+		for ( const dependency of dependencyReferences( readFileSync( entry.htmlPath, 'utf8' ), entry.url ) ) {
+			const byLocation = references.get( dependency.url ) ?? new Map< string, AssetEvidenceReference >();
+			const location = { route: entry.url, path, reference: dependency.reference };
+			byLocation.set( `${ location.route }\n${ location.reference }`, location );
+			references.set( dependency.url, byLocation );
+		}
+	}
+	return references;
+}
+
+function assetEvidence(
+	references: Map< string, Map< string, AssetEvidenceReference > >,
+	mediaStubs: MediaStubStore,
+	resourceManifest: CapturedResourceManifest,
+	portablePaths: Map< string, string >
+): { assetCount: number; assetsTruncated: boolean; assets: AssetEvidenceRecord[] } {
+	const failures = new Map< string, string >();
+	for ( const failure of resourceManifest.failures ) {
+		if ( !failures.has( failure.url ) ) failures.set( failure.url, failure.error );
+	}
+	const urls = new Set( [
+		...references.keys(),
+		...mediaStubs.list().map( ( [ url ] ) => url ),
+		...Object.keys( resourceManifest.resources ),
+		...failures.keys(),
+	] );
+	const records = [ ...urls ]
+		.sort( ( left, right ) => left.localeCompare( right ) )
+		.map( ( url ) => {
+			const stub = mediaStubs.get( url );
+			const resource = resourceManifest.resources[ url ];
+			const failure = failures.get( url ) ?? ( stub?.status === 'error' ? stub.error : undefined );
+			const outcome: AssetEvidenceRecord[ 'outcome' ] = resource || stub?.status === 'success'
+				? 'successful'
+				: failure
+				? 'failed'
+				: 'unknown';
+			const locations = [ ...( references.get( url )?.values() ?? [] ) ].sort(
+				( left, right ) =>
+					left.route.localeCompare( right.route ) || left.reference.localeCompare( right.reference )
+			);
+			return {
+				id: url,
+				sourceUrl: url,
+				outcome,
+				...( portablePaths.has( url ) ? { path: portablePaths.get( url ) } : {} ),
+				...( outcome === 'failed' ? { error: failure } : {} ),
+				referenceCount: locations.length,
+				referencesTruncated: locations.length > MAX_ASSET_EVIDENCE_REFERENCES,
+				references: locations.slice( 0, MAX_ASSET_EVIDENCE_REFERENCES ),
+			};
+		} );
+	return {
+		assetCount: records.length,
+		assetsTruncated: records.length > MAX_ASSET_EVIDENCE_ASSETS,
+		assets: records.slice( 0, MAX_ASSET_EVIDENCE_ASSETS ),
+	};
+}
+
 function removeDanglingMediaSource(
 	html: string,
 	reference: string,
@@ -1627,6 +1714,13 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 	const mediaReplacements = new Map< string, string >();
 	const unresolvedMedia: Array< { url: string; error: string } > = [];
 	const assets: Array< { sourceUrl: string; path: string } > = [];
+	const assetReferenceLocations = assetReferences(
+		retainedEntries,
+		options.sourceUrl,
+		entrypointUrl
+	);
+	const mediaStubs = MediaStubStore.load( outputDir );
+	const resourceManifest = capturedResources( outputDir );
 	const renderedMediaReferences = capturedMediaReferences( retainedEntries );
 	const mediaFamilies = new Map< string, MediaCandidate[] >();
 	const retainedMediaFamilies = retainedMediaReferencesByFamily( retainedEntries );
@@ -1640,7 +1734,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 			}
 		} )
 	);
-	for ( const [ sourceUrl, stub ] of MediaStubStore.load( outputDir ).list() ) {
+	for ( const [ sourceUrl, stub ] of mediaStubs.list() ) {
 		try {
 			if ( capturedPages.has( normalizedUrl( sourceUrl ) ) ) continue;
 		} catch {
@@ -1704,7 +1798,6 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 				)
 			);
 		} );
-	const resourceManifest = capturedResources( outputDir );
 	const portableMediaBudget = portableMediaTotalBytesLimit;
 	const selectedPortableMedia = new Set< MediaCandidate >();
 	const portableMediaHashes = new Set< string >();
@@ -1726,6 +1819,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 	const localizedMediaFamilies = new Set< string >();
 	const assetPathsByHash = new Map< string, string >();
 	const assetHashesByPath = new Map< string, string >();
+	const portablePathsBySource = new Map< string, string >();
 	for ( const candidates of mediaFamilies.values() ) {
 		const family = mediaFamily( candidates[ 0 ].sourceUrl );
 		const eligible = selectMediaCandidates( candidates );
@@ -1779,6 +1873,10 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 					path: join( 'website', assetPath ).replace( /\\/g, '/' ),
 				} );
 			}
+			portablePathsBySource.set(
+				candidate.sourceUrl,
+				`website/${ assetPath.replace( /\\/g, '/' ) }`
+			);
 			fallbackAssetPath ||= assetPath;
 			for ( const reference of candidate.exactReferences ) {
 				mediaReplacements.set( reference, `/${ assetPath.replace( /\\/g, '/' ) }` );
@@ -1863,6 +1961,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		}
 		resourceReplacements.set( dependency.reference, portablePath );
 		resourceReplacements.set( dependency.url, portablePath );
+		portablePathsBySource.set( dependency.url, `website/${ relativePath.replace( /\\/g, '/' ) }` );
 		if ( alreadyCopied ) return true;
 		mkdirSync( dirname( destination ), { recursive: true } );
 		copyingResources.add( resource.path );
@@ -2184,6 +2283,26 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 	writeFileSync(
 		join( outputDir, 'source-profile.json' ),
 		`${ JSON.stringify( sourceProfile, null, 2 ) }\n`
+	);
+	const assetEvidenceReport = assetEvidence(
+		assetReferenceLocations,
+		mediaStubs,
+		resourceManifest,
+		portablePathsBySource
+	);
+	writeFileSync(
+		join( outputDir, 'asset-evidence.json' ),
+		`${ JSON.stringify(
+			{
+				schema: ASSET_EVIDENCE_SCHEMA,
+				assetCount: assetEvidenceReport.assetCount,
+				assetsTruncated: assetEvidenceReport.assetsTruncated,
+				referenceLimit: MAX_ASSET_EVIDENCE_REFERENCES,
+				assets: assetEvidenceReport.assets,
+			},
+			null,
+			2
+		) }\n`
 	);
 
 	const receiptPath = join( outputDir, 'capture-receipt.json' );

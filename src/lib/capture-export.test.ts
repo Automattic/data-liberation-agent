@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
 	CAPTURED_INTERACTIONS_SCHEMA,
 	CAPTURE_RECEIPT_SCHEMA,
+	ASSET_EVIDENCE_SCHEMA,
 	exportWebsiteCapture,
 	INDEXED_SEMANTIC_EVIDENCE_SCHEMA,
 	portableInlineStyle,
@@ -874,6 +875,95 @@ describe( 'exportWebsiteCapture', () => {
 		expect( $( 'img' ).eq( 0 ).attr( 'src' ) ).toBe( '/media/plant-300.webp' );
 		expect( $( 'img' ).eq( 1 ).attr( 'src' ) ).toBe( '/media/plant-300.webp' );
 		expect( readFileSync( join( outputDir, 'website', 'media', 'plant-300.webp' ), 'utf8' ) ).toBe( 'plant' );
+	} );
+
+	it( 'writes one successful asset outcome with every captured route reference', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-asset-evidence-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'media', 'screenshots' ] )
+			mkdirSync( join( outputDir, path ), { recursive: true } );
+		const imageUrl = 'https://cdn.example/shared.png';
+		writeFileSync(
+			join( outputDir, 'html', 'homepage.html' ),
+			`<img src="${ imageUrl }"><img src="${ imageUrl }">`
+		);
+		writeFileSync( join( outputDir, 'html', 'about.html' ), `<img src="${ imageUrl }">` );
+		writeFileSync( join( outputDir, 'media', 'shared.png' ), 'shared' );
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( {
+				version: 1,
+				entries: {
+					'https://example.com/': { html: 'html/homepage.html' },
+					'https://example.com/about': { html: 'html/about.html' },
+				},
+			} )
+		);
+		const media = MediaStubStore.load( outputDir );
+		media.markSuccess( imageUrl, join( outputDir, 'media', 'shared.png' ) );
+		media.flush();
+
+		exportWebsiteCapture( {
+			outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [],
+		} );
+
+		const evidence = JSON.parse( readFileSync( join( outputDir, 'asset-evidence.json' ), 'utf8' ) );
+		expect( evidence ).toMatchObject( { schema: ASSET_EVIDENCE_SCHEMA } );
+		expect( evidence ).toMatchObject( {
+			assetCount: 1,
+			assetsTruncated: false,
+			referenceLimit: 100,
+		} );
+		expect( evidence.assets ).toEqual( [ {
+			id: imageUrl,
+			sourceUrl: imageUrl,
+			outcome: 'successful',
+			path: 'website/media/shared.png',
+			referenceCount: 2,
+			referencesTruncated: false,
+			references: [
+				{ route: 'https://example.com/', path: 'website/index.html', reference: imageUrl },
+				{ route: 'https://example.com/about', path: 'website/about/index.html', reference: imageUrl },
+			],
+		} ] );
+	} );
+
+	it( 'writes failed asset outcomes with every captured route reference', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-failed-asset-evidence-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
+		const imageUrl = 'https://cdn.example/missing.png';
+		writeFileSync( join( outputDir, 'html', 'homepage.html' ), `<img src="${ imageUrl }">` );
+		writeFileSync( join( outputDir, 'html', 'about.html' ), `<img src="${ imageUrl }">` );
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( {
+				version: 1,
+				entries: {
+					'https://example.com/': { html: 'html/homepage.html' },
+					'https://example.com/about': { html: 'html/about.html' },
+				},
+			} )
+		);
+		MediaStubStore.load( outputDir ).markFailure( imageUrl, 'HTTP 404' );
+
+		exportWebsiteCapture( {
+			outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [],
+		} );
+
+		const evidence = JSON.parse( readFileSync( join( outputDir, 'asset-evidence.json' ), 'utf8' ) );
+		expect( evidence.assets ).toEqual( [ {
+			id: imageUrl,
+			sourceUrl: imageUrl,
+			outcome: 'failed',
+			error: 'HTTP 404',
+			referenceCount: 2,
+			referencesTruncated: false,
+			references: [
+				{ route: 'https://example.com/', path: 'website/index.html', reference: imageUrl },
+				{ route: 'https://example.com/about', path: 'website/about/index.html', reference: imageUrl },
+			],
+		} ] );
 	} );
 
 	it( 'exports captured routes and localized media as a website directory', async () => {
