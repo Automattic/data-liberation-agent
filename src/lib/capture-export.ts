@@ -1,12 +1,9 @@
 import { createHash } from 'node:crypto';
 import {
 	copyFileSync,
-	closeSync,
 	existsSync,
 	mkdirSync,
-	openSync,
 	readFileSync,
-	renameSync,
 	rmSync,
 	statSync,
 	writeFileSync,
@@ -44,11 +41,61 @@ type ManifestEntryFluid =
 			byKind: Record< string, number >;
 	  }
 	| undefined;
-export const WEBSITE_ARTIFACT_SCHEMA = 'blocks-engine/php-transformer/site-artifact/v1';
 export const CAPTURED_INTERACTIONS_SCHEMA = 'data-liberation/captured-interactions/v1';
-/** Legacy aggregate evidence emitted by captures created before indexed shards. */
-export const CAPTURED_SEMANTIC_EVIDENCE_SCHEMA = 'data-liberation/captured-semantic-evidence/v1';
+/** Indexed semantic evidence sidecar schema. */
 export const INDEXED_SEMANTIC_EVIDENCE_SCHEMA = 'data-liberation/captured-semantic-evidence/v2';
+const MAX_SEMANTIC_EVIDENCE_FILE_BYTES = 10 * 1024 * 1024;
+
+type SemanticEvidencePage = {
+	path: string;
+	url: string;
+	viewports: Record< string, Record< string, unknown >[] >;
+};
+
+interface SemanticEvidenceArtifacts {
+	index: { path: string; content: string };
+	shards: Array< { path: string; content: string; pageCount: number }>;
+}
+
+function semanticEvidenceArtifacts( pages: SemanticEvidencePage[] ): SemanticEvidenceArtifacts {
+	const shards: SemanticEvidenceArtifacts[ 'shards' ] = [];
+	let shardPages: SemanticEvidencePage[] = [];
+	const shardContent = ( candidates: SemanticEvidencePage[] ) =>
+		`${ JSON.stringify( { schema: INDEXED_SEMANTIC_EVIDENCE_SCHEMA, pages: candidates } ) }\n`;
+	for ( const page of pages ) {
+		const single = shardContent( [ page ] );
+		if ( Buffer.byteLength( single ) > MAX_SEMANTIC_EVIDENCE_FILE_BYTES )
+			throw new Error(
+				`Semantic evidence page "${ page.path }" exceeds sidecar file limit: ${ Buffer.byteLength( single ) } bytes.`
+			);
+		const candidate = shardContent( [ ...shardPages, page ] );
+		if ( shardPages.length > 0 && Buffer.byteLength( candidate ) > MAX_SEMANTIC_EVIDENCE_FILE_BYTES ) {
+			shards.push( {
+				path: `semantic-evidence/shard-${ String( shards.length + 1 ).padStart( 4, '0' ) }.json`,
+				content: shardContent( shardPages ),
+				pageCount: shardPages.length,
+			} );
+			shardPages = [ page ];
+		} else shardPages.push( page );
+	}
+	if ( shardPages.length > 0 )
+		shards.push( {
+			path: `semantic-evidence/shard-${ String( shards.length + 1 ).padStart( 4, '0' ) }.json`,
+			content: shardContent( shardPages ),
+			pageCount: shardPages.length,
+		} );
+	const index = {
+		path: 'semantic-evidence.index.json',
+		content: `${ JSON.stringify( {
+			schema: INDEXED_SEMANTIC_EVIDENCE_SCHEMA,
+			page_count: pages.length,
+			shards: shards.map( ( shard ) => ( { path: shard.path, page_count: shard.pageCount } ) ),
+		} ) }\n`,
+	};
+	if ( Buffer.byteLength( index.content ) > MAX_SEMANTIC_EVIDENCE_FILE_BYTES )
+		throw new Error( `Semantic evidence index exceeds sidecar file limit: ${ Buffer.byteLength( index.content ) } bytes.` );
+	return { index, shards };
+}
 
 function withoutGeometryIdentities( html: string ): string {
 	return html.replace( /\sdata-dla-geometry-id=(?:"[^"]*"|'[^']*')/g, '' );
@@ -79,8 +126,8 @@ interface ExportCaptureOptions {
 	summary: Record< string, unknown >;
 	failures: Array< { url: unknown; error: unknown } >;
 	discoveryDiagnostics?: Array< { code: string; url: string; reason: string } >;
-	/** Overrides for the artifact and portable media byte limits (defaults are the compiler limits). */
-	limits?: { artifactTotalBytes?: number; portableMediaTotalBytes?: number };
+	/** Overrides the portable media byte budget. */
+	limits?: { portableMediaTotalBytes?: number };
 }
 
 interface PortableDependency {
@@ -161,9 +208,6 @@ const MAX_PORTABLE_MEDIA_BYTES = 5 * 1024 * 1024;
 const MAX_PORTABLE_RESPONSIVE_MEDIA_BYTES = 8 * 1024 * 1024;
 const MAX_PORTABLE_MEDIA_DIMENSION = 2048;
 const MAX_PORTABLE_MEDIA_TOTAL_BYTES = 160 * 1024 * 1024;
-const MAX_ARTIFACT_FILES = 5000;
-const MAX_ARTIFACT_FILE_BYTES = 10 * 1024 * 1024;
-const MAX_ARTIFACT_TOTAL_BYTES = 192 * 1024 * 1024;
 const STYLE_HOIST_DIAGNOSTIC_SAMPLE_BYTES = 31 * 1024;
 const TRANSPARENT_IMAGE_DATA_URL = 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=';
 const MAX_DECLARATIVE_FORM_EMBEDS = 32;
@@ -730,47 +774,6 @@ function styleHoistReason(
 	return /[\u0000-\u001f\u007f<>&]/.test( media ) ? 'invalid_media' : 'unsafe_attributes';
 }
 
-/** Estimate the actual route replacement plus stylesheet files before media selection. */
-function estimatedHoistedStyleArtifacts( entries: CaptureEntry[] ): { bytes: number; files: number } {
-	const styles = new Map<
-		string,
-		Array< { entry: CaptureEntry; css: string; media: string; original: string } >
-	>();
-	let routeBytes = entries.reduce( ( total, entry ) => total + statSync( entry.htmlPath ).size, 0 );
-	for ( const entry of entries ) {
-		let styleIndex = 0;
-		const html = readFileSync( entry.htmlPath, 'utf8' );
-		for ( const match of html.matchAll( /<style\b([^>]*)>([\s\S]*?)<\/style\s*>/gi ) ) {
-			const reason = styleHoistReason( entry, styleIndex++, match[ 1 ], match[ 2 ] );
-			const style = portableInlineStyle( match[ 1 ], match[ 2 ] );
-			if ( reason || !style ) continue;
-			const occurrences = styles.get( style.key ) ?? [];
-			occurrences.push( { entry, css: match[ 2 ], media: style.media, original: match[ 0 ] } );
-			styles.set( style.key, occurrences );
-		}
-	}
-	let bytes = 0;
-	const cssByHash = new Set< string >();
-	for ( const occurrences of styles.values() ) {
-		if ( new Set( occurrences.map( ( occurrence ) => occurrence.entry.htmlPath ) ).size < 2 )
-			continue;
-		const css = occurrences[ 0 ].css;
-		const contentHash = createHash( 'sha256' ).update( css ).digest( 'hex' );
-		if ( ! cssByHash.has( contentHash ) ) {
-			cssByHash.add( contentHash );
-			bytes += Buffer.byteLength( css );
-		}
-		for ( const occurrence of occurrences ) {
-			const media = occurrence.media ? ` media="${ occurrence.media }"` : '';
-			routeBytes +=
-				Buffer.byteLength(
-					`<link rel="stylesheet" href="/assets/css/capture-${ contentHash }.css"${ media }>`
-				) - Buffer.byteLength( occurrence.original );
-		}
-	}
-	return { bytes: routeBytes + bytes, files: cssByHash.size };
-}
-
 function createStyleHoistDiagnosticCollector(): StyleHoistDiagnosticCollector {
 	return { diagnostics: [], diagnosticCounts: {}, diagnosticsTruncated: false, diagnosticBytes: 0 };
 }
@@ -1080,84 +1083,6 @@ function routeMatchesSourceOrigin( url: string, sourceUrl: string ): boolean {
 	return route.origin === source.origin;
 }
 
-const ARTIFACT_REPORT_FILES = [
-	'diagnostics.json',
-	'capture-receipt.json',
-	'layout-geometry-report.json',
-	'interaction-states.json',
-];
-
-interface SemanticEvidencePage {
-	path: string;
-	url: string;
-	viewports: Record< string, Record< string, unknown >[] >;
-}
-
-interface SemanticEvidenceArtifacts {
-	index: { path: string; content: string };
-	shards: Array< { path: string; content: string; pageCount: number } >;
-}
-
-function semanticEvidenceArtifacts( pages: SemanticEvidencePage[] ): SemanticEvidenceArtifacts {
-	const shards: SemanticEvidenceArtifacts[ 'shards' ] = [];
-	let shardPages: SemanticEvidencePage[] = [];
-	const shardContent = ( candidates: SemanticEvidencePage[] ) =>
-		`${ JSON.stringify( { schema: INDEXED_SEMANTIC_EVIDENCE_SCHEMA, pages: candidates } ) }\n`;
-	for ( const page of pages ) {
-		const single = shardContent( [ page ] );
-		if ( Buffer.byteLength( single ) > MAX_ARTIFACT_FILE_BYTES )
-			throw new Error(
-				`Semantic evidence page "${ page.path }" exceeds compiler file limit: ${ Buffer.byteLength( single ) } bytes.`
-			);
-		const candidate = shardContent( [ ...shardPages, page ] );
-		if ( shardPages.length > 0 && Buffer.byteLength( candidate ) > MAX_ARTIFACT_FILE_BYTES ) {
-			shards.push( {
-				path: `semantic-evidence/shard-${ String( shards.length + 1 ).padStart( 4, '0' ) }.json`,
-				content: shardContent( shardPages ),
-				pageCount: shardPages.length,
-			} );
-			shardPages = [ page ];
-		} else shardPages.push( page );
-	}
-	if ( shardPages.length > 0 )
-		shards.push( {
-			path: `semantic-evidence/shard-${ String( shards.length + 1 ).padStart( 4, '0' ) }.json`,
-			content: shardContent( shardPages ),
-			pageCount: shardPages.length,
-		} );
-	const index = {
-		path: 'semantic-evidence.index.json',
-		content: `${ JSON.stringify( {
-			schema: INDEXED_SEMANTIC_EVIDENCE_SCHEMA,
-			page_count: pages.length,
-			shards: shards.map( ( shard ) => ( { path: shard.path, page_count: shard.pageCount } ) ),
-		} ) }\n`,
-	};
-	if ( Buffer.byteLength( index.content ) > MAX_ARTIFACT_FILE_BYTES )
-		throw new Error( `Semantic evidence index exceeds compiler file limit: ${ Buffer.byteLength( index.content ) } bytes.` );
-	return { index, shards };
-}
-
-/** Bytes of report files already on disk that the artifact will carry alongside routes and assets. */
-function existingReportBytes( outputDir: string ): number {
-	return ARTIFACT_REPORT_FILES.reduce( ( total, name ) => {
-		const path = join( outputDir, name );
-		return existsSync( path ) ? total + statSync( path ).size : total;
-	}, 0 );
-}
-
-/** Bytes of captured render dependencies that the export may copy into the artifact (scripts never are). */
-function capturedResourceBytes( outputDir: string, manifest: CapturedResourceManifest ): number {
-	let bytes = 0;
-	for ( const resource of Object.values( manifest.resources ) ) {
-		if ( /javascript|ecmascript/i.test( resource.contentType ) ) continue;
-		const path = resolve( outputDir, resource.path );
-		if ( ! pathWithin( outputDir, path ) || ! existsSync( path ) ) continue;
-		bytes += statSync( path ).size;
-	}
-	return bytes;
-}
-
 function capturedResources( outputDir: string ): CapturedResourceManifest {
 	const manifestPath = join( outputDir, 'resources', 'manifest.json' );
 	if ( ! existsSync( manifestPath ) ) return { version: 1, resources: {}, failures: [] };
@@ -1173,32 +1098,6 @@ function capturedResources( outputDir: string ): CapturedResourceManifest {
 			failures: [ { url: manifestPath, error: 'captured resource manifest is invalid' } ],
 		};
 	}
-}
-
-function preflightArtifactContents(
-	websiteDir: string,
-	routes: Array< { path: string } >,
-	assets: Array< { path: string } >,
-	outputDir: string,
-	reportFiles: string[],
-	artifactTotalBytesLimit: number
-): void {
-	const files = [
-		...routes.map( ( route ) => join( websiteDir, route.path.replace( /^website\//, '' ) ) ),
-		...assets.map( ( asset ) => join( websiteDir, asset.path.replace( /^website\//, '' ) ) ),
-		...reportFiles.map( ( report ) => join( outputDir, report ) ),
-	];
-	let bytes = 0;
-	for ( const path of files ) {
-		const size = statSync( path ).size;
-		if ( size > MAX_ARTIFACT_FILE_BYTES )
-			throw new Error( `Portable capture file "${ path }" exceeds compiler limit: ${ size } bytes.` );
-		bytes += size;
-	}
-	if ( files.length > MAX_ARTIFACT_FILES || bytes > artifactTotalBytesLimit )
-		throw new Error(
-			`Portable capture exceeds compiler limits before artifact writing: ${ files.length } files, ${ bytes } bytes.`
-		);
 }
 
 function portableResourcePath( path: string, contentType: string ): string | undefined {
@@ -1569,10 +1468,6 @@ function unresolvedCapturedAnchors(
 
 export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 	const outputDir = resolve( options.outputDir );
-	const artifactTotalBytesLimit = Math.max(
-		1,
-		Math.floor( options.limits?.artifactTotalBytes ?? MAX_ARTIFACT_TOTAL_BYTES )
-	);
 	const portableMediaTotalBytesLimit = Math.max(
 		0,
 		Math.floor( options.limits?.portableMediaTotalBytes ?? MAX_PORTABLE_MEDIA_TOTAL_BYTES )
@@ -1809,47 +1704,8 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 				)
 			);
 		} );
-	// Routes, generated reports, styles, and render dependencies share the artifact
-	// with media. Reserve every possible generated report before selecting media.
 	const resourceManifest = capturedResources( outputDir );
-	const potentialHoistedStyles = estimatedHoistedStyleArtifacts( retainedEntries );
-	const retainedRouteBytes = retainedEntries.reduce(
-		( total, entry ) => total + statSync( entry.htmlPath ).size,
-		0
-	);
-	const generatedReportFileReserve =
-		4 +
-		Number( interactionPages.length > 0 ) +
-		( semanticEvidence ? semanticEvidence.shards.length + 1 : 0 );
-	const baseArtifactFileCount = retainedEntries.length + generatedReportFileReserve;
-	if ( baseArtifactFileCount > MAX_ARTIFACT_FILES ) {
-		throw new Error(
-			`Portable capture exceeds compiler file limit before media allocation: ${ baseArtifactFileCount } files.`
-		);
-	}
-	const canHoistStyles =
-		baseArtifactFileCount + potentialHoistedStyles.files <= MAX_ARTIFACT_FILES &&
-		potentialHoistedStyles.bytes +
-			capturedResourceBytes( outputDir, resourceManifest ) +
-			existingReportBytes( outputDir ) +
-			( semanticEvidence
-				? Buffer.byteLength( semanticEvidence.index.content ) +
-				  semanticEvidence.shards.reduce( ( total, shard ) => total + Buffer.byteLength( shard.content ), 0 )
-				: 0 ) <=
-			artifactTotalBytesLimit;
-	const reservedHoistedStyleFiles = canHoistStyles ? potentialHoistedStyles.files : 0;
-	const reservedArtifactBytes =
-		( canHoistStyles ? potentialHoistedStyles.bytes : retainedRouteBytes ) +
-		capturedResourceBytes( outputDir, resourceManifest ) +
-		existingReportBytes( outputDir ) +
-		( semanticEvidence
-			? Buffer.byteLength( semanticEvidence.index.content ) +
-			  semanticEvidence.shards.reduce( ( total, shard ) => total + Buffer.byteLength( shard.content ), 0 )
-			: 0 );
-	const portableMediaBudget = Math.min(
-		portableMediaTotalBytesLimit,
-		Math.max( 0, artifactTotalBytesLimit - reservedArtifactBytes )
-	);
+	const portableMediaBudget = portableMediaTotalBytesLimit;
 	const selectedPortableMedia = new Set< MediaCandidate >();
 	const portableMediaHashes = new Set< string >();
 	let portableMediaBytes = 0;
@@ -1857,12 +1713,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		for ( const selected of family.selected ) {
 			const contentHash = fileHash( selected.localPath );
 			const needsFile = ! portableMediaHashes.has( contentHash );
-			if (
-				( ! needsFile ||
-					baseArtifactFileCount + reservedHoistedStyleFiles + portableMediaHashes.size <
-						MAX_ARTIFACT_FILES ) &&
-				( ! needsFile || portableMediaBytes + selected.bytes <= portableMediaBudget )
-			) {
+			if ( ! needsFile || portableMediaBytes + selected.bytes <= portableMediaBudget ) {
 				selectedPortableMedia.add( selected );
 				if ( needsFile ) {
 					portableMediaHashes.add( contentHash );
@@ -1943,7 +1794,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		selected_bytes: portableMediaBytes,
 		retained_external_count: retainedExternalMediaCount,
 		max_bytes: portableMediaBudget,
-		reserved_bytes: reservedArtifactBytes,
+		reserved_bytes: 0,
 	};
 	for ( const { sourceUrl, error, references } of failedMedia ) {
 		const family = mediaFamily( sourceUrl );
@@ -2002,18 +1853,6 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 			( ! isText && assetPathsByHash.has( contentHash ) ) ||
 			copiedResources.has( resource.path ) ||
 			copyingResources.has( resource.path );
-		if (
-			! alreadyCopied &&
-			baseArtifactFileCount + reservedHoistedStyleFiles + assets.length >=
-			MAX_ARTIFACT_FILES
-		) {
-			unresolvedDependencies.push( {
-				url: dependency.url,
-				sourceUrl,
-				error: 'captured dependency omitted because the portable file limit was reached',
-			} );
-			return false;
-		}
 		if ( ! pathWithin( websiteDir, destination ) ) {
 			unresolvedDependencies.push( {
 				url: dependency.url,
@@ -2115,7 +1954,6 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 	for ( const [ key, occurrences ] of [ ...inlineStyles ].sort( ( left, right ) =>
 		left[ 0 ].localeCompare( right[ 0 ] )
 	) ) {
-		if ( ! canHoistStyles ) continue;
 		if ( new Set( occurrences.map( ( occurrence ) => occurrence.entry.htmlPath ) ).size < 2 ) continue;
 		const style = occurrences[ 0 ];
 		const contentHash = createHash( 'sha256' ).update( style.css ).digest( 'hex' );
@@ -2271,6 +2109,11 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		join( outputDir, 'layout-geometry-report.json' ),
 		`${ JSON.stringify( geometryReport, null, 2 ) }\n`
 	);
+	if ( geometry.proof )
+		writeFileSync(
+			join( outputDir, 'layout-geometry-proof.json' ),
+			`${ JSON.stringify( geometry.proof, null, 2 ) }\n`
+		);
 
 	const interactionStates = interactionPages.flatMap( ( page ) => page.states );
 	const initialDialogs = interactionPages.flatMap( ( page ) => page.initialDialogs ?? [] );
@@ -2289,7 +2132,6 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 			( state ) => state.dismissal?.verified
 		).length,
 	};
-	const reportFiles = [ 'diagnostics.json', 'capture-receipt.json', 'layout-geometry-report.json' ];
 	if ( semanticEvidence ) {
 		writeFileSync( join( outputDir, semanticEvidence.index.path ), semanticEvidence.index.content );
 		for ( const shard of semanticEvidence.shards ) {
@@ -2297,7 +2139,6 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 			mkdirSync( dirname( path ), { recursive: true } );
 			writeFileSync( path, shard.content );
 		}
-		reportFiles.push( semanticEvidence.index.path, ...semanticEvidence.shards.map( ( shard ) => shard.path ) );
 	}
 	if ( interactionPages.length > 0 ) {
 		writeFileSync(
@@ -2312,7 +2153,6 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 				2
 			) }\n`
 		);
-		reportFiles.push( 'interaction-states.json' );
 	}
 
 	// --- source profile -------------------------------------------------------
@@ -2345,7 +2185,6 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		join( outputDir, 'source-profile.json' ),
 		`${ JSON.stringify( sourceProfile, null, 2 ) }\n`
 	);
-	reportFiles.push( 'source-profile.json' );
 
 	const receiptPath = join( outputDir, 'capture-receipt.json' );
 	writeFileSync(
@@ -2404,127 +2243,6 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 			2
 		) }\n`
 	);
-	preflightArtifactContents(
-		websiteDir,
-		routes,
-		assets,
-		outputDir,
-		reportFiles,
-		artifactTotalBytesLimit
-	);
-
-	const artifactPath = join( outputDir, 'artifact.json' );
-	const artifactTempPath = `${ artifactPath }.tmp`;
-	let artifactFd: number | undefined;
-	try {
-		artifactFd = openSync( artifactTempPath, 'w' );
-		writeFileSync(
-			artifactFd,
-			`${ JSON.stringify( {
-				schema: WEBSITE_ARTIFACT_SCHEMA,
-				artifact_type: 'website',
-				version: 1,
-				compiler_limits: {
-					max_files: MAX_ARTIFACT_FILES,
-					max_file_bytes: MAX_ARTIFACT_FILE_BYTES,
-					max_total_bytes: artifactTotalBytesLimit,
-				},
-				id: `capture-${ Buffer.from( options.sourceUrl ).toString( 'base64url' ).slice( 0, 24 ) }`,
-				generated_at: new Date().toISOString(),
-				root: 'website',
-				entrypoint: 'website/index.html',
-				...( geometry.proof ? { layout_geometry_proof: geometry.proof } : {} ),
-				...( semanticEvidence
-					? {
-							semantic_evidence: {
-								schema: INDEXED_SEMANTIC_EVIDENCE_SCHEMA,
-								index_path: semanticEvidence.index.path,
-								page_count: semanticPages.length,
-								shard_count: semanticEvidence.shards.length,
-							},
-					  }
-					: {} ),
-			} ).slice( 0, -1 ) },"files":[`
-		);
-
-		let firstFile = true;
-		let artifactFileCount = 0;
-		let artifactContentBytes = 0;
-		const writeArtifactFile = ( file: Record< string, unknown >, contentBytes: number ) => {
-			if ( contentBytes > MAX_ARTIFACT_FILE_BYTES ) {
-				throw new Error(
-					`Portable capture file "${ file.path }" exceeds compiler limit: ${ contentBytes } bytes.`
-				);
-			}
-			artifactFileCount++;
-			artifactContentBytes += contentBytes;
-			if (
-				artifactFileCount > MAX_ARTIFACT_FILES ||
-				artifactContentBytes > artifactTotalBytesLimit
-			) {
-				throw new Error(
-					`Portable capture exceeds compiler limits: ${ artifactFileCount } files, ${ artifactContentBytes } bytes.`
-				);
-			}
-			writeFileSync( artifactFd!, `${ firstFile ? '' : ',' }${ JSON.stringify( file ) }` );
-			firstFile = false;
-		};
-		const orderedRoutes = [ ...routes ].sort( ( left, right ) =>
-			left.path === 'website/index.html' ? -1 : right.path === 'website/index.html' ? 1 : 0
-		);
-		for ( const route of orderedRoutes ) {
-			const relativePath = route.path.replace( /^website\//, '' );
-			const content = readFileSync( join( websiteDir, relativePath ), 'utf8' );
-			writeArtifactFile(
-				{
-					path: route.path,
-					content,
-					encoding: 'utf8',
-				},
-				Buffer.byteLength( content )
-			);
-		}
-		for ( const asset of assets ) {
-			const relativePath = asset.path.replace( /^website\//, '' );
-			const content = readFileSync( join( websiteDir, relativePath ) );
-			writeArtifactFile(
-				{
-					path: asset.path,
-					content_base64: content.toString( 'base64' ),
-					encoding: 'base64',
-				},
-				content.length
-			);
-		}
-		for ( const report of reportFiles ) {
-			const content = readFileSync( join( outputDir, report ), 'utf8' );
-			writeArtifactFile(
-				{
-					path: report,
-					content,
-					encoding: 'utf8',
-				},
-				Buffer.byteLength( content )
-			);
-		}
-		writeFileSync(
-			artifactFd,
-			`],"provenance":${ JSON.stringify( {
-				provider: 'data-liberation/browser-capture',
-				source_url: options.sourceUrl,
-				platform: options.platform,
-				...( options.title ? { title: options.title } : {} ),
-			} ) },"reports":${ JSON.stringify( reportFiles ) }}\n`
-		);
-		closeSync( artifactFd );
-		artifactFd = undefined;
-		renameSync( artifactTempPath, artifactPath );
-	} catch ( error ) {
-		if ( artifactFd !== undefined ) closeSync( artifactFd );
-		rmSync( artifactTempPath, { force: true } );
-		throw error;
-	}
-
 	rmSync( stagedHtmlDir, { recursive: true, force: true } );
 	return receiptPath;
 }

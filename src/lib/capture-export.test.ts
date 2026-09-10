@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,12 +9,10 @@ import { chromium } from 'playwright';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
 	CAPTURED_INTERACTIONS_SCHEMA,
-	CAPTURED_SEMANTIC_EVIDENCE_SCHEMA,
 	CAPTURE_RECEIPT_SCHEMA,
 	exportWebsiteCapture,
 	INDEXED_SEMANTIC_EVIDENCE_SCHEMA,
 	portableInlineStyle,
-	WEBSITE_ARTIFACT_SCHEMA,
 } from './capture-export.js';
 import { SectionSpecsStore } from './replicate/section-specs-store.js';
 import { MediaStubStore } from './resume-state/index.js';
@@ -55,13 +53,12 @@ describe( 'exportWebsiteCapture', () => {
 			failures: [],
 		} );
 
-		const artifact = JSON.parse( readFileSync( join( outputDir, 'artifact.json' ), 'utf8' ) );
-		const publication = artifact.files.find(
-			( file: { path: string } ) =>
-				file.path ===
-				'website/post/can-chiropractic-help-with-back-pain-360-chiro-clinic-sheffield/index.html'
+		const $ = cheerio.load(
+			readFileSync(
+				join( outputDir, 'website', 'post', 'can-chiropractic-help-with-back-pain-360-chiro-clinic-sheffield', 'index.html' ),
+				'utf8'
+			)
 		);
-		const $ = cheerio.load( publication.content );
 		const jsonLd = $( 'head script[type="application/ld+json"]' );
 		expect( jsonLd ).toHaveLength( 1 );
 		expect( JSON.parse( jsonLd.text() ) ).toMatchObject( {
@@ -69,7 +66,6 @@ describe( 'exportWebsiteCapture', () => {
 			'@type': 'BlogPosting',
 			datePublished: '2026-08-24T12:49:28.000Z',
 		} );
-		expect( publication.metadata ).toBeUndefined();
 	} );
 
 	it( 'preserves arbitrary Article JSON-LD without enabling source scripts', () => {
@@ -88,10 +84,9 @@ describe( 'exportWebsiteCapture', () => {
 
 		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [] } );
 
-		const artifact = JSON.parse( readFileSync( join( outputDir, 'artifact.json' ), 'utf8' ) );
-		const page = artifact.files.find( ( file: { path: string } ) => file.path === 'website/index.html' );
-		expect( page.content ).toContain( 'application/ld+json' );
-		const $ = cheerio.load( page.content );
+		const page = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
+		expect( page ).toContain( 'application/ld+json' );
+		const $ = cheerio.load( page );
 		const jsonLd = $( 'script[type="application/ld+json"]' );
 		expect( jsonLd ).toHaveLength( 2 );
 		expect( JSON.parse( jsonLd.first().text() ) ).toMatchObject( {
@@ -100,10 +95,9 @@ describe( 'exportWebsiteCapture', () => {
 		expect( JSON.parse( jsonLd.last().text() ) ).toMatchObject( {
 			'@type': 'WebPage', mainEntity: { '@type': 'Article', datePublished: '2024-05-06T07:08:09Z' },
 		} );
-		expect( page.content ).toContain( '<\\/script>' );
-		expect( page.content ).not.toContain( '<script>globalThis.executed = true</script>' );
-		expect( page.content ).not.toContain( 'source-only-primitive' );
-		expect( page.metadata ).toBeUndefined();
+		expect( page ).toContain( '<\\/script>' );
+		expect( page ).not.toContain( '<script>globalThis.executed = true</script>' );
+		expect( page ).not.toContain( 'source-only-primitive' );
 	} );
 
 	it( 'bounds inert JSON-LD before parsing and preserves only accepted objects', () => {
@@ -169,7 +163,7 @@ describe( 'exportWebsiteCapture', () => {
 		expect( jsonLd ).toHaveLength( 16 );
 		expect( JSON.parse( jsonLd.last().text() ) ).toEqual( { index: 15 } );
 	} );
-	it( 'carries bounded responsive section evidence in the portable artifact', () => {
+	it( 'writes responsive section evidence as a neutral sidecar', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-semantic-export-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
@@ -205,14 +199,9 @@ describe( 'exportWebsiteCapture', () => {
 			failures: [],
 		} );
 
-		const artifact = JSON.parse( readFileSync( join( outputDir, 'artifact.json' ), 'utf8' ) );
 		const index = JSON.parse( readFileSync( join( outputDir, 'semantic-evidence.index.json' ), 'utf8' ) );
 		const evidence = JSON.parse( readFileSync( join( outputDir, index.shards[ 0 ].path ), 'utf8' ) );
-		expect( artifact.semantic_evidence ).toMatchObject( {
-			schema: INDEXED_SEMANTIC_EVIDENCE_SCHEMA,
-			index_path: 'semantic-evidence.index.json',
-			page_count: 1,
-		} );
+		expect( index ).toMatchObject( { schema: INDEXED_SEMANTIC_EVIDENCE_SCHEMA, page_count: 1 } );
 		expect( evidence.pages[ 0 ].path ).toBe( 'website/index.html' );
 		expect( evidence.pages[ 0 ].viewports.desktop ).toHaveLength( 5 );
 		expect( evidence.pages[ 0 ].viewports.mobile ).toHaveLength( 5 );
@@ -227,12 +216,6 @@ describe( 'exportWebsiteCapture', () => {
 				expect( section ).not.toHaveProperty( 'styledHtml' );
 			}
 		}
-		const artifactEvidence = artifact.files.find(
-			( file: { path: string } ) => file.path === 'semantic-evidence.index.json'
-		);
-		expect( Buffer.byteLength( artifactEvidence.content ) ).toBeLessThanOrEqual(
-			artifact.compiler_limits.max_file_bytes
-		);
 	} );
 
 	it( 'retains the HTML-only fallback when section evidence is invalid', () => {
@@ -261,11 +244,7 @@ describe( 'exportWebsiteCapture', () => {
 			failures: [],
 		} );
 
-		const artifact = JSON.parse( readFileSync( join( outputDir, 'artifact.json' ), 'utf8' ) );
-		expect( artifact.semantic_evidence ).toBeUndefined();
-		expect( artifact.files.map( ( file: { path: string } ) => file.path ) ).not.toContain(
-			'semantic-evidence.index.json'
-		);
+		expect( existsSync( join( outputDir, 'semantic-evidence.index.json' ) ) ).toBe( false );
 	} );
 
 	it( 'measures UTF-8 semantic evidence shards at the exact file limit', () => {
@@ -349,9 +328,9 @@ describe( 'exportWebsiteCapture', () => {
 			summary: {},
 			failures: [],
 		} );
-		const artifact = JSON.parse( readFileSync( join( outputDir, 'artifact.json' ), 'utf8' ) );
-		expect( artifact.layout_geometry_proof ).toMatchObject( {
-			schema: 'blocks-engine/php-transformer/layout-geometry-proof/v1',
+		const proof = JSON.parse( readFileSync( join( outputDir, 'layout-geometry-proof.json' ), 'utf8' ) );
+		expect( proof ).toMatchObject( {
+			schema: 'data-liberation/layout-geometry-proof/v1',
 			nodes: [
 				{ selector: 'main:nth-of-type(1) > div:nth-of-type(1)' },
 				{ selector: 'main:nth-of-type(1) > div:nth-of-type(1) > section:nth-of-type(1)' },
@@ -591,7 +570,7 @@ describe( 'exportWebsiteCapture', () => {
 			failures: [],
 		} );
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
-		const artifact = JSON.parse( readFileSync( join( outputDir, 'artifact.json' ), 'utf8' ) );
+		const proof = JSON.parse( readFileSync( join( outputDir, 'layout-geometry-proof.json' ), 'utf8' ) );
 		expect( html ).not.toContain( 'data-dla-geometry-id' );
 		expect( html ).not.toContain( 'onclick=' );
 		expect( html ).not.toContain( '<script' );
@@ -608,8 +587,8 @@ describe( 'exportWebsiteCapture', () => {
 			'class="data-liberation-mobile-document responsive mobile-body" style="margin:5px;padding:6px"'
 		);
 		expect( html ).toContain( 'href="/cdn/site.css"' );
-		expect( artifact.layout_geometry_proof.reductions ).toHaveLength( 2 );
-		expect( artifact.layout_geometry_proof.nodes ).toEqual(
+		expect( proof.reductions ).toHaveLength( 2 );
+		expect( proof.nodes ).toEqual(
 			expect.arrayContaining( [
 				expect.objectContaining( {
 					selector: 'div:nth-of-type(1) > main:nth-of-type(1) > div:nth-of-type(1)',
@@ -1047,14 +1026,10 @@ describe( 'exportWebsiteCapture', () => {
 		} );
 
 		const receipt = JSON.parse( readFileSync( receiptPath, 'utf8' ) );
-		const geometryArtifact = JSON.parse(
-			readFileSync( join( outputDir, 'artifact.json' ), 'utf8' )
-		);
-		expect( geometryArtifact.reports ).toContain( 'layout-geometry-report.json' );
 		expect(
 			JSON.parse( readFileSync( join( outputDir, 'layout-geometry-report.json' ), 'utf8' ) )
 		).toMatchObject( {
-			schema: 'blocks-engine/php-transformer/layout-geometry-proof/v1',
+			schema: 'data-liberation/layout-geometry-proof/v1',
 			capture_omissions: { capture_missing: 4 },
 		} );
 		expect( receipt ).toMatchObject( {
@@ -1204,11 +1179,8 @@ describe( 'exportWebsiteCapture', () => {
 		expect( readFileSync( join( outputDir, 'website', 'media', 'logo.png' ), 'utf8' ) ).toBe(
 			'png'
 		);
-		const artifact = JSON.parse( readFileSync( join( outputDir, 'artifact.json' ), 'utf8' ) );
-		expect( artifact.reports ).toContain( 'interaction-states.json' );
 		const interactionReport = JSON.parse(
-			artifact.files.find( ( file: { path: string } ) => file.path === 'interaction-states.json' )
-				.content
+			readFileSync( join( outputDir, 'interaction-states.json' ), 'utf8' )
 		);
 		expect( interactionReport ).toMatchObject( {
 			schema: CAPTURED_INTERACTIONS_SCHEMA,
@@ -1219,35 +1191,7 @@ describe( 'exportWebsiteCapture', () => {
 				initial_dismissal_verified_count: 1,
 			},
 		} );
-		expect( artifact ).toMatchObject( {
-			schema: WEBSITE_ARTIFACT_SCHEMA,
-			artifact_type: 'website',
-			compiler_limits: {
-				max_files: 5000,
-				max_file_bytes: 10 * 1024 * 1024,
-				max_total_bytes: 192 * 1024 * 1024,
-			},
-			root: 'website',
-			entrypoint: 'website/index.html',
-			provenance: {
-				provider: 'data-liberation/browser-capture',
-				source_url: 'https://example.com/shop/',
-			},
-		} );
-		expect( artifact.files[ 0 ].path ).toBe( 'website/index.html' );
-		expect(
-			artifact.files.filter( ( file: { path: string } ) => file.path === 'website/media/logo.png' )
-		).toHaveLength( 1 );
-		expect( artifact.files ).toEqual(
-			expect.arrayContaining( [
-				expect.objectContaining( { path: 'website/index.html', encoding: 'utf8' } ),
-				expect.objectContaining( {
-					path: 'website/media/logo.png',
-					encoding: 'base64',
-					content_base64: Buffer.from( 'png' ).toString( 'base64' ),
-				} ),
-			] )
-		);
+		expect( existsSync( join( outputDir, 'artifact.json' ) ) ).toBe( false );
 		expect( existsSync( join( outputDir, 'diagnostics.json' ) ) ).toBe( true );
 		expect(
 			JSON.parse( readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' ) ).unresolvedMedia
@@ -1293,7 +1237,7 @@ describe( 'exportWebsiteCapture', () => {
 		const runnerPath = join( outputDir, 'export-under-limit.ts' );
 		writeFileSync(
 			runnerPath,
-			`import { existsSync, readFileSync, statSync } from 'node:fs';
+			`import { existsSync, readFileSync } from 'node:fs';
 import { exportWebsiteCapture } from ${ JSON.stringify(
 				new URL( './capture-export.ts', import.meta.url ).href
 			) };
@@ -1307,9 +1251,8 @@ const receiptPath = exportWebsiteCapture( {
 } );
 const receipt = JSON.parse( readFileSync( receiptPath, 'utf8' ) );
 if ( receipt.routes.length !== ${ routeCount } ) throw new Error( 'route count mismatch' );
-const artifactPath = ${ JSON.stringify( join( outputDir, 'artifact.json' ) ) };
-if ( !existsSync( artifactPath ) || statSync( artifactPath ).size === 0 )
-	throw new Error( 'artifact was not completed' );
+if ( !existsSync( ${ JSON.stringify( join( outputDir, 'website', 'index.html' ) ) } ) )
+	throw new Error( 'website was not completed' );
 if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) } ) )
 	throw new Error( 'staging was not removed' );
 `
@@ -1324,7 +1267,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		expect( result.status, result.stderr ).toBe( 0 );
 	}, 70_000 );
 
-	it( 'indexes and shards structured semantic evidence above the artifact file limit', () => {
+	it( 'indexes structured semantic evidence into two bounded shards', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-compact-semantic-export-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
@@ -1357,7 +1300,6 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 			failures: [],
 		} );
 
-		const artifact = JSON.parse( readFileSync( join( outputDir, 'artifact.json' ), 'utf8' ) );
 		const index = JSON.parse( readFileSync( join( outputDir, 'semantic-evidence.index.json' ), 'utf8' ) );
 		const shards = index.shards.map( ( shard: { path: string } ) =>
 			JSON.parse( readFileSync( join( outputDir, shard.path ), 'utf8' ) )
@@ -1376,23 +1318,9 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 			[ 'Caminos y sabores 🍜' ],
 			[ 'Caminos y sabores 🍜' ],
 		] );
-		expect( Buffer.byteLength( JSON.stringify( pages ) ) ).toBeGreaterThan(
-			artifact.compiler_limits.max_file_bytes
-		);
-		for ( const file of artifact.files as Array< { path: string; content: string } > )
-			expect( Buffer.byteLength( file.content ) ).toBeLessThanOrEqual(
-				artifact.compiler_limits.max_file_bytes
-			);
-		expect(
-			artifact.files.reduce(
-				( total: number, file: { content?: string; content_base64?: string } ) =>
-					total +
-					( file.content_base64 === undefined
-						? Buffer.byteLength( file.content ?? '' )
-						: Buffer.from( file.content_base64, 'base64' ).length ),
-				0
-			)
-		).toBeLessThanOrEqual( artifact.compiler_limits.max_total_bytes );
+		expect( Buffer.byteLength( JSON.stringify( pages ) ) ).toBeGreaterThan( 10 * 1024 * 1024 );
+		for ( const shard of shards )
+			expect( Buffer.byteLength( JSON.stringify( shard ) ) ).toBeLessThanOrEqual( 10 * 1024 * 1024 );
 		const first = [ index, ...shards ].map( ( value ) => JSON.stringify( value ) );
 		exportWebsiteCapture( {
 			outputDir,
@@ -1409,28 +1337,6 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 			),
 		].map( ( value ) => JSON.stringify( value ) );
 		expect( repeated ).toEqual( first );
-	} );
-
-	it( 'retains persisted v1 semantic evidence while emitting indexed v2 metadata', () => {
-		const outputDir = mkdtempSync( join( tmpdir(), 'dla-legacy-semantic-export-' ) );
-		dirs.push( outputDir );
-		for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
-		writeFileSync( join( outputDir, 'html', 'homepage.html' ), '<main>Home</main>' );
-		writeFileSync(
-			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( { version: 1, entries: { 'https://example.com/': { html: 'html/homepage.html' } } } )
-		);
-		const legacy = `${ JSON.stringify( {
-			schema: CAPTURED_SEMANTIC_EVIDENCE_SCHEMA,
-			pages: [ { path: 'website/index.html', url: 'https://example.com/', viewports: {} } ],
-		} ) }\n`;
-		writeFileSync( join( outputDir, 'semantic-evidence.json' ), legacy );
-
-		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [] } );
-
-		expect( readFileSync( join( outputDir, 'semantic-evidence.json' ), 'utf8' ) ).toBe( legacy );
-		const artifact = JSON.parse( readFileSync( join( outputDir, 'artifact.json' ), 'utf8' ) );
-		expect( artifact.semantic_evidence ).toBeUndefined();
 	} );
 
 	it( 'preserves the rendered authoring tree when section reconstruction lacks visual proof', () => {
@@ -1752,15 +1658,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		expect( html.match( /capture-[a-f0-9]{64}\.css/g ) ).toHaveLength( 2 );
 		expect( html ).toContain( 'media="screen and (min-width: 1px)"' );
 		expect( html ).not.toContain( ':where(.data-liberation-mobile-document) .layout' );
-		const artifact = JSON.parse( readFileSync( join( outputDir, 'artifact.json' ), 'utf8' ) );
-		const stylesheets = artifact.files.filter( ( file: { path: string } ) =>
-			/^website\/assets\/css\/capture-[a-f0-9]{64}\.css$/.test( file.path )
-		);
-		expect(
-			stylesheets.map( ( file: { content_base64: string } ) =>
-				Buffer.from( file.content_base64, 'base64' ).toString( 'utf8' )
-			)
-		).toContain( '.layout{display:grid}@media(max-width:600px){.layout{display:block}}' );
+		expect( html ).toContain( '/assets/css/capture-' );
 	} );
 
 	it( 'hoists byte-identical safe styles across 186 documents without deleting local occurrences', () => {
@@ -1786,10 +1684,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'fake', summary: {}, failures: [] } );
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		expect( html.match( /<link rel="stylesheet" href="\/assets\/css\/capture-[a-f0-9]{64}\.css" media="screen">/g ) ).toHaveLength( 2 );
-		const stylesheets = JSON.parse( readFileSync( join( outputDir, 'artifact.json' ), 'utf8' ) ).files.filter(
-			( file: { path: string } ) => /^website\/assets\/css\/capture-[a-f0-9]{64}\.css$/.test( file.path )
-		);
-		expect( stylesheets ).toHaveLength( 1 );
+		expect( html ).toContain( '/assets/css/capture-' );
 	} );
 
 	it( 'keeps unsafe and base-dependent styles inline with emitted diagnostics', () => {
@@ -1818,7 +1713,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 			expect.objectContaining( { reason: 'empty_style' } ),
 			expect.objectContaining( { reason: 'empty_css_url' } ),
 		] ) );
-		expect( JSON.parse( readFileSync( join( outputDir, 'artifact.json' ), 'utf8' ) ).reports ).toContain( 'diagnostics.json' );
+		expect( existsSync( join( outputDir, 'diagnostics.json' ) ) ).toBe( true );
 	} );
 
 	it( 'bounds unhoistable style diagnostics while retaining aggregate reasons', () => {
@@ -2264,13 +2159,8 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		expect( html ).toContain( 'data:application/octet-stream;base64,' );
 		expect( html ).not.toContain( '/_runtimes/site.js' );
 		expect( html ).not.toContain( '/_runtimes/missing-script.js' );
-		const artifact = JSON.parse( readFileSync( join( outputDir, 'artifact.json' ), 'utf8' ) );
-		expect( artifact.files ).toEqual(
-			expect.arrayContaining( [
-				expect.objectContaining( { path: 'diagnostics.json', encoding: 'utf8' } ),
-				expect.objectContaining( { path: 'capture-receipt.json', encoding: 'utf8' } ),
-			] )
-		);
+		expect( existsSync( join( outputDir, 'diagnostics.json' ) ) ).toBe( true );
+		expect( existsSync( join( outputDir, 'capture-receipt.json' ) ) ).toBe( true );
 	} );
 
 	it( 'rejects decoded route paths that escape the website directory', () => {
@@ -2767,36 +2657,18 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 			platform: 'fake',
 			summary: {},
 			failures: [],
-			limits: { artifactTotalBytes },
+			limits: { portableMediaTotalBytes: artifactTotalBytes },
 		} );
 
 		const receipt = JSON.parse( readFileSync( receiptPath, 'utf8' ) );
 		expect( receipt.portableMedia ).toMatchObject( {
-			selected_count: 1,
-			retained_external_count: 1,
-		} );
-		expect( receipt.portableMedia.max_bytes ).toBeLessThanOrEqual(
-			artifactTotalBytes - 300 * 1024
-		);
-		const artifact = JSON.parse( readFileSync( join( outputDir, 'artifact.json' ), 'utf8' ) );
-		expect( artifact.compiler_limits.max_total_bytes ).toBe( artifactTotalBytes );
-		const totalBytes = artifact.files.reduce(
-			( total: number, file: { content?: string; content_base64?: string } ) =>
-				total +
-				( file.content_base64 !== undefined
-					? Buffer.from( file.content_base64, 'base64' ).length
-					: Buffer.byteLength( file.content ?? '' ) ),
-			0
-		);
-		expect( totalBytes ).toBeLessThanOrEqual( artifactTotalBytes );
-		const diagnostics = JSON.parse( readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' ) );
-		expect( diagnostics.unresolvedMedia ).toContainEqual( {
-			url: 'https://cdn.example/second.png',
-			error: 'removed because the aggregate portable media limit was reached',
+			selected_count: 2,
+			retained_external_count: 0,
+			max_bytes: artifactTotalBytes,
 		} );
 	} );
 
-	it( 'uses exact generated report bytes before writing the artifact', () => {
+	it( 'keeps generated reports beside the portable website', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-report-budget-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'screenshots', 'media' ] )
@@ -2820,26 +2692,17 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 			platform: 'fake',
 			summary: {},
 			failures: [],
-			limits: { artifactTotalBytes: 480 * 1024 },
+			limits: { portableMediaTotalBytes: 480 * 1024 },
 		} );
 
 		const receipt = JSON.parse( readFileSync( receiptPath, 'utf8' ) );
 		expect( receipt.portableMedia.selected_count ).toBe( 1 );
 		expect( existsSync( join( outputDir, 'diagnostics.json' ) ) ).toBe( true );
 		expect( existsSync( join( outputDir, 'source-profile.json' ) ) ).toBe( true );
-		const artifact = JSON.parse( readFileSync( join( outputDir, 'artifact.json' ), 'utf8' ) );
-		const totalBytes = artifact.files.reduce(
-			( total: number, file: { content?: string; content_base64?: string } ) =>
-				total +
-				( file.content_base64 !== undefined
-					? Buffer.from( file.content_base64, 'base64' ).length
-					: Buffer.byteLength( file.content ?? '' ) ),
-			0
-		);
-		expect( totalBytes ).toBeLessThanOrEqual( 480 * 1024 );
+		expect( existsSync( join( outputDir, 'artifact.json' ) ) ).toBe( false );
 	} );
 
-	it( 'exports exactly at the 5000-file boundary after reserving generated reports', () => {
+	it( 'retains every route beyond a former compiler file boundary', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-file-boundary-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
@@ -2855,10 +2718,9 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 
 		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'fake', summary: {}, failures: [] } );
 
-		const artifact = JSON.parse( readFileSync( join( outputDir, 'artifact.json' ), 'utf8' ) );
-		expect( artifact.files ).toHaveLength( 5_000 );
-		expect( artifact.files.filter( ( file: { path: string } ) => file.path === 'diagnostics.json' ) ).toHaveLength( 1 );
-		expect( artifact.files.filter( ( file: { path: string } ) => file.path === 'source-profile.json' ) ).toHaveLength( 1 );
+		const receipt = JSON.parse( readFileSync( join( outputDir, 'capture-receipt.json' ), 'utf8' ) );
+		expect( receipt.routes ).toHaveLength( 4_996 );
+		expect( existsSync( join( outputDir, 'website', 'page-4995', 'index.html' ) ) ).toBe( true );
 	}, 60_000 );
 
 	it( 'reserves repeated hoisted stylesheets before allocating constrained artifact media', () => {
@@ -2890,21 +2752,14 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 			platform: 'fake',
 			summary: {},
 			failures: [],
-			limits: { artifactTotalBytes: 400 * 1024 },
+			limits: { portableMediaTotalBytes: 400 * 1024 },
 		} );
 		const receipt = JSON.parse( readFileSync( receiptPath, 'utf8' ) );
 		expect( receipt.portableMedia.selected_count ).toBe( 1 );
-		const artifact = JSON.parse( readFileSync( join( outputDir, 'artifact.json' ), 'utf8' ) );
-		expect( artifact.files.some( ( file: { path: string } ) => /assets\/css\/capture-/.test( file.path ) ) ).toBe( true );
-		const totalBytes = artifact.files.reduce(
-			( total: number, file: { content?: string; content_base64?: string } ) =>
-				total + ( file.content_base64 ? Buffer.from( file.content_base64, 'base64' ).length : Buffer.byteLength( file.content ?? '' ) ),
-			0
-		);
-		expect( totalBytes ).toBeLessThanOrEqual( 400 * 1024 );
+		expect( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) ).toContain( '/assets/css/capture-' );
 	} );
 
-	it( 'hoists repeated 80 KiB safe styles when the net artifact fits below the old inflated estimate', () => {
+	it( 'hoists repeated 80 KiB safe styles without an artifact budget', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-net-style-budget-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
@@ -2933,23 +2788,13 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 			platform: 'fake',
 			summary: {},
 			failures: [],
-			limits: { artifactTotalBytes: limit },
+			limits: { portableMediaTotalBytes: limit },
 		} );
 
-		const artifact = JSON.parse( readFileSync( join( outputDir, 'artifact.json' ), 'utf8' ) );
-		expect( artifact.files.some( ( file: { path: string } ) => /assets\/css\/capture-/.test( file.path ) ) ).toBe( true );
-		const artifactBytes = artifact.files.reduce(
-			( total: number, file: { content?: string; content_base64?: string } ) =>
-				total +
-				( file.content_base64
-					? Buffer.from( file.content_base64, 'base64' ).length
-					: Buffer.byteLength( file.content ?? '' ) ),
-			0
-		);
-		expect( artifactBytes ).toBeLessThan( limit );
+		expect( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) ).toContain( '/assets/css/capture-' );
 	} );
 
-	it( 'fails before artifact writing when dynamic report arrays exceed a tight total cap', () => {
+	it( 'retains routes when capture reports exceed a former compiler cap', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-report-preflight-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
@@ -2963,16 +2808,15 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		}
 		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( { version: 1, entries } ) );
 
-		expect( () =>
-			exportWebsiteCapture( {
-				outputDir,
-				sourceUrl: 'https://example.com/',
-				platform: 'fake',
-				summary: {},
-				failures: [],
-				limits: { artifactTotalBytes: 3 * 1024 },
-			} )
-		).toThrow( /before artifact writing/ );
+		exportWebsiteCapture( {
+			outputDir,
+			sourceUrl: 'https://example.com/',
+			platform: 'fake',
+			summary: {},
+			failures: [],
+			limits: { portableMediaTotalBytes: 3 * 1024 },
+		} );
+		expect( existsSync( join( outputDir, 'website', 'page-99', 'index.html' ) ) ).toBe( true );
 		expect( existsSync( join( outputDir, 'artifact.json' ) ) ).toBe( false );
 	} );
 
