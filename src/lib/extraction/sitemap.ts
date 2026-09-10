@@ -28,6 +28,15 @@ export function classifyUrl(url: string): UrlType {
   if (/\/blogs\/[^/]+\/[^/]+/.test(path)) return 'post'; // Shopify /blogs/<blog>/<article>
   if (/\/blog-\d+\/post\//.test(path)) return 'post'; // Wix /blog-1/post/<slug>
   if (/\/single-post\//.test(path)) return 'post'; // Older Wix Blog URL pattern
+  // A category/listing page under a store path is not a product, the same way a bare
+  // /blog is not a post above. Weebly names these /store/c<N>/... against /store/p<N>/...
+  // for an actual product; other platforms use /category/, /collections/ (Shopify), etc.,
+  // or the bare /store//shop/ index. Check these before the broad product test below, or
+  // e.g. lonestardinners.com's /store/c1/Current_Menu.html imports into WooCommerce as a
+  // junk product named after the category, priced at whatever its cheapest listing costs.
+  if (/\/(?:store|shop)\/c\d+\//.test(path)) return 'page';
+  if (/\/(?:category|categories|collections|product-category|product-tag)(?:\/|$)/.test(path)) return 'page';
+  if (/\/(?:store|shop)\/?$/.test(path)) return 'page';
   if (/\/(products?|product-page|store|shop)\//.test(path)) return 'product';
   if (/\/(gallery|portfolio)/.test(path)) return 'gallery';
   if (/\/(event|events)/.test(path)) return 'event';
