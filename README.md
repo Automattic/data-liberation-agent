@@ -18,15 +18,24 @@ Every retained route becomes a directory of HTML, CSS, media, and fonts, with re
 
 **HTML is the contract.** The liberated site is the deliverable — not an intermediate format on the way to somewhere else, and not tied to any destination.
 
-## Three commands
+## Four commands
 
 ```bash
 data-liberation <url>                        # liberate a site
+data-liberation inspect <url>                # assess a source before liberation
 data-liberation compare <run-dir>            # verify the copy against its source
 data-liberation publish <run-dir> --to spacefast   # put it on a live URL
 ```
 
-That is the whole surface. Liberation writes the site and exits; add `--serve` to keep a local server running so you can click through it.
+That is the whole surface. Inspection is bounded and read-only; it reports measured route/document facts, coverage, issues, and explicit unknowns without writing a site. Liberation writes the site and exits; add `--serve` to keep a local server running so you can click through it.
+
+### Inspect
+
+```bash
+data-liberation inspect https://example.com/ --discovery-limit 50 --sample-limit 5
+```
+
+The JSON result is versioned and destination-neutral. It samples the entry route plus distinct discovered route types, up to the configured limits. It does not claim browser-rendered layout, responsive reflow, or activated interactions: those remain explicit unknowns until full liberation and comparison.
 
 ### Liberate
 
@@ -123,7 +132,7 @@ cd data-liberation-agent && gemini extension link .
 npm run mcp     # or: npx tsx src/mcp-server.ts
 ```
 
-The server exposes the same three verbs as tools — `liberate`, `compare`, `publish` — calling the same entry points the CLI calls. MCP is a transport here, not the architecture: nothing requires it, and it deliberately does not expose internal pipeline phases.
+The server exposes the same four verbs as tools — `inspect`, `liberate`, `compare`, `publish` — calling the same entry points the CLI calls. MCP is a transport here, not the architecture: nothing requires it, and it deliberately does not expose internal pipeline phases.
 
 > **First-time browser setup.** Capture uses Playwright's Chromium, which is not installed automatically:
 >
