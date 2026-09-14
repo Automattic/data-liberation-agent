@@ -201,7 +201,19 @@ function routeOutputPath( url: string, sourceUrl: string, entrypointUrl: string 
 	if ( url === entrypointUrl ) return 'index.html';
 	const route = new URL( url );
 	const source = new URL( sourceUrl );
-	let pathname = decodeURIComponent( route.pathname );
+	// Artifact paths must retain URL percent-encoding. Decoding turns a valid
+	// route such as `%26` into a different filesystem path and breaks route maps.
+	let pathname = route.pathname;
+	for ( const segment of pathname.split( '/' ) ) {
+		let decoded = segment;
+		try {
+			decoded = decodeURIComponent( segment );
+		} catch {
+			// Preserve malformed percent escapes as opaque path bytes.
+		}
+		if ( decoded === '.' || decoded === '..' || /[\\/\0]/.test( decoded ) )
+			throw new Error( `Captured route path escapes the website directory: ${ route.pathname }` );
+	}
 	const sourcePath = source.pathname.replace( /\/$/, '' );
 	const outsideSourcePath =
 		route.origin === source.origin &&
