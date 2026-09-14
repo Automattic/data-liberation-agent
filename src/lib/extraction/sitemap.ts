@@ -220,6 +220,7 @@ async function crawlRenderedNavLinks(baseUrl: string, baseOrigin: string): Promi
 function resolveAndFilter(href: string, baseUrl: string, baseOrigin: string): string | null {
   try {
     const resolved = new URL(href, baseUrl);
+    if (resolved.protocol !== 'http:' && resolved.protocol !== 'https:') return null;
     if (resolved.origin !== baseOrigin) return null;
     if (/\.(css|js|png|jpg|jpeg|gif|svg|ico|woff|woff2|ttf|eot|pdf|zip|xml|json)$/i.test(resolved.pathname)) return null;
     if (SKIP_PATHS.test(resolved.pathname)) return null;

@@ -55,7 +55,7 @@ describe('fetchSitemap', () => {
     const server = createServer((request, response) => {
       if (request.url === '/') {
         response.end(`<!doctype html><div id="root"></div><script>
-          document.querySelector('#root').innerHTML = '<nav><a href="/platform">Platform</a><a href="/solutions">Solutions</a><a href="/ai">AI</a></nav>';
+          document.querySelector('#root').innerHTML = '<nav><a href="/platform">Platform</a><a href="/solutions">Solutions</a><a href="/ai">AI</a><a href="data:text/html,unsafe">Unsafe data</a><a href="vbscript:msgbox(1)">Unsafe vbscript</a></nav>';
         </script>`);
         return;
       }
