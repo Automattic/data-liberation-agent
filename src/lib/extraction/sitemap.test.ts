@@ -1,5 +1,6 @@
+import { createServer } from 'node:http';
 import { describe, it, expect } from 'vitest';
-import { classifyUrl } from './sitemap.js';
+import { classifyUrl, fetchSitemap } from './sitemap.js';
 
 describe('classifyUrl', () => {
   it('classifies the homepage', () => {
@@ -46,5 +47,34 @@ describe('classifyUrl', () => {
 
   it('falls back to page for anything else', () => {
     expect(classifyUrl('https://example.com/about-us')).toBe('page');
+  });
+});
+
+describe('fetchSitemap', () => {
+  it('discovers navigation inserted by client-side JavaScript', async () => {
+    const server = createServer((request, response) => {
+      if (request.url === '/') {
+        response.end(`<!doctype html><div id="root"></div><script>
+          document.querySelector('#root').innerHTML = '<nav><a href="/platform">Platform</a><a href="/solutions">Solutions</a><a href="/ai">AI</a></nav>';
+        </script>`);
+        return;
+      }
+      response.statusCode = 404;
+      response.end();
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('Test server did not start');
+    const origin = `http://127.0.0.1:${address.port}`;
+
+    try {
+      await expect(fetchSitemap(origin)).resolves.toEqual([
+        `${origin}/platform`,
+        `${origin}/solutions`,
+        `${origin}/ai`,
+      ]);
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
   });
 });
