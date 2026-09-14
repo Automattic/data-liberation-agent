@@ -30,6 +30,8 @@ export function parseSitemapDocument(xml: string): SitemapDocument {
   return { kind, locs: urls };
 }
 
+import { chromium } from 'playwright';
+
 export function parseSitemapXml(xml: string): string[] {
   return parseSitemapDocument(xml).locs;
 }
@@ -127,6 +129,20 @@ export async function fetchSitemap(baseUrl: string): Promise<string[]> {
         seen.add(u);
       }
     }
+
+    // Client-rendered sites can ship an empty application root, so raw HTML
+    // cannot expose their navigation. Render only when the raw crawl found no
+    // routes to retain the inexpensive fetch path for ordinary sites.
+    if (navUrls.length === 0) {
+      const renderedNavUrls = await crawlRenderedNavLinks(normalizedBase, baseOrigin);
+      const seen = new Set(allUrls);
+      for (const u of renderedNavUrls) {
+        if (!seen.has(u) && allUrls.length < MAX_URLS) {
+          allUrls.push(u);
+          seen.add(u);
+        }
+      }
+    }
   }
 
   return allUrls;
@@ -175,9 +191,36 @@ async function crawlNavLinks(baseUrl: string, baseOrigin: string): Promise<strin
   return urls;
 }
 
+async function crawlRenderedNavLinks(baseUrl: string, baseOrigin: string): Promise<string[]> {
+  let browser;
+  try {
+    browser = await chromium.launch({ headless: true });
+    const page = await browser.newPage();
+    await page.goto(baseUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
+
+    const hrefs = await page.locator('a[href]').evaluateAll((links) =>
+      links.map((link) => (link as HTMLAnchorElement).href),
+    );
+    const seen = new Set<string>();
+    return hrefs.flatMap((href) => {
+      const resolved = resolveAndFilter(href, baseUrl, baseOrigin);
+      if (!resolved || seen.has(resolved)) return [];
+      seen.add(resolved);
+      return [resolved];
+    });
+  } catch {
+    // Rendering is a best-effort fallback; sitemap and raw navigation remain usable.
+    return [];
+  } finally {
+    await browser?.close();
+  }
+}
+
 function resolveAndFilter(href: string, baseUrl: string, baseOrigin: string): string | null {
   try {
     const resolved = new URL(href, baseUrl);
+    if (resolved.protocol !== 'http:' && resolved.protocol !== 'https:') return null;
     if (resolved.origin !== baseOrigin) return null;
     if (/\.(css|js|png|jpg|jpeg|gif|svg|ico|woff|woff2|ttf|eot|pdf|zip|xml|json)$/i.test(resolved.pathname)) return null;
     if (SKIP_PATHS.test(resolved.pathname)) return null;
