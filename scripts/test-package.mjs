@@ -80,10 +80,14 @@ try {
 
   // Provision ONLY the declared browser driver in a second relocated runtime.
   // Its transitive playwright-core is part of Playwright's own distribution.
+  // Take the repository's pinned Playwright rather than the consumer install's
+  // freshly resolved one: only the pinned version's browser build is the one
+  // provisioned for this checkout, and a newer resolution would launch a
+  // browser revision that was never downloaded.
   const standaloneDir = join(scratch, 'standalone');
   mkdirSync(join(standaloneDir, 'node_modules'), { recursive: true });
-  const consumerRequire = createRequire(join(packageRoot, 'package.json'));
-  const playwrightRoot = dirname(consumerRequire.resolve('playwright/package.json'));
+  const repoRequire = createRequire(join(repoRoot, 'package.json'));
+  const playwrightRoot = dirname(repoRequire.resolve('playwright/package.json'));
   const playwrightRequire = createRequire(join(playwrightRoot, 'package.json'));
   cpSync(playwrightRoot, join(standaloneDir, 'node_modules', 'playwright'), { recursive: true });
   cpSync(dirname(playwrightRequire.resolve('playwright-core/package.json')), join(standaloneDir, 'node_modules', 'playwright-core'), { recursive: true });
