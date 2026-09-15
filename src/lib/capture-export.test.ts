@@ -1976,6 +1976,47 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		expect( html ).toContain( '/assets/css/capture-' );
 	} );
 
+	it( 'keeps a stylesheet the mobile capture also contains applying below the switch width', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-' ) );
+		dirs.push( outputDir );
+		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
+		mkdirSync( join( outputDir, 'html-mobile' ), { recursive: true } );
+		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
+		const sharedStyle = '<style>.shared{color:green}</style>';
+		writeFileSync(
+			join( outputDir, 'html', 'homepage.html' ),
+			`<!doctype html><html><head>${ sharedStyle }<style>.desktop-only{color:blue}</style></head><body><main><h1>Home</h1><aside>Desktop navigation</aside></main></body></html>`
+		);
+		writeFileSync(
+			join( outputDir, 'html-mobile', 'homepage.html' ),
+			`<!doctype html><html><head>${ sharedStyle }<style>.mobile-only{color:red}</style></head><body><main><button>Menu</button><h1>Home</h1></main></body></html>`
+		);
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( {
+				version: 1,
+				entries: { 'https://example.com/': { html: 'html/homepage.html' } },
+			} )
+		);
+
+		exportWebsiteCapture( {
+			outputDir,
+			sourceUrl: 'https://example.com/',
+			platform: 'fake',
+			summary: {},
+			failures: [],
+		} );
+		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
+		expect( html ).toContain( 'data-liberation-desktop-document' );
+		expect( html ).toContain( 'data-liberation-mobile-document' );
+		// Present in both captures: must apply at every width, not be gated to desktop.
+		expect( html ).toContain( '<style>.shared{color:green}</style>' );
+		expect( html ).not.toContain( '<style media="(min-width:769px)">.shared{color:green}</style>' );
+		// Unique to one capture: stays scoped to the branch that produced it.
+		expect( html ).toContain( '<style media="(min-width:769px)">.desktop-only{color:blue}</style>' );
+		expect( html ).toContain( ':where(.data-liberation-mobile-document) .mobile-only{color:red}' );
+	} );
+
 	it( 'hoists byte-identical safe styles across 186 documents without deleting local occurrences', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-style-hoist-' ) );
 		dirs.push( outputDir );
