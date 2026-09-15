@@ -136,6 +136,12 @@ if (args.includes('--help')) {
     });
 
     console.log(`Published ${result.files} files to ${result.target}.`);
+    if (result.accepted !== undefined && result.accepted < result.files) {
+      console.log(`Only ${result.accepted} of ${result.files} were accepted by the destination.`);
+    }
+    if (result.ignored && result.ignored.length > 0) {
+      console.log(`Ignored: ${result.ignored.join(', ')}`);
+    }
     console.log(`Live: ${result.liveUrl}`);
     if (result.versionUrl) console.log(`Version: ${result.versionUrl}`);
     if (result.private) {
