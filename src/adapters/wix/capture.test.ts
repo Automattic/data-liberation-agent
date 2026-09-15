@@ -135,21 +135,26 @@ describe( 'collectWixSlideshowSlides', () => {
 	it( 'stops at a repeated runtime state and installs the distinct snapshots', async () => {
 		let clicks = 0;
 		const next = { count: async () => 1, click: async () => void ( clicks++ ) };
+		const absent = { count: async () => 0, nth: () => absent };
 		const root = {
 			count: async () => 1,
-			nth: () => ( { locator: () => next } ),
+			nth: () => ( {
+				locator: ( selector: string ) =>
+					selector.includes( 'nextButton' ) ? next : absent,
+			} ),
 		};
-		const snapshots = [
+		const evaluations = [
 			{ html: '<article>First</article>', key: 'First' },
+			null,
 			{ html: '<article>Second</article>', key: 'Second' },
-			{ html: '<article>First</article>', key: 'First' },
+			undefined,
 		];
 		const calls: unknown[][] = [];
 		const page = {
 			locator: () => root,
 			evaluate: async ( fn: unknown, arg: unknown ) => {
 				calls.push( [ fn, arg ] );
-				return calls.length <= snapshots.length ? snapshots[ calls.length - 1 ] : undefined;
+				return evaluations[ calls.length - 1 ];
 			},
 			waitForTimeout: async () => undefined,
 		};
@@ -161,7 +166,7 @@ describe( 'collectWixSlideshowSlides', () => {
 			slideshowIndex: 0,
 			slides: [ '<article>First</article>', '<article>Second</article>' ],
 		} );
-		expect( clicks ).toBe( 2 );
+		expect( clicks ).toBe( 1 );
 	} );
 } );
 

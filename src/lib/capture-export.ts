@@ -676,7 +676,22 @@ function assembleResponsiveHtml(
 
 	// Both documents ship in one file from here on, so their anchor targets would
 	// collide on a shared id. Namespace the mobile copy and repoint its own links.
+	const desktop = cheerio.load( `<body>${ desktopBody }</body>` );
+	const desktopTargets = new Map< string, string >();
+	desktop( '[data-dla-anchor-target][data-dla-anchor-source-id]' ).each( ( _index, element ) => {
+		const target = desktop( element );
+		const fragment = target.attr( 'data-dla-anchor-target' );
+		const sourceId = target.attr( 'data-dla-anchor-source-id' );
+		if ( fragment && sourceId ) desktopTargets.set( fragment, sourceId );
+	} );
 	const mobile = cheerio.load( `<body>${ mobileBody }</body>` );
+	mobile( 'a[data-dla-anchor-fragment]' ).each( ( _index, element ) => {
+		const fragment = mobile( element ).attr( 'data-dla-anchor-fragment' );
+		const sourceId = fragment ? desktopTargets.get( fragment ) : undefined;
+		if ( ! fragment || ! sourceId || mobile( `[data-dla-anchor-target="${ fragment }"]` ).length > 0 ) return;
+		const counterpart = mobile( '[id]' ).filter( ( _i, candidate ) => mobile( candidate ).attr( 'id' ) === sourceId ).first();
+		if ( counterpart.length === 1 ) counterpart.attr( 'data-dla-anchor-target', fragment );
+	} );
 	mobile( '[data-dla-anchor-target]' ).each( ( _index, element ) => {
 		const node = mobile( element );
 		const fragment = node.attr( 'data-dla-anchor-target' );
