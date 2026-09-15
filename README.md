@@ -29,6 +29,10 @@ data-liberation publish <run-dir> --to spacefast   # put it on a live URL
 
 That is the whole surface. Inspection is bounded and read-only; it reports measured route/document facts, coverage, issues, and explicit unknowns without writing a site. Liberation writes the site and exits; add `--serve` to keep a local server running so you can click through it.
 
+See [rendered inspection and complexity](docs/inspection.md) and [source cleanup, comparison, and destination attribution](docs/source-cleanup.md) for their API contracts, evidence, and limits.
+
+Embedded Node consumers can import the same operations from [`data-liberation/runtime`](docs/runtime-api.md), or use the committed standalone `dist/capture-engine.bundle.mjs`. Both expose inspect, capture, compare, publish, and their extension registries.
+
 ### Inspect
 
 ```bash

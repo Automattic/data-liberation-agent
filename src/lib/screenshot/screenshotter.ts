@@ -9,6 +9,7 @@ import { SectionSpecsStore } from '../replicate/section-specs-store.js';
 import { slugify } from '../url/index.js';
 import { SiteAnalysisAggregator } from './aggregator.js';
 import { applyCaptureRemovals } from './apply-removals.js';
+import { applySourceCleanup, readSourceCleanup, cleanupPolicy, type CleanupPolicy } from '../source-cleanup.js';
 import { captureChromeFidelity } from './capture-chrome-fidelity.js';
 import { CssAggregator } from './css-aggregator.js';
 import { captureDesignForUrl, captureMobileBodyFragment } from './design-capture-runner.js';
@@ -27,7 +28,7 @@ import { CapturedResourceStore } from './resource-capture.js';
 import { enforceSameOrigin } from './same-origin.js';
 import { analyzePage } from './site-analysis.js';
 import {
-	DEFAULT_VIEWPORTS,
+	defaultViewports,
 	SCREENSHOT_DEVICE_SCALE_FACTOR,
 	type CaptureLogSink,
 	type ScreenshotOpts,
@@ -36,7 +37,7 @@ import {
 } from './types.js';
 import type { GeometryCapture } from './layout-geometry-proof.js';
 import type { ExtractedNav } from './nav-extract.js';
-import { devices, type Browser, type BrowserContext, type Page } from 'playwright';
+import type { Browser, BrowserContext, Page } from 'playwright';
 
 /**
  * Scroll offset multiplier for the scrolled-state screenshot: we scroll to
@@ -47,7 +48,6 @@ import { devices, type Browser, type BrowserContext, type Page } from 'playwrigh
 const SCROLL_OFFSET_RATIO = 1.5;
 const ANALYSIS_SAMPLE_LIMIT = 1;
 const MAX_CAPTURED_DIALOGS = 8;
-const { defaultBrowserType: _defaultBrowserType, ...IPHONE_17_CONTEXT } = devices[ 'iPhone 17' ];
 
 /**
  * Per-URL capture pipeline:
@@ -152,6 +152,7 @@ interface CapturePerViewportArgs {
 		ctx: import('../../adapters/page-actions.js').LiberationContext
 	) => Promise< Record< string, string > >;
 	removeSelectors?: string[];
+	cleanupPolicy?: CleanupPolicy;
 	prepareCapture?: (
 		page: import('playwright').Page,
 		ctx: import('../../adapters/page-actions.js').LiberationContext
@@ -576,6 +577,8 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		}
 	}
 	if ( ! navigated ) return;
+	const sourcePolicy = args.cleanupPolicy ?? cleanupPolicy();
+	await applySourceCleanup(page, sourcePolicy);
 
 	// --- settle, dismiss overlays, lazy load ----------------------------------
 	await waitForStable( page, settleMs );
@@ -996,6 +999,9 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	} catch {
 		/* best-effort: baseline capture remains valid when interaction probing fails */
 	}
+	const cleanup = await readSourceCleanup(page);
+	entry.cleanup = { policy: sourcePolicy, reports: [...(entry.cleanup?.reports ?? []), cleanup] };
+	if (cleanup.failures.length || cleanup.residual) throw new Error('Source cleanup incomplete; see cleanup evidence');
 }
 
 function mergeInteractionReports(
@@ -1157,7 +1163,9 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	// --- validate + filter ----------------------------------------------------
 	validateOutputDir( opts.outputDir );
 
-	const viewports = opts.viewports ?? DEFAULT_VIEWPORTS;
+	const { devices } = await import('playwright');
+	const { defaultBrowserType: _defaultBrowserType, ...IPHONE_17_CONTEXT } = devices['iPhone 17'];
+	const viewports = opts.viewports ?? defaultViewports(IPHONE_17_CONTEXT.viewport);
 	const rawConcurrency = opts.concurrency ?? 6;
 	const concurrency = Math.max( 1, Math.min( 10, rawConcurrency ) );
 	const browserRestartEvery = opts.browserRestartEvery ?? 100;
@@ -1289,7 +1297,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			slug,
 			outputDir: opts.outputDir,
 			// Interrupted captures can leave files without the manifest needed to export them.
-			force: force || ! existing?.html,
+			force: force || ! existing?.html || JSON.stringify(existing.cleanup?.policy) !== JSON.stringify(opts.cleanupPolicy ?? cleanupPolicy()),
 			captureImages: opts.captureImages,
 		} );
 		const shouldAnalyzeUrl = url === representativeAnalysisUrl && ! aggregateAlreadyFresh;
@@ -1363,6 +1371,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 					resourceStore,
 					publicUrlsOnly: opts.publicUrlsOnly ?? false,
 					removeSelectors: opts.removeSelectors,
+					cleanupPolicy: opts.cleanupPolicy,
 					...( opts.collectResponsiveImages
 						? { collectResponsiveImages: opts.collectResponsiveImages }
 						: {} ),
