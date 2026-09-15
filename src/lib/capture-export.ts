@@ -29,6 +29,7 @@ import {
 	type InteractionStatesReport,
 } from './screenshot/interaction-capture.js';
 import type { CapturedResourceManifest } from './screenshot/resource-capture.js';
+import { isSourcePromotion } from './source-cleanup.js';
 
 export const CAPTURE_RECEIPT_SCHEMA = 'data-liberation/capture-receipt/v1';
 export const SOURCE_PROFILE_SCHEMA = 'data-liberation/source-profile/v1';
@@ -107,6 +108,7 @@ function withoutGeometryIdentities( html: string ): string {
 }
 
 interface CaptureManifestEntry {
+	cleanup?: import('./screenshot/manifest-queue.js').ManifestEntry['cleanup'];
 	slug?: string;
 	html?: string;
 	sections?: string;
@@ -420,10 +422,7 @@ function renderedHtml( html: string ): string {
 			.map( ( _i, link ) => $( link ).attr( 'href' ) ?? '' )
 			.get()
 			.join( ' ' );
-		if (
-			! /\bpowered by\b|\bcreate your own (?:unique )?website\b/i.test( text ) ||
-			! /\b(?:signup|get started)\b/i.test( `${ text } ${ links }` )
-		)
+		if (!isSourcePromotion(`${text} ${links}`))
 			return;
 		const height = /(?:^|;)\s*height\s*:\s*(\d+(?:\.\d+)?)px\s*!important/i.exec( style )?.[ 1 ];
 		const bodyStyle = $( 'body' ).attr( 'style' ) ?? '';
@@ -2480,11 +2479,22 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 	);
 
 	const receiptPath = join( outputDir, 'capture-receipt.json' );
+	const cleanupManifest = JSON.parse(readFileSync(join(outputDir, 'screenshots', 'manifest.json'), 'utf8')) as ScreenshotManifest;
+	const cleanupPages = Object.entries(cleanupManifest.entries).map(([url, entry]) => ({ url, ...entry.cleanup }));
+	const recordedPolicy = cleanupPages.find((page) => page.policy)?.policy;
+	const cleanup = recordedPolicy ? {
+		policy: recordedPolicy,
+		evidencePath: 'cleanup-evidence.json',
+		complete: cleanupPages.every((page) => page.policy && JSON.stringify(page.policy) === JSON.stringify(recordedPolicy) &&
+			page.reports?.length && page.reports.every((report) => report.failures.length === 0 && report.residual === 0)),
+	} : undefined;
+	if (cleanup) writeFileSync(join(outputDir, 'cleanup-evidence.json'), JSON.stringify({ schema: recordedPolicy!.schema, pages: cleanupPages }, null, 2));
 	writeFileSync(
 		receiptPath,
 		`${ JSON.stringify(
 			{
 				schema: CAPTURE_RECEIPT_SCHEMA,
+				...(cleanup ? { cleanup } : {}),
 				websiteRoot: 'website',
 				entrypoint: 'website/index.html',
 				source: { url: options.sourceUrl, platform: options.platform },
