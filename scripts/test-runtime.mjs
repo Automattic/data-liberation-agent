@@ -53,8 +53,14 @@ try {
     await assert.rejects(runtime.checkFidelity({ directory: outputDir }), /playwright/);
   } else {
     const inspection = await runtime.inspectSource(url, { sampleLimit: 1 });
-    assert.equal(inspection.complexity.band, 'complex');
-    assert.ok(inspection.rendered.samples[0].capabilities.some((finding) => finding.capability === 'booking'));
+    const evidence = JSON.stringify({ issues: inspection.issues, rendered: inspection.rendered });
+    assert.equal(inspection.rendered.succeeded, 1, evidence);
+    // observedBand is the measured classification. The reported band can
+    // additionally be unknown whenever a page resource was blocked or failed,
+    // which legitimately depends on the environment rather than the source.
+    assert.equal(inspection.complexity.observedBand, 'complex', evidence);
+    assert.ok(['complex', 'unknown'].includes(inspection.complexity.band), evidence);
+    assert.ok(inspection.rendered.samples[0].capabilities.some((finding) => finding.capability === 'booking'), evidence);
 
     const capture = await runtime.captureWebsite({ url, outputDir, learnFluid: false, captureImages: true });
     assert.equal(capture.summary.routesCaptured, 1);
