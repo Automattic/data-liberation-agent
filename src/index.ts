@@ -45,3 +45,4 @@ export type {
 } from './platform/types.js';
 export type { LiberationHooks, LiberationContext } from './adapters/page-actions.js';
 export type { InspectOptions, InspectionIssue, SourceInspection } from './lib/inspect.js';
+export type { CapabilityRule, SourceCapability, RenderedInspection, SourceComplexity } from './lib/inspect-rendered.js';
