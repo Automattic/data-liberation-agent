@@ -50,3 +50,4 @@ export { registerPublishTarget, unregisterPublishTarget, findPublishTarget, publ
 export type { PublishTarget, PublishOptions, PublishResult } from './lib/publish/types.js';
 export { publishSite } from './ui/publish.js';
 export type { InspectOptions, InspectionIssue, SourceInspection } from './lib/inspect.js';
+export type { CapabilityRule, SourceCapability, RenderedInspection, SourceComplexity } from './lib/inspect-rendered.js';
