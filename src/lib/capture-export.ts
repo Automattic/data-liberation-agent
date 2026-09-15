@@ -323,7 +323,10 @@ function rewriteCapturedRouteLinks(
 	routes: Map< string, string >
 ): string {
 	const $ = cheerio.load( html );
-	$( 'a[href],area[href]' ).each( ( _index, element ) => {
+	// `rel="canonical"` naming a URL this capture actually produced is source
+	// provenance, not an SEO signal the copy should keep declaring — a reader
+	// (or a search engine) following it lands back on the source.
+	$( 'a[href],area[href],link[rel="canonical"][href]' ).each( ( _index, element ) => {
 		const link = $( element );
 		const href = link.attr( 'href' ) ?? '';
 		if ( ! /^(?:https?:)?\/\//i.test( href ) ) return;
