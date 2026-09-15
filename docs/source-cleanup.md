@@ -75,6 +75,8 @@ node dist/cli.js compare .tmp-test/cleanup-live/example.com
 
 The browser fixtures cover a free banner, split-span footer credit, owner copyright, authored platform discussion, inline/framed/late ads, and reclaimed spacing at desktop/mobile widths. The actual screenshot capture/export pipeline produces a clean artifact, cleanup-aware comparison passes, and deleting retained owner content fails. Publisher tests verify default output, destination attribution, immutable source and cleanup on both failure paths. Invalid cleanup selectors produce recorded failures.
 
+Final integration with merged inspection PR #212 passed 96 files / 1,001 tests using `npm test -- --maxWorkers=2 --testTimeout=45000`, plus build/typecheck and installed-package checks. Lower concurrency and a longer per-test timeout were used after a busy-controller run timed out; the timed-out browser test passed in isolation. The 128 MiB export test also passed in isolation and in the final full run without changing its heap limit.
+
 On September 15, 2026, the built public-source workflow captured `example.com` (1/1 routes) and passed comparison at 1600px, 1728px and the 390px interaction check, with zero offline findings. That source has no ads or provider credits: the removal behavior is proven by controlled browser fixtures rather than inferred from that public-source pass.
 
 AI assistance: OpenAI gpt-6-astra through OpenCode implemented and verified this work directly in an isolated worktree under Chris Huber's direction. Homeboy failed before provider execution; direct implementation followed the user's instruction to bypass it.
