@@ -2869,6 +2869,46 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		);
 	} );
 
+	it( 'rewrites a literal canonical link that names a captured route to its local path', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-' ) );
+		dirs.push( outputDir );
+		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
+		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
+		writeFileSync(
+			join( outputDir, 'html', 'homepage.html' ),
+			'<link rel="canonical" href="https://example.com/"><h1>Home</h1><a href="https://example.com/about">About</a>'
+		);
+		writeFileSync(
+			join( outputDir, 'html', 'about.html' ),
+			'<link rel="canonical" href="https://example.com/about"><h1>About</h1>'
+		);
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( {
+				version: 1,
+				entries: {
+					'https://example.com/': { html: 'html/homepage.html' },
+					'https://example.com/about': { html: 'html/about.html' },
+				},
+			} )
+		);
+
+		exportWebsiteCapture( {
+			outputDir,
+			sourceUrl: 'https://example.com',
+			platform: 'fake',
+			summary: {},
+			failures: [],
+		} );
+
+		const homepage = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
+		const about = readFileSync( join( outputDir, 'website', 'about', 'index.html' ), 'utf8' );
+		expect( homepage ).toContain( 'rel="canonical" href="/index.html"' );
+		expect( about ).toContain( 'rel="canonical" href="/about/index.html"' );
+		expect( homepage ).not.toContain( 'example.com' );
+		expect( about ).not.toContain( 'example.com' );
+	} );
+
 	it( 'fails when routes claim the same website path without declaring a canonical route', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-' ) );
 		dirs.push( outputDir );
@@ -3076,7 +3116,8 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		expect( html ).not.toContain( 'siteassets.example.com' );
 		expect( html ).not.toContain( 'runtime.example' );
 		expect( html ).not.toContain( 'cdn.example' );
-		expect( html ).toContain( 'href="https://example.com/"' );
+		expect( html ).not.toContain( 'example.com' );
+		expect( html ).toContain( 'rel="canonical" href="/index.html"' );
 		expect( html ).toContain( 'href="https://external.example/about"' );
 	} );
 
