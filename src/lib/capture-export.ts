@@ -667,9 +667,16 @@ function assembleResponsiveHtml(
 	if ( responsiveBodySignature( desktopBody ) === responsiveBodySignature( mobileBody ) ) {
 		if ( styleBlocks( desktopHtml ).join( '\n' ) === styleBlocks( mobileHtml ).join( '\n' ) )
 			return withMobileViewport( desktopHtml );
+		// A stylesheet present in both captures must apply at every width, so it is
+		// left out of both scoping passes below and kept exactly once, unscoped, from
+		// the desktop copy that already carries it.
+		const shared = sharedStyleContents( desktopHtml, mobileHtml );
 		return withMobileViewport(
-			scopedStyles( desktopHtml, `(min-width:${ switchWidth + 1 }px)` )
-		).replace( /<\/head\s*>/i, `${ responsiveMobileStyles( mobileHtml, undefined, switchWidth ) }</head>` );
+			scopedStyles( desktopHtml, `(min-width:${ switchWidth + 1 }px)`, shared )
+		).replace(
+			/<\/head\s*>/i,
+			`${ responsiveMobileStyles( mobileHtml, undefined, switchWidth, shared ) }</head>`
+		);
 	}
 	( { desktopBody, mobileBody } = markResponsiveCounterparts( desktopBody, mobileBody ) );
 
@@ -762,12 +769,19 @@ function assembleResponsiveHtml(
 				( _match, closingBody: string ) => `${ outerBody }${ responsiveBody }${ closingBody }`
 			);
 	}
+	// A stylesheet present in both captures must apply at every width, so it is
+	// left out of both scoping passes below and kept exactly once, unscoped, from
+	// the desktop copy that already carries it.
+	const shared = sharedStyleContents( desktopHtml, mobileHtml );
 	const mobileStyles = responsiveMobileStyles(
 		mobileHtml,
 		'.data-liberation-mobile-document',
-		switchWidth
+		switchWidth,
+		shared
 	);
-	return withMobileViewport( scopedStyles( desktopHtml, `(min-width:${ switchWidth + 1 }px)` ) )
+	return withMobileViewport(
+		scopedStyles( desktopHtml, `(min-width:${ switchWidth + 1 }px)`, shared )
+	)
 		.replace(
 			/<\/head\s*>/i,
 			`${ mobileStyles }<style>${ RESPONSIVE_DOCUMENT_CSS }${ documentSwitchCss( switchWidth ) }</style></head>`
@@ -782,6 +796,16 @@ function styleBlocks( html: string ): string[] {
 	return [ ...html.matchAll( /<style\b[^>]*>([\s\S]*?)<\/style\s*>/gi ) ].map( ( match ) =>
 		match[ 1 ].trim()
 	);
+}
+
+/**
+ * Stylesheet content present in both captures. A stylesheet keyed here must
+ * survive assembly unscoped rather than being narrowed to whichever viewport's
+ * copy happens to be kept, because the source served it to both.
+ */
+function sharedStyleContents( desktopHtml: string, mobileHtml: string ): Set< string > {
+	const desktopBlocks = new Set( styleBlocks( desktopHtml ) );
+	return new Set( styleBlocks( mobileHtml ).filter( ( block ) => desktopBlocks.has( block ) ) );
 }
 
 export function portableInlineStyle(
@@ -926,10 +950,11 @@ function recordStyleHoistDiagnostic(
 function responsiveMobileStyles(
 	mobileHtml: string,
 	scope?: string,
-	switchWidth: number = DEFAULT_SWITCH_WIDTH
+	switchWidth: number = DEFAULT_SWITCH_WIDTH,
+	skip: ReadonlySet< string > = new Set()
 ): string {
 	return styleBlocks( mobileHtml )
-		.filter( Boolean )
+		.filter( ( style ) => style !== '' && ! skip.has( style ) )
 		.map(
 			( style ) =>
 				`<style media="(max-width:${ switchWidth }px)">${ scope ? scopeCss( style, { scope } ) : style }</style>`
@@ -937,16 +962,25 @@ function responsiveMobileStyles(
 		.join( '' );
 }
 
-function scopedStyles( html: string, media: string ): string {
-	return html.replace( /<style\b([^>]*)>/gi, ( tag, attributes: string ) => {
-		const existingMedia = /\bmedia\s*=\s*(["'])(.*?)\1/i.exec( attributes );
-		if ( ! existingMedia ) return `<style${ attributes } media="${ media }">`;
-		const combined = `${ media } and (${ existingMedia[ 2 ] })`;
-		return tag.replace(
-			existingMedia[ 0 ],
-			`media=${ existingMedia[ 1 ] }${ combined }${ existingMedia[ 1 ] }`
-		);
-	} );
+function scopedStyles(
+	html: string,
+	media: string,
+	skip: ReadonlySet< string > = new Set()
+): string {
+	return html.replace(
+		/<style\b([^>]*)>([\s\S]*?)<\/style\s*>/gi,
+		( _match, attributes: string, css: string ) => {
+			if ( skip.has( css.trim() ) ) return `<style${ attributes }>${ css }</style>`;
+			const existingMedia = /\bmedia\s*=\s*(["'])(.*?)\1/i.exec( attributes );
+			if ( ! existingMedia ) return `<style${ attributes } media="${ media }">${ css }</style>`;
+			const combined = `${ media } and (${ existingMedia[ 2 ] })`;
+			const scopedAttributes = attributes.replace(
+				existingMedia[ 0 ],
+				`media=${ existingMedia[ 1 ] }${ combined }${ existingMedia[ 1 ] }`
+			);
+			return `<style${ scopedAttributes }>${ css }</style>`;
+		}
+	);
 }
 
 function responsiveBodySignature( body: string ): string {
