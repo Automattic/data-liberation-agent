@@ -688,9 +688,20 @@ function assembleResponsiveHtml(
 	mobile( 'a[data-dla-anchor-fragment]' ).each( ( _index, element ) => {
 		const fragment = mobile( element ).attr( 'data-dla-anchor-fragment' );
 		const sourceId = fragment ? desktopTargets.get( fragment ) : undefined;
-		if ( ! fragment || ! sourceId || mobile( `[data-dla-anchor-target="${ fragment }"]` ).length > 0 ) return;
-		const counterpart = mobile( '[id]' ).filter( ( _i, candidate ) => mobile( candidate ).attr( 'id' ) === sourceId ).first();
-		if ( counterpart.length === 1 ) counterpart.attr( 'data-dla-anchor-target', fragment );
+		if ( ! fragment || mobile( `[data-dla-anchor-target="${ fragment }"]` ).length > 0 ) return;
+		if ( sourceId ) {
+			const counterpart = mobile( '[id]' )
+				.filter( ( _i, candidate ) => mobile( candidate ).attr( 'id' ) === sourceId )
+				.first();
+			if ( counterpart.length === 1 ) {
+				counterpart.attr( 'data-dla-anchor-target', fragment );
+				return;
+			}
+		}
+		const localTarget = mobile( '[id]' )
+			.filter( ( _i, candidate ) => mobile( candidate ).attr( 'id' ) === fragment )
+			.first();
+		if ( localTarget.length === 1 ) localTarget.attr( 'data-dla-anchor-target', fragment );
 	} );
 	mobile( '[data-dla-anchor-target]' ).each( ( _index, element ) => {
 		const node = mobile( element );

@@ -140,7 +140,7 @@ function slideshowExpectedStateCount( page: Page, slideshowIndex: number ): Prom
 				.map( ( control ) => control.getAttribute( 'href' ) ?? '' )
 				.filter( Boolean )
 		);
-		return destinations.size > 0 ? destinations.size + 1 : null;
+		return destinations.size || null;
 	}, slideshowIndex );
 }
 

@@ -356,7 +356,7 @@ describe( 'exportWebsiteCapture', () => {
 		);
 		writeFileSync(
 			join( outputDir, 'html-mobile', 'homepage.html' ),
-			'<html><body><a href="https://example.com/#features" data-dla-anchor-fragment="features">Features</a><section id="feature-section">Mobile features</section></body></html>'
+			'<html><body><a href="https://example.com/#features" data-dla-anchor-fragment="features">Features</a><a href="https://example.com/#testimonial" data-dla-anchor-fragment="testimonial">Testimonial</a><article id="testimonial">Mobile testimonial</article><section id="feature-section">Mobile features</section></body></html>'
 		);
 		writeFileSync(
 			join( outputDir, 'screenshots', 'manifest.json' ),
@@ -382,6 +382,10 @@ describe( 'exportWebsiteCapture', () => {
 		);
 		expect( $( '.data-liberation-mobile-document a' ).first().attr( 'href' ) ).toBe(
 			'/index.html#features--dla-mobile'
+		);
+		expect( $( '#testimonial--dla-mobile' ) ).toHaveLength( 1 );
+		expect( $( '.data-liberation-mobile-document a' ).eq( 1 ).attr( 'href' ) ).toBe(
+			'/index.html#testimonial--dla-mobile'
 		);
 		expect(
 			JSON.parse( readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' ) ).unresolvedAnchors
