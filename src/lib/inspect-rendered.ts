@@ -2,17 +2,30 @@ import type { Browser, Page } from 'playwright';
 import { safeFetch, assertPublicHttpUrl } from './media-fetch/safe-fetch.js';
 
 export type SourceCapability = 'forms' | 'navigation' | 'media' | 'embeds' | 'dialogs' | 'booking' | 'commerce' | 'membership';
+/** One host-injected surface to attribute away from the source. */
+export interface HostResidue { host: string; selector: string; evidence: string }
 export interface CapabilityRule {
   capability: SourceCapability;
   selector: string;
   evidence: string;
 }
+/** A surface attributed to the deployment host rather than to the source. */
+export interface ExcludedSurface {
+  host: string;
+  selector: string;
+  evidence: string;
+  matched: number;
+  elements: number;
+}
+
 export interface RenderedInspection {
   url: string;
   elements: number;
   textCharacters: number;
   counts: Record<'forms' | 'links' | 'images' | 'videos' | 'frames' | 'dialogs', number>;
   capabilities: Array<{ capability: SourceCapability; count: number; evidence: string }>;
+  /** Host-injected surfaces, reported rather than silently dropped. */
+  excluded: ExcludedSurface[];
   navigation: string[];
   requests: number;
   bytes: number;
@@ -49,7 +62,7 @@ export async function createRenderedInspector(signal: AbortSignal, requestTimeou
     throw error;
   }
   return {
-    async inspect(url: string, rules: CapabilityRule[] = []): Promise<RenderedInspection> {
+    async inspect(url: string, rules: CapabilityRule[] = [], residue: HostResidue[] = []): Promise<RenderedInspection> {
       signal.throwIfAborted();
       assertPublicHttpUrl(url);
       const context = await browser!.newContext({ serviceWorkers: 'block', viewport: { width: 1440, height: 900 } });
@@ -92,27 +105,41 @@ export async function createRenderedInspector(signal: AbortSignal, requestTimeou
         const response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: requestTimeoutMs });
         if (!response?.ok()) throw new Error(`Rendered entry returned HTTP ${response?.status() ?? 'unknown'}`);
         await page.waitForTimeout(300);
-        const observed = await page.evaluate((rules) => {
+        const observed = await page.evaluate(({ rules, residue }) => {
+          // Surfaces the deployment host injected are facts about the host.
+          // They are subtracted from what the source is said to contain, and
+          // reported, so an exclusion is auditable rather than invisible.
+          const injected = new Set<Element>();
+          const excluded = residue.map((rule) => {
+            const roots = [...document.querySelectorAll(rule.selector)];
+            for (const root of roots) {
+              injected.add(root);
+              for (const node of root.querySelectorAll('*')) injected.add(node);
+            }
+            return { host: rule.host, selector: rule.selector, evidence: rule.evidence, matched: roots.length, elements: roots.reduce((total, root) => total + 1 + root.querySelectorAll('*').length, 0) };
+          });
+          const authored = [...document.querySelectorAll('*')].filter((element) => !injected.has(element));
           const counts = {
-            forms: document.querySelectorAll('form').length,
-            links: document.querySelectorAll('a[href]').length,
-            images: document.querySelectorAll('img').length,
-            videos: document.querySelectorAll('video,audio,canvas').length,
-            frames: document.querySelectorAll('iframe,object,embed').length,
-            dialogs: document.querySelectorAll('dialog,[role="dialog"],[aria-haspopup],[aria-expanded],details').length,
+            forms: authored.filter((element) => element.matches('form')).length,
+            links: authored.filter((element) => element.matches('a[href]')).length,
+            images: authored.filter((element) => element.matches('img')).length,
+            videos: authored.filter((element) => element.matches('video,audio,canvas')).length,
+            frames: authored.filter((element) => element.matches('iframe,object,embed')).length,
+            dialogs: authored.filter((element) => element.matches('dialog,[role="dialog"],[aria-haspopup],[aria-expanded],details')).length,
           };
           const capabilities = rules.flatMap((rule) => {
-            const count = document.querySelectorAll(rule.selector).length;
-            return count ? [{ capability: rule.capability, count, evidence: rule.evidence }] : [];
+            const matches = authored.filter((element) => element.matches(rule.selector)).length;
+            return matches ? [{ capability: rule.capability, count: matches, evidence: rule.evidence }] : [];
           });
-          const navigation = [...document.querySelectorAll<HTMLAnchorElement>('a[href]')]
-            .map((a) => a.href).filter((href) => {
+          const navigation = authored.filter((element) => element.matches('a[href]'))
+            .map((a) => (a as HTMLAnchorElement).href).filter((href) => {
               try { return new URL(href).origin === location.origin; } catch { return false; }
             });
-          return { url: location.href, elements: document.querySelectorAll('*').length,
+          return { url: location.href, elements: authored.length,
             textCharacters: (document.body?.innerText ?? '').trim().length, counts, capabilities,
+            excluded: excluded.filter((rule) => rule.matched > 0),
             navigation: [...new Set(navigation)].slice(0, 100), navigationLimited: navigation.length > 100 };
-        }, [...GENERIC_RULES, ...rules].slice(0, 64));
+        }, { rules: [...GENERIC_RULES, ...rules].slice(0, 64), residue: residue.slice(0, 64) });
         sampleSignal.throwIfAborted();
         if (observed.navigationLimited) unknowns.add('Rendered navigation inventory reached 100 links');
         return { ...observed, requests, bytes, limited: limited || observed.navigationLimited, unknowns: [...unknowns] };
