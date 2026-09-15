@@ -2211,17 +2211,20 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 	}
 	const sharedStyles = new Map< string, { path: string; media: string } >();
 	const stylesheetPaths = new Map< string, string >();
+	const styleReplacements = new Map( [ ...mediaReplacements, ...resourceReplacements ] );
 	for ( const [ key, occurrences ] of [ ...inlineStyles ].sort( ( left, right ) =>
 		left[ 0 ].localeCompare( right[ 0 ] )
 	) ) {
 		if ( new Set( occurrences.map( ( occurrence ) => occurrence.entry.htmlPath ) ).size < 2 ) continue;
 		const style = occurrences[ 0 ];
-		const contentHash = createHash( 'sha256' ).update( style.css ).digest( 'hex' );
+		// Hoisted styles leave the HTML rewrite path, so localize them before writing.
+		const css = replaceAll( style.css, styleReplacements, rejectedReplacementKeys );
+		const contentHash = createHash( 'sha256' ).update( css ).digest( 'hex' );
 		const relativePath = stylesheetPaths.get( contentHash ) ?? `assets/css/capture-${ contentHash }.css`;
 		const destination = join( websiteDir, relativePath );
 		if ( ! stylesheetPaths.has( contentHash ) ) {
 			mkdirSync( dirname( destination ), { recursive: true } );
-			writeFileSync( destination, style.css );
+			writeFileSync( destination, css );
 			assets.push( {
 				sourceUrl: `${ options.sourceUrl }#inline-style-${ contentHash }`,
 				path: `website/${ relativePath }`,
