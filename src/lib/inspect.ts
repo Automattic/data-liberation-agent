@@ -5,7 +5,7 @@ import { extractNavLinks } from './html-extract/index.js';
 import { safeFetch } from './media-fetch/safe-fetch.js';
 import { detectFromDocument } from './detect-platform/index.js';
 import { resolvePlatform } from '../platform/registry.js';
-import { createRenderedInspector, sourceComplexity, type RenderedInspection, type SourceComplexity } from './inspect-rendered.js';
+import { createRenderedInspector, sourceComplexity, SOURCE_CAPABILITIES, SOURCE_CAPABILITY_VOCABULARY, type RenderedInspection, type SourceComplexity } from './inspect-rendered.js';
 import { detectHosts, hostResidue, type DetectedHost } from '../platform/host.js';
 
 export const INSPECTION_SCHEMA_VERSION = '2.0';
@@ -34,6 +34,12 @@ export interface InspectionIssue {
 export interface SourceInspection {
   schemaVersion: typeof INSPECTION_SCHEMA_VERSION;
   complexity: SourceComplexity;
+  /**
+   * The capability names a destination declares coverage against. Published so
+   * a consumer can key an acceptance policy on the vocabulary rather than on
+   * whatever strings happened to appear in one report.
+   */
+  capabilityVocabulary: { schema: typeof SOURCE_CAPABILITY_VOCABULARY; capabilities: readonly string[] };
   rendered: { enabled: boolean; attempted: number; succeeded: number; samples: RenderedInspection[] };
   source: {
     requestedUrl: string;
@@ -247,6 +253,7 @@ export async function inspectSource(url: string, options: InspectOptions = {}): 
   const samplingTruncated = routes.length > selected.length;
   return {
     schemaVersion: INSPECTION_SCHEMA_VERSION,
+    capabilityVocabulary: { schema: SOURCE_CAPABILITY_VOCABULARY, capabilities: SOURCE_CAPABILITIES },
     complexity: sourceComplexity(renderedSamples, options.rendered === false || discoveryTruncated || samplingTruncated ||
       renderedSamples.length !== selected.length || samples.some((sample) => sample.outcome !== 'html')),
     rendered: { enabled: options.rendered !== false, attempted: renderedAttempts, succeeded: renderedSamples.length, samples: renderedSamples },

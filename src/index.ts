@@ -56,4 +56,5 @@ export type { PublishTarget, PublishOptions, PublishResult } from './lib/publish
 export { publishSite } from './ui/publish.js';
 export type { PublishCliOptions as PublishSiteOptions } from './ui/publish.js';
 export type { InspectOptions, InspectionIssue, SourceInspection } from './lib/inspect.js';
-export type { CapabilityRule, SourceCapability, RenderedInspection, SourceComplexity } from './lib/inspect-rendered.js';
+export { SOURCE_CAPABILITIES, SOURCE_CAPABILITY_VOCABULARY } from './lib/inspect-rendered.js';
+export type { CapabilityRule, SourceCapability, RenderedInspection, SourceComplexity, ExcludedSurface } from './lib/inspect-rendered.js';

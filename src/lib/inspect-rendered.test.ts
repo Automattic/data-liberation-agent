@@ -35,6 +35,31 @@ it('distinguishes a rendered simple source from a JS-created booking app', async
   expect(complex.rendered.samples[0].capabilities).toContainEqual(expect.objectContaining({ capability: 'booking' }));
 }, 30_000);
 
+it('reports where a capability was observed, and refuses to look decided when the sample was not', async () => {
+  const url = await source('<main><h1>Contact</h1><form id="enquiry" class="contact-form stacked"><input name="email"></form><iframe id="map" src="about:blank"></iframe></main>');
+  const result = await inspectSource(url, { sampleLimit: 1 });
+  expect(result.capabilityVocabulary).toEqual({
+    schema: 'data-liberation/source-capability-vocabulary/v1',
+    capabilities: ['booking', 'commerce', 'dialogs', 'embeds', 'forms', 'media', 'membership', 'navigation'],
+  });
+  const sample = result.rendered.samples[0];
+  expect(sample.url).toBe(url);
+  const forms = sample.capabilities.find((finding) => finding.capability === 'forms');
+  expect(forms).toMatchObject({ count: 1, selector: 'form' });
+  expect(forms?.locators).toEqual(['form#enquiry.contact-form.stacked']);
+  expect(sample.capabilities.find((finding) => finding.capability === 'embeds')?.locators).toEqual(['iframe#map']);
+  // Every published capability name is one a destination can declare coverage against.
+  for (const finding of sample.capabilities) expect(result.capabilityVocabulary.capabilities).toContain(finding.capability);
+  expect(result.complexity.confidence).toBe('bounded-sample');
+  expect(sample.unknowns).toEqual([]);
+
+  // An incomplete sample is not a quiet 'simple': the band withholds instead.
+  const truncated = await inspectSource(url, { rendered: false, sampleLimit: 1 });
+  expect(truncated.complexity.band).toBe('unknown');
+  expect(truncated.complexity.confidence).toBe('incomplete');
+  expect(truncated.capabilityVocabulary.capabilities).toEqual(result.capabilityVocabulary.capabilities);
+}, 45_000);
+
 it('attributes a host badge to the host instead of to the site it is serving', async () => {
   const badge = '<main><h1>Brochure</h1><p>One page, no app.</p></main><script>const frame = document.createElement("iframe"); frame.id = "hud-badge"; frame.title = "Powered by Fixture Host"; frame.srcdoc = "<p>badge</p>"; frame.style.position = "fixed"; document.body.append(frame);</script>';
   posts = 0;
