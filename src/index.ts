@@ -25,6 +25,9 @@ export {
 	ConflictingFallbackError,
 } from './platform/registry.js';
 
+export { registerHost, registeredHosts, unregisterHost, detectHosts, hostResidue, HostRegistrationError } from './platform/host.js';
+export type { Host, HostDetection, HostResidueRule, DetectedHost } from './platform/host.js';
+
 export { detect as detectPlatform, detectFromUrl, detectFromHttp } from './lib/detect-platform/index.js';
 export { inspectSource, InspectError, INSPECTION_SCHEMA_VERSION } from './lib/inspect.js';
 export { captureWebsite, UnsupportedCapturePlatformError } from './lib/capture.js';
