@@ -202,6 +202,31 @@ export async function capturePageHtml( page: Page ): Promise< string > {
 		height: 'data-dla-visual-iframe-height',
 	};
 	await page.evaluate( ( evidenceAttributes ) => {
+		// CSSOM mutations do not update a <style> element's text content. Synchronize
+		// each inline sheet from its active rules so the static capture preserves the
+		// styles the browser is actually applying. Constructed sheets have no owner,
+		// so materialize those as new style elements.
+		const sheets = new Set( [ ...document.styleSheets, ...document.adoptedStyleSheets ] );
+		for ( const sheet of sheets ) {
+			const owner = sheet.ownerNode;
+			if ( owner instanceof HTMLLinkElement ) continue;
+			let cssText = '';
+			try {
+				cssText = Array.from( sheet.cssRules ).map( ( rule ) => rule.cssText ).join( '\n' );
+			} catch {
+				continue;
+			}
+			if ( ! cssText ) continue;
+			if ( owner instanceof HTMLStyleElement && document.documentElement.contains( owner ) ) {
+				owner.textContent = cssText;
+				continue;
+			}
+			const style = document.createElement( 'style' );
+			style.setAttribute( 'data-dla-constructed-stylesheet', '' );
+			style.textContent = cssText;
+			document.head.appendChild( style );
+		}
+
 		for ( const media of document.querySelectorAll( 'audio, video' ) ) {
 			const source = media as HTMLMediaElement;
 			for ( const property of [ 'autoplay', 'loop', 'muted' ] as const ) {
@@ -238,7 +263,9 @@ export async function capturePageHtml( page: Page ): Promise< string > {
 		}
 	}, iframeEvidenceAttributes );
 	try {
-		return await page.content();
+		// Serialize in the renderer's current task. DevTools page.content() can race
+		// framework hydration and combine a newer class namespace with older CSS.
+		return await page.evaluate( () => `<!DOCTYPE html>${ document.documentElement.outerHTML }` );
 	} finally {
 		await page.evaluate( ( evidenceAttributes ) => {
 			for ( const frame of document.querySelectorAll( 'iframe' ) ) {
