@@ -28,7 +28,7 @@ import { CapturedResourceStore } from './resource-capture.js';
 import { enforceSameOrigin } from './same-origin.js';
 import { analyzePage } from './site-analysis.js';
 import {
-	DEFAULT_VIEWPORTS,
+	defaultViewports,
 	SCREENSHOT_DEVICE_SCALE_FACTOR,
 	type CaptureLogSink,
 	type ScreenshotOpts,
@@ -37,7 +37,7 @@ import {
 } from './types.js';
 import type { GeometryCapture } from './layout-geometry-proof.js';
 import type { ExtractedNav } from './nav-extract.js';
-import { devices, type Browser, type BrowserContext, type Page } from 'playwright';
+import type { Browser, BrowserContext, Page } from 'playwright';
 
 /**
  * Scroll offset multiplier for the scrolled-state screenshot: we scroll to
@@ -48,7 +48,6 @@ import { devices, type Browser, type BrowserContext, type Page } from 'playwrigh
 const SCROLL_OFFSET_RATIO = 1.5;
 const ANALYSIS_SAMPLE_LIMIT = 1;
 const MAX_CAPTURED_DIALOGS = 8;
-const { defaultBrowserType: _defaultBrowserType, ...IPHONE_17_CONTEXT } = devices[ 'iPhone 17' ];
 
 /**
  * Per-URL capture pipeline:
@@ -1164,7 +1163,9 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	// --- validate + filter ----------------------------------------------------
 	validateOutputDir( opts.outputDir );
 
-	const viewports = opts.viewports ?? DEFAULT_VIEWPORTS;
+	const { devices } = await import('playwright');
+	const { defaultBrowserType: _defaultBrowserType, ...IPHONE_17_CONTEXT } = devices['iPhone 17'];
+	const viewports = opts.viewports ?? defaultViewports(IPHONE_17_CONTEXT.viewport);
 	const rawConcurrency = opts.concurrency ?? 6;
 	const concurrency = Math.max( 1, Math.min( 10, rawConcurrency ) );
 	const browserRestartEvery = opts.browserRestartEvery ?? 100;

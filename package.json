@@ -3,12 +3,16 @@
   "version": "0.1.0",
   "description": "Liberate any website into a complete, portable HTML site",
   "type": "module",
-  "main": "./dist/index.js",
+  "main": "./dist/capture-engine.bundle.mjs",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "default": "./dist/index.js"
+      "default": "./dist/capture-engine.bundle.mjs"
+    },
+    "./runtime": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/capture-engine.bundle.mjs"
     },
     "./package.json": "./package.json"
   },
