@@ -5,7 +5,8 @@ import { extractNavLinks } from './html-extract/index.js';
 import { safeFetch } from './media-fetch/safe-fetch.js';
 import { detectFromDocument } from './detect-platform/index.js';
 import { resolvePlatform } from '../platform/registry.js';
-import { createRenderedInspector, sourceComplexity, type RenderedInspection, type SourceComplexity } from './inspect-rendered.js';
+import { createRenderedInspector, sourceComplexity, SOURCE_CAPABILITIES, SOURCE_CAPABILITY_VOCABULARY, type RenderedInspection, type SourceComplexity } from './inspect-rendered.js';
+import { detectHosts, hostResidue, type DetectedHost } from '../platform/host.js';
 
 export const INSPECTION_SCHEMA_VERSION = '2.0';
 
@@ -33,11 +34,19 @@ export interface InspectionIssue {
 export interface SourceInspection {
   schemaVersion: typeof INSPECTION_SCHEMA_VERSION;
   complexity: SourceComplexity;
+  /**
+   * The capability names a destination declares coverage against. Published so
+   * a consumer can key an acceptance policy on the vocabulary rather than on
+   * whatever strings happened to appear in one report.
+   */
+  capabilityVocabulary: { schema: typeof SOURCE_CAPABILITY_VOCABULARY; capabilities: readonly string[] };
   rendered: { enabled: boolean; attempted: number; succeeded: number; samples: RenderedInspection[] };
   source: {
     requestedUrl: string;
     finalUrl: string;
     platform: { id: string; confidence: 'high' | 'medium' | 'low'; evidence: string[] };
+    /** Deployment hosts recognized on the entry response, if any. */
+    hosts: Array<{ id: string; evidence: string[] }>;
   };
   coverage: {
     discovery: { routes: number; limit: number; truncated: boolean };
@@ -192,6 +201,8 @@ export async function inspectSource(url: string, options: InspectOptions = {}): 
   const samples: SourceInspection['samples'] = [];
   let failedSamples = 0;
   const detection = detectFromDocument(finalUrl, entry.headers, isHtml(entry.headers.get('content-type')) ? entryHtml : '');
+  const hosts: DetectedHost[] = detectHosts(entry.headers, isHtml(entry.headers.get('content-type')) ? entryHtml : '');
+  const residue = hostResidue(hosts);
   const renderedSamples: RenderedInspection[] = [];
   let renderedAttempts = 0;
   let inspector: Awaited<ReturnType<typeof createRenderedInspector>> | undefined;
@@ -220,7 +231,7 @@ export async function inspectSource(url: string, options: InspectOptions = {}): 
       if (html && inspector) {
         renderedAttempts++;
         try {
-          const rendered = await inspector.inspect(response.finalUrl, resolvePlatform(detection.platform)?.inspection);
+          const rendered = await inspector.inspect(response.finalUrl, resolvePlatform(detection.platform)?.inspection, residue);
           renderedSamples.push(rendered);
           for (const link of rendered.navigation) addRoute(link);
           for (const discovered of routes) {
@@ -242,10 +253,11 @@ export async function inspectSource(url: string, options: InspectOptions = {}): 
   const samplingTruncated = routes.length > selected.length;
   return {
     schemaVersion: INSPECTION_SCHEMA_VERSION,
+    capabilityVocabulary: { schema: SOURCE_CAPABILITY_VOCABULARY, capabilities: SOURCE_CAPABILITIES },
     complexity: sourceComplexity(renderedSamples, options.rendered === false || discoveryTruncated || samplingTruncated ||
       renderedSamples.length !== selected.length || samples.some((sample) => sample.outcome !== 'html')),
     rendered: { enabled: options.rendered !== false, attempted: renderedAttempts, succeeded: renderedSamples.length, samples: renderedSamples },
-    source: { requestedUrl: url, finalUrl, platform: { id: detection.platform, confidence: detection.confidence, evidence: detection.signals } },
+    source: { requestedUrl: url, finalUrl, platform: { id: detection.platform, confidence: detection.confidence, evidence: detection.signals }, hosts: hosts.map(({ id, evidence }) => ({ id, evidence })) },
     coverage: {
       discovery: { routes: routes.length, limit: discoveryLimit, truncated: discoveryTruncated },
       sampling: { routes: samples.length, attempted: selected.length, succeeded: samples.length, failed: failedSamples, limit: sampleLimit, truncated: samplingTruncated, complete: !samplingTruncated && failedSamples === 0 },

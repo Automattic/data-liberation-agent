@@ -25,6 +25,9 @@ export {
 	ConflictingFallbackError,
 } from './platform/registry.js';
 
+export { registerHost, registeredHosts, unregisterHost, detectHosts, hostResidue, HostRegistrationError } from './platform/host.js';
+export type { Host, HostDetection, HostResidueRule, DetectedHost } from './platform/host.js';
+
 export { detect as detectPlatform, detectFromUrl, detectFromHttp } from './lib/detect-platform/index.js';
 export { inspectSource, InspectError, INSPECTION_SCHEMA_VERSION } from './lib/inspect.js';
 export { captureWebsite, UnsupportedCapturePlatformError } from './lib/capture.js';
@@ -53,4 +56,5 @@ export type { PublishTarget, PublishOptions, PublishResult } from './lib/publish
 export { publishSite } from './ui/publish.js';
 export type { PublishCliOptions as PublishSiteOptions } from './ui/publish.js';
 export type { InspectOptions, InspectionIssue, SourceInspection } from './lib/inspect.js';
-export type { CapabilityRule, SourceCapability, RenderedInspection, SourceComplexity } from './lib/inspect-rendered.js';
+export { SOURCE_CAPABILITIES, SOURCE_CAPABILITY_VOCABULARY } from './lib/inspect-rendered.js';
+export type { CapabilityRule, SourceCapability, RenderedInspection, SourceComplexity, ExcludedSurface } from './lib/inspect-rendered.js';
