@@ -1,7 +1,16 @@
 import type { Browser, Page } from 'playwright';
 import { safeFetch, assertPublicHttpUrl } from './media-fetch/safe-fetch.js';
 
-export type SourceCapability = 'forms' | 'navigation' | 'media' | 'embeds' | 'dialogs' | 'booking' | 'commerce' | 'membership';
+/**
+ * The capability vocabulary is a public contract, not an implementation
+ * detail. A destination publishes coverage against these names, and a caller
+ * joins the two to decide whether a source can land there. Members may be
+ * added under a new vocabulary version; removing or repurposing one is a
+ * breaking change, because someone's acceptance policy is keyed on it.
+ */
+export const SOURCE_CAPABILITY_VOCABULARY = 'data-liberation/source-capability-vocabulary/v1';
+export const SOURCE_CAPABILITIES = ['booking', 'commerce', 'dialogs', 'embeds', 'forms', 'media', 'membership', 'navigation'] as const;
+export type SourceCapability = (typeof SOURCE_CAPABILITIES)[number];
 /** One host-injected surface to attribute away from the source. */
 export interface HostResidue { host: string; selector: string; evidence: string }
 export interface CapabilityRule {
@@ -23,7 +32,12 @@ export interface RenderedInspection {
   elements: number;
   textCharacters: number;
   counts: Record<'forms' | 'links' | 'images' | 'videos' | 'frames' | 'dialogs', number>;
-  capabilities: Array<{ capability: SourceCapability; count: number; evidence: string }>;
+  /**
+   * Each finding carries the route it was observed on (this sample's `url`),
+   * the selector that matched it, and bounded locators for the matches, so a
+   * consumer can act on an occurrence instead of only on a site-wide band.
+   */
+  capabilities: Array<{ capability: SourceCapability; count: number; evidence: string; selector: string; locators: string[] }>;
   /** Host-injected surfaces, reported rather than silently dropped. */
   excluded: ExcludedSurface[];
   navigation: string[];
@@ -128,8 +142,13 @@ export async function createRenderedInspector(signal: AbortSignal, requestTimeou
             dialogs: authored.filter((element) => element.matches('dialog,[role="dialog"],[aria-haspopup],[aria-expanded],details')).length,
           };
           const capabilities = rules.flatMap((rule) => {
-            const matches = authored.filter((element) => element.matches(rule.selector)).length;
-            return matches ? [{ capability: rule.capability, count: matches, evidence: rule.evidence }] : [];
+            const matches = authored.filter((element) => element.matches(rule.selector));
+            const locators = matches.slice(0, 5).map((element) => {
+              const id = element.id ? `#${element.id}` : '';
+              const classes = (element.getAttribute('class') ?? '').trim().split(/\s+/).filter(Boolean).slice(0, 3).map((name) => `.${name}`).join('');
+              return `${element.tagName.toLowerCase()}${id}${classes}`.slice(0, 120);
+            });
+            return matches.length ? [{ capability: rule.capability, count: matches.length, evidence: rule.evidence, selector: rule.selector, locators }] : [];
           });
           const navigation = authored.filter((element) => element.matches('a[href]'))
             .map((a) => (a as HTMLAnchorElement).href).filter((href) => {
