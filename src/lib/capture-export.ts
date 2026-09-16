@@ -180,6 +180,8 @@ interface CaptureEntry {
 	evidenceDocuments: Array< { state: 'desktop' | 'mobile'; html: string } >;
 	/** The source served a structurally distinct document under mobile emulation. */
 	hasMobileDocument?: boolean;
+	/** Receipt evidence for how many responsive variants this route ships and why. */
+	responsiveVariants?: ResponsiveVariantEvidence;
 	identityHtmlPath?: string;
 	sections?: string;
 	canonicalUrl?: string;
@@ -552,15 +554,64 @@ function documentSwitchCss( switchWidth: number ): string {
 const DEFAULT_SWITCH_WIDTH = 768;
 
 /**
+ * Attributes DLA's own capture infrastructure writes to mark that two
+ * elements correspond across viewports: fluid-learning identities
+ * (viewport-prefixed, e.g. `desktop-wrapper-0` vs `mobile-wrapper-0`) and
+ * responsive counterpart slots. They cannot exist on the source site and
+ * encode correspondence, never difference, so structural equivalence must
+ * not read them as one.
+ */
+const CORRESPONDENCE_ATTRIBUTES = [ 'data-dla-geometry-id', 'data-dla-responsive-source' ];
+
+/**
  * Whether the source served a genuinely different document under mobile
- * emulation, rather than the same one. Structural, so runtime ids and text
- * differences do not masquerade as a second design.
+ * emulation, rather than the same one. Structural, so runtime ids, capture
+ * infrastructure attributes, and text differences do not masquerade as a
+ * second design.
  */
 export function documentsDiffer( desktopHtml: string, mobileHtml: string ): boolean {
 	const desktopBody = /<body\b([^>]*)>([\s\S]*?)<\/body\s*>/i.exec( desktopHtml )?.[ 2 ];
 	const mobileBody = /<body\b([^>]*)>([\s\S]*?)<\/body\s*>/i.exec( mobileHtml )?.[ 2 ];
 	if ( desktopBody === undefined || mobileBody === undefined ) return false;
 	return responsiveBodySignature( desktopBody ) !== responsiveBodySignature( mobileBody );
+}
+
+/**
+ * Per-route record of how many responsive documents were exported and why,
+ * so downstream consumers and humans can audit the collapse decision from
+ * the capture receipt alone. Present only when the source was captured under
+ * mobile emulation too — without a second capture there was no decision.
+ */
+export interface ResponsiveVariantEvidence {
+	/** Documents shipped in the exported route file. */
+	variants: 1 | 2;
+	outcome: 'collapsed-equivalent' | 'dual-structural';
+	reason: string;
+	/** How responsive CSS survives a collapse. Present only when collapsed. */
+	css?: 'shared' | 'viewport-scoped';
+}
+
+function responsiveVariantEvidence(
+	desktopHtml: string,
+	mobileHtml: string | undefined
+): ResponsiveVariantEvidence | undefined {
+	if ( mobileHtml === undefined ) return undefined;
+	if ( documentsDiffer( desktopHtml, mobileHtml ) ) {
+		return {
+			variants: 2,
+			outcome: 'dual-structural',
+			reason: 'mobile document differs structurally from desktop; both variants shipped',
+		};
+	}
+	const sharedStyles =
+		styleBlocks( desktopHtml ).join( '\n' ) === styleBlocks( mobileHtml ).join( '\n' );
+	return {
+		variants: 1,
+		outcome: 'collapsed-equivalent',
+		reason:
+			'mobile document is structurally equivalent to desktop once capture-infrastructure attributes are normalized; shipped one document',
+		css: sharedStyles ? 'shared' : 'viewport-scoped',
+	};
 }
 
 /**
@@ -1009,6 +1060,7 @@ function responsiveBodySignature( body: string ): string {
 				node.removeAttr( attribute );
 			}
 		}
+		for ( const attribute of CORRESPONDENCE_ATTRIBUTES ) node.removeAttr( attribute );
 		if ( node.is( 'img,source,video,audio' ) ) {
 			node.removeAttr( 'src' ).removeAttr( 'srcset' ).removeAttr( 'sizes' );
 		}
@@ -1876,6 +1928,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 				: undefined;
 		if ( detectedFloor ) switchWidths.push( detectedFloor );
 		if ( entry.fluid ) fluidReports.push( entry.fluid );
+		const responsiveVariants = responsiveVariantEvidence( desktopHtml, mobileHtml );
 		const capturedHtml =
 			mobileHtml === undefined
 				? desktopHtml
@@ -1894,7 +1947,8 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 				{ state: 'desktop', html: desktopHtml },
 				...( mobileHtml === undefined ? [] : [ { state: 'mobile' as const, html: mobileHtml } ] ),
 			],
-			hasMobileDocument: mobileHtml !== undefined && documentsDiffer( desktopHtml, mobileHtml ),
+			hasMobileDocument: responsiveVariants?.outcome === 'dual-structural',
+			responsiveVariants,
 			sections: entry.sections,
 			canonicalUrl: canonicalMetadataUrl(
 				entry.metadata?.openGraph?.[ 'og:url' ] ?? openGraphUrl( html ),
@@ -2369,14 +2423,19 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 
 	const routes: Array< { url: string; path: string } > = [];
 	const portableRouteLinks = new Map< string, string >();
-	for ( const { url } of retainedEntries ) {
+	for ( const entry of retainedEntries ) {
+		const { url } = entry;
 		const routePath = routeOutputPath( url, options.sourceUrl, entrypointUrl ).replace(
 			/\\/g,
 			'/'
 		);
 		const portablePath = `/${ routePath }`;
 		portableRouteLinks.set( normalizedUrl( url ), portablePath );
-		routes.push( { url, path: `website/${ routePath }` } );
+		routes.push( {
+			url,
+			path: `website/${ routePath }`,
+			...( entry.responsiveVariants ? { responsiveVariants: entry.responsiveVariants } : {} ),
+		} );
 	}
 	for ( const [ aliasKey, routePath ] of canonicalRouteAliases ) {
 		if ( portableRouteLinks.has( aliasKey ) ) continue;
