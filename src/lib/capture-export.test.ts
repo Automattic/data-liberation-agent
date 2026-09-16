@@ -2607,6 +2607,159 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		).toContain( 'Download guide' );
 	} );
 
+	it( 'names a route that never produced HTML instead of silently dropping it', () => {
+		// Reproduces the anniefinneran.weebly.com nondeterminism: discovery finds
+		// the same routes every run, but a route can still fail during the
+		// browser capture stage (a `page.goto` timeout, here) and previously
+		// vanished from the receipt with no trace — routesDiscovered stayed 29
+		// while routes.length silently dropped, and nothing named which route
+		// or why. The manifest reflects that outcome directly: the failed
+		// route has no `html` key, exactly like a real timed-out capture.
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-' ) );
+		dirs.push( outputDir );
+		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
+		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
+		writeFileSync( join( outputDir, 'html', 'home.html' ), '<h1>Home</h1>' );
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( {
+				version: 1,
+				entries: {
+					'https://example.com/': { html: 'html/home.html' },
+					// No `html` key: capturePerViewport's desktop goto attempts all
+					// timed out, so entry.html was never set.
+					'https://example.com/photos.html': {},
+				},
+			} )
+		);
+
+		// Shaped like the real FailureEntry from screenshots/failures.json (url,
+		// viewport, stage, error, ...), but the export function only depends on
+		// the loose {url,error} contract it declares.
+		const failures: Array< { url: string; viewport: string; stage: string; error: string } > = [
+			{
+				url: 'https://example.com/photos.html',
+				viewport: 'desktop',
+				stage: 'goto',
+				error: 'page.goto: Timeout 30000ms exceeded.\nCall log:\n  - navigating to "https://example.com/photos.html"',
+			},
+			{
+				url: 'https://example.com/photos.html',
+				viewport: 'mobile',
+				stage: 'goto',
+				error: 'page.goto: Timeout 30000ms exceeded.',
+			},
+		];
+		const receiptPath = exportWebsiteCapture( {
+			outputDir,
+			sourceUrl: 'https://example.com/',
+			platform: 'fake',
+			summary: {},
+			failures,
+		} );
+
+		const receipt = JSON.parse( readFileSync( receiptPath, 'utf8' ) );
+		expect( receipt.routes ).toEqual( [
+			{ url: 'https://example.com/', path: 'website/index.html' },
+		] );
+		expect( receipt.discoveryDiagnostics ).toEqual( [
+			{
+				code: 'route_capture_failed',
+				url: 'https://example.com/photos.html',
+				reason:
+					'desktop/goto: page.goto: Timeout 30000ms exceeded.; mobile/goto: page.goto: Timeout 30000ms exceeded.',
+			},
+		] );
+
+		const diagnostics = JSON.parse(
+			readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' )
+		);
+		expect( diagnostics.discoveryDiagnostics ).toEqual( receipt.discoveryDiagnostics );
+	} );
+
+	it( 'names a route whose HTML file went missing on disk after capture claimed success', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-' ) );
+		dirs.push( outputDir );
+		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
+		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
+		writeFileSync( join( outputDir, 'html', 'home.html' ), '<h1>Home</h1>' );
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( {
+				version: 1,
+				entries: {
+					'https://example.com/': { html: 'html/home.html' },
+					// Manifest claims success, but the file it points at never
+					// landed on disk (or was since removed).
+					'https://example.com/gone.html': { html: 'html/gone.html' },
+				},
+			} )
+		);
+
+		const receiptPath = exportWebsiteCapture( {
+			outputDir,
+			sourceUrl: 'https://example.com/',
+			platform: 'fake',
+			summary: {},
+			failures: [],
+		} );
+
+		const receipt = JSON.parse( readFileSync( receiptPath, 'utf8' ) );
+		expect( receipt.routes ).toEqual( [
+			{ url: 'https://example.com/', path: 'website/index.html' },
+		] );
+		expect( receipt.discoveryDiagnostics ).toEqual( [
+			{
+				code: 'route_capture_failed',
+				url: 'https://example.com/gone.html',
+				reason: 'captured HTML file is missing or outside the output directory: html/gone.html',
+			},
+		] );
+	} );
+
+	it( 'passes through discovery-time diagnostics alongside capture-time route failures', () => {
+		// Extends the existing sitemap-rejection diagnostics (fetchSitemapWithDiagnostics)
+		// rather than adding a second, parallel reporting mechanism: both discovery-time
+		// and capture-time route losses are reported through the same {code,url,reason}
+		// list in the receipt and diagnostics.json.
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-' ) );
+		dirs.push( outputDir );
+		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
+		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
+		writeFileSync( join( outputDir, 'html', 'home.html' ), '<h1>Home</h1>' );
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( {
+				version: 1,
+				entries: { 'https://example.com/': { html: 'html/home.html' } },
+			} )
+		);
+
+		const receiptPath = exportWebsiteCapture( {
+			outputDir,
+			sourceUrl: 'https://example.com/',
+			platform: 'fake',
+			summary: {},
+			failures: [],
+			discoveryDiagnostics: [
+				{
+					code: 'sitemap_url_rejected',
+					url: 'https://other-origin.example/page',
+					reason: 'origin differs from the entry URL',
+				},
+			],
+		} );
+
+		const receipt = JSON.parse( readFileSync( receiptPath, 'utf8' ) );
+		expect( receipt.discoveryDiagnostics ).toEqual( [
+			{
+				code: 'sitemap_url_rejected',
+				url: 'https://other-origin.example/page',
+				reason: 'origin differs from the entry URL',
+			},
+		] );
+	} );
+
 	it( 'uses rendered Open Graph metadata when the manifest metadata is absent', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-' ) );
 		dirs.push( outputDir );

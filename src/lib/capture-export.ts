@@ -1768,6 +1768,33 @@ function unresolvedCapturedAnchors(
 	} ) );
 }
 
+/**
+ * Group screenshot-stage failures (goto timeouts, nested-document rejections,
+ * etc.) by URL so a route that never produced HTML can report every viewport
+ * failure that led there, instead of the receipt just losing the route.
+ */
+function groupFailureReasonsByUrl(
+	failures: Array< { url: unknown; error: unknown } >
+): Map< string, string[] > {
+	const byUrl = new Map< string, string[] >();
+	for ( const failure of failures ) {
+		if ( typeof failure.url !== 'string' ) continue;
+		const record = failure as Record< string, unknown >;
+		const viewport = typeof record.viewport === 'string' ? record.viewport : 'unknown';
+		const stage = typeof record.stage === 'string' ? record.stage : 'unknown';
+		const error =
+			typeof failure.error === 'string'
+				? failure.error
+				: failure.error === undefined
+					? 'unknown error'
+					: JSON.stringify( failure.error );
+		const list = byUrl.get( failure.url ) ?? [];
+		list.push( `${ viewport }/${ stage }: ${ error.split( '\n' )[ 0 ] }` );
+		byUrl.set( failure.url, list );
+	}
+	return byUrl;
+}
+
 export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 	const outputDir = resolve( options.outputDir );
 	const portableMediaTotalBytesLimit = Math.max(
@@ -1800,14 +1827,37 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 	const capturedEntries: CaptureEntry[] = [];
 	const interactionPages: InteractionStatesReport[] = [];
 	const excludedRoutes: string[] = [];
+	// A route that was discovered and attempted must never disappear from the
+	// receipt without a reason. Every screenshot-stage failure (goto timeouts,
+	// nested-document rejections, etc.) is grouped by URL here so that a route
+	// which never produced HTML gets its own named diagnostic below, extending
+	// the same {code,url,reason} shape sitemap discovery already reports
+	// rejected leaves through, rather than a parallel reporting mechanism.
+	const routeFailureReasons = groupFailureReasonsByUrl( options.failures );
+	const routeCaptureDiagnostics: Array< { code: string; url: string; reason: string } > = [];
 	for ( const [ url, entry ] of Object.entries( capture.entries ) ) {
 		if ( ! routeMatchesSourceOrigin( url, options.sourceUrl ) ) {
 			excludedRoutes.push( url );
 			continue;
 		}
-		if ( ! entry.html ) continue;
+		if ( ! entry.html ) {
+			routeCaptureDiagnostics.push( {
+				code: 'route_capture_failed',
+				url,
+				reason: routeFailureReasons.get( url )?.join( '; ' )
+					?? 'capture completed without producing page HTML',
+			} );
+			continue;
+		}
 		const capturedHtmlPath = resolve( outputDir, entry.html );
-		if ( ! pathWithin( outputDir, capturedHtmlPath ) || ! existsSync( capturedHtmlPath ) ) continue;
+		if ( ! pathWithin( outputDir, capturedHtmlPath ) || ! existsSync( capturedHtmlPath ) ) {
+			routeCaptureDiagnostics.push( {
+				code: 'route_capture_failed',
+				url,
+				reason: `captured HTML file is missing or outside the output directory: ${ entry.html }`,
+			} );
+			continue;
+		}
 		const desktopHtml = normalizedDeclarativeFormEmbeds(
 			renderedHtml( readFileSync( capturedHtmlPath, 'utf8' ) )
 		);
@@ -2544,6 +2594,16 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		) }\n`
 	);
 
+	// Merge capture-time route diagnostics (this route never produced HTML) with
+	// discovery-time diagnostics (this route was rejected before capture even
+	// started, e.g. a same-origin sitemap leaf) into one reported list — every
+	// route the source advertised is now either in `routes` or named here with
+	// a reason, never just missing.
+	const discoveryDiagnostics = [
+		...( options.discoveryDiagnostics ?? [] ),
+		...routeCaptureDiagnostics,
+	];
+
 	const receiptPath = join( outputDir, 'capture-receipt.json' );
 	const cleanupManifest = JSON.parse(readFileSync(join(outputDir, 'screenshots', 'manifest.json'), 'utf8')) as ScreenshotManifest;
 	const cleanupPages = Object.entries(cleanupManifest.entries).map(([url, entry]) => ({ url, ...entry.cleanup }));
@@ -2574,6 +2634,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 				sourceProfile,
 				excludedRoutes,
 				duplicateRoutes,
+				discoveryDiagnostics,
 				summary: options.summary,
 			},
 			null,
@@ -2586,7 +2647,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 			{
 				schema: 'data-liberation/capture-diagnostics/v1',
 				failures: options.failures,
-				discoveryDiagnostics: options.discoveryDiagnostics ?? [],
+				discoveryDiagnostics,
 				resourceFailures: resourceManifest.failures,
 				unresolvedDependencies,
 				unresolvedMedia: [
