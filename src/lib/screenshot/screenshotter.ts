@@ -164,6 +164,10 @@ interface CapturePerViewportArgs {
 		page: import('playwright').Page,
 		ctx: import('../../adapters/page-actions.js').LiberationContext
 	) => Promise< void >;
+	beforeSerialize?: (
+		page: import('playwright').Page,
+		ctx: import('../../adapters/page-actions.js').LiberationContext
+	) => Promise< void >;
 	viewport: Viewport;
 	plan: ArtifactPlan;
 	url: string;
@@ -688,6 +692,15 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 				attempt: 1,
 			} );
 		}
+	}
+
+	if ( args.beforeSerialize ) {
+		await args.beforeSerialize( page, {
+			url,
+			viewport: isDesktop ? 'desktop' : 'mobile',
+		} ).catch( () => {
+			/* best-effort — never block capture on a late platform widget */
+		} );
 	}
 
 	// Capture only after every operation that can change the live DOM, then
@@ -1411,6 +1424,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 					...( opts.learnFluid ? { learnFluid: true } : {} ),
 					...( opts.fluidWidths ? { fluidWidths: opts.fluidWidths } : {} ),
 					prepareCapture: opts.prepareCapture,
+					beforeSerialize: opts.beforeSerialize,
 				} );
 			} catch ( err ) {
 				urlFailures.push( {
