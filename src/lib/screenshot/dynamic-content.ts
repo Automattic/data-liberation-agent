@@ -68,6 +68,9 @@ export async function expandCollapsedContent(page: Page): Promise<void> {
 
 const MAX_DISCLOSURE_CANDIDATES = 32;
 const MAX_DISCLOSURE_HTML_BYTES = 512 * 1024;
+/** How long the restore step will wait for a runtime's own close-unmount to land
+ *  before giving up (see `hydrateDisclosureContent` — the Radix Presence exit case). */
+const MAX_DISCLOSURE_SETTLE_MS = 1000;
 
 /** Raw, plain-object shape returned across the `page.evaluate` boundary — see
  *  `hydrateDisclosureContent` for how this is folded into a `CapturedDialogInteraction`. */
@@ -108,6 +111,13 @@ function boundDisclosureHtml(html: string): { html: string; bytes: number; trunc
  * state (collapsed items stay visually collapsed) while its content is now
  * physically present in the DOM rather than lost to the `hidden` attribute.
  *
+ * The restore deliberately WAITS (bounded — see `MAX_DISCLOSURE_SETTLE_MS`) for
+ * a runtime that unmounts closed panels to finish its exit animation first:
+ * such a runtime (Radix Presence) keeps the panel's children mounted ~200ms
+ * after the close, so restoring immediately would misread the transient mount
+ * as "content survived" and skip the write-back, letting the pending unmount
+ * delete the panel's only copy of its content.
+ *
  * Runs after the visual reference so hydration cannot change screenshot
  * geometry, and BEFORE `page.content()` is serialized, so the captured static
  * HTML contains the restored panels directly (no post-hoc wiring needed).
@@ -119,7 +129,7 @@ function boundDisclosureHtml(html: string): { html: string; bytes: number; trunc
 export async function hydrateDisclosureContent(page: Page): Promise<CapturedDialogInteraction[]> {
   let raw: RawDisclosureRecord[];
   try {
-    const result = await page.evaluate(async (limit: number) => {
+    const result = await page.evaluate(async ({ limit, settleMs }: { limit: number; settleMs: number }) => {
       const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
       const hasContent = (element: Element) =>
         Boolean((element.textContent || '').trim()) ||
@@ -229,6 +239,25 @@ export async function hydrateDisclosureContent(page: Page): Promise<CapturedDial
           await wait(50);
           observed.push({ target, content, trigger });
         }
+        // A runtime like Radix keeps a just-closed panel's children mounted through
+        // its exit animation (Presence) and unmounts them only ~200ms LATER. The
+        // restore guard below reads a still-mounted panel as "already has content"
+        // and skips the write-back — and the pending unmount then deletes the
+        // panel's only copy of its content. The most recently closed item always
+        // loses this race (every earlier item's unmount has landed by the time the
+        // restore loop runs), which is why the LAST accordion item shipped empty
+        // while the rest survived. So wait — bounded, concurrently for all observed
+        // panels — for a transient exit mount to clear before restoring. A runtime
+        // that never unmounts closed panels simply runs out the deadline here and
+        // is left untouched by the guard below, exactly as before.
+        const settleDeadline = Date.now() + settleMs;
+        const pending = observed.filter((entry) => hasContent(entry.target));
+        while (pending.length > 0 && Date.now() < settleDeadline) {
+          for (let i = pending.length - 1; i >= 0; i--) {
+            if (!hasContent(pending[i].target)) pending.splice(i, 1);
+          }
+          if (pending.length > 0) await wait(25);
+        }
         for (const { target, content, trigger } of observed) {
           if (!hasContent(target)) target.innerHTML = content;
           target.dataset.dlaHydratedDisclosure = 'true';
@@ -243,7 +272,7 @@ export async function hydrateDisclosureContent(page: Page): Promise<CapturedDial
         await wait(100);
       }
       return records;
-    }, MAX_DISCLOSURE_CANDIDATES);
+    }, { limit: MAX_DISCLOSURE_CANDIDATES, settleMs: MAX_DISCLOSURE_SETTLE_MS });
     raw = Array.isArray(result) ? (result as RawDisclosureRecord[]) : [];
   } catch {
     raw = [];
