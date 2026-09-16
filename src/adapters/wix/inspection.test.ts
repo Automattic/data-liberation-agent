@@ -52,11 +52,13 @@ async function wixSource(html: string) {
 afterEach(async () => { server?.closeAllConnections(); if (server) await new Promise<void>((resolve) => server.close(() => resolve())); });
 
 it('reports an app capability for a Wix Events ticketing page, so a ticketing source is no longer indistinguishable from a brochure site', async () => {
+  // No same-origin link here: a discovered but unsampled route would make
+  // this sample legitimately incomplete, which is a different assertion
+  // than the one this test makes (see the /event-details/ href coverage above).
   const url = await wixSource(
     '<meta name="generator" content="Wix.com"><main><h1>Fête Forte</h1>' +
     '<button data-hook="get-tickets-button">Buy Tickets</button>' +
-    '<div data-hook="ticketPickerContainer"></div>' +
-    '<a href="/event-details/the-artistic-gala-night">The Artistic Gala Night</a></main>',
+    '<div data-hook="ticketPickerContainer"></div></main>',
   );
   const result = await inspectSource(url, { sampleLimit: 1 });
   const found = result.rendered.samples[0].capabilities.find(
