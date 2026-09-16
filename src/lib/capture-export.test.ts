@@ -2183,6 +2183,59 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		expect( html ).toContain( ':where(.data-liberation-mobile-document) .mobile-only{color:red}' );
 	} );
 
+	it.each( [ false, true ] )( 'preserves mobile linked styles and their cascade when dual documents are %s', async ( dual ) => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-responsive-linked-css-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'html-mobile', 'screenshots', 'resources/css' ] )
+			mkdirSync( join( outputDir, path ), { recursive: true } );
+		const common = '<link rel="stylesheet" href="https://cdn.example/shared.css">';
+		const body = '<main><div class="bar">Call Map Hours</div></main>';
+		writeFileSync( join( outputDir, 'html', 'homepage.html' ),
+			`<html><head>${ common }</head><body>${ body }${ dual ? '<aside>Desktop navigation</aside>' : '' }</body></html>` );
+		writeFileSync( join( outputDir, 'html-mobile', 'homepage.html' ),
+			`<html><head><link rel="stylesheet" href="https://cdn.example/widget.css">${ common }<link rel="stylesheet" media="screen and (min-width:300px), print" href="https://cdn.example/labels.css"><link rel="stylesheet" disabled href="https://cdn.example/disabled.css"></head><body>${ body }</body></html>` );
+		const styles = {
+			'widget.css': '.bar{position:fixed;bottom:0;height:64px;background:red;color:green}',
+			'shared.css': '.bar{background:rgb(235,235,235);color:blue}',
+			'labels.css': '.bar{text-transform:uppercase;color:purple}',
+			'disabled.css': '.bar{display:none}',
+		};
+		const resources: Record< string, { path: string; contentType: string } > = {};
+		for ( const [ name, css ] of Object.entries( styles ) ) {
+			writeFileSync( join( outputDir, 'resources/css', name ), css );
+			resources[ `https://cdn.example/${ name }` ] = { path: `resources/css/${ name }`, contentType: 'text/css' };
+		}
+		writeFileSync( join( outputDir, 'resources/manifest.json' ), JSON.stringify( { version: 1, resources, failures: [] } ) );
+		writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( {
+			version: 1, entries: { 'https://example.com/': { html: 'html/homepage.html' } },
+		} ) );
+		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'fake', summary: {}, failures: [] } );
+
+		const browser = await chromium.launch();
+		try {
+			const page = await browser.newPage( { viewport: { width: 390, height: 844 } } );
+			await page.route( 'https://portable.test/**', route => {
+				const pathname = new URL( route.request().url() ).pathname;
+				return route.fulfill( { contentType: pathname.endsWith( '.css' ) ? 'text/css' : 'text/html',
+					body: readFileSync( join( outputDir, 'website', pathname === '/' ? 'index.html' : pathname ) ) } );
+			} );
+			await page.goto( 'https://portable.test/' );
+			const facts = () => page.locator( '.bar:visible' ).evaluate( element => {
+				const style = getComputedStyle( element );
+				return { position: style.position, top: element.getBoundingClientRect().top,
+					background: style.backgroundColor, color: style.color, textTransform: style.textTransform };
+			} );
+			expect( await facts() ).toEqual( { position: 'fixed', top: 780,
+				background: 'rgb(235, 235, 235)', color: 'rgb(128, 0, 128)', textTransform: 'uppercase' } );
+			await page.setViewportSize( { width: 280, height: 844 } );
+			expect( await facts() ).toMatchObject( { position: 'fixed', color: 'rgb(0, 0, 255)', textTransform: 'none' } );
+			await page.setViewportSize( { width: 1440, height: 900 } );
+			expect( await facts() ).toMatchObject( { position: 'static', color: 'rgb(0, 0, 255)', textTransform: 'none' } );
+		} finally {
+			await browser.close();
+		}
+	} );
+
 	it( 'hoists byte-identical safe styles across 186 documents without deleting local occurrences', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-style-hoist-' ) );
 		dirs.push( outputDir );
