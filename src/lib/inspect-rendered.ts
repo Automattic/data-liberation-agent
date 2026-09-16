@@ -10,6 +10,14 @@ import { safeFetch, assertPublicHttpUrl } from './media-fetch/safe-fetch.js';
  */
 export const SOURCE_CAPABILITY_VOCABULARY = 'data-liberation/source-capability-vocabulary/v1';
 export const SOURCE_CAPABILITIES = ['booking', 'commerce', 'dialogs', 'embeds', 'forms', 'media', 'membership', 'navigation'] as const;
+/**
+ * HTML document ceiling for inspect. Page-builder homepages routinely exceed
+ * 2 MB (a 2.9 MB Wix events page was rejected before any detector ran). 10 MB
+ * sits above observed documents and below the 25 MB process-wide download cap.
+ */
+export const INSPECT_DOCUMENT_MAX_BYTES = 10 * 1024 * 1024;
+/** Per-asset ceiling inside a rendered inspect sample. */
+export const INSPECT_ASSET_MAX_BYTES = 2 * 1024 * 1024;
 export type SourceCapability = (typeof SOURCE_CAPABILITIES)[number];
 /** One host-injected surface to attribute away from the source. */
 export interface HostResidue { host: string; selector: string; evidence: string }
@@ -98,7 +106,12 @@ export async function createRenderedInspector(signal: AbortSignal, requestTimeou
               throw new Error('Rendered resource budget reached');
             }
             const response = await safeFetch(request.url(), {
-              timeoutMs: requestTimeoutMs, maxBytes: Math.min(2 * 1024 * 1024, 10 * 1024 * 1024 - bytes), signal: sampleSignal,
+              timeoutMs: requestTimeoutMs,
+              maxBytes: Math.min(
+                request.isNavigationRequest() ? INSPECT_DOCUMENT_MAX_BYTES : INSPECT_ASSET_MAX_BYTES,
+                10 * 1024 * 1024 - bytes
+              ),
+              signal: sampleSignal,
             });
             bytes += response.body.length;
             if (bytes > 10 * 1024 * 1024) { limited = true; throw new Error('Rendered byte budget reached'); }
