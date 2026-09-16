@@ -11,6 +11,7 @@ import {
 	CAPTURED_INTERACTIONS_SCHEMA,
 	CAPTURE_RECEIPT_SCHEMA,
 	ASSET_EVIDENCE_SCHEMA,
+	documentsDiffer,
 	exportWebsiteCapture,
 	INDEXED_SEMANTIC_EVIDENCE_SCHEMA,
 	portableInlineStyle,
@@ -653,6 +654,171 @@ describe( 'exportWebsiteCapture', () => {
 				} ),
 			] )
 		);
+	} );
+
+	it( 'treats capture correspondence attributes as equivalence, not difference', () => {
+		const desktop =
+			'<html><body><main><div data-dla-geometry-id="desktop-wrapper-0" class="page" style="width:940px"><h1>Same heading</h1><img src="/a.jpg" alt="a"></div></main></body></html>';
+		const mobile =
+			'<html><body><main><div data-dla-geometry-id="mobile-wrapper-0" class="page mobile-page" style="width:100%"><h1>Same heading</h1><img src="/a.jpg" alt="a"></div></main></body></html>';
+		expect( documentsDiffer( desktop, mobile ) ).toBe( false );
+		expect(
+			documentsDiffer(
+				desktop,
+				mobile.replace( '<h1>Same heading</h1>', '<h1>Same heading</h1><p>Mobile extra</p>' )
+			)
+		).toBe( true );
+		expect(
+			documentsDiffer( desktop, mobile.replace( 'Same heading', 'Different heading' ) )
+		).toBe( true );
+	} );
+
+	it( 'collapses structurally equivalent responsive variants into one document and records why', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-collapse-equivalent-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
+			mkdirSync( join( outputDir, path ), { recursive: true } );
+		const sharedStyles = '<style>.wrap{margin:0 auto}.wrap img{max-width:100%}</style>';
+		writeFileSync(
+			join( outputDir, 'html', 'homepage.html' ),
+			`<html><head><meta name="viewport" content="width=device-width, initial-scale=1">${ sharedStyles }</head><body class="page"><main><div data-dla-geometry-id="desktop-wrapper-0" style="width:940px"><h1>About</h1><img src="/media/a.jpg" alt="a"></div></main></body></html>`
+		);
+		writeFileSync(
+			join( outputDir, 'html-mobile', 'homepage.html' ),
+			`<html><head><meta name="viewport" content="width=device-width, initial-scale=1">${ sharedStyles }</head><body class="page mobile"><main><div data-dla-geometry-id="mobile-wrapper-0" style="width:100%"><h1>About</h1><img src="/media/a.jpg" alt="a"></div></main></body></html>`
+		);
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( {
+				version: 1,
+				entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },
+			} )
+		);
+
+		exportWebsiteCapture( {
+			outputDir,
+			sourceUrl: 'https://example.com/',
+			platform: 'weebly',
+			summary: {},
+			failures: [],
+		} );
+
+		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
+		const $ = cheerio.load( html );
+		expect( $( '.data-liberation-desktop-document' ) ).toHaveLength( 0 );
+		expect( $( '.data-liberation-mobile-document' ) ).toHaveLength( 0 );
+		expect( $( 'h1' ) ).toHaveLength( 1 );
+		expect( $( 'img' ) ).toHaveLength( 1 );
+		// The source's own stylesheet keeps applying at every width.
+		expect( html ).toContain( '.wrap{margin:0 auto}.wrap img{max-width:100%}' );
+		const receipt = JSON.parse(
+			readFileSync( join( outputDir, 'capture-receipt.json' ), 'utf8' )
+		);
+		expect( receipt.routes[ 0 ].responsiveVariants ).toEqual( {
+			variants: 1,
+			outcome: 'collapsed-equivalent',
+			reason:
+				'mobile document is structurally equivalent to desktop once capture-infrastructure attributes are normalized; shipped one document',
+			css: 'shared',
+		} );
+	} );
+
+	it( 'collapses equivalent variants while preserving viewport-specific styles as CSS', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-collapse-scoped-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
+			mkdirSync( join( outputDir, path ), { recursive: true } );
+		writeFileSync(
+			join( outputDir, 'html', 'homepage.html' ),
+			'<html><head><style>.hero{color:red}</style></head><body><main><div data-dla-geometry-id="desktop-wrapper-0"><h1>About</h1></div></main></body></html>'
+		);
+		writeFileSync(
+			join( outputDir, 'html-mobile', 'homepage.html' ),
+			'<html><head><style>.hero{color:blue}</style></head><body><main><div data-dla-geometry-id="mobile-wrapper-0"><h1>About</h1></div></main></body></html>'
+		);
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( {
+				version: 1,
+				entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },
+			} )
+		);
+
+		exportWebsiteCapture( {
+			outputDir,
+			sourceUrl: 'https://example.com/',
+			platform: 'weebly',
+			summary: {},
+			failures: [],
+		} );
+
+		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
+		const $ = cheerio.load( html );
+		expect( $( '.data-liberation-desktop-document' ) ).toHaveLength( 0 );
+		expect( $( '.data-liberation-mobile-document' ) ).toHaveLength( 0 );
+		expect( $( 'h1' ) ).toHaveLength( 1 );
+		// Each breakpoint keeps its own stylesheet through media scoping.
+		expect( html ).toContain( 'media="(min-width:769px)"' );
+		expect( html ).toContain( 'media="(max-width:768px)"' );
+		const styles = [ ...html.matchAll( /<style\b([^>]*)>([\s\S]*?)<\/style\s*>/gi ) ];
+		expect( styles.some( ( s ) => s[ 1 ].includes( 'min-width' ) && s[ 2 ].includes( 'color:red' ) ) ).toBe(
+			true
+		);
+		expect( styles.some( ( s ) => s[ 1 ].includes( 'max-width' ) && s[ 2 ].includes( 'color:blue' ) ) ).toBe(
+			true
+		);
+		const receipt = JSON.parse(
+			readFileSync( join( outputDir, 'capture-receipt.json' ), 'utf8' )
+		);
+		expect( receipt.routes[ 0 ].responsiveVariants ).toMatchObject( {
+			variants: 1,
+			outcome: 'collapsed-equivalent',
+			css: 'viewport-scoped',
+		} );
+	} );
+
+	it( 'ships both variants when the mobile document genuinely differs, and says so', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-collapse-structural-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
+			mkdirSync( join( outputDir, path ), { recursive: true } );
+		writeFileSync(
+			join( outputDir, 'html', 'homepage.html' ),
+			'<html><body><main><div data-dla-geometry-id="desktop-wrapper-0"><h1>About</h1><section id="gallery"><img src="/media/a.jpg" alt="a"></section></div></main></body></html>'
+		);
+		writeFileSync(
+			join( outputDir, 'html-mobile', 'homepage.html' ),
+			'<html><body><main><div data-dla-geometry-id="mobile-wrapper-0"><h1>About</h1><section id="gallery"><img src="/media/a.jpg" alt="a"></section><aside id="mobile-menu">Mobile only</aside></div></main></body></html>'
+		);
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( {
+				version: 1,
+				entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },
+			} )
+		);
+
+		exportWebsiteCapture( {
+			outputDir,
+			sourceUrl: 'https://example.com/',
+			platform: 'weebly',
+			summary: {},
+			failures: [],
+		} );
+
+		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
+		const $ = cheerio.load( html );
+		expect( $( '.data-liberation-desktop-document' ) ).toHaveLength( 1 );
+		expect( $( '.data-liberation-mobile-document' ) ).toHaveLength( 1 );
+		expect( $( '#mobile-menu' ) ).toHaveLength( 1 );
+		const receipt = JSON.parse(
+			readFileSync( join( outputDir, 'capture-receipt.json' ), 'utf8' )
+		);
+		expect( receipt.routes[ 0 ].responsiveVariants ).toEqual( {
+			variants: 2,
+			outcome: 'dual-structural',
+			reason: 'mobile document differs structurally from desktop; both variants shipped',
+		} );
 	} );
 
 	it( 'preserves only capture-attested bounded HTTPS iframe surfaces', () => {
