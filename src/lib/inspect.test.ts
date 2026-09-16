@@ -138,11 +138,11 @@ describe('inspectSource', () => {
   }, 10_000);
 
   it('inspects HTML documents larger than the old 2 MB asset cap', async () => {
-    const oversized = 3 * 1024 * 1024;
+    const prefix = '<!doctype html><title>big</title>';
+    const oversized = 2 * 1024 * 1024 + 1024;
     const url = await fixture((_request, response) => {
       response.setHeader('content-type', 'text/html');
-      response.setHeader('content-length', String(oversized));
-      response.end(`<!doctype html><title>big</title>${'x'.repeat(oversized - 40)}`);
+      response.end(prefix + 'x'.repeat(oversized - prefix.length));
     });
     const result = await inspectSource(url, { sampleLimit: 1 });
     expect(result.samples[0].observations.title).toBe('big');
