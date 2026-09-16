@@ -346,12 +346,16 @@ async function visibleDialogSelectors( page: Page ): Promise< string[] > {
 			const visible = ( element: Element ): boolean => {
 				const rect = element.getBoundingClientRect();
 				const style = getComputedStyle( element );
+				let opacity = Number.parseFloat( style.opacity || '1' );
+				for ( let ancestor = element.parentElement; ancestor && opacity > 0.1; ancestor = ancestor.parentElement ) {
+					opacity *= Number.parseFloat( getComputedStyle( ancestor ).opacity || '1' );
+				}
 				return (
 					rect.width > 0 &&
 					rect.height > 0 &&
 					style.display !== 'none' &&
 					style.visibility !== 'hidden' &&
-					Number.parseFloat( style.opacity || '1' ) > 0.1
+					opacity > 0.1
 				);
 			};
 			const selector = ( element: Element, index: number ): string => {
@@ -454,12 +458,17 @@ async function firstNewVisibleDialog(
 		const visible = ( element: Element ): boolean => {
 			const rect = element.getBoundingClientRect();
 			const style = getComputedStyle( element );
+			// A descendant's own opacity can be 1 while its opening menu is transparent.
+			let opacity = Number.parseFloat( style.opacity || '1' );
+			for ( let ancestor = element.parentElement; ancestor && opacity > 0.1; ancestor = ancestor.parentElement ) {
+				opacity *= Number.parseFloat( getComputedStyle( ancestor ).opacity || '1' );
+			}
 			return (
 				rect.width > 0 &&
 				rect.height > 0 &&
 				style.display !== 'none' &&
 				style.visibility !== 'hidden' &&
-				Number.parseFloat( style.opacity || '1' ) > 0.1
+				opacity > 0.1
 			);
 		};
 		const selector = ( element: Element, index: number ): string => {
@@ -559,6 +568,9 @@ async function snapshotDialog(
 		.evaluate( ( dialog, capturedSelector ) => {
 			const clone = dialog.cloneNode( true ) as Element;
 			clone.removeAttribute( 'data-lib-interaction-dialog' );
+			// The portable disclosure's block fallback must not collapse flex/grid
+			// layouts whose descendants rely on the opened root's layout mode.
+			( clone as HTMLElement ).style.setProperty( 'display', getComputedStyle( dialog ).display, 'important' );
 			for ( const unsafe of Array.from( clone.querySelectorAll( 'script,style,noscript,iframe' ) ) )
 				unsafe.remove();
 			for ( const element of [ clone, ...Array.from( clone.querySelectorAll( '*' ) ) ] ) {
