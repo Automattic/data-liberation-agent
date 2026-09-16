@@ -124,10 +124,11 @@ function snapshotWixSlide(
 		const media = [ ...slide.querySelectorAll< HTMLImageElement >( 'img' ) ].map(
 			( image ) => image.currentSrc || image.src
 		);
+		const drawings = [ ...slide.querySelectorAll( 'svg' ) ].map( ( node ) => node.innerHTML );
 		const text = slide.textContent?.replace( /\s+/g, ' ' ).trim() ?? '';
 		return {
 			html: slide.outerHTML,
-			key: `${ slide.id }\n${ text }\n${ media.join( '\n' ) }`,
+			key: `${ text }\n${ media.join( '\n' ) }\n${ drawings.join( '\n' ) }`,
 		};
 	}, slideshowIndex );
 }
@@ -198,7 +199,7 @@ export async function collectWixSlideshowSlides( page: Page ): Promise< void > {
 		if ( expected !== null && slides.length !== expected ) {
 			failure ||= `observed ${ slides.length } of ${ expected } states declared by slideshow navigation`;
 		}
-		if ( slides.length > 1 && ( expected === null || slides.length === expected ) ) {
+		if ( slides.length > 1 ) {
 			await page.evaluate( preserveWixSlideshowSlides, {
 				slideshowIndex,
 				slides: slides.map( ( slide ) => slide.html ),

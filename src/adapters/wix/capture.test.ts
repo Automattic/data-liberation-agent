@@ -171,6 +171,49 @@ describe( 'collectWixSlideshowSlides', () => {
 		}
 	} );
 
+	it( 'keeps distinct authored states when navigation declares extra destinations', async () => {
+		const states = [ '<article id="shared">First review</article>', '<article id="shared">Second review</article>' ];
+		let index = 0;
+		const dom = new JSDOM( `<!doctype html><html><head></head><body>
+			<div class="wixui-slideshow"><div data-testid="slidesWrapper">${ states[ 0 ] }</div><nav aria-label="Reviews"><a href="#one"></a><a href="#two"></a><a href="#three"></a></nav></div>
+		</body></html>` );
+		const originalDocument = globalThis.document;
+		Object.defineProperty( globalThis, 'document', { configurable: true, value: dom.window.document } );
+		try {
+			const next = {
+				count: async () => 1,
+				click: async () => {
+					index = ( index + 1 ) % states.length;
+					dom.window.document.querySelector( '[data-testid="slidesWrapper"]' )!.innerHTML = states[ index ]!;
+				},
+			};
+			const absent = { count: async () => 0, nth: () => absent };
+			const dots = { count: async () => 3, nth: () => absent };
+			const root = {
+				count: async () => 1,
+				nth: () => ( {
+					locator: ( selector: string ) =>
+						selector.includes( 'nextButton' ) ? next : selector.includes( 'nav[' ) ? dots : absent,
+				} ),
+			};
+			const page = {
+				locator: () => root,
+				evaluate: async ( fn: ( arg: never ) => unknown, arg: never ) => fn( arg ),
+				waitForTimeout: async () => undefined,
+			};
+
+			await collectWixSlideshowSlides( page as never );
+
+			const slideshow = dom.window.document.querySelector( '.wixui-slideshow' )!;
+			expect( slideshow.getAttribute( 'data-dla-captured-slideshow' ) ).toBe( 'true' );
+			expect( slideshow.querySelectorAll( '[data-dla-captured-slide]' ) ).toHaveLength( 2 );
+			expect( slideshow.textContent ).toContain( 'First review' );
+			expect( slideshow.textContent ).toContain( 'Second review' );
+		} finally {
+			Object.defineProperty( globalThis, 'document', { configurable: true, value: originalDocument } );
+		}
+	} );
+
 	it( 'stops at a repeated runtime state and installs the distinct snapshots', async () => {
 		let clicks = 0;
 		const next = { count: async () => 1, click: async () => void ( clicks++ ) };
