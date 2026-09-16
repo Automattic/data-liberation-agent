@@ -286,6 +286,26 @@ export async function settleWixNavigation( viewport: 'desktop' | 'mobile' ): Pro
 	more.remove();
 }
 
+async function revealAndCollectWixSlideshows( page: Page ): Promise< void > {
+	for ( let pass = 0; pass < 3; pass++ ) {
+		await page
+			.evaluate( async () => {
+				const step = 600;
+				const max = Math.min( document.documentElement.scrollHeight, 12_000 );
+				for ( let y = 0; y <= max; y += step ) {
+					window.scrollTo( { top: y, left: 0, behavior: 'instant' } );
+					await new Promise( ( resolve ) => setTimeout( resolve, 80 ) );
+				}
+				window.scrollTo( { top: 0, left: 0, behavior: 'instant' } );
+			} )
+			.catch( () => undefined );
+		const count = await page.locator( WIX_SLIDESHOW_SELECTOR ).count().catch( () => 0 );
+		if ( count > 0 ) break;
+		await page.waitForTimeout( 2_000 );
+	}
+	await collectWixSlideshowSlides( page );
+}
+
 export const capture: LiberationHooks = {
   cleanupRules: [
     { id: 'wix-free-banner', category: 'source-attribution', selector: '#WIX_ADS' },
@@ -417,26 +437,6 @@ export const capture: LiberationHooks = {
 			root.style.scrollBehavior = scrollBehavior;
 		}, WIX_CAPTURE_CHROME_SELECTOR );
 
-		// Wix often hydrates slideshows only after they enter the viewport.
-		// Scroll the document first so collection can see every authored state.
-		await page.evaluate( async () => {
-			const step = 600;
-			const max = Math.min( document.documentElement.scrollHeight, 12_000 );
-			for ( let y = 0; y <= max; y += step ) {
-				window.scrollTo( 0, y );
-				await new Promise( ( resolve ) => setTimeout( resolve, 50 ) );
-			}
-			window.scrollTo( 0, 0 );
-		} );
-		try {
-			await page.locator( WIX_SLIDESHOW_SELECTOR ).first().waitFor( { state: 'attached', timeout: 8_000 } );
-		} catch {
-			// pages without a slideshow stay as-is
-		}
-		// Each viewport mounts its own slideshow independently, so collect
-		// distinct authored states before the runtime is stripped.
-		await collectWixSlideshowSlides( page );
-
 		const galleries = await page.evaluate( async () => {
 			const urls = [
 				...new Set(
@@ -512,6 +512,14 @@ export const capture: LiberationHooks = {
 				{ compId: id, markup: html, stylesheet: css }
 			);
 		}
+	},
+
+	/**
+	 * Fluid learning resizes the page after prepare. Collect slideshows on the
+	 * DOM that is about to be frozen so a late-hydrated widget is not lost.
+	 */
+	beforeSerialize: async ( page ) => {
+		await revealAndCollectWixSlideshows( page );
 	},
 
 	/**
