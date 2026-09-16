@@ -40,24 +40,31 @@ const WIDGET_SELECTOR = KNOWN_WIDGETS.map((w) => w.selector).join(', ');
 
 /**
  * Phase 1 — expand statically-collapsed content so the screenshot captures it. Opens
- * `<details>`, expands real disclosure toggles (`[aria-expanded="false"][aria-controls]`
- * — the aria-controls gate avoids tripping nav menus / dropdowns), and clicks
- * "show more / load more / view all" BUTTONS (not `<a>`, which would navigate).
+ * `<details>`, expands real disclosure toggles (`[aria-expanded="false"][aria-controls]`),
+ * and clicks "show more / load more / view all" controls. Popup controls and
+ * anchors with navigable hrefs are excluded so probing cannot leave the source document.
  * Best-effort; never throws into the capture loop.
  */
 export async function expandCollapsedContent(page: Page): Promise<void> {
   try {
     await page.evaluate(async () => {
+      const safeToActivate = (element: Element) => {
+        if (element.hasAttribute('aria-haspopup')) return false;
+        if (element.tagName !== 'A') return true;
+        const href = (element.getAttribute('href') || '').trim();
+        return !href || href === '#' || href.startsWith('#');
+      };
       document.querySelectorAll('details:not([open])').forEach((d) => {
         (d as HTMLDetailsElement).open = true;
       });
       document.querySelectorAll('[aria-expanded="false"][aria-controls]').forEach((el) => {
+        if (!safeToActivate(el)) return;
         try { (el as HTMLElement).click(); } catch { /* ignore */ }
       });
       const labels = ['load more', 'show more', 'show all', 'view all', 'see all', 'read more', 'expand all'];
       document.querySelectorAll('button, [role="button"]').forEach((el) => {
         const t = (el.textContent || '').trim().toLowerCase();
-        if (t && labels.some((l) => t === l || t.startsWith(l))) {
+        if (safeToActivate(el) && t && labels.some((l) => t === l || t.startsWith(l))) {
           try { (el as HTMLElement).click(); } catch { /* ignore */ }
         }
       });

@@ -156,6 +156,37 @@ describe('interaction + wait helpers (Phase 1/2, browser)', () => {
     await page.close();
   });
 
+  it('expands in-page disclosures without activating navigation menus or links', async () => {
+    const page = await browser.newPage();
+    await page.setContent(`
+      <a href="https://destination.test/menu" aria-expanded="false" aria-controls="menu" aria-haspopup="true">Menu</a>
+      <nav id="menu"></nav>
+      <a href="https://destination.test/link" aria-expanded="false" aria-controls="linked-region">Linked section</a>
+      <div id="linked-region" role="region"></div>
+      <button aria-expanded="false" aria-controls="answer">Question?</button>
+      <div id="answer" role="region" hidden>Answer.</div>
+      <script>
+        window.linkActivations = 0;
+        document.querySelectorAll('a').forEach((link) => link.addEventListener('click', (event) => {
+          event.preventDefault();
+          window.linkActivations++;
+        }));
+        document.querySelector('button').addEventListener('click', (event) => {
+          const button = event.currentTarget;
+          button.setAttribute('aria-expanded', 'true');
+          document.getElementById('answer').hidden = false;
+        });
+      </script>
+    `);
+
+    await expandCollapsedContent(page);
+
+    expect(await page.evaluate(() => (window as unknown as { linkActivations: number }).linkActivations)).toBe(0);
+    expect(await page.locator('button').getAttribute('aria-expanded')).toBe('true');
+    expect(await page.locator('#answer').isVisible()).toBe(true);
+    await page.close();
+  });
+
   it('hydrates every lazy single-open disclosure while restoring closed state', async () => {
     const page = await browser.newPage();
     await page.setContent(`
