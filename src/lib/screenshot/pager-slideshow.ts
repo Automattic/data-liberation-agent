@@ -136,14 +136,24 @@ async function waitForStageChange(
 	return null;
 }
 
+export interface PagerSlideshowStates {
+	index: number;
+	advertised: number;
+	states: string[];
+	error: string;
+}
+
 /**
- * Walk every state a thumbnail picker advertises and leave them all in the
- * document that is about to be frozen. Each state is displayed before it is
- * read, so the media it loads is the full-size image the source serves rather
- * than the control's thumbnail.
+ * Walk every state a thumbnail picker advertises.
+ *
+ * Reading the states needs the source's own script still driving the stage, so
+ * this runs while the page is live and only reports what it saw. Each state is
+ * displayed before it is read, so the media it loads is the full-size image the
+ * source serves rather than the control's thumbnail.
  */
-export async function collectPagerSlideshowStates( page: Page ): Promise< void > {
+export async function collectPagerSlideshowStates( page: Page ): Promise< PagerSlideshowStates[] > {
 	const slideshows = await page.evaluate( markPagerSlideshows, SLIDESHOW_LIMIT ).catch( () => [] );
+	const collections: PagerSlideshowStates[] = [];
 	for ( const { index, controls } of slideshows ) {
 		const initial = await snapshotStage( page, index );
 		if ( ! initial ) continue;
@@ -168,25 +178,45 @@ export async function collectPagerSlideshowStates( page: Page ): Promise< void >
 			states.push( snapshot );
 		}
 
+		collections.push( {
+			index,
+			advertised: controls,
+			states: states.map( ( state ) => state.html ),
+			error: failure,
+		} );
+	}
+
+	return collections;
+}
+
+/**
+ * Leave the collected states in the document that is about to be frozen.
+ *
+ * This is separate from collection because the states have to be read while the
+ * source's script is still driving the stage, whereas the document is only
+ * rewritten once every measurement that reads the live layout has finished.
+ */
+export async function applyPagerSlideshowStates(
+	page: Page,
+	collections: PagerSlideshowStates[]
+): Promise< void > {
+	for ( const { index, advertised, states, error } of collections ) {
 		if ( states.length > 1 ) {
-			await page.evaluate( preserveCapturedSlides, {
-				index,
-				slides: states.map( ( state ) => state.html ),
-			} );
+			await page.evaluate( preserveCapturedSlides, { index, slides: states } );
 		}
-		if ( states.length === controls && ! failure ) continue;
+		if ( states.length === advertised && ! error ) continue;
 
 		await page.evaluate(
-			( { stageIndex, observed, advertised, message } ) => {
+			( { stageIndex, observed, declared, message } ) => {
 				const stage = document.querySelector< HTMLElement >(
 					`[data-dla-pager-stage="${ stageIndex }"]`
 				);
 				if ( ! stage ) return;
 				stage.dataset.dlaCapturedSlideCount = String( observed );
-				stage.dataset.dlaAdvertisedSlideCount = String( advertised );
+				stage.dataset.dlaAdvertisedSlideCount = String( declared );
 				if ( message ) stage.dataset.dlaCaptureError = message;
 			},
-			{ stageIndex: index, observed: states.length, advertised: controls, message: failure }
+			{ stageIndex: index, observed: states.length, declared: advertised, message: error }
 		);
 	}
 }
