@@ -538,8 +538,18 @@ function canonicalMetadataUrl( value: unknown, documentUrl: string ): string | u
 	}
 }
 
-const RESPONSIVE_DOCUMENT_CSS =
-	'html,body{margin:0;padding:0}.data-liberation-mobile-document{display:none!important}';
+/**
+ * Class tokens marking one side of a desktop/mobile document pair emitted
+ * directly into a single exported page (see `mergeResponsiveDocuments`
+ * below). Consumers that need to recognize these as a document-scope
+ * boundary (e.g. to disambiguate a duplicate id captured on both sides)
+ * cannot assume this naming — it is declared explicitly in the capture
+ * receipt's `document_scope_classes` list rather than hardcoded downstream.
+ */
+const DESKTOP_DOCUMENT_CLASS = 'data-liberation-desktop-document';
+const MOBILE_DOCUMENT_CLASS = 'data-liberation-mobile-document';
+
+const RESPONSIVE_DOCUMENT_CSS = `html,body{margin:0;padding:0}.${ MOBILE_DOCUMENT_CLASS }{display:none!important}`;
 
 const RESPONSIVE_COUNTERPART_CLASS_PREFIX = 'data-liberation-responsive-counterpart-';
 const RESPONSIVE_COUNTERPART_TAGS = 'p,h1,h2,h3,h4,h5,h6,a,button';
@@ -547,7 +557,7 @@ const RESPONSIVE_SOURCE_ID = /^[A-Za-z][A-Za-z0-9_-]{0,79}$/;
 
 /** Switches which captured document is shown, at the detected width. */
 function documentSwitchCss( switchWidth: number ): string {
-	return `@media(max-width:${ switchWidth }px){.data-liberation-desktop-document{display:none!important}.data-liberation-mobile-document{display:contents!important}}`;
+	return `@media(max-width:${ switchWidth }px){.${ DESKTOP_DOCUMENT_CLASS }{display:none!important}.${ MOBILE_DOCUMENT_CLASS }{display:contents!important}}`;
 }
 
 /**
@@ -867,10 +877,10 @@ function assembleResponsiveHtml(
 			: ''
 	}>`;
 	const responsiveBody = `<div ${ wrapperAttributes(
-		'data-liberation-desktop-document',
+		DESKTOP_DOCUMENT_CLASS,
 		desktopBodyMatch?.[ 1 ] ?? ''
 	) }>${ desktopBody }</div><div ${ wrapperAttributes(
-		'data-liberation-mobile-document',
+		MOBILE_DOCUMENT_CLASS,
 		mobileBodyMatch?.[ 1 ] ?? ''
 	) }>${ mobileBody }</div>`;
 	const sharedStyles = styleBlocks( desktopHtml );
@@ -894,7 +904,7 @@ function assembleResponsiveHtml(
 	const shared = sharedStyleContents( desktopHtml, mobileHtml );
 	const mobileStyles = responsiveMobileStyles(
 		mobileHtml,
-		'.data-liberation-mobile-document',
+		`.${ MOBILE_DOCUMENT_CLASS }`,
 		switchWidth,
 		shared
 	);
@@ -2804,6 +2814,11 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 				entrypoint: 'website/index.html',
 				source: { url: options.sourceUrl, platform: options.platform },
 				...( options.title ? { title: options.title } : {} ),
+				// Declares the class tokens this capture tool uses to mark one side
+				// of a desktop/mobile document pair (see mergeResponsiveDocuments),
+				// so a generic consumer can recognize them as a document-scope
+				// boundary without hardcoding this tool's naming convention.
+				document_scope_classes: [ DESKTOP_DOCUMENT_CLASS, MOBILE_DOCUMENT_CLASS ],
 				routes,
 				assets,
 				assetEvidence: { path: 'asset-evidence.json', schema: ASSET_EVIDENCE_SCHEMA },
