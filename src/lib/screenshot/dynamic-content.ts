@@ -51,8 +51,10 @@ export async function expandCollapsedContent(page: Page): Promise<void> {
       const safeToActivate = (element: Element) => {
         if (element.hasAttribute('aria-haspopup')) return false;
         if (element.tagName !== 'A') return true;
-        const href = (element.getAttribute('href') || '').trim();
-        return !href || href === '#' || href.startsWith('#');
+        const rawHref = element.getAttribute('href');
+        if (rawHref === null) return true;
+        const href = rawHref.trim();
+        return href === '#' || href.startsWith('#');
       };
       document.querySelectorAll('details:not([open])').forEach((d) => {
         (d as HTMLDetailsElement).open = true;

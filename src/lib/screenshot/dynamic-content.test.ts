@@ -163,6 +163,8 @@ describe('interaction + wait helpers (Phase 1/2, browser)', () => {
       <nav id="menu"></nav>
       <a href="https://destination.test/link" aria-expanded="false" aria-controls="linked-region">Linked section</a>
       <div id="linked-region" role="region"></div>
+      <a href="" aria-expanded="false" aria-controls="reload-region">Reloading section</a>
+      <div id="reload-region" role="region"></div>
       <button aria-expanded="false" aria-controls="answer">Question?</button>
       <div id="answer" role="region" hidden>Answer.</div>
       <script>
