@@ -417,6 +417,22 @@ export const capture: LiberationHooks = {
 			root.style.scrollBehavior = scrollBehavior;
 		}, WIX_CAPTURE_CHROME_SELECTOR );
 
+		// Wix often hydrates slideshows only after they enter the viewport.
+		// Scroll the document first so collection can see every authored state.
+		await page.evaluate( async () => {
+			const step = 600;
+			const max = Math.min( document.documentElement.scrollHeight, 12_000 );
+			for ( let y = 0; y <= max; y += step ) {
+				window.scrollTo( 0, y );
+				await new Promise( ( resolve ) => setTimeout( resolve, 50 ) );
+			}
+			window.scrollTo( 0, 0 );
+		} );
+		try {
+			await page.locator( WIX_SLIDESHOW_SELECTOR ).first().waitFor( { state: 'attached', timeout: 8_000 } );
+		} catch {
+			// pages without a slideshow stay as-is
+		}
 		// Each viewport mounts its own slideshow independently, so collect
 		// distinct authored states before the runtime is stripped.
 		await collectWixSlideshowSlides( page );
