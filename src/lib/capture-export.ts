@@ -10,7 +10,7 @@ import {
 } from 'node:fs';
 import { basename, dirname, extname, join, relative, resolve, sep } from 'node:path';
 import * as cheerio from 'cheerio';
-import type { Element } from 'domhandler';
+import type { AnyNode, Element } from 'domhandler';
 import { escapeHtmlAttr } from './html-escape.js';
 import { appendScrollDrivenAnimations } from './scroll-driven-animations.js';
 import { scopeCss } from './replicate/css-scope.js';
@@ -635,8 +635,49 @@ function responsiveHtml(
 	switchWidth: number = DEFAULT_SWITCH_WIDTH
 ): string {
 	return withScrollDrivenAnimations(
-		assembleResponsiveHtml( desktopHtml, mobileHtml, switchWidth )
+		withMobileLinkedStyles(
+			assembleResponsiveHtml( desktopHtml, mobileHtml, switchWidth ),
+			mobileHtml,
+			switchWidth
+		)
 	);
+}
+
+function withMobileLinkedStyles( html: string, mobileHtml: string, switchWidth: number ): string {
+	const mobileHead = /<head\b[^>]*>([\s\S]*?)<\/head\s*>/i.exec( mobileHtml )?.[ 1 ];
+	if ( ! mobileHead || ! /<link\b/i.test( mobileHead ) ) return html;
+	return html.replace( /(<head\b[^>]*>)([\s\S]*?)(<\/head\s*>)/i, ( _match, open: string, head: string, close: string ) => {
+		const $ = cheerio.load( head, undefined, false );
+		const mobile = cheerio.load( mobileHead, undefined, false );
+		const selector = 'style,link[rel~="stylesheet" i][href]:not([rel~="alternate" i]):not([disabled])';
+		const key = ( node: cheerio.Cheerio< AnyNode > ): string =>
+			node.is( 'style' )
+				? `style:${ node.html()?.trim() }`
+				: `link:${ node.attr( 'href' ) }:${ node.attr( 'media' ) ?? '' }`;
+		const existing = new Map< string, cheerio.Cheerio< AnyNode > >(
+			$( selector ).toArray().map( node => [ key( $( node ) ), $( node ) ] )
+		);
+		const mobileStyles = mobile( selector ).toArray();
+		for ( let index = 0; index < mobileStyles.length; index++ ) {
+			const link = mobile( mobileStyles[ index ] );
+			if ( ! link.is( 'link' ) || ! link.attr( 'href' ) || existing.has( key( link ) ) ) continue;
+			// Separate media gates preserve query lists and negated source media without
+			// rewriting their logic. The import is localized by the normal resource pass.
+			const href = JSON.stringify( link.attr( 'href' ) ).replace( /</g, '\\3c ' );
+			const style = $( '<style>' )
+				.attr( 'media', link.attr( 'media' ) ?? 'all' )
+				.text( `@import url(${ href }) (max-width:${ switchWidth }px);` );
+			const following = mobileStyles.slice( index + 1 )
+				.map( node => existing.get( key( mobile( node ) ) ) ).find( Boolean );
+			const preceding = mobileStyles.slice( 0, index ).reverse()
+				.map( node => existing.get( key( mobile( node ) ) ) ).find( Boolean );
+			if ( following ) following.before( style );
+			else if ( preceding ) preceding.after( style );
+			else $.root().append( style );
+			existing.set( key( link ), style );
+		}
+		return `${ open }${ $.html() }${ close }`;
+	} );
 }
 
 /**
