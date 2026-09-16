@@ -44,12 +44,13 @@ import { connectBrowser } from '../browser-kit/index.js';
 interface MockContext { newPage: () => Promise<unknown>; addInitScript: (script: unknown) => Promise<void>; close: () => Promise<void> }
 interface MockBrowser { newContext: (opts?: unknown) => Promise<MockContext>; close: () => Promise<void> }
 
-function makeGoodPage(gotoStatus = 200) {
+function makeGoodPage(gotoStatus: number | ((url: string) => number) = 200) {
   let currentUrl = '';
+  const statusOf = (url: string) => typeof gotoStatus === 'function' ? gotoStatus(url) : gotoStatus;
   return {
     goto: vi.fn().mockImplementation(async (url: string) => {
       currentUrl = url;
-      return { status: () => gotoStatus };
+      return { status: () => statusOf(currentUrl) };
     }),
     content: vi.fn().mockResolvedValue('<html><body>hello</body></html>'),
     screenshot: vi.fn().mockResolvedValue(Buffer.from('fakepng')),
@@ -367,10 +368,50 @@ describe('captureScreenshots', () => {
     }
   });
 
-  it('records a failure entry when goto returns 4xx', async () => {
+  it('skips discovered routes that return HTTP 404 instead of failing capture', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ss-'));
+    try {
+      (connectBrowser as ReturnType<typeof vi.fn>).mockResolvedValue(
+        makeMockBrowser(() => makeGoodPage((url) => url.includes('/ghost') ? 404 : 200))
+      );
+      const result = await captureScreenshots({
+        urls: ['https://example.com/', 'https://example.com/ghost'],
+        primaryUrl: 'https://example.com/',
+        outputDir: dir,
+        concurrency: 1,
+        settleMs: 0,
+      });
+      expect(result.failed).toBe(0);
+      expect(result.skipped).toBeGreaterThan(0);
+      const failures = JSON.parse(readFileSync(join(dir, 'screenshots', 'failures.json'), 'utf8'));
+      expect(failures.some((f: { url: string; error: string }) => f.url === 'https://example.com/ghost' && f.error === 'HTTP 404')).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('still fails when the source URL itself returns HTTP 404', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'ss-'));
     try {
       (connectBrowser as ReturnType<typeof vi.fn>).mockResolvedValue(makeMockBrowser(() => makeGoodPage(404)));
+      const result = await captureScreenshots({
+        urls: ['https://example.com/'],
+        primaryUrl: 'https://example.com/',
+        outputDir: dir,
+        concurrency: 1,
+        settleMs: 0,
+      });
+      expect(result.failed).toBeGreaterThan(0);
+      expect(result.skipped).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('records a failure entry when goto returns a non-absent 4xx', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ss-'));
+    try {
+      (connectBrowser as ReturnType<typeof vi.fn>).mockResolvedValue(makeMockBrowser(() => makeGoodPage(403)));
       const result = await captureScreenshots({
         urls: ['https://example.com/a'],
         outputDir: dir,
@@ -379,7 +420,7 @@ describe('captureScreenshots', () => {
       });
       expect(result.failed).toBeGreaterThan(0);
       const failures = JSON.parse(readFileSync(join(dir, 'screenshots', 'failures.json'), 'utf8'));
-      expect(failures.some((f: { stage: string }) => f.stage === 'goto')).toBe(true);
+      expect(failures.some((f: { stage: string; error: string }) => f.stage === 'goto' && f.error === 'HTTP 403')).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

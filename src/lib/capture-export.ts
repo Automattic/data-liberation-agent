@@ -20,6 +20,7 @@ import {
 	buildLayoutGeometryProof,
 	type GeometryCapture,
 } from './screenshot/layout-geometry-proof.js';
+import { failuresAreAbsentDocument } from './screenshot/absent-document.js';
 import { selfContainWebsite } from './self-contain.js';
 import { wireCapturedDialogs } from './static-dialogs.js';
 import { rewriteMediaUrls } from './streaming/media-url-rewrite.js';
@@ -1935,12 +1936,22 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 			continue;
 		}
 		if ( ! entry.html ) {
-			routeCaptureDiagnostics.push( {
-				code: 'route_capture_failed',
-				url,
-				reason: routeFailureReasons.get( url )?.join( '; ' )
-					?? 'capture completed without producing page HTML',
-			} );
+			const reason = routeFailureReasons.get( url )?.join( '; ' )
+				?? 'capture completed without producing page HTML';
+			if ( failuresAreAbsentDocument( options.failures, url ) ) {
+				excludedRoutes.push( url );
+				routeCaptureDiagnostics.push( {
+					code: 'route_not_found',
+					url,
+					reason,
+				} );
+			} else {
+				routeCaptureDiagnostics.push( {
+					code: 'route_capture_failed',
+					url,
+					reason,
+				} );
+			}
 			continue;
 		}
 		const capturedHtmlPath = resolve( outputDir, entry.html );

@@ -2959,6 +2959,60 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		expect( diagnostics.discoveryDiagnostics ).toEqual( receipt.discoveryDiagnostics );
 	} );
 
+	it( 'names a discovered HTTP 404 as route_not_found instead of a capture failure', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-' ) );
+		dirs.push( outputDir );
+		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
+		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
+		writeFileSync( join( outputDir, 'html', 'home.html' ), '<h1>Home</h1>' );
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( {
+				version: 1,
+				entries: {
+					'https://example.com/': { html: 'html/home.html' },
+					'https://example.com/shop/p/the-echo-vase': {},
+				},
+			} )
+		);
+
+		const failures: Array< { url: string; viewport: string; stage: string; error: string } > = [
+			{
+				url: 'https://example.com/shop/p/the-echo-vase',
+				viewport: 'desktop',
+				stage: 'goto',
+				error: 'HTTP 404',
+			},
+			{
+				url: 'https://example.com/shop/p/the-echo-vase',
+				viewport: 'mobile',
+				stage: 'goto',
+				error: 'HTTP 404',
+			},
+		];
+		const receiptPath = exportWebsiteCapture( {
+			outputDir,
+			sourceUrl: 'https://example.com/',
+			platform: 'fake',
+			summary: { routesFailed: 0, routesSkipped: 1 },
+			failures,
+		} );
+
+		const receipt = JSON.parse( readFileSync( receiptPath, 'utf8' ) );
+		expect( receipt.routes ).toEqual( [
+			{ url: 'https://example.com/', path: 'website/index.html' },
+		] );
+		expect( receipt.excludedRoutes ).toEqual( [ 'https://example.com/shop/p/the-echo-vase' ] );
+		expect( receipt.discoveryDiagnostics ).toEqual( [
+			{
+				code: 'route_not_found',
+				url: 'https://example.com/shop/p/the-echo-vase',
+				reason: 'desktop/goto: HTTP 404; mobile/goto: HTTP 404',
+			},
+		] );
+		expect( receipt.summary.routesFailed ).toBe( 0 );
+	} );
+
 	it( 'names a route whose HTML file went missing on disk after capture claimed success', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-' ) );
 		dirs.push( outputDir );
