@@ -77,8 +77,7 @@ describe( 'captureScrollStates', () => {
 				expect( toggle.thresholdPx ).toBeLessThanOrEqual( 200 );
 
 				const styleTarget = toggle.styleTargets.find( ( target ) => target.id === 'logo' );
-				expect( styleTarget ).toBeDefined();
-				expect( styleTarget.properties[ 'max-height' ] ).toEqual( { rest: '100px', scrolled: '50px' } );
+				expect( styleTarget?.properties[ 'max-height' ] ).toEqual( { rest: '100px', scrolled: '50px' } );
 
 				// The page must be left scrolled back to the top (clean state for
 				// subsequent baseline captures — screenshots, geometry, etc.).
