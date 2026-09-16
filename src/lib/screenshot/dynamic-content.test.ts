@@ -297,6 +297,89 @@ describe('interaction + wait helpers (Phase 1/2, browser)', () => {
     await page.close();
   });
 
+  it('keeps the LAST panel\'s content when the runtime unmounts closed panels after an exit animation', async () => {
+    const page = await browser.newPage();
+    // Regression for the single-open accordion whose LAST item shipped empty.
+    // Real Radix runtimes do not unmount a closed panel's children immediately:
+    // Presence keeps them mounted through the ~200ms close animation, and only
+    // THEN removes them (and re-applies hidden). Restoring captured content
+    // without waiting for that deferred unmount misreads the still-mounted
+    // panel as "already has content", skips the write-back, and the pending
+    // unmount deletes the panel's only copy of its answer — which is exactly
+    // what always happened to the most recently closed (i.e. LAST) item.
+    await page.setContent(`
+      <button type="button" aria-expanded="false" id="exit-t1">Question one?</button>
+      <div id="exit-p1" role="region" aria-labelledby="exit-t1" hidden></div>
+      <button type="button" aria-expanded="false" id="exit-t2">Question two?</button>
+      <div id="exit-p2" role="region" aria-labelledby="exit-t2" hidden></div>
+      <button type="button" aria-expanded="false" id="exit-t3">Question three?</button>
+      <div id="exit-p3" role="region" aria-labelledby="exit-t3" hidden></div>
+      <script>
+        const answers = { 'exit-p1': '<p>First exit answer.</p>', 'exit-p2': '<p>Second exit answer.</p>', 'exit-p3': '<p>Third exit answer.</p>' };
+        const exitTimers = {};
+        function closeWithExitAnimation(triggerId) {
+          const trigger = document.getElementById(triggerId);
+          const panel = document.getElementById('exit-p' + triggerId.slice(-1));
+          trigger.setAttribute('aria-expanded', 'false');
+          // aria-expanded flips immediately, but the unmount lands ~250ms later.
+          exitTimers[panel.id] = setTimeout(() => {
+            panel.innerHTML = '';
+            panel.setAttribute('hidden', '');
+          }, 250);
+        }
+        function openPanel(triggerId) {
+          const trigger = document.getElementById(triggerId);
+          const panel = document.getElementById('exit-p' + triggerId.slice(-1));
+          if (exitTimers[panel.id]) { clearTimeout(exitTimers[panel.id]); exitTimers[panel.id] = null; }
+          trigger.setAttribute('aria-expanded', 'true');
+          panel.removeAttribute('hidden');
+          panel.innerHTML = answers[panel.id];
+        }
+        document.querySelectorAll('button[id^="exit-t"]').forEach((trigger) => {
+          trigger.addEventListener('click', () => {
+            const opening = trigger.getAttribute('aria-expanded') === 'false';
+            if (!opening) { closeWithExitAnimation(trigger.id); return; }
+            document.querySelectorAll('button[id^="exit-t"]').forEach((other) => {
+              if (other !== trigger && other.getAttribute('aria-expanded') === 'true') closeWithExitAnimation(other.id);
+            });
+            openPanel(trigger.id);
+          });
+        });
+      </script>
+    `);
+
+    const hydrated = await hydrateDisclosureContent(page);
+    expect(hydrated).toHaveLength(3);
+    expect(hydrated.every((record) => record.status === 'captured' && record.kind === 'disclosure')).toBe(true);
+    // Give any un-fixed pending exit unmount time to land: with the fix there is
+    // nothing pending (the restore waited for it), so this is a no-op there.
+    await page.waitForTimeout(600);
+    // The diagnostics carry every panel's captured content...
+    expect(hydrated.map((record) => record.dialog?.html)).toEqual([
+      expect.stringContaining('First exit answer.'),
+      expect.stringContaining('Second exit answer.'),
+      expect.stringContaining('Third exit answer.'),
+    ]);
+    // ...and the DOM must too: every panel collapsed, every panel populated —
+    // the LAST one specifically, which is the item this bug always destroyed.
+    const state = await page.evaluate(() =>
+      ['exit-p1', 'exit-p2', 'exit-p3'].map((id) => {
+        const panel = document.getElementById(id)!;
+        return { hidden: panel.hasAttribute('hidden'), text: panel.textContent?.trim() };
+      }),
+    );
+    expect(state).toEqual([
+      { hidden: true, text: 'First exit answer.' },
+      { hidden: true, text: 'Second exit answer.' },
+      { hidden: true, text: 'Third exit answer.' },
+    ]);
+    const html = await page.content();
+    expect(html).toContain('First exit answer.');
+    expect(html).toContain('Second exit answer.');
+    expect(html).toContain('Third exit answer.');
+    await page.close();
+  });
+
   it('rescans for disclosures that become eligible during hydration', async () => {
     const page = await browser.newPage();
     await page.setContent(`
