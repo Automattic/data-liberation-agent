@@ -33,18 +33,76 @@ export function isRemoteAssetUrl( value: string ): boolean {
 // to the source CDN rather than an inert pointer — drop the comment entirely.
 const SOURCE_MAPPING_COMMENT = /\/\*[#@]\s*sourceMappingURL=\s*([^\s*]+)\s*\*\//gi;
 
+function isEmptyCssAssetUrl( reference: string ): boolean {
+	const url = reference.trim();
+	if ( url === EMPTY_CSS_URL ) return true;
+	if ( ! url.startsWith( EMPTY_CSS_URL ) ) return false;
+	const rest = url.slice( EMPTY_CSS_URL.length );
+	return rest.startsWith( '#' ) || rest.startsWith( '?' );
+}
+
+function splitTopLevel( value: string, separator: string ): string[] {
+	const parts: string[] = [];
+	let current = '';
+	let depth = 0;
+	let quote = '';
+	for ( const char of value ) {
+		if ( quote ) {
+			current += char;
+			if ( char === quote ) quote = '';
+			continue;
+		}
+		if ( char === '"' || char === "'" ) {
+			quote = char;
+			current += char;
+			continue;
+		}
+		if ( char === '(' ) depth += 1;
+		else if ( char === ')' ) depth -= 1;
+		else if ( char === separator && depth === 0 ) {
+			parts.push( current );
+			current = '';
+			continue;
+		}
+		current += char;
+	}
+	parts.push( current );
+	return parts;
+}
+
+function omitEmptyFontFaceSrc( css: string ): string {
+	return css.replace( /(@font-face\s*\{)([^{}]*)\}/gi, ( _block, open: string, body: string ) => {
+		const declarations = splitTopLevel( body, ';' )
+			.map( ( declaration ) => {
+				const prefix = /^\s*src\s*:\s*/i.exec( declaration );
+				if ( ! prefix ) return declaration;
+				const kept = splitTopLevel( declaration.slice( prefix[ 0 ].length ), ',' ).filter( ( part ) => {
+					if ( ! part.trim() ) return false;
+					const urlMatch = /url\(\s*(?:["']([^"']*)["']|([^)]+))\s*\)/i.exec( part );
+					if ( ! urlMatch ) return true;
+					return ! isEmptyCssAssetUrl( ( urlMatch[ 1 ] ?? urlMatch[ 2 ] ?? '' ).trim() );
+				} );
+				return kept.length === 0 ? '' : `${ prefix[ 0 ] }${ kept.join( ',' ) }`;
+			} )
+			.filter( ( declaration ) => declaration.trim() !== '' );
+		return `${ open }${ declarations.join( ';' ) }}`;
+	} );
+}
+
 export function stripRemoteCssUrls( css: string ): string {
-	return css
-		.replace( SOURCE_MAPPING_COMMENT, ( match, reference ) =>
-			isRemoteAssetUrl( reference ) ? '' : match
-		)
-		.replace( /url\(\s*(?:["']([^"']+)["']|([^\s)'";]+))\s*\)/gi, ( match, quoted, bare ) => {
-			const reference = quoted ?? bare;
-			return reference && isRemoteAssetUrl( reference ) ? `url("${ EMPTY_CSS_URL }")` : match;
-		} )
-		.replace( /@import\s+(?:url\(\s*)?["']([^"']+)["'][^;]*;?/gi, ( match, reference ) =>
-			isRemoteAssetUrl( reference ) ? `@import "${ EMPTY_CSS_URL }";` : match
-		);
+	return omitEmptyFontFaceSrc(
+		css
+			.replace( SOURCE_MAPPING_COMMENT, ( match, reference ) =>
+				isRemoteAssetUrl( reference ) ? '' : match
+			)
+			.replace( /url\(\s*(?:["']([^"']+)["']|([^\s)'";]+))\s*\)/gi, ( match, quoted, bare ) => {
+				const reference = quoted ?? bare;
+				return reference && isRemoteAssetUrl( reference ) ? `url("${ EMPTY_CSS_URL }")` : match;
+			} )
+			.replace( /@import\s+(?:url\(\s*)?["']([^"']+)["'][^;]*;?/gi, ( match, reference ) =>
+				isRemoteAssetUrl( reference ) ? `@import "${ EMPTY_CSS_URL }";` : match
+			)
+	);
 }
 
 const PLACEHOLDER_SRCSET_CANDIDATE =

@@ -3611,6 +3611,70 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		);
 	} );
 
+	it( 'omits failed @font-face src sentinels so captured woff and ttf can load', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-font-face-src-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'screenshots', 'resources/css', 'resources/fonts' ] )
+			mkdirSync( join( outputDir, path ), { recursive: true } );
+		const cssUrl = 'https://cdn.example/css/site.css';
+		const eotUrl = 'https://cdn.example/fonts/icon.eot';
+		const woffUrl = 'https://cdn.example/fonts/icon.woff';
+		const ttfUrl = 'https://cdn.example/fonts/icon.ttf';
+		const missingBackground = 'https://cdn.example/images/missing.jpg';
+		writeFileSync(
+			join( outputDir, 'html', 'homepage.html' ),
+			`<html><head><link rel="stylesheet" href="${ cssUrl }"></head><body><span class="icon"></span></body></html>`
+		);
+		writeFileSync(
+			join( outputDir, 'resources', 'css', 'site.css' ),
+			`@font-face{font-family:"icon";src:url("${ eotUrl }");src:url("${ eotUrl }?#iefix") format("embedded-opentype"),url("${ woffUrl }") format("woff"),url("${ ttfUrl }") format("truetype")}.hero{background:url("${ missingBackground }")}`
+		);
+		writeFileSync( join( outputDir, 'resources', 'fonts', 'icon.woff' ), 'woff' );
+		writeFileSync( join( outputDir, 'resources', 'fonts', 'icon.ttf' ), 'ttf' );
+		writeFileSync(
+			join( outputDir, 'resources', 'manifest.json' ),
+			JSON.stringify( {
+				version: 1,
+				resources: {
+					[ cssUrl ]: { path: 'resources/css/site.css', contentType: 'text/css' },
+					[ woffUrl ]: { path: 'resources/fonts/icon.woff', contentType: 'font/woff' },
+					[ ttfUrl ]: { path: 'resources/fonts/icon.ttf', contentType: 'font/ttf' },
+				},
+				failures: [
+					{
+						url: eotUrl,
+						error: 'render dependency has unsupported content type application/vnd.ms-fontobject',
+					},
+				],
+			} )
+		);
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( {
+				version: 1,
+				entries: { 'https://example.com/': { html: 'html/homepage.html' } },
+			} )
+		);
+
+		exportWebsiteCapture( {
+			outputDir,
+			sourceUrl: 'https://example.com/',
+			platform: 'fake',
+			summary: {},
+			failures: [],
+		} );
+
+		const css = readFileSync( join( outputDir, 'website', 'css', 'site.css' ), 'utf8' );
+		expect( css ).not.toMatch( /@font-face\{[^}]*data:application\/octet-stream;base64,/ );
+		expect( css ).toContain( 'url("/fonts/icon.woff") format("woff")' );
+		expect( css ).toContain( 'url("/fonts/icon.ttf") format("truetype")' );
+		expect( css ).not.toContain( 'embedded-opentype' );
+		expect( css ).not.toContain( '.eot' );
+		expect( css ).toContain( '.hero{background:url("data:application/octet-stream;base64,")}' );
+		expect( readFileSync( join( outputDir, 'website', 'fonts', 'icon.woff' ), 'utf8' ) ).toBe( 'woff' );
+		expect( readFileSync( join( outputDir, 'website', 'fonts', 'icon.ttf' ), 'utf8' ) ).toBe( 'ttf' );
+	} );
+
 	it( 'preserves downloaded backgrounds with HTML-escaped CDN queries in the portable page', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-css-media-export-' ) );
 		dirs.push( outputDir );
