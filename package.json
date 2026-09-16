@@ -38,8 +38,6 @@
     "build": "tsc && node scripts/copy-runtime-assets.mjs && node scripts/build-mcp-bundle.mjs",
     "build:mcp-bundle": "node scripts/build-mcp-bundle.mjs",
     "copy-runtime-assets": "node scripts/copy-runtime-assets.mjs",
-    "check:versions": "node scripts/check-versions.mjs",
-    "version:sync": "node scripts/sync-versions.mjs",
     "test": "vitest run",
     "test:package": "node scripts/test-package.mjs",
     "test:watch": "vitest",
