@@ -142,6 +142,27 @@ ${'<div class="ad-slot">ad</div>'.repeat(1001)}
   } finally { await browser.close(); }
 });
 
+it('removes the Lovable attribution badge without touching owner content', async () => {
+  const { lovableAdapter } = await import('../adapters/lovable/index.js');
+  const lovablePolicy = cleanupPolicy(lovableAdapter.liberation?.cleanupRules);
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage();
+    await page.setContent(`<!doctype html><html><body>
+      <main><h1>Owner business</h1><p>Real owner content to retain.</p></main>
+      <aside id="lovable-badge" role="complementary" aria-label="Made with Lovable">
+        <a id="lovable-badge-cta" href="https://lovable.dev/projects/abc?utm_source=lovable-badge">Made with Lovable</a>
+      </aside>
+    </body></html>`);
+    const report = await applySourceCleanup(page, lovablePolicy);
+    expect(await page.locator('#lovable-badge').count()).toBe(0);
+    expect(await page.locator('main').innerText()).toContain('Owner business');
+    expect(report.removed).toBeGreaterThanOrEqual(1);
+    expect(report.failures).toEqual([]);
+    expect(report.records.some((record) => record.rule === 'lovable-badge')).toBe(true);
+  } finally { await browser.close(); }
+}, 20_000);
+
 it('reports invalid rules rather than silently certifying cleanup', async () => {
   const browser = await chromium.launch();
   try {
