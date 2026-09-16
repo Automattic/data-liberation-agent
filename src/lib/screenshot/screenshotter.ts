@@ -25,6 +25,7 @@ import {
 } from './interaction-capture.js';
 import { hydrateDisclosureContent } from './dynamic-content.js';
 import { JsAggregator } from './js-aggregator.js';
+import { isAbsentDocumentError, isSourceCaptureUrl } from './absent-document.js';
 import { ManifestQueue, type ManifestEntry, type FailureEntry } from './manifest-queue.js';
 import { validateOutputDir, planArtifacts, type ArtifactPlan } from './output-layout.js';
 import { waitForStable, triggerLazyLoad, dismissOverlays } from './page-helpers.js';
@@ -70,7 +71,8 @@ const MAX_CAPTURED_DIALOGS = 8;
  *    │                                                 newPage
  *    │                                                   │
  *    │                                                   ▼
- *    │                                                 goto ─── 4xx/throw ──▶ failures[goto]
+ *    │                                                 goto ─── 404/410 (discovered) ──▶ skipped
+ *    │                                                   │      other 4xx/throw ──▶ failures[goto]
  *    │                                                   │
  *    │                                                   ▼
  *    │                                                 waitForStable
@@ -1424,7 +1426,6 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 
 		for ( const f of urlFailures ) {
 			await manifest.recordFailure( f );
-			allFailures.push( f );
 		}
 		await manifest.updateEntry( url, entry );
 
@@ -1437,11 +1438,22 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			);
 		}
 
+		const absentFailures = urlFailures.filter(
+			( failure ) => isAbsentDocumentError( failure.error )
+		);
+		const captureFailures =
+			isSourceCaptureUrl( url, opts.primaryUrl )
+				? urlFailures
+				: urlFailures.filter( ( failure ) => ! isAbsentDocumentError( failure.error ) );
 		if ( urlFailures.length === 0 ) {
 			captured++;
 			sendLog( server, `[ok] ${ url }` );
+		} else if ( captureFailures.length === 0 && absentFailures.length > 0 ) {
+			skipped++;
+			sendLog( server, `[skip] ${ url } (${ absentFailures[ 0 ].error })` );
 		} else {
-			sendLog( server, `[fail] ${ url } (${ urlFailures.length } failures)` );
+			allFailures.push( ...captureFailures );
+			sendLog( server, `[fail] ${ url } (${ captureFailures.length } failures)` );
 		}
 		completed++;
 		opts.onProgress?.( completed, totalUrls, url );
