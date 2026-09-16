@@ -673,6 +673,31 @@ describe( 'exportWebsiteCapture', () => {
 		).toBe( true );
 	} );
 
+	it( 'treats capture geometry ids and runtime UUIDs as equivalence, not a second document', () => {
+		const desktop =
+			'<html><body><main><div id="desktop-target-0"><h1>About</h1><section id="AE7E84B0-6F1E-4160-B12C-99F8F4749F09"><p>Hello</p></section></div></main></body></html>';
+		const mobile =
+			'<html><body><main><div id="mobile-target-0"><h1>About</h1><section id="C0834C17-B49B-4A41-88EB-72DE5F404700"><p>Hello</p></section></div></main></body></html>';
+		expect( documentsDiffer( desktop, mobile ) ).toBe( false );
+		expect(
+			documentsDiffer(
+				desktop,
+				mobile.replace( '</section>', '</section><aside id="mobile-menu">Menu</aside>' )
+			)
+		).toBe( true );
+	} );
+
+	it( 'treats a viewport-injected YUI widget as equivalence, not a second document', () => {
+		const desktop =
+			'<html><body><div id="siteWrapper"><header><nav><a href="/">Home</a></nav></header><main><h1>About</h1><p>Hello</p></main></div></body></html>';
+		const mobile =
+			'<html><body><div id="yui_3_17_2_1_1789567315719_163" class="yui3-widget sqs-mobile-info-bar"><div id="yui_3_17_2_1_1789567315719_165"><a href="tel:1">Call</a></div></div><div id="siteWrapper"><header><nav><a href="/">Home</a></nav></header><main><h1>About</h1><p>Hello</p></main></div></body></html>';
+		expect( documentsDiffer( desktop, mobile ) ).toBe( false );
+		expect(
+			documentsDiffer( desktop, mobile.replace( '<p>Hello</p>', '<p>Hello</p><p>Mobile extra</p>' ) )
+		).toBe( true );
+	} );
+
 	it( 'treats viewport-only iframe embeds as equivalence, not a second document', () => {
 		const desktop =
 			'<html><body><main><h1>Contact</h1><form action="/form"><input name="email"></form>' +
@@ -1262,7 +1287,10 @@ describe( 'exportWebsiteCapture', () => {
 		const missingFont = 'https://example.com/fonts/missing.woff2';
 		writeFileSync( join( outputDir, 'html', 'homepage.html' ), `<link rel="stylesheet" href="${ cssUrl }">` );
 		writeFileSync( join( outputDir, 'html', 'about.html' ), `<link rel="stylesheet" href="${ cssUrl }">` );
-		writeFileSync( join( outputDir, 'html-mobile', 'homepage.html' ), `<img src="${ mobileUrl }">` );
+		writeFileSync(
+			join( outputDir, 'html-mobile', 'homepage.html' ),
+			`<aside id="mobile-menu">Menu</aside><img src="${ mobileUrl }">`
+		);
 		writeFileSync( join( outputDir, 'resources/css/site.css' ), `body{background:url("${ imageUrl }")}@font-face{src:url("${ missingFont }")}` );
 		writeFileSync( join( outputDir, 'resources/media/background.png' ), 'image' );
 		writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( { version: 1, entries: {
