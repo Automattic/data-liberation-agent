@@ -797,6 +797,47 @@ describe( 'exportWebsiteCapture', () => {
 		} );
 	} );
 
+	it( 'collapses before viewport peeling so hidden-chrome snapshots stay one document', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-collapse-before-peel-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
+			mkdirSync( join( outputDir, path ), { recursive: true } );
+		const inner =
+			'<header><nav><a href="/">Home</a></nav></header><main><h1>About</h1><p>Hello</p></main>';
+		writeFileSync(
+			join( outputDir, 'html', 'homepage.html' ),
+			`<html><body>${ inner }</body></html>`
+		);
+		writeFileSync(
+			join( outputDir, 'html-mobile', 'homepage.html' ),
+			`<html><body><div id="yui_3_17_2_1_1" class="yui3-widget sqs-mobile-info-bar" style="position:fixed;bottom:0"><a href="tel:1">Call</a></div>${ inner }</body></html>`
+		);
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( {
+				version: 1,
+				entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },
+			} )
+		);
+
+		exportWebsiteCapture( {
+			outputDir,
+			sourceUrl: 'https://example.com/',
+			platform: 'squarespace',
+			summary: {},
+			failures: [],
+		} );
+
+		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
+		expect( html ).not.toContain( 'data-liberation-desktop-document' );
+		expect( html ).not.toContain( 'data-liberation-mobile-document' );
+		const receipt = JSON.parse( readFileSync( join( outputDir, 'capture-receipt.json' ), 'utf8' ) );
+		expect( receipt.routes[ 0 ].responsiveVariants ).toMatchObject( {
+			variants: 1,
+			outcome: 'collapsed-equivalent',
+		} );
+	} );
+
 	it( 'collapses structurally equivalent responsive variants into one document and records why', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-collapse-equivalent-' ) );
 		dirs.push( outputDir );
@@ -1321,11 +1362,17 @@ describe( 'exportWebsiteCapture', () => {
 		const imageUrl = 'https://example.com/media/background.png';
 		const mobileUrl = 'https://cdn.example/mobile-only.png';
 		const missingFont = 'https://example.com/fonts/missing.woff2';
-		writeFileSync( join( outputDir, 'html', 'homepage.html' ), `<link rel="stylesheet" href="${ cssUrl }">` );
-		writeFileSync( join( outputDir, 'html', 'about.html' ), `<link rel="stylesheet" href="${ cssUrl }">` );
+		writeFileSync(
+			join( outputDir, 'html', 'homepage.html' ),
+			`<html><body><link rel="stylesheet" href="${ cssUrl }"></body></html>`
+		);
+		writeFileSync(
+			join( outputDir, 'html', 'about.html' ),
+			`<html><body><link rel="stylesheet" href="${ cssUrl }"></body></html>`
+		);
 		writeFileSync(
 			join( outputDir, 'html-mobile', 'homepage.html' ),
-			`<aside id="mobile-menu">Menu</aside><img src="${ mobileUrl }">`
+			`<html><body><aside id="mobile-menu">Menu</aside><img src="${ mobileUrl }"></body></html>`
 		);
 		writeFileSync( join( outputDir, 'resources/css/site.css' ), `body{background:url("${ imageUrl }")}@font-face{src:url("${ missingFont }")}` );
 		writeFileSync( join( outputDir, 'resources/media/background.png' ), 'image' );
@@ -3573,11 +3620,11 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		const mobileUrl = 'https://cdn.example/image?url=https%3A%2F%2Fimages.example%2Fphoto%2520one.jpg%3Fa%3D1%26b%3D2&width=600&format=webp';
 		writeFileSync(
 			join( outputDir, 'html', 'homepage.html' ),
-			readFileSync( fileURLToPath( new URL( '../../test/fixtures/clearlake-css-background.html', import.meta.url ) ), 'utf8' )
+			`<html><body>${ readFileSync( fileURLToPath( new URL( '../../test/fixtures/clearlake-css-background.html', import.meta.url ) ), 'utf8' ) }</body></html>`
 		);
 		writeFileSync(
 			join( outputDir, 'html-mobile', 'homepage.html' ),
-			'<main><div class="mobile-background" style="background-image:url(&quot;https://cdn.example/image?url=https%3A%2F%2Fimages.example%2Fphoto%2520one.jpg%3Fa%3D1%26b%3D2&amp;width=600&amp;format=webp&quot;)">Mobile</div><div class="missing-background" style="background:url(https://cdn.example/missing.jpg?width=600&amp;format=webp)">Missing</div></main>'
+			'<html><body><main><div class="mobile-background" style="background-image:url(&quot;https://cdn.example/image?url=https%3A%2F%2Fimages.example%2Fphoto%2520one.jpg%3Fa%3D1%26b%3D2&amp;width=600&amp;format=webp&quot;)">Mobile</div><div class="missing-background" style="background:url(https://cdn.example/missing.jpg?width=600&amp;format=webp)">Missing</div></main></body></html>'
 		);
 		writeFileSync( join( outputDir, 'media', 'background.jpg' ), 'desktop-image' );
 		writeFileSync( join( outputDir, 'media', 'background-mobile.webp' ), 'mobile-image' );

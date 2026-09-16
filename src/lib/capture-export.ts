@@ -1997,29 +1997,32 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 			} );
 			continue;
 		}
-		const desktopHtml = normalizedDeclarativeFormEmbeds(
-			renderedHtml( readFileSync( capturedHtmlPath, 'utf8' ) )
-		);
-		let mobileHtml: string | undefined;
+		const rawDesktopHtml = readFileSync( capturedHtmlPath, 'utf8' );
 		const mobileHtmlPath = resolve( outputDir, entry.html.replace( /^html[\\/]/, 'html-mobile/' ) );
-		if ( pathWithin( outputDir, mobileHtmlPath ) && existsSync( mobileHtmlPath ) ) {
-			mobileHtml = normalizedDeclarativeFormEmbeds(
-				renderedHtml( readFileSync( mobileHtmlPath, 'utf8' ) )
-			);
-		}
-		// The source's own switching point: the width its desktop document stops
-		// adapting at, learned during capture. Falls back only when undetected.
+		const rawMobileHtml =
+			pathWithin( outputDir, mobileHtmlPath ) && existsSync( mobileHtmlPath )
+				? readFileSync( mobileHtmlPath, 'utf8' )
+				: undefined;
 		const detectedFloor =
 			typeof entry.fluid?.canvasFloor === 'number' && entry.fluid.canvasFloor > 0
 				? Math.round( entry.fluid.canvasFloor )
 				: undefined;
 		if ( detectedFloor ) switchWidths.push( detectedFloor );
 		if ( entry.fluid ) fluidReports.push( entry.fluid );
-		const responsiveVariants = responsiveVariantEvidence( desktopHtml, mobileHtml );
+		const responsiveVariants = responsiveVariantEvidence( rawDesktopHtml, rawMobileHtml );
+		const desktopHtml = normalizedDeclarativeFormEmbeds( renderedHtml( rawDesktopHtml ) );
+		const mobileHtml =
+			rawMobileHtml === undefined
+				? undefined
+				: normalizedDeclarativeFormEmbeds( renderedHtml( rawMobileHtml ) );
 		const capturedHtml =
-			mobileHtml === undefined
+			rawMobileHtml === undefined
 				? desktopHtml
-				: responsiveHtml( desktopHtml, mobileHtml, detectedFloor );
+				: responsiveVariants?.outcome === 'dual-structural'
+					? responsiveHtml( desktopHtml, mobileHtml as string, detectedFloor )
+					: normalizedDeclarativeFormEmbeds(
+							renderedHtml( responsiveHtml( rawDesktopHtml, rawMobileHtml, detectedFloor ) )
+					  );
 		// safeCapturedPageHtml removes <base>; record its stylesheet semantics first.
 		const styleHoistContext = capturedStyleHoistContext( capturedHtml );
 		const sanitized = safeCapturedPageHtml( capturedHtml );
