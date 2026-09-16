@@ -559,6 +559,9 @@ async function snapshotDialog(
 		.evaluate( ( dialog, capturedSelector ) => {
 			const clone = dialog.cloneNode( true ) as Element;
 			clone.removeAttribute( 'data-lib-interaction-dialog' );
+			// The portable disclosure's block fallback must not collapse flex/grid
+			// layouts whose descendants rely on the opened root's layout mode.
+			( clone as HTMLElement ).style.setProperty( 'display', getComputedStyle( dialog ).display, 'important' );
 			for ( const unsafe of Array.from( clone.querySelectorAll( 'script,style,noscript,iframe' ) ) )
 				unsafe.remove();
 			for ( const element of [ clone, ...Array.from( clone.querySelectorAll( '*' ) ) ] ) {

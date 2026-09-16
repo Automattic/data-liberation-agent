@@ -203,6 +203,54 @@ describe( 'captureTriggeredDialogs', () => {
 	);
 
 	it.skipIf( process.env.SKIP_BROWSER_TESTS )(
+		'keeps a captured flex menu usable when its scrollable links depend on the root layout',
+		async () => {
+			const browser = await chromium.launch( { headless: true } );
+			const page = await browser.newPage( { viewport: { width: 390, height: 844 } } );
+			const markup = `<!doctype html><html><head><style>
+				#navigation { display: flex; flex-direction: column; position: fixed; inset: 0; visibility: hidden; opacity: 0; background: white; }
+				.menu-open #navigation { visibility: visible; opacity: 1; }
+				.navigation-body { flex: 1; min-height: 0; position: relative; }
+				.navigation-folder { position: absolute; inset: 0; overflow: auto; }
+				.navigation-links { min-height: 100%; display: flex; flex-direction: column; justify-content: center; align-items: center; }
+				.navigation-links a { padding: 12px; }
+				.hidden-item { display: none; }
+			</style></head><body>
+				<button id="menu" aria-label="Open Menu" aria-controls="navigation">Menu</button>
+				<nav id="navigation"><div class="navigation-body"><div class="navigation-folder"><div class="navigation-links">
+					<a href="#about">About</a><a href="#contact">Contact</a><a class="hidden-item" href="#private">Hidden</a>
+				</div></div></div></nav>
+			</body></html>`;
+			try {
+				await page.setContent( markup );
+				await page.locator( '#menu' ).evaluate( ( element ) => {
+					element.addEventListener( 'click', () => document.body.classList.toggle( 'menu-open' ) );
+					document.addEventListener( 'keydown', ( event ) => {
+						if ( event.key === 'Escape' ) document.body.classList.remove( 'menu-open' );
+					} );
+				} );
+				const report = await captureTriggeredDialogs( page, 'https://example.test/' );
+				expect( report.states ).toMatchObject( [ { status: 'captured', dialog: { id: 'navigation' } } ] );
+				await page.setContent( wireCapturedDialogs( markup, report.states ) );
+				await page.locator( 'details.dla-disclosure > summary' ).click();
+				const about = page.getByRole( 'link', { name: 'About', exact: true } );
+				expect( await about.evaluate( ( link ) => {
+					const rect = link.getBoundingClientRect();
+					return document.elementFromPoint( rect.x + rect.width / 2, rect.y + rect.height / 2 )?.closest( 'a' ) === link;
+				} ) ).toBe( true );
+				expect( await page.locator( '.hidden-item' ).isVisible() ).toBe( false );
+				await about.click( { timeout: 1_000 } );
+				expect( page.url() ).toBe( 'about:blank#about' );
+				await page.keyboard.press( 'Escape' );
+				expect( await about.isVisible() ).toBe( false );
+			} finally {
+				await browser.close();
+			}
+		},
+		30_000
+	);
+
+	it.skipIf( process.env.SKIP_BROWSER_TESTS )(
 		'dismisses portable triggered dialogs by close control and Escape without handling Escape elsewhere',
 		async () => {
 			const browser = await chromium.launch( { headless: true } );
