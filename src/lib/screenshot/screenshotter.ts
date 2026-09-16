@@ -23,6 +23,7 @@ import {
 	type CapturedDialogInteraction,
 	type InteractionStatesReport,
 } from './interaction-capture.js';
+import { collectPagerSlideshowStates } from './pager-slideshow.js';
 import { captureScrollStates, type ScrollStatesReport } from './scroll-state-capture.js';
 import { hydrateDisclosureContent } from './dynamic-content.js';
 import { JsAggregator } from './js-aggregator.js';
@@ -693,6 +694,12 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 			} );
 		}
 	}
+
+	// A slideshow driven by its own thumbnails keeps only the state it was
+	// frozen on, so walk the rest into the document before any adapter runs.
+	await collectPagerSlideshowStates( page ).catch( () => {
+		/* best-effort — a picker that will not advance must not block capture */
+	} );
 
 	if ( args.beforeSerialize ) {
 		await args.beforeSerialize( page, {
