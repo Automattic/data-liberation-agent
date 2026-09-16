@@ -417,9 +417,9 @@ export const capture: LiberationHooks = {
 			root.style.scrollBehavior = scrollBehavior;
 		}, WIX_CAPTURE_CHROME_SELECTOR );
 
-		// The mobile document keeps Wix's native layout untouched. The desktop
-		// portable source carries the bounded, static record of its runtime states.
-		if ( ctx.viewport === 'desktop' ) await collectWixSlideshowSlides( page );
+		// Each viewport mounts its own slideshow independently, so collect
+		// distinct authored states before the runtime is stripped.
+		await collectWixSlideshowSlides( page );
 
 		const galleries = await page.evaluate( async () => {
 			const urls = [
