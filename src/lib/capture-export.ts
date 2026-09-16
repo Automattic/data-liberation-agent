@@ -566,7 +566,8 @@ const CORRESPONDENCE_ATTRIBUTES = [ 'data-dla-geometry-id', 'data-dla-responsive
 /**
  * Whether the source served a genuinely different document under mobile
  * emulation, rather than the same one. Structural, so runtime ids, capture
- * infrastructure attributes, and text differences do not masquerade as a
+ * infrastructure attributes, text differences, and embed hosts (iframes that
+ * hydrated on one viewport and not the other) do not masquerade as a
  * second design.
  */
 export function documentsDiffer( desktopHtml: string, mobileHtml: string ): boolean {
@@ -1080,7 +1081,7 @@ function scopedStyles(
 
 function responsiveBodySignature( body: string ): string {
 	const $ = cheerio.load( `<body>${ body }</body>` );
-	$( 'script,style,noscript' ).remove();
+	$( 'script,style,noscript,iframe' ).remove();
 	$( 'canvas' ).removeAttr( 'width' ).removeAttr( 'height' );
 	$( '[id]' ).each( ( _index, element ) => {
 		$( element )
