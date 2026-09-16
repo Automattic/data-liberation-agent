@@ -346,12 +346,16 @@ async function visibleDialogSelectors( page: Page ): Promise< string[] > {
 			const visible = ( element: Element ): boolean => {
 				const rect = element.getBoundingClientRect();
 				const style = getComputedStyle( element );
+				let opacity = Number.parseFloat( style.opacity || '1' );
+				for ( let ancestor = element.parentElement; ancestor && opacity > 0.1; ancestor = ancestor.parentElement ) {
+					opacity *= Number.parseFloat( getComputedStyle( ancestor ).opacity || '1' );
+				}
 				return (
 					rect.width > 0 &&
 					rect.height > 0 &&
 					style.display !== 'none' &&
 					style.visibility !== 'hidden' &&
-					Number.parseFloat( style.opacity || '1' ) > 0.1
+					opacity > 0.1
 				);
 			};
 			const selector = ( element: Element, index: number ): string => {
@@ -454,12 +458,17 @@ async function firstNewVisibleDialog(
 		const visible = ( element: Element ): boolean => {
 			const rect = element.getBoundingClientRect();
 			const style = getComputedStyle( element );
+			// A descendant's own opacity can be 1 while its opening menu is transparent.
+			let opacity = Number.parseFloat( style.opacity || '1' );
+			for ( let ancestor = element.parentElement; ancestor && opacity > 0.1; ancestor = ancestor.parentElement ) {
+				opacity *= Number.parseFloat( getComputedStyle( ancestor ).opacity || '1' );
+			}
 			return (
 				rect.width > 0 &&
 				rect.height > 0 &&
 				style.display !== 'none' &&
 				style.visibility !== 'hidden' &&
-				Number.parseFloat( style.opacity || '1' ) > 0.1
+				opacity > 0.1
 			);
 		};
 		const selector = ( element: Element, index: number ): string => {
