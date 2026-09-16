@@ -41,6 +41,21 @@ const IRREVERSIBLE_FIXTURE = `<!doctype html><html><head><style>
 	</script>
 </body></html>`;
 
+const BODY_AFFIX_INNER_BAR_FIXTURE = `<!doctype html><html><head><style>
+	body { margin: 0; height: 3000px; }
+	.header-wrap { height: 240px; background: transparent; }
+	#topBar { position: absolute; top: 0; left: 0; right: 0; height: 61px; background-color: transparent; }
+	body.affix #topBar { position: fixed; height: 50px; background-color: rgb(43, 43, 43); }
+</style></head>
+<body>
+	<div class="header-wrap"><div id="topBar">MENU</div></div>
+	<script>
+		window.addEventListener('scroll', () => {
+			document.body.classList.toggle('affix', window.scrollY > 10);
+		});
+	</script>
+</body></html>`;
+
 describe( 'captureScrollStates', () => {
 	it.skipIf( process.env.SKIP_BROWSER_TESTS )(
 		'captures a scroll-driven class toggle and inline-style shrink, with a reproducible threshold',
@@ -61,9 +76,8 @@ describe( 'captureScrollStates', () => {
 				expect( toggle.thresholdPx ).toBeGreaterThan( 50 );
 				expect( toggle.thresholdPx ).toBeLessThanOrEqual( 200 );
 
-				expect( toggle.styleTargets ).toHaveLength( 1 );
-				const styleTarget = toggle.styleTargets[ 0 ];
-				expect( styleTarget.id ).toBe( 'logo' );
+				const styleTarget = toggle.styleTargets.find( ( target ) => target.id === 'logo' );
+				expect( styleTarget ).toBeDefined();
 				expect( styleTarget.properties[ 'max-height' ] ).toEqual( { rest: '100px', scrolled: '50px' } );
 
 				// The page must be left scrolled back to the top (clean state for
@@ -101,6 +115,27 @@ describe( 'captureScrollStates', () => {
 				await page.setContent( IRREVERSIBLE_FIXTURE );
 				const report = await captureScrollStates( page, 'https://example.test/' );
 				expect( report.toggles ).toHaveLength( 0 );
+			} finally {
+				await browser.close();
+			}
+		},
+		30_000
+	);
+
+	it.skipIf( process.env.SKIP_BROWSER_TESTS )(
+		'captures computed restyle of a nested header bar driven by a body scroll class',
+		async () => {
+			const browser = await chromium.launch( { headless: true } );
+			const page = await browser.newPage( { viewport: { width: 1200, height: 800 } } );
+			try {
+				await page.setContent( BODY_AFFIX_INNER_BAR_FIXTURE );
+				const report = await captureScrollStates( page, 'https://example.test/' );
+				const toggle = report.toggles.find( ( entry ) => entry.target.id === 'topBar' );
+				expect( toggle ).toBeDefined();
+				expect( toggle?.classes.add ).toHaveLength( 0 );
+				const self = toggle?.styleTargets.find( ( target ) => target.selector === ':scope' );
+				expect( self?.properties[ 'background-color' ]?.scrolled ).toContain( '43' );
+				expect( self?.properties.position ).toEqual( { rest: 'absolute', scrolled: 'fixed' } );
 			} finally {
 				await browser.close();
 			}

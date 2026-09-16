@@ -58,6 +58,7 @@ interface ContainerSnapshot {
 	id?: string;
 	top: number;
 	classList: string[];
+	computed: Record< string, string >;
 	styleTargets: { selector: string; tag: string; id?: string; styleText: string }[];
 }
 
@@ -150,6 +151,24 @@ export async function captureScrollStates(
 		const remove = before.classList.filter( ( cls ) => ! afterSet.has( cls ) );
 
 		const styleTargets: ScrollStyleTarget[] = [];
+		const computedProperties: Record< string, { rest: string; scrolled: string } > = {};
+		const computedKeys = new Set( [
+			...Object.keys( before.computed ),
+			...Object.keys( after.computed ),
+		] );
+		for ( const property of computedKeys ) {
+			const rest = before.computed[ property ] ?? '';
+			const scrolled = after.computed[ property ] ?? '';
+			if ( rest !== scrolled ) computedProperties[ property ] = { rest, scrolled };
+		}
+		if ( Object.keys( computedProperties ).length > 0 ) {
+			styleTargets.push( {
+				selector: ':scope',
+				tag: before.tag,
+				...( before.id ? { id: before.id } : {} ),
+				properties: computedProperties,
+			} );
+		}
 		const afterStyleByKey = new Map(
 			after.styleTargets.map( ( target ) => [ target.selector, target ] )
 		);
@@ -208,7 +227,9 @@ function changedContainerKeys(
 		const styleDiffers = entry.styleTargets.some(
 			( target ) => styleByKey.get( target.selector )?.styleText !== target.styleText
 		);
-		if ( classesDiffer || styleDiffers ) changed.add( entry.key );
+		const computedDiffers =
+			JSON.stringify( entry.computed ) !== JSON.stringify( match.computed );
+		if ( classesDiffer || styleDiffers || computedDiffers ) changed.add( entry.key );
 	}
 	return changed;
 }
@@ -312,27 +333,54 @@ async function snapshotContainers( page: Page ): Promise< ContainerSnapshot[] > 
 				return parts.join( ' > ' );
 			};
 
-			const candidates = Array.from(
-				document.querySelectorAll(
-					'header, [class*="header" i], [id*="header" i], nav, [role="banner"]'
-				)
-			).filter( ( element ) => {
+			const inBand = ( element: Element ): boolean => {
 				const rect = element.getBoundingClientRect();
 				if ( rect.width === 0 || rect.height === 0 ) return false;
 				const style = getComputedStyle( element );
 				if ( style.display === 'none' || style.visibility === 'hidden' ) return false;
 				return rect.top < band;
-			} );
+			};
 
-			// De-duplicate ancestor/descendant pairs, preferring the outer container.
-			const filtered = candidates.filter(
+			const headers = Array.from(
+				document.querySelectorAll(
+					'header, [class*="header" i], [id*="header" i], nav, [role="banner"]'
+				)
+			).filter( inBand );
+
+			// Prefer the outer header, but keep nested positioned chrome: many
+			// builders restyle an inner absolute bar via a body/html scroll class
+			// (the outer wrap's classList never changes).
+			const outer = headers.filter(
 				( element, index ) =>
-					! candidates.some(
+					! headers.some(
 						( other, otherIndex ) => otherIndex !== index && other.contains( element )
 					)
 			);
+			const nestedChrome: Element[] = [];
+			for ( const root of outer ) {
+				for ( const child of Array.from( root.querySelectorAll( '*' ) ) ) {
+					if ( ! inBand( child ) ) continue;
+					const position = getComputedStyle( child ).position;
+					if ( position === 'absolute' || position === 'fixed' || position === 'sticky' ) {
+						nestedChrome.push( child );
+					}
+				}
+			}
+			const filtered = [ ...outer, ...nestedChrome ].slice( 0, maxContainers );
 
-			return filtered.slice( 0, maxContainers ).map( ( element ) => {
+			const chromeComputed = ( element: Element ): Record< string, string > => {
+				const style = getComputedStyle( element );
+				return {
+					position: style.position,
+					top: style.top,
+					'background-color': style.backgroundColor,
+					height: style.height,
+					'max-height': style.maxHeight,
+					'box-shadow': style.boxShadow,
+				};
+			};
+
+			return filtered.map( ( element ) => {
 				const selector = bodyRootedSelector( element );
 				const styleTargets = Array.from( element.querySelectorAll( '[style]' ) )
 					.slice( 0, maxStyleTargets )
@@ -349,6 +397,7 @@ async function snapshotContainers( page: Page ): Promise< ContainerSnapshot[] > 
 					...( element.id ? { id: element.id } : {} ),
 					top: element.getBoundingClientRect().top,
 					classList: Array.from( element.classList ),
+					computed: chromeComputed( element ),
 					styleTargets,
 				};
 			} );
