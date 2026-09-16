@@ -1,6 +1,6 @@
 import { chromium, type Browser } from 'playwright';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { collectPagerSlideshowStates } from './pager-slideshow.js';
+import { applyPagerSlideshowStates, collectPagerSlideshowStates } from './pager-slideshow.js';
 
 const picture = ( label: string ) =>
 	`data:image/svg+xml;utf8,${ encodeURIComponent(
@@ -76,7 +76,7 @@ describe( 'pager slideshow capture', () => {
 
 	it( 'walks every state a thumbnail picker advertises into the frozen document', async () => {
 		const page = await openPage( pagerFixture() );
-		await collectPagerSlideshowStates( page );
+		await applyPagerSlideshowStates( page, await collectPagerSlideshowStates( page ) );
 
 		const slides = await page.$$eval( '[data-dla-pager-stage] > [data-dla-captured-slide]', ( nodes ) =>
 			nodes.map( ( node ) => node.querySelector( 'img' )?.getAttribute( 'src' ) ?? '' )
@@ -90,7 +90,7 @@ describe( 'pager slideshow capture', () => {
 
 	it( 'reads each state only once its own media has loaded', async () => {
 		const page = await openPage( pagerFixture() );
-		await collectPagerSlideshowStates( page );
+		await applyPagerSlideshowStates( page, await collectPagerSlideshowStates( page ) );
 
 		const stage = await page.$eval( '[data-dla-pager-stage]', ( node ) => node.innerHTML );
 		for ( const thumbnail of THUMBS.slice( 1 ) ) {
@@ -102,7 +102,7 @@ describe( 'pager slideshow capture', () => {
 
 	it( 'leaves one state on stage so the copy opens the way the source did', async () => {
 		const page = await openPage( pagerFixture() );
-		await collectPagerSlideshowStates( page );
+		await applyPagerSlideshowStates( page, await collectPagerSlideshowStates( page ) );
 
 		const shown = await page.$$eval( '[data-dla-pager-stage] > *', ( nodes ) =>
 			nodes.filter( ( node ) => getComputedStyle( node ).display !== 'none' ).length
@@ -113,7 +113,7 @@ describe( 'pager slideshow capture', () => {
 
 	it( 'records the advertised count when a control will not advance the stage', async () => {
 		const page = await openPage( pagerFixture( { brokenLastControl: true } ) );
-		await collectPagerSlideshowStates( page );
+		await applyPagerSlideshowStates( page, await collectPagerSlideshowStates( page ) );
 
 		const diagnostics = await page.$eval( '[data-dla-pager-stage]', ( node ) => ( {
 			captured: node.getAttribute( 'data-dla-captured-slide-count' ),
@@ -125,7 +125,7 @@ describe( 'pager slideshow capture', () => {
 
 	it( 'leaves a labelled link list alone', async () => {
 		const page = await openPage( LABELLED_CONTROL_FIXTURE );
-		await collectPagerSlideshowStates( page );
+		await applyPagerSlideshowStates( page, await collectPagerSlideshowStates( page ) );
 
 		expect( await page.locator( '[data-dla-captured-slide]' ).count() ).toBe( 0 );
 		await page.close();

@@ -23,7 +23,7 @@ import {
 	type CapturedDialogInteraction,
 	type InteractionStatesReport,
 } from './interaction-capture.js';
-import { collectPagerSlideshowStates } from './pager-slideshow.js';
+import { applyPagerSlideshowStates, collectPagerSlideshowStates } from './pager-slideshow.js';
 import { captureScrollStates, type ScrollStatesReport } from './scroll-state-capture.js';
 import { hydrateDisclosureContent } from './dynamic-content.js';
 import { JsAggregator } from './js-aggregator.js';
@@ -668,6 +668,10 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	// source actually obeys, learned by resizing while its runtime still runs.
 	// Must happen after removals (so stripped chrome is never modelled) and
 	// before serialization (so the learned CSS is what gets written).
+	// A slideshow driven by its own thumbnails only advances while the source's
+	// script is running, so read its states before any layout measurement.
+	const pagerSlideshows = await collectPagerSlideshowStates( page ).catch( () => [] );
+
 	if ( isDesktop && plan.captureHtml && args.learnFluid ) {
 		try {
 			const learned = await learnAndApplyFluidGeometry( page, {
@@ -695,9 +699,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		}
 	}
 
-	// A slideshow driven by its own thumbnails keeps only the state it was
-	// frozen on, so walk the rest into the document before any adapter runs.
-	await collectPagerSlideshowStates( page ).catch( () => {
+	await applyPagerSlideshowStates( page, pagerSlideshows ).catch( () => {
 		/* best-effort — a picker that will not advance must not block capture */
 	} );
 
