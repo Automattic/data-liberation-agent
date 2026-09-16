@@ -110,6 +110,26 @@ describe( 'self-contain', () => {
 		);
 	} );
 
+	it( 'omits empty @font-face src sentinels so later woff/ttf sources remain usable', () => {
+		expect(
+			stripRemoteCssUrls(
+				'@font-face{font-family:"icon";src:url("https://cdn.example/icon.eot");src:url("https://cdn.example/icon.eot?#iefix") format("embedded-opentype"),url("/fonts/icon.woff") format("woff"),url("/fonts/icon.ttf") format("truetype")}.hero{background:url("https://cdn.example/missing.jpg")}'
+			)
+		).toBe(
+			'@font-face{font-family:"icon";src:url("/fonts/icon.woff") format("woff"),url("/fonts/icon.ttf") format("truetype")}.hero{background:url("data:application/octet-stream;base64,")}'
+		);
+	} );
+
+	it( 'drops injected empty @font-face src sentinels including #iefix fragments', () => {
+		expect(
+			stripRemoteCssUrls(
+				'@font-face{font-family:"icon";src:url(data:application/octet-stream;base64,);src:url(data:application/octet-stream;base64,#iefix) format("embedded-opentype"),url("/fonts/icon.woff") format("woff"),url("/fonts/icon.ttf") format("truetype")}'
+			)
+		).toBe(
+			'@font-face{font-family:"icon";src:url("/fonts/icon.woff") format("woff"),url("/fonts/icon.ttf") format("truetype")}'
+		);
+	} );
+
 	it( 'rewrites leftover remotes already written into a website tree', () => {
 		const websiteDir = mkdtempSync( join( tmpdir(), 'dla-self-contain-' ) );
 		mkdirSync( join( websiteDir, 'assets', 'css' ), { recursive: true } );
