@@ -23,6 +23,8 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: npm
+      - name: Verify plugin manifest versions
+        run: node scripts/check-versions.mjs
       - run: npm ci --ignore-scripts
       - run: npx playwright install --with-deps chromium
       - run: npm run build
