@@ -673,6 +673,69 @@ describe( 'exportWebsiteCapture', () => {
 		).toBe( true );
 	} );
 
+	it( 'treats viewport-only iframe embeds as equivalence, not a second document', () => {
+		const desktop =
+			'<html><body><main><h1>Contact</h1><form action="/form"><input name="email"></form>' +
+			'<iframe name="form-1-target-1789528387446" id="form-1-target-1789528387446" style="display:none"></iframe>' +
+			'<iframe src="//www.weebly.com/weebly/apps/generateMap.php?map=google"></iframe>' +
+			'</main></body></html>';
+		const mobile =
+			'<html><body><main><h1>Contact</h1><form action="/form"><input name="email"></form></main></body></html>';
+		expect( documentsDiffer( desktop, mobile ) ).toBe( false );
+		expect(
+			documentsDiffer(
+				desktop,
+				mobile.replace( '</form>', '</form><aside id="mobile-only">Menu</aside>' )
+			)
+		).toBe( true );
+	} );
+
+	it( 'collapses a contact page whose only mobile gap is embed iframes, keeping the desktop map', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-collapse-iframe-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
+			mkdirSync( join( outputDir, path ), { recursive: true } );
+		writeFileSync(
+			join( outputDir, 'html', 'homepage.html' ),
+			'<html><body><main><h1>Contact</h1><form action="/form"><input name="email"></form>' +
+				'<iframe class="map" src="https://source.example/wrong" data-dla-visual-iframe-src="https://maps.example/embed" data-dla-visual-iframe-width="1280" data-dla-visual-iframe-height="350"></iframe>' +
+				'</main></body></html>'
+		);
+		writeFileSync(
+			join( outputDir, 'html-mobile', 'homepage.html' ),
+			'<html><body><main><h1>Contact</h1><form action="/form"><input name="email"></form></main></body></html>'
+		);
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( {
+				version: 1,
+				entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },
+			} )
+		);
+
+		exportWebsiteCapture( {
+			outputDir,
+			sourceUrl: 'https://example.com/',
+			platform: 'weebly',
+			summary: {},
+			failures: [],
+		} );
+
+		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
+		const $ = cheerio.load( html );
+		expect( $( '.data-liberation-desktop-document' ) ).toHaveLength( 0 );
+		expect( $( '.data-liberation-mobile-document' ) ).toHaveLength( 0 );
+		expect( $( 'form' ) ).toHaveLength( 1 );
+		expect( $( 'iframe' ).attr( 'src' ) ).toBe( 'https://maps.example/embed' );
+		const receipt = JSON.parse(
+			readFileSync( join( outputDir, 'capture-receipt.json' ), 'utf8' )
+		);
+		expect( receipt.routes[ 0 ].responsiveVariants ).toMatchObject( {
+			variants: 1,
+			outcome: 'collapsed-equivalent',
+		} );
+	} );
+
 	it( 'collapses structurally equivalent responsive variants into one document and records why', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-collapse-equivalent-' ) );
 		dirs.push( outputDir );
