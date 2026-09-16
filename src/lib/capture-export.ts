@@ -563,6 +563,23 @@ const DEFAULT_SWITCH_WIDTH = 768;
  * not read them as one.
  */
 const CORRESPONDENCE_ATTRIBUTES = [ 'data-dla-geometry-id', 'data-dla-responsive-source' ];
+const YUI_RUNTIME_ID = /^yui_/i;
+const CAPTURE_GEOMETRY_ID = /^(?:desktop|mobile)-(?:target|wrapper)-\d+/i;
+const UUID_ID =
+	/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function isYuiRuntimeId( id: string ): boolean {
+	return YUI_RUNTIME_ID.test( id );
+}
+
+function isUnstableResponsiveId( id: string ): boolean {
+	return id
+		.split( /\s+/ )
+		.some(
+			( token ) =>
+				isYuiRuntimeId( token ) || CAPTURE_GEOMETRY_ID.test( token ) || UUID_ID.test( token )
+		);
+}
 
 /**
  * Whether the source served a genuinely different document under mobile
@@ -1083,7 +1100,10 @@ function scopedStyles(
 function responsiveBodySignature( body: string ): string {
 	const $ = cheerio.load( `<body>${ body }</body>` );
 	$( 'script,style,noscript,iframe' ).remove();
-	$( 'canvas' ).removeAttr( 'width' ).removeAttr( 'height' );
+	$( '[id]' ).each( ( _index, element ) => {
+		if ( isYuiRuntimeId( $( element ).attr( 'id' ) ?? '' ) ) $( element ).remove();
+	} );
+	$( 'svg,map,area,picture,source,img,canvas,slot' ).remove();
 	$( '[id]' ).each( ( _index, element ) => {
 		$( element )
 			.contents()
@@ -1104,7 +1124,9 @@ function responsiveBodySignature( body: string ): string {
 			}
 		}
 		for ( const attribute of CORRESPONDENCE_ATTRIBUTES ) node.removeAttr( attribute );
-		if ( node.is( 'img,source,video,audio' ) ) {
+		const id = node.attr( 'id' );
+		if ( id && isUnstableResponsiveId( id ) ) node.removeAttr( 'id' );
+		if ( node.is( 'video,audio' ) ) {
 			node.removeAttr( 'src' ).removeAttr( 'srcset' ).removeAttr( 'sizes' );
 		}
 		if ( node.is( 'form,iframe' ) ) {
