@@ -72,6 +72,7 @@ it('captures clean artifacts and compares intentional removals while rejecting d
   const output = readFileSync(join(directory, 'website', 'index.html'), 'utf8');
   expect(output).not.toContain('Buy advertising now.');
   expect(output).not.toContain('Free website by Wix');
+  expect(output).not.toContain('#WIX_ADS{');
   expect(output).not.toContain('https://www.wix.com');
   expect(output).toContain('Powered by renewable energy');
   expect(output).toContain('Owner business');
@@ -142,22 +143,40 @@ ${'<div class="ad-slot">ad</div>'.repeat(1001)}
   } finally { await browser.close(); }
 });
 
-it('removes the Lovable attribution badge without touching owner content', async () => {
+it('removes the Lovable attribution badge with its orphaned stylesheet rules, keeping owner CSS', async () => {
   const { lovableAdapter } = await import('../adapters/lovable/index.js');
   const lovablePolicy = cleanupPolicy(lovableAdapter.liberation?.cleanupRules);
   const browser = await chromium.launch();
   try {
     const page = await browser.newPage();
-    await page.setContent(`<!doctype html><html><body>
+    await page.setContent(`<!doctype html><html><head><style>
+      body{margin:0;font:16px Arial}
+      #lovable-badge{position:fixed;height:24px}
+      #lovable-badge-cta:hover{opacity:.8}
+      @media (max-width:768px){#lovable-badge{display:none}.owner-note{color:red}}
+      #owner-section{color:blue}
+      a[href="#lovable-badge"]{font-weight:700}
+    </style></head><body>
       <main><h1>Owner business</h1><p>Real owner content to retain.</p></main>
       <aside id="lovable-badge" role="complementary" aria-label="Made with Lovable">
+        <span id="lovable-badge-text">Made with</span>
         <a id="lovable-badge-cta" href="https://lovable.dev/projects/abc?utm_source=lovable-badge">Made with Lovable</a>
       </aside>
     </body></html>`);
     const report = await applySourceCleanup(page, lovablePolicy);
     expect(await page.locator('#lovable-badge').count()).toBe(0);
     expect(await page.locator('main').innerText()).toContain('Owner business');
+    const css = await page.evaluate(() => document.querySelector('style')?.textContent ?? '');
+    expect(css).not.toContain('#lovable-badge{');
+    expect(css).not.toContain('#lovable-badge-cta');
+    expect(css).not.toContain('#lovable-badge-text');
+    expect(css).toContain('body{margin:0');
+    expect(css).toContain('#owner-section{color:blue}');
+    expect(css).toContain('.owner-note{color:red}');
+    expect(css).toContain('@media');
+    expect(css).toContain('a[href="#lovable-badge"]');
     expect(report.removed).toBeGreaterThanOrEqual(1);
+    expect(report.strippedCssRules).toBeGreaterThanOrEqual(3);
     expect(report.failures).toEqual([]);
     expect(report.records.some((record) => record.rule === 'lovable-badge')).toBe(true);
   } finally { await browser.close(); }

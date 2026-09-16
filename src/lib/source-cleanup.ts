@@ -45,6 +45,8 @@ export interface CleanupReport {
   failures: string[];
   residual: number;
   unknowns?: string[];
+  /** Orphaned `#id` style rules removed from inline styles after element removal. */
+  strippedCssRules?: number;
 }
 
 const AD_RULES: CleanupRule[] = [
@@ -85,6 +87,81 @@ export function installCleanupInPage(policy: CleanupPolicy): CleanupReport {
   const host = window as unknown as { __dlaCleanup?: State };
   host.__dlaCleanup?.observer.disconnect();
   const report: CleanupReport = { url: location.href, viewport: innerWidth, removed: 0, records: [], truncated: false, failures: [], residual: 0 };
+  // Removing an element orphans the CSS rules that only existed to style it.
+  // Attribution chrome routinely ships a stylesheet beside its markup; if those
+  // rules survive they are captured into website/ and re-projected into the
+  // destination theme. Track every id that left the DOM (removed nodes and
+  // their subtrees) and strip `#id` rules from inline styles.
+  const orphanedIds = new Set<string>();
+  const dropped = { count: 0 };
+  const orphanIdsIn = (node: Element) => {
+    if (node.id) orphanedIds.add(node.id);
+    for (const owned of node.querySelectorAll('[id]')) orphanedIds.add(owned.id);
+  };
+  let idPattern: RegExp | null = null;
+  let idPatternSize = -1;
+  /** Text-level scan so owner rules keep their exact bytes; only preludes
+   * naming an orphaned id are dropped. Attribute selectors are masked first so
+   * `[href="#id"]` (a rule about a linking element, not the removed one) is kept. */
+  const stripOrphanedCss = () => {
+    if (!orphanedIds.size) return;
+    if (!idPattern || orphanedIds.size !== idPatternSize) {
+      idPattern = new RegExp([...orphanedIds].map((id) => `#${id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w-])`).join('|'));
+      idPatternSize = orphanedIds.size;
+    }
+    const grouping = /^@(?:media|supports|layer|container|scope|document)\b/i;
+    const scan = (css: string): string => {
+      let out = '';
+      let index = 0;
+      while (index < css.length) {
+        let prelude = '';
+        while (index < css.length) {
+          const ch = css[index];
+          if (ch === '"' || ch === "'") { const stop = css.indexOf(ch, index + 1); const end = stop === -1 ? css.length : stop + 1; prelude += css.slice(index, end); index = end; continue; }
+          if (ch === '/' && css[index + 1] === '*') { const stop = css.indexOf('*/', index + 2); const end = stop === -1 ? css.length : stop + 2; prelude += css.slice(index, end); index = end; continue; }
+          if (ch === '{' || ch === ';' || ch === '}') break;
+          prelude += ch;
+          index++;
+        }
+        if (index >= css.length) { out += prelude; break; }
+        if (css[index] !== '{') { out += prelude + css[index]; index++; continue; }
+        let depth = 0;
+        let close = index;
+        while (close < css.length) {
+          const ch = css[close];
+          if (ch === '"' || ch === "'") { const stop = css.indexOf(ch, close + 1); close = stop === -1 ? css.length : stop + 1; continue; }
+          if (ch === '/' && css[close + 1] === '*') { const stop = css.indexOf('*/', close + 2); close = stop === -1 ? css.length : stop + 2; continue; }
+          if (ch === '{') depth++;
+          else if (ch === '}') { depth--; if (!depth) { close++; break; } }
+          close++;
+        }
+        const selector = prelude.trim();
+        const body = depth === 0 ? css.slice(index + 1, close - 1) : css.slice(index + 1, close);
+        if (selector.startsWith('@')) {
+          if (grouping.test(selector)) {
+            const inner = scan(body);
+            if (inner.trim()) out += `${prelude}{${inner}}`;
+          } else out += prelude + css.slice(index, close);
+        } else if (idPattern!.test(selector.replace(/\[[^\]]*\]/g, ''))) dropped.count++;
+        else if (body.includes('{')) out += `${prelude}{${scan(body)}}`;
+        else out += prelude + css.slice(index, close);
+        index = close;
+      }
+      return out;
+    };
+    let pass = 0;
+    for (const style of document.querySelectorAll('style')) {
+      const css = style.textContent ?? '';
+      let relevant = false;
+      for (const id of orphanedIds) if (css.includes(`#${id}`)) { relevant = true; break; }
+      if (!relevant) continue;
+      const before = dropped.count;
+      const cleaned = scan(css);
+      pass += dropped.count - before;
+      if (cleaned !== css) style.textContent = cleaned;
+    }
+    if (pass) report.strippedCssRules = (report.strippedCssRules ?? 0) + pass;
+  };
   const creditPhrase = /(?:powered by|built (?:with|on|by)|created (?:with|using)|website (?:by|built with)|proudly created with)\s*/i;
   const ownerContent = /©|copyright|all rights reserved/i;
   const promotionText = new RegExp(policy.promotion.text, 'i');
@@ -119,7 +196,7 @@ export function installCleanupInPage(policy: CleanupPolicy): CleanupReport {
     }
     return true;
   };
-  const sweep = () => {
+  const removeMatching = () => {
     for (const rule of policy.rules) {
       let matches: NodeListOf<Element>;
       try { matches = document.querySelectorAll(rule.selector); }
@@ -153,7 +230,7 @@ export function installCleanupInPage(policy: CleanupPolicy): CleanupReport {
               const value = item.node.textContent ?? '';
               item.node.textContent = value.slice(0, from) + value.slice(to);
               const anchor = item.node.parentElement?.closest('a');
-              if (anchor && !anchor.textContent?.trim() && !anchor.querySelector('img,svg')) anchor.remove();
+              if (anchor && !anchor.textContent?.trim() && !anchor.querySelector('img,svg')) { orphanIdsIn(anchor); anchor.remove(); }
             }
             report.removed++;
             if (report.records.length < 200) report.records.push({ rule: rule.id, category: rule.category, selector: selectorFor(match), text: found[0].slice(0, 160), action: 'remove-credit-text', reclaimedBodyPadding: false });
@@ -191,6 +268,7 @@ export function installCleanupInPage(policy: CleanupPolicy): CleanupReport {
           selector: selectorFor(node), text: (node.textContent ?? '').trim().slice(0, 160), action: 'remove', reclaimedBodyPadding });
         else report.truncated = true;
         let parent = node.parentElement;
+        orphanIdsIn(node);
         node.remove();
         report.removed++;
         // Reclaim an ad-only wrapper, never a content landmark or mixed container.
@@ -198,12 +276,14 @@ export function installCleanupInPage(policy: CleanupPolicy): CleanupReport {
           if (!/^(DIV|SPAN|ASIDE)$/.test(parent.tagName) || parent.children.length ||
             !/^(?:advertisement|advertising|sponsored)?$/i.test((parent.textContent ?? '').trim())) break;
           const ancestor = parent.parentElement;
+          orphanIdsIn(parent);
           parent.remove();
           parent = ancestor;
         }
       }
     }
   };
+  const sweep = () => { removeMatching(); stripOrphanedCss(); };
   sweep();
   let scheduled = false;
   let rounds = 0;
