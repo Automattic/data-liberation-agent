@@ -698,6 +698,42 @@ describe( 'exportWebsiteCapture', () => {
 		).toBe( true );
 	} );
 
+	it( 'treats Squarespace block-yui map chrome as equivalence, not a second document', () => {
+		const desktop =
+			'<html><body><main><h1>About</h1><div id="block-yui_3_17_2_1_1755739610085_5613"><button type="button"></button><table><tr><td><kbd>←</kbd></td><td>Move left</td></tr></table></div></main></body></html>';
+		const mobile =
+			'<html><body><main><h1>About</h1><div id="block-yui_3_17_2_1_1755739610085_5613"><button type="button"></button><span>To navigate the map with touch gestures double-tap and hold your finger on the map, then drag the map.</span><table><tr><td><kbd>←</kbd></td><td>Move left</td></tr></table></div></main></body></html>';
+		expect( documentsDiffer( desktop, mobile ) ).toBe( false );
+		expect(
+			documentsDiffer(
+				desktop,
+				mobile.replace( '</main>', '<aside id="mobile-menu">Menu</aside></main>' )
+			)
+		).toBe( true );
+	} );
+
+	it( 'treats generated form field names as equivalence, not a second document', () => {
+		const desktop =
+			'<html><body><main><h1>Contact</h1><form action="/form"><input id="message-field" name="message-yui_5a971da7-2728-4c20-80a1-6b77a38b830d-field" type="text"></form></main></body></html>';
+		const mobile =
+			'<html><body><main><h1>Contact</h1><form action="/form"><input id="message-field" name="message-yui_69609980-c587-4cc8-9d6e-c7268aedab8d-field" type="text"></form></main></body></html>';
+		expect( documentsDiffer( desktop, mobile ) ).toBe( false );
+		expect(
+			documentsDiffer( desktop, mobile.replace( 'type="text"', 'type="email"' ) )
+		).toBe( true );
+	} );
+
+	it( 'treats viewport hydration attributes as equivalence, not a second document', () => {
+		const desktop =
+			'<html><body><div id="siteWrapper"><a href="/cart" tabindex="0" data-test="continue-to-cart" data-current-styles="{&quot;layout&quot;:&quot;desktop&quot;}">Cart</a><header data-controller="Header"><nav><a href="/">Home</a></nav></header><main><h1>About</h1></main></div></body></html>';
+		const mobile =
+			'<html><body><div id="siteWrapper"><a href="/cart" data-test="continue-to-cart" data-current-styles="{&quot;layout&quot;:&quot;mobile&quot;}">Cart</a><header data-controller="Header"><nav><a href="/">Home</a></nav></header><main><h1>About</h1></main></div></body></html>';
+		expect( documentsDiffer( desktop, mobile ) ).toBe( false );
+		expect(
+			documentsDiffer( desktop, mobile.replace( 'href="/"', 'href="/menu"' ) )
+		).toBe( true );
+	} );
+
 	it( 'treats viewport-only iframe embeds as equivalence, not a second document', () => {
 		const desktop =
 			'<html><body><main><h1>Contact</h1><form action="/form"><input name="email"></form>' +

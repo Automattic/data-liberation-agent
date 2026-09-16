@@ -563,7 +563,8 @@ const DEFAULT_SWITCH_WIDTH = 768;
  * not read them as one.
  */
 const CORRESPONDENCE_ATTRIBUTES = [ 'data-dla-geometry-id', 'data-dla-responsive-source' ];
-const YUI_RUNTIME_ID = /^yui_/i;
+const STRUCTURAL_SIGNATURE_ATTRIBUTES = new Set( [ 'id', 'href', 'name', 'type', 'for', 'action' ] );
+const YUI_RUNTIME_ID = /yui_/i;
 const CAPTURE_GEOMETRY_ID = /^(?:desktop|mobile)-(?:target|wrapper)-\d+/i;
 const UUID_ID =
 	/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -1119,15 +1120,11 @@ function responsiveBodySignature( body: string ): string {
 	$( '*' ).each( ( _index, element ) => {
 		const node = $( element );
 		for ( const attribute of Object.keys( 'attribs' in element ? element.attribs : {} ) ) {
-			if ( attribute === 'style' || attribute === 'class' ) {
-				node.removeAttr( attribute );
-			}
+			if ( ! STRUCTURAL_SIGNATURE_ATTRIBUTES.has( attribute ) ) node.removeAttr( attribute );
 		}
-		for ( const attribute of CORRESPONDENCE_ATTRIBUTES ) node.removeAttr( attribute );
-		const id = node.attr( 'id' );
-		if ( id && isUnstableResponsiveId( id ) ) node.removeAttr( 'id' );
-		if ( node.is( 'video,audio' ) ) {
-			node.removeAttr( 'src' ).removeAttr( 'srcset' ).removeAttr( 'sizes' );
+		for ( const attribute of [ 'id', 'name' ] ) {
+			const value = node.attr( attribute );
+			if ( value && isUnstableResponsiveId( value ) ) node.removeAttr( attribute );
 		}
 		if ( node.is( 'form,iframe' ) ) {
 			for ( const attribute of [ 'id', 'name', 'target' ] ) {
