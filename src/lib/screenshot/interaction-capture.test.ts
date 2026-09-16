@@ -251,6 +251,60 @@ describe( 'captureTriggeredDialogs', () => {
 	);
 
 	it.skipIf( process.env.SKIP_BROWSER_TESTS )(
+		'waits for an opening menu instead of capturing a background inside its transparent ancestor',
+		async () => {
+			const browser = await chromium.launch( { headless: true } );
+			const page = await browser.newPage( { viewport: { width: 390, height: 844 } } );
+			try {
+				await page.setContent( `<!doctype html><style>
+					#navigation { display: none; position: fixed; inset: 0; opacity: 0; }
+					.header-menu-bg { position: absolute; inset: 0; background: white; }
+					#navigation a { position: relative; }
+				</style><button id="menu" aria-label="Menu">Menu</button>
+				<nav id="navigation"><div class="header-menu-bg"></div><a href="#about">About</a></nav>` );
+				await page.locator( '#menu' ).evaluate( ( element ) => {
+					element.addEventListener( 'click', () => {
+						const navigation = document.querySelector< HTMLElement >( '#navigation' )!;
+						navigation.style.display = 'block';
+						setTimeout( () => { navigation.style.opacity = '1'; }, 250 );
+					} );
+				} );
+				const report = await captureTriggeredDialogs( page, 'https://example.test/' );
+				expect( report.states ).toMatchObject( [ { status: 'captured', dialog: { id: 'navigation', tag: 'nav' } } ] );
+				expect( report.states[ 0 ].dialog?.html ).toContain( '>About</a>' );
+			} finally {
+				await browser.close();
+			}
+		},
+		30_000
+	);
+
+	it.skipIf( process.env.SKIP_BROWSER_TESTS )(
+		'does not count a navigation surface inside a transparent wrapper as already visible',
+		async () => {
+			const browser = await chromium.launch( { headless: true } );
+			const page = await browser.newPage( { viewport: { width: 390, height: 844 } } );
+			try {
+				await page.setContent( `<!doctype html><button id="menu" aria-label="Menu">Menu</button>
+				<div id="overlay" style="opacity: 0; pointer-events: none;">
+					<nav id="navigation" style="position: fixed; inset: 0; background: white;"><a href="#about">About</a></nav>
+				</div>` );
+				await page.locator( '#menu' ).evaluate( ( element ) => {
+					element.addEventListener( 'click', () => {
+						document.querySelector< HTMLElement >( '#overlay' )!.style.opacity = '1';
+					} );
+				} );
+				const report = await captureTriggeredDialogs( page, 'https://example.test/' );
+				expect( report.states ).toMatchObject( [ { status: 'captured', dialog: { id: 'navigation', tag: 'nav' } } ] );
+				expect( report.states[ 0 ].dialog?.html ).toContain( '>About</a>' );
+			} finally {
+				await browser.close();
+			}
+		},
+		30_000
+	);
+
+	it.skipIf( process.env.SKIP_BROWSER_TESTS )(
 		'dismisses portable triggered dialogs by close control and Escape without handling Escape elsewhere',
 		async () => {
 			const browser = await chromium.launch( { headless: true } );
