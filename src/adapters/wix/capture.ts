@@ -76,7 +76,7 @@ export const WIX_CAPTURE_CHROME_SELECTOR =
 const WIX_SLIDESHOW_SELECTOR = '.wixui-slideshow';
 const WIX_SLIDESHOW_LIMIT = 4;
 const WIX_SLIDE_LIMIT = 6;
-const WIX_SLIDE_SETTLE_MILLISECONDS = 3_000;
+const WIX_SLIDE_SETTLE_MILLISECONDS = 10_000;
 const WIX_SLIDE_POLL_MILLISECONDS = 100;
 
 /**
@@ -165,6 +165,7 @@ export async function collectWixSlideshowSlides( page: Page ): Promise< void > {
 		const slideshow = page.locator( WIX_SLIDESHOW_SELECTOR ).nth( slideshowIndex );
 		const next = slideshow.locator( 'button[data-testid="nextButton"]' );
 		if ( await next.count() !== 1 ) continue;
+		await slideshow.scrollIntoViewIfNeeded?.();
 
 		const initial = await snapshotWixSlide( page, slideshowIndex );
 		if ( ! initial ) continue;
