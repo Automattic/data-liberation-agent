@@ -2,10 +2,10 @@ import * as cheerio from 'cheerio';
 import { classifyUrl } from './extraction/sitemap.js';
 import { parseSitemapDocument } from './extraction/sitemap.js';
 import { extractNavLinks } from './html-extract/index.js';
-import { safeFetch } from './media-fetch/safe-fetch.js';
+import { BodyTooLargeError, safeFetch } from './media-fetch/safe-fetch.js';
 import { detectFromDocument } from './detect-platform/index.js';
 import { resolvePlatform } from '../platform/registry.js';
-import { createRenderedInspector, sourceComplexity, SOURCE_CAPABILITIES, SOURCE_CAPABILITY_VOCABULARY, type RenderedInspection, type SourceComplexity } from './inspect-rendered.js';
+import { createRenderedInspector, sourceComplexity, SOURCE_CAPABILITIES, SOURCE_CAPABILITY_VOCABULARY, INSPECT_DOCUMENT_MAX_BYTES, type RenderedInspection, type SourceComplexity } from './inspect-rendered.js';
 import { detectHosts, hostResidue, type DetectedHost } from '../platform/host.js';
 
 export const INSPECTION_SCHEMA_VERSION = '2.0';
@@ -141,7 +141,19 @@ export async function inspectSource(url: string, options: InspectOptions = {}): 
   const issues: InspectionIssue[] = [];
   const fetchBounded = async (requestUrl: string) => {
     if (deadline.aborted) throw new InspectError(`inspection exceeded overallTimeoutMs (${overallTimeoutMs})`);
-    return safeFetch(requestUrl, { timeoutMs: requestTimeoutMs, maxBytes: 2 * 1024 * 1024, signal: deadline });
+    try {
+      return await safeFetch(requestUrl, { timeoutMs: requestTimeoutMs, maxBytes: INSPECT_DOCUMENT_MAX_BYTES, signal: deadline });
+    } catch (error) {
+      if (error instanceof BodyTooLargeError) {
+        const observed = /(\d+) bytes/.exec(error.message)?.[1];
+        throw new InspectError(
+          observed
+            ? `page document ${observed} bytes exceeds inspect document limit ${INSPECT_DOCUMENT_MAX_BYTES}`
+            : `page document exceeds inspect document limit ${INSPECT_DOCUMENT_MAX_BYTES}`
+        );
+      }
+      throw error;
+    }
   };
 
   options.log?.('Inspecting entry route');
