@@ -23,6 +23,7 @@ import {
 	type CapturedDialogInteraction,
 	type InteractionStatesReport,
 } from './interaction-capture.js';
+import { captureScrollStates, type ScrollStatesReport } from './scroll-state-capture.js';
 import { hydrateDisclosureContent } from './dynamic-content.js';
 import { JsAggregator } from './js-aggregator.js';
 import { isAbsentDocumentError, isSourceCaptureUrl } from './absent-document.js';
@@ -1015,6 +1016,21 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		}
 	} catch {
 		/* best-effort: baseline capture remains valid when interaction probing fails */
+	}
+
+	// Scroll-driven chrome (a header/logo that shrinks or gains a background once
+	// the page scrolls past some offset) is a distinct trigger from clicks, so it
+	// gets its own probe. Also runs only after baseline artifacts, and is
+	// best-effort: a failed probe must not invalidate the rest of the capture.
+	if ( ! entry.scrollStates?.toggles.length ) {
+		try {
+			const scrollStates = await captureScrollStates( page, url );
+			if ( scrollStates.toggles.length > 0 ) {
+				entry.scrollStates = scrollStates;
+			}
+		} catch {
+			/* best-effort: baseline capture remains valid when scroll-state probing fails */
+		}
 	}
 	const cleanup = await readSourceCleanup(page);
 	entry.cleanup = { policy: sourcePolicy, reports: [...(entry.cleanup?.reports ?? []), cleanup] };

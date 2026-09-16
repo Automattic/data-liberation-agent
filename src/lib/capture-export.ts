@@ -29,6 +29,7 @@ import {
 	LEGACY_INTERACTION_STATES_SCHEMA,
 	type InteractionStatesReport,
 } from './screenshot/interaction-capture.js';
+import { SCROLL_STATES_SCHEMA, type ScrollStatesReport } from './screenshot/scroll-state-capture.js';
 import type { CapturedResourceManifest } from './screenshot/resource-capture.js';
 import { isSourcePromotion } from './source-cleanup.js';
 
@@ -49,6 +50,7 @@ type ManifestEntryFluid =
 	  }
 	| undefined;
 export const CAPTURED_INTERACTIONS_SCHEMA = 'data-liberation/captured-interactions/v1';
+export const CAPTURED_SCROLL_STATES_SCHEMA = 'data-liberation/captured-scroll-states/v1';
 /** Indexed semantic evidence sidecar schema. */
 export const INDEXED_SEMANTIC_EVIDENCE_SCHEMA = 'data-liberation/captured-semantic-evidence/v2';
 const MAX_SEMANTIC_EVIDENCE_FILE_BYTES = 10 * 1024 * 1024;
@@ -114,6 +116,7 @@ interface CaptureManifestEntry {
 	html?: string;
 	sections?: string;
 	interactions?: InteractionStatesReport;
+	scrollStates?: ScrollStatesReport;
 	/** Responsive learning outcome recorded during capture. */
 	fluid?: ManifestEntryFluid;
 	metadata?: {
@@ -188,6 +191,7 @@ interface CaptureEntry {
 	canonicalUrl?: string;
 	jsonLd: string[];
 	interactions?: InteractionStatesReport;
+	scrollStates?: ScrollStatesReport;
 	styleHoistContext: StyleHoistContext;
 }
 
@@ -534,8 +538,18 @@ function canonicalMetadataUrl( value: unknown, documentUrl: string ): string | u
 	}
 }
 
-const RESPONSIVE_DOCUMENT_CSS =
-	'html,body{margin:0;padding:0}.data-liberation-mobile-document{display:none!important}';
+/**
+ * Class tokens marking one side of a desktop/mobile document pair emitted
+ * directly into a single exported page (see `mergeResponsiveDocuments`
+ * below). Consumers that need to recognize these as a document-scope
+ * boundary (e.g. to disambiguate a duplicate id captured on both sides)
+ * cannot assume this naming — it is declared explicitly in the capture
+ * receipt's `document_scope_classes` list rather than hardcoded downstream.
+ */
+const DESKTOP_DOCUMENT_CLASS = 'data-liberation-desktop-document';
+const MOBILE_DOCUMENT_CLASS = 'data-liberation-mobile-document';
+
+const RESPONSIVE_DOCUMENT_CSS = `html,body{margin:0;padding:0}.${ MOBILE_DOCUMENT_CLASS }{display:none!important}`;
 
 const RESPONSIVE_COUNTERPART_CLASS_PREFIX = 'data-liberation-responsive-counterpart-';
 const RESPONSIVE_COUNTERPART_TAGS = 'p,h1,h2,h3,h4,h5,h6,a,button';
@@ -543,7 +557,7 @@ const RESPONSIVE_SOURCE_ID = /^[A-Za-z][A-Za-z0-9_-]{0,79}$/;
 
 /** Switches which captured document is shown, at the detected width. */
 function documentSwitchCss( switchWidth: number ): string {
-	return `@media(max-width:${ switchWidth }px){.data-liberation-desktop-document{display:none!important}.data-liberation-mobile-document{display:contents!important}}`;
+	return `@media(max-width:${ switchWidth }px){.${ DESKTOP_DOCUMENT_CLASS }{display:none!important}.${ MOBILE_DOCUMENT_CLASS }{display:contents!important}}`;
 }
 
 /**
@@ -863,10 +877,10 @@ function assembleResponsiveHtml(
 			: ''
 	}>`;
 	const responsiveBody = `<div ${ wrapperAttributes(
-		'data-liberation-desktop-document',
+		DESKTOP_DOCUMENT_CLASS,
 		desktopBodyMatch?.[ 1 ] ?? ''
 	) }>${ desktopBody }</div><div ${ wrapperAttributes(
-		'data-liberation-mobile-document',
+		MOBILE_DOCUMENT_CLASS,
 		mobileBodyMatch?.[ 1 ] ?? ''
 	) }>${ mobileBody }</div>`;
 	const sharedStyles = styleBlocks( desktopHtml );
@@ -890,7 +904,7 @@ function assembleResponsiveHtml(
 	const shared = sharedStyleContents( desktopHtml, mobileHtml );
 	const mobileStyles = responsiveMobileStyles(
 		mobileHtml,
-		'.data-liberation-mobile-document',
+		`.${ MOBILE_DOCUMENT_CLASS }`,
 		switchWidth,
 		shared
 	);
@@ -1940,6 +1954,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 
 	const capturedEntries: CaptureEntry[] = [];
 	const interactionPages: InteractionStatesReport[] = [];
+	const scrollStatesPages: ScrollStatesReport[] = [];
 	const excludedRoutes: string[] = [];
 	// A route that was discovered and attempted must never disappear from the
 	// receipt without a reason. Every screenshot-stage failure (goto timeouts,
@@ -2028,6 +2043,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 			),
 			jsonLd: sanitized.jsonLd,
 			interactions: entry.interactions,
+			scrollStates: entry.scrollStates,
 			styleHoistContext,
 		} );
 		if (
@@ -2035,6 +2051,9 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 			entry.interactions?.schema === LEGACY_INTERACTION_STATES_SCHEMA
 		) {
 			interactionPages.push( entry.interactions );
+		}
+		if ( entry.scrollStates?.schema === SCROLL_STATES_SCHEMA && entry.scrollStates.toggles.length > 0 ) {
+			scrollStatesPages.push( entry.scrollStates );
 		}
 	}
 
@@ -2682,6 +2701,24 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 			) }\n`
 		);
 	}
+	const scrollStatesSummary = {
+		page_count: scrollStatesPages.length,
+		toggle_count: scrollStatesPages.reduce( ( total, page ) => total + page.toggles.length, 0 ),
+	};
+	if ( scrollStatesPages.length > 0 ) {
+		writeFileSync(
+			join( outputDir, 'scroll-states.json' ),
+			`${ JSON.stringify(
+				{
+					schema: CAPTURED_SCROLL_STATES_SCHEMA,
+					pages: scrollStatesPages,
+					totals: scrollStatesSummary,
+				},
+				null,
+				2
+			) }\n`
+		);
+	}
 
 	// --- source profile -------------------------------------------------------
 	// What the source actually does, measured rather than assumed: whether it
@@ -2777,11 +2814,17 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 				entrypoint: 'website/index.html',
 				source: { url: options.sourceUrl, platform: options.platform },
 				...( options.title ? { title: options.title } : {} ),
+				// Declares the class tokens this capture tool uses to mark one side
+				// of a desktop/mobile document pair (see mergeResponsiveDocuments),
+				// so a generic consumer can recognize them as a document-scope
+				// boundary without hardcoding this tool's naming convention.
+				document_scope_classes: [ DESKTOP_DOCUMENT_CLASS, MOBILE_DOCUMENT_CLASS ],
 				routes,
 				assets,
 				assetEvidence: { path: 'asset-evidence.json', schema: ASSET_EVIDENCE_SCHEMA },
 				portableMedia,
 				interactions: interactionSummary,
+				scrollStates: scrollStatesSummary,
 				layoutGeometry: geometryReport,
 				sourceProfile,
 				excludedRoutes,
@@ -2812,6 +2855,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 				unresolvedAnchors,
 				portableMedia,
 				interactions: interactionSummary,
+				scrollStates: scrollStatesSummary,
 				interactionFailures: interactionStates.filter( ( state ) => state.status !== 'captured' ),
 				excludedRoutes,
 				duplicateRoutes,
