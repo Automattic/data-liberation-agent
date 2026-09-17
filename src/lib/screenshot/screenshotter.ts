@@ -262,8 +262,39 @@ export async function capturePageHtml( page: Page ): Promise< string > {
 	for ( let attempt = 0; attempt < 10 && ( await hydrateMediaSources() ) === true; attempt++ ) {
 		await page.waitForTimeout( 200 );
 	}
+	// CSSOM mutations do not update a <style> element's text content, and constructed
+	// sheets have no owner node at all, so neither survives markup serialization. Sync
+	// each sheet from its active rules so the static capture preserves the styles the
+	// browser is actually applying. Runs once, after media settling: appending inside
+	// that retry loop would emit a duplicate <style> per attempt.
+	await page.evaluate( () => {
+		const sheets = new Set( [ ...document.styleSheets, ...document.adoptedStyleSheets ] );
+		for ( const sheet of sheets ) {
+			const owner = sheet.ownerNode;
+			if ( owner instanceof HTMLLinkElement ) continue;
+			let cssText = '';
+			try {
+				cssText = Array.from( sheet.cssRules ).map( ( rule ) => rule.cssText ).join( '\n' );
+			} catch {
+				// Cross-origin sheet: .cssRules throws. Its <link> is captured separately.
+				continue;
+			}
+			if ( ! cssText ) continue;
+			if ( owner instanceof HTMLStyleElement && document.documentElement.contains( owner ) ) {
+				owner.textContent = cssText;
+				continue;
+			}
+			const style = document.createElement( 'style' );
+			style.setAttribute( 'data-dla-constructed-stylesheet', '' );
+			style.textContent = cssText;
+			document.head.appendChild( style );
+		}
+	} );
 	try {
-		return await page.content();
+		// Serialize in the renderer's current task. page.content() round-trips through
+		// DevTools and can race framework hydration, pairing a newer class namespace
+		// with older CSS.
+		return await page.evaluate( () => `<!DOCTYPE html>${ document.documentElement.outerHTML }` );
 	} finally {
 		await page.evaluate( ( evidenceAttributes ) => {
 			for ( const frame of document.querySelectorAll( 'iframe' ) ) {

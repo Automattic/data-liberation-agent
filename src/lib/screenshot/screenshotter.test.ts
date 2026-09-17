@@ -57,6 +57,8 @@ function makeGoodPage(gotoStatus: number | ((url: string) => number) = 200) {
     waitForLoadState: vi.fn().mockResolvedValue(undefined),
     evaluate: vi.fn().mockImplementation(async (fn: unknown) => {
       const s = String(fn);
+      // capturePageHtml serializes in-renderer rather than via page.content().
+      if (s.includes('DOCTYPE')) return '<html><body>hello</body></html>';
       if (s.includes('__dlaCleanup')) return { url: currentUrl, viewport: 1440, removed: 0, records: [], truncated: false, failures: [], residual: 0 };
       // extractFull's section-spec closure — return an empty raw-section array so
       // the desktop pass writes sections/<slug>.json (no real DOM in the mock).
@@ -119,24 +121,45 @@ describe('captureScreenshots', () => {
 
 	it('reflects property-only media state before serializing HTML', async () => {
 		const page = {
-			evaluate: vi.fn().mockResolvedValue(false),
+			evaluate: vi.fn().mockImplementation(async (fn: unknown) =>
+				String(fn).includes('DOCTYPE') ? '<html><video autoplay muted></video></html>' : false),
 			waitForTimeout: vi.fn(),
-			content: vi.fn().mockResolvedValue('<html><video autoplay muted></video></html>'),
 		};
 
 		await expect(capturePageHtml(page as never)).resolves.toContain('<video autoplay muted>');
-		expect(page.evaluate).toHaveBeenCalledTimes(2);
+		expect(page.evaluate).toHaveBeenCalledTimes(4);
 		expect(String(page.evaluate.mock.calls[0][0])).toContain('source.setAttribute(property');
 		expect(String(page.evaluate.mock.calls[0][0])).toContain('source.currentSrc || source.src');
 		expect(String(page.evaluate.mock.calls[0][0])).toContain('frame.getBoundingClientRect()');
-		expect(String(page.evaluate.mock.calls[1][0])).toContain('frame.removeAttribute(attribute)');
+		expect(String(page.evaluate.mock.calls[1][0])).toContain('adoptedStyleSheets');
+		expect(String(page.evaluate.mock.calls[2][0])).toContain('document.documentElement.outerHTML');
+		expect(String(page.evaluate.mock.calls[3][0])).toContain('frame.removeAttribute(attribute)');
+	});
+
+	it('synchronizes stylesheets once, after media settling rather than per retry', async () => {
+		const page = {
+			evaluate: vi.fn().mockImplementation(async (fn: unknown) => {
+				const s = String(fn);
+				if (s.includes('DOCTYPE')) return '<html></html>';
+				// Keep the media-settling loop running to its bound.
+				return s.includes('source.setAttribute(property') ? true : undefined;
+			}),
+			waitForTimeout: vi.fn().mockResolvedValue(undefined),
+		};
+
+		await capturePageHtml(page as never);
+		const cssomCalls = page.evaluate.mock.calls.filter(([fn]) => String(fn).includes('adoptedStyleSheets'));
+		expect(cssomCalls).toHaveLength(1);
 	});
 
 	it('waits only while source-less video elements are pending runtime hydration', async () => {
 		const page = {
-			evaluate: vi.fn().mockResolvedValueOnce(true).mockResolvedValueOnce(false).mockResolvedValue(undefined),
+			evaluate: vi
+				.fn()
+				.mockResolvedValueOnce(true)
+				.mockResolvedValueOnce(false)
+				.mockResolvedValue('<html><video src="https://cdn.example.test/video.mp4"></video></html>'),
 			waitForTimeout: vi.fn().mockResolvedValue(undefined),
-			content: vi.fn().mockResolvedValue('<html><video src="https://cdn.example.test/video.mp4"></video></html>'),
 		};
 
 		await capturePageHtml(page as never);
@@ -193,9 +216,10 @@ describe('captureScreenshots', () => {
 	  expect(learnAndApplyFluidGeometryMock.mock.invocationCallOrder[0]).toBeLessThan(
 		pages[0].screenshot.mock.invocationCallOrder[0],
 	  );
-      expect(pages[0].screenshot.mock.invocationCallOrder[0]).toBeLessThan(
-        pages[0].content.mock.invocationCallOrder[0],
-      );
+	  const serializationOrder = pages[0].evaluate.mock.invocationCallOrder.find(
+		(_: number, index: number) => String(pages[0].evaluate.mock.calls[index][0]).includes('DOCTYPE'),
+	  );
+      expect(pages[0].screenshot.mock.invocationCallOrder[0]).toBeLessThan(serializationOrder!);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -338,6 +362,7 @@ describe('captureScreenshots', () => {
         const p = makeGoodPage();
         p.evaluate = vi.fn().mockImplementation(async (fn: unknown) => {
           const s = String(fn);
+          if (s.includes('DOCTYPE')) return '<html><body>hello</body></html>';
           if (s.includes('__dlaCleanup')) return { url: 'https://example.com/short', viewport: 1440, removed: 0, records: [], truncated: false, failures: [], residual: 0 };
           if (s.includes('scrollHeight')) return 500;
           // site-analysis evaluate
