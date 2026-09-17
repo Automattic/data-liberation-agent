@@ -2949,7 +2949,46 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		expect( existsSync( join( outputDir, 'capture-receipt.json' ) ) ).toBe( true );
 	} );
 
-	it( 'rejects decoded route paths that escape the website directory', () => {
+	it( 'preserves percent-encoded route segments in artifact paths and links', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-' ) );
+		dirs.push( outputDir );
+		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
+		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
+		writeFileSync(
+			join( outputDir, 'html', 'homepage.html' ),
+			'<h1>Home</h1><a href="https://example.com/comms-%26-use-cases">Cases</a>'
+		);
+		writeFileSync( join( outputDir, 'html', 'cases.html' ), '<h1>Cases</h1>' );
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( {
+				version: 1,
+				entries: {
+					'https://example.com/': { html: 'html/homepage.html' },
+					'https://example.com/comms-%26-use-cases': { html: 'html/cases.html' },
+				},
+			} )
+		);
+
+		const receiptPath = exportWebsiteCapture( {
+			outputDir,
+			sourceUrl: 'https://example.com/',
+			platform: 'fake',
+			summary: {},
+			failures: [],
+		} );
+
+		const receipt = JSON.parse( readFileSync( receiptPath, 'utf8' ) );
+		expect( receipt.routes ).toContainEqual( {
+			url: 'https://example.com/comms-%26-use-cases',
+			path: 'website/comms-%26-use-cases/index.html',
+		} );
+		expect(
+			readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' )
+		).toContain( 'href="/comms-%26-use-cases/index.html"' );
+	} );
+
+	it( 'rejects encoded route paths that escape the website directory', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
