@@ -212,12 +212,13 @@ export async function captureTriggeredDialogs(
 	for ( const trigger of triggers ) {
 		const before = await visibleDialogSelectors( page );
 		try {
-			await page.locator( trigger.probeSelector ).first().click( { timeout: DIALOG_WAIT_MS } );
+			await activateTrigger( page, trigger.probeSelector );
 		} catch ( error ) {
+			const intercepting = await describeInterceptingElement( page, trigger.probeSelector );
 			states.push( {
 				status: 'click-failed',
 				trigger: triggerRecord( trigger ),
-				error: boundedError( error ),
+				error: formatClickFailure( error, intercepting ),
 			} );
 			continue;
 		}
@@ -602,4 +603,51 @@ function boundHtml( html: string ): { html: string; bytes: number; truncated: bo
 
 function boundedError( error: unknown ): string {
 	return ( error instanceof Error ? error.message : String( error ) ).slice( 0, 500 );
+}
+
+function formatClickFailure( error: unknown, intercepting: string | undefined ): string {
+	const base = boundedError( error );
+	if ( ! intercepting ) return base;
+	return `Click intercepted by ${ intercepting }. ${ base }`.slice( 0, 500 );
+}
+
+async function describeInterceptingElement(
+	page: Page,
+	probeSelector: string
+): Promise< string | undefined > {
+	return page
+		.locator( probeSelector )
+		.first()
+		.evaluate( ( element ) => {
+			const rect = element.getBoundingClientRect();
+			const hit = document.elementFromPoint(
+				rect.left + rect.width / 2,
+				rect.top + rect.height / 2
+			);
+			if ( ! hit || hit === element || element.contains( hit ) ) return undefined;
+			const className =
+				typeof ( hit as HTMLElement ).className === 'string'
+					? ( hit as HTMLElement ).className.trim().replace( /\s+/g, ' ' )
+					: '';
+			const parts = [
+				hit.id ? `id="${ hit.id }"` : '',
+				className ? `class="${ className.slice( 0, 80 ) }"` : '',
+			].filter( Boolean );
+			return `<${ hit.tagName.toLowerCase() }${ parts.length ? ` ${ parts.join( ' ' ) }` : '' }>`;
+		} )
+		.catch( () => undefined );
+}
+
+async function activateTrigger( page: Page, probeSelector: string ): Promise< void > {
+	const locator = page.locator( probeSelector ).first();
+	await locator.scrollIntoViewIfNeeded( { timeout: DIALOG_WAIT_MS } ).catch( () => undefined );
+	if ( ! ( await describeInterceptingElement( page, probeSelector ) ) ) {
+		try {
+			await locator.click( { timeout: DIALOG_WAIT_MS } );
+			return;
+		} catch {
+			/* Coordinate click failed; fall through to a node-targeted click. */
+		}
+	}
+	await locator.evaluate( ( element ) => ( element as HTMLElement ).click() );
 }

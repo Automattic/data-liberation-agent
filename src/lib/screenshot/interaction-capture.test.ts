@@ -203,6 +203,74 @@ describe( 'captureTriggeredDialogs', () => {
 	);
 
 	it.skipIf( process.env.SKIP_BROWSER_TESTS )(
+		'captures a menu trigger whose hit point is covered by an ancestor',
+		async () => {
+			const browser = await chromium.launch( { headless: true } );
+			const page = await browser.newPage( { viewport: { width: 390, height: 844 } } );
+			try {
+				await page.setContent( `<!doctype html><body>
+					<header>
+						<div class="mx-auto flex h-20" style="position:relative;z-index:0;width:320px;height:80px;background:#fff">
+							<button type="button" aria-label="Open menu" style="position:relative;z-index:-1">Menu</button>
+						</div>
+					</header>
+					<script>
+						document.querySelector('button').addEventListener('click', () => {
+							const nav = document.createElement('nav');
+							nav.id = 'site-navigation';
+							nav.setAttribute('aria-label', 'Site');
+							nav.style.cssText = 'position:fixed;inset:0;background:white';
+							nav.innerHTML = '<a href="/about">About</a><button type="button" aria-label="Close">Close</button>';
+							document.body.append(nav);
+						});
+					</script>
+				</body>` );
+
+				const report = await captureTriggeredDialogs( page, 'https://example.test/' );
+				expect( report.states ).toMatchObject( [
+					{
+						status: 'captured',
+						trigger: { tag: 'button', label: 'Open menu' },
+						dialog: { id: 'site-navigation', tag: 'nav', ariaLabel: 'Site' },
+					},
+				] );
+			} finally {
+				await browser.close();
+			}
+		},
+		30_000
+	);
+
+	it.skipIf( process.env.SKIP_BROWSER_TESTS )(
+		'names the intercepting element when an intercepted trigger cannot be activated',
+		async () => {
+			const browser = await chromium.launch( { headless: true } );
+			const page = await browser.newPage( { viewport: { width: 390, height: 844 } } );
+			try {
+				await page.setContent( `<!doctype html><body>
+					<header>
+						<div class="mx-auto flex h-20" style="position:relative;z-index:0;width:320px;height:80px;background:#fff">
+							<button type="button" aria-label="Open menu" style="position:relative;z-index:-1">Menu</button>
+						</div>
+					</header>
+					<script>
+						HTMLElement.prototype.click = function () { throw new Error('native click blocked'); };
+					</script>
+				</body>` );
+
+				const report = await captureTriggeredDialogs( page, 'https://example.test/' );
+				expect( report.states ).toHaveLength( 1 );
+				expect( report.states[ 0 ].status ).toBe( 'click-failed' );
+				expect( report.states[ 0 ].error ).toMatch( /Click intercepted by <div class="mx-auto flex h-20">/ );
+				expect( report.states[ 0 ].error ).toMatch( /native click blocked/ );
+			} finally {
+				await browser.close();
+			}
+		},
+		30_000
+	);
+
+	it.skipIf( process.env.SKIP_BROWSER_TESTS )(
 		'keeps a captured flex menu usable when its scrollable links depend on the root layout',
 		async () => {
 			const browser = await chromium.launch( { headless: true } );
