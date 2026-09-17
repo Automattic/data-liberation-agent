@@ -21,7 +21,7 @@ import {
 	type GeometryCapture,
 } from './screenshot/layout-geometry-proof.js';
 import { failuresAreAbsentDocument } from './screenshot/absent-document.js';
-import { selfContainWebsite } from './self-contain.js';
+import { isInlineUrl, selfContainWebsite } from './self-contain.js';
 import { wireCapturedDialogs } from './static-dialogs.js';
 import { rewriteMediaUrls } from './streaming/media-url-rewrite.js';
 import {
@@ -1485,7 +1485,10 @@ function dependencyReferences(
 	}
 	const references = new Set< string >();
 	const add = ( reference: string | undefined ) => {
-		if ( reference ) references.add( reference.replace( /&amp;/g, '&' ) );
+		// A data: or blob: reference already carries its bytes (or points at an
+		// in-memory object): it is never a network dependency to resolve, so it
+		// must not be recorded, let alone reported as unresolved.
+		if ( reference && ! isInlineUrl( reference ) ) references.add( reference.replace( /&amp;/g, '&' ) );
 	};
 
 	const mediaReferences = new Set< string >();
@@ -1533,7 +1536,7 @@ function dependencyReferences(
 		/\burl\(\s*(?:(["'])([\s\S]*?)\1|([^\s)'";]+))\s*\)/gi
 	) ) {
 		const reference = match[ 2 ] ?? match[ 3 ];
-		if ( reference && ! reference.startsWith( 'data:' ) && ! reference.startsWith( '#' ) ) {
+		if ( reference && ! reference.startsWith( '#' ) ) {
 			cssReferences.add( reference.replace( /&amp;/g, '&' ) );
 			add( reference );
 		}

@@ -23,9 +23,17 @@ const TRANSPARENT_IMAGE_PAYLOAD = TRANSPARENT_IMAGE.slice( TRANSPARENT_IMAGE.ind
  */
 export const ASSET_LINK_REL = /^(?:stylesheet|preload|prefetch|preconnect|dns-prefetch|prerender|modulepreload|manifest)$|(?:^|-)icon$/;
 
+// `data:` and `blob:` URIs carry their bytes inline (or reference an in-memory
+// object): there is nothing on the network to fetch, so neither is ever a
+// dependency to resolve or an asset to strip as remote.
+export function isInlineUrl( value: string ): boolean {
+	const url = value.trim();
+	return url.startsWith( 'data:' ) || url.startsWith( 'blob:' );
+}
+
 export function isRemoteAssetUrl( value: string ): boolean {
 	const url = value.trim().replace( /&amp;/g, '&' );
-	if ( ! url || url.startsWith( 'data:' ) || url.startsWith( 'blob:' ) || url.startsWith( '#' ) ) {
+	if ( ! url || isInlineUrl( url ) || url.startsWith( '#' ) ) {
 		return false;
 	}
 	if ( ! /^(?:https?:)?\/\//i.test( url ) ) return false;

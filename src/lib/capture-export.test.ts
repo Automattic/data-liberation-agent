@@ -2772,6 +2772,40 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		expect( diagnostics.unresolvedDependencies ).toEqual( [] );
 	} );
 
+	it( 'preserves a self-contained data: image src instead of treating it as an unresolved dependency', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-' ) );
+		dirs.push( outputDir );
+		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
+		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
+		const dataUri =
+			"data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' width='1em' height='1em' viewBox='0 0 256 256'%3e%3c/svg%3e";
+		writeFileSync(
+			join( outputDir, 'html', 'homepage.html' ),
+			`<html><body><img src="${ dataUri }" width="40" height="40" alt="Trello logo"></body></html>`
+		);
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( {
+				version: 1,
+				entries: { 'https://example.com/': { html: 'html/homepage.html' } },
+			} )
+		);
+
+		exportWebsiteCapture( {
+			outputDir,
+			sourceUrl: 'https://example.com/',
+			platform: 'fake',
+			summary: {},
+			failures: [],
+		} );
+
+		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
+		const diagnostics = JSON.parse( readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' ) );
+		expect( cheerio.load( html )( 'img' ).attr( 'src' ) ).toBe( dataUri );
+		expect( html ).not.toContain( 'R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=' );
+		expect( diagnostics.unresolvedDependencies ).toEqual( [] );
+	} );
+
 	it( 'removes fixed provider acquisition chrome and its matching body reservation', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-' ) );
 		dirs.push( outputDir );
