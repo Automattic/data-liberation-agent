@@ -2618,6 +2618,33 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		] ) );
 	} );
 
+	it( 'still hoists styles whose only unavailable asset became the about:blank sentinel', () => {
+		// The sentinel is base-independent like data: and absolute URLs. Classifying
+		// it as an unknown scheme would silently disable hoisting for every document
+		// that lost an asset.
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-style-hoist-sentinel-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
+		const css = '<style>.safe{background:url("https://cdn.example/missing.png")}</style>';
+		writeFileSync( join( outputDir, 'html', 'homepage.html' ), `<html><head>${ css }</head><body><p>Home</p></body></html>` );
+		writeFileSync( join( outputDir, 'html', 'about.html' ), `<html><head>${ css }</head><body><p>About</p></body></html>` );
+		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( {
+			version: 1,
+			entries: {
+				'https://example.com/': { html: 'html/homepage.html' },
+				'https://example.com/about': { html: 'html/about.html' },
+			},
+		} ) );
+		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'fake', summary: {}, failures: [] } );
+
+		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
+		expect( html ).toContain( 'capture-' );
+		const href = /href="([^"]*capture-[^"]*)"/.exec( html )?.[ 1 ];
+		expect( href ).toBeDefined();
+		const hoisted = readFileSync( join( outputDir, 'website', href!.replace( /^\//, '' ) ), 'utf8' );
+		expect( hoisted ).toContain( 'about:blank' );
+	} );
+
 	it( 'preserves computed cascade when shared styles are replaced in place', async () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-style-hoist-browser-' ) );
 		dirs.push( outputDir );
@@ -2978,7 +3005,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		expect(
 			readFileSync( join( outputDir, 'website', 'assets', 'css', 'site.css' ), 'utf8' )
 		).toBe(
-			'.hero{background:url("/assets/images/hero.webp")}.missing{background:url("data:application/octet-stream;base64,")}'
+			'.hero{background:url("/assets/images/hero.webp")}.missing{background:url("about:blank")}'
 		);
 		expect(
 			readFileSync( join( outputDir, 'website', 'assets', 'images', 'hero.webp' ), 'utf8' )
@@ -3009,7 +3036,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		expect( html ).toContain( '<source>' );
 		expect( html ).not.toContain( '/_videos/missing' );
 		expect( html ).not.toContain( '/_fonts/missing.woff2' );
-		expect( html ).toContain( 'data:application/octet-stream;base64,' );
+		expect( html ).toContain( 'about:blank' );
 		expect( html ).not.toContain( '/_runtimes/site.js' );
 		expect( html ).not.toContain( '/_runtimes/missing-script.js' );
 		expect( existsSync( join( outputDir, 'diagnostics.json' ) ) ).toBe( true );
@@ -3746,7 +3773,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		expect( html ).not.toMatch(
 			/https:\/\/cdn\.example\/(?:lazy|picture|fallback|favicon|font|preload|site|missing)/
 		);
-		expect( html ).toContain( 'data:application/octet-stream;base64,' );
+		expect( html ).toContain( 'about:blank' );
 		expect( css ).not.toContain( 'https://cdn.example' );
 		expect( diagnostics.unresolvedDependencies ).toContainEqual(
 			expect.objectContaining( { url: 'https://cdn.example/missing.jpg' } )
@@ -3812,7 +3839,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		expect( css ).toContain( 'url("/fonts/icon.ttf") format("truetype")' );
 		expect( css ).not.toContain( 'embedded-opentype' );
 		expect( css ).not.toContain( '.eot' );
-		expect( css ).toContain( '.hero{background:url("data:application/octet-stream;base64,")}' );
+		expect( css ).toContain( '.hero{background:url("about:blank")}' );
 		expect( readFileSync( join( outputDir, 'website', 'fonts', 'icon.woff' ), 'utf8' ) ).toBe( 'woff' );
 		expect( readFileSync( join( outputDir, 'website', 'fonts', 'icon.ttf' ), 'utf8' ) ).toBe( 'ttf' );
 	} );
@@ -3851,7 +3878,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		expect( $( '.kv-background-inner' ).attr( 'style' ) ).toContain( "background-image: url('/media/background.jpg')" );
 		expect( $( '.kv-background-inner' ).attr( 'style' ) ).not.toContain( 'data:' );
 		expect( $( '.mobile-background' ).attr( 'style' ) ).toBe( 'background-image:url("/media/background-mobile.webp")' );
-		expect( $( '.missing-background' ).attr( 'style' ) ).toBe( 'background:url(data:application/octet-stream;base64,)' );
+		expect( $( '.missing-background' ).attr( 'style' ) ).toBe( 'background:url(about:blank)' );
 		expect( readFileSync( join( outputDir, 'website', 'media', 'background.jpg' ), 'utf8' ) ).toBe( 'desktop-image' );
 		expect( readFileSync( join( outputDir, 'website', 'media', 'background-mobile.webp' ), 'utf8' ) ).toBe( 'mobile-image' );
 		expect( JSON.parse( readFileSync( receiptPath, 'utf8' ) ).assets ).toEqual( expect.arrayContaining( [
@@ -3912,7 +3939,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 			name: 'blanks CSS media when both download and browser capture failed',
 			mediaStatus: 'failure' as const,
 			browserResource: false,
-			expectedUrl: 'data:application/octet-stream;base64,',
+			expectedUrl: 'about:blank',
 		},
 	] )( '$name', ( { mediaStatus, browserResource, expectedUrl } ) => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-stylesheet-media-' ) );

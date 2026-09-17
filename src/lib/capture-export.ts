@@ -1039,7 +1039,11 @@ function cssReferenceReason( css: string ): StyleHoistReason | undefined {
 		// A fragment resolves against the stylesheet itself, not the document, after a move.
 		if ( reference.startsWith( '#' ) ) return 'fragment_css_url';
 		if ( reference.startsWith( '/' ) && ! reference.startsWith( '//' ) ) continue;
-		if ( /^(?:data:|https?:)/i.test( reference ) ) continue;
+		// `about:blank` is the unavailable-asset sentinel this export writes for a
+		// dependency it could not capture. Like data: and absolute URLs it resolves
+		// identically from any base, so it must not disable hoisting for every
+		// document that lost an asset.
+		if ( /^(?:data:|https?:|about:blank\b)/i.test( reference ) ) continue;
 		if ( /^[a-z][a-z0-9+.-]*:/i.test( reference ) ) return 'invalid_css_url';
 		return 'relative_css_url';
 	}
@@ -1727,11 +1731,10 @@ function replaceDanglingCssUrl(
 	reference: string,
 	rejectedKeys?: Set< string >
 ): string {
-	return replaceAll(
-		html,
-		new Map( [ [ reference, 'data:application/octet-stream;base64,' ] ] ),
-		rejectedKeys
-	);
+	// An empty data: URL is a valid, zero-byte resource, so the browser reports a
+	// clean load for an asset the capture never got. about:blank cannot be fetched
+	// as a subresource, keeping the loss visible instead of silently successful.
+	return replaceAll( html, new Map( [ [ reference, 'about:blank' ] ] ), rejectedKeys );
 }
 
 function removeDanglingResourceReference( html: string, reference: string ): string {
