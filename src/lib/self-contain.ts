@@ -2,7 +2,17 @@ import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import * as cheerio from 'cheerio';
 
-const EMPTY_CSS_URL = 'data:application/octet-stream;base64,';
+// An empty data: URL is a *valid, zero-byte resource*: the browser loads it
+// successfully, so a stylesheet that lost its asset still reports a clean load
+// and the loss becomes invisible. about:blank cannot be fetched as a
+// subresource, so the missing asset stays observable in devtools and in any
+// parity check that inspects failed requests.
+const UNAVAILABLE_CSS_URL = 'about:blank';
+// Recognition is broader than emission. The legacy empty data: URL still arrives
+// inside source stylesheets — producers inject it themselves, and earlier
+// captures wrote it — so @font-face sentinel stripping must keep matching it
+// even though nothing emits it any more.
+const UNAVAILABLE_CSS_SENTINELS = [ UNAVAILABLE_CSS_URL, 'data:application/octet-stream;base64,' ];
 const TRANSPARENT_IMAGE = 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=';
 const TRANSPARENT_IMAGE_PAYLOAD = TRANSPARENT_IMAGE.slice( TRANSPARENT_IMAGE.indexOf( ',' ) + 1 );
 
@@ -33,12 +43,14 @@ export function isRemoteAssetUrl( value: string ): boolean {
 // to the source CDN rather than an inert pointer — drop the comment entirely.
 const SOURCE_MAPPING_COMMENT = /\/\*[#@]\s*sourceMappingURL=\s*([^\s*]+)\s*\*\//gi;
 
-function isEmptyCssAssetUrl( reference: string ): boolean {
+function isUnavailableCssAssetUrl( reference: string ): boolean {
 	const url = reference.trim();
-	if ( url === EMPTY_CSS_URL ) return true;
-	if ( ! url.startsWith( EMPTY_CSS_URL ) ) return false;
-	const rest = url.slice( EMPTY_CSS_URL.length );
-	return rest.startsWith( '#' ) || rest.startsWith( '?' );
+	return UNAVAILABLE_CSS_SENTINELS.some( ( sentinel ) => {
+		if ( url === sentinel ) return true;
+		if ( ! url.startsWith( sentinel ) ) return false;
+		const rest = url.slice( sentinel.length );
+		return rest.startsWith( '#' ) || rest.startsWith( '?' );
+	} );
 }
 
 function splitTopLevel( value: string, separator: string ): string[] {
@@ -80,7 +92,7 @@ function omitEmptyFontFaceSrc( css: string ): string {
 					if ( ! part.trim() ) return false;
 					const urlMatch = /url\(\s*(?:["']([^"']*)["']|([^)]+))\s*\)/i.exec( part );
 					if ( ! urlMatch ) return true;
-					return ! isEmptyCssAssetUrl( ( urlMatch[ 1 ] ?? urlMatch[ 2 ] ?? '' ).trim() );
+					return ! isUnavailableCssAssetUrl( ( urlMatch[ 1 ] ?? urlMatch[ 2 ] ?? '' ).trim() );
 				} );
 				return kept.length === 0 ? '' : `${ prefix[ 0 ] }${ kept.join( ',' ) }`;
 			} )
@@ -97,10 +109,10 @@ export function stripRemoteCssUrls( css: string ): string {
 			)
 			.replace( /url\(\s*(?:["']([^"']+)["']|([^\s)'";]+))\s*\)/gi, ( match, quoted, bare ) => {
 				const reference = quoted ?? bare;
-				return reference && isRemoteAssetUrl( reference ) ? `url("${ EMPTY_CSS_URL }")` : match;
+				return reference && isRemoteAssetUrl( reference ) ? `url("${ UNAVAILABLE_CSS_URL }")` : match;
 			} )
 			.replace( /@import\s+(?:url\(\s*)?["']([^"']+)["'][^;]*;?/gi, ( match, reference ) =>
-				isRemoteAssetUrl( reference ) ? `@import "${ EMPTY_CSS_URL }";` : match
+				isRemoteAssetUrl( reference ) ? `@import "${ UNAVAILABLE_CSS_URL }";` : match
 			)
 	);
 }
