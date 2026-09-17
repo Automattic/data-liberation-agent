@@ -400,6 +400,73 @@ describe( 'exportWebsiteCapture', () => {
 		] );
 	} );
 
+	it( 'diagnoses an ordinary authored same-page anchor with no matching target', () => {
+		// Regression for a truncated SPA capture: a nav link like
+		// `<a href="#releases">` ships unmarked by any adapter (no
+		// `data-dla-anchor-fragment`) — this is what an entire dropped section
+		// looks like when the deferred content never rendered before the
+		// snapshot. The receipt must surface it instead of reporting a clean
+		// capture.
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-bare-anchor-export-' ) );
+		dirs.push( outputDir );
+		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
+		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
+		writeFileSync(
+			join( outputDir, 'html', 'homepage.html' ),
+			'<html><body><nav><a href="#releases">Releases</a><a href="#listen">Listen</a></nav><section id="listen">Listen</section></body></html>'
+		);
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( { version: 1, entries: { 'https://example.com/': { html: 'html/homepage.html' } } } )
+		);
+
+		exportWebsiteCapture( {
+			outputDir,
+			sourceUrl: 'https://example.com/',
+			platform: 'generic',
+			summary: {},
+			failures: [],
+		} );
+
+		expect(
+			JSON.parse( readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' ) ).unresolvedAnchors
+		).toEqual( [
+			{
+				sourceUrl: 'https://example.com/',
+				fragment: 'releases',
+				targetCount: 0,
+				reason: 'captured fragment target is missing',
+			},
+		] );
+	} );
+
+	it( 'does not flag a resolvable same-page anchor or a cross-route fragment link', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-ok-anchor-export-' ) );
+		dirs.push( outputDir );
+		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
+		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
+		writeFileSync(
+			join( outputDir, 'html', 'homepage.html' ),
+			'<html><body><a href="#listen">Listen</a><a href="/about/#team">Team</a><section id="listen">Listen</section></body></html>'
+		);
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( { version: 1, entries: { 'https://example.com/': { html: 'html/homepage.html' } } } )
+		);
+
+		exportWebsiteCapture( {
+			outputDir,
+			sourceUrl: 'https://example.com/',
+			platform: 'generic',
+			summary: {},
+			failures: [],
+		} );
+
+		expect(
+			JSON.parse( readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' ) ).unresolvedAnchors
+		).toEqual( [] );
+	} );
+
 	it( 'declares responsive editing counterparts from stable source component slots', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-responsive-counterparts-' ) );
 		dirs.push( outputDir );

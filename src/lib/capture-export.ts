@@ -1878,6 +1878,22 @@ function appendJsonLd( html: string, jsonLd: string[] ): string {
  * The copy has no runtime left to resolve a fragment by scrolling, so a link
  * without exactly one target is a defect. Reported per route rather than
  * thrown, so one broken anchor does not discard an otherwise good capture.
+ *
+ * Two sources feed this, checked in order so an adapter's own verdict always
+ * wins over the generic re-check of the same anchor:
+ *
+ *  1. `a[data-dla-anchor-fragment]` — anchors a platform's `prepare()` hook
+ *     already resolved against its own click runtime (see AGENTS.md — Wix
+ *     same-page anchors), carrying an optional `data-dla-anchor-unresolved`
+ *     reason straight from that runtime.
+ *  2. Every other `a[href="#fragment"]` (or `.../path#fragment` resolving to
+ *     THIS document) — ordinary authored same-page links that never went
+ *     through adapter resolution at all. A page whose deferred content never
+ *     rendered before the snapshot leaves exactly this behind: a nav link to
+ *     `#releases` with no `id="releases"` anywhere in the captured document.
+ *     Checking every route (not a sample) costs nothing — it is pure
+ *     `cheerio`, no browser — so this class of truncation surfaces as a
+ *     diagnostic instead of a clean receipt.
  */
 function unresolvedCapturedAnchors(
 	html: string,
@@ -1885,22 +1901,12 @@ function unresolvedCapturedAnchors(
 ): Array< { sourceUrl: string; fragment: string; targetCount: number; reason: string } > {
 	const $ = cheerio.load( html );
 	const diagnostics = new Map< string, { targetCount: number; reason: string } >();
-	$( 'a[data-dla-anchor-fragment][href]' ).each( ( _index, element ) => {
-		const link = $( element );
-		const href = link.attr( 'href' );
-		if ( ! href ) return;
-		let fragment: string;
-		try {
-			fragment = decodeURIComponent( new URL( href, sourceUrl ).hash.slice( 1 ) );
-		} catch {
-			return;
-		}
+	const record = ( fragment: string, runtimeReason?: string ) => {
 		if ( ! fragment || diagnostics.has( fragment ) ) return;
 		const targetCount = $( '[id],a[name]' ).filter(
 			( _targetIndex, target ) =>
 				$( target ).attr( 'id' ) === fragment || $( target ).attr( 'name' ) === fragment
 		).length;
-		const runtimeReason = link.attr( 'data-dla-anchor-unresolved' );
 		if ( targetCount !== 1 || runtimeReason ) {
 			diagnostics.set( fragment, {
 				targetCount,
@@ -1911,7 +1917,52 @@ function unresolvedCapturedAnchors(
 						: 'captured fragment target is ambiguous' ),
 			} );
 		}
+	};
+
+	$( 'a[data-dla-anchor-fragment][href]' ).each( ( _index, element ) => {
+		const link = $( element );
+		const href = link.attr( 'href' );
+		if ( ! href ) return;
+		let fragment: string;
+		try {
+			fragment = decodeURIComponent( new URL( href, sourceUrl ).hash.slice( 1 ) );
+		} catch {
+			return;
+		}
+		record( fragment, link.attr( 'data-dla-anchor-unresolved' ) );
 	} );
+
+	let documentUrl: URL | undefined;
+	try {
+		documentUrl = new URL( sourceUrl );
+	} catch {
+		documentUrl = undefined;
+	}
+	$( 'a[href]' ).each( ( _index, element ) => {
+		const link = $( element );
+		if ( link.attr( 'data-dla-anchor-fragment' ) !== undefined ) return; // handled above
+		const href = ( link.attr( 'href' ) ?? '' ).trim();
+		if ( ! href || href === '#' || ! documentUrl ) return;
+		let resolved: URL;
+		try {
+			resolved = new URL( href, sourceUrl );
+		} catch {
+			return;
+		}
+		if ( ! resolved.hash ) return;
+		// Same-document only: a fragment link to a DIFFERENT page resolves against
+		// that page's own document, not this one — `checkSelfConsistency` covers
+		// that cross-route case once every route has been written.
+		if ( resolved.origin !== documentUrl.origin || resolved.pathname !== documentUrl.pathname ) return;
+		let fragment: string;
+		try {
+			fragment = decodeURIComponent( resolved.hash.slice( 1 ) );
+		} catch {
+			return;
+		}
+		record( fragment );
+	} );
+
 	return [ ...diagnostics ].map( ( [ fragment, diagnostic ] ) => ( {
 		sourceUrl,
 		fragment,
