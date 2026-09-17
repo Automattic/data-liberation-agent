@@ -2739,6 +2739,42 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		expect( html.match( /href="\/work"/g ) ).toHaveLength( 1 );
 	} );
 
+	it( 'keeps an in-flow empty footer landmark while dropping detached footer chrome', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-' ) );
+		dirs.push( outputDir );
+		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
+		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
+		writeFileSync(
+			join( outputDir, 'html', 'homepage.html' ),
+			'<!doctype html><html><head><style>#SITE_FOOTER{height:152px;background:#eee}</style></head><body><main><h1>Home</h1></main><footer id="SITE_FOOTER" class="wixui-footer"><div class="footer-grid"><div class="footer-cell"></div></div></footer><div role="contentinfo" class="site-footer-band"></div><div id="footer-mount"></div><footer class="cookie-footer" style="position:fixed;bottom:0"></footer></body></html>'
+		);
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( {
+				version: 1,
+				entries: { 'https://example.com/': { html: 'html/homepage.html' } },
+			} )
+		);
+
+		exportWebsiteCapture( {
+			outputDir,
+			sourceUrl: 'https://example.com/',
+			platform: 'fake',
+			summary: {},
+			failures: [],
+		} );
+		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
+		// The band a site footer reserves is carried by CSS, so the empty
+		// landmark has to survive or the page loses that height everywhere.
+		expect( html ).toContain( 'SITE_FOOTER' );
+		expect( html ).toContain( '<footer' );
+		expect( html ).toContain( 'site-footer-band' );
+		// Named scaffolding that is not a landmark, and detached footer chrome,
+		// are still inert and still dropped.
+		expect( html ).not.toContain( 'footer-mount' );
+		expect( html ).not.toContain( 'cookie-footer' );
+	} );
+
 	it( 'collapses responsive forms whose only difference is a generated target id', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-' ) );
 		dirs.push( outputDir );

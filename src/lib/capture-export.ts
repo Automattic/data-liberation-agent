@@ -467,9 +467,20 @@ function renderedHtml( html: string ): string {
 		if ( node.parents( 'main,article' ).length > 0 ) return;
 		const style = node.attr( 'style' ) ?? '';
 		const idAndClass = `${ node.attr( 'id' ) ?? '' } ${ node.attr( 'class' ) ?? '' }`;
+		// A site footer is authored page structure, not runtime scaffolding, and
+		// it is routinely built from empty boxes that carry their band's height
+		// and background in CSS. Matching the name `footer` alone deleted that
+		// landmark and collapsed the band it reserved. Judge a landmark by where
+		// it sits instead: a detached overlay still matches the style test below.
+		const isContentInfoLandmark =
+			node.is( 'footer' ) ||
+			/(?:^|\s)contentinfo(?:\s|$)/i.test( node.attr( 'role' ) ?? '' );
 		if (
 			/(?:^|;)\s*(?:position\s*:\s*(?:fixed|absolute)|bottom\s*:)/i.test( style ) ||
-			/(?:account.*app|app.*account|footer|modal|mount|portal|popup|toast)/i.test( idAndClass )
+			( ! isContentInfoLandmark &&
+				/(?:account.*app|app.*account|footer|modal|mount|portal|popup|toast)/i.test(
+					idAndClass
+				) )
 		) {
 			node.remove();
 		}
