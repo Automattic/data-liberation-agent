@@ -306,6 +306,43 @@ async function revealAndCollectWixSlideshows( page: Page ): Promise< void > {
 	await collectWixSlideshowSlides( page );
 }
 
+/**
+ * Return the document to its at-top state after capture-time scrolling.
+ *
+ * A builder hides or compresses a sticky header while the reader scrolls, and
+ * it recomputes that state on a scroll EVENT rather than on position alone. A
+ * bare restore therefore leaves the hidden-state class on the header, and the
+ * freeze records a page whose header is translated out of view. Scroll to the
+ * top, tell the handler, then let its transition run back.
+ */
+export async function settleScrollReactiveChrome( page: Page ): Promise< void > {
+	await page
+		.evaluate( () => {
+			const root = document.documentElement;
+			const behavior = root.style.scrollBehavior;
+			root.style.scrollBehavior = 'auto';
+			window.scrollTo( { top: 0, left: 0, behavior: 'instant' } );
+			root.style.scrollBehavior = behavior;
+			window.dispatchEvent( new Event( 'scroll' ) );
+		} )
+		.catch( () => undefined );
+	// The handler is throttled, so its transition starts a beat after the event.
+	await page.waitForTimeout( 400 );
+	await page
+		.evaluate( async () => {
+			// Ambient motion such as a spinner never finishes, so each wait is
+			// bounded and the restore transition is the only thing worth awaiting.
+			const settled = document.getAnimations().map( ( animation ) =>
+				Promise.race( [
+					animation.finished.catch( () => undefined ),
+					new Promise( ( resolve ) => setTimeout( resolve, 600 ) ),
+				] )
+			);
+			await Promise.all( settled );
+		} )
+		.catch( () => undefined );
+}
+
 export const capture: LiberationHooks = {
   cleanupRules: [
     { id: 'wix-free-banner', category: 'source-attribution', selector: '#WIX_ADS' },
@@ -520,6 +557,8 @@ export const capture: LiberationHooks = {
 	 */
 	beforeSerialize: async ( page ) => {
 		await revealAndCollectWixSlideshows( page );
+		// Revealing a slideshow scrolls, so the chrome is settled last of all.
+		await settleScrollReactiveChrome( page );
 	},
 
 	/**
