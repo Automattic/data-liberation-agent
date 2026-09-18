@@ -3634,6 +3634,61 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		);
 	} );
 
+	it( 'roots the export at a discovered origin even when the entry is a deep link', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-' ) );
+		dirs.push( outputDir );
+		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
+		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
+		writeFileSync(
+			join( outputDir, 'html', 'home.html' ),
+			'<h1>Home</h1><a href="/social-kit">Kit</a>'
+		);
+		writeFileSync(
+			join( outputDir, 'html', 'kit.html' ),
+			'<h1>Kit</h1><a href="/">Home</a><a href="./">Same dir</a>'
+		);
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( {
+				version: 1,
+				entries: {
+					'https://example.com/social-kit': { html: 'html/kit.html' },
+					'https://example.com/': { html: 'html/home.html' },
+				},
+			} )
+		);
+
+		const receiptPath = exportWebsiteCapture( {
+			outputDir,
+			sourceUrl: 'https://example.com/social-kit',
+			platform: 'fake',
+			summary: {},
+			failures: [],
+		} );
+
+		const receipt = JSON.parse( readFileSync( receiptPath, 'utf8' ) );
+		expect( receipt.entrypoint ).toBe( 'website/index.html' );
+		expect( receipt.websiteRoot ).toBe( 'website' );
+		expect( receipt.routes ).toEqual( [
+			{ url: 'https://example.com/social-kit', path: 'website/social-kit/index.html' },
+			{ url: 'https://example.com/', path: 'website/index.html' },
+		] );
+		expect( receipt.routes.some( ( route: { path: string } ) => route.path.includes( 'site-root' ) ) ).toBe(
+			false
+		);
+		expect( existsSync( join( outputDir, 'website', 'site-root' ) ) ).toBe( false );
+		expect( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) ).toContain( '<h1>Home</h1>' );
+		expect( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) ).toContain(
+			'href="/social-kit/index.html"'
+		);
+		expect( readFileSync( join( outputDir, 'website', 'social-kit', 'index.html' ), 'utf8' ) ).toContain(
+			'<h1>Kit</h1>'
+		);
+		expect( readFileSync( join( outputDir, 'website', 'social-kit', 'index.html' ), 'utf8' ) ).toContain(
+			'href="/index.html"'
+		);
+	} );
+
 	it( 'rebases relative links in documents captured under a subpath', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-' ) );
 		dirs.push( outputDir );
