@@ -120,6 +120,37 @@ describe( 'wireCapturedDialogs', () => {
 		expect( html ).not.toContain( 'dla-disclosure' );
 	} );
 
+	it( 'leaves a selectable-set state alone — it is shared-region evidence, not a popup to wire', () => {
+		const input =
+			'<html><head></head><body><div id="z1">Zone 1</div><div id="panel">Placeholder</div></body></html>';
+		const html = wireCapturedDialogs( input, [
+			{
+				status: 'captured',
+				kind: 'selectable-set',
+				trigger: {
+					selector: '#z1',
+					id: 'z1',
+					tag: 'div',
+					ariaHaspopup: '',
+					label: 'Zone 1',
+					dataBindings: {},
+				},
+				dialog: {
+					selector: '#panel',
+					tag: 'div',
+					id: 'panel',
+					ariaModal: false,
+					html: '<div id="panel">Zone 1 details</div>',
+					htmlBytes: 36,
+					htmlTruncated: false,
+				},
+				set: { selector: 'body > div:nth-of-type(1)', size: 1, index: 0 },
+			},
+		] );
+		expect( html ).toBe( input );
+		expect( html ).not.toContain( 'dla-disclosure' );
+	} );
+
 	it( 'wires a listbox popup onto every matching country-code trigger', () => {
 		const html = wireCapturedDialogs(
 			'<html><head></head><body><button aria-label="Phone. Phone. Select a country code" aria-haspopup="listbox">CA</button><button aria-label="Phone. Phone. Select a country code">CA</button></body></html>',

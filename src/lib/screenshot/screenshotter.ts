@@ -26,6 +26,7 @@ import {
 import { applyPagerSlideshowStates, collectPagerSlideshowStates } from './pager-slideshow.js';
 import { captureScrollStates, type ScrollStatesReport } from './scroll-state-capture.js';
 import { hydrateDisclosureContent } from './dynamic-content.js';
+import { captureSelectableSetStates } from './selectable-set-capture.js';
 import { JsAggregator } from './js-aggregator.js';
 import { isAbsentDocumentError, isSourceCaptureUrl } from './absent-document.js';
 import { ManifestQueue, type ManifestEntry, type FailureEntry } from './manifest-queue.js';
@@ -1068,10 +1069,10 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		}
 	}
 
-	// Dialogs are captured only after every baseline artifact so probing a close
-	// control or trigger cannot alter screenshots, geometry, sidecars, or page HTML.
-	// Each viewport needs its own probe: a desktop dialog must not suppress a
-	// mobile-only trigger. Merge their bounded successful evidence rather than
+	// Dialogs and selectable sets are captured only after every baseline artifact
+	// so probing a trigger cannot alter screenshots, geometry, sidecars, or page
+	// HTML. Each viewport needs its own probe: a desktop dialog must not suppress
+	// a mobile-only trigger. Merge their bounded successful evidence rather than
 	// replacing a desktop-only dialog with a mobile-only menu.
 	try {
 		const interactions = await captureTriggeredDialogs( page, url );
@@ -1080,6 +1081,14 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		// diagnostics, using the same states array + totals the dialog/menu path
 		// already reports through, rather than a parallel reporting system.
 		interactions.states = [ ...disclosureStates, ...interactions.states ];
+		try {
+			const selectableStates = await captureSelectableSetStates( page );
+			if ( selectableStates.length > 0 ) {
+				interactions.states = [ ...interactions.states, ...selectableStates ];
+			}
+		} catch {
+			/* best-effort: selectable-set probing must not drop dialog evidence */
+		}
 		if (
 			( interactions.states.length > 0 || ( interactions.initialDialogs?.length ?? 0 ) > 0 ) &&
 			( ! entry.interactions ||
@@ -1116,11 +1125,31 @@ function mergeInteractionReports(
 	latest: InteractionStatesReport
 ): InteractionStatesReport {
 	if ( ! previous ) return latest;
-	const states = mergeCapturedEvidence(
-		previous.states,
-		latest.states,
-		( state ) => state.trigger.id ?? state.trigger.selector
-	);
+	const identity = ( state: CapturedDialogInteraction ) =>
+		`${ state.kind ?? 'dialog' }:${ state.trigger.id ?? state.trigger.selector }`;
+	const ofKind =
+		( kind: NonNullable< CapturedDialogInteraction[ 'kind' ] > | 'dialog' ) =>
+		( state: CapturedDialogInteraction ) =>
+			( state.kind ?? 'dialog' ) === kind;
+	const states = [
+		...mergeCapturedEvidence(
+			previous.states.filter( ofKind( 'disclosure' ) ),
+			latest.states.filter( ofKind( 'disclosure' ) ),
+			identity,
+			Number.POSITIVE_INFINITY
+		),
+		...mergeCapturedEvidence(
+			previous.states.filter( ofKind( 'dialog' ) ),
+			latest.states.filter( ofKind( 'dialog' ) ),
+			identity
+		),
+		...mergeCapturedEvidence(
+			previous.states.filter( ofKind( 'selectable-set' ) ),
+			latest.states.filter( ofKind( 'selectable-set' ) ),
+			identity,
+			Number.POSITIVE_INFINITY
+		),
+	];
 	const initialDialogs = mergeCapturedEvidence(
 		previous.initialDialogs ?? [],
 		latest.initialDialogs ?? [],
@@ -1136,7 +1165,8 @@ function mergeInteractionReports(
 function mergeCapturedEvidence< T extends { status: string } >(
 	previous: T[],
 	latest: T[],
-	identity: ( state: T ) => string
+	identity: ( state: T ) => string,
+	limit = MAX_CAPTURED_DIALOGS
 ): T[] {
 	const merged = new Map< string, T >();
 	for ( const state of previous ) merged.set( identity( state ), state );
@@ -1146,10 +1176,11 @@ function mergeCapturedEvidence< T extends { status: string } >(
 		if ( state.status === 'captured' || existing?.status !== 'captured' ) merged.set( key, state );
 	}
 	const states = Array.from( merged.values() );
-	return [
+	const ordered = [
 		...states.filter( ( state ) => state.status === 'captured' ),
 		...states.filter( ( state ) => state.status !== 'captured' ),
-	].slice( 0, MAX_CAPTURED_DIALOGS );
+	];
+	return Number.isFinite( limit ) ? ordered.slice( 0, limit ) : ordered;
 }
 
 /**
