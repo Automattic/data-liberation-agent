@@ -289,8 +289,28 @@ function normalizedUrl( url: string ): string {
 	return parsed.href;
 }
 
-function routeOutputPath( url: string, sourceUrl: string, entrypointUrl: string ): string {
-	if ( url === entrypointUrl ) return 'index.html';
+function isOriginRootPath( pathname: string ): boolean {
+	return ( pathname.replace( /\/$/, '' ) || '/' ) === '/';
+}
+
+function capturedOriginRoot( urls: string[], origin: string ): boolean {
+	return urls.some( ( url ) => {
+		try {
+			const route = new URL( url );
+			return route.origin === origin && isOriginRootPath( route.pathname );
+		} catch {
+			return false;
+		}
+	} );
+}
+
+function routeOutputPath(
+	url: string,
+	sourceUrl: string,
+	entrypointUrl: string,
+	originRootCaptured: boolean
+): string {
+	if ( url === entrypointUrl && ! originRootCaptured ) return 'index.html';
 	const route = new URL( url );
 	const source = new URL( sourceUrl );
 	// Artifact paths must retain URL percent-encoding. Decoding turns a valid
@@ -306,21 +326,16 @@ function routeOutputPath( url: string, sourceUrl: string, entrypointUrl: string 
 		if ( decoded === '.' || decoded === '..' || /[\\/\0]/.test( decoded ) )
 			throw new Error( `Captured route path escapes the website directory: ${ route.pathname }` );
 	}
-	const sourcePath = source.pathname.replace( /\/$/, '' );
-	const outsideSourcePath =
-		route.origin === source.origin &&
-		sourcePath !== '' &&
-		pathname.replace( /\/$/, '' ) !== sourcePath &&
-		! pathname.startsWith( `${ sourcePath }/` );
+	const sourcePath = originRootCaptured ? '' : source.pathname.replace( /\/$/, '' );
 
 	if ( route.origin === source.origin && sourcePath && pathname.startsWith( `${ sourcePath }/` ) ) {
 		pathname = pathname.slice( sourcePath.length );
-	} else if ( route.origin === source.origin && pathname.replace( /\/$/, '' ) === sourcePath ) {
+	} else if ( route.origin === source.origin && sourcePath && pathname.replace( /\/$/, '' ) === sourcePath ) {
 		pathname = '/';
 	}
 
 	const cleanPath = pathname.replace( /^\/+|\/+$/g, '' );
-	if ( ! cleanPath ) return outsideSourcePath ? 'site-root/index.html' : 'index.html';
+	if ( ! cleanPath ) return 'index.html';
 	if ( /\.[a-z0-9]+$/i.test( cleanPath ) ) return cleanPath;
 	return join( cleanPath, 'index.html' );
 }
@@ -1617,6 +1632,7 @@ function assetReferences(
 	entries: CaptureEntry[],
 	sourceUrl: string,
 	entrypointUrl: string,
+	originRootCaptured: boolean,
 	resourceManifest: CapturedResourceManifest,
 	outputDir: string
 ): AssetEvidenceReferences {
@@ -1644,7 +1660,7 @@ function assetReferences(
 		if ( indexed.references.length < MAX_ASSET_EVIDENCE_REFERENCES ) indexed.references.push( location );
 	};
 	for ( const entry of entries ) {
-		const path = `website/${ routeOutputPath( entry.url, sourceUrl, entrypointUrl ).replace( /\\/g, '/' ) }`;
+		const path = `website/${ routeOutputPath( entry.url, sourceUrl, entrypointUrl, originRootCaptured ).replace( /\\/g, '/' ) }`;
 		const visitedCss = new Set< string >();
 		const visit = ( dependency: PortableDependency, document: AssetEvidenceReference[ 'document' ] ) => {
 			add( dependency, { route: entry.url, path, document, reference: dependency.reference } );
@@ -2266,6 +2282,15 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		);
 	}
 	const entrypointUrl = entrypointCandidates[ 0 ].url;
+	const originRootCaptured = capturedOriginRoot(
+		capturedEntries.map( ( entry ) => entry.url ),
+		new URL( options.sourceUrl ).origin
+	);
+	const routePathOf = ( url: string ) =>
+		routeOutputPath( url, options.sourceUrl, entrypointUrl, originRootCaptured ).replace(
+			/\\/g,
+			'/'
+		);
 
 	const retainedEntries: CaptureEntry[] = [];
 	const duplicateRoutes: Array< { url: string; canonicalUrl: string; path: string } > = [];
@@ -2275,10 +2300,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		...capturedEntries.filter( ( { url } ) => url === entrypointUrl ),
 		...capturedEntries.filter( ( { url } ) => url !== entrypointUrl ),
 	] ) {
-		const routePath = routeOutputPath( entry.url, options.sourceUrl, entrypointUrl ).replace(
-			/\\/g,
-			'/'
-		);
+		const routePath = routePathOf( entry.url );
 		const claimed = claimedRoutes.get( routePath );
 		if ( ! claimed ) {
 			claimedRoutes.set( routePath, entry );
@@ -2308,7 +2330,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		if ( ! isUsableSectionEvidence( desktop ) ) return [];
 		const mobile = mobileSections.get( entry.url );
 		return [ {
-			path: `website/${ routeOutputPath( entry.url, options.sourceUrl, entrypointUrl ).replace( /\\/g, '/' ) }`,
+			path: `website/${ routePathOf( entry.url ) }`,
 			url: entry.url,
 			viewports: {
 				desktop: semanticSectionEvidence( desktop ),
@@ -2329,6 +2351,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		retainedEntries,
 		options.sourceUrl,
 		entrypointUrl,
+		originRootCaptured,
 		resourceManifest,
 		outputDir
 	);
@@ -2729,10 +2752,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 	const portableRouteLinks = new Map< string, string >();
 	for ( const entry of retainedEntries ) {
 		const { url } = entry;
-		const routePath = routeOutputPath( url, options.sourceUrl, entrypointUrl ).replace(
-			/\\/g,
-			'/'
-		);
+		const routePath = routePathOf( url );
 		const portablePath = `/${ routePath }`;
 		portableRouteLinks.set( normalizedUrl( url ), portablePath );
 		routes.push( {
@@ -2749,10 +2769,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		if ( ! canonicalUrl ) continue;
 		const canonicalKey = normalizedUrl( canonicalUrl );
 		if ( portableRouteLinks.has( canonicalKey ) ) continue;
-		const routePath = routeOutputPath( url, options.sourceUrl, entrypointUrl ).replace(
-			/\\/g,
-			'/'
-		);
+		const routePath = routePathOf( url );
 		portableRouteLinks.set( canonicalKey, `/${ routePath }` );
 	}
 
@@ -2786,10 +2803,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 	const capturedRouteKeys = new Set( portableRouteLinks.keys() );
 	for ( const entry of retainedEntries ) {
 		const { url, htmlPath } = entry;
-		const routePath = routeOutputPath( url, options.sourceUrl, entrypointUrl ).replace(
-			/\\/g,
-			'/'
-		);
+		const routePath = routePathOf( url );
 		const destination = join( websiteDir, routePath );
 		if ( ! pathWithin( websiteDir, destination ) ) {
 			throw new Error( `Captured route escapes the website directory: ${ url }` );
@@ -2851,10 +2865,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 						( geometryCaptureOmissions[ 'capture_invalid' ] ?? 0 ) + 1;
 				}
 			}
-			const routePath = routeOutputPath( entry.url, options.sourceUrl, entrypointUrl ).replace(
-				/\\/g,
-				'/'
-			);
+			const routePath = routePathOf( entry.url );
 			const html = readFileSync( join( websiteDir, routePath ), 'utf8' );
 			yield {
 				sourcePath: `website/${ routePath }`,
