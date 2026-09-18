@@ -1,3 +1,5 @@
+import * as cheerio from 'cheerio';
+
 function decodeXml(value: string): string {
   return value.replace(/&(?:amp|lt|gt|quot|apos);|&#(?:x[\da-f]+|\d+);/gi, (entity) => {
     if (entity === '&amp;') return '&';
@@ -161,9 +163,9 @@ export async function fetchSitemapWithDiagnostics(baseUrl: string): Promise<Site
 
   await fetchAndParse(sitemapUrl, 0);
 
-  // Supplement with homepage nav link crawl if sitemap was thin
+  // Supplement with the homepage's links if sitemap was thin
   if (allUrls.length < 5) {
-    const navUrls = await crawlNavLinks(normalizedBase, baseOrigin);
+    const navUrls = await crawlHomepageLinks(normalizedBase, baseOrigin);
     const seen = new Set(allUrls);
     for (const u of navUrls) {
       if (!seen.has(u) && allUrls.length < MAX_URLS) {
@@ -193,43 +195,40 @@ export async function fetchSitemapWithDiagnostics(baseUrl: string): Promise<Site
 // Paths that are platform UI, not user content
 const SKIP_PATHS = /^\/(cart|account|login|signup|checkout|search|api|admin|favicon)/i;
 
-async function crawlNavLinks(baseUrl: string, baseOrigin: string): Promise<string[]> {
-  const urls: string[] = [];
+async function crawlHomepageLinks(baseUrl: string, baseOrigin: string): Promise<string[]> {
   try {
     const response = await fetch(baseUrl, { signal: AbortSignal.timeout(15000) });
-    if (!response.ok) return urls;
-    const html = await response.text();
-
-    // Extract links from <nav> elements first, fall back to <header> links
-    const navBlocks = [
-      ...(html.match(/<nav[\s>][\s\S]*?<\/nav>/gi) || []),
-      ...(html.match(/<footer[\s>][\s\S]*?<\/footer>/gi) || []),
-    ];
-    // Fall back to header if no nav or footer found
-    if (navBlocks.length === 0) {
-      navBlocks.push(...(html.match(/<header[\s>][\s\S]*?<\/header>/gi) || []));
-    }
-
-    const hrefPattern = /<a\s[^>]*href=["']([^"'#][^"']*)["'][^>]*>/gi;
-    const seen = new Set<string>();
-    let match;
-
-    for (const block of navBlocks) {
-      hrefPattern.lastIndex = 0;
-      while ((match = hrefPattern.exec(block)) !== null) {
-        const href = match[1];
-        if (!href || href.startsWith('javascript:') || href.startsWith('mailto:') || href.startsWith('tel:')) continue;
-
-        const resolved = resolveAndFilter(href, baseUrl, baseOrigin);
-        if (resolved && !seen.has(resolved)) {
-          seen.add(resolved);
-          urls.push(resolved);
-        }
-      }
-    }
+    if (!response.ok) return [];
+    return extractSameOriginLinks(await response.text(), baseUrl, baseOrigin);
   } catch {
     // Homepage fetch failed
+    return [];
   }
+}
+
+/**
+ * Every same-origin page link in one HTML document, in document order.
+ *
+ * Parsed with a DOM rather than matched by landmark regexes: a lazy
+ * `<nav>…</nav>` match stops at the first nested `</nav>` (Webflow dropdowns),
+ * and site chrome routinely lives outside `<nav>`/`<footer>` — a header CTA, a
+ * GDPR bar, or a builder footer that is a plain `div` (Duda). The scope stays
+ * one document, so no crawl depth is added; the same filter as the rendered
+ * fallback below drops assets and platform UI paths.
+ */
+export function extractSameOriginLinks(html: string, baseUrl: string, baseOrigin = new URL(baseUrl).origin): string[] {
+  const $ = cheerio.load(html);
+  const urls: string[] = [];
+  const seen = new Set<string>();
+  $('a[href]').each((_, el) => {
+    const href = $(el).attr('href')?.trim();
+    if (!href || href.startsWith('#')) return;
+    const resolved = resolveAndFilter(href, baseUrl, baseOrigin);
+    if (resolved && !seen.has(resolved)) {
+      seen.add(resolved);
+      urls.push(resolved);
+    }
+  });
   return urls;
 }
 
@@ -267,6 +266,7 @@ function resolveAndFilter(href: string, baseUrl: string, baseOrigin: string): st
     if (resolved.origin !== baseOrigin) return null;
     if (/\.(css|js|png|jpg|jpeg|gif|svg|ico|woff|woff2|ttf|eot|pdf|zip|xml|json)$/i.test(resolved.pathname)) return null;
     if (SKIP_PATHS.test(resolved.pathname)) return null;
+    resolved.hash = '';
     return resolved.href;
   } catch {
     return null;

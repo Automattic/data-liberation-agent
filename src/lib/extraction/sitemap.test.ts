@@ -1,6 +1,6 @@
 import { createServer } from 'node:http';
 import { describe, it, expect, vi } from 'vitest';
-import { classifyUrl, fetchSitemap, fetchSitemapWithDiagnostics } from './sitemap.js';
+import { classifyUrl, extractSameOriginLinks, fetchSitemap, fetchSitemapWithDiagnostics } from './sitemap.js';
 
 describe('classifyUrl', () => {
   it('classifies the homepage', () => {
@@ -150,6 +150,73 @@ describe('fetchSitemap', () => {
         `${origin}/platform`,
         `${origin}/solutions`,
         `${origin}/ai`,
+      ]);
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
+  });
+});
+
+describe('extractSameOriginLinks', () => {
+  it('keeps links after a nested </nav>, outside <nav>, and in a div footer', () => {
+    // Webflow nests a dropdown <nav> inside the menu <nav>; a lazy regex match
+    // ended at the inner </nav> and dropped every top-level link after it.
+    const html = `<div role="banner" class="w-nav">
+      <nav class="w-nav-menu">
+        <a href="/">Home</a>
+        <div class="w-dropdown"><nav class="w-dropdown-list">
+          <a href="/discover/offsite">Offsite</a>
+        </nav></div>
+        <a href="/events">Events</a>
+        <a href="/house#rooms">House</a>
+        <a href="/memberships">Memberships</a>
+      </nav>
+      <a href="/apply" class="button">Apply</a>
+    </div>
+    <main><a href="https://example.test/events">Events again</a></main>
+    <div class="gdpr-footer"><a href="/privacidad">Privacidad</a><a href="/cookies">Cookies</a></div>
+    <div class="dmFooter">
+      <a href="/aviso-legal">Aviso legal</a>
+      <a href="#top">Top</a>
+      <a href="mailto:hi@example.test">Mail</a>
+      <a href="/brochure.pdf">Brochure</a>
+      <a href="/cart">Cart</a>
+      <a href="https://elsewhere.test/about">Elsewhere</a>
+    </div>`;
+
+    expect(extractSameOriginLinks(html, 'https://example.test/')).toEqual([
+      'https://example.test/',
+      'https://example.test/discover/offsite',
+      'https://example.test/events',
+      'https://example.test/house',
+      'https://example.test/memberships',
+      'https://example.test/apply',
+      'https://example.test/privacidad',
+      'https://example.test/cookies',
+      'https://example.test/aviso-legal',
+    ]);
+  });
+
+  it('is used when the site has no sitemap', async () => {
+    const server = createServer((request, response) => {
+      if (request.url === '/') {
+        response.end('<nav><a href="/a">A</a><nav><a href="/b">B</a></nav><a href="/c">C</a></nav><a href="/d">D</a>');
+        return;
+      }
+      response.statusCode = 404;
+      response.end();
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('Test server did not start');
+    const origin = `http://127.0.0.1:${address.port}`;
+
+    try {
+      await expect(fetchSitemap(origin)).resolves.toEqual([
+        `${origin}/a`,
+        `${origin}/b`,
+        `${origin}/c`,
+        `${origin}/d`,
       ]);
     } finally {
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
