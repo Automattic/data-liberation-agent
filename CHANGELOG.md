@@ -15,6 +15,21 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.3.1] - 2026-09-18
+
+### Fixed
+- discover sitemap-index.xml and make incomplete captures explicit
+- reclaim the space a removed provider bar reserved in custom properties
+- load desktop source pages as desktop Chrome, not HeadlessChrome
+- rebase relative links when captured documents move
+- accept http and www variants of the entry host in sitemaps, and report rejections
+- discover every same-origin homepage link with a DOM, not landmark regexes
+- recognize a client-routed SPA not-found screen served as HTTP 200
+- stop a client-routed SPA control from navigating capture off its route
+- recognize unnamed builder chrome by structure, not vendor name
+- capture interaction triggers covered at the click point
+- stop treating data: and blob: URIs as unresolved dependencies
+
 ## [0.3.0] - 2026-09-17
 
 ### Added
