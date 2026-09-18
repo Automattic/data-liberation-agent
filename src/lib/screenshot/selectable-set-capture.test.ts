@@ -303,13 +303,194 @@ describe( 'captureSelectableSetStates', () => {
 		30_000
 	);
 
+	it.skipIf( skipBrowser )(
+		'picks the shared region with the largest content range, not the first small mutation',
+		async () => {
+			const page = await browser.newPage( { viewport: { width: 1200, height: 800 } } );
+			try {
+				await page.setContent( `<!doctype html><html><body>
+					<div id="layout">
+						<div id="picker">
+							<div id="z1" style="cursor:pointer">Zone 1</div>
+							<div id="z2" style="cursor:pointer">Zone 2</div>
+							<div id="z3" style="cursor:pointer">Zone 3</div>
+						</div>
+						<div id="status">Click a zone</div>
+						<div id="panel">Select a zone to view details.</div>
+					</div>
+					<script>
+						const details = {
+							z1: 'Zone 1 / Production / A climate-controlled room with a 18/6 light cycle.',
+							z2: 'Zone 2 / Processing / Packaging line with humidity held at 45-55 percent RH.',
+							z3: 'Zone 3 / Storage / Cold room held at 4C for finished goods.',
+						};
+						document.querySelectorAll('#picker > *').forEach((zone) => {
+							zone.addEventListener('click', () => {
+								document.getElementById('status').textContent = 'Clear Selection';
+								if (zone.id !== 'z1') {
+									document.getElementById('panel').textContent = details[zone.id];
+								}
+							});
+						});
+					</script>
+				</body></html>` );
+				const states = await captureSelectableSetStates( page );
+				expect( states.map( ( state ) => [ state.trigger.id, state.status, state.dialog?.id ] ) ).toEqual( [
+					[ 'z1', 'no-dialog', undefined ],
+					[ 'z2', 'captured', 'panel' ],
+					[ 'z3', 'captured', 'panel' ],
+				] );
+				expect( states[ 1 ].dialog?.html ).toContain( 'Zone 2 / Processing' );
+				expect( states[ 2 ].dialog?.html ).toContain( 'Zone 3 / Storage' );
+			} finally {
+				await page.close();
+			}
+		},
+		30_000
+	);
+
+	it.skipIf( skipBrowser )(
+		'captures pointer-only SVG zones that have no role or tabindex',
+		async () => {
+			const page = await browser.newPage( { viewport: { width: 1200, height: 800 } } );
+			try {
+				await page.setContent( `<!doctype html><html><body>
+					<div id="layout">
+						<svg id="map" viewBox="0 0 90 30" width="180" height="60">
+							<g id="z1" style="cursor:pointer"><title>FR1</title><rect width="30" height="30" fill="#ccc"/></g>
+							<g id="z2" style="cursor:pointer"><title>FR2</title><rect x="30" width="30" height="30" fill="#bbb"/></g>
+							<g id="z3" style="cursor:pointer"><title>FR3</title><rect x="60" width="30" height="30" fill="#aaa"/></g>
+						</svg>
+						<div id="panel">Select a zone to view details.</div>
+					</div>
+					<script>
+						const details = {
+							z1: 'Flower Room 1 / Production / Operational / ZONE DESCRIPTION / LIGHT CYCLE 18/6.',
+							z2: 'Flower Room 2 / Production / Operational / ZONE DESCRIPTION / CO2 SETPOINT 1200.',
+							z3: 'Flower Room 3 / Production / Operational / ZONE DESCRIPTION / HUMIDITY 45-55.',
+						};
+						document.querySelectorAll('#map > g').forEach((zone) => {
+							zone.addEventListener('click', () => {
+								document.getElementById('panel').textContent = details[zone.id];
+							});
+						});
+					</script>
+				</body></html>` );
+				expect(
+					await page.evaluate( () => typeof ( document.getElementById( 'z1' ) as HTMLElement ).click )
+				).toBe( 'undefined' );
+				const states = await captureSelectableSetStates( page );
+				expect( states ).toHaveLength( 3 );
+				expect( states.every( ( state ) => state.status === 'captured' ) ).toBe( true );
+				expect( states.map( ( state ) => state.trigger.id ) ).toEqual( [ 'z1', 'z2', 'z3' ] );
+				expect( states[ 0 ].set ).toEqual( { selector: '#map', size: 3, index: 0 } );
+				expect( states[ 0 ].dialog?.html ).toContain( 'Flower Room 1 / Production' );
+				expect( states[ 1 ].dialog?.html ).toContain( 'Flower Room 2 / Production' );
+				expect( states[ 2 ].dialog?.html ).toContain( 'Flower Room 3 / Production' );
+				expect( await page.locator( '#panel' ).textContent() ).toBe(
+					'Select a zone to view details.'
+				);
+			} finally {
+				await page.close();
+			}
+		},
+		30_000
+	);
+
+	it.skipIf( skipBrowser )(
+		'captures sibling filter chips that drive a shared card grid',
+		async () => {
+			const page = await browser.newPage( { viewport: { width: 1200, height: 800 } } );
+			try {
+				await page.setContent( `<!doctype html><html><body>
+					<div id="layout">
+						<div id="chips">
+							<button type="button" id="all" class="chip on">All</button>
+							<button type="button" id="sativa" class="chip">Sativa</button>
+							<button type="button" id="indica" class="chip">Indica</button>
+						</div>
+						<div id="grid">
+							<article data-type="sativa">Sativa Orangutan unique copy for the grid.</article>
+							<article data-type="sativa">Sativa Sunrise unique copy for the grid.</article>
+							<article data-type="indica">Indica Wedding unique copy for the grid.</article>
+						</div>
+					</div>
+					<script>
+						const chips = [...document.querySelectorAll('#chips button')];
+						const grid = document.getElementById('grid');
+						const cards = [...document.querySelectorAll('#grid article')].map((card) => card.cloneNode(true));
+						chips.forEach((chip) => {
+							chip.addEventListener('click', () => {
+								chips.forEach((other) => { other.className = other === chip ? 'chip on' : 'chip'; });
+								grid.replaceChildren(
+									...cards
+										.filter((card) => chip.id === 'all' || card.dataset.type === chip.id)
+										.map((card) => card.cloneNode(true))
+								);
+							});
+						});
+					</script>
+				</body></html>` );
+				const states = await captureSelectableSetStates( page );
+				expect( states.map( ( state ) => [ state.trigger.id, state.status ] ) ).toEqual( [
+					[ 'all', 'captured' ],
+					[ 'sativa', 'captured' ],
+					[ 'indica', 'captured' ],
+				] );
+				expect( states[ 0 ].set ).toEqual( { selector: '#chips', size: 3, index: 0 } );
+				expect( states[ 0 ].dialog?.id ).toBe( 'grid' );
+				expect( states[ 1 ].dialog?.html ).toContain( 'Sativa Orangutan' );
+				expect( states[ 1 ].dialog?.html ).not.toContain( 'Indica Wedding' );
+				expect( states[ 2 ].dialog?.html ).toContain( 'Indica Wedding' );
+				expect( states[ 2 ].dialog?.html ).not.toContain( 'Sativa Orangutan' );
+			} finally {
+				await page.close();
+			}
+		},
+		30_000
+	);
+
+	it.skipIf( skipBrowser )(
+		'records no-dialog with a reason when a weak button set does not mutate a region',
+		async () => {
+			const page = await browser.newPage( { viewport: { width: 1200, height: 800 } } );
+			try {
+				await page.setContent( `<!doctype html><html><body>
+					<div id="layout">
+						<div id="chips">
+							<button type="button" id="a">Alpha</button>
+							<button type="button" id="b">Beta</button>
+							<button type="button" id="c">Gamma</button>
+						</div>
+						<div id="panel">Static copy that never changes for any chip.</div>
+					</div>
+				</body></html>` );
+				const states = await captureSelectableSetStates( page );
+				expect( states ).toHaveLength( 1 );
+				expect( states[ 0 ] ).toMatchObject( {
+					status: 'no-dialog',
+					kind: SELECTABLE_SET_KIND,
+					trigger: { id: 'a' },
+					set: { size: 3, index: 0 },
+					error: 'shared region did not vary',
+				} );
+			} finally {
+				await page.close();
+			}
+		},
+		30_000
+	);
+
 	it( 'exposes explicit drive caps', () => {
 		expect( SELECTABLE_SET_LIMITS ).toEqual( {
 			maxSets: 3,
 			maxMembers: 24,
-			maxDriveMs: 8_000,
+			maxDriveMs: 16_000,
 			maxHtmlBytes: 512 * 1024,
-			settleMs: 250,
+			settleMs: 500,
+			maxCandidateScan: 1_500,
+			maxPointerCandidates: 80,
+			maxProbeGroups: 9,
 		} );
 	} );
 } );

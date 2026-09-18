@@ -1086,8 +1086,18 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 			if ( selectableStates.length > 0 ) {
 				interactions.states = [ ...interactions.states, ...selectableStates ];
 			}
-		} catch {
-			/* best-effort: selectable-set probing must not drop dialog evidence */
+		} catch ( error ) {
+			interactions.states.push( {
+				status: 'click-failed',
+				kind: 'selectable-set',
+				trigger: {
+					selector: 'html',
+					tag: 'html',
+					ariaHaspopup: '',
+					dataBindings: {},
+				},
+				error: ( error instanceof Error ? error.message : String( error ) ).slice( 0, 500 ),
+			} );
 		}
 		if (
 			( interactions.states.length > 0 || ( interactions.initialDialogs?.length ?? 0 ) > 0 ) &&

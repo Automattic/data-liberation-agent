@@ -6,9 +6,12 @@ export const SELECTABLE_SET_KIND = 'selectable-set' as const;
 export const SELECTABLE_SET_LIMITS = {
 	maxSets: 3,
 	maxMembers: 24,
-	maxDriveMs: 8_000,
+	maxDriveMs: 16_000,
 	maxHtmlBytes: 512 * 1024,
-	settleMs: 250,
+	settleMs: 500,
+	maxCandidateScan: 1_500,
+	maxPointerCandidates: 80,
+	maxProbeGroups: 9,
 } as const;
 
 export interface SelectableSetCaptureOptions {
@@ -17,6 +20,9 @@ export interface SelectableSetCaptureOptions {
 	maxDriveMs?: number;
 	maxHtmlBytes?: number;
 	settleMs?: number;
+	maxCandidateScan?: number;
+	maxPointerCandidates?: number;
+	maxProbeGroups?: number;
 }
 
 interface RawSelectableRecord {
@@ -37,6 +43,11 @@ interface RawSelectableRecord {
  * selectable targets plus a confirmed shared mutation — not vendor- or
  * media-specific.
  *
+ * Candidacy is broad: ARIA/button semantics *or* a computed `cursor: pointer`
+ * (the CSS fact, not a class name). Confirmation is strict: two distinct
+ * contents in the same outside region. Pointer-only SVG zones, seat pickers,
+ * and chart legends have no role/tabindex; they still qualify as candidates.
+ *
  * Runs after baseline HTML/screenshots so probing cannot rewrite the initial
  * capture. Each drive restores the region before the next member, and the
  * original selection is restored before returning.
@@ -50,6 +61,10 @@ export async function captureSelectableSetStates(
 	const maxDriveMs = options.maxDriveMs ?? SELECTABLE_SET_LIMITS.maxDriveMs;
 	const maxHtmlBytes = options.maxHtmlBytes ?? SELECTABLE_SET_LIMITS.maxHtmlBytes;
 	const settleMs = options.settleMs ?? SELECTABLE_SET_LIMITS.settleMs;
+	const maxCandidateScan = options.maxCandidateScan ?? SELECTABLE_SET_LIMITS.maxCandidateScan;
+	const maxPointerCandidates =
+		options.maxPointerCandidates ?? SELECTABLE_SET_LIMITS.maxPointerCandidates;
+	const maxProbeGroups = options.maxProbeGroups ?? SELECTABLE_SET_LIMITS.maxProbeGroups;
 
 	let raw: RawSelectableRecord[];
 	try {
@@ -59,7 +74,16 @@ export async function captureSelectableSetStates(
 				maxMembers: number;
 				maxDriveMs: number;
 				settleMs: number;
+				maxCandidateScan: number;
+				maxPointerCandidates: number;
+				maxProbeGroups: number;
 			} ) => {
+				const globalWithName = globalThis as typeof globalThis & {
+					__name?: ( fn: unknown ) => unknown;
+				};
+				if ( typeof globalWithName.__name === 'undefined' ) {
+					globalWithName.__name = ( fn ) => fn;
+				}
 				const wait = ( ms: number ) => new Promise( ( resolve ) => setTimeout( resolve, ms ) );
 				const cssEscape = ( value: string ) =>
 					globalThis.CSS?.escape
@@ -100,10 +124,15 @@ export async function captureSelectableSetStates(
 				};
 				const textOf = ( element: Element ) =>
 					( element.textContent || '' ).replace( /\s+/g, ' ' ).trim();
-				const fingerprint = ( element: Element ) =>
-					`${ element.hasAttribute( 'hidden' ) || element.getAttribute( 'aria-hidden' ) === 'true' }|${
-						element.childElementCount
-					}|${ textOf( element ) }`;
+				const fingerprint = ( element: Element ) => {
+					const hidden =
+						element.hasAttribute( 'hidden' ) || element.getAttribute( 'aria-hidden' ) === 'true';
+					let visibleChildren = 0;
+					for ( const child of Array.from( element.children ) ) {
+						if ( visible( child ) ) visibleChildren++;
+					}
+					return `${ hidden }|${ element.childElementCount }|${ visibleChildren }|${ textOf( element ) }`;
+				};
 				const isChrome = ( element: Element ) =>
 					Boolean(
 						element.closest(
@@ -192,24 +221,18 @@ export async function captureSelectableSetStates(
 							'button, [role="button"], [role="tab"], [role="option"], [role="radio"], [role="menuitem"], [role="menuitemradio"], [aria-selected], [aria-pressed], [tabindex]:not([tabindex="-1"])'
 						)
 					);
+					const seen = new Set( semantic );
 					const extra: Element[] = [];
-					for ( const parent of Array.from( document.querySelectorAll( 'body *' ) ) ) {
-						const kids = Array.from( parent.children );
-						if ( kids.length < 2 ) continue;
-						const byTag = new Map< string, Element[] >();
-						for ( const kid of kids ) {
-							const list = byTag.get( kid.tagName ) ?? [];
-							list.push( kid );
-							byTag.set( kid.tagName, list );
-						}
-						for ( const repeats of byTag.values() ) {
-							if ( repeats.length < 2 ) continue;
-							for ( const kid of repeats ) {
-								if ( looksSelectable( kid ) ) extra.push( kid );
-							}
-						}
+					let scanned = 0;
+					for ( const element of Array.from( document.querySelectorAll( 'body *' ) ) ) {
+						if ( scanned++ >= limits.maxCandidateScan ) break;
+						if ( extra.length >= limits.maxPointerCandidates ) break;
+						if ( seen.has( element ) ) continue;
+						if ( ! looksSelectable( element ) ) continue;
+						seen.add( element );
+						extra.push( element );
 					}
-					const unique = [ ...new Set( [ ...semantic, ...extra ].filter( looksSelectable ) ) ];
+					const unique = [ ...seen ].filter( looksSelectable );
 					return unique.filter(
 						( element ) => ! unique.some( ( other ) => other !== element && other.contains( element ) )
 					);
@@ -259,6 +282,7 @@ export async function captureSelectableSetStates(
 							if ( members.some( ( member ) => child.contains( member ) || member.contains( child ) ) ) {
 								continue;
 							}
+							if ( isChrome( child ) ) continue;
 							if ( ! visible( child ) ) continue;
 							out.push( child );
 						}
@@ -273,7 +297,19 @@ export async function captureSelectableSetStates(
 					const before = currentRoute();
 					const beforeState = history.state;
 					try {
-						( element as HTMLElement ).click();
+						const click = ( element as HTMLElement ).click;
+						if ( typeof click === 'function' ) {
+							click.call( element );
+						} else {
+							element.dispatchEvent(
+								new MouseEvent( 'click', {
+									bubbles: true,
+									cancelable: true,
+									composed: true,
+									view: window,
+								} )
+							);
+						}
 					} catch ( error ) {
 						return {
 							ok: false,
@@ -338,19 +374,31 @@ export async function captureSelectableSetStates(
 					...( element.getAttribute( 'role' ) ? { role: element.getAttribute( 'role' )! } : {} ),
 					...( html !== undefined ? { html } : {} ),
 				} );
-				const selectedMember = ( members: Element[] ) =>
-					members.find(
+				const selectedMember = ( members: Element[] ) => {
+					const aria = members.find(
 						( member ) =>
 							member.getAttribute( 'aria-selected' ) === 'true' ||
 							member.getAttribute( 'aria-pressed' ) === 'true' ||
 							member.getAttribute( 'aria-current' ) === 'true'
 					);
+					if ( aria ) return aria;
+					const classes = members.map( ( member ) => member.getAttribute( 'class' ) || '' );
+					const counts = new Map< string, number >();
+					for ( const value of classes ) counts.set( value, ( counts.get( value ) ?? 0 ) + 1 );
+					const unique = members.filter( ( _, index ) => counts.get( classes[ index ] ) === 1 );
+					return unique.length === 1 ? unique[ 0 ] : undefined;
+				};
 
 				const records: RawSelectableRecord[] = [];
 				const deadline = Date.now() + limits.maxDriveMs;
-				const groups = findGroups( collectSelectables() ).slice( 0, limits.maxSets );
+				const groups = findGroups( collectSelectables() );
 
+				let capturedSets = 0;
+				let probedGroups = 0;
 				for ( const group of groups ) {
+					if ( capturedSets >= limits.maxSets ) break;
+					if ( probedGroups >= limits.maxProbeGroups ) break;
+					probedGroups++;
 					const candidates = regionCandidates( group.root, group.members );
 					const setRecord = ( index: number ) => ( {
 						selector: sourceSelector( group.root ),
@@ -364,53 +412,31 @@ export async function captureSelectableSetStates(
 					) => {
 						records.push( {
 							status,
-							trigger: describeTrigger( group.members[ index ] ),
+							trigger: describeTrigger( group.members[ index ] ?? group.members[ 0 ] ),
 							set: setRecord( index ),
 							...extra,
 						} );
 					};
 
+					if ( Date.now() >= deadline ) {
+						pushOutcome( 'no-dialog', 0, { error: 'time budget spent' } );
+						break;
+					}
+
 					if ( candidates.length === 0 ) {
-						if ( isStrong( group.root, group.members ) ) pushOutcome( 'no-dialog', 0 );
+						pushOutcome( 'no-dialog', 0, { error: 'no shared-region candidate' } );
 						continue;
 					}
 
 					const initialFp = candidates.map( fingerprint );
 					const initialText = candidates.map( textOf );
 					const initialHtml = candidates.map( ( candidate ) => candidate.innerHTML );
-					let regionIdx = -1;
-					const variants: Array< { fp: string } > = [];
+					const observations: Array< { fps: string[]; texts: string[] } > = [];
 					let navigated = false;
 					let discoveryError: { index: number; error: string } | undefined;
 
-					const consider = () => {
-						const fps = candidates.map( fingerprint );
-						const texts = candidates.map( textOf );
-						if ( regionIdx < 0 ) {
-							const changed: number[] = [];
-							for ( let index = 0; index < candidates.length; index++ ) {
-								if ( fps[ index ] !== initialFp[ index ] && texts[ index ] !== initialText[ index ] ) {
-									changed.push( index );
-								}
-							}
-							if ( changed.length === 0 ) return;
-							changed.sort(
-								( a, b ) =>
-									Math.abs( texts[ b ].length - initialText[ b ].length ) -
-									Math.abs( texts[ a ].length - initialText[ a ].length )
-							);
-							regionIdx = changed[ 0 ];
-						}
-						const fp = fps[ regionIdx ];
-						if ( ! variants.some( ( variant ) => variant.fp === fp ) ) variants.push( { fp } );
-					};
-
 					const probeLimit = Math.min( group.members.length, 4 );
-					for (
-						let index = 0;
-						index < probeLimit && variants.length < 2 && Date.now() < deadline;
-						index++
-					) {
+					for ( let index = 0; index < probeLimit && Date.now() < deadline; index++ ) {
 						const result = await activate( group.members[ index ] );
 						if ( ! result.ok ) {
 							discoveryError ??= { index, error: result.error };
@@ -420,7 +446,26 @@ export async function captureSelectableSetStates(
 							}
 							continue;
 						}
-						consider();
+						observations.push( {
+							fps: candidates.map( fingerprint ),
+							texts: candidates.map( textOf ),
+						} );
+					}
+
+					let regionIdx = -1;
+					let bestRange = 0;
+					const minTextRange = 24;
+					for ( let index = 0; index < candidates.length; index++ ) {
+						const texts = [ initialText[ index ], ...observations.map( ( obs ) => obs.texts[ index ] ) ];
+						const fps = new Set( [ initialFp[ index ], ...observations.map( ( obs ) => obs.fps[ index ] ) ] );
+						if ( fps.size < 2 ) continue;
+						const range =
+							Math.max( ...texts.map( ( text ) => text.length ) ) -
+							Math.min( ...texts.map( ( text ) => text.length ) );
+						if ( range >= minTextRange && range > bestRange ) {
+							bestRange = range;
+							regionIdx = index;
+						}
 					}
 
 					if ( navigated ) {
@@ -429,15 +474,12 @@ export async function captureSelectableSetStates(
 						} );
 						continue;
 					}
-					if ( variants.length < 2 || regionIdx < 0 ) {
-						if ( isStrong( group.root, group.members ) ) {
-							if ( discoveryError && variants.length === 0 ) {
-								pushOutcome( 'click-failed', discoveryError.index, { error: discoveryError.error } );
-							} else {
-								pushOutcome( 'no-dialog', 0 );
-							}
+					if ( regionIdx < 0 ) {
+						if ( discoveryError && observations.length === 0 ) {
+							pushOutcome( 'click-failed', discoveryError.index, { error: discoveryError.error } );
+						} else {
+							pushOutcome( 'no-dialog', 0, { error: 'shared region did not vary' } );
 						}
-						if ( regionIdx >= 0 ) candidates[ regionIdx ].innerHTML = initialHtml[ regionIdx ];
 						continue;
 					}
 
@@ -453,7 +495,8 @@ export async function captureSelectableSetStates(
 						const before = fingerprint( liveRegion );
 						const wasSelected =
 							member.getAttribute( 'aria-selected' ) === 'true' ||
-							member.getAttribute( 'aria-pressed' ) === 'true';
+							member.getAttribute( 'aria-pressed' ) === 'true' ||
+							member === original;
 						const result = await activate( member );
 						if ( ! result.ok ) {
 							pushOutcome( 'click-failed', index, { error: result.error } );
@@ -467,7 +510,10 @@ export async function captureSelectableSetStates(
 							document.querySelector( '[data-lib-selectable-region]' ) ?? liveRegion;
 						const after = fingerprint( afterRegion );
 						if ( after === before && ! wasSelected ) {
-							pushOutcome( 'no-dialog', index, { region: describeRegion( afterRegion ) } );
+							pushOutcome( 'no-dialog', index, {
+								region: describeRegion( afterRegion ),
+								error: 'member did not change the shared region',
+							} );
 							continue;
 						}
 						pushOutcome( 'captured', index, {
@@ -478,54 +524,78 @@ export async function captureSelectableSetStates(
 					const restoreTarget =
 						document.querySelector( '[data-lib-selectable-region]' ) ?? region;
 					if ( original && Date.now() < deadline ) await activate( original );
-					restoreTarget.innerHTML = initialHtml[ regionIdx ];
+					else restoreTarget.innerHTML = initialHtml[ regionIdx ];
 					restoreTarget.removeAttribute( 'data-lib-selectable-region' );
+					capturedSets++;
 					if ( navigated ) continue;
 				}
 
 				return records;
 			},
-			{ maxSets, maxMembers, maxDriveMs, settleMs }
+			{
+				maxSets,
+				maxMembers,
+				maxDriveMs,
+				settleMs,
+				maxCandidateScan,
+				maxPointerCandidates,
+				maxProbeGroups,
+			}
 		);
 		raw = Array.isArray( result ) ? ( result as RawSelectableRecord[] ) : [];
-	} catch {
-		raw = [];
+	} catch ( error ) {
+		return [
+			toInteraction(
+				{
+					status: 'click-failed',
+					trigger: { selector: 'html', tag: 'html' },
+					set: { selector: 'html', size: 0, index: 0 },
+					error: ( error instanceof Error ? error.message : String( error ) ).slice( 0, 500 ),
+				},
+				maxHtmlBytes
+			),
+		];
 	}
 
-	return raw.map( ( record ): CapturedDialogInteraction => {
-		const bounded =
-			record.region?.html !== undefined ? boundHtml( record.region.html, maxHtmlBytes ) : undefined;
-		return {
-			status: record.status,
-			kind: SELECTABLE_SET_KIND,
-			trigger: {
-				selector: record.trigger.selector,
-				tag: record.trigger.tag,
-				...( record.trigger.id ? { id: record.trigger.id } : {} ),
-				...( record.trigger.role ? { role: record.trigger.role } : {} ),
-				ariaHaspopup: '',
-				...( record.region?.id ? { ariaControls: record.region.id } : {} ),
-				...( record.trigger.label ? { label: record.trigger.label } : {} ),
-				dataBindings: {},
-			},
-			...( bounded && record.region
-				? {
-						dialog: {
-							selector: record.region.selector,
-							tag: record.region.tag,
-							...( record.region.id ? { id: record.region.id } : {} ),
-							...( record.region.role ? { role: record.region.role } : {} ),
-							ariaModal: false,
-							html: bounded.html,
-							htmlBytes: bounded.bytes,
-							htmlTruncated: bounded.truncated,
-						},
-				  }
-				: {} ),
-			set: record.set,
-			...( record.error ? { error: record.error } : {} ),
-		};
-	} );
+	return raw.map( ( record ) => toInteraction( record, maxHtmlBytes ) );
+}
+
+function toInteraction(
+	record: RawSelectableRecord,
+	maxHtmlBytes: number
+): CapturedDialogInteraction {
+	const bounded =
+		record.region?.html !== undefined ? boundHtml( record.region.html, maxHtmlBytes ) : undefined;
+	return {
+		status: record.status,
+		kind: SELECTABLE_SET_KIND,
+		trigger: {
+			selector: record.trigger.selector,
+			tag: record.trigger.tag,
+			...( record.trigger.id ? { id: record.trigger.id } : {} ),
+			...( record.trigger.role ? { role: record.trigger.role } : {} ),
+			ariaHaspopup: '',
+			...( record.region?.id ? { ariaControls: record.region.id } : {} ),
+			...( record.trigger.label ? { label: record.trigger.label } : {} ),
+			dataBindings: {},
+		},
+		...( bounded && record.region
+			? {
+					dialog: {
+						selector: record.region.selector,
+						tag: record.region.tag,
+						...( record.region.id ? { id: record.region.id } : {} ),
+						...( record.region.role ? { role: record.region.role } : {} ),
+						ariaModal: false,
+						html: bounded.html,
+						htmlBytes: bounded.bytes,
+						htmlTruncated: bounded.truncated,
+					},
+			  }
+			: {} ),
+		set: record.set,
+		...( record.error ? { error: record.error } : {} ),
+	};
 }
 
 function boundHtml(
