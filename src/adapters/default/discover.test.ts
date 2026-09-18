@@ -17,7 +17,7 @@ describe('discoverDefault', () => {
         response.setHeader('content-type', 'application/xml');
         response.end(`<urlset>
           <url><loc>${origin}/</loc></url>
-          <url><loc>https://${request.headers.host}/wrong-protocol</loc></url>
+          <url><loc>https://elsewhere.example.test/foreign</loc></url>
         </urlset>`);
         return;
       }
@@ -35,7 +35,7 @@ describe('discoverDefault', () => {
     expect(inventory.diagnostics).toHaveLength(1);
     expect(inventory.diagnostics?.[0]).toEqual(expect.objectContaining({
       code: 'sitemap_url_rejected',
-      url: `https://127.0.0.1:${address.port}/wrong-protocol`,
+      url: 'https://elsewhere.example.test/foreign',
     }));
   });
 
