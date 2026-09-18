@@ -32,7 +32,7 @@ export function parseSitemapDocument(xml: string): SitemapDocument {
   return { kind, locs: urls };
 }
 
-import { canonicalizeOrigin } from '../screenshot/same-origin.js';
+import { canonicalizeHost } from '../screenshot/same-origin.js';
 
 export function parseSitemapXml(xml: string): string[] {
   return parseSitemapDocument(xml).locs;
@@ -99,10 +99,10 @@ export async function fetchSitemapWithDiagnostics(baseUrl: string): Promise<Site
   const normalizedBase = baseUrl.includes('://') ? baseUrl : `https://${baseUrl}`;
   const sitemapUrl = `${normalizedBase.replace(/\/$/, '')}/sitemap.xml`;
   let baseOrigin: string;
-  let captureOrigin: string;
+  let siteHost: string;
   try {
     baseOrigin = new URL(normalizedBase).origin;
-    captureOrigin = canonicalizeOrigin(normalizedBase);
+    siteHost = canonicalizeHost(normalizedBase);
   } catch {
     return { urls: [], diagnostics: [] };
   }
@@ -111,11 +111,37 @@ export async function fetchSitemapWithDiagnostics(baseUrl: string): Promise<Site
   const diagnostics: SitemapDiagnostic[] = [];
   const visited = new Set<string>();
 
+  /**
+   * Accept a sitemap entry on the entry URL's site and move it onto the entry
+   * URL's origin. A site served over https whose sitemap still lists `http://`
+   * (or the other `www` variant) is the same site; capture enforces the entry
+   * origin exactly, so the entry is rewritten rather than kept as listed.
+   * Anything else is reported, never dropped silently.
+   */
+  function acceptEntry(entry: string): URL | null {
+    let entryUrl: URL;
+    try {
+      entryUrl = new URL(entry);
+    } catch {
+      diagnostics.push({ code: 'sitemap_url_rejected', url: entry, reason: 'invalid URL' });
+      return null;
+    }
+    if (entryUrl.protocol !== 'http:' && entryUrl.protocol !== 'https:') {
+      diagnostics.push({ code: 'sitemap_url_rejected', url: entry, reason: 'unsupported protocol' });
+      return null;
+    }
+    if (canonicalizeHost(entryUrl) !== siteHost) {
+      diagnostics.push({ code: 'sitemap_url_rejected', url: entry, reason: 'origin differs from the entry URL' });
+      return null;
+    }
+    return new URL(`${entryUrl.pathname}${entryUrl.search}`, baseOrigin);
+  }
+
   async function fetchAndParse(url: string, depth: number): Promise<void> {
     if (depth > MAX_SITEMAP_DEPTH || allUrls.length >= MAX_URLS || visited.has(url)) return;
     visited.add(url);
 
-    // Same-origin enforcement to prevent SSRF
+    // Same-origin enforcement to prevent SSRF: only the entry origin is fetched.
     try {
       if (new URL(url).origin !== baseOrigin) return;
     } catch {
@@ -132,27 +158,14 @@ export async function fetchSitemapWithDiagnostics(baseUrl: string): Promise<Site
         if (allUrls.length >= MAX_URLS) break;
         // Check for .xml before query string (e.g. sitemap_products_1.xml?from=...&to=...)
         const pathPart = u.includes('?') ? u.slice(0, u.indexOf('?')) : u;
+        const entryUrl = acceptEntry(u);
+        if (!entryUrl) continue;
         if (pathPart.endsWith('.xml')) {
-          await fetchAndParse(u, depth + 1);
+          await fetchAndParse(entryUrl.href, depth + 1);
         } else {
-          let pageUrl: URL;
-          try {
-            pageUrl = new URL(u);
-          } catch {
-            diagnostics.push({ code: 'sitemap_url_rejected', url: u, reason: 'invalid URL' });
-            continue;
-          }
-          if (pageUrl.protocol !== 'http:' && pageUrl.protocol !== 'https:') {
-            diagnostics.push({ code: 'sitemap_url_rejected', url: u, reason: 'unsupported protocol' });
-            continue;
-          }
-          if (canonicalizeOrigin(pageUrl.href) !== captureOrigin) {
-            diagnostics.push({ code: 'sitemap_url_rejected', url: u, reason: 'origin differs from the entry URL' });
-            continue;
-          }
-          if (!seenUrls.has(pageUrl.href)) {
-            allUrls.push(pageUrl.href);
-            seenUrls.add(pageUrl.href);
+          if (!seenUrls.has(entryUrl.href)) {
+            allUrls.push(entryUrl.href);
+            seenUrls.add(entryUrl.href);
           }
         }
       }
