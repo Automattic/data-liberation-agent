@@ -2013,6 +2013,60 @@ function unresolvedCapturedAnchors(
 	} ) );
 }
 
+const UNCAPTURED_ROUTE_REASON = 'target route was not captured';
+const SKIP_UNCAPTURED_PATHS = /^\/(cart|account|login|signup|checkout|search|api|admin|favicon)/i;
+const UNCAPTURED_ASSET_PATH =
+	/\.(css|js|png|jpg|jpeg|gif|svg|ico|woff|woff2|ttf|eot|pdf|zip|xml|json)$/i;
+
+/**
+ * Same-origin page links in captured HTML whose target was never captured.
+ *
+ * Checked against the pre-rewrite document so hrefs still resolve on the
+ * source origin. No extra network: the route set is whatever export already
+ * retained on disk.
+ */
+function uncapturedRouteAnchors(
+	html: string,
+	sourceUrl: string,
+	capturedRoutes: Set< string >
+): Array< { sourceUrl: string; url: string; reason: string } > {
+	let documentUrl: URL;
+	try {
+		documentUrl = new URL( sourceUrl );
+	} catch {
+		return [];
+	}
+	const $ = cheerio.load( html );
+	const missing = new Map< string, string >();
+	$( 'a[href],area[href]' ).each( ( _index, element ) => {
+		const href = ( $( element ).attr( 'href' ) ?? '' ).trim();
+		if ( ! href || href === '#' ) return;
+		let resolved: URL;
+		try {
+			resolved = new URL( href, sourceUrl );
+		} catch {
+			return;
+		}
+		if ( resolved.protocol !== 'http:' && resolved.protocol !== 'https:' ) return;
+		if ( resolved.origin !== documentUrl.origin ) return;
+		if ( UNCAPTURED_ASSET_PATH.test( resolved.pathname ) ) return;
+		if ( SKIP_UNCAPTURED_PATHS.test( resolved.pathname ) ) return;
+		let key: string;
+		try {
+			key = normalizedUrl( resolved.href );
+		} catch {
+			return;
+		}
+		if ( capturedRoutes.has( key ) || missing.has( key ) ) return;
+		missing.set( key, key );
+	} );
+	return [ ...missing.values() ].map( ( url ) => ( {
+		sourceUrl,
+		url,
+		reason: UNCAPTURED_ROUTE_REASON,
+	} ) );
+}
+
 /**
  * Group screenshot-stage failures (goto timeouts, nested-document rejections,
  * etc.) by URL so a route that never produced HTML can report every viewport
@@ -2724,10 +2778,12 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 
 	const unresolvedAnchors: Array< {
 		sourceUrl: string;
-		fragment: string;
-		targetCount: number;
 		reason: string;
+		fragment?: string;
+		targetCount?: number;
+		url?: string;
 	} > = [];
+	const capturedRouteKeys = new Set( portableRouteLinks.keys() );
 	for ( const entry of retainedEntries ) {
 		const { url, htmlPath } = entry;
 		const routePath = routeOutputPath( url, options.sourceUrl, entrypointUrl ).replace(
@@ -2739,9 +2795,11 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 			throw new Error( `Captured route escapes the website directory: ${ url }` );
 		}
 		mkdirSync( dirname( destination ), { recursive: true } );
+		const originalHtml = readFileSync( htmlPath, 'utf8' );
+		unresolvedAnchors.push( ...uncapturedRouteAnchors( originalHtml, url, capturedRouteKeys ) );
 		const identityHtml = replaceAll(
 			rewriteMediaUrls(
-				rewriteCapturedRouteLinks( readFileSync( htmlPath, 'utf8' ), url, portableRouteLinks ),
+				rewriteCapturedRouteLinks( originalHtml, url, portableRouteLinks ),
 				omitDegenerateReplacements( mediaReplacements, rejectedReplacementKeys )
 			),
 			resourceReplacements,
@@ -2963,6 +3021,10 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 			page.reports?.length && page.reports.every((report) => report.failures.length === 0 && report.residual === 0)),
 	} : undefined;
 	if (cleanup) writeFileSync(join(outputDir, 'cleanup-evidence.json'), JSON.stringify({ schema: recordedPolicy!.schema, pages: cleanupPages }, null, 2));
+	const complete =
+		Number( options.summary.routesFailed ?? 0 ) === 0 &&
+		! unresolvedAnchors.some( ( anchor ) => anchor.reason === UNCAPTURED_ROUTE_REASON );
+
 	writeFileSync(
 		receiptPath,
 		`${ JSON.stringify(
@@ -2989,7 +3051,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 				excludedRoutes,
 				duplicateRoutes,
 				discoveryDiagnostics,
-				summary: options.summary,
+				summary: { ...options.summary, complete },
 			},
 			null,
 			2
@@ -3000,6 +3062,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		`${ JSON.stringify(
 			{
 				schema: 'data-liberation/capture-diagnostics/v1',
+				complete,
 				failures: options.failures,
 				discoveryDiagnostics,
 				resourceFailures: resourceManifest.failures,

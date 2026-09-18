@@ -440,7 +440,7 @@ describe( 'exportWebsiteCapture', () => {
 		] );
 	} );
 
-	it( 'does not flag a resolvable same-page anchor or a cross-route fragment link', () => {
+	it( 'does not flag a resolvable same-page anchor or a captured cross-route fragment link', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-ok-anchor-export-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
@@ -450,8 +450,18 @@ describe( 'exportWebsiteCapture', () => {
 			'<html><body><a href="#listen">Listen</a><a href="/about/#team">Team</a><section id="listen">Listen</section></body></html>'
 		);
 		writeFileSync(
+			join( outputDir, 'html', 'about.html' ),
+			'<html><body><section id="team">Team</section></body></html>'
+		);
+		writeFileSync(
 			join( outputDir, 'screenshots', 'manifest.json' ),
-			JSON.stringify( { version: 1, entries: { 'https://example.com/': { html: 'html/homepage.html' } } } )
+			JSON.stringify( {
+				version: 1,
+				entries: {
+					'https://example.com/': { html: 'html/homepage.html' },
+					'https://example.com/about/': { html: 'html/about.html' },
+				},
+			} )
 		);
 
 		exportWebsiteCapture( {
@@ -465,6 +475,55 @@ describe( 'exportWebsiteCapture', () => {
 		expect(
 			JSON.parse( readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' ) ).unresolvedAnchors
 		).toEqual( [] );
+	} );
+
+	it( 'names same-origin anchors whose target route was never captured', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-uncaptured-route-' ) );
+		dirs.push( outputDir );
+		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
+		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
+		writeFileSync(
+			join( outputDir, 'html', 'homepage.html' ),
+			'<html><body><nav><a href="/blog">Blog</a><a href="/contact">Contact</a></nav><main><a href="/hyundai-i30n">Post</a><a href="/using-hyper-key-skhd-app-switching-mac">Another</a></main></body></html>'
+		);
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( { version: 1, entries: { 'https://example.com/': { html: 'html/homepage.html' } } } )
+		);
+
+		const receiptPath = exportWebsiteCapture( {
+			outputDir,
+			sourceUrl: 'https://example.com/',
+			platform: 'generic',
+			summary: { routesDiscovered: 1, routesCaptured: 1, routesFailed: 0 },
+			failures: [],
+		} );
+
+		const diagnostics = JSON.parse( readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' ) );
+		expect( diagnostics.unresolvedAnchors ).toEqual( [
+			{
+				sourceUrl: 'https://example.com/',
+				url: 'https://example.com/blog',
+				reason: 'target route was not captured',
+			},
+			{
+				sourceUrl: 'https://example.com/',
+				url: 'https://example.com/contact',
+				reason: 'target route was not captured',
+			},
+			{
+				sourceUrl: 'https://example.com/',
+				url: 'https://example.com/hyundai-i30n',
+				reason: 'target route was not captured',
+			},
+			{
+				sourceUrl: 'https://example.com/',
+				url: 'https://example.com/using-hyper-key-skhd-app-switching-mac',
+				reason: 'target route was not captured',
+			},
+		] );
+		expect( diagnostics.complete ).toBe( false );
+		expect( JSON.parse( readFileSync( receiptPath, 'utf8' ) ).summary.complete ).toBe( false );
 	} );
 
 	it( 'declares responsive editing counterparts from stable source component slots', () => {
