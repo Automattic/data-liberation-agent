@@ -20,7 +20,11 @@ import {
 	buildLayoutGeometryProof,
 	type GeometryCapture,
 } from './screenshot/layout-geometry-proof.js';
-import { failuresAreAbsentDocument } from './screenshot/absent-document.js';
+import {
+	failuresAreAbsentDocument,
+	isAbsentDocumentRender,
+	isSourceCaptureUrl,
+} from './screenshot/absent-document.js';
 import { isInlineUrl, selfContainWebsite } from './self-contain.js';
 import { wireCapturedDialogs } from './static-dialogs.js';
 import { rewriteMediaUrls } from './streaming/media-url-rewrite.js';
@@ -336,10 +340,26 @@ function declaresCanonicalRoute( entry: CaptureEntry, claimed: CaptureEntry ): b
 	return normalizedUrl( entry.canonicalUrl ) === claimedCanonical;
 }
 
+/**
+ * Where a copied document lives in the artifact, and every path the artifact serves.
+ *
+ * Captured documents move: a site captured at a subpath serves `/docs/intro` from
+ * `/intro/index.html`, so a relative href keeps its spelling but loses its meaning.
+ * Given this, links that don't land on something the artifact serves are resolved
+ * against the source document instead of being left to dangle.
+ */
+interface PortableLinkContext {
+	documentPath: string;
+	servedPaths: Set< string >;
+}
+
+const PORTABLE_LINK_BASE = 'https://portable.invalid';
+
 function rewriteCapturedRouteLinks(
 	html: string,
 	documentUrl: string,
-	routes: Map< string, string >
+	routes: Map< string, string >,
+	portable?: PortableLinkContext
 ): string {
 	const $ = cheerio.load( html );
 	// `rel="canonical"` naming a URL this capture actually produced is source
@@ -348,7 +368,10 @@ function rewriteCapturedRouteLinks(
 	$( 'a[href],area[href],link[rel="canonical"][href]' ).each( ( _index, element ) => {
 		const link = $( element );
 		const href = link.attr( 'href' ) ?? '';
-		if ( ! /^(?:https?:)?\/\//i.test( href ) ) return;
+		const absolute = /^(?:https?:)?\/\//i.test( href );
+		// Same-document fragments, and schemes such as `mailto:` or `tel:`, mean
+		// the same thing wherever the document is served.
+		if ( ! absolute && ( ! href.trim() || /^\s*(?:#|[a-z][a-z0-9+.-]*:)/i.test( href ) ) ) return;
 
 		let resolved: URL;
 		try {
@@ -357,8 +380,22 @@ function rewriteCapturedRouteLinks(
 			return;
 		}
 		const route = routes.get( normalizedUrl( resolved.href ) );
-		if ( ! route ) return;
-		link.attr( 'href', `${ route }${ resolved.search }${ resolved.hash }` );
+		if ( route ) {
+			link.attr( 'href', `${ route }${ resolved.search }${ resolved.hash }` );
+			return;
+		}
+		if ( absolute || ! portable ) return;
+		// Paths the export itself wrote (routes, localized media and resources)
+		// already resolve in the copy.
+		try {
+			const local = new URL( href, `${ PORTABLE_LINK_BASE }${ portable.documentPath }` );
+			if ( portable.servedPaths.has( local.pathname ) ) return;
+		} catch {
+			return;
+		}
+		// A relative link to something that was not captured would dangle once
+		// the document moves, so point it at the source it was written against.
+		if ( /^https?:$/.test( resolved.protocol ) ) link.attr( 'href', resolved.href );
 	} );
 	return $.html();
 }
@@ -2078,6 +2115,24 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 			continue;
 		}
 		const rawDesktopHtml = readFileSync( capturedHtmlPath, 'utf8' );
+		// A client-routed SPA answers every route with HTTP 200 and renders its
+		// own not-found screen in JavaScript, so the HTTP-status check above
+		// (failuresAreAbsentDocument) never sees it: the entry has HTML, capture
+		// succeeded, there is no failure to inspect. Never applied to the source
+		// URL itself -- it is known good regardless of what it renders.
+		if (
+			! isSourceCaptureUrl( url, options.sourceUrl ) &&
+			isAbsentDocumentRender( rawDesktopHtml )
+		) {
+			excludedRoutes.push( url );
+			routeCaptureDiagnostics.push( {
+				code: 'route_not_found',
+				url,
+				reason:
+					'rendered document is the client-routed not-found screen: a heading of just "404"/"410" on an otherwise thin page',
+			} );
+			continue;
+		}
 		const mobileHtmlPath = resolve( outputDir, entry.html.replace( /^html[\\/]/, 'html-mobile/' ) );
 		const rawMobileHtml =
 			pathWithin( outputDir, mobileHtmlPath ) && existsSync( mobileHtmlPath )
@@ -2647,6 +2702,26 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		portableRouteLinks.set( canonicalKey, `/${ routePath }` );
 	}
 
+	const portableServedPaths = new Set< string >();
+	for ( const path of [
+		...portableRouteLinks.values(),
+		...mediaReplacements.values(),
+		...resourceReplacements.values(),
+		...[ ...sharedStyles.values() ].map( ( style ) => style.path ),
+	] ) {
+		if ( ! path.startsWith( '/' ) ) continue;
+		try {
+			const pathname = new URL( path, PORTABLE_LINK_BASE ).pathname;
+			portableServedPaths.add( pathname );
+			if ( pathname.endsWith( '/index.html' ) ) {
+				portableServedPaths.add( pathname.slice( 0, -'index.html'.length ) );
+				portableServedPaths.add( pathname.slice( 0, -'/index.html'.length ) || '/' );
+			}
+		} catch {
+			// A replacement that is not a URL path serves nothing a link could name.
+		}
+	}
+
 	const unresolvedAnchors: Array< {
 		sourceUrl: string;
 		fragment: string;
@@ -2679,7 +2754,8 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 				entry.interactions?.initialDialogs ?? []
 			),
 			url,
-			portableRouteLinks
+			portableRouteLinks,
+			{ documentPath: `/${ routePath }`, servedPaths: portableServedPaths }
 		);
 		unresolvedAnchors.push( ...unresolvedCapturedAnchors( normalizedHtml, url ) );
 		writeFileSync( destination, normalizedHtml );

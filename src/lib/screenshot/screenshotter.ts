@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { connectBrowser } from '../browser-kit/index.js';
+import { connectBrowser, desktopContextOptions } from '../browser-kit/index.js';
 import { classifyUrl, type UrlType } from '../extraction/sitemap.js';
 import { assertPublicHttpUrl } from '../media-fetch/safe-fetch.js';
 import { CHROME_AUDIT_PROPERTIES } from '../replicate/chrome-audit-types.js';
@@ -13,7 +13,7 @@ import { applySourceCleanup, readSourceCleanup, cleanupPolicy, type CleanupPolic
 import { captureChromeFidelity } from './capture-chrome-fidelity.js';
 import { CssAggregator } from './css-aggregator.js';
 import { captureDesignForUrl, captureMobileBodyFragment } from './design-capture-runner.js';
-import { countBodyTags, isStackingArtifact } from './document-integrity.js';
+import { countBodyTags, isRouteDrift, isStackingArtifact } from './document-integrity.js';
 import { collectMobileChromeLayout } from './dom-capture.js';
 import { generateChromeCss, type BakedLayoutMap } from './fixups.js';
 import { sanitizeFrozenHtml } from './freeze.js';
@@ -774,12 +774,29 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		try {
 			const html = await capturePageHtml( page );
 			await resourceStore.captureDomDependencies( html, url );
-			// Refuse to persist a corrupted capture: if the live DOM serialized more
-			// than one document (e.g. an AJAX page-loader prefetched and nested whole
-			// pages into the body), every section is duplicated + truncated downstream.
-			// Record it as a content failure and skip the write rather than poison the
-			// reference HTML that comparison/design tooling correlates by URL.
-			if ( isStackingArtifact( html ) ) {
+			// Refuse to persist a capture whose page navigated away from the route we
+			// were asked to capture: every DOM-mutating step above (lazy-load probing,
+			// disclosure hydration, dialog probing…) runs on a live, script-controlled
+			// page, and this is the first point the actual document is compared against
+			// the intended one. A drifted document is a real, successfully-rendered
+			// page — just the WRONG one — so there is no corrupted markup to detect the
+			// way isStackingArtifact does; only comparing identities catches it.
+			// Recovering (re-navigating and re-running the capture) is not attempted:
+			// the fullpage screenshot above already ran on the drifted page too, so a
+			// re-fetched HTML would still be paired with the wrong screenshot. Refusing
+			// and recording it — the same discipline as isStackingArtifact below — keeps
+			// the receipt honest instead of shipping a mismatched pair silently.
+			const capturedUrl = page.url();
+			if ( isRouteDrift( capturedUrl, url ) ) {
+				failures.push( {
+					url,
+					viewport: viewport.id,
+					stage: 'content',
+					error: `route drift: captured ${ capturedUrl } while attempting to capture ${ url } (a control navigated the page mid-capture); HTML not persisted`,
+					timestamp: now(),
+					attempt: 1,
+				} );
+			} else if ( isStackingArtifact( html ) ) {
 				failures.push( {
 					url,
 					viewport: viewport.id,
@@ -818,7 +835,11 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		try {
 			const mhtml = sanitizeFrozenHtml( await capturePageHtml( page ) );
 			await resourceStore.captureDomDependencies( mhtml, url );
-			if ( ! isStackingArtifact( mhtml ) ) {
+			// Same route-identity guard as the desktop HTML write above — best-effort
+			// here too (this carry already silently skips on any other failure), so a
+			// drifted mobile capture just leaves the page desktop-only rather than
+			// recording a failure of its own.
+			if ( ! isRouteDrift( page.url(), url ) && ! isStackingArtifact( mhtml ) ) {
 				mkdirSync( dirname( plan.paths.htmlMobile ), { recursive: true } );
 				writeFileSync( plan.paths.htmlMobile, mhtml );
 				mobileHeights[ slug ] = await page.evaluate( () => document.documentElement.scrollHeight );
@@ -1415,10 +1436,13 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 				// scale 1 because its viewport is already small enough that
 				// further reduction loses layout detail. See types.ts for the
 				// rationale.
-				// Mobile capture must use a real mobile browser identity because builders
-				// can select viewport metadata, navigation, and layout from it.
+				// Each viewport loads as a real browser: builders can select viewport
+				// metadata, navigation, and layout from the identity, and anti-bot
+				// challenges refuse Playwright's default HeadlessChrome one.
 				context = await browser.newContext( {
-					...( viewport.id === 'mobile' ? IPHONE_17_CONTEXT : {} ),
+					...( viewport.id === 'mobile'
+						? IPHONE_17_CONTEXT
+						: await desktopContextOptions( browser ) ),
 					viewport: { width: viewport.width, height: viewport.height },
 					deviceScaleFactor:
 						viewport.id === 'desktop'
