@@ -1,6 +1,6 @@
 import type { Page } from 'playwright';
 
-export const CLEANUP_SCHEMA = 'data-liberation/source-cleanup/v1';
+export const CLEANUP_SCHEMA = 'data-liberation/source-cleanup/v2';
 export interface CleanupRule {
   id: string;
   category: 'advertisement' | 'source-attribution';
@@ -9,6 +9,8 @@ export interface CleanupRule {
   credit?: boolean;
   /** Generic acquisition bars require explicit promotion language. */
   promotion?: boolean;
+  /** Unnamed builder chrome requires an authoring affordance plus its vendor's assets. */
+  builderChrome?: boolean;
   /** Adapter-owned brand spelling for plain-text footer credit removal. */
   creditText?: string;
   hosts?: string[];
@@ -17,11 +19,18 @@ export interface CleanupPolicy {
   schema: typeof CLEANUP_SCHEMA;
   rules: CleanupRule[];
   promotion: { text: string; signup: string };
+  builderChrome: { affordance: string };
 }
 
 const PROMOTION_PATTERNS = {
   text: '\\bpowered by\\b|\\bcreate your own (?:unique )?website\\b',
   signup: '\\b(?:sign[ -]?up|get started|start (?:your|a) (?:site|website))\\b',
+};
+
+/** An offer to open this page in the tool that produced it, addressed to whoever
+ * is looking at it — the shape every builder badge shares regardless of vendor. */
+const BUILDER_CHROME_PATTERNS = {
+  affordance: '\\b(?:edit|made|built|created|designed|generated)\\s+(?:with|on|by|using)\\b',
 };
 
 /** Shared recognition for live cleanup, overlay classification and old exports. */
@@ -56,8 +65,16 @@ const AD_RULES: CleanupRule[] = [
   { id: 'provider-acquisition', category: 'source-attribution', selector: 'body > div,body > aside,footer > div', promotion: true },
 ];
 
+/** Last rule in the policy: a platform that names its own badge keeps the
+ * attribution in the evidence, and this catches the platforms nobody named. */
+const BUILDER_CHROME_RULE: CleanupRule = {
+  id: 'builder-chrome', category: 'source-attribution', builderChrome: true,
+  selector: 'body > div,body > aside,body > a,body > span,footer > div',
+};
+
 export function cleanupPolicy(rules: CleanupRule[] = []): CleanupPolicy {
-  return { schema: CLEANUP_SCHEMA, rules: [...AD_RULES, ...rules], promotion: { ...PROMOTION_PATTERNS } };
+  return { schema: CLEANUP_SCHEMA, rules: [...AD_RULES, ...rules, BUILDER_CHROME_RULE],
+    promotion: { ...PROMOTION_PATTERNS }, builderChrome: { ...BUILDER_CHROME_PATTERNS } };
 }
 
 /** Source adapters supply identity; the matching/removal mechanism is shared. */
@@ -71,7 +88,9 @@ export function providerCreditRules(id: string, hosts: string[], brand: string):
 export function validateCleanupPolicy(value: unknown): asserts value is CleanupPolicy {
   const policy = value as CleanupPolicy;
   if (!policy || policy.schema !== CLEANUP_SCHEMA || policy.promotion?.text !== PROMOTION_PATTERNS.text ||
-    policy.promotion?.signup !== PROMOTION_PATTERNS.signup || !Array.isArray(policy.rules) || policy.rules.length > 100 ||
+    policy.promotion?.signup !== PROMOTION_PATTERNS.signup ||
+    policy.builderChrome?.affordance !== BUILDER_CHROME_PATTERNS.affordance ||
+    !Array.isArray(policy.rules) || policy.rules.length > 100 ||
     policy.rules.some((rule) => !rule || typeof rule.id !== 'string' || typeof rule.selector !== 'string' ||
       rule.selector.length > 2000 || !['advertisement', 'source-attribution'].includes(rule.category) ||
       (rule.creditText !== undefined && (typeof rule.creditText !== 'string' || rule.creditText.length > 100)) ||
@@ -166,6 +185,51 @@ export function installCleanupInPage(policy: CleanupPolicy): CleanupReport {
   const ownerContent = /©|copyright|all rights reserved/i;
   const promotionText = new RegExp(policy.promotion.text, 'i');
   const promotionSignup = new RegExp(policy.promotion.signup, 'i');
+  const builderAffordance = new RegExp(policy.builderChrome.affordance, 'i');
+  // Words that describe the offer rather than name who is making it. A token
+  // left after this is a candidate brand, and a brand is what owns a domain.
+  const genericWords = new Set(['edit', 'made', 'built', 'created', 'designed', 'generated', 'with', 'using',
+    'the', 'this', 'your', 'our', 'site', 'sites', 'website', 'page', 'badge', 'close', 'open', 'love',
+    'app', 'apps', 'www', 'cdn', 'static', 'media', 'assets', 'images', 'files', 'com', 'net', 'org', 'dev']);
+  /**
+   * Host-platform builder chrome: a viewport-anchored badge offering to open
+   * this page in the tool that produced it. Recognised structurally rather than
+   * by brand, so an unknown builder is handled the same as a named one:
+   *
+   *  - fixed to the viewport, so it is chrome layered over the document rather
+   *    than a part of it that the owner placed in the flow;
+   *  - its accessible text is short enough to be a badge and makes an authoring
+   *    offer naming an entity (wordmarks ship as images, so alt/aria count);
+   *  - and that same entity serves an asset or link inside the badge from its
+   *    own domain.
+   *
+   * The last condition is what keeps authored content safe. "Made with love in
+   * Brooklyn" names nobody who owns a domain, and an owner's own floating CTA
+   * does not load a stranger's wordmark to make its point.
+   */
+  const builderChrome = (node: Element): boolean => {
+    const style = getComputedStyle(node);
+    if (style.position !== 'fixed' || style.visibility === 'hidden') return false;
+    const rect = node.getBoundingClientRect();
+    if (rect.width < 1 || rect.height < 1) return false;
+    const label = [node.textContent ?? '', node.getAttribute('aria-label') ?? '', node.getAttribute('title') ?? '',
+      ...[...node.querySelectorAll('img,[aria-label],[title]')].flatMap((child) =>
+        ['alt', 'aria-label', 'title'].map((name) => child.getAttribute(name) ?? ''))]
+      .join(' ').replace(/\s+/g, ' ').trim();
+    if (label.length > 200 || !builderAffordance.test(label)) return false;
+    const brands = [...new Set(label.toLowerCase().match(/[a-z][a-z0-9]{2,}/g) ?? [])].filter((word) => !genericWords.has(word));
+    if (!brands.length) return false;
+    const origin = location.hostname.toLowerCase();
+    for (const source of [node, ...node.querySelectorAll('[href],[src]')]) {
+      let host: string;
+      try { host = new URL(source.getAttribute('href') ?? source.getAttribute('src') ?? '', location.href).hostname.toLowerCase(); }
+      catch { continue; }
+      // The owner's own infrastructure is not a third party advertising itself.
+      if (!host || host === origin || host.endsWith(`.${origin}`) || origin.endsWith(`.${host}`)) continue;
+      if (host.split(/[.-]/).some((part) => brands.includes(part))) return true;
+    }
+    return false;
+  };
   const selectorFor = (node: Element) => {
     const parts: string[] = [];
     let current: Element | null = node;
@@ -189,6 +253,7 @@ export function installCleanupInPage(policy: CleanupPolicy): CleanupReport {
       return getComputedStyle(node).position === 'fixed' && text.length < 600 &&
         promotionText.test(text) && promotionSignup.test(text);
     }
+    if (rule.builderChrome) return builderChrome(node);
     if (rule.credit) {
       const text = node.parentElement?.textContent ?? node.textContent ?? '';
       if (node.closest('article,main') && !node.closest('footer,[role="contentinfo"]')) return false;

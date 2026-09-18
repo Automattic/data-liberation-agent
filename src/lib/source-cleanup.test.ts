@@ -182,6 +182,63 @@ it('removes the Lovable attribution badge with its orphaned stylesheet rules, ke
   } finally { await browser.close(); }
 }, 20_000);
 
+// A builder badge from a platform this repo has never heard of, beside the
+// floating chrome a site owner legitimately authors. Nothing here names the
+// vendor to the cleanup policy: the badge has to be recognised structurally.
+const builderChromeHtml = `<!doctype html><html><head><meta charset="utf-8"><style>
+body{margin:0;font:16px Arial}
+main{padding:20px}
+.floating{position:fixed;bottom:16px;padding:8px 12px;background:#000;color:#fff}
+</style></head><body>
+<div id="root" style="position:fixed;inset:0;overflow:auto"><main><h1>Owner business</h1>
+  <img src="https://media.base44.com/images/public/site/logo.png" alt="Owner business logo">
+  <p>We built with Base44 before moving here. ${'Real owner content to retain. '.repeat(10)}</p></main></div>
+<div id="platform-badge" class="floating" style="right:16px;z-index:999999">
+  <img src="https://media.base44.com/images/public/builder-assets/symbol-orange.png" alt="base44" style="width:20px;height:20px">
+  <span>Edit with </span><img src="data:image/png;base64,iVBORw0KGgo=" alt="Base44" height="18" width="56">
+  <button aria-label="Close badge">x</button>
+</div>
+<div id="owner-cta" class="floating" style="left:16px">
+  <a href="https://calendly.com/owner/consult">Book a consultation</a>
+</div>
+<div id="owner-credit" class="floating" style="left:200px">
+  <img src="https://images.unsplash.com/heart.png" alt="heart"> Made with love in Brooklyn
+</div>
+<div id="owner-consent" class="floating" style="left:400px">
+  We use cookies. <a href="https://cookiebot.com/policy">Accept all</a>
+</div>
+<div id="owner-tool" class="floating" style="left:600px">
+  <a href="https://app.localtest.me/editor"><img src="https://app.localtest.me/mark.png" alt="Localtest"> Edit with Localtest</a>
+</div>
+<div id="owner-partner">Built with Base44 <img src="https://media.base44.com/mark.png" alt="Base44"></div>
+</body></html>`;
+
+it('removes an unknown builder badge from its authoring offer and vendor provenance, keeping authored floating chrome', async () => {
+  server = createServer((_req, res) => { res.setHeader('content-type', 'text/html'); res.end(builderChromeHtml); });
+  await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve));
+  const url = `http://localtest.me:${(server.address() as { port: number }).port}/`;
+  const browser = await chromium.launch();
+  try {
+    for (const width of [1440, 390]) {
+      const page = await browser.newPage({ viewport: { width, height: 900 } });
+      await page.goto(url);
+      const report = await applySourceCleanup(page, cleanupPolicy());
+      expect(await page.locator('#platform-badge').count()).toBe(0);
+      // Everything else survives: a fixed app shell whose own prose credits the
+      // platform and loads its logo, an in-flow partner credit, a floating CTA,
+      // a geographic credit, a consent banner and the owner's own tooling.
+      for (const id of ['#root', '#owner-partner', '#owner-cta', '#owner-credit', '#owner-consent', '#owner-tool'])
+        expect(await page.locator(id).count()).toBe(1);
+      expect(await page.locator('main').innerText()).toContain('We built with Base44');
+      expect(report.failures).toEqual([]);
+      const record = report.records.find((entry) => entry.rule === 'builder-chrome');
+      expect(record).toMatchObject({ category: 'source-attribution', selector: '#platform-badge', action: 'remove' });
+      expect(record!.text).toContain('Edit with');
+      await page.close();
+    }
+  } finally { await browser.close(); }
+}, 30_000);
+
 it('reports invalid rules rather than silently certifying cleanup', async () => {
   const browser = await chromium.launch();
   try {
