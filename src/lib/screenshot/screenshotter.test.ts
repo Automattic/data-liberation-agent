@@ -52,6 +52,7 @@ function makeGoodPage(gotoStatus: number | ((url: string) => number) = 200) {
       currentUrl = url;
       return { status: () => statusOf(currentUrl) };
     }),
+    url: vi.fn().mockImplementation(() => currentUrl),
     content: vi.fn().mockResolvedValue('<html><body>hello</body></html>'),
     screenshot: vi.fn().mockResolvedValue(Buffer.from('fakepng')),
     waitForLoadState: vi.fn().mockResolvedValue(undefined),
@@ -446,6 +447,69 @@ describe('captureScreenshots', () => {
       expect(result.failed).toBeGreaterThan(0);
       const failures = JSON.parse(readFileSync(join(dir, 'screenshots', 'failures.json'), 'utf8'));
       expect(failures.some((f: { stage: string; error: string }) => f.stage === 'goto' && f.error === 'HTTP 403')).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses to persist HTML when the live page drifted to a different route mid-capture, and records the drift', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ss-'));
+    try {
+      (connectBrowser as ReturnType<typeof vi.fn>).mockResolvedValue(
+        makeMockBrowser(() => {
+          const page = makeGoodPage();
+          // Simulate a control clicked during a DOM-mutating capture step (lazy
+          // load, disclosure hydration…) turning out to navigate a client-routed
+          // SPA: by the time HTML is serialized, page.url() names a different
+          // route than the one this pass was asked to capture.
+          page.url = vi.fn().mockReturnValue('https://example.com/browse');
+          return page;
+        }),
+      );
+      const result = await captureScreenshots({
+        urls: ['https://example.com/home'],
+        outputDir: dir,
+        concurrency: 1,
+        settleMs: 0,
+      });
+      expect(result.failed).toBeGreaterThan(0);
+      expect(existsSync(join(dir, 'html', 'home.html'))).toBe(false);
+      const failures = JSON.parse(readFileSync(join(dir, 'screenshots', 'failures.json'), 'utf8'));
+      expect(
+        failures.some(
+          (f: { stage: string; error: string }) =>
+            f.stage === 'content' &&
+            /route drift/.test(f.error) &&
+            f.error.includes('example.com/browse') &&
+            f.error.includes('example.com/home'),
+        ),
+      ).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not treat a benign URL difference (trailing slash + SPA replaceState hash) as route drift', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ss-'));
+    try {
+      (connectBrowser as ReturnType<typeof vi.fn>).mockResolvedValue(
+        makeMockBrowser(() => {
+          const page = makeGoodPage();
+          // A trailing slash, a query string, and a hash the SPA's own
+          // initial replaceState left behind (still naming the same path) —
+          // none of these are drift.
+          page.url = vi.fn().mockReturnValue('https://example.com/home/?ref=abc#/home');
+          return page;
+        }),
+      );
+      const result = await captureScreenshots({
+        urls: ['https://example.com/home'],
+        outputDir: dir,
+        concurrency: 1,
+        settleMs: 0,
+      });
+      expect(result.failed).toBe(0);
+      expect(existsSync(join(dir, 'html', 'home.html'))).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
