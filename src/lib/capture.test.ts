@@ -44,7 +44,8 @@ vi.mock( './media-fetch/media.js', () => ( {
 	} ),
 } ) );
 
-import { captureWebsite, downloadCaptureSectionMedia } from './capture.js';
+import { captureWebsite, downloadCaptureSectionMedia, IncompleteCaptureError } from './capture.js';
+import { exportWebsiteCapture } from './capture-export.js';
 
 const root = join( process.cwd(), '.tmp-test', 'capture-section-media' );
 const sourceUrl = 'https://example.com/';
@@ -149,5 +150,86 @@ describe( 'captureWebsite fluid learning', () => {
 		expect( captureScreenshotsMock ).toHaveBeenCalledWith(
 			expect.objectContaining( { learnFluid: expected } )
 		);
+	} );
+} );
+
+describe( 'captureWebsite completeness', () => {
+	afterEach( () => {
+		vi.mocked( exportWebsiteCapture ).mockClear();
+		rmSync( root, { recursive: true, force: true } );
+	} );
+
+	it( 'says the capture is incomplete when exported output links to uncaptured routes', async () => {
+		vi.mocked( exportWebsiteCapture ).mockImplementationOnce( ( { outputDir } ) => {
+			mkdirSync( outputDir, { recursive: true } );
+			writeFileSync(
+				join( outputDir, 'diagnostics.json' ),
+				JSON.stringify( {
+					unresolvedAnchors: [
+						{
+							sourceUrl,
+							url: 'https://example.com/hyundai-i30n',
+							reason: 'target route was not captured',
+						},
+					],
+				} )
+			);
+			return join( outputDir, 'capture-receipt.json' );
+		} );
+
+		const result = await captureWebsite(
+			{ url: sourceUrl, outputDir: root },
+			{
+				findAdapter: () => ( {
+					id: 'generic',
+					platform: 'generic',
+					discover: async () => ( { urls: [] } ),
+					extract: async () => ( { title: '', content: '' } ),
+				} ),
+			}
+		);
+
+		expect( result.complete ).toBe( false );
+		expect( result.summary.complete ).toBe( false );
+		expect( result.unresolvedAnchors ).toEqual( [
+			{
+				sourceUrl,
+				url: 'https://example.com/hyundai-i30n',
+				reason: 'target route was not captured',
+			},
+		] );
+	} );
+
+	it( 'rejects in strict mode so programmatic callers fail closed', async () => {
+		vi.mocked( exportWebsiteCapture ).mockImplementationOnce( ( { outputDir } ) => {
+			mkdirSync( outputDir, { recursive: true } );
+			writeFileSync(
+				join( outputDir, 'diagnostics.json' ),
+				JSON.stringify( {
+					unresolvedAnchors: [
+						{
+							sourceUrl,
+							url: 'https://example.com/missing',
+							reason: 'target route was not captured',
+						},
+					],
+				} )
+			);
+			return join( outputDir, 'capture-receipt.json' );
+		} );
+
+		await expect(
+			captureWebsite(
+				{ url: sourceUrl, outputDir: root, strict: true },
+				{
+					findAdapter: () => ( {
+						id: 'generic',
+						platform: 'generic',
+						discover: async () => ( { urls: [] } ),
+						extract: async () => ( { title: '', content: '' } ),
+					} ),
+				}
+			)
+		).rejects.toBeInstanceOf( IncompleteCaptureError );
 	} );
 } );
