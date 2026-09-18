@@ -1,3 +1,5 @@
+import * as cheerio from 'cheerio';
+
 function decodeXml(value: string): string {
   return value.replace(/&(?:amp|lt|gt|quot|apos);|&#(?:x[\da-f]+|\d+);/gi, (entity) => {
     if (entity === '&amp;') return '&';
@@ -30,7 +32,6 @@ export function parseSitemapDocument(xml: string): SitemapDocument {
   return { kind, locs: urls };
 }
 
-import * as cheerio from 'cheerio';
 import { canonicalizeOrigin } from '../screenshot/same-origin.js';
 
 export function parseSitemapXml(xml: string): string[] {
