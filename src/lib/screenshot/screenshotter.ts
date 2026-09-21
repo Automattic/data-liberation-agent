@@ -12,6 +12,7 @@ import { applyCaptureRemovals } from './apply-removals.js';
 import { applySourceCleanup, readSourceCleanup, cleanupPolicy, type CleanupPolicy } from '../source-cleanup.js';
 import { captureChromeFidelity } from './capture-chrome-fidelity.js';
 import { CssAggregator } from './css-aggregator.js';
+import { CSS_SHORTHAND_REPAIR_FACTORY_SOURCE } from './css-shorthand-repair.js';
 import { captureDesignForUrl, captureMobileBodyFragment } from './design-capture-runner.js';
 import { countBodyTags, isRouteDrift, isStackingArtifact } from './document-integrity.js';
 import { collectMobileChromeLayout } from './dom-capture.js';
@@ -268,35 +269,49 @@ export async function capturePageHtml( page: Page ): Promise< string > {
 	// each sheet from its active rules so the static capture preserves the styles the
 	// browser is actually applying. Runs once, after media settling: appending inside
 	// that retry loop would emit a duplicate <style> per attempt.
-	await page.evaluate( () => {
-		const sheets = new Set( [ ...document.styleSheets, ...document.adoptedStyleSheets ] );
-		for ( const sheet of sheets ) {
-			const owner = sheet.ownerNode;
-			if ( owner instanceof HTMLLinkElement ) continue;
-			let cssText = '';
-			try {
-				cssText = Array.from( sheet.cssRules ).map( ( rule ) => rule.cssText ).join( '\n' );
-			} catch {
-				// Cross-origin sheet: .cssRules throws. Its <link> is captured separately.
-				continue;
+	//
+	// Reading a rule's live cssText is itself lossy for one shape: a shorthand set via
+	// var() (e.g. `font: var(--token)`) followed, in the same declaration, by an
+	// explicit override of one of that shorthand's own longhands (e.g.
+	// `font-style: normal`) becomes a "pending-substitution value" the CSSOM cannot
+	// re-serialize — every longhand of the shorthand reads back as an empty
+	// declaration and the shorthand itself disappears. getComputedStyle still resolves
+	// it correctly; only the declaration *text* is unrecoverable through the CSSOM.
+	// Repair against the <style> owner's own pre-mutation textContent (read below,
+	// before it is overwritten) — see css-shorthand-repair.ts.
+	await page.evaluate(
+		( { factorySrc } ) => {
+			const repairShorthandVarCollapse = new Function( 'return (' + factorySrc + ')' )()();
+			const sheets = new Set( [ ...document.styleSheets, ...document.adoptedStyleSheets ] );
+			for ( const sheet of sheets ) {
+				const owner = sheet.ownerNode;
+				if ( owner instanceof HTMLLinkElement ) continue;
+				let cssText = '';
+				try {
+					cssText = Array.from( sheet.cssRules ).map( ( rule ) => rule.cssText ).join( '\n' );
+				} catch {
+					// Cross-origin sheet: .cssRules throws. Its <link> is captured separately.
+					continue;
+				}
+				if ( ! cssText ) continue;
+				if ( owner instanceof HTMLStyleElement && document.documentElement.contains( owner ) ) {
+					// Stylesheets copied from a linked resource already have their source
+					// text in the DOM. Replacing it with Chromium's cssRules serialization
+					// can change nested/media CSS semantics (notably responsive form grids).
+					// Keep the source text; constructed sheets still use the active rules
+					// below because they have no serializable owner node.
+					if ( owner.hasAttribute( 'data-href' ) ) continue;
+					owner.textContent = repairShorthandVarCollapse( cssText, owner.textContent ?? '' );
+					continue;
+				}
+				const style = document.createElement( 'style' );
+				style.setAttribute( 'data-dla-constructed-stylesheet', '' );
+				style.textContent = cssText;
+				document.head.appendChild( style );
 			}
-			if ( ! cssText ) continue;
-			if ( owner instanceof HTMLStyleElement && document.documentElement.contains( owner ) ) {
-				// Stylesheets copied from a linked resource already have their source
-				// text in the DOM. Replacing it with Chromium's cssRules serialization
-				// can change nested/media CSS semantics (notably responsive form grids).
-				// Keep the source text; constructed sheets still use the active rules
-				// below because they have no serializable owner node.
-				if ( owner.hasAttribute( 'data-href' ) ) continue;
-				owner.textContent = cssText;
-				continue;
-			}
-			const style = document.createElement( 'style' );
-			style.setAttribute( 'data-dla-constructed-stylesheet', '' );
-			style.textContent = cssText;
-			document.head.appendChild( style );
-		}
-	} );
+		},
+		{ factorySrc: CSS_SHORTHAND_REPAIR_FACTORY_SOURCE.factorySrc }
+	);
 	try {
 		// Serialize in the renderer's current task. page.content() round-trips through
 		// DevTools and can race framework hydration, pairing a newer class namespace
