@@ -185,6 +185,15 @@ function canonicalContentType( contentType: string ): string {
 	return contentType.trim().toLowerCase() === 'woff2' ? 'font/woff2' : contentType;
 }
 
+export function isAudioLink( reference: string, documentUrl: string ): boolean {
+	try {
+		const url = new URL( reference.replace( /&amp;/g, '&' ), documentUrl );
+		return /^https?:$/.test( url.protocol ) && /\.(?:mp3|ogg|wav)$/i.test( url.pathname );
+	} catch {
+		return false;
+	}
+}
+
 export class CapturedResourceStore {
 	private readonly origin: string;
 	private readonly resourceDir: string;
@@ -282,6 +291,10 @@ export class CapturedResourceStore {
 				}
 				for ( const candidate of srcsetReferences( node.attr( 'srcset' ) ?? '' ) )
 					add( candidate, baseUrl );
+			} );
+			$( 'a[href],area[href]' ).each( ( _, element ) => {
+				const href = $( element ).attr( 'href' ) ?? '';
+				if ( isAudioLink( href, baseUrl ) ) add( href, baseUrl );
 			} );
 			$( 'link[href]' ).each( ( _, element ) => {
 				const node = $( element );

@@ -34,7 +34,7 @@ import {
 	type InteractionStatesReport,
 } from './screenshot/interaction-capture.js';
 import { SCROLL_STATES_SCHEMA, type ScrollStatesReport } from './screenshot/scroll-state-capture.js';
-import type { CapturedResourceManifest } from './screenshot/resource-capture.js';
+import { isAudioLink, type CapturedResourceManifest } from './screenshot/resource-capture.js';
 import { isSourcePromotion } from './source-cleanup.js';
 
 export const CAPTURE_RECEIPT_SCHEMA = 'data-liberation/capture-receipt/v1';
@@ -1522,8 +1522,13 @@ function dependencyReferences(
 		.replace( /&quot;|&#34;|&#x22;/gi, '"' )
 		.replace( /&apos;|&#39;|&#x27;/gi, "'" );
 	let cssContent = searchableHtml;
+	const audioLinks: string[] = [];
 	if ( ! cssOnly ) {
 		const $ = cheerio.load( html );
+		$( 'a[href],area[href]' ).each( ( _, element ) => {
+			const href = $( element ).attr( 'href' ) ?? '';
+			if ( isAudioLink( href, documentUrl ) ) audioLinks.push( href );
+		} );
 		cssContent = [
 			...$( 'style' )
 				.map( ( _index, element ) => $( element ).html() ?? '' )
@@ -1543,6 +1548,7 @@ function dependencyReferences(
 		// must not be recorded, let alone reported as unresolved.
 		if ( reference && ! isInlineUrl( reference ) ) references.add( reference.replace( /&amp;/g, '&' ) );
 	};
+	for ( const href of audioLinks ) add( href );
 
 	const mediaReferences = new Set< string >();
 	const cssReferences = new Set< string >();
@@ -2065,7 +2071,7 @@ function uncapturedRouteAnchors(
 		}
 		if ( resolved.protocol !== 'http:' && resolved.protocol !== 'https:' ) return;
 		if ( resolved.origin !== documentUrl.origin ) return;
-		if ( UNCAPTURED_ASSET_PATH.test( resolved.pathname ) ) return;
+		if ( UNCAPTURED_ASSET_PATH.test( resolved.pathname ) || isAudioLink( href, sourceUrl ) ) return;
 		if ( SKIP_UNCAPTURED_PATHS.test( resolved.pathname ) ) return;
 		let key: string;
 		try {
