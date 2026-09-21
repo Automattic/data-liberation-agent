@@ -1,5 +1,5 @@
 import * as cheerio from 'cheerio';
-import { desktopContextOptions } from '../browser-kit/browser-kit.js';
+import { sourceContextOptions } from '../browser-kit/browser-kit.js';
 
 function decodeXml(value: string): string {
   return value.replace(/&(?:amp|lt|gt|quot|apos);|&#(?:x[\da-f]+|\d+);/gi, (entity) => {
@@ -339,7 +339,7 @@ async function crawlRenderedNavLinks(baseUrl: string, baseOrigin: string): Promi
   try {
     const { chromium } = await import('playwright');
     browser = await chromium.launch({ headless: true });
-    const page = await browser.newPage(await desktopContextOptions(browser));
+    const page = await browser.newPage(await sourceContextOptions(browser, baseUrl));
     await page.goto(baseUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
     await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
 
