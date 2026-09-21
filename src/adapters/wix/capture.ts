@@ -457,15 +457,19 @@ export const capture: LiberationHooks = {
 
 			// Use Playwright's trusted input: Wix ignores synthetic `.click()` for
 			// this navigation on some desktop pages.
-			await page.locator( 'a[data-dla-anchor-fragment]' ).nth( trigger.index ).click();
-			await page.evaluate( async ( { fragment, maxWait } ) => {
+			const link = page.locator( 'a[data-dla-anchor-fragment]' ).nth( trigger.index );
+			await link.scrollIntoViewIfNeeded( { timeout: WIX_ANCHOR_SCROLL_MAX_MILLISECONDS } );
+			// Record before the trusted click: an instant handler can finish scrolling
+			// before Playwright returns. Its own visibility scroll is already complete.
+			const initialScroll = await page.evaluate( () => scrollY );
+			await link.click( { timeout: WIX_ANCHOR_SCROLL_MAX_MILLISECONDS } );
+			await page.evaluate( async ( { fragment, maxWait, initialScroll } ) => {
 				const links = [ ...document.querySelectorAll< HTMLAnchorElement >(
 					`a[data-dla-anchor-fragment="${ CSS.escape( fragment ) }"]`
 				) ];
 				const markUnresolved = ( reason: string ) => {
 					for ( const link of links ) link.dataset.dlaAnchorUnresolved = reason;
 				};
-				const initialScroll = scrollY;
 				let previous = scrollY;
 				let moved = false;
 				let stableFrames = 0;
@@ -513,7 +517,7 @@ export const capture: LiberationHooks = {
 				document.body.prepend( marker );
 				for ( const link of links ) link.href = `${ location.pathname }#${ encodeURIComponent( fragment ) }`;
 				return true;
-			}, { fragment, maxWait: WIX_ANCHOR_SCROLL_MAX_MILLISECONDS } );
+			}, { fragment, maxWait: WIX_ANCHOR_SCROLL_MAX_MILLISECONDS, initialScroll } );
 		}
 
 		await page.evaluate( ( originalScroll ) => {
