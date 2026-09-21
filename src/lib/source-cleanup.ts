@@ -1,6 +1,6 @@
 import type { Page } from 'playwright';
 
-export const CLEANUP_SCHEMA = 'data-liberation/source-cleanup/v4';
+export const CLEANUP_SCHEMA = 'data-liberation/source-cleanup/v5';
 export interface CleanupRule {
   id: string;
   category: 'advertisement' | 'source-attribution';
@@ -219,7 +219,7 @@ export function installCleanupInPage(policy: CleanupPolicy): CleanupReport {
   };
   // Providers qualify the verb ("Powered and secured by Wix"), so one optional
   // conjoined word is part of the phrase everywhere it is matched.
-  const powered = 'powered(?: and \\w+)? by';
+  const powered = 'powered(?:\\s+and\\s+\\w+)?\\s+by';
   const creditPhrase = new RegExp(`(?:${powered}|built (?:with|on|by)|created (?:with|using)|website (?:by|built with)|proudly created with)\\s*`, 'i');
   const ownerContent = /©|copyright|all rights reserved/i;
   const promotionText = new RegExp(policy.promotion.text, 'i');
