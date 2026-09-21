@@ -3142,8 +3142,11 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		expect( readFileSync( join( outputDir, 'website', '_videos', 'hero.mp4' ), 'utf8' ) ).toBe(
 			'video'
 		);
-		expect( html ).toContain( '<source>' );
-		expect( html ).not.toContain( '/_videos/missing' );
+		// A `<source>` that could not be localized keeps its resolved source url
+		// rather than losing `src` entirely — an emptied attribute would make
+		// the element unrecoverable downstream (a WordPress import, say, drops
+		// it), while the external reference at least survives as evidence.
+		expect( html ).toContain( '<source src="https://example.com/_videos/missing">' );
 		expect( html ).not.toContain( '/_fonts/missing.woff2' );
 		expect( html ).toContain( 'about:blank' );
 		expect( html ).not.toContain( '/_runtimes/site.js' );
