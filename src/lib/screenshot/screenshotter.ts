@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { connectBrowser, desktopContextOptions } from '../browser-kit/index.js';
+import { connectBrowser, sourceContextOptions } from '../browser-kit/index.js';
 import { classifyUrl, type UrlType } from '../extraction/sitemap.js';
 import { assertPublicHttpUrl } from '../media-fetch/safe-fetch.js';
 import { CHROME_AUDIT_PROPERTIES } from '../replicate/chrome-audit-types.js';
@@ -1349,6 +1349,11 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			: `https://${ opts.primaryUrl }`
 		: null;
 	enforceSameOrigin( primaryRef, urls );
+	// The URL a session (if any) is harvested from — see sourceContextOptions
+	// call below. Falls back to the first route when no primaryUrl was given
+	// (e.g. a direct captureScreenshots() call), which just reproduces the
+	// prior no-session behavior for that origin.
+	const entryUrl = primaryRef ?? urls[ 0 ] ?? '';
 
 	// --- output layout -------------------------------------------------------
 	mkdirSync( join( opts.outputDir, 'screenshots', 'desktop' ), { recursive: true } );
@@ -1486,10 +1491,16 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 				// Each viewport loads as a real browser: builders can select viewport
 				// metadata, navigation, and layout from the identity, and anti-bot
 				// challenges refuse Playwright's default HeadlessChrome one.
+				//
+				// entryUrl (not `url`) is what gets navigated to harvest a session:
+				// some sources gate every route/asset behind a session only the
+				// tokenized ENTRY url establishes. Keyed by origin, so this navigates
+				// once per run — every worker and viewport for every route reuses it.
+				const sessionContext = await sourceContextOptions( browser, entryUrl );
 				context = await browser.newContext( {
 					...( viewport.id === 'mobile'
-						? IPHONE_17_CONTEXT
-						: await desktopContextOptions( browser ) ),
+						? { ...IPHONE_17_CONTEXT, storageState: sessionContext.storageState }
+						: sessionContext ),
 					viewport: { width: viewport.width, height: viewport.height },
 					deviceScaleFactor:
 						viewport.id === 'desktop'
