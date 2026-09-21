@@ -463,6 +463,122 @@ describe( 'CapturedResourceStore', () => {
 		}
 	);
 
+	it( 'captures and localizes a video src, a child source, and its poster', async () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-video-' ) );
+		dirs.push( outputDir );
+		mkdirSync( join( outputDir, 'html' ) );
+		mkdirSync( join( outputDir, 'screenshots' ) );
+		const sourceUrl = 'https://example.com/';
+		const mp4 = 'https://example.com/photos/day12/clip.mp4';
+		const poster = 'https://example.com/photos/day12/clip.jpg';
+		const webm = 'https://example.com/photos/day12/clip.webm';
+		const bodies: Record< string, [ string, string ] > = {
+			[ mp4 ]: [ 'video/mp4', 'mp4 bytes' ],
+			[ poster ]: [ 'image/jpeg', 'poster bytes' ],
+			[ webm ]: [ 'video/webm', 'webm bytes' ],
+		};
+		const html = `<html><body>
+			<video id="attr" src="photos/day12/clip.mp4" poster="photos/day12/clip.jpg" playsinline preload="none" width="1280" height="720"></video>
+			<video id="child" poster="photos/day12/clip.jpg"><source src="photos/day12/clip.webm" type="video/webm"></video>
+		</body></html>`;
+		writeFileSync( join( outputDir, 'html', 'homepage.html' ), html );
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( { version: 1, entries: { [ sourceUrl ]: { html: 'html/homepage.html' } } } )
+		);
+		const fetchMedia = vi.fn( async ( url: string ) => ( {
+			finalUrl: url,
+			status: bodies[ url ] ? 200 : 404,
+			headers: new Headers( { 'content-type': bodies[ url ]?.[ 0 ] ?? 'text/html' } ),
+			body: Buffer.from( bodies[ url ]?.[ 1 ] ?? '' ),
+		} ) );
+		const store = new CapturedResourceStore( outputDir, sourceUrl, fetchMedia );
+		await store.captureDomDependencies( html, sourceUrl );
+		await store.flush();
+		expect( fetchMedia.mock.calls.map( ( [ url ] ) => url ).sort() ).toEqual( Object.keys( bodies ).sort() );
+
+		const receiptPath = exportWebsiteCapture( {
+			outputDir, sourceUrl, platform: 'generic', summary: {}, failures: [],
+		} );
+		const receipt = JSON.parse( readFileSync( receiptPath, 'utf8' ) );
+		const $ = cheerio.load( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) );
+
+		// The bare `<video src poster>` form localizes both attributes.
+		const attrSrc = $( '#attr' ).attr( 'src' )!;
+		expect( attrSrc ).toMatch( /^\// );
+		expect( readFileSync( join( outputDir, 'website', attrSrc ), 'utf8' ) ).toBe( 'mp4 bytes' );
+		const attrPoster = $( '#attr' ).attr( 'poster' )!;
+		expect( attrPoster ).toMatch( /^\// );
+		expect( readFileSync( join( outputDir, 'website', attrPoster ), 'utf8' ) ).toBe( 'poster bytes' );
+
+		// The `<video><source></video>` form localizes the child's src too, and
+		// shares the already-localized poster (same source url).
+		expect( $( '#child' ).attr( 'poster' ) ).toBe( attrPoster );
+		const childSrc = $( '#child source' ).attr( 'src' )!;
+		expect( childSrc ).toMatch( /^\// );
+		expect( readFileSync( join( outputDir, 'website', childSrc ), 'utf8' ) ).toBe( 'webm bytes' );
+
+		for ( const [ source, path ] of [
+			[ mp4, attrSrc ],
+			[ poster, attrPoster ],
+			[ webm, childSrc ],
+		] ) {
+			expect( receipt.assets ).toContainEqual( { sourceUrl: source, path: `website${ path }` } );
+		}
+		const diagnostics = JSON.parse( readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' ) );
+		expect( diagnostics.unresolvedDependencies ).toEqual( [] );
+		expect( diagnostics.resourceFailures ).toEqual( [] );
+	} );
+
+	it.each( [ 'HTTP 403', 'response body exceeds max 10485760 bytes' ] )(
+		'retains a video src and a child source as their resolved url instead of stripping them when capture reports %s',
+		async ( error ) => {
+			const outputDir = mkdtempSync( join( tmpdir(), 'dla-video-failure-' ) );
+			dirs.push( outputDir );
+			mkdirSync( join( outputDir, 'html' ) );
+			mkdirSync( join( outputDir, 'screenshots' ) );
+			const sourceUrl = 'https://example.com/';
+			const mp4 = 'https://example.com/clip.mp4';
+			const poster = 'https://example.com/clip.jpg';
+			const webm = 'https://example.com/clip.webm';
+			const html = `<html><body>
+				<video id="attr" src="clip.mp4" poster="clip.jpg" preload="none"></video>
+				<video id="child"><source src="clip.webm" type="video/webm"></video>
+			</body></html>`;
+			writeFileSync( join( outputDir, 'html', 'homepage.html' ), html );
+			writeFileSync(
+				join( outputDir, 'screenshots', 'manifest.json' ),
+				JSON.stringify( { version: 1, entries: { [ sourceUrl ]: { html: 'html/homepage.html' } } } )
+			);
+			const store = new CapturedResourceStore( outputDir, sourceUrl, async () => {
+				throw new Error( error );
+			} );
+			await store.captureDomDependencies( html, sourceUrl );
+			await store.flush();
+			exportWebsiteCapture( { outputDir, sourceUrl, platform: 'generic', summary: {}, failures: [] } );
+
+			const diagnostics = JSON.parse( readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' ) );
+			expect( diagnostics.resourceFailures ).toEqual( expect.arrayContaining( [
+				{ url: mp4, error }, { url: poster, error }, { url: webm, error },
+			] ) );
+			expect( diagnostics.unresolvedDependencies ).toEqual( expect.arrayContaining( [
+				{ url: mp4, sourceUrl, error: 'referenced same-origin dependency was not captured' },
+				{ url: webm, sourceUrl, error: 'referenced same-origin dependency was not captured' },
+			] ) );
+
+			const $ = cheerio.load( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) );
+			// The video (and its child source) never lose their src — an emptied
+			// attribute would make the element unrecoverable downstream (a
+			// WordPress import, say, drops it entirely) — so the resolved source
+			// url survives as external evidence instead.
+			expect( $( '#attr' ).attr( 'src' ) ).toBe( mp4 );
+			expect( $( '#child source' ).attr( 'src' ) ).toBe( webm );
+			// The poster is an ordinary image: it degrades to the same stub a
+			// failed <img> gets, not an external reference.
+			expect( $( '#attr' ).attr( 'poster' ) ).toMatch( /^data:image\/gif;base64,/ );
+		}
+	);
+
 	it( 'keeps script expressions and bare woff2 responses out of capture diagnostics', async () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-resource-diagnostics-' ) );
 		dirs.push( outputDir );

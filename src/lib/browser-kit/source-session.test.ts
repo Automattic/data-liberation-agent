@@ -44,7 +44,10 @@ function startGatedSource(): Promise<{
     if ( path.startsWith( '/entry' ) ) {
       res.setHeader( 'set-cookie', `${ SESSION_COOKIE }; Path=/` );
       res.setHeader( 'content-type', 'text/html' );
-      res.end( '<!doctype html><title>Entry</title><body>entry</body>' );
+      res.end(
+        '<!doctype html><title>Entry</title><body>entry' +
+          '<video src="/video.mp4" poster="/poster.jpg" preload="none"></video></body>'
+      );
       return;
     }
     if ( path.startsWith( '/redirect-to-other' ) ) {
@@ -60,6 +63,20 @@ function startGatedSource(): Promise<{
     }
     if ( path.startsWith( '/media.png' ) ) {
       res.setHeader( 'content-type', 'image/png' );
+      res.end( ONE_PIXEL_PNG );
+      return;
+    }
+    // The browser never requests these (no autoplay, `preload="none"`): only
+    // the DOM-dependency fetch inside CapturedResourceStore does, and that
+    // fetch is a bare `safeFetch`, not the browser holding the harvested
+    // session — exactly the surface this test proves carries the cookie too.
+    if ( path.startsWith( '/video.mp4' ) ) {
+      res.setHeader( 'content-type', 'video/mp4' );
+      res.end( Buffer.from( 'fake mp4 bytes' ) );
+      return;
+    }
+    if ( path.startsWith( '/poster.jpg' ) ) {
+      res.setHeader( 'content-type', 'image/jpeg' );
       res.end( ONE_PIXEL_PNG );
       return;
     }
@@ -156,6 +173,37 @@ describe.skipIf( process.env.SKIP_BROWSER_TESTS )( 'source session (real Chromiu
       // above; if the per-origin dedupe had failed, this would be higher.
       const entryNavigations = source.requests.filter( ( r ) => r.path.startsWith( '/entry' ) );
       expect( entryNavigations.length ).toBe( 3 );
+    } finally {
+      rmSync( outputDir, { recursive: true, force: true } );
+    }
+  }, 30_000 );
+
+  it( 'captures a DOM-referenced video and poster through the harvested session', async () => {
+    const outputDir = mkdtempSync( join( TMP_ROOT, 'session-video-' ) );
+    const entryUrl = `${ source.url }/entry?token=letmein`;
+    try {
+      // Neither URL is ever requested by the browser itself: `preload="none"`
+      // means Chromium never fetches the video, and the poster fetch (when it
+      // happens) is still the browser's OWN request, not this code path's.
+      // Only CapturedResourceStore's independent DOM-dependency fetch reaches
+      // these — the bare `safeFetch` that used to drop the session entirely.
+      const result = await captureScreenshots( {
+        urls: [ entryUrl ],
+        outputDir,
+        primaryUrl: entryUrl,
+        captureImages: false,
+      } );
+      expect( result.failed ).toBe( 0 );
+      const manifest = JSON.parse(
+        readFileSync( join( outputDir, 'resources', 'manifest.json' ), 'utf8' )
+      );
+      expect( manifest.resources[ `${ source.url }/video.mp4` ] ).toMatchObject( {
+        contentType: 'video/mp4',
+      } );
+      expect( manifest.resources[ `${ source.url }/poster.jpg` ] ).toMatchObject( {
+        contentType: 'image/jpeg',
+      } );
+      expect( manifest.failures ).toEqual( [] );
     } finally {
       rmSync( outputDir, { recursive: true, force: true } );
     }

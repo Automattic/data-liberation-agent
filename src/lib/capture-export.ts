@@ -1765,18 +1765,35 @@ function assetEvidence(
 function removeDanglingMediaSource(
 	html: string,
 	reference: string,
+	resolvedUrl: string,
 	rejectedKeys?: Set< string >
 ): string {
 	const normalizedReference = reference.replace( /&amp;/g, '&' );
+	// A video/source/audio `src` that could not be localized must keep naming
+	// a real, fetchable location rather than an empty attribute: an emptied
+	// `src` is unrecoverable downstream (a WordPress import, say, drops the
+	// element entirely), while the resolved source URL at least survives as
+	// external evidence with a matching diagnostic already recorded by the
+	// caller. `poster` (an ordinary image, handled below) keeps the existing
+	// stub behavior — losing a preview thumbnail is not the same class of
+	// loss as losing the media itself.
+	let strippedNonImageSrc = false;
 	const withoutSources = html.replace( /<(img|source|video|audio)\b[^>]*>/gi, ( tag ) => {
 		const element = /^<(\w+)/.exec( tag )?.[ 1 ].toLowerCase();
 		const src = /\bsrc\s*=\s*(["'])([\s\S]*?)\1/i.exec( tag )?.[ 2 ].replace( /&amp;/g, '&' );
-		return src === normalizedReference
-			? element === 'img'
-				? tag.replace( /\s+src\s*=\s*(["'])([\s\S]*?)\1/i, ` src="${ TRANSPARENT_IMAGE_DATA_URL }"` )
-				: tag.replace( /\s+src\s*=\s*(["'])([\s\S]*?)\1/i, '' )
-			: tag;
+		if ( src !== normalizedReference ) return tag;
+		if ( element === 'img' ) {
+			return tag.replace( /\s+src\s*=\s*(["'])([\s\S]*?)\1/i, ` src="${ TRANSPARENT_IMAGE_DATA_URL }"` );
+		}
+		strippedNonImageSrc = true;
+		return tag.replace( /\s+src\s*=\s*(["'])([\s\S]*?)\1/i, ` src="${ resolvedUrl }"` );
 	} );
+	// Once a non-image `src` has been repointed at its resolved URL, the
+	// broad substring pass below must not run: `resolvedUrl` commonly
+	// contains `reference` as a trailing substring (a relative reference
+	// resolved against its document), and re-scanning would immediately
+	// mangle the replacement it just made.
+	if ( strippedNonImageSrc ) return withoutSources;
 	return replaceAll(
 		withoutSources,
 		new Map( [
@@ -2721,7 +2738,12 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 			} else {
 				html =
 					dependency.kind === 'media'
-						? removeDanglingMediaSource( html, dependency.reference, rejectedReplacementKeys )
+						? removeDanglingMediaSource(
+								html,
+								dependency.reference,
+								dependency.url,
+								rejectedReplacementKeys
+						  )
 						: dependency.kind === 'css'
 						? replaceDanglingCssUrl( html, dependency.reference, rejectedReplacementKeys )
 						: removeDanglingResourceReference( html, dependency.reference );
