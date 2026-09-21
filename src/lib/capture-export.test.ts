@@ -584,7 +584,7 @@ describe( 'exportWebsiteCapture', () => {
 		);
 		writeFileSync(
 			join( outputDir, 'html-mobile', 'homepage.html' ),
-			'<html><head><style>.mobile{color:red}:root .device-mobile-responsive.responsive{display:revert!important}</style></head><body class="device-mobile-responsive responsive"><main>Mobile</main></body></html>'
+			'<html><head><style>.mobile{color:red}:root .device-mobile-responsive.responsive{display:revert!important}</style></head><body class="device-mobile-responsive responsive"><main>Mobile</main><nav>Menu</nav></body></html>'
 		);
 		writeFileSync(
 			join( outputDir, 'screenshots', 'manifest.json' ),
@@ -648,7 +648,7 @@ describe( 'exportWebsiteCapture', () => {
 		);
 		writeFileSync(
 			join( outputDir, 'html-mobile', 'homepage.html' ),
-			'<html><head><style>.mobile{color:red}</style></head><body><main>Mobile</main></body></html>'
+			'<html><head><style>.mobile{color:red}</style></head><body><main>Mobile</main><nav>Menu</nav></body></html>'
 		);
 		writeFileSync(
 			join( outputDir, 'screenshots', 'manifest.json' ),
@@ -794,8 +794,22 @@ describe( 'exportWebsiteCapture', () => {
 				mobile.replace( '<h1>Same heading</h1>', '<h1>Same heading</h1><p>Mobile extra</p>' )
 			)
 		).toBe( true );
+	} );
+
+	it( 'treats changing text as equivalence, not a second document', () => {
+		const desktop =
+			'<html><body><main><h1>Opening</h1><div><span>17</span><span>HEURES</span><span>52</span><span>SEC</span></div></main></body></html>';
+		const mobile =
+			'<html><body><main><h1>Opening</h1><div><span>17</span><span>HEURES</span><span>38</span><span>SEC</span></div></main></body></html>';
+		expect( documentsDiffer( desktop, mobile ) ).toBe( false );
 		expect(
-			documentsDiffer( desktop, mobile.replace( 'Same heading', 'Different heading' ) )
+			documentsDiffer( desktop, mobile.replace( 'Opening', 'Fermeture' ) )
+		).toBe( false );
+		expect(
+			documentsDiffer(
+				desktop,
+				mobile.replace( '</div></main>', '</div><aside>Menu</aside></main>' )
+			)
 		).toBe( true );
 	} );
 
@@ -2251,7 +2265,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		);
 		writeFileSync(
 			join( outputDir, 'html-mobile', 'homepage.html' ),
-			'<html><body><main><h1>Mobile capture</h1></main></body></html>'
+			'<html><body><main><h1>Mobile capture</h1></main><nav>Menu</nav></body></html>'
 		);
 		writeFileSync( join( outputDir, 'sections', 'homepage.json' ), '{invalid' );
 		writeFileSync(
@@ -3940,6 +3954,73 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		expect( readFileSync( join( outputDir, 'website', 'about', 'index.html' ), 'utf8' ) ).toContain(
 			'href="/index.html"'
 		);
+	} );
+
+	it.each( [
+		{ directory: '/', explicitSource: false, reversed: false, reservedDirectory: false },
+		{ directory: '/', explicitSource: false, reversed: true, reservedDirectory: false },
+		{ directory: '/', explicitSource: true, reversed: false, reservedDirectory: false },
+		{ directory: '/', explicitSource: true, reversed: true, reservedDirectory: false },
+		{ directory: '/docs/', explicitSource: false, reversed: true, reservedDirectory: false },
+		{ directory: '/', explicitSource: false, reversed: true, reservedDirectory: true },
+	] )( 'preserves distinct default-document captures: %j', ( { directory, explicitSource, reversed, reservedDirectory } ) => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-default-document-' ) );
+		dirs.push( outputDir );
+		for ( const dir of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, dir ), { recursive: true } );
+		const directoryUrl = `https://example.com${ directory }`;
+		const documentUrl = `${ directoryUrl }index.html`;
+		const reservedRoute = reservedDirectory ? 'index-2.html/child' : 'index-2.html';
+		const reservedPath = reservedDirectory ? 'index-2.html/child/index.html' : 'index-2.html';
+		const links = `<a href="${ directory }#directory">Directory</a><a href="${ documentUrl }?from=nav#document">Document</a><a href="${ directoryUrl }${ reservedRoute }#reserved">Reserved</a>`;
+		const menu = '<button id="menu" aria-haspopup="dialog">Menu</button>';
+		const dialogHtml = `<nav><a href="index.html?from=menu#document">Document</a><a href="${ directory }#directory">Directory</a></nav>`;
+		const interactions = ( sourceUrl: string ) => ( {
+			schema: 'data-liberation/interaction-states/v2', sourceUrl,
+			viewport: { width: 1440, height: 900 }, capturedAt: '2026-09-21T00:00:00Z',
+			states: [ {
+				status: 'captured',
+				trigger: { selector: '#menu', tag: 'button', id: 'menu', ariaHaspopup: 'dialog', dataBindings: {} },
+				dialog: { selector: '#menu-dialog', tag: 'nav', ariaModal: true, html: dialogHtml, htmlBytes: Buffer.byteLength( dialogHtml ), htmlTruncated: false },
+			} ],
+		} );
+		writeFileSync( join( outputDir, 'html', 'directory.html' ), `<h1 id="directory">Directory content</h1>${ links }${ menu }` );
+		writeFileSync( join( outputDir, 'html', 'document.html' ), `<h1 id="document">Different document content</h1>${ links }${ menu }<img src="https://example.com/missing.jpg">` );
+		writeFileSync( join( outputDir, 'html', 'reserved.html' ), `<h1 id="reserved">Reserved filename</h1>${ links }` );
+		const entries = [
+			[ directoryUrl, { html: 'html/directory.html', interactions: interactions( directoryUrl ) } ],
+			[ documentUrl, { html: 'html/document.html', interactions: interactions( documentUrl ) } ],
+			[ `${ directoryUrl }${ reservedRoute }`, { html: 'html/reserved.html' } ],
+		];
+		if ( reversed ) entries.reverse();
+		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( { version: 1, entries: Object.fromEntries( entries ) } ) );
+		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( {
+			outputDir, sourceUrl: explicitSource ? documentUrl : directoryUrl, platform: 'generic', summary: {}, failures: [],
+		} ), 'utf8' ) );
+		const directoryPath = explicitSource ? 'index-3.html' : 'index.html';
+		const documentPath = explicitSource ? 'index.html' : 'index-3.html';
+		expect( receipt.routes ).toHaveLength( 3 );
+		expect( receipt.duplicateRoutes ).toEqual( [] );
+		expect( Object.fromEntries( receipt.routes.map( ( route: { url: string; path: string } ) => [ route.url, route.path ] ) ) ).toEqual( {
+			[ directoryUrl ]: `website/${ directoryPath }`,
+			[ documentUrl ]: `website/${ documentPath }`,
+			[ `${ directoryUrl }${ reservedRoute }` ]: `website/${ reservedPath }`,
+		} );
+		expect( receipt.entrypoint ).toBe( 'website/index.html' );
+		for ( const file of [ 'index.html', reservedPath, 'index-3.html' ] ) {
+			const $ = cheerio.load( readFileSync( join( outputDir, 'website', file ), 'utf8' ) );
+			expect( $( 'a' ).not( '.dla-dialog a' ).map( ( _, link ) => $( link ).attr( 'href' ) ).get() ).toEqual( [
+				`/${ directoryPath }#directory`, `/${ documentPath }?from=nav#document`, `/${ reservedPath }#reserved`,
+			] );
+			if ( file !== reservedPath ) {
+				expect( $( '.dla-dialog a' ).map( ( _, link ) => $( link ).attr( 'href' ) ).get() ).toEqual( [
+					`/${ documentPath }?from=menu#document`, `/${ directoryPath }#directory`,
+				] );
+			}
+		}
+		expect( readFileSync( join( outputDir, 'website', directoryPath ), 'utf8' ) ).toContain( 'Directory content' );
+		expect( readFileSync( join( outputDir, 'website', documentPath ), 'utf8' ) ).toContain( 'Different document content' );
+		const evidence = JSON.parse( readFileSync( join( outputDir, 'asset-evidence.json' ), 'utf8' ) );
+		expect( evidence.assets[ 0 ].references[ 0 ].path ).toBe( `website/${ documentPath }` );
 	} );
 
 	it( 'rewrites a literal canonical link that names a captured route to its local path', () => {
