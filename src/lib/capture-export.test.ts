@@ -584,7 +584,7 @@ describe( 'exportWebsiteCapture', () => {
 		);
 		writeFileSync(
 			join( outputDir, 'html-mobile', 'homepage.html' ),
-			'<html><head><style>.mobile{color:red}:root .device-mobile-responsive.responsive{display:revert!important}</style></head><body class="device-mobile-responsive responsive"><main>Mobile</main></body></html>'
+			'<html><head><style>.mobile{color:red}:root .device-mobile-responsive.responsive{display:revert!important}</style></head><body class="device-mobile-responsive responsive"><main>Mobile</main><nav>Menu</nav></body></html>'
 		);
 		writeFileSync(
 			join( outputDir, 'screenshots', 'manifest.json' ),
@@ -648,7 +648,7 @@ describe( 'exportWebsiteCapture', () => {
 		);
 		writeFileSync(
 			join( outputDir, 'html-mobile', 'homepage.html' ),
-			'<html><head><style>.mobile{color:red}</style></head><body><main>Mobile</main></body></html>'
+			'<html><head><style>.mobile{color:red}</style></head><body><main>Mobile</main><nav>Menu</nav></body></html>'
 		);
 		writeFileSync(
 			join( outputDir, 'screenshots', 'manifest.json' ),
@@ -794,8 +794,22 @@ describe( 'exportWebsiteCapture', () => {
 				mobile.replace( '<h1>Same heading</h1>', '<h1>Same heading</h1><p>Mobile extra</p>' )
 			)
 		).toBe( true );
+	} );
+
+	it( 'treats changing text as equivalence, not a second document', () => {
+		const desktop =
+			'<html><body><main><h1>Opening</h1><div><span>17</span><span>HEURES</span><span>52</span><span>SEC</span></div></main></body></html>';
+		const mobile =
+			'<html><body><main><h1>Opening</h1><div><span>17</span><span>HEURES</span><span>38</span><span>SEC</span></div></main></body></html>';
+		expect( documentsDiffer( desktop, mobile ) ).toBe( false );
 		expect(
-			documentsDiffer( desktop, mobile.replace( 'Same heading', 'Different heading' ) )
+			documentsDiffer( desktop, mobile.replace( 'Opening', 'Fermeture' ) )
+		).toBe( false );
+		expect(
+			documentsDiffer(
+				desktop,
+				mobile.replace( '</div></main>', '</div><aside>Menu</aside></main>' )
+			)
 		).toBe( true );
 	} );
 
@@ -2251,7 +2265,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		);
 		writeFileSync(
 			join( outputDir, 'html-mobile', 'homepage.html' ),
-			'<html><body><main><h1>Mobile capture</h1></main></body></html>'
+			'<html><body><main><h1>Mobile capture</h1></main><nav>Menu</nav></body></html>'
 		);
 		writeFileSync( join( outputDir, 'sections', 'homepage.json' ), '{invalid' );
 		writeFileSync(
