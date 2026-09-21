@@ -4,8 +4,8 @@ import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import * as cheerio from 'cheerio';
 import { sourceSessionCookieHeader } from '../browser-kit/browser-kit.js';
-import { safeFetch, type SafeFetchResult } from '../media-fetch/safe-fetch.js';
-import type { Page, Response } from 'playwright';
+import { MAX_REDIRECTS, safeFetch, type SafeFetchResult } from '../media-fetch/safe-fetch.js';
+import type { Page, Request, Response } from 'playwright';
 
 const CAPTURED_RESOURCE_TYPES = new Set( [
 	'script',
@@ -116,6 +116,31 @@ async function responseBodyWithTimeout( response: Response ): Promise< Buffer > 
 function pathWithin( root: string, candidate: string ): boolean {
 	const rel = relative( resolve( root ), resolve( candidate ) );
 	return rel === '' || ( ! rel.startsWith( `..${ sep }` ) && rel !== '..' );
+}
+
+/**
+ * A redirected request's own `url()` is the POST-redirect target: the server
+ * responded with a redirect and Playwright created a NEW Request for the
+ * target, linked back via `redirectedFrom()`. The document only ever
+ * referenced the FIRST url in that chain — that is the identity a rewrite
+ * must match and the local path must derive from, not a transport detail
+ * like a session-gated origin's private-variant path. Walk back to it,
+ * bounded by the same redirect cap safeFetch enforces; fall back to
+ * `fallback` if the request has no redirect chain (the common case) or a
+ * hop's url is unparseable.
+ */
+function originRequestUrl( request: Request, fallback: URL ): URL {
+	let current = request;
+	for ( let hop = 0; hop < MAX_REDIRECTS; hop++ ) {
+		const previous = current.redirectedFrom?.();
+		if ( ! previous ) break;
+		current = previous;
+	}
+	try {
+		return new URL( current.url() );
+	} catch {
+		return fallback;
+	}
 }
 
 function resourcePath( url: URL, contentType = '', sourceOrigin?: string ): string {
@@ -390,6 +415,16 @@ export class CapturedResourceStore {
 		const resourceType = request.resourceType();
 		if ( ! CAPTURED_RESOURCE_TYPES.has( resourceType ) ) return Promise.resolve();
 
+		// A 3xx response is a transport hop, not a completed resource: Playwright
+		// fires a SEPARATE 'response' event (with its own Request) for the
+		// redirect target, so this one contributes nothing to capture. Recording
+		// it here would both log a misleading "HTTP 3xx" failure for an asset
+		// that succeeds one hop later, AND — since a redirect response's own
+		// url() IS the pre-redirect requested url — claim the dedupe/manifest
+		// key that the terminal response below needs to write under, which
+		// would silently block that later, successful capture.
+		if ( response.status() >= 300 && response.status() < 400 ) return Promise.resolve();
+
 		let resourceUrl: URL;
 		try {
 			resourceUrl = new URL( response.url() );
@@ -408,11 +443,15 @@ export class CapturedResourceStore {
 			return Promise.resolve();
 		}
 
-		const url = resourceUrl.href;
+		// Identity for the dedupe key, manifest key, and local path is the
+		// ORIGINALLY requested url — what the document references — not
+		// wherever a redirect ultimately resolved it to.
+		const requestedUrl = originRequestUrl( request, resourceUrl );
+		const url = requestedUrl.href;
 		const existing = this.captures.get( url );
 		if ( existing ) return existing;
 
-		const capture = this.captureResponse( response, resourceUrl, resourceType ).catch(
+		const capture = this.captureResponse( response, requestedUrl, resourceType ).catch(
 			( error: unknown ) => {
 				this.manifest.failures.push( {
 					url,
@@ -508,13 +547,20 @@ export class CapturedResourceStore {
 		return capture;
 	}
 
+	/**
+	 * @param requestedUrl The url the document referenced — the ORIGINAL
+	 *   pre-redirect url when `response` resolved through one or more
+	 *   redirects (see {@link originRequestUrl}). Identity (manifest key,
+	 *   local path) derives from this; `response` still supplies the actual
+	 *   fetched bytes/headers for a non-`media` resourceType.
+	 */
 	private async captureResponse(
 		response: Response,
-		resourceUrl: URL,
+		requestedUrl: URL,
 		resourceType: string
 	): Promise< void > {
 		const fetched =
-			resourceType === 'media' ? await this.fetchMedia( resourceUrl.href ) : undefined;
+			resourceType === 'media' ? await this.fetchMedia( requestedUrl.href ) : undefined;
 		const status = fetched?.status ?? response.status();
 		if ( status < 200 || status >= 300 ) throw new Error( `HTTP ${ status }` );
 		const headers = fetched ? Object.fromEntries( fetched.headers.entries() ) : response.headers();
@@ -525,7 +571,7 @@ export class CapturedResourceStore {
 				`resource body ${ declaredBytes } bytes exceeds max ${ MAX_CAPTURED_RESOURCE_BYTES }`
 			);
 		}
-		const relativePath = resourcePath( resourceUrl, contentType, this.origin );
+		const relativePath = resourcePath( requestedUrl, contentType, this.origin );
 		const destination = resolve( this.resourceDir, relativePath );
 		if ( ! pathWithin( this.resourceDir, destination ) ) {
 			throw new Error( 'resource path escapes the capture directory' );
@@ -544,13 +590,13 @@ export class CapturedResourceStore {
 		this.reserveBytes( body.length );
 		mkdirSync( dirname( destination ), { recursive: true } );
 		writeFileSync( destination, body );
-		this.manifest.resources[ resourceUrl.href ] = {
+		this.manifest.resources[ requestedUrl.href ] = {
 			path: `resources/${ relativePath.replace( /\\/g, '/' ) }`,
 			contentType,
 		};
-		this.replayResources.set( resourceUrl.href, { path: destination, contentType } );
+		this.replayResources.set( requestedUrl.href, { path: destination, contentType } );
 		const replayMetadata = replayableResponseMetadata( headers );
-		if ( replayMetadata ) this.replayMetadata.set( resourceUrl.href, replayMetadata );
+		if ( replayMetadata ) this.replayMetadata.set( requestedUrl.href, replayMetadata );
 	}
 
 	private reserveBytes( bytes: number ): void {
