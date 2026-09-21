@@ -673,10 +673,13 @@ function isUnstableResponsiveId( id: string ): boolean {
 
 /**
  * Whether the source served a genuinely different document under mobile
- * emulation, rather than the same one. Structural, so runtime ids, capture
- * infrastructure attributes, text differences, and embed hosts (iframes that
- * hydrated on one viewport and not the other) do not masquerade as a
- * second design.
+ * emulation, rather than the same one. The comparison is the element tree,
+ * ordering, and structural attributes. Runtime ids, capture infrastructure
+ * attributes, all text content, and embed hosts (iframes that hydrated on
+ * one viewport and not the other) do not masquerade as a second design.
+ * Text is ignored because desktop and mobile captures are taken seconds
+ * apart, so any live value — a countdown, a cart count, relative time —
+ * would otherwise ship two copies of the same responsive document.
  */
 export function documentsDiffer( desktopHtml: string, mobileHtml: string ): boolean {
 	const desktopBody = /<body\b([^>]*)>([\s\S]*?)<\/body\s*>/i.exec( desktopHtml )?.[ 2 ];
@@ -1198,13 +1201,6 @@ function responsiveBodySignature( body: string ): string {
 		if ( isYuiRuntimeId( $( element ).attr( 'id' ) ?? '' ) ) $( element ).remove();
 	} );
 	$( 'svg,map,area,picture,source,img,canvas,slot' ).remove();
-	$( '[id]' ).each( ( _index, element ) => {
-		$( element )
-			.contents()
-			.each( ( _childIndex, child ) => {
-				if ( child.type === 'text' ) child.data = '';
-			} );
-	} );
 	$( '*' )
 		.contents()
 		.each( ( _index, child ) => {
@@ -1242,6 +1238,11 @@ function responsiveBodySignature( body: string ): string {
 			}
 		} );
 	}
+	$( '*' )
+		.contents()
+		.each( ( _index, child ) => {
+			if ( child.type === 'text' ) child.data = '';
+		} );
 	return ( $( 'body' ).html() ?? '' ).replace( />\s+</g, '><' ).replace( /\s+/g, ' ' ).trim();
 }
 
