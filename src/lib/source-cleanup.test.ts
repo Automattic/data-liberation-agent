@@ -21,7 +21,7 @@ main{padding:20px} .ad-slot{height:200px}footer{padding:20px}
 <article>Powered by renewable energy. Read <a href="https://wix.com/blog">our platform article</a>.</article></main>
 <div><iframe id="google_ads_iframe_1" srcdoc="Ad creative"></iframe></div>
 <div class="ad-slot">${'Buy advertising now. '.repeat(50)}</div>
-<footer><p>© Owner business. All rights reserved. <span>Powered by </span><span>Wix.</span></p><p>Powered by <a href="https://www.wix.com">Wix</a></p></footer>
+<footer><p>© Owner business. All rights reserved. <span>Powered and secured by </span><span><a href="https://www.wix.com">Wix</a></span></p><p>Powered by <a href="https://www.wix.com">Wix</a></p></footer>
 <script>setTimeout(()=>{const ad=document.createElement('div');ad.className='ad-slot';ad.textContent='Late advertisement';document.body.prepend(ad)},80)</script>
 </body></html>`;
 
