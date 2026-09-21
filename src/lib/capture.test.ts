@@ -200,6 +200,29 @@ describe( 'captureWebsite completeness', () => {
 		] );
 	} );
 
+	it( 'preserves source-absent link diagnostics in a complete strict capture', async () => {
+		const realExport = await vi.importActual< typeof import('./capture-export.js') >( './capture-export.js' );
+		vi.mocked( exportWebsiteCapture ).mockImplementationOnce( realExport.exportWebsiteCapture );
+		captureScreenshotsMock.mockResolvedValueOnce( { captured: 1, skipped: 1, failed: 0, durationMs: 1 } );
+		mkdirSync( join( root, 'html' ), { recursive: true } );
+		mkdirSync( join( root, 'screenshots' ), { recursive: true } );
+		writeFileSync( join( root, 'html', 'home.html' ), '<h1>Home</h1><a href="/gone">Gone</a>' );
+		writeFileSync( join( root, 'screenshots', 'manifest.json' ), JSON.stringify( {
+			version: 1, entries: { [ sourceUrl ]: { html: 'html/home.html' }, 'https://example.com/gone': {} },
+		} ) );
+		writeFileSync( join( root, 'screenshots', 'failures.json' ), JSON.stringify( [ { url: 'https://example.com/gone', error: 'HTTP 404' } ] ) );
+		const result = await captureWebsite( { url: sourceUrl, outputDir: root, strict: true }, {
+			findAdapter: () => ( {
+				id: 'generic', platform: 'generic',
+				discover: async () => ( { urls: [ { url: 'https://example.com/gone', type: 'page' } ] } ),
+				extract: async () => ( { title: '', content: '' } ),
+			} ),
+		} );
+		expect( result.complete ).toBe( true );
+		expect( result.summary.complete ).toBe( true );
+		expect( result.unresolvedAnchors ).toEqual( [ { sourceUrl, url: 'https://example.com/gone', reason: 'target route is absent at source' } ] );
+	} );
+
 	it( 'rejects in strict mode so programmatic callers fail closed', async () => {
 		vi.mocked( exportWebsiteCapture ).mockImplementationOnce( ( { outputDir } ) => {
 			mkdirSync( outputDir, { recursive: true } );

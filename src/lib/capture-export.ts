@@ -2043,7 +2043,8 @@ const UNCAPTURED_ASSET_PATH =
 function uncapturedRouteAnchors(
 	html: string,
 	sourceUrl: string,
-	capturedRoutes: Set< string >
+	capturedRoutes: Set< string >,
+	absentRoutes: Set< string >
 ): Array< { sourceUrl: string; url: string; reason: string } > {
 	let documentUrl: URL;
 	try {
@@ -2078,7 +2079,7 @@ function uncapturedRouteAnchors(
 	return [ ...missing.values() ].map( ( url ) => ( {
 		sourceUrl,
 		url,
-		reason: UNCAPTURED_ROUTE_REASON,
+		reason: absentRoutes.has( url ) ? 'target route is absent at source' : UNCAPTURED_ROUTE_REASON,
 	} ) );
 }
 
@@ -2826,6 +2827,10 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		url?: string;
 	} > = [];
 	const capturedRouteKeys = new Set( portableRouteLinks.keys() );
+	const absentRoutes = new Set( routeCaptureDiagnostics
+		.filter( ( diagnostic ) => diagnostic.code === 'route_not_found' )
+		.map( ( diagnostic ) => diagnostic.url ) );
+	const absentRouteKeys = new Set( [ ...absentRoutes ].map( normalizedUrl ) );
 	for ( const entry of retainedEntries ) {
 		const { url, htmlPath } = entry;
 		const routePath = routePathOf( url );
@@ -2835,7 +2840,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		}
 		mkdirSync( dirname( destination ), { recursive: true } );
 		const originalHtml = readFileSync( htmlPath, 'utf8' );
-		unresolvedAnchors.push( ...uncapturedRouteAnchors( originalHtml, url, capturedRouteKeys ) );
+		unresolvedAnchors.push( ...uncapturedRouteAnchors( originalHtml, url, capturedRouteKeys, absentRouteKeys ) );
 		// Rewrite route links once, after wiring dialogs below. A portable path
 		// can also name a source route that was allocated a different filename.
 		const identityHtml = replaceAll(
@@ -3049,8 +3054,11 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 	];
 
 	const receiptPath = join( outputDir, 'capture-receipt.json' );
-	const cleanupManifest = JSON.parse(readFileSync(join(outputDir, 'screenshots', 'manifest.json'), 'utf8')) as ScreenshotManifest;
-	const cleanupPages = Object.entries(cleanupManifest.entries).map(([url, entry]) => ({ url, ...entry.cleanup }));
+	// Only proven source-absent routes lack a document requiring cleanup.
+	// Keep every other attempted route in the audit, even if it lost its HTML.
+	const cleanupPages = Object.entries(capture.entries)
+		.filter(([url]) => !absentRoutes.has(url))
+		.map(([url, entry]) => ({ url, ...entry.cleanup }));
 	const recordedPolicy = cleanupPages.find((page) => page.policy)?.policy;
 	const cleanup = recordedPolicy ? {
 		policy: recordedPolicy,

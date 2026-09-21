@@ -18,6 +18,7 @@ import {
 } from './capture-export.js';
 import { SectionSpecsStore } from './replicate/section-specs-store.js';
 import { MediaStubStore } from './resume-state/index.js';
+import { cleanupPolicy } from './source-cleanup.js';
 
 const dirs: string[] = [];
 
@@ -3399,6 +3400,106 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 			},
 		] );
 		expect( receipt.summary.routesFailed ).toBe( 0 );
+	} );
+
+	it.each( [ 404, 410, 'rendered 404' ] )( 'reports a source-absent %s link without failing capture or cleanup completeness', ( absence ) => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-source-absence-' ) );
+		dirs.push( outputDir );
+		for ( const dir of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, dir ), { recursive: true } );
+		const sourceUrl = 'https://example.com/';
+		const absentUrl = 'https://example.com/gone.html';
+		writeFileSync( join( outputDir, 'html', 'home.html' ), '<h1>Home</h1><a href="gone.html#details">Gone</a>' );
+		writeFileSync( join( outputDir, 'html', 'gone.html' ), '<h1>404</h1><p>Page not found</p>' );
+		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( {
+			version: 1, entries: {
+				[ sourceUrl ]: { html: 'html/home.html', cleanup: { policy: cleanupPolicy(), reports: [ { failures: [], residual: 0 } ] } },
+				[ absentUrl ]: absence === 'rendered 404' ? { html: 'html/gone.html' } : {},
+			},
+		} ) );
+		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( {
+			outputDir, sourceUrl, platform: 'generic', summary: { routesFailed: 0 },
+			failures: absence === 'rendered 404' ? [] : [ { url: absentUrl, error: `HTTP ${ absence }` } ],
+		} ), 'utf8' ) );
+		const diagnostics = JSON.parse( readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' ) );
+		expect( receipt.cleanup.complete ).toBe( true );
+		expect( receipt.summary.complete ).toBe( true );
+		expect( diagnostics.complete ).toBe( true );
+		expect( receipt.excludedRoutes ).toEqual( [ absentUrl ] );
+		expect( receipt.discoveryDiagnostics ).toEqual( [ expect.objectContaining( { code: 'route_not_found', url: absentUrl } ) ] );
+		expect( diagnostics.unresolvedAnchors ).toEqual( [ { sourceUrl, url: absentUrl, reason: 'target route is absent at source' } ] );
+		expect( JSON.parse( readFileSync( join( outputDir, 'cleanup-evidence.json' ), 'utf8' ) ).pages.map( ( page: { url: string } ) => page.url ) ).toEqual( [ sourceUrl ] );
+		expect( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) ).toContain( 'href="https://example.com/gone.html#details"' );
+	} );
+
+	it.each( [ 'missing policy', 'missing reports', 'failure', 'residual', 'different policy' ] )( 'still fails cleanup for an exported page with %s', ( problem ) => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-retained-cleanup-' ) );
+		dirs.push( outputDir );
+		for ( const dir of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, dir ), { recursive: true } );
+		writeFileSync( join( outputDir, 'html', 'home.html' ), '<h1>Home</h1>' );
+		writeFileSync( join( outputDir, 'html', 'other.html' ), '<h1>Other</h1>' );
+		const policy = cleanupPolicy();
+		const reports = [ { failures: [] as string[], residual: 0 } ];
+		const cleanup = {
+			...( problem === 'missing policy' ? {} : { policy: problem === 'different policy' ? { ...policy, rules: [] } : policy } ),
+			...( problem === 'missing reports' ? {} : { reports: [ {
+				failures: problem === 'failure' ? [ 'cleanup failed' ] : [], residual: problem === 'residual' ? 1 : 0,
+			} ] } ),
+		};
+		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( {
+			version: 1, entries: {
+				'https://example.com/': { html: 'html/home.html', cleanup: { policy, reports } },
+				'https://example.com/other': { html: 'html/other.html', cleanup },
+			},
+		} ) );
+		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( {
+			outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [],
+		} ), 'utf8' ) );
+		expect( receipt.cleanup.complete ).toBe( false );
+	} );
+
+	it.each( [ 'https://example.com/sitemap-only', 'https://example.com/gone?view=current' ] )( 'keeps missing cleanup evidence blocking for unlinked route %s', ( missingUrl ) => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-missing-capture-cleanup-' ) );
+		dirs.push( outputDir );
+		for ( const dir of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, dir ), { recursive: true } );
+		const sourceUrl = 'https://example.com/';
+		const absentUrl = 'https://example.com/gone?view=removed';
+		writeFileSync( join( outputDir, 'html', 'home.html' ), '<h1>Home</h1>' );
+		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( {
+			version: 1, entries: {
+				[ sourceUrl ]: { html: 'html/home.html', cleanup: { policy: cleanupPolicy(), reports: [ { failures: [], residual: 0 } ] } },
+				[ missingUrl ]: { html: 'html/missing.html' },
+				[ absentUrl ]: {},
+			},
+		} ) );
+		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( {
+			outputDir, sourceUrl, platform: 'generic', summary: { routesFailed: 0 }, failures: [ { url: absentUrl, error: 'HTTP 404' } ],
+		} ), 'utf8' ) );
+		expect( receipt.cleanup.complete ).toBe( false );
+		expect( receipt.excludedRoutes ).toEqual( [ absentUrl ] );
+		expect( receipt.discoveryDiagnostics ).toContainEqual( expect.objectContaining( { code: 'route_capture_failed', url: missingUrl } ) );
+		expect( JSON.parse( readFileSync( join( outputDir, 'cleanup-evidence.json' ), 'utf8' ) ).pages.map( ( page: { url: string } ) => page.url ) ).toContain( missingUrl );
+	} );
+
+	it.each( [ 'HTTP 500', 'Timeout exceeded', 'mixed 404 and timeout', 'unattempted' ] )( 'does not call an uncaptured %s route absent at source', ( error ) => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-unproven-absence-' ) );
+		dirs.push( outputDir );
+		for ( const dir of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, dir ), { recursive: true } );
+		const sourceUrl = 'https://example.com/';
+		const url = 'https://example.com/other';
+		writeFileSync( join( outputDir, 'html', 'home.html' ), '<h1>Home</h1><a href="/other">Other</a>' );
+		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( {
+			version: 1, entries: { [ sourceUrl ]: { html: 'html/home.html' }, ...( error === 'unattempted' ? {} : { [ url ]: {} } ) },
+		} ) );
+		const failures = error === 'unattempted' ? [] : error === 'mixed 404 and timeout'
+			? [ { url, error: 'HTTP 404' }, { url, error: 'Timeout exceeded' } ] : [ { url, error } ];
+		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( {
+			outputDir, sourceUrl, platform: 'generic', summary: { routesFailed: 0 }, failures,
+		} ), 'utf8' ) );
+		expect( receipt.excludedRoutes ).toEqual( [] );
+		expect( receipt.summary.complete ).toBe( false );
+		expect( JSON.parse( readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' ) ).unresolvedAnchors ).toEqual( [ {
+			sourceUrl, url, reason: 'target route was not captured',
+		} ] );
 	} );
 
 	it( 'excludes a client-routed SPA not-found screen served as HTTP 200, unlike a real thin route', () => {
