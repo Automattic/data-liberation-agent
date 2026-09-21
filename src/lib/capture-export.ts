@@ -1630,9 +1630,7 @@ interface AssetEvidenceReferences {
 
 function assetReferences(
 	entries: CaptureEntry[],
-	sourceUrl: string,
-	entrypointUrl: string,
-	originRootCaptured: boolean,
+	routePathOf: ( url: string ) => string,
 	resourceManifest: CapturedResourceManifest,
 	outputDir: string
 ): AssetEvidenceReferences {
@@ -1660,7 +1658,7 @@ function assetReferences(
 		if ( indexed.references.length < MAX_ASSET_EVIDENCE_REFERENCES ) indexed.references.push( location );
 	};
 	for ( const entry of entries ) {
-		const path = `website/${ routeOutputPath( entry.url, sourceUrl, entrypointUrl, originRootCaptured ).replace( /\\/g, '/' ) }`;
+		const path = `website/${ routePathOf( entry.url ) }`;
 		const visitedCss = new Set< string >();
 		const visit = ( dependency: PortableDependency, document: AssetEvidenceReference[ 'document' ] ) => {
 			add( dependency, { route: entry.url, path, document, reference: dependency.reference } );
@@ -2286,11 +2284,39 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		capturedEntries.map( ( entry ) => entry.url ),
 		new URL( options.sourceUrl ).origin
 	);
-	const routePathOf = ( url: string ) =>
+	const naturalRoutePath = ( url: string ) =>
 		routeOutputPath( url, options.sourceUrl, entrypointUrl, originRootCaptured ).replace(
 			/\\/g,
 			'/'
 		);
+	const allocatedPaths = new Map< string, string >();
+	const reservedPaths = new Set( capturedEntries.map( ( entry ) => naturalRoutePath( entry.url ) ) );
+	const entriesByUrl = new Map( capturedEntries.map( ( entry ) => [ entry.url, entry ] ) );
+	// A directory and its default document can be distinct pages. Keep both
+	// unless the existing canonical contract proves an alias. Reserve every
+	// natural path first so a generated filename never steals another route.
+	for ( const entry of capturedEntries ) {
+		const url = new URL( entry.url );
+		if ( url.search || url.hash || ! url.pathname.endsWith( '/index.html' ) ) continue;
+		const directoryUrl = new URL( './', url ).href;
+		const directory = entriesByUrl.get( directoryUrl );
+		const path = naturalRoutePath( entry.url );
+		if ( ! directory || naturalRoutePath( directoryUrl ) !== path ) continue;
+		if ( declaresCanonicalRoute( entry, directory ) || declaresCanonicalRoute( directory, entry ) ) continue;
+		const displaced = entry.url === entrypointUrl ? directory : entry;
+		if ( [ ...reservedPaths ].some( ( reserved ) => path.startsWith( `${ reserved }/` ) ) )
+			throw new Error( `Captured route needs a directory already claimed by a file: ${ path }` );
+		let suffix = 2;
+		let allocated: string;
+		do {
+			allocated = `${ path.slice( 0, -'.html'.length ) }-${ suffix++ }.html`;
+		} while ( [ ...reservedPaths ].some( ( reserved ) =>
+			reserved === allocated || reserved.startsWith( `${ allocated }/` )
+		) );
+		reservedPaths.add( allocated );
+		allocatedPaths.set( displaced.url, allocated );
+	}
+	const routePathOf = ( url: string ) => allocatedPaths.get( url ) ?? naturalRoutePath( url );
 
 	const retainedEntries: CaptureEntry[] = [];
 	const duplicateRoutes: Array< { url: string; canonicalUrl: string; path: string } > = [];
@@ -2349,9 +2375,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 	const resourceManifest = capturedResources( outputDir );
 	const assetReferenceLocations = assetReferences(
 		retainedEntries,
-		options.sourceUrl,
-		entrypointUrl,
-		originRootCaptured,
+		routePathOf,
 		resourceManifest,
 		outputDir
 	);
@@ -2811,9 +2835,11 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		mkdirSync( dirname( destination ), { recursive: true } );
 		const originalHtml = readFileSync( htmlPath, 'utf8' );
 		unresolvedAnchors.push( ...uncapturedRouteAnchors( originalHtml, url, capturedRouteKeys ) );
+		// Rewrite route links once, after wiring dialogs below. A portable path
+		// can also name a source route that was allocated a different filename.
 		const identityHtml = replaceAll(
 			rewriteMediaUrls(
-				rewriteCapturedRouteLinks( originalHtml, url, portableRouteLinks ),
+				originalHtml,
 				omitDegenerateReplacements( mediaReplacements, rejectedReplacementKeys )
 			),
 			resourceReplacements,
