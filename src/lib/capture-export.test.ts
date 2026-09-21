@@ -3958,12 +3958,23 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		const reservedRoute = reservedDirectory ? 'index-2.html/child' : 'index-2.html';
 		const reservedPath = reservedDirectory ? 'index-2.html/child/index.html' : 'index-2.html';
 		const links = `<a href="${ directory }#directory">Directory</a><a href="${ documentUrl }?from=nav#document">Document</a><a href="${ directoryUrl }${ reservedRoute }#reserved">Reserved</a>`;
-		writeFileSync( join( outputDir, 'html', 'directory.html' ), `<h1 id="directory">Directory content</h1>${ links }` );
-		writeFileSync( join( outputDir, 'html', 'document.html' ), `<h1 id="document">Different document content</h1>${ links }<img src="https://example.com/missing.jpg">` );
+		const menu = '<button id="menu" aria-haspopup="dialog">Menu</button>';
+		const dialogHtml = `<nav><a href="index.html?from=menu#document">Document</a><a href="${ directory }#directory">Directory</a></nav>`;
+		const interactions = ( sourceUrl: string ) => ( {
+			schema: 'data-liberation/interaction-states/v2', sourceUrl,
+			viewport: { width: 1440, height: 900 }, capturedAt: '2026-09-21T00:00:00Z',
+			states: [ {
+				status: 'captured',
+				trigger: { selector: '#menu', tag: 'button', id: 'menu', ariaHaspopup: 'dialog', dataBindings: {} },
+				dialog: { selector: '#menu-dialog', tag: 'nav', ariaModal: true, html: dialogHtml, htmlBytes: Buffer.byteLength( dialogHtml ), htmlTruncated: false },
+			} ],
+		} );
+		writeFileSync( join( outputDir, 'html', 'directory.html' ), `<h1 id="directory">Directory content</h1>${ links }${ menu }` );
+		writeFileSync( join( outputDir, 'html', 'document.html' ), `<h1 id="document">Different document content</h1>${ links }${ menu }<img src="https://example.com/missing.jpg">` );
 		writeFileSync( join( outputDir, 'html', 'reserved.html' ), `<h1 id="reserved">Reserved filename</h1>${ links }` );
 		const entries = [
-			[ directoryUrl, { html: 'html/directory.html' } ],
-			[ documentUrl, { html: 'html/document.html' } ],
+			[ directoryUrl, { html: 'html/directory.html', interactions: interactions( directoryUrl ) } ],
+			[ documentUrl, { html: 'html/document.html', interactions: interactions( documentUrl ) } ],
 			[ `${ directoryUrl }${ reservedRoute }`, { html: 'html/reserved.html' } ],
 		];
 		if ( reversed ) entries.reverse();
@@ -3983,9 +3994,14 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		expect( receipt.entrypoint ).toBe( 'website/index.html' );
 		for ( const file of [ 'index.html', reservedPath, 'index-3.html' ] ) {
 			const $ = cheerio.load( readFileSync( join( outputDir, 'website', file ), 'utf8' ) );
-			expect( $( 'a' ).map( ( _, link ) => $( link ).attr( 'href' ) ).get() ).toEqual( [
+			expect( $( 'a' ).not( '.dla-dialog a' ).map( ( _, link ) => $( link ).attr( 'href' ) ).get() ).toEqual( [
 				`/${ directoryPath }#directory`, `/${ documentPath }?from=nav#document`, `/${ reservedPath }#reserved`,
 			] );
+			if ( file !== reservedPath ) {
+				expect( $( '.dla-dialog a' ).map( ( _, link ) => $( link ).attr( 'href' ) ).get() ).toEqual( [
+					`/${ documentPath }?from=menu#document`, `/${ directoryPath }#directory`,
+				] );
+			}
 		}
 		expect( readFileSync( join( outputDir, 'website', directoryPath ), 'utf8' ) ).toContain( 'Directory content' );
 		expect( readFileSync( join( outputDir, 'website', documentPath ), 'utf8' ) ).toContain( 'Different document content' );
