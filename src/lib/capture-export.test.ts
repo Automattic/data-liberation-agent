@@ -3443,6 +3443,29 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		expect( receipt.cleanup.complete ).toBe( false );
 	} );
 
+	it.each( [ 'https://example.com/sitemap-only', 'https://example.com/gone?view=current' ] )( 'keeps missing cleanup evidence blocking for unlinked route %s', ( missingUrl ) => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-missing-capture-cleanup-' ) );
+		dirs.push( outputDir );
+		for ( const dir of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, dir ), { recursive: true } );
+		const sourceUrl = 'https://example.com/';
+		const absentUrl = 'https://example.com/gone?view=removed';
+		writeFileSync( join( outputDir, 'html', 'home.html' ), '<h1>Home</h1>' );
+		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( {
+			version: 1, entries: {
+				[ sourceUrl ]: { html: 'html/home.html', cleanup: { policy: cleanupPolicy(), reports: [ { failures: [], residual: 0 } ] } },
+				[ missingUrl ]: { html: 'html/missing.html' },
+				[ absentUrl ]: {},
+			},
+		} ) );
+		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( {
+			outputDir, sourceUrl, platform: 'generic', summary: { routesFailed: 0 }, failures: [ { url: absentUrl, error: 'HTTP 404' } ],
+		} ), 'utf8' ) );
+		expect( receipt.cleanup.complete ).toBe( false );
+		expect( receipt.excludedRoutes ).toEqual( [ absentUrl ] );
+		expect( receipt.discoveryDiagnostics ).toContainEqual( expect.objectContaining( { code: 'route_capture_failed', url: missingUrl } ) );
+		expect( JSON.parse( readFileSync( join( outputDir, 'cleanup-evidence.json' ), 'utf8' ) ).pages.map( ( page: { url: string } ) => page.url ) ).toContain( missingUrl );
+	} );
+
 	it.each( [ 'HTTP 500', 'Timeout exceeded', 'mixed 404 and timeout', 'unattempted' ] )( 'does not call an uncaptured %s route absent at source', ( error ) => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-unproven-absence-' ) );
 		dirs.push( outputDir );

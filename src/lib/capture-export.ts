@@ -2826,9 +2826,10 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		url?: string;
 	} > = [];
 	const capturedRouteKeys = new Set( portableRouteLinks.keys() );
-	const absentRouteKeys = new Set( routeCaptureDiagnostics
+	const absentRoutes = new Set( routeCaptureDiagnostics
 		.filter( ( diagnostic ) => diagnostic.code === 'route_not_found' )
-		.map( ( diagnostic ) => normalizedUrl( diagnostic.url ) ) );
+		.map( ( diagnostic ) => diagnostic.url ) );
+	const absentRouteKeys = new Set( [ ...absentRoutes ].map( normalizedUrl ) );
 	for ( const entry of retainedEntries ) {
 		const { url, htmlPath } = entry;
 		const routePath = routePathOf( url );
@@ -3052,9 +3053,11 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 	];
 
 	const receiptPath = join( outputDir, 'capture-receipt.json' );
-	// Audit the exported pages. Skipped source-absent routes remain in route
-	// diagnostics, but contribute no document requiring cleanup evidence.
-	const cleanupPages = retainedEntries.map(({ url }) => ({ url, ...capture.entries[url].cleanup }));
+	// Only proven source-absent routes lack a document requiring cleanup.
+	// Keep every other attempted route in the audit, even if it lost its HTML.
+	const cleanupPages = Object.entries(capture.entries)
+		.filter(([url]) => !absentRoutes.has(url))
+		.map(([url, entry]) => ({ url, ...entry.cleanup }));
 	const recordedPolicy = cleanupPages.find((page) => page.policy)?.policy;
 	const cleanup = recordedPolicy ? {
 		policy: recordedPolicy,
