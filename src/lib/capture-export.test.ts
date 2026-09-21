@@ -18,6 +18,7 @@ import {
 } from './capture-export.js';
 import { SectionSpecsStore } from './replicate/section-specs-store.js';
 import { MediaStubStore } from './resume-state/index.js';
+import { cleanupPolicy } from './source-cleanup.js';
 
 const dirs: string[] = [];
 
@@ -584,7 +585,7 @@ describe( 'exportWebsiteCapture', () => {
 		);
 		writeFileSync(
 			join( outputDir, 'html-mobile', 'homepage.html' ),
-			'<html><head><style>.mobile{color:red}:root .device-mobile-responsive.responsive{display:revert!important}</style></head><body class="device-mobile-responsive responsive"><main>Mobile</main></body></html>'
+			'<html><head><style>.mobile{color:red}:root .device-mobile-responsive.responsive{display:revert!important}</style></head><body class="device-mobile-responsive responsive"><main>Mobile</main><nav>Menu</nav></body></html>'
 		);
 		writeFileSync(
 			join( outputDir, 'screenshots', 'manifest.json' ),
@@ -648,7 +649,7 @@ describe( 'exportWebsiteCapture', () => {
 		);
 		writeFileSync(
 			join( outputDir, 'html-mobile', 'homepage.html' ),
-			'<html><head><style>.mobile{color:red}</style></head><body><main>Mobile</main></body></html>'
+			'<html><head><style>.mobile{color:red}</style></head><body><main>Mobile</main><nav>Menu</nav></body></html>'
 		);
 		writeFileSync(
 			join( outputDir, 'screenshots', 'manifest.json' ),
@@ -794,8 +795,22 @@ describe( 'exportWebsiteCapture', () => {
 				mobile.replace( '<h1>Same heading</h1>', '<h1>Same heading</h1><p>Mobile extra</p>' )
 			)
 		).toBe( true );
+	} );
+
+	it( 'treats changing text as equivalence, not a second document', () => {
+		const desktop =
+			'<html><body><main><h1>Opening</h1><div><span>17</span><span>HEURES</span><span>52</span><span>SEC</span></div></main></body></html>';
+		const mobile =
+			'<html><body><main><h1>Opening</h1><div><span>17</span><span>HEURES</span><span>38</span><span>SEC</span></div></main></body></html>';
+		expect( documentsDiffer( desktop, mobile ) ).toBe( false );
 		expect(
-			documentsDiffer( desktop, mobile.replace( 'Same heading', 'Different heading' ) )
+			documentsDiffer( desktop, mobile.replace( 'Opening', 'Fermeture' ) )
+		).toBe( false );
+		expect(
+			documentsDiffer(
+				desktop,
+				mobile.replace( '</div></main>', '</div><aside>Menu</aside></main>' )
+			)
 		).toBe( true );
 	} );
 
@@ -2251,7 +2266,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		);
 		writeFileSync(
 			join( outputDir, 'html-mobile', 'homepage.html' ),
-			'<html><body><main><h1>Mobile capture</h1></main></body></html>'
+			'<html><body><main><h1>Mobile capture</h1></main><nav>Menu</nav></body></html>'
 		);
 		writeFileSync( join( outputDir, 'sections', 'homepage.json' ), '{invalid' );
 		writeFileSync(
@@ -3387,6 +3402,106 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		expect( receipt.summary.routesFailed ).toBe( 0 );
 	} );
 
+	it.each( [ 404, 410, 'rendered 404' ] )( 'reports a source-absent %s link without failing capture or cleanup completeness', ( absence ) => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-source-absence-' ) );
+		dirs.push( outputDir );
+		for ( const dir of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, dir ), { recursive: true } );
+		const sourceUrl = 'https://example.com/';
+		const absentUrl = 'https://example.com/gone.html';
+		writeFileSync( join( outputDir, 'html', 'home.html' ), '<h1>Home</h1><a href="gone.html#details">Gone</a>' );
+		writeFileSync( join( outputDir, 'html', 'gone.html' ), '<h1>404</h1><p>Page not found</p>' );
+		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( {
+			version: 1, entries: {
+				[ sourceUrl ]: { html: 'html/home.html', cleanup: { policy: cleanupPolicy(), reports: [ { failures: [], residual: 0 } ] } },
+				[ absentUrl ]: absence === 'rendered 404' ? { html: 'html/gone.html' } : {},
+			},
+		} ) );
+		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( {
+			outputDir, sourceUrl, platform: 'generic', summary: { routesFailed: 0 },
+			failures: absence === 'rendered 404' ? [] : [ { url: absentUrl, error: `HTTP ${ absence }` } ],
+		} ), 'utf8' ) );
+		const diagnostics = JSON.parse( readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' ) );
+		expect( receipt.cleanup.complete ).toBe( true );
+		expect( receipt.summary.complete ).toBe( true );
+		expect( diagnostics.complete ).toBe( true );
+		expect( receipt.excludedRoutes ).toEqual( [ absentUrl ] );
+		expect( receipt.discoveryDiagnostics ).toEqual( [ expect.objectContaining( { code: 'route_not_found', url: absentUrl } ) ] );
+		expect( diagnostics.unresolvedAnchors ).toEqual( [ { sourceUrl, url: absentUrl, reason: 'target route is absent at source' } ] );
+		expect( JSON.parse( readFileSync( join( outputDir, 'cleanup-evidence.json' ), 'utf8' ) ).pages.map( ( page: { url: string } ) => page.url ) ).toEqual( [ sourceUrl ] );
+		expect( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) ).toContain( 'href="https://example.com/gone.html#details"' );
+	} );
+
+	it.each( [ 'missing policy', 'missing reports', 'failure', 'residual', 'different policy' ] )( 'still fails cleanup for an exported page with %s', ( problem ) => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-retained-cleanup-' ) );
+		dirs.push( outputDir );
+		for ( const dir of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, dir ), { recursive: true } );
+		writeFileSync( join( outputDir, 'html', 'home.html' ), '<h1>Home</h1>' );
+		writeFileSync( join( outputDir, 'html', 'other.html' ), '<h1>Other</h1>' );
+		const policy = cleanupPolicy();
+		const reports = [ { failures: [] as string[], residual: 0 } ];
+		const cleanup = {
+			...( problem === 'missing policy' ? {} : { policy: problem === 'different policy' ? { ...policy, rules: [] } : policy } ),
+			...( problem === 'missing reports' ? {} : { reports: [ {
+				failures: problem === 'failure' ? [ 'cleanup failed' ] : [], residual: problem === 'residual' ? 1 : 0,
+			} ] } ),
+		};
+		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( {
+			version: 1, entries: {
+				'https://example.com/': { html: 'html/home.html', cleanup: { policy, reports } },
+				'https://example.com/other': { html: 'html/other.html', cleanup },
+			},
+		} ) );
+		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( {
+			outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [],
+		} ), 'utf8' ) );
+		expect( receipt.cleanup.complete ).toBe( false );
+	} );
+
+	it.each( [ 'https://example.com/sitemap-only', 'https://example.com/gone?view=current' ] )( 'keeps missing cleanup evidence blocking for unlinked route %s', ( missingUrl ) => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-missing-capture-cleanup-' ) );
+		dirs.push( outputDir );
+		for ( const dir of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, dir ), { recursive: true } );
+		const sourceUrl = 'https://example.com/';
+		const absentUrl = 'https://example.com/gone?view=removed';
+		writeFileSync( join( outputDir, 'html', 'home.html' ), '<h1>Home</h1>' );
+		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( {
+			version: 1, entries: {
+				[ sourceUrl ]: { html: 'html/home.html', cleanup: { policy: cleanupPolicy(), reports: [ { failures: [], residual: 0 } ] } },
+				[ missingUrl ]: { html: 'html/missing.html' },
+				[ absentUrl ]: {},
+			},
+		} ) );
+		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( {
+			outputDir, sourceUrl, platform: 'generic', summary: { routesFailed: 0 }, failures: [ { url: absentUrl, error: 'HTTP 404' } ],
+		} ), 'utf8' ) );
+		expect( receipt.cleanup.complete ).toBe( false );
+		expect( receipt.excludedRoutes ).toEqual( [ absentUrl ] );
+		expect( receipt.discoveryDiagnostics ).toContainEqual( expect.objectContaining( { code: 'route_capture_failed', url: missingUrl } ) );
+		expect( JSON.parse( readFileSync( join( outputDir, 'cleanup-evidence.json' ), 'utf8' ) ).pages.map( ( page: { url: string } ) => page.url ) ).toContain( missingUrl );
+	} );
+
+	it.each( [ 'HTTP 500', 'Timeout exceeded', 'mixed 404 and timeout', 'unattempted' ] )( 'does not call an uncaptured %s route absent at source', ( error ) => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-unproven-absence-' ) );
+		dirs.push( outputDir );
+		for ( const dir of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, dir ), { recursive: true } );
+		const sourceUrl = 'https://example.com/';
+		const url = 'https://example.com/other';
+		writeFileSync( join( outputDir, 'html', 'home.html' ), '<h1>Home</h1><a href="/other">Other</a>' );
+		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( {
+			version: 1, entries: { [ sourceUrl ]: { html: 'html/home.html' }, ...( error === 'unattempted' ? {} : { [ url ]: {} } ) },
+		} ) );
+		const failures = error === 'unattempted' ? [] : error === 'mixed 404 and timeout'
+			? [ { url, error: 'HTTP 404' }, { url, error: 'Timeout exceeded' } ] : [ { url, error } ];
+		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( {
+			outputDir, sourceUrl, platform: 'generic', summary: { routesFailed: 0 }, failures,
+		} ), 'utf8' ) );
+		expect( receipt.excludedRoutes ).toEqual( [] );
+		expect( receipt.summary.complete ).toBe( false );
+		expect( JSON.parse( readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' ) ).unresolvedAnchors ).toEqual( [ {
+			sourceUrl, url, reason: 'target route was not captured',
+		} ] );
+	} );
+
 	it( 'excludes a client-routed SPA not-found screen served as HTTP 200, unlike a real thin route', () => {
 		// Reproduces https://mint-brand-vote.base44.app/Home: every route answers
 		// HTTP 200 (there is no failure for failuresAreAbsentDocument to see), and
@@ -3940,6 +4055,73 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		expect( readFileSync( join( outputDir, 'website', 'about', 'index.html' ), 'utf8' ) ).toContain(
 			'href="/index.html"'
 		);
+	} );
+
+	it.each( [
+		{ directory: '/', explicitSource: false, reversed: false, reservedDirectory: false },
+		{ directory: '/', explicitSource: false, reversed: true, reservedDirectory: false },
+		{ directory: '/', explicitSource: true, reversed: false, reservedDirectory: false },
+		{ directory: '/', explicitSource: true, reversed: true, reservedDirectory: false },
+		{ directory: '/docs/', explicitSource: false, reversed: true, reservedDirectory: false },
+		{ directory: '/', explicitSource: false, reversed: true, reservedDirectory: true },
+	] )( 'preserves distinct default-document captures: %j', ( { directory, explicitSource, reversed, reservedDirectory } ) => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-default-document-' ) );
+		dirs.push( outputDir );
+		for ( const dir of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, dir ), { recursive: true } );
+		const directoryUrl = `https://example.com${ directory }`;
+		const documentUrl = `${ directoryUrl }index.html`;
+		const reservedRoute = reservedDirectory ? 'index-2.html/child' : 'index-2.html';
+		const reservedPath = reservedDirectory ? 'index-2.html/child/index.html' : 'index-2.html';
+		const links = `<a href="${ directory }#directory">Directory</a><a href="${ documentUrl }?from=nav#document">Document</a><a href="${ directoryUrl }${ reservedRoute }#reserved">Reserved</a>`;
+		const menu = '<button id="menu" aria-haspopup="dialog">Menu</button>';
+		const dialogHtml = `<nav><a href="index.html?from=menu#document">Document</a><a href="${ directory }#directory">Directory</a></nav>`;
+		const interactions = ( sourceUrl: string ) => ( {
+			schema: 'data-liberation/interaction-states/v2', sourceUrl,
+			viewport: { width: 1440, height: 900 }, capturedAt: '2026-09-21T00:00:00Z',
+			states: [ {
+				status: 'captured',
+				trigger: { selector: '#menu', tag: 'button', id: 'menu', ariaHaspopup: 'dialog', dataBindings: {} },
+				dialog: { selector: '#menu-dialog', tag: 'nav', ariaModal: true, html: dialogHtml, htmlBytes: Buffer.byteLength( dialogHtml ), htmlTruncated: false },
+			} ],
+		} );
+		writeFileSync( join( outputDir, 'html', 'directory.html' ), `<h1 id="directory">Directory content</h1>${ links }${ menu }` );
+		writeFileSync( join( outputDir, 'html', 'document.html' ), `<h1 id="document">Different document content</h1>${ links }${ menu }<img src="https://example.com/missing.jpg">` );
+		writeFileSync( join( outputDir, 'html', 'reserved.html' ), `<h1 id="reserved">Reserved filename</h1>${ links }` );
+		const entries = [
+			[ directoryUrl, { html: 'html/directory.html', interactions: interactions( directoryUrl ) } ],
+			[ documentUrl, { html: 'html/document.html', interactions: interactions( documentUrl ) } ],
+			[ `${ directoryUrl }${ reservedRoute }`, { html: 'html/reserved.html' } ],
+		];
+		if ( reversed ) entries.reverse();
+		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( { version: 1, entries: Object.fromEntries( entries ) } ) );
+		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( {
+			outputDir, sourceUrl: explicitSource ? documentUrl : directoryUrl, platform: 'generic', summary: {}, failures: [],
+		} ), 'utf8' ) );
+		const directoryPath = explicitSource ? 'index-3.html' : 'index.html';
+		const documentPath = explicitSource ? 'index.html' : 'index-3.html';
+		expect( receipt.routes ).toHaveLength( 3 );
+		expect( receipt.duplicateRoutes ).toEqual( [] );
+		expect( Object.fromEntries( receipt.routes.map( ( route: { url: string; path: string } ) => [ route.url, route.path ] ) ) ).toEqual( {
+			[ directoryUrl ]: `website/${ directoryPath }`,
+			[ documentUrl ]: `website/${ documentPath }`,
+			[ `${ directoryUrl }${ reservedRoute }` ]: `website/${ reservedPath }`,
+		} );
+		expect( receipt.entrypoint ).toBe( 'website/index.html' );
+		for ( const file of [ 'index.html', reservedPath, 'index-3.html' ] ) {
+			const $ = cheerio.load( readFileSync( join( outputDir, 'website', file ), 'utf8' ) );
+			expect( $( 'a' ).not( '.dla-dialog a' ).map( ( _, link ) => $( link ).attr( 'href' ) ).get() ).toEqual( [
+				`/${ directoryPath }#directory`, `/${ documentPath }?from=nav#document`, `/${ reservedPath }#reserved`,
+			] );
+			if ( file !== reservedPath ) {
+				expect( $( '.dla-dialog a' ).map( ( _, link ) => $( link ).attr( 'href' ) ).get() ).toEqual( [
+					`/${ documentPath }?from=menu#document`, `/${ directoryPath }#directory`,
+				] );
+			}
+		}
+		expect( readFileSync( join( outputDir, 'website', directoryPath ), 'utf8' ) ).toContain( 'Directory content' );
+		expect( readFileSync( join( outputDir, 'website', documentPath ), 'utf8' ) ).toContain( 'Different document content' );
+		const evidence = JSON.parse( readFileSync( join( outputDir, 'asset-evidence.json' ), 'utf8' ) );
+		expect( evidence.assets[ 0 ].references[ 0 ].path ).toBe( `website/${ documentPath }` );
 	} );
 
 	it( 'rewrites a literal canonical link that names a captured route to its local path', () => {

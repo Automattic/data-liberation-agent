@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import * as cheerio from 'cheerio';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { exportWebsiteCapture } from '../capture-export.js';
 import { CapturedResourceStore } from './resource-capture.js';
@@ -364,6 +365,103 @@ describe( 'CapturedResourceStore', () => {
 			expect.arrayContaining( Object.keys( bodies ) )
 		);
 	} );
+
+	it( 'captures and localizes linked audio without fetching ordinary page links', async () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-linked-audio-' ) );
+		dirs.push( outputDir );
+		mkdirSync( join( outputDir, 'html' ) );
+		mkdirSync( join( outputDir, 'screenshots' ) );
+		const sourceUrl = 'https://example.com/album/';
+		const mp3 = 'https://example.com/audio/Track%201.MP3?download=1&quality=high';
+		const bodies: Record< string, [ string, string ] > = {
+			[ mp3 ]: [ 'audio/mpeg', 'mp3 audio' ],
+			'https://example.com/audio/second.ogg': [ 'audio/ogg', 'ogg audio' ],
+			'https://cdn.example/third.wav': [ 'audio/wav', 'wav audio' ],
+		};
+		const html = `<html><body>
+			<a id="mp3" href="../audio/Track 1.MP3?download=1&amp;quality=high">First track</a>
+			<a id="duplicate" href="${ mp3.replace( /&/g, '&amp;' ) }">First track again</a>
+			<a id="ogg" href="/audio/second.ogg">Second track</a>
+			<map name="tracks"><area id="wav" href="https://cdn.example/third.wav" alt="Third track"></map>
+			<a href="/about">About</a><a href="#tracks">Tracks</a><div id="tracks"></div>
+			<a href="mailto:music@example.com">Email</a><a href="javascript:play('track.mp3')">Play</a>
+		</body></html>`;
+		writeFileSync( join( outputDir, 'html', 'homepage.html' ), html );
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( { version: 1, entries: { [ sourceUrl ]: { html: 'html/homepage.html' } } } )
+		);
+		const fetchMedia = vi.fn( async ( url: string ) => ( {
+			finalUrl: url,
+			status: bodies[ url ] ? 200 : 404,
+			headers: new Headers( { 'content-type': bodies[ url ]?.[ 0 ] ?? 'text/html' } ),
+			body: Buffer.from( bodies[ url ]?.[ 1 ] ?? '' ),
+		} ) );
+		const store = new CapturedResourceStore( outputDir, sourceUrl, fetchMedia );
+		await store.captureDomDependencies( html, sourceUrl );
+		await store.captureDomDependencies( html, sourceUrl );
+		await store.flush();
+		expect( fetchMedia.mock.calls.map( ( [ url ] ) => url ).sort() ).toEqual( Object.keys( bodies ).sort() );
+
+		const receiptPath = exportWebsiteCapture( {
+			outputDir, sourceUrl, platform: 'generic', summary: {}, failures: [],
+		} );
+		const receipt = JSON.parse( readFileSync( receiptPath, 'utf8' ) );
+		const $ = cheerio.load( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) );
+		for ( const [ id, source ] of [ [ 'mp3', mp3 ], [ 'ogg', 'https://example.com/audio/second.ogg' ], [ 'wav', 'https://cdn.example/third.wav' ] ] ) {
+			const href = $( `#${ id }` ).attr( 'href' )!;
+			expect( href ).toMatch( /^\// );
+			const path = decodeURIComponent( new URL( href, 'https://portable.test/' ).pathname );
+			expect( readFileSync( join( outputDir, 'website', path ), 'utf8' ) ).toBe( bodies[ source ][ 1 ] );
+			expect( receipt.assets ).toContainEqual( { sourceUrl: source, path: `website${ path }` } );
+		}
+		expect( $( '#duplicate' ).attr( 'href' ) ).toBe( $( '#mp3' ).attr( 'href' ) );
+		const diagnostics = JSON.parse( readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' ) );
+		expect( diagnostics.unresolvedDependencies ).toEqual( [] );
+		expect( diagnostics.unresolvedAnchors ).toEqual( [ {
+			sourceUrl, url: 'https://example.com/about', reason: 'target route was not captured',
+		} ] );
+	} );
+
+	it.each( [ 'HTTP 404', 'response body exceeds max 10485760 bytes' ] )(
+		'retains failed linked-audio evidence when capture reports %s',
+		async ( error ) => {
+			const outputDir = mkdtempSync( join( tmpdir(), 'dla-linked-audio-failure-' ) );
+			dirs.push( outputDir );
+			mkdirSync( join( outputDir, 'html' ) );
+			mkdirSync( join( outputDir, 'screenshots' ) );
+			const sourceUrl = 'https://example.com/';
+			const audioUrl = 'https://example.com/track.mp3';
+			const html = '<html><body><a href="/track.mp3">Listen to the track</a></body></html>';
+			writeFileSync( join( outputDir, 'html', 'homepage.html' ), html );
+			writeFileSync(
+				join( outputDir, 'screenshots', 'manifest.json' ),
+				JSON.stringify( { version: 1, entries: { [ sourceUrl ]: { html: 'html/homepage.html' } } } )
+			);
+			const store = new CapturedResourceStore( outputDir, sourceUrl, async () => {
+				throw new Error( error );
+			} );
+			await store.captureDomDependencies( html, sourceUrl );
+			await store.flush();
+			const receiptPath = exportWebsiteCapture( {
+				outputDir, sourceUrl, platform: 'generic', summary: {}, failures: [],
+			} );
+			const diagnostics = JSON.parse( readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' ) );
+			expect( diagnostics.resourceFailures ).toEqual( [ { url: audioUrl, error } ] );
+			expect( diagnostics.unresolvedDependencies ).toEqual( [ {
+				url: audioUrl, sourceUrl, error: 'referenced same-origin dependency was not captured',
+			} ] );
+			expect( diagnostics.unresolvedAnchors ).toEqual( [] );
+			expect( JSON.parse( readFileSync( receiptPath, 'utf8' ) ).assets ).toEqual( [] );
+			const evidence = JSON.parse( readFileSync( join( outputDir, 'asset-evidence.json' ), 'utf8' ) );
+			expect( evidence.assets ).toMatchObject( [ {
+				sourceUrl: audioUrl, outcome: 'failed', retrieval: 'failed', portable: 'not-included', error,
+			} ] );
+			const $ = cheerio.load( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) );
+			expect( $( 'a' ).attr( 'href' ) ).toBe( audioUrl );
+			expect( $( 'a' ).text() ).toBe( 'Listen to the track' );
+		}
+	);
 
 	it( 'keeps script expressions and bare woff2 responses out of capture diagnostics', async () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-resource-diagnostics-' ) );

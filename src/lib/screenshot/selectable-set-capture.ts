@@ -146,6 +146,17 @@ export async function captureSelectableSetStates(
 					if ( href.toLowerCase().startsWith( 'javascript:' ) ) return false;
 					return true;
 				};
+				/**
+				 * A card grid renders the link outside the styled tile
+				 * (`<a href><div style="cursor:pointer">...</div></a>`), so rejecting only
+				 * the anchor leaves its descendant qualifying on the pointer cursor alone.
+				 * The outermost-wins filter cannot rescue that: the anchor is not a
+				 * candidate, so there is nothing for the descendant to lose to.
+				 */
+				const isInsideNavigable = ( element: Element ) => {
+					const anchor = element.closest( 'a[href]' );
+					return Boolean( anchor && anchor !== element && isNavigable( anchor ) );
+				};
 				const isDisclosureTrigger = ( element: Element ) => {
 					if ( ! element.hasAttribute( 'aria-expanded' ) || ! element.hasAttribute( 'aria-controls' ) ) {
 						return false;
@@ -162,6 +173,7 @@ export async function captureSelectableSetStates(
 						return false;
 					}
 					if ( isNavigable( element ) ) return false;
+					if ( isInsideNavigable( element ) ) return false;
 					if ( element.hasAttribute( 'aria-haspopup' ) ) return false;
 					if ( isDisclosureTrigger( element ) ) return false;
 					if ( isPagerControl( element ) ) return false;
@@ -291,11 +303,34 @@ export async function captureSelectableSetStates(
 					return out;
 				};
 				const currentRoute = () => `${ location.pathname }${ location.search }`;
+				/**
+				 * A probe click must not leave the page. A committed navigation destroys
+				 * this evaluate's execution context, and the capture evidence installed on
+				 * the page with it, so a route that was otherwise complete fails.
+				 *
+				 * Cancelling at `document` -- the last hop before `window` -- lets every
+				 * listener the page installed run first, so the set is still driven. Only
+				 * the follow-through that navigates is cancelled: other default actions
+				 * (a label checking its radio, a summary opening its details) are how some
+				 * sets change their region at all.
+				 */
+				const preventNavigation = ( event: Event ) => {
+					if ( event.type === 'submit' ) {
+						event.preventDefault();
+						return;
+					}
+					const anchor =
+						event.target instanceof Element ? event.target.closest( 'a[href]' ) : null;
+					if ( anchor && isNavigable( anchor ) ) event.preventDefault();
+				};
 				const activate = async (
 					element: Element
 				): Promise< { ok: true } | { ok: false; error: string; navigated?: boolean } > => {
 					const before = currentRoute();
 					const beforeState = history.state;
+					let clickError: string | undefined;
+					document.addEventListener( 'click', preventNavigation );
+					document.addEventListener( 'submit', preventNavigation );
 					try {
 						const click = ( element as HTMLElement ).click;
 						if ( typeof click === 'function' ) {
@@ -310,13 +345,14 @@ export async function captureSelectableSetStates(
 								} )
 							);
 						}
+						await wait( limits.settleMs );
 					} catch ( error ) {
-						return {
-							ok: false,
-							error: ( error instanceof Error ? error.message : String( error ) ).slice( 0, 500 ),
-						};
+						clickError = ( error instanceof Error ? error.message : String( error ) ).slice( 0, 500 );
+					} finally {
+						document.removeEventListener( 'click', preventNavigation );
+						document.removeEventListener( 'submit', preventNavigation );
 					}
-					await wait( limits.settleMs );
+					if ( clickError !== undefined ) return { ok: false, error: clickError };
 					if ( currentRoute() !== before ) {
 						try {
 							history.pushState( beforeState, '', before );
