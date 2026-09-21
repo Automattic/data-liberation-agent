@@ -1,3 +1,18 @@
+## 2026-09-21 — Wix words its footer credit "Powered and secured by Wix"
+
+**Found by:** Claude Code
+**During:** Importing a free Wix test site through Studio, then reading its saved capture and cleanup evidence
+**Type:** bug fix
+
+### What I found
+Current Wix templates qualify the credit verb. Every credit matcher only knew the literal "powered by", and the link rule tested the text of the link's direct parent, which on Wix is an underline span holding just "Wix". Both Wix credit rules ran, neither matched, and the credit with its wix.com link shipped into the liberated site.
+
+### How it works
+The credit phrase accepts one conjoined qualifier ("powered and secured by") wherever it is matched. The plain-text footer rule then removes the phrase and its link by text range and keeps the owner's copyright in the same paragraph. The policy schema moved to v4.
+
+### Why it's better than the previous approach
+The credit leaves on real Wix footers without widening what counts as a credit: a brand or provider link is still required, and authored prose such as "Powered by renewable energy" stays.
+
 ## 2026-09-16 — Localized media in captured stylesheets must stay local
 
 **Found by:** OpenAI Codex

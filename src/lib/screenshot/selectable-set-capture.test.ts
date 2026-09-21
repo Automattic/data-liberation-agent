@@ -1,5 +1,6 @@
-import { chromium, type Browser } from 'playwright';
+import { chromium, type Browser, type Page } from 'playwright';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { applySourceCleanup, cleanupPolicy, readSourceCleanup } from '../source-cleanup.js';
 import {
 	captureSelectableSetStates,
 	SELECTABLE_SET_KIND,
@@ -7,6 +8,21 @@ import {
 } from './selectable-set-capture.js';
 
 const skipBrowser = process.env.SKIP_BROWSER_TESTS;
+
+/**
+ * A relative `href` only navigates against a real origin, and `setContent`
+ * leaves the page on `about:blank` where it cannot. These fixtures are served
+ * from an intercepted synthetic origin so a probe click that reaches a link
+ * commits the same full-document navigation a live site would.
+ */
+const ORIGIN = 'https://selectable-set.test';
+
+async function serve( page: Page, html: string ): Promise< void > {
+	await page.route( `${ ORIGIN }/**`, ( route ) =>
+		route.fulfill( { contentType: 'text/html', body: html } )
+	);
+	await page.goto( `${ ORIGIN }/` );
+}
 
 const PICKER_PAGE = `<!doctype html><html><body>
 	<div id="layout">
@@ -28,6 +44,98 @@ const PICKER_PAGE = `<!doctype html><html><body>
 			zone.addEventListener('click', () => {
 				window.clicks.push(zone.id);
 				document.getElementById('panel').textContent = details[zone.id];
+			});
+		});
+	</script>
+</body></html>`;
+
+/** The card grid every site builder emits: the link wraps the styled tile. */
+const CARDS = `<div id="cards">
+		<a href="/one"><div style="cursor:pointer">Card one summary copy for the grid.</div></a>
+		<a href="/two"><div style="cursor:pointer">Card two summary copy for the grid.</div></a>
+		<a href="/three"><div style="cursor:pointer">Card three summary copy for the grid.</div></a>
+	</div>`;
+
+const LINK_WRAPPED_CARDS_PAGE = `<!doctype html><html><body>
+	<main>
+		${ CARDS }
+		<div id="panel">Nearby copy that should not be attributed to the cards.</div>
+	</main>
+</body></html>`;
+
+const CARDS_BESIDE_PICKER_PAGE = `<!doctype html><html><body>
+	<main>
+		${ CARDS }
+		<div id="picker">
+			<div id="z1" style="cursor:pointer">Zone 1</div>
+			<div id="z2" style="cursor:pointer">Zone 2</div>
+			<div id="z3" style="cursor:pointer">Zone 3</div>
+		</div>
+		<div id="panel">Select a zone to view details.</div>
+	</main>
+	<script>
+		const details = {
+			z1: 'Zone 1 / Production / A climate-controlled room with a 18/6 light cycle.',
+			z2: 'Zone 2 / Processing / Packaging line with humidity held at 45-55 percent RH.',
+			z3: 'Zone 3 / Storage / Cold room held at 4C for finished goods.',
+		};
+		document.querySelectorAll('#picker > *').forEach((zone) => {
+			zone.addEventListener('click', () => {
+				document.getElementById('panel').textContent = details[zone.id];
+			});
+		});
+	</script>
+</body></html>`;
+
+/** Tiles that carry no href and navigate by following a link from script. */
+const TILES = `<div id="tiles">
+		<div id="t1" data-target="/one" style="cursor:pointer">Tile one summary copy.</div>
+		<div id="t2" data-target="/two" style="cursor:pointer">Tile two summary copy.</div>
+		<div id="t3" data-target="/three" style="cursor:pointer">Tile three summary copy.</div>
+	</div>
+	<div id="panel">Select a tile to view details.</div>`;
+
+const SCRIPTED_LINK_TILES_PAGE = `<!doctype html><html><body>
+	<main>${ TILES }</main>
+	<script>
+		document.querySelectorAll('#tiles > *').forEach((tile) => {
+			tile.addEventListener('click', () => {
+				const link = document.createElement('a');
+				link.href = tile.dataset.target;
+				document.body.append(link);
+				link.click();
+			});
+		});
+	</script>
+</body></html>`;
+
+const SCRIPTED_ASSIGN_TILES_PAGE = `<!doctype html><html><body>
+	<main>${ TILES }</main>
+	<script>
+		document.querySelectorAll('#tiles > *').forEach((tile) => {
+			tile.addEventListener('click', () => { location.assign(tile.dataset.target); });
+		});
+	</script>
+</body></html>`;
+
+const LABEL_FILTER_PAGE = `<!doctype html><html><body>
+	<main>
+		<div id="filters">
+			<label id="f1" style="cursor:pointer"><input type="radio" name="filter" value="alpha" hidden>Alpha</label>
+			<label id="f2" style="cursor:pointer"><input type="radio" name="filter" value="beta" hidden>Beta</label>
+			<label id="f3" style="cursor:pointer"><input type="radio" name="filter" value="gamma" hidden>Gamma</label>
+		</div>
+		<div id="grid">Choose a filter.</div>
+	</main>
+	<script>
+		const copy = {
+			alpha: 'Alpha strains / Orangutan, Sunrise, Harbour Light and four more.',
+			beta: 'Beta strains / Wedding, Northern Aurora and two more on request.',
+			gamma: 'Gamma strains / Coastal Fog and Midnight Harvest, seasonal only.',
+		};
+		document.querySelectorAll('#filters input').forEach((input) => {
+			input.addEventListener('change', () => {
+				document.getElementById('grid').textContent = copy[input.value];
 			});
 		});
 	</script>
@@ -474,6 +582,116 @@ describe( 'captureSelectableSetStates', () => {
 					set: { size: 3, index: 0 },
 					error: 'shared region did not vary',
 				} );
+			} finally {
+				await page.close();
+			}
+		},
+		30_000
+	);
+
+	it.skipIf( skipBrowser )(
+		'does not drive a pointer-cursor tile that a real link wraps',
+		async () => {
+			const page = await browser.newPage( { viewport: { width: 1200, height: 800 } } );
+			const navigations: string[] = [];
+			page.on( 'framenavigated', ( frame ) => navigations.push( frame.url() ) );
+			try {
+				await serve( page, LINK_WRAPPED_CARDS_PAGE );
+				expect( await captureSelectableSetStates( page ) ).toEqual( [] );
+				expect( navigations ).toEqual( [ `${ ORIGIN }/` ] );
+			} finally {
+				await page.close();
+			}
+		},
+		30_000
+	);
+
+	it.skipIf( skipBrowser )(
+		'leaves the page and its cleanup evidence intact while driving a set beside link-wrapped cards',
+		async () => {
+			const page = await browser.newPage( { viewport: { width: 1200, height: 800 } } );
+			const navigations: string[] = [];
+			page.on( 'framenavigated', ( frame ) => navigations.push( frame.url() ) );
+			try {
+				await serve( page, CARDS_BESIDE_PICKER_PAGE );
+				await applySourceCleanup( page, cleanupPolicy() );
+				const states = await captureSelectableSetStates( page );
+				expect( states.map( ( state ) => [ state.trigger.id, state.status ] ) ).toEqual( [
+					[ 'z1', 'captured' ],
+					[ 'z2', 'captured' ],
+					[ 'z3', 'captured' ],
+				] );
+				expect( navigations ).toEqual( [ `${ ORIGIN }/` ] );
+				await expect( readSourceCleanup( page ) ).resolves.toMatchObject( { failures: [] } );
+			} finally {
+				await page.close();
+			}
+		},
+		30_000
+	);
+
+	it.skipIf( skipBrowser )(
+		'keeps the page when a member has no href and its own handler follows a link',
+		async () => {
+			const page = await browser.newPage( { viewport: { width: 1200, height: 800 } } );
+			const navigations: string[] = [];
+			page.on( 'framenavigated', ( frame ) => navigations.push( frame.url() ) );
+			try {
+				await serve( page, SCRIPTED_LINK_TILES_PAGE );
+				const states = await captureSelectableSetStates( page );
+				expect( states ).toEqual( [
+					expect.objectContaining( {
+						status: 'no-dialog',
+						kind: SELECTABLE_SET_KIND,
+						set: { selector: '#tiles', size: 3, index: 0 },
+						error: 'shared region did not vary',
+					} ),
+				] );
+				expect( navigations ).toEqual( [ `${ ORIGIN }/` ] );
+			} finally {
+				await page.close();
+			}
+		},
+		30_000
+	);
+
+	it.skipIf( skipBrowser )(
+		'still drives a set whose members change the region through a default action',
+		async () => {
+			// Only the follow-through that navigates may be cancelled. A label
+			// checking its own radio is a default action too, and here it is the
+			// only thing that changes the region.
+			const page = await browser.newPage( { viewport: { width: 1200, height: 800 } } );
+			try {
+				await serve( page, LABEL_FILTER_PAGE );
+				const states = await captureSelectableSetStates( page );
+				expect( states.map( ( state ) => [ state.trigger.id, state.status ] ) ).toEqual( [
+					[ 'f1', 'captured' ],
+					[ 'f2', 'captured' ],
+					[ 'f3', 'captured' ],
+				] );
+				expect( states[ 1 ].dialog?.html ).toContain( 'Beta strains' );
+			} finally {
+				await page.close();
+			}
+		},
+		30_000
+	);
+
+	it.skipIf( skipBrowser )(
+		'reports a scripted navigation rather than claiming the member was captured',
+		async () => {
+			// `location.assign` is not a default action, so no listener can cancel
+			// it. What must hold is that the loss is reported: a route that lost its
+			// page is evidence of a gap, and silently recording `captured` for a
+			// member whose region was never observed would hide one.
+			const page = await browser.newPage( { viewport: { width: 1200, height: 800 } } );
+			try {
+				await serve( page, SCRIPTED_ASSIGN_TILES_PAGE );
+				const states = await captureSelectableSetStates( page );
+				expect( states ).toEqual( [
+					expect.objectContaining( { status: 'click-failed', kind: SELECTABLE_SET_KIND } ),
+				] );
 			} finally {
 				await page.close();
 			}

@@ -15,6 +15,47 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.4.3] - 2026-09-21
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- wait for images before responsive capture
+
+## [0.4.2] - 2026-09-21
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- capture and localize linked audio files
+
+## [0.4.1] - 2026-09-21
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- distinguish absent source routes from incomplete captures
+
+## [0.4.0] - 2026-09-21
+
+### Added
+- record selectable sets that drive a shared region
+
+### Changed
+- regenerate plugin bundles only on main
+
+### Fixed
+- keep a selectable-set probe from navigating the page
+- stop pager probing from clicking picture-only links off the route
+- remove the "Powered and secured by Wix" footer credit
+- ignore live text in the responsive document signature
+- preserve distinct directory and default-document captures
+- root the website export at the discovered origin, not the entry URL
+- replay captured dialogs onto the captured trigger, not a label match
+
 ## [0.3.1] - 2026-09-18
 
 ### Fixed
