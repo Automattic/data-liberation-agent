@@ -15,6 +15,15 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.4.10] - 2026-09-21
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- derive a redirected resource's local path and manifest key from the requested url
+- settle scroll-reveal capture on documents that grow while scrolling
+
 ## [0.4.9] - 2026-09-21
 
 ### Changed
