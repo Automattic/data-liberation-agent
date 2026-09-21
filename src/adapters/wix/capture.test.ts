@@ -11,6 +11,7 @@ import {
 	wixMediaVariant,
 	wixStaticMediaUrl,
 	WIX_CAPTURE_CHROME_SELECTOR,
+	WIX_ANCHOR_SCROLL_GRACE_MILLISECONDS,
 } from './capture.js';
 import { wixAdapter } from './index.js';
 
@@ -254,6 +255,10 @@ describe( 'collectWixSlideshowSlides', () => {
 } );
 
 describe( 'wix capture', () => {
+	it( 'allows delayed Wix anchor scroll handlers to run before measuring a target', () => {
+		expect( WIX_ANCHOR_SCROLL_GRACE_MILLISECONDS ).toBeGreaterThanOrEqual( 500 );
+	} );
+
 	it( 'declares platform chrome removal selectors', () => {
 		expect( capture.removeSelectors ).toEqual( [
 			'[id="WIX_ADS"]',

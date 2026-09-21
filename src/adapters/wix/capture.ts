@@ -78,6 +78,7 @@ const WIX_SLIDESHOW_LIMIT = 4;
 const WIX_SLIDE_LIMIT = 6;
 const WIX_SLIDE_SETTLE_MILLISECONDS = 10_000;
 const WIX_SLIDE_POLL_MILLISECONDS = 100;
+export const WIX_ANCHOR_SCROLL_GRACE_MILLISECONDS = 500;
 
 /**
  * Wix mounts only the active slide. Replace that transient state with the
@@ -393,6 +394,10 @@ export const capture: LiberationHooks = {
 
 			const originalScroll = { x: scrollX, y: scrollY };
 			const waitForScroll = async (): Promise< void > => {
+				// Wix schedules the scroll from its click handler. Do not sample the
+				// initial top-of-page position as a settled destination while that
+				// handler is still queued.
+				await new Promise( ( resolve ) => setTimeout( resolve, WIX_ANCHOR_SCROLL_GRACE_MILLISECONDS ) );
 				let previous = scrollY;
 				let stableFrames = 0;
 				for ( let attempt = 0; attempt < 40 && stableFrames < 4; attempt++ ) {
