@@ -1,3 +1,18 @@
+## 2026-09-21 — A redirected asset's local path (and its manifest key) came from the wrong url, and that broke `<video poster>` too
+
+**Found by:** Claude Code
+**During:** A Studio CLI import of a private, session-gated source whose origin 307-redirects every asset request to a variant path (a matrix-style suffix appended to the same path)
+**Type:** bug fix
+
+### What I found
+`CapturedResourceStore`'s browser-observed capture path (`capture`/`captureResponse` in `resource-capture.ts`) derived both the stored filename and the manifest key from `response.url()`. Playwright fires a SEPARATE 'response' event per redirect hop — the redirect itself (status 3xx, `url()` is the url the document actually referenced) and a terminal response on a NEW Request (`url()` is the redirect TARGET). Two bugs fell out of that: (1) the terminal response's post-redirect url leaked into the local path, corrupting the filename (`a.jpg` fetched via a redirect to `a.jpg;variant` was stored as `a.jpg;variant.jpg` — the double extension came from `resourcePath`'s content-type suffixing not finding a trailing extension to replace); and (2) the redirect hop was captured as a failure ("HTTP 307") under the url the document referenced — the SAME dedupe key the correct terminal capture needed — so a later independent fetch of the same url (`captureDomDependencies`'s `<video poster>` handling) found that key already claimed by the failed capture and never ran its own fetch at all. `<video poster>` degraded to the transparent-gif stub not because posters are fetched differently, but because the browser's own doomed attempt at the SAME url poisoned the cache first.
+
+### How it works
+`capture()` now skips 3xx responses entirely — a redirect is a transport hop, not a completed (or failed) resource — and walks `request.redirectedFrom()` back to the first request in the chain to use as the identity for the dedupe key, the manifest key, and the local path (`originRequestUrl`). The terminal response's actual bytes/headers are still used for non-`media` resource types; a `media` resourceType still re-fetches independently, now against the ORIGINAL url so it re-runs the full (SSRF-validated, per-hop-cookie) redirect chain rather than fetching the already-redirected address directly.
+
+### Why it's better than the previous approach
+The requested url is the stable identity a rewrite must match; a redirect is a transport detail that must never leak into the artifact's file layout or block an otherwise-successful capture. Fixing the identity derivation fixed both the corrupted filenames and the `<video poster>` regression from the same root cause — no poster-specific code was needed.
+
 ## 2026-09-21 — `<video>` media was never captured, and a failed one lost its `src` entirely
 
 **Found by:** Claude Code

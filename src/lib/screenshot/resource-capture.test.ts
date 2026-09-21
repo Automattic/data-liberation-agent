@@ -165,6 +165,145 @@ describe( 'CapturedResourceStore', () => {
 		);
 	} );
 
+	it( 'derives the local path and manifest key from the originally-requested url when a same-origin response redirects to a variant path', async () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-resource-redirect-' ) );
+		dirs.push( outputDir );
+		mkdirSync( join( outputDir, 'html' ) );
+		mkdirSync( join( outputDir, 'screenshots' ) );
+		const sourceUrl = 'https://example.com/';
+		const imageUrl = 'https://example.com/img/a.jpg';
+		const redirectedUrl = `${ imageUrl };variant`;
+		const html = '<html><body><img src="/img/a.jpg"></body></html>';
+		writeFileSync( join( outputDir, 'html', 'homepage.html' ), html );
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( { version: 1, entries: { [ sourceUrl ]: { html: 'html/homepage.html' } } } )
+		);
+
+		const page = new EventEmitter();
+		const store = new CapturedResourceStore( outputDir, sourceUrl );
+		store.observe( page as never );
+
+		// A redirected browser fetch fires TWO 'response' events: the redirect
+		// hop itself (status 307, url() is the ORIGINAL requested url) and the
+		// terminal response (status 200, url() is the REDIRECT TARGET) whose
+		// Request is linked back to the original via redirectedFrom().
+		const originalRequest = {
+			resourceType: () => 'image',
+			method: () => 'GET',
+			redirectedFrom: () => null,
+			url: () => imageUrl,
+		};
+		const redirectedRequest = {
+			resourceType: () => 'image',
+			method: () => 'GET',
+			redirectedFrom: () => originalRequest,
+			url: () => redirectedUrl,
+		};
+		page.emit( 'response', {
+			url: () => imageUrl,
+			status: () => 307,
+			headers: () => ( { location: redirectedUrl } ),
+			body: vi.fn(),
+			request: () => originalRequest,
+		} );
+		page.emit( 'response', {
+			url: () => redirectedUrl,
+			status: () => 200,
+			headers: () => ( { 'content-type': 'image/jpeg' } ),
+			body: vi.fn().mockResolvedValue( Buffer.from( 'jpeg bytes' ) ),
+			request: () => redirectedRequest,
+		} );
+		await store.settle( page as never );
+		await store.flush();
+
+		const manifest = JSON.parse(
+			readFileSync( join( outputDir, 'resources', 'manifest.json' ), 'utf8' )
+		);
+		// Stored under the ORIGINALLY REQUESTED path, not the redirect target's
+		// (which would otherwise double the extension: `a.jpg;variant.jpg`).
+		expect( manifest.resources[ imageUrl ] ).toEqual( {
+			path: 'resources/img/a.jpg',
+			contentType: 'image/jpeg',
+		} );
+		expect( manifest.resources[ redirectedUrl ] ).toBeUndefined();
+		// The redirect hop is a transport detail, not a failed capture.
+		expect( manifest.failures ).toEqual( [] );
+		expect( readFileSync( join( outputDir, 'resources', 'img', 'a.jpg' ), 'utf8' ) ).toBe(
+			'jpeg bytes'
+		);
+
+		exportWebsiteCapture( { outputDir, sourceUrl, platform: 'generic', summary: {}, failures: [] } );
+		const $ = cheerio.load( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) );
+		const src = $( 'img' ).attr( 'src' )!;
+		expect( src ).toBe( '/img/a.jpg' );
+		expect( readFileSync( join( outputDir, 'website', src ), 'utf8' ) ).toBe( 'jpeg bytes' );
+	} );
+
+	it( 'does not let a same-origin redirect response block the DOM-dependency capture that follows for the same url', async () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-resource-redirect-poster-' ) );
+		dirs.push( outputDir );
+		mkdirSync( join( outputDir, 'html' ) );
+		mkdirSync( join( outputDir, 'screenshots' ) );
+		const sourceUrl = 'https://example.com/';
+		const posterUrl = 'https://example.com/photos/day12/clip.jpg';
+		const redirectedUrl = `${ posterUrl };variant`;
+		const html = `<html><body><video poster="${ posterUrl }" preload="none"></video></body></html>`;
+		writeFileSync( join( outputDir, 'html', 'homepage.html' ), html );
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( { version: 1, entries: { [ sourceUrl ]: { html: 'html/homepage.html' } } } )
+		);
+		const page = new EventEmitter();
+		const fetchMedia = vi.fn( async ( url: string ) => ( {
+			finalUrl: url,
+			status: 200,
+			headers: new Headers( { 'content-type': 'image/jpeg' } ),
+			body: Buffer.from( 'poster bytes' ),
+		} ) );
+		const store = new CapturedResourceStore( outputDir, sourceUrl, fetchMedia );
+		store.observe( page as never );
+
+		// The browser's OWN (native) fetch of the poster attribute hits the
+		// redirect first — the ordering a real page load produces before the
+		// DOM-dependency scan below ever runs. Before the fix, capturing this
+		// redirect hop under the poster's (correctly original) url claimed the
+		// dedupe entry the scan below needs, permanently blocking it.
+		const originalRequest = {
+			resourceType: () => 'image',
+			method: () => 'GET',
+			redirectedFrom: () => null,
+			url: () => posterUrl,
+		};
+		page.emit( 'response', {
+			url: () => posterUrl,
+			status: () => 307,
+			headers: () => ( { location: redirectedUrl } ),
+			body: vi.fn(),
+			request: () => originalRequest,
+		} );
+		await store.settle( page as never );
+
+		await store.captureDomDependencies( html, sourceUrl );
+		await store.flush();
+
+		const manifest = JSON.parse(
+			readFileSync( join( outputDir, 'resources', 'manifest.json' ), 'utf8' )
+		);
+		expect( manifest.resources[ posterUrl ] ).toMatchObject( { contentType: 'image/jpeg' } );
+		expect( manifest.failures ).toEqual( [] );
+		expect( fetchMedia ).toHaveBeenCalledWith( posterUrl );
+
+		exportWebsiteCapture( { outputDir, sourceUrl, platform: 'generic', summary: {}, failures: [] } );
+		const $ = cheerio.load( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) );
+		const poster = $( 'video' ).attr( 'poster' )!;
+		// A real localized image, not the transparent-gif stub a genuinely
+		// unfetchable poster still degrades to (covered separately below).
+		expect( poster ).not.toMatch( /^data:image\/gif;base64,/ );
+		expect( poster ).toMatch( /^\// );
+		expect( readFileSync( join( outputDir, 'website', poster ), 'utf8' ) ).toBe( 'poster bytes' );
+	} );
+
 	it( 'records media fetches that exceed the capture bound', async () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-resources-' ) );
 		dirs.push( outputDir );
@@ -175,6 +314,7 @@ describe( 'CapturedResourceStore', () => {
 		store.observe( page as never );
 		page.emit( 'response', {
 			url: () => 'https://example.com/_videos/oversized',
+			status: () => 200,
 			request: () => ( { resourceType: () => 'media' } ),
 		} );
 
