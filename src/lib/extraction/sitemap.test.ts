@@ -285,6 +285,62 @@ describe('fetchSitemap', () => {
     }
   });
 
+  it('probes robots.txt and well-known sitemap paths against the origin, not the entry URL, when the entry URL carries a query string', async () => {
+    const entryUrl = 'https://example.test/?token=abc';
+    const fetchMock = vi.fn(async (url: string) => {
+      if (String(url) === entryUrl) return new Response('<nav><a href="/a">A</a></nav>', { status: 200 });
+      return new Response('', { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    try {
+      const { diagnostics } = await fetchSitemapWithDiagnostics(entryUrl);
+      // Probed against the origin, never with the query string spliced in
+      // (e.g. NOT 'https://example.test/?token=abc/sitemap.xml').
+      expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+        'https://example.test/robots.txt',
+        'https://example.test/sitemap-index.xml',
+        'https://example.test/sitemap.xml',
+        entryUrl,
+      ]);
+      expect(diagnostics).toContainEqual({
+        code: 'sitemap_missing',
+        url: 'https://example.test/',
+        reason: 'No sitemap found at any probed location',
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('probes robots.txt and well-known sitemap paths against the origin, not the entry URL, when the entry URL is a deep subpath', async () => {
+    const entryUrl = 'https://example.test/en/store/checkout';
+    const fetchMock = vi.fn(async (url: string) => {
+      if (String(url) === entryUrl) return new Response('<nav><a href="/a">A</a></nav>', { status: 200 });
+      return new Response('', { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    try {
+      const { diagnostics } = await fetchSitemapWithDiagnostics(entryUrl);
+      // Probed against the origin, never with the deep path prefixed
+      // (e.g. NOT 'https://example.test/en/store/checkout/sitemap.xml').
+      expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+        'https://example.test/robots.txt',
+        'https://example.test/sitemap-index.xml',
+        'https://example.test/sitemap.xml',
+        entryUrl,
+      ]);
+      expect(diagnostics).toContainEqual({
+        code: 'sitemap_missing',
+        url: 'https://example.test/',
+        reason: 'No sitemap found at any probed location',
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('reports a sitemap fetch failure instead of swallowing it', async () => {
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
       const href = String(url);

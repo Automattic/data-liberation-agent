@@ -114,7 +114,6 @@ export async function fetchSitemap(baseUrl: string): Promise<string[]> {
  */
 export async function fetchSitemapWithDiagnostics(baseUrl: string): Promise<SitemapFetchResult> {
   const normalizedBase = baseUrl.includes('://') ? baseUrl : `https://${baseUrl}`;
-  const root = normalizedBase.replace(/\/$/, '');
   let baseOrigin: string;
   let siteHost: string;
   try {
@@ -215,32 +214,31 @@ export async function fetchSitemapWithDiagnostics(baseUrl: string): Promise<Site
   const declared: string[] = [];
   const declaredSeen = new Set<string>();
   try {
-    const robotsUrl = `${root}/robots.txt`;
-    if (new URL(robotsUrl).origin === baseOrigin) {
-      const response = await fetch(robotsUrl, { signal: AbortSignal.timeout(15000) });
-      if (response.ok) {
-        for (const loc of parseRobotsSitemapDirectives(await response.text())) {
-          let absolute: string;
-          try {
-            absolute = new URL(loc, normalizedBase).href;
-          } catch {
-            diagnostics.push({ code: 'sitemap_url_rejected', url: loc, reason: 'invalid URL' });
-            continue;
-          }
-          const accepted = acceptEntry(absolute);
-          if (!accepted || declaredSeen.has(accepted.href)) continue;
-          declaredSeen.add(accepted.href);
-          declared.push(accepted.href);
+    const robotsUrl = new URL('/robots.txt', baseOrigin).href;
+    const response = await fetch(robotsUrl, { signal: AbortSignal.timeout(15000) });
+    if (response.ok) {
+      for (const loc of parseRobotsSitemapDirectives(await response.text())) {
+        let absolute: string;
+        try {
+          absolute = new URL(loc, normalizedBase).href;
+        } catch {
+          diagnostics.push({ code: 'sitemap_url_rejected', url: loc, reason: 'invalid URL' });
+          continue;
         }
+        const accepted = acceptEntry(absolute);
+        if (!accepted || declaredSeen.has(accepted.href)) continue;
+        declaredSeen.add(accepted.href);
+        declared.push(accepted.href);
       }
     }
   } catch {
     // robots.txt is a pointer, not a sitemap; a miss here is not a sitemap miss.
   }
 
-  const wellKnown = [`${root}/sitemap-index.xml`, `${root}/sitemap.xml`].filter(
-    (url) => !declaredSeen.has(url)
-  );
+  const wellKnown = [
+    new URL('/sitemap-index.xml', baseOrigin).href,
+    new URL('/sitemap.xml', baseOrigin).href,
+  ].filter((url) => !declaredSeen.has(url));
 
   let foundSitemap = false;
   for (const candidate of declared) {
@@ -261,7 +259,7 @@ export async function fetchSitemapWithDiagnostics(baseUrl: string): Promise<Site
   if (!foundSitemap) {
     diagnostics.push({
       code: 'sitemap_missing',
-      url: `${root}/`,
+      url: `${baseOrigin}/`,
       reason: 'No sitemap found at any probed location',
     });
     diagnostics.push(...fallbackMisses);
