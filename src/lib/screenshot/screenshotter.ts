@@ -282,6 +282,12 @@ export async function capturePageHtml( page: Page ): Promise< string > {
 			}
 			if ( ! cssText ) continue;
 			if ( owner instanceof HTMLStyleElement && document.documentElement.contains( owner ) ) {
+				// Stylesheets copied from a linked resource already have their source
+				// text in the DOM. Replacing it with Chromium's cssRules serialization
+				// can change nested/media CSS semantics (notably responsive form grids).
+				// Keep the source text; constructed sheets still use the active rules
+				// below because they have no serializable owner node.
+				if ( owner.hasAttribute( 'data-href' ) ) continue;
 				owner.textContent = cssText;
 				continue;
 			}
