@@ -2299,7 +2299,17 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		);
 	const allocatedPaths = new Map< string, string >();
 	const reservedPaths = new Set( capturedEntries.map( ( entry ) => naturalRoutePath( entry.url ) ) );
-	const entriesByUrl = new Map( capturedEntries.map( ( entry ) => [ entry.url, entry ] ) );
+	// Keyed by normalized URL, not the raw captured URL: an entry URL carrying
+	// a query string or fragment (a tokenized link, tracking parameter, etc.)
+	// still names the site root, and its captured directory route must be
+	// found by what it resolves to rather than by exact string equality.
+	const entriesByNormalizedUrl = new Map(
+		capturedEntries.map( ( entry ) => [ normalizedUrl( entry.url ), entry ] )
+	);
+	// Two captured URLs naming the same document are content-duplicates when
+	// they render identically; recorded here so the dedupe pass below treats
+	// them the same way a declared canonical route already would.
+	const contentAliasPartners = new Map< string, string >();
 	// A directory and its default document can be distinct pages. Keep both
 	// unless the existing canonical contract proves an alias. Reserve every
 	// natural path first so a generated filename never steals another route.
@@ -2307,10 +2317,15 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		const url = new URL( entry.url );
 		if ( url.search || url.hash || ! url.pathname.endsWith( '/index.html' ) ) continue;
 		const directoryUrl = new URL( './', url ).href;
-		const directory = entriesByUrl.get( directoryUrl );
+		const directory = entriesByNormalizedUrl.get( normalizedUrl( directoryUrl ) );
 		const path = naturalRoutePath( entry.url );
 		if ( ! directory || naturalRoutePath( directoryUrl ) !== path ) continue;
 		if ( declaresCanonicalRoute( entry, directory ) || declaresCanonicalRoute( directory, entry ) ) continue;
+		if ( readFileSync( entry.htmlPath, 'utf8' ) === readFileSync( directory.htmlPath, 'utf8' ) ) {
+			contentAliasPartners.set( entry.url, directory.url );
+			contentAliasPartners.set( directory.url, entry.url );
+			continue;
+		}
 		const displaced = entry.url === entrypointUrl ? directory : entry;
 		if ( [ ...reservedPaths ].some( ( reserved ) => path.startsWith( `${ reserved }/` ) ) )
 			throw new Error( `Captured route needs a directory already claimed by a file: ${ path }` );
@@ -2341,7 +2356,10 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 			retainedEntries.push( entry );
 			continue;
 		}
-		if ( ! declaresCanonicalRoute( entry, claimed ) ) {
+		if (
+			! declaresCanonicalRoute( entry, claimed ) &&
+			contentAliasPartners.get( entry.url ) !== claimed.url
+		) {
 			throw new Error( `Captured routes resolve to the same website path: ${ routePath }` );
 		}
 		if ( entry.jsonLd.length > 0 ) {

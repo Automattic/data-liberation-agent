@@ -4124,6 +4124,118 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		expect( evidence.assets[ 0 ].references[ 0 ].path ).toBe( `website/${ documentPath }` );
 	} );
 
+	it( 'pairs a query-bearing entry URL with its default-document capture by normalized URL, deduping identical content', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-default-document-query-' ) );
+		dirs.push( outputDir );
+		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
+		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
+		writeFileSync( join( outputDir, 'html', 'homepage.html' ), '<h1>Home</h1>' );
+		writeFileSync( join( outputDir, 'html', 'homepage-index.html' ), '<h1>Home</h1>' );
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( {
+				version: 1,
+				entries: {
+					'https://example.com/?token=abc': { html: 'html/homepage.html' },
+					'https://example.com/index.html': { html: 'html/homepage-index.html' },
+				},
+			} )
+		);
+
+		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( {
+			outputDir,
+			sourceUrl: 'https://example.com/?token=abc',
+			platform: 'generic',
+			summary: {},
+			failures: [],
+		} ), 'utf8' ) );
+
+		expect( receipt.routes ).toEqual( [
+			{ url: 'https://example.com/?token=abc', path: 'website/index.html' },
+		] );
+		expect( receipt.duplicateRoutes ).toEqual( [ {
+			url: 'https://example.com/index.html',
+			canonicalUrl: 'https://example.com/?token=abc',
+			path: 'website/index.html',
+		} ] );
+		expect( existsSync( join( outputDir, 'website', 'index-2.html' ) ) ).toBe( false );
+	} );
+
+	it( 'pairs a fragment-bearing entry URL with its default-document capture the same way', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-default-document-fragment-' ) );
+		dirs.push( outputDir );
+		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
+		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
+		writeFileSync( join( outputDir, 'html', 'homepage.html' ), '<h1>Home</h1>' );
+		writeFileSync( join( outputDir, 'html', 'homepage-index.html' ), '<h1>Home</h1>' );
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( {
+				version: 1,
+				entries: {
+					'https://example.com/#top': { html: 'html/homepage.html' },
+					'https://example.com/index.html': { html: 'html/homepage-index.html' },
+				},
+			} )
+		);
+
+		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( {
+			outputDir,
+			sourceUrl: 'https://example.com/#top',
+			platform: 'generic',
+			summary: {},
+			failures: [],
+		} ), 'utf8' ) );
+
+		expect( receipt.routes ).toEqual( [
+			{ url: 'https://example.com/#top', path: 'website/index.html' },
+		] );
+		expect( receipt.duplicateRoutes ).toEqual( [ {
+			url: 'https://example.com/index.html',
+			canonicalUrl: 'https://example.com/#top',
+			path: 'website/index.html',
+		} ] );
+	} );
+
+	it( 'keeps a query-bearing entry URL and its default-document capture distinct when their content differs', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-default-document-query-distinct-' ) );
+		dirs.push( outputDir );
+		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
+		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
+		writeFileSync( join( outputDir, 'html', 'homepage.html' ), '<h1>Home</h1>' );
+		writeFileSync( join( outputDir, 'html', 'homepage-index.html' ), '<h1>A different default document</h1>' );
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( {
+				version: 1,
+				entries: {
+					'https://example.com/?token=abc': { html: 'html/homepage.html' },
+					'https://example.com/index.html': { html: 'html/homepage-index.html' },
+				},
+			} )
+		);
+
+		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( {
+			outputDir,
+			sourceUrl: 'https://example.com/?token=abc',
+			platform: 'generic',
+			summary: {},
+			failures: [],
+		} ), 'utf8' ) );
+
+		expect( receipt.duplicateRoutes ).toEqual( [] );
+		expect(
+			Object.fromEntries( receipt.routes.map( ( route: { url: string; path: string } ) => [ route.url, route.path ] ) )
+		).toEqual( {
+			'https://example.com/?token=abc': 'website/index.html',
+			'https://example.com/index.html': 'website/index-2.html',
+		} );
+		expect( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) ).toContain( 'Home' );
+		expect( readFileSync( join( outputDir, 'website', 'index-2.html' ), 'utf8' ) ).toContain(
+			'A different default document'
+		);
+	} );
+
 	it( 'rewrites a literal canonical link that names a captured route to its local path', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-capture-export-' ) );
 		dirs.push( outputDir );
