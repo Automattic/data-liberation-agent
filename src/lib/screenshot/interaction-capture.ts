@@ -86,6 +86,13 @@ export interface CapturedDialogInteraction {
 			htmlBytes: number;
 			htmlTruncated: boolean;
 		};
+		/** Replay is emitted only when bounded histories show activation-determined transitions. */
+		replay: 'activation-determined' | 'unsupported';
+		replayReason?: string;
+		/** Whether source actions restored the live group without replacing its nodes. */
+		restoration: 'verified' | 'unverified';
+		/** Partial drives are evidence only and cannot be replayed as complete groups. */
+		coverage: 'complete' | 'partial';
 	};
 	error?: string;
 }

@@ -50,6 +50,10 @@ interface RawSelectableRecord {
 			value: string | null;
 		} >;
 		transition: { selectedIndex: number; selected: Array< boolean | null >; html: string };
+		replay: 'activation-determined' | 'unsupported';
+		replayReason?: string;
+		restoration: 'verified' | 'unverified';
+		coverage: 'complete' | 'partial';
 	};
 	error?: string;
 }
@@ -515,7 +519,7 @@ export async function captureSelectableSetStates(
 					}
 					return clone.outerHTML;
 				};
-
+				/* source actions restore choice groups below; cloned markup cannot restore listeners or closure state */
 				const records: RawSelectableRecord[] = [];
 				const deadline = Date.now() + limits.maxDriveMs;
 				const groups = findGroups( collectSelectables() );
@@ -553,17 +557,70 @@ export async function captureSelectableSetStates(
 					const initialFp = candidates.map( fingerprint );
 					const initialText = candidates.map( textOf );
 					const initialHtml = candidates.map( ( candidate ) => candidate.innerHTML );
-					const initialGroupInnerHtml = group.root.innerHTML;
-					const initialGroupAttributes = new Map(
-						Array.from( group.root.attributes ).map( ( attribute ) => [ attribute.name, attribute.value ] )
-					);
+					const toggleGroup = group.members.every( ( member ) => member.hasAttribute( 'aria-pressed' ) );
 					const initialGroupHtml = snapshotChoiceGroup( group.root, group.members );
-					const observations: Array< { fps: string[]; texts: string[]; groupHtml: string } > = [];
+					const initialSelected = group.members.map( observedSelection );
+					const observations: Array< {
+						fps: string[];
+						texts: string[];
+						groupHtml: string;
+						selected: Array< boolean | null >;
+					} > = [];
 					let navigated = false;
 					let discoveryError: { index: number; error: string } | undefined;
+					let restorationError: string | undefined;
+					let restorationIndex: number | undefined;
+					const restoreChoiceGroup = async (): Promise< boolean > => {
+						const sameChoiceState = ( actual: string, expected: string ) => {
+							const normalize = ( html: string ) =>
+								html.replace( / style="([^"]*)"/g, ( _, value: string ) =>
+									` style="${ value.replace( /\s*([:;,])\s*/g, '$1' ).replace( /;$/, '' ) }"`
+								);
+							return normalize( actual ) === normalize( expected );
+						};
+						if ( sameChoiceState( snapshotChoiceGroup( group.root, group.members ), initialGroupHtml ) ) return true;
+						const restoreLimit = Math.min( group.members.length, limits.maxMembers );
+						if ( toggleGroup ) {
+							for ( let pass = 0; pass < 2; pass++ ) {
+								for ( let index = 0; index < restoreLimit; index++ ) {
+									if ( observedSelection( group.members[ index ]! ) === initialSelected[ index ] ) continue;
+									const result = await activate( group.members[ index ]! );
+									if ( ! result.ok && result.navigated ) navigated = true;
+								}
+								if ( sameChoiceState( snapshotChoiceGroup( group.root, group.members ), initialGroupHtml ) ) return true;
+							}
+						}
+						if ( restorationIndex !== undefined && restorationIndex < restoreLimit ) {
+							const result = await activate( group.members[ restorationIndex ]! );
+							if ( result.ok && sameChoiceState( snapshotChoiceGroup( group.root, group.members ), initialGroupHtml ) ) return true;
+							if ( ! result.ok && result.navigated ) navigated = true;
+							restorationIndex = undefined;
+						}
+						for ( let index = 0; index < restoreLimit && Date.now() < deadline; index++ ) {
+							const result = await activate( group.members[ index ]! );
+							if ( ! result.ok ) {
+								restorationError = result.error;
+								if ( result.navigated ) navigated = true;
+								continue;
+							}
+							if ( sameChoiceState( snapshotChoiceGroup( group.root, group.members ), initialGroupHtml ) ) {
+								restorationIndex = index;
+								return true;
+							}
+						}
+						restorationError ??= 'source actions did not restore the initial choice state';
+						return false;
+					};
 
 					const probeLimit = Math.min( group.members.length, 4 );
 					for ( let index = 0; index < probeLimit && Date.now() < deadline; index++ ) {
+						if ( ! ( await restoreChoiceGroup() ) ) {
+							discoveryError ??= {
+								index,
+								error: restorationError ?? 'source actions did not restore the initial choice state',
+							};
+							break;
+						}
 						const result = await activate( group.members[ index ] );
 						if ( ! result.ok ) {
 							discoveryError ??= { index, error: result.error };
@@ -577,6 +634,7 @@ export async function captureSelectableSetStates(
 							fps: candidates.map( fingerprint ),
 							texts: candidates.map( textOf ),
 							groupHtml: snapshotChoiceGroup( group.root, group.members ),
+							selected: group.members.map( observedSelection ),
 						} );
 					}
 
@@ -603,43 +661,115 @@ export async function captureSelectableSetStates(
 						continue;
 					}
 					const choiceGroupChanged = observations.some( ( observation ) => observation.groupHtml !== initialGroupHtml );
-					if ( regionIdx < 0 ) {
-						if ( choiceGroupChanged ) {
-							const choiceMetadata = association( group.root, group.members );
-							const drivenCount = Math.min( group.members.length, limits.maxMembers );
-							for ( let index = 0; index < drivenCount && Date.now() < deadline; index++ ) {
-								const before = snapshotChoiceGroup( group.root, group.members );
-								const result = await activate( group.members[ index ] );
-								if ( ! result.ok ) {
-									pushOutcome( 'click-failed', index, { error: result.error } );
-									if ( result.navigated ) navigated = true;
-									continue;
-								}
-								const after = snapshotChoiceGroup( group.root, group.members );
-								if ( after === before ) {
-									pushOutcome( 'no-dialog', index, { error: 'choice did not change the group' } );
-									continue;
-								}
-								pushOutcome( 'captured', index, {
-									choiceGroup: {
-										...choiceMetadata,
-										transition: {
-											selectedIndex: index,
-											selected: group.members.map( observedSelection ),
-											html: snapshotChoiceGroup( group.root, group.members ),
-										},
+					const choiceMetadata = choiceGroupChanged ? association( group.root, group.members ) : undefined;
+					const sameMemberParent = group.members.every(
+						( member ) => member.parentElement === group.members[ 0 ]?.parentElement
+					);
+					const shouldCaptureChoice = Boolean(
+						choiceGroupChanged &&
+						sameMemberParent &&
+						( regionIdx < 0 || toggleGroup || choiceMetadata?.group.label )
+					);
+					if ( shouldCaptureChoice ) {
+						const drivenCount = Math.min( group.members.length, limits.maxMembers );
+						const choiceRecordStart = records.length;
+						let replay: 'activation-determined' | 'unsupported' = 'activation-determined';
+						let replayReason: string | undefined;
+						const transitions = new Map< number, string >();
+						const capturedIndexes = new Set< number >();
+						for ( let index = 0; index < Math.min( observations.length, drivenCount ); index++ ) {
+							const observation = observations[ index ]!;
+							transitions.set( index, observation.groupHtml );
+							capturedIndexes.add( index );
+							pushOutcome( 'captured', index, {
+								choiceGroup: {
+									...choiceMetadata!,
+									transition: {
+										selectedIndex: index,
+										selected: observation.selected,
+										html: observation.groupHtml,
 									},
-								} );
-							}
-							for ( const attribute of Array.from( group.root.attributes ) ) {
-								if ( ! initialGroupAttributes.has( attribute.name ) ) group.root.removeAttribute( attribute.name );
-							}
-							for ( const [ name, value ] of initialGroupAttributes ) group.root.setAttribute( name, value );
-							group.root.innerHTML = initialGroupInnerHtml;
-							group.root.removeAttribute( 'data-lib-selectable-region' );
-							capturedSets++;
-							continue;
+									replay: 'activation-determined',
+									restoration: 'unverified',
+									coverage: 'partial',
+								},
+							} );
 						}
+						for ( let index = observations.length; index < drivenCount && Date.now() < deadline; index++ ) {
+							if ( ! ( await restoreChoiceGroup() ) ) {
+								replay = 'unsupported';
+								replayReason ??= restorationError ?? 'source actions did not restore the initial choice state';
+								break;
+							}
+							const result = await activate( group.members[ index ] );
+							if ( ! result.ok ) {
+								pushOutcome( 'click-failed', index, { error: result.error } );
+								if ( result.navigated ) navigated = true;
+								continue;
+							}
+							const after = snapshotChoiceGroup( group.root, group.members );
+							const selected = group.members.map( observedSelection );
+							const transition = { selectedIndex: index, selected, html: after };
+							transitions.set( index, after );
+							capturedIndexes.add( index );
+							pushOutcome( 'captured', index, {
+								choiceGroup: {
+									...choiceMetadata!,
+									transition,
+									replay: 'activation-determined',
+									restoration: 'unverified',
+									coverage: 'partial',
+								},
+							} );
+						}
+						const verifyHistory = async ( history: number[], name: string ): Promise< void > => {
+							if ( replay === 'unsupported' ) return;
+							if ( ! ( await restoreChoiceGroup() ) ) {
+								replay = 'unsupported';
+								replayReason ??= restorationError ?? 'source actions did not restore the initial choice state';
+								return;
+							}
+							for ( const index of history ) {
+								const result = await activate( group.members[ index ]! );
+								if ( ! result.ok ) {
+									replay = 'unsupported';
+									replayReason ??= `${ name} activation failed: ${ result.error }`;
+									return;
+								}
+								if ( snapshotChoiceGroup( group.root, group.members ) !== transitions.get( index ) ) {
+									replay = 'unsupported';
+									replayReason ??= `${ name} activation was history-dependent`;
+									return;
+								}
+							}
+						};
+						if ( capturedIndexes.size !== group.members.length ) {
+							replay = 'unsupported';
+							replayReason ??= 'choice group drive was truncated';
+						}
+						if ( replay === 'activation-determined' && capturedIndexes.size === group.members.length ) {
+							await verifyHistory( [ 0, 0 ], 'repeated' );
+							await verifyHistory( group.members.length > 1 ? [ 0, 1, 0 ] : [ 0, 0 ], 'alternate' );
+						}
+						const restored = await restoreChoiceGroup();
+						const coverage = capturedIndexes.size === group.members.length ? 'complete' : 'partial';
+						if ( records.length === choiceRecordStart ) {
+							pushOutcome( 'click-failed', 0, {
+								error: replayReason ?? 'choice group could not be restored for capture',
+							} );
+						}
+						for ( const record of records.slice( choiceRecordStart ) ) {
+							if ( ! record.choiceGroup ) continue;
+							record.choiceGroup.replay = replay;
+							record.choiceGroup.replayReason = replayReason;
+							record.choiceGroup.restoration = restored ? 'verified' : 'unverified';
+							record.choiceGroup.coverage = coverage;
+						}
+						group.root.removeAttribute( 'data-lib-selectable-region' );
+						capturedSets++;
+						continue;
+					}
+					if ( regionIdx < 0 ) {
 						if ( discoveryError && observations.length === 0 ) {
 							pushOutcome( 'click-failed', discoveryError.index, { error: discoveryError.error } );
 						} else {
@@ -775,6 +905,12 @@ function toInteraction(
 							htmlBytes: boundedChoice.bytes,
 							htmlTruncated: boundedChoice.truncated,
 						},
+						replay: record.choiceGroup.replay,
+						...( record.choiceGroup.replayReason
+							? { replayReason: record.choiceGroup.replayReason }
+							: {} ),
+						restoration: record.choiceGroup.restoration,
+						coverage: record.choiceGroup.coverage,
 					},
 			  }
 			: {} ),

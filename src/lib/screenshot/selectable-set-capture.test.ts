@@ -159,6 +159,42 @@ const ICON_CHOICE_PAGE = `<!doctype html><html><body>
 	</script>
 </body></html>`;
 
+const INDEPENDENT_TOGGLE_PAGE = `<!doctype html><html><body>
+	<div id="toggles" role="group" aria-label="Formatting">
+		<button type="button" aria-label="Bold" aria-pressed="false" style="width:48px;height:48px"><svg width="20" height="20"><rect width="20" height="20"/></svg></button>
+		<button type="button" aria-label="Italic" aria-pressed="false" style="width:48px;height:48px"><svg width="20" height="20"><circle cx="10" cy="10" r="9"/></svg></button>
+		<button type="button" aria-label="Underline" aria-pressed="false" style="width:48px;height:48px"><svg width="20" height="20"><path d="M0 10H20"/></svg></button>
+	</div>
+	<script>document.querySelectorAll('#toggles button').forEach((button) => button.addEventListener('click', () => button.setAttribute('aria-pressed', button.getAttribute('aria-pressed') === 'true' ? 'false' : 'true')));</script>
+</body></html>`;
+
+const HISTORY_DEPENDENT_PAGE = `<!doctype html><html><body>
+	<div id="history" role="group" aria-label="History">
+		<button type="button" aria-label="First" style="width:48px;height:48px">First</button>
+		<button type="button" aria-label="Second" style="width:48px;height:48px">Second</button>
+		<button type="button" aria-label="Third" style="width:48px;height:48px">Third</button>
+	</div>
+	<script>document.querySelectorAll('#history button').forEach((button) => button.addEventListener('click', () => button.dataset.count = String(Number(button.dataset.count || 0) + 1)));</script>
+</body></html>`;
+
+const CLOSURE_ABSOLUTE_PAGE = `<!doctype html><html><body>
+	<div id="absolute" role="group" aria-label="Absolute choice" data-state="0">
+		<button type="button" aria-label="One"><svg><rect data-choice="0"></rect></svg></button>
+		<button type="button" aria-label="Two"><svg><rect data-choice="1"></rect></svg></button>
+		<button type="button" aria-label="Three"><svg><rect data-choice="2"></rect></svg></button>
+	</div>
+	<script>
+		window.choiceState = 0;
+		const root = document.getElementById('absolute');
+		const render = () => {
+			root.dataset.state = String(window.choiceState);
+			root.querySelectorAll('rect').forEach((rect, index) => { rect.setAttribute('fill', index === window.choiceState ? 'gold' : 'none'); });
+		};
+		root.querySelectorAll('button').forEach((button, index) => button.addEventListener('click', () => { window.choiceState = index; render(); }));
+		render();
+	</script>
+</body></html>`;
+
 describe( 'captureSelectableSetStates', () => {
 	let browser: Browser;
 
@@ -593,9 +629,83 @@ describe( 'captureSelectableSetStates', () => {
 				expect( states[ 0 ].choiceGroup?.transition.html ).toContain( 'fill: none' );
 				expect( states[ 1 ].choiceGroup?.transition.html ).toContain( 'data-star="1"' );
 				expect( await page.evaluate( () => ( window as typeof window & { submits: number } ).submits ) ).toBe( 0 );
-				expect( await page.locator( '#rating-choices svg' ).evaluateAll( ( svgs ) => svgs.map( ( svg ) => svg.getAttribute( 'style' ) ) ) ).toEqual(
-					[ 'fill:rgb(251, 191, 36)', 'fill:rgb(251, 191, 36)', 'fill:rgb(251, 191, 36)', 'fill:rgb(251, 191, 36)', 'fill:rgb(251, 191, 36)' ]
+				expect( await page.locator( '#rating-choices svg' ).evaluateAll( ( svgs ) => svgs.map( ( svg ) => svg.style.fill ) ) ).toEqual(
+					[ 'rgb(251, 191, 36)', 'rgb(251, 191, 36)', 'rgb(251, 191, 36)', 'rgb(251, 191, 36)', 'rgb(251, 191, 36)' ]
 				);
+				await page.locator( '#rating-choices button' ).first().click();
+				expect( await page.locator( '#rating-choices svg' ).evaluateAll( ( svgs ) => svgs.map( ( svg ) => svg.style.fill ) ) ).toEqual(
+					[ 'rgb(251, 191, 36)', 'none', 'none', 'none', 'none' ]
+				);
+			} finally {
+				await page.close();
+			}
+		},
+		30_000
+	);
+
+	it.skipIf( skipBrowser )(
+		'keeps independent toggles explicit and restores them through source actions',
+		async () => {
+			const page = await browser.newPage( { viewport: { width: 1200, height: 800 } } );
+			try {
+				await page.setContent( INDEPENDENT_TOGGLE_PAGE );
+				const states = await captureSelectableSetStates( page, { settleMs: 20, maxDriveMs: 3_000 } );
+				expect( states ).toHaveLength( 3 );
+				expect( states.every( ( state ) => state.kind === 'choice-group' && state.choiceGroup?.replay === 'unsupported' ) ).toBe( true );
+				expect( states.every( ( state ) => state.choiceGroup?.restoration === 'verified' ) ).toBe( true );
+				expect( states.every( ( state ) => state.choiceGroup?.coverage === 'complete' ) ).toBe( true );
+				expect( states.map( ( state ) => state.choiceGroup?.transition.selected ) ).toEqual( [
+					[ true, false, false ],
+					[ false, true, false ],
+					[ false, false, true ],
+				] );
+				await page.locator( '#toggles button' ).first().click();
+				expect( await page.locator( '#toggles button' ).evaluateAll( ( buttons ) => buttons.map( ( button ) => button.getAttribute( 'aria-pressed' ) ) ) ).toEqual( [ 'true', 'false', 'false' ] );
+			} finally {
+				await page.close();
+			}
+		},
+		30_000
+	);
+
+	it.skipIf( skipBrowser )(
+		'restores closure-backed activation-determined choices through the source lifecycle',
+		async () => {
+			const page = await browser.newPage( { viewport: { width: 1200, height: 800 } } );
+			try {
+				await page.setContent( CLOSURE_ABSOLUTE_PAGE );
+				const states = await captureSelectableSetStates( page, { settleMs: 20, maxDriveMs: 3_000 } );
+				expect( states ).toHaveLength( 3 );
+				expect( states.every( ( state ) => state.choiceGroup?.replay === 'activation-determined' ) ).toBe( true );
+				expect( states.every( ( state ) => state.choiceGroup?.restoration === 'verified' ) ).toBe( true );
+				expect( states.every( ( state ) => state.choiceGroup?.coverage === 'complete' ) ).toBe( true );
+				expect( await page.evaluate( () => ( window as typeof window & { choiceState: number } ).choiceState ) ).toBe( 0 );
+				await page.locator( '#absolute button' ).nth( 2 ).click();
+				expect( await page.evaluate( () => ( window as typeof window & { choiceState: number } ).choiceState ) ).toBe( 2 );
+			} finally {
+				await page.close();
+			}
+		},
+		30_000
+	);
+
+	it.skipIf( skipBrowser )(
+		'rejects replay for a history-dependent group instead of exporting a wrong transition',
+		async () => {
+			const page = await browser.newPage( { viewport: { width: 1200, height: 800 } } );
+			try {
+				await page.setContent( HISTORY_DEPENDENT_PAGE );
+				const states = await captureSelectableSetStates( page, { settleMs: 20, maxDriveMs: 3_000 } );
+				expect( states ).toHaveLength( 1 );
+				expect( states[ 0 ] ).toMatchObject( {
+					status: 'captured',
+					kind: 'choice-group',
+					choiceGroup: {
+						replay: 'unsupported',
+						restoration: 'unverified',
+						coverage: 'partial',
+					},
+				} );
 			} finally {
 				await page.close();
 			}

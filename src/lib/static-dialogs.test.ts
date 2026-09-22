@@ -276,6 +276,9 @@ describe( 'wireCapturedDialogs', () => {
 					htmlBytes: choice( index, index ).length,
 					htmlTruncated: false,
 				},
+				replay: 'activation-determined',
+				restoration: 'verified',
+				coverage: 'complete',
 			},
 		} ) );
 		const html = wireCapturedDialogs(
@@ -299,6 +302,25 @@ describe( 'wireCapturedDialogs', () => {
 		} finally {
 			await browser.close();
 		}
+	}, 30_000 );
+
+	it( 'does not wire a choice group whose repeated activation is history-dependent', () => {
+		const input = '<html><head></head><body><div id="history"><button>A</button><button>B</button></div></body></html>';
+		const state: CapturedDialogInteraction = {
+			status: 'captured',
+			kind: 'choice-group',
+			trigger: { selector: '#history button', tag: 'button', ariaHaspopup: '', dataBindings: {} },
+			choiceGroup: {
+				group: { selector: '#history', tag: 'div', id: 'history' },
+				choices: [ 0, 1 ].map( ( index ) => ( { index, selector: `#history button:nth-of-type(${ index + 1 })`, tag: 'button', value: null } ) ),
+				transition: { selectedIndex: 0, selected: [ null, null ], html: '<div id="history"><button data-dla-choice-index="0">A</button><button data-dla-choice-index="1">B</button></div>', htmlBytes: 115, htmlTruncated: false },
+				replay: 'unsupported',
+				replayReason: 'repeated activation was history-dependent',
+				restoration: 'verified',
+				coverage: 'complete',
+			},
+		};
+		expect( wireCapturedDialogs( input, [ state ] ) ).toBe( input );
 	} );
 
 	it( 'wires a listbox popup onto every matching country-code trigger', () => {

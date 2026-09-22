@@ -76,6 +76,9 @@ export function wireCapturedDialogs(
 			state.status === 'captured' &&
 			state.kind === 'choice-group' &&
 			state.choiceGroup &&
+			state.choiceGroup.replay === 'activation-determined' &&
+			state.choiceGroup.restoration === 'verified' &&
+			state.choiceGroup.coverage === 'complete' &&
 			! state.choiceGroup.transition.htmlTruncated
 	);
 	if ( captured.length === 0 && choiceStates.length === 0 && initialDialogs.length === 0 ) return html;
