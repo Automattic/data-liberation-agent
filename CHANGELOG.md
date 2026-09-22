@@ -15,6 +15,14 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.4.18] - 2026-09-22
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- learn a rule per viewport regime when one relationship spans a breakpoint
+
 ## [0.4.17] - 2026-09-22
 
 ### Changed
