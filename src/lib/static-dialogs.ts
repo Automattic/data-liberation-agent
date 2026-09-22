@@ -17,6 +17,7 @@ const DISCLOSURE_CSS =
 	'details.dla-initial-dialog:not([open])>summary{display:none!important}';
 
 const DISCLOSURE_RUNTIME = `(function(){function disclosures(){return document.querySelectorAll('details.dla-disclosure');}function update(details){var summary=details.querySelector(':scope > summary');if(!summary)return;var label=summary.getAttribute('data-dla-disclosure-label');if(label)summary.setAttribute('aria-label',details.open?'Close '+label:label);}function ready(){disclosures().forEach(function(details){update(details);details.addEventListener('toggle',function(){update(details);});});document.addEventListener('keydown',function(event){if(event.key!=='Escape')return;var open=Array.prototype.slice.call(disclosures()).filter(function(details){return details.open;}).pop();if(!open)return;event.preventDefault();open.open=false;var summary=open.querySelector(':scope > summary');if(summary)summary.focus();});}if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',ready);else ready();})();`;
+const LISTBOX_RUNTIME = `(function(){function all(selector,root){return Array.prototype.slice.call((root||document).querySelectorAll(selector));}function panel(trigger){var key=trigger.getAttribute('data-dla-listbox-trigger');return key===null?null:document.querySelector('[data-dla-listbox-panel="'+key+'"]');}function options(surface){return surface?all('[role="option"]',surface):[];}function close(trigger){var surface=panel(trigger);if(!surface)return;surface.hidden=true;trigger.setAttribute('aria-expanded','false');}function open(trigger){var surface=panel(trigger);if(!surface)return;surface.hidden=false;trigger.setAttribute('aria-expanded','true');}function select(trigger,option){var surface=panel(trigger);if(!surface)return;options(surface).forEach(function(item){item.setAttribute('aria-selected',item===option?'true':'false');});var label=option.getAttribute('aria-label')||option.textContent||'';trigger.textContent=label.trim();if(option.id)trigger.setAttribute('aria-activedescendant',option.id);close(trigger);trigger.focus();}function move(trigger,option,delta){var surface=panel(trigger),items=options(surface);if(!surface||!items.length)return;var index=items.indexOf(option);var next=items[Math.max(0,Math.min(items.length-1,index+delta))]||items[0];items.forEach(function(item){item.tabIndex=item===next?0:-1;});next.focus();}function ready(){all('[data-dla-listbox-trigger]').forEach(function(trigger){var surface=panel(trigger);if(!surface)return;trigger.setAttribute('type','button');options(surface).forEach(function(option){option.tabIndex=-1;option.addEventListener('click',function(){select(trigger,option);});option.addEventListener('keydown',function(event){if(event.key==='Escape'){event.preventDefault();close(trigger);trigger.focus();}else if(event.key==='ArrowDown'){event.preventDefault();move(trigger,option,1);}else if(event.key==='ArrowUp'){event.preventDefault();move(trigger,option,-1);}else if(event.key==='Enter'||event.key===' '){event.preventDefault();select(trigger,option);}});});trigger.addEventListener('click',function(){if(trigger.getAttribute('aria-expanded')==='true')close(trigger);else open(trigger);});trigger.addEventListener('keydown',function(event){if(event.key==='Escape'){if(trigger.getAttribute('aria-expanded')==='true'){event.preventDefault();close(trigger);}return;}if(event.key==='ArrowDown'||event.key==='ArrowUp'){event.preventDefault();open(trigger);move(trigger,options(panel(trigger))[0],event.key==='ArrowDown'?1:-1);}else if(event.key==='Enter'||event.key===' '){event.preventDefault();if(trigger.getAttribute('aria-expanded')!=='true')open(trigger);}});});}if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',ready);else ready();})();`;
 
 const GLOBAL_ATTRIBUTES = new Set( [
 	'accesskey',
@@ -71,12 +72,21 @@ export function wireCapturedDialogs(
 	if ( captured.length === 0 && initialDialogs.length === 0 ) return html;
 	const $ = cheerio.load( html );
 	let wired = 0;
+	let listboxes = 0;
 	for ( const state of captured ) {
 		removeCapturedDialog( $, state.dialog?.selector );
 		const triggers = findTriggers( $, state.trigger );
 		triggers.each( ( _, element ) => {
 			const trigger = $( element );
-			if ( trigger.closest( 'details.dla-disclosure' ).length ) return;
+			if ( trigger.closest( 'details.dla-disclosure' ).length || trigger.attr( 'data-dla-listbox-trigger' ) ) return;
+			if ( state.dialog?.role?.toLowerCase() === 'listbox' || state.trigger.ariaHaspopup.toLowerCase() === 'listbox' ) {
+				const key = String( listboxes++ );
+				const panel = $( '<div hidden></div>' );
+				panel.attr( 'data-dla-listbox-panel', key ).html( state.dialog!.html );
+				trigger.attr( 'data-dla-listbox-trigger', key ).attr( 'type', 'button' ).after( panel );
+				trigger.attr( 'aria-expanded', 'false' );
+				return;
+			}
 			const summary = $( '<summary></summary>' );
 			const label = trigger.attr( 'aria-label' ) || normalizedText( trigger.text() );
 			const attrs = trigger.attr() ?? {};
@@ -100,6 +110,8 @@ export function wireCapturedDialogs(
 			wired++;
 		} );
 	}
+	if ( listboxes > 0 && $( 'script[data-dla-listbox-runtime]' ).length === 0 )
+		$( 'head' ).append( `<script data-dla-listbox-runtime="true">${ LISTBOX_RUNTIME }</script>` );
 	for ( const state of initialDialogs ) {
 		if ( state.status !== 'captured' || !state.dismissal?.verified || state.dialog.htmlTruncated ) continue;
 		const panel = $( '<div class="dla-dialog" role="dialog" aria-modal="true"></div>' );
