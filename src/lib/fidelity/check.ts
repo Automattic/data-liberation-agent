@@ -10,6 +10,7 @@ import type { Page } from 'playwright';
 import { sourceContextOptions } from '../browser-kit/browser-kit.js';
 import { startStaticServer } from '../replicate/local-site/static-server.js';
 import { DEFAULT_SWEEP_WIDTHS } from '../screenshot/fluid-capture.js';
+import { triggerLazyLoad, waitForStable } from '../screenshot/page-helpers.js';
 import { applySourceCleanup, readSourceCleanup, validateCleanupPolicy, type CleanupPolicy, type CleanupReport } from '../source-cleanup.js';
 import { runFidelityChecks } from './checks.js';
 import { writePixelEvidence } from './evidence.js';
@@ -226,11 +227,15 @@ async function observePage(
 	page.on( 'request', onRequest );
 	try {
 		await page.goto( url, { waitUntil: 'domcontentloaded', timeout: 60_000 } ).catch( () => {} );
-		await page.waitForTimeout( settleMs );
+		await waitForStable( page, settleMs );
 		if (cleanup) {
 			const report = await applySourceCleanup(page, cleanup);
 			if (localOrigin && report.removed) throw new Error('Liberated artifact retains advertising or source attribution');
 		}
+		// Decode lazy media and return from a controlled scroll before measuring.
+		// Scroll-linked animations are otherwise observed mid-flight, while the
+		// source runtime may still be holding the same element at rest.
+		await triggerLazyLoad( page );
 		const measured = await page.evaluate( async ( clickUnresolved: boolean ) => {
 			// Images that occupy real layout space at this viewport: wider and
 			// taller than 50px (the same floor as widestImage) and not
