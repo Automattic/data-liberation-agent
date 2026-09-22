@@ -1105,6 +1105,17 @@ function cssReferenceReason( css: string ): StyleHoistReason | undefined {
 	if ( ! foundUrl && /url\s*\(/i.test( css ) ) return 'invalid_css_url';
 }
 
+function hasEffectiveBase( html: string ): boolean {
+	for ( const match of html.matchAll( /<base\b[^>]*>/gi ) ) {
+		const attributes = /\s+([^\s=/>]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]*)))?/g;
+		let attribute: RegExpExecArray | null;
+		while ( ( attribute = attributes.exec( match[ 0 ] ) ) !== null ) {
+			if ( attribute[ 1 ].toLowerCase() === 'href' && ( attribute[ 2 ] ?? attribute[ 3 ] ?? attribute[ 4 ] ?? '' ).trim() !== '' ) return true;
+		}
+	}
+	return false;
+}
+
 function capturedStyleHoistContext( html: string ): StyleHoistContext {
 	const styleReasons: Array< StyleHoistReason | undefined > = [];
 	for ( const match of html.matchAll( /<style\b[^>]*>([\s\S]*?)<\/style\s*>/gi ) )
@@ -1112,7 +1123,7 @@ function capturedStyleHoistContext( html: string ): StyleHoistContext {
 	return {
 		// These deliberately broad scans only disable hoisting. Avoid building a second
 		// DOM for every captured document, which exceeds the constrained export heap.
-		hasBase: /<base\b/i.test( html ),
+		hasBase: hasEffectiveBase( html ),
 		hasContentSecurityPolicy:
 			/<meta\b(?=[^>]*\bhttp-equiv\b)[^>]*\bcontent-security-policy\b/i.test( html ),
 		styleReasons,
