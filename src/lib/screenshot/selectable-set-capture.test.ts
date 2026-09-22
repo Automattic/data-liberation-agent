@@ -141,6 +141,24 @@ const LABEL_FILTER_PAGE = `<!doctype html><html><body>
 	</script>
 </body></html>`;
 
+const ICON_CHOICE_PAGE = `<!doctype html><html><body>
+	<form id="feedback">
+		<div id="rating-field">
+			<label id="rating-label">Rating</label>
+			<div id="rating-choices">
+				${ [ 0, 1, 2, 3, 4 ].map( ( index ) => `<button type="button"><svg data-star="${ index }" style="fill:rgb(251, 191, 36)"></svg></button>` ).join( '' ) }
+			</div>
+		</div>
+	</form>
+	<script>
+		window.submits = 0;
+		document.getElementById('feedback').addEventListener('submit', (event) => { event.preventDefault(); window.submits++; });
+		document.querySelectorAll('#rating-choices button').forEach((button, index) => button.addEventListener('click', () => {
+			document.querySelectorAll('#rating-choices svg').forEach((star, starIndex) => { star.style.fill = starIndex <= index ? 'rgb(251, 191, 36)' : 'none'; });
+		}));
+	</script>
+</body></html>`;
+
 describe( 'captureSelectableSetStates', () => {
 	let browser: Browser;
 
@@ -551,6 +569,33 @@ describe( 'captureSelectableSetStates', () => {
 				expect( states[ 1 ].dialog?.html ).not.toContain( 'Indica Wedding' );
 				expect( states[ 2 ].dialog?.html ).toContain( 'Indica Wedding' );
 				expect( states[ 2 ].dialog?.html ).not.toContain( 'Sativa Orangutan' );
+			} finally {
+				await page.close();
+			}
+		},
+		30_000
+	);
+
+	it.skipIf( skipBrowser )(
+		'captures icon-only choice transitions that mutate styles inside their labeled group',
+		async () => {
+			const page = await browser.newPage( { viewport: { width: 1200, height: 800 } } );
+			try {
+				await page.setContent( ICON_CHOICE_PAGE );
+				const states = await captureSelectableSetStates( page );
+				expect( states ).toHaveLength( 5 );
+				expect( states.every( ( state ) => state.kind === 'choice-group' && state.status === 'captured' ) ).toBe( true );
+				expect( states.map( ( state ) => state.choiceGroup?.transition.selectedIndex ) ).toEqual( [ 0, 1, 2, 3, 4 ] );
+				expect( states[ 0 ].choiceGroup ).toMatchObject( {
+					group: { id: 'rating-choices', label: 'Rating', labelSelector: '#rating-label', formSelector: '#feedback' },
+					choices: [ { index: 0, value: null }, { index: 1, value: null }, { index: 2, value: null }, { index: 3, value: null }, { index: 4, value: null } ],
+				} );
+				expect( states[ 0 ].choiceGroup?.transition.html ).toContain( 'fill: none' );
+				expect( states[ 1 ].choiceGroup?.transition.html ).toContain( 'data-star="1"' );
+				expect( await page.evaluate( () => ( window as typeof window & { submits: number } ).submits ) ).toBe( 0 );
+				expect( await page.locator( '#rating-choices svg' ).evaluateAll( ( svgs ) => svgs.map( ( svg ) => svg.getAttribute( 'style' ) ) ) ).toEqual(
+					[ 'fill:rgb(251, 191, 36)', 'fill:rgb(251, 191, 36)', 'fill:rgb(251, 191, 36)', 'fill:rgb(251, 191, 36)', 'fill:rgb(251, 191, 36)' ]
+				);
 			} finally {
 				await page.close();
 			}

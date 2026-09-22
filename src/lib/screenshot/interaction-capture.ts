@@ -19,11 +19,12 @@ export interface CapturedDialogInteraction {
 	 * Distinguishes an in-page disclosure/accordion panel (content restored in
 	 * place, before HTML serialization — see `hydrateDisclosureContent`) from a
 	 * runtime-created popup/menu dialog (wired post-hoc by `wireCapturedDialogs`
-	 * into a synthetic `<details>` overlay) and from a selectable set whose
-	 * members drive one shared region (`selectable-set`). Omitted/`'dialog'`
+	 * into a synthetic `<details>` overlay), from a selectable set whose
+	 * members drive one shared region (`selectable-set`), and from a choice group
+	 * whose members change their own attributes or styles (`choice-group`). Omitted/`'dialog'`
 	 * preserves the pre-existing shape for callers that predate this field.
 	 */
-	kind?: 'dialog' | 'disclosure' | 'selectable-set';
+	kind?: 'dialog' | 'disclosure' | 'selectable-set' | 'choice-group';
 	trigger: {
 		selector: string;
 		tag: string;
@@ -54,6 +55,37 @@ export interface CapturedDialogInteraction {
 		selector: string;
 		size: number;
 		index: number;
+	};
+	/**
+	 * Present on captured `kind: 'choice-group'` states. This is observed
+	 * evidence, not a guessed form-value model: absent source values and
+	 * selection semantics are represented as `null`.
+	 */
+	choiceGroup?: {
+		group: {
+			selector: string;
+			tag: string;
+			id?: string;
+			label?: string;
+			labelSelector?: string;
+			formSelector?: string;
+		};
+		choices: Array< {
+			index: number;
+			selector: string;
+			tag: string;
+			id?: string;
+			role?: string;
+			label?: string;
+			value: string | null;
+		} >;
+		transition: {
+			selectedIndex: number;
+			selected: Array< boolean | null >;
+			html: string;
+			htmlBytes: number;
+			htmlTruncated: boolean;
+		};
 	};
 	error?: string;
 }

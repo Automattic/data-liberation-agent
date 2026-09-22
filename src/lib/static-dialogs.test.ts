@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { chromium } from 'playwright';
 import { wireCapturedDialogs } from './static-dialogs.js';
 import type { CapturedDialogInteraction } from './screenshot/interaction-capture.js';
 
@@ -237,6 +238,67 @@ describe( 'wireCapturedDialogs', () => {
 		] );
 		expect( html ).toBe( input );
 		expect( html ).not.toContain( 'dla-disclosure' );
+	} );
+
+	it( 'replays observed choice-group transitions offline, including keyboard activation', async () => {
+		const choice = ( index: number, selected: number ) =>
+			`<div id="rating"><label id="rating-label">Rating</label><div class="choices">${ [ 0, 1, 2 ]
+				.map( ( choiceIndex ) => `<button type="button" data-dla-choice-index="${ choiceIndex }"><svg class="${ choiceIndex <= selected ? 'filled' : 'empty' }"></svg></button>` )
+				.join( '' ) }</div></div>`;
+		const states: CapturedDialogInteraction[] = [ 0, 1, 2 ].map( ( index ) => ( {
+			status: 'captured',
+			kind: 'choice-group',
+			trigger: {
+				selector: `#rating button:nth-of-type(${ index + 1 })`,
+				tag: 'button',
+				ariaHaspopup: '',
+				dataBindings: {},
+			},
+			set: { selector: '#choices', size: 3, index },
+			choiceGroup: {
+				group: {
+					selector: '#rating',
+					tag: 'div',
+					id: 'rating',
+					label: 'Rating',
+					labelSelector: '#rating-label',
+				},
+				choices: [ 0, 1, 2 ].map( ( choiceIndex ) => ( {
+					index: choiceIndex,
+					selector: `#rating button:nth-of-type(${ choiceIndex + 1 })`,
+					tag: 'button',
+					value: null,
+				} ) ),
+				transition: {
+					selectedIndex: index,
+					selected: [ null, null, null ],
+					html: choice( index, index ),
+					htmlBytes: choice( index, index ).length,
+					htmlTruncated: false,
+				},
+			},
+		} ) );
+		const html = wireCapturedDialogs(
+			'<html><head></head><body><div id="rating"><label id="rating-label">Rating</label><div class="choices"><button type="button"><svg class="filled"></svg></button><button type="button"><svg class="filled"></svg></button><button type="button"><svg class="filled"></svg></button></div></div></body></html>',
+			states
+		);
+		expect( html ).toContain( 'data-dla-choice-runtime' );
+		expect( html ).toContain( 'data-dla-choice-group="0"' );
+		expect( html ).toContain( 'Rating' );
+
+		const browser = await chromium.launch( { headless: true } );
+		try {
+			const page = await browser.newPage();
+			await page.setContent( html );
+			const buttons = page.locator( '#rating button' );
+			await buttons.nth( 0 ).click();
+			expect( await page.locator( '#rating svg' ).evaluateAll( ( svgs ) => svgs.map( ( svg ) => svg.getAttribute( 'class' ) ) ) ).toEqual( [ 'filled', 'empty', 'empty' ] );
+			await buttons.nth( 2 ).focus();
+			await page.keyboard.press( 'Enter' );
+			expect( await page.locator( '#rating svg' ).evaluateAll( ( svgs ) => svgs.map( ( svg ) => svg.getAttribute( 'class' ) ) ) ).toEqual( [ 'filled', 'filled', 'filled' ] );
+		} finally {
+			await browser.close();
+		}
 	} );
 
 	it( 'wires a listbox popup onto every matching country-code trigger', () => {

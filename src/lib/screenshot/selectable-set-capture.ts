@@ -2,6 +2,7 @@ import type { Page } from 'playwright';
 import type { CapturedDialogInteraction } from './interaction-capture.js';
 
 export const SELECTABLE_SET_KIND = 'selectable-set' as const;
+export const CHOICE_GROUP_KIND = 'choice-group' as const;
 
 export const SELECTABLE_SET_LIMITS = {
 	maxSets: 3,
@@ -30,6 +31,26 @@ interface RawSelectableRecord {
 	trigger: { selector: string; tag: string; id?: string; role?: string; label?: string };
 	region?: { selector: string; tag: string; id?: string; role?: string; html?: string };
 	set: { selector: string; size: number; index: number };
+	choiceGroup?: {
+		group: {
+			selector: string;
+			tag: string;
+			id?: string;
+			label?: string;
+			labelSelector?: string;
+			formSelector?: string;
+		};
+		choices: Array< {
+			index: number;
+			selector: string;
+			tag: string;
+			id?: string;
+			role?: string;
+			label?: string;
+			value: string | null;
+		} >;
+		transition: { selectedIndex: number; selected: Array< boolean | null >; html: string };
+	};
 	error?: string;
 }
 
@@ -424,6 +445,76 @@ export async function captureSelectableSetStates(
 					const unique = members.filter( ( _, index ) => counts.get( classes[ index ] ) === 1 );
 					return unique.length === 1 ? unique[ 0 ] : undefined;
 				};
+				const observedSelection = ( element: Element ): boolean | null => {
+					for ( const attribute of [ 'aria-selected', 'aria-pressed', 'aria-current' ] ) {
+						if ( element.hasAttribute( attribute ) ) return element.getAttribute( attribute ) === 'true';
+					}
+					if ( element instanceof HTMLInputElement && [ 'checkbox', 'radio' ].includes( element.type ) ) {
+						return element.checked;
+					}
+					return null;
+				};
+				const describeChoice = ( element: Element, index: number ) => ( {
+					index,
+					selector: sourceSelector( element ),
+					tag: element.tagName.toLowerCase(),
+					...( element.id ? { id: element.id } : {} ),
+					...( element.getAttribute( 'role' ) ? { role: element.getAttribute( 'role' )! } : {} ),
+					...( ( element.getAttribute( 'aria-label' ) || textOf( element ) ).trim()
+						? { label: ( element.getAttribute( 'aria-label' ) || textOf( element ) ).replace( /\s+/g, ' ' ).trim().slice( 0, 80 ) }
+						: {} ),
+					value: element.hasAttribute( 'value' ) ? element.getAttribute( 'value' ) : null,
+				} );
+				const association = ( root: Element, members: Element[] ) => {
+					let label: Element | null = null;
+					const labelledBy = root.getAttribute( 'aria-labelledby' );
+					if ( labelledBy ) label = document.getElementById( labelledBy.split( /\s+/ )[ 0 ] || '' );
+					for ( let parent = root.parentElement; ! label && parent; parent = parent.parentElement ) {
+						const siblings = Array.from( parent.children );
+						const rootIndex = siblings.indexOf( root );
+						if ( rootIndex >= 0 ) {
+							label = siblings
+								.slice( 0, rootIndex )
+								.reverse()
+								.find( ( sibling ) => [ 'LABEL', 'LEGEND' ].includes( sibling.tagName ) ) ?? null;
+						}
+						if ( parent.tagName === 'FIELDSET' ) {
+							label ??= parent.querySelector( ':scope > legend' );
+						}
+						if ( parent === document.body ) break;
+					}
+					const group = {
+						selector: sourceSelector( root ),
+						tag: root.tagName.toLowerCase(),
+						...( root.id ? { id: root.id } : {} ),
+						...( root.getAttribute( 'aria-label' ) ? { label: root.getAttribute( 'aria-label' )! } : {} ),
+						...( label ? { label: textOf( label ), labelSelector: sourceSelector( label ) } : {} ),
+						...( root.closest( 'form' ) ? { formSelector: sourceSelector( root.closest( 'form' )! ) } : {} ),
+					};
+					return {
+						group,
+						choices: members.map( describeChoice ),
+					};
+				};
+				const snapshotChoiceGroup = ( root: Element, members: Element[] ) => {
+					const clone = root.cloneNode( true ) as Element;
+					const candidates = Array.from( clone.querySelectorAll( members[ 0 ]?.tagName.toLowerCase() || '*' ) )
+						.filter( ( candidate ) =>
+							( candidate.getAttribute( 'role' ) || '' ).toLowerCase() ===
+							( members[ 0 ]?.getAttribute( 'role' ) || '' ).toLowerCase()
+						);
+					candidates.slice( 0, members.length ).forEach( ( candidate, index ) =>
+						candidate.setAttribute( 'data-dla-choice-index', String( index ) )
+					);
+					for ( const unsafe of Array.from( clone.querySelectorAll( 'script,style,noscript,iframe' ) ) ) unsafe.remove();
+					for ( const node of [ clone, ...Array.from( clone.querySelectorAll( '*' ) ) ] ) {
+						for ( const attribute of Array.from( node.attributes ) ) {
+							if ( /^on/i.test( attribute.name ) || attribute.name.startsWith( 'data-lib-selectable' ) )
+								node.removeAttribute( attribute.name );
+						}
+					}
+					return clone.outerHTML;
+				};
 
 				const records: RawSelectableRecord[] = [];
 				const deadline = Date.now() + limits.maxDriveMs;
@@ -459,15 +550,15 @@ export async function captureSelectableSetStates(
 						break;
 					}
 
-					if ( candidates.length === 0 ) {
-						pushOutcome( 'no-dialog', 0, { error: 'no shared-region candidate' } );
-						continue;
-					}
-
 					const initialFp = candidates.map( fingerprint );
 					const initialText = candidates.map( textOf );
 					const initialHtml = candidates.map( ( candidate ) => candidate.innerHTML );
-					const observations: Array< { fps: string[]; texts: string[] } > = [];
+					const initialGroupInnerHtml = group.root.innerHTML;
+					const initialGroupAttributes = new Map(
+						Array.from( group.root.attributes ).map( ( attribute ) => [ attribute.name, attribute.value ] )
+					);
+					const initialGroupHtml = snapshotChoiceGroup( group.root, group.members );
+					const observations: Array< { fps: string[]; texts: string[]; groupHtml: string } > = [];
 					let navigated = false;
 					let discoveryError: { index: number; error: string } | undefined;
 
@@ -485,6 +576,7 @@ export async function captureSelectableSetStates(
 						observations.push( {
 							fps: candidates.map( fingerprint ),
 							texts: candidates.map( textOf ),
+							groupHtml: snapshotChoiceGroup( group.root, group.members ),
 						} );
 					}
 
@@ -510,11 +602,50 @@ export async function captureSelectableSetStates(
 						} );
 						continue;
 					}
+					const choiceGroupChanged = observations.some( ( observation ) => observation.groupHtml !== initialGroupHtml );
 					if ( regionIdx < 0 ) {
+						if ( choiceGroupChanged ) {
+							const choiceMetadata = association( group.root, group.members );
+							const drivenCount = Math.min( group.members.length, limits.maxMembers );
+							for ( let index = 0; index < drivenCount && Date.now() < deadline; index++ ) {
+								const before = snapshotChoiceGroup( group.root, group.members );
+								const result = await activate( group.members[ index ] );
+								if ( ! result.ok ) {
+									pushOutcome( 'click-failed', index, { error: result.error } );
+									if ( result.navigated ) navigated = true;
+									continue;
+								}
+								const after = snapshotChoiceGroup( group.root, group.members );
+								if ( after === before ) {
+									pushOutcome( 'no-dialog', index, { error: 'choice did not change the group' } );
+									continue;
+								}
+								pushOutcome( 'captured', index, {
+									choiceGroup: {
+										...choiceMetadata,
+										transition: {
+											selectedIndex: index,
+											selected: group.members.map( observedSelection ),
+											html: snapshotChoiceGroup( group.root, group.members ),
+										},
+									},
+								} );
+							}
+							for ( const attribute of Array.from( group.root.attributes ) ) {
+								if ( ! initialGroupAttributes.has( attribute.name ) ) group.root.removeAttribute( attribute.name );
+							}
+							for ( const [ name, value ] of initialGroupAttributes ) group.root.setAttribute( name, value );
+							group.root.innerHTML = initialGroupInnerHtml;
+							group.root.removeAttribute( 'data-lib-selectable-region' );
+							capturedSets++;
+							continue;
+						}
 						if ( discoveryError && observations.length === 0 ) {
 							pushOutcome( 'click-failed', discoveryError.index, { error: discoveryError.error } );
 						} else {
-							pushOutcome( 'no-dialog', 0, { error: 'shared region did not vary' } );
+							pushOutcome( 'no-dialog', 0, {
+								error: candidates.length === 0 ? 'no shared-region candidate' : 'shared region did not vary',
+							} );
 						}
 						continue;
 					}
@@ -602,9 +733,11 @@ function toInteraction(
 ): CapturedDialogInteraction {
 	const bounded =
 		record.region?.html !== undefined ? boundHtml( record.region.html, maxHtmlBytes ) : undefined;
+	const choiceHtml = record.choiceGroup?.transition.html;
+	const boundedChoice = choiceHtml !== undefined ? boundHtml( choiceHtml, maxHtmlBytes ) : undefined;
 	return {
 		status: record.status,
-		kind: SELECTABLE_SET_KIND,
+		kind: record.choiceGroup ? CHOICE_GROUP_KIND : SELECTABLE_SET_KIND,
 		trigger: {
 			selector: record.trigger.selector,
 			tag: record.trigger.tag,
@@ -630,6 +763,21 @@ function toInteraction(
 			  }
 			: {} ),
 		set: record.set,
+		...( record.choiceGroup && boundedChoice
+			? {
+					choiceGroup: {
+						group: record.choiceGroup.group,
+						choices: record.choiceGroup.choices,
+						transition: {
+							selectedIndex: record.choiceGroup.transition.selectedIndex,
+							selected: record.choiceGroup.transition.selected,
+							html: boundedChoice.html,
+							htmlBytes: boundedChoice.bytes,
+							htmlTruncated: boundedChoice.truncated,
+						},
+					},
+			  }
+			: {} ),
 		...( record.error ? { error: record.error } : {} ),
 	};
 }
