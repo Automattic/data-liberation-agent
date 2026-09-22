@@ -34,6 +34,7 @@ import {
 	type InteractionStatesReport,
 } from './screenshot/interaction-capture.js';
 import { SCROLL_STATES_SCHEMA, type ScrollStatesReport } from './screenshot/scroll-state-capture.js';
+import { FLUID_RULES_STYLE_ATTRIBUTE } from './screenshot/fluid-capture.js';
 import { isAudioLink, type CapturedResourceManifest } from './screenshot/resource-capture.js';
 import { isSourcePromotion } from './source-cleanup.js';
 
@@ -999,10 +1000,16 @@ function assembleResponsiveHtml(
 		);
 }
 
+/**
+ * Stylesheet content visible to the responsive assembly. Style blocks the
+ * capture generated itself (fluid learning rules) are not source styles: the
+ * collapse compares what the source served to each viewport, and viewport
+ * scoping must never narrow a rule that carries its own media conditions.
+ */
 function styleBlocks( html: string ): string[] {
-	return [ ...html.matchAll( /<style\b[^>]*>([\s\S]*?)<\/style\s*>/gi ) ].map( ( match ) =>
-		match[ 1 ].trim()
-	);
+	return [ ...html.matchAll( /<style\b([^>]*)>([\s\S]*?)<\/style\s*>/gi ) ]
+		.filter( ( match ) => ! FLUID_RULES_STYLE_ATTRIBUTE.test( match[ 1 ] ) )
+		.map( ( match ) => match[ 2 ].trim() );
 }
 
 /**
@@ -1191,7 +1198,11 @@ function scopedStyles(
 ): string {
 	return html.replace(
 		/<style\b([^>]*)>([\s\S]*?)<\/style\s*>/gi,
-		( _match, attributes: string, css: string ) => {
+		( match, attributes: string, css: string ) => {
+			// Capture-generated rules carry their own media conditions and are
+			// width-independent by construction; narrowing them to one side of
+			// the switch would strand the other regime's rule.
+			if ( FLUID_RULES_STYLE_ATTRIBUTE.test( attributes ) ) return match;
 			if ( skip.has( css.trim() ) ) return `<style${ attributes }>${ css }</style>`;
 			const existingMedia = /\bmedia\s*=\s*(["'])(.*?)\1/i.exec( attributes );
 			if ( ! existingMedia ) return `<style${ attributes } media="${ media }">${ css }</style>`;
