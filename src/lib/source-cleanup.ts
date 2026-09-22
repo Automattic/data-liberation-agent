@@ -109,6 +109,15 @@ export function validateCleanupPolicy(value: unknown): asserts value is CleanupP
 /** This function is serialized into the page. All policy and mechanics live
  * here so live capture and comparison use identical removal/reflow behavior. */
 export function installCleanupInPage(policy: CleanupPolicy): CleanupReport {
+  // Polyfill tsx/esbuild's __name helper inside the page (mirrors screenshotter)
+  // — page.evaluate closures serialized under tsx carry __name() instrumentation
+  // that the built bundle does not emit.
+  const globalWithName = globalThis as typeof globalThis & {
+    __name?: ( fn: unknown ) => unknown;
+  };
+  if ( typeof globalWithName.__name === 'undefined' ) {
+    globalWithName.__name = ( fn ) => fn;
+  }
   type State = { report: CleanupReport; observer: MutationObserver; sweep: () => void };
   const host = window as unknown as { __dlaCleanup?: State };
   host.__dlaCleanup?.observer.disconnect();
