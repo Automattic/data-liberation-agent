@@ -269,7 +269,18 @@ function srcsetReferences( srcset: string ): string[] {
 }
 
 function canonicalContentType( contentType: string ): string {
-	return contentType.trim().toLowerCase() === 'woff2' ? 'font/woff2' : contentType;
+	const normalized = contentType.trim().toLowerCase();
+	return {
+		woff2: 'font/woff2',
+		'application/font-woff2': 'font/woff2',
+		'application/x-font-woff2': 'font/woff2',
+		'application/font-woff': 'font/woff',
+		'application/x-font-woff': 'font/woff',
+		'application/font-ttf': 'font/ttf',
+		'application/x-font-ttf': 'font/ttf',
+		'application/font-otf': 'font/otf',
+		'application/x-font-otf': 'font/otf',
+	}[ normalized ] ?? contentType;
 }
 
 export function isAudioLink( reference: string, documentUrl: string ): boolean {

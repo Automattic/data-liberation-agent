@@ -758,7 +758,8 @@ describe( 'CapturedResourceStore', () => {
 		const fetchMedia = vi.fn( async ( url: string ) => ( {
 			finalUrl: url,
 			status: url === 'https://cdn.example/site.woff2' ? 200 : 404,
-			headers: new Headers( { 'content-type': 'woff2' } ),
+			// Typekit and other CDNs commonly use the legacy application/* MIME.
+			headers: new Headers( { 'content-type': 'application/font-woff2' } ),
 			body: Buffer.from( 'font' ),
 		} ) );
 		const store = new CapturedResourceStore( outputDir, 'https://example.com/', fetchMedia );
