@@ -237,6 +237,49 @@ async function observePage(
 		// source runtime may still be holding the same element at rest.
 		await triggerLazyLoad( page );
 		const measured = await page.evaluate( async ( clickUnresolved: boolean ) => {
+			// Perceptual identity for one image: fetch the bytes (cache-warm —
+			// the page just rendered them), decode locally, downscale to 8x8
+			// grayscale, threshold at the mean. Fetching keeps this
+			// cross-origin safe where canvas reads of the element would taint;
+			// any failure leaves null and the key-only matcher covers it.
+			const hashCache = new Map< string, Promise< string | null > >();
+			const contentHashFor = ( src: string ): Promise< string | null > => {
+				const cached = hashCache.get( src );
+				if ( cached ) return cached;
+				const pending = ( async () => {
+					try {
+						if ( ! src || src.startsWith( 'data:' ) || src.startsWith( 'blob:' ) ) return null;
+						const response = await fetch( src, { mode: 'cors', credentials: 'omit' } );
+						if ( ! response.ok ) return null;
+						const bitmap = await createImageBitmap( await response.blob() );
+						const side = 8;
+						const canvas = new OffscreenCanvas( side, side );
+						const context = canvas.getContext( '2d', { willReadFrequently: true } )!;
+						context.drawImage( bitmap, 0, 0, side, side );
+						bitmap.close();
+						const { data } = context.getImageData( 0, 0, side, side );
+						const grays: number[] = [];
+						for ( let offset = 0; offset < data.length; offset += 4 ) {
+							grays.push( 0.299 * data[ offset ] + 0.587 * data[ offset + 1 ] + 0.114 * data[ offset + 2 ] );
+						}
+						const mean = grays.reduce( ( sum, value ) => sum + value, 0 ) / grays.length;
+						let value = '';
+						for ( let nibble = 0; nibble < grays.length; nibble += 4 ) {
+							let bits = 0;
+							for ( let bit = 0; bit < 4; bit++ ) {
+								bits = ( bits << 1 ) | ( grays[ nibble + bit ] >= mean ? 1 : 0 );
+							}
+							value += bits.toString( 16 );
+						}
+						return value;
+					} catch {
+						return null;
+					}
+				} )();
+				hashCache.set( src, pending );
+				return pending;
+			};
+
 			// Images that occupy real layout space at this viewport: wider and
 			// taller than 50px (the same floor as widestImage) and not
 			// visibility:hidden, so tracking pixels and hidden decorations add
@@ -244,20 +287,23 @@ async function observePage(
 			// slides are transparent yet still hold the slideshow's layout
 			// box, and a copy that drops them all is exactly the regression
 			// the image-count gate exists to catch.
-			const images = [ ...document.querySelectorAll< HTMLImageElement >( 'img' ) ]
-				.map( ( image ) => ( {
-					rect: image.getBoundingClientRect(),
-					src: image.currentSrc || image.getAttribute( 'src' ) || '',
-					hidden: getComputedStyle( image ).visibility === 'hidden',
-				} ) )
-				.filter( ( { rect, hidden } ) => ! hidden && rect.width > 50 && rect.height > 50 )
-				.map( ( { rect, src } ) => ( {
-					key: src,
-					x: Math.round( rect.x ),
-					y: Math.round( rect.y ),
-					width: Math.round( rect.width ),
-					height: Math.round( rect.height ),
-				} ) );
+			const images = await Promise.all(
+				[ ...document.querySelectorAll< HTMLImageElement >( 'img' ) ]
+					.map( ( image ) => ( {
+						rect: image.getBoundingClientRect(),
+						src: image.currentSrc || image.getAttribute( 'src' ) || '',
+						hidden: getComputedStyle( image ).visibility === 'hidden',
+					} ) )
+					.filter( ( { rect, hidden } ) => ! hidden && rect.width > 50 && rect.height > 50 )
+					.map( async ( { rect, src } ) => ( {
+						key: src,
+						x: Math.round( rect.x ),
+						y: Math.round( rect.y ),
+						width: Math.round( rect.width ),
+						height: Math.round( rect.height ),
+						contentHash: await contentHashFor( src ),
+					} ) )
+			);
 
 			const typography: Array< {
 				key: string;
