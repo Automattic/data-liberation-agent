@@ -159,7 +159,7 @@ export async function captureTriggeredDialogs(
 		};
 		const candidates = Array.from(
 			document.querySelectorAll(
-				'button[aria-haspopup],a[aria-haspopup],[role="button"][aria-haspopup],button'
+				'button[aria-haspopup],a[aria-haspopup],[role="button"][aria-haspopup],[role="combobox"],button'
 			)
 		).filter( ( element ) => {
 			if ( element.getAttribute( 'aria-disabled' ) === 'true' ) return false;
@@ -182,7 +182,7 @@ export async function captureTriggeredDialogs(
 				if ( href && href !== '#' && ! href.startsWith( '#' ) && ! hasBinding ) return false;
 				return true;
 			}
-			return element.tagName === 'BUTTON' && /\bmenu\b/i.test( name );
+			return element.getAttribute( 'role' ) === 'combobox' || ( element.tagName === 'BUTTON' && /\bmenu\b/i.test( name ) );
 		} );
 
 		return candidates.slice( 0, limit ).map( ( element, index ) => {
@@ -652,13 +652,28 @@ async function describeInterceptingElement(
 async function activateTrigger( page: Page, probeSelector: string ): Promise< void > {
 	const locator = page.locator( probeSelector ).first();
 	await locator.scrollIntoViewIfNeeded( { timeout: DIALOG_WAIT_MS } ).catch( () => undefined );
-	if ( ! ( await describeInterceptingElement( page, probeSelector ) ) ) {
-		try {
-			await locator.click( { timeout: DIALOG_WAIT_MS } );
-			return;
-		} catch {
-			/* Coordinate click failed; fall through to a node-targeted click. */
+	await page.evaluate( () => {
+		const preventSubmit = ( event: Event ) => event.preventDefault();
+		document.addEventListener( 'submit', preventSubmit, true );
+		( document as Document & { __dlaPreventSubmit?: EventListener } ).__dlaPreventSubmit = preventSubmit;
+	} );
+	try {
+		if ( ! ( await describeInterceptingElement( page, probeSelector ) ) ) {
+			try {
+				await locator.click( { timeout: DIALOG_WAIT_MS } );
+				return;
+			} catch {
+				/* Coordinate click failed; fall through to a node-targeted click. */
+			}
 		}
+		await locator.evaluate( ( element ) => ( element as HTMLElement ).click() );
+	} finally {
+		await page.evaluate( () => {
+			const documentWithListener = document as Document & { __dlaPreventSubmit?: EventListener };
+			if ( documentWithListener.__dlaPreventSubmit ) {
+				document.removeEventListener( 'submit', documentWithListener.__dlaPreventSubmit, true );
+				delete documentWithListener.__dlaPreventSubmit;
+			}
+		} );
 	}
-	await locator.evaluate( ( element ) => ( element as HTMLElement ).click() );
 }

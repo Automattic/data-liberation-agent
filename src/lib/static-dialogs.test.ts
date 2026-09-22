@@ -264,8 +264,9 @@ describe( 'wireCapturedDialogs', () => {
 				},
 			]
 		);
-		expect( html.match( /<details class="dla-disclosure">/g ) ).toHaveLength( 2 );
+		expect( html.match( /data-dla-listbox-trigger=/g ) ).toHaveLength( 2 );
 		expect( html ).toContain( 'role="option"' );
 		expect( html ).toContain( 'Canada +1' );
+		expect( html ).toContain( 'data-dla-listbox-runtime' );
 	} );
 } );
