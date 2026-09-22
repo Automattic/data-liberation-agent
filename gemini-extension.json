@@ -7,7 +7,7 @@
   },
   "homepage": "https://github.com/Automattic/data-liberation-agent",
   "license": "GPL-2.0-or-later",
-  "contextFileName": "GEMINI.md",
+  "contextFileName": "AGENTS.md",
   "skills": "./skills/",
   "mcpServers": {
     "data-liberation": {
