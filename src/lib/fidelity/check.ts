@@ -198,6 +198,18 @@ export function checkWidthsFor( sampled: number[] = DEFAULT_SWEEP_WIDTHS ): numb
 	return DEFAULT_CHECK_WIDTHS.filter( ( width ) => ! sampled.includes( width ) );
 }
 
+/** Return a real network host requested by a local copy, or null for browser-local schemes. */
+export function externalRequestHost( href: string, localOrigin: string | null ): string | null {
+	if ( ! localOrigin || href.startsWith( 'data:' ) || href.startsWith( 'blob:' ) ) return null;
+	try {
+		const url = new URL( href );
+		if ( url.origin === localOrigin || ! [ 'http:', 'https:', 'ws:', 'wss:' ].includes( url.protocol ) ) return null;
+		return url.host || null;
+	} catch {
+		return null;
+	}
+}
+
 async function observePage(
 	page: Page,
 	url: string,
@@ -208,14 +220,8 @@ async function observePage(
 ): Promise< LayoutObservation > {
 	const external = new Set< string >();
 	const onRequest = ( request: { url: () => string } ): void => {
-		if ( ! localOrigin ) return;
-		const href = request.url();
-		if ( href.startsWith( 'data:' ) || href.startsWith( 'blob:' ) || href.startsWith( localOrigin ) ) return;
-		try {
-			external.add( new URL( href ).host );
-		} catch {
-			/* ignore unparseable */
-		}
+		const host = externalRequestHost( request.url(), localOrigin );
+		if ( host ) external.add( host );
 	};
 	page.on( 'request', onRequest );
 	try {
@@ -261,13 +267,24 @@ async function observePage(
 			const canvas = document.createElement( 'canvas' );
 			const context = canvas.getContext( '2d' );
 			const walker = document.createTreeWalker( document.body, NodeFilter.SHOW_TEXT );
+			const measuredParents = new Set< Element >();
 			let textNode: Node | null;
 			while ( typography.length < 120 && ( textNode = walker.nextNode() ) ) {
 				const parent = textNode.parentElement;
-				const text = ( textNode.textContent ?? '' ).replace( /\s+/g, ' ' ).trim();
+				if (
+					parent &&
+					parent.childNodes.length > 1 &&
+					[ ...parent.childNodes ].every( ( node ) => node.nodeType === Node.TEXT_NODE )
+				) {
+					if ( measuredParents.has( parent ) ) continue;
+					measuredParents.add( parent );
+				}
+				const text = ( parent && measuredParents.has( parent ) ? parent.textContent : textNode.textContent ?? '' )
+					.replace( /\s+/g, ' ' )
+					.trim();
 				if ( ! parent || ! text || parent.closest( 'script,style,noscript,template' ) ) continue;
 				const range = document.createRange();
-				range.selectNodeContents( textNode );
+				range.selectNodeContents( parent && measuredParents.has( parent ) ? parent : textNode );
 				const rect = range.getBoundingClientRect();
 				const style = getComputedStyle( parent );
 				if (
