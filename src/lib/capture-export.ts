@@ -2988,7 +2988,9 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		click_failed_count: interactionStates.filter( ( state ) => state.status === 'click-failed' )
 			.length,
 		truncated_count: interactionStates.filter(
-			( state ) => state.status === 'captured' && state.dialog?.htmlTruncated
+			( state ) =>
+				state.status === 'captured' &&
+				( state.dialog?.htmlTruncated || state.choiceGroup?.transition.htmlTruncated )
 		).length,
 		initial_dialog_count: initialDialogs.length,
 		initial_captured_count: initialDialogs.filter( ( state ) => state.status === 'captured' ).length,
