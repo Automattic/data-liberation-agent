@@ -58,6 +58,25 @@ describe( 'learnFluidModel', () => {
 		expect( model ).toMatchObject( { kind: 'proportional', css: '50vw', ratio: 0.5 } );
 	} );
 
+	it( 'learns the capped display type observed on a real Squarespace site', () => {
+		// Measured from quinn-fluid-demo.squarespace.com: runtime-written
+		// font-size that grows with the viewport until a 355.3px ceiling.
+		const model = learnFluidModel(
+			at( [
+				[ 768, 179.4 ],
+				[ 1024, 239.5 ],
+				[ 1280, 299.2 ],
+				[ 1440, 336.6 ],
+				[ 1920, 355.3 ],
+			] )
+		);
+		expect( model ).toMatchObject( {
+			kind: 'capped',
+			css: 'min(355.3px, 23.39vw)',
+			cap: 355.3,
+		} );
+	} );
+
 	it( 'tolerates sub-pixel rounding rather than failing the fit', () => {
 		const model = learnFluidModel(
 			at( [

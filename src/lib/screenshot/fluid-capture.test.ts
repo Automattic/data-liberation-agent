@@ -79,4 +79,56 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		expect( await page.locator( '#canvas' ).evaluate( ( element ) => element.getBoundingClientRect().height ) ).toBeGreaterThan( 1 );
 		await page.close();
 	} );
+
+	it( 'learns runtime-written fluid font sizes', async () => {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		await page.setContent( `
+			<h1 id="portfolio" style="font-size: 10px">PORTFOLIO</h1>
+			<script>
+				const update = () => document.querySelector('#portfolio').style.fontSize = (innerWidth * 0.233) + 'px';
+				addEventListener('resize', update);
+				update();
+			</script>
+		` );
+
+		await learnAndApplyFluidGeometry( page, {
+			widths: [ 768, 1024, 1280, 1440, 1920 ],
+			settleMs: 50,
+		} );
+
+		expect( await page.locator( '#portfolio' ).getAttribute( 'style' ) ).toContain( 'font-size: 23.3vw' );
+		await page.evaluate( () => {
+			setTimeout( () => {
+				document.querySelector< HTMLElement >( '#portfolio' )!.style.fontSize = '336.6px';
+			}, 10 );
+		} );
+		await page.waitForTimeout( 40 );
+		expect( await page.locator( '#portfolio' ).getAttribute( 'style' ) ).toContain( 'font-size: 23.3vw' );
+		await page.close();
+	} );
+
+	it( 'learns the ceiling when the widest sample is capped', async () => {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		await page.setContent( `
+			<h1 id="portfolio" style="font-size: 10px">PORTFOLIO</h1>
+			<script>
+				const update = () => document.querySelector('#portfolio').style.fontSize = Math.min(innerWidth * 0.2, 300) + 'px';
+				addEventListener('resize', update);
+				update();
+			</script>
+		` );
+
+		await learnAndApplyFluidGeometry( page, {
+			widths: [ 768, 1024, 1280, 1440, 1920 ],
+			settleMs: 50,
+		} );
+
+		expect( await page.locator( '#portfolio' ).getAttribute( 'style' ) ).toContain( 'font-size: min(300px, 20vw)' );
+		// At an unsampled width past the switch the ceiling, not the slope, must win.
+		await page.setViewportSize( { width: 1600, height: 900 } );
+		expect(
+			await page.locator( '#portfolio' ).evaluate( ( element ) => getComputedStyle( element ).fontSize )
+		).toBe( '300px' );
+		await page.close();
+	}, 20_000 );
 } );

@@ -34,6 +34,8 @@ export type FluidModel =
 	| { kind: 'proportional'; css: string; ratio: number }
 	/** Scales with the viewport but never below a floor. */
 	| { kind: 'floored'; css: string; ratio: number; floor: number }
+	/** Scales with the viewport but never above a ceiling. */
+	| { kind: 'capped'; css: string; ratio: number; cap: number }
 	/** No single relationship fits; the source changes behavior at a width. */
 	| { kind: 'breakpoint'; samples: GeometrySample[] };
 
@@ -124,6 +126,21 @@ export function learnFluidModel( samples: readonly GeometrySample[] ): FluidMode
 		};
 	}
 
+	// Capped: proportional up to a ceiling. The mirror of the floored idiom —
+	// display type that grows with the viewport only until a maximum size. The
+	// slope comes from the steepest observation because capped samples report a
+	// flattened ratio; the ceiling then absorbs everything above the switch.
+	const cap = max;
+	const cappedRatio = Math.max( ...ordered.map( ( sample ) => sample.value / sample.viewport ) );
+	if ( fits( ordered, ( viewport ) => Math.min( cap, cappedRatio * viewport ) ) ) {
+		return {
+			kind: 'capped',
+			css: `min(${ round( cap ) }px, ${ round( cappedRatio * 100 ) }vw)`,
+			ratio: cappedRatio,
+			cap: round( cap ),
+		};
+	}
+
 	// Nothing single-valued fits, so the source genuinely changes behavior
 	// across this range. That failure is the breakpoint signal.
 	return { kind: 'breakpoint', samples: ordered };
@@ -144,7 +161,15 @@ export function learnWidestFluidModel( samples: readonly GeometrySample[] ): Flu
 	if ( widestBreakpoint === undefined ) return wholeRange;
 	const widestSegment = wholeRange.samples.filter( ( sample ) => sample.viewport >= widestBreakpoint );
 	const widestModel = learnFluidModel( widestSegment );
-	return widestModel.kind === 'breakpoint' ? wholeRange : widestModel;
+	if ( widestModel.kind !== 'breakpoint' ) return widestModel;
+
+	// A capped value at the last sampled width leaves only one observation in the
+	// final segment. Prefer the preceding stable relationship over freezing the
+	// whole document; a later sweep can still teach the cap when it has enough
+	// samples on both sides of that breakpoint.
+	const precedingSegment = wholeRange.samples.filter( ( sample ) => sample.viewport < widestBreakpoint );
+	const precedingModel = learnFluidModel( precedingSegment );
+	return precedingModel.kind === 'breakpoint' ? wholeRange : precedingModel;
 }
 
 /** Widths where the observed relationship changes, derived from a bad fit. */
