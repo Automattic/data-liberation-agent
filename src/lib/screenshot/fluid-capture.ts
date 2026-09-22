@@ -19,7 +19,7 @@ import type { Page } from 'playwright';
 /** Marks elements across viewport changes; removed before serialization. */
 const ID_ATTRIBUTE = 'data-dla-fluid-id';
 /** Only geometry that a runtime plausibly derives from viewport width. */
-const LEARNABLE_PROPERTIES = [ 'width', 'height', 'top' ] as const;
+const LEARNABLE_PROPERTIES = [ 'width', 'height', 'top', 'font-size' ] as const;
 
 export type LearnableProperty = ( typeof LEARNABLE_PROPERTIES )[ number ];
 
@@ -71,7 +71,7 @@ export async function learnAndApplyFluidGeometry(
 			for ( const element of document.querySelectorAll< HTMLElement >( '[style]' ) ) {
 				// Only elements a runtime sized in pixels are candidates.
 				const style = element.getAttribute( 'style' ) ?? '';
-				const carriesPixelSize = /\b(?:width|height)\s*:\s*\d/.test( style );
+				const carriesPixelSize = /\b(?:width|height|font-size)\s*:\s*\d/.test( style );
 				const carriesCapturedAnchorTop =
 					element.hasAttribute( 'data-dla-anchor-target' ) && /\btop\s*:\s*\d/.test( style );
 				if ( ! carriesPixelSize && ! carriesCapturedAnchorTop ) continue;
@@ -115,7 +115,7 @@ export async function learnAndApplyFluidGeometry(
 						// `top` is a position against a containing block, not a
 						// share of a parent's box, so it has no container fit.
 						containers[ property ] =
-							parent && property !== 'top'
+								parent && property !== 'top' && property !== 'font-size'
 								? property === 'width'
 									? parent.clientWidth
 									: parent.clientHeight
@@ -225,8 +225,24 @@ export async function learnAndApplyFluidGeometry(
 				const after = element.getBoundingClientRect()[ axis ];
 				if ( after > 1 || before <= 1 ) continue;
 				element.style.setProperty( entry.property, entry.fallbackCss );
+				entry.css = entry.fallbackCss;
 				revertedCount++;
 			}
+			// A source resize callback can still mutate inline styles after learning
+			// completes. Keep the learned declaration authoritative until serialization;
+			// this observer itself is not part of the exported document.
+			const authoritative = entries.flatMap( ( entry ) => {
+				const element = document.querySelector< HTMLElement >( `[${ attribute }="${ entry.id }"]` );
+				return element ? [ { element, property: entry.property, css: entry.css, fallbackCss: entry.fallbackCss } ] : [];
+			} );
+			const observer = new MutationObserver( () => {
+				for ( const entry of authoritative ) {
+					const current = entry.element.style.getPropertyValue( entry.property );
+					if ( current === entry.css ) continue;
+					entry.element.style.setProperty( entry.property, entry.css );
+				}
+			} );
+			observer.observe( document.documentElement, { subtree: true, attributes: true, attributeFilter: [ 'style' ] } );
 			return revertedCount;
 		},
 		{ attribute: ID_ATTRIBUTE, entries: learned }
