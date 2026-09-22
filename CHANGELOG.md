@@ -15,6 +15,14 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.4.16] - 2026-09-22
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- Squarespace capture fidelity (fonts, fluid text, provider chrome, compare readiness)
+
 ## [0.4.15] - 2026-09-22
 
 ### Changed
