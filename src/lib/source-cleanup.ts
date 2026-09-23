@@ -405,8 +405,9 @@ export function installCleanupInPage(policy: CleanupPolicy): CleanupReport {
     if (scheduled) return;
     // Exhausting the observation budget on an animating page (sliders, lazy
     // images, entrance transitions) says nothing about cleanliness: it only
-    // means the observer stopped watching. `readSourceCleanup()` still runs
-    // an authoritative final sweep, so this stays a diagnostic in `truncated`
+    // means the observer stopped watching. `sweepSourceCleanup()` runs before
+    // every serialization and `readSourceCleanup()` runs an authoritative final
+    // sweep, so this stays a diagnostic in `truncated`
     // rather than a `failures` entry that would fail an otherwise-clean copy.
     if (++rounds > 100) { report.truncated = true; observer.disconnect(); return; }
     scheduled = true;
@@ -420,6 +421,18 @@ export function installCleanupInPage(policy: CleanupPolicy): CleanupReport {
 export async function applySourceCleanup(page: Page, policy: CleanupPolicy): Promise<CleanupReport> {
   validateCleanupPolicy(policy);
   return page.evaluate(installCleanupInPage, policy);
+}
+
+/**
+ * Run the installed cleanup once more, now. The mutation observer stops after
+ * its round budget, so a page that re-renders a credit or ad later is only
+ * clean after an explicit sweep. Call this immediately before serializing the
+ * document. A page without installed cleanup is left alone.
+ */
+export async function sweepSourceCleanup(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    (window as unknown as { __dlaCleanup?: { sweep: () => void } }).__dlaCleanup?.sweep();
+  });
 }
 
 export async function readSourceCleanup(page: Page): Promise<CleanupReport> {
