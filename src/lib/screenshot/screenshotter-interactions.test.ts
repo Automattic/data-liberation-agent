@@ -148,6 +148,7 @@ describe( 'captureScreenshots interactions', () => {
 					} )
 				),
 				close: vi.fn().mockResolvedValue( undefined ),
+				isConnected: () => true,
 			} );
 
 			try {
@@ -236,6 +237,7 @@ describe( 'captureScreenshots interactions', () => {
 				storageState: vi.fn().mockResolvedValue( { cookies: [], origins: [] } ),
 			} ) ),
 			close: vi.fn().mockResolvedValue( undefined ),
+			isConnected: () => true,
 		} );
 
 		try {

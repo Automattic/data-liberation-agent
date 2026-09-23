@@ -57,6 +57,7 @@ import type { Browser, BrowserContext, Page } from 'playwright';
 const SCROLL_OFFSET_RATIO = 1.5;
 const ANALYSIS_SAMPLE_LIMIT = 1;
 const MAX_CAPTURED_DIALOGS = 8;
+const MAX_CRASH_RELAUNCHES = 3;
 
 /**
  * Per-URL capture pipeline:
@@ -1462,6 +1463,35 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	let browserRestarts = 0;
 	let urlsSinceRestart = 0;
 
+	// One relaunch shared by every worker that saw the same browser die, bounded
+	// so a browser that crashes on every launch still ends the run. An attached
+	// (cdpPort) browser is reconnected; if it is gone too, the retry is skipped
+	// and the original failures are recorded.
+	let crashRelaunch: Promise< boolean > | null = null;
+	let crashRelaunches = 0;
+	const replaceCrashedBrowser = ( crashed: Browser ): Promise< boolean > => {
+		if ( browser !== crashed ) return Promise.resolve( true );
+		if ( ! crashRelaunch ) {
+			if ( crashRelaunches >= MAX_CRASH_RELAUNCHES ) return Promise.resolve( false );
+			crashRelaunches++;
+			sendLog( server, '[restart] browser disconnected mid-segment; relaunching' );
+			void crashed.close().catch( () => {} );
+			crashRelaunch = connectBrowser( { cdpPort: opts.cdpPort } )
+				.then(
+					( next ) => {
+						browser = next as unknown as Browser;
+						browserRestarts++;
+						return true;
+					},
+					() => false
+				)
+				.finally( () => {
+					crashRelaunch = null;
+				} );
+		}
+		return crashRelaunch;
+	};
+
 	let captured = 0;
 	let skipped = 0;
 	let completed = 0;
@@ -1503,101 +1533,112 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			const vpPlan = viewport.id === 'desktop' ? effectivePlan.desktop : effectivePlan.mobile;
 			if ( ! vpPlan.needsLoad ) continue;
 
-			let context: BrowserContext | undefined;
-			try {
-				// deviceScaleFactor < 1 reduces the OUTPUT pixel count of every
-				// screenshot while keeping the rendered layout identical to a
-				// standard desktop session — the browser still does its layout
-				// pass at the logical viewport (so CSS media queries hit their
-				// real desktop branch), but emits a smaller PNG. Mobile stays at
-				// scale 1 because its viewport is already small enough that
-				// further reduction loses layout detail. See types.ts for the
-				// rationale.
-				// Each viewport loads as a real browser: builders can select viewport
-				// metadata, navigation, and layout from the identity, and anti-bot
-				// challenges refuse Playwright's default HeadlessChrome one.
-				//
-				// entryUrl (not `url`) is what gets navigated to harvest a session:
-				// some sources gate every route/asset behind a session only the
-				// tokenized ENTRY url establishes. Keyed by origin, so this navigates
-				// once per run — every worker and viewport for every route reuses it.
-				const sessionContext = await sourceContextOptions( browser, entryUrl );
-				context = await browser.newContext( {
-					...( viewport.id === 'mobile'
-						? { ...IPHONE_17_CONTEXT, storageState: sessionContext.storageState }
-						: sessionContext ),
-					viewport: { width: viewport.width, height: viewport.height },
-					deviceScaleFactor:
-						viewport.id === 'desktop'
-							? SCREENSHOT_DEVICE_SCALE_FACTOR
-							: IPHONE_17_CONTEXT.deviceScaleFactor,
-					ignoreHTTPSErrors: true,
-				} );
-				// tsx/esbuild's keepNames transform wraps named const arrows with
-				// `__name(fn, 'name')` calls; that helper doesn't exist in the browser
-				// context. Polyfill as a no-op so our evaluate() closures can run.
-				// String-form init script bypasses tsx transformation entirely.
-				await context.addInitScript( `
-          if (typeof globalThis.__name === 'undefined') {
-            globalThis.__name = function (fn) { return fn; };
-          }
-        ` );
-				const page = await context.newPage();
-				await capturePerViewport( {
-					page,
-					viewport,
-					plan: vpPlan,
-					url,
-					slug,
-					archetype: classifyUrl( url ),
-					settleMs,
-					screenshotTimeoutMs,
-					evaluateTimeoutMs,
-					failures: urlFailures,
-					entry,
-					aggregator,
-					shouldAnalyze: shouldAnalyzeUrl,
-					designCtx,
-					outputDir: opts.outputDir,
-					responsiveImages,
-					mobileHeights,
-					resourceStore,
-					publicUrlsOnly: opts.publicUrlsOnly ?? false,
-					removeSelectors: opts.removeSelectors,
-					cleanupPolicy: opts.cleanupPolicy,
-					...( opts.collectResponsiveImages
-						? { collectResponsiveImages: opts.collectResponsiveImages }
-						: {} ),
-					...( opts.learnFluid ? { learnFluid: true } : {} ),
-					...( opts.fluidWidths ? { fluidWidths: opts.fluidWidths } : {} ),
-					prepareCapture: opts.prepareCapture,
-					beforeSerialize: opts.beforeSerialize,
-				} );
-			} catch ( err ) {
-				urlFailures.push( {
-					url,
-					viewport: viewport.id,
-					stage: 'goto',
-					error: err instanceof Error ? err.message : String( err ),
-					timestamp: new Date().toISOString(),
-					attempt: 1,
-				} );
-			} finally {
-				if ( context ) {
-					try {
-						const pages = context.pages();
-						await Promise.all( pages.map( ( page ) => resourceStore.settle( page ) ) );
-					} catch {
-						/* best-effort; failures are retained in the resource manifest */
+			// A browser that died under this viewport is replaced and the viewport
+			// retried once, so a crash costs the viewports in flight a retry rather
+			// than failing every route the pool claims afterwards.
+			for ( let crashRetry = false; ; crashRetry = true ) {
+				const attemptBrowser = browser;
+				const failuresBefore = urlFailures.length;
+				let context: BrowserContext | undefined;
+				try {
+					// deviceScaleFactor < 1 reduces the OUTPUT pixel count of every
+					// screenshot while keeping the rendered layout identical to a
+					// standard desktop session — the browser still does its layout
+					// pass at the logical viewport (so CSS media queries hit their
+					// real desktop branch), but emits a smaller PNG. Mobile stays at
+					// scale 1 because its viewport is already small enough that
+					// further reduction loses layout detail. See types.ts for the
+					// rationale.
+					// Each viewport loads as a real browser: builders can select viewport
+					// metadata, navigation, and layout from the identity, and anti-bot
+					// challenges refuse Playwright's default HeadlessChrome one.
+					//
+					// entryUrl (not `url`) is what gets navigated to harvest a session:
+					// some sources gate every route/asset behind a session only the
+					// tokenized ENTRY url establishes. Keyed by origin, so this navigates
+					// once per run — every worker and viewport for every route reuses it.
+					const sessionContext = await sourceContextOptions( attemptBrowser, entryUrl );
+					context = await attemptBrowser.newContext( {
+						...( viewport.id === 'mobile'
+							? { ...IPHONE_17_CONTEXT, storageState: sessionContext.storageState }
+							: sessionContext ),
+						viewport: { width: viewport.width, height: viewport.height },
+						deviceScaleFactor:
+							viewport.id === 'desktop'
+								? SCREENSHOT_DEVICE_SCALE_FACTOR
+								: IPHONE_17_CONTEXT.deviceScaleFactor,
+						ignoreHTTPSErrors: true,
+					} );
+					// tsx/esbuild's keepNames transform wraps named const arrows with
+					// `__name(fn, 'name')` calls; that helper doesn't exist in the browser
+					// context. Polyfill as a no-op so our evaluate() closures can run.
+					// String-form init script bypasses tsx transformation entirely.
+					await context.addInitScript( `
+	          if (typeof globalThis.__name === 'undefined') {
+	            globalThis.__name = function (fn) { return fn; };
+	          }
+	        ` );
+					const page = await context.newPage();
+					await capturePerViewport( {
+						page,
+						viewport,
+						plan: vpPlan,
+						url,
+						slug,
+						archetype: classifyUrl( url ),
+						settleMs,
+						screenshotTimeoutMs,
+						evaluateTimeoutMs,
+						failures: urlFailures,
+						entry,
+						aggregator,
+						shouldAnalyze: shouldAnalyzeUrl,
+						designCtx,
+						outputDir: opts.outputDir,
+						responsiveImages,
+						mobileHeights,
+						resourceStore,
+						publicUrlsOnly: opts.publicUrlsOnly ?? false,
+						removeSelectors: opts.removeSelectors,
+						cleanupPolicy: opts.cleanupPolicy,
+						...( opts.collectResponsiveImages
+							? { collectResponsiveImages: opts.collectResponsiveImages }
+							: {} ),
+						...( opts.learnFluid ? { learnFluid: true } : {} ),
+						...( opts.fluidWidths ? { fluidWidths: opts.fluidWidths } : {} ),
+						prepareCapture: opts.prepareCapture,
+						beforeSerialize: opts.beforeSerialize,
+					} );
+				} catch ( err ) {
+					urlFailures.push( {
+						url,
+						viewport: viewport.id,
+						stage: 'goto',
+						error: err instanceof Error ? err.message : String( err ),
+						timestamp: new Date().toISOString(),
+						attempt: 1,
+					} );
+				} finally {
+					if ( context ) {
+						try {
+							const pages = context.pages();
+							await Promise.all( pages.map( ( page ) => resourceStore.settle( page ) ) );
+						} catch {
+							/* best-effort; failures are retained in the resource manifest */
+						}
+					}
+					if ( context ) {
+						try {
+							await context.close();
+						} catch {
+							/* best-effort */
+						}
 					}
 				}
-				if ( context ) {
-					try {
-						await context.close();
-					} catch {
-						/* best-effort */
-					}
-				}
+				const failed = urlFailures.length > failuresBefore;
+				if ( ! failed || crashRetry || attemptBrowser.isConnected() ) break;
+				if ( ! ( await replaceCrashedBrowser( attemptBrowser ) ) ) break;
+				urlFailures.length = failuresBefore;
 			}
 		}
 

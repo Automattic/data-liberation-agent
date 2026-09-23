@@ -100,6 +100,7 @@ describe( 'screenshot resource capture', () => {
 				detach: vi.fn().mockResolvedValue( undefined ),
 			} ),
 			close: vi.fn().mockResolvedValue( undefined ),
+			isConnected: () => true,
 		} );
 
 		try {
@@ -174,6 +175,7 @@ describe( 'screenshot resource capture', () => {
 				storageState: vi.fn().mockResolvedValue( { cookies: [], origins: [] } ),
 			} ) ),
 			close: vi.fn().mockResolvedValue( undefined ),
+			isConnected: () => true,
 		} );
 
 		try {
