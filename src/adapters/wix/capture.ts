@@ -263,9 +263,15 @@ export async function settleWixNavigation( viewport: 'desktop' | 'mobile' ): Pro
 		const toggle = document.querySelector< HTMLElement >( '#MENU_AS_CONTAINER_TOGGLE' );
 		const drawer = document.getElementById( 'MENU_AS_CONTAINER' );
 		const opened = Boolean( toggle && visible( toggle ) && ! ( drawer && visible( drawer ) ) );
+		const settle = async ( open: boolean ) => {
+			const deadline = Date.now() + 2000;
+			while ( drawer && visible( drawer ) !== open && Date.now() < deadline ) await waitForFrame();
+		};
 		if ( opened ) {
 			toggle!.click();
-			await waitForFrame();
+			// A busy page can open the drawer several frames after the click; wait
+			// for it so the close below is not skipped as unnecessary.
+			await settle( true );
 			// Retain the authored trigger so conversion can emit responsive navigation.
 		}
 		const lists = Array.from( document.querySelectorAll( 'header ul' ) );
@@ -278,8 +284,7 @@ export async function settleWixNavigation( viewport: 'desktop' | 'mobile' ): Pro
 		// capture records the closed state visitors first see, not an open overlay.
 		if ( opened && drawer && visible( drawer ) ) {
 			toggle!.click();
-			const deadline = Date.now() + 2000;
-			while ( visible( drawer ) && Date.now() < deadline ) await waitForFrame();
+			await settle( false );
 		}
 		return;
 	}
