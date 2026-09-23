@@ -345,6 +345,34 @@ describe( 'wix capture', () => {
 		expect( document.querySelector( 'a[href="/contact/"]' )!.closest( 'li' )?.getAttribute( 'style' ) ).toBe( '' );
 	} );
 
+	it( 'waits for a drawer that opens late before closing it', async () => {
+		const dom = new JSDOM( `
+			<header>
+				<button id="MENU_AS_CONTAINER_TOGGLE">Menu</button>
+				<div id="MENU_AS_CONTAINER" style="display:none"><ul><li><a href="/contact/">Contact</a></li></ul></div>
+			</header>
+		` );
+		const document = dom.window.document;
+		const toggle = document.querySelector< HTMLButtonElement >( '#MENU_AS_CONTAINER_TOGGLE' )!;
+		const drawer = document.getElementById( 'MENU_AS_CONTAINER' )!;
+		// A busy page: the drawer shows several frames after the click that opens it.
+		toggle.addEventListener( 'click', () => {
+			const next = drawer.style.display === 'none' ? 'block' : 'none';
+			setTimeout( () => { drawer.style.display = next; }, 40 );
+		} );
+		vi.stubGlobal( 'document', document );
+		vi.stubGlobal( 'getComputedStyle', dom.window.getComputedStyle.bind( dom.window ) );
+		vi.stubGlobal( 'requestAnimationFrame', ( callback: FrameRequestCallback ) => setTimeout( callback, 0 ) as unknown as number );
+		vi.spyOn( dom.window.HTMLElement.prototype, 'getBoundingClientRect' ).mockReturnValue(
+			{ width: 10, height: 10 } as DOMRect
+		);
+		await settleWixNavigation( 'mobile' );
+		// Let any open still in flight land before judging the captured state.
+		await new Promise( ( resolve ) => setTimeout( resolve, 100 ) );
+
+		expect( drawer.style.display ).toBe( 'none' );
+	} );
+
 	it( 'is attached to the adapter', () => {
 		expect( wixAdapter.liberation ).toBe( capture );
 	} );
