@@ -1026,10 +1026,18 @@ export function portableInlineStyle(
 	attributes: string,
 	css: string
 ): { key: string; media: string } | undefined {
-	const mediaMatch = /\bmedia\s*=\s*(["'])(.*?)\1/i.exec( attributes );
-	const typeCount = ( attributes.match( /\btype\s*=/gi ) ?? [] ).length;
-	const mediaCount = ( attributes.match( /\bmedia\s*=/gi ) ?? [] ).length;
-	const unsupportedAttributes = attributes
+	// Exported documents carry no executable script, so identifying attributes a
+	// source runtime used to track its own style tags (Wix `id`/`data-href`, for
+	// example) cannot affect rendering once the style moves to a link. DLA's own
+	// `data-dla-*` markers are selected by later export passes and stay inline.
+	const significant = attributes.replace(
+		/(^|\s)(?:id|class|rel|data-(?!dla-)[\w.:-]+)\s*=\s*(["'])[\s\S]*?\2/gi,
+		'$1'
+	);
+	const mediaMatch = /\bmedia\s*=\s*(["'])(.*?)\1/i.exec( significant );
+	const typeCount = ( significant.match( /\btype\s*=/gi ) ?? [] ).length;
+	const mediaCount = ( significant.match( /\bmedia\s*=/gi ) ?? [] ).length;
+	const unsupportedAttributes = significant
 		// Only inert stylesheet attributes may be represented by a link.
 		.replace( /\btype\s*=\s*(["'])text\/css\1/gi, '' )
 		.replace( /\bmedia\s*=\s*(["']).*?\1/gi, '' )
