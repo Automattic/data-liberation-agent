@@ -9,7 +9,7 @@ import { SectionSpecsStore } from '../replicate/section-specs-store.js';
 import { slugify } from '../url/index.js';
 import { SiteAnalysisAggregator } from './aggregator.js';
 import { applyCaptureRemovals } from './apply-removals.js';
-import { applySourceCleanup, readSourceCleanup, cleanupPolicy, type CleanupPolicy } from '../source-cleanup.js';
+import { applySourceCleanup, readSourceCleanup, sweepSourceCleanup, cleanupPolicy, type CleanupPolicy } from '../source-cleanup.js';
 import { captureChromeFidelity } from './capture-chrome-fidelity.js';
 import { CssAggregator } from './css-aggregator.js';
 import { CSS_SHORTHAND_REPAIR_FACTORY_SOURCE } from './css-shorthand-repair.js';
@@ -794,6 +794,9 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 
 	if ( isDesktop && plan.captureHtml ) {
 		try {
+			// The cleanup observer may have exhausted its budget before the page
+			// re-rendered a credit or ad; the saved document must be swept.
+			await sweepSourceCleanup( page );
 			const html = await capturePageHtml( page );
 			await resourceStore.captureDomDependencies( html, url );
 			// Refuse to persist a capture whose page navigated away from the route we
@@ -855,6 +858,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	// can't reflow to. Best-effort: a miss leaves the page desktop-only.
 	if ( ! isDesktop && plan.captureMobileHtml ) {
 		try {
+			await sweepSourceCleanup( page );
 			const mhtml = sanitizeFrozenHtml( await capturePageHtml( page ) );
 			await resourceStore.captureDomDependencies( mhtml, url );
 			// Same route-identity guard as the desktop HTML write above — best-effort

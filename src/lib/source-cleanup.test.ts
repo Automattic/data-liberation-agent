@@ -133,6 +133,52 @@ it('treats mutation-budget exhaustion as a diagnostic, not a cleanup failure, wh
   expect(comparison.pass).toBe(true);
 }, 90_000);
 
+it('keeps a credit the page re-renders after the observer budget is spent out of the saved HTML', async () => {
+  // A hydrating builder page animates past the 100-round observer budget, then
+  // re-renders its footer, putting the credit back. Nothing watches the DOM any
+  // more, so the saved HTML must come from a swept document, not the live one.
+  const rerenderHtml = `<!doctype html><html><head><meta charset="utf-8"><title>Rehydrating owner site</title></head><body>
+<main><h1>Owner business</h1><p>${'Real owner content to retain. '.repeat(30)}</p></main>
+<footer id="site-footer"><p>© 2035 by Owner. Powered and secured by <span><a href="https://www.wix.com">Wix</a></span></p></footer>
+<script>
+(function tick(n){
+  const span = document.createElement('span');
+  span.className = 'churn';
+  span.textContent = String(n);
+  document.body.appendChild(span);
+  span.remove();
+  if (n < 160) { setTimeout(tick, 0, n + 1); return; }
+  setTimeout(() => {
+    // Assembled at runtime so the credit phrase is not in the page source.
+    const phrase = ['Powered', 'and', 'secured', 'by'].join(' ');
+    document.getElementById('site-footer').innerHTML = '<p>© 2035 by Owner. ' + phrase + ' <span><a href="https://www.wix.com">Wix</a></span></p>';
+  }, 150);
+})(0);
+</script>
+</body></html>`;
+  server = createServer((_req, res) => { res.setHeader('content-type', 'text/html'); res.end(rerenderHtml); });
+  await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve));
+  const url = `http://localtest.me:${(server.address() as { port: number }).port}/`;
+  mkdirSync(join(process.cwd(), '.tmp-test'), { recursive: true });
+  directory = mkdtempSync(join(process.cwd(), '.tmp-test', 'cleanup-rerender-'));
+  const result = await captureScreenshots({ urls: [url], primaryUrl: url, outputDir: directory,
+    cleanupPolicy: policy, captureImages: true, learnFluid: false, settleMs: 1000 });
+  expect(result.failed).toBe(0);
+  const manifest = JSON.parse(readFileSync(join(directory, 'screenshots', 'manifest.json'), 'utf8'));
+  const reports = manifest.entries[url].cleanup.reports as Array<{ truncated: boolean }>;
+  expect(reports.some((report) => report.truncated)).toBe(true);
+  for (const name of readdirSync(join(directory, 'html'))) {
+    expect(readFileSync(join(directory, 'html', name), 'utf8')).not.toContain('Powered and secured by');
+  }
+  exportWebsiteCapture({ outputDir: directory, sourceUrl: url, platform: 'wix', summary: {}, failures: [] });
+  const output = readFileSync(join(directory, 'website', 'index.html'), 'utf8');
+  expect(output).not.toContain('Powered and secured by');
+  expect(output).toContain('© 2035 by Owner.');
+  // The comparison measures instead of refusing the artifact.
+  const comparison = await checkFidelity({ directory, widths: [1440], settleMs: 200 });
+  expect(comparison.cleanup!.source.length).toBeGreaterThan(0);
+}, 90_000);
+
 it('still reports genuine residual distinctly from budget exhaustion', async () => {
   // Crosses the 1000-removal safety cap on a single rule, so the sweep's own guard
   // (not the observer budget) leaves matches unremoved and reports them as residual.
