@@ -5,9 +5,13 @@ import type {
 	CapturedInitialDialog,
 } from './screenshot/interaction-capture.js';
 
+// Base summary styling is zero-specificity (`:where(...)`) so author
+// utilities on the summary or details — e.g. a responsive `md:hidden`
+// hamburger — still win. State-driven dialog rules below keep their
+// specificity so open/closed behavior cannot be overridden.
 const DISCLOSURE_CSS =
-	'details.dla-disclosure>summary{list-style:none;cursor:pointer;display:inline-block}' +
-	'details.dla-disclosure>summary::-webkit-details-marker{display:none}' +
+	':where(details.dla-disclosure>summary){list-style:none;cursor:pointer;display:inline-block}' +
+	':where(details.dla-disclosure>summary)::-webkit-details-marker{display:none}' +
 	'details.dla-disclosure:not([open])>.dla-dialog{display:none!important}' +
 	'details.dla-disclosure[open]>.dla-dialog{display:block;position:fixed;inset:0;z-index:2147483646;overflow:auto;background:#fff}' +
 	'details.dla-disclosure[open]>.dla-dialog>:first-child{display:block!important;visibility:visible!important;opacity:1!important}' +

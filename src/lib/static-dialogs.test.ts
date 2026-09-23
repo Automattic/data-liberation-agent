@@ -24,6 +24,69 @@ const captured: CapturedDialogInteraction = {
 };
 
 describe( 'wireCapturedDialogs', () => {
+	it( 'emits zero-specificity base disclosure rules so author utilities win', () => {
+		const html = wireCapturedDialogs(
+			'<html><head></head><body><button class="burger">Open Menu</button></body></html>',
+			[ captured ]
+		);
+		const css = html.match( /<style data-dla-disclosure="true">([\s\S]*?)<\/style>/ )?.[ 1 ] ?? '';
+		expect( css ).toContain(
+			':where(details.dla-disclosure>summary){list-style:none;cursor:pointer;display:inline-block}'
+		);
+		expect( css ).toContain(
+			':where(details.dla-disclosure>summary)::-webkit-details-marker{display:none}'
+		);
+		expect( css ).not.toMatch( /(^|;)details\.dla-disclosure>summary(::-webkit-details-marker)?\{/ );
+	} );
+
+	it( 'lets an author md:hidden utility hide the toggle at 1600px while it still opens and closes the dialog at 390px', async () => {
+		const html = wireCapturedDialogs(
+			'<html><head><style>.burger{display:inline-flex}@media(min-width:768px){.md\\:hidden{display:none}}</style></head><body><header><a href="/">Logo</a><button class="burger md:hidden" aria-label="Toggle menu">Menu</button></header></body></html>',
+			[
+				{
+					status: 'captured',
+					trigger: {
+						selector: 'header > button',
+						tag: 'button',
+						ariaHaspopup: '',
+						label: 'Toggle menu',
+						dataBindings: {},
+					},
+					dialog: {
+						selector: '#menu',
+						tag: 'div',
+						ariaModal: true,
+						ariaLabel: 'Menu',
+						html: '<nav><a href="/about">About</a></nav>',
+						htmlBytes: 32,
+						htmlTruncated: false,
+					},
+				},
+			]
+		);
+		const browser = await chromium.launch( { headless: true } );
+		try {
+			const page = await browser.newPage( { viewport: { width: 1600, height: 900 } } );
+			await page.setContent( html );
+			const summary = page.locator( 'details.dla-disclosure > summary' );
+			expect(
+				await summary.evaluate( ( element ) => getComputedStyle( element ).display )
+			).toBe( 'none' );
+			await page.setViewportSize( { width: 390, height: 844 } );
+			expect(
+				await summary.evaluate( ( element ) => getComputedStyle( element ).display )
+			).toBe( 'inline-flex' );
+			await summary.click();
+			const details = page.locator( 'details.dla-disclosure' );
+			expect( await details.evaluate( ( element ) => ( element as HTMLDetailsElement ).open ) ).toBe( true );
+			expect( await page.locator( 'details.dla-disclosure[open] [role="dialog"] a' ).getAttribute( 'href' ) ).toBe( '/about' );
+			await summary.click();
+			expect( await details.evaluate( ( element ) => ( element as HTMLDetailsElement ).open ) ).toBe( false );
+		} finally {
+			await browser.close();
+		}
+	}, 30_000 );
+
 	it( 'wraps a menu button in details so a click opens the captured dialog', () => {
 		const html = wireCapturedDialogs(
 			'<html><head></head><body><button class="burger">Open Menu</button></body></html>',
