@@ -28,7 +28,8 @@ export function markPagerSlideshows( limit: number ): { index: number; controls:
 		if ( element.tagName !== 'A' ) return false;
 		const href = ( element.getAttribute( 'href' ) ?? '' ).trim();
 		if ( ! href || href === '#' || href.startsWith( '#' ) ) return false;
-		if ( href.toLowerCase().startsWith( 'javascript:' ) ) return false;
+		// Script pseudo-URLs run a handler instead of navigating anywhere.
+		if ( /^(?:javascript|vbscript|data):/i.test( href ) ) return false;
 		return true;
 	};
 	const isImageOnlyControl = ( element: Element ): boolean =>

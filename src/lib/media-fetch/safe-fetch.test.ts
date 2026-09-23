@@ -111,7 +111,7 @@ describe('safeFetch', () => {
 
   it('follows a redirect to another public host', async () => {
     const fakeFetch = (async (url: string) => {
-      if (url.startsWith('https://a.example.com')) {
+      if (new URL(url).origin === 'https://a.example.com') {
         return mockResponse({ status: 301, headers: { location: 'https://b.example.com/final' } });
       }
       return mockResponse({ status: 200, body: new TextEncoder().encode('FINAL') });
@@ -155,7 +155,7 @@ describe('headersForOrigin', () => {
     const seenHeaders: Array<Record<string, string> | undefined> = [];
     const fakeFetch = (async (url: string, init?: RequestInit) => {
       seenHeaders.push(init?.headers as Record<string, string> | undefined);
-      if (url.startsWith('https://a.example.com')) {
+      if (new URL(url).origin === 'https://a.example.com') {
         return mockResponse({ status: 302, headers: { location: 'https://b.example.com/final' } });
       }
       return mockResponse({ status: 200, body: new TextEncoder().encode('FINAL') });
