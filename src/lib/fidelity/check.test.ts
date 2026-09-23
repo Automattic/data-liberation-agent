@@ -194,6 +194,46 @@ ${ routed ? `<script>document.addEventListener('click', (event) => {
 			await new Promise< void >( ( resolve ) => server.close( () => resolve() ) );
 		}
 	}, 90_000 );
+	it( 'compares each route against a candidate copy instead of the capture', async () => {
+		const pairs: Array< [ string, string ] > = [];
+		const report = await checkFidelity( {
+			directory: liberatedRun(),
+			widths: [ 1600 ],
+			candidateUrl: 'http://127.0.0.1:8080/site/',
+			observe: async ( sourceHref, localHref, viewport ) => {
+				pairs.push( [ sourceHref, localHref ] );
+				return { source: obs( viewport ), liberated: obs( viewport ) };
+			},
+		} );
+		expect( [ ...new Set( pairs.map( ( pair ) => pair[ 1 ] ) ) ] ).toEqual( [ 'http://127.0.0.1:8080/site/' ] );
+		expect( pairs.every( ( pair ) => pair[ 0 ] === 'https://example.com/' ) ).toBe( true );
+		expect( report.pass ).toBe( true );
+	} );
+
+	it( 'reports attribution a candidate retains as a failed check, not a rejection', async () => {
+		const report = await checkFidelity( {
+			directory: liberatedRun(),
+			widths: [ 1600 ],
+			candidateUrl: 'http://127.0.0.1:8080',
+			observe: async ( _source, _local, viewport ) => ( {
+				source: obs( viewport ),
+				liberated: obs( viewport ),
+				candidateRetained: viewport === 1600 ? 2 : 0,
+			} ),
+		} );
+		expect( report.pass ).toBe( false );
+		expect( report.scores.find( ( score ) => score.viewport === 1600 )!.failures ).toContain(
+			'candidate retains advertising or source attribution (2 removable)'
+		);
+	} );
+
+	it( 'refuses a candidate URL that is not a plain http(s) base', async () => {
+		for ( const candidateUrl of [ 'not a url', 'ftp://example.com', 'https://user:pass@example.com', 'https://example.com/?x=1' ] ) {
+			await expect(
+				checkFidelity( { directory: liberatedRun(), candidateUrl, observe: async () => { throw new Error( 'unreachable' ); } } )
+			).rejects.toThrow( /candidateUrl/ );
+		}
+	} );
 
 	it( 'compares a subpath source against the page it captured, not the origin root', async () => {
 		const dir = mkdtempSync( join( tmpdir(), 'dla-check-' ) );

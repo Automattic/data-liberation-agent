@@ -54,6 +54,8 @@ const HELP = `
   Compare options:
     --screenshots        Write source/liberated/diff PNGs as evidence. Pixel score
                          never decides pass/fail.
+    --candidate <url>    Compare another rendered copy of the site, such as one
+                         built from the capture, instead of the capture itself.
 
   Inspect options:
     --http-only           Skip rendered observations; complexity remains unknown
@@ -85,11 +87,17 @@ if (args.includes('--help')) {
 } else if (args[0] === 'compare') {
   const directory = args[1];
   if (!directory || directory.startsWith('-')) {
-    console.error('Error: directory required. Usage: data-liberation compare <dir> [--screenshots]');
+    console.error('Error: directory required. Usage: data-liberation compare <dir> [--screenshots] [--candidate <url>]');
+    process.exit(1);
+  }
+  const candidateIndex = args.indexOf('--candidate');
+  const candidateUrl = candidateIndex === -1 ? undefined : args[candidateIndex + 1];
+  if (candidateIndex !== -1 && (!candidateUrl || candidateUrl.startsWith('-'))) {
+    console.error('Error: --candidate requires a URL.');
     process.exit(1);
   }
   const { runCompare } = await import('./ui/compare.js');
-  const report = await runCompare(directory, { screenshots: args.includes('--screenshots') });
+  const report = await runCompare(directory, { screenshots: args.includes('--screenshots'), candidateUrl });
   process.exit(report.pass ? 0 : 1);
 } else if (args[0] === 'inspect') {
   const url = args[1];

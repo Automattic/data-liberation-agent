@@ -48,6 +48,8 @@ export type ObservePair = (
 	liberated: LayoutObservation;
 	sourcePng?: Buffer;
 	liberatedPng?: Buffer;
+	/** Source-cleanup matches found on a `candidateUrl` copy, reported rather than rejected. */
+	candidateRetained?: number;
 } >;
 
 export interface FidelityCheckOptions {
@@ -62,6 +64,29 @@ export interface FidelityCheckOptions {
 	screenshots?: boolean;
 	log?: ( ( message: string ) => void ) | undefined;
 	observe?: ObservePair;
+	/**
+	 * Base URL of another rendered copy of the captured site, for example a
+	 * WordPress site built from the capture. When set, each sampled route is
+	 * compared against `candidateUrl + route` instead of the capture served
+	 * locally. Routes still come from the capture receipt, and the offline
+	 * self-consistency checks still describe the capture. Source attribution a
+	 * candidate retains becomes a failed check instead of rejecting the run,
+	 * since the candidate is not this tool's artifact.
+	 */
+	candidateUrl?: string;
+}
+
+function candidateBase( candidateUrl: string ): string {
+	let url: URL;
+	try {
+		url = new URL( candidateUrl );
+	} catch {
+		throw new Error( `candidateUrl is not a URL: ${ candidateUrl }` );
+	}
+	if ( ! [ 'http:', 'https:' ].includes( url.protocol ) || url.username || url.password || url.search || url.hash ) {
+		throw new Error( `candidateUrl must be an http(s) base URL without credentials, query or fragment: ${ candidateUrl }` );
+	}
+	return url.href.replace( /\/+$/, '' );
 }
 
 /** A score, told which route produced it. */
@@ -600,12 +625,13 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 		log( `[compare] source fidelity: sampling ${ routes.length } of ${ captured.length } route(s)` );
 	}
 
+	const candidate = options.candidateUrl === undefined ? null : candidateBase( options.candidateUrl );
 	let observe = options.observe;
 	const browser = observe ? null : await (await import('playwright')).chromium.launch();
 	let server: Awaited<ReturnType<typeof startStaticServer>> | null = null;
 	let page: Page | null = null;
 	try {
-		server = observe ? null : await startStaticServer( websiteDir );
+		server = observe || candidate ? null : await startStaticServer( websiteDir );
 		page = browser ? await browser.newPage( await sourceContextOptions( browser, sourceUrl ) ) : null;
 	} catch (error) {
 		await browser?.close();
@@ -623,6 +649,17 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 				if (report.failures.length || report.residual) throw new Error('Comparison source cleanup incomplete');
 			}
 			const sourcePng = options.screenshots ? await page.screenshot() : undefined;
+			if ( candidate ) {
+				// Measure the candidate as a visitor sees it, then ask the cleanup
+				// policy what it would still remove. Removing it first would hide
+				// exactly what is being measured.
+				const liberated = await observePage( page, localHref, viewport, settleMs, new URL( localHref ).origin );
+				const liberatedPng = options.screenshots ? await page.screenshot() : undefined;
+				const candidateRetained = receipt.cleanup
+					? ( await applySourceCleanup( page, receipt.cleanup.policy ) ).removed
+					: 0;
+				return { source, liberated, sourcePng, liberatedPng, candidateRetained };
+			}
 			const liberated = await observePage(
 				page,
 				localHref,
@@ -647,7 +684,7 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 	try {
 		for ( const route of routes ) {
 			const sourceHref = sources.get( route )!;
-			const localHref = `${ server?.url ?? 'http://liberated.invalid' }${ route }`;
+			const localHref = `${ candidate ?? server?.url ?? 'http://liberated.invalid' }${ route }`;
 			for ( const width of widths ) {
 				log( `[compare] ${ route } @ ${ width }px` );
 				const pair = await observe( sourceHref, localHref, width );
@@ -667,6 +704,9 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 					candidate: pair.liberated,
 					evidenceDir,
 				} );
+				if ( pair.candidateRetained ) {
+					checked.failures.push( `candidate retains advertising or source attribution (${ pair.candidateRetained } removable)` );
+				}
 				const score: RouteScore = {
 					route,
 					viewport: width,
