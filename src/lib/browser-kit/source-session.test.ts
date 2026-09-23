@@ -81,7 +81,8 @@ function startGatedSource(): Promise<{
       return;
     }
     res.setHeader( 'content-type', 'text/html' );
-    res.end( `<!doctype html><title>${ path }</title><body>${ path }</body>` );
+    const text = path.replace( /[&<>"']/g, ( character ) => `&#${ character.charCodeAt( 0 ) };` );
+    res.end( `<!doctype html><title>${ text }</title><body>${ text }</body>` );
   } );
   return new Promise( ( resolve ) => {
     server.listen( 0, '127.0.0.1', () => {

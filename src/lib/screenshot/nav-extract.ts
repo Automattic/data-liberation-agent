@@ -23,7 +23,7 @@
  * ─────────
  * 1. All `<a>` elements inside the first `<nav>` (or, if no `<nav>`, all `<a>`
  *    elements in the header). Only links with non-empty trimmed text AND a non-
- *    trivial href (not null, not pure "#", not "javascript:") are kept.
+ *    trivial href (not null, not pure "#", not a script pseudo-URL) are kept.
  * 2. Deduped by label+href. Capped at MAX_NAV_ITEMS=8 to match typical nav sizes.
  * 3. Pure in-page anchor links (href === "#") are skipped.
  *
@@ -141,7 +141,7 @@ export function extractNav(headerEl: Element): ExtractedNav {
   // All valid link candidates (non-empty text, meaningful href) from the header.
   const isValidAnchor = (a: Element): boolean => {
     const href = (a as HTMLAnchorElement).getAttribute('href');
-    if (!href || href === '#' || href.startsWith('javascript:')) return false;
+    if (!href || href === '#' || /^(?:javascript|vbscript|data):/i.test(href)) return false;
     const label = a.textContent?.trim() ?? '';
     return !!label;
   };
@@ -173,7 +173,7 @@ export function extractNav(headerEl: Element): ExtractedNav {
     // For <a> elements, must have a meaningful href (not just an anchor or JS void).
     if (el.tagName === 'A') {
       const href = (el as HTMLAnchorElement).getAttribute('href');
-      if (!href || href === '#' || href.startsWith('javascript:')) return false;
+      if (!href || href === '#' || /^(?:javascript|vbscript|data):/i.test(href)) return false;
     }
     return true;
   }) as Array<HTMLAnchorElement | HTMLButtonElement>;
