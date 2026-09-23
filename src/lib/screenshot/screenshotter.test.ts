@@ -43,7 +43,7 @@ import { classifyUrl } from '../extraction/sitemap.js';
 import { connectBrowser } from '../browser-kit/index.js';
 
 interface MockContext { newPage: () => Promise<unknown>; addInitScript: (script: unknown) => Promise<void>; close: () => Promise<void> }
-interface MockBrowser { newContext: (opts?: unknown) => Promise<MockContext>; close: () => Promise<void> }
+interface MockBrowser { newContext: (opts?: unknown) => Promise<MockContext>; close: () => Promise<void>; isConnected: () => boolean }
 
 function makeGoodPage(gotoStatus: number | ((url: string) => number) = 200) {
   let currentUrl = '';
@@ -89,6 +89,31 @@ function makeMockBrowser(pageFactory = () => makeGoodPage()): MockBrowser {
       close: vi.fn().mockResolvedValue(undefined),
     } as MockContext)),
     close: vi.fn().mockResolvedValue(undefined),
+    isConnected: () => true,
+  };
+}
+
+const CLOSED = 'Target page, context or browser has been closed';
+
+// A browser that serves routes normally until navigating to `crashAt`, then
+// dies the way Chromium does: the in-flight page and every later context fail.
+function makeCrashingBrowser(crashAt: string): MockBrowser {
+  let connected = true;
+  const healthy = makeMockBrowser(() => {
+    const page = makeGoodPage();
+    const goto = page.goto.getMockImplementation()!;
+    page.goto.mockImplementation(async (url: string) => {
+      if (url === crashAt) connected = false;
+      if (!connected) throw new Error(`page.goto: ${CLOSED}`);
+      return goto(url);
+    });
+    return page;
+  });
+  return {
+    ...healthy,
+    newContext: vi.fn().mockImplementation((opts?: unknown) =>
+      connected ? healthy.newContext(opts) : Promise.reject(new Error(`browser.newContext: ${CLOSED}`))),
+    isConnected: () => connected,
   };
 }
 
@@ -190,6 +215,28 @@ describe('captureScreenshots', () => {
       const manifest = JSON.parse(readFileSync(join(dir, 'screenshots', 'manifest.json'), 'utf8'));
       expect(manifest.version).toBe(1);
       expect(Object.keys(manifest.entries)).toHaveLength(2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('relaunches a browser that disconnects mid-segment and captures the remaining routes', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ss-'));
+    try {
+      const connect = connectBrowser as ReturnType<typeof vi.fn>;
+      connect.mockReset();
+      connect
+        .mockResolvedValueOnce(makeCrashingBrowser('https://example.com/b'))
+        .mockResolvedValue(makeMockBrowser());
+      const urls = ['a', 'b', 'c', 'd'].map((p) => `https://example.com/${p}`);
+      const result = await captureScreenshots({ urls, outputDir: dir, concurrency: 1, settleMs: 0 });
+      expect(result.failed).toBe(0);
+      expect(result.captured).toBe(4);
+      expect(result.browserRestarts).toBe(1);
+      expect(connect).toHaveBeenCalledTimes(2);
+      for (const p of ['a', 'b', 'c', 'd']) expect(existsSync(join(dir, 'html', `${p}.html`))).toBe(true);
+      const manifest = JSON.parse(readFileSync(join(dir, 'screenshots', 'manifest.json'), 'utf8'));
+      expect(JSON.stringify(manifest)).not.toContain(CLOSED);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
