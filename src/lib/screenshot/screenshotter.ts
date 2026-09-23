@@ -316,7 +316,49 @@ export async function capturePageHtml( page: Page ): Promise< string > {
 		// Serialize in the renderer's current task. page.content() round-trips through
 		// DevTools and can race framework hydration, pairing a newer class namespace
 		// with older CSS.
-		return await page.evaluate( () => `<!DOCTYPE html>${ document.documentElement.outerHTML }` );
+		//
+		// An empty custom element whose defining script the portable copy never
+		// runs is kept only if it shows or shapes something here: it paints, or
+		// taking it out moves its parent or next sibling. Otherwise it is an empty
+		// runtime hook; leave it out of the document, then restore it so later
+		// probes still see the live page.
+		return await page.evaluate( () => {
+			const box = ( node: Element | null ) => {
+				const bounds = node?.getBoundingClientRect();
+				return bounds ? `${ bounds.x },${ bounds.y },${ bounds.width },${ bounds.height }` : '';
+			};
+			const paints = ( element: Element ) => {
+				const style = getComputedStyle( element );
+				return (
+					style.backgroundImage !== 'none' ||
+					! /^(?:transparent|rgba\([^)]*,\s*0\))$/.test( style.backgroundColor ) ||
+					[ style.borderTopWidth, style.borderRightWidth, style.borderBottomWidth, style.borderLeftWidth ].some(
+						( width ) => parseFloat( width ) > 0
+					) ||
+					( style.outlineStyle !== 'none' && parseFloat( style.outlineWidth ) > 0 ) ||
+					style.boxShadow !== 'none'
+				);
+			};
+			const detached: Array< { element: Element; parent: Node; next: Node | null } > = [];
+			for ( const element of Array.from( document.body?.querySelectorAll( '*' ) ?? [] ) ) {
+				if ( element.namespaceURI !== 'http://www.w3.org/1999/xhtml' || ! element.localName.includes( '-' ) ) continue;
+				if ( element.shadowRoot || element.childElementCount > 0 || ( element.textContent ?? '' ).trim() !== '' ) continue;
+				if ( paints( element ) ) continue;
+				const parent = element.parentElement;
+				if ( ! parent ) continue;
+				const next = element.nextSibling;
+				const sibling = element.nextElementSibling;
+				const before = box( parent ) + box( sibling );
+				element.remove();
+				if ( box( parent ) + box( sibling ) === before ) detached.push( { element, parent, next } );
+				else parent.insertBefore( element, next );
+			}
+			try {
+				return `<!DOCTYPE html>${ document.documentElement.outerHTML }`;
+			} finally {
+				for ( const { element, parent, next } of detached.reverse() ) parent.insertBefore( element, next );
+			}
+		} );
 	} finally {
 		await page.evaluate( ( evidenceAttributes ) => {
 			for ( const frame of document.querySelectorAll( 'iframe' ) ) {
