@@ -68,8 +68,9 @@ To add a platform: create `src/adapters/<platform>/` with an `index.ts` that ass
 
 Both must pass for exit 0. When adding a check, put it in the cheap tier if it can be answered from disk.
 
-Two things the gate has been wrong about before, both worth remembering:
+Three things the gate has been wrong about before, all worth remembering:
 
+- The source is not what a visitor's first load shows. Capture dismisses takeover modals and consent banners before it serializes, so the copy never has one; comparing that copy to a live source with its banner still up measures two different documents, and every route fails by exactly the banner's length. Both sides now run the same `dismissOverlays` primitive, and `compare/overlay-evidence.json` records what came off each side.
 - Resolving is not the same as resolving correctly. `getElementById` returns the first match, so a fragment duplicated across the desktop and mobile documents reported success while sending the reader to the hidden one.
 - A route is not a URL path. A site captured at a subpath serves its entrypoint as the copy's `/`, so resolving routes against the source origin asks the live site for a page that was never captured — and a 404 page then becomes the thing the copy is compared to.
 

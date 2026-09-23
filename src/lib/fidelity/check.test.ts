@@ -435,3 +435,70 @@ ${ routed ? `<script>document.addEventListener('click', (event) => {
 		expect( report.scores[ 0 ]?.notes.join( ' ' ) ).toMatch( /evidence, not a gate/ );
 	} );
 } );
+
+describe( 'checkFidelity with a consent banner on the source', () => {
+	// The live source raises a cookie banner; capture dismisses it before it
+	// serializes, so the copy never has one. Measuring the source with the
+	// banner still up made every route on such a site fail by exactly the
+	// banner's length — 355 characters on www.tallersherrera.com (run r64),
+	// identically on /contacto/, /privacidad/ and /servicios/.
+	const banner = `<div id="cookie-consent-container" class="cookie-consent-container" style="position:fixed;left:0;right:0;bottom:0;z-index:10000;background:#eee;padding:24px">
+<p>Politica de cookies. Esta pagina utiliza cookies para mejorar su experiencia.</p>
+<button type="button">Aceptar</button> <button type="button">Declinar</button> <button type="button">Gestionar ajustes</button>
+</div>`;
+	const body = `<p>${ 'Reparamos faros de coche. '.repeat( 20 ) }</p>`;
+	const alsoOnTheSource = `<p>${ 'Horario de apertura de lunes a viernes. '.repeat( 10 ) }</p>`;
+	const page = ( parts: { banner?: boolean; extra?: boolean } ) =>
+		`<!doctype html><html lang="es"><head><meta charset="utf-8"><title>Taller</title></head><body>
+<main><h1>Servicios</h1>${ body }${ parts.extra === false ? '' : alsoOnTheSource }</main>
+${ parts.banner ? banner : '' }
+</body></html>`;
+
+	/** Serve `page({banner:true})` live, write `copy` to disk, and compare. */
+	async function compare( copy: string ) {
+		const server = createServer( ( _request, response ) => {
+			response.setHeader( 'content-type', 'text/html' );
+			response.end( page( { banner: true } ) );
+		} );
+		await new Promise< void >( ( resolve ) => server.listen( 0, '127.0.0.1', resolve ) );
+		const origin = `http://localtest.me:${ ( server.address() as { port: number } ).port }`;
+		const dir = mkdtempSync( join( tmpdir(), 'dla-check-' ) );
+		dirs.push( dir );
+		mkdirSync( join( dir, 'website' ), { recursive: true } );
+		writeFileSync( join( dir, 'website', 'index.html' ), copy );
+		writeFileSync(
+			join( dir, 'capture-receipt.json' ),
+			JSON.stringify( {
+				source: { url: `${ origin }/` },
+				websiteRoot: 'website',
+				routes: [ { url: `${ origin }/`, path: 'website/index.html' } ],
+			} )
+		);
+		try {
+			return await checkFidelity( { directory: dir, widths: [ 1440 ], settleMs: 200 } );
+		} finally {
+			server.closeAllConnections();
+			await new Promise< void >( ( resolve ) => server.close( () => resolve() ) );
+		}
+	}
+
+	const textFailures = ( report: Awaited< ReturnType< typeof compare > > ) =>
+		report.scores.flatMap( ( score ) => score.failures.filter( ( failure ) => failure.startsWith( 'text' ) ) );
+
+	it( 'does not fail a copy for the banner the capture dismissed', async () => {
+		const report = await compare( page( { banner: false } ) );
+		expect( textFailures( report ) ).toEqual( [] );
+		// And says why the two documents were allowed to differ.
+		const dismissed = report.overlays.filter( ( record ) => record.side === 'source' );
+		expect( dismissed.length ).toBeGreaterThan( 0 );
+		expect( dismissed.flatMap( ( record ) => record.dismissed.map( ( overlay ) => overlay.kind ) ) ).toContain(
+			'consent'
+		);
+		expect( report.overlays.filter( ( record ) => record.side === 'copy' ) ).toEqual( [] );
+	}, 90_000 );
+
+	it( 'still fails a copy that lost real content behind the banner', async () => {
+		const report = await compare( page( { banner: false, extra: false } ) );
+		expect( textFailures( report ).length ).toBeGreaterThan( 0 );
+	}, 90_000 );
+} );

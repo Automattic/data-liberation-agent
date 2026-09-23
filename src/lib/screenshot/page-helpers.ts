@@ -452,6 +452,12 @@ export interface DismissedOverlay {
 export interface DismissOverlaysOpts {
   /** Max detect→dismiss rounds (stacked overlays). Default 3. */
   maxRounds?: number;
+  /**
+   * Which kinds to dismiss. Default: all of them, which is what capture wants.
+   * A caller that measures source attribution separately narrows this so the
+   * two mechanisms do not consume each other's evidence.
+   */
+  kinds?: ReadonlyArray<OverlayTarget['kind']>;
 }
 
 /** A candidate scoring this or higher is treated as a takeover modal. */
@@ -817,7 +823,8 @@ export async function dismissOverlays(
   try {
     for (let round = 0; round < maxRounds; round++) {
       const detection = await withEvaluateTimeout(detectOverlays(page), 4000);
-      const targets = selectOverlayTargets(detection);
+      const kinds = opts.kinds;
+      const targets = selectOverlayTargets(detection).filter((t) => !kinds || kinds.includes(t.kind));
       if (targets.length === 0) break;
       let acted = 0;
       for (const t of targets) {
