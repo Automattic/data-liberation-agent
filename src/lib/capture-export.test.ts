@@ -2577,6 +2577,37 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		expect( html ).toContain( '/assets/css/capture-' );
 	} );
 
+	it( 'hoists shared styles whose only extra attributes are inert runtime identifiers', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-style-hoist-inert-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
+		// The attribute shapes a Wix page puts on its component style tags.
+		const styles =
+			'<style id="css_masterPage" data-href="https://static.example/main.css" rel="stylesheet">.a{color:red}</style>' +
+			'<style data-ricos-style-hash="h1" type="text/css" media="screen" class="ricos">.b{color:blue}</style>' +
+			'<style data-dla-disclosure="true">.marker{color:green}</style>';
+		for ( const slug of [ 'homepage', 'about' ] )
+			writeFileSync( join( outputDir, 'html', `${ slug }.html` ), `<html><head>${ styles }</head><body><p class="a b">${ slug }</p></body></html>` );
+		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( {
+			version: 1,
+			entries: {
+				'https://example.com/': { html: 'html/homepage.html' },
+				'https://example.com/about': { html: 'html/about.html' },
+			},
+		} ) );
+
+		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'fake', summary: {}, failures: [] } );
+
+		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
+		expect( html.match( /<link rel="stylesheet" href="\/assets\/css\/capture-[a-f0-9]{64}\.css">/g ) ).toHaveLength( 1 );
+		expect( html.match( /<link rel="stylesheet" href="\/assets\/css\/capture-[a-f0-9]{64}\.css" media="screen">/g ) ).toHaveLength( 1 );
+		expect( html ).not.toContain( 'css_masterPage' );
+		expect( html ).toContain( '<style data-dla-disclosure="true">.marker{' );
+		const diagnostics = JSON.parse( readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' ) );
+		expect( diagnostics.styleHoist.hoistedStylesheets ).toBe( 2 );
+		expect( diagnostics.styleHoist.diagnosticCounts ).toEqual( { unsafe_attributes: 2 } );
+	} );
+
 	it( 'keeps unsafe and base-dependent styles inline with emitted diagnostics', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-style-hoist-diagnostics-' ) );
 		dirs.push( outputDir );
