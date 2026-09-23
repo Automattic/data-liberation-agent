@@ -418,6 +418,12 @@ async function observePage(
 			const hashTargets: { fragment: string; resolved: boolean; targets: number }[] = [];
 			const internalPaths: string[] = [];
 			const seen = new Set< string >();
+			// `/`, `/index.html` and a trailing slash all name the same document:
+			// a copy served at `/` writes its own anchors as `/index.html#id`.
+			const documentPath = ( pathname: string ) =>
+				pathname.replace( /\/index\.html?$/i, '/' ).replace( /\/+$/, '' ) || '/';
+			const samePage = ( target: URL ) =>
+				documentPath( target.pathname ) === documentPath( location.pathname ) && target.search === location.search;
 			for ( const link of document.querySelectorAll< HTMLAnchorElement >( 'a[href]' ) ) {
 				const href = link.getAttribute( 'href' ) ?? '';
 				if ( ! href || href === '#' ) continue;
@@ -428,7 +434,11 @@ async function observePage(
 					continue;
 				}
 				if ( target.origin !== location.origin ) continue;
-				if ( target.hash ) {
+				// Only a fragment on this document is an in-page anchor. A fragment on
+				// another page is a link to that page: following it on a client-routed
+				// source navigates away, and the measurements below would describe the
+				// wrong page.
+				if ( target.hash && samePage( target ) ) {
 					let fragment: string;
 					try {
 						fragment = decodeURIComponent( target.hash.slice( 1 ) );
@@ -453,6 +463,9 @@ async function observePage(
 				}
 			}
 
+			// Read what describes this page before any probe click can change it.
+			const title = document.title;
+			const textChars = ( document.body?.innerText ?? '' ).replace( /\s+/g, ' ' ).trim().length;
 			if ( clickUnresolved ) {
 				const original = { x: scrollX, y: scrollY };
 				let clicks = 0;
@@ -491,8 +504,8 @@ async function observePage(
 			}
 
 			return {
-				title: document.title,
-				textChars: ( document.body?.innerText ?? '' ).replace( /\s+/g, ' ' ).trim().length,
+				title,
+				textChars,
 				widestImage: images.length
 					? Math.max( ...images.map( ( image ) => image.width ) )
 					: null,

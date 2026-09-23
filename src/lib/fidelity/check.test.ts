@@ -1,3 +1,4 @@
+import { createServer } from 'node:http';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -143,6 +144,56 @@ describe( 'checkFidelity', () => {
 		expect( report.pass ).toBe( true );
 		expect( report.sourceUrl ).toBe( 'https://example.com/' );
 	} );
+
+	it( 'measures a source subpage in place when its nav links to fragments on another page', async () => {
+		// A client-routed builder: the subpage's nav links to sections of the home
+		// page. Following one routes the app home, so the source must be measured
+		// without treating another page's fragment as an in-page anchor.
+		const other = ( routed: boolean ) => `<!doctype html><html><head><title>Other page</title></head><body>
+<nav><a href="/#features">Features</a> <a href="/#contact">Contact</a></nav>
+<main><h1>Other page</h1><p>${ 'Other page copy. '.repeat( 20 ) }</p></main>
+${ routed ? `<script>document.addEventListener('click', (event) => {
+  const link = event.target.closest('a');
+  if (!link) return;
+  event.preventDefault();
+  history.pushState({}, '', link.getAttribute('href'));
+  document.title = 'Home page';
+  document.body.innerHTML = '<main><h1>Home</h1><p>' + 'Home copy that is much longer. '.repeat(60) + '</p><section id="features">F</section><section id="contact">C</section></main>';
+});</script>` : '' }
+</body></html>`;
+		const server = createServer( ( req, res ) => {
+			res.setHeader( 'content-type', 'text/html' );
+			res.end( req.url?.startsWith( '/other' ) ? other( true ) : '<!doctype html><html><head><title>Home page</title></head><body><main><h1>Home</h1></main></body></html>' );
+		} );
+		await new Promise< void >( ( resolve ) => server.listen( 0, '127.0.0.1', resolve ) );
+		const origin = `http://localtest.me:${ ( server.address() as { port: number } ).port }`;
+		const dir = mkdtempSync( join( tmpdir(), 'dla-check-' ) );
+		dirs.push( dir );
+		mkdirSync( join( dir, 'website', 'other' ), { recursive: true } );
+		writeFileSync( join( dir, 'website', 'index.html' ), '<!doctype html><html><head><title>Home page</title></head><body><main><h1>Home</h1></main></body></html>' );
+		writeFileSync( join( dir, 'website', 'other', 'index.html' ), other( false ) );
+		writeFileSync(
+			join( dir, 'capture-receipt.json' ),
+			JSON.stringify( {
+				source: { url: `${ origin }/` },
+				websiteRoot: 'website',
+				routes: [
+					{ url: `${ origin }/`, path: 'website/index.html' },
+					{ url: `${ origin }/other`, path: 'website/other/index.html' },
+				],
+			} )
+		);
+		try {
+			const report = await checkFidelity( { directory: dir, widths: [ 1440 ], routes: [ '/other/' ], settleMs: 200 } );
+			const score = report.scores.find( ( entry ) => entry.route === '/other/' && entry.viewport === 1440 )!;
+			expect( score.source.title ).toBe( 'Other page' );
+			expect( score.failures.filter( ( failure ) => failure.startsWith( 'title' ) || failure.startsWith( 'text' ) ) ).toEqual( [] );
+			expect( score.source.hashTargets ).toEqual( [] );
+		} finally {
+			server.closeAllConnections();
+			await new Promise< void >( ( resolve ) => server.close( () => resolve() ) );
+		}
+	}, 90_000 );
 
 	it( 'compares a subpath source against the page it captured, not the origin root', async () => {
 		const dir = mkdtempSync( join( tmpdir(), 'dla-check-' ) );
