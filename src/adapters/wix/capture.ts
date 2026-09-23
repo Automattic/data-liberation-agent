@@ -261,8 +261,10 @@ export async function settleWixNavigation( viewport: 'desktop' | 'mobile' ): Pro
 
 	if ( viewport === 'mobile' ) {
 		const toggle = document.querySelector< HTMLElement >( '#MENU_AS_CONTAINER_TOGGLE' );
-		if ( toggle && visible( toggle ) ) {
-			toggle.click();
+		const drawer = document.getElementById( 'MENU_AS_CONTAINER' );
+		const opened = Boolean( toggle && visible( toggle ) && ! ( drawer && visible( drawer ) ) );
+		if ( opened ) {
+			toggle!.click();
 			await waitForFrame();
 			// Retain the authored trigger so conversion can emit responsive navigation.
 		}
@@ -272,6 +274,13 @@ export async function settleWixNavigation( viewport: 'desktop' | 'mobile' ): Pro
 				right.querySelectorAll( 'a[href]' ).length - left.querySelectorAll( 'a[href]' ).length
 		);
 		if ( lists[ 0 ] ) reveal( lists[ 0 ] );
+		// The drawer keeps its rendered links once closed. Close it again so the
+		// capture records the closed state visitors first see, not an open overlay.
+		if ( opened && drawer && visible( drawer ) ) {
+			toggle!.click();
+			const deadline = Date.now() + 2000;
+			while ( visible( drawer ) && Date.now() < deadline ) await waitForFrame();
+		}
 		return;
 	}
 

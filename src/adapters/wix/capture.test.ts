@@ -314,6 +314,37 @@ describe( 'wix capture', () => {
 		expect( contact.querySelector( '[tabindex]' ) ).toBeNull();
 	} );
 
+	it( 'closes the mobile drawer it opened once its links are revealed', async () => {
+		const dom = new JSDOM( `
+			<header>
+				<button id="MENU_AS_CONTAINER_TOGGLE">Menu</button>
+				<div id="MENU_AS_CONTAINER" style="display:none">
+					<ul><li aria-hidden="true" style="display:none"><a href="/contact/">Contact</a></li></ul>
+				</div>
+			</header>
+		` );
+		const document = dom.window.document;
+		const toggle = document.querySelector< HTMLButtonElement >( '#MENU_AS_CONTAINER_TOGGLE' )!;
+		const drawer = document.getElementById( 'MENU_AS_CONTAINER' )!;
+		// Like Wix, the drawer opens at once and hides only after its exit animation.
+		toggle.addEventListener( 'click', () => {
+			if ( drawer.style.display === 'none' ) drawer.style.display = 'block';
+			else setTimeout( () => { drawer.style.display = 'none'; }, 20 );
+		} );
+		const click = vi.spyOn( toggle, 'click' );
+		vi.stubGlobal( 'document', document );
+		vi.stubGlobal( 'getComputedStyle', dom.window.getComputedStyle.bind( dom.window ) );
+		vi.stubGlobal( 'requestAnimationFrame', ( callback: FrameRequestCallback ) => setTimeout( callback, 0 ) as unknown as number );
+		vi.spyOn( dom.window.HTMLElement.prototype, 'getBoundingClientRect' ).mockReturnValue(
+			{ width: 10, height: 10 } as DOMRect
+		);
+		await settleWixNavigation( 'mobile' );
+
+		expect( click ).toHaveBeenCalledTimes( 2 );
+		expect( drawer.style.display ).toBe( 'none' );
+		expect( document.querySelector( 'a[href="/contact/"]' )!.closest( 'li' )?.getAttribute( 'style' ) ).toBe( '' );
+	} );
+
 	it( 'is attached to the adapter', () => {
 		expect( wixAdapter.liberation ).toBe( capture );
 	} );
