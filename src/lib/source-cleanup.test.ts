@@ -96,6 +96,40 @@ it('captures clean artifacts and compares intentional removals while rejecting d
   expect(JSON.parse(readFileSync(join(directory, 'compare', 'cleanup-evidence.json'), 'utf8')).completed).toBe(false);
 }, 90_000);
 
+it('compares the source against a separately served candidate copy, reporting its retained attribution', async () => {
+  const url = await source();
+  mkdirSync(join(process.cwd(), '.tmp-test'), { recursive: true });
+  directory = mkdtempSync(join(process.cwd(), '.tmp-test', 'cleanup-candidate-'));
+  const result = await captureScreenshots({ urls: [url], primaryUrl: url, outputDir: directory,
+    cleanupPolicy: policy, captureImages: true, learnFluid: false, settleMs: 100 });
+  expect(result.captured).toBe(1);
+  exportWebsiteCapture({ outputDir: directory, sourceUrl: url, platform: 'wix', summary: {}, failures: [] });
+  // Stands in for a site another tool built from the capture, on its own origin.
+  let candidateHtml = readFileSync(join(directory, 'website', 'index.html'), 'utf8');
+  const requested: string[] = [];
+  const candidate = createServer((req, res) => {
+    requested.push(req.url ?? '');
+    res.setHeader('content-type', 'text/html');
+    res.end(candidateHtml);
+  });
+  await new Promise<void>((resolve) => candidate.listen(0, '127.0.0.1', resolve));
+  const candidateUrl = `http://127.0.0.1:${(candidate.address() as { port: number }).port}`;
+  try {
+    const clean = await checkFidelity({ directory, widths: [1440], settleMs: 200, candidateUrl });
+    expect(requested).toContain('/');
+    expect(clean.scores.flatMap((score) => score.failures)).toEqual([]);
+    expect(clean.pass).toBe(true);
+
+    candidateHtml = candidateHtml.replace('</body>', '<footer><p>Powered by <a href="https://www.wix.com">Wix</a></p></footer></body>');
+    const credited = await checkFidelity({ directory, widths: [1440], settleMs: 200, candidateUrl });
+    expect(credited.pass).toBe(false);
+    expect(credited.scores.flatMap((score) => score.failures).some((failure) => failure.startsWith('candidate retains advertising or source attribution'))).toBe(true);
+  } finally {
+    candidate.closeAllConnections();
+    await new Promise<void>((resolve) => candidate.close(() => resolve()));
+  }
+}, 90_000);
+
 it('treats mutation-budget exhaustion as a diagnostic, not a cleanup failure, when nothing dirty is left behind', async () => {
   // Mirrors an animated homepage (sliders, entrance transitions): each tick runs in its
   // own macrotask, so the observer fires once per tick and exhausts the 100-round budget

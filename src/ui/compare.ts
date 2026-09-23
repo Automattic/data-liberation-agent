@@ -2,18 +2,20 @@
 //
 // `data-liberation compare <dir>`: browser-compare the liberated copy to its
 // source at widths capture never sampled. `--screenshots` writes PNG evidence
-// and never decides pass/fail.
+// and never decides pass/fail. `--candidate <url>` compares another rendered
+// copy of the site, such as one built from the capture, instead.
 //
 import { checkFidelity, type FidelityReport } from '../lib/fidelity/check.js';
 import { summariseFindings } from '../lib/fidelity/self-consistency.js';
 
 export async function runCompare(
 	directory: string,
-	options: { screenshots?: boolean } = {}
+	options: { screenshots?: boolean; candidateUrl?: string } = {}
 ): Promise< FidelityReport > {
 	const report = await checkFidelity( {
 		directory,
 		screenshots: options.screenshots,
+		candidateUrl: options.candidateUrl,
 		log: ( message ) => process.stderr.write( `${ message }\n` ),
 	} );
 

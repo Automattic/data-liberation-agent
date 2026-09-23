@@ -73,6 +73,7 @@ const TOOLS = [
       properties: {
         directory: { type: 'string', description: 'A liberated run directory.' },
         screenshots: { type: 'boolean', description: 'Write source/copy/diff PNGs as evidence.' },
+        candidateUrl: { type: 'string', description: 'Base URL of another rendered copy of the site, such as one built from the capture, to compare instead of the capture.' },
       },
       required: ['directory'],
     },
@@ -146,6 +147,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const report = await checkFidelity({
         directory: String(args.directory ?? ''),
         screenshots: args.screenshots === true,
+        candidateUrl: typeof args.candidateUrl === 'string' ? args.candidateUrl : undefined,
         log,
       });
       return textResult(report);
