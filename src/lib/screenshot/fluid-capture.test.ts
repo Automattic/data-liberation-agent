@@ -80,6 +80,47 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		await page.close();
 	} );
 
+	it( 'keeps runtime pixels when the only container is sized by the element itself', async () => {
+		// A gallery tile inside a shrink-to-fit item: every ancestor measures
+		// exactly the tile, so "fills its parent" fits every sample — but that
+		// parent has no definite size of its own, and a percentage collapses it.
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		await page.setContent( `
+			<div style="position:relative">
+				<div id="item" style="position:absolute;top:0;left:0"><div id="shrink">
+					<div id="tile" style="height:744px;width:628px;margin:0px"></div>
+				</div></div>
+			</div>
+			<script>
+				const sizes = {
+					390: [ 390, 900 ], 600: [ 600, 900 ], 768: [ 768, 582 ], 1024: [ 447, 789 ],
+					1280: [ 558, 761 ], 1440: [ 628, 744 ], 1920: [ 698, 726 ],
+				};
+				const update = () => {
+					const [ width, height ] = sizes[ innerWidth ] ?? sizes[ 1440 ];
+					document.getElementById( 'tile' ).style.width = width + 'px';
+					document.getElementById( 'tile' ).style.height = height + 'px';
+				};
+				addEventListener( 'resize', update );
+				update();
+			</script>
+		` );
+
+		await learnAndApplyFluidGeometry( page, {
+			widths: [ 390, 600, 768, 1024, 1280, 1440, 1920 ],
+			settleMs: 50,
+		} );
+
+		const style = await page.locator( '#tile' ).getAttribute( 'style' );
+		expect( style ).not.toContain( '100%' );
+		// Removing the runtime leaves the tile at the size the source rendered.
+		await page.evaluate( () => document.querySelectorAll( 'script' ).forEach( ( script ) => script.remove() ) );
+		const box = await page.locator( '#tile' ).boundingBox();
+		expect( box?.width ).toBe( 628 );
+		expect( box?.height ).toBe( 744 );
+		await page.close();
+	}, 20_000 );
+
 	it( 'learns runtime-written fluid font sizes', async () => {
 		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
 		await page.setContent( `
