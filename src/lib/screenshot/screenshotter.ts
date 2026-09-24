@@ -29,7 +29,7 @@ import { captureScrollStates, type ScrollStatesReport } from './scroll-state-cap
 import { hydrateDisclosureContent } from './dynamic-content.js';
 import { captureSelectableSetStates } from './selectable-set-capture.js';
 import { JsAggregator } from './js-aggregator.js';
-import { isAbsentDocumentError, isSourceCaptureUrl } from './absent-document.js';
+import { isAbsentDocumentError, isSourceCaptureUrl, nonHtmlDocumentError } from './absent-document.js';
 import { ManifestQueue, type ManifestEntry, type FailureEntry } from './manifest-queue.js';
 import { validateOutputDir, planArtifacts, type ArtifactPlan } from './output-layout.js';
 import { waitForStable, triggerLazyLoad, dismissOverlays } from './page-helpers.js';
@@ -46,7 +46,7 @@ import {
 } from './types.js';
 import type { GeometryCapture } from './layout-geometry-proof.js';
 import type { ExtractedNav } from './nav-extract.js';
-import type { Browser, BrowserContext, Page } from 'playwright';
+import type { Browser, BrowserContext, Page, Route } from 'playwright';
 
 /**
  * Scroll offset multiplier for the scrolled-state screenshot: we scroll to
@@ -666,6 +666,18 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 				} );
 				return;
 			}
+			const notHtml = nonHtmlDocumentError( response?.headers?.()?.[ 'content-type' ] );
+			if ( notHtml ) {
+				failures.push( {
+					url,
+					viewport: viewport.id,
+					stage: 'goto',
+					error: notHtml,
+					timestamp: now(),
+					attempt,
+				} );
+				return;
+			}
 			navigated = true;
 			break;
 		} catch ( err ) {
@@ -1142,6 +1154,17 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	// HTML. Each viewport needs its own probe: a desktop dialog must not suppress
 	// a mobile-only trigger. Merge their bounded successful evidence rather than
 	// replacing a desktop-only dialog with a mobile-only menu.
+	const releaseNavigationLock = await lockMainFrameNavigation( page );
+	try {
+		await probeInteractions();
+	} finally {
+		await releaseNavigationLock();
+	}
+	const cleanup = await readSourceCleanup(page);
+	entry.cleanup = { policy: sourcePolicy, reports: [...(entry.cleanup?.reports ?? []), cleanup] };
+	if (cleanup.failures.length || cleanup.residual) throw new Error('Source cleanup incomplete; see cleanup evidence');
+
+	async function probeInteractions(): Promise< void > {
 	try {
 		const interactions = await captureTriggeredDialogs( page, url );
 		// Disclosure/accordion candidates were already resolved (opened, captured,
@@ -1193,9 +1216,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 			/* best-effort: baseline capture remains valid when scroll-state probing fails */
 		}
 	}
-	const cleanup = await readSourceCleanup(page);
-	entry.cleanup = { policy: sourcePolicy, reports: [...(entry.cleanup?.reports ?? []), cleanup] };
-	if (cleanup.failures.length || cleanup.residual) throw new Error('Source cleanup incomplete; see cleanup evidence');
+	}
 }
 
 function mergeInteractionReports(
@@ -1887,5 +1908,30 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		nav: designCtx?.chromeAccum.nav ?? undefined,
 		footerHtml: designCtx?.chromeAccum.footerHtml ?? undefined,
 		chromeCssText,
+	};
+}
+
+/**
+ * Keep the page on its route while post-baseline probes drive it. A probe can
+ * trigger a navigation no click handler can cancel -- a script assigning
+ * `location` after a swatch or card is activated -- and a committed navigation
+ * replaces the document, taking the capture's in-page evidence with it, so a
+ * route whose baseline was already captured would fail. Aborting main-frame
+ * document requests leaves the current document in place; every other request
+ * falls through to the capture's existing routing.
+ */
+export async function lockMainFrameNavigation( page: Page ): Promise< () => Promise< void > > {
+	if ( ! page.route ) return async () => {};
+	const guard = async ( route: Route ) => {
+		const request = route.request();
+		if ( request.isNavigationRequest() && request.frame() === page.mainFrame() ) {
+			await route.abort( 'aborted' );
+			return;
+		}
+		await route.fallback();
+	};
+	await page.route( '**/*', guard );
+	return async () => {
+		await page.unroute( '**/*', guard ).catch( () => {} );
 	};
 }

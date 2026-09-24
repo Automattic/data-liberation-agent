@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isAbsentDocumentRender } from './absent-document.js';
+import { isAbsentDocumentError, isAbsentDocumentRender, nonHtmlDocumentError } from './absent-document.js';
 
 /** The exact shape captured from https://mint-brand-vote.base44.app/Favorites and
  * /SellerProfile: HTTP 200, a generic fallback template rendered by the client
@@ -70,5 +70,20 @@ describe( 'isAbsentDocumentRender', () => {
 
 	it( 'does not flag an empty document', () => {
 		expect( isAbsentDocumentRender( '<html><body></body></html>' ) ).toBe( false );
+	} );
+} );
+
+describe( 'nonHtmlDocumentError', () => {
+	it( 'treats a non-HTML response as an absent page, like a 404', () => {
+		const error = nonHtmlDocumentError( 'text/markdown; charset=utf-8' );
+		expect( error ).toBe( 'Not an HTML document (text/markdown)' );
+		expect( isAbsentDocumentError( error! ) ).toBe( true );
+		expect( nonHtmlDocumentError( 'application/pdf' ) ).toBeDefined();
+	} );
+
+	it( 'accepts HTML and responses without a declared type', () => {
+		expect( nonHtmlDocumentError( 'text/html; charset=utf-8' ) ).toBeUndefined();
+		expect( nonHtmlDocumentError( 'application/xhtml+xml' ) ).toBeUndefined();
+		expect( nonHtmlDocumentError( undefined ) ).toBeUndefined();
 	} );
 } );
