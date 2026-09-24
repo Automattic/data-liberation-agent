@@ -213,6 +213,73 @@ it('keeps a credit the page re-renders after the observer budget is spent out of
   expect(comparison.cleanup!.source.length).toBeGreaterThan(0);
 }, 90_000);
 
+/** Owner page with an ad, whose picker tiles leave the document from script,
+ * the way a builder's runtime follows a link: a detached anchor (never reaches
+ * a `document` listener) that reloads this page, or `location.assign` to
+ * another route. `served` lists every document request the source answered. */
+async function leavingSource(follow: 'detached-anchor' | 'assign') {
+  const served: string[] = [];
+  const page = `<!doctype html><html><head><meta charset="utf-8"><title>Owner site</title></head><body>
+<main><h1>Owner business</h1><p>${'Real owner content to retain. '.repeat(30)}</p>
+<div id="tiles">${['one', 'two', 'three'].map((name) => `<div data-target="/${name}" style="cursor:pointer">Tile ${name} summary copy.</div>`).join('')}</div>
+<div id="panel">Select a tile to view details.</div></main>
+<div class="ad-slot">${'Buy advertising now. '.repeat(20)}</div>
+<script>
+document.querySelectorAll('#tiles > div').forEach((tile) => tile.addEventListener('click', () => {
+  document.getElementById('panel').textContent = tile.textContent + ' details';
+  ${follow === 'assign' ? 'location.assign(tile.dataset.target);' : "const link = document.createElement('a'); link.href = location.href; link.click();"}
+}));
+</script></body></html>`;
+  server = createServer((req, res) => { served.push(req.url ?? ''); res.setHeader('content-type', 'text/html'); res.end(page); });
+  await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve));
+  return { url: `http://localtest.me:${(server.address() as { port: number }).port}/`, served };
+}
+
+it.each(['detached-anchor', 'assign'] as const)('keeps cleanup evidence when a probe click navigates the page by %s', async (follow) => {
+  const { url, served } = await leavingSource(follow);
+  mkdirSync(join(process.cwd(), '.tmp-test'), { recursive: true });
+  directory = mkdtempSync(join(process.cwd(), '.tmp-test', 'cleanup-navigating-probe-'));
+  const result = await captureScreenshots({ urls: [url], primaryUrl: url, outputDir: directory,
+    cleanupPolicy: policy, learnFluid: false, settleMs: 100 });
+  expect(result.failed).toBe(0);
+  // The session harvest, then one document per viewport: no probe replaced either.
+  expect(served.filter((path) => path !== '/favicon.ico')).toEqual(['/', '/', '/']);
+  const manifest = JSON.parse(readFileSync(join(directory, 'screenshots', 'manifest.json'), 'utf8'));
+  const reports = manifest.entries[url].cleanup.reports as Array<{ url: string; removed: number; failures: string[] }>;
+  expect(reports.map((report) => [report.url, report.removed > 0, report.failures])).toEqual([[url, true, []], [url, true, []]]);
+  exportWebsiteCapture({ outputDir: directory, sourceUrl: url, platform: 'wix', summary: {}, failures: [] });
+  expect(JSON.parse(readFileSync(join(directory, 'capture-receipt.json'), 'utf8')).cleanup.complete).toBe(true);
+}, 90_000);
+
+it('retries a viewport whose document the source replaced on its own after load', async () => {
+  // A runtime that replaces its document once the capture has started on it
+  // (only a capture page carries installed cleanup) takes that cleanup along.
+  // The source serves a stable page afterwards, so a retry can prove it clean.
+  let replaced = false;
+  const owner = `<main><h1>Owner business</h1><p>${'Real owner content to retain. '.repeat(30)}</p></main><div class="ad-slot">Buy advertising now.</div>`;
+  const replace = '<script>const t = setInterval(() => { if (window.__dlaCleanup) { clearInterval(t); location.replace("/?replaced"); } }, 20)</script>';
+  server = createServer((req, res) => {
+    if (req.url === '/?replaced') replaced = true;
+    res.setHeader('content-type', 'text/html');
+    res.end(`<!doctype html><html><head><meta charset="utf-8"></head><body>${owner}${replaced ? '' : replace}</body></html>`);
+  });
+  await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve));
+  const url = `http://localtest.me:${(server.address() as { port: number }).port}/`;
+  mkdirSync(join(process.cwd(), '.tmp-test'), { recursive: true });
+  directory = mkdtempSync(join(process.cwd(), '.tmp-test', 'cleanup-replaced-'));
+  const result = await captureScreenshots({ urls: [url], primaryUrl: url, outputDir: directory,
+    cleanupPolicy: policy, learnFluid: false, settleMs: 300 });
+  expect(replaced).toBe(true);
+  expect(result.failed).toBe(0);
+  const manifest = JSON.parse(readFileSync(join(directory, 'screenshots', 'manifest.json'), 'utf8'));
+  expect(manifest.entries[url].cleanup.reports).toHaveLength(2);
+  for (const name of readdirSync(join(directory, 'html'))) {
+    expect(readFileSync(join(directory, 'html', name), 'utf8')).not.toContain('Buy advertising now.');
+  }
+  exportWebsiteCapture({ outputDir: directory, sourceUrl: url, platform: 'wix', summary: {}, failures: [] });
+  expect(JSON.parse(readFileSync(join(directory, 'capture-receipt.json'), 'utf8')).cleanup.complete).toBe(true);
+}, 90_000);
+
 it('still reports genuine residual distinctly from budget exhaustion', async () => {
   // Crosses the 1000-removal safety cap on a single rule, so the sweep's own guard
   // (not the observer budget) leaves matches unremoved and reports them as residual.

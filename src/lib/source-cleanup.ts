@@ -435,10 +435,16 @@ export async function sweepSourceCleanup(page: Page): Promise<void> {
   });
 }
 
+/** The page no longer holds the cleanup it was given: its document was replaced
+ * after install, so nothing proves what was removed from the one serialized. */
+export class SourceCleanupMissingError extends Error {
+  constructor() { super('Source cleanup evidence is missing'); }
+}
+
 export async function readSourceCleanup(page: Page): Promise<CleanupReport> {
-  return page.evaluate(() => {
+  const report = await page.evaluate(() => {
     const state = (window as unknown as { __dlaCleanup?: { report: CleanupReport; sweep: () => void } }).__dlaCleanup;
-    if (!state) throw new Error('Source cleanup evidence is missing');
+    if (!state) return null;
     state.sweep();
     state.report.unknowns = [];
     const frames = document.querySelectorAll('iframe,object,embed').length;
@@ -447,4 +453,6 @@ export async function readSourceCleanup(page: Page): Promise<CleanupReport> {
     if (shadows) state.report.unknowns.push(`${shadows} shadow root(s) were not inspected internally`);
     return state.report;
   });
+  if (!report) throw new SourceCleanupMissingError();
+  return report;
 }

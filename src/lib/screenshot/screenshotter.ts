@@ -9,7 +9,7 @@ import { SectionSpecsStore } from '../replicate/section-specs-store.js';
 import { slugify } from '../url/index.js';
 import { SiteAnalysisAggregator } from './aggregator.js';
 import { applyCaptureRemovals } from './apply-removals.js';
-import { applySourceCleanup, readSourceCleanup, sweepSourceCleanup, cleanupPolicy, type CleanupPolicy } from '../source-cleanup.js';
+import { applySourceCleanup, readSourceCleanup, sweepSourceCleanup, cleanupPolicy, SourceCleanupMissingError, type CleanupPolicy } from '../source-cleanup.js';
 import { captureChromeFidelity } from './capture-chrome-fidelity.js';
 import { CssAggregator } from './css-aggregator.js';
 import { CSS_SHORTHAND_REPAIR_FACTORY_SOURCE } from './css-shorthand-repair.js';
@@ -32,7 +32,7 @@ import { JsAggregator } from './js-aggregator.js';
 import { isAbsentDocumentError, isSourceCaptureUrl } from './absent-document.js';
 import { ManifestQueue, type ManifestEntry, type FailureEntry } from './manifest-queue.js';
 import { validateOutputDir, planArtifacts, type ArtifactPlan } from './output-layout.js';
-import { waitForStable, triggerLazyLoad, dismissOverlays } from './page-helpers.js';
+import { waitForStable, triggerLazyLoad, dismissOverlays, holdDocument } from './page-helpers.js';
 import { CapturedResourceStore } from './resource-capture.js';
 import { enforceSameOrigin } from './same-origin.js';
 import { analyzePage } from './site-analysis.js';
@@ -1141,7 +1141,10 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	// so probing a trigger cannot alter screenshots, geometry, sidecars, or page
 	// HTML. Each viewport needs its own probe: a desktop dialog must not suppress
 	// a mobile-only trigger. Merge their bounded successful evidence rather than
-	// replacing a desktop-only dialog with a mobile-only menu.
+	// replacing a desktop-only dialog with a mobile-only menu. A probe click can
+	// navigate the page away, so the document is held from here through the
+	// final cleanup read: the evidence read back belongs to the serialized page.
+	const releaseDocument = await holdDocument( page );
 	try {
 		const interactions = await captureTriggeredDialogs( page, url );
 		// Disclosure/accordion candidates were already resolved (opened, captured,
@@ -1194,6 +1197,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		}
 	}
 	const cleanup = await readSourceCleanup(page);
+	await releaseDocument();
 	entry.cleanup = { policy: sourcePolicy, reports: [...(entry.cleanup?.reports ?? []), cleanup] };
 	if (cleanup.failures.length || cleanup.residual) throw new Error('Source cleanup incomplete; see cleanup evidence');
 }
@@ -1577,11 +1581,14 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 
 			// A browser that died under this viewport is replaced and the viewport
 			// retried once, so a crash costs the viewports in flight a retry rather
-			// than failing every route the pool claims afterwards.
+			// than failing every route the pool claims afterwards. A document the
+			// source replaced on its own (a runtime reload) is retried once too; if
+			// it happens again the route fails with the loss recorded.
 			for ( let crashRetry = false; ; crashRetry = true ) {
 				const attemptBrowser = browser;
 				const failuresBefore = urlFailures.length;
 				let context: BrowserContext | undefined;
+				let documentReplaced = false;
 				try {
 					// deviceScaleFactor < 1 reduces the OUTPUT pixel count of every
 					// screenshot while keeping the rendered layout identical to a
@@ -1652,6 +1659,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 						beforeSerialize: opts.beforeSerialize,
 					} );
 				} catch ( err ) {
+					documentReplaced = err instanceof SourceCleanupMissingError;
 					urlFailures.push( {
 						url,
 						viewport: viewport.id,
@@ -1678,8 +1686,10 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 					}
 				}
 				const failed = urlFailures.length > failuresBefore;
-				if ( ! failed || crashRetry || attemptBrowser.isConnected() ) break;
-				if ( ! ( await replaceCrashedBrowser( attemptBrowser ) ) ) break;
+				if ( ! failed || crashRetry ) break;
+				if ( attemptBrowser.isConnected() ) {
+					if ( ! documentReplaced ) break;
+				} else if ( ! ( await replaceCrashedBrowser( attemptBrowser ) ) ) break;
 				urlFailures.length = failuresBefore;
 			}
 		}

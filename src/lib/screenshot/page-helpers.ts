@@ -1,4 +1,4 @@
-import type { Page, Request } from 'playwright';
+import type { Page, Request, Route } from 'playwright';
 import { expandCollapsedContent, waitForAppWidgets } from './dynamic-content.js';
 import { isSourcePromotion } from '../source-cleanup.js';
 
@@ -390,6 +390,26 @@ export async function withEvaluateTimeout<T>(p: Promise<T>, ms: number): Promise
   } finally {
     if (timer) clearTimeout(timer);
   }
+}
+
+/**
+ * Hold the loaded document in place until the returned release is called.
+ * Probes click the page, and a click can leave it in ways no in-page listener
+ * can cancel: a script that clicks a detached anchor, assigns `location`, or
+ * reloads. A committed navigation replaces the document and everything
+ * installed on it, source cleanup evidence included, so every later read
+ * describes another page. Aborting the main-frame navigation request at the
+ * browser leaves the current document untouched; same-document (hash and
+ * history) changes need no request and still go through.
+ */
+export async function holdDocument(page: Page): Promise<() => Promise<void>> {
+  if (!page.route) return async () => {};
+  const hold = (route: Route, request: Request) =>
+    request.isNavigationRequest() && request.frame() === page.mainFrame()
+      ? route.abort('aborted')
+      : route.fallback();
+  await page.route('**/*', hold);
+  return () => page.unroute('**/*', hold).catch(() => {});
 }
 
 // ---------------------------------------------------------------------------
