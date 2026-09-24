@@ -200,6 +200,8 @@ export async function learnAndApplyFluidGeometry(
 		containerRelative: boolean;
 		/** Media-scoped rules replace the inline declaration entirely. */
 		segmentedCss: string | null;
+		/** Media-scoped rules from the sampled sizes, for a percentage that fails verification. */
+		sampledCss: string | null;
 	} > = [];
 	const byKind: Record< string, number > = {};
 	const breakpoints = new Set< number >();
@@ -233,6 +235,7 @@ export async function learnAndApplyFluidGeometry(
 				css: '',
 				fallbackCss: null,
 				containerRelative: false,
+				sampledCss: null,
 				segmentedCss: segmentedCss(
 					`[${ SEGMENT_ATTRIBUTE }="${ id }"]`,
 					property,
@@ -254,11 +257,21 @@ export async function learnAndApplyFluidGeometry(
 		// that axis. Carry the viewport fit so a container model that collapses
 		// can fall back to the previous behaviour instead of to nothing.
 		let fallbackCss: string | null = null;
+		let sampledCss: string | null = null;
 		if ( model.kind === 'container' ) {
-			const viewportOnly = learnWidestFluidModel(
-				samples.map( ( sample ) => ( { viewport: sample.viewport, value: sample.value } ) )
-			);
-			if ( viewportOnly.kind !== 'breakpoint' ) fallbackCss = viewportOnly.css;
+			const viewportSamples = samples.map( ( sample ) => ( { viewport: sample.viewport, value: sample.value } ) );
+			const viewportOnly = learnWidestFluidModel( viewportSamples );
+			if ( viewportOnly.kind !== 'breakpoint' ) {
+				fallbackCss = viewportOnly.css;
+			} else {
+				// No single viewport expression fits, but the sweep still saw the
+				// element at every width. Should the percentage be refused, follow
+				// those sizes per regime rather than freeze the capture width's.
+				const sampled = learnSegmentedFluidModel( viewportSamples, { holdUnfitted: true } );
+				if ( sampled !== null ) {
+					sampledCss = segmentedCss( `[${ SEGMENT_ATTRIBUTE }="${ id }"]`, property, sampled.segments );
+				}
+			}
 		}
 		// A captured runtime can give a parent a definite height that disappears
 		// when its scripts are removed. A viewport fit keeps a learned height
@@ -271,6 +284,7 @@ export async function learnAndApplyFluidGeometry(
 			fallbackCss,
 			containerRelative: model.kind === 'container' && css === model.css,
 			segmentedCss: null,
+			sampledCss,
 		} );
 	}
 
@@ -280,11 +294,15 @@ export async function learnAndApplyFluidGeometry(
 	if ( original ) await page.setViewportSize( original );
 	await page.waitForTimeout( settleMs );
 
-	const { reverted, frozen } = await page.evaluate(
+	const { reverted, frozen, sampled } = await page.evaluate(
 		( { attribute, segmentAttribute, entries, tolerance } ) => {
 			let revertedCount = 0;
 			let frozenCount = 0;
-			for ( const entry of entries ) {
+			const sampledEntries: number[] = [];
+			// Accepted rules stay applied while later entries are measured; the
+			// capture-owned stylesheet written after this loop replaces them.
+			const probes: HTMLStyleElement[] = [];
+			for ( const [ index, entry ] of entries.entries() ) {
 				const element = document.querySelector< HTMLElement >( `[${ attribute }="${ entry.id }"]` );
 				if ( ! element ) continue;
 				if ( entry.segmentedCss !== null ) {
@@ -305,7 +323,8 @@ export async function learnAndApplyFluidGeometry(
 				// parent with a definite size on this axis. A shrink-to-fit parent
 				// measures exactly its child at every sampled width, so the fit
 				// looks perfect, yet the percentage then collapses it. Fall back
-				// to the viewport fit, or keep the runtime's pixels when none fits.
+				// to the viewport fit, then to rules following the sampled sizes,
+				// and keep the runtime's pixels only when neither is available.
 				const after = element.getBoundingClientRect()[ axis ];
 				if ( Math.abs( after - before ) <= tolerance ) continue;
 				if ( entry.fallbackCss !== null ) {
@@ -314,10 +333,30 @@ export async function learnAndApplyFluidGeometry(
 					revertedCount++;
 					continue;
 				}
+				if ( entry.sampledCss !== null ) {
+					// Held to the same verification: the rules must reproduce
+					// the capture width's size before they replace its pixels.
+					const probe = document.createElement( 'style' );
+					probe.textContent = entry.sampledCss;
+					document.head.appendChild( probe );
+					const hadSegment = element.hasAttribute( segmentAttribute );
+					element.setAttribute( segmentAttribute, entry.id );
+					element.style.removeProperty( entry.property );
+					const sampledSize = element.getBoundingClientRect()[ axis ];
+					if ( Math.abs( sampledSize - before ) <= tolerance ) {
+						probes.push( probe );
+						entry.segmentedCss = entry.sampledCss;
+						sampledEntries.push( index );
+						continue;
+					}
+					probe.remove();
+					if ( ! hadSegment ) element.removeAttribute( segmentAttribute );
+				}
 				element.style.setProperty( entry.property, runtimeValue );
 				entry.css = runtimeValue;
 				frozenCount++;
 			}
+			for ( const probe of probes ) probe.remove();
 			// A source resize callback can still mutate inline styles after learning
 			// completes. Keep the learned declaration authoritative until serialization;
 			// this observer itself is not part of the exported document.
@@ -339,7 +378,7 @@ export async function learnAndApplyFluidGeometry(
 				}
 			} );
 			observer.observe( document.documentElement, { subtree: true, attributes: true, attributeFilter: [ 'style' ] } );
-			return { reverted: revertedCount, frozen: frozenCount };
+			return { reverted: revertedCount, frozen: frozenCount, sampled: sampledEntries };
 		},
 		{
 			attribute: ID_ATTRIBUTE,
@@ -349,6 +388,7 @@ export async function learnAndApplyFluidGeometry(
 		}
 	);
 
+	for ( const index of sampled ) learned[ index ]!.segmentedCss = learned[ index ]!.sampledCss;
 	const segmentedRules = learned
 		.map( ( entry ) => entry.segmentedCss )
 		.filter( ( css ): css is string => css !== null );
@@ -378,6 +418,10 @@ export async function learnAndApplyFluidGeometry(
 		byKind.proportional = ( byKind.proportional ?? 0 ) + reverted;
 	}
 	if ( frozen > 0 ) byKind.container = Math.max( 0, ( byKind.container ?? 0 ) - frozen );
+	if ( sampled.length > 0 ) {
+		byKind.container = Math.max( 0, ( byKind.container ?? 0 ) - sampled.length );
+		byKind.segmented = ( byKind.segmented ?? 0 ) + sampled.length;
+	}
 
 	return {
 		applied: learned.length - frozen,

@@ -318,9 +318,16 @@ function viewportModelForRun( run: readonly GeometrySample[] ): ViewportFluidMod
  *
  * Returns null unless every sample is covered by such a run, so callers can
  * fall back to freezing rather than ship a partial guess.
+ *
+ * `holdUnfitted` is for callers whose only alternative is freezing the value
+ * observed at one width everywhere. There, a sample that fits no run holds its
+ * own observed value until the next sampled regime: it is the same kind of
+ * frozen constant, but taken at the width it governs rather than at the
+ * capture width.
  */
 export function learnSegmentedFluidModel(
-	samples: readonly GeometrySample[]
+	samples: readonly GeometrySample[],
+	options: { holdUnfitted?: boolean } = {}
 ): SegmentedFluidModel | null {
 	const usable = samples
 		.filter( ( sample ) => Number.isFinite( sample.value ) && Number.isFinite( sample.viewport ) )
@@ -346,7 +353,17 @@ export function learnSegmentedFluidModel(
 			// outlier would ship a confident wrong value for its whole stretch.
 			const tail = usable.slice( start );
 			const values = tail.map( ( sample ) => sample.value );
-			if ( Math.max( ...values ) - Math.min( ...values ) > TOLERANCE_PX ) return null;
+			if ( Math.max( ...values ) - Math.min( ...values ) > TOLERANCE_PX ) {
+				if ( ! options.holdUnfitted ) return null;
+				const held = usable[ start ]!.value;
+				runs.push( {
+					model: { kind: 'constant', css: `${ round( held, 0 ) }px`, value: held },
+					start,
+					end: start + 1,
+				} );
+				start++;
+				continue;
+			}
 			const sorted = [ ...values ].sort( ( a, b ) => a - b );
 			runs.push( {
 				model: {

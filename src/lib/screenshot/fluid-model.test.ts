@@ -390,6 +390,24 @@ describe( 'learnSegmentedFluidModel', () => {
 		).toBeNull();
 	} );
 
+	it( 'holds an unfittable sample at its own width when asked to', () => {
+		const segmented = learnSegmentedFluidModel(
+			at( [
+				[ 390, 83.5 ],
+				[ 600, 128.5 ],
+				[ 1024, 500 ],
+				[ 1280, 299.2 ],
+				[ 1440, 336.6 ],
+			] ),
+			{ holdUnfitted: true }
+		)!;
+		expect( segmented.segments.map( ( { model, minWidth, maxWidth } ) => [ model.css, minWidth, maxWidth ] ) ).toEqual( [
+			[ '21.42vw', null, 1023 ],
+			[ '500px', 1024, 1279 ],
+			[ '23.38vw', 1280, null ],
+		] );
+	} );
+
 	it( 'does not split when a single relationship already fits', () => {
 		expect(
 			learnSegmentedFluidModel(
