@@ -77,6 +77,31 @@ describe('detectFromHttp (fingerprinting)', () => {
     expect(result.platform).toBe('squarespace');
   });
 
+  it('detects a CDN-served Squarespace site from its own page markers', () => {
+    // Custom domain behind Cloudflare: no Squarespace URL or header, and the
+    // source uses static1./assets. hosts, never static.squarespace.com.
+    const headers = new Headers([['server', 'cloudflare']]);
+    const html = [
+      '<link rel="image_src" href="https://static1.squarespace.com/static/68afdbc8e59974578907e909/t/1/logo.png?format=1500w">',
+      '<script crossorigin="anonymous" src="//assets.squarespace.com/universal/scripts-compressed/common-13f7d35f7cb81498-min.en-US.js"></script>',
+      '<link rel="stylesheet" type="text/css" href="https://static1.squarespace.com/static/versioned-site-css/68afdbc8e59974578907e909/64/site.css?nocustom=true">',
+      '<script>Static.SQUARESPACE_CONTEXT = {"website":{"id":"68afdbc8e59974578907e909"}};</script>',
+    ].join('\n');
+    const result = detectFromDocument('https://investors.example.com.au/', headers, html);
+    expect(result.platform).toBe('squarespace');
+    expect(result.confidence).toBe('medium');
+    expect(findAdapter(result.platform)).toMatchObject({ id: 'squarespace' });
+  });
+
+  it('does not detect Squarespace on a page that only embeds a Squarespace-hosted image', () => {
+    const html = '<html><body><h1>Our partners</h1>'
+      + '<img src="https://images.squarespace-cdn.com/content/v1/5f1/abc/photo.jpg?format=750w" alt="">'
+      + '<a href="https://static1.squarespace.com/static/5f1/t/6a/1/brochure.pdf">Brochure</a>'
+      + '</body></html>';
+    const result = detectFromDocument('https://example.com', new Headers([['server', 'cloudflare']]), html);
+    expect(result.platform).toBe('unknown');
+  });
+
   it('detects Lovable from #lovable-badge on a custom domain', () => {
     const html = '<aside id="lovable-badge" aria-label="Made with Lovable"><a href="https://lovable.dev/projects/x?utm_source=lovable-badge">Made with Lovable</a></aside>';
     const result = detectFromDocument('https://example.com', new Headers(), html);
