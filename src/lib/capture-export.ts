@@ -1332,12 +1332,12 @@ function capturedMediaReferences( entries: CaptureEntry[] ): Map< string, Set< s
 		const html = readFileSync( entry.htmlPath, 'utf8' );
 		const references: string[] = [];
 		for ( const match of html.matchAll(
-			/<(?:img|source|video|audio)\b[^>]*\bsrc\s*=\s*(["'])([\s\S]*?)\1[^>]*>/gi
+			/<(?:img|source|video|audio)\b[^>]*\ssrc\s*=\s*(["'])([\s\S]*?)\1[^>]*>/gi
 		) ) {
 			references.push( match[ 2 ] );
 		}
 		for ( const match of html.matchAll(
-			/<(?:img|source)\b[^>]*\bsrcset\s*=\s*(["'])([\s\S]*?)\1[^>]*>/gi
+			/<(?:img|source)\b[^>]*\ssrcset\s*=\s*(["'])([\s\S]*?)\1[^>]*>/gi
 		) ) {
 			references.push( ...srcsetReferences( match[ 2 ] ) );
 		}
@@ -1591,7 +1591,7 @@ function dependencyReferences(
 	const mediaReferences = new Set< string >();
 	const cssReferences = new Set< string >();
 	for ( const match of searchableHtml.matchAll(
-		/<(?:img|source|video|audio)\b[^>]*\bsrc\s*=\s*(["'])([\s\S]*?)\1[^>]*>/gi
+		/<(?:img|source|video|audio)\b[^>]*\ssrc\s*=\s*(["'])([\s\S]*?)\1[^>]*>/gi
 	) ) {
 		mediaReferences.add( match[ 2 ].replace( /&amp;/g, '&' ) );
 		add( match[ 2 ] );
@@ -1603,7 +1603,7 @@ function dependencyReferences(
 		add( match[ 2 ] );
 	}
 	for ( const match of searchableHtml.matchAll(
-		/<(?:img|source)\b[^>]*\bsrcset\s*=\s*(["'])([\s\S]*?)\1[^>]*>/gi
+		/<(?:img|source)\b[^>]*\ssrcset\s*=\s*(["'])([\s\S]*?)\1[^>]*>/gi
 	) ) {
 		for ( const reference of srcsetReferences( match[ 2 ] ) ) {
 			if ( reference ) {
@@ -1800,10 +1800,34 @@ function assetEvidence(
 	};
 }
 
+// The largest srcset rendition of an image that was already localized. A lazy
+// loader commonly names a full-size original in `src` (and `data-src`) while
+// `srcset` carries the width renditions it actually fetched; when only the
+// renditions were captured, they are the same picture and must win over a
+// blank placeholder.
+function localizedSrcsetRendition(
+	tag: string,
+	mediaReplacements: Map< string, string >
+): string | undefined {
+	const srcset = /\ssrcset\s*=\s*(["'])([\s\S]*?)\1/i.exec( tag )?.[ 2 ];
+	if ( ! srcset ) return undefined;
+	let best: { local: string; size: number } | undefined;
+	for ( const candidate of srcset.split( /,(?=\s)/ ) ) {
+		const [ reference, descriptor = '' ] = candidate.trim().split( /\s+/ );
+		const local = reference ? mediaReplacements.get( reference.replace( /&amp;/g, '&' ) ) : undefined;
+		if ( ! local || local === TRANSPARENT_IMAGE_DATA_URL || /^(?:[a-z]+:)?\/\//i.test( local ) )
+			continue;
+		const size = Number.parseFloat( descriptor ) || 1;
+		if ( ! best || size > best.size ) best = { local, size };
+	}
+	return best?.local;
+}
+
 function removeDanglingMediaSource(
 	html: string,
 	reference: string,
 	resolvedUrl: string,
+	mediaReplacements: Map< string, string >,
 	rejectedKeys?: Set< string >
 ): string {
 	const normalizedReference = reference.replace( /&amp;/g, '&' );
@@ -1818,9 +1842,21 @@ function removeDanglingMediaSource(
 	let strippedNonImageSrc = false;
 	const withoutSources = html.replace( /<(img|source|video|audio)\b[^>]*>/gi, ( tag ) => {
 		const element = /^<(\w+)/.exec( tag )?.[ 1 ].toLowerCase();
-		const src = /\bsrc\s*=\s*(["'])([\s\S]*?)\1/i.exec( tag )?.[ 2 ].replace( /&amp;/g, '&' );
+		const src = /\ssrc\s*=\s*(["'])([\s\S]*?)\1/i.exec( tag )?.[ 2 ].replace( /&amp;/g, '&' );
 		if ( src !== normalizedReference ) return tag;
 		if ( element === 'img' ) {
+			const rendition = localizedSrcsetRendition( tag, mediaReplacements );
+			if ( rendition ) {
+				// Every attribute naming the original (src, data-src, data-image…)
+				// takes the rendition, so no loader or importer resurrects a blank.
+				return tag.replace(
+					/(\s[^\s=>]+\s*=\s*)(["'])([\s\S]*?)\2/g,
+					( attribute, name: string, quote: string, value: string ) =>
+						value.replace( /&amp;/g, '&' ) === normalizedReference
+							? `${ name }${ quote }${ rendition }${ quote }`
+							: attribute
+				);
+			}
 			return tag.replace( /\s+src\s*=\s*(["'])([\s\S]*?)\1/i, ` src="${ TRANSPARENT_IMAGE_DATA_URL }"` );
 		}
 		strippedNonImageSrc = true;
@@ -1832,13 +1868,25 @@ function removeDanglingMediaSource(
 	// resolved against its document), and re-scanning would immediately
 	// mangle the replacement it just made.
 	if ( strippedNonImageSrc ) return withoutSources;
-	return replaceAll(
-		withoutSources,
-		new Map( [
-			[ reference, TRANSPARENT_IMAGE_DATA_URL ],
-			[ normalizedReference, TRANSPARENT_IMAGE_DATA_URL ],
-		] ),
-		rejectedKeys
+	if ( ! isSubstitutableReplacementKey( normalizedReference ) ) {
+		rejectedKeys?.add( reference );
+		return withoutSources;
+	}
+	// Blank whole occurrences only. The reference is often the bare original of
+	// longer rendition URLs (`image.jpg?format=300w`) that were localized, and a
+	// substring pass would corrupt every one of them. An entity such as `&quot;`
+	// ends a URL; only `?` or a further `&name=` parameter continues it.
+	const variants = [
+		...new Set( [ reference, normalizedReference, normalizedReference.replace( /&/g, '&amp;' ) ] ),
+	].sort( ( a, b ) => b.length - a.length );
+	return withoutSources.replace(
+		new RegExp(
+			`(?:${ variants
+				.map( ( variant ) => variant.replace( /[.*+?^${}()|[\]\\]/g, '\\$&' ) )
+				.join( '|' ) })(?!\\?|&(?:amp;)?[^&;=\\s"']+=)`,
+			'g'
+		),
+		TRANSPARENT_IMAGE_DATA_URL
 	);
 }
 
@@ -2780,6 +2828,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 								html,
 								dependency.reference,
 								dependency.url,
+								mediaReplacements,
 								rejectedReplacementKeys
 						  )
 						: dependency.kind === 'css'

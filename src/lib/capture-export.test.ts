@@ -1347,6 +1347,99 @@ describe( 'exportWebsiteCapture', () => {
 		expect( diagnostics.unresolvedDependencies ).toEqual( [] );
 	} );
 
+	it( 'keeps a lazy image whose bare original was never fetched on its localized srcset renditions', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-lazy-original-export-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'media', 'screenshots' ] )
+			mkdirSync( join( outputDir, path ), { recursive: true } );
+		// A lazy loader names the full-size original in src/data-src/data-image and
+		// lets srcset carry the width renditions. Only the renditions were fetched.
+		const bare = 'https://images.cdn.example/content/portrait.jpg';
+		const rendition = ( width: number ) => `${ bare }?format=${ width }w`;
+		// An image with nothing localized still falls back to a blank, wherever
+		// its URL is named, including entity-quoted JSON.
+		const lost = 'https://images.cdn.example/content/lost.jpg';
+		writeFileSync(
+			join( outputDir, 'html', 'homepage.html' ),
+			`<html><body><img data-src="${ bare }" data-image="${ bare }" src="${ bare }" srcset="${ rendition(
+				300
+			) } 300w, ${ rendition( 750 ) } 750w, ${ rendition( 2500 ) } 2500w" alt="Portrait">` +
+				`<img id="lost" src="${ lost }" alt=""><div data-config="{&quot;assetUrl&quot;:&quot;${ lost }&quot;}"></div></body></html>`
+		);
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( {
+				version: 1,
+				entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },
+			} )
+		);
+		const media = MediaStubStore.load( outputDir );
+		for ( const width of [ 300, 750 ] ) {
+			writeFileSync( join( outputDir, 'media', `portrait-${ width }.jpg` ), `portrait ${ width }` );
+			media.markSuccess( rendition( width ), join( outputDir, 'media', `portrait-${ width }.jpg` ) );
+		}
+		media.flush();
+
+		exportWebsiteCapture( {
+			outputDir,
+			sourceUrl: 'https://example.com/',
+			platform: 'generic',
+			summary: {},
+			failures: [],
+		} );
+
+		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
+		const $ = cheerio.load( html );
+		const image = $( 'img[alt="Portrait"]' );
+		expect( $.html( image ) ).not.toContain( 'R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=' );
+		expect( html ).not.toContain( lost );
+		expect( $( '#lost' ).attr( 'src' ) ).toBe( 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=' );
+		expect( image.attr( 'srcset' ) ).toContain( '/media/portrait-300.jpg 300w' );
+		expect( image.attr( 'srcset' ) ).toContain( '/media/portrait-750.jpg 750w' );
+		expect( image.attr( 'src' ) ).toBe( '/media/portrait-750.jpg' );
+		expect( image.attr( 'data-src' ) ).toBe( '/media/portrait-750.jpg' );
+		expect( image.attr( 'data-image' ) ).toBe( '/media/portrait-750.jpg' );
+	} );
+
+	it( 'does not read a lazy data-src as the src of an image that never loaded', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-lazy-data-src-export-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'media', 'screenshots' ] )
+			mkdirSync( join( outputDir, path ), { recursive: true } );
+		// Two slides of the same image: the loader swapped a rendition into the
+		// visible one, while the off-screen one still names only its data-src.
+		const bare = 'https://images.cdn.example/content/slide.jpg';
+		const rendition = `${ bare }?format=500w`;
+		writeFileSync(
+			join( outputDir, 'html', 'homepage.html' ),
+			`<html><body><img id="loaded" data-src="${ bare }" src="${ rendition }" alt="">` +
+				`<img id="unloaded" data-src="${ bare }" alt=""></body></html>`
+		);
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( {
+				version: 1,
+				entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },
+			} )
+		);
+		writeFileSync( join( outputDir, 'media', 'slide-500.jpg' ), 'slide 500' );
+		const media = MediaStubStore.load( outputDir );
+		media.markSuccess( rendition, join( outputDir, 'media', 'slide-500.jpg' ) );
+		media.flush();
+
+		exportWebsiteCapture( {
+			outputDir,
+			sourceUrl: 'https://example.com/',
+			platform: 'generic',
+			summary: {},
+			failures: [],
+		} );
+
+		const $ = cheerio.load( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) );
+		expect( $( '#loaded' ).attr( 'src' ) ).toBe( '/media/slide-500.jpg' );
+		expect( $( '#unloaded' ).attr( 'src' ) ).toBeUndefined();
+	} );
+
 	it( 'localizes deduplicated captured width renditions before returning early', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-lazy-image-resource-export-' ) );
 		dirs.push( outputDir );
