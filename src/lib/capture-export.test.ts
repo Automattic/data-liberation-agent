@@ -624,8 +624,8 @@ describe( 'exportWebsiteCapture', () => {
 		);
 		expect( sourceVisibilityOverride ).toBeGreaterThanOrEqual( 0 );
 		expect( authoritativeSwitch ).toBeGreaterThan( sourceVisibilityOverride );
+		expect( html ).not.toContain( '767px' );
 		expect( html ).not.toContain( '768px' );
-		expect( html ).not.toContain( '769px' );
 
 		const profile = JSON.parse( readFileSync( join( outputDir, 'source-profile.json' ), 'utf8' ) );
 		expect( profile ).toMatchObject( {
@@ -667,9 +667,14 @@ describe( 'exportWebsiteCapture', () => {
 			failures: [],
 		} );
 
-		expect( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) ).toContain(
-			'@media(max-width:768px)'
-		);
+		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
+		// 768px is a tablet width. Per-device sources serve tablets their desktop
+		// document, and it is the desktop document the fluid sweep observed at
+		// 768px; the mobile document was only ever sampled at phone width.
+		expect( html ).toContain( '@media(max-width:767px)' );
+		expect( html ).toContain( '<style media="(min-width:768px)">.desktop{color:blue}</style>' );
+		expect( html ).toContain( '<style media="(max-width:767px)">:where(.data-liberation-mobile-document) .mobile{color:red}</style>' );
+		expect( html ).not.toContain( 'max-width:768px' );
 		const profile = JSON.parse( readFileSync( join( outputDir, 'source-profile.json' ), 'utf8' ) );
 		expect( profile ).toMatchObject( { switchWidth: null, switchWidthSource: 'default' } );
 	} );
@@ -1064,8 +1069,8 @@ describe( 'exportWebsiteCapture', () => {
 		expect( $( '.data-liberation-mobile-document' ) ).toHaveLength( 0 );
 		expect( $( 'h1' ) ).toHaveLength( 1 );
 		// Each breakpoint keeps its own stylesheet through media scoping.
-		expect( html ).toContain( 'media="(min-width:769px)"' );
-		expect( html ).toContain( 'media="(max-width:768px)"' );
+		expect( html ).toContain( 'media="(min-width:768px)"' );
+		expect( html ).toContain( 'media="(max-width:767px)"' );
 		const styles = [ ...html.matchAll( /<style\b([^>]*)>([\s\S]*?)<\/style\s*>/gi ) ];
 		expect( styles.some( ( s ) => s[ 1 ].includes( 'min-width' ) && s[ 2 ].includes( 'color:red' ) ) ).toBe(
 			true
@@ -1917,7 +1922,7 @@ describe( 'exportWebsiteCapture', () => {
 			'Mobile Home'
 		);
 		expect( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) ).toContain(
-			'@media(max-width:768px)'
+			'@media(max-width:767px)'
 		);
 		expect( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) ).toContain(
 			':where(.data-liberation-mobile-document) .mobile{color:red}'
@@ -1926,7 +1931,7 @@ describe( 'exportWebsiteCapture', () => {
 			':where(.data-liberation-mobile-document):not(.device-mobile-optimized) .desktop-only{display:flex}'
 		);
 		expect( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) ).toContain(
-			'<style media="(min-width:769px)">.desktop{color:blue}</style>'
+			'<style media="(min-width:768px)">.desktop{color:blue}</style>'
 		);
 		expect( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) ).toContain(
 			'<p>$100.00</p>'
@@ -2365,11 +2370,11 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		expect( html ).not.toContain( 'data-liberation-desktop-document' );
 		expect( html ).not.toContain( 'data-liberation-mobile-document' );
-		expect( html ).toContain( '<style media="(min-width:769px)">main{color:blue}</style>' );
+		expect( html ).toContain( '<style media="(min-width:768px)">main{color:blue}</style>' );
 		expect( html ).toContain(
-			'<style media="(min-width:769px) and (print)">main{margin:0}</style>'
+			'<style media="(min-width:768px) and (print)">main{margin:0}</style>'
 		);
-		expect( html ).toContain( '<style media="(max-width:768px)">main{color:red}</style>' );
+		expect( html ).toContain( '<style media="(max-width:767px)">main{color:red}</style>' );
 		expect( html ).toContain( 'name="viewport"' );
 	} );
 
@@ -2402,8 +2407,8 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		expect( html ).not.toContain( 'data-liberation-desktop-document' );
 		expect( html ).not.toContain( 'data-liberation-mobile-document' );
 		expect( html ).toContain( '<style>main{color:blue}</style>' );
-		expect( html ).not.toContain( '(min-width:769px)' );
-		expect( html ).not.toContain( '(max-width:768px)' );
+		expect( html ).not.toContain( '(min-width:768px)' );
+		expect( html ).not.toContain( '(max-width:767px)' );
 	} );
 
 	it( 'shares identical responsive styles when both authoring bodies are required', () => {
@@ -2492,9 +2497,9 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		expect( html ).toContain( 'data-liberation-mobile-document' );
 		// Present in both captures: must apply at every width, not be gated to desktop.
 		expect( html ).toContain( '<style>.shared{color:green}</style>' );
-		expect( html ).not.toContain( '<style media="(min-width:769px)">.shared{color:green}</style>' );
+		expect( html ).not.toContain( '<style media="(min-width:768px)">.shared{color:green}</style>' );
 		// Unique to one capture: stays scoped to the branch that produced it.
-		expect( html ).toContain( '<style media="(min-width:769px)">.desktop-only{color:blue}</style>' );
+		expect( html ).toContain( '<style media="(min-width:768px)">.desktop-only{color:blue}</style>' );
 		expect( html ).toContain( ':where(.data-liberation-mobile-document) .mobile-only{color:red}' );
 	} );
 
