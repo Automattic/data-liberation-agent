@@ -1,4 +1,4 @@
-import { fetchSitemapWithDiagnostics, classifyUrl, extractSameOriginLinks } from '../../lib/extraction/sitemap.js';
+import { fetchSitemapWithDiagnostics, classifyUrl, extractSameOriginLinks, routeKey } from '../../lib/extraction/sitemap.js';
 import { extractMeta, extractTitle, extractNavLinks } from '../../lib/html-extract/index.js';
 import { sourceContextOptions, getPlaywright } from '../../lib/browser-kit/browser-kit.js';
 import type { InventoryUrl } from '../shared.js';
@@ -110,12 +110,4 @@ export async function discoverDefault(url: string, _opts: Record<string, unknown
     urls: inventoryUrls,
     diagnostics: sitemap.diagnostics,
   };
-}
-
-function routeKey(url: string): string {
-  const route = new URL(url);
-  route.hash = '';
-  route.search = '';
-  route.pathname = route.pathname.replace(/\/$/, '') || '/';
-  return route.href;
 }
