@@ -494,6 +494,32 @@ export class CapturedResourceStore {
 		}
 	}
 
+	/**
+	 * Record bytes the capture produced itself (a still frame, say) under `url`,
+	 * exactly as if they had been fetched from there, so export localizes the
+	 * reference like any other captured dependency. Nothing is ever fetched from
+	 * `url`. Returns false when the bytes could not be stored.
+	 */
+	recordGeneratedResource( url: string, body: Buffer, contentType: string ): boolean {
+		if ( this.manifest.resources[ url ] ) return true;
+		try {
+			const relativePath = resourcePath( new URL( url ), contentType, this.origin );
+			const destination = resolve( this.resourceDir, relativePath );
+			if ( body.length === 0 || ! pathWithin( this.resourceDir, destination ) ) return false;
+			this.reserveBytes( body.length );
+			mkdirSync( dirname( destination ), { recursive: true } );
+			writeFileSync( destination, body );
+			this.manifest.resources[ url ] = {
+				path: `resources/${ relativePath.replace( /\\/g, '/' ) }`,
+				contentType,
+			};
+			this.captures.set( url, Promise.resolve() );
+			return true;
+		} catch {
+			return false;
+		}
+	}
+
 	private capture( response: Response ): Promise< void > {
 		const request = response.request();
 		const resourceType = request.resourceType();
