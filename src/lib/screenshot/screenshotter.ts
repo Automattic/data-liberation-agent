@@ -14,7 +14,13 @@ import { captureChromeFidelity } from './capture-chrome-fidelity.js';
 import { CssAggregator } from './css-aggregator.js';
 import { CSS_SHORTHAND_REPAIR_FACTORY_SOURCE } from './css-shorthand-repair.js';
 import { captureDesignForUrl, captureMobileBodyFragment } from './design-capture-runner.js';
-import { countBodyTags, isRouteDrift, isStackingArtifact } from './document-integrity.js';
+import {
+	countBodyTags,
+	isRouteDrift,
+	isStackingArtifact,
+	routeIdentity,
+	serverRedirectTarget,
+} from './document-integrity.js';
 import { collectMobileChromeLayout } from './dom-capture.js';
 import { generateChromeCss, type BakedLayoutMap } from './fixups.js';
 import { sanitizeFrozenHtml } from './freeze.js';
@@ -647,9 +653,13 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	const RETRYABLE_STATUS = new Set( [ 429, 503 ] );
 	const MAX_NAV_ATTEMPTS = 4;
 	let navigated = false;
+	let redirectedTo: string | undefined;
 	for ( let attempt = 1; attempt <= MAX_NAV_ATTEMPTS; attempt++ ) {
 		try {
 			const response = await page.goto( url, { waitUntil: 'load', timeout: 30_000 } );
+			redirectedTo = response?.request?.().redirectedFrom()
+				? serverRedirectTarget( url, response.url() )
+				: undefined;
 			const status = response ? response.status() : 0;
 			if ( status >= 400 ) {
 				if ( RETRYABLE_STATUS.has( status ) && attempt < MAX_NAV_ATTEMPTS ) {
@@ -685,6 +695,13 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		}
 	}
 	if ( ! navigated ) return;
+	// The server answered this URL with a redirect to another route, so it is
+	// an alias of that route rather than a page of its own; the caller
+	// captures the target once, under its own URL.
+	if ( redirectedTo ) {
+		entry.redirectedTo = redirectedTo;
+		return;
+	}
 	const sourcePolicy = args.cleanupPolicy ?? cleanupPolicy();
 	await applySourceCleanup(page, sourcePolicy);
 
@@ -1537,7 +1554,9 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	let captured = 0;
 	let skipped = 0;
 	let completed = 0;
-	const totalUrls = urls.length;
+	// A redirect alias's target joins the queue unless its route is already in
+	// it, so each route is captured once however many URLs redirect to it.
+	const queuedRoutes = new Set( urls.map( routeIdentity ) );
 	const allFailures: FailureEntry[] = [];
 
 	const capturedAt = () => new Date().toISOString();
@@ -1564,14 +1583,17 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			skipped++;
 			sendLog( server, `[skip] ${ url } (artifacts exist)` );
 			completed++;
-			opts.onProgress?.( completed, totalUrls, url );
+			opts.onProgress?.( completed, urls.length, url );
 			return;
 		}
 
-		const entry: ManifestEntry = { slug, capturedAt: capturedAt() };
+		// `redirectedTo` is always written, so a URL that stopped redirecting
+		// does not keep a prior run's alias through the manifest's merge.
+		const entry: ManifestEntry = { slug, capturedAt: capturedAt(), redirectedTo: undefined };
 		const urlFailures: FailureEntry[] = [];
 
 		for ( const viewport of viewports ) {
+			if ( entry.redirectedTo ) break;
 			const vpPlan = viewport.id === 'desktop' ? effectivePlan.desktop : effectivePlan.mobile;
 			if ( ! vpPlan.needsLoad ) continue;
 
@@ -1689,6 +1711,19 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		}
 		await manifest.updateEntry( url, entry );
 
+		if ( entry.redirectedTo ) {
+			const target = entry.redirectedTo;
+			if ( ! queuedRoutes.has( routeIdentity( target ) ) ) {
+				queuedRoutes.add( routeIdentity( target ) );
+				urls.push( target );
+			}
+			skipped++;
+			sendLog( server, `[alias] ${ url } redirects to ${ target }` );
+			completed++;
+			opts.onProgress?.( completed, urls.length, url );
+			return;
+		}
+
 		if ( entry.dismissed && entry.dismissed.length > 0 ) {
 			sendLog(
 				server,
@@ -1716,7 +1751,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			sendLog( server, `[fail] ${ url } (${ captureFailures.length } failures)` );
 		}
 		completed++;
-		opts.onProgress?.( completed, totalUrls, url );
+		opts.onProgress?.( completed, urls.length, url );
 	};
 
 	try {
@@ -1729,18 +1764,21 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		// restart-every-N invariant while keeping each worker on a stable browser.
 		const segSize = browserRestartEvery > 0 ? browserRestartEvery : urls.length;
 		for ( let segStart = 0; segStart < urls.length; segStart += segSize ) {
-			const segment = urls.slice( segStart, segStart + segSize );
-			let cursor = 0;
+			// The segment's end is read on every claim: a redirect alias appends
+			// its target to `urls`, and the worker that appended it is still
+			// running to pick it up.
+			const segEnd = () => Math.min( segStart + segSize, urls.length );
+			let cursor = segStart;
 			const worker = async (): Promise< void > => {
 				// `cursor++` is atomic on JS's single-threaded loop: each worker claims a
 				// distinct index synchronously before awaiting, so no URL runs twice.
-				for ( let idx = cursor++; idx < segment.length; idx = cursor++ ) {
-					await processUrl( segment[ idx ] );
+				while ( cursor < segEnd() ) {
+					await processUrl( urls[ cursor++ ] );
 				}
 			};
-			const poolSize = Math.max( 1, Math.min( concurrency, segment.length ) );
+			const poolSize = Math.max( 1, Math.min( concurrency, segEnd() - segStart ) );
 			await Promise.all( Array.from( { length: poolSize }, () => worker() ) );
-			urlsSinceRestart += segment.length;
+			urlsSinceRestart += segEnd() - segStart;
 
 			const moreWork = segStart + segSize < urls.length;
 			if ( moreWork ) {
@@ -1880,6 +1918,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		browserRestarts,
 		durationMs: Date.now() - startTime,
 		manifestPath,
+		urls,
 		siteCssPath,
 		cssMediaUrls: designCtx ? [ ...designCtx.cssMediaUrls ] : undefined,
 		headLinks: designCtx ? [ ...designCtx.headLinks ] : undefined,

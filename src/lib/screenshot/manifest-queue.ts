@@ -33,6 +33,11 @@ export interface ManifestEntry {
     byKind: Record<string, number>;
   };
   capturedAt: string;
+  /**
+   * The same-origin route the server redirected this URL to. The URL is an
+   * alias of that route and has no artifacts of its own.
+   */
+  redirectedTo?: string;
   /** Populated by site-analysis; may be absent */
   metadata?: {
     title?: string;

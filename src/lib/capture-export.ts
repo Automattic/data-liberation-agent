@@ -119,6 +119,8 @@ interface CaptureManifestEntry {
 	cleanup?: import('./screenshot/manifest-queue.js').ManifestEntry['cleanup'];
 	slug?: string;
 	html?: string;
+	/** Same-origin route the server redirected this URL to; see ManifestEntry. */
+	redirectedTo?: string;
 	sections?: string;
 	interactions?: InteractionStatesReport;
 	scrollStates?: ScrollStatesReport;
@@ -2212,9 +2214,14 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 	// rejected leaves through, rather than a parallel reporting mechanism.
 	const routeFailureReasons = groupFailureReasonsByUrl( options.failures );
 	const routeCaptureDiagnostics: Array< { code: string; url: string; reason: string } > = [];
+	const redirectAliases: Array< { url: string; target: string } > = [];
 	for ( const [ url, entry ] of Object.entries( capture.entries ) ) {
 		if ( ! routeMatchesSourceOrigin( url, options.sourceUrl ) ) {
 			excludedRoutes.push( url );
+			continue;
+		}
+		if ( entry.redirectedTo ) {
+			redirectAliases.push( { url, target: entry.redirectedTo } );
 			continue;
 		}
 		if ( ! entry.html ) {
@@ -2429,6 +2436,22 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 			path: `website/${ routePath }`,
 		} );
 		canonicalRouteAliases.set( normalizedUrl( entry.url ), routePath );
+	}
+	// A URL the server redirected to another captured route is that route
+	// under another name: links to it resolve to the target's page.
+	for ( const { url, target } of redirectAliases ) {
+		const targetEntry = entriesByNormalizedUrl.get( normalizedUrl( target ) );
+		if ( ! targetEntry ) {
+			routeCaptureDiagnostics.push( {
+				code: 'route_capture_failed',
+				url,
+				reason: `redirects to ${ target }, which was not captured`,
+			} );
+			continue;
+		}
+		const routePath = routePathOf( targetEntry.url );
+		duplicateRoutes.push( { url, canonicalUrl: targetEntry.url, path: `website/${ routePath }` } );
+		canonicalRouteAliases.set( normalizedUrl( url ), routePath );
 	}
 	const desktopSections = SectionSpecsStore.load( outputDir );
 	const mobileSections = SectionSpecsStore.loadMobile( outputDir );

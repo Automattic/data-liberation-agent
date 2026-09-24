@@ -4202,6 +4202,58 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		expect( evidence.assets[ 0 ].references[ 0 ].path ).toBe( `website/${ documentPath }` );
 	} );
 
+	it( 'resolves a server-redirected URL to its captured target instead of failing it', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-redirect-alias-' ) );
+		dirs.push( outputDir );
+		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
+		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
+		writeFileSync(
+			join( outputDir, 'html', 'homepage.html' ),
+			'<h1>Home</h1><a href="/old">Old</a><a href="https://example.com/new">New</a>'
+		);
+		writeFileSync( join( outputDir, 'html', 'new.html' ), '<h1>New</h1>' );
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( {
+				version: 1,
+				entries: {
+					'https://example.com/': { html: 'html/homepage.html' },
+					'https://example.com/old': { redirectedTo: 'https://example.com/new' },
+					'https://example.com/new': { html: 'html/new.html' },
+					'https://example.com/gone': { redirectedTo: 'https://example.com/missing' },
+				},
+			} )
+		);
+
+		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( {
+			outputDir,
+			sourceUrl: 'https://example.com/',
+			platform: 'generic',
+			summary: {},
+			failures: [],
+		} ), 'utf8' ) );
+
+		expect( receipt.routes.map( ( route: { url: string } ) => route.url ) ).toEqual( [
+			'https://example.com/',
+			'https://example.com/new',
+		] );
+		expect( receipt.duplicateRoutes ).toEqual( [ {
+			url: 'https://example.com/old',
+			canonicalUrl: 'https://example.com/new',
+			path: 'website/new/index.html',
+		} ] );
+		expect( receipt.discoveryDiagnostics ).toEqual( [ {
+			code: 'route_capture_failed',
+			url: 'https://example.com/gone',
+			reason: 'redirects to https://example.com/missing, which was not captured',
+		} ] );
+		const $ = cheerio.load( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) );
+		expect( $( 'a' ).map( ( _, link ) => $( link ).attr( 'href' ) ).get() ).toEqual( [
+			'/new/index.html',
+			'/new/index.html',
+		] );
+	} );
+
 	it( 'pairs a query-bearing entry URL with its default-document capture by normalized URL, deduping identical content', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-default-document-query-' ) );
 		dirs.push( outputDir );

@@ -113,6 +113,8 @@ export interface ScreenshotResult {
 	browserRestarts: number;
 	durationMs: number;
 	manifestPath: string;
+	/** Every URL processed, including redirect targets queued during capture. */
+	urls: string[];
 	/** Absolute path to site.css when captureDesign=true and at least one page/post was captured. */
 	siteCssPath?: string;
 	/** CSS media URLs discovered across all captured page/post CSS. */
