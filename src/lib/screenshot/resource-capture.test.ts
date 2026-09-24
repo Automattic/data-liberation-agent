@@ -3,6 +3,7 @@ import {
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
+	readdirSync,
 	readFileSync,
 	rmSync,
 	statSync,
@@ -870,7 +871,8 @@ describe( 'CapturedResourceStore', () => {
 					finalUrl: url,
 					status: 200,
 					headers: new Headers( { 'content-type': 'video/mp4' } ),
-					body: Buffer.alloc( size ),
+					// Distinct bytes per video: identical bodies are stored and counted once.
+					body: Buffer.alloc( size, url ),
 				};
 			} );
 			const store = new CapturedResourceStore( outputDir, sourceUrl, fetchMedia );
@@ -1016,5 +1018,50 @@ describe( 'CapturedResourceStore', () => {
 				CAPTURED_RESOURCE_TIMEOUT_CEILING_MS
 			);
 		} );
+	} );
+
+	it( 'stores and counts identical bytes once, whatever url they arrive under', async () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-resource-dedupe-' ) );
+		dirs.push( outputDir );
+		const sourceUrl = 'https://example.com/';
+		// A CDN answering a size variant with the original's exact bytes.
+		const original = 'https://cdn.example/media/clip.mp4';
+		const variant = 'https://cdn.example/media/clip.mp4?format=2500w';
+		const other = 'https://cdn.example/media/other.mp4';
+		const sameBytes = Buffer.alloc( MAX_CAPTURED_VIDEO_RESOURCE_BYTES );
+		const bodies: Record< string, Buffer > = {
+			[ original ]: sameBytes,
+			[ variant ]: sameBytes,
+			// Fits in what is left only if the duplicate was not counted again.
+			[ other ]: Buffer.alloc(
+				MAX_CAPTURED_RESOURCE_TOTAL_BYTES - 2 * MAX_CAPTURED_VIDEO_RESOURCE_BYTES + 1,
+				1
+			),
+		};
+		const store = new CapturedResourceStore( outputDir, sourceUrl, async ( url, maxBytes ) => {
+			if ( bodies[ url ].length > maxBytes )
+				throw new Error( `response body exceeds max ${ maxBytes } bytes (streamed)` );
+			return {
+				finalUrl: url,
+				status: 200,
+				headers: new Headers( { 'content-type': 'video/mp4' } ),
+				body: bodies[ url ],
+			};
+		} );
+
+		for ( const url of [ original, variant, other ] )
+			await store.captureDomDependencies( `<video src="${ url }"></video>`, sourceUrl );
+		await store.flush();
+
+		const manifest = JSON.parse(
+			readFileSync( join( outputDir, 'resources', 'manifest.json' ), 'utf8' )
+		);
+		expect( manifest.failures ).toEqual( [] );
+		expect( manifest.resources[ variant ].path ).toBe( manifest.resources[ original ].path );
+		expect( manifest.resources[ other ] ).toBeDefined();
+		const storedMedia = readdirSync( join( outputDir, 'resources' ), { recursive: true } ).filter(
+			( file ) => String( file ).endsWith( '.mp4' )
+		);
+		expect( storedMedia ).toHaveLength( 2 );
 	} );
 } );

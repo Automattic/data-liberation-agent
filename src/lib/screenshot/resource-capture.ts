@@ -314,6 +314,11 @@ export class CapturedResourceStore {
 		maxBytes: number,
 		timeoutMs: number
 	) => Promise< SafeFetchResult >;
+	// sha256 of each body written this run → where it was written.
+	private readonly storedContent = new Map<
+		string,
+		{ manifestPath: string; destination: string; contentType: string }
+	>();
 	private replayDir?: string;
 	private replayBytes = 0;
 	private capturedBytes = 0;
@@ -615,14 +620,7 @@ export class CapturedResourceStore {
 			const destination = resolve( this.resourceDir, relativePath );
 			if ( ! pathWithin( this.resourceDir, destination ) )
 				throw new Error( 'resource path escapes the capture directory' );
-			this.reserveBytes( fetched.body.length );
-			mkdirSync( dirname( destination ), { recursive: true } );
-			writeFileSync( destination, fetched.body );
-			this.manifest.resources[ url ] = {
-				path: `resources/${ relativePath.replace( /\\/g, '/' ) }`,
-				contentType,
-			};
-			this.replayResources.set( url, { path: destination, contentType } );
+			this.storeBody( url, fetched.body, relativePath, destination, contentType );
 			const metadata = replayableResponseMetadata(
 				Object.fromEntries( fetched.headers.entries() )
 			);
@@ -695,16 +693,40 @@ export class CapturedResourceStore {
 		if ( body.length > byteCeiling ) {
 			throw new Error( `resource body ${ body.length } bytes exceeds max ${ byteCeiling }` );
 		}
+		this.storeBody( requestedUrl.href, body, relativePath, destination, contentType );
+		const replayMetadata = replayableResponseMetadata( headers );
+		if ( replayMetadata ) this.replayMetadata.set( requestedUrl.href, replayMetadata );
+	}
+
+	/**
+	 * Record `body` as the capture of `url`. Storage is content-addressed: a
+	 * body whose bytes were already stored under another url (a CDN serving the
+	 * same original under a query-string variant, say) points its manifest entry
+	 * at the existing file instead of writing, and counting, the bytes again.
+	 * Hash lookup and registration run synchronously, so concurrent captures of
+	 * the same bytes cannot both miss.
+	 */
+	private storeBody(
+		url: string,
+		body: Buffer,
+		relativePath: string,
+		destination: string,
+		contentType: string
+	): void {
+		const contentHash = createHash( 'sha256' ).update( body ).digest( 'hex' );
+		const stored = this.storedContent.get( contentHash );
+		if ( stored ) {
+			this.manifest.resources[ url ] = { path: stored.manifestPath, contentType: stored.contentType };
+			this.replayResources.set( url, { path: stored.destination, contentType: stored.contentType } );
+			return;
+		}
 		this.reserveBytes( body.length );
 		mkdirSync( dirname( destination ), { recursive: true } );
 		writeFileSync( destination, body );
-		this.manifest.resources[ requestedUrl.href ] = {
-			path: `resources/${ relativePath.replace( /\\/g, '/' ) }`,
-			contentType,
-		};
-		this.replayResources.set( requestedUrl.href, { path: destination, contentType } );
-		const replayMetadata = replayableResponseMetadata( headers );
-		if ( replayMetadata ) this.replayMetadata.set( requestedUrl.href, replayMetadata );
+		const manifestPath = `resources/${ relativePath.replace( /\\/g, '/' ) }`;
+		this.storedContent.set( contentHash, { manifestPath, destination, contentType } );
+		this.manifest.resources[ url ] = { path: manifestPath, contentType };
+		this.replayResources.set( url, { path: destination, contentType } );
 	}
 
 	/**
