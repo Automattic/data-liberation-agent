@@ -22,6 +22,8 @@ import type { Page } from 'playwright';
 const ID_ATTRIBUTE = 'data-dla-fluid-id';
 /** Keys segmented stylesheet rules to their element; survives serialization. */
 const SEGMENT_ATTRIBUTE = 'data-dla-fluid-segment';
+/** How far a container percentage may miss the size it replaced at the capture width. */
+const CONTAINER_VERIFY_TOLERANCE_PX = 2;
 /** Marks the stylesheet block carrying segmented rules as capture-owned. */
 export const SEGMENT_STYLE_ATTRIBUTE = 'data-dla-fluid-rules';
 /** Attribute pattern used by the exporter to recognize those blocks. */
@@ -194,6 +196,8 @@ export async function learnAndApplyFluidGeometry(
 		property: string;
 		css: string;
 		fallbackCss: string | null;
+		/** The declaration is a percentage of the parent, which must be verified. */
+		containerRelative: boolean;
 		/** Media-scoped rules replace the inline declaration entirely. */
 		segmentedCss: string | null;
 	} > = [];
@@ -228,6 +232,7 @@ export async function learnAndApplyFluidGeometry(
 				property,
 				css: '',
 				fallbackCss: null,
+				containerRelative: false,
 				segmentedCss: segmentedCss(
 					`[${ SEGMENT_ATTRIBUTE }="${ id }"]`,
 					property,
@@ -259,7 +264,14 @@ export async function learnAndApplyFluidGeometry(
 		// when its scripts are removed. A viewport fit keeps a learned height
 		// definite in the static document instead of collapsing to 0px.
 		const css = property === 'height' && fallbackCss !== null ? fallbackCss : model.css;
-		learned.push( { id, property, css, fallbackCss, segmentedCss: null } );
+		learned.push( {
+			id,
+			property,
+			css,
+			fallbackCss,
+			containerRelative: model.kind === 'container' && css === model.css,
+			segmentedCss: null,
+		} );
 	}
 
 	// Restore the capture viewport BEFORE writing the learned CSS. Returning to
@@ -268,9 +280,10 @@ export async function learnAndApplyFluidGeometry(
 	if ( original ) await page.setViewportSize( original );
 	await page.waitForTimeout( settleMs );
 
-	const reverted = await page.evaluate(
-		( { attribute, segmentAttribute, entries } ) => {
+	const { reverted, frozen } = await page.evaluate(
+		( { attribute, segmentAttribute, entries, tolerance } ) => {
 			let revertedCount = 0;
+			let frozenCount = 0;
 			for ( const entry of entries ) {
 				const element = document.querySelector< HTMLElement >( `[${ attribute }="${ entry.id }"]` );
 				if ( ! element ) continue;
@@ -284,17 +297,26 @@ export async function learnAndApplyFluidGeometry(
 				}
 				const axis = entry.property === 'height' ? 'height' : 'width';
 				const before = element.getBoundingClientRect()[ axis ];
+				const runtimeValue = element.style.getPropertyValue( entry.property );
 				element.style.setProperty( entry.property, entry.css );
-				if ( entry.fallbackCss === null ) continue;
+				if ( ! entry.containerRelative ) continue;
 
-				// Verify rather than assume: a parent with no definite size on
-				// this axis collapses the percentage, which would be a worse
-				// copy than the viewport units it replaced.
+				// Verify rather than assume: a percentage only resolves against a
+				// parent with a definite size on this axis. A shrink-to-fit parent
+				// measures exactly its child at every sampled width, so the fit
+				// looks perfect, yet the percentage then collapses it. Fall back
+				// to the viewport fit, or keep the runtime's pixels when none fits.
 				const after = element.getBoundingClientRect()[ axis ];
-				if ( after > 1 || before <= 1 ) continue;
-				element.style.setProperty( entry.property, entry.fallbackCss );
-				entry.css = entry.fallbackCss;
-				revertedCount++;
+				if ( Math.abs( after - before ) <= tolerance ) continue;
+				if ( entry.fallbackCss !== null ) {
+					element.style.setProperty( entry.property, entry.fallbackCss );
+					entry.css = entry.fallbackCss;
+					revertedCount++;
+					continue;
+				}
+				element.style.setProperty( entry.property, runtimeValue );
+				entry.css = runtimeValue;
+				frozenCount++;
 			}
 			// A source resize callback can still mutate inline styles after learning
 			// completes. Keep the learned declaration authoritative until serialization;
@@ -317,9 +339,14 @@ export async function learnAndApplyFluidGeometry(
 				}
 			} );
 			observer.observe( document.documentElement, { subtree: true, attributes: true, attributeFilter: [ 'style' ] } );
-			return revertedCount;
+			return { reverted: revertedCount, frozen: frozenCount };
 		},
-		{ attribute: ID_ATTRIBUTE, segmentAttribute: SEGMENT_ATTRIBUTE, entries: learned }
+		{
+			attribute: ID_ATTRIBUTE,
+			segmentAttribute: SEGMENT_ATTRIBUTE,
+			entries: learned,
+			tolerance: CONTAINER_VERIFY_TOLERANCE_PX,
+		}
 	);
 
 	const segmentedRules = learned
@@ -350,10 +377,11 @@ export async function learnAndApplyFluidGeometry(
 		byKind.container = Math.max( 0, ( byKind.container ?? 0 ) - reverted );
 		byKind.proportional = ( byKind.proportional ?? 0 ) + reverted;
 	}
+	if ( frozen > 0 ) byKind.container = Math.max( 0, ( byKind.container ?? 0 ) - frozen );
 
 	return {
-		applied: learned.length,
-		unmodelled,
+		applied: learned.length - frozen,
+		unmodelled: unmodelled + frozen,
 		breakpoints: [ ...breakpoints ].sort( ( a, b ) => a - b ),
 		canvasFloor,
 		byKind,
