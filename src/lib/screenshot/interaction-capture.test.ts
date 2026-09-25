@@ -236,6 +236,36 @@ describe( 'captureTriggeredDialogs', () => {
 	);
 
 	it.skipIf( process.env.SKIP_BROWSER_TESTS )(
+		'captures a navigation drawer opened by a role="button" menu control',
+		async () => {
+			const browser = await chromium.launch( { headless: true } );
+			const page = await browser.newPage( { viewport: { width: 390, height: 844 } } );
+			try {
+				// The shape Wix renders: a div button with an accessible name and no
+				// aria-haspopup, toggling a drawer that is present but hidden.
+				await page.setContent( `<!doctype html><body>
+					<div id="menu-toggle" role="button" tabindex="0" aria-label="Open navigation menu"><span>≡</span></div>
+					<div id="menu-drawer" role="dialog" aria-modal="true" aria-label="Site" style="display:none;position:fixed;inset:0;background:white"><a href="/about">About</a><div role="button" aria-label="Close">×</div></div>
+					<script>
+						const drawer = document.querySelector('#menu-drawer');
+						document.querySelector('#menu-toggle').addEventListener('click', () => { drawer.style.display = 'block'; });
+						drawer.querySelector('[aria-label="Close"]').addEventListener('click', () => { drawer.style.display = 'none'; });
+					</script>
+				</body>` );
+
+				const report = await captureTriggeredDialogs( page, 'https://example.test/' );
+				expect( report.states ).toMatchObject( [
+					{ status: 'captured', trigger: { id: 'menu-toggle', label: 'Open navigation menu' }, dialog: { id: 'menu-drawer', ariaModal: true } },
+				] );
+				expect( await page.locator( '#menu-drawer' ).isVisible() ).toBe( false );
+			} finally {
+				await browser.close();
+			}
+		},
+		30_000
+	);
+
+	it.skipIf( process.env.SKIP_BROWSER_TESTS )(
 		'captures a menu trigger whose hit point is covered by an ancestor',
 		async () => {
 			const browser = await chromium.launch( { headless: true } );
