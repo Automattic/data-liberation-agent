@@ -35,7 +35,11 @@ import {
 } from './screenshot/interaction-capture.js';
 import { SCROLL_STATES_SCHEMA, type ScrollStatesReport } from './screenshot/scroll-state-capture.js';
 import { FLUID_RULES_STYLE_ATTRIBUTE } from './screenshot/fluid-capture.js';
-import { isAudioLink, type CapturedResourceManifest } from './screenshot/resource-capture.js';
+import {
+	isAudioLink,
+	svgUseDocumentReferences,
+	type CapturedResourceManifest,
+} from './screenshot/resource-capture.js';
 import { isSourcePromotion } from './source-cleanup.js';
 
 export const CAPTURE_RECEIPT_SCHEMA = 'data-liberation/capture-receipt/v1';
@@ -1563,12 +1567,16 @@ function dependencyReferences(
 		.replace( /&apos;|&#39;|&#x27;/gi, "'" );
 	let cssContent = searchableHtml;
 	const audioLinks: string[] = [];
+	const svgUseDocuments: string[] = [];
 	if ( ! cssOnly ) {
 		const $ = cheerio.load( html );
 		$( 'a[href],area[href]' ).each( ( _, element ) => {
 			const href = $( element ).attr( 'href' ) ?? '';
 			if ( isAudioLink( href, documentUrl ) ) audioLinks.push( href );
 		} );
+		// Recorded without the fragment, so localizing the sprite file rewrites
+		// only its path and every `#symbol` reference into it survives.
+		svgUseDocuments.push( ...svgUseDocumentReferences( $, documentUrl ) );
 		cssContent = [
 			...$( 'style' )
 				.map( ( _index, element ) => $( element ).html() ?? '' )
@@ -1589,6 +1597,7 @@ function dependencyReferences(
 		if ( reference && ! isInlineUrl( reference ) ) references.add( reference.replace( /&amp;/g, '&' ) );
 	};
 	for ( const href of audioLinks ) add( href );
+	for ( const reference of svgUseDocuments ) add( reference );
 
 	const mediaReferences = new Set< string >();
 	const cssReferences = new Set< string >();

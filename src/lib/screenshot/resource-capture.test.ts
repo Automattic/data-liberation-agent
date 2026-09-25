@@ -260,6 +260,60 @@ describe( 'CapturedResourceStore', () => {
 		expect( readFileSync( join( outputDir, 'website', src ), 'utf8' ) ).toBe( 'jpeg bytes' );
 	} );
 
+	it( 'captures an external SVG sprite referenced by <use> and keeps each fragment when localizing it', async () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-resource-svg-use-' ) );
+		dirs.push( outputDir );
+		mkdirSync( join( outputDir, 'html' ) );
+		mkdirSync( join( outputDir, 'screenshots' ) );
+		const sourceUrl = 'https://example.com/';
+		const spriteUrl = 'https://example.com/sprite.svg';
+		const html = `<html><body>
+			<svg><use href="/sprite.svg#icon"/></svg>
+			<svg><use xlink:href="/sprite.svg#other"/></svg>
+			<svg><use href="#inline"/></svg>
+			<svg><use href="https://cdn.example.net/remote.svg#icon"/></svg>
+		</body></html>`;
+		writeFileSync( join( outputDir, 'html', 'homepage.html' ), html );
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( { version: 1, entries: { [ sourceUrl ]: { html: 'html/homepage.html' } } } )
+		);
+		const sprite = '<svg xmlns="http://www.w3.org/2000/svg"><symbol id="icon"/><symbol id="other"/></svg>';
+		const fetchMedia = vi.fn( async ( url: string ) => ( {
+			finalUrl: url,
+			status: 200,
+			headers: new Headers( { 'content-type': 'image/svg+xml' } ),
+			body: Buffer.from( sprite ),
+		} ) );
+		const store = new CapturedResourceStore( outputDir, sourceUrl, fetchMedia );
+
+		await store.captureDomDependencies( html, sourceUrl );
+		await store.flush();
+
+		// One fetch for the sprite document, however many symbols it serves.
+		// Browsers never render a cross-origin <use> target, so it is not a
+		// render dependency of the copy.
+		expect( fetchMedia.mock.calls.map( ( [ url ] ) => url ) ).toEqual( [ spriteUrl ] );
+		const manifest = JSON.parse(
+			readFileSync( join( outputDir, 'resources', 'manifest.json' ), 'utf8' )
+		);
+		expect( manifest.resources[ spriteUrl ] ).toMatchObject( { contentType: 'image/svg+xml' } );
+		expect( manifest.failures ).toEqual( [] );
+
+		exportWebsiteCapture( { outputDir, sourceUrl, platform: 'generic', summary: {}, failures: [] } );
+		const $ = cheerio.load( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) );
+		const references = $( 'use' )
+			.map( ( _, element ) => $( element ).attr( 'href' ) ?? $( element ).attr( 'xlink:href' ) )
+			.get();
+		const [ icon, other ] = references;
+		expect( icon ).toMatch( /^\/.+\.svg#icon$/ );
+		expect( other ).toBe( icon.replace( /#icon$/, '#other' ) );
+		expect( references.slice( 2 ) ).toEqual( [ '#inline', 'https://cdn.example.net/remote.svg#icon' ] );
+		expect( readFileSync( join( outputDir, 'website', icon.replace( /#.*$/, '' ) ), 'utf8' ) ).toBe(
+			sprite
+		);
+	} );
+
 	it( 'does not let a same-origin redirect response block the DOM-dependency capture that follows for the same url', async () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-resource-redirect-poster-' ) );
 		dirs.push( outputDir );

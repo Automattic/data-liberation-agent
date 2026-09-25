@@ -283,6 +283,32 @@ function canonicalContentType( contentType: string ): string {
 	}[ normalized ] ?? contentType;
 }
 
+/**
+ * External documents referenced by SVG `<use>` (`href`, or the legacy
+ * `xlink:href`), as authored but without the fragment that picks a symbol:
+ * one sprite file serves every `#id` in it. A same-document `#id` is not a
+ * dependency, and browsers never render a cross-origin `<use>` target, so
+ * neither is returned.
+ */
+export function svgUseDocumentReferences( $: cheerio.CheerioAPI, documentUrl: string ): string[] {
+	const references = new Set< string >();
+	$( 'use' ).each( ( _, element ) => {
+		const node = $( element );
+		const reference = ( node.attr( 'href' ) ?? node.attr( 'xlink:href' ) ?? '' )
+			.trim()
+			.replace( /#.*$/, '' );
+		if ( ! reference ) return;
+		try {
+			const url = new URL( reference, documentUrl );
+			if ( /^https?:$/.test( url.protocol ) && url.origin === new URL( documentUrl ).origin )
+				references.add( reference );
+		} catch {
+			// An invalid reference renders nothing in the source either.
+		}
+	} );
+	return [ ...references ];
+}
+
 export function isAudioLink( reference: string, documentUrl: string ): boolean {
 	try {
 		const url = new URL( reference.replace( /&amp;/g, '&' ), documentUrl );
@@ -425,6 +451,7 @@ export class CapturedResourceStore {
 				const href = $( element ).attr( 'href' ) ?? '';
 				if ( isAudioLink( href, baseUrl ) ) add( href, baseUrl );
 			} );
+			for ( const reference of svgUseDocumentReferences( $, baseUrl ) ) add( reference, baseUrl );
 			$( 'link[href]' ).each( ( _, element ) => {
 				const node = $( element );
 				const rel = ( node.attr( 'rel' ) ?? '' ).toLowerCase().split( /\s+/ );
