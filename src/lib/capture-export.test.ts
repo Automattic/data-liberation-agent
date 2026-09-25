@@ -4288,6 +4288,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 				path: 'website/index.html',
 			},
 		] );
+		expect( existsSync( join( outputDir, 'website', '_redirects' ) ) ).toBe( false );
 		const homepage = cheerio.load( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) );
 		expect( homepage.html() ).toContain( '<h1>Home</h1>' );
 		expect( homepage( 'script[type="application/ld+json"]' ) ).toHaveLength( 2 );
@@ -4414,6 +4415,47 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 			'/new/index.html',
 			'/new/index.html',
 		] );
+		expect( readFileSync( join( outputDir, 'website', '_redirects' ), 'utf8' ) ).toBe(
+			'/old  /new/index.html  301\n'
+		);
+		expect( existsSync( join( outputDir, 'website', 'old' ) ) ).toBe( false );
+	} );
+
+	it( 'records an html alias of a directory route in website/_redirects', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-redirect-html-alias-' ) );
+		dirs.push( outputDir );
+		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
+		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
+		writeFileSync(
+			join( outputDir, 'html', 'homepage.html' ),
+			'<h1>Home</h1><a href="/blog.html">Blog</a>'
+		);
+		writeFileSync( join( outputDir, 'html', 'blog.html' ), '<h1>Blog</h1>' );
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( {
+				version: 1,
+				entries: {
+					'https://example.com/': { html: 'html/homepage.html' },
+					'https://example.com/blog.html': { redirectedTo: 'https://example.com/blog' },
+					'https://example.com/blog': { html: 'html/blog.html' },
+				},
+			} )
+		);
+
+		exportWebsiteCapture( {
+			outputDir,
+			sourceUrl: 'https://example.com/',
+			platform: 'generic',
+			summary: {},
+			failures: [],
+		} );
+
+		expect( existsSync( join( outputDir, 'website', 'blog.html' ) ) ).toBe( false );
+		expect( existsSync( join( outputDir, 'website', 'blog', 'index.html' ) ) ).toBe( true );
+		expect( readFileSync( join( outputDir, 'website', '_redirects' ), 'utf8' ) ).toBe(
+			'/blog.html  /blog/index.html  301\n'
+		);
 	} );
 
 	it( 'pairs a query-bearing entry URL with its default-document capture by normalized URL, deduping identical content', () => {
