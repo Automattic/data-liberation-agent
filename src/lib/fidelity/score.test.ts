@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+	matchRenderedImages,
 	normalizeImageKey,
 	scoreReport,
 	scoreViewport,
@@ -227,6 +228,32 @@ describe( 'normalizeImageKey', () => {
 		expect( normalizeImageKey( 'https://a.example.com/img/hero.png' ) ).toBe(
 			normalizeImageKey( 'http://127.0.0.1:53001/media/hero.avif' )
 		);
+	} );
+
+	it( 'pairs a percent-encoded parenthesized source name with its slugified avif copy', () => {
+		// The exporter writes `BG%20DESKTOP%20(2)_edited.jpg` as
+		// `BG-DESKTOP-2-_edited.avif`. A re-encode does not share a content
+		// hash, so the folded basename is the identity that has to meet.
+		const sourceUrl = 'https://cdn.example.com/media/BG%20DESKTOP%20(2)_edited.jpg';
+		const copyUrl = 'http://127.0.0.1:53001/media/BG-DESKTOP-2-_edited.avif';
+		const source = {
+			key: normalizeImageKey( sourceUrl ),
+			x: -1,
+			y: -32,
+			width: 1732,
+			height: 968,
+			contentHash: 'jpeg-bytes',
+		};
+		const copy = {
+			key: normalizeImageKey( copyUrl ),
+			x: -1,
+			y: -32,
+			width: 1732,
+			height: 968,
+			contentHash: 'avif-bytes',
+		};
+		expect( source.key ).toBe( copy.key );
+		expect( matchRenderedImages( [ source ], [ copy ] ) ).toEqual( [ { source, candidate: copy } ] );
 	} );
 
 	it( 'leaves meaningful name parts alone', () => {
