@@ -399,8 +399,7 @@ export const capture: LiberationHooks = {
 				} catch {
 					continue;
 				}
-				if ( target.origin !== location.origin || target.pathname !== location.pathname )
-					continue;
+				if ( target.origin !== location.origin ) continue;
 
 				const declaredIntent = link.getAttribute( 'data-anchor' ) ?? '';
 				const encodedFragment = target.hash ? target.hash.slice( 1 ) : declaredIntent;
@@ -415,6 +414,15 @@ export const capture: LiberationHooks = {
 				if ( ! fragment || fragment.length > 128 || /[\u0000-\u001f\u007f]/.test( fragment ) )
 					continue;
 				link.dataset.dlaAnchorFragment = fragment;
+				if ( target.pathname !== location.pathname ) {
+					// The declared section lives on another captured route, where
+					// this page's runtime cannot resolve it. Keep the intent in
+					// the href — `<target page>#<fragment>` — and let cross-route
+					// self-consistency verify the target document. Never resolve
+					// it here: clicking would navigate away from this page.
+					link.href = `${ target.pathname }#${ encodeURIComponent( fragment ) }`;
+					continue;
+				}
 				fragments.add( fragment );
 			}
 			return [ ...fragments ];
@@ -423,9 +431,19 @@ export const capture: LiberationHooks = {
 		const originalScroll = await page.evaluate( () => ( { x: scrollX, y: scrollY } ) );
 		for ( const [ index, fragment ] of fragments.entries() ) {
 			const trigger = await page.evaluate( ( { fragment, index } ) => {
+				// Cross-page links share the marker but not this page's runtime:
+				// their href already names the target route, and clicking one
+				// here would navigate away mid-capture.
+				const samePage = ( link: HTMLAnchorElement ) => {
+					try {
+						return new URL( link.href, location.href ).pathname === location.pathname;
+					} catch {
+						return false;
+					}
+				};
 				const links = [ ...document.querySelectorAll< HTMLAnchorElement >(
 					`a[data-dla-anchor-fragment="${ CSS.escape( fragment ) }"]`
-				) ];
+				) ].filter( samePage );
 				const markUnresolved = ( reason: string ) => {
 					for ( const link of links ) link.dataset.dlaAnchorUnresolved = reason;
 				};
@@ -480,7 +498,13 @@ export const capture: LiberationHooks = {
 			await page.evaluate( async ( { fragment, maxWait, initialScroll } ) => {
 				const links = [ ...document.querySelectorAll< HTMLAnchorElement >(
 					`a[data-dla-anchor-fragment="${ CSS.escape( fragment ) }"]`
-				) ];
+				) ].filter( ( link ) => {
+					try {
+						return new URL( link.href, location.href ).pathname === location.pathname;
+					} catch {
+						return false;
+					}
+				} );
 				const markUnresolved = ( reason: string ) => {
 					for ( const link of links ) link.dataset.dlaAnchorUnresolved = reason;
 				};

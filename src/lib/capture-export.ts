@@ -2067,7 +2067,10 @@ function appendJsonLd( html: string, jsonLd: string[] ): string {
  *  1. `a[data-dla-anchor-fragment]` — anchors a platform's `prepare()` hook
  *     already resolved against its own click runtime (see AGENTS.md — Wix
  *     same-page anchors), carrying an optional `data-dla-anchor-unresolved`
- *     reason straight from that runtime.
+ *     reason straight from that runtime. A marked link naming ANOTHER captured
+ *     route resolves against that route's document, so this document's target
+ *     count says nothing about it and `checkSelfConsistency` verifies the pair
+ *     once every route is written.
  *  2. Every other `a[href="#fragment"]` (or `.../path#fragment` resolving to
  *     THIS document) — ordinary authored same-page links that never went
  *     through adapter resolution at all. A page whose deferred content never
@@ -2079,10 +2082,17 @@ function appendJsonLd( html: string, jsonLd: string[] ): string {
  */
 function unresolvedCapturedAnchors(
 	html: string,
-	sourceUrl: string
+	sourceUrl: string,
+	documentPath?: string
 ): Array< { sourceUrl: string; fragment: string; targetCount: number; reason: string } > {
 	const $ = cheerio.load( html );
 	const diagnostics = new Map< string, { targetCount: number; reason: string } >();
+	let documentUrl: URL | undefined;
+	try {
+		documentUrl = new URL( sourceUrl );
+	} catch {
+		documentUrl = undefined;
+	}
 	const record = ( fragment: string, runtimeReason?: string ) => {
 		if ( ! fragment || diagnostics.has( fragment ) ) return;
 		const targetCount = $( '[id],a[name]' ).filter(
@@ -2105,21 +2115,31 @@ function unresolvedCapturedAnchors(
 		const link = $( element );
 		const href = link.attr( 'href' );
 		if ( ! href ) return;
+		let resolved: URL;
+		try {
+			resolved = new URL( href, sourceUrl );
+		} catch {
+			return;
+		}
+		// Same-document only. `documentPath` is this route's own portable
+		// spelling, which the rewrite gives same-page anchors — the entrypoint's
+		// resolved anchors read `/index.html#fragment`.
+		if (
+			documentUrl &&
+			( resolved.origin !== documentUrl.origin ||
+				( resolved.pathname !== documentUrl.pathname &&
+					resolved.pathname !== documentPath ) )
+		)
+			return;
 		let fragment: string;
 		try {
-			fragment = decodeURIComponent( new URL( href, sourceUrl ).hash.slice( 1 ) );
+			fragment = decodeURIComponent( resolved.hash.slice( 1 ) );
 		} catch {
 			return;
 		}
 		record( fragment, link.attr( 'data-dla-anchor-unresolved' ) );
 	} );
 
-	let documentUrl: URL | undefined;
-	try {
-		documentUrl = new URL( sourceUrl );
-	} catch {
-		documentUrl = undefined;
-	}
 	$( 'a[href]' ).each( ( _index, element ) => {
 		const link = $( element );
 		if ( link.attr( 'data-dla-anchor-fragment' ) !== undefined ) return; // handled above
@@ -3030,7 +3050,9 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 			portableRouteLinks,
 			{ documentPath: `/${ routePath }`, servedPaths: portableServedPaths }
 		);
-		unresolvedAnchors.push( ...unresolvedCapturedAnchors( normalizedHtml, url ) );
+		unresolvedAnchors.push(
+			...unresolvedCapturedAnchors( normalizedHtml, url, `/${ routePath }` )
+		);
 		writeFileSync( destination, normalizedHtml );
 		entry.identityHtmlPath = `${ htmlPath }.identity`;
 		writeFileSync( entry.identityHtmlPath, identityHtml );

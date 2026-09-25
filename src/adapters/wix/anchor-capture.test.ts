@@ -34,4 +34,42 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix runtime ancho
 			await browser.close();
 		}
 	}, 20_000 );
+
+	it( 'keeps a cross-page data-anchor intent in the href instead of dropping it', async () => {
+		const browser = await chromium.launch( { headless: true } );
+		try {
+			const page = await browser.newPage();
+			await page.route( 'https://anchor.test/**', ( route ) => {
+				const url = new URL( route.request().url() );
+				if ( url.pathname !== '/project' )
+					return route.fulfill( { contentType: 'text/html', body: '<main>Home</main>' } );
+				return route.fulfill( {
+					contentType: 'text/html',
+					body: '<nav><a href="https://anchor.test/" data-anchor="dataItem-home-section">Expertise</a></nav>',
+				} );
+			} );
+			await page.goto( 'https://anchor.test/project' );
+			await capture.prepare!( page, { url: page.url(), viewport: 'desktop' } );
+
+			const link = page.locator( 'nav a' );
+			expect( await link.getAttribute( 'data-dla-anchor-fragment' ) ).toBe(
+				'dataItem-home-section'
+			);
+			// The href now names the target page and its section, so a reader
+			// landing there from a project page reaches the section, not the top.
+			const resolved = new URL(
+				( await link.evaluate( ( el ) => ( el as HTMLAnchorElement ).href ) )!
+			);
+			expect( `${ resolved.pathname }${ resolved.hash }` ).toBe(
+				'/#dataItem-home-section'
+			);
+			// The target lives on the other route: nothing is resolved locally,
+			// and observing it must not navigate away from the captured page.
+			expect( await page.locator( '[data-dla-anchor-target]' ).count() ).toBe( 0 );
+			expect( await link.getAttribute( 'data-dla-anchor-unresolved' ) ).toBeNull();
+			expect( page.url() ).toBe( 'https://anchor.test/project' );
+		} finally {
+			await browser.close();
+		}
+	}, 20_000 );
 } );
