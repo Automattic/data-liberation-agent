@@ -80,7 +80,7 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		await page.close();
 	} );
 
-	it( 'keeps runtime pixels when the only container is sized by the element itself', async () => {
+	it( 'never collapses a tile whose only container is sized by the tile itself', async () => {
 		// A gallery tile inside a shrink-to-fit item: every ancestor measures
 		// exactly the tile, so "fills its parent" fits every sample — but that
 		// parent has no definite size of its own, and a percentage collapses it.
@@ -116,8 +116,62 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		// Removing the runtime leaves the tile at the size the source rendered.
 		await page.evaluate( () => document.querySelectorAll( 'script' ).forEach( ( script ) => script.remove() ) );
 		const box = await page.locator( '#tile' ).boundingBox();
-		expect( box?.width ).toBe( 628 );
-		expect( box?.height ).toBe( 744 );
+		expect( Math.abs( box!.width - 628 ) ).toBeLessThanOrEqual( 2 );
+		expect( Math.abs( box!.height - 744 ) ).toBeLessThanOrEqual( 2 );
+		await page.close();
+	}, 20_000 );
+
+	it( 'follows the sampled sizes when a container fit cannot be verified', async () => {
+		// The same shrink-to-fit gallery tile: the percentage is refused, and no
+		// single viewport expression fits the whole sweep. The sweep still saw
+		// the tile at every width, so the copy must follow those sizes rather
+		// than keep the capture width's everywhere.
+		const sizes: Record< number, [ number, number ] > = {
+			390: [ 390, 900 ], 600: [ 600, 900 ], 768: [ 768, 582 ], 1024: [ 447, 789 ],
+			1280: [ 558, 761 ], 1440: [ 628, 744 ], 1920: [ 698, 726 ],
+		};
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		await page.setContent( `
+			<div style="position:relative">
+				<div id="item" style="position:absolute;top:0;left:0"><div id="shrink">
+					<div id="tile" style="height:744px;width:628px;margin:0px"></div>
+				</div></div>
+			</div>
+			<script>
+				const sizes = ${ JSON.stringify( sizes ) };
+				const update = () => {
+					const [ width, height ] = sizes[ innerWidth ] ?? sizes[ 1440 ];
+					document.getElementById( 'tile' ).style.width = width + 'px';
+					document.getElementById( 'tile' ).style.height = height + 'px';
+				};
+				addEventListener( 'resize', update );
+				update();
+			</script>
+		` );
+
+		const result = await learnAndApplyFluidGeometry( page, {
+			widths: Object.keys( sizes ).map( Number ),
+			settleMs: 50,
+		} );
+
+		// Serialize and reload without the runtime, as the exported copy does.
+		const html = await page.evaluate( () => {
+			document.querySelectorAll( 'script' ).forEach( ( script ) => script.remove() );
+			return document.documentElement.outerHTML;
+		} );
+		const copy = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		await copy.setContent( html );
+		for ( const [ width, [ expectedWidth, expectedHeight ] ] of Object.entries( sizes ) ) {
+			await copy.setViewportSize( { width: Number( width ), height: 900 } );
+			const box = await copy.locator( '#tile' ).boundingBox();
+			expect( Math.abs( box!.width - expectedWidth ), `width at ${ width }` ).toBeLessThanOrEqual( 2 );
+			expect( Math.abs( box!.height - expectedHeight ), `height at ${ width }` ).toBeLessThanOrEqual( 2 );
+		}
+		// Between samples the width follows the fitted rule, not the capture width.
+		await copy.setViewportSize( { width: 1100, height: 900 } );
+		expect( Math.round( ( await copy.locator( '#tile' ).boundingBox() )!.width ) ).toBe( 480 );
+		expect( result.unmodelled ).toBe( 0 );
+		await copy.close();
 		await page.close();
 	}, 20_000 );
 
