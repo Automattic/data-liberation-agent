@@ -1196,6 +1196,302 @@ describe( 'exportWebsiteCapture', () => {
 		} );
 	} );
 
+	it( 'collapses a mobile document that reconciles with desktop by element identity', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-collapse-identity-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
+			mkdirSync( join( outputDir, path ), { recursive: true } );
+		writeFileSync(
+			join( outputDir, 'html', 'homepage.html' ),
+			'<html><head><style>.hero{color:red}</style></head><body><main><div id="comp-root">' +
+				'<div id="comp-hero"><h1>About</h1></div>' +
+				'<div id="comp-desktop-map">Desktop only</div>' +
+				'</div></main></body></html>'
+		);
+		writeFileSync(
+			join( outputDir, 'html-mobile', 'homepage.html' ),
+			'<html><head><style>.hero{color:blue}</style></head><body><main><div id="comp-root">' +
+				'<div id="comp-hero"><h1>About</h1></div>' +
+				'<div id="comp-mobile-menu">Mobile only</div>' +
+				'</div></main></body></html>'
+		);
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( {
+				version: 1,
+				entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },
+			} )
+		);
+
+		exportWebsiteCapture( {
+			outputDir,
+			sourceUrl: 'https://example.com/',
+			platform: 'weebly',
+			summary: {},
+			failures: [],
+		} );
+
+		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
+		const $ = cheerio.load( html );
+		expect( $( '.data-liberation-desktop-document' ) ).toHaveLength( 0 );
+		expect( $( '.data-liberation-mobile-document' ) ).toHaveLength( 0 );
+		expect( $( '#comp-hero' ) ).toHaveLength( 1 );
+		expect( $( '#comp-desktop-map' ) ).toHaveLength( 1 );
+		expect( $( '#comp-mobile-menu' ) ).toHaveLength( 1 );
+		expect( $( '#comp-mobile-menu' ).hasClass( 'data-liberation-mobile-only' ) ).toBe( true );
+		expect( $( '#comp-desktop-map' ).hasClass( 'data-liberation-desktop-only' ) ).toBe( true );
+		// Width-scoped visibility: each side's unique elements render only where its capture did.
+		expect( html ).toContain(
+			'@media(min-width:768px){.data-liberation-mobile-only{display:none!important}}'
+		);
+		expect( html ).toContain(
+			'@media(max-width:767px){.data-liberation-desktop-only{display:none!important}}'
+		);
+		// Per-width CSS survives as media-scoped stylesheets.
+		const styles = [ ...html.matchAll( /<style\b([^>]*)>([\s\S]*?)<\/style\s*>/gi ) ];
+		expect(
+			styles.some( ( s ) => s[ 1 ].includes( 'min-width' ) && s[ 2 ].includes( 'color:red' ) )
+		).toBe( true );
+		expect(
+			styles.some( ( s ) => s[ 1 ].includes( 'max-width' ) && s[ 2 ].includes( 'color:blue' ) )
+		).toBe( true );
+		const receipt = JSON.parse(
+			readFileSync( join( outputDir, 'capture-receipt.json' ), 'utf8' )
+		);
+		expect( receipt.routes[ 0 ].responsiveVariants ).toEqual( {
+			variants: 1,
+			outcome: 'collapsed-identity-subset',
+			reason:
+				'mobile document reconciles with desktop by element identity (1 mobile-only, 1 desktop-only elements); shipped one document',
+			css: 'viewport-scoped',
+			desktopOnlyElements: 1,
+			mobileOnlyElements: 1,
+		} );
+	} );
+
+	it( 'reconciles a nested mobile-only subtree and a desktop-only wrapper around shared components', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-collapse-nested-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
+			mkdirSync( join( outputDir, path ), { recursive: true } );
+		// Desktop wraps the shared background in a transition layer mobile omits;
+		// mobile adds a phone menu whose overlay is itself mobile-only.
+		writeFileSync(
+			join( outputDir, 'html', 'homepage.html' ),
+			'<html><body><div id="comp-root"><div id="comp-header"><h1>Site</h1></div>' +
+				'<div id="comp-transition"><div id="comp-background">Background</div></div>' +
+				'</div></body></html>'
+		);
+		writeFileSync(
+			join( outputDir, 'html-mobile', 'homepage.html' ),
+			'<html><body><div id="comp-root"><div id="comp-header"><h1>Site</h1>' +
+				'<nav id="comp-phone-menu">Menu<div id="comp-phone-overlay"></div></nav></div>' +
+				'<div id="comp-background">Background</div>' +
+				'</div></body></html>'
+		);
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( {
+				version: 1,
+				entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },
+			} )
+		);
+
+		exportWebsiteCapture( {
+			outputDir,
+			sourceUrl: 'https://example.com/',
+			platform: 'weebly',
+			summary: {},
+			failures: [],
+		} );
+
+		const $ = cheerio.load( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) );
+		expect( $( '.data-liberation-mobile-document' ) ).toHaveLength( 0 );
+		expect( $( '#comp-header #comp-phone-menu #comp-phone-overlay' ) ).toHaveLength( 1 );
+		expect( $( '#comp-phone-menu' ).hasClass( 'data-liberation-mobile-only' ) ).toBe( true );
+		// The wrapper stays visible on mobile so the shared background inside it renders.
+		expect( $( '#comp-transition #comp-background' ) ).toHaveLength( 1 );
+		expect( $( '#comp-transition' ).hasClass( 'data-liberation-desktop-only' ) ).toBe( false );
+		const receipt = JSON.parse(
+			readFileSync( join( outputDir, 'capture-receipt.json' ), 'utf8' )
+		);
+		expect( receipt.routes[ 0 ].responsiveVariants ).toMatchObject( {
+			variants: 1,
+			outcome: 'collapsed-identity-subset',
+			mobileOnlyElements: 1,
+			desktopOnlyElements: 0,
+		} );
+	} );
+
+	it( 'projects per-viewport presentation of shared components into width-scoped rules', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-collapse-projection-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
+			mkdirSync( join( outputDir, path ), { recursive: true } );
+		// Desktop and mobile render the same components with their own inline
+		// presentation: text rescaled on an id-less descendant, a grid item
+		// placed under an id-less grid container, an image sized per viewport,
+		// and a sibling only desktop renders ahead of the shared one.
+		writeFileSync(
+			join( outputDir, 'html', 'homepage.html' ),
+			'<html><body class=""><div id="comp-root">' +
+				'<div id="comp-text"><p style="font-size:30px"><span style="font-size:30px">Name</span></p></div>' +
+				'<div id="comp-card"><div class="trigger"></div><img class="photo" style="width:122px;height:223px" sizes="626px" src="a.jpg"></div>' +
+				'<div class="grid" data-mesh-id="root-grid"><div id="comp-first">First</div></div>' +
+				'<div id="comp-box" style="margin:0 auto;width:980px">Box</div>' +
+				'</div></body></html>'
+		);
+		writeFileSync(
+			join( outputDir, 'html-mobile', 'homepage.html' ),
+			'<html><body class="device-mobile-optimized"><div id="comp-root">' +
+				'<div id="comp-text"><p style="font-size:21px"><span style="font-size:21px">Name</span></p></div>' +
+				'<div id="comp-card"><img class="photo" style="width:280px;height:501px" sizes="280px" src="a.jpg"></div>' +
+				'<div class="grid" data-mesh-id="root-grid"><div id="comp-first">First</div><div id="comp-phone-only">Phone</div></div>' +
+				'<div id="comp-box" style="width:320px">Box</div>' +
+				'</div></body></html>'
+		);
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( {
+				version: 1,
+				entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },
+			} )
+		);
+
+		exportWebsiteCapture( {
+			outputDir,
+			sourceUrl: 'https://example.com/',
+			platform: 'weebly',
+			summary: {},
+			failures: [],
+		} );
+
+		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
+		const $ = cheerio.load( html );
+		expect( $( '.data-liberation-mobile-document' ) ).toHaveLength( 0 );
+		// The mobile capture's body flag, which its stylesheet keys on, survives.
+		expect( $( 'body' ).hasClass( 'device-mobile-optimized' ) ).toBe( true );
+		// The mobile-only component lands inside the id-less grid container.
+		expect( $( '[data-mesh-id="root-grid"] > #comp-phone-only' ) ).toHaveLength( 1 );
+		// Desktop inline presentation stays for the reference viewport when mobile
+		// restates every property, and mobile's answer applies below the switch.
+		const span = $( '#comp-text span' );
+		expect( span.attr( 'style' ) ).toBe( 'font-size:30px' );
+		const hook = ( span.attr( 'class' ) ?? '' )
+			.split( /\s+/ )
+			.find( ( token ) => token.startsWith( 'data-liberation-responsive-' ) );
+		expect( hook ).toBeDefined();
+		expect( html ).toContain( `@media(max-width:767px){` );
+		expect( html ).toContain( `.${ hook }{font-size:21px!important}` );
+		// Positional pairing skips the desktop-only trigger to reach the image.
+		const photo = $( '#comp-card img.photo' );
+		expect( photo.attr( 'sizes' ) ).toBe( '(max-width:767px) 280px, 626px' );
+		expect( html ).toMatch( /width:280px!important;height:501px!important/ );
+		// A desktop property mobile never states must not leak onto phones, so
+		// both sides move into width-scoped rules.
+		expect( $( '#comp-box' ).attr( 'style' ) ).toBeUndefined();
+		expect( html ).toContain( '@media(min-width:768px){' );
+		expect( html ).toContain( '#comp-box{margin:0 auto!important;width:980px!important}' );
+		expect( html ).toContain( '#comp-box{width:320px!important}' );
+	} );
+
+	it.each( [
+		[
+			'a repeated per-instance id and a body-level mobile-only anchor',
+			'<div id="comp-root"><button id="comp-a"><i id="icon"></i>A</button><button id="comp-b"><i id="icon"></i>B</button></div>',
+			'<span id="section-anchor"></span><div id="comp-root"><button id="comp-a"><i id="icon"></i>A</button><button id="comp-b"><i id="icon"></i>B</button></div>',
+			'collapsed-identity-subset',
+		],
+		[
+			'a shared component the mobile capture moves into another id-less container',
+			'<form id="comp-form"><div class="grid"><div class="cell"><input id="field-a"></div><div class="cell"><input id="field-b"></div></div></form>',
+			'<form id="comp-form"><div class="grid"><div class="cell"><input id="field-a"></div></div><div class="grid"><div class="cell"><input id="field-b"></div></div></form>',
+			'dual-structural',
+		],
+	] )( 'reconciles %s as expected', ( _label, desktopBody, mobileBody, outcome ) => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-collapse-shape-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
+			mkdirSync( join( outputDir, path ), { recursive: true } );
+		writeFileSync( join( outputDir, 'html', 'homepage.html' ), `<html><body>${ desktopBody }</body></html>` );
+		writeFileSync(
+			join( outputDir, 'html-mobile', 'homepage.html' ),
+			`<html><body>${ mobileBody }</body></html>`
+		);
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( {
+				version: 1,
+				entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },
+			} )
+		);
+
+		exportWebsiteCapture( {
+			outputDir,
+			sourceUrl: 'https://example.com/',
+			platform: 'weebly',
+			summary: {},
+			failures: [],
+		} );
+
+		const receipt = JSON.parse( readFileSync( join( outputDir, 'capture-receipt.json' ), 'utf8' ) );
+		expect( receipt.routes[ 0 ].responsiveVariants.outcome ).toBe( outcome );
+		if ( outcome === 'collapsed-identity-subset' ) {
+			const $ = cheerio.load( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) );
+			expect( $( 'body > #section-anchor.data-liberation-mobile-only' ) ).toHaveLength( 1 );
+			expect( $( '#comp-a #icon, #comp-b #icon' ) ).toHaveLength( 2 );
+		}
+	} );
+
+	it( 'keeps dual documents when mobile text has no mapped parent to reconcile into', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-collapse-unmapped-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
+			mkdirSync( join( outputDir, path ), { recursive: true } );
+		writeFileSync(
+			join( outputDir, 'html', 'homepage.html' ),
+			'<html><body><main><div id="comp-root">' +
+				'<div id="comp-hero"><h1>About</h1></div>' +
+				'<div id="comp-desktop-map">Desktop only</div>' +
+				'</div></main></body></html>'
+		);
+		writeFileSync(
+			join( outputDir, 'html-mobile', 'homepage.html' ),
+			'<html><body><main><div id="comp-root">' +
+				'<div id="comp-hero"><h1>About</h1></div>' +
+				'<div id="comp-mobile-menu">Mobile only</div>' +
+				'</div><p>Stray mobile note</p></main></body></html>'
+		);
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( {
+				version: 1,
+				entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },
+			} )
+		);
+
+		exportWebsiteCapture( {
+			outputDir,
+			sourceUrl: 'https://example.com/',
+			platform: 'weebly',
+			summary: {},
+			failures: [],
+		} );
+
+		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
+		const $ = cheerio.load( html );
+		expect( $( '.data-liberation-desktop-document' ) ).toHaveLength( 1 );
+		expect( $( '.data-liberation-mobile-document' ) ).toHaveLength( 1 );
+		expect( $( '#comp-mobile-menu' ) ).toHaveLength( 1 );
+		const receipt = JSON.parse(
+			readFileSync( join( outputDir, 'capture-receipt.json' ), 'utf8' )
+		);
+		expect( receipt.routes[ 0 ].responsiveVariants ).toMatchObject( {
+			variants: 2,
+			outcome: 'dual-structural',
+		} );
+	} );
+
 	it( 'preserves only capture-attested bounded HTTPS iframe surfaces', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-visual-iframe-export-' ) );
 		dirs.push( outputDir );
