@@ -359,6 +359,23 @@ export async function capturePageHtml( page: Page ): Promise< string > {
 					style.boxShadow !== 'none'
 				);
 			};
+			const restoredImages: Array< { image: HTMLImageElement; previous: string | null } > = [];
+			const placeholderGif = /^data:image\/gif;base64,R0lGODlhAQAB/i;
+			const srcsetShaped = ( value: string ) => /\s+\d+(?:\.\d+)?[wx](?=\s*(?:,|$))/i.test( value );
+			const durableImageUrl = ( value: string | null | undefined ): string => {
+				const url = ( value ?? '' ).trim();
+				if ( ! url || /^blob:/i.test( url ) || placeholderGif.test( url ) || srcsetShaped( url ) ) return '';
+				try {
+					const parsed = new URL( url, document.baseURI );
+					return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? parsed.href : '';
+				} catch {
+					return '';
+				}
+			};
+			const firstHttpUrl = ( value: string ): string => {
+				const match = /https?:\/\/[^\s,"']+/i.exec( value );
+				return match ? durableImageUrl( match[ 0 ] ) : '';
+			};
 			const detached: Array< { element: Element; parent: Node; next: Node | null } > = [];
 			for ( const element of Array.from( document.body?.querySelectorAll( '*' ) ?? [] ) ) {
 				if ( element.namespaceURI !== 'http://www.w3.org/1999/xhtml' || ! element.localName.includes( '-' ) ) continue;
@@ -373,9 +390,41 @@ export async function capturePageHtml( page: Page ): Promise< string > {
 				if ( box( parent ) + box( sibling ) === before ) detached.push( { element, parent, next } );
 				else parent.insertBefore( element, next );
 			}
+			// A lazy loader leaves the 1x1 GIF, or a density list, in the src
+			// attribute while the loaded file is currentSrc (or a data-* / source
+			// srcset). outerHTML keeps the attribute, so write the loaded URL
+			// immediately before serializing, then put the live attribute back.
+			for ( const image of document.querySelectorAll( 'img' ) ) {
+				const attribute = image.getAttribute( 'src' ) ?? '';
+				const shaped = srcsetShaped( attribute );
+				if ( ! placeholderGif.test( attribute ) && ! shaped && ! /^blob:/i.test( attribute ) ) continue;
+				let next = durableImageUrl( image.currentSrc );
+				if ( ! next ) {
+					for ( const name of [ 'data-src', 'data-lazy-src', 'data-original', 'data-image' ] ) {
+						next = durableImageUrl( image.getAttribute( name ) );
+						if ( next ) break;
+					}
+				}
+				if ( ! next ) {
+					const srcset =
+						image.getAttribute( 'srcset' ) ||
+						image.getAttribute( 'data-srcset' ) ||
+						( shaped ? attribute : '' ) ||
+						image.closest( 'picture' )?.querySelector( 'source[srcset]' )?.getAttribute( 'srcset' ) ||
+						'';
+					next = firstHttpUrl( srcset );
+				}
+				if ( ! next || next === attribute ) continue;
+				restoredImages.push( { image, previous: image.getAttribute( 'src' ) } );
+				image.setAttribute( 'src', next );
+			}
 			try {
 				return `<!DOCTYPE html>${ document.documentElement.outerHTML }`;
 			} finally {
+				for ( const { image, previous } of restoredImages.reverse() ) {
+					if ( previous === null ) image.removeAttribute( 'src' );
+					else image.setAttribute( 'src', previous );
+				}
 				for ( const { element, parent, next } of detached.reverse() ) parent.insertBefore( element, next );
 			}
 		} );

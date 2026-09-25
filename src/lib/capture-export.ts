@@ -1842,6 +1842,80 @@ function srcsetReferences( srcset: string ): string[] {
 	return references;
 }
 
+// A density or width descriptor means the attribute is a srcset list, not one
+// URL. `new URL` percent-encodes the list into a single address that 404s, and
+// blanking that string also wipes the same list where it is a real srcset.
+function isSrcsetShaped( value: string ): boolean {
+	return /\s+\d+(?:\.\d+)?[wx](?=\s*(?:,|$))/i.test( value );
+}
+
+interface SrcsetCandidate {
+	url: string;
+	size: number;
+	density: boolean;
+}
+
+function srcsetCandidates( value: string ): SrcsetCandidate[] {
+	const candidates: SrcsetCandidate[] = [];
+	let offset = 0;
+	while ( offset < value.length ) {
+		while ( offset < value.length && /[\s,]/.test( value[ offset ] ) ) offset++;
+		if ( offset >= value.length ) break;
+		const start = offset;
+		while ( offset < value.length && ! /\s/.test( value[ offset ] ) ) offset++;
+		const url = value.slice( start, offset ).replace( /,+$/, '' );
+		const descriptorStart = offset;
+		while ( offset < value.length && value[ offset ] !== ',' ) offset++;
+		const descriptor = value.slice( descriptorStart, offset );
+		if ( offset < value.length ) offset++;
+		if ( ! url ) continue;
+		const parsed = /(\d+(?:\.\d+)?)([wx])/i.exec( descriptor );
+		candidates.push( {
+			url,
+			size: parsed ? Number( parsed[ 1 ] ) : 1,
+			density: parsed?.[ 2 ].toLowerCase() === 'x',
+		} );
+	}
+	return candidates;
+}
+
+function elementSrcReferences( tag: string, value: string ): string[] {
+	const normalized = value.replace( /&amp;/g, '&' ).trim();
+	if ( ! normalized ) return [];
+	if ( tag === 'img' && isSrcsetShaped( normalized ) ) return srcsetReferences( normalized );
+	return [ normalized ];
+}
+
+function isLocalImageSrc( url: string ): boolean {
+	return Boolean( url ) && ! url.startsWith( 'data:' ) && ! /^(?:https?:)?\/\//i.test( url );
+}
+
+// The image the copy should show when `src` itself is a srcset list. Prefer a
+// candidate that was already localized, and the 1x file when several densities
+// were, so the fallback matches the image a 1x display loaded.
+function bestBoundImageSrc( value: string ): string | undefined {
+	if ( ! isSrcsetShaped( value ) ) return undefined;
+	const local = srcsetCandidates( value ).filter( ( candidate ) => isLocalImageSrc( candidate.url ) );
+	if ( local.length === 0 ) return undefined;
+	const densities = local.filter( ( candidate ) => candidate.density );
+	const pool = densities.length > 0 ? densities : local;
+	return [ ...pool ].sort( ( left, right ) =>
+		densities.length > 0
+			? Math.abs( left.size - 1 ) - Math.abs( right.size - 1 ) || left.size - right.size
+			: right.size - left.size
+	)[ 0 ]?.url;
+}
+
+function bindSrcsetShapedImageSrc( html: string ): string {
+	return html.replace( /<img\b[^>]*>/gi, ( tag ) => {
+		const match = /\ssrc\s*=\s*(["'])([\s\S]*?)\1/i.exec( tag );
+		if ( ! match ) return tag;
+		const bound = bestBoundImageSrc( match[ 2 ] );
+		if ( ! bound ) return tag;
+		return tag.replace( match[ 0 ], ` src=${ match[ 1 ] }${ bound }${ match[ 1 ] }` );
+	} );
+}
+
 function capturedMediaReferences( entries: CaptureEntry[] ): Map< string, Set< string > > {
 	const pages = new Set(
 		entries.flatMap( ( entry ) => {
@@ -1857,9 +1931,9 @@ function capturedMediaReferences( entries: CaptureEntry[] ): Map< string, Set< s
 		const html = readFileSync( entry.htmlPath, 'utf8' );
 		const references: string[] = [];
 		for ( const match of html.matchAll(
-			/<(?:img|source|video|audio)\b[^>]*\ssrc\s*=\s*(["'])([\s\S]*?)\1[^>]*>/gi
+			/<(img|source|video|audio)\b[^>]*\ssrc\s*=\s*(["'])([\s\S]*?)\2[^>]*>/gi
 		) ) {
-			references.push( match[ 2 ] );
+			references.push( ...elementSrcReferences( match[ 1 ].toLowerCase(), match[ 3 ] ) );
 		}
 		for ( const match of html.matchAll(
 			/<(?:img|source)\b[^>]*\ssrcset\s*=\s*(["'])([\s\S]*?)\1[^>]*>/gi
@@ -1924,7 +1998,10 @@ function retainedMediaReferencesByFamily( entries: CaptureEntry[] ): Map< string
 		$( 'img,source,video,audio' ).each( ( _index, element ) => {
 			const node = $( element );
 			const src = node.attr( 'src' );
-			if ( src ) add( src, url );
+			const tag = String( node.prop( 'tagName' ) ?? '' ).toLowerCase();
+			if ( src ) {
+				for ( const reference of elementSrcReferences( tag, src ) ) add( reference, url );
+			}
 			const srcset = node.attr( 'srcset' );
 			if ( ! srcset ) return;
 			for ( const candidate of srcsetReferences( srcset ) ) add( candidate, url );
@@ -2121,10 +2198,12 @@ function dependencyReferences(
 	const mediaReferences = new Set< string >();
 	const cssReferences = new Set< string >();
 	for ( const match of searchableHtml.matchAll(
-		/<(?:img|source|video|audio)\b[^>]*\ssrc\s*=\s*(["'])([\s\S]*?)\1[^>]*>/gi
+		/<(img|source|video|audio)\b[^>]*\ssrc\s*=\s*(["'])([\s\S]*?)\2[^>]*>/gi
 	) ) {
-		mediaReferences.add( match[ 2 ].replace( /&amp;/g, '&' ) );
-		add( match[ 2 ] );
+		for ( const reference of elementSrcReferences( match[ 1 ].toLowerCase(), match[ 3 ] ) ) {
+			mediaReferences.add( reference );
+			add( reference );
+		}
 	}
 	for ( const match of searchableHtml.matchAll(
 		/<video\b[^>]*\bposter\s*=\s*(["'])([\s\S]*?)\1[^>]*>/gi
@@ -3552,13 +3631,15 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		unresolvedAnchors.push( ...uncapturedRouteAnchors( originalHtml, url, capturedRouteKeys, absentRouteKeys ) );
 		// Rewrite route links once, after wiring dialogs below. A portable path
 		// can also name a source route that was allocated a different filename.
-		const identityHtml = replaceAll(
-			rewriteMediaUrls(
-				originalHtml,
-				omitDegenerateReplacements( mediaReplacements, rejectedReplacementKeys )
-			),
-			resourceReplacements,
-			rejectedReplacementKeys
+		const identityHtml = bindSrcsetShapedImageSrc(
+			replaceAll(
+				rewriteMediaUrls(
+					originalHtml,
+					omitDegenerateReplacements( mediaReplacements, rejectedReplacementKeys )
+				),
+				resourceReplacements,
+				rejectedReplacementKeys
+			)
 		);
 		const normalizedHtml = rewriteCapturedRouteLinks(
 			wireCapturedDialogs(

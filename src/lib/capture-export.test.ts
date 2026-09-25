@@ -1766,6 +1766,53 @@ describe( 'exportWebsiteCapture', () => {
 		expect( image.attr( 'data-image' ) ).toBe( '/media/portrait-750.jpg' );
 	} );
 
+	it( 'binds an image whose src is a density list to the localized file instead of the placeholder', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-srcset-src-export-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'media', 'screenshots' ] )
+			mkdirSync( join( outputDir, path ), { recursive: true } );
+		const thumb = 'https://cdn.example.test/item-1.jpg';
+		const thumb2x = 'https://cdn.example.test/item-1-2x.jpg';
+		const list = `${ thumb } 1x, ${ thumb2x } 2x`;
+		const lost = 'https://cdn.example.test/lost.jpg';
+		writeFileSync(
+			join( outputDir, 'html', 'homepage.html' ),
+			`<html><body><picture><source media="(min-width: 0px)" srcset="${ list }">` +
+				`<img alt="Item 1" src="${ list }"></picture>` +
+				`<img id="lost" src="${ lost }" alt=""></body></html>`
+		);
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( {
+				version: 1,
+				entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },
+			} )
+		);
+		writeFileSync( join( outputDir, 'media', 'item-1.jpg' ), 'item 1' );
+		writeFileSync( join( outputDir, 'media', 'item-1-2x.jpg' ), 'item 1 2x' );
+		const media = MediaStubStore.load( outputDir );
+		media.markSuccess( thumb, join( outputDir, 'media', 'item-1.jpg' ) );
+		media.markSuccess( thumb2x, join( outputDir, 'media', 'item-1-2x.jpg' ) );
+		media.flush();
+
+		exportWebsiteCapture( {
+			outputDir,
+			sourceUrl: 'https://example.com/',
+			platform: 'generic',
+			summary: {},
+			failures: [],
+		} );
+
+		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
+		const $ = cheerio.load( html );
+		const image = $( 'img[alt="Item 1"]' );
+		expect( image.attr( 'src' ) ).toBe( '/media/item-1.jpg' );
+		expect( $.html( image ) ).not.toContain( 'R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=' );
+		expect( $( 'source' ).attr( 'srcset' ) ).toContain( '/media/item-1.jpg 1x' );
+		expect( $( 'source' ).attr( 'srcset' ) ).toContain( '/media/item-1-2x.jpg 2x' );
+		expect( $( '#lost' ).attr( 'src' ) ).toBe( 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=' );
+	} );
+
 	it( 'does not read a lazy data-src as the src of an image that never loaded', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-lazy-data-src-export-' ) );
 		dirs.push( outputDir );
