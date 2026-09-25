@@ -198,7 +198,7 @@ export async function captureTriggeredDialogs(
 		};
 		const candidates = Array.from(
 			document.querySelectorAll(
-				'button[aria-haspopup],a[aria-haspopup],[role="button"][aria-haspopup],[role="combobox"],button'
+				'button[aria-haspopup],a[aria-haspopup],[role="button"][aria-haspopup],[role="combobox"],button,[role="button"]'
 			)
 		).filter( ( element ) => {
 			if ( element.getAttribute( 'aria-disabled' ) === 'true' ) return false;
@@ -221,7 +221,10 @@ export async function captureTriggeredDialogs(
 				if ( href && href !== '#' && ! href.startsWith( '#' ) && ! hasBinding ) return false;
 				return true;
 			}
-			return element.getAttribute( 'role' ) === 'combobox' || ( element.tagName === 'BUTTON' && /\bmenu\b/i.test( name ) );
+			// A menu control is a menu control whether authored as <button> or as
+			// role="button" (site builders often render the latter).
+			const isButton = element.tagName === 'BUTTON' || element.getAttribute( 'role' ) === 'button';
+			return element.getAttribute( 'role' ) === 'combobox' || ( isButton && /\bmenu\b/i.test( name ) );
 		} );
 
 		return candidates.slice( 0, limit ).map( ( element, index ) => {
