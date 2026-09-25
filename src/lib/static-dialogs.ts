@@ -13,10 +13,14 @@ const DISCLOSURE_CSS =
 	':where(details.dla-disclosure>summary){list-style:none;cursor:pointer;display:inline-block}' +
 	':where(details.dla-disclosure>summary)::-webkit-details-marker{display:none}' +
 	'details.dla-disclosure:not([open])>.dla-dialog{display:none!important}' +
-	'details.dla-disclosure[open]>.dla-dialog{display:block;position:fixed;inset:0;z-index:2147483646;overflow:auto;background:#fff}' +
+	'details.dla-disclosure:not(.dla-dropdown)[open]>.dla-dialog{display:block;position:fixed;inset:0;z-index:2147483646;overflow:auto;background:#fff}' +
+	// A dropdown panel opens below the nearest positioned ancestor of its
+	// trigger (typically a fixed or sticky header), full width, with its own paint.
+	'details.dla-disclosure.dla-dropdown{position:static}' +
+	'details.dla-disclosure.dla-dropdown[open]>.dla-dialog{display:block;position:absolute;top:100%;left:0;right:0;z-index:2147483646}' +
 	'details.dla-disclosure[open]>.dla-dialog>:first-child{display:block!important;visibility:visible!important;opacity:1!important}' +
-	'details.dla-disclosure:not(.dla-initial-dialog)[open]>summary{position:fixed;z-index:2147483647;right:1rem;top:1rem;padding:.5rem .75rem;background:#fff;color:#111;border:1px solid currentColor;border-radius:.25rem}' +
-	'details.dla-disclosure:not(.dla-initial-dialog)[open]>summary:after{content:"Close"}' +
+	'details.dla-disclosure:not(.dla-initial-dialog):not(.dla-dropdown)[open]>summary{position:fixed;z-index:2147483647;right:1rem;top:1rem;padding:.5rem .75rem;background:#fff;color:#111;border:1px solid currentColor;border-radius:.25rem}' +
+	'details.dla-disclosure:not(.dla-initial-dialog):not(.dla-dropdown)[open]>summary:after{content:"Close"}' +
 	'details.dla-initial-dialog>summary{position:fixed;z-index:2147483647;right:1rem;top:1rem}' +
 	'details.dla-initial-dialog:not([open])>summary{display:none!important}';
 
@@ -149,7 +153,12 @@ export function wireCapturedDialogs(
 			const panel = $( '<div class="dla-dialog" role="dialog" aria-modal="true"></div>' );
 			if ( state.dialog?.ariaLabel ) panel.attr( 'aria-label', state.dialog.ariaLabel );
 			panel.html( state.dialog!.html );
-			const details = $( '<details class="dla-disclosure"></details>' );
+			// An in-flow menu opens below its header, not as a white overlay.
+			const details = $(
+				state.dialog?.presentation === 'dropdown'
+					? '<details class="dla-disclosure dla-dropdown"></details>'
+					: '<details class="dla-disclosure"></details>'
+			);
 			details.append( summary, panel );
 			trigger.replaceWith( details );
 			wired++;
@@ -182,6 +191,12 @@ export function wireCapturedDialogs(
 		wired++;
 	}
 	if ( wired > 0 ) {
+		// Styles the source added only once a panel opened (for example utility
+		// classes compiled on demand) travel with the panel they style.
+		const panelCss = [ ...new Set( captured.map( ( state ) => state.dialog?.css ?? '' ).filter( Boolean ) ) ].join( '\n' );
+		if ( panelCss && $( 'style[data-dla-dialog-css]' ).length === 0 ) {
+			$( 'head' ).append( `<style data-dla-dialog-css="true">${ panelCss.replace( /<\/style/gi, '<\\/style' ) }</style>` );
+		}
 		if ( $( 'style[data-dla-disclosure]' ).length === 0 ) {
 			$( 'head' ).append( `<style data-dla-disclosure="true">${ DISCLOSURE_CSS }</style>` );
 		}
