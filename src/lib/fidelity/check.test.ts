@@ -1,3 +1,4 @@
+import { cleanupPolicy } from '../source-cleanup.js';
 import { createServer } from 'node:http';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -316,6 +317,63 @@ ${ routed ? `<script>document.addEventListener('click', (event) => {
 		expect( seen[ 0 ] ).toBe( 'https://example.com/' );
 		// Offline tier covers all of them regardless.
 		expect( report.selfConsistency.routes ).toBe( 4 );
+	} );
+
+	it( 'compares every route with proven cleanup and reports the ones without', async () => {
+		const dir = mkdtempSync( join( tmpdir(), 'fidelity-partial-cleanup-' ) );
+		mkdirSync( join( dir, 'website', 'about' ), { recursive: true } );
+		mkdirSync( join( dir, 'website', 'blog' ), { recursive: true } );
+		for ( const path of [ 'index.html', 'about/index.html', 'blog/index.html' ] )
+			writeFileSync( join( dir, 'website', path ), '<html><body><main><h1>Page</h1></main></body></html>' );
+		const policy = cleanupPolicy();
+		const clean = { policy, reports: [ { failures: [], residual: 0 } ] };
+		writeFileSync( join( dir, 'capture-receipt.json' ), JSON.stringify( {
+			source: { url: 'https://example.com/' },
+			websiteRoot: 'website',
+			routes: [
+				{ url: 'https://example.com/', path: 'website/index.html' },
+				{ url: 'https://example.com/about', path: 'website/about/index.html' },
+				{ url: 'https://example.com/blog', path: 'website/blog/index.html' },
+			],
+			cleanup: { policy, evidencePath: 'cleanup-evidence.json', complete: false },
+		} ) );
+		// The blog page lost its cleanup evidence during capture.
+		writeFileSync( join( dir, 'cleanup-evidence.json' ), JSON.stringify( { schema: policy.schema, pages: [
+			{ url: 'https://example.com/', ...clean },
+			{ url: 'https://example.com/about', ...clean },
+			{ url: 'https://example.com/blog' },
+		] } ) );
+
+		const seen: string[] = [];
+		const report = await checkFidelity( {
+			directory: dir,
+			widths: [ 1600 ],
+			observe: async ( sourceHref, _local, viewport ) => {
+				seen.push( sourceHref );
+				return { source: obs( viewport ), liberated: obs( viewport ) };
+			},
+		} );
+
+		expect( report.routes ).toEqual( [ '/', '/about/' ] );
+		expect( report.routesCleanupUnproven ).toEqual( [ '/blog/' ] );
+		expect( seen ).not.toContain( 'https://example.com/blog' );
+	} );
+
+	it( 'refuses a capture whose cleanup is unproven for every route', async () => {
+		const dir = mkdtempSync( join( tmpdir(), 'fidelity-no-cleanup-' ) );
+		mkdirSync( join( dir, 'website' ), { recursive: true } );
+		writeFileSync( join( dir, 'website', 'index.html' ), '<html><body></body></html>' );
+		const policy = cleanupPolicy();
+		writeFileSync( join( dir, 'capture-receipt.json' ), JSON.stringify( {
+			source: { url: 'https://example.com/' },
+			websiteRoot: 'website',
+			routes: [ { url: 'https://example.com/', path: 'website/index.html' } ],
+			cleanup: { policy, evidencePath: 'cleanup-evidence.json', complete: false },
+		} ) );
+		writeFileSync( join( dir, 'cleanup-evidence.json' ), JSON.stringify( { schema: policy.schema, pages: [ { url: 'https://example.com/' } ] } ) );
+
+		await expect( checkFidelity( { directory: dir, widths: [ 1600 ], observe: async () => { throw new Error( 'must not observe' ); } } ) )
+			.rejects.toThrow( 'Capture cleanup was incomplete for every route' );
 	} );
 
 	it( 'spreads the source sample so a large blog does not crowd out other pages', async () => {

@@ -44,7 +44,10 @@ export async function runCompare(
 
 	// Say what was measured, not just how it went. "Passed" over an unstated
 	// scope is how a sampled check gets read as a whole-site result.
-	const scope = `${ consistency.routes } route(s) checked offline, ${ report.routes.length } of ${ report.routesAvailable } compared to source`;
+	const unproven = report.routesCleanupUnproven.length
+		? `, ${ report.routesCleanupUnproven.length } not compared because their capture cleanup is unproven (${ report.routesCleanupUnproven.join( ', ' ) })`
+		: '';
+	const scope = `${ consistency.routes } route(s) checked offline, ${ report.routes.length } of ${ report.routesAvailable } compared to source${ unproven }`;
 	process.stdout.write(
 		report.pass
 			? `Passed: ${ scope }, against ${ report.sourceUrl }\n`
