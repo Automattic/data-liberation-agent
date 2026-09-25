@@ -645,10 +645,14 @@ function documentSwitchCss( switchWidth: number ): string {
 /**
  * Fallback switch width, used only when the source gave us nothing to detect
  * from. A detected canvas floor is always preferred: the width a document stops
- * adapting at is the source's own switching point, and asserting 768px on a
- * site whose canvas floor is 980px puts the switch in the wrong place.
+ * adapting at is the source's own switching point, and asserting a phone width
+ * on a site whose canvas floor is 980px puts the switch in the wrong place.
+ *
+ * The mobile document is what the source serves phones, and it was captured
+ * at phone width only. From 768px up are tablets, which per-device sources
+ * serve their desktop document — the one the fluid sweep observed at 768px.
  */
-const DEFAULT_SWITCH_WIDTH = 768;
+const DEFAULT_SWITCH_WIDTH = 767;
 
 /**
  * Attributes DLA's own capture infrastructure writes to mark that two
