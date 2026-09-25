@@ -886,6 +886,10 @@ function identitySubsetMerge(
 	const desktopBody = responsiveBodyContent( desktopHtml );
 	const mobileBody = responsiveBodyContent( mobileHtml );
 	if ( desktopBody === undefined || mobileBody === undefined ) return undefined;
+	// An id a document repeats (a builder's per-instance icon id) names a
+	// component template, not one element, so like a runtime id it carries no
+	// identity: those elements pair by position under their identified parent.
+	const repeated = new Set< string >();
 	const load = ( body: string ) => {
 		const $ = cheerio.load( `<body>${ body }</body>` );
 		const ids = new Map< string, Element >();
@@ -893,16 +897,17 @@ function identitySubsetMerge(
 			if ( ! isElementNode( node ) ) continue;
 			const id = $( node ).attr( 'id' ) ?? '';
 			if ( ! isStableIdentityId( id ) ) continue;
-			if ( ids.has( id ) ) return undefined;
+			if ( ids.has( id ) ) repeated.add( id );
 			ids.set( id, node );
 		}
 		return { $, ids };
 	};
+	const isIdentityId = ( id: string ): boolean => isStableIdentityId( id ) && ! repeated.has( id );
 	const nearestIdentityId = ( $: cheerio.CheerioAPI, node: AnyNode ): string | undefined => {
 		for ( let current = node.parent; current; current = current.parent ) {
 			if ( ! isElementNode( current ) ) continue;
 			const id = $( current ).attr( 'id' );
-			if ( id && isStableIdentityId( id ) ) return id;
+			if ( id && isIdentityId( id ) ) return id;
 		}
 		return undefined;
 	};
@@ -911,13 +916,16 @@ function identitySubsetMerge(
 		for ( let current = element.parent; current; current = current.parent ) {
 			if ( ! isElementNode( current ) ) continue;
 			const id = $( current ).attr( 'id' );
-			if ( id && isStableIdentityId( id ) ) chain.unshift( id );
+			if ( id && isIdentityId( id ) ) chain.unshift( id );
 		}
 		return chain;
 	};
 	const desktop = load( desktopBody );
 	const mobile = load( mobileBody );
-	if ( ! desktop || ! mobile ) return undefined;
+	for ( const id of repeated ) {
+		desktop.ids.delete( id );
+		mobile.ids.delete( id );
+	}
 	const { $: $d, ids: desktopIds } = desktop;
 	const { $: $m, ids: mobileIds } = mobile;
 	const mobileOnlyIds: string[] = [];
@@ -938,7 +946,9 @@ function identitySubsetMerge(
 	for ( const id of mobileOnlyIds ) {
 		const ancestor = nearestIdentityId( $m, mobileIds.get( id ) as Element );
 		if ( ancestor && ! desktopIds.has( ancestor ) && mobileIds.has( ancestor ) ) continue;
-		if ( ! ancestor || ! desktopIds.has( ancestor ) ) return undefined;
+		// Without an identified ancestor the element hangs from <body>, which
+		// both documents share by construction.
+		if ( ancestor && ! desktopIds.has( ancestor ) ) return undefined;
 		outermostMobileOnlyIds.push( id );
 	}
 	// The same id must hang from the same shared ancestors in both captures, or
@@ -1006,15 +1016,15 @@ function identitySubsetMerge(
 	const insertions: Insertion[] = [];
 	for ( const id of outermostMobileOnlyIds ) {
 		const mobileElement = mobileIds.get( id ) as Element;
-		const ancestorId = nearestIdentityId( $m, mobileElement ) as string;
+		const ancestorId = nearestIdentityId( $m, mobileElement );
 		const path: Element[] = [];
 		for ( let current = mobileElement.parent; current; current = current.parent ) {
 			if ( ! isElementNode( current ) ) continue;
-			if ( $m( current ).attr( 'id' ) === ancestorId ) break;
+			if ( ancestorId ? $m( current ).attr( 'id' ) === ancestorId : current.tagName === 'body' ) break;
 			path.unshift( current );
 		}
-		let parent = $d( desktopIds.get( ancestorId ) as Element );
-		let mobileParent = $m( mobileIds.get( ancestorId ) as Element );
+		let parent = ancestorId ? $d( desktopIds.get( ancestorId ) as Element ) : $d( 'body' );
+		let mobileParent = ancestorId ? $m( mobileIds.get( ancestorId ) as Element ) : $m( 'body' );
 		for ( const step of path ) {
 			const candidates = idlessChildren( $d, parent ).filter( ( child ) => child.tagName === step.tagName );
 			const mobileSiblings = idlessChildren( $m, mobileParent ).filter(
@@ -1055,6 +1065,18 @@ function identitySubsetMerge(
 	const desktopRules: string[] = [];
 	const mobileRules: string[] = [];
 	let projectedElements = 0;
+	// A shared component the two captures hold under different id-less
+	// containers (a form field a phone layout moves into its own row) is
+	// re-parented, not restyled; one tree cannot render both placements.
+	let diverged = false;
+	const sharedIdsIn = ( $: cheerio.CheerioAPI, node: Element ): string =>
+		$( node )
+			.find( '[id]' )
+			.toArray()
+			.map( ( child ) => $( child ).attr( 'id' ) ?? '' )
+			.filter( ( id ) => shared( id ) )
+			.sort()
+			.join( ' ' );
 	// Hook names derive from where an element sits below its nearest shared
 	// component, never from document order, so chrome repeated on every route
 	// serializes identically and stays recognizable as shared downstream.
@@ -1069,7 +1091,7 @@ function identitySubsetMerge(
 		if ( desktopStyle.trim() !== mobileStyle.trim() ) {
 			const id = d.attr( 'id' );
 			let selector: string;
-			if ( id && isStableIdentityId( id ) ) selector = `#${ id }`;
+			if ( id && isIdentityId( id ) ) selector = `#${ id }`;
 			else {
 				const hook = `${ RESPONSIVE_PROJECTION_CLASS_PREFIX }${ createHash( 'sha256' )
 					.update( path )
@@ -1117,31 +1139,43 @@ function identitySubsetMerge(
 		// position, so they sit outside the positional pairing.
 		const paired = ( $: cheerio.CheerioAPI ) => ( child: Element ): boolean => {
 			const childId = $( child ).attr( 'id' );
-			return ! childId || ! isStableIdentityId( childId ) || shared( childId );
+			return ! childId || ! isIdentityId( childId ) || shared( childId );
 		};
 		const desktopChildren = d.children().toArray().filter( paired( $d ) );
 		const mobileChildren = m.children().toArray().filter( paired( $m ) );
-		// Align in document order: each mobile child pairs with the next
-		// desktop child of the same tag and class list, so a sibling only one
-		// capture rendered (a lightbox trigger, a hover layer) does not stop the
-		// walk for the siblings both rendered.
+		// A child that contains an identified component pairs with the child
+		// holding the same component (a form grid whose phone layout drops
+		// cells); otherwise align in document order: each mobile child pairs
+		// with the next desktop child of the same tag and class list, so a
+		// sibling only one capture rendered (a lightbox trigger, a hover layer)
+		// does not stop the walk for the siblings both rendered.
+		const anchorOf = ( $: cheerio.CheerioAPI, child: Element ): string | undefined =>
+			$( child )
+				.find( '[id]' )
+				.toArray()
+				.map( ( node ) => $( node ).attr( 'id' ) ?? '' )
+				.find( ( id ) => shared( id ) );
+		const desktopAnchors = desktopChildren.map( ( child ) => anchorOf( $d, child as Element ) );
 		let cursor = 0;
 		for ( const mobileChild of mobileChildren ) {
+			const mobileAnchor = anchorOf( $m, mobileChild );
 			const mobileClass = $m( mobileChild ).attr( 'class' ) ?? '';
-			let match = -1;
-			for ( let index = cursor; index < desktopChildren.length; index++ ) {
+			let match = mobileAnchor ? desktopAnchors.indexOf( mobileAnchor ) : -1;
+			if ( match >= 0 && ( desktopChildren[ match ] as Element ).tagName !== mobileChild.tagName ) match = -1;
+			for ( let index = cursor; match < 0 && index < desktopChildren.length; index++ ) {
 				const candidate = desktopChildren[ index ] as Element;
+				if ( desktopAnchors[ index ] && mobileAnchor !== desktopAnchors[ index ] ) continue;
 				if ( candidate.tagName !== mobileChild.tagName ) continue;
 				if ( ( $d( candidate ).attr( 'class' ) ?? '' ) !== mobileClass && desktopChildren.length !== mobileChildren.length )
 					continue;
 				match = index;
-				break;
 			}
 			if ( match < 0 ) continue;
 			cursor = match + 1;
 			const desktopChild = desktopChildren[ match ] as Element;
+			if ( sharedIdsIn( $d, desktopChild ) !== sharedIdsIn( $m, mobileChild ) ) diverged = true;
 			const childId = $d( desktopChild ).attr( 'id' );
-			if ( childId && isStableIdentityId( childId ) ) continue;
+			if ( childId && isIdentityId( childId ) ) continue;
 			projectPair( $d( desktopChild ), $m( mobileChild ), `${ path }/${ match }` );
 		}
 	};
@@ -1149,6 +1183,7 @@ function identitySubsetMerge(
 		const mobileElement = mobileIds.get( id );
 		if ( mobileElement ) projectPair( $d( desktopElement ), $m( mobileElement ), id );
 	}
+	if ( diverged ) return undefined;
 	const css =
 		( desktopRules.length > 0
 			? `@media(min-width:${ switchWidth + 1 }px){${ desktopRules.join( '' ) }}`

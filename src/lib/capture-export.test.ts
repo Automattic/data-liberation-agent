@@ -1395,6 +1395,54 @@ describe( 'exportWebsiteCapture', () => {
 		expect( html ).toContain( '#comp-box{width:320px!important}' );
 	} );
 
+	it.each( [
+		[
+			'a repeated per-instance id and a body-level mobile-only anchor',
+			'<div id="comp-root"><button id="comp-a"><i id="icon"></i>A</button><button id="comp-b"><i id="icon"></i>B</button></div>',
+			'<span id="section-anchor"></span><div id="comp-root"><button id="comp-a"><i id="icon"></i>A</button><button id="comp-b"><i id="icon"></i>B</button></div>',
+			'collapsed-identity-subset',
+		],
+		[
+			'a shared component the mobile capture moves into another id-less container',
+			'<form id="comp-form"><div class="grid"><div class="cell"><input id="field-a"></div><div class="cell"><input id="field-b"></div></div></form>',
+			'<form id="comp-form"><div class="grid"><div class="cell"><input id="field-a"></div></div><div class="grid"><div class="cell"><input id="field-b"></div></div></form>',
+			'dual-structural',
+		],
+	] )( 'reconciles %s as expected', ( _label, desktopBody, mobileBody, outcome ) => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-collapse-shape-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
+			mkdirSync( join( outputDir, path ), { recursive: true } );
+		writeFileSync( join( outputDir, 'html', 'homepage.html' ), `<html><body>${ desktopBody }</body></html>` );
+		writeFileSync(
+			join( outputDir, 'html-mobile', 'homepage.html' ),
+			`<html><body>${ mobileBody }</body></html>`
+		);
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( {
+				version: 1,
+				entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },
+			} )
+		);
+
+		exportWebsiteCapture( {
+			outputDir,
+			sourceUrl: 'https://example.com/',
+			platform: 'weebly',
+			summary: {},
+			failures: [],
+		} );
+
+		const receipt = JSON.parse( readFileSync( join( outputDir, 'capture-receipt.json' ), 'utf8' ) );
+		expect( receipt.routes[ 0 ].responsiveVariants.outcome ).toBe( outcome );
+		if ( outcome === 'collapsed-identity-subset' ) {
+			const $ = cheerio.load( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) );
+			expect( $( 'body > #section-anchor.data-liberation-mobile-only' ) ).toHaveLength( 1 );
+			expect( $( '#comp-a #icon, #comp-b #icon' ) ).toHaveLength( 2 );
+		}
+	} );
+
 	it( 'keeps dual documents when mobile text has no mapped parent to reconcile into', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-collapse-unmapped-' ) );
 		dirs.push( outputDir );
