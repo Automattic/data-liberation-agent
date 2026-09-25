@@ -18,6 +18,7 @@ import {
 } from './capture-export.js';
 import { SectionSpecsStore } from './replicate/section-specs-store.js';
 import { MediaStubStore } from './resume-state/index.js';
+import { checkSelfConsistency } from './fidelity/self-consistency.js';
 import { cleanupPolicy } from './source-cleanup.js';
 
 const dirs: string[] = [];
@@ -476,6 +477,69 @@ describe( 'exportWebsiteCapture', () => {
 		expect(
 			JSON.parse( readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' ) ).unresolvedAnchors
 		).toEqual( [] );
+	} );
+
+	it( 'exports a Wix cross-page data-anchor as <target>#fragment and defers it to self-consistency', () => {
+		// Regression for the Wix portfolio menu: from a project page the
+		// "Expertise" link carried its target only in `data-anchor` and exported
+		// as a bare `/index.html`, landing readers at the top of the home page.
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-cross-page-anchor-export-' ) );
+		dirs.push( outputDir );
+		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
+		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
+		writeFileSync(
+			join( outputDir, 'html', 'home.html' ),
+			'<html><body><main>Home</main><span id="dataItem-home-section" data-dla-anchor-target="dataItem-home-section"></span></body></html>'
+		);
+		writeFileSync(
+			join( outputDir, 'html', 'project.html' ),
+			'<html><body><nav>' +
+				'<a href="https://example.com/#dataItem-home-section" data-dla-anchor-fragment="dataItem-home-section">Expertise</a>' +
+				'<a href="https://example.com/#dataItem-absent" data-dla-anchor-fragment="dataItem-absent">Missing</a>' +
+				'</nav></body></html>'
+		);
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( {
+				version: 1,
+				entries: {
+					'https://example.com/': { html: 'html/home.html' },
+					'https://example.com/project': { html: 'html/project.html' },
+				},
+			} )
+		);
+
+		exportWebsiteCapture( {
+			outputDir,
+			sourceUrl: 'https://example.com/',
+			platform: 'wix',
+			summary: {},
+			failures: [],
+		} );
+
+		const $ = cheerio.load(
+			readFileSync( join( outputDir, 'website', 'project', 'index.html' ), 'utf8' )
+		);
+		expect( $( 'nav a' ).eq( 0 ).attr( 'href' ) ).toBe( '/index.html#dataItem-home-section' );
+		expect( $( 'nav a' ).eq( 1 ).attr( 'href' ) ).toBe( '/index.html#dataItem-absent' );
+
+		// Cross-route marked links resolve against the TARGET document, so the
+		// per-route diagnostic stays out of the way and self-consistency rules:
+		// the section that exists passes, and the one the target page never had
+		// surfaces as a finding instead of being silently kept.
+		expect(
+			JSON.parse( readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' ) ).unresolvedAnchors
+		).toEqual( [] );
+		const report = checkSelfConsistency(
+			join( outputDir, 'website' ),
+			new Map( [
+				[ '/', 'index.html' ],
+				[ '/project/', 'project/index.html' ],
+			] )
+		);
+		expect( report.findings ).toEqual( [
+			{ route: '/project/', kind: 'anchor-missing', detail: '/index.html#dataItem-absent' },
+		] );
 	} );
 
 	it( 'names same-origin anchors whose target route was never captured', () => {
