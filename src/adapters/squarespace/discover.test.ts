@@ -43,6 +43,46 @@ describe('Squarespace discovery', () => {
     expect(inventory.navigation).not.toContainEqual({ text: 'Privacy', href: 'https://walkabout.example.test/privacy' });
   });
 
+  it('queues homepage links the sitemap omits once, without doubling sitemap routes', async () => {
+    const homepage = [
+      '<header><nav>',
+      '<a href="/">Home</a>',
+      '<a href="/journal/">Journal</a>',
+      '<a href="/about">About</a>',
+      '<a href="/about#team">Team</a>',
+      '<a href="#main">Skip</a>',
+      '<a href="https://store.example.test/collections">Store</a>',
+      '<a href="mailto:hello@walkabout.example.test">Email</a>',
+      '<a href="/cart">Cart</a>',
+      '<a href="/account">Account</a>',
+      '</nav></header>',
+      '<main><a href="/board">Board</a><a href="/journal?page=2">Older</a></main>',
+    ].join('');
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL) => {
+      const url = String(input);
+      if (url.endsWith('?format=json')) return response('{}');
+      if (url.endsWith('/sitemap.xml')) return response([
+        '<urlset>',
+        ...['/', '/journal', '/contact', '/services', '/privacy'].map((path) => `<url><loc>https://walkabout.example.test${path}</loc></url>`),
+        '</urlset>',
+      ].join(''));
+      return response(homepage);
+    }));
+
+    const inventory = await discover(siteUrl, {});
+
+    expect(inventory.urls).toEqual([
+      { url: 'https://walkabout.example.test/', type: 'homepage' },
+      { url: 'https://walkabout.example.test/journal', type: 'page' },
+      { url: 'https://walkabout.example.test/contact', type: 'page' },
+      { url: 'https://walkabout.example.test/services', type: 'page' },
+      { url: 'https://walkabout.example.test/privacy', type: 'page' },
+      { url: 'https://walkabout.example.test/about', type: 'page' },
+      { url: 'https://walkabout.example.test/board', type: 'page' },
+    ]);
+    expect(inventory.counts).toEqual({ homepage: 1, page: 6 });
+  });
+
   it('continues discovery when the public homepage cannot be fetched', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL) => {
       const url = String(input);
