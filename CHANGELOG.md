@@ -15,6 +15,14 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.6.0] - 2026-09-25
+
+### Added
+- reconcile responsive captures by element identity and project per-viewport presentation
+
+### Changed
+- regenerate plugin bundles
+
 ## [0.5.12] - 2026-09-25
 
 ### Changed
