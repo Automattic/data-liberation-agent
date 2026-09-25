@@ -236,6 +236,36 @@ describe( 'captureTriggeredDialogs', () => {
 	);
 
 	it.skipIf( process.env.SKIP_BROWSER_TESTS )(
+		'captures a navigation drawer opened by a role="button" menu control',
+		async () => {
+			const browser = await chromium.launch( { headless: true } );
+			const page = await browser.newPage( { viewport: { width: 390, height: 844 } } );
+			try {
+				// The shape Wix renders: a div button with an accessible name and no
+				// aria-haspopup, toggling a drawer that is present but hidden.
+				await page.setContent( `<!doctype html><body>
+					<div id="menu-toggle" role="button" tabindex="0" aria-label="Open navigation menu"><span>≡</span></div>
+					<div id="menu-drawer" role="dialog" aria-modal="true" aria-label="Site" style="display:none;position:fixed;inset:0;background:white"><a href="/about">About</a><div role="button" aria-label="Close">×</div></div>
+					<script>
+						const drawer = document.querySelector('#menu-drawer');
+						document.querySelector('#menu-toggle').addEventListener('click', () => { drawer.style.display = 'block'; });
+						drawer.querySelector('[aria-label="Close"]').addEventListener('click', () => { drawer.style.display = 'none'; });
+					</script>
+				</body>` );
+
+				const report = await captureTriggeredDialogs( page, 'https://example.test/' );
+				expect( report.states ).toMatchObject( [
+					{ status: 'captured', trigger: { id: 'menu-toggle', label: 'Open navigation menu' }, dialog: { id: 'menu-drawer', ariaModal: true } },
+				] );
+				expect( await page.locator( '#menu-drawer' ).isVisible() ).toBe( false );
+			} finally {
+				await browser.close();
+			}
+		},
+		30_000
+	);
+
+	it.skipIf( process.env.SKIP_BROWSER_TESTS )(
 		'captures a menu trigger whose hit point is covered by an ancestor',
 		async () => {
 			const browser = await chromium.launch( { headless: true } );
@@ -398,6 +428,45 @@ describe( 'captureTriggeredDialogs', () => {
 				const report = await captureTriggeredDialogs( page, 'https://example.test/' );
 				expect( report.states ).toMatchObject( [ { status: 'captured', dialog: { id: 'navigation', tag: 'nav' } } ] );
 				expect( report.states[ 0 ].dialog?.html ).toContain( '>About</a>' );
+			} finally {
+				await browser.close();
+			}
+		},
+		30_000
+	);
+
+	it.skipIf( process.env.SKIP_BROWSER_TESTS )(
+		'captures the in-flow panel a menu button reveals, not an unrelated large nav, and renders it as a dropdown',
+		async () => {
+			const browser = await chromium.launch( { headless: true } );
+			const page = await browser.newPage( { viewport: { width: 390, height: 844 } } );
+			try {
+				await page.setContent( `<!doctype html><style>body{margin:0}header{position:fixed;top:0;left:0;right:0;height:64px;background:#402}</style>
+				<header><button id="menu" aria-label="Toggle menu">Menu</button></header>
+				<main style="height:1200px"></main>
+				<footer><nav style="display:flex;flex-direction:column;width:350px;height:200px"><a href="/">Home</a><a href="/about">About</a></nav></footer>` );
+				await page.locator( '#menu' ).evaluate( ( element ) => {
+					element.addEventListener( 'click', () => {
+						const panel = document.createElement( 'div' );
+						panel.className = 'mobile-panel';
+						panel.style.background = '#402';
+						panel.innerHTML = '<a href="/podcasts">Podcasts</a><a href="/contact">Contact</a>';
+						const style = document.createElement( 'style' );
+						style.textContent = '.mobile-panel > * + * { margin-top: 16px; }';
+						document.head.append( style );
+						document.querySelector( 'header' )!.append( panel );
+					} );
+				} );
+				const report = await captureTriggeredDialogs( page, 'https://example.test/' );
+				expect( report.states ).toMatchObject( [ { status: 'captured', dialog: { tag: 'div', presentation: 'dropdown' } } ] );
+				expect( report.states[ 0 ].dialog?.html ).toContain( '>Podcasts</a>' );
+				expect( report.states[ 0 ].dialog?.html ).not.toContain( '>Home</a>' );
+
+				const wired = wireCapturedDialogs( '<header><button aria-label="Toggle menu">Menu</button></header>', report.states );
+				expect( report.states[ 0 ].dialog?.css ).toContain( '.mobile-panel > * + * { margin-top: 16px; }' );
+				expect( wired ).toContain( '<details class="dla-disclosure dla-dropdown">' );
+				expect( wired ).toContain( '<style data-dla-dialog-css="true">.mobile-panel > * + * { margin-top: 16px; }</style>' );
+				expect( wired ).toContain( 'details.dla-disclosure.dla-dropdown[open]>.dla-dialog{display:block;position:absolute;top:100%' );
 			} finally {
 				await browser.close();
 			}

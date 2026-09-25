@@ -334,6 +334,18 @@ export function extractSameOriginLinks(html: string, baseUrl: string, baseOrigin
   return urls;
 }
 
+/**
+ * A URL's route identity: capture treats URLs that differ only by fragment,
+ * query string or a trailing slash as one route.
+ */
+export function routeKey(url: string): string {
+  const route = new URL(url);
+  route.hash = '';
+  route.search = '';
+  route.pathname = route.pathname.replace(/\/$/, '') || '/';
+  return route.href;
+}
+
 async function crawlRenderedNavLinks(baseUrl: string, baseOrigin: string): Promise<string[]> {
   let browser;
   try {

@@ -6,6 +6,9 @@
 // capture width certifies the exact failure mode. This compares at a width the
 // caller chose, and the check runner picks widths the sweep never sampled.
 //
+import { sanitizeMediaFilename } from '../media-fetch/media.js';
+import type { DismissedOverlay } from '../screenshot/page-helpers.js';
+
 /**
  * One image the page actually renders at this viewport: where it sits (the
  * rounded box, in CSS pixels) plus a normalized source identity. The pair is
@@ -75,6 +78,13 @@ export interface LayoutObservation {
 	internalMissing: string[];
 	/** Click-to-open dialogs/menus observed on this document. */
 	dialogs: DialogProbe[];
+	/**
+	 * Takeover modals and consent banners dismissed before this page was
+	 * measured, the same way capture dismisses them before it serializes. Pure
+	 * evidence: nothing here is scored, it is what lets a reader tell a banner
+	 * the two sides disagree about from content the copy lost.
+	 */
+	dismissedOverlays?: DismissedOverlay[];
 }
 
 export interface DialogProbe {
@@ -125,9 +135,11 @@ export const MISSING_IMAGE_TOLERANCE = 1;
  *   basename can contribute.
  * - **Extension.** Capture negotiates image formats, so a source `.png` is
  *   commonly served from the copy as `.avif`. Format is not identity.
- * - **Separators and suffixes.** Wix media ids carry a `~` that localization
- *   rewrites to `-`, and both WordPress and our own collision handling append
- *   numeric and generated-size suffixes.
+ * - **Separators and suffixes.** The copy's filename is the exporter's
+ *   `sanitizeMediaFilename` of the source basename: percent-decoded, with
+ *   spaces and punctuation (`~`, parentheses) folded to hyphens. WordPress
+ *   and our own collision handling also append numeric and generated-size
+ *   suffixes.
  *
  * So `…~mv2.png` on wixstatic and `…-mv2-2.avif` in the copy are one image,
  * as are `hero.jpg`, `hero-2.jpg`, `hero-1024x576.jpg` and `hero-scaled.jpg`.
@@ -140,11 +152,11 @@ export function normalizeImageKey( src: string ): string {
 	if ( src.startsWith( 'blob:' ) ) return 'blob:';
 	const path = src.split( /[?#]/ )[ 0 ] ?? '';
 	const slash = path.lastIndexOf( '/' );
-	const name = ( slash >= 0 ? path.slice( slash + 1 ) : path ).toLowerCase();
-	const stem = name.replace( /\.[a-z0-9]+$/, '' );
-	const folded = stem.replace( /~/g, '-' );
-	const stripped = folded.replace( /-(?:\d+x\d+|scaled|\d+)$/, '' );
-	return stripped || folded || name;
+	const name = slash >= 0 ? path.slice( slash + 1 ) : path;
+	const slugged = sanitizeMediaFilename( name ).toLowerCase();
+	const stem = slugged.replace( /\.[a-z0-9]+$/, '' );
+	const stripped = stem.replace( /-(?:\d+x\d+|scaled|\d+)$/, '' );
+	return stripped || stem || slugged;
 }
 
 /**

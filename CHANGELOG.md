@@ -15,6 +15,40 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.5.7] - 2026-09-25
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- pair slugified re-encoded images in compare
+
+## [0.5.6] - 2026-09-25
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- capture the panel a menu button reveals, keep its styles, and render in-flow menus as dropdowns
+- resolve server-redirected routes to their target instead of reporting drift
+- dismiss consent banners on the compare source, as capture already does
+
+## [0.5.5] - 2026-09-25
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- probe role="button" menu controls for captured dialogs
+
+## [0.5.4] - 2026-09-24
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- keep Shopify storefronts on their route while capturing
+
 ## [0.5.3] - 2026-09-23
 
 ### Changed

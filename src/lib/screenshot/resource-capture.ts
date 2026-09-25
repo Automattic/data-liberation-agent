@@ -283,6 +283,32 @@ function canonicalContentType( contentType: string ): string {
 	}[ normalized ] ?? contentType;
 }
 
+/**
+ * External documents referenced by SVG `<use>` (`href`, or the legacy
+ * `xlink:href`), as authored but without the fragment that picks a symbol:
+ * one sprite file serves every `#id` in it. A same-document `#id` is not a
+ * dependency, and browsers never render a cross-origin `<use>` target, so
+ * neither is returned.
+ */
+export function svgUseDocumentReferences( $: cheerio.CheerioAPI, documentUrl: string ): string[] {
+	const references = new Set< string >();
+	$( 'use' ).each( ( _, element ) => {
+		const node = $( element );
+		const reference = ( node.attr( 'href' ) ?? node.attr( 'xlink:href' ) ?? '' )
+			.trim()
+			.replace( /#.*$/, '' );
+		if ( ! reference ) return;
+		try {
+			const url = new URL( reference, documentUrl );
+			if ( /^https?:$/.test( url.protocol ) && url.origin === new URL( documentUrl ).origin )
+				references.add( reference );
+		} catch {
+			// An invalid reference renders nothing in the source either.
+		}
+	} );
+	return [ ...references ];
+}
+
 export function isAudioLink( reference: string, documentUrl: string ): boolean {
 	try {
 		const url = new URL( reference.replace( /&amp;/g, '&' ), documentUrl );
@@ -314,6 +340,11 @@ export class CapturedResourceStore {
 		maxBytes: number,
 		timeoutMs: number
 	) => Promise< SafeFetchResult >;
+	// sha256 of each body written this run → where it was written.
+	private readonly storedContent = new Map<
+		string,
+		{ manifestPath: string; destination: string; contentType: string }
+	>();
 	private replayDir?: string;
 	private replayBytes = 0;
 	private capturedBytes = 0;
@@ -420,6 +451,7 @@ export class CapturedResourceStore {
 				const href = $( element ).attr( 'href' ) ?? '';
 				if ( isAudioLink( href, baseUrl ) ) add( href, baseUrl );
 			} );
+			for ( const reference of svgUseDocumentReferences( $, baseUrl ) ) add( reference, baseUrl );
 			$( 'link[href]' ).each( ( _, element ) => {
 				const node = $( element );
 				const rel = ( node.attr( 'rel' ) ?? '' ).toLowerCase().split( /\s+/ );
@@ -491,6 +523,32 @@ export class CapturedResourceStore {
 					// captureUrl records unavailable resources in the manifest.
 				}
 			}
+		}
+	}
+
+	/**
+	 * Record bytes the capture produced itself (a still frame, say) under `url`,
+	 * exactly as if they had been fetched from there, so export localizes the
+	 * reference like any other captured dependency. Nothing is ever fetched from
+	 * `url`. Returns false when the bytes could not be stored.
+	 */
+	recordGeneratedResource( url: string, body: Buffer, contentType: string ): boolean {
+		if ( this.manifest.resources[ url ] ) return true;
+		try {
+			const relativePath = resourcePath( new URL( url ), contentType, this.origin );
+			const destination = resolve( this.resourceDir, relativePath );
+			if ( body.length === 0 || ! pathWithin( this.resourceDir, destination ) ) return false;
+			this.reserveBytes( body.length );
+			mkdirSync( dirname( destination ), { recursive: true } );
+			writeFileSync( destination, body );
+			this.manifest.resources[ url ] = {
+				path: `resources/${ relativePath.replace( /\\/g, '/' ) }`,
+				contentType,
+			};
+			this.captures.set( url, Promise.resolve() );
+			return true;
+		} catch {
+			return false;
 		}
 	}
 
@@ -615,14 +673,7 @@ export class CapturedResourceStore {
 			const destination = resolve( this.resourceDir, relativePath );
 			if ( ! pathWithin( this.resourceDir, destination ) )
 				throw new Error( 'resource path escapes the capture directory' );
-			this.reserveBytes( fetched.body.length );
-			mkdirSync( dirname( destination ), { recursive: true } );
-			writeFileSync( destination, fetched.body );
-			this.manifest.resources[ url ] = {
-				path: `resources/${ relativePath.replace( /\\/g, '/' ) }`,
-				contentType,
-			};
-			this.replayResources.set( url, { path: destination, contentType } );
+			this.storeBody( url, fetched.body, relativePath, destination, contentType );
 			const metadata = replayableResponseMetadata(
 				Object.fromEntries( fetched.headers.entries() )
 			);
@@ -695,16 +746,40 @@ export class CapturedResourceStore {
 		if ( body.length > byteCeiling ) {
 			throw new Error( `resource body ${ body.length } bytes exceeds max ${ byteCeiling }` );
 		}
+		this.storeBody( requestedUrl.href, body, relativePath, destination, contentType );
+		const replayMetadata = replayableResponseMetadata( headers );
+		if ( replayMetadata ) this.replayMetadata.set( requestedUrl.href, replayMetadata );
+	}
+
+	/**
+	 * Record `body` as the capture of `url`. Storage is content-addressed: a
+	 * body whose bytes were already stored under another url (a CDN serving the
+	 * same original under a query-string variant, say) points its manifest entry
+	 * at the existing file instead of writing, and counting, the bytes again.
+	 * Hash lookup and registration run synchronously, so concurrent captures of
+	 * the same bytes cannot both miss.
+	 */
+	private storeBody(
+		url: string,
+		body: Buffer,
+		relativePath: string,
+		destination: string,
+		contentType: string
+	): void {
+		const contentHash = createHash( 'sha256' ).update( body ).digest( 'hex' );
+		const stored = this.storedContent.get( contentHash );
+		if ( stored ) {
+			this.manifest.resources[ url ] = { path: stored.manifestPath, contentType: stored.contentType };
+			this.replayResources.set( url, { path: stored.destination, contentType: stored.contentType } );
+			return;
+		}
 		this.reserveBytes( body.length );
 		mkdirSync( dirname( destination ), { recursive: true } );
 		writeFileSync( destination, body );
-		this.manifest.resources[ requestedUrl.href ] = {
-			path: `resources/${ relativePath.replace( /\\/g, '/' ) }`,
-			contentType,
-		};
-		this.replayResources.set( requestedUrl.href, { path: destination, contentType } );
-		const replayMetadata = replayableResponseMetadata( headers );
-		if ( replayMetadata ) this.replayMetadata.set( requestedUrl.href, replayMetadata );
+		const manifestPath = `resources/${ relativePath.replace( /\\/g, '/' ) }`;
+		this.storedContent.set( contentHash, { manifestPath, destination, contentType } );
+		this.manifest.resources[ url ] = { path: manifestPath, contentType };
+		this.replayResources.set( url, { path: destination, contentType } );
 	}
 
 	/**

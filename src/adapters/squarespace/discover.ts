@@ -1,4 +1,4 @@
-import { fetchSitemap, classifyUrl } from '../../lib/extraction/sitemap.js';
+import { fetchSitemap, classifyUrl, extractSameOriginLinks, routeKey } from '../../lib/extraction/sitemap.js';
 import { extractNavLinks } from '../../lib/html-extract/index.js';
 import type { InventoryUrl } from '../shared.js';
 import type { NavLink } from '../../lib/html-extract/index.js';
@@ -125,13 +125,16 @@ export async function discover(url: string, opts: Record<string, unknown>): Prom
   // 3. Squarespace renders its primary navigation in the public homepage HTML.
   // Admin discovery below supplements this list with published admin-only pages.
   let navigation: NavLink[] = [];
+  let homepageHtml = '';
   try {
     const homepageResp = await fetch(url, {
       signal: AbortSignal.timeout(15_000),
       headers: { 'User-Agent': 'Mozilla/5.0 (compatible; DataLiberation/1.0)' },
     });
-    if (homepageResp.ok) navigation = extractNavLinks(await homepageResp.text(), url);
-    else await homepageResp.body?.cancel();
+    if (homepageResp.ok) {
+      homepageHtml = await homepageResp.text();
+      navigation = extractNavLinks(homepageHtml, url);
+    } else await homepageResp.body?.cancel();
   } catch {
     // Public navigation is best-effort; sitemap and optional admin discovery continue.
   }
@@ -181,6 +184,20 @@ export async function discover(url: string, opts: Record<string, unknown>): Prom
       inventoryUrls.push({ url: archiveUrl, type: 'post' });
       counts.post = (counts.post || 0) + 1;
     }
+  }
+
+  // A sitemap is not a complete route list: pages linked from the homepage,
+  // including its primary navigation, can be missing from it. Queue those
+  // same-origin page links as generic discovery does, skipping any that match
+  // a known route by route identity.
+  const knownRoutes = new Set(inventoryUrls.map(({ url: discoveredUrl }) => routeKey(discoveredUrl)));
+  for (const linkUrl of extractSameOriginLinks(homepageHtml, url)) {
+    const key = routeKey(linkUrl);
+    if (knownRoutes.has(key)) continue;
+    knownRoutes.add(key);
+    const type = classifyUrl(linkUrl);
+    inventoryUrls.push({ url: linkUrl, type });
+    counts[type] = (counts[type] || 0) + 1;
   }
 
   let inventory: SquarespaceInventory = {

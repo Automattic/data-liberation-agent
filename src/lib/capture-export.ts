@@ -35,7 +35,11 @@ import {
 } from './screenshot/interaction-capture.js';
 import { SCROLL_STATES_SCHEMA, type ScrollStatesReport } from './screenshot/scroll-state-capture.js';
 import { FLUID_RULES_STYLE_ATTRIBUTE } from './screenshot/fluid-capture.js';
-import { isAudioLink, type CapturedResourceManifest } from './screenshot/resource-capture.js';
+import {
+	isAudioLink,
+	svgUseDocumentReferences,
+	type CapturedResourceManifest,
+} from './screenshot/resource-capture.js';
 import { isSourcePromotion } from './source-cleanup.js';
 
 export const CAPTURE_RECEIPT_SCHEMA = 'data-liberation/capture-receipt/v1';
@@ -119,6 +123,8 @@ interface CaptureManifestEntry {
 	cleanup?: import('./screenshot/manifest-queue.js').ManifestEntry['cleanup'];
 	slug?: string;
 	html?: string;
+	/** Same-origin route the server redirected this URL to; see ManifestEntry. */
+	redirectedTo?: string;
 	sections?: string;
 	interactions?: InteractionStatesReport;
 	scrollStates?: ScrollStatesReport;
@@ -639,10 +645,14 @@ function documentSwitchCss( switchWidth: number ): string {
 /**
  * Fallback switch width, used only when the source gave us nothing to detect
  * from. A detected canvas floor is always preferred: the width a document stops
- * adapting at is the source's own switching point, and asserting 768px on a
- * site whose canvas floor is 980px puts the switch in the wrong place.
+ * adapting at is the source's own switching point, and asserting a phone width
+ * on a site whose canvas floor is 980px puts the switch in the wrong place.
+ *
+ * The mobile document is what the source serves phones, and it was captured
+ * at phone width only. From 768px up are tablets, which per-device sources
+ * serve their desktop document — the one the fluid sweep observed at 768px.
  */
-const DEFAULT_SWITCH_WIDTH = 768;
+const DEFAULT_SWITCH_WIDTH = 767;
 
 /**
  * Attributes DLA's own capture infrastructure writes to mark that two
@@ -1332,12 +1342,12 @@ function capturedMediaReferences( entries: CaptureEntry[] ): Map< string, Set< s
 		const html = readFileSync( entry.htmlPath, 'utf8' );
 		const references: string[] = [];
 		for ( const match of html.matchAll(
-			/<(?:img|source|video|audio)\b[^>]*\bsrc\s*=\s*(["'])([\s\S]*?)\1[^>]*>/gi
+			/<(?:img|source|video|audio)\b[^>]*\ssrc\s*=\s*(["'])([\s\S]*?)\1[^>]*>/gi
 		) ) {
 			references.push( match[ 2 ] );
 		}
 		for ( const match of html.matchAll(
-			/<(?:img|source)\b[^>]*\bsrcset\s*=\s*(["'])([\s\S]*?)\1[^>]*>/gi
+			/<(?:img|source)\b[^>]*\ssrcset\s*=\s*(["'])([\s\S]*?)\1[^>]*>/gi
 		) ) {
 			references.push( ...srcsetReferences( match[ 2 ] ) );
 		}
@@ -1561,12 +1571,16 @@ function dependencyReferences(
 		.replace( /&apos;|&#39;|&#x27;/gi, "'" );
 	let cssContent = searchableHtml;
 	const audioLinks: string[] = [];
+	const svgUseDocuments: string[] = [];
 	if ( ! cssOnly ) {
 		const $ = cheerio.load( html );
 		$( 'a[href],area[href]' ).each( ( _, element ) => {
 			const href = $( element ).attr( 'href' ) ?? '';
 			if ( isAudioLink( href, documentUrl ) ) audioLinks.push( href );
 		} );
+		// Recorded without the fragment, so localizing the sprite file rewrites
+		// only its path and every `#symbol` reference into it survives.
+		svgUseDocuments.push( ...svgUseDocumentReferences( $, documentUrl ) );
 		cssContent = [
 			...$( 'style' )
 				.map( ( _index, element ) => $( element ).html() ?? '' )
@@ -1587,11 +1601,12 @@ function dependencyReferences(
 		if ( reference && ! isInlineUrl( reference ) ) references.add( reference.replace( /&amp;/g, '&' ) );
 	};
 	for ( const href of audioLinks ) add( href );
+	for ( const reference of svgUseDocuments ) add( reference );
 
 	const mediaReferences = new Set< string >();
 	const cssReferences = new Set< string >();
 	for ( const match of searchableHtml.matchAll(
-		/<(?:img|source|video|audio)\b[^>]*\bsrc\s*=\s*(["'])([\s\S]*?)\1[^>]*>/gi
+		/<(?:img|source|video|audio)\b[^>]*\ssrc\s*=\s*(["'])([\s\S]*?)\1[^>]*>/gi
 	) ) {
 		mediaReferences.add( match[ 2 ].replace( /&amp;/g, '&' ) );
 		add( match[ 2 ] );
@@ -1603,7 +1618,7 @@ function dependencyReferences(
 		add( match[ 2 ] );
 	}
 	for ( const match of searchableHtml.matchAll(
-		/<(?:img|source)\b[^>]*\bsrcset\s*=\s*(["'])([\s\S]*?)\1[^>]*>/gi
+		/<(?:img|source)\b[^>]*\ssrcset\s*=\s*(["'])([\s\S]*?)\1[^>]*>/gi
 	) ) {
 		for ( const reference of srcsetReferences( match[ 2 ] ) ) {
 			if ( reference ) {
@@ -1800,10 +1815,34 @@ function assetEvidence(
 	};
 }
 
+// The largest srcset rendition of an image that was already localized. A lazy
+// loader commonly names a full-size original in `src` (and `data-src`) while
+// `srcset` carries the width renditions it actually fetched; when only the
+// renditions were captured, they are the same picture and must win over a
+// blank placeholder.
+function localizedSrcsetRendition(
+	tag: string,
+	mediaReplacements: Map< string, string >
+): string | undefined {
+	const srcset = /\ssrcset\s*=\s*(["'])([\s\S]*?)\1/i.exec( tag )?.[ 2 ];
+	if ( ! srcset ) return undefined;
+	let best: { local: string; size: number } | undefined;
+	for ( const candidate of srcset.split( /,(?=\s)/ ) ) {
+		const [ reference, descriptor = '' ] = candidate.trim().split( /\s+/ );
+		const local = reference ? mediaReplacements.get( reference.replace( /&amp;/g, '&' ) ) : undefined;
+		if ( ! local || local === TRANSPARENT_IMAGE_DATA_URL || /^(?:[a-z]+:)?\/\//i.test( local ) )
+			continue;
+		const size = Number.parseFloat( descriptor ) || 1;
+		if ( ! best || size > best.size ) best = { local, size };
+	}
+	return best?.local;
+}
+
 function removeDanglingMediaSource(
 	html: string,
 	reference: string,
 	resolvedUrl: string,
+	mediaReplacements: Map< string, string >,
 	rejectedKeys?: Set< string >
 ): string {
 	const normalizedReference = reference.replace( /&amp;/g, '&' );
@@ -1818,9 +1857,21 @@ function removeDanglingMediaSource(
 	let strippedNonImageSrc = false;
 	const withoutSources = html.replace( /<(img|source|video|audio)\b[^>]*>/gi, ( tag ) => {
 		const element = /^<(\w+)/.exec( tag )?.[ 1 ].toLowerCase();
-		const src = /\bsrc\s*=\s*(["'])([\s\S]*?)\1/i.exec( tag )?.[ 2 ].replace( /&amp;/g, '&' );
+		const src = /\ssrc\s*=\s*(["'])([\s\S]*?)\1/i.exec( tag )?.[ 2 ].replace( /&amp;/g, '&' );
 		if ( src !== normalizedReference ) return tag;
 		if ( element === 'img' ) {
+			const rendition = localizedSrcsetRendition( tag, mediaReplacements );
+			if ( rendition ) {
+				// Every attribute naming the original (src, data-src, data-image…)
+				// takes the rendition, so no loader or importer resurrects a blank.
+				return tag.replace(
+					/(\s[^\s=>]+\s*=\s*)(["'])([\s\S]*?)\2/g,
+					( attribute, name: string, quote: string, value: string ) =>
+						value.replace( /&amp;/g, '&' ) === normalizedReference
+							? `${ name }${ quote }${ rendition }${ quote }`
+							: attribute
+				);
+			}
 			return tag.replace( /\s+src\s*=\s*(["'])([\s\S]*?)\1/i, ` src="${ TRANSPARENT_IMAGE_DATA_URL }"` );
 		}
 		strippedNonImageSrc = true;
@@ -1832,13 +1883,25 @@ function removeDanglingMediaSource(
 	// resolved against its document), and re-scanning would immediately
 	// mangle the replacement it just made.
 	if ( strippedNonImageSrc ) return withoutSources;
-	return replaceAll(
-		withoutSources,
-		new Map( [
-			[ reference, TRANSPARENT_IMAGE_DATA_URL ],
-			[ normalizedReference, TRANSPARENT_IMAGE_DATA_URL ],
-		] ),
-		rejectedKeys
+	if ( ! isSubstitutableReplacementKey( normalizedReference ) ) {
+		rejectedKeys?.add( reference );
+		return withoutSources;
+	}
+	// Blank whole occurrences only. The reference is often the bare original of
+	// longer rendition URLs (`image.jpg?format=300w`) that were localized, and a
+	// substring pass would corrupt every one of them. An entity such as `&quot;`
+	// ends a URL; only `?` or a further `&name=` parameter continues it.
+	const variants = [
+		...new Set( [ reference, normalizedReference, normalizedReference.replace( /&/g, '&amp;' ) ] ),
+	].sort( ( a, b ) => b.length - a.length );
+	return withoutSources.replace(
+		new RegExp(
+			`(?:${ variants
+				.map( ( variant ) => variant.replace( /[.*+?^${}()|[\]\\]/g, '\\$&' ) )
+				.join( '|' ) })(?!\\?|&(?:amp;)?[^&;=\\s"']+=)`,
+			'g'
+		),
+		TRANSPARENT_IMAGE_DATA_URL
 	);
 }
 
@@ -2212,9 +2275,14 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 	// rejected leaves through, rather than a parallel reporting mechanism.
 	const routeFailureReasons = groupFailureReasonsByUrl( options.failures );
 	const routeCaptureDiagnostics: Array< { code: string; url: string; reason: string } > = [];
+	const redirectAliases: Array< { url: string; target: string } > = [];
 	for ( const [ url, entry ] of Object.entries( capture.entries ) ) {
 		if ( ! routeMatchesSourceOrigin( url, options.sourceUrl ) ) {
 			excludedRoutes.push( url );
+			continue;
+		}
+		if ( entry.redirectedTo ) {
+			redirectAliases.push( { url, target: entry.redirectedTo } );
 			continue;
 		}
 		if ( ! entry.html ) {
@@ -2429,6 +2497,22 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 			path: `website/${ routePath }`,
 		} );
 		canonicalRouteAliases.set( normalizedUrl( entry.url ), routePath );
+	}
+	// A URL the server redirected to another captured route is that route
+	// under another name: links to it resolve to the target's page.
+	for ( const { url, target } of redirectAliases ) {
+		const targetEntry = entriesByNormalizedUrl.get( normalizedUrl( target ) );
+		if ( ! targetEntry ) {
+			routeCaptureDiagnostics.push( {
+				code: 'route_capture_failed',
+				url,
+				reason: `redirects to ${ target }, which was not captured`,
+			} );
+			continue;
+		}
+		const routePath = routePathOf( targetEntry.url );
+		duplicateRoutes.push( { url, canonicalUrl: targetEntry.url, path: `website/${ routePath }` } );
+		canonicalRouteAliases.set( normalizedUrl( url ), routePath );
 	}
 	const desktopSections = SectionSpecsStore.load( outputDir );
 	const mobileSections = SectionSpecsStore.loadMobile( outputDir );
@@ -2780,6 +2864,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 								html,
 								dependency.reference,
 								dependency.url,
+								mediaReplacements,
 								rejectedReplacementKeys
 						  )
 						: dependency.kind === 'css'

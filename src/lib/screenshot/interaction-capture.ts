@@ -42,9 +42,16 @@ export interface CapturedDialogInteraction {
 		role?: string;
 		ariaModal: boolean;
 		ariaLabel?: string;
+		presentation?: 'modal' | 'dropdown';
 		html: string;
 		htmlBytes: number;
 		htmlTruncated: boolean;
+		/**
+		 * Stylesheet rules the page added while this panel opened (for example a
+		 * runtime utility-CSS engine compiling the panel's classes). The page's
+		 * serialized styles predate the panel, so without these it renders unstyled.
+		 */
+		css?: string;
 	};
 	/**
 	 * Present on `kind: 'selectable-set'` states. `size` is how many members
@@ -139,6 +146,8 @@ interface DialogDescriptor {
 	role?: string;
 	ariaModal: boolean;
 	ariaLabel?: string;
+	/** `dropdown` when the panel opens in page flow or anchored, not as a viewport-covering overlay. */
+	presentation?: 'modal' | 'dropdown';
 	html: string;
 }
 
@@ -198,7 +207,7 @@ export async function captureTriggeredDialogs(
 		};
 		const candidates = Array.from(
 			document.querySelectorAll(
-				'button[aria-haspopup],a[aria-haspopup],[role="button"][aria-haspopup],[role="combobox"],button'
+				'button[aria-haspopup],a[aria-haspopup],[role="button"][aria-haspopup],[role="combobox"],button,[role="button"]'
 			)
 		).filter( ( element ) => {
 			if ( element.getAttribute( 'aria-disabled' ) === 'true' ) return false;
@@ -221,7 +230,10 @@ export async function captureTriggeredDialogs(
 				if ( href && href !== '#' && ! href.startsWith( '#' ) && ! hasBinding ) return false;
 				return true;
 			}
-			return element.getAttribute( 'role' ) === 'combobox' || ( element.tagName === 'BUTTON' && /\bmenu\b/i.test( name ) );
+			// A menu control is a menu control whether authored as <button> or as
+			// role="button" (site builders often render the latter).
+			const isButton = element.tagName === 'BUTTON' || element.getAttribute( 'role' ) === 'button';
+			return element.getAttribute( 'role' ) === 'combobox' || ( isButton && /\bmenu\b/i.test( name ) );
 		} );
 
 		return candidates.slice( 0, limit ).map( ( element, index ) => {
@@ -261,6 +273,7 @@ export async function captureTriggeredDialogs(
 	const states: CapturedDialogInteraction[] = [];
 	for ( const trigger of triggers ) {
 		const before = await visibleDialogSelectors( page );
+		await markVisibleBeforeActivation( page );
 		try {
 			await activateTrigger( page, trigger.probeSelector );
 		} catch ( error ) {
@@ -287,9 +300,12 @@ export async function captureTriggeredDialogs(
 			continue;
 		}
 		await waitForDialogContentStable( page, dialog.selector );
+		const presentation = dialog.presentation;
 		dialog = ( await snapshotDialog( page, dialog.selector ) ) ?? dialog;
+		if ( presentation && ! dialog.presentation ) dialog = { ...dialog, presentation };
 
 		const bounded = boundHtml( dialog.html );
+		const addedCss = await rulesAddedSinceActivation( page );
 		states.push( {
 			status: 'captured',
 			trigger: triggerRecord( trigger ),
@@ -300,9 +316,11 @@ export async function captureTriggeredDialogs(
 				...( dialog.role ? { role: dialog.role } : {} ),
 				ariaModal: dialog.ariaModal,
 				...( dialog.ariaLabel ? { ariaLabel: dialog.ariaLabel } : {} ),
+				...( dialog.presentation ? { presentation: dialog.presentation } : {} ),
 				html: bounded.html,
 				htmlBytes: bounded.bytes,
 				htmlTruncated: bounded.truncated,
+				...( addedCss ? { css: addedCss } : {} ),
 			},
 		} );
 
@@ -315,6 +333,9 @@ export async function captureTriggeredDialogs(
 		}
 		for ( const element of document.querySelectorAll( '[data-lib-interaction-dialog]' ) ) {
 			element.removeAttribute( 'data-lib-interaction-dialog' );
+		}
+		for ( const element of document.querySelectorAll( '[data-lib-visible-before]' ) ) {
+			element.removeAttribute( 'data-lib-visible-before' );
 		}
 		for ( const element of document.querySelectorAll( '[data-lib-initial-dialog],[data-lib-initial-close]' ) ) {
 			element.removeAttribute( 'data-lib-initial-dialog' );
@@ -501,6 +522,64 @@ async function findCloseControl(
 	} ).catch( () => undefined );
 }
 
+/** Rules present now that were not present when the trigger was activated. */
+async function rulesAddedSinceActivation( page: Page ): Promise< string > {
+	const css = await page.evaluate( () => {
+		const before = new Set( ( globalThis as unknown as { __dlaRulesBefore?: string[] } ).__dlaRulesBefore ?? [] );
+		const added: string[] = [];
+		for ( const sheet of Array.from( document.styleSheets ) ) {
+			try {
+				for ( const rule of Array.from( sheet.cssRules ) ) {
+					if ( ! before.has( rule.cssText ) ) added.push( rule.cssText );
+				}
+			} catch {
+				// Unreadable (cross-origin) sheet.
+			}
+		}
+		return added.join( '\n' );
+	} ).catch( () => '' );
+	return Buffer.byteLength( css ) <= MAX_DIALOG_HTML_BYTES ? css : '';
+}
+
+/**
+ * Mark every element visible before a trigger is activated, so the element the
+ * activation reveals is identified by what changed, not by its tag. A menu that
+ * opens as a plain in-flow <div> would otherwise be missed, and an unrelated
+ * large <nav> elsewhere on the page taken instead.
+ */
+async function markVisibleBeforeActivation( page: Page ): Promise< void > {
+	await page.evaluate( () => {
+		const rules: string[] = [];
+		for ( const sheet of Array.from( document.styleSheets ) ) {
+			try {
+				for ( const rule of Array.from( sheet.cssRules ) ) rules.push( rule.cssText );
+			} catch {
+				// Cross-origin sheets are captured with the page, not here.
+			}
+		}
+		( globalThis as unknown as { __dlaRulesBefore?: string[] } ).__dlaRulesBefore = rules;
+		for ( const element of document.querySelectorAll( '[data-lib-visible-before]' ) ) element.removeAttribute( 'data-lib-visible-before' );
+		// Same rule as the post-activation check, including an ancestor's
+		// opacity: a menu faded in by its wrapper was not visible before.
+		const opacityOf = new Map< Element, number >();
+		const effectiveOpacity = ( element: Element ): number => {
+			const known = opacityOf.get( element );
+			if ( known !== undefined ) return known;
+			const own = Number.parseFloat( getComputedStyle( element ).opacity || '1' );
+			const value = own * ( element.parentElement ? effectiveOpacity( element.parentElement ) : 1 );
+			opacityOf.set( element, value );
+			return value;
+		};
+		for ( const element of Array.from( document.body?.querySelectorAll( '*' ) ?? [] ) ) {
+			const rect = element.getBoundingClientRect();
+			const style = getComputedStyle( element );
+			if ( rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden' && effectiveOpacity( element ) > 0.1 ) {
+				element.setAttribute( 'data-lib-visible-before', '' );
+			}
+		}
+	} ).catch( () => undefined );
+}
+
 async function firstNewVisibleDialog(
 	page: Page,
 	before: string[]
@@ -532,12 +611,24 @@ async function firstNewVisibleDialog(
 			return `dialog-candidate:${ index }`;
 		};
 		const candidates = Array.from( document.querySelectorAll( surfaceSelector ) );
-		const dialog = candidates.find( ( element, index ) => {
-			if ( ! visible( element ) || existing.includes( selector( element, index ) ) ) return false;
+		const marked = document.querySelector( '[data-lib-visible-before]' ) !== null;
+		const wasVisible = ( element: Element, index: number ): boolean =>
+			marked ? element.hasAttribute( 'data-lib-visible-before' ) : existing.includes( selector( element, index ) );
+		const surface = candidates.find( ( element, index ) => {
+			if ( ! visible( element ) || wasVisible( element, index ) ) return false;
 			if ( element.matches( semanticSelector ) ) return true;
 			const rect = element.getBoundingClientRect();
 			return rect.width * rect.height > 40_000;
 		} );
+		// Otherwise the outermost element the activation revealed that holds
+		// interactive content: an in-flow menu panel is often a plain <div>.
+		const revealed = surface ?? ( marked ? Array.from( document.body.querySelectorAll( '*' ) ).find( ( element ) =>
+			! element.hasAttribute( 'data-lib-visible-before' ) &&
+			visible( element ) &&
+			( element.parentElement === null || element.parentElement.hasAttribute( 'data-lib-visible-before' ) ) &&
+			element.querySelector( 'a[href],button' ) !== null
+		) : undefined );
+		const dialog = revealed;
 		if ( ! dialog ) return undefined;
 		const dialogSelector = dialog.id
 			? selector( dialog, candidates.indexOf( dialog ) )
@@ -561,6 +652,12 @@ async function firstNewVisibleDialog(
 			...( dialog.getAttribute( 'aria-label' )
 				? { ariaLabel: dialog.getAttribute( 'aria-label' )! }
 				: {} ),
+			presentation: ( () => {
+				if ( dialog.getAttribute( 'aria-modal' ) === 'true' || dialog.matches( 'dialog[open]:modal' ) ) return 'modal' as const;
+				const rect = dialog.getBoundingClientRect();
+				const fixed = getComputedStyle( dialog ).position === 'fixed';
+				return fixed && rect.width * rect.height >= 0.6 * window.innerWidth * window.innerHeight ? 'modal' as const : 'dropdown' as const;
+			} )(),
 			html: clone.outerHTML,
 		};
 	}, {

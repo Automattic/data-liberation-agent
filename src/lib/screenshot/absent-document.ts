@@ -5,7 +5,20 @@ export function isAbsentDocumentStatus( status: number ): boolean {
 }
 
 export function isAbsentDocumentError( error: string ): boolean {
-	return /^HTTP (404|410)\b/.test( error );
+	return /^HTTP (404|410)\b/.test( error ) || error.startsWith( NOT_HTML_DOCUMENT );
+}
+
+const NOT_HTML_DOCUMENT = 'Not an HTML document';
+
+/**
+ * A discovered URL whose response is not HTML (a sitemap-listed `agents.md`,
+ * a feed, a PDF) has no page to capture: the browser would only render its
+ * built-in text or file viewer. It is absent as a page, like a 404.
+ */
+export function nonHtmlDocumentError( contentType: string | undefined ): string | undefined {
+	const type = ( contentType ?? '' ).split( ';' )[ 0 ].trim().toLowerCase();
+	if ( ! type || type === 'text/html' || type === 'application/xhtml+xml' ) return undefined;
+	return `${ NOT_HTML_DOCUMENT } (${ type })`;
 }
 
 /** A rendered document this thin (or thinner) is a candidate for being a

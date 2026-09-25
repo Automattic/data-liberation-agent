@@ -14,7 +14,13 @@ import { captureChromeFidelity } from './capture-chrome-fidelity.js';
 import { CssAggregator } from './css-aggregator.js';
 import { CSS_SHORTHAND_REPAIR_FACTORY_SOURCE } from './css-shorthand-repair.js';
 import { captureDesignForUrl, captureMobileBodyFragment } from './design-capture-runner.js';
-import { countBodyTags, isRouteDrift, isStackingArtifact } from './document-integrity.js';
+import {
+	countBodyTags,
+	isRouteDrift,
+	isStackingArtifact,
+	routeIdentity,
+	serverRedirectTarget,
+} from './document-integrity.js';
 import { collectMobileChromeLayout } from './dom-capture.js';
 import { generateChromeCss, type BakedLayoutMap } from './fixups.js';
 import { sanitizeFrozenHtml } from './freeze.js';
@@ -29,12 +35,13 @@ import { captureScrollStates, type ScrollStatesReport } from './scroll-state-cap
 import { hydrateDisclosureContent } from './dynamic-content.js';
 import { captureSelectableSetStates } from './selectable-set-capture.js';
 import { JsAggregator } from './js-aggregator.js';
-import { isAbsentDocumentError, isSourceCaptureUrl } from './absent-document.js';
+import { isAbsentDocumentError, isSourceCaptureUrl, nonHtmlDocumentError } from './absent-document.js';
 import { ManifestQueue, type ManifestEntry, type FailureEntry } from './manifest-queue.js';
 import { validateOutputDir, planArtifacts, type ArtifactPlan } from './output-layout.js';
 import { waitForStable, triggerLazyLoad, dismissOverlays } from './page-helpers.js';
 import { CapturedResourceStore } from './resource-capture.js';
 import { enforceSameOrigin } from './same-origin.js';
+import { preserveStreamedVideoPosters } from './streamed-video.js';
 import { analyzePage } from './site-analysis.js';
 import {
 	defaultViewports,
@@ -46,7 +53,7 @@ import {
 } from './types.js';
 import type { GeometryCapture } from './layout-geometry-proof.js';
 import type { ExtractedNav } from './nav-extract.js';
-import type { Browser, BrowserContext, Page } from 'playwright';
+import type { Browser, BrowserContext, Page, Route } from 'playwright';
 
 /**
  * Scroll offset multiplier for the scrolled-state screenshot: we scroll to
@@ -224,7 +231,19 @@ export async function capturePageHtml( page: Page ): Promise< string > {
 		for ( const media of document.querySelectorAll( 'audio, video' ) ) {
 			const source = media as HTMLMediaElement;
 			const resolvedSource = source.currentSrc || source.src;
-			if ( resolvedSource ) source.setAttribute( 'src', resolvedSource );
+			// A `blob:` URL (a Media Source Extensions stream, as HLS/DASH players
+			// use) names an object that only exists in this page session, so the
+			// copy would show a dead player. Drop it rather than persist it; the
+			// live element keeps playing, since removing `src` does not reload it.
+			// preserveStreamedVideoPosters keeps the element's visual weight.
+			const isSessionUrl = ( value: string | null ) => /^blob:/i.test( value?.trim() ?? '' );
+			for ( const child of source.querySelectorAll( 'source' ) ) {
+				if ( isSessionUrl( child.getAttribute( 'src' ) ) ) child.remove();
+			}
+			if ( isSessionUrl( source.getAttribute( 'src' ) ) ) source.removeAttribute( 'src' );
+			if ( isSessionUrl( resolvedSource ) ) {
+				// Stream-backed: nothing durable to write, and nothing left to wait for.
+			} else if ( resolvedSource ) source.setAttribute( 'src', resolvedSource );
 			else if ( source instanceof HTMLVideoElement ) pendingVideoSource = true;
 			for ( const property of [ 'autoplay', 'loop', 'muted' ] as const ) {
 				if ( source[ property ] ) source.setAttribute( property, '' );
@@ -647,9 +666,13 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	const RETRYABLE_STATUS = new Set( [ 429, 503 ] );
 	const MAX_NAV_ATTEMPTS = 4;
 	let navigated = false;
+	let redirectedTo: string | undefined;
 	for ( let attempt = 1; attempt <= MAX_NAV_ATTEMPTS; attempt++ ) {
 		try {
 			const response = await page.goto( url, { waitUntil: 'load', timeout: 30_000 } );
+			redirectedTo = response?.request?.().redirectedFrom()
+				? serverRedirectTarget( url, response.url() )
+				: undefined;
 			const status = response ? response.status() : 0;
 			if ( status >= 400 ) {
 				if ( RETRYABLE_STATUS.has( status ) && attempt < MAX_NAV_ATTEMPTS ) {
@@ -661,6 +684,18 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 					viewport: viewport.id,
 					stage: 'goto',
 					error: `HTTP ${ status }`,
+					timestamp: now(),
+					attempt,
+				} );
+				return;
+			}
+			const notHtml = nonHtmlDocumentError( response?.headers?.()?.[ 'content-type' ] );
+			if ( notHtml ) {
+				failures.push( {
+					url,
+					viewport: viewport.id,
+					stage: 'goto',
+					error: notHtml,
 					timestamp: now(),
 					attempt,
 				} );
@@ -685,6 +720,13 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		}
 	}
 	if ( ! navigated ) return;
+	// The server answered this URL with a redirect to another route, so it is
+	// an alias of that route rather than a page of its own; the caller
+	// captures the target once, under its own URL.
+	if ( redirectedTo ) {
+		entry.redirectedTo = redirectedTo;
+		return;
+	}
 	const sourcePolicy = args.cleanupPolicy ?? cleanupPolicy();
 	await applySourceCleanup(page, sourcePolicy);
 
@@ -840,6 +882,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 			// The cleanup observer may have exhausted its budget before the page
 			// re-rendered a credit or ad; the saved document must be swept.
 			await sweepSourceCleanup( page );
+			await preserveStreamedVideoPosters( page, resourceStore, url ).catch( () => undefined );
 			const html = await capturePageHtml( page );
 			await resourceStore.captureDomDependencies( html, url );
 			// Refuse to persist a capture whose page navigated away from the route we
@@ -902,6 +945,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	if ( ! isDesktop && plan.captureMobileHtml ) {
 		try {
 			await sweepSourceCleanup( page );
+			await preserveStreamedVideoPosters( page, resourceStore, url ).catch( () => undefined );
 			const mhtml = sanitizeFrozenHtml( await capturePageHtml( page ) );
 			await resourceStore.captureDomDependencies( mhtml, url );
 			// Same route-identity guard as the desktop HTML write above — best-effort
@@ -1142,6 +1186,17 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	// HTML. Each viewport needs its own probe: a desktop dialog must not suppress
 	// a mobile-only trigger. Merge their bounded successful evidence rather than
 	// replacing a desktop-only dialog with a mobile-only menu.
+	const releaseNavigationLock = await lockMainFrameNavigation( page );
+	try {
+		await probeInteractions();
+	} finally {
+		await releaseNavigationLock();
+	}
+	const cleanup = await readSourceCleanup(page);
+	entry.cleanup = { policy: sourcePolicy, reports: [...(entry.cleanup?.reports ?? []), cleanup] };
+	if (cleanup.failures.length || cleanup.residual) throw new Error('Source cleanup incomplete; see cleanup evidence');
+
+	async function probeInteractions(): Promise< void > {
 	try {
 		const interactions = await captureTriggeredDialogs( page, url );
 		// Disclosure/accordion candidates were already resolved (opened, captured,
@@ -1193,9 +1248,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 			/* best-effort: baseline capture remains valid when scroll-state probing fails */
 		}
 	}
-	const cleanup = await readSourceCleanup(page);
-	entry.cleanup = { policy: sourcePolicy, reports: [...(entry.cleanup?.reports ?? []), cleanup] };
-	if (cleanup.failures.length || cleanup.residual) throw new Error('Source cleanup incomplete; see cleanup evidence');
+	}
 }
 
 function mergeInteractionReports(
@@ -1537,7 +1590,9 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	let captured = 0;
 	let skipped = 0;
 	let completed = 0;
-	const totalUrls = urls.length;
+	// A redirect alias's target joins the queue unless its route is already in
+	// it, so each route is captured once however many URLs redirect to it.
+	const queuedRoutes = new Set( urls.map( routeIdentity ) );
 	const allFailures: FailureEntry[] = [];
 
 	const capturedAt = () => new Date().toISOString();
@@ -1564,14 +1619,17 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			skipped++;
 			sendLog( server, `[skip] ${ url } (artifacts exist)` );
 			completed++;
-			opts.onProgress?.( completed, totalUrls, url );
+			opts.onProgress?.( completed, urls.length, url );
 			return;
 		}
 
-		const entry: ManifestEntry = { slug, capturedAt: capturedAt() };
+		// `redirectedTo` is always written, so a URL that stopped redirecting
+		// does not keep a prior run's alias through the manifest's merge.
+		const entry: ManifestEntry = { slug, capturedAt: capturedAt(), redirectedTo: undefined };
 		const urlFailures: FailureEntry[] = [];
 
 		for ( const viewport of viewports ) {
+			if ( entry.redirectedTo ) break;
 			const vpPlan = viewport.id === 'desktop' ? effectivePlan.desktop : effectivePlan.mobile;
 			if ( ! vpPlan.needsLoad ) continue;
 
@@ -1689,6 +1747,19 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		}
 		await manifest.updateEntry( url, entry );
 
+		if ( entry.redirectedTo ) {
+			const target = entry.redirectedTo;
+			if ( ! queuedRoutes.has( routeIdentity( target ) ) ) {
+				queuedRoutes.add( routeIdentity( target ) );
+				urls.push( target );
+			}
+			skipped++;
+			sendLog( server, `[alias] ${ url } redirects to ${ target }` );
+			completed++;
+			opts.onProgress?.( completed, urls.length, url );
+			return;
+		}
+
 		if ( entry.dismissed && entry.dismissed.length > 0 ) {
 			sendLog(
 				server,
@@ -1716,7 +1787,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			sendLog( server, `[fail] ${ url } (${ captureFailures.length } failures)` );
 		}
 		completed++;
-		opts.onProgress?.( completed, totalUrls, url );
+		opts.onProgress?.( completed, urls.length, url );
 	};
 
 	try {
@@ -1729,18 +1800,21 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		// restart-every-N invariant while keeping each worker on a stable browser.
 		const segSize = browserRestartEvery > 0 ? browserRestartEvery : urls.length;
 		for ( let segStart = 0; segStart < urls.length; segStart += segSize ) {
-			const segment = urls.slice( segStart, segStart + segSize );
-			let cursor = 0;
+			// The segment's end is read on every claim: a redirect alias appends
+			// its target to `urls`, and the worker that appended it is still
+			// running to pick it up.
+			const segEnd = () => Math.min( segStart + segSize, urls.length );
+			let cursor = segStart;
 			const worker = async (): Promise< void > => {
 				// `cursor++` is atomic on JS's single-threaded loop: each worker claims a
 				// distinct index synchronously before awaiting, so no URL runs twice.
-				for ( let idx = cursor++; idx < segment.length; idx = cursor++ ) {
-					await processUrl( segment[ idx ] );
+				while ( cursor < segEnd() ) {
+					await processUrl( urls[ cursor++ ] );
 				}
 			};
-			const poolSize = Math.max( 1, Math.min( concurrency, segment.length ) );
+			const poolSize = Math.max( 1, Math.min( concurrency, segEnd() - segStart ) );
 			await Promise.all( Array.from( { length: poolSize }, () => worker() ) );
-			urlsSinceRestart += segment.length;
+			urlsSinceRestart += segEnd() - segStart;
 
 			const moreWork = segStart + segSize < urls.length;
 			if ( moreWork ) {
@@ -1880,6 +1954,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		browserRestarts,
 		durationMs: Date.now() - startTime,
 		manifestPath,
+		urls,
 		siteCssPath,
 		cssMediaUrls: designCtx ? [ ...designCtx.cssMediaUrls ] : undefined,
 		headLinks: designCtx ? [ ...designCtx.headLinks ] : undefined,
@@ -1887,5 +1962,30 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		nav: designCtx?.chromeAccum.nav ?? undefined,
 		footerHtml: designCtx?.chromeAccum.footerHtml ?? undefined,
 		chromeCssText,
+	};
+}
+
+/**
+ * Keep the page on its route while post-baseline probes drive it. A probe can
+ * trigger a navigation no click handler can cancel -- a script assigning
+ * `location` after a swatch or card is activated -- and a committed navigation
+ * replaces the document, taking the capture's in-page evidence with it, so a
+ * route whose baseline was already captured would fail. Aborting main-frame
+ * document requests leaves the current document in place; every other request
+ * falls through to the capture's existing routing.
+ */
+export async function lockMainFrameNavigation( page: Page ): Promise< () => Promise< void > > {
+	if ( ! page.route ) return async () => {};
+	const guard = async ( route: Route ) => {
+		const request = route.request();
+		if ( request.isNavigationRequest() && request.frame() === page.mainFrame() ) {
+			await route.abort( 'aborted' );
+			return;
+		}
+		await route.fallback();
+	};
+	await page.route( '**/*', guard );
+	return async () => {
+		await page.unroute( '**/*', guard ).catch( () => {} );
 	};
 }

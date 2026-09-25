@@ -120,4 +120,62 @@ describe.skipIf(process.env.SKIP_BROWSER_TESTS)('screenshot smoke (real Chromium
       rmSync(outputDir, { recursive: true, force: true });
     }
   }, 60_000);
+  it('resolves server-redirected routes to their target and still reports post-load drift', async () => {
+    mkdirSync(TMP_ROOT, { recursive: true });
+    const pages: Record<string, string> = {
+      '/': tallHtml('HOME').replace('<h1>', '<a href="/old">old</a><a href="/temp">temp</a><a href="/new">new</a><h1>'),
+      '/new': tallHtml('NEW'),
+      '/target': tallHtml('TARGET'),
+      // A client-routed control navigating the page away after load.
+      '/spa': tallHtml('SPA').replace('</body>', '<script>addEventListener("load",()=>history.pushState({},"","/new"))</script></body>'),
+    };
+    const redirects: Record<string, [number, string]> = {
+      '/old': [301, '/new'],
+      '/temp': [302, '/new'],
+      '/elsewhere': [301, '/target'],
+    };
+    const server: HttpServer = createServer((req, res) => {
+      const path = (req.url || '/').split('?')[0];
+      const redirect = redirects[path];
+      if (redirect) {
+        res.writeHead(redirect[0], { Location: redirect[1] });
+        res.end();
+      } else if (pages[path]) {
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.end(pages[path]);
+      } else {
+        res.writeHead(404);
+        res.end();
+      }
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
+    const origin = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+    const outputDir = mkdtempSync(join(TMP_ROOT, 'redirect-out-'));
+    try {
+      await captureScreenshots({
+        urls: ['/', '/old', '/temp', '/new', '/elsewhere', '/spa'].map((path) => `${origin}${path}`),
+        outputDir,
+        concurrency: 2,
+      });
+      const manifest = JSON.parse(readFileSync(join(outputDir, 'screenshots', 'manifest.json'), 'utf8'));
+      const failures = JSON.parse(readFileSync(join(outputDir, 'screenshots', 'failures.json'), 'utf8')) as Array<{ url: string; error: string }>;
+      // Aliases carry no artifacts of their own and are never failures.
+      for (const [alias, target] of [['/old', '/new'], ['/temp', '/new'], ['/elsewhere', '/target']]) {
+        expect(manifest.entries[`${origin}${alias}`]).toMatchObject({ redirectedTo: `${origin}${target}` });
+        expect(manifest.entries[`${origin}${alias}`].html).toBeUndefined();
+      }
+      // /new is captured once, under its own URL; /target, reached only through
+      // a redirect, is queued and captured too.
+      expect(manifest.entries[`${origin}/new`].html).toBe('html/new.html');
+      expect(manifest.entries[`${origin}/target`].html).toBe('html/target.html');
+      expect(readFileSync(join(outputDir, 'html', 'new.html'), 'utf8')).toContain('NEW');
+      expect(existsSync(join(outputDir, 'html', 'old.html'))).toBe(false);
+      expect(existsSync(join(outputDir, 'html', 'temp.html'))).toBe(false);
+      expect(failures.filter((f) => /route drift/.test(f.error)).map((f) => f.url)).toEqual([`${origin}/spa`]);
+      expect(manifest.entries[`${origin}/spa`].html).toBeUndefined();
+    } finally {
+      await new Promise<void>((r) => server.close(() => r()));
+      rmSync(outputDir, { recursive: true, force: true });
+    }
+  }, 120_000);
 });

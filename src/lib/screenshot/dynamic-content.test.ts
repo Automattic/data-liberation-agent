@@ -219,6 +219,35 @@ describe('interaction + wait helpers (Phase 1/2, browser)', () => {
     await page.close();
   });
 
+  it('never activates a control that would submit a form', async () => {
+    const page = await browser.newPage();
+    await page.setContent(`
+      <form action="/search" method="get" role="search">
+        <input type="search" name="q">
+        <button class="search-button">View all</button>
+      </form>
+      <button aria-expanded="false" aria-controls="more">Show more</button>
+      <div id="more" hidden>More.</div>
+      <script>
+        window.submissions = 0;
+        document.querySelector('form').addEventListener('submit', (event) => {
+          event.preventDefault();
+          window.submissions++;
+        });
+        document.querySelector('[aria-controls]').addEventListener('click', (event) => {
+          event.currentTarget.setAttribute('aria-expanded', 'true');
+          document.getElementById('more').hidden = false;
+        });
+      </script>
+    `);
+
+    await expandCollapsedContent(page);
+
+    expect(await page.evaluate(() => (window as unknown as { submissions: number }).submissions)).toBe(0);
+    expect(await page.locator('#more').isVisible()).toBe(true);
+    await page.close();
+  });
+
   it('hydrates every lazy single-open disclosure while restoring closed state', async () => {
     const page = await browser.newPage();
     await page.setContent(`

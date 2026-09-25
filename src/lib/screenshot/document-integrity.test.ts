@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { countBodyTags, isRouteDrift, isStackingArtifact } from './document-integrity.js';
+import { countBodyTags, isRouteDrift, isStackingArtifact, serverRedirectTarget } from './document-integrity.js';
 
 describe('document-integrity', () => {
   it('counts a clean single-document page as one body', () => {
@@ -61,5 +61,12 @@ describe('isRouteDrift', () => {
   it('treats an unparseable URL as drift rather than silently accepting it', () => {
     expect(isRouteDrift('not a url', 'https://example.com/Home')).toBe(true);
     expect(isRouteDrift('https://example.com/Home', 'not a url')).toBe(true);
+  });
+
+  it('resolves a same-origin server redirect to another route as its target', () => {
+    expect(serverRedirectTarget('https://example.com/about', 'https://example.com/about-us')).toBe('https://example.com/about-us');
+    // Same route (trailing slash, query) or another origin is not an alias.
+    expect(serverRedirectTarget('https://example.com/about', 'https://example.com/about/?x=1')).toBeUndefined();
+    expect(serverRedirectTarget('https://example.com/about', 'https://other.example/about-us')).toBeUndefined();
   });
 });

@@ -211,7 +211,7 @@ export async function captureWebsite(
 		publicUrlsOnly: true,
 		onProgress: ( current, total, url ) => progress( { phase: 'capturing', current, total, url } ),
 	} );
-	await downloadCaptureSectionMedia( outputDir, urls );
+	await downloadCaptureSectionMedia( outputDir, screenshotResult.urls );
 
 	progress( { phase: 'finalizing', current: screenshotResult.captured, total: urls.length } );
 	const failuresPath = join( outputDir, 'screenshots', 'failures.json' );

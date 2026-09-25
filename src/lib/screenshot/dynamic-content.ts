@@ -50,6 +50,11 @@ export async function expandCollapsedContent(page: Page): Promise<void> {
     await page.evaluate(async () => {
       const safeToActivate = (element: Element) => {
         if (element.hasAttribute('aria-haspopup')) return false;
+        // A submit control is never a disclosure: activating it submits its
+        // form and unloads the page (a store's "View all" search button, for
+        // one), which the route-revert below cannot undo.
+        if ((element instanceof HTMLButtonElement || element instanceof HTMLInputElement)
+          && element.type === 'submit' && element.form) return false;
         if (element.tagName !== 'A') return true;
         const rawHref = element.getAttribute('href');
         if (rawHref === null) return true;

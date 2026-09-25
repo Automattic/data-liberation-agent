@@ -10,7 +10,13 @@ import type { Page } from 'playwright';
 import { sourceContextOptions } from '../browser-kit/browser-kit.js';
 import { startStaticServer } from '../replicate/local-site/static-server.js';
 import { DEFAULT_SWEEP_WIDTHS } from '../screenshot/fluid-capture.js';
-import { triggerLazyLoad, waitForStable } from '../screenshot/page-helpers.js';
+import {
+	dismissOverlays,
+	triggerLazyLoad,
+	waitForStable,
+	type DismissedOverlay,
+	type OverlayTarget,
+} from '../screenshot/page-helpers.js';
 import { applySourceCleanup, readSourceCleanup, validateCleanupPolicy, type CleanupPolicy, type CleanupReport } from '../source-cleanup.js';
 import { runFidelityChecks } from './checks.js';
 import { probeDialogs } from './dialog-probe.js';
@@ -38,6 +44,36 @@ const BROWSER_ROUTE_SAMPLE = 4;
  * different designs.
  */
 export const DEFAULT_CHECK_WIDTHS = [ 1600, 1728 ];
+
+/**
+ * Overlay kinds this comparison dismisses on both sides before measuring.
+ *
+ * Capture dismisses takeover modals and consent banners before it serializes a
+ * page, so a copy never carries one. Measuring the live source with its banner
+ * still up compares two different documents: a source whose consent strip is
+ * 355 characters fails every route by exactly 355, and the copy is faultless.
+ * The same primitive therefore runs on both sides here.
+ *
+ * `provider-promotion` is deliberately not in this list. The cleanup policy
+ * already removes hosting-platform chrome on both sides, and what a candidate
+ * still retains is counted by running that policy over it — dismissing the
+ * same chrome first would eat the evidence that check exists to report.
+ */
+const COMPARED_OVERLAY_KINDS: ReadonlyArray< OverlayTarget[ 'kind' ] > = [ 'takeover', 'consent' ];
+
+/** What one side dismissed before it was measured, for the compare evidence. */
+export interface OverlayRecord {
+	route: string;
+	viewport: number;
+	side: 'source' | 'copy';
+	url: string;
+	dismissed: DismissedOverlay[];
+}
+
+/** `kind selector`, once each, in the order they were dismissed. */
+function overlayLabels( dismissed: DismissedOverlay[] ): string[] {
+	return [ ...new Set( dismissed.map( ( overlay ) => `${ overlay.kind } ${ overlay.selector }` ) ) ];
+}
 
 export type ObservePair = (
 	sourceUrl: string,
@@ -94,6 +130,8 @@ export type RouteScore = ViewportScore & { route: string };
 
 export interface FidelityReport {
 	cleanup?: { policy: CleanupPolicy; source: CleanupReport[] };
+	/** Overlays dismissed per side before measuring. Evidence, never a gate. */
+	overlays: OverlayRecord[];
 	sourceUrl: string;
 	websiteDir: string;
 	widths: number[];
@@ -257,10 +295,20 @@ async function observePage(
 			const report = await applySourceCleanup(page, cleanup);
 			if (localOrigin && report.removed) throw new Error('Liberated artifact retains advertising or source attribution');
 		}
+		// Dismiss takeover modals and consent banners exactly as capture does
+		// (screenshotter.ts), with the same primitive and in the same order:
+		// before lazy-load, because a modal's scroll-lock defeats the
+		// scroll-through, and again after, because scrolling is what triggers
+		// exit-intent popups. Both sides of the comparison run this, so what
+		// disappears is only what capture had already decided is not page
+		// content — a section the copy actually lost is neither fixed nor
+		// sticky, is never a dismissal target, and still fails.
+		const dismissedOverlays = await dismissOverlays( page, { kinds: COMPARED_OVERLAY_KINDS } );
 		// Decode lazy media and return from a controlled scroll before measuring.
 		// Scroll-linked animations are otherwise observed mid-flight, while the
 		// source runtime may still be holding the same element at rest.
 		await triggerLazyLoad( page );
+		dismissedOverlays.push( ...( await dismissOverlays( page, { kinds: COMPARED_OVERLAY_KINDS } ) ) );
 		const measured = await page.evaluate( async ( clickUnresolved: boolean ) => {
 			// Perceptual identity for one image: fetch the bytes (cache-warm —
 			// the page just rendered them), decode locally, downscale to 8x8
@@ -573,6 +621,7 @@ async function observePage(
 			hashTargets: measured.hashTargets as HashTarget[],
 			internalMissing,
 			dialogs,
+			dismissedOverlays,
 		};
 	} finally {
 		page.off( 'request', onRequest );
@@ -680,6 +729,25 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 	}
 
 	const scores: RouteScore[] = [];
+	const overlays: OverlayRecord[] = [];
+	// Why the two sides can legitimately differ, recorded per side and per
+	// viewport. A reader comparing a shorter copy to a longer source needs to
+	// see whether a banner came off the source here, or nothing did.
+	const recordOverlays = (
+		route: string,
+		viewport: number,
+		sourceHref: string,
+		localHref: string,
+		pair: { source: LayoutObservation; liberated: LayoutObservation }
+	): void => {
+		for ( const [ side, url, observation ] of [
+			[ 'source', sourceHref, pair.source ],
+			[ 'copy', localHref, pair.liberated ],
+		] as const ) {
+			const dismissed = observation.dismissedOverlays ?? [];
+			if ( dismissed.length ) overlays.push( { route, viewport, side, url, dismissed } );
+		}
+	};
 	let comparisonCompleted = false;
 	try {
 		for ( const route of routes ) {
@@ -688,6 +756,7 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 			for ( const width of widths ) {
 				log( `[compare] ${ route } @ ${ width }px` );
 				const pair = await observe( sourceHref, localHref, width );
+				recordOverlays( route, width, sourceHref, localHref, pair );
 				const evidenceDir = join(
 					dirname( receiptPath ),
 					'compare',
@@ -716,6 +785,15 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 					source: pair.source,
 					liberated: pair.liberated,
 				};
+				const dismissedSource = pair.source.dismissedOverlays ?? [];
+				const dismissedCopy = pair.liberated.dismissedOverlays ?? [];
+				if ( dismissedSource.length || dismissedCopy.length ) {
+					score.notes.push(
+						`overlays dismissed — source: ${
+							overlayLabels( dismissedSource ).join( ', ' ) || 'none'
+						}; copy: ${ overlayLabels( dismissedCopy ).join( ', ' ) || 'none' }`
+					);
+				}
 				for ( const artifact of checked.artifacts ) score.notes.push( `evidence → ${ artifact }` );
 				if ( pair.sourcePng && pair.liberatedPng ) {
 					const evidence = writePixelEvidence( evidenceDir, pair.sourcePng, pair.liberatedPng );
@@ -737,6 +815,7 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 			if ( ! widths.includes( 390 ) ) {
 				log( `[compare] ${ route } @ 390px interactivity` );
 				const pair = await observe( sourceHref, localHref, 390 );
+				recordOverlays( route, 390, sourceHref, localHref, pair );
 				const dialogOnly = ( observation: LayoutObservation ): LayoutObservation => ( {
 					...observation,
 					title: 'x',
@@ -761,11 +840,18 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 	} finally {
 		await browser?.close();
 		await server?.close();
+		const evidenceDir = join(dirname(receiptPath), 'compare');
+		mkdirSync(evidenceDir, { recursive: true });
 		if (receipt.cleanup) {
-			const evidenceDir = join(dirname(receiptPath), 'compare');
-			mkdirSync(evidenceDir, { recursive: true });
 			writeFileSync(join(evidenceDir, 'cleanup-evidence.json'), JSON.stringify({ completed: comparisonCompleted, policy: receipt.cleanup.policy, source: cleanupReports }, null, 2));
 		}
+		// Written whether or not anything was dismissed: "we looked and the two
+		// sides carried the same overlays" is the reading a zero-length list has
+		// to support, and a missing file cannot say that.
+		writeFileSync(
+			join(evidenceDir, 'overlay-evidence.json'),
+			JSON.stringify({ schema: 'data-liberation/compare-overlays/v1', completed: comparisonCompleted, kinds: COMPARED_OVERLAY_KINDS, observations: overlays }, null, 2)
+		);
 	}
 
 	const summary = scoreReport( scores );
@@ -773,10 +859,18 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 		const evidenceDir = join(dirname(receiptPath), 'compare');
 		log(`[compare] cleanup: ${cleanupReports.reduce((total, report) => total + report.removed, 0)} source removals; evidence: ${join(evidenceDir, 'cleanup-evidence.json')}`);
 	} else log('[compare] legacy capture: no cleanup policy was recorded; comparing the unnormalized source');
+	const dismissedBySide = ( side: OverlayRecord[ 'side' ] ): number =>
+		overlays.filter( ( record ) => record.side === side ).reduce( ( total, record ) => total + record.dismissed.length, 0 );
+	log(
+		`[compare] overlays: ${ dismissedBySide( 'source' ) } dismissed on the source, ${ dismissedBySide(
+			'copy'
+		) } on the copy; evidence: ${ join( dirname( receiptPath ), 'compare', 'overlay-evidence.json' ) }`
+	);
 	summary.pass = summary.pass && selfConsistency.pass;
 	return {
 		sourceUrl,
 		...(receipt.cleanup ? { cleanup: { policy: receipt.cleanup.policy, source: cleanupReports } } : {}),
+		overlays,
 		websiteDir,
 		widths,
 		routes,

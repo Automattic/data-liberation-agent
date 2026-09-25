@@ -624,8 +624,8 @@ describe( 'exportWebsiteCapture', () => {
 		);
 		expect( sourceVisibilityOverride ).toBeGreaterThanOrEqual( 0 );
 		expect( authoritativeSwitch ).toBeGreaterThan( sourceVisibilityOverride );
+		expect( html ).not.toContain( '767px' );
 		expect( html ).not.toContain( '768px' );
-		expect( html ).not.toContain( '769px' );
 
 		const profile = JSON.parse( readFileSync( join( outputDir, 'source-profile.json' ), 'utf8' ) );
 		expect( profile ).toMatchObject( {
@@ -667,9 +667,14 @@ describe( 'exportWebsiteCapture', () => {
 			failures: [],
 		} );
 
-		expect( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) ).toContain(
-			'@media(max-width:768px)'
-		);
+		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
+		// 768px is a tablet width. Per-device sources serve tablets their desktop
+		// document, and it is the desktop document the fluid sweep observed at
+		// 768px; the mobile document was only ever sampled at phone width.
+		expect( html ).toContain( '@media(max-width:767px)' );
+		expect( html ).toContain( '<style media="(min-width:768px)">.desktop{color:blue}</style>' );
+		expect( html ).toContain( '<style media="(max-width:767px)">:where(.data-liberation-mobile-document) .mobile{color:red}</style>' );
+		expect( html ).not.toContain( 'max-width:768px' );
 		const profile = JSON.parse( readFileSync( join( outputDir, 'source-profile.json' ), 'utf8' ) );
 		expect( profile ).toMatchObject( { switchWidth: null, switchWidthSource: 'default' } );
 	} );
@@ -1064,8 +1069,8 @@ describe( 'exportWebsiteCapture', () => {
 		expect( $( '.data-liberation-mobile-document' ) ).toHaveLength( 0 );
 		expect( $( 'h1' ) ).toHaveLength( 1 );
 		// Each breakpoint keeps its own stylesheet through media scoping.
-		expect( html ).toContain( 'media="(min-width:769px)"' );
-		expect( html ).toContain( 'media="(max-width:768px)"' );
+		expect( html ).toContain( 'media="(min-width:768px)"' );
+		expect( html ).toContain( 'media="(max-width:767px)"' );
 		const styles = [ ...html.matchAll( /<style\b([^>]*)>([\s\S]*?)<\/style\s*>/gi ) ];
 		expect( styles.some( ( s ) => s[ 1 ].includes( 'min-width' ) && s[ 2 ].includes( 'color:red' ) ) ).toBe(
 			true
@@ -1345,6 +1350,99 @@ describe( 'exportWebsiteCapture', () => {
 		);
 		expect( html ).not.toContain( '/v1/fill/' );
 		expect( diagnostics.unresolvedDependencies ).toEqual( [] );
+	} );
+
+	it( 'keeps a lazy image whose bare original was never fetched on its localized srcset renditions', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-lazy-original-export-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'media', 'screenshots' ] )
+			mkdirSync( join( outputDir, path ), { recursive: true } );
+		// A lazy loader names the full-size original in src/data-src/data-image and
+		// lets srcset carry the width renditions. Only the renditions were fetched.
+		const bare = 'https://images.cdn.example/content/portrait.jpg';
+		const rendition = ( width: number ) => `${ bare }?format=${ width }w`;
+		// An image with nothing localized still falls back to a blank, wherever
+		// its URL is named, including entity-quoted JSON.
+		const lost = 'https://images.cdn.example/content/lost.jpg';
+		writeFileSync(
+			join( outputDir, 'html', 'homepage.html' ),
+			`<html><body><img data-src="${ bare }" data-image="${ bare }" src="${ bare }" srcset="${ rendition(
+				300
+			) } 300w, ${ rendition( 750 ) } 750w, ${ rendition( 2500 ) } 2500w" alt="Portrait">` +
+				`<img id="lost" src="${ lost }" alt=""><div data-config="{&quot;assetUrl&quot;:&quot;${ lost }&quot;}"></div></body></html>`
+		);
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( {
+				version: 1,
+				entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },
+			} )
+		);
+		const media = MediaStubStore.load( outputDir );
+		for ( const width of [ 300, 750 ] ) {
+			writeFileSync( join( outputDir, 'media', `portrait-${ width }.jpg` ), `portrait ${ width }` );
+			media.markSuccess( rendition( width ), join( outputDir, 'media', `portrait-${ width }.jpg` ) );
+		}
+		media.flush();
+
+		exportWebsiteCapture( {
+			outputDir,
+			sourceUrl: 'https://example.com/',
+			platform: 'generic',
+			summary: {},
+			failures: [],
+		} );
+
+		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
+		const $ = cheerio.load( html );
+		const image = $( 'img[alt="Portrait"]' );
+		expect( $.html( image ) ).not.toContain( 'R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=' );
+		expect( html ).not.toContain( lost );
+		expect( $( '#lost' ).attr( 'src' ) ).toBe( 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=' );
+		expect( image.attr( 'srcset' ) ).toContain( '/media/portrait-300.jpg 300w' );
+		expect( image.attr( 'srcset' ) ).toContain( '/media/portrait-750.jpg 750w' );
+		expect( image.attr( 'src' ) ).toBe( '/media/portrait-750.jpg' );
+		expect( image.attr( 'data-src' ) ).toBe( '/media/portrait-750.jpg' );
+		expect( image.attr( 'data-image' ) ).toBe( '/media/portrait-750.jpg' );
+	} );
+
+	it( 'does not read a lazy data-src as the src of an image that never loaded', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-lazy-data-src-export-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'media', 'screenshots' ] )
+			mkdirSync( join( outputDir, path ), { recursive: true } );
+		// Two slides of the same image: the loader swapped a rendition into the
+		// visible one, while the off-screen one still names only its data-src.
+		const bare = 'https://images.cdn.example/content/slide.jpg';
+		const rendition = `${ bare }?format=500w`;
+		writeFileSync(
+			join( outputDir, 'html', 'homepage.html' ),
+			`<html><body><img id="loaded" data-src="${ bare }" src="${ rendition }" alt="">` +
+				`<img id="unloaded" data-src="${ bare }" alt=""></body></html>`
+		);
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( {
+				version: 1,
+				entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },
+			} )
+		);
+		writeFileSync( join( outputDir, 'media', 'slide-500.jpg' ), 'slide 500' );
+		const media = MediaStubStore.load( outputDir );
+		media.markSuccess( rendition, join( outputDir, 'media', 'slide-500.jpg' ) );
+		media.flush();
+
+		exportWebsiteCapture( {
+			outputDir,
+			sourceUrl: 'https://example.com/',
+			platform: 'generic',
+			summary: {},
+			failures: [],
+		} );
+
+		const $ = cheerio.load( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) );
+		expect( $( '#loaded' ).attr( 'src' ) ).toBe( '/media/slide-500.jpg' );
+		expect( $( '#unloaded' ).attr( 'src' ) ).toBeUndefined();
 	} );
 
 	it( 'localizes deduplicated captured width renditions before returning early', () => {
@@ -1917,7 +2015,7 @@ describe( 'exportWebsiteCapture', () => {
 			'Mobile Home'
 		);
 		expect( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) ).toContain(
-			'@media(max-width:768px)'
+			'@media(max-width:767px)'
 		);
 		expect( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) ).toContain(
 			':where(.data-liberation-mobile-document) .mobile{color:red}'
@@ -1926,7 +2024,7 @@ describe( 'exportWebsiteCapture', () => {
 			':where(.data-liberation-mobile-document):not(.device-mobile-optimized) .desktop-only{display:flex}'
 		);
 		expect( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) ).toContain(
-			'<style media="(min-width:769px)">.desktop{color:blue}</style>'
+			'<style media="(min-width:768px)">.desktop{color:blue}</style>'
 		);
 		expect( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) ).toContain(
 			'<p>$100.00</p>'
@@ -2365,11 +2463,11 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		expect( html ).not.toContain( 'data-liberation-desktop-document' );
 		expect( html ).not.toContain( 'data-liberation-mobile-document' );
-		expect( html ).toContain( '<style media="(min-width:769px)">main{color:blue}</style>' );
+		expect( html ).toContain( '<style media="(min-width:768px)">main{color:blue}</style>' );
 		expect( html ).toContain(
-			'<style media="(min-width:769px) and (print)">main{margin:0}</style>'
+			'<style media="(min-width:768px) and (print)">main{margin:0}</style>'
 		);
-		expect( html ).toContain( '<style media="(max-width:768px)">main{color:red}</style>' );
+		expect( html ).toContain( '<style media="(max-width:767px)">main{color:red}</style>' );
 		expect( html ).toContain( 'name="viewport"' );
 	} );
 
@@ -2402,8 +2500,8 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		expect( html ).not.toContain( 'data-liberation-desktop-document' );
 		expect( html ).not.toContain( 'data-liberation-mobile-document' );
 		expect( html ).toContain( '<style>main{color:blue}</style>' );
-		expect( html ).not.toContain( '(min-width:769px)' );
-		expect( html ).not.toContain( '(max-width:768px)' );
+		expect( html ).not.toContain( '(min-width:768px)' );
+		expect( html ).not.toContain( '(max-width:767px)' );
 	} );
 
 	it( 'shares identical responsive styles when both authoring bodies are required', () => {
@@ -2492,9 +2590,9 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		expect( html ).toContain( 'data-liberation-mobile-document' );
 		// Present in both captures: must apply at every width, not be gated to desktop.
 		expect( html ).toContain( '<style>.shared{color:green}</style>' );
-		expect( html ).not.toContain( '<style media="(min-width:769px)">.shared{color:green}</style>' );
+		expect( html ).not.toContain( '<style media="(min-width:768px)">.shared{color:green}</style>' );
 		// Unique to one capture: stays scoped to the branch that produced it.
-		expect( html ).toContain( '<style media="(min-width:769px)">.desktop-only{color:blue}</style>' );
+		expect( html ).toContain( '<style media="(min-width:768px)">.desktop-only{color:blue}</style>' );
 		expect( html ).toContain( ':where(.data-liberation-mobile-document) .mobile-only{color:red}' );
 	} );
 
@@ -4200,6 +4298,58 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		expect( readFileSync( join( outputDir, 'website', documentPath ), 'utf8' ) ).toContain( 'Different document content' );
 		const evidence = JSON.parse( readFileSync( join( outputDir, 'asset-evidence.json' ), 'utf8' ) );
 		expect( evidence.assets[ 0 ].references[ 0 ].path ).toBe( `website/${ documentPath }` );
+	} );
+
+	it( 'resolves a server-redirected URL to its captured target instead of failing it', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-redirect-alias-' ) );
+		dirs.push( outputDir );
+		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
+		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
+		writeFileSync(
+			join( outputDir, 'html', 'homepage.html' ),
+			'<h1>Home</h1><a href="/old">Old</a><a href="https://example.com/new">New</a>'
+		);
+		writeFileSync( join( outputDir, 'html', 'new.html' ), '<h1>New</h1>' );
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( {
+				version: 1,
+				entries: {
+					'https://example.com/': { html: 'html/homepage.html' },
+					'https://example.com/old': { redirectedTo: 'https://example.com/new' },
+					'https://example.com/new': { html: 'html/new.html' },
+					'https://example.com/gone': { redirectedTo: 'https://example.com/missing' },
+				},
+			} )
+		);
+
+		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( {
+			outputDir,
+			sourceUrl: 'https://example.com/',
+			platform: 'generic',
+			summary: {},
+			failures: [],
+		} ), 'utf8' ) );
+
+		expect( receipt.routes.map( ( route: { url: string } ) => route.url ) ).toEqual( [
+			'https://example.com/',
+			'https://example.com/new',
+		] );
+		expect( receipt.duplicateRoutes ).toEqual( [ {
+			url: 'https://example.com/old',
+			canonicalUrl: 'https://example.com/new',
+			path: 'website/new/index.html',
+		} ] );
+		expect( receipt.discoveryDiagnostics ).toEqual( [ {
+			code: 'route_capture_failed',
+			url: 'https://example.com/gone',
+			reason: 'redirects to https://example.com/missing, which was not captured',
+		} ] );
+		const $ = cheerio.load( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) );
+		expect( $( 'a' ).map( ( _, link ) => $( link ).attr( 'href' ) ).get() ).toEqual( [
+			'/new/index.html',
+			'/new/index.html',
+		] );
 	} );
 
 	it( 'pairs a query-bearing entry URL with its default-document capture by normalized URL, deduping identical content', () => {
