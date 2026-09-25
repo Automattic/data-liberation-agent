@@ -191,6 +191,12 @@ export function wireCapturedDialogs(
 		wired++;
 	}
 	if ( wired > 0 ) {
+		// Styles the source added only once a panel opened (for example utility
+		// classes compiled on demand) travel with the panel they style.
+		const panelCss = [ ...new Set( captured.map( ( state ) => state.dialog?.css ?? '' ).filter( Boolean ) ) ].join( '\n' );
+		if ( panelCss && $( 'style[data-dla-dialog-css]' ).length === 0 ) {
+			$( 'head' ).append( `<style data-dla-dialog-css="true">${ panelCss.replace( /<\/style/gi, '<\\/style' ) }</style>` );
+		}
 		if ( $( 'style[data-dla-disclosure]' ).length === 0 ) {
 			$( 'head' ).append( `<style data-dla-disclosure="true">${ DISCLOSURE_CSS }</style>` );
 		}

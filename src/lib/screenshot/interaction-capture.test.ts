@@ -421,6 +421,9 @@ describe( 'captureTriggeredDialogs', () => {
 						panel.className = 'mobile-panel';
 						panel.style.background = '#402';
 						panel.innerHTML = '<a href="/podcasts">Podcasts</a><a href="/contact">Contact</a>';
+						const style = document.createElement( 'style' );
+						style.textContent = '.mobile-panel > * + * { margin-top: 16px; }';
+						document.head.append( style );
 						document.querySelector( 'header' )!.append( panel );
 					} );
 				} );
@@ -430,7 +433,9 @@ describe( 'captureTriggeredDialogs', () => {
 				expect( report.states[ 0 ].dialog?.html ).not.toContain( '>Home</a>' );
 
 				const wired = wireCapturedDialogs( '<header><button aria-label="Toggle menu">Menu</button></header>', report.states );
+				expect( report.states[ 0 ].dialog?.css ).toContain( '.mobile-panel > * + * { margin-top: 16px; }' );
 				expect( wired ).toContain( '<details class="dla-disclosure dla-dropdown">' );
+				expect( wired ).toContain( '<style data-dla-dialog-css="true">.mobile-panel > * + * { margin-top: 16px; }</style>' );
 				expect( wired ).toContain( 'details.dla-disclosure.dla-dropdown[open]>.dla-dialog{display:block;position:absolute;top:100%' );
 			} finally {
 				await browser.close();

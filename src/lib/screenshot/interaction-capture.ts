@@ -46,6 +46,12 @@ export interface CapturedDialogInteraction {
 		html: string;
 		htmlBytes: number;
 		htmlTruncated: boolean;
+		/**
+		 * Stylesheet rules the page added while this panel opened (for example a
+		 * runtime utility-CSS engine compiling the panel's classes). The page's
+		 * serialized styles predate the panel, so without these it renders unstyled.
+		 */
+		css?: string;
 	};
 	/**
 	 * Present on `kind: 'selectable-set'` states. `size` is how many members
@@ -296,6 +302,7 @@ export async function captureTriggeredDialogs(
 		if ( presentation && ! dialog.presentation ) dialog = { ...dialog, presentation };
 
 		const bounded = boundHtml( dialog.html );
+		const addedCss = await rulesAddedSinceActivation( page );
 		states.push( {
 			status: 'captured',
 			trigger: triggerRecord( trigger ),
@@ -310,6 +317,7 @@ export async function captureTriggeredDialogs(
 				html: bounded.html,
 				htmlBytes: bounded.bytes,
 				htmlTruncated: bounded.truncated,
+				...( addedCss ? { css: addedCss } : {} ),
 			},
 		} );
 
@@ -511,6 +519,25 @@ async function findCloseControl(
 	} ).catch( () => undefined );
 }
 
+/** Rules present now that were not present when the trigger was activated. */
+async function rulesAddedSinceActivation( page: Page ): Promise< string > {
+	const css = await page.evaluate( () => {
+		const before = new Set( ( globalThis as unknown as { __dlaRulesBefore?: string[] } ).__dlaRulesBefore ?? [] );
+		const added: string[] = [];
+		for ( const sheet of Array.from( document.styleSheets ) ) {
+			try {
+				for ( const rule of Array.from( sheet.cssRules ) ) {
+					if ( ! before.has( rule.cssText ) ) added.push( rule.cssText );
+				}
+			} catch {
+				// Unreadable (cross-origin) sheet.
+			}
+		}
+		return added.join( '\n' );
+	} ).catch( () => '' );
+	return Buffer.byteLength( css ) <= MAX_DIALOG_HTML_BYTES ? css : '';
+}
+
 /**
  * Mark every element visible before a trigger is activated, so the element the
  * activation reveals is identified by what changed, not by its tag. A menu that
@@ -519,6 +546,15 @@ async function findCloseControl(
  */
 async function markVisibleBeforeActivation( page: Page ): Promise< void > {
 	await page.evaluate( () => {
+		const rules: string[] = [];
+		for ( const sheet of Array.from( document.styleSheets ) ) {
+			try {
+				for ( const rule of Array.from( sheet.cssRules ) ) rules.push( rule.cssText );
+			} catch {
+				// Cross-origin sheets are captured with the page, not here.
+			}
+		}
+		( globalThis as unknown as { __dlaRulesBefore?: string[] } ).__dlaRulesBefore = rules;
 		for ( const element of document.querySelectorAll( '[data-lib-visible-before]' ) ) element.removeAttribute( 'data-lib-visible-before' );
 		// Same rule as the post-activation check, including an ancestor's
 		// opacity: a menu faded in by its wrapper was not visible before.
