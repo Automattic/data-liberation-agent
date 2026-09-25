@@ -663,6 +663,18 @@ const RESPONSIVE_COUNTERPART_CLASS_PREFIX = 'data-liberation-responsive-counterp
 const RESPONSIVE_COUNTERPART_TAGS = 'p,h1,h2,h3,h4,h5,h6,a,button';
 const RESPONSIVE_SOURCE_ID = /^[A-Za-z][A-Za-z0-9_-]{0,79}$/;
 
+/**
+ * Class tokens marking elements only one responsive capture rendered inside an
+ * identity-subset collapse: a mobile-only element joins the desktop tree but
+ * stays hidden above the switch width, a desktop-only element stays hidden at
+ * or below it. Both are declared with the visibility stylesheet that collapse
+ * emits, so no consumer needs to know the naming.
+ */
+const RESPONSIVE_MOBILE_ONLY_CLASS = 'data-liberation-mobile-only';
+const RESPONSIVE_DESKTOP_ONLY_CLASS = 'data-liberation-desktop-only';
+/** Hook class for an id-less element whose per-viewport inline style is projected into width-scoped rules. */
+const RESPONSIVE_PROJECTION_CLASS_PREFIX = 'data-liberation-responsive-';
+
 /** Switches which captured document is shown, at the detected width. */
 function documentSwitchCss( switchWidth: number ): string {
 	return `@media(max-width:${ switchWidth }px){.${ DESKTOP_DOCUMENT_CLASS }{display:none!important}.${ MOBILE_DOCUMENT_CLASS }{display:contents!important}}`;
@@ -709,6 +721,23 @@ function isUnstableResponsiveId( id: string ): boolean {
 }
 
 /**
+ * Whether an id can stand for element identity across responsive captures.
+ * Runtime-generated ids name a hydration or a capture artifact, not a
+ * component, so they are transparent to identity reconciliation.
+ */
+function isStableIdentityId( id: string ): boolean {
+	return RESPONSIVE_SOURCE_ID.test( id ) && ! isUnstableResponsiveId( id );
+}
+
+function isElementNode( node: AnyNode ): node is Element {
+	return node.type === 'tag' || node.type === 'script' || node.type === 'style';
+}
+
+function childNodes( node: AnyNode ): AnyNode[] {
+	return 'children' in node ? node.children : [];
+}
+
+/**
  * Whether the source served a genuinely different document under mobile
  * emulation, rather than the same one. The comparison is the element tree,
  * ordering, and structural attributes. Runtime ids, capture infrastructure
@@ -734,10 +763,14 @@ export function documentsDiffer( desktopHtml: string, mobileHtml: string ): bool
 export interface ResponsiveVariantEvidence {
 	/** Documents shipped in the exported route file. */
 	variants: 1 | 2;
-	outcome: 'collapsed-equivalent' | 'dual-structural';
+	outcome: 'collapsed-equivalent' | 'collapsed-identity-subset' | 'dual-structural';
 	reason: string;
 	/** How responsive CSS survives a collapse. Present only when collapsed. */
 	css?: 'shared' | 'viewport-scoped';
+	/** Elements only the desktop capture rendered, hidden at or below the switch width. Present only for an identity-subset collapse. */
+	desktopOnlyElements?: number;
+	/** Elements only the mobile capture rendered, inserted under their mapped parent and hidden above the switch width. Present only for an identity-subset collapse. */
+	mobileOnlyElements?: number;
 }
 
 function responsiveVariantEvidence(
@@ -746,6 +779,19 @@ function responsiveVariantEvidence(
 ): ResponsiveVariantEvidence | undefined {
 	if ( mobileHtml === undefined ) return undefined;
 	if ( documentsDiffer( desktopHtml, mobileHtml ) ) {
+		const merge = identitySubsetMerge( desktopHtml, mobileHtml );
+		if ( merge ) {
+			const sharedStyles =
+				styleBlocks( desktopHtml ).join( '\n' ) === styleBlocks( mobileHtml ).join( '\n' );
+			return {
+				variants: 1,
+				outcome: 'collapsed-identity-subset',
+				reason: `mobile document reconciles with desktop by element identity (${ merge.mobileOnlyElements } mobile-only, ${ merge.desktopOnlyElements } desktop-only elements); shipped one document`,
+				css: sharedStyles ? 'shared' : 'viewport-scoped',
+				desktopOnlyElements: merge.desktopOnlyElements,
+				mobileOnlyElements: merge.mobileOnlyElements,
+			};
+		}
 		return {
 			variants: 2,
 			outcome: 'dual-structural',
@@ -761,6 +807,388 @@ function responsiveVariantEvidence(
 			'mobile document is structurally equivalent to desktop once capture-infrastructure attributes are normalized; shipped one document',
 		css: sharedStyles ? 'shared' : 'viewport-scoped',
 	};
+}
+
+function responsiveBodyContent( html: string ): string | undefined {
+	return /<body\b[^>]*>([\s\S]*?)<\/body\s*>/i.exec( html )?.[ 1 ];
+}
+
+interface IdentitySubsetMerge {
+	/** The reconciled single body: the desktop tree plus inserted mobile-only elements. */
+	body: string;
+	desktopOnlyElements: number;
+	mobileOnlyElements: number;
+	/** Shared elements whose per-viewport presentation was projected into width-scoped rules. */
+	projectedElements: number;
+	/** Width-scoped rules carrying each viewport's inline presentation for shared elements. */
+	css: string;
+}
+
+/**
+ * Split an inline style attribute into declarations, honouring parentheses and
+ * quotes so `url(data:…;base64,…)` stays one declaration.
+ */
+function inlineDeclarations( style: string ): string[] {
+	const declarations: string[] = [];
+	let current = '';
+	let depth = 0;
+	let quote = '';
+	for ( const character of style ) {
+		if ( quote ) {
+			if ( character === quote ) quote = '';
+		} else if ( character === '"' || character === "'" ) quote = character;
+		else if ( character === '(' ) depth++;
+		else if ( character === ')' && depth > 0 ) depth--;
+		else if ( character === ';' && depth === 0 ) {
+			if ( current.trim() ) declarations.push( current.trim() );
+			current = '';
+			continue;
+		}
+		current += character;
+	}
+	if ( current.trim() ) declarations.push( current.trim() );
+	return declarations;
+}
+
+/**
+ * An inline style moved into a stylesheet keeps its cascade position by
+ * becoming important: inline declarations outrank every normal author rule,
+ * and so does an important id rule.
+ */
+function importantRule( selector: string, style: string ): string {
+	const declarations = inlineDeclarations( style ).map( ( declaration ) =>
+		/!\s*important\s*$/i.test( declaration ) ? declaration : `${ declaration }!important`
+	);
+	return declarations.length > 0 ? `${ selector }{${ declarations.join( ';' ) }}` : '';
+}
+
+/**
+ * Reconciles two responsive captures into one body keyed on element identity.
+ * When the two documents share stable ids and every id-bearing mobile element
+ * either exists in the desktop body or is a mobile-only element whose nearest
+ * id-bearing ancestor exists there, the mobile document is a re-rendering of
+ * the same components — one tree plus width-scoped CSS reproduces both
+ * renderings. Mobile-only elements are inserted under their mapped desktop
+ * parent (hidden above the switch width); desktop-only elements are kept but
+ * hidden at or below it. Any mobile content with no home in the desktop tree —
+ * text outside a mapped parent, an id whose parent chain differs between
+ * captures, or a mobile-only subtree whose outermost element hangs from no
+ * shared ancestor — returns undefined so the caller keeps the two-document
+ * output. Mobile-only elements nested inside a mobile-only subtree travel with
+ * it. Platform
+ * neutral: adapters whose ids are unstable simply fall back.
+ */
+function identitySubsetMerge(
+	desktopHtml: string,
+	mobileHtml: string,
+	switchWidth: number = DEFAULT_SWITCH_WIDTH
+): IdentitySubsetMerge | undefined {
+	const desktopBody = responsiveBodyContent( desktopHtml );
+	const mobileBody = responsiveBodyContent( mobileHtml );
+	if ( desktopBody === undefined || mobileBody === undefined ) return undefined;
+	const load = ( body: string ) => {
+		const $ = cheerio.load( `<body>${ body }</body>` );
+		const ids = new Map< string, Element >();
+		for ( const node of $( '[id]' ).toArray() ) {
+			if ( ! isElementNode( node ) ) continue;
+			const id = $( node ).attr( 'id' ) ?? '';
+			if ( ! isStableIdentityId( id ) ) continue;
+			if ( ids.has( id ) ) return undefined;
+			ids.set( id, node );
+		}
+		return { $, ids };
+	};
+	const nearestIdentityId = ( $: cheerio.CheerioAPI, node: AnyNode ): string | undefined => {
+		for ( let current = node.parent; current; current = current.parent ) {
+			if ( ! isElementNode( current ) ) continue;
+			const id = $( current ).attr( 'id' );
+			if ( id && isStableIdentityId( id ) ) return id;
+		}
+		return undefined;
+	};
+	const identityChain = ( $: cheerio.CheerioAPI, element: Element ): string[] => {
+		const chain: string[] = [];
+		for ( let current = element.parent; current; current = current.parent ) {
+			if ( ! isElementNode( current ) ) continue;
+			const id = $( current ).attr( 'id' );
+			if ( id && isStableIdentityId( id ) ) chain.unshift( id );
+		}
+		return chain;
+	};
+	const desktop = load( desktopBody );
+	const mobile = load( mobileBody );
+	if ( ! desktop || ! mobile ) return undefined;
+	const { $: $d, ids: desktopIds } = desktop;
+	const { $: $m, ids: mobileIds } = mobile;
+	const mobileOnlyIds: string[] = [];
+	const desktopOnlyIds: string[] = [];
+	let sharedIdCount = 0;
+	for ( const [ id ] of mobileIds ) {
+		if ( desktopIds.has( id ) ) sharedIdCount++;
+		else mobileOnlyIds.push( id );
+	}
+	for ( const [ id ] of desktopIds ) if ( ! mobileIds.has( id ) ) desktopOnlyIds.push( id );
+	// Without a single shared id there is nothing to anchor one tree to.
+	if ( sharedIdCount === 0 ) return undefined;
+	// A mobile-only subtree maps when its outermost mobile-only element hangs
+	// from a shared ancestor. Mobile-only elements nested inside it (a phone
+	// menu's overlay inside the menu) travel with that subtree and need no home
+	// of their own; an outermost element with no shared ancestor has none.
+	const outermostMobileOnlyIds: string[] = [];
+	for ( const id of mobileOnlyIds ) {
+		const ancestor = nearestIdentityId( $m, mobileIds.get( id ) as Element );
+		if ( ancestor && ! desktopIds.has( ancestor ) && mobileIds.has( ancestor ) ) continue;
+		if ( ! ancestor || ! desktopIds.has( ancestor ) ) return undefined;
+		outermostMobileOnlyIds.push( id );
+	}
+	// The same id must hang from the same shared ancestors in both captures, or
+	// the documents nest their components differently and one tree cannot serve
+	// both. A wrapper only one capture renders (a desktop transition layer) is
+	// not a nesting difference: it stays in the tree, hidden on the other side.
+	const shared = ( id: string ): boolean => desktopIds.has( id ) && mobileIds.has( id );
+	for ( const [ id, desktopElement ] of desktopIds ) {
+		if ( ! mobileIds.has( id ) ) continue;
+		const desktopChain = identityChain( $d, desktopElement ).filter( shared );
+		const mobileChain = identityChain( $m, mobileIds.get( id ) as Element ).filter( shared );
+		if (
+			desktopChain.length !== mobileChain.length ||
+			desktopChain.some( ( value, index ) => value !== mobileChain[ index ] )
+		)
+			return undefined;
+	}
+	// Text the mobile capture rendered must live inside a mapped parent, or the
+	// documents carry different content and collapsing would drop it. Script
+	// and style bodies are not content.
+	const unmappedText = ( node: AnyNode ): boolean => {
+		for ( const child of childNodes( node ) ) {
+			if ( child.type === 'text' ) {
+				if ( ( child.data ?? '' ).trim() !== '' && nearestIdentityId( $m, child ) === undefined )
+					return true;
+			} else if (
+				isElementNode( child ) &&
+				child.tagName !== 'script' &&
+				child.tagName !== 'style' &&
+				child.tagName !== 'noscript' &&
+				unmappedText( child )
+			)
+				return true;
+		}
+		return false;
+	};
+	if ( unmappedText( $m.root()[ 0 ] ) ) return undefined;
+
+	// A desktop-only wrapper around shared components must keep rendering on
+	// mobile, or hiding it would hide them too; only leaf-side desktop-only
+	// elements are hidden at or below the switch width.
+	let hiddenDesktopOnly = 0;
+	for ( const id of desktopOnlyIds ) {
+		const element = $d( desktopIds.get( id ) as Element );
+		const wrapsShared = element
+			.find( '[id]' )
+			.toArray()
+			.some( ( node ) => shared( $d( node ).attr( 'id' ) ?? '' ) );
+		if ( wrapsShared ) continue;
+		element.addClass( RESPONSIVE_DESKTOP_ONLY_CLASS );
+		hiddenDesktopOnly++;
+	}
+	// A mobile-only element's real parent is often id-less (a mesh grid
+	// container whose rules place children with `> [id=…]`), so it goes under
+	// the desktop element at the same path below the shared ancestor. Each step
+	// resolves by an identical class list or, failing that, the same tag at the
+	// same position among id-less siblings; an unresolvable path keeps both
+	// documents rather than misplacing the element.
+	type Insertion = { parent: cheerio.Cheerio< Element >; index: number; html: string };
+	const idlessChildren = ( $: cheerio.CheerioAPI, node: cheerio.Cheerio< Element > ) =>
+		node
+			.children()
+			.toArray()
+			.filter( ( child ) => ! $( child ).attr( 'id' ) );
+	const insertions: Insertion[] = [];
+	for ( const id of outermostMobileOnlyIds ) {
+		const mobileElement = mobileIds.get( id ) as Element;
+		const ancestorId = nearestIdentityId( $m, mobileElement ) as string;
+		const path: Element[] = [];
+		for ( let current = mobileElement.parent; current; current = current.parent ) {
+			if ( ! isElementNode( current ) ) continue;
+			if ( $m( current ).attr( 'id' ) === ancestorId ) break;
+			path.unshift( current );
+		}
+		let parent = $d( desktopIds.get( ancestorId ) as Element );
+		let mobileParent = $m( mobileIds.get( ancestorId ) as Element );
+		for ( const step of path ) {
+			const candidates = idlessChildren( $d, parent ).filter( ( child ) => child.tagName === step.tagName );
+			const mobileSiblings = idlessChildren( $m, mobileParent ).filter(
+				( child ) => child.tagName === step.tagName
+			);
+			const stepClass = $m( step ).attr( 'class' ) ?? '';
+			const byClass = candidates.filter( ( child ) => ( $d( child ).attr( 'class' ) ?? '' ) === stepClass );
+			const match =
+				byClass.length === 1
+					? byClass[ 0 ]
+					: candidates.length === mobileSiblings.length
+					? candidates[ mobileSiblings.indexOf( step ) ]
+					: undefined;
+			if ( ! match ) return undefined;
+			parent = $d( match );
+			mobileParent = $m( step );
+		}
+		const element = $m( mobileElement );
+		element.addClass( RESPONSIVE_MOBILE_ONLY_CLASS );
+		insertions.push( { parent, index: element.index(), html: $m.html( element ) ?? '' } );
+	}
+	// Descending sibling positions keep earlier insertions from shifting a
+	// later one's reference child.
+	insertions.sort( ( a, b ) => b.index - a.index );
+	for ( const insertion of insertions ) {
+		const parent = insertion.parent;
+		const children = parent.children();
+		if ( insertion.index < children.length ) children.eq( insertion.index ).before( insertion.html );
+		else parent.append( insertion.html );
+	}
+	// One element now serves both viewports, but each capture rendered it with
+	// its own presentation: a builder rescales text for phones through inline
+	// styles on id-less descendants, too. Walk each shared component's subtree
+	// in parallel while the two captures agree on structure and project every
+	// difference instead of keeping only the desktop's. Class tokens union
+	// (each capture's class rules are already scoped to its side of the
+	// switch), and an image's `sizes` answers per viewport.
+	const desktopRules: string[] = [];
+	const mobileRules: string[] = [];
+	let projectedElements = 0;
+	// Hook names derive from where an element sits below its nearest shared
+	// component, never from document order, so chrome repeated on every route
+	// serializes identically and stays recognizable as shared downstream.
+	const projectPair = (
+		d: cheerio.Cheerio< Element >,
+		m: cheerio.Cheerio< Element >,
+		path: string
+	): void => {
+		let projected = false;
+		const desktopStyle = d.attr( 'style' ) ?? '';
+		const mobileStyle = m.attr( 'style' ) ?? '';
+		if ( desktopStyle.trim() !== mobileStyle.trim() ) {
+			const id = d.attr( 'id' );
+			let selector: string;
+			if ( id && isStableIdentityId( id ) ) selector = `#${ id }`;
+			else {
+				const hook = `${ RESPONSIVE_PROJECTION_CLASS_PREFIX }${ createHash( 'sha256' )
+					.update( path )
+					.digest( 'hex' )
+					.slice( 0, 12 ) }`;
+				d.addClass( hook );
+				selector = `.${ hook }`;
+			}
+			const property = ( declaration: string ) =>
+				declaration.slice( 0, declaration.indexOf( ':' ) ).trim().toLowerCase();
+			const desktopDeclarations = inlineDeclarations( desktopStyle );
+			const mobileProperties = new Set( inlineDeclarations( mobileStyle ).map( property ) );
+			// The desktop inline style stays where the reference viewport reads it
+			// when mobile restates every property it sets; otherwise it would leak
+			// onto phones, so both sides move into width-scoped rules.
+			const keepsInline =
+				! /!\s*important/i.test( desktopStyle ) &&
+				desktopDeclarations.every( ( declaration ) => mobileProperties.has( property( declaration ) ) );
+			if ( ! keepsInline ) {
+				const desktopRule = importantRule( selector, desktopStyle );
+				if ( desktopRule ) desktopRules.push( desktopRule );
+				d.removeAttr( 'style' );
+			}
+			const mobileRule = importantRule( selector, mobileStyle );
+			if ( mobileRule ) mobileRules.push( mobileRule );
+			projected = true;
+		}
+		const desktopClasses = ( d.attr( 'class' ) ?? '' ).split( /\s+/ ).filter( Boolean );
+		const mobileClasses = ( m.attr( 'class' ) ?? '' ).split( /\s+/ ).filter( Boolean );
+		const missing = mobileClasses.filter( ( token ) => ! desktopClasses.includes( token ) );
+		if ( missing.length > 0 ) {
+			d.attr( 'class', [ ...( d.attr( 'class' ) ?? '' ).split( /\s+/ ).filter( Boolean ), ...missing ].join( ' ' ) );
+			projected = true;
+		}
+		const desktopSizes = d.attr( 'sizes' );
+		const mobileSizes = m.attr( 'sizes' );
+		if ( desktopSizes && mobileSizes && desktopSizes !== mobileSizes ) {
+			d.attr( 'sizes', `(max-width:${ switchWidth }px) ${ mobileSizes }, ${ desktopSizes }` );
+			projected = true;
+		}
+		if ( projected ) projectedElements++;
+		// Descend through id-less children only while both captures agree on
+		// their shape; id-bearing children are paired by identity on their own.
+		// Components only one capture rendered are placed by identity, not by
+		// position, so they sit outside the positional pairing.
+		const paired = ( $: cheerio.CheerioAPI ) => ( child: Element ): boolean => {
+			const childId = $( child ).attr( 'id' );
+			return ! childId || ! isStableIdentityId( childId ) || shared( childId );
+		};
+		const desktopChildren = d.children().toArray().filter( paired( $d ) );
+		const mobileChildren = m.children().toArray().filter( paired( $m ) );
+		// Align in document order: each mobile child pairs with the next
+		// desktop child of the same tag and class list, so a sibling only one
+		// capture rendered (a lightbox trigger, a hover layer) does not stop the
+		// walk for the siblings both rendered.
+		let cursor = 0;
+		for ( const mobileChild of mobileChildren ) {
+			const mobileClass = $m( mobileChild ).attr( 'class' ) ?? '';
+			let match = -1;
+			for ( let index = cursor; index < desktopChildren.length; index++ ) {
+				const candidate = desktopChildren[ index ] as Element;
+				if ( candidate.tagName !== mobileChild.tagName ) continue;
+				if ( ( $d( candidate ).attr( 'class' ) ?? '' ) !== mobileClass && desktopChildren.length !== mobileChildren.length )
+					continue;
+				match = index;
+				break;
+			}
+			if ( match < 0 ) continue;
+			cursor = match + 1;
+			const desktopChild = desktopChildren[ match ] as Element;
+			const childId = $d( desktopChild ).attr( 'id' );
+			if ( childId && isStableIdentityId( childId ) ) continue;
+			projectPair( $d( desktopChild ), $m( mobileChild ), `${ path }/${ match }` );
+		}
+	};
+	for ( const [ id, desktopElement ] of desktopIds ) {
+		const mobileElement = mobileIds.get( id );
+		if ( mobileElement ) projectPair( $d( desktopElement ), $m( mobileElement ), id );
+	}
+	const css =
+		( desktopRules.length > 0
+			? `@media(min-width:${ switchWidth + 1 }px){${ desktopRules.join( '' ) }}`
+			: '' ) +
+		( mobileRules.length > 0 ? `@media(max-width:${ switchWidth }px){${ mobileRules.join( '' ) }}` : '' );
+	return {
+		body: $d( 'body' ).html() ?? desktopBody,
+		desktopOnlyElements: hiddenDesktopOnly,
+		mobileOnlyElements: insertions.length,
+		projectedElements,
+		css,
+	};
+}
+
+/**
+ * The mobile capture's body classes (a builder's device flag such as
+ * `device-mobile-optimized`) are what its stylesheet keys on. Its rules are
+ * already scoped to the mobile side of the switch, so the single body carries
+ * both captures' classes.
+ */
+function withBodyClasses( openTag: string, mobileBodyAttributes: string ): string {
+	const mobileClasses = (
+		cheerio.load( `<body${ mobileBodyAttributes }></body>` )( 'body' ).attr( 'class' ) ?? ''
+	)
+		.split( /\s+/ )
+		.filter( Boolean );
+	if ( mobileClasses.length === 0 ) return openTag;
+	const $ = cheerio.load( `${ openTag }</body>` );
+	const body = $( 'body' );
+	const classes = ( body.attr( 'class' ) ?? '' ).split( /\s+/ ).filter( Boolean );
+	body.attr( 'class', [ ...new Set( [ ...classes, ...mobileClasses ] ) ].join( ' ' ) );
+	return /<body\b[^>]*>/i.exec( $.html() )?.[ 0 ] ?? openTag;
+}
+
+/** Width-scoped visibility for elements only one side of the switch renders. */
+function identitySubsetVisibilityCss( switchWidth: number ): string {
+	return (
+		`<style>@media(min-width:${ switchWidth + 1 }px){.${ RESPONSIVE_MOBILE_ONLY_CLASS }{display:none!important}}` +
+		`@media(max-width:${ switchWidth }px){.${ RESPONSIVE_DESKTOP_ONLY_CLASS }{display:none!important}}</style>`
+	);
 }
 
 /**
@@ -921,6 +1349,32 @@ function assembleResponsiveHtml(
 			/<\/head\s*>/i,
 			`${ responsiveMobileStyles( mobileHtml, undefined, switchWidth, shared ) }</head>`
 		);
+	}
+	const identitySubset = identitySubsetMerge( desktopHtml, mobileHtml, switchWidth );
+	if ( identitySubset ) {
+		// One body carries both renderings: mobile-only elements join the desktop
+		// tree under their mapped parents and width-scoped visibility hides each
+		// side's unique elements on the other regime. Anchor, media, and
+		// counterpart evidence stay single-document; no mobile namespacing.
+		const shared = sharedStyleContents( desktopHtml, mobileHtml );
+		// Projection and visibility rules are inserted before </head>; a document
+		// without one would silently lose them.
+		const withHead = ( html: string ): string =>
+			/<\/head\s*>/i.test( html ) ? html : html.replace( /<body\b/i, '<head></head><body' );
+		return withMobileViewport(
+			withHead( scopedStyles( desktopHtml, `(min-width:${ switchWidth + 1 }px)`, shared ) )
+		)
+			.replace(
+				/(<body\b[^>]*>)[\s\S]*?(<\/body\s*>)/i,
+				( _match, open: string, close: string ) =>
+					`${ withBodyClasses( open, mobileBodyMatch?.[ 1 ] ?? '' ) }${ identitySubset.body }${ close }`
+			)
+			.replace(
+				/<\/head\s*>/i,
+				`${ responsiveMobileStyles( mobileHtml, undefined, switchWidth, shared ) }${ identitySubsetVisibilityCss( switchWidth ) }${
+					identitySubset.css ? `<style>${ identitySubset.css }</style>` : ''
+				}</head>`
+			);
 	}
 	( { desktopBody, mobileBody } = markResponsiveCounterparts( desktopBody, mobileBody ) );
 
