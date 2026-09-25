@@ -6,7 +6,8 @@ import { SectionSpecsStore } from './replicate/section-specs-store.js';
 import { MediaStubStore } from './resume-state/index.js';
 
 const { captureScreenshotsMock } = vi.hoisted( () => ( {
-	captureScreenshotsMock: vi.fn( async () => ( {
+	captureScreenshotsMock: vi.fn( async ( { urls }: { urls: string[] } ) => ( {
+		urls,
 		captured: 1,
 		skipped: 0,
 		failed: 0,
@@ -203,7 +204,7 @@ describe( 'captureWebsite completeness', () => {
 	it( 'preserves source-absent link diagnostics in a complete strict capture', async () => {
 		const realExport = await vi.importActual< typeof import('./capture-export.js') >( './capture-export.js' );
 		vi.mocked( exportWebsiteCapture ).mockImplementationOnce( realExport.exportWebsiteCapture );
-		captureScreenshotsMock.mockResolvedValueOnce( { captured: 1, skipped: 1, failed: 0, durationMs: 1 } );
+		captureScreenshotsMock.mockResolvedValueOnce( { urls: [ sourceUrl ], captured: 1, skipped: 1, failed: 0, durationMs: 1 } );
 		mkdirSync( join( root, 'html' ), { recursive: true } );
 		mkdirSync( join( root, 'screenshots' ), { recursive: true } );
 		writeFileSync( join( root, 'html', 'home.html' ), '<h1>Home</h1><a href="/gone">Gone</a>' );

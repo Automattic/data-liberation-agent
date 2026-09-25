@@ -12,7 +12,8 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const { captureScreenshotsMock } = vi.hoisted( () => ( {
-	captureScreenshotsMock: vi.fn( async () => ( {
+	captureScreenshotsMock: vi.fn( async ( { urls }: { urls: string[] } ) => ( {
+		urls,
 		captured: 2,
 		skipped: 0,
 		failed: 0,

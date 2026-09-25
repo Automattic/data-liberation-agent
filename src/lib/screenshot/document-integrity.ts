@@ -66,3 +66,32 @@ export function isRouteDrift(capturedUrl: string, intendedUrl: string): boolean 
     return capturedUrl !== intendedUrl;
   }
 }
+
+/**
+ * The route a server redirect resolved `requestedUrl` to during navigation, or
+ * undefined when it names the same route or another origin. `finalUrl` is the
+ * URL of the response navigation ended on after following redirect hops.
+ *
+ * A redirect answered by the server is the site saying the requested URL is
+ * another name for the target — nothing ran on the page yet, so it is not the
+ * drift {@link isRouteDrift} guards against (a live page navigating itself
+ * after load). A redirect off the origin names a different site, not an alias.
+ */
+export function serverRedirectTarget( requestedUrl: string, finalUrl: string ): string | undefined {
+	if ( ! isRouteDrift( finalUrl, requestedUrl ) ) return undefined;
+	try {
+		return new URL( finalUrl ).origin === new URL( requestedUrl ).origin ? finalUrl : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/** Route identity {@link isRouteDrift} compares: origin plus normalized path. */
+export function routeIdentity( url: string ): string {
+	try {
+		const parsed = new URL( url );
+		return `${ parsed.origin }${ normalizeRoutePath( parsed.pathname ) }`;
+	} catch {
+		return url;
+	}
+}
