@@ -59,4 +59,50 @@ describe('capturePageHtml stylesheet serialization', () => {
     expect(await page.evaluate(() => document.querySelector('main')!.innerHTML)).toBe(liveBefore);
     await page.close();
   });
+
+  it('writes the loaded image onto a placeholder or density-list src after hydration', async () => {
+    const page = await browser.newPage({ viewport: { width: 800, height: 400 } });
+    const png = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+      'base64'
+    );
+    await page.route('https://cdn.example.test/**', (route) =>
+      route.fulfill({ status: 200, contentType: 'image/png', body: png })
+    );
+    const placeholder = 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=';
+    await page.setContent(`<!doctype html><html><body style="height:2400px">
+      <picture>
+        <source media="(min-width: 0px)" srcset="https://cdn.example.test/item-1.jpg 1x, https://cdn.example.test/item-1-2x.jpg 2x">
+        <img id="gallery" alt="Item 1" src="https://cdn.example.test/item-1.jpg 1x, https://cdn.example.test/item-1-2x.jpg 2x">
+      </picture>
+      <img id="kept" alt="Item 3" src="https://cdn.example.test/kept.jpg">
+      <img id="lazy" alt="Item 2" style="margin-top:1800px" src="${placeholder}" data-src="https://cdn.example.test/item-2.jpg">
+      <script>
+        addEventListener('scroll', () => {
+          const image = document.getElementById('lazy');
+          if (!image || image.dataset.hydrated) return;
+          const picture = document.createElement('picture');
+          const source = document.createElement('source');
+          source.srcset = image.getAttribute('data-src');
+          image.replaceWith(picture);
+          picture.append(source, image);
+          image.dataset.hydrated = 'true';
+        }, { once: true });
+      </script>
+    </body></html>`);
+    await page.evaluate(() => window.scrollTo(0, 2000));
+    await page.waitForFunction(() => document.getElementById('lazy')?.dataset.hydrated === 'true');
+    await page.locator('#gallery').evaluate((image) => (image instanceof HTMLImageElement ? image.decode().catch(() => undefined) : undefined));
+
+    const html = await capturePageHtml(page);
+
+    expect(html).toMatch(/<img id="gallery"[^>]*src="https:\/\/cdn\.example\.test\/item-1\.jpg"/);
+    expect(html).not.toMatch(/<img id="gallery"[^>]*\ssrc="[^"]*\s1x/);
+    expect(html).toContain('srcset="https://cdn.example.test/item-1.jpg 1x, https://cdn.example.test/item-1-2x.jpg 2x"');
+    expect(html).toContain('src="https://cdn.example.test/item-2.jpg"');
+    expect(html).not.toContain('R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=');
+    expect(html).toContain('src="https://cdn.example.test/kept.jpg"');
+    expect(await page.locator('#gallery').getAttribute('src')).toContain('1x,');
+    await page.close();
+  });
 });
