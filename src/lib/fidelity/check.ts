@@ -139,6 +139,12 @@ export interface FidelityReport {
 	routes: string[];
 	/** Routes the capture retained. */
 	routesAvailable: number;
+	/**
+	 * Captured routes left out of source comparison because their capture-time
+	 * cleanup is not proven (no evidence, a failure, or residual content), so a
+	 * difference there could be leftover provider chrome rather than a copy defect.
+	 */
+	routesCleanupUnproven: string[];
 	/** Offline checks over every route. */
 	selfConsistency: SelfConsistencyReport;
 	scores: RouteScore[];
@@ -148,7 +154,7 @@ export interface FidelityReport {
 }
 
 interface CaptureReceipt {
-	cleanup?: { policy: CleanupPolicy; complete: boolean };
+	cleanup?: { policy: CleanupPolicy; complete: boolean; evidencePath?: string };
 	source?: { url?: string };
 	websiteRoot?: string;
 	routes?: Array< { url?: string; path?: string } >;
@@ -628,14 +634,47 @@ async function observePage(
 	}
 }
 
+/**
+ * Routes whose capture-time cleanup is not proven by the per-page evidence the
+ * capture recorded. The receipt's `complete` flag is their conjunction, so the
+ * routes behind a `false` are found by reading the evidence itself. Evidence
+ * that cannot be read proves nothing, so every route counts as unproven.
+ */
+function cleanupUnprovenRoutes( receipt: CaptureReceipt, captureDir: string, sources: Map< string, string > ): Set< string > {
+	const all = new Set( sources.keys() );
+	const cleanup = receipt.cleanup;
+	if ( ! cleanup ) return new Set();
+	let pages: Array< { url?: string; policy?: unknown; reports?: Array< { failures?: unknown[]; residual?: number } > } >;
+	try {
+		pages = JSON.parse( readFileSync( join( captureDir, cleanup.evidencePath ?? 'cleanup-evidence.json' ), 'utf8' ) ).pages;
+		if ( ! Array.isArray( pages ) ) return all;
+	} catch {
+		return all;
+	}
+	const policy = JSON.stringify( cleanup.policy );
+	const proven = new Set(
+		pages
+			.filter( ( page ) => JSON.stringify( page.policy ) === policy && page.reports?.length &&
+				page.reports.every( ( report ) => ( report.failures?.length ?? 0 ) === 0 && ( report.residual ?? 0 ) === 0 ) )
+			.map( ( page ) => normalizedUrl( page.url ?? '' ) )
+	);
+	return new Set( [ ...sources ].filter( ( [ , url ] ) => ! proven.has( normalizedUrl( url ) ) ).map( ( [ route ] ) => route ) );
+}
+
+function normalizedUrl( value: string ): string {
+	try {
+		const url = new URL( value );
+		return `${ url.origin }${ url.pathname.replace( /\/+$/, '' ) || '/' }${ url.search }`;
+	} catch {
+		return value;
+	}
+}
+
 export async function checkFidelity( options: FidelityCheckOptions ): Promise< FidelityReport > {
 	const log = options.log ?? ( () => {} );
 	const { websiteDir, receiptPath } = resolveCheckDirectory( options.directory );
 	const receipt = JSON.parse( readFileSync( receiptPath, 'utf8' ) ) as CaptureReceipt;
-	if (receipt.cleanup) {
-		validateCleanupPolicy(receipt.cleanup.policy);
-		if (!receipt.cleanup.complete) throw new Error('Capture cleanup was incomplete; recapture before comparison');
-	}
+	if (receipt.cleanup) validateCleanupPolicy(receipt.cleanup.policy);
 	const cleanupReports: CleanupReport[] = [];
 	const sourceUrl = receipt.source?.url;
 	if ( ! sourceUrl ) throw new Error( `capture-receipt.json has no source.url: ${ receiptPath }` );
@@ -645,6 +684,20 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 
 	const sources = routeSourceMap( receipt );
 	if ( ! sources.has( '/' ) ) sources.set( '/', sourceUrl );
+
+	// One route whose cleanup could not be proven must not block comparing the
+	// rest: set it aside, compare every route whose cleanup is proven, and
+	// report the difference. Only a capture with no proven route is refused.
+	const unproven = receipt.cleanup && ! receipt.cleanup.complete
+		? cleanupUnprovenRoutes( receipt, dirname( receiptPath ), sources )
+		: new Set< string >();
+	for ( const route of unproven ) sources.delete( route );
+	if ( receipt.cleanup && ! receipt.cleanup.complete && sources.size === 0 ) {
+		throw new Error( 'Capture cleanup was incomplete for every route; recapture before comparison' );
+	}
+	if ( unproven.size > 0 ) {
+		log( `[compare] cleanup unproven for ${ unproven.size } route(s), excluded from source comparison: ${ [ ...unproven ].sort().join( ', ' ) }` );
+	}
 
 	const captured = [ ...sources.keys() ].sort( ( left, right ) =>
 		left === '/' ? -1 : right === '/' ? 1 : left.localeCompare( right )
@@ -875,6 +928,7 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 		widths,
 		routes,
 		routesAvailable: captured.length,
+		routesCleanupUnproven: [ ...unproven ].sort(),
 		selfConsistency,
 		scores,
 		...summary,
