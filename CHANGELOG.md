@@ -15,6 +15,21 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.5.8] - 2026-09-25
+
+### Changed
+- regenerate plugin bundles
+- recognize CDN-served Squarespace sites from their page markers
+
+### Fixed
+- serve tablet widths the desktop document, not the phone capture
+- never persist blob: media URLs; keep a poster for MSE video
+- capture external SVG sprites referenced by <use> and keep their fragments
+- store and count identical resource bytes once
+- queue homepage links the sitemap omits
+- keep lazy images on their localized renditions instead of the placeholder
+- verify every container percentage before fluid capture writes it
+
 ## [0.5.7] - 2026-09-25
 
 ### Changed
