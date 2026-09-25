@@ -41,6 +41,7 @@ import { validateOutputDir, planArtifacts, type ArtifactPlan } from './output-la
 import { waitForStable, triggerLazyLoad, dismissOverlays } from './page-helpers.js';
 import { CapturedResourceStore } from './resource-capture.js';
 import { enforceSameOrigin } from './same-origin.js';
+import { preserveStreamedVideoPosters } from './streamed-video.js';
 import { analyzePage } from './site-analysis.js';
 import {
 	defaultViewports,
@@ -230,7 +231,19 @@ export async function capturePageHtml( page: Page ): Promise< string > {
 		for ( const media of document.querySelectorAll( 'audio, video' ) ) {
 			const source = media as HTMLMediaElement;
 			const resolvedSource = source.currentSrc || source.src;
-			if ( resolvedSource ) source.setAttribute( 'src', resolvedSource );
+			// A `blob:` URL (a Media Source Extensions stream, as HLS/DASH players
+			// use) names an object that only exists in this page session, so the
+			// copy would show a dead player. Drop it rather than persist it; the
+			// live element keeps playing, since removing `src` does not reload it.
+			// preserveStreamedVideoPosters keeps the element's visual weight.
+			const isSessionUrl = ( value: string | null ) => /^blob:/i.test( value?.trim() ?? '' );
+			for ( const child of source.querySelectorAll( 'source' ) ) {
+				if ( isSessionUrl( child.getAttribute( 'src' ) ) ) child.remove();
+			}
+			if ( isSessionUrl( source.getAttribute( 'src' ) ) ) source.removeAttribute( 'src' );
+			if ( isSessionUrl( resolvedSource ) ) {
+				// Stream-backed: nothing durable to write, and nothing left to wait for.
+			} else if ( resolvedSource ) source.setAttribute( 'src', resolvedSource );
 			else if ( source instanceof HTMLVideoElement ) pendingVideoSource = true;
 			for ( const property of [ 'autoplay', 'loop', 'muted' ] as const ) {
 				if ( source[ property ] ) source.setAttribute( property, '' );
@@ -869,6 +882,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 			// The cleanup observer may have exhausted its budget before the page
 			// re-rendered a credit or ad; the saved document must be swept.
 			await sweepSourceCleanup( page );
+			await preserveStreamedVideoPosters( page, resourceStore, url ).catch( () => undefined );
 			const html = await capturePageHtml( page );
 			await resourceStore.captureDomDependencies( html, url );
 			// Refuse to persist a capture whose page navigated away from the route we
@@ -931,6 +945,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	if ( ! isDesktop && plan.captureMobileHtml ) {
 		try {
 			await sweepSourceCleanup( page );
+			await preserveStreamedVideoPosters( page, resourceStore, url ).catch( () => undefined );
 			const mhtml = sanitizeFrozenHtml( await capturePageHtml( page ) );
 			await resourceStore.captureDomDependencies( mhtml, url );
 			// Same route-identity guard as the desktop HTML write above — best-effort
