@@ -347,6 +347,32 @@ function routeOutputPath(
 	return join( cleanPath, 'index.html' );
 }
 
+function publicPathname( url: string ): string {
+	try {
+		const pathname = new URL( url ).pathname;
+		if ( ! pathname || pathname === '/' ) return '/';
+		return pathname.replace( /\/+$/, '' ) || '/';
+	} catch {
+		return '';
+	}
+}
+
+function portableRedirectsFile( rules: Array< { from: string; to: string } > ): string {
+	const lines = [ ...rules ]
+		.filter(
+			( rule, index, all ) =>
+				rule.from !== '' &&
+				rule.to !== '' &&
+				rule.from !== rule.to &&
+				all.findIndex( ( other ) => other.from === rule.from && other.to === rule.to ) === index
+		)
+		.sort(
+			( left, right ) => left.from.localeCompare( right.from ) || left.to.localeCompare( right.to )
+		)
+		.map( ( rule ) => `${ rule.from }  ${ rule.to }  301` );
+	return lines.length === 0 ? '' : `${ lines.join( '\n' ) }\n`;
+}
+
 /**
  * Reports whether a captured page is an alternate address for an already claimed route.
  *
@@ -2519,7 +2545,9 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		canonicalRouteAliases.set( normalizedUrl( entry.url ), routePath );
 	}
 	// A URL the server redirected to another captured route is that route
-	// under another name: links to it resolve to the target's page.
+	// under another name: links to it resolve to the target's page, and the
+	// alias is recorded in website/_redirects.
+	const portableRedirects: Array< { from: string; to: string } > = [];
 	for ( const { url, target } of redirectAliases ) {
 		const targetEntry = entriesByNormalizedUrl.get( normalizedUrl( target ) );
 		if ( ! targetEntry ) {
@@ -2533,6 +2561,9 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		const routePath = routePathOf( targetEntry.url );
 		duplicateRoutes.push( { url, canonicalUrl: targetEntry.url, path: `website/${ routePath }` } );
 		canonicalRouteAliases.set( normalizedUrl( url ), routePath );
+		const from = publicPathname( url );
+		const to = `/${ routePath }`;
+		if ( from && from !== to ) portableRedirects.push( { from, to } );
 	}
 	const desktopSections = SectionSpecsStore.load( outputDir );
 	const mobileSections = SectionSpecsStore.loadMobile( outputDir );
@@ -3058,6 +3089,8 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		writeFileSync( entry.identityHtmlPath, identityHtml );
 	}
 	selfContainWebsite( websiteDir );
+	const redirectsFile = portableRedirectsFile( portableRedirects );
+	if ( redirectsFile ) writeFileSync( join( websiteDir, '_redirects' ), redirectsFile );
 
 	const geometryCaptureOmissions: Record< string, number > = {};
 	const geometryInputs = function* () {
