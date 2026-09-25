@@ -6,6 +6,8 @@
 // capture width certifies the exact failure mode. This compares at a width the
 // caller chose, and the check runner picks widths the sweep never sampled.
 //
+import type { DismissedOverlay } from '../screenshot/page-helpers.js';
+
 /**
  * One image the page actually renders at this viewport: where it sits (the
  * rounded box, in CSS pixels) plus a normalized source identity. The pair is
@@ -75,6 +77,13 @@ export interface LayoutObservation {
 	internalMissing: string[];
 	/** Click-to-open dialogs/menus observed on this document. */
 	dialogs: DialogProbe[];
+	/**
+	 * Takeover modals and consent banners dismissed before this page was
+	 * measured, the same way capture dismisses them before it serializes. Pure
+	 * evidence: nothing here is scored, it is what lets a reader tell a banner
+	 * the two sides disagree about from content the copy lost.
+	 */
+	dismissedOverlays?: DismissedOverlay[];
 }
 
 export interface DialogProbe {
