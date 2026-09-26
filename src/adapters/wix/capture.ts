@@ -429,7 +429,18 @@ export const capture: LiberationHooks = {
 		}, WIX_CAPTURE_CHROME_SELECTOR );
 
 		const originalScroll = await page.evaluate( () => ( { x: scrollX, y: scrollY } ) );
+		const restoreScroll = () => page.evaluate( ( originalScroll ) => {
+			const root = document.documentElement;
+			const scrollBehavior = root.style.scrollBehavior;
+			root.style.scrollBehavior = 'auto';
+			window.scrollTo( originalScroll.x, originalScroll.y );
+			root.style.scrollBehavior = scrollBehavior;
+		}, originalScroll );
 		for ( const [ index, fragment ] of fragments.entries() ) {
+			// Each observation starts from where the page was: the previous
+			// runtime scroll can leave its trigger somewhere unclickable (a header
+			// that hides once the page has scrolled).
+			await restoreScroll();
 			const trigger = await page.evaluate( ( { fragment, index } ) => {
 				// Cross-page links share the marker but not this page's runtime:
 				// their href already names the target route, and clicking one
@@ -490,11 +501,25 @@ export const capture: LiberationHooks = {
 			// Use Playwright's trusted input: Wix ignores synthetic `.click()` for
 			// this navigation on some desktop pages.
 			const link = page.locator( 'a[data-dla-anchor-fragment]' ).nth( trigger.index );
-			await link.scrollIntoViewIfNeeded( { timeout: WIX_ANCHOR_SCROLL_MAX_MILLISECONDS } );
-			// Record before the trusted click: an instant handler can finish scrolling
-			// before Playwright returns. Its own visibility scroll is already complete.
-			const initialScroll = await page.evaluate( () => scrollY );
-			await link.click( { timeout: WIX_ANCHOR_SCROLL_MAX_MILLISECONDS } );
+			let initialScroll: number;
+			try {
+				await link.scrollIntoViewIfNeeded( { timeout: WIX_ANCHOR_SCROLL_MAX_MILLISECONDS } );
+				// Record before the trusted click: an instant handler can finish scrolling
+				// before Playwright returns. Its own visibility scroll is already complete.
+				initialScroll = await page.evaluate( () => scrollY );
+				await link.click( { timeout: WIX_ANCHOR_SCROLL_MAX_MILLISECONDS } );
+			} catch {
+				// One unclickable trigger must not abandon the remaining links, or
+				// the rest of this hook: record why this fragment has no target.
+				await page.evaluate( ( fragment ) => {
+					for ( const anchor of document.querySelectorAll< HTMLAnchorElement >(
+						`a[data-dla-anchor-fragment="${ CSS.escape( fragment ) }"]`
+					) ) {
+						anchor.dataset.dlaAnchorUnresolved = 'runtime trigger click failed';
+					}
+				}, fragment );
+				continue;
+			}
 			await page.evaluate( async ( { fragment, maxWait, initialScroll } ) => {
 				const links = [ ...document.querySelectorAll< HTMLAnchorElement >(
 					`a[data-dla-anchor-fragment="${ CSS.escape( fragment ) }"]`
@@ -558,13 +583,7 @@ export const capture: LiberationHooks = {
 			}, { fragment, maxWait: WIX_ANCHOR_SCROLL_MAX_MILLISECONDS, initialScroll } );
 		}
 
-		await page.evaluate( ( originalScroll ) => {
-			const root = document.documentElement;
-			const scrollBehavior = root.style.scrollBehavior;
-			root.style.scrollBehavior = 'auto';
-			window.scrollTo( originalScroll.x, originalScroll.y );
-			root.style.scrollBehavior = scrollBehavior;
-		}, originalScroll );
+		await restoreScroll();
 
 		const galleries = await page.evaluate( async () => {
 			const urls = [
