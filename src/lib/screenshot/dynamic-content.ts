@@ -142,6 +142,7 @@ export async function expandCollapsedContent(page: Page): Promise<void> {
 }
 
 const MAX_DISCLOSURE_CANDIDATES = 32;
+const MAX_EXPAND_TOGGLES = 8;
 const MAX_DISCLOSURE_HTML_BYTES = 512 * 1024;
 /** How long the restore step will wait for a runtime's own close-unmount to land
  *  before giving up (see `hydrateDisclosureContent` — the Radix Presence exit case). */
@@ -161,185 +162,6 @@ function boundDisclosureHtml(html: string): { html: string; bytes: number; trunc
   const bytes = Buffer.byteLength(html);
   if (bytes <= MAX_DISCLOSURE_HTML_BYTES) return { html, bytes, truncated: false };
   return { html: Buffer.from(html).subarray(0, MAX_DISCLOSURE_HTML_BYTES).toString(), bytes, truncated: true };
-}
-
-const MAX_EXPAND_TOGGLES = 8;
-const EXPAND_TOGGLE_PROBE = 'data-dla-expand-toggle';
-
-/**
- * Open each collapsed "show more" / "read more" toggle, record the opened
- * region, and put the collapsed label back. A one-way click handler (sets
- * `aria-expanded`, removes a clamp class, never toggles back) is restored
- * from the pre-click snapshot so the base document stays the initial view.
- */
-async function collectExpandToggles(page: Page): Promise<RawDisclosureRecord[]> {
-  try {
-    const result = await page.evaluate(async ({ limit, labels, probe }: { limit: number; labels: string[]; probe: string }) => {
-      const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-      const labelOf = (element: Element) => (element.textContent || '').replace(/\s+/g, ' ').trim();
-      const isExpandToggle = (element: Element) => {
-        const text = labelOf(element).toLowerCase();
-        return labels.some((label) => text === label || text.startsWith(label));
-      };
-      const isCollapseLabel = (text: string) => /^(?:show|read) less\b/.test(text.toLowerCase());
-      const visible = (element: Element) => {
-        const rect = element.getBoundingClientRect();
-        const style = getComputedStyle(element);
-        return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
-      };
-      const safeToActivate = (element: Element) => {
-        if (element.hasAttribute('aria-haspopup')) return false;
-        if ((element instanceof HTMLButtonElement || element instanceof HTMLInputElement)
-          && element.type === 'submit' && element.form) return false;
-        if (element.tagName !== 'A') return true;
-        const href = (element.getAttribute('href') ?? '').trim();
-        return href === '' || href === '#' || href.startsWith('#');
-      };
-      const cssEscape = (value: string) =>
-        globalThis.CSS?.escape ? globalThis.CSS.escape(value) : value.replace(/[^a-zA-Z0-9_-]/g, '\\$&');
-      const elementPath = (element: Element): string => {
-        const parts: string[] = [];
-        for (let node: Element | null = element; node && node !== document.body; node = node.parentElement) {
-          const tag = node.tagName.toLowerCase();
-          const siblings = node.parentElement
-            ? Array.from(node.parentElement.children).filter((sibling) => sibling.tagName === node!.tagName)
-            : [];
-          parts.unshift(siblings.length > 1 ? `${tag}:nth-of-type(${siblings.indexOf(node) + 1})` : tag);
-        }
-        return `body > ${parts.join(' > ')}`;
-      };
-      const describe = (element: Element) => ({
-        selector: element.id ? `#${cssEscape(element.id)}` : elementPath(element),
-        tag: element.tagName.toLowerCase(),
-        ...(element.id ? { id: element.id } : {}),
-      });
-      const describeTrigger = (element: HTMLElement) => {
-        const label = (element.getAttribute('aria-label') || labelOf(element)).slice(0, 40);
-        return { ...describe(element), ...(label ? { label } : {}) };
-      };
-      const scopeOf = (trigger: Element): Element => {
-        const parent = trigger.parentElement;
-        if (parent && parent !== document.body && parent !== document.documentElement) return parent;
-        const controlledId = trigger.getAttribute('aria-controls') || '';
-        const controlled = controlledId ? document.getElementById(controlledId) : null;
-        return controlled || trigger.previousElementSibling || trigger;
-      };
-      const stripProbe = (html: string) => html.replace(new RegExp(`\\s${probe}="[^"]*"`, 'g'), '');
-      const currentRoute = () => `${location.pathname}${location.search}`;
-      const revertRoute = async (before: string, beforeState: unknown) => {
-        try {
-          history.pushState(beforeState, '', before);
-          window.dispatchEvent(new PopStateEvent('popstate', { state: beforeState }));
-        } catch { /* ignore */ }
-        for (let attempt = 0; attempt < 20 && currentRoute() !== before; attempt++) await wait(25);
-      };
-      const liveScope = (fallback: Element): Element => {
-        if (fallback.isConnected) return fallback;
-        const marked = document.querySelector(`[${probe}="trigger"]`);
-        return marked ? scopeOf(marked) : fallback;
-      };
-      const findTrigger = (scope: Element): HTMLElement | null => {
-        const marked = scope.querySelector(`[${probe}="trigger"]`);
-        if (marked instanceof HTMLElement) return marked;
-        for (const button of scope.querySelectorAll('button, [role="button"]')) {
-          if (!(button instanceof HTMLElement)) continue;
-          const text = labelOf(button).toLowerCase();
-          if (isCollapseLabel(text) || button.getAttribute('aria-expanded') === 'true' || isExpandToggle(button)) return button;
-        }
-        return null;
-      };
-      const isCollapsed = (scope: Element, initialLabel: string) => {
-        const trigger = findTrigger(scope);
-        if (!trigger) return false;
-        if (trigger.getAttribute('aria-expanded') === 'true') return false;
-        const text = labelOf(trigger).toLowerCase();
-        if (isCollapseLabel(text)) return false;
-        return text === initialLabel.toLowerCase();
-      };
-
-      const records: RawDisclosureRecord[] = [];
-      const candidates = Array.from(document.querySelectorAll('button, [role="button"]'))
-        .filter((element) => element instanceof HTMLElement && visible(element) && safeToActivate(element) && isExpandToggle(element))
-        .slice(0, limit) as HTMLElement[];
-
-      for (const trigger of candidates) {
-        if (!trigger.isConnected || !isExpandToggle(trigger)) continue;
-        const described = describeTrigger(trigger);
-        const scope = scopeOf(trigger);
-        const target = describe(scope);
-        const beforeHtml = scope.outerHTML;
-        const initialLabel = labelOf(trigger);
-        const beforeRoute = currentRoute();
-        const beforeState = history.state;
-        trigger.setAttribute(probe, 'trigger');
-        try {
-          trigger.click();
-        } catch (error) {
-          trigger.removeAttribute(probe);
-          records.push({
-            status: 'click-failed',
-            trigger: described,
-            target,
-            error: (error instanceof Error ? error.message : String(error)).slice(0, 500),
-          });
-          continue;
-        }
-        await wait(60);
-        if (currentRoute() !== beforeRoute) {
-          await revertRoute(beforeRoute, beforeState);
-          document.querySelectorAll(`[${probe}]`).forEach((element) => element.removeAttribute(probe));
-          records.push({ status: 'no-dialog', trigger: described, target });
-          break;
-        }
-
-        let opened = false;
-        let openedScope = scope;
-        for (let attempt = 0; attempt < 20; attempt++) {
-          openedScope = liveScope(scope);
-          const live = findTrigger(openedScope);
-          const label = live ? labelOf(live).toLowerCase() : '';
-          const htmlChanged = stripProbe(openedScope.outerHTML) !== beforeHtml;
-          if ((live && (live.getAttribute('aria-expanded') === 'true' || isCollapseLabel(label) || (label && label !== initialLabel.toLowerCase()))) || htmlChanged) {
-            opened = true;
-            break;
-          }
-          await wait(50);
-        }
-        if (!opened) {
-          const missed = findTrigger(liveScope(scope));
-          if (missed && (isCollapseLabel(labelOf(missed)) || missed.getAttribute('aria-expanded') === 'true')) {
-            try { missed.click(); } catch { /* snapshot restore follows */ }
-            await wait(200);
-            const missedScope = liveScope(scope);
-            if (missedScope.isConnected && !isCollapsed(missedScope, initialLabel)) missedScope.outerHTML = beforeHtml;
-          }
-          document.querySelectorAll(`[${probe}]`).forEach((element) => element.removeAttribute(probe));
-          records.push({ status: 'no-dialog', trigger: described, target });
-          continue;
-        }
-
-        openedScope = liveScope(scope);
-        const expandedHtml = stripProbe(openedScope.outerHTML);
-        const collapse = findTrigger(openedScope);
-        if (collapse) {
-          try { collapse.click(); } catch { /* snapshot restore below */ }
-          for (let attempt = 0; attempt < 10 && !isCollapsed(liveScope(openedScope), initialLabel); attempt++) await wait(50);
-        }
-        const restoredScope = liveScope(openedScope);
-        if (restoredScope.isConnected && !isCollapsed(restoredScope, initialLabel)) {
-          restoredScope.outerHTML = beforeHtml;
-        } else {
-          document.querySelectorAll(`[${probe}]`).forEach((element) => element.removeAttribute(probe));
-        }
-        records.push({ status: 'captured', trigger: described, target, html: expandedHtml });
-      }
-      document.querySelectorAll(`[${probe}]`).forEach((element) => element.removeAttribute(probe));
-      return records;
-    }, { limit: MAX_EXPAND_TOGGLES, labels: EXPAND_TOGGLE_LABELS, probe: EXPAND_TOGGLE_PROBE });
-    return Array.isArray(result) ? (result as RawDisclosureRecord[]) : [];
-  } catch {
-    return [];
-  }
 }
 
 /**
@@ -376,10 +198,10 @@ async function collectExpandToggles(page: Page): Promise<RawDisclosureRecord[]> 
  * geometry, and BEFORE `page.content()` is serialized, so the captured static
  * HTML contains the restored panels directly (no post-hoc wiring needed).
  *
- * Also opens "show more" / "read more" toggles, records the opened form, and
- * restores the collapsed label. Those toggles are not left open by
- * `expandCollapsedContent`: the base document is the initial first view, and
- * the opened form lives only in the disclosure record.
+ * The same candidate pass also includes visible "show more" / "read more"
+ * toggles. Those are not left open by `expandCollapsedContent`: the opened
+ * form is recorded here and the collapsed label is put back. A second click
+ * is the restore; a one-way handler is put back from the pre-click snapshot.
  *
  * Returns per-candidate diagnostics folded into `interaction-states.json`
  * alongside dialog/menu captures (`kind: 'disclosure'`) so this work is
@@ -388,7 +210,7 @@ async function collectExpandToggles(page: Page): Promise<RawDisclosureRecord[]> 
 export async function hydrateDisclosureContent(page: Page): Promise<CapturedDialogInteraction[]> {
   let raw: RawDisclosureRecord[];
   try {
-    const result = await page.evaluate(async ({ limit, settleMs }: { limit: number; settleMs: number }) => {
+    const result = await page.evaluate(async ({ limit, settleMs, labels, toggleLimit }: { limit: number; settleMs: number; labels: string[]; toggleLimit: number }) => {
       const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
       const hasContent = (element: Element) =>
         Boolean((element.textContent || '').trim()) ||
@@ -411,28 +233,52 @@ export async function hydrateDisclosureContent(page: Page): Promise<CapturedDial
         tag: element.tagName.toLowerCase(),
         ...(element.id ? { id: element.id } : {}),
       });
-      const describeTrigger = (element: HTMLElement) => ({
-        ...describe(element),
-        ...((element.getAttribute('aria-label') || element.textContent || '')
-          .replace(/\s+/g, ' ')
-          .trim()
-          .slice(0, 40)
-          ? {
-              label: (element.getAttribute('aria-label') || element.textContent || '')
-                .replace(/\s+/g, ' ')
-                .trim()
-                .slice(0, 40),
-            }
-          : {}),
-      });
+      const labelOf = (element: Element) => (element.textContent || '').replace(/\s+/g, ' ').trim();
+      const describeTrigger = (element: HTMLElement) => {
+        const label = (element.getAttribute('aria-label') || labelOf(element)).slice(0, 40);
+        return { ...describe(element), ...(label ? { label } : {}) };
+      };
+      const isCollapseLabel = (text: string) => /^(?:show|read) less\b/.test(text);
+      const isExpandToggle = (element: Element) => {
+        const text = labelOf(element).toLowerCase();
+        return labels.some((label) => text === label || text.startsWith(label));
+      };
+      const visible = (element: Element) => {
+        const rect = element.getBoundingClientRect();
+        const style = getComputedStyle(element);
+        return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+      };
+      const safeToActivate = (element: Element) => {
+        if (element.hasAttribute('aria-haspopup')) return false;
+        if ((element instanceof HTMLButtonElement || element instanceof HTMLInputElement)
+          && element.type === 'submit' && element.form) return false;
+        if (element.tagName !== 'A') return true;
+        const href = (element.getAttribute('href') ?? '').trim();
+        return href === '' || href === '#' || href.startsWith('#');
+      };
+      const scopeOf = (trigger: HTMLElement): HTMLElement => {
+        const parent = trigger.parentElement;
+        if (parent && parent !== document.body && parent !== document.documentElement) return parent;
+        const controlled = document.getElementById(trigger.getAttribute('aria-controls') || '');
+        if (controlled) return controlled;
+        const previous = trigger.previousElementSibling;
+        return previous instanceof HTMLElement ? previous : trigger;
+      };
+      const currentRoute = () => `${location.pathname}${location.search}`;
+      const collapsedToggle = (button: HTMLElement, initial: string) => {
+        if (!button.isConnected || button.getAttribute('aria-expanded') === 'true') return false;
+        const text = labelOf(button).toLowerCase();
+        return !isCollapseLabel(text) && (text === initial || text.startsWith(initial));
+      };
+      const handledToggles = new Set<string>();
 
       /** Generic ARIA disclosure candidates: aria-expanded + either aria-controls
        *  (forward) or a role="region" panel's aria-labelledby back to the trigger
        *  (reverse — the pattern a runtime that unmounts closed panels leaves behind,
        *  since it never bothers writing aria-controls on the trigger at all). */
-      const findCandidates = (): Array<{ trigger: HTMLElement; target: HTMLElement }> => {
+      const findCandidates = (): Array<{ trigger: HTMLElement; target: HTMLElement; snapshot?: boolean }> => {
         const seen = new Set<HTMLElement>();
-        const out: Array<{ trigger: HTMLElement; target: HTMLElement }> = [];
+        const out: Array<{ trigger: HTMLElement; target: HTMLElement; snapshot?: boolean }> = [];
         document
           .querySelectorAll<HTMLElement>('[aria-expanded="false"][aria-controls]:not([aria-haspopup])')
           .forEach((trigger) => {
@@ -456,19 +302,77 @@ export async function hydrateDisclosureContent(page: Page): Promise<CapturedDial
             out.push({ trigger, target });
           }
         });
+        const hydrating = new Set(out.filter((candidate) => !hasContent(candidate.target)).map((candidate) => candidate.trigger));
+        for (const node of document.querySelectorAll<HTMLElement>('button, [role="button"]')) {
+          if (hydrating.has(node) || handledToggles.has(describe(node).selector)) continue;
+          if (!visible(node) || !safeToActivate(node) || !isExpandToggle(node)) continue;
+          out.push({ trigger: node, target: scopeOf(node), snapshot: true });
+        }
         return out;
       };
 
       const records: RawDisclosureRecord[] = [];
       let hydrated = 0;
+      let togglesDone = 0;
       for (let pass = 0; pass < 3 && hydrated < limit; pass++) {
-        const candidates = findCandidates()
-          .filter((candidate) => !hasContent(candidate.target))
-          .slice(0, limit - hydrated);
+        const found = findCandidates();
+        const candidates = [
+          ...found.filter((candidate) => !candidate.snapshot && !hasContent(candidate.target)).slice(0, limit - hydrated),
+          ...found.filter((candidate) => candidate.snapshot).slice(0, toggleLimit - togglesDone),
+        ];
         if (candidates.length === 0) break;
 
         const observed: Array<{ target: HTMLElement; content: string; trigger: HTMLElement }> = [];
-        for (const { trigger, target } of candidates) {
+        for (const candidate of candidates) {
+          const { trigger, target } = candidate;
+          if (candidate.snapshot) {
+            const described = describeTrigger(trigger);
+            const describedTarget = describe(target);
+            handledToggles.add(described.selector);
+            togglesDone++;
+            const beforeHtml = target.outerHTML;
+            const initial = labelOf(trigger).toLowerCase();
+            const beforeRoute = currentRoute();
+            const beforeState = history.state;
+            try {
+              trigger.click();
+            } catch (error) {
+              records.push({
+                status: 'click-failed',
+                trigger: described,
+                target: describedTarget,
+                error: (error instanceof Error ? error.message : String(error)).slice(0, 500),
+              });
+              continue;
+            }
+            await wait(60);
+            if (currentRoute() !== beforeRoute) {
+              try {
+                history.pushState(beforeState, '', beforeRoute);
+                window.dispatchEvent(new PopStateEvent('popstate', { state: beforeState }));
+              } catch { /* ignore */ }
+              for (let attempt = 0; attempt < 20 && currentRoute() !== beforeRoute; attempt++) await wait(25);
+              records.push({ status: 'no-dialog', trigger: described, target: describedTarget });
+              break;
+            }
+            let openedHtml = '';
+            for (let attempt = 0; attempt < 20 && !openedHtml; attempt++) {
+              const text = labelOf(trigger).toLowerCase();
+              if (trigger.getAttribute('aria-expanded') === 'true' || isCollapseLabel(text) || (target.isConnected && target.outerHTML !== beforeHtml)) {
+                openedHtml = target.isConnected ? target.outerHTML : beforeHtml;
+              } else await wait(50);
+            }
+            if (!openedHtml) {
+              if (target.isConnected && target.outerHTML !== beforeHtml) target.outerHTML = beforeHtml;
+              records.push({ status: 'no-dialog', trigger: described, target: describedTarget });
+              continue;
+            }
+            try { trigger.click(); } catch { /* one-way handler: snapshot restore below */ }
+            for (let attempt = 0; attempt < 10 && trigger.isConnected && !collapsedToggle(trigger, initial); attempt++) await wait(50);
+            if (target.isConnected && !collapsedToggle(trigger, initial)) target.outerHTML = beforeHtml;
+            records.push({ status: 'captured', trigger: described, target: describedTarget, html: openedHtml });
+            continue;
+          }
           try {
             trigger.click();
           } catch (error) {
@@ -531,12 +435,11 @@ export async function hydrateDisclosureContent(page: Page): Promise<CapturedDial
         await wait(100);
       }
       return records;
-    }, { limit: MAX_DISCLOSURE_CANDIDATES, settleMs: MAX_DISCLOSURE_SETTLE_MS });
+    }, { limit: MAX_DISCLOSURE_CANDIDATES, settleMs: MAX_DISCLOSURE_SETTLE_MS, labels: EXPAND_TOGGLE_LABELS, toggleLimit: MAX_EXPAND_TOGGLES });
     raw = Array.isArray(result) ? (result as RawDisclosureRecord[]) : [];
   } catch {
     raw = [];
   }
-  raw = [...raw, ...(await collectExpandToggles(page))];
 
   return raw.map((record): CapturedDialogInteraction => {
     const bounded = record.html !== undefined ? boundDisclosureHtml(record.html) : undefined;
