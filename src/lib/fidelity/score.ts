@@ -31,6 +31,13 @@ export interface RenderedImage {
 	 * can drift while the picture stays the same.
 	 */
 	contentHash?: string | null;
+	/**
+	 * Other normalized filenames this element declared as renditions of the
+	 * same asset (its srcset candidates). The file that loaded can change with
+	 * viewport width while the asset does not; the loaded basename is the
+	 * rendition, not the identity.
+	 */
+	renditions?: string[];
 }
 
 /** Computed typography for one visible text run. The text key survives DOM
@@ -184,6 +191,26 @@ function imageDistance( source: RenderedImage, candidate: RenderedImage ): numbe
 }
 
 /**
+ * Filenames that name this rendered asset: the file that loaded, plus any
+ * other rendition the element declared. A shared placeholder is not an
+ * identity — indexing every image under one data URL would pair unrelated
+ * pictures.
+ */
+function identityKeys( image: RenderedImage ): string[] {
+	const keys: string[] = [];
+	const add = ( key: string | undefined, declared: boolean ) => {
+		if ( key === undefined || keys.includes( key ) ) return;
+		// A shared placeholder is not an asset. The loaded key, even when empty,
+		// stays so keyless images still group the way they did before.
+		if ( declared && ( ! key || key.startsWith( 'data:' ) || key.startsWith( 'blob:' ) ) ) return;
+		keys.push( key );
+	};
+	add( image.key, false );
+	for ( const key of image.renditions ?? [] ) add( key, true );
+	return keys;
+}
+
+/**
  * Pair each source image with the copy image that renders the same picture.
  *
  * Two identities are available and neither subsumes the other:
@@ -195,10 +222,12 @@ function imageDistance( source: RenderedImage, candidate: RenderedImage ): numbe
  *   can drift while the picture stays the same.
  *
  * Content is tried first — it is the stronger claim — and the URL key covers
- * whatever the hashes missed. Within a tier the nearest geometry wins, the
- * same discipline the key-only matcher always used. A copy image is consumed
- * by at most one pair, so a page rendering the same asset twice must render
- * it twice.
+ * whatever the hashes missed. A srcset candidate is the same asset under
+ * another filename: the loaded file can change with viewport width while the
+ * element still declares both renditions. Within a tier the nearest geometry
+ * wins, the same discipline the key-only matcher always used. A copy image is
+ * consumed by at most one pair, so a page rendering the same asset twice must
+ * render it twice.
  */
 export function matchRenderedImages( source: RenderedImage[], copy: RenderedImage[] ): ImagePair[] {
 	const pairs: ImagePair[] = [];
@@ -233,19 +262,35 @@ export function matchRenderedImages( source: RenderedImage[], copy: RenderedImag
 		}
 	}
 
-	// Tier 2: same folded basename, for images whose bytes could not be read.
+	// Tier 2: same folded basename, or another rendition this element declared,
+	// for images whose bytes could not be read or whose renditions hashed apart.
 	const available = new Map< string, RenderedImage[] >();
 	for ( const image of copy ) {
 		if ( paired.has( image ) ) continue;
-		const group = available.get( image.key ) ?? [];
-		group.push( image );
-		available.set( image.key, group );
+		for ( const key of identityKeys( image ) ) {
+			const group = available.get( key ) ?? [];
+			group.push( image );
+			available.set( key, group );
+		}
 	}
 	for ( const image of source ) {
 		if ( pairs.some( ( pair ) => pair.source === image ) ) continue;
-		const candidate = nearestIn( available.get( image.key ) ?? [], image );
+		const seen = new Set< RenderedImage >();
+		const candidates: RenderedImage[] = [];
+		for ( const key of identityKeys( image ) ) {
+			for ( const candidate of available.get( key ) ?? [] ) {
+				if ( seen.has( candidate ) ) continue;
+				seen.add( candidate );
+				candidates.push( candidate );
+			}
+		}
+		const candidate = nearestIn( candidates, image );
 		if ( ! candidate ) continue;
 		paired.add( candidate );
+		for ( const group of available.values() ) {
+			const index = group.indexOf( candidate );
+			if ( index >= 0 ) group.splice( index, 1 );
+		}
 		pairs.push( { source: image, candidate } );
 	}
 
