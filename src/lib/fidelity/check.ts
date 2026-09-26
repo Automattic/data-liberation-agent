@@ -366,16 +366,51 @@ async function observePage(
 			// slides are transparent yet still hold the slideshow's layout
 			// box, and a copy that drops them all is exactly the regression
 			// the image-count gate exists to catch.
+			// Candidates the element itself declared, not the one file the viewport
+			// happened to load. A density list does not switch on width, so a
+			// wider observation can load a different rendition of the same asset.
+			const srcsetUrls = ( value: string | null ): string[] => {
+				if ( ! value ) return [];
+				const urls: string[] = [];
+				let offset = 0;
+				while ( offset < value.length ) {
+					while ( offset < value.length && /[\s,]/.test( value[ offset ] ) ) offset++;
+					if ( offset >= value.length ) break;
+					const start = offset;
+					while ( offset < value.length && ! /\s/.test( value[ offset ] ) ) offset++;
+					const url = value.slice( start, offset ).replace( /,+$/, '' );
+					if ( url ) urls.push( url );
+					while ( offset < value.length && value[ offset ] !== ',' ) offset++;
+					if ( offset < value.length ) offset++;
+				}
+				return urls;
+			};
+			const renditionUrls = ( image: HTMLImageElement ): string[] => {
+				const urls = [
+					...srcsetUrls( image.getAttribute( 'srcset' ) ),
+					...srcsetUrls( image.getAttribute( 'data-srcset' ) ),
+				];
+				const picture = image.closest( 'picture' );
+				if ( picture ) {
+					for ( const source of picture.querySelectorAll( 'source' ) ) {
+						urls.push( ...srcsetUrls( source.getAttribute( 'srcset' ) ) );
+						urls.push( ...srcsetUrls( source.getAttribute( 'data-srcset' ) ) );
+					}
+				}
+				return urls;
+			};
 			const images = await Promise.all(
 				[ ...document.querySelectorAll< HTMLImageElement >( 'img' ) ]
 					.map( ( image ) => ( {
 						rect: image.getBoundingClientRect(),
 						src: image.currentSrc || image.getAttribute( 'src' ) || '',
+						renditions: renditionUrls( image ),
 						hidden: getComputedStyle( image ).visibility === 'hidden',
 					} ) )
 					.filter( ( { rect, hidden } ) => ! hidden && rect.width > 50 && rect.height > 50 )
-					.map( async ( { rect, src } ) => ( {
+					.map( async ( { rect, src, renditions } ) => ( {
 						key: src,
+						renditions,
 						x: Math.round( rect.x ),
 						y: Math.round( rect.y ),
 						width: Math.round( rect.width ),
@@ -614,10 +649,24 @@ async function observePage(
 			title: measured.title,
 			textChars: measured.textChars,
 			widestImage: measured.widestImage,
-			images: measured.images.map( ( image ) => ( {
-				...image,
-				key: normalizeImageKey( image.key ),
-			} ) ),
+			images: measured.images.map( ( image ) => {
+				const key = normalizeImageKey( image.key );
+				const renditions: string[] = [];
+				for ( const url of image.renditions ?? [] ) {
+					const rendition = normalizeImageKey( url );
+					if (
+						! rendition ||
+						rendition === key ||
+						renditions.includes( rendition ) ||
+						rendition.startsWith( 'data:' ) ||
+						rendition.startsWith( 'blob:' )
+					) {
+						continue;
+					}
+					renditions.push( rendition );
+				}
+				return { ...image, key, renditions };
+			} ),
 			typography: measured.typography,
 			animations: measured.animations,
 			responsiveAnimations: measured.responsiveAnimations,

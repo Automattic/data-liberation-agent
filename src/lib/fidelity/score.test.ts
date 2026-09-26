@@ -188,6 +188,36 @@ describe( 'scoreViewport', () => {
 		expect( score.notes ).toContain( 'images 1 missing within tolerance' );
 	} );
 
+	it( 'matches a gallery image whose loaded rendition differs by viewport', () => {
+		// The wide observation loaded the large file. The copy kept the file
+		// loaded at capture width, and still declares the large file as a
+		// srcset rendition of that same image. One copy cannot cover two.
+		const source = [
+			img( 'item-large', 16, 420, 507, 285 ),
+			img( 'item-large', 540, 420, 507, 285 ),
+		];
+		const copy = [
+			{ ...img( 'item-small', 16, 420, 507, 285 ), renditions: [ 'item-large' ] },
+			{ ...img( 'item-small', 540, 420, 507, 285 ), renditions: [ 'item-large' ] },
+		];
+		expect( matchRenderedImages( source, copy ) ).toHaveLength( 2 );
+		const score = scoreViewport( at( 1728, { images: source } ), at( 1728, { images: copy } ) );
+		expect( score.failures.find( ( failure ) => failure.startsWith( 'images ' ) ) ).toBeUndefined();
+	} );
+
+	it( 'does not let one declared rendition satisfy every source image that shares it', () => {
+		const source = [
+			img( 'item-large', 0, 100, 200, 120 ),
+			img( 'item-large', 0, 400, 200, 120 ),
+			img( 'item-large', 0, 700, 200, 120 ),
+		];
+		const copy = [ { ...img( 'item-small', 0, 100, 200, 120 ), renditions: [ 'item-large' ] } ];
+		expect( matchRenderedImages( source, copy ) ).toHaveLength( 1 );
+		expect( scoreViewport( at( 1728, { images: source } ), at( 1728, { images: copy } ) ).failures[ 0 ] ).toMatch(
+			/^images 2 of 3 missing/
+		);
+	} );
+
 	it( 'matches same-named images by count, not presence', () => {
 		const gallery = [ img( 'divider.jpg', 0, 800, 1600, 60 ), img( 'divider.jpg', 0, 1600, 1600, 60 ), img( 'divider.jpg', 0, 2400, 1600, 60 ) ];
 		const score = scoreViewport( at( 1600, { images: gallery } ), at( 1600, { images: gallery.slice( 0, 1 ) } ) );
