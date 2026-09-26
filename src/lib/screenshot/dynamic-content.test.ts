@@ -219,6 +219,39 @@ describe('interaction + wait helpers (Phase 1/2, browser)', () => {
     await page.close();
   });
 
+  it('keeps a show-more disclosure collapsed in the serialized document and records the opened form', async () => {
+    const page = await browser.newPage();
+    await page.setContent(`
+      <style>.clamp { max-height: 2.4em; overflow: hidden; }</style>
+      <section id="about">
+        <p id="blurb" class="clamp">Item 1 is a longer description the author keeps behind a disclosure so the first view stays short.</p>
+        <button type="button" id="more" aria-expanded="false" aria-controls="blurb">Show more</button>
+      </section>
+      <script>
+        document.getElementById('more').addEventListener('click', () => {
+          document.getElementById('more').setAttribute('aria-expanded', 'true');
+          document.getElementById('more').textContent = 'Show less';
+          document.getElementById('blurb').classList.remove('clamp');
+        });
+      </script>
+    `);
+
+    await expandCollapsedContent(page);
+    const recorded = await hydrateDisclosureContent(page);
+    const html = await page.content();
+    const button = html.match(/<button[^>]*id="more"[^>]*>[\s\S]*?<\/button>/)?.[0] ?? '';
+
+    expect(button).toContain('Show more');
+    expect(button).not.toContain('Show less');
+    expect(button).not.toContain('aria-expanded="true"');
+    expect(html).toMatch(/id="blurb"[^>]*class="clamp"/);
+    const opened = recorded.find((state) => state.kind === 'disclosure' && state.status === 'captured');
+    expect(opened?.trigger.label).toBe('Show more');
+    expect(opened?.dialog?.html).toContain('Show less');
+    expect(opened?.dialog?.html).not.toContain('class="clamp"');
+    await page.close();
+  });
+
   it('never activates a control that would submit a form', async () => {
     const page = await browser.newPage();
     await page.setContent(`
@@ -226,7 +259,7 @@ describe('interaction + wait helpers (Phase 1/2, browser)', () => {
         <input type="search" name="q">
         <button class="search-button">View all</button>
       </form>
-      <button aria-expanded="false" aria-controls="more">Show more</button>
+      <button aria-expanded="false" aria-controls="more">Details</button>
       <div id="more" hidden>More.</div>
       <script>
         window.submissions = 0;
