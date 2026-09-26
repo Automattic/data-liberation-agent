@@ -348,6 +348,66 @@ describe( 'exportWebsiteCapture', () => {
 		);
 	} );
 
+	it( 'points a captured phone menu panel at the phone document section targets', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-responsive-panel-anchor-export-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
+			mkdirSync( join( outputDir, path ), { recursive: true } );
+		writeFileSync(
+			join( outputDir, 'html', 'homepage.html' ),
+			'<html><body><nav><a href="https://example.com/#services" data-dla-anchor-fragment="services">Services</a></nav><span id="services" data-dla-anchor-target="services" data-dla-anchor-source-id="services-section"></span><section id="services-section">Desktop services</section></body></html>'
+		);
+		// The phone header only has a menu button; its links live in the dialog
+		// the capture recorded, which carries source-origin hrefs.
+		writeFileSync(
+			join( outputDir, 'html-mobile', 'homepage.html' ),
+			'<html><body><header><button id="menu" aria-haspopup="dialog" aria-label="Menu">Menu</button></header><section id="services-section">Phone services</section></body></html>'
+		);
+		const menuHtml = '<div role="dialog" aria-label="Site"><nav><a href="https://example.com/#services">Services</a><a href="https://example.com/#unknown">Unknown</a></nav></div>';
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( {
+				version: 1,
+				entries: {
+					'https://example.com/': {
+						slug: 'homepage',
+						html: 'html/homepage.html',
+						interactions: {
+							schema: 'data-liberation/interaction-states/v2',
+							sourceUrl: 'https://example.com/',
+							viewport: { width: 390, height: 844 },
+							capturedAt: '2026-09-26T00:00:00.000Z',
+							states: [
+								{
+									status: 'captured',
+									trigger: { selector: '#menu', tag: 'button', id: 'menu', ariaHaspopup: 'dialog', label: 'Menu', dataBindings: {} },
+									dialog: { selector: '[role="dialog"]', tag: 'div', role: 'dialog', ariaModal: true, html: menuHtml, htmlBytes: menuHtml.length, htmlTruncated: false },
+								},
+							],
+						},
+					},
+				},
+			} )
+		);
+
+		exportWebsiteCapture( {
+			outputDir,
+			sourceUrl: 'https://example.com/',
+			platform: 'wix',
+			summary: {},
+			failures: [],
+		} );
+
+		const $ = cheerio.load( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) );
+		const panelLinks = $( '.data-liberation-mobile-document details.dla-disclosure a' );
+		expect( panelLinks ).toHaveLength( 2 );
+		expect( $( '#services--dla-mobile' ) ).toHaveLength( 1 );
+		expect( panelLinks.eq( 0 ).attr( 'href' ) ).toBe( '/index.html#services--dla-mobile' );
+		// A fragment with no phone target is left as the route rebased it.
+		expect( panelLinks.eq( 1 ).attr( 'href' ) ).toBe( '/index.html#unknown' );
+		expect( $( '.data-liberation-desktop-document a' ).first().attr( 'href' ) ).toBe( '/index.html#services' );
+	} );
+
 	it( 'keeps responsive runtime anchor targets unique and diagnoses unresolved fragments', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-responsive-anchor-export-' ) );
 		dirs.push( outputDir );

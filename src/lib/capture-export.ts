@@ -1352,6 +1352,56 @@ function markResponsiveCounterparts(
 	};
 }
 
+/**
+ * A captured dialog wired into the phone document (for example the opened phone
+ * menu) is added after responsive assembly namespaced that document's anchors,
+ * so its section links still name the desktop targets, which are hidden at
+ * phone width. Point each same-page fragment link inside the phone document at
+ * the phone copy of the section the desktop target resolved to.
+ */
+function routePhoneDocumentFragments( html: string, documentPath: string ): string {
+	if ( ! html.includes( MOBILE_DOCUMENT_CLASS ) ) return html;
+	const $ = cheerio.load( html );
+	const mobile = $( `.${ MOBILE_DOCUMENT_CLASS }` ).first();
+	if ( mobile.length === 0 ) return html;
+	const sourceIds = new Map< string, string >();
+	$( `.${ DESKTOP_DOCUMENT_CLASS } [data-dla-anchor-target][data-dla-anchor-source-id]` ).each( ( _index, element ) => {
+		const fragment = $( element ).attr( 'data-dla-anchor-target' );
+		const sourceId = $( element ).attr( 'data-dla-anchor-source-id' );
+		if ( fragment && sourceId ) sourceIds.set( fragment, sourceId );
+	} );
+	let changed = false;
+	mobile.find( 'a[href]' ).each( ( _index, element ) => {
+		const link = $( element );
+		const href = link.attr( 'href' ) ?? '';
+		const hash = href.indexOf( '#' );
+		if ( hash < 0 ) return;
+		const path = href.slice( 0, hash );
+		if ( path !== '' && path !== documentPath ) return;
+		let fragment: string;
+		try {
+			fragment = decodeURIComponent( href.slice( hash + 1 ) );
+		} catch {
+			return;
+		}
+		if ( ! fragment || fragment.endsWith( '--dla-mobile' ) ) return;
+		const phoneId = `${ fragment }--dla-mobile`;
+		if ( mobile.find( '[id]' ).filter( ( _i, candidate ) => $( candidate ).attr( 'id' ) === phoneId ).length === 0 ) {
+			const sourceId = sourceIds.get( fragment );
+			const counterpart = sourceId
+				? mobile.find( '[id]' ).filter( ( _i, candidate ) => $( candidate ).attr( 'id' ) === sourceId )
+				: $();
+			if ( counterpart.length !== 1 ) return;
+			counterpart.before(
+				`<span id="${ escapeHtmlAttr( phoneId ) }" data-dla-anchor-target="${ escapeHtmlAttr( fragment ) }" aria-hidden="true"></span>`
+			);
+		}
+		link.attr( 'href', `${ path }#${ encodeURIComponent( fragment ) }--dla-mobile` );
+		changed = true;
+	} );
+	return changed ? $.html() : html;
+}
+
 function assembleResponsiveHtml(
 	desktopHtml: string,
 	mobileHtml: string,
@@ -3641,15 +3691,18 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 				rejectedReplacementKeys
 			)
 		);
-		const normalizedHtml = rewriteCapturedRouteLinks(
-			wireCapturedDialogs(
-				withoutGeometryIdentities( identityHtml ),
-				entry.interactions?.states ?? [],
-				entry.interactions?.initialDialogs ?? []
+		const normalizedHtml = routePhoneDocumentFragments(
+			rewriteCapturedRouteLinks(
+				wireCapturedDialogs(
+					withoutGeometryIdentities( identityHtml ),
+					entry.interactions?.states ?? [],
+					entry.interactions?.initialDialogs ?? []
+				),
+				url,
+				portableRouteLinks,
+				{ documentPath: `/${ routePath }`, servedPaths: portableServedPaths }
 			),
-			url,
-			portableRouteLinks,
-			{ documentPath: `/${ routePath }`, servedPaths: portableServedPaths }
+			`/${ routePath }`
 		);
 		unresolvedAnchors.push(
 			...unresolvedCapturedAnchors( normalizedHtml, url, `/${ routePath }` )
