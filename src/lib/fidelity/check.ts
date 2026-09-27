@@ -9,7 +9,6 @@ import { dirname, join, resolve } from 'node:path';
 import type { Page } from 'playwright';
 import { sourceContextOptions } from '../browser-kit/browser-kit.js';
 import { startStaticServer } from '../replicate/local-site/static-server.js';
-import { DEFAULT_SWEEP_WIDTHS } from '../screenshot/fluid-capture.js';
 import {
 	dismissOverlays,
 	triggerLazyLoad,
@@ -44,6 +43,10 @@ const BROWSER_ROUTE_SAMPLE = 4;
  * different designs.
  */
 export const DEFAULT_CHECK_WIDTHS = [ 1600, 1728 ];
+
+// Keep the gate's unsampled-width baseline stable when the capture sweep gains
+// extra learning points; those points must remain independently verified.
+const DEFAULT_CAPTURE_WIDTHS_FOR_CHECK = [ 390, 600, 768, 1024, 1280, 1440, 1920 ];
 
 /**
  * Overlay kinds this comparison dismisses on both sides before measuring.
@@ -264,7 +267,7 @@ export function resolveCheckDirectory( directory: string ): {
 	);
 }
 
-export function checkWidthsFor( sampled: number[] = DEFAULT_SWEEP_WIDTHS ): number[] {
+export function checkWidthsFor( sampled: number[] = DEFAULT_CAPTURE_WIDTHS_FOR_CHECK ): number[] {
 	return DEFAULT_CHECK_WIDTHS.filter( ( width ) => ! sampled.includes( width ) );
 }
 
