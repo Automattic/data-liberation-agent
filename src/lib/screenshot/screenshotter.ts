@@ -401,13 +401,16 @@ export async function capturePageHtml( page: Page ): Promise< string > {
 				// contract in the static artifact: the source stylesheet/runtime may
 				// not be present when the localized image is laid out again.
 				const imageStyle = getComputedStyle( image );
-				if ( imageStyle.aspectRatio !== 'auto' && image.getBoundingClientRect().height > 0 ) {
+				const rendered = image.getBoundingClientRect();
+				if ( imageStyle.aspectRatio !== 'auto' && rendered.width > 0 && rendered.height > 0 ) {
 					restoredAspectRatios.push( {
 						image,
 						previous: image.style.getPropertyValue( 'aspect-ratio' ),
 						priority: image.style.getPropertyPriority( 'aspect-ratio' ),
 					} );
-					image.style.setProperty( 'aspect-ratio', imageStyle.aspectRatio );
+					// An `auto <ratio>` declaration still lets a localized replaced image
+					// use its different intrinsic ratio. Freeze what the source rendered.
+					image.style.setProperty( 'aspect-ratio', `${ rendered.width } / ${ rendered.height }` );
 				}
 				const attribute = image.getAttribute( 'src' ) ?? '';
 				const shaped = srcsetShaped( attribute );

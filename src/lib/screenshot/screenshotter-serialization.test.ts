@@ -13,24 +13,35 @@ describe('capturePageHtml stylesheet serialization', () => {
     await browser.close();
   });
 
-  it('preserves a responsive image owning layer aspect ratio', async () => {
-    for (const [width, ratio] of [[390, '1 / 1'], [768, '900 / 581'], [1440, '900 / 581']] as const) {
-      const page = await browser.newPage({ viewport: { width, height: 900 } });
-      await page.setContent(`<!doctype html><style>
-        .owner { width: 100%; max-width: 554px; }
-        .owner img { display: block; width: 100%; aspect-ratio: 900 / 581; }
-        @media (max-width: 767px) { .owner img { aspect-ratio: 1 / 1; } }
-      </style><div class="owner"><img src="https://cdn.example.test/a.jpg" width="900" height="581"></div>`);
-      try {
-        const sourceHeight = await page.locator('img').evaluate((image) => image.getBoundingClientRect().height);
-        const sourceStyle = await page.locator('img').getAttribute('style');
-        const html = await capturePageHtml(page);
-        expect(sourceHeight).toBeGreaterThan(0);
-        expect(html).toMatch(new RegExp(`<img[^>]+style="[^"]*aspect-ratio:\\s*${ratio.replace(' / ', ' \\/ ')}`));
-        expect(await page.locator('img').getAttribute('style')).toBe(sourceStyle ?? '');
-      } finally {
-        await page.close();
-      }
+  it('preserves rendered image geometry when localization changes intrinsic dimensions', async () => {
+    const source = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+    const copy = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+    const svg = (width: number, height: number) =>
+      `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><rect width="100%" height="100%" fill="red"/></svg>`;
+    await source.route('https://source.example.test/**', (route) =>
+      route.fulfill({ status: 200, contentType: 'image/svg+xml', body: svg(900, 581) }),
+    );
+    await copy.route('https://local.example.test/**', (route) =>
+      route.fulfill({ status: 200, contentType: 'image/svg+xml', body: svg(1000, 581) }),
+    );
+    try {
+      await source.setContent(`<!doctype html><style>
+        .owner { width: 554px; }
+        .owner img { display: block; width: 100%; aspect-ratio: auto 900 / 581; }
+      </style><div class="owner"><img src="https://source.example.test/a.svg"></div>`);
+      await source.locator('img').evaluate((image) => (image as HTMLImageElement).decode());
+      const sourceHeight = await source.locator('img').evaluate((image) => image.getBoundingClientRect().height);
+      const html = await capturePageHtml(source);
+      expect(html).toMatch(/<img[^>]+style="[^"]*aspect-ratio:\s*\d+(?:\.\d+)?\s*\/\s*\d+/);
+      expect(html).not.toMatch(/<img[^>]+style="[^"]*aspect-ratio:\s*auto/);
+
+      await copy.setContent(html.replaceAll('https://source.example.test/a.svg', 'https://local.example.test/a.svg'));
+      await copy.locator('img').evaluate((image) => (image as HTMLImageElement).decode());
+      const copyHeight = await copy.locator('img').evaluate((image) => image.getBoundingClientRect().height);
+      expect(copyHeight).toBeCloseTo(sourceHeight, 1);
+    } finally {
+      await source.close();
+      await copy.close();
     }
   });
 
