@@ -179,6 +179,7 @@ interface CapturePerViewportArgs {
 		page: import('playwright').Page,
 		ctx: import('../../adapters/page-actions.js').LiberationContext
 	) => Promise< void >;
+	canonicalizeHtml?: ( html: string ) => string;
 	viewport: Viewport;
 	plan: ArtifactPlan;
 	url: string;
@@ -692,6 +693,12 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	} = args;
 	const now = () => new Date().toISOString();
 	const isDesktop = viewport.id === 'desktop';
+	// The adapter's rewrite of platform-owned identifiers applies to every stored
+	// HTML artifact alike, so page HTML and the captured dialogs that refer to it
+	// keep naming the same elements.
+	const canonicalize = ( html: string ): string => ( args.canonicalizeHtml ? args.canonicalizeHtml( html ) : html );
+	const canonicalizeInteractions = < T, >( report: T ): T =>
+		args.canonicalizeHtml ? canonicalizeInteractionReport( report, args.canonicalizeHtml ) : report;
 
 	resourceStore.observe( page );
 	if ( publicUrlsOnly && page.route ) {
@@ -953,7 +960,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 			// re-rendered a credit or ad; the saved document must be swept.
 			await sweepSourceCleanup( page );
 			await preserveStreamedVideoPosters( page, resourceStore, url ).catch( () => undefined );
-			const html = await capturePageHtml( page );
+			const html = canonicalize( await capturePageHtml( page ) );
 			await resourceStore.captureDomDependencies( html, url );
 			// Refuse to persist a capture whose page navigated away from the route we
 			// were asked to capture: every DOM-mutating step above (lazy-load probing,
@@ -1016,7 +1023,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		try {
 			await sweepSourceCleanup( page );
 			await preserveStreamedVideoPosters( page, resourceStore, url ).catch( () => undefined );
-			const mhtml = sanitizeFrozenHtml( await capturePageHtml( page ) );
+			const mhtml = canonicalize( sanitizeFrozenHtml( await capturePageHtml( page ) ) );
 			await resourceStore.captureDomDependencies( mhtml, url );
 			// Same route-identity guard as the desktop HTML write above — best-effort
 			// here too (this carry already silently skips on any other failure), so a
@@ -1298,7 +1305,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 				interactions.states.some( ( state ) => state.status === 'captured' ) ||
 				interactions.initialDialogs?.some( ( state ) => state.status === 'captured' ) )
 		) {
-			entry.interactions = mergeInteractionReports( entry.interactions, interactions );
+			entry.interactions = mergeInteractionReports( entry.interactions, canonicalizeInteractions( interactions ) );
 		}
 	} catch {
 		/* best-effort: baseline capture remains valid when interaction probing fails */
@@ -1778,6 +1785,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 						...( opts.fluidWidths ? { fluidWidths: opts.fluidWidths } : {} ),
 						prepareCapture: opts.prepareCapture,
 						beforeSerialize: opts.beforeSerialize,
+						...( opts.canonicalizeHtml ? { canonicalizeHtml: opts.canonicalizeHtml } : {} ),
 					} );
 				} catch ( err ) {
 					urlFailures.push( {
@@ -2058,4 +2066,33 @@ export async function lockMainFrameNavigation( page: Page ): Promise< () => Prom
 	return async () => {
 		await page.unroute( '**/*', guard ).catch( () => {} );
 	};
+}
+
+/**
+ * Apply an adapter's HTML rewrite to every string in an interaction report
+ * (dialog markup, trigger and dialog selectors), then restate each dialog's
+ * byte count, which consumers verify against the markup.
+ */
+function canonicalizeInteractionReport< T >( report: T, canonicalize: ( html: string ) => string ): T {
+	const rewrite = ( value: unknown ): unknown => {
+		if ( typeof value === 'string' ) return canonicalize( value );
+		if ( Array.isArray( value ) ) return value.map( rewrite );
+		if ( value && typeof value === 'object' ) {
+			const source = value as Record< string, unknown >;
+			const out: Record< string, unknown > = {};
+			for ( const [ key, child ] of Object.entries( source ) ) out[ key ] = rewrite( child );
+			// A complete dialog's byte count describes its markup; a truncated one
+			// records the original size, which the rewrite does not change.
+			if (
+				typeof source.html === 'string' &&
+				typeof out.html === 'string' &&
+				source.htmlBytes === Buffer.byteLength( source.html )
+			) {
+				out.htmlBytes = Buffer.byteLength( out.html );
+			}
+			return out;
+		}
+		return value;
+	};
+	return rewrite( report ) as T;
 }
