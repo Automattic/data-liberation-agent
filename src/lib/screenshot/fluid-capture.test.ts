@@ -175,6 +175,36 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		await page.close();
 	}, 20_000 );
 
+	it( 'preserves responsive wrapper reflow across desktop regimes', async () => {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		await page.setContent( `
+			<div id="wrapper" style="width:321px;height:180px"><img src="about:blank" style="display:block;width:100%;height:100%"></div>
+			<script>
+				const update = () => {
+					const width = innerWidth >= 1600 ? 358 : 321;
+					document.getElementById('wrapper').style.width = width + 'px';
+				};
+				addEventListener('resize', update);
+				update();
+			</script>
+		` );
+
+		await learnAndApplyFluidGeometry( page, { settleMs: 50 } );
+		const html = await page.evaluate( () => {
+			document.querySelectorAll( 'script' ).forEach( ( script ) => script.remove() );
+			return document.documentElement.outerHTML;
+		} );
+		const copy = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		await copy.setContent( html );
+		for ( const [ width, expected ] of [ [ 1440, 321 ], [ 1600, 358 ], [ 1728, 358 ] ] as const ) {
+			await copy.setViewportSize( { width, height: 900 } );
+			const box = await copy.locator( '#wrapper' ).boundingBox();
+			expect( Math.abs( ( box?.width ?? 0 ) - expected ), `wrapper width at ${ width }` ).toBeLessThanOrEqual( 2 );
+		}
+		await copy.close();
+		await page.close();
+	}, 30_000 );
+
 	it( 'learns runtime-written fluid font sizes', async () => {
 		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
 		await page.setContent( `

@@ -360,6 +360,7 @@ export async function capturePageHtml( page: Page ): Promise< string > {
 				);
 			};
 			const restoredImages: Array< { image: HTMLImageElement; previous: string | null } > = [];
+			const restoredAspectRatios: Array< { image: HTMLImageElement; previous: string; priority: string } > = [];
 			const placeholderGif = /^data:image\/gif;base64,R0lGODlhAQAB/i;
 			const srcsetShaped = ( value: string ) => /\s+\d+(?:\.\d+)?[wx](?=\s*(?:,|$))/i.test( value );
 			const durableImageUrl = ( value: string | null | undefined ): string => {
@@ -395,6 +396,22 @@ export async function capturePageHtml( page: Page ): Promise< string > {
 			// srcset). outerHTML keeps the attribute, so write the loaded URL
 			// immediately before serializing, then put the live attribute back.
 			for ( const image of document.querySelectorAll( 'img' ) ) {
+				// Responsive image components often put the rendered ratio on the
+				// image's owning layer through a custom property. Keep that computed
+				// contract in the static artifact: the source stylesheet/runtime may
+				// not be present when the localized image is laid out again.
+				const imageStyle = getComputedStyle( image );
+				const rendered = image.getBoundingClientRect();
+				if ( imageStyle.aspectRatio !== 'auto' && rendered.width > 0 && rendered.height > 0 ) {
+					restoredAspectRatios.push( {
+						image,
+						previous: image.style.getPropertyValue( 'aspect-ratio' ),
+						priority: image.style.getPropertyPriority( 'aspect-ratio' ),
+					} );
+					// An `auto <ratio>` declaration still lets a localized replaced image
+					// use its different intrinsic ratio. Freeze what the source rendered.
+					image.style.setProperty( 'aspect-ratio', `${ rendered.width } / ${ rendered.height }` );
+				}
 				const attribute = image.getAttribute( 'src' ) ?? '';
 				const shaped = srcsetShaped( attribute );
 				if ( ! placeholderGif.test( attribute ) && ! shaped && ! /^blob:/i.test( attribute ) ) continue;
@@ -424,6 +441,10 @@ export async function capturePageHtml( page: Page ): Promise< string > {
 				for ( const { image, previous } of restoredImages.reverse() ) {
 					if ( previous === null ) image.removeAttribute( 'src' );
 					else image.setAttribute( 'src', previous );
+				}
+				for ( const { image, previous, priority } of restoredAspectRatios.reverse() ) {
+					if ( previous === '' ) image.style.removeProperty( 'aspect-ratio' );
+					else image.style.setProperty( 'aspect-ratio', previous, priority );
 				}
 				for ( const { element, parent, next } of detached.reverse() ) parent.insertBefore( element, next );
 			}

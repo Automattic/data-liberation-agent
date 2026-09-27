@@ -63,7 +63,7 @@ export interface FluidLearningResult {
  * breakpoint and another below it (container share changes, different clamp)
  * is unmodelled — or worse, mis-modelled — when every sample sits above the
  * switch. */
-export const DEFAULT_SWEEP_WIDTHS = [ 390, 600, 768, 1024, 1280, 1440, 1920 ];
+export const DEFAULT_SWEEP_WIDTHS = [ 390, 600, 768, 1024, 1280, 1440, 1600, 1728, 1920 ];
 
 /**
  * Observe inline geometry across widths, fit a model per element and property,
