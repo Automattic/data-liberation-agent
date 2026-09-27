@@ -13,6 +13,27 @@ describe('capturePageHtml stylesheet serialization', () => {
     await browser.close();
   });
 
+  it('preserves a responsive image owning layer aspect ratio', async () => {
+    for (const [width, ratio] of [[390, '1 / 1'], [768, '900 / 581'], [1440, '900 / 581']] as const) {
+      const page = await browser.newPage({ viewport: { width, height: 900 } });
+      await page.setContent(`<!doctype html><style>
+        .owner { width: 100%; max-width: 554px; }
+        .owner img { display: block; width: 100%; aspect-ratio: 900 / 581; }
+        @media (max-width: 767px) { .owner img { aspect-ratio: 1 / 1; } }
+      </style><div class="owner"><img src="https://cdn.example.test/a.jpg" width="900" height="581"></div>`);
+      try {
+        const sourceHeight = await page.locator('img').evaluate((image) => image.getBoundingClientRect().height);
+        const sourceStyle = await page.locator('img').getAttribute('style');
+        const html = await capturePageHtml(page);
+        expect(sourceHeight).toBeGreaterThan(0);
+        expect(html).toMatch(new RegExp(`<img[^>]+style="[^"]*aspect-ratio:\\s*${ratio.replace(' / ', ' \\/ ')}`));
+        expect(await page.locator('img').getAttribute('style')).toBe(sourceStyle ?? '');
+      } finally {
+        await page.close();
+      }
+    }
+  });
+
   it('preserves linked stylesheet source text and responsive layout', async () => {
     const page = await browser.newPage({ viewport: { width: 390, height: 900 } });
     await page.setContent(`
