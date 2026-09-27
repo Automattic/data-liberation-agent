@@ -179,6 +179,7 @@ interface CapturePerViewportArgs {
 		page: import('playwright').Page,
 		ctx: import('../../adapters/page-actions.js').LiberationContext
 	) => Promise< void >;
+	canonicalizeHtml?: ( html: string ) => string;
 	viewport: Viewport;
 	plan: ArtifactPlan;
 	url: string;
@@ -360,6 +361,7 @@ export async function capturePageHtml( page: Page ): Promise< string > {
 				);
 			};
 			const restoredImages: Array< { image: HTMLImageElement; previous: string | null } > = [];
+			const restoredAspectRatios: Array< { image: HTMLImageElement; previous: string; priority: string } > = [];
 			const placeholderGif = /^data:image\/gif;base64,R0lGODlhAQAB/i;
 			const srcsetShaped = ( value: string ) => /\s+\d+(?:\.\d+)?[wx](?=\s*(?:,|$))/i.test( value );
 			const durableImageUrl = ( value: string | null | undefined ): string => {
@@ -395,6 +397,22 @@ export async function capturePageHtml( page: Page ): Promise< string > {
 			// srcset). outerHTML keeps the attribute, so write the loaded URL
 			// immediately before serializing, then put the live attribute back.
 			for ( const image of document.querySelectorAll( 'img' ) ) {
+				// Responsive image components often put the rendered ratio on the
+				// image's owning layer through a custom property. Keep that computed
+				// contract in the static artifact: the source stylesheet/runtime may
+				// not be present when the localized image is laid out again.
+				const imageStyle = getComputedStyle( image );
+				const rendered = image.getBoundingClientRect();
+				if ( imageStyle.aspectRatio !== 'auto' && rendered.width > 0 && rendered.height > 0 ) {
+					restoredAspectRatios.push( {
+						image,
+						previous: image.style.getPropertyValue( 'aspect-ratio' ),
+						priority: image.style.getPropertyPriority( 'aspect-ratio' ),
+					} );
+					// An `auto <ratio>` declaration still lets a localized replaced image
+					// use its different intrinsic ratio. Freeze what the source rendered.
+					image.style.setProperty( 'aspect-ratio', `${ rendered.width } / ${ rendered.height }` );
+				}
 				const attribute = image.getAttribute( 'src' ) ?? '';
 				const shaped = srcsetShaped( attribute );
 				if ( ! placeholderGif.test( attribute ) && ! shaped && ! /^blob:/i.test( attribute ) ) continue;
@@ -424,6 +442,10 @@ export async function capturePageHtml( page: Page ): Promise< string > {
 				for ( const { image, previous } of restoredImages.reverse() ) {
 					if ( previous === null ) image.removeAttribute( 'src' );
 					else image.setAttribute( 'src', previous );
+				}
+				for ( const { image, previous, priority } of restoredAspectRatios.reverse() ) {
+					if ( previous === '' ) image.style.removeProperty( 'aspect-ratio' );
+					else image.style.setProperty( 'aspect-ratio', previous, priority );
 				}
 				for ( const { element, parent, next } of detached.reverse() ) parent.insertBefore( element, next );
 			}
@@ -671,6 +693,12 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	} = args;
 	const now = () => new Date().toISOString();
 	const isDesktop = viewport.id === 'desktop';
+	// The adapter's rewrite of platform-owned identifiers applies to every stored
+	// HTML artifact alike, so page HTML and the captured dialogs that refer to it
+	// keep naming the same elements.
+	const canonicalize = ( html: string ): string => ( args.canonicalizeHtml ? args.canonicalizeHtml( html ) : html );
+	const canonicalizeInteractions = < T, >( report: T ): T =>
+		args.canonicalizeHtml ? canonicalizeInteractionReport( report, args.canonicalizeHtml ) : report;
 
 	resourceStore.observe( page );
 	if ( publicUrlsOnly && page.route ) {
@@ -934,7 +962,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 			// sweep — the policy lets the sweep reinstall on the fresh document.
 			await sweepSourceCleanup( page, sourcePolicy );
 			await preserveStreamedVideoPosters( page, resourceStore, url ).catch( () => undefined );
-			const html = await capturePageHtml( page );
+			const html = canonicalize( await capturePageHtml( page ) );
 			await resourceStore.captureDomDependencies( html, url );
 			// Refuse to persist a capture whose page navigated away from the route we
 			// were asked to capture: every DOM-mutating step above (lazy-load probing,
@@ -997,7 +1025,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		try {
 			await sweepSourceCleanup( page, sourcePolicy );
 			await preserveStreamedVideoPosters( page, resourceStore, url ).catch( () => undefined );
-			const mhtml = sanitizeFrozenHtml( await capturePageHtml( page ) );
+			const mhtml = canonicalize( sanitizeFrozenHtml( await capturePageHtml( page ) ) );
 			await resourceStore.captureDomDependencies( mhtml, url );
 			// Same route-identity guard as the desktop HTML write above — best-effort
 			// here too (this carry already silently skips on any other failure), so a
@@ -1279,7 +1307,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 				interactions.states.some( ( state ) => state.status === 'captured' ) ||
 				interactions.initialDialogs?.some( ( state ) => state.status === 'captured' ) )
 		) {
-			entry.interactions = mergeInteractionReports( entry.interactions, interactions );
+			entry.interactions = mergeInteractionReports( entry.interactions, canonicalizeInteractions( interactions ) );
 		}
 	} catch {
 		/* best-effort: baseline capture remains valid when interaction probing fails */
@@ -1759,6 +1787,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 						...( opts.fluidWidths ? { fluidWidths: opts.fluidWidths } : {} ),
 						prepareCapture: opts.prepareCapture,
 						beforeSerialize: opts.beforeSerialize,
+						...( opts.canonicalizeHtml ? { canonicalizeHtml: opts.canonicalizeHtml } : {} ),
 					} );
 				} catch ( err ) {
 					urlFailures.push( {
@@ -2039,4 +2068,33 @@ export async function lockMainFrameNavigation( page: Page ): Promise< () => Prom
 	return async () => {
 		await page.unroute( '**/*', guard ).catch( () => {} );
 	};
+}
+
+/**
+ * Apply an adapter's HTML rewrite to every string in an interaction report
+ * (dialog markup, trigger and dialog selectors), then restate each dialog's
+ * byte count, which consumers verify against the markup.
+ */
+function canonicalizeInteractionReport< T >( report: T, canonicalize: ( html: string ) => string ): T {
+	const rewrite = ( value: unknown ): unknown => {
+		if ( typeof value === 'string' ) return canonicalize( value );
+		if ( Array.isArray( value ) ) return value.map( rewrite );
+		if ( value && typeof value === 'object' ) {
+			const source = value as Record< string, unknown >;
+			const out: Record< string, unknown > = {};
+			for ( const [ key, child ] of Object.entries( source ) ) out[ key ] = rewrite( child );
+			// A complete dialog's byte count describes its markup; a truncated one
+			// records the original size, which the rewrite does not change.
+			if (
+				typeof source.html === 'string' &&
+				typeof out.html === 'string' &&
+				source.htmlBytes === Buffer.byteLength( source.html )
+			) {
+				out.htmlBytes = Buffer.byteLength( out.html );
+			}
+			return out;
+		}
+		return value;
+	};
+	return rewrite( report ) as T;
 }
