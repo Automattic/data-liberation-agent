@@ -196,6 +196,24 @@ describe('rewriteMediaUrls', () => {
     expect(out).toBe(html);
   });
 
+  it('leaves a rendition that embeds a mapped bare URL as a string prefix untouched', () => {
+    // Image services that derive renditions by APPENDING to the bare asset URL
+    // (no separator: …/IMG.JPG/:/ + rs=w:1160,h:720) put the mapped base inside
+    // every rendition. Rewriting such a prefix splices the local path onto the
+    // rendition's tail, producing an absent file the browser then selects as
+    // the hero's currentSrc (#398). Only a bare URL standing as the whole
+    // value may be rewritten.
+    const base = 'https://images.cdn.example/isteam/ip/abc123/IMG_2019.JPG/:/';
+    const local = 'http://localhost:8884/wp-content/uploads/2026/09/hero.jpg';
+    const truncated = `${base}rs=w:1160`;
+    const desktop = `${base}rs=w:1160,h:720`;
+    const html = `<img src="${base}" srcset="${truncated} 1160w, ${desktop} 1160w">`;
+
+    const out = rewriteMediaUrls(html, new Map([[base, local]]));
+
+    expect(out).toBe(`<img src="${local}" srcset="${truncated} 1160w, ${desktop} 1160w">`);
+  });
+
   it("rewrites Wix display filenames containing apostrophes without suffix corruption", () => {
     const hash = '670df9_dc553b632f22456e8f3e591105cdc3da';
     const base = `https://static.wixstatic.com/media/${hash}~mv2.jpg`;

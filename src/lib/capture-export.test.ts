@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as cheerio from 'cheerio';
 import { chromium } from 'playwright';
@@ -1825,6 +1825,103 @@ describe( 'exportWebsiteCapture', () => {
 		expect( image.attr( 'data-src' ) ).toBe( '/media/portrait-750.jpg' );
 		expect( image.attr( 'data-image' ) ).toBe( '/media/portrait-750.jpg' );
 	} );
+
+	it( 'keeps a runtime-selected desktop rendition whose uncaptured sibling embeds the bare original as a prefix', () => {
+		// An image runtime derives renditions by appending to the bare asset URL
+		// (`…/IMG_2019.JPG/:/` + `rs=w:1160,h:720`), so the frozen srcset names
+		// candidates the browser never fetched next to the one it painted — and
+		// the unpainted ones embed a painted sibling's URL as a string prefix.
+		// Blanking the uncaptured `rs=w:1160` used to splice every `rs=w:1160,…`
+		// sibling too, so the painted desktop rendition was dropped and only the
+		// mobile crop survived (#398: gray hero at desktop, fine at phone).
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-rendition-prefix-export-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'resources', 'screenshots' ] )
+			mkdirSync( join( outputDir, path ), { recursive: true } );
+		const cdn = 'https://images.cdn.example';
+		const base = `${ cdn }/isteam/ip/abc123/IMG_2019.JPG/:/`;
+		const rendition = ( dims: string ) => `${ base }rs=w:${ dims }`;
+		const mobile = rendition( '390,h:242' );
+		const desktop = rendition( '1160,h:720' );
+		const truncated = rendition( '1160' );
+		const oversized = rendition( '1160,h:893' );
+		const srcset = [ `${ mobile } 390w`, `${ truncated } 1160w`, `${ oversized } 1440w`, `${ desktop } 1160w` ].join(
+			', '
+		);
+		writeFileSync(
+			join( outputDir, 'html', 'homepage.html' ),
+			`<html><body><section class="hero"><img id="hero" alt="Studio" sizes="100vw" src="${ base }" srcset="${ srcset }"></section></body></html>`
+		);
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( {
+				version: 1,
+				entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },
+			} )
+		);
+		// The browser painted (and so captured) the bare original at mobile, the
+		// mobile crop, and the desktop crop; the source never served the
+		// truncated width-only and oversized candidates. Cross-origin resources
+		// are stored under the CDN-origin hash, as CapturedResourceStore does.
+		const captured: Array< [ string, string ] > = [
+			[ base, 'base-bytes' ],
+			[ mobile, 'mobile-bytes' ],
+			[ desktop, 'desktop-bytes' ],
+		];
+		const resources: Record< string, { path: string; contentType: string } > = {};
+		const externalHash = createHash( 'sha256' ).update( cdn ).digest( 'hex' ).slice( 0, 16 );
+		for ( const [ url, bytes ] of captured ) {
+			const suffix = url === base ? '' : `rs=w:${ url.split( 'rs=w:' )[ 1 ] }`;
+			const path = `external/${ externalHash }/isteam/ip/abc123/IMG_2019.JPG/:/${ suffix }.jpg`;
+			mkdirSync( dirname( join( outputDir, 'resources', path ) ), { recursive: true } );
+			writeFileSync( join( outputDir, 'resources', path ), bytes );
+			resources[ url ] = { path: `resources/${ path }`, contentType: 'image/jpeg' };
+		}
+		writeFileSync(
+			join( outputDir, 'resources', 'manifest.json' ),
+			JSON.stringify( {
+				version: 1,
+				resources,
+				failures: [ truncated, oversized ].map( ( url ) => ( { url, error: 'HTTP 404' } ) ),
+			} )
+		);
+
+		exportWebsiteCapture( {
+			outputDir,
+			sourceUrl: 'https://example.com/',
+			platform: 'generic',
+			summary: {},
+			failures: [],
+		} );
+
+		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
+		const $ = cheerio.load( html );
+		const image = $( '#hero' );
+		const exportedSrcset = image.attr( 'srcset' ) ?? '';
+		// The painted desktop rendition localizes instead of being corrupted away…
+		expect( exportedSrcset ).toMatch( /external\/[0-9a-f]+\/isteam\/ip\/abc123\/IMG_2019\.JPG\/:\/rs=w:1160,h:720\.jpg 1160w/ );
+		// …while the mobile rendition it must not sacrifice is still selectable.
+		expect( exportedSrcset ).toMatch( /rs=w:390,h:242\.jpg 390w/ );
+		// Uncaptured candidates name nothing in the artifact.
+		expect( exportedSrcset ).not.toContain( 'rs=w:1160 ' );
+		expect( html ).not.toContain( 'h:893' );
+		// Nothing the copy can select is allowed to dangle: every local candidate
+		// (and the localized src) resolves to a file that shipped.
+		for ( const candidate of exportedSrcset.split( /,(?=\s)/ ).map( ( entry ) => entry.trim() ).filter( Boolean ) ) {
+			const url = candidate.split( /\s+/ )[ 0 ] ?? '';
+			if ( url.startsWith( 'data:' ) ) continue;
+			expect( existsSync( join( outputDir, 'website', url ) ) ).toBe( true );
+		}
+		expect( existsSync( join( outputDir, 'website', image.attr( 'src' ) ?? '' ) ) ).toBe( true );
+		const diagnostics = JSON.parse( readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' ) );
+		expect( diagnostics.unresolvedDependencies ).toEqual(
+			expect.arrayContaining( [
+				expect.objectContaining( { url: truncated } ),
+				expect.objectContaining( { url: oversized } ),
+			] )
+		);
+	} );
+
 
 	it( 'binds an image whose src is a density list to the localized file instead of the placeholder', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-srcset-src-export-' ) );
