@@ -28,6 +28,15 @@ export interface LiberationHooks {
    * Best-effort: a throw is swallowed and liberation continues.
    */
   responsiveImages?(page: Page, ctx: LiberationContext): Promise<Record<string, string>>;
+  /**
+   * Rewrite a serialized HTML artifact (page HTML or a captured dialog) before
+   * it is stored. Runs on the frozen string only, never on the live page, so
+   * the platform runtime keeps working for later probes. Use it for
+   * platform-owned identifiers that vary per route but carry no meaning in a
+   * static copy. Must be deterministic and keep markup and in-document CSS
+   * paired.
+   */
+  canonicalizeHtml?(html: string): string;
 }
 
 export interface LiberationContext {

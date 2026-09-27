@@ -6,6 +6,7 @@
 import type { LiberationHooks } from '../page-actions.js';
 import { providerCreditRules } from '../../lib/source-cleanup.js';
 import type { Locator, Page } from 'playwright';
+import { canonicalizeWixInstanceIds } from './instance-ids.js';
 
 /** Wix media ids look like `8e80e7_a1b2…`, stable across crops of one asset. */
 const WIX_MEDIA_ID = /([a-z0-9]{4,12}_[a-z0-9]{24,48})/i;
@@ -359,6 +360,7 @@ export async function settleScrollReactiveChrome( page: Page ): Promise< void > 
 }
 
 export const capture: LiberationHooks = {
+  canonicalizeHtml: canonicalizeWixInstanceIds,
   cleanupRules: [
     // Wix publishes the measured height of its own banner into these, and its
     // layout reads them from the sticky header, the page root and the pinned
