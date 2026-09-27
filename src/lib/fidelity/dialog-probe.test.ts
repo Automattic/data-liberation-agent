@@ -37,4 +37,22 @@ describe( 'probeDialogs', () => {
 		await page.close();
 		await browser.close();
 	}, 20_000 );
+
+	it( 'counts a visibly open controlled panel without closing it', async () => {
+		browser = await chromium.launch();
+		const page = await browser.newPage();
+		await page.setContent( `
+			<style>.panel { display:none; }.panel.open { display:block; }</style>
+			<button id="trigger" aria-expanded="true" aria-controls="panel">Current panel</button>
+			<div id="panel" class="panel open" role="region">Visible content</div>
+		` );
+
+		const probes = await probeDialogs( page );
+
+		expect( probes ).toEqual( [ { label: 'Current panel', opened: true } ] );
+		expect( await page.locator( '#trigger' ).getAttribute( 'aria-expanded' ) ).toBe( 'true' );
+		expect( await page.locator( '#panel' ).isVisible() ).toBe( true );
+		await page.close();
+		await browser.close();
+	}, 20_000 );
 } );

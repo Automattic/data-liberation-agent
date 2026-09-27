@@ -41,13 +41,22 @@ export async function probeDialogs( page: Page ): Promise< DialogProbe[] > {
 			const probes = [];
 			for (const trigger of triggers) {
 				const label = (trigger.getAttribute('aria-label') || trigger.getAttribute('data-dla-disclosure-label') || trigger.innerText || 'dialog').replace(/\\s+/g, ' ').trim().slice(0, 40);
+				const controlled = trigger.getAttribute('aria-controls');
+				const panel = controlled ? document.getElementById(controlled) : null;
+				const details = trigger.closest('details');
+				const alreadyOpen =
+					(trigger.getAttribute('aria-expanded') === 'true' && Boolean(panel && isShown(panel))) ||
+					Boolean(details && details.open);
+				if (alreadyOpen) {
+					probes.push({ label: label || 'dialog', opened: true });
+					continue;
+				}
 				const before = openCount();
 				const expanded = trigger.getAttribute('aria-expanded') === 'true';
 				const bodyClass = document.body.className;
 				const hidden = [...document.querySelectorAll('[aria-hidden="true"]')];
 				trigger.click();
 				await new Promise((resolve) => setTimeout(resolve, 400));
-				const details = trigger.closest('details');
 				const revealed = hidden.some((element) => element.getAttribute('aria-hidden') !== 'true');
 				const opened =
 					openCount() > before ||

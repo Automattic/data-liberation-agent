@@ -198,6 +198,14 @@ function boundDisclosureHtml(html: string): { html: string; bytes: number; trunc
  * geometry, and BEFORE `page.content()` is serialized, so the captured static
  * HTML contains the restored panels directly (no post-hoc wiring needed).
  *
+ * Populated disclosures whose panel is already in the document, only hidden
+ * until a click, are learned the same way: the click is observed, the class,
+ * hidden, display, or parent attribute that revealed the panel is recorded on
+ * the trigger, and the document is put back exactly as it was. A later static
+ * runtime replays that observation. The resting open/closed state is preserved
+ * so a screenshot and a compare that re-expands the source still see the same
+ * first view.
+ *
  * The same candidate pass also includes visible "show more" / "read more"
  * toggles. Those are not left open by `expandCollapsedContent`: the opened
  * form is recorded here and the collapsed label is put back. A second click
@@ -210,7 +218,7 @@ function boundDisclosureHtml(html: string): { html: string; bytes: number; trunc
 export async function hydrateDisclosureContent(page: Page): Promise<CapturedDialogInteraction[]> {
   let raw: RawDisclosureRecord[];
   try {
-    const result = await page.evaluate(async ({ limit, settleMs, labels, toggleLimit }: { limit: number; settleMs: number; labels: string[]; toggleLimit: number }) => {
+    const evaluateDisclosure = async ({ limit, settleMs, labels, toggleLimit }: { limit: number; settleMs: number; labels: string[]; toggleLimit: number }) => {
       const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
       const hasContent = (element: Element) =>
         Boolean((element.textContent || '').trim()) ||
@@ -434,8 +442,187 @@ export async function hydrateDisclosureContent(page: Page): Promise<CapturedDial
         hydrated += observed.length;
         await wait(100);
       }
+
+      const shown = (element: Element) => {
+        const rect = element.getBoundingClientRect();
+        const style = getComputedStyle(element);
+        return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden' && !element.hasAttribute('hidden');
+      };
+      const tokens = (element: Element) => (element.getAttribute('class') || '').split(/\s+/).filter(Boolean);
+      const attrMap = (element: Element | null) => {
+        const map: Record<string, string> = {};
+        if (!element) return map;
+        for (const attribute of element.attributes) map[attribute.name] = attribute.value;
+        return map;
+      };
+      const dataDelta = (before: Record<string, string>, after: Record<string, string>, removed: boolean) => {
+        const source = removed ? before : after;
+        const other = removed ? after : before;
+        for (const [name, value] of Object.entries(source)) {
+          if (!name.startsWith('data-') || name.startsWith('data-dla-') || name in other) continue;
+          return { name, value };
+        }
+        return null;
+      };
+      const classDelta = (before: string[], after: string[], removed: boolean) => {
+        const source = removed ? before : after;
+        const other = removed ? after : before;
+        return source.filter((token) => !other.includes(token)).join(' ');
+      };
+      const regionFor = (trigger: HTMLElement): HTMLElement | null => {
+        if (trigger.hasAttribute('aria-haspopup') || !safeToActivate(trigger) || !visible(trigger) || isExpandToggle(trigger)) return null;
+        const controlledId = trigger.getAttribute('aria-controls') || '';
+        const controlled = controlledId ? document.getElementById(controlledId) : null;
+        if (controlled && controlled.getAttribute('role') === 'region' && !controlled.dataset.dlaHydratedDisclosure && hasContent(controlled)) {
+          return controlled;
+        }
+        if (!trigger.id) return null;
+        const labelled = document.querySelector<HTMLElement>(`[role="region"][aria-labelledby="${cssEscape(trigger.id)}"]`);
+        if (!labelled || labelled.dataset.dlaHydratedDisclosure || !hasContent(labelled)) return null;
+        return labelled;
+      };
+      const waitExpanded = async (trigger: HTMLElement, want: boolean) => {
+        for (let attempt = 0; attempt < 20; attempt++) {
+          if ((trigger.getAttribute('aria-expanded') === 'true') === want) return true;
+          await wait(50);
+        }
+        return (trigger.getAttribute('aria-expanded') === 'true') === want;
+      };
+      const parentData = (element: Element | null) => {
+        const map: Record<string, string> = {};
+        for (const [name, value] of Object.entries(attrMap(element))) {
+          if (name.startsWith('data-') && !name.startsWith('data-dla-')) map[name] = value;
+        }
+        return map;
+      };
+      const snapshotOf = (trigger: HTMLElement, panel: HTMLElement) => ({
+        expanded: trigger.getAttribute('aria-expanded') === 'true',
+        panelClass: panel.getAttribute('class') || '',
+        panelHidden: panel.hasAttribute('hidden'),
+        panelDisplay: panel.style.display || '',
+        parentData: parentData(panel.parentElement),
+      });
+      const applySnapshot = (trigger: HTMLElement, panel: HTMLElement, snap: ReturnType<typeof snapshotOf>) => {
+        trigger.setAttribute('aria-expanded', snap.expanded ? 'true' : 'false');
+        if (snap.panelClass) panel.setAttribute('class', snap.panelClass);
+        else panel.removeAttribute('class');
+        if (snap.panelHidden) panel.setAttribute('hidden', '');
+        else panel.removeAttribute('hidden');
+        if (snap.panelDisplay) panel.style.display = snap.panelDisplay;
+        else panel.style.removeProperty('display');
+        const parent = panel.parentElement;
+        if (!parent) return;
+        for (const attribute of Array.from(parent.attributes)) {
+          if (attribute.name.startsWith('data-') && !attribute.name.startsWith('data-dla-') && !(attribute.name in snap.parentData)) {
+            parent.removeAttribute(attribute.name);
+          }
+        }
+        for (const [name, value] of Object.entries(snap.parentData)) parent.setAttribute(name, value);
+      };
+      const candidates = Array.from(document.querySelectorAll<HTMLElement>('[aria-expanded][aria-controls], [aria-expanded][id]'))
+        .filter((trigger, index, all) => all.indexOf(trigger) === index && regionFor(trigger));
+      const ordered = [
+        ...candidates.filter((trigger) => trigger.getAttribute('aria-expanded') === 'true'),
+        ...candidates.filter((trigger) => trigger.getAttribute('aria-expanded') !== 'true'),
+      ].slice(0, limit);
+      const observed = ordered.flatMap((trigger) => {
+        const panel = regionFor(trigger);
+        return panel ? [{ trigger, panel, snap: snapshotOf(trigger, panel) }] : [];
+      });
+      const restoreAll = () => {
+        for (const entry of observed) applySnapshot(entry.trigger, entry.panel, entry.snap);
+      };
+      const exclusiveEdges: Array<[HTMLElement, HTMLElement]> = [];
+      for (const { trigger, panel, snap } of observed) {
+        if (trigger.hasAttribute('data-dla-inline-disclosure')) continue;
+        const expanded = snap.expanded;
+        if (!expanded && shown(panel)) continue;
+        if (expanded && !shown(panel)) continue;
+        const beforeClass = tokens(panel);
+        const beforeParentClass = tokens(panel.parentElement || panel);
+        const beforeAttrs = attrMap(panel.parentElement);
+        const beforeHidden = panel.hasAttribute('hidden');
+        const beforeDisplay = panel.style.display;
+        const beforeRoute = currentRoute();
+        const beforeState = history.state;
+        let toggled = false;
+        for (let attempt = 0; attempt < 3 && !toggled; attempt++) {
+          try { trigger.click(); } catch { break; }
+          await wait(60);
+          if (currentRoute() !== beforeRoute) break;
+          toggled = await waitExpanded(trigger, !expanded);
+          if (!toggled) await wait(250);
+        }
+        if (currentRoute() !== beforeRoute) {
+          try {
+            history.pushState(beforeState, '', beforeRoute);
+            window.dispatchEvent(new PopStateEvent('popstate', { state: beforeState }));
+          } catch { /* ignore */ }
+          restoreAll();
+          break;
+        }
+        if (!toggled) {
+          restoreAll();
+          continue;
+        }
+        const openClass = classDelta(beforeClass, tokens(panel), expanded);
+        const parentClass = classDelta(beforeParentClass, tokens(panel.parentElement || panel), expanded);
+        const itemAttr = dataDelta(beforeAttrs, attrMap(panel.parentElement), expanded);
+        const usesHidden = beforeHidden !== panel.hasAttribute('hidden');
+        const display = !expanded && panel.style.display && panel.style.display !== beforeDisplay ? panel.style.display : '';
+        const revealed = expanded ? !shown(panel) : shown(panel);
+        for (const sibling of observed) {
+          if (sibling.trigger !== trigger && sibling.snap.expanded && sibling.trigger.getAttribute('aria-expanded') === 'false') {
+            exclusiveEdges.push([trigger, sibling.trigger]);
+          }
+        }
+        restoreAll();
+        if (!revealed && !openClass && !parentClass && !usesHidden && !display && !itemAttr) continue;
+        if (!panel.id) panel.id = `dla-inline-panel-${records.length}`;
+        if (!trigger.getAttribute('aria-controls')) trigger.setAttribute('aria-controls', panel.id);
+        trigger.setAttribute('data-dla-inline-disclosure', '');
+        if (openClass) trigger.setAttribute('data-dla-inline-open-class', openClass);
+        if (parentClass) trigger.setAttribute('data-dla-inline-parent-class', parentClass);
+        if (usesHidden) trigger.setAttribute('data-dla-inline-hidden', '');
+        if (display) trigger.setAttribute('data-dla-inline-display', display);
+        if (itemAttr && panel.parentElement) {
+          panel.parentElement.setAttribute('data-dla-inline-open-attr', itemAttr.name);
+          panel.parentElement.setAttribute('data-dla-inline-open-value', itemAttr.value);
+        }
+        records.push({ status: 'captured', trigger: describeTrigger(trigger), target: describe(panel), html: panel.outerHTML });
+      }
+      const exclusiveGroups = new Map<HTMLElement, Set<HTMLElement>>();
+      for (const [left, right] of exclusiveEdges) {
+        const leftGroup = exclusiveGroups.get(left) || new Set([left]);
+        const rightGroup = exclusiveGroups.get(right) || new Set([right]);
+        const merged = new Set([...leftGroup, ...rightGroup]);
+        for (const member of merged) exclusiveGroups.set(member, merged);
+      }
+      const writtenGroups = new Set<Set<HTMLElement>>();
+      for (const [trigger, group] of exclusiveGroups) {
+        if (writtenGroups.has(group)) continue;
+        writtenGroups.add(group);
+        const key = `inline-exclusive-${writtenGroups.size - 1}`;
+        for (const member of group) member.setAttribute('data-dla-inline-exclusive-group', key);
+      }
+      restoreAll();
       return records;
-    }, { limit: MAX_DISCLOSURE_CANDIDATES, settleMs: MAX_DISCLOSURE_SETTLE_MS, labels: EXPAND_TOGGLE_LABELS, toggleLimit: MAX_EXPAND_TOGGLES });
+    };
+    // tsx keeps function names by rewriting this callback with a `__name` helper
+    // that exists in Node and not in the page. Evaluate the source as a string
+    // so the helper is defined where the callback actually runs.
+    const result = await page.evaluate(
+      '(() => { function __name(fn) { return fn; } return (' +
+        evaluateDisclosure.toString() +
+        ')(' +
+        JSON.stringify({
+          limit: MAX_DISCLOSURE_CANDIDATES,
+          settleMs: MAX_DISCLOSURE_SETTLE_MS,
+          labels: EXPAND_TOGGLE_LABELS,
+          toggleLimit: MAX_EXPAND_TOGGLES,
+        }) +
+        '); })()'
+    );
     raw = Array.isArray(result) ? (result as RawDisclosureRecord[]) : [];
   } catch {
     raw = [];

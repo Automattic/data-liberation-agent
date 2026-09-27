@@ -7,6 +7,8 @@ import type { AddressInfo } from 'node:net';
 import { chromium, type Browser } from 'playwright';
 import { assessBody, expandCollapsedContent, hydrateDisclosureContent, waitForAppWidgets, readPngHeight, classifyEmptyBodies, KNOWN_WIDGETS, type PageStat } from './dynamic-content.js';
 import { extractFaqsFromHtml } from '../replicate/faq-extract.js';
+import { wireCapturedDialogs } from '../static-dialogs.js';
+import { probeDialogs } from '../fidelity/dialog-probe.js';
 
 // Fictional content only (no source-site data).
 const wrap = (bodyInner: string) =>
@@ -331,6 +333,120 @@ describe('interaction + wait helpers (Phase 1/2, browser)', () => {
       { question: 'Question one?', answer: 'First lazy answer.' },
       { question: 'Question two?', answer: 'Second lazy answer.' },
     ]);
+    await page.close();
+  });
+
+  it('keeps several independent populated accordion triggers operable after scripts are stripped', async () => {
+    const page = await browser.newPage();
+    await page.setContent(`
+      <style>
+        .panel { display: none; }
+        .panel.revealed { display: block; }
+        .item[data-open="true"] .mark { transform: rotate(45deg); }
+      </style>
+      <ul>
+        <li class="item"><button id="q1" aria-expanded="false" aria-controls="a1">First question?<span class="mark"></span></button><div id="a1" class="panel" role="region" aria-labelledby="q1"><p>First answer.</p></div></li>
+        <li class="item"><button id="q2" aria-expanded="false" aria-controls="a2">Second question?<span class="mark"></span></button><div id="a2" class="panel" role="region" aria-labelledby="q2"><p>Second answer.</p></div></li>
+        <li class="item"><button id="q3" aria-expanded="false" aria-controls="a3">Third question?<span class="mark"></span></button><div id="a3" class="panel" role="region" aria-labelledby="q3"><p>Third answer.</p></div></li>
+      </ul>
+      <script>
+        document.querySelectorAll('button[aria-controls]').forEach((button) => {
+          button.addEventListener('click', () => {
+            const opening = button.getAttribute('aria-expanded') !== 'true';
+            const panel = document.getElementById(button.getAttribute('aria-controls'));
+            const item = button.closest('.item');
+            button.setAttribute('aria-expanded', opening ? 'true' : 'false');
+            panel.classList.toggle('revealed', opening);
+            if (opening) item.setAttribute('data-open', 'true');
+            else item.removeAttribute('data-open');
+          });
+        });
+      </script>
+    `);
+
+    const learned = await hydrateDisclosureContent(page);
+    expect(learned.filter((state) => state.status === 'captured')).toHaveLength(3);
+    expect(await page.locator('[aria-expanded="true"]').count()).toBe(0);
+    expect(await page.locator('#a1').isVisible()).toBe(false);
+    const serialized = (await page.content()).replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '');
+    expect(serialized).toContain('data-dla-inline-disclosure');
+    expect(serialized).toContain('data-dla-inline-open-class="revealed"');
+    expect(serialized).not.toContain('addEventListener');
+    const portable = wireCapturedDialogs(serialized, learned);
+    expect(portable).toContain('data-dla-inline-disclosure-runtime');
+    expect(portable).not.toContain('class="dla-disclosure"');
+
+    for (const width of [390, 1600]) {
+      await page.setViewportSize({ width, height: 800 });
+      await page.setContent(portable);
+      await expandCollapsedContent(page);
+      expect(await page.locator('[aria-expanded="true"]').count()).toBe(3);
+      const probes = await probeDialogs(page);
+      expect(probes.map((probe) => probe.label)).toEqual(['First question?', 'Second question?', 'Third question?']);
+      expect(probes.every((probe) => probe.opened)).toBe(true);
+      await page.setContent(portable);
+      for (const id of ['q1', 'q2', 'q3']) {
+        await page.locator(`#${id}`).click();
+        expect(await page.locator(`#${id}`).getAttribute('aria-expanded')).toBe('true');
+        expect(await page.locator(`#a${id.slice(1)}`).isVisible()).toBe(true);
+      }
+      expect(await page.locator('[aria-expanded="true"]').count()).toBe(3);
+      await page.locator('#q1').click();
+      expect(await page.locator('#q1').getAttribute('aria-expanded')).toBe('false');
+      expect(await page.locator('#a1').isVisible()).toBe(false);
+      expect(await page.locator('#q2').getAttribute('aria-expanded')).toBe('true');
+      expect(await page.locator('#a2').isVisible()).toBe(true);
+    }
+    await page.close();
+  });
+
+  it('restores a single-open accordion after learning each populated trigger', async () => {
+    const page = await browser.newPage();
+    await page.setContent(`
+      <style>
+        .panel { display: none; }
+        .panel.revealed { display: block; }
+      </style>
+      <ul>
+        <li class="item" data-open="true"><button id="q1" aria-expanded="true" aria-controls="a1">First question?</button><div id="a1" class="panel revealed" role="region" aria-labelledby="q1"><p>First answer.</p></div></li>
+        <li class="item"><button id="q2" aria-expanded="false" aria-controls="a2">Second question?</button><div id="a2" class="panel" role="region" aria-labelledby="q2"><p>Second answer.</p></div></li>
+        <li class="item"><button id="q3" aria-expanded="false" aria-controls="a3">Third question?</button><div id="a3" class="panel" role="region" aria-labelledby="q3"><p>Third answer.</p></div></li>
+      </ul>
+      <script>
+        document.querySelectorAll('button[aria-controls]').forEach((button) => {
+          button.addEventListener('click', () => {
+            const opening = button.getAttribute('aria-expanded') !== 'true';
+            document.querySelectorAll('button[aria-controls]').forEach((other) => {
+              const panel = document.getElementById(other.getAttribute('aria-controls'));
+              const item = other.closest('.item');
+              const on = other === button && opening;
+              other.setAttribute('aria-expanded', on ? 'true' : 'false');
+              panel.classList.toggle('revealed', on);
+              if (on) item.setAttribute('data-open', 'true');
+              else item.removeAttribute('data-open');
+            });
+          });
+        });
+      </script>
+    `);
+    const learned = await hydrateDisclosureContent(page);
+    expect(learned.filter((state) => state.status === 'captured')).toHaveLength(3);
+    expect(await page.locator('#q1').getAttribute('aria-expanded')).toBe('true');
+    expect(await page.locator('#a1').isVisible()).toBe(true);
+    expect(await page.locator('#q2').getAttribute('aria-expanded')).toBe('false');
+    expect(await page.locator('#a2').isVisible()).toBe(false);
+    expect(await page.locator('#q3').getAttribute('aria-expanded')).toBe('false');
+    const portable = wireCapturedDialogs(
+      (await page.content()).replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, ''),
+      learned
+    );
+    expect(portable).toContain('data-dla-inline-exclusive-group');
+    await page.setContent(portable);
+    await page.locator('#q2').click();
+    expect(await page.locator('#q1').getAttribute('aria-expanded')).toBe('false');
+    expect(await page.locator('#a1').isVisible()).toBe(false);
+    expect(await page.locator('#q2').getAttribute('aria-expanded')).toBe('true');
+    expect(await page.locator('#a2').isVisible()).toBe(true);
     await page.close();
   });
 
