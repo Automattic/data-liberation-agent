@@ -61,6 +61,10 @@ export interface CleanupReport {
   unknowns?: string[];
   /** Orphaned `#id` style rules removed from inline styles after element removal. */
   strippedCssRules?: number;
+  /** Installed over a document whose earlier cleanup state was lost to a
+   *  source-side re-initialization, so the evidence names the report actually
+   *  behind the captured artifacts rather than an unbroken lifecycle. */
+  recovered?: boolean;
 }
 
 const AD_RULES: CleanupRule[] = [
@@ -107,8 +111,9 @@ export function validateCleanupPolicy(value: unknown): asserts value is CleanupP
 }
 
 /** This function is serialized into the page. All policy and mechanics live
- * here so live capture and comparison use identical removal/reflow behavior. */
-export function installCleanupInPage(policy: CleanupPolicy): CleanupReport {
+ *  here so live capture and comparison use identical removal/reflow behavior. */
+export function installCleanupInPage(args: { policy: CleanupPolicy; recovered?: boolean }): CleanupReport {
+  const { policy, recovered } = args;
   // Polyfill tsx/esbuild's __name helper inside the page (mirrors screenshotter)
   // — page.evaluate closures serialized under tsx carry __name() instrumentation
   // that the built bundle does not emit.
@@ -415,36 +420,65 @@ export function installCleanupInPage(policy: CleanupPolicy): CleanupReport {
   });
   observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'id', 'src', 'href', 'data-ad-slot'] });
   host.__dlaCleanup = { report, observer, sweep };
+  if (recovered) report.recovered = true;
   return report;
 }
 
-export async function applySourceCleanup(page: Page, policy: CleanupPolicy): Promise<CleanupReport> {
+export async function applySourceCleanup(page: Page, policy: CleanupPolicy, opts: { recovered?: boolean } = {}): Promise<CleanupReport> {
   validateCleanupPolicy(policy);
-  return page.evaluate(installCleanupInPage, policy);
+  return page.evaluate(installCleanupInPage, { policy, ...(opts.recovered ? { recovered: true } : {}) });
 }
 
 /**
  * Run the installed cleanup once more, now. The mutation observer stops after
  * its round budget, so a page that re-renders a credit or ad later is only
  * clean after an explicit sweep. Call this immediately before serializing the
- * document. A page without installed cleanup is left alone.
+ * document.
+ *
+ * When the in-page state is gone the source re-initialized its document after
+ * the policy was installed (a builder runtime reloading or rebooting itself —
+ * the same-URL reload never reaches the route-drift guard, so everything down
+ * to serialization runs on the fresh document). With a policy in hand the
+ * sweep reinstalls on the document that is about to be serialized instead of
+ * silently leaving it dirty; the fresh report carries `recovered` so the
+ * evidence shows the reinstallation. Without a policy it is left alone.
  */
-export async function sweepSourceCleanup(page: Page): Promise<void> {
-  await page.evaluate(() => {
-    (window as unknown as { __dlaCleanup?: { sweep: () => void } }).__dlaCleanup?.sweep();
+export async function sweepSourceCleanup(page: Page, policy?: CleanupPolicy): Promise<void> {
+  const present = await page.evaluate(() => {
+    const state = (window as unknown as { __dlaCleanup?: { sweep: () => void } }).__dlaCleanup;
+    state?.sweep();
+    return Boolean(state);
   });
+  if (!present && policy) await applySourceCleanup(page, policy, { recovered: true });
 }
 
-export async function readSourceCleanup(page: Page): Promise<CleanupReport> {
-  return page.evaluate(() => {
-    const state = (window as unknown as { __dlaCleanup?: { report: CleanupReport; sweep: () => void } }).__dlaCleanup;
-    if (!state) throw new Error('Source cleanup evidence is missing');
-    state.sweep();
-    state.report.unknowns = [];
-    const frames = document.querySelectorAll('iframe,object,embed').length;
-    if (frames) state.report.unknowns.push(`${frames} retained embedded surface(s) were not inspected internally for advertising`);
-    const shadows = [...document.querySelectorAll('*')].filter((node) => node.shadowRoot).length;
-    if (shadows) state.report.unknowns.push(`${shadows} shadow root(s) were not inspected internally`);
-    return state.report;
-  });
+/** Thrown inside the page; the message must stay in sync across the evaluate
+ *  boundary, where Playwright delivers it as `page.evaluate: Error: …`. */
+const MISSING_EVIDENCE_MESSAGE = 'Source cleanup evidence is missing';
+
+function isMissingCleanupEvidence(error: unknown): boolean {
+  return error instanceof Error && error.message.includes(MISSING_EVIDENCE_MESSAGE);
+}
+
+export async function readSourceCleanup(page: Page, policy?: CleanupPolicy): Promise<CleanupReport> {
+  try {
+    return await page.evaluate(() => {
+      const state = (window as unknown as { __dlaCleanup?: { report: CleanupReport; sweep: () => void } }).__dlaCleanup;
+      if (!state) throw new Error('Source cleanup evidence is missing');
+      state.sweep();
+      state.report.unknowns = [];
+      const frames = document.querySelectorAll('iframe,object,embed').length;
+      if (frames) state.report.unknowns.push(`${frames} retained embedded surface(s) were not inspected internally for advertising`);
+      const shadows = [...document.querySelectorAll('*')].filter((node) => node.shadowRoot).length;
+      if (shadows) state.report.unknowns.push(`${shadows} shadow root(s) were not inspected internally`);
+      return state.report;
+    });
+  } catch (error) {
+    // Same recovery as the pre-serialization sweep, at the authoritative read:
+    // a re-initialization that lands after the sweep still has cleanup run on
+    // the document the capture is reporting for, so one lost in-page state no
+    // longer fails a route whose artifacts are otherwise clean.
+    if (!policy || !isMissingCleanupEvidence(error)) throw error;
+    return applySourceCleanup(page, policy, { recovered: true });
+  }
 }
