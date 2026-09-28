@@ -158,8 +158,19 @@ export function normalizeImageKey( src: string ): string {
 	if ( src.startsWith( 'data:' ) ) return `data:${ src.slice( 5 ).split( ';' )[ 0 ] ?? '' }`;
 	if ( src.startsWith( 'blob:' ) ) return 'blob:';
 	const path = src.split( /[?#]/ )[ 0 ] ?? '';
-	const slash = path.lastIndexOf( '/' );
-	const name = slash >= 0 ? path.slice( slash + 1 ) : path;
+	const segments = path.split( '/' );
+	let name = segments.at( -1 ) ?? '';
+	// Some image services append crop/resize path segments after the original
+	// filename. Those transform parameters can change across renditions and
+	// after localization; the earlier image filename still names the picture.
+	for ( let index = segments.length - 2; index >= 0; index-- ) {
+		const segment = segments[ index ];
+		if ( ! segment || ! /\.(?:avif|gif|jpe?g|png|svg|webp)$/i.test( segment ) ) continue;
+		if ( segments.slice( index + 1 ).some( ( suffix ) => /[:=]|%3[ad]/i.test( suffix ) ) ) {
+			name = segment;
+			break;
+		}
+	}
 	const slugged = sanitizeMediaFilename( name ).toLowerCase();
 	const stem = slugged.replace( /\.[a-z0-9]+$/, '' );
 	const stripped = stem.replace( /-(?:\d+x\d+|scaled|\d+)$/, '' );
