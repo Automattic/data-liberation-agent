@@ -10,6 +10,7 @@ import {
   waitForAnimations,
   waitForRenderIdle,
   waitForDomQuiescence,
+  waitForDeclaredLoadingState,
 } from './page-helpers.js';
 
 type MockPage = {
@@ -130,6 +131,33 @@ describe('waitForDomQuiescence', () => {
     const page = makePage();
     page.evaluate = vi.fn().mockImplementation(() => new Promise(() => {}));
     await expect(waitForDomQuiescence(page as never, 10, 30)).resolves.toBeUndefined();
+  });
+});
+
+describe('declared loading state', () => {
+  let browser: Browser;
+
+  beforeAll(async () => { browser = await chromium.launch(); });
+  afterAll(async () => { await browser.close(); });
+
+  it('captures the final authored text after a sequence with quiet gaps between timers', async () => {
+    const page = await browser.newPage();
+    await page.setContent(`<body class="loading"><p id="status">Starting</p><script>
+      setTimeout(() => document.querySelector('#status').textContent = 'Halfway', 900);
+      setTimeout(() => { document.querySelector('#status').textContent = 'Complete'; document.body.classList.remove('loading'); }, 1800);
+    </script></body>`);
+    await waitForStable(page, 0, 1_000);
+    expect(await page.locator('#status').textContent()).toBe('Complete');
+    await page.close();
+  });
+
+  it('bounds a loading state that never clears', async () => {
+    const page = await browser.newPage();
+    await page.setContent('<body class="loading"><p>Static content</p></body>');
+    const started = Date.now();
+    await waitForDeclaredLoadingState(page, 50);
+    expect(Date.now() - started).toBeLessThan(2_000);
+    await page.close();
   });
 });
 
