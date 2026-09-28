@@ -158,6 +158,7 @@ export interface FidelityReport {
 
 interface CaptureReceipt {
 	cleanup?: { policy: CleanupPolicy; complete: boolean; evidencePath?: string };
+	sourceInteractivity?: { schema: string; path: string; unreproduced_route_count: number };
 	source?: { url?: string };
 	websiteRoot?: string;
 	routes?: Array< { url?: string; path?: string } >;
@@ -726,6 +727,13 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 	const log = options.log ?? ( () => {} );
 	const { websiteDir, receiptPath } = resolveCheckDirectory( options.directory );
 	const receipt = JSON.parse( readFileSync( receiptPath, 'utf8' ) ) as CaptureReceipt;
+	const motionPages = receipt.sourceInteractivity?.schema === 'data-liberation/source-interactivity/v1'
+		&& receipt.sourceInteractivity.path === 'source-interactivity.json'
+		? JSON.parse( readFileSync( join( dirname( receiptPath ), receipt.sourceInteractivity.path ), 'utf8' ) ) as { pages?: Array< { url: string; status: string; signals: string[] } > }
+		: undefined;
+	const unreproducedMotion = new Map( ( motionPages?.pages ?? [] )
+		.filter( ( page ) => page.status === 'unreproduced' )
+		.map( ( page ) => [ page.url, page.signals ] ) );
 	if (receipt.cleanup) validateCleanupPolicy(receipt.cleanup.policy);
 	const cleanupReports: CleanupReport[] = [];
 	const sourceUrl = receipt.source?.url;
@@ -881,6 +889,8 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 				if ( pair.candidateRetained ) {
 					checked.failures.push( `candidate retains advertising or source attribution (${ pair.candidateRetained } removable)` );
 				}
+				const motionSignals = unreproducedMotion.get( sourceHref );
+				if ( motionSignals ) checked.failures.push( `source motion not reproduced by capture: ${ motionSignals.join( ', ' ) }` );
 				const score: RouteScore = {
 					route,
 					viewport: width,
@@ -937,6 +947,11 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 					...scoreViewport( dialogOnly( pair.source ), dialogOnly( pair.liberated ) ),
 					route,
 				};
+				const motionSignals = unreproducedMotion.get( sourceHref );
+				if ( motionSignals ) {
+					score.failures.push( `source motion not reproduced by capture: ${ motionSignals.join( ', ' ) }` );
+					score.pass = false;
+				}
 				score.notes.push( 'interactivity' );
 				scores.push( score );
 			}
