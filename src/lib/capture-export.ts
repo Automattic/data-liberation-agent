@@ -44,6 +44,7 @@ import {
 	type CapturedResourceManifest,
 } from './screenshot/resource-capture.js';
 import { isSourcePromotion } from './source-cleanup.js';
+import { inspectSourceInteractivity, SOURCE_INTERACTIVITY_SCHEMA, type SourceInteractivityPage } from './source-interactivity.js';
 
 export const CAPTURE_RECEIPT_SCHEMA = 'data-liberation/capture-receipt/v1';
 export const SOURCE_PROFILE_SCHEMA = 'data-liberation/source-profile/v1';
@@ -207,6 +208,7 @@ interface CaptureEntry {
 	interactions?: InteractionStatesReport;
 	scrollStates?: ScrollStatesReport;
 	styleHoistContext: StyleHoistContext;
+	sourceInteractivity: SourceInteractivityPage;
 }
 
 function isUsableSectionEvidence( sections: unknown ): sections is Record< string, unknown >[] {
@@ -3179,6 +3181,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 	mkdirSync( stagedHtmlDir, { recursive: true } );
 
 	const capturedEntries: CaptureEntry[] = [];
+	const resourceManifest = capturedResources( outputDir );
 	const interactionPages: InteractionStatesReport[] = [];
 	const scrollStatesPages: ScrollStatesReport[] = [];
 	const excludedRoutes: string[] = [];
@@ -3229,6 +3232,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 			continue;
 		}
 		const rawDesktopHtml = readFileSync( capturedHtmlPath, 'utf8' );
+		const sourceInteractivity = inspectSourceInteractivity( rawDesktopHtml, url, outputDir, resourceManifest );
 		// A client-routed SPA answers every route with HTTP 200 and renders its
 		// own not-found screen in JavaScript, so the HTTP-status check above
 		// (failuresAreAbsentDocument) never sees it: the entry has HTML, capture
@@ -3297,6 +3301,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 			interactions: entry.interactions,
 			scrollStates: entry.scrollStates,
 			styleHoistContext,
+			sourceInteractivity,
 		} );
 		if (
 			entry.interactions?.schema === INTERACTION_STATES_SCHEMA ||
@@ -3457,7 +3462,6 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 	const unresolvedMedia: Array< { url: string; error: string } > = [];
 	const assets: Array< { sourceUrl: string; path: string } > = [];
 	const mediaStubs = MediaStubStore.load( outputDir );
-	const resourceManifest = capturedResources( outputDir );
 	const assetReferenceLocations = assetReferences(
 		retainedEntries,
 		routePathOf,
@@ -4047,6 +4051,17 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 			( state ) => state.dismissal?.verified
 		).length,
 	};
+	const unreproducedMotion = capturedEntries.map( ( entry ) => entry.sourceInteractivity )
+		.filter( ( page ) => page.status === 'unreproduced' );
+	const sourceInteractivity = unreproducedMotion.length ? {
+		schema: SOURCE_INTERACTIVITY_SCHEMA,
+		path: 'source-interactivity.json',
+		unreproduced_route_count: unreproducedMotion.length,
+	} : undefined;
+	if ( sourceInteractivity ) writeFileSync(
+		join( outputDir, sourceInteractivity.path ),
+		`${ JSON.stringify( { schema: SOURCE_INTERACTIVITY_SCHEMA, pages: unreproducedMotion }, null, 2 ) }\n`
+	);
 	if ( semanticEvidence ) {
 		writeFileSync( join( outputDir, semanticEvidence.index.path ), semanticEvidence.index.content );
 		for ( const shard of semanticEvidence.shards ) {
@@ -4199,6 +4214,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 				assetEvidence: { path: 'asset-evidence.json', schema: ASSET_EVIDENCE_SCHEMA },
 				portableMedia,
 				interactions: interactionSummary,
+				...(sourceInteractivity ? { sourceInteractivity } : {}),
 				scrollStates: scrollStatesSummary,
 				layoutGeometry: geometryReport,
 				sourceProfile,
@@ -4231,6 +4247,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 				unresolvedAnchors,
 				portableMedia,
 				interactions: interactionSummary,
+				...(sourceInteractivity ? { sourceInteractivity } : {}),
 				scrollStates: scrollStatesSummary,
 				interactionFailures: interactionStates.filter( ( state ) => state.status !== 'captured' ),
 				excludedRoutes,

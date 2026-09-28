@@ -146,6 +146,24 @@ describe( 'checkFidelity', () => {
 		expect( report.sourceUrl ).toBe( 'https://example.com/' );
 	} );
 
+	it( 'fails source parity when identical static observations conceal unsupported motion', async () => {
+		const directory = liberatedRun();
+		writeFileSync( join( directory, 'source-interactivity.json' ), JSON.stringify( {
+			schema: 'data-liberation/source-interactivity/v1',
+			pages: [ { url: 'https://example.com/', status: 'unreproduced', signals: [ 'canvas-2d', 'pointer-input' ] } ],
+		} ) );
+		writeFileSync( join( directory, 'capture-receipt.json' ), JSON.stringify( {
+			source: { url: 'https://example.com/' }, websiteRoot: 'website',
+			sourceInteractivity: { schema: 'data-liberation/source-interactivity/v1', path: 'source-interactivity.json', unreproduced_route_count: 1 },
+		} ) );
+		const report = await checkFidelity( {
+			directory,
+			observe: async ( _source, _candidate, viewport ) => ( { source: obs( viewport ), liberated: obs( viewport ) } ),
+		} );
+		expect( report.pass ).toBe( false );
+		expect( report.scores.every( ( score ) => score.failures.some( ( reason ) => reason.includes( 'source motion not reproduced' ) ) ) ).toBe( true );
+	} );
+
 	it( 'measures a source subpage in place when its nav links to fragments on another page', async () => {
 		// A client-routed builder: the subpage's nav links to sections of the home
 		// page. Following one routes the app home, so the source must be measured

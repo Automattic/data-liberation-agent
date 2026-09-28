@@ -22,6 +22,7 @@ import { MediaStubStore } from './resume-state/index.js';
 import { checkSelfConsistency } from './fidelity/self-consistency.js';
 import { startStaticServer } from './replicate/local-site/static-server.js';
 import { cleanupPolicy } from './source-cleanup.js';
+import { inspectSourceInteractivity } from './source-interactivity.js';
 
 const dirs: string[] = [];
 
@@ -30,6 +31,31 @@ afterEach( () => {
 } );
 
 describe( 'exportWebsiteCapture', () => {
+	it( 'distinguishes an addressable unlabelled canvas from passive third-party timing', () => {
+		const resources = { version: 1 as const, resources: {}, failures: [] };
+		const motion = inspectSourceInteractivity( '<canvas></canvas><script>const canvas=document.querySelector("canvas");canvas.getContext("2d");requestAnimationFrame(()=>{});</script>', 'https://example.test/', tmpdir(), resources );
+		const passive = inspectSourceInteractivity( '<main>News</main><script>requestAnimationFrame(()=>{});</script>', 'https://example.test/', tmpdir(), resources );
+		expect( motion.status ).toBe( 'unreproduced' );
+		expect( passive.status ).toBe( 'not_detected' );
+	} );
+
+	it( 'reports captured first-party canvas motion whose executable script is intentionally removed', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-source-motion-' ) );
+		dirs.push( outputDir );
+		for ( const directory of [ 'html', 'screenshots', 'resources' ] ) mkdirSync( join( outputDir, directory ), { recursive: true } );
+		writeFileSync( join( outputDir, 'html/homepage.html' ), '<html><body><canvas id="stage"></canvas><p id="status">Waiting</p><script src="/motion.js"></script></body></html>' );
+		writeFileSync( join( outputDir, 'resources/motion.js' ), 'const canvas = document.getElementById("stage"); const ctx = canvas.getContext("2d"); function draw(){requestAnimationFrame(draw)}; addEventListener("mousemove",draw); document.getElementById("status").addEventListener("click",()=>setTimeout(()=>{document.getElementById("status").textContent="Ready"},10)); draw();' );
+		writeFileSync( join( outputDir, 'resources/manifest.json' ), JSON.stringify( { version: 1, failures: [], resources: { 'https://example.test/motion.js': { path: 'resources/motion.js', contentType: 'application/javascript' } } } ) );
+		writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( { version: 1, entries: { 'https://example.test/': { html: 'html/homepage.html' } } } ) );
+		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.test/', platform: 'generic', summary: {}, failures: [] } );
+		const receipt = JSON.parse( readFileSync( join( outputDir, 'capture-receipt.json' ), 'utf8' ) );
+		const report = JSON.parse( readFileSync( join( outputDir, 'source-interactivity.json' ), 'utf8' ) );
+		expect( receipt.sourceInteractivity ).toMatchObject( { schema: 'data-liberation/source-interactivity/v1', unreproduced_route_count: 1 } );
+		expect( report.pages[ 0 ] ).toMatchObject( { status: 'unreproduced', signals: [ 'canvas-2d', 'pointer-input', 'animation-frame', 'timed-dom-update', 'click-input' ] } );
+		expect( report.pages[ 0 ].scripts[ 0 ].sha256 ).toMatch( /^[a-f0-9]{64}$/ );
+		expect( readFileSync( join( outputDir, 'website/index.html' ), 'utf8' ) ).not.toContain( '<script src="/motion.js"' );
+	} );
+
 	it( 'stabilizes only unreferenced runtime header ids across routes', () => {
 		const page = ( token: string ) => `<html><body><header><div id="yui_3_17_2_1_${ token }_3" class="announcement"><div id="yui_3_17_2_1_${ token }_4"><a aria-labelledby="announcement-label" href="/tickets"></a><span id="announcement-label">Tickets</span></div></div><nav><a href="/">Home</a></nav></header><main><div id="yui_3_17_2_1_${ token }_5">Body</div></main></body></html>`;
 		const home = canonicalizeUnreferencedHeaderIds( page( '111' ) );
