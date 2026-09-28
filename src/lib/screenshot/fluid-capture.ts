@@ -29,7 +29,7 @@ export const SEGMENT_STYLE_ATTRIBUTE = 'data-dla-fluid-rules';
 /** Attribute pattern used by the exporter to recognize those blocks. */
 export const FLUID_RULES_STYLE_ATTRIBUTE = /\bdata-dla-fluid-rules\b/i;
 /** Only geometry that a runtime plausibly derives from viewport width. */
-const LEARNABLE_PROPERTIES = [ 'width', 'height', 'top', 'font-size', 'padding-top', 'transform-x' ] as const;
+const LEARNABLE_PROPERTIES = [ 'width', 'height', 'font-size', 'padding-top', 'transform-x' ] as const;
 
 function isPureXTranslationMatrix( matrix: readonly number[] ): boolean {
 	return (
@@ -101,9 +101,7 @@ export async function learnAndApplyFluidGeometry(
 				const carriesPixelSize = /\b(?:width|height|font-size|padding-top)\s*:\s*\d/.test( style );
 				const carriesPixelCustomProperty = /(?:^|;)\s*--[-a-zA-Z0-9_]+\s*:\s*-?\d+(?:\.\d+)?px\s*(?:;|$)/.test( style );
 				const carriesMatrixTransform = /(?:^|;)\s*transform\s*:\s*matrix\(/.test( style );
-				const carriesCapturedAnchorTop =
-					element.hasAttribute( 'data-dla-anchor-target' ) && /\btop\s*:\s*\d/.test( style );
-				if ( ! carriesPixelSize && ! carriesPixelCustomProperty && ! carriesCapturedAnchorTop && ! carriesMatrixTransform ) {
+				if ( ! carriesPixelSize && ! carriesPixelCustomProperty && ! carriesMatrixTransform ) {
 					continue;
 				}
 				element.setAttribute( attribute, String( index++ ) );
@@ -166,9 +164,7 @@ export async function learnAndApplyFluidGeometry(
 							values[ property ] = isPureXTranslation ? matrix[ 4 ]! : null;
 							continue;
 						}
-						// `top` is a position against a containing block, not a
-						// share of a parent's box, so it has no container fit.
-						// `font-size` is excluded too: CSS resolves a font
+						// `font-size` is excluded: CSS resolves a font
 						// percentage against the parent font size, not its width,
 						// and container-query units assume the exported copy
 						// reflows the parent box the way the source did — which a
@@ -179,7 +175,6 @@ export async function learnAndApplyFluidGeometry(
 						containers[ property ] =
 							parent &&
 							! property.startsWith( '--' ) &&
-							property !== 'top' &&
 							property !== 'font-size' &&
 							property !== 'padding-top' &&
 							property !== 'transform-x'
@@ -190,25 +185,6 @@ export async function learnAndApplyFluidGeometry(
 					}
 					for ( const property of elementProperties ) {
 						if ( property === 'transform-x' ) continue;
-						if ( property === 'top' && ! element.hasAttribute( 'data-dla-anchor-target' ) ) {
-							values[ property ] = null;
-							continue;
-						}
-						if ( property === 'top' ) {
-							const sourceId = element.getAttribute( 'data-dla-anchor-source-id' );
-							const source = sourceId ? document.getElementById( sourceId ) : null;
-							// A sticky/fixed source reports the current viewport edge, not
-							// the document destination the anchor observed. In that case
-							// retain the marker's measured document coordinate.
-							if (
-								source &&
-								! source.closest( 'header,[role="banner"]' ) &&
-								! [ 'fixed', 'sticky' ].includes( getComputedStyle( source ).position )
-							) {
-								values[ property ] = source.getBoundingClientRect().top + window.scrollY;
-								continue;
-							}
-						}
 						const match = new RegExp( `(?:^|;)\\s*${ property }\\s*:\\s*(-?\\d+(?:\\.\\d+)?)px` ).exec( style );
 						values[ property ] = match ? Number( match[ 1 ] ) : null;
 						if ( property.startsWith( '--' ) && ! match ) {

@@ -13,19 +13,11 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		await browser.close();
 	} );
 
-	it( 'learns a responsive top offset only for captured anchor targets', async () => {
+	it( 'never learns a top offset: anchor targets move with their section instead', async () => {
 		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
 		await page.setContent( `
-			<span id="features" data-dla-anchor-target="features" data-dla-anchor-source-id="feature-section" style="position:absolute;top:787px;width:0;height:0"></span>
+			<section id="feature-section" style="position:relative;height:400px"><span id="features" data-dla-anchor-target="features" data-dla-anchor-source-id="feature-section" style="position:absolute;width:0;height:0"></span></section>
 			<div id="ordinary" style="position:absolute;top:144px;width:100px;height:100px"></div>
-			<section id="feature-section" style="position:absolute;top:787px"></section>
-			<script>
-				const update = () => {
-					document.querySelector('#feature-section').style.top = (innerWidth * 0.5464) + 'px';
-				};
-				addEventListener('resize', update);
-				update();
-			</script>
 		` );
 
 		await learnAndApplyFluidGeometry( page, {
@@ -33,22 +25,8 @@ describe( 'learnAndApplyFluidGeometry', () => {
 			settleMs: 50,
 		} );
 
-		expect( await page.locator( '#features' ).getAttribute( 'style' ) ).toContain( 'top: 54.64vw' );
+		expect( await page.locator( '#features' ).getAttribute( 'style' ) ).not.toContain( 'top' );
 		expect( await page.locator( '#ordinary' ).getAttribute( 'style' ) ).toContain( 'top:144px' );
-		await page.close();
-	} );
-
-	it( 'keeps a marker coordinate when its source is sticky chrome', async () => {
-		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
-		await page.setContent( `
-			<header id="source" style="position:sticky;top:0;height:40px">Header</header>
-			<span id="target" data-dla-anchor-target="target" data-dla-anchor-source-id="source" style="position:absolute;top:640px;width:0;height:0"></span>
-			<div style="height:1800px"></div>
-		` );
-
-		await learnAndApplyFluidGeometry( page, { widths: [ 768, 1440 ], settleMs: 20 } );
-
-		expect( await page.locator( '#target' ).getAttribute( 'style' ) ).toContain( 'top:640px' );
 		await page.close();
 	} );
 
