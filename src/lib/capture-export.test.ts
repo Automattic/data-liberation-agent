@@ -20,6 +20,7 @@ import {
 import { SectionSpecsStore } from './replicate/section-specs-store.js';
 import { MediaStubStore } from './resume-state/index.js';
 import { checkSelfConsistency } from './fidelity/self-consistency.js';
+import { startStaticServer } from './replicate/local-site/static-server.js';
 import { cleanupPolicy } from './source-cleanup.js';
 
 const dirs: string[] = [];
@@ -5648,6 +5649,49 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		expect( readFileSync( join( outputDir, 'website', 'external', 'feature.webp' ), 'utf8' ) ).toBe(
 			'webp'
 		);
+	} );
+
+	it( 'serves a captured browser image whose on-disk transform path contains literal percent signs', async () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-percent-resource-export-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'screenshots', 'resources/external/crop' ] )
+			mkdirSync( join( outputDir, path ), { recursive: true } );
+		const source = 'https://cdn.example/crop/rs=h:100%25,cg:true';
+		const file = 'resources/external/crop/rs=h:100%,cg:true.png';
+		writeFileSync( join( outputDir, file ), Buffer.from(
+			'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+			'base64'
+		) );
+		writeFileSync( join( outputDir, 'html', 'homepage.html' ), `<main><img src="${ source }" alt="Logo"></main>` );
+		writeFileSync( join( outputDir, 'resources', 'manifest.json' ), JSON.stringify( {
+			version: 1,
+			resources: { [ source ]: { path: file, contentType: 'image/png' } },
+			failures: [],
+		} ) );
+		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( {
+			version: 1,
+			entries: { 'https://example.com/': { html: 'html/homepage.html' } },
+		} ) );
+		MediaStubStore.load( outputDir ).markFailure( source, 'HTTP 403' );
+		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'fake', summary: {}, failures: [] } );
+
+		const websiteDir = join( outputDir, 'website' );
+		const server = await startStaticServer( websiteDir );
+		const browser = await chromium.launch();
+		try {
+			const page = await browser.newPage();
+			await page.goto( server.url );
+			const image = await page.locator( 'img' ).evaluate( ( element: HTMLImageElement ) => ( {
+				src: element.getAttribute( 'src' ),
+				width: element.naturalWidth,
+			} ) );
+			expect( image.src ).toContain( '100%25%2Ccg%3Atrue.png' );
+			expect( image.width ).toBe( 1 );
+			await page.close();
+		} finally {
+			await browser.close();
+			await server.close();
+		}
 	} );
 
 	it( 'keeps portable media within the artifact capacity left after routes and resources', () => {
