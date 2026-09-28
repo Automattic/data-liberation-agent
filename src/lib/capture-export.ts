@@ -15,6 +15,7 @@ import postcss from 'postcss';
 import selectorParser from 'postcss-selector-parser';
 import type { AnyNode, Element } from 'domhandler';
 import { escapeHtmlAttr } from './html-escape.js';
+import { allocateCaptureRoutes, normalizedUrl } from './capture-export-routes.js';
 import { appendScrollDrivenAnimations } from './scroll-driven-animations.js';
 import { scopeCss } from './replicate/css-scope.js';
 import { SectionSpecsStore } from './replicate/section-specs-store.js';
@@ -293,74 +294,6 @@ function pathWithin( root: string, candidate: string ): boolean {
 	return rel === '' || ( ! rel.startsWith( `..${ sep }` ) && rel !== '..' );
 }
 
-function normalizedUrl( url: string ): string {
-	const parsed = new URL( url );
-	parsed.hash = '';
-	parsed.search = '';
-	parsed.pathname = parsed.pathname.replace( /\/$/, '' ) || '/';
-	return parsed.href;
-}
-
-function isOriginRootPath( pathname: string ): boolean {
-	return ( pathname.replace( /\/$/, '' ) || '/' ) === '/';
-}
-
-function capturedOriginRoot( urls: string[], origin: string ): boolean {
-	return urls.some( ( url ) => {
-		try {
-			const route = new URL( url );
-			return route.origin === origin && isOriginRootPath( route.pathname );
-		} catch {
-			return false;
-		}
-	} );
-}
-
-function routeOutputPath(
-	url: string,
-	sourceUrl: string,
-	entrypointUrl: string,
-	originRootCaptured: boolean
-): string {
-	if ( url === entrypointUrl && ! originRootCaptured ) return 'index.html';
-	const route = new URL( url );
-	const source = new URL( sourceUrl );
-	// Artifact paths must retain URL percent-encoding. Decoding turns a valid
-	// route such as `%26` into a different filesystem path and breaks route maps.
-	let pathname = route.pathname;
-	for ( const segment of pathname.split( '/' ) ) {
-		let decoded = segment;
-		try {
-			decoded = decodeURIComponent( segment );
-		} catch {
-			// Preserve malformed percent escapes as opaque path bytes.
-		}
-		if ( decoded === '.' || decoded === '..' || /[\\/\0]/.test( decoded ) )
-			throw new Error( `Captured route path escapes the website directory: ${ route.pathname }` );
-	}
-	const sourcePath = originRootCaptured ? '' : source.pathname.replace( /\/$/, '' );
-
-	if ( route.origin === source.origin && sourcePath && pathname.startsWith( `${ sourcePath }/` ) ) {
-		pathname = pathname.slice( sourcePath.length );
-	} else if ( route.origin === source.origin && sourcePath && pathname.replace( /\/$/, '' ) === sourcePath ) {
-		pathname = '/';
-	}
-
-	const cleanPath = pathname.replace( /^\/+|\/+$/g, '' );
-	if ( ! cleanPath ) return 'index.html';
-	if ( /\.[a-z0-9]+$/i.test( cleanPath ) ) return cleanPath;
-	return join( cleanPath, 'index.html' );
-}
-
-function publicPathname( url: string ): string {
-	try {
-		const pathname = new URL( url ).pathname;
-		if ( ! pathname || pathname === '/' ) return '/';
-		return pathname.replace( /\/+$/, '' ) || '/';
-	} catch {
-		return '';
-	}
-}
 
 function portableRedirectsFile( rules: Array< { from: string; to: string } > ): string {
 	const lines = [ ...rules ]
@@ -376,21 +309,6 @@ function portableRedirectsFile( rules: Array< { from: string; to: string } > ): 
 		)
 		.map( ( rule ) => `${ rule.from }  ${ rule.to }  301` );
 	return lines.length === 0 ? '' : `${ lines.join( '\n' ) }\n`;
-}
-
-/**
- * Reports whether a captured page is an alternate address for an already claimed route.
- *
- * Sites commonly serve one document from several URLs, such as `/` and `/index.html`.
- * The alternate address declares the claimed route as its canonical URL, so the capture
- * keeps the claimed page and links the alternate address to it.
- */
-function declaresCanonicalRoute( entry: CaptureEntry, claimed: CaptureEntry ): boolean {
-	if ( ! entry.canonicalUrl ) return false;
-	const claimedCanonical = claimed.canonicalUrl
-		? normalizedUrl( claimed.canonicalUrl )
-		: normalizedUrl( claimed.url );
-	return normalizedUrl( entry.canonicalUrl ) === claimedCanonical;
 }
 
 /**
@@ -3314,131 +3232,14 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		}
 	}
 
-	const normalizedSourceUrl = normalizedUrl( options.sourceUrl );
-	const exactEntrypointCandidates = capturedEntries.filter(
-		( { url } ) => normalizedUrl( url ) === normalizedSourceUrl
-	);
-	const entrypointCandidates =
-		exactEntrypointCandidates.length > 0
-			? exactEntrypointCandidates
-			: capturedEntries.filter(
-					( { canonicalUrl } ) =>
-						canonicalUrl !== undefined && normalizedUrl( canonicalUrl ) === normalizedSourceUrl
-			  );
-	if ( entrypointCandidates.length !== 1 ) {
-		throw new Error(
-			`Capture does not identify one rendered homepage for the source URL: ${ options.sourceUrl }`
-		);
+	const {
+		entrypointUrl, entrypointEntry, routePathOf, retainedEntries, duplicateRoutes,
+		canonicalRouteAliases, portableRedirects, missingRedirectTargets, duplicateJsonLd,
+	} = allocateCaptureRoutes( capturedEntries, options.sourceUrl, redirectAliases );
+	for ( const { claimed, jsonLd } of duplicateJsonLd ) {
+		writeFileSync( claimed.htmlPath, appendJsonLd( readFileSync( claimed.htmlPath, 'utf8' ), jsonLd ) );
 	}
-	const entrypointUrl = entrypointCandidates[ 0 ].url;
-	const originRootCaptured = capturedOriginRoot(
-		capturedEntries.map( ( entry ) => entry.url ),
-		new URL( options.sourceUrl ).origin
-	);
-	const naturalRoutePath = ( url: string ) =>
-		routeOutputPath( url, options.sourceUrl, entrypointUrl, originRootCaptured ).replace(
-			/\\/g,
-			'/'
-		);
-	const allocatedPaths = new Map< string, string >();
-	const reservedPaths = new Set( capturedEntries.map( ( entry ) => naturalRoutePath( entry.url ) ) );
-	// Keyed by normalized URL, not the raw captured URL: an entry URL carrying
-	// a query string or fragment (a tokenized link, tracking parameter, etc.)
-	// still names the site root, and its captured directory route must be
-	// found by what it resolves to rather than by exact string equality.
-	const entriesByNormalizedUrl = new Map(
-		capturedEntries.map( ( entry ) => [ normalizedUrl( entry.url ), entry ] )
-	);
-	// Two captured URLs naming the same document are content-duplicates when
-	// they render identically; recorded here so the dedupe pass below treats
-	// them the same way a declared canonical route already would.
-	const contentAliasPartners = new Map< string, string >();
-	// A directory and its default document can be distinct pages. Keep both
-	// unless the existing canonical contract proves an alias. Reserve every
-	// natural path first so a generated filename never steals another route.
-	for ( const entry of capturedEntries ) {
-		const url = new URL( entry.url );
-		if ( url.search || url.hash || ! url.pathname.endsWith( '/index.html' ) ) continue;
-		const directoryUrl = new URL( './', url ).href;
-		const directory = entriesByNormalizedUrl.get( normalizedUrl( directoryUrl ) );
-		const path = naturalRoutePath( entry.url );
-		if ( ! directory || naturalRoutePath( directoryUrl ) !== path ) continue;
-		if ( declaresCanonicalRoute( entry, directory ) || declaresCanonicalRoute( directory, entry ) ) continue;
-		if ( readFileSync( entry.htmlPath, 'utf8' ) === readFileSync( directory.htmlPath, 'utf8' ) ) {
-			contentAliasPartners.set( entry.url, directory.url );
-			contentAliasPartners.set( directory.url, entry.url );
-			continue;
-		}
-		const displaced = entry.url === entrypointUrl ? directory : entry;
-		if ( [ ...reservedPaths ].some( ( reserved ) => path.startsWith( `${ reserved }/` ) ) )
-			throw new Error( `Captured route needs a directory already claimed by a file: ${ path }` );
-		let suffix = 2;
-		let allocated: string;
-		do {
-			allocated = `${ path.slice( 0, -'.html'.length ) }-${ suffix++ }.html`;
-		} while ( [ ...reservedPaths ].some( ( reserved ) =>
-			reserved === allocated || reserved.startsWith( `${ allocated }/` )
-		) );
-		reservedPaths.add( allocated );
-		allocatedPaths.set( displaced.url, allocated );
-	}
-	const routePathOf = ( url: string ) => allocatedPaths.get( url ) ?? naturalRoutePath( url );
-
-	const retainedEntries: CaptureEntry[] = [];
-	const duplicateRoutes: Array< { url: string; canonicalUrl: string; path: string } > = [];
-	const canonicalRouteAliases = new Map< string, string >();
-	const claimedRoutes = new Map< string, CaptureEntry >();
-	for ( const entry of [
-		...capturedEntries.filter( ( { url } ) => url === entrypointUrl ),
-		...capturedEntries.filter( ( { url } ) => url !== entrypointUrl ),
-	] ) {
-		const routePath = routePathOf( entry.url );
-		const claimed = claimedRoutes.get( routePath );
-		if ( ! claimed ) {
-			claimedRoutes.set( routePath, entry );
-			retainedEntries.push( entry );
-			continue;
-		}
-		if (
-			! declaresCanonicalRoute( entry, claimed ) &&
-			contentAliasPartners.get( entry.url ) !== claimed.url
-		) {
-			throw new Error( `Captured routes resolve to the same website path: ${ routePath }` );
-		}
-		if ( entry.jsonLd.length > 0 ) {
-			writeFileSync(
-				claimed.htmlPath,
-				appendJsonLd( readFileSync( claimed.htmlPath, 'utf8' ), entry.jsonLd )
-			);
-		}
-		duplicateRoutes.push( {
-			url: entry.url,
-			canonicalUrl: claimed.url,
-			path: `website/${ routePath }`,
-		} );
-		canonicalRouteAliases.set( normalizedUrl( entry.url ), routePath );
-	}
-	// A URL the server redirected to another captured route is that route
-	// under another name: links to it resolve to the target's page, and the
-	// alias is recorded in website/_redirects.
-	const portableRedirects: Array< { from: string; to: string } > = [];
-	for ( const { url, target } of redirectAliases ) {
-		const targetEntry = entriesByNormalizedUrl.get( normalizedUrl( target ) );
-		if ( ! targetEntry ) {
-			routeCaptureDiagnostics.push( {
-				code: 'route_capture_failed',
-				url,
-				reason: `redirects to ${ target }, which was not captured`,
-			} );
-			continue;
-		}
-		const routePath = routePathOf( targetEntry.url );
-		duplicateRoutes.push( { url, canonicalUrl: targetEntry.url, path: `website/${ routePath }` } );
-		canonicalRouteAliases.set( normalizedUrl( url ), routePath );
-		const from = publicPathname( url );
-		const to = `/${ routePath }`;
-		if ( from && from !== to ) portableRedirects.push( { from, to } );
-	}
+	routeCaptureDiagnostics.push( ...missingRedirectTargets );
 	const desktopSections = SectionSpecsStore.load( outputDir );
 	const mobileSections = SectionSpecsStore.loadMobile( outputDir );
 	const semanticPages: SemanticEvidencePage[] = retainedEntries.flatMap( ( entry ) => {
@@ -3524,7 +3325,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 			const leftEntrypoint = left.candidates.some( ( candidate ) =>
 				candidate.references.some( ( reference ) =>
 					containsMediaReference(
-						readFileSync( entrypointCandidates[ 0 ].htmlPath, 'utf8' ),
+						readFileSync( entrypointEntry.htmlPath, 'utf8' ),
 						reference
 					)
 				)
@@ -3532,7 +3333,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 			const rightEntrypoint = right.candidates.some( ( candidate ) =>
 				candidate.references.some( ( reference ) =>
 					containsMediaReference(
-						readFileSync( entrypointCandidates[ 0 ].htmlPath, 'utf8' ),
+						readFileSync( entrypointEntry.htmlPath, 'utf8' ),
 						reference
 					)
 				)
