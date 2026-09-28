@@ -4,6 +4,7 @@ import {
 	existsSync,
 	mkdirSync,
 	readFileSync,
+	readdirSync,
 	rmSync,
 	statSync,
 	writeFileSync,
@@ -709,6 +710,76 @@ const UUID_ID =
 
 function isYuiRuntimeId( id: string ): boolean {
 	return YUI_RUNTIME_ID.test( id );
+}
+
+/**
+ * A captured header may carry hydration-only widget IDs which change on every
+ * route. Share a stable identity only when no retained HTML, script, or style
+ * reads the original ID. Rewrite the exact attribute, never the whole document:
+ * reserializing a page would change unrelated source markup and SVGs.
+ */
+export function canonicalizeUnreferencedHeaderIds(
+	html: string,
+	externalTexts: readonly string[] = []
+): string {
+	if ( ! YUI_RUNTIME_ID.test( html ) ) return html;
+	const $ = cheerio.load( html );
+	const header = $( 'header' ).filter( ( _index, node ) =>
+		$( node ).find( 'nav' ).length > 0 && $( node ).parents( 'main, article, section' ).length === 0
+	).first();
+	if ( ! header.length ) return html;
+	const rewrites = new Map< string, string >();
+	header.find( '[id]' ).each( ( _index, node ) => {
+		const id = $( node ).attr( 'id' ) ?? '';
+		if ( ! isYuiRuntimeId( id ) || html.split( id ).length !== 2 || externalTexts.some( ( text ) => text.includes( id ) ) ) return;
+		const segments: string[] = [];
+		let element: Element | null = node;
+		while ( element && element !== header[ 0 ] ) {
+			let position = 0;
+			for ( let sibling = element.prev; sibling; sibling = sibling.prev ) {
+				if ( isElementNode( sibling ) && sibling.name === element.name ) position++;
+			}
+			segments.unshift( `${ element.name }:${ position }` );
+			element = element.parent && isElementNode( element.parent ) ? element.parent : null;
+		}
+		if ( element !== header[ 0 ] ) return;
+		const stable = `dla-shared-${ createHash( 'sha256' ).update( segments.join( '/' ) ).digest( 'hex' ).slice( 0, 16 ) }`;
+		if ( html.includes( `id="${ stable }"` ) || [ ...rewrites.values() ].includes( stable ) ) return;
+		rewrites.set( id, stable );
+	} );
+	for ( const [ id, stable ] of rewrites ) {
+		const escaped = id.replace( /[.*+?^${}()|[\]\\]/g, '\\$&' );
+		html = html.replace( new RegExp( `\\bid(\\s*=\\s*["'])${ escaped }(?=["'])`, 'g' ), ( full ) => full.replace( id, stable ) );
+	}
+	return html;
+}
+
+/** An incomplete reference audit cannot prove an ID is safe to canonicalize. */
+function portableTextReferences( websiteDir: string ): Array< { path: string; text: string } > | null {
+	const texts: Array< { path: string; text: string } > = [];
+	let totalBytes = 0;
+	const pending = [ websiteDir ];
+	try {
+		while ( pending.length ) {
+			const directory = pending.pop()!;
+			for ( const entry of readdirSync( directory, { withFileTypes: true } ) ) {
+				const path = join( directory, entry.name );
+				if ( entry.isDirectory() ) {
+					pending.push( path );
+					continue;
+				}
+				if ( entry.isSymbolicLink() ) return null;
+				if ( ! entry.isFile() || ! /\.(?:css|js|mjs|json|svg|xml|txt|html)$/i.test( entry.name ) ) continue;
+				const bytes = statSync( path ).size;
+				totalBytes += bytes;
+				if ( bytes > 32 * 1024 * 1024 || totalBytes > 128 * 1024 * 1024 ) return null;
+				texts.push( { path, text: readFileSync( path, 'utf8' ) } );
+			}
+		}
+	} catch {
+		return null;
+	}
+	return texts;
 }
 
 function isUnstableResponsiveId( id: string ): boolean {
@@ -3796,6 +3867,14 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		writeFileSync( entry.identityHtmlPath, identityHtml );
 	}
 	selfContainWebsite( websiteDir );
+	const portableTexts = portableTextReferences( websiteDir );
+	if ( portableTexts ) for ( const entry of retainedEntries ) {
+		const path = join( websiteDir, routePathOf( entry.url ) );
+		const html = readFileSync( path, 'utf8' );
+		const externalTexts = portableTexts.filter( ( item ) => item.path !== path ).map( ( item ) => item.text );
+		const stable = canonicalizeUnreferencedHeaderIds( html, externalTexts );
+		if ( stable !== html ) writeFileSync( path, stable );
+	}
 	const redirectsFile = portableRedirectsFile( portableRedirects );
 	if ( redirectsFile ) writeFileSync( join( websiteDir, '_redirects' ), redirectsFile );
 
