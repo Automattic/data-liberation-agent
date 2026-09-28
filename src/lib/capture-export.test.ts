@@ -1377,6 +1377,66 @@ describe( 'exportWebsiteCapture', () => {
 		}
 	} );
 
+	it( 'scopes mobile CSS against body classes carried by the document wrapper', async () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-responsive-root-class-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
+			mkdirSync( join( outputDir, path ), { recursive: true } );
+		writeFileSync(
+			join( outputDir, 'html', 'homepage.html' ),
+			'<html><head><style>body{margin:0}.x .banner{height:152px}.x .article-title{font-size:32px;line-height:36px;margin:0}</style></head><body class="x"><header class="banner"></header><main><h1 class="article-title">Article title</h1><p>Desktop article</p></main></body></html>'
+		);
+		writeFileSync(
+			join( outputDir, 'html-mobile', 'homepage.html' ),
+			'<html><head><style>body{margin:0}.x .banner{height:0}.x .article-title{font-size:28px;line-height:31.5px;margin:0}</style></head><body class="x"><header class="banner"></header><main><h1 class="article-title">Article title</h1><p>Mobile article</p><aside>Mobile menu</aside></main></body></html>'
+		);
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( {
+				version: 1,
+				entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },
+			} )
+		);
+		writeFileSync( join( outputDir, 'breakpoints.json' ), JSON.stringify( { minWidth: [ 768, 1024, 1280 ], maxWidth: [ 767, 1023, 1279 ] } ) );
+		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'unknown', summary: {}, failures: [] } );
+		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
+		const browser = await chromium.launch( { headless: true } );
+		try {
+			const page = await browser.newPage();
+			for ( const width of [ 390, 768, 1440 ] ) {
+				await page.setViewportSize( { width, height: 900 } );
+				await page.setContent( html );
+				const geometry = await page.evaluate( () => {
+					const title = [ ...document.querySelectorAll( '.article-title' ) ].find(
+						( element ) => element.getClientRects().length > 0
+					)!;
+					const banner = title.parentElement!.parentElement!.querySelector( '.banner' )!;
+					return {
+						titleTop: title.getBoundingClientRect().top,
+						bannerTop: banner.getBoundingClientRect().top,
+						bannerHeight: banner.getBoundingClientRect().height,
+						fontSize: getComputedStyle( title ).fontSize,
+						lineHeight: getComputedStyle( title ).lineHeight,
+						menus: [ ...document.querySelectorAll( 'aside' ) ].filter( ( item ) => item.getClientRects().length > 0 ).length,
+					};
+				} );
+				expect( geometry.bannerTop ).toBe( 0 );
+				expect( geometry.titleTop ).toBe( geometry.bannerHeight );
+				if ( width <= 1279 ) {
+					expect( geometry.fontSize ).toBe( '28px' );
+					expect( geometry.lineHeight ).toBe( '31.5px' );
+					expect( geometry.menus ).toBe( 1 );
+				} else {
+					expect( geometry.fontSize ).toBe( '32px' );
+					expect( geometry.lineHeight ).toBe( '36px' );
+					expect( geometry.menus ).toBe( 0 );
+				}
+			}
+		} finally {
+			await browser.close();
+		}
+	} );
+
 	it( 'reconciles a nested mobile-only subtree and a desktop-only wrapper around shared components', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-collapse-nested-' ) );
 		dirs.push( outputDir );

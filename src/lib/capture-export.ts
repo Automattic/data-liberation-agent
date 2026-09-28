@@ -693,6 +693,29 @@ function documentSwitchCss( switchWidth: number ): string {
  * serve their desktop document — the one the fluid sweep observed at 768px.
  */
 const DEFAULT_SWITCH_WIDTH = 767;
+const DESKTOP_CAPTURE_WIDTH = 1440;
+
+/**
+ * Use the widest observed source media breakpoint below the desktop capture
+ * viewport when fluid capture did not identify a switch. Responsive variants
+ * can remain in their mobile layout above 767px; the captured site breakpoints
+ * are stronger evidence than assuming the conventional phone/tablet boundary.
+ */
+function fallbackResponsiveSwitchWidth( outputDir: string ): number | undefined {
+	const path = join( outputDir, 'breakpoints.json' );
+	if ( ! existsSync( path ) ) return undefined;
+	try {
+		const data = JSON.parse( readFileSync( path, 'utf8' ) ) as { maxWidth?: unknown };
+		if ( ! Array.isArray( data.maxWidth ) ) return undefined;
+		const candidates = data.maxWidth.filter(
+			( width ): width is number =>
+				typeof width === 'number' && Number.isInteger( width ) && width > 0 && width < DESKTOP_CAPTURE_WIDTH
+		);
+		return candidates.length > 0 ? Math.max( ...candidates ) : undefined;
+	} catch {
+		return undefined;
+	}
+}
 
 /**
  * Attributes DLA's own capture infrastructure writes to mark that two
@@ -1816,12 +1839,18 @@ function responsiveMobileStyles(
 	skip: ReadonlySet< string > = new Set(),
 	classAliases: ReadonlyMap<string, string> = new Map()
 ): string {
+	const bodyAttributes = /<body\b([^>]*)>/i.exec( mobileHtml )?.[ 1 ] ?? '';
+	const rootClasses = (
+		cheerio.load( `<body${ bodyAttributes }></body>` )( 'body' ).attr( 'class' ) ?? ''
+	)
+		.split( /\s+/ )
+		.filter( Boolean );
 	return styleBlocks( mobileHtml )
 		.filter( ( style ) => style !== '' && ( ! skip.has( style ) || classAliases.size > 0 ) )
 		.map(
 			( original ) => {
 				const style = aliasResponsiveClasses( original, classAliases );
-				return `<style media="(max-width:${ switchWidth }px)">${ scope ? scopeCss( style, { scope } ) : style }</style>`;
+				return `<style media="(max-width:${ switchWidth }px)">${ scope ? scopeCss( style, { scope, rootClasses } ) : style }</style>`;
 			}
 		)
 		.join( '' );
@@ -2972,6 +3001,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 	if ( capture.version !== 1 || ! capture.entries || typeof capture.entries !== 'object' ) {
 		throw new Error( `Invalid screenshot manifest: ${ screenshotManifestPath }` );
 	}
+	const siteSwitchWidth = fallbackResponsiveSwitchWidth( outputDir );
 
 	const websiteDir = join( outputDir, 'website' );
 	const stagedHtmlDir = join( outputDir, '.capture-export-html' );
@@ -3057,7 +3087,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		const detectedFloor =
 			typeof entry.fluid?.canvasFloor === 'number' && entry.fluid.canvasFloor > 0
 				? Math.round( entry.fluid.canvasFloor )
-				: undefined;
+				: siteSwitchWidth;
 		if ( detectedFloor ) switchWidths.push( detectedFloor );
 		if ( entry.fluid ) fluidReports.push( entry.fluid );
 		const responsiveVariants = responsiveVariantEvidence( rawDesktopHtml, rawMobileHtml );
