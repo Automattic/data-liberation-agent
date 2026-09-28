@@ -189,14 +189,17 @@ describe( 'learnAndApplyFluidGeometry', () => {
 			</script>
 		` );
 
-		await learnAndApplyFluidGeometry( page, { settleMs: 50 } );
+		await learnAndApplyFluidGeometry( page, {
+			widths: [ 390, 600, 768, 1024, 1280, 1440, 1600, 1680, 1840, 1920 ],
+			settleMs: 50,
+		} );
 		const html = await page.evaluate( () => {
 			document.querySelectorAll( 'script' ).forEach( ( script ) => script.remove() );
 			return document.documentElement.outerHTML;
 		} );
 		const copy = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
 		await copy.setContent( html );
-		for ( const [ width, expected ] of [ [ 1440, 321 ], [ 1600, 358 ], [ 1728, 358 ] ] as const ) {
+		for ( const [ width, expected ] of [ [ 1440, 321 ], [ 1600, 358 ], [ 1680, 358 ], [ 1728, 358 ] ] as const ) {
 			await copy.setViewportSize( { width, height: 900 } );
 			const box = await copy.locator( '#wrapper' ).boundingBox();
 			expect( Math.abs( ( box?.width ?? 0 ) - expected ), `wrapper width at ${ width }` ).toBeLessThanOrEqual( 2 );
@@ -351,6 +354,153 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		expect( Math.abs( fontSize - 0.2434 * 983 ) ).toBeLessThanOrEqual( 2 );
 		await page.close();
 	}, 20_000 );
+
+	it( 'keeps mixed-unit image height responsive and intrinsic width aligned after serialization', async () => {
+		const source = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		await source.setContent( `
+			<style>
+				#frame { position: relative; width: 420px; height: 228px; left: 84px }
+				@media (max-width: 500px) { #frame { --image-height: 208px } }
+				@media (min-width: 501px) and (max-width: 767px) { #frame { --image-height: 100% } }
+				#image { position: absolute; width: var(--image-width); height: var(--image-height) }
+			</style>
+			<div id="frame" style="--image-height: 369.333px; --image-width: 231px"><div id="image"></div></div>
+			<script>
+				const update = () => {
+					const frame = document.querySelector( '#frame' );
+					const height =
+						innerWidth < 768
+							? innerWidth === 390
+								? '208px'
+								: '100%'
+							: ( innerWidth * 0.23 ) + 'px';
+					frame.style.setProperty( '--image-height', height );
+				};
+				addEventListener( 'resize', update );
+				update();
+			</script>` );
+		const heights: Record< number, number > = {};
+		for ( const width of [ 390, 600, 768, 1024, 1280, 1440, 1536, 1680, 1792, 1920 ] ) {
+			await source.setViewportSize( { width, height: 900 } );
+			await source.waitForTimeout( 10 );
+			heights[ width ] = ( await source.locator( '#image' ).boundingBox() )!.height;
+		}
+		await learnAndApplyFluidGeometry( source, { settleMs: 30 } );
+		const html = await source.evaluate( () => {
+			document.querySelectorAll( 'script' ).forEach( ( script ) => script.remove() );
+			return document.documentElement.outerHTML;
+		} );
+		const copy = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		await copy.setContent( html );
+		for ( const width of [ 390, 600, 1600, 1728 ] ) {
+			await copy.setViewportSize( { width, height: 900 } );
+			const box = ( await copy.locator( '#image' ).boundingBox() )!;
+			expect(
+				Math.abs( box.height - ( heights[ width ] ?? width * 0.23 ) ),
+				`height at ${ width }`
+			).toBeLessThanOrEqual( 2 );
+			expect( box.width, `intrinsic width at ${ width }` ).toBe( 231 );
+			expect( box.x, `alignment at ${ width }` ).toBe( 92 );
+		}
+		await copy.close();
+		await source.close();
+	}, 30_000 );
+
+	it( 'learns a translated positioned image owner across independent widths', async () => {
+		const source = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		await source.setContent( `
+			<style>body { margin: 0 }</style>
+			<div id="frame" style="position: relative; width: 100vw; height: 300px">
+				<div id="owner" style="position: absolute; width: 231px; height: 228px; transform: matrix(1, 0, 0, 1, 754.776, 0)">
+					<img id="image" width="231" height="228" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='231' height='228'/%3E">
+				</div>
+			</div>
+			<script>
+				const update = () => {
+					const x = innerWidth * 0.52415;
+					document.querySelector( '#owner' ).style.transform = 'matrix(1, 0, 0, 1, ' + x + ', 0)';
+				};
+				addEventListener( 'resize', update );
+				update();
+			</script>` );
+		for ( const width of [ 390, 600, 768, 1024, 1280, 1440, 1536, 1840, 1920 ] ) {
+			await source.setViewportSize( { width, height: 900 } );
+			await source.waitForTimeout( 10 );
+		}
+		await learnAndApplyFluidGeometry( source, { settleMs: 30 } );
+		const html = await source.evaluate( () => {
+			document.querySelectorAll( 'script' ).forEach( ( script ) => script.remove() );
+			return document.documentElement.outerHTML;
+		} );
+		const copy = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		await copy.setContent( html );
+		for ( const width of [ 1600, 1728 ] ) {
+			await copy.setViewportSize( { width, height: 900 } );
+			const box = await copy.locator( '#image' ).boundingBox();
+			expect( Math.abs( box!.x - width * 0.52415 ), `image x at ${ width }` ).toBeLessThanOrEqual( 2 );
+			expect( box!.width ).toBe( 231 );
+		}
+		await copy.close();
+		await source.close();
+	}, 30_000 );
+
+	it( 'does not rewrite scaled, rotated, or vertically translated matrices', async () => {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		const matrices = [
+			'matrix(2, 0, 0, 2, 40, 0)',
+			'matrix(0, 1, -1, 0, 40, 0)',
+			'matrix(1, 0, 0, 1, 40, 24)',
+		];
+		await page.setContent( `
+			<div id="scaled" style="width: 40px; height: 40px; transform: ${ matrices[ 0 ] }"></div>
+			<div id="rotated" style="width: 40px; height: 40px; transform: ${ matrices[ 1 ] }"></div>
+			<div id="vertical" style="width: 40px; height: 40px; transform: ${ matrices[ 2 ] }"></div>
+		` );
+		await learnAndApplyFluidGeometry( page, { settleMs: 20 } );
+		for ( const [ index, id ] of [ 'scaled', 'rotated', 'vertical' ].entries() ) {
+			expect(
+				await page.locator( `#${ id }` ).evaluate( ( element ) => getComputedStyle( element ).transform )
+			).toBe( matrices[ index ] );
+			expect( await page.locator( `#${ id }` ).getAttribute( 'data-dla-fluid-segment' ) ).toBeNull();
+		}
+		const html = await page.evaluate( () => {
+			document.querySelectorAll( 'script' ).forEach( ( script ) => script.remove() );
+			return document.documentElement.outerHTML;
+		} );
+		const copy = await browser.newPage( { viewport: { width: 1600, height: 900 } } );
+		await copy.setContent( html );
+		for ( const [ index, id ] of [ 'scaled', 'rotated', 'vertical' ].entries() ) {
+			expect(
+				await copy.locator( `#${ id }` ).evaluate( ( element ) => getComputedStyle( element ).transform )
+			).toBe( matrices[ index ] );
+		}
+		await copy.close();
+		await page.close();
+	}, 30_000 );
+
+	it( 'keeps a non-translation matrix written when the sweep restores its viewport', async () => {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		await page.setContent( `
+			<div id="owner" style="width: 231px; height: 228px; transform: matrix(1, 0, 0, 1, 754.776, 0)"></div>
+			<script>
+				let restored = false;
+				addEventListener( 'resize', () => {
+					const owner = document.querySelector( '#owner' );
+					if ( innerWidth === 1440 && restored ) {
+						owner.style.transform = 'matrix(0, 1, -1, 0, 754.776, 24)';
+					} else {
+						owner.style.transform = 'matrix(1, 0, 0, 1, ' + ( innerWidth * 0.52415 ) + ', 0)';
+					}
+					if ( innerWidth === 1440 ) restored = true;
+				} );
+			</script>
+		` );
+		await learnAndApplyFluidGeometry( page, { settleMs: 30 } );
+
+		expect( await page.locator( '#owner' ).getAttribute( 'style' ) ).toContain( 'matrix(0, 1, -1, 0, 754.776, 24)' );
+		expect( await page.locator( '#owner' ).getAttribute( 'data-dla-fluid-segment' ) ).toBeNull();
+		await page.close();
+	}, 30_000 );
 
 	it( 'learns a runtime-written header offset as media-scoped padding rules', async () => {
 		// A fixed header's clearance is written onto the first section as
