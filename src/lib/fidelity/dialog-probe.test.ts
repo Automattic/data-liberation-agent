@@ -37,4 +37,32 @@ describe( 'probeDialogs', () => {
 		await page.close();
 		await browser.close();
 	}, 20_000 );
+
+	it( 'uses a real pointer when a visible summary rejects a synthetic click', async () => {
+		const browser = await chromium.launch();
+		try {
+			const page = await browser.newPage( { viewport: { width: 390, height: 844 } } );
+			await page.setContent( `<details><summary data-dla-disclosure-label="Menu">Menu</summary><div role="dialog">Links</div></details>
+				<script>document.querySelector('summary').addEventListener('click', (event) => {
+					if (!event.isTrusted) event.preventDefault();
+				});</script>` );
+			expect( await probeDialogs( page ) ).toEqual( [ { label: 'Menu', opened: true } ] );
+			await page.close();
+		} finally {
+			await browser.close();
+		}
+	}, 20_000 );
+
+	it( 'still reports a summary dead when a real pointer cannot open it', async () => {
+		const browser = await chromium.launch();
+		try {
+			const page = await browser.newPage( { viewport: { width: 390, height: 844 } } );
+			await page.setContent( `<details><summary data-dla-disclosure-label="Menu">Menu</summary><div role="dialog">Links</div></details>
+				<script>document.querySelector('summary').addEventListener('click', (event) => event.preventDefault());</script>` );
+			expect( await probeDialogs( page ) ).toEqual( [ { label: 'Menu', opened: false } ] );
+			await page.close();
+		} finally {
+			await browser.close();
+		}
+	}, 20_000 );
 } );
