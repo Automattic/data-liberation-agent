@@ -107,6 +107,26 @@ describe('startStaticServer', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it('serves captured percent-encoded Unicode directories without losing decoded routes', async () => {
+    const dir = makeSite();
+    try {
+      const encoded = 'team%E2%80%99s-work';
+      mkdirSync(join(dir, encoded));
+      writeFileSync(join(dir, encoded, 'index.html'), '<h1>encoded route</h1>');
+      server = await startStaticServer(dir);
+      const encodedResponse = await fetch(`${server.url}/${encoded}/index.html`);
+      expect(encodedResponse.status).toBe(200);
+      expect(await encodedResponse.text()).toContain('encoded route');
+
+      mkdirSync(join(dir, 'team’s-work'));
+      writeFileSync(join(dir, 'team’s-work', 'index.html'), '<h1>decoded route</h1>');
+      const decodedResponse = await fetch(`${server.url}/${encoded}/`);
+      expect(await decodedResponse.text()).toContain('decoded route');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('resolveRequestPath', () => {
