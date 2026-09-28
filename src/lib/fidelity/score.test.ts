@@ -254,6 +254,17 @@ describe( 'normalizeImageKey', () => {
 		expect( normalizeImageKey( copy ) ).toBe( normalizeImageKey( source ) );
 	} );
 
+	it( 'uses the original image filename before a CDN transform suffix', () => {
+		const source = 'https://cdn.example/media/team-a.png/:/crop=t:0%25,l:0%25/resize=w:109,h:100';
+		const copy = 'http://localhost/external/media/team-a.png/%3A/crop%3Dt%3A0%25%2Cl%3A0%25/resize%3Dh%3A100.png';
+		const other = 'https://cdn.example/media/team-b.png/:/crop=t:0%25,l:0%25/resize=w:109,h:100';
+		expect( normalizeImageKey( source ) ).toBe( normalizeImageKey( copy ) );
+		expect( normalizeImageKey( source ) ).not.toBe( normalizeImageKey( other ) );
+		const sourceImages = [ img( normalizeImageKey( source ), 0, 180, 109, 100 ), img( normalizeImageKey( other ), 120, 180, 109, 100 ) ];
+		const copyImages = [ img( normalizeImageKey( copy ), 0, 180, 109, 100 ) ];
+		expect( scoreViewport( at( 1600, { images: sourceImages } ), at( 1600, { images: copyImages } ) ).notes ).toContain( 'images 1 missing within tolerance' );
+	} );
+
 	it( 'treats a re-encoded image as the same image', () => {
 		expect( normalizeImageKey( 'https://a.example.com/img/hero.png' ) ).toBe(
 			normalizeImageKey( 'http://127.0.0.1:53001/media/hero.avif' )
