@@ -4898,6 +4898,35 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		expect( existsSync( join( outputDir, 'website', 'old' ) ) ).toBe( false );
 	} );
 
+	it( 'accepts a proven unscheduled external redirect but keeps genuinely missing HTML blocking', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-unscheduled-anchor-' ) );
+		dirs.push( outputDir );
+		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
+		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
+		writeFileSync( join( outputDir, 'html', 'home.html' ), '<h1>Home</h1><a href="/unscheduled">External</a><a href="/absent">Absent</a><a href="/missing-html">Missing</a>' );
+		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( { version: 1, entries: {
+			'https://example.com/': { html: 'html/home.html' },
+			'https://example.com/unscheduled': { externalRedirect: true },
+			'https://example.com/absent': { sourceAbsentStatus: 404 },
+		} } ) );
+		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( {
+			outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [],
+		} ), 'utf8' ) );
+		const diagnostics = JSON.parse( readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' ) );
+		expect( diagnostics.unresolvedAnchors ).toEqual( [
+			{ sourceUrl: 'https://example.com/', url: 'https://example.com/absent', reason: 'target route is absent at source' },
+			{ sourceUrl: 'https://example.com/', url: 'https://example.com/missing-html', reason: 'target route was not captured' },
+		] );
+		expect( receipt.summary.complete ).toBe( false );
+		expect( receipt.discoveryDiagnostics ).toEqual( [
+			{ code: 'route_external_redirect', url: 'https://example.com/unscheduled', reason: 'source HTTP redirect to an external origin (destination omitted)' },
+			{ code: 'route_not_found', url: 'https://example.com/absent', reason: 'HTTP 404' },
+		] );
+		const $ = cheerio.load( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) );
+		expect( $( 'a' ).first().attr( 'href' ) ).toBe( 'https://example.com/unscheduled' );
+		expect( JSON.stringify( receipt ) ).not.toContain( 'destination.example' );
+	} );
+
 	it( 'records an html alias of a directory route in website/_redirects', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-redirect-html-alias-' ) );
 		dirs.push( outputDir );
