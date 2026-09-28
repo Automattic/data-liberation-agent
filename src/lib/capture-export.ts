@@ -28,7 +28,7 @@ import {
 } from './screenshot/absent-document.js';
 import { isInlineUrl, selfContainWebsite } from './self-contain.js';
 import { wireCapturedDialogs } from './static-dialogs.js';
-import { rewriteMediaUrls } from './streaming/media-url-rewrite.js';
+import { rewriteMediaUrls, URL_TERMINATOR_LOOKAHEAD } from './streaming/media-url-rewrite.js';
 import {
 	INTERACTION_STATES_SCHEMA,
 	LEGACY_INTERACTION_STATES_SCHEMA,
@@ -487,7 +487,9 @@ function replaceAll(
 		.sort( ( a, b ) => b.length - a.length );
 	if ( sources.length === 0 ) return content;
 	const pattern = new RegExp(
-		sources.map( ( source ) => source.replace( /[.*+?^${}()|[\]\\]/g, '\\$&' ) ).join( '|' ),
+		sources
+			.map( ( source ) => source.replace( /[.*+?^${}()|[\]\\]/g, '\\$&' ) )
+			.join( '|' ) + URL_TERMINATOR_LOOKAHEAD,
 		'g'
 	);
 	return content.replace( pattern, ( source ) => values.get( source ) ?? source );
@@ -2687,9 +2689,14 @@ function removeDanglingMediaSource(
 		return withoutSources;
 	}
 	// Blank whole occurrences only. The reference is often the bare original of
-	// longer rendition URLs (`image.jpg?format=300w`) that were localized, and a
-	// substring pass would corrupt every one of them. An entity such as `&quot;`
-	// ends a URL; only `?` or a further `&name=` parameter continues it.
+	// longer rendition URLs — `image.jpg?format=300w` was the old query-shaped
+	// case; image services like GoDaddy's append whole path segments instead
+	// (`image.jpg/:/` → `image.jpg/:/rs=w:1160,h:720`, so the continuation does
+	// not even start with punctuation) — and those longer URLs are different
+	// assets, some of them captured. Splicing the blank at such a prefix
+	// corrupts the rendition and the loader loses the desktop image entirely.
+	// The URL terminator lookahead refuses every partial match: only a
+	// reference that stands as the complete URL here gets blanked.
 	const variants = [
 		...new Set( [ reference, normalizedReference, normalizedReference.replace( /&/g, '&amp;' ) ] ),
 	].sort( ( a, b ) => b.length - a.length );
@@ -2697,7 +2704,7 @@ function removeDanglingMediaSource(
 		new RegExp(
 			`(?:${ variants
 				.map( ( variant ) => variant.replace( /[.*+?^${}()|[\]\\]/g, '\\$&' ) )
-				.join( '|' ) })(?!\\?|&(?:amp;)?[^&;=\\s"']+=)`,
+				.join( '|' ) })${ URL_TERMINATOR_LOOKAHEAD }`,
 			'g'
 		),
 		TRANSPARENT_IMAGE_DATA_URL
