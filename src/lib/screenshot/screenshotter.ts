@@ -957,8 +957,10 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	if ( isDesktop && plan.captureHtml ) {
 		try {
 			// The cleanup observer may have exhausted its budget before the page
-			// re-rendered a credit or ad; the saved document must be swept.
-			await sweepSourceCleanup( page );
+			// re-rendered a credit or ad; the saved document must be swept. A source
+			// that re-initialized its document after install has no state left to
+			// sweep — the policy lets the sweep reinstall on the fresh document.
+			await sweepSourceCleanup( page, sourcePolicy );
 			await preserveStreamedVideoPosters( page, resourceStore, url ).catch( () => undefined );
 			const html = canonicalize( await capturePageHtml( page ) );
 			await resourceStore.captureDomDependencies( html, url );
@@ -1021,7 +1023,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	// can't reflow to. Best-effort: a miss leaves the page desktop-only.
 	if ( ! isDesktop && plan.captureMobileHtml ) {
 		try {
-			await sweepSourceCleanup( page );
+			await sweepSourceCleanup( page, sourcePolicy );
 			await preserveStreamedVideoPosters( page, resourceStore, url ).catch( () => undefined );
 			const mhtml = canonicalize( sanitizeFrozenHtml( await capturePageHtml( page ) ) );
 			await resourceStore.captureDomDependencies( mhtml, url );
@@ -1269,7 +1271,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	} finally {
 		await releaseNavigationLock();
 	}
-	const cleanup = await readSourceCleanup(page);
+	const cleanup = await readSourceCleanup(page, sourcePolicy);
 	entry.cleanup = { policy: sourcePolicy, reports: [...(entry.cleanup?.reports ?? []), cleanup] };
 	if (cleanup.failures.length || cleanup.residual) throw new Error('Source cleanup incomplete; see cleanup evidence');
 
