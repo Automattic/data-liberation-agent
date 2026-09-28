@@ -175,6 +175,7 @@ interface CapturePerViewportArgs {
 		page: import('playwright').Page,
 		ctx: import('../../adapters/page-actions.js').LiberationContext
 	) => Promise< void >;
+	resolveClientRedirect?: ( page: Page, url: string ) => Promise< string | undefined >;
 	beforeSerialize?: (
 		page: import('playwright').Page,
 		ctx: import('../../adapters/page-actions.js').LiberationContext
@@ -803,6 +804,16 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	if ( redirectedTo ) {
 		entry.redirectedTo = redirectedTo;
 		return;
+	}
+	// Some platforms answer 200 before their client router replaces an unavailable
+	// child route with its parent. Only an adapter-confirmed target is an alias;
+	// all other post-load navigation remains a route-drift failure.
+	if ( args.resolveClientRedirect ) {
+		const target = await args.resolveClientRedirect( page, url ).catch( () => undefined );
+		if ( target && serverRedirectTarget( url, target ) === target ) {
+			entry.redirectedTo = target;
+			return;
+		}
 	}
 	const sourcePolicy = args.cleanupPolicy ?? cleanupPolicy();
 	await applySourceCleanup(page, sourcePolicy);
@@ -1784,6 +1795,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 						...( opts.learnFluid ? { learnFluid: true } : {} ),
 						...( opts.fluidWidths ? { fluidWidths: opts.fluidWidths } : {} ),
 						prepareCapture: opts.prepareCapture,
+						resolveClientRedirect: opts.resolveClientRedirect,
 						beforeSerialize: opts.beforeSerialize,
 						...( opts.canonicalizeHtml ? { canonicalizeHtml: opts.canonicalizeHtml } : {} ),
 					} );
