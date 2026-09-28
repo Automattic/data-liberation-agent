@@ -15,6 +15,24 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.6.11] - 2026-09-28
+
+### Changed
+- regenerate plugin bundles
+- expect browser-encoded rendition URLs
+
+### Fixed
+- surface unreproduced source motion in parity checks
+- scope mobile-only classes to mobile styles
+- preserve authored responsive image ratios
+- encode copied asset paths for browser URLs
+- probe disclosures with trusted pointer clicks
+- match images through CDN transform paths
+- resolve percent-encoded captured route directories
+- preserve comma-bearing responsive image URLs
+- recover cleanup after source document reinit
+- preserve off-screen mobile drawer interactions
+
 ## [0.6.10] - 2026-09-28
 
 ### Changed
