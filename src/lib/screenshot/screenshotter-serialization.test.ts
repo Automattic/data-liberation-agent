@@ -45,6 +45,38 @@ describe('capturePageHtml stylesheet serialization', () => {
     }
   });
 
+  it('keeps an authored fixed image ratio responsive when its owner grows beyond capture width', async () => {
+    const source = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+    const copy = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+    const image = '<svg xmlns="http://www.w3.org/2000/svg" width="542" height="104"><rect width="542" height="104" fill="red"/></svg>';
+    for (const page of [source, copy]) {
+      await page.route('https://cdn.example.test/logo.svg', (route) =>
+        route.fulfill({ status: 200, contentType: 'image/svg+xml', body: image })
+      );
+    }
+    try {
+      await source.setContent(`<!doctype html><style>
+        .owner { width: calc((100vw - 96px) / 3); }
+        .owner img { width: auto; height: 104px; max-width: 100%; aspect-ratio: 542 / 104; }
+      </style><div class="owner"><img src="https://cdn.example.test/logo.svg"></div>`);
+      await source.locator('img').evaluate((element) => (element as HTMLImageElement).decode());
+      const html = await capturePageHtml(source);
+      await copy.setContent(html);
+      await copy.locator('img').evaluate((element) => (element as HTMLImageElement).decode());
+
+      for (const width of [1440, 1600, 1728]) {
+        await source.setViewportSize({ width, height: 900 });
+        await copy.setViewportSize({ width, height: 900 });
+        const expected = await source.locator('img').evaluate((element) => element.getBoundingClientRect().width);
+        const actual = await copy.locator('img').evaluate((element) => element.getBoundingClientRect().width);
+        expect(actual, `${width}px preserves the authored ratio under a fluid owner`).toBeCloseTo(expected, 0);
+      }
+    } finally {
+      await source.close();
+      await copy.close();
+    }
+  });
+
   it('preserves linked stylesheet source text and responsive layout', async () => {
     const page = await browser.newPage({ viewport: { width: 390, height: 900 } });
     await page.setContent(`
