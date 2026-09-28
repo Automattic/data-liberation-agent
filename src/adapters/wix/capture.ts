@@ -679,15 +679,23 @@ export const capture: LiberationHooks = {
 					return false;
 				}
 
+				// The target lives inside the section it resolved to, not at a page
+				// coordinate: content above it can still change height (late media,
+				// removed platform banners), and the section moves with it. The
+				// runtime's landing offset from the section edge (it keeps the
+				// section clear of pinned chrome) is replayed as scroll-margin.
 				const marker = document.createElement( 'span' );
 				marker.id = fragment;
 				marker.dataset.dlaAnchorTarget = fragment;
 				if ( resolved.element.id ) marker.dataset.dlaAnchorSourceId = resolved.element.id;
 				marker.setAttribute( 'aria-hidden', 'true' );
-				marker.style.cssText = `position:absolute;top:${ Math.round(
-					resolved.top
-				) }px;left:0;width:0;height:0;overflow:hidden;pointer-events:none`;
-				document.body.prepend( marker );
+				// Absolutely positioned without offsets, the marker sits at its
+				// static position, the section's start, and stays out of the
+				// section's own (often grid) layout.
+				marker.style.cssText = 'position:absolute;width:0;height:0;overflow:hidden;pointer-events:none';
+				resolved.element.prepend( marker );
+				const margin = Math.round( resolved.top - targetTop );
+				if ( margin > 0 ) marker.style.scrollMarginTop = `${ margin }px`;
 				for ( const link of links ) link.href = `${ location.pathname }#${ encodeURIComponent( fragment ) }`;
 				return true;
 			}, { fragment, maxWait: WIX_ANCHOR_SCROLL_MAX_MILLISECONDS, initialScroll } );
