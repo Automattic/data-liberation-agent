@@ -11,6 +11,7 @@ import {
 	CAPTURED_INTERACTIONS_SCHEMA,
 	CAPTURE_RECEIPT_SCHEMA,
 	ASSET_EVIDENCE_SCHEMA,
+	canonicalizeUnreferencedHeaderIds,
 	documentsDiffer,
 	exportWebsiteCapture,
 	INDEXED_SEMANTIC_EVIDENCE_SCHEMA,
@@ -28,6 +29,31 @@ afterEach( () => {
 } );
 
 describe( 'exportWebsiteCapture', () => {
+	it( 'stabilizes only unreferenced runtime header ids across routes', () => {
+		const page = ( token: string ) => `<html><body><header><div id="yui_3_17_2_1_${ token }_3" class="announcement"><div id="yui_3_17_2_1_${ token }_4"><a aria-labelledby="announcement-label" href="/tickets"></a><span id="announcement-label">Tickets</span></div></div><nav><a href="/">Home</a></nav></header><main><div id="yui_3_17_2_1_${ token }_5">Body</div></main></body></html>`;
+		const home = canonicalizeUnreferencedHeaderIds( page( '111' ) );
+		const about = canonicalizeUnreferencedHeaderIds( page( '222' ) );
+		expect( home.replace( '111_5', 'body' ) ).toBe( about.replace( '222_5', 'body' ) );
+		expect( home ).toContain( 'id="announcement-label"' );
+		expect( home ).toContain( 'id="yui_3_17_2_1_111_5"' );
+		expect( home ).not.toContain( 'id="yui_3_17_2_1_111_3"' );
+		expect( canonicalizeUnreferencedHeaderIds( page( '111' ), [ '#yui_3_17_2_1_111_3{display:block}' ] ) ).toContain( 'id="yui_3_17_2_1_111_3"' );
+		expect( canonicalizeUnreferencedHeaderIds( page( '111' ).replace( 'href="/tickets"', 'href="#yui_3_17_2_1_111_3"' ) ) ).toContain( 'id="yui_3_17_2_1_111_3"' );
+	} );
+
+	it( 'exports structurally shared header IDs without rewriting independent page content', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-header-identity-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
+		for ( const [ slug, id ] of [ [ 'homepage', '111' ], [ 'about', '222' ] ] ) writeFileSync( join( outputDir, 'html', `${ slug }.html` ), `<html><body><header><div id="yui_3_17_2_1_${ id }_3"><div id="yui_3_17_2_1_${ id }_4">Brand</div></div><nav><a href="/">Home</a></nav></header><main><h1>${ slug }</h1></main></body></html>` );
+		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( { version: 1, entries: { 'https://example.test/': { html: 'html/homepage.html' }, 'https://example.test/about': { html: 'html/about.html' } } } ) );
+		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.test/', platform: 'generic', summary: {}, failures: [] } );
+		const first = cheerio.load( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) );
+		const second = cheerio.load( readFileSync( join( outputDir, 'website', 'about', 'index.html' ), 'utf8' ) );
+		expect( first( 'header [id]' ).map( ( _index, element ) => first( element ).attr( 'id' ) ).get() ).toEqual( second( 'header [id]' ).map( ( _index, element ) => second( element ).attr( 'id' ) ).get() );
+		expect( second( 'main h1' ).text() ).toBe( 'about' );
+	} );
+
 	it( 'preserves the 360 Chiropractic BlogPosting as standard document JSON-LD', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-publication-export-' ) );
 		dirs.push( outputDir );
