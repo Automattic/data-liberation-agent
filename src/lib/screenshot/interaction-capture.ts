@@ -324,7 +324,7 @@ export async function captureTriggeredDialogs(
 			},
 		} );
 
-		await closeCapturedDialog( page, dialog.selector );
+		await closeCapturedDialog( page, dialog.selector, trigger.probeSelector );
 	}
 
 	await page.evaluate( () => {
@@ -334,8 +334,10 @@ export async function captureTriggeredDialogs(
 		for ( const element of document.querySelectorAll( '[data-lib-interaction-dialog]' ) ) {
 			element.removeAttribute( 'data-lib-interaction-dialog' );
 		}
-		for ( const element of document.querySelectorAll( '[data-lib-visible-before]' ) ) {
+		for ( const element of document.querySelectorAll( '[data-lib-visible-before],[data-lib-offscreen-pos],[data-lib-motion-reveal]' ) ) {
 			element.removeAttribute( 'data-lib-visible-before' );
+			element.removeAttribute( 'data-lib-offscreen-pos' );
+			element.removeAttribute( 'data-lib-motion-reveal' );
 		}
 		for ( const element of document.querySelectorAll( '[data-lib-initial-dialog],[data-lib-initial-close]' ) ) {
 			element.removeAttribute( 'data-lib-initial-dialog' );
@@ -546,6 +548,10 @@ async function rulesAddedSinceActivation( page: Page ): Promise< string > {
  * activation reveals is identified by what changed, not by its tag. A menu that
  * opens as a plain in-flow <div> would otherwise be missed, and an unrelated
  * large <nav> elsewhere on the page taken instead.
+ *
+ * Shown elements outside the viewport also get their document position. A
+ * drawer translated off-screen still has a box, so visibility alone cannot
+ * tell that a click slid it into view.
  */
 async function markVisibleBeforeActivation( page: Page ): Promise< void > {
 	await page.evaluate( () => {
@@ -558,7 +564,10 @@ async function markVisibleBeforeActivation( page: Page ): Promise< void > {
 			}
 		}
 		( globalThis as unknown as { __dlaRulesBefore?: string[] } ).__dlaRulesBefore = rules;
-		for ( const element of document.querySelectorAll( '[data-lib-visible-before]' ) ) element.removeAttribute( 'data-lib-visible-before' );
+		for ( const element of document.querySelectorAll( '[data-lib-visible-before],[data-lib-offscreen-pos]' ) ) {
+			element.removeAttribute( 'data-lib-visible-before' );
+			element.removeAttribute( 'data-lib-offscreen-pos' );
+		}
 		// Same rule as the post-activation check, including an ancestor's
 		// opacity: a menu faded in by its wrapper was not visible before.
 		const opacityOf = new Map< Element, number >();
@@ -570,11 +579,22 @@ async function markVisibleBeforeActivation( page: Page ): Promise< void > {
 			opacityOf.set( element, value );
 			return value;
 		};
+		const inViewport = ( rect: DOMRect ): boolean =>
+			rect.bottom > 0 &&
+			rect.right > 0 &&
+			rect.top < window.innerHeight &&
+			rect.left < window.innerWidth;
 		for ( const element of Array.from( document.body?.querySelectorAll( '*' ) ?? [] ) ) {
 			const rect = element.getBoundingClientRect();
 			const style = getComputedStyle( element );
 			if ( rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden' && effectiveOpacity( element ) > 0.1 ) {
 				element.setAttribute( 'data-lib-visible-before', '' );
+				if ( ! inViewport( rect ) ) {
+					element.setAttribute(
+						'data-lib-offscreen-pos',
+						`${ Math.round( rect.left + window.scrollX ) },${ Math.round( rect.top + window.scrollY ) }`
+					);
+				}
 			}
 		}
 	} ).catch( () => undefined );
@@ -628,14 +648,62 @@ async function firstNewVisibleDialog(
 			( element.parentElement === null || element.parentElement.hasAttribute( 'data-lib-visible-before' ) ) &&
 			element.querySelector( 'a[href],button' ) !== null
 		) : undefined );
-		const dialog = revealed;
+		const intersectionArea = ( rect: DOMRect ): number => {
+			const width = Math.min( rect.right, window.innerWidth ) - Math.max( rect.left, 0 );
+			const height = Math.min( rect.bottom, window.innerHeight ) - Math.max( rect.top, 0 );
+			return Math.max( 0, width ) * Math.max( 0, height );
+		};
+		const slidIntoView = ( element: Element ): boolean => {
+			const pos = element.getAttribute( 'data-lib-offscreen-pos' );
+			if ( ! pos || element.hasAttribute( 'data-lib-interaction-trigger' ) || element.closest( '[data-lib-interaction-trigger]' ) ) return false;
+			if ( ! visible( element ) ) return false;
+			const rect = element.getBoundingClientRect();
+			if ( intersectionArea( rect ) < 10_000 ) return false;
+			const [ left, top ] = pos.split( ',' ).map( ( value ) => Number.parseFloat( value ) );
+			const moved =
+				Math.abs( rect.left + window.scrollX - left ) > 48 ||
+				Math.abs( rect.top + window.scrollY - top ) > 48;
+			return moved && element.querySelector( 'a[href],button,[role="button"]' ) !== null;
+		};
+		const moved = revealed ?? ( marked
+			? Array.from( document.querySelectorAll( '[data-lib-offscreen-pos]' ) ).find( ( element ) => {
+				if ( ! slidIntoView( element ) ) return false;
+				const parent = element.parentElement;
+				return parent === null || ! slidIntoView( parent );
+			} )
+			: undefined );
+		if ( moved && moved !== revealed ) moved.setAttribute( 'data-lib-motion-reveal', '' );
+		const dialog = moved;
 		if ( ! dialog ) return undefined;
 		const dialogSelector = dialog.id
 			? selector( dialog, candidates.indexOf( dialog ) )
 			: '[data-lib-interaction-dialog="captured"]';
 		if ( ! dialog.id ) dialog.setAttribute( 'data-lib-interaction-dialog', 'captured' );
-		const clone = dialog.cloneNode( true ) as Element;
+		const clone = dialog.cloneNode( true ) as HTMLElement;
 		clone.removeAttribute( 'data-lib-interaction-dialog' );
+		clone.removeAttribute( 'data-lib-motion-reveal' );
+		clone.removeAttribute( 'data-lib-offscreen-pos' );
+		clone.removeAttribute( 'data-lib-visible-before' );
+		if ( dialog.hasAttribute( 'data-lib-motion-reveal' ) ) {
+			const position = getComputedStyle( dialog ).position;
+			clone.style.removeProperty( 'transform' );
+			clone.style.setProperty( 'transform', 'translateX(0)', 'important' );
+			clone.style.setProperty( 'visibility', 'visible', 'important' );
+			clone.style.setProperty( 'opacity', '1', 'important' );
+			if ( position === 'fixed' || position === 'absolute' ) {
+				clone.style.setProperty( 'position', 'relative', 'important' );
+				clone.style.setProperty( 'inset', 'auto', 'important' );
+				clone.style.setProperty( 'left', 'auto', 'important' );
+				clone.style.setProperty( 'right', 'auto', 'important' );
+				clone.style.setProperty( 'top', 'auto', 'important' );
+				clone.style.setProperty( 'bottom', 'auto', 'important' );
+			}
+		}
+		for ( const marked of Array.from( clone.querySelectorAll( '[data-lib-visible-before],[data-lib-offscreen-pos],[data-lib-motion-reveal]' ) ) ) {
+			marked.removeAttribute( 'data-lib-visible-before' );
+			marked.removeAttribute( 'data-lib-offscreen-pos' );
+			marked.removeAttribute( 'data-lib-motion-reveal' );
+		}
 		for ( const unsafe of Array.from( clone.querySelectorAll( 'script,style,noscript,iframe' ) ) )
 			unsafe.remove();
 		for ( const element of [ clone, ...Array.from( clone.querySelectorAll( '*' ) ) ] ) {
@@ -667,25 +735,39 @@ async function firstNewVisibleDialog(
 	} ) as Promise< DialogDescriptor | undefined >;
 }
 
-async function closeCapturedDialog( page: Page, selector: string ): Promise< void > {
+async function closeCapturedDialog( page: Page, selector: string, triggerSelector?: string ): Promise< void > {
 	await page.keyboard.press( 'Escape' ).catch( () => undefined );
 	await page.waitForTimeout( 100 );
-	const stillVisible = await page
-		.locator( selector )
-		.first()
-		.isVisible()
-		.catch( () => false );
-	if ( ! stillVisible ) return;
+	if ( ! ( await panelIntersectsViewport( page, selector ) ) ) return;
 	const close = page
 		.locator( selector )
 		.first()
 		.locator(
-			'[aria-label*="close" i],[title*="close" i],button[class*="close" i],[data-dismiss],[data-testid*="close" i]'
+			'[aria-label*="close" i],[title*="close" i],button[class*="close" i],[data-dismiss],[data-close],[data-testid*="close" i]'
 		)
 		.first();
 	if ( await close.isVisible().catch( () => false ) ) {
 		await close.click( { timeout: 1_000 } ).catch( () => undefined );
+		await page.waitForTimeout( 100 );
 	}
+	if ( triggerSelector && ( await panelIntersectsViewport( page, selector ) ) ) {
+		await page.locator( triggerSelector ).first().click( { timeout: 1_000 } ).catch( () => undefined );
+	}
+}
+
+async function panelIntersectsViewport( page: Page, selector: string ): Promise< boolean > {
+	return page
+		.locator( selector )
+		.first()
+		.evaluate( ( element ) => {
+			const rect = element.getBoundingClientRect();
+			const style = getComputedStyle( element );
+			if ( style.display === 'none' || style.visibility === 'hidden' ) return false;
+			const width = Math.min( rect.right, window.innerWidth ) - Math.max( rect.left, 0 );
+			const height = Math.min( rect.bottom, window.innerHeight ) - Math.max( rect.top, 0 );
+			return width > 8 && height > 8;
+		}, undefined, { timeout: 1_000 } )
+		.catch( () => false );
 }
 
 async function waitForDialogContentStable( page: Page, selector: string ): Promise< void > {
@@ -714,11 +796,34 @@ async function snapshotDialog(
 		.locator( selector )
 		.first()
 		.evaluate( ( dialog, capturedSelector ) => {
-			const clone = dialog.cloneNode( true ) as Element;
+			const clone = dialog.cloneNode( true ) as HTMLElement;
 			clone.removeAttribute( 'data-lib-interaction-dialog' );
+			clone.removeAttribute( 'data-lib-motion-reveal' );
+			clone.removeAttribute( 'data-lib-offscreen-pos' );
+			clone.removeAttribute( 'data-lib-visible-before' );
+			if ( dialog.hasAttribute( 'data-lib-motion-reveal' ) ) {
+				const position = getComputedStyle( dialog ).position;
+				clone.style.removeProperty( 'transform' );
+				clone.style.setProperty( 'transform', 'translateX(0)', 'important' );
+				clone.style.setProperty( 'visibility', 'visible', 'important' );
+				clone.style.setProperty( 'opacity', '1', 'important' );
+				if ( position === 'fixed' || position === 'absolute' ) {
+					clone.style.setProperty( 'position', 'relative', 'important' );
+					clone.style.setProperty( 'inset', 'auto', 'important' );
+					clone.style.setProperty( 'left', 'auto', 'important' );
+					clone.style.setProperty( 'right', 'auto', 'important' );
+					clone.style.setProperty( 'top', 'auto', 'important' );
+					clone.style.setProperty( 'bottom', 'auto', 'important' );
+				}
+			}
+			for ( const marked of Array.from( clone.querySelectorAll( '[data-lib-visible-before],[data-lib-offscreen-pos],[data-lib-motion-reveal]' ) ) ) {
+				marked.removeAttribute( 'data-lib-visible-before' );
+				marked.removeAttribute( 'data-lib-offscreen-pos' );
+				marked.removeAttribute( 'data-lib-motion-reveal' );
+			}
 			// The portable disclosure's block fallback must not collapse flex/grid
 			// layouts whose descendants rely on the opened root's layout mode.
-			( clone as HTMLElement ).style.setProperty( 'display', getComputedStyle( dialog ).display, 'important' );
+			clone.style.setProperty( 'display', getComputedStyle( dialog ).display, 'important' );
 			for ( const unsafe of Array.from( clone.querySelectorAll( 'script,style,noscript,iframe' ) ) )
 				unsafe.remove();
 			for ( const element of [ clone, ...Array.from( clone.querySelectorAll( '*' ) ) ] ) {
