@@ -2084,20 +2084,20 @@ describe( 'exportWebsiteCapture', () => {
 		const image = $( '#hero' );
 		const exportedSrcset = image.attr( 'srcset' ) ?? '';
 		// The painted desktop rendition localizes instead of being corrupted away…
-		expect( exportedSrcset ).toMatch( /external\/[0-9a-f]+\/isteam\/ip\/abc123\/IMG_2019\.JPG\/:\/rs=w:1160,h:720\.jpg 1160w/ );
+		expect( exportedSrcset ).toMatch( /external\/[0-9a-f]+\/isteam\/ip\/abc123\/IMG_2019\.JPG\/%3A\/rs%3Dw%3A1160%2Ch%3A720\.jpg 1160w/ );
 		// …while the mobile rendition it must not sacrifice is still selectable.
-		expect( exportedSrcset ).toMatch( /rs=w:390,h:242\.jpg 390w/ );
+		expect( exportedSrcset ).toMatch( /rs%3Dw%3A390%2Ch%3A242\.jpg 390w/ );
 		// Uncaptured candidates name nothing in the artifact.
-		expect( exportedSrcset ).not.toContain( 'rs=w:1160 ' );
-		expect( html ).not.toContain( 'h:893' );
+		expect( exportedSrcset ).not.toContain( 'rs%3Dw%3A1160 1160w' );
+		expect( html ).not.toContain( '%2Ch%3A893' );
 		// Nothing the copy can select is allowed to dangle: every local candidate
 		// (and the localized src) resolves to a file that shipped.
 		for ( const candidate of exportedSrcset.split( /,(?=\s)/ ).map( ( entry ) => entry.trim() ).filter( Boolean ) ) {
 			const url = candidate.split( /\s+/ )[ 0 ] ?? '';
 			if ( url.startsWith( 'data:' ) ) continue;
-			expect( existsSync( join( outputDir, 'website', url ) ) ).toBe( true );
+			expect( existsSync( join( outputDir, 'website', decodeURIComponent( url ) ) ) ).toBe( true );
 		}
-		expect( existsSync( join( outputDir, 'website', image.attr( 'src' ) ?? '' ) ) ).toBe( true );
+		expect( existsSync( join( outputDir, 'website', decodeURIComponent( image.attr( 'src' ) ?? '' ) ) ) ).toBe( true );
 		const diagnostics = JSON.parse( readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' ) );
 		expect( diagnostics.unresolvedDependencies ).toEqual(
 			expect.arrayContaining( [
