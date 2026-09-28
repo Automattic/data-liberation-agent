@@ -1666,7 +1666,19 @@ function assembleResponsiveHtml(
 			`${ responsiveMobileStyles( mobileHtml, undefined, switchWidth, shared ) }</head>`
 		);
 	}
-	const identitySubset = identitySubsetMerge( desktopHtml, mobileHtml, switchWidth );
+	// A phone-only body flag can gate the source's desktop width rules. The
+	// identity-subset path carries phone classes onto its single body, making a
+	// `body:not(.flag)` rule false at desktop widths as well. Use the existing
+	// two-document path only when a phone-only class actually gates desktop CSS.
+	const capturedBodyClasses = ( attributes: string ) =>
+		( cheerio.load( `<body${ attributes }></body>` )( 'body' ).attr( 'class' ) ?? '' ).split( /\s+/ ).filter( Boolean );
+	const desktopClasses = new Set( capturedBodyClasses( desktopBodyMatch?.[ 1 ] ?? '' ) );
+	const desktopCss = styleBlocks( desktopHtml ).join( '\n' );
+	const gatedByMobileClass = capturedBodyClasses( mobileBodyMatch?.[ 1 ] ?? '' ).some( ( className ) =>
+		! desktopClasses.has( className ) &&
+		new RegExp( `\\bbody\\s*:not\\(\\s*\\.${ className.replace( /[.*+?^${}()|[\]\\]/g, '\\$&' ) }\\s*\\)` ).test( desktopCss )
+	);
+	const identitySubset = gatedByMobileClass ? null : identitySubsetMerge( desktopHtml, mobileHtml, switchWidth );
 	if ( identitySubset ) {
 		// One body carries both renderings: mobile-only elements join the desktop
 		// tree under their mapped parents and width-scoped visibility hides each
@@ -1770,6 +1782,7 @@ function assembleResponsiveHtml(
 	) }>${ mobileBody }</div>`;
 	const sharedStyles = styleBlocks( desktopHtml );
 	if (
+		! gatedByMobileClass &&
 		sharedStyles.length > 0 &&
 		sharedStyles.join( '\n' ) === styleBlocks( mobileHtml ).join( '\n' )
 	) {
@@ -1786,7 +1799,7 @@ function assembleResponsiveHtml(
 	// A stylesheet present in both captures must apply at every width, so it is
 	// left out of both scoping passes below and kept exactly once, unscoped, from
 	// the desktop copy that already carries it.
-	const shared = sharedStyleContents( desktopHtml, mobileHtml );
+	const shared = gatedByMobileClass ? new Set< string >() : sharedStyleContents( desktopHtml, mobileHtml );
 	const mobileStyles = responsiveMobileStyles(
 		mobileHtml,
 		`.${ MOBILE_DOCUMENT_CLASS }`,
