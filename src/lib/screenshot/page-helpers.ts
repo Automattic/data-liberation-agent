@@ -6,7 +6,7 @@ import { isSourcePromotion } from '../source-cleanup.js';
  * Wait for a page to reach a stable state after load.
  *
  *   goto('load') ─▶ settleMs ─▶ networkidle best-effort (5s) ─▶ fonts.ready (4s)
- *     ─▶ DOM quiescence, bounded (5s) ─▶ done
+ *     ─▶ DOM quiescence, bounded (5s) ─▶ declared loading state, if any ─▶ done
  *
  * Networkidle is wrapped in try/catch because chatty analytics (GA, Intercom)
  * can hold it open indefinitely; we don't want that to block capture.
@@ -19,7 +19,7 @@ import { isSourcePromotion } from '../source-cleanup.js';
  * networkidle, so any font request issued by late hydration JS is already in
  * flight and document.fonts.ready waits for it to actually apply.
  *
- * The DOM-quiescence step runs LAST because a client-rendered app can still be
+ * The DOM-quiescence step runs after fonts because a client-rendered app can still be
  * assembling its own content well after 'load' fires and after networkidle has
  * either resolved or given up. 'load' only covers the document's own
  * script/stylesheet bundle, not whatever that bundle goes on to fetch and
@@ -34,7 +34,9 @@ import { isSourcePromotion } from '../source-cleanup.js';
  * for `quietMs`, bounded by `domTimeoutMs` so a page that never stops mutating
  * (a live-updating ticker, a looping carousel re-render) cannot hang the
  * capture — it simply falls back to whatever the DOM looked like at the
- * deadline, same as every other best-effort wait in this file.
+ * deadline, same as every other best-effort wait in this file. A declared
+ * loading state additionally keeps finite timer sequences from being frozen
+ * during a quiet gap between text updates.
  */
 export async function waitForStable(
   page: Page,
@@ -52,6 +54,40 @@ export async function waitForStable(
   }
   await waitForFonts(page);
   await waitForDomQuiescence(page, 500, domTimeoutMs);
+  await waitForDeclaredLoadingState(page);
+}
+
+/**
+ * A quiet gap between timers does not mean that an authored loading sequence is
+ * finished. Only wait when the document explicitly declares itself busy, and
+ * bound the wait for pages whose busy state never clears.
+ */
+export async function waitForDeclaredLoadingState(page: Page, timeoutMs: number = 15_000): Promise<void> {
+  try {
+    const wasBusy = await withEvaluateTimeout(page.evaluate(({ timeoutMs }) => {
+      const busy = () => [document.documentElement, document.body].some(
+        (element) => element?.classList.contains('loading') || element?.getAttribute('aria-busy') === 'true'
+      );
+      if (!busy()) return false;
+      return new Promise<boolean>((resolve) => {
+        const observer = new MutationObserver(() => {
+          if (!busy()) finish();
+        });
+        const finish = () => {
+          clearTimeout(timer);
+          observer.disconnect();
+          resolve(true);
+        };
+        observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'aria-busy'] });
+        if (document.body) observer.observe(document.body, { attributes: true, attributeFilter: ['class', 'aria-busy'] });
+        const timer = setTimeout(finish, timeoutMs);
+        if (!busy()) finish();
+      });
+    }, { timeoutMs }), timeoutMs + 1_000);
+    if (wasBusy) await waitForDomQuiescence(page, 500, 2_000);
+  } catch {
+    /* best-effort — never hang a capture on an orphaned loading state */
+  }
 }
 
 /**
