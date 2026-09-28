@@ -1618,6 +1618,50 @@ describe( 'exportWebsiteCapture', () => {
 		expect( html ).toContain( '#comp-box{width:320px!important}' );
 	} );
 
+	it( 'keeps a responsive hero and split section wide when a phone-only body flag gates desktop layout', async () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-responsive-body-width-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
+			mkdirSync( join( outputDir, path ), { recursive: true } );
+		const css = '<style>body{margin:0}.hero img{width:100%}' +
+			'body:not(.compact) .hero{width:100vw}' +
+			'body:not(.compact) .split{display:flex;width:100vw}' +
+			'body:not(.compact) .split img{width:40%}' +
+			'@media(max-width:767px){.split img{width:100%}}' +
+			'</style>';
+		const image = '<img src="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22/%3E" style="display:block;height:120px">';
+		const body = ( phone: boolean ) => '<main id="layout">' +
+			`<section id="hero" class="hero">${ image }</section>` +
+			`<section id="split" class="split">${ image }<p>Story</p></section>` +
+			( phone ? '<span id="phone-navigation">Menu</span>' : '' ) + '</main>';
+		writeFileSync( join( outputDir, 'html/homepage.html' ),
+			`<html><head>${ css }</head><body>${ body( false ) }</body></html>` );
+		writeFileSync( join( outputDir, 'html-mobile/homepage.html' ),
+			`<html><head>${ css }</head><body class="compact">${ body( true ) }</body></html>` );
+		writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( {
+			version: 1, entries: { 'https://example.com/': { html: 'html/homepage.html' } },
+		} ) );
+		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [] } );
+		const browser = await chromium.launch();
+		try {
+			const page = await browser.newPage();
+			await page.setContent( readFileSync( join( outputDir, 'website/index.html' ), 'utf8' ) );
+			for ( const [ width, heroWidth, splitWidth ] of [
+				[ 390, 390, 390 ], [ 768, 768, 307.2 ], [ 1440, 1440, 576 ],
+				[ 1600, 1600, 640 ], [ 1728, 1728, 691.2 ],
+			] ) {
+				await page.setViewportSize( { width, height: 900 } );
+				const hero = await page.locator( '#hero:visible img' ).boundingBox();
+				const split = await page.locator( '#split:visible img' ).boundingBox();
+				expect( Math.abs( hero!.width - heroWidth ), `hero width at ${ width }` ).toBeLessThan( 2 );
+				expect( Math.abs( split!.width - splitWidth ), `split width at ${ width }` ).toBeLessThan( 2 );
+				expect( split!.x, `split x at ${ width }` ).toBe( 0 );
+			}
+		} finally {
+			await browser.close();
+		}
+	} );
+
 	it.each( [
 		[
 			'a repeated per-instance id and a body-level mobile-only anchor',
