@@ -409,9 +409,16 @@ export async function capturePageHtml( page: Page ): Promise< string > {
 						previous: image.style.getPropertyValue( 'aspect-ratio' ),
 						priority: image.style.getPropertyPriority( 'aspect-ratio' ),
 					} );
-					// An `auto <ratio>` declaration still lets a localized replaced image
-					// use its different intrinsic ratio. Freeze what the source rendered.
-					image.style.setProperty( 'aspect-ratio', `${ rendered.width } / ${ rendered.height }` );
+					// `auto <ratio>` lets a localized image use its different intrinsic
+					// ratio, so retain the source's rendered ratio in that case. A fixed
+					// authored ratio must stay fixed: a max-width-constrained image can
+					// have a different rendered box ratio at every viewport width.
+					image.style.setProperty(
+						'aspect-ratio',
+						/^auto\s/i.test( imageStyle.aspectRatio )
+							? `${ rendered.width } / ${ rendered.height }`
+							: imageStyle.aspectRatio
+					);
 				}
 				const attribute = image.getAttribute( 'src' ) ?? '';
 				const shaped = srcsetShaped( attribute );
