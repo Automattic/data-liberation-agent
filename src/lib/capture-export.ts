@@ -2287,6 +2287,11 @@ function portableResourcePath( path: string, contentType: string ): string | und
 	return extension ? `${ requestedPath }${ extension }` : undefined;
 }
 
+/** Encode a copied file's URL without changing its on-disk path. */
+function portableAssetUrl( path: string ): string {
+	return '/' + path.replace( /\\/g, '/' ).split( '/' ).map( encodeURIComponent ).join( '/' );
+}
+
 function dependencyReferences(
 	html: string,
 	documentUrl: string,
@@ -3455,12 +3460,12 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 			);
 			fallbackAssetPath ||= assetPath;
 			for ( const reference of candidate.exactReferences ) {
-				mediaReplacements.set( reference, `/${ assetPath.replace( /\\/g, '/' ) }` );
+				mediaReplacements.set( reference, portableAssetUrl( assetPath ) );
 			}
 		}
 		for ( const reference of retainedMediaFamilies.get( family ) ?? [] ) {
 			if ( ! mediaReplacements.has( reference ) )
-				mediaReplacements.set( reference, `/${ fallbackAssetPath.replace( /\\/g, '/' ) }` );
+				mediaReplacements.set( reference, portableAssetUrl( fallbackAssetPath ) );
 		}
 	}
 	const portableMedia = {
@@ -3535,7 +3540,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 			: assetPathsByHash.get( contentHash ) ??
 			  uniqueAssetPath( requestedPath, contentHash, assetHashesByPath );
 		const destination = resolve( websiteDir, relativePath );
-		const portablePath = `/${ relativePath.replace( /\\/g, '/' ) }`;
+		const portablePath = portableAssetUrl( relativePath );
 		const alreadyCopied =
 			( ! isText && assetPathsByHash.has( contentHash ) ) ||
 			copiedResources.has( resource.path ) ||
