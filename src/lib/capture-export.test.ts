@@ -1462,12 +1462,6 @@ describe( 'exportWebsiteCapture', () => {
 			'<span id="section-anchor"></span><div id="comp-root"><button id="comp-a"><i id="icon"></i>A</button><button id="comp-b"><i id="icon"></i>B</button></div>',
 			'collapsed-identity-subset',
 		],
-		[
-			'a shared component the mobile capture moves into another id-less container',
-			'<form id="comp-form"><div class="grid"><div class="cell"><input id="field-a"></div><div class="cell"><input id="field-b"></div></div></form>',
-			'<form id="comp-form"><div class="grid"><div class="cell"><input id="field-a"></div></div><div class="grid"><div class="cell"><input id="field-b"></div></div></form>',
-			'dual-structural',
-		],
 	] )( 'reconciles %s as expected', ( _label, desktopBody, mobileBody, outcome ) => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-collapse-shape-' ) );
 		dirs.push( outputDir );
@@ -1501,6 +1495,60 @@ describe( 'exportWebsiteCapture', () => {
 			expect( $( 'body > #section-anchor.data-liberation-mobile-only' ) ).toHaveLength( 1 );
 			expect( $( '#comp-a #icon, #comp-b #icon' ) ).toHaveLength( 2 );
 		}
+	} );
+
+	const exportDualCapture = ( desktopBody: string, mobileBody: string ) => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-collapse-component-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
+			mkdirSync( join( outputDir, path ), { recursive: true } );
+		writeFileSync( join( outputDir, 'html', 'homepage.html' ), `<html><body>${ desktopBody }</body></html>` );
+		writeFileSync( join( outputDir, 'html-mobile', 'homepage.html' ), `<html><body>${ mobileBody }</body></html>` );
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( { version: 1, entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } } } )
+		);
+		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'weebly', summary: {}, failures: [] } );
+		return {
+			receipt: JSON.parse( readFileSync( join( outputDir, 'capture-receipt.json' ), 'utf8' ) ),
+			$: cheerio.load( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) ),
+		};
+	};
+
+	it( 'ships only a re-parented component once per viewport and collapses the rest of the page', () => {
+		// The phone layout moves one form field into its own row. Everything else,
+		// the header included, is the same component tree on both sides.
+		const header = '<header id="comp-header"><nav><a href="#about">About</a></nav></header>';
+		const section = '<section id="about"><h2>About</h2></section>';
+		const { receipt, $ } = exportDualCapture(
+			header + section + '<form id="comp-form"><div class="grid"><div class="cell"><label for="field-a">A</label><input id="field-a"></div><div class="cell"><input id="field-b" aria-describedby="hint-b"><span id="hint-b">Hint</span></div></div></form>',
+			header + section + '<form id="comp-form"><div class="grid"><div class="cell"><label for="field-a">A</label><input id="field-a"></div></div><div class="grid"><div class="cell"><input id="field-b" aria-describedby="hint-b"><span id="hint-b">Hint</span></div></div></form>'
+		);
+		expect( receipt.routes[ 0 ].responsiveVariants ).toMatchObject( { variants: 1, outcome: 'collapsed-identity-subset', divergedComponents: 1 } );
+		expect( $( '.data-liberation-mobile-document' ) ).toHaveLength( 0 );
+		expect( $( 'header#comp-header' ) ).toHaveLength( 1 );
+		expect( $( 'a[href="#about"]' ) ).toHaveLength( 1 );
+		expect( $( '#about' ) ).toHaveLength( 1 );
+		// Each viewport renders its own form, and the phone copy's ids and the
+		// references inside it move together.
+		expect( $( '#comp-form.data-liberation-desktop-only .grid' ) ).toHaveLength( 1 );
+		const phone = $( '#comp-form--dla-mobile.data-liberation-mobile-only' );
+		expect( phone ).toHaveLength( 1 );
+		expect( phone.find( '.grid' ) ).toHaveLength( 2 );
+		expect( phone.find( 'label' ).attr( 'for' ) ).toBe( 'field-a--dla-mobile' );
+		expect( phone.find( '#field-b--dla-mobile' ).attr( 'aria-describedby' ) ).toBe( 'hint-b--dla-mobile' );
+		expect( $( '#comp-form' ).next().is( phone ) ).toBe( true );
+		const ids = $( '[id]' ).toArray().map( ( node ) => $( node ).attr( 'id' ) );
+		expect( new Set( ids ).size ).toBe( ids.length );
+	} );
+
+	it( 'keeps dual documents when a re-parented component holds a link target', () => {
+		// Renaming the phone copy would move the target a link points at.
+		const { receipt } = exportDualCapture(
+			'<nav><a href="#field-b">Jump</a></nav><form id="comp-form"><div class="grid"><div class="cell"><input id="field-a"></div><div class="cell"><input id="field-b"></div></div></form>',
+			'<nav><a href="#field-b">Jump</a></nav><form id="comp-form"><div class="grid"><div class="cell"><input id="field-a"></div></div><div class="grid"><div class="cell"><input id="field-b"></div></div></form>'
+		);
+		expect( receipt.routes[ 0 ].responsiveVariants.outcome ).toBe( 'dual-structural' );
 	} );
 
 	it( 'keeps dual documents when mobile text has no mapped parent to reconcile into', () => {

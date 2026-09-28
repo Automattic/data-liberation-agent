@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { canonicalizeWixInstanceIds } from './instance-ids.js';
+import { canonicalizeWixCapturedHtml, canonicalizeWixFormControlIds, canonicalizeWixInstanceIds } from './instance-ids.js';
 
 const page = ( instance: string, extra = '' ) =>
 	`<html><head><style>#${ instance }{position:sticky}.${ instance }-container{margin:0}` +
@@ -51,5 +51,37 @@ describe( 'canonicalizeWixInstanceIds', () => {
 	it( 'leaves markup without instance references unchanged', () => {
 		const html = '<div id="comp-abc" class="comp-abc-container">x</div>';
 		expect( canonicalizeWixInstanceIds( html ) ).toBe( html );
+	} );
+} );
+
+describe( 'canonicalizeWixFormControlIds', () => {
+	const consent = ( counter: number, before = '' ) =>
+		`<form>${ before }<div data-hook="form-field-form_field_92f1"><input type="checkbox" id="checkbox-${ counter }"><label for="checkbox-${ counter }">Subscribe</label></div></form>`;
+
+	it( 'names a render-counter checkbox after its form field, so every page and viewport agrees', () => {
+		const home = canonicalizeWixFormControlIds( consent( 23, '<div data-hook="form-field-email"><input id="checkbox-3" type="checkbox"></div>' ) );
+		const privacy = canonicalizeWixFormControlIds( consent( 5 ) );
+		const token = /id="(checkbox-dla[0-9a-f]{8})"/.exec( privacy )?.[ 1 ];
+		expect( token ).toBeDefined();
+		expect( home ).toContain( `id="${ token }"` );
+		expect( home ).not.toMatch( /checkbox-(23|5|3)(?![0-9a-z-])/ );
+		// Another field's checkbox gets its own name.
+		expect( home.match( /id="checkbox-dla[0-9a-f]{8}"/g ) ).toHaveLength( 2 );
+	} );
+
+	it( 'rewrites references to the counter id and leaves ids that only start with it alone', () => {
+		const html = canonicalizeWixFormControlIds( consent( 5, '<span id="checkbox-5-hint">Hint</span>' ) );
+		const token = /id="(checkbox-dla[0-9a-f]{8})"/.exec( html )?.[ 1 ];
+		expect( html ).toContain( `for="${ token }"` );
+		expect( html ).toContain( 'id="checkbox-5-hint"' );
+	} );
+
+	it( 'keeps a document unchanged when a counter checkbox has no enclosing field', () => {
+		const html = '<form><input type="checkbox" id="checkbox-4"></form>';
+		expect( canonicalizeWixFormControlIds( html ) ).toBe( html );
+	} );
+
+	it( 'runs after instance canonicalization in the captured-HTML hook', () => {
+		expect( canonicalizeWixCapturedHtml( page( 'comp-aaaa1111', consent( 9 ) ) ) ).toBe( canonicalizeWixCapturedHtml( page( 'comp-bbbb2222', consent( 12 ) ) ) );
 	} );
 } );

@@ -771,6 +771,8 @@ export interface ResponsiveVariantEvidence {
 	desktopOnlyElements?: number;
 	/** Elements only the mobile capture rendered, inserted under their mapped parent and hidden above the switch width. Present only for an identity-subset collapse. */
 	mobileOnlyElements?: number;
+	/** Shared components the phone layout re-parents, shipped once per viewport inside the collapsed document. */
+	divergedComponents?: number;
 }
 
 function responsiveVariantEvidence(
@@ -786,10 +788,13 @@ function responsiveVariantEvidence(
 			return {
 				variants: 1,
 				outcome: 'collapsed-identity-subset',
-				reason: `mobile document reconciles with desktop by element identity (${ merge.mobileOnlyElements } mobile-only, ${ merge.desktopOnlyElements } desktop-only elements); shipped one document`,
+				reason: `mobile document reconciles with desktop by element identity (${ merge.mobileOnlyElements } mobile-only, ${ merge.desktopOnlyElements } desktop-only elements${
+					merge.divergedComponents > 0 ? `, ${ merge.divergedComponents } re-parented component${ merge.divergedComponents === 1 ? '' : 's' } shipped per viewport` : ''
+				}); shipped one document`,
 				css: sharedStyles ? 'shared' : 'viewport-scoped',
 				desktopOnlyElements: merge.desktopOnlyElements,
 				mobileOnlyElements: merge.mobileOnlyElements,
+				...( merge.divergedComponents > 0 ? { divergedComponents: merge.divergedComponents } : {} ),
 			};
 		}
 		return {
@@ -822,6 +827,8 @@ interface IdentitySubsetMerge {
 	projectedElements: number;
 	/** Width-scoped rules carrying each viewport's inline presentation for shared elements. */
 	css: string;
+	/** Shared components the phone layout re-parents, shipped as one rendering per viewport. */
+	divergedComponents: number;
 }
 
 /**
@@ -1067,8 +1074,10 @@ function identitySubsetMerge(
 	let projectedElements = 0;
 	// A shared component the two captures hold under different id-less
 	// containers (a form field a phone layout moves into its own row) is
-	// re-parented, not restyled; one tree cannot render both placements.
-	let diverged = false;
+	// re-parented, not restyled; one tree cannot render both placements. The
+	// walk records the shared component it started from, and only that
+	// component ships once per viewport.
+	const divergedRoots = new Set< string >();
 	const sharedIdsIn = ( $: cheerio.CheerioAPI, node: Element ): string =>
 		$( node )
 			.find( '[id]' )
@@ -1173,7 +1182,10 @@ function identitySubsetMerge(
 			if ( match < 0 ) continue;
 			cursor = match + 1;
 			const desktopChild = desktopChildren[ match ] as Element;
-			if ( sharedIdsIn( $d, desktopChild ) !== sharedIdsIn( $m, mobileChild ) ) diverged = true;
+			if ( sharedIdsIn( $d, desktopChild ) !== sharedIdsIn( $m, mobileChild ) ) {
+				divergedRoots.add( path.split( '/' )[ 0 ] as string );
+				continue;
+			}
 			const childId = $d( desktopChild ).attr( 'id' );
 			if ( childId && isIdentityId( childId ) ) continue;
 			projectPair( $d( desktopChild ), $m( mobileChild ), `${ path }/${ match }` );
@@ -1183,7 +1195,8 @@ function identitySubsetMerge(
 		const mobileElement = mobileIds.get( id );
 		if ( mobileElement ) projectPair( $d( desktopElement ), $m( mobileElement ), id );
 	}
-	if ( diverged ) return undefined;
+	const divergedComponents = splitDivergedComponents( $d, $m, divergedRoots, desktopIds, mobileIds );
+	if ( divergedComponents === undefined ) return undefined;
 	const css =
 		( desktopRules.length > 0
 			? `@media(min-width:${ switchWidth + 1 }px){${ desktopRules.join( '' ) }}`
@@ -1195,7 +1208,78 @@ function identitySubsetMerge(
 		mobileOnlyElements: insertions.length,
 		projectedElements,
 		css,
+		divergedComponents,
 	};
+}
+
+/** Attributes that name other elements by id, so a renamed subtree keeps its own references. */
+const ID_REFERENCE_ATTRIBUTES = [ 'for', 'aria-labelledby', 'aria-describedby', 'aria-controls', 'aria-owns', 'aria-activedescendant', 'aria-details', 'aria-errormessage', 'list', 'form', 'headers' ];
+
+/**
+ * Ship each re-parented shared component once per viewport: the desktop
+ * rendering stays in place and is hidden at phone width, and the phone
+ * rendering follows it, hidden above the switch. The phone copy's ids take the
+ * `--dla-mobile` suffix, like a phone document's, and its references within
+ * the copy follow them. Nested diverged components travel with their outermost
+ * one. A component whose ids a link or anchor targets cannot be renamed
+ * without moving that target, so the whole page stays dual instead.
+ *
+ * Returns the number of split components, or undefined to keep both documents.
+ */
+function splitDivergedComponents(
+	$d: cheerio.CheerioAPI,
+	$m: cheerio.CheerioAPI,
+	roots: Set< string >,
+	desktopIds: Map< string, Element >,
+	mobileIds: Map< string, Element >
+): number | undefined {
+	if ( roots.size === 0 ) return 0;
+	const outermost = [ ...roots ].filter( ( id ) => {
+		const element = desktopIds.get( id );
+		return element !== undefined && ! [ ...roots ].some( ( other ) => other !== id && $d( desktopIds.get( other ) as Element ).find( element ).length > 0 );
+	} );
+	const linkedFragments = new Set< string >();
+	for ( const $ of [ $d, $m ] ) {
+		$( 'a[href*="#"]' ).each( ( _index, link ) => {
+			const href = $( link ).attr( 'href' ) ?? '';
+			try {
+				linkedFragments.add( decodeURIComponent( href.slice( href.indexOf( '#' ) + 1 ) ) );
+			} catch {
+				// An undecodable fragment targets nothing.
+			}
+		} );
+	}
+	for ( const id of outermost ) {
+		const desktop = $d( desktopIds.get( id ) as Element );
+		const mobileElement = mobileIds.get( id );
+		if ( ! mobileElement ) return undefined;
+		const mobile = $m( mobileElement ).clone();
+		const idsIn = ( node: cheerio.Cheerio< Element >, $: cheerio.CheerioAPI ) => [ node, ...node.find( '[id]' ).toArray().map( ( child ) => $( child ) ) ].map( ( n ) => n.attr( 'id' ) ?? '' ).filter( Boolean );
+		const targeted = ( node: cheerio.Cheerio< Element >, $: cheerio.CheerioAPI ) =>
+			node.is( '[data-dla-anchor-target]' ) || node.find( '[data-dla-anchor-target]' ).length > 0 || idsIn( node, $ ).some( ( value ) => linkedFragments.has( value ) );
+		if ( targeted( desktop, $d ) || targeted( $m( mobileElement ), $m ) ) return undefined;
+		const renamed = new Map< string, string >();
+		for ( const node of [ mobile, ...mobile.find( '[id]' ).toArray().map( ( child ) => $m( child ) ) ] ) {
+			const value = node.attr( 'id' );
+			if ( ! value ) continue;
+			renamed.set( value, `${ value }--dla-mobile` );
+			node.attr( 'id', `${ value }--dla-mobile` );
+		}
+		for ( const node of [ mobile, ...mobile.find( '*' ).toArray().map( ( child ) => $m( child ) ) ] ) {
+			for ( const attribute of ID_REFERENCE_ATTRIBUTES ) {
+				const value = node.attr( attribute );
+				if ( value === undefined ) continue;
+				node.attr( attribute, value.split( /\s+/ ).map( ( token ) => renamed.get( token ) ?? token ).join( ' ' ) );
+			}
+		}
+		// Phone-only elements the merge placed inside the desktop rendering
+		// already live in the phone copy.
+		desktop.find( `.${ RESPONSIVE_MOBILE_ONLY_CLASS }` ).remove();
+		desktop.addClass( RESPONSIVE_DESKTOP_ONLY_CLASS );
+		mobile.removeClass( RESPONSIVE_DESKTOP_ONLY_CLASS ).addClass( RESPONSIVE_MOBILE_ONLY_CLASS );
+		desktop.after( $m.html( mobile ) ?? '' );
+	}
+	return outermost.length;
 }
 
 /**
