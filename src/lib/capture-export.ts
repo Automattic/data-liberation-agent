@@ -11,6 +11,8 @@ import {
 } from 'node:fs';
 import { basename, dirname, extname, join, relative, resolve, sep } from 'node:path';
 import * as cheerio from 'cheerio';
+import postcss from 'postcss';
+import selectorParser from 'postcss-selector-parser';
 import type { AnyNode, Element } from 'domhandler';
 import { escapeHtmlAttr } from './html-escape.js';
 import { appendScrollDrivenAnimations } from './scroll-driven-animations.js';
@@ -694,6 +696,29 @@ function documentSwitchCss( switchWidth: number ): string {
  * serve their desktop document — the one the fluid sweep observed at 768px.
  */
 const DEFAULT_SWITCH_WIDTH = 767;
+const DESKTOP_CAPTURE_WIDTH = 1440;
+
+/**
+ * Use the widest observed source media breakpoint below the desktop capture
+ * viewport when fluid capture did not identify a switch. Responsive variants
+ * can remain in their mobile layout above 767px; the captured site breakpoints
+ * are stronger evidence than assuming the conventional phone/tablet boundary.
+ */
+function fallbackResponsiveSwitchWidth( outputDir: string ): number | undefined {
+	const path = join( outputDir, 'breakpoints.json' );
+	if ( ! existsSync( path ) ) return undefined;
+	try {
+		const data = JSON.parse( readFileSync( path, 'utf8' ) ) as { maxWidth?: unknown };
+		if ( ! Array.isArray( data.maxWidth ) ) return undefined;
+		const candidates = data.maxWidth.filter(
+			( width ): width is number =>
+				typeof width === 'number' && Number.isInteger( width ) && width > 0 && width < DESKTOP_CAPTURE_WIDTH
+		);
+		return candidates.length > 0 ? Math.max( ...candidates ) : undefined;
+	} catch {
+		return undefined;
+	}
+}
 
 /**
  * Attributes DLA's own capture infrastructure writes to mark that two
@@ -900,6 +925,7 @@ interface IdentitySubsetMerge {
 	projectedElements: number;
 	/** Width-scoped rules carrying each viewport's inline presentation for shared elements. */
 	css: string;
+	classAliases: Map<string, string>;
 	/** Shared components the phone layout re-parents, shipped as one rendering per viewport. */
 	divergedComponents: number;
 }
@@ -1008,6 +1034,22 @@ function identitySubsetMerge(
 	}
 	const { $: $d, ids: desktopIds } = desktop;
 	const { $: $m, ids: mobileIds } = mobile;
+	const classAliases = new Map<string, string>();
+	const desktopClassTokens = new Set<string>();
+	$d( '[class]' ).each( ( _index, node ) =>
+		( $d( node ).attr( 'class' ) ?? '' ).split( /\s+/ ).filter( Boolean ).forEach( ( token ) => desktopClassTokens.add( token ) )
+	);
+	let unsafeClassAlias = false;
+	const bodyClasses = ( html: string ) => {
+		const attributes = /<body\b([^>]*)>/i.exec( html )?.[ 1 ] ?? '';
+		return ( cheerio.load( `<body${ attributes }></body>` )( 'body' ).attr( 'class' ) ?? '' ).split( /\s+/ ).filter( Boolean );
+	};
+	const desktopBodyClasses = new Set( bodyClasses( desktopHtml ) );
+	for ( const token of bodyClasses( mobileHtml ) ) {
+		if ( desktopBodyClasses.has( token ) ) continue;
+		if ( desktopClassTokens.has( token ) ) unsafeClassAlias = true;
+		classAliases.set( token, `${ RESPONSIVE_PROJECTION_CLASS_PREFIX }class-${ createHash( 'sha256' ).update( token ).digest( 'hex' ).slice( 0, 12 ) }` );
+	}
 	const mobileOnlyIds: string[] = [];
 	const desktopOnlyIds: string[] = [];
 	let sharedIdCount = 0;
@@ -1205,7 +1247,14 @@ function identitySubsetMerge(
 		const mobileClasses = ( m.attr( 'class' ) ?? '' ).split( /\s+/ ).filter( Boolean );
 		const missing = mobileClasses.filter( ( token ) => ! desktopClasses.includes( token ) );
 		if ( missing.length > 0 ) {
-			d.attr( 'class', [ ...( d.attr( 'class' ) ?? '' ).split( /\s+/ ).filter( Boolean ), ...missing ].join( ' ' ) );
+			// Mobile-only class names must not meet desktop rules in the merged DOM.
+			const aliases = missing.map( ( token ) => {
+				if ( desktopClassTokens.has( token ) ) unsafeClassAlias = true;
+				const alias = classAliases.get( token ) ?? `${ RESPONSIVE_PROJECTION_CLASS_PREFIX }class-${ createHash( 'sha256' ).update( token ).digest( 'hex' ).slice( 0, 12 ) }`;
+				classAliases.set( token, alias );
+				return alias;
+			} );
+			d.attr( 'class', [ ...( d.attr( 'class' ) ?? '' ).split( /\s+/ ).filter( Boolean ), ...aliases ].join( ' ' ) );
 			projected = true;
 		}
 		const desktopSizes = d.attr( 'sizes' );
@@ -1268,8 +1317,13 @@ function identitySubsetMerge(
 		const mobileElement = mobileIds.get( id );
 		if ( mobileElement ) projectPair( $d( desktopElement ), $m( mobileElement ), id );
 	}
+	if ( unsafeClassAlias ) return undefined;
 	const divergedComponents = splitDivergedComponents( $d, $m, divergedRoots, desktopIds, mobileIds );
 	if ( divergedComponents === undefined ) return undefined;
+	$d( '[class]' ).each( ( _index, node ) => {
+		const element = $d( node );
+		element.attr( 'class', ( element.attr( 'class' ) ?? '' ).split( /\s+/ ).filter( Boolean ).map( ( token ) => classAliases.get( token ) ?? token ).join( ' ' ) );
+	} );
 	const css =
 		( desktopRules.length > 0
 			? `@media(min-width:${ switchWidth + 1 }px){${ desktopRules.join( '' ) }}`
@@ -1281,8 +1335,27 @@ function identitySubsetMerge(
 		mobileOnlyElements: insertions.length,
 		projectedElements,
 		css,
+		classAliases,
 		divergedComponents,
 	};
+}
+
+function aliasResponsiveClasses( css: string, aliases: ReadonlyMap<string, string> ): string {
+	if ( aliases.size === 0 ) return css;
+	try {
+		const root = postcss.parse( css );
+		root.walkRules( ( rule ) => {
+			rule.selector = selectorParser( ( selectors ) => {
+				selectors.walkClasses( ( node ) => {
+					const alias = aliases.get( node.value );
+					if ( alias ) node.value = alias;
+				} );
+			} ).processSync( rule.selector );
+		} );
+		return root.toString();
+	} catch {
+		return css;
+	}
 }
 
 /** Attributes that name other elements by id, so a renamed subtree keeps its own references. */
@@ -1361,12 +1434,13 @@ function splitDivergedComponents(
  * already scoped to the mobile side of the switch, so the single body carries
  * both captures' classes.
  */
-function withBodyClasses( openTag: string, mobileBodyAttributes: string ): string {
+function withBodyClasses( openTag: string, mobileBodyAttributes: string, aliases: ReadonlyMap<string, string> = new Map() ): string {
 	const mobileClasses = (
 		cheerio.load( `<body${ mobileBodyAttributes }></body>` )( 'body' ).attr( 'class' ) ?? ''
 	)
 		.split( /\s+/ )
-		.filter( Boolean );
+		.filter( Boolean )
+		.map( ( token ) => aliases.get( token ) ?? token );
 	if ( mobileClasses.length === 0 ) return openTag;
 	const $ = cheerio.load( `${ openTag }</body>` );
 	const body = $( 'body' );
@@ -1609,11 +1683,11 @@ function assembleResponsiveHtml(
 			.replace(
 				/(<body\b[^>]*>)[\s\S]*?(<\/body\s*>)/i,
 				( _match, open: string, close: string ) =>
-					`${ withBodyClasses( open, mobileBodyMatch?.[ 1 ] ?? '' ) }${ identitySubset.body }${ close }`
+					`${ withBodyClasses( open, mobileBodyMatch?.[ 1 ] ?? '', identitySubset.classAliases ) }${ identitySubset.body }${ close }`
 			)
 			.replace(
 				/<\/head\s*>/i,
-				`${ responsiveMobileStyles( mobileHtml, undefined, switchWidth, shared ) }${ identitySubsetVisibilityCss( switchWidth ) }${
+				`${ responsiveMobileStyles( mobileHtml, undefined, switchWidth, shared, identitySubset.classAliases ) }${ identitySubsetVisibilityCss( switchWidth ) }${
 					identitySubset.css ? `<style>${ identitySubset.css }</style>` : ''
 				}</head>`
 			);
@@ -1920,13 +1994,22 @@ function responsiveMobileStyles(
 	mobileHtml: string,
 	scope?: string,
 	switchWidth: number = DEFAULT_SWITCH_WIDTH,
-	skip: ReadonlySet< string > = new Set()
+	skip: ReadonlySet< string > = new Set(),
+	classAliases: ReadonlyMap<string, string> = new Map()
 ): string {
+	const bodyAttributes = /<body\b([^>]*)>/i.exec( mobileHtml )?.[ 1 ] ?? '';
+	const rootClasses = (
+		cheerio.load( `<body${ bodyAttributes }></body>` )( 'body' ).attr( 'class' ) ?? ''
+	)
+		.split( /\s+/ )
+		.filter( Boolean );
 	return styleBlocks( mobileHtml )
-		.filter( ( style ) => style !== '' && ! skip.has( style ) )
+		.filter( ( style ) => style !== '' && ( ! skip.has( style ) || classAliases.size > 0 ) )
 		.map(
-			( style ) =>
-				`<style media="(max-width:${ switchWidth }px)">${ scope ? scopeCss( style, { scope } ) : style }</style>`
+			( original ) => {
+				const style = aliasResponsiveClasses( original, classAliases );
+				return `<style media="(max-width:${ switchWidth }px)">${ scope ? scopeCss( style, { scope, rootClasses } ) : style }</style>`;
+			}
 		)
 		.join( '' );
 }
@@ -3086,6 +3169,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 	if ( capture.version !== 1 || ! capture.entries || typeof capture.entries !== 'object' ) {
 		throw new Error( `Invalid screenshot manifest: ${ screenshotManifestPath }` );
 	}
+	const siteSwitchWidth = fallbackResponsiveSwitchWidth( outputDir );
 
 	const websiteDir = join( outputDir, 'website' );
 	const stagedHtmlDir = join( outputDir, '.capture-export-html' );
@@ -3171,7 +3255,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		const detectedFloor =
 			typeof entry.fluid?.canvasFloor === 'number' && entry.fluid.canvasFloor > 0
 				? Math.round( entry.fluid.canvasFloor )
-				: undefined;
+				: siteSwitchWidth;
 		if ( detectedFloor ) switchWidths.push( detectedFloor );
 		if ( entry.fluid ) fluidReports.push( entry.fluid );
 		const responsiveVariants = responsiveVariantEvidence( rawDesktopHtml, rawMobileHtml );

@@ -1356,6 +1356,114 @@ describe( 'exportWebsiteCapture', () => {
 		} );
 	} );
 
+	it( 'keeps mobile-only layout classes viewport-scoped in a single identity-merged tree', async () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-responsive-class-scope-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
+			mkdirSync( join( outputDir, path ), { recursive: true } );
+		const css = '@media(min-width:768px){.phone-layout{position:absolute;transform:translate(0,-500px)}}.article{width:900px;min-height:1100px;margin:0 auto}.phone-layout{width:100%;margin:0}';
+		writeFileSync( join( outputDir, 'html', 'homepage.html' ),
+			`<html><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>${ css }</style></head><body><main><article id="comp-article" class="article" style="width:900px"><h1>One article title</h1><img src="/media/hero.jpg"><p>Article text</p></article></main></body></html>` );
+		writeFileSync( join( outputDir, 'html-mobile', 'homepage.html' ),
+			`<html><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>${ css }</style></head><body><main><article id="comp-article" class="article phone-layout" style="width:100%"><h1>One article title</h1><img src="/media/hero.jpg"><p>Article text</p><aside id="comp-mobile-note">Mobile note</aside></article></main></body></html>` );
+		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( {
+			version: 1, entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },
+		} ) );
+		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'unknown', summary: {}, failures: [] } );
+		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
+		const $ = cheerio.load( html );
+		expect( $( '#comp-article' ) ).toHaveLength( 1 );
+		expect( $( '#comp-article' ).hasClass( 'phone-layout' ) ).toBe( false );
+		expect( html ).toContain( 'data-liberation-responsive-class-' );
+		const browser = await chromium.launch( { headless: true } );
+		try {
+			const page = await browser.newPage();
+			for ( const width of [ 390, 768, 1440 ] ) {
+				await page.setViewportSize( { width, height: 900 } );
+				await page.setContent( html );
+				const result = await page.evaluate( () => {
+					const article = document.querySelector( '#comp-article' )!;
+					return {
+						top: article.querySelector( 'h1' )!.getBoundingClientRect().top,
+						height: document.documentElement.scrollHeight,
+						position: getComputedStyle( article ).position,
+						width: article.getBoundingClientRect().width,
+						order: [ ...article.querySelectorAll( 'h1,img,p' ) ].map( ( child ) => child.tagName ).join( ',' ),
+						titles: document.querySelectorAll( '#comp-article h1' ).length,
+					};
+				} );
+				expect( result.top ).toBeGreaterThanOrEqual( 0 );
+				expect( result.height ).toBeGreaterThan( 900 );
+				expect( result.order ).toBe( 'H1,IMG,P' );
+				expect( result.titles ).toBe( 1 );
+				expect( result.position ).toBe( 'static' );
+				if ( width === 390 ) expect( result.width ).toBeLessThan( 500 );
+			}
+		} finally {
+			await browser.close();
+		}
+	} );
+
+	it( 'scopes mobile CSS against body classes carried by the document wrapper', async () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-responsive-root-class-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
+			mkdirSync( join( outputDir, path ), { recursive: true } );
+		writeFileSync(
+			join( outputDir, 'html', 'homepage.html' ),
+			'<html><head><style>body{margin:0}.x .banner{height:152px}.x .article-title{font-size:32px;line-height:36px;margin:0}</style></head><body class="x"><header class="banner"></header><main><h1 class="article-title">Article title</h1><p>Desktop article</p></main></body></html>'
+		);
+		writeFileSync(
+			join( outputDir, 'html-mobile', 'homepage.html' ),
+			'<html><head><style>body{margin:0}.x .banner{height:0}.x .article-title{font-size:28px;line-height:31.5px;margin:0}</style></head><body class="x"><header class="banner"></header><main><h1 class="article-title">Article title</h1><p>Mobile article</p><aside>Mobile menu</aside></main></body></html>'
+		);
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( {
+				version: 1,
+				entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },
+			} )
+		);
+		writeFileSync( join( outputDir, 'breakpoints.json' ), JSON.stringify( { minWidth: [ 768, 1024, 1280 ], maxWidth: [ 767, 1023, 1279 ] } ) );
+		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'unknown', summary: {}, failures: [] } );
+		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
+		const browser = await chromium.launch( { headless: true } );
+		try {
+			const page = await browser.newPage();
+			for ( const width of [ 390, 768, 1440 ] ) {
+				await page.setViewportSize( { width, height: 900 } );
+				await page.setContent( html );
+				const geometry = await page.evaluate( () => {
+					const title = [ ...document.querySelectorAll( '.article-title' ) ].find(
+						( element ) => element.getClientRects().length > 0
+					)!;
+					const banner = title.parentElement!.parentElement!.querySelector( '.banner' )!;
+					return {
+						titleTop: title.getBoundingClientRect().top,
+						bannerTop: banner.getBoundingClientRect().top,
+						bannerHeight: banner.getBoundingClientRect().height,
+						fontSize: getComputedStyle( title ).fontSize,
+						lineHeight: getComputedStyle( title ).lineHeight,
+						menus: [ ...document.querySelectorAll( 'aside' ) ].filter( ( item ) => item.getClientRects().length > 0 ).length,
+					};
+				} );
+				expect( geometry.bannerTop ).toBe( 0 );
+				expect( geometry.titleTop ).toBe( geometry.bannerHeight );
+				if ( width <= 1279 ) {
+					expect( geometry.fontSize ).toBe( '28px' );
+					expect( geometry.lineHeight ).toBe( '31.5px' );
+					expect( geometry.menus ).toBe( 1 );
+				} else {
+					expect( geometry.fontSize ).toBe( '32px' );
+					expect( geometry.lineHeight ).toBe( '36px' );
+					expect( geometry.menus ).toBe( 0 );
+				}
+			}
+		} finally {
+			await browser.close();
+		}
+	} );
+
 	it( 'reconciles a nested mobile-only subtree and a desktop-only wrapper around shared components', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-collapse-nested-' ) );
 		dirs.push( outputDir );
@@ -1456,8 +1564,10 @@ describe( 'exportWebsiteCapture', () => {
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		const $ = cheerio.load( html );
 		expect( $( '.data-liberation-mobile-document' ) ).toHaveLength( 0 );
-		// The mobile capture's body flag, which its stylesheet keys on, survives.
-		expect( $( 'body' ).hasClass( 'device-mobile-optimized' ) ).toBe( true );
+		// A mobile-only body flag is privately named so unscoped desktop rules
+		// cannot match it; the mobile stylesheet uses that alias below the switch.
+		expect( $( 'body' ).hasClass( 'device-mobile-optimized' ) ).toBe( false );
+		expect( $( 'body' ).attr( 'class' ) ).toContain( 'data-liberation-responsive-class-' );
 		// The mobile-only component lands inside the id-less grid container.
 		expect( $( '[data-mesh-id="root-grid"] > #comp-phone-only' ) ).toHaveLength( 1 );
 		// Desktop inline presentation stays for the reference viewport when mobile
