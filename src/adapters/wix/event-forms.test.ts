@@ -57,6 +57,9 @@ describe('Wix event form navigation', () => {
         discoveryDiagnostics: [sourceDiagnostic] }), 'utf8'));
       expect(receipt.summary.routesSkipped).toBe(1);
       expect(receipt.summary.complete).toBe(true);
+      expect(receipt.cleanup.complete).toBe(true);
+      expect(JSON.parse(readFileSync(join(dir, 'cleanup-evidence.json'), 'utf8')).pages
+        .map((page: { url: string }) => page.url)).not.toContain(urls[1]);
       expect(receipt.duplicateRoutes).toContainEqual({ url: urls[1],
         canonicalUrl: `${origin}/event-details/expired`, path: 'website/event-details/expired/index.html' });
       expect(receipt.routes.map((route: { url: string }) => route.url)).toContain(urls[2]);

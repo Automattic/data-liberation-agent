@@ -3990,7 +3990,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 	// Only proven source-absent routes lack a document requiring cleanup.
 	// Keep every other attempted route in the audit, even if it lost its HTML.
 	const cleanupPages = Object.entries(capture.entries)
-		.filter(([url]) => !absentRoutes.has(url))
+		.filter(([url, entry]) => !absentRoutes.has(url) && !entry.redirectedTo)
 		.map(([url, entry]) => ({ url, ...entry.cleanup }));
 	const recordedPolicy = cleanupPages.find((page) => page.policy)?.policy;
 	const cleanup = recordedPolicy ? {
