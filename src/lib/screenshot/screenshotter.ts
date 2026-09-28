@@ -1675,6 +1675,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	const capturedAt = () => new Date().toISOString();
 
 	const processUrl = async ( url: string ): Promise< void > => {
+		const routeStartedAt = Date.now();
 		const base = slugify( url );
 		// On resume the URL may already have an entry — reuse its slug so the
 		// existing-artifact check hits the same files we wrote last run. Only
@@ -1865,6 +1866,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			sendLog( server, `[fail] ${ url } (${ captureFailures.length } failures)` );
 		}
 		completed++;
+		process.stderr.write( `[timing] route ${ Date.now() - routeStartedAt }ms ${ url }\n` );
 		opts.onProgress?.( completed, urls.length, url );
 	};
 

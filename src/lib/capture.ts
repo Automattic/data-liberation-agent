@@ -10,7 +10,7 @@ import { SectionSpecsStore } from './replicate/section-specs-store.js';
 import { MediaStubStore } from './resume-state/index.js';
 
 export interface CaptureProgress {
-	phase: 'discovering' | 'capturing' | 'finalizing' | 'complete';
+	phase: 'discovering' | 'capturing' | 'media' | 'finalizing' | 'complete';
 	current?: number;
 	total?: number;
 	url?: string;
@@ -184,6 +184,7 @@ export async function captureWebsite(
 		outputDir,
 		resume: options.resume === true,
 	} ) ) as CaptureInventory;
+	process.stderr.write( `[timing] discovery ${ Date.now() - phaseStartedAt }ms\n` );
 	const sourceRoute = captureRouteKey( sourceUrl );
 	const urls = [
 		sourceUrl,
@@ -214,8 +215,17 @@ export async function captureWebsite(
 		publicUrlsOnly: true,
 		onProgress: ( current, total, url ) => progress( { phase: 'capturing', current, total, url } ),
 	} );
-	await downloadCaptureSectionMedia( outputDir, screenshotResult.urls );
+	process.stderr.write(
+		`[timing] browser-capture ${ screenshotResult.durationMs }ms (${ screenshotResult.captured } captured, ${ screenshotResult.failed } failed)\n`
+	);
+	progress( { phase: 'media', current: screenshotResult.captured, total: urls.length } );
+	const mediaStartedAt = Date.now();
+	const downloadedSectionMedia = await downloadCaptureSectionMedia( outputDir, screenshotResult.urls );
+	process.stderr.write(
+		`[timing] section-media ${ Date.now() - mediaStartedAt }ms (${ downloadedSectionMedia } downloaded)\n`
+	);
 
+	const exportStartedAt = Date.now();
 	progress( { phase: 'finalizing', current: screenshotResult.captured, total: urls.length } );
 	const failuresPath = join( outputDir, 'screenshots', 'failures.json' );
 	const failures = existsSync( failuresPath )
@@ -241,6 +251,7 @@ export async function captureWebsite(
 		failures,
 		discoveryDiagnostics: inventory.diagnostics ?? [],
 	} );
+	process.stderr.write( `[timing] export ${ Date.now() - exportStartedAt }ms\n` );
 	const unresolvedAnchors = readUnresolvedAnchors( outputDir );
 	const complete =
 		summary.routesFailed === 0 &&
