@@ -596,6 +596,76 @@ describe( 'captureTriggeredDialogs', () => {
 	);
 
 	it.skipIf( process.env.SKIP_BROWSER_TESTS )(
+		'keeps an anchor-button mobile menu that slides in from off-screen',
+		async () => {
+			const browser = await chromium.launch( { headless: true } );
+			const page = await browser.newPage( { viewport: { width: 390, height: 844 } } );
+			const markup = `<!doctype html><html><head></head><body>
+				<header>
+					<a id="menu-toggle" role="button" href="#" aria-haspopup="menu" aria-expanded="false" aria-label="Open menu">Menu</a>
+					<nav id="desktop-nav"><a href="/guides">Guides</a><a href="/contact">Contact</a></nav>
+				</header>
+				<div id="mobile-menu" role="navigation" aria-label="Site" style="position:fixed;inset:0;transform:translateX(-100vw);visibility:visible;background:#fff">
+					<a href="/guides">Field notes</a>
+					<a href="/contact">Write to us</a>
+				</div>
+				<script>
+					document.getElementById('menu-toggle').addEventListener('click', (event) => {
+						event.preventDefault();
+						const trigger = event.currentTarget;
+						const menu = document.getElementById('mobile-menu');
+						const open = trigger.getAttribute('aria-expanded') !== 'true';
+						trigger.setAttribute('aria-expanded', open ? 'true' : 'false');
+						menu.style.transform = open ? 'translateX(0)' : 'translateX(-100vw)';
+					});
+				</script>
+			</body></html>`;
+			try {
+				await page.setContent( markup );
+				const report = await captureTriggeredDialogs( page, 'https://example.test/' );
+				expect( report.states ).toMatchObject( [
+					{
+						status: 'captured',
+						trigger: { id: 'menu-toggle', tag: 'a', role: 'button', ariaHaspopup: 'menu', label: 'Open menu' },
+						dialog: { id: 'mobile-menu', tag: 'div' },
+					},
+				] );
+				expect( report.states[ 0 ].dialog?.html ).toContain( 'href="/guides"' );
+				expect( report.states[ 0 ].dialog?.html ).toContain( 'Field notes' );
+				expect( report.states[ 0 ].dialog?.html ).not.toContain( 'id="desktop-nav"' );
+
+				const portable = wireCapturedDialogs(
+					'<!doctype html><html><head></head><body><header><a id="menu-toggle" role="button" href="#" aria-haspopup="menu" aria-expanded="false" aria-label="Open menu">Menu</a><nav id="desktop-nav"><a href="/guides">Guides</a><a href="/contact">Contact</a></nav></header><div id="mobile-menu" role="navigation" aria-label="Site" style="position:fixed;inset:0;transform:translateX(-100vw);visibility:visible;background:#fff"><a href="/guides">Field notes</a><a href="/contact">Write to us</a></div></body></html>',
+					report.states
+				);
+				expect( portable ).toContain( 'id="desktop-nav"' );
+				expect( portable ).toContain( '<nav id="desktop-nav">' );
+				await page.setContent( portable );
+				const desktopGuides = page.locator( '#desktop-nav a[href="/guides"]' );
+				expect( await desktopGuides.evaluate( ( link ) => link.closest( 'details' ) === null ) ).toBe( true );
+				expect( await desktopGuides.isVisible() ).toBe( true );
+
+				const summary = page.locator( 'details.dla-disclosure > summary' );
+				await summary.click();
+				const menuGuides = page.locator( 'details.dla-disclosure[open] .dla-dialog a[href="/guides"]' );
+				const menuContact = page.locator( 'details.dla-disclosure[open] .dla-dialog a[href="/contact"]' );
+				expect( await menuGuides.isVisible() ).toBe( true );
+				expect( await menuContact.isVisible() ).toBe( true );
+				await summary.click();
+				expect( await page.locator( 'details.dla-disclosure' ).evaluate( ( element ) => ( element as HTMLDetailsElement ).open ) ).toBe( false );
+				expect( await menuGuides.isVisible() ).toBe( false );
+				await summary.click();
+				await page.keyboard.press( 'Escape' );
+				expect( await page.locator( 'details.dla-disclosure' ).evaluate( ( element ) => ( element as HTMLDetailsElement ).open ) ).toBe( false );
+				expect( await desktopGuides.isVisible() ).toBe( true );
+			} finally {
+				await browser.close();
+			}
+		},
+		30_000
+	);
+
+	it.skipIf( process.env.SKIP_BROWSER_TESTS )(
 		'only clicks the first eight unambiguous dialog triggers',
 		async () => {
 			const browser = await chromium.launch( { headless: true } );

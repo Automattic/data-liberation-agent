@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as cheerio from 'cheerio';
 import { chromium } from 'playwright';
@@ -11,6 +11,7 @@ import {
 	CAPTURED_INTERACTIONS_SCHEMA,
 	CAPTURE_RECEIPT_SCHEMA,
 	ASSET_EVIDENCE_SCHEMA,
+	canonicalizeUnreferencedHeaderIds,
 	documentsDiffer,
 	exportWebsiteCapture,
 	INDEXED_SEMANTIC_EVIDENCE_SCHEMA,
@@ -28,6 +29,31 @@ afterEach( () => {
 } );
 
 describe( 'exportWebsiteCapture', () => {
+	it( 'stabilizes only unreferenced runtime header ids across routes', () => {
+		const page = ( token: string ) => `<html><body><header><div id="yui_3_17_2_1_${ token }_3" class="announcement"><div id="yui_3_17_2_1_${ token }_4"><a aria-labelledby="announcement-label" href="/tickets"></a><span id="announcement-label">Tickets</span></div></div><nav><a href="/">Home</a></nav></header><main><div id="yui_3_17_2_1_${ token }_5">Body</div></main></body></html>`;
+		const home = canonicalizeUnreferencedHeaderIds( page( '111' ) );
+		const about = canonicalizeUnreferencedHeaderIds( page( '222' ) );
+		expect( home.replace( '111_5', 'body' ) ).toBe( about.replace( '222_5', 'body' ) );
+		expect( home ).toContain( 'id="announcement-label"' );
+		expect( home ).toContain( 'id="yui_3_17_2_1_111_5"' );
+		expect( home ).not.toContain( 'id="yui_3_17_2_1_111_3"' );
+		expect( canonicalizeUnreferencedHeaderIds( page( '111' ), [ '#yui_3_17_2_1_111_3{display:block}' ] ) ).toContain( 'id="yui_3_17_2_1_111_3"' );
+		expect( canonicalizeUnreferencedHeaderIds( page( '111' ).replace( 'href="/tickets"', 'href="#yui_3_17_2_1_111_3"' ) ) ).toContain( 'id="yui_3_17_2_1_111_3"' );
+	} );
+
+	it( 'exports structurally shared header IDs without rewriting independent page content', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-header-identity-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
+		for ( const [ slug, id ] of [ [ 'homepage', '111' ], [ 'about', '222' ] ] ) writeFileSync( join( outputDir, 'html', `${ slug }.html` ), `<html><body><header><div id="yui_3_17_2_1_${ id }_3"><div id="yui_3_17_2_1_${ id }_4">Brand</div></div><nav><a href="/">Home</a></nav></header><main><h1>${ slug }</h1></main></body></html>` );
+		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( { version: 1, entries: { 'https://example.test/': { html: 'html/homepage.html' }, 'https://example.test/about': { html: 'html/about.html' } } } ) );
+		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.test/', platform: 'generic', summary: {}, failures: [] } );
+		const first = cheerio.load( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) );
+		const second = cheerio.load( readFileSync( join( outputDir, 'website', 'about', 'index.html' ), 'utf8' ) );
+		expect( first( 'header [id]' ).map( ( _index, element ) => first( element ).attr( 'id' ) ).get() ).toEqual( second( 'header [id]' ).map( ( _index, element ) => second( element ).attr( 'id' ) ).get() );
+		expect( second( 'main h1' ).text() ).toBe( 'about' );
+	} );
+
 	it( 'preserves the 360 Chiropractic BlogPosting as standard document JSON-LD', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-publication-export-' ) );
 		dirs.push( outputDir );
@@ -1572,12 +1598,6 @@ describe( 'exportWebsiteCapture', () => {
 			'<span id="section-anchor"></span><div id="comp-root"><button id="comp-a"><i id="icon"></i>A</button><button id="comp-b"><i id="icon"></i>B</button></div>',
 			'collapsed-identity-subset',
 		],
-		[
-			'a shared component the mobile capture moves into another id-less container',
-			'<form id="comp-form"><div class="grid"><div class="cell"><input id="field-a"></div><div class="cell"><input id="field-b"></div></div></form>',
-			'<form id="comp-form"><div class="grid"><div class="cell"><input id="field-a"></div></div><div class="grid"><div class="cell"><input id="field-b"></div></div></form>',
-			'dual-structural',
-		],
 	] )( 'reconciles %s as expected', ( _label, desktopBody, mobileBody, outcome ) => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-collapse-shape-' ) );
 		dirs.push( outputDir );
@@ -1611,6 +1631,60 @@ describe( 'exportWebsiteCapture', () => {
 			expect( $( 'body > #section-anchor.data-liberation-mobile-only' ) ).toHaveLength( 1 );
 			expect( $( '#comp-a #icon, #comp-b #icon' ) ).toHaveLength( 2 );
 		}
+	} );
+
+	const exportDualCapture = ( desktopBody: string, mobileBody: string ) => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-collapse-component-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
+			mkdirSync( join( outputDir, path ), { recursive: true } );
+		writeFileSync( join( outputDir, 'html', 'homepage.html' ), `<html><body>${ desktopBody }</body></html>` );
+		writeFileSync( join( outputDir, 'html-mobile', 'homepage.html' ), `<html><body>${ mobileBody }</body></html>` );
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( { version: 1, entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } } } )
+		);
+		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'weebly', summary: {}, failures: [] } );
+		return {
+			receipt: JSON.parse( readFileSync( join( outputDir, 'capture-receipt.json' ), 'utf8' ) ),
+			$: cheerio.load( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) ),
+		};
+	};
+
+	it( 'ships only a re-parented component once per viewport and collapses the rest of the page', () => {
+		// The phone layout moves one form field into its own row. Everything else,
+		// the header included, is the same component tree on both sides.
+		const header = '<header id="comp-header"><nav><a href="#about">About</a></nav></header>';
+		const section = '<section id="about"><h2>About</h2></section>';
+		const { receipt, $ } = exportDualCapture(
+			header + section + '<form id="comp-form"><div class="grid"><div class="cell"><label for="field-a">A</label><input id="field-a"></div><div class="cell"><input id="field-b" aria-describedby="hint-b"><span id="hint-b">Hint</span></div></div></form>',
+			header + section + '<form id="comp-form"><div class="grid"><div class="cell"><label for="field-a">A</label><input id="field-a"></div></div><div class="grid"><div class="cell"><input id="field-b" aria-describedby="hint-b"><span id="hint-b">Hint</span></div></div></form>'
+		);
+		expect( receipt.routes[ 0 ].responsiveVariants ).toMatchObject( { variants: 1, outcome: 'collapsed-identity-subset', divergedComponents: 1 } );
+		expect( $( '.data-liberation-mobile-document' ) ).toHaveLength( 0 );
+		expect( $( 'header#comp-header' ) ).toHaveLength( 1 );
+		expect( $( 'a[href="#about"]' ) ).toHaveLength( 1 );
+		expect( $( '#about' ) ).toHaveLength( 1 );
+		// Each viewport renders its own form, and the phone copy's ids and the
+		// references inside it move together.
+		expect( $( '#comp-form.data-liberation-desktop-only .grid' ) ).toHaveLength( 1 );
+		const phone = $( '#comp-form--dla-mobile.data-liberation-mobile-only' );
+		expect( phone ).toHaveLength( 1 );
+		expect( phone.find( '.grid' ) ).toHaveLength( 2 );
+		expect( phone.find( 'label' ).attr( 'for' ) ).toBe( 'field-a--dla-mobile' );
+		expect( phone.find( '#field-b--dla-mobile' ).attr( 'aria-describedby' ) ).toBe( 'hint-b--dla-mobile' );
+		expect( $( '#comp-form' ).next().is( phone ) ).toBe( true );
+		const ids = $( '[id]' ).toArray().map( ( node ) => $( node ).attr( 'id' ) );
+		expect( new Set( ids ).size ).toBe( ids.length );
+	} );
+
+	it( 'keeps dual documents when a re-parented component holds a link target', () => {
+		// Renaming the phone copy would move the target a link points at.
+		const { receipt } = exportDualCapture(
+			'<nav><a href="#field-b">Jump</a></nav><form id="comp-form"><div class="grid"><div class="cell"><input id="field-a"></div><div class="cell"><input id="field-b"></div></div></form>',
+			'<nav><a href="#field-b">Jump</a></nav><form id="comp-form"><div class="grid"><div class="cell"><input id="field-a"></div></div><div class="grid"><div class="cell"><input id="field-b"></div></div></form>'
+		);
+		expect( receipt.routes[ 0 ].responsiveVariants.outcome ).toBe( 'dual-structural' );
 	} );
 
 	it( 'keeps dual documents when mobile text has no mapped parent to reconcile into', () => {
@@ -1935,6 +2009,103 @@ describe( 'exportWebsiteCapture', () => {
 		expect( image.attr( 'data-src' ) ).toBe( '/media/portrait-750.jpg' );
 		expect( image.attr( 'data-image' ) ).toBe( '/media/portrait-750.jpg' );
 	} );
+
+	it( 'keeps a runtime-selected desktop rendition whose uncaptured sibling embeds the bare original as a prefix', () => {
+		// An image runtime derives renditions by appending to the bare asset URL
+		// (`…/IMG_2019.JPG/:/` + `rs=w:1160,h:720`), so the frozen srcset names
+		// candidates the browser never fetched next to the one it painted — and
+		// the unpainted ones embed a painted sibling's URL as a string prefix.
+		// Blanking the uncaptured `rs=w:1160` used to splice every `rs=w:1160,…`
+		// sibling too, so the painted desktop rendition was dropped and only the
+		// mobile crop survived (#398: gray hero at desktop, fine at phone).
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-rendition-prefix-export-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'resources', 'screenshots' ] )
+			mkdirSync( join( outputDir, path ), { recursive: true } );
+		const cdn = 'https://images.cdn.example';
+		const base = `${ cdn }/isteam/ip/abc123/IMG_2019.JPG/:/`;
+		const rendition = ( dims: string ) => `${ base }rs=w:${ dims }`;
+		const mobile = rendition( '390,h:242' );
+		const desktop = rendition( '1160,h:720' );
+		const truncated = rendition( '1160' );
+		const oversized = rendition( '1160,h:893' );
+		const srcset = [ `${ mobile } 390w`, `${ truncated } 1160w`, `${ oversized } 1440w`, `${ desktop } 1160w` ].join(
+			', '
+		);
+		writeFileSync(
+			join( outputDir, 'html', 'homepage.html' ),
+			`<html><body><section class="hero"><img id="hero" alt="Studio" sizes="100vw" src="${ base }" srcset="${ srcset }"></section></body></html>`
+		);
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( {
+				version: 1,
+				entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },
+			} )
+		);
+		// The browser painted (and so captured) the bare original at mobile, the
+		// mobile crop, and the desktop crop; the source never served the
+		// truncated width-only and oversized candidates. Cross-origin resources
+		// are stored under the CDN-origin hash, as CapturedResourceStore does.
+		const captured: Array< [ string, string ] > = [
+			[ base, 'base-bytes' ],
+			[ mobile, 'mobile-bytes' ],
+			[ desktop, 'desktop-bytes' ],
+		];
+		const resources: Record< string, { path: string; contentType: string } > = {};
+		const externalHash = createHash( 'sha256' ).update( cdn ).digest( 'hex' ).slice( 0, 16 );
+		for ( const [ url, bytes ] of captured ) {
+			const suffix = url === base ? '' : `rs=w:${ url.split( 'rs=w:' )[ 1 ] }`;
+			const path = `external/${ externalHash }/isteam/ip/abc123/IMG_2019.JPG/:/${ suffix }.jpg`;
+			mkdirSync( dirname( join( outputDir, 'resources', path ) ), { recursive: true } );
+			writeFileSync( join( outputDir, 'resources', path ), bytes );
+			resources[ url ] = { path: `resources/${ path }`, contentType: 'image/jpeg' };
+		}
+		writeFileSync(
+			join( outputDir, 'resources', 'manifest.json' ),
+			JSON.stringify( {
+				version: 1,
+				resources,
+				failures: [ truncated, oversized ].map( ( url ) => ( { url, error: 'HTTP 404' } ) ),
+			} )
+		);
+
+		exportWebsiteCapture( {
+			outputDir,
+			sourceUrl: 'https://example.com/',
+			platform: 'generic',
+			summary: {},
+			failures: [],
+		} );
+
+		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
+		const $ = cheerio.load( html );
+		const image = $( '#hero' );
+		const exportedSrcset = image.attr( 'srcset' ) ?? '';
+		// The painted desktop rendition localizes instead of being corrupted away…
+		expect( exportedSrcset ).toMatch( /external\/[0-9a-f]+\/isteam\/ip\/abc123\/IMG_2019\.JPG\/:\/rs=w:1160,h:720\.jpg 1160w/ );
+		// …while the mobile rendition it must not sacrifice is still selectable.
+		expect( exportedSrcset ).toMatch( /rs=w:390,h:242\.jpg 390w/ );
+		// Uncaptured candidates name nothing in the artifact.
+		expect( exportedSrcset ).not.toContain( 'rs=w:1160 ' );
+		expect( html ).not.toContain( 'h:893' );
+		// Nothing the copy can select is allowed to dangle: every local candidate
+		// (and the localized src) resolves to a file that shipped.
+		for ( const candidate of exportedSrcset.split( /,(?=\s)/ ).map( ( entry ) => entry.trim() ).filter( Boolean ) ) {
+			const url = candidate.split( /\s+/ )[ 0 ] ?? '';
+			if ( url.startsWith( 'data:' ) ) continue;
+			expect( existsSync( join( outputDir, 'website', url ) ) ).toBe( true );
+		}
+		expect( existsSync( join( outputDir, 'website', image.attr( 'src' ) ?? '' ) ) ).toBe( true );
+		const diagnostics = JSON.parse( readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' ) );
+		expect( diagnostics.unresolvedDependencies ).toEqual(
+			expect.arrayContaining( [
+				expect.objectContaining( { url: truncated } ),
+				expect.objectContaining( { url: oversized } ),
+			] )
+		);
+	} );
+
 
 	it( 'binds an image whose src is a density list to the localized file instead of the placeholder', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-srcset-src-export-' ) );

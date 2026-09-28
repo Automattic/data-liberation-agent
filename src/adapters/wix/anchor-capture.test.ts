@@ -3,6 +3,12 @@ import { chromium } from 'playwright';
 import { describe, expect, it } from 'vitest';
 import { capture } from './capture.js';
 
+/** Where a visitor following the captured target lands: its scroll position once scrolled into view. */
+const landing = ( node: Element ): number => {
+	( node as HTMLElement ).scrollIntoView( { block: 'start', behavior: 'instant' } );
+	return Math.round( window.scrollY );
+};
+
 describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix runtime anchor capture', () => {
 	it.each( [ 0, 600, -1 ] )( 'observes scroll from a trusted click with delay %i', async ( delay ) => {
 		const browser = await chromium.launch( { headless: true } );
@@ -27,9 +33,40 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix runtime ancho
 				expect( await page.locator( 'a' ).getAttribute( 'data-dla-anchor-unresolved' ) ).toContain( 'did not move' );
 			} else {
 				expect( await page.locator( '#runtime-section' ).count() ).toBe( 1 );
-				expect( await page.locator( '#runtime-section' ).evaluate( ( node ) => ( node as HTMLElement ).style.top ) ).toBe( '1000px' );
+				expect( await page.locator( '#runtime-section' ).evaluate( landing ) ).toBe( 1000 );
+				// The target lives inside the section the runtime scrolled to.
+				expect( await page.locator( '#section-source > #runtime-section' ).count() ).toBe( 1 );
 				expect( await page.locator( 'a' ).getAttribute( 'data-dla-anchor-unresolved' ) ).toBeNull();
 			}
+		} finally {
+			await browser.close();
+		}
+	}, 20_000 );
+
+	it( 'keeps the runtime landing offset and follows its section when content above it changes height', async () => {
+		const browser = await chromium.launch( { headless: true } );
+		try {
+			const page = await browser.newPage();
+			await page.route( 'https://anchor.test/**', ( route ) => route.fulfill( {
+				contentType: 'text/html',
+				body: `<style>body{margin:0}header{position:fixed;top:0;z-index:5;height:60px}section{height:1000px}</style>
+					<header><a href="#team">Team</a></header>
+					<div id="banner" style="height:34px"></div><section>First</section><section id="team-source">Team</section><section>Last</section>
+					<script>document.querySelector('a').addEventListener('click', event => {
+						event.preventDefault();
+						// The runtime keeps the section 16px clear of the viewport edge.
+						if (event.isTrusted) window.scrollTo({ top: document.getElementById('team-source').offsetTop - 16, behavior: 'instant' });
+					});</script>`,
+			} ) );
+			await page.goto( 'https://anchor.test/' );
+			await capture.prepare!( page, { url: page.url(), viewport: 'desktop' } );
+			expect( await page.locator( '#team' ).evaluate( landing ) ).toBe( 1034 - 16 );
+			// The platform banner is removed and media above the section grows.
+			await page.evaluate( () => {
+				document.getElementById( 'banner' )!.remove();
+				( document.querySelector( 'section' ) as HTMLElement ).style.height = '1300px';
+			} );
+			expect( await page.locator( '#team' ).evaluate( landing ) ).toBe( 1300 - 16 );
 		} finally {
 			await browser.close();
 		}
@@ -57,9 +94,9 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix runtime ancho
 			} ) );
 			await page.goto( 'https://anchor.test/' );
 			await capture.prepare!( page, { url: page.url(), viewport: 'desktop' } );
-			for ( const [ fragment, top ] of [ [ 'first-runtime', '1000px' ], [ 'second-runtime', '2000px' ], [ 'third-runtime', '3000px' ] ] as const ) {
+			for ( const [ fragment, top ] of [ [ 'first-runtime', 1000 ], [ 'second-runtime', 2000 ], [ 'third-runtime', 3000 ] ] as const ) {
 				expect( await page.locator( `#${ fragment }` ).count(), fragment ).toBe( 1 );
-				expect( await page.locator( `#${ fragment }` ).evaluate( ( node ) => ( node as HTMLElement ).style.top ), fragment ).toBe( top );
+				expect( await page.locator( `#${ fragment }` ).evaluate( landing ), fragment ).toBe( top );
 			}
 		} finally {
 			await browser.close();
@@ -86,7 +123,7 @@ describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'Wix runtime ancho
 			await capture.prepare!( page, { url: page.url(), viewport: 'desktop' } );
 			expect( await page.locator( 'a[href$="#blocked-runtime"]' ).getAttribute( 'data-dla-anchor-unresolved' ) ).toContain( 'click' );
 			expect( await page.locator( '#open-runtime' ).count() ).toBe( 1 );
-			expect( await page.locator( '#open-runtime' ).evaluate( ( node ) => ( node as HTMLElement ).style.top ) ).toBe( '2000px' );
+			expect( await page.locator( '#open-runtime' ).evaluate( landing ) ).toBe( 2000 );
 		} finally {
 			await browser.close();
 		}

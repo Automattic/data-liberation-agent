@@ -6,7 +6,7 @@
 import type { LiberationHooks } from '../page-actions.js';
 import { providerCreditRules } from '../../lib/source-cleanup.js';
 import type { Locator, Page } from 'playwright';
-import { canonicalizeWixInstanceIds } from './instance-ids.js';
+import { canonicalizeWixCapturedHtml } from './instance-ids.js';
 
 /** Wix media ids look like `8e80e7_a1b2…`, stable across crops of one asset. */
 const WIX_MEDIA_ID = /([a-z0-9]{4,12}_[a-z0-9]{24,48})/i;
@@ -221,6 +221,80 @@ export async function collectWixSlideshowSlides( page: Page ): Promise< void > {
 }
 
 /**
+ * Open a collapsed menu through its visible "Menu" button with trusted input,
+ * and wait until one of its links renders. Returns whether it opened.
+ */
+async function openCollapsedMenu( page: Page ): Promise< boolean > {
+	for ( const candidate of await page.locator( 'button[aria-label]' ).filter( { visible: true } ).all() ) {
+		if ( ! /^\s*menu\s*$/i.test( ( await candidate.getAttribute( 'aria-label' ) ) ?? '' ) ) continue;
+		try {
+			await candidate.click( { timeout: WIX_ANCHOR_SCROLL_MAX_MILLISECONDS } );
+			await page.waitForFunction(
+				() => [ ...document.querySelectorAll< HTMLElement >( 'a[data-dla-anchor-fragment]' ) ].some(
+					( link ) => link.getBoundingClientRect().width > 0 && link.getBoundingClientRect().height > 0
+				),
+				undefined,
+				{ timeout: WIX_ANCHOR_SCROLL_MAX_MILLISECONDS }
+			);
+			return true;
+		} catch {
+			return false;
+		}
+	}
+	return false;
+}
+
+/** Record each element's interaction state attributes before the capture interacts with the page. */
+export function snapshotInteractionAttributes(): void {
+	const names = [ 'data-animation-name', 'data-animation-state', 'data-open', 'data-hovered', 'data-focused' ];
+	const store = new Map< Element, Record< string, string | null > >();
+	for ( const element of document.querySelectorAll( '[data-part="menu-item"], [data-animation-name], [data-animation-state]' ) ) {
+		const values: Record< string, string | null > = {};
+		for ( const name of names ) values[ name ] = element.getAttribute( name );
+		store.set( element, values );
+	}
+	( window as unknown as { __dlaInteractionAttributes?: typeof store } ).__dlaInteractionAttributes = store;
+}
+
+/**
+ * Put back the interaction state attributes the capture's own clicks changed,
+ * and drop the ones they added, so the page is captured at rest.
+ */
+export function restoreInteractionAttributes(): void {
+	const names = [ 'data-animation-name', 'data-animation-state', 'data-open', 'data-hovered', 'data-focused' ];
+	const store = ( window as unknown as { __dlaInteractionAttributes?: Map< Element, Record< string, string | null > > } ).__dlaInteractionAttributes;
+	if ( ! store ) return;
+	for ( const [ element, values ] of store ) {
+		if ( ! element.isConnected ) continue;
+		for ( const name of names ) {
+			const value = values[ name ];
+			if ( value === null || value === undefined ) element.removeAttribute( name );
+			else element.setAttribute( name, value );
+		}
+	}
+	delete ( window as unknown as { __dlaInteractionAttributes?: unknown } ).__dlaInteractionAttributes;
+}
+
+/** Close a menu opened for anchor observation, so the capture records the closed page. */
+async function closeOpenedMenu( page: Page ): Promise< void > {
+	const opened = () =>
+		page.evaluate( () =>
+			[ ...document.querySelectorAll< HTMLElement >( '[role="dialog"]' ) ].some(
+				( dialog ) => dialog.getBoundingClientRect().width > 0 && getComputedStyle( dialog ).visibility !== 'hidden'
+			)
+		);
+	if ( ! ( await opened() ) ) return;
+	await page.keyboard.press( 'Escape' );
+	await page.waitForFunction(
+		() => ! [ ...document.querySelectorAll< HTMLElement >( '[role="dialog"]' ) ].some(
+			( dialog ) => dialog.getBoundingClientRect().width > 0 && getComputedStyle( dialog ).visibility !== 'hidden'
+		),
+		undefined,
+		{ timeout: WIX_ANCHOR_SCROLL_MAX_MILLISECONDS }
+	).catch( () => undefined );
+}
+
+/**
  * Wix creates an overflow item and a mobile drawer only after its client
  * runtime starts. A portable capture cannot retain that runtime, so settle the
  * live menu into a static list of its authored destinations instead.
@@ -360,7 +434,7 @@ export async function settleScrollReactiveChrome( page: Page ): Promise< void > 
 }
 
 export const capture: LiberationHooks = {
-  canonicalizeHtml: canonicalizeWixInstanceIds,
+  canonicalizeHtml: canonicalizeWixCapturedHtml,
   cleanupRules: [
     // Wix publishes the measured height of its own banner into these, and its
     // layout reads them from the sticky header, the page root and the pinned
@@ -431,6 +505,10 @@ export const capture: LiberationHooks = {
 		}, WIX_CAPTURE_CHROME_SELECTOR );
 
 		const originalScroll = await page.evaluate( () => ( { x: scrollX, y: scrollY } ) );
+		// Observing an anchor hovers and clicks its link, and Wix records that
+		// interaction on the menu item (`data-animation-name`/`-state`). The
+		// capture must keep the resting page, so remember those attributes now.
+		await page.evaluate( snapshotInteractionAttributes );
 		const restoreScroll = () => page.evaluate( ( originalScroll ) => {
 			const root = document.documentElement;
 			const scrollBehavior = root.style.scrollBehavior;
@@ -491,18 +569,47 @@ export const capture: LiberationHooks = {
 					);
 				} );
 				if ( ! trigger ) {
-					markUnresolved( 'no rendered fragment trigger' );
-					return null;
+					// A link inside a collapsed menu becomes clickable once the
+					// visitor opens that menu; anything else has no trigger.
+					const menuLink = links.find( ( link ) => link.closest( 'nav,[role="navigation"],[data-hook="menu-root"]' ) );
+					const menuButton = [ ...document.querySelectorAll< HTMLElement >( 'button[aria-label]' ) ].find(
+						( button ) => /^\s*menu\s*$/i.test( button.getAttribute( 'aria-label' ) ?? '' ) && button.getClientRects().length > 0
+					);
+					if ( ! menuLink || ! menuButton ) {
+						markUnresolved( 'no rendered fragment trigger' );
+						return null;
+					}
+					return {
+						index: [ ...document.querySelectorAll( 'a[data-dla-anchor-fragment]' ) ].indexOf( menuLink ),
+						menu: true,
+					};
 				}
 				return {
 					index: [ ...document.querySelectorAll( 'a[data-dla-anchor-fragment]' ) ].indexOf( trigger ),
+					menu: false,
 				};
 			}, { fragment, index } );
 			if ( ! trigger ) continue;
 
 			// Use Playwright's trusted input: Wix ignores synthetic `.click()` for
 			// this navigation on some desktop pages.
-			const link = page.locator( 'a[data-dla-anchor-fragment]' ).nth( trigger.index );
+			let link = page.locator( 'a[data-dla-anchor-fragment]' ).nth( trigger.index );
+			// On a phone layout the menu's links render only once its collapsed
+			// menu opens, exactly as a visitor sees them: tap the menu button and
+			// follow the same destination from the opened menu, which renders its
+			// own copy of the link.
+			if ( trigger.menu && ( await openCollapsedMenu( page ) ) ) {
+				link = page.locator( `a[href$="#${ encodeURIComponent( fragment ) }"]` ).filter( { visible: true } ).first();
+			} else if ( trigger.menu ) {
+				await page.evaluate( ( fragment ) => {
+					for ( const anchor of document.querySelectorAll< HTMLAnchorElement >(
+						`a[data-dla-anchor-fragment="${ CSS.escape( fragment ) }"]`
+					) ) {
+						anchor.dataset.dlaAnchorUnresolved = 'no rendered fragment trigger';
+					}
+				}, fragment );
+				continue;
+			}
 			let initialScroll: number;
 			try {
 				await link.scrollIntoViewIfNeeded( { timeout: WIX_ANCHOR_SCROLL_MAX_MILLISECONDS } );
@@ -513,6 +620,7 @@ export const capture: LiberationHooks = {
 			} catch {
 				// One unclickable trigger must not abandon the remaining links, or
 				// the rest of this hook: record why this fragment has no target.
+				if ( trigger.menu ) await closeOpenedMenu( page );
 				await page.evaluate( ( fragment ) => {
 					for ( const anchor of document.querySelectorAll< HTMLAnchorElement >(
 						`a[data-dla-anchor-fragment="${ CSS.escape( fragment ) }"]`
@@ -571,21 +679,34 @@ export const capture: LiberationHooks = {
 					return false;
 				}
 
+				// The target lives inside the section it resolved to, not at a page
+				// coordinate: content above it can still change height (late media,
+				// removed platform banners), and the section moves with it. The
+				// runtime's landing offset from the section edge (it keeps the
+				// section clear of pinned chrome) is replayed as scroll-margin.
 				const marker = document.createElement( 'span' );
 				marker.id = fragment;
 				marker.dataset.dlaAnchorTarget = fragment;
 				if ( resolved.element.id ) marker.dataset.dlaAnchorSourceId = resolved.element.id;
 				marker.setAttribute( 'aria-hidden', 'true' );
-				marker.style.cssText = `position:absolute;top:${ Math.round(
-					resolved.top
-				) }px;left:0;width:0;height:0;overflow:hidden;pointer-events:none`;
-				document.body.prepend( marker );
+				// Absolutely positioned without offsets, the marker sits at its
+				// static position, the section's start, and stays out of the
+				// section's own (often grid) layout.
+				marker.style.cssText = 'position:absolute;width:0;height:0;overflow:hidden;pointer-events:none';
+				resolved.element.prepend( marker );
+				const margin = Math.round( resolved.top - targetTop );
+				if ( margin > 0 ) marker.style.scrollMarginTop = `${ margin }px`;
 				for ( const link of links ) link.href = `${ location.pathname }#${ encodeURIComponent( fragment ) }`;
 				return true;
 			}, { fragment, maxWait: WIX_ANCHOR_SCROLL_MAX_MILLISECONDS, initialScroll } );
+			// Following a link closes the menu; a link that did not navigate
+			// leaves it open, and the capture must record the closed page.
+			if ( trigger.menu ) await closeOpenedMenu( page );
 		}
 
 		await restoreScroll();
+		await page.mouse.move( 0, 0 );
+		await page.evaluate( restoreInteractionAttributes );
 
 		const galleries = await page.evaluate( async () => {
 			const urls = [

@@ -4,6 +4,7 @@ import {
 	existsSync,
 	mkdirSync,
 	readFileSync,
+	readdirSync,
 	rmSync,
 	statSync,
 	writeFileSync,
@@ -29,7 +30,7 @@ import {
 } from './screenshot/absent-document.js';
 import { isInlineUrl, selfContainWebsite } from './self-contain.js';
 import { wireCapturedDialogs } from './static-dialogs.js';
-import { rewriteMediaUrls } from './streaming/media-url-rewrite.js';
+import { rewriteMediaUrls, URL_TERMINATOR_LOOKAHEAD } from './streaming/media-url-rewrite.js';
 import {
 	INTERACTION_STATES_SCHEMA,
 	LEGACY_INTERACTION_STATES_SCHEMA,
@@ -488,7 +489,9 @@ function replaceAll(
 		.sort( ( a, b ) => b.length - a.length );
 	if ( sources.length === 0 ) return content;
 	const pattern = new RegExp(
-		sources.map( ( source ) => source.replace( /[.*+?^${}()|[\]\\]/g, '\\$&' ) ).join( '|' ),
+		sources
+			.map( ( source ) => source.replace( /[.*+?^${}()|[\]\\]/g, '\\$&' ) )
+			.join( '|' ) + URL_TERMINATOR_LOOKAHEAD,
 		'g'
 	);
 	return content.replace( pattern, ( source ) => values.get( source ) ?? source );
@@ -736,6 +739,76 @@ function isYuiRuntimeId( id: string ): boolean {
 	return YUI_RUNTIME_ID.test( id );
 }
 
+/**
+ * A captured header may carry hydration-only widget IDs which change on every
+ * route. Share a stable identity only when no retained HTML, script, or style
+ * reads the original ID. Rewrite the exact attribute, never the whole document:
+ * reserializing a page would change unrelated source markup and SVGs.
+ */
+export function canonicalizeUnreferencedHeaderIds(
+	html: string,
+	externalTexts: readonly string[] = []
+): string {
+	if ( ! YUI_RUNTIME_ID.test( html ) ) return html;
+	const $ = cheerio.load( html );
+	const header = $( 'header' ).filter( ( _index, node ) =>
+		$( node ).find( 'nav' ).length > 0 && $( node ).parents( 'main, article, section' ).length === 0
+	).first();
+	if ( ! header.length ) return html;
+	const rewrites = new Map< string, string >();
+	header.find( '[id]' ).each( ( _index, node ) => {
+		const id = $( node ).attr( 'id' ) ?? '';
+		if ( ! isYuiRuntimeId( id ) || html.split( id ).length !== 2 || externalTexts.some( ( text ) => text.includes( id ) ) ) return;
+		const segments: string[] = [];
+		let element: Element | null = node;
+		while ( element && element !== header[ 0 ] ) {
+			let position = 0;
+			for ( let sibling = element.prev; sibling; sibling = sibling.prev ) {
+				if ( isElementNode( sibling ) && sibling.name === element.name ) position++;
+			}
+			segments.unshift( `${ element.name }:${ position }` );
+			element = element.parent && isElementNode( element.parent ) ? element.parent : null;
+		}
+		if ( element !== header[ 0 ] ) return;
+		const stable = `dla-shared-${ createHash( 'sha256' ).update( segments.join( '/' ) ).digest( 'hex' ).slice( 0, 16 ) }`;
+		if ( html.includes( `id="${ stable }"` ) || [ ...rewrites.values() ].includes( stable ) ) return;
+		rewrites.set( id, stable );
+	} );
+	for ( const [ id, stable ] of rewrites ) {
+		const escaped = id.replace( /[.*+?^${}()|[\]\\]/g, '\\$&' );
+		html = html.replace( new RegExp( `\\bid(\\s*=\\s*["'])${ escaped }(?=["'])`, 'g' ), ( full ) => full.replace( id, stable ) );
+	}
+	return html;
+}
+
+/** An incomplete reference audit cannot prove an ID is safe to canonicalize. */
+function portableTextReferences( websiteDir: string ): Array< { path: string; text: string } > | null {
+	const texts: Array< { path: string; text: string } > = [];
+	let totalBytes = 0;
+	const pending = [ websiteDir ];
+	try {
+		while ( pending.length ) {
+			const directory = pending.pop()!;
+			for ( const entry of readdirSync( directory, { withFileTypes: true } ) ) {
+				const path = join( directory, entry.name );
+				if ( entry.isDirectory() ) {
+					pending.push( path );
+					continue;
+				}
+				if ( entry.isSymbolicLink() ) return null;
+				if ( ! entry.isFile() || ! /\.(?:css|js|mjs|json|svg|xml|txt|html)$/i.test( entry.name ) ) continue;
+				const bytes = statSync( path ).size;
+				totalBytes += bytes;
+				if ( bytes > 32 * 1024 * 1024 || totalBytes > 128 * 1024 * 1024 ) return null;
+				texts.push( { path, text: readFileSync( path, 'utf8' ) } );
+			}
+		}
+	} catch {
+		return null;
+	}
+	return texts;
+}
+
 function isUnstableResponsiveId( id: string ): boolean {
 	return id
 		.split( /\s+/ )
@@ -796,6 +869,8 @@ export interface ResponsiveVariantEvidence {
 	desktopOnlyElements?: number;
 	/** Elements only the mobile capture rendered, inserted under their mapped parent and hidden above the switch width. Present only for an identity-subset collapse. */
 	mobileOnlyElements?: number;
+	/** Shared components the phone layout re-parents, shipped once per viewport inside the collapsed document. */
+	divergedComponents?: number;
 }
 
 function responsiveVariantEvidence(
@@ -811,10 +886,13 @@ function responsiveVariantEvidence(
 			return {
 				variants: 1,
 				outcome: 'collapsed-identity-subset',
-				reason: `mobile document reconciles with desktop by element identity (${ merge.mobileOnlyElements } mobile-only, ${ merge.desktopOnlyElements } desktop-only elements); shipped one document`,
+				reason: `mobile document reconciles with desktop by element identity (${ merge.mobileOnlyElements } mobile-only, ${ merge.desktopOnlyElements } desktop-only elements${
+					merge.divergedComponents > 0 ? `, ${ merge.divergedComponents } re-parented component${ merge.divergedComponents === 1 ? '' : 's' } shipped per viewport` : ''
+				}); shipped one document`,
 				css: sharedStyles ? 'shared' : 'viewport-scoped',
 				desktopOnlyElements: merge.desktopOnlyElements,
 				mobileOnlyElements: merge.mobileOnlyElements,
+				...( merge.divergedComponents > 0 ? { divergedComponents: merge.divergedComponents } : {} ),
 			};
 		}
 		return {
@@ -848,6 +926,8 @@ interface IdentitySubsetMerge {
 	/** Width-scoped rules carrying each viewport's inline presentation for shared elements. */
 	css: string;
 	classAliases: Map<string, string>;
+	/** Shared components the phone layout re-parents, shipped as one rendering per viewport. */
+	divergedComponents: number;
 }
 
 /**
@@ -1109,8 +1189,10 @@ function identitySubsetMerge(
 	let projectedElements = 0;
 	// A shared component the two captures hold under different id-less
 	// containers (a form field a phone layout moves into its own row) is
-	// re-parented, not restyled; one tree cannot render both placements.
-	let diverged = false;
+	// re-parented, not restyled; one tree cannot render both placements. The
+	// walk records the shared component it started from, and only that
+	// component ships once per viewport.
+	const divergedRoots = new Set< string >();
 	const sharedIdsIn = ( $: cheerio.CheerioAPI, node: Element ): string =>
 		$( node )
 			.find( '[id]' )
@@ -1222,7 +1304,10 @@ function identitySubsetMerge(
 			if ( match < 0 ) continue;
 			cursor = match + 1;
 			const desktopChild = desktopChildren[ match ] as Element;
-			if ( sharedIdsIn( $d, desktopChild ) !== sharedIdsIn( $m, mobileChild ) ) diverged = true;
+			if ( sharedIdsIn( $d, desktopChild ) !== sharedIdsIn( $m, mobileChild ) ) {
+				divergedRoots.add( path.split( '/' )[ 0 ] as string );
+				continue;
+			}
 			const childId = $d( desktopChild ).attr( 'id' );
 			if ( childId && isIdentityId( childId ) ) continue;
 			projectPair( $d( desktopChild ), $m( mobileChild ), `${ path }/${ match }` );
@@ -1232,7 +1317,9 @@ function identitySubsetMerge(
 		const mobileElement = mobileIds.get( id );
 		if ( mobileElement ) projectPair( $d( desktopElement ), $m( mobileElement ), id );
 	}
-	if ( diverged || unsafeClassAlias ) return undefined;
+	if ( unsafeClassAlias ) return undefined;
+	const divergedComponents = splitDivergedComponents( $d, $m, divergedRoots, desktopIds, mobileIds );
+	if ( divergedComponents === undefined ) return undefined;
 	$d( '[class]' ).each( ( _index, node ) => {
 		const element = $d( node );
 		element.attr( 'class', ( element.attr( 'class' ) ?? '' ).split( /\s+/ ).filter( Boolean ).map( ( token ) => classAliases.get( token ) ?? token ).join( ' ' ) );
@@ -1249,6 +1336,7 @@ function identitySubsetMerge(
 		projectedElements,
 		css,
 		classAliases,
+		divergedComponents,
 	};
 }
 
@@ -1268,6 +1356,76 @@ function aliasResponsiveClasses( css: string, aliases: ReadonlyMap<string, strin
 	} catch {
 		return css;
 	}
+}
+
+/** Attributes that name other elements by id, so a renamed subtree keeps its own references. */
+const ID_REFERENCE_ATTRIBUTES = [ 'for', 'aria-labelledby', 'aria-describedby', 'aria-controls', 'aria-owns', 'aria-activedescendant', 'aria-details', 'aria-errormessage', 'list', 'form', 'headers' ];
+
+/**
+ * Ship each re-parented shared component once per viewport: the desktop
+ * rendering stays in place and is hidden at phone width, and the phone
+ * rendering follows it, hidden above the switch. The phone copy's ids take the
+ * `--dla-mobile` suffix, like a phone document's, and its references within
+ * the copy follow them. Nested diverged components travel with their outermost
+ * one. A component whose ids a link or anchor targets cannot be renamed
+ * without moving that target, so the whole page stays dual instead.
+ *
+ * Returns the number of split components, or undefined to keep both documents.
+ */
+function splitDivergedComponents(
+	$d: cheerio.CheerioAPI,
+	$m: cheerio.CheerioAPI,
+	roots: Set< string >,
+	desktopIds: Map< string, Element >,
+	mobileIds: Map< string, Element >
+): number | undefined {
+	if ( roots.size === 0 ) return 0;
+	const outermost = [ ...roots ].filter( ( id ) => {
+		const element = desktopIds.get( id );
+		return element !== undefined && ! [ ...roots ].some( ( other ) => other !== id && $d( desktopIds.get( other ) as Element ).find( element ).length > 0 );
+	} );
+	const linkedFragments = new Set< string >();
+	for ( const $ of [ $d, $m ] ) {
+		$( 'a[href*="#"]' ).each( ( _index, link ) => {
+			const href = $( link ).attr( 'href' ) ?? '';
+			try {
+				linkedFragments.add( decodeURIComponent( href.slice( href.indexOf( '#' ) + 1 ) ) );
+			} catch {
+				// An undecodable fragment targets nothing.
+			}
+		} );
+	}
+	for ( const id of outermost ) {
+		const desktop = $d( desktopIds.get( id ) as Element );
+		const mobileElement = mobileIds.get( id );
+		if ( ! mobileElement ) return undefined;
+		const mobile = $m( mobileElement ).clone();
+		const idsIn = ( node: cheerio.Cheerio< Element >, $: cheerio.CheerioAPI ) => [ node, ...node.find( '[id]' ).toArray().map( ( child ) => $( child ) ) ].map( ( n ) => n.attr( 'id' ) ?? '' ).filter( Boolean );
+		const targeted = ( node: cheerio.Cheerio< Element >, $: cheerio.CheerioAPI ) =>
+			node.is( '[data-dla-anchor-target]' ) || node.find( '[data-dla-anchor-target]' ).length > 0 || idsIn( node, $ ).some( ( value ) => linkedFragments.has( value ) );
+		if ( targeted( desktop, $d ) || targeted( $m( mobileElement ), $m ) ) return undefined;
+		const renamed = new Map< string, string >();
+		for ( const node of [ mobile, ...mobile.find( '[id]' ).toArray().map( ( child ) => $m( child ) ) ] ) {
+			const value = node.attr( 'id' );
+			if ( ! value ) continue;
+			renamed.set( value, `${ value }--dla-mobile` );
+			node.attr( 'id', `${ value }--dla-mobile` );
+		}
+		for ( const node of [ mobile, ...mobile.find( '*' ).toArray().map( ( child ) => $m( child ) ) ] ) {
+			for ( const attribute of ID_REFERENCE_ATTRIBUTES ) {
+				const value = node.attr( attribute );
+				if ( value === undefined ) continue;
+				node.attr( attribute, value.split( /\s+/ ).map( ( token ) => renamed.get( token ) ?? token ).join( ' ' ) );
+			}
+		}
+		// Phone-only elements the merge placed inside the desktop rendering
+		// already live in the phone copy.
+		desktop.find( `.${ RESPONSIVE_MOBILE_ONLY_CLASS }` ).remove();
+		desktop.addClass( RESPONSIVE_DESKTOP_ONLY_CLASS );
+		mobile.removeClass( RESPONSIVE_DESKTOP_ONLY_CLASS ).addClass( RESPONSIVE_MOBILE_ONLY_CLASS );
+		desktop.after( $m.html( mobile ) ?? '' );
+	}
+	return outermost.length;
 }
 
 /**
@@ -2614,9 +2772,14 @@ function removeDanglingMediaSource(
 		return withoutSources;
 	}
 	// Blank whole occurrences only. The reference is often the bare original of
-	// longer rendition URLs (`image.jpg?format=300w`) that were localized, and a
-	// substring pass would corrupt every one of them. An entity such as `&quot;`
-	// ends a URL; only `?` or a further `&name=` parameter continues it.
+	// longer rendition URLs — `image.jpg?format=300w` was the old query-shaped
+	// case; image services like GoDaddy's append whole path segments instead
+	// (`image.jpg/:/` → `image.jpg/:/rs=w:1160,h:720`, so the continuation does
+	// not even start with punctuation) — and those longer URLs are different
+	// assets, some of them captured. Splicing the blank at such a prefix
+	// corrupts the rendition and the loader loses the desktop image entirely.
+	// The URL terminator lookahead refuses every partial match: only a
+	// reference that stands as the complete URL here gets blanked.
 	const variants = [
 		...new Set( [ reference, normalizedReference, normalizedReference.replace( /&/g, '&amp;' ) ] ),
 	].sort( ( a, b ) => b.length - a.length );
@@ -2624,7 +2787,7 @@ function removeDanglingMediaSource(
 		new RegExp(
 			`(?:${ variants
 				.map( ( variant ) => variant.replace( /[.*+?^${}()|[\]\\]/g, '\\$&' ) )
-				.join( '|' ) })(?!\\?|&(?:amp;)?[^&;=\\s"']+=)`,
+				.join( '|' ) })${ URL_TERMINATOR_LOOKAHEAD }`,
 			'g'
 		),
 		TRANSPARENT_IMAGE_DATA_URL
@@ -3795,6 +3958,14 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		writeFileSync( entry.identityHtmlPath, identityHtml );
 	}
 	selfContainWebsite( websiteDir );
+	const portableTexts = portableTextReferences( websiteDir );
+	if ( portableTexts ) for ( const entry of retainedEntries ) {
+		const path = join( websiteDir, routePathOf( entry.url ) );
+		const html = readFileSync( path, 'utf8' );
+		const externalTexts = portableTexts.filter( ( item ) => item.path !== path ).map( ( item ) => item.text );
+		const stable = canonicalizeUnreferencedHeaderIds( html, externalTexts );
+		if ( stable !== html ) writeFileSync( path, stable );
+	}
 	const redirectsFile = portableRedirectsFile( portableRedirects );
 	if ( redirectsFile ) writeFileSync( join( websiteDir, '_redirects' ), redirectsFile );
 

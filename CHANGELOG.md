@@ -15,6 +15,31 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.6.10] - 2026-09-28
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- place captured anchor targets inside their sections, not at page coordinates
+
+## [0.6.9] - 2026-09-28
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- stabilize unreferenced shared header widget ids
+- learn responsive image owner geometry
+
+## [0.6.8] - 2026-09-28
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- collapse a page whose phone layout re-parents one component, and capture Wix phone anchors at rest
+
 ## [0.6.7] - 2026-09-27
 
 ### Changed

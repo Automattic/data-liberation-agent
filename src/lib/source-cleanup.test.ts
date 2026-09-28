@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync, rmSyn
 import { join } from 'node:path';
 import { chromium } from 'playwright';
 import { afterEach, expect, it } from 'vitest';
-import { cleanupPolicy, applySourceCleanup, readSourceCleanup } from './source-cleanup.js';
+import { cleanupPolicy, applySourceCleanup, readSourceCleanup, sweepSourceCleanup } from './source-cleanup.js';
 import { capture as wixCapture } from '../adapters/wix/capture.js';
 import { captureScreenshots } from './screenshot/screenshotter.js';
 import { exportWebsiteCapture } from './capture-export.js';
@@ -94,6 +94,87 @@ it('captures clean artifacts and compares intentional removals while rejecting d
   writeFileSync(join(directory, 'website', 'index.html'), output.replace('</body>', '<div class="ad-slot">Unexpected ad</div></body>'));
   await expect(checkFidelity({ directory, widths: [1440], settleMs: 200 })).rejects.toThrow('retains advertising');
   expect(JSON.parse(readFileSync(join(directory, 'compare', 'cleanup-evidence.json'), 'utf8')).completed).toBe(false);
+}, 90_000);
+
+// A builder runtime that re-initializes its document shortly after load (a
+// same-URL reload the route-drift guard never sees) takes window.__dlaCleanup
+// with it: every step after the reload runs on a document no cleanup policy
+// was ever installed on, and the authoritative read used to fail the route.
+const reinitHtml = `<!doctype html><html><head><meta charset="utf-8"><title>Owner site</title><style>
+:root{--wix-ads-height:50px}
+body{margin:0;font:16px Arial;padding-top:50px}#WIX_ADS{position:fixed;top:0;height:50px}
+</style></head><body><div id="WIX_ADS">Free website by Wix</div>
+<main><h1>Owner business</h1><p>${'Real owner content to retain. '.repeat(30)}</p></main>
+<script>
+if (!sessionStorage.getItem('reinit')) {
+  sessionStorage.setItem('reinit', '1');
+  setTimeout(function () { location.reload(); }, 40);
+}
+</script></body></html>`;
+
+async function reinitSource() {
+  server = createServer((_req, res) => { res.setHeader('content-type', 'text/html'); res.end(reinitHtml); });
+  await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve));
+  return `http://localtest.me:${(server.address() as { port: number }).port}/`;
+}
+
+it('reinstalls cleanup when the source re-initializes its document after install', async () => {
+  const url = await reinitSource();
+  const browser = await chromium.launch();
+  try {
+    // The disappearance itself: install, let the source reload, and the
+    // evidence is gone — a policy-less read still reports it missing.
+    const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+    await page.goto(url);
+    await applySourceCleanup(page, policy);
+    await page.waitForTimeout(200);
+    await expect(readSourceCleanup(page)).rejects.toThrow('Source cleanup evidence is missing');
+    // With the policy in hand the read reinstalls on the re-initialized
+    // document and its report says so — the chrome really is removed.
+    const recovered = await readSourceCleanup(page, policy);
+    expect(recovered.recovered).toBe(true);
+    expect(recovered.removed).toBeGreaterThanOrEqual(1);
+    expect(await page.locator('#WIX_ADS').count()).toBe(0);
+    await page.close();
+
+    // Same for the pre-serialization sweep: without a policy it leaves the
+    // fresh document dirty; with the policy it re-cleans what got serialized.
+    const swept = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+    await swept.goto(url);
+    await applySourceCleanup(swept, policy);
+    await swept.waitForTimeout(200);
+    await sweepSourceCleanup(swept);
+    expect(await swept.locator('#WIX_ADS').count()).toBe(1);
+    await sweepSourceCleanup(swept, policy);
+    expect(await swept.locator('#WIX_ADS').count()).toBe(0);
+    expect((await readSourceCleanup(swept)).recovered).toBe(true);
+    await swept.close();
+  } finally { await browser.close(); }
+}, 20_000);
+
+it('keeps a route whose source re-initializes mid-capture, recording the recovery in the evidence', async () => {
+  const url = await reinitSource();
+  mkdirSync(join(process.cwd(), '.tmp-test'), { recursive: true });
+  directory = mkdtempSync(join(process.cwd(), '.tmp-test', 'cleanup-reinit-'));
+  const result = await captureScreenshots({ urls: [url], primaryUrl: url, outputDir: directory,
+    cleanupPolicy: policy, captureImages: true, learnFluid: false, settleMs: 100 });
+  expect(result.failed).toBe(0);
+  expect(result.captured).toBe(1);
+  const manifest = JSON.parse(readFileSync(join(directory, 'screenshots', 'manifest.json'), 'utf8'));
+  const reports = manifest.entries[url].cleanup.reports as Array<{ recovered?: boolean; removed: number; failures: string[]; residual: number }>;
+  expect(reports.length).toBe(2);
+  expect(reports.every((report) => report.recovered)).toBe(true);
+  expect(reports.every((report) => report.failures.length === 0 && report.residual === 0 && report.removed > 0)).toBe(true);
+  // The re-initialized document is what got saved, and the recovery cleaned it
+  // before serialization — the attribution chrome never reaches the copy.
+  for (const name of readdirSync(join(directory, 'html'))) {
+    expect(readFileSync(join(directory, 'html', name), 'utf8')).not.toContain('Free website by Wix');
+  }
+  exportWebsiteCapture({ outputDir: directory, sourceUrl: url, platform: 'wix', summary: {}, failures: [] });
+  const receipt = JSON.parse(readFileSync(join(directory, 'capture-receipt.json'), 'utf8'));
+  expect(receipt.cleanup.complete).toBe(true);
+  const comparison = await checkFidelity({ directory, widths: [1440], settleMs: 200 });
+  expect(comparison.pass).toBe(true);
 }, 90_000);
 
 it('compares the source against a separately served candidate copy, reporting its retained attribution', async () => {

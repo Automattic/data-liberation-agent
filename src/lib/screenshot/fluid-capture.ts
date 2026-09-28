@@ -29,7 +29,19 @@ export const SEGMENT_STYLE_ATTRIBUTE = 'data-dla-fluid-rules';
 /** Attribute pattern used by the exporter to recognize those blocks. */
 export const FLUID_RULES_STYLE_ATTRIBUTE = /\bdata-dla-fluid-rules\b/i;
 /** Only geometry that a runtime plausibly derives from viewport width. */
-const LEARNABLE_PROPERTIES = [ 'width', 'height', 'top', 'font-size', 'padding-top' ] as const;
+const LEARNABLE_PROPERTIES = [ 'width', 'height', 'font-size', 'padding-top', 'transform-x' ] as const;
+
+function isPureXTranslationMatrix( matrix: readonly number[] ): boolean {
+	return (
+		matrix.length === 6 &&
+		matrix.every( Number.isFinite ) &&
+		Math.abs( matrix[ 0 ]! - 1 ) <= 0.01 &&
+		Math.abs( matrix[ 1 ]! ) <= 0.01 &&
+		Math.abs( matrix[ 2 ]! ) <= 0.01 &&
+		Math.abs( matrix[ 3 ]! - 1 ) <= 0.01 &&
+		Math.abs( matrix[ 5 ]! ) <= 0.01
+	);
+}
 
 export type LearnableProperty = ( typeof LEARNABLE_PROPERTIES )[ number ];
 
@@ -63,7 +75,7 @@ export interface FluidLearningResult {
  * breakpoint and another below it (container share changes, different clamp)
  * is unmodelled — or worse, mis-modelled — when every sample sits above the
  * switch. */
-export const DEFAULT_SWEEP_WIDTHS = [ 390, 600, 768, 1024, 1280, 1440, 1600, 1728, 1920 ];
+export const DEFAULT_SWEEP_WIDTHS = [ 390, 600, 768, 1024, 1280, 1440, 1536, 1840, 1920 ];
 
 /**
  * Observe inline geometry across widths, fit a model per element and property,
@@ -84,12 +96,14 @@ export async function learnAndApplyFluidGeometry(
 		( { attribute } ) => {
 			let index = 0;
 			for ( const element of document.querySelectorAll< HTMLElement >( '[style]' ) ) {
-			// Only elements a runtime sized in pixels are candidates.
-			const style = element.getAttribute( 'style' ) ?? '';
-			const carriesPixelSize = /\b(?:width|height|font-size|padding-top)\s*:\s*\d/.test( style );
-				const carriesCapturedAnchorTop =
-					element.hasAttribute( 'data-dla-anchor-target' ) && /\btop\s*:\s*\d/.test( style );
-				if ( ! carriesPixelSize && ! carriesCapturedAnchorTop ) continue;
+				// Only elements a runtime sized in pixels are candidates.
+				const style = element.getAttribute( 'style' ) ?? '';
+				const carriesPixelSize = /\b(?:width|height|font-size|padding-top)\s*:\s*\d/.test( style );
+				const carriesPixelCustomProperty = /(?:^|;)\s*--[-a-zA-Z0-9_]+\s*:\s*-?\d+(?:\.\d+)?px\s*(?:;|$)/.test( style );
+				const carriesMatrixTransform = /(?:^|;)\s*transform\s*:\s*matrix\(/.test( style );
+				if ( ! carriesPixelSize && ! carriesPixelCustomProperty && ! carriesMatrixTransform ) {
+					continue;
+				}
 				element.setAttribute( attribute, String( index++ ) );
 			}
 			return index;
@@ -131,11 +145,26 @@ export async function learnAndApplyFluidGeometry(
 					const style = element.getAttribute( 'style' ) ?? '';
 					const values: Record< string, number | null > = {};
 					const containers: Record< string, number | null > = {};
+					const customProperties = [ ...style.matchAll( /(?:^|;)\s*(--[-a-zA-Z0-9_]+)\s*:\s*[^;]+/g ) ].map( ( match ) => match[ 1 ]! );
+					const elementProperties = [ ...new Set( [ ...properties, ...customProperties ] ) ];
 					const parent = element.parentElement;
-					for ( const property of properties ) {
-						// `top` is a position against a containing block, not a
-						// share of a parent's box, so it has no container fit.
-						// `font-size` is excluded too: CSS resolves a font
+					for ( const property of elementProperties ) {
+						if ( property === 'transform-x' ) {
+							const transform = /(?:^|;)\s*transform\s*:\s*matrix\(([^)]+)\)/.exec( style );
+							const matrix = transform?.[ 1 ]?.split( ',' ).map( Number );
+							const isPureXTranslation =
+								matrix !== undefined &&
+								matrix.length === 6 &&
+								matrix.every( Number.isFinite ) &&
+								Math.abs( matrix[ 0 ]! - 1 ) <= 0.01 &&
+								Math.abs( matrix[ 1 ]! ) <= 0.01 &&
+								Math.abs( matrix[ 2 ]! ) <= 0.01 &&
+								Math.abs( matrix[ 3 ]! - 1 ) <= 0.01 &&
+								Math.abs( matrix[ 5 ]! ) <= 0.01;
+							values[ property ] = isPureXTranslation ? matrix[ 4 ]! : null;
+							continue;
+						}
+						// `font-size` is excluded: CSS resolves a font
 						// percentage against the parent font size, not its width,
 						// and container-query units assume the exported copy
 						// reflows the parent box the way the source did — which a
@@ -144,34 +173,24 @@ export async function learnAndApplyFluidGeometry(
 						// resolves against the containing block's width, which
 						// the sweep does not observe on the vertical axis.
 						containers[ property ] =
-							parent && property !== 'top' && property !== 'font-size' && property !== 'padding-top'
-							? property === 'width'
-								? parent.clientWidth
-								: parent.clientHeight
-							: null;
+							parent &&
+							! property.startsWith( '--' ) &&
+							property !== 'font-size' &&
+							property !== 'padding-top' &&
+							property !== 'transform-x'
+								? property === 'width'
+									? parent.clientWidth
+									: parent.clientHeight
+								: null;
 					}
-					for ( const property of properties ) {
-						if ( property === 'top' && ! element.hasAttribute( 'data-dla-anchor-target' ) ) {
-							values[ property ] = null;
-							continue;
-						}
-						if ( property === 'top' ) {
-							const sourceId = element.getAttribute( 'data-dla-anchor-source-id' );
-							const source = sourceId ? document.getElementById( sourceId ) : null;
-							// A sticky/fixed source reports the current viewport edge, not
-							// the document destination the anchor observed. In that case
-							// retain the marker's measured document coordinate.
-							if (
-								source &&
-								! source.closest( 'header,[role="banner"]' ) &&
-								! [ 'fixed', 'sticky' ].includes( getComputedStyle( source ).position )
-							) {
-								values[ property ] = source.getBoundingClientRect().top + window.scrollY;
-								continue;
-							}
-						}
-						const match = new RegExp( `(?:^|;)\\s*${ property }\\s*:\\s*(\\d+(?:\\.\\d+)?)px` ).exec( style );
+					for ( const property of elementProperties ) {
+						if ( property === 'transform-x' ) continue;
+						const match = new RegExp( `(?:^|;)\\s*${ property }\\s*:\\s*(-?\\d+(?:\\.\\d+)?)px` ).exec( style );
 						values[ property ] = match ? Number( match[ 1 ] ) : null;
+						if ( property.startsWith( '--' ) && ! match ) {
+							const computed = getComputedStyle( element ).getPropertyValue( property ).trim();
+							if ( computed ) values[ property ] = null;
+						}
 					}
 					return { id: element.getAttribute( attribute )!, values, containers };
 				} ),
@@ -179,11 +198,17 @@ export async function learnAndApplyFluidGeometry(
 		);
 
 		for ( const entry of measured ) {
-			for ( const property of LEARNABLE_PROPERTIES ) {
+			for ( const property of Object.keys( entry.values ) as LearnableProperty[] ) {
 				const value = entry.values[ property ];
-				if ( value === null || value === undefined ) continue;
 				const key = `${ entry.id }:${ property }`;
 				const list = observations.get( key ) ?? [];
+				if ( value === null || value === undefined ) {
+					if ( property.startsWith( '--' ) ) {
+						list.push( { viewport: width, value: Number.NaN } );
+						observations.set( key, list );
+					}
+					continue;
+				}
 				list.push( { viewport: width, value, container: entry.containers?.[ property ] ?? null } );
 				observations.set( key, list );
 			}
@@ -210,8 +235,11 @@ export async function learnAndApplyFluidGeometry(
 
 	for ( const [ key, samples ] of observations ) {
 		const [ id, property ] = key.split( ':' ) as [ string, LearnableProperty ];
-		const wholeRangeModel = learnFluidModel( samples );
-		const model: FluidModel = learnWidestFluidModel( samples );
+		const transformX = property === 'transform-x';
+		const customProperty = property.startsWith( '--' );
+		const modelSamples = customProperty ? widestFiniteRun( samples ) : samples;
+		const wholeRangeModel = learnFluidModel( modelSamples );
+		const model: FluidModel = learnWidestFluidModel( modelSamples );
 		byKind[ model.kind ] = ( byKind[ model.kind ] ?? 0 ) + 1;
 		if ( wholeRangeModel.kind === 'breakpoint' ) {
 			for ( const width of breakpointsFrom( wholeRangeModel.samples ) ) breakpoints.add( width );
@@ -222,7 +250,68 @@ export async function learnAndApplyFluidGeometry(
 		// segment fits a viewport-expressible model, ship media-scoped rules
 		// instead of freezing.
 		const segmented =
-			model.kind === 'breakpoint' ? learnSegmentedFluidModel( samples ) : null;
+			wholeRangeModel.kind === 'breakpoint'
+				? learnSegmentedFluidModel( modelSamples, customProperty ? { holdUnfitted: true } : {} )
+				: null;
+		if ( customProperty && model.kind !== 'breakpoint' && modelSamples.length >= 3 ) {
+			const customModel =
+				model.kind === 'container'
+					? learnWidestFluidModel( modelSamples.map( ( sample ) => ( { viewport: sample.viewport, value: sample.value } ) ) )
+					: model;
+			if ( customModel.kind === 'breakpoint' || customModel.kind === 'container' ) {
+				unmodelled++;
+				continue;
+			}
+			learned.push( {
+				id,
+				property,
+				css: customModel.kind === 'constant' ? customModel.css : '',
+				fallbackCss: null,
+				containerRelative: false,
+				sampledCss: null,
+				segmentedCss:
+					customModel.kind === 'constant'
+						? null
+						: segmentedCss( `[${ SEGMENT_ATTRIBUTE }="${ id }"]`, property, [
+								{
+									model: customModel,
+									minWidth: modelSamples[ 0 ]!.viewport,
+									maxWidth: null,
+								},
+							] ),
+			} );
+			continue;
+		}
+		if ( transformX && ( model.kind !== 'breakpoint' || segmented !== null ) ) {
+			const element = await page.locator( `[${ ID_ATTRIBUTE }="${ id }"]` ).first().getAttribute( 'style' );
+			const matrix = /(?:^|;)\s*transform\s*:\s*matrix\(([^)]+)\)/.exec( element ?? '' )?.[ 1 ]?.split( ',' ).map( Number );
+			if ( ! matrix || ! isPureXTranslationMatrix( matrix ) ) {
+				// The runtime may have switched this transform after the sweep; do not
+				// replace a newly rotated, scaled, skewed, or vertically shifted matrix.
+				unmodelled++;
+				continue;
+			}
+			const valueFor = ( css: string ) => `translateX(${ css })`;
+			const transformSegments =
+				segmented?.segments ?? ( model.kind === 'breakpoint' ? [] : [ { model, minWidth: null, maxWidth: null } ] );
+			learned.push( {
+				id,
+				property: 'transform',
+				css: '',
+				fallbackCss: null,
+				containerRelative: false,
+				sampledCss: null,
+				segmentedCss: segmentedCss(
+					`[${ SEGMENT_ATTRIBUTE }="${ id }"]`,
+					'transform',
+					transformSegments.map( ( segment ) => ( {
+						...segment,
+						model: { ...segment.model, css: valueFor( segment.model.css ) },
+					} ) )
+				),
+			} );
+			continue;
+		}
 		if ( segmented !== null ) {
 			byKind[ model.kind ] = Math.max( 0, ( byKind[ model.kind ] ?? 0 ) - 1 );
 			byKind.segmented = ( byKind.segmented ?? 0 ) + 1;
@@ -293,6 +382,18 @@ export async function learnAndApplyFluidGeometry(
 	// it would overwrite anything applied beforehand with pixels again.
 	if ( original ) await page.setViewportSize( original );
 	await page.waitForTimeout( settleMs );
+	// The resize back to the capture viewport can switch a transform to another
+	// matrix after the sweep. Validate that final state before removing inline
+	// transform; otherwise translateX would discard its new components.
+	for ( let index = learned.length - 1; index >= 0; index-- ) {
+		const entry = learned[ index ]!;
+		if ( entry.property !== 'transform' ) continue;
+		const style = await page.locator( `[${ ID_ATTRIBUTE }="${ entry.id }"]` ).first().getAttribute( 'style' );
+		const matrix = /(?:^|;)\s*transform\s*:\s*matrix\(([^)]+)\)/.exec( style ?? '' )?.[ 1 ]?.split( ',' ).map( Number );
+		if ( matrix && isPureXTranslationMatrix( matrix ) ) continue;
+		learned.splice( index, 1 );
+		unmodelled++;
+	}
 
 	const { reverted, frozen, sampled } = await page.evaluate(
 		( { attribute, segmentAttribute, entries, tolerance } ) => {
@@ -459,4 +560,19 @@ async function waitForRestGeometry( page: Page, attribute: string ): Promise< vo
 			previous = current;
 		}
 	}, { attribute } );
+}
+
+/** The last contiguous stretch of numeric pixel custom-property observations. */
+function widestFiniteRun( samples: readonly GeometrySample[] ): GeometrySample[] {
+	const runs: GeometrySample[][] = [];
+	let run: GeometrySample[] = [];
+	for ( const sample of [ ...samples ].sort( ( a, b ) => a.viewport - b.viewport ) ) {
+		if ( Number.isFinite( sample.value ) ) run.push( sample );
+		else if ( run.length ) {
+			runs.push( run );
+			run = [];
+		}
+	}
+	if ( run.length ) runs.push( run );
+	return runs.at( -1 ) ?? [];
 }
