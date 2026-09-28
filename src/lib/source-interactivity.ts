@@ -24,6 +24,11 @@ export function inspectSourceInteractivity(
 	outputDir: string,
 	resources: CapturedResourceManifest
 ): SourceInteractivityPage {
+	// Large static captures can contain many megabytes of editorial text. Avoid
+	// allocating a second parsed DOM when no executable source is even present.
+	if ( ! /<script\b/i.test( html ) ) {
+		return { url: pageUrl, status: 'not_detected', signals: [], scripts: [] };
+	}
 	const $ = cheerio.load( html );
 	const hasCanvas = $( 'canvas' ).length > 0;
 	const canvasIds = $( 'canvas[id]' )
