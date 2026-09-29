@@ -34,7 +34,10 @@ export const godaddyWmAdapter: PlatformAdapter = {
   detection,
   discover,
   liberation: {
-    cleanupRules: providerCreditRules('godaddy', ['godaddy.com'], 'GoDaddy'),
+    cleanupRules: [
+      { id: 'godaddy-freemium-acquisition', category: 'source-attribution', selector: '[data-freemium-ad="true"]' },
+      ...providerCreditRules('godaddy', ['godaddy.com'], 'GoDaddy'),
+    ],
     beforeSerialize: async (page) => preservePublicationEvidence(page),
   },
 };
