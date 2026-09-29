@@ -318,6 +318,16 @@ export function isAudioLink( reference: string, documentUrl: string ): boolean {
 	}
 }
 
+/** Linked Word files are downloads, not navigable HTML routes. */
+export function isDocumentDownloadLink( reference: string, documentUrl: string ): boolean {
+	try {
+		const url = new URL( reference.replace( /&amp;/g, '&' ), documentUrl );
+		return /^https?:$/.test( url.protocol ) && /\.docx?$/i.test( url.pathname );
+	} catch {
+		return false;
+	}
+}
+
 export class CapturedResourceStore {
 	private readonly origin: string;
 	private readonly resourceDir: string;
@@ -449,7 +459,7 @@ export class CapturedResourceStore {
 			} );
 			$( 'a[href],area[href]' ).each( ( _, element ) => {
 				const href = $( element ).attr( 'href' ) ?? '';
-				if ( isAudioLink( href, baseUrl ) ) add( href, baseUrl );
+				if ( isAudioLink( href, baseUrl ) || isDocumentDownloadLink( href, baseUrl ) ) add( href, baseUrl );
 			} );
 			for ( const reference of svgUseDocumentReferences( $, baseUrl ) ) add( reference, baseUrl );
 			$( 'link[href]' ).each( ( _, element ) => {
@@ -474,7 +484,7 @@ export class CapturedResourceStore {
 							.get(),
 				  ].join( '\n' );
 			for ( const match of css.matchAll(
-				/(?:url\(\s*(?:["']([^"']+)["']|([^\s)'";]+))\s*\)|@import\s+(?:url\(\s*)?["']([^"']+)["'])/gi
+				/(?:url\(\s*(?:["']([^"']+)["']|([^\s)'";]+))\s*\)|@import\s*(?:url\(\s*)?["']([^"']+)["'])/gi
 			) )
 				add( match[ 1 ] ?? match[ 2 ] ?? match[ 3 ] ?? '', baseUrl );
 		};
@@ -661,7 +671,7 @@ export class CapturedResourceStore {
 			if ( fetched.body.length === 0 )
 				throw new Error( 'render dependency response body is empty' );
 			if (
-				! /^(?:text\/css|image\/|audio\/|video\/|font\/|application\/(?:font|x-font|font-woff|octet-stream))/i.test(
+				! /^(?:text\/css|image\/|audio\/|video\/|font\/|application\/(?:font|x-font|font-woff|octet-stream|msword|vnd\.openxmlformats-officedocument\.wordprocessingml\.document))/i.test(
 					contentType
 				)
 			)

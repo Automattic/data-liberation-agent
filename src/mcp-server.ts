@@ -60,6 +60,7 @@ const TOOLS = [
         outputDir: { type: 'string', description: 'Output base directory. Defaults to ~/data-liberation.' },
         resume: { type: 'boolean', description: 'Reuse artifacts already on disk instead of recapturing.' },
         screenshots: { type: 'boolean', description: 'Also capture full-page and scrolled PNGs.' },
+        portableMotion: { type: 'object', description: 'Optional author-supplied, hash-pinned portable motion recipe verified in the browser before export.' },
       },
       required: ['url'],
     },
@@ -74,6 +75,7 @@ const TOOLS = [
         directory: { type: 'string', description: 'A liberated run directory.' },
         screenshots: { type: 'boolean', description: 'Write source/copy/diff PNGs as evidence.' },
         candidateUrl: { type: 'string', description: 'Base URL of another rendered copy of the site, such as one built from the capture, to compare instead of the capture.' },
+        motionContract: { type: 'object', description: 'Authored routes, widths, readiness selectors, text, canvas and click probes for independent source/candidate behavior verification.' },
       },
       required: ['directory'],
     },
@@ -127,6 +129,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         outputBase: typeof args.outputDir === 'string' ? args.outputDir : resolveOutputBase(),
         resume: args.resume === true,
         screenshots: args.screenshots === true,
+        portableMotion: args.portableMotion && typeof args.portableMotion === 'object' ? args.portableMotion as import('./lib/portable-motion.js').PortableMotionRecipe : undefined,
         // A tool call has no terminal to hold, so it never serves.
         serve: false,
         log,
@@ -148,6 +151,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         directory: String(args.directory ?? ''),
         screenshots: args.screenshots === true,
         candidateUrl: typeof args.candidateUrl === 'string' ? args.candidateUrl : undefined,
+        motionContract: args.motionContract && typeof args.motionContract === 'object' ? args.motionContract as import('./lib/fidelity/candidate-motion.js').MotionContract : undefined,
         log,
       });
       return textResult(report);

@@ -99,6 +99,7 @@ export interface ScreenshotOpts {
 		page: import('playwright').Page,
 		ctx: import('../../adapters/page-actions.js').LiberationContext
 	) => Promise< void >;
+	resolveClientRedirect?: ( page: import('playwright').Page, url: string ) => Promise< string | undefined >;
 	/** Adapter rewrite applied to every serialized HTML artifact before it is stored. */
 	canonicalizeHtml?: ( html: string ) => string;
 	/** Adapter hook run after fluid learning, immediately before serialize. Best-effort. */

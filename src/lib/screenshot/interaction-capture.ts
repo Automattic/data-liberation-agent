@@ -218,7 +218,10 @@ export async function captureTriggeredDialogs(
 				''
 			).replace( /\s+/g, ' ' );
 			const popup = ( element.getAttribute( 'aria-haspopup' ) ?? '' ).toLowerCase();
-			if ( popupTypes.includes( popup ) ) {
+			// `aria-haspopup="true"` is an ambiguous legacy alias for a menu.
+			// Probe it only when the control also declares a collapsed/expanded
+			// state; a visible newly revealed panel is still required to capture.
+			if ( popupTypes.includes( popup ) || ( popup === 'true' && element.hasAttribute( 'aria-expanded' ) ) ) {
 				const hasBinding =
 					Boolean( element.getAttribute( 'aria-controls' ) ) ||
 					Array.from( element.attributes ).some(

@@ -4,6 +4,7 @@
 // path: recognising a platform's CDN is exactly what an adapter is for.
 //
 import type { LiberationHooks } from '../page-actions.js';
+import { resolveEventFormRedirect } from './event-forms.js';
 import { providerCreditRules } from '../../lib/source-cleanup.js';
 import type { Locator, Page } from 'playwright';
 import { canonicalizeWixCapturedHtml } from './instance-ids.js';
@@ -434,6 +435,7 @@ export async function settleScrollReactiveChrome( page: Page ): Promise< void > 
 }
 
 export const capture: LiberationHooks = {
+  resolveClientRedirect: resolveEventFormRedirect,
   canonicalizeHtml: canonicalizeWixCapturedHtml,
   cleanupRules: [
     // Wix publishes the measured height of its own banner into these, and its
