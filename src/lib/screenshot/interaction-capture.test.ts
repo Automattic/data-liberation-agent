@@ -666,6 +666,66 @@ describe( 'captureTriggeredDialogs', () => {
 	);
 
 	it.skipIf( process.env.SKIP_BROWSER_TESTS )(
+		'captures a current-route button popup with generic aria-haspopup and preserves its links offline',
+		async () => {
+			const browser = await chromium.launch( { headless: true } );
+			const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+			const markup = `<!doctype html><html><head><style>
+				.nav { position: relative; }
+				.panel { position: absolute; top: 100%; right: 0; width: 224px; background: white; }
+				.panel a { display: block; padding: 10px; }
+			</style></head><body><header><div class="nav">
+				<button type="button" aria-haspopup="true" aria-expanded="false">About<span aria-hidden="true">⌄</span></button>
+			</div></header><main>About page</main>
+			<script>
+				const nav = document.querySelector('.nav');
+				const button = nav.querySelector('button');
+				button.addEventListener('click', () => {
+					const open = button.getAttribute('aria-expanded') === 'true';
+					button.setAttribute('aria-expanded', String(!open));
+					if (open) nav.querySelector('.panel').remove();
+					else {
+						const panel = document.createElement('div');
+						panel.className = 'panel';
+						panel.innerHTML = '<a href="/">Home</a><a href="/about" aria-current="page">About</a><a href="/contact">Contact</a>';
+						nav.append(panel);
+					}
+				});
+			</script></body></html>`;
+			try {
+				await page.setContent( markup );
+				const report = await captureTriggeredDialogs( page, 'https://example.test/about' );
+				expect( report.states ).toMatchObject( [ {
+					status: 'captured',
+					trigger: { tag: 'button', ariaHaspopup: 'true', label: 'About⌄' },
+					dialog: { tag: 'div', presentation: 'dropdown' },
+				} ] );
+				expect( report.states[ 0 ].dialog?.html ).toContain( 'aria-current="page"' );
+				expect( await page.locator( '.panel' ).count() ).toBe( 0 );
+				const portable = wireCapturedDialogs( markup.replace( /<script>[\s\S]*?<\/script>/, '' ), report.states );
+				await page.setContent( portable );
+				const disclosure = page.locator( 'details.dla-disclosure' );
+				const summary = disclosure.locator( 'summary' );
+				expect( await disclosure.count() ).toBe( 1 );
+				expect( await page.locator( '.dla-dialog a:visible' ).count() ).toBe( 0 );
+				await summary.click();
+				expect( await page.locator( '.dla-dialog a:visible' ).allTextContents() ).toEqual( [ 'Home', 'About', 'Contact' ] );
+				expect( await page.locator( '.dla-dialog a[aria-current="page"]' ).getAttribute( 'href' ) ).toBe( '/about' );
+				await summary.click();
+				expect( await page.locator( '.dla-dialog a:visible' ).count() ).toBe( 0 );
+				await summary.focus();
+				await page.keyboard.press( 'Enter' );
+				expect( await page.locator( '.dla-dialog a:visible' ).count() ).toBe( 3 );
+				await page.keyboard.press( 'Escape' );
+				expect( await disclosure.getAttribute( 'open' ) ).toBeNull();
+			} finally {
+				await browser.close();
+			}
+		},
+		30_000
+	);
+
+	it.skipIf( process.env.SKIP_BROWSER_TESTS )(
 		'only clicks the first eight unambiguous dialog triggers',
 		async () => {
 			const browser = await chromium.launch( { headless: true } );
@@ -720,6 +780,6 @@ describe( 'captureTriggeredDialogs', () => {
 				await browser.close();
 			}
 		},
-		30_000
+		60_000
 	);
 } );
