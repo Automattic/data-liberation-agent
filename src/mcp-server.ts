@@ -74,6 +74,7 @@ const TOOLS = [
         directory: { type: 'string', description: 'A liberated run directory.' },
         screenshots: { type: 'boolean', description: 'Write source/copy/diff PNGs as evidence.' },
         candidateUrl: { type: 'string', description: 'Base URL of another rendered copy of the site, such as one built from the capture, to compare instead of the capture.' },
+        motionContract: { type: 'object', description: 'Authored routes, widths, readiness selectors, text, canvas and click probes for independent source/candidate behavior verification.' },
       },
       required: ['directory'],
     },
@@ -148,6 +149,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         directory: String(args.directory ?? ''),
         screenshots: args.screenshots === true,
         candidateUrl: typeof args.candidateUrl === 'string' ? args.candidateUrl : undefined,
+        motionContract: args.motionContract && typeof args.motionContract === 'object' ? args.motionContract as import('./lib/fidelity/candidate-motion.js').MotionContract : undefined,
         log,
       });
       return textResult(report);
