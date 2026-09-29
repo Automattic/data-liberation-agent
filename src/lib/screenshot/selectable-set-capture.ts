@@ -202,6 +202,12 @@ export async function captureSelectableSetStates(
 					if ( isInsideNavigable( element ) ) return false;
 					if ( element.hasAttribute( 'aria-haspopup' ) ) return false;
 					if ( isDisclosureTrigger( element ) ) return false;
+					// Cursor is inherited by a control's icon/label. Excluding the
+					// popup/disclosure trigger itself must also exclude its descendants:
+					// clicking them bubbles to the same control, not an independent set.
+					for ( let parent = element.parentElement; parent; parent = parent.parentElement ) {
+						if ( parent.hasAttribute( 'aria-haspopup' ) || isDisclosureTrigger( parent ) ) return false;
+					}
 					if ( isPagerControl( element ) ) return false;
 					if ( isChrome( element ) ) return false;
 					const tag = element.tagName.toLowerCase();
