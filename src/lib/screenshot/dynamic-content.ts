@@ -91,12 +91,29 @@ export async function expandCollapsedContent(page: Page): Promise<void> {
       // unsafe. This is generic and vendor-neutral: it only ever asks "did the
       // route change", never what framework produced it.
       const currentRoute = () => `${location.pathname}${location.search}`;
+      // A route revert only works while this document survives. A plain
+      // <button> whose handler loads another document (location.assign, a
+      // scripted link click) would replace it outright, destroying this
+      // evaluate and leaving capture on a different page. The Navigation API
+      // announces every navigation this document starts, so cancel the ones
+      // that would leave it; same-document ones (pushState) still run and
+      // are reverted below.
+      type NavigateEvent = Event & { destination?: { sameDocument?: boolean } };
+      const navigation = (window as unknown as { navigation?: EventTarget }).navigation;
+      let blockedNavigation = false;
+      const keepDocument = (event: Event) => {
+        if (!event.cancelable || (event as NavigateEvent).destination?.sameDocument) return;
+        event.preventDefault();
+        blockedNavigation = true;
+      };
+      navigation?.addEventListener('navigate', keepDocument);
       const activate = async (element: Element): Promise<'ok' | 'navigated'> => {
         const before = currentRoute();
         const beforeState = history.state;
         try { (element as HTMLElement).click(); } catch { return 'ok'; }
         // Let a synchronous router (the common case) act before checking.
         await new Promise((r) => setTimeout(r, 60));
+        if (blockedNavigation) return 'navigated';
         if (currentRoute() === before) return 'ok';
         try {
           history.pushState(beforeState, '', before);
@@ -137,6 +154,7 @@ export async function expandCollapsedContent(page: Page): Promise<void> {
       }
 
       await new Promise((r) => setTimeout(r, 400));
+      navigation?.removeEventListener('navigate', keepDocument);
     }, EXPAND_TOGGLE_LABELS);
   } catch { /* page blocked our script — don't fail the capture */ }
 }
