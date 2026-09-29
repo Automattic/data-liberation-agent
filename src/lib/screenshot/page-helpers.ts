@@ -468,6 +468,7 @@ export interface OverlayCandidate {
   text: string;              // lowercased textContent, truncated
   ariaLabel: string | null;  // lowercased aria-label
   hasCloseAffordance: boolean; // a visible close control exists in the subtree
+  textShare?: number;        // share of the document's rendered text inside it, 0..1
 }
 
 /** Page-global scroll-lock state (one modal locking scroll affects the page). */
@@ -583,6 +584,9 @@ export function isProviderPromotion(c: OverlayCandidate): boolean {
   return c.coverageRatio < 0.25 && isSourcePromotion(hay);
 }
 
+/** A candidate holding at least this share of the document's text is the page itself. */
+const PAGE_TEXT_SHARE = 0.9;
+
 /**
  * Decide which candidates are overlays and in what order to dismiss them.
  * Pure. Takeovers (score ≥ threshold) first, highest score first; then consent
@@ -596,6 +600,9 @@ export function selectOverlayTargets(d: OverlayDetection): OverlayTarget[] {
   // (lets the mocked-browser path be a true no-op, and removes a hidden
   // dependency on dismissOverlays' try/catch).
   for (const c of d.candidates ?? []) {
+    // Nothing is behind a layer that holds the document's text: it is the page
+    // (a password or access gate, say), and removing it leaves an empty document.
+    if ((c.textShare ?? 0) >= PAGE_TEXT_SHARE) continue;
     const { score, signals } = scoreOverlay(c, d.scrollLock);
     // Ambient signals alone (page-global scroll-lock + a SIBLING modal's backdrop)
     // can lift benign sticky chrome to the threshold. Require a takeover to either
@@ -684,6 +691,7 @@ function detectOverlays(page: Page): Promise<OverlayDetection> {
       });
     };
 
+    const pageTextLength = (document.body?.innerText || '').trim().length;
     const candidates: Array<Record<string, unknown>> = [];
     let idx = 0;
     for (const el of Array.from(document.querySelectorAll('*'))) {
@@ -706,6 +714,9 @@ function detectOverlays(page: Page): Promise<OverlayDetection> {
         text: (el.textContent || '').toLowerCase().slice(0, 400),
         ariaLabel: ((el.getAttribute('aria-label') || '').toLowerCase()) || null,
         hasCloseAffordance: !!close,
+        textShare: pageTextLength
+          ? ((el as HTMLElement).innerText || '').trim().length / pageTextLength
+          : 0,
       });
       idx++;
     }
