@@ -23,6 +23,12 @@ describe( 'independent source/candidate interaction', () => {
 		  setTimeout(() => { document.querySelector('#message').textContent = 'READY'; document.body.classList.remove('loading'); }, 100);
 		  document.querySelector('#control').addEventListener('click', () => { document.querySelector('#message').textContent = noPending ? '' : 'Initializing'; setTimeout(() => document.querySelector('#message').textContent = 'READY', 150); });
 		  window.addEventListener('mousemove', () => document.querySelector('#drawing').getContext('2d').fillRect(5, 5, 30, 30));
+		  if (location.search.includes('startup-ripple=1')) {
+		    const canvas = document.querySelector('#drawing');
+		    let tick = 0;
+		    const paint = setInterval(() => { canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height); canvas.getContext('2d').fillRect(40 + tick++, 5, 15, 15); }, 60);
+		    setTimeout(() => clearInterval(paint), 3400);
+		  }
 		} else { document.querySelector('#message').textContent = 'READY'; document.body.classList.remove('loading'); }
 		</script></body></html>` );
 	} );
@@ -60,5 +66,12 @@ describe( 'independent source/candidate interaction', () => {
 		const evidence = await verifyCandidateMotion( browser, '/', 390, origin, `${ origin }?no-pending=1`, contract.routes[ '/' ], signals );
 		expect( evidence.failures ).toContain( 'startup text phase differs: #message' );
 		expect( evidence.failures ).toContain( 'click replay text phase differs: #control' );
+	}, 30_000 );
+
+	it( 'waits for a finite startup canvas ripple before checking the pointer control', async () => {
+		const url = `${ origin }?startup-ripple=1`;
+		const evidence = await verifyCandidateMotion( browser, '/', 390, url, url, contract.routes[ '/' ], signals );
+		expect( evidence ).toMatchObject( { pass: true, failures: [] } );
+		expect( evidence.observations[ 'canvas #drawing' ] ).toMatchObject( { source: { idle: true, responds: true }, candidate: { idle: true, responds: true } } );
 	}, 30_000 );
 } );

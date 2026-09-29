@@ -110,17 +110,27 @@ function firstVisiblePhase( changes: string[] ): string {
 async function pointerProbe( page: Page, selector: string ): Promise< { idle: boolean; responds: boolean } > {
 	const canvas = page.locator( selector ).first();
 	if ( ! await canvas.count() ) return { idle: false, responds: false };
-	await page.waitForTimeout( 2500 ); // allow finite startup ripples to settle before the no-input control
 	const image = () => canvas.evaluate( ( element ) => ( element as HTMLCanvasElement ).toDataURL() );
-	const before = await image();
-	await page.waitForTimeout( 150 );
-	const control = await image();
+	// A source may finish its DOM transition before its last canvas ripple fades.
+	// Require a bounded quiet interval instead of sampling one fixed instant.
+	// The initial wait also prevents an empty frame between sparse draws from
+	// appearing idle when the drawing is still in progress.
+	await page.waitForTimeout( 2500 );
+	let previous = await image();
+	let quiet = 0;
+	for ( let attempt = 0; attempt < 24 && quiet < 3; attempt++ ) {
+		await page.waitForTimeout( 250 );
+		const current = await image();
+		quiet = current === previous ? quiet + 1 : 0;
+		previous = current;
+	}
+	const control = previous;
 	const box = await canvas.boundingBox();
 	if ( ! box ) return { idle: false, responds: false };
 	await page.mouse.move( box.x + box.width * .25, box.y + box.height * .5 );
 	await page.mouse.move( box.x + box.width * .6, box.y + box.height * .52 );
 	await page.waitForTimeout( 150 );
-	return { idle: before === control, responds: control !== await image() };
+	return { idle: quiet >= 3, responds: control !== await image() };
 }
 
 async function replay( page: Page, click: { trigger: string; target: string }, ready: string ): Promise< { changed: boolean; restored: boolean; firstPhase: string } > {
