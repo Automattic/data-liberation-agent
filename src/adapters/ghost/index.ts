@@ -11,6 +11,12 @@ import { detection } from './detection.js';
 const ghostCreditRules = providerCreditRules( 'ghost', [ 'ghost.org' ], 'Ghost' )
 	.filter( ( rule ) => ! rule.creditText );
 
+// Portal (members) and Sodo Search render their UI at runtime into these
+// roots. Portal's floating "Subscribe" trigger is an iframe whose src is the
+// live site, so a captured copy would frame the source origin; neither app
+// can run without Ghost's members/search APIs.
+const RUNTIME_ROOTS = [ '#ghost-portal-root', '#sodo-search-root' ];
+
 // Ghost serves a standard sitemap index (pages, posts, authors, tags), so the
 // generic discovery covers it.
 export const ghostAdapter: PlatformAdapter = {
@@ -19,5 +25,6 @@ export const ghostAdapter: PlatformAdapter = {
 	discover: discoverDefault,
 	liberation: {
 		cleanupRules: ghostCreditRules,
+		removeSelectors: RUNTIME_ROOTS,
 	},
 };
