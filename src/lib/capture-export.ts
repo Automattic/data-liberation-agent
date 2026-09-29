@@ -41,6 +41,7 @@ import { SCROLL_STATES_SCHEMA, type ScrollStatesReport } from './screenshot/scro
 import { FLUID_RULES_STYLE_ATTRIBUTE } from './screenshot/fluid-capture.js';
 import {
 	isAudioLink,
+	isDocumentDownloadLink,
 	svgUseDocumentReferences,
 	type CapturedResourceManifest,
 } from './screenshot/resource-capture.js';
@@ -2390,13 +2391,13 @@ function dependencyReferences(
 		.replace( /&quot;|&#34;|&#x22;/gi, '"' )
 		.replace( /&apos;|&#39;|&#x27;/gi, "'" );
 	let cssContent = searchableHtml;
-	const audioLinks: string[] = [];
+	const linkedFiles: string[] = [];
 	const svgUseDocuments: string[] = [];
 	if ( ! cssOnly ) {
 		const $ = cheerio.load( html );
 		$( 'a[href],area[href]' ).each( ( _, element ) => {
 			const href = $( element ).attr( 'href' ) ?? '';
-			if ( isAudioLink( href, documentUrl ) ) audioLinks.push( href );
+			if ( isAudioLink( href, documentUrl ) || isDocumentDownloadLink( href, documentUrl ) ) linkedFiles.push( href );
 		} );
 		// Recorded without the fragment, so localizing the sprite file rewrites
 		// only its path and every `#symbol` reference into it survives.
@@ -2420,7 +2421,7 @@ function dependencyReferences(
 		// must not be recorded, let alone reported as unresolved.
 		if ( reference && ! isInlineUrl( reference ) ) references.add( reference.replace( /&amp;/g, '&' ) );
 	};
-	for ( const href of audioLinks ) add( href );
+	for ( const href of linkedFiles ) add( href );
 	for ( const reference of svgUseDocuments ) add( reference );
 
 	const mediaReferences = new Set< string >();
@@ -3002,7 +3003,7 @@ function unresolvedCapturedAnchors(
 const UNCAPTURED_ROUTE_REASON = 'target route was not captured';
 const SKIP_UNCAPTURED_PATHS = /^\/(cart|account|login|signup|checkout|search|api|admin|favicon)/i;
 const UNCAPTURED_ASSET_PATH =
-	/\.(css|js|png|jpg|jpeg|gif|svg|ico|woff|woff2|ttf|eot|pdf|zip|xml|json)$/i;
+	/\.(css|js|png|jpg|jpeg|gif|svg|ico|woff|woff2|ttf|eot|pdf|docx?|zip|xml|json)$/i;
 
 /**
  * Same-origin page links in captured HTML whose target was never captured.

@@ -31,6 +31,44 @@ afterEach( () => {
 } );
 
 describe( 'CapturedResourceStore', () => {
+	it( 'exports a linked DOCX as portable bytes beside a missing HTML route', async () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-linked-docx-' ) );
+		dirs.push( outputDir );
+		mkdirSync( join( outputDir, 'html' ) );
+		mkdirSync( join( outputDir, 'screenshots' ) );
+		const sourceUrl = 'https://example.com/';
+		const download = 'https://example.com/_files/ugd/flyer.docx?dn=Fly%20fishing.docx';
+		const missing = 'https://example.com/missing-page';
+		const bytes = Buffer.from( 'PK\x03\x04word document fixture' );
+		const html = `<html><body><a id="flyer" href="${ download }">Flyer</a><a id="missing" href="/missing-page">Missing</a></body></html>`;
+		writeFileSync( join( outputDir, 'html', 'home.html' ), html );
+		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( {
+			version: 1, entries: { [ sourceUrl ]: { html: 'html/home.html' }, [ missing ]: {} },
+		} ) );
+		const fetchMedia = vi.fn( async ( url: string ) => ( {
+			finalUrl: url, status: 200,
+			headers: new Headers( { 'content-type': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' } ),
+			body: bytes,
+		} ) );
+		const store = new CapturedResourceStore( outputDir, sourceUrl, fetchMedia );
+		await store.captureDomDependencies( html, sourceUrl );
+		await store.flush();
+		expect( fetchMedia ).toHaveBeenCalledTimes( 1 );
+		expect( fetchMedia ).toHaveBeenCalledWith( download, expect.anything(), expect.anything() );
+		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( {
+			outputDir, sourceUrl, platform: 'generic', summary: { routesFailed: 0 },
+			failures: [ { url: missing, error: 'HTTP 404' } ],
+		} ), 'utf8' ) );
+		const $ = cheerio.load( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) );
+		const href = $( '#flyer' ).attr( 'href' )!;
+		expect( href ).toMatch( /^\// );
+		expect( readFileSync( join( outputDir, 'website', decodeURIComponent( new URL( href, 'https://portable.test' ).pathname ) ) ) ).toEqual( bytes );
+		expect( receipt.assets ).toContainEqual( expect.objectContaining( { sourceUrl: download } ) );
+		expect( receipt.discoveryDiagnostics ).toContainEqual( expect.objectContaining( { code: 'route_not_found', url: missing } ) );
+		expect( receipt.routes ).toEqual( [ { url: sourceUrl, path: 'website/index.html' } ] );
+		expect( $( '#missing' ).attr( 'href' ) ).toBe( missing );
+	} );
+
 	it( 'replays only fresh static responses with response semantics intact', async () => {
 		vi.useFakeTimers();
 		vi.setSystemTime( new Date( '2026-08-29T00:00:00Z' ) );
