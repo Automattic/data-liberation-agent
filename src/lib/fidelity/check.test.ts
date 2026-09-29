@@ -1,6 +1,6 @@
 import { cleanupPolicy } from '../source-cleanup.js';
 import { createServer } from 'node:http';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PNG } from 'pngjs';
@@ -533,6 +533,39 @@ ${ routed ? `<script>document.addEventListener('click', (event) => {
 		expect( report.pass ).toBe( true );
 		expect( report.scores[ 0 ]?.notes.join( ' ' ) ).toMatch( /evidence, not a gate/ );
 	} );
+} );
+
+describe( 'comparison screenshot transaction', () => {
+	it( 'captures the baseline before dialog probes change scroll and visibility', async () => {
+		const html = ( scroll: boolean ) => `<!doctype html><html><head><title>Dialog baseline</title>
+			<style>body{margin:0;background:white}#top{height:900px;background:#123456}#bottom{height:2000px;background:#abcdef}</style>
+			</head><body><main><div id="top"><h1>Article</h1>
+			<button aria-haspopup="true" aria-controls="panel" onclick="document.getElementById('panel').hidden=false;${ scroll ? 'window.scrollTo(0,1500)' : '' }">Open</button>
+			<div id="panel" role="dialog" hidden>Details</div></div><div id="bottom">Footer</div></main></body></html>`;
+		const server = createServer( ( _request, response ) => {
+			response.setHeader( 'content-type', 'text/html' );
+			response.end( html( true ) );
+		} );
+		await new Promise<void>( resolve => server.listen( 0, '127.0.0.1', resolve ) );
+		const origin = `http://localtest.me:${ ( server.address() as { port: number } ).port }`;
+		const dir = liberatedRun();
+		writeFileSync( join( dir, 'website', 'index.html' ), html( false ) );
+		writeFileSync( join( dir, 'capture-receipt.json' ), JSON.stringify( {
+			source: { url: origin + '/' }, websiteRoot: 'website',
+			routes: [ { url: origin + '/', path: 'website/index.html' } ],
+		} ) );
+		try {
+			await checkFidelity( { directory: dir, widths: [ 1600 ], settleMs: 0, screenshots: true } );
+			for ( const side of [ 'source', 'liberated' ] ) {
+				const png = PNG.sync.read( readFileSync( join( dir, 'compare', 'index', '1600', `${ side }.png` ) ) );
+				const offset = ( 400 * png.width + 800 ) * 4;
+				expect( [ ...png.data.subarray( offset, offset + 3 ) ] ).toEqual( [ 0x12, 0x34, 0x56 ] );
+			}
+		} finally {
+			server.closeAllConnections();
+			await new Promise<void>( resolve => server.close( () => resolve() ) );
+		}
+	}, 90_000 );
 } );
 
 describe( 'checkFidelity with a consent banner on the source', () => {

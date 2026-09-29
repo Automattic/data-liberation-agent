@@ -298,7 +298,8 @@ async function observePage(
 	viewport: number,
 	settleMs: number,
 	localOrigin: string | null,
-	cleanup?: CleanupPolicy
+	cleanup?: CleanupPolicy,
+	onBaseline?: () => Promise<void>
 ): Promise< LayoutObservation > {
 	const external = new Set< string >();
 	const onRequest = ( request: { url: () => string } ): void => {
@@ -327,6 +328,9 @@ async function observePage(
 		// source runtime may still be holding the same element at rest.
 		await triggerLazyLoad( page );
 		dismissedOverlays.push( ...( await dismissOverlays( page, { kinds: COMPARED_OVERLAY_KINDS } ) ) );
+		// Evidence describes the settled baseline, not the page left behind by
+		// anchor/dialog probes (which can scroll or leave a popup open).
+		await onBaseline?.();
 		const measured = await page.evaluate( async ( clickUnresolved: boolean ) => {
 			// Perceptual identity for one image: fetch the bytes (cache-warm —
 			// the page just rendered them), decode locally, downscale to 8x8
@@ -832,19 +836,21 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 		observe = async ( sourceHref, localHref, viewport ) => {
 			if ( ! page ) throw new Error( 'browser page missing' );
 			await page.setViewportSize( { width: viewport, height: 900 } );
-			const source = await observePage( page, sourceHref, viewport, settleMs, null, receipt.cleanup?.policy );
+			let sourcePng: Buffer | undefined;
+			let liberatedPng: Buffer | undefined;
+			const source = await observePage( page, sourceHref, viewport, settleMs, null, receipt.cleanup?.policy,
+				options.screenshots ? async () => { sourcePng = await page!.screenshot(); } : undefined );
 			if (receipt.cleanup) {
 				const report = await readSourceCleanup(page);
 				cleanupReports.push(report);
 				if (report.failures.length || report.residual) throw new Error('Comparison source cleanup incomplete');
 			}
-			const sourcePng = options.screenshots ? await page.screenshot() : undefined;
 			if ( candidate ) {
 				// Measure the candidate as a visitor sees it, then ask the cleanup
 				// policy what it would still remove. Removing it first would hide
 				// exactly what is being measured.
-				const liberated = await observePage( page, localHref, viewport, settleMs, new URL( localHref ).origin );
-				const liberatedPng = options.screenshots ? await page.screenshot() : undefined;
+				const liberated = await observePage( page, localHref, viewport, settleMs, new URL( localHref ).origin, undefined,
+					options.screenshots ? async () => { liberatedPng = await page!.screenshot(); } : undefined );
 				const candidateRetained = receipt.cleanup
 					? ( await applySourceCleanup( page, receipt.cleanup.policy ) ).removed
 					: 0;
@@ -856,7 +862,8 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 				viewport,
 				settleMs,
 				new URL( localHref ).origin,
-				receipt.cleanup?.policy
+				receipt.cleanup?.policy,
+				options.screenshots ? async () => { liberatedPng = await page!.screenshot(); } : undefined
 			);
 			if (receipt.cleanup) {
 				const candidateCleanup = await readSourceCleanup(page);
@@ -864,7 +871,6 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 					throw new Error('Liberated artifact retains advertising/source attribution or its cleanup audit failed');
 				}
 			}
-			const liberatedPng = options.screenshots ? await page.screenshot() : undefined;
 			return { source, liberated, sourcePng, liberatedPng };
 		};
 	}
