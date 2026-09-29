@@ -207,6 +207,28 @@ describe( 'captureSelectableSetStates', () => {
 		await browser?.close();
 	} );
 
+	it.skipIf( skipBrowser )( 'does not drive pointer descendants of popup and disclosure controls', async () => {
+		const page = await browser.newPage();
+		try {
+			await page.setContent( `<!doctype html><html><body>
+				<div id="controls">
+					<button aria-haspopup="true" style="cursor:pointer"><div>Share one</div></button>
+					<button aria-haspopup="true" style="cursor:pointer"><div>Share two</div></button>
+					<button aria-expanded="false" aria-controls="answer" style="cursor:pointer"><div>Question one</div></button>
+					<button aria-expanded="false" aria-controls="answer" style="cursor:pointer"><div>Question two</div></button>
+				</div>
+				<div id="answer" role="region">Answer</div>
+				<div id="panel">Nearby content</div>
+				<script>window.clicks = 0; document.querySelectorAll('button').forEach(b => b.onclick = () => window.clicks++);</script>
+			</body></html>` );
+			const states = await captureSelectableSetStates( page, { settleMs: 10 } );
+			expect( states ).toEqual( [] );
+			expect( await page.evaluate( () => ( window as unknown as { clicks: number } ).clicks ) ).toBe( 0 );
+		} finally {
+			await page.close();
+		}
+	} );
+
 	it.skipIf( skipBrowser )(
 		'captures distinct shared-region content for each member',
 		async () => {
