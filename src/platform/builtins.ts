@@ -15,6 +15,7 @@ import { registerHost } from './host.js';
 import { netlifyHost } from '../hosts/netlify.js';
 import { defaultAdapter } from '../adapters/default/index.js';
 import { emdashAdapter } from '../adapters/emdash/index.js';
+import { ghostAdapter } from '../adapters/ghost/index.js';
 import { godaddyWmAdapter } from '../adapters/godaddy-wm/index.js';
 import { hostingerAdapter } from '../adapters/hostinger/index.js';
 import { hubspotAdapter } from '../adapters/hubspot/index.js';
@@ -37,6 +38,7 @@ registerPlatform( defaultAdapter, { fallback: true } );
 // consumer-registered platforms deliberately share signals.
 const builtins: Platform[] = [
 	emdashAdapter,
+	ghostAdapter,
 	godaddyWmAdapter,
 	hostingerAdapter,
 	hubspotAdapter,

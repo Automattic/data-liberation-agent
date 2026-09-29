@@ -24,6 +24,8 @@ describe('detectFromUrl (heuristics)', () => {
     ['https://eloisacalvinato.lovable.app/', 'lovable'],
     ['https://eloisacalvinato.lovable.app', 'lovable'],
     ['https://lovable.dev/projects/abc', 'lovable'],
+    ['https://demo.ghost.io/', 'ghost'],
+    ['https://codinghorror.ghost.io/ghost/', 'ghost'],
   ])('detects %s as %s', (url, platform) => {
     const detected = detectFromUrl(url);
     expect(detected).toBe(platform);
@@ -163,6 +165,49 @@ describe('detectFromHttp (fingerprinting)', () => {
       });
     const result = await detectFromHttp('https://example.com');
     expect(result.platform).toBe('unknown');
+  });
+
+  // Ghost signal values are from live sites (2026-09): platformer.news,
+  // citationneeded.news (self-hosted), demo.ghost.io, aftermath.site.
+  it('does not treat a host merely containing "ghost.io" as Ghost(Pro)', () => {
+    expect(detectFromUrl('https://ghost.io.example.com/')).toBeNull();
+    expect(detectFromUrl('https://example.com/ghost.io/')).toBeNull();
+  });
+
+  it('detects Ghost(Pro) from its ghost-fastly header', () => {
+    const headers = new Headers([['ghost-fastly', 'true;production'], ['server', 'openresty']]);
+    const result = detectFromDocument('https://www.platformer.news/', headers, '<html></html>');
+    expect(result.platform).toBe('ghost');
+    expect(result.confidence).toBe('high');
+    expect(findAdapter(result.platform)).toMatchObject({ id: 'ghost' });
+  });
+
+  it.each([
+    ['its generator meta', '<meta name="generator" content="Ghost 6.56">'],
+    ['its Portal script', '<script defer src="https://cdn.jsdelivr.net/ghost/portal@~2.71/umd/portal.min.js" data-i18n="true" data-ghost="https://www.citationneeded.news/" crossorigin="anonymous"></script>'],
+    ['its Search script', '<script defer src="https://cdn.jsdelivr.net/ghost/sodo-search@~1.8/umd/sodo-search.min.js" data-sodo-search="https://example.com/"></script>'],
+  ])('detects self-hosted Ghost from %s', (_label, html) => {
+    const result = detectFromDocument('https://www.citationneeded.news/', new Headers([['x-powered-by', 'Express']]), html);
+    expect(result.platform).toBe('ghost');
+    expect(result.confidence).toBe('medium');
+  });
+
+  it('does not detect Ghost on a headless front end that only renders Ghost content', () => {
+    // buffer.com/resources: Next.js pages reading Ghost's Content API.
+    const html = '<figure class="kg-card kg-image-card"><img src="https://buffer.com/resources/content/images/2026/09/a.png"></figure><p>Published with Ghost as a backend.</p>';
+    const result = detectFromDocument('https://buffer.com/resources/', new Headers([['x-powered-by', 'Next.js']]), html);
+    expect(result.platform).toBe('unknown');
+  });
+
+  it('detects a Ghost(Pro) custom domain from its /ghost/ admin redirect', async () => {
+    global.fetch = vi.fn()
+      .mockResolvedValueOnce({ ok: true, headers: new Map(), text: () => Promise.resolve('<html><body>Stripped theme</body></html>') })
+      .mockImplementation(async (u: string) => (String(u).endsWith('/ghost/')
+        ? { status: 302, headers: new Map([['location', 'https://aftermath.ghost.io/ghost/']]) }
+        : { status: 404, headers: new Map() }));
+    const result = await detectFromHttp('https://aftermath.site');
+    expect(result.platform).toBe('ghost');
+    expect(result.signals).toContain('/ghost/ redirects to the Ghost(Pro) admin');
   });
 
   it('returns unknown for unrecognized sites', async () => {
