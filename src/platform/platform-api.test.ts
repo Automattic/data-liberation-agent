@@ -160,11 +160,11 @@ describe( 'consumer-defined platform (public Platform API)', () => {
 					headers: new Map(),
 					text: () => Promise.resolve( '<html><body>Themed beyond recognition</body></html>' ),
 				} )
-				.mockResolvedValueOnce( {
-					// The probe HEAD.
-					status: 204,
+				// Probe HEADs: only ours answers (built-in probes run first and miss).
+				.mockImplementation( async ( u: string ) => ( {
+					status: String( u ).endsWith( '/_acme/health' ) ? 204 : 404,
 					headers: new Map(),
-				} ),
+				} ) ),
 		);
 		const result = await detectFromHttp( 'https://www.custom-domain-business.com' );
 		expect( result.platform ).toBe( id );
