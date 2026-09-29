@@ -11,6 +11,10 @@ import {
 } from './self-contain.js';
 
 describe( 'self-contain', () => {
+	it( 'removes an uncaptured compact import instead of leaving a remote font host', () => {
+		expect( stripRemoteCssUrls( '@import"https://fonts.example.net/css?family=Serif" screen and (min-width: 768px);' ) )
+			.toBe( '@import "about:blank";' );
+	} );
 	it( 'treats absolute and protocol-relative hosts as remote, local paths as not', () => {
 		expect( isRemoteAssetUrl( 'https://siteassets.example.com/app.js' ) ).toBe( true );
 		expect( isRemoteAssetUrl( '//cdn.example/font.woff2' ) ).toBe( true );

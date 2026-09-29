@@ -541,7 +541,7 @@ describe( 'CapturedResourceStore', () => {
 		expect( readFileSync( join( outputDir, resource.path ) ) ).toEqual( Buffer.from( 'webp' ) );
 	} );
 
-	it( 'fetches lazy DOM dependencies and nested CSS imports missed by responses', async () => {
+	it( 'fetches lazy DOM dependencies and compact cross-origin nested CSS font imports missed by responses', async () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-resources-' ) );
 		dirs.push( outputDir );
 		const transformedImage =
@@ -549,13 +549,13 @@ describe( 'CapturedResourceStore', () => {
 		const bodies: Record< string, [ string, string ] > = {
 			'https://cdn.example/site.css': [
 				'text/css',
-				'@import "nested.css";.hero{background:url("background.jpg")}',
+				'@import"https://fonts.example.net/css/nested.css" screen and (min-width: 768px);.hero{background:url("background.jpg")}',
 			],
-			'https://cdn.example/nested.css': [ 'text/css', '@font-face{src:url("font.woff2")}' ],
+			'https://fonts.example.net/css/nested.css': [ 'text/css', '@font-face{src:url("../fonts/font.woff2")}' ],
 			'https://cdn.example/lazy.jpg': [ 'image/jpeg', 'lazy' ],
 			'https://cdn.example/lazy-2.jpg': [ 'image/jpeg', 'lazy2' ],
 			'https://cdn.example/background.jpg': [ 'image/jpeg', 'background' ],
-			'https://cdn.example/font.woff2': [ 'font/woff2', 'font' ],
+			'https://fonts.example.net/fonts/font.woff2': [ 'font/woff2', 'font' ],
 			[ transformedImage ]: [ 'image/jpeg', 'transformed' ],
 		};
 		const store = new CapturedResourceStore( outputDir, 'https://example.com/', async ( url ) => {

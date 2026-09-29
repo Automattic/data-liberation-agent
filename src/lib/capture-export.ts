@@ -2475,7 +2475,7 @@ function dependencyReferences(
 			add( reference );
 		}
 	}
-	for ( const match of cssContent.matchAll( /@import\s+(?:url\(\s*)?(["'])([\s\S]*?)\1/gi ) ) {
+	for ( const match of cssContent.matchAll( /@import\s*(?:url\(\s*)?(["'])([\s\S]*?)\1/gi ) ) {
 		const reference = match[ 2 ];
 		cssReferences.add( reference.replace( /&amp;/g, '&' ) );
 		add( reference );

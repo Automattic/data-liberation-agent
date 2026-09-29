@@ -119,7 +119,7 @@ export function stripRemoteCssUrls( css: string ): string {
 				const reference = quoted ?? bare;
 				return reference && isRemoteAssetUrl( reference ) ? `url("${ UNAVAILABLE_CSS_URL }")` : match;
 			} )
-			.replace( /@import\s+(?:url\(\s*)?["']([^"']+)["'][^;]*;?/gi, ( match, reference ) =>
+			.replace( /@import\s*(?:url\(\s*)?["']([^"']+)["'][^;]*;?/gi, ( match, reference ) =>
 				isRemoteAssetUrl( reference ) ? `@import "${ UNAVAILABLE_CSS_URL }";` : match
 			)
 	);

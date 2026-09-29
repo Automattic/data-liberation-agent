@@ -474,7 +474,7 @@ export class CapturedResourceStore {
 							.get(),
 				  ].join( '\n' );
 			for ( const match of css.matchAll(
-				/(?:url\(\s*(?:["']([^"']+)["']|([^\s)'";]+))\s*\)|@import\s+(?:url\(\s*)?["']([^"']+)["'])/gi
+				/(?:url\(\s*(?:["']([^"']+)["']|([^\s)'";]+))\s*\)|@import\s*(?:url\(\s*)?["']([^"']+)["'])/gi
 			) )
 				add( match[ 1 ] ?? match[ 2 ] ?? match[ 3 ] ?? '', baseUrl );
 		};
