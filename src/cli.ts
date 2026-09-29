@@ -55,7 +55,9 @@ const HELP = `
     --screenshots        Write source/liberated/diff PNGs as evidence. Pixel score
                          never decides pass/fail.
     --candidate <url>    Compare another rendered copy of the site, such as one
-                         built from the capture, instead of the capture itself.
+                          built from the capture, instead of the capture itself.
+    --motion-contract <json>  With --candidate, verify authored source/candidate
+                          text, canvas-pointer and click behavior at named widths.
 
   Inspect options:
     --http-only           Skip rendered observations; complexity remains unknown
@@ -96,8 +98,15 @@ if (args.includes('--help')) {
     console.error('Error: --candidate requires a URL.');
     process.exit(1);
   }
+  const motionIndex = args.indexOf('--motion-contract');
+  const motionPath = motionIndex === -1 ? undefined : args[motionIndex + 1];
+  if (motionIndex !== -1 && (!motionPath || motionPath.startsWith('-'))) {
+    console.error('Error: --motion-contract requires a JSON file.');
+    process.exit(1);
+  }
+  const motionContract = motionPath ? JSON.parse((await import('node:fs')).readFileSync(motionPath, 'utf8')) : undefined;
   const { runCompare } = await import('./ui/compare.js');
-  const report = await runCompare(directory, { screenshots: args.includes('--screenshots'), candidateUrl });
+  const report = await runCompare(directory, { screenshots: args.includes('--screenshots'), candidateUrl, motionContract });
   process.exit(report.pass ? 0 : 1);
 } else if (args[0] === 'inspect') {
   const url = args[1];

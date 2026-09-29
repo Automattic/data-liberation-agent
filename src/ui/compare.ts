@@ -6,16 +6,18 @@
 // copy of the site, such as one built from the capture, instead.
 //
 import { checkFidelity, type FidelityReport } from '../lib/fidelity/check.js';
+import type { MotionContract } from '../lib/fidelity/candidate-motion.js';
 import { summariseFindings } from '../lib/fidelity/self-consistency.js';
 
 export async function runCompare(
 	directory: string,
-	options: { screenshots?: boolean; candidateUrl?: string } = {}
+	options: { screenshots?: boolean; candidateUrl?: string; motionContract?: MotionContract } = {}
 ): Promise< FidelityReport > {
 	const report = await checkFidelity( {
 		directory,
 		screenshots: options.screenshots,
 		candidateUrl: options.candidateUrl,
+		motionContract: options.motionContract,
 		log: ( message ) => process.stderr.write( `${ message }\n` ),
 	} );
 
@@ -40,6 +42,9 @@ export async function runCompare(
 		if ( ! score.pass ) process.stdout.write( `: ${ score.failures.join( '; ' ) }` );
 		if ( score.notes.length ) process.stdout.write( `  (${ score.notes.join( '; ' ) })` );
 		process.stdout.write( '\n' );
+	}
+	for ( const evidence of report.motionEvidence ?? [] ) {
+		process.stdout.write( `${ evidence.route } ${ evidence.viewport }px source/candidate interaction ${ evidence.pass ? 'ok' : `FAIL: ${ evidence.failures.join( '; ' ) }` } (static capture: unreproduced)\n` );
 	}
 
 	// Say what was measured, not just how it went. "Passed" over an unstated
