@@ -780,10 +780,27 @@ async function verifyCapturedRouteTabs(
 		const matched = await page.evaluate( `(() => {
 			const { label, siblings } = ${ JSON.stringify( { label, siblings: target.siblings } ) };
 			function name(element) { return (element.getAttribute('aria-label') || element.textContent || '').replace(/\\s+/g, ' ').trim(); }
+			// The same rule a real click applies: a display:contents anchor
+			// generates no box of its own, so it is visible when a child
+			// element or text node paints in its place (WordPress import
+			// lowering wraps each bottom-tab label as a > mark this way).
+			// Children of a display:none or visibility:hidden link never
+			// paint, so hidden links stay rejected.
 			function visible(element) {
-				const rect = element.getBoundingClientRect();
 				const style = getComputedStyle(element);
-				return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+				if (style.display === 'none' || style.visibility === 'hidden') return false;
+				const rect = element.getBoundingClientRect();
+				if (rect.width > 0 && rect.height > 0) return true;
+				if (style.display !== 'contents') return false;
+				for (const child of element.children) if (visible(child)) return true;
+				for (const node of element.childNodes) {
+					if (node.nodeType !== 3 || !node.textContent.trim()) continue;
+					const range = document.createRange();
+					range.selectNode(node);
+					const textRect = range.getBoundingClientRect();
+					if (textRect.width > 0 && textRect.height > 0) return true;
+				}
+				return false;
 			}
 			for ( const nav of Array.from(document.querySelectorAll('nav,[role="navigation"]')).slice(0, 4) ) {
 				const members = Array.from(nav.querySelectorAll('a,button')).slice(0, 64);

@@ -671,11 +671,23 @@ ${ parts.banner ? banner : '' }
 	</script>
 	</body></html>`;
 
-	const copyPage = ( variant: 'flat' | 'shell' | 'wrapped' | 'wrapped-broken', route: string ): string => {
-		const wrapped = variant === 'wrapped' || variant === 'wrapped-broken';
+	const copyPage = ( variant: 'flat' | 'shell' | 'wrapped' | 'wrapped-broken' | 'contents' | 'contents-negative', route: string ): string => {
+		const wrapped = variant === 'wrapped' || variant === 'wrapped-broken' || variant === 'contents' || variant === 'contents-negative';
+		const labelLink = ( label: string, href: string ): string => {
+			if ( variant === 'contents' ) return `<p class="tab-label"><a href="${ href }" style="display:contents"><mark>${ label }</mark></a></p>`;
+			// Negative controls: a link the import left genuinely hidden
+			// (display:none, so its mark never paints) must stay missing, and
+			// a box-less link that renders but no longer reaches its captured
+			// route must still be reported.
+			if ( variant === 'contents-negative' ) {
+				if ( label === 'Services' ) return `<p class="tab-label"><a href="${ href }" style="display:none"><mark>${ label }</mark></a></p>`;
+				if ( label === 'Contact' ) return `<p class="tab-label"><a href="/contact-missing/" style="display:contents"><mark>${ label }</mark></a></p>`;
+			}
+			return `<p class="tab-label"><a href="${ href }">${ label }</a></p>`;
+		};
 		const nav = ! wrapped
 			? `<nav id="bottom" aria-label="Pages"><a href="/">Home</a><a href="/services/">Services</a><a href="/resources/">Resources</a><a href="/contact/">Contact</a><button type="button">Refresh</button></nav>`
-			: `<nav id="bottom" aria-label="Pages">${ [ [ 'Home', '/' ], [ 'Services', '/services/' ], [ 'Resources', '/resources/' ], [ 'Contact', variant === 'wrapped-broken' ? '/contact-missing/' : '/contact/' ] ].map( ( [ label, href ] ) => `<div class="tab"><a href="${ href }"><svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><rect width="20" height="20"/></svg></a><p class="tab-label"><a href="${ href }">${ label }</a></p></div>` ).join( '' ) }<button type="button">Refresh</button></nav>`;
+			: `<nav id="bottom" aria-label="Pages">${ [ [ 'Home', '/' ], [ 'Services', '/services/' ], [ 'Resources', '/resources/' ], [ 'Contact', variant === 'wrapped-broken' ? '/contact-missing/' : '/contact/' ] ].map( ( [ label, href ] ) => `<div class="tab"><a href="${ href }"><svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><rect width="20" height="20"/></svg></a>${ labelLink( label, href ) }</div>` ).join( '' ) }<button type="button">Refresh</button></nav>`;
 		return `<!doctype html><html><head><title>${ route === '/' ? 'Home' : route }</title><style>
 		#bottom{display:flex;position:fixed;bottom:0;left:0;right:0;height:64px;background:#fff;border-top:1px solid #ddd;z-index:10}
 		#bottom a,#bottom button{flex:1;display:flex;align-items:center;justify-content:center;font-size:16px}
@@ -690,7 +702,7 @@ ${ parts.banner ? banner : '' }
 	</body></html>`;
 	};
 
-	const routeTabRun = ( origin: string, variant: 'flat' | 'shell' | 'wrapped' | 'wrapped-broken' ): string => {
+	const routeTabRun = ( origin: string, variant: 'flat' | 'shell' | 'wrapped' | 'wrapped-broken' | 'contents' | 'contents-negative' ): string => {
 		const dir = mkdtempSync( join( tmpdir(), 'dla-check-tabs-' ) );
 		dirs.push( dir );
 		mkdirSync( join( dir, 'website', 'services' ), { recursive: true } );
@@ -800,6 +812,42 @@ ${ parts.banner ? banner : '' }
 			const report = await checkFidelity( { directory: routeTabRun( server.origin, 'wrapped-broken' ), widths: [ 1440 ], routes: [ '/' ], settleMs: 200 } );
 			const broken = report.scores.flatMap( ( score ) => score.failures ).filter( ( failure ) => failure.includes( 'links to /contact-missing/' ) );
 			expect( broken.length ).toBeGreaterThan( 0 );
+			expect( report.pass ).toBe( false );
+		} finally {
+			await server.close();
+		}
+	}, 90_000 );
+
+	// WordPress import lowering can leave the tab's label anchor itself
+	// box-less: the conversion marks the label link display:contents so its
+	// child <mark> paints in the anchor's place. The anchor then has a zero
+	// rect and empty client rects even though a real click navigates, so a
+	// rect-only visibility predicate reports the tab as missing. The link must
+	// count as visible when a child of a display:contents anchor actually
+	// paints — and a genuinely hidden (display:none) or re-pointed counterpart
+	// must stay reported.
+	it( 'verifies route tabs whose label anchor is display:contents around a rendered mark', async () => {
+		const server = await routeTabServer();
+		try {
+			const report = await checkFidelity( { directory: routeTabRun( server.origin, 'contents' ), widths: [ 1440 ], routes: [ '/' ], settleMs: 200 } );
+			const interactivity = report.scores.find( ( score ) => score.viewport === 390 )!;
+			expect( interactivity.notes ).toContain( 'route tabs @ 390px: clicks verified' );
+			expect( interactivity.notes ).toContain( 'route tabs @ 768px: clicks verified' );
+			expect( report.pass ).toBe( true );
+		} finally {
+			await server.close();
+		}
+	}, 90_000 );
+
+	it( 'fails a display:contents tab that is hidden or no longer reaches its route', async () => {
+		const server = await routeTabServer();
+		try {
+			const report = await checkFidelity( { directory: routeTabRun( server.origin, 'contents-negative' ), widths: [ 1440 ], routes: [ '/' ], settleMs: 200 } );
+			const failures = report.scores.flatMap( ( score ) => score.failures );
+			expect( failures.filter( ( failure ) => failure.includes( 'route tab Services @ 390px missing native link' ) ).length ).toBe( 1 );
+			expect( failures.filter( ( failure ) => failure.includes( 'route tab Services @ 768px missing native link' ) ).length ).toBe( 1 );
+			expect( failures.filter( ( failure ) => failure.includes( 'route tab Contact @ 390px links to /contact-missing/' ) ).length ).toBe( 1 );
+			expect( failures.filter( ( failure ) => failure.includes( 'route tab Contact @ 768px links to /contact-missing/' ) ).length ).toBe( 1 );
 			expect( report.pass ).toBe( false );
 		} finally {
 			await server.close();
