@@ -26,6 +26,7 @@ import { generateChromeCss, type BakedLayoutMap } from './fixups.js';
 import { sanitizeFrozenHtml } from './freeze.js';
 import { learnAndApplyFluidGeometry } from './fluid-capture.js';
 import {
+	captureRouteNavigation,
 	captureTriggeredDialogs,
 	type CapturedDialogInteraction,
 	type InteractionStatesReport,
@@ -38,7 +39,7 @@ import { JsAggregator } from './js-aggregator.js';
 import { isAbsentDocumentError, isSourceCaptureUrl, nonHtmlDocumentError } from './absent-document.js';
 import { ManifestQueue, type ManifestEntry, type FailureEntry } from './manifest-queue.js';
 import { validateOutputDir, planArtifacts, type ArtifactPlan } from './output-layout.js';
-import { waitForStable, triggerLazyLoad, dismissOverlays } from './page-helpers.js';
+import { waitForStable, triggerLazyLoad, dismissOverlays, pageResponds } from './page-helpers.js';
 import { CapturedResourceStore } from './resource-capture.js';
 import { enforceSameOrigin } from './same-origin.js';
 import { preserveStreamedVideoPosters } from './streamed-video.js';
@@ -840,6 +841,21 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		// this run's — intended (we want the most-recent capture's dismissals, not a union).
 		entry.dismissed = [ ...( entry.dismissed ?? [] ), ...dismissedHere ];
 	}
+	// Every step above is bounded and best-effort, so a page whose script has
+	// taken over its main thread still arrives here. Nothing after this can make
+	// progress on it, so stop now with the real reason instead of letting the
+	// next unbounded evaluate wait for the renderer to die.
+	if ( ! ( await pageResponds( page, evaluateTimeoutMs ) ) ) {
+		failures.push( {
+			url,
+			viewport: viewport.id,
+			stage: 'evaluate',
+			error: `page stopped responding while settling (overlay dismissal / lazy load): no answer to an evaluate within ${ evaluateTimeoutMs }ms`,
+			timestamp: now(),
+			attempt: 1,
+		} );
+		return;
+	}
 
 	// Seam 1: deterministic adapter-declared removals on the settled page, so they
 	// pollute neither screenshot, carried HTML, mobile carry, nor SectionSpec.
@@ -1296,6 +1312,13 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	async function probeInteractions(): Promise< void > {
 	try {
 		const interactions = await captureTriggeredDialogs( page, url );
+		// Route-tab observation is evidence, not a baseline artifact: its failure
+		// must not discard the dialog states captured before it.
+		try {
+			interactions.routeNavigation = await captureRouteNavigation( page, url );
+		} catch {
+			/* best-effort: capture proceeds with dialog evidence alone */
+		}
 		// Disclosure/accordion candidates were already resolved (opened, captured,
 		// reclosed) before serialization above — folded in here purely as
 		// diagnostics, using the same states array + totals the dialog/menu path
@@ -1320,9 +1343,10 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 			} );
 		}
 		if (
-			( interactions.states.length > 0 || ( interactions.initialDialogs?.length ?? 0 ) > 0 ) &&
+			( interactions.states.length > 0 || ( interactions.initialDialogs?.length ?? 0 ) > 0 || ( interactions.routeNavigation?.length ?? 0 ) > 0 ) &&
 			( ! entry.interactions ||
 				interactions.states.some( ( state ) => state.status === 'captured' ) ||
+				( interactions.routeNavigation?.length ?? 0 ) > 0 ||
 				interactions.initialDialogs?.some( ( state ) => state.status === 'captured' ) )
 		) {
 			entry.interactions = mergeInteractionReports( entry.interactions, canonicalizeInteractions( interactions ) );
@@ -1392,6 +1416,8 @@ function mergeInteractionReports(
 	return {
 		...latest,
 		states,
+		routeNavigation: [ ...new Map( [ ...( previous.routeNavigation ?? [] ), ...( latest.routeNavigation ?? [] ) ]
+			.map( route => [ route.selector, route ] ) ).values() ],
 		...( initialDialogs.length > 0 ? { initialDialogs } : {} ),
 	};
 }

@@ -8,6 +8,7 @@ import { existsSync, readFileSync, statSync, mkdirSync, writeFileSync } from 'no
 import { dirname, join, resolve } from 'node:path';
 import type { Page } from 'playwright';
 import { sourceContextOptions } from '../browser-kit/browser-kit.js';
+import type { CapturedRouteNavigation } from '../screenshot/interaction-capture.js';
 import { startStaticServer } from '../replicate/local-site/static-server.js';
 import {
 	dismissOverlays,
@@ -749,6 +750,54 @@ function normalizedUrl( value: string ): string {
 	}
 }
 
+async function verifyCapturedRouteTabs(
+	page: Page,
+	localHref: string,
+	width: number,
+	observations: CapturedRouteNavigation[],
+	sources: Map< string, string >
+): Promise< string[] > {
+	const sourceRoutes = new Map( [ ...sources ].map( ( [ route, url ] ) => [ normalizedUrl( url ), route ] ) );
+	const tabs = new Map< string, { route: string; siblings: string[] } >();
+	for ( const observation of observations ) {
+		const route = sourceRoutes.get( normalizedUrl( observation.url ) );
+		if ( route && observation.siblings.length >= 2 && ! tabs.has( observation.label ) )
+			tabs.set( observation.label, { route, siblings: observation.siblings } );
+	}
+	if ( ! tabs.size ) return [];
+	const failures: string[] = [];
+	await page.setViewportSize( { width, height: 900 } );
+	for ( const [ label, target ] of [ ...tabs ].slice( 0, 4 ) ) {
+		await page.goto( localHref );
+		const matched = await page.evaluate( `(() => {
+			const { label, siblings } = ${ JSON.stringify( { label, siblings: target.siblings } ) };
+			function name(element) { return (element.getAttribute('aria-label') || element.textContent || '').replace(/\\s+/g, ' ').trim(); }
+			const links = Array.from(document.querySelectorAll('nav a,[role="navigation"] a'));
+			const link = links.find(candidate => {
+				const nav = candidate.closest('nav,[role="navigation"]');
+				if (!nav || name(candidate) !== label || candidate.getBoundingClientRect().width === 0) return false;
+				return Array.from(candidate.parentElement?.children ?? []).filter(child => child.matches('button,a'))
+					.map(name).join('|') === siblings.join('|');
+			});
+			if (!link) return false;
+			link.setAttribute('data-dla-check-route-tab', '');
+			return true;
+		})()` ) as boolean;
+		if ( ! matched ) {
+			failures.push( `route tab ${ label } @ ${ width }px missing native link` );
+			continue;
+		}
+		try {
+			await page.locator( '[data-dla-check-route-tab]' ).click( { timeout: 2_000 } );
+			if ( canonicalRoutePath( new URL( page.url() ).pathname ) !== target.route )
+				failures.push( `route tab ${ label } @ ${ width }px landed on ${ new URL( page.url() ).pathname }, expected ${ target.route }` );
+		} catch {
+			failures.push( `route tab ${ label } @ ${ width }px click blocked` );
+		}
+	}
+	return failures;
+}
+
 export async function checkFidelity( options: FidelityCheckOptions ): Promise< FidelityReport > {
 	const log = options.log ?? ( () => {} );
 	const { websiteDir, receiptPath } = resolveCheckDirectory( options.directory );
@@ -769,6 +818,11 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 	const settleMs = options.settleMs ?? 4000;
 
 	const sources = routeSourceMap( receipt );
+	const interactionPath = join( dirname( receiptPath ), 'interaction-states.json' );
+	const observedRoutes: CapturedRouteNavigation[] = existsSync( interactionPath )
+		? ( JSON.parse( readFileSync( interactionPath, 'utf8' ) ) as { pages?: Array< { routeNavigation?: CapturedRouteNavigation[] } > } )
+			.pages?.flatMap( page => page.routeNavigation ?? [] ) ?? []
+		: [];
 	if ( ! sources.has( '/' ) ) sources.set( '/', sourceUrl );
 
 	// One route whose cleanup could not be proven must not block comparing the
@@ -993,6 +1047,18 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 					...scoreViewport( dialogOnly( pair.source ), dialogOnly( pair.liberated ) ),
 					route,
 				};
+				if ( page && observedRoutes.length ) {
+					// Route-tab evidence was observed on the source during capture. Verify
+					// the visitor's real click on the portable counterpart, not just href.
+					for ( const width of [ 390, 768 ] ) {
+						const failures = await verifyCapturedRouteTabs( page, localHref, width, observedRoutes, sources );
+						if ( failures.length ) {
+							score.failures.push( ...failures );
+							score.pass = false;
+						}
+						score.notes.push( `route tabs @ ${ width }px: ${ failures.length ? 'failed' : 'clicks verified' }` );
+					}
+				}
 				if ( signals && ! candidateMotionVerified ) {
 					score.failures.push( `source motion not reproduced by capture: ${ signals.join( ', ' ) }; candidate behavior unverified` );
 					score.pass = false;

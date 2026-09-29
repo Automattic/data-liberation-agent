@@ -1,8 +1,9 @@
 import { cleanupPolicy } from '../source-cleanup.js';
 import { createServer } from 'node:http';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { chromium } from 'playwright';
 import { PNG } from 'pngjs';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
@@ -15,6 +16,10 @@ import {
 	routeSourceMap,
 } from './check.js';
 import type { LayoutObservation } from './score.js';
+
+// Tests that launch a real browser skip — not fail — in checkouts without
+// Playwright's Chromium (`npm install` does not download it; `npm run setup:browser` does).
+const skipBrowserTests = Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chromium.executablePath() );
 
 const dirs: string[] = [];
 afterEach( () => {
@@ -164,7 +169,7 @@ describe( 'checkFidelity', () => {
 		expect( report.scores.every( ( score ) => score.failures.some( ( reason ) => reason.includes( 'source motion not reproduced' ) ) ) ).toBe( true );
 	} );
 
-	it( 'ignores a clipped focus-only fragment link while retaining the matching visible link', async () => {
+	it.skipIf( skipBrowserTests )( 'ignores a clipped focus-only fragment link while retaining the matching visible link', async () => {
 		const visible = '<nav><a href="#content">Skip to content</a></nav><main id="content"><h1>Home</h1><p>Visible editorial text.</p></main>';
 		const candidate = '<style>.focus-only{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}.focus-only:focus{clip-path:none;width:auto;height:auto}</style><a class="focus-only" href="#content">Skip to content</a>';
 		const server = createServer( ( request, response ) => {
@@ -187,7 +192,7 @@ describe( 'checkFidelity', () => {
 		}
 	}, 90_000 );
 
-	it( 'measures a source subpage in place when its nav links to fragments on another page', async () => {
+	it.skipIf( skipBrowserTests )( 'measures a source subpage in place when its nav links to fragments on another page', async () => {
 		// A client-routed builder: the subpage's nav links to sections of the home
 		// page. Following one routes the app home, so the source must be measured
 		// without treating another page's fragment as an in-page anchor.
@@ -535,7 +540,7 @@ ${ routed ? `<script>document.addEventListener('click', (event) => {
 	} );
 } );
 
-describe( 'comparison screenshot transaction', () => {
+describe.skipIf( skipBrowserTests )( 'comparison screenshot transaction', () => {
 	it( 'captures the baseline before dialog probes change scroll and visibility', async () => {
 		const html = ( scroll: boolean ) => `<!doctype html><html><head><title>Dialog baseline</title>
 			<style>body{margin:0;background:white}#top{height:900px;background:#123456}#bottom{height:2000px;background:#abcdef}</style>
@@ -568,7 +573,7 @@ describe( 'comparison screenshot transaction', () => {
 	}, 90_000 );
 } );
 
-describe( 'checkFidelity with a consent banner on the source', () => {
+describe.skipIf( skipBrowserTests )( 'checkFidelity with a consent banner on the source', () => {
 	// The live source raises a cookie banner; capture dismisses it before it
 	// serializes, so the copy never has one. Measuring the source with the
 	// banner still up made every route on such a site fail by exactly the
@@ -632,5 +637,130 @@ ${ parts.banner ? banner : '' }
 	it( 'still fails a copy that lost real content behind the banner', async () => {
 		const report = await compare( page( { banner: false, extra: false } ) );
 		expect( textFailures( report ).length ).toBeGreaterThan( 0 );
+	}, 90_000 );
+
+	// A source-observed mobile bottom-tab bar: buttons whose clicks are client-side
+	// route changes. Capture records which button changed which URL; compare must
+	// prove the portable copy's native link actually navigates under a real
+	// visitor click at the widths a phone and tablet use — and that an empty
+	// fixed shell parked over the tabs (the pre-fix state) is reported as the
+	// click interception it is, not silently passed.
+	const TAB_LABELS = [ 'Home', 'Services', 'Resources', 'Contact', 'Refresh' ];
+
+	const sourceApp = (): string => `<!doctype html><html><head><title>Home</title><style>
+		#bottom{display:flex;position:fixed;bottom:0;left:0;right:0;height:64px;background:#fff;border-top:1px solid #ddd;z-index:10}
+		#bottom button{flex:1;border:0;background:none;font-size:16px}
+		.shell{position:fixed;bottom:0;right:0;width:60%;height:70px;z-index:100}
+		@media(min-width:1000px){#bottom{display:none}}
+	</style></head><body>
+	<main><h1>Home</h1><p>Home copy.</p></main>
+	<nav id="bottom" aria-label="Pages"><button type="button">Home</button><button type="button">Services</button><button type="button">Resources</button><button type="button">Contact</button><button type="button">Refresh</button></nav>
+	<div class="shell"></div>
+	<script>
+		var titles = { '': 'Home', services: 'Services', resources: 'Resources', contact: 'Contact' };
+		document.querySelectorAll('#bottom button').forEach(function (button) {
+			button.addEventListener('click', function () {
+				var id = button.textContent.trim().toLowerCase();
+				history.pushState({}, '', id ? '/' + id + '/' : '/');
+				document.querySelector('h1').textContent = titles[id === '' ? '' : id] || 'Home';
+			});
+		});
+	</script>
+	</body></html>`;
+
+	const copyPage = ( shell: boolean, route: string ): string => `<!doctype html><html><head><title>${ route === '/' ? 'Home' : route }</title><style>
+		#bottom{display:flex;position:fixed;bottom:0;left:0;right:0;height:64px;background:#fff;border-top:1px solid #ddd;z-index:10}
+		#bottom a,#bottom button{flex:1;display:flex;align-items:center;justify-content:center;font-size:16px}
+		.shell{position:fixed;bottom:0;right:0;width:60%;height:70px;z-index:100}
+		@media(min-width:1000px){#bottom{display:none}}
+	</style></head><body>
+	<main><h1>${ route === '/' ? 'Home' : route }</h1><p>${ route === '/' ? 'Home copy.' : route + ' copy.' }</p></main>
+	<nav id="bottom" aria-label="Pages"><a href="/">Home</a><a href="/services/">Services</a><a href="/resources/">Resources</a><a href="/contact/">Contact</a><button type="button">Refresh</button></nav>
+	${ shell ? '<div class="shell"></div>' : '' }
+	</body></html>`;
+
+	const routeTabRun = ( origin: string, shell: boolean ): string => {
+		const dir = mkdtempSync( join( tmpdir(), 'dla-check-tabs-' ) );
+		dirs.push( dir );
+		mkdirSync( join( dir, 'website', 'services' ), { recursive: true } );
+		mkdirSync( join( dir, 'website', 'resources' ), { recursive: true } );
+		mkdirSync( join( dir, 'website', 'contact' ), { recursive: true } );
+		writeFileSync( join( dir, 'website', 'index.html' ), copyPage( shell, '/' ) );
+		writeFileSync( join( dir, 'website', 'services', 'index.html' ), copyPage( shell, 'Services' ) );
+		writeFileSync( join( dir, 'website', 'resources', 'index.html' ), copyPage( shell, 'Resources' ) );
+		writeFileSync( join( dir, 'website', 'contact', 'index.html' ), copyPage( shell, 'Contact' ) );
+		writeFileSync( join( dir, 'interaction-states.json' ), JSON.stringify( {
+			schema: 'data-liberation/captured-interactions/v2',
+			pages: [
+				{
+					url: `${ origin }/`,
+					routeNavigation: [ 'services', 'resources', 'contact' ].map( ( id ) => ( {
+						selector: `body > nav:nth-of-type(2) > button:nth-of-type(${ 2 + [ 'services', 'resources', 'contact' ].indexOf( id ) })`,
+						id,
+						label: id[ 0 ].toUpperCase() + id.slice( 1 ),
+						siblings: TAB_LABELS,
+						url: `${ origin }/${ id }`,
+					} ) ),
+				},
+				{
+					url: `${ origin }/services`,
+					routeNavigation: [ { selector: 'body > nav:nth-of-type(2) > button:nth-of-type(1)', id: 'home', label: 'Home', siblings: TAB_LABELS, url: `${ origin }/` } ],
+				},
+			],
+		} ) );
+		writeFileSync(
+			join( dir, 'capture-receipt.json' ),
+			JSON.stringify( {
+				source: { url: `${ origin }/` },
+				websiteRoot: 'website',
+				routes: [
+					{ url: `${ origin }/`, path: 'website/index.html' },
+					{ url: `${ origin }/services`, path: 'website/services/index.html' },
+					{ url: `${ origin }/resources`, path: 'website/resources/index.html' },
+					{ url: `${ origin }/contact`, path: 'website/contact/index.html' },
+				],
+			} )
+		);
+		return dir;
+	};
+
+	const routeTabServer = async (): Promise< { origin: string; close: () => Promise< void > } > => {
+		const server = createServer( ( request, response ) => {
+			response.setHeader( 'content-type', 'text/html' );
+			response.end( sourceApp() );
+		} );
+		await new Promise< void >( ( resolve ) => server.listen( 0, '127.0.0.1', resolve ) );
+		return {
+			origin: `http://localtest.me:${ ( server.address() as { port: number } ).port }`,
+			close: async () => {
+				server.closeAllConnections();
+				await new Promise< void >( ( resolve ) => server.close( () => resolve() ) );
+			},
+		};
+	};
+
+	it( 'proves real clicks on observed route tabs at 390 and 768', async () => {
+		const server = await routeTabServer();
+		try {
+			const report = await checkFidelity( { directory: routeTabRun( server.origin, false ), widths: [ 1440 ], routes: [ '/' ], settleMs: 200 } );
+			const interactivity = report.scores.find( ( score ) => score.viewport === 390 )!;
+			expect( interactivity.notes ).toContain( 'route tabs @ 390px: clicks verified' );
+			expect( interactivity.notes ).toContain( 'route tabs @ 768px: clicks verified' );
+			expect( report.pass ).toBe( true );
+		} finally {
+			await server.close();
+		}
+	}, 90_000 );
+
+	it( 'fails when an empty fixed shell still blocks the tab clicks', async () => {
+		const server = await routeTabServer();
+		try {
+			const report = await checkFidelity( { directory: routeTabRun( server.origin, true ), widths: [ 1440 ], routes: [ '/' ], settleMs: 200 } );
+			const blocked = report.scores.flatMap( ( score ) => score.failures ).filter( ( failure ) => failure.includes( 'click blocked' ) );
+			expect( blocked.length ).toBeGreaterThan( 0 );
+			expect( report.pass ).toBe( false );
+		} finally {
+			await server.close();
+		}
 	}, 90_000 );
 } );

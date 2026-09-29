@@ -15,6 +15,28 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.8.5] - 2026-09-29
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- follow absolute gallery inset positions
+
+## [0.8.4] - 2026-09-29
+
+### Changed
+- regenerate plugin bundles
+- Add EmDash CMS platform detection
+
+### Fixed
+- keep a fixed layer that holds the page's content
+- fail fast when a page stops responding while settling
+- keep the expansion probe from loading another document
+- preserve source-observed mobile route tabs
+- exclude popup descendants from selectable probes
+- strip freemium acquisition overlay
+
 ## [0.8.3] - 2026-09-29
 
 ### Changed

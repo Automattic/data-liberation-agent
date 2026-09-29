@@ -187,6 +187,46 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		await page.close();
 	}, 30_000 );
 
+	it( 'retains gallery grid positions written as absolute inset coordinates', async () => {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		await page.setContent( `
+			<div style="position:relative"><div id="first" style="position:absolute;inset:0px auto auto 0px;width:412px;height:412px"></div>
+			<div id="second" style="position:absolute;inset:0px auto auto 442px;width:412px;height:412px"></div>
+			<div id="third" style="position:absolute;inset:442px auto auto 442px;width:412px;height:412px"></div></div>
+			<script>
+				const narrow = { 390: [294, 324], 600: [287, 317], 768: [281, 311] };
+				const update = () => {
+					const [tile, step] = narrow[innerWidth] ?? [Math.round(innerWidth * .3 - 20), Math.round(innerWidth * .3 + 10)];
+					for (const [id, top, left] of [['first', 0, 0], ['second', 0, step], ['third', step, step]]) {
+						const el = document.getElementById(id);
+						el.style.inset = top + 'px auto auto ' + left + 'px';
+						el.style.width = tile + 'px';
+						el.style.height = tile + 'px';
+					}
+				};
+				addEventListener('resize', update);
+				update();
+			</script>
+		` );
+		await learnAndApplyFluidGeometry( page, { settleMs: 30 } );
+		const html = await page.evaluate( () => {
+			document.querySelectorAll( 'script' ).forEach( ( script ) => script.remove() );
+			return document.documentElement.outerHTML;
+		} );
+		const copy = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		await copy.setContent( html );
+		for ( const [ width, step ] of [ [ 390, 324 ], [ 768, 311 ], [ 1440, 442 ], [ 1600, 490 ], [ 1728, 528 ] ] ) {
+			await copy.setViewportSize( { width, height: 900 } );
+			const first = await copy.locator( '#first' ).boundingBox();
+			const second = await copy.locator( '#second' ).boundingBox();
+			const third = await copy.locator( '#third' ).boundingBox();
+			expect( Math.abs( second!.x - first!.x - step ), `column at ${ width }` ).toBeLessThanOrEqual( 2 );
+			expect( Math.abs( third!.y - first!.y - step ), `row at ${ width }` ).toBeLessThanOrEqual( 2 );
+		}
+		await copy.close();
+		await page.close();
+	}, 30_000 );
+
 	it( 'keeps a fluid tile wrapper sized when its intermediate parent shrink-wraps it', async () => {
 		const page = await browser.newPage( { viewport: { width: 980, height: 900 } } );
 		await page.setContent( `
