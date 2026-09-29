@@ -336,6 +336,29 @@ export function learnSegmentedFluidModel(
 	// distinguishes a genuine regime change from pixel noise.
 	if ( usable.length < 4 ) return null;
 
+	// A positive-width desktop grid can follow `viewport share - fixed gutters`.
+	// That line is unsafe as an unbounded model (it becomes negative on phones),
+	// but is safe above a measured switch when its value is positive at the
+	// switch. Keep the narrower regime's independently fitted rule below it.
+	for ( let split = usable.length - MIN_SAMPLES; split >= 2; split-- ) {
+		const narrow = viewportModelForRun( usable.slice( 0, split ) );
+		const wide = usable.slice( split );
+		const line = leastSquaresLine( wide );
+		if ( narrow === null || viewportModelForRun( wide ) !== null || line === null ||
+			line.slope <= 0 || line.intercept >= -TOLERANCE_PX ||
+			line.slope * wide[ 0 ]!.viewport + line.intercept <= 0 ||
+			! fits( wide, ( viewport ) => line.slope * viewport + line.intercept ) ) continue;
+		return { kind: 'segmented', segments: [
+			{ model: narrow, minWidth: null, maxWidth: wide[ 0 ]!.viewport - 1 },
+			{ model: {
+				kind: 'affine',
+				css: `calc(${ round( line.slope * 100 ) }vw + ${ round( line.intercept ) }px)`,
+				slope: line.slope,
+				intercept: line.intercept,
+			}, minWidth: wide[ 0 ]!.viewport, maxWidth: null },
+		] };
+	}
+
 	const runs: Array< { model: ViewportFluidModel; start: number; end: number } > = [];
 	let start = 0;
 	while ( start < usable.length ) {
