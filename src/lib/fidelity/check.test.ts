@@ -164,6 +164,29 @@ describe( 'checkFidelity', () => {
 		expect( report.scores.every( ( score ) => score.failures.some( ( reason ) => reason.includes( 'source motion not reproduced' ) ) ) ).toBe( true );
 	} );
 
+	it( 'ignores a clipped focus-only fragment link while retaining the matching visible link', async () => {
+		const visible = '<nav><a href="#content">Skip to content</a></nav><main id="content"><h1>Home</h1><p>Visible editorial text.</p></main>';
+		const candidate = '<style>.focus-only{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}.focus-only:focus{clip-path:none;width:auto;height:auto}</style><a class="focus-only" href="#content">Skip to content</a>';
+		const server = createServer( ( request, response ) => {
+			response.setHeader( 'content-type', 'text/html' );
+			response.end( `<!doctype html><html><head><title>Home</title></head><body>${ request.headers.host?.startsWith( 'localhost' ) ? candidate : '' }${ visible }</body></html>` );
+		} );
+		await new Promise< void >( ( resolve ) => server.listen( 0, '127.0.0.1', resolve ) );
+		const port = ( server.address() as { port: number } ).port;
+		const directory = liberatedRun();
+		writeFileSync( join( directory, 'website', 'index.html' ), `<!doctype html><html><head><title>Home</title></head><body>${ visible }</body></html>` );
+		writeFileSync( join( directory, 'capture-receipt.json' ), JSON.stringify( { source: { url: `http://127.0.0.1:${ port }/` }, websiteRoot: 'website', routes: [ { url: `http://127.0.0.1:${ port }/`, path: 'website/index.html' } ] } ) );
+		try {
+			const report = await checkFidelity( { directory, candidateUrl: `http://localhost:${ port }`, widths: [ 1600, 390 ], settleMs: 0 } );
+			const score = report.scores.find( ( row ) => row.viewport === 1600 )!;
+			expect( score.source.textChars ).toBe( score.liberated.textChars );
+			expect( score.failures.filter( ( failure ) => failure.startsWith( 'text' ) ) ).toEqual( [] );
+		} finally {
+			server.closeAllConnections();
+			await new Promise< void >( ( resolve ) => server.close( () => resolve() ) );
+		}
+	}, 90_000 );
+
 	it( 'measures a source subpage in place when its nav links to fragments on another page', async () => {
 		// A client-routed builder: the subpage's nav links to sections of the home
 		// page. Following one routes the app home, so the source must be measured
