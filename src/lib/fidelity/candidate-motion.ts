@@ -7,6 +7,8 @@ export interface MotionContract {
 	routes: Record< string, {
 		ready: { source: string; candidate: string };
 		text: string[];
+		/** Compare visibly present/hidden elements during startup and after readiness. */
+		visibility?: string[];
 		/** Volatile clock digits are compared to each page's own observation time, not across a minute boundary. */
 		clock?: { hour: string; minute: string; format: '12h' | '24h' };
 		clicks: Array< { trigger: string; target: string } >;
@@ -47,6 +49,10 @@ export function validateMotionContract( contract: MotionContract ): void {
 			throw new Error( `Invalid motion contract route: ${ route }` );
 		}
 		validateSelectors( [ probe.ready.source, probe.ready.candidate, ...probe.text, ...probe.canvases ] );
+		if ( probe.visibility ) {
+			if ( ! Array.isArray( probe.visibility ) || probe.visibility.length > 16 ) throw new Error( `Invalid visibility probes: ${ route }` );
+			validateSelectors( probe.visibility );
+		}
 		if ( probe.clock ) {
 			validateSelectors( [ probe.clock.hour, probe.clock.minute ] );
 			if ( ! probe.text.includes( probe.clock.hour ) || ! probe.text.includes( probe.clock.minute ) || ! [ '12h', '24h' ].includes( probe.clock.format ) ) {
@@ -60,7 +66,7 @@ export function validateMotionContract( contract: MotionContract ): void {
 	}
 }
 
-async function visit( page: Page, url: string, ready: string, text: string[] ): Promise< { values: Record< string, string >; changes: Record< string, string[] >; observedAt: number } > {
+async function visit( page: Page, url: string, ready: string, text: string[], visibility: string[] ): Promise< { values: Record< string, string >; changes: Record< string, string[] >; observedAt: number; initialVisibility: Record< string, boolean >; finalVisibility: Record< string, boolean > } > {
 	await page.addInitScript( ( selectors ) => {
 		const start = () => {
 			const changes = Object.fromEntries( selectors.map( ( selector ) => [ selector, [] as string[] ] ) );
@@ -80,9 +86,14 @@ async function visit( page: Page, url: string, ready: string, text: string[] ): 
 		else start();
 	}, text );
 	await page.goto( url, { waitUntil: 'domcontentloaded', timeout: 30_000 } );
+	await page.waitForTimeout( 200 );
+	const initialVisibility = await page.evaluate( ( selectors ) => Object.fromEntries( selectors.map( ( selector ) => {
+		const element = document.querySelector( selector );
+		return [ selector, !! element && getComputedStyle( element ).display !== 'none' && getComputedStyle( element ).visibility !== 'hidden' ];
+	} ) ), visibility );
 	await page.waitForSelector( ready, { state: 'attached', timeout: 25_000 } );
 	await page.waitForTimeout( 150 );
-	return page.evaluate( ( selectors ) => {
+	const result = await page.evaluate( ( selectors ) => {
 		const trace = ( window as typeof window & { __dlaMotion?: { changes: Record< string, string[] >; sample: () => void } } ).__dlaMotion;
 		trace?.sample();
 		return {
@@ -91,6 +102,11 @@ async function visit( page: Page, url: string, ready: string, text: string[] ): 
 			observedAt: Date.now(),
 		};
 	}, text );
+	const finalVisibility = await page.evaluate( ( selectors ) => Object.fromEntries( selectors.map( ( selector ) => {
+		const element = document.querySelector( selector );
+		return [ selector, !! element && getComputedStyle( element ).display !== 'none' && getComputedStyle( element ).visibility !== 'hidden' ];
+	} ) ), visibility );
+	return { ...result, initialVisibility, finalVisibility };
 }
 
 function validClock( observation: { values: Record< string, string >; observedAt: number }, clock: NonNullable< RouteContract[ 'clock' ] > ): boolean {
@@ -180,10 +196,14 @@ export async function verifyCandidateMotion(
 	const candidatePage = await browser.newPage( { viewport: { width: viewport, height: 900 } } );
 	try {
 		const [ original, copy ] = await Promise.all( [
-			visit( sourcePage, source, contract.ready.source, contract.text ),
-			visit( candidatePage, candidate, contract.ready.candidate, contract.text ),
+			visit( sourcePage, source, contract.ready.source, contract.text, contract.visibility ?? [] ),
+			visit( candidatePage, candidate, contract.ready.candidate, contract.text, contract.visibility ?? [] ),
 		] );
 		observations.text = { source: original, candidate: copy };
+		for ( const selector of contract.visibility ?? [] ) {
+			if ( original.initialVisibility[ selector ] !== copy.initialVisibility[ selector ] ) failures.push( `startup visibility differs: ${ selector }` );
+			if ( original.finalVisibility[ selector ] !== copy.finalVisibility[ selector ] ) failures.push( `settled visibility differs: ${ selector }` );
+		}
 		if ( contract.clock ) {
 			if ( ! validClock( original, contract.clock ) ) failures.push( 'source clock is not visitor-local time' );
 			if ( ! validClock( copy, contract.clock ) ) failures.push( 'candidate clock is not visitor-local time' );

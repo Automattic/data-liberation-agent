@@ -44,7 +44,7 @@ export async function runCompare(
 		process.stdout.write( '\n' );
 	}
 	for ( const evidence of report.motionEvidence ?? [] ) {
-		process.stdout.write( `${ evidence.route } ${ evidence.viewport }px source/candidate interaction ${ evidence.pass ? 'ok' : `FAIL: ${ evidence.failures.join( '; ' ) }` } (static capture: unreproduced)\n` );
+		process.stdout.write( `${ evidence.route } ${ evidence.viewport }px source/${ report.portableMotion ? 'authored portable capture' : 'candidate' } interaction ${ evidence.pass ? 'ok' : `FAIL: ${ evidence.failures.join( '; ' ) }` } (raw captured script: removed)\n` );
 	}
 
 	// Say what was measured, not just how it went. "Passed" over an unstated
