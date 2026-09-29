@@ -766,25 +766,52 @@ async function verifyCapturedRouteTabs(
 	}
 	if ( ! tabs.size ) return [];
 	const failures: string[] = [];
+	const origin = new URL( localHref ).origin;
 	await page.setViewportSize( { width, height: 900 } );
 	for ( const [ label, target ] of [ ...tabs ].slice( 0, 4 ) ) {
 		await page.goto( localHref );
+		// Editable-block destination conversions nest each observed tab inside
+		// arbitrary wrappers and may split it into an icon link plus a
+		// paragraph-wrapped labeled link, so direct anchor/button siblings no
+		// longer exist. The group is identified by the labels the source was
+		// observed to show — every one of them must still be present among the
+		// navigation's bounded descendants — and the verified link is the
+		// visible labeled one, wherever the conversion nested it.
 		const matched = await page.evaluate( `(() => {
 			const { label, siblings } = ${ JSON.stringify( { label, siblings: target.siblings } ) };
 			function name(element) { return (element.getAttribute('aria-label') || element.textContent || '').replace(/\\s+/g, ' ').trim(); }
-			const links = Array.from(document.querySelectorAll('nav a,[role="navigation"] a'));
-			const link = links.find(candidate => {
-				const nav = candidate.closest('nav,[role="navigation"]');
-				if (!nav || name(candidate) !== label || candidate.getBoundingClientRect().width === 0) return false;
-				return Array.from(candidate.parentElement?.children ?? []).filter(child => child.matches('button,a'))
-					.map(name).join('|') === siblings.join('|');
-			});
-			if (!link) return false;
-			link.setAttribute('data-dla-check-route-tab', '');
-			return true;
-		})()` ) as boolean;
-		if ( ! matched ) {
+			function visible(element) {
+				const rect = element.getBoundingClientRect();
+				const style = getComputedStyle(element);
+				return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+			}
+			for ( const nav of Array.from(document.querySelectorAll('nav,[role="navigation"]')).slice(0, 4) ) {
+				const members = Array.from(nav.querySelectorAll('a,button')).slice(0, 64);
+				const names = members.map(name);
+				if (!siblings.every(sibling => names.includes(sibling))) continue;
+				const link = members.find(member => member.tagName === 'A' && member.hasAttribute('href') && name(member) === label && visible(member));
+				if (!link) continue;
+				link.setAttribute('data-dla-check-route-tab', '');
+				return link.href;
+			}
+			return null;
+		})()` ) as string | null;
+		if ( matched === null ) {
 			failures.push( `route tab ${ label } @ ${ width }px missing native link` );
+			continue;
+		}
+		// Destination checking: the matched link must point at the copy's own
+		// file for the route the source click produced, before any click.
+		let destination: URL;
+		try {
+			destination = new URL( matched );
+		} catch {
+			failures.push( `route tab ${ label } @ ${ width }px links to ${ matched }, expected ${ target.route }` );
+			continue;
+		}
+		const linkedRoute = destination.origin === origin ? canonicalRoutePath( destination.pathname ) : destination.href;
+		if ( linkedRoute !== target.route ) {
+			failures.push( `route tab ${ label } @ ${ width }px links to ${ linkedRoute }, expected ${ target.route }` );
 			continue;
 		}
 		try {
