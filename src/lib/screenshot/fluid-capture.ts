@@ -93,12 +93,26 @@ export async function learnAndApplyFluidGeometry(
 	const original = page.viewportSize();
 
 	const tagged = await page.evaluate(
-		( { attribute } ) => {
+		( { attribute, properties } ) => {
 			let index = 0;
 			for ( const element of document.querySelectorAll< HTMLElement >( '[style]' ) ) {
-				// Only elements a runtime sized in pixels are candidates.
+				// Match the declarations the measurement pass can actually learn.
+				// A substring match also tagged min-height/max-width and percentages,
+				// which produced no observations but still paid for the whole sweep.
 				const style = element.getAttribute( 'style' ) ?? '';
-				const carriesPixelSize = /\b(?:width|height|font-size|padding-top)\s*:\s*\d/.test( style );
+				const blankParagraph = element.tagName === 'P' &&
+					! ( element.textContent ?? '' ).replace( /[ \t\r\n]/g, '' ) &&
+					! element.querySelector( ':not(br)' ) &&
+					[ '::before', '::after' ].every( pseudo =>
+						[ 'none', 'normal', '""', "''" ].includes( getComputedStyle( element, pseudo ).content )
+					);
+				const carriesPixelSize = properties.some( property =>
+					// Empty editorial paragraphs carry font formatting even though they
+					// have no text/glyph to size. Retain that native CSS unchanged; explicit
+					// spacer dimensions, real text and generated glyphs still qualify.
+					!( property === 'font-size' && blankParagraph ) &&
+					/^-?\d+(?:\.\d+)?px$/.test( element.style.getPropertyValue( property ).trim() )
+				);
 				const carriesPixelCustomProperty = /(?:^|;)\s*--[-a-zA-Z0-9_]+\s*:\s*-?\d+(?:\.\d+)?px\s*(?:;|$)/.test( style );
 				const carriesMatrixTransform = /(?:^|;)\s*transform\s*:\s*matrix\(/.test( style );
 				const carriesAbsoluteInset = getComputedStyle( element ).position === 'absolute' &&
@@ -110,7 +124,7 @@ export async function learnAndApplyFluidGeometry(
 			}
 			return index;
 		},
-		{ attribute: ID_ATTRIBUTE }
+		{ attribute: ID_ATTRIBUTE, properties: LEARNABLE_PROPERTIES }
 	);
 
 	if ( tagged === 0 ) {
