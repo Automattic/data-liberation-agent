@@ -30,7 +30,7 @@ import {
 	isSourceCaptureUrl,
 } from './screenshot/absent-document.js';
 import { isInlineUrl, selfContainWebsite } from './self-contain.js';
-import { wireCapturedDialogs } from './static-dialogs.js';
+import { wireCapturedDialogs, wireCapturedRouteNavigation } from './static-dialogs.js';
 import { rewriteMediaUrls, URL_TERMINATOR_LOOKAHEAD } from './streaming/media-url-rewrite.js';
 import {
 	INTERACTION_STATES_SCHEMA,
@@ -3739,6 +3739,21 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		.filter( ( diagnostic ) => diagnostic.code === 'route_not_found' )
 		.map( ( diagnostic ) => diagnostic.url ) );
 	const absentRouteKeys = new Set( [ ...absentRoutes ].map( normalizedUrl ) );
+	// A tab for the current route cannot demonstrate a URL change on that page.
+	// Reuse only an unambiguous observation of the same navigation group on
+	// another captured route (for example Home observed from Services).
+	const routeObservations = retainedEntries.flatMap( entry => entry.interactions?.routeNavigation ?? [] );
+	const routeDestinations = new Map< string, Set< string > >();
+	for ( const route of routeObservations ) {
+		const key = JSON.stringify( [ route.siblings, route.label ] );
+		const destinations = routeDestinations.get( key ) ?? new Set< string >();
+		destinations.add( route.url );
+		routeDestinations.set( key, destinations );
+	}
+	const verifiedRouteObservations = routeObservations.filter( route =>
+		portableRouteLinks.has( normalizedUrl( route.url ) ) &&
+		routeDestinations.get( JSON.stringify( [ route.siblings, route.label ] ) )?.size === 1
+	);
 	for ( const entry of retainedEntries ) {
 		const { url, htmlPath } = entry;
 		const routePath = routePathOf( url );
@@ -3763,10 +3778,13 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		);
 		const normalizedHtml = routePhoneDocumentFragments(
 			rewriteCapturedRouteLinks(
-				wireCapturedDialogs(
-					withoutGeometryIdentities( identityHtml ),
-					entry.interactions?.states ?? [],
-					entry.interactions?.initialDialogs ?? []
+				wireCapturedRouteNavigation(
+					wireCapturedDialogs(
+						withoutGeometryIdentities( identityHtml ),
+						entry.interactions?.states ?? [],
+						entry.interactions?.initialDialogs ?? []
+					),
+					verifiedRouteObservations
 				),
 				url,
 				portableRouteLinks,

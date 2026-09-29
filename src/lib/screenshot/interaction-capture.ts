@@ -8,6 +8,63 @@ const MAX_INITIAL_DIALOGS = 8;
 const MAX_DIALOG_HTML_BYTES = 512 * 1024;
 const DIALOG_WAIT_MS = 2_000;
 const POPUP_HASPOPUP = [ 'dialog', 'listbox', 'menu', 'tree', 'grid' ];
+const MAX_ROUTE_CONTROLS = 12;
+
+export interface CapturedRouteNavigation {
+	selector: string;
+	id?: string;
+	label: string;
+	siblings: string[];
+	url: string;
+}
+
+/** Observe the result of clicking visible navigation buttons, never infer a route from a label. */
+export async function captureRouteNavigation( page: Page, sourceUrl: string ): Promise< CapturedRouteNavigation[] > {
+	const candidates = await page.evaluate( ( limit: number ) => {
+		return Array.from( document.querySelectorAll< HTMLButtonElement >( 'nav button,[role="navigation"] button' ) )
+			.filter( button => {
+				const rect = button.getBoundingClientRect();
+				const style = getComputedStyle( button );
+				return rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.top < innerHeight &&
+					style.display !== 'none' && style.visibility !== 'hidden' && ! button.disabled &&
+					! button.closest( 'form,a,[hidden],[inert]' ) &&
+					! button.matches( '[aria-haspopup],[aria-expanded],[aria-controls],[role="tab"],[aria-pressed]' ) &&
+					! button.querySelector( 'a' );
+			} ).slice( 0, limit ).map( button => {
+				const parts: string[] = [];
+				for ( let node: Element | null = button; node && node !== document.body; node = node.parentElement ) {
+					const siblings = Array.from( node.parentElement?.children ?? [] ).filter( sibling => sibling.tagName === node!.tagName );
+					parts.unshift( `${ node.tagName.toLowerCase() }:nth-of-type(${ siblings.indexOf( node ) + 1 })` );
+				}
+				return {
+					selector: `body > ${ parts.join( ' > ' ) }`,
+					...( button.id ? { id: button.id } : {} ),
+					label: ( button.getAttribute( 'aria-label' ) || button.textContent || '' ).replace( /\s+/g, ' ' ).trim(),
+					siblings: Array.from( button.parentElement?.children ?? [] ).filter( child => child.tagName === 'BUTTON' )
+						.map( child => ( child.getAttribute( 'aria-label' ) || child.textContent || '' ).replace( /\s+/g, ' ' ).trim() ),
+				};
+			} );
+	}, MAX_ROUTE_CONTROLS );
+	const original = new URL( sourceUrl );
+	const routes: CapturedRouteNavigation[] = [];
+	for ( const candidate of candidates ) {
+		if ( ! candidate.label || page.url() !== sourceUrl ) break;
+		try {
+			await page.locator( candidate.selector ).click( { timeout: 1_000 } );
+			await page.waitForFunction( ( before: string ) => location.href !== before, sourceUrl, { timeout: 500 } ).catch( () => undefined );
+			const after = new URL( page.url() );
+			if ( after.origin !== original.origin || after.href === original.href || after.pathname === original.pathname && after.search === original.search ) continue;
+			routes.push( { ...candidate, url: after.href } );
+			await page.evaluate( () => history.back() );
+			await page.waitForURL( sourceUrl, { timeout: 1_000 } );
+			// A router may replace its navigation nodes on back; do not apply stale selectors.
+			await page.waitForTimeout( 200 );
+		} catch {
+			if ( page.url() !== sourceUrl ) break;
+		}
+	}
+	return routes;
+}
 const POPUP_SURFACE_SELECTOR =
 	'dialog,[role="dialog"],[aria-modal="true"],[role="listbox"],[role="menu"],[role="tree"],[role="grid"],nav,[class*="header-menu"]';
 const SEMANTIC_POPUP_SELECTOR =
@@ -122,6 +179,7 @@ export interface InteractionStatesReport {
 	viewport: { width: number; height: number };
 	capturedAt: string;
 	states: CapturedDialogInteraction[];
+	routeNavigation?: CapturedRouteNavigation[];
 	/** Dialogs already visible after the page's normal runtime settling. */
 	initialDialogs?: CapturedInitialDialog[];
 }

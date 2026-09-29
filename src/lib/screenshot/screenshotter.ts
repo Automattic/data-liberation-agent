@@ -26,6 +26,7 @@ import { generateChromeCss, type BakedLayoutMap } from './fixups.js';
 import { sanitizeFrozenHtml } from './freeze.js';
 import { learnAndApplyFluidGeometry } from './fluid-capture.js';
 import {
+	captureRouteNavigation,
 	captureTriggeredDialogs,
 	type CapturedDialogInteraction,
 	type InteractionStatesReport,
@@ -1296,6 +1297,13 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	async function probeInteractions(): Promise< void > {
 	try {
 		const interactions = await captureTriggeredDialogs( page, url );
+		// Route-tab observation is evidence, not a baseline artifact: its failure
+		// must not discard the dialog states captured before it.
+		try {
+			interactions.routeNavigation = await captureRouteNavigation( page, url );
+		} catch {
+			/* best-effort: capture proceeds with dialog evidence alone */
+		}
 		// Disclosure/accordion candidates were already resolved (opened, captured,
 		// reclosed) before serialization above — folded in here purely as
 		// diagnostics, using the same states array + totals the dialog/menu path
@@ -1320,9 +1328,10 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 			} );
 		}
 		if (
-			( interactions.states.length > 0 || ( interactions.initialDialogs?.length ?? 0 ) > 0 ) &&
+			( interactions.states.length > 0 || ( interactions.initialDialogs?.length ?? 0 ) > 0 || ( interactions.routeNavigation?.length ?? 0 ) > 0 ) &&
 			( ! entry.interactions ||
 				interactions.states.some( ( state ) => state.status === 'captured' ) ||
+				( interactions.routeNavigation?.length ?? 0 ) > 0 ||
 				interactions.initialDialogs?.some( ( state ) => state.status === 'captured' ) )
 		) {
 			entry.interactions = mergeInteractionReports( entry.interactions, canonicalizeInteractions( interactions ) );
@@ -1392,6 +1401,8 @@ function mergeInteractionReports(
 	return {
 		...latest,
 		states,
+		routeNavigation: [ ...new Map( [ ...( previous.routeNavigation ?? [] ), ...( latest.routeNavigation ?? [] ) ]
+			.map( route => [ route.selector, route ] ) ).values() ],
 		...( initialDialogs.length > 0 ? { initialDialogs } : {} ),
 	};
 }

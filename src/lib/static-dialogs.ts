@@ -3,6 +3,7 @@ import type { Element } from 'domhandler';
 import type {
 	CapturedDialogInteraction,
 	CapturedInitialDialog,
+	CapturedRouteNavigation,
 } from './screenshot/interaction-capture.js';
 
 // Base summary styling is zero-specificity (`:where(...)`) so author
@@ -207,6 +208,46 @@ export function wireCapturedDialogs(
 		}
 	}
 	return $.html();
+}
+
+/** Replace only the exact navigation button whose source click changed routes. */
+export function wireCapturedRouteNavigation( html: string, routes: CapturedRouteNavigation[] ): string {
+	if ( routes.length === 0 ) return html;
+	const $ = cheerio.load( html );
+	let changed = false;
+	for ( const route of routes ) {
+		if ( route.siblings.length < 2 ) continue;
+		// Responsive document merging may add wrappers or retain two device copies.
+		// The observed sibling group, not a bare label, identifies those copies.
+		$( 'nav button,[role="navigation"] button' ).each( ( _, element ) => {
+			const button = $( element );
+			if ( button.closest( 'form,a,details' ).length ) return;
+			if ( normalizedText( button.attr( 'aria-label' ) || button.text() ) !== route.label ) return;
+			const siblings = button.parent().children( 'button,a' ).map( ( __, sibling ) =>
+				normalizedText( $( sibling ).attr( 'aria-label' ) || $( sibling ).text() )
+			).get();
+			if ( siblings.join( '\u0000' ) !== route.siblings.join( '\u0000' ) ) return;
+			const link = $( '<a></a>' );
+			for ( const [ name, value ] of Object.entries( button.attr() ?? {} ) ) {
+				if ( name === 'type' || name === 'disabled' || name.startsWith( 'on' ) || name === 'role' ) continue;
+				link.attr( name, value );
+			}
+			link.attr( 'href', route.url ).html( button.html() ?? '' );
+			button.replaceWith( link );
+			changed = true;
+		} );
+	}
+	if ( changed ) {
+		// Empty fixed toaster shells can sit over the bottom tabs at tablet widths.
+		// They have no content or controls to preserve, but still intercept clicks.
+		$( 'div' ).toArray().reverse().forEach( element => {
+			const shell = $( element );
+			const classes = shell.attr( 'class' ) ?? '';
+			if ( shell.children().length || normalizedText( shell.text() ) || shell.attr( 'role' ) || shell.attr( 'aria-label' ) ) return;
+			if ( /(?:^|\s)fixed(?:\s|$)/.test( classes ) && /(?:^|\s)z-\S+/.test( classes ) ) shell.remove();
+		} );
+	}
+	return changed ? $.html() : html;
 }
 
 function removeCapturedDialog( $: cheerio.CheerioAPI, selector: string | undefined ): void {
