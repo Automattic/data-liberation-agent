@@ -48,6 +48,8 @@ const HELP = `
                          interrupted, for browsing it. Liberation writes the site
                          and exits without this.
     --no-learn-fluid     Skip the width sweep and freeze the layout at one width.
+    --portable-motion <json>  Author a portable runtime from pinned independent
+                         scripts and verify it against the live source before export.
                          Learning is on by default: it keeps the copy reflowing
                          like the source instead of pinning it to the capture width.
 
@@ -193,12 +195,19 @@ if (args.includes('--help')) {
   }
 
   const { liberateSite } = await import('./ui/liberate.js');
+  const portablePath = getArg('--portable-motion');
+  if (args.includes('--portable-motion') && !portablePath) {
+    console.error('Error: --portable-motion requires a JSON recipe file.');
+    process.exit(1);
+  }
+  const portableMotion = portablePath ? JSON.parse((await import('node:fs')).readFileSync(portablePath, 'utf8')) : undefined;
   const result = await liberateSite({
     url,
     outputBase: getArg('--output') || resolveOutputBase(),
     resume: args.includes('--resume'),
     screenshots: args.includes('--screenshots'),
     learnFluid: !args.includes('--no-learn-fluid'),
+    portableMotion,
     serve: args.includes('--serve'),
     log: (message) => process.stderr.write(`${message}\n`),
   });

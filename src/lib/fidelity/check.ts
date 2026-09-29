@@ -18,6 +18,7 @@ import {
 } from '../screenshot/page-helpers.js';
 import { applySourceCleanup, readSourceCleanup, validateCleanupPolicy, type CleanupPolicy, type CleanupReport } from '../source-cleanup.js';
 import { runFidelityChecks } from './checks.js';
+import { readPortableMotion } from '../portable-motion.js';
 import { validateMotionContract, verifyCandidateMotion, type MotionContract, type MotionEvidence } from './candidate-motion.js';
 import { probeDialogs } from './dialog-probe.js';
 import { writePixelEvidence } from './evidence.js';
@@ -135,6 +136,8 @@ function candidateBase( candidateUrl: string ): string {
 export type RouteScore = ViewportScore & { route: string };
 
 export interface FidelityReport {
+	/** Authored portable runtime was verified during this comparison, not inferred from source scripts. */
+	portableMotion?: { verified: boolean; routes: string[] };
 	cleanup?: { policy: CleanupPolicy; source: CleanupReport[] };
 	/** Overlays dismissed per side before measuring. Evidence, never a gate. */
 	overlays: OverlayRecord[];
@@ -807,9 +810,11 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 	}
 
 	const candidate = options.candidateUrl === undefined ? null : candidateBase( options.candidateUrl );
-	if ( options.motionContract ) {
-		if ( ! candidate || options.observe ) throw new Error( 'Motion contract requires a live --candidate browser comparison' );
-		validateMotionContract( options.motionContract );
+	const portable = candidate || options.motionContract ? null : readPortableMotion( dirname( receiptPath ), websiteDir );
+	const motionContract = options.motionContract ?? portable?.contract;
+	if ( motionContract ) {
+		if ( ( ! candidate && ! portable ) || options.observe ) throw new Error( 'Motion contract requires a live --candidate browser comparison or an authored portable runtime receipt' );
+		validateMotionContract( motionContract );
 	}
 	let observe = options.observe;
 	const browser = observe ? null : await (await import('playwright')).chromium.launch();
@@ -891,9 +896,9 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 			const sourceHref = sources.get( route )!;
 			const localHref = `${ candidate ?? server?.url ?? 'http://liberated.invalid' }${ route }`;
 			const signals = unreproducedMotion.get( sourceHref );
-			const contract = signals && options.motionContract?.routes[ route ];
+			const contract = signals && motionContract?.routes[ route ];
 			if ( signals && contract && browser ) {
-				for ( const width of options.motionContract!.widths ) {
+				for ( const width of motionContract!.widths ) {
 					log( `[compare] ${ route } @ ${ width }px source/candidate motion` );
 					motionEvidence.push( await verifyCandidateMotion( browser, route, width, sourceHref, localHref, contract, signals ) );
 				}
@@ -925,7 +930,7 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 					checked.failures.push( `candidate retains advertising or source attribution (${ pair.candidateRetained } removable)` );
 				}
 				if ( signals && ! candidateMotionVerified ) checked.failures.push( `source motion not reproduced by capture: ${ signals.join( ', ' ) }; candidate behavior unverified` );
-				if ( candidateMotionVerified ) checked.notes.push( 'source/capture motion unreproduced; independent source/candidate interaction verified at 390/768/1440px' );
+				if ( candidateMotionVerified ) checked.notes.push( portable ? 'raw source/capture motion unreproduced; authored portable runtime independently verified at 390/768/1440px' : 'source/capture motion unreproduced; independent source/candidate interaction verified at 390/768/1440px' );
 				const score: RouteScore = {
 					route,
 					viewport: width,
@@ -986,7 +991,7 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 					score.failures.push( `source motion not reproduced by capture: ${ signals.join( ', ' ) }; candidate behavior unverified` );
 					score.pass = false;
 				}
-				if ( candidateMotionVerified ) score.notes.push( 'source/capture motion unreproduced; independent candidate interaction verified' );
+				if ( candidateMotionVerified ) score.notes.push( portable ? 'raw capture motion unreproduced; authored portable runtime verified' : 'source/capture motion unreproduced; independent candidate interaction verified' );
 				score.notes.push( 'interactivity' );
 				scores.push( score );
 			}
@@ -1007,7 +1012,7 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 			join(evidenceDir, 'overlay-evidence.json'),
 			JSON.stringify({ schema: 'data-liberation/compare-overlays/v1', completed: comparisonCompleted, kinds: COMPARED_OVERLAY_KINDS, observations: overlays }, null, 2)
 		);
-		if ( options.motionContract ) writeFileSync( join( evidenceDir, 'candidate-motion-evidence.json' ),
+		if ( motionContract ) writeFileSync( join( evidenceDir, 'candidate-motion-evidence.json' ),
 			JSON.stringify( { schema: 'data-liberation/candidate-motion/v1', completed: comparisonCompleted, observations: motionEvidence }, null, 2 ) );
 	}
 
@@ -1035,7 +1040,8 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 		routesCleanupUnproven: [ ...unproven ].sort(),
 		selfConsistency,
 		scores,
-		...( options.motionContract ? { motionEvidence } : {} ),
+		...( motionContract ? { motionEvidence } : {} ),
+		...( portable ? { portableMotion: { verified: motionEvidence.length > 0 && motionEvidence.every( ( evidence ) => evidence.pass ), routes: Object.keys( portable.routes ) } } : {} ),
 		...summary,
 	};
 }
