@@ -1,7 +1,67 @@
 import { chromium } from 'playwright';
 import { describe, expect, it } from 'vitest';
-import { captureTriggeredDialogs, INTERACTION_STATES_SCHEMA } from './interaction-capture.js';
-import { wireCapturedDialogs } from '../static-dialogs.js';
+import { captureRouteNavigation, captureTriggeredDialogs, INTERACTION_STATES_SCHEMA } from './interaction-capture.js';
+import { wireCapturedDialogs, wireCapturedRouteNavigation } from '../static-dialogs.js';
+
+it.skipIf( process.env.SKIP_BROWSER_TESTS )( 'turns observed mobile client-routed tabs into native, keyboard-accessible routes without converting actions', async () => {
+	const browser = await chromium.launch( { headless: true } );
+	const origin = 'https://route-tabs.test';
+	const source = `<!doctype html><html><head><style>
+		#bottom { display:flex; position:fixed;bottom:0;background:white }
+		@media(min-width:1000px){#bottom{display:none}}
+	</style></head><body><nav id="bottom" aria-label="Pages">
+		<button id="home" type="button">Home</button><button id="services" type="button">Services</button>
+		<button id="resources" type="button">Resources</button><button id="contact" type="button">Contact</button>
+		<button id="action" type="button">Refresh</button>
+	</nav><button id="outside" type="button">Other action</button><main><h1>Home</h1></main>
+	<script>document.querySelectorAll('#bottom button:not(#action),#outside').forEach(button=>button.addEventListener('click',()=>{
+		const path=button.id==='home'?'/':'/'+button.id;history.pushState({},'',path);
+		document.querySelector('h1').textContent=button.textContent;
+	}));document.querySelector('#action').onclick=()=>document.body.dataset.refreshed='yes';</script></body></html>`;
+	try {
+		for ( const width of [ 390, 768, 1440 ] ) {
+			const page = await browser.newPage( { viewport: { width, height: 900 } } );
+			await page.route( `${ origin }/**`, route => route.fulfill( { contentType: 'text/html', body: `<h1>${ new URL( route.request().url() ).pathname }</h1>` } ) );
+			await page.goto( `${ origin }/` );
+			await page.setContent( source );
+			const routes = await captureRouteNavigation( page, `${ origin }/` );
+			if ( width < 1000 ) {
+				expect( routes.map( route => [ route.id, route.url ] ) ).toEqual( [
+					[ 'services', `${ origin }/services` ], [ 'resources', `${ origin }/resources` ], [ 'contact', `${ origin }/contact` ],
+				] );
+				expect( page.url() ).toBe( `${ origin }/` );
+				const portable = wireCapturedRouteNavigation( source.replace( /<script>[\s\S]*?<\/script>/, '' )
+					.replace( '</body>', '<div class="fixed z-100" style="position:fixed;z-index:100;bottom:0;right:0;width:50%;height:70px"></div></body>' ), routes );
+				await page.setContent( portable );
+				expect( await page.locator( '.fixed.z-100' ).count() ).toBe( 0 );
+				const link = page.getByRole( 'link', { name: 'Services' } );
+				expect( await link.getAttribute( 'href' ) ).toBe( `${ origin }/services` );
+				expect( await page.locator( '#action' ).evaluate( el => el.tagName ) ).toBe( 'BUTTON' );
+				expect( await page.locator( '#outside' ).evaluate( el => el.tagName ) ).toBe( 'BUTTON' );
+				await link.focus();
+				await page.keyboard.press( 'Enter' );
+				await page.waitForURL( `${ origin }/services` );
+				await page.setContent( portable );
+				await page.getByRole( 'link', { name: 'Resources' } ).click();
+				await page.waitForURL( `${ origin }/resources` );
+				const otherGroup = '<nav><button>Home</button><button>Services</button></nav>';
+				const duplicated = wireCapturedRouteNavigation(
+					source.replace( /<script>[\s\S]*?<\/script>/, '' ).replace( '</body>', `<div>${ source.match( /<nav[\s\S]*?<\/nav>/ )?.[ 0 ] }</div>${ otherGroup }</body>` ),
+					routes
+				);
+				await page.setContent( duplicated );
+				expect( await page.locator( 'nav a#services' ).count() ).toBe( 2 );
+				expect( await page.locator( 'nav button#services' ).count() ).toBe( 0 );
+				expect( await page.locator( 'nav button' ).filter( { hasText: 'Services' } ).count() ).toBe( 1 );
+				await page.goto( `${ origin }/services` );
+				await page.setContent( source );
+				const fromServices = await captureRouteNavigation( page, `${ origin }/services` );
+				expect( fromServices.find( route => route.label === 'Home' )?.url ).toBe( `${ origin }/` );
+			} else expect( routes ).toEqual( [] );
+			await page.close();
+		}
+	} finally { await browser.close(); }
+}, 30_000 );
 
 describe( 'captureTriggeredDialogs', () => {
 	it.skipIf( process.env.SKIP_BROWSER_TESTS )(
