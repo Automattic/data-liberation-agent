@@ -2,6 +2,16 @@ import { describe, expect, it, vi } from 'vitest';
 import { discoverLinkedRoutes, resolveCanonicalSiteUrl } from './discovery-links.js';
 
 describe( 'discoverLinkedRoutes', () => {
+	it( 'retains missing HTML links but does not schedule linked Word downloads as pages', async () => {
+		const download = 'https://example.com/_files/ugd/flyer.docx?dn=Fly%20fishing.docx';
+		const loadLinks = vi.fn( async () => [ '/missing-page', download, '/notes.doc' ] );
+		const result = await discoverLinkedRoutes( {
+			siteUrl: 'https://example.com/', initialUrls: [ download ], loadLinks, maxPages: 1,
+		} );
+		expect( result.urls ).toEqual( [ 'https://example.com/', 'https://example.com/missing-page' ] );
+		expect( loadLinks ).toHaveBeenCalledTimes( 1 );
+	} );
+
 	it( 'merges partial sitemap inventory with recursively linked same-origin routes', async () => {
 		const loadLinks = vi.fn( async ( url: string ) => {
 			if ( url === 'https://example.com/' ) {

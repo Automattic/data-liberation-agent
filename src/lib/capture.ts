@@ -204,6 +204,7 @@ export async function captureWebsite(
 		removeSelectors: adapter.liberation?.removeSelectors,
 		cleanupPolicy: (await import('./source-cleanup.js')).cleanupPolicy(adapter.liberation?.cleanupRules),
 		prepareCapture: adapter.liberation?.prepare,
+		resolveClientRedirect: adapter.liberation?.resolveClientRedirect,
 		beforeSerialize: adapter.liberation?.beforeSerialize,
 		...( adapter.liberation?.canonicalizeHtml
 			? { canonicalizeHtml: adapter.liberation.canonicalizeHtml.bind( adapter.liberation ) }

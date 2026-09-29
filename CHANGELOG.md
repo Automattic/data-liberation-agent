@@ -15,6 +15,21 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.7.2] - 2026-09-29
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- localize compact CSS font imports
+
+## [0.7.1] - 2026-09-29
+
+### Changed
+- regenerate plugin bundles
+- Capture linked Word downloads as portable assets
+- Treat expired Wix event forms as parent-event aliases
+
 ## [0.7.0] - 2026-09-29
 
 ### Added
