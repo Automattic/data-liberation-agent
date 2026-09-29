@@ -583,7 +583,21 @@ async function observePage(
 
 			// Read what describes this page before any probe click can change it.
 			const title = document.title;
-			const textChars = ( document.body?.innerText ?? '' ).replace( /\s+/g, ' ' ).trim().length;
+			// innerText still includes a clipped 1×1 keyboard skip link. It is
+			// useful content when focused, but not rendered body copy at rest.
+			// Remove only a direct, focus-only fragment link occupying the text
+			// prefix; editorial links with the same label remain counted.
+			let bodyText = document.body?.innerText ?? '';
+			for ( const element of document.body?.children ?? [] ) {
+				if ( ! ( element instanceof HTMLAnchorElement ) || ! element.hash || element.matches( ':focus' ) ) continue;
+				const style = getComputedStyle( element );
+				const box = element.getBoundingClientRect();
+				if ( box.width > 1.5 || box.height > 1.5 || style.overflow !== 'hidden' || ( style.clipPath === 'none' && style.clip === 'auto' ) ) continue;
+				const label = element.innerText.replace( /\s+/g, ' ' ).trim();
+				const prefix = bodyText.trimStart();
+				if ( label && prefix.startsWith( label ) && /^\s/.test( prefix.slice( label.length ) ) ) bodyText = prefix.slice( label.length );
+			}
+			const textChars = bodyText.replace( /\s+/g, ' ' ).trim().length;
 			if ( clickUnresolved ) {
 				const original = { x: scrollX, y: scrollY };
 				let clicks = 0;
