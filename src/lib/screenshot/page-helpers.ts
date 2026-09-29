@@ -2,6 +2,9 @@ import type { Page, Request } from 'playwright';
 import { expandCollapsedContent, waitForAppWidgets } from './dynamic-content.js';
 import { isSourcePromotion } from '../source-cleanup.js';
 
+/** Slack given to an in-page step beyond its own budget before Node gives up on it. */
+const EVALUATE_GRACE_MS = 5_000;
+
 /**
  * Wait for a page to reach a stable state after load.
  *
@@ -349,8 +352,10 @@ export async function triggerLazyLoad(page: Page, requireNetworkIdle: boolean = 
     // allowance, so a page that never stops growing can't spend the full
     // per-sweep cap on every one of `settleScroll`'s rounds and blow past the
     // overall budget by a multiple of it.
+    // Every in-page step is also bounded from Node: a renderer whose main
+    // thread is spinning never answers, so its own budget never fires.
     const sweepToBottom = (maxMs: number) =>
-      page.evaluate(
+      withEvaluateTimeout(page.evaluate(
         async ({ step, pauseMs, maxMs }) => {
           const started = Date.now();
           let y = window.scrollY;
@@ -365,7 +370,7 @@ export async function triggerLazyLoad(page: Page, requireNetworkIdle: boolean = 
           return total;
         },
         { step: 500, pauseMs: 200, maxMs },
-      );
+      ), maxMs + EVALUATE_GRACE_MS);
     const settleScroll = async () => {
       const deadline = Date.now() + 20_000;
       let previousHeight = -1;
@@ -392,15 +397,15 @@ export async function triggerLazyLoad(page: Page, requireNetworkIdle: boolean = 
     // content widgets (reviews / FAQ apps) to populate — so the snapshot captures real
     // content, not an empty placeholder. Both are no-ops on ordinary pages. (See
     // dynamic-content.ts; DISCOVERIES 2026-06-04.)
-    await expandCollapsedContent(page);
-    await waitForAppWidgets(page);
+    await withEvaluateTimeout(expandCollapsedContent(page), 30_000);
+    await withEvaluateTimeout(waitForAppWidgets(page), 8_000 + EVALUATE_GRACE_MS);
     await waitForImages(page);
     // Return to top AND fire a scroll event so scroll-reactive headers recompute
     // their at-top (un-faded) state — scrollTo alone doesn't trigger their handler.
-    await page.evaluate(() => {
+    await withEvaluateTimeout(page.evaluate(() => {
       window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
       window.dispatchEvent(new Event('scroll'));
-    });
+    }), EVALUATE_GRACE_MS);
     // Scroll handlers are throttled/debounced (~200ms observed on Wix), so the
     // restore transition starts a beat AFTER the event — waitForAnimations would
     // otherwise sample before it begins and return early. Give the handler time
@@ -409,6 +414,19 @@ export async function triggerLazyLoad(page: Page, requireNetworkIdle: boolean = 
     await waitForAnimations(page);
   } catch {
     /* if the page crashes or blocks our script, don't fail the capture */
+  }
+}
+
+/**
+ * Whether the page's main thread still answers a trivial evaluate. A renderer
+ * stuck in a script loop never does, and every later step would hang with it.
+ */
+export async function pageResponds(page: Page, ms: number = EVALUATE_GRACE_MS): Promise<boolean> {
+  try {
+    await withEvaluateTimeout(page.evaluate(() => true), ms);
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -864,20 +882,20 @@ export async function dismissOverlays(
       if (targets.length === 0) break;
       let acted = 0;
       for (const t of targets) {
-        const method = await dismissOne(page, t);
+        const method = await withEvaluateTimeout(dismissOne(page, t), 10_000);
         if (method) {
           dismissed.push({ selector: t.selector, method, kind: t.kind, score: t.score, signals: t.signals });
           acted++;
         }
       }
-      if (acted > 0) await ensureScrollUnlocked(page);
-      await cleanupStamps(page);
+      if (acted > 0) await withEvaluateTimeout(ensureScrollUnlocked(page), EVALUATE_GRACE_MS);
+      await withEvaluateTimeout(cleanupStamps(page), EVALUATE_GRACE_MS);
       if (acted === 0) break; // nothing dismissable left; stop early
     }
   } catch {
     /* best-effort — never fail a capture on overlay dismissal */
   } finally {
-    try { await cleanupStamps(page); } catch { /* ignore */ }
+    try { await withEvaluateTimeout(cleanupStamps(page), EVALUATE_GRACE_MS); } catch { /* ignore */ }
   }
   return dismissed;
 }
