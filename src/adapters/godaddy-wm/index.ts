@@ -17,5 +17,10 @@ export const godaddyWmAdapter: PlatformAdapter = {
   id: 'godaddy-wm',
   detection,
   discover,
-  liberation: { cleanupRules: providerCreditRules('godaddy', ['godaddy.com'], 'GoDaddy') },
+  liberation: {
+    cleanupRules: [
+      { id: 'godaddy-freemium-acquisition', category: 'source-attribution', selector: '[data-freemium-ad="true"]' },
+      ...providerCreditRules('godaddy', ['godaddy.com'], 'GoDaddy'),
+    ],
+  },
 };
