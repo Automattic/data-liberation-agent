@@ -251,7 +251,7 @@ export async function learnAndApplyFluidGeometry(
 		// instead of freezing.
 		const segmented =
 			wholeRangeModel.kind === 'breakpoint'
-				? learnSegmentedFluidModel( modelSamples, customProperty ? { holdUnfitted: true } : {} )
+				? learnSegmentedFluidModel( modelSamples, customProperty ? { holdUnfitted: true } : { holdNarrowForBoundedAffine: true } )
 				: null;
 		if ( customProperty && model.kind !== 'breakpoint' && modelSamples.length >= 3 ) {
 			const customModel =
@@ -350,16 +350,19 @@ export async function learnAndApplyFluidGeometry(
 		if ( model.kind === 'container' ) {
 			const viewportSamples = samples.map( ( sample ) => ( { viewport: sample.viewport, value: sample.value } ) );
 			const viewportOnly = learnWidestFluidModel( viewportSamples );
-			if ( viewportOnly.kind !== 'breakpoint' ) {
+			const varying = Math.max( ...viewportSamples.map( ( sample ) => sample.value ) ) -
+				Math.min( ...viewportSamples.map( ( sample ) => sample.value ) ) > CONTAINER_VERIFY_TOLERANCE_PX;
+			// A shrink-to-fit intermediate can make 100% collapse. The widest
+			// shortcut may fit only its narrow constant regime, even though the
+			// source grew across the rest of the sweep. Try the complete bounded
+			// viewport relationship before accepting that frozen constant.
+			const sampled = viewportOnly.kind === 'breakpoint' || ( viewportOnly.kind === 'constant' && varying )
+				? learnSegmentedFluidModel( viewportSamples, { holdUnfitted: true } )
+				: null;
+			if ( sampled !== null ) {
+				sampledCss = segmentedCss( `[${ SEGMENT_ATTRIBUTE }="${ id }"]`, property, sampled.segments );
+			} else if ( viewportOnly.kind !== 'breakpoint' ) {
 				fallbackCss = viewportOnly.css;
-			} else {
-				// No single viewport expression fits, but the sweep still saw the
-				// element at every width. Should the percentage be refused, follow
-				// those sizes per regime rather than freeze the capture width's.
-				const sampled = learnSegmentedFluidModel( viewportSamples, { holdUnfitted: true } );
-				if ( sampled !== null ) {
-					sampledCss = segmentedCss( `[${ SEGMENT_ATTRIBUTE }="${ id }"]`, property, sampled.segments );
-				}
 			}
 		}
 		// A captured runtime can give a parent a definite height that disappears

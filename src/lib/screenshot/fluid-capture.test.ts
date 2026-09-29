@@ -153,6 +153,81 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		await page.close();
 	}, 20_000 );
 
+	it( 'keeps a gallery image fluid through a zero-width picture parent', async () => {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		await page.setContent( `
+			<div id="item" style="width:412px;height:412px"><picture><img id="image" style="width:412px;height:412px"></picture></div>
+			<script>
+				const sizes = { 390:294, 600:287, 768:281 };
+				const update = () => {
+					const size = sizes[innerWidth] ?? Math.round(innerWidth * 0.3 - 20);
+					for (const id of ['item', 'image']) {
+						const element = document.getElementById(id);
+						element.style.width = size + 'px';
+						element.style.height = size + 'px';
+					}
+				};
+				addEventListener('resize', update);
+				update();
+			</script>
+		` );
+		await learnAndApplyFluidGeometry( page, { settleMs: 30 } );
+		const html = await page.evaluate( () => {
+			document.querySelectorAll( 'script' ).forEach( ( script ) => script.remove() );
+			return document.documentElement.outerHTML;
+		} );
+		const copy = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		await copy.setContent( html );
+		for ( const [ width, expected ] of [ [ 390, 294 ], [ 768, 281 ], [ 1440, 412 ], [ 1600, 460 ], [ 1728, 498 ] ] ) {
+			await copy.setViewportSize( { width, height: 900 } );
+			const box = await copy.locator( '#image' ).boundingBox();
+			expect( Math.abs( box!.width - expected ), `image at ${ width }` ).toBeLessThanOrEqual( 2 );
+		}
+		await copy.close();
+		await page.close();
+	}, 30_000 );
+
+	it( 'keeps a fluid tile wrapper sized when its intermediate parent shrink-wraps it', async () => {
+		const page = await browser.newPage( { viewport: { width: 980, height: 900 } } );
+		await page.setContent( `
+			<div style="position:relative;width:100vw">
+				<div id="item" style="position:absolute;top:0;left:0;width:253px;height:253px">
+					<div id="shrink"><div id="wrapper" style="width:253px;height:253px">
+						<div id="tile" style="width:253px;height:253px"></div>
+					</div></div>
+				</div>
+			</div>
+			<script>
+				const update = () => {
+					const width = Math.max(253, Math.round(innerWidth / 3 - 73));
+					for (const id of ['item', 'wrapper', 'tile']) {
+						const element = document.getElementById(id);
+						element.style.width = width + 'px';
+						element.style.height = width + 'px';
+					}
+				};
+				addEventListener('resize', update);
+				update();
+			</script>
+		` );
+		await learnAndApplyFluidGeometry( page, { settleMs: 30 } );
+		const html = await page.evaluate( () => {
+			document.querySelectorAll( 'script' ).forEach( ( script ) => script.remove() );
+			return document.documentElement.outerHTML;
+		} );
+		const copy = await browser.newPage( { viewport: { width: 980, height: 900 } } );
+		await copy.setContent( html );
+		for ( const [ width, expected ] of [ [ 390, 253 ], [ 768, 253 ], [ 1440, 407 ], [ 1600, 460 ], [ 1728, 503 ] ] ) {
+			await copy.setViewportSize( { width, height: 900 } );
+			for ( const id of [ 'item', 'wrapper', 'tile' ] ) {
+				const box = await copy.locator( `#${ id }` ).boundingBox();
+				expect( Math.abs( box!.width - expected ), `${ id } at ${ width }` ).toBeLessThanOrEqual( 2 );
+			}
+		}
+		await copy.close();
+		await page.close();
+	}, 30_000 );
+
 	it( 'preserves responsive wrapper reflow across desktop regimes', async () => {
 		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
 		await page.setContent( `
