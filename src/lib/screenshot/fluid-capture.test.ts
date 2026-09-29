@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { chromium, type Browser } from 'playwright';
 import { learnAndApplyFluidGeometry } from './fluid-capture.js';
 
@@ -11,6 +11,48 @@ describe( 'learnAndApplyFluidGeometry', () => {
 
 	afterAll( async () => {
 		await browser.close();
+	} );
+
+	it( 'preserves minimum sizing and blank paragraph typography without a width sweep', async () => {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		try {
+			await page.setContent( `<p id="blank" style="font-size:12px;line-height:normal;margin:0;min-height:14px"><br></p>
+				<div style="min-width:100px;max-width:500px;min-height:20px"></div>
+				<div style="width:50%;height:auto"></div>` );
+			const original = await page.locator( '#blank' ).getAttribute( 'style' );
+			const originalHeight = await page.locator( '#blank' ).evaluate( element => element.getBoundingClientRect().height );
+			const resize = vi.spyOn( page, 'setViewportSize' );
+			const result = await learnAndApplyFluidGeometry( page, { settleMs: 10 } );
+			expect( resize ).not.toHaveBeenCalled();
+			expect( result.applied ).toBe( 0 );
+			expect( await page.locator( '#blank' ).getAttribute( 'style' ) ).toBe( original );
+			expect( await page.locator( '#blank' ).evaluate( element => element.getBoundingClientRect().height ) ).toBe( originalHeight );
+		} finally {
+			await page.close();
+		}
+	} );
+
+	it( 'still learns runtime-sized text, generated glyphs, and explicit blank spacers', async () => {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		try {
+			await page.setContent( `<style>#glyph::before{content:'★'}</style>
+				<p id="text" style="font-size:18px">Text<br></p>
+				<p id="glyph" style="font-size:18px"><br></p>
+				<p id="spacer" style="width:720px"><br></p>
+				<script>function update(){
+					document.getElementById('text').style.fontSize = innerWidth / 80 + 'px';
+					document.getElementById('glyph').style.fontSize = innerWidth / 80 + 'px';
+					document.getElementById('spacer').style.width = innerWidth / 2 + 'px';
+				} addEventListener('resize',update);update();</script>` );
+			const result = await learnAndApplyFluidGeometry( page, { widths: [ 390, 768, 1440 ], settleMs: 50 } );
+			expect( result.applied ).toBeGreaterThanOrEqual( 3 );
+			for ( const id of [ 'text', 'glyph' ] ) {
+				expect( await page.locator( `#${ id }` ).getAttribute( 'style' ) ).toContain( 'vw' );
+			}
+			expect( await page.locator( '#spacer' ).getAttribute( 'style' ) ).toMatch( /(?:50vw|100%)/ );
+		} finally {
+			await page.close();
+		}
 	} );
 
 	it( 'never learns a top offset: anchor targets move with their section instead', async () => {
