@@ -20,12 +20,13 @@ describe( 'learnAndApplyFluidGeometry', () => {
 				<div style="min-width:100px;max-width:500px;min-height:20px"></div>
 				<div style="width:50%;height:auto"></div>` );
 			const original = await page.locator( '#blank' ).getAttribute( 'style' );
+			const originalHeight = await page.locator( '#blank' ).evaluate( element => element.getBoundingClientRect().height );
 			const resize = vi.spyOn( page, 'setViewportSize' );
 			const result = await learnAndApplyFluidGeometry( page, { settleMs: 10 } );
 			expect( resize ).not.toHaveBeenCalled();
 			expect( result.applied ).toBe( 0 );
 			expect( await page.locator( '#blank' ).getAttribute( 'style' ) ).toBe( original );
-			expect( await page.locator( '#blank' ).evaluate( element => element.getBoundingClientRect().height ) ).toBe( 14 );
+			expect( await page.locator( '#blank' ).evaluate( element => element.getBoundingClientRect().height ) ).toBe( originalHeight );
 		} finally {
 			await page.close();
 		}
