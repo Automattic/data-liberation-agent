@@ -29,7 +29,7 @@ export const SEGMENT_STYLE_ATTRIBUTE = 'data-dla-fluid-rules';
 /** Attribute pattern used by the exporter to recognize those blocks. */
 export const FLUID_RULES_STYLE_ATTRIBUTE = /\bdata-dla-fluid-rules\b/i;
 /** Only geometry that a runtime plausibly derives from viewport width. */
-const LEARNABLE_PROPERTIES = [ 'width', 'height', 'font-size', 'padding-top', 'transform-x' ] as const;
+const LEARNABLE_PROPERTIES = [ 'width', 'height', 'font-size', 'padding-top', 'transform-x', 'inset-top', 'inset-left' ] as const;
 
 function isPureXTranslationMatrix( matrix: readonly number[] ): boolean {
 	return (
@@ -101,7 +101,9 @@ export async function learnAndApplyFluidGeometry(
 				const carriesPixelSize = /\b(?:width|height|font-size|padding-top)\s*:\s*\d/.test( style );
 				const carriesPixelCustomProperty = /(?:^|;)\s*--[-a-zA-Z0-9_]+\s*:\s*-?\d+(?:\.\d+)?px\s*(?:;|$)/.test( style );
 				const carriesMatrixTransform = /(?:^|;)\s*transform\s*:\s*matrix\(/.test( style );
-				if ( ! carriesPixelSize && ! carriesPixelCustomProperty && ! carriesMatrixTransform ) {
+				const carriesAbsoluteInset = getComputedStyle( element ).position === 'absolute' &&
+					/(?:^|;)\s*inset\s*:\s*-?\d+(?:\.\d+)?px\s+auto\s+auto\s+-?\d+(?:\.\d+)?px\s*(?:;|$)/.test( style );
+				if ( ! carriesPixelSize && ! carriesPixelCustomProperty && ! carriesMatrixTransform && ! carriesAbsoluteInset ) {
 					continue;
 				}
 				element.setAttribute( attribute, String( index++ ) );
@@ -149,6 +151,13 @@ export async function learnAndApplyFluidGeometry(
 					const elementProperties = [ ...new Set( [ ...properties, ...customProperties ] ) ];
 					const parent = element.parentElement;
 					for ( const property of elementProperties ) {
+						if ( property === 'inset-top' || property === 'inset-left' ) {
+							const inset = /(?:^|;)\s*inset\s*:\s*(-?\d+(?:\.\d+)?)px\s+auto\s+auto\s+(-?\d+(?:\.\d+)?)px\s*(?:;|$)/.exec( style );
+							values[ property ] = getComputedStyle( element ).position === 'absolute' && inset
+								? Number( inset[ property === 'inset-top' ? 1 : 2 ] ) : null;
+							containers[ property ] = null;
+							continue;
+						}
 						if ( property === 'transform-x' ) {
 							const transform = /(?:^|;)\s*transform\s*:\s*matrix\(([^)]+)\)/.exec( style );
 							const matrix = transform?.[ 1 ]?.split( ',' ).map( Number );
@@ -184,7 +193,7 @@ export async function learnAndApplyFluidGeometry(
 								: null;
 					}
 					for ( const property of elementProperties ) {
-						if ( property === 'transform-x' ) continue;
+						if ( property === 'transform-x' || property === 'inset-top' || property === 'inset-left' ) continue;
 						const match = new RegExp( `(?:^|;)\\s*${ property }\\s*:\\s*(-?\\d+(?:\\.\\d+)?)px` ).exec( style );
 						values[ property ] = match ? Number( match[ 1 ] ) : null;
 						if ( property.startsWith( '--' ) && ! match ) {
@@ -236,6 +245,7 @@ export async function learnAndApplyFluidGeometry(
 	for ( const [ key, samples ] of observations ) {
 		const [ id, property ] = key.split( ':' ) as [ string, LearnableProperty ];
 		const transformX = property === 'transform-x';
+		const insetAxis = property === 'inset-top' || property === 'inset-left';
 		const customProperty = property.startsWith( '--' );
 		const modelSamples = customProperty ? widestFiniteRun( samples ) : samples;
 		const wholeRangeModel = learnFluidModel( modelSamples );
@@ -251,8 +261,25 @@ export async function learnAndApplyFluidGeometry(
 		// instead of freezing.
 		const segmented =
 			wholeRangeModel.kind === 'breakpoint'
-				? learnSegmentedFluidModel( modelSamples, customProperty ? { holdUnfitted: true } : { holdNarrowForBoundedAffine: true } )
+				? learnSegmentedFluidModel( modelSamples, customProperty || insetAxis
+					? { holdUnfitted: true, holdNarrowForBoundedAffine: true }
+					: { holdNarrowForBoundedAffine: true } )
 				: null;
+		if ( insetAxis ) {
+			const segments = segmented?.segments ?? ( wholeRangeModel.kind !== 'breakpoint' && wholeRangeModel.kind !== 'constant' && wholeRangeModel.kind !== 'container'
+				? [ { model: wholeRangeModel, minWidth: null, maxWidth: null } ] : null );
+			if ( segments === null ) continue;
+			learned.push( {
+				id,
+				property: property === 'inset-top' ? 'top' : 'left',
+				css: '',
+				fallbackCss: null,
+				containerRelative: false,
+				sampledCss: null,
+				segmentedCss: segmentedCss( `[${ SEGMENT_ATTRIBUTE }="${ id }"]`, property === 'inset-top' ? 'top' : 'left', segments ),
+			} );
+			continue;
+		}
 		if ( customProperty && model.kind !== 'breakpoint' && modelSamples.length >= 3 ) {
 			const customModel =
 				model.kind === 'container'
