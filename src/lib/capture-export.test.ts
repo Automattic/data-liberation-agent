@@ -5467,6 +5467,76 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		);
 	} );
 
+	it( 'localizes compact cross-origin CSS imports and nested font faces with their media and stylesheet bases', async () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-nested-fonts-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'screenshots', 'resources/css', 'resources/fonts' ] )
+			mkdirSync( join( outputDir, path ), { recursive: true } );
+		const sourceCss = 'https://example.com/assets/site.css';
+		const importedCss = 'https://styles.example.net/css/theme.css';
+		const nestedCss = 'https://styles.example.net/css/nested/face.css';
+		const font = 'https://styles.example.net/css/fonts/serif.woff2';
+		writeFileSync( join( outputDir, 'html/homepage.html' ),
+			`<html><head><link rel="stylesheet" href="${ sourceCss }"></head><body><main>Typography</main></body></html>` );
+		writeFileSync( join( outputDir, 'resources/css/site.css' ),
+			`@import"${ importedCss }" screen;main{font-family:"Portable Serif",serif}` );
+		writeFileSync( join( outputDir, 'resources/css/theme.css' ),
+			'@import url("nested/face.css") screen and (min-width: 768px);' );
+		writeFileSync( join( outputDir, 'resources/css/face.css' ),
+			'@font-face{font-family:"Portable Serif";src:url("../fonts/serif.woff2") format("woff2");font-weight:400}main{font-family:"Portable Serif",serif}' );
+		writeFileSync( join( outputDir, 'resources/fonts/serif.woff2' ), 'font-bytes' );
+		writeFileSync( join( outputDir, 'resources/manifest.json' ), JSON.stringify( {
+			version: 1, resources: {
+				[ sourceCss ]: { path: 'resources/css/site.css', contentType: 'text/css' },
+				[ importedCss ]: { path: 'resources/css/theme.css', contentType: 'text/css' },
+				[ nestedCss ]: { path: 'resources/css/face.css', contentType: 'text/css' },
+				[ font ]: { path: 'resources/fonts/serif.woff2', contentType: 'font/woff2' },
+			}, failures: [],
+		} ) );
+		writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( {
+			version: 1, entries: { 'https://example.com/': { html: 'html/homepage.html' } },
+		} ) );
+
+		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [] } );
+
+		const website = join( outputDir, 'website' );
+		expect( readFileSync( join( website, 'css/site.css' ), 'utf8' ) )
+			.toContain( '@import"/css/theme.css" screen;' );
+		const theme = readFileSync( join( website, 'css/theme.css' ), 'utf8' );
+		expect( theme ).toContain( '@import url("/css/face.css")' );
+		expect( theme ).toContain( 'screen and (min-width: 768px)' );
+		const face = readFileSync( join( website, 'css/face.css' ), 'utf8' );
+		expect( face ).toContain( 'font-family:"Portable Serif"' );
+		expect( face ).toContain( 'url("/fonts/serif.woff2")' );
+		expect( readFileSync( join( website, 'fonts/serif.woff2' ), 'utf8' ) ).toBe( 'font-bytes' );
+		expect( readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' ) ).not.toContain( 'referenced same-origin dependency was not captured' );
+		const server = await startStaticServer( website );
+		let browser: Awaited< ReturnType< typeof chromium.launch > > | undefined;
+		try {
+			browser = await chromium.launch();
+			for ( const width of [ 390, 768, 1440 ] ) {
+				const page = await browser.newPage( { viewport: { width, height: 800 } } );
+				const external: string[] = [];
+				const localFonts: string[] = [];
+				page.on( 'request', ( request ) => {
+					if ( new URL( request.url() ).origin !== new URL( server.url ).origin ) external.push( request.url() );
+					if ( request.url().endsWith( '/fonts/serif.woff2' ) ) localFonts.push( request.url() );
+				} );
+				await page.goto( server.url );
+				await page.evaluate( () => document.fonts.ready );
+				expect( await page.locator( 'main' ).evaluate( ( element ) => getComputedStyle( element ).fontFamily ) )
+					.toContain( 'Portable Serif' );
+				expect( external ).toEqual( [] );
+				if ( width >= 768 ) expect( localFonts ).toContain( `${ server.url }/fonts/serif.woff2` );
+				else expect( localFonts ).toEqual( [] );
+				await page.close();
+			}
+		} finally {
+			await browser?.close();
+			await server.close();
+		}
+	} );
+
 	it( 'omits failed @font-face src sentinels so captured woff and ttf can load', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-font-face-src-' ) );
 		dirs.push( outputDir );
