@@ -39,7 +39,7 @@ import { JsAggregator } from './js-aggregator.js';
 import { isAbsentDocumentError, isSourceCaptureUrl, nonHtmlDocumentError } from './absent-document.js';
 import { ManifestQueue, type ManifestEntry, type FailureEntry } from './manifest-queue.js';
 import { validateOutputDir, planArtifacts, type ArtifactPlan } from './output-layout.js';
-import { waitForStable, triggerLazyLoad, dismissOverlays } from './page-helpers.js';
+import { waitForStable, triggerLazyLoad, dismissOverlays, pageResponds } from './page-helpers.js';
 import { CapturedResourceStore } from './resource-capture.js';
 import { enforceSameOrigin } from './same-origin.js';
 import { preserveStreamedVideoPosters } from './streamed-video.js';
@@ -840,6 +840,21 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		// re-capture, updateEntry's shallow spread REPLACES the prior dismissed[] with
 		// this run's — intended (we want the most-recent capture's dismissals, not a union).
 		entry.dismissed = [ ...( entry.dismissed ?? [] ), ...dismissedHere ];
+	}
+	// Every step above is bounded and best-effort, so a page whose script has
+	// taken over its main thread still arrives here. Nothing after this can make
+	// progress on it, so stop now with the real reason instead of letting the
+	// next unbounded evaluate wait for the renderer to die.
+	if ( ! ( await pageResponds( page, evaluateTimeoutMs ) ) ) {
+		failures.push( {
+			url,
+			viewport: viewport.id,
+			stage: 'evaluate',
+			error: `page stopped responding while settling (overlay dismissal / lazy load): no answer to an evaluate within ${ evaluateTimeoutMs }ms`,
+			timestamp: now(),
+			attempt: 1,
+		} );
+		return;
 	}
 
 	// Seam 1: deterministic adapter-declared removals on the settled page, so they
