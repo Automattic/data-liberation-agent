@@ -1,9 +1,14 @@
+import { existsSync } from 'node:fs';
 import { chromium } from 'playwright';
 import { describe, expect, it } from 'vitest';
 import { captureRouteNavigation, captureTriggeredDialogs, INTERACTION_STATES_SCHEMA } from './interaction-capture.js';
 import { wireCapturedDialogs, wireCapturedRouteNavigation } from '../static-dialogs.js';
 
-it.skipIf( process.env.SKIP_BROWSER_TESTS )( 'turns observed mobile client-routed tabs into native, keyboard-accessible routes without converting actions', async () => {
+// Browser-backed tests skip — not fail — in checkouts without Playwright's
+// Chromium (`npm install` does not download it; `npm run setup:browser` does).
+const skipBrowserTests = Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chromium.executablePath() );
+
+it.skipIf( skipBrowserTests )( 'turns observed mobile client-routed tabs into native, keyboard-accessible routes without converting actions', async () => {
 	const browser = await chromium.launch( { headless: true } );
 	const origin = 'https://route-tabs.test';
 	const source = `<!doctype html><html><head><style>
@@ -64,7 +69,7 @@ it.skipIf( process.env.SKIP_BROWSER_TESTS )( 'turns observed mobile client-route
 }, 30_000 );
 
 describe( 'captureTriggeredDialogs', () => {
-	it.skipIf( process.env.SKIP_BROWSER_TESTS )(
+	it.skipIf( skipBrowserTests )(
 		'captures initially visible dialogs with verified native dismissal and bounds probes',
 		async () => {
 			const browser = await chromium.launch( { headless: true } );
@@ -117,7 +122,7 @@ describe( 'captureTriggeredDialogs', () => {
 		30_000
 	);
 
-	it.skipIf( process.env.SKIP_BROWSER_TESTS )(
+	it.skipIf( skipBrowserTests )(
 		'discovers an unbound dialog trigger',
 		async () => {
 			const browser = await chromium.launch( { headless: true } );
@@ -152,7 +157,7 @@ describe( 'captureTriggeredDialogs', () => {
 		30_000
 	);
 
-	it.skipIf( process.env.SKIP_BROWSER_TESTS )(
+	it.skipIf( skipBrowserTests )(
 		'preserves a generic combobox listbox selection and keyboard dismissal offline',
 		async () => {
 			const browser = await chromium.launch( { headless: true } );
@@ -187,7 +192,7 @@ describe( 'captureTriggeredDialogs', () => {
 		30_000
 	);
 
-	it.skipIf( process.env.SKIP_BROWSER_TESTS )(
+	it.skipIf( skipBrowserTests )(
 		'captures a listbox opened by an aria-haspopup=listbox trigger',
 		async () => {
 			const browser = await chromium.launch( { headless: true } );
@@ -241,7 +246,7 @@ describe( 'captureTriggeredDialogs', () => {
 		30_000
 	);
 
-	it.skipIf( process.env.SKIP_BROWSER_TESTS )(
+	it.skipIf( skipBrowserTests )(
 		'preserves an event-created navigation dialog without claiming a menu-shaped no-op',
 		async () => {
 			const browser = await chromium.launch( { headless: true } );
@@ -295,7 +300,7 @@ describe( 'captureTriggeredDialogs', () => {
 		30_000
 	);
 
-	it.skipIf( process.env.SKIP_BROWSER_TESTS )(
+	it.skipIf( skipBrowserTests )(
 		'captures a navigation drawer opened by a role="button" menu control',
 		async () => {
 			const browser = await chromium.launch( { headless: true } );
@@ -325,7 +330,7 @@ describe( 'captureTriggeredDialogs', () => {
 		30_000
 	);
 
-	it.skipIf( process.env.SKIP_BROWSER_TESTS )(
+	it.skipIf( skipBrowserTests )(
 		'captures a menu trigger whose hit point is covered by an ancestor',
 		async () => {
 			const browser = await chromium.launch( { headless: true } );
@@ -364,7 +369,7 @@ describe( 'captureTriggeredDialogs', () => {
 		30_000
 	);
 
-	it.skipIf( process.env.SKIP_BROWSER_TESTS )(
+	it.skipIf( skipBrowserTests )(
 		'names the intercepting element when an intercepted trigger cannot be activated',
 		async () => {
 			const browser = await chromium.launch( { headless: true } );
@@ -393,7 +398,7 @@ describe( 'captureTriggeredDialogs', () => {
 		30_000
 	);
 
-	it.skipIf( process.env.SKIP_BROWSER_TESTS )(
+	it.skipIf( skipBrowserTests )(
 		'keeps a captured flex menu usable when its scrollable links depend on the root layout',
 		async () => {
 			const browser = await chromium.launch( { headless: true } );
@@ -441,7 +446,7 @@ describe( 'captureTriggeredDialogs', () => {
 		30_000
 	);
 
-	it.skipIf( process.env.SKIP_BROWSER_TESTS )(
+	it.skipIf( skipBrowserTests )(
 		'waits for an opening menu instead of capturing a background inside its transparent ancestor',
 		async () => {
 			const browser = await chromium.launch( { headless: true } );
@@ -470,7 +475,7 @@ describe( 'captureTriggeredDialogs', () => {
 		30_000
 	);
 
-	it.skipIf( process.env.SKIP_BROWSER_TESTS )(
+	it.skipIf( skipBrowserTests )(
 		'does not count a navigation surface inside a transparent wrapper as already visible',
 		async () => {
 			const browser = await chromium.launch( { headless: true } );
@@ -495,7 +500,7 @@ describe( 'captureTriggeredDialogs', () => {
 		30_000
 	);
 
-	it.skipIf( process.env.SKIP_BROWSER_TESTS )(
+	it.skipIf( skipBrowserTests )(
 		'captures the in-flow panel a menu button reveals, not an unrelated large nav, and renders it as a dropdown',
 		async () => {
 			const browser = await chromium.launch( { headless: true } );
@@ -534,7 +539,7 @@ describe( 'captureTriggeredDialogs', () => {
 		30_000
 	);
 
-	it.skipIf( process.env.SKIP_BROWSER_TESTS )(
+	it.skipIf( skipBrowserTests )(
 		'dismisses portable triggered dialogs by close control and Escape without handling Escape elsewhere',
 		async () => {
 			const browser = await chromium.launch( { headless: true } );
@@ -605,7 +610,7 @@ describe( 'captureTriggeredDialogs', () => {
 		30_000
 	);
 
-	it.skipIf( process.env.SKIP_BROWSER_TESTS )(
+	it.skipIf( skipBrowserTests )(
 		'captures a bounded inert snapshot after a dialog trigger click',
 		async () => {
 			const browser = await chromium.launch( { headless: true } );
@@ -655,7 +660,7 @@ describe( 'captureTriggeredDialogs', () => {
 		30_000
 	);
 
-	it.skipIf( process.env.SKIP_BROWSER_TESTS )(
+	it.skipIf( skipBrowserTests )(
 		'keeps an anchor-button mobile menu that slides in from off-screen',
 		async () => {
 			const browser = await chromium.launch( { headless: true } );
@@ -725,7 +730,7 @@ describe( 'captureTriggeredDialogs', () => {
 		30_000
 	);
 
-	it.skipIf( process.env.SKIP_BROWSER_TESTS )(
+	it.skipIf( skipBrowserTests )(
 		'captures a current-route button popup with generic aria-haspopup and preserves its links offline',
 		async () => {
 			const browser = await chromium.launch( { headless: true } );
@@ -785,7 +790,7 @@ describe( 'captureTriggeredDialogs', () => {
 		30_000
 	);
 
-	it.skipIf( process.env.SKIP_BROWSER_TESTS )(
+	it.skipIf( skipBrowserTests )(
 		'only clicks the first eight unambiguous dialog triggers',
 		async () => {
 			const browser = await chromium.launch( { headless: true } );

@@ -1,8 +1,9 @@
 import { cleanupPolicy } from '../source-cleanup.js';
 import { createServer } from 'node:http';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { chromium } from 'playwright';
 import { PNG } from 'pngjs';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
@@ -15,6 +16,10 @@ import {
 	routeSourceMap,
 } from './check.js';
 import type { LayoutObservation } from './score.js';
+
+// Tests that launch a real browser skip — not fail — in checkouts without
+// Playwright's Chromium (`npm install` does not download it; `npm run setup:browser` does).
+const skipBrowserTests = Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chromium.executablePath() );
 
 const dirs: string[] = [];
 afterEach( () => {
@@ -164,7 +169,7 @@ describe( 'checkFidelity', () => {
 		expect( report.scores.every( ( score ) => score.failures.some( ( reason ) => reason.includes( 'source motion not reproduced' ) ) ) ).toBe( true );
 	} );
 
-	it( 'ignores a clipped focus-only fragment link while retaining the matching visible link', async () => {
+	it.skipIf( skipBrowserTests )( 'ignores a clipped focus-only fragment link while retaining the matching visible link', async () => {
 		const visible = '<nav><a href="#content">Skip to content</a></nav><main id="content"><h1>Home</h1><p>Visible editorial text.</p></main>';
 		const candidate = '<style>.focus-only{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}.focus-only:focus{clip-path:none;width:auto;height:auto}</style><a class="focus-only" href="#content">Skip to content</a>';
 		const server = createServer( ( request, response ) => {
@@ -187,7 +192,7 @@ describe( 'checkFidelity', () => {
 		}
 	}, 90_000 );
 
-	it( 'measures a source subpage in place when its nav links to fragments on another page', async () => {
+	it.skipIf( skipBrowserTests )( 'measures a source subpage in place when its nav links to fragments on another page', async () => {
 		// A client-routed builder: the subpage's nav links to sections of the home
 		// page. Following one routes the app home, so the source must be measured
 		// without treating another page's fragment as an in-page anchor.
@@ -535,7 +540,7 @@ ${ routed ? `<script>document.addEventListener('click', (event) => {
 	} );
 } );
 
-describe( 'checkFidelity with a consent banner on the source', () => {
+describe.skipIf( skipBrowserTests )( 'checkFidelity with a consent banner on the source', () => {
 	// The live source raises a cookie banner; capture dismisses it before it
 	// serializes, so the copy never has one. Measuring the source with the
 	// banner still up made every route on such a site fail by exactly the
