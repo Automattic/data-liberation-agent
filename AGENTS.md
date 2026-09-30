@@ -64,9 +64,9 @@ To add a platform: create `src/adapters/<platform>/` with an `index.ts` that ass
 `compare` is what makes the one-for-one claim defensible, and it runs in two tiers because they answer different questions at wildly different cost.
 
 - **Self-consistency** (`src/lib/fidelity/self-consistency.ts`) — every route, offline, milliseconds. Anchors resolving to exactly one target, internal links landing on a real file, no asset still pointing at the origin. Links resolve through the same resolver the preview server uses, so a dangling link it reports is one a reader would hit.
-- **Source fidelity** (`src/lib/fidelity/check.ts`) — a sample, in a browser, ~25s per route. Text, geometry and reflow at widths the capture never sampled, plus dialogs. Routes come from the receipt's route table and are spread across it, spanning both ends so whatever sorts last is still reachable.
+- **Frozen fidelity** (`src/lib/fidelity/check.ts`) — all receipt routes by default, in a browser, against capture-session source evidence at 390/768/1440 in baseline state. Missing/stale/ambiguous evidence stays unproven. A candidate selects portable capture → candidate materialization; only explicit `--stage drift` revisits the live source with route sampling, unsampled widths and interaction checks. See `docs/fidelity-reference.md`.
 
-Both must pass for exit 0. When adding a check, put it in the cheap tier if it can be answered from disk.
+Both must pass for exit 0 within the declared scope. Baseline excludes dialogs, zoom and motion; downstream acceptance must request required states or leave them pending. When adding a check, put it in the cheap tier if it can be answered from disk.
 
 Three things the gate has been wrong about before, all worth remembering:
 

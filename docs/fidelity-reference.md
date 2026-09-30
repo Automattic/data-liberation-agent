@@ -83,6 +83,9 @@ Readiness is bounded to the settled layout, cleanup audit, decoded visible media
 fonts and observed runtime errors. It cannot prove that arbitrary application
 work has finished. V1 freezes **baseline only**; dialogs, zoom interactions and
 motion remain explicit unknowns. Requesting those states cannot certify a pass.
+Downstream acceptance must declare every required state via `states` (for example,
+`['baseline', 'dialog', 'zoom', 'motion']`) or keep those requirements pending in
+its own policy. A default baseline pass does not satisfy interaction acceptance.
 Repeated filename/content media requires unique semantic ancestor role/label and
 image-label correspondence. DOM sibling indices and nearest geometry do not
 establish correspondence; lost/duplicate roles become ambiguous/unproven.
@@ -103,3 +106,17 @@ source runtime failures. The relocated-bundle workflow in
 `scripts/test-runtime.mjs` checks the same public default against a mutated source
 without requesting it. These are reproducible local evidence, independent of any
 destination provider or acceptance orchestrator.
+
+## Migrating live callers
+
+The default change is behavioral: old runs without a reference now return
+unproven instead of visiting today's source. Recapture for frozen checks, or
+explicitly choose `stage: 'drift'` for live diagnostics. Live `observe`,
+`sampleSize`, and `motionContract` callers must also choose drift; they are
+rejected by frozen stages. The CLI and MCP forward the stage, and the portable
+motion verifier explicitly selects drift. Candidate callers now measure
+portable capture → candidate, rather than live source → candidate, unless they
+request drift. Compose capture and materialization results for chain acceptance.
+
+This repository supplies the stage APIs and evidence only. Unified Studio/SSI
+acceptance-runner integration belongs to the separate SSI #1925 executor.

@@ -83,7 +83,7 @@ try {
     liveHtml = html.replace('Runtime fixture', 'Changed live source').replace('Owner website', 'New recommendations');
     const requestsBeforeReplay = originRequests;
     const comparison = await runtime.checkFidelity({ directory: outputDir, settleMs: 100 });
-    assert.equal(comparison.pass, true, JSON.stringify(comparison.scores));
+    assert.equal(comparison.pass, true, JSON.stringify(comparison));
     assert.equal(comparison.stage, 'capture');
     assert.equal(comparison.status, 'proven');
     const reference = JSON.parse(await readFile(join(outputDir, 'fidelity-reference.json'), 'utf8'));
@@ -95,6 +95,8 @@ try {
     const damaged = await runtime.checkFidelity({ directory: outputDir, widths: [1440], settleMs: 100 });
     assert.equal(damaged.pass, false, 'Loss of retained owner content must fail');
     assert.equal(damaged.stage, 'capture');
+    assert.equal(damaged.status, 'failed');
+    assert.ok(damaged.scores.some((score) => score.stage === 'capture' && !score.pass));
     assert.equal(originRequests, requestsBeforeReplay);
     await writeFile(artifactPath, artifact);
     const candidate = createServer((_request, response) => {
@@ -108,10 +110,42 @@ try {
       assert.equal(materialization.status, 'failed');
       assert.ok(materialization.scores.some((score) => score.stage === 'materialization' && !score.pass));
       assert.equal(originRequests, requestsBeforeReplay);
+      await writeFile(artifactPath, artifact.replaceAll(ownerText.trim(), ''));
+      const staleCapture = await runtime.checkFidelity({ directory: outputDir, candidateUrl: `http://127.0.0.1:${candidate.address().port}`, settleMs: 100 });
+      assert.equal(staleCapture.status, 'unproven');
+      assert.equal(staleCapture.pass, false);
+      assert.ok(staleCapture.pending.every((item) => item.stage === 'materialization' && /digest mismatch/.test(item.reason)));
+      await writeFile(artifactPath, artifact);
     } finally {
       candidate.closeAllConnections();
       await new Promise((resolve) => candidate.close(resolve));
     }
+    const referencePath = join(outputDir, 'fidelity-reference.json');
+    const referenceBytes = await readFile(referencePath, 'utf8');
+    for (const change of [
+      (value) => { value.receipt.sha256 = 'stale'; },
+      (value) => { value.entries = value.entries.filter((entry) => entry.viewport !== 768); },
+      (value) => { value.entries.push(structuredClone(value.entries[0])); },
+    ]) {
+      const value = JSON.parse(referenceBytes);
+      change(value);
+      await writeFile(referencePath, JSON.stringify(value));
+      const unproven = await runtime.checkFidelity({ directory: outputDir, settleMs: 100 });
+      assert.equal(unproven.status, 'unproven');
+      assert.equal(unproven.pass, false);
+      assert.ok(unproven.pending.length > 0);
+    }
+    await writeFile(referencePath, referenceBytes);
+    const states = await runtime.checkFidelity({ directory: outputDir, widths: [1440], states: ['dialog', 'zoom', 'motion'] });
+    assert.equal(states.status, 'unproven');
+    assert.equal(states.pass, false);
+    assert.deepEqual(states.pending.map((item) => item.state), ['dialog', 'zoom', 'motion']);
+    await rm(referencePath);
+    const missing = await runtime.checkFidelity({ directory: outputDir });
+    assert.equal(missing.status, 'unproven');
+    assert.equal(missing.pass, false);
+    await writeFile(referencePath, referenceBytes);
+    assert.equal(originRequests, requestsBeforeReplay, 'No frozen failure or pending evidence may revisit origin');
   }
 
   const canonical = await readFile(join(outputDir, 'website', 'index.html'), 'utf8');

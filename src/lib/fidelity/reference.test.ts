@@ -62,6 +62,9 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			const brokenCapture = await checkFidelity( options );
 			expect( brokenCapture.status ).toBe( 'failed' );
 			expect( brokenCapture.scores.some( score => score.stage === 'capture' && score.failures.some( failure => /image/.test( failure ) ) ) ).toBe( true );
+			const staleBaseline = await checkFidelity( { ...options, candidateUrl: origin } );
+			expect( staleBaseline.status ).toBe( 'unproven' );
+			expect( staleBaseline.pending!.every( item => item.stage === 'materialization' && /digest mismatch/.test( item.reason ) ) ).toBe( true );
 			writeFileSync( artifactPath, artifact );
 			candidate = createServer( ( request, response ) => {
 				response.setHeader( 'content-type', request.url?.endsWith( '.png' ) ? 'image/png' : 'text/html' );
@@ -74,6 +77,7 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			expect( requests ).toBe( before );
 			for ( const change of [
 				( value: FidelityReference ) => { value.entries = value.entries.filter( entry => entry.viewport !== 768 ); },
+				( value: FidelityReference ) => { value.entries.push( structuredClone( value.entries[0]! ) ); },
 				( value: FidelityReference ) => { value.receipt.sha256 = 'stale'; },
 				( value: FidelityReference ) => { value.entries[0]!.observation!.sha256 = 'changed'; },
 				( value: FidelityReference ) => { value.scope.sourceUrls.push( `${ origin }/missing/` ); },
@@ -90,8 +94,10 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			writeFileSync( sourceDocument, '<p>Changed source observation</p>' );
 			expect( ( await checkFidelity( options ) ).status ).toBe( 'unproven' );
 			writeFileSync( sourceDocument, documentBytes );
-			const unsupported = await checkFidelity( { ...options, states: [ 'baseline', 'zoom' ] } );
-			expect( unsupported.pending!.some( item => item.state === 'zoom' ) ).toBe( true );
+			const unsupported = await checkFidelity( { ...options, states: [ 'baseline', 'dialog', 'zoom', 'motion' ] } );
+			expect( unsupported.status ).toBe( 'unproven' );
+			expect( unsupported.pass ).toBe( false );
+			for ( const state of [ 'dialog', 'zoom', 'motion' ] ) expect( unsupported.pending!.some( item => item.state === state ) ).toBe( true );
 			unlinkSync( join( directory, manifest.entries[0]!.screenshot!.path ) );
 			expect( ( await checkFidelity( options ) ).status ).toBe( 'unproven' );
 			unlinkSync( manifestPath );

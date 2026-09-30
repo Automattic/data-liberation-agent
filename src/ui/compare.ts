@@ -1,9 +1,9 @@
 // src/ui/compare.ts
 //
 // `data-liberation compare <dir>`: browser-compare the liberated copy to its
-// source at widths capture never sampled. `--screenshots` writes PNG evidence
-// and never decides pass/fail. `--candidate <url>` compares another rendered
-// copy of the site, such as one built from the capture, instead.
+// frozen capture-session source. `--screenshots` writes PNG evidence and never
+// decides pass/fail. `--candidate <url>` compares portable capture to candidate;
+// only explicit `--stage drift` revisits the live source at unsampled widths.
 //
 import { checkFidelity, type FidelityReport } from '../lib/fidelity/check.js';
 import type { MotionContract } from '../lib/fidelity/candidate-motion.js';
