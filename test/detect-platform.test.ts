@@ -24,6 +24,8 @@ describe('detectFromUrl (heuristics)', () => {
     ['https://eloisacalvinato.lovable.app/', 'lovable'],
     ['https://eloisacalvinato.lovable.app', 'lovable'],
     ['https://lovable.dev/projects/abc', 'lovable'],
+    ['https://heathercoxrichardson.substack.com/', 'substack'],
+    ['https://on.substack.com/p/some-post', 'substack'],
   ])('detects %s as %s', (url, platform) => {
     const detected = detectFromUrl(url);
     expect(detected).toBe(platform);
@@ -162,6 +164,38 @@ describe('detectFromHttp (fingerprinting)', () => {
         headers: new Map([['location', 'https://team.cloudflareaccess.com/cdn-cgi/access/login/example.com?redirect_url=%2F_emdash%2Fadmin']]),
       });
     const result = await detectFromHttp('https://example.com');
+    expect(result.platform).toBe('unknown');
+  });
+
+  // Substack signal values are from live custom-domain publications (2026-09):
+  // derekthompson.org, astralcodexten.com, slowboring.com.
+  it('does not treat a host merely containing "substack.com" as Substack', () => {
+    expect(detectFromUrl('https://substack.com.example.org/')).toBeNull();
+    expect(detectFromUrl('https://example.com/substack.com/')).toBeNull();
+  });
+
+  it.each([
+    ['x-served-by', 'Substack'],
+    ['x-cluster', 'substack'],
+  ])('detects a Substack custom domain from its %s header', (header, value) => {
+    const headers = new Headers([[header, value], ['server', 'cloudflare']]);
+    const result = detectFromDocument('https://www.derekthompson.org/', headers, '<html></html>');
+    expect(result.platform).toBe('substack');
+    expect(result.confidence).toBe('high');
+    expect(findAdapter(result.platform)).toMatchObject({ id: 'substack' });
+  });
+
+  it('detects Substack from its app bundle in page source', () => {
+    const html = '<script src="https://substackcdn.com/bundle/static/js/lib-router.3f2a9c1b.js" charset="utf-8"></script>';
+    const result = detectFromDocument('https://www.slowboring.com/', new Headers(), html);
+    expect(result.platform).toBe('substack');
+    expect(result.confidence).toBe('medium');
+  });
+
+  it('does not detect Substack on a page that only hotlinks a Substack image or embeds a post', () => {
+    const html = '<img src="https://substackcdn.com/image/fetch/w_1456,c_limit/https%3A%2F%2Fsubstack-post-media.s3.amazonaws.com%2Fpublic%2Fimages%2Fa.png">'
+      + '<iframe src="https://www.astralcodexten.com/embed" width="480" height="320"></iframe>';
+    const result = detectFromDocument('https://example.com', new Headers(), html);
     expect(result.platform).toBe('unknown');
   });
 

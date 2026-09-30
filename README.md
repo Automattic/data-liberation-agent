@@ -82,6 +82,7 @@ Naming an unknown target lists the registered ones.
 | HubSpot | Ready |
 | Shopify | Ready |
 | Squarespace | Ready |
+| Substack | Ready |
 | Webflow | Ready |
 | Weebly | Ready |
 | Wix | Ready |

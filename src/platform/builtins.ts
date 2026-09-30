@@ -20,6 +20,7 @@ import { hostingerAdapter } from '../adapters/hostinger/index.js';
 import { hubspotAdapter } from '../adapters/hubspot/index.js';
 import { shopifyAdapter } from '../adapters/shopify/index.js';
 import { squarespaceAdapter } from '../adapters/squarespace/index.js';
+import { substackAdapter } from '../adapters/substack/index.js';
 import { lovableAdapter } from '../adapters/lovable/index.js';
 import { webflowAdapter } from '../adapters/webflow/index.js';
 import { weeblyAdapter } from '../adapters/weebly/index.js';
@@ -43,6 +44,7 @@ const builtins: Platform[] = [
 	lovableAdapter,
 	shopifyAdapter,
 	squarespaceAdapter,
+	substackAdapter,
 	webflowAdapter,
 	weeblyAdapter,
 	wixAdapter,
