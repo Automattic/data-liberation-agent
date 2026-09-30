@@ -792,6 +792,8 @@ export interface ResponsiveVariantEvidence {
 	mobileOnlyElements?: number;
 	/** Shared components the phone layout re-parents, shipped once per viewport inside the collapsed document. */
 	divergedComponents?: number;
+	/** Shared elements whose per-viewport inline styles were projected into width-scoped rules. Present only when an equivalent collapse found differing inline styles. */
+	projectedInlineStyles?: number;
 }
 
 function responsiveVariantEvidence(
@@ -824,12 +826,16 @@ function responsiveVariantEvidence(
 	}
 	const sharedStyles =
 		styleBlocks( desktopHtml ).join( '\n' ) === styleBlocks( mobileHtml ).join( '\n' );
+	const projection = equivalentInlineProjection( desktopHtml, mobileHtml );
 	return {
 		variants: 1,
 		outcome: 'collapsed-equivalent',
 		reason:
 			'mobile document is structurally equivalent to desktop once capture-infrastructure attributes are normalized; shipped one document',
 		css: sharedStyles ? 'shared' : 'viewport-scoped',
+		...( projection && projection.projectedElements > 0
+			? { projectedInlineStyles: projection.projectedElements }
+			: {} ),
 	};
 }
 
@@ -1261,6 +1267,181 @@ function identitySubsetMerge(
 	};
 }
 
+interface EquivalentInlineProjection {
+	/** The projected desktop body: hook classes added, moved inline styles removed. */
+	body: string;
+	/** Width-scoped rules carrying each viewport's inline presentation. */
+	css: string;
+	projectedElements: number;
+}
+
+/**
+ * Nodes the body signature never sees cannot have moved the alignment between
+ * two structurally equivalent captures: embed hosts and media a runtime may
+ * render differently per viewport, inert script and style, runtime-id
+ * elements, comments, and attribute-less empty mount divs/spans (which the
+ * signature strips after dropping non-structural attributes).
+ */
+const SIGNATURE_TRANSPARENT_TAGS = new Set( [
+	'script',
+	'style',
+	'noscript',
+	'iframe',
+	'svg',
+	'map',
+	'area',
+	'picture',
+	'source',
+	'img',
+	'canvas',
+	'slot',
+] );
+
+/**
+ * Projects per-element inline presentation differences between two
+ * structurally equivalent responsive captures into width-scoped rules, the
+ * same projection an identity-subset collapse applies to shared components.
+ * The signature that decided the collapse compares structure, never style
+ * attributes, so equivalent trees can still carry per-viewport inline
+ * geometry — keeping only the desktop body would silently freeze mobile at
+ * the desktop value. Both trees are walked in parallel positionally, ignoring
+ * exactly the nodes the signature ignores; a `#id` selector stands when both
+ * captures share one stable id unique in the document, otherwise a
+ * deterministic hook class names the element. Any structural disagreement —
+ * the alignment guarantee the signature provides, re-checked while walking —
+ * returns undefined so the caller keeps the unprojected desktop body. Like
+ * `projectPair`, identical inline styles project nothing, a desktop inline
+ * style stays inline when mobile restates every property it sets, and a
+ * desktop property mobile never states moves both sides into width-scoped
+ * rules rather than leaking onto phones.
+ */
+function equivalentInlineProjection(
+	desktopHtml: string,
+	mobileHtml: string,
+	switchWidth: number = DEFAULT_SWITCH_WIDTH
+): EquivalentInlineProjection | undefined {
+	const desktopBody = responsiveBodyContent( desktopHtml );
+	const mobileBody = responsiveBodyContent( mobileHtml );
+	if ( desktopBody === undefined || mobileBody === undefined ) return undefined;
+	const $d = cheerio.load( `<body>${ desktopBody }</body>` );
+	const $m = cheerio.load( `<body>${ mobileBody }</body>` );
+	const transparent = ( $: cheerio.CheerioAPI, node: AnyNode ): boolean => {
+		if ( ! isElementNode( node ) ) return true;
+		if ( SIGNATURE_TRANSPARENT_TAGS.has( node.tagName ) ) return true;
+		const id = $( node ).attr( 'id' );
+		if ( id && isYuiRuntimeId( id ) ) return true;
+		if ( node.tagName !== 'div' && node.tagName !== 'span' ) return false;
+		for ( const attribute of Object.keys( node.attribs ?? {} ) ) {
+			if ( attribute === 'id' || attribute === 'name' ) {
+				const value = $( node ).attr( attribute ) ?? '';
+				// An unstable value is dropped from the signature, so it cannot
+				// make the element structural; a stable one does.
+				if ( value && ! isUnstableResponsiveId( value ) ) return false;
+				continue;
+			}
+			if ( STRUCTURAL_SIGNATURE_ATTRIBUTES.has( attribute ) ) return false;
+		}
+		// An attribute-less mount disappears from the signature once everything
+		// it wraps is transparent too — including their text, which leaves with
+		// the removed subtrees — and the mount itself carries only whitespace.
+		return childNodes( node ).every(
+			( child ) =>
+				transparent( $, child ) && ( child.type !== 'text' || ( child.data ?? '' ).trim() === '' )
+		);
+	};
+	// An id the desktop body repeats would pair `#id` with the first match
+	// instead of this element, so only a unique stable id may stand in a rule.
+	const idCounts = new Map< string, number >();
+	for ( const node of $d( '[id]' ).toArray() ) {
+		if ( ! isElementNode( node ) ) continue;
+		const id = $d( node ).attr( 'id' ) ?? '';
+		if ( ! isStableIdentityId( id ) ) continue;
+		idCounts.set( id, ( idCounts.get( id ) ?? 0 ) + 1 );
+	}
+	const desktopRules: string[] = [];
+	const mobileRules: string[] = [];
+	let projectedElements = 0;
+	let aligned = true;
+	const visibleChildren = ( $: cheerio.CheerioAPI, element: Element ): Element[] =>
+		childNodes( element ).filter(
+			( child ): child is Element => isElementNode( child ) && ! transparent( $, child )
+		);
+	const project = (
+		d: cheerio.Cheerio< Element >,
+		m: cheerio.Cheerio< Element >,
+		path: string
+	): void => {
+		let projected = false;
+		const desktopStyle = d.attr( 'style' ) ?? '';
+		const mobileStyle = m.attr( 'style' ) ?? '';
+		if ( desktopStyle.trim() !== mobileStyle.trim() ) {
+			const id = d.attr( 'id' );
+			let selector: string;
+			if ( id && isStableIdentityId( id ) && idCounts.get( id ) === 1 ) selector = `#${ id }`;
+			else {
+				const hook = `${ RESPONSIVE_PROJECTION_CLASS_PREFIX }${ createHash( 'sha256' )
+					.update( path )
+					.digest( 'hex' )
+					.slice( 0, 12 ) }`;
+				d.addClass( hook );
+				selector = `.${ hook }`;
+			}
+			const property = ( declaration: string ) =>
+				declaration.slice( 0, declaration.indexOf( ':' ) ).trim().toLowerCase();
+			const desktopDeclarations = inlineDeclarations( desktopStyle );
+			const mobileProperties = new Set( inlineDeclarations( mobileStyle ).map( property ) );
+			const keepsInline =
+				! /!\s*important/i.test( desktopStyle ) &&
+				desktopDeclarations.every( ( declaration ) => mobileProperties.has( property( declaration ) ) );
+			if ( ! keepsInline ) {
+				const desktopRule = importantRule( selector, desktopStyle );
+				if ( desktopRule ) desktopRules.push( desktopRule );
+				d.removeAttr( 'style' );
+			}
+			const mobileRule = importantRule( selector, mobileStyle );
+			if ( mobileRule ) mobileRules.push( mobileRule );
+			projected = true;
+		}
+		if ( projected ) projectedElements++;
+		const desktopChildren = visibleChildren( $d, d.get( 0 ) as Element );
+		const mobileChildren = visibleChildren( $m, m.get( 0 ) as Element );
+		if ( desktopChildren.length !== mobileChildren.length ) {
+			aligned = false;
+			return;
+		}
+		for ( let index = 0; index < desktopChildren.length; index++ ) {
+			const desktopChild = desktopChildren[ index ];
+			const mobileChild = mobileChildren[ index ];
+			if ( desktopChild.tagName !== mobileChild.tagName ) {
+				aligned = false;
+				return;
+			}
+			const childPath = `${ path }/${ index }`;
+			project( $d( desktopChild ), $m( mobileChild ), childPath );
+			if ( ! aligned ) return;
+		}
+	};
+	const desktopTop = visibleChildren( $d, $d( 'body' ).get( 0 ) as Element );
+	const mobileTop = visibleChildren( $m, $m( 'body' ).get( 0 ) as Element );
+	if ( desktopTop.length !== mobileTop.length ) return undefined;
+	for ( let index = 0; index < desktopTop.length; index++ ) {
+		if ( desktopTop[ index ].tagName !== mobileTop[ index ].tagName ) return undefined;
+		project( $d( desktopTop[ index ] ), $m( mobileTop[ index ] ), `body/${ index }` );
+		if ( ! aligned ) return undefined;
+	}
+	if ( projectedElements === 0 ) return undefined;
+	const css =
+		( desktopRules.length > 0
+			? `@media(min-width:${ switchWidth + 1 }px){${ desktopRules.join( '' ) }}`
+			: '' ) +
+		( mobileRules.length > 0 ? `@media(max-width:${ switchWidth }px){${ mobileRules.join( '' ) }}` : '' );
+	return {
+		body: $d( 'body' ).html() ?? desktopBody,
+		css,
+		projectedElements,
+	};
+}
+
 function aliasResponsiveClasses( css: string, aliases: ReadonlyMap<string, string> ): string {
 	if ( aliases.size === 0 ) return css;
 	try {
@@ -1574,17 +1755,40 @@ function assembleResponsiveHtml(
 			: html.replace( /<\/head\s*>/i, `${ mobileViewport }</head>` );
 	};
 	if ( responsiveBodySignature( desktopBody ) === responsiveBodySignature( mobileBody ) ) {
+		// Equivalent trees can still carry different inline presentation: the
+		// signature compares structure, never style attributes. Project those
+		// differences the way an identity-subset collapse does, so one editable
+		// body renders both captured viewports instead of freezing mobile at the
+		// desktop's inline geometry.
+		const projection = equivalentInlineProjection( desktopHtml, mobileHtml, switchWidth );
+		const projectionStyle = projection ? `<style>${ projection.css }</style>` : '';
+		const withProjectedBody = ( html: string ): string =>
+			projection
+				? html.replace(
+						/(<body\b[^>]*>)[\s\S]*?(<\/body\s*>)/i,
+						( _match, open: string, close: string ) => `${ open }${ projection.body }${ close }`
+				  )
+				: html;
+		// Projection rules are inserted before </head>; a document without one
+		// would silently lose them.
+		const withProjectionStyle = ( html: string ): string => {
+			if ( ! projectionStyle ) return html;
+			const withHead = /<\/head\s*>/i.test( html ) ? html : html.replace( /<body\b/i, '<head></head><body' );
+			return withHead.replace( /<\/head\s*>/i, `${ projectionStyle }</head>` );
+		};
 		if ( styleBlocks( desktopHtml ).join( '\n' ) === styleBlocks( mobileHtml ).join( '\n' ) )
-			return withMobileViewport( desktopHtml );
+			return withMobileViewport( withProjectionStyle( withProjectedBody( desktopHtml ) ) );
 		// A stylesheet present in both captures must apply at every width, so it is
 		// left out of both scoping passes below and kept exactly once, unscoped, from
 		// the desktop copy that already carries it.
 		const shared = sharedStyleContents( desktopHtml, mobileHtml );
-		return withMobileViewport(
-			scopedStyles( desktopHtml, `(min-width:${ switchWidth + 1 }px)`, shared )
-		).replace(
-			/<\/head\s*>/i,
-			`${ responsiveMobileStyles( mobileHtml, undefined, switchWidth, shared ) }</head>`
+		return withProjectionStyle(
+			withMobileViewport(
+				withProjectedBody( scopedStyles( desktopHtml, `(min-width:${ switchWidth + 1 }px)`, shared ) )
+			).replace(
+				/<\/head\s*>/i,
+				`${ responsiveMobileStyles( mobileHtml, undefined, switchWidth, shared ) }</head>`
+			)
 		);
 	}
 	// A phone-only body flag can gate the source's desktop width rules. The

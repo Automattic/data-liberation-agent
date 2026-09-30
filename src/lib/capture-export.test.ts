@@ -1199,6 +1199,15 @@ describe( 'exportWebsiteCapture', () => {
 		expect( $( 'img' ) ).toHaveLength( 1 );
 		// The source's own stylesheet keeps applying at every width.
 		expect( html ).toContain( '.wrap{margin:0 auto}.wrap img{max-width:100%}' );
+		// The per-viewport inline geometry the signature never compares is
+		// projected, not frozen at the desktop value.
+		const wrap = $( 'main > div' );
+		expect( wrap.attr( 'style' ) ).toBe( 'width:940px' );
+		const hook = ( wrap.attr( 'class' ) ?? '' )
+			.split( /\s+/ )
+			.find( ( token ) => token.startsWith( 'data-liberation-responsive-' ) );
+		expect( hook ).toBeDefined();
+		expect( html ).toContain( `.${ hook }{width:100%!important}` );
 		const receipt = JSON.parse(
 			readFileSync( join( outputDir, 'capture-receipt.json' ), 'utf8' )
 		);
@@ -1208,6 +1217,7 @@ describe( 'exportWebsiteCapture', () => {
 			reason:
 				'mobile document is structurally equivalent to desktop once capture-infrastructure attributes are normalized; shipped one document',
 			css: 'shared',
+			projectedInlineStyles: 1,
 		} );
 	} );
 
@@ -1263,6 +1273,166 @@ describe( 'exportWebsiteCapture', () => {
 			outcome: 'collapsed-equivalent',
 			css: 'viewport-scoped',
 		} );
+	} );
+
+	it( 'does not project equivalent variants whose inline styles already match', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-collapse-identical-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
+			mkdirSync( join( outputDir, path ), { recursive: true } );
+		const section =
+			'<section class="page-section" style="padding:8px"><h1>About</h1><p>Hello</p></section>';
+		writeFileSync(
+			join( outputDir, 'html', 'homepage.html' ),
+			`<html><head><style>body{margin:0}</style></head><body><main>${ section }</main></body></html>`
+		);
+		writeFileSync(
+			join( outputDir, 'html-mobile', 'homepage.html' ),
+			`<html><head><style>body{margin:0}</style></head><body><main>${ section }</main></body></html>`
+		);
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( {
+				version: 1,
+				entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },
+			} )
+		);
+
+		exportWebsiteCapture( {
+			outputDir,
+			sourceUrl: 'https://example.com/',
+			platform: 'weebly',
+			summary: {},
+			failures: [],
+		} );
+
+		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
+		const $ = cheerio.load( html );
+		expect( $( 'section' ).attr( 'style' ) ).toBe( 'padding:8px' );
+		// Matching inline presentation needs no projection hooks or extra rules.
+		expect( html ).not.toContain( 'data-liberation-responsive-' );
+		const receipt = JSON.parse(
+			readFileSync( join( outputDir, 'capture-receipt.json' ), 'utf8' )
+		);
+		expect( receipt.routes[ 0 ].responsiveVariants ).toEqual( {
+			variants: 1,
+			outcome: 'collapsed-equivalent',
+			reason:
+				'mobile document is structurally equivalent to desktop once capture-infrastructure attributes are normalized; shipped one document',
+			css: 'shared',
+		} );
+	} );
+
+	it( 'renders projected equivalent geometry at both captured viewports', async () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-collapse-equivalent-geometry-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
+			mkdirSync( join( outputDir, path ), { recursive: true } );
+		// A banner section whose runtime writes its phone padding inline at the
+		// phone width and a feature box whose phone rules drop the desktop
+		// centering: structurally equivalent id-less trees, different inline
+		// presentation per viewport.
+		const head =
+			'<meta name="viewport" content="width=device-width, initial-scale=1">' +
+			'<style>body{margin:0}.page-section{background:#eef}.feature p{color:#111}</style>';
+		writeFileSync(
+			join( outputDir, 'html', 'homepage.html' ),
+			`<html><head>${ head }</head><body><main>` +
+				'<section class="page-section" style="padding-top:189px"><h1>About</h1></section>' +
+				'<div class="feature" style="margin:0 auto;width:980px"><p>Feature</p></div>' +
+				'</main></body></html>'
+		);
+		writeFileSync(
+			join( outputDir, 'html-mobile', 'homepage.html' ),
+			`<html><head>${ head }</head><body><main>` +
+				'<section class="page-section" style="padding-top:145px"><h1>About</h1></section>' +
+				'<div class="feature" style="width:320px"><p>Feature</p></div>' +
+				'</main></body></html>'
+		);
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( {
+				version: 1,
+				entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } },
+			} )
+		);
+
+		exportWebsiteCapture( {
+			outputDir,
+			sourceUrl: 'https://example.com/',
+			platform: 'weebly',
+			summary: {},
+			failures: [],
+		} );
+
+		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
+		const $ = cheerio.load( html );
+		expect( $( '.data-liberation-desktop-document' ) ).toHaveLength( 0 );
+		expect( $( '.data-liberation-mobile-document' ) ).toHaveLength( 0 );
+		expect( $( 'section' ) ).toHaveLength( 1 );
+		expect( $( 'h1' ) ).toHaveLength( 1 );
+		// Author CSS keeps applying unscoped at every width.
+		expect( html ).toContain( 'body{margin:0}.page-section{background:#eef}.feature p{color:#111}' );
+		// The section restates padding at both widths, so its desktop inline
+		// style stays put and the phone answer is scoped below the switch.
+		const section = $( 'section' );
+		expect( section.attr( 'style' ) ).toBe( 'padding-top:189px' );
+		const sectionHook = ( section.attr( 'class' ) ?? '' )
+			.split( /\s+/ )
+			.find( ( token ) => token.startsWith( 'data-liberation-responsive-' ) );
+		expect( sectionHook ).toBeDefined();
+		expect( html ).toContain( `.${ sectionHook }{padding-top:145px!important}` );
+		// The box drops its desktop centering on phones, so keeping the inline
+		// style would leak `margin` onto phones: both sides move into rules.
+		const feature = $( '.feature' );
+		expect( feature.attr( 'style' ) ).toBeUndefined();
+		const featureHook = ( feature.attr( 'class' ) ?? '' )
+			.split( /\s+/ )
+			.find( ( token ) => token.startsWith( 'data-liberation-responsive-' ) );
+		expect( featureHook ).toBeDefined();
+		expect( featureHook ).not.toBe( sectionHook );
+		expect( html ).toContain( `.${ featureHook }{margin:0 auto!important;width:980px!important}` );
+		expect( html ).toContain( `.${ featureHook }{width:320px!important}` );
+		const receipt = JSON.parse(
+			readFileSync( join( outputDir, 'capture-receipt.json' ), 'utf8' )
+		);
+		expect( receipt.routes[ 0 ].responsiveVariants ).toEqual( {
+			variants: 1,
+			outcome: 'collapsed-equivalent',
+			reason:
+				'mobile document is structurally equivalent to desktop once capture-infrastructure attributes are normalized; shipped one document',
+			css: 'shared',
+			projectedInlineStyles: 2,
+		} );
+
+		// Both captured viewports measure the geometry their capture observed.
+		const browser = await chromium.launch( { headless: true } );
+		try {
+			const page = await browser.newPage();
+			const measure = async ( width: number ) => {
+				await page.setViewportSize( { width, height: 900 } );
+				await page.setContent( html );
+				return page.evaluate( () => {
+					const box = ( element: Element | null ) => {
+						const rect = element!.getBoundingClientRect();
+						const computed = getComputedStyle( element! );
+						return { height: Math.round( rect.height ), width: Math.round( rect.width ), marginLeft: computed.marginLeft, paddingTop: computed.paddingTop };
+					};
+					return { section: box( document.querySelector( 'section' ) ), feature: box( document.querySelector( '.feature' ) ) };
+				} );
+			};
+			const phone = await measure( 390 );
+			expect( phone.section.paddingTop ).toBe( '145px' );
+			expect( phone.feature.width ).toBe( 320 );
+			expect( phone.feature.marginLeft ).toBe( '0px' );
+			const desktop = await measure( 1440 );
+			expect( desktop.section.paddingTop ).toBe( '189px' );
+			expect( desktop.feature.width ).toBe( 980 );
+			// `margin:0 auto` survives only above the switch width.
+			expect( Number.parseFloat( desktop.feature.marginLeft ) ).toBeGreaterThan( 0 );
+		} finally {
+			await browser.close();
+		}
 	} );
 
 	it( 'ships both variants when the mobile document genuinely differs, and says so', () => {
@@ -3245,8 +3415,15 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
 		expect( html ).not.toContain( 'data-liberation-desktop-document' );
 		expect( html ).not.toContain( 'data-liberation-mobile-document' );
-		expect( html ).toContain( 'class="desktop"' );
-		expect( html ).not.toContain( 'class="mobile"' );
+		// One authoring body: the desktop class stays, the mobile one never
+		// joins it, and the per-viewport width difference is projected into a
+		// width-scoped rule under a private hook class.
+		const mainClass = ( cheerio.load( html )( 'main' ).attr( 'class' ) ?? '' ).split( /\s+/ );
+		expect( mainClass ).toContain( 'desktop' );
+		expect( mainClass ).not.toContain( 'mobile' );
+		const hook = mainClass.find( ( token ) => token.startsWith( 'data-liberation-responsive-' ) );
+		expect( hook ).toBeDefined();
+		expect( html ).toContain( `@media(max-width:767px){.${ hook }{width:390px!important}}` );
 		expect( html ).toContain( '<canvas id="canvas" width="1440" height="900"></canvas>' );
 	} );
 
