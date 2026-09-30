@@ -6,13 +6,22 @@ import type {
 	CapturedRouteNavigation,
 } from './screenshot/interaction-capture.js';
 
-// Base summary styling is zero-specificity (`:where(...)`) so author
-// utilities on the summary or details — e.g. a responsive `md:hidden`
-// hamburger — still win. State-driven dialog rules below keep their
-// specificity so open/closed behavior cannot be overridden.
-const DISCLOSURE_CSS =
+// Base summary styling must lose to every author rule on the summary or
+// details — e.g. a responsive `md:hidden` hamburger, or the `display:flex` a
+// converted button had. Zero specificity (`:where(...)`) is not enough on its
+// own: unlayered CSS beats every cascade layer, so Substack's
+// `@layer legacy{.post-ufi .post-ufi-button{display:flex}}` lost to an
+// unlayered `:where()` rule and the trigger wrapped onto two lines. The base
+// rules therefore live in their own layer, declared first in <head> so it is
+// the lowest-priority layer too (see wireCapturedDialogs).
+const DISCLOSURE_BASE_CSS =
+	'@layer dla-disclosure-base{' +
 	':where(details.dla-disclosure>summary){list-style:none;cursor:pointer;display:inline-block}' +
 	':where(details.dla-disclosure>summary)::-webkit-details-marker{display:none}' +
+	'}';
+// State-driven dialog rules stay unlayered and keep their specificity so
+// open/closed behavior cannot be overridden.
+const DISCLOSURE_CSS =
 	'details.dla-disclosure:not([open])>.dla-dialog{display:none!important}' +
 	'details.dla-disclosure:not(.dla-dropdown)[open]>.dla-dialog{display:block;position:fixed;inset:0;z-index:2147483646;overflow:auto;background:#fff}' +
 	// A dropdown panel opens below the nearest positioned ancestor of its
@@ -200,6 +209,11 @@ export function wireCapturedDialogs(
 		}
 		if ( $( 'style[data-dla-disclosure]' ).length === 0 ) {
 			$( 'head' ).append( `<style data-dla-disclosure="true">${ DISCLOSURE_CSS }</style>` );
+		}
+		if ( $( 'style[data-dla-disclosure-base]' ).length === 0 ) {
+			// First in <head>: a layer's priority is fixed where it is first
+			// declared, so this must precede any author `@layer` statement.
+			$( 'head' ).prepend( `<style data-dla-disclosure-base="true">${ DISCLOSURE_BASE_CSS }</style>` );
 		}
 		if ( $( 'script[data-dla-disclosure-runtime]' ).length === 0 ) {
 			$( 'head' ).append(
