@@ -33,6 +33,8 @@ export { inspectSource, InspectError, INSPECTION_SCHEMA_VERSION } from './lib/in
 export { captureWebsite, UnsupportedCapturePlatformError, IncompleteCaptureError } from './lib/capture.js';
 export type { CaptureOptions, CaptureResult, CaptureProgress, CaptureDependencies, UnresolvedAnchor } from './lib/capture.js';
 export { checkFidelity } from './lib/fidelity/check.js';
+export { serveCapture } from './lib/serve-capture.js';
+export type { StaticServer as CapturePreviewServer } from './lib/replicate/local-site/static-server.js';
 export type { FidelityCheckOptions, FidelityReport, RouteScore, ObservePair } from './lib/fidelity/check.js';
 export type { FidelityStage, FidelityReference, ReferenceEntry, ReferenceArtifact } from './lib/fidelity/reference.js';
 export type { MotionContract, MotionEvidence } from './lib/fidelity/candidate-motion.js';

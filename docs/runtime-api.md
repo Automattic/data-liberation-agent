@@ -7,6 +7,7 @@ import {
   inspectSource,
   captureWebsite,
   checkFidelity,
+  serveCapture,
   publishSite,
   registerPlatform,
   registerPublishTarget,
@@ -16,6 +17,13 @@ import {
 `data-liberation` and `data-liberation/runtime` resolve to the **same module**, including the same platform and publish registries. The runtime uses the implementations used by the CLI and MCP, with no separate pipeline, destination policy or sandbox configuration.
 
 ## Standalone distribution
+
+`await serveCapture(directory)` serves the owned portable `website/` using the
+same clean-URL and asset resolver as fidelity comparison. The directory may be
+the capture root or its `website/` directory. The returned `CapturePreviewServer`
+provides `url`, `port`, `urlForPage`, and `close()`; the caller must close it in a
+`finally` block. This helper makes no live-origin request and requires no browser,
+so consumers can reuse source rendering without implementing another server.
 
 The committed **`dist/capture-engine.bundle.mjs`** now exports the full runtime. Its historical filename is retained for consumers that already pin that artifact. An embedded runner can import the file directly:
 

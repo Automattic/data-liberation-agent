@@ -149,6 +149,13 @@ try {
   }
 
   const canonical = await readFile(join(outputDir, 'website', 'index.html'), 'utf8');
+  const preview = await runtime.serveCapture(outputDir);
+  try {
+    assert.equal(await (await fetch(preview.urlForPage('index.html'))).text(), canonical);
+  } finally {
+    await preview.close();
+  }
+  await assert.rejects(fetch(preview.url));
   let staging;
   runtime.registerPublishTarget({
     name: 'fixture-target',
