@@ -431,6 +431,31 @@ it('removes a fixed trial badge and provider credit text without removing owner 
   } finally { await browser.close(); }
 }, 20_000);
 
+it('keeps credit-like phrasing in article prose while removing footer credit text', async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage();
+    // The article sentence is real (demo.ghost.io/design/). Before the fix the
+    // body-scoped rule turned it into "new sites are 's friendly publication theme".
+    await page.setContent(`<!doctype html><html><body>
+      <main><article>
+        <p id="prose">By default, new sites are created with Ghost's friendly publication theme, called Casper.</p>
+        <footer id="post-footer">Powered by Ghost</footer>
+      </article>
+      <p id="main-prose">This newsletter was built with Ghost from day one.</p></main>
+      <footer id="site-footer">© 2026 Owner. Powered by Ghost</footer>
+    </body></html>`);
+    const report = await applySourceCleanup(page, cleanupPolicy([
+      { id: 'ghost-credit-text', category: 'source-attribution', selector: 'footer,[role="contentinfo"],body', creditText: 'Ghost' },
+    ]));
+    expect(await page.locator('#prose').innerText()).toBe("By default, new sites are created with Ghost's friendly publication theme, called Casper.");
+    expect(await page.locator('#main-prose').innerText()).toBe('This newsletter was built with Ghost from day one.');
+    expect(await page.locator('#site-footer').innerText()).toBe('© 2026 Owner.');
+    expect(await page.locator('#post-footer').innerText()).toBe('');
+    expect(report.failures).toEqual([]);
+  } finally { await browser.close(); }
+}, 20_000);
+
 it('reports invalid rules rather than silently certifying cleanup', async () => {
   const browser = await chromium.launch();
   try {

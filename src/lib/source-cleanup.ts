@@ -331,6 +331,10 @@ export function installCleanupInPage(args: { policy: CleanupPolicy; recovered?: 
           let text: Node | null;
           while ((text = walker.nextNode())) {
             if (text.parentElement?.closest('script,style,noscript')) continue;
+            // Same boundary as the link credit rule: article/main prose is owner
+            // content, even when it reads like a credit ("new sites are created
+            // with Ghost's theme" on demo.ghost.io), unless it sits in a footer.
+            if (text.parentElement?.closest('article,main') && !text.parentElement.closest('footer,[role="contentinfo"]')) continue;
             const value = text.textContent ?? '';
             nodes.push({ node: text, start: content.length, text: value });
             content += value;
