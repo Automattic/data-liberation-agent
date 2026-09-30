@@ -225,10 +225,12 @@ function boundDisclosureHtml(html: string): { html: string; bytes: number; trunc
  * alongside dialog/menu captures (`kind: 'disclosure'`) so this work is
  * observable with the same `candidate_count`/`captured_count` conventions.
  */
-export async function hydrateDisclosureContent(page: Page): Promise<CapturedDialogInteraction[]> {
+export async function hydrateDisclosureContent(page: Page, rootSelector = 'body'): Promise<CapturedDialogInteraction[]> {
   let raw: RawDisclosureRecord[];
   try {
-    const result = await page.evaluate(async ({ limit, settleMs, labels, toggleLimit }: { limit: number; settleMs: number; labels: string[]; toggleLimit: number }) => {
+    const result = await page.evaluate(async ({ limit, settleMs, labels, toggleLimit, rootSelector }: { limit: number; settleMs: number; labels: string[]; toggleLimit: number; rootSelector: string }) => {
+      const root = document.querySelector(rootSelector);
+      if (!root) return [];
       const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
       const hasContent = (element: Element) =>
         Boolean((element.textContent || '').trim()) ||
@@ -294,10 +296,10 @@ export async function hydrateDisclosureContent(page: Page): Promise<CapturedDial
        *  (forward) or a role="region" panel's aria-labelledby back to the trigger
        *  (reverse — the pattern a runtime that unmounts closed panels leaves behind,
        *  since it never bothers writing aria-controls on the trigger at all). */
-      const findCandidates = (): Array<{ trigger: HTMLElement; target: HTMLElement; snapshot?: boolean }> => {
+      const findCandidates = (): Array<{ trigger: HTMLElement; target: HTMLElement; snapshot?: boolean; mounted?: boolean }> => {
         const seen = new Set<HTMLElement>();
-        const out: Array<{ trigger: HTMLElement; target: HTMLElement; snapshot?: boolean }> = [];
-        document
+        const out: Array<{ trigger: HTMLElement; target: HTMLElement; snapshot?: boolean; mounted?: boolean }> = [];
+        root
           .querySelectorAll<HTMLElement>('[aria-expanded="false"][aria-controls]:not([aria-haspopup])')
           .forEach((trigger) => {
             const id = trigger.getAttribute('aria-controls') || '';
@@ -307,7 +309,7 @@ export async function hydrateDisclosureContent(page: Page): Promise<CapturedDial
               out.push({ trigger, target });
             }
           });
-        document.querySelectorAll<HTMLElement>('[role="region"][aria-labelledby]').forEach((target) => {
+        root.querySelectorAll<HTMLElement>('[role="region"][aria-labelledby]').forEach((target) => {
           const id = target.getAttribute('aria-labelledby') || '';
           const trigger = id ? (document.getElementById(id) as HTMLElement | null) : null;
           if (
@@ -320,8 +322,20 @@ export async function hydrateDisclosureContent(page: Page): Promise<CapturedDial
             out.push({ trigger, target });
           }
         });
-        const hydrating = new Set(out.filter((candidate) => !hasContent(candidate.target)).map((candidate) => candidate.trigger));
-        for (const node of document.querySelectorAll<HTMLElement>('button, [role="button"]')) {
+        // An aria-expanded control can mount its entire panel on activation,
+        // leaving neither a controlled ID nor a region in the resting DOM.
+        // Only probe a bounded local item with exactly one disclosure control;
+        // an observed new sibling, rather than its label/class, identifies it.
+        root.querySelectorAll<HTMLElement>('button[aria-expanded="false"]:not([aria-haspopup]),[role="button"][aria-expanded="false"]:not([aria-haspopup])').forEach(trigger => {
+          if (seen.has(trigger) || handledToggles.has(describe(trigger).selector) || !visible(trigger) || !safeToActivate(trigger)) return;
+          if (document.getElementById(trigger.getAttribute('aria-controls') || '')) return;
+          const target = scopeOf(trigger);
+          if (target === trigger || target.querySelectorAll('[aria-expanded]').length !== 1) return;
+          seen.add(trigger);
+          out.push({ trigger, target, mounted: true });
+        });
+        const hydrating = new Set(out.filter((candidate) => candidate.mounted || !hasContent(candidate.target)).map((candidate) => candidate.trigger));
+        for (const node of root.querySelectorAll<HTMLElement>('button, [role="button"]')) {
           if (hydrating.has(node) || handledToggles.has(describe(node).selector)) continue;
           if (!visible(node) || !safeToActivate(node) || !isExpandToggle(node)) continue;
           out.push({ trigger: node, target: scopeOf(node), snapshot: true });
@@ -330,12 +344,13 @@ export async function hydrateDisclosureContent(page: Page): Promise<CapturedDial
       };
 
       const records: RawDisclosureRecord[] = [];
+      const mountedPanels: Array<{ trigger: HTMLElement; parent: HTMLElement; panel: HTMLElement }> = [];
       let hydrated = 0;
       let togglesDone = 0;
       for (let pass = 0; pass < 3 && hydrated < limit; pass++) {
         const found = findCandidates();
         const candidates = [
-          ...found.filter((candidate) => !candidate.snapshot && !hasContent(candidate.target)).slice(0, limit - hydrated),
+          ...found.filter((candidate) => !candidate.snapshot && (candidate.mounted || !hasContent(candidate.target))).slice(0, limit - hydrated),
           ...found.filter((candidate) => candidate.snapshot).slice(0, toggleLimit - togglesDone),
         ];
         if (candidates.length === 0) break;
@@ -343,6 +358,30 @@ export async function hydrateDisclosureContent(page: Page): Promise<CapturedDial
         const observed: Array<{ target: HTMLElement; content: string; trigger: HTMLElement }> = [];
         for (const candidate of candidates) {
           const { trigger, target } = candidate;
+          if (candidate.mounted) {
+            handledToggles.add(describe(trigger).selector);
+            const before = new Set(Array.from(target.children));
+            const route = currentRoute();
+            trigger.click();
+            let panels: HTMLElement[] = [];
+            for (let attempt = 0; attempt < 20; attempt++) {
+              panels = Array.from(target.children).filter((child): child is HTMLElement => child instanceof HTMLElement && !before.has(child) && !child.contains(trigger) && hasContent(child) && visible(child));
+              if (trigger.getAttribute('aria-expanded') === 'true' && panels.length === 1) break;
+              await wait(50);
+            }
+            const panel = panels.length === 1 && currentRoute() === route && trigger.getAttribute('aria-expanded') === 'true' ? panels[0] : undefined;
+            const copy = panel?.cloneNode(true) as HTMLElement | undefined;
+            if (trigger.getAttribute('aria-expanded') === 'true') trigger.click();
+            const deadline = Date.now() + settleMs;
+            while (Date.now() < deadline && (trigger.getAttribute('aria-expanded') !== 'false' || panel?.isConnected)) await wait(25);
+            if (copy && trigger.getAttribute('aria-expanded') === 'false' && !panel?.isConnected) {
+              mountedPanels.push({ trigger, parent: target, panel: copy });
+              hydrated++;
+            } else {
+              records.push({ status: 'no-dialog', trigger: describeTrigger(trigger), target: describe(target), error: 'No unique locally mounted panel with verified collapsed restoration.' });
+            }
+            continue;
+          }
           if (candidate.snapshot) {
             const described = describeTrigger(trigger);
             const describedTarget = describe(target);
@@ -452,8 +491,46 @@ export async function hydrateDisclosureContent(page: Page): Promise<CapturedDial
         hydrated += observed.length;
         await wait(100);
       }
+      const exclusiveGroups = new Set<HTMLElement>();
+      const groups = new Map<HTMLElement, typeof mountedPanels>();
+      for (const entry of mountedPanels) {
+        const group = entry.parent.parentElement;
+        if (group) groups.set(group, [...(groups.get(group) ?? []), entry]);
+      }
+      for (const [group, entries] of groups) {
+        if (entries.length < 2) continue;
+        const first = entries[0].trigger;
+        const second = entries[1].trigger;
+        const before = new Set(entries.flatMap(entry => Array.from(entry.parent.children)));
+        first.click();
+        await wait(60);
+        if (first.getAttribute('aria-expanded') !== 'true') continue;
+        second.click();
+        await wait(60);
+        if (second.getAttribute('aria-expanded') === 'true' && first.getAttribute('aria-expanded') === 'false') exclusiveGroups.add(group);
+        for (const trigger of [first, second]) if (trigger.getAttribute('aria-expanded') === 'true') trigger.click();
+        const deadline = Date.now() + settleMs;
+        while (Date.now() < deadline && entries.some(entry => Array.from(entry.parent.children).some(child => !before.has(child)))) await wait(25);
+      }
+      // Write back only after all source interactions. A single-open runtime
+      // can unmount siblings when the next item opens, including DOM we added.
+      for (const { trigger, parent, panel } of mountedPanels) {
+        if (!trigger.isConnected || !parent.isConnected) continue;
+        let index = 0;
+        while (document.getElementById(`dla-disclosure-panel-${index}`)) index++;
+        panel.id = `dla-disclosure-panel-${index}`;
+        panel.hidden = true;
+        panel.setAttribute('role', 'region');
+        panel.dataset.dlaHydratedDisclosure = 'true';
+        panel.dataset.dlaLocalDisclosure = 'true';
+        const group = parent.parentElement;
+        if (group && exclusiveGroups.has(group)) group.dataset.dlaExclusiveDisclosures = 'true';
+        trigger.setAttribute('aria-controls', panel.id);
+        parent.append(panel);
+        records.push({ status: 'captured', trigger: describeTrigger(trigger), target: describe(panel), html: panel.outerHTML });
+      }
       return records;
-    }, { limit: MAX_DISCLOSURE_CANDIDATES, settleMs: MAX_DISCLOSURE_SETTLE_MS, labels: EXPAND_TOGGLE_LABELS, toggleLimit: MAX_EXPAND_TOGGLES });
+    }, { limit: MAX_DISCLOSURE_CANDIDATES, settleMs: MAX_DISCLOSURE_SETTLE_MS, labels: EXPAND_TOGGLE_LABELS, toggleLimit: MAX_EXPAND_TOGGLES, rootSelector });
     raw = Array.isArray(result) ? (result as RawDisclosureRecord[]) : [];
   } catch {
     raw = [];
