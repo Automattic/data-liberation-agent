@@ -184,6 +184,8 @@ export async function captureSelectableSetStates(
 					return Boolean( anchor && anchor !== element && isNavigable( anchor ) );
 				};
 				const isDisclosureTrigger = ( element: Element ) => {
+					if ( element.tagName === 'SUMMARY' && element.parentElement?.tagName === 'DETAILS' &&
+						element.parentElement.querySelector( ':scope > summary' ) === element ) return true;
 					if ( ! element.hasAttribute( 'aria-expanded' ) || ! element.hasAttribute( 'aria-controls' ) ) {
 						return false;
 					}
@@ -238,7 +240,16 @@ export async function captureSelectableSetStates(
 						return true;
 					}
 					if ( ( element as HTMLElement ).tabIndex >= 0 && tag !== 'a' ) return true;
-					return getComputedStyle( element ).cursor === 'pointer';
+					if ( getComputedStyle( element ).cursor !== 'pointer' ) return false;
+					// A passive pointer wrapper around one link is navigation, just like
+					// a pointer descendant inside that link. Explicit selectable semantics
+					// above still win; mixed controls/content remain probe candidates.
+					const links = Array.from( element.querySelectorAll( 'a[href]' ) );
+					if ( links.length === 1 && isNavigable( links[ 0 ]! ) &&
+						textOf( element ) === textOf( links[ 0 ]! ) &&
+						! element.querySelector( 'button,input,select,textarea,[role],[tabindex],[aria-selected],[aria-pressed],[onclick]' ) &&
+						! element.hasAttribute( 'onclick' ) ) return false;
+					return true;
 				};
 				const signature = ( element: Element ) =>
 					`${ element.tagName.toLowerCase() }|${ ( element.getAttribute( 'role' ) || '' ).toLowerCase() }`;
