@@ -23,6 +23,18 @@ export const cleanupRules: CleanupRule[] = [
 		category: 'source-attribution',
 		selector: '.footer-terms > a[href^="https://substack.com/"], .footer-terms > span:not(:first-child)',
 	},
+	// Subscribe forms post to Substack's /api/v1/free and can't work once the
+	// copy has left Substack; each carries a consent line naming Substack's
+	// Terms and Privacy Policy (label.tosCheckbox-*). Only the form and that
+	// line go — the publication name, tagline and "Subscribe to …" headings
+	// around them are the owner's. Filed as source attribution: the cleanup
+	// categories are advertisement | source-attribution, and this is
+	// Substack's own service UI.
+	{
+		id: 'substack-subscribe-form',
+		category: 'source-attribution',
+		selector: 'form[action^="/api/v1/free"], [class*="tosCheckbox-"]',
+	},
 ];
 
 // Links that only work inside Substack: sign-in, and author bylines, which
