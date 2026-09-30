@@ -29,14 +29,54 @@ describe( 'wireCapturedDialogs', () => {
 			'<html><head></head><body><button class="burger">Open Menu</button></body></html>',
 			[ captured ]
 		);
-		const css = html.match( /<style data-dla-disclosure="true">([\s\S]*?)<\/style>/ )?.[ 1 ] ?? '';
-		expect( css ).toContain(
+		const base = html.match( /<style data-dla-disclosure-base="true">([\s\S]*?)<\/style>/ )?.[ 1 ] ?? '';
+		expect( base ).toContain(
 			':where(details.dla-disclosure>summary){list-style:none;cursor:pointer;display:inline-block}'
 		);
-		expect( css ).toContain(
+		expect( base ).toContain(
 			':where(details.dla-disclosure>summary)::-webkit-details-marker{display:none}'
 		);
+		// In its own cascade layer, declared before anything else in <head>.
+		expect( base.startsWith( '@layer dla-disclosure-base{' ) ).toBe( true );
+		expect( html ).toMatch( /<head><style data-dla-disclosure-base="true">/ );
+		const css = html.match( /<style data-dla-disclosure="true">([\s\S]*?)<\/style>/ )?.[ 1 ] ?? '';
+		expect( css ).not.toContain( ':where(details.dla-disclosure>summary)' );
 		expect( css ).not.toMatch( /(^|;)details\.dla-disclosure>summary(::-webkit-details-marker)?\{/ );
+	} );
+
+	it( 'lets layered author CSS keep a converted trigger\'s display (Substack restack button)', async () => {
+		// derekthompson.org: Substack ships its CSS in cascade layers. The restack
+		// button opens a menu, so capture converts it to <summary>; an unlayered
+		// base rule then beat the layered `display:flex` and the icon and count
+		// wrapped onto two lines, pushing the post 9px down.
+		const html = wireCapturedDialogs(
+			'<html><head><style>@layer legacy,pencraft;@layer legacy{.post-ufi .post-ufi-button{display:flex;align-items:center;height:40px}}</style></head>' +
+			'<body><div class="post-ufi"><button class="post-ufi-button" aria-haspopup="menu"><svg width="20" height="20"></svg><div class="label">68</div></button></div></body></html>',
+			[
+				{
+					status: 'captured',
+					trigger: { selector: '.post-ufi > button', tag: 'button', ariaHaspopup: 'menu', label: '68', dataBindings: {} },
+					dialog: { selector: '#menu', tag: 'div', ariaModal: false, ariaLabel: 'Restack', html: '<div>Copy link</div>', htmlBytes: 20, htmlTruncated: false },
+				},
+			]
+		);
+		const browser = await chromium.launch( { headless: true } );
+		try {
+			const page = await browser.newPage( { viewport: { width: 1600, height: 900 } } );
+			await page.setContent( html );
+			const summary = page.locator( 'details.dla-disclosure > summary' );
+			expect( await summary.count() ).toBe( 1 );
+			expect( await summary.evaluate( ( el ) => getComputedStyle( el ).display ) ).toBe( 'flex' );
+			expect( ( await summary.boundingBox() )?.height ).toBe( 40 );
+			// A trigger no author rule styles still gets the base look.
+			await page.setContent( wireCapturedDialogs(
+				'<html><head></head><body><button class="burger">Open Menu</button></body></html>',
+				[ captured ]
+			) );
+			expect( await page.locator( 'details.dla-disclosure > summary' ).evaluate( ( el ) => getComputedStyle( el ).display ) ).toBe( 'inline-block' );
+		} finally {
+			await browser.close();
+		}
 	} );
 
 	it( 'lets an author md:hidden utility hide the toggle at 1600px while it still opens and closes the dialog at 390px', async () => {
