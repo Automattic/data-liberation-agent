@@ -181,6 +181,7 @@ interface CapturePerViewportArgs {
 		page: import('playwright').Page,
 		ctx: import('../../adapters/page-actions.js').LiberationContext
 	) => Promise< void >;
+	observeSource?: ScreenshotOpts['observeSource'];
 	canonicalizeHtml?: ( html: string ) => string;
 	viewport: Viewport;
 	plan: ArtifactPlan;
@@ -710,6 +711,11 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		args.canonicalizeHtml ? canonicalizeInteractionReport( report, args.canonicalizeHtml ) : report;
 
 	resourceStore.observe( page );
+	const sourceErrors: string[] = [];
+	if ( args.observeSource ) {
+		page.on( 'pageerror', error => sourceErrors.push( `source runtime error: ${ error.message }` ) );
+		page.on( 'crash', () => sourceErrors.push( 'source renderer crashed' ) );
+	}
 	if ( publicUrlsOnly && page.route ) {
 		await page.route( '**/*', async ( route ) => {
 			const request = route.request();
@@ -920,6 +926,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	// A slideshow driven by its own thumbnails only advances while the source's
 	// script is running, so read its states before any layout measurement.
 	const pagerSlideshows = await collectPagerSlideshowStates( page ).catch( () => [] );
+	await args.observeSource?.( page, url, isDesktop ? 'desktop' : 'mobile', sourceErrors );
 
 	if ( isDesktop && plan.captureHtml && args.learnFluid ) {
 		try {
@@ -1832,6 +1839,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 						prepareCapture: opts.prepareCapture,
 						resolveClientRedirect: opts.resolveClientRedirect,
 						beforeSerialize: opts.beforeSerialize,
+						observeSource: opts.observeSource,
 						...( opts.canonicalizeHtml ? { canonicalizeHtml: opts.canonicalizeHtml } : {} ),
 					} );
 				} catch ( err ) {

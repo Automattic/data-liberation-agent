@@ -34,6 +34,7 @@ export { captureWebsite, UnsupportedCapturePlatformError, IncompleteCaptureError
 export type { CaptureOptions, CaptureResult, CaptureProgress, CaptureDependencies, UnresolvedAnchor } from './lib/capture.js';
 export { checkFidelity } from './lib/fidelity/check.js';
 export type { FidelityCheckOptions, FidelityReport, RouteScore, ObservePair } from './lib/fidelity/check.js';
+export type { FidelityStage, FidelityReference, ReferenceEntry, ReferenceArtifact } from './lib/fidelity/reference.js';
 export type { MotionContract, MotionEvidence } from './lib/fidelity/candidate-motion.js';
 export { authorPortableMotion } from './lib/portable-motion.js';
 export type { PortableMotionRecipe, PortableMotionReceipt } from './lib/portable-motion.js';

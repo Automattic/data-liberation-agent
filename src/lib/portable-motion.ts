@@ -138,7 +138,7 @@ export async function authorPortableMotion( directory: string, recipe: PortableM
 		const offline = checkSelfConsistency( stage, routes );
 		if ( ! offline.pass ) throw new Error( `Authored portable site fails offline checks: ${ offline.findings.map( ( finding ) => finding.detail ).join( '; ' ) }` );
 		server = await startStaticServer( stage );
-		const report = await checkFidelity( { directory: root, candidateUrl: server.url, motionContract: recipe.contract, widths: recipe.contract.widths } );
+		const report = await checkFidelity( { stage: 'drift', directory: root, candidateUrl: server.url, motionContract: recipe.contract, widths: recipe.contract.widths } );
 		if ( ! report.pass ) throw new Error( `Portable motion did not reproduce the source: ${ report.scores.flatMap( ( score ) => score.failures ).join( '; ' ) }; ${ report.motionEvidence?.flatMap( ( row ) => row.failures ).join( '; ' ) }` );
 		// Successful browser proof precedes every change to the public website.
 		cpSync( stage, websiteDir, { recursive: true, force: true } );

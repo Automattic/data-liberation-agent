@@ -28,9 +28,12 @@ vi.mock( './screenshot/screenshotter.js', () => ( {
 } ) );
 
 vi.mock( './capture-export.js', () => ( {
-	exportWebsiteCapture: vi.fn( ( { outputDir }: { outputDir: string } ) =>
-		join( outputDir, 'capture-receipt.json' )
-	),
+	exportWebsiteCapture: vi.fn( ( { outputDir }: { outputDir: string } ) => {
+		mkdirSync( outputDir, { recursive: true } );
+		const path = join( outputDir, 'capture-receipt.json' );
+		writeFileSync( path, JSON.stringify( { source: { url: 'https://example.com/' }, routes: [] } ) );
+		return path;
+	} ),
 } ) );
 
 vi.mock( './media-fetch/media.js', () => ( {
@@ -163,6 +166,7 @@ describe( 'captureWebsite completeness', () => {
 	it( 'says the capture is incomplete when exported output links to uncaptured routes', async () => {
 		vi.mocked( exportWebsiteCapture ).mockImplementationOnce( ( { outputDir } ) => {
 			mkdirSync( outputDir, { recursive: true } );
+			writeFileSync( join( outputDir, 'capture-receipt.json' ), JSON.stringify( { source: { url: sourceUrl }, routes: [] } ) );
 			writeFileSync(
 				join( outputDir, 'diagnostics.json' ),
 				JSON.stringify( {
@@ -227,6 +231,7 @@ describe( 'captureWebsite completeness', () => {
 	it( 'rejects in strict mode so programmatic callers fail closed', async () => {
 		vi.mocked( exportWebsiteCapture ).mockImplementationOnce( ( { outputDir } ) => {
 			mkdirSync( outputDir, { recursive: true } );
+			writeFileSync( join( outputDir, 'capture-receipt.json' ), JSON.stringify( { source: { url: sourceUrl }, routes: [] } ) );
 			writeFileSync(
 				join( outputDir, 'diagnostics.json' ),
 				JSON.stringify( {

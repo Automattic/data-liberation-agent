@@ -107,6 +107,8 @@ export interface ScreenshotOpts {
 		page: import('playwright').Page,
 		ctx: import('../../adapters/page-actions.js').LiberationContext
 	) => Promise< void >;
+	/** Product-owned evidence observer, after source cleanup and before geometry rewriting. */
+	observeSource?: ( page: import('playwright').Page, url: string, device: 'desktop' | 'mobile', errors: readonly string[] ) => Promise<void>;
 }
 
 export interface ScreenshotResult {

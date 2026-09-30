@@ -1,5 +1,5 @@
 import type { FidelityCheckResult } from './checks.js';
-import { matchRenderedImages } from './score.js';
+import { matchRenderedImages, ambiguousRenderedImages } from './score.js';
 import type { LayoutObservation, RenderedImage, RenderedTextStyle } from './score.js';
 
 export const IMAGE_POSITION_TOLERANCE_PX = 8;
@@ -12,6 +12,7 @@ export function checkImageGeometry(
 	source: LayoutObservation,
 	candidate: LayoutObservation
 ): FidelityCheckResult {
+	if ( ambiguousRenderedImages( source.images, candidate.images ).length ) return { failures: [ 'image correspondence unproven: repeated media lacks unique structural role/state' ] };
 	const moved = matchRenderedImages( source.images, candidate.images ).filter( ( pair ) => {
 		const { source: left, candidate: right } = pair;
 		return (

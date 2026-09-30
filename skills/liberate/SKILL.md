@@ -17,7 +17,7 @@ The CLI does the work. Your job is to run it, read what it reports, verify the r
 |---|---|
 | `data-liberation inspect <url>` | Bounded read-only source assessment with explicit coverage and unknowns |
 | `data-liberation <url>` | Detect the platform, discover routes, liberate every one, write the site |
-| `data-liberation compare <run-dir>` | Verify the copy against its live source. **This is the acceptance gate** |
+| `data-liberation compare <run-dir>` | Verify baseline fidelity against frozen capture-session source evidence |
 | `data-liberation publish <run-dir> --to <target>` | Put the copy on a live URL |
 
 ## Step 1 — Liberate
@@ -50,22 +50,24 @@ This runs two tiers, and the report says which found what.
 
 **Self-consistency, over every route, offline.** Does the copy work on its own terms — every same-page and cross-page anchor resolving to exactly one target, every internal link landing on a real file, no asset still pointing at the origin. This needs no browser and no network, so it covers the whole site in milliseconds.
 
-**Source fidelity, over a sample, in a browser.** Does the copy still match the original — text, geometry and reflow at widths the capture never sampled, and dialogs opening as the source opens them. Each check is a live round trip costing roughly 25 seconds, so it runs on the entrypoint plus a spread of other routes rather than all of them.
+**Frozen source fidelity, in a browser.** Does the copy match the cleaned source observed during capture — text and geometry at 390, 768 and 1440 pixels, over all receipt routes by default. Replay never visits the source. Missing, stale or ambiguous evidence is unproven and prevents a pass. Old runs need recapture to obtain frozen evidence.
 
-**Exit 0 means accepted. Exit 1 means report it.** Each failure names what diverged:
+`--candidate <url>` selects materialization: portable capture → candidate. Compose that result with capture-stage verification for chain acceptance. Only explicit `--stage drift` revisits today's live source, sampling routes and unsampled widths; motion contracts require drift. Baseline evidence excludes dialogs, zoom and motion. Report those as unknown; downstream acceptance requiring them must request the states through the API or keep them pending. See `docs/fidelity-reference.md` for the exact API and scope.
+
+**Exit 0 proves the reported scope. Exit 1 means report failed or unproven evidence.** Each failure names what diverged:
 
 ```
 self-consistency FAIL anchor-ambiguous: 1 route(s) — / /index.html#introduction matches 2 targets
-/anchor/ 1600px FAIL: text 62 chars !== source 707
+capture /anchor/ 1440px baseline FAIL: text 62 chars !== source 707
 ```
 
 The closing line states the scope measured, and both tiers must pass:
 
 ```
-Passed: 4 route(s) checked offline, 4 of 4 compared to source, against https://example.com/
+Passed: 4 route(s) checked offline, 4 of 4 in capture scope, against https://example.com/
 ```
 
-When that line shows fewer routes compared than captured, source fidelity was sampled — say so when reporting, rather than describing the whole site as verified. Add `--screenshots` to write source, copy, and diff PNGs. The pixel score is evidence for a human; pass or fail comes from the named checks.
+Report the stage, required/measured cell coverage, pending evidence and unknown states. When drift samples fewer routes than captured, say so rather than describing the whole site as verified. Add `--screenshots` to write source, copy, and diff PNGs. The pixel score is evidence for a human; pass or fail comes from the named checks.
 
 ## Step 3 — Publish
 
@@ -141,4 +143,4 @@ Report the failure and the matching diagnostics together, so the operator sees b
 
 ## Done
 
-A liberation is complete when `compare` exits 0 and the operator has the run directory, the route counts, and any unresolved entries. A live URL is complete when `publish` has reported it, along with the claim link when the publish was anonymous.
+A baseline liberation is verified when `compare` exits 0 and the operator has the run directory, the route counts, measured scope, and any unresolved entries or unknown states. Broader interaction acceptance stays pending until its requirements are proven. A live URL is complete when `publish` has reported it, along with the claim link when the publish was anonymous.
