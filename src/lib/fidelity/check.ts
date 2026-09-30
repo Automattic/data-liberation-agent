@@ -24,10 +24,12 @@ import { validateMotionContract, verifyCandidateMotion, type MotionContract, typ
 import { probeDialogs } from './dialog-probe.js';
 import { writePixelEvidence } from './evidence.js';
 import { checkSelfConsistency, type SelfConsistencyReport } from './self-consistency.js';
+import { REFERENCE_WIDTHS, readFrozenObservation, readReferenceArtifact, type FidelityReference, type FidelityStage } from './reference.js';
 import {
 	scoreReport,
 	scoreViewport,
 	normalizeImageKey,
+	ambiguousRenderedImages,
 	type HashTarget,
 	type LayoutObservation,
 	type ViewportScore,
@@ -96,8 +98,12 @@ export type ObservePair = (
 
 export interface FidelityCheckOptions {
 	directory: string;
+	/** Frozen capture by default; candidateUrl defaults to materialization. Live origin is visited only in drift mode. */
+	stage?: FidelityStage;
+	/** Required states. Unsupported or absent states are pending, never silently skipped. Default: baseline. */
+	states?: string[];
 	widths?: number[];
-	/** Pathnames to check, e.g. `/` and `/about/`. Default: homepage only. */
+	/** Portable pathnames to check. Frozen default: all declared routes; drift default: spread sample. */
 	routes?: string[];
 	settleMs?: number;
 	/** How many routes to compare against the live source. */
@@ -107,13 +113,9 @@ export interface FidelityCheckOptions {
 	log?: ( ( message: string ) => void ) | undefined;
 	observe?: ObservePair;
 	/**
-	 * Base URL of another rendered copy of the captured site, for example a
-	 * WordPress site built from the capture. When set, each sampled route is
-	 * compared against `candidateUrl + route` instead of the capture served
-	 * locally. Routes still come from the capture receipt, and the offline
-	 * self-consistency checks still describe the capture. Source attribution a
-	 * candidate retains becomes a failed check instead of rejecting the run,
-	 * since the candidate is not this tool's artifact.
+	 * Base URL of another rendered copy. Defaults to portable capture → candidate
+	 * at each required route/viewport/state. Explicit stage:'drift' instead compares
+	 * the live source to the candidate. Offline checks always describe the capture.
 	 */
 	candidateUrl?: string;
 	/** Explicit observable source/candidate interactions; never changes the static capture's diagnosis. */
@@ -134,9 +136,13 @@ function candidateBase( candidateUrl: string ): string {
 }
 
 /** A score, told which route produced it. */
-export type RouteScore = ViewportScore & { route: string };
+export type RouteScore = ViewportScore & { route: string; stage?: FidelityStage; state?: string };
 
 export interface FidelityReport {
+	stage?: FidelityStage;
+	status?: 'proven' | 'failed' | 'unproven';
+	pending?: Array<{ stage: FidelityStage; route: string; viewport: number; state: string; reason: string }>;
+	coverage?: { required: number; measured: number; unknowns: string[] };
 	/** Authored portable runtime was verified during this comparison, not inferred from source scripts. */
 	portableMotion?: { verified: boolean; routes: string[] };
 	cleanup?: { policy: CleanupPolicy; source: CleanupReport[] };
@@ -293,14 +299,16 @@ export function externalRequestHost( href: string, localOrigin: string | null ):
 	}
 }
 
-async function observePage(
+export async function observePage(
 	page: Page,
 	url: string,
 	viewport: number,
 	settleMs: number,
 	localOrigin: string | null,
 	cleanup?: CleanupPolicy,
-	onBaseline?: () => Promise<void>
+	onBaseline?: () => Promise<void>,
+	/** Observe the already-cleaned capture session without navigation or interaction probes. */
+	captureSession = false
 ): Promise< LayoutObservation > {
 	const external = new Set< string >();
 	const onRequest = ( request: { url: () => string } ): void => {
@@ -309,7 +317,10 @@ async function observePage(
 	};
 	page.on( 'request', onRequest );
 	try {
-		await page.goto( url, { waitUntil: 'domcontentloaded', timeout: 60_000 } ).catch( () => {} );
+		if ( ! captureSession ) {
+			const response = await page.goto( url, { waitUntil: 'domcontentloaded', timeout: 60_000 } );
+			if ( response && ! response.ok() ) throw new Error( `Observation HTTP ${ response.status() }: ${ url }` );
+		}
 		await waitForStable( page, settleMs );
 		if (cleanup) {
 			const report = await applySourceCleanup(page, cleanup);
@@ -345,7 +356,7 @@ async function observePage(
 				const pending = ( async () => {
 					try {
 						if ( ! src || src.startsWith( 'data:' ) || src.startsWith( 'blob:' ) ) return null;
-						const response = await fetch( src, { mode: 'cors', credentials: 'omit' } );
+						const response = await fetch( src, { mode: 'cors', credentials: 'omit', signal: AbortSignal.timeout( 5000 ) } );
 						if ( ! response.ok ) return null;
 						const bitmap = await createImageBitmap( await response.blob() );
 						const side = 8;
@@ -416,17 +427,29 @@ async function observePage(
 				}
 				return urls;
 			};
+			const semanticRole = ( image: HTMLImageElement ): string => {
+				const parts: string[] = [];
+				for ( let element: Element | null = image; element; element = element.parentElement ) {
+					if ( element !== image && ! element.matches( 'dialog,[role],nav,main,header,footer,figure,section[aria-label]' ) ) continue;
+					parts.push( `${ element.getAttribute( 'role' ) || element.tagName.toLowerCase() }:${ element.getAttribute( 'aria-label' ) || element.getAttribute( 'alt' ) || '' }` );
+				}
+				return parts.join( '/' );
+			};
 			const images = await Promise.all(
 				[ ...document.querySelectorAll< HTMLImageElement >( 'img' ) ]
 					.map( ( image ) => ( {
 						rect: image.getBoundingClientRect(),
 						src: image.currentSrc || image.getAttribute( 'src' ) || '',
+						role: semanticRole( image ),
+						decoded: image.complete && image.naturalWidth > 0,
 						renditions: renditionUrls( image ),
 						hidden: getComputedStyle( image ).visibility === 'hidden',
 					} ) )
 					.filter( ( { rect, hidden } ) => ! hidden && rect.width > 50 && rect.height > 50 )
-					.map( async ( { rect, src, renditions } ) => ( {
+					.map( async ( { rect, src, renditions, role, decoded } ) => ( {
 						key: src,
+						role,
+						decoded,
 						renditions,
 						x: Math.round( rect.x ),
 						y: Math.round( rect.y ),
@@ -663,17 +686,19 @@ async function observePage(
 				hashTargets,
 				internalPaths,
 			};
-		}, ! localOrigin );
+		}, ! localOrigin && ! captureSession );
 
 		const internalMissing: string[] = [];
 		if ( localOrigin ) {
 			for ( const path of measured.internalPaths.slice( 0, MAX_ROUTE_CHECKS ) ) {
-				const response = await page.request.get( `${ localOrigin }${ path }`, { timeout: 10_000 } );
+				// API requests do not pass through browser routing. Frozen replay must
+				// not follow a candidate's redirect back to the live origin.
+				const response = await page.request.get( `${ localOrigin }${ path }`, { timeout: 10_000, maxRedirects: captureSession ? 0 : 20 } );
 				if ( ! response.ok() ) internalMissing.push( path );
 			}
 		}
 
-		const dialogs = await probeDialogs( page );
+		const dialogs = captureSession ? [] : await probeDialogs( page );
 
 		return {
 			viewport,
@@ -843,6 +868,9 @@ async function verifyCapturedRouteTabs(
 }
 
 export async function checkFidelity( options: FidelityCheckOptions ): Promise< FidelityReport > {
+	const stage = options.stage ?? ( options.candidateUrl ? 'materialization' : 'capture' );
+	if ( ! [ 'capture', 'materialization', 'drift' ].includes( stage ) ) throw new Error( 'Unknown fidelity stage' );
+	if ( stage !== 'drift' ) return checkFrozenFidelity( options, stage );
 	const log = options.log ?? ( () => {} );
 	const { websiteDir, receiptPath } = resolveCheckDirectory( options.directory );
 	const receipt = JSON.parse( readFileSync( receiptPath, 'utf8' ) ) as CaptureReceipt;
@@ -1028,6 +1056,8 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 				);
 				// Every check, built-in and contributed, runs through the registry.
 				const checked = await runFidelityChecks( {
+					stage: 'drift',
+					state: 'baseline',
 					route,
 					viewport: width,
 					sourceUrl: sourceHref,
@@ -1042,6 +1072,8 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 				if ( signals && ! candidateMotionVerified ) checked.failures.push( `source motion not reproduced by capture: ${ signals.join( ', ' ) }; candidate behavior unverified` );
 				if ( candidateMotionVerified ) checked.notes.push( portable ? 'raw source/capture motion unreproduced; authored portable runtime independently verified at 390/768/1440px' : 'source/capture motion unreproduced; independent source/candidate interaction verified at 390/768/1440px' );
 				const score: RouteScore = {
+					stage: 'drift',
+					state: 'baseline',
 					route,
 					viewport: width,
 					pass: checked.failures.length === 0,
@@ -1094,6 +1126,8 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 					internalMissing: [],
 				} );
 				const score = {
+					stage: 'drift' as const,
+					state: 'dialogs',
 					...scoreViewport( dialogOnly( pair.source ), dialogOnly( pair.liberated ) ),
 					route,
 				};
@@ -1152,6 +1186,7 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 	);
 	summary.pass = summary.pass && selfConsistency.pass;
 	return {
+		stage: 'drift',
 		sourceUrl,
 		...(receipt.cleanup ? { cleanup: { policy: receipt.cleanup.policy, source: cleanupReports } } : {}),
 		overlays,
@@ -1166,4 +1201,103 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 		...( portable ? { portableMotion: { verified: motionEvidence.length > 0 && motionEvidence.every( ( evidence ) => evidence.pass ), routes: Object.keys( portable.routes ) } } : {} ),
 		...summary,
 	};
+}
+
+/** Frozen stages share the live observer and registered scoring path; no source browser is created. */
+async function checkFrozenFidelity( options: FidelityCheckOptions, stage: 'capture' | 'materialization' ): Promise<FidelityReport> {
+	if ( options.observe || options.motionContract ) throw new Error( 'Frozen comparison requires real browser baseline evidence; observe/motionContract are drift-only' );
+	if ( options.sampleSize !== undefined ) throw new Error( 'sampleSize is drift-only; select explicit routes for bounded frozen comparison' );
+	if ( stage === 'materialization' && ! options.candidateUrl ) throw new Error( 'Materialization stage requires candidateUrl' );
+	if ( stage === 'capture' && options.candidateUrl ) throw new Error( 'candidateUrl requires materialization or drift stage' );
+	const { websiteDir, receiptPath } = resolveCheckDirectory( options.directory );
+	const directory = dirname( receiptPath );
+	const receipt = JSON.parse( readFileSync( receiptPath, 'utf8' ) ) as CaptureReceipt;
+	const sources = routeSourceMap( receipt );
+	const widths = options.widths ?? [ ...REFERENCE_WIDTHS ];
+	const states = options.states ?? [ 'baseline' ];
+	const routes = options.routes?.map( canonicalRoutePath ) ?? [ ...sources.keys() ];
+	const selfConsistency = checkSelfConsistency( websiteDir, routeFiles( receipt ) );
+	const scores: RouteScore[] = [];
+	const pending: NonNullable<FidelityReport['pending']> = [];
+	let manifest: FidelityReference | undefined;
+	let invalid: string | undefined;
+	try {
+		manifest = JSON.parse( readFileSync( join( directory, 'fidelity-reference.json' ), 'utf8' ) ) as FidelityReference;
+		if ( manifest.schema !== 'data-liberation/fidelity-reference/v1' || manifest.sourceUrl !== receipt.source?.url || ! manifest.captureId ) throw new Error( 'Invalid reference schema or source identity' );
+		if ( manifest.receipt.path !== 'capture-receipt.json' ) throw new Error( 'Invalid reference receipt identity' );
+		readReferenceArtifact( directory, manifest.receipt );
+		if ( stage === 'materialization' ) {
+			if ( ! manifest.capture.length ) throw new Error( 'Portable capture hashes missing' );
+			for ( const artifact of manifest.capture ) readReferenceArtifact( directory, artifact );
+		}
+	} catch ( error ) { invalid = `Frozen reference unproven: ${ String( error ) }`; }
+	const unknowns = manifest?.scope?.unknowns ?? [ 'Capture has no valid frozen source evidence.' ];
+	// Discovery failures cannot disappear simply because no portable route was written.
+	let missingRoutes = 0;
+	for ( const url of options.routes ? [] : manifest?.scope?.sourceUrls ?? [] ) {
+		if ( [ ...sources.values() ].includes( url ) ) continue;
+		missingRoutes++;
+		for ( const viewport of widths ) for ( const state of states ) pending.push( { stage, route: url, viewport, state, reason: 'Declared source route has no portable capture' } );
+	}
+	let server: Awaited<ReturnType<typeof startStaticServer>> | undefined;
+	let browser: Awaited<ReturnType<typeof import('playwright')['chromium']['launch']>> | undefined;
+	try {
+		for ( const route of routes ) for ( const viewport of widths ) for ( const state of states ) {
+			options.log?.( `[compare] ${ stage } ${ route } @ ${ viewport }px ${ state }` );
+			const attribution = { stage, route, viewport, state };
+			try {
+				if ( invalid ) throw new Error( invalid );
+				if ( ! manifest || ! sources.has( route ) ) throw new Error( 'Required route was not captured' );
+				if ( state !== 'baseline' || ! manifest.scope.states.includes( state ) || ! manifest.scope.widths.includes( viewport ) ) throw new Error( 'Required viewport/state is outside frozen scope' );
+				const entries = manifest.entries.filter( entry => entry.route === route && entry.sourceUrl === sources.get( route ) && entry.viewport === viewport && entry.state === state );
+				if ( entries.length !== 1 ) throw new Error( 'Source observation missing or ambiguous' );
+				const frozen = readFrozenObservation( directory, entries[0]! );
+				// Validate all source evidence even for materialization: stale evidence cannot certify a chain.
+				server ??= await startStaticServer( websiteDir );
+				browser ??= await ( await import( 'playwright' ) ).chromium.launch();
+				const page = await browser.newPage( { viewport: { width: viewport, height: 900 }, serviceWorkers: 'block' } );
+				try {
+					// Portable replay cannot reach the origin, including redirects and media requests.
+					const local = `${ server.url }${ route }`;
+					const candidate = stage === 'materialization' ? `${ candidateBase( options.candidateUrl! ) }${ route }` : local;
+					await page.context().route( '**/*', async request => {
+						const origin = new URL( request.request().url() ).origin;
+						if ( origin === new URL( server!.url ).origin || ( stage === 'materialization' && origin !== new URL( manifest!.sourceUrl ).origin ) ) await request.continue();
+						else await request.abort();
+					} );
+					let source = frozen.observation;
+					let sourcePng = frozen.png;
+					const measure = async ( url: string ): Promise<LayoutObservation> => {
+						const response = await page.goto( url, { waitUntil: 'domcontentloaded' } );
+						if ( response && ! response.ok() ) throw new Error( `Observation HTTP ${ response.status() }` );
+						return observePage( page, url, viewport, options.settleMs ?? 800, new URL( url ).origin, undefined, undefined, true );
+					};
+					if ( stage === 'materialization' ) { source = await measure( local ); sourcePng = await page.screenshot(); }
+					const liberated = await measure( candidate );
+					if ( ambiguousRenderedImages( source.images, liberated.images ).length ) throw new Error( 'Repeated image correspondence ambiguous: structural role/state does not uniquely identify occurrences' );
+					const evidenceDir = join( directory, 'compare', stage, evidenceSlug( route ), String( viewport ), state );
+					const candidatePng = options.screenshots ? await page.screenshot() : undefined;
+					const checked = await runFidelityChecks( { ...attribution, sourceUrl: stage === 'capture' ? `frozen:${ entries[0]!.observation!.path }` : local, candidateUrl: candidate, source, candidate: liberated, evidenceDir } );
+					if ( receipt.cleanup ) {
+						const retained = await applySourceCleanup( page, receipt.cleanup.policy );
+						if ( retained.removed || retained.residual || retained.failures.length ) checked.failures.push( 'Rendered artifact retains source attribution/advertising or cleanup audit failed' );
+					}
+					if ( candidatePng ) {
+						const pixels = writePixelEvidence( evidenceDir, sourcePng, candidatePng );
+						checked.notes.push( 'score' in pixels ? `pixel evidence → ${ pixels.diffPath }` : pixels.error );
+					}
+					scores.push( { ...attribution, source, liberated, pass: ! checked.failures.length, failures: checked.failures, notes: checked.notes } );
+				} finally { await page.context().close(); }
+			} catch ( error ) { pending.push( { ...attribution, reason: String( error ) } ); }
+		}
+	} finally { await browser?.close(); await server?.close(); }
+	if ( ! routes.length || ! widths.length || ! states.length ) pending.push( { stage, route: '/', viewport: 0, state: 'baseline', reason: 'Empty required scope' } );
+	const summary = scoreReport( scores );
+	const pass = summary.pass && selfConsistency.pass && pending.length === 0;
+	const report: FidelityReport = { ...summary, pass, stage, status: pending.length ? 'unproven' : pass ? 'proven' : 'failed', pending,
+		coverage: { required: ( routes.length + missingRoutes ) * widths.length * states.length, measured: scores.length, unknowns },
+		sourceUrl: receipt.source?.url ?? '', websiteDir, widths, routes, routesAvailable: sources.size, routesCleanupUnproven: [], selfConsistency, scores, overlays: [] };
+	mkdirSync( join( directory, 'compare', stage ), { recursive: true } );
+	writeFileSync( join( directory, 'compare', stage, 'report.json' ), `${ JSON.stringify( report, null, 2 ) }\n` );
+	return report;
 }

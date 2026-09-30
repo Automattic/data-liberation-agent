@@ -7,7 +7,8 @@ import { cleanupPolicy, applySourceCleanup, readSourceCleanup, sweepSourceCleanu
 import { capture as wixCapture } from '../adapters/wix/capture.js';
 import { captureScreenshots } from './screenshot/screenshotter.js';
 import { exportWebsiteCapture } from './capture-export.js';
-import { checkFidelity } from './fidelity/check.js';
+import { checkFidelity as checkLiveFidelity } from './fidelity/check.js';
+const checkFidelity = ( options: Parameters<typeof checkLiveFidelity>[0] ) => checkLiveFidelity( { ...options, stage: 'drift' } );
 
 let server: Server | undefined;
 let directory: string | undefined;

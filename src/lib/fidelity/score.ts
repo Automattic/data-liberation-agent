@@ -19,6 +19,10 @@ import type { DismissedOverlay } from '../screenshot/page-helpers.js';
  */
 export interface RenderedImage {
 	key: string;
+	/** Semantic ancestor role/label and image label; never a sibling index or geometry. */
+	role?: string;
+	/** False when the visible image has not decoded; an occupied box is not proof of real media. */
+	decoded?: boolean;
 	x: number;
 	y: number;
 	width: number;
@@ -192,15 +196,6 @@ interface ImagePair {
 	candidate: RenderedImage;
 }
 
-function imageDistance( source: RenderedImage, candidate: RenderedImage ): number {
-	return (
-		Math.abs( source.x - candidate.x ) +
-		Math.abs( source.y - candidate.y ) +
-		Math.abs( source.width - candidate.width ) +
-		Math.abs( source.height - candidate.height )
-	);
-}
-
 /**
  * Filenames that name this rendered asset: the file that loaded, plus any
  * other rendition the element declared. A shared placeholder is not an
@@ -235,24 +230,29 @@ function identityKeys( image: RenderedImage ): string[] {
  * Content is tried first — it is the stronger claim — and the URL key covers
  * whatever the hashes missed. A srcset candidate is the same asset under
  * another filename: the loaded file can change with viewport width while the
- * element still declares both renditions. Within a tier the nearest geometry
- * wins, the same discipline the key-only matcher always used. A copy image is
- * consumed by at most one pair, so a page rendering the same asset twice must
- * render it twice.
+ * element still declares both renditions. Within a tier repeated identities
+ * require unique structural roles; geometry is a measurement, not identity.
+ * A copy image is consumed by at most one pair.
  */
 export function matchRenderedImages( source: RenderedImage[], copy: RenderedImage[] ): ImagePair[] {
 	const pairs: ImagePair[] = [];
 	const paired = new Set< RenderedImage >();
 
-	const nearestIn = ( group: RenderedImage[], image: RenderedImage ): RenderedImage | null => {
+	const correspondingIn = ( group: RenderedImage[], image: RenderedImage, content = false ): RenderedImage | null => {
 		if ( group.length === 0 ) return null;
-		let nearest = 0;
-		for ( let index = 1; index < group.length; index++ ) {
-			if ( imageDistance( image, group[ index ] ) < imageDistance( image, group[ nearest ] ) ) {
-				nearest = index;
-			}
+		const sameIdentity = ( other: RenderedImage ) => content
+			? image.contentHash === other.contentHash
+			: identityKeys( image ).some( key => identityKeys( other ).includes( key ) );
+		const sourceOccurrences = source.filter( sameIdentity );
+		const copyOccurrences = copy.filter( sameIdentity );
+		if ( sourceOccurrences.length > 1 || copyOccurrences.length > 1 ) {
+			// Geometry cannot prove correspondence: pairing the nearest box hides a
+			// swapped normal/zoom occurrence or a materialization layout defect.
+			if ( ! image.role || sourceOccurrences.filter( other => other.role === image.role ).length !== 1 || copyOccurrences.filter( other => other.role === image.role ).length !== 1 ) return null;
+			const index = group.findIndex( candidate => candidate.role === image.role );
+			return index < 0 ? null : group.splice( index, 1 )[0]!;
 		}
-		return group.splice( nearest, 1 )[ 0 ]!;
+		return group.shift()!;
 	};
 
 	// Tier 1: same picture, whatever it is called on each side.
@@ -266,7 +266,7 @@ export function matchRenderedImages( source: RenderedImage[], copy: RenderedImag
 		}
 		for ( const image of source ) {
 			if ( ! image.contentHash ) continue;
-			const candidate = nearestIn( byHash.get( image.contentHash ) ?? [], image );
+			const candidate = correspondingIn( byHash.get( image.contentHash ) ?? [], image, true );
 			if ( ! candidate ) continue;
 			paired.add( candidate );
 			pairs.push( { source: image, candidate } );
@@ -295,7 +295,7 @@ export function matchRenderedImages( source: RenderedImage[], copy: RenderedImag
 				candidates.push( candidate );
 			}
 		}
-		const candidate = nearestIn( candidates, image );
+		const candidate = correspondingIn( candidates, image );
 		if ( ! candidate ) continue;
 		paired.add( candidate );
 		for ( const group of available.values() ) {
@@ -306,6 +306,12 @@ export function matchRenderedImages( source: RenderedImage[], copy: RenderedImag
 	}
 
 	return pairs;
+}
+
+export function ambiguousRenderedImages( source: RenderedImage[], copy: RenderedImage[] ): RenderedImage[] {
+	const paired = new Set( matchRenderedImages( source, copy ).map( pair => pair.source ) );
+	return source.filter( image => ! paired.has( image ) && copy.some( candidate =>
+		( !! image.contentHash && image.contentHash === candidate.contentHash ) || identityKeys( image ).some( key => identityKeys( candidate ).includes( key ) ) ) );
 }
 
 export function scoreViewport(
@@ -363,6 +369,8 @@ export function scoreViewport(
 	if ( liberated.images.length > matchedImages ) {
 		notes.push( `images ${ liberated.images.length - matchedImages } extra in copy (not a failure)` );
 	}
+	const undecoded = liberated.images.filter( image => image.decoded === false );
+	if ( undecoded.length ) failures.push( `images ${ undecoded.length } visible image(s) pending or failed decoding` );
 
 	if ( liberated.overflow && ! source.overflow ) {
 		failures.push( `horizontal overflow at ${ liberated.docWidth }px in a ${ liberated.viewport }px viewport` );

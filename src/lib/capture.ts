@@ -194,6 +194,8 @@ export async function captureWebsite(
 	progress( { phase: 'capturing', current: 0, total: urls.length } );
 
 	const { captureScreenshots } = await import( './screenshot/screenshotter.js' );
+	const { createReferenceCollector } = await import( './fidelity/reference.js' );
+	const reference = createReferenceCollector( outputDir, sourceUrl, urls );
 	const screenshotResult = await captureScreenshots( {
 		urls,
 		outputDir,
@@ -206,6 +208,7 @@ export async function captureWebsite(
 		prepareCapture: adapter.liberation?.prepare,
 		resolveClientRedirect: adapter.liberation?.resolveClientRedirect,
 		beforeSerialize: adapter.liberation?.beforeSerialize,
+		observeSource: reference.observe,
 		...( adapter.liberation?.canonicalizeHtml
 			? { canonicalizeHtml: adapter.liberation.canonicalizeHtml.bind( adapter.liberation ) }
 			: {} ),
@@ -243,6 +246,7 @@ export async function captureWebsite(
 		discoveryDiagnostics: inventory.diagnostics ?? [],
 	} );
 	const unresolvedAnchors = readUnresolvedAnchors( outputDir );
+	reference.finalize( captureReceiptPath );
 	const complete =
 		summary.routesFailed === 0 &&
 		unresolvedAnchors.every( ( anchor ) => anchor.reason !== 'target route was not captured' );

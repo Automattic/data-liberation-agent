@@ -68,13 +68,14 @@ const TOOLS = [
   {
     name: 'compare',
     description:
-      'Verify a liberated copy: self-consistency across every route, and source fidelity across a sample. Returns the report, including whether it passed.',
+      'Verify frozen source/capture evidence or portable capture/candidate fidelity. Explicit drift stage revisits the live source. Returns coverage, pending evidence and scores.',
     inputSchema: {
       type: 'object',
       properties: {
         directory: { type: 'string', description: 'A liberated run directory.' },
         screenshots: { type: 'boolean', description: 'Write source/copy/diff PNGs as evidence.' },
         candidateUrl: { type: 'string', description: 'Base URL of another rendered copy of the site, such as one built from the capture, to compare instead of the capture.' },
+        stage: { type: 'string', enum: ['capture', 'materialization', 'drift'], description: 'Defaults to capture, or materialization with candidateUrl. Only drift visits the source.' },
         motionContract: { type: 'object', description: 'Authored routes, widths, readiness selectors, text, canvas and click probes for independent source/candidate behavior verification.' },
       },
       required: ['directory'],
@@ -151,6 +152,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         directory: String(args.directory ?? ''),
         screenshots: args.screenshots === true,
         candidateUrl: typeof args.candidateUrl === 'string' ? args.candidateUrl : undefined,
+        stage: typeof args.stage === 'string' ? args.stage as import('./lib/fidelity/reference.js').FidelityStage : undefined,
         motionContract: args.motionContract && typeof args.motionContract === 'object' ? args.motionContract as import('./lib/fidelity/candidate-motion.js').MotionContract : undefined,
         log,
       });
