@@ -12,6 +12,16 @@ import { createReferenceCollector, type FidelityReference } from './reference.js
 import { matchRenderedImages } from './score.js';
 
 describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chromium.executablePath() ) )( 'capture-session reference replay', () => {
+	it( 'measures the declared resting disclosure state without expanding it during frozen observation', async () => {
+		const browser = await chromium.launch();
+		const page = await browser.newPage();
+		try {
+			await page.setContent('<button aria-expanded="false" aria-controls="answer">Neutral baseline question</button><div id="answer" hidden>Only visible after activation</div><script>const button=document.querySelector("button");button.onclick=()=>{const open=button.getAttribute("aria-expanded")==="false";button.setAttribute("aria-expanded",String(open));document.getElementById("answer").hidden=!open;};</script>');
+			const observation = await observePage(page, 'http://fixture.invalid/', 390, 0, null, undefined, undefined, true);
+			expect(await page.locator('button').getAttribute('aria-expanded')).toBe('false');
+			expect(observation.textChars).toBe('Neutral baseline question'.length);
+		} finally { await browser.close(); }
+	}, 30_000);
 	it( 'freezes a mutating neutral source, attributes geometry to each stage, and refuses incomplete evidence', async () => {
 		const parent = join( process.cwd(), '.tmp-test' );
 		mkdirSync( parent, { recursive: true } );

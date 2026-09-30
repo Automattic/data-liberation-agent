@@ -340,12 +340,14 @@ export async function observePage(
 		// Decode lazy media and return from a controlled scroll before measuring.
 		// Scroll-linked animations are otherwise observed mid-flight, while the
 		// source runtime may still be holding the same element at rest.
-		await triggerLazyLoad( page );
+		await triggerLazyLoad( page, false, { expandContent: !captureSession } );
 		dismissedOverlays.push( ...( await dismissOverlays( page, { kinds: COMPARED_OVERLAY_KINDS } ) ) );
 		// Evidence describes the settled baseline, not the page left behind by
 		// anchor/dialog probes (which can scroll or leave a popup open).
 		await onBaseline?.();
 		const measured = await page.evaluate( async ( clickUnresolved: boolean ) => {
+			const globalWithName = globalThis as typeof globalThis & { __name?: (fn: unknown) => unknown };
+			if (typeof globalWithName.__name === 'undefined') globalWithName.__name = fn => fn;
 			// Perceptual identity for one image: fetch the bytes (cache-warm —
 			// the page just rendered them), decode locally, downscale to 8x8
 			// grayscale, threshold at the mean. Fetching keeps this
