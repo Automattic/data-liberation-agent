@@ -2,6 +2,7 @@ import type { PlatformAdapter } from '../../types.js';
 import { discoverDefault } from '../default/discover.js';
 import { providerCreditRules } from '../../lib/source-cleanup.js';
 import { detection } from './detection.js';
+import { neutralizePortalLinks } from './portal-links.js';
 
 // Ghost themes credit the platform with a link to ghost.org ("Powered by
 // Ghost", "Published with Ghost"), so only the link-based credit rule is used.
@@ -26,5 +27,6 @@ export const ghostAdapter: PlatformAdapter = {
 	liberation: {
 		cleanupRules: ghostCreditRules,
 		removeSelectors: RUNTIME_ROOTS,
+		beforeSerialize: async ( page ) => { await neutralizePortalLinks( page ); },
 	},
 };
