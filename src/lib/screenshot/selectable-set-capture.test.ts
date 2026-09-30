@@ -207,6 +207,48 @@ describe( 'captureSelectableSetStates', () => {
 		await browser?.close();
 	} );
 
+	it.skipIf( skipBrowser )( 'leaves native summaries and passive link wrappers to their owning controls', async () => {
+		const page = await browser.newPage();
+		try {
+			await serve( page, `<main><div id="links">
+				<div style="cursor:pointer"><a href="/one"><span>Read one</span></a></div>
+				<div style="cursor:pointer"><a href="/two"><span>Read two</span></a></div>
+			</div><div id="disclosures">
+				<details><summary style="cursor:pointer"><span>Archive</span></summary><p>Archive content</p></details>
+				<details><summary style="cursor:pointer"><span>Labels</span></summary><p>Label content</p></details>
+			</div><div>Nearby shared content</div></main>
+			<script>window.clicks=0;document.addEventListener('click',()=>window.clicks++);</script>` );
+			expect( await captureSelectableSetStates( page, { settleMs: 10 } ) ).toEqual( [] );
+			expect( await page.evaluate( () => ( window as unknown as { clicks: number } ).clicks ) ).toBe( 0 );
+			await page.locator( 'summary' ).first().click();
+			expect( await page.locator( 'details' ).first().getAttribute( 'open' ) ).not.toBeNull();
+			await page.getByRole( 'link', { name: 'Read one' } ).click();
+			expect( page.url() ).toBe( `${ ORIGIN }/one` );
+		} finally {
+			await page.close();
+		}
+	} );
+
+	it.skipIf( skipBrowser )( 'retains semantic and mixed-content pickers that contain navigation links', async () => {
+		const page = await browser.newPage();
+		try {
+			await page.setContent( `<div id="layout"><div id="picker">
+				<div id="a" role="tab" style="cursor:pointer"><a href="/a">Alpha</a></div>
+				<div id="b" role="tab" style="cursor:pointer"><a href="/b">Beta</a></div>
+			</div><div id="panel">Choose a region for detailed information.</div></div><script>
+				const copy={a:'Alpha region / Production / A climate-controlled room with a 18/6 light cycle.',b:'Beta region / Storage / Cold room held at 4C for finished goods.'};
+				document.querySelectorAll('#picker > div').forEach(el=>el.addEventListener('click',()=>document.getElementById('panel').textContent=copy[el.id]));
+			</script>` );
+			const states = await captureSelectableSetStates( page, { settleMs: 10 } );
+			expect( states.filter( state => state.status === 'captured' ).map( state => state.trigger.id ) ).toEqual( [ 'a', 'b' ] );
+			await page.setContent( PICKER_PAGE.replace( 'Zone 1</div>', 'Zone 1 <a href="/guide">Guide</a></div>' ) );
+			const mixed = await captureSelectableSetStates( page, { settleMs: 10 } );
+			expect( mixed.filter( state => state.status === 'captured' ) ).toHaveLength( 3 );
+		} finally {
+			await page.close();
+		}
+	} );
+
 	it.skipIf( skipBrowser )( 'does not drive pointer descendants of popup and disclosure controls', async () => {
 		const page = await browser.newPage();
 		try {
