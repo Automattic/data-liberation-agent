@@ -361,6 +361,7 @@ export async function hydrateDisclosureContent(page: Page, rootSelector = 'body'
           if (candidate.mounted) {
             handledToggles.add(describe(trigger).selector);
             const before = new Set(Array.from(target.children));
+            const closedIcons = Array.from(trigger.querySelectorAll('svg')).map(icon => ({className: icon.getAttribute('class') ?? '', style: icon.getAttribute('style') ?? ''}));
             const route = currentRoute();
             trigger.click();
             let panels: HTMLElement[] = [];
@@ -371,10 +372,24 @@ export async function hydrateDisclosureContent(page: Page, rootSelector = 'body'
             }
             const panel = panels.length === 1 && currentRoute() === route && trigger.getAttribute('aria-expanded') === 'true' ? panels[0] : undefined;
             const copy = panel?.cloneNode(true) as HTMLElement | undefined;
+            const openIcons = Array.from(trigger.querySelectorAll('svg')).map(icon => ({className: icon.getAttribute('class') ?? '', style: icon.getAttribute('style') ?? ''}));
             if (trigger.getAttribute('aria-expanded') === 'true') trigger.click();
             const deadline = Date.now() + settleMs;
             while (Date.now() < deadline && (trigger.getAttribute('aria-expanded') !== 'false' || panel?.isConnected)) await wait(25);
             if (copy && trigger.getAttribute('aria-expanded') === 'false' && !panel?.isConnected) {
+              const icons = Array.from(trigger.querySelectorAll('svg'));
+              if (icons.length === closedIcons.length && icons.length === openIcons.length) icons.forEach((icon,index) => {
+                const closed = closedIcons[index]!, open = openIcons[index]!;
+                if ((icon.getAttribute('class') ?? '') !== closed.className || (icon.getAttribute('style') ?? '') !== closed.style) return;
+                if (closed.className !== open.className) {
+                  icon.setAttribute('data-dla-disclosure-open-class',open.className);
+                  icon.setAttribute('data-dla-disclosure-closed-class',closed.className);
+                }
+                if (closed.style !== open.style) {
+                  icon.setAttribute('data-dla-disclosure-open-style',open.style);
+                  icon.setAttribute('data-dla-disclosure-closed-style',closed.style);
+                }
+              });
               mountedPanels.push({ trigger, parent: target, panel: copy });
               hydrated++;
             } else {

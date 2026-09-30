@@ -78,7 +78,7 @@ function panelFor(trigger){
   var parent=trigger.parentElement,id=trigger.getAttribute('aria-controls');
   return parent&&Array.prototype.find.call(parent.querySelectorAll('[data-dla-local-disclosure]'),function(panel){return panel.id===id;});
 }
-function set(trigger,open){var panel=panelFor(trigger);if(!panel)return;panel.hidden=!open;trigger.setAttribute('aria-expanded',String(open));}
+function set(trigger,open){var panel=panelFor(trigger);if(!panel)return;panel.hidden=!open;trigger.setAttribute('aria-expanded',String(open));trigger.querySelectorAll('[data-dla-disclosure-open-class],[data-dla-disclosure-open-style]').forEach(function(icon){['class','style'].forEach(function(name){var value=icon.getAttribute('data-dla-disclosure-'+(open?'open':'closed')+'-'+name);if(value!==null)icon.setAttribute(name,value);});});}
 function activate(event){
   var trigger=event.target.closest&&event.target.closest('[aria-controls]');
   if(!trigger||!panelFor(trigger))return;

@@ -2,6 +2,7 @@ import {chromium} from 'playwright';
 import {expect, it} from 'vitest';
 import {hydrateDisclosureContent} from './dynamic-content.js';
 import {captureSelectableSetStates} from './selectable-set-capture.js';
+import {wireCapturedDialogs} from '../static-dialogs.js';
 
 it('captures rebuilt category answers by observation, including different answers with duplicate labels', async () => {
   const browser = await chromium.launch({headless: true});
@@ -49,4 +50,20 @@ it('captures rebuilt category answers by observation, including different answer
   } finally {
     await browser.close();
   }
+});
+
+it('preserves an observed disclosure icon state without replacing the editable label', async () => {
+  const browser=await chromium.launch({headless:true});const page=await browser.newPage();
+  try {
+    await page.setContent(`<style>.resting{rotate:0deg}.expanded{rotate:180deg}</style><article><button type="button" aria-expanded="false"><span>Editable question</span><svg class="resting" width="18" height="18" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg></button></article><script>const button=document.querySelector('button');button.onclick=()=>{const open=button.getAttribute('aria-expanded')==='false';button.setAttribute('aria-expanded',String(open));button.querySelector('svg').setAttribute('class',open?'expanded':'resting');button.nextElementSibling?.remove();if(open)button.insertAdjacentHTML('afterend','<div><p>Real answer</p></div>');};</script>`);
+    const states=await hydrateDisclosureContent(page);
+    expect(await page.locator('svg').getAttribute('class')).toBe('resting');
+    expect(await page.locator('svg').getAttribute('data-dla-disclosure-open-class')).toBe('expanded');
+    await page.setContent(wireCapturedDialogs((await page.content()).replace(/<script>[\s\S]*?<\/script>/g,''),states));
+    await page.locator('button span').evaluate(element=>element.textContent='Owner edited question');
+    await page.locator('button').click();expect(await page.locator('svg').getAttribute('class')).toBe('expanded');
+    expect(await page.locator('svg').evaluate(element=>getComputedStyle(element).rotate)).toBe('180deg');
+    expect(await page.locator('button span').innerText()).toBe('Owner edited question');
+    await page.locator('button').click();expect(await page.locator('svg').getAttribute('class')).toBe('resting');
+  } finally { await browser.close(); }
 });
