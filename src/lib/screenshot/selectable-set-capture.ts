@@ -1,5 +1,6 @@
 import type { Page } from 'playwright';
 import type { CapturedDialogInteraction } from './interaction-capture.js';
+import { hydrateDisclosureContent } from './dynamic-content.js';
 
 export const SELECTABLE_SET_KIND = 'selectable-set' as const;
 export const CHOICE_GROUP_KIND = 'choice-group' as const;
@@ -56,6 +57,7 @@ interface RawSelectableRecord {
 		coverage: 'complete' | 'partial';
 	};
 	error?: string;
+	restoreSelector?: string;
 }
 
 /**
@@ -545,6 +547,7 @@ export async function captureSelectableSetStates(
 				let capturedSets = 0;
 				let probedGroups = 0;
 				for ( const group of groups ) {
+					const original = selectedMember(group.members);
 					if ( capturedSets >= limits.maxSets ) break;
 					if ( probedGroups >= limits.maxProbeGroups ) break;
 					probedGroups++;
@@ -563,6 +566,7 @@ export async function captureSelectableSetStates(
 							status,
 							trigger: describeTrigger( group.members[ index ] ?? group.members[ 0 ] ),
 							set: setRecord( index ),
+							...(original ? { restoreSelector: sourceSelector(original) } : {}),
 							...extra,
 						} );
 					};
@@ -800,7 +804,6 @@ export async function captureSelectableSetStates(
 
 					const region = candidates[ regionIdx ];
 					region.setAttribute( 'data-lib-selectable-region', 'true' );
-					const original = selectedMember( group.members );
 					const drivenCount = Math.min( group.members.length, limits.maxMembers );
 
 					for ( let index = 0; index < drivenCount && Date.now() < deadline; index++ ) {
@@ -872,6 +875,40 @@ export async function captureSelectableSetStates(
 		];
 	}
 
+	// Rebuilt category subtrees need their own observed answers. Matching a
+	// duplicate question label to an answer from another state is ambiguous.
+	// Re-drive only confirmed states containing unassociated disclosure controls.
+	const deadline = Date.now() + maxDriveMs;
+	const restores = new Set<string>();
+	try {
+		for (const record of raw) {
+			if (record.status !== 'captured' || record.choiceGroup || !record.region?.html || !record.region.html.includes('aria-expanded="false"')) continue;
+			if (Date.now() >= deadline) break;
+			if (record.restoreSelector) restores.add(record.restoreSelector);
+			try {
+				await page.locator(record.trigger.selector).first().evaluate((element: HTMLElement) => element.click());
+				await page.waitForTimeout(settleMs);
+				const local = page.locator(record.region.selector).first();
+				if (!await local.locator('[aria-expanded="false"]:not([aria-haspopup])').count()) continue;
+				await hydrateDisclosureContent(page, record.region.selector);
+				record.region.html = await local.evaluate(element => {
+				const clone = element.cloneNode(true) as Element;
+				clone.querySelectorAll('script,style,noscript,iframe').forEach(node => node.remove());
+				for (const node of [clone, ...Array.from(clone.querySelectorAll('*'))]) {
+					for (const attribute of Array.from(node.attributes)) if (/^on/i.test(attribute.name) || attribute.name.startsWith('data-lib-selectable')) node.removeAttribute(attribute.name);
+				}
+				return clone.outerHTML;
+				});
+			} catch (error) {
+				record.error = `Disclosure hydration failed: ${error instanceof Error ? error.message : String(error)}`.slice(0, 500);
+			}
+		}
+	} finally {
+		for (const selector of restores) {
+			await page.locator(selector).first().evaluate((element: HTMLElement) => element.click()).catch(() => undefined);
+			await page.waitForTimeout(settleMs);
+		}
+	}
 	return raw.map( ( record ) => toInteraction( record, maxHtmlBytes ) );
 }
 

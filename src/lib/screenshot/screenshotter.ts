@@ -910,14 +910,6 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	// Diagnostics are held until the interaction-states merge below rather than
 	// dropped, so the fix is observable in interaction-states.json.
 	let disclosureStates: CapturedDialogInteraction[] = [];
-	if (
-		plan.captureHtml ||
-		plan.captureMobileHtml ||
-		plan.captureSections ||
-		plan.captureMobileSections
-	) {
-		disclosureStates = await hydrateDisclosureContent( page );
-	}
 
 	// Seam 1b: replace runtime-computed pixel geometry with the relationship the
 	// source actually obeys, learned by resizing while its runtime still runs.
@@ -966,6 +958,13 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		} ).catch( () => {
 			/* best-effort — never block capture on a late platform widget */
 		} );
+	}
+
+	// Hydrated panels belong to the serialization transaction. Browser probes
+	// and width learning can rerender their source items, discarding injected
+	// answers or mistaking the new controls for another interactive component.
+	if (plan.captureHtml || plan.captureMobileHtml || plan.captureSections || plan.captureMobileSections) {
+		disclosureStates = await hydrateDisclosureContent(page);
 	}
 
 	// Capture only after every operation that can change the live DOM, then
