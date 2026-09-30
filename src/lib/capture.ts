@@ -246,6 +246,10 @@ export async function captureWebsite(
 		discoveryDiagnostics: inventory.diagnostics ?? [],
 	} );
 	const unresolvedAnchors = readUnresolvedAnchors( outputDir );
+	// Diagnosed dynamic pages need causal evidence, not an author-authored site
+	// recipe. Discovery remains explicit untranslated evidence until a portable
+	// implementation passes the independent source fidelity gate.
+	await ( await import( './behavior-discovery.js' ) ).discoverCapturedBehavior( outputDir );
 	reference.finalize( captureReceiptPath );
 	const complete =
 		summary.routesFailed === 0 &&

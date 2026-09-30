@@ -86,7 +86,9 @@ function overlayLabels( dismissed: DismissedOverlay[] ): string[] {
 export type ObservePair = (
 	sourceUrl: string,
 	localUrl: string,
-	viewport: number
+	viewport: number,
+	/** A learned source startup duration; the source is observed only once it has settled. */
+	sourceSettleMs?: number
 ) => Promise< {
 	source: LayoutObservation;
 	liberated: LayoutObservation;
@@ -144,7 +146,7 @@ export interface FidelityReport {
 	pending?: Array<{ stage: FidelityStage; route: string; viewport: number; state: string; reason: string }>;
 	coverage?: { required: number; measured: number; unknowns: string[] };
 	/** Authored portable runtime was verified during this comparison, not inferred from source scripts. */
-	portableMotion?: { verified: boolean; routes: string[] };
+	portableMotion?: { verified: boolean; routes: string[]; origin: 'authored' | 'learned' };
 	cleanup?: { policy: CleanupPolicy; source: CleanupReport[] };
 	/** Overlays dismissed per side before measuring. Evidence, never a gate. */
 	overlays: OverlayRecord[];
@@ -943,7 +945,7 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 	const portable = candidate || options.motionContract ? null : readPortableMotion( dirname( receiptPath ), websiteDir );
 	const motionContract = options.motionContract ?? portable?.contract;
 	if ( motionContract ) {
-		if ( ( ! candidate && ! portable ) || options.observe ) throw new Error( 'Motion contract requires a live --candidate browser comparison or an authored portable runtime receipt' );
+		if ( ( ! candidate && ! portable ) || options.observe ) throw new Error( 'Motion contract requires a live --candidate browser comparison or a portable runtime receipt' );
 		validateMotionContract( motionContract );
 	}
 	let observe = options.observe;
@@ -959,12 +961,12 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 		throw error;
 	}
 	if ( ! observe ) {
-		observe = async ( sourceHref, localHref, viewport ) => {
+		observe = async ( sourceHref, localHref, viewport, sourceSettleMs = 0 ) => {
 			if ( ! page ) throw new Error( 'browser page missing' );
 			await page.setViewportSize( { width: viewport, height: 900 } );
 			let sourcePng: Buffer | undefined;
 			let liberatedPng: Buffer | undefined;
-			const source = await observePage( page, sourceHref, viewport, settleMs, null, receipt.cleanup?.policy,
+			const source = await observePage( page, sourceHref, viewport, Math.max( settleMs, sourceSettleMs ), null, receipt.cleanup?.policy,
 				options.screenshots ? async () => { sourcePng = await page!.screenshot(); } : undefined );
 			if (receipt.cleanup) {
 				const report = await readSourceCleanup(page);
@@ -1046,7 +1048,7 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 			);
 			for ( const width of widths ) {
 				log( `[compare] ${ route } @ ${ width }px` );
-				const pair = await observe( sourceHref, localHref, width );
+				const pair = await observe( sourceHref, localHref, width, contract ? contract.ready.sourceSettleMs : undefined );
 				recordOverlays( route, width, sourceHref, localHref, pair );
 				const evidenceDir = join(
 					dirname( receiptPath ),
@@ -1070,7 +1072,8 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 					checked.failures.push( `candidate retains advertising or source attribution (${ pair.candidateRetained } removable)` );
 				}
 				if ( signals && ! candidateMotionVerified ) checked.failures.push( `source motion not reproduced by capture: ${ signals.join( ', ' ) }; candidate behavior unverified` );
-				if ( candidateMotionVerified ) checked.notes.push( portable ? 'raw source/capture motion unreproduced; authored portable runtime independently verified at 390/768/1440px' : 'source/capture motion unreproduced; independent source/candidate interaction verified at 390/768/1440px' );
+				for ( const residual of portable?.unsupported?.[ route ] ?? [] ) checked.failures.push( `source behavior not translated${ residual.selector ? ` (${ residual.selector })` : '' }: ${ residual.reason }` );
+				if ( candidateMotionVerified ) checked.notes.push( portable ? `raw source/capture motion unreproduced; ${ portable.origin ?? 'authored' } portable runtime independently verified at 390/768/1440px` : 'source/capture motion unreproduced; independent source/candidate interaction verified at 390/768/1440px' );
 				const score: RouteScore = {
 					stage: 'drift',
 					state: 'baseline',
@@ -1111,7 +1114,7 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 			// conclusions from values that were zeroed rather than measured.
 			if ( ! widths.includes( 390 ) ) {
 				log( `[compare] ${ route } @ 390px interactivity` );
-				const pair = await observe( sourceHref, localHref, 390 );
+				const pair = await observe( sourceHref, localHref, 390, contract ? contract.ready.sourceSettleMs : undefined );
 				recordOverlays( route, 390, sourceHref, localHref, pair );
 				const dialogOnly = ( observation: LayoutObservation ): LayoutObservation => ( {
 					...observation,
@@ -1147,7 +1150,7 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 					score.failures.push( `source motion not reproduced by capture: ${ signals.join( ', ' ) }; candidate behavior unverified` );
 					score.pass = false;
 				}
-				if ( candidateMotionVerified ) score.notes.push( portable ? 'raw capture motion unreproduced; authored portable runtime verified' : 'source/capture motion unreproduced; independent candidate interaction verified' );
+				if ( candidateMotionVerified ) score.notes.push( portable ? `raw capture motion unreproduced; ${ portable.origin ?? 'authored' } portable runtime verified` : 'source/capture motion unreproduced; independent candidate interaction verified' );
 				score.notes.push( 'interactivity' );
 				scores.push( score );
 			}
@@ -1198,7 +1201,7 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 		selfConsistency,
 		scores,
 		...( motionContract ? { motionEvidence } : {} ),
-		...( portable ? { portableMotion: { verified: motionEvidence.length > 0 && motionEvidence.every( ( evidence ) => evidence.pass ), routes: Object.keys( portable.routes ) } } : {} ),
+		...( portable ? { portableMotion: { verified: motionEvidence.length > 0 && motionEvidence.every( ( evidence ) => evidence.pass ), routes: Object.keys( portable.routes ), origin: portable.origin ?? 'authored' } } : {} ),
 		...summary,
 	};
 }
