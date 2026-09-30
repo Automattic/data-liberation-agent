@@ -77,6 +77,7 @@ Naming an unknown target lists the registered ones.
 | Platform | Status |
 |---|---|
 | EmDash CMS | Ready |
+| Ghost | Ready |
 | GoDaddy Websites & Marketing | Ready |
 | Hostinger Website Builder | Ready |
 | HubSpot | Ready |
