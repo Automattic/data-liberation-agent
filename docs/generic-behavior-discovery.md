@@ -1,54 +1,54 @@
-# Generic source behavior discovery (in progress)
+# Generic source behavior discovery
 
-Ordinary URL capture now observes diagnosed dynamic pages without an author
-recipe. It instruments source DOM mutations, visibility, event registrations,
-and drawing API operations before navigation. Bounded startup and click phases
-record timestamped evidence; pointer input records both bitmap change and the
-actual drawing methods used. Circle and line fixtures produce distinct canvas
-evidence. The observer never identifies an arbitrary drawing algorithm as a
-preselected particle effect.
+Plain URL capture learns diagnosed dynamic behavior from the source itself,
+with no site recipe. For each page `source-interactivity.json` marks
+`unreproduced`, capture:
 
-Two controlled Date/timezone runs identify targets dependent on local time,
-separately from editorial content. The current semantic recognizer supports a
-bounded set of clock representations (12/24-hour digits, minutes, AM/PM, ISO,
-GMT offset and locale-derived uppercase date). A target must match the chosen
-representation in both counterfactuals; other dynamic text stays unsupported.
+1. **Observes** the live source twice under controlled `Date` values and
+   timezones. Instrumentation installed before source scripts records
+   timestamped text of leaf and mixed-content elements, visibility changes with
+   their mechanism (`visibility` or `display`), click/pointer listener
+   registrations, and 2D canvas drawing calls. Startup ends when text has been
+   quiet (bounded); each discovered click is probed from a settled page.
+2. **Learns** an editable program in the Blocks Engine motion vocabulary
+   (`learned-motion.ts`):
+   - sequential text reveals: per-character cadence, delay after the previous
+     step, and click replay trigger and delay;
+   - a static pending message with the common cycling-dot suffix;
+   - elements hidden until a reveal starts (`revealSelectors`);
+   - a live clock: which elements carry hour, minute, AM/PM, GMT offset and
+     locale date (proved by the two controlled times), plus its startup and
+     replay frames and date reveal.
+   Values are measured, never embedded editorial copy: the runtime replays the
+   current DOM text, so an edited page replays its edited value.
+3. **Reports** everything the vocabulary cannot express in `unsupported`
+   (unrecognized text or visibility changes, unmatched time-derived text,
+   concurrent reveals, and canvas drawing algorithms). Nothing is substituted.
+4. **Promotes** (`learned-motion-promotion.ts`) only after a staged portable
+   copy reproduces the learned behavior against the live source at
+   390/768/1440px with a contract derived from the evidence. The markers and
+   the portable interpreter (`motion-runtime.ts`) are then written to
+   `website/`, with a `portable-motion.json` receipt (`origin: "learned"`)
+   carrying the derived contract and the unsupported residuals.
 
-The text recognizer learns one-character prefix progressions and interval
-distributions from observations. Cyclic loading dots are separate from one-shot
-reveals. A compiled text candidate captures its replay value from the current
-exported DOM, so later editorial edits replay their new value. No editorial
-strings or source JavaScript are embedded in the candidate runtime. The clock
-candidate computes current browser-local time rather than replaying captured
-digits. Neutral real-browser tests exercise renamed targets, changed text,
-different timings, different drawing algorithms, controlled Date values and
-edited output content.
+Plain `compare` re-verifies the receipt on every run and fails visibly for each
+residual: `source behavior not translated (<selector>): <reason>`.
 
-## Evidence boundary
+## WordPress
 
-`source-behavior.json` retains the browser traces and model hypotheses, including
-sampling limits, truncation and unknown capabilities. Candidate scripts live in
-`behavior/`, outside `website/`. They remain unpromoted until complete source
-startup/replay/pointer/visibility behavior and the existing fidelity gate pass.
-This implementation does **not** clear the unreproduced-motion finding.
+The page carries inert `data-blocks-engine-motion-steps` and
+`data-blocks-engine-live-clock` markers. Blocks Engine lowers them to editable
+motion-sequence and live-clock blocks with their own view scripts. The portable
+interpreter is tagged `data-blocks-engine-marker-runtime`, so the importer
+replaces it with those view scripts rather than loading both.
 
-## Remaining translation requirements
+## Current limits
 
-- A Date-dependent field still needs its startup/replay state machine, not only
-  its settled clock role. Masks, date typewriting and click-triggered clock reset
-  are independently observable transitions that need faithful compilation.
-- Pending messages, cycling dots, indicator visibility and linked sequence
-  readiness need explicit causal state transitions. Observed timing distributions
-  are evidence, not exact authored timer values.
-- Canvas calls/bitmaps show response but do not reconstruct arbitrary source
-  computation. Translating the actual supported algorithm requires a bounded
-  semantics-preserving behavior IR and renderer, with explicit unknowns when the
-  input exceeds the supported language. Neither replaying recorded pixels nor
-  substituting a canned effect is sufficient.
-- Discovery must distinguish direct and delegated event ownership and retain
-  action safety boundaries; nested mutations and sparse drawing activity need
-  neutral fixtures and strict sampling-completeness evidence.
-- Full plain-URL source/capture/WordPress parity at 390/768/1440 is the acceptance
-  gate. Manual recipes and independently configured earlier sites do not count.
+- Canvas drawing: call traces and bitmaps prove a pointer response but do not
+  reconstruct the source computation. It stays an explicit unsupported residual.
+- Measured timings carry timer jitter from the observing machine; the fidelity
+  gate compares observable phases and settled state, not exact milliseconds.
+- The vocabulary expresses sequential reveals, pending dots, reveal visibility
+  and one live clock per page; other patterns are reported, not approximated.
 
 Tracker: https://github.com/Automattic/data-liberation-agent/issues/425

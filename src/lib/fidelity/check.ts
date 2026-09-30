@@ -138,7 +138,7 @@ export type RouteScore = ViewportScore & { route: string };
 
 export interface FidelityReport {
 	/** Authored portable runtime was verified during this comparison, not inferred from source scripts. */
-	portableMotion?: { verified: boolean; routes: string[] };
+	portableMotion?: { verified: boolean; routes: string[]; origin: 'authored' | 'learned' };
 	cleanup?: { policy: CleanupPolicy; source: CleanupReport[] };
 	/** Overlays dismissed per side before measuring. Evidence, never a gate. */
 	overlays: OverlayRecord[];
@@ -915,7 +915,7 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 	const portable = candidate || options.motionContract ? null : readPortableMotion( dirname( receiptPath ), websiteDir );
 	const motionContract = options.motionContract ?? portable?.contract;
 	if ( motionContract ) {
-		if ( ( ! candidate && ! portable ) || options.observe ) throw new Error( 'Motion contract requires a live --candidate browser comparison or an authored portable runtime receipt' );
+		if ( ( ! candidate && ! portable ) || options.observe ) throw new Error( 'Motion contract requires a live --candidate browser comparison or a portable runtime receipt' );
 		validateMotionContract( motionContract );
 	}
 	let observe = options.observe;
@@ -1034,7 +1034,8 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 					checked.failures.push( `candidate retains advertising or source attribution (${ pair.candidateRetained } removable)` );
 				}
 				if ( signals && ! candidateMotionVerified ) checked.failures.push( `source motion not reproduced by capture: ${ signals.join( ', ' ) }; candidate behavior unverified` );
-				if ( candidateMotionVerified ) checked.notes.push( portable ? 'raw source/capture motion unreproduced; authored portable runtime independently verified at 390/768/1440px' : 'source/capture motion unreproduced; independent source/candidate interaction verified at 390/768/1440px' );
+				for ( const residual of portable?.unsupported?.[ route ] ?? [] ) checked.failures.push( `source behavior not translated${ residual.selector ? ` (${ residual.selector })` : '' }: ${ residual.reason }` );
+				if ( candidateMotionVerified ) checked.notes.push( portable ? `raw source/capture motion unreproduced; ${ portable.origin ?? 'authored' } portable runtime independently verified at 390/768/1440px` : 'source/capture motion unreproduced; independent source/candidate interaction verified at 390/768/1440px' );
 				const score: RouteScore = {
 					route,
 					viewport: width,
@@ -1107,7 +1108,7 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 					score.failures.push( `source motion not reproduced by capture: ${ signals.join( ', ' ) }; candidate behavior unverified` );
 					score.pass = false;
 				}
-				if ( candidateMotionVerified ) score.notes.push( portable ? 'raw capture motion unreproduced; authored portable runtime verified' : 'source/capture motion unreproduced; independent candidate interaction verified' );
+				if ( candidateMotionVerified ) score.notes.push( portable ? `raw capture motion unreproduced; ${ portable.origin ?? 'authored' } portable runtime verified` : 'source/capture motion unreproduced; independent candidate interaction verified' );
 				score.notes.push( 'interactivity' );
 				scores.push( score );
 			}
@@ -1157,7 +1158,7 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 		selfConsistency,
 		scores,
 		...( motionContract ? { motionEvidence } : {} ),
-		...( portable ? { portableMotion: { verified: motionEvidence.length > 0 && motionEvidence.every( ( evidence ) => evidence.pass ), routes: Object.keys( portable.routes ) } } : {} ),
+		...( portable ? { portableMotion: { verified: motionEvidence.length > 0 && motionEvidence.every( ( evidence ) => evidence.pass ), routes: Object.keys( portable.routes ), origin: portable.origin ?? 'authored' } } : {} ),
 		...summary,
 	};
 }

@@ -5,7 +5,7 @@ export const SOURCE_BEHAVIOR_SCHEMA = 'data-liberation/source-behavior/v1';
 export interface BehaviorTrace {
 	text: Record< string, Array< { at: number; text: string } > >;
 	settledText?: Record< string, string >;
-	visibility: Record< string, Array< { at: number; visible: boolean } > >;
+	visibility: Record< string, Array< { at: number; visible: boolean; via?: 'display' | 'visibility' | 'layout' } > >;
 	events: Array< { selector: string; event: string } >;
 	canvas: Record< string, { methods: Record< string, number >; sample: Array< { method: string; args: unknown[] } > } >;
 	truncated: boolean;
@@ -17,6 +17,8 @@ export interface SourceBehavior {
 	viewport: number;
 	startup: BehaviorTrace;
 	clockSamples?: Record< string, string >;
+	/** Document language used for locale-formatted values. */
+	locale?: string;
 	pointer: { before: Record< string, string >; after: Record< string, string >; trace: BehaviorTrace };
 	replays: Array< { selector: string; trace: BehaviorTrace } >;
 	/** Observing drawing activity does not identify its algorithm or establish reproducibility. */
@@ -28,7 +30,7 @@ async function instrument( page: Page ): Promise< void > {
 	await page.addInitScript( () => {
 		type Trace = {
 			text: Record< string, Array< { at: number; text: string } > >;
-			visibility: Record< string, Array< { at: number; visible: boolean } > >;
+			visibility: Record< string, Array< { at: number; visible: boolean; via?: 'display' | 'visibility' | 'layout' } > >;
 			events: Array< { selector: string; event: string } >;
 			canvas: Record< string, { methods: Record< string, number >; sample: Array< { method: string; args: unknown[] } > } >;
 			truncated: boolean;
@@ -37,6 +39,7 @@ async function instrument( page: Page ): Promise< void > {
 		let trace = empty();
 		let epoch = performance.now();
 		let samples = 0;
+		let lastChange = performance.now();
 		const listeners: Array< { selector: string; event: string } > = [];
 		function selector( target: EventTarget | Element ): string {
 			if ( target === window ) return 'window';
@@ -64,6 +67,12 @@ async function instrument( page: Page ): Promise< void > {
 			}
 			return add.call( this, event, listener, options );
 		};
+		const canvasKeys = new WeakMap< HTMLCanvasElement, string >();
+		const canvasKey = ( canvas: HTMLCanvasElement ) => {
+			let value = canvasKeys.get( canvas );
+			if ( value === undefined ) canvasKeys.set( canvas, value = selector( canvas ) );
+			return value;
+		};
 		// Record drawing operations, not an invented effect label. Different source
 		// algorithms retain different evidence (e.g. arcs versus strokes).
 		for ( const method of [ 'clearRect', 'fillRect', 'strokeRect', 'beginPath', 'moveTo', 'lineTo', 'arc', 'ellipse', 'bezierCurveTo', 'quadraticCurveTo', 'fill', 'stroke', 'drawImage', 'fillText', 'putImageData' ] ) {
@@ -71,10 +80,10 @@ async function instrument( page: Page ): Promise< void > {
 			const original = prototype[ method ];
 			if ( typeof original !== 'function' ) continue;
 			prototype[ method ] = function( this: CanvasRenderingContext2D, ...args: unknown[] ) {
-				const key = selector( this.canvas );
-				if ( key ) {
-					if ( ! trace.canvas[ key ] && Object.keys( trace.canvas ).length < 8 ) trace.canvas[ key ] = { methods: {}, sample: [] };
-					const record = trace.canvas[ key ];
+				const name = canvasKey( this.canvas );
+				if ( name ) {
+					if ( ! trace.canvas[ name ] && Object.keys( trace.canvas ).length < 8 ) trace.canvas[ name ] = { methods: {}, sample: [] };
+					const record = trace.canvas[ name ];
 					if ( record ) {
 						record.methods[ method ] = Math.min( 100000, ( record.methods[ method ] ?? 0 ) + 1 );
 						if ( record.sample.length < 48 ) record.sample.push( { method, args: args.map( ( value ) => typeof value === 'number' || typeof value === 'string' || typeof value === 'boolean' ? value : null ) } );
@@ -83,39 +92,71 @@ async function instrument( page: Page ): Promise< void > {
 				return original.apply( this, args );
 			};
 		}
-		function sample(): void {
-			if ( ! document.body ) return;
-			if ( ++samples > 2000 ) { trace.truncated = true; return; }
-			const nodes = Array.from( document.body.querySelectorAll( '*' ) );
-			if ( nodes.length > 512 ) trace.truncated = true;
-			for ( const element of nodes.slice( 0, 512 ) ) {
-				if ( element.closest( 'script,style,noscript,template' ) ) continue;
-				const key = selector( element );
-				if ( ! key ) continue;
-				const at = Math.round( performance.now() - epoch );
-				if ( ! element.children.length && element.localName !== 'canvas' ) {
-					const text = element.textContent ?? '';
-					if ( text.length <= 512 ) {
-						const history = trace.text[ key ] ??= [];
-						if ( history.at( -1 )?.text !== text ) {
-							if ( history.length < 128 ) history.push( { at, text } );
-							else trace.truncated = true;
-						}
+		// Instrumentation must not slow the page it measures: record only the
+		// elements a mutation touched, and sweep the whole page on a slow timer
+		// for CSS-driven changes that produce no mutation record.
+		const keys = new WeakMap< Element, string >();
+		const key = ( element: Element ) => {
+			let value = keys.get( element );
+			if ( value === undefined || ( element.id && value !== '#' + CSS.escape( element.id ) ) ) keys.set( element, value = selector( element ) );
+			return value;
+		};
+		function record( element: Element, at: number ): void {
+			if ( element.closest( 'script,style,noscript,template' ) ) return;
+			const name = key( element );
+			if ( ! name ) return;
+			// Leaves, plus mixed content such as a status message wrapping an
+			// animated child (`Loading<span>..</span>`): its full text is the
+			// user-visible phase even though a child element carries part of it.
+			const mixed = element.children.length > 0 && element.querySelectorAll( '*' ).length <= 3 &&
+				Array.from( element.childNodes ).some( ( node ) => node.nodeType === Node.TEXT_NODE && ( node.textContent ?? '' ).trim() );
+			if ( ( ! element.children.length || mixed ) && element.localName !== 'canvas' ) {
+				const text = element.textContent ?? '';
+				if ( text.length <= 512 ) {
+					const history = trace.text[ name ] ??= [];
+					if ( history.at( -1 )?.text !== text ) {
+						lastChange = performance.now();
+						if ( history.length < 128 ) history.push( { at, text } );
+						else trace.truncated = true;
 					}
 				}
-				const style = getComputedStyle( element );
-				const visible = style.display !== 'none' && style.visibility !== 'hidden' && element.getClientRects().length > 0;
-				const states = trace.visibility[ key ] ??= [];
-				if ( states.at( -1 )?.visible !== visible ) {
-					if ( states.length < 64 ) states.push( { at, visible } );
-					else trace.truncated = true;
-				}
 			}
+			const style = getComputedStyle( element );
+			const visible = style.display !== 'none' && style.visibility !== 'hidden' && element.getClientRects().length > 0;
+			// The hiding mechanism matters: `visibility` keeps layout, `display` removes it.
+			const via = style.display === 'none' ? 'display' as const : style.visibility === 'hidden' ? 'visibility' as const : 'layout' as const;
+			const states = trace.visibility[ name ] ??= [];
+			if ( states.at( -1 )?.visible !== visible ) {
+				if ( states.length < 64 ) states.push( visible ? { at, visible } : { at, visible, via } );
+				else trace.truncated = true;
+			}
+		}
+		function sample(): void {
+			if ( ! document.body ) return;
+			const nodes = Array.from( document.body.querySelectorAll( '*' ) );
+			if ( nodes.length > 512 ) trace.truncated = true;
+			const at = Math.round( performance.now() - epoch );
+			for ( const element of nodes.slice( 0, 512 ) ) record( element, at );
+		}
+		function mutated( records: MutationRecord[] ): void {
+			if ( ++samples > 20000 ) { trace.truncated = true; return; }
+			const at = Math.round( performance.now() - epoch );
+			const touched = new Set< Element >();
+			for ( const row of records ) {
+				const target = row.target instanceof Element ? row.target : row.target.parentElement;
+				if ( ! target ) continue;
+				// Mixed-content ancestors change text when a child does.
+				for ( let element: Element | null = target, depth = 0; element && element !== document.body && depth < 3; element = element.parentElement, depth++ ) touched.add( element );
+				// Style/class/child changes can hide or show a whole subtree.
+				if ( row.type !== 'characterData' ) for ( const child of Array.from( target.querySelectorAll( '*' ) ).slice( 0, 64 ) ) touched.add( child );
+			}
+			for ( const element of touched ) record( element, at );
 		}
 		const start = () => {
 			epoch = performance.now();
 			sample();
-			new MutationObserver( sample ).observe( document.body, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: [ 'class', 'style', 'hidden', 'aria-busy' ] } );
+			new MutationObserver( mutated ).observe( document.body, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: [ 'class', 'style', 'hidden', 'aria-busy' ] } );
+			setInterval( sample, 500 );
 		};
 		add.call( document, 'DOMContentLoaded', start, { once: true } );
 		( window as unknown as { __dlaBehavior: unknown } ).__dlaBehavior = {
@@ -124,10 +165,12 @@ async function instrument( page: Page ): Promise< void > {
 				const settledText: Record< string, string > = {};
 				for ( const key of Object.keys( trace.text ) ) {
 					const element = document.querySelector( key );
-					if ( element && ! element.children.length ) settledText[ key ] = element.textContent ?? '';
+					if ( element ) settledText[ key ] = element.textContent ?? '';
 				}
 				return { ...trace, settledText };
 			},
+			/** Milliseconds since any observed text last changed. */
+			idle: () => performance.now() - lastChange,
 			reset: () => { trace = empty(); epoch = performance.now(); samples = 0; sample(); },
 		};
 	} );
@@ -138,14 +181,18 @@ async function snapshot( page: Page ): Promise< BehaviorTrace > {
 }
 
 /** Bounded source-only probe. Its output is evidence for translation, never a fidelity pass. */
-export async function captureSourceBehavior( page: Page, url: string, options: { startupMs?: number; replayMs?: number; maxClicks?: number; fixedTime?: string } = {} ): Promise< SourceBehavior > {
+export async function captureSourceBehavior( page: Page, url: string, options: { startupMs?: number; quietMs?: number; replayMs?: number; maxClicks?: number; fixedTime?: string } = {} ): Promise< SourceBehavior > {
 	const startupMs = Math.min( 15000, Math.max( 100, options.startupMs ?? 15000 ) );
 	const replayMs = Math.min( 6000, Math.max( 100, options.replayMs ?? 5000 ) );
 	const maxClicks = Math.min( 8, Math.max( 0, options.maxClicks ?? 8 ) );
 	if ( options.fixedTime ) await page.clock.setFixedTime( new Date( options.fixedTime ) );
 	await instrument( page );
 	await page.goto( url, { waitUntil: 'domcontentloaded', timeout: 30000 } );
-	await page.waitForTimeout( startupMs );
+	// Startup ends once text has been quiet for `quietMs` (bounded by `startupMs`),
+	// so a slow machine does not truncate a sequence and a fast page is not over-waited.
+	const quietMs = Math.min( startupMs, Math.max( 500, options.quietMs ?? 3000 ) );
+	await page.waitForTimeout( Math.min( startupMs, 1000 ) );
+	await page.waitForFunction( ( quiet ) => ( window as unknown as { __dlaBehavior: { idle: () => number } } ).__dlaBehavior.idle() > quiet, quietMs, { timeout: Math.max( 1, startupMs - 1000 ), polling: 100 } ).catch( () => undefined );
 	const startup = await snapshot( page );
 	const clockSamples = await page.evaluate( () => {
 		const now = new Date();
@@ -180,11 +227,14 @@ export async function captureSourceBehavior( page: Page, url: string, options: {
 		// Restrict probing to same-document handlers; navigation/submit controls
 		// remain owned by the established interaction capture primitives.
 		if ( await target.evaluate( ( element ) => !! element.closest( 'a[href],form' ) ) ) continue;
+		// Start each replay from a settled page so earlier phases do not leak into its trace.
+		await page.waitForFunction( () => ( window as unknown as { __dlaBehavior: { idle: () => number } } ).__dlaBehavior.idle() > 700, null, { timeout: replayMs } ).catch( () => undefined );
 		await page.evaluate( () => ( window as unknown as { __dlaBehavior: { reset: () => void } } ).__dlaBehavior.reset() );
 		await target.click( { force: true, timeout: 3000 } );
 		await page.waitForTimeout( replayMs );
 		if ( page.url() !== url ) break;
 		replays.push( { selector: listener.selector, trace: await snapshot( page ) } );
 	}
-	return { schema: SOURCE_BEHAVIOR_SCHEMA, url, viewport: viewport.width, startup, clockSamples, pointer, replays, status: 'observed_untranslated' };
+	const locale = await page.evaluate( () => document.documentElement.lang || 'en-US' );
+	return { schema: SOURCE_BEHAVIOR_SCHEMA, url, viewport: viewport.width, startup, clockSamples, locale, pointer, replays, status: 'observed_untranslated' };
 }

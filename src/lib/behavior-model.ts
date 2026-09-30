@@ -30,7 +30,16 @@ export function learnTextReveals( trace: BehaviorTrace ): LearnedTextReveal[] {
 		const first = Array.from( sequence[ 0 ]?.text ?? '' ).length;
 		const last = Array.from( final ).length;
 		if ( sequence.length < 3 || first > 2 || sequence.at( -1 )!.text !== final ) continue;
-		const intervalMs = Math.round( ( sequence.at( -1 )!.at - sequence[ 0 ].at ) / Math.max( 1, last - first ) );
+		const average = ( sequence.at( -1 )!.at - sequence[ 0 ].at ) / Math.max( 1, last - first );
+		// Timer jitter only ever delays a character. The lower quartile of the
+		// single-character steps (excluding catch-up bursts) estimates the
+		// requested rate better than the load-inflated average.
+		const singles = sequence.slice( 1 )
+			.filter( ( frame, index ) => Array.from( frame.text ).length - Array.from( sequence[ index ].text ).length === 1 )
+			.map( ( frame ) => frame.at - sequence[ sequence.indexOf( frame ) - 1 ].at )
+			.filter( ( value ) => value >= average * .5 )
+			.sort( ( a, b ) => a - b );
+		const intervalMs = Math.round( singles.length >= 4 ? singles[ Math.floor( singles.length / 4 ) ] : average );
 		if ( intervalMs < 5 || intervalMs > 1000 ) continue;
 		// Reject bursts: a multi-character jump must have taken plausible time for
 		// that rate. Single-character steps are always valid; timer jitter can

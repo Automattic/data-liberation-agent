@@ -16,17 +16,3 @@ export function learnClockBindings( first: SourceBehavior, second: SourceBehavio
 	}
 	return { bindings, unsupported };
 }
-
-export function compileClockBehavior( bindings: ClockBinding[] ): string {
-	return `(function(){
-const bindings=${ JSON.stringify( bindings ).replace( /</g, '\\u003c' ) };
-function values(){
-const now=new Date(),two=value=>String(value).padStart(2,'0'),locale=document.documentElement.lang||'en-US';
-const parts=new Intl.DateTimeFormat(locale,{weekday:'long',month:'short',day:'numeric',year:'numeric'}).formatToParts(now),part=type=>(parts.find(value=>value.type===type)||{}).value||'';
-const offset=-now.getTimezoneOffset()/60;
-return {hour12:two(now.getHours()%12||12),hour24:two(now.getHours()),minute:two(now.getMinutes()),ampm:now.getHours()<12?'AM':'PM',iso:now.toISOString(),gmtOffset:'(GMT '+(offset>=0?'+':'')+offset+')',dateUpper:(part('weekday')+', '+part('month')+' '+part('day')+', '+part('year')).toUpperCase()};
-}
-function update(){const current=values();for(const binding of bindings){const node=document.querySelector(binding.selector);if(node&&!node.children.length&&current[binding.role]!==undefined)node.textContent=current[binding.role]}}
-if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',update,{once:true});else update();setInterval(update,1000);
-})();`;
-}

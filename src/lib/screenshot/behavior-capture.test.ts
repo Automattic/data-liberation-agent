@@ -3,7 +3,7 @@ import { chromium, type Browser } from 'playwright';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { captureSourceBehavior } from './behavior-capture.js';
 import { timeDependentTargets } from '../behavior-model.js';
-import { compileClockBehavior, learnClockBindings } from '../clock-behavior.js';
+import { learnClockBindings } from '../clock-behavior.js';
 
 describe( 'automatic source behavior evidence', () => {
 	let browser: Browser;
@@ -57,13 +57,6 @@ describe( 'automatic source behavior evidence', () => {
 			expect( timeDependentTargets( first, second ) ).toEqual( [ '#dynamic-stamp' ] );
 			const learned = learnClockBindings( first, second );
 			expect( learned ).toEqual( { bindings: [ { selector: '#dynamic-stamp', role: 'iso', confidence: 'two_controlled_dates' } ], unsupported: [] } );
-			const output = await browser.newPage();
-			try {
-				await output.clock.setFixedTime( new Date( '2034-04-05T17:23:00Z' ) );
-				await output.setContent( '<span id="dynamic-stamp">old frozen text</span>' );
-				await output.addScriptTag( { content: compileClockBehavior( learned.bindings ) } );
-				expect( await output.locator( '#dynamic-stamp' ).textContent() ).toBe( '2034-04-05T17:23:00.000Z' );
-			} finally { await output.close(); }
 		} finally { await firstPage.close(); await secondPage.close(); }
 	} );
 } );
