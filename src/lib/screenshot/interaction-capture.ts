@@ -81,7 +81,8 @@ export interface CapturedDialogInteraction {
 	 * whose members change their own attributes or styles (`choice-group`). Omitted/`'dialog'`
 	 * preserves the pre-existing shape for callers that predate this field.
 	 */
-	kind?: 'dialog' | 'disclosure' | 'selectable-set' | 'choice-group';
+	kind?: 'dialog' | 'disclosure' | 'selectable-set' | 'choice-group' | 'typed-search';
+	collectionFilter?: import('./typed-search-capture.js').CapturedCollectionFilter;
 	trigger: {
 		selector: string;
 		tag: string;
