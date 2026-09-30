@@ -35,6 +35,7 @@ import { applyPagerSlideshowStates, collectPagerSlideshowStates } from './pager-
 import { captureScrollStates, type ScrollStatesReport } from './scroll-state-capture.js';
 import { hydrateDisclosureContent } from './dynamic-content.js';
 import { captureSelectableSetStates } from './selectable-set-capture.js';
+import { captureTypedSearchStates } from './typed-search-capture.js';
 import { JsAggregator } from './js-aggregator.js';
 import { isAbsentDocumentError, isSourceCaptureUrl, nonHtmlDocumentError } from './absent-document.js';
 import { ManifestQueue, type ManifestEntry, type FailureEntry } from './manifest-queue.js';
@@ -1335,6 +1336,11 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 			if ( selectableStates.length > 0 ) {
 				interactions.states = [ ...interactions.states, ...selectableStates ];
 			}
+			try {
+				interactions.states.push( ...await captureTypedSearchStates( page, selectableStates ) );
+			} catch {
+				/* A failed input probe must not misreport a successful selectable drive. */
+			}
 		} catch ( error ) {
 			interactions.states.push( {
 				status: 'click-failed',
@@ -1390,6 +1396,10 @@ function mergeInteractionReports(
 		( state: CapturedDialogInteraction ) =>
 			( state.kind ?? 'dialog' ) === kind;
 	const states = [
+		...mergeCapturedEvidence(
+			previous.states.filter( ofKind( 'typed-search' ) ),
+			latest.states.filter( ofKind( 'typed-search' ) ), identity, Number.POSITIVE_INFINITY
+		),
 		...mergeCapturedEvidence(
 			previous.states.filter( ofKind( 'disclosure' ) ),
 			latest.states.filter( ofKind( 'disclosure' ) ),

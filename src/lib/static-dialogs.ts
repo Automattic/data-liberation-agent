@@ -1,5 +1,6 @@
 import * as cheerio from 'cheerio';
 import type { Element } from 'domhandler';
+import { wireCapturedCollections } from './static-collections.js';
 import type {
 	CapturedDialogInteraction,
 	CapturedInitialDialog,
@@ -94,6 +95,7 @@ export function wireCapturedDialogs(
 	states: CapturedDialogInteraction[],
 	initialDialogs: CapturedInitialDialog[] = []
 ): string {
+	html = wireCapturedCollections( html, states );
 	// Disclosure/accordion panels (`kind === 'disclosure'`) are restored in
 	// place, in the live DOM, before the page's HTML is ever serialized (see
 	// `hydrateDisclosureContent`) — their content is already inline in `html`
