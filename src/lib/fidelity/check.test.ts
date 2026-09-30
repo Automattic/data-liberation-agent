@@ -573,6 +573,67 @@ describe.skipIf( skipBrowserTests )( 'comparison screenshot transaction', () => 
 	}, 90_000 );
 } );
 
+describe.skipIf( skipBrowserTests )( 'checkFidelity with a source that pings on exit', () => {
+	// Substack publications send analytics beacons when the page is left
+	// (POST /api/v1/firehose/batch to the site and to substack.com). compare
+	// measured the source and then navigated the same tab to the copy with the
+	// copy's request listener already attached, so the source's exit pings were
+	// reported as "copy requested 2 external host(s): substack.com,
+	// www.derekthompson.org" on every route of a clean copy.
+	const body = `<main><h1>A post</h1><p>${ 'Body copy that does not change. '.repeat( 20 ) }</p></main>`;
+	const html = ( extra = '' ) =>
+		`<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Post</title></head><body>${ body }${ extra }</body></html>`;
+	const exitBeacon = `<script>addEventListener('beforeunload', () => navigator.sendBeacon('/ping', 'left'));</script>`;
+
+	/** Serve a live source that beacons on exit, write `copy` (given the source origin) to disk, and compare. */
+	async function compare( copy: ( origin: string ) => string ) {
+		let pings = 0;
+		const server = createServer( ( request, response ) => {
+			if ( request.url === '/ping' || request.url === '/pixel.gif' ) {
+				if ( request.url === '/ping' ) pings++;
+				response.end();
+				return;
+			}
+			response.setHeader( 'content-type', 'text/html' );
+			response.end( html( exitBeacon ) );
+		} );
+		await new Promise< void >( ( resolve ) => server.listen( 0, '127.0.0.1', resolve ) );
+		const origin = `http://localtest.me:${ ( server.address() as { port: number } ).port }`;
+		const dir = mkdtempSync( join( tmpdir(), 'dla-check-' ) );
+		dirs.push( dir );
+		mkdirSync( join( dir, 'website' ), { recursive: true } );
+		writeFileSync( join( dir, 'website', 'index.html' ), copy( origin ) );
+		writeFileSync(
+			join( dir, 'capture-receipt.json' ),
+			JSON.stringify( {
+				source: { url: `${ origin }/` },
+				websiteRoot: 'website',
+				routes: [ { url: `${ origin }/`, path: 'website/index.html' } ],
+			} )
+		);
+		try {
+			const report = await checkFidelity( { directory: dir, widths: [ 1440 ], settleMs: 200 } );
+			const external = report.scores.flatMap( ( score ) => score.failures.filter( ( failure ) => failure.startsWith( 'copy requested' ) ) );
+			return { pings, external };
+		} finally {
+			server.closeAllConnections();
+			await new Promise< void >( ( resolve ) => server.close( () => resolve() ) );
+		}
+	}
+
+	it( 'does not blame the copy for the source page\'s exit beacons', async () => {
+		const { pings, external } = await compare( () => html() );
+		// The scenario is real: the source did send its exit beacon.
+		expect( pings ).toBeGreaterThan( 0 );
+		expect( external ).toEqual( [] );
+	}, 90_000 );
+
+	it( 'still reports a request the copy itself makes to the source', async () => {
+		const { external } = await compare( ( origin ) => html( `<img src="${ origin }/pixel.gif" alt="">` ) );
+		expect( external ).toEqual( [ expect.stringMatching( /^copy requested 1 external host\(s\): localtest\.me:\d+/ ) ] );
+	}, 90_000 );
+} );
+
 describe.skipIf( skipBrowserTests )( 'checkFidelity with a consent banner on the source', () => {
 	// The live source raises a cookie banner; capture dismisses it before it
 	// serializes, so the copy never has one. Measuring the source with the

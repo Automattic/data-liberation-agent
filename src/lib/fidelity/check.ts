@@ -943,6 +943,12 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 				cleanupReports.push(report);
 				if (report.failures.length || report.residual) throw new Error('Comparison source cleanup incomplete');
 			}
+			// Leave the source before observing the copy in this same tab. Sources
+			// send analytics beacons as they are left (beforeunload, in-flight
+			// batches — Substack's /api/v1/firehose/batch); navigating straight to
+			// the copy fires them after the copy's request listener is attached, so
+			// a clean copy was reported as requesting the source's hosts.
+			await page.goto( 'about:blank' ).catch( () => {} );
 			if ( candidate ) {
 				// Measure the candidate as a visitor sees it, then ask the cleanup
 				// policy what it would still remove. Removing it first would hide
