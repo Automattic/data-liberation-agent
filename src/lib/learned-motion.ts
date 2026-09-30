@@ -40,7 +40,7 @@ export interface LiveClockConfig {
 	dateDelayMs?: number;
 	characterIntervalMs?: number;
 }
-export interface UnsupportedBehavior { selector?: string; reason: string }
+export interface UnsupportedBehavior { selector?: string; reason: string; kind?: 'canvas' }
 export interface LearnedMotion {
 	schema: typeof LEARNED_MOTION_SCHEMA;
 	steps: MotionStep[];
@@ -218,7 +218,7 @@ export function learnMotion( first: SourceBehavior, second: SourceBehavior ): Le
 		}
 	}
 	for ( const [ selector, canvas ] of Object.entries( { ...first.startup.canvas, ...first.pointer.trace.canvas } ) ) {
-		unsupported.push( { selector, reason: `canvas drawing algorithm is not translated (observed ${ Object.keys( canvas.methods ).join( ', ' ) })` } );
+		unsupported.push( { selector, kind: 'canvas', reason: `canvas drawing algorithm is not translated (observed ${ Object.keys( canvas.methods ).join( ', ' ) })` } );
 	}
 	const stepsEnd = steps.reduce( ( end, step ) => Math.max( end, revealEnd( first.startup.text[ step.selector ], learnTextReveals( first.startup ).find( ( row ) => row.selector === step.selector )!, settled[ step.selector ] ?? '' ) ), 0 );
 	const unique = new Map( unsupported.map( ( row ) => [ `${ row.selector }\u0000${ row.reason }`, row ] ) );

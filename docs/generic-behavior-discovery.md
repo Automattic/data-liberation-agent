@@ -23,8 +23,15 @@ with no site recipe. For each page `source-interactivity.json` marks
    current DOM text, so an edited page replays its edited value.
 3. **Reports** everything the vocabulary cannot express in `unsupported`
    (unrecognized text or visibility changes, unmatched time-derived text,
-   concurrent reveals, and canvas drawing algorithms). Nothing is substituted.
-4. **Promotes** (`learned-motion-promotion.ts`) only after a staged portable
+   concurrent reveals, and canvas drawing). Nothing is substituted.
+4. **Reuses source canvas code** (`canvas-sandbox.ts`). A canvas drawing
+   algorithm is not re-derived: the page's own captured, hash-verified scripts
+   that draw on a canvas run behind a DOM membrane. Canvas elements, drawing
+   contexts and event listeners are live; reads return real values; every write
+   to non-canvas content is discarded, so the source can never overwrite the
+   editable page. If the sandboxed copy does not reproduce the source pointer
+   response, promotion falls back to learned motion with canvas as a residual.
+5. **Promotes** (`learned-motion-promotion.ts`) only after a staged portable
    copy reproduces the learned behavior against the live source at
    390/768/1440px with a contract derived from the evidence. The markers and
    the portable interpreter (`motion-runtime.ts`) are then written to
@@ -44,8 +51,10 @@ replaces it with those view scripts rather than loading both.
 
 ## Current limits
 
-- Canvas drawing: call traces and bitmaps prove a pointer response but do not
-  reconstruct the source computation. It stays an explicit unsupported residual.
+- Canvas: source canvas code runs only if it still works when its content
+  writes are discarded; code whose drawing depends on content it would have
+  created itself stays an explicit residual. In WordPress the sandbox is a
+  preserved runtime island (`runtime_js`); page content remains native blocks.
 - Measured timings carry timer jitter from the observing machine; the fidelity
   gate compares observable phases and settled state, not exact milliseconds.
 - The vocabulary expresses sequential reveals, pending dots, reveal visibility

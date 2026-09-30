@@ -30,7 +30,11 @@ export interface PortableMotionReceipt {
 	/** `learned` receipts are inferred from source observation; `authored` come from a recipe. */
 	origin?: 'authored' | 'learned';
 	contract: MotionContract;
-	routes: Record< string, { scripts: Array< { path: string; sha256: string } > } >;
+	routes: Record< string, {
+		scripts: Array< { path: string; sha256: string } >;
+		/** Source scripts run inside the canvas sandbox, identified by their captured bytes. */
+		sandboxedSource?: Array< { url: string; sha256: string } >;
+	} >;
 	/** Observed source behavior the portable runtime does not reproduce, per route. */
 	unsupported?: Record< string, Array< { selector?: string; reason: string } > >;
 }

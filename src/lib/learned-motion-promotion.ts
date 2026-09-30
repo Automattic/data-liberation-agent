@@ -8,6 +8,7 @@ import { verifyCandidateMotion, type MotionContract, type MotionEvidence } from 
 import { checkSelfConsistency } from './fidelity/self-consistency.js';
 import type { LearnedMotion } from './learned-motion.js';
 import { MOTION_RUNTIME } from './motion-runtime.js';
+import { buildCanvasSandbox, drawsOnCanvas, type SandboxedSource } from './canvas-sandbox.js';
 import { PORTABLE_MOTION_SCHEMA, type PortableMotionReceipt } from './portable-motion.js';
 import { startStaticServer } from './replicate/local-site/static-server.js';
 
@@ -51,7 +52,23 @@ export function learnedMotionContract( learned: LearnedMotion ): MotionContract[
  * vocabulary cannot express is recorded on the receipt and keeps failing
  * plain comparison; it is never substituted.
  */
-export async function promoteLearnedMotion( directory: string, routes: Array< { url: string; learned: LearnedMotion } >, browser: Browser ): Promise< LearnedPromotion > {
+/** The page's captured same-origin scripts that draw on a canvas, byte-verified against the diagnosis. */
+function canvasSources( root: string, scripts: Array< { url: string; sha256: string } > ): SandboxedSource[] {
+	const manifestPath = join( root, 'resources', 'manifest.json' );
+	if ( ! existsSync( manifestPath ) ) return [];
+	const manifest = JSON.parse( readFileSync( manifestPath, 'utf8' ) ) as { resources?: Record< string, { path?: string } > };
+	const sources: SandboxedSource[] = [];
+	for ( const script of scripts ) {
+		const path = manifest.resources?.[ script.url ]?.path;
+		const file = path ? resolve( root, path ) : '';
+		if ( ! file || ! file.startsWith( root + sep ) || ! existsSync( file ) ) continue;
+		const body = readFileSync( file, 'utf8' );
+		if ( createHash( 'sha256' ).update( body ).digest( 'hex' ) === script.sha256 && drawsOnCanvas( body ) ) sources.push( { url: script.url, sha256: script.sha256, body } );
+	}
+	return sources;
+}
+
+export async function promoteLearnedMotion( directory: string, routes: Array< { url: string; learned: LearnedMotion } >, browser: Browser, options: { sandboxCanvas?: boolean } = {} ): Promise< LearnedPromotion > {
 	const root = resolve( directory );
 	const failures: string[] = [];
 	const evidence: MotionEvidence[] = [];
@@ -59,7 +76,8 @@ export async function promoteLearnedMotion( directory: string, routes: Array< { 
 	const capture = JSON.parse( readFileSync( join( root, 'capture-receipt.json' ), 'utf8' ) );
 	const websiteDir = resolve( root, capture.websiteRoot ?? 'website' );
 	if ( ! websiteDir.startsWith( root + sep ) || ! existsSync( websiteDir ) ) return { promoted: false, failures: [ 'capture website root is missing' ], evidence };
-	const interactivity = JSON.parse( readFileSync( join( root, 'source-interactivity.json' ), 'utf8' ) ) as { pages?: Array< { url: string; signals: string[] } > };
+	const interactivity = JSON.parse( readFileSync( join( root, 'source-interactivity.json' ), 'utf8' ) ) as { pages?: Array< { url: string; signals: string[]; scripts?: Array< { url: string; sha256: string } > } > };
+	const sandboxFiles = new Map< string, Buffer >();
 	const bytes = Buffer.from( MOTION_RUNTIME );
 	const digest = createHash( 'sha256' ).update( bytes ).digest( 'hex' );
 	const scriptPath = `motion/${ digest.slice( 0, 12 ) }-learned-motion.js`;
@@ -70,7 +88,11 @@ export async function promoteLearnedMotion( directory: string, routes: Array< { 
 		const receipt: PortableMotionReceipt = { schema: PORTABLE_MOTION_SCHEMA, origin: 'learned', contract: { widths: VERIFIED_WIDTHS, routes: {} }, routes: {}, unsupported: {} };
 		const plans: Array< { route: string; url: string; signals: string[] } > = [];
 		for ( const { url, learned } of routes ) {
-			if ( ! learned.steps.length && ! learned.clock ) continue;
+			const page = ( interactivity.pages ?? [] ).find( ( row ) => row.url === url );
+			const canvasResiduals = learned.unsupported.filter( ( row ) => row.kind === 'canvas' && row.selector );
+			// The source's own drawing code, run behind the content membrane.
+			const sandboxed = options.sandboxCanvas && canvasResiduals.length ? canvasSources( root, page?.scripts ?? [] ) : [];
+			if ( ! learned.steps.length && ! learned.clock && ! sandboxed.length ) continue;
 			const route = new URL( url ).pathname;
 			const entry = route === new URL( capture.source?.url ?? url ).pathname ? { path: 'index.html' } : ( capture.routes ?? [] ).find( ( row: { url?: string } ) => row.url === url );
 			const pagePath = entry?.path ? join( stage, String( entry.path ).replace( /^website\//, '' ) ) : '';
@@ -80,29 +102,43 @@ export async function promoteLearnedMotion( directory: string, routes: Array< { 
 			}
 			const $ = cheerio.load( readFileSync( pagePath, 'utf8' ) );
 			const contract = learnedMotionContract( learned );
-			const selectors = [ ...contract.text, ...( contract.visibility ?? [] ), ...contract.clicks.map( ( click ) => click.trigger ) ];
+			if ( sandboxed.length ) contract.canvases = canvasResiduals.map( ( row ) => row.selector! );
+			const selectors = [ ...contract.text, ...( contract.visibility ?? [] ), ...contract.clicks.map( ( click ) => click.trigger ), ...contract.canvases ];
 			const missing = selectors.filter( ( selector ) => $( selector ).length !== 1 );
 			if ( missing.length ) {
 				failures.push( `${ route }: learned targets are not unique in the capture: ${ missing.join( ', ' ) }` );
 				continue;
 			}
-			if ( learned.steps.length ) $( 'body' ).append( `<span hidden data-blocks-engine-motion-steps="${ escape( JSON.stringify( learned.steps ) ) }"></span>` );
-			if ( learned.clock ) $( 'body' ).append( `<span hidden data-blocks-engine-live-clock="${ escape( JSON.stringify( learned.clock ) ) }"></span>` );
-			// Declares itself the static interpreter of the markers; importers that
-			// lower the markers to blocks use those blocks' view scripts instead.
-			$( 'body' ).append( `<script defer src="/${ scriptPath }" data-blocks-engine-marker-runtime="motion"></script>` );
+			const scripts: PortableMotionReceipt[ 'routes' ][ string ][ 'scripts' ] = [];
+			if ( learned.steps.length || learned.clock ) {
+				if ( learned.steps.length ) $( 'body' ).append( `<span hidden data-blocks-engine-motion-steps="${ escape( JSON.stringify( learned.steps ) ) }"></span>` );
+				if ( learned.clock ) $( 'body' ).append( `<span hidden data-blocks-engine-live-clock="${ escape( JSON.stringify( learned.clock ) ) }"></span>` );
+				// Declares itself the static interpreter of the markers; importers that
+				// lower the markers to blocks use those blocks' view scripts instead.
+				$( 'body' ).append( `<script defer src="/${ scriptPath }" data-blocks-engine-marker-runtime="motion"></script>` );
+				scripts.push( { path: scriptPath, sha256: digest } );
+			}
+			if ( sandboxed.length ) {
+				const sandbox = Buffer.from( buildCanvasSandbox( sandboxed ) );
+				const sandboxDigest = createHash( 'sha256' ).update( sandbox ).digest( 'hex' );
+				const sandboxPath = `motion/${ sandboxDigest.slice( 0, 12 ) }-source-canvas.js`;
+				sandboxFiles.set( sandboxPath, sandbox );
+				$( 'body' ).append( `<script defer src="/${ sandboxPath }" data-dla-source-canvas="sandboxed"></script>` );
+				scripts.push( { path: sandboxPath, sha256: sandboxDigest } );
+			}
 			writeFileSync( pagePath, $.html() );
 			receipt.contract.routes[ route ] = contract;
-			receipt.routes[ route ] = { scripts: [ { path: scriptPath, sha256: digest } ] };
-			if ( learned.unsupported.length ) receipt.unsupported![ route ] = learned.unsupported;
-			const canvasResidual = learned.unsupported.some( ( row ) => row.reason.startsWith( 'canvas drawing algorithm' ) );
-			const signals = ( interactivity.pages ?? [] ).find( ( page ) => page.url === url )?.signals ?? [];
-			// The learned subset is verified here; canvas residuals stay failing on the receipt.
-			plans.push( { route, url, signals: signals.filter( ( signal ) => ! canvasResidual || ! CANVAS_SIGNALS.includes( signal ) ) } );
+			receipt.routes[ route ] = { scripts, ...( sandboxed.length ? { sandboxedSource: sandboxed.map( ( { url: source, sha256 } ) => ( { url: source, sha256 } ) ) } : {} ) };
+			const residual = sandboxed.length ? learned.unsupported.filter( ( row ) => ! canvasResiduals.includes( row ) ) : learned.unsupported;
+			if ( residual.length ) receipt.unsupported![ route ] = residual;
+			const signals = page?.signals ?? [];
+			// Without the sandbox, canvas stays a failing residual on the receipt and is not probed here.
+			plans.push( { route, url, signals: signals.filter( ( signal ) => sandboxed.length || ! canvasResiduals.length || ! CANVAS_SIGNALS.includes( signal ) ) } );
 		}
 		if ( ! plans.length ) return { promoted: false, failures: failures.length ? failures : [ 'no learned motion to promote' ], evidence };
 		mkdirSync( join( stage, 'motion' ), { recursive: true } );
 		writeFileSync( join( stage, scriptPath ), bytes );
+		for ( const [ path, content ] of sandboxFiles ) writeFileSync( join( stage, path ), content );
 		const offline = checkSelfConsistency( stage, new Map( [ [ '/', 'index.html' ] ] ) );
 		if ( ! offline.pass ) return { promoted: false, failures: [ ...failures, ...offline.findings.map( ( finding ) => finding.detail ) ], evidence };
 		server = await startStaticServer( stage );

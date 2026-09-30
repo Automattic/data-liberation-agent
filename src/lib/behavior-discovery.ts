@@ -25,6 +25,7 @@ export async function discoverCapturedBehavior( directory: string ): Promise< vo
 	const learned: Array< { url: string; learned: LearnedMotion } > = [];
 	const failures: Array< { url: string; error: string } > = [];
 	let promotion: LearnedPromotion | null = null;
+	const attempts: Array< { sandboxCanvas: boolean; promoted: boolean; failures: string[] } > = [];
 	try {
 		for ( const { url } of pages.slice( 0, 4 ) ) {
 			const open = async ( timezoneId: string ) => browser.newPage( { ...await sourceContextOptions( browser, url ), timezoneId, viewport: { width: 1440, height: 900 } } );
@@ -46,13 +47,24 @@ export async function discoverCapturedBehavior( directory: string ): Promise< vo
 				await Promise.all( [ page.close(), counterfactualPage.close() ] );
 			}
 		}
-		if ( learned.length ) promotion = await promoteLearnedMotion( directory, learned, browser );
+		if ( learned.length ) {
+			// Prefer running the source's own canvas code behind the content membrane;
+			// if that does not verify, promote the learned motion alone with canvas as a residual.
+			const canvas = learned.some( ( row ) => row.learned.unsupported.some( ( item ) => item.kind === 'canvas' ) );
+			if ( canvas ) {
+				const sandboxed = await promoteLearnedMotion( directory, learned, browser, { sandboxCanvas: true } );
+				attempts.push( { sandboxCanvas: true, promoted: sandboxed.promoted, failures: sandboxed.failures } );
+				if ( sandboxed.promoted ) promotion = sandboxed;
+			}
+			promotion ??= await promoteLearnedMotion( directory, learned, browser );
+		}
 	} finally { await browser.close(); }
-	const residual = learned.some( ( row ) => row.learned.unsupported.length );
+	const receipt = existsSync( join( directory, 'portable-motion.json' ) ) ? JSON.parse( readFileSync( join( directory, 'portable-motion.json' ), 'utf8' ) ) as { unsupported?: Record< string, unknown[] > } : null;
+	const residual = Object.values( receipt?.unsupported ?? {} ).some( ( rows ) => rows.length );
 	writeFileSync( join( directory, 'source-behavior.json' ), JSON.stringify( {
 		schema: 'data-liberation/source-behavior-report/v1', observed: observations.length,
 		total: pages.length, omitted: Math.max( 0, pages.length - 4 ), observations, failures,
-		promotion: promotion && { promoted: promotion.promoted, failures: promotion.failures, evidence: promotion.evidence },
+		promotion: promotion && { promoted: promotion.promoted, failures: promotion.failures, evidence: promotion.evidence, attempts },
 		status: promotion?.promoted ? ( residual ? 'partially_translated' : 'translated' ) : 'observed_untranslated',
 	}, null, 2 ) );
 }

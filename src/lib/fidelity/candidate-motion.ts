@@ -160,6 +160,17 @@ async function replay( page: Page, click: { trigger: string; target: string }, r
 		const trace = ( window as typeof window & { __dlaMotion?: { changes: Record< string, string[] >; sample: () => void } } ).__dlaMotion;
 		if ( trace ) { trace.changes[ selector ] = []; trace.sample(); }
 	}, click.target );
+	await page.locator( click.trigger ).first().scrollIntoViewIfNeeded( { timeout: 3000 } ).catch( () => undefined );
+	// A page may disable its controls while a previous sequence runs (for
+	// example `pointer-events:none` during a loading state). Click only once the
+	// trigger actually receives pointer input, as a visitor's click would.
+	await page.waitForFunction( ( selector ) => {
+		const trigger = document.querySelector( selector );
+		const box = trigger?.getBoundingClientRect();
+		if ( ! trigger || ! box || ! box.width || ! box.height ) return false;
+		const hit = document.elementFromPoint( box.left + box.width / 2, box.top + box.height / 2 );
+		return !! hit && ( hit === trigger || trigger.contains( hit ) );
+	}, click.trigger, { timeout: 10_000 } ).catch( () => undefined );
 	await page.locator( click.trigger ).first().click( { force: true, timeout: 5000 } );
 	const changed = await page.waitForFunction(
 		( { selector, previous } ) => document.querySelector( selector )?.textContent?.trim() !== previous,

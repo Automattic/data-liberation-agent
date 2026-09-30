@@ -84,7 +84,9 @@ function overlayLabels( dismissed: DismissedOverlay[] ): string[] {
 export type ObservePair = (
 	sourceUrl: string,
 	localUrl: string,
-	viewport: number
+	viewport: number,
+	/** A learned source startup duration; the source is observed only once it has settled. */
+	sourceSettleMs?: number
 ) => Promise< {
 	source: LayoutObservation;
 	liberated: LayoutObservation;
@@ -931,12 +933,12 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 		throw error;
 	}
 	if ( ! observe ) {
-		observe = async ( sourceHref, localHref, viewport ) => {
+		observe = async ( sourceHref, localHref, viewport, sourceSettleMs = 0 ) => {
 			if ( ! page ) throw new Error( 'browser page missing' );
 			await page.setViewportSize( { width: viewport, height: 900 } );
 			let sourcePng: Buffer | undefined;
 			let liberatedPng: Buffer | undefined;
-			const source = await observePage( page, sourceHref, viewport, settleMs, null, receipt.cleanup?.policy,
+			const source = await observePage( page, sourceHref, viewport, Math.max( settleMs, sourceSettleMs ), null, receipt.cleanup?.policy,
 				options.screenshots ? async () => { sourcePng = await page!.screenshot(); } : undefined );
 			if (receipt.cleanup) {
 				const report = await readSourceCleanup(page);
@@ -1012,7 +1014,7 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 			);
 			for ( const width of widths ) {
 				log( `[compare] ${ route } @ ${ width }px` );
-				const pair = await observe( sourceHref, localHref, width );
+				const pair = await observe( sourceHref, localHref, width, contract ? contract.ready.sourceSettleMs : undefined );
 				recordOverlays( route, width, sourceHref, localHref, pair );
 				const evidenceDir = join(
 					dirname( receiptPath ),
@@ -1074,7 +1076,7 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 			// conclusions from values that were zeroed rather than measured.
 			if ( ! widths.includes( 390 ) ) {
 				log( `[compare] ${ route } @ 390px interactivity` );
-				const pair = await observe( sourceHref, localHref, 390 );
+				const pair = await observe( sourceHref, localHref, 390, contract ? contract.ready.sourceSettleMs : undefined );
 				recordOverlays( route, 390, sourceHref, localHref, pair );
 				const dialogOnly = ( observation: LayoutObservation ): LayoutObservation => ( {
 					...observation,
