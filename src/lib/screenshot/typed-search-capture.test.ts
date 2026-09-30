@@ -63,6 +63,15 @@ describe( 'source-backed typed collection filtering', () => {
 		expect(await captureTypedSearchStates(page,[],{settleMs:10})).toMatchObject([{kind:'typed-search',status:'no-dialog',error:expect.stringContaining('No complete')}]);
 		await page.close();
 	});
+	it( 'binds captured membership by complete item identity when baseline order changes', async () => {
+		const page=await browser.newPage();await page.setContent(fixture);
+		const categories=await captureSelectableSetStates(page,{settleMs:10});const states=await captureTypedSearchStates(page,categories,{settleMs:10});
+		await page.locator('#items').evaluate(element=>element.append(element.firstElementChild!));
+		const html=wireCapturedDialogs((await page.content()).replace(/<script>[\s\S]*?<\/script>/g,''),states);
+		await page.setContent(html);await page.getByRole('button',{name:'First',exact:true}).click();
+		expect(await page.locator('article:visible').innerText()).toContain('Evidence for apples');
+		await page.close();
+	},30_000);
 	it( 'rejects results that depend on fetching source data', async () => {
 		const page=await browser.newPage();await page.route('https://fixture.invalid/**',route=>route.fulfill({body:'{}',contentType:'application/json'}));
 		await page.setContent(fixture.replace("document.querySelector('input').addEventListener('input',render)","document.querySelector('input').addEventListener('input',()=>{fetch('https://fixture.invalid/data').then(render).catch(()=>{})})"));

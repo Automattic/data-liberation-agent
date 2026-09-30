@@ -27,8 +27,11 @@ export function wireCapturedCollections( html: string, states: CapturedDialogInt
 		// Evidence HTML remains diagnostic rather than replacing the authoring tree.
 		const children = target.children();
 		if ( children.length !== evidence.items.length ) continue;
+		const text = ( element: import('domhandler').AnyNode ): string => element.type === 'text' ? element.data : 'children' in element ? element.children.map( text ).join( ' ' ) : '';
+		const identities = children.toArray().map( element => evidence.items.find( item => item.text === text(element).replace(/\s+/g,' ').trim() ) );
+		if ( identities.some( item => !item ) || new Set(identities.map(item=>item!.key)).size !== children.length ) continue;
 		children.each( ( index, element ) => {
-			$( element ).attr( 'data-dla-collection-item', evidence.items[index]!.key ).attr( 'data-dla-collection-members', JSON.stringify( evidence.items[index]!.categories ) );
+			$( element ).attr( 'data-dla-collection-item', identities[index]!.key ).attr( 'data-dla-collection-members', JSON.stringify( identities[index]!.categories ) );
 		});
 		target.attr( 'data-dla-collection', key ).attr( 'data-dla-collection-category', String( evidence.initialCategory ) );
 		field.attr( 'data-dla-collection-field', key );
