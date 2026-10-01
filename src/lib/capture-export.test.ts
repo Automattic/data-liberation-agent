@@ -1866,6 +1866,72 @@ describe( 'exportWebsiteCapture', () => {
 		}
 	} );
 
+	it( 'keeps the phone document when a body-class gate ships two documents that hidden-chrome pruning would delete', async () => {
+		// A phone capture that reconciles with desktop by element identity but
+		// whose phone-only body class gates desktop CSS (`body:not(.phone)`)
+		// must ship both documents. It also starts its body with a hidden SVG
+		// sprite: if post-assembly hidden-chrome pruning ever ran over the
+		// wrappers, that sprite would read the whole phone document as a
+		// redundant hidden navigation and delete it, leaving the desktop
+		// document — which is display:none at phone width — as the only copy.
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-gated-dual-prune-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
+			mkdirSync( join( outputDir, path ), { recursive: true } );
+		const css = '<style>body{margin:0}body:not(.phone) .page{width:980px;margin:0 auto}</style>';
+		const nav = '<header id="site-header"><nav><a href="/about">About</a><a href="/contact">Contact</a></nav></header>';
+		const page = ( story: string ) => `<main id="page" class="page"><h1>Home</h1><p>${ story }</p></main>`;
+		writeFileSync(
+			join( outputDir, 'html', 'homepage.html' ),
+			`<html><head>${ css }</head><body>${ nav }${ page( 'Desktop story' ) }</body></html>`
+		);
+		writeFileSync(
+			join( outputDir, 'html-mobile', 'homepage.html' ),
+			`<html><head><meta name="viewport" content="width=device-width, initial-scale=1">${ css }</head><body class="phone">` +
+				'<svg id="sprite" style="display:none" aria-hidden="true"><symbol id="i-menu" viewBox="0 0 24 24"></symbol></svg>' +
+				`${ nav }${ page( 'Phone story' ) }<aside id="mobile-menu">Phone menu</aside></body></html>`
+		);
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( { version: 1, entries: { 'https://example.com/': { html: 'html/homepage.html' } } } )
+		);
+
+		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [] } );
+
+		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
+		const $ = cheerio.load( html );
+		expect( $( '.data-liberation-desktop-document' ) ).toHaveLength( 1 );
+		expect( $( '.data-liberation-mobile-document' ) ).toHaveLength( 1 );
+		expect( $( '.data-liberation-mobile-document #mobile-menu' ).text() ).toBe( 'Phone menu' );
+		const receipt = JSON.parse( readFileSync( join( outputDir, 'capture-receipt.json' ), 'utf8' ) );
+		expect( receipt.routes[ 0 ].responsiveVariants ).toMatchObject( {
+			variants: 2,
+			outcome: 'dual-structural',
+		} );
+		expect( receipt.routes[ 0 ].responsiveVariants.reason ).toContain( 'body:not(.phone)' );
+		const profile = JSON.parse( readFileSync( join( outputDir, 'source-profile.json' ), 'utf8' ) );
+		expect( profile ).toMatchObject( { variants: 'per-device', documentsPerRoute: 2 } );
+
+		// What a reader gets: the phone document at phone width, the desktop
+		// document above the switch — no blank phone page.
+		const browser = await chromium.launch( { headless: true } );
+		try {
+			const page = await browser.newPage();
+			await page.setContent( html );
+			await page.setViewportSize( { width: 390, height: 844 } );
+			expect( await page.locator( '.data-liberation-mobile-document:visible' ).count() ).toBe( 1 );
+			expect( await page.getByText( 'Phone menu' ).isVisible() ).toBe( true );
+			expect( await page.getByText( 'Phone story' ).isVisible() ).toBe( true );
+			expect( await page.locator( '.data-liberation-desktop-document' ).isVisible() ).toBe( false );
+			await page.setViewportSize( { width: 1440, height: 900 } );
+			expect( await page.locator( '.data-liberation-desktop-document:visible' ).count() ).toBe( 1 );
+			expect( await page.getByText( 'Desktop story' ).isVisible() ).toBe( true );
+			expect( await page.locator( '.data-liberation-mobile-document' ).isVisible() ).toBe( false );
+		} finally {
+			await browser.close();
+		}
+	} );
+
 	it.each( [
 		[
 			'a repeated per-instance id and a body-level mobile-only anchor',

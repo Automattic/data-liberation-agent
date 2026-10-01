@@ -802,11 +802,28 @@ export interface ResponsiveVariantEvidence {
 
 function responsiveVariantEvidence(
 	desktopHtml: string,
-	mobileHtml: string | undefined
+	mobileHtml: string | undefined,
+	switchWidth: number = DEFAULT_SWITCH_WIDTH
 ): ResponsiveVariantEvidence | undefined {
 	if ( mobileHtml === undefined ) return undefined;
 	if ( documentsDiffer( desktopHtml, mobileHtml ) ) {
-		const merge = identitySubsetMerge( desktopHtml, mobileHtml );
+		// The receipt describes the shipped file, so it must answer the assembly
+		// decision, not run a parallel one: a phone-only body class gating
+		// desktop CSS forces the two-document output even where the trees
+		// reconcile by element identity (see mobileBodyClassGatesDesktopCss).
+		const gatedByMobileClass = mobileBodyClassGatesDesktopCss(
+			desktopHtml,
+			mobileHtml,
+			styleBlocks( desktopHtml ).join( '\n' )
+		);
+		if ( gatedByMobileClass !== undefined ) {
+			return {
+				variants: 2,
+				outcome: 'dual-structural',
+				reason: `a phone-only body class gates desktop CSS (body:not(.${ gatedByMobileClass })); both variants shipped`,
+			};
+		}
+		const merge = identitySubsetMerge( desktopHtml, mobileHtml, switchWidth );
 		if ( merge ) {
 			const sharedStyles =
 				styleBlocks( desktopHtml ).join( '\n' ) === styleBlocks( mobileHtml ).join( '\n' );
@@ -845,6 +862,32 @@ function responsiveVariantEvidence(
 
 function responsiveBodyContent( html: string ): string | undefined {
 	return /<body\b[^>]*>([\s\S]*?)<\/body\s*>/i.exec( html )?.[ 1 ];
+}
+
+/**
+ * A phone-only body flag can gate the source's desktop width rules. The
+ * identity-subset path carries phone classes onto its single body, making a
+ * `body:not(.flag)` rule false at desktop widths as well. The two-document
+ * output is therefore required whenever a phone-only class actually gates
+ * desktop CSS, and both the assembly and the receipt evidence must answer
+ * this identically — the receipt describes the shipped file. Returns the
+ * first gating class, or undefined when the documents may collapse.
+ */
+function mobileBodyClassGatesDesktopCss(
+	desktopHtml: string,
+	mobileHtml: string,
+	desktopCss: string
+): string | undefined {
+	const bodyAttributes = ( html: string ): string => /<body\b([^>]*)>/i.exec( html )?.[ 1 ] ?? '';
+	const bodyClasses = ( attributes: string ): string[] =>
+		( cheerio.load( `<body${ attributes }></body>` )( 'body' ).attr( 'class' ) ?? '' )
+			.split( /\s+/ )
+			.filter( Boolean );
+	const desktopClasses = new Set( bodyClasses( bodyAttributes( desktopHtml ) ) );
+	return bodyClasses( bodyAttributes( mobileHtml ) ).find( ( className ) =>
+		! desktopClasses.has( className ) &&
+		new RegExp( `\\bbody\\s*:not\\(\\s*\\.${ className.replace( /[.*+?^${}()|[\]\\]/g, '\\$&' ) }\\s*\\)` ).test( desktopCss )
+	);
 }
 
 interface IdentitySubsetMerge {
@@ -1833,18 +1876,15 @@ function assembleResponsiveHtml(
 			)
 		);
 	}
-	// A phone-only body flag can gate the source's desktop width rules. The
-	// identity-subset path carries phone classes onto its single body, making a
-	// `body:not(.flag)` rule false at desktop widths as well. Use the existing
-	// two-document path only when a phone-only class actually gates desktop CSS.
-	const capturedBodyClasses = ( attributes: string ) =>
-		( cheerio.load( `<body${ attributes }></body>` )( 'body' ).attr( 'class' ) ?? '' ).split( /\s+/ ).filter( Boolean );
-	const desktopClasses = new Set( capturedBodyClasses( desktopBodyMatch?.[ 1 ] ?? '' ) );
-	const desktopCss = styleBlocks( desktopHtml ).join( '\n' );
-	const gatedByMobileClass = capturedBodyClasses( mobileBodyMatch?.[ 1 ] ?? '' ).some( ( className ) =>
-		! desktopClasses.has( className ) &&
-		new RegExp( `\\bbody\\s*:not\\(\\s*\\.${ className.replace( /[.*+?^${}()|[\]\\]/g, '\\$&' ) }\\s*\\)` ).test( desktopCss )
-	);
+	// A phone-only body flag gating desktop CSS forces the two-document path
+	// even where the trees reconcile by element identity; the same predicate
+	// answers the receipt evidence above, so the two can never disagree.
+	const gatedByMobileClass =
+		mobileBodyClassGatesDesktopCss(
+			desktopHtml,
+			mobileHtml,
+			styleBlocks( desktopHtml ).join( '\n' )
+		) !== undefined;
 	const identitySubset = gatedByMobileClass ? null : identitySubsetMerge( desktopHtml, mobileHtml, switchWidth );
 	if ( identitySubset ) {
 		// One body carries both renderings: mobile-only elements join the desktop
@@ -3421,7 +3461,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 				: siteSwitchWidth;
 		if ( detectedFloor ) switchWidths.push( detectedFloor );
 		if ( entry.fluid ) fluidReports.push( entry.fluid );
-		const responsiveVariants = responsiveVariantEvidence( rawDesktopHtml, rawMobileHtml );
+		const responsiveVariants = responsiveVariantEvidence( rawDesktopHtml, rawMobileHtml, detectedFloor );
 		const desktopHtml = normalizedDeclarativeFormEmbeds( renderedHtml( rawDesktopHtml ) );
 		const mobileHtml =
 			rawMobileHtml === undefined
