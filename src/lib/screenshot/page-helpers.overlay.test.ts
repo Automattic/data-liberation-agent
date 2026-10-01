@@ -363,6 +363,28 @@ const CONSENT_FIXTURE = `<!doctype html><html><head><style>
 </body></html>`;
 
 describe('dismissOverlays — consent banner (Playwright)', () => {
+  it('preserves business chrome when a static consent notice is nested inside its header', async () => {
+    const page = await browser.newPage();
+    await page.setContent(`<!doctype html><html><head><style>
+      body { margin: 0; }
+      header { position: fixed; top: 0; width: 100%; height: 180px; z-index: 1000; }
+    </style></head><body>
+      <header id="business-header">
+        <section>We use cookies to improve your experience.</section>
+        <a id="brand" href="/">Example Brand</a><nav><a href="/services">Services</a></nav>
+      </header>
+      <main style="height:3000px">${'Useful business content. '.repeat(50)}</main>
+    </body></html>`);
+    try {
+      expect(await dismissOverlays(page)).toEqual([]);
+      expect(await page.locator('#business-header').count()).toBe(1);
+      expect(await page.locator('#brand').textContent()).toBe('Example Brand');
+      expect(await page.locator('nav a').getAttribute('href')).toBe('/services');
+    } finally {
+      await page.close();
+    }
+  });
+
   it('dismisses a cookie banner, preferring reject', async () => {
     const page = await browser.newPage();
     await page.setContent(CONSENT_FIXTURE);
