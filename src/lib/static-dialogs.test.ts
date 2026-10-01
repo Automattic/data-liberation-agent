@@ -24,6 +24,41 @@ const captured: CapturedDialogInteraction = {
 };
 
 describe( 'wireCapturedDialogs', () => {
+	it.each( [ 'modal', 'dropdown' ] )( 'preserves responsive flex participation of a %s trigger across resizing', async ( presentation ) => {
+		const source = '<html><head><style>body{margin:0}header{display:flex;align-items:center;justify-content:space-between;max-width:672px;margin:auto;padding:24px;box-sizing:border-box}.desktop{display:none}.menu{display:inline-flex;padding:8px;font:16px sans-serif;border:0;background:none;box-sizing:border-box;width:60px;height:36px}@media(min-width:640px){.desktop{display:flex;gap:20px}.menu{display:none}}</style></head><body><header><a href="/">Site title</a><nav class="desktop"><a href="/about">About</a><a href="/writing">Writing</a></nav><button class="menu" aria-label="Open menu">Menu</button></header></body></html>';
+		const browser = await chromium.launch();
+		try {
+			const page = await browser.newPage();
+			const widths = [ 390, 768, 1440, 390, 1440, 390 ];
+			const rectangles = new Map<number, { nav: { x: number; y: number; width: number; height: number } | null; trigger: { x: number; y: number; width: number; height: number } | null }>();
+			for ( const width of [ 390, 768, 1440 ] ) {
+				await page.setViewportSize( { width, height: 900 } );
+				await page.setContent( source );
+				rectangles.set( width, { nav: await page.locator( '.desktop' ).boundingBox(), trigger: await page.locator( '.menu' ).boundingBox() } );
+			}
+			const state: CapturedDialogInteraction = {
+				...captured,
+				trigger: { ...captured.trigger, selector: 'header > button' },
+				dialog: { ...captured.dialog!, ...( presentation === 'dropdown' ? { presentation: 'dropdown' as const } : {} ) },
+			};
+			await page.setContent( wireCapturedDialogs( source, [ state ] ) );
+			for ( const width of widths ) {
+				await page.setViewportSize( { width, height: 900 } );
+				const details = page.locator( 'details.dla-disclosure' );
+				await expect.poll( () => details.evaluate( element => ( element as HTMLElement ).hidden ) ).toBe( width >= 640 );
+				expect( await page.locator( '.desktop' ).boundingBox() ).toEqual( rectangles.get( width )!.nav );
+				expect( await page.locator( 'summary' ).boundingBox() ).toEqual( rectangles.get( width )!.trigger );
+				if ( width === 390 ) {
+					await page.locator( 'summary' ).focus();
+					await page.keyboard.press( 'Enter' );
+					expect( await details.evaluate( element => ( element as HTMLDetailsElement ).open ) ).toBe( true );
+					await page.keyboard.press( 'Escape' );
+					expect( await details.evaluate( element => ( element as HTMLDetailsElement ).open ) ).toBe( false );
+					expect( await page.locator( 'summary' ).evaluate( element => document.activeElement === element ) ).toBe( true );
+				}
+			}
+		} finally { await browser.close(); }
+	}, 30_000 );
 	it( 'emits zero-specificity base disclosure rules so author utilities win', () => {
 		const html = wireCapturedDialogs(
 			'<html><head></head><body><button class="burger">Open Menu</button></body></html>',
