@@ -35,6 +35,8 @@ export interface RenderedImage {
 	 * can drift while the picture stays the same.
 	 */
 	contentHash?: string | null;
+	/** SHA-256 of the fetched resource bytes; stable across animation frames. */
+	assetHash?: string | null;
 	/**
 	 * Other normalized filenames this element declared as renditions of the
 	 * same asset (its srcset candidates). The file that loaded can change with
@@ -219,15 +221,16 @@ function identityKeys( image: RenderedImage ): string[] {
 /**
  * Pair each source image with the copy image that renders the same picture.
  *
- * Two identities are available and neither subsumes the other:
+ * Resource, perceptual, and URL identities cover different evidence:
  *
- * - **Content.** The perceptual hash survives every renaming, but it is only
+ * - **Bytes.** The exact resource digest survives renaming and animation phase.
+ * - **Content.** The perceptual hash survives re-encoding, but it is only
  *   present when both sides' bytes could be fetched and decoded.
  * - **URL key.** `normalizeImageKey` folds basenames, but a CDN can serve one
  *   asset under several names across pages and device variants, so the key
  *   can drift while the picture stays the same.
  *
- * Content is tried first — it is the stronger claim — and the URL key covers
+ * Exact bytes precede perceptual content, and the URL key covers
  * whatever the hashes missed. A srcset candidate is the same asset under
  * another filename: the loaded file can change with viewport width while the
  * element still declares both renditions. Within a tier repeated identities
@@ -238,10 +241,10 @@ export function matchRenderedImages( source: RenderedImage[], copy: RenderedImag
 	const pairs: ImagePair[] = [];
 	const paired = new Set< RenderedImage >();
 
-	const correspondingIn = ( group: RenderedImage[], image: RenderedImage, content = false ): RenderedImage | null => {
+	const correspondingIn = ( group: RenderedImage[], image: RenderedImage, identity: 'assetHash' | 'contentHash' | 'key' = 'key' ): RenderedImage | null => {
 		if ( group.length === 0 ) return null;
-		const sameIdentity = ( other: RenderedImage ) => content
-			? image.contentHash === other.contentHash
+		const sameIdentity = ( other: RenderedImage ) => identity !== 'key'
+			? image[ identity ] === other[ identity ]
 			: identityKeys( image ).some( key => identityKeys( other ).includes( key ) );
 		const sourceOccurrences = source.filter( sameIdentity );
 		const copyOccurrences = copy.filter( sameIdentity );
@@ -255,18 +258,21 @@ export function matchRenderedImages( source: RenderedImage[], copy: RenderedImag
 		return group.shift()!;
 	};
 
-	// Tier 1: same picture, whatever it is called on each side.
-	if ( source.some( ( image ) => image.contentHash ) ) {
+	// Exact bytes precede perceptual identity, which can collide or vary with a
+	// decoded animation frame. Repeated resources still require unique roles.
+	for ( const identity of [ 'assetHash', 'contentHash' ] as const ) {
 		const byHash = new Map< string, RenderedImage[] >();
 		for ( const image of copy ) {
-			if ( ! image.contentHash ) continue;
-			const group = byHash.get( image.contentHash ) ?? [];
+			const hash = image[ identity ];
+			if ( ! hash || paired.has( image ) ) continue;
+			const group = byHash.get( hash ) ?? [];
 			group.push( image );
-			byHash.set( image.contentHash, group );
+			byHash.set( hash, group );
 		}
 		for ( const image of source ) {
-			if ( ! image.contentHash ) continue;
-			const candidate = correspondingIn( byHash.get( image.contentHash ) ?? [], image, true );
+			const hash = image[ identity ];
+			if ( ! hash || pairs.some( pair => pair.source === image ) ) continue;
+			const candidate = correspondingIn( byHash.get( hash ) ?? [], image, identity );
 			if ( ! candidate ) continue;
 			paired.add( candidate );
 			pairs.push( { source: image, candidate } );

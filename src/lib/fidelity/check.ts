@@ -353,8 +353,8 @@ export async function observePage(
 			// grayscale, threshold at the mean. Fetching keeps this
 			// cross-origin safe where canvas reads of the element would taint;
 			// any failure leaves null and the key-only matcher covers it.
-			const hashCache = new Map< string, Promise< string | null > >();
-			const contentHashFor = ( src: string ): Promise< string | null > => {
+			const hashCache = new Map< string, Promise< { contentHash: string; assetHash: string | null } | null > >();
+			const contentHashFor = ( src: string ): Promise< { contentHash: string; assetHash: string | null } | null > => {
 				const cached = hashCache.get( src );
 				if ( cached ) return cached;
 				const pending = ( async () => {
@@ -362,7 +362,11 @@ export async function observePage(
 						if ( ! src || src.startsWith( 'data:' ) || src.startsWith( 'blob:' ) ) return null;
 						const response = await fetch( src, { mode: 'cors', credentials: 'omit', signal: AbortSignal.timeout( 5000 ) } );
 						if ( ! response.ok ) return null;
-						const bitmap = await createImageBitmap( await response.blob() );
+						const blob = await response.blob();
+						const bytes = await blob.arrayBuffer();
+						const digest = await globalThis.crypto?.subtle?.digest( 'SHA-256', bytes );
+						const assetHash = digest ? Array.from( new Uint8Array( digest ), byte => byte.toString( 16 ).padStart( 2, '0' ) ).join( '' ) : null;
+						const bitmap = await createImageBitmap( blob );
 						const side = 8;
 						const canvas = new OffscreenCanvas( side, side );
 						const context = canvas.getContext( '2d', { willReadFrequently: true } )!;
@@ -382,7 +386,7 @@ export async function observePage(
 							}
 							value += bits.toString( 16 );
 						}
-						return value;
+						return { contentHash: value, assetHash };
 					} catch {
 						return null;
 					}
@@ -459,7 +463,7 @@ export async function observePage(
 						y: Math.round( rect.y ),
 						width: Math.round( rect.width ),
 						height: Math.round( rect.height ),
-						contentHash: await contentHashFor( src ),
+						...( await contentHashFor( src ) ?? { contentHash: null, assetHash: null } ),
 					} ) )
 			);
 
