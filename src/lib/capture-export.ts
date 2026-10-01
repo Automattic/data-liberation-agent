@@ -46,6 +46,7 @@ import {
 	type CapturedResourceManifest,
 } from './screenshot/resource-capture.js';
 import { isSourcePromotion } from './source-cleanup.js';
+import { sameOriginPageAnchors } from './screenshot/unscheduled-anchors.js';
 import { inspectSourceInteractivity, SOURCE_INTERACTIVITY_SCHEMA, type SourceInteractivityPage } from './source-interactivity.js';
 
 export const CAPTURE_RECEIPT_SCHEMA = 'data-liberation/capture-receipt/v1';
@@ -131,6 +132,9 @@ interface CaptureManifestEntry {
 	html?: string;
 	/** Same-origin route the server redirected this URL to; see ManifestEntry. */
 	redirectedTo?: string;
+	/** Bounded source inspection of a linked route absent from the capture schedule. */
+	externalRedirect?: boolean;
+	sourceAbsentStatus?: 404 | 410;
 	sections?: string;
 	interactions?: InteractionStatesReport;
 	scrollStates?: ScrollStatesReport;
@@ -3243,16 +3247,13 @@ function unresolvedCapturedAnchors(
 }
 
 const UNCAPTURED_ROUTE_REASON = 'target route was not captured';
-const SKIP_UNCAPTURED_PATHS = /^\/(cart|account|login|signup|checkout|search|api|admin|favicon)/i;
-const UNCAPTURED_ASSET_PATH =
-	/\.(css|js|png|jpg|jpeg|gif|svg|ico|woff|woff2|ttf|eot|pdf|docx?|zip|xml|json)$/i;
 
 /**
  * Same-origin page links in captured HTML whose target was never captured.
  *
  * Checked against the pre-rewrite document so hrefs still resolve on the
- * source origin. No extra network: the route set is whatever export already
- * retained on disk.
+ * source origin. The bounded inspection recorded by capture can establish
+ * absence or an external redirect; all other missing pages remain blocking.
  */
 function uncapturedRouteAnchors(
 	html: string,
@@ -3260,37 +3261,9 @@ function uncapturedRouteAnchors(
 	capturedRoutes: Set< string >,
 	absentRoutes: Set< string >
 ): Array< { sourceUrl: string; url: string; reason: string } > {
-	let documentUrl: URL;
-	try {
-		documentUrl = new URL( sourceUrl );
-	} catch {
-		return [];
-	}
-	const $ = cheerio.load( html );
-	const missing = new Map< string, string >();
-	$( 'a[href],area[href]' ).each( ( _index, element ) => {
-		const href = ( $( element ).attr( 'href' ) ?? '' ).trim();
-		if ( ! href || href === '#' ) return;
-		let resolved: URL;
-		try {
-			resolved = new URL( href, sourceUrl );
-		} catch {
-			return;
-		}
-		if ( resolved.protocol !== 'http:' && resolved.protocol !== 'https:' ) return;
-		if ( resolved.origin !== documentUrl.origin ) return;
-		if ( UNCAPTURED_ASSET_PATH.test( resolved.pathname ) || isAudioLink( href, sourceUrl ) ) return;
-		if ( SKIP_UNCAPTURED_PATHS.test( resolved.pathname ) ) return;
-		let key: string;
-		try {
-			key = normalizedUrl( resolved.href );
-		} catch {
-			return;
-		}
-		if ( capturedRoutes.has( key ) || missing.has( key ) ) return;
-		missing.set( key, key );
-	} );
-	return [ ...missing.values() ].map( ( url ) => ( {
+	return sameOriginPageAnchors( html, sourceUrl )
+		.filter( ( url ) => ! capturedRoutes.has( url ) )
+		.map( ( url ) => ( {
 		sourceUrl,
 		url,
 		reason: absentRoutes.has( url ) ? 'target route is absent at source' : UNCAPTURED_ROUTE_REASON,
@@ -3375,6 +3348,18 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		}
 		if ( entry.redirectedTo ) {
 			redirectAliases.push( { url, target: entry.redirectedTo } );
+			continue;
+		}
+		if ( entry.externalRedirect ) {
+			// The source sends this link off-origin. Retain only the fact of the
+			// redirect; neither its destination nor its query belongs in the copy.
+			excludedRoutes.push( url );
+			routeCaptureDiagnostics.push( { code: 'route_external_redirect', url, reason: 'source HTTP redirect to an external origin (destination omitted)' } );
+			continue;
+		}
+		if ( entry.sourceAbsentStatus ) {
+			excludedRoutes.push( url );
+			routeCaptureDiagnostics.push( { code: 'route_not_found', url, reason: `HTTP ${ entry.sourceAbsentStatus }` } );
 			continue;
 		}
 		if ( ! entry.html ) {
@@ -3977,6 +3962,9 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		url?: string;
 	} > = [];
 	const capturedRouteKeys = new Set( portableRouteLinks.keys() );
+	for ( const [ url, entry ] of Object.entries( capture.entries ) ) {
+		if ( entry.externalRedirect ) capturedRouteKeys.add( normalizedUrl( url ) );
+	}
 	const absentRoutes = new Set( routeCaptureDiagnostics
 		.filter( ( diagnostic ) => diagnostic.code === 'route_not_found' )
 		.map( ( diagnostic ) => diagnostic.url ) );
@@ -4255,7 +4243,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 	// Only proven source-absent routes lack a document requiring cleanup.
 	// Keep every other attempted route in the audit, even if it lost its HTML.
 	const cleanupPages = Object.entries(capture.entries)
-		.filter(([url, entry]) => !absentRoutes.has(url) && !entry.redirectedTo)
+		.filter(([url, entry]) => !absentRoutes.has(url) && !entry.redirectedTo && !entry.externalRedirect)
 		.map(([url, entry]) => ({ url, ...entry.cleanup }));
 	const recordedPolicy = cleanupPages.find((page) => page.policy)?.policy;
 	const cleanup = recordedPolicy ? {

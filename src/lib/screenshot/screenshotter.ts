@@ -44,6 +44,7 @@ import { waitForStable, triggerLazyLoad, dismissOverlays, pageResponds } from '.
 import { CapturedResourceStore } from './resource-capture.js';
 import { enforceSameOrigin } from './same-origin.js';
 import { preserveStreamedVideoPosters } from './streamed-video.js';
+import { sameOriginPageAnchors } from './unscheduled-anchors.js';
 import { analyzePage } from './site-analysis.js';
 import {
 	defaultViewports,
@@ -1985,6 +1986,55 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 				browser = ( await connectBrowser( { cdpPort: opts.cdpPort } ) ) as unknown as Browser;
 				browserRestarts++;
 				urlsSinceRestart = 0;
+			}
+		}
+		// Discovery can omit links authored on a captured page. Inspect only a
+		// bounded set of those links, using the source session and manual redirects:
+		// never request an off-origin Location or persist its (possibly tokenized) URL.
+		const scheduled = new Set( urls.map( routeIdentity ) );
+		const candidates = new Set< string >();
+		for ( const url of urls ) {
+			const htmlPath = manifest.getEntry( url )?.html;
+			if ( ! htmlPath || ! existsSync( join( opts.outputDir, htmlPath ) ) ) continue;
+			for ( const link of sameOriginPageAnchors( readFileSync( join( opts.outputDir, htmlPath ), 'utf8' ), url ) ) {
+				if ( ! scheduled.has( routeIdentity( link ) ) ) candidates.add( link );
+			}
+		}
+		if ( candidates.size ) {
+			let context: BrowserContext | undefined;
+			try {
+				context = await browser.newContext( await sourceContextOptions( browser, entryUrl ) );
+				for ( const url of [ ...candidates ].slice( 0, 32 ) ) {
+					try {
+						// A plain rerun must not trust a prior probe when the source changed.
+						const prior = manifest.getEntry( url );
+						if ( prior ) await manifest.updateEntry( url, { ...prior, externalRedirect: undefined, sourceAbsentStatus: undefined } );
+						let current = url;
+						for ( let hop = 0; hop < 4; hop++ ) {
+							const response = await context.request.get( current, { maxRedirects: 0, timeout: 5_000 } );
+							const status = response.status();
+							if ( status === 404 || status === 410 ) {
+								await manifest.updateEntry( url, { slug: prior?.slug ?? await manifest.claimSlug( slugify( url ) ), capturedAt: capturedAt(), sourceAbsentStatus: status } );
+								break;
+							}
+							if ( ! [ 301, 302, 303, 307, 308 ].includes( status ) ) break;
+							const location = response.headers()[ 'location' ];
+							if ( ! location ) break;
+							const next = new URL( location, current );
+							if ( next.origin !== new URL( url ).origin ) {
+								await manifest.updateEntry( url, { slug: prior?.slug ?? await manifest.claimSlug( slugify( url ) ), capturedAt: capturedAt(), externalRedirect: true } );
+								break;
+							}
+							current = next.href;
+						}
+					} catch {
+						// Unknown outcomes remain blocking uncaptured links at export.
+					}
+				}
+			} catch {
+				// Inspection is evidence-only; a browser/session failure leaves links unresolved.
+			} finally {
+				await context?.close().catch( () => {} );
 			}
 		}
 	} finally {
