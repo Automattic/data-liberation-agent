@@ -15,6 +15,18 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.16.0] - 2026-10-01
+
+### Added
+- add a narrow Next.js platform adapter
+
+### Changed
+- regenerate plugin bundles
+- Preserve semantic headers containing nested consent notices
+
+### Fixed
+- normalize responsive named-anchor aliases
+
 ## [0.15.0] - 2026-10-01
 
 ### Added
