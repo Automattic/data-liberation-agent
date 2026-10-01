@@ -218,7 +218,7 @@ describe( 'consumer-defined platform (public Platform API)', () => {
 		expect( reference.sourceUrl ).toBe( sourceUrl );
 		expect( reference.scope.sourceUrls ).toEqual( [ sourceUrl, new URL( 'pricing', sourceUrl ).href ] );
 		expect( reference.capture.map( ( artifact: { path: string } ) => artifact.path ).sort() ).toEqual( [
-			'website/index.html', 'website/pricing/index.html',
+			'website/index.html', 'website/pricing/index.html', 'website/site-preview.png',
 		] );
 		// The browser mock contributes no source observations; files alone do
 		// not fabricate frozen evidence for the consumer platform.
