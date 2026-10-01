@@ -461,6 +461,42 @@ describe( 'exportWebsiteCapture', () => {
 		expect( $( '.data-liberation-desktop-document a' ).first().attr( 'href' ) ).toBe( '/index.html#services' );
 	} );
 
+	it( 'resolves cross-page legacy anchor aliases to the visible responsive target', async () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-responsive-named-alias-' ) ); dirs.push( outputDir );
+		for ( const path of [ 'html', 'html-mobile', 'screenshots', 'resources' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
+		const css = '<style>body{margin:0}body:not(.phone){--desktop:1}</style><link rel="stylesheet" href="https://example.com/aliases.css">';
+		writeFileSync( join( outputDir, 'resources', 'aliases.css' ), '#comments{margin-top:1100px;height:500px;color:rgb(11,22,33)}a[name="comments"]{display:block;height:7px}' );
+		writeFileSync( join( outputDir, 'resources', 'manifest.json' ), JSON.stringify( { version: 1, failures: [], resources: {
+			'https://example.com/aliases.css': { path: 'resources/aliases.css', contentType: 'text/css' },
+		} } ) );
+		const article = '<main><h1>Article</h1><section id="comments"><a name="comments"></a><h2>Comments</h2></section><footer style="height:900px">Footer</footer></main>';
+		writeFileSync( join( outputDir, 'html', 'homepage.html' ), '<html><body><a href="/article#comments">Comments</a></body></html>' );
+		writeFileSync( join( outputDir, 'html', 'article.html' ), `<html><head>${ css }</head><body>${ article }</body></html>` );
+		writeFileSync( join( outputDir, 'html-mobile', 'article.html' ), `<html><head>${ css }</head><body class="phone"><p>Mobile introduction</p>${ article }</body></html>` );
+		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( { version: 1, entries: {
+			'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' },
+			'https://example.com/article': { slug: 'article', html: 'html/article.html' },
+		} } ) );
+		const receiptPath = exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'default', summary: {}, failures: [] } );
+		const receipt = JSON.parse( readFileSync( receiptPath, 'utf8' ) );
+		const routeFiles = new Map<string,string>( receipt.routes.map( ( route: { url: string; path: string } ) => [ new URL( route.url ).pathname, route.path.replace( /^website\//, '' ) ] ) );
+		expect( checkSelfConsistency( join( outputDir, 'website' ), routeFiles ).findings ).toEqual( [] );
+		const browser = await chromium.launch(); const server = await startStaticServer( join( outputDir, 'website' ) );
+		try {
+			for ( const width of [ 390, 768, 1440 ] ) {
+				const page = await browser.newPage( { viewport: { width, height: 900 } } );
+				await page.goto( server.url ); await page.getByRole( 'link', { name: 'Comments' } ).click();
+				const expected = width < 768 ? '#comments--dla-mobile' : '#comments';
+				await page.waitForFunction( target => Math.abs( document.querySelector( target )!.getBoundingClientRect().top ) < 2, expected );
+				expect( await page.locator( expected ).count() ).toBe( 1 );
+				expect( await page.locator( `${ expected } a[data-dla-anchor-alias]` ).evaluate( node => node.getBoundingClientRect().height ) ).toBe( 7 );
+				await page.goto( page.url().split( '#' )[ 0 ] + '#comments' );
+				await page.waitForFunction( target => Math.abs( document.querySelector( target )!.getBoundingClientRect().top ) < 2, expected );
+				await page.close();
+			}
+		} finally { await server.close(); await browser.close(); }
+	}, 30_000 );
+
 	it( 'keeps ordinary responsive fragment targets unique with author CSS and ARIA associations', async () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-authored-responsive-anchor-' ) );
 		dirs.push( outputDir );
