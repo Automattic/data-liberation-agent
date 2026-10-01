@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser } from 'playwright';
 import { capturePageHtml } from './screenshotter.js';
+import { sanitizeFrozenHtml } from './freeze.js';
 
 describe('capturePageHtml stylesheet serialization', () => {
   let browser: Browser;
@@ -11,6 +12,41 @@ describe('capturePageHtml stylesheet serialization', () => {
 
   afterAll(async () => {
     await browser.close();
+  });
+
+  it('preserves adjacent runtime text-node shaping through HTML and frozen serialization without mutating the source', async () => {
+    const source = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+    const copy = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+    try {
+      await source.setContent(`<!doctype html><style>
+        p { font: 12px/16px ui-sans-serif, system-ui, sans-serif; margin: 0; }
+      </style><p></p><textarea></textarea><script type="application/json"></script>`);
+      await source.evaluate(() => {
+        document.querySelector('p')!.append('© ', '2026', ' Example Behavioral Consulting Group. All rights reserved.');
+        document.querySelector('textarea')!.append('editable ', 'value');
+        document.querySelector('script')!.append('{"value":', '1}');
+      });
+      const nodes = await source.locator('p').evaluate(element => Array.from(element.childNodes).map(node => ({ type: node.nodeType, text: node.textContent })));
+      const html = await capturePageHtml(source);
+      for (const width of [390, 768, 1440]) {
+        await source.setViewportSize({ width, height: 900 });
+        await copy.setViewportSize({ width, height: 900 });
+        const expected = await source.locator('p').screenshot();
+        for (const serialized of [html, sanitizeFrozenHtml(html)]) {
+          await copy.setContent(serialized);
+          expect((await copy.locator('p').screenshot()).equals(expected), `${width}px serialized text paints exactly like the independent live DOM`).toBe(true);
+          expect(await copy.locator('p').evaluate(element => Array.from(element.childNodes).filter(node => node.nodeType === Node.TEXT_NODE).map(node => node.textContent)))
+            .toEqual(['© ', '2026', ' Example Behavioral Consulting Group. All rights reserved.']);
+          expect(await copy.locator('textarea').inputValue()).toBe('editable value');
+        }
+      }
+      expect(await source.locator('p').evaluate(element => Array.from(element.childNodes).map(node => ({ type: node.nodeType, text: node.textContent })))).toEqual(nodes);
+      expect(html).toContain('<script type="application/json">{"value":1}</script>');
+      expect(html).toMatch(/<textarea[^>]*>editable value<\/textarea>/);
+    } finally {
+      await source.close();
+      await copy.close();
+    }
   });
 
   it('preserves rendered image geometry when localization changes intrinsic dimensions', async () => {
