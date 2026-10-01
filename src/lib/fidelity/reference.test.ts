@@ -14,6 +14,51 @@ import { waitForFonts } from '../screenshot/page-helpers.js';
 import { squareFont } from './font-fixture.js';
 
 describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chromium.executablePath() ) )( 'capture-session reference replay', () => {
+	it( 'replays source pixel density when measuring resolution-dependent content', async () => {
+		const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
+		const directory = mkdtempSync( join( parent, 'reference-pixel-density-' ) );
+		const html = '<meta name="viewport" content="width=device-width,initial-scale=1"><style>h1{font-size:20px}@media(min-resolution:2dppx){h1{font-size:30px}}</style><h1>Density-dependent heading</h1>';
+		mkdirSync( join( directory, 'website' ) );
+		writeFileSync( join( directory, 'website', 'index.html' ), html );
+		const browser = await chromium.launch();
+		const page = await browser.newPage( { viewport: { width: 390, height: 900 }, deviceScaleFactor: 3 } );
+		const url = 'http://fixture.invalid/';
+		try {
+			await page.route( url, route => route.fulfill( { contentType: 'text/html', body: html } ) );
+			await page.goto( url ); await applySourceCleanup( page, cleanupPolicy() );
+			const collector = createReferenceCollector( directory, url, [ url ] );
+			await collector.observe( page, url, 'mobile' );
+			const receipt = join( directory, 'capture-receipt.json' );
+			writeFileSync( receipt, JSON.stringify( { source: { url }, websiteRoot: 'website', routes: [ { url, path: 'website/index.html' } ] } ) );
+			collector.finalize( receipt );
+			const report = await checkFidelity( { directory, stage: 'capture', widths: [ 390 ] } );
+			expect( report.pending ).toEqual( [] );
+			expect( report.scores[ 0 ]!.failures ).toEqual( [] );
+			expect( report.pass ).toBe( true );
+		} finally { await browser.close(); rmSync( directory, { recursive: true, force: true } ); }
+	}, 30_000 );
+	it( 'uses capture route identity for query/hash renditions while refusing path drift', async () => {
+		const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
+		const directory = mkdtempSync( join( parent, 'reference-route-identity-' ) );
+		const browser = await chromium.launch();
+		const page = await browser.newPage();
+		const url = 'http://fixture.invalid/article/';
+		try {
+			for ( const [ destination, drift ] of [ [ '/article/?view=phone#content', false ], [ '/different/', true ] ] as const ) {
+				await page.route( 'http://fixture.invalid/**', route => route.fulfill( { contentType: 'text/html', body:
+					`<main id="content"><h1>Article</h1></main><script>history.replaceState(null,'',${ JSON.stringify( destination ) });</script>` } ) );
+				await page.goto( url );
+				await applySourceCleanup( page, cleanupPolicy() );
+				const collector = createReferenceCollector( directory, url, [ url ] );
+				await collector.observe( page, url, 'mobile' );
+				const receipt = join( directory, 'receipt.json' ); writeFileSync( receipt, JSON.stringify( { routes: [] } ) );
+				const manifest = JSON.parse( readFileSync( collector.finalize( receipt ), 'utf8' ) ) as FidelityReference;
+				expect( manifest.entries[ 0 ]!.readiness.reasons.includes( 'source route drift' ) ).toBe( drift );
+				if ( ! drift ) expect( manifest.entries[ 0 ]!.readiness.ready, manifest.entries[ 0 ]!.readiness.reasons.join( ', ' ) ).toBe( true );
+				await page.unroute( 'http://fixture.invalid/**' );
+			}
+		} finally { await browser.close(); rmSync( directory, { recursive: true, force: true } ); }
+	}, 30_000 );
 	it( 'settles unused local fallback stacks at each frozen viewport', async () => {
 		const parent = join(process.cwd(), '.tmp-test'); mkdirSync(parent, { recursive: true });
 		const directory = mkdtempSync(join(parent, 'reference-fonts-'));

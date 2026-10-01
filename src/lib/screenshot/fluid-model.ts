@@ -78,7 +78,7 @@ export function learnFluidModel( samples: readonly GeometrySample[] ): FluidMode
 		// Median, not the last sample: one rounding artifact should not become
 		// the value every width inherits.
 		const sorted = [ ...values ].sort( ( a, b ) => a - b );
-		const value = round( sorted[ Math.floor( sorted.length / 2 ) ]!, 0 );
+		const value = round( sorted[ Math.floor( sorted.length / 2 ) ]! );
 		return { kind: 'constant', css: `${ value }px`, value };
 	}
 

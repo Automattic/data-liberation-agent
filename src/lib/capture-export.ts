@@ -11,6 +11,7 @@ import {
 } from 'node:fs';
 import { basename, dirname, extname, join, relative, resolve, sep } from 'node:path';
 import * as cheerio from 'cheerio';
+import { identityLogoReferences } from './identity-resources.js';
 import postcss from 'postcss';
 import selectorParser from 'postcss-selector-parser';
 import type { AnyNode, Element } from 'domhandler';
@@ -2624,6 +2625,7 @@ function portableResourcePath( path: string, contentType: string ): string | und
 			'application/ecmascript': '.js',
 			'application/javascript': '.js',
 			'application/json': '.json',
+			'application/manifest+json': '.json',
 			'application/ld+json': '.json',
 			'application/pdf': '.pdf',
 			'application/xml': '.xml',
@@ -2709,6 +2711,7 @@ function dependencyReferences(
 	};
 	for ( const href of linkedFiles ) add( href );
 	for ( const reference of svgUseDocuments ) add( reference );
+	if ( ! cssOnly ) for ( const reference of identityLogoReferences( html ) ) add( reference );
 
 	const mediaReferences = new Set< string >();
 	const cssReferences = new Set< string >();
@@ -2742,7 +2745,7 @@ function dependencyReferences(
 		const as = /\bas\s*=\s*(["'])([\s\S]*?)\1/i.exec( tag )?.[ 2 ].toLowerCase() ?? '';
 		const relations = rel.split( /\s+/ );
 		if (
-			relations.some( ( value ) => value === 'stylesheet' || /(?:^|-)icon$/.test( value ) ) ||
+			relations.some( ( value ) => value === 'manifest' || value === 'stylesheet' || /(?:^|-)icon$/.test( value ) ) ||
 			( relations.includes( 'preload' ) && [ 'style', 'font', 'image', 'media' ].includes( as ) )
 		) {
 			add( /\bhref\s*=\s*(["'])([\s\S]*?)\1/i.exec( tag )?.[ 2 ] );
@@ -3781,7 +3784,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 			} );
 			return false;
 		}
-		const isText = /^(?:application\/json|text\/)/i.test( resource.contentType );
+		const isText = /^(?:application\/(?:json|manifest\+json)|text\/)/i.test( resource.contentType );
 		const contentHash = isText ? '' : fileHash( source );
 		const relativePath = isText
 			? requestedPath
@@ -3809,6 +3812,17 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		copyingResources.add( resource.path );
 		if ( isText ) {
 			let content = readFileSync( source, 'utf8' );
+			if ( /application\/(?:json|manifest\+json)/i.test( resource.contentType ) ) {
+				try {
+					const manifest = JSON.parse( content );
+					for ( const icon of ( Array.isArray( manifest?.icons ) ? manifest.icons : [] ).slice( 0, 64 ) ) {
+						if ( typeof icon?.src !== 'string' || isInlineUrl( icon.src ) ) continue;
+						const url = new URL( icon.src, dependency.url ).href;
+						if ( copyResource( { reference: url, url, kind: 'resource' }, dependency.url ) ) icon.src = resourceReplacements.get( url );
+					}
+					content = JSON.stringify( manifest );
+				} catch { /* Preserve invalid optional metadata for diagnostics. */ }
+			}
 			if ( /text\/css/i.test( resource.contentType ) ) {
 				for ( const nested of dependencyReferences( content, dependency.url, true ) ) {
 					const mediaReplacement =

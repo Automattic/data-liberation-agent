@@ -1283,7 +1283,13 @@ async function checkFrozenFidelity( options: FidelityCheckOptions, stage: 'captu
 				// Validate all source evidence even for materialization: stale evidence cannot certify a chain.
 				server ??= await startStaticServer( websiteDir );
 				browser ??= await ( await import( 'playwright' ) ).chromium.launch();
-				const page = await browser.newPage( { viewport: { width: viewport, height: 900 }, serviceWorkers: 'block' } );
+				const entry = entries[ 0 ]!;
+				const page = await browser.newPage( {
+					viewport: { width: viewport, height: entry.viewportHeight },
+					deviceScaleFactor: entry.deviceScaleFactor ?? 1,
+					...( entry.userAgent ? { userAgent: entry.userAgent } : {} ),
+					serviceWorkers: 'block',
+				} );
 				try {
 					// Portable replay cannot reach the origin, including redirects and media requests.
 					const local = `${ server.url }${ route }`;
