@@ -7,6 +7,7 @@ import type { AddressInfo } from 'node:net';
 import { chromium, type Browser } from 'playwright';
 import { assessBody, expandCollapsedContent, hydrateDisclosureContent, waitForAppWidgets, readPngHeight, classifyEmptyBodies, KNOWN_WIDGETS, type PageStat } from './dynamic-content.js';
 import { extractFaqsFromHtml } from '../replicate/faq-extract.js';
+import { wireCapturedDialogs } from '../static-dialogs.js';
 
 // Fictional content only (no source-site data).
 const wrap = (bodyInner: string) =>
@@ -278,6 +279,53 @@ describe('interaction + wait helpers (Phase 1/2, browser)', () => {
 
     expect(await page.evaluate(() => (window as unknown as { submissions: number }).submissions)).toBe(0);
     expect(await page.locator('#more').isVisible()).toBe(true);
+    await page.close();
+  });
+
+  it('hydrates locally mounted disclosure answers without IDs or panel associations', async () => {
+    const page = await browser.newPage();
+    await page.setContent(`
+      <section>${['First', 'Second', 'Third'].map(label => `<article><button type="button" aria-expanded="false">${label} question</button></article>`).join('')}</section>
+      <button type="button" aria-expanded="false" aria-haspopup="dialog">Open dialog</button>
+      <script>
+        document.querySelectorAll('article button').forEach(button => button.onclick = () => {
+          const opening = button.getAttribute('aria-expanded') === 'false';
+          document.querySelectorAll('article').forEach(item => {
+            item.querySelector('button').setAttribute('aria-expanded', 'false');
+            item.querySelector('div')?.remove();
+          });
+          if (opening) {
+            button.setAttribute('aria-expanded', 'true');
+            const panel = document.createElement('div');
+            panel.innerHTML = '<p>' + button.textContent.replace('question', 'lazy answer') + '</p>';
+            button.after(panel);
+          }
+        });
+      </script>`);
+    const records = await hydrateDisclosureContent(page);
+    expect(records).toHaveLength(3);
+    expect(records.every(record => record.status === 'captured')).toBe(true);
+    expect(await page.locator('article').allTextContents()).toEqual([
+      'First questionFirst lazy answer', 'Second questionSecond lazy answer', 'Third questionThird lazy answer',
+    ]);
+    expect(await page.locator('article button[aria-expanded="false"]').count()).toBe(3);
+    expect(await page.locator('article [hidden]').count()).toBe(3);
+    for (const record of records) {
+      expect(record.trigger.ariaControls).toBeTruthy();
+      expect(record.dialog?.html).toContain('lazy answer');
+    }
+    const offline = wireCapturedDialogs((await page.content()).replace(/<script>[\s\S]*?<\/script>/g, ''), records);
+    for (const width of [390, 768, 1440]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.setContent(offline);
+      await page.locator('article button').nth(0).click();
+      expect(await page.locator('article [role="region"]').nth(0).isVisible()).toBe(true);
+      await page.locator('article button').nth(1).click();
+      expect(await page.locator('article [role="region"]').nth(0).isVisible()).toBe(false);
+      expect(await page.locator('article [role="region"]').nth(1).isVisible()).toBe(true);
+      await page.locator('article button').nth(1).click();
+      expect(await page.locator('article [role="region"]').nth(1).isVisible()).toBe(false);
+    }
     await page.close();
   });
 

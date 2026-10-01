@@ -56,9 +56,9 @@ const HELP = `
   Compare options:
     --screenshots        Write source/liberated/diff PNGs as evidence. Pixel score
                          never decides pass/fail.
-    --candidate <url>    Compare another rendered copy of the site, such as one
-                          built from the capture, instead of the capture itself.
-    --motion-contract <json>  With --candidate, verify authored source/candidate
+    --stage <stage>      capture (default), materialization, or live-source drift
+    --candidate <url>    Compare the portable capture to another rendered copy.
+    --motion-contract <json>  With --stage drift --candidate, verify source/candidate
                           text, canvas-pointer and click behavior at named widths.
 
   Inspect options:
@@ -108,7 +108,10 @@ if (args.includes('--help')) {
   }
   const motionContract = motionPath ? JSON.parse((await import('node:fs')).readFileSync(motionPath, 'utf8')) : undefined;
   const { runCompare } = await import('./ui/compare.js');
-  const report = await runCompare(directory, { screenshots: args.includes('--screenshots'), candidateUrl, motionContract });
+  const stageIndex = args.indexOf('--stage');
+  const stage = stageIndex === -1 ? undefined : args[stageIndex + 1];
+  if ((stage !== undefined && !['capture', 'materialization', 'drift'].includes(stage)) || (stageIndex !== -1 && !stage)) throw new Error('--stage requires capture, materialization or drift');
+  const report = await runCompare(directory, { screenshots: args.includes('--screenshots'), candidateUrl, motionContract, stage: stage as import('./lib/fidelity/reference.js').FidelityStage | undefined });
   process.exit(report.pass ? 0 : 1);
 } else if (args[0] === 'inspect') {
   const url = args[1];

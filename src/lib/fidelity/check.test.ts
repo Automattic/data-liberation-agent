@@ -8,7 +8,7 @@ import { PNG } from 'pngjs';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
 	canonicalRoutePath,
-	checkFidelity,
+	checkFidelity as checkLiveFidelity,
 	checkWidthsFor,
 	evidenceSlug,
 	externalRequestHost,
@@ -16,6 +16,8 @@ import {
 	routeSourceMap,
 } from './check.js';
 import type { LayoutObservation } from './score.js';
+// This suite exercises the retained live drift diagnostic; frozen stages have real-browser coverage in reference.test.ts.
+const checkFidelity = ( options: Parameters<typeof checkLiveFidelity>[0] ) => checkLiveFidelity( { ...options, stage: 'drift' } );
 
 // Tests that launch a real browser skip — not fail — in checkouts without
 // Playwright's Chromium (`npm install` does not download it; `npm run setup:browser` does).

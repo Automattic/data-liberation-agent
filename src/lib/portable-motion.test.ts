@@ -6,7 +6,8 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium } from 'playwright';
 import { exportWebsiteCapture } from './capture-export.js';
-import { checkFidelity } from './fidelity/check.js';
+import { checkFidelity as checkLiveFidelity } from './fidelity/check.js';
+const checkFidelity = ( options: Parameters<typeof checkLiveFidelity>[0] ) => checkLiveFidelity( { ...options, stage: 'drift' } );
 import { authorPortableMotion, PORTABLE_MOTION_SCHEMA, type PortableMotionRecipe } from './portable-motion.js';
 import { startStaticServer } from './replicate/local-site/static-server.js';
 
