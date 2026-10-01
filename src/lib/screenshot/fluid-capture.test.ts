@@ -13,6 +13,27 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		await browser.close();
 	} );
 
+	it( 'preserves fractional constant typography through learning and static serialization', async () => {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		const copy = await browser.newPage();
+		try {
+			await page.setContent( '<p id="copy" style="font-family:serif;font-size:17.94px;line-height:1.2">A long editorial text run must keep its original subpixel font metrics.</p>' );
+			const measure = async ( target: typeof page ) => target.locator( '#copy' ).evaluate( element => {
+				const style = getComputedStyle( element );
+				const canvas = document.createElement( 'canvas' ).getContext( '2d' )!;
+				canvas.font = `${ style.fontSize } ${ style.fontFamily }`;
+				return { fontSize: style.fontSize, lineHeight: style.lineHeight, advance: canvas.measureText( element.textContent! ).width };
+			} );
+			const before = await measure( page );
+			await learnAndApplyFluidGeometry( page, { widths: [ 390, 768, 1440 ], settleMs: 50 } );
+			await copy.setContent( await page.content() );
+			for ( const width of [ 390, 768, 1440 ] ) {
+				await copy.setViewportSize( { width, height: 900 } );
+				expect( await measure( copy ) ).toEqual( before );
+			}
+		} finally { await page.close(); await copy.close(); }
+	} );
+
 	it( 'preserves minimum sizing and blank paragraph typography without a width sweep', async () => {
 		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
 		try {
