@@ -193,12 +193,12 @@ describe( 'scoreViewport', () => {
 		// loaded at capture width, and still declares the large file as a
 		// srcset rendition of that same image. One copy cannot cover two.
 		const source = [
-			img( 'item-large', 16, 420, 507, 285 ),
-			img( 'item-large', 540, 420, 507, 285 ),
+			{ ...img( 'item-large', 16, 420, 507, 285 ), role: 'hero' },
+			{ ...img( 'item-large', 540, 420, 507, 285 ), role: 'detail' },
 		];
 		const copy = [
-			{ ...img( 'item-small', 16, 420, 507, 285 ), renditions: [ 'item-large' ] },
-			{ ...img( 'item-small', 540, 420, 507, 285 ), renditions: [ 'item-large' ] },
+			{ ...img( 'item-small', 16, 420, 507, 285 ), role: 'hero', renditions: [ 'item-large' ] },
+			{ ...img( 'item-small', 540, 420, 507, 285 ), role: 'detail', renditions: [ 'item-large' ] },
 		];
 		expect( matchRenderedImages( source, copy ) ).toHaveLength( 2 );
 		const score = scoreViewport( at( 1728, { images: source } ), at( 1728, { images: copy } ) );
@@ -212,17 +212,17 @@ describe( 'scoreViewport', () => {
 			img( 'item-large', 0, 700, 200, 120 ),
 		];
 		const copy = [ { ...img( 'item-small', 0, 100, 200, 120 ), renditions: [ 'item-large' ] } ];
-		expect( matchRenderedImages( source, copy ) ).toHaveLength( 1 );
+		expect( matchRenderedImages( source, copy ) ).toHaveLength( 0 );
 		expect( scoreViewport( at( 1728, { images: source } ), at( 1728, { images: copy } ) ).failures[ 0 ] ).toMatch(
-			/^images 2 of 3 missing/
+			/^images 3 of 3 missing/
 		);
 	} );
 
-	it( 'matches same-named images by count, not presence', () => {
+	it( 'leaves same-named repeated images unpaired without structural evidence', () => {
 		const gallery = [ img( 'divider.jpg', 0, 800, 1600, 60 ), img( 'divider.jpg', 0, 1600, 1600, 60 ), img( 'divider.jpg', 0, 2400, 1600, 60 ) ];
 		const score = scoreViewport( at( 1600, { images: gallery } ), at( 1600, { images: gallery.slice( 0, 1 ) } ) );
 		expect( score.pass ).toBe( false );
-		expect( score.failures[ 0 ] ).toMatch( /^images 2 of 3 missing/ );
+		expect( score.failures[ 0 ] ).toMatch( /^images 3 of 3 missing/ );
 	} );
 
 	it( 'refuses to score mismatched viewports', () => {

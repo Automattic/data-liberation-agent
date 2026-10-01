@@ -2,7 +2,8 @@
 
 A captured HTML site can preserve the final visual state but still lose its
 source's timers, canvas drawings, or click interactions. The capture receipt
-records these as unreproduced source signals; plain `compare` remains red.
+records these as unreproduced source signals; `compare --stage drift` remains red.
+Default frozen `compare` proves baseline layout only and leaves motion unknown.
 
 When an independently built candidate implements the interactions (for example,
 using editable WordPress blocks), describe the **observable** behaviors to test
@@ -26,10 +27,10 @@ in a JSON file:
 }
 ```
 
-Run `data-liberation compare <capture-dir> --candidate <url> --motion-contract
-<file.json>`. The same contract is available as `motionContract` to the runtime
-API and MCP `compare` tool. Selectors refer to each page's own DOM; the candidate
-runs only its own scripts. The probe waits for each page's explicit ready selector
+Run `data-liberation compare <capture-dir> --stage drift --candidate <url> --motion-contract
+<file.json>`. The same contract is available as `motionContract` with explicit
+`stage: 'drift'` to the runtime API and MCP `compare` tool. Selectors refer to each
+page's own DOM; the candidate runs only its own scripts. The probe waits for each page's explicit ready selector
 to be **attached**, which also supports hidden readiness markers. It verifies
 that tracked text settles to the source's values and enters the same first
 visible phase, that visitor-local clock digits are current on each side, and
@@ -84,7 +85,7 @@ source at the contract's widths before the public `website/` tree is changed.
 Failure leaves the original capture intact. The successful `portable-motion.json`
 receipt stores relative script paths and hashes, not absolute source paths.
 
-Thereafter plain `data-liberation compare <run-dir>` checks those hashes and
+Thereafter `data-liberation compare <run-dir> --stage drift` checks those hashes and
 **reruns** the live source-versus-portable runtime contract. A missing/changed
 script or failed startup, canvas, clock, visibility or click probe does not
 inherit the earlier pass. The report distinguishes the removed raw source script

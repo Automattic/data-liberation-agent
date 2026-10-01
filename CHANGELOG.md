@@ -15,6 +15,34 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.12.0] - 2026-09-30
+
+### Added
+- verify and replay local collection search
+
+### Changed
+- regenerate plugin bundles
+
+## [0.11.0] - 2026-09-30
+
+### Added
+- expose owned capture preview server
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- hydrate locally mounted disclosure panels
+- cook data-liberation-agent
+
+## [0.10.0] - 2026-09-30
+
+### Added
+- freeze capture-session references and compare adjacent stages
+
+### Changed
+- regenerate plugin bundles
+
 ## [0.9.0] - 2026-09-30
 
 ### Added

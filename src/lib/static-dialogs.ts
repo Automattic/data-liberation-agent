@@ -1,5 +1,6 @@
 import * as cheerio from 'cheerio';
 import type { Element } from 'domhandler';
+import { wireCapturedCollections } from './static-collections.js';
 import type {
 	CapturedDialogInteraction,
 	CapturedInitialDialog,
@@ -70,11 +71,31 @@ const GLOBAL_ATTRIBUTES = new Set( [
 	'translate',
 ] );
 
+// Delegated activation survives collection replacement and keeps answer content
+// in the authoring tree. The source probe marks single-open groups explicitly.
+const LOCAL_DISCLOSURE_RUNTIME = `(function(){
+function panelFor(trigger){
+  var parent=trigger.parentElement,id=trigger.getAttribute('aria-controls');
+  return parent&&Array.prototype.find.call(parent.querySelectorAll('[data-dla-local-disclosure]'),function(panel){return panel.id===id;});
+}
+function set(trigger,open){var panel=panelFor(trigger);if(!panel)return;panel.hidden=!open;trigger.setAttribute('aria-expanded',String(open));trigger.querySelectorAll('[data-dla-disclosure-open-class],[data-dla-disclosure-open-style]').forEach(function(icon){['class','style'].forEach(function(name){var value=icon.getAttribute('data-dla-disclosure-'+(open?'open':'closed')+'-'+name);if(value!==null)icon.setAttribute(name,value);});});}
+function activate(event){
+  var trigger=event.target.closest&&event.target.closest('[aria-controls]');
+  if(!trigger||!panelFor(trigger))return;
+  if(event.type==='keydown'){if(trigger.tagName==='BUTTON'||(event.key!=='Enter'&&event.key!==' '))return;event.preventDefault();}
+  var open=trigger.getAttribute('aria-expanded')!=='true',group=trigger.closest('[data-dla-exclusive-disclosures]');
+  if(open&&group)group.querySelectorAll('[aria-controls][aria-expanded="true"]').forEach(function(other){set(other,false);});
+  set(trigger,open);
+}
+document.addEventListener('click',activate);document.addEventListener('keydown',activate);
+})();`;
+
 export function wireCapturedDialogs(
 	html: string,
 	states: CapturedDialogInteraction[],
 	initialDialogs: CapturedInitialDialog[] = []
 ): string {
+	html = wireCapturedCollections( html, states );
 	// Disclosure/accordion panels (`kind === 'disclosure'`) are restored in
 	// place, in the live DOM, before the page's HTML is ever serialized (see
 	// `hydrateDisclosureContent`) — their content is already inline in `html`
@@ -99,7 +120,8 @@ export function wireCapturedDialogs(
 			state.choiceGroup.coverage === 'complete' &&
 			! state.choiceGroup.transition.htmlTruncated
 	);
-	if ( captured.length === 0 && choiceStates.length === 0 && initialDialogs.length === 0 ) return html;
+	const localDisclosures = html.includes('data-dla-local-disclosure');
+	if ( captured.length === 0 && choiceStates.length === 0 && initialDialogs.length === 0 && !localDisclosures ) return html;
 	const $ = cheerio.load( html );
 	let wired = 0;
 	let listboxes = 0;
@@ -220,6 +242,9 @@ export function wireCapturedDialogs(
 				`<script data-dla-disclosure-runtime="true">${ DISCLOSURE_RUNTIME }</script>`
 			);
 		}
+	}
+	if (localDisclosures && $('script[data-dla-local-disclosure-runtime]').length === 0) {
+		$('head').append(`<script data-dla-local-disclosure-runtime="true">${LOCAL_DISCLOSURE_RUNTIME}</script>`);
 	}
 	return $.html();
 }
