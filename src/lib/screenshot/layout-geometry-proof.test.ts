@@ -57,6 +57,27 @@ describe( 'buildLayoutGeometryProof', () => {
 		).toHaveLength( 2 );
 	} );
 
+	it( 'identifies only article-contained image wells in reductions', () => {
+		const articleHtml = '<article><div><img src="photo.jpg"></div></article>';
+		const articleIdentityHtml = articleHtml
+			.replace( '<div>', '<div data-dla-geometry-id="wrapper-0">' )
+			.replace( '<img', '<img data-dla-geometry-id="target-0"' );
+		const imageObservation = {
+			...observation( 1440 ),
+			wrapper: { x: 0, y: 0, width: 100, height: 24 },
+			target: { x: 0, y: 0, width: 100, height: 24 },
+			simulated: { x: 0, y: 0, width: 100, height: 24 },
+		};
+		const result = buildLayoutGeometryProof( [ {
+			sourcePath: 'website/article.html',
+			html: articleHtml,
+			identityHtml: articleIdentityHtml,
+			observations: [ imageObservation ],
+		} ] );
+		expect( ( result.proof as { reductions: Array< { kind: string } > } ).reductions[ 0 ].kind )
+			.toBe( 'article_image_well' );
+	} );
+
 	it( 'preserves nested DOM-subtree overlap semantics without retaining documents', () => {
 		const nestedHtml = '<main><div><div><section>Copy</section></div></div></main>';
 		const nestedIdentityHtml = nestedHtml

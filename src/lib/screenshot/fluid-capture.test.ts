@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { chromium, type Browser } from 'playwright';
 import { learnAndApplyFluidGeometry } from './fluid-capture.js';
 
@@ -11,6 +11,48 @@ describe( 'learnAndApplyFluidGeometry', () => {
 
 	afterAll( async () => {
 		await browser.close();
+	} );
+
+	it( 'preserves minimum sizing and blank paragraph typography without a width sweep', async () => {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		try {
+			await page.setContent( `<p id="blank" style="font-size:12px;line-height:normal;margin:0;min-height:14px"><br></p>
+				<div style="min-width:100px;max-width:500px;min-height:20px"></div>
+				<div style="width:50%;height:auto"></div>` );
+			const original = await page.locator( '#blank' ).getAttribute( 'style' );
+			const originalHeight = await page.locator( '#blank' ).evaluate( element => element.getBoundingClientRect().height );
+			const resize = vi.spyOn( page, 'setViewportSize' );
+			const result = await learnAndApplyFluidGeometry( page, { settleMs: 10 } );
+			expect( resize ).not.toHaveBeenCalled();
+			expect( result.applied ).toBe( 0 );
+			expect( await page.locator( '#blank' ).getAttribute( 'style' ) ).toBe( original );
+			expect( await page.locator( '#blank' ).evaluate( element => element.getBoundingClientRect().height ) ).toBe( originalHeight );
+		} finally {
+			await page.close();
+		}
+	} );
+
+	it( 'still learns runtime-sized text, generated glyphs, and explicit blank spacers', async () => {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		try {
+			await page.setContent( `<style>#glyph::before{content:'★'}</style>
+				<p id="text" style="font-size:18px">Text<br></p>
+				<p id="glyph" style="font-size:18px"><br></p>
+				<p id="spacer" style="width:720px"><br></p>
+				<script>function update(){
+					document.getElementById('text').style.fontSize = innerWidth / 80 + 'px';
+					document.getElementById('glyph').style.fontSize = innerWidth / 80 + 'px';
+					document.getElementById('spacer').style.width = innerWidth / 2 + 'px';
+				} addEventListener('resize',update);update();</script>` );
+			const result = await learnAndApplyFluidGeometry( page, { widths: [ 390, 768, 1440 ], settleMs: 50 } );
+			expect( result.applied ).toBeGreaterThanOrEqual( 3 );
+			for ( const id of [ 'text', 'glyph' ] ) {
+				expect( await page.locator( `#${ id }` ).getAttribute( 'style' ) ).toContain( 'vw' );
+			}
+			expect( await page.locator( '#spacer' ).getAttribute( 'style' ) ).toMatch( /(?:50vw|100%)/ );
+		} finally {
+			await page.close();
+		}
 	} );
 
 	it( 'never learns a top offset: anchor targets move with their section instead', async () => {
@@ -152,6 +194,121 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		await copy.close();
 		await page.close();
 	}, 20_000 );
+
+	it( 'keeps a gallery image fluid through a zero-width picture parent', async () => {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		await page.setContent( `
+			<div id="item" style="width:412px;height:412px"><picture><img id="image" style="width:412px;height:412px"></picture></div>
+			<script>
+				const sizes = { 390:294, 600:287, 768:281 };
+				const update = () => {
+					const size = sizes[innerWidth] ?? Math.round(innerWidth * 0.3 - 20);
+					for (const id of ['item', 'image']) {
+						const element = document.getElementById(id);
+						element.style.width = size + 'px';
+						element.style.height = size + 'px';
+					}
+				};
+				addEventListener('resize', update);
+				update();
+			</script>
+		` );
+		await learnAndApplyFluidGeometry( page, { settleMs: 30 } );
+		const html = await page.evaluate( () => {
+			document.querySelectorAll( 'script' ).forEach( ( script ) => script.remove() );
+			return document.documentElement.outerHTML;
+		} );
+		const copy = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		await copy.setContent( html );
+		for ( const [ width, expected ] of [ [ 390, 294 ], [ 768, 281 ], [ 1440, 412 ], [ 1600, 460 ], [ 1728, 498 ] ] ) {
+			await copy.setViewportSize( { width, height: 900 } );
+			const box = await copy.locator( '#image' ).boundingBox();
+			expect( Math.abs( box!.width - expected ), `image at ${ width }` ).toBeLessThanOrEqual( 2 );
+		}
+		await copy.close();
+		await page.close();
+	}, 30_000 );
+
+	it( 'retains gallery grid positions written as absolute inset coordinates', async () => {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		await page.setContent( `
+			<div style="position:relative"><div id="first" style="position:absolute;inset:0px auto auto 0px;width:412px;height:412px"></div>
+			<div id="second" style="position:absolute;inset:0px auto auto 442px;width:412px;height:412px"></div>
+			<div id="third" style="position:absolute;inset:442px auto auto 442px;width:412px;height:412px"></div></div>
+			<script>
+				const narrow = { 390: [294, 324], 600: [287, 317], 768: [281, 311] };
+				const update = () => {
+					const [tile, step] = narrow[innerWidth] ?? [Math.round(innerWidth * .3 - 20), Math.round(innerWidth * .3 + 10)];
+					for (const [id, top, left] of [['first', 0, 0], ['second', 0, step], ['third', step, step]]) {
+						const el = document.getElementById(id);
+						el.style.inset = top + 'px auto auto ' + left + 'px';
+						el.style.width = tile + 'px';
+						el.style.height = tile + 'px';
+					}
+				};
+				addEventListener('resize', update);
+				update();
+			</script>
+		` );
+		await learnAndApplyFluidGeometry( page, { settleMs: 30 } );
+		const html = await page.evaluate( () => {
+			document.querySelectorAll( 'script' ).forEach( ( script ) => script.remove() );
+			return document.documentElement.outerHTML;
+		} );
+		const copy = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		await copy.setContent( html );
+		for ( const [ width, step ] of [ [ 390, 324 ], [ 768, 311 ], [ 1440, 442 ], [ 1600, 490 ], [ 1728, 528 ] ] ) {
+			await copy.setViewportSize( { width, height: 900 } );
+			const first = await copy.locator( '#first' ).boundingBox();
+			const second = await copy.locator( '#second' ).boundingBox();
+			const third = await copy.locator( '#third' ).boundingBox();
+			expect( Math.abs( second!.x - first!.x - step ), `column at ${ width }` ).toBeLessThanOrEqual( 2 );
+			expect( Math.abs( third!.y - first!.y - step ), `row at ${ width }` ).toBeLessThanOrEqual( 2 );
+		}
+		await copy.close();
+		await page.close();
+	}, 30_000 );
+
+	it( 'keeps a fluid tile wrapper sized when its intermediate parent shrink-wraps it', async () => {
+		const page = await browser.newPage( { viewport: { width: 980, height: 900 } } );
+		await page.setContent( `
+			<div style="position:relative;width:100vw">
+				<div id="item" style="position:absolute;top:0;left:0;width:253px;height:253px">
+					<div id="shrink"><div id="wrapper" style="width:253px;height:253px">
+						<div id="tile" style="width:253px;height:253px"></div>
+					</div></div>
+				</div>
+			</div>
+			<script>
+				const update = () => {
+					const width = Math.max(253, Math.round(innerWidth / 3 - 73));
+					for (const id of ['item', 'wrapper', 'tile']) {
+						const element = document.getElementById(id);
+						element.style.width = width + 'px';
+						element.style.height = width + 'px';
+					}
+				};
+				addEventListener('resize', update);
+				update();
+			</script>
+		` );
+		await learnAndApplyFluidGeometry( page, { settleMs: 30 } );
+		const html = await page.evaluate( () => {
+			document.querySelectorAll( 'script' ).forEach( ( script ) => script.remove() );
+			return document.documentElement.outerHTML;
+		} );
+		const copy = await browser.newPage( { viewport: { width: 980, height: 900 } } );
+		await copy.setContent( html );
+		for ( const [ width, expected ] of [ [ 390, 253 ], [ 768, 253 ], [ 1440, 407 ], [ 1600, 460 ], [ 1728, 503 ] ] ) {
+			await copy.setViewportSize( { width, height: 900 } );
+			for ( const id of [ 'item', 'wrapper', 'tile' ] ) {
+				const box = await copy.locator( `#${ id }` ).boundingBox();
+				expect( Math.abs( box!.width - expected ), `${ id } at ${ width }` ).toBeLessThanOrEqual( 2 );
+			}
+		}
+		await copy.close();
+		await page.close();
+	}, 30_000 );
 
 	it( 'preserves responsive wrapper reflow across desktop regimes', async () => {
 		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );

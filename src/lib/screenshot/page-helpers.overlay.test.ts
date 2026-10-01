@@ -186,6 +186,14 @@ describe('selectOverlayTargets', () => {
     };
     expect(selectOverlayTargets(detection)).toEqual([]);
   });
+
+  it('keeps a full-viewport, high-z layer that holds the document\'s text: it is the page', () => {
+    const root = benign({
+      idx: 0, selector: 'div#app', coverageRatio: 1, zIndex: 100000, hasCloseAffordance: true,
+    });
+    expect(selectOverlayTargets({ scrollLock: noLock, candidates: [{ ...root, textShare: 0.2 }] })).toHaveLength(1);
+    expect(selectOverlayTargets({ scrollLock: noLock, candidates: [{ ...root, textShare: 1 }] })).toEqual([]);
+  });
 });
 
 // A scroll-locking newsletter modal with a working close button, a backdrop, and
@@ -255,6 +263,26 @@ describe('dismissOverlays — Tier 1 graceful close (Playwright)', () => {
     try {
       expect(await dismissOverlays(page)).toEqual([]);
       expect(await page.locator('#canvas').count()).toBe(1);
+    } finally {
+      await page.close();
+    }
+  });
+});
+
+describe('dismissOverlays — a layer holding the page content (Playwright)', () => {
+  it('leaves a full-viewport, high-z root that contains the page content in place', async () => {
+    const page = await browser.newPage();
+    await page.setContent(`<!doctype html><html><head><style>
+      body { margin: 0; }
+      #root { position: fixed; inset: 0; z-index: 100000; background: #fff; }
+    </style></head><body><div id="root">
+      <button aria-label="Close">×</button>
+      <h1>Members area</h1><p>Please enter the password below.</p>
+      <form><input type="password"><button>Go</button></form>
+    </div></body></html>`);
+    try {
+      expect(await dismissOverlays(page)).toEqual([]);
+      expect(await page.locator('#root h1').count()).toBe(1);
     } finally {
       await page.close();
     }

@@ -4,6 +4,8 @@ import selectorParser from 'postcss-selector-parser';
 export interface ScopeOpts {
   /** Wrapper selector to scope everything under, e.g. `body.lib-carry-site`. */
   scope: string;
+  /** Classes carried by the scoped root (for example, source body classes). */
+  rootClasses?: readonly string[];
   /** Stable short id (used later for @keyframes namespacing). */
   scopeId?: string;
   /** Rewrite url(...) targets; return null to leave unchanged. */
@@ -38,7 +40,7 @@ function parseCss(css: string) {
   }
 }
 
-function scopeSelector(selector: string, scope: string): string {
+function scopeSelector(selector: string, scope: string, rootClasses: ReadonlySet<string>): string {
   // Wrap the scope in :where() so it contributes ZERO specificity. The carried
   // source CSS then keeps its ORIGINAL internal cascade exactly — critical because
   // the same reset/component rules are emitted in both the site sheet (scope
@@ -60,6 +62,14 @@ function scopeSelector(selector: string, scope: string): string {
         first.replaceWith(selectorParser.string({ value: whereScope }));
         return;
       }
+      // A wrapper may carry the source body classes itself. In that case a
+      // selector beginning with one of those classes must match the wrapper,
+      // not a descendant that cannot exist (e.g. `.x .title` with `.x` on the
+      // wrapper). Keep the class adjacent to the zero-specificity scope.
+      if (first?.type === 'class' && rootClasses.has(first.value)) {
+        sel.prepend(selectorParser.string({ value: whereScope }));
+        return;
+      }
       // Reverse-order prepends: each prepend pushes ahead of the current first node, so
       // inserting the combinator first then the scope yields `scope <combinator> <original…>`.
       sel.prepend(selectorParser.combinator({ value: ' ' }));
@@ -70,6 +80,7 @@ function scopeSelector(selector: string, scope: string): string {
 
 export function scopeCss(css: string, opts: ScopeOpts): string {
   const root = parseCss(css);
+  const rootClasses = new Set(opts.rootClasses ?? []);
 
   // Hoist root font-size to a real :root rule so `rem` resolves correctly. The
   // scoper otherwise rewrites html/:root -> :where(scope) (body), which silently
@@ -99,7 +110,7 @@ export function scopeCss(css: string, opts: ScopeOpts): string {
       /keyframes$/i.test((rule.parent as { name?: string }).name ?? '')
     )
       return;
-    rule.selector = rule.selectors.map((s) => scopeSelector(s, opts.scope)).join(', ');
+    rule.selector = rule.selectors.map((s) => scopeSelector(s, opts.scope, rootClasses)).join(', ');
   });
 
   if (opts.scopeId) {

@@ -1,6 +1,6 @@
 const SKIP_PATHS = /^\/(?:cart|account|login|signup|checkout|search|api|admin|favicon)(?:\/|$)/i;
 const ASSET_PATH =
-	/\.(?:css|js|mjs|png|jpe?g|gif|webp|avif|svg|ico|woff2?|ttf|eot|pdf|zip|xml|json)$/i;
+	/\.(?:css|js|mjs|png|jpe?g|gif|webp|avif|svg|ico|woff2?|ttf|eot|pdf|docx?|zip|xml|json)$/i;
 
 export interface LinkedRouteDiscoveryOptions {
 	siteUrl: string;

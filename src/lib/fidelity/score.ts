@@ -19,6 +19,10 @@ import type { DismissedOverlay } from '../screenshot/page-helpers.js';
  */
 export interface RenderedImage {
 	key: string;
+	/** Semantic ancestor role/label and image label; never a sibling index or geometry. */
+	role?: string;
+	/** False when the visible image has not decoded; an occupied box is not proof of real media. */
+	decoded?: boolean;
 	x: number;
 	y: number;
 	width: number;
@@ -31,6 +35,8 @@ export interface RenderedImage {
 	 * can drift while the picture stays the same.
 	 */
 	contentHash?: string | null;
+	/** SHA-256 of the fetched resource bytes; stable across animation frames. */
+	assetHash?: string | null;
 	/**
 	 * Other normalized filenames this element declared as renditions of the
 	 * same asset (its srcset candidates). The file that loaded can change with
@@ -158,8 +164,19 @@ export function normalizeImageKey( src: string ): string {
 	if ( src.startsWith( 'data:' ) ) return `data:${ src.slice( 5 ).split( ';' )[ 0 ] ?? '' }`;
 	if ( src.startsWith( 'blob:' ) ) return 'blob:';
 	const path = src.split( /[?#]/ )[ 0 ] ?? '';
-	const slash = path.lastIndexOf( '/' );
-	const name = slash >= 0 ? path.slice( slash + 1 ) : path;
+	const segments = path.split( '/' );
+	let name = segments.at( -1 ) ?? '';
+	// Some image services append crop/resize path segments after the original
+	// filename. Those transform parameters can change across renditions and
+	// after localization; the earlier image filename still names the picture.
+	for ( let index = segments.length - 2; index >= 0; index-- ) {
+		const segment = segments[ index ];
+		if ( ! segment || ! /\.(?:avif|gif|jpe?g|png|svg|webp)$/i.test( segment ) ) continue;
+		if ( segments.slice( index + 1 ).some( ( suffix ) => /[:=]|%3[ad]/i.test( suffix ) ) ) {
+			name = segment;
+			break;
+		}
+	}
 	const slugged = sanitizeMediaFilename( name ).toLowerCase();
 	const stem = slugged.replace( /\.[a-z0-9]+$/, '' );
 	const stripped = stem.replace( /-(?:\d+x\d+|scaled|\d+)$/, '' );
@@ -179,15 +196,6 @@ function missingRenderedImages( source: RenderedImage[], copy: RenderedImage[] )
 interface ImagePair {
 	source: RenderedImage;
 	candidate: RenderedImage;
-}
-
-function imageDistance( source: RenderedImage, candidate: RenderedImage ): number {
-	return (
-		Math.abs( source.x - candidate.x ) +
-		Math.abs( source.y - candidate.y ) +
-		Math.abs( source.width - candidate.width ) +
-		Math.abs( source.height - candidate.height )
-	);
 }
 
 /**
@@ -213,49 +221,58 @@ function identityKeys( image: RenderedImage ): string[] {
 /**
  * Pair each source image with the copy image that renders the same picture.
  *
- * Two identities are available and neither subsumes the other:
+ * Resource, perceptual, and URL identities cover different evidence:
  *
- * - **Content.** The perceptual hash survives every renaming, but it is only
+ * - **Bytes.** The exact resource digest survives renaming and animation phase.
+ * - **Content.** The perceptual hash survives re-encoding, but it is only
  *   present when both sides' bytes could be fetched and decoded.
  * - **URL key.** `normalizeImageKey` folds basenames, but a CDN can serve one
  *   asset under several names across pages and device variants, so the key
  *   can drift while the picture stays the same.
  *
- * Content is tried first — it is the stronger claim — and the URL key covers
+ * Exact bytes precede perceptual content, and the URL key covers
  * whatever the hashes missed. A srcset candidate is the same asset under
  * another filename: the loaded file can change with viewport width while the
- * element still declares both renditions. Within a tier the nearest geometry
- * wins, the same discipline the key-only matcher always used. A copy image is
- * consumed by at most one pair, so a page rendering the same asset twice must
- * render it twice.
+ * element still declares both renditions. Within a tier repeated identities
+ * require unique structural roles; geometry is a measurement, not identity.
+ * A copy image is consumed by at most one pair.
  */
 export function matchRenderedImages( source: RenderedImage[], copy: RenderedImage[] ): ImagePair[] {
 	const pairs: ImagePair[] = [];
 	const paired = new Set< RenderedImage >();
 
-	const nearestIn = ( group: RenderedImage[], image: RenderedImage ): RenderedImage | null => {
+	const correspondingIn = ( group: RenderedImage[], image: RenderedImage, identity: 'assetHash' | 'contentHash' | 'key' = 'key' ): RenderedImage | null => {
 		if ( group.length === 0 ) return null;
-		let nearest = 0;
-		for ( let index = 1; index < group.length; index++ ) {
-			if ( imageDistance( image, group[ index ] ) < imageDistance( image, group[ nearest ] ) ) {
-				nearest = index;
-			}
+		const sameIdentity = ( other: RenderedImage ) => identity !== 'key'
+			? image[ identity ] === other[ identity ]
+			: identityKeys( image ).some( key => identityKeys( other ).includes( key ) );
+		const sourceOccurrences = source.filter( sameIdentity );
+		const copyOccurrences = copy.filter( sameIdentity );
+		if ( sourceOccurrences.length > 1 || copyOccurrences.length > 1 ) {
+			// Geometry cannot prove correspondence: pairing the nearest box hides a
+			// swapped normal/zoom occurrence or a materialization layout defect.
+			if ( ! image.role || sourceOccurrences.filter( other => other.role === image.role ).length !== 1 || copyOccurrences.filter( other => other.role === image.role ).length !== 1 ) return null;
+			const index = group.findIndex( candidate => candidate.role === image.role );
+			return index < 0 ? null : group.splice( index, 1 )[0]!;
 		}
-		return group.splice( nearest, 1 )[ 0 ]!;
+		return group.shift()!;
 	};
 
-	// Tier 1: same picture, whatever it is called on each side.
-	if ( source.some( ( image ) => image.contentHash ) ) {
+	// Exact bytes precede perceptual identity, which can collide or vary with a
+	// decoded animation frame. Repeated resources still require unique roles.
+	for ( const identity of [ 'assetHash', 'contentHash' ] as const ) {
 		const byHash = new Map< string, RenderedImage[] >();
 		for ( const image of copy ) {
-			if ( ! image.contentHash ) continue;
-			const group = byHash.get( image.contentHash ) ?? [];
+			const hash = image[ identity ];
+			if ( ! hash || paired.has( image ) ) continue;
+			const group = byHash.get( hash ) ?? [];
 			group.push( image );
-			byHash.set( image.contentHash, group );
+			byHash.set( hash, group );
 		}
 		for ( const image of source ) {
-			if ( ! image.contentHash ) continue;
-			const candidate = nearestIn( byHash.get( image.contentHash ) ?? [], image );
+			const hash = image[ identity ];
+			if ( ! hash || pairs.some( pair => pair.source === image ) ) continue;
+			const candidate = correspondingIn( byHash.get( hash ) ?? [], image, identity );
 			if ( ! candidate ) continue;
 			paired.add( candidate );
 			pairs.push( { source: image, candidate } );
@@ -284,7 +301,7 @@ export function matchRenderedImages( source: RenderedImage[], copy: RenderedImag
 				candidates.push( candidate );
 			}
 		}
-		const candidate = nearestIn( candidates, image );
+		const candidate = correspondingIn( candidates, image );
 		if ( ! candidate ) continue;
 		paired.add( candidate );
 		for ( const group of available.values() ) {
@@ -295,6 +312,12 @@ export function matchRenderedImages( source: RenderedImage[], copy: RenderedImag
 	}
 
 	return pairs;
+}
+
+export function ambiguousRenderedImages( source: RenderedImage[], copy: RenderedImage[] ): RenderedImage[] {
+	const paired = new Set( matchRenderedImages( source, copy ).map( pair => pair.source ) );
+	return source.filter( image => ! paired.has( image ) && copy.some( candidate =>
+		( !! image.contentHash && image.contentHash === candidate.contentHash ) || identityKeys( image ).some( key => identityKeys( candidate ).includes( key ) ) ) );
 }
 
 export function scoreViewport(
@@ -352,6 +375,8 @@ export function scoreViewport(
 	if ( liberated.images.length > matchedImages ) {
 		notes.push( `images ${ liberated.images.length - matchedImages } extra in copy (not a failure)` );
 	}
+	const undecoded = liberated.images.filter( image => image.decoded === false );
+	if ( undecoded.length ) failures.push( `images ${ undecoded.length } visible image(s) pending or failed decoding` );
 
 	if ( liberated.overflow && ! source.overflow ) {
 		failures.push( `horizontal overflow at ${ liberated.docWidth }px in a ${ liberated.viewport }px viewport` );

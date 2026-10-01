@@ -24,6 +24,8 @@ describe('detectFromUrl (heuristics)', () => {
     ['https://eloisacalvinato.lovable.app/', 'lovable'],
     ['https://eloisacalvinato.lovable.app', 'lovable'],
     ['https://lovable.dev/projects/abc', 'lovable'],
+    ['https://heathercoxrichardson.substack.com/', 'substack'],
+    ['https://on.substack.com/p/some-post', 'substack'],
   ])('detects %s as %s', (url, platform) => {
     const detected = detectFromUrl(url);
     expect(detected).toBe(platform);
@@ -107,6 +109,94 @@ describe('detectFromHttp (fingerprinting)', () => {
     const result = detectFromDocument('https://example.com', new Headers(), html);
     expect(result.platform).toBe('lovable');
     expect(findAdapter(result.platform)).toMatchObject({ id: 'lovable' });
+  });
+
+  // EmDash signal values are from live sites (2026-09): q-lu.co, espritlabs.ai,
+  // blog.cloudflare.com, farra.media, studioproaudio.com.
+  it('detects EmDash from its Server-Timing runtime phases', () => {
+    const headers = new Headers([['server-timing', 'setup;dur=191;desc="Setup probe", rt.seedcheck;dur=184;desc="Auto-seed gate", render;dur=855']]);
+    const result = detectFromDocument('https://q-lu.co/', headers, '<html></html>');
+    expect(result.platform).toBe('emdash');
+    expect(result.confidence).toBe('high');
+    expect(findAdapter(result.platform)).toMatchObject({ id: 'emdash' });
+  });
+
+  it('does not detect EmDash from an unrelated Server-Timing header', () => {
+    const headers = new Headers([['server-timing', 'processing;dur=62, db;dur=17']]);
+    const result = detectFromDocument('https://example.com', headers, '<html></html>');
+    expect(result.platform).not.toBe('emdash');
+  });
+
+  it.each([
+    ['a relative media URL', '<img src="/_emdash/api/media/file/01M1VN7ZNKV36VQGDVS9R0BW92.png" alt="">'],
+    ['a media URL inside Astro\'s encoded image proxy', '<img src="/_image?href=https%3A%2F%2Fblog.example%2F_emdash%2Fapi%2Fmedia%2Ffile%2F01KW497YX7768BEJGS24P0FMX8.png&amp;w=64">'],
+    ['an emdash-* component class', '<img src="/logo.png" class="emdash-image-media astro-6depetnu">'],
+    ['an <emdash-*> custom element', '<emdash-live-search data-config="{}" class="search-live"></emdash-live-search>'],
+  ])('detects EmDash from %s in page source', (_label, html) => {
+    const result = detectFromDocument('https://example.com', new Headers(), html);
+    expect(result.platform).toBe('emdash');
+    expect(result.confidence).toBe('medium');
+  });
+
+  it('does not detect EmDash from the word "EmDash" in body copy', () => {
+    const html = '<p>We build sites with EmDash. <a href="/posts/emdash-build">Read more</a></p>';
+    const result = detectFromDocument('https://agency.example', new Headers(), html);
+    expect(result.platform).toBe('unknown');
+  });
+
+  it('detects a fully themed EmDash site from the /_emdash/admin login redirect', async () => {
+    global.fetch = vi.fn()
+      .mockResolvedValueOnce({ ok: true, headers: new Map(), text: () => Promise.resolve('<html><body>Themed</body></html>') })
+      .mockImplementation(async (u: string) => ({
+        status: String(u).endsWith('/_emdash/admin') ? 302 : 404,
+        headers: new Map([['location', 'https://q-lu.co/_emdash/admin/login?redirect=%2F_emdash%2Fadmin']]),
+      }));
+    const result = await detectFromHttp('https://q-lu.co');
+    expect(result.platform).toBe('emdash');
+    expect(result.signals).toContain('/_emdash/admin redirects to /_emdash/admin/login');
+  });
+
+  it('does not detect EmDash from a Cloudflare Access redirect on /_emdash/admin', async () => {
+    global.fetch = vi.fn()
+      .mockResolvedValueOnce({ ok: true, headers: new Map(), text: () => Promise.resolve('<html></html>') })
+      .mockResolvedValue({
+        status: 302,
+        headers: new Map([['location', 'https://team.cloudflareaccess.com/cdn-cgi/access/login/example.com?redirect_url=%2F_emdash%2Fadmin']]),
+      });
+    const result = await detectFromHttp('https://example.com');
+    expect(result.platform).toBe('unknown');
+  });
+
+  // Substack signal values are from live custom-domain publications (2026-09):
+  // derekthompson.org, astralcodexten.com, slowboring.com.
+  it('does not treat a host merely containing "substack.com" as Substack', () => {
+    expect(detectFromUrl('https://substack.com.example.org/')).toBeNull();
+    expect(detectFromUrl('https://example.com/substack.com/')).toBeNull();
+  });
+
+  it.each([
+    ['x-served-by', 'Substack'],
+    ['x-cluster', 'substack'],
+  ])('detects a Substack custom domain from its %s header', (header, value) => {
+    const headers = new Headers([[header, value], ['server', 'cloudflare']]);
+    const result = detectFromDocument('https://www.derekthompson.org/', headers, '<html></html>');
+    expect(result.platform).toBe('substack');
+    expect(result.confidence).toBe('high');
+    expect(findAdapter(result.platform)).toMatchObject({ id: 'substack' });
+  });
+
+  it('detects Substack from its app bundle in page source', () => {
+    const html = '<script src="https://substackcdn.com/bundle/static/js/lib-router.3f2a9c1b.js" charset="utf-8"></script>';
+    const result = detectFromDocument('https://www.slowboring.com/', new Headers(), html);
+    expect(result.platform).toBe('substack');
+    expect(result.confidence).toBe('medium');
+  });
+
+  it('does not detect Substack on a page that only hotlinks a Substack image or embeds a post', () => {
+    const html = '<img src="https://substackcdn.com/image/fetch/w_1456,c_limit/https%3A%2F%2Fsubstack-post-media.s3.amazonaws.com%2Fpublic%2Fimages%2Fa.png">'
+      + '<iframe src="https://www.astralcodexten.com/embed" width="480" height="320"></iframe>';
+    const result = detectFromDocument('https://example.com', new Headers(), html);
+    expect(result.platform).toBe('unknown');
   });
 
   it('returns unknown for unrecognized sites', async () => {
@@ -368,8 +458,10 @@ describe('platform-owned path probes', () => {
     const detectFromHttp = await freshDetect();
     const result = await detectFromHttp('https://example.com');
     expect(result.platform).toBe('unknown');
-    // Critical: only ONE fetch call (the homepage). Cross-origin probe never fired.
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    // Critical: the cross-origin probe never fired. (Built-in platforms'
+    // same-origin probes may still run.)
+    const fetched = fetchMock.mock.calls.map(([u]) => String(u));
+    expect(fetched.some((u) => u.includes('attacker.example'))).toBe(false);
   });
 
   it('still runs probe tier when homepage body read throws', async () => {

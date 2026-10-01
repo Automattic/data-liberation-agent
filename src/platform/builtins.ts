@@ -14,11 +14,13 @@ import { registerPlatform } from './registry.js';
 import { registerHost } from './host.js';
 import { netlifyHost } from '../hosts/netlify.js';
 import { defaultAdapter } from '../adapters/default/index.js';
+import { emdashAdapter } from '../adapters/emdash/index.js';
 import { godaddyWmAdapter } from '../adapters/godaddy-wm/index.js';
 import { hostingerAdapter } from '../adapters/hostinger/index.js';
 import { hubspotAdapter } from '../adapters/hubspot/index.js';
 import { shopifyAdapter } from '../adapters/shopify/index.js';
 import { squarespaceAdapter } from '../adapters/squarespace/index.js';
+import { substackAdapter } from '../adapters/substack/index.js';
 import { lovableAdapter } from '../adapters/lovable/index.js';
 import { webflowAdapter } from '../adapters/webflow/index.js';
 import { weeblyAdapter } from '../adapters/weebly/index.js';
@@ -35,12 +37,14 @@ registerPlatform( defaultAdapter, { fallback: true } );
 // disjoint platform infrastructure, so in practice this only matters when
 // consumer-registered platforms deliberately share signals.
 const builtins: Platform[] = [
+	emdashAdapter,
 	godaddyWmAdapter,
 	hostingerAdapter,
 	hubspotAdapter,
 	lovableAdapter,
 	shopifyAdapter,
 	squarespaceAdapter,
+	substackAdapter,
 	webflowAdapter,
 	weeblyAdapter,
 	wixAdapter,

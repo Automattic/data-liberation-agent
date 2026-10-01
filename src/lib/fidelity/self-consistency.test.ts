@@ -64,6 +64,18 @@ describe( 'checkSelfConsistency', () => {
 		] );
 	} );
 
+	it( 'accepts a captured Unicode project route stored with an encoded directory name', () => {
+		const dir = site( {
+			'index.html': '<a href="/projects/team%E2%80%99s-work/index.html">Team’s work</a>',
+			'projects/team%E2%80%99s-work/index.html': '<h1>Team’s work</h1>',
+		} );
+		const report = checkSelfConsistency( dir, files(
+			[ '/', 'index.html' ],
+			[ '/projects/team%E2%80%99s-work/', 'projects/team%E2%80%99s-work/index.html' ]
+		) );
+		expect( report.findings ).toEqual( [] );
+	} );
+
 	it( 'leaves links to other sites alone', () => {
 		const dir = site( { 'index.html': '<a href="https://wordpress.org/">WP</a><a href="mailto:a@b.c">Mail</a>' } );
 		expect( checkSelfConsistency( dir, files( [ '/', 'index.html' ] ) ).pass ).toBe( true );

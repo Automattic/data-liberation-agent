@@ -327,7 +327,7 @@ function viewportModelForRun( run: readonly GeometrySample[] ): ViewportFluidMod
  */
 export function learnSegmentedFluidModel(
 	samples: readonly GeometrySample[],
-	options: { holdUnfitted?: boolean } = {}
+	options: { holdUnfitted?: boolean; holdNarrowForBoundedAffine?: boolean } = {}
 ): SegmentedFluidModel | null {
 	const usable = samples
 		.filter( ( sample ) => Number.isFinite( sample.value ) && Number.isFinite( sample.viewport ) )
@@ -335,6 +335,45 @@ export function learnSegmentedFluidModel(
 	// Two regimes with two observations each is the least evidence that
 	// distinguishes a genuine regime change from pixel noise.
 	if ( usable.length < 4 ) return null;
+
+	// A positive-width desktop grid can follow `viewport share - fixed gutters`.
+	// That line is unsafe as an unbounded model (it becomes negative on phones),
+	// but is safe above a measured switch when its value is positive at the
+	// switch. Keep the narrower regime's independently fitted rule below it.
+	for ( let split = 2; split <= usable.length - MIN_SAMPLES; split++ ) {
+		const narrow = viewportModelForRun( usable.slice( 0, split ) );
+		const wide = usable.slice( split );
+		const line = leastSquaresLine( wide );
+		if ( ( narrow === null && ! options.holdNarrowForBoundedAffine ) || viewportModelForRun( wide ) !== null || line === null ||
+			line.slope <= 0 || line.intercept >= -TOLERANCE_PX ||
+			line.slope * wide[ 0 ]!.viewport + line.intercept <= 0 ||
+			! fits( wide, ( viewport ) => line.slope * viewport + line.intercept ) ) continue;
+		// When the narrow run is a floor, switch where the line actually
+		// reaches that floor, not at the next sampled width. Otherwise a
+		// shrink-to-fit parent observed between samples would be frozen when
+		// the learned percentage is checked against the capture viewport.
+		const switchWidth = narrow?.kind === 'constant'
+			? Math.ceil( ( narrow.value - line.intercept ) / line.slope )
+			: wide[ 0 ]!.viewport;
+		if ( switchWidth <= usable[ split - 1 ]!.viewport || switchWidth > wide[ 0 ]!.viewport ||
+			line.slope * switchWidth + line.intercept <= 0 ) continue;
+		const narrowSegments: FluidModelSegment[] = narrow === null
+			? usable.slice( 0, split ).map( ( sample, index ) => ( {
+				model: { kind: 'constant' as const, css: `${ round( sample.value, 0 ) }px`, value: sample.value },
+				minWidth: index === 0 ? null : sample.viewport,
+				maxWidth: index === split - 1 ? switchWidth - 1 : usable[ index + 1 ]!.viewport - 1,
+			} ) )
+			: [ { model: narrow, minWidth: null, maxWidth: switchWidth - 1 } ];
+		return { kind: 'segmented', segments: [
+			...narrowSegments,
+			{ model: {
+				kind: 'affine',
+				css: `calc(${ round( line.slope * 100 ) }vw + ${ round( line.intercept ) }px)`,
+				slope: line.slope,
+				intercept: line.intercept,
+			}, minWidth: switchWidth, maxWidth: null },
+		] };
+	}
 
 	const runs: Array< { model: ViewportFluidModel; start: number; end: number } > = [];
 	let start = 0;

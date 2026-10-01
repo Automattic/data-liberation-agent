@@ -44,48 +44,54 @@ const MIME: Record<string, string> = {
 
 /** Resolve a request path to an on-disk file inside root, or null. */
 export function resolveRequestPath(root: string, rawPath: string): string | null {
-  let cleaned: string;
+  const requested = rawPath.split(/[?#]/)[0];
+  let decoded: string;
   try {
-    cleaned = decodeURIComponent(rawPath.split(/[?#]/)[0]);
+    decoded = decodeURIComponent(requested);
   } catch {
     return null; // malformed encoding → 404
   }
-  const rel = normalize(cleaned).replace(/^\/+/, '');
-  const abs = resolve(root, rel);
-  if (abs !== resolve(root) && !abs.startsWith(resolve(root) + '/')) return null; // traversal
-  // exact file (styles.css, blog/post.html)
-  if (existsSync(abs) && statSync(abs).isFile()) return abs;
-  // directory → index.html
-  if (existsSync(abs) && statSync(abs).isDirectory()) {
-    const idx = join(abs, 'index.html');
-    return existsSync(idx) ? idx : null;
-  }
-  // clean URL: /about/ or /about → about.html ; /blog/post/ → blog/post.html
-  const noSlash = rel.replace(/\/+$/, '');
-  if (noSlash) {
-    const html = resolve(root, `${noSlash}.html`);
-    if (html.startsWith(resolve(root) + '/') && existsSync(html)) return html;
-  } else {
-    const idx = resolve(root, 'index.html');
-    if (existsSync(idx)) return idx;
-  }
-  // Relative-asset fallback for clean URLs: a page served at /contact/ whose
-  // HTML says href="styles.css" requests /contact/styles.css — under the
-  // original .html serving that path meant <page dir>/styles.css. Re-resolve
-  // ASSET paths (non-.html, has an extension) by progressively stripping
-  // leading segments until a real file is found. Each candidate re-passes the
-  // sandbox guard.
-  const ext = extname(noSlash);
-  if (ext && ext !== '.html' && ext !== '.htm') {
-    const segs = noSlash.split('/');
-    for (let i = 1; i < segs.length; i++) {
-      const candidate = resolve(root, segs.slice(i).join('/'));
-      if (
-        candidate.startsWith(resolve(root) + '/') &&
-        existsSync(candidate) &&
-        statSync(candidate).isFile()
-      ) {
-        return candidate;
+  // Captured route directories can be named with literal percent-encoded
+  // Unicode. A browser requests that spelling verbatim, while decoded paths
+  // still take precedence when both spellings exist on disk.
+  for (const cleaned of decoded === requested ? [decoded] : [decoded, requested]) {
+    const rel = normalize(cleaned).replace(/^\/+/, '');
+    const abs = resolve(root, rel);
+    if (abs !== resolve(root) && !abs.startsWith(resolve(root) + '/')) continue; // traversal
+    // exact file (styles.css, blog/post.html)
+    if (existsSync(abs) && statSync(abs).isFile()) return abs;
+    // directory → index.html
+    if (existsSync(abs) && statSync(abs).isDirectory()) {
+      const idx = join(abs, 'index.html');
+      if (existsSync(idx)) return idx;
+    }
+    // clean URL: /about/ or /about → about.html ; /blog/post/ → blog/post.html
+    const noSlash = rel.replace(/\/+$/, '');
+    if (noSlash) {
+      const html = resolve(root, `${noSlash}.html`);
+      if (html.startsWith(resolve(root) + '/') && existsSync(html)) return html;
+    } else {
+      const idx = resolve(root, 'index.html');
+      if (existsSync(idx)) return idx;
+    }
+    // Relative-asset fallback for clean URLs: a page served at /contact/ whose
+    // HTML says href="styles.css" requests /contact/styles.css — under the
+    // original .html serving that path meant <page dir>/styles.css. Re-resolve
+    // ASSET paths (non-.html, has an extension) by progressively stripping
+    // leading segments until a real file is found. Each candidate re-passes the
+    // sandbox guard.
+    const ext = extname(noSlash);
+    if (ext && ext !== '.html' && ext !== '.htm') {
+      const segs = noSlash.split('/');
+      for (let i = 1; i < segs.length; i++) {
+        const candidate = resolve(root, segs.slice(i).join('/'));
+        if (
+          candidate.startsWith(resolve(root) + '/') &&
+          existsSync(candidate) &&
+          statSync(candidate).isFile()
+        ) {
+          return candidate;
+        }
       }
     }
   }

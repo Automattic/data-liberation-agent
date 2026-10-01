@@ -1,10 +1,75 @@
+import { existsSync } from 'node:fs';
 import { chromium } from 'playwright';
 import { describe, expect, it } from 'vitest';
-import { captureTriggeredDialogs, INTERACTION_STATES_SCHEMA } from './interaction-capture.js';
-import { wireCapturedDialogs } from '../static-dialogs.js';
+import { captureRouteNavigation, captureTriggeredDialogs, INTERACTION_STATES_SCHEMA } from './interaction-capture.js';
+import { wireCapturedDialogs, wireCapturedRouteNavigation } from '../static-dialogs.js';
+
+// Browser-backed tests skip — not fail — in checkouts without Playwright's
+// Chromium (`npm install` does not download it; `npm run setup:browser` does).
+const skipBrowserTests = Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chromium.executablePath() );
+
+it.skipIf( skipBrowserTests )( 'turns observed mobile client-routed tabs into native, keyboard-accessible routes without converting actions', async () => {
+	const browser = await chromium.launch( { headless: true } );
+	const origin = 'https://route-tabs.test';
+	const source = `<!doctype html><html><head><style>
+		#bottom { display:flex; position:fixed;bottom:0;background:white }
+		@media(min-width:1000px){#bottom{display:none}}
+	</style></head><body><nav id="bottom" aria-label="Pages">
+		<button id="home" type="button">Home</button><button id="services" type="button">Services</button>
+		<button id="resources" type="button">Resources</button><button id="contact" type="button">Contact</button>
+		<button id="action" type="button">Refresh</button>
+	</nav><button id="outside" type="button">Other action</button><main><h1>Home</h1></main>
+	<script>document.querySelectorAll('#bottom button:not(#action),#outside').forEach(button=>button.addEventListener('click',()=>{
+		const path=button.id==='home'?'/':'/'+button.id;history.pushState({},'',path);
+		document.querySelector('h1').textContent=button.textContent;
+	}));document.querySelector('#action').onclick=()=>document.body.dataset.refreshed='yes';</script></body></html>`;
+	try {
+		for ( const width of [ 390, 768, 1440 ] ) {
+			const page = await browser.newPage( { viewport: { width, height: 900 } } );
+			await page.route( `${ origin }/**`, route => route.fulfill( { contentType: 'text/html', body: `<h1>${ new URL( route.request().url() ).pathname }</h1>` } ) );
+			await page.goto( `${ origin }/` );
+			await page.setContent( source );
+			const routes = await captureRouteNavigation( page, `${ origin }/` );
+			if ( width < 1000 ) {
+				expect( routes.map( route => [ route.id, route.url ] ) ).toEqual( [
+					[ 'services', `${ origin }/services` ], [ 'resources', `${ origin }/resources` ], [ 'contact', `${ origin }/contact` ],
+				] );
+				expect( page.url() ).toBe( `${ origin }/` );
+				const portable = wireCapturedRouteNavigation( source.replace( /<script>[\s\S]*?<\/script>/, '' )
+					.replace( '</body>', '<div class="fixed z-100" style="position:fixed;z-index:100;bottom:0;right:0;width:50%;height:70px"></div></body>' ), routes );
+				await page.setContent( portable );
+				expect( await page.locator( '.fixed.z-100' ).count() ).toBe( 0 );
+				const link = page.getByRole( 'link', { name: 'Services' } );
+				expect( await link.getAttribute( 'href' ) ).toBe( `${ origin }/services` );
+				expect( await page.locator( '#action' ).evaluate( el => el.tagName ) ).toBe( 'BUTTON' );
+				expect( await page.locator( '#outside' ).evaluate( el => el.tagName ) ).toBe( 'BUTTON' );
+				await link.focus();
+				await page.keyboard.press( 'Enter' );
+				await page.waitForURL( `${ origin }/services` );
+				await page.setContent( portable );
+				await page.getByRole( 'link', { name: 'Resources' } ).click();
+				await page.waitForURL( `${ origin }/resources` );
+				const otherGroup = '<nav><button>Home</button><button>Services</button></nav>';
+				const duplicated = wireCapturedRouteNavigation(
+					source.replace( /<script>[\s\S]*?<\/script>/, '' ).replace( '</body>', `<div>${ source.match( /<nav[\s\S]*?<\/nav>/ )?.[ 0 ] }</div>${ otherGroup }</body>` ),
+					routes
+				);
+				await page.setContent( duplicated );
+				expect( await page.locator( 'nav a#services' ).count() ).toBe( 2 );
+				expect( await page.locator( 'nav button#services' ).count() ).toBe( 0 );
+				expect( await page.locator( 'nav button' ).filter( { hasText: 'Services' } ).count() ).toBe( 1 );
+				await page.goto( `${ origin }/services` );
+				await page.setContent( source );
+				const fromServices = await captureRouteNavigation( page, `${ origin }/services` );
+				expect( fromServices.find( route => route.label === 'Home' )?.url ).toBe( `${ origin }/` );
+			} else expect( routes ).toEqual( [] );
+			await page.close();
+		}
+	} finally { await browser.close(); }
+}, 30_000 );
 
 describe( 'captureTriggeredDialogs', () => {
-	it.skipIf( process.env.SKIP_BROWSER_TESTS )(
+	it.skipIf( skipBrowserTests )(
 		'captures initially visible dialogs with verified native dismissal and bounds probes',
 		async () => {
 			const browser = await chromium.launch( { headless: true } );
@@ -57,7 +122,7 @@ describe( 'captureTriggeredDialogs', () => {
 		30_000
 	);
 
-	it.skipIf( process.env.SKIP_BROWSER_TESTS )(
+	it.skipIf( skipBrowserTests )(
 		'discovers an unbound dialog trigger',
 		async () => {
 			const browser = await chromium.launch( { headless: true } );
@@ -92,7 +157,7 @@ describe( 'captureTriggeredDialogs', () => {
 		30_000
 	);
 
-	it.skipIf( process.env.SKIP_BROWSER_TESTS )(
+	it.skipIf( skipBrowserTests )(
 		'preserves a generic combobox listbox selection and keyboard dismissal offline',
 		async () => {
 			const browser = await chromium.launch( { headless: true } );
@@ -127,7 +192,7 @@ describe( 'captureTriggeredDialogs', () => {
 		30_000
 	);
 
-	it.skipIf( process.env.SKIP_BROWSER_TESTS )(
+	it.skipIf( skipBrowserTests )(
 		'captures a listbox opened by an aria-haspopup=listbox trigger',
 		async () => {
 			const browser = await chromium.launch( { headless: true } );
@@ -181,7 +246,7 @@ describe( 'captureTriggeredDialogs', () => {
 		30_000
 	);
 
-	it.skipIf( process.env.SKIP_BROWSER_TESTS )(
+	it.skipIf( skipBrowserTests )(
 		'preserves an event-created navigation dialog without claiming a menu-shaped no-op',
 		async () => {
 			const browser = await chromium.launch( { headless: true } );
@@ -235,7 +300,7 @@ describe( 'captureTriggeredDialogs', () => {
 		30_000
 	);
 
-	it.skipIf( process.env.SKIP_BROWSER_TESTS )(
+	it.skipIf( skipBrowserTests )(
 		'captures a navigation drawer opened by a role="button" menu control',
 		async () => {
 			const browser = await chromium.launch( { headless: true } );
@@ -265,7 +330,7 @@ describe( 'captureTriggeredDialogs', () => {
 		30_000
 	);
 
-	it.skipIf( process.env.SKIP_BROWSER_TESTS )(
+	it.skipIf( skipBrowserTests )(
 		'captures a menu trigger whose hit point is covered by an ancestor',
 		async () => {
 			const browser = await chromium.launch( { headless: true } );
@@ -304,7 +369,7 @@ describe( 'captureTriggeredDialogs', () => {
 		30_000
 	);
 
-	it.skipIf( process.env.SKIP_BROWSER_TESTS )(
+	it.skipIf( skipBrowserTests )(
 		'names the intercepting element when an intercepted trigger cannot be activated',
 		async () => {
 			const browser = await chromium.launch( { headless: true } );
@@ -333,7 +398,7 @@ describe( 'captureTriggeredDialogs', () => {
 		30_000
 	);
 
-	it.skipIf( process.env.SKIP_BROWSER_TESTS )(
+	it.skipIf( skipBrowserTests )(
 		'keeps a captured flex menu usable when its scrollable links depend on the root layout',
 		async () => {
 			const browser = await chromium.launch( { headless: true } );
@@ -381,7 +446,7 @@ describe( 'captureTriggeredDialogs', () => {
 		30_000
 	);
 
-	it.skipIf( process.env.SKIP_BROWSER_TESTS )(
+	it.skipIf( skipBrowserTests )(
 		'waits for an opening menu instead of capturing a background inside its transparent ancestor',
 		async () => {
 			const browser = await chromium.launch( { headless: true } );
@@ -410,7 +475,7 @@ describe( 'captureTriggeredDialogs', () => {
 		30_000
 	);
 
-	it.skipIf( process.env.SKIP_BROWSER_TESTS )(
+	it.skipIf( skipBrowserTests )(
 		'does not count a navigation surface inside a transparent wrapper as already visible',
 		async () => {
 			const browser = await chromium.launch( { headless: true } );
@@ -435,7 +500,7 @@ describe( 'captureTriggeredDialogs', () => {
 		30_000
 	);
 
-	it.skipIf( process.env.SKIP_BROWSER_TESTS )(
+	it.skipIf( skipBrowserTests )(
 		'captures the in-flow panel a menu button reveals, not an unrelated large nav, and renders it as a dropdown',
 		async () => {
 			const browser = await chromium.launch( { headless: true } );
@@ -474,7 +539,7 @@ describe( 'captureTriggeredDialogs', () => {
 		30_000
 	);
 
-	it.skipIf( process.env.SKIP_BROWSER_TESTS )(
+	it.skipIf( skipBrowserTests )(
 		'dismisses portable triggered dialogs by close control and Escape without handling Escape elsewhere',
 		async () => {
 			const browser = await chromium.launch( { headless: true } );
@@ -545,7 +610,7 @@ describe( 'captureTriggeredDialogs', () => {
 		30_000
 	);
 
-	it.skipIf( process.env.SKIP_BROWSER_TESTS )(
+	it.skipIf( skipBrowserTests )(
 		'captures a bounded inert snapshot after a dialog trigger click',
 		async () => {
 			const browser = await chromium.launch( { headless: true } );
@@ -595,7 +660,137 @@ describe( 'captureTriggeredDialogs', () => {
 		30_000
 	);
 
-	it.skipIf( process.env.SKIP_BROWSER_TESTS )(
+	it.skipIf( skipBrowserTests )(
+		'keeps an anchor-button mobile menu that slides in from off-screen',
+		async () => {
+			const browser = await chromium.launch( { headless: true } );
+			const page = await browser.newPage( { viewport: { width: 390, height: 844 } } );
+			const markup = `<!doctype html><html><head></head><body>
+				<header>
+					<a id="menu-toggle" role="button" href="#" aria-haspopup="menu" aria-expanded="false" aria-label="Open menu">Menu</a>
+					<nav id="desktop-nav"><a href="/guides">Guides</a><a href="/contact">Contact</a></nav>
+				</header>
+				<div id="mobile-menu" role="navigation" aria-label="Site" style="position:fixed;inset:0;transform:translateX(-100vw);visibility:visible;background:#fff">
+					<a href="/guides">Field notes</a>
+					<a href="/contact">Write to us</a>
+				</div>
+				<script>
+					document.getElementById('menu-toggle').addEventListener('click', (event) => {
+						event.preventDefault();
+						const trigger = event.currentTarget;
+						const menu = document.getElementById('mobile-menu');
+						const open = trigger.getAttribute('aria-expanded') !== 'true';
+						trigger.setAttribute('aria-expanded', open ? 'true' : 'false');
+						menu.style.transform = open ? 'translateX(0)' : 'translateX(-100vw)';
+					});
+				</script>
+			</body></html>`;
+			try {
+				await page.setContent( markup );
+				const report = await captureTriggeredDialogs( page, 'https://example.test/' );
+				expect( report.states ).toMatchObject( [
+					{
+						status: 'captured',
+						trigger: { id: 'menu-toggle', tag: 'a', role: 'button', ariaHaspopup: 'menu', label: 'Open menu' },
+						dialog: { id: 'mobile-menu', tag: 'div' },
+					},
+				] );
+				expect( report.states[ 0 ].dialog?.html ).toContain( 'href="/guides"' );
+				expect( report.states[ 0 ].dialog?.html ).toContain( 'Field notes' );
+				expect( report.states[ 0 ].dialog?.html ).not.toContain( 'id="desktop-nav"' );
+
+				const portable = wireCapturedDialogs(
+					'<!doctype html><html><head></head><body><header><a id="menu-toggle" role="button" href="#" aria-haspopup="menu" aria-expanded="false" aria-label="Open menu">Menu</a><nav id="desktop-nav"><a href="/guides">Guides</a><a href="/contact">Contact</a></nav></header><div id="mobile-menu" role="navigation" aria-label="Site" style="position:fixed;inset:0;transform:translateX(-100vw);visibility:visible;background:#fff"><a href="/guides">Field notes</a><a href="/contact">Write to us</a></div></body></html>',
+					report.states
+				);
+				expect( portable ).toContain( 'id="desktop-nav"' );
+				expect( portable ).toContain( '<nav id="desktop-nav">' );
+				await page.setContent( portable );
+				const desktopGuides = page.locator( '#desktop-nav a[href="/guides"]' );
+				expect( await desktopGuides.evaluate( ( link ) => link.closest( 'details' ) === null ) ).toBe( true );
+				expect( await desktopGuides.isVisible() ).toBe( true );
+
+				const summary = page.locator( 'details.dla-disclosure > summary' );
+				await summary.click();
+				const menuGuides = page.locator( 'details.dla-disclosure[open] .dla-dialog a[href="/guides"]' );
+				const menuContact = page.locator( 'details.dla-disclosure[open] .dla-dialog a[href="/contact"]' );
+				expect( await menuGuides.isVisible() ).toBe( true );
+				expect( await menuContact.isVisible() ).toBe( true );
+				await summary.click();
+				expect( await page.locator( 'details.dla-disclosure' ).evaluate( ( element ) => ( element as HTMLDetailsElement ).open ) ).toBe( false );
+				expect( await menuGuides.isVisible() ).toBe( false );
+				await summary.click();
+				await page.keyboard.press( 'Escape' );
+				expect( await page.locator( 'details.dla-disclosure' ).evaluate( ( element ) => ( element as HTMLDetailsElement ).open ) ).toBe( false );
+				expect( await desktopGuides.isVisible() ).toBe( true );
+			} finally {
+				await browser.close();
+			}
+		},
+		30_000
+	);
+
+	it.skipIf( skipBrowserTests )(
+		'captures a current-route button popup with generic aria-haspopup and preserves its links offline',
+		async () => {
+			const browser = await chromium.launch( { headless: true } );
+			const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+			const markup = `<!doctype html><html><head><style>
+				.nav { position: relative; }
+				.panel { position: absolute; top: 100%; right: 0; width: 224px; background: white; }
+				.panel a { display: block; padding: 10px; }
+			</style></head><body><header><div class="nav">
+				<button type="button" aria-haspopup="true" aria-expanded="false">About<span aria-hidden="true">⌄</span></button>
+			</div></header><main>About page</main>
+			<script>
+				const nav = document.querySelector('.nav');
+				const button = nav.querySelector('button');
+				button.addEventListener('click', () => {
+					const open = button.getAttribute('aria-expanded') === 'true';
+					button.setAttribute('aria-expanded', String(!open));
+					if (open) nav.querySelector('.panel').remove();
+					else {
+						const panel = document.createElement('div');
+						panel.className = 'panel';
+						panel.innerHTML = '<a href="/">Home</a><a href="/about" aria-current="page">About</a><a href="/contact">Contact</a>';
+						nav.append(panel);
+					}
+				});
+			</script></body></html>`;
+			try {
+				await page.setContent( markup );
+				const report = await captureTriggeredDialogs( page, 'https://example.test/about' );
+				expect( report.states ).toMatchObject( [ {
+					status: 'captured',
+					trigger: { tag: 'button', ariaHaspopup: 'true', label: 'About⌄' },
+					dialog: { tag: 'div', presentation: 'dropdown' },
+				} ] );
+				expect( report.states[ 0 ].dialog?.html ).toContain( 'aria-current="page"' );
+				expect( await page.locator( '.panel' ).count() ).toBe( 0 );
+				const portable = wireCapturedDialogs( markup.replace( /<script>[\s\S]*?<\/script>/, '' ), report.states );
+				await page.setContent( portable );
+				const disclosure = page.locator( 'details.dla-disclosure' );
+				const summary = disclosure.locator( 'summary' );
+				expect( await disclosure.count() ).toBe( 1 );
+				expect( await page.locator( '.dla-dialog a:visible' ).count() ).toBe( 0 );
+				await summary.click();
+				expect( await page.locator( '.dla-dialog a:visible' ).allTextContents() ).toEqual( [ 'Home', 'About', 'Contact' ] );
+				expect( await page.locator( '.dla-dialog a[aria-current="page"]' ).getAttribute( 'href' ) ).toBe( '/about' );
+				await summary.click();
+				expect( await page.locator( '.dla-dialog a:visible' ).count() ).toBe( 0 );
+				await summary.focus();
+				await page.keyboard.press( 'Enter' );
+				expect( await page.locator( '.dla-dialog a:visible' ).count() ).toBe( 3 );
+				await page.keyboard.press( 'Escape' );
+				expect( await disclosure.getAttribute( 'open' ) ).toBeNull();
+			} finally {
+				await browser.close();
+			}
+		},
+		30_000
+	);
+
+	it.skipIf( skipBrowserTests )(
 		'only clicks the first eight unambiguous dialog triggers',
 		async () => {
 			const browser = await chromium.launch( { headless: true } );
@@ -650,6 +845,6 @@ describe( 'captureTriggeredDialogs', () => {
 				await browser.close();
 			}
 		},
-		30_000
+		60_000
 	);
 } );

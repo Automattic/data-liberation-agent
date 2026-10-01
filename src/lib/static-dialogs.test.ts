@@ -24,19 +24,94 @@ const captured: CapturedDialogInteraction = {
 };
 
 describe( 'wireCapturedDialogs', () => {
+	it.each( [ 'modal', 'dropdown' ] )( 'preserves responsive flex participation of a %s trigger across resizing', async ( presentation ) => {
+		const source = '<html><head><style>body{margin:0}header{display:flex;align-items:center;justify-content:space-between;max-width:672px;margin:auto;padding:24px;box-sizing:border-box}.desktop{display:none}.menu{display:inline-flex;padding:8px;font:16px sans-serif;border:0;background:none;box-sizing:border-box;width:60px;height:36px}@media(min-width:640px){.desktop{display:flex;gap:20px}.menu{display:none}}</style></head><body><header><a href="/">Site title</a><nav class="desktop"><a href="/about">About</a><a href="/writing">Writing</a></nav><button class="menu" aria-label="Open menu">Menu</button></header></body></html>';
+		const browser = await chromium.launch();
+		try {
+			const page = await browser.newPage();
+			const widths = [ 390, 768, 1440, 390, 1440, 390 ];
+			const rectangles = new Map<number, { nav: { x: number; y: number; width: number; height: number } | null; trigger: { x: number; y: number; width: number; height: number } | null }>();
+			for ( const width of [ 390, 768, 1440 ] ) {
+				await page.setViewportSize( { width, height: 900 } );
+				await page.setContent( source );
+				rectangles.set( width, { nav: await page.locator( '.desktop' ).boundingBox(), trigger: await page.locator( '.menu' ).boundingBox() } );
+			}
+			const state: CapturedDialogInteraction = {
+				...captured,
+				trigger: { ...captured.trigger, selector: 'header > button' },
+				dialog: { ...captured.dialog!, ...( presentation === 'dropdown' ? { presentation: 'dropdown' as const } : {} ) },
+			};
+			await page.setContent( wireCapturedDialogs( source, [ state ] ) );
+			for ( const width of widths ) {
+				await page.setViewportSize( { width, height: 900 } );
+				const details = page.locator( 'details.dla-disclosure' );
+				await expect.poll( () => details.evaluate( element => ( element as HTMLElement ).hidden ) ).toBe( width >= 640 );
+				expect( await page.locator( '.desktop' ).boundingBox() ).toEqual( rectangles.get( width )!.nav );
+				expect( await page.locator( 'summary' ).boundingBox() ).toEqual( rectangles.get( width )!.trigger );
+				if ( width === 390 ) {
+					await page.locator( 'summary' ).focus();
+					await page.keyboard.press( 'Enter' );
+					expect( await details.evaluate( element => ( element as HTMLDetailsElement ).open ) ).toBe( true );
+					await page.keyboard.press( 'Escape' );
+					expect( await details.evaluate( element => ( element as HTMLDetailsElement ).open ) ).toBe( false );
+					expect( await page.locator( 'summary' ).evaluate( element => document.activeElement === element ) ).toBe( true );
+				}
+			}
+		} finally { await browser.close(); }
+	}, 30_000 );
 	it( 'emits zero-specificity base disclosure rules so author utilities win', () => {
 		const html = wireCapturedDialogs(
 			'<html><head></head><body><button class="burger">Open Menu</button></body></html>',
 			[ captured ]
 		);
-		const css = html.match( /<style data-dla-disclosure="true">([\s\S]*?)<\/style>/ )?.[ 1 ] ?? '';
-		expect( css ).toContain(
+		const base = html.match( /<style data-dla-disclosure-base="true">([\s\S]*?)<\/style>/ )?.[ 1 ] ?? '';
+		expect( base ).toContain(
 			':where(details.dla-disclosure>summary){list-style:none;cursor:pointer;display:inline-block}'
 		);
-		expect( css ).toContain(
+		expect( base ).toContain(
 			':where(details.dla-disclosure>summary)::-webkit-details-marker{display:none}'
 		);
+		// In its own cascade layer, declared before anything else in <head>.
+		expect( base.startsWith( '@layer dla-disclosure-base{' ) ).toBe( true );
+		expect( html ).toMatch( /<head><style data-dla-disclosure-base="true">/ );
+		const css = html.match( /<style data-dla-disclosure="true">([\s\S]*?)<\/style>/ )?.[ 1 ] ?? '';
+		expect( css ).not.toContain( ':where(details.dla-disclosure>summary)' );
 		expect( css ).not.toMatch( /(^|;)details\.dla-disclosure>summary(::-webkit-details-marker)?\{/ );
+	} );
+
+	it( 'lets layered author CSS keep a converted trigger\'s display (Substack restack button)', async () => {
+		// derekthompson.org: Substack ships its CSS in cascade layers. The restack
+		// button opens a menu, so capture converts it to <summary>; an unlayered
+		// base rule then beat the layered `display:flex` and the icon and count
+		// wrapped onto two lines, pushing the post 9px down.
+		const html = wireCapturedDialogs(
+			'<html><head><style>@layer legacy,pencraft;@layer legacy{.post-ufi .post-ufi-button{display:flex;align-items:center;height:40px}}</style></head>' +
+			'<body><div class="post-ufi"><button class="post-ufi-button" aria-haspopup="menu"><svg width="20" height="20"></svg><div class="label">68</div></button></div></body></html>',
+			[
+				{
+					status: 'captured',
+					trigger: { selector: '.post-ufi > button', tag: 'button', ariaHaspopup: 'menu', label: '68', dataBindings: {} },
+					dialog: { selector: '#menu', tag: 'div', ariaModal: false, ariaLabel: 'Restack', html: '<div>Copy link</div>', htmlBytes: 20, htmlTruncated: false },
+				},
+			]
+		);
+		const browser = await chromium.launch( { headless: true } );
+		try {
+			const page = await browser.newPage( { viewport: { width: 1600, height: 900 } } );
+			await page.setContent( html );
+			const summary = page.locator( 'details.dla-disclosure > summary' );
+			expect( await summary.count() ).toBe( 1 );
+			expect( await summary.evaluate( ( el ) => getComputedStyle( el ).display ) ).toBe( 'flex' );
+			expect( ( await summary.boundingBox() )?.height ).toBe( 40 );
+			// A trigger no author rule styles still gets the base look.
+			await page.setContent( wireCapturedDialogs(
+				'<html><head></head><body><button class="burger">Open Menu</button></body></html>',
+				[ captured ]
+			) );
+			expect( await page.locator( 'details.dla-disclosure > summary' ).evaluate( ( el ) => getComputedStyle( el ).display ) ).toBe( 'inline-block' );
+		} finally {
+			await browser.close();
+		}
 	} );
 
 	it( 'lets an author md:hidden utility hide the toggle at 1600px while it still opens and closes the dialog at 390px', async () => {

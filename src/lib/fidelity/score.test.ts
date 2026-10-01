@@ -1,4 +1,9 @@
 import { describe, expect, it } from 'vitest';
+import { createServer } from 'node:http';
+import { chromium } from 'playwright';
+import { PNG } from 'pngjs';
+import { observePage } from './check.js';
+import { checkImageGeometry } from './rendered-contract-checks.js';
 import {
 	matchRenderedImages,
 	normalizeImageKey,
@@ -193,12 +198,12 @@ describe( 'scoreViewport', () => {
 		// loaded at capture width, and still declares the large file as a
 		// srcset rendition of that same image. One copy cannot cover two.
 		const source = [
-			img( 'item-large', 16, 420, 507, 285 ),
-			img( 'item-large', 540, 420, 507, 285 ),
+			{ ...img( 'item-large', 16, 420, 507, 285 ), role: 'hero' },
+			{ ...img( 'item-large', 540, 420, 507, 285 ), role: 'detail' },
 		];
 		const copy = [
-			{ ...img( 'item-small', 16, 420, 507, 285 ), renditions: [ 'item-large' ] },
-			{ ...img( 'item-small', 540, 420, 507, 285 ), renditions: [ 'item-large' ] },
+			{ ...img( 'item-small', 16, 420, 507, 285 ), role: 'hero', renditions: [ 'item-large' ] },
+			{ ...img( 'item-small', 540, 420, 507, 285 ), role: 'detail', renditions: [ 'item-large' ] },
 		];
 		expect( matchRenderedImages( source, copy ) ).toHaveLength( 2 );
 		const score = scoreViewport( at( 1728, { images: source } ), at( 1728, { images: copy } ) );
@@ -212,18 +217,73 @@ describe( 'scoreViewport', () => {
 			img( 'item-large', 0, 700, 200, 120 ),
 		];
 		const copy = [ { ...img( 'item-small', 0, 100, 200, 120 ), renditions: [ 'item-large' ] } ];
-		expect( matchRenderedImages( source, copy ) ).toHaveLength( 1 );
+		expect( matchRenderedImages( source, copy ) ).toHaveLength( 0 );
 		expect( scoreViewport( at( 1728, { images: source } ), at( 1728, { images: copy } ) ).failures[ 0 ] ).toMatch(
-			/^images 2 of 3 missing/
+			/^images 3 of 3 missing/
 		);
 	} );
 
-	it( 'matches same-named images by count, not presence', () => {
+	it( 'leaves same-named repeated images unpaired without structural evidence', () => {
 		const gallery = [ img( 'divider.jpg', 0, 800, 1600, 60 ), img( 'divider.jpg', 0, 1600, 1600, 60 ), img( 'divider.jpg', 0, 2400, 1600, 60 ) ];
 		const score = scoreViewport( at( 1600, { images: gallery } ), at( 1600, { images: gallery.slice( 0, 1 ) } ) );
 		expect( score.pass ).toBe( false );
-		expect( score.failures[ 0 ] ).toMatch( /^images 2 of 3 missing/ );
+		expect( score.failures[ 0 ] ).toMatch( /^images 3 of 3 missing/ );
 	} );
+
+	it( 'uses exact resource bytes to distinguish same-named images with colliding perceptual hashes', () => {
+		const source = [
+			{ ...img( 'image', 0, 100, 100, 100 ), contentHash: 'uniform', assetHash: 'first' },
+			{ ...img( 'image', 0, 300, 100, 100 ), contentHash: 'uniform', assetHash: 'second' },
+		];
+		const candidate = source.map( image => ( { ...image } ) );
+		expect( matchRenderedImages( source, candidate ) ).toHaveLength( 2 );
+		expect( matchRenderedImages( [ source[ 0 ], source[ 0 ] ], [ candidate[ 0 ], candidate[ 0 ] ] ) ).toHaveLength( 0 );
+		const swapped = candidate.map( ( image, index ) => ( { ...image, y: candidate[ 1 - index ].y } ) );
+		expect( checkImageGeometry( at( 768, { images: source } ), at( 768, { images: swapped } ) ).failures?.[ 0 ] ).toContain( 'geometry differs' );
+	} );
+
+	it( 'matches byte-identical animated resources despite differing perceptual observations', () => {
+		const source = [
+			{ ...img( 'image', 0, 100, 100, 100 ), contentHash: 'frame-one', assetHash: 'animation-one' },
+			{ ...img( 'image', 0, 300, 100, 100 ), contentHash: 'frame-two', assetHash: 'animation-two' },
+		];
+		const candidate = source.map( image => ( { ...image, contentHash: 'other-frame' } ) );
+		expect( matchRenderedImages( source, candidate ) ).toHaveLength( 2 );
+	} );
+
+	it.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) )( 'observes stable resource digests and detects relocated colliding images in a browser', async () => {
+		const black = new PNG( { width: 1, height: 1 } );
+		black.data.set( [ 0, 0, 0, 255 ] );
+		const white = new PNG( { width: 1, height: 1 } );
+		white.data.set( [ 255, 255, 255, 255 ] );
+		const images = [ PNG.sync.write( black ), PNG.sync.write( white ) ];
+		const server = createServer( ( request, response ) => {
+			if ( request.url?.startsWith( '/image-' ) ) {
+				response.writeHead( 200, { 'content-type': 'image/png' } );
+				response.end( images[ request.url === '/image-1.png' ? 1 : 0 ] );
+			} else {
+				const order = request.url === '/swapped' ? [ 1, 0 ] : [ 0, 1 ];
+				response.writeHead( 200, { 'content-type': 'text/html' } );
+				response.end( `<style>img{display:block;width:100px;height:100px;margin-bottom:100px}</style>${ order.map( index => `<img src="/image-${ index }.png">` ).join( '' ) }` );
+			}
+		} );
+		await new Promise<void>( resolve => server.listen( 0, '127.0.0.1', resolve ) );
+		const origin = `http://127.0.0.1:${ ( server.address() as { port: number } ).port }`;
+		const browser = await chromium.launch();
+		try {
+			const page = await browser.newPage( { viewport: { width: 768, height: 900 } } );
+			const source = await observePage( page, origin, 768, 0, null );
+			expect( source.images[ 0 ].contentHash ).toBe( source.images[ 1 ].contentHash );
+			expect( source.images[ 0 ].assetHash ).toMatch( /^[a-f0-9]{64}$/ );
+			expect( source.images[ 0 ].assetHash ).not.toBe( source.images[ 1 ].assetHash );
+			const candidate = await observePage( page, `${ origin }/swapped`, 768, 0, origin );
+			expect( matchRenderedImages( source.images, candidate.images ) ).toHaveLength( 2 );
+			expect( checkImageGeometry( source, candidate ).failures?.[ 0 ] ).toContain( 'geometry differs' );
+		} finally {
+			await browser.close();
+			await new Promise<void>( resolve => server.close( () => resolve() ) );
+		}
+	}, 30_000 );
 
 	it( 'refuses to score mismatched viewports', () => {
 		expect( () => scoreViewport( at( 1440 ), at( 1600 ) ) ).toThrow( /mismatched viewports/ );
@@ -252,6 +312,17 @@ describe( 'normalizeImageKey', () => {
 			'https://static.wixstatic.com/media/84770f_036df751d6ad458abdb34ad1da5a52fb~mv2.png/v1/fill/w_919,h_131/84770f_036df751d6ad458abdb34ad1da5a52fb~mv2.png';
 		const copy = 'http://127.0.0.1:53001/media/84770f_036df751d6ad458abdb34ad1da5a52fb-mv2-2.avif';
 		expect( normalizeImageKey( copy ) ).toBe( normalizeImageKey( source ) );
+	} );
+
+	it( 'uses the original image filename before a CDN transform suffix', () => {
+		const source = 'https://cdn.example/media/team-a.png/:/crop=t:0%25,l:0%25/resize=w:109,h:100';
+		const copy = 'http://localhost/external/media/team-a.png/%3A/crop%3Dt%3A0%25%2Cl%3A0%25/resize%3Dh%3A100.png';
+		const other = 'https://cdn.example/media/team-b.png/:/crop=t:0%25,l:0%25/resize=w:109,h:100';
+		expect( normalizeImageKey( source ) ).toBe( normalizeImageKey( copy ) );
+		expect( normalizeImageKey( source ) ).not.toBe( normalizeImageKey( other ) );
+		const sourceImages = [ img( normalizeImageKey( source ), 0, 180, 109, 100 ), img( normalizeImageKey( other ), 120, 180, 109, 100 ) ];
+		const copyImages = [ img( normalizeImageKey( copy ), 0, 180, 109, 100 ) ];
+		expect( scoreViewport( at( 1600, { images: sourceImages } ), at( 1600, { images: copyImages } ) ).notes ).toContain( 'images 1 missing within tolerance' );
 	} );
 
 	it( 'treats a re-encoded image as the same image', () => {

@@ -8,6 +8,7 @@ import { existsSync, readFileSync, statSync, mkdirSync, writeFileSync } from 'no
 import { dirname, join, resolve } from 'node:path';
 import type { Page } from 'playwright';
 import { sourceContextOptions } from '../browser-kit/browser-kit.js';
+import type { CapturedRouteNavigation } from '../screenshot/interaction-capture.js';
 import { startStaticServer } from '../replicate/local-site/static-server.js';
 import {
 	dismissOverlays,
@@ -18,13 +19,17 @@ import {
 } from '../screenshot/page-helpers.js';
 import { applySourceCleanup, readSourceCleanup, validateCleanupPolicy, type CleanupPolicy, type CleanupReport } from '../source-cleanup.js';
 import { runFidelityChecks } from './checks.js';
+import { readPortableMotion } from '../portable-motion.js';
+import { validateMotionContract, verifyCandidateMotion, type MotionContract, type MotionEvidence } from './candidate-motion.js';
 import { probeDialogs } from './dialog-probe.js';
 import { writePixelEvidence } from './evidence.js';
 import { checkSelfConsistency, type SelfConsistencyReport } from './self-consistency.js';
+import { REFERENCE_WIDTHS, readFrozenObservation, readReferenceArtifact, type FidelityReference, type FidelityStage } from './reference.js';
 import {
 	scoreReport,
 	scoreViewport,
 	normalizeImageKey,
+	ambiguousRenderedImages,
 	type HashTarget,
 	type LayoutObservation,
 	type ViewportScore,
@@ -81,7 +86,9 @@ function overlayLabels( dismissed: DismissedOverlay[] ): string[] {
 export type ObservePair = (
 	sourceUrl: string,
 	localUrl: string,
-	viewport: number
+	viewport: number,
+	/** A learned source startup duration; the source is observed only once it has settled. */
+	sourceSettleMs?: number
 ) => Promise< {
 	source: LayoutObservation;
 	liberated: LayoutObservation;
@@ -93,8 +100,12 @@ export type ObservePair = (
 
 export interface FidelityCheckOptions {
 	directory: string;
+	/** Frozen capture by default; candidateUrl defaults to materialization. Live origin is visited only in drift mode. */
+	stage?: FidelityStage;
+	/** Required states. Unsupported or absent states are pending, never silently skipped. Default: baseline. */
+	states?: string[];
 	widths?: number[];
-	/** Pathnames to check, e.g. `/` and `/about/`. Default: homepage only. */
+	/** Portable pathnames to check. Frozen default: all declared routes; drift default: spread sample. */
 	routes?: string[];
 	settleMs?: number;
 	/** How many routes to compare against the live source. */
@@ -104,15 +115,13 @@ export interface FidelityCheckOptions {
 	log?: ( ( message: string ) => void ) | undefined;
 	observe?: ObservePair;
 	/**
-	 * Base URL of another rendered copy of the captured site, for example a
-	 * WordPress site built from the capture. When set, each sampled route is
-	 * compared against `candidateUrl + route` instead of the capture served
-	 * locally. Routes still come from the capture receipt, and the offline
-	 * self-consistency checks still describe the capture. Source attribution a
-	 * candidate retains becomes a failed check instead of rejecting the run,
-	 * since the candidate is not this tool's artifact.
+	 * Base URL of another rendered copy. Defaults to portable capture → candidate
+	 * at each required route/viewport/state. Explicit stage:'drift' instead compares
+	 * the live source to the candidate. Offline checks always describe the capture.
 	 */
 	candidateUrl?: string;
+	/** Explicit observable source/candidate interactions; never changes the static capture's diagnosis. */
+	motionContract?: MotionContract;
 }
 
 function candidateBase( candidateUrl: string ): string {
@@ -129,9 +138,15 @@ function candidateBase( candidateUrl: string ): string {
 }
 
 /** A score, told which route produced it. */
-export type RouteScore = ViewportScore & { route: string };
+export type RouteScore = ViewportScore & { route: string; stage?: FidelityStage; state?: string };
 
 export interface FidelityReport {
+	stage?: FidelityStage;
+	status?: 'proven' | 'failed' | 'unproven';
+	pending?: Array<{ stage: FidelityStage; route: string; viewport: number; state: string; reason: string }>;
+	coverage?: { required: number; measured: number; unknowns: string[] };
+	/** Authored portable runtime was verified during this comparison, not inferred from source scripts. */
+	portableMotion?: { verified: boolean; routes: string[]; origin: 'authored' | 'learned' };
 	cleanup?: { policy: CleanupPolicy; source: CleanupReport[] };
 	/** Overlays dismissed per side before measuring. Evidence, never a gate. */
 	overlays: OverlayRecord[];
@@ -151,6 +166,8 @@ export interface FidelityReport {
 	/** Offline checks over every route. */
 	selfConsistency: SelfConsistencyReport;
 	scores: RouteScore[];
+	/** Independent live source/candidate behavior evidence. The HTML capture remains motion-incomplete. */
+	motionEvidence?: MotionEvidence[];
 	pass: boolean;
 	failed: number;
 	passed: number;
@@ -158,6 +175,7 @@ export interface FidelityReport {
 
 interface CaptureReceipt {
 	cleanup?: { policy: CleanupPolicy; complete: boolean; evidencePath?: string };
+	sourceInteractivity?: { schema: string; path: string; unreproduced_route_count: number };
 	source?: { url?: string };
 	websiteRoot?: string;
 	routes?: Array< { url?: string; path?: string } >;
@@ -283,13 +301,16 @@ export function externalRequestHost( href: string, localOrigin: string | null ):
 	}
 }
 
-async function observePage(
+export async function observePage(
 	page: Page,
 	url: string,
 	viewport: number,
 	settleMs: number,
 	localOrigin: string | null,
-	cleanup?: CleanupPolicy
+	cleanup?: CleanupPolicy,
+	onBaseline?: () => Promise<void>,
+	/** Observe the already-cleaned capture session without navigation or interaction probes. */
+	captureSession = false
 ): Promise< LayoutObservation > {
 	const external = new Set< string >();
 	const onRequest = ( request: { url: () => string } ): void => {
@@ -298,7 +319,10 @@ async function observePage(
 	};
 	page.on( 'request', onRequest );
 	try {
-		await page.goto( url, { waitUntil: 'domcontentloaded', timeout: 60_000 } ).catch( () => {} );
+		if ( ! captureSession ) {
+			const response = await page.goto( url, { waitUntil: 'domcontentloaded', timeout: 60_000 } );
+			if ( response && ! response.ok() ) throw new Error( `Observation HTTP ${ response.status() }: ${ url }` );
+		}
 		await waitForStable( page, settleMs );
 		if (cleanup) {
 			const report = await applySourceCleanup(page, cleanup);
@@ -316,24 +340,33 @@ async function observePage(
 		// Decode lazy media and return from a controlled scroll before measuring.
 		// Scroll-linked animations are otherwise observed mid-flight, while the
 		// source runtime may still be holding the same element at rest.
-		await triggerLazyLoad( page );
+		await triggerLazyLoad( page, false, { expandContent: !captureSession } );
 		dismissedOverlays.push( ...( await dismissOverlays( page, { kinds: COMPARED_OVERLAY_KINDS } ) ) );
+		// Evidence describes the settled baseline, not the page left behind by
+		// anchor/dialog probes (which can scroll or leave a popup open).
+		await onBaseline?.();
 		const measured = await page.evaluate( async ( clickUnresolved: boolean ) => {
+			const globalWithName = globalThis as typeof globalThis & { __name?: (fn: unknown) => unknown };
+			if (typeof globalWithName.__name === 'undefined') globalWithName.__name = fn => fn;
 			// Perceptual identity for one image: fetch the bytes (cache-warm —
 			// the page just rendered them), decode locally, downscale to 8x8
 			// grayscale, threshold at the mean. Fetching keeps this
 			// cross-origin safe where canvas reads of the element would taint;
 			// any failure leaves null and the key-only matcher covers it.
-			const hashCache = new Map< string, Promise< string | null > >();
-			const contentHashFor = ( src: string ): Promise< string | null > => {
+			const hashCache = new Map< string, Promise< { contentHash: string; assetHash: string | null } | null > >();
+			const contentHashFor = ( src: string ): Promise< { contentHash: string; assetHash: string | null } | null > => {
 				const cached = hashCache.get( src );
 				if ( cached ) return cached;
 				const pending = ( async () => {
 					try {
 						if ( ! src || src.startsWith( 'data:' ) || src.startsWith( 'blob:' ) ) return null;
-						const response = await fetch( src, { mode: 'cors', credentials: 'omit' } );
+						const response = await fetch( src, { mode: 'cors', credentials: 'omit', signal: AbortSignal.timeout( 5000 ) } );
 						if ( ! response.ok ) return null;
-						const bitmap = await createImageBitmap( await response.blob() );
+						const blob = await response.blob();
+						const bytes = await blob.arrayBuffer();
+						const digest = await globalThis.crypto?.subtle?.digest( 'SHA-256', bytes );
+						const assetHash = digest ? Array.from( new Uint8Array( digest ), byte => byte.toString( 16 ).padStart( 2, '0' ) ).join( '' ) : null;
+						const bitmap = await createImageBitmap( blob );
 						const side = 8;
 						const canvas = new OffscreenCanvas( side, side );
 						const context = canvas.getContext( '2d', { willReadFrequently: true } )!;
@@ -353,7 +386,7 @@ async function observePage(
 							}
 							value += bits.toString( 16 );
 						}
-						return value;
+						return { contentHash: value, assetHash };
 					} catch {
 						return null;
 					}
@@ -402,23 +435,35 @@ async function observePage(
 				}
 				return urls;
 			};
+			const semanticRole = ( image: HTMLImageElement ): string => {
+				const parts: string[] = [];
+				for ( let element: Element | null = image; element; element = element.parentElement ) {
+					if ( element !== image && ! element.matches( 'dialog,[role],nav,main,header,footer,figure,section[aria-label]' ) ) continue;
+					parts.push( `${ element.getAttribute( 'role' ) || element.tagName.toLowerCase() }:${ element.getAttribute( 'aria-label' ) || element.getAttribute( 'alt' ) || '' }` );
+				}
+				return parts.join( '/' );
+			};
 			const images = await Promise.all(
 				[ ...document.querySelectorAll< HTMLImageElement >( 'img' ) ]
 					.map( ( image ) => ( {
 						rect: image.getBoundingClientRect(),
 						src: image.currentSrc || image.getAttribute( 'src' ) || '',
+						role: semanticRole( image ),
+						decoded: image.complete && image.naturalWidth > 0,
 						renditions: renditionUrls( image ),
 						hidden: getComputedStyle( image ).visibility === 'hidden',
 					} ) )
 					.filter( ( { rect, hidden } ) => ! hidden && rect.width > 50 && rect.height > 50 )
-					.map( async ( { rect, src, renditions } ) => ( {
+					.map( async ( { rect, src, renditions, role, decoded } ) => ( {
 						key: src,
+						role,
+						decoded,
 						renditions,
 						x: Math.round( rect.x ),
 						y: Math.round( rect.y ),
 						width: Math.round( rect.width ),
 						height: Math.round( rect.height ),
-						contentHash: await contentHashFor( src ),
+						...( await contentHashFor( src ) ?? { contentHash: null, assetHash: null } ),
 					} ) )
 			);
 
@@ -582,7 +627,40 @@ async function observePage(
 
 			// Read what describes this page before any probe click can change it.
 			const title = document.title;
-			const textChars = ( document.body?.innerText ?? '' ).replace( /\s+/g, ' ' ).trim().length;
+			// innerText still includes a clipped 1×1 keyboard skip link. It is
+			// useful content when focused, but not rendered body copy at rest.
+			// Remove only a direct, focus-only fragment link occupying the text
+			// prefix; editorial links with the same label remain counted.
+			let bodyText = document.body?.innerText ?? '';
+			for ( const element of document.body?.children ?? [] ) {
+				if ( ! ( element instanceof HTMLAnchorElement ) || ! element.hash || element.matches( ':focus' ) ) continue;
+				const style = getComputedStyle( element );
+				const box = element.getBoundingClientRect();
+				if ( box.width > 1.5 || box.height > 1.5 || style.overflow !== 'hidden' || ( style.clipPath === 'none' && style.clip === 'auto' ) ) continue;
+				const label = element.innerText.replace( /\s+/g, ' ' ).trim();
+				const prefix = bodyText.trimStart();
+				if ( label && prefix.startsWith( label ) && /^\s/.test( prefix.slice( label.length ) ) ) bodyText = prefix.slice( label.length );
+			}
+			// A native decorative glyph may be replaced visually by source SVG
+			// artwork while its save-valid text remains in the DOM at font-size:0.
+			// innerText counts that unpainted text. Remove only a zero-font, leaf,
+			// explicitly decorative fragment at its actual position in its parent;
+			// identical visible symbols in an editorial label remain counted.
+			const normalized = (value: string) => value.replace(/\s+/g, ' ').trim();
+			bodyText = normalized(bodyText);
+			for (const element of document.querySelectorAll<HTMLElement>('[aria-hidden="true"]')) {
+				if (element.childElementCount || getComputedStyle(element).fontSize !== '0px') continue;
+				const parent = element.parentElement, label = normalized(element.innerText);
+				if (!parent || !label || !parent.getBoundingClientRect().height) continue;
+				const context = normalized(parent.innerText);
+				const range = document.createRange(); range.selectNodeContents(parent); range.setEndBefore(element);
+				const prefix = normalized(range.toString());
+				if (prefix && !context.startsWith(prefix)) continue;
+				const offset = context.indexOf(label, prefix.length);
+				if (offset < 0) continue;
+				bodyText = bodyText.replace(context, normalized(context.slice(0, offset) + context.slice(offset + label.length)));
+			}
+			const textChars = bodyText.replace( /\s+/g, ' ' ).trim().length;
 			if ( clickUnresolved ) {
 				const original = { x: scrollX, y: scrollY };
 				let clicks = 0;
@@ -635,17 +713,19 @@ async function observePage(
 				hashTargets,
 				internalPaths,
 			};
-		}, ! localOrigin );
+		}, ! localOrigin && ! captureSession );
 
 		const internalMissing: string[] = [];
 		if ( localOrigin ) {
 			for ( const path of measured.internalPaths.slice( 0, MAX_ROUTE_CHECKS ) ) {
-				const response = await page.request.get( `${ localOrigin }${ path }`, { timeout: 10_000 } );
+				// API requests do not pass through browser routing. Frozen replay must
+				// not follow a candidate's redirect back to the live origin.
+				const response = await page.request.get( `${ localOrigin }${ path }`, { timeout: 10_000, maxRedirects: captureSession ? 0 : 20 } );
 				if ( ! response.ok() ) internalMissing.push( path );
 			}
 		}
 
-		const dialogs = await probeDialogs( page );
+		const dialogs = captureSession ? [] : await probeDialogs( page );
 
 		return {
 			viewport,
@@ -722,10 +802,112 @@ function normalizedUrl( value: string ): string {
 	}
 }
 
+async function verifyCapturedRouteTabs(
+	page: Page,
+	localHref: string,
+	width: number,
+	observations: CapturedRouteNavigation[],
+	sources: Map< string, string >
+): Promise< string[] > {
+	const sourceRoutes = new Map( [ ...sources ].map( ( [ route, url ] ) => [ normalizedUrl( url ), route ] ) );
+	const tabs = new Map< string, { route: string; siblings: string[] } >();
+	for ( const observation of observations ) {
+		const route = sourceRoutes.get( normalizedUrl( observation.url ) );
+		if ( route && observation.siblings.length >= 2 && ! tabs.has( observation.label ) )
+			tabs.set( observation.label, { route, siblings: observation.siblings } );
+	}
+	if ( ! tabs.size ) return [];
+	const failures: string[] = [];
+	const origin = new URL( localHref ).origin;
+	await page.setViewportSize( { width, height: 900 } );
+	for ( const [ label, target ] of [ ...tabs ].slice( 0, 4 ) ) {
+		await page.goto( localHref );
+		// Editable-block destination conversions nest each observed tab inside
+		// arbitrary wrappers and may split it into an icon link plus a
+		// paragraph-wrapped labeled link, so direct anchor/button siblings no
+		// longer exist. The group is identified by the labels the source was
+		// observed to show — every one of them must still be present among the
+		// navigation's bounded descendants — and the verified link is the
+		// visible labeled one, wherever the conversion nested it.
+		const matched = await page.evaluate( `(() => {
+			const { label, siblings } = ${ JSON.stringify( { label, siblings: target.siblings } ) };
+			function name(element) { return (element.getAttribute('aria-label') || element.textContent || '').replace(/\\s+/g, ' ').trim(); }
+			// The same rule a real click applies: a display:contents anchor
+			// generates no box of its own, so it is visible when a child
+			// element or text node paints in its place (WordPress import
+			// lowering wraps each bottom-tab label as a > mark this way).
+			// Children of a display:none or visibility:hidden link never
+			// paint, so hidden links stay rejected.
+			function visible(element) {
+				const style = getComputedStyle(element);
+				if (style.display === 'none' || style.visibility === 'hidden') return false;
+				const rect = element.getBoundingClientRect();
+				if (rect.width > 0 && rect.height > 0) return true;
+				if (style.display !== 'contents') return false;
+				for (const child of element.children) if (visible(child)) return true;
+				for (const node of element.childNodes) {
+					if (node.nodeType !== 3 || !node.textContent.trim()) continue;
+					const range = document.createRange();
+					range.selectNode(node);
+					const textRect = range.getBoundingClientRect();
+					if (textRect.width > 0 && textRect.height > 0) return true;
+				}
+				return false;
+			}
+			for ( const nav of Array.from(document.querySelectorAll('nav,[role="navigation"]')).slice(0, 4) ) {
+				const members = Array.from(nav.querySelectorAll('a,button')).slice(0, 64);
+				const names = members.map(name);
+				if (!siblings.every(sibling => names.includes(sibling))) continue;
+				const link = members.find(member => member.tagName === 'A' && member.hasAttribute('href') && name(member) === label && visible(member));
+				if (!link) continue;
+				link.setAttribute('data-dla-check-route-tab', '');
+				return link.href;
+			}
+			return null;
+		})()` ) as string | null;
+		if ( matched === null ) {
+			failures.push( `route tab ${ label } @ ${ width }px missing native link` );
+			continue;
+		}
+		// Destination checking: the matched link must point at the copy's own
+		// file for the route the source click produced, before any click.
+		let destination: URL;
+		try {
+			destination = new URL( matched );
+		} catch {
+			failures.push( `route tab ${ label } @ ${ width }px links to ${ matched }, expected ${ target.route }` );
+			continue;
+		}
+		const linkedRoute = destination.origin === origin ? canonicalRoutePath( destination.pathname ) : destination.href;
+		if ( linkedRoute !== target.route ) {
+			failures.push( `route tab ${ label } @ ${ width }px links to ${ linkedRoute }, expected ${ target.route }` );
+			continue;
+		}
+		try {
+			await page.locator( '[data-dla-check-route-tab]' ).click( { timeout: 2_000 } );
+			if ( canonicalRoutePath( new URL( page.url() ).pathname ) !== target.route )
+				failures.push( `route tab ${ label } @ ${ width }px landed on ${ new URL( page.url() ).pathname }, expected ${ target.route }` );
+		} catch {
+			failures.push( `route tab ${ label } @ ${ width }px click blocked` );
+		}
+	}
+	return failures;
+}
+
 export async function checkFidelity( options: FidelityCheckOptions ): Promise< FidelityReport > {
+	const stage = options.stage ?? ( options.candidateUrl ? 'materialization' : 'capture' );
+	if ( ! [ 'capture', 'materialization', 'drift' ].includes( stage ) ) throw new Error( 'Unknown fidelity stage' );
+	if ( stage !== 'drift' ) return checkFrozenFidelity( options, stage );
 	const log = options.log ?? ( () => {} );
 	const { websiteDir, receiptPath } = resolveCheckDirectory( options.directory );
 	const receipt = JSON.parse( readFileSync( receiptPath, 'utf8' ) ) as CaptureReceipt;
+	const motionPages = receipt.sourceInteractivity?.schema === 'data-liberation/source-interactivity/v1'
+		&& receipt.sourceInteractivity.path === 'source-interactivity.json'
+		? JSON.parse( readFileSync( join( dirname( receiptPath ), receipt.sourceInteractivity.path ), 'utf8' ) ) as { pages?: Array< { url: string; status: string; signals: string[] } > }
+		: undefined;
+	const unreproducedMotion = new Map( ( motionPages?.pages ?? [] )
+		.filter( ( page ) => page.status === 'unreproduced' )
+		.map( ( page ) => [ page.url, page.signals ] ) );
 	if (receipt.cleanup) validateCleanupPolicy(receipt.cleanup.policy);
 	const cleanupReports: CleanupReport[] = [];
 	const sourceUrl = receipt.source?.url;
@@ -735,6 +917,11 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 	const settleMs = options.settleMs ?? 4000;
 
 	const sources = routeSourceMap( receipt );
+	const interactionPath = join( dirname( receiptPath ), 'interaction-states.json' );
+	const observedRoutes: CapturedRouteNavigation[] = existsSync( interactionPath )
+		? ( JSON.parse( readFileSync( interactionPath, 'utf8' ) ) as { pages?: Array< { routeNavigation?: CapturedRouteNavigation[] } > } )
+			.pages?.flatMap( page => page.routeNavigation ?? [] ) ?? []
+		: [];
 	if ( ! sources.has( '/' ) ) sources.set( '/', sourceUrl );
 
 	// One route whose cleanup could not be proven must not block comparing the
@@ -780,6 +967,12 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 	}
 
 	const candidate = options.candidateUrl === undefined ? null : candidateBase( options.candidateUrl );
+	const portable = candidate || options.motionContract ? null : readPortableMotion( dirname( receiptPath ), websiteDir );
+	const motionContract = options.motionContract ?? portable?.contract;
+	if ( motionContract ) {
+		if ( ( ! candidate && ! portable ) || options.observe ) throw new Error( 'Motion contract requires a live --candidate browser comparison or a portable runtime receipt' );
+		validateMotionContract( motionContract );
+	}
 	let observe = options.observe;
 	const browser = observe ? null : await (await import('playwright')).chromium.launch();
 	let server: Awaited<ReturnType<typeof startStaticServer>> | null = null;
@@ -793,22 +986,30 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 		throw error;
 	}
 	if ( ! observe ) {
-		observe = async ( sourceHref, localHref, viewport ) => {
+		observe = async ( sourceHref, localHref, viewport, sourceSettleMs = 0 ) => {
 			if ( ! page ) throw new Error( 'browser page missing' );
 			await page.setViewportSize( { width: viewport, height: 900 } );
-			const source = await observePage( page, sourceHref, viewport, settleMs, null, receipt.cleanup?.policy );
+			let sourcePng: Buffer | undefined;
+			let liberatedPng: Buffer | undefined;
+			const source = await observePage( page, sourceHref, viewport, Math.max( settleMs, sourceSettleMs ), null, receipt.cleanup?.policy,
+				options.screenshots ? async () => { sourcePng = await page!.screenshot(); } : undefined );
 			if (receipt.cleanup) {
 				const report = await readSourceCleanup(page);
 				cleanupReports.push(report);
 				if (report.failures.length || report.residual) throw new Error('Comparison source cleanup incomplete');
 			}
-			const sourcePng = options.screenshots ? await page.screenshot() : undefined;
+			// Leave the source before observing the copy in this same tab. Sources
+			// send analytics beacons as they are left (beforeunload, in-flight
+			// batches — Substack's /api/v1/firehose/batch); navigating straight to
+			// the copy fires them after the copy's request listener is attached, so
+			// a clean copy was reported as requesting the source's hosts.
+			await page.goto( 'about:blank' ).catch( () => {} );
 			if ( candidate ) {
 				// Measure the candidate as a visitor sees it, then ask the cleanup
 				// policy what it would still remove. Removing it first would hide
 				// exactly what is being measured.
-				const liberated = await observePage( page, localHref, viewport, settleMs, new URL( localHref ).origin );
-				const liberatedPng = options.screenshots ? await page.screenshot() : undefined;
+				const liberated = await observePage( page, localHref, viewport, settleMs, new URL( localHref ).origin, undefined,
+					options.screenshots ? async () => { liberatedPng = await page!.screenshot(); } : undefined );
 				const candidateRetained = receipt.cleanup
 					? ( await applySourceCleanup( page, receipt.cleanup.policy ) ).removed
 					: 0;
@@ -820,7 +1021,8 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 				viewport,
 				settleMs,
 				new URL( localHref ).origin,
-				receipt.cleanup?.policy
+				receipt.cleanup?.policy,
+				options.screenshots ? async () => { liberatedPng = await page!.screenshot(); } : undefined
 			);
 			if (receipt.cleanup) {
 				const candidateCleanup = await readSourceCleanup(page);
@@ -828,12 +1030,12 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 					throw new Error('Liberated artifact retains advertising/source attribution or its cleanup audit failed');
 				}
 			}
-			const liberatedPng = options.screenshots ? await page.screenshot() : undefined;
 			return { source, liberated, sourcePng, liberatedPng };
 		};
 	}
 
 	const scores: RouteScore[] = [];
+	const motionEvidence: MotionEvidence[] = [];
 	const overlays: OverlayRecord[] = [];
 	// Why the two sides can legitimately differ, recorded per side and per
 	// viewport. A reader comparing a shorter copy to a longer source needs to
@@ -858,9 +1060,20 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 		for ( const route of routes ) {
 			const sourceHref = sources.get( route )!;
 			const localHref = `${ candidate ?? server?.url ?? 'http://liberated.invalid' }${ route }`;
+			const signals = unreproducedMotion.get( sourceHref );
+			const contract = signals && motionContract?.routes[ route ];
+			if ( signals && contract && browser ) {
+				for ( const width of motionContract!.widths ) {
+					log( `[compare] ${ route } @ ${ width }px source/candidate motion` );
+					motionEvidence.push( await verifyCandidateMotion( browser, route, width, sourceHref, localHref, contract, signals ) );
+				}
+			}
+			const candidateMotionVerified = !! signals && !! contract && [ 390, 768, 1440 ].every( ( width ) =>
+				motionEvidence.some( ( evidence ) => evidence.route === route && evidence.viewport === width && evidence.pass )
+			);
 			for ( const width of widths ) {
 				log( `[compare] ${ route } @ ${ width }px` );
-				const pair = await observe( sourceHref, localHref, width );
+				const pair = await observe( sourceHref, localHref, width, contract ? contract.ready.sourceSettleMs : undefined );
 				recordOverlays( route, width, sourceHref, localHref, pair );
 				const evidenceDir = join(
 					dirname( receiptPath ),
@@ -870,6 +1083,8 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 				);
 				// Every check, built-in and contributed, runs through the registry.
 				const checked = await runFidelityChecks( {
+					stage: 'drift',
+					state: 'baseline',
 					route,
 					viewport: width,
 					sourceUrl: sourceHref,
@@ -881,7 +1096,12 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 				if ( pair.candidateRetained ) {
 					checked.failures.push( `candidate retains advertising or source attribution (${ pair.candidateRetained } removable)` );
 				}
+				if ( signals && ! candidateMotionVerified ) checked.failures.push( `source motion not reproduced by capture: ${ signals.join( ', ' ) }; candidate behavior unverified` );
+				for ( const residual of portable?.unsupported?.[ route ] ?? [] ) checked.failures.push( `source behavior not translated${ residual.selector ? ` (${ residual.selector })` : '' }: ${ residual.reason }` );
+				if ( candidateMotionVerified ) checked.notes.push( portable ? `raw source/capture motion unreproduced; ${ portable.origin ?? 'authored' } portable runtime independently verified at 390/768/1440px` : 'source/capture motion unreproduced; independent source/candidate interaction verified at 390/768/1440px' );
 				const score: RouteScore = {
+					stage: 'drift',
+					state: 'baseline',
 					route,
 					viewport: width,
 					pass: checked.failures.length === 0,
@@ -919,7 +1139,7 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 			// conclusions from values that were zeroed rather than measured.
 			if ( ! widths.includes( 390 ) ) {
 				log( `[compare] ${ route } @ 390px interactivity` );
-				const pair = await observe( sourceHref, localHref, 390 );
+				const pair = await observe( sourceHref, localHref, 390, contract ? contract.ready.sourceSettleMs : undefined );
 				recordOverlays( route, 390, sourceHref, localHref, pair );
 				const dialogOnly = ( observation: LayoutObservation ): LayoutObservation => ( {
 					...observation,
@@ -934,9 +1154,28 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 					internalMissing: [],
 				} );
 				const score = {
+					stage: 'drift' as const,
+					state: 'dialogs',
 					...scoreViewport( dialogOnly( pair.source ), dialogOnly( pair.liberated ) ),
 					route,
 				};
+				if ( page && observedRoutes.length ) {
+					// Route-tab evidence was observed on the source during capture. Verify
+					// the visitor's real click on the portable counterpart, not just href.
+					for ( const width of [ 390, 768 ] ) {
+						const failures = await verifyCapturedRouteTabs( page, localHref, width, observedRoutes, sources );
+						if ( failures.length ) {
+							score.failures.push( ...failures );
+							score.pass = false;
+						}
+						score.notes.push( `route tabs @ ${ width }px: ${ failures.length ? 'failed' : 'clicks verified' }` );
+					}
+				}
+				if ( signals && ! candidateMotionVerified ) {
+					score.failures.push( `source motion not reproduced by capture: ${ signals.join( ', ' ) }; candidate behavior unverified` );
+					score.pass = false;
+				}
+				if ( candidateMotionVerified ) score.notes.push( portable ? `raw capture motion unreproduced; ${ portable.origin ?? 'authored' } portable runtime verified` : 'source/capture motion unreproduced; independent candidate interaction verified' );
 				score.notes.push( 'interactivity' );
 				scores.push( score );
 			}
@@ -957,6 +1196,8 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 			join(evidenceDir, 'overlay-evidence.json'),
 			JSON.stringify({ schema: 'data-liberation/compare-overlays/v1', completed: comparisonCompleted, kinds: COMPARED_OVERLAY_KINDS, observations: overlays }, null, 2)
 		);
+		if ( motionContract ) writeFileSync( join( evidenceDir, 'candidate-motion-evidence.json' ),
+			JSON.stringify( { schema: 'data-liberation/candidate-motion/v1', completed: comparisonCompleted, observations: motionEvidence }, null, 2 ) );
 	}
 
 	const summary = scoreReport( scores );
@@ -973,6 +1214,7 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 	);
 	summary.pass = summary.pass && selfConsistency.pass;
 	return {
+		stage: 'drift',
 		sourceUrl,
 		...(receipt.cleanup ? { cleanup: { policy: receipt.cleanup.policy, source: cleanupReports } } : {}),
 		overlays,
@@ -983,6 +1225,107 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 		routesCleanupUnproven: [ ...unproven ].sort(),
 		selfConsistency,
 		scores,
+		...( motionContract ? { motionEvidence } : {} ),
+		...( portable ? { portableMotion: { verified: motionEvidence.length > 0 && motionEvidence.every( ( evidence ) => evidence.pass ), routes: Object.keys( portable.routes ), origin: portable.origin ?? 'authored' } } : {} ),
 		...summary,
 	};
+}
+
+/** Frozen stages share the live observer and registered scoring path; no source browser is created. */
+async function checkFrozenFidelity( options: FidelityCheckOptions, stage: 'capture' | 'materialization' ): Promise<FidelityReport> {
+	if ( options.observe || options.motionContract ) throw new Error( 'Frozen comparison requires real browser baseline evidence; observe/motionContract are drift-only' );
+	if ( options.sampleSize !== undefined ) throw new Error( 'sampleSize is drift-only; select explicit routes for bounded frozen comparison' );
+	if ( stage === 'materialization' && ! options.candidateUrl ) throw new Error( 'Materialization stage requires candidateUrl' );
+	if ( stage === 'capture' && options.candidateUrl ) throw new Error( 'candidateUrl requires materialization or drift stage' );
+	const { websiteDir, receiptPath } = resolveCheckDirectory( options.directory );
+	const directory = dirname( receiptPath );
+	const receipt = JSON.parse( readFileSync( receiptPath, 'utf8' ) ) as CaptureReceipt;
+	const sources = routeSourceMap( receipt );
+	const widths = options.widths ?? [ ...REFERENCE_WIDTHS ];
+	const states = options.states ?? [ 'baseline' ];
+	const routes = options.routes?.map( canonicalRoutePath ) ?? [ ...sources.keys() ];
+	const selfConsistency = checkSelfConsistency( websiteDir, routeFiles( receipt ) );
+	const scores: RouteScore[] = [];
+	const pending: NonNullable<FidelityReport['pending']> = [];
+	let manifest: FidelityReference | undefined;
+	let invalid: string | undefined;
+	try {
+		manifest = JSON.parse( readFileSync( join( directory, 'fidelity-reference.json' ), 'utf8' ) ) as FidelityReference;
+		if ( manifest.schema !== 'data-liberation/fidelity-reference/v1' || manifest.sourceUrl !== receipt.source?.url || ! manifest.captureId ) throw new Error( 'Invalid reference schema or source identity' );
+		if ( manifest.receipt.path !== 'capture-receipt.json' ) throw new Error( 'Invalid reference receipt identity' );
+		readReferenceArtifact( directory, manifest.receipt );
+		if ( stage === 'materialization' ) {
+			if ( ! manifest.capture.length ) throw new Error( 'Portable capture hashes missing' );
+			for ( const artifact of manifest.capture ) readReferenceArtifact( directory, artifact );
+		}
+	} catch ( error ) { invalid = `Frozen reference unproven: ${ String( error ) }`; }
+	const unknowns = manifest?.scope?.unknowns ?? [ 'Capture has no valid frozen source evidence.' ];
+	// Discovery failures cannot disappear simply because no portable route was written.
+	let missingRoutes = 0;
+	for ( const url of options.routes ? [] : manifest?.scope?.sourceUrls ?? [] ) {
+		if ( [ ...sources.values() ].includes( url ) ) continue;
+		missingRoutes++;
+		for ( const viewport of widths ) for ( const state of states ) pending.push( { stage, route: url, viewport, state, reason: 'Declared source route has no portable capture' } );
+	}
+	let server: Awaited<ReturnType<typeof startStaticServer>> | undefined;
+	let browser: Awaited<ReturnType<typeof import('playwright')['chromium']['launch']>> | undefined;
+	try {
+		for ( const route of routes ) for ( const viewport of widths ) for ( const state of states ) {
+			options.log?.( `[compare] ${ stage } ${ route } @ ${ viewport }px ${ state }` );
+			const attribution = { stage, route, viewport, state };
+			try {
+				if ( invalid ) throw new Error( invalid );
+				if ( ! manifest || ! sources.has( route ) ) throw new Error( 'Required route was not captured' );
+				if ( state !== 'baseline' || ! manifest.scope.states.includes( state ) || ! manifest.scope.widths.includes( viewport ) ) throw new Error( 'Required viewport/state is outside frozen scope' );
+				const entries = manifest.entries.filter( entry => entry.route === route && entry.sourceUrl === sources.get( route ) && entry.viewport === viewport && entry.state === state );
+				if ( entries.length !== 1 ) throw new Error( 'Source observation missing or ambiguous' );
+				const frozen = readFrozenObservation( directory, entries[0]! );
+				// Validate all source evidence even for materialization: stale evidence cannot certify a chain.
+				server ??= await startStaticServer( websiteDir );
+				browser ??= await ( await import( 'playwright' ) ).chromium.launch();
+				const page = await browser.newPage( { viewport: { width: viewport, height: 900 }, serviceWorkers: 'block' } );
+				try {
+					// Portable replay cannot reach the origin, including redirects and media requests.
+					const local = `${ server.url }${ route }`;
+					const candidate = stage === 'materialization' ? `${ candidateBase( options.candidateUrl! ) }${ route }` : local;
+					await page.context().route( '**/*', async request => {
+						const origin = new URL( request.request().url() ).origin;
+						if ( origin === new URL( server!.url ).origin || ( stage === 'materialization' && origin !== new URL( manifest!.sourceUrl ).origin ) ) await request.continue();
+						else await request.abort();
+					} );
+					let source = frozen.observation;
+					let sourcePng = frozen.png;
+					const measure = async ( url: string ): Promise<LayoutObservation> => {
+						const response = await page.goto( url, { waitUntil: 'domcontentloaded' } );
+						if ( response && ! response.ok() ) throw new Error( `Observation HTTP ${ response.status() }` );
+						return observePage( page, url, viewport, options.settleMs ?? 800, new URL( url ).origin, undefined, undefined, true );
+					};
+					if ( stage === 'materialization' ) { source = await measure( local ); sourcePng = await page.screenshot(); }
+					const liberated = await measure( candidate );
+					if ( ambiguousRenderedImages( source.images, liberated.images ).length ) throw new Error( 'Repeated image correspondence ambiguous: structural role/state does not uniquely identify occurrences' );
+					const evidenceDir = join( directory, 'compare', stage, evidenceSlug( route ), String( viewport ), state );
+					const candidatePng = options.screenshots ? await page.screenshot() : undefined;
+					const checked = await runFidelityChecks( { ...attribution, sourceUrl: stage === 'capture' ? `frozen:${ entries[0]!.observation!.path }` : local, candidateUrl: candidate, source, candidate: liberated, evidenceDir } );
+					if ( receipt.cleanup ) {
+						const retained = await applySourceCleanup( page, receipt.cleanup.policy );
+						if ( retained.removed || retained.residual || retained.failures.length ) checked.failures.push( 'Rendered artifact retains source attribution/advertising or cleanup audit failed' );
+					}
+					if ( candidatePng ) {
+						const pixels = writePixelEvidence( evidenceDir, sourcePng, candidatePng );
+						checked.notes.push( 'score' in pixels ? `pixel evidence → ${ pixels.diffPath }` : pixels.error );
+					}
+					scores.push( { ...attribution, source, liberated, pass: ! checked.failures.length, failures: checked.failures, notes: checked.notes } );
+				} finally { await page.context().close(); }
+			} catch ( error ) { pending.push( { ...attribution, reason: String( error ) } ); }
+		}
+	} finally { await browser?.close(); await server?.close(); }
+	if ( ! routes.length || ! widths.length || ! states.length ) pending.push( { stage, route: '/', viewport: 0, state: 'baseline', reason: 'Empty required scope' } );
+	const summary = scoreReport( scores );
+	const pass = summary.pass && selfConsistency.pass && pending.length === 0;
+	const report: FidelityReport = { ...summary, pass, stage, status: pending.length ? 'unproven' : pass ? 'proven' : 'failed', pending,
+		coverage: { required: ( routes.length + missingRoutes ) * widths.length * states.length, measured: scores.length, unknowns },
+		sourceUrl: receipt.source?.url ?? '', websiteDir, widths, routes, routesAvailable: sources.size, routesCleanupUnproven: [], selfConsistency, scores, overlays: [] };
+	mkdirSync( join( directory, 'compare', stage ), { recursive: true } );
+	writeFileSync( join( directory, 'compare', stage, 'report.json' ), `${ JSON.stringify( report, null, 2 ) }\n` );
+	return report;
 }

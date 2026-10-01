@@ -3,6 +3,9 @@ import type { Page } from 'playwright';
 
 /** Platform-specific preparation applied while liberating a live page. */
 export interface LiberationHooks {
+  /** Recognize an observed client-side navigation as a source-declared alias.
+   * Return only a same-origin target; uncertainty leaves the route to normal capture. */
+  resolveClientRedirect?(page: Page, url: string): Promise<string | undefined>;
   /** Source branding rules shared by capture and comparison. */
   cleanupRules?: import('../lib/source-cleanup.js').CleanupRule[];
   /** CSS selectors removed from the DOM before portable artifacts are produced. */

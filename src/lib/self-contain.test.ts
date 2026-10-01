@@ -1,6 +1,7 @@
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { chromium } from 'playwright';
 import { describe, expect, it } from 'vitest';
 import {
 	isRemoteAssetUrl,
@@ -10,6 +11,10 @@ import {
 } from './self-contain.js';
 
 describe( 'self-contain', () => {
+	it( 'removes an uncaptured compact import instead of leaving a remote font host', () => {
+		expect( stripRemoteCssUrls( '@import"https://fonts.example.net/css?family=Serif" screen and (min-width: 768px);' ) )
+			.toBe( '@import "about:blank";' );
+	} );
 	it( 'treats absolute and protocol-relative hosts as remote, local paths as not', () => {
 		expect( isRemoteAssetUrl( 'https://siteassets.example.com/app.js' ) ).toBe( true );
 		expect( isRemoteAssetUrl( '//cdn.example/font.woff2' ) ).toBe( true );
@@ -89,6 +94,33 @@ describe( 'self-contain', () => {
 		);
 		expect( html ).not.toContain( 'cdn.example' );
 		expect( html ).toContain( `srcset="${ url.replaceAll( ' ', '%20' ) } 1x"` );
+	} );
+
+	it( 'keeps a descriptorless picture rendition with commas loadable at every breakpoint', async () => {
+		const browser = await chromium.launch();
+		try {
+			const gif = Buffer.from( 'R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=', 'base64' );
+			const renditions = [ 390, 768, 1440 ].map( ( width ) => `/media/photo/:/rs=w:${ width },h:240.gif` );
+			const html = stripRemoteAssetRequests(
+				`<picture><source media="(min-width: 1200px)" srcset="${ renditions[ 2 ] }"><source media="(min-width: 600px)" srcset="${ renditions[ 1 ] }"><img src="${ renditions[ 0 ] }"></picture>`
+			);
+			for ( const [ width, expected ] of [ [ 390, renditions[ 0 ] ], [ 768, renditions[ 1 ] ], [ 1440, renditions[ 2 ] ] ] as const ) {
+				const page = await browser.newPage( { viewport: { width, height: 900 } } );
+				await page.route( 'http://portable.test/**', ( route ) => {
+					const pathname = new URL( route.request().url() ).pathname;
+					if ( pathname === '/' ) return route.fulfill( { contentType: 'text/html', body: html } );
+					if ( renditions.includes( pathname ) ) return route.fulfill( { contentType: 'image/gif', body: gif } );
+					return route.fulfill( { status: 404, body: 'missing rendition' } );
+				} );
+				await page.goto( 'http://portable.test/' );
+				await page.locator( 'picture img' ).evaluate( ( image: HTMLImageElement ) => image.decode().catch( () => undefined ) );
+				const image = await page.locator( 'picture img' ).evaluate( ( node: HTMLImageElement ) => ( { pathname: new URL( node.currentSrc ).pathname, width: node.naturalWidth } ) );
+				expect( image ).toEqual( { pathname: expected, width: 1 } );
+				await page.close();
+			}
+		} finally {
+			await browser.close();
+		}
 	} );
 
 	it( 'drops a sourceMappingURL comment pointing at a non-local origin, keeping a local one', () => {

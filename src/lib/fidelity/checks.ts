@@ -21,10 +21,12 @@ import {
 } from './rendered-contract-checks.js';
 
 export interface FidelityCheckContext {
+	stage?: import('./reference.js').FidelityStage;
+	state?: string;
 	/** Route in the copy, e.g. `/` or `/about/`. */
 	route: string;
 	viewport: number;
-	/** Live source URL for this route. */
+	/** Live URL in drift, frozen: artifact reference in capture, local portable URL in materialization. */
 	sourceUrl: string;
 	/** Local URL serving the liberated copy of this route. */
 	candidateUrl: string;

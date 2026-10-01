@@ -38,9 +38,9 @@ This is rule-based recognition, not a claim that arbitrary first-party sponsored
 
 ## Comparison
 
-`compare` replays the capture's exact supported policy on the live source before text, image, typography and geometry observations. It records reference-side removals in `compare/cleanup-evidence.json` and logs the removal count. Retained-content checks remain active; there is no rectangular mask or tolerance exemption for arbitrary missing content.
+Default `compare` uses the cleaned, frozen capture-session source observations and their cleanup audit, without revisiting the source. `compare --stage drift` replays the capture's exact supported policy on the live source before text, image, typography and geometry observations. Drift records reference-side removals in `compare/cleanup-evidence.json` and logs the removal count. Retained-content checks remain active; there is no rectangular mask or tolerance exemption for arbitrary missing content.
 
-The candidate is also audited: a matching ad or source credit remaining in the liberated artifact fails comparison. An interrupted/failed comparison writes `completed: false` cleanup evidence instead of leaving a previous successful report looking current.
+The candidate is also audited: a matching ad or source credit remaining in the liberated artifact fails comparison. An interrupted/failed drift comparison writes `completed: false` cleanup evidence instead of leaving a previous successful report looking current. Frozen stages report pending evidence and findings in `compare/<stage>/report.json`.
 
 An incomplete recorded cleanup or unsupported policy fails explicitly. Older captures without a policy are compared against the original unnormalized source and identified as legacy in the log; recapture to use cleanup-aware comparison.
 

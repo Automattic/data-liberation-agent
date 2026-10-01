@@ -7,6 +7,7 @@ import type { AddressInfo } from 'node:net';
 import { chromium, type Browser } from 'playwright';
 import { assessBody, expandCollapsedContent, hydrateDisclosureContent, waitForAppWidgets, readPngHeight, classifyEmptyBodies, KNOWN_WIDGETS, type PageStat } from './dynamic-content.js';
 import { extractFaqsFromHtml } from '../replicate/faq-extract.js';
+import { wireCapturedDialogs } from '../static-dialogs.js';
 
 // Fictional content only (no source-site data).
 const wrap = (bodyInner: string) =>
@@ -278,6 +279,53 @@ describe('interaction + wait helpers (Phase 1/2, browser)', () => {
 
     expect(await page.evaluate(() => (window as unknown as { submissions: number }).submissions)).toBe(0);
     expect(await page.locator('#more').isVisible()).toBe(true);
+    await page.close();
+  });
+
+  it('hydrates locally mounted disclosure answers without IDs or panel associations', async () => {
+    const page = await browser.newPage();
+    await page.setContent(`
+      <section>${['First', 'Second', 'Third'].map(label => `<article><button type="button" aria-expanded="false">${label} question</button></article>`).join('')}</section>
+      <button type="button" aria-expanded="false" aria-haspopup="dialog">Open dialog</button>
+      <script>
+        document.querySelectorAll('article button').forEach(button => button.onclick = () => {
+          const opening = button.getAttribute('aria-expanded') === 'false';
+          document.querySelectorAll('article').forEach(item => {
+            item.querySelector('button').setAttribute('aria-expanded', 'false');
+            item.querySelector('div')?.remove();
+          });
+          if (opening) {
+            button.setAttribute('aria-expanded', 'true');
+            const panel = document.createElement('div');
+            panel.innerHTML = '<p>' + button.textContent.replace('question', 'lazy answer') + '</p>';
+            button.after(panel);
+          }
+        });
+      </script>`);
+    const records = await hydrateDisclosureContent(page);
+    expect(records).toHaveLength(3);
+    expect(records.every(record => record.status === 'captured')).toBe(true);
+    expect(await page.locator('article').allTextContents()).toEqual([
+      'First questionFirst lazy answer', 'Second questionSecond lazy answer', 'Third questionThird lazy answer',
+    ]);
+    expect(await page.locator('article button[aria-expanded="false"]').count()).toBe(3);
+    expect(await page.locator('article [hidden]').count()).toBe(3);
+    for (const record of records) {
+      expect(record.trigger.ariaControls).toBeTruthy();
+      expect(record.dialog?.html).toContain('lazy answer');
+    }
+    const offline = wireCapturedDialogs((await page.content()).replace(/<script>[\s\S]*?<\/script>/g, ''), records);
+    for (const width of [390, 768, 1440]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.setContent(offline);
+      await page.locator('article button').nth(0).click();
+      expect(await page.locator('article [role="region"]').nth(0).isVisible()).toBe(true);
+      await page.locator('article button').nth(1).click();
+      expect(await page.locator('article [role="region"]').nth(0).isVisible()).toBe(false);
+      expect(await page.locator('article [role="region"]').nth(1).isVisible()).toBe(true);
+      await page.locator('article button').nth(1).click();
+      expect(await page.locator('article [role="region"]').nth(1).isVisible()).toBe(false);
+    }
     await page.close();
   });
 
@@ -569,7 +617,7 @@ describe('expandCollapsedContent vs. a client-routed SPA (Home/Browse regression
   let baseUrl: string;
   beforeAll(async () => {
     browser = await chromium.launch();
-    server = createServer((_req, res) => res.end('<!doctype html><html><body></body></html>'));
+    server = createServer((req, res) => res.end(req.url === '/details' ? fullNavigationFixture : '<!doctype html><html><body></body></html>'));
     await new Promise<void>((resolve) => server.listen(0, resolve));
     baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   });
@@ -582,6 +630,21 @@ describe('expandCollapsedContent vs. a client-routed SPA (Home/Browse regression
   // React Router) wires itself up: it patches `history.pushState` so ANY
   // caller triggers its render — not only its own `navigate()` — which is
   // exactly the mechanism `expandCollapsedContent`'s revert relies on.
+  // A plain type=button whose handler loads another route as a new document
+  // (location.assign), the way a site builder's "See all" link-out is wired.
+  const fullNavigationFixture = `<!doctype html><html><body>
+    <button id="see-all" type="button">See all</button>
+    <button id="toggle" aria-expanded="false" aria-controls="more">Details</button>
+    <div id="more" hidden>More.</div>
+    <script>
+      document.getElementById('see-all').addEventListener('click', () => { location.assign('/schedule'); });
+      document.getElementById('toggle').addEventListener('click', (event) => {
+        event.currentTarget.setAttribute('aria-expanded', 'true');
+        document.getElementById('more').hidden = false;
+      });
+    </script>
+  </body></html>`;
+
   const spaFixture = `
     <div id="root"></div>
     <button id="faq-trigger" aria-expanded="false" aria-controls="faq-answer">Question?</button>
@@ -622,6 +685,27 @@ describe('expandCollapsedContent vs. a client-routed SPA (Home/Browse regression
     expect(await page.evaluate(() => location.pathname)).toBe('/Home');
     expect(await page.locator('#root').innerText()).toContain('Pre-made Logos, Community Approved');
     expect(await page.locator('#root').innerText()).not.toContain('Browse Logos');
+    await page.close();
+  });
+
+  it('keeps a "See all" button that loads another document from taking the capture off its route', async () => {
+    const page = await browser.newPage();
+    const navigations: string[] = [];
+    page.on('framenavigated', (frame) => { if (frame === page.mainFrame()) navigations.push(frame.url()); });
+    await page.goto(`${baseUrl}/details`);
+    await page.evaluate(() => { (window as unknown as { marker: boolean }).marker = true; });
+
+    await expandCollapsedContent(page);
+    // A committed navigation lands asynchronously; give one the time to.
+    await page.waitForTimeout(300);
+
+    // The click must not have committed a full-document navigation: the same
+    // document (its in-memory marker intact) is still on the original route.
+    expect(navigations).toEqual([`${baseUrl}/details`]);
+    expect(page.url()).toBe(`${baseUrl}/details`);
+    expect(await page.evaluate(() => (window as unknown as { marker?: boolean }).marker)).toBe(true);
+    // Probing still ran around it: the in-page disclosure opened.
+    expect(await page.locator('#more').isVisible()).toBe(true);
     await page.close();
   });
 
