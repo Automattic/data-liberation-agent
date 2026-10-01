@@ -82,6 +82,7 @@ Naming an unknown target lists the registered ones.
 | GoDaddy Websites & Marketing | Ready |
 | Hostinger Website Builder | Ready |
 | HubSpot | Ready |
+| Next.js | Generic discovery + framework route-announcer cleanup |
 | Shopify | Ready |
 | Squarespace | Ready |
 | Substack | Ready |

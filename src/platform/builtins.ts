@@ -13,6 +13,7 @@ import type { Platform } from './types.js';
 import { registerPlatform } from './registry.js';
 import { registerHost } from './host.js';
 import { netlifyHost } from '../hosts/netlify.js';
+import { nextjsAdapter } from '../adapters/nextjs/index.js';
 import { defaultAdapter } from '../adapters/default/index.js';
 import { emdashAdapter } from '../adapters/emdash/index.js';
 import { godaddyWmAdapter } from '../adapters/godaddy-wm/index.js';
@@ -33,10 +34,10 @@ registerPlatform( defaultAdapter, { fallback: true } );
 
 // Registration order is deterministic and doubles as the cross-platform
 // tiebreak order if several platforms' signals ever matched the same response
-// (the last matching platform wins). Built-in signals are fingerprints of
-// disjoint platform infrastructure, so in practice this only matters when
-// consumer-registered platforms deliberately share signals.
+// (the last matching platform wins). Frameworks register before more specific
+// platforms, which may themselves use that framework's infrastructure.
 const builtins: Platform[] = [
+	nextjsAdapter,
 	emdashAdapter,
 	godaddyWmAdapter,
 	hostingerAdapter,
