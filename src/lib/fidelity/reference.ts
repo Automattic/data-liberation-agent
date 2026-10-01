@@ -6,6 +6,7 @@ import { PNG } from 'pngjs';
 import { observePage, routeSourceMap } from './check.js';
 import { readSourceCleanup, type CleanupReport } from '../source-cleanup.js';
 import type { LayoutObservation } from './score.js';
+import { isRouteDrift } from '../screenshot/document-integrity.js';
 
 export const REFERENCE_WIDTHS = [ 390, 768, 1440 ];
 export type FidelityStage = 'capture' | 'materialization' | 'drift';
@@ -72,7 +73,9 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 						const cleanup = await readSourceCleanup( page );
 						entry.readiness.cleanup = cleanup;
 						if ( cleanup.failures.length || cleanup.residual ) entry.readiness.reasons.push( 'source cleanup incomplete' );
-						if ( page.url().replace( /\/$/, '' ) !== url.replace( /\/$/, '' ) ) entry.readiness.reasons.push( 'source route drift' );
+						// Freeze the same route identity capture accepts: query/hash
+						// renditions do not become different origin/path documents.
+						if ( isRouteDrift( page.url(), url ) ) entry.readiness.reasons.push( 'source route drift' );
 						const mediaReady = await page.evaluate( () => [ ...document.images ].every( image => {
 							const rect = image.getBoundingClientRect();
 							return rect.width <= 50 || rect.height <= 50 || ( image.complete && image.naturalWidth > 0 );

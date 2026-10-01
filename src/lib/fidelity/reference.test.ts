@@ -14,6 +14,28 @@ import { waitForFonts } from '../screenshot/page-helpers.js';
 import { squareFont } from './font-fixture.js';
 
 describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chromium.executablePath() ) )( 'capture-session reference replay', () => {
+	it( 'uses capture route identity for query/hash renditions while refusing path drift', async () => {
+		const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
+		const directory = mkdtempSync( join( parent, 'reference-route-identity-' ) );
+		const browser = await chromium.launch();
+		const page = await browser.newPage();
+		const url = 'http://fixture.invalid/article/';
+		try {
+			for ( const [ destination, drift ] of [ [ '/article/?view=phone#content', false ], [ '/different/', true ] ] as const ) {
+				await page.route( 'http://fixture.invalid/**', route => route.fulfill( { contentType: 'text/html', body:
+					`<main id="content"><h1>Article</h1></main><script>history.replaceState(null,'',${ JSON.stringify( destination ) });</script>` } ) );
+				await page.goto( url );
+				await applySourceCleanup( page, cleanupPolicy() );
+				const collector = createReferenceCollector( directory, url, [ url ] );
+				await collector.observe( page, url, 'mobile' );
+				const receipt = join( directory, 'receipt.json' ); writeFileSync( receipt, JSON.stringify( { routes: [] } ) );
+				const manifest = JSON.parse( readFileSync( collector.finalize( receipt ), 'utf8' ) ) as FidelityReference;
+				expect( manifest.entries[ 0 ]!.readiness.reasons.includes( 'source route drift' ) ).toBe( drift );
+				if ( ! drift ) expect( manifest.entries[ 0 ]!.readiness.ready, manifest.entries[ 0 ]!.readiness.reasons.join( ', ' ) ).toBe( true );
+				await page.unroute( 'http://fixture.invalid/**' );
+			}
+		} finally { await browser.close(); rmSync( directory, { recursive: true, force: true } ); }
+	}, 30_000 );
 	it( 'settles unused local fallback stacks at each frozen viewport', async () => {
 		const parent = join(process.cwd(), '.tmp-test'); mkdirSync(parent, { recursive: true });
 		const directory = mkdtempSync(join(parent, 'reference-fonts-'));
