@@ -22,6 +22,14 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			expect(observation.textChars).toBe('Neutral baseline question'.length);
 		} finally { await browser.close(); }
 	}, 30_000);
+	it( 'counts painted labels without a zero-font decorative glyph, retaining visible plus signs', async () => {
+		const browser = await chromium.launch(); const page = await browser.newPage();
+		try {
+			await page.setContent('<p>Visible + sum</p><button>Neutral + question<span aria-hidden="true" style="font-size:0;display:inline-block;width:18px;height:18px;background:blue">+</span></button>');
+			const observation = await observePage(page, 'http://fixture.invalid/', 390, 0, null, undefined, undefined, true);
+			expect(observation.textChars).toBe('Visible + sum Neutral + question'.length);
+		} finally { await browser.close(); }
+	}, 30_000);
 	it( 'freezes a mutating neutral source, attributes geometry to each stage, and refuses incomplete evidence', async () => {
 		const parent = join( process.cwd(), '.tmp-test' );
 		mkdirSync( parent, { recursive: true } );

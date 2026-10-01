@@ -637,6 +637,25 @@ export async function observePage(
 				const prefix = bodyText.trimStart();
 				if ( label && prefix.startsWith( label ) && /^\s/.test( prefix.slice( label.length ) ) ) bodyText = prefix.slice( label.length );
 			}
+			// A native decorative glyph may be replaced visually by source SVG
+			// artwork while its save-valid text remains in the DOM at font-size:0.
+			// innerText counts that unpainted text. Remove only a zero-font, leaf,
+			// explicitly decorative fragment at its actual position in its parent;
+			// identical visible symbols in an editorial label remain counted.
+			const normalized = (value: string) => value.replace(/\s+/g, ' ').trim();
+			bodyText = normalized(bodyText);
+			for (const element of document.querySelectorAll<HTMLElement>('[aria-hidden="true"]')) {
+				if (element.childElementCount || getComputedStyle(element).fontSize !== '0px') continue;
+				const parent = element.parentElement, label = normalized(element.innerText);
+				if (!parent || !label || !parent.getBoundingClientRect().height) continue;
+				const context = normalized(parent.innerText);
+				const range = document.createRange(); range.selectNodeContents(parent); range.setEndBefore(element);
+				const prefix = normalized(range.toString());
+				if (prefix && !context.startsWith(prefix)) continue;
+				const offset = context.indexOf(label, prefix.length);
+				if (offset < 0) continue;
+				bodyText = bodyText.replace(context, normalized(context.slice(0, offset) + context.slice(offset + label.length)));
+			}
 			const textChars = bodyText.replace( /\s+/g, ' ' ).trim().length;
 			if ( clickUnresolved ) {
 				const original = { x: scrollX, y: scrollY };
