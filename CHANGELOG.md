@@ -15,6 +15,19 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.13.0] - 2026-10-01
+
+### Added
+- render a portable homepage preview
+
+### Changed
+- regenerate plugin bundles
+- stop lazy sweeps at the reachable scroll bottom
+
+### Fixed
+- disambiguate authored responsive fragment targets
+- preserve resting disclosures and painted text
+
 ## [0.12.0] - 2026-09-30
 
 ### Added
