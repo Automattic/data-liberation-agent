@@ -224,6 +224,27 @@ describe('triggerLazyLoad', () => {
     await page.close();
   });
 
+  it('stops scroll preparation at the reachable viewport bottom without overscroll waits', async () => {
+    const page = await browser.newPage({ viewport: { width: 800, height: 900 } });
+    try {
+      await page.setContent('<style>body{margin:0}</style><main style="height:2100px">Content</main>');
+      await page.evaluate(() => {
+        const original = window.scrollTo.bind(window);
+        (window as unknown as { overshoots: number }).overshoots = 0;
+        window.scrollTo = ((options: ScrollToOptions) => {
+          if ((options.top ?? 0) > Math.max(0, document.documentElement.scrollHeight - innerHeight))
+            (window as unknown as { overshoots: number }).overshoots++;
+          original(options);
+        }) as typeof window.scrollTo;
+      });
+      await triggerLazyLoad(page);
+      expect(await page.evaluate(() => (window as unknown as { overshoots: number }).overshoots)).toBe(0);
+      expect(await page.evaluate(() => scrollY)).toBe(0);
+    } finally {
+      await page.close();
+    }
+  });
+
   // Regression coverage for the stale-`total` scroll-reveal bug: a document
   // whose height grows as it is scrolled (lazy images, an IntersectionObserver
   // reveal that adds an "in" class) must have every element revealed, the same
