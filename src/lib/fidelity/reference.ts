@@ -12,6 +12,7 @@ export const REFERENCE_WIDTHS = [ 390, 768, 1440 ];
 export type FidelityStage = 'capture' | 'materialization' | 'drift';
 export interface ReferenceArtifact { path: string; sha256: string }
 export interface ReferenceEntry {
+	deviceScaleFactor?: number;
 	/** Assigned from the exported receipt; absent when no portable route was retained. */
 	route?: string;
 	sourceUrl: string;
@@ -69,6 +70,7 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 					try {
 						await page.setViewportSize( { width: viewport, height: 900 } );
 						entry.userAgent = await page.evaluate( () => navigator.userAgent );
+						entry.deviceScaleFactor = await page.evaluate( () => window.devicePixelRatio );
 						const observation = await observePage( page, url, viewport, 800, null, undefined, undefined, true );
 						const cleanup = await readSourceCleanup( page );
 						entry.readiness.cleanup = cleanup;
