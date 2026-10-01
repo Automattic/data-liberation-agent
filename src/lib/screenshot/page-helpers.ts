@@ -151,17 +151,51 @@ export async function waitForDomQuiescence(
 }
 
 /**
- * Wait for web fonts to finish loading (or fail) so FOIT resolves before a
- * screenshot. Best-effort and timeout-bounded: a webfont that never settles
- * (or a hostile/blocked CDN) must not hang or fail the capture.
+ * Settle the declared stacks of painted text, not only the faces layout chose.
+ * fonts.ready alone leaves unused @font-face fallbacks unloaded, while the
+ * observation's fonts.check asks about the whole computed stack. Explicitly
+ * load those stacks so a usable local fallback is not mistaken for a failure.
+ * Re-read computed styles on every call (including after viewport changes).
+ * Failed/pending faces remain detectable by fonts.check; this best-effort wait
+ * does not decide readiness or let a blocked font hang capture.
  */
 export async function waitForFonts(page: Page, timeoutMs: number = 4_000): Promise<void> {
   try {
     await withEvaluateTimeout(
-      // document.fonts.ready resolves once every in-use @font-face has loaded or
-      // errored; map to a serializable value so playwright can return it.
-      page.evaluate(() => document.fonts.ready.then(() => true)),
-      timeoutMs,
+      page.evaluate(async (budget) => {
+        const deadline = Date.now() + budget;
+        const stacks = new Map<string, Set<string>>();
+        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+        let node: Node | null;
+        while (Date.now() < deadline && (node = walker.nextNode())) {
+          const parent = node.parentElement;
+          const text = node.textContent?.replace(/\s+/g, ' ').trim();
+          if (!parent || !text || parent.closest('script,style,noscript,template')) continue;
+          const range = document.createRange();
+          range.selectNodeContents(node);
+          const rect = range.getBoundingClientRect();
+          const style = getComputedStyle(parent);
+          if (rect.width <= 0 || rect.height <= 0 || style.display === 'none' || style.visibility === 'hidden') continue;
+          const font = `${style.fontStyle} ${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+          const characters = stacks.get(font) ?? new Set<string>();
+          for (const character of text) characters.add(character);
+          stacks.set(font, characters);
+        }
+        // One load per stack with all observed codepoints preserves unicode-range
+        // matching without issuing a separate load for every repeated text node.
+        const loading = Promise.all([...stacks].map(([font, characters]) =>
+          document.fonts.load(font, [...characters].join('')).catch(() => undefined)
+        )).then(() => document.fonts.ready);
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          await Promise.race([
+            loading,
+            new Promise<void>(resolve => { timer = setTimeout(resolve, Math.max(0, deadline - Date.now())); }),
+          ]);
+        } finally { clearTimeout(timer); }
+        return true;
+      }, timeoutMs),
+      timeoutMs + 1_000,
     );
   } catch {
     /* best-effort — never block capture on a slow/blocked webfont */
@@ -416,6 +450,9 @@ export async function triggerLazyLoad(page: Page, requireNetworkIdle: boolean = 
     // to kick the transition off, then wait for that transition to finish.
     await new Promise((r) => setTimeout(r, 400));
     await waitForAnimations(page);
+    // Scrolling, restored headers and newly revealed content can introduce font
+    // stacks after the initial stable wait. Settle before observation/screenshot.
+    await waitForFonts(page);
   } catch {
     /* if the page crashes or blocks our script, don't fail the capture */
   }
