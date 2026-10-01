@@ -447,9 +447,25 @@ export async function capturePageHtml( page: Page ): Promise< string > {
 				restoredImages.push( { image, previous: image.getAttribute( 'src' ) } );
 				image.setAttribute( 'src', next );
 			}
+			// outerHTML concatenates adjacent Text nodes. Re-parsing that string
+			// coalesces source shaping runs, which can change subpixel advances and
+			// painted glyphs even when the text and element boxes are identical.
+			// Empty comments preserve those parser boundaries without adding an
+			// element, a character, or CSS. Raw-text/RCDATA elements cannot use them.
+			const textBoundaries: Comment[] = [];
+			for ( const element of document.querySelectorAll( '*' ) ) {
+				if ( /^(?:script|style|textarea|title|xmp|iframe|noembed|noframes|noscript|plaintext)$/i.test( element.localName ) ) continue;
+				for ( const node of Array.from( element.childNodes ) ) {
+					if ( node.nodeType !== Node.TEXT_NODE || node.nextSibling?.nodeType !== Node.TEXT_NODE ) continue;
+					const boundary = document.createComment( '' );
+					element.insertBefore( boundary, node.nextSibling );
+					textBoundaries.push( boundary );
+				}
+			}
 			try {
 				return `<!DOCTYPE html>${ document.documentElement.outerHTML }`;
 			} finally {
+				for ( const boundary of textBoundaries ) boundary.remove();
 				for ( const { image, previous } of restoredImages.reverse() ) {
 					if ( previous === null ) image.removeAttribute( 'src' );
 					else image.setAttribute( 'src', previous );
