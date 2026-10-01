@@ -217,7 +217,9 @@ describe( 'consumer-defined platform (public Platform API)', () => {
 		const reference = JSON.parse( readFileSync( join( root, 'fidelity-reference.json' ), 'utf8' ) );
 		expect( reference.sourceUrl ).toBe( sourceUrl );
 		expect( reference.scope.sourceUrls ).toEqual( [ sourceUrl, new URL( 'pricing', sourceUrl ).href ] );
-		expect( reference.capture.map( ( artifact: { path: string } ) => artifact.path ).sort() ).toEqual( [
+		// This fixture verifies discovered page coverage. The portable preview is
+		// best-effort with the mocked browser and has its own real-browser test.
+		expect( reference.capture.map( ( artifact: { path: string } ) => artifact.path ).filter( ( path: string ) => path.endsWith( '.html' ) ).sort() ).toEqual( [
 			'website/index.html', 'website/pricing/index.html',
 		] );
 		// The browser mock contributes no source observations; files alone do

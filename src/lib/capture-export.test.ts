@@ -461,6 +461,40 @@ describe( 'exportWebsiteCapture', () => {
 		expect( $( '.data-liberation-desktop-document a' ).first().attr( 'href' ) ).toBe( '/index.html#services' );
 	} );
 
+	it( 'keeps ordinary responsive fragment targets unique with author CSS and ARIA associations', async () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-authored-responsive-anchor-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] ) mkdirSync( join( outputDir, path ), { recursive: true } );
+		const css = '<style>body{margin:0}#main{padding-top:700px;color:rgb(11,22,33)}#main p{height:600px}</style>';
+		writeFileSync( join( outputDir, 'html', 'homepage.html' ), `<html><head>${ css }</head><body><a href="#main" aria-controls="main">Skip</a><main id="main"><p>Desktop article</p></main></body></html>` );
+		writeFileSync( join( outputDir, 'html-mobile', 'homepage.html' ), `<html><head>${ css }</head><body><a href="#main" aria-controls="main">Skip</a><main id="main"><section><p>Phone article</p></section></main></body></html>` );
+		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( { version: 1, entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } } } ) );
+		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'default', summary: {}, failures: [] } );
+		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
+		const $ = cheerio.load( html );
+		expect( $( '#main' ) ).toHaveLength( 1 );
+		expect( $( '#main--dla-mobile' ) ).toHaveLength( 1 );
+		expect( $( '.data-liberation-mobile-document a' ).attr( 'aria-controls' ) ).toBe( 'main--dla-mobile' );
+		expect( checkSelfConsistency( join( outputDir, 'website' ), new Map( [ [ '/', 'index.html' ] ] ) ).findings ).toEqual( [] );
+		const browser = await chromium.launch();
+		const server = await startStaticServer( join( outputDir, 'website' ) );
+		try {
+			for ( const width of [ 390, 768, 1440 ] ) {
+				const page = await browser.newPage( { viewport: { width, height: 900 } } );
+				await page.goto( server.url );
+				await page.getByRole( 'link', { name: 'Skip' } ).click();
+				const target = width < 768 ? '#main--dla-mobile' : '#main';
+				expect( await page.locator( target ).evaluate( el => getComputedStyle( el ).color ) ).toBe( 'rgb(11, 22, 33)' );
+				expect( await page.locator( target ).evaluate( el => getComputedStyle( el ).paddingTop ) ).toBe( '700px' );
+				expect( new URL( page.url() ).hash ).toBe( target );
+				await page.close();
+			}
+		} finally {
+			await server.close();
+			await browser.close();
+		}
+	}, 30_000 );
+
 	it( 'keeps responsive runtime anchor targets unique and diagnoses unresolved fragments', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-responsive-anchor-export-' ) );
 		dirs.push( outputDir );

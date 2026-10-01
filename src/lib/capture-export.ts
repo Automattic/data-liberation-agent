@@ -1704,13 +1704,14 @@ function routePhoneDocumentFragments( html: string, documentPath: string ): stri
 		if ( fragment && sourceId ) sourceIds.set( fragment, sourceId );
 	} );
 	let changed = false;
+	const renamed = new Map< string, string >();
 	mobile.find( 'a[href]' ).each( ( _index, element ) => {
 		const link = $( element );
 		const href = link.attr( 'href' ) ?? '';
 		const hash = href.indexOf( '#' );
 		if ( hash < 0 ) return;
 		const path = href.slice( 0, hash );
-		if ( path !== '' && path !== documentPath ) return;
+		if ( path !== '' && path.split( '?' )[ 0 ] !== documentPath ) return;
 		let fragment: string;
 		try {
 			fragment = decodeURIComponent( href.slice( hash + 1 ) );
@@ -1720,18 +1721,55 @@ function routePhoneDocumentFragments( html: string, documentPath: string ): stri
 		if ( ! fragment || fragment.endsWith( '--dla-mobile' ) ) return;
 		const phoneId = `${ fragment }--dla-mobile`;
 		if ( mobile.find( '[id]' ).filter( ( _i, candidate ) => $( candidate ).attr( 'id' ) === phoneId ).length === 0 ) {
+			// Ordinary authored fragments have no adapter marker. Their mobile
+			// target still carries the original id and collides with the desktop
+			// copy; preserve its associations when assigning the phone identity.
+			const authored = mobile.find( '[id]' ).filter( ( _i, candidate ) => $( candidate ).attr( 'id' ) === fragment );
+			if ( authored.length === 1 ) {
+				authored.attr( 'id', phoneId );
+				renamed.set( fragment, phoneId );
+				changed = true;
+			}
 			const sourceId = sourceIds.get( fragment );
-			const counterpart = sourceId
+			const counterpart = authored.length === 1 ? authored : sourceId
 				? mobile.find( '[id]' ).filter( ( _i, candidate ) => $( candidate ).attr( 'id' ) === sourceId )
 				: $();
 			if ( counterpart.length !== 1 ) return;
-			counterpart.before(
+			if ( authored.length !== 1 ) counterpart.before(
 				`<span id="${ escapeHtmlAttr( phoneId ) }" data-dla-anchor-target="${ escapeHtmlAttr( fragment ) }" aria-hidden="true"></span>`
 			);
 		}
 		link.attr( 'href', `${ path }#${ encodeURIComponent( fragment ) }--dla-mobile` );
 		changed = true;
 	} );
+	if ( renamed.size > 0 ) {
+		mobile.find( '*' ).each( ( _index, element ) => {
+			const node = $( element );
+			for ( const attribute of ID_REFERENCE_ATTRIBUTES ) {
+				const value = node.attr( attribute );
+				if ( value !== undefined ) node.attr( attribute, value.split( /\s+/ ).map( token => renamed.get( token ) ?? token ).join( ' ' ) );
+			}
+		} );
+		$( 'style' ).each( ( _index, element ) => {
+			const node = $( element );
+			const css = postcss.parse( node.html() ?? '' );
+			css.walkRules( rule => {
+				const selectors = selectorParser().astSync( rule.selector );
+				const ids: selectorParser.Identifier[] = [];
+				selectors.walkIds( id => { if ( renamed.has( id.value ) ) ids.push( id ); } );
+				for ( const id of ids ) {
+					const phone = id.clone();
+					phone.value = renamed.get( id.value )!;
+					id.replaceWith( selectorParser.pseudo( { value: ':is', nodes: [
+						selectorParser.selector( { value: '', nodes: [ id.clone() ] } ),
+						selectorParser.selector( { value: '', nodes: [ phone ] } ),
+					] } ) );
+				}
+				rule.selector = selectors.toString();
+			} );
+			node.html( css.toString() );
+		} );
+	}
 	return changed ? $.html() : html;
 }
 
