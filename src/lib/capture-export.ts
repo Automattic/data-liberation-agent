@@ -1696,7 +1696,32 @@ function markResponsiveCounterparts(
  * phone width. Point each same-page fragment link inside the phone document at
  * the phone copy of the section the desktop target resolved to.
  */
-function routePhoneDocumentFragments( html: string, documentPath: string ): string {
+const RESPONSIVE_FRAGMENT_RUNTIME = `(function(){
+function resolve(){var fragment;try{fragment=decodeURIComponent(location.hash.slice(1));}catch(_){return;}
+var targets=Array.prototype.filter.call(document.querySelectorAll('[data-dla-responsive-fragment]'),function(el){return el.getAttribute('data-dla-responsive-fragment')===fragment&&el.getClientRects().length;});
+if(targets.length===1)targets[0].scrollIntoView();}
+function schedule(){requestAnimationFrame(resolve);}
+window.addEventListener('hashchange',schedule);
+document.addEventListener('click',function(event){var link=event.target.closest&&event.target.closest('a[href]');if(!link)return;var url;try{url=new URL(link.href);}catch(_){return;}if(url.origin===location.origin&&url.pathname===location.pathname&&url.hash)schedule();});
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',schedule);else schedule();
+})();`;
+
+function projectResponsiveIdentityCss( source: string, renamed: ReadonlyMap<string,string>, namedAliases: boolean ): string {
+	const css = postcss.parse( source );
+	css.walkRules( rule => {
+		const selectors = selectorParser().astSync( rule.selector );
+		const replacements: Array<{ node: selectorParser.Identifier | selectorParser.Attribute; alias: selectorParser.Identifier | selectorParser.Attribute }> = [];
+		selectors.walkIds( id => { const value = renamed.get( id.value ); if ( value ) { const alias = id.clone(); alias.value = value; replacements.push( { node: id, alias } ); } } );
+		if ( namedAliases ) selectors.walkAttributes( attribute => { if ( attribute.attribute === 'name' ) { const alias = attribute.clone(); alias.attribute = 'data-dla-anchor-alias'; replacements.push( { node: attribute, alias } ); } } );
+		for ( const { node, alias } of replacements ) node.replaceWith( selectorParser.pseudo( { value: ':is', nodes: [
+			selectorParser.selector( { value: '', nodes: [ node.clone() ] } ), selectorParser.selector( { value: '', nodes: [ alias ] } ),
+		] } ) );
+		rule.selector = selectors.toString();
+	} );
+	return css.toString();
+}
+
+function routePhoneDocumentFragments( html: string, documentPath: string, identities?: { ids: Map<string,string>; namedAliases: boolean } ): string {
 	if ( ! html.includes( MOBILE_DOCUMENT_CLASS ) ) return html;
 	const $ = cheerio.load( html );
 	const mobile = $( `.${ MOBILE_DOCUMENT_CLASS }` ).first();
@@ -1709,20 +1734,19 @@ function routePhoneDocumentFragments( html: string, documentPath: string ): stri
 	} );
 	let changed = false;
 	const renamed = new Map< string, string >();
-	mobile.find( 'a[href]' ).each( ( _index, element ) => {
-		const link = $( element );
-		const href = link.attr( 'href' ) ?? '';
-		const hash = href.indexOf( '#' );
-		if ( hash < 0 ) return;
-		const path = href.slice( 0, hash );
-		if ( path !== '' && path.split( '?' )[ 0 ] !== documentPath ) return;
-		let fragment: string;
-		try {
-			fragment = decodeURIComponent( href.slice( hash + 1 ) );
-		} catch {
-			return;
-		}
-		if ( ! fragment || fragment.endsWith( '--dla-mobile' ) ) return;
+	const aliases = new Set< string >();
+	// A legacy named anchor inside its identically named id target is an alias,
+	// not another destination. Keep its styling token without duplicating the
+	// native fragment identity; browsers already prefer the ancestor's id.
+	$( 'a[name]' ).each( ( _index, element ) => {
+		const node = $( element );
+		const name = node.attr( 'name' )!;
+		if ( ! name || node.parents( '[id]' ).filter( ( _i, parent ) => $( parent ).attr( 'id' ) === name ).length === 0 ) return;
+		node.attr( 'data-dla-anchor-alias', name ).removeAttr( 'name' );
+		aliases.add( name );
+		changed = true;
+	} );
+	const phoneTarget = ( fragment: string ): boolean => {
 		const phoneId = `${ fragment }--dla-mobile`;
 		if ( mobile.find( '[id]' ).filter( ( _i, candidate ) => $( candidate ).attr( 'id' ) === phoneId ).length === 0 ) {
 			// Ordinary authored fragments have no adapter marker. Their mobile
@@ -1738,15 +1762,36 @@ function routePhoneDocumentFragments( html: string, documentPath: string ): stri
 			const counterpart = authored.length === 1 ? authored : sourceId
 				? mobile.find( '[id]' ).filter( ( _i, candidate ) => $( candidate ).attr( 'id' ) === sourceId )
 				: $();
-			if ( counterpart.length !== 1 ) return;
+			if ( counterpart.length !== 1 ) return false;
 			if ( authored.length !== 1 ) counterpart.before(
 				`<span id="${ escapeHtmlAttr( phoneId ) }" data-dla-anchor-target="${ escapeHtmlAttr( fragment ) }" aria-hidden="true"></span>`
 			);
 		}
+		return true;
+	};
+	let responsiveAliases = false;
+	for ( const fragment of aliases ) {
+		const desktopTarget = $( `.${ DESKTOP_DOCUMENT_CLASS } [id]` ).filter( ( _i, element ) => $( element ).attr( 'id' ) === fragment );
+		const mobileTarget = mobile.find( '[id]' ).filter( ( _i, element ) => $( element ).attr( 'id' ) === fragment );
+		if ( desktopTarget.length !== 1 || mobileTarget.length !== 1 || ! phoneTarget( fragment ) ) continue;
+		desktopTarget.attr( 'data-dla-responsive-fragment', fragment );
+		mobileTarget.attr( 'data-dla-responsive-fragment', fragment );
+		responsiveAliases = true;
+	}
+	mobile.find( 'a[href]' ).each( ( _index, element ) => {
+		const link = $( element );
+		const href = link.attr( 'href' ) ?? '';
+		const hash = href.indexOf( '#' );
+		if ( hash < 0 ) return;
+		const path = href.slice( 0, hash );
+		if ( path !== '' && path.split( '?' )[ 0 ] !== documentPath ) return;
+		let fragment: string;
+		try { fragment = decodeURIComponent( href.slice( hash + 1 ) ); } catch { return; }
+		if ( ! fragment || fragment.endsWith( '--dla-mobile' ) || ! phoneTarget( fragment ) ) return;
 		link.attr( 'href', `${ path }#${ encodeURIComponent( fragment ) }--dla-mobile` );
 		changed = true;
 	} );
-	if ( renamed.size > 0 ) {
+	if ( renamed.size > 0 || aliases.size > 0 ) {
 		mobile.find( '*' ).each( ( _index, element ) => {
 			const node = $( element );
 			for ( const attribute of ID_REFERENCE_ATTRIBUTES ) {
@@ -1756,24 +1801,11 @@ function routePhoneDocumentFragments( html: string, documentPath: string ): stri
 		} );
 		$( 'style' ).each( ( _index, element ) => {
 			const node = $( element );
-			const css = postcss.parse( node.html() ?? '' );
-			css.walkRules( rule => {
-				const selectors = selectorParser().astSync( rule.selector );
-				const ids: selectorParser.Identifier[] = [];
-				selectors.walkIds( id => { if ( renamed.has( id.value ) ) ids.push( id ); } );
-				for ( const id of ids ) {
-					const phone = id.clone();
-					phone.value = renamed.get( id.value )!;
-					id.replaceWith( selectorParser.pseudo( { value: ':is', nodes: [
-						selectorParser.selector( { value: '', nodes: [ id.clone() ] } ),
-						selectorParser.selector( { value: '', nodes: [ phone ] } ),
-					] } ) );
-				}
-				rule.selector = selectors.toString();
-			} );
-			node.html( css.toString() );
+			node.html( projectResponsiveIdentityCss( node.html() ?? '', renamed, aliases.size > 0 ) );
 		} );
+		if ( identities ) { for ( const [ key, value ] of renamed ) identities.ids.set( key, value ); identities.namedAliases ||= aliases.size > 0; }
 	}
+	if ( responsiveAliases ) $( 'body' ).append( `<script data-dla-responsive-fragments>${ RESPONSIVE_FRAGMENT_RUNTIME }</script>` );
 	return changed ? $.html() : html;
 }
 
@@ -3984,6 +4016,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		portableRouteLinks.has( normalizedUrl( route.url ) ) &&
 		routeDestinations.get( JSON.stringify( [ route.siblings, route.label ] ) )?.size === 1
 	);
+	const responsiveIdentities = { ids: new Map<string,string>(), namedAliases: false };
 	for ( const entry of retainedEntries ) {
 		const { url, htmlPath } = entry;
 		const routePath = routePathOf( url );
@@ -4020,7 +4053,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 				portableRouteLinks,
 				{ documentPath: `/${ routePath }`, servedPaths: portableServedPaths }
 			),
-			`/${ routePath }`
+			`/${ routePath }`, responsiveIdentities
 		);
 		unresolvedAnchors.push(
 			...unresolvedCapturedAnchors( normalizedHtml, url, `/${ routePath }` )
@@ -4030,6 +4063,22 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		writeFileSync( entry.identityHtmlPath, identityHtml );
 	}
 	selfContainWebsite( websiteDir );
+	// Author identity selectors can live in linked/imported stylesheets, not
+	// only inline <style>. Project the localized copies with the same primitive.
+	if ( responsiveIdentities.ids.size || responsiveIdentities.namedAliases ) {
+		const projectStylesheets = ( directory: string ): void => {
+			for ( const entry of readdirSync( directory, { withFileTypes: true } ) ) {
+				const path = join( directory, entry.name );
+				if ( entry.isDirectory() ) projectStylesheets( path );
+				else if ( entry.isFile() && entry.name.endsWith( '.css' ) ) {
+					const original = readFileSync( path, 'utf8' );
+					const projected = projectResponsiveIdentityCss( original, responsiveIdentities.ids, responsiveIdentities.namedAliases );
+					if ( original !== projected ) writeFileSync( path, projected );
+				}
+			}
+		};
+		projectStylesheets( websiteDir );
+	}
 	const portableTexts = portableTextReferences( websiteDir );
 	if ( portableTexts ) for ( const entry of retainedEntries ) {
 		const path = join( websiteDir, routePathOf( entry.url ) );
