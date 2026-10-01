@@ -168,6 +168,28 @@ describe('selectOverlayTargets', () => {
     expect(selectOverlayTargets(detection)).toEqual([]);
   });
 
+  it('does not treat a sticky header close/menu descendant as takeover evidence', () => {
+    const detection: OverlayDetection = {
+      scrollLock: { active: true },
+      candidates: [benign({
+        idx: 0, selector: 'header#header', zIndex: 1000, hasCloseAffordance: true,
+      })],
+    };
+    expect(selectOverlayTargets(detection)).toEqual([]);
+  });
+
+  it('preserves a semantic header whose text includes a nested cookie banner', () => {
+    const detection: OverlayDetection = {
+      scrollLock: { active: false },
+      candidates: [benign({
+        idx: 0, selector: 'header.site-header', isLandmark: true,
+        text: 'By using this website, you agree to our use of cookies. Accept Services Team Contact Us',
+        coverageRatio: 0.24,
+      })],
+    };
+    expect(selectOverlayTargets(detection)).toEqual([]);
+  });
+
   it('keeps a small scroll-locking modal that carries its own dialog semantics', () => {
     // score = dialog(3) + scroll-lock(3) = 6; coverage only 0.09 but aria-modal → takeover.
     const detection: OverlayDetection = {

@@ -510,6 +510,7 @@ export interface OverlayCandidate {
   ariaLabel: string | null;  // lowercased aria-label
   hasCloseAffordance: boolean; // a visible close control exists in the subtree
   textShare?: number;        // share of the document's rendered text inside it, 0..1
+  isLandmark?: boolean;      // semantic site chrome must not be dismissed as a nested overlay
 }
 
 /** Page-global scroll-lock state (one modal locking scroll affects the page). */
@@ -641,6 +642,11 @@ export function selectOverlayTargets(d: OverlayDetection): OverlayTarget[] {
   // (lets the mocked-browser path be a true no-op, and removes a hidden
   // dependency on dismissOverlays' try/catch).
   for (const c of d.candidates ?? []) {
+    // Consent banners are sometimes rendered inside a site's semantic header.
+    // Its combined text then contains the cookie copy, but removing the header
+    // also removes the site's logo and navigation. Detect and dismiss the
+    // positioned banner child; never classify the landmark wrapper itself.
+    if (c.isLandmark) continue;
     // Nothing is behind a layer that holds the document's text: it is the page
     // (a password or access gate, say), and removing it leaves an empty document.
     if ((c.textShare ?? 0) >= PAGE_TEXT_SHARE) continue;
@@ -651,8 +657,12 @@ export function selectOverlayTargets(d: OverlayDetection): OverlayTarget[] {
     // of the viewport — so a small age-gate dialog is still caught while a thin
     // sticky header (no modal role, tiny coverage) is not.
     const hasModalRole = c.ariaModal || c.role === 'dialog' || c.role === 'alertdialog';
+    // A close control can be an ordinary header/menu descendant (Squarespace
+    // headers commonly contain a mobile menu toggle). It is useful after an
+    // overlay has been identified, but by itself must not turn the global
+    // scroll-lock signal into evidence that this candidate is a takeover.
     const hasOverlayEvidence =
-      hasModalRole || c.hasCloseAffordance || c.vendorHint ||
+      hasModalRole || c.vendorHint || (c.hasCloseAffordance && c.coverageRatio >= 0.15) ||
       (c.hasBackdrop && c.coverageRatio >= 0.15);
     if (score >= OVERLAY_THRESHOLD && hasOverlayEvidence) {
       takeovers.push({
@@ -755,6 +765,8 @@ function detectOverlays(page: Page): Promise<OverlayDetection> {
         text: (el.textContent || '').toLowerCase().slice(0, 400),
         ariaLabel: ((el.getAttribute('aria-label') || '').toLowerCase()) || null,
         hasCloseAffordance: !!close,
+        isLandmark: /^(HEADER|NAV)$/.test(el.tagName) ||
+          ['banner', 'navigation', 'contentinfo'].includes((el.getAttribute('role') || '').toLowerCase()),
         textShare: pageTextLength
           ? ((el as HTMLElement).innerText || '').trim().length / pageTextLength
           : 0,
