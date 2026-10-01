@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import * as cheerio from 'cheerio';
 import { sourceSessionCookieHeader } from '../browser-kit/browser-kit.js';
+import { identityLogoReferences } from '../identity-resources.js';
 import { MAX_REDIRECTS, safeFetch, type SafeFetchResult } from '../media-fetch/safe-fetch.js';
 import type { Page, Request, Response } from 'playwright';
 
@@ -467,6 +468,7 @@ export class CapturedResourceStore {
 				const rel = ( node.attr( 'rel' ) ?? '' ).toLowerCase().split( /\s+/ );
 				const as = ( node.attr( 'as' ) ?? '' ).toLowerCase();
 				if (
+					rel.includes( 'manifest' ) ||
 					rel.includes( 'stylesheet' ) ||
 					rel.some( ( value ) => /(?:^|-)icon$/.test( value ) ) ||
 					( rel.includes( 'preload' ) && [ 'style', 'font', 'image', 'media' ].includes( as ) )
@@ -490,6 +492,7 @@ export class CapturedResourceStore {
 		};
 
 		collect( html, documentUrl );
+		for ( const logo of identityLogoReferences( html ) ) add( logo, documentUrl );
 		const startedAt = Date.now();
 		const processed = new Set< string >();
 		while ( true ) {
@@ -519,16 +522,18 @@ export class CapturedResourceStore {
 			await Promise.all( batch.map( ( url ) => this.captureUrl( url ) ) );
 			for ( const url of batch ) {
 				const resource = this.manifest.resources[ url ];
-				if ( ! resource?.contentType.toLowerCase().startsWith( 'text/css' ) ) continue;
+				if ( ! resource || ! /^(?:text\/css|application\/(?:json|manifest\+json))/i.test( resource.contentType ) ) continue;
 				try {
-					collect(
-						readFileSync(
+					const text = readFileSync(
 							resolve( this.resourceDir, resource.path.replace( /^resources\//, '' ) ),
 							'utf8'
-						),
-						url,
-						true
 					);
+					if ( resource.contentType.toLowerCase().startsWith( 'text/css' ) ) collect( text, url, true );
+					if ( /manifest\+json|application\/json/i.test( resource.contentType ) ) {
+						const parsed = JSON.parse( text ) as { icons?: Array<{ src?: unknown }> };
+						for ( const icon of ( Array.isArray( parsed.icons ) ? parsed.icons : [] ).slice( 0, 64 ) )
+							if ( typeof icon?.src === 'string' ) add( icon.src, url );
+					}
 				} catch {
 					// captureUrl records unavailable resources in the manifest.
 				}
@@ -671,7 +676,7 @@ export class CapturedResourceStore {
 			if ( fetched.body.length === 0 )
 				throw new Error( 'render dependency response body is empty' );
 			if (
-				! /^(?:text\/css|image\/|audio\/|video\/|font\/|application\/(?:font|x-font|font-woff|octet-stream|msword|vnd\.openxmlformats-officedocument\.wordprocessingml\.document))/i.test(
+				! /^(?:text\/css|image\/|audio\/|video\/|font\/|application\/(?:json|manifest\+json|font|x-font|font-woff|octet-stream|msword|vnd\.openxmlformats-officedocument\.wordprocessingml\.document))/i.test(
 					contentType
 				)
 			)

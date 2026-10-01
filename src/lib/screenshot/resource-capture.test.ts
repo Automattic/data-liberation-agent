@@ -31,6 +31,43 @@ afterEach( () => {
 } );
 
 describe( 'CapturedResourceStore', () => {
+	it( 'localizes declared JSON-LD logos and relative manifest icons without visible images', async () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-native-branding-' ) );
+		dirs.push( outputDir );
+		mkdirSync( join( outputDir, 'html' ) );
+		mkdirSync( join( outputDir, 'screenshots' ) );
+		const sourceUrl = 'https://example.com/shop/';
+		const logoUrl = 'https://cdn.example/brand.png';
+		const manifestUrl = new URL( 'meta/app.webmanifest', sourceUrl ).href;
+		const iconUrl = new URL( '../icons/icon.png', manifestUrl ).href;
+		const png = Buffer.from( 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jXioAAAAASUVORK5CYII=', 'base64' );
+		const html = `<html><head><link rel='manifest' href='meta/app.webmanifest'><script type='application/ld+json'>{"@context":"https://schema.org","@graph":[{"@type":"WebSite","name":"Acme"},{"@type":["Organization"],"logo":{"@type":"ImageObject","url":"${ logoUrl }"},"slogan":"Care & clarity"}]}</script></head><body><h1>Acme</h1></body></html>`;
+		writeFileSync( join( outputDir, 'html', 'home.html' ), html );
+		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( { version: 1, entries: { [ sourceUrl ]: { html: 'html/home.html' } } } ) );
+		const fetchMedia = vi.fn( async ( url: string ) => ( {
+			finalUrl: url, status: 200,
+			headers: new Headers( { 'content-type': url === manifestUrl ? 'application/manifest+json' : 'image/png' } ),
+			body: url === manifestUrl ? Buffer.from( JSON.stringify( { icons: [ { src: '../icons/icon.png', sizes: '512x512', type: 'image/png' } ] } ) ) : png,
+		} ) );
+		const store = new CapturedResourceStore( outputDir, sourceUrl, fetchMedia );
+		await store.captureDomDependencies( html, sourceUrl );
+		await store.flush();
+		expect( fetchMedia.mock.calls.map( ( [ url ] ) => url ).sort() ).toEqual( [ logoUrl, manifestUrl, iconUrl ].sort() );
+		exportWebsiteCapture( { outputDir, sourceUrl, platform: 'generic', summary: { routesFailed: 0 }, failures: [] } );
+		const website = join( outputDir, 'website' );
+		const $ = cheerio.load( readFileSync( join( website, 'index.html' ), 'utf8' ) );
+		const identity = JSON.parse( $( 'script[type="application/ld+json"]' ).text() )[ '@graph' ][ 1 ];
+		expect( identity.slogan ).toBe( 'Care & clarity' );
+		expect( identity.logo.url ).toMatch( /^\// );
+		expect( readFileSync( join( website, decodeURIComponent( identity.logo.url ) ) ) ).toEqual( png );
+		const manifestPath = $( 'link[rel=manifest]' ).attr( 'href' )!;
+		expect( manifestPath ).toMatch( /^\// );
+		const manifest = JSON.parse( readFileSync( join( website, decodeURIComponent( manifestPath ) ), 'utf8' ) );
+		expect( manifest.icons[ 0 ].src ).toMatch( /^\// );
+		expect( readFileSync( join( website, decodeURIComponent( manifest.icons[ 0 ].src ) ) ) ).toEqual( png );
+		expect( manifest.icons[ 0 ].src ).toBe( identity.logo.url );
+	} );
+
 	it( 'exports a linked DOCX as portable bytes beside a missing HTML route', async () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-linked-docx-' ) );
 		dirs.push( outputDir );
