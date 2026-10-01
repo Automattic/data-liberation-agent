@@ -340,12 +340,14 @@ export async function observePage(
 		// Decode lazy media and return from a controlled scroll before measuring.
 		// Scroll-linked animations are otherwise observed mid-flight, while the
 		// source runtime may still be holding the same element at rest.
-		await triggerLazyLoad( page );
+		await triggerLazyLoad( page, false, { expandContent: !captureSession } );
 		dismissedOverlays.push( ...( await dismissOverlays( page, { kinds: COMPARED_OVERLAY_KINDS } ) ) );
 		// Evidence describes the settled baseline, not the page left behind by
 		// anchor/dialog probes (which can scroll or leave a popup open).
 		await onBaseline?.();
 		const measured = await page.evaluate( async ( clickUnresolved: boolean ) => {
+			const globalWithName = globalThis as typeof globalThis & { __name?: (fn: unknown) => unknown };
+			if (typeof globalWithName.__name === 'undefined') globalWithName.__name = fn => fn;
 			// Perceptual identity for one image: fetch the bytes (cache-warm —
 			// the page just rendered them), decode locally, downscale to 8x8
 			// grayscale, threshold at the mean. Fetching keeps this
@@ -634,6 +636,25 @@ export async function observePage(
 				const label = element.innerText.replace( /\s+/g, ' ' ).trim();
 				const prefix = bodyText.trimStart();
 				if ( label && prefix.startsWith( label ) && /^\s/.test( prefix.slice( label.length ) ) ) bodyText = prefix.slice( label.length );
+			}
+			// A native decorative glyph may be replaced visually by source SVG
+			// artwork while its save-valid text remains in the DOM at font-size:0.
+			// innerText counts that unpainted text. Remove only a zero-font, leaf,
+			// explicitly decorative fragment at its actual position in its parent;
+			// identical visible symbols in an editorial label remain counted.
+			const normalized = (value: string) => value.replace(/\s+/g, ' ').trim();
+			bodyText = normalized(bodyText);
+			for (const element of document.querySelectorAll<HTMLElement>('[aria-hidden="true"]')) {
+				if (element.childElementCount || getComputedStyle(element).fontSize !== '0px') continue;
+				const parent = element.parentElement, label = normalized(element.innerText);
+				if (!parent || !label || !parent.getBoundingClientRect().height) continue;
+				const context = normalized(parent.innerText);
+				const range = document.createRange(); range.selectNodeContents(parent); range.setEndBefore(element);
+				const prefix = normalized(range.toString());
+				if (prefix && !context.startsWith(prefix)) continue;
+				const offset = context.indexOf(label, prefix.length);
+				if (offset < 0) continue;
+				bodyText = bodyText.replace(context, normalized(context.slice(0, offset) + context.slice(offset + label.length)));
 			}
 			const textChars = bodyText.replace( /\s+/g, ' ' ).trim().length;
 			if ( clickUnresolved ) {

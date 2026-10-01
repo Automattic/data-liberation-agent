@@ -345,7 +345,7 @@ export async function waitForRenderIdle(
  * wall-clock time so a page that grows forever (true infinite scroll) still
  * terminates rather than capturing forever.
  */
-export async function triggerLazyLoad(page: Page, requireNetworkIdle: boolean = false): Promise<void> {
+export async function triggerLazyLoad(page: Page, requireNetworkIdle: boolean = false, options: { expandContent?: boolean } = {}): Promise<void> {
   try {
     // One page.evaluate call per sweep, given the time it's still allowed to
     // run: `maxMs` here is the REMAINING settle budget, not a fixed per-sweep
@@ -401,7 +401,7 @@ export async function triggerLazyLoad(page: Page, requireNetworkIdle: boolean = 
     // content widgets (reviews / FAQ apps) to populate — so the snapshot captures real
     // content, not an empty placeholder. Both are no-ops on ordinary pages. (See
     // dynamic-content.ts; DISCOVERIES 2026-06-04.)
-    await withEvaluateTimeout(expandCollapsedContent(page), 30_000);
+    if (options.expandContent !== false) await withEvaluateTimeout(expandCollapsedContent(page), 30_000);
     await withEvaluateTimeout(waitForAppWidgets(page), 8_000 + EVALUATE_GRACE_MS);
     await waitForImages(page);
     // Return to top AND fire a scroll event so scroll-reactive headers recompute
