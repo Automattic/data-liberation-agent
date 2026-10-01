@@ -1867,13 +1867,9 @@ describe( 'exportWebsiteCapture', () => {
 	} );
 
 	it( 'keeps the phone document when a body-class gate ships two documents that hidden-chrome pruning would delete', async () => {
-		// A phone capture that reconciles with desktop by element identity but
-		// whose phone-only body class gates desktop CSS (`body:not(.phone)`)
-		// must ship both documents. It also starts its body with a hidden SVG
-		// sprite: if post-assembly hidden-chrome pruning ever ran over the
-		// wrappers, that sprite would read the whole phone document as a
-		// redundant hidden navigation and delete it, leaving the desktop
-		// document — which is display:none at phone width — as the only copy.
+		// Phone-only body classes must retain separate documents when they gate
+		// desktop CSS. The hidden first child and duplicate navigation links
+		// exercise the redundant-hidden-navigation cleanup heuristic.
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-gated-dual-prune-' ) );
 		dirs.push( outputDir );
 		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
@@ -1902,6 +1898,8 @@ describe( 'exportWebsiteCapture', () => {
 		const $ = cheerio.load( html );
 		expect( $( '.data-liberation-desktop-document' ) ).toHaveLength( 1 );
 		expect( $( '.data-liberation-mobile-document' ) ).toHaveLength( 1 );
+		expect( $( '.data-liberation-mobile-document #sprite' ) ).toHaveLength( 1 );
+		expect( $( '.data-liberation-mobile-document nav a' ).first().text() ).toBe( 'About' );
 		expect( $( '.data-liberation-mobile-document #mobile-menu' ).text() ).toBe( 'Phone menu' );
 		const receipt = JSON.parse( readFileSync( join( outputDir, 'capture-receipt.json' ), 'utf8' ) );
 		expect( receipt.routes[ 0 ].responsiveVariants ).toMatchObject( {
@@ -1919,17 +1917,44 @@ describe( 'exportWebsiteCapture', () => {
 			const page = await browser.newPage();
 			await page.setContent( html );
 			await page.setViewportSize( { width: 390, height: 844 } );
-			expect( await page.locator( '.data-liberation-mobile-document:visible' ).count() ).toBe( 1 );
+			// The wrappers use display:contents, so test their rendered descendants.
 			expect( await page.getByText( 'Phone menu' ).isVisible() ).toBe( true );
 			expect( await page.getByText( 'Phone story' ).isVisible() ).toBe( true );
-			expect( await page.locator( '.data-liberation-desktop-document' ).isVisible() ).toBe( false );
+			expect( await page.getByText( 'Desktop story' ).isVisible() ).toBe( false );
 			await page.setViewportSize( { width: 1440, height: 900 } );
-			expect( await page.locator( '.data-liberation-desktop-document:visible' ).count() ).toBe( 1 );
 			expect( await page.getByText( 'Desktop story' ).isVisible() ).toBe( true );
-			expect( await page.locator( '.data-liberation-mobile-document' ).isVisible() ).toBe( false );
+			expect( await page.getByText( 'Phone story' ).isVisible() ).toBe( false );
 		} finally {
 			await browser.close();
 		}
+	} );
+
+	it( 'keeps receipt and assembly aligned when a phone-only body class gates structurally equivalent documents', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-gated-equivalent-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'html-mobile', 'screenshots' ] )
+			mkdirSync( join( outputDir, path ), { recursive: true } );
+		const document = ( bodyClass = '' ) =>
+			`<html><head><style>body:not(.phone) main{width:980px}</style></head><body${ bodyClass }>\n` +
+				'<main><h1>Shared page</h1></main></body></html>';
+		writeFileSync( join( outputDir, 'html', 'homepage.html' ), document() );
+		writeFileSync( join( outputDir, 'html-mobile', 'homepage.html' ), document( ' class="phone"' ) );
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( { version: 1, entries: { 'https://example.com/': { html: 'html/homepage.html' } } } )
+		);
+
+		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [] } );
+
+		const html = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
+		const $ = cheerio.load( html );
+		expect( $( '.data-liberation-desktop-document main h1' ).text() ).toBe( 'Shared page' );
+		expect( $( '.data-liberation-mobile-document main h1' ).text() ).toBe( 'Shared page' );
+		const receipt = JSON.parse( readFileSync( join( outputDir, 'capture-receipt.json' ), 'utf8' ) );
+		expect( receipt.routes[ 0 ].responsiveVariants ).toMatchObject( {
+			variants: 2,
+			outcome: 'dual-structural',
+		} );
 	} );
 
 	it.each( [

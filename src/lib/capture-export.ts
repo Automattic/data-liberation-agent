@@ -807,23 +807,19 @@ function responsiveVariantEvidence(
 	switchWidth: number = DEFAULT_SWITCH_WIDTH
 ): ResponsiveVariantEvidence | undefined {
 	if ( mobileHtml === undefined ) return undefined;
+	const gatedByMobileClass = mobileBodyClassGatesDesktopCss(
+		desktopHtml,
+		mobileHtml,
+		styleBlocks( desktopHtml ).join( '\n' )
+	);
+	if ( gatedByMobileClass !== undefined ) {
+		return {
+			variants: 2,
+			outcome: 'dual-structural',
+			reason: `a phone-only body class gates desktop CSS (body:not(.${ gatedByMobileClass })); both variants shipped`,
+		};
+	}
 	if ( documentsDiffer( desktopHtml, mobileHtml ) ) {
-		// The receipt describes the shipped file, so it must answer the assembly
-		// decision, not run a parallel one: a phone-only body class gating
-		// desktop CSS forces the two-document output even where the trees
-		// reconcile by element identity (see mobileBodyClassGatesDesktopCss).
-		const gatedByMobileClass = mobileBodyClassGatesDesktopCss(
-			desktopHtml,
-			mobileHtml,
-			styleBlocks( desktopHtml ).join( '\n' )
-		);
-		if ( gatedByMobileClass !== undefined ) {
-			return {
-				variants: 2,
-				outcome: 'dual-structural',
-				reason: `a phone-only body class gates desktop CSS (body:not(.${ gatedByMobileClass })); both variants shipped`,
-			};
-		}
 		const merge = identitySubsetMerge( desktopHtml, mobileHtml, switchWidth );
 		if ( merge ) {
 			const sharedStyles =
@@ -1834,13 +1830,21 @@ function assembleResponsiveHtml(
 	const mobileViewport = /<meta\b[^>]*\bname\s*=\s*(["'])viewport\1[^>]*>/i.exec(
 		mobileHtml
 	)?.[ 0 ];
+	const gatedByMobileClass = mobileBodyClassGatesDesktopCss(
+		desktopHtml,
+		mobileHtml,
+		styleBlocks( desktopHtml ).join( '\n' )
+	);
 	const withMobileViewport = ( html: string ): string => {
 		if ( ! mobileViewport ) return html;
 		return /<meta\b[^>]*\bname\s*=\s*(["'])viewport\1[^>]*>/i.test( html )
 			? html.replace( /<meta\b[^>]*\bname\s*=\s*(["'])viewport\1[^>]*>/i, mobileViewport )
 			: html.replace( /<\/head\s*>/i, `${ mobileViewport }</head>` );
 	};
-	if ( responsiveBodySignature( desktopBody ) === responsiveBodySignature( mobileBody ) ) {
+	if (
+		gatedByMobileClass === undefined &&
+		responsiveBodySignature( desktopBody ) === responsiveBodySignature( mobileBody )
+	) {
 		// Equivalent trees can still carry different inline presentation: the
 		// signature compares structure, never style attributes. Project those
 		// differences the way an identity-subset collapse does, so one editable
@@ -1877,15 +1881,6 @@ function assembleResponsiveHtml(
 			)
 		);
 	}
-	// A phone-only body flag gating desktop CSS forces the two-document path
-	// even where the trees reconcile by element identity; the same predicate
-	// answers the receipt evidence above, so the two can never disagree.
-	const gatedByMobileClass =
-		mobileBodyClassGatesDesktopCss(
-			desktopHtml,
-			mobileHtml,
-			styleBlocks( desktopHtml ).join( '\n' )
-		) !== undefined;
 	const identitySubset = gatedByMobileClass ? null : identitySubsetMerge( desktopHtml, mobileHtml, switchWidth );
 	if ( identitySubset ) {
 		// One body carries both renderings: mobile-only elements join the desktop
