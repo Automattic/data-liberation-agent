@@ -360,13 +360,17 @@ export async function triggerLazyLoad(page: Page, requireNetworkIdle: boolean = 
           const started = Date.now();
           let y = window.scrollY;
           let total = document.documentElement.scrollHeight;
-          while (y < total && Date.now() - started < maxMs) {
-            y = Math.min(y + step, total);
+          // The viewport already covers the final innerHeight pixels. Walking
+          // toward scrollHeight overscrolls a clamped page and sleeps despite
+          // revealing nothing, again on every image-settling round.
+          let bottom = Math.max(0, total - window.innerHeight);
+          while (y < bottom && Date.now() - started < maxMs) {
+            y = Math.min(y + step, bottom);
             window.scrollTo({ top: y, left: 0, behavior: 'instant' });
             await new Promise((r) => setTimeout(r, pauseMs));
             total = document.documentElement.scrollHeight;
+            bottom = Math.max(0, total - window.innerHeight);
           }
-          window.scrollTo({ top: total, left: 0, behavior: 'instant' });
           return total;
         },
         { step: 500, pauseMs: 200, maxMs },
