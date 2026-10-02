@@ -24,6 +24,54 @@ const captured: CapturedDialogInteraction = {
 };
 
 describe( 'wireCapturedDialogs', () => {
+	it.each( [ 'button', 'div' ] )( 'preserves direct-child grid ownership for a %s trigger through resize', async ( tag ) => {
+		const trigger = tag === 'button'
+			? '<button id="toggle" class="menu" aria-label="Open Menu">Menu</button>'
+			: '<div id="toggle" class="menu" role="button" tabindex="0" aria-label="Open Menu">Menu</div>';
+		const source = `<html><head><style>
+			*{box-sizing:border-box}body{margin:0}header{display:grid;grid-template-columns:1fr 36px;align-items:center;height:63px;padding:6px 12px}
+			header>#toggle{grid-column:2;grid-row:1;margin:0;width:36px;height:37px;padding:0}
+			.logo{grid-column:1}@media(min-width:700px){header{height:72px;grid-template-columns:1fr 36px}}
+		</style></head><body><header><span class="logo">Logo</span>${trigger}</header><main style="height:2800px">Content</main></body></html>`;
+		const state: CapturedDialogInteraction = {
+			...captured,
+			trigger: { ...captured.trigger, selector: 'header > #toggle', tag },
+		};
+		const browser = await chromium.launch( { headless: true } );
+		try {
+			const page = await browser.newPage();
+			const measure = async () => page.evaluate( () => {
+				const rect = ( selector: string ) => {
+					const r = document.querySelector( selector )!.getBoundingClientRect();
+					return { x: r.x, y: r.y, width: r.width, height: r.height };
+				};
+				return { trigger: rect( '#toggle' ), header: rect( 'header' ), contentTop: rect( 'main' ).y, height: document.documentElement.scrollHeight };
+			} );
+			const originals = new Map<number, Awaited<ReturnType<typeof measure>>>();
+			for ( const width of [ 390, 768, 1440 ] ) {
+				await page.setViewportSize( { width, height: 900 } );
+				await page.setContent( source );
+				originals.set( width, await measure() );
+			}
+			await page.setContent( wireCapturedDialogs( source, [ state ] ) );
+			for ( const width of [ 390, 768, 1440, 390, 1440, 768, 390 ] ) {
+				await page.setViewportSize( { width, height: 900 } );
+				expect( await measure() ).toEqual( originals.get( width ) );
+				if ( width === 390 ) {
+					const summary = page.locator( 'summary' );
+					await summary.focus();
+					await page.keyboard.press( 'Enter' );
+					expect( await page.locator( 'details' ).evaluate( el => ( el as HTMLDetailsElement ).open ) ).toBe( true );
+					await page.keyboard.press( 'Escape' );
+					expect( await page.locator( 'details' ).evaluate( el => ( el as HTMLDetailsElement ).open ) ).toBe( false );
+					expect( await summary.evaluate( el => document.activeElement === el ) ).toBe( true );
+				}
+			}
+			expect( await page.locator( '#toggle' ).count() ).toBe( 1 );
+			expect( await page.locator( 'summary#toggle' ).count() ).toBe( 0 );
+		} finally { await browser.close(); }
+	}, 30_000 );
+
 	it.each( [ 'modal', 'dropdown' ] )( 'preserves responsive flex participation of a %s trigger across resizing', async ( presentation ) => {
 		const source = '<html><head><style>body{margin:0}header{display:flex;align-items:center;justify-content:space-between;max-width:672px;margin:auto;padding:24px;box-sizing:border-box}.desktop{display:none}.menu{display:inline-flex;padding:8px;font:16px sans-serif;border:0;background:none;box-sizing:border-box;width:60px;height:36px}@media(min-width:640px){.desktop{display:flex;gap:20px}.menu{display:none}}</style></head><body><header><a href="/">Site title</a><nav class="desktop"><a href="/about">About</a><a href="/writing">Writing</a></nav><button class="menu" aria-label="Open menu">Menu</button></header></body></html>';
 		const browser = await chromium.launch();
@@ -47,7 +95,7 @@ describe( 'wireCapturedDialogs', () => {
 				const details = page.locator( 'details.dla-disclosure' );
 				await expect.poll( () => details.evaluate( element => ( element as HTMLElement ).hidden ) ).toBe( width >= 640 );
 				expect( await page.locator( '.desktop' ).boundingBox() ).toEqual( rectangles.get( width )!.nav );
-				expect( await page.locator( 'summary' ).boundingBox() ).toEqual( rectangles.get( width )!.trigger );
+				expect( await details.boundingBox() ).toEqual( rectangles.get( width )!.trigger );
 				if ( width === 390 ) {
 					await page.locator( 'summary' ).focus();
 					await page.keyboard.press( 'Enter' );
@@ -167,7 +215,7 @@ describe( 'wireCapturedDialogs', () => {
 			'<html><head></head><body><button class="burger">Open Menu</button></body></html>',
 			[ captured ]
 		);
-		expect( html ).toContain( '<details class="dla-disclosure">' );
+		expect( html ).toContain( '<details class="burger dla-disclosure">' );
 		expect( html ).toContain( '<summary class="burger" data-dla-disclosure-label="Open Menu">' );
 		expect( html ).toContain( 'Open Menu' );
 		expect( html ).toContain( 'role="dialog"' );
@@ -182,7 +230,7 @@ describe( 'wireCapturedDialogs', () => {
 			'<html><head></head><body><button>Open Menu</button><button>Open Menu</button></body></html>',
 			[ captured ]
 		);
-		expect( html.match( /<details class="dla-disclosure">/g ) ).toHaveLength( 2 );
+		expect( html.match( /<details class="(?:[^" ]+ )?dla-disclosure">/g ) ).toHaveLength( 2 );
 	} );
 
 	it( 'replaces the captured portal without retaining its closed source copy', () => {

@@ -174,6 +174,8 @@ export function wireCapturedDialogs(
 			const attrs = trigger.attr() ?? {};
 			for ( const [ name, value ] of Object.entries( attrs ) ) {
 				if (
+					name === 'id' ||
+					name === 'style' ||
 					! GLOBAL_ATTRIBUTES.has( name ) &&
 					! name.startsWith( 'aria-' ) &&
 					! name.startsWith( 'data-' )
@@ -192,6 +194,13 @@ export function wireCapturedDialogs(
 					? '<details class="dla-disclosure dla-dropdown"></details>'
 					: '<details class="dla-disclosure"></details>'
 			);
+			// Keep the source layout selectors attached to the replacement child.
+			// The identifier moves to avoid duplicate IDs; classes remain on both
+			// nodes so existing trigger presentation rules still reach summary.
+			for ( const name of [ 'class', 'id', 'style' ] ) {
+				if ( attrs[ name ] !== undefined ) details.attr( name, attrs[ name ] );
+			}
+			if ( attrs.class ) details.addClass( 'dla-disclosure' );
 			details.append( summary, panel );
 			trigger.replaceWith( details );
 			wired++;
