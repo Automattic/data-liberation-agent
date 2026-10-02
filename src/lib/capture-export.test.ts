@@ -452,7 +452,7 @@ describe( 'exportWebsiteCapture', () => {
 		} );
 
 		const $ = cheerio.load( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) );
-		const panelLinks = $( '.data-liberation-mobile-document details.dla-disclosure a' );
+		const panelLinks = $( '.data-liberation-mobile-document [data-dla-dialog-panel] a' );
 		expect( panelLinks ).toHaveLength( 2 );
 		expect( $( '#services--dla-mobile' ) ).toHaveLength( 1 );
 		expect( panelLinks.eq( 0 ).attr( 'href' ) ).toBe( '/index.html#services--dla-mobile' );
@@ -3201,10 +3201,10 @@ describe( 'exportWebsiteCapture', () => {
 		try {
 			const page = await browser.newPage();
 			await page.setContent( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) );
-			const menu = page.locator( 'details.dla-disclosure:not(.dla-initial-dialog)' ).first();
-			await menu.locator( 'summary' ).evaluate( ( summary ) => ( summary as HTMLElement ).click() );
-			expect( await menu.evaluate( ( details ) => ( details as HTMLDetailsElement ).open ) ).toBe( true );
-			const menuLinks = menu.locator( '[role="dialog"] a' );
+			const menu = page.locator( '[data-dla-dialog-panel]' ).first();
+			await page.locator( '#contact' ).evaluate( ( trigger ) => ( trigger as HTMLElement ).click() );
+			expect( await menu.evaluate( ( panel ) => ( panel as HTMLElement ).hidden ) ).toBe( false );
+			const menuLinks = menu.locator( 'a' );
 			expect( await menuLinks.first().getAttribute( 'href' ) ).toBe(
 				'/about/index.html?from=menu#team'
 			);

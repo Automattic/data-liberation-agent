@@ -280,18 +280,16 @@ describe( 'captureTriggeredDialogs', () => {
 					report.states
 				);
 				await page.setContent( portable );
-				await page.locator( 'details.dla-disclosure summary' ).click();
+				await page.locator( '#site-menu' ).click();
 				expect(
 					await page
-						.locator( 'details.dla-disclosure[open] [role="dialog"] a[href="/about"]' )
+						.locator( '[data-dla-dialog-panel]:not([hidden]) a[href="/about"]' )
 						.isVisible()
 				).toBe( true );
 				await page.keyboard.press( 'Escape' );
 				expect(
-					await page
-						.locator( 'details.dla-disclosure' )
-						.evaluate( ( element ) => ( element as HTMLDetailsElement ).open )
-				).toBe( false );
+					await page.locator( '#site-menu' ).getAttribute( 'aria-expanded' )
+				).toBe( 'false' );
 				expect( await page.locator( '#no-op-menu' ).count() ).toBe( 1 );
 			} finally {
 				await browser.close();
@@ -428,7 +426,7 @@ describe( 'captureTriggeredDialogs', () => {
 				const report = await captureTriggeredDialogs( page, 'https://example.test/' );
 				expect( report.states ).toMatchObject( [ { status: 'captured', dialog: { id: 'navigation' } } ] );
 				await page.setContent( wireCapturedDialogs( markup, report.states ) );
-				await page.locator( 'details.dla-disclosure > summary' ).click();
+				await page.locator( '#menu' ).click();
 				const about = page.getByRole( 'link', { name: 'About', exact: true } );
 				expect( await about.evaluate( ( link ) => {
 					const rect = link.getBoundingClientRect();
@@ -529,9 +527,10 @@ describe( 'captureTriggeredDialogs', () => {
 
 				const wired = wireCapturedDialogs( '<header><button aria-label="Toggle menu">Menu</button></header>', report.states );
 				expect( report.states[ 0 ].dialog?.css ).toContain( '.mobile-panel > * + * { margin-top: 16px; }' );
-				expect( wired ).toContain( '<details class="dla-disclosure dla-dropdown">' );
+				expect( wired ).toContain( 'class="dla-dialog dla-dropdown"' );
+				expect( wired ).toContain( '<button aria-label="Toggle menu"' );
 				expect( wired ).toContain( '<style data-dla-dialog-css="true">.mobile-panel > * + * { margin-top: 16px; }</style>' );
-				expect( wired ).toContain( 'details.dla-disclosure.dla-dropdown[open]>.dla-dialog{display:block;position:absolute;top:100%' );
+				expect( wired ).toContain( '[data-dla-dialog-panel].dla-dropdown:not([hidden]){display:block;position:absolute;top:100%' );
 			} finally {
 				await browser.close();
 			}
@@ -566,24 +565,23 @@ describe( 'captureTriggeredDialogs', () => {
 				await page.setContent( portable );
 				await page.waitForFunction( () => document.readyState === 'complete' );
 
-				const disclosure = page.locator( 'details.dla-disclosure' );
-				const summary = disclosure.locator( 'summary' );
-				await summary.click();
+				const trigger = page.locator( '#site-menu' );
+				await trigger.click();
 				expect( await page.getByRole( 'link', { name: 'Home' } ).isVisible() ).toBe( true );
 				expect( await page.getByRole( 'link', { name: 'Get a Quote' } ).isVisible() ).toBe( true );
 				expect( await page.getByRole( 'link', { name: 'Contact' } ).isVisible() ).toBe( true );
 				await page.waitForFunction( () =>
-					document.querySelector( 'details.dla-disclosure > summary' )?.getAttribute( 'aria-label' ) === 'Close Menu'
+					document.querySelector( '#site-menu' )?.getAttribute( 'aria-label' ) === 'Close Menu'
 				);
-				expect( await summary.getAttribute( 'aria-label' ) ).toBe( 'Close Menu' );
-				await summary.click();
-				expect( await disclosure.evaluate( ( element ) => ( element as HTMLDetailsElement ).open ) ).toBe( false );
-				expect( await page.evaluate( () => document.activeElement?.tagName ) ).toBe( 'SUMMARY' );
+				expect( await trigger.getAttribute( 'aria-label' ) ).toBe( 'Close Menu' );
+				await page.locator( '[data-dla-dialog-close]' ).click();
+				expect( await trigger.getAttribute( 'aria-expanded' ) ).toBe( 'false' );
+				expect( await page.evaluate( () => document.activeElement?.id ) ).toBe( 'site-menu' );
 
-				await summary.click();
+				await trigger.click();
 				await page.keyboard.press( 'Escape' );
-				expect( await disclosure.evaluate( ( element ) => ( element as HTMLDetailsElement ).open ) ).toBe( false );
-				expect( await page.evaluate( () => document.activeElement?.tagName ) ).toBe( 'SUMMARY' );
+				expect( await trigger.getAttribute( 'aria-expanded' ) ).toBe( 'false' );
+				expect( await page.evaluate( () => document.activeElement?.id ) ).toBe( 'site-menu' );
 
 				await page.locator( 'input' ).focus();
 				await page.evaluate( () => {
@@ -707,21 +705,21 @@ describe( 'captureTriggeredDialogs', () => {
 				expect( portable ).toContain( '<nav id="desktop-nav">' );
 				await page.setContent( portable );
 				const desktopGuides = page.locator( '#desktop-nav a[href="/guides"]' );
-				expect( await desktopGuides.evaluate( ( link ) => link.closest( 'details' ) === null ) ).toBe( true );
+				expect( await desktopGuides.evaluate( ( link ) => link.closest( '[data-dla-dialog-panel]' ) === null ) ).toBe( true );
 				expect( await desktopGuides.isVisible() ).toBe( true );
 
-				const summary = page.locator( 'details.dla-disclosure > summary' );
-				await summary.click();
-				const menuGuides = page.locator( 'details.dla-disclosure[open] .dla-dialog a[href="/guides"]' );
-				const menuContact = page.locator( 'details.dla-disclosure[open] .dla-dialog a[href="/contact"]' );
+				const trigger = page.locator( '#menu-toggle' );
+				await trigger.click();
+				const menuGuides = page.locator( '[data-dla-dialog-panel]:not([hidden]) a[href="/guides"]' );
+				const menuContact = page.locator( '[data-dla-dialog-panel]:not([hidden]) a[href="/contact"]' );
 				expect( await menuGuides.isVisible() ).toBe( true );
 				expect( await menuContact.isVisible() ).toBe( true );
-				await summary.click();
-				expect( await page.locator( 'details.dla-disclosure' ).evaluate( ( element ) => ( element as HTMLDetailsElement ).open ) ).toBe( false );
+				await page.locator( '[data-dla-dialog-close]' ).click();
+				expect( await trigger.getAttribute( 'aria-expanded' ) ).toBe( 'false' );
 				expect( await menuGuides.isVisible() ).toBe( false );
-				await summary.click();
+				await trigger.click();
 				await page.keyboard.press( 'Escape' );
-				expect( await page.locator( 'details.dla-disclosure' ).evaluate( ( element ) => ( element as HTMLDetailsElement ).open ) ).toBe( false );
+				expect( await trigger.getAttribute( 'aria-expanded' ) ).toBe( 'false' );
 				expect( await desktopGuides.isVisible() ).toBe( true );
 			} finally {
 				await browser.close();
@@ -769,20 +767,19 @@ describe( 'captureTriggeredDialogs', () => {
 				expect( await page.locator( '.panel' ).count() ).toBe( 0 );
 				const portable = wireCapturedDialogs( markup.replace( /<script>[\s\S]*?<\/script>/, '' ), report.states );
 				await page.setContent( portable );
-				const disclosure = page.locator( 'details.dla-disclosure' );
-				const summary = disclosure.locator( 'summary' );
-				expect( await disclosure.count() ).toBe( 1 );
+				const trigger = page.locator( 'header button' );
+				expect( await page.locator( '[data-dla-dialog-panel]' ).count() ).toBe( 1 );
 				expect( await page.locator( '.dla-dialog a:visible' ).count() ).toBe( 0 );
-				await summary.click();
+				await trigger.click();
 				expect( await page.locator( '.dla-dialog a:visible' ).allTextContents() ).toEqual( [ 'Home', 'About', 'Contact' ] );
 				expect( await page.locator( '.dla-dialog a[aria-current="page"]' ).getAttribute( 'href' ) ).toBe( '/about' );
-				await summary.click();
+				await trigger.click();
 				expect( await page.locator( '.dla-dialog a:visible' ).count() ).toBe( 0 );
-				await summary.focus();
+				await trigger.focus();
 				await page.keyboard.press( 'Enter' );
 				expect( await page.locator( '.dla-dialog a:visible' ).count() ).toBe( 3 );
 				await page.keyboard.press( 'Escape' );
-				expect( await disclosure.getAttribute( 'open' ) ).toBeNull();
+				expect( await page.locator( '[data-dla-dialog-panel]' ).evaluate( element => ( element as HTMLElement ).hidden ) ).toBe( true );
 			} finally {
 				await browser.close();
 			}
