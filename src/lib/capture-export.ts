@@ -15,6 +15,12 @@ import { identityLogoReferences } from './identity-resources.js';
 import type { Element } from 'domhandler';
 import { escapeHtmlAttr } from './html-escape.js';
 import { allocateCaptureRoutes, normalizedUrl } from './capture-export-routes.js';
+import {
+	indexPortableMediaReferences,
+	mediaReferenceMatched,
+	planPortableMediaFamilies,
+	type PortableMediaCandidate,
+} from './portable-media-plan.js';
 import { isElementNode, isYuiRuntimeId, YUI_RUNTIME_ID } from './html-nodes.js';
 import {
 	assembleResponsiveCapture,
@@ -194,14 +200,7 @@ interface AssetEvidenceRecord {
 	references: AssetEvidenceReference[];
 }
 
-interface MediaCandidate {
-	sourceUrl: string;
-	localPath: string;
-	references: string[];
-	exactReferences: string[];
-	bytes: number;
-	dimension: number;
-}
+type MediaCandidate = PortableMediaCandidate;
 
 interface CaptureEntry {
 	slug: string;
@@ -267,9 +266,6 @@ function uniqueAssetPath(
 	) }-${ contentHash.slice( 0, 12 ) }${ extension }`;
 }
 
-const MAX_PORTABLE_MEDIA_BYTES = 5 * 1024 * 1024;
-const MAX_PORTABLE_RESPONSIVE_MEDIA_BYTES = 8 * 1024 * 1024;
-const MAX_PORTABLE_MEDIA_DIMENSION = 2048;
 const MAX_PORTABLE_MEDIA_TOTAL_BYTES = 160 * 1024 * 1024;
 const STYLE_HOIST_DIAGNOSTIC_SAMPLE_BYTES = 31 * 1024;
 const TRANSPARENT_IMAGE_DATA_URL = 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=';
@@ -848,23 +844,6 @@ function mediaReferences( sourceUrl: string, siteUrl: string ): string[] {
 	return [ sourceUrl, `${ media.pathname }${ media.search }` ];
 }
 
-function containsMediaReference( content: string, reference: string ): boolean {
-	for ( const candidate of [ reference, reference.replace( /&/g, '&amp;' ) ] ) {
-		let offset = content.indexOf( candidate );
-		while ( offset !== -1 ) {
-			const suffix = content.slice( offset + candidate.length );
-			if (
-				new URL( reference, 'https://example.com' ).search ||
-				( ! suffix.startsWith( '?' ) && ! suffix.startsWith( '&amp;' ) )
-			) {
-				return true;
-			}
-			offset = content.indexOf( candidate, offset + candidate.length );
-		}
-	}
-	return false;
-}
-
 function srcsetReferences( srcset: string ): string[] {
 	const references: string[] = [];
 	let offset = 0;
@@ -1061,38 +1040,6 @@ function mediaDimension( sourceUrl: string ): number {
 		Number( url.searchParams.get( 'w' ) ) || 0,
 		Number( url.searchParams.get( 'h' ) ) || 0,
 		...pathDimensions
-	);
-}
-
-function selectMediaCandidate( candidates: MediaCandidate[] ): MediaCandidate | undefined {
-	const bounded = candidates.filter(
-		( candidate ) =>
-			candidate.bytes <= MAX_PORTABLE_MEDIA_BYTES &&
-			candidate.dimension <= MAX_PORTABLE_MEDIA_DIMENSION
-	);
-	return [ ...bounded ].sort(
-		( a, b ) =>
-			b.dimension - a.dimension || a.bytes - b.bytes || a.sourceUrl.localeCompare( b.sourceUrl )
-	)[ 0 ];
-}
-
-function selectMediaCandidates( candidates: MediaCandidate[] ): MediaCandidate[] {
-	const dimensionBounded = candidates.filter(
-		( candidate ) => candidate.dimension <= MAX_PORTABLE_MEDIA_DIMENSION
-	);
-	const responsiveFamily =
-		dimensionBounded.filter( ( candidate ) => candidate.exactReferences.length > 0 ).length > 1;
-	const bounded = dimensionBounded.filter(
-		( candidate ) =>
-			candidate.bytes <=
-			( responsiveFamily ? MAX_PORTABLE_RESPONSIVE_MEDIA_BYTES : MAX_PORTABLE_MEDIA_BYTES )
-	);
-	const exact = bounded.filter( ( candidate ) => candidate.exactReferences.length > 0 );
-	const fallback = selectMediaCandidate( bounded );
-	const selected = exact.length > 0 ? exact : fallback ? [ fallback ] : [];
-	return [ ...selected ].sort(
-		( a, b ) =>
-			b.dimension - a.dimension || a.bytes - b.bytes || a.sourceUrl.localeCompare( b.sourceUrl )
 	);
 }
 
@@ -2095,6 +2042,24 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 			}
 		} )
 	);
+	const probeReferences: string[] = [];
+	const seenProbeReferences = new Set< string >();
+	for ( const [ sourceUrl ] of mediaStubs.list() ) {
+		try {
+			if ( capturedPages.has( normalizedUrl( sourceUrl ) ) ) continue;
+		} catch {
+			// Invalid media URLs still flow through mediaReferences().
+		}
+		for ( const reference of mediaReferences( sourceUrl, options.sourceUrl ) ) {
+			if ( seenProbeReferences.has( reference ) ) continue;
+			seenProbeReferences.add( reference );
+			probeReferences.push( reference );
+		}
+	}
+	const referenceIndex = indexPortableMediaReferences(
+		retainedEntries.map( ( entry ) => entry.htmlPath ),
+		probeReferences,
+	);
 	for ( const [ sourceUrl, stub ] of mediaStubs.list() ) {
 		try {
 			if ( capturedPages.has( normalizedUrl( sourceUrl ) ) ) continue;
@@ -2104,9 +2069,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		const references = mediaReferences( sourceUrl, options.sourceUrl );
 		const family = mediaFamily( sourceUrl );
 		const exactReferences = references.filter( ( reference ) =>
-			retainedEntries.some( ( entry ) =>
-				containsMediaReference( readFileSync( entry.htmlPath, 'utf8' ), reference )
-			)
+			mediaReferenceMatched( referenceIndex, reference )
 		);
 		const isReferenced = retainedMediaFamilies.has( family ) || exactReferences.length > 0;
 		if ( stub.status === 'error' && isReferenced ) {
@@ -2132,59 +2095,20 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		};
 		mediaFamilies.set( family, [ ...( mediaFamilies.get( family ) ?? [] ), candidate ] );
 	}
-	const portableMediaCandidates = [ ...mediaFamilies.values() ]
-		.map( ( candidates ) => ( { candidates, selected: selectMediaCandidates( candidates ) } ) )
-		.sort( ( left, right ) => {
-			const leftEntrypoint = left.candidates.some( ( candidate ) =>
-				candidate.references.some( ( reference ) =>
-					containsMediaReference(
-						readFileSync( entrypointEntry.htmlPath, 'utf8' ),
-						reference
-					)
-				)
-			);
-			const rightEntrypoint = right.candidates.some( ( candidate ) =>
-				candidate.references.some( ( reference ) =>
-					containsMediaReference(
-						readFileSync( entrypointEntry.htmlPath, 'utf8' ),
-						reference
-					)
-				)
-			);
-			return (
-				Number( rightEntrypoint ) - Number( leftEntrypoint ) ||
-				( left.selected[ 0 ]?.bytes ?? 0 ) - ( right.selected[ 0 ]?.bytes ?? 0 ) ||
-				( left.selected[ 0 ]?.sourceUrl ?? '' ).localeCompare(
-					right.selected[ 0 ]?.sourceUrl ?? ''
-				)
-			);
-		} );
 	const portableMediaBudget = portableMediaTotalBytesLimit;
-	const selectedPortableMedia = new Set< MediaCandidate >();
-	const portableMediaHashes = new Set< string >();
-	let portableMediaBytes = 0;
-	for ( const family of portableMediaCandidates ) {
-		for ( const selected of family.selected ) {
-			const contentHash = fileHash( selected.localPath );
-			const needsFile = ! portableMediaHashes.has( contentHash );
-			if ( ! needsFile || portableMediaBytes + selected.bytes <= portableMediaBudget ) {
-				selectedPortableMedia.add( selected );
-				if ( needsFile ) {
-					portableMediaHashes.add( contentHash );
-					portableMediaBytes += selected.bytes;
-				}
-			}
-		}
-	}
+	const portableMediaPlan = planPortableMediaFamilies(
+		[ ...mediaFamilies ].map( ( [ family, candidates ] ) => ( { family, candidates } ) ),
+		portableMediaBudget,
+		entrypointEntry.htmlPath,
+	);
 	let retainedExternalMediaCount = 0;
 	const localizedMediaFamilies = new Set< string >();
 	const assetPathsByHash = new Map< string, string >();
 	const assetHashesByPath = new Map< string, string >();
 	const portablePathsBySource = new Map< string, string >();
-	for ( const candidates of mediaFamilies.values() ) {
-		const family = mediaFamily( candidates[ 0 ].sourceUrl );
-		const eligible = selectMediaCandidates( candidates );
-		if ( eligible.length === 0 ) {
+	for ( const decision of portableMediaPlan.families ) {
+		const { family, candidates, eligible, admitted } = decision;
+		if ( decision.outcome === 'limit-excluded' ) {
 			for ( const reference of retainedMediaFamilies.get( family ) ?? [] )
 				mediaReplacements.set( reference, TRANSPARENT_IMAGE_DATA_URL );
 			for ( const candidate of candidates ) {
@@ -2199,8 +2123,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 			}
 			continue;
 		}
-		const selected = eligible.filter( ( candidate ) => selectedPortableMedia.has( candidate ) );
-		if ( selected.length === 0 ) {
+		if ( decision.outcome === 'budget-excluded' ) {
 			for ( const candidate of candidates ) {
 				for ( const reference of candidate.references ) {
 					mediaReplacements.set( reference, TRANSPARENT_IMAGE_DATA_URL );
@@ -2215,7 +2138,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		}
 		localizedMediaFamilies.add( family );
 		let fallbackAssetPath = '';
-		for ( const candidate of selected ) {
+		for ( const candidate of admitted ) {
 			const contentHash = fileHash( candidate.localPath );
 			let assetPath = assetPathsByHash.get( contentHash );
 			if ( assetPath === undefined ) {
@@ -2250,7 +2173,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 	}
 	const portableMedia = {
 		selected_count: assets.length,
-		selected_bytes: portableMediaBytes,
+		selected_bytes: portableMediaPlan.selectedBytes,
 		retained_external_count: retainedExternalMediaCount,
 		max_bytes: portableMediaBudget,
 		reserved_bytes: 0,
