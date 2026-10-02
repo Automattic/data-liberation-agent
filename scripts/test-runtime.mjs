@@ -37,10 +37,19 @@ try {
     discover: async (source) => ({ urls: [{ url: source }] }),
     inspection: [{ capability: 'booking', selector: '[data-booking]', evidence: 'Fixture application surface' }],
     liberation: { cleanupRules: [{ id: 'fixture-credit', category: 'source-attribution', selector: '.provider-credit' }] },
+    acquisition: { id: 'runtime-fixture-http', variants: [{ id: 'desktop' }], prepare: html => ({ html }) },
   });
   assert.equal((await runtime.detectPlatform(url)).platform, 'runtime-fixture');
 
   if (browserless) {
+    assert.throws(() => createRequire(bundleUrl).resolve('playwright'), { code: 'MODULE_NOT_FOUND' });
+    const platform = runtime.resolvePlatform('runtime-fixture');
+    const acquisition = await runtime.acquireHttpDocuments({ url, urls: [url], outputDir: join(outputDir, 'source-acquisition'), profile: platform.acquisition, collectAssets: true });
+    assert.deepEqual(acquisition.coverage, { routes: 1, requiredDocuments: 1, acquired: 1, browserRequired: 0, failed: 0 });
+    assert.equal(acquisition.verification.rendering, 'unverified');
+    assert.equal(acquisition.resources.failures, 0);
+    const response = await readFile(join(outputDir, 'source-acquisition', acquisition.documents[0].rawPath), 'utf8');
+    assert.equal(response, liveHtml);
     assert.throws(() => createRequire(bundleUrl).resolve('playwright'), { code: 'MODULE_NOT_FOUND' });
     const http = await runtime.inspectSource(url, { rendered: false, sampleLimit: 1 });
     assert.equal(http.source.platform.id, 'runtime-fixture');
