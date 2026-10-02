@@ -600,6 +600,40 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		await source.close();
 	}, 30_000 );
 
+	it( 'keeps an inactive responsive slide offstage through the tablet range', async () => {
+		const source = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		await source.setContent( `
+			<style>body{margin:0}#track{position:relative;width:100vw;height:180px;overflow:hidden}#slide{position:absolute;width:320px;height:160px}</style>
+			<div id="track"><div id="slide" style="transform:matrix(1,0,0,1,1402,0)">Inactive testimonial</div></div>
+			<script>
+				const update=()=>{const x=innerWidth<800?innerWidth-4:innerWidth-38;document.querySelector('#slide').style.transform='matrix(1,0,0,1,'+x+',0)};
+				addEventListener('resize',update);update();
+			</script>` );
+		const widths = [ 390, 600, 767, 768, 799, 800, 1024, 1440 ];
+		const sourcePhase = new Map<number, number>();
+		for ( const width of widths ) {
+			await source.setViewportSize( { width, height: 900 } );
+			await source.waitForTimeout( 5 );
+			sourcePhase.set( width, ( await source.locator( '#slide' ).boundingBox() )!.x );
+		}
+		await learnAndApplyFluidGeometry( source, { widths, settleMs: 20 } );
+		const html = await source.evaluate( () => {
+			document.querySelectorAll( 'script' ).forEach( script => script.remove() );
+			return document.documentElement.outerHTML;
+		} );
+		const copy = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		await copy.setContent( html );
+		for ( const width of [ 390, 768, 1440 ] ) {
+			await copy.setViewportSize( { width, height: 900 } );
+			const slide = ( await copy.locator( '#slide' ).boundingBox() )!;
+			const track = ( await copy.locator( '#track' ).boundingBox() )!;
+			expect( Math.abs( slide.x - sourcePhase.get( width )! ), `source/copy phase at ${ width }` ).toBeLessThanOrEqual( 2 );
+			if ( width === 768 ) expect( slide.x ).toBeGreaterThanOrEqual( track.x + track.width );
+		}
+		await copy.close();
+		await source.close();
+	}, 30_000 );
+
 	it( 'does not rewrite scaled, rotated, or vertically translated matrices', async () => {
 		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
 		const matrices = [

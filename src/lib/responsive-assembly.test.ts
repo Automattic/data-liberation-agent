@@ -2,8 +2,10 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as cheerio from 'cheerio';
+import { chromium } from 'playwright';
 import { afterEach, describe, expect, it } from 'vitest';
 import { exportWebsiteCapture } from './capture-export.js';
+import { learnAndApplyFluidGeometry } from './screenshot/fluid-capture.js';
 import {
 	assembleResponsiveCapture,
 	DESKTOP_DOCUMENT_CLASS,
@@ -49,6 +51,66 @@ function evidenceMatchesTree( assembly: ResponsiveAssembly ): void {
 }
 
 describe( 'assembleResponsiveCapture', () => {
+	it( 'keeps the learned runtime slide phase authoritative over mobile counterpart projection', async () => {
+		const body = '<main><div id="track" style="position:relative;width:calc(100vw - 31px);height:180px;overflow:hidden"><div id="active" style="position:absolute;width:320px;height:150px">Active</div><div id="inactive" style="position:absolute;width:320px;height:150px;transform:translate3d(0px,0px,0px)">Inactive testimonial</div></div></main>';
+		const runtime = `<script>const update=()=>{const w=innerWidth,x=w<768?w-16:w<800?w-11:w-38;document.querySelector('#inactive').style.transform='translate3d('+x+'px,0px,0px)'};addEventListener('resize',update);update()</script>`;
+		const desktop = page( body + runtime, '<style>body{margin:0}</style>' );
+		const mobile = page( body + runtime, '<style>body{margin:0}</style>' );
+		const browser = await chromium.launch();
+		try {
+			const source = await browser.newPage( { viewport: { width: 402, height: 681 } } );
+			await source.setContent( mobile );
+			const sourcePhoneX = ( await source.locator( '#inactive' ).boundingBox() )!.x;
+			await source.setViewportSize( { width: 768, height: 900 } );
+			await source.waitForTimeout( 30 );
+			const sourceTabletX = ( await source.locator( '#inactive' ).boundingBox() )!.x;
+			await source.setViewportSize( { width: 402, height: 681 } );
+			await source.waitForTimeout( 30 );
+			const capturedMobile = await source.evaluate( () => { document.querySelectorAll( 'script' ).forEach( script => script.remove() ); return document.documentElement.outerHTML; } );
+			const desktopSource = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+			await desktopSource.setContent( desktop );
+			const widths = [ 390, 402, 600, 767, 768, 799, 800, 1024, 1280, 1440 ];
+			const sourcePhase = new Map<number, number>();
+			for ( const width of [ 390, 402, 768, 1440 ] ) {
+				await desktopSource.setViewportSize( { width, height: 900 } );
+				await desktopSource.waitForTimeout( 20 );
+				sourcePhase.set( width, ( await desktopSource.locator( '#inactive' ).boundingBox() )!.x );
+			}
+			for ( const width of widths ) {
+				await desktopSource.setViewportSize( { width, height: 900 } );
+				await desktopSource.waitForTimeout( 10 );
+			}
+			await learnAndApplyFluidGeometry( desktopSource, { widths, settleMs: 10 } );
+			const capturedDesktop = await desktopSource.evaluate( () => { document.querySelectorAll( 'script' ).forEach( script => script.remove() ); return document.documentElement.outerHTML; } );
+			const capturedAssembly = assembleResponsiveCapture( {
+				rawDesktopHtml: capturedDesktop,
+				rawMobileHtml: capturedMobile,
+				portableDesktopHtml: capturedDesktop,
+				portableMobileHtml: capturedMobile,
+				switchWidth: 799,
+			} );
+			const copy = await browser.newPage( { viewport: { width: 768, height: 900 } } );
+			await copy.setContent( capturedAssembly.html );
+			expect( sourcePhoneX ).toBe( 386 );
+			// The source's tablet pose is observed from the live responsive runtime,
+			// not extrapolated from the phone and desktop endpoint snapshots.
+			expect( sourceTabletX ).toBe( 757 );
+			expect( capturedDesktop ).toContain( 'data-dla-fluid-rules' );
+			for ( const width of [ 390, 402, 768, 1440 ] ) {
+				await copy.setViewportSize( { width, height: 900 } );
+				const copyBox = ( await copy.locator( '#inactive' ).boundingBox() )!;
+				const holder = ( await copy.locator( '#track' ).boundingBox() )!;
+				expect( Math.abs( copyBox.x - sourcePhase.get( width )! ), `source/copy phase at ${ width }` ).toBeLessThanOrEqual( 2 );
+				if ( width === 768 ) expect( copyBox.x ).toBeGreaterThanOrEqual( holder.x + holder.width );
+			}
+			await source.close();
+			await desktopSource.close();
+			await copy.close();
+		} finally {
+			await browser.close();
+		}
+	}, 30_000 );
+
 	it( 'returns the portable desktop document when mobile was not captured', () => {
 		const desktop = page( '<main><h1>Only</h1></main>' );
 		const assembly = assembleResponsiveCapture( {
