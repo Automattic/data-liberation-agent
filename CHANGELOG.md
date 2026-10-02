@@ -15,6 +15,17 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.17.0] - 2026-10-02
+
+### Added
+- add HTTP acquisition and observed child export
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- observe clipped offstage text and baseline pose
+
 ## [0.16.6] - 2026-10-02
 
 ### Changed
