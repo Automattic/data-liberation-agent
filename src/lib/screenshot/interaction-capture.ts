@@ -76,7 +76,7 @@ export interface CapturedDialogInteraction {
 	 * Distinguishes an in-page disclosure/accordion panel (content restored in
 	 * place, before HTML serialization — see `hydrateDisclosureContent`) from a
 	 * runtime-created popup/menu dialog (wired post-hoc by `wireCapturedDialogs`
-	 * into a synthetic `<details>` overlay), from a selectable set whose
+	 * onto the authored trigger), from a selectable set whose
 	 * members drive one shared region (`selectable-set`), and from a choice group
 	 * whose members change their own attributes or styles (`choice-group`). Omitted/`'dialog'`
 	 * preserves the pre-existing shape for callers that predate this field.
