@@ -674,7 +674,7 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		await page.setContent( `
 			<style>:root { --header-height: 79.0469px; }
 			main .sections .page-section:first-child { padding-top: var(--header-height, 100px); }</style>
-			<main><div class="sections"><section id="first-section" class="page-section" style="min-height: 1vh; padding-top: 79.0469px"></section></div></main>
+			<main><div class="sections"><section id="first-section" class="page-section" data-test="page-section" style="min-height: 1vh; padding-top: 79.0469px"></section></div></main>
 			<script>
 				const desktop = { 1024: 61.8438, 1280: 72.375, 1440: 79.0469, 1920: 88.8281 };
 				const update = () => {
@@ -727,4 +727,43 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		expect( Math.abs( desktopPadding - 79.0469 ) ).toBeLessThanOrEqual( 1 );
 		await page.close();
 	}, 20_000 );
+
+	it( 'learns runtime padding on ordinary rendered geometry without platform markers', async () => {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		await page.setContent( `
+			<style>html { scroll-behavior:smooth } body { min-height:2400px }.hero { height: 180px; }</style>
+			<main><div id="hero" class="hero" style="padding-top:178.781px"></div><div id="closed-menu" style="display:none;padding-top:240px"></div></main>
+			<script>
+				function updateHeaderClearance() {
+					const width = innerWidth;
+					const padding = width < 768 ? width * 0.12 + 36.97
+						: width < 800 ? 242.156
+						: 150.02 + width * 0.02;
+					document.querySelector('#hero').style.paddingTop = padding + 'px';
+				}
+				addEventListener('resize', updateHeaderClearance);
+				addEventListener('scroll', () => {
+					if ( scrollY > 0 ) {
+						document.querySelector('#hero').style.paddingTop = (parseFloat(document.querySelector('#hero').style.paddingTop) + 36) + 'px';
+					} else updateHeaderClearance();
+				});
+				updateHeaderClearance();
+			</script>
+		` );
+		await learnAndApplyFluidGeometry( page, {
+			widths: [ 390, 600, 767, 768, 769, 799, 800, 801, 1024, 1280, 1440 ],
+			settleMs: 40,
+		} );
+
+		const rules = await page.locator( 'style[data-dla-fluid-rules]' ).textContent();
+		expect( rules ).toContain( 'padding-top' );
+		expect( rules ).toContain( '@media' );
+		expect( await page.locator( '#hero' ).getAttribute( 'style' ) ).not.toContain( 'padding-top' );
+		expect( await page.locator( '#closed-menu' ).getAttribute( 'style' ) ).toContain( 'padding-top:240px' );
+		expect( await page.locator( '#closed-menu' ).getAttribute( 'data-dla-fluid-segment' ) ).toBeNull();
+		await page.setViewportSize( { width: 768, height: 900 } );
+		await page.waitForTimeout( 60 );
+		expect( Number.parseFloat( await page.locator( '#hero' ).evaluate( element => getComputedStyle( element ).paddingTop ) ) ).toBeCloseTo( 242.156, 0 );
+		await page.close();
+	}, 40_000 );
 } );

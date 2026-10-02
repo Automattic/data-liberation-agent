@@ -642,11 +642,6 @@ export function selectOverlayTargets(d: OverlayDetection): OverlayTarget[] {
   // (lets the mocked-browser path be a true no-op, and removes a hidden
   // dependency on dismissOverlays' try/catch).
   for (const c of d.candidates ?? []) {
-    // Consent banners are sometimes rendered inside a site's semantic header.
-    // Its combined text then contains the cookie copy, but removing the header
-    // also removes the site's logo and navigation. Detect and dismiss the
-    // positioned banner child; never classify the landmark wrapper itself.
-    if (c.isLandmark) continue;
     // Nothing is behind a layer that holds the document's text: it is the page
     // (a password or access gate, say), and removing it leaves an empty document.
     if ((c.textShare ?? 0) >= PAGE_TEXT_SHARE) continue;
@@ -657,6 +652,12 @@ export function selectOverlayTargets(d: OverlayDetection): OverlayTarget[] {
     // of the viewport — so a small age-gate dialog is still caught while a thin
     // sticky header (no modal role, tiny coverage) is not.
     const hasModalRole = c.ariaModal || c.role === 'dialog' || c.role === 'alertdialog';
+    // Consent banners are sometimes rendered inside a site's semantic header.
+    // Its combined text then contains the cookie copy, but removing the header
+    // also removes the site's logo and navigation. Leave implicit overlay
+    // classifications to positioned descendants; explicit dialog semantics
+    // still allow a genuine modal landmark to be handled.
+    if (c.isLandmark && !hasModalRole) continue;
     // A close control can be an ordinary header/menu descendant (Squarespace
     // headers commonly contain a mobile menu toggle). It is useful after an
     // overlay has been identified, but by itself must not turn the global
@@ -692,6 +693,8 @@ export function selectOverlayTargets(d: OverlayDetection): OverlayTarget[] {
  */
 function detectOverlays(page: Page): Promise<OverlayDetection> {
   return page.evaluate(() => {
+    const globalWithName = globalThis as typeof globalThis & { __name?: (fn: unknown) => unknown };
+    if (typeof globalWithName.__name === 'undefined') globalWithName.__name = (fn) => fn;
     const VENDOR = /klaviyo|privy|optinmonster|justuno|sumo|mailchimp|popup|newsletter|subscribe|interstitial/i;
     const SCROLL_LOCK = /(prevent|disable|no)[-_]?(body[-_]?)?scroll|modal[-_]?open|scroll[-_]?lock/i;
     const vw = window.innerWidth || 1;
@@ -750,6 +753,48 @@ function detectOverlays(page: Page): Promise<OverlayDetection> {
       if ((cs.position !== 'fixed' && cs.position !== 'sticky') || !visible(cs)) continue;
       const r = el.getBoundingClientRect();
       if (r.width < vw * 0.1 && r.height < vh * 0.1) continue; // drop trackers/badges
+      el.setAttribute('data-lib-overlay', String(idx));
+      const close = findClose(el);
+      if (close) close.setAttribute('data-lib-overlay-close', String(idx));
+      candidates.push({
+        idx,
+        selector: cssPath(el),
+        role: el.getAttribute('role'),
+        ariaModal: el.getAttribute('aria-modal') === 'true',
+        zIndex: parseInt(cs.zIndex, 10) || 0,
+        coverageRatio: Math.min(1, (r.width * r.height) / vpArea),
+        hasBackdrop: hasBackdrop(el),
+        vendorHint: VENDOR.test(`${el.id} ${cls(el)}`),
+        text: (el.textContent || '').toLowerCase().slice(0, 400),
+        ariaLabel: ((el.getAttribute('aria-label') || '').toLowerCase()) || null,
+        hasCloseAffordance: !!close,
+        isLandmark: /^(HEADER|NAV)$/.test(el.tagName) ||
+          ['banner', 'navigation', 'contentinfo'].includes((el.getAttribute('role') || '').toLowerCase()),
+        textShare: pageTextLength
+          ? ((el as HTMLElement).innerText || '').trim().length / pageTextLength
+          : 0,
+      });
+      idx++;
+    }
+    // Some platforms (including Squarespace) put their cookie notice in normal
+    // flow inside a fixed semantic header. The header is overlay-positioned,
+    // but the notice itself is static, so the positioned-element scan above
+    // cannot safely target it. Add only explicitly labelled/identified consent
+    // descendants with a real action control; selection still uses the shared
+    // consent classifier and dismissal policy.
+    const consentHint = /cookie|consent|gdpr/i;
+    for (const el of Array.from(document.querySelectorAll('[aria-label],[class]'))) {
+      if (el.hasAttribute('data-lib-overlay')) continue;
+      const identity = `${el.getAttribute('aria-label') || ''} ${cls(el)}`;
+      if (!consentHint.test(identity) || !el.querySelector('button,[role="button"],input[type="button"],input[type="submit"]')) continue;
+      let positionedHost = el.parentElement;
+      while (positionedHost && !['fixed', 'sticky'].includes(getComputedStyle(positionedHost).position)) {
+        positionedHost = positionedHost.parentElement;
+      }
+      if (!positionedHost) continue;
+      const cs = getComputedStyle(el);
+      const r = el.getBoundingClientRect();
+      if (!visible(cs) || r.width < vw * 0.1 || r.height < 24 || r.height > vh * 0.5) continue;
       el.setAttribute('data-lib-overlay', String(idx));
       const close = findClose(el);
       if (close) close.setAttribute('data-lib-overlay-close', String(idx));
