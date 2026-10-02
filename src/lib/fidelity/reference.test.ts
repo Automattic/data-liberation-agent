@@ -131,6 +131,18 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			expect(observation.typography![0]).toMatchObject({ fontFamily: 'sans-serif, Restored', loaded: true });
 		} finally { await browser.close(); }
 	}, 30_000);
+	it( 'keeps frozen baseline pose untouched while retaining the explicit scroll probe for drift', async () => {
+		const browser = await chromium.launch(); const page = await browser.newPage( { viewport: { width: 768, height: 700 } } );
+		try {
+			await page.setContent( `<style>header{height:100px}header.compact{height:60px}</style><header>Header</header><main style="height:2400px">Baseline content</main>
+				<script>addEventListener('scroll',()=>document.querySelector('header').classList.add('compact'),{once:true})</script>` );
+			await observePage( page, 'about:blank', 768, 0, 'http://fixture.invalid', undefined, undefined, true, true );
+			expect( await page.locator( 'header' ).evaluate( element => getComputedStyle( element ).height ) ).toBe( '100px' );
+			await observePage( page, 'about:blank', 768, 0, 'http://fixture.invalid', undefined, undefined, true );
+			expect( await page.evaluate( () => scrollY ) ).toBe( 0 );
+			expect( await page.locator( 'header' ).evaluate( element => getComputedStyle( element ).height ) ).toBe( '60px' );
+		} finally { await browser.close(); }
+	}, 30_000 );
 
 	it( 'keeps failed and unavailable fonts unready and bounds a pending font', async () => {
 		const parent = join(process.cwd(), '.tmp-test'); mkdirSync(parent, { recursive: true });
@@ -192,11 +204,12 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 		await new Promise<void>( resolve => source.listen( 0, '127.0.0.1', resolve ) );
 		const origin = `http://127.0.0.1:${ ( source.address() as { port: number } ).port }`;
 		const url = `${ origin }/shop/product/`;
-		const collector = createReferenceCollector( directory, url, [ url ] );
+		const sourcePolicy = cleanupPolicy( [ { id: 'fixture-credit', category: 'source-attribution', selector: '.credit' } ] );
+		const collector = createReferenceCollector( directory, url, [ url ], { cleanupPolicy: sourcePolicy } );
 		let candidate: ReturnType<typeof createServer> | undefined;
 		try {
 			const captured = await captureScreenshots( { urls: [ url ], primaryUrl: url, outputDir: directory, concurrency: 1, settleMs: 100, learnFluid: false,
-				cleanupPolicy: cleanupPolicy( [ { id: 'fixture-credit', category: 'source-attribution', selector: '.credit' } ] ), observeSource: collector.observe } );
+				cleanupPolicy: sourcePolicy, observeSource: collector.observe } );
 			expect( captured.failed ).toBe( 0 );
 			const receiptPath = exportWebsiteCapture( { outputDir: directory, sourceUrl: url, platform: 'default', summary: { routesDiscovered: 1, routesCaptured: 1, routesSkipped: 0, routesFailed: 0, durationMs: captured.durationMs }, failures: [], discoveryDiagnostics: [] } );
 			const manifestPath = collector.finalize( receiptPath );
@@ -292,6 +305,38 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			expect( matchRenderedImages( source.images, ambiguous.images ) ).toEqual( [] );
 		} finally { await browser.close(); }
 	}, 30_000 );
+	it( 'excludes overflow-clipped offstage copy while retaining repeated and below-fold text', async () => {
+		const browser = await chromium.launch(); const page = await browser.newPage( { viewport: { width: 390, height: 700 } } );
+		try {
+			const quote = 'The migration from Google Workspace to Microsoft 365 and Exchange Online went very well. Shaun did a wonderful job making it happen. We also moved from an on-prem phone system to Teams Phone and it is working out quite well.';
+			const attribution = 'Luke Ervin - IT Director';
+			const shared = '<p>Shared visible label</p><p>Shared visible label</p><div style="margin-top:1200px">Lower-page editorial content</div>';
+			await page.setContent( `<style>body{margin:0}.track{width:240px;height:80px;overflow:hidden}.offstage{transform:translateX(300px)}</style>
+				${ shared }<div class="track"><div class="offstage"><p>${ quote }</p><p>${ attribution }</p></div></div>` );
+			const source = await observePage( page, 'about:blank', 390, 0, null, undefined, undefined, true, true );
+			expect( await page.locator( '.offstage' ).textContent() ).toContain( attribution );
+			await page.setContent( `<style>.track{width:240px;height:80px}.inactive{visibility:hidden}</style>${ shared }
+				<div class="track"><div class="inactive"><p>${ quote }</p><p>${ attribution }</p></div></div>` );
+			const candidate = await observePage( page, 'about:blank', 390, 0, null, undefined, undefined, true, true );
+			expect( source.textChars ).toBe( candidate.textChars );
+			expect( source.textChars ).toBe( 'Shared visible label Shared visible label Lower-page editorial content'.length );
+			expect( quote.length + 1 + attribution.length ).toBe( 249 );
+			expect( await page.locator( '.inactive' ).textContent() ).toContain( quote );
+			await page.setContent( `<style>.track{width:240px;height:80px;overflow:hidden}.partial{transform:translateX(150px)}</style>${ shared }
+				<div class="track"><div class="partial"><p>${ quote }</p><p>${ attribution }</p></div></div>` );
+			const partial = await observePage( page, 'about:blank', 390, 0, null, undefined, undefined, true, true );
+			expect( partial.textChars ).toBe( 'Shared visible label Shared visible label Lower-page editorial content'.length + quote.length + 1 );
+			const repeated = 'Repeated article sentence';
+			await page.setContent( `<style>.clip{width:200px;height:60px;overflow:hidden}.offstage{transform:translateX(300px)}article{width:200px;height:50px;overflow:auto}</style>
+				<p>${ repeated }</p><div class="clip"><p class="offstage">${ repeated }</p></div>` );
+			const repeatedText = await observePage( page, 'about:blank', 390, 0, null, undefined, undefined, true, true );
+			expect( repeatedText.textChars ).toBe( repeated.length );
+			const scrollCopy = 'Scrollable editorial text remains part of the article below its visible scrollport.';
+			await page.setContent( `<style>article{width:220px;height:40px;overflow-x:hidden;overflow-y:auto}p{margin:0}</style><article><p>Article introduction.</p><p style="margin-top:90px">${ scrollCopy }</p></article>` );
+			const scrollText = await observePage( page, 'about:blank', 390, 0, null, undefined, undefined, true, true );
+			expect( scrollText.textChars ).toBe( 'Article introduction.'.length + 1 + scrollCopy.length );
+		} finally { await browser.close(); }
+	}, 30_000 );
 
 	it( 'leaves source runtime failures unready even when the page can serialize', async () => {
 		const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
@@ -308,6 +353,34 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			expect( ( await checkFidelity( { directory } ) ).status ).toBe( 'unproven' );
 		} finally { server.closeAllConnections(); await new Promise<void>( resolve => server.close( () => resolve() ) ); rmSync( directory, { recursive: true, force: true } ); }
 	}, 90_000 );
+	it( 'freezes each width from a fresh navigation instead of resize-history state', async () => {
+		const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
+		const directory = mkdtempSync( join( parent, 'reference-fresh-viewport-' ) );
+		const server = createServer( ( _request, response ) => {
+			response.setHeader( 'content-type', 'text/html' );
+			response.end( `<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><style>h1{font-size:33px}</style><h1>Neutral viewport pose</h1><script>
+				if ( innerWidth === 768 ) document.documentElement.dataset.pose = 'fresh';
+				addEventListener('resize', () => { if ( innerWidth === 768 ) { document.documentElement.dataset.pose = 'resized'; document.querySelector('h1').style.fontSize = '29px'; } });
+			</script>` );
+		} );
+		await new Promise<void>( resolve => server.listen( 0, '127.0.0.1', resolve ) );
+		const url = `http://127.0.0.1:${ ( server.address() as { port: number } ).port }/`;
+		const browser = await chromium.launch(); const context = await browser.newContext( { viewport: { width: 1440, height: 900 } } );
+		try {
+			const page = await context.newPage(); await page.goto( url ); await page.setViewportSize( { width: 768, height: 900 } );
+			expect( await page.locator( 'h1' ).evaluate( element => getComputedStyle( element ).fontSize ) ).toBe( '29px' );
+			const collector = createReferenceCollector( directory, url, [ url ], { cleanupPolicy: cleanupPolicy() } );
+			await collector.observe( page, url, 'desktop' );
+			const receipt = join( directory, 'receipt.json' ); writeFileSync( receipt, JSON.stringify( { routes: [] } ) );
+			const manifest = JSON.parse( readFileSync( collector.finalize( receipt ), 'utf8' ) ) as FidelityReference;
+			const entry = manifest.entries.find( candidate => candidate.viewport === 768 )!;
+			const observation = JSON.parse( readFileSync( join( directory, entry.observation!.path ), 'utf8' ) );
+			expect( entry.readiness.ready, entry.readiness.reasons.join( ', ' ) ).toBe( true );
+			expect( observation.typography ).toContainEqual( expect.objectContaining( { key: 'Neutral viewport pose', fontSize: 33 } ) );
+			// The original capture page is not resized or otherwise changed by reference collection.
+			expect( await page.locator( 'h1' ).evaluate( element => getComputedStyle( element ).fontSize ) ).toBe( '29px' );
+		} finally { await browser.close(); server.closeAllConnections(); await new Promise<void>( resolve => server.close( () => resolve() ) ); rmSync( directory, { recursive: true, force: true } ); }
+	}, 60_000 );
 } );
 
 it( 'never silently pairs normal/zoom duplicate media by geometry or index', () => {

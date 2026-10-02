@@ -462,15 +462,15 @@ describe( 'learnSegmentedFluidModel', () => {
 	it( 'emits nested media rules', () => {
 		const segmented = learnSegmentedFluidModel( scaledHeadline )!;
 		const css = segmentedCss( '[data-dla-fluid-segment="0"]', 'font-size', segmented.segments );
-		expect( css ).toContain( '@media (max-width:767px) {\n[data-dla-fluid-segment="0"] { font-size: 21.42vw !important; }\n}' );
-		expect( css ).toContain( '@media (min-width:768px) {\n[data-dla-fluid-segment="0"] { font-size: min(355.4px, 23.38vw) !important; }\n}' );
+		expect( css ).toContain( '@media (max-width:767px) {\n:is(#dla-fluid-specificity, [data-dla-fluid-segment="0"]) { font-size: 21.42vw !important; }\n}' );
+		expect( css ).toContain( '@media (min-width:768px) {\n:is(#dla-fluid-specificity, [data-dla-fluid-segment="0"]) { font-size: min(355.4px, 23.38vw) !important; }\n}' );
 	} );
 
 	it( 'emits the frozen tail as a media-scoped constant', () => {
 		const segmented = learnSegmentedFluidModel( headerOffset )!;
 		const css = segmentedCss( '[data-dla-fluid-segment="7"]', 'padding-top', segmented.segments );
-		expect( css ).toContain( '@media (max-width:1023px) {\n[data-dla-fluid-segment="7"] { padding-top: calc(11.87vw + 38.08px) !important; }\n}' );
-		expect( css ).toContain( '@media (min-width:1024px) and (max-width:1919px) {\n[data-dla-fluid-segment="7"] { padding-top: calc(4.13vw + 19.5px) !important; }\n}' );
-		expect( css ).toContain( '@media (min-width:1920px) {\n[data-dla-fluid-segment="7"] { padding-top: 89px !important; }\n}' );
+		expect( css ).toContain( '@media (max-width:1023px) {\n:is(#dla-fluid-specificity, [data-dla-fluid-segment="7"]) { padding-top: calc(11.87vw + 38.08px) !important; }\n}' );
+		expect( css ).toContain( '@media (min-width:1024px) and (max-width:1919px) {\n:is(#dla-fluid-specificity, [data-dla-fluid-segment="7"]) { padding-top: calc(4.13vw + 19.5px) !important; }\n}' );
+		expect( css ).toContain( '@media (min-width:1920px) {\n:is(#dla-fluid-specificity, [data-dla-fluid-segment="7"]) { padding-top: 89px !important; }\n}' );
 	} );
 } );

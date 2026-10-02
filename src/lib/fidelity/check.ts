@@ -322,7 +322,9 @@ export async function observePage(
 	cleanup?: CleanupPolicy,
 	onBaseline?: () => Promise<void>,
 	/** Observe the already-cleaned capture session without navigation or interaction probes. */
-	captureSession = false
+	captureSession = false,
+	/** Skip scroll probes for frozen baseline observations; drift observations keep them enabled. */
+	skipScrollProbe = false
 ): Promise< LayoutObservation > {
 	const external = new Set< string >();
 	const onRequest = ( request: { url: () => string } ): void => {
@@ -349,15 +351,16 @@ export async function observePage(
 		// content — a section the copy actually lost is neither fixed nor
 		// sticky, is never a dismissal target, and still fails.
 		const dismissedOverlays = await dismissOverlays( page, { kinds: COMPARED_OVERLAY_KINDS } );
-		// Decode lazy media and return from a controlled scroll before measuring.
-		// Scroll-linked animations are otherwise observed mid-flight, while the
-		// source runtime may still be holding the same element at rest.
-		await triggerLazyLoad( page, false, { expandContent: !captureSession } );
+		// Baseline capture already completed its lazy-load sweep. Repeating it
+		// while collecting frozen evidence can relatch scroll-driven page state;
+		// candidate baseline observation likewise preserves the visitor's pose.
+		// Drift observations keep the controlled sweep for lazy content/motion.
+		if ( ! skipScrollProbe ) await triggerLazyLoad( page, false, { expandContent: !captureSession } );
 		dismissedOverlays.push( ...( await dismissOverlays( page, { kinds: COMPARED_OVERLAY_KINDS } ) ) );
 		// Evidence describes the settled baseline, not the page left behind by
 		// anchor/dialog probes (which can scroll or leave a popup open).
 		await onBaseline?.();
-		const measured = await page.evaluate( async ( clickUnresolved: boolean ) => {
+		const measured = await page.evaluate( async ( { clickUnresolved, skipScrollProbe }: { clickUnresolved: boolean; skipScrollProbe: boolean } ) => {
 			const globalWithName = globalThis as typeof globalThis & { __name?: (fn: unknown) => unknown };
 			if (typeof globalWithName.__name === 'undefined') globalWithName.__name = fn => fn;
 			// Perceptual identity for one image: fetch the bytes (cache-warm —
@@ -512,9 +515,14 @@ export async function observePage(
 				range.selectNodeContents( parent && measuredParents.has( parent ) ? parent : textNode );
 				const rect = range.getBoundingClientRect();
 				const style = getComputedStyle( parent );
+				const parentRect = parent.getBoundingClientRect();
+				const clippedLabel = parentRect.width <= 1.5 && parentRect.height <= 1.5 &&
+					( style.position === 'absolute' || style.position === 'fixed' ) &&
+					( style.overflow === 'hidden' || style.clip !== 'auto' || style.clipPath !== 'none' );
 				if (
 					rect.width <= 0 ||
 					rect.height <= 0 ||
+					clippedLabel ||
 					style.display === 'none' ||
 					style.visibility === 'hidden'
 				) {
@@ -555,39 +563,42 @@ export async function observePage(
 			const animationStateBefore = new Map(
 				animationsBefore.map( ( animation ) => [ animation.key, animation ] )
 			);
-			const originalScroll = { x: scrollX, y: scrollY };
-			const root = document.documentElement;
-			const scrollBehavior = root.style.scrollBehavior;
-			root.style.scrollBehavior = 'auto';
-			window.scrollTo( 0, Math.min( document.documentElement.scrollHeight - innerHeight, innerHeight * 1.5 ) );
-			await new Promise( ( resolve ) => requestAnimationFrame( () => requestAnimationFrame( resolve ) ) );
-			await new Promise( ( resolve ) => setTimeout( resolve, 250 ) );
-			const occurrencesAfter = new Map< string, number >();
-			const animationsAfter = document
-				.getAnimations()
-				.filter( ( animation ) => animation.effect?.getComputedTiming().iterations !== Infinity )
-				.map( ( animation ) => {
-					const name = ( animation as Animation & { animationName?: string } ).animationName;
-					if ( ! name || name === 'none' ) return null;
-					const occurrence = occurrencesAfter.get( name ) ?? 0;
-					occurrencesAfter.set( name, occurrence + 1 );
-					return {
-						key: `${ name }:${ occurrence }`,
-						name,
-						time: animation.currentTime?.toString() ?? 'null',
-						state: animation.playState,
-					};
-				} )
-				.filter( ( animation ): animation is NonNullable< typeof animation > => animation !== null );
-			const responsiveAnimations = animationsAfter
-				.filter( ( animation ) => {
-					const before = animationStateBefore.get( animation.key );
-					return ! before || before.time !== animation.time || before.state !== animation.state;
-				} )
-				.map( ( animation ) => animation.name )
-				.sort();
-			window.scrollTo( originalScroll.x, originalScroll.y );
-			root.style.scrollBehavior = scrollBehavior;
+			let responsiveAnimations: string[] = [];
+			if ( ! skipScrollProbe ) {
+				const originalScroll = { x: scrollX, y: scrollY };
+				const root = document.documentElement;
+				const scrollBehavior = root.style.scrollBehavior;
+				root.style.scrollBehavior = 'auto';
+				window.scrollTo( 0, Math.min( document.documentElement.scrollHeight - innerHeight, innerHeight * 1.5 ) );
+				await new Promise( ( resolve ) => requestAnimationFrame( () => requestAnimationFrame( resolve ) ) );
+				await new Promise( ( resolve ) => setTimeout( resolve, 250 ) );
+				const occurrencesAfter = new Map< string, number >();
+				const animationsAfter = document
+					.getAnimations()
+					.filter( ( animation ) => animation.effect?.getComputedTiming().iterations !== Infinity )
+					.map( ( animation ) => {
+						const name = ( animation as Animation & { animationName?: string } ).animationName;
+						if ( ! name || name === 'none' ) return null;
+						const occurrence = occurrencesAfter.get( name ) ?? 0;
+						occurrencesAfter.set( name, occurrence + 1 );
+						return {
+							key: `${ name }:${ occurrence }`,
+							name,
+							time: animation.currentTime?.toString() ?? 'null',
+							state: animation.playState,
+						};
+					} )
+					.filter( ( animation ): animation is NonNullable< typeof animation > => animation !== null );
+				responsiveAnimations = animationsAfter
+					.filter( ( animation ) => {
+						const before = animationStateBefore.get( animation.key );
+						return ! before || before.time !== animation.time || before.state !== animation.state;
+					} )
+					.map( ( animation ) => animation.name )
+					.sort();
+				window.scrollTo( originalScroll.x, originalScroll.y );
+				root.style.scrollBehavior = scrollBehavior;
+			}
 			const animations = animationsBefore.map( ( animation ) => animation.name ).sort();
 			const hashTargets: { fragment: string; resolved: boolean; targets: number }[] = [];
 			const internalPaths: string[] = [];
@@ -644,6 +655,55 @@ export async function observePage(
 			// Remove only a direct, focus-only fragment link occupying the text
 			// prefix; editorial links with the same label remain counted.
 			let bodyText = document.body?.innerText ?? '';
+			// innerText reports text in overflow-clipped offstage content. Remove
+			// a text node only when none of its actual range boxes intersects an
+			// ancestor clip; any partly painted run remains counted. Do not use
+			// carousel selectors, aria-hidden, or viewport position.
+			bodyText = bodyText.replace( /\s+/g, ' ' ).trim();
+			const textNodes: Array< { text: string; clipped: boolean } > = [];
+			const textWalker = document.createTreeWalker( document.body, NodeFilter.SHOW_TEXT );
+			let candidateText: Node | null;
+			while ( ( candidateText = textWalker.nextNode() ) ) {
+				const value = candidateText.textContent ?? '';
+				if ( ! value.trim() || candidateText.parentElement?.closest( 'script,style,noscript,template' ) ) continue;
+				if ( candidateText.parentElement && getComputedStyle( candidateText.parentElement ).fontSize === '0px' ) continue;
+				const range = document.createRange(); range.selectNodeContents( candidateText );
+				const rects = [ ...range.getClientRects() ];
+				if ( ! rects.length ) continue;
+				const parent = candidateText.parentElement;
+				if ( ! parent ) continue;
+				if ( getComputedStyle( parent ).visibility === 'hidden' ) continue;
+				const painted = rects.some( rect => {
+					if ( rect.width <= 0 || rect.height <= 0 ) return false;
+					let left = rect.left, right = rect.right, top = rect.top, bottom = rect.bottom;
+					for ( let ancestor: HTMLElement | null = parent; ancestor && ancestor !== document.body; ancestor = ancestor.parentElement ) {
+						const style = getComputedStyle( ancestor );
+						if ( ! [ 'hidden', 'clip' ].includes( style.overflowX ) && ! [ 'hidden', 'clip' ].includes( style.overflowY ) ) continue;
+						const box = ancestor.getBoundingClientRect();
+						if ( [ 'hidden', 'clip' ].includes( style.overflowX ) ) { left = Math.max( left, box.left ); right = Math.min( right, box.right ); }
+						if ( [ 'hidden', 'clip' ].includes( style.overflowY ) ) { top = Math.max( top, box.top ); bottom = Math.min( bottom, box.bottom ); }
+					}
+					return right > left && bottom > top;
+				} );
+				textNodes.push( { text: value, clipped: ! painted } );
+			}
+			let textSearchFrom = 0;
+			for ( const { text, clipped } of textNodes ) {
+				// Map each DOM text node in document order to the normalized
+				// innerText stream. Advancing for visible nodes prevents identical
+				// later text from being mistaken for an earlier occurrence.
+				const normalizedText = text.replace( /\s+/g, ' ' ).trim();
+				if ( ! normalizedText ) continue;
+				const at = bodyText.indexOf( normalizedText, textSearchFrom );
+				if ( at >= 0 ) {
+					if ( clipped ) {
+						bodyText = `${ bodyText.slice( 0, at ) } ${ bodyText.slice( at + normalizedText.length ) }`;
+						// The stream shrinks on deletion; resume after the replacement
+						// separator while preserving later identical occurrences.
+						textSearchFrom = at + 1;
+					} else textSearchFrom = at + normalizedText.length;
+				}
+			}
 			for ( const element of document.body?.children ?? [] ) {
 				if ( ! ( element instanceof HTMLAnchorElement ) || ! element.hash || element.matches( ':focus' ) ) continue;
 				const style = getComputedStyle( element );
@@ -725,7 +785,7 @@ export async function observePage(
 				hashTargets,
 				internalPaths,
 			};
-		}, ! localOrigin && ! captureSession );
+		}, { clickUnresolved: ! localOrigin && ! captureSession, skipScrollProbe } );
 
 		const internalMissing: string[] = [];
 		if ( localOrigin ) {
@@ -1316,7 +1376,7 @@ async function checkFrozenFidelity( options: FidelityCheckOptions, stage: 'captu
 					const measure = async ( url: string ): Promise<LayoutObservation> => {
 						const response = await page.goto( url, { waitUntil: 'domcontentloaded' } );
 						if ( response && ! response.ok() ) throw new Error( `Observation HTTP ${ response.status() }` );
-						return observePage( page, url, viewport, options.settleMs ?? 800, new URL( url ).origin, undefined, undefined, true );
+						return observePage( page, url, viewport, options.settleMs ?? 800, new URL( url ).origin, undefined, undefined, true, true );
 					};
 					if ( stage === 'materialization' ) { source = await measure( local ); sourcePng = await page.screenshot(); }
 					const liberated = await measure( candidate );

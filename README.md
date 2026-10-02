@@ -78,6 +78,7 @@ Naming an unknown target lists the registered ones.
 
 | Platform | Status |
 |---|---|
+| Blogger | Browser capture + feed accounting; HTTP source-evidence API |
 | EmDash CMS | Ready |
 | GoDaddy Websites & Marketing | Ready |
 | Hostinger Website Builder | Ready |
@@ -92,6 +93,8 @@ Naming an unknown target lists the registered ones.
 | Any other website | Best-effort generic fallback |
 
 Adapters contribute platform knowledge to discovery and capture — how a platform lists its routes, what its CDN URLs look like, how its runtime resolves anchors. Sites matching none of them fall back to a generic adapter that renders each page in a headless browser.
+
+Registered HTTP profiles can acquire route response evidence and shared dependencies through the [HTTP acquisition API](/docs/http-acquisition.md). Portable preparation and rendered acceptance remain separate from acquisition coverage.
 
 ### Custom platforms
 

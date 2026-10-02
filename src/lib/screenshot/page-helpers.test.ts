@@ -178,6 +178,32 @@ describe('triggerLazyLoad', () => {
     expect(page.evaluate).toHaveBeenCalled();
   });
 
+  it('preserves asynchronous body state and content revealed during lazy-load scrolling', async () => {
+    const page = await browser.newPage();
+    await page.setContent(`<!doctype html><style>
+      body { height:3000px; }
+      body.loaded main { min-height: 120px; background: rgb(1, 2, 3); }
+      header { position:fixed; top:0; height:40px; padding-top:24px; }
+      header.shrink { padding-top:4px; }
+    </style><header id="header">Navigation</header><main style="height:3000px">Content</main>
+    <script>
+      setTimeout(() => document.body.classList.add('loaded'), 300);
+      let scrolled = false;
+      addEventListener('scroll', () => {
+        if (scrollY > 0) { scrolled = true; document.body.classList.add('scrolling'); document.querySelector('#header').classList.add('compact'); }
+        else if (scrolled) { document.body.classList.remove('scrolling'); document.querySelector('#header').classList.remove('compact'); }
+      });
+    </script>`);
+    try {
+      await triggerLazyLoad(page);
+      expect(await page.evaluate(() => scrollY)).toBe(0);
+      expect(await page.locator('body').getAttribute('class')).toContain('loaded');
+      expect(await page.locator('main').evaluate((element) => getComputedStyle(element).backgroundColor)).toBe('rgb(1, 2, 3)');
+    } finally {
+      await page.close();
+    }
+  }, 30_000);
+
   it('all in-page scrollTo calls are explicit-instant (smooth-scroll glide immunity)', async () => {
     // html{scroll-behavior:smooth} makes a bare scrollTo GLIDE: the restore
     // scrollTo(0,0) was still mid-glide (y=4, is-scrolled on) when the snap

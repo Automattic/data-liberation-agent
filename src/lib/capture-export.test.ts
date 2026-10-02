@@ -12,7 +12,6 @@ import {
 	CAPTURE_RECEIPT_SCHEMA,
 	ASSET_EVIDENCE_SCHEMA,
 	canonicalizeUnreferencedHeaderIds,
-	documentsDiffer,
 	exportWebsiteCapture,
 	INDEXED_SEMANTIC_EVIDENCE_SCHEMA,
 	portableInlineStyle,
@@ -23,6 +22,7 @@ import { checkSelfConsistency } from './fidelity/self-consistency.js';
 import { startStaticServer } from './replicate/local-site/static-server.js';
 import { cleanupPolicy } from './source-cleanup.js';
 import { inspectSourceInteractivity } from './source-interactivity.js';
+import { documentsDiffer } from './responsive-assembly.js';
 
 const dirs: string[] = [];
 
@@ -452,7 +452,7 @@ describe( 'exportWebsiteCapture', () => {
 		} );
 
 		const $ = cheerio.load( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) );
-		const panelLinks = $( '.data-liberation-mobile-document details.dla-disclosure a' );
+		const panelLinks = $( '.data-liberation-mobile-document [data-dla-dialog-panel] a' );
 		expect( panelLinks ).toHaveLength( 2 );
 		expect( $( '#services--dla-mobile' ) ).toHaveLength( 1 );
 		expect( panelLinks.eq( 0 ).attr( 'href' ) ).toBe( '/index.html#services--dla-mobile' );
@@ -3201,10 +3201,10 @@ describe( 'exportWebsiteCapture', () => {
 		try {
 			const page = await browser.newPage();
 			await page.setContent( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) );
-			const menu = page.locator( 'details.dla-disclosure:not(.dla-initial-dialog)' ).first();
-			await menu.locator( 'summary' ).evaluate( ( summary ) => ( summary as HTMLElement ).click() );
-			expect( await menu.evaluate( ( details ) => ( details as HTMLDetailsElement ).open ) ).toBe( true );
-			const menuLinks = menu.locator( '[role="dialog"] a' );
+			const menu = page.locator( '[data-dla-dialog-panel]' ).first();
+			await page.locator( '#contact' ).evaluate( ( trigger ) => ( trigger as HTMLElement ).click() );
+			expect( await menu.evaluate( ( panel ) => ( panel as HTMLElement ).hidden ) ).toBe( false );
+			const menuLinks = menu.locator( 'a' );
 			expect( await menuLinks.first().getAttribute( 'href' ) ).toBe(
 				'/about/index.html?from=menu#team'
 			);
@@ -6601,5 +6601,164 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 			url: '/',
 			error: 'skipped degenerate replacement key',
 		} );
+	} );
+
+	it( 'selects raw punctuation, comma, entity, and percent references that are not DOM src values', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-exact-media-spellings-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'screenshots', 'media' ] )
+			mkdirSync( join( outputDir, path ), { recursive: true } );
+		const quoted = "https://static.wixstatic.com/media/Happy%20Women's%20Day.jpg";
+		const comma = 'https://cdn.example/media/asset~mv2.png/v1/fill/w_58,h_57,al_c/file.png';
+		const entity = 'https://cdn.example/q.png?w=1&h=2';
+		const percent = 'https://cdn.example/crop/rs=h:100%25,cg:true';
+		const prefix = 'https://cdn.example/hero.png';
+		writeFileSync(
+			join( outputDir, 'html', 'homepage.html' ),
+			`<main>` +
+				`<img data-src="${ quoted }">` +
+				`<img data-src="${ comma }">` +
+				`<img data-src="${ entity.replace( /&/g, '&amp;' ) }">` +
+				`<img data-src="${ percent }">` +
+				`<img data-src="${ prefix }?w=128">` +
+				`</main>`
+		);
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( {
+				version: 1,
+				entries: { 'https://example.com/': { html: 'html/homepage.html' } },
+			} )
+		);
+		const media = MediaStubStore.load( outputDir );
+		const selected = [
+			[ quoted, 'quoted.jpg' ],
+			[ comma, 'comma.png' ],
+			[ entity, 'entity.png' ],
+			[ percent, 'percent.png' ],
+		] as const;
+		for ( const [ url, name ] of selected ) {
+			writeFileSync( join( outputDir, 'media', name ), name );
+			media.markSuccess( url, join( outputDir, 'media', name ) );
+		}
+		writeFileSync( join( outputDir, 'media', 'prefix.png' ), 'prefix' );
+		media.markSuccess( prefix, join( outputDir, 'media', 'prefix.png' ) );
+		media.flush();
+
+		const receiptPath = exportWebsiteCapture( {
+			outputDir,
+			sourceUrl: 'https://example.com/',
+			platform: 'fake',
+			summary: {},
+			failures: [],
+		} );
+
+		const receipt = JSON.parse( readFileSync( receiptPath, 'utf8' ) );
+		expect( receipt.assets.map( ( asset: { sourceUrl: string } ) => asset.sourceUrl ) ).toEqual( [
+			quoted,
+			comma,
+			entity,
+			percent,
+		] );
+		expect( existsSync( join( outputDir, 'website', 'media', 'prefix.png' ) ) ).toBe( false );
+	} );
+
+	it( 'keeps the smaller eligible family when homepage priority ties, independent of stub order', () => {
+		for ( const order of [ 'large-first', 'small-first' ] as const ) {
+			const outputDir = mkdtempSync( join( tmpdir(), `dla-media-budget-bytes-${ order }-` ) );
+			dirs.push( outputDir );
+			for ( const path of [ 'html', 'screenshots', 'media' ] )
+				mkdirSync( join( outputDir, path ), { recursive: true } );
+			const largeUrl = 'https://cdn.example/a-large.png';
+			const smallUrl = 'https://cdn.example/z-small.png';
+			writeFileSync(
+				join( outputDir, 'html', 'homepage.html' ),
+				`<main><img src="${ largeUrl }"><img src="${ smallUrl }"></main>`
+			);
+			writeFileSync(
+				join( outputDir, 'screenshots', 'manifest.json' ),
+				JSON.stringify( {
+					version: 1,
+					entries: { 'https://example.com/': { html: 'html/homepage.html' } },
+				} )
+			);
+			writeFileSync( join( outputDir, 'media', 'a-large.png' ), Buffer.alloc( 2000, 1 ) );
+			writeFileSync( join( outputDir, 'media', 'z-small.png' ), Buffer.alloc( 1000, 2 ) );
+			const media = MediaStubStore.load( outputDir );
+			const stubs = order === 'large-first'
+				? [ [ largeUrl, 'a-large.png' ], [ smallUrl, 'z-small.png' ] ]
+				: [ [ smallUrl, 'z-small.png' ], [ largeUrl, 'a-large.png' ] ];
+			for ( const [ url, name ] of stubs )
+				media.markSuccess( url, join( outputDir, 'media', name ) );
+			media.flush();
+
+			const receiptPath = exportWebsiteCapture( {
+				outputDir,
+				sourceUrl: 'https://example.com/',
+				platform: 'fake',
+				summary: {},
+				failures: [],
+				limits: { portableMediaTotalBytes: 1000 },
+			} );
+
+			const receipt = JSON.parse( readFileSync( receiptPath, 'utf8' ) );
+			const diagnostics = JSON.parse( readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' ) );
+			expect( receipt.assets.map( ( asset: { sourceUrl: string } ) => asset.sourceUrl ) ).toEqual( [ smallUrl ] );
+			expect( receipt.portableMedia ).toMatchObject( { selected_count: 1, selected_bytes: 1000 } );
+			expect( diagnostics.unresolvedMedia ).toContainEqual( {
+				url: largeUrl,
+				error: 'removed because the aggregate portable media limit was reached',
+			} );
+		}
+	} );
+
+	it( 'keeps the homepage family over a smaller other-page family, independent of stub order', () => {
+		for ( const order of [ 'other-first', 'home-first' ] as const ) {
+			const outputDir = mkdtempSync( join( tmpdir(), `dla-media-budget-home-${ order }-` ) );
+			dirs.push( outputDir );
+			for ( const path of [ 'html', 'screenshots', 'media' ] )
+				mkdirSync( join( outputDir, path ), { recursive: true } );
+			const homeUrl = 'https://cdn.example/z-home.png';
+			const otherUrl = 'https://cdn.example/a-other.png';
+			writeFileSync( join( outputDir, 'html', 'homepage.html' ), `<main><img src="${ homeUrl }"></main>` );
+			writeFileSync( join( outputDir, 'html', 'other.html' ), `<main><img src="${ otherUrl }"></main>` );
+			writeFileSync(
+				join( outputDir, 'screenshots', 'manifest.json' ),
+				JSON.stringify( {
+					version: 1,
+					entries: {
+						'https://example.com/': { html: 'html/homepage.html' },
+						'https://example.com/other': { html: 'html/other.html' },
+					},
+				} )
+			);
+			writeFileSync( join( outputDir, 'media', 'z-home.png' ), Buffer.alloc( 1500, 1 ) );
+			writeFileSync( join( outputDir, 'media', 'a-other.png' ), Buffer.alloc( 1000, 2 ) );
+			const media = MediaStubStore.load( outputDir );
+			const stubs = order === 'other-first'
+				? [ [ otherUrl, 'a-other.png' ], [ homeUrl, 'z-home.png' ] ]
+				: [ [ homeUrl, 'z-home.png' ], [ otherUrl, 'a-other.png' ] ];
+			for ( const [ url, name ] of stubs )
+				media.markSuccess( url, join( outputDir, 'media', name ) );
+			media.flush();
+
+			const receiptPath = exportWebsiteCapture( {
+				outputDir,
+				sourceUrl: 'https://example.com/',
+				platform: 'fake',
+				summary: {},
+				failures: [],
+				limits: { portableMediaTotalBytes: 1500 },
+			} );
+
+			const receipt = JSON.parse( readFileSync( receiptPath, 'utf8' ) );
+			const diagnostics = JSON.parse( readFileSync( join( outputDir, 'diagnostics.json' ), 'utf8' ) );
+			expect( receipt.assets.map( ( asset: { sourceUrl: string } ) => asset.sourceUrl ) ).toEqual( [ homeUrl ] );
+			expect( receipt.portableMedia.selected_bytes ).toBe( 1500 );
+			expect( diagnostics.unresolvedMedia ).toContainEqual( {
+				url: otherUrl,
+				error: 'removed because the aggregate portable media limit was reached',
+			} );
+		}
 	} );
 } );

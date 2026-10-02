@@ -13,6 +13,7 @@ import {
 	evidenceSlug,
 	externalRequestHost,
 	receiptCoversSourceUrl,
+	observePage,
 	resolveCheckDirectory,
 	routeSourceMap,
 } from './check.js';
@@ -143,6 +144,23 @@ describe( 'receiptCoversSourceUrl', () => {
 describe( 'checkWidthsFor', () => {
 	it( 'drops widths the sweep already sampled', () => {
 		expect( checkWidthsFor( [ 1440, 1600, 1920 ] ) ).toEqual( [ 1728 ] );
+	} );
+} );
+
+describe( 'observePage typography', () => {
+	it.skipIf( skipBrowserTests )( 'does not compare line metrics for a clipped accessible-only label', async () => {
+		const browser = await chromium.launch();
+		const page = await browser.newPage( { viewport: { width: 390, height: 900 } } );
+		try {
+			await page.setContent( `<!doctype html><style>
+				.visually-hidden { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(1px,1px,1px,1px); white-space:nowrap; line-height:normal; }
+			</style><header><span class="visually-hidden">Open Menu</span><p>Visible navigation label</p></header>` );
+			const observation = await observePage( page, page.url(), 390, 0, null, undefined, undefined, true );
+			expect( observation.typography?.map( ( item ) => item.key ) ).toContain( 'Visible navigation label' );
+			expect( observation.typography?.map( ( item ) => item.key ) ).not.toContain( 'Open Menu' );
+		} finally {
+			await browser.close();
+		}
 	} );
 } );
 

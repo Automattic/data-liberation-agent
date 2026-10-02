@@ -32,6 +32,9 @@ export { detect as detectPlatform, detectFromUrl, detectFromHttp } from './lib/d
 export { inspectSource, InspectError, INSPECTION_SCHEMA_VERSION } from './lib/inspect.js';
 export { captureWebsite, UnsupportedCapturePlatformError, IncompleteCaptureError } from './lib/capture.js';
 export type { CaptureOptions, CaptureResult, CaptureProgress, CaptureDependencies, UnresolvedAnchor } from './lib/capture.js';
+export { acquireHttpDocuments } from './lib/http-acquisition.js';
+export type { HttpAcquisitionOptions, AcquiredHttpDocument } from './lib/http-acquisition.js';
+export type { HttpAcquisitionProfile, HttpDocumentContext, PreparedHttpDocument, RuntimeRegionRequirement } from './platform/acquisition.js';
 export { checkFidelity } from './lib/fidelity/check.js';
 export { serveCapture } from './lib/serve-capture.js';
 export type { StaticServer as CapturePreviewServer } from './lib/replicate/local-site/static-server.js';
@@ -64,3 +67,8 @@ export type { PublishCliOptions as PublishSiteOptions } from './ui/publish.js';
 export type { InspectOptions, InspectionIssue, SourceInspection } from './lib/inspect.js';
 export { SOURCE_CAPABILITIES, SOURCE_CAPABILITY_VOCABULARY } from './lib/inspect-rendered.js';
 export type { CapabilityRule, SourceCapability, RenderedInspection, SourceComplexity, ExcludedSurface } from './lib/inspect-rendered.js';
+export { materializeHttpDocuments, type HttpMaterializationOptions } from './lib/http-materialization.js';
+export { observeRuntimeRegions } from './lib/runtime-regions.js';
+export type { RuntimeRegionNode, RuntimeRegionObservation } from './lib/runtime-regions.js';
+export { stageRuntimeRegions } from './lib/embedded-documents.js';
+export type { RuntimeRegionAttachment } from './lib/embedded-documents.js';

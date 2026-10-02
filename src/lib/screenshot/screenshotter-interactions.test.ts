@@ -255,7 +255,7 @@ describe( 'captureScreenshots interactions', () => {
 			);
 			expect( wireCapturedDialogs(
 				'<html><head></head><body><button id="desktop-dialog">Desktop</button><button id="mobile-menu">Mobile</button></body></html>', states
-			).match( /<details class="dla-disclosure">/g ) ).toHaveLength( 2 );
+			).match( /data-dla-dialog-trigger=/g ) ).toHaveLength( 2 );
 		} finally {
 			rmSync( outputDir, { recursive: true, force: true } );
 		}

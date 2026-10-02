@@ -25,6 +25,46 @@ export function squarespaceVideoPoster( config: string ): string | undefined {
 }
 
 export const capture: LiberationHooks = {
+	/** The captured default state leaves Squarespace's overlay navigation closed;
+	 * its runtime-written top padding belongs to the menu, not page geometry. */
+	prepare: async ( page ) => {
+		await page.evaluate( () => {
+			// Squarespace's header scroll-back controller can leave its fixed header
+			// translated above the viewport during the geometry sweep. Normalize its
+			// observed top-of-page state here, before measuring dependent clearances.
+			const header = document.querySelector< HTMLElement >( 'header[data-test="header"]' );
+			if ( header ) {
+				// The lazy-load sweep scrolls through the page. Squarespace leaves
+				// its scroll-derived `shrink` state latched after returning to scrollY=0;
+				// the page a visitor freshly opens at the declared top pose has the
+				// expanded header, whose height also determines the hero geometry.
+				header.classList.remove( 'shrink' );
+				let style = document.querySelector< HTMLStyleElement >( 'style[data-dla-squarespace-header-style]' );
+				if ( ! style ) {
+					style = document.createElement( 'style' );
+					style.setAttribute( 'data-dla-squarespace-header-style', '' );
+				}
+				style.textContent = ':is(#dla-squarespace-header-visible,header[data-test="header"]){transition:none!important;transform:none!important}';
+				( document.body ?? document.head ?? document.documentElement ).append( style );
+			}
+			for ( const menu of document.querySelectorAll< HTMLElement >( '[data-test="header-menu"]' ) ) {
+				if ( menu.style.getPropertyValue( 'padding-top' ) ) {
+					menu.setAttribute( 'data-dla-fluid-ignore-padding', '' );
+				}
+			}
+		} );
+		// Squarespace may also have committed collapsed-header geometry into its
+		// runtime model while scrolling, which removing the presentation class
+		// alone does not recompute. A desktop-width round trip makes its own
+		// responsive controller reconcile that model with the current top pose.
+		const viewport = page.viewportSize();
+		if ( viewport && viewport.width < 1440 ) {
+			await page.setViewportSize( { width: 1440, height: viewport.height } );
+			await page.waitForTimeout( 250 );
+			await page.setViewportSize( viewport );
+			await page.waitForTimeout( 250 );
+		}
+	},
 	/**
 	 * A Squarespace-hosted video plays through an HLS player whose `blob:`
 	 * source dies with the page session. The generic capture falls back to a

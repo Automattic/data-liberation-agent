@@ -15,6 +15,47 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.16.6] - 2026-10-02
+
+### Changed
+- regenerate plugin bundles
+- Preserve learned slide transforms through responsive counterpart assembly
+
+### Fixed
+- strip app builder acquisition chrome
+
+## [0.16.5] - 2026-10-02
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- preserve authored dialog trigger layout and interaction
+
+## [0.16.4] - 2026-10-02
+
+### Changed
+- regenerate plugin bundles
+- plan portable media selection once
+
+## [0.16.3] - 2026-10-02
+
+### Changed
+- regenerate plugin bundles
+- bind responsive HTML and evidence to one assembly
+
+### Fixed
+- exclude clipped accessible-only text metrics
+- preserve coherent responsive source baselines
+
+## [0.16.2] - 2026-10-02
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- interpret CSS dependency URLs and empty stylesheets correctly
+
 ## [0.16.1] - 2026-10-02
 
 ### Changed
