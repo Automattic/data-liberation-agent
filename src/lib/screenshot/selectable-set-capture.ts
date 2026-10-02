@@ -117,7 +117,7 @@ export async function captureSelectableSetStates(
 						? globalThis.CSS.escape( value )
 						: value.replace( /[^a-zA-Z0-9_-]/g, '\\$&' );
 				const sourceSelector = ( element: Element ): string => {
-					if ( element.id ) return `#${ cssEscape( element.id ) }`;
+					if ( element.id && document.querySelectorAll( `#${ cssEscape( element.id ) }` ).length === 1 ) return `#${ cssEscape( element.id ) }`;
 					const parts: string[] = [];
 					for (
 						let node: Element | null = element;
@@ -901,9 +901,13 @@ export async function captureSelectableSetStates(
 			if (Date.now() >= deadline) break;
 			if (record.restoreSelector) restores.add(record.restoreSelector);
 			try {
+				const questions = [...record.region.html.matchAll(/<h[1-6][^>]*>(.*?)<\/h[1-6]>/g)].map(match => match[1].replace(/<[^>]+>/g, '').trim()).filter(Boolean).slice(0, 3);
 				await page.locator(record.trigger.selector).first().evaluate((element: HTMLElement) => element.click());
 				await page.waitForTimeout(settleMs);
+				const selected = await page.locator(record.trigger.selector).first().evaluate(element => element.getAttribute('aria-selected') ?? element.getAttribute('aria-pressed')).catch(() => null);
 				const local = page.locator(record.region.selector).first();
+				const regionText = await local.innerText().catch(() => '');
+				if (selected === 'false' || (questions.length && !questions.some(question => regionText.includes(question)))) continue;
 				if (!await local.locator('[aria-expanded="false"]:not([aria-haspopup])').count()) continue;
 				await hydrateDisclosureContent(page, record.region.selector);
 				record.region.html = await local.evaluate(element => {

@@ -50,6 +50,7 @@ export async function captureTypedSearchStates(
 		groups.set( key, [ ...( groups.get( key ) ?? [] ), state ] );
 	}
 	const results: CapturedDialogInteraction[] = [];
+	const initiallyOpen: Array<{ selector: string; label: string }> = [];
 	const completeGroups = [ ...groups.values() ].filter( group => group.length === group[ 0 ]!.set!.size && group[ 0 ]!.dialog?.selector );
 	if ( ! completeGroups.length ) {
 		const orphan = await page.locator( 'input[type="search"], input[type="text"]' ).evaluateAll( elements => {
@@ -95,7 +96,18 @@ export async function captureTypedSearchStates(
 				results.push( { status: 'no-dialog', kind: 'typed-search', trigger: { selector: field.selector, tag: 'input', ariaHaspopup: '', dataBindings: {} }, error: `Resting collection did not yield a unique item list (${ baseline.length })` } );
 				continue;
 			}
-			const memberships = group.map( state => snapshotItems( state.dialog!.html ).map( item => baseline.findIndex( candidate => candidate.text === item.text ) ) );
+			const questionOf = ( text: string ) => {
+				const question = text.split( '?' )[ 0 ]?.trim() ?? '';
+				return question.length >= 8 ? question : text;
+			};
+			const matchIndex = ( itemText: string ) => {
+				const exact = baseline.findIndex( candidate => candidate.text === itemText );
+				if ( exact >= 0 ) return exact;
+				const question = questionOf( itemText );
+				const hits = baseline.flatMap( ( candidate, index ) => questionOf( candidate.text ) === question ? [ index ] : [] );
+				return hits.length === 1 ? hits[ 0 ]! : -1;
+			};
+			const memberships = group.map( state => snapshotItems( state.dialog!.html ).map( item => matchIndex( item.text ) ) );
 			if ( memberships.some( members => ! members.length ) ) {
 				results.push( { status: 'no-dialog', kind: 'typed-search', trigger: { selector: field.selector, tag: 'input', ariaHaspopup: '', dataBindings: {} }, error: 'A category snapshot had no items' } );
 				continue;
@@ -148,7 +160,8 @@ export async function captureTypedSearchStates(
 						if ( Date.now() >= deadline ) throw new Error( 'Typed search drive budget exceeded' );
 						await input.fill( query ); await page.waitForTimeout( settleMs );
 						if ( page.url() !== sourceUrl ) throw new Error('Source input drive changed routes; local replay remains unproven');
-						await hydrateDisclosureContent( page, targetSelector );
+			initiallyOpen.push( ...await target.locator( '[aria-expanded="true"]' ).evaluateAll( ( elements, selector ) => elements.map( element => ( { selector, label: ( element.textContent ?? '' ).replace( /\s+/g, ' ' ).trim() } ) ).filter( item => item.label ), targetSelector ) );
+			await hydrateDisclosureContent( page, targetSelector );
 						const actual = snapshotItems( await target.evaluate( element => element.outerHTML ) );
 						const expected = items.filter( item => item.categories.includes( category ) && item.text.toLowerCase().includes( query.toLowerCase() ) );
 						const actualKeys = actual.map( item => items.find( candidate => candidate.text === item.text )?.key );
@@ -198,6 +211,10 @@ export async function captureTypedSearchStates(
 			break;
 	}
 	if ( ! results.length ) results.push({ status: 'no-dialog', kind: 'typed-search', trigger: { selector: 'body', tag: 'input', ariaHaspopup: '', dataBindings: {} }, error: 'No complete, unambiguous selectable collection relationship was established' });
+	for ( const opened of initiallyOpen ) {
+		const trigger = page.locator( opened.selector ).locator( '[aria-expanded="false"]' ).filter( { hasText: opened.label } ).first();
+		if ( await trigger.count() ) await trigger.evaluate( element => ( element as HTMLElement ).click() ).catch( () => undefined );
+	}
 	return results;
 }
 

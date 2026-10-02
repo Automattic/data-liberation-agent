@@ -161,6 +161,29 @@ describe( 'source-backed typed collection filtering', () => {
 		expect( resourceStates[ 0 ]?.collectionFilter?.finiteBootstrap ).toBeUndefined();
 		await resource.close();
 	}, 60_000 );
+	it( 'keeps category snapshots when a duplicated id would click a hidden copy and preserves an open answer', async () => {
+		const source = `<!doctype html><body>
+			<div hidden><div role="tablist"><button role="tab" id="cat-one" aria-selected="true">One</button><button role="tab" id="cat-two">Two</button></div><section>Resources question that must not replace the visible category. Extra stale answer text.</section></div>
+			<main><input type="search" placeholder="Find entries"><div role="tablist"><button role="tab" id="cat-one" aria-selected="true">One</button><button role="tab" id="cat-two">Two</button></div><div id="items"></div></main>
+			<script>
+			const entries=[['Alpha question about apricot','A populated apricot answer that starts open',0],['Beta question about blueberry','A populated blueberry answer that starts closed',0],['Gamma question about citrus','A populated citrus answer in the other category',1]];
+			let category=0;
+			function render(){document.querySelectorAll('main [role=tab]').forEach((tab,i)=>tab.setAttribute('aria-selected',String(i===category)));document.querySelector('#items').innerHTML=entries.filter(e=>e[2]===category).map((e,i)=>'<article><button aria-expanded="'+(category===0&&i===0?'true':'false')+'">'+e[0]+'</button><div>'+e[1]+'</div></article>').join('')||'<p>No entries match.</p>';}
+			document.querySelector('input').addEventListener('input',render);
+			document.querySelectorAll('main [role=tab]').forEach((tab,i)=>tab.onclick=()=>{category=i;render();});
+			render();
+			</script></body>`;
+		const page = await browser.newPage();
+		await page.setContent( source );
+		const categories = await captureSelectableSetStates( page, { settleMs: 20 } );
+		const one = categories.find( state => state.kind === 'selectable-set' && state.trigger.label === 'One' && state.dialog?.html );
+		expect( one?.dialog?.html ?? '' ).toContain( 'Alpha question about apricot' );
+		expect( one?.dialog?.html ?? '' ).not.toContain( 'must not replace' );
+		const states = await captureTypedSearchStates( page, categories, { settleMs: 20 } );
+		expect( states.some( state => state.collectionFilter?.reason === 'No category snapshot matched the resting item list' ) ).toBe( false );
+		expect( await page.locator( '#items button[aria-expanded="true"]' ).innerText() ).toContain( 'Alpha question about apricot' );
+		await page.close();
+	}, 30_000 );
 	it( 'rejects query-dependent, paginated, undeclared, incomplete, and unrestored collection drives', async () => {
 		const expected = {
 			'query-dependent': /Query-dependent/,
