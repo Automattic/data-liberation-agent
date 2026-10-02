@@ -43,6 +43,13 @@ function isPureXTranslationMatrix( matrix: readonly number[] ): boolean {
 	);
 }
 
+function pureXTranslation( transform: string ): number | null {
+	const matrix = /^matrix\(\s*([^)]*)\s*\)$/i.exec( transform )?.[ 1 ]?.split( ',' ).map( Number );
+	if ( matrix && isPureXTranslationMatrix( matrix ) ) return matrix[ 4 ]!;
+	const translate = /^translate(?:3d|x)?\(\s*(-?\d+(?:\.\d+)?)px(?:\s*,\s*0(?:px)?(?:\s*,\s*0(?:px)?)?)?\s*\)$/i.exec( transform.trim() );
+	return translate ? Number( translate[ 1 ] ) : null;
+}
+
 export type LearnableProperty = ( typeof LEARNABLE_PROPERTIES )[ number ];
 
 export interface FluidSweepOptions {
@@ -119,7 +126,7 @@ export async function learnAndApplyFluidGeometry(
 					/^-?\d+(?:\.\d+)?px$/.test( element.style.getPropertyValue( property ).trim() )
 				);
 				const carriesPixelCustomProperty = /(?:^|;)\s*--[-a-zA-Z0-9_]+\s*:\s*-?\d+(?:\.\d+)?px\s*(?:;|$)/.test( style );
-				const carriesMatrixTransform = /(?:^|;)\s*transform\s*:\s*matrix\(/.test( style );
+				const carriesMatrixTransform = /(?:^|;)\s*transform\s*:\s*(?:matrix\(|translate(?:3d|x)?\()/i.test( style );
 				const carriesAbsoluteInset = getComputedStyle( element ).position === 'absolute' &&
 					/(?:^|;)\s*inset\s*:\s*-?\d+(?:\.\d+)?px\s+auto\s+auto\s+-?\d+(?:\.\d+)?px\s*(?:;|$)/.test( style );
 				if ( ! carriesPixelSize && ! carriesPixelCustomProperty && ! carriesMatrixTransform && ! carriesAbsoluteInset ) {
@@ -181,18 +188,15 @@ export async function learnAndApplyFluidGeometry(
 							continue;
 						}
 						if ( property === 'transform-x' ) {
-							const transform = /(?:^|;)\s*transform\s*:\s*matrix\(([^)]+)\)/.exec( style );
-							const matrix = transform?.[ 1 ]?.split( ',' ).map( Number );
-							const isPureXTranslation =
-								matrix !== undefined &&
-								matrix.length === 6 &&
-								matrix.every( Number.isFinite ) &&
-								Math.abs( matrix[ 0 ]! - 1 ) <= 0.01 &&
-								Math.abs( matrix[ 1 ]! ) <= 0.01 &&
-								Math.abs( matrix[ 2 ]! ) <= 0.01 &&
-								Math.abs( matrix[ 3 ]! - 1 ) <= 0.01 &&
-								Math.abs( matrix[ 5 ]! ) <= 0.01;
-							values[ property ] = isPureXTranslation ? matrix[ 4 ]! : null;
+							const transform = /(?:^|;)\s*transform\s*:\s*([^;]+)/i.exec( style )?.[ 1 ]?.trim();
+							if ( transform ) {
+								const matrix = /^matrix\(\s*([^)]*)\s*\)$/i.exec( transform )?.[ 1 ]?.split( ',' ).map( Number );
+								const translated = /^translate(?:3d|x)?\(\s*(-?\d+(?:\.\d+)?)px(?:\s*,\s*0(?:px)?(?:\s*,\s*0(?:px)?)?)?\s*\)$/i.exec( transform );
+								const pureMatrix = matrix && matrix.length === 6 && matrix.every( Number.isFinite ) &&
+									Math.abs( matrix[ 0 ]! - 1 ) <= 0.01 && Math.abs( matrix[ 1 ]! ) <= 0.01 &&
+									Math.abs( matrix[ 2 ]! ) <= 0.01 && Math.abs( matrix[ 3 ]! - 1 ) <= 0.01 && Math.abs( matrix[ 5 ]! ) <= 0.01;
+								values[ property ] = pureMatrix ? matrix[ 4 ]! : translated ? Number( translated[ 1 ] ) : null;
+							} else values[ property ] = null;
 							continue;
 						}
 						// `font-size` is excluded: CSS resolves a font
@@ -284,7 +288,7 @@ export async function learnAndApplyFluidGeometry(
 			wholeRangeModel.kind === 'breakpoint'
 				? learnSegmentedFluidModel( modelSamples, customProperty || insetAxis
 					? { holdUnfitted: true, holdNarrowForBoundedAffine: true }
-					: { holdNarrowForBoundedAffine: true } )
+					: { holdUnfitted: transformX, holdNarrowForBoundedAffine: true } )
 				: null;
 		if ( insetAxis ) {
 			const segments = segmented?.segments ?? ( wholeRangeModel.kind !== 'breakpoint' && wholeRangeModel.kind !== 'constant' && wholeRangeModel.kind !== 'container'
@@ -332,8 +336,8 @@ export async function learnAndApplyFluidGeometry(
 		}
 		if ( transformX && ( model.kind !== 'breakpoint' || segmented !== null ) ) {
 			const element = await page.locator( `[${ ID_ATTRIBUTE }="${ id }"]` ).first().getAttribute( 'style' );
-			const matrix = /(?:^|;)\s*transform\s*:\s*matrix\(([^)]+)\)/.exec( element ?? '' )?.[ 1 ]?.split( ',' ).map( Number );
-			if ( ! matrix || ! isPureXTranslationMatrix( matrix ) ) {
+			const transform = /(?:^|;)\s*transform\s*:\s*([^;]+)/i.exec( element ?? '' )?.[ 1 ]?.trim();
+			if ( ! transform || pureXTranslation( transform ) === null ) {
 				// The runtime may have switched this transform after the sweep; do not
 				// replace a newly rotated, scaled, skewed, or vertically shifted matrix.
 				unmodelled++;
@@ -440,8 +444,8 @@ export async function learnAndApplyFluidGeometry(
 		const entry = learned[ index ]!;
 		if ( entry.property !== 'transform' ) continue;
 		const style = await page.locator( `[${ ID_ATTRIBUTE }="${ entry.id }"]` ).first().getAttribute( 'style' );
-		const matrix = /(?:^|;)\s*transform\s*:\s*matrix\(([^)]+)\)/.exec( style ?? '' )?.[ 1 ]?.split( ',' ).map( Number );
-		if ( matrix && isPureXTranslationMatrix( matrix ) ) continue;
+		const transform = /(?:^|;)\s*transform\s*:\s*([^;]+)/i.exec( style ?? '' )?.[ 1 ]?.trim();
+		if ( transform && pureXTranslation( transform ) !== null ) continue;
 		learned.splice( index, 1 );
 		unmodelled++;
 	}

@@ -63,6 +63,31 @@ function documentSwitchCss( switchWidth: number ): string {
  */
 const DEFAULT_SWITCH_WIDTH = 767;
 
+function learnedTransformSelectors( html: string ): string[] {
+	const selectors: string[] = [];
+	for ( const match of html.matchAll( /<style\b([^>]*)>([\s\S]*?)<\/style\s*>/gi ) ) {
+		if ( ! FLUID_RULES_STYLE_ATTRIBUTE.test( match[ 1 ] ?? '' ) ) continue;
+		try {
+			postcss.parse( match[ 2 ] ?? '' ).walkRules( ( rule ) => {
+				if ( rule.nodes?.some( ( node ) => node.type === 'decl' && node.prop.toLowerCase() === 'transform' ) ) selectors.push( rule.selector );
+			} );
+		} catch {
+			// Malformed capture-owned CSS is not evidence of a usable model.
+		}
+	}
+	return selectors;
+}
+
+function hasLearnedTransform( selectors: string[], segment: string | undefined ): boolean {
+	return !!segment && selectors.some( selector => selector.includes( `[data-dla-fluid-segment="${ segment }"]` ) );
+}
+
+function withoutTransform( style: string ): string {
+	return inlineDeclarations( style )
+		.filter( ( declaration ) => declaration.slice( 0, declaration.indexOf( ':' ) ).trim().toLowerCase() !== 'transform' )
+		.join( '; ' );
+}
+
 /**
  * Attributes DLA's own capture infrastructure writes to mark that two
  * elements correspond across viewports: fluid-learning identities
@@ -257,6 +282,7 @@ function identitySubsetMerge(
 	switchWidth: number = DEFAULT_SWITCH_WIDTH
 ): IdentitySubsetMerge | undefined {
 	const desktopBody = responsiveBodyContent( desktopHtml );
+	const learnedTransforms = learnedTransformSelectors( desktopHtml );
 	const mobileBody = responsiveBodyContent( mobileHtml );
 	if ( desktopBody === undefined || mobileBody === undefined ) return undefined;
 	// An id a document repeats (a builder's per-instance icon id) names a
@@ -480,6 +506,10 @@ function identitySubsetMerge(
 		const desktopStyle = d.attr( 'style' ) ?? '';
 		const mobileStyle = m.attr( 'style' ) ?? '';
 		if ( desktopStyle.trim() !== mobileStyle.trim() ) {
+			const desktopSegment = d.attr( 'data-dla-fluid-segment' );
+			const projectedMobileStyle = hasLearnedTransform( learnedTransforms, desktopSegment )
+				? withoutTransform( mobileStyle )
+				: mobileStyle;
 			const id = d.attr( 'id' );
 			let selector: string;
 			if ( id && isIdentityId( id ) ) selector = `#${ id }`;
@@ -494,7 +524,7 @@ function identitySubsetMerge(
 			const property = ( declaration: string ) =>
 				declaration.slice( 0, declaration.indexOf( ':' ) ).trim().toLowerCase();
 			const desktopDeclarations = inlineDeclarations( desktopStyle );
-			const mobileProperties = new Set( inlineDeclarations( mobileStyle ).map( property ) );
+			const mobileProperties = new Set( inlineDeclarations( projectedMobileStyle ).map( property ) );
 			// The desktop inline style stays where the reference viewport reads it
 			// when mobile restates every property it sets; otherwise it would leak
 			// onto phones, so both sides move into width-scoped rules.
@@ -506,7 +536,7 @@ function identitySubsetMerge(
 				if ( desktopRule ) desktopRules.push( desktopRule );
 				d.removeAttr( 'style' );
 			}
-			const mobileRule = importantRule( selector, mobileStyle );
+			const mobileRule = importantRule( selector, projectedMobileStyle );
 			if ( mobileRule ) mobileRules.push( mobileRule );
 			projected = true;
 		}
@@ -661,6 +691,7 @@ function equivalentInlineProjection(
 	switchWidth: number = DEFAULT_SWITCH_WIDTH
 ): EquivalentInlineProjection | undefined {
 	const desktopBody = responsiveBodyContent( desktopHtml );
+	const learnedTransforms = learnedTransformSelectors( desktopHtml );
 	const mobileBody = responsiveBodyContent( mobileHtml );
 	if ( desktopBody === undefined || mobileBody === undefined ) return undefined;
 	const $d = cheerio.load( `<body>${ desktopBody }</body>` );
@@ -715,6 +746,10 @@ function equivalentInlineProjection(
 		const desktopStyle = d.attr( 'style' ) ?? '';
 		const mobileStyle = m.attr( 'style' ) ?? '';
 		if ( desktopStyle.trim() !== mobileStyle.trim() ) {
+			const desktopSegment = d.attr( 'data-dla-fluid-segment' );
+			const projectedMobileStyle = hasLearnedTransform( learnedTransforms, desktopSegment )
+				? withoutTransform( mobileStyle )
+				: mobileStyle;
 			const id = d.attr( 'id' );
 			let selector: string;
 			if ( id && isStableIdentityId( id ) && idCounts.get( id ) === 1 ) selector = `#${ id }`;
@@ -729,7 +764,7 @@ function equivalentInlineProjection(
 			const property = ( declaration: string ) =>
 				declaration.slice( 0, declaration.indexOf( ':' ) ).trim().toLowerCase();
 			const desktopDeclarations = inlineDeclarations( desktopStyle );
-			const mobileProperties = new Set( inlineDeclarations( mobileStyle ).map( property ) );
+			const mobileProperties = new Set( inlineDeclarations( projectedMobileStyle ).map( property ) );
 			const keepsInline =
 				! /!\s*important/i.test( desktopStyle ) &&
 				desktopDeclarations.every( ( declaration ) => mobileProperties.has( property( declaration ) ) );
@@ -738,7 +773,7 @@ function equivalentInlineProjection(
 				if ( desktopRule ) desktopRules.push( desktopRule );
 				d.removeAttr( 'style' );
 			}
-			const mobileRule = importantRule( selector, mobileStyle );
+			const mobileRule = importantRule( selector, projectedMobileStyle );
 			if ( mobileRule ) mobileRules.push( mobileRule );
 			projected = true;
 		}
