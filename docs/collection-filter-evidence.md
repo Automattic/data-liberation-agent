@@ -59,7 +59,10 @@ the collection in document order.
 - `categories`: selector, label, index and separately observed `activeHtml` and
   `inactiveHtml` for that control.
 - `initialCategory` and the verified `normalized-text-includes` predicate.
-- `emptyHtml` and `emptyPlacement` (`inside` or `after`).
+- `emptyHtml` and `emptyPlacement` (`inside` or `after`). Optional
+  `emptyBindsQuery` means `emptyHtml` contains `__DLA_QUERY__`, proven by two
+  empty observations that differ only by the typed query. The runtime substitutes
+  the live field value. A frozen probe string is not user-visible copy.
 - `probes`: query, category index and ordered item keys for every tested drive.
 - `replay`, `restoration`, and an unsupported `reason` where applicable.
 - `network`: the data-request isolation policy and number of blocked requests.

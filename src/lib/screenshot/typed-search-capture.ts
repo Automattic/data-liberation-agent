@@ -17,6 +17,7 @@ export interface CapturedCollectionFilter {
 	mode?: 'category-and-query' | 'category-or-global-search';
 	emptyHtml: string;
 	emptyPlacement: 'inside' | 'after';
+	emptyBindsQuery?: boolean;
 	probes: Array<{ query: string; category: number; keys: string[] }>;
 	restoration: 'verified' | 'unverified';
 	replay: 'verified' | 'unsupported';
@@ -70,7 +71,10 @@ export async function captureTypedSearchStates(
 		group.sort( ( first, second ) => first.set!.index - second.set!.index );
 		const targetSelector = group[ 0 ]!.dialog!.selector;
 		const field = await associatedField( page, targetSelector, group.map( state => state.trigger.selector ) );
-		if ( ! field ) continue;
+		if ( ! field ) {
+			results.push( { status: 'no-dialog', kind: 'typed-search', trigger: { selector: targetSelector, tag: 'input', ariaHaspopup: '', dataBindings: {} }, error: 'No text field shares a bounded ancestor with the collection' } );
+			continue;
+		}
 		driven++;
 		const deadline = Date.now() + ( options.maxDriveMs ?? 120_000 );
 		if ( field.value ) {
@@ -79,17 +83,29 @@ export async function captureTypedSearchStates(
 		}
 		const input = page.locator( field.selector );
 		const target = page.locator( targetSelector );
-		if ( await target.count() !== 1 ) continue;
+		if ( await target.count() !== 1 ) {
+			results.push( { status: 'no-dialog', kind: 'typed-search', trigger: { selector: field.selector, tag: 'input', ariaHaspopup: '', dataBindings: {} }, error: 'Collection region selector did not match one element' } );
+			continue;
+		}
 			await hydrateDisclosureContent( page, targetSelector );
 			const siblingTexts = await target.evaluate( element => Array.from( element.parentElement!.children ).filter( node => node !== element ).map( node => (node.textContent ?? '').replace(/\s+/g,' ').trim() ) );
 			const baselineSnap = snapshotCollectionItems( await target.evaluate( element => element.outerHTML ) );
 			const baseline = baselineSnap.items;
-			if ( baseline.length < 2 || baseline.length > 100 || baseline.some( item => !item.text ) || new Set( baseline.map( item => item.text ) ).size !== baseline.length ) continue;
+			if ( baseline.length < 2 || baseline.length > 100 || baseline.some( item => !item.text ) || new Set( baseline.map( item => item.text ) ).size !== baseline.length ) {
+				results.push( { status: 'no-dialog', kind: 'typed-search', trigger: { selector: field.selector, tag: 'input', ariaHaspopup: '', dataBindings: {} }, error: `Resting collection did not yield a unique item list (${ baseline.length })` } );
+				continue;
+			}
 			const memberships = group.map( state => snapshotItems( state.dialog!.html ).map( item => baseline.findIndex( candidate => candidate.text === item.text ) ) );
-			if ( memberships.some( members => ! members.length ) ) continue;
+			if ( memberships.some( members => ! members.length ) ) {
+				results.push( { status: 'no-dialog', kind: 'typed-search', trigger: { selector: field.selector, tag: 'input', ariaHaspopup: '', dataBindings: {} }, error: 'A category snapshot had no items' } );
+				continue;
+			}
 			const outsideBaseline = memberships.some( members => members.includes( -1 ) );
 			const initialCategory = memberships.findIndex( members => members.length === baseline.length && members.every( index => index >= 0 ) );
-			if ( initialCategory < 0 ) continue;
+			if ( initialCategory < 0 ) {
+				results.push( { status: 'no-dialog', kind: 'typed-search', trigger: { selector: field.selector, tag: 'input', ariaHaspopup: '', dataBindings: {} }, error: 'No category snapshot matched the resting item list' } );
+				continue;
+			}
 			if ( outsideBaseline ) {
 				const finite = await captureFiniteBootstrap( page, field, group, initialCategory, { settleMs, deadline, maxHtmlBytes: options.maxHtmlBytes ?? 512 * 1024 } );
 				results.push( finite ? collectionState( field.selector, finite ) : { status: 'no-dialog', kind: 'typed-search', trigger: { selector: field.selector, tag: 'input', ariaHaspopup: '', dataBindings: {} }, error: 'Category snapshots contain items outside the resting collection and no finite bootstrap was observed' } );

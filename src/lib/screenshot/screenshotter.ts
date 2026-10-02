@@ -1335,6 +1335,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 
 	async function probeInteractions(): Promise< void > {
 	try {
+		await dismissOverlays( page );
 		const interactions = await captureTriggeredDialogs( page, url );
 		// Route-tab observation is evidence, not a baseline artifact: its failure
 		// must not discard the dialog states captured before it.
@@ -1354,7 +1355,8 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 				interactions.states = [ ...interactions.states, ...selectableStates ];
 			}
 			try {
-				interactions.states.push( ...await captureTypedSearchStates( page, selectableStates ) );
+				await dismissOverlays( page );
+				interactions.states.push( ...await captureTypedSearchStates( page, selectableStates, { maxDriveMs: 300_000 } ) );
 			} catch {
 				/* A failed input probe must not misreport a successful selectable drive. */
 			}

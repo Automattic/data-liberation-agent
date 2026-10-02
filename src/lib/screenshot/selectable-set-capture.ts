@@ -377,6 +377,7 @@ export async function captureSelectableSetStates(
 					document.addEventListener( 'click', preventNavigation );
 					document.addEventListener( 'submit', preventNavigation );
 					try {
+						if ( element instanceof HTMLElement ) element.scrollIntoView( { block: 'center', inline: 'center' } );
 						const click = ( element as HTMLElement ).click;
 						if ( typeof click === 'function' ) {
 							click.call( element );
@@ -652,6 +653,10 @@ export async function captureSelectableSetStates(
 							}
 							continue;
 						}
+						const observationDeadline = Date.now() + Math.min( 2_500, Math.max( limits.settleMs * 4, 1_200 ) );
+						while ( Date.now() < observationDeadline && Date.now() < deadline && candidates.every( ( candidate, candidateIndex ) => fingerprint( candidate ) === initialFp[ candidateIndex ] ) ) {
+							await wait( 100 );
+						}
 						observations.push( {
 							fps: candidates.map( fingerprint ),
 							texts: candidates.map( textOf ),
@@ -828,9 +833,15 @@ export async function captureSelectableSetStates(
 							}
 							continue;
 						}
-						const afterRegion =
+						let afterRegion =
 							document.querySelector( '[data-lib-selectable-region]' ) ?? liveRegion;
-						const after = fingerprint( afterRegion );
+						let after = fingerprint( afterRegion );
+						const changeDeadline = Date.now() + Math.min( 2_500, Math.max( limits.settleMs * 4, 1_200 ) );
+						while ( after === before && ! wasSelected && Date.now() < changeDeadline && Date.now() < deadline ) {
+							await wait( 100 );
+							afterRegion = document.querySelector( '[data-lib-selectable-region]' ) ?? liveRegion;
+							after = fingerprint( afterRegion );
+						}
 						if ( after === before && ! wasSelected ) {
 							pushOutcome( 'no-dialog', index, {
 								region: describeRegion( afterRegion ),

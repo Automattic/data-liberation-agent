@@ -1,11 +1,13 @@
 import type { Page, Route } from 'playwright';
 import * as cheerio from 'cheerio';
 import { hydrateDisclosureContent } from './dynamic-content.js';
+import { dismissOverlays } from './page-helpers.js';
 import type { CapturedCollectionFilter } from './typed-search-capture.js';
 
 export const FINITE_BOOTSTRAP_SCHEMA = 'data-liberation/finite-bootstrap/v1' as const;
 export const BOOTSTRAP_PROBE = 'dla-finite-probe-7f39b2';
 const NO_MATCH = 'dla-no-match-7f39b2';
+const NO_MATCH_AGAIN = 'dla-no-match-2c81e4';
 const MAX_BODY_BYTES = 256 * 1024;
 
 export type CollectionCompleteness = 'declared-finite' | 'paginated' | 'undeclared';
@@ -48,6 +50,7 @@ interface Exchange {
 	status: number;
 	contentType: string;
 	body: string;
+	phase: 'search' | 'category';
 	truncated: boolean;
 	carriesQuery: boolean;
 	completeness: CollectionCompleteness;
@@ -71,6 +74,15 @@ export function isOrderedSubsequence( order: string[], subset: string[] ): boole
 		if ( index === subset.length ) return true;
 	}
 	return index === subset.length;
+}
+
+export function bindObservedEmpty( firstHtml: string, firstQuery: string, secondHtml: string, secondQuery: string ): { html: string; bindsQuery: boolean } {
+	const swap = ( html: string, from: string, to: string ) => html.split( from ).join( to );
+	if ( firstHtml.includes( firstQuery ) && secondHtml.includes( secondQuery ) && swap( firstHtml, firstQuery, secondQuery ) === secondHtml ) {
+		return { html: swap( firstHtml, firstQuery, '__DLA_QUERY__' ), bindsQuery: true };
+	}
+	const strip = ( html: string ) => swap( swap( html, firstQuery, '' ), secondQuery, '' );
+	return { html: strip( firstHtml ), bindsQuery: false };
 }
 
 export function collectionItemHasResource( html: string ): boolean {
@@ -179,6 +191,7 @@ export async function captureFiniteBootstrap(
 	const input = page.locator( field.selector );
 	const target = page.locator( targetSelector );
 	if ( await input.count() !== 1 || await target.count() !== 1 ) return null;
+	await dismissOverlays( page );
 	const triggers = group.map( state => state.trigger.selector );
 	const observed: Exchange[] = [];
 	const onResponse = async ( response: import('playwright').Response ) => {
@@ -192,12 +205,20 @@ export async function captureFiniteBootstrap(
 			contentType: response.headers()[ 'content-type' ] ?? '',
 			body: Buffer.byteLength( body ) > MAX_BODY_BYTES ? '' : body,
 			truncated: Buffer.byteLength( body ) > MAX_BODY_BYTES,
+			phase,
 			carriesQuery: requestCarriesQuery( request.url(), postData, BOOTSTRAP_PROBE ),
 			collectionShaped: isCollectionShaped( body ),
 			...classified,
 		} );
 	};
 	const settle = async () => { await page.waitForTimeout( options.settleMs ); };
+	const activateControl = async ( selector: string ) => {
+		const control = page.locator( selector );
+		await control.evaluate( element => {
+			element.scrollIntoView( { block: 'center', inline: 'center' } );
+			if ( element instanceof HTMLElement ) element.click();
+		} );
+	};
 	const drive = async ( action: () => Promise<void> ) => {
 		if ( Date.now() >= options.deadline ) throw new Error( 'Finite bootstrap drive budget exceeded' );
 		const pending = page.waitForResponse( response => [ 'fetch', 'xhr' ].includes( response.request().resourceType() ), { timeout: Math.max( options.settleMs * 8, 1_000 ) } ).catch( () => null );
@@ -205,12 +226,14 @@ export async function captureFiniteBootstrap(
 		await pending;
 		await settle();
 	};
+	let phase: 'search' | 'category' = 'search';
 	page.on( 'response', onResponse );
 	try {
 		await drive( () => input.fill( BOOTSTRAP_PROBE ) );
+		phase = 'category';
 		await drive( () => input.fill( '' ) );
-		for ( const selector of triggers ) await drive( () => page.locator( selector ).click() );
-		await drive( () => page.locator( triggers[ initialCategory ]! ).click() );
+		for ( const selector of triggers ) await drive( () => activateControl( selector ) );
+		await drive( () => activateControl( triggers[ initialCategory ]! ) );
 	} catch ( error ) {
 		page.off( 'response', onResponse );
 		return unsupported( field, targetSelector, initialCategory, group, String( error ) );
@@ -218,16 +241,15 @@ export async function captureFiniteBootstrap(
 	page.off( 'response', onResponse );
 	const searchExchanges = observed.filter( item => item.carriesQuery || item.completeness !== 'undeclared' || item.collectionShaped );
 	if ( searchExchanges.some( item => item.carriesQuery ) ) return unsupported( field, targetSelector, initialCategory, group, 'Query-dependent data request; finite bootstrap is not server search', 'query-dependent' );
-	const finiteResponses = observed.filter( item => ! item.carriesQuery && item.completeness === 'declared-finite' && item.declaredCount !== null && ! item.truncated );
+	const searchFinite = observed.filter( item => item.phase === 'search' && ! item.carriesQuery && item.completeness === 'declared-finite' && item.declaredCount !== null && ! item.truncated );
+	const finiteResponses = searchFinite.length ? searchFinite : observed.filter( item => ! item.carriesQuery && item.completeness === 'declared-finite' && item.declaredCount !== null && ! item.truncated );
 	if ( ! finiteResponses.length ) {
 		if ( observed.some( item => item.completeness === 'paginated' ) ) return unsupported( field, targetSelector, initialCategory, group, 'Paginated data response; completeness cannot be guessed from one page', 'incomplete' );
 		if ( observed.some( item => item.collectionShaped ) ) return unsupported( field, targetSelector, initialCategory, group, 'Undeclared completeness; response length is not proof of a finite collection', 'incomplete' );
 		return null;
 	}
-	const declaredCount = Math.max( ...finiteResponses.map( item => item.declaredCount ?? 0 ) );
-	const universes = finiteResponses.filter( item => item.declaredCount === declaredCount );
-	const distinct = new Set( universes.map( item => item.body ) );
-	if ( distinct.size !== 1 ) return unsupported( field, targetSelector, initialCategory, group, 'Ambiguous finite bootstrap responses', 'incomplete' );
+	let declaredCount = Math.max( ...finiteResponses.map( item => item.declaredCount ?? 0 ) );
+	if ( ! finiteResponses.some( item => item.declaredCount === declaredCount ) ) return unsupported( field, targetSelector, initialCategory, group, 'Declared finite response did not include a matching record list', 'incomplete' );
 	let replayed = 0;
 	let blocked = 0;
 	const replay = async ( route: Route ) => {
@@ -256,7 +278,7 @@ export async function captureFiniteBootstrap(
 	try {
 		const snapshots: Array<{ category: number; items: Array<{ text: string; html: string }>; visible: boolean }> = [];
 		for ( let category = 0; category < triggers.length; category++ ) {
-			await drive( async () => { await input.fill( '' ); await page.locator( triggers[ category ]! ).click(); } );
+			await drive( async () => { await input.fill( '' ); await activateControl( triggers[ category ]! ); } );
 			await hydrateDisclosureContent( page, targetSelector );
 			const activeHtml = await page.locator( triggers[ category ]! ).evaluate( element => element.outerHTML );
 			evidence.categories.push( { selector: triggers[ category ]!, label: group[ category ]?.trigger.label ?? '', index: category, activeHtml, inactiveHtml: '' } );
@@ -277,7 +299,11 @@ export async function captureFiniteBootstrap(
 				else byText.set( item.text, { html: item.html, categories: [ snapshot.category ] } );
 			}
 		}
-		if ( byText.size !== declaredCount ) throw new Error( `Finite coverage mismatch: declared ${ declaredCount }, observed ${ byText.size }` );
+		if ( byText.size !== declaredCount ) {
+			const partition = [ ...new Map( observed.filter( item => item.phase === 'category' && item.completeness === 'declared-finite' ).map( item => [ item.postData, item.declaredCount ?? 0 ] ) ).values() ].reduce( ( sum, count ) => sum + count, 0 );
+			if ( partition === byText.size && partition >= declaredCount && ! observed.some( item => item.completeness === 'paginated' ) ) declaredCount = partition;
+			else throw new Error( `Finite coverage mismatch: declared ${ declaredCount }, observed ${ byText.size }` );
+		}
 		if ( [ ...byText.values() ].some( item => collectionItemHasResource( item.html ) ) ) throw new Error( 'Resource-bearing collection items are not portable without localization' );
 		const orderQuery = sharedOrderQuery( [ ...byText.keys() ] );
 		if ( ! orderQuery ) throw new Error( 'Source order unsupported: no shared query matches every finite item' );
@@ -299,7 +325,7 @@ export async function captureFiniteBootstrap(
 		} );
 		const answerOnly = answers === 'observed' ? evidence.items.flatMap( item => useful.filter( token => item.text.toLowerCase().includes( token ) && ! labelOf( item.html ).includes( token ) ) )[ 0 ] : undefined;
 		const matching = [ ...new Set( [ useful[ 0 ], answerOnly, useful[ useful.length - 1 ] ].filter( ( query ): query is string => Boolean( query ) ) ) ].slice( 0, 3 );
-		const queries = [ ...matching, useful[ 0 ]?.toUpperCase(), NO_MATCH ].filter( ( query ): query is string => Boolean( query ) );
+		const queries = [ ...matching, useful[ 0 ]?.toUpperCase(), NO_MATCH, NO_MATCH_AGAIN ].filter( ( query ): query is string => Boolean( query ) );
 		if ( matching.length < 1 || ! queries.includes( NO_MATCH ) ) throw new Error( 'Finite collection did not yield a discriminating probe' );
 		const siblingTexts = await target.evaluate( element => Array.from( element.parentElement?.children ?? [] ).filter( node => node !== element ).map( node => ( node.textContent ?? '' ).replace( /\s+/g, ' ' ).trim() ) );
 		const global: Array<{ query: string; keys: string[] }> = [];
@@ -319,7 +345,12 @@ export async function captureFiniteBootstrap(
 					evidence.emptyPlacement = 'after';
 				}
 				if ( ! evidence.emptyHtml ) evidence.emptyHtml = html;
-				if ( normalize( snapshotItems( `<div>${ html }</div>` ).map( item => item.text ).join( ' ' ) ) !== normalize( snapshotItems( `<div>${ evidence.emptyHtml }</div>` ).map( item => item.text ).join( ' ' ) ) ) throw new Error( 'Empty-state content depends on query' );
+				else {
+					const bound = bindObservedEmpty( evidence.emptyHtml, NO_MATCH, html, query );
+					if ( ! bound.bindsQuery && normalize( snapshotItems( `<div>${ bound.html }</div>` ).map( item => item.text ).join( ' ' ) ) !== normalize( snapshotItems( `<div>${ evidence.emptyHtml }</div>` ).map( item => item.text ).join( ' ' ) ) && ! evidence.emptyHtml.includes( NO_MATCH ) ) throw new Error( 'Empty-state content depends on query' );
+					evidence.emptyHtml = bound.html;
+					if ( bound.bindsQuery ) evidence.emptyBindsQuery = true;
+				}
 				global.push( { query, keys: [] } );
 			} else if ( JSON.stringify( actualKeys ) !== JSON.stringify( expected ) ) {
 				throw new Error( 'Global search results do not match the source order' );
@@ -333,7 +364,7 @@ export async function captureFiniteBootstrap(
 		const sourceKeys = evidence.items.map( item => item.key );
 		const categoriesAgree = categories.every( probe => isOrderedSubsequence( sourceKeys, probe.keys ) );
 		evidence.probes = categories.map( probe => ( { query: '', category: probe.category, keys: probe.keys } ) );
-		await drive( async () => { await input.fill( '' ); await page.locator( triggers[ initialCategory ]! ).click(); } );
+		await drive( async () => { await input.fill( '' ); await activateControl( triggers[ initialCategory ]! ); } );
 		await drive( () => input.fill( BOOTSTRAP_PROBE ) );
 		await drive( () => input.fill( '' ) );
 		if ( ! await controlsVisible( page, triggers ) ) throw new Error( 'Unverified restoration: empty query did not restore category controls' );
@@ -378,7 +409,7 @@ export async function captureFiniteBootstrap(
 	} finally {
 		await page.unroute( '**/*', replay ).catch( () => undefined );
 		await input.fill( '' ).catch( () => undefined );
-		await page.locator( triggers[ initialCategory ]! ).click().catch( () => undefined );
+		await activateControl( triggers[ initialCategory ]! ).catch( () => undefined );
 		await settle();
 		await hydrateDisclosureContent( page, targetSelector );
 		evidence.target.html = await target.evaluate( element => element.outerHTML ).catch( () => '' );
@@ -387,10 +418,10 @@ export async function captureFiniteBootstrap(
 		if ( expected.length > 0 && restored.length === expected.length && restored.every( text => expected.includes( text ) ) ) evidence.restoration = 'verified';
 		for ( const category of evidence.categories ) if ( category.index !== initialCategory ) category.inactiveHtml = await page.locator( category.selector ).evaluate( element => element.outerHTML ).catch( () => '' );
 		if ( evidence.categories.length === triggers.length ) {
-			await page.locator( triggers[ ( initialCategory + 1 ) % triggers.length ]! ).click().catch( () => undefined );
+			await activateControl( triggers[ ( initialCategory + 1 ) % triggers.length ]! ).catch( () => undefined );
 			await settle();
 			evidence.categories[ initialCategory ]!.inactiveHtml = await page.locator( triggers[ initialCategory ]! ).evaluate( element => element.outerHTML ).catch( () => '' );
-			await page.locator( triggers[ initialCategory ]! ).click().catch( () => undefined );
+		await activateControl( triggers[ initialCategory ]! ).catch( () => undefined );
 			await settle();
 			await hydrateDisclosureContent( page, targetSelector );
 			evidence.target.html = await target.evaluate( element => element.outerHTML ).catch( () => '' );

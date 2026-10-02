@@ -399,6 +399,27 @@ describe('dismissOverlays — consent banner (Playwright)', () => {
     }
   });
 
+  it('dismisses a shadow consent host by its action control', async () => {
+    const page = await browser.newPage();
+    await page.setContent(`<!doctype html><body><aside id="usercentrics-cmp-ui"></aside><main style="height:2000px">Page content stays.</main>
+      <script>
+        const host = document.querySelector('#usercentrics-cmp-ui');
+        const root = host.attachShadow({ mode: 'open' });
+        root.innerHTML = '<div style="position:fixed;inset:auto 0 0;height:160px;background:#111;color:#fff"><p>We use cookies.</p><button>Deny</button><button>Accept All</button></div>';
+        root.querySelector('button').addEventListener('click', () => host.remove());
+      </script></body>`);
+    try {
+      const dismissed = await dismissOverlays(page);
+      expect(dismissed).toHaveLength(1);
+      expect(dismissed[0].kind).toBe('consent');
+      expect(dismissed[0].method).toBe('close-click');
+      expect(await page.locator('#usercentrics-cmp-ui').count()).toBe(0);
+      expect(await page.locator('main').textContent()).toContain('Page content stays.');
+    } finally {
+      await page.close();
+    }
+  });
+
   it('dismisses a cookie banner, preferring reject', async () => {
     const page = await browser.newPage();
     await page.setContent(CONSENT_FIXTURE);

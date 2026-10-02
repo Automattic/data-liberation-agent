@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { classifyCollectionResponse, collectionItemHasResource, isCollectionShaped, isOrderedSubsequence, requestCarriesQuery, sharedOrderQuery, snapshotCollectionItems } from './finite-bootstrap.js';
+import { bindObservedEmpty, classifyCollectionResponse, collectionItemHasResource, isCollectionShaped, isOrderedSubsequence, requestCarriesQuery, sharedOrderQuery, snapshotCollectionItems } from './finite-bootstrap.js';
 
 describe( 'finite bootstrap completeness', () => {
 	it( 'accepts an explicit finite page and rejects length guesses', () => {
@@ -17,6 +17,8 @@ describe( 'finite bootstrap completeness', () => {
 		expect( isOrderedSubsequence( [ '0', '1', '2' ], [ '2', '0' ] ) ).toBe( false );
 		expect( collectionItemHasResource( '<article><h2>Question</h2><p>Answer text</p></article>' ) ).toBe( false );
 		expect( collectionItemHasResource( '<article><img src="https://cdn.example/photo.png" alt=""></article>' ) ).toBe( true );
+		expect( bindObservedEmpty( '<p>Showing results for dla-no-match-7f39b2</p>', 'dla-no-match-7f39b2', '<p>Showing results for zzzzmissing</p>', 'zzzzmissing' ) ).toEqual( { html: '<p>Showing results for __DLA_QUERY__</p>', bindsQuery: true } );
+		expect( bindObservedEmpty( '<p>No FAQs found</p>', 'dla-no-match-7f39b2', '<p>No FAQs found</p>', 'zzzzmissing' ).bindsQuery ).toBe( false );
 	} );
 	it( 'reads repeated items through a single wrapper without treating the wrapper as the item', () => {
 		const wrapped = '<section><div><article><h2>One</h2><p>Apricot answer</p></article><article><h2>Two</h2><p>Berry answer</p></article></div></section>';
