@@ -63,23 +63,23 @@ function documentSwitchCss( switchWidth: number ): string {
  */
 const DEFAULT_SWITCH_WIDTH = 767;
 
-function hasLearnedTransform( html: string, segment: string | undefined ): boolean {
-	if ( ! segment ) return false;
-	const selector = `[data-dla-fluid-segment="${ segment }"]`;
+function learnedTransformSelectors( html: string ): string[] {
+	const selectors: string[] = [];
 	for ( const match of html.matchAll( /<style\b([^>]*)>([\s\S]*?)<\/style\s*>/gi ) ) {
 		if ( ! FLUID_RULES_STYLE_ATTRIBUTE.test( match[ 1 ] ?? '' ) ) continue;
 		try {
-			let found = false;
 			postcss.parse( match[ 2 ] ?? '' ).walkRules( ( rule ) => {
-				if ( ! rule.selector.includes( selector ) ) return;
-				if ( rule.nodes?.some( ( node ) => node.type === 'decl' && node.prop.toLowerCase() === 'transform' ) ) found = true;
+				if ( rule.nodes?.some( ( node ) => node.type === 'decl' && node.prop.toLowerCase() === 'transform' ) ) selectors.push( rule.selector );
 			} );
-			if ( found ) return true;
 		} catch {
 			// Malformed capture-owned CSS is not evidence of a usable model.
 		}
 	}
-	return false;
+	return selectors;
+}
+
+function hasLearnedTransform( selectors: string[], segment: string | undefined ): boolean {
+	return !!segment && selectors.some( selector => selector.includes( `[data-dla-fluid-segment="${ segment }"]` ) );
 }
 
 function withoutTransform( style: string ): string {
@@ -282,6 +282,7 @@ function identitySubsetMerge(
 	switchWidth: number = DEFAULT_SWITCH_WIDTH
 ): IdentitySubsetMerge | undefined {
 	const desktopBody = responsiveBodyContent( desktopHtml );
+	const learnedTransforms = learnedTransformSelectors( desktopHtml );
 	const mobileBody = responsiveBodyContent( mobileHtml );
 	if ( desktopBody === undefined || mobileBody === undefined ) return undefined;
 	// An id a document repeats (a builder's per-instance icon id) names a
@@ -506,7 +507,7 @@ function identitySubsetMerge(
 		const mobileStyle = m.attr( 'style' ) ?? '';
 		if ( desktopStyle.trim() !== mobileStyle.trim() ) {
 			const desktopSegment = d.attr( 'data-dla-fluid-segment' );
-			const projectedMobileStyle = hasLearnedTransform( desktopHtml, desktopSegment )
+			const projectedMobileStyle = hasLearnedTransform( learnedTransforms, desktopSegment )
 				? withoutTransform( mobileStyle )
 				: mobileStyle;
 			const id = d.attr( 'id' );
@@ -690,6 +691,7 @@ function equivalentInlineProjection(
 	switchWidth: number = DEFAULT_SWITCH_WIDTH
 ): EquivalentInlineProjection | undefined {
 	const desktopBody = responsiveBodyContent( desktopHtml );
+	const learnedTransforms = learnedTransformSelectors( desktopHtml );
 	const mobileBody = responsiveBodyContent( mobileHtml );
 	if ( desktopBody === undefined || mobileBody === undefined ) return undefined;
 	const $d = cheerio.load( `<body>${ desktopBody }</body>` );
@@ -745,7 +747,7 @@ function equivalentInlineProjection(
 		const mobileStyle = m.attr( 'style' ) ?? '';
 		if ( desktopStyle.trim() !== mobileStyle.trim() ) {
 			const desktopSegment = d.attr( 'data-dla-fluid-segment' );
-			const projectedMobileStyle = hasLearnedTransform( desktopHtml, desktopSegment )
+			const projectedMobileStyle = hasLearnedTransform( learnedTransforms, desktopSegment )
 				? withoutTransform( mobileStyle )
 				: mobileStyle;
 			const id = d.attr( 'id' );
