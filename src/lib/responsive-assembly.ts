@@ -61,7 +61,7 @@ function documentSwitchCss( switchWidth: number ): string {
  * at phone width only. From 768px up are tablets, which per-device sources
  * serve their desktop document — the one the fluid sweep observed at 768px.
  */
-const DEFAULT_SWITCH_WIDTH = 767;
+export const DEFAULT_SWITCH_WIDTH = 767;
 
 function learnedTransformSelectors( html: string ): string[] {
 	const selectors: string[] = [];
@@ -1164,7 +1164,9 @@ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',
 })();`;
 
 export function projectResponsiveIdentityCss( source: string, renamed: ReadonlyMap<string,string>, namedAliases: boolean ): string {
-	const css = postcss.parse( source );
+	// CSS accepts legacy HTML-comment wrappers; PostCSS rejects the closing CDC.
+	// Strip only outer tokens, preserving quoted content inside the stylesheet.
+	const css = postcss.parse( source.replace( /^\s*<!--/, '' ).replace( /-->\s*$/, '' ) );
 	css.walkRules( rule => {
 		const selectors = selectorParser().astSync( rule.selector );
 		const replacements: Array<{ node: selectorParser.Identifier | selectorParser.Attribute; alias: selectorParser.Identifier | selectorParser.Attribute }> = [];
