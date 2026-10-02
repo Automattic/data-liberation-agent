@@ -25,8 +25,10 @@ export function wireCapturedCollections( html: string, states: CapturedDialogInt
 		const evidence = state.collectionFilter!;
 		const finite = evidence.finiteBootstrap?.schema === 'data-liberation/finite-bootstrap/v1' && evidence.finiteBootstrap.mode === 'category-or-global-search' && evidence.finiteBootstrap.coverage === 'complete' && evidence.network.dataRequests === 'observed-response-replay' && evidence.network.verification === 'intercepted-observed-responses';
 		if ( ! finite && evidence.network.dataRequests !== 'blocked' ) continue;
-		const field = $( evidence.field.selector ), target = $( evidence.target.selector );
-		if ( field.length !== 1 || target.length !== 1 ) continue;
+		const copies = collectionCopies( $, evidence );
+		if ( ! copies.length ) continue;
+		for ( const copy of copies ) {
+		const field = copy.field, target = copy.target;
 		const key = String( configs.length );
 		const textOf = ( element: import('domhandler').AnyNode ): string => element.type === 'text' ? element.data : 'children' in element ? element.children.map( textOf ).join( ' ' ) : '';
 		const normalize = ( value: string ) => value.replace( /\s+/g, ' ' ).trim();
@@ -87,11 +89,59 @@ export function wireCapturedCollections( html: string, states: CapturedDialogInt
 			return Object.fromEntries( ['class','style','aria-selected','data-state'].map( name => [name, node.attr( name ) ?? null] ) );
 		};
 		const categories = evidence.categories.map( category => {
-			$( category.selector ).attr( 'data-dla-collection-category-control', key ).attr( 'data-dla-collection-index', String( category.index ) ).attr( 'aria-pressed', String( category.index === evidence.initialCategory ) );
+			const control = copy.root.find( category.selector );
+			const chosen = control.length === 1 ? control : controlByLabel( $, copy.root, category.label );
+			if ( chosen?.length ) chosen.attr( 'data-dla-collection-category-control', key ).attr( 'data-dla-collection-index', String( category.index ) ).attr( 'aria-pressed', String( category.index === evidence.initialCategory ) );
 			return { active: attributes( category.activeHtml ), inactive: attributes( category.inactiveHtml ) };
 		});
 		configs.push({ mode: finite ? 'category-or-global-search' : 'category-and-query', ...( finite ? { order: evidence.finiteBootstrap!.order.keys, categoryOrders: evidence.finiteBootstrap!.order.categoryKeys } : {} ), ...( evidence.emptyBindsQuery ? { emptyTemplate: evidence.emptyHtml } : {} ), categories });
+		}
 	}
 	if ( configs.length ) $( 'head' ).append( `<style data-dla-collection-visibility>[data-dla-collection-item][hidden],[data-dla-collection-empty][hidden],[data-dla-collection-category-control][hidden]{display:none!important}</style><script data-dla-collection-runtime>${RUNTIME.replace( '__CONFIG__', JSON.stringify( configs ).replace( /</g, '\\u003c' ) )}</script>` );
 	return $.html();
+}
+
+function collectionCopies( $: cheerio.CheerioAPI, evidence: NonNullable<CapturedDialogInteraction['collectionFilter']> ) {
+	const field = $( evidence.field.selector );
+	const target = $( evidence.target.selector );
+	if ( field.length === 1 && target.length === 1 ) return [ { field, target, root: target.parent() } ];
+	const labels = evidence.categories.map( category => category.label ).filter( Boolean );
+	const needle = evidence.items.find( item => item.categories.includes( evidence.initialCategory ) )?.text.split( '?' )[ 0 ];
+	if ( ! labels.length || ! needle ) return [];
+	const copies: Array<{ field: cheerio.Cheerio<import('domhandler').Element>; target: cheerio.Cheerio<import('domhandler').Element>; root: cheerio.Cheerio<import('domhandler').AnyNode> }> = [];
+	$( 'input[type="text"], input[type="search"]' ).each( ( _, element ) => {
+		let node = $( element ).parent();
+		for ( let depth = 0; depth < 16 && node.length; depth++ ) {
+			const text = node.text().replace( /\s+/g, ' ' );
+			if ( labels.every( label => text.includes( label ) ) && text.includes( needle ) ) {
+				const located = smallestContaining( $, node, evidence.items.filter( item => item.categories.includes( evidence.initialCategory ) ).map( item => item.text.split( '?' )[ 0 ] ) );
+				if ( located ) copies.push( { field: $( element ), target: located, root: node } );
+				break;
+			}
+			const parent = node.parent();
+			if ( ! parent.length ) break;
+			node = parent;
+		}
+	} );
+	return copies;
+}
+
+function smallestContaining( $: cheerio.CheerioAPI, root: cheerio.Cheerio<import('domhandler').AnyNode>, needles: string[] ) {
+	let best: cheerio.Cheerio<import('domhandler').Element> | null = null;
+	let bestLength = Number.POSITIVE_INFINITY;
+	root.find( '*' ).each( ( _, element ) => {
+		const node = $( element );
+		const text = node.text().replace( /\s+/g, ' ' );
+		if ( ! needles.every( needle => text.includes( needle ) ) ) return;
+		if ( text.length < bestLength ) {
+			best = node;
+			bestLength = text.length;
+		}
+	} );
+	return best;
+}
+
+function controlByLabel( $: cheerio.CheerioAPI, root: cheerio.Cheerio<import('domhandler').AnyNode>, label: string ) {
+	const match = root.find( '[role="tab"], button, [role="button"]' ).filter( ( _, element ) => $( element ).text().replace( /\s+/g, ' ' ).trim() === label );
+	return match.length ? match.first() : null;
 }

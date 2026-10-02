@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { wireCapturedCollections } from '../static-collections.js';
 import { bindObservedEmpty, classifyCollectionResponse, collectionItemHasResource, isCollectionShaped, isOrderedSubsequence, requestCarriesQuery, sharedOrderQuery, snapshotCollectionItems } from './finite-bootstrap.js';
 
 describe( 'finite bootstrap completeness', () => {
@@ -19,6 +20,55 @@ describe( 'finite bootstrap completeness', () => {
 		expect( collectionItemHasResource( '<article><img src="https://cdn.example/photo.png" alt=""></article>' ) ).toBe( true );
 		expect( bindObservedEmpty( '<p>Showing results for dla-no-match-7f39b2</p>', 'dla-no-match-7f39b2', '<p>Showing results for zzzzmissing</p>', 'zzzzmissing' ) ).toEqual( { html: '<p>Showing results for __DLA_QUERY__</p>', bindsQuery: true } );
 		expect( bindObservedEmpty( '<p>No FAQs found</p>', 'dla-no-match-7f39b2', '<p>No FAQs found</p>', 'zzzzmissing' ).bindsQuery ).toBe( false );
+	} );
+	it( 'wires each assembled copy when the capture selector no longer matches', () => {
+		const copy = `<section><input type="text" aria-label="Browse"><div role="tablist"><button role="tab">One</button><button role="tab">Two</button></div><div><article>Alpha question Alpha answer</article></div></section>`;
+		const html = `<body>${ copy }${ copy }</body>`;
+		const evidence = {
+			field: { selector: '#missing', value: '' },
+			target: { selector: '#missing-target', html: '' },
+			items: [
+				{ key: '0', text: 'Alpha question Alpha answer', html: '<article><h2>Alpha question</h2><p>Alpha answer</p></article>', categories: [0] },
+				{ key: '1', text: 'Beta question Beta answer', html: '<article><h2>Beta question</h2><p>Beta answer</p></article>', categories: [1] },
+			],
+			categories: [
+				{ selector: '#missing-tab', label: 'One', index: 0, activeHtml: '<button role="tab">One</button>', inactiveHtml: '<button role="tab">One</button>' },
+				{ selector: '#missing-tab', label: 'Two', index: 1, activeHtml: '<button role="tab">Two</button>', inactiveHtml: '<button role="tab">Two</button>' },
+			],
+			initialCategory: 0,
+			predicate: 'normalized-text-includes' as const,
+			mode: 'category-or-global-search' as const,
+			emptyHtml: '<p>None</p>',
+			emptyPlacement: 'inside' as const,
+			probes: [],
+			restoration: 'verified' as const,
+			replay: 'verified' as const,
+			network: { dataRequests: 'observed-response-replay' as const, verification: 'intercepted-observed-responses' as const, blockedRequests: 1 },
+			finiteBootstrap: {
+				schema: 'data-liberation/finite-bootstrap/v1' as const,
+				mode: 'category-or-global-search' as const,
+				queryIndependent: true as const,
+				completeness: 'declared-finite' as const,
+				declaredCount: 2,
+				observedItemCount: 2,
+				coverage: 'complete' as const,
+				verification: 'intercepted-observed-responses' as const,
+				replayedResponses: 1,
+				blockedFollowUps: 1,
+				sourceFollowUpsBlocked: 0,
+				unmatchedProbeBlocked: true as const,
+				categoryControlsDuringSearch: 'hidden' as const,
+				emptyQueryRestoresCategory: true as const,
+				answers: 'observed' as const,
+				answerOnly: 'verified' as const,
+				resources: 'text-only' as const,
+				order: { proof: 'universal-query' as const, query: 'a', keys: ['0', '1'], categoriesAgree: true, categoryKeys: [['0'], ['1']] },
+				probes: { global: [], categories: [] },
+			},
+		};
+		const wired = wireCapturedCollections( html, [ { status: 'captured', kind: 'typed-search', trigger: { selector: 'input', tag: 'input', ariaHaspopup: '', dataBindings: {} }, collectionFilter: evidence } ] );
+		expect( wired.match( /data-dla-collection-item=/g ) ).toHaveLength( 4 );
+		expect( wired ).not.toContain( 'dla-no-match' );
 	} );
 	it( 'reads repeated items through a single wrapper without treating the wrapper as the item', () => {
 		const wrapped = '<section><div><article><h2>One</h2><p>Apricot answer</p></article><article><h2>Two</h2><p>Berry answer</p></article></div></section>';
