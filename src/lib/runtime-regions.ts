@@ -9,7 +9,7 @@ export interface RuntimeRegionNode {
 	sha256?: string;
 	box: { x: number; y: number; width: number; height: number };
 	visible: boolean;
-	frames: Array<{ url: string; html?: string; sha256?: string; error?: string }>;
+	frames: Array<{ url: string; html?: string; sha256?: string; box?: { width: number; height: number }; error?: string }>;
 	error?: string;
 }
 
@@ -83,6 +83,7 @@ export async function observeRuntimeRegions( page: Page, sourceUrl: string, requ
 						if ( ! frame ) { node.frames.push( { url: '', error: 'Child document unavailable' } ); continue; }
 						const child: RuntimeRegionNode['frames'][number] = { url: frame.url() }; node.frames.push( child );
 						try {
+							child.box = await handle.evaluate( element => { const box = element.getBoundingClientRect(); return { width: box.width, height: box.height }; } );
 							// Locator evaluation provides timeout containment for detached/blocked frames.
 							const html = await frame.locator( 'html' ).evaluate( element => element.outerHTML.length <= 256 * 1024 ? `<!DOCTYPE html>${ element.outerHTML }` : undefined, undefined, { timeout: remainingTime() } );
 							if ( ! html || Buffer.byteLength( html ) > 256 * 1024 || Buffer.byteLength( html ) > remainingBytes ) child.error = 'Child HTML exceeds byte budget';

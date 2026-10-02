@@ -70,3 +70,5 @@ export type { CapabilityRule, SourceCapability, RenderedInspection, SourceComple
 export { materializeHttpDocuments, type HttpMaterializationOptions } from './lib/http-materialization.js';
 export { observeRuntimeRegions } from './lib/runtime-regions.js';
 export type { RuntimeRegionNode, RuntimeRegionObservation } from './lib/runtime-regions.js';
+export { stageRuntimeRegions } from './lib/embedded-documents.js';
+export type { RuntimeRegionAttachment } from './lib/embedded-documents.js';

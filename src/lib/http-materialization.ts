@@ -6,6 +6,8 @@ export interface HttpMaterializationOptions {
 	platform: string;
 	desktopVariant: string;
 	mobileVariant?: string;
+	/** Include explicitly staged, hash-verified runtime child documents. */
+	embeddedDocuments?: boolean;
 	limits?: { portableMediaTotalBytes?: number };
 }
 

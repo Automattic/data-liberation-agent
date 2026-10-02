@@ -158,3 +158,43 @@ The returned `data-liberation/runtime-regions/v1` report retains
 evidence is scoped to its actual route and viewport, not generalized to all
 routes or widths. Child forms and sign-in controls need functional handling;
 retaining an external iframe URL does not satisfy self-contained acceptance.
+
+## Observed embedded-document attachments
+
+```js
+import { stageRuntimeRegions, materializeHttpDocuments } from 'data-liberation';
+
+await stageRuntimeRegions({
+  outputDir: './source-evidence',
+  attachments: [{ variant: 'desktop', observation: desktopRegionReport }],
+});
+materializeHttpDocuments({
+  outputDir: './source-evidence', sourceUrl: url, platform: platform.id,
+  desktopVariant: 'desktop', mobileVariant: 'mobile', embeddedDocuments: true,
+});
+```
+
+Select one actual observed viewport per acquired variant. Staging matches
+declared regions, verifies node/child hashes and observed child geometry, and
+writes `embedded-documents.json`, original child snapshots in
+`embedded-source/*.html`, and inert `embedded-documents/*.html`.
+Executable scripts and nested child frames are removed. Child document base
+URLs are resolved before shared dependency staging. Staging is bounded to
+100 attachments and 16 MiB of region/child HTML; partial observations are
+retained as unresolved acquisition diagnostics rather than projected.
+
+Explicit materialization verifies child bytes, file containment and parent
+prepared-document identities before replacing the candidate. It inserts
+observed regions, retains authored iframe width/border geometry, recursively
+localizes child HTML dependencies through the existing resource exporter,
+and serves sandboxed local child documents. It records the attachment receipt
+hash; HTTP rendering/geometry/interactions and embedded interactions remain
+unverified, and `complete` remains false.
+
+This is a localized static projection. Removing provider scripts leaves
+controls such as sign-in, Follow and Next functionally unverified. When
+desktop/mobile child HTML or height differs inside equivalent parents, the
+exporter preserves both children in width-scoped document islands. It uses
+the existing export switch-width policy; a default switch is not a learned
+source breakpoint. Behavior between observed widths remains unverified.
+No region is generalized to routes without its own attachment.

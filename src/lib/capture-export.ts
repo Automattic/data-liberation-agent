@@ -50,6 +50,7 @@ import { isSourcePromotion } from './source-cleanup.js';
 import { sameOriginPageAnchors } from './screenshot/unscheduled-anchors.js';
 import { inspectSourceInteractivity, SOURCE_INTERACTIVITY_SCHEMA, type SourceInteractivityPage } from './source-interactivity.js';
 import { loadHttpExportInput, type HttpExportInput } from './http-export-input.js';
+import { loadEmbeddedDocuments, projectEmbeddedRegions, mergeResponsiveEmbeddedRegions } from './embedded-documents.js';
 
 export const CAPTURE_RECEIPT_SCHEMA = 'data-liberation/capture-receipt/v1';
 export const SOURCE_PROFILE_SCHEMA = 'data-liberation/source-profile/v1';
@@ -156,6 +157,7 @@ interface ScreenshotManifest {
 interface ExportCaptureOptions {
 	/** Explicit source-only materialization. Browser acquisition remains the default. */
 	input?: HttpExportInput;
+	embeddedDocuments?: boolean;
 	outputDir: string;
 	sourceUrl: string;
 	platform: string;
@@ -1751,7 +1753,10 @@ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',
 })();`;
 
 function projectResponsiveIdentityCss( source: string, renamed: ReadonlyMap<string,string>, namedAliases: boolean ): string {
-	const css = postcss.parse( source );
+	// Browsers accept legacy HTML-comment wrappers around stylesheet content.
+	// PostCSS treats the trailing CDC as an unknown word; remove only the
+	// outer wrapper so quoted CSS strings and content tokens remain untouched.
+	const css = postcss.parse( source.replace( /^\s*<!--/, '' ).replace( /-->\s*$/, '' ) );
 	css.walkRules( rule => {
 		const selectors = selectorParser().astSync( rule.selector );
 		const replacements: Array<{ node: selectorParser.Identifier | selectorParser.Attribute; alias: selectorParser.Identifier | selectorParser.Attribute }> = [];
@@ -2704,7 +2709,8 @@ function portableAssetUrl( path: string ): string {
 function dependencyReferences(
 	html: string,
 	documentUrl: string,
-	cssOnly = false
+	cssOnly = false,
+	embeddedSources: ReadonlySet<string> = new Set()
 ): PortableDependency[] {
 	const searchableHtml = html
 		.replace( /&quot;|&#34;|&#x22;/gi, '"' )
@@ -2714,6 +2720,7 @@ function dependencyReferences(
 	const svgUseDocuments: string[] = [];
 	if ( ! cssOnly ) {
 		const $ = cheerio.load( html );
+		$( 'iframe[src]' ).each( ( _, element ) => { const source = $( element ).attr( 'src' ) ?? ''; if ( embeddedSources.has( source ) ) linkedFiles.push( source ); } );
 		$( 'a[href],area[href]' ).each( ( _, element ) => {
 			const href = $( element ).attr( 'href' ) ?? '';
 			if ( isAudioLink( href, documentUrl ) || isDocumentDownloadLink( href, documentUrl ) ) linkedFiles.push( href );
@@ -3088,7 +3095,7 @@ function removeDanglingResourceReference( html: string, reference: string ): str
 	return $.html();
 }
 
-function safeCapturedPageHtml( html: string ): { html: string; jsonLd: string[] } {
+function safeCapturedPageHtml( html: string, embeddedSources: ReadonlySet<string> = new Set() ): { html: string; jsonLd: string[] } {
 	const $ = cheerio.load( html );
 	const jsonLd: string[] = [];
 	let jsonLdScriptCount = 0;
@@ -3126,6 +3133,18 @@ function safeCapturedPageHtml( html: string ): { html: string; jsonLd: string[] 
 	}
 	$( 'iframe' ).each( ( _index, element ) => {
 		const node = $( element );
+		const embeddedSource = node.attr( 'data-dla-embedded-document' );
+		if ( embeddedSource && embeddedSources.has( embeddedSource ) ) {
+			const height = Number( node.attr( 'height' ) );
+			if ( ! Number.isFinite( height ) || height <= 0 ) { node.remove(); return; }
+			for ( const attribute of Object.keys( 'attribs' in element ? element.attribs : {} ) ) {
+				if ( ! VISUAL_IFRAME_ATTRIBUTES.has( attribute.toLowerCase() ) && ! [ 'id', 'style', 'aria-label', 'frameborder', 'scrolling', 'allowtransparency' ].includes( attribute.toLowerCase() ) ) node.removeAttr( attribute );
+			}
+			node.attr( 'src', embeddedSource );
+			node.attr( 'sandbox', 'allow-same-origin' );
+			node.empty();
+			return;
+		}
 		const source = node.attr( VISUAL_IFRAME_EVIDENCE_ATTRIBUTES.src ) ?? '';
 		const width = node.attr( VISUAL_IFRAME_EVIDENCE_ATTRIBUTES.width ) ?? '';
 		const height = node.attr( VISUAL_IFRAME_EVIDENCE_ATTRIBUTES.height ) ?? '';
@@ -3383,6 +3402,22 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 	const fluidReports: Array< NonNullable< ManifestEntryFluid > > = [];
 	const screenshotManifestPath = join( outputDir, 'screenshots', 'manifest.json' );
 	const httpInput = options.input ? loadHttpExportInput( outputDir, options.sourceUrl, options.input ) : undefined;
+	const embedded = options.embeddedDocuments ? loadEmbeddedDocuments( outputDir ) : undefined;
+	if ( embedded && ! httpInput ) throw new Error( 'Runtime attachments require explicit HTTP input' );
+	const embeddedSources = new Set( Object.keys( embedded?.resources ?? {} ) );
+	if ( embedded && httpInput && options.input ) {
+		const checked = new Set<string>();
+		for ( const region of embedded.receipt.regions ) {
+			const key = JSON.stringify( [ region.url, region.variant ] );
+			if ( checked.has( key ) ) continue;
+			checked.add( key );
+			const entry = httpInput.entries[ region.url ];
+			const path = region.variant === options.input.desktopVariant ? entry?.html : region.variant === options.input.mobileVariant ? entry?.mobileHtml : undefined;
+			if ( ! path ) throw new Error( 'Runtime attachment has no corresponding acquired variant' );
+			const html = readFileSync( join( outputDir, path ), 'utf8' );
+			projectEmbeddedRegions( html, region.url, region.variant, createHash( 'sha256' ).update( html ).digest( 'hex' ), embedded.receipt.regions );
+		}
+	}
 	if ( ! httpInput && ! existsSync( screenshotManifestPath ) ) {
 		throw new Error( `Screenshot manifest not found: ${ screenshotManifestPath }` );
 	}
@@ -3404,6 +3439,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 
 	const capturedEntries: CaptureEntry[] = [];
 	const resourceManifest = capturedResources( outputDir );
+	if ( embedded ) Object.assign( resourceManifest.resources, embedded.resources );
 	const interactionPages: InteractionStatesReport[] = [];
 	const scrollStatesPages: ScrollStatesReport[] = [];
 	const excludedRoutes: string[] = [];
@@ -3465,7 +3501,8 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 			} );
 			continue;
 		}
-		const rawDesktopHtml = readFileSync( capturedHtmlPath, 'utf8' );
+		const acquiredDesktopHtml = readFileSync( capturedHtmlPath, 'utf8' );
+		let rawDesktopHtml = embedded && options.input ? projectEmbeddedRegions( acquiredDesktopHtml, url, options.input.desktopVariant, createHash( 'sha256' ).update( acquiredDesktopHtml ).digest( 'hex' ), embedded.receipt.regions ) : acquiredDesktopHtml;
 		const sourceInteractivity = inspectSourceInteractivity( rawDesktopHtml, url, outputDir, resourceManifest );
 		// A client-routed SPA answers every route with HTTP 200 and renders its
 		// own not-found screen in JavaScript, so the HTTP-status check above
@@ -3486,16 +3523,21 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 			continue;
 		}
 		const mobileHtmlPath = resolve( outputDir, entry.mobileHtml ?? entry.html.replace( /^html[\\/]/, 'html-mobile/' ) );
-		const rawMobileHtml =
+		const acquiredMobileHtml =
 			( ! httpInput || entry.mobileHtml ) && pathWithin( outputDir, mobileHtmlPath ) && existsSync( mobileHtmlPath )
 				? readFileSync( mobileHtmlPath, 'utf8' )
 				: undefined;
+		let rawMobileHtml = embedded && options.input?.mobileVariant && acquiredMobileHtml !== undefined ? projectEmbeddedRegions( acquiredMobileHtml, url, options.input.mobileVariant, createHash( 'sha256' ).update( acquiredMobileHtml ).digest( 'hex' ), embedded.receipt.regions ) : acquiredMobileHtml;
 		const detectedFloor =
 			typeof entry.fluid?.canvasFloor === 'number' && entry.fluid.canvasFloor > 0
 				? Math.round( entry.fluid.canvasFloor )
 				: siteSwitchWidth;
 		if ( detectedFloor ) switchWidths.push( detectedFloor );
 		if ( entry.fluid ) fluidReports.push( entry.fluid );
+		if ( embedded && options.input?.mobileVariant && rawMobileHtml !== undefined ) {
+			const pair = mergeResponsiveEmbeddedRegions( { desktop: rawDesktopHtml, mobile: rawMobileHtml, url, desktopVariant: options.input.desktopVariant, mobileVariant: options.input.mobileVariant, receipt: embedded.receipt, switchWidth: detectedFloor ?? DEFAULT_SWITCH_WIDTH, scopeClasses: { desktop: DESKTOP_DOCUMENT_CLASS, mobile: MOBILE_DOCUMENT_CLASS } } );
+			rawDesktopHtml = pair.desktop; rawMobileHtml = pair.mobile;
+		}
 		const responsiveVariants = responsiveVariantEvidence( rawDesktopHtml, rawMobileHtml, detectedFloor );
 		const desktopHtml = normalizedDeclarativeFormEmbeds( renderedHtml( rawDesktopHtml ) );
 		const mobileHtml =
@@ -3512,7 +3554,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 					  );
 		// safeCapturedPageHtml removes <base>; record its stylesheet semantics first.
 		const styleHoistContext = capturedStyleHoistContext( capturedHtml );
-		const sanitized = safeCapturedPageHtml( capturedHtml );
+		const sanitized = safeCapturedPageHtml( capturedHtml, embeddedSources );
 		const html = sanitized.html;
 		const stagedHtmlPath = join( stagedHtmlDir, `${ capturedEntries.length }.html` );
 		writeFileSync( stagedHtmlPath, html );
@@ -3874,6 +3916,12 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 					}
 				}
 			}
+			if ( /^text\/html(?:;|$)/i.test( resource.contentType ) && embeddedSources.has( dependency.url ) ) {
+				const $ = cheerio.load( content );
+				const base = new URL( $( 'base[href]' ).first().attr( 'href' ) ?? dependency.url, dependency.url ).href;
+				content = safeCapturedPageHtml( content ).html;
+				for ( const nested of dependencyReferences( content, base ) ) copyResource( nested, dependency.url );
+			}
 			content = replaceAll( content, mediaReplacements, rejectedReplacementKeys );
 			writeFileSync(
 				destination,
@@ -3895,7 +3943,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 	for ( const entry of retainedEntries ) {
 		const originalHtml = readFileSync( entry.htmlPath, 'utf8' );
 		let html = originalHtml;
-		for ( const dependency of dependencyReferences( html, entry.url ) ) {
+		for ( const dependency of dependencyReferences( html, entry.url, false, embeddedSources ) ) {
 			const mediaReplacement = mediaReplacements.get( dependency.reference );
 			if (
 				mediaReplacement &&
@@ -4367,6 +4415,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 			{
 				schema: CAPTURE_RECEIPT_SCHEMA,
 				...( httpInput ? { acquisition: httpInput.acquisition } : {} ),
+				...( embedded ? { embeddedDocuments: embedded.evidence } : {} ),
 				...(cleanup ? { cleanup } : {}),
 				websiteRoot: 'website',
 				entrypoint: 'website/index.html',
