@@ -530,6 +530,80 @@ describe('interaction + wait helpers (Phase 1/2, browser)', () => {
     await page.close();
   });
 
+  it('keeps an initially open exclusive item open through expand then hydration', async () => {
+    const page = await browser.newPage();
+    const group = (id: string, openAnswer: string, closedAnswer: string) => `<section id="${id}">
+      <div class="item"><button type="button" id="q1" aria-expanded="true" aria-controls="a1">Open question</button><div class="clip" style="height:auto;overflow:visible"><div class="inner" style="display:block;opacity:1"><div id="a1" role="region" aria-hidden="false">${openAnswer}</div></div></div></div>
+      <div class="item"><button type="button" id="q2" aria-expanded="false" aria-controls="a2">Closed question</button><div class="clip" style="height:0;overflow:hidden"><div class="inner" style="display:none;opacity:0"><div id="a2" role="region" aria-hidden="true">${closedAnswer}</div></div></div></div>
+    </section>`;
+    await page.setContent(`
+      <header id="site-header" style="height:64px;overflow:hidden">Site header</header>
+      <div id="author-note" style="opacity:0.85">Author note</div>
+      <div id="irrelevant-clip" style="height:0;overflow:hidden"></div>
+      ${group('primary', 'Primary open answer.', 'Primary closed answer.')}
+      ${group('scoped', 'Scoped open answer.', 'Scoped closed answer.')}
+      <section id="separate">
+        <div class="item"><button type="button" id="alone" aria-expanded="true" aria-controls="alone-panel">Separate question</button><div class="clip" style="height:auto;overflow:visible"><div class="inner" style="display:block"><div id="alone-panel" role="region">Separate answer.</div></div></div></div>
+      </section>
+      <section id="stuck">
+        <div class="item"><button type="button" id="stuck-q" aria-expanded="false" aria-controls="stuck-a">Stuck question</button><div class="clip" style="height:0;overflow:hidden"><div class="inner" style="display:none"><div id="stuck-a" role="region">Stuck answer.</div></div></div></div>
+      </section>
+      <script>
+        function setState(item, open) {
+          const button = item.querySelector('button');
+          const clip = item.querySelector('.clip');
+          const inner = item.querySelector('.inner');
+          const panel = item.querySelector('[role="region"]');
+          button.setAttribute('aria-expanded', open ? 'true' : 'false');
+          clip.style.height = open ? 'auto' : '0px';
+          clip.style.overflow = open ? 'visible' : 'hidden';
+          inner.style.display = open ? 'block' : 'none';
+          inner.style.opacity = open ? '1' : '0';
+          panel.setAttribute('aria-hidden', open ? 'false' : 'true');
+        }
+        function bind(section, exclusive) {
+          section.querySelectorAll('button').forEach((button) => {
+            button.addEventListener('click', () => {
+              const item = button.closest('.item');
+              const opening = button.getAttribute('aria-expanded') !== 'true';
+              if (button.id === 'stuck-q') { if (opening) setState(item, true); return; }
+              if (exclusive && opening) section.querySelectorAll('.item').forEach((other) => { if (other !== item) setState(other, false); });
+              setState(item, opening);
+            });
+          });
+        }
+        bind(document.getElementById('primary'), true);
+        bind(document.getElementById('scoped'), true);
+        bind(document.getElementById('separate'), false);
+        bind(document.getElementById('stuck'), false);
+      </script>
+    `);
+    await expandCollapsedContent(page);
+    const records = await hydrateDisclosureContent(page);
+    expect(await page.locator('#primary button').nth(0).getAttribute('aria-expanded')).toBe('true');
+    expect(await page.locator('#primary [role="region"]').nth(0).isVisible()).toBe(true);
+    expect(await page.locator('#primary [role="region"]').nth(0).innerText()).toBe('Primary open answer.');
+    expect(await page.locator('#primary button').nth(1).getAttribute('aria-expanded')).toBe('false');
+    expect(await page.locator('#primary [role="region"]').nth(1).innerText()).toBe('Primary closed answer.');
+    expect(await page.locator('#scoped button').nth(0).getAttribute('aria-expanded')).toBe('true');
+    expect(await page.locator('#separate button').getAttribute('aria-expanded')).toBe('true');
+    expect(await page.locator('#stuck [data-dla-local-disclosure]').count()).toBe(0);
+    expect(await page.locator('#stuck [role="region"]').innerText()).toBe('Stuck answer.');
+    expect(await page.locator('#site-header').getAttribute('style')).toBe('height:64px;overflow:hidden');
+    expect(await page.locator('#author-note').getAttribute('style')).toBe('opacity:0.85');
+    expect(await page.locator('#irrelevant-clip').getAttribute('style')).toBe('height:0;overflow:hidden');
+    expect(await page.locator('#primary[data-dla-exclusive-disclosures]').count()).toBe(1);
+    expect(await page.locator('#separate[data-dla-exclusive-disclosures]').count()).toBe(0);
+    const offline = wireCapturedDialogs((await page.content()).replace(/<script>[\s\S]*?<\/script>/g, ''), records);
+    await page.setContent(offline);
+    expect(await page.locator('#primary [role="region"]').nth(0).isVisible()).toBe(true);
+    await page.locator('#primary button').nth(1).press('Enter');
+    expect(await page.locator('#primary [role="region"]').nth(1).innerText()).toBe('Primary closed answer.');
+    expect(await page.locator('#primary [role="region"]').nth(0).isVisible()).toBe(false);
+    expect(await page.locator('#scoped button').nth(0).getAttribute('aria-expanded')).toBe('true');
+    await page.close();
+  });
+
   it('hydrates a Radix-style accordion with no aria-controls, via the reverse aria-labelledby relationship, resilient to single-open auto-collapse', async () => {
     const page = await browser.newPage();
     // Mirrors the real shadcn/ui Radix accordion markup: the trigger carries

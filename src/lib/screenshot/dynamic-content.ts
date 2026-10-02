@@ -134,27 +134,57 @@ export async function expandCollapsedContent(page: Page): Promise<void> {
         (d as HTMLDetailsElement).open = true;
       });
 
+      const populatedResting: Array<{ trigger: HTMLElement; parent: HTMLElement; controls: string; expanded: boolean }> = [];
+      for (const el of Array.from(document.querySelectorAll<HTMLElement>('[aria-expanded][aria-controls]'))) {
+        if (!safeToActivate(el) || isExpandToggle(el) || !el.parentElement) continue;
+        const controls = el.getAttribute('aria-controls') || '';
+        const panel = Array.from(el.parentElement.querySelectorAll('[id]')).find((node) => node.id === controls);
+        if (!panel || panel.getAttribute('role') !== 'region') continue;
+        if (!((panel.textContent || '').trim() || panel.querySelector('img,video,audio,picture,svg,canvas'))) continue;
+        populatedResting.push({ trigger: el, parent: el.parentElement, controls, expanded: el.getAttribute('aria-expanded') === 'true' });
+      }
+      const exclusiveSets: Array<Set<HTMLElement>> = [];
+      const linkExclusive = (left: HTMLElement, right: HTMLElement) => {
+        let leftSet = exclusiveSets.find((set) => set.has(left));
+        let rightSet = exclusiveSets.find((set) => set.has(right));
+        if (leftSet && rightSet && leftSet !== rightSet) {
+          for (const item of rightSet) leftSet.add(item);
+          exclusiveSets.splice(exclusiveSets.indexOf(rightSet), 1);
+        } else if (leftSet) leftSet.add(right);
+        else if (rightSet) rightSet.add(left);
+        else exclusiveSets.push(new Set([left, right]));
+      };
+      const restingTrigger = (entry: { trigger: HTMLElement; parent: HTMLElement; controls: string }) => {
+        if (entry.trigger.isConnected) return entry.trigger;
+        if (!entry.parent.isConnected) return entry.trigger;
+        return Array.from(entry.parent.querySelectorAll<HTMLElement>('[aria-controls]')).find((item) => item.getAttribute('aria-controls') === entry.controls) || entry.trigger;
+      };
       let navigated = false;
-      const openedPopulated: HTMLElement[] = [];
       for (const el of Array.from(document.querySelectorAll('[aria-expanded="false"][aria-controls]'))) {
         if (navigated) break;
         if (!safeToActivate(el) || isExpandToggle(el)) continue;
-        const controlledId = el.getAttribute('aria-controls') || '';
-        const localPanel = el.parentElement && Array.from(el.parentElement.querySelectorAll('[id]')).find((node) => node.id === controlledId);
-        const alreadyPopulated = Boolean(localPanel
-          && localPanel.getAttribute('role') === 'region'
-          && ((localPanel.textContent || '').trim() || localPanel.querySelector('img,video,audio,picture,svg,canvas')));
+        const openBefore = new Set(populatedResting.filter((entry) => restingTrigger(entry).getAttribute('aria-expanded') === 'true').map((entry) => entry.trigger));
         if ((await activate(el)) === 'navigated') navigated = true;
-        else if (alreadyPopulated && el instanceof HTMLElement) openedPopulated.push(el);
+        else if (el instanceof HTMLElement) {
+          for (const peer of populatedResting) {
+            if (peer.trigger === el) continue;
+            if (openBefore.has(peer.trigger) && restingTrigger(peer).getAttribute('aria-expanded') !== 'true') linkExclusive(el, peer.trigger);
+          }
+        }
       }
       if (!navigated) {
-        for (const el of openedPopulated) {
-          if (el.getAttribute('aria-expanded') !== 'true') continue;
-          let scope = el.parentElement;
-          while (scope && scope !== document.body && openedPopulated.filter((item) => scope!.contains(item)).length < 2) scope = scope.parentElement;
-          const openedHere = scope ? openedPopulated.filter((item) => scope!.contains(item)) : [];
-          const stillOpen = openedHere.filter((item) => item.getAttribute('aria-expanded') === 'true');
-          if (openedHere.length >= 2 && stillOpen.length === 1) await activate(el);
+        for (const set of exclusiveSets) {
+          const members = populatedResting.filter((entry) => set.has(entry.trigger));
+          for (const entry of members) {
+            if (!entry.expanded) continue;
+            const live = restingTrigger(entry);
+            if (live.getAttribute('aria-expanded') !== 'true') await activate(live);
+          }
+          for (const entry of members) {
+            if (entry.expanded) continue;
+            const live = restingTrigger(entry);
+            if (live.getAttribute('aria-expanded') === 'true') await activate(live);
+          }
         }
       }
 
@@ -637,14 +667,19 @@ export async function hydrateDisclosureContent(page: Page, rootSelector = 'body'
         ariaHidden: panel.getAttribute('aria-hidden'),
         text: panel.textContent,
         controls: trigger.getAttribute('aria-controls') || '',
+        parent: trigger.parentElement,
         nodes: concealmentNodes(panel, trigger).map((node) => ({ style: node.getAttribute('style'), className: node.getAttribute('class') })),
       });
       const resolveLive = (entry: { trigger: HTMLElement; panel: HTMLElement; snap: ReturnType<typeof snapshotOf> }) => {
         const controls = entry.snap.controls;
-        const triggers = Array.from(root.querySelectorAll<HTMLElement>('[aria-controls]')).filter((trigger) => trigger.isConnected && trigger.getAttribute('aria-controls') === controls);
-        const trigger = (entry.trigger.isConnected ? entry.trigger : undefined) || triggers.find((item) => visible(item)) || triggers[0];
-        const panel = trigger ? panelForTrigger(trigger) : null;
-        return { trigger: trigger || entry.trigger, panel: panel || entry.panel };
+        const parent = entry.snap.parent;
+        const trigger = entry.trigger.isConnected
+          ? entry.trigger
+          : (parent?.isConnected
+            ? Array.from(parent.querySelectorAll<HTMLElement>('[aria-controls]')).find((item) => item.getAttribute('aria-controls') === controls)
+            : undefined) || entry.trigger;
+        const panel = trigger.isConnected ? panelForTrigger(trigger) : null;
+        return { trigger, panel: panel || entry.panel };
       };
       const applySnap = (trigger: HTMLElement, panel: HTMLElement, snap: ReturnType<typeof snapshotOf>) => {
         if (!trigger.isConnected || !panel.isConnected) return;
@@ -759,22 +794,18 @@ export async function hydrateDisclosureContent(page: Page, rootSelector = 'body'
           if (node.contains(entry.trigger)) return;
           const closed = entry.closedClips[index];
           const opened = entry.openClips[index];
-          const style = node.getAttribute('style') || '';
-          const computed = getComputedStyle(node);
-          if ((closed && opened && closed.display === 'none' && opened.display !== 'none') || computed.display === 'none' || node.style.display === 'none') {
-            if (opened?.inlineDisplay && opened.display !== 'none') node.style.display = opened.inlineDisplay;
+          if (!closed || !opened) return;
+          if (closed.display === 'none' && opened.display !== 'none') {
+            if (opened.inlineDisplay) node.style.display = opened.inlineDisplay;
             else node.style.removeProperty('display');
           }
-          if ((closed && opened && closed.opacity === '0' && opened.opacity !== '0') || computed.opacity === '0' || node.style.opacity === '0') {
-            if (opened?.inlineOpacity && opened.opacity !== '0') node.style.opacity = opened.inlineOpacity;
+          if (closed.opacity === '0' && opened.opacity !== '0') {
+            if (opened.inlineOpacity) node.style.opacity = opened.inlineOpacity;
             else node.style.removeProperty('opacity');
           }
-          const inlineConceals = /(?:^|;)\s*height\s*:\s*0(?:px)?\s*(?:;|$)/i.test(style) || computed.overflow === 'hidden' || computed.overflowY === 'hidden';
-          if ((closed?.heightZero && !opened?.heightZero) || (inlineConceals && node.getBoundingClientRect().height < 1 && node !== entry.panel)) {
+          if (closed.heightZero && !opened.heightZero) {
             node.style.height = 'auto';
             node.style.overflow = 'visible';
-          }
-          if (closed && opened) {
             const closedTokens = closed.className.split(/\s+/).filter(Boolean);
             const openTokens = opened.className.split(/\s+/).filter(Boolean);
             for (const token of closedTokens) if (!openTokens.includes(token)) node.classList.remove(token);
