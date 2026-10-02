@@ -395,6 +395,141 @@ describe('interaction + wait helpers (Phase 1/2, browser)', () => {
     await page.close();
   });
 
+  it('normalizes a populated disclosure concealed by a reversing ancestor onto the local hidden contract', async () => {
+    const page = await browser.newPage();
+    await page.setContent(`
+      <header id="site-header" style="height:64px;overflow:hidden">Site header</header>
+      <div id="tablet-frame" style="height:480px">
+        <div id="irrelevant-clip" style="height:0;overflow:hidden"></div>
+        <section id="primary">
+          <div class="item">
+            <button type="button" id="q1" aria-expanded="false" aria-controls="a1">First kept question</button>
+            <div class="clip" style="height:0;overflow:hidden"><div class="inner" style="display:none;opacity:0"><div id="a1" role="region" aria-hidden="true">First kept answer.</div></div></div>
+            <div class="decoy" style="height:0;overflow:hidden"></div>
+          </div>
+          <div class="item">
+            <button type="button" id="q2" aria-expanded="true" aria-controls="a2">Second kept question</button>
+            <div class="clip" style="height:auto;overflow:visible"><div class="inner" style="display:block;opacity:1"><div id="a2" role="region" aria-hidden="false">Second kept answer.</div></div></div>
+          </div>
+        </section>
+        <section id="scoped">
+          <div class="item">
+            <button type="button" id="q1" aria-expanded="false" aria-controls="a1">First kept question</button>
+            <div class="clip" style="height:0;overflow:hidden"><div class="inner" style="display:none;opacity:0"><div id="a1" role="region" aria-hidden="true">Scoped first answer.</div></div></div>
+          </div>
+          <div class="item">
+            <button type="button" id="q2" aria-expanded="false" aria-controls="a2">Second kept question</button>
+            <div class="clip" style="height:0;overflow:hidden"><div class="inner" style="display:none;opacity:0"><div id="a2" role="region" aria-hidden="true">Scoped second answer.</div></div></div>
+          </div>
+        </section>
+        <section id="independent">
+          <div class="item">
+            <button type="button" id="iq1" aria-expanded="false" aria-controls="ia1">Independent question</button>
+            <div class="clip" style="height:0;overflow:hidden"><div class="inner" style="display:none;opacity:0"><div id="ia1" role="region" aria-hidden="true">Independent answer.</div></div></div>
+          </div>
+          <div class="item">
+            <button type="button" id="iq2" aria-expanded="false" aria-controls="ia2">Independent sibling</button>
+            <div class="clip" style="height:0;overflow:hidden"><div class="inner" style="display:none;opacity:0"><div id="ia2" role="region" aria-hidden="true">Independent sibling answer.</div></div></div>
+          </div>
+        </section>
+        <section id="one-way">
+          <div class="item">
+            <button type="button" id="ow" aria-expanded="false" aria-controls="owa">Unsupported question</button>
+            <div class="clip" style="height:0;overflow:hidden"><div class="inner" style="display:none;opacity:0"><div id="owa" role="region" aria-hidden="true">Unsupported answer.</div></div></div>
+          </div>
+        </section>
+      </div>
+      <script>
+        function setState(item, open) {
+          const button = item.querySelector('button');
+          const clip = item.querySelector('.clip');
+          const inner = item.querySelector('.inner');
+          const panel = item.querySelector('[role="region"]');
+          button.setAttribute('aria-expanded', open ? 'true' : 'false');
+          clip.style.height = open ? 'auto' : '0px';
+          clip.style.overflow = open ? 'visible' : 'hidden';
+          inner.style.display = open ? 'block' : 'none';
+          inner.style.opacity = open ? '1' : '0';
+          panel.setAttribute('aria-hidden', open ? 'false' : 'true');
+        }
+        function bind(section, exclusive) {
+          section.querySelectorAll('button').forEach((button) => {
+            button.addEventListener('click', () => {
+              const item = button.closest('.item');
+              const opening = button.getAttribute('aria-expanded') !== 'true';
+              if (button.id === 'ow' && !opening) return;
+              if (exclusive && opening) section.querySelectorAll('.item').forEach((other) => { if (other !== item) setState(other, false); });
+              setState(item, opening);
+            });
+          });
+        }
+        bind(document.getElementById('primary'), true);
+        bind(document.getElementById('scoped'), true);
+        bind(document.getElementById('independent'), false);
+        bind(document.getElementById('one-way'), false);
+      </script>
+    `);
+
+    const records = await hydrateDisclosureContent(page);
+    expect(records.filter((record) => record.status === 'captured')).toHaveLength(6);
+    expect(await page.locator('#one-way [data-dla-local-disclosure]').count()).toBe(0);
+    expect(await page.locator('#one-way button').getAttribute('aria-expanded')).toBe('false');
+    expect(await page.locator('#one-way .clip').getAttribute('style')).toContain('height:0');
+    expect(await page.locator('#primary[data-dla-exclusive-disclosures]').count()).toBe(1);
+    expect(await page.locator('#scoped[data-dla-exclusive-disclosures]').count()).toBe(1);
+    expect(await page.locator('#independent[data-dla-exclusive-disclosures]').count()).toBe(0);
+    expect(await page.locator('#site-header').getAttribute('style')).toBe('height:64px;overflow:hidden');
+    expect(await page.locator('#tablet-frame').getAttribute('style')).toBe('height:480px');
+    expect(await page.locator('#irrelevant-clip').getAttribute('style')).toBe('height:0;overflow:hidden');
+    expect(await page.locator('#primary .decoy').getAttribute('style')).toBe('height:0;overflow:hidden');
+    const resting = await page.evaluate(() => ({
+      primary: [...document.querySelectorAll('#primary button')].map((button) => button.getAttribute('aria-expanded')),
+      answers: [...document.querySelectorAll('[role="region"]')].map((panel) => panel.textContent),
+    }));
+    expect(resting.primary).toEqual(['false', 'true']);
+    expect(resting.answers).toEqual([
+      'First kept answer.',
+      'Second kept answer.',
+      'Scoped first answer.',
+      'Scoped second answer.',
+      'Independent answer.',
+      'Independent sibling answer.',
+      'Unsupported answer.',
+    ]);
+    expect(await page.locator('#primary [role="region"]').nth(0).isVisible()).toBe(false);
+    expect(await page.locator('#primary [role="region"]').nth(1).isVisible()).toBe(true);
+
+    const offline = wireCapturedDialogs((await page.content()).replace(/<script>[\s\S]*?<\/script>/g, ''), records);
+    expect(offline).toContain('data-dla-local-disclosure-runtime');
+    expect(offline).not.toContain('data-dla-inline-disclosure');
+    for (const width of [390, 768, 1440]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.setContent(offline);
+      const primary = page.locator('#primary');
+      const scoped = page.locator('#scoped');
+      const independent = page.locator('#independent');
+      expect(await primary.locator('[role="region"]').nth(1).isVisible()).toBe(true);
+      expect(await primary.locator('[role="region"]').nth(0).isVisible()).toBe(false);
+      await primary.locator('button').nth(0).click();
+      expect(await primary.locator('[role="region"]').nth(0).innerText()).toBe('First kept answer.');
+      expect(await primary.locator('[role="region"]').nth(0).isVisible()).toBe(true);
+      expect(await primary.locator('[role="region"]').nth(1).isVisible()).toBe(false);
+      expect(await scoped.locator('button').nth(0).getAttribute('aria-expanded')).toBe('false');
+      await primary.locator('button').nth(0).click();
+      expect(await primary.locator('[role="region"]').nth(0).isVisible()).toBe(false);
+      expect(await primary.locator('button[aria-expanded="true"]').count()).toBe(0);
+      await independent.locator('button').nth(0).click();
+      await independent.locator('button').nth(1).click();
+      expect(await independent.locator('[role="region"]').nth(0).isVisible()).toBe(true);
+      expect(await independent.locator('[role="region"]').nth(1).isVisible()).toBe(true);
+      expect(await page.locator('#site-header').getAttribute('style')).toBe('height:64px;overflow:hidden');
+      expect(await page.locator('#tablet-frame').getAttribute('style')).toBe('height:480px');
+      expect(await page.locator('#irrelevant-clip').getAttribute('style')).toBe('height:0;overflow:hidden');
+      expect(await page.locator('#primary .decoy').getAttribute('style')).toBe('height:0;overflow:hidden');
+    }
+    await page.close();
+  });
+
   it('hydrates a Radix-style accordion with no aria-controls, via the reverse aria-labelledby relationship, resilient to single-open auto-collapse', async () => {
     const page = await browser.newPage();
     // Mirrors the real shadcn/ui Radix accordion markup: the trigger carries
