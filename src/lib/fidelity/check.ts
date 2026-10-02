@@ -310,7 +310,9 @@ export async function observePage(
 	cleanup?: CleanupPolicy,
 	onBaseline?: () => Promise<void>,
 	/** Observe the already-cleaned capture session without navigation or interaction probes. */
-	captureSession = false
+	captureSession = false,
+	/** The caller has already exercised scrolling and restored its declared baseline pose. */
+	skipScrollProbe = false
 ): Promise< LayoutObservation > {
 	const external = new Set< string >();
 	const onRequest = ( request: { url: () => string } ): void => {
@@ -345,7 +347,7 @@ export async function observePage(
 		// Evidence describes the settled baseline, not the page left behind by
 		// anchor/dialog probes (which can scroll or leave a popup open).
 		await onBaseline?.();
-		const measured = await page.evaluate( async ( clickUnresolved: boolean ) => {
+		const measured = await page.evaluate( async ( { clickUnresolved, skipScrollProbe }: { clickUnresolved: boolean; skipScrollProbe: boolean } ) => {
 			const globalWithName = globalThis as typeof globalThis & { __name?: (fn: unknown) => unknown };
 			if (typeof globalWithName.__name === 'undefined') globalWithName.__name = fn => fn;
 			// Perceptual identity for one image: fetch the bytes (cache-warm —
@@ -543,39 +545,42 @@ export async function observePage(
 			const animationStateBefore = new Map(
 				animationsBefore.map( ( animation ) => [ animation.key, animation ] )
 			);
-			const originalScroll = { x: scrollX, y: scrollY };
-			const root = document.documentElement;
-			const scrollBehavior = root.style.scrollBehavior;
-			root.style.scrollBehavior = 'auto';
-			window.scrollTo( 0, Math.min( document.documentElement.scrollHeight - innerHeight, innerHeight * 1.5 ) );
-			await new Promise( ( resolve ) => requestAnimationFrame( () => requestAnimationFrame( resolve ) ) );
-			await new Promise( ( resolve ) => setTimeout( resolve, 250 ) );
-			const occurrencesAfter = new Map< string, number >();
-			const animationsAfter = document
-				.getAnimations()
-				.filter( ( animation ) => animation.effect?.getComputedTiming().iterations !== Infinity )
-				.map( ( animation ) => {
-					const name = ( animation as Animation & { animationName?: string } ).animationName;
-					if ( ! name || name === 'none' ) return null;
-					const occurrence = occurrencesAfter.get( name ) ?? 0;
-					occurrencesAfter.set( name, occurrence + 1 );
-					return {
-						key: `${ name }:${ occurrence }`,
-						name,
-						time: animation.currentTime?.toString() ?? 'null',
-						state: animation.playState,
-					};
-				} )
-				.filter( ( animation ): animation is NonNullable< typeof animation > => animation !== null );
-			const responsiveAnimations = animationsAfter
-				.filter( ( animation ) => {
-					const before = animationStateBefore.get( animation.key );
-					return ! before || before.time !== animation.time || before.state !== animation.state;
-				} )
-				.map( ( animation ) => animation.name )
-				.sort();
-			window.scrollTo( originalScroll.x, originalScroll.y );
-			root.style.scrollBehavior = scrollBehavior;
+			let responsiveAnimations: string[] = [];
+			if ( ! skipScrollProbe ) {
+				const originalScroll = { x: scrollX, y: scrollY };
+				const root = document.documentElement;
+				const scrollBehavior = root.style.scrollBehavior;
+				root.style.scrollBehavior = 'auto';
+				window.scrollTo( 0, Math.min( document.documentElement.scrollHeight - innerHeight, innerHeight * 1.5 ) );
+				await new Promise( ( resolve ) => requestAnimationFrame( () => requestAnimationFrame( resolve ) ) );
+				await new Promise( ( resolve ) => setTimeout( resolve, 250 ) );
+				const occurrencesAfter = new Map< string, number >();
+				const animationsAfter = document
+					.getAnimations()
+					.filter( ( animation ) => animation.effect?.getComputedTiming().iterations !== Infinity )
+					.map( ( animation ) => {
+						const name = ( animation as Animation & { animationName?: string } ).animationName;
+						if ( ! name || name === 'none' ) return null;
+						const occurrence = occurrencesAfter.get( name ) ?? 0;
+						occurrencesAfter.set( name, occurrence + 1 );
+						return {
+							key: `${ name }:${ occurrence }`,
+							name,
+							time: animation.currentTime?.toString() ?? 'null',
+							state: animation.playState,
+						};
+					} )
+					.filter( ( animation ): animation is NonNullable< typeof animation > => animation !== null );
+				responsiveAnimations = animationsAfter
+					.filter( ( animation ) => {
+						const before = animationStateBefore.get( animation.key );
+						return ! before || before.time !== animation.time || before.state !== animation.state;
+					} )
+					.map( ( animation ) => animation.name )
+					.sort();
+				window.scrollTo( originalScroll.x, originalScroll.y );
+				root.style.scrollBehavior = scrollBehavior;
+			}
 			const animations = animationsBefore.map( ( animation ) => animation.name ).sort();
 			const hashTargets: { fragment: string; resolved: boolean; targets: number }[] = [];
 			const internalPaths: string[] = [];
@@ -713,7 +718,7 @@ export async function observePage(
 				hashTargets,
 				internalPaths,
 			};
-		}, ! localOrigin && ! captureSession );
+		}, { clickUnresolved: ! localOrigin && ! captureSession, skipScrollProbe } );
 
 		const internalMissing: string[] = [];
 		if ( localOrigin ) {
