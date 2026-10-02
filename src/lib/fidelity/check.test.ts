@@ -12,6 +12,7 @@ import {
 	checkWidthsFor,
 	evidenceSlug,
 	externalRequestHost,
+	receiptCoversSourceUrl,
 	observePage,
 	resolveCheckDirectory,
 	routeSourceMap,
@@ -115,6 +116,28 @@ describe( 'routeSourceMap', () => {
 			[ '/', 'https://example.com/docs/start' ],
 			[ '/api/', 'https://example.com/docs/api' ],
 		] );
+	} );
+} );
+
+describe( 'receiptCoversSourceUrl', () => {
+	const receipt = {
+		routes: [ { url: 'https://example.com/home', path: 'website/home/index.html' } ],
+		duplicateRoutes: [ {
+			url: 'https://example.com/home/',
+			canonicalUrl: 'https://example.com/home',
+			path: 'website/home/index.html',
+		} ],
+	};
+
+	it( 'accepts an exact captured URL and an explicitly receipted alias to that same file', () => {
+		expect( receiptCoversSourceUrl( receipt, 'https://example.com/home' ) ).toBe( true );
+		expect( receiptCoversSourceUrl( receipt, 'https://example.com/home/' ) ).toBe( true );
+	} );
+
+	it( 'does not infer slash aliases without matching receipt proof and file identity', () => {
+		expect( receiptCoversSourceUrl( receipt, 'https://example.com/home//nested' ) ).toBe( false );
+		expect( receiptCoversSourceUrl( { ...receipt, duplicateRoutes: [ { ...receipt.duplicateRoutes[ 0 ]!, path: 'website/other/index.html' } ] }, 'https://example.com/home/' ) ).toBe( false );
+		expect( receiptCoversSourceUrl( { ...receipt, duplicateRoutes: [] }, 'https://example.com/home/' ) ).toBe( false );
 	} );
 } );
 

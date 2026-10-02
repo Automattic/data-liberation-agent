@@ -179,6 +179,7 @@ interface CaptureReceipt {
 	source?: { url?: string };
 	websiteRoot?: string;
 	routes?: Array< { url?: string; path?: string } >;
+	duplicateRoutes?: Array< { url?: string; canonicalUrl?: string; path?: string } >;
 }
 
 /**
@@ -261,6 +262,17 @@ export function routeSourceMap( receipt: CaptureReceipt ): Map< string, string >
 		map.set( canonicalRoutePath( `/${ relative.replace( /^\/*/, '' ) }` ), route.url );
 	}
 	return map;
+}
+
+/** True when this exact URL was captured or the receipt proves it shares a
+ * portable file with a retained canonical route. URL normalization alone is
+ * deliberately insufficient: aliases must be explicit in duplicateRoutes. */
+export function receiptCoversSourceUrl( receipt: CaptureReceipt, url: string ): boolean {
+	if ( receipt.routes?.some( route => route.url === url && route.path ) ) return true;
+	return ( receipt.duplicateRoutes ?? [] ).some( alias =>
+		alias.url === url && !!alias.canonicalUrl && !!alias.path &&
+		receipt.routes?.some( route => route.url === alias.canonicalUrl && route.path === alias.path )
+	);
 }
 
 export function resolveCheckDirectory( directory: string ): {
@@ -1323,7 +1335,7 @@ async function checkFrozenFidelity( options: FidelityCheckOptions, stage: 'captu
 	// Discovery failures cannot disappear simply because no portable route was written.
 	let missingRoutes = 0;
 	for ( const url of options.routes ? [] : manifest?.scope?.sourceUrls ?? [] ) {
-		if ( [ ...sources.values() ].includes( url ) ) continue;
+		if ( [ ...sources.values() ].includes( url ) || receiptCoversSourceUrl( receipt, url ) ) continue;
 		missingRoutes++;
 		for ( const viewport of widths ) for ( const state of states ) pending.push( { stage, route: url, viewport, state, reason: 'Declared source route has no portable capture' } );
 	}
