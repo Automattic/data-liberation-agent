@@ -12,7 +12,6 @@ import {
 	CAPTURE_RECEIPT_SCHEMA,
 	ASSET_EVIDENCE_SCHEMA,
 	canonicalizeUnreferencedHeaderIds,
-	documentsDiffer,
 	exportWebsiteCapture,
 	INDEXED_SEMANTIC_EVIDENCE_SCHEMA,
 	portableInlineStyle,
@@ -23,6 +22,7 @@ import { checkSelfConsistency } from './fidelity/self-consistency.js';
 import { startStaticServer } from './replicate/local-site/static-server.js';
 import { cleanupPolicy } from './source-cleanup.js';
 import { inspectSourceInteractivity } from './source-interactivity.js';
+import { documentsDiffer } from './responsive-assembly.js';
 
 const dirs: string[] = [];
 
