@@ -111,13 +111,19 @@ describe( 'source-backed typed collection filtering', () => {
 				},
 			},
 		} );
-		expect( Object.keys( states[ 0 ]!.collectionFilter!.finiteBootstrap! ).sort() ).toEqual( [ 'answerOnly', 'answers', 'blockedFollowUps', 'categoryControlsDuringSearch', 'completeness', 'coverage', 'declaredCount', 'emptyQueryRestoresCategory', 'mode', 'observedItemCount', 'probes', 'queryIndependent', 'replayedResponses', 'schema', 'sourceFollowUpsBlocked', 'unmatchedProbeBlocked', 'verification' ] );
+		expect( Object.keys( states[ 0 ]!.collectionFilter!.finiteBootstrap! ).sort() ).toEqual( [ 'answerOnly', 'answers', 'blockedFollowUps', 'categoryControlsDuringSearch', 'completeness', 'coverage', 'declaredCount', 'emptyQueryRestoresCategory', 'mode', 'observedItemCount', 'order', 'probes', 'queryIndependent', 'replayedResponses', 'resources', 'schema', 'sourceFollowUpsBlocked', 'unmatchedProbeBlocked', 'verification' ] );
+		expect( states[ 0 ]!.collectionFilter!.items!.map( item => item.text.split( ' ' )[ 1 ] ) ).toEqual( [ 'alpha', 'beta', 'delta', 'gamma' ] );
+		expect( states[ 0 ]!.collectionFilter!.finiteBootstrap ).toMatchObject( { resources: 'text-only', order: { proof: 'universal-query', categoriesAgree: true } } );
+		expect( states[ 0 ]!.collectionFilter!.finiteBootstrap!.order.keys ).toEqual( states[ 0 ]!.collectionFilter!.items!.map( item => item.key ) );
+		expect( states[ 0 ]!.collectionFilter!.finiteBootstrap!.probes.global[ 0 ]!.keys ).toEqual( states[ 0 ]!.collectionFilter!.finiteBootstrap!.order.keys );
 		expect( await page.locator( states[ 0 ]!.collectionFilter!.field.selector ).getAttribute( 'aria-label' ) ).toBe( 'Browse entries' );
 		expect( states[ 0 ]!.collectionFilter!.items ).toHaveLength( 4 );
 		expect( states[ 0 ]!.collectionFilter!.items!.some( item => ! item.categories.includes( states[ 0 ]!.collectionFilter!.initialCategory ) ) ).toBe( true );
 		const html = wireCapturedDialogs( ( await page.content() ).replace( /<script>[\s\S]*?<\/script>/g, '' ), states );
 		await page.setContent( html );
 		expect( await page.locator( 'article' ).count() ).toBe( 4 );
+		await page.locator( 'input[aria-label="Browse entries"]' ).fill( states[ 0 ]!.collectionFilter!.finiteBootstrap!.order.query );
+		expect( await page.locator( 'article:visible h2' ).allInnerTexts() ).toEqual( [ 'Question alpha', 'Question beta', 'Question delta', 'Question gamma' ] );
 		await page.locator( 'input[aria-label="Browse entries"]' ).fill( 'APRICOT' );
 		expect( await page.locator( 'article:visible' ).count() ).toBe( 1 );
 		expect( await page.locator( '[role="tab"]:visible' ).count() ).toBe( 0 );
@@ -134,6 +140,26 @@ describe( 'source-backed typed collection filtering', () => {
 		await page.locator( 'input[aria-label="Browse entries"]' ).fill( 'plum' );
 		expect( await page.locator( 'article:visible' ).count() ).toBe( 1 );
 		await page.close();
+	}, 60_000 );
+	it( 'keeps a reversed category order on the same nodes and rejects resource-bearing items', async () => {
+		const reversed = await browser.newPage();
+		await installFinite( reversed, 'category-order' );
+		const reversedStates = await captureTypedSearchStates( reversed, await captureSelectableSetStates( reversed, { settleMs: 150 } ), { settleMs: 80 } );
+		expect( reversedStates[ 0 ]?.collectionFilter?.finiteBootstrap?.order.categoriesAgree ).toBe( false );
+		expect( reversedStates[ 0 ]?.collectionFilter?.items?.map( item => item.text.split( ' ' )[ 1 ] ) ).toEqual( [ 'alpha', 'beta', 'delta', 'gamma' ] );
+		const reversedHtml = wireCapturedDialogs( ( await reversed.content() ).replace( /<script>[\s\S]*?<\/script>/g, '' ), reversedStates );
+		await reversed.setContent( reversedHtml );
+		expect( await reversed.locator( 'article:visible h2' ).allInnerTexts() ).toEqual( [ 'Question delta', 'Question alpha' ] );
+		await reversed.locator( 'input[aria-label="Browse entries"]' ).fill( reversedStates[ 0 ]!.collectionFilter!.finiteBootstrap!.order.query );
+		expect( await reversed.locator( 'article:visible h2' ).allInnerTexts() ).toEqual( [ 'Question alpha', 'Question beta', 'Question delta', 'Question gamma' ] );
+		await reversed.close();
+		const resource = await browser.newPage();
+		await installFinite( resource, 'resource' );
+		const resourceStates = await captureTypedSearchStates( resource, await captureSelectableSetStates( resource, { settleMs: 150 } ), { settleMs: 80 } );
+		expect( resourceStates[ 0 ]?.collectionFilter?.replay ).toBe( 'unsupported' );
+		expect( resourceStates[ 0 ]?.collectionFilter?.reason ).toMatch( /Resource-bearing/ );
+		expect( resourceStates[ 0 ]?.collectionFilter?.finiteBootstrap ).toBeUndefined();
+		await resource.close();
 	}, 60_000 );
 	it( 'rejects query-dependent, paginated, undeclared, incomplete, and unrestored collection drives', async () => {
 		const expected = {
@@ -158,12 +184,12 @@ describe( 'source-backed typed collection filtering', () => {
 	}, 120_000 );
 });
 
-async function installFinite( page: import('playwright').Page, variant: 'finite' | 'query-dependent' | 'paginated' | 'undeclared' | 'coverage' | 'restoration' ) {
+async function installFinite( page: import('playwright').Page, variant: 'finite' | 'query-dependent' | 'paginated' | 'undeclared' | 'coverage' | 'restoration' | 'category-order' | 'resource' ) {
 	const rows = [
-		{ q: 'Question alpha', a: 'A detailed answer about apricot fruit', c: 0 },
-		{ q: 'Question delta', a: 'A detailed answer about recommendations nearby', c: 0 },
-		{ q: 'Question beta', a: 'A detailed answer about blueberry fruit', c: 1 },
-		{ q: 'Question gamma', a: 'A detailed answer about citrus fruit', c: 2 },
+		{ q: 'Question alpha', a: 'A detailed answer about apricot fruit', c: 0, rank: 0 },
+		{ q: 'Question beta', a: 'A detailed answer about blueberry fruit', c: 1, rank: 1 },
+		{ q: 'Question delta', a: 'A detailed answer about recommendations nearby', c: 0, rank: 2 },
+		{ q: 'Question gamma', a: 'A detailed answer about citrus fruit', c: 2, rank: 3 },
 	];
 	await page.route( 'https://fixture.invalid/**', async route => {
 		const request = JSON.parse( route.request().postData() || '{}' ) as { query?: string; filter?: { category?: number } };
@@ -188,8 +214,8 @@ async function installFinite( page: import('playwright').Page, variant: 'finite'
 		let selected=0, universe=null, fromClick=false;
 		const input=document.querySelector('[aria-label="Browse entries"]');
 		async function post(body){const response=await fetch('https://fixture.invalid/collection',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});if(!response.ok)throw new Error('network');return response.json();}
-		function paint(list){document.querySelector('#results').innerHTML=list.map(row=>'<article><h2>'+row.q+'</h2><p>'+row.a+'</p></article>').join('')||'<p>No results found.</p>';document.querySelectorAll('[role=tab]').forEach((tab,index)=>tab.setAttribute('aria-selected',String(index===selected)));}
-		async function render(){const query=input.value;document.querySelector('[role=tablist]').hidden=Boolean(query);if(query){if(!universe)universe=await post(variant==='query-dependent'?{query,filter:{},paging:{limit:100}}:{filter:{},paging:{limit:100}});const source=(variant==='paginated'||variant==='undeclared')?local:(universe.records||[]);paint(source.filter(row=>(row.q+' '+row.a).toLowerCase().includes(query.toLowerCase())));return;}if(variant==='paginated'||variant==='undeclared'){await post({filter:{category:selected},paging:{limit:50}});paint(local.filter(row=>row.c===selected));return;}const category=await post({filter:{category:selected},paging:{limit:50}});paint(category.records||[]);}
+		function paint(list){document.querySelector('#results').innerHTML=list.map(row=>'<article><h2>'+row.q+'</h2><p>'+row.a+'</p>'+(variant==='resource'?'<img src="https://cdn.example/photo.png" alt="">':'')+'</article>').join('')||'<p>No results found.</p>';document.querySelectorAll('[role=tab]').forEach((tab,index)=>tab.setAttribute('aria-selected',String(index===selected)));}
+		async function render(){const query=input.value;document.querySelector('[role=tablist]').hidden=Boolean(query);if(query){if(!universe)universe=await post(variant==='query-dependent'?{query,filter:{},paging:{limit:100}}:{filter:{},paging:{limit:100}});const source=(variant==='paginated'||variant==='undeclared')?local:(universe.records||[]);paint(source.filter(row=>(row.q+' '+row.a).toLowerCase().includes(query.toLowerCase())).sort((left,right)=>left.rank-right.rank));return;}if(variant==='paginated'||variant==='undeclared'){await post({filter:{category:selected},paging:{limit:50}});paint(local.filter(row=>row.c===selected));return;}const category=await post({filter:{category:selected},paging:{limit:50}});let records=category.records||[];if(variant==='category-order'&&selected===0)records=records.slice().reverse();paint(records);}
 		input.addEventListener('input',()=>{if(variant==='restoration'&&!input.value){document.querySelector('[role=tablist]').hidden=false;paint([{q:'Unrestored heading',a:'This answer was not the source category.',c:0}]);return;}render().catch(()=>{document.querySelector('#results').innerHTML='<p>network</p>';});});
 		document.querySelectorAll('[role=tab]').forEach((tab,index)=>tab.onclick=()=>{selected=index;fromClick=true;render().finally(()=>{fromClick=false;});});
 		render();

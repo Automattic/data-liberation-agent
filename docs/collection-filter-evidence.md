@@ -105,9 +105,17 @@ Exact fixture fields:
   "emptyQueryRestoresCategory": true,
   "answers": "observed",
   "answerOnly": "verified",
+  "resources": "text-only",
+  "order": {
+    "proof": "universal-query",
+    "query": "a",
+    "keys": ["0", "1", "2", "3"],
+    "categoriesAgree": true,
+    "categoryKeys": [["0", "2"], ["1"], ["3"]]
+  },
   "probes": {
-    "global": [{ "query": "apricot", "keys": ["0"] }],
-    "categories": [{ "category": 0, "keys": ["0", "1"] }]
+    "global": [{ "query": "a", "keys": ["0", "1", "2", "3"] }, { "query": "apricot", "keys": ["0"] }],
+    "categories": [{ "category": 0, "keys": ["0", "2"] }]
   }
 }
 ```
@@ -117,9 +125,19 @@ The parent `collectionFilter` must also carry `replay: verified`,
 `mode: category-or-global-search`, `network.dataRequests: observed-response-replay`,
 and `network.verification: intercepted-observed-responses`. `items` is the full
 observed universe, including entries outside `initialCategory`. Legacy `probes`
-are empty-query category membership only. Global search probes live in
-`finiteBootstrap.probes.global` and are a set match against normalized item text,
-in source-observed order, not category-union order.
+are empty-query category membership only. `order.proof` is `universal-query`:
+`order.query` is the first shared letter, or otherwise the first shared
+non-whitespace character, of the observed item texts. It is not a source-specific
+token. `order.keys` is the full rendered result of that query and is the source
+global order. `items` follows that same order. `probes.global` keys equal
+`order.keys` filtered by normalized text inclusion, in that order, not as a set
+and not as a category-union. `order.categoryKeys` is the observed order of each
+category. `categoriesAgree` is true only when every category key list is an
+ordered subsequence of `order.keys`. When it is false, category mode must move
+the existing item nodes into `categoryKeys` for that category; do not clone them.
+`resources` must be `text-only`. Item HTML with `src`, `srcset`, `poster`, a
+media element, or a CSS `url()` is not portable: localization already ran, and
+raw evidence HTML must not be inserted afterward.
 
 Native collection projection (blocks-engine #2417) must keep rejecting a record
 whose `network.dataRequests` is `blocked` unless the existing Ward verifier
@@ -127,9 +145,13 @@ passes. It may project this mode only when `finiteBootstrap.schema` is
 `data-liberation/finite-bootstrap/v1` and every field above matches, including
 `declaredCount === items.length`. Global search filters every item and hides
 category controls. Empty query shows `initialCategory` membership. Do not
-recompute `finiteBootstrap.probes.global` as a category intersection. Reject
-`query-dependent`, `incomplete`, paginated responses, undeclared completeness,
-ambiguous identities, and unverified restoration.
+recompute `finiteBootstrap.probes.global` as a category intersection or a set.
+Visible global order is `order.keys` filtered by the predicate. Visible category
+order is `order.categoryKeys[index]`. Reject records whose `resources` is not
+`text-only`, whose `order.proof` is not `universal-query`, or whose global probe
+keys are not the ordered source filter. Also reject `query-dependent`,
+`incomplete`, paginated responses, undeclared completeness, ambiguous identities,
+and unverified restoration.
 
 `answers: pending-disclosure-integration` means `hydrateDisclosureContent` did
 not leave answer text inside an expanded control. Portable search then covers
@@ -138,9 +160,10 @@ stay with the existing local disclosure runtime; this producer does not duplicat
 that script. Integration of answer text into the serialized tree is pending
 until that companion leaves the text in each item before this snapshot.
 
-The portable exporter appends observed item HTML that was not in the resting
-category so one authoring tree holds the universe. It does not keep a remote
-runtime. Global-search order in that tree is category-union order.
+The portable exporter places one existing node per item in source global order
+when category orders agree, and in the selected category's observed order at
+rest when they do not. Missing text-only items are inserted from observed HTML.
+Resource-bearing items are not inserted and the collection is left unwired.
 
 ## Portable output
 

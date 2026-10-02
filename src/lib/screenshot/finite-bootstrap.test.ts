@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { classifyCollectionResponse, isCollectionShaped, requestCarriesQuery, snapshotCollectionItems } from './finite-bootstrap.js';
+import { classifyCollectionResponse, collectionItemHasResource, isCollectionShaped, isOrderedSubsequence, requestCarriesQuery, sharedOrderQuery, snapshotCollectionItems } from './finite-bootstrap.js';
 
 describe( 'finite bootstrap completeness', () => {
 	it( 'accepts an explicit finite page and rejects length guesses', () => {
@@ -8,6 +8,15 @@ describe( 'finite bootstrap completeness', () => {
 		expect( classifyCollectionResponse( JSON.stringify( { records: [ { id: 'a' }, { id: 'b' }, { id: 'c' } ] } ) ) ).toEqual( { completeness: 'undeclared', declaredCount: null } );
 		expect( isCollectionShaped( JSON.stringify( { records: [ { id: 'a' }, { id: 'b' } ] } ) ) ).toBe( true );
 		expect( isCollectionShaped( '{}' ) ).toBe( false );
+	} );
+	it( 'derives a shared order query and rejects resource-bearing item markup', () => {
+		expect( sharedOrderQuery( [ 'Question alpha apricot', 'Question beta berry' ] ) ).toBe( 'q' );
+		expect( sharedOrderQuery( [ 'alpha', 'beta' ] ) ).toBe( 'a' );
+		expect( sharedOrderQuery( [ 'aaa', 'bbb' ] ) ).toBeNull();
+		expect( isOrderedSubsequence( [ '0', '1', '2', '3' ], [ '0', '2' ] ) ).toBe( true );
+		expect( isOrderedSubsequence( [ '0', '1', '2' ], [ '2', '0' ] ) ).toBe( false );
+		expect( collectionItemHasResource( '<article><h2>Question</h2><p>Answer text</p></article>' ) ).toBe( false );
+		expect( collectionItemHasResource( '<article><img src="https://cdn.example/photo.png" alt=""></article>' ) ).toBe( true );
 	} );
 	it( 'reads repeated items through a single wrapper without treating the wrapper as the item', () => {
 		const wrapped = '<section><div><article><h2>One</h2><p>Apricot answer</p></article><article><h2>Two</h2><p>Berry answer</p></article></div></section>';

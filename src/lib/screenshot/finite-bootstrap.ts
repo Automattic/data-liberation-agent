@@ -27,6 +27,14 @@ export interface FiniteBootstrapContract {
 	emptyQueryRestoresCategory: true;
 	answers: 'observed' | 'pending-disclosure-integration';
 	answerOnly: 'verified' | 'pending-disclosure-integration';
+	resources: 'text-only';
+	order: {
+		proof: 'universal-query';
+		query: string;
+		keys: string[];
+		categoriesAgree: boolean;
+		categoryKeys: string[][];
+	};
 	probes: {
 		global: Array<{ query: string; keys: string[] }>;
 		categories: Array<{ category: number; keys: string[] }>;
@@ -48,6 +56,28 @@ interface Exchange {
 }
 
 const normalize = ( text: string ) => text.replace( /\s+/g, ' ' ).trim();
+
+export function sharedOrderQuery( texts: string[] ): string | null {
+	if ( texts.length < 2 ) return null;
+	const normalized = texts.map( text => text.toLowerCase() );
+	const shared = [ ...normalized[ 0 ] ].filter( ( character, index, all ) => character.trim() && all.indexOf( character ) === index && normalized.every( text => text.includes( character ) ) );
+	return shared.find( character => /\p{L}/u.test( character ) ) ?? shared[ 0 ] ?? null;
+}
+
+export function isOrderedSubsequence( order: string[], subset: string[] ): boolean {
+	let index = 0;
+	for ( const key of order ) {
+		if ( key === subset[ index ] ) index++;
+		if ( index === subset.length ) return true;
+	}
+	return index === subset.length;
+}
+
+export function collectionItemHasResource( html: string ): boolean {
+	return /<(?:img|video|audio|source|iframe|embed|object|picture)\b/i.test( html )
+		|| /\s(?:src|srcset|poster)\s*=\s*["'](?!data:|#)/i.test( html )
+		|| /url\s*\(\s*['"]?(?!data:)/i.test( html );
+}
 
 export function requestCarriesQuery( url: string, postData: string, query: string ): boolean {
 	return query.length > 0 && `${ url }\n${ postData }`.includes( query );
@@ -248,7 +278,15 @@ export async function captureFiniteBootstrap(
 			}
 		}
 		if ( byText.size !== declaredCount ) throw new Error( `Finite coverage mismatch: declared ${ declaredCount }, observed ${ byText.size }` );
-		evidence.items = [ ...byText.entries() ].map( ( [ text, item ], index ) => ( { key: String( index ), text, html: item.html, categories: item.categories } ) );
+		if ( [ ...byText.values() ].some( item => collectionItemHasResource( item.html ) ) ) throw new Error( 'Resource-bearing collection items are not portable without localization' );
+		const orderQuery = sharedOrderQuery( [ ...byText.keys() ] );
+		if ( ! orderQuery ) throw new Error( 'Source order unsupported: no shared query matches every finite item' );
+		await drive( () => input.fill( orderQuery ) );
+		if ( await controlsVisible( page, triggers ) ) throw new Error( 'Alternate-mode unproven: category controls stayed visible during global search' );
+		const ordered = snapshotItems( await target.evaluate( element => element.outerHTML ) );
+		if ( ordered.length !== byText.size || new Set( ordered.map( item => item.text ) ).size !== byText.size || ordered.some( item => ! byText.has( item.text ) ) ) throw new Error( 'Source order incomplete: shared query did not return every finite item' );
+		evidence.items = ordered.map( ( item, index ) => ( { key: String( index ), text: item.text, html: byText.get( item.text )!.html, categories: byText.get( item.text )!.categories } ) );
+		const keyByText = new Map( evidence.items.map( item => [ item.text, item.key ] ) );
 		const answers = answerCoverage( evidence.items );
 		const labelOf = ( html: string ) => {
 			const $ = cheerio.load( html, null, false );
@@ -270,9 +308,9 @@ export async function captureFiniteBootstrap(
 			await drive( () => input.fill( query ) );
 			if ( await controlsVisible( page, triggers ) ) throw new Error( 'Alternate-mode unproven: category controls stayed visible during global search' );
 			const actual = snapshotItems( await target.evaluate( element => element.outerHTML ) );
-			const expected = new Set( evidence.items.filter( item => item.text.toLowerCase().includes( query.toLowerCase() ) ).map( item => item.key ) );
+			const expected = evidence.items.filter( item => item.text.toLowerCase().includes( query.toLowerCase() ) ).map( item => item.key );
 			const actualKeys = actual.map( item => evidence.items.find( candidate => candidate.text === item.text )?.key );
-			if ( expected.size === 0 ) {
+			if ( expected.length === 0 ) {
 				let html = await target.evaluate( element => element.innerHTML );
 				if ( ! html.trim() ) {
 					const siblings = await target.evaluate( ( element, beforeTexts ) => Array.from( element.parentElement?.children ?? [] ).filter( node => node !== element && ! beforeTexts.includes( ( node.textContent ?? '' ).replace( /\s+/g, ' ' ).trim() ) && node.getBoundingClientRect().height > 0 ).map( node => node.outerHTML ), siblingTexts );
@@ -283,23 +321,25 @@ export async function captureFiniteBootstrap(
 				if ( ! evidence.emptyHtml ) evidence.emptyHtml = html;
 				if ( normalize( snapshotItems( `<div>${ html }</div>` ).map( item => item.text ).join( ' ' ) ) !== normalize( snapshotItems( `<div>${ evidence.emptyHtml }</div>` ).map( item => item.text ).join( ' ' ) ) ) throw new Error( 'Empty-state content depends on query' );
 				global.push( { query, keys: [] } );
-			} else if ( actualKeys.some( key => ! key ) || actualKeys.length !== expected.size || actualKeys.some( key => ! expected.has( key! ) ) ) {
-				throw new Error( 'Global search results do not support the normalized text predicate' );
+			} else if ( JSON.stringify( actualKeys ) !== JSON.stringify( expected ) ) {
+				throw new Error( 'Global search results do not match the source order' );
 			} else global.push( { query, keys: actualKeys as string[] } );
 			if ( blocked > before ) evidence.network.blockedFollowUps = blocked;
 		}
 		const categories = snapshots.map( snapshot => ( {
 			category: snapshot.category,
-			keys: snapshot.items.map( item => evidence.items.find( candidate => candidate.text === item.text )?.key ).filter( ( key ): key is string => Boolean( key ) ),
+			keys: snapshot.items.map( item => keyByText.get( item.text ) ).filter( ( key ): key is string => Boolean( key ) ),
 		} ) );
+		const sourceKeys = evidence.items.map( item => item.key );
+		const categoriesAgree = categories.every( probe => isOrderedSubsequence( sourceKeys, probe.keys ) );
 		evidence.probes = categories.map( probe => ( { query: '', category: probe.category, keys: probe.keys } ) );
 		await drive( async () => { await input.fill( '' ); await page.locator( triggers[ initialCategory ]! ).click(); } );
 		await drive( () => input.fill( BOOTSTRAP_PROBE ) );
 		await drive( () => input.fill( '' ) );
 		if ( ! await controlsVisible( page, triggers ) ) throw new Error( 'Unverified restoration: empty query did not restore category controls' );
 		const cleared = snapshotItems( await target.evaluate( element => element.outerHTML ) ).map( item => item.text );
-		const restoredCategory = evidence.items.filter( item => item.categories.includes( initialCategory ) ).map( item => item.text );
-		if ( cleared.length !== restoredCategory.length || cleared.some( text => ! restoredCategory.includes( text ) ) ) throw new Error( 'Unverified restoration: empty query did not return the selected category' );
+		const restoredCategory = snapshots[ initialCategory ]!.items.map( item => item.text );
+		if ( JSON.stringify( cleared ) !== JSON.stringify( restoredCategory ) ) throw new Error( 'Unverified restoration: empty query did not return the selected category' );
 		const blockedBeforeSentinel = blocked;
 		await page.evaluate( () => fetch( 'https://fixture.invalid/dla-finite-follow-up', { method: 'POST', body: '{"dla":"follow-up"}' } ).catch( () => null ) );
 		await settle();
@@ -322,7 +362,9 @@ export async function captureFiniteBootstrap(
 			emptyQueryRestoresCategory: true,
 			answers,
 			answerOnly: answerOnly ? 'verified' : 'pending-disclosure-integration',
-			probes: { global, categories },
+			resources: 'text-only',
+			order: { proof: 'universal-query', query: orderQuery, keys: sourceKeys, categoriesAgree, categoryKeys: categories.map( probe => probe.keys ) },
+			probes: { global: [ { query: orderQuery, keys: sourceKeys }, ...global.filter( probe => probe.query !== orderQuery ) ], categories },
 		};
 		evidence.network.replayedResponses = replayed;
 		evidence.network.blockedFollowUps = blocked;
