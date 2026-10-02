@@ -134,3 +134,27 @@ manifest, cleanup audit, or frozen browser evidence is synthesized. Keep
 browser evidence in a separate output directory; mixed frozen/geometry
 artifacts are rejected. Browser-region reconstruction and fidelity validation
 remain prerequisites for accepted capture.
+
+## Bounded runtime-region evidence
+
+`observeRuntimeRegions(page, sourceUrl, document.browserRegions)` observes
+declared regions on a caller-owned browser page after the caller establishes
+readiness. It records real DOM and SHA-256 identities, bounding boxes,
+visibility, and child iframe document HTML (including cross-origin children
+accessible through Playwright). It does not navigate, click, scroll or mutate
+the page, and rejects source-route drift before and after observation.
+
+Bounds: 32 selectors, 16 matches per selector, 16 child documents, 256 KiB per
+HTML snapshot, 2 MiB total HTML, and a 10-second observation budget with
+timeout-contained locator reads. Missing regions, invalid selectors, blank
+child documents, exhausted budgets and partial snapshots are explicit.
+`observed` means a DOM snapshot was obtained, not that readiness, responsive
+behavior, interaction or rendering was proven. Raw runtime HTML is evidence;
+it can contain executable scripts and session URLs and must be reconstructed
+and localized before inclusion in an accepted website.
+
+The returned `data-liberation/runtime-regions/v1` report retains
+`projection: not_materialized` and rendering/interactions unverified. Region
+evidence is scoped to its actual route and viewport, not generalized to all
+routes or widths. Child forms and sign-in controls need functional handling;
+retaining an external iframe URL does not satisfy self-contained acceptance.

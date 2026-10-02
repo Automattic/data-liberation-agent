@@ -5,12 +5,17 @@ export interface HttpDocumentContext {
 	variant: string;
 }
 
+export interface RuntimeRegionRequirement {
+	selector: string;
+	reason: string;
+}
+
 export interface PreparedHttpDocument {
 	html: string;
 	/** Platform evidence that describes the acquired route, not rendered parity. */
 	metadata?: Record<string, string>;
 	/** Source-declared surfaces that still need bounded browser observation. */
-	browserRegions?: ReadonlyArray<{ selector: string; reason: string }>;
+	browserRegions?: ReadonlyArray<RuntimeRegionRequirement>;
 }
 
 export interface HttpAcquisitionProfile {

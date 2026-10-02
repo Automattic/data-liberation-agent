@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { HttpAcquisitionProfile } from '../platform/acquisition.js';
+import type { HttpAcquisitionProfile, RuntimeRegionRequirement } from '../platform/acquisition.js';
 import { mapPool } from './concurrency.js';
 import { safeFetch, assertPublicHttpUrl, SsrfBlockedError, BodyTooLargeError } from './media-fetch/safe-fetch.js';
 import { isRouteDrift } from './screenshot/document-integrity.js';
@@ -22,7 +22,7 @@ export interface AcquiredHttpDocument {
 	documentSha256?: string;
 	documentContentType?: string;
 	metadata?: Record<string, string>;
-	browserRegions?: ReadonlyArray<{ selector: string; reason: string }>;
+	browserRegions?: ReadonlyArray<RuntimeRegionRequirement>;
 	error?: string;
 	attempts: number;
 	durationMs: number;
