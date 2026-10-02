@@ -925,6 +925,26 @@ describe( 'CapturedResourceStore', () => {
 		);
 		expect( readFileSync( join( outputDir, 'website', fontPath ), 'utf8' ) ).toBe( 'font' );
 	} );
+	it( 'resolves escaped CSS URLs against their actual origin', async () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-css-escaped-resource-' ) ); dirs.push( outputDir );
+		const fetchMedia = vi.fn( async ( url: string ) => ( { finalUrl: url, status: 200, headers: new Headers( { 'content-type': 'image/png' } ), body: Buffer.from( 'neutral-image' ) } ) );
+		const store = new CapturedResourceStore( outputDir, 'https://example.com/', fetchMedia );
+		await store.captureDomDependencies( String.raw`<style>.hero{background:url(https\:\/\/cdn.example\/photo.png)}</style>`, 'https://example.com/article/' );
+		await store.flush();
+		expect( fetchMedia ).toHaveBeenCalledWith( 'https://cdn.example/photo.png', expect.any( Number ), expect.any( Number ) );
+		const manifest = JSON.parse( readFileSync( join( outputDir, 'resources', 'manifest.json' ), 'utf8' ) );
+		expect( Object.keys( manifest.resources ) ).toEqual( [ 'https://cdn.example/photo.png' ] );
+		expect( manifest.failures ).toEqual( [] );
+	} );
+	it( 'retains a zero-byte stylesheet as a valid source dependency', async () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-resource-empty-css-' ) ); dirs.push( outputDir );
+		const cssUrl = 'https://cdn.example/empty.css';
+		const store = new CapturedResourceStore( outputDir, 'https://example.com/', async url => ( { finalUrl: url, status: 200, headers: new Headers( { 'content-type': 'text/css' } ), body: Buffer.alloc( 0 ) } ) );
+		await store.captureDomDependencies( `<link rel="stylesheet" href="${ cssUrl }">`, 'https://example.com/' ); await store.flush();
+		const manifest = JSON.parse( readFileSync( join( outputDir, 'resources', 'manifest.json' ), 'utf8' ) );
+		expect( manifest.failures ).toEqual( [] );
+		expect( readFileSync( join( outputDir, manifest.resources[ cssUrl ].path ) ).length ).toBe( 0 );
+	} );
 	it( 'records a zero-byte font response as a failed dependency', async () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-resource-empty-font-' ) );
 		dirs.push( outputDir );

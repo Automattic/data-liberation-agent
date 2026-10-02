@@ -5,6 +5,7 @@ import { dirname, join, relative, resolve, sep } from 'node:path';
 import * as cheerio from 'cheerio';
 import { sourceSessionCookieHeader } from '../browser-kit/browser-kit.js';
 import { identityLogoReferences } from '../identity-resources.js';
+import { decodeCssUrl } from '../css-url-escapes.js';
 import { MAX_REDIRECTS, safeFetch, type SafeFetchResult } from '../media-fetch/safe-fetch.js';
 import type { Page, Request, Response } from 'playwright';
 
@@ -488,7 +489,7 @@ export class CapturedResourceStore {
 			for ( const match of css.matchAll(
 				/(?:url\(\s*(?:["']([^"']+)["']|([^\s)'";]+))\s*\)|@import\s*(?:url\(\s*)?["']([^"']+)["'])/gi
 			) )
-				add( match[ 1 ] ?? match[ 2 ] ?? match[ 3 ] ?? '', baseUrl );
+				add( decodeCssUrl( match[ 1 ] ?? match[ 2 ] ?? match[ 3 ] ?? '' ), baseUrl );
 		};
 
 		collect( html, documentUrl );
@@ -671,9 +672,9 @@ export class CapturedResourceStore {
 			if ( fetched.status < 200 || fetched.status >= 300 )
 				throw new Error( `HTTP ${ fetched.status }` );
 			const contentType = canonicalContentType( fetched.headers.get( 'content-type' ) ?? '' );
-			// A 200 with no bytes is not a usable asset. Storing it would record a
-			// successful capture whose font or image renders as nothing downstream.
-			if ( fetched.body.length === 0 )
+			// An empty stylesheet is a valid no-op. Empty fonts/images are not
+			// usable assets and must remain visible failures.
+			if ( fetched.body.length === 0 && contentType !== 'text/css' )
 				throw new Error( 'render dependency response body is empty' );
 			if (
 				! /^(?:text\/css|image\/|audio\/|video\/|font\/|application\/(?:json|manifest\+json|font|x-font|font-woff|octet-stream|msword|vnd\.openxmlformats-officedocument\.wordprocessingml\.document))/i.test(
@@ -753,9 +754,8 @@ export class CapturedResourceStore {
 				response,
 				resourceTimeoutMs( Number.isFinite( declaredBytes ) ? declaredBytes : byteCeiling )
 			) );
-		// A 200 with no bytes is not a usable asset; record it as a failed
-		// dependency rather than a resource that silently renders as nothing.
-		if ( body.length === 0 ) {
+		// Empty CSS is valid; other empty render dependencies remain failures.
+		if ( body.length === 0 && contentType !== 'text/css' ) {
 			throw new Error( 'render dependency response body is empty' );
 		}
 		if ( body.length > byteCeiling ) {
