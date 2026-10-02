@@ -67,3 +67,4 @@ export type { PublishCliOptions as PublishSiteOptions } from './ui/publish.js';
 export type { InspectOptions, InspectionIssue, SourceInspection } from './lib/inspect.js';
 export { SOURCE_CAPABILITIES, SOURCE_CAPABILITY_VOCABULARY } from './lib/inspect-rendered.js';
 export type { CapabilityRule, SourceCapability, RenderedInspection, SourceComplexity, ExcludedSurface } from './lib/inspect-rendered.js';
+export { materializeHttpDocuments, type HttpMaterializationOptions } from './lib/http-materialization.js';

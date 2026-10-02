@@ -3,8 +3,9 @@
 HTTP acquisition is a source-evidence layer underneath capture. It fetches
 the actual route documents, retains raw bytes and prepared documents with
 SHA-256 identities, and optionally stages deduplicated dependencies using
-the existing resource store. It does not produce a portable `website/` or
-certify rendering. The four CLI/MCP operations remain unchanged.
+the existing resource store. Acquisition itself does not produce a portable
+`website/` or certify rendering. Explicit materialization can produce a
+localized review candidate. The four CLI/MCP operations remain unchanged.
 
 ## Public API
 
@@ -101,6 +102,35 @@ are also runtime-mounted surfaces. Their requirements are recorded as
 browser regions rather than promoted to static rendering claims.
 
 The next integration is bounded browser-region observation/materialization,
-asset localization and explicit sampled fidelity coverage before the
+and explicit sampled fidelity coverage before the
 HTTP path replaces per-route rendering. Complete under-hour capture and
 WordPress acceptance remain separate gates under issue 467.
+
+## Localized review candidate
+
+```js
+import { materializeHttpDocuments } from 'data-liberation';
+
+const receiptPath = materializeHttpDocuments({
+  outputDir: './source-evidence',
+  sourceUrl: url,
+  platform: platform.id,
+  desktopVariant: 'desktop',
+  mobileVariant: 'mobile',
+});
+```
+
+Materialization reads `http-acquisition.json` directly and verifies prepared
+document hashes, source origin and variant identities before replacing the
+review candidate. It reuses capture export for route allocation, shared
+dependency localization and responsive document handling. Acquire with
+`collectAssets: true` first to stage dependencies. Missing/failed variants,
+unresolved dependencies and unobserved browser regions remain diagnostics.
+
+`capture-receipt.json` links the original acquisition receipt by SHA-256,
+marks rendering/geometry/interactions unverified, and keeps `summary.complete`
+false. Geometry remains unverified in the source profile. No screenshot
+manifest, cleanup audit, or frozen browser evidence is synthesized. Keep
+browser evidence in a separate output directory; mixed frozen/geometry
+artifacts are rejected. Browser-region reconstruction and fidelity validation
+remain prerequisites for accepted capture.

@@ -49,6 +49,7 @@ import {
 import { isSourcePromotion } from './source-cleanup.js';
 import { sameOriginPageAnchors } from './screenshot/unscheduled-anchors.js';
 import { inspectSourceInteractivity, SOURCE_INTERACTIVITY_SCHEMA, type SourceInteractivityPage } from './source-interactivity.js';
+import { loadHttpExportInput, type HttpExportInput } from './http-export-input.js';
 
 export const CAPTURE_RECEIPT_SCHEMA = 'data-liberation/capture-receipt/v1';
 export const SOURCE_PROFILE_SCHEMA = 'data-liberation/source-profile/v1';
@@ -131,6 +132,7 @@ interface CaptureManifestEntry {
 	cleanup?: import('./screenshot/manifest-queue.js').ManifestEntry['cleanup'];
 	slug?: string;
 	html?: string;
+	mobileHtml?: string;
 	/** Same-origin route the server redirected this URL to; see ManifestEntry. */
 	redirectedTo?: string;
 	/** Bounded source inspection of a linked route absent from the capture schedule. */
@@ -152,6 +154,8 @@ interface ScreenshotManifest {
 }
 
 interface ExportCaptureOptions {
+	/** Explicit source-only materialization. Browser acquisition remains the default. */
+	input?: HttpExportInput;
 	outputDir: string;
 	sourceUrl: string;
 	platform: string;
@@ -3343,17 +3347,18 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 	/** Per-route learning outcomes, aggregated into the source profile. */
 	const fluidReports: Array< NonNullable< ManifestEntryFluid > > = [];
 	const screenshotManifestPath = join( outputDir, 'screenshots', 'manifest.json' );
-	if ( ! existsSync( screenshotManifestPath ) ) {
+	const httpInput = options.input ? loadHttpExportInput( outputDir, options.sourceUrl, options.input ) : undefined;
+	if ( ! httpInput && ! existsSync( screenshotManifestPath ) ) {
 		throw new Error( `Screenshot manifest not found: ${ screenshotManifestPath }` );
 	}
 
-	const capture = JSON.parse(
+	const capture: ScreenshotManifest = httpInput ? { version: 1, entries: httpInput.entries } : JSON.parse(
 		readFileSync( screenshotManifestPath, 'utf8' )
 	) as ScreenshotManifest;
 	if ( capture.version !== 1 || ! capture.entries || typeof capture.entries !== 'object' ) {
 		throw new Error( `Invalid screenshot manifest: ${ screenshotManifestPath }` );
 	}
-	const siteSwitchWidth = fallbackResponsiveSwitchWidth( outputDir );
+	const siteSwitchWidth = httpInput ? undefined : fallbackResponsiveSwitchWidth( outputDir );
 
 	const websiteDir = join( outputDir, 'website' );
 	const stagedHtmlDir = join( outputDir, '.capture-export-html' );
@@ -3445,9 +3450,9 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 			} );
 			continue;
 		}
-		const mobileHtmlPath = resolve( outputDir, entry.html.replace( /^html[\\/]/, 'html-mobile/' ) );
+		const mobileHtmlPath = resolve( outputDir, entry.mobileHtml ?? entry.html.replace( /^html[\\/]/, 'html-mobile/' ) );
 		const rawMobileHtml =
-			pathWithin( outputDir, mobileHtmlPath ) && existsSync( mobileHtmlPath )
+			( ! httpInput || entry.mobileHtml ) && pathWithin( outputDir, mobileHtmlPath ) && existsSync( mobileHtmlPath )
 				? readFileSync( mobileHtmlPath, 'utf8' )
 				: undefined;
 		const detectedFloor =
@@ -3516,8 +3521,8 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		writeFileSync( claimed.htmlPath, appendJsonLd( readFileSync( claimed.htmlPath, 'utf8' ), jsonLd ) );
 	}
 	routeCaptureDiagnostics.push( ...missingRedirectTargets );
-	const desktopSections = SectionSpecsStore.load( outputDir );
-	const mobileSections = SectionSpecsStore.loadMobile( outputDir );
+	const desktopSections = httpInput ? new Map() : SectionSpecsStore.load( outputDir );
+	const mobileSections = httpInput ? new Map() : SectionSpecsStore.loadMobile( outputDir );
 	const semanticPages: SemanticEvidencePage[] = retainedEntries.flatMap( ( entry ) => {
 		const desktop = desktopSections.get( entry.url );
 		if ( ! isUsableSectionEvidence( desktop ) ) return [];
@@ -4112,7 +4117,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 			const observations: GeometryCapture[ 'observations' ] = [];
 			for ( const viewport of [ 'desktop', 'mobile' ] ) {
 				const path = join( outputDir, 'layout-geometry', `${ entry.slug }.${ viewport }.json` );
-				if ( ! existsSync( path ) ) {
+				if ( httpInput || ! existsSync( path ) ) {
 					geometryCaptureOmissions[ 'capture_missing' ] =
 						( geometryCaptureOmissions[ 'capture_missing' ] ?? 0 ) + 1;
 					continue;
@@ -4245,7 +4250,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		variants: routesWithMobile > 0 ? 'per-device' : 'single',
 		documentsPerRoute: routesWithMobile > 0 ? 2 : 1,
 		geometry:
-			learnedApplied > 0 && learnedFrozen > 0
+			httpInput ? 'unverified' : learnedApplied > 0 && learnedFrozen > 0
 				? 'mixed'
 				: learnedApplied > 0
 				? 'runtime-written'
@@ -4299,6 +4304,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 	// a reason, never just missing.
 	const discoveryDiagnostics = [
 		...( options.discoveryDiagnostics ?? [] ),
+		...( httpInput?.diagnostics ?? [] ),
 		...routeCaptureDiagnostics,
 	];
 
@@ -4317,7 +4323,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 	} : undefined;
 	if (cleanup) writeFileSync(join(outputDir, 'cleanup-evidence.json'), JSON.stringify({ schema: recordedPolicy!.schema, pages: cleanupPages }, null, 2));
 	const complete =
-		Number( options.summary.routesFailed ?? 0 ) === 0 &&
+		! httpInput && Number( options.summary.routesFailed ?? 0 ) === 0 &&
 		! unresolvedAnchors.some( ( anchor ) => anchor.reason === UNCAPTURED_ROUTE_REASON );
 
 	writeFileSync(
@@ -4325,6 +4331,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		`${ JSON.stringify(
 			{
 				schema: CAPTURE_RECEIPT_SCHEMA,
+				...( httpInput ? { acquisition: httpInput.acquisition } : {} ),
 				...(cleanup ? { cleanup } : {}),
 				websiteRoot: 'website',
 				entrypoint: 'website/index.html',

@@ -50,6 +50,12 @@ try {
     assert.equal(acquisition.resources.failures, 0);
     const response = await readFile(join(outputDir, 'source-acquisition', acquisition.documents[0].rawPath), 'utf8');
     assert.equal(response, liveHtml);
+    const materializedPath = runtime.materializeHttpDocuments({ outputDir: join(outputDir, 'source-acquisition'), sourceUrl: url, platform: platform.id, desktopVariant: 'desktop' });
+    const materialized = JSON.parse(await readFile(materializedPath, 'utf8'));
+    assert.equal(materialized.routes.length, 1);
+    assert.equal(materialized.summary.complete, false);
+    assert.equal(materialized.sourceProfile.geometry, 'unverified');
+    assert.equal(materialized.acquisition.verification.rendering, 'unverified');
     assert.throws(() => createRequire(bundleUrl).resolve('playwright'), { code: 'MODULE_NOT_FOUND' });
     const http = await runtime.inspectSource(url, { rendered: false, sampleLimit: 1 });
     assert.equal(http.source.platform.id, 'runtime-fixture');
