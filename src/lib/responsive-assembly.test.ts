@@ -1,0 +1,283 @@
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import * as cheerio from 'cheerio';
+import { afterEach, describe, expect, it } from 'vitest';
+import { exportWebsiteCapture } from './capture-export.js';
+import {
+	assembleResponsiveCapture,
+	DESKTOP_DOCUMENT_CLASS,
+	documentsDiffer,
+	MOBILE_DOCUMENT_CLASS,
+	type ResponsiveAssembly,
+} from './responsive-assembly.js';
+
+const dirs: string[] = [];
+
+afterEach( () => {
+	for ( const dir of dirs.splice( 0 ) ) rmSync( dir, { recursive: true, force: true } );
+} );
+
+function page( body: string, head = '', bodyAttributes = '' ): string {
+	return `<html><head>${ head }</head><body${ bodyAttributes }>${ body }</body></html>`;
+}
+
+function wrappers( html: string ): { desktop: number; mobile: number } {
+	const $ = cheerio.load( html );
+	return {
+		desktop: $( `.${ DESKTOP_DOCUMENT_CLASS }` ).length,
+		mobile: $( `.${ MOBILE_DOCUMENT_CLASS }` ).length,
+	};
+}
+
+function evidenceMatchesTree( assembly: ResponsiveAssembly ): void {
+	const shipped = wrappers( assembly.html );
+	if ( assembly.evidence === undefined ) {
+		expect( assembly.hasMobileDocument ).toBe( false );
+		expect( shipped.desktop + shipped.mobile ).toBe( 0 );
+		return;
+	}
+	expect( assembly.hasMobileDocument ).toBe( assembly.evidence.outcome === 'dual-structural' );
+	expect( assembly.evidence.variants ).toBe( assembly.hasMobileDocument ? 2 : 1 );
+	if ( assembly.hasMobileDocument ) {
+		expect( shipped.desktop ).toBe( 1 );
+		expect( shipped.mobile ).toBe( 1 );
+	} else {
+		expect( shipped.desktop ).toBe( 0 );
+		expect( shipped.mobile ).toBe( 0 );
+	}
+}
+
+describe( 'assembleResponsiveCapture', () => {
+	it( 'returns the portable desktop document when mobile was not captured', () => {
+		const desktop = page( '<main><h1>Only</h1></main>' );
+		const assembly = assembleResponsiveCapture( {
+			rawDesktopHtml: desktop,
+			portableDesktopHtml: desktop.replace( 'Only', 'Portable' ),
+		} );
+		expect( assembly.html ).toContain( 'Portable' );
+		expect( assembly.evidence ).toBeUndefined();
+		expect( assembly.portableNormalization ).toBe( 'absent' );
+		evidenceMatchesTree( assembly );
+	} );
+
+	it( 'collapses equivalent documents and projects inline presentation into the same result', () => {
+		const head = '<style>.wrap{margin:0}</style>';
+		const rawDesktop = page( '<main><div class="wrap" style="width:940px"><h1>About</h1></div></main>', head );
+		const rawMobile = page( '<main><div class="wrap" style="width:100%"><h1>About</h1></div></main>', head, ' class="mobile"' );
+		const assembly = assembleResponsiveCapture( {
+			rawDesktopHtml: rawDesktop,
+			rawMobileHtml: rawMobile,
+			portableDesktopHtml: rawDesktop,
+			portableMobileHtml: rawMobile,
+		} );
+		evidenceMatchesTree( assembly );
+		expect( assembly.evidence ).toMatchObject( {
+			variants: 1,
+			outcome: 'collapsed-equivalent',
+			css: 'shared',
+			projectedInlineStyles: 1,
+		} );
+		expect( assembly.html ).toContain( 'width:100%!important' );
+		expect( assembly.html ).toContain( 'style="width:940px"' );
+		expect( assembly.portableNormalization ).toBe( 'pending' );
+	} );
+
+	it( 'collapses an identity subset and records the inserted mobile-only element', () => {
+		const rawDesktop = page( '<div id="comp-root"><p id="comp-copy">Desktop</p></div>' );
+		const rawMobile = page( '<div id="comp-root"><p id="comp-copy">Desktop</p><span id="comp-phone">Phone</span></div>' );
+		const assembly = assembleResponsiveCapture( {
+			rawDesktopHtml: rawDesktop,
+			rawMobileHtml: rawMobile,
+			portableDesktopHtml: rawDesktop,
+			portableMobileHtml: rawMobile,
+		} );
+		evidenceMatchesTree( assembly );
+		expect( assembly.evidence ).toMatchObject( {
+			outcome: 'collapsed-identity-subset',
+			mobileOnlyElements: 1,
+		} );
+		const $ = cheerio.load( assembly.html );
+		expect( $( '#comp-phone.data-liberation-mobile-only' ) ).toHaveLength( 1 );
+		expect( assembly.portableNormalization ).toBe( 'pending' );
+	} );
+
+	it( 'ships both documents when the mobile tree does not reconcile', () => {
+		const rawDesktop = page( '<main><h1>Desktop</h1></main>' );
+		const rawMobile = page( '<main><h1>Phone</h1><aside>Menu</aside></main>', '', ' class="phone"' );
+		const assembly = assembleResponsiveCapture( {
+			rawDesktopHtml: rawDesktop,
+			rawMobileHtml: rawMobile,
+			portableDesktopHtml: rawDesktop,
+			portableMobileHtml: rawMobile,
+		} );
+		evidenceMatchesTree( assembly );
+		expect( assembly.evidence ).toMatchObject( {
+			variants: 2,
+			outcome: 'dual-structural',
+			reason: 'mobile document differs structurally from desktop; both variants shipped',
+		} );
+		expect( assembly.portableNormalization ).toBe( 'applied' );
+	} );
+
+	it( 'records a single desktop document when a binding gate has no portable body to wrap', () => {
+		const css = '<style>body:not(.phone) main{width:980px}</style>';
+		const rawDesktop = page( '<main><h1>Shared</h1></main>', css );
+		const rawMobile = page( '<main><h1>Shared</h1></main>', css, ' class="phone"' );
+		const portableDesktop = page( '<main><h1>Portable</h1></main>', css );
+		const portableMobile = `<html><head>${ css }</head><body class="phone"><main><h1>Broken</h1></main>`;
+		const assembly = assembleResponsiveCapture( {
+			rawDesktopHtml: rawDesktop,
+			rawMobileHtml: rawMobile,
+			portableDesktopHtml: portableDesktop,
+			portableMobileHtml: portableMobile,
+		} );
+		expect( wrappers( assembly.html ) ).toEqual( { desktop: 0, mobile: 0 } );
+		expect( assembly.html ).toContain( 'Portable' );
+		expect( assembly.html ).not.toContain( DESKTOP_DOCUMENT_CLASS );
+		expect( assembly.hasMobileDocument ).toBe( false );
+		expect( assembly.portableNormalization ).toBe( 'applied' );
+		expect( assembly.evidence ).toEqual( {
+			variants: 1,
+			outcome: 'collapsed-equivalent',
+			reason: 'a captured document is missing its body, so assembly shipped the desktop document alone',
+		} );
+		// Invalid input correction: the raw gate would previously have recorded
+		// variants:2 / dual-structural while the emitted file had one document.
+		expect( assembly.evidence?.variants ).not.toBe( 2 );
+		expect( assembly.evidence?.outcome ).not.toBe( 'dual-structural' );
+		evidenceMatchesTree( assembly );
+	} );
+
+	it( 'follows the portable collapse when raw documents differ only before normalization', () => {
+		const rawDesktop = page( '<main><h1>Home</h1><aside><a href="/signup">Sign up</a></aside></main>' );
+		const rawMobile = page( '<main><h1>Home</h1></main>' );
+		const portable = page( '<main><h1>Home</h1></main>' );
+		const assembly = assembleResponsiveCapture( {
+			rawDesktopHtml: rawDesktop,
+			rawMobileHtml: rawMobile,
+			portableDesktopHtml: portable,
+			portableMobileHtml: portable,
+		} );
+		expect( documentsDiffer( rawDesktop, rawMobile ) ).toBe( true );
+		expect( wrappers( assembly.html ) ).toEqual( { desktop: 0, mobile: 0 } );
+		expect( assembly.hasMobileDocument ).toBe( false );
+		expect( assembly.portableNormalization ).toBe( 'applied' );
+		expect( assembly.evidence ).toMatchObject( {
+			variants: 1,
+			outcome: 'collapsed-equivalent',
+		} );
+		// The source pair is structurally dual. The previous receipt classifier
+		// recorded dual-structural for that raw pair while assembly of the
+		// normalized pair emitted one document. The receipt now follows the tree.
+		expect( assembly.evidence?.outcome ).not.toBe( 'dual-structural' );
+		evidenceMatchesTree( assembly );
+	} );
+
+	it( 'keeps a phone-only body-class gate even when portable documents no longer show it', () => {
+		const css = '<style>body:not(.phone) main{width:980px}</style>';
+		const rawDesktop = page( '<main><h1>Shared</h1></main>', css );
+		const rawMobile = page( '<main><h1>Shared</h1></main>', css, ' class="phone"' );
+		const portable = page( '<main><h1>Shared</h1></main>' );
+		const assembly = assembleResponsiveCapture( {
+			rawDesktopHtml: rawDesktop,
+			rawMobileHtml: rawMobile,
+			portableDesktopHtml: portable,
+			portableMobileHtml: portable.replace( '<body>', '<body class="phone">' ),
+		} );
+		evidenceMatchesTree( assembly );
+		expect( assembly.evidence?.reason ).toContain( 'body:not(.phone)' );
+		expect( assembly.html ).toContain( DESKTOP_DOCUMENT_CLASS );
+		expect( assembly.html ).toContain( MOBILE_DOCUMENT_CLASS );
+		expect( assembly.portableNormalization ).toBe( 'applied' );
+	} );
+} );
+
+describe( 'exportWebsiteCapture responsive assembly', () => {
+	function exportPair( desktop: string, mobile?: string ): { html: string; receipt: { routes: Array< { responsiveVariants?: { outcome: string; variants: number } } > }; profile: { variants: string; documentsPerRoute: number } } {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-responsive-assembly-' ) );
+		dirs.push( outputDir );
+		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
+		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
+		writeFileSync( join( outputDir, 'html', 'homepage.html' ), desktop );
+		if ( mobile !== undefined ) {
+			mkdirSync( join( outputDir, 'html-mobile' ), { recursive: true } );
+			writeFileSync( join( outputDir, 'html-mobile', 'homepage.html' ), mobile );
+		}
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( { version: 1, entries: { 'https://example.com/': { slug: 'homepage', html: 'html/homepage.html' } } } )
+		);
+		exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.com/', platform: 'generic', summary: {}, failures: [] } );
+		return {
+			html: readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ),
+			receipt: JSON.parse( readFileSync( join( outputDir, 'capture-receipt.json' ), 'utf8' ) ),
+			profile: JSON.parse( readFileSync( join( outputDir, 'source-profile.json' ), 'utf8' ) ),
+		};
+	}
+
+	function receiptMatchesTree( html: string, outcome: string | undefined, profile: { documentsPerRoute: number } ): void {
+		const shipped = wrappers( html );
+		const dual = shipped.desktop === 1 && shipped.mobile === 1;
+		expect( shipped.desktop ).toBe( dual ? 1 : 0 );
+		expect( shipped.mobile ).toBe( dual ? 1 : 0 );
+		expect( outcome === 'dual-structural' ).toBe( dual );
+		expect( profile.documentsPerRoute ).toBe( dual ? 2 : 1 );
+	}
+
+	it( 'records the same disposition the emitted tree shows for absent, equivalent, identity-subset, and gated pairs', () => {
+		const absent = exportPair( page( '<main><h1>Only</h1></main>' ) );
+		expect( absent.receipt.routes[ 0 ].responsiveVariants ).toBeUndefined();
+		receiptMatchesTree( absent.html, undefined, absent.profile );
+
+		const equivalent = exportPair(
+			page( '<main><div style="width:940px"><h1>About</h1></div></main>', '<style>.a{color:red}</style>' ),
+			page( '<main><div style="width:100%"><h1>About</h1></div></main>', '<style>.a{color:red}</style>' )
+		);
+		expect( equivalent.receipt.routes[ 0 ].responsiveVariants ).toMatchObject( {
+			outcome: 'collapsed-equivalent',
+			projectedInlineStyles: 1,
+		} );
+		receiptMatchesTree( equivalent.html, equivalent.receipt.routes[ 0 ].responsiveVariants?.outcome, equivalent.profile );
+
+		const subset = exportPair(
+			page( '<div id="comp-root"><p id="comp-copy">Desktop</p></div>' ),
+			page( '<div id="comp-root"><p id="comp-copy">Desktop</p><span id="comp-phone">Phone</span></div>' )
+		);
+		expect( subset.receipt.routes[ 0 ].responsiveVariants?.outcome ).toBe( 'collapsed-identity-subset' );
+		receiptMatchesTree( subset.html, subset.receipt.routes[ 0 ].responsiveVariants?.outcome, subset.profile );
+		expect( cheerio.load( subset.html )( '#comp-phone' ) ).toHaveLength( 1 );
+
+		const gated = exportPair(
+			page( '<main><h1>Shared</h1></main>', '<style>body:not(.phone) main{width:980px}</style>' ),
+			page( '<main><h1>Shared</h1></main>', '<style>body:not(.phone) main{width:980px}</style>', ' class="phone"' )
+		);
+		expect( gated.receipt.routes[ 0 ].responsiveVariants ).toMatchObject( { variants: 2, outcome: 'dual-structural' } );
+		receiptMatchesTree( gated.html, gated.receipt.routes[ 0 ].responsiveVariants?.outcome, gated.profile );
+	} );
+
+	it( 'records the collapsed portable tree when rendering removes the only raw structural difference', () => {
+		const promo = '<div style="position:fixed!important"><a href="/signup">Sign up</a> Create your own website</div>';
+		const mobile = page( '<main><h1>Home</h1></main>' );
+		const desktop = page( `<main><h1>Home</h1></main>${ promo }` );
+		const exported = exportPair( desktop, mobile );
+		expect( documentsDiffer( desktop, mobile ) ).toBe( true );
+		expect( exported.html ).not.toContain( 'Create your own website' );
+		expect( exported.html ).not.toContain( DESKTOP_DOCUMENT_CLASS );
+		expect( exported.receipt.routes[ 0 ].responsiveVariants ).toMatchObject( {
+			variants: 1,
+			outcome: 'collapsed-equivalent',
+		} );
+		expect( exported.profile ).toMatchObject( { variants: 'single', documentsPerRoute: 1 } );
+		receiptMatchesTree(
+			exported.html,
+			exported.receipt.routes[ 0 ].responsiveVariants?.outcome,
+			exported.profile
+		);
+		// Before this slice the raw classifier recorded dual-structural and
+		// documentsPerRoute 2 for this pair, while the normalized assembly
+		// emitted one document. Metadata now matches that emitted tree.
+		expect( exported.receipt.routes[ 0 ].responsiveVariants?.outcome ).not.toBe( 'dual-structural' );
+		expect( exported.profile.documentsPerRoute ).not.toBe( 2 );
+	} );
+} );

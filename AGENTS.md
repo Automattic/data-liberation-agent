@@ -26,7 +26,8 @@ url → detect platform → discover routes → capture each route in a browser
 
 - `src/lib/capture.ts` — orchestrates a run.
 - `src/lib/screenshot/` — the browser work: rendering, settling, DOM capture, CSS aggregation, interaction capture, fluid learning.
-- `src/lib/capture-export.ts` — turns captured routes into the portable `website/` tree: route paths, link rewriting, media localization, desktop/mobile document merging, diagnostics.
+- `src/lib/capture-export.ts` — turns captured routes into the portable `website/` tree: route paths, link rewriting, media localization, diagnostics. It consumes one responsive assembly result rather than classifying and assembling separately.
+- `src/lib/responsive-assembly.ts` — one responsive assembly. The source pair is the raw captures: it decides the binding phone-only body-class gate and which documents are assembled. A raw collapse is rendered from that same analysis. A raw structural dual is assembled from the already-normalized portable pair, and that emitted analysis — not a second look at the source pair — is what the receipt records. Portable rendering stays ordered around the choice: dual inputs are already normalized; a raw collapse is normalized after assembly. A missing body ships the desktop document alone and records that, even when the source pair had a binding gate.
 - `src/lib/self-contain.ts` — strips anything that would still reach the network.
 - `src/lib/fidelity/` — the gate. See below.
 - `src/lib/publish/` — the destination boundary.
