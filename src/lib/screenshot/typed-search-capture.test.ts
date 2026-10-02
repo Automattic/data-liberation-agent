@@ -14,6 +14,18 @@ function render(){const query=document.querySelector('input').value.toLowerCase(
 document.querySelector('input').addEventListener('input',render);document.querySelectorAll('#categories button').forEach((b,i)=>b.onclick=()=>{category=i;render()});render();</script></body></html>`;
 
 describe( 'source-backed typed collection filtering', () => {
+	it( 'admits a neutral text field from observed filtering and captures content outside a labeled tablist', async () => {
+		const source = `<!doctype html><body><main><form><input type="text" name="name" aria-label="Your name"><input type="text" name="email" aria-label="Email address"><input type="text" name="phone" aria-label="Phone number"></form><input type="text" aria-label="Browse entries"><div role="tablist" aria-label="Topics"><button role="tab" aria-selected="true">All</button><button role="tab" aria-selected="false">One</button><button role="tab" aria-selected="false">Two</button></div><section id="results"></section></main><script>
+		const rows=[['Question alpha','A detailed answer about apricot fruit',1],['Question beta','A detailed answer about blueberry fruit',2],['Question gamma','A detailed answer about citrus fruit',2]];let selected=0;function render(){document.querySelectorAll('[role=tab]').forEach((tab,i)=>tab.setAttribute('aria-selected',String(i===selected)));const q=document.querySelector('[aria-label="Browse entries"]').value.toLowerCase();document.querySelector('#results').innerHTML=rows.filter(row=>(!selected||row[2]===selected)&&row.join(' ').toLowerCase().includes(q)).map(row=>'<article><h2>'+row[0]+'</h2><p>'+row[1]+'</p></article>').join('')||'<p>No results found.</p>';}document.querySelector('[aria-label="Browse entries"]').addEventListener('input',render);document.querySelectorAll('[role=tab]').forEach((tab,i)=>tab.onclick=()=>{selected=i;render()});render();</script></body>`;
+		const page = await browser.newPage(); await page.setContent(source);
+		const categories = await captureSelectableSetStates(page, { settleMs: 10 });
+		expect(categories.some(state => state.kind === 'selectable-set' && state.dialog?.selector === '#results')).toBe(true);
+		const states = await captureTypedSearchStates(page, categories, { settleMs: 10 });
+		expect(states[0]).toMatchObject({ status: 'captured', kind: 'typed-search', collectionFilter: { replay: 'verified', restoration: 'verified', mode: 'category-and-query', network: { dataRequests: 'blocked', verification: 'all-requests-blocked' } } });
+		expect(await page.locator(states[0]!.collectionFilter!.field.selector).getAttribute('aria-label')).toBe('Browse entries');
+		expect(await page.locator('#results article').count()).toBe(3);
+		await page.close();
+	}, 30_000 );
 	it( 'confirms answer-only text, case and category composition, restores source, and replays one editable tree offline', async () => {
 		const page = await browser.newPage(); await page.setContent( fixture );
 		const baseline = await page.locator('main').innerText();
@@ -80,4 +92,107 @@ describe( 'source-backed typed collection filtering', () => {
 		expect(states[0]).toMatchObject({status:'no-dialog',collectionFilter:{replay:'unsupported',restoration:'verified',network:{dataRequests:'blocked',blockedRequests:expect.any(Number)}}});
 		await page.close();
 	},30_000);
+	it( 'captures a finite query-independent bootstrap as an alternate category or global-search mode', async () => {
+		const page = await browser.newPage();
+		await installFinite( page, 'finite' );
+		const categories = await captureSelectableSetStates( page, { settleMs: 150 } );
+		expect( categories.some( state => state.kind === 'selectable-set' && state.dialog?.selector === '#results' ) ).toBe( true );
+		const states = await captureTypedSearchStates( page, categories, { settleMs: 80 } );
+		expect( states[ 0 ] ).toMatchObject( {
+			status: 'captured',
+			collectionFilter: {
+				replay: 'verified', restoration: 'verified', mode: 'category-or-global-search',
+				network: { dataRequests: 'observed-response-replay', verification: 'intercepted-observed-responses' },
+				finiteBootstrap: {
+					schema: 'data-liberation/finite-bootstrap/v1', mode: 'category-or-global-search', queryIndependent: true,
+					completeness: 'declared-finite', declaredCount: 4, observedItemCount: 4, coverage: 'complete',
+					verification: 'intercepted-observed-responses', unmatchedProbeBlocked: true, categoryControlsDuringSearch: 'hidden',
+					emptyQueryRestoresCategory: true, answers: 'observed', answerOnly: 'verified',
+				},
+			},
+		} );
+		expect( Object.keys( states[ 0 ]!.collectionFilter!.finiteBootstrap! ).sort() ).toEqual( [ 'answerOnly', 'answers', 'blockedFollowUps', 'categoryControlsDuringSearch', 'completeness', 'coverage', 'declaredCount', 'emptyQueryRestoresCategory', 'mode', 'observedItemCount', 'probes', 'queryIndependent', 'replayedResponses', 'schema', 'sourceFollowUpsBlocked', 'unmatchedProbeBlocked', 'verification' ] );
+		expect( await page.locator( states[ 0 ]!.collectionFilter!.field.selector ).getAttribute( 'aria-label' ) ).toBe( 'Browse entries' );
+		expect( states[ 0 ]!.collectionFilter!.items ).toHaveLength( 4 );
+		expect( states[ 0 ]!.collectionFilter!.items!.some( item => ! item.categories.includes( states[ 0 ]!.collectionFilter!.initialCategory ) ) ).toBe( true );
+		const html = wireCapturedDialogs( ( await page.content() ).replace( /<script>[\s\S]*?<\/script>/g, '' ), states );
+		await page.setContent( html );
+		expect( await page.locator( 'article' ).count() ).toBe( 4 );
+		await page.locator( 'input[aria-label="Browse entries"]' ).fill( 'APRICOT' );
+		expect( await page.locator( 'article:visible' ).count() ).toBe( 1 );
+		expect( await page.locator( '[role="tab"]:visible' ).count() ).toBe( 0 );
+		await page.locator( 'input[aria-label="Browse entries"]' ).fill( 'recommendations' );
+		expect( await page.locator( 'article:visible' ).innerText() ).toContain( 'Question delta' );
+		await page.locator( 'input[aria-label="Browse entries"]' ).fill( 'dla-no-match-7f39b2' );
+		expect( await page.getByText( 'No results found.', { exact: true } ).isVisible() ).toBe( true );
+		await page.locator( 'input[aria-label="Browse entries"]' ).fill( '' );
+		expect( await page.locator( 'article:visible' ).count() ).toBe( 2 );
+		expect( await page.locator( '[role="tab"]:visible' ).count() ).toBe( 3 );
+		await page.getByRole( 'tab', { name: 'Two', exact: true } ).click();
+		expect( await page.locator( 'article:visible' ).innerText() ).toContain( 'blueberry' );
+		await page.locator( 'article:visible p' ).evaluate( element => { element.textContent = 'Edited plum answer'; } );
+		await page.locator( 'input[aria-label="Browse entries"]' ).fill( 'plum' );
+		expect( await page.locator( 'article:visible' ).count() ).toBe( 1 );
+		await page.close();
+	}, 60_000 );
+	it( 'rejects query-dependent, paginated, undeclared, incomplete, and unrestored collection drives', async () => {
+		const expected = {
+			'query-dependent': /Query-dependent/,
+			paginated: /Paginated/,
+			undeclared: /Undeclared completeness/,
+			coverage: /coverage mismatch/,
+			restoration: /Unverified restoration/,
+		} as const;
+		for ( const variant of [ 'query-dependent', 'paginated', 'undeclared', 'coverage', 'restoration' ] as const ) {
+			const page = await browser.newPage();
+			await installFinite( page, variant );
+			const categories = await captureSelectableSetStates( page, { settleMs: 150 } );
+			const states = await captureTypedSearchStates( page, categories, { settleMs: 80 } );
+			expect( states[ 0 ]?.status, variant ).not.toBe( 'captured' );
+			expect( states[ 0 ]?.collectionFilter?.replay, variant ).toBe( 'unsupported' );
+			expect( states[ 0 ]?.collectionFilter?.network.dataRequests, variant ).not.toBe( 'blocked' );
+			expect( states[ 0 ]?.collectionFilter?.finiteBootstrap, variant ).toBeUndefined();
+			expect( states[ 0 ]?.collectionFilter?.reason ?? states[ 0 ]?.error, variant ).toMatch( expected[ variant ] );
+			await page.close();
+		}
+	}, 120_000 );
 });
+
+async function installFinite( page: import('playwright').Page, variant: 'finite' | 'query-dependent' | 'paginated' | 'undeclared' | 'coverage' | 'restoration' ) {
+	const rows = [
+		{ q: 'Question alpha', a: 'A detailed answer about apricot fruit', c: 0 },
+		{ q: 'Question delta', a: 'A detailed answer about recommendations nearby', c: 0 },
+		{ q: 'Question beta', a: 'A detailed answer about blueberry fruit', c: 1 },
+		{ q: 'Question gamma', a: 'A detailed answer about citrus fruit', c: 2 },
+	];
+	await page.route( 'https://fixture.invalid/**', async route => {
+		const request = JSON.parse( route.request().postData() || '{}' ) as { query?: string; filter?: { category?: number } };
+		if ( variant === 'paginated' ) {
+			await route.fulfill( { json: { records: rows.slice( 0, 2 ), paging: { hasNext: true, count: 2 } } } );
+			return;
+		}
+		if ( variant === 'undeclared' ) {
+			await route.fulfill( { json: { records: rows } } );
+			return;
+		}
+		const local = variant === 'coverage' && request.filter?.category === undefined ? [ ...rows, { q: 'Question epsilon', a: 'A detailed answer about unrendered mango fruit', c: 9 } ] : rows;
+		const records = request.filter?.category === undefined ? local : local.filter( row => row.c === request.filter?.category );
+		await route.fulfill( { json: { records, paging: { hasNext: false, count: records.length } } } );
+	} );
+	await page.setContent( `<!doctype html><body><main>
+		<form><input type="text" aria-label="Your name"><input type="text" aria-label="Email address"><input type="text" aria-label="Phone number"></form>
+		<input type="text" aria-label="Browse entries"><div role="tablist" aria-label="Topics"><button role="tab" aria-selected="true">One</button><button role="tab">Two</button><button role="tab">Three</button></div><section id="results"></section>
+		</main><script>
+		const variant=${ JSON.stringify( variant ) };
+		const local=${ JSON.stringify( rows ) };
+		let selected=0, universe=null, fromClick=false;
+		const input=document.querySelector('[aria-label="Browse entries"]');
+		async function post(body){const response=await fetch('https://fixture.invalid/collection',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});if(!response.ok)throw new Error('network');return response.json();}
+		function paint(list){document.querySelector('#results').innerHTML=list.map(row=>'<article><h2>'+row.q+'</h2><p>'+row.a+'</p></article>').join('')||'<p>No results found.</p>';document.querySelectorAll('[role=tab]').forEach((tab,index)=>tab.setAttribute('aria-selected',String(index===selected)));}
+		async function render(){const query=input.value;document.querySelector('[role=tablist]').hidden=Boolean(query);if(query){if(!universe)universe=await post(variant==='query-dependent'?{query,filter:{},paging:{limit:100}}:{filter:{},paging:{limit:100}});const source=(variant==='paginated'||variant==='undeclared')?local:(universe.records||[]);paint(source.filter(row=>(row.q+' '+row.a).toLowerCase().includes(query.toLowerCase())));return;}if(variant==='paginated'||variant==='undeclared'){await post({filter:{category:selected},paging:{limit:50}});paint(local.filter(row=>row.c===selected));return;}const category=await post({filter:{category:selected},paging:{limit:50}});paint(category.records||[]);}
+		input.addEventListener('input',()=>{if(variant==='restoration'&&!input.value){document.querySelector('[role=tablist]').hidden=false;paint([{q:'Unrestored heading',a:'This answer was not the source category.',c:0}]);return;}render().catch(()=>{document.querySelector('#results').innerHTML='<p>network</p>';});});
+		document.querySelectorAll('[role=tab]').forEach((tab,index)=>tab.onclick=()=>{selected=index;fromClick=true;render().finally(()=>{fromClick=false;});});
+		render();
+		</script></body>` );
+	await page.locator( '#results article' ).first().waitFor();
+}

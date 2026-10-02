@@ -690,7 +690,11 @@ export async function captureSelectableSetStates(
 					const shouldCaptureChoice = Boolean(
 						choiceGroupChanged &&
 						sameMemberParent &&
-						( regionIdx < 0 || toggleGroup || choiceMetadata?.group.label )
+						// A labeled tablist may itself update selection attributes while
+						// also driving a distinct outside content region. Prefer the
+						// content evidence when both change; the choice-group snapshot
+						// alone cannot represent that collection transition.
+						( regionIdx < 0 || toggleGroup )
 					);
 					if ( shouldCaptureChoice ) {
 						const drivenCount = Math.min( group.members.length, limits.maxMembers );
