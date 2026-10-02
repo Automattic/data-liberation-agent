@@ -502,9 +502,14 @@ export async function observePage(
 				range.selectNodeContents( parent && measuredParents.has( parent ) ? parent : textNode );
 				const rect = range.getBoundingClientRect();
 				const style = getComputedStyle( parent );
+				const parentRect = parent.getBoundingClientRect();
+				const clippedLabel = parentRect.width <= 1.5 && parentRect.height <= 1.5 &&
+					( style.position === 'absolute' || style.position === 'fixed' ) &&
+					( style.overflow === 'hidden' || style.clip !== 'auto' || style.clipPath !== 'none' );
 				if (
 					rect.width <= 0 ||
 					rect.height <= 0 ||
+					clippedLabel ||
 					style.display === 'none' ||
 					style.visibility === 'hidden'
 				) {
