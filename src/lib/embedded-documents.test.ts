@@ -1,6 +1,5 @@
 import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { chromium, type Browser } from 'playwright';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
@@ -11,14 +10,15 @@ import { serveCapture } from './serve-capture.js';
 
 let browser: Browser;
 const dirs: string[] = [];
+const tempRoot = join( process.cwd(), '.tmp-test' );
 const sourceUrl = 'https://parent.test/article/';
 const sha = ( html: string ) => createHash( 'sha256' ).update( html ).digest( 'hex' );
-beforeAll( async () => { browser = await chromium.launch(); } );
+beforeAll( async () => { mkdirSync( tempRoot, { recursive: true } ); browser = await chromium.launch(); } );
 afterAll( async () => { await browser?.close(); } );
 afterEach( () => { for ( const path of dirs.splice( 0 ) ) rmSync( path, { recursive: true, force: true } ); } );
 
 async function fixture( border = '0', width = 768 ) {
-	const outputDir = mkdtempSync( join( tmpdir(), 'dla-embedded-' ) ); dirs.push( outputDir );
+	const outputDir = mkdtempSync( join( tempRoot, 'dla-embedded-' ) ); dirs.push( outputDir );
 	mkdirSync( join( outputDir, 'source-documents' ) );
 	const prepared = '<html><head><title>Article</title></head><body><div id="host"></div><div id="legacy"><a name="legacy"></a></div></body></html>';
 	writeFileSync( join( outputDir, 'source-documents/article.html' ), prepared );
@@ -98,7 +98,7 @@ describe( 'observed embedded document export', () => {
 		await stage();
 		const receiptPath = join( outputDir, 'embedded-documents.json' );
 		const receipt = JSON.parse( readFileSync( receiptPath, 'utf8' ) );
-		const external = mkdtempSync( join( tmpdir(), 'dla-embedded-outside-' ) ); dirs.push( external );
+		const external = mkdtempSync( join( tempRoot, 'dla-embedded-outside-' ) ); dirs.push( external );
 		writeFileSync( join( external, 'child.html' ), 'Outside' );
 		symlinkSync( join( external, 'child.html' ), join( outputDir, 'embedded-documents/linked.html' ) );
 		const doc = Object.values( receipt.documents )[ 0 ] as { path: string };

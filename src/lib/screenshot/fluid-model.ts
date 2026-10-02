@@ -465,7 +465,11 @@ export function segmentedCss(
 			// outranked every normal author rule. `!important` keeps that
 			// precedence; without it a more specific author selector (a
 			// `var()` fallback, say) silently wins at every width.
-			const declaration = `${ selector } { ${ property }: ${ segment.model.css } !important; }`;
+			// Runtime-written inline geometry has been removed, but author CSS may
+			// still declare the same property with a more specific selector (often
+			// one carrying a runtime variable). Give the measured rule enough
+			// specificity to replace that stale fallback at every sampled regime.
+			const declaration = `:is(#dla-fluid-specificity, ${ selector }) { ${ property }: ${ segment.model.css } !important; }`;
 			if ( conditions.length === 0 ) return declaration;
 			return `@media ${ conditions.join( ' and ' ) } {\n${ declaration }\n}`;
 		} )

@@ -192,11 +192,12 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 		await new Promise<void>( resolve => source.listen( 0, '127.0.0.1', resolve ) );
 		const origin = `http://127.0.0.1:${ ( source.address() as { port: number } ).port }`;
 		const url = `${ origin }/shop/product/`;
-		const collector = createReferenceCollector( directory, url, [ url ] );
+		const sourcePolicy = cleanupPolicy( [ { id: 'fixture-credit', category: 'source-attribution', selector: '.credit' } ] );
+		const collector = createReferenceCollector( directory, url, [ url ], { cleanupPolicy: sourcePolicy } );
 		let candidate: ReturnType<typeof createServer> | undefined;
 		try {
 			const captured = await captureScreenshots( { urls: [ url ], primaryUrl: url, outputDir: directory, concurrency: 1, settleMs: 100, learnFluid: false,
-				cleanupPolicy: cleanupPolicy( [ { id: 'fixture-credit', category: 'source-attribution', selector: '.credit' } ] ), observeSource: collector.observe } );
+				cleanupPolicy: sourcePolicy, observeSource: collector.observe } );
 			expect( captured.failed ).toBe( 0 );
 			const receiptPath = exportWebsiteCapture( { outputDir: directory, sourceUrl: url, platform: 'default', summary: { routesDiscovered: 1, routesCaptured: 1, routesSkipped: 0, routesFailed: 0, durationMs: captured.durationMs }, failures: [], discoveryDiagnostics: [] } );
 			const manifestPath = collector.finalize( receiptPath );
@@ -308,6 +309,34 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			expect( ( await checkFidelity( { directory } ) ).status ).toBe( 'unproven' );
 		} finally { server.closeAllConnections(); await new Promise<void>( resolve => server.close( () => resolve() ) ); rmSync( directory, { recursive: true, force: true } ); }
 	}, 90_000 );
+	it( 'freezes each width from a fresh navigation instead of resize-history state', async () => {
+		const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
+		const directory = mkdtempSync( join( parent, 'reference-fresh-viewport-' ) );
+		const server = createServer( ( _request, response ) => {
+			response.setHeader( 'content-type', 'text/html' );
+			response.end( `<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><style>h1{font-size:33px}</style><h1>Neutral viewport pose</h1><script>
+				if ( innerWidth === 768 ) document.documentElement.dataset.pose = 'fresh';
+				addEventListener('resize', () => { if ( innerWidth === 768 ) { document.documentElement.dataset.pose = 'resized'; document.querySelector('h1').style.fontSize = '29px'; } });
+			</script>` );
+		} );
+		await new Promise<void>( resolve => server.listen( 0, '127.0.0.1', resolve ) );
+		const url = `http://127.0.0.1:${ ( server.address() as { port: number } ).port }/`;
+		const browser = await chromium.launch(); const context = await browser.newContext( { viewport: { width: 1440, height: 900 } } );
+		try {
+			const page = await context.newPage(); await page.goto( url ); await page.setViewportSize( { width: 768, height: 900 } );
+			expect( await page.locator( 'h1' ).evaluate( element => getComputedStyle( element ).fontSize ) ).toBe( '29px' );
+			const collector = createReferenceCollector( directory, url, [ url ], { cleanupPolicy: cleanupPolicy() } );
+			await collector.observe( page, url, 'desktop' );
+			const receipt = join( directory, 'receipt.json' ); writeFileSync( receipt, JSON.stringify( { routes: [] } ) );
+			const manifest = JSON.parse( readFileSync( collector.finalize( receipt ), 'utf8' ) ) as FidelityReference;
+			const entry = manifest.entries.find( candidate => candidate.viewport === 768 )!;
+			const observation = JSON.parse( readFileSync( join( directory, entry.observation!.path ), 'utf8' ) );
+			expect( entry.readiness.ready, entry.readiness.reasons.join( ', ' ) ).toBe( true );
+			expect( observation.typography ).toContainEqual( expect.objectContaining( { key: 'Neutral viewport pose', fontSize: 33 } ) );
+			// The original capture page is not resized or otherwise changed by reference collection.
+			expect( await page.locator( 'h1' ).evaluate( element => getComputedStyle( element ).fontSize ) ).toBe( '29px' );
+		} finally { await browser.close(); server.closeAllConnections(); await new Promise<void>( resolve => server.close( () => resolve() ) ); rmSync( directory, { recursive: true, force: true } ); }
+	}, 60_000 );
 } );
 
 it( 'never silently pairs normal/zoom duplicate media by geometry or index', () => {
