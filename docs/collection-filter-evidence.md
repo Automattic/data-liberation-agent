@@ -156,6 +156,56 @@ keys are not the ordered source filter. Also reject `query-dependent`,
 `incomplete`, paginated responses, undeclared completeness, ambiguous identities,
 and unverified restoration.
 
+## Collection status
+
+Optional `finiteBootstrap.status`. Absent means no positive status was proven.
+Present must be `schema: data-liberation/collection-status/v1` and is consumed
+strictly. A parent record stays `data-liberation/finite-bootstrap/v1`.
+
+```json
+{
+  "schema": "data-liberation/collection-status/v1",
+  "nodes": [
+    {
+      "html": "<div role=\"status\" class=\"count\">{count} entries shown</div>",
+      "template": "{count} entries shown",
+      "binds": ["count"],
+      "placement": "before-items",
+      "hidesAtZero": true
+    },
+    {
+      "html": "<div class=\"query\">Shown for: {query}</div>",
+      "template": "Shown for: {query}",
+      "binds": ["query"],
+      "placement": "before-items",
+      "hidesAtZero": true
+    }
+  ]
+}
+```
+
+The only tokens are `{count}` and `{query}`. `binds` lists exactly the tokens in
+`template`. `{count}` is the visible item count. `{query}` is the raw field
+value; the predicate stays normalized lowercase. Static copy, class, and inline
+layout come from the observed node. `placement` is `before-items` or
+`after-items`.
+
+A node is included only when every positive observation, including two counts, a
+case-distinct pair, the universal query, and an answer-only query when one was
+verified, reduces to that same markup. A no-match observation must agree or the
+node must be absent. Copy that does not reduce is omitted, not guessed.
+
+`hidesAtZero` is true when the zero rendering is already in `emptyHtml`, or the
+node is absent at zero. The renderer hides the node instead of repeating the
+zero message. An empty query hides every status node.
+
+The exporter inserts the observed markup once per responsive collection copy,
+hidden at rest, with `data-dla-status-template` on the text node. The runtime
+writes `textContent` from that attribute, so an editor can change the fallback
+without a second widget. The resting text may remain the source template while
+the node is hidden. A present status whose schema, tokens, or binds do not match
+is not portable and must not be rendered.
+
 `answers: pending-disclosure-integration` means `hydrateDisclosureContent` did
 not leave answer text inside an expanded control. Portable search then covers
 observed item text only. Populated disclosure panels and ancestor concealment

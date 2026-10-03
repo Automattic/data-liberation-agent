@@ -141,6 +141,33 @@ describe( 'source-backed typed collection filtering', () => {
 		expect( await page.locator( 'article:visible' ).count() ).toBe( 1 );
 		await page.close();
 	}, 60_000 );
+	it( 'exports an observed status template and keeps the raw query case', async () => {
+		const page = await browser.newPage();
+		await installFinite( page, 'status' );
+		const states = await captureTypedSearchStates( page, await captureSelectableSetStates( page, { settleMs: 150 } ), { settleMs: 80 } );
+		const status = states[ 0 ]?.collectionFilter?.finiteBootstrap?.status;
+		expect( status ).toMatchObject( { schema: 'data-liberation/collection-status/v1' } );
+		expect( status?.nodes.map( node => node.template ) ).toEqual( [ '{count} entries shown', 'Shown for: {query}' ] );
+		expect( status?.nodes.every( node => node.hidesAtZero ) ).toBe( true );
+		expect( states[ 0 ]?.collectionFilter?.emptyHtml ).toContain( '0 entries shown' );
+		expect( states[ 0 ]?.collectionFilter?.emptyHtml ).toContain( 'No results found.' );
+		const html = wireCapturedDialogs( ( await page.content() ).replace( /<script>[\s\S]*?<\/script>/g, '' ), states );
+		expect( html.match( / data-dla-collection="/g ) ).toHaveLength( 1 );
+		expect( html.match( / data-dla-collection-status="/g ) ).toHaveLength( 2 );
+		await page.setContent( html );
+		await page.locator( 'input[aria-label="Browse entries"]' ).fill( 'APRICOT' );
+		await expect.poll( () => page.locator( '[data-dla-collection-status]:visible' ).allInnerTexts() ).toEqual( [ '1 entries shown', 'Shown for: APRICOT' ] );
+		await page.locator( 'article p' ).first().evaluate( element => { element.textContent = 'A detailed answer about apricot<img> fruit'; } );
+		await page.locator( 'input[aria-label="Browse entries"]' ).fill( 'apricot<img>' );
+		await expect.poll( () => page.locator( '.query-status' ).innerText() ).toBe( 'Shown for: apricot<img>' );
+		expect( await page.locator( '.query-status img' ).count() ).toBe( 0 );
+		await page.locator( 'input[aria-label="Browse entries"]' ).fill( 'dla-no-match-7f39b2' );
+		expect( await page.locator( '[data-dla-collection-status]:visible' ).count() ).toBe( 0 );
+		expect( await page.getByText( '0 entries shown', { exact: true } ).count() ).toBe( 1 );
+		await page.locator( 'input[aria-label="Browse entries"]' ).fill( '' );
+		expect( await page.locator( '[data-dla-collection-status]:visible' ).count() ).toBe( 0 );
+		await page.close();
+	}, 60_000 );
 	it( 'keeps a reversed category order on the same nodes and rejects resource-bearing items', async () => {
 		const reversed = await browser.newPage();
 		await installFinite( reversed, 'category-order' );
@@ -207,7 +234,7 @@ describe( 'source-backed typed collection filtering', () => {
 	}, 120_000 );
 });
 
-async function installFinite( page: import('playwright').Page, variant: 'finite' | 'query-dependent' | 'paginated' | 'undeclared' | 'coverage' | 'restoration' | 'category-order' | 'resource' ) {
+	async function installFinite( page: import('playwright').Page, variant: 'finite' | 'query-dependent' | 'paginated' | 'undeclared' | 'coverage' | 'restoration' | 'category-order' | 'resource' | 'status' ) {
 	const rows = [
 		{ q: 'Question alpha', a: 'A detailed answer about apricot fruit', c: 0, rank: 0 },
 		{ q: 'Question beta', a: 'A detailed answer about blueberry fruit', c: 1, rank: 1 },
@@ -230,14 +257,14 @@ async function installFinite( page: import('playwright').Page, variant: 'finite'
 	} );
 	await page.setContent( `<!doctype html><body><main>
 		<form><input type="text" aria-label="Your name"><input type="text" aria-label="Email address"><input type="text" aria-label="Phone number"></form>
-		<input type="text" aria-label="Browse entries"><div role="tablist" aria-label="Topics"><button role="tab" aria-selected="true">One</button><button role="tab">Two</button><button role="tab">Three</button></div><section id="results"></section>
+		<input type="text" aria-label="Browse entries"><div role="tablist" aria-label="Topics"><button role="tab" aria-selected="true">One</button><button role="tab">Two</button><button role="tab">Three</button></div>${ variant === 'status' ? '<div id="status-slot"></div>' : '' }<section id="results"></section>
 		</main><script>
 		const variant=${ JSON.stringify( variant ) };
 		const local=${ JSON.stringify( rows ) };
 		let selected=0, universe=null, fromClick=false;
 		const input=document.querySelector('[aria-label="Browse entries"]');
 		async function post(body){const response=await fetch('https://fixture.invalid/collection',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});if(!response.ok)throw new Error('network');return response.json();}
-		function paint(list){document.querySelector('#results').innerHTML=list.map(row=>'<article><h2>'+row.q+'</h2><p>'+row.a+'</p>'+(variant==='resource'?'<img src="https://cdn.example/photo.png" alt="">':'')+'</article>').join('')||'<p>No results found.</p>';document.querySelectorAll('[role=tab]').forEach((tab,index)=>tab.setAttribute('aria-selected',String(index===selected)));}
+		function paint(list){if(variant==='status'){var slot=document.querySelector('#status-slot');slot.replaceChildren();if(input.value&&list.length){var countEl=document.createElement('div');countEl.className='count-status';countEl.setAttribute('role','status');countEl.textContent=list.length+' entries shown';var queryEl=document.createElement('div');queryEl.className='query-status';queryEl.textContent='Shown for: '+input.value;slot.append(countEl,queryEl);}}document.querySelector('#results').innerHTML=list.map(row=>'<article><h2>'+row.q+'</h2><p>'+row.a+'</p>'+(variant==='resource'?'<img src="https://cdn.example/photo.png" alt="">':'')+'</article>').join('')||(variant==='status'?'<p>0 entries shown</p><p>No results found.</p>':'<p>No results found.</p>');document.querySelectorAll('[role=tab]').forEach((tab,index)=>tab.setAttribute('aria-selected',String(index===selected)));}
 		async function render(){const query=input.value;document.querySelector('[role=tablist]').hidden=Boolean(query);if(query){if(!universe)universe=await post(variant==='query-dependent'?{query,filter:{},paging:{limit:100}}:{filter:{},paging:{limit:100}});const source=(variant==='paginated'||variant==='undeclared')?local:(universe.records||[]);paint(source.filter(row=>(row.q+' '+row.a).toLowerCase().includes(query.toLowerCase())).sort((left,right)=>left.rank-right.rank));return;}if(variant==='paginated'||variant==='undeclared'){await post({filter:{category:selected},paging:{limit:50}});paint(local.filter(row=>row.c===selected));return;}const category=await post({filter:{category:selected},paging:{limit:50}});let records=category.records||[];if(variant==='category-order'&&selected===0)records=records.slice().reverse();paint(records);}
 		input.addEventListener('input',()=>{if(variant==='restoration'&&!input.value){document.querySelector('[role=tablist]').hidden=false;paint([{q:'Unrestored heading',a:'This answer was not the source category.',c:0}]);return;}render().catch(()=>{document.querySelector('#results').innerHTML='<p>network</p>';});});
 		document.querySelectorAll('[role=tab]').forEach((tab,index)=>tab.onclick=()=>{selected=index;fromClick=true;render().finally(()=>{fromClick=false;});});

@@ -5,6 +5,7 @@ import { dismissOverlays } from './page-helpers.js';
 import type { CapturedCollectionFilter } from './typed-search-capture.js';
 
 export const FINITE_BOOTSTRAP_SCHEMA = 'data-liberation/finite-bootstrap/v1' as const;
+export const COLLECTION_STATUS_SCHEMA = 'data-liberation/collection-status/v1' as const;
 export const BOOTSTRAP_PROBE = 'dla-finite-probe-7f39b2';
 const NO_MATCH = 'dla-no-match-7f39b2';
 const NO_MATCH_AGAIN = 'dla-no-match-2c81e4';
@@ -41,6 +42,26 @@ export interface FiniteBootstrapContract {
 		global: Array<{ query: string; keys: string[] }>;
 		categories: Array<{ category: number; keys: string[] }>;
 	};
+	status?: CollectionStatusContract;
+}
+
+export interface CollectionStatusNode {
+	html: string;
+	template: string;
+	binds: Array< 'count' | 'query' >;
+	placement: 'before-items' | 'after-items';
+	hidesAtZero: boolean;
+}
+
+export interface CollectionStatusContract {
+	schema: typeof COLLECTION_STATUS_SCHEMA;
+	nodes: CollectionStatusNode[];
+}
+
+export interface StatusObservation {
+	query: string;
+	count: number;
+	nodes: Array< { signature: string; text: string; html: string; before: boolean } >;
 }
 
 interface Exchange {
@@ -83,6 +104,134 @@ export function bindObservedEmpty( firstHtml: string, firstQuery: string, second
 	}
 	const strip = ( html: string ) => swap( swap( html, firstQuery, '' ), secondQuery, '' );
 	return { html: strip( firstHtml ), bindsQuery: false };
+}
+
+interface StatusSpan { start: number; end: number; token: '{count}' | '{query}' }
+
+function locateSpans( text: string, needle: string, token: StatusSpan[ 'token' ], wholeNumber: boolean ): StatusSpan[] {
+	if ( ! needle ) return [];
+	const spans: StatusSpan[] = [];
+	for ( let from = 0; from <= text.length; from++ ) {
+		const at = text.indexOf( needle, from );
+		if ( at < 0 ) break;
+		const bounded = ! wholeNumber || ( ( at === 0 || ! /\d/.test( text[ at - 1 ]! ) ) && ( at + needle.length >= text.length || ! /\d/.test( text[ at + needle.length ]! ) ) );
+		if ( bounded ) spans.push( { start: at, end: at + needle.length, token } );
+		from = at;
+	}
+	return spans;
+}
+
+function applySpans( text: string, spans: StatusSpan[] ): string | null {
+	const ordered = [ ...spans ].sort( ( left, right ) => left.start - right.start );
+	if ( ordered.some( ( span, index ) => index > 0 && span.start < ordered[ index - 1 ]!.end ) ) return null;
+	let out = text;
+	for ( const span of [ ...ordered ].reverse() ) out = out.slice( 0, span.start ) + span.token + out.slice( span.end );
+	return out;
+}
+
+function maskChoices( text: string, query: string, count: number ): string[] {
+	const queries = query ? locateSpans( text, query, '{query}', false ) : [];
+	const counts = locateSpans( text, String( count ), '{count}', true );
+	const choices: string[] = [];
+	const queryOptions: Array<StatusSpan | null> = [ null, ...queries ];
+	const countOptions: Array<StatusSpan | null> = [ null, ...counts ];
+	for ( const querySpan of queryOptions ) {
+		for ( const countSpan of countOptions ) {
+			const spans = [ querySpan, countSpan ].filter( ( span ): span is StatusSpan => Boolean( span ) );
+			if ( ! spans.length ) continue;
+			const masked = applySpans( text, spans );
+			if ( masked && ( masked.includes( '{count}' ) || masked.includes( '{query}' ) ) ) choices.push( masked );
+		}
+	}
+	return [ ...new Set( choices ) ];
+}
+
+function templatizeStatusHtml( html: string, template: string, query: string, count: number ): string | null {
+	const $ = cheerio.load( html, null, false );
+	const root = $.root().children().first();
+	const element = root.get( 0 );
+	if ( ! element || element.type !== 'tag' ) return null;
+	const texts: Array<import('domhandler').Text> = [];
+	const walk = ( node: import('domhandler').AnyNode ) => {
+		if ( node.type === 'text' ) texts.push( node );
+		else if ( 'children' in node ) node.children?.forEach( walk );
+	};
+	walk( element );
+	const combined = texts.map( node => node.data ?? '' ).join( '' );
+	const querySpans = template.includes( '{query}' ) ? locateSpans( combined, query, '{query}', false ) : [ null ];
+	const countSpans = template.includes( '{count}' ) ? locateSpans( combined, String( count ), '{count}', true ) : [ null ];
+	for ( const querySpan of querySpans ) {
+		for ( const countSpan of countSpans ) {
+			const spans = [ querySpan, countSpan ].filter( ( span ): span is StatusSpan => Boolean( span ) );
+			if ( normalize( applySpans( combined, spans ) ?? '' ) !== template ) continue;
+			let cursor = 0;
+			for ( const node of texts ) {
+				const data = node.data ?? '';
+				const local = spans.filter( span => span.start >= cursor && span.end <= cursor + data.length ).map( span => ( { ...span, start: span.start - cursor, end: span.end - cursor } ) );
+				node.data = applySpans( data, local ) ?? data;
+				cursor += data.length;
+			}
+			if ( normalize( root.text() ) !== template ) return null;
+			return $.html( root );
+		}
+	}
+	return null;
+}
+
+/** A status template is emitted only when every positive observation reduces to the same markup. */
+export function deriveObservedStatus(
+	observations: StatusObservation[],
+	options: { emptyHtml: string; universe: number; answerQuery?: string }
+): CollectionStatusContract | null {
+	const positive = observations.filter( item => item.query && item.count > 0 );
+	const zero = observations.filter( item => item.count === 0 && item.query );
+	const counts = new Set( positive.map( item => item.count ) );
+	const queries = positive.map( item => item.query );
+	const hasCase = queries.some( query => query !== query.toLowerCase() && queries.some( other => other !== query && other.toLowerCase() === query.toLowerCase() ) );
+	if ( counts.size < 2 || ! hasCase || ! zero.length || ! positive.some( item => item.count === options.universe ) ) return null;
+	if ( options.answerQuery && ! positive.some( item => item.query === options.answerQuery ) ) return null;
+	const resting = new Set( observations.filter( item => item.query === '' ).flatMap( item => item.nodes.map( node => node.signature ) ) );
+	const signatures = [ ...new Set( positive.flatMap( item => item.nodes.map( node => node.signature ) ) ) ].filter( signature => ! resting.has( signature ) );
+	const emptyText = normalize( cheerio.load( `<div>${ options.emptyHtml }</div>` ).root().text() );
+	const nodes: CollectionStatusNode[] = [];
+	for ( const signature of signatures ) {
+		const samples = positive.map( item => item.nodes.find( node => node.signature === signature ) );
+		if ( samples.some( sample => ! sample ) ) continue;
+		const present = samples as Array< StatusObservation[ 'nodes' ][ number ] >;
+		if ( new Set( present.map( sample => sample.before ) ).size !== 1 ) continue;
+		const templates = present.map( ( sample, index ) => new Set( maskChoices( sample.text, positive[ index ]!.query, positive[ index ]!.count ) ) );
+		const shared = [ ...templates[ 0 ]! ].filter( template => templates.every( choices => choices.has( template ) ) );
+		let explained: { html: string; text: string; binds: Array< 'count' | 'query' > } | null = null;
+		for ( const template of shared ) {
+			const binds: Array< 'count' | 'query' > = [];
+			if ( template.includes( '{count}' ) ) binds.push( 'count' );
+			if ( template.includes( '{query}' ) ) binds.push( 'query' );
+			if ( ! binds.length || ( binds.includes( 'count' ) && counts.size < 2 ) || ( binds.includes( 'query' ) && ! hasCase ) ) continue;
+			if ( template.includes( 'dla-no-match' ) || template.includes( 'dla-finite-probe' ) ) continue;
+			const rendered = positive.map( ( item, index ) => templatizeStatusHtml( present[ index ]!.html, template, item.query, item.count ) );
+			if ( rendered.some( item => ! item ) || new Set( rendered ).size !== 1 ) continue;
+			explained = { html: rendered[ 0 ]!, text: template, binds };
+			break;
+		}
+		if ( ! explained ) continue;
+		const zeroMismatch = zero.some( item => {
+			const node = item.nodes.find( candidate => candidate.signature === signature );
+			if ( ! node ) return false;
+			const rendered = explained!.text.replaceAll( '{count}', '0' ).replaceAll( '{query}', item.query );
+			return normalize( node.text ) !== rendered;
+		} );
+		if ( zeroMismatch ) continue;
+		const ownedByEmpty = zero.some( item => emptyText.includes( explained!.text.replaceAll( '{count}', '0' ).replaceAll( '{query}', item.query ) ) );
+		const absentAtZero = zero.every( item => ! item.nodes.some( node => node.signature === signature ) );
+		nodes.push( {
+			html: explained.html,
+			template: explained.text,
+			binds: explained.binds,
+			placement: present[ 0 ]!.before ? 'before-items' : 'after-items',
+			hidesAtZero: ownedByEmpty || absentAtZero,
+		} );
+	}
+	return nodes.length ? { schema: COLLECTION_STATUS_SCHEMA, nodes } : null;
 }
 
 export function collectionItemHasResource( html: string ): boolean {
@@ -172,6 +321,42 @@ async function visible( page: Page, selector: string ): Promise<boolean> {
 		const rect = element.getBoundingClientRect();
 		return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0 && ! element.closest( '[hidden]' );
 	} ).catch( () => false );
+}
+
+async function readCollectionStatus( page: Page, targetSelector: string, fieldSelector: string, controlSelectors: string[] ): Promise<StatusObservation[ 'nodes' ]> {
+	return page.evaluate( ( { targetSelector, fieldSelector, controlSelectors } ) => {
+		const target = document.querySelector( targetSelector );
+		const field = document.querySelector( fieldSelector );
+		if ( ! target || ! field ) return [];
+		let scope: Element | null = field;
+		while ( scope && ! scope.contains( target ) ) scope = scope.parentElement;
+		if ( ! scope ) return [];
+		const controls = new Set( controlSelectors.map( selector => document.querySelector( selector ) ).filter( ( element ): element is Element => Boolean( element ) ) );
+		const blocked = ( element: Element ) => element === target || target.contains( element ) || element.contains( target ) || element === field || field.contains( element ) || element.contains( field ) || [ ...controls ].some( control => element === control || control.contains( element ) || element.contains( control ) );
+		const nodes: Array<{ signature: string; text: string; html: string; before: boolean }> = [];
+		const seen = new Set<string>();
+		const walker = document.createTreeWalker( scope, NodeFilter.SHOW_ELEMENT );
+		while ( walker.nextNode() ) {
+			const element = walker.currentNode as Element;
+			if ( blocked( element ) ) continue;
+			const own = [ ...element.childNodes ].filter( node => node.nodeType === Node.TEXT_NODE ).map( node => ( node.textContent ?? '' ).replace( /\s+/g, ' ' ).trim() ).filter( Boolean ).join( ' ' );
+			if ( ! own ) continue;
+			const style = getComputedStyle( element );
+			if ( element.getBoundingClientRect().height === 0 || style.display === 'none' || style.visibility === 'hidden' ) continue;
+			let unit = element;
+			while ( unit.parentElement && unit.parentElement !== scope && ! blocked( unit.parentElement ) ) {
+				const parentText = ( unit.parentElement.textContent ?? '' ).replace( /\s+/g, ' ' ).trim();
+				const unitText = ( unit.textContent ?? '' ).replace( /\s+/g, ' ' ).trim();
+				if ( parentText !== unitText ) break;
+				unit = unit.parentElement;
+			}
+			const signature = [ unit.tagName, unit.getAttribute( 'role' ) ?? '', unit.getAttribute( 'data-hook' ) ?? '', String( unit.className ), String( [ ...scope.children ].indexOf( unit ) ) ].join( '|' );
+			if ( seen.has( signature ) ) continue;
+			seen.add( signature );
+			nodes.push( { signature, text: ( unit.textContent ?? '' ).replace( /\s+/g, ' ' ).trim(), html: unit.outerHTML, before: Boolean( target.compareDocumentPosition( unit ) & Node.DOCUMENT_POSITION_PRECEDING ) } );
+		}
+		return nodes;
+	}, { targetSelector, fieldSelector, controlSelectors } ).catch( () => [] );
 }
 
 async function controlsVisible( page: Page, selectors: string[] ): Promise<boolean> {
@@ -305,10 +490,15 @@ export async function captureFiniteBootstrap(
 			else throw new Error( `Finite coverage mismatch: declared ${ declaredCount }, observed ${ byText.size }` );
 		}
 		if ( [ ...byText.values() ].some( item => collectionItemHasResource( item.html ) ) ) throw new Error( 'Resource-bearing collection items are not portable without localization' );
+		const statusObservations: StatusObservation[] = [];
+		const readStatus = async ( query: string, count: number ) => {
+			statusObservations.push( { query, count, nodes: await readCollectionStatus( page, targetSelector, field.selector, triggers ) } );
+		};
 		const orderQuery = sharedOrderQuery( [ ...byText.keys() ] );
 		if ( ! orderQuery ) throw new Error( 'Source order unsupported: no shared query matches every finite item' );
 		await drive( () => input.fill( orderQuery ) );
 		if ( await controlsVisible( page, triggers ) ) throw new Error( 'Alternate-mode unproven: category controls stayed visible during global search' );
+		await readStatus( orderQuery, byText.size );
 		const ordered = snapshotItems( await target.evaluate( element => element.outerHTML ) );
 		if ( ordered.length !== byText.size || new Set( ordered.map( item => item.text ) ).size !== byText.size || ordered.some( item => ! byText.has( item.text ) ) ) throw new Error( 'Source order incomplete: shared query did not return every finite item' );
 		evidence.items = ordered.map( ( item, index ) => ( { key: String( index ), text: item.text, html: byText.get( item.text )!.html, categories: byText.get( item.text )!.categories } ) );
@@ -332,6 +522,7 @@ export async function captureFiniteBootstrap(
 		for ( const query of queries ) {
 			const before = blocked;
 			await drive( () => input.fill( query ) );
+			await readStatus( query, evidence.items.filter( item => item.text.toLowerCase().includes( query.toLowerCase() ) ).length );
 			if ( await controlsVisible( page, triggers ) ) throw new Error( 'Alternate-mode unproven: category controls stayed visible during global search' );
 			const actual = snapshotItems( await target.evaluate( element => element.outerHTML ) );
 			const expected = evidence.items.filter( item => item.text.toLowerCase().includes( query.toLowerCase() ) ).map( item => item.key );
@@ -371,6 +562,8 @@ export async function captureFiniteBootstrap(
 		const cleared = snapshotItems( await target.evaluate( element => element.outerHTML ) ).map( item => item.text );
 		const restoredCategory = snapshots[ initialCategory ]!.items.map( item => item.text );
 		if ( JSON.stringify( cleared ) !== JSON.stringify( restoredCategory ) ) throw new Error( 'Unverified restoration: empty query did not return the selected category' );
+		await readStatus( '', restoredCategory.length );
+		const status = deriveObservedStatus( statusObservations, { emptyHtml: evidence.emptyHtml, universe: evidence.items.length, answerQuery: answerOnly } );
 		const blockedBeforeSentinel = blocked;
 		await page.evaluate( () => fetch( 'https://fixture.invalid/dla-finite-follow-up', { method: 'POST', body: '{"dla":"follow-up"}' } ).catch( () => null ) );
 		await settle();
@@ -396,6 +589,7 @@ export async function captureFiniteBootstrap(
 			resources: 'text-only',
 			order: { proof: 'universal-query', query: orderQuery, keys: sourceKeys, categoriesAgree, categoryKeys: categories.map( probe => probe.keys ) },
 			probes: { global: [ { query: orderQuery, keys: sourceKeys }, ...global.filter( probe => probe.query !== orderQuery ) ], categories },
+			...( status ? { status } : {} ),
 		};
 		evidence.network.replayedResponses = replayed;
 		evidence.network.blockedFollowUps = blocked;
