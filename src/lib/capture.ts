@@ -10,6 +10,7 @@ import { SectionSpecsStore } from './replicate/section-specs-store.js';
 import { MediaStubStore } from './resume-state/index.js';
 
 export interface CaptureProgress {
+	unit?: 'routes' | 'documents';
 	phase: 'discovering' | 'capturing' | 'finalizing' | 'complete';
 	current?: number;
 	total?: number;
@@ -19,6 +20,9 @@ export interface CaptureProgress {
 }
 
 export interface CaptureOptions {
+	/** Opt-in source-only review capture; browser rendering remains the default. */
+	acquisition?: 'browser' | 'http';
+	http?: import('./capture-http.js').HttpCaptureOptions;
 	url: string;
 	outputDir: string;
 	resume?: boolean;
@@ -151,6 +155,9 @@ export async function captureWebsite(
 	options: CaptureOptions,
 	dependencies: CaptureDependencies = defaultDependencies
 ): Promise< CaptureResult > {
+	if ( options.acquisition !== undefined && ! [ 'browser', 'http' ].includes( options.acquisition ) ) throw new Error( 'Unknown capture acquisition mode' );
+	if ( options.acquisition === 'http' ) ( await import( './capture-http.js' ) ).validateHttpCaptureOptions( options );
+	else if ( options.http !== undefined ) throw new Error( 'HTTP capture options require HTTP acquisition' );
 	const { onProgress } = options;
 	const startedAt = Date.now();
 	let phase = '';
@@ -178,6 +185,7 @@ export async function captureWebsite(
 		throw new UnsupportedCapturePlatformError(
 			`No adapter available for platform: ${ detection.platform }`
 		);
+	if ( options.acquisition === 'http' && ! adapter.acquisition ) throw new UnsupportedCapturePlatformError( `Platform ${ adapter.id } has no HTTP acquisition profile` );
 
 	progress( { phase: 'discovering', url: sourceUrl } );
 	const inventory = ( await adapter.discover( sourceUrl, {
@@ -192,6 +200,11 @@ export async function captureWebsite(
 			.filter( ( url ) => captureRouteKey( url ) !== sourceRoute ),
 	];
 	progress( { phase: 'capturing', current: 0, total: urls.length } );
+	if ( options.acquisition === 'http' ) {
+		const result = await ( await import( './capture-http.js' ) ).captureHttpWebsite( { options, sourceUrl, platform: adapter, urls, startedAt, progress, title: inventory.siteMeta?.title, discoveryDiagnostics: inventory.diagnostics ?? [] } );
+		if ( options.strict && ! result.complete ) throw new IncompleteCaptureError( result );
+		return result;
+	}
 
 	const { captureScreenshots } = await import( './screenshot/screenshotter.js' );
 	const { createReferenceCollector } = await import( './fidelity/reference.js' );
