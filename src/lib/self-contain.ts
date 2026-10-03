@@ -119,7 +119,7 @@ export function stripRemoteCssUrls( css: string ): string {
 				const reference = quoted ?? bare;
 				return reference && isRemoteAssetUrl( reference ) ? `url("${ UNAVAILABLE_CSS_URL }")` : match;
 			} )
-			.replace( /@import\s+(?:url\(\s*)?["']([^"']+)["'][^;]*;?/gi, ( match, reference ) =>
+			.replace( /@import\s*(?:url\(\s*)?["']([^"']+)["'][^;]*;?/gi, ( match, reference ) =>
 				isRemoteAssetUrl( reference ) ? `@import "${ UNAVAILABLE_CSS_URL }";` : match
 			)
 	);
@@ -135,7 +135,14 @@ function srcsetCandidates( srcset: string ): string[] {
 		const url = match[ 1 ].trim().replace( /\s/g, ( whitespace ) => encodeURIComponent( whitespace ) );
 		if ( url ) candidates.push( `${ url } ${ match[ 2 ] }` );
 	}
-	return candidates.length > 0 ? candidates : srcset.split( ',' ).map( ( candidate ) => candidate.trim() );
+	// A descriptorless <picture><source> can contain a comma in the URL itself
+	// (for example, an image-service rendition `rs=w:1160,h:720`). Splitting on
+	// every comma turns that single resource into two srcset candidates and the
+	// browser requests the truncated, absent `rs=w:1160` path. Candidate-list
+	// separators have following whitespace; preserve commas inside URL tokens.
+	return candidates.length > 0
+		? candidates
+		: srcset.split( /,(?=\s)/ ).map( ( candidate ) => candidate.trim() );
 }
 
 function withoutRemoteSrcset( srcset: string ): string {

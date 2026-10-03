@@ -131,7 +131,7 @@ try {
     "import { inspectSource, captureWebsite, checkFidelity, publishSite, type InspectOptions, type CaptureOptions, type FidelityCheckOptions, type PublishSiteOptions } from 'data-liberation/runtime';",
     "const inspect: InspectOptions = { rendered: false };",
     "const capture: CaptureOptions = { url: 'https://example.com', outputDir: './run' };",
-    "const compare: FidelityCheckOptions = { directory: './run' };",
+    "const compare: FidelityCheckOptions = { directory: './run', stage: 'capture', states: ['baseline'], widths: [390, 768, 1440] };",
     "const publish: PublishSiteOptions = { directory: './run', target: 'example' };",
     "async function workflow() { const a = await inspectSource(capture.url, inspect); const b = await captureWebsite(capture); const c = await checkFidelity(compare); const d = await publishSite(publish); return [a.complexity.band, b.summary.routesFailed, c.pass, d.liveUrl]; }",
   ].join('\n'));

@@ -2,6 +2,9 @@ import { describe, it, expect } from 'vitest';
 import { sanitizeSourceHtml } from './html-sanitize.js';
 
 describe('sanitizeSourceHtml', () => {
+  it('strips empty comments by default for skill-facing markup', () => {
+    expect(sanitizeSourceHtml('<p>one<!---->two</p>')).toBe('<p>onetwo</p>');
+  });
   it('strips <script> tags including content', () => {
     const input = '<p>Hello</p><script>alert(1)</script><p>World</p>';
     const out = sanitizeSourceHtml(input);

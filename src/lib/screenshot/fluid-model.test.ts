@@ -27,6 +27,9 @@ const headerOffset = at( [
 ] );
 
 describe( 'learnFluidModel', () => {
+	it( 'does not project negative-offset width lines onto an unbounded viewport', () => {
+		expect( learnFluidModel( at( [ [ 1280, 353 ], [ 1440, 407 ], [ 1920, 567 ] ] ) ).kind ).toBe( 'breakpoint' );
+	} );
 	it( 'learns the floored model observed on a real Wix site', () => {
 		// Measured from www.roeeby.com: full-bleed image, runtime-written widths.
 		const model = learnFluidModel(
@@ -318,6 +321,41 @@ describe( 'breakpointsFrom', () => {
 } );
 
 describe( 'learnSegmentedFluidModel', () => {
+	it( 'keeps a measured narrow regime while fitting a bounded desktop gallery image', () => {
+		const samples = at( [
+			[ 390, 294 ], [ 600, 287 ], [ 768, 281 ], [ 1024, 287 ],
+			[ 1280, 364 ], [ 1440, 412 ], [ 1536, 441 ], [ 1840, 532 ], [ 1920, 556 ],
+		] );
+		const segmented = learnSegmentedFluidModel( samples, { holdNarrowForBoundedAffine: true } );
+		expect( segmented ).not.toBeNull();
+		const desktop = segmented!.segments.at( -1 )!;
+		expect( desktop.model.kind ).toBe( 'affine' );
+		expect( desktop.minWidth ).toBeGreaterThan( 768 );
+		expect( desktop.model.kind === 'affine' && desktop.model.slope * desktop.minWidth! + desktop.model.intercept ).toBeGreaterThan( 0 );
+		for ( const [ width, expected ] of [ [ 1600, 460 ], [ 1728, 498 ] ] ) {
+			if ( desktop.model.kind !== 'affine' ) throw new Error( 'expected affine model' );
+			expect( Math.abs( desktop.model.slope * width + desktop.model.intercept - expected ) ).toBeLessThanOrEqual( 2 );
+		}
+	} );
+	it( 'keeps an offset grid fluid only above its observed positive-width breakpoint', () => {
+		const samples = at( [
+			[ 390, 253 ], [ 600, 253 ], [ 768, 253 ], [ 1024, 268 ],
+			[ 1280, 353 ], [ 1440, 407 ], [ 1536, 439 ], [ 1840, 540 ], [ 1920, 567 ],
+		] );
+		const segmented = learnSegmentedFluidModel( samples );
+		expect( segmented?.segments ).toHaveLength( 2 );
+		expect( segmented!.segments[ 0 ]!.maxWidth ).toBeGreaterThan( 768 );
+		expect( segmented!.segments[ 0 ]!.maxWidth ).toBeLessThan( 1024 );
+		const desktop = segmented!.segments[ 1 ]!;
+		expect( desktop ).toMatchObject( { maxWidth: null, model: { kind: 'affine' } } );
+		expect( desktop.model.kind === 'affine' && desktop.model.slope * desktop.minWidth! + desktop.model.intercept ).toBeGreaterThan( 0 );
+		const css = segmentedCss( '[data-dla-fluid-segment="grid"]', 'width', segmented!.segments );
+		expect( css ).toContain( `@media (min-width:${ desktop.minWidth }px)` );
+		for ( const [ width, expected ] of [ [ 1600, 460 ], [ 1728, 503 ] ] ) {
+			if ( desktop.model.kind !== 'affine' ) throw new Error( 'expected affine model' );
+			expect( Math.abs( desktop.model.slope * width + desktop.model.intercept - expected ) ).toBeLessThanOrEqual( 2 );
+		}
+	} );
 	// Measured from quinn-fluid-demo.squarespace.com: the "PORTFOLIO" headline
 	// is scaled text the runtime sizes to fill its container, and the container
 	// is 88% of a phone viewport but 96% of a desktop one, saturating at 1459px
@@ -424,15 +462,15 @@ describe( 'learnSegmentedFluidModel', () => {
 	it( 'emits nested media rules', () => {
 		const segmented = learnSegmentedFluidModel( scaledHeadline )!;
 		const css = segmentedCss( '[data-dla-fluid-segment="0"]', 'font-size', segmented.segments );
-		expect( css ).toContain( '@media (max-width:767px) {\n[data-dla-fluid-segment="0"] { font-size: 21.42vw !important; }\n}' );
-		expect( css ).toContain( '@media (min-width:768px) {\n[data-dla-fluid-segment="0"] { font-size: min(355.4px, 23.38vw) !important; }\n}' );
+		expect( css ).toContain( '@media (max-width:767px) {\n:is(#dla-fluid-specificity, [data-dla-fluid-segment="0"]) { font-size: 21.42vw !important; }\n}' );
+		expect( css ).toContain( '@media (min-width:768px) {\n:is(#dla-fluid-specificity, [data-dla-fluid-segment="0"]) { font-size: min(355.4px, 23.38vw) !important; }\n}' );
 	} );
 
 	it( 'emits the frozen tail as a media-scoped constant', () => {
 		const segmented = learnSegmentedFluidModel( headerOffset )!;
 		const css = segmentedCss( '[data-dla-fluid-segment="7"]', 'padding-top', segmented.segments );
-		expect( css ).toContain( '@media (max-width:1023px) {\n[data-dla-fluid-segment="7"] { padding-top: calc(11.87vw + 38.08px) !important; }\n}' );
-		expect( css ).toContain( '@media (min-width:1024px) and (max-width:1919px) {\n[data-dla-fluid-segment="7"] { padding-top: calc(4.13vw + 19.5px) !important; }\n}' );
-		expect( css ).toContain( '@media (min-width:1920px) {\n[data-dla-fluid-segment="7"] { padding-top: 89px !important; }\n}' );
+		expect( css ).toContain( '@media (max-width:1023px) {\n:is(#dla-fluid-specificity, [data-dla-fluid-segment="7"]) { padding-top: calc(11.87vw + 38.08px) !important; }\n}' );
+		expect( css ).toContain( '@media (min-width:1024px) and (max-width:1919px) {\n:is(#dla-fluid-specificity, [data-dla-fluid-segment="7"]) { padding-top: calc(4.13vw + 19.5px) !important; }\n}' );
+		expect( css ).toContain( '@media (min-width:1920px) {\n:is(#dla-fluid-specificity, [data-dla-fluid-segment="7"]) { padding-top: 89px !important; }\n}' );
 	} );
 } );

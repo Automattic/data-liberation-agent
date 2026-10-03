@@ -106,12 +106,12 @@ export function rewriteMediaUrls(
     const safe = escapeRegex(source);
     // Longest-first only removes the mangle for transform urls the candidate
     // scan reached. A transform url on any other surface - a `data-` attribute,
-    // a `<source src>`, a `<video poster>` - never enters `replacements`, so the
-    // shorter base entry is still free to match its prefix and leave
-    // `<local>/v1/fill/.../img.jpg` behind. A mapped url followed by `/` is a
-    // longer path, so it names a different resource: keeping the remote url is
-    // correct there, while a mangled local path is a 404.
-    return `${safe}(?!/)`;
+    // a `<source src>`, a `<video poster>` - never enters `replacements`, so
+    // the shorter base entry would still be free to match its prefix. The URL
+    // terminator lookahead refuses every such partial match: a mapped url
+    // continued by any URL character names a longer, different resource, and
+    // splicing the local path onto its tail would leave an absent file.
+    return `${safe}${URL_TERMINATOR_LOOKAHEAD}`;
   });
   // Match the original input once: a relative source alias must not match
   // the suffix of a local path emitted by an earlier replacement.
@@ -266,3 +266,18 @@ function parseHttpUrl(source: string): URL | undefined {
 function escapeRegex(input: string): string {
   return input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
+
+// A reference names a complete URL only where a URL terminator follows it.
+// Image runtimes derive rendition URLs by appending to the bare asset URL
+// (`…/IMG_2019.JPG/:/` → `…/IMG_2019.JPG/:/rs=w:1160,h:720`), so the bare URL
+// occurs in markup as a string-prefix of every one of its renditions. Any
+// rewrite — to a local path, a blank, or about:blank — that splices the
+// reference at such a position mangles the rendition into a URL no file
+// answers (the issue #398 absent `/rs=w:1160` hero). Only rewrite where the
+// match is the whole URL: end of string, whitespace, quote, tag/CSS boundary,
+// or an entity-encoded quote (attribute JSON encodes both the quote and any
+// `&` inside the URL, so the terminator may itself be double-encoded).
+// Everything else — letters, `/`, `?`, `&`, `:`, `,`, `;`, `=` — continues the
+// longer URL.
+export const URL_TERMINATOR_LOOKAHEAD =
+  '(?=$|[\\s"\'()<>]|&(?:amp;)?(?:quot|apos|#3[49]|#x2[27]);?)';

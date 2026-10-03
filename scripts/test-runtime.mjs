@@ -19,10 +19,13 @@ const html = `<!doctype html><html><head><meta charset="utf-8"><title>Runtime fi
 <script>const app=document.createElement('section');app.dataset.booking='true';app.textContent='Booking surface';document.querySelector('main').append(app)</script>
 </body></html>`;
 
+let liveHtml = html;
+let originRequests = 0;
 const server = createServer((request, response) => {
+  originRequests++;
   response.setHeader('x-runtime-fixture', 'true');
   response.setHeader('content-type', request.url === '/sitemap.xml' ? 'application/xml' : 'text/html; charset=utf-8');
-  response.end(request.url === '/sitemap.xml' ? '<urlset/>' : html);
+  response.end(request.url === '/sitemap.xml' ? '<urlset/>' : liveHtml);
 });
 await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
 const url = `http://localtest.me:${server.address().port}/`;
@@ -34,10 +37,25 @@ try {
     discover: async (source) => ({ urls: [{ url: source }] }),
     inspection: [{ capability: 'booking', selector: '[data-booking]', evidence: 'Fixture application surface' }],
     liberation: { cleanupRules: [{ id: 'fixture-credit', category: 'source-attribution', selector: '.provider-credit' }] },
+    acquisition: { id: 'runtime-fixture-http', variants: [{ id: 'desktop' }], prepare: html => ({ html }) },
   });
   assert.equal((await runtime.detectPlatform(url)).platform, 'runtime-fixture');
 
   if (browserless) {
+    assert.throws(() => createRequire(bundleUrl).resolve('playwright'), { code: 'MODULE_NOT_FOUND' });
+    const platform = runtime.resolvePlatform('runtime-fixture');
+    const acquisition = await runtime.acquireHttpDocuments({ url, urls: [url], outputDir: join(outputDir, 'source-acquisition'), profile: platform.acquisition, collectAssets: true });
+    assert.deepEqual(acquisition.coverage, { routes: 1, requiredDocuments: 1, acquired: 1, browserRequired: 0, failed: 0 });
+    assert.equal(acquisition.verification.rendering, 'unverified');
+    assert.equal(acquisition.resources.failures, 0);
+    const response = await readFile(join(outputDir, 'source-acquisition', acquisition.documents[0].rawPath), 'utf8');
+    assert.equal(response, liveHtml);
+    const materializedPath = runtime.materializeHttpDocuments({ outputDir: join(outputDir, 'source-acquisition'), sourceUrl: url, platform: platform.id, desktopVariant: 'desktop' });
+    const materialized = JSON.parse(await readFile(materializedPath, 'utf8'));
+    assert.equal(materialized.routes.length, 1);
+    assert.equal(materialized.summary.complete, false);
+    assert.equal(materialized.sourceProfile.geometry, 'unverified');
+    assert.equal(materialized.acquisition.verification.rendering, 'unverified');
     assert.throws(() => createRequire(bundleUrl).resolve('playwright'), { code: 'MODULE_NOT_FOUND' });
     const http = await runtime.inspectSource(url, { rendered: false, sampleLimit: 1 });
     assert.equal(http.source.platform.id, 'runtime-fixture');
@@ -50,7 +68,10 @@ try {
     await writeFile(join(outputDir, 'capture-receipt.json'), JSON.stringify({ source: { url }, websiteRoot: 'website', routes: [{ url, path: 'website/index.html' }] }));
     // A rejected browser operation must release resources and let this process
     // terminate normally, rather than retaining an already-started web server.
-    await assert.rejects(runtime.checkFidelity({ directory: outputDir }), /playwright/);
+    const legacy = await runtime.checkFidelity({ directory: outputDir });
+    assert.equal(legacy.status, 'unproven');
+    assert.equal(legacy.pass, false);
+    await assert.rejects(runtime.checkFidelity({ stage: 'drift', directory: outputDir }), /playwright/);
   } else {
     const inspection = await runtime.inspectSource(url, { sampleLimit: 1 });
     const evidence = JSON.stringify({ issues: inspection.issues, rendered: inspection.rendered });
@@ -74,16 +95,82 @@ try {
     assert.ok(!artifact.includes('Unwanted advertisement'));
     assert.ok(!artifact.includes('Powered by fixture'));
 
-    const comparison = await runtime.checkFidelity({ directory: outputDir, widths: [1440], settleMs: 100 });
-    assert.equal(comparison.pass, true, JSON.stringify(comparison.scores));
-    assert.ok(comparison.cleanup.source.some((report) => report.removed >= 2));
+    liveHtml = html.replace('Runtime fixture', 'Changed live source').replace('Owner website', 'New recommendations');
+    const requestsBeforeReplay = originRequests;
+    const comparison = await runtime.checkFidelity({ directory: outputDir, settleMs: 100 });
+    assert.equal(comparison.pass, true, JSON.stringify(comparison));
+    assert.equal(comparison.stage, 'capture');
+    assert.equal(comparison.status, 'proven');
+    const reference = JSON.parse(await readFile(join(outputDir, 'fidelity-reference.json'), 'utf8'));
+    assert.deepEqual(reference.scope.widths, [390, 768, 1440]);
+    assert.equal(reference.entries.length, 3);
+    assert.equal(comparison.scores.length, 3);
+    assert.equal(originRequests, requestsBeforeReplay, 'Frozen replay must never request origin');
     await writeFile(artifactPath, artifact.replaceAll(ownerText.trim(), ''));
     const damaged = await runtime.checkFidelity({ directory: outputDir, widths: [1440], settleMs: 100 });
     assert.equal(damaged.pass, false, 'Loss of retained owner content must fail');
+    assert.equal(damaged.stage, 'capture');
+    assert.equal(damaged.status, 'failed');
+    assert.ok(damaged.scores.some((score) => score.stage === 'capture' && !score.pass));
+    assert.equal(originRequests, requestsBeforeReplay);
     await writeFile(artifactPath, artifact);
+    const candidate = createServer((_request, response) => {
+      response.setHeader('content-type', 'text/html; charset=utf-8');
+      response.end(artifact.replaceAll(ownerText.trim(), ''));
+    });
+    await new Promise((resolve) => candidate.listen(0, '127.0.0.1', resolve));
+    try {
+      const materialization = await runtime.checkFidelity({ directory: outputDir, candidateUrl: `http://127.0.0.1:${candidate.address().port}`, settleMs: 100 });
+      assert.equal(materialization.stage, 'materialization');
+      assert.equal(materialization.status, 'failed');
+      assert.ok(materialization.scores.some((score) => score.stage === 'materialization' && !score.pass));
+      assert.equal(originRequests, requestsBeforeReplay);
+      await writeFile(artifactPath, artifact.replaceAll(ownerText.trim(), ''));
+      const staleCapture = await runtime.checkFidelity({ directory: outputDir, candidateUrl: `http://127.0.0.1:${candidate.address().port}`, settleMs: 100 });
+      assert.equal(staleCapture.status, 'unproven');
+      assert.equal(staleCapture.pass, false);
+      assert.ok(staleCapture.pending.every((item) => item.stage === 'materialization' && /digest mismatch/.test(item.reason)));
+      await writeFile(artifactPath, artifact);
+    } finally {
+      candidate.closeAllConnections();
+      await new Promise((resolve) => candidate.close(resolve));
+    }
+    const referencePath = join(outputDir, 'fidelity-reference.json');
+    const referenceBytes = await readFile(referencePath, 'utf8');
+    for (const change of [
+      (value) => { value.receipt.sha256 = 'stale'; },
+      (value) => { value.entries = value.entries.filter((entry) => entry.viewport !== 768); },
+      (value) => { value.entries.push(structuredClone(value.entries[0])); },
+    ]) {
+      const value = JSON.parse(referenceBytes);
+      change(value);
+      await writeFile(referencePath, JSON.stringify(value));
+      const unproven = await runtime.checkFidelity({ directory: outputDir, settleMs: 100 });
+      assert.equal(unproven.status, 'unproven');
+      assert.equal(unproven.pass, false);
+      assert.ok(unproven.pending.length > 0);
+    }
+    await writeFile(referencePath, referenceBytes);
+    const states = await runtime.checkFidelity({ directory: outputDir, widths: [1440], states: ['dialog', 'zoom', 'motion'] });
+    assert.equal(states.status, 'unproven');
+    assert.equal(states.pass, false);
+    assert.deepEqual(states.pending.map((item) => item.state), ['dialog', 'zoom', 'motion']);
+    await rm(referencePath);
+    const missing = await runtime.checkFidelity({ directory: outputDir });
+    assert.equal(missing.status, 'unproven');
+    assert.equal(missing.pass, false);
+    await writeFile(referencePath, referenceBytes);
+    assert.equal(originRequests, requestsBeforeReplay, 'No frozen failure or pending evidence may revisit origin');
   }
 
   const canonical = await readFile(join(outputDir, 'website', 'index.html'), 'utf8');
+  const preview = await runtime.serveCapture(outputDir);
+  try {
+    assert.equal(await (await fetch(preview.urlForPage('index.html'))).text(), canonical);
+  } finally {
+    await preview.close();
+  }
+  await assert.rejects(fetch(preview.url));
   let staging;
   runtime.registerPublishTarget({
     name: 'fixture-target',

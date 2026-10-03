@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer, type Server as HttpServer } from 'node:http';
 import { captureScreenshots } from './screenshotter.js';
+import { sameOriginPageAnchors } from './unscheduled-anchors.js';
 
 // validateOutputDir rejects paths outside cwd, so use a cwd-local .tmp-test dir.
 const TMP_ROOT = join(process.cwd(), '.tmp-test');
@@ -24,6 +25,13 @@ const nestedDocHtml = (title: string) =>
   `<h1>${title}</h1><div style="height:3000px">tall</div>` +
   `<script>for(var i=0;i<10;i++){var b=document.createElement('body');b.textContent='copy'+i;document.body.appendChild(b);}</script>` +
   '</body></html>';
+
+it('does not probe linked document and image assets as missing HTML routes', () => {
+  expect(sameOriginPageAnchors(
+    '<a href="/meeting">Join</a><a href="/_files/flyer.docx?dn=Flyer.docx">Flyer</a><a href="/photos/hero.avif">Hero</a>',
+    'https://example.com/'
+  )).toEqual(['https://example.com/meeting']);
+});
 
 describe.skipIf(process.env.SKIP_BROWSER_TESTS)('screenshot smoke (real Chromium)', () => {
   it('captures two pages end-to-end', async () => {
@@ -123,9 +131,10 @@ describe.skipIf(process.env.SKIP_BROWSER_TESTS)('screenshot smoke (real Chromium
   it('resolves server-redirected routes to their target and still reports post-load drift', async () => {
     mkdirSync(TMP_ROOT, { recursive: true });
     const pages: Record<string, string> = {
-      '/': tallHtml('HOME').replace('<h1>', '<a href="/old">old</a><a href="/temp">temp</a><a href="/new">new</a><h1>'),
+      '/': tallHtml('HOME').replace('<h1>', '<a href="/old">old</a><a href="/temp">temp</a><a href="/new">new</a><a href="/unscheduled">outside</a><a href="/absent">absent</a><a href="/missing-html">missing HTML</a><h1>'),
       '/new': tallHtml('NEW'),
       '/target': tallHtml('TARGET'),
+      '/missing-html': tallHtml('NOT CAPTURED'),
       // A client-routed control navigating the page away after load.
       '/spa': tallHtml('SPA').replace('</body>', '<script>addEventListener("load",()=>history.pushState({},"","/new"))</script></body>'),
     };
@@ -133,6 +142,7 @@ describe.skipIf(process.env.SKIP_BROWSER_TESTS)('screenshot smoke (real Chromium
       '/old': [301, '/new'],
       '/temp': [302, '/new'],
       '/elsewhere': [301, '/target'],
+      '/unscheduled': [302, 'https://destination.example/landing?secret=do-not-store'],
     };
     const server: HttpServer = createServer((req, res) => {
       const path = (req.url || '/').split('?')[0];
@@ -173,6 +183,10 @@ describe.skipIf(process.env.SKIP_BROWSER_TESTS)('screenshot smoke (real Chromium
       expect(existsSync(join(outputDir, 'html', 'temp.html'))).toBe(false);
       expect(failures.filter((f) => /route drift/.test(f.error)).map((f) => f.url)).toEqual([`${origin}/spa`]);
       expect(manifest.entries[`${origin}/spa`].html).toBeUndefined();
+      expect(manifest.entries[`${origin}/unscheduled`]).toMatchObject({ externalRedirect: true });
+      expect(manifest.entries[`${origin}/absent`]).toMatchObject({ sourceAbsentStatus: 404 });
+      expect(manifest.entries[`${origin}/missing-html`]).toBeUndefined();
+      expect(JSON.stringify(manifest)).not.toContain('secret=');
     } finally {
       await new Promise<void>((r) => server.close(() => r()));
       rmSync(outputDir, { recursive: true, force: true });

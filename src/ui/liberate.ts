@@ -11,6 +11,7 @@ import type { UnresolvedAnchor } from '../lib/capture.js';
 import { siteOutputDir } from '../lib/paths.js';
 import { startStaticServer } from '../lib/replicate/local-site/static-server.js';
 import type { StaticServer } from '../lib/replicate/local-site/static-server.js';
+import { authorPortableMotion, type PortableMotionRecipe } from '../lib/portable-motion.js';
 
 export interface LiberateOptions {
 	url: string;
@@ -23,6 +24,8 @@ export interface LiberateOptions {
 	serve?: boolean;
 	/** Learn responsive sizing across widths rather than freezing one. Default: true. */
 	learnFluid?: boolean;
+	/** Optional authored runtime; installed only after live source/portable behavior comparison passes. */
+	portableMotion?: PortableMotionRecipe;
 	log?: ( message: string ) => void;
 }
 
@@ -62,6 +65,10 @@ export async function liberateSite( options: LiberateOptions ): Promise< Liberat
 	} );
 
 	const websiteDir = join( outputDir, 'website' );
+	if ( options.portableMotion && capture.complete ) {
+		log( '[liberate] verifying authored portable motion against the live source' );
+		await authorPortableMotion( outputDir, options.portableMotion );
+	}
 	return {
 		outputDir,
 		websiteDir,

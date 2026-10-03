@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { findAdapter } from '../adapters/index.js';
 import type { PlatformAdapter } from '../types.js';
@@ -194,6 +194,12 @@ export async function captureWebsite(
 	progress( { phase: 'capturing', current: 0, total: urls.length } );
 
 	const { captureScreenshots } = await import( './screenshot/screenshotter.js' );
+	const { createReferenceCollector } = await import( './fidelity/reference.js' );
+	const reference = createReferenceCollector( outputDir, sourceUrl, urls, {
+		cleanupPolicy: ( await import( './source-cleanup.js' ) ).cleanupPolicy( adapter.liberation?.cleanupRules ),
+		removeSelectors: adapter.liberation?.removeSelectors,
+		prepareCapture: adapter.liberation?.prepare,
+	} );
 	const screenshotResult = await captureScreenshots( {
 		urls,
 		outputDir,
@@ -204,7 +210,12 @@ export async function captureWebsite(
 		removeSelectors: adapter.liberation?.removeSelectors,
 		cleanupPolicy: (await import('./source-cleanup.js')).cleanupPolicy(adapter.liberation?.cleanupRules),
 		prepareCapture: adapter.liberation?.prepare,
+		resolveClientRedirect: adapter.liberation?.resolveClientRedirect,
 		beforeSerialize: adapter.liberation?.beforeSerialize,
+		observeSource: reference.observe,
+		...( adapter.liberation?.canonicalizeHtml
+			? { canonicalizeHtml: adapter.liberation.canonicalizeHtml.bind( adapter.liberation ) }
+			: {} ),
 		...( adapter.liberation?.responsiveImages
 			? { collectResponsiveImages: adapter.liberation.responsiveImages.bind( adapter.liberation ) }
 			: {} ),
@@ -238,7 +249,24 @@ export async function captureWebsite(
 		failures,
 		discoveryDiagnostics: inventory.diagnostics ?? [],
 	} );
+	// A portable homepage preview is a deliverable, not optional capture evidence.
+	// Its failure must not turn an otherwise usable website into a failed capture.
+	const { captureSitePreview } = await import( './site-preview.js' );
+	let preview;
+	try {
+		preview = { status: 'captured', ...await captureSitePreview( join( outputDir, 'website' ) ) };
+	} catch ( error ) {
+		preview = { status: 'failed', reason: error instanceof Error ? error.message : String( error ) };
+	}
+	const receipt = JSON.parse( readFileSync( captureReceiptPath, 'utf8' ) );
+	receipt.preview = preview;
+	writeFileSync( captureReceiptPath, `${ JSON.stringify( receipt, null, 2 ) }\n` );
 	const unresolvedAnchors = readUnresolvedAnchors( outputDir );
+	// Diagnosed dynamic pages need causal evidence, not an author-authored site
+	// recipe. Discovery remains explicit untranslated evidence until a portable
+	// implementation passes the independent source fidelity gate.
+	await ( await import( './behavior-discovery.js' ) ).discoverCapturedBehavior( outputDir );
+	reference.finalize( captureReceiptPath );
 	const complete =
 		summary.routesFailed === 0 &&
 		unresolvedAnchors.every( ( anchor ) => anchor.reason !== 'target route was not captured' );

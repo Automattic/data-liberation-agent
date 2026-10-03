@@ -1,4 +1,4 @@
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { SectionSpec } from './replicate/section-extract.js';
@@ -27,10 +27,17 @@ vi.mock( './screenshot/screenshotter.js', () => ( {
 	captureScreenshots: captureScreenshotsMock,
 } ) );
 
+vi.mock( './site-preview.js', () => ( {
+	captureSitePreview: vi.fn( async () => ( { path: 'website/site-preview.png', width: 1200, height: 900, origin: 'portable_render' } ) ),
+} ) );
+
 vi.mock( './capture-export.js', () => ( {
-	exportWebsiteCapture: vi.fn( ( { outputDir }: { outputDir: string } ) =>
-		join( outputDir, 'capture-receipt.json' )
-	),
+	exportWebsiteCapture: vi.fn( ( { outputDir }: { outputDir: string } ) => {
+		mkdirSync( outputDir, { recursive: true } );
+		const path = join( outputDir, 'capture-receipt.json' );
+		writeFileSync( path, JSON.stringify( { source: { url: 'https://example.com/' }, routes: [] } ) );
+		return path;
+	} ),
 } ) );
 
 vi.mock( './media-fetch/media.js', () => ( {
@@ -47,6 +54,7 @@ vi.mock( './media-fetch/media.js', () => ( {
 
 import { captureWebsite, downloadCaptureSectionMedia, IncompleteCaptureError } from './capture.js';
 import { exportWebsiteCapture } from './capture-export.js';
+import { captureSitePreview } from './site-preview.js';
 
 const root = join( process.cwd(), '.tmp-test', 'capture-section-media' );
 const sourceUrl = 'https://example.com/';
@@ -160,9 +168,19 @@ describe( 'captureWebsite completeness', () => {
 		rmSync( root, { recursive: true, force: true } );
 	} );
 
+	it( 'records preview failure without failing an otherwise complete capture', async () => {
+		vi.mocked( captureSitePreview ).mockRejectedValueOnce( new Error( 'Preview browser failed' ) );
+		const result = await captureWebsite( { url: sourceUrl, outputDir: root }, {
+			findAdapter: () => ( { id: 'generic', platform: 'generic', discover: async () => ( { urls: [] } ), extract: async () => ( { title: '', content: '' } ) } ),
+		} );
+		expect( result.complete ).toBe( true );
+		expect( JSON.parse( readFileSync( result.captureReceiptPath, 'utf8' ) ).preview ).toEqual( { status: 'failed', reason: 'Preview browser failed' } );
+	} );
+
 	it( 'says the capture is incomplete when exported output links to uncaptured routes', async () => {
 		vi.mocked( exportWebsiteCapture ).mockImplementationOnce( ( { outputDir } ) => {
 			mkdirSync( outputDir, { recursive: true } );
+			writeFileSync( join( outputDir, 'capture-receipt.json' ), JSON.stringify( { source: { url: sourceUrl }, routes: [] } ) );
 			writeFileSync(
 				join( outputDir, 'diagnostics.json' ),
 				JSON.stringify( {
@@ -227,6 +245,7 @@ describe( 'captureWebsite completeness', () => {
 	it( 'rejects in strict mode so programmatic callers fail closed', async () => {
 		vi.mocked( exportWebsiteCapture ).mockImplementationOnce( ( { outputDir } ) => {
 			mkdirSync( outputDir, { recursive: true } );
+			writeFileSync( join( outputDir, 'capture-receipt.json' ), JSON.stringify( { source: { url: sourceUrl }, routes: [] } ) );
 			writeFileSync(
 				join( outputDir, 'diagnostics.json' ),
 				JSON.stringify( {

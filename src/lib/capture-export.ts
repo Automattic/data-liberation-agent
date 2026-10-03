@@ -4,16 +4,33 @@ import {
 	existsSync,
 	mkdirSync,
 	readFileSync,
+	readdirSync,
 	rmSync,
 	statSync,
 	writeFileSync,
 } from 'node:fs';
 import { basename, dirname, extname, join, relative, resolve, sep } from 'node:path';
 import * as cheerio from 'cheerio';
-import type { AnyNode, Element } from 'domhandler';
+import { identityLogoReferences } from './identity-resources.js';
+import type { Element } from 'domhandler';
 import { escapeHtmlAttr } from './html-escape.js';
-import { appendScrollDrivenAnimations } from './scroll-driven-animations.js';
-import { scopeCss } from './replicate/css-scope.js';
+import { allocateCaptureRoutes, normalizedUrl } from './capture-export-routes.js';
+import {
+	indexPortableMediaReferences,
+	mediaReferenceMatched,
+	planPortableMediaFamilies,
+	type PortableMediaCandidate,
+} from './portable-media-plan.js';
+import { isElementNode, isYuiRuntimeId, YUI_RUNTIME_ID } from './html-nodes.js';
+import {
+	assembleResponsiveCapture,
+	DEFAULT_SWITCH_WIDTH,
+	DESKTOP_DOCUMENT_CLASS,
+	MOBILE_DOCUMENT_CLASS,
+	projectResponsiveIdentityCss,
+	routePhoneDocumentFragments,
+	type ResponsiveVariantEvidence,
+} from './responsive-assembly.js';
 import { SectionSpecsStore } from './replicate/section-specs-store.js';
 import { MediaStubStore } from './resume-state/index.js';
 import {
@@ -26,21 +43,25 @@ import {
 	isSourceCaptureUrl,
 } from './screenshot/absent-document.js';
 import { isInlineUrl, selfContainWebsite } from './self-contain.js';
-import { wireCapturedDialogs } from './static-dialogs.js';
-import { rewriteMediaUrls } from './streaming/media-url-rewrite.js';
+import { wireCapturedDialogs, wireCapturedRouteNavigation } from './static-dialogs.js';
+import { rewriteMediaUrls, URL_TERMINATOR_LOOKAHEAD } from './streaming/media-url-rewrite.js';
 import {
 	INTERACTION_STATES_SCHEMA,
 	LEGACY_INTERACTION_STATES_SCHEMA,
 	type InteractionStatesReport,
 } from './screenshot/interaction-capture.js';
 import { SCROLL_STATES_SCHEMA, type ScrollStatesReport } from './screenshot/scroll-state-capture.js';
-import { FLUID_RULES_STYLE_ATTRIBUTE } from './screenshot/fluid-capture.js';
 import {
 	isAudioLink,
+	isDocumentDownloadLink,
 	svgUseDocumentReferences,
 	type CapturedResourceManifest,
 } from './screenshot/resource-capture.js';
 import { isSourcePromotion } from './source-cleanup.js';
+import { sameOriginPageAnchors } from './screenshot/unscheduled-anchors.js';
+import { inspectSourceInteractivity, SOURCE_INTERACTIVITY_SCHEMA, type SourceInteractivityPage } from './source-interactivity.js';
+import { loadHttpExportInput, type HttpExportInput } from './http-export-input.js';
+import { loadEmbeddedDocuments, projectEmbeddedRegions, mergeResponsiveEmbeddedRegions } from './embedded-documents.js';
 
 export const CAPTURE_RECEIPT_SCHEMA = 'data-liberation/capture-receipt/v1';
 export const SOURCE_PROFILE_SCHEMA = 'data-liberation/source-profile/v1';
@@ -123,8 +144,12 @@ interface CaptureManifestEntry {
 	cleanup?: import('./screenshot/manifest-queue.js').ManifestEntry['cleanup'];
 	slug?: string;
 	html?: string;
+	mobileHtml?: string;
 	/** Same-origin route the server redirected this URL to; see ManifestEntry. */
 	redirectedTo?: string;
+	/** Bounded source inspection of a linked route absent from the capture schedule. */
+	externalRedirect?: boolean;
+	sourceAbsentStatus?: 404 | 410;
 	sections?: string;
 	interactions?: InteractionStatesReport;
 	scrollStates?: ScrollStatesReport;
@@ -141,6 +166,8 @@ interface ScreenshotManifest {
 }
 
 interface ExportCaptureOptions {
+	input?: HttpExportInput;
+	embeddedDocuments?: boolean;
 	outputDir: string;
 	sourceUrl: string;
 	platform: string;
@@ -179,14 +206,7 @@ interface AssetEvidenceRecord {
 	references: AssetEvidenceReference[];
 }
 
-interface MediaCandidate {
-	sourceUrl: string;
-	localPath: string;
-	references: string[];
-	exactReferences: string[];
-	bytes: number;
-	dimension: number;
-}
+type MediaCandidate = PortableMediaCandidate;
 
 interface CaptureEntry {
 	slug: string;
@@ -204,6 +224,7 @@ interface CaptureEntry {
 	interactions?: InteractionStatesReport;
 	scrollStates?: ScrollStatesReport;
 	styleHoistContext: StyleHoistContext;
+	sourceInteractivity: SourceInteractivityPage;
 }
 
 function isUsableSectionEvidence( sections: unknown ): sections is Record< string, unknown >[] {
@@ -251,9 +272,6 @@ function uniqueAssetPath(
 	) }-${ contentHash.slice( 0, 12 ) }${ extension }`;
 }
 
-const MAX_PORTABLE_MEDIA_BYTES = 5 * 1024 * 1024;
-const MAX_PORTABLE_RESPONSIVE_MEDIA_BYTES = 8 * 1024 * 1024;
-const MAX_PORTABLE_MEDIA_DIMENSION = 2048;
 const MAX_PORTABLE_MEDIA_TOTAL_BYTES = 160 * 1024 * 1024;
 const STYLE_HOIST_DIAGNOSTIC_SAMPLE_BYTES = 31 * 1024;
 const TRANSPARENT_IMAGE_DATA_URL = 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=';
@@ -288,74 +306,6 @@ function pathWithin( root: string, candidate: string ): boolean {
 	return rel === '' || ( ! rel.startsWith( `..${ sep }` ) && rel !== '..' );
 }
 
-function normalizedUrl( url: string ): string {
-	const parsed = new URL( url );
-	parsed.hash = '';
-	parsed.search = '';
-	parsed.pathname = parsed.pathname.replace( /\/$/, '' ) || '/';
-	return parsed.href;
-}
-
-function isOriginRootPath( pathname: string ): boolean {
-	return ( pathname.replace( /\/$/, '' ) || '/' ) === '/';
-}
-
-function capturedOriginRoot( urls: string[], origin: string ): boolean {
-	return urls.some( ( url ) => {
-		try {
-			const route = new URL( url );
-			return route.origin === origin && isOriginRootPath( route.pathname );
-		} catch {
-			return false;
-		}
-	} );
-}
-
-function routeOutputPath(
-	url: string,
-	sourceUrl: string,
-	entrypointUrl: string,
-	originRootCaptured: boolean
-): string {
-	if ( url === entrypointUrl && ! originRootCaptured ) return 'index.html';
-	const route = new URL( url );
-	const source = new URL( sourceUrl );
-	// Artifact paths must retain URL percent-encoding. Decoding turns a valid
-	// route such as `%26` into a different filesystem path and breaks route maps.
-	let pathname = route.pathname;
-	for ( const segment of pathname.split( '/' ) ) {
-		let decoded = segment;
-		try {
-			decoded = decodeURIComponent( segment );
-		} catch {
-			// Preserve malformed percent escapes as opaque path bytes.
-		}
-		if ( decoded === '.' || decoded === '..' || /[\\/\0]/.test( decoded ) )
-			throw new Error( `Captured route path escapes the website directory: ${ route.pathname }` );
-	}
-	const sourcePath = originRootCaptured ? '' : source.pathname.replace( /\/$/, '' );
-
-	if ( route.origin === source.origin && sourcePath && pathname.startsWith( `${ sourcePath }/` ) ) {
-		pathname = pathname.slice( sourcePath.length );
-	} else if ( route.origin === source.origin && sourcePath && pathname.replace( /\/$/, '' ) === sourcePath ) {
-		pathname = '/';
-	}
-
-	const cleanPath = pathname.replace( /^\/+|\/+$/g, '' );
-	if ( ! cleanPath ) return 'index.html';
-	if ( /\.[a-z0-9]+$/i.test( cleanPath ) ) return cleanPath;
-	return join( cleanPath, 'index.html' );
-}
-
-function publicPathname( url: string ): string {
-	try {
-		const pathname = new URL( url ).pathname;
-		if ( ! pathname || pathname === '/' ) return '/';
-		return pathname.replace( /\/+$/, '' ) || '/';
-	} catch {
-		return '';
-	}
-}
 
 function portableRedirectsFile( rules: Array< { from: string; to: string } > ): string {
 	const lines = [ ...rules ]
@@ -371,21 +321,6 @@ function portableRedirectsFile( rules: Array< { from: string; to: string } > ): 
 		)
 		.map( ( rule ) => `${ rule.from }  ${ rule.to }  301` );
 	return lines.length === 0 ? '' : `${ lines.join( '\n' ) }\n`;
-}
-
-/**
- * Reports whether a captured page is an alternate address for an already claimed route.
- *
- * Sites commonly serve one document from several URLs, such as `/` and `/index.html`.
- * The alternate address declares the claimed route as its canonical URL, so the capture
- * keeps the claimed page and links the alternate address to it.
- */
-function declaresCanonicalRoute( entry: CaptureEntry, claimed: CaptureEntry ): boolean {
-	if ( ! entry.canonicalUrl ) return false;
-	const claimedCanonical = claimed.canonicalUrl
-		? normalizedUrl( claimed.canonicalUrl )
-		: normalizedUrl( claimed.url );
-	return normalizedUrl( entry.canonicalUrl ) === claimedCanonical;
 }
 
 /**
@@ -486,7 +421,9 @@ function replaceAll(
 		.sort( ( a, b ) => b.length - a.length );
 	if ( sources.length === 0 ) return content;
 	const pattern = new RegExp(
-		sources.map( ( source ) => source.replace( /[.*+?^${}()|[\]\\]/g, '\\$&' ) ).join( '|' ),
+		sources
+			.map( ( source ) => source.replace( /[.*+?^${}()|[\]\\]/g, '\\$&' ) )
+			.join( '|' ) + URL_TERMINATOR_LOOKAHEAD,
 		'g'
 	);
 	return content.replace( pattern, ( source ) => values.get( source ) ?? source );
@@ -647,955 +584,100 @@ function canonicalMetadataUrl( value: unknown, documentUrl: string ): string | u
 }
 
 /**
- * Class tokens marking one side of a desktop/mobile document pair emitted
- * directly into a single exported page (see `mergeResponsiveDocuments`
- * below). Consumers that need to recognize these as a document-scope
- * boundary (e.g. to disambiguate a duplicate id captured on both sides)
- * cannot assume this naming — it is declared explicitly in the capture
- * receipt's `document_scope_classes` list rather than hardcoded downstream.
+ * A captured header may carry hydration-only widget IDs which change on every
+ * route. Share a stable identity only when no retained HTML, script, or style
+ * reads the original ID. Rewrite the exact attribute, never the whole document:
+ * reserializing a page would change unrelated source markup and SVGs.
  */
-const DESKTOP_DOCUMENT_CLASS = 'data-liberation-desktop-document';
-const MOBILE_DOCUMENT_CLASS = 'data-liberation-mobile-document';
-
-const RESPONSIVE_DOCUMENT_CSS = `html,body{margin:0;padding:0}.${ MOBILE_DOCUMENT_CLASS }{display:none!important}`;
-
-const RESPONSIVE_COUNTERPART_CLASS_PREFIX = 'data-liberation-responsive-counterpart-';
-const RESPONSIVE_COUNTERPART_TAGS = 'p,h1,h2,h3,h4,h5,h6,a,button';
-const RESPONSIVE_SOURCE_ID = /^[A-Za-z][A-Za-z0-9_-]{0,79}$/;
-
-/**
- * Class tokens marking elements only one responsive capture rendered inside an
- * identity-subset collapse: a mobile-only element joins the desktop tree but
- * stays hidden above the switch width, a desktop-only element stays hidden at
- * or below it. Both are declared with the visibility stylesheet that collapse
- * emits, so no consumer needs to know the naming.
- */
-const RESPONSIVE_MOBILE_ONLY_CLASS = 'data-liberation-mobile-only';
-const RESPONSIVE_DESKTOP_ONLY_CLASS = 'data-liberation-desktop-only';
-/** Hook class for an id-less element whose per-viewport inline style is projected into width-scoped rules. */
-const RESPONSIVE_PROJECTION_CLASS_PREFIX = 'data-liberation-responsive-';
-
-/** Switches which captured document is shown, at the detected width. */
-function documentSwitchCss( switchWidth: number ): string {
-	return `@media(max-width:${ switchWidth }px){.${ DESKTOP_DOCUMENT_CLASS }{display:none!important}.${ MOBILE_DOCUMENT_CLASS }{display:contents!important}}`;
-}
-
-/**
- * Fallback switch width, used only when the source gave us nothing to detect
- * from. A detected canvas floor is always preferred: the width a document stops
- * adapting at is the source's own switching point, and asserting a phone width
- * on a site whose canvas floor is 980px puts the switch in the wrong place.
- *
- * The mobile document is what the source serves phones, and it was captured
- * at phone width only. From 768px up are tablets, which per-device sources
- * serve their desktop document — the one the fluid sweep observed at 768px.
- */
-const DEFAULT_SWITCH_WIDTH = 767;
-
-/**
- * Attributes DLA's own capture infrastructure writes to mark that two
- * elements correspond across viewports: fluid-learning identities
- * (viewport-prefixed, e.g. `desktop-wrapper-0` vs `mobile-wrapper-0`) and
- * responsive counterpart slots. They cannot exist on the source site and
- * encode correspondence, never difference, so structural equivalence must
- * not read them as one.
- */
-const CORRESPONDENCE_ATTRIBUTES = [ 'data-dla-geometry-id', 'data-dla-responsive-source' ];
-const STRUCTURAL_SIGNATURE_ATTRIBUTES = new Set( [ 'id', 'href', 'name', 'type', 'for', 'action' ] );
-const YUI_RUNTIME_ID = /yui_/i;
-const CAPTURE_GEOMETRY_ID = /^(?:desktop|mobile)-(?:target|wrapper)-\d+/i;
-const UUID_ID =
-	/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-function isYuiRuntimeId( id: string ): boolean {
-	return YUI_RUNTIME_ID.test( id );
-}
-
-function isUnstableResponsiveId( id: string ): boolean {
-	return id
-		.split( /\s+/ )
-		.some(
-			( token ) =>
-				isYuiRuntimeId( token ) || CAPTURE_GEOMETRY_ID.test( token ) || UUID_ID.test( token )
-		);
-}
-
-/**
- * Whether an id can stand for element identity across responsive captures.
- * Runtime-generated ids name a hydration or a capture artifact, not a
- * component, so they are transparent to identity reconciliation.
- */
-function isStableIdentityId( id: string ): boolean {
-	return RESPONSIVE_SOURCE_ID.test( id ) && ! isUnstableResponsiveId( id );
-}
-
-function isElementNode( node: AnyNode ): node is Element {
-	return node.type === 'tag' || node.type === 'script' || node.type === 'style';
-}
-
-function childNodes( node: AnyNode ): AnyNode[] {
-	return 'children' in node ? node.children : [];
-}
-
-/**
- * Whether the source served a genuinely different document under mobile
- * emulation, rather than the same one. The comparison is the element tree,
- * ordering, and structural attributes. Runtime ids, capture infrastructure
- * attributes, all text content, and embed hosts (iframes that hydrated on
- * one viewport and not the other) do not masquerade as a second design.
- * Text is ignored because desktop and mobile captures are taken seconds
- * apart, so any live value — a countdown, a cart count, relative time —
- * would otherwise ship two copies of the same responsive document.
- */
-export function documentsDiffer( desktopHtml: string, mobileHtml: string ): boolean {
-	const desktopBody = /<body\b([^>]*)>([\s\S]*?)<\/body\s*>/i.exec( desktopHtml )?.[ 2 ];
-	const mobileBody = /<body\b([^>]*)>([\s\S]*?)<\/body\s*>/i.exec( mobileHtml )?.[ 2 ];
-	if ( desktopBody === undefined || mobileBody === undefined ) return false;
-	return responsiveBodySignature( desktopBody ) !== responsiveBodySignature( mobileBody );
-}
-
-/**
- * Per-route record of how many responsive documents were exported and why,
- * so downstream consumers and humans can audit the collapse decision from
- * the capture receipt alone. Present only when the source was captured under
- * mobile emulation too — without a second capture there was no decision.
- */
-export interface ResponsiveVariantEvidence {
-	/** Documents shipped in the exported route file. */
-	variants: 1 | 2;
-	outcome: 'collapsed-equivalent' | 'collapsed-identity-subset' | 'dual-structural';
-	reason: string;
-	/** How responsive CSS survives a collapse. Present only when collapsed. */
-	css?: 'shared' | 'viewport-scoped';
-	/** Elements only the desktop capture rendered, hidden at or below the switch width. Present only for an identity-subset collapse. */
-	desktopOnlyElements?: number;
-	/** Elements only the mobile capture rendered, inserted under their mapped parent and hidden above the switch width. Present only for an identity-subset collapse. */
-	mobileOnlyElements?: number;
-}
-
-function responsiveVariantEvidence(
-	desktopHtml: string,
-	mobileHtml: string | undefined
-): ResponsiveVariantEvidence | undefined {
-	if ( mobileHtml === undefined ) return undefined;
-	if ( documentsDiffer( desktopHtml, mobileHtml ) ) {
-		const merge = identitySubsetMerge( desktopHtml, mobileHtml );
-		if ( merge ) {
-			const sharedStyles =
-				styleBlocks( desktopHtml ).join( '\n' ) === styleBlocks( mobileHtml ).join( '\n' );
-			return {
-				variants: 1,
-				outcome: 'collapsed-identity-subset',
-				reason: `mobile document reconciles with desktop by element identity (${ merge.mobileOnlyElements } mobile-only, ${ merge.desktopOnlyElements } desktop-only elements); shipped one document`,
-				css: sharedStyles ? 'shared' : 'viewport-scoped',
-				desktopOnlyElements: merge.desktopOnlyElements,
-				mobileOnlyElements: merge.mobileOnlyElements,
-			};
-		}
-		return {
-			variants: 2,
-			outcome: 'dual-structural',
-			reason: 'mobile document differs structurally from desktop; both variants shipped',
-		};
-	}
-	const sharedStyles =
-		styleBlocks( desktopHtml ).join( '\n' ) === styleBlocks( mobileHtml ).join( '\n' );
-	return {
-		variants: 1,
-		outcome: 'collapsed-equivalent',
-		reason:
-			'mobile document is structurally equivalent to desktop once capture-infrastructure attributes are normalized; shipped one document',
-		css: sharedStyles ? 'shared' : 'viewport-scoped',
-	};
-}
-
-function responsiveBodyContent( html: string ): string | undefined {
-	return /<body\b[^>]*>([\s\S]*?)<\/body\s*>/i.exec( html )?.[ 1 ];
-}
-
-interface IdentitySubsetMerge {
-	/** The reconciled single body: the desktop tree plus inserted mobile-only elements. */
-	body: string;
-	desktopOnlyElements: number;
-	mobileOnlyElements: number;
-	/** Shared elements whose per-viewport presentation was projected into width-scoped rules. */
-	projectedElements: number;
-	/** Width-scoped rules carrying each viewport's inline presentation for shared elements. */
-	css: string;
-}
-
-/**
- * Split an inline style attribute into declarations, honouring parentheses and
- * quotes so `url(data:…;base64,…)` stays one declaration.
- */
-function inlineDeclarations( style: string ): string[] {
-	const declarations: string[] = [];
-	let current = '';
-	let depth = 0;
-	let quote = '';
-	for ( const character of style ) {
-		if ( quote ) {
-			if ( character === quote ) quote = '';
-		} else if ( character === '"' || character === "'" ) quote = character;
-		else if ( character === '(' ) depth++;
-		else if ( character === ')' && depth > 0 ) depth--;
-		else if ( character === ';' && depth === 0 ) {
-			if ( current.trim() ) declarations.push( current.trim() );
-			current = '';
-			continue;
-		}
-		current += character;
-	}
-	if ( current.trim() ) declarations.push( current.trim() );
-	return declarations;
-}
-
-/**
- * An inline style moved into a stylesheet keeps its cascade position by
- * becoming important: inline declarations outrank every normal author rule,
- * and so does an important id rule.
- */
-function importantRule( selector: string, style: string ): string {
-	const declarations = inlineDeclarations( style ).map( ( declaration ) =>
-		/!\s*important\s*$/i.test( declaration ) ? declaration : `${ declaration }!important`
-	);
-	return declarations.length > 0 ? `${ selector }{${ declarations.join( ';' ) }}` : '';
-}
-
-/**
- * Reconciles two responsive captures into one body keyed on element identity.
- * When the two documents share stable ids and every id-bearing mobile element
- * either exists in the desktop body or is a mobile-only element whose nearest
- * id-bearing ancestor exists there, the mobile document is a re-rendering of
- * the same components — one tree plus width-scoped CSS reproduces both
- * renderings. Mobile-only elements are inserted under their mapped desktop
- * parent (hidden above the switch width); desktop-only elements are kept but
- * hidden at or below it. Any mobile content with no home in the desktop tree —
- * text outside a mapped parent, an id whose parent chain differs between
- * captures, or a mobile-only subtree whose outermost element hangs from no
- * shared ancestor — returns undefined so the caller keeps the two-document
- * output. Mobile-only elements nested inside a mobile-only subtree travel with
- * it. Platform
- * neutral: adapters whose ids are unstable simply fall back.
- */
-function identitySubsetMerge(
-	desktopHtml: string,
-	mobileHtml: string,
-	switchWidth: number = DEFAULT_SWITCH_WIDTH
-): IdentitySubsetMerge | undefined {
-	const desktopBody = responsiveBodyContent( desktopHtml );
-	const mobileBody = responsiveBodyContent( mobileHtml );
-	if ( desktopBody === undefined || mobileBody === undefined ) return undefined;
-	// An id a document repeats (a builder's per-instance icon id) names a
-	// component template, not one element, so like a runtime id it carries no
-	// identity: those elements pair by position under their identified parent.
-	const repeated = new Set< string >();
-	const load = ( body: string ) => {
-		const $ = cheerio.load( `<body>${ body }</body>` );
-		const ids = new Map< string, Element >();
-		for ( const node of $( '[id]' ).toArray() ) {
-			if ( ! isElementNode( node ) ) continue;
-			const id = $( node ).attr( 'id' ) ?? '';
-			if ( ! isStableIdentityId( id ) ) continue;
-			if ( ids.has( id ) ) repeated.add( id );
-			ids.set( id, node );
-		}
-		return { $, ids };
-	};
-	const isIdentityId = ( id: string ): boolean => isStableIdentityId( id ) && ! repeated.has( id );
-	const nearestIdentityId = ( $: cheerio.CheerioAPI, node: AnyNode ): string | undefined => {
-		for ( let current = node.parent; current; current = current.parent ) {
-			if ( ! isElementNode( current ) ) continue;
-			const id = $( current ).attr( 'id' );
-			if ( id && isIdentityId( id ) ) return id;
-		}
-		return undefined;
-	};
-	const identityChain = ( $: cheerio.CheerioAPI, element: Element ): string[] => {
-		const chain: string[] = [];
-		for ( let current = element.parent; current; current = current.parent ) {
-			if ( ! isElementNode( current ) ) continue;
-			const id = $( current ).attr( 'id' );
-			if ( id && isIdentityId( id ) ) chain.unshift( id );
-		}
-		return chain;
-	};
-	const desktop = load( desktopBody );
-	const mobile = load( mobileBody );
-	for ( const id of repeated ) {
-		desktop.ids.delete( id );
-		mobile.ids.delete( id );
-	}
-	const { $: $d, ids: desktopIds } = desktop;
-	const { $: $m, ids: mobileIds } = mobile;
-	const mobileOnlyIds: string[] = [];
-	const desktopOnlyIds: string[] = [];
-	let sharedIdCount = 0;
-	for ( const [ id ] of mobileIds ) {
-		if ( desktopIds.has( id ) ) sharedIdCount++;
-		else mobileOnlyIds.push( id );
-	}
-	for ( const [ id ] of desktopIds ) if ( ! mobileIds.has( id ) ) desktopOnlyIds.push( id );
-	// Without a single shared id there is nothing to anchor one tree to.
-	if ( sharedIdCount === 0 ) return undefined;
-	// A mobile-only subtree maps when its outermost mobile-only element hangs
-	// from a shared ancestor. Mobile-only elements nested inside it (a phone
-	// menu's overlay inside the menu) travel with that subtree and need no home
-	// of their own; an outermost element with no shared ancestor has none.
-	const outermostMobileOnlyIds: string[] = [];
-	for ( const id of mobileOnlyIds ) {
-		const ancestor = nearestIdentityId( $m, mobileIds.get( id ) as Element );
-		if ( ancestor && ! desktopIds.has( ancestor ) && mobileIds.has( ancestor ) ) continue;
-		// Without an identified ancestor the element hangs from <body>, which
-		// both documents share by construction.
-		if ( ancestor && ! desktopIds.has( ancestor ) ) return undefined;
-		outermostMobileOnlyIds.push( id );
-	}
-	// The same id must hang from the same shared ancestors in both captures, or
-	// the documents nest their components differently and one tree cannot serve
-	// both. A wrapper only one capture renders (a desktop transition layer) is
-	// not a nesting difference: it stays in the tree, hidden on the other side.
-	const shared = ( id: string ): boolean => desktopIds.has( id ) && mobileIds.has( id );
-	for ( const [ id, desktopElement ] of desktopIds ) {
-		if ( ! mobileIds.has( id ) ) continue;
-		const desktopChain = identityChain( $d, desktopElement ).filter( shared );
-		const mobileChain = identityChain( $m, mobileIds.get( id ) as Element ).filter( shared );
-		if (
-			desktopChain.length !== mobileChain.length ||
-			desktopChain.some( ( value, index ) => value !== mobileChain[ index ] )
-		)
-			return undefined;
-	}
-	// Text the mobile capture rendered must live inside a mapped parent, or the
-	// documents carry different content and collapsing would drop it. Script
-	// and style bodies are not content.
-	const unmappedText = ( node: AnyNode ): boolean => {
-		for ( const child of childNodes( node ) ) {
-			if ( child.type === 'text' ) {
-				if ( ( child.data ?? '' ).trim() !== '' && nearestIdentityId( $m, child ) === undefined )
-					return true;
-			} else if (
-				isElementNode( child ) &&
-				child.tagName !== 'script' &&
-				child.tagName !== 'style' &&
-				child.tagName !== 'noscript' &&
-				unmappedText( child )
-			)
-				return true;
-		}
-		return false;
-	};
-	if ( unmappedText( $m.root()[ 0 ] ) ) return undefined;
-
-	// A desktop-only wrapper around shared components must keep rendering on
-	// mobile, or hiding it would hide them too; only leaf-side desktop-only
-	// elements are hidden at or below the switch width.
-	let hiddenDesktopOnly = 0;
-	for ( const id of desktopOnlyIds ) {
-		const element = $d( desktopIds.get( id ) as Element );
-		const wrapsShared = element
-			.find( '[id]' )
-			.toArray()
-			.some( ( node ) => shared( $d( node ).attr( 'id' ) ?? '' ) );
-		if ( wrapsShared ) continue;
-		element.addClass( RESPONSIVE_DESKTOP_ONLY_CLASS );
-		hiddenDesktopOnly++;
-	}
-	// A mobile-only element's real parent is often id-less (a mesh grid
-	// container whose rules place children with `> [id=…]`), so it goes under
-	// the desktop element at the same path below the shared ancestor. Each step
-	// resolves by an identical class list or, failing that, the same tag at the
-	// same position among id-less siblings; an unresolvable path keeps both
-	// documents rather than misplacing the element.
-	type Insertion = { parent: cheerio.Cheerio< Element >; index: number; html: string };
-	const idlessChildren = ( $: cheerio.CheerioAPI, node: cheerio.Cheerio< Element > ) =>
-		node
-			.children()
-			.toArray()
-			.filter( ( child ) => ! $( child ).attr( 'id' ) );
-	const insertions: Insertion[] = [];
-	for ( const id of outermostMobileOnlyIds ) {
-		const mobileElement = mobileIds.get( id ) as Element;
-		const ancestorId = nearestIdentityId( $m, mobileElement );
-		const path: Element[] = [];
-		for ( let current = mobileElement.parent; current; current = current.parent ) {
-			if ( ! isElementNode( current ) ) continue;
-			if ( ancestorId ? $m( current ).attr( 'id' ) === ancestorId : current.tagName === 'body' ) break;
-			path.unshift( current );
-		}
-		let parent = ancestorId ? $d( desktopIds.get( ancestorId ) as Element ) : $d( 'body' );
-		let mobileParent = ancestorId ? $m( mobileIds.get( ancestorId ) as Element ) : $m( 'body' );
-		for ( const step of path ) {
-			const candidates = idlessChildren( $d, parent ).filter( ( child ) => child.tagName === step.tagName );
-			const mobileSiblings = idlessChildren( $m, mobileParent ).filter(
-				( child ) => child.tagName === step.tagName
-			);
-			const stepClass = $m( step ).attr( 'class' ) ?? '';
-			const byClass = candidates.filter( ( child ) => ( $d( child ).attr( 'class' ) ?? '' ) === stepClass );
-			const match =
-				byClass.length === 1
-					? byClass[ 0 ]
-					: candidates.length === mobileSiblings.length
-					? candidates[ mobileSiblings.indexOf( step ) ]
-					: undefined;
-			if ( ! match ) return undefined;
-			parent = $d( match );
-			mobileParent = $m( step );
-		}
-		const element = $m( mobileElement );
-		element.addClass( RESPONSIVE_MOBILE_ONLY_CLASS );
-		insertions.push( { parent, index: element.index(), html: $m.html( element ) ?? '' } );
-	}
-	// Descending sibling positions keep earlier insertions from shifting a
-	// later one's reference child.
-	insertions.sort( ( a, b ) => b.index - a.index );
-	for ( const insertion of insertions ) {
-		const parent = insertion.parent;
-		const children = parent.children();
-		if ( insertion.index < children.length ) children.eq( insertion.index ).before( insertion.html );
-		else parent.append( insertion.html );
-	}
-	// One element now serves both viewports, but each capture rendered it with
-	// its own presentation: a builder rescales text for phones through inline
-	// styles on id-less descendants, too. Walk each shared component's subtree
-	// in parallel while the two captures agree on structure and project every
-	// difference instead of keeping only the desktop's. Class tokens union
-	// (each capture's class rules are already scoped to its side of the
-	// switch), and an image's `sizes` answers per viewport.
-	const desktopRules: string[] = [];
-	const mobileRules: string[] = [];
-	let projectedElements = 0;
-	// A shared component the two captures hold under different id-less
-	// containers (a form field a phone layout moves into its own row) is
-	// re-parented, not restyled; one tree cannot render both placements.
-	let diverged = false;
-	const sharedIdsIn = ( $: cheerio.CheerioAPI, node: Element ): string =>
-		$( node )
-			.find( '[id]' )
-			.toArray()
-			.map( ( child ) => $( child ).attr( 'id' ) ?? '' )
-			.filter( ( id ) => shared( id ) )
-			.sort()
-			.join( ' ' );
-	// Hook names derive from where an element sits below its nearest shared
-	// component, never from document order, so chrome repeated on every route
-	// serializes identically and stays recognizable as shared downstream.
-	const projectPair = (
-		d: cheerio.Cheerio< Element >,
-		m: cheerio.Cheerio< Element >,
-		path: string
-	): void => {
-		let projected = false;
-		const desktopStyle = d.attr( 'style' ) ?? '';
-		const mobileStyle = m.attr( 'style' ) ?? '';
-		if ( desktopStyle.trim() !== mobileStyle.trim() ) {
-			const id = d.attr( 'id' );
-			let selector: string;
-			if ( id && isIdentityId( id ) ) selector = `#${ id }`;
-			else {
-				const hook = `${ RESPONSIVE_PROJECTION_CLASS_PREFIX }${ createHash( 'sha256' )
-					.update( path )
-					.digest( 'hex' )
-					.slice( 0, 12 ) }`;
-				d.addClass( hook );
-				selector = `.${ hook }`;
-			}
-			const property = ( declaration: string ) =>
-				declaration.slice( 0, declaration.indexOf( ':' ) ).trim().toLowerCase();
-			const desktopDeclarations = inlineDeclarations( desktopStyle );
-			const mobileProperties = new Set( inlineDeclarations( mobileStyle ).map( property ) );
-			// The desktop inline style stays where the reference viewport reads it
-			// when mobile restates every property it sets; otherwise it would leak
-			// onto phones, so both sides move into width-scoped rules.
-			const keepsInline =
-				! /!\s*important/i.test( desktopStyle ) &&
-				desktopDeclarations.every( ( declaration ) => mobileProperties.has( property( declaration ) ) );
-			if ( ! keepsInline ) {
-				const desktopRule = importantRule( selector, desktopStyle );
-				if ( desktopRule ) desktopRules.push( desktopRule );
-				d.removeAttr( 'style' );
-			}
-			const mobileRule = importantRule( selector, mobileStyle );
-			if ( mobileRule ) mobileRules.push( mobileRule );
-			projected = true;
-		}
-		const desktopClasses = ( d.attr( 'class' ) ?? '' ).split( /\s+/ ).filter( Boolean );
-		const mobileClasses = ( m.attr( 'class' ) ?? '' ).split( /\s+/ ).filter( Boolean );
-		const missing = mobileClasses.filter( ( token ) => ! desktopClasses.includes( token ) );
-		if ( missing.length > 0 ) {
-			d.attr( 'class', [ ...( d.attr( 'class' ) ?? '' ).split( /\s+/ ).filter( Boolean ), ...missing ].join( ' ' ) );
-			projected = true;
-		}
-		const desktopSizes = d.attr( 'sizes' );
-		const mobileSizes = m.attr( 'sizes' );
-		if ( desktopSizes && mobileSizes && desktopSizes !== mobileSizes ) {
-			d.attr( 'sizes', `(max-width:${ switchWidth }px) ${ mobileSizes }, ${ desktopSizes }` );
-			projected = true;
-		}
-		if ( projected ) projectedElements++;
-		// Descend through id-less children only while both captures agree on
-		// their shape; id-bearing children are paired by identity on their own.
-		// Components only one capture rendered are placed by identity, not by
-		// position, so they sit outside the positional pairing.
-		const paired = ( $: cheerio.CheerioAPI ) => ( child: Element ): boolean => {
-			const childId = $( child ).attr( 'id' );
-			return ! childId || ! isIdentityId( childId ) || shared( childId );
-		};
-		const desktopChildren = d.children().toArray().filter( paired( $d ) );
-		const mobileChildren = m.children().toArray().filter( paired( $m ) );
-		// A child that contains an identified component pairs with the child
-		// holding the same component (a form grid whose phone layout drops
-		// cells); otherwise align in document order: each mobile child pairs
-		// with the next desktop child of the same tag and class list, so a
-		// sibling only one capture rendered (a lightbox trigger, a hover layer)
-		// does not stop the walk for the siblings both rendered.
-		const anchorOf = ( $: cheerio.CheerioAPI, child: Element ): string | undefined =>
-			$( child )
-				.find( '[id]' )
-				.toArray()
-				.map( ( node ) => $( node ).attr( 'id' ) ?? '' )
-				.find( ( id ) => shared( id ) );
-		const desktopAnchors = desktopChildren.map( ( child ) => anchorOf( $d, child as Element ) );
-		let cursor = 0;
-		for ( const mobileChild of mobileChildren ) {
-			const mobileAnchor = anchorOf( $m, mobileChild );
-			const mobileClass = $m( mobileChild ).attr( 'class' ) ?? '';
-			let match = mobileAnchor ? desktopAnchors.indexOf( mobileAnchor ) : -1;
-			if ( match >= 0 && ( desktopChildren[ match ] as Element ).tagName !== mobileChild.tagName ) match = -1;
-			for ( let index = cursor; match < 0 && index < desktopChildren.length; index++ ) {
-				const candidate = desktopChildren[ index ] as Element;
-				if ( desktopAnchors[ index ] && mobileAnchor !== desktopAnchors[ index ] ) continue;
-				if ( candidate.tagName !== mobileChild.tagName ) continue;
-				if ( ( $d( candidate ).attr( 'class' ) ?? '' ) !== mobileClass && desktopChildren.length !== mobileChildren.length )
-					continue;
-				match = index;
-			}
-			if ( match < 0 ) continue;
-			cursor = match + 1;
-			const desktopChild = desktopChildren[ match ] as Element;
-			if ( sharedIdsIn( $d, desktopChild ) !== sharedIdsIn( $m, mobileChild ) ) diverged = true;
-			const childId = $d( desktopChild ).attr( 'id' );
-			if ( childId && isIdentityId( childId ) ) continue;
-			projectPair( $d( desktopChild ), $m( mobileChild ), `${ path }/${ match }` );
-		}
-	};
-	for ( const [ id, desktopElement ] of desktopIds ) {
-		const mobileElement = mobileIds.get( id );
-		if ( mobileElement ) projectPair( $d( desktopElement ), $m( mobileElement ), id );
-	}
-	if ( diverged ) return undefined;
-	const css =
-		( desktopRules.length > 0
-			? `@media(min-width:${ switchWidth + 1 }px){${ desktopRules.join( '' ) }}`
-			: '' ) +
-		( mobileRules.length > 0 ? `@media(max-width:${ switchWidth }px){${ mobileRules.join( '' ) }}` : '' );
-	return {
-		body: $d( 'body' ).html() ?? desktopBody,
-		desktopOnlyElements: hiddenDesktopOnly,
-		mobileOnlyElements: insertions.length,
-		projectedElements,
-		css,
-	};
-}
-
-/**
- * The mobile capture's body classes (a builder's device flag such as
- * `device-mobile-optimized`) are what its stylesheet keys on. Its rules are
- * already scoped to the mobile side of the switch, so the single body carries
- * both captures' classes.
- */
-function withBodyClasses( openTag: string, mobileBodyAttributes: string ): string {
-	const mobileClasses = (
-		cheerio.load( `<body${ mobileBodyAttributes }></body>` )( 'body' ).attr( 'class' ) ?? ''
-	)
-		.split( /\s+/ )
-		.filter( Boolean );
-	if ( mobileClasses.length === 0 ) return openTag;
-	const $ = cheerio.load( `${ openTag }</body>` );
-	const body = $( 'body' );
-	const classes = ( body.attr( 'class' ) ?? '' ).split( /\s+/ ).filter( Boolean );
-	body.attr( 'class', [ ...new Set( [ ...classes, ...mobileClasses ] ) ].join( ' ' ) );
-	return /<body\b[^>]*>/i.exec( $.html() )?.[ 0 ] ?? openTag;
-}
-
-/** Width-scoped visibility for elements only one side of the switch renders. */
-function identitySubsetVisibilityCss( switchWidth: number ): string {
-	return (
-		`<style>@media(min-width:${ switchWidth + 1 }px){.${ RESPONSIVE_MOBILE_ONLY_CLASS }{display:none!important}}` +
-		`@media(max-width:${ switchWidth }px){.${ RESPONSIVE_DESKTOP_ONLY_CLASS }{display:none!important}}</style>`
-	);
-}
-
-/**
- * Entrance animations a builder starts from script cannot run in a captured
- * document, because capture strips the script. Re-bind them to the scroll
- * timeline so the authored motion survives.
- */
-function withScrollDrivenAnimations( html: string ): string {
-	const sourceCss = styleBlocks( html ).join( '\n' );
-	if ( sourceCss === '' ) return html;
-	const override = appendScrollDrivenAnimations( '', sourceCss );
-	if ( override === '' ) return html;
-	return /<\/head\s*>/i.test( html )
-		? html.replace( /<\/head\s*>/i, `<style>${ override }</style></head>` )
-		: `${ html }<style>${ override }</style>`;
-}
-
-function responsiveHtml(
-	desktopHtml: string,
-	mobileHtml: string,
-	switchWidth: number = DEFAULT_SWITCH_WIDTH
+export function canonicalizeUnreferencedHeaderIds(
+	html: string,
+	externalTexts: readonly string[] = []
 ): string {
-	return withScrollDrivenAnimations(
-		withMobileLinkedStyles(
-			assembleResponsiveHtml( desktopHtml, mobileHtml, switchWidth ),
-			mobileHtml,
-			switchWidth
-		)
-	);
-}
-
-function withMobileLinkedStyles( html: string, mobileHtml: string, switchWidth: number ): string {
-	const mobileHead = /<head\b[^>]*>([\s\S]*?)<\/head\s*>/i.exec( mobileHtml )?.[ 1 ];
-	if ( ! mobileHead || ! /<link\b/i.test( mobileHead ) ) return html;
-	return html.replace( /(<head\b[^>]*>)([\s\S]*?)(<\/head\s*>)/i, ( _match, open: string, head: string, close: string ) => {
-		const $ = cheerio.load( head, undefined, false );
-		const mobile = cheerio.load( mobileHead, undefined, false );
-		const selector = 'style,link[rel~="stylesheet" i][href]:not([rel~="alternate" i]):not([disabled])';
-		const key = ( node: cheerio.Cheerio< AnyNode > ): string =>
-			node.is( 'style' )
-				? `style:${ node.html()?.trim() }`
-				: `link:${ node.attr( 'href' ) }:${ node.attr( 'media' ) ?? '' }`;
-		const existing = new Map< string, cheerio.Cheerio< AnyNode > >(
-			$( selector ).toArray().map( node => [ key( $( node ) ), $( node ) ] )
-		);
-		const mobileStyles = mobile( selector ).toArray();
-		for ( let index = 0; index < mobileStyles.length; index++ ) {
-			const link = mobile( mobileStyles[ index ] );
-			if ( ! link.is( 'link' ) || ! link.attr( 'href' ) || existing.has( key( link ) ) ) continue;
-			// Separate media gates preserve query lists and negated source media without
-			// rewriting their logic. The import is localized by the normal resource pass.
-			const href = JSON.stringify( link.attr( 'href' ) ).replace( /</g, '\\3c ' );
-			const style = $( '<style>' )
-				.attr( 'media', link.attr( 'media' ) ?? 'all' )
-				.text( `@import url(${ href }) (max-width:${ switchWidth }px);` );
-			const following = mobileStyles.slice( index + 1 )
-				.map( node => existing.get( key( mobile( node ) ) ) ).find( Boolean );
-			const preceding = mobileStyles.slice( 0, index ).reverse()
-				.map( node => existing.get( key( mobile( node ) ) ) ).find( Boolean );
-			if ( following ) following.before( style );
-			else if ( preceding ) preceding.after( style );
-			else $.root().append( style );
-			existing.set( key( link ), style );
-		}
-		return `${ open }${ $.html() }${ close }`;
-	} );
-}
-
-/**
- * Marks corresponding editable leaves from source identity, without comparing
- * their content or visual geometry. The nearest unique source id owns a leaf's
- * tag-relative slot even when the two responsive documents wrap it differently.
- */
-function markResponsiveCounterparts(
-	desktopBody: string,
-	mobileBody: string
-): { desktopBody: string; mobileBody: string } {
-	if ( ! /\sid\s*=\s*["']/i.test( desktopBody ) || ! /\sid\s*=\s*["']/i.test( mobileBody ) )
-		return { desktopBody, mobileBody };
-	type Candidate = { node: Element; source: string };
-	const collect = ( body: string ) => {
-		const $ = cheerio.load( `<body>${ body }</body>` );
-		const idCounts = new Map< string, number >();
-		$( '[id]' ).each( ( _index, element ) => {
-			const id = $( element ).attr( 'id' ) ?? '';
-			if ( RESPONSIVE_SOURCE_ID.test( id ) ) idCounts.set( id, ( idCounts.get( id ) ?? 0 ) + 1 );
-		} );
-		const slots = new Map< string, number >();
-		const candidates = new Map< string, Candidate >();
-		$( RESPONSIVE_COUNTERPART_TAGS ).each( ( _index, element ) => {
-			const node = $( element );
-			const owner = node.closest( '[id]' );
-			const sourceId = owner.attr( 'id' ) ?? '';
-			if ( idCounts.get( sourceId ) !== 1 ) return;
-			const tag = element.name.toLowerCase();
-			const slotKey = `${ sourceId }\0${ tag }`;
-			const slot = ( slots.get( slotKey ) ?? 0 ) + 1;
-			slots.set( slotKey, slot );
-			const source = `${ sourceId }:${ tag }:${ slot }`;
-			candidates.set( source, { node: element, source } );
-		} );
-		return { $, candidates };
-	};
-
-	const desktop = collect( desktopBody );
-	const mobile = collect( mobileBody );
-	for ( const [ source, desktopCandidate ] of desktop.candidates ) {
-		const mobileCandidate = mobile.candidates.get( source );
-		if ( ! mobileCandidate ) continue;
-		const token = `${ RESPONSIVE_COUNTERPART_CLASS_PREFIX }${ createHash( 'sha256' )
-			.update( `mobile\0${ source }` )
-			.digest( 'hex' )
-			.slice( 0, 12 ) }`;
-		for ( const [ $, candidate ] of [
-			[ desktop.$, desktopCandidate ],
-			[ mobile.$, mobileCandidate ],
-		] as const ) {
-			const node = $( candidate.node );
-			node.addClass( token );
-			node.attr( 'data-dla-responsive-source', candidate.source );
-		}
-	}
-	return {
-		desktopBody: desktop.$( 'body' ).html() ?? desktopBody,
-		mobileBody: mobile.$( 'body' ).html() ?? mobileBody,
-	};
-}
-
-/**
- * A captured dialog wired into the phone document (for example the opened phone
- * menu) is added after responsive assembly namespaced that document's anchors,
- * so its section links still name the desktop targets, which are hidden at
- * phone width. Point each same-page fragment link inside the phone document at
- * the phone copy of the section the desktop target resolved to.
- */
-function routePhoneDocumentFragments( html: string, documentPath: string ): string {
-	if ( ! html.includes( MOBILE_DOCUMENT_CLASS ) ) return html;
+	if ( ! YUI_RUNTIME_ID.test( html ) ) return html;
 	const $ = cheerio.load( html );
-	const mobile = $( `.${ MOBILE_DOCUMENT_CLASS }` ).first();
-	if ( mobile.length === 0 ) return html;
-	const sourceIds = new Map< string, string >();
-	$( `.${ DESKTOP_DOCUMENT_CLASS } [data-dla-anchor-target][data-dla-anchor-source-id]` ).each( ( _index, element ) => {
-		const fragment = $( element ).attr( 'data-dla-anchor-target' );
-		const sourceId = $( element ).attr( 'data-dla-anchor-source-id' );
-		if ( fragment && sourceId ) sourceIds.set( fragment, sourceId );
-	} );
-	let changed = false;
-	mobile.find( 'a[href]' ).each( ( _index, element ) => {
-		const link = $( element );
-		const href = link.attr( 'href' ) ?? '';
-		const hash = href.indexOf( '#' );
-		if ( hash < 0 ) return;
-		const path = href.slice( 0, hash );
-		if ( path !== '' && path !== documentPath ) return;
-		let fragment: string;
-		try {
-			fragment = decodeURIComponent( href.slice( hash + 1 ) );
-		} catch {
-			return;
+	const header = $( 'header' ).filter( ( _index, node ) =>
+		$( node ).find( 'nav' ).length > 0 && $( node ).parents( 'main, article, section' ).length === 0
+	).first();
+	if ( ! header.length ) return html;
+	const rewrites = new Map< string, string >();
+	header.find( '[id]' ).each( ( _index, node ) => {
+		const id = $( node ).attr( 'id' ) ?? '';
+		if ( ! isYuiRuntimeId( id ) || html.split( id ).length !== 2 || externalTexts.some( ( text ) => text.includes( id ) ) ) return;
+		const segments: string[] = [];
+		let element: Element | null = node;
+		while ( element && element !== header[ 0 ] ) {
+			let position = 0;
+			for ( let sibling = element.prev; sibling; sibling = sibling.prev ) {
+				if ( isElementNode( sibling ) && sibling.name === element.name ) position++;
+			}
+			segments.unshift( `${ element.name }:${ position }` );
+			element = element.parent && isElementNode( element.parent ) ? element.parent : null;
 		}
-		if ( ! fragment || fragment.endsWith( '--dla-mobile' ) ) return;
-		const phoneId = `${ fragment }--dla-mobile`;
-		if ( mobile.find( '[id]' ).filter( ( _i, candidate ) => $( candidate ).attr( 'id' ) === phoneId ).length === 0 ) {
-			const sourceId = sourceIds.get( fragment );
-			const counterpart = sourceId
-				? mobile.find( '[id]' ).filter( ( _i, candidate ) => $( candidate ).attr( 'id' ) === sourceId )
-				: $();
-			if ( counterpart.length !== 1 ) return;
-			counterpart.before(
-				`<span id="${ escapeHtmlAttr( phoneId ) }" data-dla-anchor-target="${ escapeHtmlAttr( fragment ) }" aria-hidden="true"></span>`
-			);
-		}
-		link.attr( 'href', `${ path }#${ encodeURIComponent( fragment ) }--dla-mobile` );
-		changed = true;
+		if ( element !== header[ 0 ] ) return;
+		const stable = `dla-shared-${ createHash( 'sha256' ).update( segments.join( '/' ) ).digest( 'hex' ).slice( 0, 16 ) }`;
+		if ( html.includes( `id="${ stable }"` ) || [ ...rewrites.values() ].includes( stable ) ) return;
+		rewrites.set( id, stable );
 	} );
-	return changed ? $.html() : html;
+	for ( const [ id, stable ] of rewrites ) {
+		const escaped = id.replace( /[.*+?^${}()|[\]\\]/g, '\\$&' );
+		html = html.replace( new RegExp( `\\bid(\\s*=\\s*["'])${ escaped }(?=["'])`, 'g' ), ( full ) => full.replace( id, stable ) );
+	}
+	return html;
 }
 
-function assembleResponsiveHtml(
-	desktopHtml: string,
-	mobileHtml: string,
-	switchWidth: number = DEFAULT_SWITCH_WIDTH
-): string {
-	const desktopBodyMatch = /<body\b([^>]*)>([\s\S]*?)<\/body\s*>/i.exec( desktopHtml );
-	let desktopBody = desktopBodyMatch?.[ 2 ];
-	const mobileBodyMatch = /<body\b([^>]*)>([\s\S]*?)<\/body\s*>/i.exec( mobileHtml );
-	let mobileBody = mobileBodyMatch?.[ 2 ];
-	if ( desktopBody === undefined || mobileBody === undefined ) return desktopHtml;
-	const mobileViewport = /<meta\b[^>]*\bname\s*=\s*(["'])viewport\1[^>]*>/i.exec(
-		mobileHtml
-	)?.[ 0 ];
-	const withMobileViewport = ( html: string ): string => {
-		if ( ! mobileViewport ) return html;
-		return /<meta\b[^>]*\bname\s*=\s*(["'])viewport\1[^>]*>/i.test( html )
-			? html.replace( /<meta\b[^>]*\bname\s*=\s*(["'])viewport\1[^>]*>/i, mobileViewport )
-			: html.replace( /<\/head\s*>/i, `${ mobileViewport }</head>` );
-	};
-	if ( responsiveBodySignature( desktopBody ) === responsiveBodySignature( mobileBody ) ) {
-		if ( styleBlocks( desktopHtml ).join( '\n' ) === styleBlocks( mobileHtml ).join( '\n' ) )
-			return withMobileViewport( desktopHtml );
-		// A stylesheet present in both captures must apply at every width, so it is
-		// left out of both scoping passes below and kept exactly once, unscoped, from
-		// the desktop copy that already carries it.
-		const shared = sharedStyleContents( desktopHtml, mobileHtml );
-		return withMobileViewport(
-			scopedStyles( desktopHtml, `(min-width:${ switchWidth + 1 }px)`, shared )
-		).replace(
-			/<\/head\s*>/i,
-			`${ responsiveMobileStyles( mobileHtml, undefined, switchWidth, shared ) }</head>`
-		);
-	}
-	const identitySubset = identitySubsetMerge( desktopHtml, mobileHtml, switchWidth );
-	if ( identitySubset ) {
-		// One body carries both renderings: mobile-only elements join the desktop
-		// tree under their mapped parents and width-scoped visibility hides each
-		// side's unique elements on the other regime. Anchor, media, and
-		// counterpart evidence stay single-document; no mobile namespacing.
-		const shared = sharedStyleContents( desktopHtml, mobileHtml );
-		// Projection and visibility rules are inserted before </head>; a document
-		// without one would silently lose them.
-		const withHead = ( html: string ): string =>
-			/<\/head\s*>/i.test( html ) ? html : html.replace( /<body\b/i, '<head></head><body' );
-		return withMobileViewport(
-			withHead( scopedStyles( desktopHtml, `(min-width:${ switchWidth + 1 }px)`, shared ) )
-		)
-			.replace(
-				/(<body\b[^>]*>)[\s\S]*?(<\/body\s*>)/i,
-				( _match, open: string, close: string ) =>
-					`${ withBodyClasses( open, mobileBodyMatch?.[ 1 ] ?? '' ) }${ identitySubset.body }${ close }`
-			)
-			.replace(
-				/<\/head\s*>/i,
-				`${ responsiveMobileStyles( mobileHtml, undefined, switchWidth, shared ) }${ identitySubsetVisibilityCss( switchWidth ) }${
-					identitySubset.css ? `<style>${ identitySubset.css }</style>` : ''
-				}</head>`
-			);
-	}
-	( { desktopBody, mobileBody } = markResponsiveCounterparts( desktopBody, mobileBody ) );
-
-	// Both documents ship in one file from here on, so their anchor targets would
-	// collide on a shared id. Namespace the mobile copy and repoint its own links.
-	const desktop = cheerio.load( `<body>${ desktopBody }</body>` );
-	const desktopTargets = new Map< string, string >();
-	desktop( '[data-dla-anchor-target][data-dla-anchor-source-id]' ).each( ( _index, element ) => {
-		const target = desktop( element );
-		const fragment = target.attr( 'data-dla-anchor-target' );
-		const sourceId = target.attr( 'data-dla-anchor-source-id' );
-		if ( fragment && sourceId ) desktopTargets.set( fragment, sourceId );
-	} );
-	const mobile = cheerio.load( `<body>${ mobileBody }</body>` );
-	mobile( 'a[data-dla-anchor-fragment]' ).each( ( _index, element ) => {
-		const fragment = mobile( element ).attr( 'data-dla-anchor-fragment' );
-		const sourceId = fragment ? desktopTargets.get( fragment ) : undefined;
-		if ( ! fragment || mobile( `[data-dla-anchor-target="${ fragment }"]` ).length > 0 ) return;
-		if ( sourceId ) {
-			const counterpart = mobile( '[id]' )
-				.filter( ( _i, candidate ) => mobile( candidate ).attr( 'id' ) === sourceId )
-				.first();
-			if ( counterpart.length === 1 ) {
-				counterpart.attr( 'data-dla-anchor-target', fragment );
-				return;
+/** An incomplete reference audit cannot prove an ID is safe to canonicalize. */
+function portableTextReferences( websiteDir: string ): Array< { path: string; text: string } > | null {
+	const texts: Array< { path: string; text: string } > = [];
+	let totalBytes = 0;
+	const pending = [ websiteDir ];
+	try {
+		while ( pending.length ) {
+			const directory = pending.pop()!;
+			for ( const entry of readdirSync( directory, { withFileTypes: true } ) ) {
+				const path = join( directory, entry.name );
+				if ( entry.isDirectory() ) {
+					pending.push( path );
+					continue;
+				}
+				if ( entry.isSymbolicLink() ) return null;
+				if ( ! entry.isFile() || ! /\.(?:css|js|mjs|json|svg|xml|txt|html)$/i.test( entry.name ) ) continue;
+				const bytes = statSync( path ).size;
+				totalBytes += bytes;
+				if ( bytes > 32 * 1024 * 1024 || totalBytes > 128 * 1024 * 1024 ) return null;
+				texts.push( { path, text: readFileSync( path, 'utf8' ) } );
 			}
 		}
-		const localTarget = mobile( '[id]' )
-			.filter( ( _i, candidate ) => mobile( candidate ).attr( 'id' ) === fragment )
-			.first();
-		if ( localTarget.length === 1 ) localTarget.attr( 'data-dla-anchor-target', fragment );
-	} );
-	mobile( '[data-dla-anchor-target]' ).each( ( _index, element ) => {
-		const node = mobile( element );
-		const fragment = node.attr( 'data-dla-anchor-target' );
-		if ( fragment ) node.attr( 'id', `${ fragment }--dla-mobile` );
-	} );
-	mobile( 'a[data-dla-anchor-fragment][href]' ).each( ( _index, element ) => {
-		const node = mobile( element );
-		const fragment = node.attr( 'data-dla-anchor-fragment' );
-		const href = node.attr( 'href' );
-		if ( fragment && href )
-			node.attr(
-				'href',
-				`${ href.replace( /#.*$/, '' ) }#${ encodeURIComponent( fragment ) }--dla-mobile`
-			);
-	} );
-	mobileBody = mobile( 'body' ).html() ?? mobileBody;
-
-	const wrapperAttributes = ( baseClass: string, bodyAttributes: string ): string => {
-		const body = cheerio.load( `<body${ bodyAttributes }></body>` )( 'body' );
-		const className = [ baseClass, body.attr( 'class' ) ].filter( Boolean ).join( ' ' );
-		const style = body.attr( 'style' );
-		return `class="${ escapeHtmlAttr( className ) }"${
-			style ? ` style="${ escapeHtmlAttr( style ) }"` : ''
-		}`;
-	};
-	const bodyClasses = ( bodyAttributes: string ): string[] =>
-		( cheerio.load( `<body${ bodyAttributes }></body>` )( 'body' ).attr( 'class' ) ?? '' )
-			.split( /\s+/ )
-			.filter( Boolean );
-	const mobileBodyClasses = new Set( bodyClasses( mobileBodyMatch?.[ 1 ] ?? '' ) );
-	const sharedBodyClasses = [ ...new Set( bodyClasses( desktopBodyMatch?.[ 1 ] ?? '' ) ) ].filter(
-		( className ) => mobileBodyClasses.has( className )
-	);
-	const outerBody = `<body${
-		sharedBodyClasses.length > 0
-			? ` class="${ escapeHtmlAttr( sharedBodyClasses.join( ' ' ) ) }"`
-			: ''
-	}>`;
-	const responsiveBody = `<div ${ wrapperAttributes(
-		DESKTOP_DOCUMENT_CLASS,
-		desktopBodyMatch?.[ 1 ] ?? ''
-	) }>${ desktopBody }</div><div ${ wrapperAttributes(
-		MOBILE_DOCUMENT_CLASS,
-		mobileBodyMatch?.[ 1 ] ?? ''
-	) }>${ mobileBody }</div>`;
-	const sharedStyles = styleBlocks( desktopHtml );
-	if (
-		sharedStyles.length > 0 &&
-		sharedStyles.join( '\n' ) === styleBlocks( mobileHtml ).join( '\n' )
-	) {
-		return withMobileViewport( desktopHtml )
-			.replace(
-				/<\/head\s*>/i,
-				`<style>${ RESPONSIVE_DOCUMENT_CSS }${ documentSwitchCss( switchWidth ) }</style></head>`
-			)
-			.replace(
-				/<body\b[^>]*>[\s\S]*?(<\/body\s*>)/i,
-				( _match, closingBody: string ) => `${ outerBody }${ responsiveBody }${ closingBody }`
-			);
+	} catch {
+		return null;
 	}
-	// A stylesheet present in both captures must apply at every width, so it is
-	// left out of both scoping passes below and kept exactly once, unscoped, from
-	// the desktop copy that already carries it.
-	const shared = sharedStyleContents( desktopHtml, mobileHtml );
-	const mobileStyles = responsiveMobileStyles(
-		mobileHtml,
-		`.${ MOBILE_DOCUMENT_CLASS }`,
-		switchWidth,
-		shared
-	);
-	return withMobileViewport(
-		scopedStyles( desktopHtml, `(min-width:${ switchWidth + 1 }px)`, shared )
-	)
-		.replace(
-			/<\/head\s*>/i,
-			`${ mobileStyles }<style>${ RESPONSIVE_DOCUMENT_CSS }${ documentSwitchCss( switchWidth ) }</style></head>`
-		)
-		.replace(
-			/<body\b[^>]*>[\s\S]*?(<\/body\s*>)/i,
-			( _match, closingBody: string ) => `${ outerBody }${ responsiveBody }${ closingBody }`
+	return texts;
+}
+
+const DESKTOP_CAPTURE_WIDTH = 1440;
+
+/**
+ * Use the widest observed source media breakpoint below the desktop capture
+ * viewport when fluid capture did not identify a switch. Responsive variants
+ * can remain in their mobile layout above 767px; the captured site breakpoints
+ * are stronger evidence than assuming the conventional phone/tablet boundary.
+ */
+function fallbackResponsiveSwitchWidth( outputDir: string ): number | undefined {
+	const path = join( outputDir, 'breakpoints.json' );
+	if ( ! existsSync( path ) ) return undefined;
+	try {
+		const data = JSON.parse( readFileSync( path, 'utf8' ) ) as { maxWidth?: unknown };
+		if ( ! Array.isArray( data.maxWidth ) ) return undefined;
+		const candidates = data.maxWidth.filter(
+			( width ): width is number =>
+				typeof width === 'number' && Number.isInteger( width ) && width > 0 && width < DESKTOP_CAPTURE_WIDTH
 		);
+		return candidates.length > 0 ? Math.max( ...candidates ) : undefined;
+	} catch {
+		return undefined;
+	}
 }
 
-/**
- * Stylesheet content visible to the responsive assembly. Style blocks the
- * capture generated itself (fluid learning rules) are not source styles: the
- * collapse compares what the source served to each viewport, and viewport
- * scoping must never narrow a rule that carries its own media conditions.
- */
-function styleBlocks( html: string ): string[] {
-	return [ ...html.matchAll( /<style\b([^>]*)>([\s\S]*?)<\/style\s*>/gi ) ]
-		.filter( ( match ) => ! FLUID_RULES_STYLE_ATTRIBUTE.test( match[ 1 ] ) )
-		.map( ( match ) => match[ 2 ].trim() );
-}
 
-/**
- * Stylesheet content present in both captures. A stylesheet keyed here must
- * survive assembly unscoped rather than being narrowed to whichever viewport's
- * copy happens to be kept, because the source served it to both.
- */
-function sharedStyleContents( desktopHtml: string, mobileHtml: string ): Set< string > {
-	const desktopBlocks = new Set( styleBlocks( desktopHtml ) );
-	return new Set( styleBlocks( mobileHtml ).filter( ( block ) => desktopBlocks.has( block ) ) );
-}
 
 export function portableInlineStyle(
 	attributes: string,
@@ -1759,97 +841,6 @@ function recordStyleHoistDiagnostic(
 	collector.diagnosticBytes += separator + bytes;
 }
 
-function responsiveMobileStyles(
-	mobileHtml: string,
-	scope?: string,
-	switchWidth: number = DEFAULT_SWITCH_WIDTH,
-	skip: ReadonlySet< string > = new Set()
-): string {
-	return styleBlocks( mobileHtml )
-		.filter( ( style ) => style !== '' && ! skip.has( style ) )
-		.map(
-			( style ) =>
-				`<style media="(max-width:${ switchWidth }px)">${ scope ? scopeCss( style, { scope } ) : style }</style>`
-		)
-		.join( '' );
-}
-
-function scopedStyles(
-	html: string,
-	media: string,
-	skip: ReadonlySet< string > = new Set()
-): string {
-	return html.replace(
-		/<style\b([^>]*)>([\s\S]*?)<\/style\s*>/gi,
-		( match, attributes: string, css: string ) => {
-			// Capture-generated rules carry their own media conditions and are
-			// width-independent by construction; narrowing them to one side of
-			// the switch would strand the other regime's rule.
-			if ( FLUID_RULES_STYLE_ATTRIBUTE.test( attributes ) ) return match;
-			if ( skip.has( css.trim() ) ) return `<style${ attributes }>${ css }</style>`;
-			const existingMedia = /\bmedia\s*=\s*(["'])(.*?)\1/i.exec( attributes );
-			if ( ! existingMedia ) return `<style${ attributes } media="${ media }">${ css }</style>`;
-			const combined = `${ media } and (${ existingMedia[ 2 ] })`;
-			const scopedAttributes = attributes.replace(
-				existingMedia[ 0 ],
-				`media=${ existingMedia[ 1 ] }${ combined }${ existingMedia[ 1 ] }`
-			);
-			return `<style${ scopedAttributes }>${ css }</style>`;
-		}
-	);
-}
-
-function responsiveBodySignature( body: string ): string {
-	const $ = cheerio.load( `<body>${ body }</body>` );
-	$( 'script,style,noscript,iframe' ).remove();
-	$( '[id]' ).each( ( _index, element ) => {
-		if ( isYuiRuntimeId( $( element ).attr( 'id' ) ?? '' ) ) $( element ).remove();
-	} );
-	$( 'svg,map,area,picture,source,img,canvas,slot' ).remove();
-	$( '*' )
-		.contents()
-		.each( ( _index, child ) => {
-			if ( child.type === 'comment' ) $( child ).remove();
-		} );
-	$( '*' ).each( ( _index, element ) => {
-		const node = $( element );
-		for ( const attribute of Object.keys( 'attribs' in element ? element.attribs : {} ) ) {
-			if ( ! STRUCTURAL_SIGNATURE_ATTRIBUTES.has( attribute ) ) node.removeAttr( attribute );
-		}
-		for ( const attribute of [ 'id', 'name' ] ) {
-			const value = node.attr( attribute );
-			if ( value && isUnstableResponsiveId( value ) ) node.removeAttr( attribute );
-		}
-		if ( node.is( 'form,iframe' ) ) {
-			for ( const attribute of [ 'id', 'name', 'target' ] ) {
-				const value = node.attr( attribute );
-				if ( value && /(?:target|frame)[-_]?\d{6,}$/i.test( value ) )
-					node.attr( attribute, 'capture-target' );
-			}
-		}
-	} );
-	let removedEmptyMount = true;
-	while ( removedEmptyMount ) {
-		removedEmptyMount = false;
-		$( 'div,span' ).each( ( _index, element ) => {
-			const node = $( element );
-			if (
-				Object.keys( 'attribs' in element ? element.attribs : {} ).length === 0 &&
-				node.children().length === 0 &&
-				node.text().trim() === ''
-			) {
-				node.remove();
-				removedEmptyMount = true;
-			}
-		} );
-	}
-	$( '*' )
-		.contents()
-		.each( ( _index, child ) => {
-			if ( child.type === 'text' ) child.data = '';
-		} );
-	return ( $( 'body' ).html() ?? '' ).replace( />\s+</g, '><' ).replace( /\s+/g, ' ' ).trim();
-}
 
 function mediaReferences( sourceUrl: string, siteUrl: string ): string[] {
 	const media = new URL( sourceUrl );
@@ -1857,23 +848,6 @@ function mediaReferences( sourceUrl: string, siteUrl: string ): string[] {
 	if ( media.origin !== site.origin ) return [ sourceUrl ];
 	if ( media.pathname === '/' ) return [ sourceUrl ];
 	return [ sourceUrl, `${ media.pathname }${ media.search }` ];
-}
-
-function containsMediaReference( content: string, reference: string ): boolean {
-	for ( const candidate of [ reference, reference.replace( /&/g, '&amp;' ) ] ) {
-		let offset = content.indexOf( candidate );
-		while ( offset !== -1 ) {
-			const suffix = content.slice( offset + candidate.length );
-			if (
-				new URL( reference, 'https://example.com' ).search ||
-				( ! suffix.startsWith( '?' ) && ! suffix.startsWith( '&amp;' ) )
-			) {
-				return true;
-			}
-			offset = content.indexOf( candidate, offset + candidate.length );
-		}
-	}
-	return false;
 }
 
 function srcsetReferences( srcset: string ): string[] {
@@ -2075,38 +1049,6 @@ function mediaDimension( sourceUrl: string ): number {
 	);
 }
 
-function selectMediaCandidate( candidates: MediaCandidate[] ): MediaCandidate | undefined {
-	const bounded = candidates.filter(
-		( candidate ) =>
-			candidate.bytes <= MAX_PORTABLE_MEDIA_BYTES &&
-			candidate.dimension <= MAX_PORTABLE_MEDIA_DIMENSION
-	);
-	return [ ...bounded ].sort(
-		( a, b ) =>
-			b.dimension - a.dimension || a.bytes - b.bytes || a.sourceUrl.localeCompare( b.sourceUrl )
-	)[ 0 ];
-}
-
-function selectMediaCandidates( candidates: MediaCandidate[] ): MediaCandidate[] {
-	const dimensionBounded = candidates.filter(
-		( candidate ) => candidate.dimension <= MAX_PORTABLE_MEDIA_DIMENSION
-	);
-	const responsiveFamily =
-		dimensionBounded.filter( ( candidate ) => candidate.exactReferences.length > 0 ).length > 1;
-	const bounded = dimensionBounded.filter(
-		( candidate ) =>
-			candidate.bytes <=
-			( responsiveFamily ? MAX_PORTABLE_RESPONSIVE_MEDIA_BYTES : MAX_PORTABLE_MEDIA_BYTES )
-	);
-	const exact = bounded.filter( ( candidate ) => candidate.exactReferences.length > 0 );
-	const fallback = selectMediaCandidate( bounded );
-	const selected = exact.length > 0 ? exact : fallback ? [ fallback ] : [];
-	return [ ...selected ].sort(
-		( a, b ) =>
-			b.dimension - a.dimension || a.bytes - b.bytes || a.sourceUrl.localeCompare( b.sourceUrl )
-	);
-}
-
 function portableMediaBasename( candidate: MediaCandidate ): string {
 	const localName = basename( candidate.localPath );
 	if (
@@ -2164,6 +1106,7 @@ function portableResourcePath( path: string, contentType: string ): string | und
 			'application/ecmascript': '.js',
 			'application/javascript': '.js',
 			'application/json': '.json',
+			'application/manifest+json': '.json',
 			'application/ld+json': '.json',
 			'application/pdf': '.pdf',
 			'application/xml': '.xml',
@@ -2203,22 +1146,29 @@ function portableResourcePath( path: string, contentType: string ): string | und
 	return extension ? `${ requestedPath }${ extension }` : undefined;
 }
 
+/** Encode a copied file's URL without changing its on-disk path. */
+function portableAssetUrl( path: string ): string {
+	return '/' + path.replace( /\\/g, '/' ).split( '/' ).map( encodeURIComponent ).join( '/' );
+}
+
 function dependencyReferences(
 	html: string,
 	documentUrl: string,
-	cssOnly = false
+	cssOnly = false,
+	embeddedSources: ReadonlySet<string> = new Set()
 ): PortableDependency[] {
 	const searchableHtml = html
 		.replace( /&quot;|&#34;|&#x22;/gi, '"' )
 		.replace( /&apos;|&#39;|&#x27;/gi, "'" );
 	let cssContent = searchableHtml;
-	const audioLinks: string[] = [];
+	const linkedFiles: string[] = [];
 	const svgUseDocuments: string[] = [];
 	if ( ! cssOnly ) {
 		const $ = cheerio.load( html );
+		$( 'iframe[src]' ).each( ( _, element ) => { const source = $( element ).attr( 'src' ) ?? ''; if ( embeddedSources.has( source ) ) linkedFiles.push( source ); } );
 		$( 'a[href],area[href]' ).each( ( _, element ) => {
 			const href = $( element ).attr( 'href' ) ?? '';
-			if ( isAudioLink( href, documentUrl ) ) audioLinks.push( href );
+			if ( isAudioLink( href, documentUrl ) || isDocumentDownloadLink( href, documentUrl ) ) linkedFiles.push( href );
 		} );
 		// Recorded without the fragment, so localizing the sprite file rewrites
 		// only its path and every `#symbol` reference into it survives.
@@ -2242,8 +1192,9 @@ function dependencyReferences(
 		// must not be recorded, let alone reported as unresolved.
 		if ( reference && ! isInlineUrl( reference ) ) references.add( reference.replace( /&amp;/g, '&' ) );
 	};
-	for ( const href of audioLinks ) add( href );
+	for ( const href of linkedFiles ) add( href );
 	for ( const reference of svgUseDocuments ) add( reference );
+	if ( ! cssOnly ) for ( const reference of identityLogoReferences( html ) ) add( reference );
 
 	const mediaReferences = new Set< string >();
 	const cssReferences = new Set< string >();
@@ -2277,7 +1228,7 @@ function dependencyReferences(
 		const as = /\bas\s*=\s*(["'])([\s\S]*?)\1/i.exec( tag )?.[ 2 ].toLowerCase() ?? '';
 		const relations = rel.split( /\s+/ );
 		if (
-			relations.some( ( value ) => value === 'stylesheet' || /(?:^|-)icon$/.test( value ) ) ||
+			relations.some( ( value ) => value === 'manifest' || value === 'stylesheet' || /(?:^|-)icon$/.test( value ) ) ||
 			( relations.includes( 'preload' ) && [ 'style', 'font', 'image', 'media' ].includes( as ) )
 		) {
 			add( /\bhref\s*=\s*(["'])([\s\S]*?)\1/i.exec( tag )?.[ 2 ] );
@@ -2297,7 +1248,7 @@ function dependencyReferences(
 			add( reference );
 		}
 	}
-	for ( const match of cssContent.matchAll( /@import\s+(?:url\(\s*)?(["'])([\s\S]*?)\1/gi ) ) {
+	for ( const match of cssContent.matchAll( /@import\s*(?:url\(\s*)?(["'])([\s\S]*?)\1/gi ) ) {
 		const reference = match[ 2 ];
 		cssReferences.add( reference.replace( /&amp;/g, '&' ) );
 		add( reference );
@@ -2532,9 +1483,14 @@ function removeDanglingMediaSource(
 		return withoutSources;
 	}
 	// Blank whole occurrences only. The reference is often the bare original of
-	// longer rendition URLs (`image.jpg?format=300w`) that were localized, and a
-	// substring pass would corrupt every one of them. An entity such as `&quot;`
-	// ends a URL; only `?` or a further `&name=` parameter continues it.
+	// longer rendition URLs — `image.jpg?format=300w` was the old query-shaped
+	// case; image services like GoDaddy's append whole path segments instead
+	// (`image.jpg/:/` → `image.jpg/:/rs=w:1160,h:720`, so the continuation does
+	// not even start with punctuation) — and those longer URLs are different
+	// assets, some of them captured. Splicing the blank at such a prefix
+	// corrupts the rendition and the loader loses the desktop image entirely.
+	// The URL terminator lookahead refuses every partial match: only a
+	// reference that stands as the complete URL here gets blanked.
 	const variants = [
 		...new Set( [ reference, normalizedReference, normalizedReference.replace( /&/g, '&amp;' ) ] ),
 	].sort( ( a, b ) => b.length - a.length );
@@ -2542,7 +1498,7 @@ function removeDanglingMediaSource(
 		new RegExp(
 			`(?:${ variants
 				.map( ( variant ) => variant.replace( /[.*+?^${}()|[\]\\]/g, '\\$&' ) )
-				.join( '|' ) })(?!\\?|&(?:amp;)?[^&;=\\s"']+=)`,
+				.join( '|' ) })${ URL_TERMINATOR_LOOKAHEAD }`,
 			'g'
 		),
 		TRANSPARENT_IMAGE_DATA_URL
@@ -2584,7 +1540,7 @@ function removeDanglingResourceReference( html: string, reference: string ): str
 	return $.html();
 }
 
-function safeCapturedPageHtml( html: string ): { html: string; jsonLd: string[] } {
+function safeCapturedPageHtml( html: string, embeddedSources: ReadonlySet<string> = new Set() ): { html: string; jsonLd: string[] } {
 	const $ = cheerio.load( html );
 	const jsonLd: string[] = [];
 	let jsonLdScriptCount = 0;
@@ -2622,6 +1578,18 @@ function safeCapturedPageHtml( html: string ): { html: string; jsonLd: string[] 
 	}
 	$( 'iframe' ).each( ( _index, element ) => {
 		const node = $( element );
+		const embeddedSource = node.attr( 'data-dla-embedded-document' );
+		if ( embeddedSource && embeddedSources.has( embeddedSource ) ) {
+			const height = Number( node.attr( 'height' ) );
+			if ( ! Number.isFinite( height ) || height <= 0 ) { node.remove(); return; }
+			for ( const attribute of Object.keys( 'attribs' in element ? element.attribs : {} ) ) {
+				if ( ! VISUAL_IFRAME_ATTRIBUTES.has( attribute.toLowerCase() ) && ! [ 'id', 'style', 'aria-label', 'frameborder', 'scrolling', 'allowtransparency' ].includes( attribute.toLowerCase() ) ) node.removeAttr( attribute );
+			}
+			node.attr( 'src', embeddedSource );
+			node.attr( 'sandbox', 'allow-same-origin' );
+			node.empty();
+			return;
+		}
 		const source = node.attr( VISUAL_IFRAME_EVIDENCE_ATTRIBUTES.src ) ?? '';
 		const width = node.attr( VISUAL_IFRAME_EVIDENCE_ATTRIBUTES.width ) ?? '';
 		const height = node.attr( VISUAL_IFRAME_EVIDENCE_ATTRIBUTES.height ) ?? '';
@@ -2817,16 +1785,13 @@ function unresolvedCapturedAnchors(
 }
 
 const UNCAPTURED_ROUTE_REASON = 'target route was not captured';
-const SKIP_UNCAPTURED_PATHS = /^\/(cart|account|login|signup|checkout|search|api|admin|favicon)/i;
-const UNCAPTURED_ASSET_PATH =
-	/\.(css|js|png|jpg|jpeg|gif|svg|ico|woff|woff2|ttf|eot|pdf|zip|xml|json)$/i;
 
 /**
  * Same-origin page links in captured HTML whose target was never captured.
  *
  * Checked against the pre-rewrite document so hrefs still resolve on the
- * source origin. No extra network: the route set is whatever export already
- * retained on disk.
+ * source origin. The bounded inspection recorded by capture can establish
+ * absence or an external redirect; all other missing pages remain blocking.
  */
 function uncapturedRouteAnchors(
 	html: string,
@@ -2834,37 +1799,9 @@ function uncapturedRouteAnchors(
 	capturedRoutes: Set< string >,
 	absentRoutes: Set< string >
 ): Array< { sourceUrl: string; url: string; reason: string } > {
-	let documentUrl: URL;
-	try {
-		documentUrl = new URL( sourceUrl );
-	} catch {
-		return [];
-	}
-	const $ = cheerio.load( html );
-	const missing = new Map< string, string >();
-	$( 'a[href],area[href]' ).each( ( _index, element ) => {
-		const href = ( $( element ).attr( 'href' ) ?? '' ).trim();
-		if ( ! href || href === '#' ) return;
-		let resolved: URL;
-		try {
-			resolved = new URL( href, sourceUrl );
-		} catch {
-			return;
-		}
-		if ( resolved.protocol !== 'http:' && resolved.protocol !== 'https:' ) return;
-		if ( resolved.origin !== documentUrl.origin ) return;
-		if ( UNCAPTURED_ASSET_PATH.test( resolved.pathname ) || isAudioLink( href, sourceUrl ) ) return;
-		if ( SKIP_UNCAPTURED_PATHS.test( resolved.pathname ) ) return;
-		let key: string;
-		try {
-			key = normalizedUrl( resolved.href );
-		} catch {
-			return;
-		}
-		if ( capturedRoutes.has( key ) || missing.has( key ) ) return;
-		missing.set( key, key );
-	} );
-	return [ ...missing.values() ].map( ( url ) => ( {
+	return sameOriginPageAnchors( html, sourceUrl )
+		.filter( ( url ) => ! capturedRoutes.has( url ) )
+		.map( ( url ) => ( {
 		sourceUrl,
 		url,
 		reason: absentRoutes.has( url ) ? 'target route is absent at source' : UNCAPTURED_ROUTE_REASON,
@@ -2909,16 +1846,34 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 	/** Per-route learning outcomes, aggregated into the source profile. */
 	const fluidReports: Array< NonNullable< ManifestEntryFluid > > = [];
 	const screenshotManifestPath = join( outputDir, 'screenshots', 'manifest.json' );
-	if ( ! existsSync( screenshotManifestPath ) ) {
+	const httpInput = options.input ? loadHttpExportInput( outputDir, options.sourceUrl, options.input ) : undefined;
+	const embedded = options.embeddedDocuments ? loadEmbeddedDocuments( outputDir ) : undefined;
+	if ( embedded && ! httpInput ) throw new Error( 'Runtime attachments require explicit HTTP input' );
+	const embeddedSources = new Set( Object.keys( embedded?.resources ?? {} ) );
+	if ( embedded && httpInput && options.input ) {
+		const checked = new Set<string>();
+		for ( const region of embedded.receipt.regions ) {
+			const key = JSON.stringify( [ region.url, region.variant ] );
+			if ( checked.has( key ) ) continue;
+			checked.add( key );
+			const entry = httpInput.entries[ region.url ];
+			const path = region.variant === options.input.desktopVariant ? entry?.html : region.variant === options.input.mobileVariant ? entry?.mobileHtml : undefined;
+			if ( ! path ) throw new Error( 'Runtime attachment has no corresponding acquired variant' );
+			const html = readFileSync( join( outputDir, path ), 'utf8' );
+			projectEmbeddedRegions( html, region.url, region.variant, createHash( 'sha256' ).update( html ).digest( 'hex' ), embedded.receipt.regions );
+		}
+	}
+	if ( ! httpInput && ! existsSync( screenshotManifestPath ) ) {
 		throw new Error( `Screenshot manifest not found: ${ screenshotManifestPath }` );
 	}
 
-	const capture = JSON.parse(
+	const capture: ScreenshotManifest = httpInput ? { version: 1, entries: httpInput.entries } : JSON.parse(
 		readFileSync( screenshotManifestPath, 'utf8' )
 	) as ScreenshotManifest;
 	if ( capture.version !== 1 || ! capture.entries || typeof capture.entries !== 'object' ) {
 		throw new Error( `Invalid screenshot manifest: ${ screenshotManifestPath }` );
 	}
+	const siteSwitchWidth = httpInput ? undefined : fallbackResponsiveSwitchWidth( outputDir );
 
 	const websiteDir = join( outputDir, 'website' );
 	const stagedHtmlDir = join( outputDir, '.capture-export-html' );
@@ -2928,6 +1883,8 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 	mkdirSync( stagedHtmlDir, { recursive: true } );
 
 	const capturedEntries: CaptureEntry[] = [];
+	const resourceManifest = capturedResources( outputDir );
+	if ( embedded ) Object.assign( resourceManifest.resources, embedded.resources );
 	const interactionPages: InteractionStatesReport[] = [];
 	const scrollStatesPages: ScrollStatesReport[] = [];
 	const excludedRoutes: string[] = [];
@@ -2947,6 +1904,18 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		}
 		if ( entry.redirectedTo ) {
 			redirectAliases.push( { url, target: entry.redirectedTo } );
+			continue;
+		}
+		if ( entry.externalRedirect ) {
+			// The source sends this link off-origin. Retain only the fact of the
+			// redirect; neither its destination nor its query belongs in the copy.
+			excludedRoutes.push( url );
+			routeCaptureDiagnostics.push( { code: 'route_external_redirect', url, reason: 'source HTTP redirect to an external origin (destination omitted)' } );
+			continue;
+		}
+		if ( entry.sourceAbsentStatus ) {
+			excludedRoutes.push( url );
+			routeCaptureDiagnostics.push( { code: 'route_not_found', url, reason: `HTTP ${ entry.sourceAbsentStatus }` } );
 			continue;
 		}
 		if ( ! entry.html ) {
@@ -2977,7 +1946,9 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 			} );
 			continue;
 		}
-		const rawDesktopHtml = readFileSync( capturedHtmlPath, 'utf8' );
+		const acquiredDesktopHtml = readFileSync( capturedHtmlPath, 'utf8' );
+		let rawDesktopHtml = embedded && options.input ? projectEmbeddedRegions( acquiredDesktopHtml, url, options.input.desktopVariant, createHash( 'sha256' ).update( acquiredDesktopHtml ).digest( 'hex' ), embedded.receipt.regions ) : acquiredDesktopHtml;
+		const sourceInteractivity = inspectSourceInteractivity( rawDesktopHtml, url, outputDir, resourceManifest );
 		// A client-routed SPA answers every route with HTTP 200 and renders its
 		// own not-found screen in JavaScript, so the HTTP-status check above
 		// (failuresAreAbsentDocument) never sees it: the entry has HTML, capture
@@ -2996,34 +1967,40 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 			} );
 			continue;
 		}
-		const mobileHtmlPath = resolve( outputDir, entry.html.replace( /^html[\\/]/, 'html-mobile/' ) );
-		const rawMobileHtml =
-			pathWithin( outputDir, mobileHtmlPath ) && existsSync( mobileHtmlPath )
+		const mobileHtmlPath = resolve( outputDir, entry.mobileHtml ?? entry.html.replace( /^html[\\/]/, 'html-mobile/' ) );
+		const acquiredMobileHtml =
+			( ! httpInput || entry.mobileHtml ) && pathWithin( outputDir, mobileHtmlPath ) && existsSync( mobileHtmlPath )
 				? readFileSync( mobileHtmlPath, 'utf8' )
 				: undefined;
+		let rawMobileHtml = embedded && options.input?.mobileVariant && acquiredMobileHtml !== undefined ? projectEmbeddedRegions( acquiredMobileHtml, url, options.input.mobileVariant, createHash( 'sha256' ).update( acquiredMobileHtml ).digest( 'hex' ), embedded.receipt.regions ) : acquiredMobileHtml;
 		const detectedFloor =
 			typeof entry.fluid?.canvasFloor === 'number' && entry.fluid.canvasFloor > 0
 				? Math.round( entry.fluid.canvasFloor )
-				: undefined;
+				: siteSwitchWidth;
 		if ( detectedFloor ) switchWidths.push( detectedFloor );
 		if ( entry.fluid ) fluidReports.push( entry.fluid );
-		const responsiveVariants = responsiveVariantEvidence( rawDesktopHtml, rawMobileHtml );
+		if ( embedded && options.input?.mobileVariant && rawMobileHtml !== undefined ) {
+			const pair = mergeResponsiveEmbeddedRegions( { desktop: rawDesktopHtml, mobile: rawMobileHtml, url, desktopVariant: options.input.desktopVariant, mobileVariant: options.input.mobileVariant, receipt: embedded.receipt, switchWidth: detectedFloor ?? DEFAULT_SWITCH_WIDTH, scopeClasses: { desktop: DESKTOP_DOCUMENT_CLASS, mobile: MOBILE_DOCUMENT_CLASS } } );
+			rawDesktopHtml = pair.desktop; rawMobileHtml = pair.mobile;
+		}
 		const desktopHtml = normalizedDeclarativeFormEmbeds( renderedHtml( rawDesktopHtml ) );
 		const mobileHtml =
 			rawMobileHtml === undefined
 				? undefined
 				: normalizedDeclarativeFormEmbeds( renderedHtml( rawMobileHtml ) );
-		const capturedHtml =
-			rawMobileHtml === undefined
-				? desktopHtml
-				: responsiveVariants?.outcome === 'dual-structural'
-					? responsiveHtml( desktopHtml, mobileHtml as string, detectedFloor )
-					: normalizedDeclarativeFormEmbeds(
-							renderedHtml( responsiveHtml( rawDesktopHtml, rawMobileHtml, detectedFloor ) )
-					  );
+		const assembly = assembleResponsiveCapture( {
+			rawDesktopHtml,
+			rawMobileHtml,
+			portableDesktopHtml: desktopHtml,
+			portableMobileHtml: mobileHtml,
+			switchWidth: detectedFloor,
+		} );
+		const capturedHtml = assembly.portableNormalization === 'pending'
+			? normalizedDeclarativeFormEmbeds( renderedHtml( assembly.html ) )
+			: assembly.html;
 		// safeCapturedPageHtml removes <base>; record its stylesheet semantics first.
 		const styleHoistContext = capturedStyleHoistContext( capturedHtml );
-		const sanitized = safeCapturedPageHtml( capturedHtml );
+		const sanitized = safeCapturedPageHtml( capturedHtml, embeddedSources );
 		const html = sanitized.html;
 		const stagedHtmlPath = join( stagedHtmlDir, `${ capturedEntries.length }.html` );
 		writeFileSync( stagedHtmlPath, html );
@@ -3035,8 +2012,8 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 				{ state: 'desktop', html: desktopHtml },
 				...( mobileHtml === undefined ? [] : [ { state: 'mobile' as const, html: mobileHtml } ] ),
 			],
-			hasMobileDocument: responsiveVariants?.outcome === 'dual-structural',
-			responsiveVariants,
+			hasMobileDocument: assembly.hasMobileDocument,
+			responsiveVariants: assembly.evidence,
 			sections: entry.sections,
 			canonicalUrl: canonicalMetadataUrl(
 				entry.metadata?.openGraph?.[ 'og:url' ] ?? openGraphUrl( html ),
@@ -3046,6 +2023,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 			interactions: entry.interactions,
 			scrollStates: entry.scrollStates,
 			styleHoistContext,
+			sourceInteractivity,
 		} );
 		if (
 			entry.interactions?.schema === INTERACTION_STATES_SCHEMA ||
@@ -3058,133 +2036,16 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		}
 	}
 
-	const normalizedSourceUrl = normalizedUrl( options.sourceUrl );
-	const exactEntrypointCandidates = capturedEntries.filter(
-		( { url } ) => normalizedUrl( url ) === normalizedSourceUrl
-	);
-	const entrypointCandidates =
-		exactEntrypointCandidates.length > 0
-			? exactEntrypointCandidates
-			: capturedEntries.filter(
-					( { canonicalUrl } ) =>
-						canonicalUrl !== undefined && normalizedUrl( canonicalUrl ) === normalizedSourceUrl
-			  );
-	if ( entrypointCandidates.length !== 1 ) {
-		throw new Error(
-			`Capture does not identify one rendered homepage for the source URL: ${ options.sourceUrl }`
-		);
+	const {
+		entrypointUrl, entrypointEntry, routePathOf, retainedEntries, duplicateRoutes,
+		canonicalRouteAliases, portableRedirects, missingRedirectTargets, duplicateJsonLd,
+	} = allocateCaptureRoutes( capturedEntries, options.sourceUrl, redirectAliases );
+	for ( const { claimed, jsonLd } of duplicateJsonLd ) {
+		writeFileSync( claimed.htmlPath, appendJsonLd( readFileSync( claimed.htmlPath, 'utf8' ), jsonLd ) );
 	}
-	const entrypointUrl = entrypointCandidates[ 0 ].url;
-	const originRootCaptured = capturedOriginRoot(
-		capturedEntries.map( ( entry ) => entry.url ),
-		new URL( options.sourceUrl ).origin
-	);
-	const naturalRoutePath = ( url: string ) =>
-		routeOutputPath( url, options.sourceUrl, entrypointUrl, originRootCaptured ).replace(
-			/\\/g,
-			'/'
-		);
-	const allocatedPaths = new Map< string, string >();
-	const reservedPaths = new Set( capturedEntries.map( ( entry ) => naturalRoutePath( entry.url ) ) );
-	// Keyed by normalized URL, not the raw captured URL: an entry URL carrying
-	// a query string or fragment (a tokenized link, tracking parameter, etc.)
-	// still names the site root, and its captured directory route must be
-	// found by what it resolves to rather than by exact string equality.
-	const entriesByNormalizedUrl = new Map(
-		capturedEntries.map( ( entry ) => [ normalizedUrl( entry.url ), entry ] )
-	);
-	// Two captured URLs naming the same document are content-duplicates when
-	// they render identically; recorded here so the dedupe pass below treats
-	// them the same way a declared canonical route already would.
-	const contentAliasPartners = new Map< string, string >();
-	// A directory and its default document can be distinct pages. Keep both
-	// unless the existing canonical contract proves an alias. Reserve every
-	// natural path first so a generated filename never steals another route.
-	for ( const entry of capturedEntries ) {
-		const url = new URL( entry.url );
-		if ( url.search || url.hash || ! url.pathname.endsWith( '/index.html' ) ) continue;
-		const directoryUrl = new URL( './', url ).href;
-		const directory = entriesByNormalizedUrl.get( normalizedUrl( directoryUrl ) );
-		const path = naturalRoutePath( entry.url );
-		if ( ! directory || naturalRoutePath( directoryUrl ) !== path ) continue;
-		if ( declaresCanonicalRoute( entry, directory ) || declaresCanonicalRoute( directory, entry ) ) continue;
-		if ( readFileSync( entry.htmlPath, 'utf8' ) === readFileSync( directory.htmlPath, 'utf8' ) ) {
-			contentAliasPartners.set( entry.url, directory.url );
-			contentAliasPartners.set( directory.url, entry.url );
-			continue;
-		}
-		const displaced = entry.url === entrypointUrl ? directory : entry;
-		if ( [ ...reservedPaths ].some( ( reserved ) => path.startsWith( `${ reserved }/` ) ) )
-			throw new Error( `Captured route needs a directory already claimed by a file: ${ path }` );
-		let suffix = 2;
-		let allocated: string;
-		do {
-			allocated = `${ path.slice( 0, -'.html'.length ) }-${ suffix++ }.html`;
-		} while ( [ ...reservedPaths ].some( ( reserved ) =>
-			reserved === allocated || reserved.startsWith( `${ allocated }/` )
-		) );
-		reservedPaths.add( allocated );
-		allocatedPaths.set( displaced.url, allocated );
-	}
-	const routePathOf = ( url: string ) => allocatedPaths.get( url ) ?? naturalRoutePath( url );
-
-	const retainedEntries: CaptureEntry[] = [];
-	const duplicateRoutes: Array< { url: string; canonicalUrl: string; path: string } > = [];
-	const canonicalRouteAliases = new Map< string, string >();
-	const claimedRoutes = new Map< string, CaptureEntry >();
-	for ( const entry of [
-		...capturedEntries.filter( ( { url } ) => url === entrypointUrl ),
-		...capturedEntries.filter( ( { url } ) => url !== entrypointUrl ),
-	] ) {
-		const routePath = routePathOf( entry.url );
-		const claimed = claimedRoutes.get( routePath );
-		if ( ! claimed ) {
-			claimedRoutes.set( routePath, entry );
-			retainedEntries.push( entry );
-			continue;
-		}
-		if (
-			! declaresCanonicalRoute( entry, claimed ) &&
-			contentAliasPartners.get( entry.url ) !== claimed.url
-		) {
-			throw new Error( `Captured routes resolve to the same website path: ${ routePath }` );
-		}
-		if ( entry.jsonLd.length > 0 ) {
-			writeFileSync(
-				claimed.htmlPath,
-				appendJsonLd( readFileSync( claimed.htmlPath, 'utf8' ), entry.jsonLd )
-			);
-		}
-		duplicateRoutes.push( {
-			url: entry.url,
-			canonicalUrl: claimed.url,
-			path: `website/${ routePath }`,
-		} );
-		canonicalRouteAliases.set( normalizedUrl( entry.url ), routePath );
-	}
-	// A URL the server redirected to another captured route is that route
-	// under another name: links to it resolve to the target's page, and the
-	// alias is recorded in website/_redirects.
-	const portableRedirects: Array< { from: string; to: string } > = [];
-	for ( const { url, target } of redirectAliases ) {
-		const targetEntry = entriesByNormalizedUrl.get( normalizedUrl( target ) );
-		if ( ! targetEntry ) {
-			routeCaptureDiagnostics.push( {
-				code: 'route_capture_failed',
-				url,
-				reason: `redirects to ${ target }, which was not captured`,
-			} );
-			continue;
-		}
-		const routePath = routePathOf( targetEntry.url );
-		duplicateRoutes.push( { url, canonicalUrl: targetEntry.url, path: `website/${ routePath }` } );
-		canonicalRouteAliases.set( normalizedUrl( url ), routePath );
-		const from = publicPathname( url );
-		const to = `/${ routePath }`;
-		if ( from && from !== to ) portableRedirects.push( { from, to } );
-	}
-	const desktopSections = SectionSpecsStore.load( outputDir );
-	const mobileSections = SectionSpecsStore.loadMobile( outputDir );
+	routeCaptureDiagnostics.push( ...missingRedirectTargets );
+	const desktopSections = httpInput ? new Map() : SectionSpecsStore.load( outputDir );
+	const mobileSections = httpInput ? new Map() : SectionSpecsStore.loadMobile( outputDir );
 	const semanticPages: SemanticEvidencePage[] = retainedEntries.flatMap( ( entry ) => {
 		const desktop = desktopSections.get( entry.url );
 		if ( ! isUsableSectionEvidence( desktop ) ) return [];
@@ -3206,7 +2067,6 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 	const unresolvedMedia: Array< { url: string; error: string } > = [];
 	const assets: Array< { sourceUrl: string; path: string } > = [];
 	const mediaStubs = MediaStubStore.load( outputDir );
-	const resourceManifest = capturedResources( outputDir );
 	const assetReferenceLocations = assetReferences(
 		retainedEntries,
 		routePathOf,
@@ -3226,6 +2086,24 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 			}
 		} )
 	);
+	const probeReferences: string[] = [];
+	const seenProbeReferences = new Set< string >();
+	for ( const [ sourceUrl ] of mediaStubs.list() ) {
+		try {
+			if ( capturedPages.has( normalizedUrl( sourceUrl ) ) ) continue;
+		} catch {
+			// Invalid media URLs still flow through mediaReferences().
+		}
+		for ( const reference of mediaReferences( sourceUrl, options.sourceUrl ) ) {
+			if ( seenProbeReferences.has( reference ) ) continue;
+			seenProbeReferences.add( reference );
+			probeReferences.push( reference );
+		}
+	}
+	const referenceIndex = indexPortableMediaReferences(
+		retainedEntries.map( ( entry ) => entry.htmlPath ),
+		probeReferences,
+	);
 	for ( const [ sourceUrl, stub ] of mediaStubs.list() ) {
 		try {
 			if ( capturedPages.has( normalizedUrl( sourceUrl ) ) ) continue;
@@ -3235,9 +2113,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		const references = mediaReferences( sourceUrl, options.sourceUrl );
 		const family = mediaFamily( sourceUrl );
 		const exactReferences = references.filter( ( reference ) =>
-			retainedEntries.some( ( entry ) =>
-				containsMediaReference( readFileSync( entry.htmlPath, 'utf8' ), reference )
-			)
+			mediaReferenceMatched( referenceIndex, reference )
 		);
 		const isReferenced = retainedMediaFamilies.has( family ) || exactReferences.length > 0;
 		if ( stub.status === 'error' && isReferenced ) {
@@ -3263,59 +2139,20 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		};
 		mediaFamilies.set( family, [ ...( mediaFamilies.get( family ) ?? [] ), candidate ] );
 	}
-	const portableMediaCandidates = [ ...mediaFamilies.values() ]
-		.map( ( candidates ) => ( { candidates, selected: selectMediaCandidates( candidates ) } ) )
-		.sort( ( left, right ) => {
-			const leftEntrypoint = left.candidates.some( ( candidate ) =>
-				candidate.references.some( ( reference ) =>
-					containsMediaReference(
-						readFileSync( entrypointCandidates[ 0 ].htmlPath, 'utf8' ),
-						reference
-					)
-				)
-			);
-			const rightEntrypoint = right.candidates.some( ( candidate ) =>
-				candidate.references.some( ( reference ) =>
-					containsMediaReference(
-						readFileSync( entrypointCandidates[ 0 ].htmlPath, 'utf8' ),
-						reference
-					)
-				)
-			);
-			return (
-				Number( rightEntrypoint ) - Number( leftEntrypoint ) ||
-				( left.selected[ 0 ]?.bytes ?? 0 ) - ( right.selected[ 0 ]?.bytes ?? 0 ) ||
-				( left.selected[ 0 ]?.sourceUrl ?? '' ).localeCompare(
-					right.selected[ 0 ]?.sourceUrl ?? ''
-				)
-			);
-		} );
 	const portableMediaBudget = portableMediaTotalBytesLimit;
-	const selectedPortableMedia = new Set< MediaCandidate >();
-	const portableMediaHashes = new Set< string >();
-	let portableMediaBytes = 0;
-	for ( const family of portableMediaCandidates ) {
-		for ( const selected of family.selected ) {
-			const contentHash = fileHash( selected.localPath );
-			const needsFile = ! portableMediaHashes.has( contentHash );
-			if ( ! needsFile || portableMediaBytes + selected.bytes <= portableMediaBudget ) {
-				selectedPortableMedia.add( selected );
-				if ( needsFile ) {
-					portableMediaHashes.add( contentHash );
-					portableMediaBytes += selected.bytes;
-				}
-			}
-		}
-	}
+	const portableMediaPlan = planPortableMediaFamilies(
+		[ ...mediaFamilies ].map( ( [ family, candidates ] ) => ( { family, candidates } ) ),
+		portableMediaBudget,
+		entrypointEntry.htmlPath,
+	);
 	let retainedExternalMediaCount = 0;
 	const localizedMediaFamilies = new Set< string >();
 	const assetPathsByHash = new Map< string, string >();
 	const assetHashesByPath = new Map< string, string >();
 	const portablePathsBySource = new Map< string, string >();
-	for ( const candidates of mediaFamilies.values() ) {
-		const family = mediaFamily( candidates[ 0 ].sourceUrl );
-		const eligible = selectMediaCandidates( candidates );
-		if ( eligible.length === 0 ) {
+	for ( const decision of portableMediaPlan.families ) {
+		const { family, candidates, eligible, admitted } = decision;
+		if ( decision.outcome === 'limit-excluded' ) {
 			for ( const reference of retainedMediaFamilies.get( family ) ?? [] )
 				mediaReplacements.set( reference, TRANSPARENT_IMAGE_DATA_URL );
 			for ( const candidate of candidates ) {
@@ -3330,8 +2167,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 			}
 			continue;
 		}
-		const selected = eligible.filter( ( candidate ) => selectedPortableMedia.has( candidate ) );
-		if ( selected.length === 0 ) {
+		if ( decision.outcome === 'budget-excluded' ) {
 			for ( const candidate of candidates ) {
 				for ( const reference of candidate.references ) {
 					mediaReplacements.set( reference, TRANSPARENT_IMAGE_DATA_URL );
@@ -3346,7 +2182,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		}
 		localizedMediaFamilies.add( family );
 		let fallbackAssetPath = '';
-		for ( const candidate of selected ) {
+		for ( const candidate of admitted ) {
 			const contentHash = fileHash( candidate.localPath );
 			let assetPath = assetPathsByHash.get( contentHash );
 			if ( assetPath === undefined ) {
@@ -3371,17 +2207,17 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 			);
 			fallbackAssetPath ||= assetPath;
 			for ( const reference of candidate.exactReferences ) {
-				mediaReplacements.set( reference, `/${ assetPath.replace( /\\/g, '/' ) }` );
+				mediaReplacements.set( reference, portableAssetUrl( assetPath ) );
 			}
 		}
 		for ( const reference of retainedMediaFamilies.get( family ) ?? [] ) {
 			if ( ! mediaReplacements.has( reference ) )
-				mediaReplacements.set( reference, `/${ fallbackAssetPath.replace( /\\/g, '/' ) }` );
+				mediaReplacements.set( reference, portableAssetUrl( fallbackAssetPath ) );
 		}
 	}
 	const portableMedia = {
 		selected_count: assets.length,
-		selected_bytes: portableMediaBytes,
+		selected_bytes: portableMediaPlan.selectedBytes,
 		retained_external_count: retainedExternalMediaCount,
 		max_bytes: portableMediaBudget,
 		reserved_bytes: 0,
@@ -3444,14 +2280,14 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 			} );
 			return false;
 		}
-		const isText = /^(?:application\/json|text\/)/i.test( resource.contentType );
+		const isText = /^(?:application\/(?:json|manifest\+json)|text\/)/i.test( resource.contentType );
 		const contentHash = isText ? '' : fileHash( source );
 		const relativePath = isText
 			? requestedPath
 			: assetPathsByHash.get( contentHash ) ??
 			  uniqueAssetPath( requestedPath, contentHash, assetHashesByPath );
 		const destination = resolve( websiteDir, relativePath );
-		const portablePath = `/${ relativePath.replace( /\\/g, '/' ) }`;
+		const portablePath = portableAssetUrl( relativePath );
 		const alreadyCopied =
 			( ! isText && assetPathsByHash.has( contentHash ) ) ||
 			copiedResources.has( resource.path ) ||
@@ -3472,6 +2308,17 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		copyingResources.add( resource.path );
 		if ( isText ) {
 			let content = readFileSync( source, 'utf8' );
+			if ( /application\/(?:json|manifest\+json)/i.test( resource.contentType ) ) {
+				try {
+					const manifest = JSON.parse( content );
+					for ( const icon of ( Array.isArray( manifest?.icons ) ? manifest.icons : [] ).slice( 0, 64 ) ) {
+						if ( typeof icon?.src !== 'string' || isInlineUrl( icon.src ) ) continue;
+						const url = new URL( icon.src, dependency.url ).href;
+						if ( copyResource( { reference: url, url, kind: 'resource' }, dependency.url ) ) icon.src = resourceReplacements.get( url );
+					}
+					content = JSON.stringify( manifest );
+				} catch { /* Preserve invalid optional metadata for diagnostics. */ }
+			}
 			if ( /text\/css/i.test( resource.contentType ) ) {
 				for ( const nested of dependencyReferences( content, dependency.url, true ) ) {
 					const mediaReplacement =
@@ -3492,6 +2339,12 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 				}
 			}
 			content = replaceAll( content, mediaReplacements, rejectedReplacementKeys );
+			if ( /^text\/html(?:;|$)/i.test( resource.contentType ) && embeddedSources.has( dependency.url ) ) {
+				const $ = cheerio.load( content );
+				const base = new URL( $( 'base[href]' ).first().attr( 'href' ) ?? dependency.url, dependency.url ).href;
+				content = safeCapturedPageHtml( content ).html;
+				for ( const nested of dependencyReferences( content, base ) ) copyResource( nested, dependency.url );
+			}
 			writeFileSync(
 				destination,
 				replaceAll( content, resourceReplacements, rejectedReplacementKeys )
@@ -3512,7 +2365,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 	for ( const entry of retainedEntries ) {
 		const originalHtml = readFileSync( entry.htmlPath, 'utf8' );
 		let html = originalHtml;
-		for ( const dependency of dependencyReferences( html, entry.url ) ) {
+		for ( const dependency of dependencyReferences( html, entry.url, false, embeddedSources ) ) {
 			const mediaReplacement = mediaReplacements.get( dependency.reference );
 			if (
 				mediaReplacement &&
@@ -3665,10 +2518,29 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		url?: string;
 	} > = [];
 	const capturedRouteKeys = new Set( portableRouteLinks.keys() );
+	for ( const [ url, entry ] of Object.entries( capture.entries ) ) {
+		if ( entry.externalRedirect ) capturedRouteKeys.add( normalizedUrl( url ) );
+	}
 	const absentRoutes = new Set( routeCaptureDiagnostics
 		.filter( ( diagnostic ) => diagnostic.code === 'route_not_found' )
 		.map( ( diagnostic ) => diagnostic.url ) );
 	const absentRouteKeys = new Set( [ ...absentRoutes ].map( normalizedUrl ) );
+	// A tab for the current route cannot demonstrate a URL change on that page.
+	// Reuse only an unambiguous observation of the same navigation group on
+	// another captured route (for example Home observed from Services).
+	const routeObservations = retainedEntries.flatMap( entry => entry.interactions?.routeNavigation ?? [] );
+	const routeDestinations = new Map< string, Set< string > >();
+	for ( const route of routeObservations ) {
+		const key = JSON.stringify( [ route.siblings, route.label ] );
+		const destinations = routeDestinations.get( key ) ?? new Set< string >();
+		destinations.add( route.url );
+		routeDestinations.set( key, destinations );
+	}
+	const verifiedRouteObservations = routeObservations.filter( route =>
+		portableRouteLinks.has( normalizedUrl( route.url ) ) &&
+		routeDestinations.get( JSON.stringify( [ route.siblings, route.label ] ) )?.size === 1
+	);
+	const responsiveIdentities = { ids: new Map<string,string>(), namedAliases: false };
 	for ( const entry of retainedEntries ) {
 		const { url, htmlPath } = entry;
 		const routePath = routePathOf( url );
@@ -3693,16 +2565,19 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		);
 		const normalizedHtml = routePhoneDocumentFragments(
 			rewriteCapturedRouteLinks(
-				wireCapturedDialogs(
-					withoutGeometryIdentities( identityHtml ),
-					entry.interactions?.states ?? [],
-					entry.interactions?.initialDialogs ?? []
+				wireCapturedRouteNavigation(
+					wireCapturedDialogs(
+						withoutGeometryIdentities( identityHtml ),
+						entry.interactions?.states ?? [],
+						entry.interactions?.initialDialogs ?? []
+					),
+					verifiedRouteObservations
 				),
 				url,
 				portableRouteLinks,
 				{ documentPath: `/${ routePath }`, servedPaths: portableServedPaths }
 			),
-			`/${ routePath }`
+			`/${ routePath }`, responsiveIdentities
 		);
 		unresolvedAnchors.push(
 			...unresolvedCapturedAnchors( normalizedHtml, url, `/${ routePath }` )
@@ -3712,6 +2587,30 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		writeFileSync( entry.identityHtmlPath, identityHtml );
 	}
 	selfContainWebsite( websiteDir );
+	// Author identity selectors can live in linked/imported stylesheets, not
+	// only inline <style>. Project the localized copies with the same primitive.
+	if ( responsiveIdentities.ids.size || responsiveIdentities.namedAliases ) {
+		const projectStylesheets = ( directory: string ): void => {
+			for ( const entry of readdirSync( directory, { withFileTypes: true } ) ) {
+				const path = join( directory, entry.name );
+				if ( entry.isDirectory() ) projectStylesheets( path );
+				else if ( entry.isFile() && entry.name.endsWith( '.css' ) ) {
+					const original = readFileSync( path, 'utf8' );
+					const projected = projectResponsiveIdentityCss( original, responsiveIdentities.ids, responsiveIdentities.namedAliases );
+					if ( original !== projected ) writeFileSync( path, projected );
+				}
+			}
+		};
+		projectStylesheets( websiteDir );
+	}
+	const portableTexts = portableTextReferences( websiteDir );
+	if ( portableTexts ) for ( const entry of retainedEntries ) {
+		const path = join( websiteDir, routePathOf( entry.url ) );
+		const html = readFileSync( path, 'utf8' );
+		const externalTexts = portableTexts.filter( ( item ) => item.path !== path ).map( ( item ) => item.text );
+		const stable = canonicalizeUnreferencedHeaderIds( html, externalTexts );
+		if ( stable !== html ) writeFileSync( path, stable );
+	}
 	const redirectsFile = portableRedirectsFile( portableRedirects );
 	if ( redirectsFile ) writeFileSync( join( websiteDir, '_redirects' ), redirectsFile );
 
@@ -3723,7 +2622,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 			const observations: GeometryCapture[ 'observations' ] = [];
 			for ( const viewport of [ 'desktop', 'mobile' ] ) {
 				const path = join( outputDir, 'layout-geometry', `${ entry.slug }.${ viewport }.json` );
-				if ( ! existsSync( path ) ) {
+				if ( httpInput || ! existsSync( path ) ) {
 					geometryCaptureOmissions[ 'capture_missing' ] =
 						( geometryCaptureOmissions[ 'capture_missing' ] ?? 0 ) + 1;
 					continue;
@@ -3788,6 +2687,17 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 			( state ) => state.dismissal?.verified
 		).length,
 	};
+	const unreproducedMotion = capturedEntries.map( ( entry ) => entry.sourceInteractivity )
+		.filter( ( page ) => page.status === 'unreproduced' );
+	const sourceInteractivity = unreproducedMotion.length ? {
+		schema: SOURCE_INTERACTIVITY_SCHEMA,
+		path: 'source-interactivity.json',
+		unreproduced_route_count: unreproducedMotion.length,
+	} : undefined;
+	if ( sourceInteractivity ) writeFileSync(
+		join( outputDir, sourceInteractivity.path ),
+		`${ JSON.stringify( { schema: SOURCE_INTERACTIVITY_SCHEMA, pages: unreproducedMotion }, null, 2 ) }\n`
+	);
 	if ( semanticEvidence ) {
 		writeFileSync( join( outputDir, semanticEvidence.index.path ), semanticEvidence.index.content );
 		for ( const shard of semanticEvidence.shards ) {
@@ -3845,7 +2755,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		variants: routesWithMobile > 0 ? 'per-device' : 'single',
 		documentsPerRoute: routesWithMobile > 0 ? 2 : 1,
 		geometry:
-			learnedApplied > 0 && learnedFrozen > 0
+			httpInput ? 'unverified' : learnedApplied > 0 && learnedFrozen > 0
 				? 'mixed'
 				: learnedApplied > 0
 				? 'runtime-written'
@@ -3899,6 +2809,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 	// a reason, never just missing.
 	const discoveryDiagnostics = [
 		...( options.discoveryDiagnostics ?? [] ),
+		...( httpInput?.diagnostics ?? [] ),
 		...routeCaptureDiagnostics,
 	];
 
@@ -3906,7 +2817,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 	// Only proven source-absent routes lack a document requiring cleanup.
 	// Keep every other attempted route in the audit, even if it lost its HTML.
 	const cleanupPages = Object.entries(capture.entries)
-		.filter(([url]) => !absentRoutes.has(url))
+		.filter(([url, entry]) => !absentRoutes.has(url) && !entry.redirectedTo && !entry.externalRedirect)
 		.map(([url, entry]) => ({ url, ...entry.cleanup }));
 	const recordedPolicy = cleanupPages.find((page) => page.policy)?.policy;
 	const cleanup = recordedPolicy ? {
@@ -3917,7 +2828,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 	} : undefined;
 	if (cleanup) writeFileSync(join(outputDir, 'cleanup-evidence.json'), JSON.stringify({ schema: recordedPolicy!.schema, pages: cleanupPages }, null, 2));
 	const complete =
-		Number( options.summary.routesFailed ?? 0 ) === 0 &&
+		! httpInput && Number( options.summary.routesFailed ?? 0 ) === 0 &&
 		! unresolvedAnchors.some( ( anchor ) => anchor.reason === UNCAPTURED_ROUTE_REASON );
 
 	writeFileSync(
@@ -3925,21 +2836,24 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		`${ JSON.stringify(
 			{
 				schema: CAPTURE_RECEIPT_SCHEMA,
+				...( httpInput ? { acquisition: httpInput.acquisition } : {} ),
+				...( embedded ? { embeddedDocuments: embedded.evidence } : {} ),
 				...(cleanup ? { cleanup } : {}),
 				websiteRoot: 'website',
 				entrypoint: 'website/index.html',
 				source: { url: options.sourceUrl, platform: options.platform },
 				...( options.title ? { title: options.title } : {} ),
 				// Declares the class tokens this capture tool uses to mark one side
-				// of a desktop/mobile document pair (see mergeResponsiveDocuments),
-				// so a generic consumer can recognize them as a document-scope
-				// boundary without hardcoding this tool's naming convention.
+				// of a desktop/mobile document pair inside one exported page, so a
+				// generic consumer can recognize them as a document-scope boundary
+				// without hardcoding this tool's naming convention.
 				document_scope_classes: [ DESKTOP_DOCUMENT_CLASS, MOBILE_DOCUMENT_CLASS ],
 				routes,
 				assets,
 				assetEvidence: { path: 'asset-evidence.json', schema: ASSET_EVIDENCE_SCHEMA },
 				portableMedia,
 				interactions: interactionSummary,
+				...(sourceInteractivity ? { sourceInteractivity } : {}),
 				scrollStates: scrollStatesSummary,
 				layoutGeometry: geometryReport,
 				sourceProfile,
@@ -3972,6 +2886,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 				unresolvedAnchors,
 				portableMedia,
 				interactions: interactionSummary,
+				...(sourceInteractivity ? { sourceInteractivity } : {}),
 				scrollStates: scrollStatesSummary,
 				interactionFailures: interactionStates.filter( ( state ) => state.status !== 'captured' ),
 				excludedRoutes,

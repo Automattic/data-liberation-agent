@@ -16,7 +16,48 @@ import type { DialogProbe } from './score.js';
  * aria-label after its first toggle.
  */
 export async function probeDialogs( page: Page ): Promise< DialogProbe[] > {
-	return ( await page.evaluate( `(async () => {
+	// A synthetic summary click can both fail to open its native details and
+	// activate a different delegated menu that intercepts the later real click.
+	// Probe summaries with the same trusted pointer a visitor uses, first.
+	const summaries = await page.evaluate( () =>
+		[ ...document.querySelectorAll( 'summary' ) ]
+			.map( ( element, index ) => {
+				const rect = element.getBoundingClientRect();
+				const style = getComputedStyle( element );
+				return {
+					index,
+					shown: rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden',
+					disabled: element.getAttribute( 'aria-disabled' ) === 'true',
+					label: ( element.getAttribute( 'aria-label' ) || element.getAttribute( 'data-dla-disclosure-label' ) ||
+						element.querySelector( '[data-dla-disclosure-label]' )?.getAttribute( 'data-dla-disclosure-label' ) ||
+						element.innerText || 'dialog' ).replace( /\s+/g, ' ' ).trim().slice( 0, 40 ),
+				};
+			} )
+			.filter( ( summary ) => summary.shown && ! summary.disabled )
+			.slice( 0, 8 )
+	);
+	const summaryProbes: DialogProbe[] = [];
+	for ( const { index, label } of summaries ) {
+		const summary = page.locator( 'summary' ).nth( index );
+		let opened = false;
+		try {
+			opened = await summary.evaluate( ( element ) => Boolean( element.closest( 'details' )?.open ) );
+			if ( ! opened ) {
+				await summary.click( { timeout: 3_000 } );
+				await page.waitForTimeout( 400 );
+				opened = await summary.evaluate( ( element ) => Boolean( element.closest( 'details' )?.open ) );
+			}
+			await summary.evaluate( ( element ) => {
+				const details = element.closest( 'details' );
+				if ( details?.open ) details.open = false;
+				document.dispatchEvent( new KeyboardEvent( 'keydown', { key: 'Escape', bubbles: true } ) );
+			} );
+		} catch {
+			// A trigger that cannot be activated by a real pointer stays dead.
+		}
+		summaryProbes.push( { label, opened } );
+	}
+	const probes = ( await page.evaluate( `(async () => {
 			const isShown = (element) => {
 				const rect = element.getBoundingClientRect();
 				const style = getComputedStyle(element);
@@ -30,7 +71,7 @@ export async function probeDialogs( page: Page ): Promise< DialogProbe[] > {
 					if (element.getAttribute('aria-disabled') === 'true') return false;
 					const href = element.tagName === 'A' ? (element.getAttribute('href') || '').trim() : '';
 					if (href && href !== '#' && !href.startsWith('#')) return false;
-					if (element.tagName === 'SUMMARY') return true;
+					if (element.tagName === 'SUMMARY') return false;
 					if (element.hasAttribute('aria-expanded')) return true;
 					const popup = (element.getAttribute('aria-haspopup') || '').toLowerCase();
 					if (['dialog', 'menu', 'true'].includes(popup)) return true;
@@ -41,22 +82,13 @@ export async function probeDialogs( page: Page ): Promise< DialogProbe[] > {
 			const probes = [];
 			for (const trigger of triggers) {
 				const label = (trigger.getAttribute('aria-label') || trigger.getAttribute('data-dla-disclosure-label') || trigger.innerText || 'dialog').replace(/\\s+/g, ' ').trim().slice(0, 40);
-				const controlled = trigger.getAttribute('aria-controls');
-				const panel = controlled ? document.getElementById(controlled) : null;
-				const details = trigger.closest('details');
-				const alreadyOpen =
-					(trigger.getAttribute('aria-expanded') === 'true' && Boolean(panel && isShown(panel))) ||
-					Boolean(details && details.open);
-				if (alreadyOpen) {
-					probes.push({ label: label || 'dialog', opened: true });
-					continue;
-				}
 				const before = openCount();
 				const expanded = trigger.getAttribute('aria-expanded') === 'true';
 				const bodyClass = document.body.className;
 				const hidden = [...document.querySelectorAll('[aria-hidden="true"]')];
 				trigger.click();
 				await new Promise((resolve) => setTimeout(resolve, 400));
+				const details = trigger.closest('details');
 				const revealed = hidden.some((element) => element.getAttribute('aria-hidden') !== 'true');
 				const opened =
 					openCount() > before ||
@@ -71,4 +103,5 @@ export async function probeDialogs( page: Page ): Promise< DialogProbe[] > {
 			}
 			return probes;
 		})()` ) ) as DialogProbe[];
+	return [ ...summaryProbes, ...probes ];
 }

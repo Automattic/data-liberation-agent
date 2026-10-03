@@ -3,6 +3,9 @@ import type { Page } from 'playwright';
 
 /** Platform-specific preparation applied while liberating a live page. */
 export interface LiberationHooks {
+  /** Recognize an observed client-side navigation as a source-declared alias.
+   * Return only a same-origin target; uncertainty leaves the route to normal capture. */
+  resolveClientRedirect?(page: Page, url: string): Promise<string | undefined>;
   /** Source branding rules shared by capture and comparison. */
   cleanupRules?: import('../lib/source-cleanup.js').CleanupRule[];
   /** CSS selectors removed from the DOM before portable artifacts are produced. */
@@ -28,6 +31,15 @@ export interface LiberationHooks {
    * Best-effort: a throw is swallowed and liberation continues.
    */
   responsiveImages?(page: Page, ctx: LiberationContext): Promise<Record<string, string>>;
+  /**
+   * Rewrite a serialized HTML artifact (page HTML or a captured dialog) before
+   * it is stored. Runs on the frozen string only, never on the live page, so
+   * the platform runtime keeps working for later probes. Use it for
+   * platform-owned identifiers that vary per route but carry no meaning in a
+   * static copy. Must be deterministic and keep markup and in-document CSS
+   * paired.
+   */
+  canonicalizeHtml?(html: string): string;
 }
 
 export interface LiberationContext {

@@ -51,12 +51,12 @@ describe( 'checkImageGeometry', () => {
 		expect( result.failures?.[ 0 ] ).toContain( 'copy 1600x600 at (32,140)' );
 	} );
 
-	it( 'matches repeated images to their nearest geometry', () => {
+	it( 'refuses nearest-geometry guesses for repeated media without roles', () => {
 		const source = [ image( 'tile', 0, 100 ), image( 'tile', 0, 900 ) ];
 		const candidate = [ image( 'tile', 2, 902 ), image( 'tile', 2, 102 ) ];
 		expect(
 			checkImageGeometry( observation( { images: source } ), observation( { images: candidate } ) )
-		).toEqual( {} );
+		).toEqual( { failures: [ 'image correspondence unproven: repeated media lacks unique structural role/state' ] } );
 	} );
 
 	it( 'allows small browser rounding drift', () => {
@@ -198,15 +198,15 @@ describe( 'checkImageGeometry with content identity', () => {
 		).toBeGreaterThan( 0 );
 	} );
 
-	it( 'keeps repeated same-content images matched to their own positions', () => {
+	it( 'keeps repeated same-content images matched by structural role', () => {
 		const source = [
 			image( 'tile', 0, 100, 400, 300 ),
 			image( 'tile', 0, 900, 400, 300 ),
-		].map( ( img ) => ( { ...img, contentHash: 'same' } ) );
+		].map( ( img, index ) => ( { ...img, contentHash: 'same', role: [ 'hero', 'detail' ][index] } ) );
 		const copy = [
 			image( 'renamed', 2, 902, 400, 300 ),
 			image( 'renamed', 2, 102, 400, 300 ),
-		].map( ( img ) => ( { ...img, contentHash: 'same' } ) );
+		].map( ( img, index ) => ( { ...img, contentHash: 'same', role: [ 'detail', 'hero' ][index] } ) );
 		expect(
 			checkImageGeometry( observation( { images: source } ), observation( { images: copy } ) )
 		).toEqual( {} );

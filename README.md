@@ -33,6 +33,8 @@ See [rendered inspection and complexity](docs/inspection.md) and [source cleanup
 
 Embedded Node consumers can import the same operations from [`data-liberation/runtime`](docs/runtime-api.md), or use the committed standalone `dist/capture-engine.bundle.mjs`. Both expose inspect, capture, compare, publish, and their extension registries.
 
+Comparison defaults to [immutable capture-session evidence](docs/fidelity-reference.md) at 390/768/1440px. `--candidate <url>` compares the portable capture to another rendered copy; `--stage drift` explicitly revisits the live source. Missing reference evidence stays unproven.
+
 ### Inspect
 
 ```bash
@@ -76,17 +78,23 @@ Naming an unknown target lists the registered ones.
 
 | Platform | Status |
 |---|---|
+| Blogger | Browser capture + feed accounting; HTTP source-evidence API |
+| EmDash CMS | Ready |
 | GoDaddy Websites & Marketing | Ready |
 | Hostinger Website Builder | Ready |
 | HubSpot | Ready |
+| Next.js | Generic discovery + framework route-announcer cleanup |
 | Shopify | Ready |
 | Squarespace | Ready |
+| Substack | Ready |
 | Webflow | Ready |
 | Weebly | Ready |
 | Wix | Ready |
 | Any other website | Best-effort generic fallback |
 
 Adapters contribute platform knowledge to discovery and capture — how a platform lists its routes, what its CDN URLs look like, how its runtime resolves anchors. Sites matching none of them fall back to a generic adapter that renders each page in a headless browser.
+
+Registered HTTP profiles can acquire route response evidence and shared dependencies through the [HTTP acquisition API](/docs/http-acquisition.md). Portable preparation and rendered acceptance remain separate from acquisition coverage.
 
 ### Custom platforms
 

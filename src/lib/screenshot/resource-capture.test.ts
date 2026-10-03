@@ -31,6 +31,81 @@ afterEach( () => {
 } );
 
 describe( 'CapturedResourceStore', () => {
+	it( 'localizes declared JSON-LD logos and relative manifest icons without visible images', async () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-native-branding-' ) );
+		dirs.push( outputDir );
+		mkdirSync( join( outputDir, 'html' ) );
+		mkdirSync( join( outputDir, 'screenshots' ) );
+		const sourceUrl = 'https://example.com/shop/';
+		const logoUrl = 'https://cdn.example/brand.png';
+		const manifestUrl = new URL( 'meta/app.webmanifest', sourceUrl ).href;
+		const iconUrl = new URL( '../icons/icon.png', manifestUrl ).href;
+		const png = Buffer.from( 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jXioAAAAASUVORK5CYII=', 'base64' );
+		const html = `<html><head><link rel='manifest' href='meta/app.webmanifest'><script type='application/ld+json'>{"@context":"https://schema.org","@graph":[{"@type":"WebSite","name":"Acme"},{"@type":["Organization"],"logo":{"@type":"ImageObject","url":"${ logoUrl }"},"slogan":"Care & clarity"}]}</script></head><body><h1>Acme</h1></body></html>`;
+		writeFileSync( join( outputDir, 'html', 'home.html' ), html );
+		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( { version: 1, entries: { [ sourceUrl ]: { html: 'html/home.html' } } } ) );
+		const fetchMedia = vi.fn( async ( url: string ) => ( {
+			finalUrl: url, status: 200,
+			headers: new Headers( { 'content-type': url === manifestUrl ? 'application/manifest+json' : 'image/png' } ),
+			body: url === manifestUrl ? Buffer.from( JSON.stringify( { icons: [ { src: '../icons/icon.png', sizes: '512x512', type: 'image/png' } ] } ) ) : png,
+		} ) );
+		const store = new CapturedResourceStore( outputDir, sourceUrl, fetchMedia );
+		await store.captureDomDependencies( html, sourceUrl );
+		await store.flush();
+		expect( fetchMedia.mock.calls.map( ( [ url ] ) => url ).sort() ).toEqual( [ logoUrl, manifestUrl, iconUrl ].sort() );
+		exportWebsiteCapture( { outputDir, sourceUrl, platform: 'generic', summary: { routesFailed: 0 }, failures: [] } );
+		const website = join( outputDir, 'website' );
+		const $ = cheerio.load( readFileSync( join( website, 'index.html' ), 'utf8' ) );
+		const identity = JSON.parse( $( 'script[type="application/ld+json"]' ).text() )[ '@graph' ][ 1 ];
+		expect( identity.slogan ).toBe( 'Care & clarity' );
+		expect( identity.logo.url ).toMatch( /^\// );
+		expect( readFileSync( join( website, decodeURIComponent( identity.logo.url ) ) ) ).toEqual( png );
+		const manifestPath = $( 'link[rel=manifest]' ).attr( 'href' )!;
+		expect( manifestPath ).toMatch( /^\// );
+		const manifest = JSON.parse( readFileSync( join( website, decodeURIComponent( manifestPath ) ), 'utf8' ) );
+		expect( manifest.icons[ 0 ].src ).toMatch( /^\// );
+		expect( readFileSync( join( website, decodeURIComponent( manifest.icons[ 0 ].src ) ) ) ).toEqual( png );
+		expect( manifest.icons[ 0 ].src ).toBe( identity.logo.url );
+	} );
+
+	it( 'exports a linked DOCX as portable bytes beside a missing HTML route', async () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-linked-docx-' ) );
+		dirs.push( outputDir );
+		mkdirSync( join( outputDir, 'html' ) );
+		mkdirSync( join( outputDir, 'screenshots' ) );
+		const sourceUrl = 'https://example.com/';
+		const download = 'https://example.com/_files/ugd/flyer.docx?dn=Fly%20fishing.docx';
+		const missing = 'https://example.com/missing-page';
+		const bytes = Buffer.from( 'PK\x03\x04word document fixture' );
+		const html = `<html><body><a id="flyer" href="${ download }">Flyer</a><a id="missing" href="/missing-page">Missing</a></body></html>`;
+		writeFileSync( join( outputDir, 'html', 'home.html' ), html );
+		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( {
+			version: 1, entries: { [ sourceUrl ]: { html: 'html/home.html' }, [ missing ]: {} },
+		} ) );
+		const fetchMedia = vi.fn( async ( url: string ) => ( {
+			finalUrl: url, status: 200,
+			headers: new Headers( { 'content-type': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' } ),
+			body: bytes,
+		} ) );
+		const store = new CapturedResourceStore( outputDir, sourceUrl, fetchMedia );
+		await store.captureDomDependencies( html, sourceUrl );
+		await store.flush();
+		expect( fetchMedia ).toHaveBeenCalledTimes( 1 );
+		expect( fetchMedia ).toHaveBeenCalledWith( download, expect.anything(), expect.anything() );
+		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( {
+			outputDir, sourceUrl, platform: 'generic', summary: { routesFailed: 0 },
+			failures: [ { url: missing, error: 'HTTP 404' } ],
+		} ), 'utf8' ) );
+		const $ = cheerio.load( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) );
+		const href = $( '#flyer' ).attr( 'href' )!;
+		expect( href ).toMatch( /^\// );
+		expect( readFileSync( join( outputDir, 'website', decodeURIComponent( new URL( href, 'https://portable.test' ).pathname ) ) ) ).toEqual( bytes );
+		expect( receipt.assets ).toContainEqual( expect.objectContaining( { sourceUrl: download } ) );
+		expect( receipt.discoveryDiagnostics ).toContainEqual( expect.objectContaining( { code: 'route_not_found', url: missing } ) );
+		expect( receipt.routes ).toEqual( [ { url: sourceUrl, path: 'website/index.html' } ] );
+		expect( $( '#missing' ).attr( 'href' ) ).toBe( missing );
+	} );
+
 	it( 'replays only fresh static responses with response semantics intact', async () => {
 		vi.useFakeTimers();
 		vi.setSystemTime( new Date( '2026-08-29T00:00:00Z' ) );
@@ -541,7 +616,7 @@ describe( 'CapturedResourceStore', () => {
 		expect( readFileSync( join( outputDir, resource.path ) ) ).toEqual( Buffer.from( 'webp' ) );
 	} );
 
-	it( 'fetches lazy DOM dependencies and nested CSS imports missed by responses', async () => {
+	it( 'fetches lazy DOM dependencies and compact cross-origin nested CSS font imports missed by responses', async () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-resources-' ) );
 		dirs.push( outputDir );
 		const transformedImage =
@@ -549,13 +624,13 @@ describe( 'CapturedResourceStore', () => {
 		const bodies: Record< string, [ string, string ] > = {
 			'https://cdn.example/site.css': [
 				'text/css',
-				'@import "nested.css";.hero{background:url("background.jpg")}',
+				'@import"https://fonts.example.net/css/nested.css" screen and (min-width: 768px);.hero{background:url("background.jpg")}',
 			],
-			'https://cdn.example/nested.css': [ 'text/css', '@font-face{src:url("font.woff2")}' ],
+			'https://fonts.example.net/css/nested.css': [ 'text/css', '@font-face{src:url("../fonts/font.woff2")}' ],
 			'https://cdn.example/lazy.jpg': [ 'image/jpeg', 'lazy' ],
 			'https://cdn.example/lazy-2.jpg': [ 'image/jpeg', 'lazy2' ],
 			'https://cdn.example/background.jpg': [ 'image/jpeg', 'background' ],
-			'https://cdn.example/font.woff2': [ 'font/woff2', 'font' ],
+			'https://fonts.example.net/fonts/font.woff2': [ 'font/woff2', 'font' ],
 			[ transformedImage ]: [ 'image/jpeg', 'transformed' ],
 		};
 		const store = new CapturedResourceStore( outputDir, 'https://example.com/', async ( url ) => {
@@ -849,6 +924,26 @@ describe( 'CapturedResourceStore', () => {
 			'font/woff2'
 		);
 		expect( readFileSync( join( outputDir, 'website', fontPath ), 'utf8' ) ).toBe( 'font' );
+	} );
+	it( 'resolves escaped CSS URLs against their actual origin', async () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-css-escaped-resource-' ) ); dirs.push( outputDir );
+		const fetchMedia = vi.fn( async ( url: string ) => ( { finalUrl: url, status: 200, headers: new Headers( { 'content-type': 'image/png' } ), body: Buffer.from( 'neutral-image' ) } ) );
+		const store = new CapturedResourceStore( outputDir, 'https://example.com/', fetchMedia );
+		await store.captureDomDependencies( String.raw`<style>.hero{background:url(https\:\/\/cdn.example\/photo.png)}</style>`, 'https://example.com/article/' );
+		await store.flush();
+		expect( fetchMedia ).toHaveBeenCalledWith( 'https://cdn.example/photo.png', expect.any( Number ), expect.any( Number ) );
+		const manifest = JSON.parse( readFileSync( join( outputDir, 'resources', 'manifest.json' ), 'utf8' ) );
+		expect( Object.keys( manifest.resources ) ).toEqual( [ 'https://cdn.example/photo.png' ] );
+		expect( manifest.failures ).toEqual( [] );
+	} );
+	it( 'retains a zero-byte stylesheet as a valid source dependency', async () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-resource-empty-css-' ) ); dirs.push( outputDir );
+		const cssUrl = 'https://cdn.example/empty.css';
+		const store = new CapturedResourceStore( outputDir, 'https://example.com/', async url => ( { finalUrl: url, status: 200, headers: new Headers( { 'content-type': 'text/css' } ), body: Buffer.alloc( 0 ) } ) );
+		await store.captureDomDependencies( `<link rel="stylesheet" href="${ cssUrl }">`, 'https://example.com/' ); await store.flush();
+		const manifest = JSON.parse( readFileSync( join( outputDir, 'resources', 'manifest.json' ), 'utf8' ) );
+		expect( manifest.failures ).toEqual( [] );
+		expect( readFileSync( join( outputDir, manifest.resources[ cssUrl ].path ) ).length ).toBe( 0 );
 	} );
 	it( 'records a zero-byte font response as a failed dependency', async () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-resource-empty-font-' ) );

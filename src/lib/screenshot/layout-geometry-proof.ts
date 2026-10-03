@@ -58,6 +58,7 @@ interface GeometryCandidate {
 	subtreeEnd: number;
 	wrapperDepth: number;
 	deepestChainImpact: number;
+	kind: 'article_image_well' | 'generic';
 }
 
 function hash( value: string ): string {
@@ -220,6 +221,17 @@ export function buildLayoutGeometryProof(
 				continue;
 			}
 			const wrapperDepth = elementDepth( wrapperNode );
+			const targetNode = document.nodeForSelector( targetSelector );
+			let insideArticle = false;
+			let ancestor: AnyNode | null = wrapperNode;
+			while ( ancestor?.type === 'tag' ) {
+				if ( ancestor.name === 'article' ) insideArticle = true;
+				ancestor = ancestor.parent?.type === 'tag' ? ancestor.parent : null;
+			}
+			const kind = insideArticle && targetNode?.type === 'tag' &&
+				/^(img|picture)$/.test( targetNode.name )
+				? 'article_image_well'
+				: 'generic';
 			const deepestChainImpact = document.nodes.reduce( ( deepest, { node, depth } ) => {
 				let current: AnyNode | null = node;
 				while ( current?.type === 'tag' ) {
@@ -240,6 +252,7 @@ export function buildLayoutGeometryProof(
 				subtreeEnd: wrapperInterval.end,
 				wrapperDepth,
 				deepestChainImpact,
+				kind,
 			} );
 		}
 	}
@@ -327,6 +340,7 @@ export function buildLayoutGeometryProof(
 		reductions.push( {
 			wrapper,
 			target,
+			kind: candidate.kind,
 			invariants: { selectors: true, runtime: true, semantics: true, viewports: true },
 			corrective_css: {
 				declarations: [ { property: 'display', value: candidate.ordered[ 0 ].facts.display } ],

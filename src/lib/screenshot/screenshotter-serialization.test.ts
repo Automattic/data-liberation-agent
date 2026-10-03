@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser } from 'playwright';
 import { capturePageHtml } from './screenshotter.js';
+import { sanitizeFrozenHtml } from './freeze.js';
 
 describe('capturePageHtml stylesheet serialization', () => {
   let browser: Browser;
@@ -11,6 +12,105 @@ describe('capturePageHtml stylesheet serialization', () => {
 
   afterAll(async () => {
     await browser.close();
+  });
+
+  it('preserves adjacent runtime text-node shaping through HTML and frozen serialization without mutating the source', async () => {
+    const source = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+    const copy = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+    try {
+      await source.setContent(`<!doctype html><style>
+        p { font: 12px/16px ui-sans-serif, system-ui, sans-serif; margin: 0; }
+      </style><p></p><textarea></textarea><script type="application/json"></script>`);
+      await source.evaluate(() => {
+        document.querySelector('p')!.append('© ', '2026', ' Example Behavioral Consulting Group. All rights reserved.');
+        document.querySelector('textarea')!.append('editable ', 'value');
+        document.querySelector('script')!.append('{"value":', '1}');
+      });
+      const nodes = await source.locator('p').evaluate(element => Array.from(element.childNodes).map(node => ({ type: node.nodeType, text: node.textContent })));
+      const html = await capturePageHtml(source);
+      for (const width of [390, 768, 1440]) {
+        await source.setViewportSize({ width, height: 900 });
+        await copy.setViewportSize({ width, height: 900 });
+        const expected = await source.locator('p').screenshot();
+        for (const serialized of [html, sanitizeFrozenHtml(html)]) {
+          await copy.setContent(serialized);
+          expect((await copy.locator('p').screenshot()).equals(expected), `${width}px serialized text paints exactly like the independent live DOM`).toBe(true);
+          expect(await copy.locator('p').evaluate(element => Array.from(element.childNodes).filter(node => node.nodeType === Node.TEXT_NODE).map(node => node.textContent)))
+            .toEqual(['© ', '2026', ' Example Behavioral Consulting Group. All rights reserved.']);
+          expect(await copy.locator('textarea').inputValue()).toBe('editable value');
+        }
+      }
+      expect(await source.locator('p').evaluate(element => Array.from(element.childNodes).map(node => ({ type: node.nodeType, text: node.textContent })))).toEqual(nodes);
+      expect(html).toContain('<script type="application/json">{"value":1}</script>');
+      expect(html).toMatch(/<textarea[^>]*>editable value<\/textarea>/);
+    } finally {
+      await source.close();
+      await copy.close();
+    }
+  });
+
+  it('preserves rendered image geometry when localization changes intrinsic dimensions', async () => {
+    const source = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+    const copy = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+    const svg = (width: number, height: number) =>
+      `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><rect width="100%" height="100%" fill="red"/></svg>`;
+    await source.route('https://source.example.test/**', (route) =>
+      route.fulfill({ status: 200, contentType: 'image/svg+xml', body: svg(900, 581) }),
+    );
+    await copy.route('https://local.example.test/**', (route) =>
+      route.fulfill({ status: 200, contentType: 'image/svg+xml', body: svg(1000, 581) }),
+    );
+    try {
+      await source.setContent(`<!doctype html><style>
+        .owner { width: 554px; }
+        .owner img { display: block; width: 100%; aspect-ratio: auto 900 / 581; }
+      </style><div class="owner"><img src="https://source.example.test/a.svg"></div>`);
+      await source.locator('img').evaluate((image) => (image as HTMLImageElement).decode());
+      const sourceHeight = await source.locator('img').evaluate((image) => image.getBoundingClientRect().height);
+      const html = await capturePageHtml(source);
+      expect(html).toMatch(/<img[^>]+style="[^"]*aspect-ratio:\s*\d+(?:\.\d+)?\s*\/\s*\d+/);
+      expect(html).not.toMatch(/<img[^>]+style="[^"]*aspect-ratio:\s*auto/);
+
+      await copy.setContent(html.replaceAll('https://source.example.test/a.svg', 'https://local.example.test/a.svg'));
+      await copy.locator('img').evaluate((image) => (image as HTMLImageElement).decode());
+      const copyHeight = await copy.locator('img').evaluate((image) => image.getBoundingClientRect().height);
+      expect(copyHeight).toBeCloseTo(sourceHeight, 1);
+    } finally {
+      await source.close();
+      await copy.close();
+    }
+  });
+
+  it('keeps an authored fixed image ratio responsive when its owner grows beyond capture width', async () => {
+    const source = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+    const copy = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+    const image = '<svg xmlns="http://www.w3.org/2000/svg" width="542" height="104"><rect width="542" height="104" fill="red"/></svg>';
+    for (const page of [source, copy]) {
+      await page.route('https://cdn.example.test/logo.svg', (route) =>
+        route.fulfill({ status: 200, contentType: 'image/svg+xml', body: image })
+      );
+    }
+    try {
+      await source.setContent(`<!doctype html><style>
+        .owner { width: calc((100vw - 96px) / 3); }
+        .owner img { width: auto; height: 104px; max-width: 100%; aspect-ratio: 542 / 104; }
+      </style><div class="owner"><img src="https://cdn.example.test/logo.svg"></div>`);
+      await source.locator('img').evaluate((element) => (element as HTMLImageElement).decode());
+      const html = await capturePageHtml(source);
+      await copy.setContent(html);
+      await copy.locator('img').evaluate((element) => (element as HTMLImageElement).decode());
+
+      for (const width of [1440, 1600, 1728]) {
+        await source.setViewportSize({ width, height: 900 });
+        await copy.setViewportSize({ width, height: 900 });
+        const expected = await source.locator('img').evaluate((element) => element.getBoundingClientRect().width);
+        const actual = await copy.locator('img').evaluate((element) => element.getBoundingClientRect().width);
+        expect(actual, `${width}px preserves the authored ratio under a fluid owner`).toBeCloseTo(expected, 0);
+      }
+    } finally {
+      await source.close();
+      await copy.close();
+    }
   });
 
   it('preserves linked stylesheet source text and responsive layout', async () => {

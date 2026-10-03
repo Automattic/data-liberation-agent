@@ -8,6 +8,63 @@ const MAX_INITIAL_DIALOGS = 8;
 const MAX_DIALOG_HTML_BYTES = 512 * 1024;
 const DIALOG_WAIT_MS = 2_000;
 const POPUP_HASPOPUP = [ 'dialog', 'listbox', 'menu', 'tree', 'grid' ];
+const MAX_ROUTE_CONTROLS = 12;
+
+export interface CapturedRouteNavigation {
+	selector: string;
+	id?: string;
+	label: string;
+	siblings: string[];
+	url: string;
+}
+
+/** Observe the result of clicking visible navigation buttons, never infer a route from a label. */
+export async function captureRouteNavigation( page: Page, sourceUrl: string ): Promise< CapturedRouteNavigation[] > {
+	const candidates = await page.evaluate( ( limit: number ) => {
+		return Array.from( document.querySelectorAll< HTMLButtonElement >( 'nav button,[role="navigation"] button' ) )
+			.filter( button => {
+				const rect = button.getBoundingClientRect();
+				const style = getComputedStyle( button );
+				return rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.top < innerHeight &&
+					style.display !== 'none' && style.visibility !== 'hidden' && ! button.disabled &&
+					! button.closest( 'form,a,[hidden],[inert]' ) &&
+					! button.matches( '[aria-haspopup],[aria-expanded],[aria-controls],[role="tab"],[aria-pressed]' ) &&
+					! button.querySelector( 'a' );
+			} ).slice( 0, limit ).map( button => {
+				const parts: string[] = [];
+				for ( let node: Element | null = button; node && node !== document.body; node = node.parentElement ) {
+					const siblings = Array.from( node.parentElement?.children ?? [] ).filter( sibling => sibling.tagName === node!.tagName );
+					parts.unshift( `${ node.tagName.toLowerCase() }:nth-of-type(${ siblings.indexOf( node ) + 1 })` );
+				}
+				return {
+					selector: `body > ${ parts.join( ' > ' ) }`,
+					...( button.id ? { id: button.id } : {} ),
+					label: ( button.getAttribute( 'aria-label' ) || button.textContent || '' ).replace( /\s+/g, ' ' ).trim(),
+					siblings: Array.from( button.parentElement?.children ?? [] ).filter( child => child.tagName === 'BUTTON' )
+						.map( child => ( child.getAttribute( 'aria-label' ) || child.textContent || '' ).replace( /\s+/g, ' ' ).trim() ),
+				};
+			} );
+	}, MAX_ROUTE_CONTROLS );
+	const original = new URL( sourceUrl );
+	const routes: CapturedRouteNavigation[] = [];
+	for ( const candidate of candidates ) {
+		if ( ! candidate.label || page.url() !== sourceUrl ) break;
+		try {
+			await page.locator( candidate.selector ).click( { timeout: 1_000 } );
+			await page.waitForFunction( ( before: string ) => location.href !== before, sourceUrl, { timeout: 500 } ).catch( () => undefined );
+			const after = new URL( page.url() );
+			if ( after.origin !== original.origin || after.href === original.href || after.pathname === original.pathname && after.search === original.search ) continue;
+			routes.push( { ...candidate, url: after.href } );
+			await page.evaluate( () => history.back() );
+			await page.waitForURL( sourceUrl, { timeout: 1_000 } );
+			// A router may replace its navigation nodes on back; do not apply stale selectors.
+			await page.waitForTimeout( 200 );
+		} catch {
+			if ( page.url() !== sourceUrl ) break;
+		}
+	}
+	return routes;
+}
 const POPUP_SURFACE_SELECTOR =
 	'dialog,[role="dialog"],[aria-modal="true"],[role="listbox"],[role="menu"],[role="tree"],[role="grid"],nav,[class*="header-menu"]';
 const SEMANTIC_POPUP_SELECTOR =
@@ -19,12 +76,13 @@ export interface CapturedDialogInteraction {
 	 * Distinguishes an in-page disclosure/accordion panel (content restored in
 	 * place, before HTML serialization — see `hydrateDisclosureContent`) from a
 	 * runtime-created popup/menu dialog (wired post-hoc by `wireCapturedDialogs`
-	 * into a synthetic `<details>` overlay), from a selectable set whose
+	 * onto the authored trigger), from a selectable set whose
 	 * members drive one shared region (`selectable-set`), and from a choice group
 	 * whose members change their own attributes or styles (`choice-group`). Omitted/`'dialog'`
 	 * preserves the pre-existing shape for callers that predate this field.
 	 */
-	kind?: 'dialog' | 'disclosure' | 'selectable-set' | 'choice-group';
+	kind?: 'dialog' | 'disclosure' | 'selectable-set' | 'choice-group' | 'typed-search';
+	collectionFilter?: import('./typed-search-capture.js').CapturedCollectionFilter;
 	trigger: {
 		selector: string;
 		tag: string;
@@ -122,6 +180,7 @@ export interface InteractionStatesReport {
 	viewport: { width: number; height: number };
 	capturedAt: string;
 	states: CapturedDialogInteraction[];
+	routeNavigation?: CapturedRouteNavigation[];
 	/** Dialogs already visible after the page's normal runtime settling. */
 	initialDialogs?: CapturedInitialDialog[];
 }
@@ -218,7 +277,10 @@ export async function captureTriggeredDialogs(
 				''
 			).replace( /\s+/g, ' ' );
 			const popup = ( element.getAttribute( 'aria-haspopup' ) ?? '' ).toLowerCase();
-			if ( popupTypes.includes( popup ) ) {
+			// `aria-haspopup="true"` is an ambiguous legacy alias for a menu.
+			// Probe it only when the control also declares a collapsed/expanded
+			// state; a visible newly revealed panel is still required to capture.
+			if ( popupTypes.includes( popup ) || ( popup === 'true' && element.hasAttribute( 'aria-expanded' ) ) ) {
 				const hasBinding =
 					Boolean( element.getAttribute( 'aria-controls' ) ) ||
 					Array.from( element.attributes ).some(
@@ -324,7 +386,7 @@ export async function captureTriggeredDialogs(
 			},
 		} );
 
-		await closeCapturedDialog( page, dialog.selector );
+		await closeCapturedDialog( page, dialog.selector, trigger.probeSelector );
 	}
 
 	await page.evaluate( () => {
@@ -334,8 +396,10 @@ export async function captureTriggeredDialogs(
 		for ( const element of document.querySelectorAll( '[data-lib-interaction-dialog]' ) ) {
 			element.removeAttribute( 'data-lib-interaction-dialog' );
 		}
-		for ( const element of document.querySelectorAll( '[data-lib-visible-before]' ) ) {
+		for ( const element of document.querySelectorAll( '[data-lib-visible-before],[data-lib-offscreen-pos],[data-lib-motion-reveal]' ) ) {
 			element.removeAttribute( 'data-lib-visible-before' );
+			element.removeAttribute( 'data-lib-offscreen-pos' );
+			element.removeAttribute( 'data-lib-motion-reveal' );
 		}
 		for ( const element of document.querySelectorAll( '[data-lib-initial-dialog],[data-lib-initial-close]' ) ) {
 			element.removeAttribute( 'data-lib-initial-dialog' );
@@ -546,6 +610,10 @@ async function rulesAddedSinceActivation( page: Page ): Promise< string > {
  * activation reveals is identified by what changed, not by its tag. A menu that
  * opens as a plain in-flow <div> would otherwise be missed, and an unrelated
  * large <nav> elsewhere on the page taken instead.
+ *
+ * Shown elements outside the viewport also get their document position. A
+ * drawer translated off-screen still has a box, so visibility alone cannot
+ * tell that a click slid it into view.
  */
 async function markVisibleBeforeActivation( page: Page ): Promise< void > {
 	await page.evaluate( () => {
@@ -558,7 +626,10 @@ async function markVisibleBeforeActivation( page: Page ): Promise< void > {
 			}
 		}
 		( globalThis as unknown as { __dlaRulesBefore?: string[] } ).__dlaRulesBefore = rules;
-		for ( const element of document.querySelectorAll( '[data-lib-visible-before]' ) ) element.removeAttribute( 'data-lib-visible-before' );
+		for ( const element of document.querySelectorAll( '[data-lib-visible-before],[data-lib-offscreen-pos]' ) ) {
+			element.removeAttribute( 'data-lib-visible-before' );
+			element.removeAttribute( 'data-lib-offscreen-pos' );
+		}
 		// Same rule as the post-activation check, including an ancestor's
 		// opacity: a menu faded in by its wrapper was not visible before.
 		const opacityOf = new Map< Element, number >();
@@ -570,11 +641,22 @@ async function markVisibleBeforeActivation( page: Page ): Promise< void > {
 			opacityOf.set( element, value );
 			return value;
 		};
+		const inViewport = ( rect: DOMRect ): boolean =>
+			rect.bottom > 0 &&
+			rect.right > 0 &&
+			rect.top < window.innerHeight &&
+			rect.left < window.innerWidth;
 		for ( const element of Array.from( document.body?.querySelectorAll( '*' ) ?? [] ) ) {
 			const rect = element.getBoundingClientRect();
 			const style = getComputedStyle( element );
 			if ( rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden' && effectiveOpacity( element ) > 0.1 ) {
 				element.setAttribute( 'data-lib-visible-before', '' );
+				if ( ! inViewport( rect ) ) {
+					element.setAttribute(
+						'data-lib-offscreen-pos',
+						`${ Math.round( rect.left + window.scrollX ) },${ Math.round( rect.top + window.scrollY ) }`
+					);
+				}
 			}
 		}
 	} ).catch( () => undefined );
@@ -628,14 +710,62 @@ async function firstNewVisibleDialog(
 			( element.parentElement === null || element.parentElement.hasAttribute( 'data-lib-visible-before' ) ) &&
 			element.querySelector( 'a[href],button' ) !== null
 		) : undefined );
-		const dialog = revealed;
+		const intersectionArea = ( rect: DOMRect ): number => {
+			const width = Math.min( rect.right, window.innerWidth ) - Math.max( rect.left, 0 );
+			const height = Math.min( rect.bottom, window.innerHeight ) - Math.max( rect.top, 0 );
+			return Math.max( 0, width ) * Math.max( 0, height );
+		};
+		const slidIntoView = ( element: Element ): boolean => {
+			const pos = element.getAttribute( 'data-lib-offscreen-pos' );
+			if ( ! pos || element.hasAttribute( 'data-lib-interaction-trigger' ) || element.closest( '[data-lib-interaction-trigger]' ) ) return false;
+			if ( ! visible( element ) ) return false;
+			const rect = element.getBoundingClientRect();
+			if ( intersectionArea( rect ) < 10_000 ) return false;
+			const [ left, top ] = pos.split( ',' ).map( ( value ) => Number.parseFloat( value ) );
+			const moved =
+				Math.abs( rect.left + window.scrollX - left ) > 48 ||
+				Math.abs( rect.top + window.scrollY - top ) > 48;
+			return moved && element.querySelector( 'a[href],button,[role="button"]' ) !== null;
+		};
+		const moved = revealed ?? ( marked
+			? Array.from( document.querySelectorAll( '[data-lib-offscreen-pos]' ) ).find( ( element ) => {
+				if ( ! slidIntoView( element ) ) return false;
+				const parent = element.parentElement;
+				return parent === null || ! slidIntoView( parent );
+			} )
+			: undefined );
+		if ( moved && moved !== revealed ) moved.setAttribute( 'data-lib-motion-reveal', '' );
+		const dialog = moved;
 		if ( ! dialog ) return undefined;
 		const dialogSelector = dialog.id
 			? selector( dialog, candidates.indexOf( dialog ) )
 			: '[data-lib-interaction-dialog="captured"]';
 		if ( ! dialog.id ) dialog.setAttribute( 'data-lib-interaction-dialog', 'captured' );
-		const clone = dialog.cloneNode( true ) as Element;
+		const clone = dialog.cloneNode( true ) as HTMLElement;
 		clone.removeAttribute( 'data-lib-interaction-dialog' );
+		clone.removeAttribute( 'data-lib-motion-reveal' );
+		clone.removeAttribute( 'data-lib-offscreen-pos' );
+		clone.removeAttribute( 'data-lib-visible-before' );
+		if ( dialog.hasAttribute( 'data-lib-motion-reveal' ) ) {
+			const position = getComputedStyle( dialog ).position;
+			clone.style.removeProperty( 'transform' );
+			clone.style.setProperty( 'transform', 'translateX(0)', 'important' );
+			clone.style.setProperty( 'visibility', 'visible', 'important' );
+			clone.style.setProperty( 'opacity', '1', 'important' );
+			if ( position === 'fixed' || position === 'absolute' ) {
+				clone.style.setProperty( 'position', 'relative', 'important' );
+				clone.style.setProperty( 'inset', 'auto', 'important' );
+				clone.style.setProperty( 'left', 'auto', 'important' );
+				clone.style.setProperty( 'right', 'auto', 'important' );
+				clone.style.setProperty( 'top', 'auto', 'important' );
+				clone.style.setProperty( 'bottom', 'auto', 'important' );
+			}
+		}
+		for ( const marked of Array.from( clone.querySelectorAll( '[data-lib-visible-before],[data-lib-offscreen-pos],[data-lib-motion-reveal]' ) ) ) {
+			marked.removeAttribute( 'data-lib-visible-before' );
+			marked.removeAttribute( 'data-lib-offscreen-pos' );
+			marked.removeAttribute( 'data-lib-motion-reveal' );
+		}
 		for ( const unsafe of Array.from( clone.querySelectorAll( 'script,style,noscript,iframe' ) ) )
 			unsafe.remove();
 		for ( const element of [ clone, ...Array.from( clone.querySelectorAll( '*' ) ) ] ) {
@@ -667,25 +797,39 @@ async function firstNewVisibleDialog(
 	} ) as Promise< DialogDescriptor | undefined >;
 }
 
-async function closeCapturedDialog( page: Page, selector: string ): Promise< void > {
+async function closeCapturedDialog( page: Page, selector: string, triggerSelector?: string ): Promise< void > {
 	await page.keyboard.press( 'Escape' ).catch( () => undefined );
 	await page.waitForTimeout( 100 );
-	const stillVisible = await page
-		.locator( selector )
-		.first()
-		.isVisible()
-		.catch( () => false );
-	if ( ! stillVisible ) return;
+	if ( ! ( await panelIntersectsViewport( page, selector ) ) ) return;
 	const close = page
 		.locator( selector )
 		.first()
 		.locator(
-			'[aria-label*="close" i],[title*="close" i],button[class*="close" i],[data-dismiss],[data-testid*="close" i]'
+			'[aria-label*="close" i],[title*="close" i],button[class*="close" i],[data-dismiss],[data-close],[data-testid*="close" i]'
 		)
 		.first();
 	if ( await close.isVisible().catch( () => false ) ) {
 		await close.click( { timeout: 1_000 } ).catch( () => undefined );
+		await page.waitForTimeout( 100 );
 	}
+	if ( triggerSelector && ( await panelIntersectsViewport( page, selector ) ) ) {
+		await page.locator( triggerSelector ).first().click( { timeout: 1_000 } ).catch( () => undefined );
+	}
+}
+
+async function panelIntersectsViewport( page: Page, selector: string ): Promise< boolean > {
+	return page
+		.locator( selector )
+		.first()
+		.evaluate( ( element ) => {
+			const rect = element.getBoundingClientRect();
+			const style = getComputedStyle( element );
+			if ( style.display === 'none' || style.visibility === 'hidden' ) return false;
+			const width = Math.min( rect.right, window.innerWidth ) - Math.max( rect.left, 0 );
+			const height = Math.min( rect.bottom, window.innerHeight ) - Math.max( rect.top, 0 );
+			return width > 8 && height > 8;
+		}, undefined, { timeout: 1_000 } )
+		.catch( () => false );
 }
 
 async function waitForDialogContentStable( page: Page, selector: string ): Promise< void > {
@@ -714,11 +858,34 @@ async function snapshotDialog(
 		.locator( selector )
 		.first()
 		.evaluate( ( dialog, capturedSelector ) => {
-			const clone = dialog.cloneNode( true ) as Element;
+			const clone = dialog.cloneNode( true ) as HTMLElement;
 			clone.removeAttribute( 'data-lib-interaction-dialog' );
+			clone.removeAttribute( 'data-lib-motion-reveal' );
+			clone.removeAttribute( 'data-lib-offscreen-pos' );
+			clone.removeAttribute( 'data-lib-visible-before' );
+			if ( dialog.hasAttribute( 'data-lib-motion-reveal' ) ) {
+				const position = getComputedStyle( dialog ).position;
+				clone.style.removeProperty( 'transform' );
+				clone.style.setProperty( 'transform', 'translateX(0)', 'important' );
+				clone.style.setProperty( 'visibility', 'visible', 'important' );
+				clone.style.setProperty( 'opacity', '1', 'important' );
+				if ( position === 'fixed' || position === 'absolute' ) {
+					clone.style.setProperty( 'position', 'relative', 'important' );
+					clone.style.setProperty( 'inset', 'auto', 'important' );
+					clone.style.setProperty( 'left', 'auto', 'important' );
+					clone.style.setProperty( 'right', 'auto', 'important' );
+					clone.style.setProperty( 'top', 'auto', 'important' );
+					clone.style.setProperty( 'bottom', 'auto', 'important' );
+				}
+			}
+			for ( const marked of Array.from( clone.querySelectorAll( '[data-lib-visible-before],[data-lib-offscreen-pos],[data-lib-motion-reveal]' ) ) ) {
+				marked.removeAttribute( 'data-lib-visible-before' );
+				marked.removeAttribute( 'data-lib-offscreen-pos' );
+				marked.removeAttribute( 'data-lib-motion-reveal' );
+			}
 			// The portable disclosure's block fallback must not collapse flex/grid
 			// layouts whose descendants rely on the opened root's layout mode.
-			( clone as HTMLElement ).style.setProperty( 'display', getComputedStyle( dialog ).display, 'important' );
+			clone.style.setProperty( 'display', getComputedStyle( dialog ).display, 'important' );
 			for ( const unsafe of Array.from( clone.querySelectorAll( 'script,style,noscript,iframe' ) ) )
 				unsafe.remove();
 			for ( const element of [ clone, ...Array.from( clone.querySelectorAll( '*' ) ) ] ) {

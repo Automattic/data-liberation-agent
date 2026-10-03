@@ -2,11 +2,14 @@ import type { Page, Request } from 'playwright';
 import { expandCollapsedContent, waitForAppWidgets } from './dynamic-content.js';
 import { isSourcePromotion } from '../source-cleanup.js';
 
+/** Slack given to an in-page step beyond its own budget before Node gives up on it. */
+const EVALUATE_GRACE_MS = 5_000;
+
 /**
  * Wait for a page to reach a stable state after load.
  *
  *   goto('load') ─▶ settleMs ─▶ networkidle best-effort (5s) ─▶ fonts.ready (4s)
- *     ─▶ DOM quiescence, bounded (5s) ─▶ done
+ *     ─▶ DOM quiescence, bounded (5s) ─▶ declared loading state, if any ─▶ done
  *
  * Networkidle is wrapped in try/catch because chatty analytics (GA, Intercom)
  * can hold it open indefinitely; we don't want that to block capture.
@@ -19,7 +22,7 @@ import { isSourcePromotion } from '../source-cleanup.js';
  * networkidle, so any font request issued by late hydration JS is already in
  * flight and document.fonts.ready waits for it to actually apply.
  *
- * The DOM-quiescence step runs LAST because a client-rendered app can still be
+ * The DOM-quiescence step runs after fonts because a client-rendered app can still be
  * assembling its own content well after 'load' fires and after networkidle has
  * either resolved or given up. 'load' only covers the document's own
  * script/stylesheet bundle, not whatever that bundle goes on to fetch and
@@ -34,7 +37,9 @@ import { isSourcePromotion } from '../source-cleanup.js';
  * for `quietMs`, bounded by `domTimeoutMs` so a page that never stops mutating
  * (a live-updating ticker, a looping carousel re-render) cannot hang the
  * capture — it simply falls back to whatever the DOM looked like at the
- * deadline, same as every other best-effort wait in this file.
+ * deadline, same as every other best-effort wait in this file. A declared
+ * loading state additionally keeps finite timer sequences from being frozen
+ * during a quiet gap between text updates.
  */
 export async function waitForStable(
   page: Page,
@@ -52,6 +57,40 @@ export async function waitForStable(
   }
   await waitForFonts(page);
   await waitForDomQuiescence(page, 500, domTimeoutMs);
+  await waitForDeclaredLoadingState(page);
+}
+
+/**
+ * A quiet gap between timers does not mean that an authored loading sequence is
+ * finished. Only wait when the document explicitly declares itself busy, and
+ * bound the wait for pages whose busy state never clears.
+ */
+export async function waitForDeclaredLoadingState(page: Page, timeoutMs: number = 15_000): Promise<void> {
+  try {
+    const wasBusy = await withEvaluateTimeout(page.evaluate(({ timeoutMs }) => {
+      const busy = () => [document.documentElement, document.body].some(
+        (element) => element?.classList.contains('loading') || element?.getAttribute('aria-busy') === 'true'
+      );
+      if (!busy()) return false;
+      return new Promise<boolean>((resolve) => {
+        const observer = new MutationObserver(() => {
+          if (!busy()) finish();
+        });
+        const finish = () => {
+          clearTimeout(timer);
+          observer.disconnect();
+          resolve(true);
+        };
+        observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'aria-busy'] });
+        if (document.body) observer.observe(document.body, { attributes: true, attributeFilter: ['class', 'aria-busy'] });
+        const timer = setTimeout(finish, timeoutMs);
+        if (!busy()) finish();
+      });
+    }, { timeoutMs }), timeoutMs + 1_000);
+    if (wasBusy) await waitForDomQuiescence(page, 500, 2_000);
+  } catch {
+    /* best-effort — never hang a capture on an orphaned loading state */
+  }
 }
 
 /**
@@ -112,17 +151,51 @@ export async function waitForDomQuiescence(
 }
 
 /**
- * Wait for web fonts to finish loading (or fail) so FOIT resolves before a
- * screenshot. Best-effort and timeout-bounded: a webfont that never settles
- * (or a hostile/blocked CDN) must not hang or fail the capture.
+ * Settle the declared stacks of painted text, not only the faces layout chose.
+ * fonts.ready alone leaves unused @font-face fallbacks unloaded, while the
+ * observation's fonts.check asks about the whole computed stack. Explicitly
+ * load those stacks so a usable local fallback is not mistaken for a failure.
+ * Re-read computed styles on every call (including after viewport changes).
+ * Failed/pending faces remain detectable by fonts.check; this best-effort wait
+ * does not decide readiness or let a blocked font hang capture.
  */
 export async function waitForFonts(page: Page, timeoutMs: number = 4_000): Promise<void> {
   try {
     await withEvaluateTimeout(
-      // document.fonts.ready resolves once every in-use @font-face has loaded or
-      // errored; map to a serializable value so playwright can return it.
-      page.evaluate(() => document.fonts.ready.then(() => true)),
-      timeoutMs,
+      page.evaluate(async (budget) => {
+        const deadline = Date.now() + budget;
+        const stacks = new Map<string, Set<string>>();
+        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+        let node: Node | null;
+        while (Date.now() < deadline && (node = walker.nextNode())) {
+          const parent = node.parentElement;
+          const text = node.textContent?.replace(/\s+/g, ' ').trim();
+          if (!parent || !text || parent.closest('script,style,noscript,template')) continue;
+          const range = document.createRange();
+          range.selectNodeContents(node);
+          const rect = range.getBoundingClientRect();
+          const style = getComputedStyle(parent);
+          if (rect.width <= 0 || rect.height <= 0 || style.display === 'none' || style.visibility === 'hidden') continue;
+          const font = `${style.fontStyle} ${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+          const characters = stacks.get(font) ?? new Set<string>();
+          for (const character of text) characters.add(character);
+          stacks.set(font, characters);
+        }
+        // One load per stack with all observed codepoints preserves unicode-range
+        // matching without issuing a separate load for every repeated text node.
+        const loading = Promise.all([...stacks].map(([font, characters]) =>
+          document.fonts.load(font, [...characters].join('')).catch(() => undefined)
+        )).then(() => document.fonts.ready);
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          await Promise.race([
+            loading,
+            new Promise<void>(resolve => { timer = setTimeout(resolve, Math.max(0, deadline - Date.now())); }),
+          ]);
+        } finally { clearTimeout(timer); }
+        return true;
+      }, timeoutMs),
+      timeoutMs + 1_000,
     );
   } catch {
     /* best-effort — never block capture on a slow/blocked webfont */
@@ -306,30 +379,36 @@ export async function waitForRenderIdle(
  * wall-clock time so a page that grows forever (true infinite scroll) still
  * terminates rather than capturing forever.
  */
-export async function triggerLazyLoad(page: Page, requireNetworkIdle: boolean = false): Promise<void> {
+export async function triggerLazyLoad(page: Page, requireNetworkIdle: boolean = false, options: { expandContent?: boolean } = {}): Promise<void> {
   try {
     // One page.evaluate call per sweep, given the time it's still allowed to
     // run: `maxMs` here is the REMAINING settle budget, not a fixed per-sweep
     // allowance, so a page that never stops growing can't spend the full
     // per-sweep cap on every one of `settleScroll`'s rounds and blow past the
     // overall budget by a multiple of it.
+    // Every in-page step is also bounded from Node: a renderer whose main
+    // thread is spinning never answers, so its own budget never fires.
     const sweepToBottom = (maxMs: number) =>
-      page.evaluate(
+      withEvaluateTimeout(page.evaluate(
         async ({ step, pauseMs, maxMs }) => {
           const started = Date.now();
           let y = window.scrollY;
           let total = document.documentElement.scrollHeight;
-          while (y < total && Date.now() - started < maxMs) {
-            y = Math.min(y + step, total);
+          // The viewport already covers the final innerHeight pixels. Walking
+          // toward scrollHeight overscrolls a clamped page and sleeps despite
+          // revealing nothing, again on every image-settling round.
+          let bottom = Math.max(0, total - window.innerHeight);
+          while (y < bottom && Date.now() - started < maxMs) {
+            y = Math.min(y + step, bottom);
             window.scrollTo({ top: y, left: 0, behavior: 'instant' });
             await new Promise((r) => setTimeout(r, pauseMs));
             total = document.documentElement.scrollHeight;
+            bottom = Math.max(0, total - window.innerHeight);
           }
-          window.scrollTo({ top: total, left: 0, behavior: 'instant' });
           return total;
         },
         { step: 500, pauseMs: 200, maxMs },
-      );
+      ), maxMs + EVALUATE_GRACE_MS);
     const settleScroll = async () => {
       const deadline = Date.now() + 20_000;
       let previousHeight = -1;
@@ -356,23 +435,39 @@ export async function triggerLazyLoad(page: Page, requireNetworkIdle: boolean = 
     // content widgets (reviews / FAQ apps) to populate — so the snapshot captures real
     // content, not an empty placeholder. Both are no-ops on ordinary pages. (See
     // dynamic-content.ts; DISCOVERIES 2026-06-04.)
-    await expandCollapsedContent(page);
-    await waitForAppWidgets(page);
+    if (options.expandContent !== false) await withEvaluateTimeout(expandCollapsedContent(page), 30_000);
+    await withEvaluateTimeout(waitForAppWidgets(page), 8_000 + EVALUATE_GRACE_MS);
     await waitForImages(page);
     // Return to top AND fire a scroll event so scroll-reactive headers recompute
     // their at-top (un-faded) state — scrollTo alone doesn't trigger their handler.
-    await page.evaluate(() => {
+    await withEvaluateTimeout(page.evaluate(() => {
       window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
       window.dispatchEvent(new Event('scroll'));
-    });
+    }), EVALUATE_GRACE_MS);
     // Scroll handlers are throttled/debounced (~200ms observed on Wix), so the
     // restore transition starts a beat AFTER the event — waitForAnimations would
     // otherwise sample before it begins and return early. Give the handler time
     // to kick the transition off, then wait for that transition to finish.
     await new Promise((r) => setTimeout(r, 400));
     await waitForAnimations(page);
+    // Scrolling, restored headers and newly revealed content can introduce font
+    // stacks after the initial stable wait. Settle before observation/screenshot.
+    await waitForFonts(page);
   } catch {
     /* if the page crashes or blocks our script, don't fail the capture */
+  }
+}
+
+/**
+ * Whether the page's main thread still answers a trivial evaluate. A renderer
+ * stuck in a script loop never does, and every later step would hang with it.
+ */
+export async function pageResponds(page: Page, ms: number = EVALUATE_GRACE_MS): Promise<boolean> {
+  try {
+    await withEvaluateTimeout(page.evaluate(() => true), ms);
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -414,6 +509,8 @@ export interface OverlayCandidate {
   text: string;              // lowercased textContent, truncated
   ariaLabel: string | null;  // lowercased aria-label
   hasCloseAffordance: boolean; // a visible close control exists in the subtree
+  textShare?: number;        // share of the document's rendered text inside it, 0..1
+  isLandmark?: boolean;      // semantic site chrome must not be dismissed as a nested overlay
 }
 
 /** Page-global scroll-lock state (one modal locking scroll affects the page). */
@@ -529,6 +626,9 @@ export function isProviderPromotion(c: OverlayCandidate): boolean {
   return c.coverageRatio < 0.25 && isSourcePromotion(hay);
 }
 
+/** A candidate holding at least this share of the document's text is the page itself. */
+const PAGE_TEXT_SHARE = 0.9;
+
 /**
  * Decide which candidates are overlays and in what order to dismiss them.
  * Pure. Takeovers (score ≥ threshold) first, highest score first; then consent
@@ -542,6 +642,9 @@ export function selectOverlayTargets(d: OverlayDetection): OverlayTarget[] {
   // (lets the mocked-browser path be a true no-op, and removes a hidden
   // dependency on dismissOverlays' try/catch).
   for (const c of d.candidates ?? []) {
+    // Nothing is behind a layer that holds the document's text: it is the page
+    // (a password or access gate, say), and removing it leaves an empty document.
+    if ((c.textShare ?? 0) >= PAGE_TEXT_SHARE) continue;
     const { score, signals } = scoreOverlay(c, d.scrollLock);
     // Ambient signals alone (page-global scroll-lock + a SIBLING modal's backdrop)
     // can lift benign sticky chrome to the threshold. Require a takeover to either
@@ -549,8 +652,18 @@ export function selectOverlayTargets(d: OverlayDetection): OverlayTarget[] {
     // of the viewport — so a small age-gate dialog is still caught while a thin
     // sticky header (no modal role, tiny coverage) is not.
     const hasModalRole = c.ariaModal || c.role === 'dialog' || c.role === 'alertdialog';
+    // Consent banners are sometimes rendered inside a site's semantic header.
+    // Its combined text then contains the cookie copy, but removing the header
+    // also removes the site's logo and navigation. Leave implicit overlay
+    // classifications to positioned descendants; explicit dialog semantics
+    // still allow a genuine modal landmark to be handled.
+    if (c.isLandmark && !hasModalRole) continue;
+    // A close control can be an ordinary header/menu descendant (Squarespace
+    // headers commonly contain a mobile menu toggle). It is useful after an
+    // overlay has been identified, but by itself must not turn the global
+    // scroll-lock signal into evidence that this candidate is a takeover.
     const hasOverlayEvidence =
-      hasModalRole || c.hasCloseAffordance || c.vendorHint ||
+      hasModalRole || c.vendorHint || (c.hasCloseAffordance && c.coverageRatio >= 0.15) ||
       (c.hasBackdrop && c.coverageRatio >= 0.15);
     if (score >= OVERLAY_THRESHOLD && hasOverlayEvidence) {
       takeovers.push({
@@ -580,6 +693,8 @@ export function selectOverlayTargets(d: OverlayDetection): OverlayTarget[] {
  */
 function detectOverlays(page: Page): Promise<OverlayDetection> {
   return page.evaluate(() => {
+    const globalWithName = globalThis as typeof globalThis & { __name?: (fn: unknown) => unknown };
+    if (typeof globalWithName.__name === 'undefined') globalWithName.__name = (fn) => fn;
     const VENDOR = /klaviyo|privy|optinmonster|justuno|sumo|mailchimp|popup|newsletter|subscribe|interstitial/i;
     const SCROLL_LOCK = /(prevent|disable|no)[-_]?(body[-_]?)?scroll|modal[-_]?open|scroll[-_]?lock/i;
     const vw = window.innerWidth || 1;
@@ -630,6 +745,7 @@ function detectOverlays(page: Page): Promise<OverlayDetection> {
       });
     };
 
+    const pageTextLength = (document.body?.innerText || '').trim().length;
     const candidates: Array<Record<string, unknown>> = [];
     let idx = 0;
     for (const el of Array.from(document.querySelectorAll('*'))) {
@@ -652,6 +768,53 @@ function detectOverlays(page: Page): Promise<OverlayDetection> {
         text: (el.textContent || '').toLowerCase().slice(0, 400),
         ariaLabel: ((el.getAttribute('aria-label') || '').toLowerCase()) || null,
         hasCloseAffordance: !!close,
+        isLandmark: /^(HEADER|NAV)$/.test(el.tagName) ||
+          ['banner', 'navigation', 'contentinfo'].includes((el.getAttribute('role') || '').toLowerCase()),
+        textShare: pageTextLength
+          ? ((el as HTMLElement).innerText || '').trim().length / pageTextLength
+          : 0,
+      });
+      idx++;
+    }
+    // Some platforms (including Squarespace) put their cookie notice in normal
+    // flow inside a fixed semantic header. The header is overlay-positioned,
+    // but the notice itself is static, so the positioned-element scan above
+    // cannot safely target it. Add only explicitly labelled/identified consent
+    // descendants with a real action control; selection still uses the shared
+    // consent classifier and dismissal policy.
+    const consentHint = /cookie|consent|gdpr/i;
+    for (const el of Array.from(document.querySelectorAll('[aria-label],[class]'))) {
+      if (el.hasAttribute('data-lib-overlay')) continue;
+      const identity = `${el.getAttribute('aria-label') || ''} ${cls(el)}`;
+      if (!consentHint.test(identity) || !el.querySelector('button,[role="button"],input[type="button"],input[type="submit"]')) continue;
+      let positionedHost = el.parentElement;
+      while (positionedHost && !['fixed', 'sticky'].includes(getComputedStyle(positionedHost).position)) {
+        positionedHost = positionedHost.parentElement;
+      }
+      if (!positionedHost) continue;
+      const cs = getComputedStyle(el);
+      const r = el.getBoundingClientRect();
+      if (!visible(cs) || r.width < vw * 0.1 || r.height < 24 || r.height > vh * 0.5) continue;
+      el.setAttribute('data-lib-overlay', String(idx));
+      const close = findClose(el);
+      if (close) close.setAttribute('data-lib-overlay-close', String(idx));
+      candidates.push({
+        idx,
+        selector: cssPath(el),
+        role: el.getAttribute('role'),
+        ariaModal: el.getAttribute('aria-modal') === 'true',
+        zIndex: parseInt(cs.zIndex, 10) || 0,
+        coverageRatio: Math.min(1, (r.width * r.height) / vpArea),
+        hasBackdrop: hasBackdrop(el),
+        vendorHint: VENDOR.test(`${el.id} ${cls(el)}`),
+        text: (el.textContent || '').toLowerCase().slice(0, 400),
+        ariaLabel: ((el.getAttribute('aria-label') || '').toLowerCase()) || null,
+        hasCloseAffordance: !!close,
+        isLandmark: /^(HEADER|NAV)$/.test(el.tagName) ||
+          ['banner', 'navigation', 'contentinfo'].includes((el.getAttribute('role') || '').toLowerCase()),
+        textShare: pageTextLength
+          ? ((el as HTMLElement).innerText || '').trim().length / pageTextLength
+          : 0,
       });
       idx++;
     }
@@ -828,20 +991,20 @@ export async function dismissOverlays(
       if (targets.length === 0) break;
       let acted = 0;
       for (const t of targets) {
-        const method = await dismissOne(page, t);
+        const method = await withEvaluateTimeout(dismissOne(page, t), 10_000);
         if (method) {
           dismissed.push({ selector: t.selector, method, kind: t.kind, score: t.score, signals: t.signals });
           acted++;
         }
       }
-      if (acted > 0) await ensureScrollUnlocked(page);
-      await cleanupStamps(page);
+      if (acted > 0) await withEvaluateTimeout(ensureScrollUnlocked(page), EVALUATE_GRACE_MS);
+      await withEvaluateTimeout(cleanupStamps(page), EVALUATE_GRACE_MS);
       if (acted === 0) break; // nothing dismissable left; stop early
     }
   } catch {
     /* best-effort — never fail a capture on overlay dismissal */
   } finally {
-    try { await cleanupStamps(page); } catch { /* ignore */ }
+    try { await withEvaluateTimeout(cleanupStamps(page), EVALUATE_GRACE_MS); } catch { /* ignore */ }
   }
   return dismissed;
 }

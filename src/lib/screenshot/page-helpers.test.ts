@@ -10,6 +10,7 @@ import {
   waitForAnimations,
   waitForRenderIdle,
   waitForDomQuiescence,
+  waitForDeclaredLoadingState,
 } from './page-helpers.js';
 
 type MockPage = {
@@ -133,6 +134,33 @@ describe('waitForDomQuiescence', () => {
   });
 });
 
+describe('declared loading state', () => {
+  let browser: Browser;
+
+  beforeAll(async () => { browser = await chromium.launch(); });
+  afterAll(async () => { await browser.close(); });
+
+  it('captures the final authored text after a sequence with quiet gaps between timers', async () => {
+    const page = await browser.newPage();
+    await page.setContent(`<body class="loading"><p id="status">Starting</p><script>
+      setTimeout(() => document.querySelector('#status').textContent = 'Halfway', 900);
+      setTimeout(() => { document.querySelector('#status').textContent = 'Complete'; document.body.classList.remove('loading'); }, 1800);
+    </script></body>`);
+    await waitForStable(page, 0, 1_000);
+    expect(await page.locator('#status').textContent()).toBe('Complete');
+    await page.close();
+  });
+
+  it('bounds a loading state that never clears', async () => {
+    const page = await browser.newPage();
+    await page.setContent('<body class="loading"><p>Static content</p></body>');
+    const started = Date.now();
+    await waitForDeclaredLoadingState(page, 50);
+    expect(Date.now() - started).toBeLessThan(2_000);
+    await page.close();
+  });
+});
+
 describe('triggerLazyLoad', () => {
   let browser: Browser;
 
@@ -149,6 +177,32 @@ describe('triggerLazyLoad', () => {
     await triggerLazyLoad(page as never);
     expect(page.evaluate).toHaveBeenCalled();
   });
+
+  it('preserves asynchronous body state and content revealed during lazy-load scrolling', async () => {
+    const page = await browser.newPage();
+    await page.setContent(`<!doctype html><style>
+      body { height:3000px; }
+      body.loaded main { min-height: 120px; background: rgb(1, 2, 3); }
+      header { position:fixed; top:0; height:40px; padding-top:24px; }
+      header.shrink { padding-top:4px; }
+    </style><header id="header">Navigation</header><main style="height:3000px">Content</main>
+    <script>
+      setTimeout(() => document.body.classList.add('loaded'), 300);
+      let scrolled = false;
+      addEventListener('scroll', () => {
+        if (scrollY > 0) { scrolled = true; document.body.classList.add('scrolling'); document.querySelector('#header').classList.add('compact'); }
+        else if (scrolled) { document.body.classList.remove('scrolling'); document.querySelector('#header').classList.remove('compact'); }
+      });
+    </script>`);
+    try {
+      await triggerLazyLoad(page);
+      expect(await page.evaluate(() => scrollY)).toBe(0);
+      expect(await page.locator('body').getAttribute('class')).toContain('loaded');
+      expect(await page.locator('main').evaluate((element) => getComputedStyle(element).backgroundColor)).toBe('rgb(1, 2, 3)');
+    } finally {
+      await page.close();
+    }
+  }, 30_000);
 
   it('all in-page scrollTo calls are explicit-instant (smooth-scroll glide immunity)', async () => {
     // html{scroll-behavior:smooth} makes a bare scrollTo GLIDE: the restore
@@ -194,6 +248,27 @@ describe('triggerLazyLoad', () => {
     }));
     expect(image).toEqual({ complete: true, naturalWidth: 10 });
     await page.close();
+  });
+
+  it('stops scroll preparation at the reachable viewport bottom without overscroll waits', async () => {
+    const page = await browser.newPage({ viewport: { width: 800, height: 900 } });
+    try {
+      await page.setContent('<style>body{margin:0}</style><main style="height:2100px">Content</main>');
+      await page.evaluate(() => {
+        const original = window.scrollTo.bind(window);
+        (window as unknown as { overshoots: number }).overshoots = 0;
+        window.scrollTo = ((options: ScrollToOptions) => {
+          if ((options.top ?? 0) > Math.max(0, document.documentElement.scrollHeight - innerHeight))
+            (window as unknown as { overshoots: number }).overshoots++;
+          original(options);
+        }) as typeof window.scrollTo;
+      });
+      await triggerLazyLoad(page);
+      expect(await page.evaluate(() => (window as unknown as { overshoots: number }).overshoots)).toBe(0);
+      expect(await page.evaluate(() => scrollY)).toBe(0);
+    } finally {
+      await page.close();
+    }
   });
 
   // Regression coverage for the stale-`total` scroll-reveal bug: a document

@@ -168,6 +168,28 @@ describe('selectOverlayTargets', () => {
     expect(selectOverlayTargets(detection)).toEqual([]);
   });
 
+  it('does not treat a sticky header close/menu descendant as takeover evidence', () => {
+    const detection: OverlayDetection = {
+      scrollLock: { active: true },
+      candidates: [benign({
+        idx: 0, selector: 'header#header', zIndex: 1000, hasCloseAffordance: true,
+      })],
+    };
+    expect(selectOverlayTargets(detection)).toEqual([]);
+  });
+
+  it('preserves a semantic header whose text includes a nested cookie banner', () => {
+    const detection: OverlayDetection = {
+      scrollLock: { active: false },
+      candidates: [benign({
+        idx: 0, selector: 'header.site-header', isLandmark: true,
+        text: 'By using this website, you agree to our use of cookies. Accept Services Team Contact Us',
+        coverageRatio: 0.24,
+      })],
+    };
+    expect(selectOverlayTargets(detection)).toEqual([]);
+  });
+
   it('keeps a small scroll-locking modal that carries its own dialog semantics', () => {
     // score = dialog(3) + scroll-lock(3) = 6; coverage only 0.09 but aria-modal → takeover.
     const detection: OverlayDetection = {
@@ -185,6 +207,14 @@ describe('selectOverlayTargets', () => {
       candidates: [benign({ idx: 0, selector: 'canvas#canvas', coverageRatio: 1 })],
     };
     expect(selectOverlayTargets(detection)).toEqual([]);
+  });
+
+  it('keeps a full-viewport, high-z layer that holds the document\'s text: it is the page', () => {
+    const root = benign({
+      idx: 0, selector: 'div#app', coverageRatio: 1, zIndex: 100000, hasCloseAffordance: true,
+    });
+    expect(selectOverlayTargets({ scrollLock: noLock, candidates: [{ ...root, textShare: 0.2 }] })).toHaveLength(1);
+    expect(selectOverlayTargets({ scrollLock: noLock, candidates: [{ ...root, textShare: 1 }] })).toEqual([]);
   });
 });
 
@@ -261,6 +291,26 @@ describe('dismissOverlays — Tier 1 graceful close (Playwright)', () => {
   });
 });
 
+describe('dismissOverlays — a layer holding the page content (Playwright)', () => {
+  it('leaves a full-viewport, high-z root that contains the page content in place', async () => {
+    const page = await browser.newPage();
+    await page.setContent(`<!doctype html><html><head><style>
+      body { margin: 0; }
+      #root { position: fixed; inset: 0; z-index: 100000; background: #fff; }
+    </style></head><body><div id="root">
+      <button aria-label="Close">×</button>
+      <h1>Members area</h1><p>Please enter the password below.</p>
+      <form><input type="password"><button>Go</button></form>
+    </div></body></html>`);
+    try {
+      expect(await dismissOverlays(page)).toEqual([]);
+      expect(await page.locator('#root h1').count()).toBe(1);
+    } finally {
+      await page.close();
+    }
+  });
+});
+
 // A scroll-locking modal with NO close control that closes on Escape.
 const MODAL_ESCAPE_FIXTURE = `<!doctype html><html><head><style>
   body.locked { overflow: hidden; }
@@ -313,6 +363,42 @@ const CONSENT_FIXTURE = `<!doctype html><html><head><style>
 </body></html>`;
 
 describe('dismissOverlays — consent banner (Playwright)', () => {
+  it('preserves ordinary in-flow cookie preference content with an action control', async () => {
+    const page = await browser.newPage();
+    await page.setContent(`<!doctype html><body><main>
+      <section class="cookie-preferences"><h2>Cookie preferences</h2><p>Edit cookie preferences for this account.</p><button>Save preferences</button></section>
+      <p>${'Useful account content. '.repeat(50)}</p>
+    </main></body>`);
+    try {
+      expect(await dismissOverlays(page)).toEqual([]);
+      expect(await page.locator('.cookie-preferences').count()).toBe(1);
+    } finally {
+      await page.close();
+    }
+  });
+
+  it('preserves business chrome when a static consent notice is nested inside its header', async () => {
+    const page = await browser.newPage();
+    await page.setContent(`<!doctype html><html><head><style>
+      body { margin: 0; }
+      header { position: fixed; top: 0; width: 100%; height: 180px; z-index: 1000; }
+    </style></head><body>
+      <header id="business-header">
+        <section>We use cookies to improve your experience.</section>
+        <a id="brand" href="/">Example Brand</a><nav><a href="/services">Services</a></nav>
+      </header>
+      <main style="height:3000px">${'Useful business content. '.repeat(50)}</main>
+    </body></html>`);
+    try {
+      expect(await dismissOverlays(page)).toEqual([]);
+      expect(await page.locator('#business-header').count()).toBe(1);
+      expect(await page.locator('#brand').textContent()).toBe('Example Brand');
+      expect(await page.locator('nav a').getAttribute('href')).toBe('/services');
+    } finally {
+      await page.close();
+    }
+  });
+
   it('dismisses a cookie banner, preferring reject', async () => {
     const page = await browser.newPage();
     await page.setContent(CONSENT_FIXTURE);
@@ -323,6 +409,54 @@ describe('dismissOverlays — consent banner (Playwright)', () => {
       expect(dismissed[0].method).toBe('close-click');
       expect(await page.locator('#c').count()).toBe(0);
       expect(await page.evaluate(() => (window as unknown as { __consent?: string }).__consent)).toBe('reject');
+    } finally {
+      await page.close();
+    }
+  });
+
+  it('dismisses consent nested in a semantic header without removing logo or navigation', async () => {
+    const page = await browser.newPage();
+    await page.setContent(`<!doctype html><html><head><style>
+      header { position: fixed; inset: 0 0 auto; height: 150px; background: #111; color: white; }
+      #nested-cookie { height: 80px; background: #222; }
+    </style></head><body>
+      <header id="site-header">
+        <img id="logo" alt="Example logo" src="data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=">
+        <nav><a href="/services">Services</a><a href="/team">Team</a></nav>
+        <section id="nested-cookie" aria-label="Cookie banner">
+          <span>By using this website, you agree to our use of cookies.</span>
+          <button id="accept">Accept</button>
+        </section>
+      </header>
+      <main style="height:3000px">Page content keeps the header from owning all text.</main>
+      <script>document.querySelector('#accept').addEventListener('click', () => document.querySelector('#nested-cookie').remove())</script>
+    </body></html>`);
+    try {
+      const dismissed = await dismissOverlays(page);
+      expect(dismissed).toHaveLength(1);
+      expect(dismissed[0].kind).toBe('consent');
+      expect(await page.locator('#nested-cookie').count()).toBe(0);
+      expect(await page.locator('#site-header').count()).toBe(1);
+      expect(await page.locator('#logo').count()).toBe(1);
+      expect(await page.locator('header nav a').allTextContents()).toEqual(['Services', 'Team']);
+      expect(await page.locator('[data-lib-overlay]').count()).toBe(0);
+    } finally {
+      await page.close();
+    }
+  });
+
+  it('still dismisses an explicit modal dialog landmark', async () => {
+    const page = await browser.newPage();
+    await page.setContent(`<!doctype html><html><body>
+      <header id="modal-header" role="dialog" aria-modal="true" style="position:fixed;inset:0;background:white">
+        <button aria-label="Close">×</button><p>Welcome to this site</p>
+      </header><main>Page content</main>
+    </body></html>`);
+    try {
+      const dismissed = await dismissOverlays(page);
+      expect(dismissed).toHaveLength(1);
+      expect(dismissed[0].kind).toBe('takeover');
+      expect(await page.locator('#modal-header').count()).toBe(0);
     } finally {
       await page.close();
     }

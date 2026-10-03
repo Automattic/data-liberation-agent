@@ -26,6 +26,7 @@ import { generateChromeCss, type BakedLayoutMap } from './fixups.js';
 import { sanitizeFrozenHtml } from './freeze.js';
 import { learnAndApplyFluidGeometry } from './fluid-capture.js';
 import {
+	captureRouteNavigation,
 	captureTriggeredDialogs,
 	type CapturedDialogInteraction,
 	type InteractionStatesReport,
@@ -34,14 +35,16 @@ import { applyPagerSlideshowStates, collectPagerSlideshowStates } from './pager-
 import { captureScrollStates, type ScrollStatesReport } from './scroll-state-capture.js';
 import { hydrateDisclosureContent } from './dynamic-content.js';
 import { captureSelectableSetStates } from './selectable-set-capture.js';
+import { captureTypedSearchStates } from './typed-search-capture.js';
 import { JsAggregator } from './js-aggregator.js';
 import { isAbsentDocumentError, isSourceCaptureUrl, nonHtmlDocumentError } from './absent-document.js';
 import { ManifestQueue, type ManifestEntry, type FailureEntry } from './manifest-queue.js';
 import { validateOutputDir, planArtifacts, type ArtifactPlan } from './output-layout.js';
-import { waitForStable, triggerLazyLoad, dismissOverlays } from './page-helpers.js';
+import { waitForStable, triggerLazyLoad, dismissOverlays, pageResponds } from './page-helpers.js';
 import { CapturedResourceStore } from './resource-capture.js';
 import { enforceSameOrigin } from './same-origin.js';
 import { preserveStreamedVideoPosters } from './streamed-video.js';
+import { sameOriginPageAnchors } from './unscheduled-anchors.js';
 import { analyzePage } from './site-analysis.js';
 import {
 	defaultViewports,
@@ -175,10 +178,13 @@ interface CapturePerViewportArgs {
 		page: import('playwright').Page,
 		ctx: import('../../adapters/page-actions.js').LiberationContext
 	) => Promise< void >;
+	resolveClientRedirect?: ( page: Page, url: string ) => Promise< string | undefined >;
 	beforeSerialize?: (
 		page: import('playwright').Page,
 		ctx: import('../../adapters/page-actions.js').LiberationContext
 	) => Promise< void >;
+	observeSource?: ScreenshotOpts['observeSource'];
+	canonicalizeHtml?: ( html: string ) => string;
 	viewport: Viewport;
 	plan: ArtifactPlan;
 	url: string;
@@ -360,6 +366,7 @@ export async function capturePageHtml( page: Page ): Promise< string > {
 				);
 			};
 			const restoredImages: Array< { image: HTMLImageElement; previous: string | null } > = [];
+			const restoredAspectRatios: Array< { image: HTMLImageElement; previous: string; priority: string } > = [];
 			const placeholderGif = /^data:image\/gif;base64,R0lGODlhAQAB/i;
 			const srcsetShaped = ( value: string ) => /\s+\d+(?:\.\d+)?[wx](?=\s*(?:,|$))/i.test( value );
 			const durableImageUrl = ( value: string | null | undefined ): string => {
@@ -395,6 +402,29 @@ export async function capturePageHtml( page: Page ): Promise< string > {
 			// srcset). outerHTML keeps the attribute, so write the loaded URL
 			// immediately before serializing, then put the live attribute back.
 			for ( const image of document.querySelectorAll( 'img' ) ) {
+				// Responsive image components often put the rendered ratio on the
+				// image's owning layer through a custom property. Keep that computed
+				// contract in the static artifact: the source stylesheet/runtime may
+				// not be present when the localized image is laid out again.
+				const imageStyle = getComputedStyle( image );
+				const rendered = image.getBoundingClientRect();
+				if ( imageStyle.aspectRatio !== 'auto' && rendered.width > 0 && rendered.height > 0 ) {
+					restoredAspectRatios.push( {
+						image,
+						previous: image.style.getPropertyValue( 'aspect-ratio' ),
+						priority: image.style.getPropertyPriority( 'aspect-ratio' ),
+					} );
+					// `auto <ratio>` lets a localized image use its different intrinsic
+					// ratio, so retain the source's rendered ratio in that case. A fixed
+					// authored ratio must stay fixed: a max-width-constrained image can
+					// have a different rendered box ratio at every viewport width.
+					image.style.setProperty(
+						'aspect-ratio',
+						/^auto\s/i.test( imageStyle.aspectRatio )
+							? `${ rendered.width } / ${ rendered.height }`
+							: imageStyle.aspectRatio
+					);
+				}
 				const attribute = image.getAttribute( 'src' ) ?? '';
 				const shaped = srcsetShaped( attribute );
 				if ( ! placeholderGif.test( attribute ) && ! shaped && ! /^blob:/i.test( attribute ) ) continue;
@@ -418,12 +448,32 @@ export async function capturePageHtml( page: Page ): Promise< string > {
 				restoredImages.push( { image, previous: image.getAttribute( 'src' ) } );
 				image.setAttribute( 'src', next );
 			}
+			// outerHTML concatenates adjacent Text nodes. Re-parsing that string
+			// coalesces source shaping runs, which can change subpixel advances and
+			// painted glyphs even when the text and element boxes are identical.
+			// Empty comments preserve those parser boundaries without adding an
+			// element, a character, or CSS. Raw-text/RCDATA elements cannot use them.
+			const textBoundaries: Comment[] = [];
+			for ( const element of document.querySelectorAll( '*' ) ) {
+				if ( /^(?:script|style|textarea|title|xmp|iframe|noembed|noframes|noscript|plaintext)$/i.test( element.localName ) ) continue;
+				for ( const node of Array.from( element.childNodes ) ) {
+					if ( node.nodeType !== Node.TEXT_NODE || node.nextSibling?.nodeType !== Node.TEXT_NODE ) continue;
+					const boundary = document.createComment( '' );
+					element.insertBefore( boundary, node.nextSibling );
+					textBoundaries.push( boundary );
+				}
+			}
 			try {
 				return `<!DOCTYPE html>${ document.documentElement.outerHTML }`;
 			} finally {
+				for ( const boundary of textBoundaries ) boundary.remove();
 				for ( const { image, previous } of restoredImages.reverse() ) {
 					if ( previous === null ) image.removeAttribute( 'src' );
 					else image.setAttribute( 'src', previous );
+				}
+				for ( const { image, previous, priority } of restoredAspectRatios.reverse() ) {
+					if ( previous === '' ) image.style.removeProperty( 'aspect-ratio' );
+					else image.style.setProperty( 'aspect-ratio', previous, priority );
 				}
 				for ( const { element, parent, next } of detached.reverse() ) parent.insertBefore( element, next );
 			}
@@ -671,8 +721,19 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	} = args;
 	const now = () => new Date().toISOString();
 	const isDesktop = viewport.id === 'desktop';
+	// The adapter's rewrite of platform-owned identifiers applies to every stored
+	// HTML artifact alike, so page HTML and the captured dialogs that refer to it
+	// keep naming the same elements.
+	const canonicalize = ( html: string ): string => ( args.canonicalizeHtml ? args.canonicalizeHtml( html ) : html );
+	const canonicalizeInteractions = < T, >( report: T ): T =>
+		args.canonicalizeHtml ? canonicalizeInteractionReport( report, args.canonicalizeHtml ) : report;
 
 	resourceStore.observe( page );
+	const sourceErrors: string[] = [];
+	if ( args.observeSource ) {
+		page.on( 'pageerror', error => sourceErrors.push( `source runtime error: ${ error.message }` ) );
+		page.on( 'crash', () => sourceErrors.push( 'source renderer crashed' ) );
+	}
 	if ( publicUrlsOnly && page.route ) {
 		await page.route( '**/*', async ( route ) => {
 			const request = route.request();
@@ -776,6 +837,16 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		entry.redirectedTo = redirectedTo;
 		return;
 	}
+	// Some platforms answer 200 before their client router replaces an unavailable
+	// child route with its parent. Only an adapter-confirmed target is an alias;
+	// all other post-load navigation remains a route-drift failure.
+	if ( args.resolveClientRedirect ) {
+		const target = await args.resolveClientRedirect( page, url ).catch( () => undefined );
+		if ( target && serverRedirectTarget( url, target ) === target ) {
+			entry.redirectedTo = target;
+			return;
+		}
+	}
 	const sourcePolicy = args.cleanupPolicy ?? cleanupPolicy();
 	await applySourceCleanup(page, sourcePolicy);
 
@@ -793,6 +864,21 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		// re-capture, updateEntry's shallow spread REPLACES the prior dismissed[] with
 		// this run's — intended (we want the most-recent capture's dismissals, not a union).
 		entry.dismissed = [ ...( entry.dismissed ?? [] ), ...dismissedHere ];
+	}
+	// Every step above is bounded and best-effort, so a page whose script has
+	// taken over its main thread still arrives here. Nothing after this can make
+	// progress on it, so stop now with the real reason instead of letting the
+	// next unbounded evaluate wait for the renderer to die.
+	if ( ! ( await pageResponds( page, evaluateTimeoutMs ) ) ) {
+		failures.push( {
+			url,
+			viewport: viewport.id,
+			stage: 'evaluate',
+			error: `page stopped responding while settling (overlay dismissal / lazy load): no answer to an evaluate within ${ evaluateTimeoutMs }ms`,
+			timestamp: now(),
+			attempt: 1,
+		} );
+		return;
 	}
 
 	// Seam 1: deterministic adapter-declared removals on the settled page, so they
@@ -842,14 +928,6 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	// Diagnostics are held until the interaction-states merge below rather than
 	// dropped, so the fix is observable in interaction-states.json.
 	let disclosureStates: CapturedDialogInteraction[] = [];
-	if (
-		plan.captureHtml ||
-		plan.captureMobileHtml ||
-		plan.captureSections ||
-		plan.captureMobileSections
-	) {
-		disclosureStates = await hydrateDisclosureContent( page );
-	}
 
 	// Seam 1b: replace runtime-computed pixel geometry with the relationship the
 	// source actually obeys, learned by resizing while its runtime still runs.
@@ -858,6 +936,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	// A slideshow driven by its own thumbnails only advances while the source's
 	// script is running, so read its states before any layout measurement.
 	const pagerSlideshows = await collectPagerSlideshowStates( page ).catch( () => [] );
+	await args.observeSource?.( page, url, isDesktop ? 'desktop' : 'mobile', sourceErrors );
 
 	if ( isDesktop && plan.captureHtml && args.learnFluid ) {
 		try {
@@ -899,6 +978,13 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		} );
 	}
 
+	// Hydrated panels belong to the serialization transaction. Browser probes
+	// and width learning can rerender their source items, discarding injected
+	// answers or mistaking the new controls for another interactive component.
+	if (plan.captureHtml || plan.captureMobileHtml || plan.captureSections || plan.captureMobileSections) {
+		disclosureStates = await hydrateDisclosureContent(page);
+	}
+
 	// Capture only after every operation that can change the live DOM, then
 	// serialize immediately below. This keeps runtime-driven components in the
 	// same state across the visual reference and its HTML transaction.
@@ -929,10 +1015,12 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	if ( isDesktop && plan.captureHtml ) {
 		try {
 			// The cleanup observer may have exhausted its budget before the page
-			// re-rendered a credit or ad; the saved document must be swept.
-			await sweepSourceCleanup( page );
+			// re-rendered a credit or ad; the saved document must be swept. A source
+			// that re-initialized its document after install has no state left to
+			// sweep — the policy lets the sweep reinstall on the fresh document.
+			await sweepSourceCleanup( page, sourcePolicy );
 			await preserveStreamedVideoPosters( page, resourceStore, url ).catch( () => undefined );
-			const html = await capturePageHtml( page );
+			const html = canonicalize( await capturePageHtml( page ) );
 			await resourceStore.captureDomDependencies( html, url );
 			// Refuse to persist a capture whose page navigated away from the route we
 			// were asked to capture: every DOM-mutating step above (lazy-load probing,
@@ -993,9 +1081,9 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	// can't reflow to. Best-effort: a miss leaves the page desktop-only.
 	if ( ! isDesktop && plan.captureMobileHtml ) {
 		try {
-			await sweepSourceCleanup( page );
+			await sweepSourceCleanup( page, sourcePolicy );
 			await preserveStreamedVideoPosters( page, resourceStore, url ).catch( () => undefined );
-			const mhtml = sanitizeFrozenHtml( await capturePageHtml( page ) );
+			const mhtml = canonicalize( sanitizeFrozenHtml( await capturePageHtml( page ) ) );
 			await resourceStore.captureDomDependencies( mhtml, url );
 			// Same route-identity guard as the desktop HTML write above — best-effort
 			// here too (this carry already silently skips on any other failure), so a
@@ -1241,13 +1329,20 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	} finally {
 		await releaseNavigationLock();
 	}
-	const cleanup = await readSourceCleanup(page);
+	const cleanup = await readSourceCleanup(page, sourcePolicy);
 	entry.cleanup = { policy: sourcePolicy, reports: [...(entry.cleanup?.reports ?? []), cleanup] };
 	if (cleanup.failures.length || cleanup.residual) throw new Error('Source cleanup incomplete; see cleanup evidence');
 
 	async function probeInteractions(): Promise< void > {
 	try {
 		const interactions = await captureTriggeredDialogs( page, url );
+		// Route-tab observation is evidence, not a baseline artifact: its failure
+		// must not discard the dialog states captured before it.
+		try {
+			interactions.routeNavigation = await captureRouteNavigation( page, url );
+		} catch {
+			/* best-effort: capture proceeds with dialog evidence alone */
+		}
 		// Disclosure/accordion candidates were already resolved (opened, captured,
 		// reclosed) before serialization above — folded in here purely as
 		// diagnostics, using the same states array + totals the dialog/menu path
@@ -1257,6 +1352,11 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 			const selectableStates = await captureSelectableSetStates( page );
 			if ( selectableStates.length > 0 ) {
 				interactions.states = [ ...interactions.states, ...selectableStates ];
+			}
+			try {
+				interactions.states.push( ...await captureTypedSearchStates( page, selectableStates ) );
+			} catch {
+				/* A failed input probe must not misreport a successful selectable drive. */
 			}
 		} catch ( error ) {
 			interactions.states.push( {
@@ -1272,12 +1372,13 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 			} );
 		}
 		if (
-			( interactions.states.length > 0 || ( interactions.initialDialogs?.length ?? 0 ) > 0 ) &&
+			( interactions.states.length > 0 || ( interactions.initialDialogs?.length ?? 0 ) > 0 || ( interactions.routeNavigation?.length ?? 0 ) > 0 ) &&
 			( ! entry.interactions ||
 				interactions.states.some( ( state ) => state.status === 'captured' ) ||
+				( interactions.routeNavigation?.length ?? 0 ) > 0 ||
 				interactions.initialDialogs?.some( ( state ) => state.status === 'captured' ) )
 		) {
-			entry.interactions = mergeInteractionReports( entry.interactions, interactions );
+			entry.interactions = mergeInteractionReports( entry.interactions, canonicalizeInteractions( interactions ) );
 		}
 	} catch {
 		/* best-effort: baseline capture remains valid when interaction probing fails */
@@ -1313,6 +1414,10 @@ function mergeInteractionReports(
 			( state.kind ?? 'dialog' ) === kind;
 	const states = [
 		...mergeCapturedEvidence(
+			previous.states.filter( ofKind( 'typed-search' ) ),
+			latest.states.filter( ofKind( 'typed-search' ) ), identity, Number.POSITIVE_INFINITY
+		),
+		...mergeCapturedEvidence(
 			previous.states.filter( ofKind( 'disclosure' ) ),
 			latest.states.filter( ofKind( 'disclosure' ) ),
 			identity,
@@ -1344,6 +1449,8 @@ function mergeInteractionReports(
 	return {
 		...latest,
 		states,
+		routeNavigation: [ ...new Map( [ ...( previous.routeNavigation ?? [] ), ...( latest.routeNavigation ?? [] ) ]
+			.map( route => [ route.selector, route ] ) ).values() ],
 		...( initialDialogs.length > 0 ? { initialDialogs } : {} ),
 	};
 }
@@ -1756,7 +1863,10 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 						...( opts.learnFluid ? { learnFluid: true } : {} ),
 						...( opts.fluidWidths ? { fluidWidths: opts.fluidWidths } : {} ),
 						prepareCapture: opts.prepareCapture,
+						resolveClientRedirect: opts.resolveClientRedirect,
 						beforeSerialize: opts.beforeSerialize,
+						observeSource: opts.observeSource,
+						...( opts.canonicalizeHtml ? { canonicalizeHtml: opts.canonicalizeHtml } : {} ),
 					} );
 				} catch ( err ) {
 					urlFailures.push( {
@@ -1876,6 +1986,55 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 				browser = ( await connectBrowser( { cdpPort: opts.cdpPort } ) ) as unknown as Browser;
 				browserRestarts++;
 				urlsSinceRestart = 0;
+			}
+		}
+		// Discovery can omit links authored on a captured page. Inspect only a
+		// bounded set of those links, using the source session and manual redirects:
+		// never request an off-origin Location or persist its (possibly tokenized) URL.
+		const scheduled = new Set( urls.map( routeIdentity ) );
+		const candidates = new Set< string >();
+		for ( const url of urls ) {
+			const htmlPath = manifest.getEntry( url )?.html;
+			if ( ! htmlPath || ! existsSync( join( opts.outputDir, htmlPath ) ) ) continue;
+			for ( const link of sameOriginPageAnchors( readFileSync( join( opts.outputDir, htmlPath ), 'utf8' ), url ) ) {
+				if ( ! scheduled.has( routeIdentity( link ) ) ) candidates.add( link );
+			}
+		}
+		if ( candidates.size ) {
+			let context: BrowserContext | undefined;
+			try {
+				context = await browser.newContext( await sourceContextOptions( browser, entryUrl ) );
+				for ( const url of [ ...candidates ].slice( 0, 32 ) ) {
+					try {
+						// A plain rerun must not trust a prior probe when the source changed.
+						const prior = manifest.getEntry( url );
+						if ( prior ) await manifest.updateEntry( url, { ...prior, externalRedirect: undefined, sourceAbsentStatus: undefined } );
+						let current = url;
+						for ( let hop = 0; hop < 4; hop++ ) {
+							const response = await context.request.get( current, { maxRedirects: 0, timeout: 5_000 } );
+							const status = response.status();
+							if ( status === 404 || status === 410 ) {
+								await manifest.updateEntry( url, { slug: prior?.slug ?? await manifest.claimSlug( slugify( url ) ), capturedAt: capturedAt(), sourceAbsentStatus: status } );
+								break;
+							}
+							if ( ! [ 301, 302, 303, 307, 308 ].includes( status ) ) break;
+							const location = response.headers()[ 'location' ];
+							if ( ! location ) break;
+							const next = new URL( location, current );
+							if ( next.origin !== new URL( url ).origin ) {
+								await manifest.updateEntry( url, { slug: prior?.slug ?? await manifest.claimSlug( slugify( url ) ), capturedAt: capturedAt(), externalRedirect: true } );
+								break;
+							}
+							current = next.href;
+						}
+					} catch {
+						// Unknown outcomes remain blocking uncaptured links at export.
+					}
+				}
+			} catch {
+				// Inspection is evidence-only; a browser/session failure leaves links unresolved.
+			} finally {
+				await context?.close().catch( () => {} );
 			}
 		}
 	} finally {
@@ -2037,4 +2196,33 @@ export async function lockMainFrameNavigation( page: Page ): Promise< () => Prom
 	return async () => {
 		await page.unroute( '**/*', guard ).catch( () => {} );
 	};
+}
+
+/**
+ * Apply an adapter's HTML rewrite to every string in an interaction report
+ * (dialog markup, trigger and dialog selectors), then restate each dialog's
+ * byte count, which consumers verify against the markup.
+ */
+function canonicalizeInteractionReport< T >( report: T, canonicalize: ( html: string ) => string ): T {
+	const rewrite = ( value: unknown ): unknown => {
+		if ( typeof value === 'string' ) return canonicalize( value );
+		if ( Array.isArray( value ) ) return value.map( rewrite );
+		if ( value && typeof value === 'object' ) {
+			const source = value as Record< string, unknown >;
+			const out: Record< string, unknown > = {};
+			for ( const [ key, child ] of Object.entries( source ) ) out[ key ] = rewrite( child );
+			// A complete dialog's byte count describes its markup; a truncated one
+			// records the original size, which the rewrite does not change.
+			if (
+				typeof source.html === 'string' &&
+				typeof out.html === 'string' &&
+				source.htmlBytes === Buffer.byteLength( source.html )
+			) {
+				out.htmlBytes = Buffer.byteLength( out.html );
+			}
+			return out;
+		}
+		return value;
+	};
+	return rewrite( report ) as T;
 }

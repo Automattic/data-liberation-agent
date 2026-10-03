@@ -38,21 +38,31 @@ describe( 'probeDialogs', () => {
 		await browser.close();
 	}, 20_000 );
 
-	it( 'counts a visibly open controlled panel without closing it', async () => {
-		browser = await chromium.launch();
-		const page = await browser.newPage();
-		await page.setContent( `
-			<style>.panel { display:none; }.panel.open { display:block; }</style>
-			<button id="trigger" aria-expanded="true" aria-controls="panel">Current panel</button>
-			<div id="panel" class="panel open" role="region">Visible content</div>
-		` );
+	it( 'uses a real pointer when a visible summary rejects a synthetic click', async () => {
+		const browser = await chromium.launch();
+		try {
+			const page = await browser.newPage( { viewport: { width: 390, height: 844 } } );
+			await page.setContent( `<details><summary data-dla-disclosure-label="Menu">Menu</summary><div role="dialog">Links</div></details>
+				<script>document.querySelector('summary').addEventListener('click', (event) => {
+					if (!event.isTrusted) event.preventDefault();
+				});</script>` );
+			expect( await probeDialogs( page ) ).toEqual( [ { label: 'Menu', opened: true } ] );
+			await page.close();
+		} finally {
+			await browser.close();
+		}
+	}, 20_000 );
 
-		const probes = await probeDialogs( page );
-
-		expect( probes ).toEqual( [ { label: 'Current panel', opened: true } ] );
-		expect( await page.locator( '#trigger' ).getAttribute( 'aria-expanded' ) ).toBe( 'true' );
-		expect( await page.locator( '#panel' ).isVisible() ).toBe( true );
-		await page.close();
-		await browser.close();
+	it( 'still reports a summary dead when a real pointer cannot open it', async () => {
+		const browser = await chromium.launch();
+		try {
+			const page = await browser.newPage( { viewport: { width: 390, height: 844 } } );
+			await page.setContent( `<details><summary data-dla-disclosure-label="Menu">Menu</summary><div role="dialog">Links</div></details>
+				<script>document.querySelector('summary').addEventListener('click', (event) => event.preventDefault());</script>` );
+			expect( await probeDialogs( page ) ).toEqual( [ { label: 'Menu', opened: false } ] );
+			await page.close();
+		} finally {
+			await browser.close();
+		}
 	}, 20_000 );
 } );

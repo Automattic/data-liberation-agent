@@ -38,6 +38,10 @@ export interface ManifestEntry {
    * alias of that route and has no artifacts of its own.
    */
   redirectedTo?: string;
+  /** Proven off-origin HTTP redirect from an unscheduled same-origin page link. No destination is stored. */
+  externalRedirect?: boolean;
+  /** Proven absent response for an unscheduled same-origin page link. */
+  sourceAbsentStatus?: 404 | 410;
   /** Populated by site-analysis; may be absent */
   metadata?: {
     title?: string;

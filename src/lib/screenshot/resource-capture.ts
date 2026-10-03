@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import * as cheerio from 'cheerio';
 import { sourceSessionCookieHeader } from '../browser-kit/browser-kit.js';
+import { identityLogoReferences } from '../identity-resources.js';
+import { decodeCssUrl } from '../css-url-escapes.js';
 import { MAX_REDIRECTS, safeFetch, type SafeFetchResult } from '../media-fetch/safe-fetch.js';
 import type { Page, Request, Response } from 'playwright';
 
@@ -318,6 +320,16 @@ export function isAudioLink( reference: string, documentUrl: string ): boolean {
 	}
 }
 
+/** Linked Word files are downloads, not navigable HTML routes. */
+export function isDocumentDownloadLink( reference: string, documentUrl: string ): boolean {
+	try {
+		const url = new URL( reference.replace( /&amp;/g, '&' ), documentUrl );
+		return /^https?:$/.test( url.protocol ) && /\.docx?$/i.test( url.pathname );
+	} catch {
+		return false;
+	}
+}
+
 export class CapturedResourceStore {
 	private readonly origin: string;
 	private readonly resourceDir: string;
@@ -449,7 +461,7 @@ export class CapturedResourceStore {
 			} );
 			$( 'a[href],area[href]' ).each( ( _, element ) => {
 				const href = $( element ).attr( 'href' ) ?? '';
-				if ( isAudioLink( href, baseUrl ) ) add( href, baseUrl );
+				if ( isAudioLink( href, baseUrl ) || isDocumentDownloadLink( href, baseUrl ) ) add( href, baseUrl );
 			} );
 			for ( const reference of svgUseDocumentReferences( $, baseUrl ) ) add( reference, baseUrl );
 			$( 'link[href]' ).each( ( _, element ) => {
@@ -457,6 +469,7 @@ export class CapturedResourceStore {
 				const rel = ( node.attr( 'rel' ) ?? '' ).toLowerCase().split( /\s+/ );
 				const as = ( node.attr( 'as' ) ?? '' ).toLowerCase();
 				if (
+					rel.includes( 'manifest' ) ||
 					rel.includes( 'stylesheet' ) ||
 					rel.some( ( value ) => /(?:^|-)icon$/.test( value ) ) ||
 					( rel.includes( 'preload' ) && [ 'style', 'font', 'image', 'media' ].includes( as ) )
@@ -474,12 +487,13 @@ export class CapturedResourceStore {
 							.get(),
 				  ].join( '\n' );
 			for ( const match of css.matchAll(
-				/(?:url\(\s*(?:["']([^"']+)["']|([^\s)'";]+))\s*\)|@import\s+(?:url\(\s*)?["']([^"']+)["'])/gi
+				/(?:url\(\s*(?:["']([^"']+)["']|([^\s)'";]+))\s*\)|@import\s*(?:url\(\s*)?["']([^"']+)["'])/gi
 			) )
-				add( match[ 1 ] ?? match[ 2 ] ?? match[ 3 ] ?? '', baseUrl );
+				add( decodeCssUrl( match[ 1 ] ?? match[ 2 ] ?? match[ 3 ] ?? '' ), baseUrl );
 		};
 
 		collect( html, documentUrl );
+		for ( const logo of identityLogoReferences( html ) ) add( logo, documentUrl );
 		const startedAt = Date.now();
 		const processed = new Set< string >();
 		while ( true ) {
@@ -509,16 +523,18 @@ export class CapturedResourceStore {
 			await Promise.all( batch.map( ( url ) => this.captureUrl( url ) ) );
 			for ( const url of batch ) {
 				const resource = this.manifest.resources[ url ];
-				if ( ! resource?.contentType.toLowerCase().startsWith( 'text/css' ) ) continue;
+				if ( ! resource || ! /^(?:text\/css|application\/(?:json|manifest\+json))/i.test( resource.contentType ) ) continue;
 				try {
-					collect(
-						readFileSync(
+					const text = readFileSync(
 							resolve( this.resourceDir, resource.path.replace( /^resources\//, '' ) ),
 							'utf8'
-						),
-						url,
-						true
 					);
+					if ( resource.contentType.toLowerCase().startsWith( 'text/css' ) ) collect( text, url, true );
+					if ( /manifest\+json|application\/json/i.test( resource.contentType ) ) {
+						const parsed = JSON.parse( text ) as { icons?: Array<{ src?: unknown }> };
+						for ( const icon of ( Array.isArray( parsed.icons ) ? parsed.icons : [] ).slice( 0, 64 ) )
+							if ( typeof icon?.src === 'string' ) add( icon.src, url );
+					}
 				} catch {
 					// captureUrl records unavailable resources in the manifest.
 				}
@@ -656,12 +672,12 @@ export class CapturedResourceStore {
 			if ( fetched.status < 200 || fetched.status >= 300 )
 				throw new Error( `HTTP ${ fetched.status }` );
 			const contentType = canonicalContentType( fetched.headers.get( 'content-type' ) ?? '' );
-			// A 200 with no bytes is not a usable asset. Storing it would record a
-			// successful capture whose font or image renders as nothing downstream.
-			if ( fetched.body.length === 0 )
+			// An empty stylesheet is a valid no-op. Empty fonts/images are not
+			// usable assets and must remain visible failures.
+			if ( fetched.body.length === 0 && contentType !== 'text/css' )
 				throw new Error( 'render dependency response body is empty' );
 			if (
-				! /^(?:text\/css|image\/|audio\/|video\/|font\/|application\/(?:font|x-font|font-woff|octet-stream))/i.test(
+				! /^(?:text\/css|image\/|audio\/|video\/|font\/|application\/(?:json|manifest\+json|font|x-font|font-woff|octet-stream|msword|vnd\.openxmlformats-officedocument\.wordprocessingml\.document))/i.test(
 					contentType
 				)
 			)
@@ -738,9 +754,8 @@ export class CapturedResourceStore {
 				response,
 				resourceTimeoutMs( Number.isFinite( declaredBytes ) ? declaredBytes : byteCeiling )
 			) );
-		// A 200 with no bytes is not a usable asset; record it as a failed
-		// dependency rather than a resource that silently renders as nothing.
-		if ( body.length === 0 ) {
+		// Empty CSS is valid; other empty render dependencies remain failures.
+		if ( body.length === 0 && contentType !== 'text/css' ) {
 			throw new Error( 'render dependency response body is empty' );
 		}
 		if ( body.length > byteCeiling ) {
