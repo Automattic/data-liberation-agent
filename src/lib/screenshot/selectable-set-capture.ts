@@ -117,7 +117,7 @@ export async function captureSelectableSetStates(
 						? globalThis.CSS.escape( value )
 						: value.replace( /[^a-zA-Z0-9_-]/g, '\\$&' );
 				const sourceSelector = ( element: Element ): string => {
-					if ( element.id ) return `#${ cssEscape( element.id ) }`;
+					if ( element.id && document.querySelectorAll( `#${ cssEscape( element.id ) }` ).length === 1 ) return `#${ cssEscape( element.id ) }`;
 					const parts: string[] = [];
 					for (
 						let node: Element | null = element;
@@ -377,6 +377,7 @@ export async function captureSelectableSetStates(
 					document.addEventListener( 'click', preventNavigation );
 					document.addEventListener( 'submit', preventNavigation );
 					try {
+						if ( element instanceof HTMLElement ) element.scrollIntoView( { block: 'center', inline: 'center' } );
 						const click = ( element as HTMLElement ).click;
 						if ( typeof click === 'function' ) {
 							click.call( element );
@@ -652,6 +653,10 @@ export async function captureSelectableSetStates(
 							}
 							continue;
 						}
+						const observationDeadline = Date.now() + Math.min( 2_500, Math.max( limits.settleMs * 4, 1_200 ) );
+						while ( Date.now() < observationDeadline && Date.now() < deadline && candidates.every( ( candidate, candidateIndex ) => fingerprint( candidate ) === initialFp[ candidateIndex ] ) ) {
+							await wait( 100 );
+						}
 						observations.push( {
 							fps: candidates.map( fingerprint ),
 							texts: candidates.map( textOf ),
@@ -690,7 +695,11 @@ export async function captureSelectableSetStates(
 					const shouldCaptureChoice = Boolean(
 						choiceGroupChanged &&
 						sameMemberParent &&
-						( regionIdx < 0 || toggleGroup || choiceMetadata?.group.label )
+						// A labeled tablist may itself update selection attributes while
+						// also driving a distinct outside content region. Prefer the
+						// content evidence when both change; the choice-group snapshot
+						// alone cannot represent that collection transition.
+						( regionIdx < 0 || toggleGroup )
 					);
 					if ( shouldCaptureChoice ) {
 						const drivenCount = Math.min( group.members.length, limits.maxMembers );
@@ -824,9 +833,15 @@ export async function captureSelectableSetStates(
 							}
 							continue;
 						}
-						const afterRegion =
+						let afterRegion =
 							document.querySelector( '[data-lib-selectable-region]' ) ?? liveRegion;
-						const after = fingerprint( afterRegion );
+						let after = fingerprint( afterRegion );
+						const changeDeadline = Date.now() + Math.min( 2_500, Math.max( limits.settleMs * 4, 1_200 ) );
+						while ( after === before && ! wasSelected && Date.now() < changeDeadline && Date.now() < deadline ) {
+							await wait( 100 );
+							afterRegion = document.querySelector( '[data-lib-selectable-region]' ) ?? liveRegion;
+							after = fingerprint( afterRegion );
+						}
 						if ( after === before && ! wasSelected ) {
 							pushOutcome( 'no-dialog', index, {
 								region: describeRegion( afterRegion ),
@@ -886,9 +901,13 @@ export async function captureSelectableSetStates(
 			if (Date.now() >= deadline) break;
 			if (record.restoreSelector) restores.add(record.restoreSelector);
 			try {
+				const questions = [...record.region.html.matchAll(/<h[1-6][^>]*>(.*?)<\/h[1-6]>/g)].map(match => match[1].replace(/<[^>]+>/g, '').trim()).filter(Boolean).slice(0, 3);
 				await page.locator(record.trigger.selector).first().evaluate((element: HTMLElement) => element.click());
 				await page.waitForTimeout(settleMs);
+				const selected = await page.locator(record.trigger.selector).first().evaluate(element => element.getAttribute('aria-selected') ?? element.getAttribute('aria-pressed')).catch(() => null);
 				const local = page.locator(record.region.selector).first();
+				const regionText = await local.innerText().catch(() => '');
+				if (selected === 'false' || (questions.length && !questions.some(question => regionText.includes(question)))) continue;
 				if (!await local.locator('[aria-expanded="false"]:not([aria-haspopup])').count()) continue;
 				await hydrateDisclosureContent(page, record.region.selector);
 				record.region.html = await local.evaluate(element => {

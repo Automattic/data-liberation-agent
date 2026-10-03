@@ -33,6 +33,17 @@ unproven relationships produce explicit unsupported records. Standalone search
 fields without a confirmed selectable collection remain unsupported by this
 recognizer.
 
+Blocked confirmation is not a finite bootstrap. A collection that issues a
+query-independent data response before filtering locally uses the versioned
+contract below. Replaying previously observed response bodies is
+`intercepted-observed-responses`, never `all-requests-blocked`. Completeness is
+not inferred from response length. Query-dependent, paginated, undeclared,
+ambiguous, and unrestored drives stay unsupported.
+
+Candidate inputs are association-bounded. A text field inside a form that does
+not contain the collection does not consume the field cap, even when it precedes
+the collection in document order.
+
 ## Contract
 
 `collectionFilter` carries:
@@ -41,10 +52,17 @@ recognizer.
 - `target`: collection selector and restored source HTML.
 - `items`: stable keys, normalized full text, source HTML and observed category
   indices. Each item has one canonical authoring identity.
+- `itemDepth`: how many single-element wrappers sit between `target` and the
+  repeated item children. `0` means the target's own element children are the
+  items. Consumers descend that many only-child wrappers before matching items.
+  Missing `itemDepth` means `0`.
 - `categories`: selector, label, index and separately observed `activeHtml` and
   `inactiveHtml` for that control.
 - `initialCategory` and the verified `normalized-text-includes` predicate.
-- `emptyHtml` and `emptyPlacement` (`inside` or `after`).
+- `emptyHtml` and `emptyPlacement` (`inside` or `after`). Optional
+  `emptyBindsQuery` means `emptyHtml` contains `__DLA_QUERY__`, proven by two
+  empty observations that differ only by the typed query. The runtime substitutes
+  the live field value. A frozen probe string is not user-visible copy.
 - `probes`: query, category index and ordered item keys for every tested drive.
 - `replay`, `restoration`, and an unsupported `reason` where applicable.
 - `network`: the data-request isolation policy and number of blocked requests.
@@ -52,6 +70,153 @@ recognizer.
 Only `status: captured`, `replay: verified`, `restoration: verified` records are
 eligible for portable replay or destination projection. Consumers should retain
 these checks and build on native editable content rather than snapshot copies.
+
+Ward records keep `mode: category-and-query`, `network.dataRequests: blocked`,
+and `network.verification: all-requests-blocked`. Every item belongs to
+`initialCategory` is not required by the producer for the alternate mode below;
+the existing consumer verifier must keep requiring it unless `finiteBootstrap`
+is present and passes every check in that contract.
+
+## Finite bootstrap contract
+
+Schema: `data-liberation/finite-bootstrap/v1`.
+
+Portable only when the source itself issued a query-independent response, that
+response declared `hasNext: false` with `count` equal to a sibling array of
+records, later probes were verified by replaying those exact observed bodies,
+and an unmatched Fetch/XHR was blocked. Category controls hide during a nonempty
+query. An empty query restores the selected category and its controls. This is
+not category-and-query intersection.
+
+Exact fixture fields:
+
+```json
+{
+  "schema": "data-liberation/finite-bootstrap/v1",
+  "mode": "category-or-global-search",
+  "queryIndependent": true,
+  "completeness": "declared-finite",
+  "declaredCount": 4,
+  "observedItemCount": 4,
+  "coverage": "complete",
+  "verification": "intercepted-observed-responses",
+  "replayedResponses": 1,
+  "blockedFollowUps": 1,
+  "sourceFollowUpsBlocked": 0,
+  "unmatchedProbeBlocked": true,
+  "categoryControlsDuringSearch": "hidden",
+  "emptyQueryRestoresCategory": true,
+  "answers": "observed",
+  "answerOnly": "verified",
+  "resources": "text-only",
+  "order": {
+    "proof": "universal-query",
+    "query": "a",
+    "keys": ["0", "1", "2", "3"],
+    "categoriesAgree": true,
+    "categoryKeys": [["0", "2"], ["1"], ["3"]]
+  },
+  "probes": {
+    "global": [{ "query": "a", "keys": ["0", "1", "2", "3"] }, { "query": "apricot", "keys": ["0"] }],
+    "categories": [{ "category": 0, "keys": ["0", "2"] }]
+  }
+}
+```
+
+The parent `collectionFilter` must also carry `replay: verified`,
+`restoration: verified`, `predicate: normalized-text-includes`,
+`mode: category-or-global-search`, `network.dataRequests: observed-response-replay`,
+and `network.verification: intercepted-observed-responses`. `items` is the full
+observed universe, including entries outside `initialCategory`. Legacy `probes`
+are empty-query category membership only. `order.proof` is `universal-query`:
+`order.query` is the first shared letter, or otherwise the first shared
+non-whitespace character, of the observed item texts. It is not a source-specific
+token. `order.keys` is the full rendered result of that query and is the source
+global order. `items` follows that same order. `probes.global` keys equal
+`order.keys` filtered by normalized text inclusion, in that order, not as a set
+and not as a category-union. `order.categoryKeys` is the observed order of each
+category. `categoriesAgree` is true only when every category key list is an
+ordered subsequence of `order.keys`. When it is false, category mode must move
+the existing item nodes into `categoryKeys` for that category; do not clone them.
+`resources` must be `text-only`. Item HTML with `src`, `srcset`, `poster`, a
+media element, or a CSS `url()` is not portable: localization already ran, and
+raw evidence HTML must not be inserted afterward.
+
+Native collection projection (blocks-engine #2417) must keep rejecting a record
+whose `network.dataRequests` is `blocked` unless the existing Ward verifier
+passes. It may project this mode only when `finiteBootstrap.schema` is
+`data-liberation/finite-bootstrap/v1` and every field above matches, including
+`declaredCount === items.length`. Global search filters every item and hides
+category controls. Empty query shows `initialCategory` membership. Do not
+recompute `finiteBootstrap.probes.global` as a category intersection or a set.
+Visible global order is `order.keys` filtered by the predicate. Visible category
+order is `order.categoryKeys[index]`. Reject records whose `resources` is not
+`text-only`, whose `order.proof` is not `universal-query`, or whose global probe
+keys are not the ordered source filter. Also reject `query-dependent`,
+`incomplete`, paginated responses, undeclared completeness, ambiguous identities,
+and unverified restoration.
+
+## Collection status
+
+Optional `finiteBootstrap.status`. Absent means no positive status was proven.
+Present must be `schema: data-liberation/collection-status/v1` and is consumed
+strictly. A parent record stays `data-liberation/finite-bootstrap/v1`.
+
+```json
+{
+  "schema": "data-liberation/collection-status/v1",
+  "nodes": [
+    {
+      "html": "<div role=\"status\" class=\"count\">{count} entries shown</div>",
+      "template": "{count} entries shown",
+      "binds": ["count"],
+      "placement": "before-items",
+      "hidesAtZero": true
+    },
+    {
+      "html": "<div class=\"query\">Shown for: {query}</div>",
+      "template": "Shown for: {query}",
+      "binds": ["query"],
+      "placement": "before-items",
+      "hidesAtZero": true
+    }
+  ]
+}
+```
+
+The only tokens are `{count}` and `{query}`. `binds` lists exactly the tokens in
+`template`. `{count}` is the visible item count. `{query}` is the raw field
+value; the predicate stays normalized lowercase. Static copy, class, and inline
+layout come from the observed node. `placement` is `before-items` or
+`after-items`.
+
+A node is included only when every positive observation, including two counts, a
+case-distinct pair, the universal query, and an answer-only query when one was
+verified, reduces to that same markup. A no-match observation must agree or the
+node must be absent. Copy that does not reduce is omitted, not guessed.
+
+`hidesAtZero` is true when the zero rendering is already in `emptyHtml`, or the
+node is absent at zero. The renderer hides the node instead of repeating the
+zero message. An empty query hides every status node.
+
+The exporter inserts the observed markup once per responsive collection copy,
+hidden at rest, with `data-dla-status-template` on the text node. The runtime
+writes `textContent` from that attribute, so an editor can change the fallback
+without a second widget. The resting text may remain the source template while
+the node is hidden. A present status whose schema, tokens, or binds do not match
+is not portable and must not be rendered.
+
+`answers: pending-disclosure-integration` means `hydrateDisclosureContent` did
+not leave answer text inside an expanded control. Portable search then covers
+observed item text only. Populated disclosure panels and ancestor concealment
+stay with the existing local disclosure runtime; this producer does not duplicate
+that script. Integration of answer text into the serialized tree is pending
+until that companion leaves the text in each item before this snapshot.
+
+The portable exporter places one existing node per item in source global order
+when category orders agree, and in the selected category's observed order at
+rest when they do not. Missing text-only items are inserted from observed HTML.
+Resource-bearing items are not inserted and the collection is left unwired.
 
 ## Portable output
 
