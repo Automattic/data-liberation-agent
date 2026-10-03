@@ -105,7 +105,7 @@ export function wireCapturedCollections( html: string, states: CapturedDialogInt
 	return $.html();
 }
 
-function insertObservedStatus( $: cheerio.CheerioAPI, target: cheerio.Cheerio<import('domhandler').Element>, status: { nodes: Array<{ html: string; placement: 'before-items' | 'after-items'; hidesAtZero: boolean }> }, key: string ) {
+function insertObservedStatus( $: cheerio.CheerioAPI, target: cheerio.Cheerio<import('domhandler').AnyNode>, status: { nodes: Array<{ html: string; placement: 'before-items' | 'after-items'; hidesAtZero: boolean }> }, key: string ) {
 	const markup = ( node: { html: string; hidesAtZero: boolean } ) => {
 		const fragment = cheerio.load( node.html, null, false );
 		const root = fragment.root().children().first();
