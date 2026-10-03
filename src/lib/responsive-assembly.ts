@@ -1181,10 +1181,11 @@ export function projectResponsiveIdentityCss( source: string, renamed: ReadonlyM
 }
 
 export function routePhoneDocumentFragments( html: string, documentPath: string, identities?: { ids: Map<string,string>; namedAliases: boolean } ): string {
-	if ( ! html.includes( MOBILE_DOCUMENT_CLASS ) ) return html;
+	// Named aliases need reconciliation even when the responsive source
+	// collapsed to a single document. Preserve the cheap path for other pages.
+	if ( ! html.includes( MOBILE_DOCUMENT_CLASS ) && ! /<a\b[^>]*\bname\s*=/i.test( html ) ) return html;
 	const $ = cheerio.load( html );
 	const mobile = $( `.${ MOBILE_DOCUMENT_CLASS }` ).first();
-	if ( mobile.length === 0 ) return html;
 	const sourceIds = new Map< string, string >();
 	$( `.${ DESKTOP_DOCUMENT_CLASS } [data-dla-anchor-target][data-dla-anchor-source-id]` ).each( ( _index, element ) => {
 		const fragment = $( element ).attr( 'data-dla-anchor-target' );
