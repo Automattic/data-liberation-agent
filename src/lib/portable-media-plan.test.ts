@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -164,7 +165,7 @@ describe( 'planPortableMediaFamilies', () => {
 			planPortableMediaFamilies( families, budget, homepage ).families.map( ( decision ) => ( {
 				family: decision.family,
 				outcome: decision.outcome,
-				admitted: decision.admitted.map( ( item ) => item.sourceUrl ),
+				admitted: decision.admitted.map( ( { candidate } ) => candidate.sourceUrl ),
 			} ) );
 
 		const homepageFirst = admitted(
@@ -211,7 +212,7 @@ describe( 'planPortableMediaFamilies', () => {
 			const plan = planPortableMediaFamilies( families, 250, emptyHomepage );
 			const decided = plan.families;
 			expect( decided.map( ( decision ) => decision.family ) ).toEqual( families.map( ( family ) => family.family ) );
-			expect( decided.find( ( decision ) => decision.family === modest.sourceUrl )?.admitted.map( ( item ) => item.sourceUrl ) ).toEqual( [
+			expect( decided.find( ( decision ) => decision.family === modest.sourceUrl )?.admitted.map( ( { candidate } ) => candidate.sourceUrl ) ).toEqual( [
 				modest.sourceUrl,
 			] );
 			expect( decided.find( ( decision ) => decision.family === large.sourceUrl ) ).toMatchObject( {
@@ -253,5 +254,10 @@ describe( 'planPortableMediaFamilies', () => {
 		);
 		expect( plan.families.every( ( decision ) => decision.outcome === 'selected' ) ).toBe( true );
 		expect( plan.selectedBytes ).toBe( 400 );
+		const contentHash = createHash( 'sha256' ).update( Buffer.alloc( 400, 7 ) ).digest( 'hex' );
+		expect( plan.families.map( ( decision ) => decision.admitted ) ).toEqual( [
+			[ { candidate: second, contentHash } ],
+			[ { candidate: first, contentHash } ],
+		] );
 	} );
 } );

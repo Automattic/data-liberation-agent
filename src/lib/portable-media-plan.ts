@@ -41,7 +41,7 @@ export interface PortableMediaFamilyDecision {
 	/** `selectMediaCandidates` result. Budget tie-breaks use the first entry. */
 	eligible: PortableMediaCandidate[];
 	/** Eligible candidates admitted by budget and content-hash dedupe, in eligible order. */
-	admitted: PortableMediaCandidate[];
+	admitted: Array< { candidate: PortableMediaCandidate; contentHash: string } >;
 	homepagePriority: boolean;
 	outcome: PortableMediaFamilyOutcome;
 }
@@ -182,7 +182,7 @@ export function planPortableMediaFamilies(
 			( left.eligible[ 0 ]?.bytes ?? 0 ) - ( right.eligible[ 0 ]?.bytes ?? 0 ) ||
 			( left.eligible[ 0 ]?.sourceUrl ?? '' ).localeCompare( right.eligible[ 0 ]?.sourceUrl ?? '' )
 	);
-	const admitted = new Set< PortableMediaCandidate >();
+	const admitted = new Map< PortableMediaCandidate, PortableMediaFamilyDecision[ 'admitted' ][ number ] >();
 	const hashes = new Set< string >();
 	let selectedBytes = 0;
 	for ( const family of admissionOrder ) {
@@ -190,7 +190,7 @@ export function planPortableMediaFamilies(
 			const contentHash = fileHash( candidate.localPath );
 			const needsFile = ! hashes.has( contentHash );
 			if ( ! needsFile || selectedBytes + candidate.bytes <= budget ) {
-				admitted.add( candidate );
+				admitted.set( candidate, { candidate, contentHash } );
 				if ( needsFile ) {
 					hashes.add( contentHash );
 					selectedBytes += candidate.bytes;
@@ -201,7 +201,10 @@ export function planPortableMediaFamilies(
 	return {
 		families: families.map( ( family, index ) => {
 			const eligible = ranked[ index ].eligible;
-			const admittedCandidates = eligible.filter( ( candidate ) => admitted.has( candidate ) );
+			const admittedCandidates = eligible.flatMap( ( candidate ) => {
+				const admission = admitted.get( candidate );
+				return admission ? [ admission ] : [];
+			} );
 			const outcome: PortableMediaFamilyOutcome =
 				eligible.length === 0
 					? 'limit-excluded'
