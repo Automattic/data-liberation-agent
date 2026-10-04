@@ -2197,8 +2197,7 @@ function buildExportCapture(
 		}
 		localizedMediaFamilies.add( family );
 		let fallbackAssetPath = '';
-		for ( const candidate of admitted ) {
-			const contentHash = fileHash( candidate.localPath );
+		for ( const { candidate, contentHash } of admitted ) {
 			let assetPath = assetPathsByHash.get( contentHash );
 			if ( assetPath === undefined ) {
 				assetPath = uniqueAssetPath(
