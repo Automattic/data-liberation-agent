@@ -818,6 +818,33 @@ function detectOverlays(page: Page): Promise<OverlayDetection> {
       });
       idx++;
     }
+    const consentVendor = /onetrust|cookiebot|usercentrics|termly|osano|trustarc|cookieyes/i;
+    for (const host of Array.from(document.querySelectorAll('*'))) {
+      if (!host.shadowRoot || host.hasAttribute('data-lib-overlay')) continue;
+      if (!consentVendor.test(`${host.id} ${cls(host)}`)) continue;
+      const action = Array.from(host.shadowRoot.querySelectorAll('button,[role="button"]')).find((button) => {
+        const rect = button.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+      });
+      if (!action) continue;
+      host.setAttribute('data-lib-overlay', String(idx));
+      candidates.push({
+        idx,
+        selector: cssPath(host),
+        role: host.getAttribute('role'),
+        ariaModal: false,
+        zIndex: parseInt(getComputedStyle(host).zIndex, 10) || 0,
+        coverageRatio: 0.2,
+        hasBackdrop: false,
+        vendorHint: true,
+        text: (host.shadowRoot.textContent || '').toLowerCase().slice(0, 400),
+        ariaLabel: null,
+        hasCloseAffordance: false,
+        isLandmark: false,
+        textShare: 0,
+      });
+      idx++;
+    }
     return { candidates, scrollLock: { active: lockActive } } as unknown as OverlayDetection;
   });
 }
@@ -827,6 +854,19 @@ function overlayPresent(page: Page, idx: number): Promise<boolean> {
   return page.evaluate((i: number) => {
     const el = document.querySelector(`[data-lib-overlay="${i}"]`);
     if (!el) return false;
+    const shown = (node: Element) => {
+      const rect = node.getBoundingClientRect();
+      const style = getComputedStyle(node);
+      return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden' && parseFloat(style.opacity || '1') > 0.1;
+    };
+    if (el.shadowRoot) {
+      const viewport = (window.innerWidth || 1) * (window.innerHeight || 1) || 1;
+      return Array.from(el.shadowRoot.querySelectorAll('*')).some((node) => {
+        if (!shown(node)) return false;
+        const rect = node.getBoundingClientRect();
+        return (rect.width * rect.height) / viewport >= 0.12;
+      });
+    }
     const cs = getComputedStyle(el);
     return cs.display !== 'none' && cs.visibility !== 'hidden' && parseFloat(cs.opacity || '1') > 0.1;
   }, idx);
@@ -912,9 +952,9 @@ async function clickConsentControl(page: Page, idx: number): Promise<boolean> {
   const found = await page.evaluate((i: number) => {
     const root = document.querySelector(`[data-lib-overlay="${i}"]`);
     if (!root) return false;
-    const ACCEPT = /^(reject|decline|accept|agree|got it|allow|ok)\b/i;
-    const ctrls = Array.from(root.querySelectorAll('button,a,[role="button"]'));
-    const prefer = ctrls.find((b) => /^(reject|decline)\b/i.test((b.textContent || '').trim()));
+    const ACCEPT = /^(reject|decline|deny|accept|agree|got it|allow|ok)\b/i;
+    const ctrls = Array.from((root.shadowRoot || root).querySelectorAll('button,a,[role="button"]'));
+    const prefer = ctrls.find((b) => /^(reject|decline|deny)\b/i.test((b.textContent || '').trim()));
     const chosen = prefer || ctrls.find((b) => ACCEPT.test((b.textContent || '').trim()));
     if (!chosen) return false;
     chosen.setAttribute('data-lib-overlay-consent', String(i));
@@ -922,8 +962,18 @@ async function clickConsentControl(page: Page, idx: number): Promise<boolean> {
   }, idx);
   if (!found) return false;
   try {
-    await page.click(`[data-lib-overlay-consent="${idx}"]`, { timeout: 1500 });
-    return true;
+    const host = page.locator(`[data-lib-overlay="${idx}"]`);
+    const reject = host.getByRole('button', { name: /^(deny|reject|decline)\b/i });
+    const accept = host.getByRole('button', { name: /^(accept all|accept|agree|allow|got it|ok)\b/i });
+    if (await reject.count()) await reject.first().click({ timeout: 1500 });
+    else if (await accept.count()) await accept.first().click({ timeout: 1500 });
+    else await host.locator('[data-lib-overlay-consent]').click({ timeout: 1500 });
+    if (await overlayPresent(page, idx) && await accept.count()) await accept.first().click({ timeout: 1500 });
+    for (let attempt = 0; attempt < 15; attempt++) {
+      if (!(await overlayPresent(page, idx))) return true;
+      await page.waitForTimeout(100);
+    }
+    return !(await overlayPresent(page, idx));
   } catch {
     return false;
   }
