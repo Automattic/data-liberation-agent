@@ -5,7 +5,6 @@ import {
 	mkdirSync,
 	readFileSync,
 	readdirSync,
-	rmSync,
 	statSync,
 	writeFileSync,
 } from 'node:fs';
@@ -62,6 +61,11 @@ import { sameOriginPageAnchors } from './screenshot/unscheduled-anchors.js';
 import { inspectSourceInteractivity, SOURCE_INTERACTIVITY_SCHEMA, type SourceInteractivityPage } from './source-interactivity.js';
 import { loadHttpExportInput, type HttpExportInput } from './http-export-input.js';
 import { loadEmbeddedDocuments, projectEmbeddedRegions, mergeResponsiveEmbeddedRegions } from './embedded-documents.js';
+import {
+	EXPORT_PUBLICATION_BOUNDARIES,
+	exportPublicationBoundary,
+	publishExportGeneration,
+} from './export-publication.js';
 
 export const CAPTURE_RECEIPT_SCHEMA = 'data-liberation/capture-receipt/v1';
 export const SOURCE_PROFILE_SCHEMA = 'data-liberation/source-profile/v1';
@@ -1343,7 +1347,8 @@ function assetEvidence(
 	mediaStubs: MediaStubStore,
 	resourceManifest: CapturedResourceManifest,
 	portablePaths: Map< string, string >,
-	outputDir: string
+	outputDir: string,
+	portableRoot: string = outputDir,
 ): {
 	assetCount: number;
 	assetCountExact: boolean;
@@ -1356,7 +1361,7 @@ function assetEvidence(
 		const stub = mediaStubs.get( url );
 		const resource = resourceManifest.resources[ url ];
 		const path = portablePaths.get( url );
-		const included = path !== undefined && existsSync( resolve( outputDir, path ) );
+		const included = path !== undefined && existsSync( resolve( portableRoot, path ) );
 		const resourcePath = resource ? resolve( outputDir, resource.path ) : undefined;
 		const retrieved = resourcePath
 			? pathWithin( outputDir, resourcePath ) && existsSync( resourcePath )
@@ -1837,14 +1842,6 @@ function groupFailureReasonsByUrl(
 
 export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 	const outputDir = resolve( options.outputDir );
-	const portableMediaTotalBytesLimit = Math.max(
-		0,
-		Math.floor( options.limits?.portableMediaTotalBytes ?? MAX_PORTABLE_MEDIA_TOTAL_BYTES )
-	);
-	/** Detected switch widths, one per route, for the source profile. */
-	const switchWidths: number[] = [];
-	/** Per-route learning outcomes, aggregated into the source profile. */
-	const fluidReports: Array< NonNullable< ManifestEntryFluid > > = [];
 	const screenshotManifestPath = join( outputDir, 'screenshots', 'manifest.json' );
 	const httpInput = options.input ? loadHttpExportInput( outputDir, options.sourceUrl, options.input ) : undefined;
 	const embedded = options.embeddedDocuments ? loadEmbeddedDocuments( outputDir ) : undefined;
@@ -1874,11 +1871,29 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		throw new Error( `Invalid screenshot manifest: ${ screenshotManifestPath }` );
 	}
 	const siteSwitchWidth = httpInput ? undefined : fallbackResponsiveSwitchWidth( outputDir );
+	return publishExportGeneration( outputDir, ( stageDir ) => {
+		buildExportCapture( options, outputDir, capture, httpInput, embedded, embeddedSources, siteSwitchWidth, stageDir );
+	} );
+}
 
-	const websiteDir = join( outputDir, 'website' );
-	const stagedHtmlDir = join( outputDir, '.capture-export-html' );
-	rmSync( websiteDir, { recursive: true, force: true } );
-	rmSync( stagedHtmlDir, { recursive: true, force: true } );
+function buildExportCapture(
+	options: ExportCaptureOptions,
+	outputDir: string,
+	capture: ScreenshotManifest,
+	httpInput: ReturnType< typeof loadHttpExportInput > | undefined,
+	embedded: ReturnType< typeof loadEmbeddedDocuments > | undefined,
+	embeddedSources: Set< string >,
+	siteSwitchWidth: number | undefined,
+	stageDir: string,
+): void {
+	const portableMediaTotalBytesLimit = Math.max(
+		0,
+		Math.floor( options.limits?.portableMediaTotalBytes ?? MAX_PORTABLE_MEDIA_TOTAL_BYTES )
+	);
+	const switchWidths: number[] = [];
+	const fluidReports: Array< NonNullable< ManifestEntryFluid > > = [];
+	const websiteDir = join( stageDir, 'website' );
+	const stagedHtmlDir = join( stageDir, '.capture-export-html' );
 	mkdirSync( websiteDir, { recursive: true } );
 	mkdirSync( stagedHtmlDir, { recursive: true } );
 
@@ -2613,6 +2628,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 	}
 	const redirectsFile = portableRedirectsFile( portableRedirects );
 	if ( redirectsFile ) writeFileSync( join( websiteDir, '_redirects' ), redirectsFile );
+	exportPublicationBoundary( EXPORT_PUBLICATION_BOUNDARIES.afterHtml );
 
 	const geometryCaptureOmissions: Record< string, number > = {};
 	const geometryInputs = function* () {
@@ -2659,12 +2675,13 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		capture_omissions: geometryCaptureOmissions,
 	};
 	writeFileSync(
-		join( outputDir, 'layout-geometry-report.json' ),
+		join( stageDir, 'layout-geometry-report.json' ),
 		`${ JSON.stringify( geometryReport, null, 2 ) }\n`
 	);
+	exportPublicationBoundary( EXPORT_PUBLICATION_BOUNDARIES.sidecarWrite );
 	if ( geometry.proof )
 		writeFileSync(
-			join( outputDir, 'layout-geometry-proof.json' ),
+			join( stageDir, 'layout-geometry-proof.json' ),
 			`${ JSON.stringify( geometry.proof, null, 2 ) }\n`
 		);
 
@@ -2695,20 +2712,20 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		unreproduced_route_count: unreproducedMotion.length,
 	} : undefined;
 	if ( sourceInteractivity ) writeFileSync(
-		join( outputDir, sourceInteractivity.path ),
+		join( stageDir, sourceInteractivity.path ),
 		`${ JSON.stringify( { schema: SOURCE_INTERACTIVITY_SCHEMA, pages: unreproducedMotion }, null, 2 ) }\n`
 	);
 	if ( semanticEvidence ) {
-		writeFileSync( join( outputDir, semanticEvidence.index.path ), semanticEvidence.index.content );
+		writeFileSync( join( stageDir, semanticEvidence.index.path ), semanticEvidence.index.content );
 		for ( const shard of semanticEvidence.shards ) {
-			const path = join( outputDir, shard.path );
+			const path = join( stageDir, shard.path );
 			mkdirSync( dirname( path ), { recursive: true } );
 			writeFileSync( path, shard.content );
 		}
 	}
 	if ( interactionPages.length > 0 ) {
 		writeFileSync(
-			join( outputDir, 'interaction-states.json' ),
+			join( stageDir, 'interaction-states.json' ),
 			`${ JSON.stringify(
 				{
 					schema: CAPTURED_INTERACTIONS_SCHEMA,
@@ -2726,7 +2743,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 	};
 	if ( scrollStatesPages.length > 0 ) {
 		writeFileSync(
-			join( outputDir, 'scroll-states.json' ),
+			join( stageDir, 'scroll-states.json' ),
 			`${ JSON.stringify(
 				{
 					schema: CAPTURED_SCROLL_STATES_SCHEMA,
@@ -2766,7 +2783,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		learned: { applied: learnedApplied, frozen: learnedFrozen, routes: fluidReports.length },
 	};
 	writeFileSync(
-		join( outputDir, 'source-profile.json' ),
+		join( stageDir, 'source-profile.json' ),
 		`${ JSON.stringify( sourceProfile, null, 2 ) }\n`
 	);
 	const assetEvidenceReport = assetEvidence(
@@ -2774,10 +2791,11 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		mediaStubs,
 		resourceManifest,
 		portablePathsBySource,
-		outputDir
+		outputDir,
+		stageDir,
 	);
 	writeFileSync(
-		join( outputDir, 'asset-evidence.json' ),
+		join( stageDir, 'asset-evidence.json' ),
 		`${ JSON.stringify(
 			{
 				schema: ASSET_EVIDENCE_SCHEMA,
@@ -2813,7 +2831,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		...routeCaptureDiagnostics,
 	];
 
-	const receiptPath = join( outputDir, 'capture-receipt.json' );
+	const receiptPath = join( stageDir, 'capture-receipt.json' );
 	// Only proven source-absent routes lack a document requiring cleanup.
 	// Keep every other attempted route in the audit, even if it lost its HTML.
 	const cleanupPages = Object.entries(capture.entries)
@@ -2826,7 +2844,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		complete: cleanupPages.every((page) => page.policy && JSON.stringify(page.policy) === JSON.stringify(recordedPolicy) &&
 			page.reports?.length && page.reports.every((report) => report.failures.length === 0 && report.residual === 0)),
 	} : undefined;
-	if (cleanup) writeFileSync(join(outputDir, 'cleanup-evidence.json'), JSON.stringify({ schema: recordedPolicy!.schema, pages: cleanupPages }, null, 2));
+	if (cleanup) writeFileSync(join(stageDir, 'cleanup-evidence.json'), JSON.stringify({ schema: recordedPolicy!.schema, pages: cleanupPages }, null, 2));
 	const complete =
 		! httpInput && Number( options.summary.routesFailed ?? 0 ) === 0 &&
 		! unresolvedAnchors.some( ( anchor ) => anchor.reason === UNCAPTURED_ROUTE_REASON );
@@ -2867,7 +2885,7 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 		) }\n`
 	);
 	writeFileSync(
-		join( outputDir, 'diagnostics.json' ),
+		join( stageDir, 'diagnostics.json' ),
 		`${ JSON.stringify(
 			{
 				schema: 'data-liberation/capture-diagnostics/v1',
@@ -2902,6 +2920,4 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 			2
 		) }\n`
 	);
-	rmSync( stagedHtmlDir, { recursive: true, force: true } );
-	return receiptPath;
 }
