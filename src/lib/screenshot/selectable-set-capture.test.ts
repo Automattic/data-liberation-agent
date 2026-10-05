@@ -207,6 +207,51 @@ describe( 'captureSelectableSetStates', () => {
 		await browser?.close();
 	} );
 
+	const pressedGroupPage = ( initial: [ boolean, boolean ], exclusive: boolean ) => `<main><section>
+		<div id="view-switch">
+			<button type="button" aria-pressed="${ initial[ 0 ] }">First view</button>
+			<button type="button" aria-pressed="${ initial[ 1 ] }">Second view</button>
+		</div>
+		<div id="view-body"></div>
+	</section></main>
+	<script>
+		const copy = [ 'First view body carries one long paragraph of unique words here.', 'Second view swaps in short text.' ];
+		const buttons = [ ...document.querySelectorAll( '#view-switch button' ) ];
+		const render = () => { document.getElementById( 'view-body' ).textContent = buttons.map( ( b, i ) => b.getAttribute( 'aria-pressed' ) === 'true' ? copy[ i ] : '' ).join( ' ' ).trim() || 'Nothing pressed yet, placeholder text.'; };
+		buttons.forEach( ( button, index ) => button.addEventListener( 'click', () => {
+			buttons.forEach( ( b, i ) => b.setAttribute( 'aria-pressed', String( ${ exclusive } ? i === index : ( i === index ? b.getAttribute( 'aria-pressed' ) !== 'true' : b.getAttribute( 'aria-pressed' ) === 'true' ) ) ) );
+			render();
+		} ) );
+		render();
+	</script>`;
+
+	it.skipIf( skipBrowser )( 'captures the region of an exclusive aria-pressed segmented control', async () => {
+		const page = await browser.newPage();
+		try {
+			await serve( page, pressedGroupPage( [ true, false ], true ) );
+			const states = await captureSelectableSetStates( page, { settleMs: 10 } );
+			expect( states.map( ( state ) => [ state.kind, state.status ] ) ).toEqual( Array( 2 ).fill( [ SELECTABLE_SET_KIND, 'captured' ] ) );
+			expect( states.map( ( state ) => state.dialog?.html ) ).toEqual( [
+				expect.stringContaining( 'First view body' ),
+				expect.stringContaining( 'Second view swaps' ),
+			] );
+		} finally {
+			await page.close();
+		}
+	} );
+
+	it.skipIf( skipBrowser )( 'keeps independent aria-pressed toggles as a choice group even when a region changes', async () => {
+		const page = await browser.newPage();
+		try {
+			await serve( page, pressedGroupPage( [ false, false ], false ) );
+			const states = await captureSelectableSetStates( page, { settleMs: 10 } );
+			expect( states.length ).toBeGreaterThan( 0 );
+			expect( states.every( ( state ) => state.kind === 'choice-group' ) ).toBe( true );
+		} finally {
+			await page.close();
+		}
+	} );
+
 	it.skipIf( skipBrowser )( 'leaves native summaries and passive link wrappers to their owning controls', async () => {
 		const page = await browser.newPage();
 		try {

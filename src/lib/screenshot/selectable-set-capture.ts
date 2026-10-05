@@ -692,6 +692,15 @@ export async function captureSelectableSetStates(
 					const sameMemberParent = group.members.every(
 						( member ) => member.parentElement === group.members[ 0 ]?.parentElement
 					);
+					// A segmented control keeps exactly one member pressed before and after
+					// every probe; its pressed state is a view switch, so a varying region
+					// is its content. Independent toggles (none or several pressed) are not.
+					const pressedCount = ( selected: Array< boolean | null > ) => selected.filter( ( value ) => value === true ).length;
+					const exclusivePressed =
+						toggleGroup &&
+						observations.length > 0 &&
+						pressedCount( initialSelected ) === 1 &&
+						observations.every( ( observation ) => pressedCount( observation.selected ) === 1 );
 					const shouldCaptureChoice = Boolean(
 						choiceGroupChanged &&
 						sameMemberParent &&
@@ -699,7 +708,7 @@ export async function captureSelectableSetStates(
 						// also driving a distinct outside content region. Prefer the
 						// content evidence when both change; the choice-group snapshot
 						// alone cannot represent that collection transition.
-						( regionIdx < 0 || toggleGroup )
+						( regionIdx < 0 || ( toggleGroup && ! exclusivePressed ) )
 					);
 					if ( shouldCaptureChoice ) {
 						const drivenCount = Math.min( group.members.length, limits.maxMembers );
