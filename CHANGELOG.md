@@ -15,6 +15,17 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.18.4] - 2026-10-05
+
+### Changed
+- regenerate plugin bundles
+- share srcset tokenization across capture and export
+
+### Fixed
+- use local images inside captured interaction states
+- capture the region of exclusive aria-pressed segmented controls
+- preserve distinct query route documents
+
 ## [0.18.3] - 2026-10-05
 
 ### Changed
