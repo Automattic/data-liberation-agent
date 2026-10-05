@@ -79,6 +79,8 @@ export interface LayoutObservation {
 	/** Finite CSS animations that appeared, advanced, or changed play state
 	 * during a controlled scroll probe. */
 	responsiveAnimations?: string[];
+	/** Source-observed viewport entrances: target text, property, timing and keyframes. */
+	entranceTransitions?: string[];
 	/** documentElement.scrollWidth. */
 	docWidth: number;
 	/** True when the document is wider than the viewport. */

@@ -51,6 +51,7 @@ import {
 	type InteractionStatesReport,
 } from './screenshot/interaction-capture.js';
 import { SCROLL_STATES_SCHEMA, type ScrollStatesReport } from './screenshot/scroll-state-capture.js';
+import { withViewportEntrances } from './viewport-entrances.js';
 import {
 	isAudioLink,
 	isDocumentDownloadLink,
@@ -2651,7 +2652,7 @@ function buildExportCapture(
 		unresolvedAnchors.push(
 			...unresolvedCapturedAnchors( normalizedHtml, url, `/${ routePath }` )
 		);
-		writeFileSync( destination, normalizedHtml );
+		writeFileSync( destination, withViewportEntrances( normalizedHtml ) );
 		entry.identityHtmlPath = `${ htmlPath }.identity`;
 		writeFileSync( entry.identityHtmlPath, identityHtml );
 	}

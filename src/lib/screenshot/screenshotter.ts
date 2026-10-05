@@ -33,6 +33,7 @@ import {
 } from './interaction-capture.js';
 import { applyPagerSlideshowStates, collectPagerSlideshowStates } from './pager-slideshow.js';
 import { captureScrollStates, type ScrollStatesReport } from './scroll-state-capture.js';
+import { observeViewportEntrances } from '../viewport-entrances.js';
 import { hydrateDisclosureContent } from './dynamic-content.js';
 import { captureSelectableSetStates } from './selectable-set-capture.js';
 import { captureTypedSearchStates } from './typed-search-capture.js';
@@ -309,6 +310,7 @@ export async function capturePageHtml( page: Page ): Promise< string > {
 	// before it is overwritten) — see css-shorthand-repair.ts.
 	await page.evaluate(
 		( { factorySrc } ) => {
+			( window as typeof window & { __dlaEntrances?: { stamp(): void } } ).__dlaEntrances?.stamp();
 			const repairShorthandVarCollapse = new Function( 'return (' + factorySrc + ')' )()();
 			const sheets = new Set( [ ...document.styleSheets, ...document.adoptedStyleSheets ] );
 			for ( const sheet of sheets ) {
@@ -1839,6 +1841,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	            globalThis.__name = function (fn) { return fn; };
 	          }
 	        ` );
+					await context.addInitScript( observeViewportEntrances );
 					const page = await context.newPage();
 					await capturePerViewport( {
 						page,
