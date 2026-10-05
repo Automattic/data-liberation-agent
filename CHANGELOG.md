@@ -15,6 +15,17 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.18.3] - 2026-10-05
+
+### Changed
+- regenerate plugin bundles
+- collect retained media references once
+
+### Fixed
+- capture every panel of ARIA tablists that select on mousedown
+- probe plain action buttons for the dialogs they open
+- give selectable-set probing a 30s drive budget
+
 ## [0.18.2] - 2026-10-05
 
 ### Changed
