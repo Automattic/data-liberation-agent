@@ -158,6 +158,47 @@ describe( 'captureTriggeredDialogs', () => {
 	);
 
 	it.skipIf( skipBrowserTests )(
+		'captures a dialog opened by a plain button that declares no popup semantics',
+		async () => {
+			const browser = await chromium.launch( { headless: true } );
+			const page = await browser.newPage( { viewport: { width: 1200, height: 800 } } );
+			try {
+				await page.setContent( `<!doctype html><body><main>
+				<button id="card" type="button">Open the record</button>
+				<div><button type="button">Tab one</button><button type="button">Tab two</button></div>
+				<form><button type="submit">Send</button></form>
+				</main>
+				<script>
+					document.querySelector('#card').addEventListener('click', () => {
+						const dialog = document.createElement('div');
+						dialog.setAttribute('role', 'dialog');
+						dialog.setAttribute('aria-modal', 'true');
+						dialog.style.cssText = 'position:fixed;inset:10% 20%;background:#fff';
+						dialog.innerHTML = '<h2>Record details</h2><button type="button" aria-label="Close">Close</button>';
+						dialog.querySelector('button').addEventListener('click', () => dialog.remove());
+						document.body.append(dialog);
+					});
+				</script></body>` );
+
+				const report = await captureTriggeredDialogs( page, 'https://example.test/' );
+				const captured = report.states.filter( ( state ) => state.status === 'captured' );
+				expect( captured ).toHaveLength( 1 );
+				expect( captured[ 0 ] ).toMatchObject( {
+					trigger: { tag: 'button', label: 'Open the record' },
+					dialog: { role: 'dialog' },
+				} );
+				expect( ( captured[ 0 ] as { dialog: { html: string } } ).dialog.html ).toContain( 'Record details' );
+				// Segmented groups and form submit buttons are never probed.
+				expect( report.states.map( ( state ) => state.trigger.label ) ).not.toContain( 'Tab one' );
+				expect( report.states.map( ( state ) => state.trigger.label ) ).not.toContain( 'Send' );
+			} finally {
+				await browser.close();
+			}
+		},
+		30_000
+	);
+
+	it.skipIf( skipBrowserTests )(
 		'preserves a generic combobox listbox selection and keyboard dismissal offline',
 		async () => {
 			const browser = await chromium.launch( { headless: true } );
