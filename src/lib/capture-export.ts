@@ -13,7 +13,8 @@ import * as cheerio from 'cheerio';
 import { identityLogoReferences } from './identity-resources.js';
 import type { Element } from 'domhandler';
 import { escapeHtmlAttr } from './html-escape.js';
-import { allocateCaptureRoutes, normalizedUrl } from './capture-export-routes.js';
+import { allocateCaptureRoutes } from './capture-export-routes.js';
+import { normalizedUrl } from './url/route-key.js';
 import {
 	indexPortableMediaReferences,
 	mediaReferenceMatched,
@@ -369,8 +370,21 @@ function rewriteCapturedRouteLinks(
 		}
 		const route = routes.get( normalizedUrl( resolved.href ) );
 		if ( route ) {
-			link.attr( 'href', `${ route }${ resolved.search }${ resolved.hash }` );
+			link.attr( 'href', `${ route }${ resolved.hash }` );
 			return;
+		}
+		// A captured pathname does not prove an uncaptured query rendition.
+		if ( resolved.search ) {
+			const base = new URL( resolved.href );
+			base.search = '';
+			if ( [ ...routes.keys() ].some( key => {
+				const captured = new URL( key );
+				captured.search = '';
+				return normalizedUrl( captured.href ) === normalizedUrl( base.href );
+			} ) ) {
+				link.attr( 'href', resolved.href );
+				return;
+			}
 		}
 		if ( absolute || ! portable ) return;
 		// Paths the export itself wrote (routes, localized media and resources)
