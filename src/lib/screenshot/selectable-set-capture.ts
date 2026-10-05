@@ -8,7 +8,7 @@ export const CHOICE_GROUP_KIND = 'choice-group' as const;
 export const SELECTABLE_SET_LIMITS = {
 	maxSets: 3,
 	maxMembers: 24,
-	maxDriveMs: 16_000,
+	maxDriveMs: 30_000,
 	maxHtmlBytes: 512 * 1024,
 	settleMs: 500,
 	maxCandidateScan: 1_500,
