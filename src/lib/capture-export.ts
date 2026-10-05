@@ -999,6 +999,65 @@ function mediaFamily( sourceUrl: string ): string {
 		: sourceUrl;
 }
 
+// A captured interaction state carries the HTML of a revealed panel. That HTML
+// is serialized from the live DOM, so an image can name the exact CDN rendition
+// the runtime chose for the viewport at the moment of capture. That rendition
+// may never have been downloaded, but another rendition of the same image was.
+// Point such a reference at the portable file for its media family.
+function localizeFamilyMediaUrls(
+	text: string,
+	portableUrlByFamily: Map< string, string >
+): string {
+	if ( portableUrlByFamily.size === 0 || ! /https?:\/\//i.test( text ) ) return text;
+	return text.replace( /https?:\/\/[^\s"'<>)\\]+/gi, ( match ) => {
+		try {
+			const portable = portableUrlByFamily.get(
+				mediaFamily( new URL( match.replace( /&amp;/g, '&' ) ).href )
+			);
+			return portable ?? match;
+		} catch {
+			return match;
+		}
+	} );
+}
+
+// A `data-*` attribute that holds one image URL (a runtime's record of the
+// image it should load), or a link to the image file, keeps the source CDN
+// address after the image itself is localized. Point it at the local file for
+// the same picture.
+function localizeDataAttributeMedia( html: string, portableUrlByFamily: Map< string, string > ): string {
+	if ( portableUrlByFamily.size === 0 ) return html;
+	return html.replace(
+		/(\s(?:data-[\w-]+|href)\s*=\s*)(["'])(https?:\/\/[^"']+)\2/gi,
+		( match, prefix: string, quote: string, value: string ) => {
+			const local = localizeFamilyMediaUrls( value, portableUrlByFamily );
+			return local === value ? match : `${ prefix }${ quote }${ local }${ quote }`;
+		}
+	);
+}
+
+function localizeStringsInPlace( value: unknown, localize: ( text: string ) => string ): void {
+	if ( Array.isArray( value ) ) {
+		value.forEach( ( item, index ) => {
+			if ( typeof item === 'string' ) value[ index ] = localize( item );
+			else localizeStringsInPlace( item, localize );
+		} );
+		return;
+	}
+	if ( value === null || typeof value !== 'object' ) return;
+	const record = value as Record< string, unknown >;
+	const htmlBytesBefore =
+		typeof record.html === 'string' ? Buffer.byteLength( record.html ) : undefined;
+	for ( const [ key, item ] of Object.entries( record ) ) {
+		if ( typeof item === 'string' ) record[ key ] = localize( item );
+		else localizeStringsInPlace( item, localize );
+	}
+	// A region records the byte length of its html, and consumers reject a
+	// region whose length no longer matches. Keep a matching length matching.
+	if ( typeof record.html === 'string' && typeof record.htmlBytes === 'number' && record.htmlBytes === htmlBytesBefore )
+		record.htmlBytes = Buffer.byteLength( record.html );
+}
+
 function mediaDimension( sourceUrl: string ): number {
 	const url = new URL( sourceUrl );
 	const finalTransformation = [
@@ -2123,6 +2182,7 @@ function buildExportCapture(
 	);
 	let retainedExternalMediaCount = 0;
 	const localizedMediaFamilies = new Set< string >();
+	const portableUrlByFamily = new Map< string, string >();
 	const assetPathsByHash = new Map< string, string >();
 	const assetHashesByPath = new Map< string, string >();
 	const portablePathsBySource = new Map< string, string >();
@@ -2189,6 +2249,7 @@ function buildExportCapture(
 			if ( ! mediaReplacements.has( reference ) )
 				mediaReplacements.set( reference, portableAssetUrl( fallbackAssetPath ) );
 		}
+		if ( fallbackAssetPath ) portableUrlByFamily.set( family, portableAssetUrl( fallbackAssetPath ) );
 	}
 	const portableMedia = {
 		selected_count: assets.length,
@@ -2516,6 +2577,36 @@ function buildExportCapture(
 		routeDestinations.get( JSON.stringify( [ route.siblings, route.label ] ) )?.size === 1
 	);
 	const responsiveIdentities = { ids: new Map<string,string>(), namedAliases: false };
+	// An image captured as a page resource, not as a media stub, still names one
+	// picture at several sizes. Let the largest captured size stand for the
+	// picture wherever only the picture, not a size, is named.
+	const largestResourceByFamily = new Map< string, { portable: string; dimension: number } >();
+	for ( const [ resourceUrl, portable ] of resourceReplacements ) {
+		if ( ! /^https?:\/\//i.test( resourceUrl ) || ! /\.(?:avif|gif|jpe?g|png|webp)$/i.test( portable ) )
+			continue;
+		try {
+			const family = mediaFamily( resourceUrl );
+			if ( family === resourceUrl ) continue;
+			const dimension = mediaDimension( resourceUrl );
+			if ( dimension > ( largestResourceByFamily.get( family )?.dimension ?? -1 ) )
+				largestResourceByFamily.set( family, { portable, dimension } );
+		} catch {
+			// Not a media URL.
+		}
+	}
+	for ( const [ family, { portable } ] of largestResourceByFamily ) {
+		if ( ! portableUrlByFamily.has( family ) ) portableUrlByFamily.set( family, portable );
+	}
+	// Interaction states are written to interaction-states.json and replayed into
+	// the portable pages, so their embedded HTML must name local media too.
+	const localizeInteractionMedia = ( text: string ): string =>
+		localizeFamilyMediaUrls(
+			replaceAll( text, mediaReplacements, rejectedReplacementKeys ),
+			portableUrlByFamily
+		);
+	for ( const entry of retainedEntries ) {
+		if ( entry.interactions ) localizeStringsInPlace( entry.interactions, localizeInteractionMedia );
+	}
 	for ( const entry of retainedEntries ) {
 		const { url, htmlPath } = entry;
 		const routePath = routePathOf( url );
@@ -2529,13 +2620,16 @@ function buildExportCapture(
 		// Rewrite route links once, after wiring dialogs below. A portable path
 		// can also name a source route that was allocated a different filename.
 		const identityHtml = bindSrcsetShapedImageSrc(
-			replaceAll(
-				rewriteMediaUrls(
-					originalHtml,
-					omitDegenerateReplacements( mediaReplacements, rejectedReplacementKeys )
+			localizeDataAttributeMedia(
+				replaceAll(
+					rewriteMediaUrls(
+						originalHtml,
+						omitDegenerateReplacements( mediaReplacements, rejectedReplacementKeys )
+					),
+					resourceReplacements,
+					rejectedReplacementKeys
 				),
-				resourceReplacements,
-				rejectedReplacementKeys
+				portableUrlByFamily
 			)
 		);
 		const normalizedHtml = routePhoneDocumentFragments(
