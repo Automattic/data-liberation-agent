@@ -425,27 +425,30 @@ function omitDegenerateReplacements(
 	return values;
 }
 
-function replaceAll(
-	content: string,
+function preparePortableReplacements(
 	replacements: Map< string, string >,
 	rejectedKeys?: Set< string >
-): string {
+): ( content: string ) => string {
 	const values = new Map< string, string >();
-	for ( const [ source, local ] of omitDegenerateReplacements( replacements, rejectedKeys ) ) {
+	for ( const [ source, local ] of replacements ) {
+		if ( ! isSubstitutableReplacementKey( source ) ) {
+			if ( source ) rejectedKeys?.add( source );
+			continue;
+		}
 		values.set( source, local );
 		values.set( source.replace( /&/g, '&amp;' ), local.replace( /&/g, '&amp;' ) );
 	}
 	const sources = [ ...values.keys() ]
 		.filter( ( source ) => source !== '' && source !== '/' )
 		.sort( ( a, b ) => b.length - a.length );
-	if ( sources.length === 0 ) return content;
+	if ( sources.length === 0 ) return ( content ) => content;
 	const pattern = new RegExp(
 		sources
 			.map( ( source ) => source.replace( /[.*+?^${}()|[\]\\]/g, '\\$&' ) )
 			.join( '|' ) + URL_TERMINATOR_LOOKAHEAD,
 		'g'
 	);
-	return content.replace( pattern, ( source ) => values.get( source ) ?? source );
+	return ( content ) => content.replace( pattern, ( source ) => values.get( source ) ?? source );
 }
 
 function renderedHtml( html: string ): string {
@@ -1538,7 +1541,7 @@ function replaceDanglingCssUrl(
 	// An empty data: URL is a valid, zero-byte resource, so the browser reports a
 	// clean load for an asset the capture never got. about:blank cannot be fetched
 	// as a subresource, keeping the loss visible instead of silently successful.
-	return replaceAll( html, new Map( [ [ reference, 'about:blank' ] ] ), rejectedKeys );
+	return preparePortableReplacements( new Map( [ [ reference, 'about:blank' ] ] ), rejectedKeys )( html );
 }
 
 function removeDanglingResourceReference( html: string, reference: string ): string {
@@ -2374,7 +2377,7 @@ function buildExportCapture(
 					}
 				}
 			}
-			content = replaceAll( content, mediaReplacements, rejectedReplacementKeys );
+			content = preparePortableReplacements( mediaReplacements, rejectedReplacementKeys )( content );
 			if ( /^text\/html(?:;|$)/i.test( resource.contentType ) && embeddedSources.has( dependency.url ) ) {
 				const $ = cheerio.load( content );
 				const base = new URL( $( 'base[href]' ).first().attr( 'href' ) ?? dependency.url, dependency.url ).href;
@@ -2383,7 +2386,7 @@ function buildExportCapture(
 			}
 			writeFileSync(
 				destination,
-				replaceAll( content, resourceReplacements, rejectedReplacementKeys )
+				preparePortableReplacements( resourceReplacements, rejectedReplacementKeys )( content )
 			);
 		} else {
 			copyFileSync( source, destination );
@@ -2459,13 +2462,19 @@ function buildExportCapture(
 	const sharedStyles = new Map< string, { path: string; media: string } >();
 	const stylesheetPaths = new Map< string, string >();
 	const styleReplacements = new Map( [ ...mediaReplacements, ...resourceReplacements ] );
+	// Resource discovery and fallback promotion are complete; these maps are
+	// stable for the remaining styles, interaction strings and page projection.
+	const replaceStyleResources = preparePortableReplacements( styleReplacements, rejectedReplacementKeys );
+	const replaceMedia = preparePortableReplacements( mediaReplacements, rejectedReplacementKeys );
+	const replaceResources = preparePortableReplacements( resourceReplacements, rejectedReplacementKeys );
+	const portableMediaReplacements = omitDegenerateReplacements( mediaReplacements, rejectedReplacementKeys );
 	for ( const [ key, occurrences ] of [ ...inlineStyles ].sort( ( left, right ) =>
 		left[ 0 ].localeCompare( right[ 0 ] )
 	) ) {
 		if ( new Set( occurrences.map( ( occurrence ) => occurrence.entry.htmlPath ) ).size < 2 ) continue;
 		const style = occurrences[ 0 ];
 		// Hoisted styles leave the HTML rewrite path, so localize them before writing.
-		const css = replaceAll( style.css, styleReplacements, rejectedReplacementKeys );
+		const css = replaceStyleResources( style.css );
 		const contentHash = createHash( 'sha256' ).update( css ).digest( 'hex' );
 		const relativePath = stylesheetPaths.get( contentHash ) ?? `assets/css/capture-${ contentHash }.css`;
 		const destination = join( websiteDir, relativePath );
@@ -2601,7 +2610,7 @@ function buildExportCapture(
 	// the portable pages, so their embedded HTML must name local media too.
 	const localizeInteractionMedia = ( text: string ): string =>
 		localizeFamilyMediaUrls(
-			replaceAll( text, mediaReplacements, rejectedReplacementKeys ),
+			replaceMedia( text ),
 			portableUrlByFamily
 		);
 	for ( const entry of retainedEntries ) {
@@ -2621,13 +2630,11 @@ function buildExportCapture(
 		// can also name a source route that was allocated a different filename.
 		const identityHtml = bindSrcsetShapedImageSrc(
 			localizeDataAttributeMedia(
-				replaceAll(
+				replaceResources(
 					rewriteMediaUrls(
 						originalHtml,
-						omitDegenerateReplacements( mediaReplacements, rejectedReplacementKeys )
-					),
-					resourceReplacements,
-					rejectedReplacementKeys
+						portableMediaReplacements
+					)
 				),
 				portableUrlByFamily
 			)
