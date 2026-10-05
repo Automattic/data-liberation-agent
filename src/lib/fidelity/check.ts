@@ -20,6 +20,7 @@ import {
 import { applySourceCleanup, readSourceCleanup, validateCleanupPolicy, type CleanupPolicy, type CleanupReport } from '../source-cleanup.js';
 import { runFidelityChecks } from './checks.js';
 import { readPortableMotion } from '../portable-motion.js';
+import { observeViewportEntrances } from '../viewport-entrances.js';
 import { validateMotionContract, verifyCandidateMotion, type MotionContract, type MotionEvidence } from './candidate-motion.js';
 import { probeDialogs } from './dialog-probe.js';
 import { writePixelEvidence } from './evidence.js';
@@ -335,6 +336,7 @@ export async function observePage(
 	page.on( 'request', onRequest );
 	try {
 		if ( ! captureSession ) {
+			await page.addInitScript( observeViewportEntrances );
 			const response = await page.goto( url, { waitUntil: 'domcontentloaded', timeout: 60_000 } );
 			if ( response && ! response.ok() ) throw new Error( `Observation HTTP ${ response.status() }: ${ url }` );
 		}
@@ -782,6 +784,7 @@ export async function observePage(
 				typography,
 				animations,
 				responsiveAnimations,
+				entranceTransitions: ( window as typeof window & { __dlaEntrances?: { transitions: string[] } } ).__dlaEntrances?.transitions ?? [],
 				docWidth: document.documentElement.scrollWidth,
 				overflow: document.documentElement.scrollWidth > window.innerWidth,
 				hashTargets,
@@ -827,6 +830,7 @@ export async function observePage(
 			typography: measured.typography,
 			animations: measured.animations,
 			responsiveAnimations: measured.responsiveAnimations,
+			entranceTransitions: measured.entranceTransitions,
 			docWidth: measured.docWidth,
 			overflow: measured.overflow,
 			externalHosts: [ ...external ].sort(),
@@ -1366,6 +1370,7 @@ async function checkFrozenFidelity( options: FidelityCheckOptions, stage: 'captu
 					...entry.browserProfile,
 					serviceWorkers: 'block',
 				} );
+				await page.addInitScript( observeViewportEntrances );
 				try {
 					// Portable replay cannot reach the origin, including redirects and media requests.
 					const local = `${ server.url }${ route }`;

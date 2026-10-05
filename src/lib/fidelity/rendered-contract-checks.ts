@@ -160,16 +160,18 @@ export function checkMotion(
 ): FidelityCheckResult {
 	const sourceAnimations = source.animations ?? [];
 	const candidateAnimations = candidate.animations ?? [];
-	if ( sourceAnimations.length === 0 ) return {};
 	const matched = matchedAnimationCount( sourceAnimations, candidateAnimations );
-	const coverage = matched / sourceAnimations.length;
+	const coverage = sourceAnimations.length ? matched / sourceAnimations.length : 1;
 	const sourceResponsive = source.responsiveAnimations ?? [];
 	const candidateResponsive = candidate.responsiveAnimations ?? [];
 	const responsiveMatched = matchedAnimationCount( sourceResponsive, candidateResponsive );
 	const responsiveCoverage = sourceResponsive.length
 		? responsiveMatched / sourceResponsive.length
 		: 1;
-	if ( coverage >= MOTION_COVERAGE_FLOOR && responsiveCoverage >= MOTION_COVERAGE_FLOOR ) return {};
+	const sourceEntrances = source.entranceTransitions ?? [];
+	const entranceMatched = matchedAnimationCount( sourceEntrances, candidate.entranceTransitions ?? [] );
+	const entranceCoverage = sourceEntrances.length ? entranceMatched / sourceEntrances.length : 1;
+	if ( coverage >= MOTION_COVERAGE_FLOOR && responsiveCoverage >= MOTION_COVERAGE_FLOOR && entranceCoverage >= MOTION_COVERAGE_FLOOR ) return {};
 
 	return {
 		failures: [
@@ -177,9 +179,10 @@ export function checkMotion(
 				? `animation coverage ${ matched } of ${ sourceAnimations.length } (${ Math.round(
 					coverage * 100
 				) }%) is below ${ Math.round( MOTION_COVERAGE_FLOOR * 100 ) }%; copy registered ${ candidateAnimations.length } finite CSS animation(s)`
-				: `responsive animation coverage ${ responsiveMatched } of ${ sourceResponsive.length } (${ Math.round(
+				: responsiveCoverage < MOTION_COVERAGE_FLOOR ? `responsive animation coverage ${ responsiveMatched } of ${ sourceResponsive.length } (${ Math.round(
 					responsiveCoverage * 100
-				) }%) is below ${ Math.round( MOTION_COVERAGE_FLOOR * 100 ) }% after controlled scroll`,
+				) }%) is below ${ Math.round( MOTION_COVERAGE_FLOOR * 100 ) }% after controlled scroll`
+				: `viewport entrance transition coverage ${ entranceMatched } of ${ sourceEntrances.length } (${ Math.round( entranceCoverage * 100 ) }%) is below ${ Math.round( MOTION_COVERAGE_FLOOR * 100 ) }%`,
 		],
 	};
 }
