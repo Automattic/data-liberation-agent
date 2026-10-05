@@ -46,6 +46,7 @@ import { CapturedResourceStore } from './resource-capture.js';
 import { enforceSameOrigin } from './same-origin.js';
 import { preserveStreamedVideoPosters } from './streamed-video.js';
 import { sameOriginPageAnchors } from './unscheduled-anchors.js';
+import { normalizedUrl } from '../url/route-key.js';
 import { analyzePage } from './site-analysis.js';
 import {
 	defaultViewports,
@@ -1999,13 +2000,13 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		// Discovery can omit links authored on a captured page. Inspect only a
 		// bounded set of those links, using the source session and manual redirects:
 		// never request an off-origin Location or persist its (possibly tokenized) URL.
-		const scheduled = new Set( urls.map( routeIdentity ) );
+		const scheduled = new Set( urls.map( normalizedUrl ) );
 		const candidates = new Set< string >();
 		for ( const url of urls ) {
 			const htmlPath = manifest.getEntry( url )?.html;
 			if ( ! htmlPath || ! existsSync( join( opts.outputDir, htmlPath ) ) ) continue;
 			for ( const link of sameOriginPageAnchors( readFileSync( join( opts.outputDir, htmlPath ), 'utf8' ), url ) ) {
-				if ( ! scheduled.has( routeIdentity( link ) ) ) candidates.add( link );
+				if ( ! scheduled.has( normalizedUrl( link ) ) ) candidates.add( link );
 			}
 		}
 		if ( candidates.size ) {
