@@ -944,7 +944,10 @@ function bindSrcsetShapedImageSrc( html: string ): string {
 	} );
 }
 
-function capturedMediaReferences( entries: CaptureEntry[] ): Map< string, Set< string > > {
+function retainedMediaReferenceInventory( entries: CaptureEntry[] ): {
+	rendered: Map< string, Set< string > >;
+	retained: Map< string, string[] >;
+} {
 	const pages = new Set(
 		entries.flatMap( ( entry ) => {
 			try {
@@ -954,9 +957,28 @@ function capturedMediaReferences( entries: CaptureEntry[] ): Map< string, Set< s
 			}
 		} )
 	);
-	const families = new Map< string, Set< string > >();
+	const rendered = new Map< string, Set< string > >();
+	const retained = new Map< string, string[] >();
 	for ( const entry of entries ) {
 		const html = readFileSync( entry.htmlPath, 'utf8' );
+		// Both projections classify through one document-local identity map, but
+		// preserve their distinct raw spelling and DOM occurrence order.
+		const identities = new Map< string, string | undefined >();
+		const familyOf = ( reference: string ): string | undefined => {
+			const normalized = reference.trim().replace( /&amp;/g, '&' );
+			if ( ! normalized ) return undefined;
+			if ( ! identities.has( normalized ) ) {
+				let family: string | undefined;
+				try {
+					const resolved = new URL( normalized, entry.url ).href;
+					if ( ! pages.has( normalizedUrl( resolved ) ) ) family = mediaFamily( resolved );
+				} catch {
+					// Malformed browser values have no media family.
+				}
+				identities.set( normalized, family );
+			}
+			return identities.get( normalized );
+		};
 		const references: string[] = [];
 		for ( const match of html.matchAll(
 			/<(img|source|video|audio)\b[^>]*\ssrc\s*=\s*(["'])([\s\S]*?)\2[^>]*>/gi
@@ -969,19 +991,33 @@ function capturedMediaReferences( entries: CaptureEntry[] ): Map< string, Set< s
 			references.push( ...srcsetReferences( match[ 2 ] ) );
 		}
 		for ( const reference of references ) {
-			const trimmed = reference.trim();
-			if ( ! trimmed ) continue;
-			try {
-				const resolved = new URL( trimmed.replace( /&amp;/g, '&' ), entry.url ).href;
-				if ( pages.has( normalizedUrl( resolved ) ) ) continue;
-				const family = mediaFamily( resolved );
-				families.set( family, new Set( [ ...( families.get( family ) ?? [] ), reference ] ) );
-			} catch {
-				// Ignore non-URL browser values such as data URIs and malformed placeholders.
-			}
+			const family = familyOf( reference );
+			if ( family === undefined ) continue;
+			const bindings = rendered.get( family ) ?? new Set< string >();
+			bindings.add( reference );
+			rendered.set( family, bindings );
 		}
+		const add = ( reference: string ) => {
+			const family = familyOf( reference );
+			if ( family === undefined ) return;
+			const occurrences = retained.get( family ) ?? [];
+			occurrences.push( reference.trim().replace( /&amp;/g, '&' ) );
+			retained.set( family, occurrences );
+		};
+		const $ = cheerio.load( html );
+		$( 'img,source,video,audio' ).each( ( _index, element ) => {
+			const node = $( element );
+			const src = node.attr( 'src' );
+			const tag = String( node.prop( 'tagName' ) ?? '' ).toLowerCase();
+			if ( src ) {
+				for ( const reference of elementSrcReferences( tag, src ) ) add( reference );
+			}
+			const srcset = node.attr( 'srcset' );
+			if ( ! srcset ) return;
+			for ( const candidate of srcsetReferences( srcset ) ) add( candidate );
+		} );
 	}
-	return families;
+	return { rendered, retained };
 }
 
 function mediaFamily( sourceUrl: string ): string {
@@ -1041,54 +1077,16 @@ function localizeStringsInPlace( value: unknown, localize: ( text: string ) => s
 	}
 	if ( value === null || typeof value !== 'object' ) return;
 	const record = value as Record< string, unknown >;
+	const htmlBytesBefore =
+		typeof record.html === 'string' ? Buffer.byteLength( record.html ) : undefined;
 	for ( const [ key, item ] of Object.entries( record ) ) {
 		if ( typeof item === 'string' ) record[ key ] = localize( item );
 		else localizeStringsInPlace( item, localize );
 	}
-}
-
-function retainedMediaReferencesByFamily( entries: CaptureEntry[] ): Map< string, string[] > {
-	const pages = new Set(
-		entries.flatMap( ( { url } ) => {
-			try {
-				return [ normalizedUrl( url ) ];
-			} catch {
-				return [];
-			}
-		} )
-	);
-	const families = new Map< string, string[] >();
-	const add = ( reference: string, documentUrl: string ) => {
-		const trimmed = reference.trim();
-		if ( ! trimmed ) return;
-		try {
-			const resolved = new URL( trimmed.replace( /&amp;/g, '&' ), documentUrl ).href;
-			if ( pages.has( normalizedUrl( resolved ) ) ) return;
-			const family = mediaFamily( resolved );
-			families.set( family, [
-				...( families.get( family ) ?? [] ),
-				trimmed.replace( /&amp;/g, '&' ),
-			] );
-		} catch {
-			// Non-URL media sources, such as data URLs, need no localization.
-		}
-	};
-	for ( const { url, htmlPath } of entries ) {
-		const html = readFileSync( htmlPath, 'utf8' );
-		const $ = cheerio.load( html );
-		$( 'img,source,video,audio' ).each( ( _index, element ) => {
-			const node = $( element );
-			const src = node.attr( 'src' );
-			const tag = String( node.prop( 'tagName' ) ?? '' ).toLowerCase();
-			if ( src ) {
-				for ( const reference of elementSrcReferences( tag, src ) ) add( reference, url );
-			}
-			const srcset = node.attr( 'srcset' );
-			if ( ! srcset ) return;
-			for ( const candidate of srcsetReferences( srcset ) ) add( candidate, url );
-		} );
-	}
-	return families;
+	// A region records the byte length of its html, and consumers reject a
+	// region whose length no longer matches. Keep a matching length matching.
+	if ( typeof record.html === 'string' && typeof record.htmlBytes === 'number' && record.htmlBytes === htmlBytesBefore )
+		record.htmlBytes = Buffer.byteLength( record.html );
 }
 
 function mediaDimension( sourceUrl: string ): number {
@@ -2141,9 +2139,9 @@ function buildExportCapture(
 		resourceManifest,
 		outputDir
 	);
-	const renderedMediaReferences = capturedMediaReferences( retainedEntries );
+	const { rendered: renderedMediaReferences, retained: retainedMediaFamilies } =
+		retainedMediaReferenceInventory( retainedEntries );
 	const mediaFamilies = new Map< string, MediaCandidate[] >();
-	const retainedMediaFamilies = retainedMediaReferencesByFamily( retainedEntries );
 	const failedMedia: Array< { sourceUrl: string; error: string; references: string[] } > = [];
 	const capturedPages = new Set(
 		[ options.sourceUrl, ...retainedEntries.map( ( entry ) => entry.url ) ].flatMap( ( url ) => {

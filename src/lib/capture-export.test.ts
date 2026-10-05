@@ -2422,6 +2422,63 @@ describe( 'exportWebsiteCapture', () => {
 		expect( website ).toContain( 'data-image-src="/media/portrait.webp"' );
 	} );
 
+	it( 'keeps htmlBytes equal to the html length after localizing interaction-state images', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-interaction-bytes-export-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'media', 'screenshots' ] )
+			mkdirSync( join( outputDir, path ), { recursive: true } );
+		const rendition = ( width: number ) =>
+			`https://cdn.example/images/portrait.png/v1/fill/w_${ width },h_${ width },al_c/portrait.webp`;
+		writeFileSync(
+			join( outputDir, 'html', 'homepage.html' ),
+			`<html><body><img src="${ rendition( 534 ) }"><button id="a" aria-haspopup="dialog">A</button><button id="b" aria-haspopup="dialog">B</button></body></html>`
+		);
+		writeFileSync( join( outputDir, 'media', 'portrait.webp' ), 'portrait' );
+		const region = ( id: string, html: string, htmlBytes: number ) => ( {
+			status: 'captured',
+			trigger: { selector: `#${ id }`, tag: 'button', id, ariaHaspopup: 'dialog', dataBindings: {} },
+			dialog: { selector: `#p-${ id }`, tag: 'div', id: `p-${ id }`, role: 'dialog', ariaModal: true, html, htmlBytes, htmlTruncated: false },
+		} );
+		const html = ( label: string ) => `<div>${ label } caf\u00e9 \u2603<img src="${ rendition( 352 ) }"></div>`;
+		const exact = html( 'exact' );
+		const stale = html( 'stale' );
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( {
+				version: 1,
+				entries: {
+					'https://example.com/': {
+						html: 'html/homepage.html',
+						interactions: {
+							schema: 'data-liberation/interaction-states/v2',
+							sourceUrl: 'https://example.com/',
+							viewport: { width: 1440, height: 900 },
+							capturedAt: '2026-08-22T00:00:00.000Z',
+							states: [ region( 'a', exact, Buffer.byteLength( exact ) ), region( 'b', stale, 12345 ) ],
+							initialDialogs: [],
+						},
+					},
+				},
+			} )
+		);
+		const media = MediaStubStore.load( outputDir );
+		media.markSuccess( rendition( 534 ), join( outputDir, 'media', 'portrait.webp' ) );
+		media.flush();
+		exportWebsiteCapture( {
+			outputDir,
+			sourceUrl: 'https://example.com/',
+			platform: 'generic',
+			summary: {},
+			failures: [],
+		} );
+
+		const states = JSON.parse( readFileSync( join( outputDir, 'interaction-states.json' ), 'utf8' ) ).pages[ 0 ].states;
+		expect( states[ 0 ].dialog.html ).not.toContain( 'cdn.example' );
+		expect( states[ 0 ].dialog.htmlBytes ).toBe( Buffer.byteLength( states[ 0 ].dialog.html ) );
+		expect( states[ 1 ].dialog.html ).not.toContain( 'cdn.example' );
+		expect( states[ 1 ].dialog.htmlBytes ).toBe( 12345 );
+	} );
+
 	it( 'keeps a lazy image whose bare original was never fetched on its localized srcset renditions', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-lazy-original-export-' ) );
 		dirs.push( outputDir );
