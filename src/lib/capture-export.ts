@@ -58,6 +58,7 @@ import {
 } from './screenshot/resource-capture.js';
 import { isSourcePromotion } from './source-cleanup.js';
 import { sameOriginPageAnchors } from './screenshot/unscheduled-anchors.js';
+import { srcsetCandidates, srcsetReferences } from './srcset.js';
 import { inspectSourceInteractivity, SOURCE_INTERACTIVITY_SCHEMA, type SourceInteractivityPage } from './source-interactivity.js';
 import { loadHttpExportInput, type HttpExportInput } from './http-export-input.js';
 import { loadEmbeddedDocuments, projectEmbeddedRegions, mergeResponsiveEmbeddedRegions } from './embedded-documents.js';
@@ -854,57 +855,11 @@ function mediaReferences( sourceUrl: string, siteUrl: string ): string[] {
 	return [ sourceUrl, `${ media.pathname }${ media.search }` ];
 }
 
-function srcsetReferences( srcset: string ): string[] {
-	const references: string[] = [];
-	let offset = 0;
-	while ( offset < srcset.length ) {
-		while ( offset < srcset.length && /[\s,]/.test( srcset[ offset ] ) ) offset++;
-		if ( offset >= srcset.length ) break;
-		const start = offset;
-		while ( offset < srcset.length && ! /\s/.test( srcset[ offset ] ) ) offset++;
-		const reference = srcset.slice( start, offset ).replace( /,+$/, '' );
-		if ( reference ) references.push( reference );
-		while ( offset < srcset.length && srcset[ offset ] !== ',' ) offset++;
-		if ( offset < srcset.length ) offset++;
-	}
-	return references;
-}
-
 // A density or width descriptor means the attribute is a srcset list, not one
 // URL. `new URL` percent-encodes the list into a single address that 404s, and
 // blanking that string also wipes the same list where it is a real srcset.
 function isSrcsetShaped( value: string ): boolean {
 	return /\s+\d+(?:\.\d+)?[wx](?=\s*(?:,|$))/i.test( value );
-}
-
-interface SrcsetCandidate {
-	url: string;
-	size: number;
-	density: boolean;
-}
-
-function srcsetCandidates( value: string ): SrcsetCandidate[] {
-	const candidates: SrcsetCandidate[] = [];
-	let offset = 0;
-	while ( offset < value.length ) {
-		while ( offset < value.length && /[\s,]/.test( value[ offset ] ) ) offset++;
-		if ( offset >= value.length ) break;
-		const start = offset;
-		while ( offset < value.length && ! /\s/.test( value[ offset ] ) ) offset++;
-		const url = value.slice( start, offset ).replace( /,+$/, '' );
-		const descriptorStart = offset;
-		while ( offset < value.length && value[ offset ] !== ',' ) offset++;
-		const descriptor = value.slice( descriptorStart, offset );
-		if ( offset < value.length ) offset++;
-		if ( ! url ) continue;
-		const parsed = /(\d+(?:\.\d+)?)([wx])/i.exec( descriptor );
-		candidates.push( {
-			url,
-			size: parsed ? Number( parsed[ 1 ] ) : 1,
-			density: parsed?.[ 2 ].toLowerCase() === 'x',
-		} );
-	}
-	return candidates;
 }
 
 function elementSrcReferences( tag: string, value: string ): string[] {

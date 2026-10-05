@@ -6,6 +6,7 @@ import * as cheerio from 'cheerio';
 import { sourceSessionCookieHeader } from '../browser-kit/browser-kit.js';
 import { identityLogoReferences } from '../identity-resources.js';
 import { decodeCssUrl } from '../css-url-escapes.js';
+import { srcsetReferences } from '../srcset.js';
 import { MAX_REDIRECTS, safeFetch, type SafeFetchResult } from '../media-fetch/safe-fetch.js';
 import type { Page, Request, Response } from 'playwright';
 
@@ -253,22 +254,6 @@ function resourcePath( url: URL, contentType = '', sourceOrigin?: string ): stri
 }
 
 const EXTERNAL_PASSIVE_RESOURCE_TYPES = new Set( [ 'stylesheet', 'font', 'image', 'media' ] );
-
-function srcsetReferences( srcset: string ): string[] {
-	const references: string[] = [];
-	let offset = 0;
-	while ( offset < srcset.length ) {
-		while ( offset < srcset.length && /[\s,]/.test( srcset[ offset ] ) ) offset++;
-		if ( offset >= srcset.length ) break;
-		const start = offset;
-		while ( offset < srcset.length && ! /\s/.test( srcset[ offset ] ) ) offset++;
-		const reference = srcset.slice( start, offset ).replace( /,+$/, '' );
-		if ( reference ) references.push( reference );
-		while ( offset < srcset.length && srcset[ offset ] !== ',' ) offset++;
-		if ( offset < srcset.length ) offset++;
-	}
-	return references;
-}
 
 function canonicalContentType( contentType: string ): string {
 	const normalized = contentType.trim().toLowerCase();
