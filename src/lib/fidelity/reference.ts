@@ -9,6 +9,7 @@ import type { LayoutObservation } from './score.js';
 import { isRouteDrift } from '../screenshot/document-integrity.js';
 import { applyCaptureRemovals } from '../screenshot/apply-removals.js';
 import type { CleanupPolicy } from '../source-cleanup.js';
+import { captureViewportScreenshot } from './viewport-screenshot.js';
 
 export interface ReferenceCollectorOptions {
 	cleanupPolicy?: CleanupPolicy;
@@ -21,6 +22,7 @@ export type FidelityStage = 'capture' | 'materialization' | 'drift';
 export interface ReferenceArtifact { path: string; sha256: string }
 export interface ReferenceEntry {
 	deviceScaleFactor?: number;
+	browserProfile?: Readonly<{ isMobile: boolean; hasTouch: boolean }>;
 	/** Assigned from the exported receipt; absent when no portable route was retained. */
 	route?: string;
 	sourceUrl: string;
@@ -69,7 +71,7 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 		return { path, sha256: digest( bytes ) };
 	};
 	return {
-		async observe( page: Page, url: string, device: 'desktop' | 'mobile', errors: readonly string[] = [] ): Promise<void> {
+		async observe( page: Page, url: string, device: 'desktop' | 'mobile', errors: readonly string[] = [], browserProfile?: ReferenceEntry['browserProfile'] ): Promise<void> {
 			for ( const viewport of device === 'mobile' ? [ 390 ] : [ 768, 1440 ] ) {
 					const entry: ReferenceEntry = { sourceUrl: url, viewport, viewportHeight: 900, device, state: 'baseline', readiness: { ready: false, reasons: [] } };
 					entries.push( entry );
@@ -96,9 +98,11 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 						}
 						entry.userAgent = await referencePage.evaluate( () => navigator.userAgent );
 						entry.deviceScaleFactor = await referencePage.evaluate( () => window.devicePixelRatio );
+						entry.browserProfile = browserProfile;
+						if ( ! browserProfile ) entry.readiness.reasons.push( 'source browser profile unproven' );
 						const observation = await observePage( referencePage, url, viewport, 800, null, options.cleanupPolicy ?? cleanupPolicy(), async () => {
 							await applyCaptureRemovals( referencePage!, { removeSelectors: options.removeSelectors, prepare: options.prepareCapture, ctx: { url, viewport: device } } );
-						}, true, true );
+						}, true, referencePage === page );
 						const cleanup = await readSourceCleanup( referencePage );
 						entry.readiness.cleanup = cleanup;
 						if ( cleanup.failures.length || cleanup.residual ) entry.readiness.reasons.push( 'source cleanup incomplete' );
@@ -116,7 +120,7 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 						const stem = `${ digest( url ).slice( 0, 24 ) }-${ viewport }`;
 						entry.observation = store( `${ stem }.json`, JSON.stringify( observation ) );
 						entry.document = store( `${ stem }.html`, await referencePage.content() );
-						entry.screenshot = store( `${ stem }.png`, await referencePage.screenshot( { scale: 'css' } ) );
+						entry.screenshot = store( `${ stem }.png`, await captureViewportScreenshot( referencePage ) );
 						entry.readiness.reasons.push( ...errors );
 						entry.readiness.ready = entry.readiness.reasons.length === 0;
 					} catch ( error ) {

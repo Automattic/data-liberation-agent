@@ -23,6 +23,7 @@ import { readPortableMotion } from '../portable-motion.js';
 import { validateMotionContract, verifyCandidateMotion, type MotionContract, type MotionEvidence } from './candidate-motion.js';
 import { probeDialogs } from './dialog-probe.js';
 import { writePixelEvidence } from './evidence.js';
+import { captureViewportScreenshot } from './viewport-screenshot.js';
 import { checkSelfConsistency, type SelfConsistencyReport } from './self-consistency.js';
 import { REFERENCE_WIDTHS, readFrozenObservation, readReferenceArtifact, type FidelityReference, type FidelityStage } from './reference.js';
 import {
@@ -678,6 +679,7 @@ export async function observePage(
 					let left = rect.left, right = rect.right, top = rect.top, bottom = rect.bottom;
 					for ( let ancestor: HTMLElement | null = parent; ancestor && ancestor !== document.body; ancestor = ancestor.parentElement ) {
 						const style = getComputedStyle( ancestor );
+						if ( style.display === 'contents' ) continue;
 						if ( ! [ 'hidden', 'clip' ].includes( style.overflowX ) && ! [ 'hidden', 'clip' ].includes( style.overflowY ) ) continue;
 						const box = ancestor.getBoundingClientRect();
 						if ( [ 'hidden', 'clip' ].includes( style.overflowX ) ) { left = Math.max( left, box.left ); right = Math.min( right, box.right ); }
@@ -1356,10 +1358,12 @@ async function checkFrozenFidelity( options: FidelityCheckOptions, stage: 'captu
 				server ??= await startStaticServer( websiteDir );
 				browser ??= await ( await import( 'playwright' ) ).chromium.launch();
 				const entry = entries[ 0 ]!;
+				if ( typeof entry.browserProfile?.isMobile !== 'boolean' || typeof entry.browserProfile?.hasTouch !== 'boolean' ) throw new Error( 'Source browser profile unproven' );
 				const page = await browser.newPage( {
 					viewport: { width: viewport, height: entry.viewportHeight },
 					deviceScaleFactor: entry.deviceScaleFactor ?? 1,
 					...( entry.userAgent ? { userAgent: entry.userAgent } : {} ),
+					...entry.browserProfile,
 					serviceWorkers: 'block',
 				} );
 				try {
@@ -1376,13 +1380,13 @@ async function checkFrozenFidelity( options: FidelityCheckOptions, stage: 'captu
 					const measure = async ( url: string ): Promise<LayoutObservation> => {
 						const response = await page.goto( url, { waitUntil: 'domcontentloaded' } );
 						if ( response && ! response.ok() ) throw new Error( `Observation HTTP ${ response.status() }` );
-						return observePage( page, url, viewport, options.settleMs ?? 800, new URL( url ).origin, undefined, undefined, true, true );
+						return observePage( page, url, viewport, options.settleMs ?? 800, new URL( url ).origin, undefined, undefined, true, false );
 					};
-					if ( stage === 'materialization' ) { source = await measure( local ); sourcePng = await page.screenshot(); }
+					if ( stage === 'materialization' ) { source = await measure( local ); sourcePng = await captureViewportScreenshot( page ); }
 					const liberated = await measure( candidate );
 					if ( ambiguousRenderedImages( source.images, liberated.images ).length ) throw new Error( 'Repeated image correspondence ambiguous: structural role/state does not uniquely identify occurrences' );
 					const evidenceDir = join( directory, 'compare', stage, evidenceSlug( route ), String( viewport ), state );
-					const candidatePng = options.screenshots ? await page.screenshot() : undefined;
+					const candidatePng = options.screenshots ? await captureViewportScreenshot( page ) : undefined;
 					const checked = await runFidelityChecks( { ...attribution, sourceUrl: stage === 'capture' ? `frozen:${ entries[0]!.observation!.path }` : local, candidateUrl: candidate, source, candidate: liberated, evidenceDir } );
 					if ( receipt.cleanup ) {
 						const retained = await applySourceCleanup( page, receipt.cleanup.policy );
