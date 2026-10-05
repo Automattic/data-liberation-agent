@@ -1,7 +1,7 @@
 import { createServer } from 'node:http';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { chromium } from 'playwright';
+import { chromium, devices } from 'playwright';
 import { PNG } from 'pngjs';
 import { describe, expect, it } from 'vitest';
 import { captureScreenshots } from '../screenshot/screenshotter.js';
@@ -14,6 +14,52 @@ import { waitForFonts } from '../screenshot/page-helpers.js';
 import { squareFont } from './font-fixture.js';
 
 describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chromium.executablePath() ) )( 'capture-session reference replay', () => {
+	it( 'counts painted text through boxless wrappers while honoring real ancestor clipping', async () => {
+		const browser = await chromium.launch();
+		try {
+			const page = await browser.newPage( { viewport: { width: 390, height: 900 } } );
+			const text = 'Painted editorial text survives a boxless wrapper.';
+			await page.setContent( `<div style="display:contents;overflow:hidden"><h1>${ text }</h1></div>` );
+			const painted = await observePage( page, 'about:blank', 390, 0, null, undefined, undefined, true, true );
+			expect( painted.textChars ).toBe( text.length );
+			await page.setContent( `<div style="position:relative;width:100px;height:100px;overflow:hidden"><div style="display:contents;overflow:hidden"><p style="position:absolute;left:200px;width:200px">${ text }</p></div></div>` );
+			const clipped = await observePage( page, 'about:blank', 390, 0, null, undefined, undefined, true, true );
+			expect( clipped.textChars ).toBe( 0 );
+		} finally { await browser.close(); }
+	}, 30_000 );
+	it( 'replays fixed-width mobile emulation and complete compositor frames', async () => {
+		const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
+		const directory = mkdtempSync( join( parent, 'reference-mobile-profile-' ) );
+		const html = '<meta name="viewport" content="width=320,user-scalable=yes"><style>body{margin:0}h1{font:20px Arial}@media(pointer:coarse){h1{font-size:30px}}</style><h1>Mobile viewport heading</h1><div style="height:2000px"></div><img loading="lazy" src="/media.png" width="120" height="120">';
+		mkdirSync( join( directory, 'website' ) );
+		writeFileSync( join( directory, 'website', 'index.html' ), html );
+		const media = PNG.sync.write( new PNG( { width: 120, height: 120 } ) );
+		writeFileSync( join( directory, 'website', 'media.png' ), media );
+		const browser = await chromium.launch();
+		try {
+			const { defaultBrowserType: _browserType, ...iphone } = devices[ 'iPhone 17' ];
+			const context = await browser.newContext( iphone );
+			const page = await context.newPage();
+			const url = 'http://fixture.invalid/';
+			await context.route( url, route => route.fulfill( { contentType: 'text/html', body: html } ) );
+			await context.route( `${ url }media.png`, route => route.fulfill( { contentType: 'image/png', body: media } ) );
+			const collector = createReferenceCollector( directory, url, [ url ] );
+			await collector.observe( page, url, 'mobile', [], { isMobile: true, hasTouch: true } );
+			const receipt = join( directory, 'capture-receipt.json' );
+			writeFileSync( receipt, JSON.stringify( { source: { url }, websiteRoot: 'website', routes: [ { url, path: 'website/index.html' } ] } ) );
+			const manifest = JSON.parse( readFileSync( collector.finalize( receipt ), 'utf8' ) ) as FidelityReference;
+			expect( manifest.entries[ 0 ]!.readiness.ready, manifest.entries[ 0 ]!.readiness.reasons.join( ', ' ) ).toBe( true );
+			const report = await checkFidelity( { directory, stage: 'capture', widths: [ 390 ], screenshots: true } );
+			expect( report.pending ).toEqual( [] );
+			expect( report.scores[ 0 ]!.failures ).toEqual( [] );
+			expect( report.pass ).toBe( true );
+			delete manifest.entries[ 0 ]!.browserProfile;
+			writeFileSync( join( directory, 'fidelity-reference.json' ), JSON.stringify( manifest ) );
+			const legacy = await checkFidelity( { directory, stage: 'capture', widths: [ 390 ] } );
+			expect( legacy.pass ).toBe( false );
+			expect( legacy.pending?.[ 0 ]!.reason ).toMatch( /browser profile unproven/ );
+		} finally { await browser.close(); rmSync( directory, { recursive: true, force: true } ); }
+	}, 30_000 );
 	it( 'replays source pixel density when measuring resolution-dependent content', async () => {
 		const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
 		const directory = mkdtempSync( join( parent, 'reference-pixel-density-' ) );
@@ -27,7 +73,7 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			await page.route( url, route => route.fulfill( { contentType: 'text/html', body: html } ) );
 			await page.goto( url ); await applySourceCleanup( page, cleanupPolicy() );
 			const collector = createReferenceCollector( directory, url, [ url ] );
-			await collector.observe( page, url, 'mobile' );
+			await collector.observe( page, url, 'mobile', [], { isMobile: false, hasTouch: false } );
 			const receipt = join( directory, 'capture-receipt.json' );
 			writeFileSync( receipt, JSON.stringify( { source: { url }, websiteRoot: 'website', routes: [ { url, path: 'website/index.html' } ] } ) );
 			collector.finalize( receipt );
@@ -50,7 +96,7 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 				await page.goto( url );
 				await applySourceCleanup( page, cleanupPolicy() );
 				const collector = createReferenceCollector( directory, url, [ url ] );
-				await collector.observe( page, url, 'mobile' );
+				await collector.observe( page, url, 'mobile', [], { isMobile: false, hasTouch: false } );
 				const receipt = join( directory, 'receipt.json' ); writeFileSync( receipt, JSON.stringify( { routes: [] } ) );
 				const manifest = JSON.parse( readFileSync( collector.finalize( receipt ), 'utf8' ) ) as FidelityReference;
 				expect( manifest.entries[ 0 ]!.readiness.reasons.includes( 'source route drift' ) ).toBe( drift );
@@ -78,8 +124,8 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			expect(await page.evaluate(() => document.fonts.check('500 36px Primary'))).toBe(true);
 			expect(await page.evaluate(() => document.fonts.check('500 36px Primary,"Wide Fallback",sans-serif'))).toBe(false);
 			const collector = createReferenceCollector(directory, url, [url]);
-			await collector.observe(page, url, 'desktop');
-			await collector.observe(page, url, 'mobile');
+			await collector.observe(page, url, 'desktop', [], { isMobile: false, hasTouch: false });
+			await collector.observe(page, url, 'mobile', [], { isMobile: false, hasTouch: false });
 			const receipt = join(directory, 'receipt.json'); writeFileSync(receipt, JSON.stringify({ routes: [] }));
 			const manifest = JSON.parse(readFileSync(collector.finalize(receipt), 'utf8')) as FidelityReference;
 			expect(manifest.entries.map(entry => entry.viewport)).toEqual([768, 1440, 390]);
@@ -156,7 +202,7 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			expect(await page.evaluate(() => [...document.fonts].map(font => font.status))).toEqual(['error', 'error']);
 			await applySourceCleanup(page, cleanupPolicy());
 			const collector = createReferenceCollector(directory, 'about:blank', ['about:blank']);
-			await collector.observe(page, 'about:blank', 'desktop');
+			await collector.observe(page, 'about:blank', 'desktop', [], { isMobile: false, hasTouch: false });
 			const receipt = join(directory, 'receipt.json'); writeFileSync(receipt, JSON.stringify({ routes: [] }));
 			const manifest = JSON.parse(readFileSync(collector.finalize(receipt), 'utf8')) as FidelityReference;
 			expect(manifest.entries.every(entry => !entry.readiness.ready && entry.readiness.fontsReady === false && entry.readiness.reasons.includes('source fonts pending or failed'))).toBe(true);
@@ -370,7 +416,7 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			const page = await context.newPage(); await page.goto( url ); await page.setViewportSize( { width: 768, height: 900 } );
 			expect( await page.locator( 'h1' ).evaluate( element => getComputedStyle( element ).fontSize ) ).toBe( '29px' );
 			const collector = createReferenceCollector( directory, url, [ url ], { cleanupPolicy: cleanupPolicy() } );
-			await collector.observe( page, url, 'desktop' );
+			await collector.observe( page, url, 'desktop', [], { isMobile: false, hasTouch: false } );
 			const receipt = join( directory, 'receipt.json' ); writeFileSync( receipt, JSON.stringify( { routes: [] } ) );
 			const manifest = JSON.parse( readFileSync( collector.finalize( receipt ), 'utf8' ) ) as FidelityReference;
 			const entry = manifest.entries.find( candidate => candidate.viewport === 768 )!;

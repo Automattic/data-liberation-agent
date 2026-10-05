@@ -71,16 +71,23 @@ The exported `FidelityReference`, `ReferenceEntry`, `ReferenceArtifact`, and
 contains a fresh capture ID, source URL, timestamp, receipt SHA-256, portable-file
 SHA-256s, declared source-route/width/state scope, unknowns and entries. Each entry
 contains portable route, source URL, device/user agent, viewport dimensions,
+pixel density, mobile/touch emulation options recorded at context construction,
 readiness (cleanup, media and fonts), and SHA-256-bound observation JSON, cleaned source document
 and viewport PNG references. All paths are run-relative. Receipt/source identity
 and every required source artifact are verified before scoring. Missing files,
 changed digests, duplicate entries, absent routes/widths/states, incomplete cleanup,
 source runtime errors, and pending/failed visible images or fonts are unproven.
+Comparison replays the recorded emulation options; references without that profile remain unproven.
 This is an integrity record, not a signature: preserve/hash the manifest itself in
 the caller's immutable evidence store with the rest of the run.
 
 Readiness is bounded to the settled layout, cleanup audit, decoded visible media,
-fonts and observed runtime errors. It cannot prove that arbitrary application
+fonts and observed runtime errors. Fresh reference and candidate navigations run
+the controlled lazy-load sweep and return to the baseline pose before observation.
+Viewport evidence uses Chromium's complete compositor frame and verifies its exact
+requested dimensions before readiness. This preserves fixed-width mobile viewport
+scaling without clipping a fractional bottom row or resizing the resulting raster.
+It cannot prove that arbitrary application
 work has finished. V1 freezes **baseline only**; dialogs, zoom interactions and
 motion remain explicit unknowns. Requesting those states cannot certify a pass.
 Downstream acceptance must declare every required state via `states` (for example,

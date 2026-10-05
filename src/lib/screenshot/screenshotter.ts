@@ -56,7 +56,7 @@ import {
 } from './types.js';
 import type { GeometryCapture } from './layout-geometry-proof.js';
 import type { ExtractedNav } from './nav-extract.js';
-import type { Browser, BrowserContext, Page, Route } from 'playwright';
+import type { Browser, BrowserContext, BrowserContextOptions, Page, Route } from 'playwright';
 
 /**
  * Scroll offset multiplier for the scrolled-state screenshot: we scroll to
@@ -184,6 +184,7 @@ interface CapturePerViewportArgs {
 		ctx: import('../../adapters/page-actions.js').LiberationContext
 	) => Promise< void >;
 	observeSource?: ScreenshotOpts['observeSource'];
+	browserProfile: Readonly<{ isMobile: boolean; hasTouch: boolean }>;
 	canonicalizeHtml?: ( html: string ) => string;
 	viewport: Viewport;
 	plan: ArtifactPlan;
@@ -936,7 +937,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	// A slideshow driven by its own thumbnails only advances while the source's
 	// script is running, so read its states before any layout measurement.
 	const pagerSlideshows = await collectPagerSlideshowStates( page ).catch( () => [] );
-	await args.observeSource?.( page, url, isDesktop ? 'desktop' : 'mobile', sourceErrors );
+	await args.observeSource?.( page, url, isDesktop ? 'desktop' : 'mobile', sourceErrors, args.browserProfile );
 
 	if ( isDesktop && plan.captureHtml && args.learnFluid ) {
 		try {
@@ -1816,7 +1817,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 					// tokenized ENTRY url establishes. Keyed by origin, so this navigates
 					// once per run — every worker and viewport for every route reuses it.
 					const sessionContext = await sourceContextOptions( attemptBrowser, entryUrl );
-					context = await attemptBrowser.newContext( {
+					const contextOptions: BrowserContextOptions = {
 						...( viewport.id === 'mobile'
 							? { ...IPHONE_17_CONTEXT, storageState: sessionContext.storageState }
 							: sessionContext ),
@@ -1826,7 +1827,8 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 								? SCREENSHOT_DEVICE_SCALE_FACTOR
 								: IPHONE_17_CONTEXT.deviceScaleFactor,
 						ignoreHTTPSErrors: true,
-					} );
+					};
+					context = await attemptBrowser.newContext( contextOptions );
 					// tsx/esbuild's keepNames transform wraps named const arrows with
 					// `__name(fn, 'name')` calls; that helper doesn't exist in the browser
 					// context. Polyfill as a no-op so our evaluate() closures can run.
@@ -1839,6 +1841,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 					const page = await context.newPage();
 					await capturePerViewport( {
 						page,
+						browserProfile: { isMobile: contextOptions.isMobile ?? false, hasTouch: contextOptions.hasTouch ?? false },
 						viewport,
 						plan: vpPlan,
 						url,
