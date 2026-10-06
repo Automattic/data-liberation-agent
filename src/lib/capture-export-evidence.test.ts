@@ -21,7 +21,10 @@ it.each( [ 'http', 'missing-route' ] )( 'keeps receipt and sidecar completeness/
 			locations: { captureRoot, stageRoot },
 			source: { sourceUrl: 'https://example.test/', platform: 'generic', summary: { routesFailed: 0 }, failures: [] },
 			capture: {
-				entries: { 'https://example.test/': {} }, absentRoutes: new Set(), interactivity: [],
+				entries: { 'https://example.test/': { nativeViewTimelines: { desktop: {
+					path: 'native-view-timelines/home.desktop.json', preserved: 0,
+					losses: [ { target: 'n1', reason: 'range is unproven' } ], status: 'unproven', failures: [],
+				} } } }, absentRoutes: new Set(), interactivity: [],
 				...( mode === 'http' ? { http: { acquisition: { method: 'http' }, diagnostics: [] } } : {} ),
 			},
 			pages: [ { slug: 'home', url: 'https://example.test/', routePath: 'index.html', identityHtmlPath, hasMobileDocument: true } ],
@@ -52,6 +55,8 @@ it.each( [ 'http', 'missing-route' ] )( 'keeps receipt and sidecar completeness/
 		expect( diagnostics.interactions ).toEqual( receipt.interactions );
 		expect( diagnostics.scrollStates ).toEqual( receipt.scrollStates );
 		expect( diagnostics.portableMedia ).toEqual( receipt.portableMedia );
+		expect( diagnostics.nativeViewTimelines ).toEqual( receipt.nativeViewTimelines );
+		expect( receipt.nativeViewTimelines.pages ).toEqual( [ { url: 'https://example.test/', profiles: input.capture.entries[ 'https://example.test/' ].nativeViewTimelines } ] );
 		expect( diagnostics.unresolvedMedia ).toEqual( [ { url: '/', error: 'skipped degenerate replacement key' } ] );
 		expect( receipt.layoutGeometry ).toEqual( JSON.parse( readFileSync( join( stageRoot, 'layout-geometry-report.json' ), 'utf8' ) ) );
 		expect( existsSync( join( stageRoot, 'interaction-states.json' ) ) ).toBe( false );

@@ -13,6 +13,7 @@ import * as cheerio from 'cheerio';
 import type { Element } from 'domhandler';
 import { escapeHtmlAttr } from './html-escape.js';
 import { allocateCaptureRoutes } from './capture-export-routes.js';
+import { sameHttpSite } from './screenshot/same-origin.js';
 import { normalizedUrl } from './url/route-key.js';
 import {
 	indexPortableMediaReferences,
@@ -39,6 +40,7 @@ import {
 } from './screenshot/absent-document.js';
 import { selfContainWebsite } from './self-contain.js';
 import { wireCapturedDialogs, wireCapturedRouteNavigation } from './static-dialogs.js';
+import { wireNativeViewTimelines } from './native-view-timelines.js';
 import { rewriteMediaUrls } from './streaming/media-url-rewrite.js';
 import {
 	INTERACTION_STATES_SCHEMA,
@@ -72,6 +74,7 @@ function withoutGeometryIdentities( html: string ): string {
 }
 
 interface CaptureManifestEntry {
+	nativeViewTimelines?: import('./screenshot/manifest-queue.js').ManifestEntry['nativeViewTimelines'];
 	cleanup?: import('./screenshot/manifest-queue.js').ManifestEntry['cleanup'];
 	slug?: string;
 	html?: string;
@@ -216,6 +219,8 @@ interface PortableLinkContext {
 }
 
 const PORTABLE_LINK_BASE = 'https://portable.invalid';
+const DOCUMENT_LINK_RELATIONS = new Set( [ 'canonical', 'next', 'prev', 'alternate', 'author', 'help', 'license', 'search' ] );
+const RESOURCE_LINK_RELATIONS = new Set( [ 'stylesheet', 'icon', 'manifest', 'preload', 'modulepreload', 'prefetch', 'preconnect', 'dns-prefetch' ] );
 
 function rewriteCapturedRouteLinks(
 	html: string,
@@ -224,11 +229,15 @@ function rewriteCapturedRouteLinks(
 	portable?: PortableLinkContext
 ): string {
 	const $ = cheerio.load( html );
-	// `rel="canonical"` naming a URL this capture actually produced is source
-	// provenance, not an SEO signal the copy should keep declaring — a reader
-	// (or a search engine) following it lands back on the source.
-	$( 'a[href],area[href],link[rel="canonical"][href]' ).each( ( _index, element ) => {
+	// Document relations share navigation's route/source resolution. Resource
+	// relations keep their asset localization, including alternate stylesheets.
+	$( 'a[href],area[href],link[href]' ).each( ( _index, element ) => {
 		const link = $( element );
+		if ( element.tagName === 'link' ) {
+			const relations = ( link.attr( 'rel' ) ?? '' ).toLowerCase().split( /\s+/ );
+			if ( relations.some( relation => RESOURCE_LINK_RELATIONS.has( relation ) ) ||
+				! relations.some( relation => DOCUMENT_LINK_RELATIONS.has( relation ) ) ) return;
+		}
 		const href = link.attr( 'href' ) ?? '';
 		const absolute = /^(?:https?:)?\/\//i.test( href );
 		// Same-document fragments, and schemes such as `mailto:` or `tel:`, mean
@@ -912,9 +921,7 @@ function portableMediaBasename( candidate: MediaCandidate ): string {
 }
 
 function routeMatchesSourceOrigin( url: string, sourceUrl: string ): boolean {
-	const route = new URL( url );
-	const source = new URL( sourceUrl );
-	return route.origin === source.origin;
+	return sameHttpSite( url, sourceUrl );
 }
 
 function capturedResources( outputDir: string ): CapturedResourceManifest {
@@ -1874,7 +1881,7 @@ function buildExportCapture(
 		unresolvedAnchors.push(
 			...unresolvedCapturedAnchors( normalizedHtml, url, `/${ routePath }` )
 		);
-		writeFileSync( destination, withViewportEntrances( normalizedHtml ) );
+		writeFileSync( destination, wireNativeViewTimelines( withViewportEntrances( normalizedHtml ) ) );
 		entry.identityHtmlPath = `${ htmlPath }.identity`;
 		writeFileSync( entry.identityHtmlPath, identityHtml );
 	}

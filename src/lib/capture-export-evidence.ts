@@ -34,7 +34,7 @@ export interface CaptureEvidenceInput {
 		discoveryDiagnostics?: ReadonlyArray< { code: string; url: string; reason: string } >;
 	};
 	capture: {
-		entries: Readonly< Record< string, Pick< ManifestEntry, 'cleanup' | 'redirectedTo' | 'externalRedirect' > > >;
+		entries: Readonly< Record< string, Pick< ManifestEntry, 'cleanup' | 'redirectedTo' | 'externalRedirect' | 'nativeViewTimelines' > > >;
 		absentRoutes: ReadonlySet< string >;
 		interactivity: ReadonlyArray< SourceInteractivityPage >;
 		http?: { acquisition: unknown; diagnostics: ReadonlyArray< { code: string; url: string; reason: string } > };
@@ -556,6 +556,13 @@ export function writeCaptureEvidence( input: CaptureEvidenceInput ): string {
 	const complete =
 		! httpInput && Number( options.summary.routesFailed ?? 0 ) === 0 &&
 		! unresolvedAnchors.some( ( anchor ) => anchor.reason === UNCAPTURED_ROUTE_REASON );
+	const nativePages = Object.entries( capture.entries ).filter( ([ , entry ]) => entry.nativeViewTimelines ).map( ([ url, entry ]) => ({ url, profiles: entry.nativeViewTimelines }) );
+	const nativeViewTimelines = nativePages.length ? {
+		schema: 'data-liberation/native-view-timelines/v1',
+		pages: nativePages,
+		binding: { targetEffectsAttribute: 'data-dla-native-effects', nodeIdentityAttribute: 'data-dla-native-node', profileAttribute: 'data-dla-native-profile', documentScopeAttribute: 'data-dla-document-scope' },
+		verification: 'source-observed; portable motion parity requires browser verification',
+	} : undefined;
 
 	writeFileSync(
 		receiptPath,
@@ -582,6 +589,7 @@ export function writeCaptureEvidence( input: CaptureEvidenceInput ): string {
 				...(sourceInteractivity ? { sourceInteractivity } : {}),
 				scrollStates: scrollStatesSummary,
 				layoutGeometry: geometryReport,
+				...( nativeViewTimelines ? { nativeViewTimelines } : {} ),
 				sourceProfile,
 				excludedRoutes,
 				duplicateRoutes,
@@ -615,6 +623,7 @@ export function writeCaptureEvidence( input: CaptureEvidenceInput ): string {
 				...(sourceInteractivity ? { sourceInteractivity } : {}),
 				scrollStates: scrollStatesSummary,
 				interactionFailures: interactionStates.filter( ( state ) => state.status !== 'captured' ),
+				...( nativeViewTimelines ? { nativeViewTimelines } : {} ),
 				excludedRoutes,
 				duplicateRoutes,
 				styleHoist: {
