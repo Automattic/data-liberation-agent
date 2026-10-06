@@ -40,11 +40,15 @@ function makePage() {
 			currentUrl = url;
 			return { status: () => 200 };
 		} ),
+		url: () => currentUrl,
+		viewportSize: () => null,
 		content: vi.fn().mockResolvedValue( '<html><body>Tianna Wolfson</body></html>' ),
 		screenshot: vi.fn().mockResolvedValue( Buffer.from( 'fakepng' ) ),
 		waitForLoadState: vi.fn().mockResolvedValue( undefined ),
 		evaluate: vi.fn().mockImplementation( async ( fn: unknown ) => {
 			const source = String( fn );
+			if ( source.includes( 'ViewTimeline' ) ) return [];
+			if ( source.includes( '__dlaCleanup' ) ) return { url: currentUrl, viewport: 1440, removed: 0, records: [], truncated: false, failures: [], residual: 0 };
 			if ( source.includes( 'DOCTYPE' ) ) return '<html><body>Tianna Wolfson</body></html>';
 			if ( source.includes( 'motionAnimatedElements' ) ) return { rows: [], landmarks: [] };
 			if ( source.includes( 'scrollHeight' ) ) return 3000;
@@ -153,7 +157,7 @@ describe( 'captureScreenshots interactions', () => {
 			} );
 
 			try {
-				await captureScreenshots( {
+				const result = await captureScreenshots( {
 					urls: [ 'https://example.com/tianna' ],
 					outputDir,
 					concurrency: 1,
@@ -163,7 +167,7 @@ describe( 'captureScreenshots interactions', () => {
 						id === 'mobile' ? { id, width: 402, height: 681 } : { id, width: 1440, height: 900 }
 					),
 				} );
-
+				expect( result.failed ).toBe( 0 );
 				expect( captureDialogs ).toHaveBeenCalledTimes( expectedCalls );
 				expect( captureDialogs ).toHaveBeenCalledWith( mobilePage, 'https://example.com/tianna' );
 				expect( triggerClicks ).toBe( 1 );
@@ -242,10 +246,11 @@ describe( 'captureScreenshots interactions', () => {
 		} );
 
 		try {
-			await captureScreenshots( {
+			const result = await captureScreenshots( {
 				urls: [ 'https://example.com/mobile-menu' ], outputDir, concurrency: 1, settleMs: 0, captureImages: true,
 				viewports: viewportIds.map( ( id ) => id === 'mobile' ? { id, width: 390, height: 844 } : { id, width: 1440, height: 900 } ),
 			} );
+			expect( result.failed ).toBe( 0 );
 			expect( captureDialogs ).toHaveBeenCalledTimes( 2 );
 			const manifest = JSON.parse( readFileSync( join( outputDir, 'screenshots', 'manifest.json' ), 'utf8' ) );
 			const states = manifest.entries[ 'https://example.com/mobile-menu' ].interactions.states;

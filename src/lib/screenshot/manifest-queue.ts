@@ -20,6 +20,8 @@ export interface ManifestEntry {
   interactions?: InteractionStatesReport;
   /** Scroll-position-driven class/style toggles (e.g. a shrinking sticky header). */
   scrollStates?: ScrollStatesReport;
+  /** Public-API native motion evidence, keyed by source capture profile identity. */
+  nativeViewTimelines?: Record<string, { path: string; preserved: number; losses: Array<{ target: string; reason: string }>; status?: 'observed' | 'unproven'; failures?: string[] }>;
   /**
    * Outcome of learning the source's sizing across viewport widths: how much
    * runtime-frozen geometry became fluid CSS, and what stayed frozen.

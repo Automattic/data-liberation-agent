@@ -10,7 +10,8 @@ import { SectionSpecsStore } from './replicate/section-specs-store.js';
 import { MediaStubStore } from './resume-state/index.js';
 
 export interface CaptureProgress {
-	phase: 'discovering' | 'capturing' | 'finalizing' | 'complete';
+	unit?: 'routes' | 'documents';
+	phase: 'discovering' | 'capturing' | 'media' | 'finalizing' | 'complete';
 	current?: number;
 	total?: number;
 	url?: string;
@@ -19,6 +20,9 @@ export interface CaptureProgress {
 }
 
 export interface CaptureOptions {
+	/** Opt-in source-only review capture; browser rendering remains the default. */
+	acquisition?: 'browser' | 'http';
+	http?: import('./capture-http.js').HttpCaptureOptions;
 	url: string;
 	outputDir: string;
 	resume?: boolean;
@@ -151,6 +155,9 @@ export async function captureWebsite(
 	options: CaptureOptions,
 	dependencies: CaptureDependencies = defaultDependencies
 ): Promise< CaptureResult > {
+	if ( options.acquisition !== undefined && ! [ 'browser', 'http' ].includes( options.acquisition ) ) throw new Error( 'Unknown capture acquisition mode' );
+	if ( options.acquisition === 'http' ) ( await import( './capture-http.js' ) ).validateHttpCaptureOptions( options );
+	else if ( options.http !== undefined ) throw new Error( 'HTTP capture options require HTTP acquisition' );
 	const { onProgress } = options;
 	const startedAt = Date.now();
 	let phase = '';
@@ -178,12 +185,14 @@ export async function captureWebsite(
 		throw new UnsupportedCapturePlatformError(
 			`No adapter available for platform: ${ detection.platform }`
 		);
+	if ( options.acquisition === 'http' && ! adapter.acquisition ) throw new UnsupportedCapturePlatformError( `Platform ${ adapter.id } has no HTTP acquisition profile` );
 
 	progress( { phase: 'discovering', url: sourceUrl } );
 	const inventory = ( await adapter.discover( sourceUrl, {
 		outputDir,
 		resume: options.resume === true,
 	} ) ) as CaptureInventory;
+	process.stderr.write( `[timing] discovery ${ Date.now() - phaseStartedAt }ms\n` );
 	const sourceRoute = captureRouteKey( sourceUrl );
 	const urls = [
 		sourceUrl,
@@ -192,6 +201,11 @@ export async function captureWebsite(
 			.filter( ( url ) => captureRouteKey( url ) !== sourceRoute ),
 	];
 	progress( { phase: 'capturing', current: 0, total: urls.length } );
+	if ( options.acquisition === 'http' ) {
+		const result = await ( await import( './capture-http.js' ) ).captureHttpWebsite( { options, sourceUrl, platform: adapter, urls, startedAt, progress, title: inventory.siteMeta?.title, discoveryDiagnostics: inventory.diagnostics ?? [] } );
+		if ( options.strict && ! result.complete ) throw new IncompleteCaptureError( result );
+		return result;
+	}
 
 	const { captureScreenshots } = await import( './screenshot/screenshotter.js' );
 	const { createReferenceCollector } = await import( './fidelity/reference.js' );
@@ -222,8 +236,17 @@ export async function captureWebsite(
 		publicUrlsOnly: true,
 		onProgress: ( current, total, url ) => progress( { phase: 'capturing', current, total, url } ),
 	} );
-	await downloadCaptureSectionMedia( outputDir, screenshotResult.urls );
+	process.stderr.write(
+		`[timing] browser-capture ${ screenshotResult.durationMs }ms (${ screenshotResult.captured } captured, ${ screenshotResult.failed } failed)\n`
+	);
+	progress( { phase: 'media', current: screenshotResult.captured, total: urls.length } );
+	const mediaStartedAt = Date.now();
+	const downloadedSectionMedia = await downloadCaptureSectionMedia( outputDir, screenshotResult.urls );
+	process.stderr.write(
+		`[timing] section-media ${ Date.now() - mediaStartedAt }ms (${ downloadedSectionMedia } downloaded)\n`
+	);
 
+	const exportStartedAt = Date.now();
 	progress( { phase: 'finalizing', current: screenshotResult.captured, total: urls.length } );
 	const failuresPath = join( outputDir, 'screenshots', 'failures.json' );
 	const failures = existsSync( failuresPath )
@@ -249,6 +272,8 @@ export async function captureWebsite(
 		failures,
 		discoveryDiagnostics: inventory.diagnostics ?? [],
 	} );
+	process.stderr.write( `[timing] export ${ Date.now() - exportStartedAt }ms\n` );
+	const previewStartedAt = Date.now();
 	// A portable homepage preview is a deliverable, not optional capture evidence.
 	// Its failure must not turn an otherwise usable website into a failed capture.
 	const { captureSitePreview } = await import( './site-preview.js' );
@@ -261,6 +286,7 @@ export async function captureWebsite(
 	const receipt = JSON.parse( readFileSync( captureReceiptPath, 'utf8' ) );
 	receipt.preview = preview;
 	writeFileSync( captureReceiptPath, `${ JSON.stringify( receipt, null, 2 ) }\n` );
+	process.stderr.write( `[timing] homepage-preview ${ Date.now() - previewStartedAt }ms\n` );
 	const unresolvedAnchors = readUnresolvedAnchors( outputDir );
 	// Diagnosed dynamic pages need causal evidence, not an author-authored site
 	// recipe. Discovery remains explicit untranslated evidence until a portable

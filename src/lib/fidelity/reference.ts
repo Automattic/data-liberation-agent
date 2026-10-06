@@ -6,7 +6,7 @@ import { PNG } from 'pngjs';
 import { observePage, routeSourceMap } from './check.js';
 import { cleanupPolicy, readSourceCleanup, type CleanupReport } from '../source-cleanup.js';
 import type { LayoutObservation } from './score.js';
-import { isRouteDrift } from '../screenshot/document-integrity.js';
+import { isRouteDrift, navigationDocumentUrl } from '../screenshot/document-integrity.js';
 import { applyCaptureRemovals } from '../screenshot/apply-removals.js';
 import type { CleanupPolicy } from '../source-cleanup.js';
 import { captureViewportScreenshot } from './viewport-screenshot.js';
@@ -76,6 +76,7 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 					const entry: ReferenceEntry = { sourceUrl: url, viewport, viewportHeight: 900, device, state: 'baseline', readiness: { ready: false, reasons: [] } };
 					entries.push( entry );
 					let referencePage: Page | undefined;
+					let navigationUrl = url;
 					try {
 						// Each frozen width is an independent source navigation in the same
 						// BrowserKit context. Resizing a page that has crossed breakpoints or
@@ -95,6 +96,7 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 						if ( url !== 'about:blank' ) {
 							const response = await referencePage.goto( url, { waitUntil: 'load', timeout: 60_000 } );
 							if ( response && ! response.ok() ) throw new Error( `Reference navigation HTTP ${ response.status() }` );
+							navigationUrl = navigationDocumentUrl( url, response?.url() ?? url, Boolean( response?.request().redirectedFrom() ) );
 						}
 						entry.userAgent = await referencePage.evaluate( () => navigator.userAgent );
 						entry.deviceScaleFactor = await referencePage.evaluate( () => window.devicePixelRatio );
@@ -108,7 +110,7 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 						if ( cleanup.failures.length || cleanup.residual ) entry.readiness.reasons.push( 'source cleanup incomplete' );
 						// Freeze the same route identity capture accepts: query/hash
 						// renditions do not become different origin/path documents.
-						if ( isRouteDrift( referencePage.url(), url ) ) entry.readiness.reasons.push( 'source route drift' );
+						if ( isRouteDrift( referencePage.url(), navigationUrl ) ) entry.readiness.reasons.push( 'source route drift' );
 						const mediaReady = await referencePage.evaluate( () => [ ...document.images ].every( image => {
 							const rect = image.getBoundingClientRect();
 							return rect.width <= 50 || rect.height <= 50 || ( image.complete && image.naturalWidth > 0 );
