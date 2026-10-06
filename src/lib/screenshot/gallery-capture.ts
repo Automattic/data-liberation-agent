@@ -262,6 +262,10 @@ async function visibleGallerySurfaces(page: Page): Promise<string[]> {
 	return page.evaluate(() => {
 		const rendered = (image: HTMLImageElement) => {
 			if (!image.complete || image.naturalWidth <= 1) return false;
+			for (let node: Element | null = image; node; node = node.parentElement) {
+				const style = getComputedStyle(node);
+				if (style.visibility === 'hidden' || Number(style.opacity) < 0.1) return false;
+			}
 			const rect = image.getBoundingClientRect();
 			const x = Math.max(0, rect.left) + Math.min(rect.width, innerWidth - Math.max(0, rect.left)) / 2;
 			const y = Math.max(0, rect.top) + Math.min(rect.height, innerHeight - Math.max(0, rect.top)) / 2;
@@ -391,8 +395,11 @@ export async function captureGalleries(page: Page): Promise<CapturedDialogIntera
 		await close.click({ timeout: 2000 }).catch((error) => {
 			state.error = String(error).slice(0, 500);
 		});
-		await page.waitForTimeout(500);
-		state.gallery!.closed = !(await visibleGallerySurfaces(page)).includes(overlay);
+		for (let sample = 0; sample < 30; sample++) {
+			await page.waitForTimeout(100);
+			state.gallery!.closed = !(await visibleGallerySurfaces(page)).includes(overlay);
+			if (state.gallery!.closed) break;
+		}
 		if (
 			lightbox?.coverage === 'complete' &&
 			lightbox.restoration === 'verified' &&
