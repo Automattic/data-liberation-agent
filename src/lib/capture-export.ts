@@ -13,6 +13,7 @@ import * as cheerio from 'cheerio';
 import type { Element } from 'domhandler';
 import { escapeHtmlAttr } from './html-escape.js';
 import { allocateCaptureRoutes } from './capture-export-routes.js';
+import { sameHttpSite } from './screenshot/same-origin.js';
 import { normalizedUrl } from './url/route-key.js';
 import {
 	indexPortableMediaReferences,
@@ -1008,9 +1009,7 @@ function portableMediaBasename( candidate: MediaCandidate ): string {
 }
 
 function routeMatchesSourceOrigin( url: string, sourceUrl: string ): boolean {
-	const route = new URL( url );
-	const source = new URL( sourceUrl );
-	return route.origin === source.origin;
+	return sameHttpSite( url, sourceUrl );
 }
 
 function capturedResources( outputDir: string ): CapturedResourceManifest {

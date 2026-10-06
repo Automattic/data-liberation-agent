@@ -118,6 +118,46 @@ function makeCrashingBrowser(crashAt: string): MockBrowser {
 }
 
 describe('captureScreenshots', () => {
+	it.each( [ 'server', 'client', 'late-control' ] )( 'validates %s protocol navigation against the observed server document', async ( navigation ) => {
+		const requested = 'https://example.com/author';
+		const landed = 'http://example.com/author/';
+		let late = false;
+		const browser = makeMockBrowser( () => {
+			const page = makeGoodPage();
+			const goto = page.goto.getMockImplementation()!;
+			page.goto.mockImplementation( async ( url: string ) => {
+				await goto( url );
+				return {
+					status: () => 200,
+					url: () => navigation === 'client' ? requested : landed,
+					request: () => ( { redirectedFrom: () => navigation === 'client' ? null : {} } ),
+				};
+			} );
+			page.url.mockImplementation( () => late ? 'http://example.com/other' : landed );
+			return page;
+		} );
+		vi.mocked( connectBrowser ).mockResolvedValue( browser as never );
+		const outputDir = mkdtempSync( join( tmpdir(), 'protocol-redirect-' ) );
+		try {
+			await captureScreenshots( {
+				urls: [ requested ], outputDir, concurrency: 1, settleMs: 0,
+				viewports: [ { id: 'desktop', width: 1440, height: 900 } ],
+				beforeSerialize: async () => { late = navigation === 'late-control'; },
+			} );
+			const manifest = JSON.parse( readFileSync( join( outputDir, 'screenshots', 'manifest.json' ), 'utf8' ) );
+			const failurePath = join( outputDir, 'screenshots', 'failures.json' );
+			const failures = existsSync( failurePath ) ? JSON.parse( readFileSync( failurePath, 'utf8' ) ) : [];
+			if ( navigation === 'server' ) {
+				expect( manifest.entries[ requested ].html ).toBe( 'html/author.html' );
+				expect( failures ).toEqual( [] );
+			} else {
+				expect( manifest.entries[ requested ].html ).toBeUndefined();
+				expect( failures ).toEqual( expect.arrayContaining( [ expect.objectContaining( { error: expect.stringContaining( 'route drift' ) } ) ] ) );
+			}
+		} finally {
+			rmSync( outputDir, { recursive: true, force: true } );
+		}
+	} );
 	it( 'rejects wrappers that the proof consumer cannot coalesce', () => {
 		expect( geometryCandidateIsSafe( {
 			tag: 'div',

@@ -18,6 +18,7 @@ import {
 	countBodyTags,
 	isRouteDrift,
 	isStackingArtifact,
+	navigationDocumentUrl,
 	routeIdentity,
 	serverRedirectTarget,
 } from './document-integrity.js';
@@ -43,7 +44,7 @@ import { ManifestQueue, type ManifestEntry, type FailureEntry } from './manifest
 import { validateOutputDir, planArtifacts, type ArtifactPlan } from './output-layout.js';
 import { waitForStable, triggerLazyLoad, dismissOverlays, pageResponds } from './page-helpers.js';
 import { CapturedResourceStore } from './resource-capture.js';
-import { enforceSameOrigin } from './same-origin.js';
+import { enforceSameOrigin, sameHttpSite } from './same-origin.js';
 import { preserveStreamedVideoPosters } from './streamed-video.js';
 import { sameOriginPageAnchors } from './unscheduled-anchors.js';
 import { normalizedUrl } from '../url/route-key.js';
@@ -781,9 +782,13 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	const MAX_NAV_ATTEMPTS = 4;
 	let navigated = false;
 	let redirectedTo: string | undefined;
+	let navigationUrl = url;
 	for ( let attempt = 1; attempt <= MAX_NAV_ATTEMPTS; attempt++ ) {
 		try {
 			const response = await page.goto( url, { waitUntil: 'load', timeout: 30_000 } );
+			// Only an observed server redirect can establish a different initial
+			// document origin. Later control-driven navigation is still drift.
+			navigationUrl = navigationDocumentUrl( url, response?.url?.() ?? url, Boolean( response?.request?.().redirectedFrom() ) );
 			redirectedTo = response?.request?.().redirectedFrom()
 				? serverRedirectTarget( url, response.url() )
 				: undefined;
@@ -1039,7 +1044,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 			// and recording it — the same discipline as isStackingArtifact below — keeps
 			// the receipt honest instead of shipping a mismatched pair silently.
 			const capturedUrl = page.url();
-			if ( isRouteDrift( capturedUrl, url ) ) {
+			if ( isRouteDrift( capturedUrl, navigationUrl ) ) {
 				failures.push( {
 					url,
 					viewport: viewport.id,
@@ -1093,7 +1098,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 			// here too (this carry already silently skips on any other failure), so a
 			// drifted mobile capture just leaves the page desktop-only rather than
 			// recording a failure of its own.
-			if ( ! isRouteDrift( page.url(), url ) && ! isStackingArtifact( mhtml ) ) {
+			if ( ! isRouteDrift( page.url(), navigationUrl ) && ! isStackingArtifact( mhtml ) ) {
 				mkdirSync( dirname( plan.paths.htmlMobile ), { recursive: true } );
 				writeFileSync( plan.paths.htmlMobile, mhtml );
 				mobileHeights[ slug ] = await page.evaluate( () => document.documentElement.scrollHeight );
@@ -2032,7 +2037,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 							const location = response.headers()[ 'location' ];
 							if ( ! location ) break;
 							const next = new URL( location, current );
-							if ( next.origin !== new URL( url ).origin ) {
+							if ( ! sameHttpSite( url, next.href ) ) {
 								await manifest.updateEntry( url, { slug: prior?.slug ?? await manifest.claimSlug( slugify( url ) ), capturedAt: capturedAt(), externalRedirect: true } );
 								break;
 							}

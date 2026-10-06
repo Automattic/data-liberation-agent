@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { extname, join } from 'node:path';
 import { normalizedUrl } from './url/route-key.js';
+import { sameHttpSite } from './screenshot/same-origin.js';
 
 export interface RouteEntry {
 	url: string;
@@ -13,7 +14,7 @@ function capturedOriginRoot( urls: string[], origin: string ): boolean {
 	return urls.some( ( url ) => {
 		try {
 			const route = new URL( url );
-			return route.origin === origin && ( route.pathname.replace( /\/$/, '' ) || '/' ) === '/';
+			return sameHttpSite( url, origin ) && ( route.pathname.replace( /\/$/, '' ) || '/' ) === '/';
 		} catch {
 			return false;
 		}
@@ -38,9 +39,9 @@ function routeOutputPath( url: string, sourceUrl: string, entrypointUrl: string,
 			throw new Error( `Captured route path escapes the website directory: ${ route.pathname }` );
 	}
 	const sourcePath = originRootCaptured ? '' : source.pathname.replace( /\/$/, '' );
-	if ( route.origin === source.origin && sourcePath && pathname.startsWith( `${ sourcePath }/` ) ) {
+	if ( sameHttpSite( url, sourceUrl ) && sourcePath && pathname.startsWith( `${ sourcePath }/` ) ) {
 		pathname = pathname.slice( sourcePath.length );
-	} else if ( route.origin === source.origin && sourcePath && pathname.replace( /\/$/, '' ) === sourcePath ) {
+	} else if ( sameHttpSite( url, sourceUrl ) && sourcePath && pathname.replace( /\/$/, '' ) === sourcePath ) {
 		pathname = '/';
 	}
 	const cleanPath = pathname.replace( /^\/+|\/+$/g, '' );

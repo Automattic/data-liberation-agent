@@ -105,6 +105,38 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 			}
 		} finally { await browser.close(); rmSync( directory, { recursive: true, force: true } ); }
 	}, 30_000 );
+	it( 'freezes a protocol-changing server redirect while rejecting subsequent client drift', async () => {
+		const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
+		const directory = mkdtempSync( join( parent, 'reference-protocol-redirect-' ) );
+		const browser = await chromium.launch();
+		const context = await browser.newContext();
+		const page = await context.newPage();
+		let drift = false;
+		const server = createServer( ( _request, response ) => {
+			response.writeHead( 200, { 'Content-Type': 'text/html' } );
+			response.end( `<main><h1>Article</h1></main>${ drift ? '<script>history.replaceState(null,"","/different/")</script>' : '' }` );
+		} );
+		await new Promise<void>( resolve => server.listen( 0, '127.0.0.1', resolve ) );
+		const host = `127.0.0.1:${ ( server.address() as { port: number } ).port }`;
+		const url = `https://${ host }/article`;
+		const destination = `http://${ host }/article/`;
+		try {
+			await context.route( url, route => route.fulfill( { status: 308, headers: { location: destination } } ) );
+			for ( const shouldDrift of [ false, true ] ) {
+				drift = shouldDrift;
+				const collector = createReferenceCollector( directory, url, [ url ] );
+				await collector.observe( page, url, 'desktop', [], { isMobile: false, hasTouch: false } );
+				await collector.observe( page, url, 'mobile', [], { isMobile: false, hasTouch: false } );
+				const receipt = join( directory, 'receipt.json' ); writeFileSync( receipt, JSON.stringify( { routes: [] } ) );
+				const manifest = JSON.parse( readFileSync( collector.finalize( receipt ), 'utf8' ) ) as FidelityReference;
+				expect( manifest.entries.map( entry => entry.viewport ) ).toEqual( [ 768, 1440, 390 ] );
+				for ( const entry of manifest.entries ) {
+					expect( entry.readiness.reasons.includes( 'source route drift' ) ).toBe( drift );
+					if ( ! drift ) expect( entry.readiness.ready, entry.readiness.reasons.join( ', ' ) ).toBe( true );
+				}
+			}
+		} finally { await browser.close(); await new Promise<void>( resolve => server.close( () => resolve() ) ); rmSync( directory, { recursive: true, force: true } ); }
+	}, 30_000 );
 	it( 'settles unused local fallback stacks at each frozen viewport', async () => {
 		const parent = join(process.cwd(), '.tmp-test'); mkdirSync(parent, { recursive: true });
 		const directory = mkdtempSync(join(parent, 'reference-fonts-'));
