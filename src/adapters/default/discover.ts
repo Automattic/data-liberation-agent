@@ -1,4 +1,5 @@
-import { fetchSitemapWithDiagnostics, classifyUrl, extractSameOriginLinks, resolvePageLink, routeKey } from '../../lib/extraction/sitemap.js';
+import { fetchSitemapWithDiagnostics, classifyUrl, extractSameOriginLinks, resolvePageLink } from '../../lib/extraction/sitemap.js';
+import { documentRequestUrl } from '../../lib/url/route-key.js';
 import { extractMeta, extractTitle, extractNavLinks } from '../../lib/html-extract/index.js';
 import { sourceContextOptions, getPlaywright } from '../../lib/browser-kit/browser-kit.js';
 import type { InventoryUrl } from '../shared.js';
@@ -9,7 +10,8 @@ const UA = 'Mozilla/5.0 (compatible; DataLiberation/1.0)';
 /**
  * Discovery for the platform-agnostic fallback adapter. Mirrors the webflow
  * adapter: homepage metadata + sitemap + bounded linked-page fallback when
- * the sitemap is absent/thin. An empty raw HTML entry can render navigation.
+ * the sitemap is absent/thin, plus raw/rendered entry links. Capture expands
+ * the bounded rendered linked frontier, keeping adapter discovery as its seed.
  */
 export async function discoverDefault(url: string, _opts: Record<string, unknown>): Promise<DefaultInventory> {
   const normalized = url.includes('://') ? url : `https://${url}`;
@@ -37,7 +39,7 @@ export async function discoverDefault(url: string, _opts: Record<string, unknown
   const sitemap = await fetchSitemapWithDiagnostics(url);
   const sitemapUrls = sitemap.urls;
   let navigation = extractNavLinks(homepageHtml, normalized);
-  let renderedHeaderUrls: string[] = [];
+  let renderedUrls: string[] = [];
 
   // Single-page apps commonly serve an empty shell to both the homepage and
   // sitemap.xml. Render their primary navigation before falling back to one route.
@@ -51,7 +53,7 @@ export async function discoverDefault(url: string, _opts: Record<string, unknown
         await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
         const renderedNavigation = extractNavLinks(await page.content(), page.url());
         if (renderedNavigation.length > 0) navigation = renderedNavigation;
-        renderedHeaderUrls = await page.locator('header a[href], [role="banner"] a[href]').evaluateAll(
+        renderedUrls = await page.locator('a[href],area[href]').evaluateAll(
           (links) => links.map((link) => (link as HTMLAnchorElement).href)
         );
       } finally {
@@ -65,21 +67,21 @@ export async function discoverDefault(url: string, _opts: Record<string, unknown
   const counts: Record<string, number> = {};
   const inventoryUrls: InventoryUrl[] = [];
   const discoveredUrls = new Set(sitemapUrls);
-  const knownRoutes = new Set(sitemapUrls.map(routeKey));
+  const knownRoutes = new Set(sitemapUrls.map(documentRequestUrl));
   const origin = new URL(normalized).origin;
   // A sitemap is not a complete route list: builders routinely omit legal and
   // CTA pages that are linked only from site chrome, which may be a plain
   // `div` rather than a <footer>. Merge the homepage's own same-origin links
-  // whatever the sitemap's size, skipping any that differ from a known route
-  // only by a trailing slash or query string — capture treats those as one.
+  // whatever the sitemap's size. Retain exact slash and query addresses until
+  // source navigation proves an alias; normalization is not that evidence.
   for (const href of [
     ...navigation.map((link) => link.href),
-    ...renderedHeaderUrls,
+    ...renderedUrls,
     ...extractSameOriginLinks(homepageHtml, normalized),
   ]) {
     const pageUrl = resolvePageLink(href, normalized, origin);
     if (!pageUrl) continue;
-    const key = routeKey(pageUrl);
+    const key = documentRequestUrl(pageUrl);
     if (knownRoutes.has(key)) continue;
     knownRoutes.add(key);
     discoveredUrls.add(pageUrl);
