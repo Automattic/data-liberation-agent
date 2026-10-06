@@ -51,6 +51,7 @@ function makePage( mobile: boolean, routedRequest?: object ) {
 					? '<html><head><style>.hero{background:url("mobile-only.jpg")}</style></head><body>mobile</body></html>'
 					: '<html><body>desktop</body></html>';
 			}
+			if ( source.includes( 'document.baseURI' ) ) return { url: 'https://example.com/', baseUrl: 'https://example.com/' };
 			if ( source.includes( 'motionAnimatedElements' ) ) return { rows: [], landmarks: [] };
 			if ( source.includes( 'scrollHeight' ) ) return 0;
 			if ( source.includes( 'querySelectorAll' ) && source.includes( "'img'" ) ) return {};

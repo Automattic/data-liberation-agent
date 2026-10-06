@@ -12,6 +12,8 @@ export interface ManifestEntry {
   mobile?: string;
   mobileScrolled?: string;
   html?: string;
+  /** Browser URL and effective base per viewport; the manifest key remains the requested route. */
+  documents?: Partial<Record<'desktop' | 'mobile', import('../document-resource-base.js').RenderedDocumentUrl>>;
   /** path to sections/<slug>.json (captured section specs) when present */
   sections?: string;
   /** Overlays/banners dismissed before this URL was captured (observability). */
