@@ -5617,14 +5617,15 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		expect( evidence.assets[ 0 ].references[ 0 ].path ).toBe( `website/${ documentPath }` );
 	} );
 
-	it( 'resolves a server-redirected URL to its captured target instead of failing it', () => {
+	it.each( [ 'https:', 'http:' ] )( 'resolves a server redirect to a captured %s target instead of failing it', ( protocol ) => {
+		const target = `${ protocol }//example.com/new`;
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-redirect-alias-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
 		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
 		writeFileSync(
 			join( outputDir, 'html', 'homepage.html' ),
-			'<h1>Home</h1><a href="/old">Old</a><a href="https://example.com/new">New</a>'
+			`<h1>Home</h1><a href="/old">Old</a><a href="${ target }">New</a>`
 		);
 		writeFileSync( join( outputDir, 'html', 'new.html' ), '<h1>New</h1>' );
 		writeFileSync(
@@ -5633,8 +5634,8 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 				version: 1,
 				entries: {
 					'https://example.com/': { html: 'html/homepage.html' },
-					'https://example.com/old': { redirectedTo: 'https://example.com/new' },
-					'https://example.com/new': { html: 'html/new.html' },
+					'https://example.com/old': { redirectedTo: target },
+					[ target ]: { html: 'html/new.html' },
 					'https://example.com/gone': { redirectedTo: 'https://example.com/missing' },
 				},
 			} )
@@ -5650,11 +5651,11 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 
 		expect( receipt.routes.map( ( route: { url: string } ) => route.url ) ).toEqual( [
 			'https://example.com/',
-			'https://example.com/new',
+			target,
 		] );
 		expect( receipt.duplicateRoutes ).toEqual( [ {
 			url: 'https://example.com/old',
-			canonicalUrl: 'https://example.com/new',
+			canonicalUrl: target,
 			path: 'website/new/index.html',
 		} ] );
 		expect( receipt.discoveryDiagnostics ).toEqual( [ {
