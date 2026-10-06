@@ -328,7 +328,7 @@ export function extractSameOriginLinks(html: string, baseUrl: string, baseOrigin
   $('a[href]').each((_, el) => {
     const href = $(el).attr('href')?.trim();
     if (!href || href.startsWith('#')) return;
-    const resolved = resolveAndFilter(href, baseUrl, baseOrigin);
+    const resolved = resolvePageLink(href, baseUrl, baseOrigin);
     if (resolved && !seen.has(resolved)) {
       seen.add(resolved);
       urls.push(resolved);
@@ -363,7 +363,7 @@ async function crawlRenderedNavLinks(baseUrl: string, baseOrigin: string): Promi
     );
     const seen = new Set<string>();
     return hrefs.flatMap((href) => {
-      const resolved = resolveAndFilter(href, baseUrl, baseOrigin);
+      const resolved = resolvePageLink(href, baseUrl, baseOrigin);
       if (!resolved || seen.has(resolved)) return [];
       seen.add(resolved);
       return [resolved];
@@ -376,7 +376,7 @@ async function crawlRenderedNavLinks(baseUrl: string, baseOrigin: string): Promi
   }
 }
 
-function resolveAndFilter(href: string, baseUrl: string, baseOrigin: string): string | null {
+export function resolvePageLink(href: string, baseUrl: string, baseOrigin: string): string | null {
   try {
     const resolved = new URL(href, baseUrl);
     if (resolved.protocol !== 'http:' && resolved.protocol !== 'https:') return null;
