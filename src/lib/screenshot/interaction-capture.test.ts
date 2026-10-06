@@ -621,7 +621,7 @@ describe( 'captureTriggeredDialogs', () => {
 				expect( wired ).toContain( 'class="dla-dialog dla-dropdown"' );
 				expect( wired ).toContain( '<button aria-label="Toggle menu"' );
 				expect( wired ).toContain( '<style data-dla-dialog-css="true">.mobile-panel > * + * { margin-top: 16px; }</style>' );
-				expect( wired ).toContain( '[data-dla-dialog-panel].dla-dropdown:not([hidden]){display:block;position:absolute;top:100%' );
+				expect( wired ).toContain( '[data-dla-dialog-panel].dla-dropdown:not([data-dla-existing-panel]):not([hidden]){display:block;position:absolute;top:100%' );
 			} finally {
 				await browser.close();
 			}

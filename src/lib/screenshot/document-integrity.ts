@@ -1,3 +1,5 @@
+import { sameHttpSite } from './same-origin.js';
+
 // src/lib/screenshot/document-integrity.ts
 //
 // A faithfully-captured page is ONE HTML document — exactly one <body>. A capture
@@ -67,20 +69,26 @@ export function isRouteDrift(capturedUrl: string, intendedUrl: string): boolean 
   }
 }
 
+/** Initial document identity; only an observed same-site server redirect can change it. */
+export function navigationDocumentUrl(requestedUrl: string, responseUrl: string, redirected: boolean): string {
+  return redirected && sameHttpSite(requestedUrl, responseUrl) ? responseUrl : requestedUrl;
+}
+
 /**
  * The route a server redirect resolved `requestedUrl` to during navigation, or
- * undefined when it names the same route or another origin. `finalUrl` is the
+ * undefined when it names the same path or another site. `finalUrl` is the
  * URL of the response navigation ended on after following redirect hops.
  *
  * A redirect answered by the server is the site saying the requested URL is
  * another name for the target — nothing ran on the page yet, so it is not the
  * drift {@link isRouteDrift} guards against (a live page navigating itself
- * after load). A redirect off the origin names a different site, not an alias.
+ * after load). HTTP/HTTPS and apex/www aliases remain on the same site;
+ * unrelated hosts and non-default ports remain outside its boundary.
  */
 export function serverRedirectTarget( requestedUrl: string, finalUrl: string ): string | undefined {
-	if ( ! isRouteDrift( finalUrl, requestedUrl ) ) return undefined;
+	if ( ! sameHttpSite( requestedUrl, finalUrl ) ) return undefined;
 	try {
-		return new URL( finalUrl ).origin === new URL( requestedUrl ).origin ? finalUrl : undefined;
+		return normalizeRoutePath( new URL( finalUrl ).pathname ) !== normalizeRoutePath( new URL( requestedUrl ).pathname ) ? finalUrl : undefined;
 	} catch {
 		return undefined;
 	}

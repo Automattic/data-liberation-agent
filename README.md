@@ -49,6 +49,9 @@ The JSON result is versioned and destination-neutral. It samples the entry route
 |---|---|
 | `--output <dir>` | Output base. Default `~/data-liberation`, or `DLA_OUTPUT_DIR` |
 | `--resume` | Reuse what is already on disk instead of recapturing |
+| `--acquisition http` | Acquire and export an explicitly unverified HTTP review candidate; browser capture remains the default |
+| `--route-limit <n>` | Bound HTTP route requests while retaining the full discovered inventory in diagnostics |
+| `--runtime-route-limit <n>` | Observe declared runtime regions on at most 0–50 HTTP routes (default 0) |
 | `--screenshots` | Also write full-page desktop and mobile PNGs |
 | `--serve` | Keep a local server running until interrupted |
 | `--no-learn-fluid` | Freeze the layout at one width instead of learning how it reflows |
@@ -78,7 +81,7 @@ Naming an unknown target lists the registered ones.
 
 | Platform | Status |
 |---|---|
-| Blogger | Browser capture + feed accounting; HTTP source-evidence API |
+| Blogger | Browser capture + feed accounting; opt-in orchestrated HTTP review capture |
 | EmDash CMS | Ready |
 | GoDaddy Websites & Marketing | Ready |
 | Hostinger Website Builder | Ready |

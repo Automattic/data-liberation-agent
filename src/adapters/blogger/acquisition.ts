@@ -105,6 +105,15 @@ export function prepareBloggerDocument(html: string, context: HttpDocumentContex
 
 export const bloggerAcquisition: HttpAcquisitionProfile = {
 	id: 'blogger',
+	exportVariants: { desktop: 'desktop', mobile: 'mobile' },
+	prepareRuntimeRegions: async page => {
+		await page.waitForFunction( () => {
+			const editor = document.querySelector( '#comment-editor' );
+			const followers = document.querySelector( '.widget.Followers' );
+			return ( ! editor || editor.getAttribute( 'data-resized' ) === 'true' ) &&
+				( ! followers || followers.querySelector( 'iframe' )?.getAttribute( 'height' )?.endsWith( 'px' ) );
+		}, undefined, { timeout: 10_000 } );
+	},
 	variants: [
 		{ id: 'desktop', headers: { 'User-Agent': DESKTOP_UA } },
 		{ id: 'mobile', headers: { 'User-Agent': MOBILE_UA } },
