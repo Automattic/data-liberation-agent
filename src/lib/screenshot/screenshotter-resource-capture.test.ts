@@ -28,6 +28,7 @@ vi.mock( './resource-capture.js', () => ( {
 function makePage( mobile: boolean, routedRequest?: object ) {
 	let routeHandler: ( route: object ) => Promise< void >;
 	return {
+		once: vi.fn(),
 		route: vi.fn().mockImplementation( async ( _pattern, handler ) => {
 			routeHandler = handler;
 		} ),

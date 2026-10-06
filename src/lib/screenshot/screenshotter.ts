@@ -168,6 +168,8 @@ interface DesignCaptureContext {
 
 interface CapturePerViewportArgs {
 	page: Page;
+	/** Stop best-effort stages after a crash; recovery belongs to the viewport loop. */
+	rendererCrashed: () => boolean;
 	learnFluid?: boolean;
 	fluidWidths?: number[];
 	collectResponsiveImages?: (
@@ -941,6 +943,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	// script is running, so read its states before any layout measurement.
 	const pagerSlideshows = await collectPagerSlideshowStates( page ).catch( () => [] );
 	await args.observeSource?.( page, url, isDesktop ? 'desktop' : 'mobile', sourceErrors, args.browserProfile );
+	if ( args.rendererCrashed() ) return;
 
 	if ( isDesktop && plan.captureHtml && args.learnFluid ) {
 		try {
@@ -968,6 +971,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 			} );
 		}
 	}
+	if ( args.rendererCrashed() ) return;
 
 	await applyPagerSlideshowStates( page, pagerSlideshows ).catch( () => {
 		/* best-effort — a picker that will not advance must not block capture */
@@ -981,6 +985,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 			/* best-effort — never block capture on a late platform widget */
 		} );
 	}
+	if ( args.rendererCrashed() ) return;
 
 	// Hydrated panels belong to the serialization transaction. Browser probes
 	// and width learning can rerender their source items, discarding injected
@@ -1016,6 +1021,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		}
 	}
 
+	if ( args.rendererCrashed() ) return;
 	if ( isDesktop && plan.captureHtml ) {
 		try {
 			// The cleanup observer may have exhausted its budget before the page
@@ -1075,6 +1081,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 			} );
 		}
 	}
+	if ( args.rendererCrashed() ) return;
 
 	// --- mobile-DOM carry (mobile only) ---------------------------------------
 	// On the mobile pass, the mobile UA + isMobile emulation make JS builders like
@@ -1138,6 +1145,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	}
 
 	// --- scrolled screenshot --------------------------------------------------
+	if ( args.rendererCrashed() ) return;
 	if ( plan.captureScrolled ) {
 		try {
 			const docHeight = await page.evaluate( () => document.documentElement.scrollHeight );
@@ -1181,6 +1189,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	}
 
 	// --- desktop-only site analysis -------------------------------------------
+	if ( args.rendererCrashed() ) return;
 	if ( isDesktop && shouldAnalyze ) {
 		try {
 			const analysis = await analyzePage( page, evaluateTimeoutMs );
@@ -1196,6 +1205,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 				attempt: 1,
 			} );
 		}
+		if ( args.rendererCrashed() ) return;
 		// Best-effort: capture source chrome computed-style fingerprint for later
 		// carry-vs-source fidelity audits. A failure here MUST NOT break the
 		// screenshot run — the try/catch ensures this is never propagated.
@@ -1219,6 +1229,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	}
 
 	// --- desktop-only design capture (page/post archetypes only) ---------------
+	if ( args.rendererCrashed() ) return;
 	if ( isDesktop && designCtx ) {
 		try {
 			// The design sidecar slug MUST match the WXR item slug used by adapters
@@ -1327,6 +1338,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	// HTML. Each viewport needs its own probe: a desktop dialog must not suppress
 	// a mobile-only trigger. Merge their bounded successful evidence rather than
 	// replacing a desktop-only dialog with a mobile-only menu.
+	if ( args.rendererCrashed() ) return;
 	const releaseNavigationLock = await lockMainFrameNavigation( page );
 	try {
 		await probeInteractions();
@@ -1795,13 +1807,13 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			const vpPlan = viewport.id === 'desktop' ? effectivePlan.desktop : effectivePlan.mobile;
 			if ( ! vpPlan.needsLoad ) continue;
 
-			// A browser that died under this viewport is replaced and the viewport
-			// retried once, so a crash costs the viewports in flight a retry rather
-			// than failing every route the pool claims afterwards.
+			// Retry a crashed renderer in a fresh context once. A disconnected browser
+			// also needs the shared relaunch before the retry.
 			for ( let crashRetry = false; ; crashRetry = true ) {
 				const attemptBrowser = browser;
 				const failuresBefore = urlFailures.length;
 				let context: BrowserContext | undefined;
+				let rendererCrashed = false;
 				try {
 					// deviceScaleFactor < 1 reduces the OUTPUT pixel count of every
 					// screenshot while keeping the rendered layout identical to a
@@ -1843,8 +1855,10 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	        ` );
 					await context.addInitScript( observeViewportEntrances );
 					const page = await context.newPage();
+					page.once( 'crash', () => { rendererCrashed = true; } );
 					await capturePerViewport( {
 						page,
+						rendererCrashed: () => rendererCrashed,
 						browserProfile: { isMobile: contextOptions.isMobile ?? false, hasTouch: contextOptions.hasTouch ?? false },
 						viewport,
 						plan: vpPlan,
@@ -1903,9 +1917,25 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 						}
 					}
 				}
+				if ( rendererCrashed && urlFailures.length === failuresBefore ) {
+					urlFailures.push( {
+						url,
+						viewport: viewport.id,
+						stage: 'evaluate',
+						error: 'source renderer crashed',
+						timestamp: new Date().toISOString(),
+						attempt: crashRetry ? 2 : 1,
+					} );
+				}
+				for ( const failure of urlFailures.slice( failuresBefore ) ) {
+					failure.attempt = crashRetry ? 2 : failure.attempt;
+				}
 				const failed = urlFailures.length > failuresBefore;
-				if ( ! failed || crashRetry || attemptBrowser.isConnected() ) break;
-				if ( ! ( await replaceCrashedBrowser( attemptBrowser ) ) ) break;
+				if ( ! failed || crashRetry ) break;
+				if ( attemptBrowser.isConnected() ) {
+					if ( ! rendererCrashed ) break;
+					sendLog( server, `[retry] renderer crashed for ${ url } (${ viewport.id }); using a fresh context` );
+				} else if ( ! ( await replaceCrashedBrowser( attemptBrowser ) ) ) break;
 				urlFailures.length = failuresBefore;
 			}
 		}
