@@ -24,6 +24,7 @@ import {
 import { collectMobileChromeLayout } from './dom-capture.js';
 import { generateChromeCss, type BakedLayoutMap } from './fixups.js';
 import { sanitizeFrozenHtml } from './freeze.js';
+import { captureNativeViewTimelines } from './native-view-timelines.js';
 import { learnAndApplyFluidGeometry } from './fluid-capture.js';
 import {
 	captureRouteNavigation,
@@ -40,7 +41,7 @@ import { JsAggregator } from './js-aggregator.js';
 import { isAbsentDocumentError, isSourceCaptureUrl, nonHtmlDocumentError } from './absent-document.js';
 import { ManifestQueue, type ManifestEntry, type FailureEntry } from './manifest-queue.js';
 import { validateOutputDir, planArtifacts, type ArtifactPlan } from './output-layout.js';
-import { waitForStable, triggerLazyLoad, dismissOverlays, pageResponds } from './page-helpers.js';
+import { waitForStable, triggerLazyLoad, dismissOverlays, pageResponds, withEvaluateTimeout } from './page-helpers.js';
 import { CapturedResourceStore } from './resource-capture.js';
 import { enforceSameOrigin } from './same-origin.js';
 import { preserveStreamedVideoPosters } from './streamed-video.js';
@@ -937,7 +938,37 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	// A slideshow driven by its own thumbnails only advances while the source's
 	// script is running, so read its states before any layout measurement.
 	const pagerSlideshows = await collectPagerSlideshowStates( page ).catch( () => [] );
+	// Browser probes can scroll an offscreen control into view. Native view
+	// animations legitimately report finished there; observe the capture's
+	// at-top baseline, not the incidental position left by a probe click.
+	try { await withEvaluateTimeout( page.evaluate( async () => {
+		window.scrollTo( { top: 0, left: 0, behavior: 'instant' } );
+		await new Promise<void>( resolve => requestAnimationFrame( () => requestAnimationFrame( () => resolve() ) ) );
+	} ), evaluateTimeoutMs ); }
+	catch ( error ) {
+		failures.push( { url, viewport: viewport.id, stage: 'evaluate', error: `source baseline reset unproven: ${ String( error ) }`, timestamp: now(), attempt: 1 } );
+		return;
+	}
 	await args.observeSource?.( page, url, isDesktop ? 'desktop' : 'mobile', sourceErrors, args.browserProfile );
+	if ( plan.captureHtml || plan.captureMobileHtml ) {
+		try {
+			const native = await captureNativeViewTimelines( page, viewport.id, evaluateTimeoutMs );
+			if ( native.samples.length || native.status === 'unproven' ) {
+				const path = join( outputDir, 'native-view-timelines', viewport.id, `${ slug }.json` );
+				mkdirSync( dirname( path ), { recursive: true } );
+				writeFileSync( path, JSON.stringify( native, null, 2 ) );
+				entry.nativeViewTimelines ??= {};
+				entry.nativeViewTimelines[ viewport.id ] = { path: `native-view-timelines/${ viewport.id }/${ slug }.json`, preserved: native.preserved, losses: native.losses, status: native.status, failures: native.failures };
+			}
+			if ( native.status === 'unproven' ) {
+				failures.push( { url, viewport: viewport.id, stage: 'evaluate', error: `native timeline source capture unproven: ${ native.failures.join( '; ' ) }`, timestamp: now(), attempt: 1 } );
+				return;
+			}
+		} catch ( error ) {
+			failures.push( { url, viewport: viewport.id, stage: 'evaluate', error: `native timeline capture failed: ${ String( error ) }`, timestamp: now(), attempt: 1 } );
+			return;
+		}
+	}
 
 	if ( isDesktop && plan.captureHtml && args.learnFluid ) {
 		try {
