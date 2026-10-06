@@ -120,15 +120,30 @@ describe('startStaticServer', () => {
     const dir = makeSite();
     try {
       mkdirSync(join(dir, 'parts'));
-      const include = '<!--#include virtual="/parts/header-test.html" -->';
+      const include = '<!--#include virtual="/parts/Header_test-1.html" -->';
       const page = join(dir, 'index.html');
-      for (const malformed of ['<!--#include -->', '<!--#include virtual="../outside.html" -->', '<!--#include virtual="/parts/../outside.html" -->', '<!--#include virtual="/parts/header-test.html"', '<!-- #include virtual="/parts/header-test.html" -->']) {
+      for (const malformed of [
+        '<!--#include -->',
+        '<!--#include virtual="../outside.html" -->',
+        '<!--#include virtual="/parts/../outside.html" -->',
+        '<!--#include virtual="/parts/header-test.html"',
+        '<!-- #include virtual="/parts/header-test.html" -->',
+        "<!--#include virtual='/parts/header-test.html' -->",
+        '<!--#include  virtual="/parts/header-test.html" -->',
+        '<!--#include virtual ="/parts/header-test.html" -->',
+        '<!--#INCLUDE virtual="/parts/header-test.html" -->',
+        '<!--#include virtual="/fragments/header-test.html" -->',
+        '<!--#include virtual="/parts/nested/header-test.html" -->',
+        '<!--#include virtual="/parts/header-test.htm" -->',
+        '<!--#include virtual="/parts/.html" -->',
+        '<!--#include virtual="/parts/header-test.html"-->',
+      ]) {
         writeFileSync(page, malformed);
         expect(() => readResolvedPage(dir, page)).toThrow(/Malformed/);
       }
       writeFileSync(page, include);
       expect(() => readResolvedPage(dir, page)).toThrow();
-      const part = join(dir, 'parts/header-test.html');
+      const part = join(dir, 'parts/Header_test-1.html');
       writeFileSync(part, include);
       expect(() => readResolvedPage(dir, page)).toThrow(/cycle/);
       writeFileSync(part, '<!--#include virtual="/parts/nested.html" -->');
@@ -140,7 +155,7 @@ describe('startStaticServer', () => {
       rmSync(part);
       rmSync(join(dir, 'parts'), { recursive: true });
       mkdirSync(join(dir, 'actual-parts'));
-      writeFileSync(join(dir, 'actual-parts/header-test.html'), 'Symlink directory target');
+      writeFileSync(join(dir, 'actual-parts/Header_test-1.html'), 'Symlink directory target');
       symlinkSync(join(dir, 'actual-parts'), join(dir, 'parts'));
       expect(() => readResolvedPage(dir, page)).toThrow(/symlink/);
       rmSync(join(dir, 'parts'));

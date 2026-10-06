@@ -122,6 +122,12 @@ reference them at their original positions with literal HTML comments:
 <!--#include virtual="/parts/header-<sha256>.html" -->
 ```
 
+The portable include contract is literal: double quotes, the spaces shown, and
+lowercase `#include virtual`. The root-relative path names one `.html` file under
+`/parts/`, with an ASCII filename containing letters, digits, `_` or `-`.
+Fragments may reference other fragments with the same syntax. Any producer or
+consumer can implement this HTML contract; it carries no destination identity.
+
 Sharing requires at least two retained route documents and a net byte reduction
 including the stored part and every reference. Route-specific navigation and
 mobile variants remain distinct; chrome inside `main`, `article`, or `section`
