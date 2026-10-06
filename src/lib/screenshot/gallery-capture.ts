@@ -72,7 +72,7 @@ async function describe(
 				previous: path(previous, scope),
 				order: Array.from(stage.children)
 					.map((child) => child.querySelector('[data-src]')?.getAttribute('data-src') || child.getAttribute('data-src') || child.querySelector('img')?.currentSrc || child.querySelector('img')?.src || '')
-					.filter(Boolean),
+					.filter(Boolean).map(value => new URL(value, document.baseURI).href),
 			};
 		})
 		.then((result) => (result ? { ...result, selector: root, viewport: page.viewportSize() ?? { width: 0, height: 0 } } : null));
@@ -260,13 +260,14 @@ async function collect(
 
 async function visibleGallerySurfaces(page: Page): Promise<string[]> {
 	return page.evaluate(() => {
-		const visible = (el:Element) => {
-			const rect=el.getBoundingClientRect(),style=getComputedStyle(el);
-			let opacity=1;
-			for(let node:Element|null=el;node;node=node.parentElement) opacity*=Number.parseFloat(getComputedStyle(node).opacity||'1');
-			return rect.width>0 && rect.height>0 && style.visibility!=='hidden' && opacity>0.1;
+		const rendered = (image: HTMLImageElement) => {
+			if (!image.complete || image.naturalWidth <= 1) return false;
+			const rect = image.getBoundingClientRect();
+			const x = Math.max(0, rect.left) + Math.min(rect.width, innerWidth - Math.max(0, rect.left)) / 2;
+			const y = Math.max(0, rect.top) + Math.min(rect.height, innerHeight - Math.max(0, rect.top)) / 2;
+			return rect.width > 0 && rect.height > 0 && document.elementFromPoint(x, y) === image;
 		};
-		return Array.from(document.body.children).filter(el=>el.id && Array.from(el.querySelectorAll('[aria-label="Next slide"]')).some(visible) && Array.from(el.querySelectorAll('[aria-label*="Close" i]')).some(visible)).map(el=>'#'+CSS.escape(el.id));
+		return Array.from(document.body.children).filter(el=>el.id && el.querySelector('[aria-label="Next slide"]') && el.querySelector('[aria-label*="Close" i]') && Array.from(el.querySelectorAll('img')).some(rendered)).map(el=>'#'+CSS.escape(el.id));
 	});
 }
 
@@ -336,9 +337,13 @@ export async function captureGalleries(page: Page): Promise<CapturedDialogIntera
 			state.error = String(error).slice(0, 500);
 			continue;
 		}
-		await page.waitForTimeout(700);
-		const overlay = (await visibleGallerySurfaces(page)).find(selector=>!before.includes(selector));
+		let overlay: string | undefined;
+		for (let sample = 0; !overlay && sample < 30; sample++) {
+			await page.waitForTimeout(100);
+			overlay = (await visibleGallerySurfaces(page)).find(selector=>!before.includes(selector));
+		}
 		if (!overlay) {
+			state.error = 'No new visible lightbox after activating the decoded selected image';
 			await page.keyboard.press('Escape');
 			continue;
 		}
