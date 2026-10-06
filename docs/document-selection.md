@@ -33,8 +33,12 @@ identity message instead of rendering another device's tree.
 The portable file embeds all available trees and their original viewport metadata.
 DLA-owned synchronous classic scripts are inserted after source-script sanitization:
 
-1. The beginning of the head selects an identity, overlays source-owned root attributes and
-   inserts exactly one matching viewport meta before body parsing.
+1. The export declares exactly one viewport META and the complete visibility CSS
+   for the available identity keys. The beginning-of-head selector overlays
+   source-owned root attributes and updates only the existing viewport node's
+   selected attributes before body parsing. It constructs/appends no META, STYLE
+   or asset nodes. Unavailable identities have no viewport content or visible
+   source tree, rather than using the default identity's head.
 2. Synchronous parser scripts emit only that identity's active style/link media,
    preserving authored media queries and native render-blocking stylesheet loading.
    Merely activating a `media="not all"` link at the end of head allowed Chromium
@@ -75,6 +79,22 @@ carry the document identity/scope and pre-layout selector/viewport semantics.
 These are handoff requirements, not proof that any particular destination has
 implemented them. Conversion, host-root coexistence and combined scoped motion
 acceptance remain independent downstream gates.
+
+All stylesheet URLs are present on declared serialized LINK nodes and normal
+CSS URL/import declarations. The parser-time stylesheet emitter reads the selected
+declared node, preserves its already-localized href/content and authored media,
+and emits that same node at its source head position. It computes no URL, creates
+no script asset, imports no module and chooses no asset from a runtime URL string.
+Changing a declared LINK href during relocation therefore changes the emitted
+active LINK as well. Consumers must preserve this head ordering and static-node
+provenance; an inert LINK is not an unknown runtime-created asset.
+
+The META is also a declared head target required by the selector. A compiler's
+runtime DOM-parity check must account for document-head targets carried by its
+head metadata/materialization contract rather than only generated body blocks.
+This requirement does not exempt DLA scripts from asset or DOM proof. A missing
+head target remains a conversion blocker until the owning head contract preserves
+and proves it.
 
 No routing server, provider runtime, deferred hydration, or viewport resize is
 required. Selection remains constant on resize. With JavaScript disabled this

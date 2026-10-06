@@ -62,6 +62,13 @@ async function observation( page: Page ) {
 describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'portable source-owned document selection', () => {
 	it( 'selects three request identities on static hosting before paint and keeps identity through resize', async () => {
 		const dir = directory(); const html = exported( dir );
+		const serialized = cheerio.load( html );
+		expect( serialized( 'meta[name="viewport"]' ) ).toHaveLength( 1 );
+		expect( serialized( 'meta[name="viewport"]' ).attr( 'data-dla-selected-viewport' ) ).toBeDefined();
+		const visibility = serialized( 'style[data-dla-device-visibility]' ).text();
+		for ( const key of selection.documents ) expect( visibility ).toContain( `html[data-dla-selected-document="${ key }"] [data-dla-device-document="${ key }"]{display:contents!important}` );
+		const selector = serialized( 'script[data-dla-device-selection]' ).text();
+		expect( selector ).not.toMatch( /appendChild|insertBefore|createElement\(['"](?:meta|style|script)['"]\)|new\s+URL|\.src\s*=/ );
 		expect( html ).not.toContain( 'sourceOnly' );
 		expect( html ).not.toContain( '@media(max-width:980px){.data-liberation-desktop-document' );
 		const profile = JSON.parse( readFileSync( join( dir, 'source-profile.json' ), 'utf8' ) );
@@ -200,6 +207,25 @@ window.embeddingBeforeFrame=embeddingSnapshot();window.embeddingFrames=[];functi
 		expect( $( '[data-dla-device-unavailable]' ) ).toHaveLength( 0 );
 	} );
 
+	it( 'emits the relocated declared stylesheet without constructing another asset reference', async () => {
+		const dir = directory(); const html = exported( dir ); const $ = cheerio.load( html );
+		mkdirSync( join( dir, 'website/relocated' ) );
+		writeFileSync( join( dir, 'website/relocated/source.css' ), linkedCss );
+		$( 'link[data-dla-device-style]' ).attr( 'href', '/relocated/source.css' );
+		writeFileSync( join( dir, 'website/index.html' ), $.html() );
+		const site = await startStaticServer( join( dir, 'website' ) ); const browser = await chromium.launch();
+		try {
+			const page = await browser.newPage( { userAgent: 'NeutralDesktop', viewport: { width: 768, height: 900 } } );
+			await page.goto( site.url );
+			expect( ( await observation( page ) ).letterSpacing ).toBe( '3px' );
+			const active = page.locator( 'link[data-dla-source-media]:not([data-dla-device-style])' );
+			expect( await active.count() ).toBe( 1 );
+			expect( await active.getAttribute( 'href' ) ).toBe( '/relocated/source.css' );
+			expect( await active.getAttribute( 'media' ) ).toBe( 'all' );
+			expect( await active.getAttribute( 'data-dla-source-media' ) ).toBe( 'all' );
+		} finally { await browser.close(); await site.close(); }
+	} );
+
 	it( 'exposes an uncaptured tablet without substituting a phone or desktop tree', async () => {
 		const dir = directory(); exported( dir, false );
 		const receipt = JSON.parse( readFileSync( join( dir, 'capture-receipt.json' ), 'utf8' ) );
@@ -210,6 +236,8 @@ window.embeddingBeforeFrame=embeddingSnapshot();window.embeddingFrames=[];functi
 			expect( ( await observation( page ) ).selected ).toBeUndefined();
 			expect( await page.locator( '[data-dla-device-unavailable]' ).isVisible() ).toBe( true );
 			expect( await page.locator( 'html' ).getAttribute( 'data-dla-document-unavailable' ) ).toBe( 'tablet' );
+			expect( await page.locator( 'meta[name="viewport"]' ).count() ).toBe( 1 );
+			expect( await page.locator( 'meta[name="viewport"]' ).getAttribute( 'content' ) ).toBeNull();
 		} finally { await browser.close(); await site.close(); }
 	} );
 
