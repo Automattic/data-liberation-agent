@@ -867,7 +867,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	// scroll-lock would defeat the scroll-through) and again AFTER (scrolling can
 	// trigger exit-intent / scroll-depth popups). Best-effort: never fails capture.
 	const dismissedEarly = await dismissOverlays( page );
-	await triggerLazyLoad( page, isDesktop && args.learnFluid === true );
+	await triggerLazyLoad( page, args.learnFluid === true );
 	const dismissedLate = await dismissOverlays( page );
 	const dismissedHere = [ ...dismissedEarly, ...dismissedLate ];
 	if ( dismissedHere.length > 0 ) {
@@ -979,13 +979,14 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		}
 	}
 
-	if ( isDesktop && plan.captureHtml && args.learnFluid ) {
+	if ( ( plan.captureHtml || plan.captureMobileHtml ) && args.learnFluid ) {
 		try {
 			const learned = await learnAndApplyFluidGeometry( page, {
+				document: isDesktop ? 'desktop' : 'mobile',
 				...( args.fluidWidths ? { widths: args.fluidWidths } : {} ),
 				settleMs: Math.max( args.settleMs, 800 ),
 			} );
-			entry.fluid = {
+			entry[ isDesktop ? 'fluid' : 'fluidMobile' ] = {
 				applied: learned.applied,
 				unmodelled: learned.unmodelled,
 				breakpoints: learned.breakpoints,

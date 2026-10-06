@@ -887,6 +887,14 @@ describe( 'exportWebsiteCapture', () => {
 							canvasFloor: 980,
 							byKind: { floored: 12, breakpoint: 3 },
 						},
+						// A separate document's floor cannot select the desktop document.
+						fluidMobile: {
+							applied: 4,
+							unmodelled: 1,
+							breakpoints: [ 600 ],
+							canvasFloor: 402,
+							byKind: { floored: 4, breakpoint: 1 },
+						},
 					},
 				},
 			} )
@@ -919,7 +927,13 @@ describe( 'exportWebsiteCapture', () => {
 			geometry: 'mixed',
 			switchWidth: 980,
 			switchWidthSource: 'detected',
-			breakpoints: [ 1024 ],
+			breakpoints: [ 600, 1024 ],
+			learned: { applied: 16, frozen: 4, routes: 1, documents: 2 },
+		} );
+		const receipt = JSON.parse( readFileSync( join( outputDir, 'capture-receipt.json' ), 'utf8' ) );
+		expect( receipt.routes[ 0 ].fluidGeometry ).toMatchObject( {
+			desktop: { applied: 12, canvasFloor: 980 },
+			mobile: { applied: 4, canvasFloor: 402 },
 		} );
 	} );
 
