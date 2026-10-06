@@ -52,7 +52,7 @@ const obs = ( viewport: number, extra: Partial< LayoutObservation > = {} ): Layo
 	overflow: false,
 	externalHosts: [],
 	hashTargets: [],
-	internalMissing: [],
+	internalRoutes: [],
 	dialogs: [],
 	...extra,
 } );

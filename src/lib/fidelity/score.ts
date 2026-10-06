@@ -8,6 +8,7 @@
 //
 import { sanitizeMediaFilename } from '../media-fetch/media.js';
 import type { DismissedOverlay } from '../screenshot/page-helpers.js';
+import type { InternalRouteOutcome } from './internal-route.js';
 
 /**
  * One image the page actually renders at this viewport: where it sits (the
@@ -89,8 +90,8 @@ export interface LayoutObservation {
 	externalHosts: string[];
 	/** Same-page hash targets found on this document. */
 	hashTargets: HashTarget[];
-	/** Internal pathnames whose local copy 404s. Empty on the live source. */
-	internalMissing: string[];
+	/** Bounded candidate-local HTTP outcomes. Empty on the source. */
+	internalRoutes: InternalRouteOutcome[];
 	/** Click-to-open dialogs/menus observed on this document. */
 	dialogs: DialogProbe[];
 	/**
@@ -432,10 +433,12 @@ export function scoreViewport(
 		);
 	}
 
-	if ( liberated.internalMissing.length > 0 ) {
+	const failedRoutes = liberated.internalRoutes.filter( route => route.outcome !== 'reachable' );
+	if ( failedRoutes.length > 0 ) {
 		failures.push(
-			`nav ${ liberated.internalMissing.length } internal link(s) 404: ${ liberated.internalMissing
+			`nav ${ failedRoutes.length } internal link(s) unsuccessful: ${ failedRoutes
 				.slice( 0, 3 )
+				.map( route => `${ route.path } (${ route.status === null ? 'no HTTP response' : `HTTP ${ route.status }` }; ${ route.outcome })` )
 				.join( ', ' ) }`
 		);
 	}
