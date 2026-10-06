@@ -44,6 +44,7 @@ import {
 } from './screenshot/absent-document.js';
 import { selfContainWebsite } from './self-contain.js';
 import { wireCapturedDialogs, wireCapturedRouteNavigation } from './static-dialogs.js';
+import { wireNativeViewTimelines } from './native-view-timelines.js';
 import { rewriteMediaUrls } from './streaming/media-url-rewrite.js';
 import {
 	INTERACTION_STATES_SCHEMA,
@@ -148,6 +149,7 @@ function withoutGeometryIdentities( html: string ): string {
 }
 
 interface CaptureManifestEntry {
+	nativeViewTimelines?: import('./screenshot/manifest-queue.js').ManifestEntry['nativeViewTimelines'];
 	cleanup?: import('./screenshot/manifest-queue.js').ManifestEntry['cleanup'];
 	slug?: string;
 	html?: string;
@@ -2108,7 +2110,7 @@ function buildExportCapture(
 		unresolvedAnchors.push(
 			...unresolvedCapturedAnchors( normalizedHtml, url, `/${ routePath }` )
 		);
-		writeFileSync( destination, withViewportEntrances( normalizedHtml ) );
+		writeFileSync( destination, wireNativeViewTimelines( withViewportEntrances( normalizedHtml ) ) );
 		entry.identityHtmlPath = `${ htmlPath }.identity`;
 		writeFileSync( entry.identityHtmlPath, identityHtml );
 	}
@@ -2359,6 +2361,13 @@ function buildExportCapture(
 	const complete =
 		! httpInput && Number( options.summary.routesFailed ?? 0 ) === 0 &&
 		! unresolvedAnchors.some( ( anchor ) => anchor.reason === UNCAPTURED_ROUTE_REASON );
+	const nativePages = Object.entries( capture.entries ).filter( ([ , entry ]) => entry.nativeViewTimelines ).map( ([ url, entry ]) => ({ url, profiles: entry.nativeViewTimelines }) );
+	const nativeViewTimelines = nativePages.length ? {
+		schema: 'data-liberation/native-view-timelines/v1',
+		pages: nativePages,
+		binding: { targetEffectsAttribute: 'data-dla-native-effects', nodeIdentityAttribute: 'data-dla-native-node', profileAttribute: 'data-dla-native-profile', documentScopeAttribute: 'data-dla-document-scope' },
+		verification: 'source-observed; portable motion parity requires browser verification',
+	} : undefined;
 
 	writeFileSync(
 		receiptPath,
@@ -2385,6 +2394,7 @@ function buildExportCapture(
 				...(sourceInteractivity ? { sourceInteractivity } : {}),
 				scrollStates: scrollStatesSummary,
 				layoutGeometry: geometryReport,
+				...( nativeViewTimelines ? { nativeViewTimelines } : {} ),
 				sourceProfile,
 				excludedRoutes,
 				duplicateRoutes,
@@ -2418,6 +2428,7 @@ function buildExportCapture(
 				...(sourceInteractivity ? { sourceInteractivity } : {}),
 				scrollStates: scrollStatesSummary,
 				interactionFailures: interactionStates.filter( ( state ) => state.status !== 'captured' ),
+				...( nativeViewTimelines ? { nativeViewTimelines } : {} ),
 				excludedRoutes,
 				duplicateRoutes,
 				styleHoist: {
