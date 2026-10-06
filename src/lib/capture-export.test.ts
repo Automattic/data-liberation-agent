@@ -3272,6 +3272,7 @@ describe( 'exportWebsiteCapture', () => {
 			excludedRoutes: [],
 		} );
 		expect( receipt.interactions ).toEqual( {
+			ancestor_state_unverified_count: 0,
 			candidate_count: 1,
 			captured_count: 1,
 			no_dialog_count: 0,

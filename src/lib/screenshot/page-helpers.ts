@@ -440,22 +440,22 @@ export async function triggerLazyLoad(page: Page, requireNetworkIdle: boolean = 
     await waitForImages(page);
     // Return to top AND fire a scroll event so scroll-reactive headers recompute
     // their at-top (un-faded) state — scrollTo alone doesn't trigger their handler.
-    await withEvaluateTimeout(page.evaluate(() => {
-      window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
-      window.dispatchEvent(new Event('scroll'));
-    }), EVALUATE_GRACE_MS);
-    // Scroll handlers are throttled/debounced (~200ms observed on Wix), so the
-    // restore transition starts a beat AFTER the event — waitForAnimations would
-    // otherwise sample before it begins and return early. Give the handler time
-    // to kick the transition off, then wait for that transition to finish.
-    await new Promise((r) => setTimeout(r, 400));
-    await waitForAnimations(page);
-    // Scrolling, restored headers and newly revealed content can introduce font
-    // stacks after the initial stable wait. Settle before observation/screenshot.
-    await waitForFonts(page);
+    await restoreTopScrollState(page);
   } catch {
     /* if the page crashes or blocks our script, don't fail the capture */
   }
+}
+
+/** Restore the same top-of-document state used by baseline artifacts and probes. */
+export async function restoreTopScrollState(page: Page): Promise<void> {
+  await withEvaluateTimeout(page.evaluate(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+    window.dispatchEvent(new Event('scroll'));
+  }), EVALUATE_GRACE_MS);
+  // Let throttled scroll handlers start their transitions before settling them.
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  await waitForAnimations(page);
+  await waitForFonts(page);
 }
 
 /**

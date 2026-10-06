@@ -406,6 +406,7 @@ export function writeCaptureEvidence( input: CaptureEvidenceInput ): string {
 				state.status === 'captured' &&
 				( state.dialog?.htmlTruncated || state.choiceGroup?.transition.htmlTruncated )
 		).length,
+		ancestor_state_unverified_count: interactionStates.filter( state => state.dialog?.ancestorState?.status === 'unverified' ).length,
 		initial_dialog_count: initialDialogs.length,
 		initial_captured_count: initialDialogs.filter( ( state ) => state.status === 'captured' ).length,
 		initial_dismissal_verified_count: initialDialogs.filter(
