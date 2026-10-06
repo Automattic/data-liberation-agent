@@ -15,6 +15,17 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.19.6] - 2026-10-06
+
+### Changed
+- regenerate plugin bundles
+- isolate shared stylesheet materialization
+
+### Fixed
+- preserve linked PDFs as portable assets
+- preserve dropdown ancestor state and source flow placement
+- follow bounded candidate-local redirects
+
 ## [0.19.5] - 2026-10-06
 
 ### Changed
