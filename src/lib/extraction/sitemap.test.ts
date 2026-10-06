@@ -171,6 +171,134 @@ describe('fetchSitemap', () => {
     }
   });
 
+  it('follows sitemapindex children by document kind, not filename', async () => {
+    // Index children can be extensionless, including paginated endpoints.
+    const urlset = (paths: string[]) =>
+      `<urlset>${paths.map((path) => `<url><loc>https://example.test${path}</loc></url>`).join('')}</urlset>`;
+    const responseByUrl = new Map([
+      ['https://example.test/sitemap.xml', `<sitemapindex>
+        <sitemap><loc>https://example.test/sitemap/static</loc></sitemap>
+        <sitemap><loc>https://example.test/sitemap/v1-0?from=2&amp;to=3</loc></sitemap>
+        <sitemap><loc>https://example.test/sitemap/pages.xml?from=10&amp;to=20</loc></sitemap>
+      </sitemapindex>`],
+      ['https://example.test/sitemap/static', urlset(['/a', '/b', '/c'])],
+      // A urlset entry still recurses only on a .xml filename (paginated
+      // children like Shopify's sitemap_products_1.xml?from=...), while its
+      // extensionless locs remain ordinary pages.
+      ['https://example.test/sitemap/v1-0?from=2&to=3', `<urlset>
+        <url><loc>https://example.test/d</loc></url>
+        <url><loc>https://example.test/e</loc></url>
+        <url><loc>https://example.test/sitemap/more.xml?from=2&amp;to=3</loc></url>
+      </urlset>`],
+      ['https://example.test/sitemap/more.xml?from=2&to=3', urlset(['/f'])],
+      ['https://example.test/sitemap/pages.xml?from=10&to=20', urlset(['/g'])],
+    ]);
+    const fetchMock = vi.fn(async (url: string) => responseByUrl.has(String(url))
+      ? new Response(responseByUrl.get(String(url)), { status: 200 })
+      : new Response('', { status: 404 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    try {
+      const { urls, diagnostics } = await fetchSitemapWithDiagnostics('https://example.test/');
+      expect(urls).toEqual([
+        'https://example.test/a',
+        'https://example.test/b',
+        'https://example.test/c',
+        'https://example.test/d',
+        'https://example.test/e',
+        'https://example.test/f',
+        'https://example.test/g',
+      ]);
+      expect(diagnostics).toEqual([]);
+      expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
+        'https://example.test/robots.txt',
+        'https://example.test/sitemap-index.xml',
+        'https://example.test/sitemap.xml',
+        'https://example.test/sitemap/static',
+        'https://example.test/sitemap/v1-0?from=2&to=3',
+        'https://example.test/sitemap/more.xml?from=2&to=3',
+        'https://example.test/sitemap/pages.xml?from=10&to=20',
+      ]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('stops following sitemapindex children at a cycle and at the depth bound', async () => {
+    const index = (children: string[]) =>
+      `<sitemapindex>${children.map((loc) => `<sitemap><loc>https://example.test${loc}</loc></sitemap>`).join('')}</sitemapindex>`;
+    const responseByUrl = new Map([
+      // sitemap.xml → one → two → three; three's child would sit at depth 4
+      // (past MAX_SITEMAP_DEPTH) and must never be fetched, and two re-lists
+      // one, which must not be fetched a second time.
+      ['https://example.test/sitemap.xml', index(['/sitemap/one', '/sitemap/pages'])],
+      ['https://example.test/sitemap/one', index(['/sitemap/two'])],
+      ['https://example.test/sitemap/two', index(['/sitemap/one', '/sitemap/three'])],
+      ['https://example.test/sitemap/three', index(['/sitemap/too-deep'])],
+      ['https://example.test/sitemap/pages', `<urlset>${['/a', '/b', '/c', '/d', '/e']
+        .map((path) => `<url><loc>https://example.test${path}</loc></url>`).join('')}</urlset>`],
+    ]);
+    const fetchMock = vi.fn(async (url: string) => responseByUrl.has(String(url))
+      ? new Response(responseByUrl.get(String(url)), { status: 200 })
+      : new Response('', { status: 404 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    try {
+      const { urls, diagnostics } = await fetchSitemapWithDiagnostics('https://example.test/');
+      expect(urls).toEqual([
+        'https://example.test/a',
+        'https://example.test/b',
+        'https://example.test/c',
+        'https://example.test/d',
+        'https://example.test/e',
+      ]);
+      expect(diagnostics).toEqual([]);
+      expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
+        'https://example.test/robots.txt',
+        'https://example.test/sitemap-index.xml',
+        'https://example.test/sitemap.xml',
+        'https://example.test/sitemap/one',
+        'https://example.test/sitemap/two',
+        'https://example.test/sitemap/three',
+        'https://example.test/sitemap/pages',
+      ]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('rejects an extensionless sitemapindex child off the entry origin', async () => {
+    const responseByUrl = new Map([
+      ['https://example.test/sitemap.xml', `<sitemapindex>
+        <sitemap><loc>https://elsewhere.test/sitemap/static</loc></sitemap>
+        <sitemap><loc>https://example.test/sitemap/pages</loc></sitemap>
+      </sitemapindex>`],
+      ['https://example.test/sitemap/pages', `<urlset>${['/a', '/b', '/c', '/d', '/e']
+        .map((path) => `<url><loc>https://example.test${path}</loc></url>`).join('')}</urlset>`],
+    ]);
+    const fetchMock = vi.fn(async (url: string) => responseByUrl.has(String(url))
+      ? new Response(responseByUrl.get(String(url)), { status: 200 })
+      : new Response('', { status: 404 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    try {
+      const { urls, diagnostics } = await fetchSitemapWithDiagnostics('https://example.test/');
+      expect(urls).toEqual([
+        'https://example.test/a',
+        'https://example.test/b',
+        'https://example.test/c',
+        'https://example.test/d',
+        'https://example.test/e',
+      ]);
+      expect(diagnostics).toEqual([
+        { code: 'sitemap_url_rejected', url: 'https://elsewhere.test/sitemap/static', reason: 'origin differs from the entry URL' },
+      ]);
+      expect(fetchMock.mock.calls.map(([url]) => String(url))).not.toContain('https://elsewhere.test/sitemap/static');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('discovers every URL from sitemap-index.xml when sitemap.xml is absent', async () => {
     const pages = ['/', '/blog', '/contact', '/now', '/post-one', '/post-two', '/post-three', '/post-four', '/post-five'];
     const server = createServer((request, response) => {

@@ -7,6 +7,7 @@ import {
   inspectSource,
   captureWebsite,
   checkFidelity,
+  serveCapture,
   publishSite,
   registerPlatform,
   registerPublishTarget,
@@ -16,6 +17,47 @@ import {
 `data-liberation` and `data-liberation/runtime` resolve to the **same module**, including the same platform and publish registries. The runtime uses the implementations used by the CLI and MCP, with no separate pipeline, destination policy or sandbox configuration.
 
 ## Standalone distribution
+
+`await serveCapture(directory)` serves the owned portable `website/` using the
+same clean-URL and asset resolver as fidelity comparison. The directory may be
+the capture root or its `website/` directory. The returned `CapturePreviewServer`
+provides `url`, `port`, `urlForPage`, and `close()`; the caller must close it in a
+`finally` block. This helper makes no live-origin request and requires no browser,
+so consumers can reuse source rendering without implementing another server.
+
+### Shared parts and serving
+
+The canonical `website/` may contain `parts/header-<sha256>.html` and
+`parts/footer-<sha256>.html`. Each is an exact byte slice of a repeated site-level
+semantic landmark. The filename hash is a stable initial identity, not an edit
+lock: consumers may edit a part in place. Routes reference the part in position:
+
+```html
+<!--#include virtual="/parts/header-<sha256>.html" -->
+```
+
+`serveCapture` resolves real HTML comment nodes on the server for every HTML
+request, preserving all other bytes. The browser receives a complete document,
+without client fetching or an assembly script. Offline self-consistency uses the
+same resolver, so shared IDs, links and remote assets are checked on every route.
+Capture evidence and geometry source hashes are projected before extraction and
+describe the expanded document. Parts are resources and do not enlarge the
+receipt route table. Existing tree/ZIP reporting includes their stored bytes.
+
+The resolver accepts exactly the comment syntax above, with a root-relative
+`/parts/` path, a filename containing ASCII letters, digits, `_` or `-`, and an
+`.html` suffix. Include-looking strings in scripts, attributes and raw text are
+left untouched. Malformed directives, missing files, cycles, traversal and
+symlinks fail: preview returns HTTP 500 with a resolution error and offline
+comparison reports `include-unresolved`. Reads are bounded before allocation:
+16 MiB per file, 64 MiB cumulative read/expanded document budget, 16 nesting
+levels and 1,024 file reads per request. No expanded copy is written to disk.
+
+A raw file server or `file://` does not resolve these comments. To serve without
+DLA, use an include-aware server or compile the same grammar into expanded HTML
+for deployment. Compilation must walk HTML comment nodes, preserve surrounding
+bytes, and resolve bounded paths inside the website root. Consumer platform
+support is maintained separately; the export is destination-neutral.
 
 The committed **`dist/capture-engine.bundle.mjs`** now exports the full runtime. Its historical filename is retained for consumers that already pin that artifact. An embedded runner can import the file directly:
 
@@ -42,8 +84,8 @@ Each GitHub Release attaches the package's `npm pack` tarball, **`data-liberatio
 | Operation | Inputs | Result and failure contract |
 | --- | --- | --- |
 | `inspectSource(url, options?)` | Bounded discovery/rendering options; `rendered: false` selects HTTP-only | `SourceInspection`, including complexity factors, coverage, unknowns and issues. Missing browser support becomes `browser-unavailable` and unknown complexity. Invalid input or an unrecoverable entry request rejects. |
-| `captureWebsite(options)` | `url`, `outputDir`, optional `resume`, `captureImages`, `learnFluid`, `strict`, `onProgress` | `CaptureResult` with receipt path, route counts, `complete`, and `unresolvedAnchors`. A partial site still resolves with `complete: false` unless `strict: true`, which rejects with `IncompleteCaptureError`. Callers must inspect `complete` rather than inferring coverage from counters. Setup errors reject. Output follows the existing cwd-local path contract. |
-| `checkFidelity(options)` | `directory`, optional widths/sample size/screenshots/settling/log callback, optional `candidateUrl` | `FidelityReport`. `pass: false` means measured fidelity or offline checks failed. Invalid artifacts, unavailable browser support and failed cleanup audits reject. Cleanup-aware comparison consumes the policy recorded by capture. With `candidateUrl`, each sampled route is compared against `candidateUrl + route` instead of the locally served capture; routes and the offline checks still come from the capture, and attribution the candidate retains is a failed check rather than a rejection. Takeover modals and consent banners are dismissed on both sides before measuring, the same way capture dismisses them before serializing; `report.overlays` and `compare/overlay-evidence.json` record what came off each side. |
+| `captureWebsite(options)` | `url`, `outputDir`, optional `resume`, `captureImages`, `learnFluid`, `strict`, `onProgress` | `CaptureResult` with receipt path, route counts, `complete`, and `unresolvedAnchors`. A partial site still resolves with `complete: false` unless `strict: true`, which rejects with `IncompleteCaptureError`. Callers must inspect `complete` rather than inferring coverage from counters. Setup errors reject. Export publication rejects while another export holds the run lock; it does not rematerialize over that writer. Pre-commit failures restore the previous public generation; a post-commit cleanup failure retains the new generation and recovery state. Preview and fidelity-reference updates run after that publication. Output follows the existing cwd-local path contract. See [export publication](export-publication.md). |
+| `checkFidelity(options)` | `directory`, optional `stage`, `routes`, `widths`, `states`, screenshots/settling/log callback, optional `candidateUrl` | `FidelityReport`. Defaults to frozen source → capture at 390/768/1440; with `candidateUrl`, portable capture → candidate. Missing/stale evidence stays pending/unproven and cannot pass. Explicit `stage: 'drift'` preserves live-source sampling, observation injection and motion contracts. See [reference contract and evidence](fidelity-reference.md). |
 | `publishSite(options)` | `directory`, `target`, optional credentials/log callback | `PublishResult` from the selected target. Publishing is an explicit operation. Target and setup failures reject; optional attribution runs in disposable staging. |
 
 Types are exported for all options/results, including `InspectOptions`, `CaptureOptions`, `CaptureResult`, `FidelityCheckOptions`, `FidelityReport`, `PublishSiteOptions`, and `PublishResult`.

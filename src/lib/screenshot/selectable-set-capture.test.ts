@@ -207,6 +207,136 @@ describe( 'captureSelectableSetStates', () => {
 		await browser?.close();
 	} );
 
+	it.skipIf( skipBrowser )( 'captures every panel of a roving-focus tablist that selects on mousedown and mounts only the active panel', async () => {
+		const page = await browser.newPage();
+		try {
+			await serve( page, `<main><section>
+				<div id="tabs">
+					<div role="tablist" tabindex="0">
+						<button role="tab" id="t-a" aria-controls="p-a" aria-selected="true" tabindex="-1" type="button">Alpha</button>
+						<button role="tab" id="t-b" aria-controls="p-b" aria-selected="false" tabindex="-1" type="button">Bravo</button>
+						<button role="tab" id="t-c" aria-controls="p-c" aria-selected="false" tabindex="-1" type="button">Charlie</button>
+					</div>
+					<div role="tabpanel" id="p-a"></div>
+					<div role="tabpanel" id="p-b" hidden></div>
+					<div role="tabpanel" id="p-c" hidden></div>
+				</div>
+			</section></main>
+			<script>
+				const copy = { a: 'Alpha panel copy with enough words to count.', b: 'Bravo panel carries different words entirely here.', c: 'Charlie panel has yet another body of text.' };
+				const select = (key) => {
+					for (const k of Object.keys(copy)) {
+						const tab = document.getElementById('t-' + k), panel = document.getElementById('p-' + k);
+						tab.setAttribute('aria-selected', String(k === key));
+						tab.tabIndex = k === key ? 0 : -1;
+						panel.hidden = k !== key;
+						panel.textContent = k === key ? copy[k] : '';
+					}
+				};
+				select('a');
+				document.getElementById('tabs').firstElementChild.tabIndex = 0;
+				document.querySelectorAll('[role=tab]').forEach((tab) => tab.addEventListener('mousedown', () => select(tab.id.slice(2))));
+			</script>` );
+			const states = await captureSelectableSetStates( page, { settleMs: 10 } );
+			expect( states.map( ( state ) => [ state.kind, state.status ] ) ).toEqual( Array( 3 ).fill( [ SELECTABLE_SET_KIND, 'captured' ] ) );
+			expect( states.map( ( state ) => state.dialog?.html ) ).toEqual( [
+				expect.stringContaining( 'Alpha panel copy' ),
+				expect.stringContaining( 'Bravo panel carries' ),
+				expect.stringContaining( 'Charlie panel has' ),
+			] );
+			expect( new Set( states.map( ( state ) => state.dialog?.selector ) ).size ).toBe( 1 );
+		} finally {
+			await page.close();
+		}
+	} );
+
+	const pressedGroupPage = ( initial: [ boolean, boolean ], exclusive: boolean ) => `<main><section>
+		<div id="view-switch">
+			<button type="button" aria-pressed="${ initial[ 0 ] }">First view</button>
+			<button type="button" aria-pressed="${ initial[ 1 ] }">Second view</button>
+		</div>
+		<div id="view-body"></div>
+	</section></main>
+	<script>
+		const copy = [ 'First view body carries one long paragraph of unique words here.', 'Second view swaps in short text.' ];
+		const buttons = [ ...document.querySelectorAll( '#view-switch button' ) ];
+		const render = () => { document.getElementById( 'view-body' ).textContent = buttons.map( ( b, i ) => b.getAttribute( 'aria-pressed' ) === 'true' ? copy[ i ] : '' ).join( ' ' ).trim() || 'Nothing pressed yet, placeholder text.'; };
+		buttons.forEach( ( button, index ) => button.addEventListener( 'click', () => {
+			buttons.forEach( ( b, i ) => b.setAttribute( 'aria-pressed', String( ${ exclusive } ? i === index : ( i === index ? b.getAttribute( 'aria-pressed' ) !== 'true' : b.getAttribute( 'aria-pressed' ) === 'true' ) ) ) );
+			render();
+		} ) );
+		render();
+	</script>`;
+
+	it.skipIf( skipBrowser )( 'captures the region of an exclusive aria-pressed segmented control', async () => {
+		const page = await browser.newPage();
+		try {
+			await serve( page, pressedGroupPage( [ true, false ], true ) );
+			const states = await captureSelectableSetStates( page, { settleMs: 10 } );
+			expect( states.map( ( state ) => [ state.kind, state.status ] ) ).toEqual( Array( 2 ).fill( [ SELECTABLE_SET_KIND, 'captured' ] ) );
+			expect( states.map( ( state ) => state.dialog?.html ) ).toEqual( [
+				expect.stringContaining( 'First view body' ),
+				expect.stringContaining( 'Second view swaps' ),
+			] );
+		} finally {
+			await page.close();
+		}
+	} );
+
+	it.skipIf( skipBrowser )( 'keeps independent aria-pressed toggles as a choice group even when a region changes', async () => {
+		const page = await browser.newPage();
+		try {
+			await serve( page, pressedGroupPage( [ false, false ], false ) );
+			const states = await captureSelectableSetStates( page, { settleMs: 10 } );
+			expect( states.length ).toBeGreaterThan( 0 );
+			expect( states.every( ( state ) => state.kind === 'choice-group' ) ).toBe( true );
+		} finally {
+			await page.close();
+		}
+	} );
+
+	it.skipIf( skipBrowser )( 'leaves native summaries and passive link wrappers to their owning controls', async () => {
+		const page = await browser.newPage();
+		try {
+			await serve( page, `<main><div id="links">
+				<div style="cursor:pointer"><a href="/one"><span>Read one</span></a></div>
+				<div style="cursor:pointer"><a href="/two"><span>Read two</span></a></div>
+			</div><div id="disclosures">
+				<details><summary style="cursor:pointer"><span>Archive</span></summary><p>Archive content</p></details>
+				<details><summary style="cursor:pointer"><span>Labels</span></summary><p>Label content</p></details>
+			</div><div>Nearby shared content</div></main>
+			<script>window.clicks=0;document.addEventListener('click',()=>window.clicks++);</script>` );
+			expect( await captureSelectableSetStates( page, { settleMs: 10 } ) ).toEqual( [] );
+			expect( await page.evaluate( () => ( window as unknown as { clicks: number } ).clicks ) ).toBe( 0 );
+			await page.locator( 'summary' ).first().click();
+			expect( await page.locator( 'details' ).first().getAttribute( 'open' ) ).not.toBeNull();
+			await page.getByRole( 'link', { name: 'Read one' } ).click();
+			expect( page.url() ).toBe( `${ ORIGIN }/one` );
+		} finally {
+			await page.close();
+		}
+	} );
+
+	it.skipIf( skipBrowser )( 'retains semantic and mixed-content pickers that contain navigation links', async () => {
+		const page = await browser.newPage();
+		try {
+			await page.setContent( `<div id="layout"><div id="picker">
+				<div id="a" role="tab" style="cursor:pointer"><a href="/a">Alpha</a></div>
+				<div id="b" role="tab" style="cursor:pointer"><a href="/b">Beta</a></div>
+			</div><div id="panel">Choose a region for detailed information.</div></div><script>
+				const copy={a:'Alpha region / Production / A climate-controlled room with a 18/6 light cycle.',b:'Beta region / Storage / Cold room held at 4C for finished goods.'};
+				document.querySelectorAll('#picker > div').forEach(el=>el.addEventListener('click',()=>document.getElementById('panel').textContent=copy[el.id]));
+			</script>` );
+			const states = await captureSelectableSetStates( page, { settleMs: 10 } );
+			expect( states.filter( state => state.status === 'captured' ).map( state => state.trigger.id ) ).toEqual( [ 'a', 'b' ] );
+			await page.setContent( PICKER_PAGE.replace( 'Zone 1</div>', 'Zone 1 <a href="/guide">Guide</a></div>' ) );
+			const mixed = await captureSelectableSetStates( page, { settleMs: 10 } );
+			expect( mixed.filter( state => state.status === 'captured' ) ).toHaveLength( 3 );
+		} finally {
+			await page.close();
+		}
+	} );
+
 	it.skipIf( skipBrowser )( 'does not drive pointer descendants of popup and disclosure controls', async () => {
 		const page = await browser.newPage();
 		try {
@@ -880,7 +1010,7 @@ describe( 'captureSelectableSetStates', () => {
 		expect( SELECTABLE_SET_LIMITS ).toEqual( {
 			maxSets: 3,
 			maxMembers: 24,
-			maxDriveMs: 16_000,
+			maxDriveMs: 30_000,
 			maxHtmlBytes: 512 * 1024,
 			settleMs: 500,
 			maxCandidateScan: 1_500,

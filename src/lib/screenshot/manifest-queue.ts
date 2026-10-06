@@ -12,6 +12,8 @@ export interface ManifestEntry {
   mobile?: string;
   mobileScrolled?: string;
   html?: string;
+  /** Browser URL and effective base per viewport; the manifest key remains the requested route. */
+  documents?: Partial<Record<'desktop' | 'mobile', import('../document-resource-base.js').RenderedDocumentUrl>>;
   /** path to sections/<slug>.json (captured section specs) when present */
   sections?: string;
   /** Overlays/banners dismissed before this URL was captured (observability). */
@@ -20,6 +22,8 @@ export interface ManifestEntry {
   interactions?: InteractionStatesReport;
   /** Scroll-position-driven class/style toggles (e.g. a shrinking sticky header). */
   scrollStates?: ScrollStatesReport;
+  /** Public-API native motion evidence, keyed by source capture profile identity. */
+  nativeViewTimelines?: Record<string, { path: string; preserved: number; losses: Array<{ target: string; reason: string }>; status?: 'observed' | 'unproven'; failures?: string[] }>;
   /**
    * Outcome of learning the source's sizing across viewport widths: how much
    * runtime-frozen geometry became fluid CSS, and what stayed frozen.
@@ -32,12 +36,18 @@ export interface ManifestEntry {
     canvasFloor?: number | null;
     byKind: Record<string, number>;
   };
+  /** Phone-document learning, whose canvas floor does not select the desktop document. */
+  fluidMobile?: ManifestEntry['fluid'];
   capturedAt: string;
   /**
    * The same-origin route the server redirected this URL to. The URL is an
    * alias of that route and has no artifacts of its own.
    */
   redirectedTo?: string;
+  /** Proven off-origin HTTP redirect from an unscheduled same-origin page link. No destination is stored. */
+  externalRedirect?: boolean;
+  /** Proven absent response for an unscheduled same-origin page link. */
+  sourceAbsentStatus?: 404 | 410;
   /** Populated by site-analysis; may be absent */
   metadata?: {
     title?: string;

@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { chromium, type Browser } from 'playwright';
 import { learnAndApplyFluidGeometry } from './fluid-capture.js';
 
@@ -11,6 +11,69 @@ describe( 'learnAndApplyFluidGeometry', () => {
 
 	afterAll( async () => {
 		await browser.close();
+	} );
+
+	it( 'preserves fractional constant typography through learning and static serialization', async () => {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		const copy = await browser.newPage();
+		try {
+			await page.setContent( '<p id="copy" style="font-family:serif;font-size:17.94px;line-height:1.2">A long editorial text run must keep its original subpixel font metrics.</p>' );
+			const measure = async ( target: typeof page ) => target.locator( '#copy' ).evaluate( element => {
+				const style = getComputedStyle( element );
+				const canvas = document.createElement( 'canvas' ).getContext( '2d' )!;
+				canvas.font = `${ style.fontSize } ${ style.fontFamily }`;
+				return { fontSize: style.fontSize, lineHeight: style.lineHeight, advance: canvas.measureText( element.textContent! ).width };
+			} );
+			const before = await measure( page );
+			await learnAndApplyFluidGeometry( page, { widths: [ 390, 768, 1440 ], settleMs: 50 } );
+			await copy.setContent( await page.content() );
+			for ( const width of [ 390, 768, 1440 ] ) {
+				await copy.setViewportSize( { width, height: 900 } );
+				expect( await measure( copy ) ).toEqual( before );
+			}
+		} finally { await page.close(); await copy.close(); }
+	} );
+
+	it( 'preserves minimum sizing and blank paragraph typography without a width sweep', async () => {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		try {
+			await page.setContent( `<p id="blank" style="font-size:12px;line-height:normal;margin:0;min-height:14px"><br></p>
+				<div style="min-width:100px;max-width:500px;min-height:20px"></div>
+				<div style="width:50%;height:auto"></div>` );
+			const original = await page.locator( '#blank' ).getAttribute( 'style' );
+			const originalHeight = await page.locator( '#blank' ).evaluate( element => element.getBoundingClientRect().height );
+			const resize = vi.spyOn( page, 'setViewportSize' );
+			const result = await learnAndApplyFluidGeometry( page, { settleMs: 10 } );
+			expect( resize ).not.toHaveBeenCalled();
+			expect( result.applied ).toBe( 0 );
+			expect( await page.locator( '#blank' ).getAttribute( 'style' ) ).toBe( original );
+			expect( await page.locator( '#blank' ).evaluate( element => element.getBoundingClientRect().height ) ).toBe( originalHeight );
+		} finally {
+			await page.close();
+		}
+	} );
+
+	it( 'still learns runtime-sized text, generated glyphs, and explicit blank spacers', async () => {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		try {
+			await page.setContent( `<style>#glyph::before{content:'★'}</style>
+				<p id="text" style="font-size:18px">Text<br></p>
+				<p id="glyph" style="font-size:18px"><br></p>
+				<p id="spacer" style="width:720px"><br></p>
+				<script>function update(){
+					document.getElementById('text').style.fontSize = innerWidth / 80 + 'px';
+					document.getElementById('glyph').style.fontSize = innerWidth / 80 + 'px';
+					document.getElementById('spacer').style.width = innerWidth / 2 + 'px';
+				} addEventListener('resize',update);update();</script>` );
+			const result = await learnAndApplyFluidGeometry( page, { widths: [ 390, 768, 1440 ], settleMs: 50 } );
+			expect( result.applied ).toBeGreaterThanOrEqual( 3 );
+			for ( const id of [ 'text', 'glyph' ] ) {
+				expect( await page.locator( `#${ id }` ).getAttribute( 'style' ) ).toContain( 'vw' );
+			}
+			expect( await page.locator( '#spacer' ).getAttribute( 'style' ) ).toMatch( /(?:50vw|100%)/ );
+		} finally {
+			await page.close();
+		}
 	} );
 
 	it( 'never learns a top offset: anchor targets move with their section instead', async () => {
@@ -475,7 +538,10 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		const heights: Record< number, number > = {};
 		for ( const width of [ 390, 600, 768, 1024, 1280, 1440, 1536, 1680, 1792, 1920 ] ) {
 			await source.setViewportSize( { width, height: 900 } );
-			await source.waitForTimeout( 10 );
+			await source.waitForFunction( () => {
+				const expected = innerWidth < 768 ? innerWidth === 390 ? '208px' : '100%' : `${ innerWidth * 0.23 }px`;
+				return document.querySelector< HTMLElement >( '#frame' )!.style.getPropertyValue( '--image-height' ) === expected;
+			} );
 			heights[ width ] = ( await source.locator( '#image' ).boundingBox() )!.height;
 		}
 		await learnAndApplyFluidGeometry( source, { settleMs: 30 } );
@@ -532,6 +598,40 @@ describe( 'learnAndApplyFluidGeometry', () => {
 			const box = await copy.locator( '#image' ).boundingBox();
 			expect( Math.abs( box!.x - width * 0.52415 ), `image x at ${ width }` ).toBeLessThanOrEqual( 2 );
 			expect( box!.width ).toBe( 231 );
+		}
+		await copy.close();
+		await source.close();
+	}, 30_000 );
+
+	it( 'keeps an inactive responsive slide offstage through the tablet range', async () => {
+		const source = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		await source.setContent( `
+			<style>body{margin:0}#track{position:relative;width:100vw;height:180px;overflow:hidden}#slide{position:absolute;width:320px;height:160px}</style>
+			<div id="track"><div id="slide" style="transform:matrix(1,0,0,1,1402,0)">Inactive testimonial</div></div>
+			<script>
+				const update=()=>{const x=innerWidth<800?innerWidth-4:innerWidth-38;document.querySelector('#slide').style.transform='matrix(1,0,0,1,'+x+',0)};
+				addEventListener('resize',update);update();
+			</script>` );
+		const widths = [ 390, 600, 767, 768, 799, 800, 1024, 1440 ];
+		const sourcePhase = new Map<number, number>();
+		for ( const width of widths ) {
+			await source.setViewportSize( { width, height: 900 } );
+			await source.waitForTimeout( 5 );
+			sourcePhase.set( width, ( await source.locator( '#slide' ).boundingBox() )!.x );
+		}
+		await learnAndApplyFluidGeometry( source, { widths, settleMs: 20 } );
+		const html = await source.evaluate( () => {
+			document.querySelectorAll( 'script' ).forEach( script => script.remove() );
+			return document.documentElement.outerHTML;
+		} );
+		const copy = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		await copy.setContent( html );
+		for ( const width of [ 390, 768, 1440 ] ) {
+			await copy.setViewportSize( { width, height: 900 } );
+			const slide = ( await copy.locator( '#slide' ).boundingBox() )!;
+			const track = ( await copy.locator( '#track' ).boundingBox() )!;
+			expect( Math.abs( slide.x - sourcePhase.get( width )! ), `source/copy phase at ${ width }` ).toBeLessThanOrEqual( 2 );
+			if ( width === 768 ) expect( slide.x ).toBeGreaterThanOrEqual( track.x + track.width );
 		}
 		await copy.close();
 		await source.close();
@@ -611,7 +711,7 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		await page.setContent( `
 			<style>:root { --header-height: 79.0469px; }
 			main .sections .page-section:first-child { padding-top: var(--header-height, 100px); }</style>
-			<main><div class="sections"><section id="first-section" class="page-section" style="min-height: 1vh; padding-top: 79.0469px"></section></div></main>
+			<main><div class="sections"><section id="first-section" class="page-section" data-test="page-section" style="min-height: 1vh; padding-top: 79.0469px"></section></div></main>
 			<script>
 				const desktop = { 1024: 61.8438, 1280: 72.375, 1440: 79.0469, 1920: 88.8281 };
 				const update = () => {
@@ -664,4 +764,43 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		expect( Math.abs( desktopPadding - 79.0469 ) ).toBeLessThanOrEqual( 1 );
 		await page.close();
 	}, 20_000 );
+
+	it( 'learns runtime padding on ordinary rendered geometry without platform markers', async () => {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		await page.setContent( `
+			<style>html { scroll-behavior:smooth } body { min-height:2400px }.hero { height: 180px; }</style>
+			<main><div id="hero" class="hero" style="padding-top:178.781px"></div><div id="closed-menu" style="display:none;padding-top:240px"></div></main>
+			<script>
+				function updateHeaderClearance() {
+					const width = innerWidth;
+					const padding = width < 768 ? width * 0.12 + 36.97
+						: width < 800 ? 242.156
+						: 150.02 + width * 0.02;
+					document.querySelector('#hero').style.paddingTop = padding + 'px';
+				}
+				addEventListener('resize', updateHeaderClearance);
+				addEventListener('scroll', () => {
+					if ( scrollY > 0 ) {
+						document.querySelector('#hero').style.paddingTop = (parseFloat(document.querySelector('#hero').style.paddingTop) + 36) + 'px';
+					} else updateHeaderClearance();
+				});
+				updateHeaderClearance();
+			</script>
+		` );
+		await learnAndApplyFluidGeometry( page, {
+			widths: [ 390, 600, 767, 768, 769, 799, 800, 801, 1024, 1280, 1440 ],
+			settleMs: 40,
+		} );
+
+		const rules = await page.locator( 'style[data-dla-fluid-rules]' ).textContent();
+		expect( rules ).toContain( 'padding-top' );
+		expect( rules ).toContain( '@media' );
+		expect( await page.locator( '#hero' ).getAttribute( 'style' ) ).not.toContain( 'padding-top' );
+		expect( await page.locator( '#closed-menu' ).getAttribute( 'style' ) ).toContain( 'padding-top:240px' );
+		expect( await page.locator( '#closed-menu' ).getAttribute( 'data-dla-fluid-segment' ) ).toBeNull();
+		await page.setViewportSize( { width: 768, height: 900 } );
+		await page.waitForTimeout( 60 );
+		expect( Number.parseFloat( await page.locator( '#hero' ).evaluate( element => getComputedStyle( element ).paddingTop ) ) ).toBeCloseTo( 242.156, 0 );
+		await page.close();
+	}, 40_000 );
 } );

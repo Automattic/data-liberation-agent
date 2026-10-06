@@ -1,6 +1,6 @@
 import type { Page } from 'playwright';
 
-export const CLEANUP_SCHEMA = 'data-liberation/source-cleanup/v6';
+export const CLEANUP_SCHEMA = 'data-liberation/source-cleanup/v7';
 export interface CleanupRule {
   id: string;
   category: 'advertisement' | 'source-attribution';
@@ -31,9 +31,10 @@ const PROMOTION_PATTERNS = {
 };
 
 /** An offer to open this page in the tool that produced it, addressed to whoever
- * is looking at it — the shape every builder badge shares regardless of vendor. */
+ * is looking at it — the shape every builder badge shares regardless of vendor.
+ * Allow a bounded object phrase, as in "built my app for free using". */
 const BUILDER_CHROME_PATTERNS = {
-  affordance: '\\b(?:edit|made|built|created|designed|generated)\\s+(?:with|on|by|using)\\b|\\bcreate\\s+(?:a|your own)\\s+(?:unique\\s+)?site\\b|\\bfree\\s+trial\\b',
+  affordance: '\\b(?:edit|made|built|created|designed|generated)\\s+(?:\\w+\\s+){0,4}?(?:with|on|by|using)\\b|\\bcreate\\s+(?:a|an|your(?:\\s+own)?)\\s+(?:unique\\s+)?(?:site|website|app)\\b|\\bfree\\s+trial\\b',
 };
 
 /** Shared recognition for live cleanup, overlay classification and old exports. */
@@ -332,6 +333,10 @@ export function installCleanupInPage(args: { policy: CleanupPolicy; recovered?: 
           let text: Node | null;
           while ((text = walker.nextNode())) {
             if (text.parentElement?.closest('script,style,noscript')) continue;
+            // Same boundary as the link credit rule: article/main prose is owner
+            // content, even when it reads like a credit ("new sites are created
+            // with Ghost's theme" on demo.ghost.io), unless it sits in a footer.
+            if (text.parentElement?.closest('article,main') && !text.parentElement.closest('footer,[role="contentinfo"]')) continue;
             const value = text.textContent ?? '';
             nodes.push({ node: text, start: content.length, text: value });
             content += value;

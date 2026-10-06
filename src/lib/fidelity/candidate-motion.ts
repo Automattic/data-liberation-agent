@@ -5,7 +5,8 @@ import { sourceContextOptions } from '../browser-kit/browser-kit.js';
 export interface MotionContract {
 	widths: number[];
 	routes: Record< string, {
-		ready: { source: string; candidate: string };
+		/** `sourceSettleMs` waits a learned startup duration for a source that exposes no readiness marker. */
+		ready: { source: string; candidate: string; sourceSettleMs?: number };
 		text: string[];
 		/** Compare visibly present/hidden elements during startup and after readiness. */
 		visibility?: string[];
@@ -49,6 +50,9 @@ export function validateMotionContract( contract: MotionContract ): void {
 			throw new Error( `Invalid motion contract route: ${ route }` );
 		}
 		validateSelectors( [ probe.ready.source, probe.ready.candidate, ...probe.text, ...probe.canvases ] );
+		if ( probe.ready.sourceSettleMs !== undefined && ( ! Number.isInteger( probe.ready.sourceSettleMs ) || probe.ready.sourceSettleMs < 0 || probe.ready.sourceSettleMs > 25_000 ) ) {
+			throw new Error( `Invalid readiness settle time: ${ route }` );
+		}
 		if ( probe.visibility ) {
 			if ( ! Array.isArray( probe.visibility ) || probe.visibility.length > 16 ) throw new Error( `Invalid visibility probes: ${ route }` );
 			validateSelectors( probe.visibility );
@@ -66,7 +70,7 @@ export function validateMotionContract( contract: MotionContract ): void {
 	}
 }
 
-async function visit( page: Page, url: string, ready: string, text: string[], visibility: string[] ): Promise< { values: Record< string, string >; changes: Record< string, string[] >; observedAt: number; initialVisibility: Record< string, boolean >; finalVisibility: Record< string, boolean > } > {
+async function visit( page: Page, url: string, ready: string, text: string[], visibility: string[], settleMs = 0 ): Promise< { values: Record< string, string >; changes: Record< string, string[] >; observedAt: number; initialVisibility: Record< string, boolean >; finalVisibility: Record< string, boolean > } > {
 	await page.addInitScript( ( selectors ) => {
 		const start = () => {
 			const changes = Object.fromEntries( selectors.map( ( selector ) => [ selector, [] as string[] ] ) );
@@ -92,7 +96,7 @@ async function visit( page: Page, url: string, ready: string, text: string[], vi
 		return [ selector, !! element && getComputedStyle( element ).display !== 'none' && getComputedStyle( element ).visibility !== 'hidden' ];
 	} ) ), visibility );
 	await page.waitForSelector( ready, { state: 'attached', timeout: 25_000 } );
-	await page.waitForTimeout( 150 );
+	await page.waitForTimeout( 150 + settleMs );
 	const result = await page.evaluate( ( selectors ) => {
 		const trace = ( window as typeof window & { __dlaMotion?: { changes: Record< string, string[] >; sample: () => void } } ).__dlaMotion;
 		trace?.sample();
@@ -156,6 +160,17 @@ async function replay( page: Page, click: { trigger: string; target: string }, r
 		const trace = ( window as typeof window & { __dlaMotion?: { changes: Record< string, string[] >; sample: () => void } } ).__dlaMotion;
 		if ( trace ) { trace.changes[ selector ] = []; trace.sample(); }
 	}, click.target );
+	await page.locator( click.trigger ).first().scrollIntoViewIfNeeded( { timeout: 3000 } ).catch( () => undefined );
+	// A page may disable its controls while a previous sequence runs (for
+	// example `pointer-events:none` during a loading state). Click only once the
+	// trigger actually receives pointer input, as a visitor's click would.
+	await page.waitForFunction( ( selector ) => {
+		const trigger = document.querySelector( selector );
+		const box = trigger?.getBoundingClientRect();
+		if ( ! trigger || ! box || ! box.width || ! box.height ) return false;
+		const hit = document.elementFromPoint( box.left + box.width / 2, box.top + box.height / 2 );
+		return !! hit && ( hit === trigger || trigger.contains( hit ) );
+	}, click.trigger, { timeout: 10_000 } ).catch( () => undefined );
 	await page.locator( click.trigger ).first().click( { force: true, timeout: 5000 } );
 	const changed = await page.waitForFunction(
 		( { selector, previous } ) => document.querySelector( selector )?.textContent?.trim() !== previous,
@@ -196,7 +211,7 @@ export async function verifyCandidateMotion(
 	const candidatePage = await browser.newPage( { viewport: { width: viewport, height: 900 } } );
 	try {
 		const [ original, copy ] = await Promise.all( [
-			visit( sourcePage, source, contract.ready.source, contract.text, contract.visibility ?? [] ),
+			visit( sourcePage, source, contract.ready.source, contract.text, contract.visibility ?? [], contract.ready.sourceSettleMs ),
 			visit( candidatePage, candidate, contract.ready.candidate, contract.text, contract.visibility ?? [] ),
 		] );
 		observations.text = { source: original, candidate: copy };

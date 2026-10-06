@@ -49,7 +49,7 @@ const DANGEROUS_URI_RE = /\b(href|src)\s*=\s*("javascript:[^"]*"|'javascript:[^'
  * Remove script/iframe/object/embed tags, HTML comments, event-handler
  * attributes, and javascript: URIs from the input string. Idempotent.
  */
-export function sanitizeSourceHtml(html: string): string {
+export function sanitizeSourceHtml(html: string, options: { preserveEmptyComments?: boolean } = {}): string {
   if (!html) return html;
   let out = html;
 
@@ -65,7 +65,10 @@ export function sanitizeSourceHtml(html: string): string {
 
   // Comments next — they can contain prompt-injection text intended to
   // surface only when an LLM "reads" the markup.
-  out = out.replace(COMMENT_RE, '');
+  // Portable snapshots use empty comments as inert text-node boundaries.
+  // The skill-facing default still strips every comment; no comment payload
+  // is retained even when the snapshot caller opts in.
+  out = out.replace(COMMENT_RE, comment => options.preserveEmptyComments && comment === '<!---->' ? comment : '');
 
   // Event handlers and dangerous URIs can decorate any remaining tag.
   out = out.replace(EVENT_HANDLER_RE, '');

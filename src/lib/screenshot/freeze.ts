@@ -34,9 +34,9 @@ import { sanitizeSourceHtml } from '../streaming/html-sanitize.js';
 const MIN_FREEZE_BYTES = 2048;
 
 /** Reuse the project's sanitizer: strips script/iframe/object/embed/on*=/javascript:,
- *  preserves <style> and inline style= (verified). */
+ *  preserves <style>, inline style=, and payload-free text-node boundaries. */
 export function sanitizeFrozenHtml(html: string): string {
-  return sanitizeSourceHtml(html);
+  return sanitizeSourceHtml(html, { preserveEmptyComments: true });
 }
 
 export interface FreezeResult { html: string; bytes: number; via: 'single-file-cli' | 'fallback'; }

@@ -26,6 +26,8 @@ describe('detectFromUrl (heuristics)', () => {
     ['https://lovable.dev/projects/abc', 'lovable'],
     ['https://demo.ghost.io/', 'ghost'],
     ['https://codinghorror.ghost.io/ghost/', 'ghost'],
+    ['https://heathercoxrichardson.substack.com/', 'substack'],
+    ['https://on.substack.com/p/some-post', 'substack'],
   ])('detects %s as %s', (url, platform) => {
     const detected = detectFromUrl(url);
     expect(detected).toBe(platform);
@@ -196,7 +198,9 @@ describe('detectFromHttp (fingerprinting)', () => {
     // buffer.com/resources: Next.js pages reading Ghost's Content API.
     const html = '<figure class="kg-card kg-image-card"><img src="https://buffer.com/resources/content/images/2026/09/a.png"></figure><p>Published with Ghost as a backend.</p>';
     const result = detectFromDocument('https://buffer.com/resources/', new Headers([['x-powered-by', 'Next.js']]), html);
-    expect(result.platform).toBe('unknown');
+    expect(result.platform).toBe('nextjs');
+    expect(findAdapter(result.platform)).toMatchObject({ id: 'nextjs' });
+    expect(detectFromDocument('https://buffer.com/resources/', new Headers(), html).platform).toBe('unknown');
   });
 
   it('detects a Ghost(Pro) custom domain from its /ghost/ admin redirect', async () => {
@@ -208,6 +212,38 @@ describe('detectFromHttp (fingerprinting)', () => {
     const result = await detectFromHttp('https://aftermath.site');
     expect(result.platform).toBe('ghost');
     expect(result.signals).toContain('/ghost/ redirects to the Ghost(Pro) admin');
+  });
+
+  // Substack signal values are from live custom-domain publications (2026-09):
+  // derekthompson.org, astralcodexten.com, slowboring.com.
+  it('does not treat a host merely containing "substack.com" as Substack', () => {
+    expect(detectFromUrl('https://substack.com.example.org/')).toBeNull();
+    expect(detectFromUrl('https://example.com/substack.com/')).toBeNull();
+  });
+
+  it.each([
+    ['x-served-by', 'Substack'],
+    ['x-cluster', 'substack'],
+  ])('detects a Substack custom domain from its %s header', (header, value) => {
+    const headers = new Headers([[header, value], ['server', 'cloudflare']]);
+    const result = detectFromDocument('https://www.derekthompson.org/', headers, '<html></html>');
+    expect(result.platform).toBe('substack');
+    expect(result.confidence).toBe('high');
+    expect(findAdapter(result.platform)).toMatchObject({ id: 'substack' });
+  });
+
+  it('detects Substack from its app bundle in page source', () => {
+    const html = '<script src="https://substackcdn.com/bundle/static/js/lib-router.3f2a9c1b.js" charset="utf-8"></script>';
+    const result = detectFromDocument('https://www.slowboring.com/', new Headers(), html);
+    expect(result.platform).toBe('substack');
+    expect(result.confidence).toBe('medium');
+  });
+
+  it('does not detect Substack on a page that only hotlinks a Substack image or embeds a post', () => {
+    const html = '<img src="https://substackcdn.com/image/fetch/w_1456,c_limit/https%3A%2F%2Fsubstack-post-media.s3.amazonaws.com%2Fpublic%2Fimages%2Fa.png">'
+      + '<iframe src="https://www.astralcodexten.com/embed" width="480" height="320"></iframe>';
+    const result = detectFromDocument('https://example.com', new Headers(), html);
+    expect(result.platform).toBe('unknown');
   });
 
   it('returns unknown for unrecognized sites', async () => {

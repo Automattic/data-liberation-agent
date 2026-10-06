@@ -7,7 +7,7 @@
 // and flows through liberation with its platform hooks intact.
 // No core file is modified by the "consumer" here; it only uses the public
 // exports.
-import { mkdirSync, rmSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -26,9 +26,24 @@ vi.mock( '../lib/screenshot/screenshotter.js', () => ( {
 } ) );
 
 vi.mock( '../lib/capture-export.js', () => ( {
-	exportWebsiteCapture: vi.fn( ( { outputDir }: { outputDir: string } ) =>
-		join( outputDir, 'capture-receipt.json' ),
-	),
+	exportWebsiteCapture: vi.fn( ( { outputDir, sourceUrl }: { outputDir: string; sourceUrl: string } ) => {
+		// Model the exporter boundary with real files: reference finalization
+		// binds the declared receipt and portable tree, even with a mocked browser.
+		mkdirSync( join( outputDir, 'website', 'pricing' ), { recursive: true } );
+		writeFileSync( join( outputDir, 'website', 'index.html' ), '<h1>Acme Builder site</h1>' );
+		writeFileSync( join( outputDir, 'website', 'pricing', 'index.html' ), '<h1>Pricing</h1>' );
+		const path = join( outputDir, 'capture-receipt.json' );
+		writeFileSync( path, JSON.stringify( {
+			schema: 'data-liberation/capture-receipt/v1',
+			source: { url: sourceUrl },
+			websiteRoot: 'website',
+			routes: [
+				{ url: sourceUrl, path: 'website/index.html' },
+				{ url: new URL( 'pricing', sourceUrl ).href, path: 'website/pricing/index.html' },
+			],
+		} ) );
+		return path;
+	} ),
 } ) );
 
 // The consumer import: everything below enters through the public entry.
@@ -199,6 +214,17 @@ describe( 'consumer-defined platform (public Platform API)', () => {
 		);
 		expect( result.provenance.platform ).toBe( id );
 		expect( result.summary.routesDiscovered ).toBe( 2 ); // homepage + /pricing
+		const reference = JSON.parse( readFileSync( join( root, 'fidelity-reference.json' ), 'utf8' ) );
+		expect( reference.sourceUrl ).toBe( sourceUrl );
+		expect( reference.scope.sourceUrls ).toEqual( [ sourceUrl, new URL( 'pricing', sourceUrl ).href ] );
+		// This fixture verifies discovered page coverage. The portable preview is
+		// best-effort with the mocked browser and has its own real-browser test.
+		expect( reference.capture.map( ( artifact: { path: string } ) => artifact.path ).filter( ( path: string ) => path.endsWith( '.html' ) ).sort() ).toEqual( [
+			'website/index.html', 'website/pricing/index.html',
+		] );
+		// The browser mock contributes no source observations; files alone do
+		// not fabricate frozen evidence for the consumer platform.
+		expect( reference.entries ).toEqual( [] );
 		// The platform's liberation hooks reached the internal browser orchestrator.
 		expect( captureScreenshotsMock ).toHaveBeenCalledWith(
 			expect.objectContaining( {

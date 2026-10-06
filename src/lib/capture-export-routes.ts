@@ -1,5 +1,7 @@
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { extname, join } from 'node:path';
+import { normalizedUrl } from './url/route-key.js';
+import { sameHttpSite } from './screenshot/same-origin.js';
 
 export interface RouteEntry {
 	url: string;
@@ -8,19 +10,11 @@ export interface RouteEntry {
 	jsonLd: string[];
 }
 
-export function normalizedUrl( url: string ): string {
-	const parsed = new URL( url );
-	parsed.hash = '';
-	parsed.search = '';
-	parsed.pathname = parsed.pathname.replace( /\/$/, '' ) || '/';
-	return parsed.href;
-}
-
 function capturedOriginRoot( urls: string[], origin: string ): boolean {
 	return urls.some( ( url ) => {
 		try {
 			const route = new URL( url );
-			return route.origin === origin && ( route.pathname.replace( /\/$/, '' ) || '/' ) === '/';
+			return sameHttpSite( url, origin ) && ( route.pathname.replace( /\/$/, '' ) || '/' ) === '/';
 		} catch {
 			return false;
 		}
@@ -45,9 +39,9 @@ function routeOutputPath( url: string, sourceUrl: string, entrypointUrl: string,
 			throw new Error( `Captured route path escapes the website directory: ${ route.pathname }` );
 	}
 	const sourcePath = originRootCaptured ? '' : source.pathname.replace( /\/$/, '' );
-	if ( route.origin === source.origin && sourcePath && pathname.startsWith( `${ sourcePath }/` ) ) {
+	if ( sameHttpSite( url, sourceUrl ) && sourcePath && pathname.startsWith( `${ sourcePath }/` ) ) {
 		pathname = pathname.slice( sourcePath.length );
-	} else if ( route.origin === source.origin && sourcePath && pathname.replace( /\/$/, '' ) === sourcePath ) {
+	} else if ( sameHttpSite( url, sourceUrl ) && sourcePath && pathname.replace( /\/$/, '' ) === sourcePath ) {
 		pathname = '/';
 	}
 	const cleanPath = pathname.replace( /^\/+|\/+$/g, '' );
@@ -105,7 +99,7 @@ export function allocateCaptureRoutes<T extends RouteEntry>(
 	const naturalRoutePath = ( url: string ) => routeOutputPath( url, sourceUrl, entrypointUrl, originRootCaptured ).replace( /\\/g, '/' );
 	const allocatedPaths = new Map< string, string >();
 	const reservedPaths = new Set( capturedEntries.map( ( entry ) => naturalRoutePath( entry.url ) ) );
-	// Match query-bearing or fragment-bearing captured URLs to their directory document.
+	// Fragments share a document; query strings can identify distinct content.
 	const entriesByNormalizedUrl = new Map( capturedEntries.map( ( entry ) => [ normalizedUrl( entry.url ), entry ] ) );
 	const contentAliasPartners = new Map< string, string >();
 	// A directory and default document may be distinct; reserve natural paths before suffixing.
@@ -113,7 +107,13 @@ export function allocateCaptureRoutes<T extends RouteEntry>(
 		const url = new URL( entry.url );
 		if ( url.search || url.hash || ! url.pathname.endsWith( '/index.html' ) ) continue;
 		const directoryUrl = new URL( './', url ).href;
-		const directory = entriesByNormalizedUrl.get( normalizedUrl( directoryUrl ) );
+		const directoryCandidates = capturedEntries.filter( ( candidate ) => {
+			const address = new URL( candidate.url );
+			address.search = '';
+			return normalizedUrl( address.href ) === normalizedUrl( directoryUrl );
+		} );
+		const directory = entriesByNormalizedUrl.get( normalizedUrl( directoryUrl ) )
+			?? ( directoryCandidates.length === 1 ? directoryCandidates[ 0 ] : undefined );
 		const path = naturalRoutePath( entry.url );
 		if ( ! directory || naturalRoutePath( directoryUrl ) !== path ) continue;
 		if ( declaresCanonicalRoute( entry, directory ) || declaresCanonicalRoute( directory, entry ) ) continue;
@@ -134,6 +134,49 @@ export function allocateCaptureRoutes<T extends RouteEntry>(
 		allocatedPaths.set( displaced.url, allocated );
 	}
 	const routePathOf = ( url: string ) => allocatedPaths.get( url ) ?? naturalRoutePath( url );
+	const pathGroups = new Map< string, T[] >();
+	for ( const entry of capturedEntries ) {
+		const path = routePathOf( entry.url );
+		const group = pathGroups.get( path ) ?? [];
+		group.push( entry );
+		pathGroups.set( path, group );
+	}
+	for ( const [ path, group ] of pathGroups ) {
+		if ( group.length < 2 ) continue;
+		const sorted = [ ...group ].sort( ( left, right ) => left.url.localeCompare( right.url ) );
+		// Form proven alias groups before assigning filenames, including aliases
+		// of a query rendition rather than just aliases of the base document.
+		const clusters: T[][] = [];
+		for ( const entry of sorted ) {
+			const matching = clusters.filter( cluster => cluster.some( member =>
+				declaresCanonicalRoute( entry, member ) || declaresCanonicalRoute( member, entry ) ||
+				contentAliasPartners.get( entry.url ) === member.url ) );
+			const cluster = [ entry, ...matching.flat() ];
+			for ( const matched of matching ) clusters.splice( clusters.indexOf( matched ), 1 );
+			clusters.push( cluster );
+		}
+		const representatives = clusters.map( cluster => cluster.find( entry => entry.url === entrypointUrl )
+			?? cluster.find( entry => ! new URL( entry.url ).search )
+			?? cluster.find( entry => cluster.some( alias => alias.canonicalUrl && normalizedUrl( alias.canonicalUrl ) === normalizedUrl( entry.url ) ) )
+			?? cluster[ 0 ] );
+		const preferred = representatives.find( entry => entry.url === entrypointUrl )
+			?? representatives.find( entry => ! new URL( entry.url ).search ) ?? representatives[ 0 ];
+		let suffix = 1;
+		for ( const [ index, entry ] of representatives.entries() ) {
+			if ( entry === preferred || ( ! new URL( entry.url ).search && ! new URL( preferred.url ).search ) ) continue;
+			if ( [ ...reservedPaths ].some( reserved => path.startsWith( `${ reserved }/` ) ) )
+				throw new Error( `Captured route needs a directory already claimed by a file: ${ path }` );
+			const extension = extname( path );
+			const stem = extension ? path.slice( 0, -extension.length ) : path;
+			let allocated: string;
+			do {
+				allocated = `${ stem }-query-${ suffix++ }${ extension }`;
+			} while ( [ ...reservedPaths ].some( reserved => reserved === allocated ||
+				reserved.startsWith( `${ allocated }/` ) || allocated.startsWith( `${ reserved }/` ) ) );
+			reservedPaths.add( allocated );
+			for ( const alias of clusters[ index ] ) allocatedPaths.set( alias.url, allocated );
+		}
+	}
 	const retainedEntries: T[] = [];
 	const duplicateRoutes: RouteStage<T>[ 'duplicateRoutes' ] = [];
 	const canonicalRouteAliases = new Map< string, string >();
@@ -141,7 +184,8 @@ export function allocateCaptureRoutes<T extends RouteEntry>(
 	const claimedRoutes = new Map< string, T >();
 	for ( const entry of [
 		...capturedEntries.filter( ( { url } ) => url === entrypointUrl ),
-		...capturedEntries.filter( ( { url } ) => url !== entrypointUrl ),
+		...capturedEntries.filter( ( { url } ) => url !== entrypointUrl ).sort( ( left, right ) =>
+			Number( !! new URL( left.url ).search ) - Number( !! new URL( right.url ).search ) ),
 	] ) {
 		const routePath = routePathOf( entry.url );
 		const claimed = claimedRoutes.get( routePath );
@@ -150,7 +194,7 @@ export function allocateCaptureRoutes<T extends RouteEntry>(
 			retainedEntries.push( entry );
 			continue;
 		}
-		if ( ! declaresCanonicalRoute( entry, claimed ) && contentAliasPartners.get( entry.url ) !== claimed.url )
+		if ( ! declaresCanonicalRoute( entry, claimed ) && ! declaresCanonicalRoute( claimed, entry ) && contentAliasPartners.get( entry.url ) !== claimed.url )
 			throw new Error( `Captured routes resolve to the same website path: ${ routePath }` );
 		if ( entry.jsonLd.length > 0 ) duplicateJsonLd.push( { claimed, jsonLd: entry.jsonLd } );
 		duplicateRoutes.push( { url: entry.url, canonicalUrl: claimed.url, path: `website/${ routePath }` } );
@@ -169,7 +213,8 @@ export function allocateCaptureRoutes<T extends RouteEntry>(
 		canonicalRouteAliases.set( normalizedUrl( url ), routePath );
 		const from = publicPathname( url );
 		const to = `/${ routePath }`;
-		if ( from && from !== to ) portableRedirects.push( { from, to } );
+		// Path-only static redirect rules cannot distinguish query renditions.
+		if ( ! new URL( url ).search && from && from !== to ) portableRedirects.push( { from, to } );
 	}
 	return { entrypointUrl, entrypointEntry: entrypointCandidates[ 0 ], routePathOf, retainedEntries, duplicateRoutes, canonicalRouteAliases, portableRedirects, missingRedirectTargets, duplicateJsonLd };
 }

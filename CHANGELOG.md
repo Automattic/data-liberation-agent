@@ -15,6 +15,382 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.19.7] - 2026-10-06
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- recover orphan CSS priority fragments
+
+## [0.19.6] - 2026-10-06
+
+### Changed
+- regenerate plugin bundles
+- isolate shared stylesheet materialization
+
+### Fixed
+- preserve linked PDFs as portable assets
+- preserve dropdown ancestor state and source flow placement
+- follow bounded candidate-local redirects
+
+## [0.19.5] - 2026-10-06
+
+### Changed
+- regenerate plugin bundles
+- Store shared chrome once in the canonical site tree
+- isolate portable media materialization
+
+## [0.19.4] - 2026-10-06
+
+### Changed
+- await source resize fixture transitions
+
+## [0.19.3] - 2026-10-06
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- learn and preserve mobile fluid geometry
+- resolve resources against rendered document base
+
+## [0.19.2] - 2026-10-06
+
+### Changed
+- regenerate plugin bundles
+- isolate capture evidence projection
+
+## [0.19.1] - 2026-10-06
+
+### Changed
+- regenerate plugin bundles
+- complete browser doubles for native timeline probes
+- isolate portable resource materialization
+
+### Fixed
+- preserve resting navigation and existing panel identity
+- normalize portable document relation links
+- preserve native view timeline motion and responsive ranges
+- recognize same-site protocol redirects
+- follow extensionless sitemap index children
+
+## [0.19.0] - 2026-10-06
+
+### Added
+- orchestrate opt-in HTTP review capture
+
+### Changed
+- regenerate plugin bundles
+
+## [0.18.7] - 2026-10-06
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- probe header navigation buttons for the link panels they reveal
+
+## [0.18.6] - 2026-10-05
+
+### Changed
+- regenerate plugin bundles
+- prepare stable portable replacements once
+
+## [0.18.5] - 2026-10-05
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- preserve viewport-triggered transition entrances
+
+## [0.18.4] - 2026-10-05
+
+### Changed
+- regenerate plugin bundles
+- share srcset tokenization across capture and export
+
+### Fixed
+- use local images inside captured interaction states
+- capture the region of exclusive aria-pressed segmented controls
+- preserve distinct query route documents
+
+## [0.18.3] - 2026-10-05
+
+### Changed
+- regenerate plugin bundles
+- collect retained media references once
+
+### Fixed
+- capture every panel of ARIA tablists that select on mousedown
+- probe plain action buttons for the dialogs they open
+- give selectable-set probing a 30s drive budget
+
+## [0.18.2] - 2026-10-05
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- capture and replay coherent mobile viewport evidence
+
+## [0.18.1] - 2026-10-04
+
+### Changed
+- regenerate plugin bundles
+- reuse planned media content hashes
+- publish website and sidecars with recovery
+
+## [0.18.0] - 2026-10-04
+
+### Added
+- capture finite bootstrap-backed collections
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- replay populated disclosures with observed ancestor concealment
+
+## [0.17.2] - 2026-10-03
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- reconcile named aliases in single documents
+
+## [0.17.1] - 2026-10-02
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- honor receipt-proven source route aliases
+
+## [0.17.0] - 2026-10-02
+
+### Added
+- add HTTP acquisition and observed child export
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- observe clipped offstage text and baseline pose
+
+## [0.16.6] - 2026-10-02
+
+### Changed
+- regenerate plugin bundles
+- Preserve learned slide transforms through responsive counterpart assembly
+
+### Fixed
+- strip app builder acquisition chrome
+
+## [0.16.5] - 2026-10-02
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- preserve authored dialog trigger layout and interaction
+
+## [0.16.4] - 2026-10-02
+
+### Changed
+- regenerate plugin bundles
+- plan portable media selection once
+
+## [0.16.3] - 2026-10-02
+
+### Changed
+- regenerate plugin bundles
+- bind responsive HTML and evidence to one assembly
+
+### Fixed
+- exclude clipped accessible-only text metrics
+- preserve coherent responsive source baselines
+
+## [0.16.2] - 2026-10-02
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- interpret CSS dependency URLs and empty stylesheets correctly
+
+## [0.16.1] - 2026-10-02
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- preserve body-class-gated mobile documents
+
+## [0.16.0] - 2026-10-01
+
+### Added
+- add a narrow Next.js platform adapter
+
+### Changed
+- regenerate plugin bundles
+- Preserve semantic headers containing nested consent notices
+
+### Fixed
+- normalize responsive named-anchor aliases
+
+## [0.15.0] - 2026-10-01
+
+### Added
+- preserve portable native branding evidence
+
+## [0.14.0] - 2026-10-01
+
+### Added
+- preserve portable native branding evidence
+
+### Changed
+- regenerate plugin bundles
+
+## [0.13.5] - 2026-10-01
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- replay frozen source pixel density and browser identity
+
+## [0.13.4] - 2026-10-01
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- preserve fractional constant typography
+
+## [0.13.3] - 2026-10-01
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- reuse capture route identity for frozen readiness
+
+## [0.13.2] - 2026-10-01
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- inspect unscheduled source links for outbound redirects
+- preserve adjacent text shaping boundaries
+
+## [0.13.1] - 2026-10-01
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- match exact image resources before perceptual hashes
+- preserve responsive disclosure layout participation
+- settle painted font stacks before freezing evidence
+
+## [0.13.0] - 2026-10-01
+
+### Added
+- render a portable homepage preview
+
+### Changed
+- regenerate plugin bundles
+- stop lazy sweeps at the reachable scroll bottom
+
+### Fixed
+- disambiguate authored responsive fragment targets
+- preserve resting disclosures and painted text
+
+## [0.12.0] - 2026-09-30
+
+### Added
+- verify and replay local collection search
+
+### Changed
+- regenerate plugin bundles
+
+## [0.11.0] - 2026-09-30
+
+### Added
+- expose owned capture preview server
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- hydrate locally mounted disclosure panels
+- cook data-liberation-agent
+
+## [0.10.0] - 2026-09-30
+
+### Added
+- freeze capture-session references and compare adjacent stages
+
+### Changed
+- regenerate plugin bundles
+
+## [0.9.0] - 2026-09-30
+
+### Added
+- learn editable motion, sandbox source canvas code, and promote after live verification
+
+### Changed
+- regenerate plugin bundles
+
+## [0.8.11] - 2026-09-30
+
+### Changed
+- regenerate plugin bundles
+- classify native disclosures and passive link wrappers before probing
+
+## [0.8.10] - 2026-09-30
+
+### Changed
+- regenerate plugin bundles
+- Let layered author CSS win over converted-trigger base styles
+- Stop blaming the copy for the source page's exit beacons
+- Keep article prose out of credit-text cleanup
+- Add Substack platform detection and capture cleanup
+
+## [0.8.9] - 2026-09-30
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- project mobile inline styles in equivalent documents
+
+## [0.8.8] - 2026-09-29
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- verify editable route-tab links with painted labels
+
+## [0.8.7] - 2026-09-29
+
+### Changed
+- regenerate plugin bundles
+- avoid fluid sweeps for blank editorial formatting
+
+## [0.8.6] - 2026-09-29
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- snapshot baseline before interaction probes
+
 ## [0.8.5] - 2026-09-29
 
 ### Changed

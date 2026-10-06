@@ -9,6 +9,7 @@
 // the contract without pulling in adapter internals.
 import type { LiberationHooks } from '../adapters/page-actions.js';
 import type { CapabilityRule } from '../lib/inspect-rendered.js';
+import type { HttpAcquisitionProfile } from './acquisition.js';
 
 /** URL substring/regex tested against the normalized site URL. */
 export type PlatformUrlSignal = RegExp;
@@ -80,6 +81,8 @@ export interface Platform {
 	discover( url: string, opts: Record< string, unknown > ): Promise< unknown >;
 	/** Optional platform-specific hooks applied while liberating each page. */
 	liberation?: LiberationHooks;
+	/** Optional server-document acquisition profile; rendered fidelity remains separate. */
+	acquisition?: HttpAcquisitionProfile;
 	/** Read-only selectors identifying platform-owned application surfaces. */
 	inspection?: CapabilityRule[];
 }

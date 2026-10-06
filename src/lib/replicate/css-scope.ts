@@ -24,18 +24,31 @@ function errorOffset(css: string, line: number, column: number): number {
   return offset + column - 1;
 }
 
-function parseCss(css: string) {
+/** Parse captured CSS, recovering only proven browser-ignored fragments. */
+export function parseCss(css: string) {
   let recovered = css;
   for (;;) {
     try {
       return postcss.parse(recovered);
     } catch (error) {
-      if (!(error instanceof CssSyntaxError) || !/^Unknown word [)\]]$/.test(error.reason))
-        throw error;
+      if (!(error instanceof CssSyntaxError)) throw error;
       if (error.line === undefined || error.column === undefined) throw error;
       const offset = errorOffset(recovered, error.line, error.column);
-      if (offset < 0 || !/[)\]]/.test(recovered[offset])) throw error;
-      recovered = recovered.slice(0, offset) + recovered.slice(offset + 1);
+      if (offset < 0) throw error;
+      let length: number;
+      if (/^Unknown word [)\]]$/.test(error.reason) && /[)\]]/.test(recovered[offset])) {
+        length = 1;
+      } else if (/^Unknown word !important$/i.test(error.reason)
+        && /[;{]\s*$/.test(recovered.slice(0, offset))
+        && /^!important\s*(?=[;}])/i.test(recovered.slice(offset))) {
+        // A priority token after a declaration boundary is not a declaration.
+        // Browsers discard this orphan but keep adjacent valid declarations.
+        // Require the whole fragment: never strip a declaration's valid priority.
+        length = '!important'.length;
+      } else {
+        throw error;
+      }
+      recovered = recovered.slice(0, offset) + recovered.slice(offset + length);
     }
   }
 }

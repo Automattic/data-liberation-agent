@@ -1,5 +1,6 @@
 import type { Page } from 'playwright';
 import type { CapturedDialogInteraction } from './interaction-capture.js';
+import { hydrateDisclosureContent } from './dynamic-content.js';
 
 export const SELECTABLE_SET_KIND = 'selectable-set' as const;
 export const CHOICE_GROUP_KIND = 'choice-group' as const;
@@ -7,7 +8,7 @@ export const CHOICE_GROUP_KIND = 'choice-group' as const;
 export const SELECTABLE_SET_LIMITS = {
 	maxSets: 3,
 	maxMembers: 24,
-	maxDriveMs: 16_000,
+	maxDriveMs: 30_000,
 	maxHtmlBytes: 512 * 1024,
 	settleMs: 500,
 	maxCandidateScan: 1_500,
@@ -56,6 +57,7 @@ interface RawSelectableRecord {
 		coverage: 'complete' | 'partial';
 	};
 	error?: string;
+	restoreSelector?: string;
 }
 
 /**
@@ -115,7 +117,7 @@ export async function captureSelectableSetStates(
 						? globalThis.CSS.escape( value )
 						: value.replace( /[^a-zA-Z0-9_-]/g, '\\$&' );
 				const sourceSelector = ( element: Element ): string => {
-					if ( element.id ) return `#${ cssEscape( element.id ) }`;
+					if ( element.id && document.querySelectorAll( `#${ cssEscape( element.id ) }` ).length === 1 ) return `#${ cssEscape( element.id ) }`;
 					const parts: string[] = [];
 					for (
 						let node: Element | null = element;
@@ -184,6 +186,8 @@ export async function captureSelectableSetStates(
 					return Boolean( anchor && anchor !== element && isNavigable( anchor ) );
 				};
 				const isDisclosureTrigger = ( element: Element ) => {
+					if ( element.tagName === 'SUMMARY' && element.parentElement?.tagName === 'DETAILS' &&
+						element.parentElement.querySelector( ':scope > summary' ) === element ) return true;
 					if ( ! element.hasAttribute( 'aria-expanded' ) || ! element.hasAttribute( 'aria-controls' ) ) {
 						return false;
 					}
@@ -202,6 +206,11 @@ export async function captureSelectableSetStates(
 					if ( isInsideNavigable( element ) ) return false;
 					if ( element.hasAttribute( 'aria-haspopup' ) ) return false;
 					if ( isDisclosureTrigger( element ) ) return false;
+					// A composite widget (a tablist, radiogroup, ...) is the group of
+					// its members, never a member itself. Roving-focus runtimes give it
+					// tabindex="0", which would otherwise make it a selectable that
+					// outermost-wins then prefers over every member it contains.
+					if ( isExplicitContainer( element ) ) return false;
 					// Cursor is inherited by a control's icon/label. Excluding the
 					// popup/disclosure trigger itself must also exclude its descendants:
 					// clicking them bubbles to the same control, not an independent set.
@@ -238,7 +247,16 @@ export async function captureSelectableSetStates(
 						return true;
 					}
 					if ( ( element as HTMLElement ).tabIndex >= 0 && tag !== 'a' ) return true;
-					return getComputedStyle( element ).cursor === 'pointer';
+					if ( getComputedStyle( element ).cursor !== 'pointer' ) return false;
+					// A passive pointer wrapper around one link is navigation, just like
+					// a pointer descendant inside that link. Explicit selectable semantics
+					// above still win; mixed controls/content remain probe candidates.
+					const links = Array.from( element.querySelectorAll( 'a[href]' ) );
+					if ( links.length === 1 && isNavigable( links[ 0 ]! ) &&
+						textOf( element ) === textOf( links[ 0 ]! ) &&
+						! element.querySelector( 'button,input,select,textarea,[role],[tabindex],[aria-selected],[aria-pressed],[onclick]' ) &&
+						! element.hasAttribute( 'onclick' ) ) return false;
+					return true;
 				};
 				const signature = ( element: Element ) =>
 					`${ element.tagName.toLowerCase() }|${ ( element.getAttribute( 'role' ) || '' ).toLowerCase() }`;
@@ -334,6 +352,16 @@ export async function captureSelectableSetStates(
 					}
 					return out;
 				};
+				/**
+				 * An ARIA tab owns its panel through `aria-controls`. Runtimes that mount
+				 * only the active panel leave the previous one empty, so the region that
+				 * varies is the controlled panel, not the element observed initially.
+				 */
+				const controlledPanel = ( member: Element ): Element | null => {
+					const id = ( member.getAttribute( 'aria-controls' ) || '' ).split( /\s+/ )[ 0 ] || '';
+					const panel = id ? document.getElementById( id ) : null;
+					return panel && panel.getAttribute( 'role' ) === 'tabpanel' && ! panel.contains( member ) ? panel : null;
+				};
 				const currentRoute = () => `${ location.pathname }${ location.search }`;
 				/**
 				 * A probe click must not leave the page. A committed navigation destroys
@@ -364,6 +392,15 @@ export async function captureSelectableSetStates(
 					document.addEventListener( 'click', preventNavigation );
 					document.addEventListener( 'submit', preventNavigation );
 					try {
+						if ( element instanceof HTMLElement ) element.scrollIntoView( { block: 'center', inline: 'center' } );
+						// Tab runtimes commonly select on mousedown rather than click, so a
+						// bare click() leaves their panels untouched.
+						if ( ( element.getAttribute( 'role' ) || '' ).toLowerCase() === 'tab' ) {
+							for ( const type of [ 'pointerdown', 'mousedown', 'pointerup', 'mouseup' ] ) {
+								const init = { bubbles: true, cancelable: true, composed: true, view: window, button: 0 };
+								element.dispatchEvent( type.startsWith( 'pointer' ) ? new PointerEvent( type, init ) : new MouseEvent( type, init ) );
+							}
+						}
 						const click = ( element as HTMLElement ).click;
 						if ( typeof click === 'function' ) {
 							click.call( element );
@@ -534,6 +571,7 @@ export async function captureSelectableSetStates(
 				let capturedSets = 0;
 				let probedGroups = 0;
 				for ( const group of groups ) {
+					const original = selectedMember(group.members);
 					if ( capturedSets >= limits.maxSets ) break;
 					if ( probedGroups >= limits.maxProbeGroups ) break;
 					probedGroups++;
@@ -552,6 +590,7 @@ export async function captureSelectableSetStates(
 							status,
 							trigger: describeTrigger( group.members[ index ] ?? group.members[ 0 ] ),
 							set: setRecord( index ),
+							...(original ? { restoreSelector: sourceSelector(original) } : {}),
 							...extra,
 						} );
 					};
@@ -579,8 +618,10 @@ export async function captureSelectableSetStates(
 					let restorationIndex: number | undefined;
 					const restoreChoiceGroup = async (): Promise< boolean > => {
 						const sameChoiceState = ( actual: string, expected: string ) => {
+							// Roving-focus runtimes move tabindex with focus, which an
+							// activation cannot undo; selection state is what restores.
 							const normalize = ( html: string ) =>
-								html.replace( / style="([^"]*)"/g, ( _, value: string ) =>
+								html.replace( / tabindex="[^"]*"/g, '' ).replace( / style="([^"]*)"/g, ( _, value: string ) =>
 									` style="${ value.replace( /\s*([:;,])\s*/g, '$1' ).replace( /;$/, '' ) }"`
 								);
 							return normalize( actual ) === normalize( expected );
@@ -637,6 +678,14 @@ export async function captureSelectableSetStates(
 							}
 							continue;
 						}
+						// Re-activating the selected member is not expected to change anything,
+						// so it must not burn the observation window.
+						const observationDeadline = observedSelection( group.members[ index ]! ) === true && initialSelected[ index ] === true
+							? 0
+							: Date.now() + Math.min( 2_500, Math.max( limits.settleMs * 4, 1_200 ) );
+						while ( Date.now() < observationDeadline && Date.now() < deadline && candidates.every( ( candidate, candidateIndex ) => fingerprint( candidate ) === initialFp[ candidateIndex ] ) ) {
+							await wait( 100 );
+						}
 						observations.push( {
 							fps: candidates.map( fingerprint ),
 							texts: candidates.map( textOf ),
@@ -672,10 +721,23 @@ export async function captureSelectableSetStates(
 					const sameMemberParent = group.members.every(
 						( member ) => member.parentElement === group.members[ 0 ]?.parentElement
 					);
+					// A segmented control keeps exactly one member pressed before and after
+					// every probe; its pressed state is a view switch, so a varying region
+					// is its content. Independent toggles (none or several pressed) are not.
+					const pressedCount = ( selected: Array< boolean | null > ) => selected.filter( ( value ) => value === true ).length;
+					const exclusivePressed =
+						toggleGroup &&
+						observations.length > 0 &&
+						pressedCount( initialSelected ) === 1 &&
+						observations.every( ( observation ) => pressedCount( observation.selected ) === 1 );
 					const shouldCaptureChoice = Boolean(
 						choiceGroupChanged &&
 						sameMemberParent &&
-						( regionIdx < 0 || toggleGroup || choiceMetadata?.group.label )
+						// A labeled tablist may itself update selection attributes while
+						// also driving a distinct outside content region. Prefer the
+						// content evidence when both change; the choice-group snapshot
+						// alone cannot represent that collection transition.
+						( regionIdx < 0 || ( toggleGroup && ! exclusivePressed ) )
 					);
 					if ( shouldCaptureChoice ) {
 						const drivenCount = Math.min( group.members.length, limits.maxMembers );
@@ -789,7 +851,6 @@ export async function captureSelectableSetStates(
 
 					const region = candidates[ regionIdx ];
 					region.setAttribute( 'data-lib-selectable-region', 'true' );
-					const original = selectedMember( group.members );
 					const drivenCount = Math.min( group.members.length, limits.maxMembers );
 
 					for ( let index = 0; index < drivenCount && Date.now() < deadline; index++ ) {
@@ -810,9 +871,16 @@ export async function captureSelectableSetStates(
 							}
 							continue;
 						}
-						const afterRegion =
-							document.querySelector( '[data-lib-selectable-region]' ) ?? liveRegion;
-						const after = fingerprint( afterRegion );
+						const resolveRegion = () =>
+							controlledPanel( member ) ?? document.querySelector( '[data-lib-selectable-region]' ) ?? liveRegion;
+						let afterRegion = resolveRegion();
+						let after = fingerprint( afterRegion );
+						const changeDeadline = Date.now() + Math.min( 2_500, Math.max( limits.settleMs * 4, 1_200 ) );
+						while ( after === before && ! wasSelected && Date.now() < changeDeadline && Date.now() < deadline ) {
+							await wait( 100 );
+							afterRegion = resolveRegion();
+							after = fingerprint( afterRegion );
+						}
 						if ( after === before && ! wasSelected ) {
 							pushOutcome( 'no-dialog', index, {
 								region: describeRegion( afterRegion ),
@@ -821,7 +889,12 @@ export async function captureSelectableSetStates(
 							continue;
 						}
 						pushOutcome( 'captured', index, {
-							region: describeRegion( afterRegion, snapshotHtml( afterRegion ) ),
+							// A controlled panel is a different element per member; the shared
+							// region stays the one the set was confirmed against.
+							region: describeRegion(
+								controlledPanel( member ) ? region : afterRegion,
+								snapshotHtml( afterRegion )
+							),
 						} );
 					}
 
@@ -861,6 +934,44 @@ export async function captureSelectableSetStates(
 		];
 	}
 
+	// Rebuilt category subtrees need their own observed answers. Matching a
+	// duplicate question label to an answer from another state is ambiguous.
+	// Re-drive only confirmed states containing unassociated disclosure controls.
+	const deadline = Date.now() + maxDriveMs;
+	const restores = new Set<string>();
+	try {
+		for (const record of raw) {
+			if (record.status !== 'captured' || record.choiceGroup || !record.region?.html || !record.region.html.includes('aria-expanded="false"')) continue;
+			if (Date.now() >= deadline) break;
+			if (record.restoreSelector) restores.add(record.restoreSelector);
+			try {
+				const questions = [...record.region.html.matchAll(/<h[1-6][^>]*>(.*?)<\/h[1-6]>/g)].map(match => match[1].replace(/<[^>]+>/g, '').trim()).filter(Boolean).slice(0, 3);
+				await page.locator(record.trigger.selector).first().evaluate((element: HTMLElement) => element.click());
+				await page.waitForTimeout(settleMs);
+				const selected = await page.locator(record.trigger.selector).first().evaluate(element => element.getAttribute('aria-selected') ?? element.getAttribute('aria-pressed')).catch(() => null);
+				const local = page.locator(record.region.selector).first();
+				const regionText = await local.innerText().catch(() => '');
+				if (selected === 'false' || (questions.length && !questions.some(question => regionText.includes(question)))) continue;
+				if (!await local.locator('[aria-expanded="false"]:not([aria-haspopup])').count()) continue;
+				await hydrateDisclosureContent(page, record.region.selector);
+				record.region.html = await local.evaluate(element => {
+				const clone = element.cloneNode(true) as Element;
+				clone.querySelectorAll('script,style,noscript,iframe').forEach(node => node.remove());
+				for (const node of [clone, ...Array.from(clone.querySelectorAll('*'))]) {
+					for (const attribute of Array.from(node.attributes)) if (/^on/i.test(attribute.name) || attribute.name.startsWith('data-lib-selectable')) node.removeAttribute(attribute.name);
+				}
+				return clone.outerHTML;
+				});
+			} catch (error) {
+				record.error = `Disclosure hydration failed: ${error instanceof Error ? error.message : String(error)}`.slice(0, 500);
+			}
+		}
+	} finally {
+		for (const selector of restores) {
+			await page.locator(selector).first().evaluate((element: HTMLElement) => element.click()).catch(() => undefined);
+			await page.waitForTimeout(settleMs);
+		}
+	}
 	return raw.map( ( record ) => toInteraction( record, maxHtmlBytes ) );
 }
 

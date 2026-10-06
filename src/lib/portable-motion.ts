@@ -27,8 +27,16 @@ export interface PortableMotionRecipe {
 
 export interface PortableMotionReceipt {
 	schema: typeof PORTABLE_MOTION_SCHEMA;
+	/** `learned` receipts are inferred from source observation; `authored` come from a recipe. */
+	origin?: 'authored' | 'learned';
 	contract: MotionContract;
-	routes: Record< string, { scripts: Array< { path: string; sha256: string } > } >;
+	routes: Record< string, {
+		scripts: Array< { path: string; sha256: string } >;
+		/** Source scripts run inside the canvas sandbox, identified by their captured bytes. */
+		sandboxedSource?: Array< { url: string; sha256: string } >;
+	} >;
+	/** Observed source behavior the portable runtime does not reproduce, per route. */
+	unsupported?: Record< string, Array< { selector?: string; reason: string } > >;
 }
 
 const sha = ( source: string | Buffer ) => createHash( 'sha256' ).update( source ).digest( 'hex' );
@@ -75,7 +83,7 @@ export async function authorPortableMotion( directory: string, recipe: PortableM
 	let server: Awaited< ReturnType< typeof startStaticServer > > | null = null;
 	try {
 		cpSync( websiteDir, stage, { recursive: true, force: true } );
-		const receipt: PortableMotionReceipt = { schema: PORTABLE_MOTION_SCHEMA, contract: recipe.contract, routes: {} };
+		const receipt: PortableMotionReceipt = { schema: PORTABLE_MOTION_SCHEMA, origin: 'authored', contract: recipe.contract, routes: {} };
 		for ( const [ route, authored ] of Object.entries( recipe.routes ) ) {
 			if ( ! recipe.contract.routes[ route ] || ! /^(?:\/|\/[a-z0-9-]+(?:\/[a-z0-9-]+)*\/?)$/i.test( route ) || ! authored ||
 				! Array.isArray( authored.elements ) || ! Array.isArray( authored.markers ) || ! Array.isArray( authored.scripts ) ||
@@ -130,7 +138,7 @@ export async function authorPortableMotion( directory: string, recipe: PortableM
 		const offline = checkSelfConsistency( stage, routes );
 		if ( ! offline.pass ) throw new Error( `Authored portable site fails offline checks: ${ offline.findings.map( ( finding ) => finding.detail ).join( '; ' ) }` );
 		server = await startStaticServer( stage );
-		const report = await checkFidelity( { directory: root, candidateUrl: server.url, motionContract: recipe.contract, widths: recipe.contract.widths } );
+		const report = await checkFidelity( { stage: 'drift', directory: root, candidateUrl: server.url, motionContract: recipe.contract, widths: recipe.contract.widths } );
 		if ( ! report.pass ) throw new Error( `Portable motion did not reproduce the source: ${ report.scores.flatMap( ( score ) => score.failures ).join( '; ' ) }; ${ report.motionEvidence?.flatMap( ( row ) => row.failures ).join( '; ' ) }` );
 		// Successful browser proof precedes every change to the public website.
 		cpSync( stage, websiteDir, { recursive: true, force: true } );

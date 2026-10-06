@@ -7,7 +7,8 @@ import { cleanupPolicy, applySourceCleanup, readSourceCleanup, sweepSourceCleanu
 import { capture as wixCapture } from '../adapters/wix/capture.js';
 import { captureScreenshots } from './screenshot/screenshotter.js';
 import { exportWebsiteCapture } from './capture-export.js';
-import { checkFidelity } from './fidelity/check.js';
+import { checkFidelity as checkLiveFidelity } from './fidelity/check.js';
+const checkFidelity = ( options: Parameters<typeof checkLiveFidelity>[0] ) => checkLiveFidelity( { ...options, stage: 'drift' } );
 
 let server: Server | undefined;
 let directory: string | undefined;
@@ -408,6 +409,71 @@ it('removes an unknown builder badge from its authoring offer and vendor provena
   } finally { await browser.close(); }
 }, 30_000);
 
+// The wordmark CDN is unrelated to the brand; the promotional link proves provenance.
+const builderBarHtml = `<!doctype html><html><head><meta charset="utf-8"><title>Owner travel journal</title><style>
+body{margin:0;font:16px Arial}
+main{padding:20px}
+</style></head><body>
+<div id="owner-shell" style="position:fixed;inset:0;overflow:auto;z-index:99990">
+  <p>We built it ourselves. I built my app for free using
+  <a href="https://www.framecraft.example/editor">Framecraft</a>
+  <img src="https://cdn.example/mark.png" alt="Framecraft">
+  ${'Real owner content to retain. '.repeat(12)}</p>
+</div>
+<main id="content"><h1>Owner travel journal</h1>
+  <p>Plan your next journey.</p>
+  <p>${'Real owner content to retain. '.repeat(30)}</p>
+</main>
+<footer><p>© Owner travel journal. All rights reserved.</p></footer>
+<div id="platform-bar" style="position:fixed;left:0;right:0;bottom:0;height:64px;display:flex;align-items:center;background:#0583F2;color:#fff;z-index:999999">
+  <button type="button" aria-label="Close"><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 2.5l7 7m0-7l-7 7"/></svg></button>
+  <a rel="nofollow" target="_blank" href="https://www.framecraft.example/?utm_source=user-app&amp;utm_medium=powered-by-ad">
+    <span>I BUILT MY APP FOR FREE USING</span>
+    <img src="https://cdn.example/wordmark.png" alt="Framecraft" style="height:21px;width:auto;vertical-align:middle;">
+    <span>CREATE YOUR APP</span>
+  </a>
+  <button type="button" aria-label="Report Abuse"><span>Report Abuse</span><span aria-hidden="true">Report Abuse</span></button>
+</div>
+<div id="owner-cta" style="position:fixed;left:16px;bottom:80px;background:#000;color:#fff;padding:8px 12px">
+  <a href="https://calendly.com/owner/consult">Book a consultation</a>
+</div>
+<div id="owner-tool" style="position:fixed;left:200px;bottom:80px;background:#000;color:#fff;padding:8px 12px">
+  <a href="https://app.localtest.me/editor"><img src="https://app.localtest.me/mark.png" alt="Localtest"> Edit with Localtest</a>
+</div>
+<div id="owner-partner">Built with Framecraft <img src="https://cdn.example/partner-mark.png" alt="Framecraft"></div>
+</body></html>`;
+
+it('removes the split-wordmark acquisition bar at every viewport, keeping owner sections and authored chrome', async () => {
+  server = createServer((_req, res) => { res.setHeader('content-type', 'text/html'); res.end(builderBarHtml); });
+  await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve));
+  const url = `http://localtest.me:${(server.address() as { port: number }).port}/`;
+  const browser = await chromium.launch();
+  try {
+    for (const width of [390, 768, 1440]) {
+      const page = await browser.newPage({ viewport: { width, height: 900 } });
+      await page.goto(url);
+      const report = await applySourceCleanup(page, cleanupPolicy());
+      expect(await page.locator('#platform-bar').count()).toBe(0);
+      const body = await page.locator('body').innerText();
+      expect(body).not.toContain('I BUILT MY APP FOR FREE USING');
+      expect(body).not.toContain('CREATE YOUR APP');
+      expect(body).not.toContain('Report Abuse');
+      const content = await page.locator('main').innerText();
+      expect(content).toContain('Owner travel journal');
+      expect(content).toContain('Plan your next journey.');
+      expect(await page.locator('footer').innerText()).toContain('© Owner travel journal');
+      for (const id of ['#owner-shell', '#owner-cta', '#owner-tool', '#owner-partner'])
+        expect(await page.locator(id).count()).toBe(1);
+      expect(report.failures).toEqual([]);
+      expect(report.removed).toBe(1);
+      const record = report.records.find((entry) => entry.rule === 'builder-chrome');
+      expect(record).toMatchObject({ category: 'source-attribution', selector: '#platform-bar', action: 'remove' });
+      expect(record!.text).toContain('I BUILT MY APP FOR FREE USING');
+      await page.close();
+    }
+  } finally { await browser.close(); }
+}, 30_000);
+
 it('removes a fixed trial badge and provider credit text without removing owner content', async () => {
   const browser = await chromium.launch();
   try {
@@ -428,6 +494,31 @@ it('removes a fixed trial badge and provider credit text without removing owner 
     expect(report.failures).toEqual([]);
     expect(report.records.some((record) => record.rule === 'builder-chrome')).toBe(true);
     expect(report.records.some((record) => record.rule === 'squarespace-credit-text')).toBe(true);
+  } finally { await browser.close(); }
+}, 20_000);
+
+it('keeps credit-like phrasing in article prose while removing footer credit text', async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage();
+    // The article sentence is real (demo.ghost.io/design/). Before the fix the
+    // body-scoped rule turned it into "new sites are 's friendly publication theme".
+    await page.setContent(`<!doctype html><html><body>
+      <main><article>
+        <p id="prose">By default, new sites are created with Ghost's friendly publication theme, called Casper.</p>
+        <footer id="post-footer">Powered by Ghost</footer>
+      </article>
+      <p id="main-prose">This newsletter was built with Ghost from day one.</p></main>
+      <footer id="site-footer">© 2026 Owner. Powered by Ghost</footer>
+    </body></html>`);
+    const report = await applySourceCleanup(page, cleanupPolicy([
+      { id: 'ghost-credit-text', category: 'source-attribution', selector: 'footer,[role="contentinfo"],body', creditText: 'Ghost' },
+    ]));
+    expect(await page.locator('#prose').innerText()).toBe("By default, new sites are created with Ghost's friendly publication theme, called Casper.");
+    expect(await page.locator('#main-prose').innerText()).toBe('This newsletter was built with Ghost from day one.');
+    expect(await page.locator('#site-footer').innerText()).toBe('© 2026 Owner.');
+    expect(await page.locator('#post-footer').innerText()).toBe('');
+    expect(report.failures).toEqual([]);
   } finally { await browser.close(); }
 }, 20_000);
 

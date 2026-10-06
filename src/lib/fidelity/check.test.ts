@@ -1,6 +1,6 @@
 import { cleanupPolicy } from '../source-cleanup.js';
 import { createServer } from 'node:http';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { chromium } from 'playwright';
@@ -8,14 +8,18 @@ import { PNG } from 'pngjs';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
 	canonicalRoutePath,
-	checkFidelity,
+	checkFidelity as checkLiveFidelity,
 	checkWidthsFor,
 	evidenceSlug,
 	externalRequestHost,
+	receiptCoversSourceUrl,
+	observePage,
 	resolveCheckDirectory,
 	routeSourceMap,
 } from './check.js';
 import type { LayoutObservation } from './score.js';
+// This suite exercises the retained live drift diagnostic; frozen stages have real-browser coverage in reference.test.ts.
+const checkFidelity = ( options: Parameters<typeof checkLiveFidelity>[0] ) => checkLiveFidelity( { ...options, stage: 'drift' } );
 
 // Tests that launch a real browser skip — not fail — in checkouts without
 // Playwright's Chromium (`npm install` does not download it; `npm run setup:browser` does).
@@ -48,7 +52,7 @@ const obs = ( viewport: number, extra: Partial< LayoutObservation > = {} ): Layo
 	overflow: false,
 	externalHosts: [],
 	hashTargets: [],
-	internalMissing: [],
+	internalRoutes: [],
 	dialogs: [],
 	...extra,
 } );
@@ -115,9 +119,48 @@ describe( 'routeSourceMap', () => {
 	} );
 } );
 
+describe( 'receiptCoversSourceUrl', () => {
+	const receipt = {
+		routes: [ { url: 'https://example.com/home', path: 'website/home/index.html' } ],
+		duplicateRoutes: [ {
+			url: 'https://example.com/home/',
+			canonicalUrl: 'https://example.com/home',
+			path: 'website/home/index.html',
+		} ],
+	};
+
+	it( 'accepts an exact captured URL and an explicitly receipted alias to that same file', () => {
+		expect( receiptCoversSourceUrl( receipt, 'https://example.com/home' ) ).toBe( true );
+		expect( receiptCoversSourceUrl( receipt, 'https://example.com/home/' ) ).toBe( true );
+	} );
+
+	it( 'does not infer slash aliases without matching receipt proof and file identity', () => {
+		expect( receiptCoversSourceUrl( receipt, 'https://example.com/home//nested' ) ).toBe( false );
+		expect( receiptCoversSourceUrl( { ...receipt, duplicateRoutes: [ { ...receipt.duplicateRoutes[ 0 ]!, path: 'website/other/index.html' } ] }, 'https://example.com/home/' ) ).toBe( false );
+		expect( receiptCoversSourceUrl( { ...receipt, duplicateRoutes: [] }, 'https://example.com/home/' ) ).toBe( false );
+	} );
+} );
+
 describe( 'checkWidthsFor', () => {
 	it( 'drops widths the sweep already sampled', () => {
 		expect( checkWidthsFor( [ 1440, 1600, 1920 ] ) ).toEqual( [ 1728 ] );
+	} );
+} );
+
+describe( 'observePage typography', () => {
+	it.skipIf( skipBrowserTests )( 'does not compare line metrics for a clipped accessible-only label', async () => {
+		const browser = await chromium.launch();
+		const page = await browser.newPage( { viewport: { width: 390, height: 900 } } );
+		try {
+			await page.setContent( `<!doctype html><style>
+				.visually-hidden { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(1px,1px,1px,1px); white-space:nowrap; line-height:normal; }
+			</style><header><span class="visually-hidden">Open Menu</span><p>Visible navigation label</p></header>` );
+			const observation = await observePage( page, page.url(), 390, 0, null, undefined, undefined, true );
+			expect( observation.typography?.map( ( item ) => item.key ) ).toContain( 'Visible navigation label' );
+			expect( observation.typography?.map( ( item ) => item.key ) ).not.toContain( 'Open Menu' );
+		} finally {
+			await browser.close();
+		}
 	} );
 } );
 
@@ -540,6 +583,100 @@ ${ routed ? `<script>document.addEventListener('click', (event) => {
 	} );
 } );
 
+describe.skipIf( skipBrowserTests )( 'comparison screenshot transaction', () => {
+	it( 'captures the baseline before dialog probes change scroll and visibility', async () => {
+		const html = ( scroll: boolean ) => `<!doctype html><html><head><title>Dialog baseline</title>
+			<style>body{margin:0;background:white}#top{height:900px;background:#123456}#bottom{height:2000px;background:#abcdef}</style>
+			</head><body><main><div id="top"><h1>Article</h1>
+			<button aria-haspopup="true" aria-controls="panel" onclick="document.getElementById('panel').hidden=false;${ scroll ? 'window.scrollTo(0,1500)' : '' }">Open</button>
+			<div id="panel" role="dialog" hidden>Details</div></div><div id="bottom">Footer</div></main></body></html>`;
+		const server = createServer( ( _request, response ) => {
+			response.setHeader( 'content-type', 'text/html' );
+			response.end( html( true ) );
+		} );
+		await new Promise<void>( resolve => server.listen( 0, '127.0.0.1', resolve ) );
+		const origin = `http://localtest.me:${ ( server.address() as { port: number } ).port }`;
+		const dir = liberatedRun();
+		writeFileSync( join( dir, 'website', 'index.html' ), html( false ) );
+		writeFileSync( join( dir, 'capture-receipt.json' ), JSON.stringify( {
+			source: { url: origin + '/' }, websiteRoot: 'website',
+			routes: [ { url: origin + '/', path: 'website/index.html' } ],
+		} ) );
+		try {
+			await checkFidelity( { directory: dir, widths: [ 1600 ], settleMs: 0, screenshots: true } );
+			for ( const side of [ 'source', 'liberated' ] ) {
+				const png = PNG.sync.read( readFileSync( join( dir, 'compare', 'index', '1600', `${ side }.png` ) ) );
+				const offset = ( 400 * png.width + 800 ) * 4;
+				expect( [ ...png.data.subarray( offset, offset + 3 ) ] ).toEqual( [ 0x12, 0x34, 0x56 ] );
+			}
+		} finally {
+			server.closeAllConnections();
+			await new Promise<void>( resolve => server.close( () => resolve() ) );
+		}
+	}, 90_000 );
+} );
+
+describe.skipIf( skipBrowserTests )( 'checkFidelity with a source that pings on exit', () => {
+	// Substack publications send analytics beacons when the page is left
+	// (POST /api/v1/firehose/batch to the site and to substack.com). compare
+	// measured the source and then navigated the same tab to the copy with the
+	// copy's request listener already attached, so the source's exit pings were
+	// reported as "copy requested 2 external host(s): substack.com,
+	// www.derekthompson.org" on every route of a clean copy.
+	const body = `<main><h1>A post</h1><p>${ 'Body copy that does not change. '.repeat( 20 ) }</p></main>`;
+	const html = ( extra = '' ) =>
+		`<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Post</title></head><body>${ body }${ extra }</body></html>`;
+	const exitBeacon = `<script>addEventListener('beforeunload', () => navigator.sendBeacon('/ping', 'left'));</script>`;
+
+	/** Serve a live source that beacons on exit, write `copy` (given the source origin) to disk, and compare. */
+	async function compare( copy: ( origin: string ) => string ) {
+		let pings = 0;
+		const server = createServer( ( request, response ) => {
+			if ( request.url === '/ping' || request.url === '/pixel.gif' ) {
+				if ( request.url === '/ping' ) pings++;
+				response.end();
+				return;
+			}
+			response.setHeader( 'content-type', 'text/html' );
+			response.end( html( exitBeacon ) );
+		} );
+		await new Promise< void >( ( resolve ) => server.listen( 0, '127.0.0.1', resolve ) );
+		const origin = `http://localtest.me:${ ( server.address() as { port: number } ).port }`;
+		const dir = mkdtempSync( join( tmpdir(), 'dla-check-' ) );
+		dirs.push( dir );
+		mkdirSync( join( dir, 'website' ), { recursive: true } );
+		writeFileSync( join( dir, 'website', 'index.html' ), copy( origin ) );
+		writeFileSync(
+			join( dir, 'capture-receipt.json' ),
+			JSON.stringify( {
+				source: { url: `${ origin }/` },
+				websiteRoot: 'website',
+				routes: [ { url: `${ origin }/`, path: 'website/index.html' } ],
+			} )
+		);
+		try {
+			const report = await checkFidelity( { directory: dir, widths: [ 1440 ], settleMs: 200 } );
+			const external = report.scores.flatMap( ( score ) => score.failures.filter( ( failure ) => failure.startsWith( 'copy requested' ) ) );
+			return { pings, external };
+		} finally {
+			server.closeAllConnections();
+			await new Promise< void >( ( resolve ) => server.close( () => resolve() ) );
+		}
+	}
+
+	it( 'does not blame the copy for the source page\'s exit beacons', async () => {
+		const { pings, external } = await compare( () => html() );
+		// The scenario is real: the source did send its exit beacon.
+		expect( pings ).toBeGreaterThan( 0 );
+		expect( external ).toEqual( [] );
+	}, 90_000 );
+
+	it( 'still reports a request the copy itself makes to the source', async () => {
+		const { external } = await compare( ( origin ) => html( `<img src="${ origin }/pixel.gif" alt="">` ) );
+		expect( external ).toEqual( [ expect.stringMatching( /^copy requested 1 external host\(s\): localtest\.me:\d+/ ) ] );
+	}, 90_000 );
+} );
+
 describe.skipIf( skipBrowserTests )( 'checkFidelity with a consent banner on the source', () => {
 	// The live source raises a cookie banner; capture dismisses it before it
 	// serializes, so the copy never has one. Measuring the source with the
@@ -611,7 +748,10 @@ ${ parts.banner ? banner : '' }
 	// prove the portable copy's native link actually navigates under a real
 	// visitor click at the widths a phone and tablet use — and that an empty
 	// fixed shell parked over the tabs (the pre-fix state) is reported as the
-	// click interception it is, not silently passed.
+	// click interception it is, not silently passed. A destination conversion
+	// may also materialize each tab as an editable group that splits it into an
+	// icon link plus a paragraph-wrapped labeled link — every link still
+	// navigates, and the verifier must follow the labels through the wrappers.
 	const TAB_LABELS = [ 'Home', 'Services', 'Resources', 'Contact', 'Refresh' ];
 
 	const sourceApp = (): string => `<!doctype html><html><head><title>Home</title><style>
@@ -635,27 +775,47 @@ ${ parts.banner ? banner : '' }
 	</script>
 	</body></html>`;
 
-	const copyPage = ( shell: boolean, route: string ): string => `<!doctype html><html><head><title>${ route === '/' ? 'Home' : route }</title><style>
+	const copyPage = ( variant: 'flat' | 'shell' | 'wrapped' | 'wrapped-broken' | 'contents' | 'contents-negative', route: string ): string => {
+		const wrapped = variant === 'wrapped' || variant === 'wrapped-broken' || variant === 'contents' || variant === 'contents-negative';
+		const labelLink = ( label: string, href: string ): string => {
+			if ( variant === 'contents' ) return `<p class="tab-label"><a href="${ href }" style="display:contents"><mark>${ label }</mark></a></p>`;
+			// Negative controls: a link the import left genuinely hidden
+			// (display:none, so its mark never paints) must stay missing, and
+			// a box-less link that renders but no longer reaches its captured
+			// route must still be reported.
+			if ( variant === 'contents-negative' ) {
+				if ( label === 'Services' ) return `<p class="tab-label"><a href="${ href }" style="display:none"><mark>${ label }</mark></a></p>`;
+				if ( label === 'Contact' ) return `<p class="tab-label"><a href="/contact-missing/" style="display:contents"><mark>${ label }</mark></a></p>`;
+			}
+			return `<p class="tab-label"><a href="${ href }">${ label }</a></p>`;
+		};
+		const nav = ! wrapped
+			? `<nav id="bottom" aria-label="Pages"><a href="/">Home</a><a href="/services/">Services</a><a href="/resources/">Resources</a><a href="/contact/">Contact</a><button type="button">Refresh</button></nav>`
+			: `<nav id="bottom" aria-label="Pages">${ [ [ 'Home', '/' ], [ 'Services', '/services/' ], [ 'Resources', '/resources/' ], [ 'Contact', variant === 'wrapped-broken' ? '/contact-missing/' : '/contact/' ] ].map( ( [ label, href ] ) => `<div class="tab"><a href="${ href }"><svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><rect width="20" height="20"/></svg></a>${ labelLink( label, href ) }</div>` ).join( '' ) }<button type="button">Refresh</button></nav>`;
+		return `<!doctype html><html><head><title>${ route === '/' ? 'Home' : route }</title><style>
 		#bottom{display:flex;position:fixed;bottom:0;left:0;right:0;height:64px;background:#fff;border-top:1px solid #ddd;z-index:10}
 		#bottom a,#bottom button{flex:1;display:flex;align-items:center;justify-content:center;font-size:16px}
+		#bottom .tab{flex:1;display:flex;align-items:center;justify-content:center;gap:6px}
+		#bottom p{margin:0}
 		.shell{position:fixed;bottom:0;right:0;width:60%;height:70px;z-index:100}
 		@media(min-width:1000px){#bottom{display:none}}
 	</style></head><body>
 	<main><h1>${ route === '/' ? 'Home' : route }</h1><p>${ route === '/' ? 'Home copy.' : route + ' copy.' }</p></main>
-	<nav id="bottom" aria-label="Pages"><a href="/">Home</a><a href="/services/">Services</a><a href="/resources/">Resources</a><a href="/contact/">Contact</a><button type="button">Refresh</button></nav>
-	${ shell ? '<div class="shell"></div>' : '' }
+	${ nav }
+	${ variant === 'shell' ? '<div class="shell"></div>' : '' }
 	</body></html>`;
+	};
 
-	const routeTabRun = ( origin: string, shell: boolean ): string => {
+	const routeTabRun = ( origin: string, variant: 'flat' | 'shell' | 'wrapped' | 'wrapped-broken' | 'contents' | 'contents-negative' ): string => {
 		const dir = mkdtempSync( join( tmpdir(), 'dla-check-tabs-' ) );
 		dirs.push( dir );
 		mkdirSync( join( dir, 'website', 'services' ), { recursive: true } );
 		mkdirSync( join( dir, 'website', 'resources' ), { recursive: true } );
 		mkdirSync( join( dir, 'website', 'contact' ), { recursive: true } );
-		writeFileSync( join( dir, 'website', 'index.html' ), copyPage( shell, '/' ) );
-		writeFileSync( join( dir, 'website', 'services', 'index.html' ), copyPage( shell, 'Services' ) );
-		writeFileSync( join( dir, 'website', 'resources', 'index.html' ), copyPage( shell, 'Resources' ) );
-		writeFileSync( join( dir, 'website', 'contact', 'index.html' ), copyPage( shell, 'Contact' ) );
+		writeFileSync( join( dir, 'website', 'index.html' ), copyPage( variant, '/' ) );
+		writeFileSync( join( dir, 'website', 'services', 'index.html' ), copyPage( variant, 'Services' ) );
+		writeFileSync( join( dir, 'website', 'resources', 'index.html' ), copyPage( variant, 'Resources' ) );
+		writeFileSync( join( dir, 'website', 'contact', 'index.html' ), copyPage( variant, 'Contact' ) );
 		writeFileSync( join( dir, 'interaction-states.json' ), JSON.stringify( {
 			schema: 'data-liberation/captured-interactions/v2',
 			pages: [
@@ -709,7 +869,7 @@ ${ parts.banner ? banner : '' }
 	it( 'proves real clicks on observed route tabs at 390 and 768', async () => {
 		const server = await routeTabServer();
 		try {
-			const report = await checkFidelity( { directory: routeTabRun( server.origin, false ), widths: [ 1440 ], routes: [ '/' ], settleMs: 200 } );
+			const report = await checkFidelity( { directory: routeTabRun( server.origin, 'flat' ), widths: [ 1440 ], routes: [ '/' ], settleMs: 200 } );
 			const interactivity = report.scores.find( ( score ) => score.viewport === 390 )!;
 			expect( interactivity.notes ).toContain( 'route tabs @ 390px: clicks verified' );
 			expect( interactivity.notes ).toContain( 'route tabs @ 768px: clicks verified' );
@@ -722,9 +882,76 @@ ${ parts.banner ? banner : '' }
 	it( 'fails when an empty fixed shell still blocks the tab clicks', async () => {
 		const server = await routeTabServer();
 		try {
-			const report = await checkFidelity( { directory: routeTabRun( server.origin, true ), widths: [ 1440 ], routes: [ '/' ], settleMs: 200 } );
+			const report = await checkFidelity( { directory: routeTabRun( server.origin, 'shell' ), widths: [ 1440 ], routes: [ '/' ], settleMs: 200 } );
 			const blocked = report.scores.flatMap( ( score ) => score.failures ).filter( ( failure ) => failure.includes( 'click blocked' ) );
 			expect( blocked.length ).toBeGreaterThan( 0 );
+			expect( report.pass ).toBe( false );
+		} finally {
+			await server.close();
+		}
+	}, 90_000 );
+
+	// Editable-block materialization splits each source tab into an icon link
+	// and a paragraph-wrapped labeled link inside a per-tab group: no direct
+	// anchor/button siblings remain. Every labeled link still reaches its
+	// route, so the verifier must follow the source-observed group labels
+	// through the wrappers — and a labeled link that no longer reaches its
+	// captured route must still be reported.
+	it( 'verifies route tabs an editable conversion split into icon and labeled links', async () => {
+		const server = await routeTabServer();
+		try {
+			const report = await checkFidelity( { directory: routeTabRun( server.origin, 'wrapped' ), widths: [ 1440 ], routes: [ '/' ], settleMs: 200 } );
+			const interactivity = report.scores.find( ( score ) => score.viewport === 390 )!;
+			expect( interactivity.notes ).toContain( 'route tabs @ 390px: clicks verified' );
+			expect( interactivity.notes ).toContain( 'route tabs @ 768px: clicks verified' );
+			expect( report.pass ).toBe( true );
+		} finally {
+			await server.close();
+		}
+	}, 90_000 );
+
+	it( 'fails a split route tab whose labeled link no longer reaches its route', async () => {
+		const server = await routeTabServer();
+		try {
+			const report = await checkFidelity( { directory: routeTabRun( server.origin, 'wrapped-broken' ), widths: [ 1440 ], routes: [ '/' ], settleMs: 200 } );
+			const broken = report.scores.flatMap( ( score ) => score.failures ).filter( ( failure ) => failure.includes( 'links to /contact-missing/' ) );
+			expect( broken.length ).toBeGreaterThan( 0 );
+			expect( report.pass ).toBe( false );
+		} finally {
+			await server.close();
+		}
+	}, 90_000 );
+
+	// WordPress import lowering can leave the tab's label anchor itself
+	// box-less: the conversion marks the label link display:contents so its
+	// child <mark> paints in the anchor's place. The anchor then has a zero
+	// rect and empty client rects even though a real click navigates, so a
+	// rect-only visibility predicate reports the tab as missing. The link must
+	// count as visible when a child of a display:contents anchor actually
+	// paints — and a genuinely hidden (display:none) or re-pointed counterpart
+	// must stay reported.
+	it( 'verifies route tabs whose label anchor is display:contents around a rendered mark', async () => {
+		const server = await routeTabServer();
+		try {
+			const report = await checkFidelity( { directory: routeTabRun( server.origin, 'contents' ), widths: [ 1440 ], routes: [ '/' ], settleMs: 200 } );
+			const interactivity = report.scores.find( ( score ) => score.viewport === 390 )!;
+			expect( interactivity.notes ).toContain( 'route tabs @ 390px: clicks verified' );
+			expect( interactivity.notes ).toContain( 'route tabs @ 768px: clicks verified' );
+			expect( report.pass ).toBe( true );
+		} finally {
+			await server.close();
+		}
+	}, 90_000 );
+
+	it( 'fails a display:contents tab that is hidden or no longer reaches its route', async () => {
+		const server = await routeTabServer();
+		try {
+			const report = await checkFidelity( { directory: routeTabRun( server.origin, 'contents-negative' ), widths: [ 1440 ], routes: [ '/' ], settleMs: 200 } );
+			const failures = report.scores.flatMap( ( score ) => score.failures );
+			expect( failures.filter( ( failure ) => failure.includes( 'route tab Services @ 390px missing native link' ) ).length ).toBe( 1 );
+			expect( failures.filter( ( failure ) => failure.includes( 'route tab Services @ 768px missing native link' ) ).length ).toBe( 1 );
+			expect( failures.filter( ( failure ) => failure.includes( 'route tab Contact @ 390px links to /contact-missing/' ) ).length ).toBe( 1 );
+			expect( failures.filter( ( failure ) => failure.includes( 'route tab Contact @ 768px links to /contact-missing/' ) ).length ).toBe( 1 );
 			expect( report.pass ).toBe( false );
 		} finally {
 			await server.close();

@@ -43,9 +43,18 @@ function isPureXTranslationMatrix( matrix: readonly number[] ): boolean {
 	);
 }
 
+function pureXTranslation( transform: string ): number | null {
+	const matrix = /^matrix\(\s*([^)]*)\s*\)$/i.exec( transform )?.[ 1 ]?.split( ',' ).map( Number );
+	if ( matrix && isPureXTranslationMatrix( matrix ) ) return matrix[ 4 ]!;
+	const translate = /^translate(?:3d|x)?\(\s*(-?\d+(?:\.\d+)?)px(?:\s*,\s*0(?:px)?(?:\s*,\s*0(?:px)?)?)?\s*\)$/i.exec( transform.trim() );
+	return translate ? Number( translate[ 1 ] ) : null;
+}
+
 export type LearnableProperty = ( typeof LEARNABLE_PROPERTIES )[ number ];
 
 export interface FluidSweepOptions {
+	/** Distinguishes rule identities when responsive documents share a stylesheet. */
+	document?: 'desktop' | 'mobile';
 	/** Widths to observe. More widths cost time but sharpen the fit. */
 	widths?: number[];
 	/** Settle time after each resize, for the runtime to react. */
@@ -75,7 +84,7 @@ export interface FluidLearningResult {
  * breakpoint and another below it (container share changes, different clamp)
  * is unmodelled — or worse, mis-modelled — when every sample sits above the
  * switch. */
-export const DEFAULT_SWEEP_WIDTHS = [ 390, 600, 768, 1024, 1280, 1440, 1536, 1840, 1920 ];
+export const DEFAULT_SWEEP_WIDTHS = [ 390, 600, 767, 768, 769, 775, 783, 791, 799, 800, 801, 1024, 1280, 1440, 1536, 1840, 1920 ];
 
 /**
  * Observe inline geometry across widths, fit a model per element and property,
@@ -91,29 +100,55 @@ export async function learnAndApplyFluidGeometry(
 	const widths = options.widths ?? DEFAULT_SWEEP_WIDTHS;
 	const settleMs = options.settleMs ?? 1200;
 	const original = page.viewportSize();
+	// A resize can write geometry onto elements that had none at capture width
+	// (including dormant cloned chrome). Keep their baseline declarations too:
+	// an unobserved side effect of the sweep must not become the frozen copy.
+	const baseline = await page.evaluateHandle( () => new Map(
+		[ ...document.querySelectorAll< HTMLElement >( '*' ) ].map( element => [ element, element.getAttribute( 'style' ) ] )
+	) );
 
 	const tagged = await page.evaluate(
-		( { attribute } ) => {
+		( { attribute, properties, prefix } ) => {
 			let index = 0;
 			for ( const element of document.querySelectorAll< HTMLElement >( '[style]' ) ) {
-				// Only elements a runtime sized in pixels are candidates.
+				const ignorePadding = element.hasAttribute( 'data-dla-fluid-ignore-padding' );
+				element.removeAttribute( 'data-dla-fluid-ignore-padding' );
+				// Match the declarations the measurement pass can actually learn.
+				// A substring match also tagged min-height/max-width and percentages,
+				// which produced no observations but still paid for the whole sweep.
 				const style = element.getAttribute( 'style' ) ?? '';
-				const carriesPixelSize = /\b(?:width|height|font-size|padding-top)\s*:\s*\d/.test( style );
+				const blankParagraph = element.tagName === 'P' &&
+					! ( element.textContent ?? '' ).replace( /[ \t\r\n]/g, '' ) &&
+					! element.querySelector( ':not(br)' ) &&
+					[ '::before', '::after' ].every( pseudo =>
+						[ 'none', 'normal', '""', "''" ].includes( getComputedStyle( element, pseudo ).content )
+					);
+				const carriesPixelSize = properties.some( property =>
+					// Adapters can annotate platform-owned closed-state padding without
+					// teaching generic capture about their DOM or runtime.
+					( property !== 'padding-top' || ! ignorePadding ) &&
+					// Empty editorial paragraphs carry font formatting even though they
+					// have no text/glyph to size. Retain that native CSS unchanged; explicit
+					// spacer dimensions, real text and generated glyphs still qualify.
+					!( property === 'font-size' && blankParagraph ) &&
+					/^-?\d+(?:\.\d+)?px$/.test( element.style.getPropertyValue( property ).trim() )
+				);
 				const carriesPixelCustomProperty = /(?:^|;)\s*--[-a-zA-Z0-9_]+\s*:\s*-?\d+(?:\.\d+)?px\s*(?:;|$)/.test( style );
-				const carriesMatrixTransform = /(?:^|;)\s*transform\s*:\s*matrix\(/.test( style );
+				const carriesMatrixTransform = /(?:^|;)\s*transform\s*:\s*(?:matrix\(|translate(?:3d|x)?\()/i.test( style );
 				const carriesAbsoluteInset = getComputedStyle( element ).position === 'absolute' &&
 					/(?:^|;)\s*inset\s*:\s*-?\d+(?:\.\d+)?px\s+auto\s+auto\s+-?\d+(?:\.\d+)?px\s*(?:;|$)/.test( style );
 				if ( ! carriesPixelSize && ! carriesPixelCustomProperty && ! carriesMatrixTransform && ! carriesAbsoluteInset ) {
 					continue;
 				}
-				element.setAttribute( attribute, String( index++ ) );
+				element.setAttribute( attribute, `${ prefix }${ index++ }` );
 			}
 			return index;
 		},
-		{ attribute: ID_ATTRIBUTE }
+		{ attribute: ID_ATTRIBUTE, properties: LEARNABLE_PROPERTIES, prefix: options.document ? `${ options.document }-` : '' }
 	);
 
 	if ( tagged === 0 ) {
+		await baseline.dispose();
 		return { applied: 0, unmodelled: 0, breakpoints: [], canvasFloor: null, byKind: {} };
 	}
 
@@ -128,10 +163,13 @@ export async function learnAndApplyFluidGeometry(
 		await page.evaluate( async () => {
 			const step = window.innerHeight;
 			for ( let y = 0; y < document.documentElement.scrollHeight; y += step ) {
-				window.scrollTo( 0, y );
+				window.scrollTo( { top: y, left: 0, behavior: 'instant' } );
 				await new Promise( ( resolve ) => setTimeout( resolve, 60 ) );
 			}
-			window.scrollTo( 0, 0 );
+			window.scrollTo( { top: 0, left: 0, behavior: 'instant' } );
+			// Some scroll-reactive runtimes only recompute their top-of-page state
+			// from the scroll handler; scrollTo alone does not emit that event.
+			window.dispatchEvent( new Event( 'scroll' ) );
 		} );
 		// The copy renders at rest — what a reader at the top of the page
 		// sees — so the samples must be taken there too. Scroll-linked chrome
@@ -159,18 +197,15 @@ export async function learnAndApplyFluidGeometry(
 							continue;
 						}
 						if ( property === 'transform-x' ) {
-							const transform = /(?:^|;)\s*transform\s*:\s*matrix\(([^)]+)\)/.exec( style );
-							const matrix = transform?.[ 1 ]?.split( ',' ).map( Number );
-							const isPureXTranslation =
-								matrix !== undefined &&
-								matrix.length === 6 &&
-								matrix.every( Number.isFinite ) &&
-								Math.abs( matrix[ 0 ]! - 1 ) <= 0.01 &&
-								Math.abs( matrix[ 1 ]! ) <= 0.01 &&
-								Math.abs( matrix[ 2 ]! ) <= 0.01 &&
-								Math.abs( matrix[ 3 ]! - 1 ) <= 0.01 &&
-								Math.abs( matrix[ 5 ]! ) <= 0.01;
-							values[ property ] = isPureXTranslation ? matrix[ 4 ]! : null;
+							const transform = /(?:^|;)\s*transform\s*:\s*([^;]+)/i.exec( style )?.[ 1 ]?.trim();
+							if ( transform ) {
+								const matrix = /^matrix\(\s*([^)]*)\s*\)$/i.exec( transform )?.[ 1 ]?.split( ',' ).map( Number );
+								const translated = /^translate(?:3d|x)?\(\s*(-?\d+(?:\.\d+)?)px(?:\s*,\s*0(?:px)?(?:\s*,\s*0(?:px)?)?)?\s*\)$/i.exec( transform );
+								const pureMatrix = matrix && matrix.length === 6 && matrix.every( Number.isFinite ) &&
+									Math.abs( matrix[ 0 ]! - 1 ) <= 0.01 && Math.abs( matrix[ 1 ]! ) <= 0.01 &&
+									Math.abs( matrix[ 2 ]! ) <= 0.01 && Math.abs( matrix[ 3 ]! - 1 ) <= 0.01 && Math.abs( matrix[ 5 ]! ) <= 0.01;
+								values[ property ] = pureMatrix ? matrix[ 4 ]! : translated ? Number( translated[ 1 ] ) : null;
+							} else values[ property ] = null;
 							continue;
 						}
 						// `font-size` is excluded: CSS resolves a font
@@ -205,7 +240,6 @@ export async function learnAndApplyFluidGeometry(
 				} ),
 			{ attribute: ID_ATTRIBUTE, properties: LEARNABLE_PROPERTIES as unknown as string[] }
 		);
-
 		for ( const entry of measured ) {
 			for ( const property of Object.keys( entry.values ) as LearnableProperty[] ) {
 				const value = entry.values[ property ];
@@ -263,7 +297,7 @@ export async function learnAndApplyFluidGeometry(
 			wholeRangeModel.kind === 'breakpoint'
 				? learnSegmentedFluidModel( modelSamples, customProperty || insetAxis
 					? { holdUnfitted: true, holdNarrowForBoundedAffine: true }
-					: { holdNarrowForBoundedAffine: true } )
+					: { holdUnfitted: transformX, holdNarrowForBoundedAffine: true } )
 				: null;
 		if ( insetAxis ) {
 			const segments = segmented?.segments ?? ( wholeRangeModel.kind !== 'breakpoint' && wholeRangeModel.kind !== 'constant' && wholeRangeModel.kind !== 'container'
@@ -311,8 +345,8 @@ export async function learnAndApplyFluidGeometry(
 		}
 		if ( transformX && ( model.kind !== 'breakpoint' || segmented !== null ) ) {
 			const element = await page.locator( `[${ ID_ATTRIBUTE }="${ id }"]` ).first().getAttribute( 'style' );
-			const matrix = /(?:^|;)\s*transform\s*:\s*matrix\(([^)]+)\)/.exec( element ?? '' )?.[ 1 ]?.split( ',' ).map( Number );
-			if ( ! matrix || ! isPureXTranslationMatrix( matrix ) ) {
+			const transform = /(?:^|;)\s*transform\s*:\s*([^;]+)/i.exec( element ?? '' )?.[ 1 ]?.trim();
+			if ( ! transform || pureXTranslation( transform ) === null ) {
 				// The runtime may have switched this transform after the sweep; do not
 				// replace a newly rotated, scaled, skewed, or vertically shifted matrix.
 				unmodelled++;
@@ -412,6 +446,29 @@ export async function learnAndApplyFluidGeometry(
 	// it would overwrite anything applied beforehand with pixels again.
 	if ( original ) await page.setViewportSize( original );
 	await page.waitForTimeout( settleMs );
+	await waitForRestGeometry( page, ID_ATTRIBUTE );
+	await page.evaluate( snapshot => {
+		// Transforms retain the final runtime state: the pure-translation checks
+		// below must still reject a matrix that became rotated/scaled on return.
+		const geometry = [ 'width', 'height', 'font-size', 'padding-top', 'inset', 'top', 'left' ];
+		const scratch = document.createElement( 'span' );
+		for ( const [ element, style ] of snapshot ) {
+			if ( ! element.isConnected || ! element.style ) continue;
+			scratch.style.cssText = style ?? '';
+			const properties = new Set( [ ...geometry,
+				...[ ...element.style, ...scratch.style ].filter( property => property.startsWith( '--' ) ),
+			] );
+			for ( const property of properties ) {
+				const value = scratch.style.getPropertyValue( property );
+				const priority = scratch.style.getPropertyPriority( property );
+				if ( element.style.getPropertyValue( property ) === value && element.style.getPropertyPriority( property ) === priority ) continue;
+				if ( value ) element.style.setProperty( property, value, priority );
+				else element.style.removeProperty( property );
+			}
+			if ( style === null && element.style.cssText === '' ) element.removeAttribute( 'style' );
+		}
+	}, baseline );
+	await baseline.dispose();
 	// The resize back to the capture viewport can switch a transform to another
 	// matrix after the sweep. Validate that final state before removing inline
 	// transform; otherwise translateX would discard its new components.
@@ -419,8 +476,8 @@ export async function learnAndApplyFluidGeometry(
 		const entry = learned[ index ]!;
 		if ( entry.property !== 'transform' ) continue;
 		const style = await page.locator( `[${ ID_ATTRIBUTE }="${ entry.id }"]` ).first().getAttribute( 'style' );
-		const matrix = /(?:^|;)\s*transform\s*:\s*matrix\(([^)]+)\)/.exec( style ?? '' )?.[ 1 ]?.split( ',' ).map( Number );
-		if ( matrix && isPureXTranslationMatrix( matrix ) ) continue;
+		const transform = /(?:^|;)\s*transform\s*:\s*([^;]+)/i.exec( style ?? '' )?.[ 1 ]?.trim();
+		if ( transform && pureXTranslation( transform ) !== null ) continue;
 		learned.splice( index, 1 );
 		unmodelled++;
 	}

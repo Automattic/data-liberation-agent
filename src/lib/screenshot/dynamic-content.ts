@@ -64,6 +64,9 @@ export async function expandCollapsedContent(page: Page): Promise<void> {
       };
       const safeToActivate = (element: Element) => {
         if (element.hasAttribute('aria-haspopup')) return false;
+        if (element.closest('nav,[role="navigation"]')) return false;
+        const controlled = document.getElementById(element.getAttribute('aria-controls') || '');
+        if (controlled?.closest('nav,[role="navigation"]') || controlled?.querySelector('nav,[role="navigation"]')) return false;
         // A submit control is never a disclosure: activating it submits its
         // form and unloads the page (a store's "View all" search button, for
         // one), which the route-revert below cannot undo.
@@ -130,15 +133,62 @@ export async function expandCollapsedContent(page: Page): Promise<void> {
         // collapsed page content: force-opening it overlays the document with
         // a fixed panel and flips the very toggle a later interactivity probe
         // measures, so a working menu reports as dead.
-        if (d.querySelector('[role="dialog"],[aria-modal="true"]')) return;
+        if (d.closest('nav,[role="navigation"]') || d.querySelector('nav,[role="navigation"],[role="dialog"],[aria-modal="true"]')) return;
         (d as HTMLDetailsElement).open = true;
       });
 
+      const populatedResting: Array<{ trigger: HTMLElement; parent: HTMLElement; controls: string; expanded: boolean }> = [];
+      for (const el of Array.from(document.querySelectorAll<HTMLElement>('[aria-expanded][aria-controls]'))) {
+        if (!safeToActivate(el) || isExpandToggle(el) || !el.parentElement) continue;
+        const controls = el.getAttribute('aria-controls') || '';
+        const panel = Array.from(el.parentElement.querySelectorAll('[id]')).find((node) => node.id === controls);
+        if (!panel || panel.getAttribute('role') !== 'region') continue;
+        if (!((panel.textContent || '').trim() || panel.querySelector('img,video,audio,picture,svg,canvas'))) continue;
+        populatedResting.push({ trigger: el, parent: el.parentElement, controls, expanded: el.getAttribute('aria-expanded') === 'true' });
+      }
+      const exclusiveSets: Array<Set<HTMLElement>> = [];
+      const linkExclusive = (left: HTMLElement, right: HTMLElement) => {
+        let leftSet = exclusiveSets.find((set) => set.has(left));
+        let rightSet = exclusiveSets.find((set) => set.has(right));
+        if (leftSet && rightSet && leftSet !== rightSet) {
+          for (const item of rightSet) leftSet.add(item);
+          exclusiveSets.splice(exclusiveSets.indexOf(rightSet), 1);
+        } else if (leftSet) leftSet.add(right);
+        else if (rightSet) rightSet.add(left);
+        else exclusiveSets.push(new Set([left, right]));
+      };
+      const restingTrigger = (entry: { trigger: HTMLElement; parent: HTMLElement; controls: string }) => {
+        if (entry.trigger.isConnected) return entry.trigger;
+        if (!entry.parent.isConnected) return entry.trigger;
+        return Array.from(entry.parent.querySelectorAll<HTMLElement>('[aria-controls]')).find((item) => item.getAttribute('aria-controls') === entry.controls) || entry.trigger;
+      };
       let navigated = false;
       for (const el of Array.from(document.querySelectorAll('[aria-expanded="false"][aria-controls]'))) {
         if (navigated) break;
         if (!safeToActivate(el) || isExpandToggle(el)) continue;
+        const openBefore = new Set(populatedResting.filter((entry) => restingTrigger(entry).getAttribute('aria-expanded') === 'true').map((entry) => entry.trigger));
         if ((await activate(el)) === 'navigated') navigated = true;
+        else if (el instanceof HTMLElement) {
+          for (const peer of populatedResting) {
+            if (peer.trigger === el) continue;
+            if (openBefore.has(peer.trigger) && restingTrigger(peer).getAttribute('aria-expanded') !== 'true') linkExclusive(el, peer.trigger);
+          }
+        }
+      }
+      if (!navigated) {
+        for (const set of exclusiveSets) {
+          const members = populatedResting.filter((entry) => set.has(entry.trigger));
+          for (const entry of members) {
+            if (!entry.expanded) continue;
+            const live = restingTrigger(entry);
+            if (live.getAttribute('aria-expanded') !== 'true') await activate(live);
+          }
+          for (const entry of members) {
+            if (entry.expanded) continue;
+            const live = restingTrigger(entry);
+            if (live.getAttribute('aria-expanded') === 'true') await activate(live);
+          }
+        }
       }
 
       if (!navigated) {
@@ -205,6 +255,14 @@ function boundDisclosureHtml(html: string): { html: string; bytes: number; trunc
  * state (collapsed items stay visually collapsed) while its content is now
  * physically present in the DOM rather than lost to the `hidden` attribute.
  *
+ * A panel that is already populated can still be invisible because an ancestor
+ * clips it (height 0 and overflow hidden) or an inner node uses display none.
+ * Those controls are observed and restored. Only concealment that reverses is
+ * normalized onto the local `hidden` contract. Layout that does not reverse,
+ * including header and tablet geometry, stays untouched. Exclusive groups are
+ * assigned only after a source open/close proof. Duplicate ids resolve inside
+ * the trigger's own parent, not document-wide.
+ *
  * The restore deliberately WAITS (bounded — see `MAX_DISCLOSURE_SETTLE_MS`) for
  * a runtime that unmounts closed panels to finish its exit animation first:
  * such a runtime (Radix Presence) keeps the panel's children mounted ~200ms
@@ -225,10 +283,12 @@ function boundDisclosureHtml(html: string): { html: string; bytes: number; trunc
  * alongside dialog/menu captures (`kind: 'disclosure'`) so this work is
  * observable with the same `candidate_count`/`captured_count` conventions.
  */
-export async function hydrateDisclosureContent(page: Page): Promise<CapturedDialogInteraction[]> {
+export async function hydrateDisclosureContent(page: Page, rootSelector = 'body'): Promise<CapturedDialogInteraction[]> {
   let raw: RawDisclosureRecord[];
   try {
-    const result = await page.evaluate(async ({ limit, settleMs, labels, toggleLimit }: { limit: number; settleMs: number; labels: string[]; toggleLimit: number }) => {
+    const result = await page.evaluate(async ({ limit, settleMs, labels, toggleLimit, rootSelector }: { limit: number; settleMs: number; labels: string[]; toggleLimit: number; rootSelector: string }) => {
+      const root = document.querySelector(rootSelector);
+      if (!root) return [];
       const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
       const hasContent = (element: Element) =>
         Boolean((element.textContent || '').trim()) ||
@@ -268,6 +328,9 @@ export async function hydrateDisclosureContent(page: Page): Promise<CapturedDial
       };
       const safeToActivate = (element: Element) => {
         if (element.hasAttribute('aria-haspopup')) return false;
+        if (element.closest('nav,[role="navigation"]')) return false;
+        const controlled = document.getElementById(element.getAttribute('aria-controls') || '');
+        if (controlled?.closest('nav,[role="navigation"]') || controlled?.querySelector('nav,[role="navigation"]')) return false;
         if ((element instanceof HTMLButtonElement || element instanceof HTMLInputElement)
           && element.type === 'submit' && element.form) return false;
         if (element.tagName !== 'A') return true;
@@ -294,34 +357,46 @@ export async function hydrateDisclosureContent(page: Page): Promise<CapturedDial
        *  (forward) or a role="region" panel's aria-labelledby back to the trigger
        *  (reverse — the pattern a runtime that unmounts closed panels leaves behind,
        *  since it never bothers writing aria-controls on the trigger at all). */
-      const findCandidates = (): Array<{ trigger: HTMLElement; target: HTMLElement; snapshot?: boolean }> => {
+      const findCandidates = (): Array<{ trigger: HTMLElement; target: HTMLElement; snapshot?: boolean; mounted?: boolean }> => {
         const seen = new Set<HTMLElement>();
-        const out: Array<{ trigger: HTMLElement; target: HTMLElement; snapshot?: boolean }> = [];
-        document
+        const out: Array<{ trigger: HTMLElement; target: HTMLElement; snapshot?: boolean; mounted?: boolean }> = [];
+        root
           .querySelectorAll<HTMLElement>('[aria-expanded="false"][aria-controls]:not([aria-haspopup])')
           .forEach((trigger) => {
             const id = trigger.getAttribute('aria-controls') || '';
             const target = id ? document.getElementById(id) : null;
-            if (target && target.getAttribute('role') === 'region' && !seen.has(trigger)) {
+            if (target && target.getAttribute('role') === 'region' && !seen.has(trigger) && safeToActivate(trigger)) {
               seen.add(trigger);
               out.push({ trigger, target });
             }
           });
-        document.querySelectorAll<HTMLElement>('[role="region"][aria-labelledby]').forEach((target) => {
+        root.querySelectorAll<HTMLElement>('[role="region"][aria-labelledby]').forEach((target) => {
           const id = target.getAttribute('aria-labelledby') || '';
           const trigger = id ? (document.getElementById(id) as HTMLElement | null) : null;
           if (
             trigger &&
             !seen.has(trigger) &&
             trigger.getAttribute('aria-expanded') === 'false' &&
-            !trigger.hasAttribute('aria-haspopup')
+            safeToActivate(trigger)
           ) {
             seen.add(trigger);
             out.push({ trigger, target });
           }
         });
-        const hydrating = new Set(out.filter((candidate) => !hasContent(candidate.target)).map((candidate) => candidate.trigger));
-        for (const node of document.querySelectorAll<HTMLElement>('button, [role="button"]')) {
+        // An aria-expanded control can mount its entire panel on activation,
+        // leaving neither a controlled ID nor a region in the resting DOM.
+        // Only probe a bounded local item with exactly one disclosure control;
+        // an observed new sibling, rather than its label/class, identifies it.
+        root.querySelectorAll<HTMLElement>('button[aria-expanded="false"]:not([aria-haspopup]),[role="button"][aria-expanded="false"]:not([aria-haspopup])').forEach(trigger => {
+          if (seen.has(trigger) || handledToggles.has(describe(trigger).selector) || !visible(trigger) || !safeToActivate(trigger)) return;
+          if (document.getElementById(trigger.getAttribute('aria-controls') || '')) return;
+          const target = scopeOf(trigger);
+          if (target === trigger || target.querySelectorAll('[aria-expanded]').length !== 1) return;
+          seen.add(trigger);
+          out.push({ trigger, target, mounted: true });
+        });
+        const hydrating = new Set(out.filter((candidate) => candidate.mounted || !hasContent(candidate.target)).map((candidate) => candidate.trigger));
+        for (const node of root.querySelectorAll<HTMLElement>('button, [role="button"]')) {
           if (hydrating.has(node) || handledToggles.has(describe(node).selector)) continue;
           if (!visible(node) || !safeToActivate(node) || !isExpandToggle(node)) continue;
           out.push({ trigger: node, target: scopeOf(node), snapshot: true });
@@ -330,12 +405,13 @@ export async function hydrateDisclosureContent(page: Page): Promise<CapturedDial
       };
 
       const records: RawDisclosureRecord[] = [];
+      const mountedPanels: Array<{ trigger: HTMLElement; parent: HTMLElement; panel: HTMLElement }> = [];
       let hydrated = 0;
       let togglesDone = 0;
       for (let pass = 0; pass < 3 && hydrated < limit; pass++) {
         const found = findCandidates();
         const candidates = [
-          ...found.filter((candidate) => !candidate.snapshot && !hasContent(candidate.target)).slice(0, limit - hydrated),
+          ...found.filter((candidate) => !candidate.snapshot && (candidate.mounted || !hasContent(candidate.target))).slice(0, limit - hydrated),
           ...found.filter((candidate) => candidate.snapshot).slice(0, toggleLimit - togglesDone),
         ];
         if (candidates.length === 0) break;
@@ -343,6 +419,45 @@ export async function hydrateDisclosureContent(page: Page): Promise<CapturedDial
         const observed: Array<{ target: HTMLElement; content: string; trigger: HTMLElement }> = [];
         for (const candidate of candidates) {
           const { trigger, target } = candidate;
+          if (candidate.mounted) {
+            handledToggles.add(describe(trigger).selector);
+            const before = new Set(Array.from(target.children));
+            const closedIcons = Array.from(trigger.querySelectorAll('svg')).map(icon => ({className: icon.getAttribute('class') ?? '', style: icon.getAttribute('style') ?? ''}));
+            const route = currentRoute();
+            trigger.click();
+            let panels: HTMLElement[] = [];
+            for (let attempt = 0; attempt < 20; attempt++) {
+              panels = Array.from(target.children).filter((child): child is HTMLElement => child instanceof HTMLElement && !before.has(child) && !child.contains(trigger) && hasContent(child) && visible(child));
+              if (trigger.getAttribute('aria-expanded') === 'true' && panels.length === 1) break;
+              await wait(50);
+            }
+            const panel = panels.length === 1 && currentRoute() === route && trigger.getAttribute('aria-expanded') === 'true' ? panels[0] : undefined;
+            const copy = panel?.cloneNode(true) as HTMLElement | undefined;
+            const openIcons = Array.from(trigger.querySelectorAll('svg')).map(icon => ({className: icon.getAttribute('class') ?? '', style: icon.getAttribute('style') ?? ''}));
+            if (trigger.getAttribute('aria-expanded') === 'true') trigger.click();
+            const deadline = Date.now() + settleMs;
+            while (Date.now() < deadline && (trigger.getAttribute('aria-expanded') !== 'false' || panel?.isConnected)) await wait(25);
+            if (copy && trigger.getAttribute('aria-expanded') === 'false' && !panel?.isConnected) {
+              const icons = Array.from(trigger.querySelectorAll('svg'));
+              if (icons.length === closedIcons.length && icons.length === openIcons.length) icons.forEach((icon,index) => {
+                const closed = closedIcons[index]!, open = openIcons[index]!;
+                if ((icon.getAttribute('class') ?? '') !== closed.className || (icon.getAttribute('style') ?? '') !== closed.style) return;
+                if (closed.className !== open.className) {
+                  icon.setAttribute('data-dla-disclosure-open-class',open.className);
+                  icon.setAttribute('data-dla-disclosure-closed-class',closed.className);
+                }
+                if (closed.style !== open.style) {
+                  icon.setAttribute('data-dla-disclosure-open-style',open.style);
+                  icon.setAttribute('data-dla-disclosure-closed-style',closed.style);
+                }
+              });
+              mountedPanels.push({ trigger, parent: target, panel: copy });
+              hydrated++;
+            } else {
+              records.push({ status: 'no-dialog', trigger: describeTrigger(trigger), target: describe(target), error: 'No unique locally mounted panel with verified collapsed restoration.' });
+            }
+            continue;
+          }
           if (candidate.snapshot) {
             const described = describeTrigger(trigger);
             const describedTarget = describe(target);
@@ -452,8 +567,277 @@ export async function hydrateDisclosureContent(page: Page): Promise<CapturedDial
         hydrated += observed.length;
         await wait(100);
       }
+      const exclusiveGroups = new Set<HTMLElement>();
+      const groups = new Map<HTMLElement, typeof mountedPanels>();
+      for (const entry of mountedPanels) {
+        const group = entry.parent.parentElement;
+        if (group) groups.set(group, [...(groups.get(group) ?? []), entry]);
+      }
+      for (const [group, entries] of groups) {
+        if (entries.length < 2) continue;
+        const first = entries[0].trigger;
+        const second = entries[1].trigger;
+        const before = new Set(entries.flatMap(entry => Array.from(entry.parent.children)));
+        first.click();
+        await wait(60);
+        if (first.getAttribute('aria-expanded') !== 'true') continue;
+        second.click();
+        await wait(60);
+        if (second.getAttribute('aria-expanded') === 'true' && first.getAttribute('aria-expanded') === 'false') exclusiveGroups.add(group);
+        for (const trigger of [first, second]) if (trigger.getAttribute('aria-expanded') === 'true') trigger.click();
+        const deadline = Date.now() + settleMs;
+        while (Date.now() < deadline && entries.some(entry => Array.from(entry.parent.children).some(child => !before.has(child)))) await wait(25);
+      }
+      // Write back only after all source interactions. A single-open runtime
+      // can unmount siblings when the next item opens, including DOM we added.
+      for (const { trigger, parent, panel } of mountedPanels) {
+        if (!trigger.isConnected || !parent.isConnected) continue;
+        let index = 0;
+        while (document.getElementById(`dla-disclosure-panel-${index}`)) index++;
+        panel.id = `dla-disclosure-panel-${index}`;
+        panel.hidden = true;
+        panel.setAttribute('role', 'region');
+        panel.dataset.dlaHydratedDisclosure = 'true';
+        panel.dataset.dlaLocalDisclosure = 'true';
+        const group = parent.parentElement;
+        if (group && exclusiveGroups.has(group)) group.dataset.dlaExclusiveDisclosures = 'true';
+        trigger.setAttribute('aria-controls', panel.id);
+        parent.append(panel);
+        records.push({ status: 'captured', trigger: describeTrigger(trigger), target: describe(panel), html: panel.outerHTML });
+      }
+      const matchesIn = (scope: ParentNode, id: string) => Array.from(scope.querySelectorAll<HTMLElement>('[id]')).filter((element) => element.id === id);
+      const panelForTrigger = (trigger: HTMLElement): HTMLElement | null => {
+        const id = trigger.getAttribute('aria-controls') || '';
+        if (!id) return null;
+        let scope: HTMLElement | null = trigger.parentElement;
+        while (scope) {
+          const matches = matchesIn(scope, id);
+          if (matches.length === 1) return matches[0]!;
+          if (matches.length > 1) return null;
+          if (scope === root || scope === document.body) break;
+          scope = scope.parentElement;
+        }
+        return null;
+      };
+      const clipped = (element: HTMLElement) => {
+        for (let node: HTMLElement | null = element; node && node !== document.body; node = node.parentElement) {
+          const style = getComputedStyle(node);
+          if (style.display === 'none' || style.visibility === 'hidden' || Number.parseFloat(style.opacity) === 0 || node.hasAttribute('hidden')) return true;
+          const overflow = style.overflowY || style.overflow;
+          if ((overflow === 'hidden' || overflow === 'clip') && node.getBoundingClientRect().height < 1) return true;
+        }
+        return element.getBoundingClientRect().height < 1;
+      };
+      const concealmentNodes = (panel: HTMLElement, trigger: HTMLElement) => {
+        const nodes = [panel];
+        for (let node = panel.parentElement; node && !node.contains(trigger); node = node.parentElement) nodes.push(node);
+        return nodes;
+      };
+      const clipState = (node: HTMLElement) => {
+        const style = getComputedStyle(node);
+        const overflow = style.overflowY || style.overflow;
+        return {
+          display: style.display,
+          opacity: style.opacity,
+          heightZero: node.getBoundingClientRect().height < 1 && (overflow === 'hidden' || overflow === 'clip'),
+          className: node.getAttribute('class') || '',
+          inlineDisplay: node.style.display,
+          inlineOpacity: node.style.opacity,
+        };
+      };
+      const clusterOf = (trigger: HTMLElement) => {
+        let node = trigger.parentElement;
+        while (node && node !== document.body && node !== document.documentElement) {
+          const triggers = Array.from(node.querySelectorAll<HTMLElement>('[aria-expanded][aria-controls]:not([aria-haspopup])'));
+          if (triggers.length >= 2 && triggers.includes(trigger)) return node;
+          node = node.parentElement;
+        }
+        return null;
+      };
+      const populated: Array<{ trigger: HTMLElement; panel: HTMLElement }> = [];
+      for (const trigger of Array.from(root.querySelectorAll<HTMLElement>('[aria-expanded][aria-controls]:not([aria-haspopup])'))) {
+        if (populated.length >= limit - hydrated || !visible(trigger) || !safeToActivate(trigger) || isExpandToggle(trigger)) continue;
+        const panel = panelForTrigger(trigger);
+        if (!panel || panel.getAttribute('role') !== 'region' || !hasContent(panel) || !trigger.parentElement?.contains(panel)) continue;
+        if (panel.dataset.dlaLocalDisclosure || panel.dataset.dlaHydratedDisclosure) continue;
+        populated.push({ trigger, panel });
+      }
+      const eligible = populated.filter((pair) => {
+        if (clipped(pair.panel)) return true;
+        const cluster = clusterOf(pair.trigger);
+        return Boolean(cluster && populated.some((other) => other !== pair && cluster.contains(other.trigger) && clipped(other.panel)));
+      }).slice(0, limit - hydrated);
+      const snapshotOf = (trigger: HTMLElement, panel: HTMLElement) => ({
+        expanded: trigger.getAttribute('aria-expanded') === 'true',
+        hidden: panel.hasAttribute('hidden'),
+        ariaHidden: panel.getAttribute('aria-hidden'),
+        text: panel.textContent,
+        controls: trigger.getAttribute('aria-controls') || '',
+        parent: trigger.parentElement,
+        nodes: concealmentNodes(panel, trigger).map((node) => ({ style: node.getAttribute('style'), className: node.getAttribute('class') })),
+      });
+      const resolveLive = (entry: { trigger: HTMLElement; panel: HTMLElement; snap: ReturnType<typeof snapshotOf> }) => {
+        const controls = entry.snap.controls;
+        const parent = entry.snap.parent;
+        const trigger = entry.trigger.isConnected
+          ? entry.trigger
+          : (parent?.isConnected
+            ? Array.from(parent.querySelectorAll<HTMLElement>('[aria-controls]')).find((item) => item.getAttribute('aria-controls') === controls)
+            : undefined) || entry.trigger;
+        const panel = trigger.isConnected ? panelForTrigger(trigger) : null;
+        return { trigger, panel: panel || entry.panel };
+      };
+      const applySnap = (trigger: HTMLElement, panel: HTMLElement, snap: ReturnType<typeof snapshotOf>) => {
+        if (!trigger.isConnected || !panel.isConnected) return;
+        trigger.setAttribute('aria-expanded', snap.expanded ? 'true' : 'false');
+        if (snap.hidden) panel.setAttribute('hidden', '');
+        else panel.removeAttribute('hidden');
+        if (snap.ariaHidden === null) panel.removeAttribute('aria-hidden');
+        else panel.setAttribute('aria-hidden', snap.ariaHidden);
+        concealmentNodes(panel, trigger).forEach((node, index) => {
+          const item = snap.nodes[index];
+          if (!item || !node.isConnected) return;
+          if (item.style === null) node.removeAttribute('style');
+          else node.setAttribute('style', item.style);
+          if (item.className === null) node.removeAttribute('class');
+          else node.setAttribute('class', item.className);
+        });
+      };
+      const waitExpanded = async (trigger: HTMLElement, want: boolean) => {
+        for (let attempt = 0; attempt < 20; attempt++) {
+          if ((trigger.getAttribute('aria-expanded') === 'true') === want) return true;
+          await wait(50);
+        }
+        return (trigger.getAttribute('aria-expanded') === 'true') === want;
+      };
+      const waitClip = async (panel: HTMLElement, wantClipped: boolean) => {
+        for (let attempt = 0; attempt < 40; attempt++) {
+          if (panel.isConnected && clipped(panel) === wantClipped) return true;
+          await wait(50);
+        }
+        return panel.isConnected && clipped(panel) === wantClipped;
+      };
+      type PopulatedEntry = {
+        trigger: HTMLElement;
+        panel: HTMLElement;
+        snap: ReturnType<typeof snapshotOf>;
+        closedClips: Array<ReturnType<typeof clipState>>;
+        openClips: Array<ReturnType<typeof clipState>>;
+      };
+      const prepared = eligible.map(({ trigger, panel }) => ({ trigger, panel, snap: snapshotOf(trigger, panel) }));
+      const forceResting = async (entry: (typeof prepared)[number]) => {
+        const live = resolveLive(entry);
+        if (live.trigger.isConnected && (live.trigger.getAttribute('aria-expanded') === 'true') !== entry.snap.expanded) {
+          try { live.trigger.click(); } catch { /* the attribute restore below still returns the serialized control */ }
+          for (let attempt = 0; attempt < 8 && (live.trigger.getAttribute('aria-expanded') === 'true') !== entry.snap.expanded; attempt++) await wait(50);
+        }
+        applySnap(live.trigger, live.panel, entry.snap);
+        entry.trigger = live.trigger;
+        entry.panel = live.panel;
+      };
+      const restorePrepared = async () => { for (const entry of prepared) await forceResting(entry); };
+      const observedPopulated: PopulatedEntry[] = [];
+      for (const entry of prepared) {
+        const live = resolveLive(entry);
+        entry.trigger = live.trigger;
+        entry.panel = live.panel;
+        const { trigger, panel, snap } = entry;
+        const first = concealmentNodes(panel, trigger).map(clipState);
+        const beforeRoute = currentRoute();
+        let opened = false;
+        try { trigger.click(); opened = true; } catch { await restorePrepared(); continue; }
+        if (!opened || currentRoute() !== beforeRoute || !(await waitExpanded(trigger, !snap.expanded)) || !(await waitClip(panel, snap.expanded))) {
+          records.push({ status: 'no-dialog', trigger: describeTrigger(resolveLive(entry).trigger), target: describe(resolveLive(entry).panel), error: 'Populated disclosure did not reveal.' });
+          await restorePrepared();
+          continue;
+        }
+        const second = concealmentNodes(panel, trigger).map(clipState);
+        const revealed = !clipped(panel) === !snap.expanded;
+        try { trigger.click(); } catch { await restorePrepared(); continue; }
+        const reversed = await waitExpanded(trigger, snap.expanded) && await waitClip(panel, !snap.expanded) && panel.textContent === snap.text;
+        await restorePrepared();
+        if (currentRoute() !== beforeRoute || !revealed || !reversed) {
+          records.push({ status: 'no-dialog', trigger: describeTrigger(entry.trigger), target: describe(entry.panel), error: 'Populated disclosure concealment did not reverse.' });
+          continue;
+        }
+        observedPopulated.push({
+          trigger: entry.trigger,
+          panel: entry.panel,
+          snap,
+          closedClips: snap.expanded ? second : first,
+          openClips: snap.expanded ? first : second,
+        });
+      }
+      const grouped = new Map<HTMLElement, PopulatedEntry[]>();
+      for (const entry of observedPopulated) {
+        const cluster = clusterOf(entry.trigger);
+        if (!cluster) continue;
+        grouped.set(cluster, [...(grouped.get(cluster) ?? []), entry]);
+      }
+      const exclusiveClusters = new Set<HTMLElement>();
+      for (const [cluster, entries] of grouped) {
+        if (entries.length < 2) continue;
+        const first = entries.find((entry) => !entry.snap.expanded) ?? entries[0]!;
+        const second = entries.find((entry) => entry !== first);
+        if (!second) continue;
+        const beforeRoute = currentRoute();
+        const firstLive = resolveLive(first);
+        const secondLive = resolveLive(second);
+        try { firstLive.trigger.click(); } catch { await restorePrepared(); continue; }
+        if (currentRoute() !== beforeRoute || !(await waitExpanded(firstLive.trigger, true))) {
+          await restorePrepared();
+          continue;
+        }
+        try { secondLive.trigger.click(); } catch { await restorePrepared(); continue; }
+        if (currentRoute() === beforeRoute && await waitExpanded(secondLive.trigger, true) && firstLive.trigger.getAttribute('aria-expanded') === 'false') exclusiveClusters.add(cluster);
+        await restorePrepared();
+      }
+      const applyNormalized = (entry: PopulatedEntry) => {
+        const live = resolveLive(entry);
+        entry.trigger = live.trigger;
+        entry.panel = live.panel;
+        concealmentNodes(entry.panel, entry.trigger).forEach((node, index) => {
+          if (node.contains(entry.trigger)) return;
+          const closed = entry.closedClips[index];
+          const opened = entry.openClips[index];
+          if (!closed || !opened) return;
+          if (closed.display === 'none' && opened.display !== 'none') {
+            if (opened.inlineDisplay) node.style.display = opened.inlineDisplay;
+            else node.style.removeProperty('display');
+          }
+          if (closed.opacity === '0' && opened.opacity !== '0') {
+            if (opened.inlineOpacity) node.style.opacity = opened.inlineOpacity;
+            else node.style.removeProperty('opacity');
+          }
+          if (closed.heightZero && !opened.heightZero) {
+            node.style.height = 'auto';
+            node.style.overflow = 'visible';
+            const closedTokens = closed.className.split(/\s+/).filter(Boolean);
+            const openTokens = opened.className.split(/\s+/).filter(Boolean);
+            for (const token of closedTokens) if (!openTokens.includes(token)) node.classList.remove(token);
+            for (const token of openTokens) if (!closedTokens.includes(token)) node.classList.add(token);
+          }
+        });
+        entry.trigger.setAttribute('aria-expanded', entry.snap.expanded ? 'true' : 'false');
+        entry.panel.hidden = !entry.snap.expanded;
+        if (entry.snap.ariaHidden !== null) entry.panel.setAttribute('aria-hidden', entry.snap.expanded ? 'false' : 'true');
+        entry.panel.dataset.dlaLocalDisclosure = 'true';
+        entry.panel.dataset.dlaHydratedDisclosure = 'true';
+        const cluster = clusterOf(entry.trigger);
+        if (cluster && exclusiveClusters.has(cluster)) cluster.dataset.dlaExclusiveDisclosures = 'true';
+      };
+      for (const entry of observedPopulated) applyNormalized(entry);
+      await wait(450);
+      for (const entry of observedPopulated) applyNormalized(entry);
+      for (const entry of prepared) {
+        if (observedPopulated.some((observed) => observed.snap.controls === entry.snap.controls && observed.snap.text === entry.snap.text)) continue;
+        await forceResting(entry);
+      }
+      for (const entry of observedPopulated) {
+        records.push({ status: 'captured', trigger: describeTrigger(entry.trigger), target: describe(entry.panel), html: entry.panel.outerHTML });
+      }
       return records;
-    }, { limit: MAX_DISCLOSURE_CANDIDATES, settleMs: MAX_DISCLOSURE_SETTLE_MS, labels: EXPAND_TOGGLE_LABELS, toggleLimit: MAX_EXPAND_TOGGLES });
+    }, { limit: MAX_DISCLOSURE_CANDIDATES, settleMs: MAX_DISCLOSURE_SETTLE_MS, labels: EXPAND_TOGGLE_LABELS, toggleLimit: MAX_EXPAND_TOGGLES, rootSelector });
     raw = Array.isArray(result) ? (result as RawDisclosureRecord[]) : [];
   } catch {
     raw = [];

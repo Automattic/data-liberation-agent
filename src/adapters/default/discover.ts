@@ -1,4 +1,4 @@
-import { fetchSitemapWithDiagnostics, classifyUrl, extractSameOriginLinks, routeKey } from '../../lib/extraction/sitemap.js';
+import { fetchSitemapWithDiagnostics, classifyUrl, extractSameOriginLinks, resolvePageLink, routeKey } from '../../lib/extraction/sitemap.js';
 import { extractMeta, extractTitle, extractNavLinks } from '../../lib/html-extract/index.js';
 import { sourceContextOptions, getPlaywright } from '../../lib/browser-kit/browser-kit.js';
 import type { InventoryUrl } from '../shared.js';
@@ -78,13 +78,12 @@ export async function discoverDefault(url: string, _opts: Record<string, unknown
     ...renderedHeaderUrls,
     ...extractSameOriginLinks(homepageHtml, normalized),
   ]) {
-    const linkUrl = new URL(href);
-    if (linkUrl.origin !== origin || !['http:', 'https:'].includes(linkUrl.protocol)) continue;
-    linkUrl.hash = '';
-    const key = routeKey(linkUrl.href);
+    const pageUrl = resolvePageLink(href, normalized, origin);
+    if (!pageUrl) continue;
+    const key = routeKey(pageUrl);
     if (knownRoutes.has(key)) continue;
     knownRoutes.add(key);
-    discoveredUrls.add(linkUrl.href);
+    discoveredUrls.add(pageUrl);
   }
   for (const u of discoveredUrls) {
     const type = classifyUrl(u);

@@ -52,7 +52,7 @@ const TOOLS = [
   {
     name: 'liberate',
     description:
-      'Liberate a website into a complete, portable HTML site. Returns the run directory, the website directory, and route counts.',
+      'Liberate a website into a portable HTML site. Browser capture is the default; HTTP mode creates an explicitly unverified review candidate. Returns the website directory, route counts, and completeness.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -60,6 +60,9 @@ const TOOLS = [
         outputDir: { type: 'string', description: 'Output base directory. Defaults to ~/data-liberation.' },
         resume: { type: 'boolean', description: 'Reuse artifacts already on disk instead of recapturing.' },
         screenshots: { type: 'boolean', description: 'Also capture full-page and scrolled PNGs.' },
+        acquisition: { type: 'string', enum: ['browser', 'http'], description: 'Browser by default; HTTP produces an explicitly unverified review candidate.' },
+        routeLimit: { type: 'integer', minimum: 1, description: 'Maximum HTTP routes requested; omitted routes remain diagnosed.' },
+        runtimeRouteLimit: { type: 'integer', minimum: 0, maximum: 50, description: 'Maximum HTTP routes observed for runtime regions; default 0.' },
         portableMotion: { type: 'object', description: 'Optional author-supplied, hash-pinned portable motion recipe verified in the browser before export.' },
       },
       required: ['url'],
@@ -68,13 +71,14 @@ const TOOLS = [
   {
     name: 'compare',
     description:
-      'Verify a liberated copy: self-consistency across every route, and source fidelity across a sample. Returns the report, including whether it passed.',
+      'Verify frozen source/capture evidence or portable capture/candidate fidelity. Explicit drift stage revisits the live source. Returns coverage, pending evidence and scores.',
     inputSchema: {
       type: 'object',
       properties: {
         directory: { type: 'string', description: 'A liberated run directory.' },
         screenshots: { type: 'boolean', description: 'Write source/copy/diff PNGs as evidence.' },
         candidateUrl: { type: 'string', description: 'Base URL of another rendered copy of the site, such as one built from the capture, to compare instead of the capture.' },
+        stage: { type: 'string', enum: ['capture', 'materialization', 'drift'], description: 'Defaults to capture, or materialization with candidateUrl. Only drift visits the source.' },
         motionContract: { type: 'object', description: 'Authored routes, widths, readiness selectors, text, canvas and click probes for independent source/candidate behavior verification.' },
       },
       required: ['directory'],
@@ -125,6 +129,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     if (name === 'liberate') {
       const { liberateSite } = await import('./ui/liberate.js');
       const result = await liberateSite({
+        acquisition: args.acquisition as import('./lib/capture.js').CaptureOptions['acquisition'],
+        http: args.acquisition === 'http' || args.routeLimit !== undefined || args.runtimeRouteLimit !== undefined ? { routeLimit: args.routeLimit as number | undefined, runtimeRouteLimit: args.runtimeRouteLimit as number | undefined } : undefined,
         url: String(args.url ?? ''),
         outputBase: typeof args.outputDir === 'string' ? args.outputDir : resolveOutputBase(),
         resume: args.resume === true,
@@ -151,6 +157,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         directory: String(args.directory ?? ''),
         screenshots: args.screenshots === true,
         candidateUrl: typeof args.candidateUrl === 'string' ? args.candidateUrl : undefined,
+        stage: typeof args.stage === 'string' ? args.stage as import('./lib/fidelity/reference.js').FidelityStage : undefined,
         motionContract: args.motionContract && typeof args.motionContract === 'object' ? args.motionContract as import('./lib/fidelity/candidate-motion.js').MotionContract : undefined,
         log,
       });

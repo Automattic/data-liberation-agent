@@ -78,7 +78,7 @@ export function learnFluidModel( samples: readonly GeometrySample[] ): FluidMode
 		// Median, not the last sample: one rounding artifact should not become
 		// the value every width inherits.
 		const sorted = [ ...values ].sort( ( a, b ) => a - b );
-		const value = round( sorted[ Math.floor( sorted.length / 2 ) ]!, 0 );
+		const value = round( sorted[ Math.floor( sorted.length / 2 ) ]! );
 		return { kind: 'constant', css: `${ value }px`, value };
 	}
 
@@ -273,7 +273,7 @@ export type ViewportFluidModel = Exclude< FluidModel, { kind: 'breakpoint' } >;
  * parent box exactly as the source did, which a layout frozen into static flow
  * cannot promise — a viewport fit carries no such assumption.
  */
-function viewportModelForRun( run: readonly GeometrySample[] ): ViewportFluidModel | null {
+function viewportModelForRun( run: readonly GeometrySample[], allowBoundedAffine = false ): ViewportFluidModel | null {
 	if ( run.length < 2 ) return null;
 	if ( run.length === 2 ) {
 		const [ first, second ] = run;
@@ -283,6 +283,21 @@ function viewportModelForRun( run: readonly GeometrySample[] ): ViewportFluidMod
 		const ratio = second.value / second.viewport;
 		if ( fits( run, ( viewport ) => ratio * viewport ) ) {
 			return { kind: 'proportional', css: `${ round( ratio * 100 ) }vw`, ratio };
+		}
+		// Two boundary observations can prove a positive, bounded affine run
+		// when the encompassing sweep has already established a breakpoint.
+		// This is needed for runtime offsets such as viewport minus a fixed
+		// gutter; rejecting the run freezes the first phone offset over tablets.
+		const slope = ( second.value - first.value ) / ( second.viewport - first.viewport );
+		const intercept = first.value - slope * first.viewport;
+		if ( allowBoundedAffine && slope > 0 && slope * first.viewport + intercept > 0 ) {
+			const offset = round( Math.abs( intercept ) );
+			return {
+				kind: 'affine',
+				css: `calc(${ round( slope * 100 ) }vw ${ intercept < 0 ? '-' : '+' } ${ offset }px)`,
+				slope,
+				intercept,
+			};
 		}
 		return null;
 	}
@@ -341,7 +356,7 @@ export function learnSegmentedFluidModel(
 	// but is safe above a measured switch when its value is positive at the
 	// switch. Keep the narrower regime's independently fitted rule below it.
 	for ( let split = 2; split <= usable.length - MIN_SAMPLES; split++ ) {
-		const narrow = viewportModelForRun( usable.slice( 0, split ) );
+		const narrow = viewportModelForRun( usable.slice( 0, split ), options.holdNarrowForBoundedAffine );
 		const wide = usable.slice( split );
 		const line = leastSquaresLine( wide );
 		if ( ( narrow === null && ! options.holdNarrowForBoundedAffine ) || viewportModelForRun( wide ) !== null || line === null ||
@@ -380,7 +395,7 @@ export function learnSegmentedFluidModel(
 	while ( start < usable.length ) {
 		let matched: { model: ViewportFluidModel; end: number } | null = null;
 		for ( let end = usable.length; end > start + 1; end-- ) {
-			const model = viewportModelForRun( usable.slice( start, end ) );
+			const model = viewportModelForRun( usable.slice( start, end ), options.holdNarrowForBoundedAffine );
 			if ( model !== null ) {
 				matched = { model, end };
 				break;
@@ -465,7 +480,11 @@ export function segmentedCss(
 			// outranked every normal author rule. `!important` keeps that
 			// precedence; without it a more specific author selector (a
 			// `var()` fallback, say) silently wins at every width.
-			const declaration = `${ selector } { ${ property }: ${ segment.model.css } !important; }`;
+			// Runtime-written inline geometry has been removed, but author CSS may
+			// still declare the same property with a more specific selector (often
+			// one carrying a runtime variable). Give the measured rule enough
+			// specificity to replace that stale fallback at every sampled regime.
+			const declaration = `:is(#dla-fluid-specificity, ${ selector }) { ${ property }: ${ segment.model.css } !important; }`;
 			if ( conditions.length === 0 ) return declaration;
 			return `@media ${ conditions.join( ' and ' ) } {\n${ declaration }\n}`;
 		} )
