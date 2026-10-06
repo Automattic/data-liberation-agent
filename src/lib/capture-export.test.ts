@@ -5617,14 +5617,15 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		expect( evidence.assets[ 0 ].references[ 0 ].path ).toBe( `website/${ documentPath }` );
 	} );
 
-	it( 'resolves a server-redirected URL to its captured target instead of failing it', () => {
+	it.each( [ 'https:', 'http:' ] )( 'resolves a server redirect to a captured %s target instead of failing it', ( protocol ) => {
+		const target = `${ protocol }//example.com/new`;
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-redirect-alias-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
 		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
 		writeFileSync(
 			join( outputDir, 'html', 'homepage.html' ),
-			'<h1>Home</h1><a href="/old">Old</a><a href="https://example.com/new">New</a>'
+			`<h1>Home</h1><a href="/old">Old</a><a href="${ target }">New</a>`
 		);
 		writeFileSync( join( outputDir, 'html', 'new.html' ), '<h1>New</h1>' );
 		writeFileSync(
@@ -5633,8 +5634,8 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 				version: 1,
 				entries: {
 					'https://example.com/': { html: 'html/homepage.html' },
-					'https://example.com/old': { redirectedTo: 'https://example.com/new' },
-					'https://example.com/new': { html: 'html/new.html' },
+					'https://example.com/old': { redirectedTo: target },
+					[ target ]: { html: 'html/new.html' },
 					'https://example.com/gone': { redirectedTo: 'https://example.com/missing' },
 				},
 			} )
@@ -5650,11 +5651,11 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 
 		expect( receipt.routes.map( ( route: { url: string } ) => route.url ) ).toEqual( [
 			'https://example.com/',
-			'https://example.com/new',
+			target,
 		] );
 		expect( receipt.duplicateRoutes ).toEqual( [ {
 			url: 'https://example.com/old',
-			canonicalUrl: 'https://example.com/new',
+			canonicalUrl: target,
 			path: 'website/new/index.html',
 		} ] );
 		expect( receipt.discoveryDiagnostics ).toEqual( [ {
@@ -5889,6 +5890,49 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		expect( about ).toContain( 'rel="canonical" href="/about/index.html"' );
 		expect( homepage ).not.toContain( 'example.com' );
 		expect( about ).not.toContain( 'example.com' );
+	} );
+
+	it( 'preserves captured and uncaptured document relations when their documents move', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-document-relations-' ) );
+		dirs.push( outputDir );
+		for ( const directory of [ 'html', 'screenshots', 'resources' ] )
+			mkdirSync( join( outputDir, directory ), { recursive: true } );
+		writeFileSync( join( outputDir, 'html/homepage.html' ),
+			'<html><head><link rel="NEXT" href="page-2.html#photos"><link rel="prev" href="../older/index.html"><link rel="alternate search" href="feed.xml"><link rel="canonical" href="index.html"><link rel="alternate stylesheet" href="theme.css"><link rel="icon" href="favicon.ico"></head><body><h1>Gallery</h1></body></html>' );
+		writeFileSync( join( outputDir, 'html/next.html' ), '<h1 id="photos">More photos</h1>' );
+		writeFileSync( join( outputDir, 'resources/theme.css' ), 'body{color:navy}' );
+		writeFileSync( join( outputDir, 'resources/favicon.ico' ), 'icon' );
+		writeFileSync( join( outputDir, 'resources/manifest.json' ), JSON.stringify( {
+			version: 1,
+			resources: {
+				'https://example.com/archive/gallery/theme.css': { path: 'resources/theme.css', contentType: 'text/css' },
+				'https://example.com/archive/gallery/favicon.ico': { path: 'resources/favicon.ico', contentType: 'image/x-icon' },
+			},
+			failures: [],
+		} ) );
+		writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( {
+			version: 1,
+			entries: {
+				'https://example.com/archive/gallery/index.html': { html: 'html/homepage.html' },
+				'https://example.com/archive/gallery/page-2.html': { html: 'html/next.html' },
+			},
+		} ) );
+		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( {
+			outputDir,
+			sourceUrl: 'https://example.com/archive/gallery/index.html',
+			platform: 'generic', summary: {}, failures: [],
+		} ), 'utf8' ) );
+		const document = cheerio.load( readFileSync( join( outputDir, receipt.entrypoint ), 'utf8' ) );
+		const nextRoute = receipt.routes.find( ( route: { url: string } ) => route.url.endsWith( '/page-2.html' ) );
+		expect( document( 'link[rel="NEXT"]' ).attr( 'href' ) ).toBe( `/${ nextRoute.path.replace( /^website\//, '' ) }#photos` );
+		expect( document( 'link[rel="prev"]' ).attr( 'href' ) ).toBe( 'https://example.com/archive/older/index.html' );
+		expect( document( 'link[rel="alternate search"]' ).attr( 'href' ) ).toBe( 'https://example.com/archive/gallery/feed.xml' );
+		expect( document( 'link[rel="canonical"]' ).attr( 'href' ) ).toBe( `/${ receipt.entrypoint.replace( /^website\//, '' ) }` );
+		for ( const relation of [ 'alternate stylesheet', 'icon' ] ) {
+			const href = document( `link[rel="${ relation }"]` ).attr( 'href' )!;
+			expect( href ).toMatch( /^\// );
+			expect( existsSync( join( outputDir, 'website', href.slice( 1 ) ) ) ).toBe( true );
+		}
 	} );
 
 	it( 'fails when routes claim the same website path without declaring a canonical route', () => {

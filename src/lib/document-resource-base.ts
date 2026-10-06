@@ -9,6 +9,9 @@ export interface RenderedDocumentUrl {
 
 /** Resolve source references before removing <base> or combining viewport documents. */
 export function resolveDocumentReferences( html: string, documentUrl: string, browserBaseUrl?: string ): string {
+	// Legacy captures without browser metadata or an authored base already use
+	// the route URL. Avoid an extra DOM allocation for those large documents.
+	if ( browserBaseUrl === undefined && ! /<base(?:\s|>)/i.test( html ) ) return html;
 	const $ = cheerio.load( html );
 	const authoredBase = $( 'base[href]' ).first().attr( 'href' );
 	if ( browserBaseUrl === undefined && authoredBase === undefined ) return html;

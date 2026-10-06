@@ -69,4 +69,15 @@ describe('isRouteDrift', () => {
     expect(serverRedirectTarget('https://example.com/about', 'https://example.com/about/?x=1')).toBeUndefined();
     expect(serverRedirectTarget('https://example.com/about', 'https://other.example/about-us')).toBeUndefined();
   });
+
+  it('recognizes observed HTTP/HTTPS aliases without weakening post-load drift', () => {
+    expect(serverRedirectTarget('https://example.com/old', 'http://example.com/new/')).toBe('http://example.com/new/');
+    expect(serverRedirectTarget('http://example.com/old', 'https://example.com/new/')).toBe('https://example.com/new/');
+    expect(serverRedirectTarget('https://example.com/author', 'http://example.com/author/')).toBeUndefined();
+    expect(isRouteDrift('http://example.com/author/', 'https://example.com/author')).toBe(true);
+    expect(serverRedirectTarget('https://example.com/old', 'http://other.example/new')).toBeUndefined();
+    expect(serverRedirectTarget('https://example.com/old', 'http://example.com:8080/new')).toBeUndefined();
+    expect(serverRedirectTarget('https://example.com/old', 'http://user:secret@example.com/new')).toBeUndefined();
+    expect(serverRedirectTarget('https://example.com/old', 'ftp://example.com/new')).toBeUndefined();
+  });
 });

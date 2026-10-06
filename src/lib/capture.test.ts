@@ -276,3 +276,27 @@ describe( 'captureWebsite completeness', () => {
 		).rejects.toBeInstanceOf( IncompleteCaptureError );
 	} );
 } );
+
+describe( 'captureWebsite phase progress', () => {
+	afterEach( () => {
+		captureScreenshotsMock.mockClear();
+		rmSync( root, { recursive: true, force: true } );
+	} );
+
+	it( 'reports media acquisition separately from browser capture and export', async () => {
+		const phases: string[] = [];
+		await captureWebsite(
+			{ url: sourceUrl, outputDir: root, onProgress: ( event ) => phases.push( event.phase ) },
+			{
+				findAdapter: () => ( {
+					id: 'generic',
+					platform: 'generic',
+					discover: async () => ( { urls: [] } ),
+					extract: async () => ( { title: '', content: '' } ),
+				} ),
+			}
+		);
+
+		expect( phases ).toEqual( [ 'discovering', 'capturing', 'media', 'finalizing', 'complete' ] );
+	} );
+} );
