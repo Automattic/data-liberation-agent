@@ -36,11 +36,11 @@ describe('desktopUserAgent', () => {
 });
 
 describe('desktopContextOptions', () => {
-  it('gives no override when the browser cannot report its user agent', async () => {
-    expect(await desktopContextOptions({})).toEqual({});
+  it('keeps the locale when the browser cannot report its user agent', async () => {
+    expect(await desktopContextOptions({})).toEqual({ locale: 'en-US' });
     expect(
       await desktopContextOptions({ newBrowserCDPSession: () => Promise.reject(new Error('no cdp')) })
-    ).toEqual({});
+    ).toEqual({ locale: 'en-US' });
   });
 });
 
@@ -54,7 +54,7 @@ describe.skipIf(process.env.SKIP_BROWSER_TESTS)('desktopContextOptions in a real
       const ua = await page.evaluate(() => navigator.userAgent);
       expect(ua).not.toContain('HeadlessChrome');
       expect(ua).toContain(`Chrome/${b.version()}`);
-      expect(options).toEqual({ userAgent: ua });
+      expect(options).toEqual({ locale: 'en-US', userAgent: ua });
     } finally {
       await b.close();
     }

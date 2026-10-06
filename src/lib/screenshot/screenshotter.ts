@@ -1822,7 +1822,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 					const sessionContext = await sourceContextOptions( attemptBrowser, entryUrl );
 					const contextOptions: BrowserContextOptions = {
 						...( viewport.id === 'mobile'
-							? { ...IPHONE_17_CONTEXT, storageState: sessionContext.storageState }
+							? { ...sessionContext, ...IPHONE_17_CONTEXT }
 							: sessionContext ),
 						viewport: { width: viewport.width, height: viewport.height },
 						deviceScaleFactor:
