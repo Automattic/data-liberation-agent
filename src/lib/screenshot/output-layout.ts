@@ -115,3 +115,24 @@ export function planArtifacts( args: {
 	};
 	return { desktop: plan( 'desktop' ), mobile: plan( 'mobile' ) };
 }
+
+/** Additional identities use the same capture transaction, with isolated paths.
+ * Legacy section/design sidecars remain desktop/mobile; they are not overwritten.
+ */
+export function planDocumentArtifacts( args: { slug: string; outputDir: string; id: string; force: boolean; captureImages?: boolean } ): ArtifactPlan {
+	if ( ! /^[a-z][a-z0-9-]*$/.test( args.id ) || [ 'desktop', 'mobile' ].includes( args.id ) ) throw new Error( 'Invalid additional document identity' );
+	const base = planArtifacts( args ).desktop;
+	const html = join( args.outputDir, `html-${ args.id }`, `${ args.slug }.html` );
+	const fullpage = join( args.outputDir, 'screenshots', args.id, `${ args.slug }.png` );
+	const scrolled = join( args.outputDir, 'screenshots', args.id, `${ args.slug }.scrolled.png` );
+	const geometry = join( args.outputDir, 'layout-geometry', `${ args.slug }.${ args.id }.json` );
+	const captureHtml = args.force || ! existsSync( html );
+	const captureGeometry = args.force || ! existsSync( geometry );
+	const captureFullpage = args.captureImages === true && ( args.force || ! existsSync( fullpage ) );
+	const captureScrolled = args.captureImages === true && ( args.force || ! existsSync( scrolled ) );
+	return { ...base, needsLoad: captureHtml || captureGeometry || captureFullpage || captureScrolled,
+		captureHtml, captureGeometry, captureFullpage, captureScrolled,
+		captureMobileHtml: false, captureSections: false, captureMobileSections: false,
+		paths: { ...base.paths, html, fullpage, scrolled, geometry },
+	};
+}

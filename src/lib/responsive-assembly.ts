@@ -52,14 +52,9 @@ function documentSwitchCss( switchWidth: number ): string {
 }
 
 /**
- * Fallback switch width, used only when the source gave us nothing to detect
- * from. A detected canvas floor is always preferred: the width a document stops
- * adapting at is the source's own switching point, and asserting a phone width
- * on a site whose canvas floor is 980px puts the switch in the wrong place.
- *
- * The mobile document is what the source serves phones, and it was captured
- * at phone width only. From 768px up are tablets, which per-device sources
- * serve their desktop document — the one the fluid sweep observed at 768px.
+ * Legacy width-only assembly fallback. Source-owned device selection bypasses
+ * this path: a canvas floor or CSS boundary does not prove a device transition.
+ * Explicit observed width contracts supply their own boundary instead.
  */
 export const DEFAULT_SWITCH_WIDTH = 767;
 
@@ -149,7 +144,7 @@ export function documentsDiffer( desktopHtml: string, mobileHtml: string ): bool
  */
 export interface ResponsiveVariantEvidence {
 	/** Documents shipped in the exported route file. */
-	variants: 1 | 2;
+	variants: number;
 	outcome: 'collapsed-equivalent' | 'collapsed-identity-subset' | 'dual-structural';
 	reason: string;
 	/** How responsive CSS survives a collapse. Present only when collapsed. */

@@ -1,15 +1,12 @@
 import type { ExtractedNav } from './nav-extract.js';
 import type { UrlType } from '../extraction/sitemap.js';
+import type { CaptureProfile } from './capture-profiles.js';
 
 export interface CaptureLogSink {
 	sendLoggingMessage( message: { level: 'info'; data: string } ): void | Promise< void >;
 }
 
-export interface Viewport {
-	id: 'desktop' | 'mobile';
-	width: number;
-	height: number;
-}
+export interface Viewport extends CaptureProfile {}
 
 // Desktop stays at 1440×900 — the browser renders the real desktop layout
 // (responsive media queries kick in based on logical viewport, not output
@@ -39,6 +36,10 @@ export interface ScreenshotOpts {
 	outputDir: string;
 	primaryUrl?: string; // reference for same-origin enforcement
 	viewports?: Viewport[];
+	additionalProfiles?: import('../../adapters/page-actions.js').LiberationHooks['additionalProfiles'];
+	referenceWidths?: number[];
+	/** Declare required cells before navigating, so failed profiles stay pending. */
+	declareSourceProfile?: (url: string, profile: import('./capture-profiles.js').CaptureProfile) => void;
 	concurrency?: number; // default: 6
 	browserRestartEvery?: number; // default: 100
 	cdpPort?: number;
@@ -108,7 +109,7 @@ export interface ScreenshotOpts {
 		ctx: import('../../adapters/page-actions.js').LiberationContext
 	) => Promise< void >;
 	/** Product-owned evidence observer, after source cleanup and before geometry rewriting. */
-	observeSource?: ( page: import('playwright').Page, url: string, device: 'desktop' | 'mobile', errors: readonly string[], browserProfile?: Readonly<{ isMobile: boolean; hasTouch: boolean }> ) => Promise<void>;
+	observeSource?: ( page: import('playwright').Page, url: string, device: string, errors: readonly string[], browserProfile?: Readonly<{ isMobile: boolean; hasTouch: boolean }>, profile?: import('./capture-profiles.js').CaptureProfile ) => Promise<void>;
 }
 
 export interface ScreenshotResult {

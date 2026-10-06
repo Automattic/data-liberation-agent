@@ -58,6 +58,9 @@ export type {
 	RegisterPlatformOptions,
 } from './platform/types.js';
 export type { LiberationHooks, LiberationContext } from './adapters/page-actions.js';
+export type { DeviceDocumentSelection, DocumentSelection } from './lib/document-selection.js';
+export type { CaptureProfile } from './lib/screenshot/capture-profiles.js';
+export type { ReplayBrowserIdentity } from './lib/screenshot/capture-profiles.js';
 export { cleanupPolicy, providerCreditRules, CLEANUP_SCHEMA } from './lib/source-cleanup.js';
 export type { CleanupRule, CleanupPolicy, CleanupReport, CleanupRecord } from './lib/source-cleanup.js';
 export { registerPublishTarget, unregisterPublishTarget, findPublishTarget, publishTargetNames, PublishError } from './lib/publish/index.js';

@@ -8,6 +8,7 @@ import { resolveEventFormRedirect } from './event-forms.js';
 import { providerCreditRules } from '../../lib/source-cleanup.js';
 import type { Locator, Page } from 'playwright';
 import { canonicalizeWixCapturedHtml } from './instance-ids.js';
+import { wixDocumentSelection, wixAdditionalProfiles } from './document-selection.js';
 
 /** Wix media ids look like `8e80e7_a1b2…`, stable across crops of one asset. */
 const WIX_MEDIA_ID = /([a-z0-9]{4,12}_[a-z0-9]{24,48})/i;
@@ -300,7 +301,7 @@ async function closeOpenedMenu( page: Page ): Promise< void > {
  * runtime starts. A portable capture cannot retain that runtime, so settle the
  * live menu into a static list of its authored destinations instead.
  */
-export async function settleWixNavigation( viewport: 'desktop' | 'mobile' ): Promise< void > {
+export async function settleWixNavigation( viewport: string ): Promise< void > {
 	const waitForFrame = () =>
 		new Promise< void >( ( resolve ) =>
 			requestAnimationFrame( () => requestAnimationFrame( () => resolve() ) )
@@ -435,6 +436,9 @@ export async function settleScrollReactiveChrome( page: Page ): Promise< void > 
 }
 
 export const capture: LiberationHooks = {
+	documentSelection: wixDocumentSelection,
+	additionalProfiles: wixAdditionalProfiles,
+	referenceWidths: [ 390, 768, 1440 ],
   resolveClientRedirect: resolveEventFormRedirect,
   canonicalizeHtml: canonicalizeWixCapturedHtml,
   cleanupRules: [

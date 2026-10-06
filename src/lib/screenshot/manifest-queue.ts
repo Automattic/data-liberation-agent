@@ -12,6 +12,22 @@ export interface ManifestEntry {
   mobile?: string;
   mobileScrolled?: string;
   html?: string;
+  mobileHtml?: string;
+  /** Actual browser identity and artifacts for every acquired document profile. */
+  profiles?: Record<string, {
+    recipe: import('./capture-profiles.js').CaptureProfile;
+    identity?: import('./capture-profiles.js').ReplayBrowserIdentity;
+    viewport: { width: number; height: number };
+    userAgent?: string;
+    browserProfile: { isMobile: boolean; hasTouch: boolean };
+    deviceScaleFactor: number;
+    html?: string;
+    fluid?: ManifestEntry['fluid'];
+    interactions?: InteractionStatesReport;
+    scrollStates?: ScrollStatesReport;
+  }>;
+  /** Additional captured device documents, keyed by the platform selection contract. */
+  documents?: Record<string, string>;
   /** path to sections/<slug>.json (captured section specs) when present */
   sections?: string;
   /** Overlays/banners dismissed before this URL was captured (observability). */
@@ -28,7 +44,7 @@ export interface ManifestEntry {
     applied: number;
     unmodelled: number;
     breakpoints: number[];
-    /** Width below which this document stops adapting; drives the switch point. */
+    /** Width below which this document stops adapting; geometry, not device selection. */
     canvasFloor?: number | null;
     byKind: Record<string, number>;
   };
