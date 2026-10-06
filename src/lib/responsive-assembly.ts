@@ -1644,7 +1644,13 @@ function responsiveMobileStyles(
 	)
 		.split( /\s+/ )
 		.filter( Boolean );
-	return styleBlocks( mobileHtml )
+	// Learned rules already carry their width conditions and document-specific
+	// identities. Keep them intact alongside the scoped source styles.
+	const fluidRules = [ ...mobileHtml.matchAll( /<style\b([^>]*)>([\s\S]*?)<\/style\s*>/gi ) ]
+		.filter( match => FLUID_RULES_STYLE_ATTRIBUTE.test( match[ 1 ] ?? '' ) )
+		.map( match => match[ 0 ] )
+		.join( '' );
+	return fluidRules + styleBlocks( mobileHtml )
 		.filter( ( style ) => style !== '' && ( ! skip.has( style ) || classAliases.size > 0 ) )
 		.map(
 			( original ) => {

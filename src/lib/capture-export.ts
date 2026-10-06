@@ -59,7 +59,7 @@ import { pathWithin } from './portable-assets.js';
 import { materializePortableMedia, type FailedPortableMedia } from './portable-media.js';
 import { isSrcsetShaped, elementSrcReferences, omitDegenerateReplacements, preparePortableReplacements } from './portable-references.js';
 import { materializePortableResources } from './portable-resources.js';
-import { collectAssetEvidenceReferences, buildSemanticEvidenceArtifacts, writeCaptureEvidence, UNCAPTURED_ROUTE_REASON, type CaptureFluidEvidence, type SemanticEvidencePage } from './capture-export-evidence.js';
+import { collectAssetEvidenceReferences, buildSemanticEvidenceArtifacts, writeCaptureEvidence, UNCAPTURED_ROUTE_REASON, type CaptureFluidEvidence, type CaptureDocumentFluidEvidence, type SemanticEvidencePage } from './capture-export-evidence.js';
 export { CAPTURE_RECEIPT_SCHEMA, SOURCE_PROFILE_SCHEMA, ASSET_EVIDENCE_SCHEMA, CAPTURED_INTERACTIONS_SCHEMA, CAPTURED_SCROLL_STATES_SCHEMA, INDEXED_SEMANTIC_EVIDENCE_SCHEMA } from './capture-export-evidence.js';
 import { inspectSourceInteractivity, type SourceInteractivityPage } from './source-interactivity.js';
 import { loadHttpExportInput, type HttpExportInput } from './http-export-input.js';
@@ -91,6 +91,7 @@ interface CaptureManifestEntry {
 	scrollStates?: ScrollStatesReport;
 	/** Responsive learning outcome recorded during capture. */
 	fluid?: CaptureFluidEvidence;
+	fluidMobile?: CaptureFluidEvidence;
 	metadata?: {
 		openGraph?: Record< string, string >;
 	};
@@ -126,6 +127,7 @@ interface CaptureEntry {
 	hasMobileDocument?: boolean;
 	/** Receipt evidence for how many responsive variants this route ships and why. */
 	responsiveVariants?: ResponsiveVariantEvidence;
+	fluidGeometry?: CaptureDocumentFluidEvidence;
 	identityHtmlPath?: string;
 	sections?: string;
 	canonicalUrl?: string;
@@ -1367,6 +1369,7 @@ function buildExportCapture(
 				: siteSwitchWidth;
 		if ( detectedFloor ) switchWidths.push( detectedFloor );
 		if ( entry.fluid ) fluidReports.push( entry.fluid );
+		if ( entry.fluidMobile ) fluidReports.push( entry.fluidMobile );
 		if ( embedded && options.input?.mobileVariant && rawMobileHtml !== undefined ) {
 			const pair = mergeResponsiveEmbeddedRegions( { desktop: rawDesktopHtml, mobile: rawMobileHtml, url, desktopVariant: options.input.desktopVariant, mobileVariant: options.input.mobileVariant, receipt: embedded.receipt, switchWidth: detectedFloor ?? DEFAULT_SWITCH_WIDTH, scopeClasses: { desktop: DESKTOP_DOCUMENT_CLASS, mobile: MOBILE_DOCUMENT_CLASS } } );
 			rawDesktopHtml = pair.desktop; rawMobileHtml = pair.mobile;
@@ -1402,6 +1405,7 @@ function buildExportCapture(
 			],
 			hasMobileDocument: assembly.hasMobileDocument,
 			responsiveVariants: assembly.evidence,
+			...( entry.fluid || entry.fluidMobile ? { fluidGeometry: { desktop: entry.fluid, mobile: entry.fluidMobile } } : {} ),
 			sections: entry.sections,
 			canonicalUrl: canonicalMetadataUrl(
 				entry.metadata?.openGraph?.[ 'og:url' ] ?? openGraphUrl( html ),
@@ -1639,6 +1643,7 @@ function buildExportCapture(
 			url,
 			path: `website/${ routePath }`,
 			...( entry.responsiveVariants ? { responsiveVariants: entry.responsiveVariants } : {} ),
+			...( entry.fluidGeometry ? { fluidGeometry: entry.fluidGeometry } : {} ),
 		} );
 	}
 	for ( const [ aliasKey, routePath ] of canonicalRouteAliases ) {

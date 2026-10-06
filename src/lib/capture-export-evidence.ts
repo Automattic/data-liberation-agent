@@ -19,6 +19,10 @@ export interface CaptureFluidEvidence {
 	canvasFloor?: number | null;
 	byKind: Record< string, number >;
 }
+export interface CaptureDocumentFluidEvidence {
+	desktop?: CaptureFluidEvidence;
+	mobile?: CaptureFluidEvidence;
+}
 interface AssetEvidenceEntry {
 	url: string;
 	evidenceDocuments: Array< { state: 'desktop' | 'mobile'; html: string } >;
@@ -48,7 +52,7 @@ export interface CaptureEvidenceInput {
 		hasMobileDocument?: boolean;
 	} >;
 	routes: {
-		retained: ReadonlyArray< { url: string; path: string; responsiveVariants?: ResponsiveVariantEvidence } >;
+		retained: ReadonlyArray< { url: string; path: string; responsiveVariants?: ResponsiveVariantEvidence; fluidGeometry?: CaptureDocumentFluidEvidence } >;
 		excluded: ReadonlyArray< string >;
 		duplicates: ReadonlyArray< { url: string; canonicalUrl: string; path: string } >;
 	};
@@ -488,7 +492,7 @@ export function writeCaptureEvidence( input: CaptureEvidenceInput ): string {
 		switchWidth: switchWidths.length > 0 ? Math.max( ...switchWidths ) : null,
 		switchWidthSource: switchWidths.length > 0 ? 'detected' : 'default',
 		breakpoints: observedBreakpoints,
-		learned: { applied: learnedApplied, frozen: learnedFrozen, routes: fluidReports.length },
+		learned: { applied: learnedApplied, frozen: learnedFrozen, routes: routes.filter( entry => entry.fluidGeometry ).length, documents: fluidReports.length },
 	};
 	writeFileSync(
 		join( stageDir, 'source-profile.json' ),

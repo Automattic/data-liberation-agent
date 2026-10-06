@@ -17,6 +17,10 @@ it.each( [ 'http', 'missing-route' ] )( 'keeps receipt and sidecar completeness/
 		writeFileSync( identityHtmlPath, '<main>Evidence</main>' );
 		const resourceManifest = { version: 1 as const, resources: {}, failures: [] };
 		const references = collectAssetEvidenceReferences( [], () => 'index.html', resourceManifest, captureRoot );
+		const fluidGeometry = {
+			desktop: { applied: 5, unmodelled: 1, breakpoints: [ 751, 390, 751 ], byKind: {} },
+			mobile: { applied: 2, unmodelled: 2, breakpoints: [ 390 ], canvasFloor: 402, byKind: {} },
+		};
 		const input: CaptureEvidenceInput = {
 			locations: { captureRoot, stageRoot },
 			source: { sourceUrl: 'https://example.test/', platform: 'generic', summary: { routesFailed: 0 }, failures: [] },
@@ -28,9 +32,9 @@ it.each( [ 'http', 'missing-route' ] )( 'keeps receipt and sidecar completeness/
 				...( mode === 'http' ? { http: { acquisition: { method: 'http' }, diagnostics: [] } } : {} ),
 			},
 			pages: [ { slug: 'home', url: 'https://example.test/', routePath: 'index.html', identityHtmlPath, hasMobileDocument: true } ],
-			routes: { retained: [ { url: 'https://example.test/', path: 'website/index.html' } ], excluded: [], duplicates: [] },
+			routes: { retained: [ { url: 'https://example.test/', path: 'website/index.html', fluidGeometry } ], excluded: [], duplicates: [] },
 			states: { interactions: [], scroll: [] },
-			layout: { switchWidths: [ 751, 768 ], fluidReports: [ { applied: 5, unmodelled: 1, breakpoints: [ 751, 390, 751 ], byKind: {} } ] },
+			layout: { switchWidths: [ 751, 768 ], fluidReports: Object.values( fluidGeometry ) },
 			assets: {
 				references, stubs: MediaStubStore.load( captureRoot ), manifest: resourceManifest, portablePaths: new Map(), files: [],
 				media: { selected_count: 0, selected_bytes: 0, retained_external_count: 0, max_bytes: 1000, reserved_bytes: 0 },
@@ -52,6 +56,8 @@ it.each( [ 'http', 'missing-route' ] )( 'keeps receipt and sidecar completeness/
 		expect( profile.breakpoints ).toEqual( [ 390, 751 ] );
 		expect( profile.switchWidth ).toBe( 768 );
 		expect( profile.documentsPerRoute ).toBe( 2 );
+		expect( profile.learned ).toEqual( { applied: 7, frozen: 3, routes: 1, documents: 2 } );
+		expect( receipt.routes[ 0 ].fluidGeometry ).toEqual( fluidGeometry );
 		expect( diagnostics.interactions ).toEqual( receipt.interactions );
 		expect( diagnostics.scrollStates ).toEqual( receipt.scrollStates );
 		expect( diagnostics.portableMedia ).toEqual( receipt.portableMedia );

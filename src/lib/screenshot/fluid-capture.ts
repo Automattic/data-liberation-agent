@@ -53,6 +53,8 @@ function pureXTranslation( transform: string ): number | null {
 export type LearnableProperty = ( typeof LEARNABLE_PROPERTIES )[ number ];
 
 export interface FluidSweepOptions {
+	/** Distinguishes rule identities when responsive documents share a stylesheet. */
+	document?: 'desktop' | 'mobile';
 	/** Widths to observe. More widths cost time but sharpen the fit. */
 	widths?: number[];
 	/** Settle time after each resize, for the runtime to react. */
@@ -98,9 +100,15 @@ export async function learnAndApplyFluidGeometry(
 	const widths = options.widths ?? DEFAULT_SWEEP_WIDTHS;
 	const settleMs = options.settleMs ?? 1200;
 	const original = page.viewportSize();
+	// A resize can write geometry onto elements that had none at capture width
+	// (including dormant cloned chrome). Keep their baseline declarations too:
+	// an unobserved side effect of the sweep must not become the frozen copy.
+	const baseline = await page.evaluateHandle( () => new Map(
+		[ ...document.querySelectorAll< HTMLElement >( '*' ) ].map( element => [ element, element.getAttribute( 'style' ) ] )
+	) );
 
 	const tagged = await page.evaluate(
-		( { attribute, properties } ) => {
+		( { attribute, properties, prefix } ) => {
 			let index = 0;
 			for ( const element of document.querySelectorAll< HTMLElement >( '[style]' ) ) {
 				const ignorePadding = element.hasAttribute( 'data-dla-fluid-ignore-padding' );
@@ -132,14 +140,15 @@ export async function learnAndApplyFluidGeometry(
 				if ( ! carriesPixelSize && ! carriesPixelCustomProperty && ! carriesMatrixTransform && ! carriesAbsoluteInset ) {
 					continue;
 				}
-				element.setAttribute( attribute, String( index++ ) );
+				element.setAttribute( attribute, `${ prefix }${ index++ }` );
 			}
 			return index;
 		},
-		{ attribute: ID_ATTRIBUTE, properties: LEARNABLE_PROPERTIES }
+		{ attribute: ID_ATTRIBUTE, properties: LEARNABLE_PROPERTIES, prefix: options.document ? `${ options.document }-` : '' }
 	);
 
 	if ( tagged === 0 ) {
+		await baseline.dispose();
 		return { applied: 0, unmodelled: 0, breakpoints: [], canvasFloor: null, byKind: {} };
 	}
 
@@ -437,6 +446,29 @@ export async function learnAndApplyFluidGeometry(
 	// it would overwrite anything applied beforehand with pixels again.
 	if ( original ) await page.setViewportSize( original );
 	await page.waitForTimeout( settleMs );
+	await waitForRestGeometry( page, ID_ATTRIBUTE );
+	await page.evaluate( snapshot => {
+		// Transforms retain the final runtime state: the pure-translation checks
+		// below must still reject a matrix that became rotated/scaled on return.
+		const geometry = [ 'width', 'height', 'font-size', 'padding-top', 'inset', 'top', 'left' ];
+		const scratch = document.createElement( 'span' );
+		for ( const [ element, style ] of snapshot ) {
+			if ( ! element.isConnected || ! element.style ) continue;
+			scratch.style.cssText = style ?? '';
+			const properties = new Set( [ ...geometry,
+				...[ ...element.style, ...scratch.style ].filter( property => property.startsWith( '--' ) ),
+			] );
+			for ( const property of properties ) {
+				const value = scratch.style.getPropertyValue( property );
+				const priority = scratch.style.getPropertyPriority( property );
+				if ( element.style.getPropertyValue( property ) === value && element.style.getPropertyPriority( property ) === priority ) continue;
+				if ( value ) element.style.setProperty( property, value, priority );
+				else element.style.removeProperty( property );
+			}
+			if ( style === null && element.style.cssText === '' ) element.removeAttribute( 'style' );
+		}
+	}, baseline );
+	await baseline.dispose();
 	// The resize back to the capture viewport can switch a transform to another
 	// matrix after the sweep. Validate that final state before removing inline
 	// transform; otherwise translateX would discard its new components.
