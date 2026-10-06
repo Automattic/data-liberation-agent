@@ -15,6 +15,20 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.19.1] - 2026-10-06
+
+### Changed
+- regenerate plugin bundles
+- complete browser doubles for native timeline probes
+- isolate portable resource materialization
+
+### Fixed
+- preserve resting navigation and existing panel identity
+- normalize portable document relation links
+- preserve native view timeline motion and responsive ranges
+- recognize same-site protocol redirects
+- follow extensionless sitemap index children
+
 ## [0.19.0] - 2026-10-06
 
 ### Added
