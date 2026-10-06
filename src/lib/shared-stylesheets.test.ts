@@ -20,8 +20,9 @@ it( 'localizes and deduplicates shared CSS while preserving media, source restri
 			const htmlPath = join( root, `${ name }.html` ); writeFileSync( htmlPath, staged );
 			return { url: `https://example.test/${ name }/`, htmlPath, styleHoistContext: capturedStyleHoistContext( source ) };
 		} );
-		const mediaReplacements = new Map( [ [ 'https://cdn.test/image.png', '/media/image.png' ] ] );
-		const result = materializeSharedStylesheets( { entries, websiteDir, sourceUrl: 'https://example.test/', mediaReplacements, resourceReplacements: new Map(), rejectedReplacementKeys: new Set() } );
+		const mediaReplacements = new Map( [ [ 'https://cdn.test/image.png', '/media/stub.png' ] ] );
+		const resourceReplacements = new Map( [ [ 'https://cdn.test/image.png', '/media/image.png' ] ] );
+		const result = materializeSharedStylesheets( { entries, websiteDir, sourceUrl: 'https://example.test/', mediaReplacements, resourceReplacements, rejectedReplacementKeys: new Set() } );
 		expect( result.assets ).toEqual( [ { sourceUrl: `https://example.test/#inline-style-${ hash }`, path: `website/assets/css/capture-${ hash }.css` } ] );
 		expect( result.servedPaths ).toEqual( [ `/assets/css/capture-${ hash }.css`, `/assets/css/capture-${ hash }.css` ] );
 		expect( readdirSync( join( websiteDir, 'assets/css' ) ) ).toEqual( [ `capture-${ hash }.css` ] );
@@ -37,6 +38,7 @@ it( 'localizes and deduplicates shared CSS while preserving media, source restri
 		expect( result.diagnostics.diagnosticCounts ).toEqual( { relative_css_url: 2, unsafe_attributes: 2 } );
 		expect( result.diagnostics.hoistedStylesheets ).toBe( 1 );
 		expect( readFileSync( sourcePath, 'utf8' ) ).toBe( source );
-		expect( [ ...mediaReplacements ] ).toEqual( [ [ 'https://cdn.test/image.png', '/media/image.png' ] ] );
+		expect( [ ...mediaReplacements ] ).toEqual( [ [ 'https://cdn.test/image.png', '/media/stub.png' ] ] );
+		expect( [ ...resourceReplacements ] ).toEqual( [ [ 'https://cdn.test/image.png', '/media/image.png' ] ] );
 	} finally { rmSync( root, { recursive: true, force: true } ); }
 } );

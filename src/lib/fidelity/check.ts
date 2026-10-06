@@ -23,6 +23,7 @@ import { readPortableMotion } from '../portable-motion.js';
 import { observeViewportEntrances } from '../viewport-entrances.js';
 import { validateMotionContract, verifyCandidateMotion, type MotionContract, type MotionEvidence } from './candidate-motion.js';
 import { probeDialogs } from './dialog-probe.js';
+import { checkInternalRoute, type InternalRouteOutcome } from './internal-route.js';
 import { writePixelEvidence } from './evidence.js';
 import { captureViewportScreenshot } from './viewport-screenshot.js';
 import { checkSelfConsistency, type SelfConsistencyReport } from './self-consistency.js';
@@ -792,13 +793,10 @@ export async function observePage(
 			};
 		}, { clickUnresolved: ! localOrigin && ! captureSession, skipScrollProbe } );
 
-		const internalMissing: string[] = [];
+		const internalRoutes: InternalRouteOutcome[] = [];
 		if ( localOrigin ) {
 			for ( const path of measured.internalPaths.slice( 0, MAX_ROUTE_CHECKS ) ) {
-				// API requests do not pass through browser routing. Frozen replay must
-				// not follow a candidate's redirect back to the live origin.
-				const response = await page.request.get( `${ localOrigin }${ path }`, { timeout: 10_000, maxRedirects: captureSession ? 0 : 20 } );
-				if ( ! response.ok() ) internalMissing.push( path );
+				internalRoutes.push( await checkInternalRoute( page.request, localOrigin, path ) );
 			}
 		}
 
@@ -835,7 +833,7 @@ export async function observePage(
 			overflow: measured.overflow,
 			externalHosts: [ ...external ].sort(),
 			hashTargets: measured.hashTargets as HashTarget[],
-			internalMissing,
+			internalRoutes,
 			dialogs,
 			dismissedOverlays,
 		};
@@ -1229,7 +1227,7 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 					docWidth: 390,
 					externalHosts: [],
 					hashTargets: [],
-					internalMissing: [],
+					internalRoutes: [],
 				} );
 				const score = {
 					stage: 'drift' as const,

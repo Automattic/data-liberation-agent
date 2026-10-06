@@ -61,6 +61,26 @@ Frozen reports include:
 - Existing `scores`, `selfConsistency`, counters and route counts. Offline
   self-consistency still checks every portable route, even for a candidate.
 
+Rendered observations expose `internalRoutes: InternalRouteOutcome[]` in place of
+the former `internalMissing` pathname list. Each checked link carries its authored
+`path`, last observed HTTP `status` (or `null` if no response arrived), count of
+followed `redirects`, and `outcome`. `reachable` requires a terminal 2xx;
+`http-error` preserves other terminal statuses. Redirect failures distinguish
+`blocked-redirect`, `missing-location`, `invalid-location`, `redirect-loop`, and
+`redirect-limit`; transport failures distinguish `timeout` and `request-error`.
+The last status on a failed chain is evidence of that hop, not a terminal result.
+Navigation failures name the actual status and outcome rather than labeling every
+failure 404. Successful chains remain available as report evidence.
+
+Internal-link API probes check at most 32 authored pathnames per observation,
+follow at most 20 redirects per path, and share a 10-second deadline across each
+chain. Automatic redirects are disabled. Every requested hop must have exactly
+the candidate's origin (scheme, hostname and port), without credentials; aliases
+and outbound Locations are blocked before requesting them. Outbound destinations
+are not persisted. These probes cannot borrow live source evidence, even though
+Playwright API requests bypass the browser route guard. Source observations carry
+an empty route-outcome list.
+
 Reports are written to `compare/<stage>/report.json`. `screenshots: true` adds
 source/copy/diff PNGs per stage/route/width/state. Pixel scores remain human
 evidence, never a pass/fail threshold. A materialization pass proves only that
