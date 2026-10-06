@@ -8,12 +8,12 @@ import {
 	statSync,
 	writeFileSync,
 } from 'node:fs';
-import { basename, dirname, extname, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, extname, join, resolve } from 'node:path';
 import * as cheerio from 'cheerio';
-import { identityLogoReferences } from './identity-resources.js';
 import type { Element } from 'domhandler';
 import { escapeHtmlAttr } from './html-escape.js';
-import { allocateCaptureRoutes, normalizedUrl } from './capture-export-routes.js';
+import { allocateCaptureRoutes } from './capture-export-routes.js';
+import { normalizedUrl } from './url/route-key.js';
 import {
 	indexPortableMediaReferences,
 	mediaReferenceMatched,
@@ -41,24 +41,26 @@ import {
 	isAbsentDocumentRender,
 	isSourceCaptureUrl,
 } from './screenshot/absent-document.js';
-import { isInlineUrl, selfContainWebsite } from './self-contain.js';
+import { selfContainWebsite } from './self-contain.js';
 import { wireCapturedDialogs, wireCapturedRouteNavigation } from './static-dialogs.js';
 import { wireNativeViewTimelines } from './native-view-timelines.js';
-import { rewriteMediaUrls, URL_TERMINATOR_LOOKAHEAD } from './streaming/media-url-rewrite.js';
+import { rewriteMediaUrls } from './streaming/media-url-rewrite.js';
 import {
 	INTERACTION_STATES_SCHEMA,
 	LEGACY_INTERACTION_STATES_SCHEMA,
 	type InteractionStatesReport,
 } from './screenshot/interaction-capture.js';
 import { SCROLL_STATES_SCHEMA, type ScrollStatesReport } from './screenshot/scroll-state-capture.js';
+import { withViewportEntrances } from './viewport-entrances.js';
 import {
-	isAudioLink,
-	isDocumentDownloadLink,
-	svgUseDocumentReferences,
 	type CapturedResourceManifest,
 } from './screenshot/resource-capture.js';
 import { isSourcePromotion } from './source-cleanup.js';
 import { sameOriginPageAnchors } from './screenshot/unscheduled-anchors.js';
+import { srcsetCandidates, srcsetReferences } from './srcset.js';
+import { pathWithin, portableAssetUrl, uniqueAssetPath, TRANSPARENT_IMAGE_DATA_URL } from './portable-assets.js';
+import { isSrcsetShaped, elementSrcReferences, dependencyReferences, omitDegenerateReplacements, preparePortableReplacements, type PortableDependency } from './portable-references.js';
+import { materializePortableResources } from './portable-resources.js';
 import { inspectSourceInteractivity, SOURCE_INTERACTIVITY_SCHEMA, type SourceInteractivityPage } from './source-interactivity.js';
 import { loadHttpExportInput, type HttpExportInput } from './http-export-input.js';
 import { loadEmbeddedDocuments, projectEmbeddedRegions, mergeResponsiveEmbeddedRegions } from './embedded-documents.js';
@@ -185,12 +187,6 @@ interface ExportCaptureOptions {
 	limits?: { portableMediaTotalBytes?: number };
 }
 
-interface PortableDependency {
-	reference: string;
-	url: string;
-	kind: 'resource' | 'media' | 'css';
-}
-
 interface AssetEvidenceReference {
 	route: string;
 	path: string;
@@ -260,27 +256,8 @@ function semanticSectionEvidence(
 	} );
 }
 
-function fileHash( path: string ): string {
-	return createHash( 'sha256' ).update( readFileSync( path ) ).digest( 'hex' );
-}
-
-function uniqueAssetPath(
-	requestedPath: string,
-	contentHash: string,
-	hashesByPath: Map< string, string >
-): string {
-	const existingHash = hashesByPath.get( requestedPath );
-	if ( existingHash === undefined || existingHash === contentHash ) return requestedPath;
-	const extension = extname( requestedPath );
-	return `${ requestedPath.slice(
-		0,
-		requestedPath.length - extension.length
-	) }-${ contentHash.slice( 0, 12 ) }${ extension }`;
-}
-
 const MAX_PORTABLE_MEDIA_TOTAL_BYTES = 160 * 1024 * 1024;
 const STYLE_HOIST_DIAGNOSTIC_SAMPLE_BYTES = 31 * 1024;
-const TRANSPARENT_IMAGE_DATA_URL = 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=';
 const MAX_DECLARATIVE_FORM_EMBEDS = 32;
 const MAX_JSON_LD_SCRIPTS = 16;
 const MAX_JSON_LD_SCRIPT_BYTES = 64 * 1024;
@@ -306,12 +283,6 @@ const HUBSPOT_FORM_HOSTS = new Map( [
 	[ 'na1', 'js.hsforms.net' ],
 	[ 'eu1', 'js-eu1.hsforms.net' ],
 ] );
-
-function pathWithin( root: string, candidate: string ): boolean {
-	const rel = relative( resolve( root ), resolve( candidate ) );
-	return rel === '' || ( ! rel.startsWith( `..${ sep }` ) && rel !== '..' );
-}
-
 
 function portableRedirectsFile( rules: Array< { from: string; to: string } > ): string {
 	const lines = [ ...rules ]
@@ -370,8 +341,21 @@ function rewriteCapturedRouteLinks(
 		}
 		const route = routes.get( normalizedUrl( resolved.href ) );
 		if ( route ) {
-			link.attr( 'href', `${ route }${ resolved.search }${ resolved.hash }` );
+			link.attr( 'href', `${ route }${ resolved.hash }` );
 			return;
+		}
+		// A captured pathname does not prove an uncaptured query rendition.
+		if ( resolved.search ) {
+			const base = new URL( resolved.href );
+			base.search = '';
+			if ( [ ...routes.keys() ].some( key => {
+				const captured = new URL( key );
+				captured.search = '';
+				return normalizedUrl( captured.href ) === normalizedUrl( base.href );
+			} ) ) {
+				link.attr( 'href', resolved.href );
+				return;
+			}
 		}
 		if ( absolute || ! portable ) return;
 		// Paths the export itself wrote (routes, localized media and resources)
@@ -387,52 +371,6 @@ function rewriteCapturedRouteLinks(
 		if ( /^https?:$/.test( resolved.protocol ) ) link.attr( 'href', resolved.href );
 	} );
 	return $.html();
-}
-
-// Substring replacement is only safe for distinct URL-ish tokens (absolute URLs,
-// `/media/logo.png`, `images/logo.png`). A single character or punctuation-only
-// string (`/`, `//`, `./`) is ordinary HTML/CSS syntax — closing tags, protocol
-// separators, relative prefixes — not a specific reference.
-function isSubstitutableReplacementKey( source: string ): boolean {
-	return source.length > 1 && /[0-9A-Za-z]/.test( source );
-}
-
-function omitDegenerateReplacements(
-	replacements: Map< string, string >,
-	rejectedKeys?: Set< string >
-): Map< string, string > {
-	const values = new Map< string, string >();
-	for ( const [ source, local ] of replacements ) {
-		if ( ! isSubstitutableReplacementKey( source ) ) {
-			if ( source ) rejectedKeys?.add( source );
-			continue;
-		}
-		values.set( source, local );
-	}
-	return values;
-}
-
-function replaceAll(
-	content: string,
-	replacements: Map< string, string >,
-	rejectedKeys?: Set< string >
-): string {
-	const values = new Map< string, string >();
-	for ( const [ source, local ] of omitDegenerateReplacements( replacements, rejectedKeys ) ) {
-		values.set( source, local );
-		values.set( source.replace( /&/g, '&amp;' ), local.replace( /&/g, '&amp;' ) );
-	}
-	const sources = [ ...values.keys() ]
-		.filter( ( source ) => source !== '' && source !== '/' )
-		.sort( ( a, b ) => b.length - a.length );
-	if ( sources.length === 0 ) return content;
-	const pattern = new RegExp(
-		sources
-			.map( ( source ) => source.replace( /[.*+?^${}()|[\]\\]/g, '\\$&' ) )
-			.join( '|' ) + URL_TERMINATOR_LOOKAHEAD,
-		'g'
-	);
-	return content.replace( pattern, ( source ) => values.get( source ) ?? source );
 }
 
 function renderedHtml( html: string ): string {
@@ -856,66 +794,6 @@ function mediaReferences( sourceUrl: string, siteUrl: string ): string[] {
 	return [ sourceUrl, `${ media.pathname }${ media.search }` ];
 }
 
-function srcsetReferences( srcset: string ): string[] {
-	const references: string[] = [];
-	let offset = 0;
-	while ( offset < srcset.length ) {
-		while ( offset < srcset.length && /[\s,]/.test( srcset[ offset ] ) ) offset++;
-		if ( offset >= srcset.length ) break;
-		const start = offset;
-		while ( offset < srcset.length && ! /\s/.test( srcset[ offset ] ) ) offset++;
-		const reference = srcset.slice( start, offset ).replace( /,+$/, '' );
-		if ( reference ) references.push( reference );
-		while ( offset < srcset.length && srcset[ offset ] !== ',' ) offset++;
-		if ( offset < srcset.length ) offset++;
-	}
-	return references;
-}
-
-// A density or width descriptor means the attribute is a srcset list, not one
-// URL. `new URL` percent-encodes the list into a single address that 404s, and
-// blanking that string also wipes the same list where it is a real srcset.
-function isSrcsetShaped( value: string ): boolean {
-	return /\s+\d+(?:\.\d+)?[wx](?=\s*(?:,|$))/i.test( value );
-}
-
-interface SrcsetCandidate {
-	url: string;
-	size: number;
-	density: boolean;
-}
-
-function srcsetCandidates( value: string ): SrcsetCandidate[] {
-	const candidates: SrcsetCandidate[] = [];
-	let offset = 0;
-	while ( offset < value.length ) {
-		while ( offset < value.length && /[\s,]/.test( value[ offset ] ) ) offset++;
-		if ( offset >= value.length ) break;
-		const start = offset;
-		while ( offset < value.length && ! /\s/.test( value[ offset ] ) ) offset++;
-		const url = value.slice( start, offset ).replace( /,+$/, '' );
-		const descriptorStart = offset;
-		while ( offset < value.length && value[ offset ] !== ',' ) offset++;
-		const descriptor = value.slice( descriptorStart, offset );
-		if ( offset < value.length ) offset++;
-		if ( ! url ) continue;
-		const parsed = /(\d+(?:\.\d+)?)([wx])/i.exec( descriptor );
-		candidates.push( {
-			url,
-			size: parsed ? Number( parsed[ 1 ] ) : 1,
-			density: parsed?.[ 2 ].toLowerCase() === 'x',
-		} );
-	}
-	return candidates;
-}
-
-function elementSrcReferences( tag: string, value: string ): string[] {
-	const normalized = value.replace( /&amp;/g, '&' ).trim();
-	if ( ! normalized ) return [];
-	if ( tag === 'img' && isSrcsetShaped( normalized ) ) return srcsetReferences( normalized );
-	return [ normalized ];
-}
-
 function isLocalImageSrc( url: string ): boolean {
 	return Boolean( url ) && ! url.startsWith( 'data:' ) && ! /^(?:https?:)?\/\//i.test( url );
 }
@@ -946,7 +824,10 @@ function bindSrcsetShapedImageSrc( html: string ): string {
 	} );
 }
 
-function capturedMediaReferences( entries: CaptureEntry[] ): Map< string, Set< string > > {
+function retainedMediaReferenceInventory( entries: CaptureEntry[] ): {
+	rendered: Map< string, Set< string > >;
+	retained: Map< string, string[] >;
+} {
 	const pages = new Set(
 		entries.flatMap( ( entry ) => {
 			try {
@@ -956,9 +837,28 @@ function capturedMediaReferences( entries: CaptureEntry[] ): Map< string, Set< s
 			}
 		} )
 	);
-	const families = new Map< string, Set< string > >();
+	const rendered = new Map< string, Set< string > >();
+	const retained = new Map< string, string[] >();
 	for ( const entry of entries ) {
 		const html = readFileSync( entry.htmlPath, 'utf8' );
+		// Both projections classify through one document-local identity map, but
+		// preserve their distinct raw spelling and DOM occurrence order.
+		const identities = new Map< string, string | undefined >();
+		const familyOf = ( reference: string ): string | undefined => {
+			const normalized = reference.trim().replace( /&amp;/g, '&' );
+			if ( ! normalized ) return undefined;
+			if ( ! identities.has( normalized ) ) {
+				let family: string | undefined;
+				try {
+					const resolved = new URL( normalized, entry.url ).href;
+					if ( ! pages.has( normalizedUrl( resolved ) ) ) family = mediaFamily( resolved );
+				} catch {
+					// Malformed browser values have no media family.
+				}
+				identities.set( normalized, family );
+			}
+			return identities.get( normalized );
+		};
 		const references: string[] = [];
 		for ( const match of html.matchAll(
 			/<(img|source|video|audio)\b[^>]*\ssrc\s*=\s*(["'])([\s\S]*?)\2[^>]*>/gi
@@ -971,19 +871,33 @@ function capturedMediaReferences( entries: CaptureEntry[] ): Map< string, Set< s
 			references.push( ...srcsetReferences( match[ 2 ] ) );
 		}
 		for ( const reference of references ) {
-			const trimmed = reference.trim();
-			if ( ! trimmed ) continue;
-			try {
-				const resolved = new URL( trimmed.replace( /&amp;/g, '&' ), entry.url ).href;
-				if ( pages.has( normalizedUrl( resolved ) ) ) continue;
-				const family = mediaFamily( resolved );
-				families.set( family, new Set( [ ...( families.get( family ) ?? [] ), reference ] ) );
-			} catch {
-				// Ignore non-URL browser values such as data URIs and malformed placeholders.
-			}
+			const family = familyOf( reference );
+			if ( family === undefined ) continue;
+			const bindings = rendered.get( family ) ?? new Set< string >();
+			bindings.add( reference );
+			rendered.set( family, bindings );
 		}
+		const add = ( reference: string ) => {
+			const family = familyOf( reference );
+			if ( family === undefined ) return;
+			const occurrences = retained.get( family ) ?? [];
+			occurrences.push( reference.trim().replace( /&amp;/g, '&' ) );
+			retained.set( family, occurrences );
+		};
+		const $ = cheerio.load( html );
+		$( 'img,source,video,audio' ).each( ( _index, element ) => {
+			const node = $( element );
+			const src = node.attr( 'src' );
+			const tag = String( node.prop( 'tagName' ) ?? '' ).toLowerCase();
+			if ( src ) {
+				for ( const reference of elementSrcReferences( tag, src ) ) add( reference );
+			}
+			const srcset = node.attr( 'srcset' );
+			if ( ! srcset ) return;
+			for ( const candidate of srcsetReferences( srcset ) ) add( candidate );
+		} );
 	}
-	return families;
+	return { rendered, retained };
 }
 
 function mediaFamily( sourceUrl: string ): string {
@@ -996,48 +910,63 @@ function mediaFamily( sourceUrl: string ): string {
 		: sourceUrl;
 }
 
-function retainedMediaReferencesByFamily( entries: CaptureEntry[] ): Map< string, string[] > {
-	const pages = new Set(
-		entries.flatMap( ( { url } ) => {
-			try {
-				return [ normalizedUrl( url ) ];
-			} catch {
-				return [];
-			}
-		} )
-	);
-	const families = new Map< string, string[] >();
-	const add = ( reference: string, documentUrl: string ) => {
-		const trimmed = reference.trim();
-		if ( ! trimmed ) return;
+// A captured interaction state carries the HTML of a revealed panel. That HTML
+// is serialized from the live DOM, so an image can name the exact CDN rendition
+// the runtime chose for the viewport at the moment of capture. That rendition
+// may never have been downloaded, but another rendition of the same image was.
+// Point such a reference at the portable file for its media family.
+function localizeFamilyMediaUrls(
+	text: string,
+	portableUrlByFamily: Map< string, string >
+): string {
+	if ( portableUrlByFamily.size === 0 || ! /https?:\/\//i.test( text ) ) return text;
+	return text.replace( /https?:\/\/[^\s"'<>)\\]+/gi, ( match ) => {
 		try {
-			const resolved = new URL( trimmed.replace( /&amp;/g, '&' ), documentUrl ).href;
-			if ( pages.has( normalizedUrl( resolved ) ) ) return;
-			const family = mediaFamily( resolved );
-			families.set( family, [
-				...( families.get( family ) ?? [] ),
-				trimmed.replace( /&amp;/g, '&' ),
-			] );
+			const portable = portableUrlByFamily.get(
+				mediaFamily( new URL( match.replace( /&amp;/g, '&' ) ).href )
+			);
+			return portable ?? match;
 		} catch {
-			// Non-URL media sources, such as data URLs, need no localization.
+			return match;
 		}
-	};
-	for ( const { url, htmlPath } of entries ) {
-		const html = readFileSync( htmlPath, 'utf8' );
-		const $ = cheerio.load( html );
-		$( 'img,source,video,audio' ).each( ( _index, element ) => {
-			const node = $( element );
-			const src = node.attr( 'src' );
-			const tag = String( node.prop( 'tagName' ) ?? '' ).toLowerCase();
-			if ( src ) {
-				for ( const reference of elementSrcReferences( tag, src ) ) add( reference, url );
-			}
-			const srcset = node.attr( 'srcset' );
-			if ( ! srcset ) return;
-			for ( const candidate of srcsetReferences( srcset ) ) add( candidate, url );
+	} );
+}
+
+// A `data-*` attribute that holds one image URL (a runtime's record of the
+// image it should load), or a link to the image file, keeps the source CDN
+// address after the image itself is localized. Point it at the local file for
+// the same picture.
+function localizeDataAttributeMedia( html: string, portableUrlByFamily: Map< string, string > ): string {
+	if ( portableUrlByFamily.size === 0 ) return html;
+	return html.replace(
+		/(\s(?:data-[\w-]+|href)\s*=\s*)(["'])(https?:\/\/[^"']+)\2/gi,
+		( match, prefix: string, quote: string, value: string ) => {
+			const local = localizeFamilyMediaUrls( value, portableUrlByFamily );
+			return local === value ? match : `${ prefix }${ quote }${ local }${ quote }`;
+		}
+	);
+}
+
+function localizeStringsInPlace( value: unknown, localize: ( text: string ) => string ): void {
+	if ( Array.isArray( value ) ) {
+		value.forEach( ( item, index ) => {
+			if ( typeof item === 'string' ) value[ index ] = localize( item );
+			else localizeStringsInPlace( item, localize );
 		} );
+		return;
 	}
-	return families;
+	if ( value === null || typeof value !== 'object' ) return;
+	const record = value as Record< string, unknown >;
+	const htmlBytesBefore =
+		typeof record.html === 'string' ? Buffer.byteLength( record.html ) : undefined;
+	for ( const [ key, item ] of Object.entries( record ) ) {
+		if ( typeof item === 'string' ) record[ key ] = localize( item );
+		else localizeStringsInPlace( item, localize );
+	}
+	// A region records the byte length of its html, and consumers reject a
+	// region whose length no longer matches. Keep a matching length matching.
+	if ( typeof record.html === 'string' && typeof record.htmlBytes === 'number' && record.htmlBytes === htmlBytesBefore )
+		record.htmlBytes = Buffer.byteLength( record.html );
 }
 
 function mediaDimension( sourceUrl: string ): number {
@@ -1101,183 +1030,6 @@ function capturedResources( outputDir: string ): CapturedResourceManifest {
 			failures: [ { url: manifestPath, error: 'captured resource manifest is invalid' } ],
 		};
 	}
-}
-
-function portableResourcePath( path: string, contentType: string ): string | undefined {
-	const requestedPath = path.replace( /^resources[\\/]/, '' );
-	if ( extname( basename( requestedPath ) ) ) return requestedPath;
-
-	const extension =
-		{
-			'application/ecmascript': '.js',
-			'application/javascript': '.js',
-			'application/json': '.json',
-			'application/manifest+json': '.json',
-			'application/ld+json': '.json',
-			'application/pdf': '.pdf',
-			'application/xml': '.xml',
-			'application/wasm': '.wasm',
-			'audio/mpeg': '.mp3',
-			'audio/ogg': '.ogg',
-			'audio/wav': '.wav',
-			'font/otf': '.otf',
-			'font/ttf': '.ttf',
-			'font/woff': '.woff',
-			'font/woff2': '.woff2',
-			'application/font-otf': '.otf',
-			'application/font-ttf': '.ttf',
-			'application/font-woff': '.woff',
-			'application/font-woff2': '.woff2',
-			'application/x-font-otf': '.otf',
-			'application/x-font-ttf': '.ttf',
-			'application/x-font-woff': '.woff',
-			'application/x-font-woff2': '.woff2',
-			'image/avif': '.avif',
-			'image/gif': '.gif',
-			'image/jpeg': '.jpg',
-			'image/png': '.png',
-			'image/svg+xml': '.svg',
-			'image/webp': '.webp',
-			'text/css': '.css',
-			'text/ecmascript': '.js',
-			'text/html': '.html',
-			'text/javascript': '.js',
-			'text/plain': '.txt',
-			'text/xml': '.xml',
-			'video/mp4': '.mp4',
-			'video/ogg': '.ogg',
-			'video/webm': '.webm',
-		}[ contentType.toLowerCase().split( ';', 1 )[ 0 ].trim() ] ?? '';
-
-	return extension ? `${ requestedPath }${ extension }` : undefined;
-}
-
-/** Encode a copied file's URL without changing its on-disk path. */
-function portableAssetUrl( path: string ): string {
-	return '/' + path.replace( /\\/g, '/' ).split( '/' ).map( encodeURIComponent ).join( '/' );
-}
-
-function dependencyReferences(
-	html: string,
-	documentUrl: string,
-	cssOnly = false,
-	embeddedSources: ReadonlySet<string> = new Set()
-): PortableDependency[] {
-	const searchableHtml = html
-		.replace( /&quot;|&#34;|&#x22;/gi, '"' )
-		.replace( /&apos;|&#39;|&#x27;/gi, "'" );
-	let cssContent = searchableHtml;
-	const linkedFiles: string[] = [];
-	const svgUseDocuments: string[] = [];
-	if ( ! cssOnly ) {
-		const $ = cheerio.load( html );
-		$( 'iframe[src]' ).each( ( _, element ) => { const source = $( element ).attr( 'src' ) ?? ''; if ( embeddedSources.has( source ) ) linkedFiles.push( source ); } );
-		$( 'a[href],area[href]' ).each( ( _, element ) => {
-			const href = $( element ).attr( 'href' ) ?? '';
-			if ( isAudioLink( href, documentUrl ) || isDocumentDownloadLink( href, documentUrl ) ) linkedFiles.push( href );
-		} );
-		// Recorded without the fragment, so localizing the sprite file rewrites
-		// only its path and every `#symbol` reference into it survives.
-		svgUseDocuments.push( ...svgUseDocumentReferences( $, documentUrl ) );
-		cssContent = [
-			...$( 'style' )
-				.map( ( _index, element ) => $( element ).html() ?? '' )
-				.get(),
-			...$( '[style]' )
-				.map( ( _index, element ) => $( element ).attr( 'style' ) ?? '' )
-				.get(),
-		]
-			.join( '\n' )
-			.replace( /&quot;|&#34;|&#x22;/gi, '"' )
-			.replace( /&apos;|&#39;|&#x27;/gi, "'" );
-	}
-	const references = new Set< string >();
-	const add = ( reference: string | undefined ) => {
-		// A data: or blob: reference already carries its bytes (or points at an
-		// in-memory object): it is never a network dependency to resolve, so it
-		// must not be recorded, let alone reported as unresolved.
-		if ( reference && ! isInlineUrl( reference ) ) references.add( reference.replace( /&amp;/g, '&' ) );
-	};
-	for ( const href of linkedFiles ) add( href );
-	for ( const reference of svgUseDocuments ) add( reference );
-	if ( ! cssOnly ) for ( const reference of identityLogoReferences( html ) ) add( reference );
-
-	const mediaReferences = new Set< string >();
-	const cssReferences = new Set< string >();
-	for ( const match of searchableHtml.matchAll(
-		/<(img|source|video|audio)\b[^>]*\ssrc\s*=\s*(["'])([\s\S]*?)\2[^>]*>/gi
-	) ) {
-		for ( const reference of elementSrcReferences( match[ 1 ].toLowerCase(), match[ 3 ] ) ) {
-			mediaReferences.add( reference );
-			add( reference );
-		}
-	}
-	for ( const match of searchableHtml.matchAll(
-		/<video\b[^>]*\bposter\s*=\s*(["'])([\s\S]*?)\1[^>]*>/gi
-	) ) {
-		mediaReferences.add( match[ 2 ].replace( /&amp;/g, '&' ) );
-		add( match[ 2 ] );
-	}
-	for ( const match of searchableHtml.matchAll(
-		/<(?:img|source)\b[^>]*\ssrcset\s*=\s*(["'])([\s\S]*?)\1[^>]*>/gi
-	) ) {
-		for ( const reference of srcsetReferences( match[ 2 ] ) ) {
-			if ( reference ) {
-				mediaReferences.add( reference.replace( /&amp;/g, '&' ) );
-				add( reference );
-			}
-		}
-	}
-	for ( const match of searchableHtml.matchAll( /<link\b[^>]*>/gi ) ) {
-		const tag = match[ 0 ];
-		const rel = /\brel\s*=\s*(["'])([\s\S]*?)\1/i.exec( tag )?.[ 2 ].toLowerCase() ?? '';
-		const as = /\bas\s*=\s*(["'])([\s\S]*?)\1/i.exec( tag )?.[ 2 ].toLowerCase() ?? '';
-		const relations = rel.split( /\s+/ );
-		if (
-			relations.some( ( value ) => value === 'manifest' || value === 'stylesheet' || /(?:^|-)icon$/.test( value ) ) ||
-			( relations.includes( 'preload' ) && [ 'style', 'font', 'image', 'media' ].includes( as ) )
-		) {
-			add( /\bhref\s*=\s*(["'])([\s\S]*?)\1/i.exec( tag )?.[ 2 ] );
-		}
-	}
-	for ( const match of searchableHtml.matchAll(
-		/\bimport\s+(?:[^"']*?\s+from\s+)?(["'])([\s\S]*?)\1/g
-	) ) {
-		add( match[ 2 ] );
-	}
-	for ( const match of cssContent.matchAll(
-		/\burl\(\s*(?:(["'])([\s\S]*?)\1|([^\s)'";]+))\s*\)/gi
-	) ) {
-		const reference = match[ 2 ] ?? match[ 3 ];
-		if ( reference && ! reference.startsWith( '#' ) ) {
-			cssReferences.add( reference.replace( /&amp;/g, '&' ) );
-			add( reference );
-		}
-	}
-	for ( const match of cssContent.matchAll( /@import\s*(?:url\(\s*)?(["'])([\s\S]*?)\1/gi ) ) {
-		const reference = match[ 2 ];
-		cssReferences.add( reference.replace( /&amp;/g, '&' ) );
-		add( reference );
-	}
-
-	return [ ...references ].flatMap( ( reference ) => {
-		try {
-			const url = new URL( reference, documentUrl );
-			return [
-				{
-					reference,
-					url: url.href,
-					kind: mediaReferences.has( reference )
-						? 'media'
-						: cssReferences.has( reference )
-						? 'css'
-						: 'resource',
-				},
-			];
-		} catch {
-			return [];
-		}
-	} );
 }
 
 interface AssetEvidenceReferences {
@@ -1415,136 +1167,6 @@ function assetEvidence(
 		assetsTruncated: !references.assetCountExact,
 		assets: records,
 	};
-}
-
-// The largest srcset rendition of an image that was already localized. A lazy
-// loader commonly names a full-size original in `src` (and `data-src`) while
-// `srcset` carries the width renditions it actually fetched; when only the
-// renditions were captured, they are the same picture and must win over a
-// blank placeholder.
-function localizedSrcsetRendition(
-	tag: string,
-	mediaReplacements: Map< string, string >
-): string | undefined {
-	const srcset = /\ssrcset\s*=\s*(["'])([\s\S]*?)\1/i.exec( tag )?.[ 2 ];
-	if ( ! srcset ) return undefined;
-	let best: { local: string; size: number } | undefined;
-	for ( const candidate of srcset.split( /,(?=\s)/ ) ) {
-		const [ reference, descriptor = '' ] = candidate.trim().split( /\s+/ );
-		const local = reference ? mediaReplacements.get( reference.replace( /&amp;/g, '&' ) ) : undefined;
-		if ( ! local || local === TRANSPARENT_IMAGE_DATA_URL || /^(?:[a-z]+:)?\/\//i.test( local ) )
-			continue;
-		const size = Number.parseFloat( descriptor ) || 1;
-		if ( ! best || size > best.size ) best = { local, size };
-	}
-	return best?.local;
-}
-
-function removeDanglingMediaSource(
-	html: string,
-	reference: string,
-	resolvedUrl: string,
-	mediaReplacements: Map< string, string >,
-	rejectedKeys?: Set< string >
-): string {
-	const normalizedReference = reference.replace( /&amp;/g, '&' );
-	// A video/source/audio `src` that could not be localized must keep naming
-	// a real, fetchable location rather than an empty attribute: an emptied
-	// `src` is unrecoverable downstream (a WordPress import, say, drops the
-	// element entirely), while the resolved source URL at least survives as
-	// external evidence with a matching diagnostic already recorded by the
-	// caller. `poster` (an ordinary image, handled below) keeps the existing
-	// stub behavior — losing a preview thumbnail is not the same class of
-	// loss as losing the media itself.
-	let strippedNonImageSrc = false;
-	const withoutSources = html.replace( /<(img|source|video|audio)\b[^>]*>/gi, ( tag ) => {
-		const element = /^<(\w+)/.exec( tag )?.[ 1 ].toLowerCase();
-		const src = /\ssrc\s*=\s*(["'])([\s\S]*?)\1/i.exec( tag )?.[ 2 ].replace( /&amp;/g, '&' );
-		if ( src !== normalizedReference ) return tag;
-		if ( element === 'img' ) {
-			const rendition = localizedSrcsetRendition( tag, mediaReplacements );
-			if ( rendition ) {
-				// Every attribute naming the original (src, data-src, data-image…)
-				// takes the rendition, so no loader or importer resurrects a blank.
-				return tag.replace(
-					/(\s[^\s=>]+\s*=\s*)(["'])([\s\S]*?)\2/g,
-					( attribute, name: string, quote: string, value: string ) =>
-						value.replace( /&amp;/g, '&' ) === normalizedReference
-							? `${ name }${ quote }${ rendition }${ quote }`
-							: attribute
-				);
-			}
-			return tag.replace( /\s+src\s*=\s*(["'])([\s\S]*?)\1/i, ` src="${ TRANSPARENT_IMAGE_DATA_URL }"` );
-		}
-		strippedNonImageSrc = true;
-		return tag.replace( /\s+src\s*=\s*(["'])([\s\S]*?)\1/i, ` src="${ resolvedUrl }"` );
-	} );
-	// Once a non-image `src` has been repointed at its resolved URL, the
-	// broad substring pass below must not run: `resolvedUrl` commonly
-	// contains `reference` as a trailing substring (a relative reference
-	// resolved against its document), and re-scanning would immediately
-	// mangle the replacement it just made.
-	if ( strippedNonImageSrc ) return withoutSources;
-	if ( ! isSubstitutableReplacementKey( normalizedReference ) ) {
-		rejectedKeys?.add( reference );
-		return withoutSources;
-	}
-	// Blank whole occurrences only. The reference is often the bare original of
-	// longer rendition URLs — `image.jpg?format=300w` was the old query-shaped
-	// case; image services like GoDaddy's append whole path segments instead
-	// (`image.jpg/:/` → `image.jpg/:/rs=w:1160,h:720`, so the continuation does
-	// not even start with punctuation) — and those longer URLs are different
-	// assets, some of them captured. Splicing the blank at such a prefix
-	// corrupts the rendition and the loader loses the desktop image entirely.
-	// The URL terminator lookahead refuses every partial match: only a
-	// reference that stands as the complete URL here gets blanked.
-	const variants = [
-		...new Set( [ reference, normalizedReference, normalizedReference.replace( /&/g, '&amp;' ) ] ),
-	].sort( ( a, b ) => b.length - a.length );
-	return withoutSources.replace(
-		new RegExp(
-			`(?:${ variants
-				.map( ( variant ) => variant.replace( /[.*+?^${}()|[\]\\]/g, '\\$&' ) )
-				.join( '|' ) })${ URL_TERMINATOR_LOOKAHEAD }`,
-			'g'
-		),
-		TRANSPARENT_IMAGE_DATA_URL
-	);
-}
-
-function replaceDanglingCssUrl(
-	html: string,
-	reference: string,
-	rejectedKeys?: Set< string >
-): string {
-	// An empty data: URL is a valid, zero-byte resource, so the browser reports a
-	// clean load for an asset the capture never got. about:blank cannot be fetched
-	// as a subresource, keeping the loss visible instead of silently successful.
-	return replaceAll( html, new Map( [ [ reference, 'about:blank' ] ] ), rejectedKeys );
-}
-
-function removeDanglingResourceReference( html: string, reference: string ): string {
-	const normalizedReference = reference.replace( /&amp;/g, '&' );
-	const $ = cheerio.load( html );
-	$( 'link' ).each( ( _, element ) => {
-		const link = $( element );
-		const relations = ( link.attr( 'rel' ) ?? '' ).toLowerCase().split( /\s+/ );
-		const href = ( link.attr( 'href' ) ?? '' ).replace( /&amp;/g, '&' );
-		if (
-			href === normalizedReference &&
-			( relations.includes( 'preload' ) ||
-				relations.includes( 'stylesheet' ) ||
-				relations.some( ( value ) => /(?:^|-)icon$/.test( value ) ) )
-		) {
-			link.remove();
-		}
-	} );
-	$( 'script' ).each( ( _, element ) => {
-		const script = $( element );
-		const src = ( script.attr( 'src' ) ?? '' ).replace( /&amp;/g, '&' );
-		if ( src === normalizedReference ) script.remove();
-	} );
-	return $.html();
 }
 
 function safeCapturedPageHtml( html: string, embeddedSources: ReadonlySet<string> = new Set() ): { html: string; jsonLd: string[] } {
@@ -2080,7 +1702,7 @@ function buildExportCapture(
 	} );
 	const semanticEvidence =
 		semanticPages.length > 0 ? semanticEvidenceArtifacts( semanticPages ) : undefined;
-	const mediaReplacements = new Map< string, string >();
+	let mediaReplacements = new Map< string, string >();
 	const unresolvedMedia: Array< { url: string; error: string } > = [];
 	const assets: Array< { sourceUrl: string; path: string } > = [];
 	const mediaStubs = MediaStubStore.load( outputDir );
@@ -2090,9 +1712,9 @@ function buildExportCapture(
 		resourceManifest,
 		outputDir
 	);
-	const renderedMediaReferences = capturedMediaReferences( retainedEntries );
+	const { rendered: renderedMediaReferences, retained: retainedMediaFamilies } =
+		retainedMediaReferenceInventory( retainedEntries );
 	const mediaFamilies = new Map< string, MediaCandidate[] >();
-	const retainedMediaFamilies = retainedMediaReferencesByFamily( retainedEntries );
 	const failedMedia: Array< { sourceUrl: string; error: string; references: string[] } > = [];
 	const capturedPages = new Set(
 		[ options.sourceUrl, ...retainedEntries.map( ( entry ) => entry.url ) ].flatMap( ( url ) => {
@@ -2164,9 +1786,10 @@ function buildExportCapture(
 	);
 	let retainedExternalMediaCount = 0;
 	const localizedMediaFamilies = new Set< string >();
+	const portableUrlByFamily = new Map< string, string >();
 	const assetPathsByHash = new Map< string, string >();
 	const assetHashesByPath = new Map< string, string >();
-	const portablePathsBySource = new Map< string, string >();
+	let portablePathsBySource = new Map< string, string >();
 	for ( const decision of portableMediaPlan.families ) {
 		const { family, candidates, eligible, admitted } = decision;
 		if ( decision.outcome === 'limit-excluded' ) {
@@ -2230,6 +1853,7 @@ function buildExportCapture(
 			if ( ! mediaReplacements.has( reference ) )
 				mediaReplacements.set( reference, portableAssetUrl( fallbackAssetPath ) );
 		}
+		if ( fallbackAssetPath ) portableUrlByFamily.set( family, portableAssetUrl( fallbackAssetPath ) );
 	}
 	const portableMedia = {
 		selected_count: assets.length,
@@ -2248,170 +1872,22 @@ function buildExportCapture(
 		unresolvedMedia.push( { url: sourceUrl, error } );
 	}
 
-	const unresolvedDependencies: Array< { url: string; sourceUrl: string; error: string } > = [];
-	const rejectedReplacementKeys = new Set< string >();
-	const copiedResources = new Set< string >();
-	const copyingResources = new Set< string >();
-	const resourceReplacements = new Map< string, string >();
-	const promoteCapturedMediaReplacement = ( dependencyUrl: string, documentUrl: string ) => {
-		const portablePath = resourceReplacements.get( dependencyUrl );
-		if ( ! portablePath ) return;
-		for ( const [ reference, replacement ] of mediaReplacements ) {
-			if ( replacement !== TRANSPARENT_IMAGE_DATA_URL ) continue;
-			try {
-				if ( new URL( reference.replace( /&amp;/g, '&' ), documentUrl ).href === dependencyUrl )
-					mediaReplacements.set( reference, portablePath );
-			} catch {
-				// Malformed references cannot alias a captured resource URL.
-			}
-		}
-	};
-	const copyResource = ( dependency: PortableDependency, sourceUrl: string ): boolean => {
-		const resource = resourceManifest.resources[ dependency.url ];
-		if ( ! resource ) {
-			unresolvedDependencies.push( {
-				url: dependency.url,
-				sourceUrl,
-				error: 'referenced same-origin dependency was not captured',
-			} );
-			return false;
-		}
-		const source = resolve( outputDir, resource.path );
-		if ( ! pathWithin( outputDir, source ) || ! existsSync( source ) ) {
-			unresolvedDependencies.push( {
-				url: dependency.url,
-				sourceUrl,
-				error: 'captured dependency file is unavailable',
-			} );
-			return false;
-		}
-		const requestedPath = portableResourcePath( resource.path, resource.contentType );
-		if ( ! requestedPath ) {
-			unresolvedDependencies.push( {
-				url: dependency.url,
-				sourceUrl,
-				error: `captured dependency has no portable extension for ${
-					resource.contentType || 'unknown content type'
-				}`,
-			} );
-			return false;
-		}
-		const isText = /^(?:application\/(?:json|manifest\+json)|text\/)/i.test( resource.contentType );
-		const contentHash = isText ? '' : fileHash( source );
-		const relativePath = isText
-			? requestedPath
-			: assetPathsByHash.get( contentHash ) ??
-			  uniqueAssetPath( requestedPath, contentHash, assetHashesByPath );
-		const destination = resolve( websiteDir, relativePath );
-		const portablePath = portableAssetUrl( relativePath );
-		const alreadyCopied =
-			( ! isText && assetPathsByHash.has( contentHash ) ) ||
-			copiedResources.has( resource.path ) ||
-			copyingResources.has( resource.path );
-		if ( ! pathWithin( websiteDir, destination ) ) {
-			unresolvedDependencies.push( {
-				url: dependency.url,
-				sourceUrl,
-				error: 'captured dependency file is unavailable',
-			} );
-			return false;
-		}
-		resourceReplacements.set( dependency.reference, portablePath );
-		resourceReplacements.set( dependency.url, portablePath );
-		portablePathsBySource.set( dependency.url, `website/${ relativePath.replace( /\\/g, '/' ) }` );
-		if ( alreadyCopied ) return true;
-		mkdirSync( dirname( destination ), { recursive: true } );
-		copyingResources.add( resource.path );
-		if ( isText ) {
-			let content = readFileSync( source, 'utf8' );
-			if ( /application\/(?:json|manifest\+json)/i.test( resource.contentType ) ) {
-				try {
-					const manifest = JSON.parse( content );
-					for ( const icon of ( Array.isArray( manifest?.icons ) ? manifest.icons : [] ).slice( 0, 64 ) ) {
-						if ( typeof icon?.src !== 'string' || isInlineUrl( icon.src ) ) continue;
-						const url = new URL( icon.src, dependency.url ).href;
-						if ( copyResource( { reference: url, url, kind: 'resource' }, dependency.url ) ) icon.src = resourceReplacements.get( url );
-					}
-					content = JSON.stringify( manifest );
-				} catch { /* Preserve invalid optional metadata for diagnostics. */ }
-			}
-			if ( /text\/css/i.test( resource.contentType ) ) {
-				for ( const nested of dependencyReferences( content, dependency.url, true ) ) {
-					const mediaReplacement =
-						mediaReplacements.get( nested.reference ) ?? mediaReplacements.get( nested.url );
-					if (
-						mediaReplacement &&
-						mediaReplacement !== TRANSPARENT_IMAGE_DATA_URL &&
-						! /^(?:https?:)?\/\//i.test( mediaReplacement )
-					)
-						continue;
-					if ( copyResource( nested, dependency.url ) ) {
-						if ( mediaReplacement === TRANSPARENT_IMAGE_DATA_URL ) {
-							promoteCapturedMediaReplacement( nested.url, dependency.url );
-						}
-					} else {
-						content = replaceDanglingCssUrl( content, nested.reference, rejectedReplacementKeys );
-					}
-				}
-			}
-			content = replaceAll( content, mediaReplacements, rejectedReplacementKeys );
-			if ( /^text\/html(?:;|$)/i.test( resource.contentType ) && embeddedSources.has( dependency.url ) ) {
-				const $ = cheerio.load( content );
-				const base = new URL( $( 'base[href]' ).first().attr( 'href' ) ?? dependency.url, dependency.url ).href;
-				content = safeCapturedPageHtml( content ).html;
-				for ( const nested of dependencyReferences( content, base ) ) copyResource( nested, dependency.url );
-			}
-			writeFileSync(
-				destination,
-				replaceAll( content, resourceReplacements, rejectedReplacementKeys )
-			);
-		} else {
-			copyFileSync( source, destination );
-			assetPathsByHash.set( contentHash, relativePath );
-			assetHashesByPath.set( relativePath, contentHash );
-		}
-		copyingResources.delete( resource.path );
-		copiedResources.add( resource.path );
-		assets.push( {
-			sourceUrl: dependency.url,
-			path: `website/${ relativePath.replace( /\\/g, '/' ) }`,
-		} );
-		return true;
-	};
-	for ( const entry of retainedEntries ) {
-		const originalHtml = readFileSync( entry.htmlPath, 'utf8' );
-		let html = originalHtml;
-		for ( const dependency of dependencyReferences( html, entry.url, false, embeddedSources ) ) {
-			const mediaReplacement = mediaReplacements.get( dependency.reference );
-			if (
-				mediaReplacement &&
-				mediaReplacement !== TRANSPARENT_IMAGE_DATA_URL &&
-				! /^(?:https?:)?\/\//i.test( mediaReplacement )
-			)
-				continue;
-			if ( copyResource( dependency, entry.url ) ) {
-				// A browser-captured response is a faithful bounded fallback when the
-				// independent media fetch failed. Let its local replacement win.
-				if ( mediaReplacement === TRANSPARENT_IMAGE_DATA_URL ) {
-					promoteCapturedMediaReplacement( dependency.url, entry.url );
-				}
-			} else {
-				html =
-					dependency.kind === 'media'
-						? removeDanglingMediaSource(
-								html,
-								dependency.reference,
-								dependency.url,
-								mediaReplacements,
-								rejectedReplacementKeys
-						  )
-						: dependency.kind === 'css'
-						? replaceDanglingCssUrl( html, dependency.reference, rejectedReplacementKeys )
-						: removeDanglingResourceReference( html, dependency.reference );
-			}
-		}
-		if ( html !== originalHtml ) writeFileSync( entry.htmlPath, html );
-	}
+	const resourceStage = materializePortableResources( {
+		sourceRoot: outputDir,
+		websiteDir,
+		entries: retainedEntries,
+		resourceManifest,
+		mediaReplacements,
+		assetPathsByHash,
+		assetHashesByPath,
+		portablePathsBySource,
+		embeddedSources,
+		projectEmbeddedHtml: ( html ) => safeCapturedPageHtml( html ).html,
+	} );
+	mediaReplacements = resourceStage.mediaReplacements;
+	portablePathsBySource = resourceStage.portablePathsBySource;
+	assets.push( ...resourceStage.assets );
+	const { resourceReplacements, unresolvedDependencies, rejectedReplacementKeys } = resourceStage;
 	const inlineStyles = new Map< string, Array< { entry: CaptureEntry; css: string; media: string } > >();
 	const styleHoistDiagnostics = createStyleHoistDiagnosticCollector();
 	for ( const entry of retainedEntries ) {
@@ -2439,13 +1915,19 @@ function buildExportCapture(
 	const sharedStyles = new Map< string, { path: string; media: string } >();
 	const stylesheetPaths = new Map< string, string >();
 	const styleReplacements = new Map( [ ...mediaReplacements, ...resourceReplacements ] );
+	// Resource discovery and fallback promotion are complete; these maps are
+	// stable for the remaining styles, interaction strings and page projection.
+	const replaceStyleResources = preparePortableReplacements( styleReplacements, rejectedReplacementKeys );
+	const replaceMedia = preparePortableReplacements( mediaReplacements, rejectedReplacementKeys );
+	const replaceResources = preparePortableReplacements( resourceReplacements, rejectedReplacementKeys );
+	const portableMediaReplacements = omitDegenerateReplacements( mediaReplacements, rejectedReplacementKeys );
 	for ( const [ key, occurrences ] of [ ...inlineStyles ].sort( ( left, right ) =>
 		left[ 0 ].localeCompare( right[ 0 ] )
 	) ) {
 		if ( new Set( occurrences.map( ( occurrence ) => occurrence.entry.htmlPath ) ).size < 2 ) continue;
 		const style = occurrences[ 0 ];
 		// Hoisted styles leave the HTML rewrite path, so localize them before writing.
-		const css = replaceAll( style.css, styleReplacements, rejectedReplacementKeys );
+		const css = replaceStyleResources( style.css );
 		const contentHash = createHash( 'sha256' ).update( css ).digest( 'hex' );
 		const relativePath = stylesheetPaths.get( contentHash ) ?? `assets/css/capture-${ contentHash }.css`;
 		const destination = join( websiteDir, relativePath );
@@ -2557,6 +2039,36 @@ function buildExportCapture(
 		routeDestinations.get( JSON.stringify( [ route.siblings, route.label ] ) )?.size === 1
 	);
 	const responsiveIdentities = { ids: new Map<string,string>(), namedAliases: false };
+	// An image captured as a page resource, not as a media stub, still names one
+	// picture at several sizes. Let the largest captured size stand for the
+	// picture wherever only the picture, not a size, is named.
+	const largestResourceByFamily = new Map< string, { portable: string; dimension: number } >();
+	for ( const [ resourceUrl, portable ] of resourceReplacements ) {
+		if ( ! /^https?:\/\//i.test( resourceUrl ) || ! /\.(?:avif|gif|jpe?g|png|webp)$/i.test( portable ) )
+			continue;
+		try {
+			const family = mediaFamily( resourceUrl );
+			if ( family === resourceUrl ) continue;
+			const dimension = mediaDimension( resourceUrl );
+			if ( dimension > ( largestResourceByFamily.get( family )?.dimension ?? -1 ) )
+				largestResourceByFamily.set( family, { portable, dimension } );
+		} catch {
+			// Not a media URL.
+		}
+	}
+	for ( const [ family, { portable } ] of largestResourceByFamily ) {
+		if ( ! portableUrlByFamily.has( family ) ) portableUrlByFamily.set( family, portable );
+	}
+	// Interaction states are written to interaction-states.json and replayed into
+	// the portable pages, so their embedded HTML must name local media too.
+	const localizeInteractionMedia = ( text: string ): string =>
+		localizeFamilyMediaUrls(
+			replaceMedia( text ),
+			portableUrlByFamily
+		);
+	for ( const entry of retainedEntries ) {
+		if ( entry.interactions ) localizeStringsInPlace( entry.interactions, localizeInteractionMedia );
+	}
 	for ( const entry of retainedEntries ) {
 		const { url, htmlPath } = entry;
 		const routePath = routePathOf( url );
@@ -2570,13 +2082,14 @@ function buildExportCapture(
 		// Rewrite route links once, after wiring dialogs below. A portable path
 		// can also name a source route that was allocated a different filename.
 		const identityHtml = bindSrcsetShapedImageSrc(
-			replaceAll(
-				rewriteMediaUrls(
-					originalHtml,
-					omitDegenerateReplacements( mediaReplacements, rejectedReplacementKeys )
+			localizeDataAttributeMedia(
+				replaceResources(
+					rewriteMediaUrls(
+						originalHtml,
+						portableMediaReplacements
+					)
 				),
-				resourceReplacements,
-				rejectedReplacementKeys
+				portableUrlByFamily
 			)
 		);
 		const normalizedHtml = routePhoneDocumentFragments(
@@ -2598,7 +2111,7 @@ function buildExportCapture(
 		unresolvedAnchors.push(
 			...unresolvedCapturedAnchors( normalizedHtml, url, `/${ routePath }` )
 		);
-		writeFileSync( destination, wireNativeViewTimelines( normalizedHtml ) );
+		writeFileSync( destination, wireNativeViewTimelines( withViewportEntrances( normalizedHtml ) ) );
 		entry.identityHtmlPath = `${ htmlPath }.identity`;
 		writeFileSync( entry.identityHtmlPath, identityHtml );
 	}
