@@ -271,6 +271,21 @@ async function visibleGallerySurfaces(page: Page): Promise<string[]> {
 	});
 }
 
+/** Bind an observed cycle to the actual state at this viewport's serialization boundary. */
+export async function alignCapturedGalleries(page: Page, states: CapturedDialogInteraction[]): Promise<void> {
+	for (const state of states) {
+		const gallery = state.gallery?.inline;
+		if (!gallery || gallery.coverage !== 'complete') continue;
+		for (let sample = 0; sample < 30; sample++) {
+			const frame = await snapshot(page, gallery);
+			const index = frame ? gallery.frames.findIndex(item => item.key === frame.key) : -1;
+			if (frame && index >= 0) { gallery.initial = index; gallery.frames[index]!.text = frame.text; break; }
+			if (sample === 29) gallery.restoration = 'unverified';
+			await page.waitForTimeout(100);
+		}
+	}
+}
+
 /** Gallery evidence travels through interaction-states and its existing HTML/media export. */
 export async function captureGalleries(page: Page): Promise<CapturedDialogInteraction[]> {
 	await page.evaluate(() => {

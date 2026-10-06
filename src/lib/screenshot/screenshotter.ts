@@ -24,7 +24,7 @@ import {
 import { collectMobileChromeLayout } from './dom-capture.js';
 import { generateChromeCss, type BakedLayoutMap } from './fixups.js';
 import { sanitizeFrozenHtml } from './freeze.js';
-import { captureGalleries } from './gallery-capture.js';
+import { captureGalleries, alignCapturedGalleries } from './gallery-capture.js';
 import { wireCapturedDialogs } from '../static-dialogs.js';
 import { learnAndApplyFluidGeometry } from './fluid-capture.js';
 import {
@@ -941,6 +941,9 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	// before serialization (so the learned CSS is what gets written).
 	// A slideshow driven by its own thumbnails only advances while the source's
 	// script is running, so read its states before any layout measurement.
+	// Observe actions while source geometry and lazy-image owners are still live.
+	// Width learning can freeze hidden overlay boxes; it cannot be the input to an action drive.
+	const galleryStates = await captureGalleries(page).catch(() => []);
 	const pagerSlideshows = await collectPagerSlideshowStates( page ).catch( () => [] );
 	await args.observeSource?.( page, url, isDesktop ? 'desktop' : 'mobile', sourceErrors, args.browserProfile );
 
@@ -992,7 +995,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	}
 	// Gallery cycles are part of this viewport's serialization transaction, not
 	// a later drive after the baseline HTML has already been saved.
-	const galleryStates = await captureGalleries(page).catch(() => []);
+	await alignCapturedGalleries(page, galleryStates);
 
 	// Capture only after every operation that can change the live DOM, then
 	// serialize immediately below. This keeps runtime-driven components in the

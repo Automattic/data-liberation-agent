@@ -121,22 +121,22 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS)||!existsSync(chromium.executab
 	const url=`http://127.0.0.1:${(server.address() as {port:number}).port}/`;
 	const browser=await chromium.launch();
 	try{
-		await captureScreenshots({urls:[url],outputDir,concurrency:1,settleMs:100,captureImages:true,viewports:[{id:'desktop',width:1440,height:900},{id:'mobile',width:390,height:900}]});
+		await captureScreenshots({urls:[url],outputDir,concurrency:1,settleMs:100,captureImages:true,beforeSerialize:async page=>{await page.evaluate(()=>{document.getElementById('overlay')!.remove();(document.querySelector('[aria-label="Next image"]') as HTMLElement).click();});},viewports:[{id:'desktop',width:1440,height:900},{id:'mobile',width:390,height:900}]});
 		const manifest=JSON.parse(readFileSync(join(outputDir,'screenshots','manifest.json'),'utf8'));
 		const galleries=manifest.entries[url].interactions.states.filter((state:{kind:string})=>state.kind==='gallery');
 		expect(galleries).toHaveLength(2);
-		expect(galleries[0]).toMatchObject({status:'captured',gallery:{inline:{coverage:'complete'},lightbox:{coverage:'complete'},closed:true}});
+		expect(galleries[0]).toMatchObject({status:'captured',gallery:{inline:{coverage:'complete',initial:1},lightbox:{coverage:'complete'},closed:true}});
 		exportWebsiteCapture({outputDir,sourceUrl:url,platform:'default',summary:{},failures:[]});
 		const portable=readFileSync(join(outputDir,'website','index.html'),'utf8');
 		for(const width of [390,768,1440]){
 			const page=await browser.newPage({viewport:{width,height:900}});
 			await page.route('**/*',route=>route.abort());await page.setContent(portable);
 			await page.getByRole('button',{name:'Next image',exact:true}).click();
-			expect(await page.locator('#count').textContent()).toBe('2 / 3');
+			expect(await page.locator('#count').textContent()).toBe('3 / 3');
 			await page.locator('#stage img:visible').click();
 			expect(await page.locator('[data-dla-dialog-panel]').isVisible()).toBe(true);
 			await page.getByRole('button',{name:'Next slide',exact:true}).click();
-			expect(await page.locator('#large-count').textContent()).toBe('3 / 3');
+			expect(await page.locator('#large-count').textContent()).toBe('1 / 3');
 			await page.getByRole('button',{name:'Close gallery',exact:true}).click();
 			expect(await page.locator('[data-dla-dialog-panel]').isVisible()).toBe(false);
 			await page.close();
