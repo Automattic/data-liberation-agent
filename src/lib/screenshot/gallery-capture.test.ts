@@ -97,6 +97,16 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.execut
 	10_000,
 );
 
+it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath()))('waits for a delayed rendered initial frame without inventing its identity',async()=>{
+	const browser=await chromium.launch();
+	try{
+		const page=await browser.newPage();
+		await page.setContent(fixture.replace('<script>','<script>document.querySelector("#stage .chosen").classList.remove("chosen");setTimeout(()=>document.querySelector("#stage .frame").classList.add("chosen"),350);'));
+		const states=await captureGalleries(page);
+		expect(states[0]).toMatchObject({status:'captured',gallery:{inline:{initial:0,coverage:'complete',restoration:'verified'}}});
+	}finally{await browser.close();}
+},15_000);
+
 it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath()))(
 	'takes the popup baseline after activation scrolls a nested contact container',
 	async () => {

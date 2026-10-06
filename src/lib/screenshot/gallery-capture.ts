@@ -131,9 +131,6 @@ async function collect(
 	descriptor: Awaited<ReturnType<typeof describe>>,
 ): Promise<CapturedGallery | null> {
 	if (!descriptor) return null;
-	const first = await snapshot(page, descriptor);
-	if (!first) return null;
-	const frames = [first];
 	const deadline = Date.now() + 120_000;
 	const settle = async () => {
 		await page.waitForTimeout(100);
@@ -156,6 +153,16 @@ async function collect(
 			});
 		await page.waitForTimeout(100);
 	};
+	// Capture can arrive during an authored automatic transition or lazy decode.
+	// Settle the rendered stage before assigning the cycle's initial identity.
+	await settle();
+	let first = await snapshot(page, descriptor);
+	for (let sample = 0; !first && sample < 30; sample++) {
+		await page.waitForTimeout(100);
+		first = await snapshot(page, descriptor);
+	}
+	if (!first) return null;
+	const frames = [first];
 	let complete = false;
 	for (let count = 0; count < LIMIT && Date.now() < deadline; count++) {
 		const before = frames.at(-1)!;
@@ -261,7 +268,10 @@ export async function captureGalleries(page: Page): Promise<CapturedDialogIntera
 			});
 			continue;
 		}
-		if (!inline) continue;
+		if (!inline) {
+			states.push({status:'no-dialog',kind:'gallery',trigger:{selector:root,tag:'div',ariaHaspopup:'',dataBindings:{}},error:'No single decoded rendered initial image within the bounded stage readiness window'});
+			continue;
+		}
 		const state: CapturedDialogInteraction = {
 			status: 'no-dialog',
 			kind: 'gallery',
