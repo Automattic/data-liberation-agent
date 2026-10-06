@@ -49,6 +49,7 @@ function makeGoodPage(gotoStatus: number | ((url: string) => number) = 200) {
   let currentUrl = '';
   const statusOf = (url: string) => typeof gotoStatus === 'function' ? gotoStatus(url) : gotoStatus;
   return {
+    once: vi.fn(),
     goto: vi.fn().mockImplementation(async (url: string) => {
       currentUrl = url;
       return { status: () => statusOf(currentUrl) };

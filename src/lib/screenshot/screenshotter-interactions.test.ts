@@ -36,6 +36,7 @@ function makeHarvestPage() {
 function makePage() {
 	let currentUrl = '';
 	return {
+		once: vi.fn(),
 		goto: vi.fn().mockImplementation( async ( url: string ) => {
 			currentUrl = url;
 			return { status: () => 200 };
