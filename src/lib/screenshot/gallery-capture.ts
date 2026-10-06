@@ -227,6 +227,18 @@ async function collect(
 	};
 }
 
+async function visibleGallerySurfaces(page: Page): Promise<string[]> {
+	return page.evaluate(() => {
+		const visible = (el:Element) => {
+			const rect=el.getBoundingClientRect(),style=getComputedStyle(el);
+			let opacity=1;
+			for(let node:Element|null=el;node;node=node.parentElement) opacity*=Number.parseFloat(getComputedStyle(node).opacity||'1');
+			return rect.width>0 && rect.height>0 && style.visibility!=='hidden' && opacity>0.1;
+		};
+		return Array.from(document.body.children).filter(el=>el.id && Array.from(el.querySelectorAll('[aria-label="Next slide"]')).some(visible) && Array.from(el.querySelectorAll('[aria-label*="Close" i]')).some(visible)).map(el=>'#'+CSS.escape(el.id));
+	});
+}
+
 /** Gallery evidence travels through interaction-states and its existing HTML/media export. */
 export async function captureGalleries(page: Page): Promise<CapturedDialogInteraction[]> {
 	await page.evaluate(() => {
@@ -281,11 +293,7 @@ export async function captureGalleries(page: Page): Promise<CapturedDialogIntera
 		states.push(state);
 		// Incomplete cycles remain evidence, never a guessed portable interaction.
 		if (inline.coverage !== 'complete' || inline.restoration !== 'verified') continue;
-		const before = await page.evaluate(() =>
-			Array.from(document.body.children)
-				.filter((el) => getComputedStyle(el).display !== 'none')
-				.map((el) => el.id),
-		);
+		const before = await visibleGallerySurfaces(page);
 		const opener = page
 			.locator(root)
 			.locator(inline.stage)
@@ -299,17 +307,7 @@ export async function captureGalleries(page: Page): Promise<CapturedDialogIntera
 			continue;
 		}
 		await page.waitForTimeout(700);
-		const overlay = await page.evaluate((before) => {
-			const node = Array.from(document.body.children).find(
-				(el) =>
-					el.id &&
-					!before.includes(el.id) &&
-					getComputedStyle(el).display !== 'none' &&
-					el.querySelector('[aria-label="Next slide"]') &&
-					el.querySelector('[aria-label*="Close" i]'),
-			);
-			return node ? '#' + CSS.escape(node.id) : '';
-		}, before);
+		const overlay = (await visibleGallerySurfaces(page)).find(selector=>!before.includes(selector));
 		if (!overlay) {
 			await page.keyboard.press('Escape');
 			continue;

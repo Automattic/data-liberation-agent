@@ -16,7 +16,7 @@ const image = (index: number, full = false) =>
 	);
 const fixture = `<!doctype html><html><head><style>
 .frame{display:none;width:100%}.frame.chosen{display:block}img{width:100%;height:200px;object-fit:contain}
-#overlay{display:none;position:fixed;inset:0;background:black;z-index:100}#overlay.visible{display:block}#overlay img{height:60vh}button,[role=button],[role=img]{cursor:pointer}#stage{width:100%}
+#overlay{display:block;visibility:hidden;position:fixed;inset:0;background:black;z-index:100}#overlay.visible{visibility:visible}#overlay img{height:60vh}button,[role=button],[role=img]{cursor:pointer}#stage{width:100%}
 </style></head><body><section id="gallery"><h2>Pictures</h2><div aria-label="Image gallery carousel"><div id="stage">${[0, 1, 2].map((i) => `<div class="frame ${i === 0 ? 'chosen' : ''}"><div role="img" data-src="${image(i, true)}"><img src="${image(i)}"></div></div>`).join('')}</div></div><div role="button" aria-label="Previous image">Previous</div><div role="button" aria-label="Next image">Next</div><span id="count">1 / 3</span></section>
 <div id="overlay"><div id="large">${[0, 1, 2].map((i) => `<div class="frame ${i === 0 ? 'chosen' : ''}"><img src="${image(i, true)}"></div>`).join('')}</div><button aria-label="Previous slide">Previous</button><button aria-label="Next slide">Next</button><button aria-label="Close gallery">Close</button><span id="large-count">1 / 3</span></div>
 <script>let current=0,large=0;function show(scope,index,counter){scope.querySelectorAll('.frame').forEach((node,i)=>node.classList.toggle('chosen',i===index));document.getElementById(counter).textContent=(index+1)+' / 3';}
@@ -56,6 +56,8 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.execut
 				for (const expected of ['2 / 3', '3 / 3', '1 / 3']) {
 					await offline.getByRole('button', { name: 'Next image', exact: true }).click();
 					expect(await offline.locator('#count').textContent()).toBe(expected);
+					expect(await offline.locator('#stage img:visible').count()).toBe(1);
+					expect(await offline.locator('#stage img:visible').getAttribute('src')).toBe(image(Number(expected[0])-1));
 				}
 				await offline.getByRole('button', { name: 'Previous image', exact: true }).click();
 				expect(await offline.locator('#count').textContent()).toBe('3 / 3');
