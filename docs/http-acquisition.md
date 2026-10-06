@@ -1,5 +1,44 @@
 # HTTP source acquisition
 
+## Orchestrated review capture
+
+The existing capture entry point and CLI/MCP liberation verb accept explicit
+HTTP acquisition. Browser capture remains the default.
+
+```sh
+data-liberation https://example.blogspot.com/ --acquisition http \
+  --route-limit 25 --runtime-route-limit 3 --output ./review-captures
+```
+
+```js
+await captureWebsite({
+  url, outputDir: './review-capture', acquisition: 'http',
+  http: { routeLimit: 25, runtimeRouteLimit: 3 },
+});
+```
+
+The orchestrator owns detection, discovery, actual HTTP responses, shared
+asset acquisition, optional runtime observation/staging, and website export.
+The route limit bounds requested routes; discovered routes outside it remain
+named diagnostics. Runtime observation defaults to zero routes and can be
+bounded to 0–50 eligible routes, distributed across the requested inventory.
+Each selected variant replays its hash-verified acquired source response,
+then uses platform-owned readiness and the shared region observer. Source
+browser acquisition and full fluid sweeps are not run in this mode.
+
+Profiles with multiple variants declare `exportVariants` explicitly; a single
+variant can be exported directly. `prepareRuntimeRegions` supplies optional
+platform-specific readiness without host checks in the generic orchestrator.
+Runtime failures remain diagnostics and do not promote rendering coverage.
+The same settings are `acquisition`, `routeLimit`, and `runtimeRouteLimit` on
+the existing MCP `liberate` tool.
+
+HTTP output is always a review candidate with `complete: false`; `strict:
+true` rejects it through the existing `IncompleteCaptureError` contract.
+Results count discovered/requested/exported routes separately and carry
+`data-liberation/http-capture` provenance. Resume and source-screenshot capture
+are explicitly unsupported. No frozen fidelity reference is invented.
+
 HTTP acquisition is a source-evidence layer underneath capture. It fetches
 the actual route documents, retains raw bytes and prepared documents with
 SHA-256 identities, and optionally stages deduplicated dependencies using

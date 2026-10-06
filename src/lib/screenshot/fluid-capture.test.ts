@@ -538,7 +538,10 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		const heights: Record< number, number > = {};
 		for ( const width of [ 390, 600, 768, 1024, 1280, 1440, 1536, 1680, 1792, 1920 ] ) {
 			await source.setViewportSize( { width, height: 900 } );
-			await source.waitForTimeout( 10 );
+			await source.waitForFunction( () => {
+				const expected = innerWidth < 768 ? innerWidth === 390 ? '208px' : '100%' : `${ innerWidth * 0.23 }px`;
+				return document.querySelector< HTMLElement >( '#frame' )!.style.getPropertyValue( '--image-height' ) === expected;
+			} );
 			heights[ width ] = ( await source.locator( '#image' ).boundingBox() )!.height;
 		}
 		await learnAndApplyFluidGeometry( source, { settleMs: 30 } );

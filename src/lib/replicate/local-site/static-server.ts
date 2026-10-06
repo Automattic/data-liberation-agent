@@ -10,6 +10,7 @@
 import { createServer, type Server } from 'node:http';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join, normalize, resolve, extname, sep } from 'node:path';
+import { readResolvedPage } from '../../site-includes.js';
 
 export interface StaticServer {
   url: string;
@@ -108,8 +109,14 @@ export function startStaticServer(root: string): Promise<StaticServer> {
         res.end('not found');
         return;
       }
-      res.writeHead(200, { 'Content-Type': MIME[extname(file)] ?? 'application/octet-stream' });
-      res.end(readFileSync(file));
+      try {
+        const body = extname(file) === '.html' ? readResolvedPage(absRoot, file) : readFileSync(file);
+        res.writeHead(200, { 'Content-Type': MIME[extname(file)] ?? 'application/octet-stream' });
+        res.end(body);
+      } catch (error) {
+        res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+        res.end(`Site resource resolution failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
     });
     server.on('error', reject);
     server.listen(0, '127.0.0.1', () => {

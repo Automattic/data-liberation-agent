@@ -20,9 +20,13 @@ jobs:
           fetch-depth: 0
       - name: Keep generated bundles out of pull requests
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
+          # A retargeted PR can retain an old API base SHA. Compare against the
+          # actual common ancestor so main-owned release bundles are inherited,
+          # while any bundle changes authored on the feature branch still fail.
+          BASE_SHA=$(git merge-base "$HEAD_SHA" "origin/$BASE_REF")
           if ! git diff --quiet "${BASE_SHA}...${HEAD_SHA}" -- dist; then
             echo "dist/ is maintained on main by the Release workflow. Restore generated changes to the PR merge-base before committing."
             git diff --stat "${BASE_SHA}...${HEAD_SHA}" -- dist

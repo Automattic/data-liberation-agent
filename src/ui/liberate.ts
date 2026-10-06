@@ -7,13 +7,15 @@
 //
 import { join } from 'node:path';
 import { captureWebsite } from '../lib/capture.js';
-import type { UnresolvedAnchor } from '../lib/capture.js';
+import type { CaptureOptions, UnresolvedAnchor } from '../lib/capture.js';
 import { siteOutputDir } from '../lib/paths.js';
 import { startStaticServer } from '../lib/replicate/local-site/static-server.js';
 import type { StaticServer } from '../lib/replicate/local-site/static-server.js';
 import { authorPortableMotion, type PortableMotionRecipe } from '../lib/portable-motion.js';
 
 export interface LiberateOptions {
+	acquisition?: CaptureOptions['acquisition'];
+	http?: CaptureOptions['http'];
 	url: string;
 	/** Base directory; the site lands in a per-source subdirectory. */
 	outputBase: string;
@@ -48,6 +50,7 @@ export async function liberateSite( options: LiberateOptions ): Promise< Liberat
 	const outputDir = siteOutputDir( options.outputBase, options.url );
 
 	const capture = await captureWebsite( {
+		acquisition: options.acquisition, http: options.http,
 		url: options.url,
 		outputDir,
 		resume: options.resume,
@@ -56,7 +59,7 @@ export async function liberateSite( options: LiberateOptions ): Promise< Liberat
 		onProgress: ( progress ) => {
 			if ( progress.phase === 'capturing' && progress.total ) {
 				log(
-					`[liberate] ${ progress.current ?? 0 }/${ progress.total } ${ progress.url ?? '' }`.trim()
+					`[liberate] ${ progress.current ?? 0 }/${ progress.total } ${ progress.unit ? `${ progress.unit } ` : '' }${ progress.url ?? '' }`.trim()
 				);
 				return;
 			}

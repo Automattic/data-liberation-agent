@@ -68,15 +68,18 @@ describe( 'CapturedResourceStore', () => {
 		expect( manifest.icons[ 0 ].src ).toBe( identity.logo.url );
 	} );
 
-	it( 'exports a linked DOCX as portable bytes beside a missing HTML route', async () => {
+	it.each( [
+		[ 'docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'PK\x03\x04word document fixture' ],
+		[ 'PDF', 'application/pdf', '%PDF-1.7\npdf document fixture' ],
+	] )( 'exports a linked %s as portable bytes beside a missing HTML route', async ( extension, contentType, content ) => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-linked-docx-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ) );
 		mkdirSync( join( outputDir, 'screenshots' ) );
 		const sourceUrl = 'https://example.com/';
-		const download = 'https://example.com/_files/ugd/flyer.docx?dn=Fly%20fishing.docx';
+		const download = `https://example.com/_files/ugd/flyer.${ extension }?dn=Fly%20fishing.${ extension }`;
 		const missing = 'https://example.com/missing-page';
-		const bytes = Buffer.from( 'PK\x03\x04word document fixture' );
+		const bytes = Buffer.from( content );
 		const html = `<html><body><a id="flyer" href="${ download }">Flyer</a><a id="missing" href="/missing-page">Missing</a></body></html>`;
 		writeFileSync( join( outputDir, 'html', 'home.html' ), html );
 		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( {
@@ -84,7 +87,7 @@ describe( 'CapturedResourceStore', () => {
 		} ) );
 		const fetchMedia = vi.fn( async ( url: string ) => ( {
 			finalUrl: url, status: 200,
-			headers: new Headers( { 'content-type': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' } ),
+			headers: new Headers( { 'content-type': contentType } ),
 			body: bytes,
 		} ) );
 		const store = new CapturedResourceStore( outputDir, sourceUrl, fetchMedia );
