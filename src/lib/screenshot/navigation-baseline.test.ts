@@ -1,9 +1,12 @@
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { chromium } from 'playwright';
 import { expect, it } from 'vitest';
 import { expandCollapsedContent, hydrateDisclosureContent } from './dynamic-content.js';
 import { captureTriggeredDialogs } from './interaction-capture.js';
 import { wireCapturedDialogs } from '../static-dialogs.js';
+import { exportWebsiteCapture } from '../capture-export.js';
+import { startStaticServer, type StaticServer } from '../replicate/local-site/static-server.js';
 
 const skipBrowser = Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath());
 const fixture = `<!doctype html><html><head><style>
@@ -97,6 +100,88 @@ it.skipIf(skipBrowser)('probes an opening transition and restores an initially e
     expect(await page.locator('#content').evaluate(el=>el.getBoundingClientRect().top)).toBe(top);
   } finally { await browser.close(); }
 },30000);
+
+for (const breakpoint of [650,1100]) {
+  it.skipIf(skipBrowser)(`replays phone evidence on one responsive export using authored visibility at ${breakpoint}px`, async () => {
+    const browser = await chromium.launch({headless:true});
+    const page = await browser.newPage({viewport:{width:390,height:844}});
+    mkdirSync('.tmp-test',{recursive:true});
+    const outputDir=mkdtempSync(join('.tmp-test','nav-responsive-'));
+    let server: StaticServer | undefined;
+    const responsive = fixture.replace('@media(min-width:1000px)',`@media(min-width:${breakpoint}px)`)
+      .replace('nav ul { margin:0;', 'nav[data-open] ul { display:block } nav ul { display:none; margin:0;')
+      .replace('nav > div { display:block } nav li { height:30px }',
+        'nav > div { display:grid; grid-template-columns:1fr } nav ul { display:flex; gap:8px } nav li { height:30px }')
+      .replace('<div><ul id="links">','<div style="border-top:3px solid"><ul id="links">');
+    const measure = () => page.evaluate(()=>({
+      links:Array.from(document.querySelectorAll('#links a'),el=>{
+        const rect=el.getBoundingClientRect();
+        return {text:el.textContent,x:rect.x,y:rect.y,width:rect.width,height:rect.height};
+      }),
+      contentTop:document.querySelector('#content')!.getBoundingClientRect().top,
+      menuDisplay:getComputedStyle(document.querySelector('#links')!).display,
+      panelDisplay:getComputedStyle(document.querySelector('#links')!.parentElement!).display,
+    }));
+    try {
+      await page.setContent(responsive);
+      await expandCollapsedContent(page);
+      await hydrateDisclosureContent(page);
+      const baseline=(await page.content()).replace(/<script>[\s\S]*?<\/script>/g,'');
+      const report=await captureTriggeredDialogs(page,'https://navigation.test/');
+      expect(report.states.filter(state=>state.status==='captured')).toHaveLength(1);
+      const sourceGeometry=new Map<number,Awaited<ReturnType<typeof measure>>>();
+      for (const width of [390,768,1440]) {
+        await page.setViewportSize({width,height:844});
+        sourceGeometry.set(width,await measure());
+      }
+      // The same phone observation is applied once to a single document, then
+      // served at every viewport, as in a collapsed-equivalent site export.
+      for (const directory of ['html','html-mobile','screenshots']) mkdirSync(join(outputDir,directory));
+      writeFileSync(join(outputDir,'html/home.html'),baseline);
+      writeFileSync(join(outputDir,'html-mobile/home.html'),baseline);
+      writeFileSync(join(outputDir,'screenshots/manifest.json'),JSON.stringify({version:1,entries:{
+        'https://navigation.test/':{html:'html/home.html',mobileHtml:'html-mobile/home.html',interactions:report},
+      }}));
+      exportWebsiteCapture({outputDir,sourceUrl:'https://navigation.test/',platform:'generic',summary:{},failures:[]});
+      const receipt=JSON.parse(readFileSync(join(outputDir,'capture-receipt.json'),'utf8'));
+      expect(receipt.routes[0].responsiveVariants).toMatchObject({variants:1,outcome:'collapsed-equivalent'});
+      server=await startStaticServer(join(outputDir,'website'));
+      await page.goto(server.url);
+      for (const width of [390,768,1440,390]) {
+        await page.setViewportSize({width,height:844});
+        await page.waitForTimeout(100);
+        expect(await measure()).toEqual(sourceGeometry.get(width));
+        expect(await page.locator('#links').count()).toBe(1);
+        expect(await page.locator('#content').count()).toBe(1);
+        if (await page.locator('#menu').isVisible()) {
+          expect(await page.locator('#links').isVisible()).toBe(false);
+          await page.locator('#menu').click();
+          expect(await page.locator('#menu').getAttribute('aria-expanded')).toBe('true');
+          expect(await page.getByRole('link',{name:'First',exact:true}).isVisible()).toBe(true);
+          await page.keyboard.press('Escape');
+          expect(await page.locator('#menu').getAttribute('aria-expanded')).toBe('false');
+          expect(await measure()).toEqual(sourceGeometry.get(width));
+        } else {
+          expect(await page.getByRole('link',{name:'First',exact:true}).isVisible()).toBe(true);
+          expect(await page.getByRole('link',{name:'Last',exact:true}).isVisible()).toBe(true);
+        }
+      }
+      // A resize from an open phone menu also hands layout back to source CSS.
+      await page.locator('#menu').click();
+      await page.setViewportSize({width:1440,height:844});
+      await page.waitForTimeout(100);
+      expect(await measure()).toEqual(sourceGeometry.get(1440));
+      expect(await page.evaluate(()=>{
+        const ids=Array.from(document.querySelectorAll('[id]'),el=>el.id);
+        return new Set(ids).size===ids.length;
+      })).toBe(true);
+    } finally {
+      await browser.close();
+      await server?.close();
+      rmSync(outputDir,{recursive:true,force:true});
+    }
+  },30000);
+}
 
 it.skipIf(skipBrowser)('does not mistake unowned flow displacement for a movement-only popup', async () => {
   const browser = await chromium.launch({headless:true});
