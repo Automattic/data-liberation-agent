@@ -5,7 +5,7 @@ import selectorParser from 'postcss-selector-parser';
 import type { AnyNode, Element } from 'domhandler';
 import { escapeHtmlAttr } from './html-escape.js';
 import { appendScrollDrivenAnimations } from './scroll-driven-animations.js';
-import { scopeCss } from './replicate/css-scope.js';
+import { parseCss, scopeCss } from './replicate/css-scope.js';
 import { FLUID_RULES_STYLE_ATTRIBUTE } from './screenshot/fluid-capture.js';
 import { isElementNode, isYuiRuntimeId } from './html-nodes.js';
 
@@ -1166,7 +1166,7 @@ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',
 export function projectResponsiveIdentityCss( source: string, renamed: ReadonlyMap<string,string>, namedAliases: boolean ): string {
 	// CSS accepts legacy HTML-comment wrappers; PostCSS rejects the closing CDC.
 	// Strip only outer tokens, preserving quoted content inside the stylesheet.
-	const css = postcss.parse( source.replace( /^\s*<!--/, '' ).replace( /-->\s*$/, '' ) );
+	const css = parseCss( source.replace( /^\s*<!--/, '' ).replace( /-->\s*$/, '' ) );
 	css.walkRules( rule => {
 		const selectors = selectorParser().astSync( rule.selector );
 		const replacements: Array<{ node: selectorParser.Identifier | selectorParser.Attribute; alias: selectorParser.Identifier | selectorParser.Attribute }> = [];
