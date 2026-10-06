@@ -14,7 +14,7 @@ Point it at a URL and get your site back as plain files:
 data-liberation https://example.com/
 ```
 
-Every retained route becomes a directory of HTML, CSS, media, and fonts, with references rewritten so navigation works locally. It runs on its own, anywhere that can serve a folder.
+Every retained route becomes a directory of HTML, CSS, media, and fonts, with references rewritten so navigation works locally. Sites with shared headers/footers need include-aware serving or compilation as described below; the rendered pages need no DLA or browser assembly runtime.
 
 **HTML is the contract.** The liberated site is the deliverable — not an intermediate format on the way to somewhere else, and not tied to any destination.
 
@@ -106,11 +106,37 @@ A run produces, under `~/data-liberation/<host>/`:
 
 | Path | |
 |---|---|
-| `website/` | **The deliverable.** Serve this directory anywhere. Same-site server redirect aliases are recorded as Netlify-format `website/_redirects` when any were captured. |
+| `website/` | **The deliverable.** Serve with include support, or compile includes for a plain static host. Same-site server redirect aliases are recorded as Netlify-format `website/_redirects` when any were captured. |
 | `capture-receipt.json` | Source URL, the route table mapping each page to the URL it came from, assets |
 | `asset-evidence.json` | Bounded v1 source-asset evidence. Each source URL records retained-route references, retrieval separately from portable inclusion, and its canonical `portableAssetId` when bytes were deduplicated; consumers group source records by that ID. It retains the first 10,000 reachable source URLs in captured-route traversal and emits them lexically; `assetCount` is exact unless `assetCountExact` is false, when it is a lower bound and `assetsTruncated` identifies omitted detail. `totalReferenceCount` remains exact, while per-asset `referencesTruncated` identifies omitted locations. The receipt links this sidecar as `assetEvidence.path`. |
 | `diagnostics.json` | Everything the source withheld or the capture could not resolve |
 | `source-profile.json` | Measured behaviour: one document or per-device, declarative or runtime-written geometry, switch width |
+
+### Shared site chrome
+
+Repeated byte-identical site-level semantic headers and footers are stored once in
+`website/parts/header-<sha256>.html` or `website/parts/footer-<sha256>.html`. Pages
+reference them at their original positions with literal HTML comments:
+
+```html
+<!--#include virtual="/parts/header-<sha256>.html" -->
+```
+
+Sharing requires at least two retained route documents and a net byte reduction
+including the stored part and every reference. Route-specific navigation and
+mobile variants remain distinct; chrome inside `main`, `article`, or `section`
+stays local. IDs, styles, scripts and assets retain their authored bytes. Parts
+are resources, not routes. There is one canonical `website/` tree; receipts and
+existing evidence still own coverage and size reporting.
+
+DLA's `--serve`, runtime `serveCapture`, preview screenshots, and offline fidelity
+resolve these comments before interpreting HTML. Editing one part updates every
+referencing route on the next request. Ordinary static file servers and `file://`
+do **not** expand HTML comments: use an include-aware host or compile the comments
+to fragment bytes before deployment. Compilation must parse real HTML comments,
+not script strings, and resolve virtual paths relative to the website root. It
+does not require client-side fetching. DLA retains no expanded authoring copies.
+See [runtime serving and limits](docs/runtime-api.md#shared-parts-and-serving).
 
 ## Using it from an agent
 

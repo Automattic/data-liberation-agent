@@ -70,6 +70,8 @@ import {
 	publishExportGeneration,
 } from './export-publication.js';
 
+import { extractSharedChrome } from './shared-chrome.js';
+
 export const CAPTURE_RECEIPT_SCHEMA = 'data-liberation/capture-receipt/v1';
 export const SOURCE_PROFILE_SCHEMA = 'data-liberation/source-profile/v1';
 export const ASSET_EVIDENCE_SCHEMA = 'data-liberation/asset-evidence/v1';
@@ -2982,4 +2984,7 @@ function buildExportCapture(
 			2
 		) }\n`
 	);
+	// Evidence above describes the expanded bytes. Compact only after all projections,
+	// inside the same publication transaction; parts are resources, never routes.
+	extractSharedChrome( websiteDir, routes.map( route => route.path.replace( /^website\//, '' ) ) );
 }

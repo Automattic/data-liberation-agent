@@ -2,7 +2,7 @@
 
 ## Overview
 
-`data-liberation-agent` copies a website into a complete, portable HTML site. HTML is the contract: the liberated directory is the deliverable, and it runs on its own without this tool, a browser runtime, or any destination platform.
+`data-liberation-agent` copies a website into a complete, portable HTML site. HTML is the contract: the liberated directory is the deliverable. Shared-part comments require include-aware serving or compilation; expanded pages run without this tool, a browser assembly runtime, or any destination platform.
 
 The product is four verbs, and everything else exists to serve them:
 
@@ -30,6 +30,8 @@ url → detect platform → discover routes → capture each route in a browser
 - `src/lib/portable-media-plan.ts` — the portable media plan. One pass over retained pages records which known reference strings meet the raw replacement-boundary check, then releases each page. Each family gets one eligibility, homepage-priority, byte-budget, and content-hash decision, in the original family order. The plan owns the existing rendition limits; output names, missing-media reasons, and asset evidence stay with the exporter.
 - `src/lib/responsive-assembly.ts` — one responsive assembly. The source pair is the raw captures: it decides the binding phone-only body-class gate and which documents are assembled. A raw collapse is rendered from that same analysis. A raw structural dual is assembled from the already-normalized portable pair, and that emitted analysis — not a second look at the source pair — is what the receipt records. Portable rendering stays ordered around the choice: dual inputs are already normalized; a raw collapse is normalized after assembly. A missing body ships the desktop document alone and records that, even when the source pair had a binding gate.
 - `src/lib/self-contain.ts` — strips anything that would still reach the network.
+- `src/lib/shared-chrome.ts` — the final export step, after evidence projection and before atomic publication. Exact site-level semantic landmark ranges become `website/parts/<role>-<sha256>.html` only when two or more route documents share them and total bytes decrease (including the part). Neutral root wrappers are allowed; content-local chrome and real variants stay distinct. Apply all replacements against one original byte sequence, without DOM serialization. Never overwrite an existing resource. Parts are resources, never receipt routes; no parallel authoring tree or manifest owns them.
+- `src/lib/site-includes.ts` — shared HTML-comment parser and bounded root-contained resolver used by preview serving and offline fidelity. Grammar is exactly `<!--#include virtual="/parts/<safe-name>.html" -->`; include-looking raw text/scripts are not directives. Missing, malformed, cyclic, escaping, symlinked and over-limit includes fail visibly. Evidence and geometry hashes describe resolved bytes, not compact comments. A plain static server must compile includes or support them itself; browsers do not assemble parts.
 - `src/lib/fidelity/` — the gate. See below.
 - `src/lib/publish/` — the destination boundary.
 

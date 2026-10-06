@@ -12,13 +12,14 @@
 // Comparing against the live source is a different and far more expensive
 // question, and it lives in check.ts.
 //
-import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { existsSync } from 'node:fs';
+import { readResolvedPage } from '../site-includes.js';
 import * as cheerio from 'cheerio';
 import { ASSET_LINK_REL, isRemoteAssetUrl } from '../self-contain.js';
 import { resolveRequestPath } from '../replicate/local-site/static-server.js';
 
-export type FindingKind = 'anchor-missing' | 'anchor-ambiguous' | 'link-dangling' | 'remote-asset';
+export type FindingKind = 'anchor-missing' | 'anchor-ambiguous' | 'link-dangling' | 'remote-asset' | 'include-unresolved';
 
 export interface Finding {
 	route: string;
@@ -50,6 +51,7 @@ const ASSET_REFS: Array< [ string, string ] > = [
  * about once per route otherwise.
  */
 function fragmentTargets(
+	websiteDir: string,
 	cache: Map< string, cheerio.CheerioAPI | null >,
 	file: string,
 	fragment: string
@@ -57,7 +59,7 @@ function fragmentTargets(
 	let $ = cache.get( file );
 	if ( $ === undefined ) {
 		try {
-			$ = cheerio.load( readFileSync( file, 'utf8' ) );
+			$ = cheerio.load( readResolvedPage( websiteDir, file ) );
 		} catch {
 			$ = null;
 		}
@@ -87,9 +89,11 @@ export function checkSelfConsistency(
 	for ( const [ route, relative ] of routeFiles ) {
 		let html: string;
 		try {
-			html = readFileSync( join( websiteDir, relative ), 'utf8' );
-		} catch {
-			findings.push( { route, kind: 'link-dangling', detail: `route file missing: ${ relative }` } );
+			html = readResolvedPage( websiteDir, join( websiteDir, relative ) );
+		} catch ( error ) {
+			findings.push( existsSync( join( websiteDir, relative ) )
+				? { route, kind: 'include-unresolved', detail: `${ relative }: ${ String( error ) }` }
+				: { route, kind: 'link-dangling', detail: `route file missing: ${ relative }` } );
 			continue;
 		}
 		const $ = cheerio.load( html );
@@ -122,8 +126,11 @@ export function checkSelfConsistency(
 			}
 			if ( ! fragment ) return;
 
-			const targets = fragmentTargets( documents, target, fragment );
-			if ( targets === null ) return;
+			const targets = fragmentTargets( websiteDir, documents, target, fragment );
+			if ( targets === null ) {
+				findings.push( { route, kind: 'include-unresolved', detail: href } );
+				return;
+			}
 			if ( targets === 0 ) {
 				findings.push( { route, kind: 'anchor-missing', detail: href } );
 			} else if ( targets > 1 ) {
