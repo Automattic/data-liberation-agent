@@ -4,6 +4,10 @@ export const INTERACTION_STATES_SCHEMA = 'data-liberation/interaction-states/v2'
 export const LEGACY_INTERACTION_STATES_SCHEMA = 'data-liberation/interaction-states/v1';
 
 const MAX_TRIGGERS = 8;
+/** Plain buttons with no popup semantics that may still open a dialog; probed last. */
+const MAX_PLAIN_BUTTON_PROBES = 4;
+/** Labelled header/nav buttons that may reveal a link panel on activation; probed after declared popups. */
+const MAX_NAV_DROPDOWN_PROBES = 6;
 const MAX_INITIAL_DIALOGS = 8;
 const MAX_DIALOG_HTML_BYTES = 512 * 1024;
 const DIALOG_WAIT_MS = 2_000;
@@ -223,7 +227,7 @@ export async function captureTriggeredDialogs(
 ): Promise< InteractionStatesReport > {
 	const viewport = page.viewportSize() ?? { width: 0, height: 0 };
 	const initialDialogs = await captureInitiallyVisibleDialogs( page );
-	const triggers = ( await page.evaluate( ( { limit, popupTypes }: { limit: number; popupTypes: string[] } ) => {
+	const triggers = ( await page.evaluate( ( { limit, popupTypes, plainLimit, navLimit }: { limit: number; popupTypes: string[]; plainLimit: number; navLimit: number } ) => {
 		const visible = ( element: Element ): boolean => {
 			const rect = element.getBoundingClientRect();
 			const style = getComputedStyle( element );
@@ -264,6 +268,48 @@ export async function captureTriggeredDialogs(
 			element.setAttribute( 'data-lib-interaction-trigger', String( index ) );
 			return `[data-lib-interaction-trigger="${ index }"]`;
 		};
+		const isPlainActionButton = ( element: Element ): boolean => {
+			if ( element.tagName !== 'BUTTON' && element.getAttribute( 'role' ) !== 'button' ) return false;
+			if ( element.hasAttribute( 'disabled' ) || element.getAttribute( 'aria-disabled' ) === 'true' ) return false;
+			// Controls that declare any state or relationship are probed (or captured) elsewhere.
+			if ( element.matches( '[aria-haspopup],[aria-expanded],[aria-controls],[aria-pressed],[aria-selected],[aria-checked]' ) ) return false;
+			const type = ( element.getAttribute( 'type' ) ?? '' ).toLowerCase();
+			if ( type === 'submit' || type === 'reset' ) return false;
+			if ( element.closest( 'form,nav,li,[role="navigation"],[role="tablist"],[role="menu"],[role="listbox"],[role="dialog"],dialog,header' ) ) return false;
+			// A list item or a row of sibling buttons is a selectable set, not a single opener.
+			const siblingButtons = Array.from( element.parentElement?.children ?? [] ).filter(
+				( sibling ) => sibling.tagName === 'BUTTON' || sibling.getAttribute( 'role' ) === 'button'
+			);
+			if ( siblingButtons.length > 1 ) return false;
+			if ( ( element.textContent ?? '' ).replace( /\s+/g, '' ).length === 0 ) return false;
+			// Scroll-reveal sections start at opacity 0 until scrolled into view; the probe
+			// click scrolls them in, so only layout presence is required here.
+			const rect = element.getBoundingClientRect();
+			const style = getComputedStyle( element );
+			return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+		};
+		// A navigation item that is a button rather than a link opens a panel of
+		// links (React-state dropdowns). It declares no popup semantics, so it is
+		// recognized by where it sits and by being a short text label. A chevron
+		// icon only orders the likelier openers first.
+		const isNavDropdownButton = ( element: Element ): boolean => {
+			if ( element.tagName !== 'BUTTON' && element.getAttribute( 'role' ) !== 'button' ) return false;
+			if ( element.hasAttribute( 'disabled' ) || element.getAttribute( 'aria-disabled' ) === 'true' ) return false;
+			if ( ! element.closest( 'header,nav,[role="navigation"]' ) ) return false;
+			if ( element.closest( 'form,[role="dialog"],dialog,[role="menu"]' ) ) return false;
+			const type = ( element.getAttribute( 'type' ) ?? '' ).toLowerCase();
+			if ( type === 'submit' || type === 'reset' ) return false;
+			const text = ( element.textContent ?? '' ).replace( /\s+/g, ' ' ).trim();
+			if ( text.length === 0 || text.length > 30 ) return false;
+			return visible( element );
+		};
+		const navDropdowns = Array.from( document.querySelectorAll( 'button,[role="button"]' ) )
+			.filter( isNavDropdownButton )
+			.sort( ( a, b ) => Number( b.querySelector( 'svg' ) !== null ) - Number( a.querySelector( 'svg' ) !== null ) )
+			.slice( 0, navLimit );
+		const plain = Array.from( document.querySelectorAll( 'button,[role="button"]' ) )
+			.filter( isPlainActionButton )
+			.slice( 0, plainLimit );
 		const candidates = Array.from(
 			document.querySelectorAll(
 				'button[aria-haspopup],a[aria-haspopup],[role="button"][aria-haspopup],[role="combobox"],button,[role="button"]'
@@ -298,7 +344,11 @@ export async function captureTriggeredDialogs(
 			return element.getAttribute( 'role' ) === 'combobox' || ( isButton && /\bmenu\b/i.test( name ) );
 		} );
 
-		return candidates.slice( 0, limit ).map( ( element, index ) => {
+		const ordered = [ ...candidates ];
+		for ( const element of [ ...navDropdowns, ...plain ] ) {
+			if ( ! ordered.includes( element ) ) ordered.push( element );
+		}
+		return ordered.slice( 0, limit ).map( ( element, index ) => {
 			const dataBindings: Record< string, string > = {};
 			for ( const attribute of Array.from( element.attributes ) ) {
 				if (
@@ -330,7 +380,7 @@ export async function captureTriggeredDialogs(
 				dataBindings,
 			};
 		} );
-	}, { limit: MAX_TRIGGERS, popupTypes: POPUP_HASPOPUP } ) ) as TriggerDescriptor[];
+	}, { limit: MAX_TRIGGERS, popupTypes: POPUP_HASPOPUP, plainLimit: MAX_PLAIN_BUTTON_PROBES, navLimit: MAX_NAV_DROPDOWN_PROBES } ) ) as TriggerDescriptor[];
 
 	const states: CapturedDialogInteraction[] = [];
 	for ( const trigger of triggers ) {

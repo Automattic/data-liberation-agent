@@ -32,6 +32,7 @@ export { detect as detectPlatform, detectFromUrl, detectFromHttp } from './lib/d
 export { inspectSource, InspectError, INSPECTION_SCHEMA_VERSION } from './lib/inspect.js';
 export { captureWebsite, UnsupportedCapturePlatformError, IncompleteCaptureError } from './lib/capture.js';
 export type { CaptureOptions, CaptureResult, CaptureProgress, CaptureDependencies, UnresolvedAnchor } from './lib/capture.js';
+export type { HttpCaptureOptions } from './lib/capture-http.js';
 export { acquireHttpDocuments } from './lib/http-acquisition.js';
 export type { HttpAcquisitionOptions, AcquiredHttpDocument } from './lib/http-acquisition.js';
 export type { HttpAcquisitionProfile, HttpDocumentContext, PreparedHttpDocument, RuntimeRegionRequirement } from './platform/acquisition.js';

@@ -56,6 +56,10 @@ try {
     assert.equal(materialized.summary.complete, false);
     assert.equal(materialized.sourceProfile.geometry, 'unverified');
     assert.equal(materialized.acquisition.verification.rendering, 'unverified');
+    const orchestrated = await runtime.captureWebsite({ url, outputDir: join(outputDir, 'orchestrated-http'), acquisition: 'http', http: { routeLimit: 1 } });
+    assert.equal(orchestrated.summary.routesCaptured, 1);
+    assert.equal(orchestrated.complete, false);
+    assert.equal(orchestrated.provenance.provider, 'data-liberation/http-capture');
     assert.throws(() => createRequire(bundleUrl).resolve('playwright'), { code: 'MODULE_NOT_FOUND' });
     const http = await runtime.inspectSource(url, { rendered: false, sampleLimit: 1 });
     assert.equal(http.source.platform.id, 'runtime-fixture');

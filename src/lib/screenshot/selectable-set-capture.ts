@@ -8,7 +8,7 @@ export const CHOICE_GROUP_KIND = 'choice-group' as const;
 export const SELECTABLE_SET_LIMITS = {
 	maxSets: 3,
 	maxMembers: 24,
-	maxDriveMs: 16_000,
+	maxDriveMs: 30_000,
 	maxHtmlBytes: 512 * 1024,
 	settleMs: 500,
 	maxCandidateScan: 1_500,
@@ -206,6 +206,11 @@ export async function captureSelectableSetStates(
 					if ( isInsideNavigable( element ) ) return false;
 					if ( element.hasAttribute( 'aria-haspopup' ) ) return false;
 					if ( isDisclosureTrigger( element ) ) return false;
+					// A composite widget (a tablist, radiogroup, ...) is the group of
+					// its members, never a member itself. Roving-focus runtimes give it
+					// tabindex="0", which would otherwise make it a selectable that
+					// outermost-wins then prefers over every member it contains.
+					if ( isExplicitContainer( element ) ) return false;
 					// Cursor is inherited by a control's icon/label. Excluding the
 					// popup/disclosure trigger itself must also exclude its descendants:
 					// clicking them bubbles to the same control, not an independent set.
@@ -347,6 +352,16 @@ export async function captureSelectableSetStates(
 					}
 					return out;
 				};
+				/**
+				 * An ARIA tab owns its panel through `aria-controls`. Runtimes that mount
+				 * only the active panel leave the previous one empty, so the region that
+				 * varies is the controlled panel, not the element observed initially.
+				 */
+				const controlledPanel = ( member: Element ): Element | null => {
+					const id = ( member.getAttribute( 'aria-controls' ) || '' ).split( /\s+/ )[ 0 ] || '';
+					const panel = id ? document.getElementById( id ) : null;
+					return panel && panel.getAttribute( 'role' ) === 'tabpanel' && ! panel.contains( member ) ? panel : null;
+				};
 				const currentRoute = () => `${ location.pathname }${ location.search }`;
 				/**
 				 * A probe click must not leave the page. A committed navigation destroys
@@ -378,6 +393,14 @@ export async function captureSelectableSetStates(
 					document.addEventListener( 'submit', preventNavigation );
 					try {
 						if ( element instanceof HTMLElement ) element.scrollIntoView( { block: 'center', inline: 'center' } );
+						// Tab runtimes commonly select on mousedown rather than click, so a
+						// bare click() leaves their panels untouched.
+						if ( ( element.getAttribute( 'role' ) || '' ).toLowerCase() === 'tab' ) {
+							for ( const type of [ 'pointerdown', 'mousedown', 'pointerup', 'mouseup' ] ) {
+								const init = { bubbles: true, cancelable: true, composed: true, view: window, button: 0 };
+								element.dispatchEvent( type.startsWith( 'pointer' ) ? new PointerEvent( type, init ) : new MouseEvent( type, init ) );
+							}
+						}
 						const click = ( element as HTMLElement ).click;
 						if ( typeof click === 'function' ) {
 							click.call( element );
@@ -595,8 +618,10 @@ export async function captureSelectableSetStates(
 					let restorationIndex: number | undefined;
 					const restoreChoiceGroup = async (): Promise< boolean > => {
 						const sameChoiceState = ( actual: string, expected: string ) => {
+							// Roving-focus runtimes move tabindex with focus, which an
+							// activation cannot undo; selection state is what restores.
 							const normalize = ( html: string ) =>
-								html.replace( / style="([^"]*)"/g, ( _, value: string ) =>
+								html.replace( / tabindex="[^"]*"/g, '' ).replace( / style="([^"]*)"/g, ( _, value: string ) =>
 									` style="${ value.replace( /\s*([:;,])\s*/g, '$1' ).replace( /;$/, '' ) }"`
 								);
 							return normalize( actual ) === normalize( expected );
@@ -653,7 +678,11 @@ export async function captureSelectableSetStates(
 							}
 							continue;
 						}
-						const observationDeadline = Date.now() + Math.min( 2_500, Math.max( limits.settleMs * 4, 1_200 ) );
+						// Re-activating the selected member is not expected to change anything,
+						// so it must not burn the observation window.
+						const observationDeadline = observedSelection( group.members[ index ]! ) === true && initialSelected[ index ] === true
+							? 0
+							: Date.now() + Math.min( 2_500, Math.max( limits.settleMs * 4, 1_200 ) );
 						while ( Date.now() < observationDeadline && Date.now() < deadline && candidates.every( ( candidate, candidateIndex ) => fingerprint( candidate ) === initialFp[ candidateIndex ] ) ) {
 							await wait( 100 );
 						}
@@ -692,6 +721,15 @@ export async function captureSelectableSetStates(
 					const sameMemberParent = group.members.every(
 						( member ) => member.parentElement === group.members[ 0 ]?.parentElement
 					);
+					// A segmented control keeps exactly one member pressed before and after
+					// every probe; its pressed state is a view switch, so a varying region
+					// is its content. Independent toggles (none or several pressed) are not.
+					const pressedCount = ( selected: Array< boolean | null > ) => selected.filter( ( value ) => value === true ).length;
+					const exclusivePressed =
+						toggleGroup &&
+						observations.length > 0 &&
+						pressedCount( initialSelected ) === 1 &&
+						observations.every( ( observation ) => pressedCount( observation.selected ) === 1 );
 					const shouldCaptureChoice = Boolean(
 						choiceGroupChanged &&
 						sameMemberParent &&
@@ -699,7 +737,7 @@ export async function captureSelectableSetStates(
 						// also driving a distinct outside content region. Prefer the
 						// content evidence when both change; the choice-group snapshot
 						// alone cannot represent that collection transition.
-						( regionIdx < 0 || toggleGroup )
+						( regionIdx < 0 || ( toggleGroup && ! exclusivePressed ) )
 					);
 					if ( shouldCaptureChoice ) {
 						const drivenCount = Math.min( group.members.length, limits.maxMembers );
@@ -833,13 +871,14 @@ export async function captureSelectableSetStates(
 							}
 							continue;
 						}
-						let afterRegion =
-							document.querySelector( '[data-lib-selectable-region]' ) ?? liveRegion;
+						const resolveRegion = () =>
+							controlledPanel( member ) ?? document.querySelector( '[data-lib-selectable-region]' ) ?? liveRegion;
+						let afterRegion = resolveRegion();
 						let after = fingerprint( afterRegion );
 						const changeDeadline = Date.now() + Math.min( 2_500, Math.max( limits.settleMs * 4, 1_200 ) );
 						while ( after === before && ! wasSelected && Date.now() < changeDeadline && Date.now() < deadline ) {
 							await wait( 100 );
-							afterRegion = document.querySelector( '[data-lib-selectable-region]' ) ?? liveRegion;
+							afterRegion = resolveRegion();
 							after = fingerprint( afterRegion );
 						}
 						if ( after === before && ! wasSelected ) {
@@ -850,7 +889,12 @@ export async function captureSelectableSetStates(
 							continue;
 						}
 						pushOutcome( 'captured', index, {
-							region: describeRegion( afterRegion, snapshotHtml( afterRegion ) ),
+							// A controlled panel is a different element per member; the shared
+							// region stays the one the set was confirmed against.
+							region: describeRegion(
+								controlledPanel( member ) ? region : afterRegion,
+								snapshotHtml( afterRegion )
+							),
 						} );
 					}
 

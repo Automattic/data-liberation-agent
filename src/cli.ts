@@ -41,6 +41,9 @@ const HELP = `
     data-liberation --version          Show version
 
   Liberate options:
+    --acquisition <mode> browser (default), or http for an unverified review candidate
+    --route-limit <n>    Bound HTTP routes; omitted routes remain diagnosed
+    --runtime-route-limit <n> Observe HTTP runtime regions on at most n routes (0-50)
     --output <dir>       Output base directory (default: ~/data-liberation; override with --output or DLA_OUTPUT_DIR)
     --resume             Reuse artifacts already on disk instead of recapturing
     --screenshots        Also capture full-page + scrolled PNG screenshots
@@ -208,7 +211,19 @@ if (args.includes('--help')) {
     process.exit(1);
   }
   const portableMotion = portablePath ? JSON.parse((await import('node:fs')).readFileSync(portablePath, 'utf8')) : undefined;
+  const acquisition = getArg('--acquisition') ?? undefined;
+  if (args.includes('--acquisition') && !acquisition) throw new Error('--acquisition requires browser or http');
+  const httpNumber = (name: string) => {
+    if (!args.includes(name)) return undefined;
+    const value = getArg(name);
+    if (value === null) throw new Error(`${name} requires an integer`);
+    return Number(value);
+  };
+  const routeLimit = httpNumber('--route-limit');
+  const runtimeRouteLimit = httpNumber('--runtime-route-limit');
   const result = await liberateSite({
+    acquisition: acquisition as import('./lib/capture.js').CaptureOptions['acquisition'],
+    http: acquisition === 'http' || routeLimit !== undefined || runtimeRouteLimit !== undefined ? {routeLimit, runtimeRouteLimit} : undefined,
     url,
     outputBase: getArg('--output') || resolveOutputBase(),
     resume: args.includes('--resume'),
@@ -225,7 +240,7 @@ if (args.includes('--help')) {
     result.complete ? '' : 'incomplete',
   ].filter(Boolean);
   console.log(
-    `Liberated ${result.routesCaptured + result.routesSkipped}/${result.routesDiscovered} routes` +
+    `${acquisition === 'http' ? 'HTTP review candidate:' : 'Liberated'} ${result.routesCaptured + result.routesSkipped}/${result.routesDiscovered} routes` +
       (notes.length ? ` (${notes.join(', ')})` : ''),
   );
   console.log(`Site: ${result.websiteDir}`);
@@ -249,6 +264,6 @@ if (args.includes('--help')) {
     process.once('SIGTERM', stop);
   } else {
     // Guidance goes to stderr so stdout stays the machine-readable result.
-    process.stderr.write(`Browse it: data-liberation ${url} --resume --serve\n`);
+    process.stderr.write(acquisition === 'http' ? 'HTTP review candidate: rendering and interactions remain unverified.\n' : `Browse it: data-liberation ${url} --resume --serve\n`);
   }
 }

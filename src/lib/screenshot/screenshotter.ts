@@ -33,6 +33,7 @@ import {
 } from './interaction-capture.js';
 import { applyPagerSlideshowStates, collectPagerSlideshowStates } from './pager-slideshow.js';
 import { captureScrollStates, type ScrollStatesReport } from './scroll-state-capture.js';
+import { observeViewportEntrances } from '../viewport-entrances.js';
 import { hydrateDisclosureContent } from './dynamic-content.js';
 import { captureSelectableSetStates } from './selectable-set-capture.js';
 import { captureTypedSearchStates } from './typed-search-capture.js';
@@ -46,6 +47,7 @@ import { CapturedResourceStore } from './resource-capture.js';
 import { enforceSameOrigin } from './same-origin.js';
 import { preserveStreamedVideoPosters } from './streamed-video.js';
 import { sameOriginPageAnchors } from './unscheduled-anchors.js';
+import { normalizedUrl } from '../url/route-key.js';
 import { analyzePage } from './site-analysis.js';
 import {
 	defaultViewports,
@@ -309,6 +311,7 @@ export async function capturePageHtml( page: Page ): Promise< string > {
 	// before it is overwritten) — see css-shorthand-repair.ts.
 	await page.evaluate(
 		( { factorySrc } ) => {
+			( window as typeof window & { __dlaEntrances?: { stamp(): void } } ).__dlaEntrances?.stamp();
 			const repairShorthandVarCollapse = new Function( 'return (' + factorySrc + ')' )()();
 			const sheets = new Set( [ ...document.styleSheets, ...document.adoptedStyleSheets ] );
 			for ( const sheet of sheets ) {
@@ -1764,6 +1767,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	const capturedAt = () => new Date().toISOString();
 
 	const processUrl = async ( url: string ): Promise< void > => {
+		const routeStartedAt = Date.now();
 		const base = slugify( url );
 		// On resume the URL may already have an entry — reuse its slug so the
 		// existing-artifact check hits the same files we wrote last run. Only
@@ -1872,6 +1876,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	            globalThis.__name = function (fn) { return fn; };
 	          }
 	        ` );
+					await context.addInitScript( observeViewportEntrances );
 					const page = await context.newPage();
 					try {
 						await capturePerViewport( {
@@ -2021,6 +2026,7 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 			sendLog( server, `[fail] ${ url } (${ captureFailures.length } failures)` );
 		}
 		completed++;
+		process.stderr.write( `[timing] route ${ Date.now() - routeStartedAt }ms ${ url }\n` );
 		opts.onProgress?.( completed, urls.length, url );
 	};
 
@@ -2066,13 +2072,13 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		// Discovery can omit links authored on a captured page. Inspect only a
 		// bounded set of those links, using the source session and manual redirects:
 		// never request an off-origin Location or persist its (possibly tokenized) URL.
-		const scheduled = new Set( urls.map( routeIdentity ) );
+		const scheduled = new Set( urls.map( normalizedUrl ) );
 		const candidates = new Set< string >();
 		for ( const url of urls ) {
 			const htmlPath = manifest.getEntry( url )?.html;
 			if ( ! htmlPath || ! existsSync( join( opts.outputDir, htmlPath ) ) ) continue;
 			for ( const link of sameOriginPageAnchors( readFileSync( join( opts.outputDir, htmlPath ), 'utf8' ), url ) ) {
-				if ( ! scheduled.has( routeIdentity( link ) ) ) candidates.add( link );
+				if ( ! scheduled.has( normalizedUrl( link ) ) ) candidates.add( link );
 			}
 		}
 		if ( candidates.size ) {

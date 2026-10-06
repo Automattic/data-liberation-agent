@@ -31,6 +31,44 @@ afterEach( () => {
 } );
 
 describe( 'exportWebsiteCapture', () => {
+	it( 'keeps uncaptured query-only navigation pointing at the source when no base route was captured', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-query-only-home-' ) );
+		dirs.push( outputDir );
+		for ( const directory of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, directory ), { recursive: true } );
+		writeFileSync( join( outputDir, 'html/home.html' ), '<h1>English</h1><a href="?lang=de">German</a>' );
+		const sourceUrl = 'https://example.test/?lang=en';
+		writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( { version: 1, entries: { [ sourceUrl ]: { html: 'html/home.html' } } } ) );
+		exportWebsiteCapture( { outputDir, sourceUrl, platform: 'generic', summary: {}, failures: [] } );
+		const $ = cheerio.load( readFileSync( join( outputDir, 'website/index.html' ), 'utf8' ) );
+		expect( $( 'a' ).attr( 'href' ) ).toBe( 'https://example.test/?lang=de' );
+	} );
+
+	it( 'exports query collections with their own content and correctly targeted portable links', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-query-collections-' ) );
+		dirs.push( outputDir );
+		for ( const directory of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, directory ), { recursive: true } );
+		const urls = [ 'https://example.test/', 'https://example.test/catalog/', 'https://example.test/catalog/?tag=red', 'https://example.test/catalog/?tag=blue%26green' ];
+		const nav = '<nav><a id="all" href="/catalog/">All</a><a id="red" href="/catalog/?tag=red#items">Red</a><a id="blue" href="https://example.test/catalog/?tag=blue%26green#items">Blue</a><a id="uncaptured" href="/catalog/?tag=unknown">Unknown</a></nav>';
+		const entries = Object.fromEntries( urls.map( ( url, index ) => {
+			const html = `html/page-${ index }.html`;
+			writeFileSync( join( outputDir, html ), `${ nav }<main id="items"><h1>Collection ${ index }</h1></main>` );
+			return [ url, { html } ];
+		} ) );
+		writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( { version: 1, entries } ) );
+		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( { outputDir, sourceUrl: urls[ 0 ], platform: 'generic', summary: {}, failures: [] } ), 'utf8' ) );
+		const paths = new Map<string, string>( receipt.routes.map( ( route: { url: string; path: string } ) => [ route.url, route.path ] ) );
+		expect( new Set( paths.values() ).size ).toBe( 4 );
+		for ( const [ index, url ] of urls.entries() ) {
+			const $ = cheerio.load( readFileSync( join( outputDir, paths.get( url )! ), 'utf8' ) );
+			expect( $( 'h1' ).text() ).toBe( `Collection ${ index }` );
+			for ( const [ id, target ] of [ [ 'all', urls[ 1 ] ], [ 'red', urls[ 2 ] ], [ 'blue', urls[ 3 ] ] ] ) {
+				expect( $( `#${ id }` ).attr( 'href' ) ).toBe( `/${ paths.get( target )!.replace( /^website\//, '' ) }${ id === 'all' ? '' : '#items' }` );
+			}
+			expect( $( '#uncaptured' ).attr( 'href' ) ).toBe( 'https://example.test/catalog/?tag=unknown' );
+		}
+		expect( receipt.duplicateRoutes ).toEqual( [] );
+	} );
+
 	it( 'distinguishes an addressable unlabelled canvas from passive third-party timing', () => {
 		const resources = { version: 1 as const, resources: {}, failures: [] };
 		const motion = inspectSourceInteractivity( '<canvas></canvas><script>const canvas=document.querySelector("canvas");canvas.getContext("2d");requestAnimationFrame(()=>{});</script>', 'https://example.test/', tmpdir(), resources );
@@ -2358,6 +2396,127 @@ describe( 'exportWebsiteCapture', () => {
 		expect( diagnostics.unresolvedDependencies ).toEqual( [] );
 	} );
 
+	it( 'localizes images named inside captured interaction states, including renditions that were never downloaded', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-interaction-media-export-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'media', 'screenshots' ] )
+			mkdirSync( join( outputDir, path ), { recursive: true } );
+		const rendition = ( width: number, height: number ) =>
+			`https://cdn.example/images/portrait.png/v1/fill/w_${ width },h_${ height },al_c,q_90,enc_webp/portrait.webp`;
+		const page = `<html><body><a href="https://cdn.example/images/portrait.png" download>Download</a><span data-image-src="https://cdn.example/images/portrait.png"><img src="${ rendition( 534, 713 ) }" alt="Portrait"></span><button id="open" aria-haspopup="dialog">Open</button></body></html>`;
+		writeFileSync( join( outputDir, 'html', 'homepage.html' ), page );
+		writeFileSync( join( outputDir, 'media', 'portrait.webp' ), 'portrait' );
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( {
+				version: 1,
+				entries: {
+					'https://example.com/': {
+						html: 'html/homepage.html',
+						interactions: {
+							schema: 'data-liberation/interaction-states/v2',
+							sourceUrl: 'https://example.com/',
+							viewport: { width: 1440, height: 900 },
+							capturedAt: '2026-08-22T00:00:00.000Z',
+							states: [
+								{
+									status: 'captured',
+									trigger: { selector: '#open', tag: 'button', id: 'open', ariaHaspopup: 'dialog', dataBindings: {} },
+									dialog: {
+										selector: '#panel',
+										tag: 'div',
+										id: 'panel',
+										role: 'dialog',
+										ariaModal: true,
+										// The 352px rendition is not the one that was downloaded.
+										html: `<div id="panel" role="dialog"><img src="${ rendition( 352, 470 ) }" srcset="${ rendition( 352, 470 ) } 1x, ${ rendition( 704, 940 ) } 2x"></div>`,
+										htmlBytes: 100,
+										htmlTruncated: false,
+									},
+								},
+							],
+							initialDialogs: [],
+						},
+					},
+				},
+			} )
+		);
+		const media = MediaStubStore.load( outputDir );
+		media.markSuccess( rendition( 534, 713 ), join( outputDir, 'media', 'portrait.webp' ) );
+		media.flush();
+		exportWebsiteCapture( {
+			outputDir,
+			sourceUrl: 'https://example.com/',
+			platform: 'generic',
+			summary: {},
+			failures: [],
+		} );
+
+		const states = readFileSync( join( outputDir, 'interaction-states.json' ), 'utf8' );
+		expect( states ).not.toContain( 'cdn.example' );
+		expect( states ).toContain( '/media/portrait.webp' );
+		const website = readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' );
+		expect( website ).not.toContain( 'cdn.example' );
+		expect( website ).toContain( 'data-image-src="/media/portrait.webp"' );
+	} );
+
+	it( 'keeps htmlBytes equal to the html length after localizing interaction-state images', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-interaction-bytes-export-' ) );
+		dirs.push( outputDir );
+		for ( const path of [ 'html', 'media', 'screenshots' ] )
+			mkdirSync( join( outputDir, path ), { recursive: true } );
+		const rendition = ( width: number ) =>
+			`https://cdn.example/images/portrait.png/v1/fill/w_${ width },h_${ width },al_c/portrait.webp`;
+		writeFileSync(
+			join( outputDir, 'html', 'homepage.html' ),
+			`<html><body><img src="${ rendition( 534 ) }"><button id="a" aria-haspopup="dialog">A</button><button id="b" aria-haspopup="dialog">B</button></body></html>`
+		);
+		writeFileSync( join( outputDir, 'media', 'portrait.webp' ), 'portrait' );
+		const region = ( id: string, html: string, htmlBytes: number ) => ( {
+			status: 'captured',
+			trigger: { selector: `#${ id }`, tag: 'button', id, ariaHaspopup: 'dialog', dataBindings: {} },
+			dialog: { selector: `#p-${ id }`, tag: 'div', id: `p-${ id }`, role: 'dialog', ariaModal: true, html, htmlBytes, htmlTruncated: false },
+		} );
+		const html = ( label: string ) => `<div>${ label } caf\u00e9 \u2603<img src="${ rendition( 352 ) }"></div>`;
+		const exact = html( 'exact' );
+		const stale = html( 'stale' );
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( {
+				version: 1,
+				entries: {
+					'https://example.com/': {
+						html: 'html/homepage.html',
+						interactions: {
+							schema: 'data-liberation/interaction-states/v2',
+							sourceUrl: 'https://example.com/',
+							viewport: { width: 1440, height: 900 },
+							capturedAt: '2026-08-22T00:00:00.000Z',
+							states: [ region( 'a', exact, Buffer.byteLength( exact ) ), region( 'b', stale, 12345 ) ],
+							initialDialogs: [],
+						},
+					},
+				},
+			} )
+		);
+		const media = MediaStubStore.load( outputDir );
+		media.markSuccess( rendition( 534 ), join( outputDir, 'media', 'portrait.webp' ) );
+		media.flush();
+		exportWebsiteCapture( {
+			outputDir,
+			sourceUrl: 'https://example.com/',
+			platform: 'generic',
+			summary: {},
+			failures: [],
+		} );
+
+		const states = JSON.parse( readFileSync( join( outputDir, 'interaction-states.json' ), 'utf8' ) ).pages[ 0 ].states;
+		expect( states[ 0 ].dialog.html ).not.toContain( 'cdn.example' );
+		expect( states[ 0 ].dialog.htmlBytes ).toBe( Buffer.byteLength( states[ 0 ].dialog.html ) );
+		expect( states[ 1 ].dialog.html ).not.toContain( 'cdn.example' );
+		expect( states[ 1 ].dialog.htmlBytes ).toBe( 12345 );
+	} );
+
 	it( 'keeps a lazy image whose bare original was never fetched on its localized srcset renditions', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-lazy-original-export-' ) );
 		dirs.push( outputDir );
@@ -3183,7 +3342,7 @@ describe( 'exportWebsiteCapture', () => {
 			'<details class="dla-disclosure dla-initial-dialog" open="">'
 		);
 		expect( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) ).toContain(
-			'href="/about/index.html?from=home#team"'
+			'href="https://example.com/shop/about?from=home#team"'
 		);
 		expect( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) ).toContain(
 			'href="https://example.com/shop/missing"'
@@ -3192,7 +3351,7 @@ describe( 'exportWebsiteCapture', () => {
 			'href="https://external.example/about"'
 		);
 		expect( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) ).toContain(
-			'href="/about/index.html?from=menu#team"'
+			'href="https://example.com/shop/about?from=menu#team"'
 		);
 		expect( readFileSync( join( outputDir, 'website', 'index.html' ), 'utf8' ) ).toContain(
 			'href="https://external.example/contact"'
@@ -3206,7 +3365,7 @@ describe( 'exportWebsiteCapture', () => {
 			expect( await menu.evaluate( ( panel ) => ( panel as HTMLElement ).hidden ) ).toBe( false );
 			const menuLinks = menu.locator( 'a' );
 			expect( await menuLinks.first().getAttribute( 'href' ) ).toBe(
-				'/about/index.html?from=menu#team'
+				'https://example.com/shop/about?from=menu#team'
 			);
 			expect( await menuLinks.nth( 1 ).getAttribute( 'href' ) ).toBe(
 				'https://external.example/contact'
@@ -5194,7 +5353,7 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		expect( html ).toContain( '<a href="/index.html">Root-relative home</a>' );
 		expect( html ).toContain( '<a href="/css/index.html">Root-relative route</a>' );
 		expect( html ).toContain(
-			'<a href="/css/index.html?from=nav#box">Document-relative route</a>'
+			'<a href="https://example.com/bootcamp/css?from=nav#box">Document-relative route</a>'
 		);
 		expect( html ).toContain( '<a href="/css/index.html">Parent-relative route</a>' );
 		expect( html ).toContain( '<area href="/css/index.html" alt="Area route">' );
@@ -5444,11 +5603,11 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		for ( const file of [ 'index.html', reservedPath, 'index-3.html' ] ) {
 			const $ = cheerio.load( readFileSync( join( outputDir, 'website', file ), 'utf8' ) );
 			expect( $( 'a' ).not( '.dla-dialog a' ).map( ( _, link ) => $( link ).attr( 'href' ) ).get() ).toEqual( [
-				`/${ directoryPath }#directory`, `/${ documentPath }?from=nav#document`, `/${ reservedPath }#reserved`,
+				`/${ directoryPath }#directory`, `${ documentUrl }?from=nav#document`, `/${ reservedPath }#reserved`,
 			] );
 			if ( file !== reservedPath ) {
 				expect( $( '.dla-dialog a' ).map( ( _, link ) => $( link ).attr( 'href' ) ).get() ).toEqual( [
-					`/${ documentPath }?from=menu#document`, `/${ directoryPath }#directory`,
+					`${ documentUrl }?from=menu#document`, `/${ directoryPath }#directory`,
 				] );
 			}
 		}

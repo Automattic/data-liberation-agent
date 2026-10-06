@@ -158,6 +158,97 @@ describe( 'captureTriggeredDialogs', () => {
 	);
 
 	it.skipIf( skipBrowserTests )(
+		'captures the link panel a header navigation button reveals on click',
+		async () => {
+			const browser = await chromium.launch( { headless: true } );
+			const page = await browser.newPage( { viewport: { width: 1280, height: 800 } } );
+			try {
+				await page.setContent( `<!doctype html><body><header><nav>
+				<a href="/home">Home</a>
+				<div style="position:relative"><button id="shop" type="button">Shop<svg width="10" height="10"><path d="m1 3 4 4 4-4"/></svg></button></div>
+				<div style="position:relative"><button id="more" type="button">More</button></div>
+				<div style="position:relative"><button id="idle" type="button">Idle</button></div>
+				</nav></header><main><p>Body</p></main>
+				<script>
+					const reveal = ( id, links ) => {
+						const button = document.getElementById( id );
+						button.addEventListener( 'click', () => {
+							const existing = button.parentElement.querySelector( '.panel' );
+							if ( existing ) { existing.remove(); return; }
+							const panel = document.createElement( 'div' );
+							panel.className = 'panel';
+							panel.style.cssText = 'position:absolute;top:100%;left:0;background:#fff;padding:8px';
+							panel.innerHTML = '<div>' + links.map( ( [ href, text ] ) => '<a href="' + href + '" style="display:block">' + text + '</a>' ).join( '' ) + '</div>';
+							button.parentElement.append( panel );
+						} );
+					};
+					reveal( 'shop', [ [ '/shop/new', 'New in' ], [ '/shop/sale', 'Sale' ] ] );
+					reveal( 'more', [ [ '/about', 'About' ] ] );
+				</script></body>` );
+
+				const report = await captureTriggeredDialogs( page, 'https://example.test/' );
+				const captured = report.states.filter( ( state ) => state.status === 'captured' );
+				expect( captured.map( ( state ) => state.trigger.label ) ).toEqual( [ 'Shop', 'More' ] );
+				const shop = captured[ 0 ] as { dialog: { html: string; presentation?: string } };
+				expect( shop.dialog.presentation ).toBe( 'dropdown' );
+				expect( shop.dialog.html ).toContain( 'href="/shop/new"' );
+				expect( shop.dialog.html ).toContain( 'href="/shop/sale"' );
+				// A header button that reveals nothing records no panel.
+				expect( report.states.find( ( state ) => state.trigger.label === 'Idle' )?.status ).toBe( 'no-dialog' );
+
+				const markup = await page.evaluate( () => document.documentElement.outerHTML );
+				const wired = wireCapturedDialogs( markup, report.states );
+				expect( wired ).toMatch( /<button[^>]*aria-haspopup="menu"[^>]*>Shop/ );
+				expect( wired ).toContain( 'dla-dropdown' );
+			} finally {
+				await browser.close();
+			}
+		},
+		30_000
+	);
+
+	it.skipIf( skipBrowserTests )(
+		'captures a dialog opened by a plain button that declares no popup semantics',
+		async () => {
+			const browser = await chromium.launch( { headless: true } );
+			const page = await browser.newPage( { viewport: { width: 1200, height: 800 } } );
+			try {
+				await page.setContent( `<!doctype html><body><main>
+				<button id="card" type="button">Open the record</button>
+				<div><button type="button">Tab one</button><button type="button">Tab two</button></div>
+				<form><button type="submit">Send</button></form>
+				</main>
+				<script>
+					document.querySelector('#card').addEventListener('click', () => {
+						const dialog = document.createElement('div');
+						dialog.setAttribute('role', 'dialog');
+						dialog.setAttribute('aria-modal', 'true');
+						dialog.style.cssText = 'position:fixed;inset:10% 20%;background:#fff';
+						dialog.innerHTML = '<h2>Record details</h2><button type="button" aria-label="Close">Close</button>';
+						dialog.querySelector('button').addEventListener('click', () => dialog.remove());
+						document.body.append(dialog);
+					});
+				</script></body>` );
+
+				const report = await captureTriggeredDialogs( page, 'https://example.test/' );
+				const captured = report.states.filter( ( state ) => state.status === 'captured' );
+				expect( captured ).toHaveLength( 1 );
+				expect( captured[ 0 ] ).toMatchObject( {
+					trigger: { tag: 'button', label: 'Open the record' },
+					dialog: { role: 'dialog' },
+				} );
+				expect( ( captured[ 0 ] as { dialog: { html: string } } ).dialog.html ).toContain( 'Record details' );
+				// Segmented groups and form submit buttons are never probed.
+				expect( report.states.map( ( state ) => state.trigger.label ) ).not.toContain( 'Tab one' );
+				expect( report.states.map( ( state ) => state.trigger.label ) ).not.toContain( 'Send' );
+			} finally {
+				await browser.close();
+			}
+		},
+		30_000
+	);
+
+	it.skipIf( skipBrowserTests )(
 		'preserves a generic combobox listbox selection and keyboard dismissal offline',
 		async () => {
 			const browser = await chromium.launch( { headless: true } );

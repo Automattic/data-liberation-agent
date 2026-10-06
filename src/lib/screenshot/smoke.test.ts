@@ -33,6 +33,13 @@ it('does not probe linked document and image assets as missing HTML routes', () 
   )).toEqual(['https://example.com/meeting']);
 });
 
+it('keeps distinct query collections in missing-route diagnostics and strips only fragments', () => {
+  expect(sameOriginPageAnchors(
+    '<a href="/catalog/?tag=red#items">Red</a><a href="/catalog/?tag=blue#items">Blue</a><a href="/catalog/?tag=red#other">Red again</a>',
+    'https://example.com/'
+  )).toEqual(['https://example.com/catalog?tag=red', 'https://example.com/catalog?tag=blue']);
+});
+
 describe.skipIf(process.env.SKIP_BROWSER_TESTS)('screenshot smoke (real Chromium)', () => {
   it('captures two pages end-to-end', async () => {
     mkdirSync(TMP_ROOT, { recursive: true });
@@ -131,7 +138,7 @@ describe.skipIf(process.env.SKIP_BROWSER_TESTS)('screenshot smoke (real Chromium
   it('resolves server-redirected routes to their target and still reports post-load drift', async () => {
     mkdirSync(TMP_ROOT, { recursive: true });
     const pages: Record<string, string> = {
-      '/': tallHtml('HOME').replace('<h1>', '<a href="/old">old</a><a href="/temp">temp</a><a href="/new">new</a><a href="/unscheduled">outside</a><a href="/absent">absent</a><a href="/missing-html">missing HTML</a><h1>'),
+      '/': tallHtml('HOME').replace('<h1>', '<a href="/old">old</a><a href="/temp">temp</a><a href="/new">new</a><a href="/unscheduled">outside</a><a href="/absent">absent</a><a href="/?missing=1">absent query</a><a href="/missing-html">missing HTML</a><h1>'),
       '/new': tallHtml('NEW'),
       '/target': tallHtml('TARGET'),
       '/missing-html': tallHtml('NOT CAPTURED'),
@@ -147,7 +154,10 @@ describe.skipIf(process.env.SKIP_BROWSER_TESTS)('screenshot smoke (real Chromium
     const server: HttpServer = createServer((req, res) => {
       const path = (req.url || '/').split('?')[0];
       const redirect = redirects[path];
-      if (redirect) {
+      if (req.url === '/?missing=1') {
+        res.writeHead(404);
+        res.end();
+      } else if (redirect) {
         res.writeHead(redirect[0], { Location: redirect[1] });
         res.end();
       } else if (pages[path]) {
@@ -185,6 +195,7 @@ describe.skipIf(process.env.SKIP_BROWSER_TESTS)('screenshot smoke (real Chromium
       expect(manifest.entries[`${origin}/spa`].html).toBeUndefined();
       expect(manifest.entries[`${origin}/unscheduled`]).toMatchObject({ externalRedirect: true });
       expect(manifest.entries[`${origin}/absent`]).toMatchObject({ sourceAbsentStatus: 404 });
+      expect(manifest.entries[`${origin}/?missing=1`]).toMatchObject({ sourceAbsentStatus: 404 });
       expect(manifest.entries[`${origin}/missing-html`]).toBeUndefined();
       expect(JSON.stringify(manifest)).not.toContain('secret=');
     } finally {
