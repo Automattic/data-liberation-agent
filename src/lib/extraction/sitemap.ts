@@ -109,8 +109,9 @@ export async function fetchSitemap(baseUrl: string): Promise<string[]> {
  *
  * Candidates are probed in preference order: `Sitemap:` directives in
  * `/robots.txt`, then `/sitemap-index.xml`, then `/sitemap.xml`. The first
- * document that parses as a sitemap wins; index-document following is
- * unchanged.
+ * document that parses as a sitemap wins; a `sitemapindex`'s children are
+ * followed by document kind whatever their filename, while a urlset entry
+ * recurses only when its path ends in `.xml`.
  */
 export async function fetchSitemapWithDiagnostics(baseUrl: string): Promise<SitemapFetchResult> {
   const normalizedBase = baseUrl.includes('://') ? baseUrl : `https://${baseUrl}`;
@@ -191,7 +192,9 @@ export async function fetchSitemapWithDiagnostics(baseUrl: string): Promise<Site
         const pathPart = u.includes('?') ? u.slice(0, u.indexOf('?')) : u;
         const entryUrl = acceptEntry(u);
         if (!entryUrl) continue;
-        if (pathPart.endsWith('.xml')) {
+        // Index entries are child sitemaps regardless of filename. Preserve
+        // the existing .xml recursion signal for urlset entries.
+        if (document.kind === 'index' || pathPart.endsWith('.xml')) {
           await fetchAndParse(entryUrl.href, depth + 1);
         } else {
           if (!seenUrls.has(entryUrl.href)) {
