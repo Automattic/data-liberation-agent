@@ -15,24 +15,16 @@ function wire($: cheerio.CheerioAPI, gallery: CapturedGallery, fullImages: boole
 	if (gallery.coverage !== 'complete' || gallery.restoration !== 'verified') return false;
 	let wired = false;
 	$(gallery.selector).each((_, element) => {
-		const root = $(element),
+		const root = $(element);
+		if (root.is('[data-dla-gallery]')) return;
+		const width = root.attr('data-dla-gallery-capture-width');
+		if (width && Number(width) !== gallery.viewport?.width) return;
+		const
 			stage = root.find(gallery.stage.replace(':scope', ''));
 		const next = root.find(gallery.next.replace(':scope', '')),
 			previous = root.find(gallery.previous.replace(':scope', ''));
 		if (stage.length !== 1 || next.length !== 1 || previous.length !== 1) return;
-		const matching = stage.children().filter((__, child) =>
-			gallery.frames.some((frame) => {
-				const observed = cheerio.load(frame.html, null, false).root().children().first();
-				return (
-					observed.attr('class') === $(child).attr('class') &&
-					observed.find('img').first().attr('src') === $(child).find('img').first().attr('src')
-				);
-			}),
-		);
-		const initialImage =
-			matching.length === 1 ? matching.find('img').first().attr('src') : undefined;
-		let initial = gallery.frames.findIndex((frame) => frame.key === initialImage);
-		if (initial < 0) initial = gallery.initial;
+		const initial = gallery.initial;
 		stage.empty();
 		gallery.frames.forEach((frame, index) => {
 			const fragment = cheerio.load(frame.html, null, false);
@@ -41,14 +33,15 @@ function wire($: cheerio.CheerioAPI, gallery: CapturedGallery, fullImages: boole
 				.attr('data-dla-gallery-frame', String(index))
 				.attr('data-dla-gallery-image', frame.key)
 				.attr('data-dla-gallery-text', JSON.stringify(frame.text));
-			const fullImage = child.find('[data-src]').first().attr('data-src');
+			const fullImage = frame.fullImage;
 			if (fullImage) child.attr('data-dla-gallery-full-image', fullImage);
 			if (index !== initial) child.attr('hidden', '');
 			else child.removeAttr('hidden');
 			stage.append(fragment.html());
 		});
-		root.attr('data-dla-gallery', '').attr('data-dla-gallery-index', String(initial));
-		stage.attr('data-dla-gallery-stage', '');
+		root.attr('data-dla-gallery', '').attr('data-dla-gallery-source', gallery.selector).attr('data-dla-gallery-index', String(initial));
+		for (const record of gallery.frames[initial]!.text) root.find(record.selector.replace(':scope', '')).text(record.value);
+		stage.attr('data-dla-gallery-stage', '').attr('data-dla-gallery-initial', String(initial));
 		next.attr('data-dla-gallery-direction', '1');
 		previous.attr('data-dla-gallery-direction', '-1');
 		if (fullImages) root.find('[aria-label*="Close" i]').attr('data-dla-gallery-close', '');
@@ -59,24 +52,17 @@ function wire($: cheerio.CheerioAPI, gallery: CapturedGallery, fullImages: boole
 
 export function wireCapturedGalleries(html: string, states: CapturedDialogInteraction[]): string {
 	const captured = states.filter(
-		state => state.kind === 'gallery' && state.status === 'captured' && state.gallery && !state.dialog?.htmlTruncated
+		state => state.kind === 'gallery' && state.gallery?.inline.coverage === 'complete' && state.gallery.inline.restoration === 'verified'
 	);
 	if (captured.length === 0) return html;
 	const $ = cheerio.load(html);
-	let wired = false;
-	for (const state of captured)
-		if (
-			state.kind === 'gallery' &&
-			state.status === 'captured' &&
-			state.gallery &&
-			!state.dialog?.htmlTruncated
-		)
-			wired = wire($, state.gallery.inline, false) || wired;
+	let wired = $('[data-dla-gallery]').length > 0;
+	for (const state of captured) wired = wire($, state.gallery!.inline, false) || wired;
 	if (wired) {
-		$('head').append(
+		if (!$('style[data-dla-gallery-visibility]').length) $('head').append(
 			'<style data-dla-gallery-visibility>[data-dla-gallery-frame][hidden]{display:none!important}[data-dla-gallery-frame]:not([hidden]){display:block!important;visibility:visible!important;opacity:1!important}</style>',
 		);
-		$('head').append(`<script data-dla-gallery-runtime>${RUNTIME}</script>`);
+		if (!$('script[data-dla-gallery-runtime]').length) $('head').append(`<script data-dla-gallery-runtime>${RUNTIME}</script>`);
 	}
 	return wired ? $.html() : html;
 }

@@ -137,6 +137,10 @@ export function wireCapturedDialogs(
 		const triggers = findTriggers( $, state.trigger );
 		triggers.each( ( _, element ) => {
 			const trigger = $( element );
+			if (state.gallery) {
+				const width = trigger.closest('[data-dla-gallery-capture-width]').attr('data-dla-gallery-capture-width');
+				if (width && Number(width) !== state.gallery.inline.viewport.width) return;
+			}
 			if (
 				trigger.closest( 'details.dla-disclosure' ).length ||
 				trigger.attr( 'data-dla-listbox-trigger' ) ||
@@ -201,7 +205,7 @@ export function wireCapturedDialogs(
 		$( 'body' ).append( details );
 		wired++;
 	}
-	if ( wired > 0 ) {
+	if ( wired > 0 || $('[data-dla-dialog-trigger]').length > 0 ) {
 		// Styles the source added only once a panel opened (for example utility
 		// classes compiled on demand) travel with the panel they style.
 		const panelCss = [ ...new Set( captured.map( ( state ) => state.dialog?.css ?? '' ).filter( Boolean ) ) ].join( '\n' );

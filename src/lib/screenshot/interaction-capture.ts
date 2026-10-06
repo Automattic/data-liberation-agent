@@ -89,7 +89,7 @@ export interface CapturedDialogInteraction {
 	 */
 	kind?: 'dialog' | 'disclosure' | 'selectable-set' | 'choice-group' | 'typed-search' | 'gallery';
 	/** Directional replay requires a complete cycle, inverse edges and source restoration. */
-	gallery?: { inline: CapturedGallery; lightbox?: CapturedGallery; closed?: boolean };
+	gallery?: { inline: CapturedGallery; lightbox?: CapturedGallery; closed?: boolean; selection?: number[] };
 	collectionFilter?: import('./typed-search-capture.js').CapturedCollectionFilter;
 	trigger: {
 		selector: string;
@@ -386,8 +386,7 @@ export async function captureTriggeredDialogs(
 		} );
 	}, { limit: MAX_TRIGGERS, popupTypes: POPUP_HASPOPUP, plainLimit: MAX_PLAIN_BUTTON_PROBES, navLimit: MAX_NAV_DROPDOWN_PROBES } ) ) as TriggerDescriptor[];
 
-	const { captureGalleries } = await import( './gallery-capture.js' );
-	const states: CapturedDialogInteraction[] = await captureGalleries( page );
+	const states: CapturedDialogInteraction[] = [];
 	for ( const trigger of triggers ) {
 		let before: string[] = [];
 		try {
@@ -1009,7 +1008,7 @@ async function describeInterceptingElement(
 		.catch( () => undefined );
 }
 
-async function activateTrigger( page: Page, probeSelector: string, baseline?: () => Promise< void > ): Promise< void > {
+export async function activateTrigger( page: Page, probeSelector: string, baseline?: () => Promise< void > ): Promise< void > {
 	const locator = page.locator( probeSelector ).first();
 	await locator.scrollIntoViewIfNeeded( { timeout: DIALOG_WAIT_MS } ).catch( () => undefined );
 	// Native activation scrolls nested containers as well as the window. Those

@@ -1,5 +1,6 @@
 import type { Page } from 'playwright';
 import type { CapturedDialogInteraction } from './interaction-capture.js';
+import { activateTrigger } from './interaction-capture.js';
 
 /** A finite, observed cycle. Each frame occurs once in the authoring tree. */
 export interface CapturedGallery {
@@ -7,14 +8,16 @@ export interface CapturedGallery {
 	stage: string;
 	next: string;
 	previous: string;
+	viewport: { width: number; height: number };
 	/** Authored rendered DOM order, when all frames are already materialized. */
 	order: string[];
 	initial: number;
-	frames: Array<{ key: string; html: string; text: Array<{ selector: string; value: string }> }>;
+	frames: Array<{ key: string; fullImage?: string; html: string; text: Array<{ selector: string; value: string }> }>;
 	coverage: 'complete' | 'partial';
 	restoration: 'verified' | 'unverified';
 	/** Timing is deliberately not inferred from the captured index. */
 	autoplay: 'unmeasured';
+	failure?: string;
 }
 
 const LIMIT = 24;
@@ -26,7 +29,7 @@ async function describe(
 	root: string,
 ): Promise<Omit<
 	CapturedGallery,
-	'frames' | 'initial' | 'coverage' | 'restoration' | 'autoplay'
+	'frames' | 'initial' | 'coverage' | 'restoration' | 'autoplay' | 'failure'
 > | null> {
 	return page
 		.locator(root)
@@ -68,11 +71,11 @@ async function describe(
 				next: path(next, scope),
 				previous: path(previous, scope),
 				order: Array.from(stage.children)
-					.map((child) => child.querySelector('img')?.src || '')
+					.map((child) => child.querySelector('[data-src]')?.getAttribute('data-src') || child.getAttribute('data-src') || child.querySelector('img')?.currentSrc || child.querySelector('img')?.src || '')
 					.filter(Boolean),
 			};
 		})
-		.then((result) => (result ? { ...result, selector: root } : null));
+		.then((result) => (result ? { ...result, selector: root, viewport: page.viewportSize() ?? { width: 0, height: 0 } } : null));
 }
 
 async function snapshot(page: Page, gallery: Pick<CapturedGallery, 'selector' | 'stage'>) {
@@ -82,6 +85,20 @@ async function snapshot(page: Page, gallery: Pick<CapturedGallery, 'selector' | 
 		.evaluate((scope, stageSelector) => {
 			const stage = scope.querySelector(stageSelector);
 			if (!stage) return null;
+			const laidOut = Array.from(stage.children).filter(child => {
+				const image = child.querySelector('img');
+				if (!image) return false;
+				const rect = image.getBoundingClientRect();
+				if (!rect.width || !rect.height) return false;
+				for (let node: Element | null = image; node; node = node.parentElement) {
+					const style = getComputedStyle(node);
+					if (style.visibility === 'hidden' || Number(style.opacity) < 0.1) return false;
+				}
+				return true;
+			});
+			// A different-height successor can be outside a nested scrollport after
+			// its arrow was clicked. Normalize that activation movement before hit testing.
+			if (laidOut.length === 1) laidOut[0]!.querySelector('img')!.scrollIntoView({block:'center',inline:'nearest',behavior:'instant'});
 			const rendered = Array.from(stage.children).filter((child) => {
 				const image = child.querySelector('img');
 				if (!image) return false;
@@ -96,8 +113,14 @@ async function snapshot(page: Page, gallery: Pick<CapturedGallery, 'selector' | 
 			if (rendered.length !== 1) return null;
 			const child = rendered[0]!;
 			const image = child.querySelector('img')!;
-			if (!image.complete || image.naturalWidth === 0) return null;
+			if (!image.complete || image.naturalWidth <= 1) return null;
+			const source = image.currentSrc || image.src;
 			const clone = child.cloneNode(true) as Element;
+			const capturedImage = clone.querySelector('img')!;
+			capturedImage.setAttribute('src', source);
+			capturedImage.removeAttribute('srcset');
+			capturedImage.removeAttribute('sizes');
+			for (const source of clone.querySelectorAll('picture source')) source.remove();
 			for (const unsafe of clone.querySelectorAll('script,iframe,noscript')) unsafe.remove();
 			for (const element of [clone, ...clone.querySelectorAll('*')]) {
 				for (const attr of Array.from(element.attributes))
@@ -121,7 +144,9 @@ async function snapshot(page: Page, gallery: Pick<CapturedGallery, 'selector' | 
 				}
 				text.push({ selector: ':scope > ' + parts.join(' > '), value: el.textContent });
 			}
-			return { key: image.src, html: clone.outerHTML, text };
+			const fullImage = child.querySelector('[data-src]')?.getAttribute('data-src') || child.getAttribute('data-src');
+			const key = fullImage ? new URL(fullImage, document.baseURI).href : source;
+			return { key, ...(fullImage ? { fullImage: new URL(fullImage, document.baseURI).href } : {}), html: clone.outerHTML, text, slot: Array.from(stage.children).indexOf(child) };
 		}, gallery.stage);
 }
 
@@ -163,25 +188,29 @@ async function collect(
 	}
 	if (!first) return null;
 	const frames = [first];
+	let current = first;
+	const observe = async (accept: (frame: NonNullable<typeof first>) => boolean) => {
+		let previous: Awaited<ReturnType<typeof snapshot>> = null;
+		for (let sample = 0; sample < 30 && Date.now() < deadline; sample++) {
+			const frame = await snapshot(page, descriptor);
+			if (frame && accept(frame) && previous?.key === frame.key && JSON.stringify(previous.text) === JSON.stringify(frame.text)) return frame;
+			previous = frame;
+			await page.waitForTimeout(100);
+		}
+		return null;
+	};
 	let complete = false;
+	let failure: string | undefined;
 	for (let count = 0; count < LIMIT && Date.now() < deadline; count++) {
-		const before = frames.at(-1)!;
+		const before = current;
 		await page
 			.locator(descriptor.selector)
 			.first()
 			.locator(descriptor.next)
 			.click({ timeout: 2000 });
 		await settle();
-		let after: typeof first | null = null;
-		for (let sample = 0; sample < 20; sample++) {
-			await page.waitForTimeout(100);
-			after = await snapshot(page, descriptor);
-			if (after && after.key !== before.key) break;
-		}
-		if (!after || after.key === before.key) break;
-		await settle();
-		after = await snapshot(page, descriptor);
-		if (!after) break;
+		const after = await observe(frame => frame.key !== before.key);
+		if (!after || after.key === before.key) { failure = 'Next action did not produce a stable decoded successor'; break; }
 		// The same action must not silently mean a fixed choice. Verify its inverse.
 		await page
 			.locator(descriptor.selector)
@@ -189,14 +218,15 @@ async function collect(
 			.locator(descriptor.previous)
 			.click({ timeout: 2000 });
 		await settle();
-		if ((await snapshot(page, descriptor))?.key !== before.key) break;
+		if (!await observe(frame => frame.key === before.key)) { failure = `Previous action did not restore ${before.key}`; break; }
 		await page
 			.locator(descriptor.selector)
 			.first()
 			.locator(descriptor.next)
 			.click({ timeout: 2000 });
 		await settle();
-		if ((await snapshot(page, descriptor))?.key !== after.key) break;
+		if (!await observe(frame => frame.key === after.key)) { failure = 'Repeated next action did not restore the observed successor'; break; }
+		current = after;
 		if (after.key === first.key) {
 			complete = frames.length >= 2;
 			break;
@@ -220,10 +250,11 @@ async function collect(
 	return {
 		...descriptor,
 		initial: ordered.findIndex((frame) => frame.key === first.key),
-		frames: ordered,
+		frames: ordered.map(({slot, ...frame}) => frame),
 		coverage: complete ? 'complete' : 'partial',
 		restoration: (await snapshot(page, descriptor))?.key === first.key ? 'verified' : 'unverified',
 		autoplay: 'unmeasured',
+		...(failure ? {failure} : {}),
 	};
 }
 
@@ -267,7 +298,9 @@ export async function captureGalleries(page: Page): Promise<CapturedDialogIntera
 	);
 	const states: CapturedDialogInteraction[] = [];
 	for (const root of roots) {
+		const scroll = await page.evaluate(() => ({ x: scrollX, y: scrollY }));
 		await page.locator(root).scrollIntoViewIfNeeded();
+		await page.locator(root).evaluate((element, width) => element.setAttribute('data-dla-gallery-capture-width', String(width)), page.viewportSize()?.width ?? 0);
 		let inline: CapturedGallery | null;
 		try {
 			inline = await collect(page, await describe(page, root));
@@ -293,15 +326,12 @@ export async function captureGalleries(page: Page): Promise<CapturedDialogIntera
 		states.push(state);
 		// Incomplete cycles remain evidence, never a guessed portable interaction.
 		if (inline.coverage !== 'complete' || inline.restoration !== 'verified') continue;
-		const before = await visibleGallerySurfaces(page);
-		const opener = page
-			.locator(root)
-			.locator(inline.stage)
-			.locator('img')
-			.filter({ visible: true })
-			.first();
+		const selected = await snapshot(page, inline);
+		if (!selected) continue;
+		const opener = root + inline.stage.replace(':scope', '') + ` > :nth-child(${selected.slot + 1}) img`;
+		let before: string[] = [];
 		try {
-			await opener.click({ timeout: 2000 });
+			await activateTrigger(page, opener, async () => { before = await visibleGallerySurfaces(page); });
 		} catch (error) {
 			state.error = String(error).slice(0, 500);
 			continue;
@@ -342,13 +372,19 @@ export async function captureGalleries(page: Page): Promise<CapturedDialogIntera
 			state.error = String(error).slice(0, 500);
 		});
 		await page.waitForTimeout(500);
-		state.gallery!.closed = !(await page.locator(overlay).isVisible());
+		state.gallery!.closed = !(await visibleGallerySurfaces(page)).includes(overlay);
 		if (
 			lightbox?.coverage === 'complete' &&
 			lightbox.restoration === 'verified' &&
 			state.gallery!.closed
-		)
-			state.status = 'captured';
+		) {
+			const selection = inline.frames.map(frame => lightbox.frames.findIndex(full => full.key === (frame.fullImage || frame.key)));
+			if (selection.every(index => index >= 0) && new Set(selection).size === lightbox.frames.length) {
+				state.gallery!.selection = selection;
+				state.status = 'captured';
+			} else state.error = 'Observed inline images do not identify the complete decoded lightbox cycle';
+		}
+		await page.evaluate(({x, y}) => scrollTo(x, y), scroll);
 	}
 	return states;
 }

@@ -124,7 +124,7 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS)||!existsSync(chromium.executab
 		await captureScreenshots({urls:[url],outputDir,concurrency:1,settleMs:100,captureImages:true,viewports:[{id:'desktop',width:1440,height:900},{id:'mobile',width:390,height:900}]});
 		const manifest=JSON.parse(readFileSync(join(outputDir,'screenshots','manifest.json'),'utf8'));
 		const galleries=manifest.entries[url].interactions.states.filter((state:{kind:string})=>state.kind==='gallery');
-		expect(galleries).toHaveLength(1);
+		expect(galleries).toHaveLength(2);
 		expect(galleries[0]).toMatchObject({status:'captured',gallery:{inline:{coverage:'complete'},lightbox:{coverage:'complete'},closed:true}});
 		exportWebsiteCapture({outputDir,sourceUrl:url,platform:'default',summary:{},failures:[]});
 		const portable=readFileSync(join(outputDir,'website','index.html'),'utf8');
@@ -143,6 +143,29 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS)||!existsSync(chromium.executab
 		}
 	}finally{await browser.close();await new Promise<void>(resolve=>server.close(()=>resolve()));rmSync(outputDir,{recursive:true,force:true});}
 },180_000);
+
+it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath()))(
+	'retains decoded responsive inline cycles when no lightbox opens', async () => {
+		const browser = await chromium.launch();
+		try {
+			const page = await browser.newPage({viewport:{width:390,height:900}});
+			const responsive = fixture.replace(/<img src="([^"]+)"/g, '<img src="data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=" srcset="$1 1x"')
+				.replace("document.getElementById('overlay').classList.add('visible');", '');
+			await page.setContent(responsive);
+			const baseline = await page.content();
+			const states = await captureGalleries(page);
+			expect(states[0]).toMatchObject({status:'no-dialog',gallery:{inline:{coverage:'complete',restoration:'verified'}}});
+			const html = wireCapturedDialogs(baseline.replace(/<script>[\s\S]*?<\/script>/g,''), states);
+			await page.setContent(html);
+			for(const ordinal of [2,3,1]) {
+				await page.getByRole('button',{name:'Next image',exact:true}).click();
+				expect(await page.locator('#count').textContent()).toBe(`${ordinal} / 3`);
+				expect(await page.locator('#stage img:visible').evaluate(img => (img as HTMLImageElement).naturalWidth)).toBe(200);
+			}
+			expect(wireCapturedDialogs(html,states).match(/data-dla-gallery-runtime/g)).toHaveLength(1);
+		} finally { await browser.close(); }
+	}, 20_000,
+);
 
 it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath()))(
 	'takes the popup baseline after activation scrolls a nested contact container',
