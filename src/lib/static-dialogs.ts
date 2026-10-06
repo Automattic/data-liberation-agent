@@ -1,6 +1,7 @@
 import * as cheerio from 'cheerio';
 import type { Element } from 'domhandler';
 import { wireCapturedCollections } from './static-collections.js';
+import { wireCapturedGalleries, wireGalleryDialog } from './static-galleries.js';
 import type {
 	CapturedDialogInteraction,
 	CapturedInitialDialog,
@@ -69,6 +70,7 @@ export function wireCapturedDialogs(
 	initialDialogs: CapturedInitialDialog[] = []
 ): string {
 	html = wireCapturedCollections( html, states );
+	html = wireCapturedGalleries( html, states );
 	// Disclosure/accordion panels (`kind === 'disclosure'`) are restored in
 	// place, in the live DOM, before the page's HTML is ever serialized (see
 	// `hydrateDisclosureContent`) — their content is already inline in `html`
@@ -81,7 +83,10 @@ export function wireCapturedDialogs(
 		( state ) =>
 			state.status === 'captured' &&
 			state.dialog?.html &&
-			( state.kind === undefined || state.kind === 'dialog' )
+			( state.kind === undefined || state.kind === 'dialog' || (
+				state.kind === 'gallery' && state.gallery?.lightbox?.coverage === 'complete' &&
+				state.gallery.closed && ! state.dialog.htmlTruncated
+			) )
 	);
 	const choiceStates = states.filter(
 		( state ) =>
@@ -152,7 +157,9 @@ export function wireCapturedDialogs(
 			panel.attr( 'id', panelId ).attr( 'data-dla-dialog-panel', panelId );
 			if ( dropdown ) panel.addClass( 'dla-dropdown' );
 			if ( state.dialog?.ariaLabel ) panel.attr( 'aria-label', state.dialog.ariaLabel );
-			panel.html( state.dialog!.html );
+			panel.html( state.gallery?.lightbox
+				? wireGalleryDialog( state.dialog!.html, state.gallery.lightbox, panelId )
+				: state.dialog!.html );
 			if ( label ) trigger.attr( 'data-dla-disclosure-label', label );
 			trigger.attr( 'data-dla-dialog-trigger', panelId );
 			trigger.attr( 'aria-controls', panelId );

@@ -1,4 +1,5 @@
 import type { Page } from 'playwright';
+import type { CapturedGallery } from './gallery-capture.js';
 
 export const INTERACTION_STATES_SCHEMA = 'data-liberation/interaction-states/v2';
 export const LEGACY_INTERACTION_STATES_SCHEMA = 'data-liberation/interaction-states/v1';
@@ -82,10 +83,13 @@ export interface CapturedDialogInteraction {
 	 * runtime-created popup/menu dialog (wired post-hoc by `wireCapturedDialogs`
 	 * onto the authored trigger), from a selectable set whose
 	 * members drive one shared region (`selectable-set`), and from a choice group
-	 * whose members change their own attributes or styles (`choice-group`). Omitted/`'dialog'`
+	 * whose members change their own attributes or styles (`choice-group`), and
+	 * a finite image cycle with an observed image-opened lightbox (`gallery`). Omitted/`'dialog'`
 	 * preserves the pre-existing shape for callers that predate this field.
 	 */
-	kind?: 'dialog' | 'disclosure' | 'selectable-set' | 'choice-group' | 'typed-search';
+	kind?: 'dialog' | 'disclosure' | 'selectable-set' | 'choice-group' | 'typed-search' | 'gallery';
+	/** Directional replay requires a complete cycle, inverse edges and source restoration. */
+	gallery?: { inline: CapturedGallery; lightbox?: CapturedGallery; closed?: boolean };
 	collectionFilter?: import('./typed-search-capture.js').CapturedCollectionFilter;
 	trigger: {
 		selector: string;
@@ -382,12 +386,15 @@ export async function captureTriggeredDialogs(
 		} );
 	}, { limit: MAX_TRIGGERS, popupTypes: POPUP_HASPOPUP, plainLimit: MAX_PLAIN_BUTTON_PROBES, navLimit: MAX_NAV_DROPDOWN_PROBES } ) ) as TriggerDescriptor[];
 
-	const states: CapturedDialogInteraction[] = [];
+	const { captureGalleries } = await import( './gallery-capture.js' );
+	const states: CapturedDialogInteraction[] = await captureGalleries( page );
 	for ( const trigger of triggers ) {
-		const before = await visibleDialogSelectors( page );
-		await markVisibleBeforeActivation( page );
+		let before: string[] = [];
 		try {
-			await activateTrigger( page, trigger.probeSelector );
+			await activateTrigger( page, trigger.probeSelector, async () => {
+				before = await visibleDialogSelectors( page );
+				await markVisibleBeforeActivation( page );
+			} );
 		} catch ( error ) {
 			const intercepting = await describeInterceptingElement( page, trigger.probeSelector );
 			states.push( {
@@ -1002,9 +1009,12 @@ async function describeInterceptingElement(
 		.catch( () => undefined );
 }
 
-async function activateTrigger( page: Page, probeSelector: string ): Promise< void > {
+async function activateTrigger( page: Page, probeSelector: string, baseline?: () => Promise< void > ): Promise< void > {
 	const locator = page.locator( probeSelector ).first();
 	await locator.scrollIntoViewIfNeeded( { timeout: DIALOG_WAIT_MS } ).catch( () => undefined );
+	// Native activation scrolls nested containers as well as the window. Those
+	// layout movements precede the action; they are not revealed popup evidence.
+	await baseline?.();
 	await page.evaluate( () => {
 		const preventSubmit = ( event: Event ) => event.preventDefault();
 		document.addEventListener( 'submit', preventSubmit, true );
