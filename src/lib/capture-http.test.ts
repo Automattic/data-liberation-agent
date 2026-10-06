@@ -3,14 +3,14 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { PlatformAdapter } from '../types.js';
 
-const state = vi.hoisted( () => ( { runtime: false } ) );
+const state = vi.hoisted( () => ( { runtime: false, redirected: false } ) );
 vi.mock( './media-fetch/safe-fetch.js', async importOriginal => {
 	const original = await importOriginal<typeof import('./media-fetch/safe-fetch.js')>();
 	return { ...original, safeFetch: vi.fn( async ( url: string ) => ( {
-		finalUrl: url, status: 200,
+		finalUrl: state.redirected ? 'https://example.com/final/article/index.html' : url, status: 200,
 		headers: new Headers( { 'content-type': url.endsWith( '.css' ) ? 'text/css' : 'text/html; charset=utf-8' } ),
 		body: Buffer.from( url.endsWith( '.css' ) ? 'body{color:red}' : state.runtime
-			? '<html><head><title>Runtime fixture</title></head><body><div id="host"></div><script>document.getElementById("host").textContent="Mounted ready"</script></body></html>'
+			? `<html><head><title>Runtime fixture</title></head><body><div id="host"></div><script>document.getElementById("host").textContent=${ state.redirected ? 'document.baseURI' : '"Mounted ready"' }</script></body></html>`
 			: `<html><head><title>Article</title><link rel="stylesheet" href="https://cdn.example.com/site.css"></head><body><h1>${ url }</h1><a href="https://example.com/post/">Post</a>${ url.includes( 'requires-browser' ) ? '<canvas></canvas>' : '' }</body></html>` ),
 	} ) ) };
 } );
@@ -32,7 +32,7 @@ function adapter(): PlatformAdapter {
 		acquisition: { id: 'fixture-http', variants: [ { id: 'authored' } ], prepare: html => html.includes( '<canvas' ) ? undefined : { html: html.replace( /<script>[\s\S]*?<\/script>/g, '' ), browserRegions: state.runtime ? [ { selector: '#host', reason: 'Runtime mount' } ] : undefined } },
 	};
 }
-afterEach( () => { for ( const dir of dirs.splice( 0 ) ) rmSync( dir, { recursive: true, force: true } ); state.runtime = false; vi.clearAllMocks(); } );
+afterEach( () => { for ( const dir of dirs.splice( 0 ) ) rmSync( dir, { recursive: true, force: true } ); state.runtime = false; state.redirected = false; vi.clearAllMocks(); } );
 
 describe( 'orchestrated HTTP review capture', () => {
 	it( 'discovers, acquires and localizes through captureWebsite with truthful unsupported-route coverage', async () => {
@@ -70,6 +70,17 @@ describe( 'orchestrated HTTP review capture', () => {
 		expect( report.failures ).toEqual( [] );
 		expect( result.complete ).toBe( false );
 		expect( browserCapture ).not.toHaveBeenCalled();
+	} );
+
+	it( 'preserves canonical final-URL identity during real-browser region replay', async () => {
+		state.runtime = true;
+		state.redirected = true;
+		const outputDir = directory();
+		await captureWebsite( { url, outputDir, acquisition: 'http', http: { routeLimit: 1, runtimeRouteLimit: 1 } }, { findAdapter: adapter } );
+		const report = JSON.parse( readFileSync( join( outputDir, 'runtime-observations.json' ), 'utf8' ) );
+		expect( report.selectedRoutes ).toEqual( [ 'https://example.com/final/article/index.html' ] );
+		expect( report.failures ).toEqual( [] );
+		expect( report.attachments[ 0 ].observation.regions[ 0 ].nodes[ 0 ].html ).toContain( 'https://example.com/final/article/index.html' );
 	} );
 
 	it.each( [ { resume: true }, { captureImages: true }, { http: { routeLimit: 0 } }, { http: { runtimeRouteLimit: 51 } } ] )( 'rejects unsupported options before fetching: %j', async option => {
