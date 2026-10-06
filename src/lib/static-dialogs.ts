@@ -1,5 +1,6 @@
 import * as cheerio from 'cheerio';
-import type { Element } from 'domhandler';
+import type { AnyNode, Element } from 'domhandler';
+import { DROPDOWN_ANCESTOR_ATTRIBUTE_PATTERN, type CapturedDropdownAncestorState } from './screenshot/dropdown-ancestor-state.js';
 import { wireCapturedCollections } from './static-collections.js';
 import type {
 	CapturedDialogInteraction,
@@ -35,8 +36,8 @@ const DISCLOSURE_CSS =
 	'details.dla-initial-dialog:not([open])>summary{display:none!important}' +
 	'[data-dla-dialog-panel][hidden]:not([data-dla-resting-panel]),[data-dla-dialog-close][hidden]{display:none!important}' +
 	'[data-dla-dialog-panel]:not(.dla-dropdown):not([hidden]){display:block;position:fixed;inset:0;z-index:2147483646;overflow:auto;background:#fff}' +
-	'[data-dla-dialog-panel].dla-dropdown:not([data-dla-existing-panel]):not([hidden]){display:block;position:absolute;top:100%;left:0;right:0;z-index:2147483646}' +
-	'[data-dla-dialog-panel]:not([data-dla-resting-panel]):not([hidden])>:first-child{display:block!important;visibility:visible!important;opacity:1!important}' +
+	'[data-dla-dialog-panel].dla-dropdown:not([data-dla-existing-panel]):not([data-dla-observed-placement]):not([hidden]){display:block;position:absolute;top:100%;left:0;right:0;z-index:2147483646}' +
+	'[data-dla-dialog-panel]:not([data-dla-resting-panel]):not([data-dla-observed-placement]):not([hidden])>:first-child{display:block!important;visibility:visible!important;opacity:1!important}' +
 	'[data-dla-dialog-close]:not([hidden]){position:fixed;z-index:2147483647;right:1rem;top:1rem;padding:.5rem .75rem;background:#fff;color:#111;border:1px solid currentColor;border-radius:.25rem}';
 
 const DISCLOSURE_RUNTIME = `(function(){
@@ -44,9 +45,18 @@ function triggers(){return document.querySelectorAll('[data-dla-dialog-trigger]'
 function panel(trigger){var id=trigger.getAttribute('aria-controls');return id?document.getElementById(id):null;}
 function closeFor(trigger){var id=trigger.getAttribute('aria-controls');return id?document.querySelector('[data-dla-dialog-close="'+id+'"]'):null;}
 function concealed(trigger){var style=getComputedStyle(trigger);if(style.display==='none'||style.visibility==='hidden')return true;var rect=trigger.getBoundingClientRect();return rect.width===0||rect.height===0;}
+function ancestorBindings(trigger){try{return JSON.parse(trigger.getAttribute('data-dla-dialog-ancestor-state')||'[]');}catch(error){return [];}}
+function ancestorAt(trigger,depth){var node=trigger;while(depth--&&node)node=node.parentElement;return node;}
+function applyAncestors(trigger,open){ancestorBindings(trigger).forEach(function(binding){var node=ancestorAt(trigger,binding.depth);if(!node)return;
+  Object.keys(binding.closed).forEach(function(name){var value=open?binding.opened[name]:binding.closed[name];
+    if(!open){var owner=Array.prototype.find.call(triggers(),function(other){return other!==trigger&&!concealed(other)&&other.getAttribute('aria-expanded')==='true'&&ancestorBindings(other).some(function(row){return ancestorAt(other,row.depth)===node&&Object.prototype.hasOwnProperty.call(row.opened,name);});});if(owner){var row=ancestorBindings(owner).find(function(row){return ancestorAt(owner,row.depth)===node&&Object.prototype.hasOwnProperty.call(row.opened,name);});value=row.opened[name];}}
+    if(value===null)node.removeAttribute(name);else node.setAttribute(name,value);
+  });
+});}
 function apply(trigger){
   var target=panel(trigger);if(!target)return;
   var inactive=concealed(trigger),open=trigger.getAttribute('aria-expanded')==='true'&&!inactive;
+  applyAncestors(trigger,open);
   var existing=target.getAttribute('data-dla-existing-panel');
   if(existing){
     var states=JSON.parse(existing),state=inactive?states.resting:states.opened;
@@ -175,6 +185,9 @@ export function wireCapturedDialogs(
 			}
 			const label = trigger.attr( 'aria-label' ) || normalizedText( trigger.text() );
 			const dropdown = state.dialog?.presentation === 'dropdown';
+			const observed = dropdown ? resolveDropdownAncestors( $, trigger, state.dialog?.ancestorState ) : undefined;
+			if ( state.dialog?.ancestorState && !observed ) trigger.attr( 'data-dla-dialog-ancestor-unverified', state.dialog.ancestorState.reason ?? 'portable-owner-mismatch' );
+			if ( observed ) trigger.attr( 'data-dla-dialog-ancestor-state', JSON.stringify( observed.state.ancestors ) );
 			const reusedPanelId = reusedPanels.get( state.dialog!.selector );
 			if ( reusedPanelId ) {
 				trigger.attr( 'data-dla-dialog-trigger', reusedPanelId ).attr( 'aria-controls', reusedPanelId ).attr( 'aria-expanded', 'false' );
@@ -183,14 +196,16 @@ export function wireCapturedDialogs(
 				return;
 			}
 			const panelId = reusePanel && state.dialog?.id ? state.dialog.id : nextDialogId( $ );
-			const panel = reusePanel ? $( state.dialog!.html ).first() : $( '<div class="dla-dialog" role="dialog" aria-modal="true" hidden></div>' );
-			if ( reusePanel ) {
+			const sourcePlaced = Boolean( observed );
+			const panel = reusePanel || sourcePlaced ? $( state.dialog!.html ).first() : $( '<div class="dla-dialog" role="dialog" aria-modal="true" hidden></div>' );
+			if ( sourcePlaced ) panel.addClass( 'dla-dialog' );
+			if ( reusePanel || sourcePlaced ) {
 				// Snapshot display overrides the source's closed-state rule, but must
 				// still yield to our hidden-state rule on the same (reused) root.
 				panel.attr( 'style', ( panel.attr( 'style' ) ?? '' ).replace( /(display\s*:[^;!]+)\s*!important/gi, '$1' ) );
 				// A shared responsive document can show this same panel without its
 				// phone toggle. In that state, authored CSS and inline styles own it.
-				panel.attr( 'data-dla-existing-panel', JSON.stringify( {
+				if ( reusePanel ) panel.attr( 'data-dla-existing-panel', JSON.stringify( {
 					resting: {
 						style: existingPanel.attr( 'style' ) ?? null,
 						class: `${ existingPanel.attr( 'class' ) ?? '' } dla-dropdown`.trim(),
@@ -201,11 +216,12 @@ export function wireCapturedDialogs(
 						class: `${ panel.attr( 'class' ) ?? '' } dla-dropdown`.trim(),
 					},
 				} ) ).attr( 'hidden', '' );
+				if ( sourcePlaced ) panel.attr( 'data-dla-observed-placement', 'true' ).attr( 'hidden', '' );
 			}
 			panel.attr( 'id', panelId ).attr( 'data-dla-dialog-panel', panelId );
 			if ( dropdown ) panel.addClass( 'dla-dropdown' );
 			if ( state.dialog?.ariaLabel ) panel.attr( 'aria-label', state.dialog.ariaLabel );
-			if ( !reusePanel ) panel.html( state.dialog!.html );
+			if ( !reusePanel && !sourcePlaced ) panel.html( state.dialog!.html );
 			if ( label ) trigger.attr( 'data-dla-disclosure-label', label );
 			trigger.attr( 'data-dla-dialog-trigger', panelId );
 			trigger.attr( 'aria-controls', panelId );
@@ -214,6 +230,10 @@ export function wireCapturedDialogs(
 			if ( reusePanel ) {
 				existingPanel.replaceWith( panel );
 				reusedPanels.set( state.dialog!.selector, panelId );
+			}
+			else if ( observed ) {
+				if ( observed.before ) $( observed.before ).before( panel );
+				else $( observed.parent ).append( panel );
 			}
 			else trigger.after( panel );
 			if ( ! dropdown ) {
@@ -322,6 +342,36 @@ function nextDialogId( $: cheerio.CheerioAPI ): string {
 	let index = 0;
 	while ( $( `#dla-dialog-${ index }` ).length ) index++;
 	return `dla-dialog-${ index }`;
+}
+
+/** Bind verified source evidence only to the unchanged local portable owner. */
+function resolveDropdownAncestors(
+	$: cheerio.CheerioAPI,
+	trigger: cheerio.Cheerio< AnyNode >,
+	state: CapturedDropdownAncestorState | undefined
+): { state: CapturedDropdownAncestorState; parent: Element; before?: Element } | undefined {
+	if ( state?.status !== 'verified' || !state.placement || !Array.isArray( state.ancestors ) || state.ancestors.length > 8 || JSON.stringify( state ).length > 32768 ) return undefined;
+	const parents = trigger.parents().toArray();
+	const parent = parents[ state.placement.parentDepth - 1 ];
+	if ( !parent || !selectByCapturedSelector( $, state.placement.parentSelector, parent.tagName ).toArray().includes( parent ) ) return undefined;
+	if ( ![ 'static', 'relative', 'absolute', 'fixed', 'sticky' ].includes( state.placement.position ) ) return undefined;
+	for ( const row of state.ancestors ) {
+		if ( !row || !row.closed || !row.opened ) return undefined;
+		if ( !Number.isInteger( row.depth ) || row.depth < 1 || row.depth > 8 ) return undefined;
+		const node = parents[ row.depth - 1 ];
+		if ( !node || node.tagName !== row.tag || !selectByCapturedSelector( $, row.selector, row.tag ).toArray().includes( node ) ) return undefined;
+		const names = Object.keys( row.closed );
+		if ( names.length > 32 || names.length !== Object.keys( row.opened ).length ) return undefined;
+		for ( const name of names ) {
+			if ( !DROPDOWN_ANCESTOR_ATTRIBUTE_PATTERN.test( name ) ) return undefined;
+			const closed = row.closed[ name ], opened = row.opened[ name ];
+			if ( [ closed, opened ].some( value => value !== null && ( typeof value !== 'string' || Buffer.byteLength( value ) > 4096 ) ) ) return undefined;
+			if ( closed !== opened && ( $( node ).attr( name ) ?? null ) !== closed ) return undefined;
+		}
+	}
+	const beforeNodes = state.placement.beforeSelector ? selectByCapturedSelector( $, state.placement.beforeSelector, undefined ).toArray().filter( ( node ): node is Element => node.type === 'tag' && node.parent === parent ) : [];
+	if ( state.placement.beforeSelector && beforeNodes.length !== 1 ) return undefined;
+	return { state, parent, ...( beforeNodes[ 0 ] ? { before: beforeNodes[ 0 ] } : {} ) };
 }
 
 function removeCapturedDialog( $: cheerio.CheerioAPI, selector: string | undefined ): void {

@@ -44,7 +44,7 @@ import { JsAggregator } from './js-aggregator.js';
 import { isAbsentDocumentError, isSourceCaptureUrl, nonHtmlDocumentError } from './absent-document.js';
 import { ManifestQueue, type ManifestEntry, type FailureEntry } from './manifest-queue.js';
 import { validateOutputDir, planArtifacts, type ArtifactPlan } from './output-layout.js';
-import { waitForStable, triggerLazyLoad, dismissOverlays, pageResponds, withEvaluateTimeout } from './page-helpers.js';
+import { waitForStable, triggerLazyLoad, dismissOverlays, pageResponds, withEvaluateTimeout, restoreTopScrollState } from './page-helpers.js';
 import { CapturedResourceStore } from './resource-capture.js';
 import { enforceSameOrigin, sameHttpSite } from './same-origin.js';
 import { preserveStreamedVideoPosters } from './streamed-video.js';
@@ -1381,6 +1381,9 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 
 	async function probeInteractions(): Promise< void > {
 	try {
+		// The scrolled screenshot must not become the resting state for controls
+		// whose evidence is replayed against the top-of-document portable baseline.
+		await restoreTopScrollState( page );
 		await dismissOverlays( page );
 		const interactions = await captureTriggeredDialogs( page, url );
 		// Route-tab observation is evidence, not a baseline artifact: its failure

@@ -1,4 +1,5 @@
 import type { Page } from 'playwright';
+import { rememberDropdownAncestors, observeDropdownAncestors, verifyDropdownRestoration, type CapturedDropdownAncestorState } from './dropdown-ancestor-state.js';
 
 export const INTERACTION_STATES_SCHEMA = 'data-liberation/interaction-states/v2';
 export const LEGACY_INTERACTION_STATES_SCHEMA = 'data-liberation/interaction-states/v1';
@@ -114,6 +115,8 @@ export interface CapturedDialogInteraction {
 		 * serialized styles predate the panel, so without these it renders unstyled.
 		 */
 		css?: string;
+		/** Observed local ancestor transitions and panel placement, verified by source restoration. */
+		ancestorState?: CapturedDropdownAncestorState;
 	};
 	/**
 	 * Present on `kind: 'selectable-set'` states. `size` is how many members
@@ -399,6 +402,7 @@ export async function captureTriggeredDialogs(
 		}
 		const before = await visibleDialogSelectors( page );
 		await markVisibleBeforeActivation( page );
+		await rememberDropdownAncestors( page, trigger.probeSelector );
 		try {
 			await activateTrigger( page, trigger.probeSelector );
 		} catch ( error ) {
@@ -436,6 +440,9 @@ export async function captureTriggeredDialogs(
 
 		const bounded = boundHtml( dialog.html );
 		const addedCss = await rulesAddedSinceActivation( page );
+		const ancestorState = dialog.presentation === 'dropdown' ? await observeDropdownAncestors( page, dialog.selector ) : undefined;
+		await closeCapturedDialog( page, dialog.selector, trigger.probeSelector );
+		const restoredAncestorState = ancestorState ? await verifyDropdownRestoration( page, ancestorState, dialog.selector ) : undefined;
 		states.push( {
 			status: 'captured',
 			trigger: triggerRecord( trigger ),
@@ -451,15 +458,16 @@ export async function captureTriggeredDialogs(
 				htmlBytes: bounded.bytes,
 				htmlTruncated: bounded.truncated,
 				...( addedCss ? { css: addedCss } : {} ),
+				...( restoredAncestorState ? { ancestorState: restoredAncestorState } : {} ),
 			},
 		} );
 
-		await closeCapturedDialog( page, dialog.selector, trigger.probeSelector );
 		if ( initiallyExpanded ) await restoreExpandedTrigger( page, trigger.probeSelector );
 	}
 
 	await page.evaluate( () => {
 		delete ( globalThis as unknown as { __dlaPanelSelectors?: WeakMap< Element, string > } ).__dlaPanelSelectors;
+		delete ( globalThis as unknown as { __dlaDropdownAncestors?: unknown } ).__dlaDropdownAncestors;
 		for ( const element of document.querySelectorAll( '[data-lib-interaction-trigger]' ) ) {
 			element.removeAttribute( 'data-lib-interaction-trigger' );
 		}
