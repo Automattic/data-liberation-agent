@@ -446,6 +446,7 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 		const browser = await chromium.launch(); const context = await browser.newContext( { viewport: { width: 1440, height: 900 } } );
 		try {
 			const page = await context.newPage(); await page.goto( url ); await page.setViewportSize( { width: 768, height: 900 } );
+			await page.waitForFunction( () => document.documentElement.dataset.pose === 'resized' );
 			expect( await page.locator( 'h1' ).evaluate( element => getComputedStyle( element ).fontSize ) ).toBe( '29px' );
 			const collector = createReferenceCollector( directory, url, [ url ], { cleanupPolicy: cleanupPolicy() } );
 			await collector.observe( page, url, 'desktop', [], { isMobile: false, hasTouch: false } );
