@@ -305,11 +305,11 @@ export function isAudioLink( reference: string, documentUrl: string ): boolean {
 	}
 }
 
-/** Linked Word files are downloads, not navigable HTML routes. */
+/** Linked documents are downloads, not navigable HTML routes. */
 export function isDocumentDownloadLink( reference: string, documentUrl: string ): boolean {
 	try {
 		const url = new URL( reference.replace( /&amp;/g, '&' ), documentUrl );
-		return /^https?:$/.test( url.protocol ) && /\.docx?$/i.test( url.pathname );
+		return /^https?:$/.test( url.protocol ) && /\.(?:pdf|docx?)$/i.test( url.pathname );
 	} catch {
 		return false;
 	}
@@ -662,7 +662,7 @@ export class CapturedResourceStore {
 			if ( fetched.body.length === 0 && contentType !== 'text/css' )
 				throw new Error( 'render dependency response body is empty' );
 			if (
-				! /^(?:text\/css|image\/|audio\/|video\/|font\/|application\/(?:json|manifest\+json|font|x-font|font-woff|octet-stream|msword|vnd\.openxmlformats-officedocument\.wordprocessingml\.document))/i.test(
+				! /^(?:text\/css|image\/|audio\/|video\/|font\/|application\/(?:json|manifest\+json|font|x-font|font-woff|octet-stream|pdf|msword|vnd\.openxmlformats-officedocument\.wordprocessingml\.document))/i.test(
 					contentType
 				)
 			)
