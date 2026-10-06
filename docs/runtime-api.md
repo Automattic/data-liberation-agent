@@ -25,6 +25,40 @@ provides `url`, `port`, `urlForPage`, and `close()`; the caller must close it in
 `finally` block. This helper makes no live-origin request and requires no browser,
 so consumers can reuse source rendering without implementing another server.
 
+### Shared parts and serving
+
+The canonical `website/` may contain `parts/header-<sha256>.html` and
+`parts/footer-<sha256>.html`. Each is an exact byte slice of a repeated site-level
+semantic landmark. The filename hash is a stable initial identity, not an edit
+lock: consumers may edit a part in place. Routes reference the part in position:
+
+```html
+<!--#include virtual="/parts/header-<sha256>.html" -->
+```
+
+`serveCapture` resolves real HTML comment nodes on the server for every HTML
+request, preserving all other bytes. The browser receives a complete document,
+without client fetching or an assembly script. Offline self-consistency uses the
+same resolver, so shared IDs, links and remote assets are checked on every route.
+Capture evidence and geometry source hashes are projected before extraction and
+describe the expanded document. Parts are resources and do not enlarge the
+receipt route table. Existing tree/ZIP reporting includes their stored bytes.
+
+The resolver accepts exactly the comment syntax above, with a root-relative
+`/parts/` path, a filename containing ASCII letters, digits, `_` or `-`, and an
+`.html` suffix. Include-looking strings in scripts, attributes and raw text are
+left untouched. Malformed directives, missing files, cycles, traversal and
+symlinks fail: preview returns HTTP 500 with a resolution error and offline
+comparison reports `include-unresolved`. Reads are bounded before allocation:
+16 MiB per file, 64 MiB cumulative read/expanded document budget, 16 nesting
+levels and 1,024 file reads per request. No expanded copy is written to disk.
+
+A raw file server or `file://` does not resolve these comments. To serve without
+DLA, use an include-aware server or compile the same grammar into expanded HTML
+for deployment. Compilation must walk HTML comment nodes, preserve surrounding
+bytes, and resolve bounded paths inside the website root. Consumer platform
+support is maintained separately; the export is destination-neutral.
+
 The committed **`dist/capture-engine.bundle.mjs`** now exports the full runtime. Its historical filename is retained for consumers that already pin that artifact. An embedded runner can import the file directly:
 
 ```js

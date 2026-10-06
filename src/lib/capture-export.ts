@@ -70,6 +70,8 @@ import {
 	publishExportGeneration,
 } from './export-publication.js';
 
+import { extractSharedChrome } from './shared-chrome.js';
+
 function withoutGeometryIdentities( html: string ): string {
 	return html.replace( /\sdata-dla-geometry-id=(?:"[^"]*"|'[^']*')/g, '' );
 }
@@ -1840,4 +1842,6 @@ function buildExportCapture(
 			styles: { hoistedStylesheets: stylesheetPaths.size, ...styleHoistDiagnostics },
 		},
 	} );
+	// Evidence describes expanded bytes. Compact afterwards in the same publication.
+	extractSharedChrome( websiteDir, routes.map( route => route.path.replace( /^website\//, '' ) ) );
 }

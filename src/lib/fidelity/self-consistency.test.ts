@@ -22,6 +22,20 @@ function site( pages: Record< string, string > ): string {
 const files = ( ...routes: Array< [ string, string ] > ) => new Map( routes );
 
 describe( 'checkSelfConsistency', () => {
+	it( 'counts shared targets on each resolved route and reports unresolved parts', () => {
+		const include = '<!--#include virtual="/parts/header-test.html" -->';
+		const dir = site( {
+			'index.html': `${ include }<a href="/about/#brand">About brand</a>`,
+			'about/index.html': include,
+			'parts/header-test.html': '<header id="brand"><a href="#brand">Brand</a></header>',
+		} );
+		const routes = files( [ '/', 'index.html' ], [ '/about/', 'about/index.html' ] );
+		expect( checkSelfConsistency( dir, routes ) ).toMatchObject( { routes: 2, pass: true } );
+		writeFileSync( join( dir, 'parts/header-test.html' ), '<header id="brand"></header><div id="brand"></div>' );
+		expect( checkSelfConsistency( dir, routes ).findings[ 0 ].kind ).toBe( 'anchor-ambiguous' );
+		rmSync( join( dir, 'parts/header-test.html' ) );
+		expect( checkSelfConsistency( dir, routes ).findings.map( finding => finding.kind ) ).toEqual( [ 'include-unresolved', 'include-unresolved' ] );
+	} );
 	it( 'accepts a copy whose links, anchors and assets all resolve locally', () => {
 		const dir = site( {
 			'index.html':

@@ -6,7 +6,9 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as cheerio from 'cheerio';
 import { chromium } from 'playwright';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import * as sharedChrome from './shared-chrome.js';
+import { includeReferences, readResolvedPage } from './site-includes.js';
 import {
 	CAPTURED_INTERACTIONS_SCHEMA,
 	CAPTURE_RECEIPT_SCHEMA,
@@ -31,6 +33,52 @@ afterEach( () => {
 } );
 
 describe( 'exportWebsiteCapture', () => {
+	it( 'compacts both landmarks after evidence projection within the published website tree', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-canonical-parts-' ) );
+		dirs.push( outputDir );
+		for ( const directory of [ 'html', 'screenshots', 'layout-geometry' ] ) mkdirSync( join( outputDir, directory ), { recursive: true } );
+		const header = `<header id="brand"><nav><a href="https://external.test/">External</a></nav><div>${ 'Brand content '.repeat( 100 ) }</div></header>`;
+		const footer = `<footer id="copyright">${ 'Copyright content '.repeat( 100 ) }</footer>`;
+		const entries = Object.fromEntries( [ 'home', 'about' ].map( ( slug, i ) => {
+			const html = `html/${ slug }.html`;
+			writeFileSync( join( outputDir, html ), `<html><body><div>${ header }<main><div data-dla-geometry-id="wrapper"><section data-dla-geometry-id="target"><h1>Route ${ i }</h1><a href="#copyright">Copyright</a></section></div></main>${ footer }</div></body></html>` );
+			writeFileSync( join( outputDir, 'layout-geometry', `${ slug }.desktop.json` ), JSON.stringify( {
+				schema: 'data-liberation/layout-geometry-capture/v1', omissions: {}, observations: [ {
+					wrapperIdentity: 'wrapper', targetIdentity: 'target', viewport: 1440, state: 'default',
+					wrapper: { x: 0, y: 0, width: 100, height: 24 }, target: { x: 0, y: 0, width: 100, height: 24 }, simulated: { x: 0, y: 0, width: 100, height: 24 },
+					facts: { display: 'block', position: 'static', visibility: 'visible', childCount: 1 }, invariants: { runtime: true, semantics: true },
+				} ],
+			} ) );
+			return [ i ? 'https://example.test/about' : 'https://example.test/', { html, slug } ];
+		} ) );
+		writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( { version: 1, entries } ) );
+		const options = { outputDir, sourceUrl: 'https://example.test/', platform: 'generic', summary: {}, failures: [] };
+		// Record the existing exporter bytes/evidence immediately before its new final step.
+		const baseline = vi.spyOn( sharedChrome, 'extractSharedChrome' ).mockImplementation( () => {} );
+		let receipt: { routes: Array< { path: string } > };
+		let before: string[];
+		let geometry: string;
+		try {
+			receipt = JSON.parse( readFileSync( exportWebsiteCapture( options ), 'utf8' ) );
+			before = receipt.routes.map( route => readFileSync( join( outputDir, route.path ), 'utf8' ) );
+			geometry = readFileSync( join( outputDir, 'layout-geometry-report.json' ), 'utf8' );
+		} finally { baseline.mockRestore(); }
+		const compactReceipt = JSON.parse( readFileSync( exportWebsiteCapture( options ), 'utf8' ) );
+		const proof = JSON.parse( readFileSync( join( outputDir, 'layout-geometry-proof.json' ), 'utf8' ) );
+		expect( proof.nodes.length ).toBeGreaterThan( 0 );
+		expect( compactReceipt.routes ).toEqual( receipt!.routes );
+		expect( compactReceipt.routes ).toHaveLength( 2 );
+		expect( readFileSync( join( outputDir, 'layout-geometry-report.json' ), 'utf8' ) ).toBe( geometry! );
+		for ( const [ i, route ] of receipt!.routes.entries() ) {
+			const compact = readFileSync( join( outputDir, route.path ), 'utf8' );
+			const includes = includeReferences( compact );
+			expect( includes.map( item => item.path.split( '/' ).pop()!.split( '-' )[ 0 ] ) ).toEqual( [ 'header', 'footer' ] );
+			const expanded = readResolvedPage( join( outputDir, 'website' ), join( outputDir, route.path ) );
+			expect( expanded ).toBe( before![ i ] );
+			expect( proof.nodes.filter( ( node: { source_path: string } ) => node.source_path === route.path ).map( ( node: { source_hash: string } ) => node.source_hash ) ).toEqual( expect.arrayContaining( [ createHash( 'sha256' ).update( expanded ).digest( 'hex' ) ] ) );
+		}
+		expect( checkSelfConsistency( join( outputDir, 'website' ), new Map( receipt!.routes.map( route => [ route.path, route.path.replace( /^website\//, '' ) ] ) ) ).pass ).toBe( true );
+	} );
 	it( 'keeps uncaptured query-only navigation pointing at the source when no base route was captured', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-query-only-home-' ) );
 		dirs.push( outputDir );
