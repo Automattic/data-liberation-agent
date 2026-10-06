@@ -1,9 +1,13 @@
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { createServer } from 'node:http';
 import { chromium } from 'playwright';
 import { expect, it } from 'vitest';
 import { captureGalleries } from './gallery-capture.js';
 import { captureTriggeredDialogs } from './interaction-capture.js';
 import { wireCapturedDialogs } from '../static-dialogs.js';
+import { captureScreenshots } from './screenshotter.js';
+import { exportWebsiteCapture } from '../capture-export.js';
 
 const image = (index: number, full = false) =>
 	'data:image/svg+xml,' +
@@ -106,6 +110,37 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.execut
 		expect(states[0]).toMatchObject({status:'captured',gallery:{inline:{initial:0,coverage:'complete',restoration:'verified'}}});
 	}finally{await browser.close();}
 },15_000);
+
+it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS)||!existsSync(chromium.executablePath()))('retains gallery evidence through real dual-viewport capture, export and offline replay',async()=>{
+	const parent=join(process.cwd(),'.tmp-test');mkdirSync(parent,{recursive:true});
+	const outputDir=mkdtempSync(join(parent,'gallery-pipeline-'));
+	const server=createServer((_,response)=>{response.writeHead(200,{'Content-Type':'text/html'});response.end(fixture);});
+	await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve));
+	const url=`http://127.0.0.1:${(server.address() as {port:number}).port}/`;
+	const browser=await chromium.launch();
+	try{
+		await captureScreenshots({urls:[url],outputDir,concurrency:1,settleMs:100,captureImages:true,viewports:[{id:'desktop',width:1440,height:900},{id:'mobile',width:390,height:900}]});
+		const manifest=JSON.parse(readFileSync(join(outputDir,'screenshots','manifest.json'),'utf8'));
+		const galleries=manifest.entries[url].interactions.states.filter((state:{kind:string})=>state.kind==='gallery');
+		expect(galleries).toHaveLength(1);
+		expect(galleries[0]).toMatchObject({status:'captured',gallery:{inline:{coverage:'complete'},lightbox:{coverage:'complete'},closed:true}});
+		exportWebsiteCapture({outputDir,sourceUrl:url,platform:'default',summary:{},failures:[]});
+		const portable=readFileSync(join(outputDir,'website','index.html'),'utf8');
+		for(const width of [390,768,1440]){
+			const page=await browser.newPage({viewport:{width,height:900}});
+			await page.route('**/*',route=>route.abort());await page.setContent(portable);
+			await page.getByRole('button',{name:'Next image',exact:true}).click();
+			expect(await page.locator('#count').textContent()).toBe('2 / 3');
+			await page.locator('#stage img:visible').click();
+			expect(await page.locator('[data-dla-dialog-panel]').isVisible()).toBe(true);
+			await page.getByRole('button',{name:'Next slide',exact:true}).click();
+			expect(await page.locator('#large-count').textContent()).toBe('3 / 3');
+			await page.getByRole('button',{name:'Close gallery',exact:true}).click();
+			expect(await page.locator('[data-dla-dialog-panel]').isVisible()).toBe(false);
+			await page.close();
+		}
+	}finally{await browser.close();await new Promise<void>(resolve=>server.close(()=>resolve()));rmSync(outputDir,{recursive:true,force:true});}
+},180_000);
 
 it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath()))(
 	'takes the popup baseline after activation scrolls a nested contact container',

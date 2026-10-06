@@ -1420,6 +1420,12 @@ function mergeInteractionReports(
 			( state.kind ?? 'dialog' ) === kind;
 	const states = [
 		...mergeCapturedEvidence(
+			previous.states.filter( ofKind( 'gallery' ) ),
+			latest.states.filter( ofKind( 'gallery' ) ),
+			identity,
+			Number.POSITIVE_INFINITY
+		),
+		...mergeCapturedEvidence(
 			previous.states.filter( ofKind( 'typed-search' ) ),
 			latest.states.filter( ofKind( 'typed-search' ) ), identity, Number.POSITIVE_INFINITY
 		),
