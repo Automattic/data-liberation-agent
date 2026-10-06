@@ -55,6 +55,7 @@ import {
 import { isSourcePromotion } from './source-cleanup.js';
 import { sameOriginPageAnchors } from './screenshot/unscheduled-anchors.js';
 import { srcsetCandidates, srcsetReferences } from './srcset.js';
+import { resolveDocumentReferences } from './document-resource-base.js';
 import { pathWithin, portableAssetUrl, uniqueAssetPath, TRANSPARENT_IMAGE_DATA_URL } from './portable-assets.js';
 import { isSrcsetShaped, elementSrcReferences, omitDegenerateReplacements, preparePortableReplacements } from './portable-references.js';
 import { materializePortableResources } from './portable-resources.js';
@@ -74,6 +75,7 @@ function withoutGeometryIdentities( html: string ): string {
 }
 
 interface CaptureManifestEntry {
+	documents?: import('./screenshot/manifest-queue.js').ManifestEntry['documents'];
 	nativeViewTimelines?: import('./screenshot/manifest-queue.js').ManifestEntry['nativeViewTimelines'];
 	cleanup?: import('./screenshot/manifest-queue.js').ManifestEntry['cleanup'];
 	slug?: string;
@@ -1355,7 +1357,9 @@ function buildExportCapture(
 			} );
 			continue;
 		}
-		const acquiredDesktopHtml = readFileSync( capturedHtmlPath, 'utf8' );
+		const acquiredDesktopHtml = resolveDocumentReferences(
+			readFileSync( capturedHtmlPath, 'utf8' ), entry.documents?.desktop?.url ?? url, entry.documents?.desktop?.baseUrl
+		);
 		let rawDesktopHtml = embedded && options.input ? projectEmbeddedRegions( acquiredDesktopHtml, url, options.input.desktopVariant, createHash( 'sha256' ).update( acquiredDesktopHtml ).digest( 'hex' ), embedded.receipt.regions ) : acquiredDesktopHtml;
 		const sourceInteractivity = inspectSourceInteractivity( rawDesktopHtml, url, outputDir, resourceManifest );
 		// A client-routed SPA answers every route with HTTP 200 and renders its
@@ -1379,7 +1383,7 @@ function buildExportCapture(
 		const mobileHtmlPath = resolve( outputDir, entry.mobileHtml ?? entry.html.replace( /^html[\\/]/, 'html-mobile/' ) );
 		const acquiredMobileHtml =
 			( ! httpInput || entry.mobileHtml ) && pathWithin( outputDir, mobileHtmlPath ) && existsSync( mobileHtmlPath )
-				? readFileSync( mobileHtmlPath, 'utf8' )
+				? resolveDocumentReferences( readFileSync( mobileHtmlPath, 'utf8' ), entry.documents?.mobile?.url ?? url, entry.documents?.mobile?.baseUrl )
 				: undefined;
 		let rawMobileHtml = embedded && options.input?.mobileVariant && acquiredMobileHtml !== undefined ? projectEmbeddedRegions( acquiredMobileHtml, url, options.input.mobileVariant, createHash( 'sha256' ).update( acquiredMobileHtml ).digest( 'hex' ), embedded.receipt.regions ) : acquiredMobileHtml;
 		const detectedFloor =
