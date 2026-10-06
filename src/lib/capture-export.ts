@@ -315,6 +315,8 @@ interface PortableLinkContext {
 }
 
 const PORTABLE_LINK_BASE = 'https://portable.invalid';
+const DOCUMENT_LINK_RELATIONS = new Set( [ 'canonical', 'next', 'prev', 'alternate', 'author', 'help', 'license', 'search' ] );
+const RESOURCE_LINK_RELATIONS = new Set( [ 'stylesheet', 'icon', 'manifest', 'preload', 'modulepreload', 'prefetch', 'preconnect', 'dns-prefetch' ] );
 
 function rewriteCapturedRouteLinks(
 	html: string,
@@ -323,11 +325,15 @@ function rewriteCapturedRouteLinks(
 	portable?: PortableLinkContext
 ): string {
 	const $ = cheerio.load( html );
-	// `rel="canonical"` naming a URL this capture actually produced is source
-	// provenance, not an SEO signal the copy should keep declaring — a reader
-	// (or a search engine) following it lands back on the source.
-	$( 'a[href],area[href],link[rel="canonical"][href]' ).each( ( _index, element ) => {
+	// Document relations share navigation's route/source resolution. Resource
+	// relations keep their asset localization, including alternate stylesheets.
+	$( 'a[href],area[href],link[href]' ).each( ( _index, element ) => {
 		const link = $( element );
+		if ( element.tagName === 'link' ) {
+			const relations = ( link.attr( 'rel' ) ?? '' ).toLowerCase().split( /\s+/ );
+			if ( relations.some( relation => RESOURCE_LINK_RELATIONS.has( relation ) ) ||
+				! relations.some( relation => DOCUMENT_LINK_RELATIONS.has( relation ) ) ) return;
+		}
 		const href = link.attr( 'href' ) ?? '';
 		const absolute = /^(?:https?:)?\/\//i.test( href );
 		// Same-document fragments, and schemes such as `mailto:` or `tel:`, mean
