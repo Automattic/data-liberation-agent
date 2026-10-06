@@ -116,6 +116,9 @@ async function snapshot(page: Page, gallery: Pick<CapturedGallery, 'selector' | 
 			if (!image.complete || image.naturalWidth <= 1) return null;
 			const source = image.currentSrc || image.src;
 			const clone = child.cloneNode(true) as Element;
+			// A settled frame's resolved transform is its presentation. Neighbour
+			// transition classes in the source must not move it again after serialization.
+			(clone as HTMLElement).style.transform = getComputedStyle(child).transform;
 			const capturedImage = clone.querySelector('img')!;
 			capturedImage.setAttribute('src', source);
 			capturedImage.removeAttribute('srcset');
@@ -146,7 +149,9 @@ async function snapshot(page: Page, gallery: Pick<CapturedGallery, 'selector' | 
 			}
 			const fullImage = child.querySelector('[data-src]')?.getAttribute('data-src') || child.getAttribute('data-src');
 			const key = fullImage ? new URL(fullImage, document.baseURI).href : source;
-			return { key, ...(fullImage ? { fullImage: new URL(fullImage, document.baseURI).href } : {}), html: clone.outerHTML, text, slot: Array.from(stage.children).indexOf(child) };
+			const rect = child.getBoundingClientRect();
+			const ordinal = image.hasAttribute('data-index') ? Number(image.getAttribute('data-index')) : undefined;
+			return { key, ...(fullImage ? { fullImage: new URL(fullImage, document.baseURI).href } : {}), html: clone.outerHTML, text, ordinal, slot: Array.from(stage.children).indexOf(child), geometry:[rect.x,rect.y,rect.width,rect.height].map(value=>Math.round(value*10)/10) };
 		}, gallery.stage);
 }
 
@@ -193,7 +198,7 @@ async function collect(
 		let previous: Awaited<ReturnType<typeof snapshot>> = null;
 		for (let sample = 0; sample < 30 && Date.now() < deadline; sample++) {
 			const frame = await snapshot(page, descriptor);
-			if (frame && accept(frame) && previous?.key === frame.key && JSON.stringify(previous.text) === JSON.stringify(frame.text)) return frame;
+			if (frame && accept(frame) && previous?.key === frame.key && JSON.stringify(previous.text) === JSON.stringify(frame.text) && JSON.stringify(previous.geometry) === JSON.stringify(frame.geometry)) return frame;
 			previous = frame;
 			await page.waitForTimeout(100);
 		}
@@ -239,7 +244,7 @@ async function collect(
 		}
 	}
 	const sourceInitial = descriptor.order.indexOf(first.key);
-	const ordered =
+	let ordered =
 		complete &&
 		descriptor.order.length === frames.length &&
 		frames.every(
@@ -247,10 +252,15 @@ async function collect(
 		)
 			? descriptor.order.map((key) => frames.find((frame) => frame.key === key)!)
 			: frames;
+	// Lazily materialized stages can still expose authored item indices. Use
+	// them only when the complete observed successor cycle proves their order.
+	if (complete && new Set(frames.map(frame => frame.ordinal)).size === frames.length && frames.every((frame, index) => Number.isInteger(frame.ordinal) && frame.ordinal! >= 0 && frame.ordinal! < frames.length && frames[(index + 1) % frames.length]!.ordinal === (frame.ordinal! + 1) % frames.length)) {
+		ordered = [...frames].sort((a, b) => a.ordinal! - b.ordinal!);
+	}
 	return {
 		...descriptor,
 		initial: ordered.findIndex((frame) => frame.key === first.key),
-		frames: ordered.map(({slot, ...frame}) => frame),
+		frames: ordered.map(({slot, geometry, ordinal, ...frame}) => frame),
 		coverage: complete ? 'complete' : 'partial',
 		restoration: (await snapshot(page, descriptor))?.key === first.key ? 'verified' : 'unverified',
 		autoplay: 'unmeasured',

@@ -1022,7 +1022,8 @@ export async function activateTrigger( page: Page, probeSelector: string, baseli
 	try {
 		if ( ! ( await describeInterceptingElement( page, probeSelector ) ) ) {
 			try {
-				await locator.click( { timeout: DIALOG_WAIT_MS } );
+				if (await page.evaluate(() => navigator.maxTouchPoints > 0)) await locator.tap({timeout:DIALOG_WAIT_MS});
+				else await locator.click( { timeout: DIALOG_WAIT_MS } );
 				return;
 			} catch {
 				/* Coordinate click failed; fall through to a node-targeted click. */

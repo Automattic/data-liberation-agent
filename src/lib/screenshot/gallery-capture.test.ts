@@ -167,6 +167,15 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.execut
 	}, 20_000,
 );
 
+it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath()))('activates an image-opened lightbox through the source touch contract',async()=>{
+	const browser=await chromium.launch();
+	try{
+		const page=await browser.newPage({hasTouch:true,isMobile:true,viewport:{width:390,height:900}});
+		await page.setContent(fixture.replace('node.onclick=()=>{large=i;', "node.addEventListener('touchend',()=>{large=i;").replace("document.getElementById('overlay').classList.add('visible');});", "document.getElementById('overlay').classList.add('visible');}));"));
+		expect(await captureGalleries(page)).toMatchObject([{status:'captured',gallery:{closed:true,selection:[0,1,2]}}]);
+	}finally{await browser.close();}
+},20_000);
+
 it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.executablePath()))(
 	'takes the popup baseline after activation scrolls a nested contact container',
 	async () => {
