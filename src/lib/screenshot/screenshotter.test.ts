@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, existsSync, rmSync, mkdirSync, writeFileSync
 import { join } from 'node:path';
 
 const { learnAndApplyFluidGeometryMock } = vi.hoisted( () => ( {
-	learnAndApplyFluidGeometryMock: vi.fn( async () => ( {
+	learnAndApplyFluidGeometryMock: vi.fn( async ( _page: unknown, _options: unknown ) => ( {
 		applied: 0,
 		unmodelled: 0,
 		breakpoints: [],
@@ -261,7 +261,9 @@ describe('captureScreenshots', () => {
 		learnFluid: true,
       });
       expect(pages).toHaveLength(2);
-	  expect(learnAndApplyFluidGeometryMock).toHaveBeenCalledTimes(1);
+	  expect(learnAndApplyFluidGeometryMock).toHaveBeenCalledTimes(2);
+	  expect(learnAndApplyFluidGeometryMock.mock.calls[0]?.[1]).toMatchObject({ document: 'desktop' });
+	  expect(learnAndApplyFluidGeometryMock.mock.calls[1]?.[1]).toMatchObject({ document: 'mobile' });
 	  expect(learnAndApplyFluidGeometryMock.mock.invocationCallOrder[0]).toBeLessThan(
 		pages[0].screenshot.mock.invocationCallOrder[0],
 	  );

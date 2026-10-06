@@ -53,6 +53,8 @@ function pureXTranslation( transform: string ): number | null {
 export type LearnableProperty = ( typeof LEARNABLE_PROPERTIES )[ number ];
 
 export interface FluidSweepOptions {
+	/** Distinguishes rule identities when responsive documents share a stylesheet. */
+	document?: 'desktop' | 'mobile';
 	/** Widths to observe. More widths cost time but sharpen the fit. */
 	widths?: number[];
 	/** Settle time after each resize, for the runtime to react. */
@@ -100,7 +102,7 @@ export async function learnAndApplyFluidGeometry(
 	const original = page.viewportSize();
 
 	const tagged = await page.evaluate(
-		( { attribute, properties } ) => {
+		( { attribute, properties, prefix } ) => {
 			let index = 0;
 			for ( const element of document.querySelectorAll< HTMLElement >( '[style]' ) ) {
 				const ignorePadding = element.hasAttribute( 'data-dla-fluid-ignore-padding' );
@@ -132,11 +134,11 @@ export async function learnAndApplyFluidGeometry(
 				if ( ! carriesPixelSize && ! carriesPixelCustomProperty && ! carriesMatrixTransform && ! carriesAbsoluteInset ) {
 					continue;
 				}
-				element.setAttribute( attribute, String( index++ ) );
+				element.setAttribute( attribute, `${ prefix }${ index++ }` );
 			}
 			return index;
 		},
-		{ attribute: ID_ATTRIBUTE, properties: LEARNABLE_PROPERTIES }
+		{ attribute: ID_ATTRIBUTE, properties: LEARNABLE_PROPERTIES, prefix: options.document ? `${ options.document }-` : '' }
 	);
 
 	if ( tagged === 0 ) {

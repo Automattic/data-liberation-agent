@@ -32,6 +32,8 @@ export interface ManifestEntry {
     canvasFloor?: number | null;
     byKind: Record<string, number>;
   };
+  /** Phone-document learning, whose canvas floor does not select the desktop document. */
+  fluidMobile?: ManifestEntry['fluid'];
   capturedAt: string;
   /**
    * The same-origin route the server redirected this URL to. The URL is an

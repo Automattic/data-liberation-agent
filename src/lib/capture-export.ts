@@ -162,6 +162,7 @@ interface CaptureManifestEntry {
 	scrollStates?: ScrollStatesReport;
 	/** Responsive learning outcome recorded during capture. */
 	fluid?: ManifestEntryFluid;
+	fluidMobile?: ManifestEntryFluid;
 	metadata?: {
 		openGraph?: Record< string, string >;
 	};
@@ -224,6 +225,7 @@ interface CaptureEntry {
 	hasMobileDocument?: boolean;
 	/** Receipt evidence for how many responsive variants this route ships and why. */
 	responsiveVariants?: ResponsiveVariantEvidence;
+	fluidGeometry?: { desktop?: ManifestEntryFluid; mobile?: ManifestEntryFluid };
 	identityHtmlPath?: string;
 	sections?: string;
 	canonicalUrl?: string;
@@ -2018,6 +2020,7 @@ function buildExportCapture(
 				: siteSwitchWidth;
 		if ( detectedFloor ) switchWidths.push( detectedFloor );
 		if ( entry.fluid ) fluidReports.push( entry.fluid );
+		if ( entry.fluidMobile ) fluidReports.push( entry.fluidMobile );
 		if ( embedded && options.input?.mobileVariant && rawMobileHtml !== undefined ) {
 			const pair = mergeResponsiveEmbeddedRegions( { desktop: rawDesktopHtml, mobile: rawMobileHtml, url, desktopVariant: options.input.desktopVariant, mobileVariant: options.input.mobileVariant, receipt: embedded.receipt, switchWidth: detectedFloor ?? DEFAULT_SWITCH_WIDTH, scopeClasses: { desktop: DESKTOP_DOCUMENT_CLASS, mobile: MOBILE_DOCUMENT_CLASS } } );
 			rawDesktopHtml = pair.desktop; rawMobileHtml = pair.mobile;
@@ -2053,6 +2056,7 @@ function buildExportCapture(
 			],
 			hasMobileDocument: assembly.hasMobileDocument,
 			responsiveVariants: assembly.evidence,
+			...( entry.fluid || entry.fluidMobile ? { fluidGeometry: { desktop: entry.fluid, mobile: entry.fluidMobile } } : {} ),
 			sections: entry.sections,
 			canonicalUrl: canonicalMetadataUrl(
 				entry.metadata?.openGraph?.[ 'og:url' ] ?? openGraphUrl( html ),
@@ -2522,6 +2526,7 @@ function buildExportCapture(
 			url,
 			path: `website/${ routePath }`,
 			...( entry.responsiveVariants ? { responsiveVariants: entry.responsiveVariants } : {} ),
+			...( entry.fluidGeometry ? { fluidGeometry: entry.fluidGeometry } : {} ),
 		} );
 	}
 	for ( const [ aliasKey, routePath ] of canonicalRouteAliases ) {
@@ -2842,7 +2847,7 @@ function buildExportCapture(
 		switchWidth: switchWidths.length > 0 ? Math.max( ...switchWidths ) : null,
 		switchWidthSource: switchWidths.length > 0 ? 'detected' : 'default',
 		breakpoints: observedBreakpoints,
-		learned: { applied: learnedApplied, frozen: learnedFrozen, routes: fluidReports.length },
+		learned: { applied: learnedApplied, frozen: learnedFrozen, routes: retainedEntries.filter( entry => entry.fluidGeometry ).length, documents: fluidReports.length },
 	};
 	writeFileSync(
 		join( stageDir, 'source-profile.json' ),
