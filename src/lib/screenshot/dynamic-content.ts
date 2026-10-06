@@ -64,6 +64,9 @@ export async function expandCollapsedContent(page: Page): Promise<void> {
       };
       const safeToActivate = (element: Element) => {
         if (element.hasAttribute('aria-haspopup')) return false;
+        if (element.closest('nav,[role="navigation"]')) return false;
+        const controlled = document.getElementById(element.getAttribute('aria-controls') || '');
+        if (controlled?.closest('nav,[role="navigation"]') || controlled?.querySelector('nav,[role="navigation"]')) return false;
         // A submit control is never a disclosure: activating it submits its
         // form and unloads the page (a store's "View all" search button, for
         // one), which the route-revert below cannot undo.
@@ -130,7 +133,7 @@ export async function expandCollapsedContent(page: Page): Promise<void> {
         // collapsed page content: force-opening it overlays the document with
         // a fixed panel and flips the very toggle a later interactivity probe
         // measures, so a working menu reports as dead.
-        if (d.querySelector('[role="dialog"],[aria-modal="true"]')) return;
+        if (d.closest('nav,[role="navigation"]') || d.querySelector('nav,[role="navigation"],[role="dialog"],[aria-modal="true"]')) return;
         (d as HTMLDetailsElement).open = true;
       });
 
@@ -325,6 +328,9 @@ export async function hydrateDisclosureContent(page: Page, rootSelector = 'body'
       };
       const safeToActivate = (element: Element) => {
         if (element.hasAttribute('aria-haspopup')) return false;
+        if (element.closest('nav,[role="navigation"]')) return false;
+        const controlled = document.getElementById(element.getAttribute('aria-controls') || '');
+        if (controlled?.closest('nav,[role="navigation"]') || controlled?.querySelector('nav,[role="navigation"]')) return false;
         if ((element instanceof HTMLButtonElement || element instanceof HTMLInputElement)
           && element.type === 'submit' && element.form) return false;
         if (element.tagName !== 'A') return true;
@@ -359,7 +365,7 @@ export async function hydrateDisclosureContent(page: Page, rootSelector = 'body'
           .forEach((trigger) => {
             const id = trigger.getAttribute('aria-controls') || '';
             const target = id ? document.getElementById(id) : null;
-            if (target && target.getAttribute('role') === 'region' && !seen.has(trigger)) {
+            if (target && target.getAttribute('role') === 'region' && !seen.has(trigger) && safeToActivate(trigger)) {
               seen.add(trigger);
               out.push({ trigger, target });
             }
@@ -371,7 +377,7 @@ export async function hydrateDisclosureContent(page: Page, rootSelector = 'body'
             trigger &&
             !seen.has(trigger) &&
             trigger.getAttribute('aria-expanded') === 'false' &&
-            !trigger.hasAttribute('aria-haspopup')
+            safeToActivate(trigger)
           ) {
             seen.add(trigger);
             out.push({ trigger, target });

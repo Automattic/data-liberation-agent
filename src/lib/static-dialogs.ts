@@ -35,7 +35,7 @@ const DISCLOSURE_CSS =
 	'details.dla-initial-dialog:not([open])>summary{display:none!important}' +
 	'[data-dla-dialog-panel][hidden],[data-dla-dialog-close][hidden]{display:none!important}' +
 	'[data-dla-dialog-panel]:not(.dla-dropdown):not([hidden]){display:block;position:fixed;inset:0;z-index:2147483646;overflow:auto;background:#fff}' +
-	'[data-dla-dialog-panel].dla-dropdown:not([hidden]){display:block;position:absolute;top:100%;left:0;right:0;z-index:2147483646}' +
+	'[data-dla-dialog-panel].dla-dropdown:not([data-dla-existing-panel]):not([hidden]){display:block;position:absolute;top:100%;left:0;right:0;z-index:2147483646}' +
 	'[data-dla-dialog-panel]:not([hidden])>:first-child{display:block!important;visibility:visible!important;opacity:1!important}' +
 	'[data-dla-dialog-close]:not([hidden]){position:fixed;z-index:2147483647;right:1rem;top:1rem;padding:.5rem .75rem;background:#fff;color:#111;border:1px solid currentColor;border-radius:.25rem}';
 
@@ -98,6 +98,7 @@ export function wireCapturedDialogs(
 	const $ = cheerio.load( html );
 	let wired = 0;
 	let listboxes = 0;
+	const reusedPanels = new Map< string, string >();
 	const choiceConfigs: Array< { transitions: Record< string, string > } > = [];
 	const choiceGroups = new Map< string, NonNullable< CapturedDialogInteraction[ 'choiceGroup' ] >[] >();
 	for ( const state of choiceStates ) {
@@ -128,7 +129,11 @@ export function wireCapturedDialogs(
 		if ( roots.length > 0 && Object.keys( transitions ).length > 0 ) choiceConfigs.push( { transitions } );
 	}
 	for ( const state of captured ) {
-		removeCapturedDialog( $, state.dialog?.selector );
+		const sharedPanelId = reusedPanels.get( state.dialog!.selector );
+		const existingPanel = selectByCapturedSelector( $, state.dialog?.selector, state.dialog?.tag )
+			.not( '[data-dla-dialog-panel], [data-dla-dialog-panel] *' );
+		const reusePanel = state.dialog?.presentation === 'dropdown' && existingPanel.length === 1;
+		if ( !reusePanel && !sharedPanelId ) removeCapturedDialog( $, state.dialog?.selector );
 		const triggers = findTriggers( $, state.trigger );
 		triggers.each( ( _, element ) => {
 			const trigger = $( element );
@@ -147,18 +152,35 @@ export function wireCapturedDialogs(
 			}
 			const label = trigger.attr( 'aria-label' ) || normalizedText( trigger.text() );
 			const dropdown = state.dialog?.presentation === 'dropdown';
-			const panelId = nextDialogId( $ );
-			const panel = $( '<div class="dla-dialog" role="dialog" aria-modal="true" hidden></div>' );
+			const reusedPanelId = reusedPanels.get( state.dialog!.selector );
+			if ( reusedPanelId ) {
+				trigger.attr( 'data-dla-dialog-trigger', reusedPanelId ).attr( 'aria-controls', reusedPanelId ).attr( 'aria-expanded', 'false' );
+				if ( label ) trigger.attr( 'data-dla-disclosure-label', label );
+				if ( !trigger.attr( 'aria-haspopup' ) ) trigger.attr( 'aria-haspopup', 'menu' );
+				return;
+			}
+			const panelId = reusePanel && state.dialog?.id ? state.dialog.id : nextDialogId( $ );
+			const panel = reusePanel ? $( state.dialog!.html ).first() : $( '<div class="dla-dialog" role="dialog" aria-modal="true" hidden></div>' );
+			if ( reusePanel ) {
+				panel.attr( 'data-dla-existing-panel', '' ).attr( 'hidden', '' );
+				// Snapshot display overrides the source's closed-state rule, but must
+				// still yield to our hidden-state rule on the same (reused) root.
+				panel.attr( 'style', ( panel.attr( 'style' ) ?? '' ).replace( /(display\s*:[^;!]+)\s*!important/gi, '$1' ) );
+			}
 			panel.attr( 'id', panelId ).attr( 'data-dla-dialog-panel', panelId );
 			if ( dropdown ) panel.addClass( 'dla-dropdown' );
 			if ( state.dialog?.ariaLabel ) panel.attr( 'aria-label', state.dialog.ariaLabel );
-			panel.html( state.dialog!.html );
+			if ( !reusePanel ) panel.html( state.dialog!.html );
 			if ( label ) trigger.attr( 'data-dla-disclosure-label', label );
 			trigger.attr( 'data-dla-dialog-trigger', panelId );
 			trigger.attr( 'aria-controls', panelId );
 			trigger.attr( 'aria-expanded', 'false' );
 			if ( ! trigger.attr( 'aria-haspopup' ) ) trigger.attr( 'aria-haspopup', dropdown ? 'menu' : 'dialog' );
-			trigger.after( panel );
+			if ( reusePanel ) {
+				existingPanel.replaceWith( panel );
+				reusedPanels.set( state.dialog!.selector, panelId );
+			}
+			else trigger.after( panel );
 			if ( ! dropdown ) {
 				const close = $( '<button type="button" hidden>Close</button>' );
 				close.attr( 'data-dla-dialog-close', panelId );
