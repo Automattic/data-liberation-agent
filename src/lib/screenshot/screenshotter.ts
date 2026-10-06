@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { resolveDocumentReferences } from '../document-resource-base.js';
 import { connectBrowser, sourceContextOptions } from '../browser-kit/index.js';
 import { classifyUrl, type UrlType } from '../extraction/sitemap.js';
 import { assertPublicHttpUrl } from '../media-fetch/safe-fetch.js';
@@ -1061,7 +1062,8 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 			await sweepSourceCleanup( page, sourcePolicy );
 			await preserveStreamedVideoPosters( page, resourceStore, url ).catch( () => undefined );
 			const html = canonicalize( await capturePageHtml( page ) );
-			await resourceStore.captureDomDependencies( html, url );
+			const documentUrl = await page.evaluate( () => ( { url: document.URL, baseUrl: document.baseURI } ) );
+			await resourceStore.captureDomDependencies( html, documentUrl.baseUrl );
 			// Refuse to persist a capture whose page navigated away from the route we
 			// were asked to capture: every DOM-mutating step above (lazy-load probing,
 			// disclosure hydration, dialog probing…) runs on a live, script-controlled
@@ -1099,6 +1101,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 				mkdirSync( dirname( plan.paths.html ), { recursive: true } );
 				writeFileSync( plan.paths.html, html );
 				entry.html = `html/${ slug }.html`;
+				entry.documents = { ...entry.documents, desktop: documentUrl };
 			}
 		} catch ( err ) {
 			failures.push( {
@@ -1124,7 +1127,8 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 			await sweepSourceCleanup( page, sourcePolicy );
 			await preserveStreamedVideoPosters( page, resourceStore, url ).catch( () => undefined );
 			const mhtml = canonicalize( sanitizeFrozenHtml( await capturePageHtml( page ) ) );
-			await resourceStore.captureDomDependencies( mhtml, url );
+			const documentUrl = await page.evaluate( () => ( { url: document.URL, baseUrl: document.baseURI } ) );
+			await resourceStore.captureDomDependencies( mhtml, documentUrl.baseUrl );
 			// Same route-identity guard as the desktop HTML write above — best-effort
 			// here too (this carry already silently skips on any other failure), so a
 			// drifted mobile capture just leaves the page desktop-only rather than
@@ -1132,6 +1136,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 			if ( ! isRouteDrift( page.url(), navigationUrl ) && ! isStackingArtifact( mhtml ) ) {
 				mkdirSync( dirname( plan.paths.htmlMobile ), { recursive: true } );
 				writeFileSync( plan.paths.htmlMobile, mhtml );
+				entry.documents = { ...entry.documents, mobile: documentUrl };
 				mobileHeights[ slug ] = await page.evaluate( () => document.documentElement.scrollHeight );
 			}
 		} catch {
@@ -2041,9 +2046,11 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		const scheduled = new Set( urls.map( normalizedUrl ) );
 		const candidates = new Set< string >();
 		for ( const url of urls ) {
-			const htmlPath = manifest.getEntry( url )?.html;
+			const entry = manifest.getEntry( url );
+			const htmlPath = entry?.html;
 			if ( ! htmlPath || ! existsSync( join( opts.outputDir, htmlPath ) ) ) continue;
-			for ( const link of sameOriginPageAnchors( readFileSync( join( opts.outputDir, htmlPath ), 'utf8' ), url ) ) {
+			const html = resolveDocumentReferences( readFileSync( join( opts.outputDir, htmlPath ), 'utf8' ), entry?.documents?.desktop?.url ?? url, entry?.documents?.desktop?.baseUrl );
+			for ( const link of sameOriginPageAnchors( html, url ) ) {
 				if ( ! scheduled.has( normalizedUrl( link ) ) ) candidates.add( link );
 			}
 		}
