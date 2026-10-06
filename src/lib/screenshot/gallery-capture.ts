@@ -119,6 +119,7 @@ async function snapshot(page: Page, gallery: Pick<CapturedGallery, 'selector' | 
 			// A settled frame's resolved transform is its presentation. Neighbour
 			// transition classes in the source must not move it again after serialization.
 			(clone as HTMLElement).style.transform = getComputedStyle(child).transform;
+			(clone as HTMLElement).style.display = getComputedStyle(child).display;
 			const capturedImage = clone.querySelector('img')!;
 			capturedImage.setAttribute('src', source);
 			capturedImage.removeAttribute('srcset');

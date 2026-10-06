@@ -5,7 +5,7 @@ import type { CapturedGallery } from './screenshot/gallery-capture.js';
 const RUNTIME = `(function(){
 function all(selector,root){return Array.prototype.slice.call((root||document).querySelectorAll(selector));}
 function frames(root){return all('[data-dla-gallery-frame]',root).filter(function(node){return node.closest('[data-dla-gallery]')===root;});}
-function set(root,index){var items=frames(root),frame=items[index];if(!frame)return;root.setAttribute('data-dla-gallery-index',String(index));items.forEach(function(node){node.hidden=node!==frame;});var text=JSON.parse(frame.getAttribute('data-dla-gallery-text')||'[]');text.forEach(function(record){var node=root.querySelector(record.selector);if(node)node.textContent=record.value;});}
+function set(root,index){var items=frames(root),frame=items[index];if(!frame)return;root.setAttribute('data-dla-gallery-index',String(index));items.forEach(function(node){node.hidden=node!==frame;node.style.setProperty('display',node===frame?(node.getAttribute('data-dla-gallery-display')||'block'):'none','important');});var text=JSON.parse(frame.getAttribute('data-dla-gallery-text')||'[]');text.forEach(function(record){var node=root.querySelector(record.selector);if(node)node.textContent=record.value;});}
 function activate(event){var control=event.target.closest&&event.target.closest('[data-dla-gallery-direction]');if(control){var root=control.closest('[data-dla-gallery]');if(!root)return;event.preventDefault();event.stopPropagation();var size=frames(root).length,index=Number(root.getAttribute('data-dla-gallery-index'));set(root,(index+Number(control.getAttribute('data-dla-gallery-direction'))+size)%size);return;}
 var stage=event.target.closest&&event.target.closest('[data-dla-gallery-stage][data-dla-dialog-trigger]');if(!stage||!event.target.closest('img'))return;var owner=stage.closest('[data-dla-gallery]'),panel=document.getElementById(stage.getAttribute('aria-controls'));if(!owner||!panel)return;var overlay=panel.querySelector('[data-dla-gallery]'),items=frames(owner),selected=items[Number(owner.getAttribute('data-dla-gallery-index'))],identity=selected&&selected.getAttribute('data-dla-gallery-full-image');var target=overlay&&frames(overlay).findIndex(function(frame){return frame.getAttribute('data-dla-gallery-image')===identity;});if(overlay&&target>=0)set(overlay,target);}
 document.addEventListener('click',activate,true);
@@ -32,11 +32,13 @@ function wire($: cheerio.CheerioAPI, gallery: CapturedGallery, fullImages: boole
 			child
 				.attr('data-dla-gallery-frame', String(index))
 				.attr('data-dla-gallery-image', frame.key)
+				.attr('data-dla-gallery-display', child.css('display')?.replace(/\s*!important\s*$/, '') || 'block')
 				.attr('data-dla-gallery-text', JSON.stringify(frame.text));
 			const fullImage = frame.fullImage;
 			if (fullImage) child.attr('data-dla-gallery-full-image', fullImage);
 			if (index !== initial) child.attr('hidden', '');
 			else child.removeAttr('hidden');
+			child.css('display', (index === initial ? child.attr('data-dla-gallery-display')! : 'none') + ' !important');
 			stage.append(fragment.html());
 		});
 		root.attr('data-dla-gallery', '').attr('data-dla-gallery-source', gallery.selector).attr('data-dla-gallery-index', String(initial));
@@ -59,10 +61,12 @@ export function wireCapturedGalleries(html: string, states: CapturedDialogIntera
 	let wired = $('[data-dla-gallery]').length > 0;
 	for (const state of captured) wired = wire($, state.gallery!.inline, false) || wired;
 	if (wired) {
-		if (!$('style[data-dla-gallery-visibility]').length) $('head').append(
-			'<style data-dla-gallery-visibility>[data-dla-gallery-frame][hidden]{display:none!important}[data-dla-gallery-frame]:not([hidden]){display:block!important;visibility:visible!important;opacity:1!important}</style>',
+		$('style[data-dla-gallery-visibility]').remove();
+		$('head').append(
+			'<style data-dla-gallery-visibility>[data-dla-gallery-frame][hidden]{display:none!important}[data-dla-gallery-frame]:not([hidden]){display:block!important;visibility:visible!important;opacity:1!important;pointer-events:auto!important}[data-dla-gallery-direction],[data-dla-gallery-close]{pointer-events:auto!important}</style>',
 		);
-		if (!$('script[data-dla-gallery-runtime]').length) $('head').append(`<script data-dla-gallery-runtime>${RUNTIME}</script>`);
+		$('script[data-dla-gallery-runtime]').remove();
+		$('head').append(`<script data-dla-gallery-runtime>${RUNTIME}</script>`);
 	}
 	return wired ? $.html() : html;
 }

@@ -15,8 +15,8 @@ const image = (index: number, full = false) =>
 		`<svg xmlns="http://www.w3.org/2000/svg" width="${full ? 800 : 200}" height="200"><rect width="100%" height="100%" fill="${['red', 'green', 'blue'][index]}"/><text x="20" y="50">${index}</text></svg>`,
 	);
 const fixture = `<!doctype html><html><head><style>
-.frame{display:none;width:100%}.frame.chosen{display:block}img{width:100%;height:200px;object-fit:contain}
-#overlay{display:block;visibility:hidden;position:fixed;inset:0;background:black;z-index:100}#overlay.visible{visibility:visible}#overlay img{height:60vh}button,[role=button],[role=img]{cursor:pointer}#stage{width:100%}
+.frame{display:none;width:100%}.frame.chosen{display:block}img{width:100%;height:200px;object-fit:contain}#gallery{transform:translateZ(0)}
+#overlay{display:block;visibility:hidden;position:fixed;inset:0;background:black;z-index:100}#overlay.visible{visibility:visible}#overlay img{height:60vh}#overlay .frame.chosen{display:block!important}button,[role=button],[role=img]{cursor:pointer}#stage{width:100%}
 </style></head><body><section id="gallery"><h2>Pictures</h2><div aria-label="Image gallery carousel"><div id="stage">${[0, 1, 2].map((i) => `<div class="frame ${i === 0 ? 'chosen' : ''}"><div role="img" data-src="${image(i, true)}"><img src="${image(i)}"></div></div>`).join('')}</div></div><div role="button" aria-label="Previous image">Previous</div><div role="button" aria-label="Next image">Next</div><span id="count">1 / 3</span></section>
 <div id="overlay"><div id="large">${[0, 1, 2].map((i) => `<div class="frame ${i === 0 ? 'chosen' : ''}"><img src="${image(i, true)}"></div>`).join('')}</div><button aria-label="Previous slide">Previous</button><button aria-label="Next slide">Next</button><button aria-label="Close gallery">Close</button><span id="large-count">1 / 3</span></div>
 <script>let current=0,large=0;function show(scope,index,counter){scope.querySelectorAll('.frame').forEach((node,i)=>node.classList.toggle('chosen',i===index));document.getElementById(counter).textContent=(index+1)+' / 3';}
@@ -63,9 +63,13 @@ it.skipIf(Boolean(process.env.SKIP_BROWSER_TESTS) || !existsSync(chromium.execut
 				expect(await offline.locator('#count').textContent()).toBe('3 / 3');
 				await offline.locator('#stage img:visible').click();
 				expect(await offline.locator('[data-dla-dialog-panel]').isVisible()).toBe(true);
+				expect(await offline.locator('[data-dla-dialog-panel]').evaluate(el=>{const rect=el.getBoundingClientRect();return {x:rect.x,y:rect.y,width:rect.width,height:rect.height};})).toEqual({x:0,y:0,width,height:900});
 				expect(await offline.locator('#large-count').textContent()).toBe('3 / 3');
+				expect(await offline.locator('[data-dla-dialog-panel] img:visible').count()).toBe(1);
 				await offline.getByRole('button', { name: 'Next slide', exact: true }).click();
 				expect(await offline.locator('#large-count').textContent()).toBe('1 / 3');
+				expect(await offline.locator('[data-dla-dialog-panel] img:visible').count()).toBe(1);
+				expect(await offline.locator('[data-dla-dialog-panel] img:visible').getAttribute('src')).toBe(image(0,true));
 				await offline.getByRole('button', { name: 'Previous slide', exact: true }).click();
 				expect(await offline.locator('#large-count').textContent()).toBe('3 / 3');
 				await offline.getByRole('button', { name: 'Close gallery', exact: true }).click();
