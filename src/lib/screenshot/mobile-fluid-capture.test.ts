@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { chromium, type Page } from 'playwright';
 import { expect, it } from 'vitest';
 import { captureScreenshots } from './screenshotter.js';
+import { learnAndApplyFluidGeometry } from './fluid-capture.js';
 import { exportWebsiteCapture } from '../capture-export.js';
 
 // A runtime-stretched document, not a builder-specific fixture. The unrelated
@@ -93,3 +94,39 @@ it( 'learns each responsive document through tablet widths without freezing phon
 		rmSync( outputDir, { recursive: true, force: true } );
 	}
 }, 90_000 );
+
+it( 'restores baseline geometry on a cloned menu first mutated at a wide sweep width', async () => {
+	const html = `<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">
+	<style>body{margin:0}header{position:fixed;top:0;left:0;height:80px;background:white}
+	.logo{margin:20px;width:100px;height:40px;background:teal}.spacer{visibility:hidden;height:80px;position:relative}
+	.menu{visibility:visible;position:absolute;left:0;top:80px;width:100%;height:20px}.menu a{display:block;width:100%;height:20px}
+	main{padding:20px}h1{margin:0}</style>
+	<header style="width:402px"><div class="logo"></div></header>
+	<div class="spacer"><nav class="menu"><a>About</a></nav></div><main><h1>Cloned chrome</h1></main>
+	<script>function update(){document.querySelector('header').style.width=document.documentElement.clientWidth+'px';
+	if(innerWidth>=768){const menu=document.querySelector('.menu');menu.style.width=innerWidth+'px';menu.style.left='30px';menu.style.setProperty('--menu-width',innerWidth+'px');}}
+	addEventListener('resize',update);update();</script>`;
+	const browser = await chromium.launch();
+	try {
+		const source = await browser.newPage( { viewport: { width: 402, height: 900 } } );
+		await source.setContent( html );
+		await learnAndApplyFluidGeometry( source, { document: 'mobile', widths: [ 390, 768, 1440, 1920 ], settleMs: 30 } );
+		const captured = await source.evaluate( () => {
+			document.querySelectorAll( 'script' ).forEach( script => script.remove() );
+			return document.documentElement.outerHTML;
+		} );
+		const copy = await browser.newPage( { viewport: { width: 390, height: 900 } } );
+		await copy.setContent( captured );
+		for ( const width of [ 390, 768, 1440, 390 ] ) {
+			await copy.setViewportSize( { width, height: 900 } );
+			await copy.waitForTimeout( 30 );
+			const menu = ( await copy.locator( '.menu' ).boundingBox() )!;
+			expect( menu.x + menu.width, `cloned menu right edge at ${ width }` ).toBeLessThanOrEqual( width );
+			expect( await copy.evaluate( () => document.documentElement.scrollWidth ), `overflow after sweep at ${ width }` ).toBe( width );
+			expect( ( await copy.locator( '.logo' ).boundingBox() )!.x ).toBeCloseTo( 20, 2 );
+		}
+		expect( await copy.locator( '.menu' ).getAttribute( 'style' ) ).toBeFalsy();
+	} finally {
+		await browser.close();
+	}
+}, 15_000 );
