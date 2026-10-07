@@ -836,6 +836,7 @@ describe( 'CapturedResourceStore', () => {
 			const html = `<html><body>
 				<video id="attr" src="clip.mp4" poster="clip.jpg" preload="none"></video>
 				<video id="child"><source src="clip.webm" type="video/webm"></video>
+				<img id="image" src="clip.jpg" alt="Failed image">
 			</body></html>`;
 			writeFileSync( join( outputDir, 'html', 'homepage.html' ), html );
 			writeFileSync(
@@ -865,9 +866,11 @@ describe( 'CapturedResourceStore', () => {
 			// url survives as external evidence instead.
 			expect( $( '#attr' ).attr( 'src' ) ).toBe( mp4 );
 			expect( $( '#child source' ).attr( 'src' ) ).toBe( webm );
-			// The poster is an ordinary image: it degrades to the same stub a
-			// failed <img> gets, not an external reference.
-			expect( $( '#attr' ).attr( 'poster' ) ).toMatch( /^data:image\/gif;base64,/ );
+			// A square image stub would redefine the video's intrinsic geometry.
+			// Keep its failed poster in diagnostics, and retain the ordinary image
+			// fallback contract for the same missing resource.
+			expect( $( '#attr' ).attr( 'poster' ) ).toBeUndefined();
+			expect( $( '#image' ).attr( 'src' ) ).toMatch( /^data:image\/gif;base64,/ );
 		}
 	);
 
