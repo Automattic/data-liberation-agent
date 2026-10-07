@@ -246,7 +246,8 @@ export function installCleanupInPage(args: { policy: CleanupPolicy; recovered?: 
   // Providers qualify the verb ("Powered and secured by Wix"), so one optional
   // conjoined word is part of the phrase everywhere it is matched.
   const powered = 'powered(?:\\s+and\\s+\\w+)?\\s+by';
-  const creditPhrase = new RegExp(`(?:${powered}|built (?:with|on|by)|created (?:with|using)|website (?:by|built with)|proudly created with)\\s*`, 'i');
+  // "Published with" is Ghost's own credit phrasing (aftermath.site, older Casper).
+  const creditPhrase = new RegExp(`(?:${powered}|built (?:with|on|by)|created (?:with|using)|published with|website (?:by|built with)|proudly created with)\\s*`, 'i');
   const ownerContent = /©|copyright|all rights reserved/i;
   const promotionText = new RegExp(policy.promotion.text, 'i');
   const promotionSignup = new RegExp(policy.promotion.signup, 'i');
@@ -382,7 +383,7 @@ export function installCleanupInPage(args: { policy: CleanupPolicy; recovered?: 
             !parent.querySelector('img,video,form,input,button')) node = parent;
           else {
             const previous = node.previousSibling;
-            if (previous?.nodeType === Node.TEXT_NODE) previous.textContent = (previous.textContent ?? '').replace(new RegExp(`(?:${powered}|built (?:with|on|by)|created (?:with|using)|proudly created with)\\s*$`, 'i'), '');
+            if (previous?.nodeType === Node.TEXT_NODE) previous.textContent = (previous.textContent ?? '').replace(new RegExp(`(?:${powered}|built (?:with|on|by)|created (?:with|using)|published with|proudly created with)\\s*$`, 'i'), '');
           }
         }
         const rect = node.getBoundingClientRect();
