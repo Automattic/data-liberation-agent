@@ -107,7 +107,9 @@ export function rewriteMediaReferences(
 		const value = match[ 3 ];
 		const replaced = /srcset$/i.test( match[ 1 ] ) || isSrcsetShaped( value )
 			? rewriteSrcset( value, replaceUrl )
-			: replaceUrl( value );
+			// Browsers resolve a single URL after stripping its surrounding ASCII
+			// whitespace. Replace only that token, preserving the authored padding.
+			: value.replace( /^([\t\n\f\r ]*)([\s\S]*?)([\t\n\f\r ]*)$/, ( _, before, url, after ) => before + replaceUrl( url ) + after );
 		const valueStart = match[ 0 ].indexOf( match[ 2 ] ) + 1;
 		result += match[ 0 ].slice( 0, valueStart ) + replaced + match[ 2 ];
 		offset = match.index + match[ 0 ].length;

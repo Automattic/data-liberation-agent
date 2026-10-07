@@ -4,6 +4,19 @@ import { preparePortableReplacements, removeDanglingMediaSource } from './portab
 import { rewriteMediaUrls } from './streaming/media-url-rewrite.js';
 
 describe( 'shared srcset tokenization', () => {
+	it( 'recognizes browser-trimmed single URLs while retaining quoted attribute whitespace', () => {
+		const url = 'https://source.test/photo.png';
+		const mapping = new Map( [ [ url, '/media/photo.png' ], [ 'photo.png', '/media/wrong.png' ] ] );
+		for ( const padding of [ ' ', '\t', '\n', '\r\n \t', '\f' ] ) {
+			const html = `<img src="${ padding }${ url }${ padding }" data-src='${ padding }${ url }${ padding }'><source src="${ padding }${ url }/:/larger${ padding }">`;
+			const expected = `<img src="${ padding }/media/photo.png${ padding }" data-src='${ padding }/media/photo.png${ padding }'><source src="${ padding }${ url }/:/larger${ padding }">`;
+			expect( preparePortableReplacements( mapping )( html ) ).toBe( expected );
+			expect( rewriteMediaUrls( html, mapping ) ).toBe( expected );
+		}
+		// Non-ASCII whitespace is URL content rather than removable HTML padding.
+		const nonAscii = `<img src="\u00a0${ url }\u00a0">`;
+		expect( preparePortableReplacements( mapping )( nonAscii ) ).toBe( nonAscii );
+	} );
 	it( 'ends descriptorless candidates at trailing commas, not URL-internal commas', () => {
 		const urls = [ 720, 480, 320 ].map( size => `/images/square-${ size }x${ size }_scale,w_${ size }.png` );
 		expect( srcsetReferences( urls.join( ', ' ) ) ).toEqual( urls );

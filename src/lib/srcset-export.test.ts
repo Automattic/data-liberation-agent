@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { createHash } from 'node:crypto';
 import { chromium, type Page } from 'playwright';
 import { PNG } from 'pngjs';
 import * as cheerio from 'cheerio';
@@ -12,6 +13,87 @@ import { observePage } from './fidelity/check.js';
 import { normalizeImageKey } from './fidelity/score.js';
 
 describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chromium.executablePath() ) )( 'srcset browser/export contract', () => {
+	it( 'localizes padded single URL attributes without replacing registered source pixels with placeholders', async () => {
+		const directory = mkdtempSync( join( tmpdir(), 'dla-padded-url-contract-' ) );
+		const browser = await chromium.launch();
+		let server: Awaited<ReturnType<typeof startStaticServer>> | undefined;
+		try {
+			for ( const folder of [ 'html', 'screenshots', 'media' ] ) mkdirSync( join( directory, folder ) );
+			const source = 'https://source.test/';
+			const png = new PNG( { width: 88, height: 78 } );
+			for ( let offset = 0; offset < png.data.length; offset += 4 ) {
+				png.data[ offset ] = ( offset / 4 ) % 251;
+				png.data[ offset + 1 ] = ( offset / 352 ) % 239;
+				png.data[ offset + 2 ] = 71;
+				png.data[ offset + 3 ] = 255;
+			}
+			const bytes = PNG.sync.write( png );
+			const pixelHash = createHash( 'sha256' ).update( png.data ).digest( 'hex' );
+			const inline = `data:image/png;base64,${ bytes.toString( 'base64' ) }`;
+			const cases = [
+				{ value: `${ source }photo.png`, padding: ' ', quote: '"' },
+				{ value: `${ source }photo.png`, padding: '\t', quote: "'" },
+				{ value: `${ source }photo.png`, padding: '\n', quote: '"' },
+				{ value: `${ source }photo.png`, padding: '\r\n \t', quote: "'" },
+				{ value: inline, padding: ' ', quote: '"' },
+				{ value: inline, padding: '\t\n', quote: "'" },
+			];
+			const html = `<meta name="viewport" content="width=device-width"><style>body{margin:0}img{display:block;width:88px;height:auto}</style><main>${ cases.map( ( fixture, index ) => `<img alt="Padded image ${ index }" src=${ fixture.quote }${ fixture.padding }${ fixture.value }${ fixture.padding }${ fixture.quote }>` ).join( '' ) }<p>After retained images</p></main>`;
+			writeFileSync( join( directory, 'html/home.html' ), html );
+			writeFileSync( join( directory, 'screenshots/manifest.json' ), JSON.stringify( { version: 1, entries: { [ source ]: { html: 'html/home.html' } } } ) );
+			const file = join( directory, 'media/photo.png' );
+			writeFileSync( file, bytes );
+			const media = MediaStubStore.load( directory );
+			media.markSuccess( `${ source }photo.png`, file ); media.flush();
+			const requests: string[] = [];
+			const sample = async ( page: Page ) => {
+				await page.waitForFunction( () => document.images.length === 6 && Array.from( document.images ).every( image => image.complete && image.naturalWidth > 0 ), {}, { timeout: 5000 } );
+				return page.evaluate( async () => {
+					await Promise.all( Array.from( document.images, image => image.decode() ) );
+					await new Promise<void>( resolve => requestAnimationFrame( () => requestAnimationFrame( () => resolve() ) ) );
+					return Promise.all( Array.from( document.images, async image => {
+						const bitmap = await createImageBitmap( image );
+						const canvas = new OffscreenCanvas( bitmap.width, bitmap.height );
+						const context = canvas.getContext( '2d' )!;
+						context.drawImage( bitmap, 0, 0 ); bitmap.close();
+						const pixels = context.getImageData( 0, 0, canvas.width, canvas.height ).data;
+						const hash = Array.from( new Uint8Array( await crypto.subtle.digest( 'SHA-256', pixels ) ), byte => byte.toString( 16 ).padStart( 2, '0' ) ).join( '' );
+						const rect = image.getBoundingClientRect();
+						return { currentSrc: image.currentSrc, hash, natural: [ image.naturalWidth, image.naturalHeight ], rect: [ rect.x, rect.y, rect.width, rect.height ] };
+					} ) );
+				} );
+			};
+			for ( const width of [ 390, 768, 1440 ] ) {
+				const context = await browser.newContext( { viewport: { width, height: 900 }, deviceScaleFactor: 1 } );
+				try {
+					await context.route( `${ source }**`, route => {
+						const path = new URL( route.request().url() ).pathname;
+						return path === '/' ? route.fulfill( { contentType: 'text/html', body: html } ) : path === '/photo.png' ? route.fulfill( { contentType: 'image/png', body: bytes } ) : route.fulfill( { status: 404 } );
+					} );
+					const page = await context.newPage();
+					await page.goto( source, { waitUntil: 'domcontentloaded' } );
+					const before = await sample( page );
+					expect( before.every( image => image.hash === pixelHash && image.natural[ 0 ] === 88 && image.natural[ 1 ] === 78 ) ).toBe( true );
+					if ( ! server ) {
+						exportWebsiteCapture( { outputDir: directory, sourceUrl: source, platform: 'generic', summary: {}, failures: [] } );
+						const diagnostics = JSON.parse( readFileSync( join( directory, 'diagnostics.json' ), 'utf8' ) );
+						expect( diagnostics.unresolvedDependencies ).toEqual( [] );
+						const $ = cheerio.load( readFileSync( join( directory, 'website/index.html' ), 'utf8' ) );
+						expect( $( 'img' ).map( ( _, image ) => $( image ).attr( 'src' ) ).get() ).toEqual( cases.map( fixture => fixture.padding.replaceAll( '\r\n', '\n' ) + ( fixture.value.startsWith( 'data:' ) ? fixture.value : '/media/photo.png' ) + fixture.padding.replaceAll( '\r\n', '\n' ) ) );
+						expect( readFileSync( join( directory, 'website/media/photo.png' ) ) ).toEqual( bytes );
+						server = await startStaticServer( join( directory, 'website' ) );
+					}
+					page.on( 'request', request => requests.push( request.url() ) );
+					await page.goto( server.url, { waitUntil: 'domcontentloaded' } );
+					const after = await sample( page );
+					expect( after.map( ( { currentSrc, ...image } ) => image ) ).toEqual( before.map( ( { currentSrc, ...image } ) => image ) );
+					for ( const image of after.slice( 0, 4 ) ) expect( new URL( image.currentSrc ).pathname ).toBe( '/media/photo.png' );
+					for ( const image of after.slice( 4 ) ) expect( image.currentSrc ).toBe( inline );
+				} finally { await context.close(); }
+			}
+			expect( requests.some( url => url.startsWith( source ) ) ).toBe( false );
+		} finally { await server?.close(); await browser.close(); rmSync( directory, { recursive: true, force: true } ); }
+	}, 30_000 );
 	it( 'retains descriptorless comma paths, density/width selection and inline pixels through export', async () => {
 		const directory = mkdtempSync( join( tmpdir(), 'dla-srcset-contract-' ) );
 		const browser = await chromium.launch();
