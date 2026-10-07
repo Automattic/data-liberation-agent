@@ -345,9 +345,6 @@ export async function fetchSitemapWithDiagnostics(baseUrl: string): Promise<Site
   return { urls: allUrls, diagnostics };
 }
 
-// Paths that are platform UI, not user content
-const SKIP_PATHS = /^\/(cart|account|login|signup|checkout|search|api|admin|favicon)/i;
-
 const LINKED_PAGE_REQUEST_LIMIT = 100;
 const LINKED_PAGE_TIME_LIMIT_MS = 60_000;
 const LINKED_PAGE_BODY_LIMIT = 2 * 1024 * 1024;
@@ -461,8 +458,9 @@ async function crawlLinkedPages(baseUrl: string, baseOrigin: string, seeds: stri
  * `<nav>…</nav>` match stops at the first nested `</nav>` (Webflow dropdowns),
  * and site chrome routinely lives outside `<nav>`/`<footer>` — a header CTA, a
  * GDPR bar, or a builder footer that is a plain `div` (Duda). The scope stays
- * one document; the same filter as the rendered
- * fallback below drops assets and platform UI paths.
+ * one document; the same filter as the rendered fallback below drops obvious
+ * asset references. Public path names alone do not establish whether a page
+ * is editorial content or platform UI.
  */
 export function extractSameOriginLinks(html: string, baseUrl: string, baseOrigin = new URL(baseUrl).origin): string[] {
   const $ = cheerio.load(html);
@@ -536,7 +534,6 @@ export function resolvePageLink(href: string, baseUrl: string, baseOrigin: strin
     if (resolved.protocol !== 'http:' && resolved.protocol !== 'https:') return null;
     if (resolved.origin !== baseOrigin) return null;
     if (/\.(css|js|png|jpg|jpeg|gif|svg|ico|woff|woff2|ttf|eot|pdf|docx?|zip|xml|json)$/i.test(resolved.pathname)) return null;
-    if (SKIP_PATHS.test(resolved.pathname)) return null;
     resolved.hash = '';
     return resolved.href;
   } catch {

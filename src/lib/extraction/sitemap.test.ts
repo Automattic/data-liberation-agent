@@ -625,6 +625,7 @@ describe('extractSameOriginLinks', () => {
       'https://example.test/privacidad',
       'https://example.test/cookies',
       'https://example.test/aviso-legal',
+      'https://example.test/cart',
     ]);
   });
 

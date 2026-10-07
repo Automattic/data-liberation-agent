@@ -24,14 +24,102 @@ it('names concrete page, depth and time omissions without merging query or slash
 });
 
 describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executablePath()))('bounded rendered linked frontier', () => {
+	it.each([20, 4])('classifies public documents by response instead of path names with maxPages=%s', async maxPages => {
+		const requests: string[] = [];
+		const docs: Record<string, string> = {
+			'/': '<h1>Home</h1><a href="/second/">Second</a>',
+			'/second/': '<h1>Second</h1><a href="/administration/">Administration</a><a href="/accounting/">Accounting</a><a href="/apiary/">Apiary</a><a href="/search/">Editorial search</a>',
+			'/administration/': '<h1>Editorial administration</h1>',
+			'/accounting/': '<h1>Editorial accounting</h1>',
+			'/apiary/': '<h1>Editorial apiary</h1>',
+			'/search/': '<h1>Editorial search</h1>',
+		};
+		const source = createServer((request, response) => {
+			requests.push(request.url!);
+			response.writeHead(docs[request.url!] ? 200 : 404, {'content-type': 'text/html'});
+			response.end(`<meta name="viewport" content="width=device-width,initial-scale=1">${docs[request.url!] ?? '<h1>404</h1>'}`);
+		});
+		await new Promise<void>(resolve => source.listen(0, '127.0.0.1', resolve));
+		const origin = `http://127.0.0.1:${(source.address() as {port: number}).port}`;
+		mkdirSync(join(process.cwd(), '.tmp-test'), {recursive: true});
+		const directory = mkdtempSync(join(process.cwd(), '.tmp-test', 'editorial-frontier-'));
+		let closed = false;
+		try {
+			const url = `${origin}/`;
+			const collector = createReferenceCollector(directory, url, [url]);
+			const capture = await captureScreenshots({urls: [url], primaryUrl: url, outputDir: directory, linkedPages: {maxPages, maxDepth: 3, timeoutMs: 120_000}, concurrency: 3, settleMs: 0, learnFluid: false, observeSource: collector.observe});
+			expect(capture.captured).toBe(Math.min(maxPages, 6));
+			expect(capture.linkedPageCoverage!.requiredUrls).toHaveLength(6);
+			expect(capture.linkedPageCoverage!.diagnostics).toHaveLength(maxPages === 20 ? 0 : 2);
+			if (maxPages === 20) expect(requests).toEqual(expect.arrayContaining(Object.keys(docs)));
+			else {
+				expect(requests).not.toContain('/apiary/'); expect(requests).not.toContain('/search/');
+				expect(capture.linkedPageCoverage!.diagnostics.every(row => row.reason.includes('maxPages=4'))).toBe(true);
+			}
+			const receiptPath = exportWebsiteCapture({outputDir: directory, sourceUrl: url, platform: 'default', summary: {routesFailed: capture.failed}, failures: []});
+			expect(JSON.parse(readFileSync(receiptPath, 'utf8')).summary.complete).toBe(maxPages === 20);
+			const frozen = JSON.parse(readFileSync(collector.finalize(receiptPath), 'utf8'));
+			expect(frozen.scope.sourceUrls).toHaveLength(6);
+			source.closeAllConnections(); await new Promise<void>(resolve => source.close(() => resolve())); closed = true;
+			const report = await checkFidelity({directory, widths: [390]});
+			expect(report.pass, JSON.stringify(report)).toBe(maxPages === 20);
+			expect(report.pending).toHaveLength(maxPages === 20 ? 0 : 2);
+		} finally {
+			if (!closed) {source.closeAllConnections(); await new Promise<void>(resolve => source.close(() => resolve()));}
+			if (!process.env.KEEP_FRONTIER_EVIDENCE) rmSync(directory, {recursive: true, force: true});
+		}
+	}, 180_000);
+	it('retains different slash documents through allocation, exact links and frozen verification', async () => {
+		const docs: Record<string, string> = {
+			'/': '<h1>Home</h1><a href="/article">Article address</a><a href="/article/">Directory address</a>',
+			'/article': '<h1>Article without slash</h1><a href="/article/">Other document</a>',
+			'/article/': '<h1>Article with slash</h1><a href="/article">Other document</a>',
+		};
+		const source = createServer((request, response) => {
+			response.writeHead(docs[request.url!] ? 200 : 404, {'content-type': 'text/html'});
+			response.end(`<meta name="viewport" content="width=device-width,initial-scale=1">${docs[request.url!] ?? '<h1>404</h1>'}`);
+		});
+		await new Promise<void>(resolve => source.listen(0, '127.0.0.1', resolve));
+		const origin = `http://127.0.0.1:${(source.address() as {port: number}).port}`;
+		mkdirSync(join(process.cwd(), '.tmp-test'), {recursive: true});
+		const directory = mkdtempSync(join(process.cwd(), '.tmp-test', 'slash-frontier-'));
+		let closed = false;
+		try {
+			const url = `${origin}/`;
+			const collector = createReferenceCollector(directory, url, [url]);
+			const capture = await captureScreenshots({urls: [url], primaryUrl: url, outputDir: directory, linkedPages: {maxPages: 20, maxDepth: 3, timeoutMs: 120_000}, concurrency: 2, settleMs: 0, learnFluid: false, observeSource: collector.observe});
+			expect(capture.captured).toBe(3);
+			const receiptPath = exportWebsiteCapture({outputDir: directory, sourceUrl: url, platform: 'default', summary: {routesFailed: capture.failed}, failures: []});
+			const receipt = JSON.parse(readFileSync(receiptPath, 'utf8'));
+			const without = receipt.routes.find((route: {url: string}) => route.url === `${origin}/article`);
+			const withSlash = receipt.routes.find((route: {url: string}) => route.url === `${origin}/article/`);
+			expect(without.path).not.toBe(withSlash.path);
+			expect(readFileSync(join(directory, without.path), 'utf8')).toContain('<h1>Article without slash</h1>');
+			expect(readFileSync(join(directory, withSlash.path), 'utf8')).toContain('<h1>Article with slash</h1>');
+			const home = readFileSync(join(directory, 'website/index.html'), 'utf8');
+			expect(home).toContain(`href="/${without.path.slice('website/'.length)}">Article address`);
+			expect(home).toContain(`href="/${withSlash.path.slice('website/'.length)}">Directory address`);
+			expect(readFileSync(join(directory, without.path), 'utf8')).toContain(`href="/${withSlash.path.slice('website/'.length)}"`);
+			expect(readFileSync(join(directory, withSlash.path), 'utf8')).toContain(`href="/${without.path.slice('website/'.length)}"`);
+			expect(receipt.duplicateRoutes).toEqual([]);
+			collector.finalize(receiptPath);
+			source.closeAllConnections(); await new Promise<void>(resolve => source.close(() => resolve())); closed = true;
+			const report = await checkFidelity({directory});
+			expect(report.pending).toEqual([]);
+			expect(report.pass, JSON.stringify(report)).toBe(true);
+		} finally {
+			if (!closed) {source.closeAllConnections(); await new Promise<void>(resolve => source.close(() => resolve()));}
+			if (!process.env.KEEP_FRONTIER_EVIDENCE) rmSync(directory, {recursive: true, force: true});
+		}
+	}, 180_000);
 	it.each([2, 4])('keeps budget omissions and actual source errors in required frozen scope with maxPages=%s', async maxPages => {
 		const requests: string[] = [];
 		const source = createServer((request, response) => {
 			requests.push(request.url!);
 			if (request.url === '/absent') {response.writeHead(404, {'content-type': 'text/html'}); response.end('<h1>404</h1>'); return;}
-			if (request.url === '/nonhtml') {response.writeHead(200, {'content-type': 'text/plain'}); response.end('not an HTML page'); return;}
+			if (request.url === '/api/data.json') {response.writeHead(200, {'content-type': 'text/plain'}); response.end('not an HTML page'); return;}
 			response.setHeader('content-type', 'text/html');
-			response.end('<meta name="viewport" content="width=device-width,initial-scale=1">' + (request.url === '/' ? '<h1>Home</h1><a href="/local/">Local</a><a href="/absent">Absent</a><a href="/nonhtml">Non HTML</a>' : '<h1>Local</h1>'));
+			response.end('<meta name="viewport" content="width=device-width,initial-scale=1">' + (request.url === '/' ? '<h1>Home</h1><a href="/local/">Local</a><a href="/absent">Absent</a><a href="/api/data.json">Non HTML</a>' : '<h1>Local</h1>'));
 		});
 		await new Promise<void>(resolve => source.listen(0, '127.0.0.1', resolve));
 		const url = `http://127.0.0.1:${(source.address() as {port: number}).port}/`;
@@ -45,10 +133,10 @@ describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executa
 			expect(capture.linkedPageCoverage?.requiredUrls).toHaveLength(4);
 			expect(capture.linkedPageCoverage?.diagnostics).toHaveLength(2);
 			if (maxPages === 2) {
-				expect(requests).not.toContain('/absent'); expect(requests).not.toContain('/nonhtml');
+				expect(requests).not.toContain('/absent'); expect(requests).not.toContain('/api/data.json');
 				expect(capture.linkedPageCoverage!.diagnostics.every(row => row.reason.includes('maxPages=2'))).toBe(true);
 			} else {
-				expect(requests).toEqual(expect.arrayContaining(['/absent', '/nonhtml']));
+				expect(requests).toEqual(expect.arrayContaining(['/absent', '/api/data.json']));
 				expect(capture.linkedPageCoverage!.diagnostics.map(row => row.reason)).toEqual(expect.arrayContaining([expect.stringContaining('HTTP 404'), expect.stringContaining('Not an HTML document (text/plain)')]));
 			}
 			const failuresPath = join(directory, 'screenshots/failures.json');
@@ -64,7 +152,7 @@ describe.skipIf(!!process.env.SKIP_BROWSER_TESTS || !existsSync(chromium.executa
 			const report = await checkFidelity({directory, widths: [390]});
 			expect(report.pass).toBe(false);
 			expect(report.pending).toHaveLength(2);
-			expect(report.pending!.map(row => row.route)).toEqual(expect.arrayContaining([`${url}absent`, `${url}nonhtml`]));
+			expect(report.pending!.map(row => row.route)).toEqual(expect.arrayContaining([`${url}absent`, `${url}api/data.json`]));
 		} finally {
 			if (!closed) {source.closeAllConnections(); await new Promise<void>(resolve => source.close(() => resolve()));}
 			if (!process.env.KEEP_FRONTIER_EVIDENCE) rmSync(directory, {recursive: true, force: true});

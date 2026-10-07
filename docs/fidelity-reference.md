@@ -159,6 +159,20 @@ slash and query renditions; only source-proven redirects reuse aliases. Newly
 scheduled local HTML gets ordinary capture-session reference observations, and
 external declarations use the same frozen boundary contract below.
 
+Rendered same-origin HTTP(S) anchors are candidates regardless of path names or
+filename suffixes. The existing response/document classifier establishes HTML,
+absent/non-HTML inputs and navigation boundaries. Unsupported outcomes stay in
+required scope with explicit diagnostics; names such as `administration`,
+`accounting`, `apiary` or `search` do not imply an exclusion policy.
+
+Distinct captured request addresses that claim the same natural portable path
+are allocated deterministic numeric suffixes after reserving authored filenames
+and directories. Entrypoint selection prefers the exact requested document;
+source-declared canonical and established default-document content aliases
+retain their existing alias contract. Slash variants are independent until that
+proof exists. Query renditions keep their query allocation convention. Source
+links and redirect aliases bind exact addresses to the allocated document paths.
+
 `CaptureOptions.linkedPages` configures `maxPages` (256 by default), `maxDepth`
 (8 linked hops), and `timeoutMs` (1,800,000 ms). The time budget bounds admission
 and starting queued work; an already active capture completes under its ordinary
