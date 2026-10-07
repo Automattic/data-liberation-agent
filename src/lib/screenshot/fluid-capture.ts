@@ -17,6 +17,7 @@ import {
 	type GeometrySample,
 } from './fluid-model.js';
 import type { Page } from 'playwright';
+import { captureFluidBaseline } from './fluid-baseline.js';
 
 /** Marks elements across viewport changes; removed before serialization. */
 const ID_ATTRIBUTE = 'data-dla-fluid-id';
@@ -97,15 +98,39 @@ export async function learnAndApplyFluidGeometry(
 	page: Page,
 	options: FluidSweepOptions = {}
 ): Promise< FluidLearningResult > {
+	const { withEvaluateTimeout } = await import( './page-helpers.js' );
+	const original = page.viewportSize();
+	const baseline = await captureFluidBaseline( page, ID_ATTRIBUTE );
+	let completed = false;
+	try {
+		const result = await learnFluidGeometry( page, options, baseline );
+		completed = true;
+		return result;
+	} finally {
+		try {
+			await withEvaluateTimeout( ( async () => {
+				if ( ! completed ) {
+					await baseline.evaluate( state => state.restore() );
+					if ( original ) await page.setViewportSize( original );
+					await waitForRestGeometry( page, ID_ATTRIBUTE );
+					await baseline.evaluate( state => state.reconcile() );
+				}
+				await baseline.evaluate( state => state.cleanup() );
+			} )(), 8000 );
+		} finally {
+			await baseline.dispose();
+		}
+	}
+}
+
+async function learnFluidGeometry(
+	page: Page,
+	options: FluidSweepOptions,
+	baseline: Awaited<ReturnType<typeof captureFluidBaseline>>
+): Promise<FluidLearningResult> {
 	const widths = options.widths ?? DEFAULT_SWEEP_WIDTHS;
 	const settleMs = options.settleMs ?? 1200;
 	const original = page.viewportSize();
-	// A resize can write geometry onto elements that had none at capture width
-	// (including dormant cloned chrome). Keep their baseline declarations too:
-	// an unobserved side effect of the sweep must not become the frozen copy.
-	const baseline = await page.evaluateHandle( () => new Map(
-		[ ...document.querySelectorAll< HTMLElement >( '*' ) ].map( element => [ element, element.getAttribute( 'style' ) ] )
-	) );
 
 	const tagged = await page.evaluate(
 		( { attribute, properties, prefix } ) => {
@@ -148,9 +173,9 @@ export async function learnAndApplyFluidGeometry(
 	);
 
 	if ( tagged === 0 ) {
-		await baseline.dispose();
 		return { applied: 0, unmodelled: 0, breakpoints: [], canvasFloor: null, byKind: {} };
 	}
+	await baseline.evaluate( state => state.bind() );
 
 	// key: `${id}:${property}` -> observations across widths
 	const observations = new Map< string, GeometrySample[] >();
@@ -178,6 +203,7 @@ export async function learnAndApplyFluidGeometry(
 		// races it or wastes time. Wait for the geometry actually being
 		// measured to go quiet instead.
 		await waitForRestGeometry( page, ID_ATTRIBUTE );
+		await baseline.evaluate( state => state.reconcile() );
 
 		const measured = await page.evaluate(
 			( { attribute, properties } ) =>
@@ -270,6 +296,8 @@ export async function learnAndApplyFluidGeometry(
 		segmentedCss: string | null;
 		/** Media-scoped rules from the sampled sizes, for a percentage that fails verification. */
 		sampledCss: string | null;
+		/** Whole-range model kind, used when capture-width validation rejects it. */
+		kind?: FluidModel['kind'];
 	} > = [];
 	const byKind: Record< string, number > = {};
 	const breakpoints = new Set< number >();
@@ -438,37 +466,19 @@ export async function learnAndApplyFluidGeometry(
 			containerRelative: model.kind === 'container' && css === model.css,
 			segmentedCss: null,
 			sampledCss,
+			kind: model.kind,
 		} );
 	}
 
-	// Restore the capture viewport BEFORE writing the learned CSS. Returning to
-	// the original width makes the source's runtime recompute one last time, and
-	// it would overwrite anything applied beforehand with pixels again.
+	// Seed each source role with its capture baseline BEFORE returning the
+	// viewport. Resize handlers can clone the previous state before updating it;
+	// they must inherit the capture baseline rather than the widest sweep sample.
+	// The source then owns the final clone state. Learned CSS follows that resize.
+	await baseline.evaluate( state => state.restore() );
 	if ( original ) await page.setViewportSize( original );
 	await page.waitForTimeout( settleMs );
 	await waitForRestGeometry( page, ID_ATTRIBUTE );
-	await page.evaluate( snapshot => {
-		// Transforms retain the final runtime state: the pure-translation checks
-		// below must still reject a matrix that became rotated/scaled on return.
-		const geometry = [ 'width', 'height', 'font-size', 'padding-top', 'inset', 'top', 'left' ];
-		const scratch = document.createElement( 'span' );
-		for ( const [ element, style ] of snapshot ) {
-			if ( ! element.isConnected || ! element.style ) continue;
-			scratch.style.cssText = style ?? '';
-			const properties = new Set( [ ...geometry,
-				...[ ...element.style, ...scratch.style ].filter( property => property.startsWith( '--' ) ),
-			] );
-			for ( const property of properties ) {
-				const value = scratch.style.getPropertyValue( property );
-				const priority = scratch.style.getPropertyPriority( property );
-				if ( element.style.getPropertyValue( property ) === value && element.style.getPropertyPriority( property ) === priority ) continue;
-				if ( value ) element.style.setProperty( property, value, priority );
-				else element.style.removeProperty( property );
-			}
-			if ( style === null && element.style.cssText === '' ) element.removeAttribute( 'style' );
-		}
-	}, baseline );
-	await baseline.dispose();
+	await baseline.evaluate( state => state.reconcile() );
 	// The resize back to the capture viewport can switch a transform to another
 	// matrix after the sweep. Validate that final state before removing inline
 	// transform; otherwise translateX would discard its new components.
@@ -482,10 +492,11 @@ export async function learnAndApplyFluidGeometry(
 		unmodelled++;
 	}
 
-	const { reverted, frozen, sampled } = await page.evaluate(
+	const { reverted, frozen, frozenWidths, sampled, appliedCss } = await page.evaluate(
 		( { attribute, segmentAttribute, entries, tolerance } ) => {
 			let revertedCount = 0;
 			let frozenCount = 0;
+			const frozenWidths: number[] = [];
 			const sampledEntries: number[] = [];
 			// Accepted rules stay applied while later entries are measured; the
 			// capture-owned stylesheet written after this loop replaces them.
@@ -508,8 +519,19 @@ export async function learnAndApplyFluidGeometry(
 				const axis = entry.property === 'height' ? 'height' : 'width';
 				const before = element.getBoundingClientRect()[ axis ];
 				const runtimeValue = element.style.getPropertyValue( entry.property );
+				const runtimePriority = element.style.getPropertyPriority( entry.property );
 				element.style.setProperty( entry.property, entry.css );
-				if ( ! entry.containerRelative ) continue;
+				if ( ! entry.containerRelative ) {
+					// A fit learned outside the capture width may describe a clone's
+					// transient wide state. Never replace its returned width with a
+					// relationship that fails this source observation.
+					if ( entry.property === 'width' && Math.abs( element.getBoundingClientRect().width - before ) > tolerance ) {
+						element.style.setProperty( entry.property, runtimeValue, runtimePriority );
+						entry.css = runtimeValue;
+						frozenWidths.push( index );
+					}
+					continue;
+				}
 
 				// Verify rather than assume: a percentage only resolves against a
 				// parent with a definite size on this axis. A shrink-to-fit parent
@@ -521,9 +543,11 @@ export async function learnAndApplyFluidGeometry(
 				if ( Math.abs( after - before ) <= tolerance ) continue;
 				if ( entry.fallbackCss !== null ) {
 					element.style.setProperty( entry.property, entry.fallbackCss );
-					entry.css = entry.fallbackCss;
-					revertedCount++;
-					continue;
+					if ( Math.abs( element.getBoundingClientRect()[ axis ] - before ) <= tolerance ) {
+						entry.css = entry.fallbackCss;
+						revertedCount++;
+						continue;
+					}
 				}
 				if ( entry.sampledCss !== null ) {
 					// Held to the same verification: the rules must reproduce
@@ -544,33 +568,12 @@ export async function learnAndApplyFluidGeometry(
 					probe.remove();
 					if ( ! hadSegment ) element.removeAttribute( segmentAttribute );
 				}
-				element.style.setProperty( entry.property, runtimeValue );
+				element.style.setProperty( entry.property, runtimeValue, runtimePriority );
 				entry.css = runtimeValue;
 				frozenCount++;
 			}
 			for ( const probe of probes ) probe.remove();
-			// A source resize callback can still mutate inline styles after learning
-			// completes. Keep the learned declaration authoritative until serialization;
-			// this observer itself is not part of the exported document.
-			const authoritative = entries.flatMap( ( entry ) => {
-				const element = document.querySelector< HTMLElement >( `[${ attribute }="${ entry.id }"]` );
-				return element ? [ { element, property: entry.property, css: entry.css, segmented: entry.segmentedCss !== null } ] : [];
-			} );
-			const observer = new MutationObserver( () => {
-				for ( const entry of authoritative ) {
-					const current = entry.element.style.getPropertyValue( entry.property );
-					if ( entry.segmented ) {
-						// The stylesheet rule is the declaration; any inline pixels
-						// the runtime rewrites would outrank it.
-						if ( current !== '' ) entry.element.style.removeProperty( entry.property );
-						continue;
-					}
-					if ( current === entry.css ) continue;
-					entry.element.style.setProperty( entry.property, entry.css );
-				}
-			} );
-			observer.observe( document.documentElement, { subtree: true, attributes: true, attributeFilter: [ 'style' ] } );
-			return { reverted: revertedCount, frozen: frozenCount, sampled: sampledEntries };
+			return { reverted: revertedCount, frozen: frozenCount, frozenWidths, sampled: sampledEntries, appliedCss: entries.map( entry => entry.css ) };
 		},
 		{
 			attribute: ID_ATTRIBUTE,
@@ -580,6 +583,7 @@ export async function learnAndApplyFluidGeometry(
 		}
 	);
 
+	for ( const [ index, css ] of appliedCss.entries() ) learned[ index ]!.css = css;
 	for ( const index of sampled ) learned[ index ]!.segmentedCss = learned[ index ]!.sampledCss;
 	const segmentedRules = learned
 		.map( ( entry ) => entry.segmentedCss )
@@ -595,29 +599,29 @@ export async function learnAndApplyFluidGeometry(
 			{ styleAttribute: SEGMENT_STYLE_ATTRIBUTE, rules: segmentedRules }
 		);
 	}
-
-	await page.evaluate(
-		( { attribute } ) => {
-			for ( const element of document.querySelectorAll( `[${ attribute }]` ) ) {
-				element.removeAttribute( attribute );
-			}
-		},
-		{ attribute: ID_ATTRIBUTE }
-	);
+	await baseline.evaluate( ( state, { entries, segmentAttribute, width } ) => state.activate( entries, segmentAttribute, width ), {
+		entries: learned.map( entry => ( { id: entry.id, property: entry.property, css: entry.css, segmented: entry.segmentedCss !== null } ) ),
+		segmentAttribute: SEGMENT_ATTRIBUTE,
+		width: original?.width,
+	} );
 
 	if ( reverted > 0 ) {
 		byKind.container = Math.max( 0, ( byKind.container ?? 0 ) - reverted );
 		byKind.proportional = ( byKind.proportional ?? 0 ) + reverted;
 	}
 	if ( frozen > 0 ) byKind.container = Math.max( 0, ( byKind.container ?? 0 ) - frozen );
+	for ( const index of frozenWidths ) {
+		const kind = learned[ index ]!.kind!;
+		byKind[ kind ] = Math.max( 0, ( byKind[ kind ] ?? 0 ) - 1 );
+	}
 	if ( sampled.length > 0 ) {
 		byKind.container = Math.max( 0, ( byKind.container ?? 0 ) - sampled.length );
 		byKind.segmented = ( byKind.segmented ?? 0 ) + sampled.length;
 	}
 
 	return {
-		applied: learned.length - frozen,
-		unmodelled: unmodelled + frozen,
+		applied: learned.length - frozen - frozenWidths.length,
+		unmodelled: unmodelled + frozen + frozenWidths.length,
 		breakpoints: [ ...breakpoints ].sort( ( a, b ) => a - b ),
 		canvasFloor,
 		byKind,
