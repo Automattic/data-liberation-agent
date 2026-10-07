@@ -1519,7 +1519,9 @@ export async function extractFull(
         }
         return el;
       };
-      const promotedWinners = Array.from(new Set(semanticWinners.map(promoteToHeadingParent)));
+      // Spread, not Array.from: a legacy page library (Prototype.js) replaces
+      // Array.from with one that returns [] for a Set.
+      const promotedWinners = [...new Set(semanticWinners.map(promoteToHeadingParent))];
 
       // Y-band candidate collection: every element big enough to be a content
       // band that carries an image or real text. Shared by the page-builder

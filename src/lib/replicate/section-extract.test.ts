@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
+import { chromium } from 'playwright';
 import {
+  extractFull,
   extractSignature,
   classifySection,
   filterIconCandidate,
@@ -782,4 +784,46 @@ describe('buildSectionForms', () => {
     expect(form.fields[0].widthPct).toBe(50);
     expect(form.fields[1].widthPct).toBe(50);
   });
+});
+
+describe('extractFull on a page whose library replaced Array.from', () => {
+  // Prototype.js replaces Array.from with a copy that only reads `length`, so
+  // a Set becomes []. Section extraction runs inside the page and must find
+  // the same sections either way.
+  const LEGACY_ARRAY_FROM = `<script>Array.from = function (iterable) {
+    if (!iterable) return [];
+    if ('toArray' in Object(iterable)) return iterable.toArray();
+    var length = iterable.length || 0, results = new Array(length);
+    while (length--) results[length] = iterable[length];
+    return results;
+  };</script>`;
+  const fixture = (head = '') => `<!doctype html><html><head><style>
+    body{margin:0;font-family:sans-serif}header,footer{min-height:220px;padding:24px}main>section{min-height:320px;padding:40px 24px}
+    </style>${head}</head><body>
+    <header><h1>Studio</h1><nav><a href="/">Home</a> <a href="/about/">About</a></nav></header>
+    <main>
+      <section><h2>Services</h2><p>We design things for people who need them designed.</p></section>
+      <section><h2>Work</h2><p>Selected projects from the last few years.</p></section>
+      <section><h2>About</h2><p>A small studio in a quiet town.</p></section>
+      <section><h2>Contact</h2><p>Write to us or call during office hours.</p></section>
+    </main>
+    <footer><p>Footer text</p></footer></body></html>`;
+
+  it('finds the same sections with and without the patched Array.from', async () => {
+    const browser = await chromium.launch();
+    try {
+      const run = async (html: string) => {
+        const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+        await page.setContent(html);
+        const { specs } = await extractFull(page, {});
+        await page.close();
+        return specs.map(({ top, height, headings }) => ({ top, height, headings }));
+      };
+      const pristine = await run(fixture());
+      expect(pristine.length).toBeGreaterThanOrEqual(4);
+      expect(await run(fixture(LEGACY_ARRAY_FROM))).toEqual(pristine);
+    } finally {
+      await browser.close();
+    }
+  }, 60_000);
 });
