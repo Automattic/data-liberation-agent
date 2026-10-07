@@ -1,9 +1,13 @@
 import type { Page } from 'playwright';
 
-export const CLEANUP_SCHEMA = 'data-liberation/source-cleanup/v7';
+export const CLEANUP_SCHEMA = 'data-liberation/source-cleanup/v8';
+export const CLEANUP_CATEGORIES = ['advertisement', 'source-attribution', 'provider-service'] as const;
+export type CleanupCategory = typeof CLEANUP_CATEGORIES[number];
 export interface CleanupRule {
   id: string;
-  category: 'advertisement' | 'source-attribution';
+  /** `provider-service`: provider runtime UI that only works on the provider
+   *  (a site-members login), so a copy can only ship it broken. */
+  category: CleanupCategory;
   selector: string;
   /** Credit links remove their attribution phrase, retaining owner footer text. */
   credit?: boolean;
@@ -17,6 +21,11 @@ export interface CleanupRule {
    *  it reserved is reclaimed with it rather than frozen at the captured value. */
   reclaimVariables?: string[];
   hosts?: string[];
+  /** The provider withholds this route's content behind this element (a
+   *  members-only page). Removing it leaves nothing of the page, so its
+   *  removal marks the route as gated; see `access-gate.ts`. Names the
+   *  provider for the owner-facing note. */
+  accessGate?: { provider: string };
 }
 export interface CleanupPolicy {
   schema: typeof CLEANUP_SCHEMA;
@@ -102,7 +111,8 @@ export function validateCleanupPolicy(value: unknown): asserts value is CleanupP
     policy.builderChrome?.affordance !== BUILDER_CHROME_PATTERNS.affordance ||
     !Array.isArray(policy.rules) || policy.rules.length > 100 ||
     policy.rules.some((rule) => !rule || typeof rule.id !== 'string' || typeof rule.selector !== 'string' ||
-      rule.selector.length > 2000 || !['advertisement', 'source-attribution'].includes(rule.category) ||
+      rule.selector.length > 2000 || !(CLEANUP_CATEGORIES as readonly string[]).includes(rule.category) ||
+      (rule.accessGate !== undefined && (typeof rule.accessGate?.provider !== 'string' || !rule.accessGate.provider || rule.accessGate.provider.length > 100)) ||
       (rule.creditText !== undefined && (typeof rule.creditText !== 'string' || rule.creditText.length > 100)) ||
       (rule.reclaimVariables !== undefined && (!Array.isArray(rule.reclaimVariables) || rule.reclaimVariables.length > 20 ||
         rule.reclaimVariables.some((name) => typeof name !== 'string' || !/^--[\w-]{1,100}$/.test(name)))) ||
@@ -455,6 +465,15 @@ export async function sweepSourceCleanup(page: Page, policy?: CleanupPolicy): Pr
     return Boolean(state);
   });
   if (!present && policy) await applySourceCleanup(page, policy, { recovered: true });
+}
+
+/** The access-gate rule (see `CleanupRule.accessGate`) this report recorded a removal for. */
+export function accessGateRemoval(report: CleanupReport, policy: CleanupPolicy): { rule: string; provider: string } | undefined {
+  for (const record of report.records) {
+    const gate = policy.rules.find((rule) => rule.id === record.rule)?.accessGate;
+    if (gate) return { rule: record.rule, provider: gate.provider };
+  }
+  return undefined;
 }
 
 /** Thrown inside the page; the message must stay in sync across the evaluate

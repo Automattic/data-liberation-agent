@@ -6,6 +6,8 @@ import type { ScrollStatesReport } from './scroll-state-capture.js';
 
 export interface ManifestEntry {
   cleanup?: { policy: import('../source-cleanup.js').CleanupPolicy; reports: import('../source-cleanup.js').CleanupReport[] };
+  /** The provider withheld this route behind its login; it was captured as a placeholder (see access-gate.ts). */
+  accessGate?: import('../access-gate.js').AccessGateEvidence;
   slug: string;
   desktop?: string;          // path to screenshots/desktop/<slug>.png
   desktopScrolled?: string;  // path to scrolled variant

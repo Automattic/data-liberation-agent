@@ -444,6 +444,15 @@ export const capture: LiberationHooks = {
     { id: 'wix-free-banner', category: 'source-attribution', selector: '#WIX_ADS',
       reclaimVariables: ['--wix-ads-height', '--wix-ads-top-height', '--sticky-offset'] },
     ...providerCreditRules('wix', ['wix.com'], 'Wix'),
+    // Wix Members login. It only works against Wix's own member accounts, so a
+    // copy can only ship it as a dead form. On a members-only page the runtime
+    // replaces the whole site container with it behind a blocking layer: that
+    // route is gated, not empty. Elsewhere the same dialog opens as a pop-up
+    // from the "Sign In" control. The gate is listed first so a blocking gate
+    // is recorded as the gate rather than as the dialog inside it.
+    { id: 'wix-members-gate', category: 'provider-service',
+      selector: '[data-testid="siteMembersDialogBlockingLayer"]', accessGate: { provider: 'Wix' } },
+    { id: 'wix-members-dialog', category: 'provider-service', selector: '[data-testid="siteMembersDialogLayout"]' },
   ],
 	removeSelectors: [ '[id="WIX_ADS"]', '[id$="-hiddenA11ySubMenuIndication"]' ],
 	/**

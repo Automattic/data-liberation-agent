@@ -1,4 +1,5 @@
 import type { Page } from 'playwright';
+import { sweepSourceCleanup } from '../source-cleanup.js';
 import { rememberDropdownAncestors, observeDropdownAncestors, verifyDropdownRestoration, type CapturedDropdownAncestorState } from './dropdown-ancestor-state.js';
 
 export const INTERACTION_STATES_SCHEMA = 'data-liberation/interaction-states/v2';
@@ -419,6 +420,10 @@ export async function captureTriggeredDialogs(
 		let dialog: DialogDescriptor | undefined;
 		const deadline = Date.now() + DIALOG_WAIT_MS;
 		do {
+			// Source cleanup removes provider dialogs as they open, but its
+			// observer has a budget a busy page can spend before the probes run.
+			// Sweep explicitly so a policy-removed dialog is never recorded.
+			await sweepSourceCleanup( page ).catch( () => undefined );
 			dialog = await firstNewVisibleDialog( page, before, trigger.probeSelector );
 			if ( dialog ) break;
 			await page.waitForTimeout( 100 );
@@ -502,6 +507,7 @@ async function restoreExpandedTrigger( page: Page, selector: string ): Promise< 
 }
 
 async function captureInitiallyVisibleDialogs( page: Page ): Promise< CapturedInitialDialog[] > {
+	await sweepSourceCleanup( page ).catch( () => undefined );
 	const dialogs = await visibleSemanticDialogs( page );
 	const states: CapturedInitialDialog[] = [];
 	for ( const dialog of dialogs.slice( 0, MAX_INITIAL_DIALOGS ) ) {
