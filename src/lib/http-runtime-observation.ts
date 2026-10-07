@@ -46,7 +46,9 @@ export async function observeHttpCaptureRegions( options: {
 					} );
 					await page.goto( document.url, { waitUntil: 'load', timeout: 20_000 } );
 					await options.profile.prepareRuntimeRegions?.( page, { url: document.url, finalUrl: document.finalUrl!, variant: document.variant } );
-					return observeRuntimeRegions( page, document.url, document.browserRegions! );
+					const projection = await options.profile.projectRuntimeRegions?.(page, { url: document.url, finalUrl: document.finalUrl!, variant: document.variant });
+					const observed = await observeRuntimeRegions( page, document.url, document.browserRegions! );
+					return { ...observed, ...(projection ? { projection } : {}) };
 				} )(), 45_000, 'runtime-region observation' );
 				attachments.push( { variant: document.variant, observation } );
 			} catch ( error ) { failures.push( { url: document.url, error: `${ document.variant } runtime observation: ${ String( error ) }` } ); }

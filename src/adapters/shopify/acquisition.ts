@@ -117,7 +117,11 @@ export function prepareShopifyDocument(html: string, context: HttpDocumentContex
 				add(`#${id}`, 'Brooklyn source-owned lazy/slideshow section and initial slide state.');
 		});
 	if (kind === 'collection') {
-		add('.grid-product__wrapper', 'Brooklyn product card image, labels and initial price presentation.');
+		regions.push({
+			selector: '.grid-product__image-wrapper', projection: 'subtree', retainSourceAttributes: ['style'],
+			reason: 'Brooklyn observed image/label state inside the acquired responsive card geometry; runtime equal-height rounding remains unverified.',
+		});
+		add('.grid-product__meta', 'Brooklyn observed product title, review badge and initial price presentation.');
 		add('#sort-by', 'Actual initial collection sort selection; sort navigation is unverified.');
 	}
 	if (kind === 'product') {
@@ -155,6 +159,18 @@ export const shopifyAcquisition: HttpAcquisitionProfile = {
 	id: 'shopify',
 	exportVariants: { desktop: 'desktop', mobile: 'mobile' },
 	prepareRuntimeRegions: prepareShopifyRuntime,
+	projectRuntimeRegions: async (page, context) => {
+		if (!await page.locator('body.template-index .hero-slideshow').count()) return undefined;
+		const { learnAndApplyFluidGeometry } = await import('../../lib/screenshot/fluid-capture.js');
+		const learning = await learnAndApplyFluidGeometry(page, {
+			document: context.variant === 'mobile' ? 'mobile' : 'desktop',
+			widths: [390, 601, 768, 769, 1024, 1440], settleMs: 150,
+			prepareViewport: pauseShopifySlides,
+			learnRelativeOffsets: true,
+		});
+		await pauseShopifySlides(page);
+		return { primitive: 'fluid-capture', sampling: 'source-runtime-resize', learning };
+	},
 	variants: [
 		{
 			id: 'desktop',
@@ -196,6 +212,21 @@ export async function preserveShopifyWalletPresentation(page: import('playwright
 	});
 }
 
+export async function pauseShopifySlides(page: import('playwright').Page): Promise<void> {
+	await page.evaluate(() => {
+		// Brooklyn ships Slick's direct jQuery methods. Calling slick('slickPause')
+		// on this version returns the collection without pausing its timer.
+		const jq = (window as unknown as { jQuery?: (node: Element) => { slickPause: () => void } }).jQuery;
+		const sliders = document.querySelectorAll('.slick-initialized');
+		if (sliders.length && !jq) throw new Error('Brooklyn slide runtime is unavailable');
+		if (jq) for (const slider of sliders) {
+			const instance = jq(slider);
+			if (typeof instance.slickPause !== 'function') throw new Error('Brooklyn slide pause API is unavailable');
+			instance.slickPause();
+		}
+	});
+}
+
 async function prepareShopifyRuntime(page: import('playwright').Page): Promise<void> {
 	const { triggerLazyLoad, waitForFonts, waitForDomQuiescence, dismissOverlays } = await import(
 		'../../lib/screenshot/page-helpers.js'
@@ -212,14 +243,7 @@ async function prepareShopifyRuntime(page: import('playwright').Page): Promise<v
 		undefined,
 		{ timeout: 10000 }
 	);
-	await page.evaluate(() => {
-		const jq = (
-			window as unknown as {
-				jQuery?: (node: Element) => { slick: (...args: Array<string | number | boolean>) => void };
-			}
-		).jQuery;
-		if (jq) for (const slider of document.querySelectorAll('.slick-initialized')) jq(slider).slick('slickPause');
-	});
+	await pauseShopifySlides(page);
 	await dismissOverlays(page);
 	await triggerLazyLoad(page);
 	await page.waitForFunction(
@@ -254,12 +278,5 @@ async function prepareShopifyRuntime(page: import('playwright').Page): Promise<v
 	}), undefined, { timeout: 5000 }).catch(() => undefined);
 	await preserveShopifyWalletPresentation(page);
 	await page.evaluate(() => window.scrollTo(0, 0));
-	await page.evaluate(() => {
-		const jq = (
-			window as unknown as {
-				jQuery?: (node: Element) => { slick: (...args: Array<string | number | boolean>) => void };
-			}
-		).jQuery;
-		if (jq) for (const slider of document.querySelectorAll('.slick-initialized')) jq(slider).slick('slickPause');
-	});
+	await pauseShopifySlides(page);
 }

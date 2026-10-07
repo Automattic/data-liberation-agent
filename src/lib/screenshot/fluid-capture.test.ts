@@ -13,6 +13,126 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		await browser.close();
 	} );
 
+	it.each( [ false, true ] )( 'preserves non-relative left declarations with relative-offset learning (other geometry: %s)', async otherGeometry => {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		try {
+			await page.setContent( `<style>body{margin:0}#containing{position:relative;width:80vw}#immediate{width:20vw}</style>
+				<div id="containing"><div id="immediate">${ [ 'static', 'absolute', 'fixed', 'sticky' ].map( position =>
+					`<div id="${ position }" style="position:${ position };left:144px${ otherGeometry ? ';width:720px' : '' }">${ position }</div>` ).join( '' ) }</div></div>
+				<script>const update=()=>document.querySelectorAll('#immediate > div').forEach(node=>{node.style.left=innerWidth/10+'px';${ otherGeometry ? "node.style.width=innerWidth/2+'px';" : '' }});addEventListener('resize',update);update();</script>` );
+			const resize = vi.spyOn( page, 'setViewportSize' );
+			expect( await page.locator( '#absolute' ).evaluate( node => ( node as HTMLElement ).offsetParent?.id ) ).toBe( 'containing' );
+			await learnAndApplyFluidGeometry( page, { widths: [ 390, 768, 1440 ], settleMs: 30, learnRelativeOffsets: true } );
+			for ( const position of [ 'static', 'absolute', 'fixed', 'sticky' ] )
+				expect( await page.locator( `#${ position }` ).evaluate( node => ( node as HTMLElement ).style.left ) ).toBe( '144px' );
+			if ( ! otherGeometry ) expect( resize ).not.toHaveBeenCalled();
+		} finally { await page.close(); }
+	}, 20_000 );
+
+	it( 'rejects sparse relative-left fits when authored media changes position during the sweep', async () => {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		const copy = await browser.newPage();
+		try {
+			await page.setContent( `<style>body{margin:0}.item{position:relative;height:20px}#authored{left:10vw}@media(min-width:600px) and (max-width:700px){.item{position:static}}@media(max-width:599px){#authored{left:20vw}}</style>
+				<div id="runtime" class="item" style="width:720px;left:360px">Runtime</div><div id="authored" class="item" style="width:720px">Authored</div>
+				<script>const update=()=>{document.querySelectorAll('.item').forEach(node=>node.style.width=innerWidth/2+'px');document.querySelector('#runtime').style.left=innerWidth/4+'px'};addEventListener('resize',update);update();</script>` );
+			await learnAndApplyFluidGeometry( page, { widths: [ 390, 601, 768, 1024, 1440 ], settleMs: 30, learnRelativeOffsets: true } );
+			expect( await page.locator( '#runtime' ).evaluate( node => ( node as HTMLElement ).style.left ) ).toBe( '360px' );
+			expect( await page.locator( '#authored' ).evaluate( node => ( node as HTMLElement ).style.left ) ).toBe( '' );
+			await page.locator( 'script' ).evaluateAll( nodes => nodes.forEach( node => node.remove() ) );
+			await copy.setContent( await page.content() );
+			for ( const width of [ 390, 601, 768, 1024, 1440 ] ) {
+				await copy.setViewportSize( { width, height: 900 } );
+				const geometry = await copy.locator( '#authored' ).evaluate( node => ( { position: getComputedStyle( node ).position, x: node.getBoundingClientRect().x } ) );
+				expect( geometry.position ).toBe( width === 601 ? 'static' : 'relative' );
+				expect( geometry.x ).toBeCloseTo( width === 601 ? 0 : width * ( width === 390 ? 0.2 : 0.1 ), 1 );
+			}
+		} finally { await page.close(); await copy.close(); }
+	}, 20_000 );
+
+	it( 'verifies relative-left container fits against horizontal position rather than unchanged element width', async () => {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		const reference = await browser.newPage(), copy = await browser.newPage();
+		const html = `<style>body{margin:0}#parent{width:50vw;padding:40px}#item{position:relative;width:60px;height:20px}</style><div id="parent"><div id="item" style="left:400px">Offset</div></div>
+			<script>const update=()=>document.querySelector('#item').style.left=document.querySelector('#parent').clientWidth/2+'px';addEventListener('resize',update);update();</script>`;
+		try {
+			await page.setContent( html ); await reference.setContent( html );
+			await learnAndApplyFluidGeometry( page, { widths: [ 390, 768, 1440 ], settleMs: 30, learnRelativeOffsets: true } );
+			expect( await page.locator( '#item' ).evaluate( node => ( node as HTMLElement ).style.left ) ).not.toContain( '%' );
+			await page.locator( 'script' ).evaluateAll( nodes => nodes.forEach( node => node.remove() ) );
+			await copy.setContent( await page.content() );
+			for ( const width of [ 390, 768, 1440 ] ) {
+				await reference.setViewportSize( { width, height: 900 } ); await reference.waitForTimeout( 30 );
+				await copy.setViewportSize( { width, height: 900 } );
+				expect( await copy.locator( '#item' ).boundingBox() ).toEqual( await reference.locator( '#item' ).boundingBox() );
+			}
+		} finally { await page.close(); await reference.close(); await copy.close(); }
+	}, 20_000 );
+
+	it( 'verifies segmented relative-left rules at the original phase and every bounded width', async () => {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		const reference = await browser.newPage(), copy = await browser.newPage();
+		const html = `<style>body{margin:0}.track{width:300vw}.slide{position:relative;float:left;width:100vw;height:30px}.slide:not(.active){opacity:0}</style><div class="track">${ [ 0, 1, 2 ].map( index => `<div class="slide ${ index === 2 ? 'active' : '' }" data-phase="${ index }" style="left:${ -index * 1440 }px">Phase ${ index }</div>` ).join( '' ) }</div>
+			<script>const update=()=>document.querySelectorAll('.slide').forEach((node,index)=>node.style.left=(-index*innerWidth*(innerWidth<=768?1:0.5))+'px');addEventListener('resize',update);update();</script>`;
+		try {
+			await page.setContent( html ); await reference.setContent( html );
+			const originalBox = await page.locator( '.active' ).boundingBox();
+			await learnAndApplyFluidGeometry( page, { widths: [ 390, 601, 768, 769, 1024, 1440 ], settleMs: 30, learnRelativeOffsets: true } );
+			const learnedBox = ( await page.locator( '.active' ).boundingBox() )!;
+			expect( { ...learnedBox, x: originalBox!.x } ).toEqual( originalBox );
+			expect( Math.abs( learnedBox.x - originalBox!.x ) ).toBeLessThanOrEqual( 2 );
+			await page.locator( 'script' ).evaluateAll( nodes => nodes.forEach( node => node.remove() ) );
+			await copy.setContent( await page.content() );
+			for ( const width of [ 390, 601, 768, 769, 1024, 1440 ] ) {
+				await reference.setViewportSize( { width, height: 900 } ); await reference.waitForTimeout( 30 );
+				await copy.setViewportSize( { width, height: 900 } );
+				expect( await copy.locator( '.active' ).getAttribute( 'data-phase' ) ).toBe( '2' );
+				const actual = ( await copy.locator( '.active' ).boundingBox() )!;
+				const expected = ( await reference.locator( '.active' ).boundingBox() )!;
+				expect( { ...actual, x: expected.x }, `phase dimensions at ${ width }px` ).toEqual( expected );
+				expect( Math.abs( actual.x - expected.x ), `phase offset at ${ width }px` ).toBeLessThanOrEqual( 2 );
+			}
+		} finally { await page.close(); await reference.close(); await copy.close(); }
+	}, 20_000 );
+
+	it.each( [ false, true ] )( 'restores baseline source geometry and viewport around ordered preparation callbacks (reject: %s)', async reject => {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		try {
+			await page.setContent( `<div id="item" style="position:relative;width:720px!important;left:144px"></div><div id="untagged"></div>
+				<script>addEventListener('resize',()=>{document.querySelector('#item').style.setProperty('width',innerWidth/2+'px','important');document.querySelector('#item').style.left=innerWidth/10+'px';document.querySelector('#untagged').style.height=innerWidth/3+'px'});</script>` );
+			// Let the new page's initial resize finish before establishing the fixture baseline.
+			await page.waitForTimeout( 50 );
+			await page.locator( '#untagged' ).evaluate( node => node.removeAttribute( 'style' ) );
+			expect( await page.locator( '#untagged' ).getAttribute( 'style' ) ).toBeNull();
+			const declaredGeometry = () => page.locator( '#item' ).evaluate( node => {
+				const style = ( node as HTMLElement ).style;
+				return { position: style.position, width: style.width, widthPriority: style.getPropertyPriority( 'width' ), left: style.left };
+			} );
+			const initialStyle = await declaredGeometry();
+			const order: string[] = [];
+			const learning = learnAndApplyFluidGeometry( page, {
+				widths: [ 390, 768 ], settleMs: 30, learnRelativeOffsets: true,
+				prepareViewport: async current => {
+					const width = current.viewportSize()!.width;
+					expect( await current.locator( '#item' ).evaluate( node => node.getBoundingClientRect().width ) ).toBe( width / 2 );
+					order.push( `prepare:${ width }` );
+					if ( reject && width === 768 ) throw new Error( 'Preparation rejected' );
+				},
+				onProgress: width => { order.push( `sample:${ width }` ); },
+			} );
+			if ( reject ) await expect( learning ).rejects.toThrow( 'Preparation rejected' );
+			else await learning;
+			expect( order ).toEqual( reject ? [ 'prepare:390', 'sample:390', 'prepare:768' ] : [ 'prepare:390', 'sample:390', 'prepare:768', 'sample:768' ] );
+			expect( page.viewportSize() ).toEqual( { width: 1440, height: 900 } );
+			expect( await page.locator( '#untagged' ).getAttribute( 'style' ) ).toBeNull();
+			expect( await page.locator( '[data-dla-fluid-id]' ).count() ).toBe( 0 );
+			if ( reject ) {
+				expect( await declaredGeometry() ).toEqual( initialStyle );
+				expect( await page.locator( '[data-dla-fluid-segment],style[data-dla-fluid-rules]' ).count() ).toBe( 0 );
+			}
+		} finally { await page.close(); }
+	}, 20_000 );
+
 	it( 'preserves fractional constant typography through learning and static serialization', async () => {
 		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
 		const copy = await browser.newPage();
