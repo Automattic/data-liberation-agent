@@ -478,7 +478,29 @@ export async function capturePageHtml( page: Page ): Promise< string > {
 				}
 			}
 			try {
-				return `<!DOCTYPE html>${ document.documentElement.outerHTML }`;
+				// Freeze native control properties on a detached snapshot. Updating live
+				// attributes would also change defaults (and can change radio peers or
+				// select options), contaminating later probes and source observations.
+				const snapshot = document.documentElement.cloneNode( true ) as HTMLElement;
+				const controls = document.documentElement.querySelectorAll( 'input, textarea, option' );
+				const copies = snapshot.querySelectorAll( 'input, textarea, option' );
+				controls.forEach( ( control, index ) => {
+					const copy = copies[ index ]!;
+					if ( control instanceof HTMLInputElement ) {
+						if ( control.type === 'checkbox' || control.type === 'radio' ) {
+							copy.toggleAttribute( 'checked', control.checked );
+						} else if ( control.type !== 'file' && control.value !== control.defaultValue ) {
+							copy.setAttribute( 'value', control.value );
+						}
+					} else if ( control instanceof HTMLTextAreaElement ) {
+						// HTML parsing consumes one LF immediately after this start tag.
+						const text = control.value.startsWith( '\n' ) ? '\n' + control.value : control.value;
+						if ( text !== control.textContent ) copy.textContent = text;
+					} else if ( control instanceof HTMLOptionElement ) {
+						copy.toggleAttribute( 'selected', control.selected );
+					}
+				} );
+				return `<!DOCTYPE html>${ snapshot.outerHTML }`;
 			} finally {
 				for ( const boundary of textBoundaries ) boundary.remove();
 				for ( const { image, previous } of restoredImages.reverse() ) {
