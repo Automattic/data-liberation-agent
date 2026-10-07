@@ -498,40 +498,21 @@ export async function observePage(
 			} > = [];
 			const canvas = document.createElement( 'canvas' );
 			const context = canvas.getContext( '2d' );
-			const walker = document.createTreeWalker( document.body, NodeFilter.SHOW_TEXT );
-			const measuredParents = new Set< Element >();
-			let textNode: Node | null;
-			while ( typography.length < 120 && ( textNode = walker.nextNode() ) ) {
-				const parent = textNode.parentElement;
-				if (
-					parent &&
-					parent.childNodes.length > 1 &&
-					[ ...parent.childNodes ].every( ( node ) => node.nodeType === Node.TEXT_NODE )
-				) {
-					if ( measuredParents.has( parent ) ) continue;
-					measuredParents.add( parent );
-				}
-				const text = ( parent && measuredParents.has( parent ) ? parent.textContent : textNode.textContent ?? '' )
-					.replace( /\s+/g, ' ' )
-					.trim();
-				if ( ! parent || ! text || parent.closest( 'script,style,noscript,template' ) ) continue;
-				const range = document.createRange();
-				range.selectNodeContents( parent && measuredParents.has( parent ) ? parent : textNode );
-				const rect = range.getBoundingClientRect();
-				const style = getComputedStyle( parent );
-				const parentRect = parent.getBoundingClientRect();
-				const clippedLabel = parentRect.width <= 1.5 && parentRect.height <= 1.5 &&
-					( style.position === 'absolute' || style.position === 'fixed' ) &&
-					( style.overflow === 'hidden' || style.clip !== 'auto' || style.clipPath !== 'none' );
-				if (
-					rect.width <= 0 ||
-					rect.height <= 0 ||
-					clippedLabel ||
-					style.display === 'none' ||
-					style.visibility === 'hidden'
-				) {
-					continue;
-				}
+			// Canonicalize painted inline flow, not DOM serialization boundaries.
+			// Keep raw whitespace until the complete run is assembled; comments and
+			// equivalent inline wrappers add no glyphs, while blocks/replaced boxes,
+			// positioning and style changes must remain separate observations.
+			const styleProperties = [ 'fontFamily', 'fontStyle', 'fontWeight', 'fontSize', 'lineHeight', 'letterSpacing',
+				'fontStretch', 'fontVariant', 'fontFeatureSettings', 'fontVariationSettings', 'fontKerning',
+				'whiteSpace', 'textTransform', 'wordSpacing', 'direction', 'writingMode', 'verticalAlign',
+				'color', 'textDecorationLine', 'textDecorationStyle', 'textDecorationColor' ] as const;
+			let run: { text: string; style: CSSStyleDeclaration; signature: string; last: DOMRect; width: number } | undefined;
+			const flush = () => {
+				if ( ! run ) return;
+				const { style, width } = run;
+				const text = run.text.replace( /\s+/g, ' ' ).trim();
+				run = undefined;
+				if ( ! text || typography.length >= 120 ) return;
 				const fontSize = Number.parseFloat( style.fontSize ) || 0;
 				const font = `${ style.fontStyle } ${ style.fontWeight } ${ style.fontSize } ${ style.fontFamily }`;
 				if ( context ) context.font = font;
@@ -542,10 +523,70 @@ export async function observePage(
 					fontSize,
 					lineHeight: Number.parseFloat( style.lineHeight ) || fontSize * 1.2,
 					letterSpacing: Number.parseFloat( style.letterSpacing ) || 0,
-					advance: Math.round( ( context?.measureText( text ).width ?? rect.width ) * 100 ) / 100,
+					advance: Math.round( ( context?.measureText( text ).width ?? width ) * 100 ) / 100,
 					loaded: document.fonts.check( font, text ),
 				} );
-			}
+			};
+			const visit = ( node: Node ) => {
+				if ( typography.length >= 120 ) return;
+				if ( node.nodeType === Node.COMMENT_NODE ) return;
+				if ( node instanceof Element ) {
+					const style = getComputedStyle( node );
+					if ( node.matches( 'script,style,noscript,template' ) || style.display === 'none' || style.visibility === 'hidden' ) {
+						flush();
+						return;
+					}
+					const inline = ( style.display === 'inline' || style.display === 'contents' ) &&
+						style.position === 'static' && style.cssFloat === 'none' && style.transform === 'none' &&
+						style.translate === 'none' && style.rotate === 'none' && style.scale === 'none' &&
+						[ style.marginLeft, style.marginRight, style.paddingLeft, style.paddingRight, style.borderLeftWidth, style.borderRightWidth ]
+							.every( value => Number.parseFloat( value ) === 0 );
+					const boundary = ! inline || ! node.childNodes.length;
+					if ( boundary ) flush();
+					for ( const child of node.childNodes ) visit( child );
+					if ( boundary ) flush();
+					return;
+				}
+				const parent = node.parentElement;
+				if ( node.nodeType !== Node.TEXT_NODE || ! parent || ! node.textContent ) return;
+				const range = document.createRange();
+				range.selectNodeContents( node );
+				const rect = range.getBoundingClientRect();
+				const style = getComputedStyle( parent );
+				const signature = JSON.stringify( styleProperties.map( property => style[ property ] ) );
+				const parentRect = parent.getBoundingClientRect();
+				const clippedLabel = parentRect.width <= 1.5 && parentRect.height <= 1.5 &&
+					( style.position === 'absolute' || style.position === 'fixed' ) &&
+					( style.overflow === 'hidden' || style.clip !== 'auto' || style.clipPath !== 'none' );
+				// A collapsed inter-word space at a soft wrap has no painted width,
+				// but still separates words in the canonical text of this flow.
+				if ( rect.width === 0 && /^\s+$/.test( node.textContent ) && ! clippedLabel ) {
+					if ( run?.signature === signature ) run.text += node.textContent;
+					else flush();
+					return;
+				}
+				if (
+					rect.width <= 0 ||
+					rect.height <= 0 ||
+					clippedLabel ||
+					style.display === 'none' ||
+					style.visibility === 'hidden'
+				) {
+					flush();
+					return;
+				}
+				const rects = [ ...range.getClientRects() ].filter( part => part.width > 0 && part.height > 0 );
+				const first = rects[ 0 ] ?? rect;
+				const last = rects.at( -1 ) ?? rect;
+				const adjacent = ! run || ( style.writingMode === 'horizontal-tb' && style.direction === 'ltr' &&
+					( Math.abs( first.y - run.last.y ) < 1 ? Math.abs( first.left - run.last.right ) <= 2 :
+						first.y > run.last.y && first.y - run.last.y <= ( Number.parseFloat( style.lineHeight ) || rect.height * 1.2 ) + 2 ) );
+				if ( run && ( run.signature !== signature || ! adjacent ) ) flush();
+				if ( run ) { run.text += node.textContent; run.last = last; run.width += rect.width; }
+				else run = { text: node.textContent, style, signature, last, width: rect.width };
+			};
+			visit( document.body );
+			flush();
 
 			const occurrencesBefore = new Map< string, number >();
 			const animationsBefore = document
