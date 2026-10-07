@@ -15,6 +15,16 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.20.2] - 2026-10-07
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- exclude copied popup nodes from source trigger wiring
+- preserve source device documents and profile identity
+- handle removed nodes during fluid transform validation
+
 ## [0.20.1] - 2026-10-07
 
 ### Changed
