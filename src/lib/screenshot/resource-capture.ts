@@ -8,6 +8,7 @@ import { identityLogoReferences } from '../identity-resources.js';
 import { decodeCssUrl } from '../css-url-escapes.js';
 import { srcsetReferences } from '../srcset.js';
 import { MAX_REDIRECTS, safeFetch, type SafeFetchResult } from '../media-fetch/safe-fetch.js';
+import { uniqueAssetPath } from '../portable-assets.js';
 import type { Page, Request, Response } from 'playwright';
 
 const CAPTURED_RESOURCE_TYPES = new Set( [
@@ -234,9 +235,12 @@ function resourcePath( url: URL, contentType = '', sourceOrigin?: string ): stri
 		[ 'image/png', '.png' ],
 		[ 'image/svg+xml', '.svg' ],
 		[ 'image/webp', '.webp' ],
+		[ 'text/css', '.css' ],
 	] ).get( contentType.split( ';', 1 )[ 0 ].trim().toLowerCase() );
-	// CDNs can transcode a URL ending in .png to WebP. Store the response under
-	// its declared format so a static server supplies a matching MIME type offline.
+	// CDNs can transcode a URL ending in .png to WebP, and build pipelines serve
+	// compiled CSS from `.scss`/`.less`/`.php` names. Store the response under
+	// its declared format so a static server supplies a matching MIME type
+	// offline; standards-mode browsers ignore a stylesheet that is not text/css.
 	const pathWithSuffix = /\.[a-z0-9]+$/i.test( cleanPath )
 		? cleanPath.replace( /(\.[a-z0-9]+)$/i, `${ querySuffix }${ extension ?? '$1' }` )
 		: undefined;
@@ -342,6 +346,8 @@ export class CapturedResourceStore {
 		string,
 		{ manifestPath: string; destination: string; contentType: string }
 	>();
+	// Manifest-relative path written this run → sha256 of the body stored there.
+	private readonly storedPaths = new Map< string, string >();
 	private replayDir?: string;
 	private replayBytes = 0;
 	private capturedBytes = 0;
@@ -773,13 +779,20 @@ export class CapturedResourceStore {
 			this.replayResources.set( url, { path: stored.destination, contentType: stored.contentType } );
 			return;
 		}
+		// Two different responses can share one declared-format name (`main.scss`
+		// and `main.css` both served as text/css; two CDN variants transcoded to
+		// WebP). Suffix the later one instead of overwriting the first.
+		const requestedPath = relativePath.replace( /\\/g, '/' );
+		const storedPath = uniqueAssetPath( requestedPath, contentHash, this.storedPaths );
+		const target = storedPath === requestedPath ? destination : resolve( this.resourceDir, storedPath );
 		this.reserveBytes( body.length );
-		mkdirSync( dirname( destination ), { recursive: true } );
-		writeFileSync( destination, body );
-		const manifestPath = `resources/${ relativePath.replace( /\\/g, '/' ) }`;
-		this.storedContent.set( contentHash, { manifestPath, destination, contentType } );
+		mkdirSync( dirname( target ), { recursive: true } );
+		writeFileSync( target, body );
+		const manifestPath = `resources/${ storedPath }`;
+		this.storedPaths.set( storedPath, contentHash );
+		this.storedContent.set( contentHash, { manifestPath, destination: target, contentType } );
 		this.manifest.resources[ url ] = { path: manifestPath, contentType };
-		this.replayResources.set( url, { path: destination, contentType } );
+		this.replayResources.set( url, { path: target, contentType } );
 	}
 
 	/**

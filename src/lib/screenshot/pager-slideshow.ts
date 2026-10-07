@@ -97,7 +97,10 @@ export function preserveCapturedSlides( { index, slides }: { index: number; slid
 	if ( ! stage || slides.length < 2 ) return;
 
 	const fragment = document.createDocumentFragment();
-	for ( const [ position, html ] of slides.entries() ) {
+	// Runs inside the page: index the array rather than rely on
+	// Array.prototype.entries, which a legacy page library may have replaced.
+	for ( let position = 0; position < slides.length; position++ ) {
+		const html = slides[ position ]!;
 		const template = document.createElement( 'template' );
 		template.innerHTML = html;
 		const slide = template.content.firstElementChild;

@@ -58,6 +58,27 @@ it.skipIf( skipBrowser )( 'keeps a shared ancestor open until its last source co
 	} finally { await browser.close(); }
 }, 30_000 );
 
+// Prototype.js replaces Array.from with a copy that only reads `length`, so a
+// Set becomes []. The ancestor diff runs inside the page and must still see
+// the changed attributes.
+it.skipIf( skipBrowser )( 'records ancestor changes when the page library replaced Array.from', async () => {
+	const browser = await chromium.launch( { headless: true } );
+	const page = await browser.newPage( { viewport: { width: 390, height: 844 } } );
+	try {
+		await page.setContent( `<script>Array.from = function ( iterable ) {
+			if ( ! iterable ) return [];
+			if ( 'toArray' in Object( iterable ) ) return iterable.toArray();
+			var length = iterable.length || 0, results = new Array( length );
+			while ( length-- ) results[ length ] = iterable[ length ];
+			return results;
+		};</script>${ fixture() }` );
+		expect( await page.evaluate( () => Array.from( new Set( [ 1, 2 ] ) ).length ) ).toBe( 0 );
+		const report = await captureTriggeredDialogs( page, 'https://example.test/' );
+		const state = report.states.find( item => item.trigger.id === 'a' );
+		expect( state?.dialog?.ancestorState ).toMatchObject( { status: 'verified', ancestors: [ { selector: '#header', closed: { class: 'closed' }, opened: { class: 'opened' } } ] } );
+	} finally { await browser.close(); }
+}, 30_000 );
+
 it.skipIf( skipBrowser )( 'does not overwrite an ancestor edited after its captured proof', async () => {
 	const browser = await chromium.launch( { headless: true } );
 	const page = await browser.newPage();

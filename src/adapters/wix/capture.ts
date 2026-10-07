@@ -8,6 +8,34 @@ import { resolveEventFormRedirect } from './event-forms.js';
 import { providerCreditRules } from '../../lib/source-cleanup.js';
 import type { Locator, Page } from 'playwright';
 import { canonicalizeWixCapturedHtml } from './instance-ids.js';
+import { markMemberLoginControls, MEMBER_LOGIN_ATTRIBUTE, MEMBER_LOGIN_CLASS_PREFIX } from '../../lib/member-login.js';
+import { portWixRuntimeEmbeds } from './embeds.js';
+
+/**
+ * Wix Members sign-in entry points: the login bar's button, which opens the
+ * members dialog removed by `wix-members-dialog`, and links into the members
+ * area, which a visitor only reaches through that login.
+ */
+export const WIX_MEMBER_LOGIN = {
+	provider: 'wix',
+	controls: '.wixui-login-social-bar [data-testid="handle-button"]',
+};
+
+/**
+ * Where the Wix members area lives for a captured route. A connected domain
+ * serves it at `/account/`; a free `<user>.wixsite.com/<site>/` serves the
+ * whole site under its first path segment, members area included.
+ */
+export function wixMemberPaths( url: string ): string[] {
+	try {
+		const parsed = new URL( url );
+		const site = parsed.pathname.split( '/' ).filter( Boolean )[ 0 ];
+		if ( /(?:^|\.)wixsite\.com$/i.test( parsed.hostname ) && site ) return [ `/${ site }/account/` ];
+	} catch {
+		/* fall through to the connected-domain layout */
+	}
+	return [ '/account/' ];
+}
 
 /** Wix media ids look like `8e80e7_a1b2…`, stable across crops of one asset. */
 const WIX_MEDIA_ID = /([a-z0-9]{4,12}_[a-z0-9]{24,48})/i;
@@ -94,7 +122,10 @@ export function preserveWixSlideshowSlides(
 	if ( ! slideshow || ! wrapper || slides.length < 2 ) return;
 
 	const fragment = document.createDocumentFragment();
-	for ( const [ index, html ] of slides.entries() ) {
+	// Runs inside the page: index the array rather than rely on
+	// Array.prototype.entries, which a page library may have replaced.
+	for ( let index = 0; index < slides.length; index++ ) {
+		const html = slides[ index ]!;
 		const template = document.createElement( 'template' );
 		template.innerHTML = html;
 		const slide = template.content.firstElementChild;
@@ -453,6 +484,11 @@ export const capture: LiberationHooks = {
     { id: 'wix-members-gate', category: 'provider-service',
       selector: '[data-testid="siteMembersDialogBlockingLayer"]', accessGate: { provider: 'Wix' } },
     { id: 'wix-members-dialog', category: 'provider-service', selector: '[data-testid="siteMembersDialogLayout"]' },
+    // Wix mirrors its response headers into <meta http-equiv="X-Wix-…">: the
+    // owner's metaSiteId, the app instance id and the published revision. They
+    // are Wix account identifiers, not page metadata, and a copy would publish
+    // them on every page (and in the importer's report).
+    { id: 'wix-site-identifiers', category: 'source-attribution', selector: 'meta[http-equiv^="X-Wix-" i]' },
   ],
 	removeSelectors: [ '[id="WIX_ADS"]', '[id$="-hiddenA11ySubMenuIndication"]' ],
 	/**
@@ -800,10 +836,20 @@ export const capture: LiberationHooks = {
 	 * Fluid learning resizes the page after prepare. Collect slideshows on the
 	 * DOM that is about to be frozen so a late-hydrated widget is not lost.
 	 */
-	beforeSerialize: async ( page ) => {
+	beforeSerialize: async ( page, ctx ) => {
 		await revealAndCollectWixSlideshows( page );
-		// Revealing a slideshow scrolls, so the chrome is settled last of all.
+		// Maps and App Market widgets only work inside Wix's viewer (see embeds.ts).
+		await portWixRuntimeEmbeds( page ).catch( () => undefined );
+		// Revealing a slideshow scrolls, so the chrome is settled after it.
 		await settleScrollReactiveChrome( page );
+		// The members dialog is gone, so the controls that opened it are marked
+		// for the destination to point at its own login (see member-login.ts).
+		// Last of all, so a scroll-driven rerender cannot drop the marker
+		// before the freeze.
+		await page.evaluate( markMemberLoginControls, {
+			...WIX_MEMBER_LOGIN, memberPaths: wixMemberPaths( ctx.url ),
+			attribute: MEMBER_LOGIN_ATTRIBUTE, classPrefix: MEMBER_LOGIN_CLASS_PREFIX,
+		} ).catch( () => 0 );
 	},
 
 	/**

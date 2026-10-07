@@ -69,6 +69,45 @@ function declaresCanonicalRoute( entry: RouteEntry, claimed: RouteEntry ): boole
 	return normalizedUrl( entry.canonicalUrl ) === claimedCanonical;
 }
 
+export interface RouteDiagnostic {
+	code: string;
+	url: string;
+	reason: string;
+}
+
+function documentIdentity( url: string ): string | undefined {
+	try {
+		return normalizedUrl( url );
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * Why the capture holds no rendered page for the source URL, from what the
+ * capture itself recorded: a failed or absent route, or a server redirect to
+ * another route. Undefined when nothing explains the absence.
+ */
+function entrypointAbsenceReason(
+	sourceUrl: string,
+	capturedIdentities: ReadonlySet< string >,
+	redirectAliases: ReadonlyArray< { url: string; target: string } >,
+	routeDiagnostics: ReadonlyArray< RouteDiagnostic >
+): string | undefined {
+	const sourceIdentity = normalizedUrl( sourceUrl );
+	const recorded = routeDiagnostics.find( ( { url } ) => documentIdentity( url ) === sourceIdentity );
+	if ( recorded ) return `Source homepage ${ sourceUrl } was not captured: ${ recorded.reason }`;
+	const redirect = redirectAliases.find( ( { url } ) => documentIdentity( url ) === sourceIdentity );
+	if ( ! redirect ) return undefined;
+	const targetIdentity = documentIdentity( redirect.target );
+	if ( targetIdentity === undefined )
+		return `Source homepage ${ sourceUrl } redirects to ${ redirect.target }, which was not captured`;
+	if ( capturedIdentities.has( targetIdentity ) )
+		return `Source homepage ${ sourceUrl } redirects to ${ redirect.target }, which was captured as a separate route`;
+	const targetRecord = routeDiagnostics.find( ( { url } ) => documentIdentity( url ) === targetIdentity );
+	return `Source homepage ${ sourceUrl } redirects to ${ redirect.target }, which was not captured${ targetRecord ? `: ${ targetRecord.reason }` : '' }`;
+}
+
 export interface RouteStage<T extends RouteEntry> {
 	entrypointUrl: string;
 	entrypointEntry: T;
@@ -85,15 +124,27 @@ export interface RouteStage<T extends RouteEntry> {
 export function allocateCaptureRoutes<T extends RouteEntry>(
 	capturedEntries: T[],
 	sourceUrl: string,
-	redirectAliases: Array< { url: string; target: string } >
+	redirectAliases: Array< { url: string; target: string } >,
+	routeDiagnostics: ReadonlyArray< RouteDiagnostic > = []
 ): RouteStage<T> {
 	const normalizedSourceUrl = normalizedUrl( sourceUrl );
 	const exactEntrypointCandidates = capturedEntries.filter( ( { url } ) => normalizedUrl( url ) === normalizedSourceUrl );
 	const entrypointCandidates = exactEntrypointCandidates.length > 0
 		? exactEntrypointCandidates
 		: capturedEntries.filter( ( { canonicalUrl } ) => canonicalUrl !== undefined && normalizedUrl( canonicalUrl ) === normalizedSourceUrl );
-	if ( entrypointCandidates.length !== 1 )
-		throw new Error( `Capture does not identify one rendered homepage for the source URL: ${ sourceUrl }` );
+	if ( entrypointCandidates.length !== 1 ) {
+		// A homepage the capture recorded as failed, absent or redirected is not
+		// an ambiguous homepage: report the recorded cause so the caller sees it.
+		const absence = entrypointCandidates.length === 0
+			? entrypointAbsenceReason(
+				sourceUrl,
+				new Set( capturedEntries.map( ( { url } ) => normalizedUrl( url ) ) ),
+				redirectAliases,
+				routeDiagnostics
+			)
+			: undefined;
+		throw new Error( absence ?? `Capture does not identify one rendered homepage for the source URL: ${ sourceUrl }` );
+	}
 	const entrypointUrl = entrypointCandidates[ 0 ].url;
 	const originRootCaptured = capturedOriginRoot( capturedEntries.map( ( entry ) => entry.url ), new URL( sourceUrl ).origin );
 	const naturalRoutePath = ( url: string ) => routeOutputPath( url, sourceUrl, entrypointUrl, originRootCaptured ).replace( /\\/g, '/' );
