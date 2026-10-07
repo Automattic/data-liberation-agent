@@ -181,7 +181,7 @@ interface CaptureReceipt {
 	sourceInteractivity?: { schema: string; path: string; unreproduced_route_count: number };
 	source?: { url?: string };
 	websiteRoot?: string;
-	routes?: Array< { url?: string; path?: string } >;
+	routes?: Array< { url?: string; path?: string; accessGate?: unknown } >;
 	duplicateRoutes?: Array< { url?: string; canonicalUrl?: string; path?: string } >;
 }
 
@@ -1014,12 +1014,23 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 		log( `[compare] cleanup unproven for ${ unproven.size } route(s), excluded from source comparison: ${ [ ...unproven ].sort().join( ', ' ) }` );
 	}
 
+	// A provider-gated route was captured as a placeholder over the site shell
+	// (see access-gate.ts). The live source only ever shows its login there, so
+	// replaying it would report the placeholder itself as drift.
+	const gatedUrls = new Set( ( receipt.routes ?? [] ).filter( ( route ) => route?.accessGate && route.url ).map( ( route ) => route.url! ) );
+	const gated = [ ...sources ].filter( ( [ , url ] ) => gatedUrls.has( url ) ).map( ( [ route ] ) => route );
+	for ( const route of gated ) sources.delete( route );
+	if ( gated.length > 0 ) {
+		log( `[compare] ${ gated.length } access-gated route(s) were captured as placeholders and are not compared against the live source: ${ gated.sort().join( ', ' ) }` );
+	}
+
 	const captured = [ ...sources.keys() ].sort( ( left, right ) =>
 		left === '/' ? -1 : right === '/' ? 1 : left.localeCompare( right )
 	);
 	const requested = options.routes?.map( canonicalRoutePath );
 	for ( const route of requested ?? [] ) {
 		if ( sources.has( route ) ) continue;
+		if ( gated.includes( route ) ) throw new Error( `Route ${ route } was captured as an access-gate placeholder; the live source cannot be compared` );
 		throw new Error(
 			`Route ${ route } was not captured. Captured routes: ${ captured.join( ', ' ) }`
 		);

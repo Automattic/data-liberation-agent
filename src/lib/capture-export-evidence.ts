@@ -52,7 +52,7 @@ export interface CaptureEvidenceInput {
 		hasMobileDocument?: boolean;
 	} >;
 	routes: {
-		retained: ReadonlyArray< { url: string; path: string; responsiveVariants?: ResponsiveVariantEvidence; fluidGeometry?: CaptureDocumentFluidEvidence } >;
+		retained: ReadonlyArray< { url: string; path: string; responsiveVariants?: ResponsiveVariantEvidence; fluidGeometry?: CaptureDocumentFluidEvidence; accessGate?: import( './access-gate.js' ).AccessGateEvidence } >;
 		excluded: ReadonlyArray< string >;
 		duplicates: ReadonlyArray< { url: string; canonicalUrl: string; path: string } >;
 	};

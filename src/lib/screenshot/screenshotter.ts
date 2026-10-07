@@ -10,7 +10,8 @@ import { SectionSpecsStore } from '../replicate/section-specs-store.js';
 import { slugify } from '../url/index.js';
 import { SiteAnalysisAggregator } from './aggregator.js';
 import { applyCaptureRemovals } from './apply-removals.js';
-import { applySourceCleanup, readSourceCleanup, sweepSourceCleanup, cleanupPolicy, type CleanupPolicy } from '../source-cleanup.js';
+import { accessGateRemoval, applySourceCleanup, readSourceCleanup, sweepSourceCleanup, cleanupPolicy, type CleanupPolicy } from '../source-cleanup.js';
+import { accessGateNote, installAccessGatePlaceholder, openAccessGateShell, routeKeptContent, type AccessGateEvidence } from '../access-gate.js';
 import { captureChromeFidelity } from './capture-chrome-fidelity.js';
 import { CssAggregator } from './css-aggregator.js';
 import { CSS_SHORTHAND_REPAIR_FACTORY_SOURCE } from './css-shorthand-repair.js';
@@ -865,6 +866,28 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 
 	// --- settle, dismiss overlays, lazy load ----------------------------------
 	await waitForStable( page, settleMs );
+	// A provider login withholding the whole route (a members-only page) was
+	// removed by the policy, leaving nothing of the page. Capture it as a
+	// placeholder inside the site's public shell instead (see access-gate.ts).
+	// Read before any probe clicks, so a login pop-up a control opens later is
+	// never mistaken for a gated route.
+	let accessGate: AccessGateEvidence | undefined;
+	const gateRemoval = accessGateRemoval( await readSourceCleanup( page, sourcePolicy ), sourcePolicy );
+	const gate = gateRemoval && ! ( await routeKeptContent( page ) ) ? gateRemoval : undefined;
+	if ( gate ) {
+		const gateTitle = ( await page.title().catch( () => '' ) ).trim();
+		const shell = await openAccessGateShell( page, url );
+		if ( shell ) {
+			await applySourceCleanup( page, sourcePolicy );
+			await waitForStable( page, settleMs );
+		}
+		accessGate = { ...gate, ...( shell ? { shell } : {} ) };
+		const placed = await page.evaluate( installAccessGatePlaceholder, {
+			route: url, gateTitle, note: accessGateNote( gate.provider ), provider: gate.provider,
+		} );
+		accessGate.label = placed.label;
+		entry.accessGate = accessGate;
+	}
 	// Dismiss takeover modals / consent banners BEFORE lazy-load (a modal's
 	// scroll-lock would defeat the scroll-through) and again AFTER (scrolling can
 	// trigger exit-intent / scroll-depth popups). Best-effort: never fails capture.
