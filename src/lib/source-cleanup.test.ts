@@ -593,3 +593,28 @@ main{padding-top:var(--owner-gap)}
     await page.close();
   } finally { await browser.close(); }
 }, 20_000);
+
+it('removes Wix account identifiers mirrored into http-equiv meta tags, keeping owner metadata', async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage();
+    await page.setContent(`<!doctype html><html><head>
+<meta charset="utf-8">
+<meta http-equiv="X-Wix-Meta-Site-Id" content="83afeb95-b781-4368-b098-cdba2c774dd5">
+<meta http-equiv="X-Wix-Application-Instance-Id" content="67c011b9-61ac-4654-834f-967ce6c27439">
+<meta http-equiv="x-wix-published-version" content="155">
+<meta http-equiv="content-language" content="en">
+<meta name="description" content="Owner description">
+<title>Owner</title></head><body><main><h1>Owner business</h1></main></body></html>`);
+    await applySourceCleanup(page, policy);
+    const report = await readSourceCleanup(page);
+    const html = await page.evaluate(() => document.documentElement.outerHTML);
+    expect(html).not.toMatch(/X-Wix-/i);
+    expect(html).not.toContain('83afeb95-b781-4368-b098-cdba2c774dd5');
+    // Only Wix's own identifiers go: the owner's metadata stays.
+    expect(await page.locator('meta[http-equiv="content-language"]').count()).toBe(1);
+    expect(await page.locator('meta[name="description"]').count()).toBe(1);
+    expect(report.records.filter((record) => record.rule === 'wix-site-identifiers')).toHaveLength(3);
+    expect(report.failures).toEqual([]);
+  } finally { await browser.close(); }
+}, 20_000);

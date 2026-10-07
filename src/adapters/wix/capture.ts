@@ -9,6 +9,7 @@ import { providerCreditRules } from '../../lib/source-cleanup.js';
 import type { Locator, Page } from 'playwright';
 import { canonicalizeWixCapturedHtml } from './instance-ids.js';
 import { markMemberLoginControls, MEMBER_LOGIN_ATTRIBUTE, MEMBER_LOGIN_CLASS_PREFIX } from '../../lib/member-login.js';
+import { portWixRuntimeEmbeds } from './embeds.js';
 
 /**
  * Wix Members sign-in entry points: the login bar's button, which opens the
@@ -483,6 +484,11 @@ export const capture: LiberationHooks = {
     { id: 'wix-members-gate', category: 'provider-service',
       selector: '[data-testid="siteMembersDialogBlockingLayer"]', accessGate: { provider: 'Wix' } },
     { id: 'wix-members-dialog', category: 'provider-service', selector: '[data-testid="siteMembersDialogLayout"]' },
+    // Wix mirrors its response headers into <meta http-equiv="X-Wix-…">: the
+    // owner's metaSiteId, the app instance id and the published revision. They
+    // are Wix account identifiers, not page metadata, and a copy would publish
+    // them on every page (and in the importer's report).
+    { id: 'wix-site-identifiers', category: 'source-attribution', selector: 'meta[http-equiv^="X-Wix-" i]' },
   ],
 	removeSelectors: [ '[id="WIX_ADS"]', '[id$="-hiddenA11ySubMenuIndication"]' ],
 	/**
@@ -832,6 +838,8 @@ export const capture: LiberationHooks = {
 	 */
 	beforeSerialize: async ( page, ctx ) => {
 		await revealAndCollectWixSlideshows( page );
+		// Maps and App Market widgets only work inside Wix's viewer (see embeds.ts).
+		await portWixRuntimeEmbeds( page ).catch( () => undefined );
 		// Revealing a slideshow scrolls, so the chrome is settled after it.
 		await settleScrollReactiveChrome( page );
 		// The members dialog is gone, so the controls that opened it are marked
