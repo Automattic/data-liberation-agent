@@ -668,7 +668,7 @@ describe('fetchSitemap route identity', () => {
       expect(resolvePageLink('/group//entry', `${origin}/`, origin)).toBe(`${origin}/group//entry`);
       // A filesystem collision is explicit until source canonical/redirect
       // evidence proves an alias; discovery cannot substitute another page.
-      expect(() => allocateCaptureRoutes(urls.map(url => ({ url, htmlPath: '', jsonLd: [] })), `${origin}/`, []))
+      expect(() => allocateCaptureRoutes(urls.map(url => ({ url, htmlPath: '', sourceData: [] })), `${origin}/`, []))
         .toThrow('Captured routes resolve to the same website path');
     } finally {
       await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
