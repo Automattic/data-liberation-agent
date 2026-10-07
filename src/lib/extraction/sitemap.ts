@@ -34,6 +34,7 @@ export function parseSitemapDocument(xml: string): SitemapDocument {
 }
 
 import { canonicalizeHost } from '../screenshot/same-origin.js';
+import { normalizedUrl } from '../url/route-key.js';
 
 export function parseSitemapXml(xml: string): string[] {
   return parseSitemapDocument(xml).locs;
@@ -204,9 +205,12 @@ export async function fetchSitemapWithDiagnostics(baseUrl: string): Promise<Site
         if (document.kind === 'index' || pathPart.endsWith('.xml')) {
           await fetchAndParse(entryUrl.href, depth + 1);
         } else {
-          if (!seenUrls.has(entryUrl.href)) {
+          // Capture and export treat `/x` and `/x/` as one route. Keep the
+          // first form the sitemap lists so the two cannot collide at export.
+          const route = normalizedUrl(entryUrl.href);
+          if (!seenUrls.has(route)) {
             allUrls.push(entryUrl.href);
-            seenUrls.add(entryUrl.href);
+            seenUrls.add(route);
           }
         }
       }
@@ -278,11 +282,11 @@ export async function fetchSitemapWithDiagnostics(baseUrl: string): Promise<Site
   // Supplement with the homepage's links if sitemap was thin
   if (allUrls.length < 5) {
     const navUrls = await crawlHomepageLinks(normalizedBase, baseOrigin);
-    const seen = new Set(allUrls);
+    const seen = new Set(allUrls.map(normalizedUrl));
     for (const u of navUrls) {
-      if (!seen.has(u) && allUrls.length < MAX_URLS) {
+      if (!seen.has(normalizedUrl(u)) && allUrls.length < MAX_URLS) {
         allUrls.push(u);
-        seen.add(u);
+        seen.add(normalizedUrl(u));
       }
     }
 
@@ -291,11 +295,11 @@ export async function fetchSitemapWithDiagnostics(baseUrl: string): Promise<Site
     // routes to retain the inexpensive fetch path for ordinary sites.
     if (navUrls.length === 0) {
       const renderedNavUrls = await crawlRenderedNavLinks(normalizedBase, baseOrigin);
-      const seen = new Set(allUrls);
+      const seen = new Set(allUrls.map(normalizedUrl));
       for (const u of renderedNavUrls) {
-        if (!seen.has(u) && allUrls.length < MAX_URLS) {
+        if (!seen.has(normalizedUrl(u)) && allUrls.length < MAX_URLS) {
           allUrls.push(u);
-          seen.add(u);
+          seen.add(normalizedUrl(u));
         }
       }
     }

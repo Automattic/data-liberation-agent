@@ -634,3 +634,37 @@ describe('resolvePageLink', () => {
     ]);
   });
 });
+
+describe('fetchSitemap route identity', () => {
+  it('keeps one route when a sitemap lists a page with and without a trailing slash or with repeated slashes', async () => {
+    // Export writes `/x/`, `/x` and `//x` to the same file, so discovery must
+    // hand over one of them. Query renditions stay distinct.
+    const sitemap = `<urlset>
+      <url><loc>https://example.test/x/</loc></url>
+      <url><loc>https://example.test//x</loc></url>
+      <url><loc>https://example.test/x</loc></url>
+      <url><loc>https://example.test/x?lang=alt</loc></url>
+      <url><loc>https://example.test/y</loc></url>
+      <url><loc>https://example.test/y/</loc></url>
+      <url><loc>https://example.test/one</loc></url>
+      <url><loc>https://example.test/two</loc></url>
+    </urlset>`;
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => url === 'https://example.test/sitemap.xml'
+      ? new Response(sitemap, { status: 200 })
+      : new Response(null, { status: 404 })));
+
+    try {
+      const { urls, diagnostics } = await fetchSitemapWithDiagnostics('https://example.test/');
+      expect(urls).toEqual([
+        'https://example.test/x/',
+        'https://example.test/x?lang=alt',
+        'https://example.test/y',
+        'https://example.test/one',
+        'https://example.test/two',
+      ]);
+      expect(diagnostics).toEqual([]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
