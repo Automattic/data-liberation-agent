@@ -85,11 +85,14 @@ export function installAccessGatePlaceholder( args: { route: string; gateTitle: 
 	const section = document.createElement( 'section' );
 	section.setAttribute( 'data-dla-access-gate', args.provider.toLowerCase() );
 	section.style.cssText = 'max-width:720px;margin:64px auto;padding:0 24px;box-sizing:border-box';
+	// Explicit sizes: builders often set a tiny root font size and size text per component.
 	const heading = document.createElement( 'h1' );
 	heading.textContent = label;
+	heading.style.cssText = 'font-size:32px;line-height:1.25;margin:0 0 16px';
 	if ( headingFont ) heading.style.fontFamily = headingFont;
 	const note = document.createElement( 'p' );
 	note.textContent = args.note;
+	note.style.cssText = 'font-size:18px;line-height:1.5;margin:0';
 	if ( bodyFont ) note.style.fontFamily = bodyFont;
 	section.append( heading, note );
 	main.replaceChildren( section );
