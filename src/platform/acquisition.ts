@@ -8,6 +8,8 @@ export interface HttpDocumentContext {
 export interface RuntimeRegionRequirement {
 	selector: string;
 	reason: string;
+	/** Explicit opt-in. Omitted requirements retain child-document-only staging. */
+	projection?: 'subtree' | 'attributes';
 }
 
 export interface PreparedHttpDocument {

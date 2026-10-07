@@ -122,6 +122,44 @@ bounded paginated fallback. A requested 500-entry page can contain only
 150 entries, so pagination advances by the observed count. Partial or
 unavailable feed coverage is reported explicitly.
 
+## Shopify profile
+
+The registered Shopify profile recognizes measured Brooklyn server-rendered
+homepage, collection, product and informational documents. Shopify identity,
+expected route sections, a headed main document and matching canonical URL are
+required. Declared Shopify CDN width templates can supply an authored fallback
+rendition. Unknown themes, missing sections and unsupported documents stay
+browser-required. Executable scripts are removed; inert JSON and source CSS remain.
+
+With runtime observation requested, Shopify's bounded readiness settles lazy
+images, initial gallery/slideshow state and route-owned review/recommendation
+content. Declared subtrees and HTML/body attributes enter the existing staging
+and export path. Header and selected sort presentation survive; commerce and
+form backends remain separate. Rendering and interactions are still unverified.
+
+The four-route proof and its precise feasibility blockers are documented in
+`artifacts/shopify-http/README.md`. `scripts/validate-shopify-http-evidence.mjs`
+checks the retained observations and honest incomplete coverage.
+
+## Observed subtree and attribute projection
+
+`RuntimeRegionRequirement.projection` explicitly selects `subtree` or
+`attributes`. Omitted requirements retain child-document-only staging. The
+observer serializes current native form selection and observes head stylesheet
+dependencies, source base URL, UA and DPR. Staging verifies prepared-document,
+observed-node and stylesheet identities, preserving root tag/ID and route/variant
+mapping. Subtrees must be addressable in the acquired document; no whole-document
+or whole-main replacement is implied.
+
+Captured linked CSS is placed into the existing responsive reconciliation before
+viewport-only class aliases are emitted. Its URL dependencies retain the original
+stylesheet base. Uncaptured/imported CSS and incomplete observations remain
+diagnostics. Each acquired variant selects one observed viewport; the existing
+responsive assembler handles those documents, not a new three-point responsive
+model. Unsampled widths, partial child regions and functional behavior remain
+unproven. Source/staged byte hashes and containment checks run before publication;
+modified attributes are rejected transactionally. HTTP `complete` remains false.
+
 ## Evidence and next integration boundary
 
 On the Reflecting the Image 25-route corpus, the implemented API acquired
