@@ -221,6 +221,34 @@ describe( 'wireCapturedDialogs', () => {
 		expect( css ).not.toMatch( /(^|;)details\.dla-disclosure>summary(::-webkit-details-marker)?\{/ );
 	} );
 
+	it( 'keeps layered responsive summary visibility while retaining native disclosure behavior', async () => {
+		const source = '<html><head><style>@layer utilities{@media(min-width:40rem){.sm\\:hidden{display:none}}@media(max-width:39.999rem){.sm\\:hidden{display:inline-block}}.sm\\:hidden{width:36px;height:43px}}body{margin:0}header{height:104px} @media(max-width:39.999rem){header{height:96px}}</style></head><body><header><button class="sm:hidden" aria-label="Close menu">Menu</button></header></body></html>';
+		const portable = wireCapturedDialogs( source, [], [ {
+			status: 'captured',
+			initiallyVisible: true,
+			dialog: { selector: 'header', tag: 'header', ariaModal: false, ariaLabel: 'Menu', html: '<button class="sm:hidden" aria-label="Close menu">Menu</button><nav>Links</nav>', htmlBytes: 74, htmlTruncated: false },
+			dismissal: { control: { selector: 'header > button', tag: 'button', label: 'Close menu' }, verified: true },
+		} ] );
+		const browser = await chromium.launch( { headless: true } );
+		try {
+			const page = await browser.newPage();
+			await page.setContent( portable );
+			for ( const width of [ 1280, 390 ] ) {
+				await page.setViewportSize( { width, height: 844 } );
+				const summary = page.locator( 'details.dla-disclosure > summary' );
+				expect( await page.locator( 'header' ).evaluate( element => element.getBoundingClientRect().height ) ).toBe( width === 1280 ? 104 : 96 );
+				expect( await summary.evaluate( element => getComputedStyle( element ).display ) ).toBe( width === 1280 ? 'none' : 'inline-block' );
+				if ( width === 390 ) {
+					expect( await summary.boundingBox() ).toMatchObject( { width: 36, height: 43 } );
+					await summary.click();
+					expect( await page.locator( 'details' ).evaluate( element => ( element as HTMLDetailsElement ).open ) ).toBe( true );
+					await page.keyboard.press( 'Escape' );
+					expect( await page.locator( 'details' ).evaluate( element => ( element as HTMLDetailsElement ).open ) ).toBe( false );
+				}
+			}
+		} finally { await browser.close(); }
+	}, 30_000 );
+
 	it( 'lets layered author CSS keep a trigger\'s display (Substack restack button)', async () => {
 		// derekthompson.org: Substack ships its CSS in cascade layers. Replacing the
 		// restack button lost `.post-ufi-button{display:flex}` and wrapped the icon
