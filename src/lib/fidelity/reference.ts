@@ -10,17 +10,22 @@ import { isRouteDrift, navigationDocumentUrl } from '../screenshot/document-inte
 import { applyCaptureRemovals } from '../screenshot/apply-removals.js';
 import type { CleanupPolicy } from '../source-cleanup.js';
 import { captureViewportScreenshot } from './viewport-screenshot.js';
+import { replayBrowserIdentity, type CaptureProfile } from '../screenshot/capture-profiles.js';
 
 export interface ReferenceCollectorOptions {
 	cleanupPolicy?: CleanupPolicy;
 	removeSelectors?: string[];
-	prepareCapture?: ( page: Page, ctx: { url: string; viewport: 'desktop' | 'mobile' } ) => Promise<void>;
+	prepareCapture?: ( page: Page, ctx: { url: string; viewport: string } ) => Promise<void>;
 }
 
 export const REFERENCE_WIDTHS = [ 390, 768, 1440 ];
 export type FidelityStage = 'capture' | 'materialization' | 'drift';
 export interface ReferenceArtifact { path: string; sha256: string }
 export interface ReferenceEntry {
+	/** Named source document/profile identity; absent on older width-only evidence. */
+	profile?: string;
+	context?: CaptureProfile['context'];
+	viewportMeta?: string;
 	deviceScaleFactor?: number;
 	browserProfile?: Readonly<{ isMobile: boolean; hasTouch: boolean }>;
 	/** Assigned from the exported receipt; absent when no portable route was retained. */
@@ -28,7 +33,7 @@ export interface ReferenceEntry {
 	sourceUrl: string;
 	viewport: number;
 	viewportHeight: number;
-	device: 'desktop' | 'mobile';
+	device: string;
 	userAgent?: string;
 	state: string;
 	readiness: { ready: boolean; reasons: string[]; cleanup?: CleanupReport; mediaReady?: boolean; fontsReady?: boolean };
@@ -43,8 +48,14 @@ export interface FidelityReference {
 	createdAt: string;
 	receipt: ReferenceArtifact;
 	capture: ReferenceArtifact[];
-	scope: { sourceUrls: string[]; widths: number[]; states: string[]; unknowns: string[] };
+	scope: { sourceUrls: string[]; widths: number[]; states: string[]; unknowns: string[]; cells?: ReferenceCell[] };
 	entries: ReferenceEntry[];
+}
+export interface ReferenceCell {
+	sourceUrl: string;
+	profile: string;
+	viewport: number;
+	state: string;
 }
 export function digest( bytes: string | Buffer ): string {
 	return createHash( 'sha256' ).update( bytes ).digest( 'hex' );
@@ -64,6 +75,13 @@ export function readReferenceArtifact( directory: string, artifact: ReferenceArt
 export function createReferenceCollector( directory: string, sourceUrl: string, sourceUrls: string[], options: ReferenceCollectorOptions = {} ) {
 	const captureId = randomUUID();
 	const entries: ReferenceEntry[] = [];
+	const cells = new Map<string, ReferenceCell>();
+	const declare = ( url: string, profile: CaptureProfile ): void => {
+		for ( const viewport of profile.referenceWidths ?? ( profile.id === 'mobile' ? [ 390 ] : profile.id === 'desktop' ? [ 768, 1440 ] : [ profile.width ] ) ) {
+			const cell = { sourceUrl: url, profile: profile.id, viewport, state: 'baseline' };
+			cells.set( JSON.stringify( cell ), cell );
+		}
+	};
 	const store = ( name: string, bytes: string | Buffer ): ReferenceArtifact => {
 		const path = `reference/${ captureId }/${ name }`;
 		mkdirSync( dirname( join( directory, path ) ), { recursive: true } );
@@ -71,28 +89,48 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 		return { path, sha256: digest( bytes ) };
 	};
 	return {
-		async observe( page: Page, url: string, device: 'desktop' | 'mobile', errors: readonly string[] = [], browserProfile?: ReferenceEntry['browserProfile'] ): Promise<void> {
-			for ( const viewport of device === 'mobile' ? [ 390 ] : [ 768, 1440 ] ) {
-					const entry: ReferenceEntry = { sourceUrl: url, viewport, viewportHeight: 900, device, state: 'baseline', readiness: { ready: false, reasons: [] } };
+		declare,
+		async observe( page: Page, url: string, device: string, errors: readonly string[] = [], browserProfile?: ReferenceEntry['browserProfile'], profile?: CaptureProfile ): Promise<void> {
+			const recipe = profile ?? { id: device, width: page.viewportSize()?.width ?? 1440, height: 900 };
+			declare( url, recipe );
+			for ( const cell of [ ...cells.values() ].filter( cell => cell.sourceUrl === url && cell.profile === device ) ) {
+					const viewport = cell.viewport;
+					const identity = profile?.context ? replayBrowserIdentity( profile.context ) : undefined;
+					const entry: ReferenceEntry = { sourceUrl: url, viewport, viewportHeight: 900, device, profile: device, context: identity, state: 'baseline', readiness: { ready: false, reasons: [] } };
 					entries.push( entry );
 					let referencePage: Page | undefined;
+					let referenceContext: import('playwright').BrowserContext | undefined;
 					let navigationUrl = url;
 					try {
-						// Each frozen width is an independent source navigation in the same
-						// BrowserKit context. Resizing a page that has crossed breakpoints or
-						// scrolled can preserve runtime/header state that a fresh visitor does
-						// not have, making the reference describe a different pose than capture.
-						// browser.newPage() creates a convenience-owned context that cannot
-						// open sibling pages; keep that unit-test/one-off path compatible.
-						try {
-							referencePage = await page.context().newPage();
-						} catch {
-							// Convenience-owned contexts (browser.newPage()) cannot open a
-							// sibling page. Their callers already own the source page, so retain
-							// compatibility; capture's normal browser.newContext() path is fresh.
-							referencePage = page;
+						const sourceContext = page.context();
+						const browser = typeof sourceContext.browser === 'function' ? sourceContext.browser() : null;
+						if ( identity?.screen && ! browser ) throw new Error( 'Preset screen replay requires a source browser context' );
+						if ( identity?.screen && browser ) {
+							// Page.setViewportSize resets screen even on an explicitly screened
+							// device context. Construct at the target viewport to preserve the
+							// resolved preset. Session state stays runtime-only, never in entry.
+							referenceContext = await browser.newContext( { ...identity, viewport: { width: viewport, height: 900 },
+								storageState: await sourceContext.storageState(), ignoreHTTPSErrors: true,
+							} );
+							await referenceContext.addInitScript( "if(typeof globalThis.__name==='undefined')globalThis.__name=function(fn){return fn;};" );
+							referencePage = await referenceContext.newPage();
+						} else {
+							// Without an explicit screen, each width is an independent navigation
+							// in the source context. Resizing a page that has crossed breakpoints or
+							// scrolled can preserve runtime/header state that a fresh visitor does
+							// not have, making the reference describe a different pose than capture.
+							// browser.newPage() creates a convenience-owned context that cannot
+							// open sibling pages; keep that unit-test/one-off path compatible.
+							try {
+								referencePage = await page.context().newPage();
+							} catch {
+								// Convenience-owned contexts (browser.newPage()) cannot open a
+								// sibling page. Their callers already own the source page, so retain
+								// compatibility; capture's normal browser.newContext() path is fresh.
+								referencePage = page;
+							}
+							await referencePage.setViewportSize( { width: viewport, height: 900 } );
 						}
-						await referencePage.setViewportSize( { width: viewport, height: 900 } );
 						if ( url !== 'about:blank' ) {
 							const response = await referencePage.goto( url, { waitUntil: 'load', timeout: 60_000 } );
 							if ( response && ! response.ok() ) throw new Error( `Reference navigation HTTP ${ response.status() }` );
@@ -119,7 +157,8 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 						entry.readiness.mediaReady = mediaReady;
 						entry.readiness.fontsReady = ! observation.typography?.some( text => ! text.loaded );
 						if ( ! entry.readiness.fontsReady ) entry.readiness.reasons.push( 'source fonts pending or failed' );
-						const stem = `${ digest( url ).slice( 0, 24 ) }-${ viewport }`;
+						const stem = `${ digest( url ).slice( 0, 24 ) }-${ digest( device ).slice( 0, 12 ) }-${ viewport }`;
+						entry.viewportMeta = await referencePage.evaluate( () => document.querySelector( 'meta[name="viewport"]' )?.getAttribute( 'content' ) ?? undefined );
 						entry.observation = store( `${ stem }.json`, JSON.stringify( observation ) );
 						entry.document = store( `${ stem }.html`, await referencePage.content() );
 						entry.screenshot = store( `${ stem }.png`, await captureViewportScreenshot( referencePage ) );
@@ -129,6 +168,7 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 						entry.readiness.reasons.push( String( error ) );
 					} finally {
 						if ( referencePage && referencePage !== page ) await referencePage.close().catch( () => {} );
+						await referenceContext?.close().catch( () => {} );
 					}
 				}
 		},
@@ -150,7 +190,7 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 			const manifest: FidelityReference = {
 				schema: 'data-liberation/fidelity-reference/v1', captureId, sourceUrl, createdAt: new Date().toISOString(),
 				receipt: { path: relative( directory, receiptPath ), sha256: digest( receiptBytes ) }, capture: files,
-				scope: { sourceUrls: [ ...new Set( [ ...sourceUrls, ...capturedUrls ] ) ], widths: [ ...REFERENCE_WIDTHS ], states: [ 'baseline' ],
+				scope: { sourceUrls: [ ...new Set( [ ...sourceUrls, ...capturedUrls ] ) ], widths: cells.size ? [ ...new Set( [ ...cells.values() ].map( cell => cell.viewport ) ) ].sort( ( a, b ) => a - b ) : [ ...REFERENCE_WIDTHS ], states: [ 'baseline' ], cells: [ ...cells.values() ],
 					unknowns: [ 'Interaction states are not frozen; baseline scope excludes dialogs, zoom, and motion.', 'Readiness is bounded to settled layout, cleanup and decoded images; asynchronous application work may remain.' ] },
 				entries,
 			};

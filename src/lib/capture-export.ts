@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { assembleDeviceDocuments, installDeviceSelection, type DocumentSelection } from './document-selection.js';
 import type { AccessGateEvidence } from './access-gate.js';
 import {
 	existsSync,
@@ -81,6 +82,7 @@ function withoutGeometryIdentities( html: string ): string {
 
 interface CaptureManifestEntry {
 	documents?: import('./screenshot/manifest-queue.js').ManifestEntry['documents'];
+	profiles?: import('./screenshot/manifest-queue.js').ManifestEntry['profiles'];
 	nativeViewTimelines?: import('./screenshot/manifest-queue.js').ManifestEntry['nativeViewTimelines'];
 	cleanup?: import('./screenshot/manifest-queue.js').ManifestEntry['cleanup'];
 	accessGate?: AccessGateEvidence;
@@ -109,6 +111,7 @@ interface ScreenshotManifest {
 }
 
 interface ExportCaptureOptions {
+	resolveDocumentSelection?: ( documents: Readonly<Record<string, string>> ) => DocumentSelection | undefined;
 	input?: HttpExportInput;
 	embeddedDocuments?: boolean;
 	outputDir: string;
@@ -133,6 +136,7 @@ interface CaptureEntry {
 	hasMobileDocument?: boolean;
 	/** Receipt evidence for how many responsive variants this route ships and why. */
 	responsiveVariants?: ResponsiveVariantEvidence;
+	documentSelection?: { kind: 'device'; id: string; documents: string[]; missing: string[]; evidence: string } | { kind: 'width'; switchWidth: number; evidence: string };
 	fluidGeometry?: CaptureDocumentFluidEvidence;
 	/** Captured as a placeholder for a provider-gated route (see access-gate.ts). */
 	accessGate?: AccessGateEvidence;
@@ -522,10 +526,9 @@ function portableTextReferences( websiteDir: string ): Array< { path: string; te
 const DESKTOP_CAPTURE_WIDTH = 1440;
 
 /**
- * Use the widest observed source media breakpoint below the desktop capture
- * viewport when fluid capture did not identify a switch. Responsive variants
- * can remain in their mobile layout above 767px; the captured site breakpoints
- * are stronger evidence than assuming the conventional phone/tablet boundary.
+ * Legacy width-only export fallback. These are stylesheet geometry boundaries,
+ * not evidence of a device switch. A source-owned device or observed width
+ * contract bypasses this guess; undeclared captures keep their existing output.
  */
 function fallbackResponsiveSwitchWidth( outputDir: string ): number | undefined {
 	const path = join( outputDir, 'breakpoints.json' );
@@ -1128,6 +1131,8 @@ function buildExportCapture(
 		Math.floor( options.limits?.portableMediaTotalBytes ?? MAX_PORTABLE_MEDIA_TOTAL_BYTES )
 	);
 	const switchWidths: number[] = [];
+	const deviceSelections: Array<{ url: string; id: string; documents: string[]; missing: string[]; evidence: string }> = [];
+	const widthSelections: Array<{ url: string; kind: 'width'; switchWidth: number; evidence: string }> = [];
 	const fluidReports: CaptureFluidEvidence[] = [];
 	const websiteDir = join( stageDir, 'website' );
 	const stagedHtmlDir = join( stageDir, '.capture-export-html' );
@@ -1229,14 +1234,27 @@ function buildExportCapture(
 		const mobileHash = acquiredMobileHtml === undefined ? undefined : createHash('sha256').update(acquiredMobileHtml).digest('hex');
 		let rawMobileHtml = embedded && options.input?.mobileVariant && acquiredMobileHtml !== undefined ? projectRuntimePresentation(projectEmbeddedRegions(acquiredMobileHtml, url, options.input.mobileVariant, mobileHash!, embedded.receipt.regions), url, options.input.mobileVariant, mobileHash!, embedded.receipt) : acquiredMobileHtml;
 		if (rawMobileHtml !== undefined) rawMobileHtml = resolveDocumentReferences(rawMobileHtml, entry.documents?.mobile?.url ?? url, entry.documents?.mobile?.baseUrl);
+		const sourceDocuments: Record<string, string> = { desktop: rawDesktopHtml, ...( rawMobileHtml === undefined ? {} : { mobile: rawMobileHtml } ) };
+		for ( const [ key, profile ] of Object.entries( entry.profiles ?? {} ) ) {
+			if ( key === 'desktop' || key === 'mobile' || ! profile.html ) continue;
+			const path = resolve( outputDir, profile.html );
+			if ( ! pathWithin( outputDir, path ) || ! existsSync( path ) ) throw new Error( `Device document is missing or outside capture: ${ key }` );
+			const documentUrl = entry.documents?.[ key ];
+			sourceDocuments[ key ] = resolveDocumentReferences( readFileSync( path, 'utf8' ), documentUrl?.url ?? url, documentUrl?.baseUrl );
+		}
+		const selection = options.resolveDocumentSelection?.( sourceDocuments );
+		if ( selection?.kind === 'width' ) {
+			if ( ! Number.isInteger( selection.switchWidth ) || selection.switchWidth <= 0 || ! selection.evidence ) throw new Error( 'Invalid observed document switch' );
+			widthSelections.push( { url, ...selection } );
+		}
 		const detectedFloor =
-			typeof entry.fluid?.canvasFloor === 'number' && entry.fluid.canvasFloor > 0
+			selection?.kind === 'device' ? undefined : selection?.kind === 'width' ? selection.switchWidth : typeof entry.fluid?.canvasFloor === 'number' && entry.fluid.canvasFloor > 0
 				? Math.round( entry.fluid.canvasFloor )
 				: siteSwitchWidth;
 		if ( detectedFloor ) switchWidths.push( detectedFloor );
 		if ( entry.fluid ) fluidReports.push( entry.fluid );
 		if ( entry.fluidMobile ) fluidReports.push( entry.fluidMobile );
-		if ( embedded && options.input?.mobileVariant && rawMobileHtml !== undefined ) {
+		if ( selection?.kind !== 'device' && embedded && options.input?.mobileVariant && rawMobileHtml !== undefined ) {
 			const pair = mergeResponsiveEmbeddedRegions( { desktop: rawDesktopHtml, mobile: rawMobileHtml, url, desktopVariant: options.input.desktopVariant, mobileVariant: options.input.mobileVariant, receipt: embedded.receipt, switchWidth: detectedFloor ?? DEFAULT_SWITCH_WIDTH, scopeClasses: { desktop: DESKTOP_DOCUMENT_CLASS, mobile: MOBILE_DOCUMENT_CLASS } } );
 			rawDesktopHtml = pair.desktop; rawMobileHtml = pair.mobile;
 		}
@@ -1245,7 +1263,17 @@ function buildExportCapture(
 			rawMobileHtml === undefined
 				? undefined
 				: normalizedDeclarativeFormEmbeds( renderedHtml( rawMobileHtml ) );
-		const assembly = assembleResponsiveCapture( {
+		const deviceAssembly = selection?.kind === 'device' ? assembleDeviceDocuments(
+			Object.fromEntries( Object.entries( sourceDocuments ).map( ( [ key, html ] ) => [ key, normalizedDeclarativeFormEmbeds( renderedHtml( html ) ) ] ) ), selection
+		) : undefined;
+		if ( deviceAssembly ) {
+			deviceSelections.push( { url, id: deviceAssembly.selection.id, documents: deviceAssembly.selection.documents, missing: deviceAssembly.missing, evidence: deviceAssembly.selection.evidence } );
+			for ( const key of deviceAssembly.missing ) routeCaptureDiagnostics.push( { code: 'device_document_uncaptured', url, reason: `Source identity ${ key } has no captured document; portable runtime reports unavailable instead of selecting another identity` } );
+		}
+		const assembly = deviceAssembly ? {
+			html: deviceAssembly.html, hasMobileDocument: 'mobile' in sourceDocuments, portableNormalization: 'applied' as const,
+			evidence: { variants: Object.keys( deviceAssembly.viewports ).length, outcome: 'dual-structural' as const, reason: `Source-owned device selection: ${ deviceAssembly.selection.id }` },
+		} : assembleResponsiveCapture( {
 			rawDesktopHtml,
 			rawMobileHtml,
 			portableDesktopHtml: desktopHtml,
@@ -1258,8 +1286,8 @@ function buildExportCapture(
 		// safeCapturedPageHtml removes <base>; record its stylesheet semantics first.
 		const styleHoistContext = capturedStyleHoistContext( capturedHtml );
 		const sanitized = safeCapturedPageHtml( capturedHtml, embeddedSources );
-		routeCaptureDiagnostics.push( ...sanitized.diagnostics.map( diagnostic => ( { ...diagnostic, url } ) ) );
-		const html = sanitized.html;
+        routeCaptureDiagnostics.push( ...sanitized.diagnostics.map( diagnostic => ( { ...diagnostic, url } ) ) );
+        const html = deviceAssembly ? installDeviceSelection( sanitized.html, deviceAssembly ) : sanitized.html;
 		const stagedHtmlPath = join( stagedHtmlDir, `${ capturedEntries.length }.html` );
 		writeFileSync( stagedHtmlPath, html );
 		capturedEntries.push( {
@@ -1272,6 +1300,7 @@ function buildExportCapture(
 			],
 			hasMobileDocument: assembly.hasMobileDocument,
 			responsiveVariants: assembly.evidence,
+			documentSelection: deviceAssembly ? { kind: 'device', id: deviceAssembly.selection.id, documents: deviceAssembly.selection.documents, missing: deviceAssembly.missing, evidence: deviceAssembly.selection.evidence } : selection?.kind === 'width' ? selection : undefined,
 			...( entry.fluid || entry.fluidMobile ? { fluidGeometry: { desktop: entry.fluid, mobile: entry.fluidMobile } } : {} ),
 			...( entry.accessGate ? { accessGate: entry.accessGate } : {} ),
 			sections: entry.sections,
@@ -1445,6 +1474,7 @@ function buildExportCapture(
 			url,
 			path: `website/${ routePath }`,
 			...( entry.responsiveVariants ? { responsiveVariants: entry.responsiveVariants } : {} ),
+			...( entry.documentSelection ? { documentSelection: entry.documentSelection } : {} ),
 			...( entry.fluidGeometry ? { fluidGeometry: entry.fluidGeometry } : {} ),
 			...( entry.accessGate ? { accessGate: entry.accessGate } : {} ),
 		} );
@@ -1631,7 +1661,7 @@ function buildExportCapture(
 		} ) ),
 		routes: { retained: routes, excluded: excludedRoutes, duplicates: duplicateRoutes },
 		states: { interactions: interactionPages, scroll: scrollStatesPages },
-		layout: { fluidReports, switchWidths },
+		layout: { fluidReports, switchWidths, deviceSelections, widthSelections },
 		assets: {
 			references: assetReferenceLocations, stubs: mediaStubs, manifest: resourceManifest,
 			portablePaths: portablePathsBySource, files: assets, media: portableMedia,

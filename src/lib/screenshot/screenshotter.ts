@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 import { resolveDocumentReferences } from '../document-resource-base.js';
 import { connectBrowser, sourceContextOptions } from '../browser-kit/index.js';
 import { classifyUrl, type UrlType } from '../extraction/sitemap.js';
@@ -46,8 +46,9 @@ import { captureTypedSearchStates } from './typed-search-capture.js';
 import { JsAggregator } from './js-aggregator.js';
 import { isAbsentDocumentError, isSourceCaptureUrl, nonHtmlDocumentError } from './absent-document.js';
 import { ManifestQueue, type ManifestEntry, type FailureEntry } from './manifest-queue.js';
+import { validateOutputDir, planArtifacts, planDocumentArtifacts, type ArtifactPlan } from './output-layout.js';
+import { validateCaptureProfile, publicCaptureProfile, replayBrowserIdentity } from './capture-profiles.js';
 import { rejectedNavigationReason } from './navigation-rejection.js';
-import { validateOutputDir, planArtifacts, type ArtifactPlan } from './output-layout.js';
 import { waitForStable, triggerLazyLoad, dismissOverlays, pageResponds, withEvaluateTimeout, restoreTopScrollState } from './page-helpers.js';
 import { CapturedResourceStore } from './resource-capture.js';
 import { enforceSameOrigin, sameHttpSite } from './same-origin.js';
@@ -734,6 +735,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	} = args;
 	const now = () => new Date().toISOString();
 	const isDesktop = viewport.id === 'desktop';
+	const isMobile = viewport.id === 'mobile';
 	// The adapter's rewrite of platform-owned identifiers applies to every stored
 	// HTML artifact alike, so page HTML and the captured dialogs that refer to it
 	// keep naming the same elements.
@@ -925,7 +927,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	await applyCaptureRemovals( page, {
 		removeSelectors: args.removeSelectors,
 		prepare: args.prepareCapture,
-		ctx: { url, viewport: isDesktop ? 'desktop' : 'mobile' },
+		ctx: { url, viewport: viewport.id },
 	} );
 
 	// --- responsive image map (mobile only) -----------------------------------
@@ -934,7 +936,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	// <picture> with no JavaScript. Which URLs are variants is adapter
 	// knowledge (seam 2), so the capture path never learns a CDN's shape.
 	// Best-effort: a read failure must not fail the screenshot.
-	if ( ! isDesktop && args.collectResponsiveImages ) {
+	if ( isMobile && args.collectResponsiveImages ) {
 		try {
 			Object.assign(
 				responsiveImages,
@@ -989,7 +991,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		failures.push( { url, viewport: viewport.id, stage: 'evaluate', error: `source baseline reset unproven: ${ String( error ) }`, timestamp: now(), attempt: 1 } );
 		return;
 	}
-	await args.observeSource?.( page, url, isDesktop ? 'desktop' : 'mobile', sourceErrors, args.browserProfile );
+	await args.observeSource?.( page, url, viewport.id, sourceErrors, args.browserProfile, viewport );
 	if ( args.rendererCrashed() ) return;
 	if ( plan.captureHtml || plan.captureMobileHtml ) {
 		try {
@@ -1011,7 +1013,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		}
 	}
 
-	if ( ( plan.captureHtml || plan.captureMobileHtml ) && args.learnFluid ) {
+	if ( ( plan.captureHtml || plan.captureMobileHtml ) && args.learnFluid && viewport.learnFluid !== false ) {
 		try {
 			const learned = await learnAndApplyFluidGeometry( page, {
 				document: isDesktop ? 'desktop' : 'mobile',
@@ -1047,7 +1049,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	if ( args.beforeSerialize ) {
 		await args.beforeSerialize( page, {
 			url,
-			viewport: isDesktop ? 'desktop' : 'mobile',
+			viewport: viewport.id,
 		} ).catch( () => {
 			/* best-effort — never block capture on a late platform widget */
 		} );
@@ -1077,7 +1079,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 			writeFileSync( plan.paths.fullpage, buf );
 			const rel = `screenshots/${ viewport.id }/${ slug }.png`;
 			if ( isDesktop ) entry.desktop = rel;
-			else entry.mobile = rel;
+			else if ( isMobile ) entry.mobile = rel;
 		} catch ( err ) {
 			const msg = err instanceof Error ? err.message : String( err );
 			failures.push( {
@@ -1092,7 +1094,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	}
 
 	if ( args.rendererCrashed() ) return;
-	if ( isDesktop && plan.captureHtml ) {
+	if ( plan.captureHtml ) {
 		try {
 			// The cleanup observer may have exhausted its budget before the page
 			// re-rendered a credit or ad; the saved document must be swept. A source
@@ -1139,8 +1141,8 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 			} else {
 				mkdirSync( dirname( plan.paths.html ), { recursive: true } );
 				writeFileSync( plan.paths.html, html );
-				entry.html = `html/${ slug }.html`;
-				entry.documents = { ...entry.documents, desktop: documentUrl };
+				entry.html = relative( outputDir, plan.paths.html );
+				entry.documents = { ...entry.documents, [ viewport.id ]: documentUrl };
 			}
 		} catch ( err ) {
 			failures.push( {
@@ -1162,7 +1164,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	// it renders statically) + its height to html-mobile/. The alt reconstruct carries
 	// it in a viewport-isolated iframe to reproduce the mobile layout the desktop DOM
 	// can't reflow to. Best-effort: a miss leaves the page desktop-only.
-	if ( ! isDesktop && plan.captureMobileHtml ) {
+	if ( isMobile && plan.captureMobileHtml ) {
 		try {
 			await sweepSourceCleanup( page, sourcePolicy );
 			await preserveStreamedVideoPosters( page, resourceStore, url ).catch( () => undefined );
@@ -1176,6 +1178,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 			if ( ! isRouteDrift( page.url(), navigationUrl ) && ! isStackingArtifact( mhtml ) ) {
 				mkdirSync( dirname( plan.paths.htmlMobile ), { recursive: true } );
 				writeFileSync( plan.paths.htmlMobile, mhtml );
+				entry.mobileHtml = relative( outputDir, plan.paths.htmlMobile );
 				entry.documents = { ...entry.documents, mobile: documentUrl };
 				mobileHeights[ slug ] = await page.evaluate( () => document.documentElement.scrollHeight );
 			}
@@ -1206,7 +1209,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 			/* best-effort — reconstruction live-extracts when the spec cache is missing */
 		}
 	}
-	if ( ! isDesktop && plan.captureMobileSections ) {
+	if ( isMobile && plan.captureMobileSections ) {
 		try {
 			const { specs, landmarks } = await extractFull( page, {}, evaluateTimeoutMs );
 			SectionSpecsStore.loadMobile( outputDir ).set( url, specs, landmarks, {
@@ -1247,7 +1250,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 				writeFileSync( plan.paths.scrolled, buf );
 				const rel = `screenshots/${ viewport.id }/${ slug }.scrolled.png`;
 				if ( isDesktop ) entry.desktopScrolled = rel;
-				else entry.mobileScrolled = rel;
+				else if ( isMobile ) entry.mobileScrolled = rel;
 			}
 		} catch ( err ) {
 			const msg = err instanceof Error ? err.message : String( err );
@@ -1351,7 +1354,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	// and mobileLayoutMap stays null. generateChromeCss then emits desktop-only
 	// rules. The static hamburger is not interactive — known limitation.
 	if (
-		! isDesktop &&
+		isMobile &&
 		designCtx &&
 		designCtx.chromeAccum.desktopLayoutMap !== null &&
 		designCtx.chromeAccum.mobileLayoutMap === null
@@ -1384,7 +1387,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	//
 	// The check against `archetype` uses the same DESIGN_CAPTURE_ARCHETYPES set logic.
 	// We re-derive the slug the same way the desktop pass does: slugify(url).
-	if ( ! isDesktop && designCtx ) {
+	if ( isMobile && designCtx ) {
 		const DESIGN_CAPTURE_ARCHETYPES = new Set( [ 'homepage', 'page', 'post', 'gallery', 'event' ] );
 		if ( DESIGN_CAPTURE_ARCHETYPES.has( archetype ) ) {
 			try {
@@ -1468,10 +1471,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		}
 		if (
 			( interactions.states.length > 0 || ( interactions.initialDialogs?.length ?? 0 ) > 0 || ( interactions.routeNavigation?.length ?? 0 ) > 0 ) &&
-			( ! entry.interactions ||
-				interactions.states.some( ( state ) => state.status === 'captured' ) ||
-				( interactions.routeNavigation?.length ?? 0 ) > 0 ||
-				interactions.initialDialogs?.some( ( state ) => state.status === 'captured' ) )
+			hasPromotableInteractionEvidence( entry.interactions, interactions )
 		) {
 			entry.interactions = mergeInteractionReports( entry.interactions, canonicalizeInteractions( interactions ) );
 		}
@@ -1494,6 +1494,11 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		}
 	}
 	}
+}
+
+function hasPromotableInteractionEvidence( previous: InteractionStatesReport | undefined, latest: InteractionStatesReport ): boolean {
+	return ! previous || latest.states.some( state => state.status === 'captured' ) ||
+		( latest.routeNavigation?.length ?? 0 ) > 0 || latest.initialDialogs?.some( state => state.status === 'captured' ) === true;
 }
 
 function mergeInteractionReports(
@@ -1698,6 +1703,8 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 	const { devices } = await import('playwright');
 	const { defaultBrowserType: _defaultBrowserType, ...IPHONE_17_CONTEXT } = devices['iPhone 17'];
 	const viewports = opts.viewports ?? defaultViewports(IPHONE_17_CONTEXT.viewport);
+	for ( const viewport of viewports ) validateCaptureProfile( viewport );
+	if ( new Set( viewports.map( viewport => viewport.id ) ).size !== viewports.length ) throw new Error( 'Duplicate source capture profile' );
 	const rawConcurrency = opts.concurrency ?? 6;
 	const concurrency = Math.max( 1, Math.min( 10, rawConcurrency ) );
 	const browserRestartEvery = opts.browserRestartEvery ?? 100;
@@ -1872,8 +1879,27 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 		const shouldAnalyzeUrl = url === representativeAnalysisUrl && ! aggregateAlreadyFresh;
 		const desktopPlan = shouldAnalyzeUrl ? { ...plan.desktop, needsLoad: true } : plan.desktop;
 		const effectivePlan = { ...plan, desktop: desktopPlan };
+		const routeProfiles: Viewport[] = viewports.map( profile => ( { ...publicCaptureProfile( profile ),
+			referenceWidths: profile.referenceWidths ?? opts.referenceWidths ?? ( profile.id === 'mobile' ? [ 390 ] : profile.id === 'desktop' ? [ 768, 1440 ] : [ profile.width ] ),
+		} ) );
+		let additionalDeclared = false;
+		const declareAdditional = ( html: string ): void => {
+			if ( additionalDeclared ) return;
+			additionalDeclared = true;
+			for ( const profile of opts.additionalProfiles?.( html ) ?? [] ) {
+				validateCaptureProfile( profile );
+				if ( routeProfiles.some( other => other.id === profile.id ) ) throw new Error( `Duplicate source capture profile: ${ profile.id }` );
+				routeProfiles.push( { ...publicCaptureProfile( profile ), referenceWidths: profile.referenceWidths ?? opts.referenceWidths ?? [ profile.width ] } );
+			}
+		};
+		if ( ! force && existing?.html && existsSync( join( opts.outputDir, existing.html ) ) ) declareAdditional( readFileSync( join( opts.outputDir, existing.html ), 'utf8' ) );
+		const profilePlan = ( profile: Viewport ): ArtifactPlan => profile.id === 'desktop' ? effectivePlan.desktop : profile.id === 'mobile' ? effectivePlan.mobile : planDocumentArtifacts( {
+			outputDir: opts.outputDir, slug, id: profile.id, captureImages: opts.captureImages,
+			force: force || ! existing?.profiles?.[ profile.id ]?.html || JSON.stringify( existing.profiles?.[ profile.id ]?.recipe ) !== JSON.stringify( profile ),
+		} );
+		for ( const profile of routeProfiles ) opts.declareSourceProfile?.( url, profile );
 
-		if ( ! effectivePlan.desktop.needsLoad && ! effectivePlan.mobile.needsLoad ) {
+		if ( routeProfiles.every( profile => ! profilePlan( profile ).needsLoad ) ) {
 			skipped++;
 			sendLog( server, `[skip] ${ url } (artifacts exist)` );
 			completed++;
@@ -1883,13 +1909,16 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 
 		// `redirectedTo` is always written, so a URL that stopped redirecting
 		// does not keep a prior run's alias through the manifest's merge.
-		const entry: ManifestEntry = { slug, capturedAt: capturedAt(), redirectedTo: undefined };
+		const entry: ManifestEntry = { slug, capturedAt: capturedAt(), redirectedTo: undefined,
+			documents: force ? {} : { ...existing?.documents }, profiles: force ? {} : { ...existing?.profiles } };
 		const urlFailures: FailureEntry[] = [];
 
-		for ( const viewport of viewports ) {
+		for ( const viewport of routeProfiles ) {
 			if ( entry.redirectedTo ) break;
-			const vpPlan = viewport.id === 'desktop' ? effectivePlan.desktop : effectivePlan.mobile;
+			const vpPlan = profilePlan( viewport );
 			if ( ! vpPlan.needsLoad ) continue;
+			const additional = ! [ 'desktop', 'mobile' ].includes( viewport.id );
+			const profileEntry: ManifestEntry = { slug, capturedAt: capturedAt() };
 
 			// Retry a crashed renderer in a fresh context once. A disconnected browser
 			// also needs the shared relaunch before the retry.
@@ -1916,17 +1945,22 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 					// tokenized ENTRY url establishes. Keyed by origin, so this navigates
 					// once per run — every worker and viewport for every route reuses it.
 					const sessionContext = await sourceContextOptions( attemptBrowser, entryUrl );
+					const device = viewport.device ? devices[ viewport.device ] : undefined;
+					if ( viewport.device && ! device ) throw new Error( `Unknown source device profile: ${ viewport.device }` );
+					const { defaultBrowserType: _deviceType, ...deviceContext } = device ?? {};
 					const contextOptions: BrowserContextOptions = {
 						...( viewport.id === 'mobile'
 							? { ...sessionContext, ...IPHONE_17_CONTEXT }
 							: sessionContext ),
-						viewport: { width: viewport.width, height: viewport.height },
 						deviceScaleFactor:
 							viewport.id === 'desktop'
 								? SCREENSHOT_DEVICE_SCALE_FACTOR
-								: IPHONE_17_CONTEXT.deviceScaleFactor,
+								: viewport.id === 'mobile' ? IPHONE_17_CONTEXT.deviceScaleFactor : 1,
 						ignoreHTTPSErrors: true,
+						...deviceContext, ...viewport.context,
+						viewport: { width: viewport.width, height: viewport.height },
 					};
+					const identity = replayBrowserIdentity( contextOptions );
 					context = await attemptBrowser.newContext( contextOptions );
 					// tsx/esbuild's keepNames transform wraps named const arrows with
 					// `__name(fn, 'name')` calls; that helper doesn't exist in the browser
@@ -1940,41 +1974,84 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 					await context.addInitScript( observeViewportEntrances );
 					const page = await context.newPage();
 					page.once( 'crash', () => { rendererCrashed = true; } );
-					await capturePerViewport( {
-						page,
-						rendererCrashed: () => rendererCrashed,
-						browserProfile: { isMobile: contextOptions.isMobile ?? false, hasTouch: contextOptions.hasTouch ?? false },
-						viewport,
-						plan: vpPlan,
-						url,
-						slug,
-						archetype: classifyUrl( url ),
-						settleMs,
-						screenshotTimeoutMs,
-						evaluateTimeoutMs,
-						failures: urlFailures,
-						entry,
-						aggregator,
-						shouldAnalyze: shouldAnalyzeUrl,
-						designCtx,
-						outputDir: opts.outputDir,
-						responsiveImages,
-						mobileHeights,
-						resourceStore,
-						publicUrlsOnly: opts.publicUrlsOnly ?? false,
-						removeSelectors: opts.removeSelectors,
-						cleanupPolicy: opts.cleanupPolicy,
-						...( opts.collectResponsiveImages
-							? { collectResponsiveImages: opts.collectResponsiveImages }
-							: {} ),
-						...( opts.learnFluid ? { learnFluid: true } : {} ),
-						...( opts.fluidWidths ? { fluidWidths: opts.fluidWidths } : {} ),
-						prepareCapture: opts.prepareCapture,
-						resolveClientRedirect: opts.resolveClientRedirect,
-						beforeSerialize: opts.beforeSerialize,
-						observeSource: opts.observeSource,
-						...( opts.canonicalizeHtml ? { canonicalizeHtml: opts.canonicalizeHtml } : {} ),
-					} );
+					try {
+						await capturePerViewport( {
+							page,
+							rendererCrashed: () => rendererCrashed,
+							browserProfile: { isMobile: contextOptions.isMobile ?? false, hasTouch: contextOptions.hasTouch ?? false },
+							viewport: { ...viewport, context: identity },
+							plan: vpPlan,
+							url,
+							slug,
+							archetype: classifyUrl( url ),
+							settleMs,
+							screenshotTimeoutMs,
+							evaluateTimeoutMs,
+							failures: urlFailures,
+							entry: profileEntry,
+							aggregator,
+							shouldAnalyze: viewport.id === 'desktop' && shouldAnalyzeUrl,
+							designCtx: additional ? undefined : designCtx,
+							outputDir: opts.outputDir,
+							responsiveImages,
+							mobileHeights,
+							resourceStore,
+							publicUrlsOnly: opts.publicUrlsOnly ?? false,
+							removeSelectors: opts.removeSelectors,
+							cleanupPolicy: opts.cleanupPolicy,
+							...( opts.collectResponsiveImages
+								? { collectResponsiveImages: opts.collectResponsiveImages }
+								: {} ),
+							...( opts.learnFluid ? { learnFluid: true } : {} ),
+							...( opts.fluidWidths ? { fluidWidths: opts.fluidWidths } : {} ),
+							prepareCapture: opts.prepareCapture,
+							resolveClientRedirect: opts.resolveClientRedirect,
+							beforeSerialize: opts.beforeSerialize,
+							observeSource: opts.observeSource,
+							...( opts.canonicalizeHtml ? { canonicalizeHtml: opts.canonicalizeHtml } : {} ),
+						} );
+					} finally {
+						// HTML and successful interaction evidence precede the final cleanup
+						// audit. A late audit failure must record a failure, not erase those
+						// artifacts (the prior shared-entry transaction retained them too).
+						const previousInteractions = entry.interactions;
+						const previousCleanup = entry.cleanup;
+						const previousDocuments = entry.documents;
+						const previousNativeViewTimelines = entry.nativeViewTimelines;
+						if ( viewport.id === 'desktop' ) {
+							Object.assign( entry, profileEntry );
+						}
+						else if ( viewport.id === 'mobile' ) {
+							if ( profileEntry.mobile ) entry.mobile = profileEntry.mobile;
+							if ( profileEntry.mobileScrolled ) entry.mobileScrolled = profileEntry.mobileScrolled;
+							if ( profileEntry.mobileHtml ) entry.mobileHtml = profileEntry.mobileHtml;
+							if ( profileEntry.redirectedTo ) entry.redirectedTo = profileEntry.redirectedTo;
+							if ( profileEntry.fluidMobile ) entry.fluidMobile = profileEntry.fluidMobile;
+						}
+						entry.documents = { ...previousDocuments, ...profileEntry.documents };
+						if ( ! additional && profileEntry.nativeViewTimelines ) entry.nativeViewTimelines = { ...previousNativeViewTimelines, ...profileEntry.nativeViewTimelines };
+						if ( ! additional ) {
+							const latest = profileEntry.interactions;
+							const accepted = latest && hasPromotableInteractionEvidence( previousInteractions, latest );
+							entry.interactions = accepted ? mergeInteractionReports( previousInteractions, latest ) : previousInteractions;
+						}
+						if ( ! additional && ! entry.scrollStates?.toggles.length && profileEntry.scrollStates ) entry.scrollStates = profileEntry.scrollStates;
+						if ( profileEntry.cleanup ) entry.cleanup = { policy: profileEntry.cleanup.policy, reports: [ ...( previousCleanup?.reports ?? [] ), ...profileEntry.cleanup.reports ] };
+						const htmlPath = viewport.id === 'mobile' ? profileEntry.mobileHtml : profileEntry.html;
+						const documentUrl = profileEntry.documents?.[ viewport.id ];
+						entry.profiles![ viewport.id ] = { recipe: viewport, viewport: { width: viewport.width, height: viewport.height },
+							identity,
+							userAgent: contextOptions.userAgent, browserProfile: { isMobile: contextOptions.isMobile ?? false, hasTouch: contextOptions.hasTouch ?? false },
+							deviceScaleFactor: contextOptions.deviceScaleFactor ?? 1, html: htmlPath,
+							...( documentUrl ? { documentUrl } : {} ),
+							// The learner's document label namespaces desktop/mobile rules;
+							// every non-desktop pass writes fluidMobile, including extra profiles.
+							fluid: viewport.id === 'desktop' ? profileEntry.fluid : profileEntry.fluidMobile,
+							nativeViewTimelines: profileEntry.nativeViewTimelines,
+							interactions: profileEntry.interactions, scrollStates: profileEntry.scrollStates,
+						};
+					}
+					if ( additional && profileEntry.redirectedTo ) throw new Error( `Source profile ${ viewport.id } redirected to another document; identity was not captured` );
 				} catch ( err ) {
 					urlFailures.push( {
 						url,
@@ -2021,6 +2098,11 @@ export async function captureScreenshots( opts: ScreenshotOpts ): Promise< Scree
 					sendLog( server, `[retry] renderer crashed for ${ url } (${ viewport.id }); using a fresh context` );
 				} else if ( ! ( await replaceCrashedBrowser( attemptBrowser ) ) ) break;
 				urlFailures.length = failuresBefore;
+			}
+			if ( viewport.id === 'desktop' && entry.html && ! additionalDeclared ) {
+				const before = routeProfiles.length;
+				declareAdditional( readFileSync( join( opts.outputDir, entry.html ), 'utf8' ) );
+				for ( const profile of routeProfiles.slice( before ) ) opts.declareSourceProfile?.( url, profile );
 			}
 		}
 

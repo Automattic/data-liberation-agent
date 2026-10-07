@@ -73,7 +73,7 @@ export interface FluidLearningResult {
 	/**
 	 * Width at which this document stops shrinking — the widest floor among
 	 * learned `max(floor, k*vw)` models. Below it the layout overflows rather
-	 * than adapting, which makes it the source's own switching point.
+ * than adapting. This is geometry, not evidence of a device document switch.
 	 */
 	canvasFloor: number | null;
 	byKind: Record< string, number >;

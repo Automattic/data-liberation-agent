@@ -14,8 +14,24 @@ export interface ManifestEntry {
   mobile?: string;
   mobileScrolled?: string;
   html?: string;
-  /** Browser URL and effective base per viewport; the manifest key remains the requested route. */
-  documents?: Partial<Record<'desktop' | 'mobile', import('../document-resource-base.js').RenderedDocumentUrl>>;
+  mobileHtml?: string;
+  /** Actual browser identity and artifacts for every acquired document profile. */
+  profiles?: Record<string, {
+    recipe: import('./capture-profiles.js').CaptureProfile;
+    identity?: import('./capture-profiles.js').ReplayBrowserIdentity;
+    viewport: { width: number; height: number };
+    userAgent?: string;
+    browserProfile: { isMobile: boolean; hasTouch: boolean };
+    deviceScaleFactor: number;
+    html?: string;
+    documentUrl?: import('../document-resource-base.js').RenderedDocumentUrl;
+    fluid?: ManifestEntry['fluid'];
+    nativeViewTimelines?: ManifestEntry['nativeViewTimelines'];
+    interactions?: InteractionStatesReport;
+    scrollStates?: ScrollStatesReport;
+  }>;
+  /** Browser URL and effective base per named profile; the manifest key remains the requested route. */
+  documents?: Partial<Record<string, import('../document-resource-base.js').RenderedDocumentUrl>>;
   /** path to sections/<slug>.json (captured section specs) when present */
   sections?: string;
   /** Overlays/banners dismissed before this URL was captured (observability). */
@@ -34,7 +50,7 @@ export interface ManifestEntry {
     applied: number;
     unmodelled: number;
     breakpoints: number[];
-    /** Width below which this document stops adapting; drives the switch point. */
+    /** Width below which this document stops adapting; geometry, not device selection. */
     canvasFloor?: number | null;
     byKind: Record<string, number>;
   };

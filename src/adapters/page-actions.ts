@@ -3,6 +3,15 @@ import type { Page } from 'playwright';
 
 /** Platform-specific preparation applied while liberating a live page. */
 export interface LiberationHooks {
+  /** Additional source identities, selected from the acquired primary document.
+   * No profile may alias a document captured under another request identity. */
+  additionalProfiles?(desktopHtml: string): readonly import('../lib/screenshot/capture-profiles.js').CaptureProfile[];
+  /** Explicit acceptance ladder for device-dependent sources. Ordinary sources
+   * keep the default desktop 768/1440 and phone 390 cells. */
+  referenceWidths?: number[];
+  /** Source-owned selection, declared only when captured identities support it.
+   * Geometry floors and unrelated CSS breakpoints are not document selection. */
+  documentSelection?(documents: Readonly<Record<string, string>>): import('../lib/document-selection.js').DocumentSelection | undefined;
   /** Recognize an observed client-side navigation as a source-declared alias.
    * Return only a same-origin target; uncertainty leaves the route to normal capture. */
   resolveClientRedirect?(page: Page, url: string): Promise<string | undefined>;
@@ -44,5 +53,5 @@ export interface LiberationHooks {
 
 export interface LiberationContext {
   url: string;
-  viewport: 'desktop' | 'mobile';
+  viewport: string;
 }

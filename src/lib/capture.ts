@@ -218,6 +218,9 @@ export async function captureWebsite(
 		urls,
 		outputDir,
 		primaryUrl: sourceUrl,
+		additionalProfiles: adapter.liberation?.additionalProfiles,
+		referenceWidths: adapter.liberation?.referenceWidths,
+		declareSourceProfile: reference.declare,
 		captureImages: options.captureImages === true,
 		learnFluid: options.learnFluid !== false,
 		force: options.resume !== true,
@@ -267,6 +270,7 @@ export async function captureWebsite(
 		outputDir,
 		sourceUrl,
 		platform: detection.platform,
+		resolveDocumentSelection: adapter.liberation?.documentSelection,
 		title: inventory.siteMeta?.title,
 		summary,
 		failures,
@@ -295,6 +299,7 @@ export async function captureWebsite(
 	reference.finalize( captureReceiptPath );
 	const complete =
 		summary.routesFailed === 0 &&
+		! ( receipt.sourceProfile?.documentSelection?.routes ?? [] ).some( ( route: { missing?: string[] } ) => ( route.missing?.length ?? 0 ) > 0 ) &&
 		unresolvedAnchors.every( ( anchor ) => anchor.reason !== 'target route was not captured' );
 	const result: CaptureResult = {
 		captureReceiptPath,

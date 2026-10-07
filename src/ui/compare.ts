@@ -11,7 +11,7 @@ import { summariseFindings } from '../lib/fidelity/self-consistency.js';
 
 export async function runCompare(
 	directory: string,
-	options: { screenshots?: boolean; candidateUrl?: string; motionContract?: MotionContract; stage?: import('../lib/fidelity/reference.js').FidelityStage } = {}
+	options: { screenshots?: boolean; candidateUrl?: string; motionContract?: MotionContract; profiles?: string[]; stage?: import('../lib/fidelity/reference.js').FidelityStage } = {}
 ): Promise< FidelityReport > {
 	const report = await checkFidelity( {
 		directory,
@@ -19,6 +19,7 @@ export async function runCompare(
 		candidateUrl: options.candidateUrl,
 		motionContract: options.motionContract,
 		stage: options.stage,
+		profiles: options.profiles,
 		log: ( message ) => process.stderr.write( `${ message }\n` ),
 	} );
 
@@ -37,10 +38,10 @@ export async function runCompare(
 	}
 
 	// Tier two, over the sampled routes.
-	for ( const item of report.pending ?? [] ) process.stdout.write( `${ item.stage } ${ item.route } ${ item.viewport }px ${ item.state } UNPROVEN: ${ item.reason }\n` );
+	for ( const item of report.pending ?? [] ) process.stdout.write( `${ item.stage } ${ item.route } ${ item.profile ? `${ item.profile } ` : '' }${ item.viewport }px ${ item.state } UNPROVEN: ${ item.reason }\n` );
 	for ( const score of report.scores ) {
 		const mark = score.pass ? 'ok' : 'FAIL';
-		process.stdout.write( `${ score.stage ?? report.stage ?? 'drift' } ${ score.route } ${ score.viewport }px ${ score.state ?? 'baseline' } ${ mark }` );
+		process.stdout.write( `${ score.stage ?? report.stage ?? 'drift' } ${ score.route } ${ score.profile ? `${ score.profile } ` : '' }${ score.viewport }px ${ score.state ?? 'baseline' } ${ mark }` );
 		if ( ! score.pass ) process.stdout.write( `: ${ score.failures.join( '; ' ) }` );
 		if ( score.notes.length ) process.stdout.write( `  (${ score.notes.join( '; ' ) })` );
 		process.stdout.write( '\n' );

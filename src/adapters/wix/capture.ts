@@ -8,6 +8,7 @@ import { resolveEventFormRedirect } from './event-forms.js';
 import { providerCreditRules } from '../../lib/source-cleanup.js';
 import type { Locator, Page } from 'playwright';
 import { canonicalizeWixCapturedHtml } from './instance-ids.js';
+import { wixDocumentSelection, wixAdditionalProfiles } from './document-selection.js';
 import { preserveWixCollections } from './collections.js';
 import { markMemberLoginControls, MEMBER_LOGIN_ATTRIBUTE, MEMBER_LOGIN_CLASS_PREFIX } from '../../lib/member-login.js';
 import { portWixRuntimeEmbeds } from './embeds.js';
@@ -332,7 +333,7 @@ async function closeOpenedMenu( page: Page ): Promise< void > {
  * runtime starts. A portable capture cannot retain that runtime, so settle the
  * live menu into a static list of its authored destinations instead.
  */
-export async function settleWixNavigation( viewport: 'desktop' | 'mobile' ): Promise< void > {
+export async function settleWixNavigation( viewport: string ): Promise< void > {
 	const waitForFrame = () =>
 		new Promise< void >( ( resolve ) =>
 			requestAnimationFrame( () => requestAnimationFrame( () => resolve() ) )
@@ -467,6 +468,9 @@ export async function settleScrollReactiveChrome( page: Page ): Promise< void > 
 }
 
 export const capture: LiberationHooks = {
+	documentSelection: wixDocumentSelection,
+	additionalProfiles: wixAdditionalProfiles,
+	referenceWidths: [ 390, 768, 1440 ],
   resolveClientRedirect: resolveEventFormRedirect,
   canonicalizeHtml: ( html ) => canonicalizeWixCapturedHtml( preserveWixCollections( html ) ),
   cleanupRules: [

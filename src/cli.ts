@@ -60,6 +60,7 @@ const HELP = `
     --screenshots        Write source/liberated/diff PNGs as evidence. Pixel score
                          never decides pass/fail.
     --stage <stage>      capture (default), materialization, or live-source drift
+    --profiles <ids>     Frozen document identities, comma-separated; default all declared cells
     --candidate <url>    Compare the portable capture to another rendered copy.
     --motion-contract <json>  With --stage drift --candidate, verify source/candidate
                           text, canvas-pointer and click behavior at named widths.
@@ -114,7 +115,10 @@ if (args.includes('--help')) {
   const stageIndex = args.indexOf('--stage');
   const stage = stageIndex === -1 ? undefined : args[stageIndex + 1];
   if ((stage !== undefined && !['capture', 'materialization', 'drift'].includes(stage)) || (stageIndex !== -1 && !stage)) throw new Error('--stage requires capture, materialization or drift');
-  const report = await runCompare(directory, { screenshots: args.includes('--screenshots'), candidateUrl, motionContract, stage: stage as import('./lib/fidelity/reference.js').FidelityStage | undefined });
+  const profileArgument = getArg('--profiles');
+  if (args.includes('--profiles') && !profileArgument) throw new Error('--profiles requires comma-separated document identities');
+  const profiles = profileArgument?.split(',').map(value => value.trim());
+  const report = await runCompare(directory, { screenshots: args.includes('--screenshots'), candidateUrl, motionContract, profiles, stage: stage as import('./lib/fidelity/reference.js').FidelityStage | undefined });
   process.exit(report.pass ? 0 : 1);
 } else if (args[0] === 'inspect') {
   const url = args[1];

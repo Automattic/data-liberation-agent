@@ -7,6 +7,8 @@
 import { existsSync, readFileSync, statSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import type { Page } from 'playwright';
+import * as cheerio from 'cheerio';
+import { replayBrowserIdentity } from '../screenshot/capture-profiles.js';
 import { sourceContextOptions } from '../browser-kit/browser-kit.js';
 import type { CapturedRouteNavigation } from '../screenshot/interaction-capture.js';
 import { startStaticServer } from '../replicate/local-site/static-server.js';
@@ -108,6 +110,8 @@ export interface FidelityCheckOptions {
 	/** Required states. Unsupported or absent states are pending, never silently skipped. Default: baseline. */
 	states?: string[];
 	widths?: number[];
+	/** Named document identities in frozen evidence. Default: all declared profile cells. */
+	profiles?: string[];
 	/** Portable pathnames to check. Frozen default: all declared routes; drift default: spread sample. */
 	routes?: string[];
 	settleMs?: number;
@@ -141,13 +145,13 @@ function candidateBase( candidateUrl: string ): string {
 }
 
 /** A score, told which route produced it. */
-export type RouteScore = ViewportScore & { route: string; stage?: FidelityStage; state?: string };
+export type RouteScore = ViewportScore & { route: string; stage?: FidelityStage; state?: string; profile?: string };
 
 export interface FidelityReport {
 	stage?: FidelityStage;
 	status?: 'proven' | 'failed' | 'unproven';
-	pending?: Array<{ stage: FidelityStage; route: string; viewport: number; state: string; reason: string }>;
-	coverage?: { required: number; measured: number; unknowns: string[] };
+	pending?: Array<{ stage: FidelityStage; route: string; viewport: number; state: string; profile?: string; reason: string }>;
+	coverage?: { required: number; measured: number; unknowns: string[]; profiles?: Record<string, { required: number; measured: number; pending: number }> };
 	/** Authored portable runtime was verified during this comparison, not inferred from source scripts. */
 	portableMotion?: { verified: boolean; routes: string[]; origin: 'authored' | 'learned' };
 	cleanup?: { policy: CleanupPolicy; source: CleanupReport[] };
@@ -156,6 +160,7 @@ export interface FidelityReport {
 	sourceUrl: string;
 	websiteDir: string;
 	widths: number[];
+	profiles?: string[];
 	/** Routes actually measured. */
 	routes: string[];
 	/** Routes the capture retained. */
@@ -181,7 +186,7 @@ interface CaptureReceipt {
 	sourceInteractivity?: { schema: string; path: string; unreproduced_route_count: number };
 	source?: { url?: string };
 	websiteRoot?: string;
-	routes?: Array< { url?: string; path?: string; accessGate?: unknown } >;
+	routes?: Array< { url?: string; path?: string; documentSelection?: { kind: string }; accessGate?: unknown } >;
 	duplicateRoutes?: Array< { url?: string; canonicalUrl?: string; path?: string } >;
 }
 
@@ -1013,6 +1018,8 @@ async function verifyCapturedRouteTabs(
 
 export async function checkFidelity( options: FidelityCheckOptions ): Promise< FidelityReport > {
 	const stage = options.stage ?? ( options.candidateUrl ? 'materialization' : 'capture' );
+	if ( options.profiles && ( ! options.profiles.length || options.profiles.some( profile => ! /^[a-z][a-z0-9-]*$/.test( profile ) ) ) ) throw new Error( 'profiles requires valid source document identities' );
+	if ( stage === 'drift' && options.profiles ) throw new Error( 'Named source profile replay requires frozen evidence' );
 	if ( ! [ 'capture', 'materialization', 'drift' ].includes( stage ) ) throw new Error( 'Unknown fidelity stage' );
 	if ( stage !== 'drift' ) return checkFrozenFidelity( options, stage );
 	const log = options.log ?? ( () => {} );
@@ -1369,7 +1376,7 @@ async function checkFrozenFidelity( options: FidelityCheckOptions, stage: 'captu
 	const directory = dirname( receiptPath );
 	const receipt = JSON.parse( readFileSync( receiptPath, 'utf8' ) ) as CaptureReceipt;
 	const sources = routeSourceMap( receipt );
-	const widths = options.widths ?? [ ...REFERENCE_WIDTHS ];
+	let widths = options.widths ?? [ ...REFERENCE_WIDTHS ];
 	const states = options.states ?? [ 'baseline' ];
 	const routes = options.routes?.map( canonicalRoutePath ) ?? [ ...sources.keys() ];
 	const selfConsistency = checkSelfConsistency( websiteDir, routeFiles( receipt ) );
@@ -1380,6 +1387,14 @@ async function checkFrozenFidelity( options: FidelityCheckOptions, stage: 'captu
 	try {
 		manifest = JSON.parse( readFileSync( join( directory, 'fidelity-reference.json' ), 'utf8' ) ) as FidelityReference;
 		if ( manifest.schema !== 'data-liberation/fidelity-reference/v1' || manifest.sourceUrl !== receipt.source?.url || ! manifest.captureId ) throw new Error( 'Invalid reference schema or source identity' );
+		if ( manifest.scope.cells ) {
+			const keys = new Set<string>();
+			for ( const cell of manifest.scope.cells ) {
+				const key = JSON.stringify( [ cell.sourceUrl, cell.profile, cell.viewport, cell.state ] );
+				if ( keys.has( key ) || ! /^[a-z][a-z0-9-]*$/.test( cell.profile ) || ! Number.isInteger( cell.viewport ) || cell.viewport <= 0 ) throw new Error( 'Invalid or duplicate reference profile cell' );
+				keys.add( key );
+			}
+		}
 		if ( manifest.receipt.path !== 'capture-receipt.json' ) throw new Error( 'Invalid reference receipt identity' );
 		readReferenceArtifact( directory, manifest.receipt );
 		if ( stage === 'materialization' ) {
@@ -1387,25 +1402,51 @@ async function checkFrozenFidelity( options: FidelityCheckOptions, stage: 'captu
 			for ( const artifact of manifest.capture ) readReferenceArtifact( directory, artifact );
 		}
 	} catch ( error ) { invalid = `Frozen reference unproven: ${ String( error ) }`; }
+	if ( ! options.widths && manifest?.scope.cells ) widths = manifest.scope.widths;
+	const required: Array<{ route: string; viewport: number; state: string; profile?: string }> = [];
+	for ( const route of routes ) {
+		const declared = manifest?.scope.cells?.filter( cell => cell.sourceUrl === sources.get( route ) );
+		if ( declared ) {
+			for ( const cell of declared ) {
+				if ( ! widths.includes( cell.viewport ) || ! states.includes( cell.state ) || options.profiles && ! options.profiles.includes( cell.profile ) ) continue;
+				required.push( { route, viewport: cell.viewport, state: cell.state, profile: cell.profile } );
+			}
+			// Explicit caller requirements outside declared cells stay pending.
+			for ( const viewport of widths ) for ( const state of states ) {
+				const profiles = options.profiles ?? [ undefined ];
+				for ( const profile of profiles ) {
+					if ( required.some( cell => cell.route === route && cell.viewport === viewport && cell.state === state && ( profile === undefined || cell.profile === profile ) ) ) continue;
+					if ( ! options.widths && ! options.profiles && state === 'baseline' && declared.length ) continue;
+					if ( ! options.widths && profile !== undefined && declared.some( cell => cell.profile === profile && cell.state === state ) ) continue;
+					required.push( { route, viewport, state, ...( profile ? { profile } : {} ) } );
+				}
+			}
+		} else for ( const viewport of widths ) for ( const state of states ) for ( const profile of options.profiles ?? [ undefined ] ) required.push( { route, viewport, state, ...( profile ? { profile } : {} ) } );
+	}
 	const unknowns = manifest?.scope?.unknowns ?? [ 'Capture has no valid frozen source evidence.' ];
 	// Discovery failures cannot disappear simply because no portable route was written.
-	let missingRoutes = 0;
+	let missingRequired = 0;
 	for ( const url of options.routes ? [] : manifest?.scope?.sourceUrls ?? [] ) {
 		if ( [ ...sources.values() ].includes( url ) || receiptCoversSourceUrl( receipt, url ) ) continue;
-		missingRoutes++;
-		for ( const viewport of widths ) for ( const state of states ) pending.push( { stage, route: url, viewport, state, reason: 'Declared source route has no portable capture' } );
+		const declared = manifest?.scope.cells?.filter( cell => cell.sourceUrl === url && widths.includes( cell.viewport ) && states.includes( cell.state ) && ( ! options.profiles || options.profiles.includes( cell.profile ) ) );
+		if ( declared?.length ) {
+			for ( const cell of declared ) { pending.push( { stage, route: url, viewport: cell.viewport, state: cell.state, profile: cell.profile, reason: 'Declared source route has no portable capture' } ); missingRequired++; }
+		} else for ( const viewport of widths ) for ( const state of states ) for ( const profile of options.profiles ?? [ undefined ] ) {
+			pending.push( { stage, route: url, viewport, state, ...( profile ? { profile } : {} ), reason: 'Declared source route has no portable capture' } ); missingRequired++;
+		}
 	}
 	let server: Awaited<ReturnType<typeof startStaticServer>> | undefined;
 	let browser: Awaited<ReturnType<typeof import('playwright')['chromium']['launch']>> | undefined;
 	try {
-		for ( const route of routes ) for ( const viewport of widths ) for ( const state of states ) {
-			options.log?.( `[compare] ${ stage } ${ route } @ ${ viewport }px ${ state }` );
-			const attribution = { stage, route, viewport, state };
+		for ( const cell of required ) {
+			const { route, viewport, state, profile } = cell;
+			options.log?.( `[compare] ${ stage } ${ route } ${ profile ?? '' } @ ${ viewport }px ${ state }` );
+			const attribution = { stage, ...cell };
 			try {
 				if ( invalid ) throw new Error( invalid );
 				if ( ! manifest || ! sources.has( route ) ) throw new Error( 'Required route was not captured' );
 				if ( state !== 'baseline' || ! manifest.scope.states.includes( state ) || ! manifest.scope.widths.includes( viewport ) ) throw new Error( 'Required viewport/state is outside frozen scope' );
-				const entries = manifest.entries.filter( entry => entry.route === route && entry.sourceUrl === sources.get( route ) && entry.viewport === viewport && entry.state === state );
+				const entries = manifest.entries.filter( entry => entry.route === route && entry.sourceUrl === sources.get( route ) && entry.viewport === viewport && entry.state === state && ( profile === undefined || ( entry.profile ?? entry.device ) === profile ) );
 				if ( entries.length !== 1 ) throw new Error( 'Source observation missing or ambiguous' );
 				const frozen = readFrozenObservation( directory, entries[0]! );
 				// Validate all source evidence even for materialization: stale evidence cannot certify a chain.
@@ -1414,10 +1455,12 @@ async function checkFrozenFidelity( options: FidelityCheckOptions, stage: 'captu
 				const entry = entries[ 0 ]!;
 				if ( typeof entry.browserProfile?.isMobile !== 'boolean' || typeof entry.browserProfile?.hasTouch !== 'boolean' ) throw new Error( 'Source browser profile unproven' );
 				const page = await browser.newPage( {
+					...replayBrowserIdentity( entry.context ?? {} ),
 					viewport: { width: viewport, height: entry.viewportHeight },
 					deviceScaleFactor: entry.deviceScaleFactor ?? 1,
 					...( entry.userAgent ? { userAgent: entry.userAgent } : {} ),
-					...entry.browserProfile,
+					isMobile: entry.browserProfile.isMobile,
+					hasTouch: entry.browserProfile.hasTouch,
 					serviceWorkers: 'block',
 				} );
 				await page.addInitScript( observeViewportEntrances );
@@ -1432,17 +1475,26 @@ async function checkFrozenFidelity( options: FidelityCheckOptions, stage: 'captu
 					} );
 					let source = frozen.observation;
 					let sourcePng = frozen.png;
+					const deviceSelected = receipt.routes?.some( row => row.url === sources.get( route ) && row.documentSelection?.kind === 'device' );
+					const sourceDocument = deviceSelected && entry.viewportMeta === undefined ? cheerio.load( readReferenceArtifact( directory, entry.document! ).toString() ) : undefined;
+					let sourceViewport = entry.viewportMeta ?? sourceDocument?.( 'meta[name="viewport"]' ).attr( 'content' );
+					const readViewport = () => page.evaluate( () => document.querySelector( 'meta[name="viewport"]' )?.getAttribute( 'content' ) ?? undefined );
 					const measure = async ( url: string ): Promise<LayoutObservation> => {
 						const response = await page.goto( url, { waitUntil: 'domcontentloaded' } );
 						if ( response && ! response.ok() ) throw new Error( `Observation HTTP ${ response.status() }` );
 						return observePage( page, url, viewport, options.settleMs ?? 800, new URL( url ).origin, undefined, undefined, true, false );
 					};
-					if ( stage === 'materialization' ) { source = await measure( local ); sourcePng = await captureViewportScreenshot( page ); }
+					if ( stage === 'materialization' ) { source = await measure( local ); sourcePng = await captureViewportScreenshot( page ); sourceViewport = await readViewport(); }
 					const liberated = await measure( candidate );
 					if ( ambiguousRenderedImages( source.images, liberated.images ).length ) throw new Error( 'Repeated image correspondence ambiguous: structural role/state does not uniquely identify occurrences' );
-					const evidenceDir = join( directory, 'compare', stage, evidenceSlug( route ), String( viewport ), state );
+					const evidenceDir = join( directory, 'compare', stage, evidenceSlug( route ), ...( profile ? [ evidenceSlug( profile ) ] : [] ), String( viewport ), state );
 					const candidatePng = options.screenshots ? await captureViewportScreenshot( page ) : undefined;
 					const checked = await runFidelityChecks( { ...attribution, sourceUrl: stage === 'capture' ? `frozen:${ entries[0]!.observation!.path }` : local, candidateUrl: candidate, source, candidate: liberated, evidenceDir } );
+					if ( deviceSelected ) {
+						const actualViewport = await readViewport();
+						const directives = ( value: string | undefined ) => value?.split( ',' ).map( directive => directive.trim().toLowerCase() ).sort().join( ',' );
+						if ( ! sourceViewport || directives( actualViewport ) !== directives( sourceViewport ) ) checked.failures.push( `source-selected viewport metadata differs: ${ actualViewport ?? 'absent' } !== ${ sourceViewport ?? 'unproven' }` );
+					}
 					if ( receipt.cleanup ) {
 						const retained = await applySourceCleanup( page, receipt.cleanup.policy );
 						if ( retained.removed || retained.residual || retained.failures.length ) checked.failures.push( 'Rendered artifact retains source attribution/advertising or cleanup audit failed' );
@@ -1459,8 +1511,14 @@ async function checkFrozenFidelity( options: FidelityCheckOptions, stage: 'captu
 	if ( ! routes.length || ! widths.length || ! states.length ) pending.push( { stage, route: '/', viewport: 0, state: 'baseline', reason: 'Empty required scope' } );
 	const summary = scoreReport( scores );
 	const pass = summary.pass && selfConsistency.pass && pending.length === 0;
+	const profileCoverage = Object.fromEntries( [ ...new Set( [ ...required, ...pending ].flatMap( cell => cell.profile ? [ cell.profile ] : [] ) ) ].map( profile => [ profile, {
+		required: scores.filter( cell => cell.profile === profile ).length + pending.filter( cell => cell.profile === profile ).length,
+		measured: scores.filter( cell => cell.profile === profile ).length,
+		pending: pending.filter( cell => cell.profile === profile ).length,
+	} ] ) );
 	const report: FidelityReport = { ...summary, pass, stage, status: pending.length ? 'unproven' : pass ? 'proven' : 'failed', pending,
-		coverage: { required: ( routes.length + missingRoutes ) * widths.length * states.length, measured: scores.length, unknowns },
+		coverage: { required: required.length + missingRequired, measured: scores.length, unknowns, profiles: profileCoverage },
+		profiles: [ ...new Set( required.flatMap( cell => cell.profile ? [ cell.profile ] : [] ) ) ],
 		sourceUrl: receipt.source?.url ?? '', websiteDir, widths, routes, routesAvailable: sources.size, routesCleanupUnproven: [], selfConsistency, scores, overlays: [] };
 	mkdirSync( join( directory, 'compare', stage ), { recursive: true } );
 	writeFileSync( join( directory, 'compare', stage, 'report.json' ), `${ JSON.stringify( report, null, 2 ) }\n` );

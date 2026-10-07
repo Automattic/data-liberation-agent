@@ -57,7 +57,12 @@ export interface CaptureEvidenceInput {
 		duplicates: ReadonlyArray< { url: string; canonicalUrl: string; path: string } >;
 	};
 	states: { interactions: ReadonlyArray< InteractionStatesReport >; scroll: ReadonlyArray< ScrollStatesReport > };
-	layout: { fluidReports: ReadonlyArray< CaptureFluidEvidence >; switchWidths: ReadonlyArray< number > };
+	layout: {
+		fluidReports: ReadonlyArray< CaptureFluidEvidence >;
+		switchWidths: ReadonlyArray< number >;
+		deviceSelections?: ReadonlyArray< { url: string; id: string; documents: string[]; missing: string[]; evidence: string } >;
+		widthSelections?: ReadonlyArray< { url: string; kind: 'width'; switchWidth: number; evidence: string } >;
+	};
 	assets: {
 		references: AssetEvidenceReferences;
 		stubs: MediaStubStore;
@@ -475,6 +480,7 @@ export function writeCaptureEvidence( input: CaptureEvidenceInput ): string {
 	// written by a runtime, and where it changes behavior. Downstream stages
 	// consume this instead of hardcoding viewports and breakpoints.
 	const routesWithMobile = retainedEntries.filter( ( entry ) => entry.hasMobileDocument ).length;
+	const { deviceSelections = [], widthSelections = [] } = input.layout;
 	const learnedApplied = fluidReports.reduce( ( total, report ) => total + report.applied, 0 );
 	const learnedFrozen = fluidReports.reduce( ( total, report ) => total + report.unmodelled, 0 );
 	const observedBreakpoints = [
@@ -483,7 +489,11 @@ export function writeCaptureEvidence( input: CaptureEvidenceInput ): string {
 	const sourceProfile = {
 		schema: SOURCE_PROFILE_SCHEMA,
 		variants: routesWithMobile > 0 ? 'per-device' : 'single',
-		documentsPerRoute: routesWithMobile > 0 ? 2 : 1,
+		documentsPerRoute: Math.max( routesWithMobile > 0 ? 2 : 1, ...deviceSelections.map( row => row.documents.length - row.missing.length ) ),
+		documentSelection: deviceSelections.length || widthSelections.length ? {
+			kind: deviceSelections.length ? widthSelections.length ? 'mixed' : 'device' : 'width',
+			routes: [ ...deviceSelections.map( row => ( { kind: 'device', ...row } ) ), ...widthSelections ],
+		} : undefined,
 		geometry:
 			httpInput ? 'unverified' : learnedApplied > 0 && learnedFrozen > 0
 				? 'mixed'
@@ -491,7 +501,7 @@ export function writeCaptureEvidence( input: CaptureEvidenceInput ): string {
 				? 'runtime-written'
 				: 'declarative',
 		switchWidth: switchWidths.length > 0 ? Math.max( ...switchWidths ) : null,
-		switchWidthSource: switchWidths.length > 0 ? 'detected' : 'default',
+		switchWidthSource: deviceSelections.length && ! switchWidths.length ? 'not-applicable' : widthSelections.length === switchWidths.length && widthSelections.length > 0 ? 'observed' : switchWidths.length > 0 ? 'detected' : 'default',
 		breakpoints: observedBreakpoints,
 		learned: { applied: learnedApplied, frozen: learnedFrozen, routes: routes.filter( entry => entry.fluidGeometry ).length, documents: fluidReports.length },
 	};
@@ -585,7 +595,9 @@ export function writeCaptureEvidence( input: CaptureEvidenceInput ): string {
 				// of a desktop/mobile document pair inside one exported page, so a
 				// generic consumer can recognize them as a document-scope boundary
 				// without hardcoding this tool's naming convention.
-				document_scope_classes: [ DESKTOP_DOCUMENT_CLASS, MOBILE_DOCUMENT_CLASS ],
+				document_scope_classes: [ ...new Set( [ DESKTOP_DOCUMENT_CLASS, MOBILE_DOCUMENT_CLASS,
+					...deviceSelections.flatMap( row => row.documents.filter( key => ! row.missing.includes( key ) ).map( key => `data-liberation-${ key }-document` ) ),
+				] ) ],
 				routes,
 				assets,
 				assetEvidence: { path: 'asset-evidence.json', schema: ASSET_EVIDENCE_SCHEMA },
