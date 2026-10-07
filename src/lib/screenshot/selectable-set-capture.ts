@@ -196,7 +196,7 @@ export async function captureSelectableSetStates(
 				};
 				const isPagerControl = ( element: Element ) =>
 					element.hasAttribute( 'data-dla-pager-control' ) ||
-					Boolean( element.closest( '[data-dla-pager-stage]' ) );
+					Boolean( element.closest( '[data-dla-pager-stage],[data-dla-gallery-capture-width]' ) );
 				const looksSelectable = ( element: Element ): boolean => {
 					if ( ! visible( element ) ) return false;
 					if ( element.getAttribute( 'aria-disabled' ) === 'true' || element.hasAttribute( 'disabled' ) ) {

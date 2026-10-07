@@ -27,6 +27,8 @@ import {
 import { collectMobileChromeLayout } from './dom-capture.js';
 import { generateChromeCss, type BakedLayoutMap } from './fixups.js';
 import { sanitizeFrozenHtml } from './freeze.js';
+import { captureGalleries, alignCapturedGalleries } from './gallery-capture.js';
+import { wireCapturedDialogs } from '../static-dialogs.js';
 import { captureNativeViewTimelines } from './native-view-timelines.js';
 import { learnAndApplyFluidGeometry } from './fluid-capture.js';
 import {
@@ -971,6 +973,9 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	// before serialization (so the learned CSS is what gets written).
 	// A slideshow driven by its own thumbnails only advances while the source's
 	// script is running, so read its states before any layout measurement.
+	// Observe actions while source geometry and lazy-image owners are still live.
+	// Width learning can freeze hidden overlay boxes; it cannot be the input to an action drive.
+	const galleryStates = await captureGalleries(page).catch(() => []);
 	const pagerSlideshows = await collectPagerSlideshowStates( page ).catch( () => [] );
 	// Browser probes can scroll an offscreen control into view. Native view
 	// animations legitimately report finished there; observe the capture's
@@ -1054,6 +1059,9 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	if (plan.captureHtml || plan.captureMobileHtml || plan.captureSections || plan.captureMobileSections) {
 		disclosureStates = await hydrateDisclosureContent(page);
 	}
+	// Gallery cycles are part of this viewport's serialization transaction, not
+	// a later drive after the baseline HTML has already been saved.
+	await alignCapturedGalleries(page, galleryStates);
 
 	// Capture only after every operation that can change the live DOM, then
 	// serialize immediately below. This keeps runtime-driven components in the
@@ -1091,7 +1099,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 			// sweep — the policy lets the sweep reinstall on the fresh document.
 			await sweepSourceCleanup( page, sourcePolicy );
 			await preserveStreamedVideoPosters( page, resourceStore, url ).catch( () => undefined );
-			const html = canonicalize( await capturePageHtml( page ) );
+			const html = canonicalize( wireCapturedDialogs(await capturePageHtml( page ), galleryStates) );
 			const documentUrl = await page.evaluate( () => ( { url: document.URL, baseUrl: document.baseURI } ) );
 			await resourceStore.captureDomDependencies( html, documentUrl.baseUrl );
 			// Refuse to persist a capture whose page navigated away from the route we
@@ -1157,7 +1165,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		try {
 			await sweepSourceCleanup( page, sourcePolicy );
 			await preserveStreamedVideoPosters( page, resourceStore, url ).catch( () => undefined );
-			const mhtml = canonicalize( sanitizeFrozenHtml( await capturePageHtml( page ) ) );
+			const mhtml = canonicalize( wireCapturedDialogs(sanitizeFrozenHtml( await capturePageHtml( page ) ), galleryStates) );
 			const documentUrl = await page.evaluate( () => ( { url: document.URL, baseUrl: document.baseURI } ) );
 			await resourceStore.captureDomDependencies( mhtml, documentUrl.baseUrl );
 			// Same route-identity guard as the desktop HTML write above — best-effort
@@ -1432,7 +1440,7 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 		// reclosed) before serialization above — folded in here purely as
 		// diagnostics, using the same states array + totals the dialog/menu path
 		// already reports through, rather than a parallel reporting system.
-		interactions.states = [ ...disclosureStates, ...interactions.states ];
+		interactions.states = [ ...galleryStates, ...disclosureStates, ...interactions.states ];
 		try {
 			const selectableStates = await captureSelectableSetStates( page );
 			if ( selectableStates.length > 0 ) {
@@ -1493,12 +1501,18 @@ function mergeInteractionReports(
 ): InteractionStatesReport {
 	if ( ! previous ) return latest;
 	const identity = ( state: CapturedDialogInteraction ) =>
-		`${ state.kind ?? 'dialog' }:${ state.trigger.id ?? state.trigger.selector }`;
+		`${ state.kind ?? 'dialog' }:${ state.trigger.id ?? state.trigger.selector }${state.gallery ? ':' + state.gallery.inline.viewport.width : ''}`;
 	const ofKind =
 		( kind: NonNullable< CapturedDialogInteraction[ 'kind' ] > | 'dialog' ) =>
 		( state: CapturedDialogInteraction ) =>
 			( state.kind ?? 'dialog' ) === kind;
 	const states = [
+		...mergeCapturedEvidence(
+			previous.states.filter( ofKind( 'gallery' ) ),
+			latest.states.filter( ofKind( 'gallery' ) ),
+			identity,
+			Number.POSITIVE_INFINITY
+		),
 		...mergeCapturedEvidence(
 			previous.states.filter( ofKind( 'typed-search' ) ),
 			latest.states.filter( ofKind( 'typed-search' ) ), identity, Number.POSITIVE_INFINITY

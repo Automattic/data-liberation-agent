@@ -2,6 +2,7 @@ import * as cheerio from 'cheerio';
 import type { AnyNode, Element } from 'domhandler';
 import { DROPDOWN_ANCESTOR_ATTRIBUTE_PATTERN, type CapturedDropdownAncestorState } from './screenshot/dropdown-ancestor-state.js';
 import { wireCapturedCollections } from './static-collections.js';
+import { wireCapturedGalleries, wireGalleryDialog } from './static-galleries.js';
 import type {
 	CapturedDialogInteraction,
 	CapturedInitialDialog,
@@ -102,6 +103,7 @@ export function wireCapturedDialogs(
 	initialDialogs: CapturedInitialDialog[] = []
 ): string {
 	html = wireCapturedCollections( html, states );
+	html = wireCapturedGalleries( html, states );
 	// Disclosure/accordion panels (`kind === 'disclosure'`) are restored in
 	// place, in the live DOM, before the page's HTML is ever serialized (see
 	// `hydrateDisclosureContent`) — their content is already inline in `html`
@@ -114,7 +116,10 @@ export function wireCapturedDialogs(
 		( state ) =>
 			state.status === 'captured' &&
 			state.dialog?.html &&
-			( state.kind === undefined || state.kind === 'dialog' )
+			( state.kind === undefined || state.kind === 'dialog' || (
+				state.kind === 'gallery' && state.gallery?.lightbox?.coverage === 'complete' &&
+				state.gallery.closed && ! state.dialog.htmlTruncated
+			) )
 	);
 	const choiceStates = states.filter(
 		( state ) =>
@@ -170,6 +175,21 @@ export function wireCapturedDialogs(
 		const triggers = findTriggers( $, state.trigger );
 		triggers.each( ( _, element ) => {
 			const trigger = $( element );
+			if (state.gallery) {
+				const width = trigger.closest('[data-dla-gallery-capture-width]').attr('data-dla-gallery-capture-width');
+				if (width && Number(width) !== state.gallery.inline.viewport.width) return;
+				const existing = trigger.attr('aria-controls');
+				if (trigger.attr('data-dla-dialog-trigger') && existing) {
+					const surface = gallerySurface($, trigger), panel = $('#' + cssEscape(existing));
+					const key = trigger.attr('data-dla-dialog-trigger');
+					surface.find('[data-dla-dialog-close]').filter((_, close) => $(close).attr('data-dla-dialog-close') === key && !$(close).closest('[data-dla-dialog-panel]').length).remove();
+					panel.attr('data-dla-dialog-panel', existing);
+					panel.find('[data-dla-dialog-close]').attr('data-dla-dialog-close', existing);
+					trigger.attr('data-dla-dialog-trigger', existing);
+					surface.append(panel);
+					return;
+				}
+			}
 			if (
 				trigger.closest( 'details.dla-disclosure' ).length ||
 				trigger.attr( 'data-dla-listbox-trigger' ) ||
@@ -221,13 +241,18 @@ export function wireCapturedDialogs(
 			panel.attr( 'id', panelId ).attr( 'data-dla-dialog-panel', panelId );
 			if ( dropdown ) panel.addClass( 'dla-dropdown' );
 			if ( state.dialog?.ariaLabel ) panel.attr( 'aria-label', state.dialog.ariaLabel );
-			if ( !reusePanel && !sourcePlaced ) panel.html( state.dialog!.html );
+			if ( !reusePanel && !sourcePlaced ) panel.html( state.gallery?.lightbox
+				? wireGalleryDialog( state.dialog!.html, state.gallery.lightbox, panelId )
+				: state.dialog!.html );
 			if ( label ) trigger.attr( 'data-dla-disclosure-label', label );
 			trigger.attr( 'data-dla-dialog-trigger', panelId );
 			trigger.attr( 'aria-controls', panelId );
 			trigger.attr( 'aria-expanded', 'false' );
 			if ( ! trigger.attr( 'aria-haspopup' ) ) trigger.attr( 'aria-haspopup', dropdown ? 'menu' : 'dialog' );
-			if ( reusePanel ) {
+			// A captured image lightbox is a viewport surface. Keeping it below a
+			// transformed slide would make fixed positioning and hit ownership local.
+			if (state.gallery) gallerySurface($, trigger).append(panel);
+			else if ( reusePanel ) {
 				existingPanel.replaceWith( panel );
 				reusedPanels.set( state.dialog!.selector, panelId );
 			}
@@ -236,7 +261,7 @@ export function wireCapturedDialogs(
 				else $( observed.parent ).append( panel );
 			}
 			else trigger.after( panel );
-			if ( ! dropdown ) {
+			if ( ! dropdown && !state.gallery ) {
 				const close = $( '<button type="button" hidden>Close</button>' );
 				close.attr( 'data-dla-dialog-close', panelId );
 				close.attr( 'aria-label', label ? `Close ${ label }` : 'Close' );
@@ -271,7 +296,7 @@ export function wireCapturedDialogs(
 		$( 'body' ).append( details );
 		wired++;
 	}
-	if ( wired > 0 ) {
+	if ( wired > 0 || $('[data-dla-dialog-trigger]').length > 0 ) {
 		// Styles the source added only once a panel opened (for example utility
 		// classes compiled on demand) travel with the panel they style.
 		const panelCss = [ ...new Set( captured.map( ( state ) => state.dialog?.css ?? '' ).filter( Boolean ) ) ].join( '\n' );
@@ -342,6 +367,11 @@ function nextDialogId( $: cheerio.CheerioAPI ): string {
 	let index = 0;
 	while ( $( `#dla-dialog-${ index }` ).length ) index++;
 	return `dla-dialog-${ index }`;
+}
+
+function gallerySurface($: cheerio.CheerioAPI, trigger: cheerio.Cheerio<AnyNode>) {
+	const document = trigger.closest('.data-liberation-desktop-document,.data-liberation-mobile-document,[class*="site-document-variant-"]');
+	return document.length ? document : $('body');
 }
 
 /** Bind verified source evidence only to the unchanged local portable owner. */
