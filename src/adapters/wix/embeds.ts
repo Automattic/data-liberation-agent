@@ -118,6 +118,9 @@ export function googleMapsEmbedUrl( view: MapView, language?: string ): string |
  * Runs inside Wix's map wrapper. The wrapper keeps the map and its markers on
  * `window`; the first marker is the owner's location, the zoom is the map's.
  * Without those, Google's own view link carries the centre and zoom.
+ *
+ * Known limit: a keyless Google Maps embed shows one pin, so a Wix map with
+ * several locations keeps only its first marker. The others are not carried.
  */
 function readWixMapView(): { lat?: number; lng?: number; zoom?: number; link?: string } | null {
 	const scope = window as unknown as Record< string, unknown >;

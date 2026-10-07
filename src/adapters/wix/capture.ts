@@ -484,6 +484,11 @@ export const capture: LiberationHooks = {
     { id: 'wix-members-gate', category: 'provider-service',
       selector: '[data-testid="siteMembersDialogBlockingLayer"]', accessGate: { provider: 'Wix' } },
     { id: 'wix-members-dialog', category: 'provider-service', selector: '[data-testid="siteMembersDialogLayout"]' },
+    // Wix mirrors its response headers into <meta http-equiv="X-Wix-…">: the
+    // owner's metaSiteId, the app instance id and the published revision. They
+    // are Wix account identifiers, not page metadata, and a copy would publish
+    // them on every page (and in the importer's report).
+    { id: 'wix-site-identifiers', category: 'source-attribution', selector: 'meta[http-equiv^="X-Wix-" i]' },
   ],
 	removeSelectors: [ '[id="WIX_ADS"]', '[id$="-hiddenA11ySubMenuIndication"]' ],
 	/**
