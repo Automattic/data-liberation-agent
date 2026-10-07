@@ -1,4 +1,5 @@
 import { createServer } from 'node:http';
+import { allocateCaptureRoutes } from '../capture-export-routes.js';
 import { describe, it, expect, vi } from 'vitest';
 import { classifyUrl, extractSameOriginLinks, fetchSitemap, fetchSitemapWithDiagnostics, resolvePageLink } from './sitemap.js';
 
@@ -129,10 +130,10 @@ describe('fetchSitemap', () => {
     }
   });
 
-  it('keeps a sitemap path that starts with repeated slashes on the entry host, as one path', async () => {
+  it('keeps a sitemap path that starts with repeated slashes on the entry host unchanged', async () => {
     // `//alt` is a path here, not a scheme-relative reference: moving the entry
-    // onto the entry origin must not turn it into `https://alt/`. The repeated
-    // slashes collapse because export maps `//alt` and `/alt` to one file.
+    // onto the entry origin must not turn it into `https://alt/` or silently
+    // substitute a different source path.
     const sitemap = `<urlset>
       <url><loc>http://example.test//alt</loc></url>
       <url><loc>http://www.example.test//alt/about?lang=alt</loc></url>
@@ -148,9 +149,9 @@ describe('fetchSitemap', () => {
     try {
       const { urls, diagnostics } = await fetchSitemapWithDiagnostics('https://example.test/');
       expect(urls).toEqual([
-        'https://example.test/alt',
-        'https://example.test/alt/about?lang=alt',
-        'https://example.test/deep',
+        'https://example.test//alt',
+        'https://example.test//alt/about?lang=alt',
+        'https://example.test///deep',
         'https://example.test/one',
         'https://example.test/two',
         'https://example.test/three',
@@ -619,26 +620,64 @@ describe('extractSameOriginLinks', () => {
 });
 
 describe('resolvePageLink', () => {
-  it('collapses repeated slashes in a same-origin page path and still drops scheme-relative hosts', () => {
+  it('preserves repeated slashes in same-origin paths and still drops scheme-relative hosts', () => {
     const base = 'https://example.test/';
     const origin = 'https://example.test';
-    expect(resolvePageLink('/a//b', base, origin)).toBe('https://example.test/a/b');
-    expect(resolvePageLink('https://example.test///alt/', base, origin)).toBe('https://example.test/alt/');
+    expect(resolvePageLink('/a//b', base, origin)).toBe('https://example.test/a//b');
+    expect(resolvePageLink('https://example.test///alt/', base, origin)).toBe('https://example.test///alt/');
     expect(resolvePageLink('//other.test/x', base, origin)).toBeNull();
-    // Platform UI and assets are still recognised after the collapse.
+    // Platform UI and assets remain excluded.
     expect(resolvePageLink('//cart', base, origin)).toBeNull();
     expect(resolvePageLink('/img//logo.png', base, origin)).toBeNull();
     expect(extractSameOriginLinks('<a href="/a//b">b</a><a href="//other.test/x">x</a><a href="/c/">c</a>', base)).toEqual([
-      'https://example.test/a/b',
+      'https://example.test/a//b',
       'https://example.test/c/',
     ]);
   });
 });
 
 describe('fetchSitemap route identity', () => {
-  it('keeps one route when a sitemap lists a page with and without a trailing slash or with repeated slashes', async () => {
-    // Export writes `/x/`, `/x` and `//x` to the same file, so discovery must
-    // hand over one of them. Query renditions stay distinct.
+  it('fetches distinct repeated-slash source documents without inventing aliases', async () => {
+    const paths = ['/', '//page', '/page', '/group//entry', '/group/entry', '/about'];
+    const server = createServer((request, response) => {
+      if (request.url === '/sitemap.xml') {
+        const origin = `http://${request.headers.host}`;
+        response.setHeader('content-type', 'application/xml');
+        response.end(`<urlset>${paths.map(path => `<url><loc>${origin}${path}</loc></url>`).join('')}</urlset>`);
+        return;
+      }
+      if (!paths.includes(request.url ?? '')) {
+        response.statusCode = 404;
+        response.end();
+        return;
+      }
+      response.setHeader('content-type', 'text/html');
+      response.end(`<h1>Source document ${request.url}</h1>`);
+    });
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('Test server did not start');
+    const origin = `http://127.0.0.1:${address.port}`;
+    try {
+      const { urls, diagnostics } = await fetchSitemapWithDiagnostics(`${origin}/`);
+      expect(urls).toEqual(paths.map(path => `${origin}${path}`));
+      expect(diagnostics).toEqual([]);
+      const documents = await Promise.all(urls.map(async url => (await fetch(url)).text()));
+      expect(documents).toEqual(paths.map(path => `<h1>Source document ${path}</h1>`));
+      expect(resolvePageLink(`${origin}//page`, `${origin}/`, origin)).toBe(`${origin}//page`);
+      expect(resolvePageLink('/group//entry', `${origin}/`, origin)).toBe(`${origin}/group//entry`);
+      // A filesystem collision is explicit until source canonical/redirect
+      // evidence proves an alias; discovery cannot substitute another page.
+      expect(() => allocateCaptureRoutes(urls.map(url => ({ url, htmlPath: '', jsonLd: [] })), `${origin}/`, []))
+        .toThrow('Captured routes resolve to the same website path');
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+    }
+  });
+
+  it('deduplicates existing route identity without folding distinct repeated-slash paths', async () => {
+    // Preserve the existing `/x/` versus `/x` identity and query renditions.
+    // `//x` remains its own source document until source evidence proves an alias.
     const sitemap = `<urlset>
       <url><loc>https://example.test/x/</loc></url>
       <url><loc>https://example.test//x</loc></url>
@@ -657,6 +696,7 @@ describe('fetchSitemap route identity', () => {
       const { urls, diagnostics } = await fetchSitemapWithDiagnostics('https://example.test/');
       expect(urls).toEqual([
         'https://example.test/x/',
+        'https://example.test//x',
         'https://example.test/x?lang=alt',
         'https://example.test/y',
         'https://example.test/one',
