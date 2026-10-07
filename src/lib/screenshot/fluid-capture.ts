@@ -490,7 +490,11 @@ export async function learnAndApplyFluidGeometry(
 			// Accepted rules stay applied while later entries are measured; the
 			// capture-owned stylesheet written after this loop replaces them.
 			const probes: HTMLStyleElement[] = [];
-			for ( const [ index, entry ] of entries.entries() ) {
+			// This runs in the page's main world, where a legacy library can have
+			// replaced Array.prototype methods (Prototype.js turns `entries()` into a
+			// plain copy or deletes it). Index the array instead.
+			for ( let index = 0; index < entries.length; index++ ) {
+				const entry = entries[ index ]!;
 				const element = document.querySelector< HTMLElement >( `[${ attribute }="${ entry.id }"]` );
 				if ( ! element ) continue;
 				if ( entry.segmentedCss !== null ) {

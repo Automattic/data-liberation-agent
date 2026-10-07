@@ -94,7 +94,10 @@ export function preserveWixSlideshowSlides(
 	if ( ! slideshow || ! wrapper || slides.length < 2 ) return;
 
 	const fragment = document.createDocumentFragment();
-	for ( const [ index, html ] of slides.entries() ) {
+	// Runs inside the page: index the array rather than rely on
+	// Array.prototype.entries, which a page library may have replaced.
+	for ( let index = 0; index < slides.length; index++ ) {
+		const html = slides[ index ]!;
 		const template = document.createElement( 'template' );
 		template.innerHTML = html;
 		const slide = template.content.firstElementChild;
