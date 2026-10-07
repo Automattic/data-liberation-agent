@@ -61,7 +61,9 @@ export function captureFluidBaseline( page: Page, attribute: string ) {
 				}
 				if ( role.style === null && style.cssText === '' ) element.removeAttribute( 'style' );
 			}
-			for ( const [ index, child ] of role.children.entries() ) {
+			// Main-world libraries can replace or delete Array.prototype.entries.
+			for ( let index = 0; index < role.children.length; index++ ) {
+				const child = role.children[ index ]!;
 				const current = child.element.isConnected
 					? child.element.parentElement === element ? child.element : undefined
 					: element.children[ index ];

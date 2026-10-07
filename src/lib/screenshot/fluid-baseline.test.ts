@@ -3,6 +3,29 @@ import { expect, it, vi } from 'vitest';
 import { captureFluidBaseline } from './fluid-baseline.js';
 import { learnAndApplyFluidGeometry } from './fluid-capture.js';
 
+it.each( [
+	[ 'copy', 'Array.prototype.entries = function () { return this.slice(); };' ],
+	[ 'deleted', 'delete Array.prototype.entries;' ],
+] )( 'restores and cleans replacement roles when main-world Array.entries is %s', async ( _mode, patch ) => {
+	const browser = await chromium.launch();
+	try {
+		const page = await browser.newPage();
+		await page.setContent( `<script>${ patch }Array.from = function (value) { return Array.isArray(value) ? value.slice() : []; };</script><div class="active"><nav id="duplicate" class="menu" data-dla-fluid-id="mobile-0" style="width:400px">Active</nav></div><div class="spacer"><nav id="duplicate" class="menu" data-dla-fluid-id="mobile-1" style="width:80px;left:13px">Clone</nav></div>` );
+		const baseline = await captureFluidBaseline( page, 'data-dla-fluid-id' );
+		await baseline.evaluate( state => state.bind() );
+		await page.evaluate( () => document.querySelector( '.spacer .menu' )!.replaceWith( document.querySelector( '.active .menu' )!.cloneNode( true ) ) );
+		await baseline.evaluate( state => state.reconcile() );
+		await baseline.evaluate( state => state.restore() );
+		expect( ( await page.locator( '.spacer .menu' ).boundingBox() )!.width ).toBe( 80 );
+		expect( await page.locator( '.spacer .menu' ).evaluate( element => ( element as HTMLElement ).style.left ) ).toBe( '13px' );
+		await baseline.evaluate( state => state.cleanup() );
+		expect( await page.locator( '[data-dla-fluid-id]' ).count() ).toBe( 0 );
+		await baseline.dispose();
+	} finally {
+		await browser.close();
+	}
+} );
+
 it( 'keeps finalized clone geometry after cleanup while allowing source controls to open', async () => {
 	const browser = await chromium.launch();
 	try {

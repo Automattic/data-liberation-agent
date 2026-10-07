@@ -9,6 +9,7 @@ import {
 	settleWixNavigation,
 	stripShowcaseMarkup,
 	wixMediaVariant,
+	wixMemberPaths,
 	wixStaticMediaUrl,
 	WIX_CAPTURE_CHROME_SELECTOR,
 	WIX_ANCHOR_SCROLL_MAX_MILLISECONDS,
@@ -46,6 +47,18 @@ describe( 'wixMediaVariant', () => {
 	it( 'ignores empty and local URLs', () => {
 		expect( wixMediaVariant( '' ) ).toBeNull();
 		expect( wixMediaVariant( '/media/local.avif' ) ).toBeNull();
+	} );
+} );
+
+describe( 'wixMemberPaths', () => {
+	it( 'finds the members area at the root of a connected domain', () => {
+		expect( wixMemberPaths( 'https://www.dunbaroakshoa.com/bylaws' ) ).toEqual( [ '/account/' ] );
+		expect( wixMemberPaths( 'https://www.example.com/' ) ).toEqual( [ '/account/' ] );
+	} );
+
+	it( 'finds it under the site path of a free wixsite.com site', () => {
+		expect( wixMemberPaths( 'https://owner.wixsite.com/my-hoa/bylaws' ) ).toEqual( [ '/my-hoa/account/' ] );
+		expect( wixMemberPaths( 'https://owner.wixsite.com/my-hoa' ) ).toEqual( [ '/my-hoa/account/' ] );
 	} );
 } );
 

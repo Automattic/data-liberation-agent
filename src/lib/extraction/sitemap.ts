@@ -34,6 +34,7 @@ export function parseSitemapDocument(xml: string): SitemapDocument {
 }
 
 import { canonicalizeHost } from '../screenshot/same-origin.js';
+import { normalizedUrl } from '../url/route-key.js';
 
 export function parseSitemapXml(xml: string): string[] {
   return parseSitemapDocument(xml).locs;
@@ -151,7 +152,14 @@ export async function fetchSitemapWithDiagnostics(baseUrl: string): Promise<Site
       diagnostics.push({ code: 'sitemap_url_rejected', url: entry, reason: 'origin differs from the entry URL' });
       return null;
     }
-    return new URL(`${entryUrl.pathname}${entryUrl.search}`, baseOrigin);
+    // Change only the scheme and host; keep the listed path and query. The
+    // setters cannot move the URL to another host, whereas re-parsing
+    // `pathname` as a relative reference reads a path such as `//alt` as
+    // scheme-relative and yields `https://alt/`.
+    const accepted = new URL(baseOrigin);
+    accepted.pathname = entryUrl.pathname;
+    accepted.search = entryUrl.search;
+    return accepted;
   }
 
   function noteMiss(diagnostic: SitemapDiagnostic, bucket?: SitemapDiagnostic[]): void {
@@ -197,9 +205,12 @@ export async function fetchSitemapWithDiagnostics(baseUrl: string): Promise<Site
         if (document.kind === 'index' || pathPart.endsWith('.xml')) {
           await fetchAndParse(entryUrl.href, depth + 1);
         } else {
-          if (!seenUrls.has(entryUrl.href)) {
+          // Capture and export treat `/x` and `/x/` as one route. Keep the
+          // first form the sitemap lists so the two cannot collide at export.
+          const route = normalizedUrl(entryUrl.href);
+          if (!seenUrls.has(route)) {
             allUrls.push(entryUrl.href);
-            seenUrls.add(entryUrl.href);
+            seenUrls.add(route);
           }
         }
       }
@@ -271,11 +282,11 @@ export async function fetchSitemapWithDiagnostics(baseUrl: string): Promise<Site
   // Supplement with the homepage's links if sitemap was thin
   if (allUrls.length < 5) {
     const navUrls = await crawlHomepageLinks(normalizedBase, baseOrigin);
-    const seen = new Set(allUrls);
+    const seen = new Set(allUrls.map(normalizedUrl));
     for (const u of navUrls) {
-      if (!seen.has(u) && allUrls.length < MAX_URLS) {
+      if (!seen.has(normalizedUrl(u)) && allUrls.length < MAX_URLS) {
         allUrls.push(u);
-        seen.add(u);
+        seen.add(normalizedUrl(u));
       }
     }
 
@@ -284,11 +295,11 @@ export async function fetchSitemapWithDiagnostics(baseUrl: string): Promise<Site
     // routes to retain the inexpensive fetch path for ordinary sites.
     if (navUrls.length === 0) {
       const renderedNavUrls = await crawlRenderedNavLinks(normalizedBase, baseOrigin);
-      const seen = new Set(allUrls);
+      const seen = new Set(allUrls.map(normalizedUrl));
       for (const u of renderedNavUrls) {
-        if (!seen.has(u) && allUrls.length < MAX_URLS) {
+        if (!seen.has(normalizedUrl(u)) && allUrls.length < MAX_URLS) {
           allUrls.push(u);
-          seen.add(u);
+          seen.add(normalizedUrl(u));
         }
       }
     }

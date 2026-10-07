@@ -154,6 +154,23 @@ describe( 'pager slideshow capture', () => {
 		await page.close();
 	} );
 
+	// The slides are written back inside the page, where a legacy library
+	// (Prototype.js) may have replaced Array.prototype.entries with a plain copy
+	// (1.6) or deleted it (1.7).
+	it.each( [
+		[ 'returns a copy of the array', 'Array.prototype.entries = function () { return this.slice(); };' ],
+		[ 'is deleted', 'delete Array.prototype.entries;' ],
+	] )( 'still writes every state when the page library replaced Array.prototype.entries: %s', async ( _case, patch ) => {
+		const page = await openPage( pagerFixture().replace( '<body>', `<body><script>${ patch }</script>` ) );
+		await applyPagerSlideshowStates( page, await collectPagerSlideshowStates( page ) );
+
+		const slides = await page.$$eval( '[data-dla-pager-stage] > [data-dla-captured-slide]', ( nodes ) =>
+			nodes.map( ( node ) => node.querySelector( 'img' )?.getAttribute( 'src' ) ?? '' )
+		);
+		expect( slides ).toEqual( FULL );
+		await page.close();
+	} );
+
 	it( 'reads each state only once its own media has loaded', async () => {
 		const page = await openPage( pagerFixture() );
 		await applyPagerSlideshowStates( page, await collectPagerSlideshowStates( page ) );

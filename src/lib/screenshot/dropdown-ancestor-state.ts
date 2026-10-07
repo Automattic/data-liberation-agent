@@ -86,7 +86,9 @@ export async function observeDropdownAncestors( page: Page, panelSelector: strin
 			if ( Object.values( opened ).some( value => new TextEncoder().encode( value ?? '' ).length > 4096 ) ) {
 				return { ...result, reason: 'ancestor-attribute-limit' };
 			}
-			const changed = Array.from( new Set( [ ...Object.keys( row.closed ), ...Object.keys( opened ) ] ) ).filter( name => ( row.closed[ name ] ?? null ) !== ( opened[ name ] ?? null ) );
+			// Spread, not Array.from: a legacy page library (Prototype.js) replaces
+			// Array.from with one that returns [] for a Set.
+			const changed = [ ...new Set( [ ...Object.keys( row.closed ), ...Object.keys( opened ) ] ) ].filter( name => ( row.closed[ name ] ?? null ) !== ( opened[ name ] ?? null ) );
 			if ( changed.length > 32 ) return { ...result, reason: 'ancestor-attribute-count-limit' };
 			if ( changed.length > 0 ) {
 				result.ancestors.push( { selector: row.selector, tag: row.tag, depth: row.depth,
@@ -123,7 +125,7 @@ export async function verifyDropdownRestoration( page: Page, state: CapturedDrop
 			return Boolean( snapshot && snapshot.rows.every( row =>
 				row.node.isConnected && document.querySelectorAll( row.selector ).length === 1 &&
 				document.querySelector( row.selector ) === row.node &&
-				Array.from( new Set( [ ...Object.keys( row.closed ), ...Object.keys( row.opened ?? {} ) ] ) ).every( name => row.node.getAttribute( name ) === ( row.closed[ name ] ?? null ) )
+				[ ...new Set( [ ...Object.keys( row.closed ), ...Object.keys( row.opened ?? {} ) ] ) ].every( name => row.node.getAttribute( name ) === ( row.closed[ name ] ?? null ) )
 			) && !panelVisible && ( !snapshot.placement?.before || snapshot.placement.before.isConnected && snapshot.placement.before.parentElement === snapshot.placement.parent ) );
 		}, panelSelector, { timeout: 1000 } );
 		return { ...state, status: 'verified' };

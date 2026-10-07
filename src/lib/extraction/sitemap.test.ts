@@ -1,6 +1,7 @@
 import { createServer } from 'node:http';
+import { allocateCaptureRoutes } from '../capture-export-routes.js';
 import { describe, it, expect, vi } from 'vitest';
-import { classifyUrl, extractSameOriginLinks, fetchSitemap, fetchSitemapWithDiagnostics } from './sitemap.js';
+import { classifyUrl, extractSameOriginLinks, fetchSitemap, fetchSitemapWithDiagnostics, resolvePageLink } from './sitemap.js';
 
 describe('classifyUrl', () => {
   it('classifies the homepage', () => {
@@ -124,6 +125,39 @@ describe('fetchSitemap', () => {
         'https://www.example.test/four',
         'https://www.example.test/five',
       ]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('keeps a sitemap path that starts with repeated slashes on the entry host unchanged', async () => {
+    // `//alt` is a path here, not a scheme-relative reference: moving the entry
+    // onto the entry origin must not turn it into `https://alt/` or silently
+    // substitute a different source path.
+    const sitemap = `<urlset>
+      <url><loc>http://example.test//alt</loc></url>
+      <url><loc>http://www.example.test//alt/about?lang=alt</loc></url>
+      <url><loc>http://example.test///deep</loc></url>
+      <url><loc>http://example.test/one</loc></url>
+      <url><loc>http://example.test/two</loc></url>
+      <url><loc>http://example.test/three</loc></url>
+    </urlset>`;
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => url === 'https://example.test/sitemap.xml'
+      ? new Response(sitemap, { status: 200 })
+      : new Response(null, { status: 404 })));
+
+    try {
+      const { urls, diagnostics } = await fetchSitemapWithDiagnostics('https://example.test/');
+      expect(urls).toEqual([
+        'https://example.test//alt',
+        'https://example.test//alt/about?lang=alt',
+        'https://example.test///deep',
+        'https://example.test/one',
+        'https://example.test/two',
+        'https://example.test/three',
+      ]);
+      expect(diagnostics).toEqual([]);
+      for (const url of urls) expect(new URL(url).host).toBe('example.test');
     } finally {
       vi.unstubAllGlobals();
     }
@@ -581,6 +615,96 @@ describe('extractSameOriginLinks', () => {
       ]);
     } finally {
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
+  });
+});
+
+describe('resolvePageLink', () => {
+  it('preserves repeated slashes in same-origin paths and still drops scheme-relative hosts', () => {
+    const base = 'https://example.test/';
+    const origin = 'https://example.test';
+    expect(resolvePageLink('/a//b', base, origin)).toBe('https://example.test/a//b');
+    expect(resolvePageLink('https://example.test///alt/', base, origin)).toBe('https://example.test///alt/');
+    expect(resolvePageLink('//other.test/x', base, origin)).toBeNull();
+    // Platform UI and assets remain excluded.
+    expect(resolvePageLink('//cart', base, origin)).toBeNull();
+    expect(resolvePageLink('/img//logo.png', base, origin)).toBeNull();
+    expect(extractSameOriginLinks('<a href="/a//b">b</a><a href="//other.test/x">x</a><a href="/c/">c</a>', base)).toEqual([
+      'https://example.test/a//b',
+      'https://example.test/c/',
+    ]);
+  });
+});
+
+describe('fetchSitemap route identity', () => {
+  it('fetches distinct repeated-slash source documents without inventing aliases', async () => {
+    const paths = ['/', '//page', '/page', '/group//entry', '/group/entry', '/about'];
+    const server = createServer((request, response) => {
+      if (request.url === '/sitemap.xml') {
+        const origin = `http://${request.headers.host}`;
+        response.setHeader('content-type', 'application/xml');
+        response.end(`<urlset>${paths.map(path => `<url><loc>${origin}${path}</loc></url>`).join('')}</urlset>`);
+        return;
+      }
+      if (!paths.includes(request.url ?? '')) {
+        response.statusCode = 404;
+        response.end();
+        return;
+      }
+      response.setHeader('content-type', 'text/html');
+      response.end(`<h1>Source document ${request.url}</h1>`);
+    });
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('Test server did not start');
+    const origin = `http://127.0.0.1:${address.port}`;
+    try {
+      const { urls, diagnostics } = await fetchSitemapWithDiagnostics(`${origin}/`);
+      expect(urls).toEqual(paths.map(path => `${origin}${path}`));
+      expect(diagnostics).toEqual([]);
+      const documents = await Promise.all(urls.map(async url => (await fetch(url)).text()));
+      expect(documents).toEqual(paths.map(path => `<h1>Source document ${path}</h1>`));
+      expect(resolvePageLink(`${origin}//page`, `${origin}/`, origin)).toBe(`${origin}//page`);
+      expect(resolvePageLink('/group//entry', `${origin}/`, origin)).toBe(`${origin}/group//entry`);
+      // A filesystem collision is explicit until source canonical/redirect
+      // evidence proves an alias; discovery cannot substitute another page.
+      expect(() => allocateCaptureRoutes(urls.map(url => ({ url, htmlPath: '', jsonLd: [] })), `${origin}/`, []))
+        .toThrow('Captured routes resolve to the same website path');
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+    }
+  });
+
+  it('deduplicates existing route identity without folding distinct repeated-slash paths', async () => {
+    // Preserve the existing `/x/` versus `/x` identity and query renditions.
+    // `//x` remains its own source document until source evidence proves an alias.
+    const sitemap = `<urlset>
+      <url><loc>https://example.test/x/</loc></url>
+      <url><loc>https://example.test//x</loc></url>
+      <url><loc>https://example.test/x</loc></url>
+      <url><loc>https://example.test/x?lang=alt</loc></url>
+      <url><loc>https://example.test/y</loc></url>
+      <url><loc>https://example.test/y/</loc></url>
+      <url><loc>https://example.test/one</loc></url>
+      <url><loc>https://example.test/two</loc></url>
+    </urlset>`;
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => url === 'https://example.test/sitemap.xml'
+      ? new Response(sitemap, { status: 200 })
+      : new Response(null, { status: 404 })));
+
+    try {
+      const { urls, diagnostics } = await fetchSitemapWithDiagnostics('https://example.test/');
+      expect(urls).toEqual([
+        'https://example.test/x/',
+        'https://example.test//x',
+        'https://example.test/x?lang=alt',
+        'https://example.test/y',
+        'https://example.test/one',
+        'https://example.test/two',
+      ]);
+      expect(diagnostics).toEqual([]);
+    } finally {
+      vi.unstubAllGlobals();
     }
   });
 });

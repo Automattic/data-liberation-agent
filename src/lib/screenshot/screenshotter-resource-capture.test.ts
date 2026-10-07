@@ -29,6 +29,7 @@ function makePage( mobile: boolean, routedRequest?: object ) {
 	let routeHandler: ( route: object ) => Promise< void >;
 	let currentUrl = '';
 	return {
+		once: vi.fn(),
 		unroute: vi.fn().mockResolvedValue( undefined ),
 		route: vi.fn().mockImplementation( async ( _pattern, handler ) => {
 			routeHandler = handler;

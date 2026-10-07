@@ -100,3 +100,69 @@ describe( 'capture export route stage', () => {
 		] );
 	} );
 } );
+
+describe( 'entrypoint failure reporting', () => {
+	function stage( name: string ) {
+		mkdirSync( '.tmp-test', { recursive: true } );
+		const dir = mkdtempSync( join( '.tmp-test', name ) );
+		dirs.push( dir );
+		return dir;
+	}
+
+	it( 'names the recorded capture failure when the source URL produced no page', () => {
+		const dir = stage( 'dla-entrypoint-failed-' );
+		const about = entry( dir, 'about.html', 'https://example.com/about/', '<h1>About</h1>' );
+		expect( () => allocateCaptureRoutes( [ about ], 'https://example.com/', [], [
+			{ code: 'route_capture_failed', url: 'https://example.com/', reason: 'desktop/goto: HTTP 403; mobile/goto: HTTP 403' },
+		] ) ).toThrow( 'Source homepage https://example.com/ was not captured: desktop/goto: HTTP 403; mobile/goto: HTTP 403' );
+	} );
+
+	it( 'matches the recorded failure by document identity, not by exact string', () => {
+		const dir = stage( 'dla-entrypoint-identity-' );
+		const about = entry( dir, 'about.html', 'https://example.com/about/', '<h1>About</h1>' );
+		expect( () => allocateCaptureRoutes( [ about ], 'https://example.com/', [], [
+			{ code: 'route_not_found', url: 'https://example.com', reason: 'HTTP 404' },
+		] ) ).toThrow( 'Source homepage https://example.com/ was not captured: HTTP 404' );
+	} );
+
+	it( 'names the redirect target when the source URL redirected to a route that was not captured', () => {
+		const dir = stage( 'dla-entrypoint-redirect-' );
+		const about = entry( dir, 'about.html', 'https://example.com/about/', '<h1>About</h1>' );
+		expect( () => allocateCaptureRoutes(
+			[ about ],
+			'https://example.com/',
+			[ { url: 'https://example.com/', target: 'https://example.com/home/' } ],
+			[ { code: 'route_capture_failed', url: 'https://example.com/home/', reason: 'desktop/goto: HTTP 500' } ]
+		) ).toThrow( 'Source homepage https://example.com/ redirects to https://example.com/home/, which was not captured: desktop/goto: HTTP 500' );
+	} );
+
+	it( 'says so when the source URL redirected to a route that was captured separately', () => {
+		const dir = stage( 'dla-entrypoint-redirect-captured-' );
+		const home = entry( dir, 'home.html', 'https://example.com/home/', '<h1>Home</h1>' );
+		expect( () => allocateCaptureRoutes(
+			[ home ],
+			'https://example.com/',
+			[ { url: 'https://example.com/', target: 'https://example.com/home/' } ],
+			[]
+		) ).toThrow( 'Source homepage https://example.com/ redirects to https://example.com/home/, which was captured as a separate route' );
+	} );
+
+	it( 'keeps the generic message when nothing was recorded for the source URL', () => {
+		const dir = stage( 'dla-entrypoint-unknown-' );
+		const about = entry( dir, 'about.html', 'https://example.com/about/', '<h1>About</h1>' );
+		expect( () => allocateCaptureRoutes( [ about ], 'https://example.com/', [], [
+			{ code: 'route_capture_failed', url: 'https://example.com/other/', reason: 'desktop/goto: HTTP 500' },
+		] ) ).toThrow( 'Capture does not identify one rendered homepage for the source URL: https://example.com/' );
+		expect( () => allocateCaptureRoutes( [ about ], 'https://example.com/', [] ) )
+			.toThrow( 'Capture does not identify one rendered homepage for the source URL: https://example.com/' );
+	} );
+
+	it( 'keeps the generic message when the source URL is ambiguous', () => {
+		const dir = stage( 'dla-entrypoint-ambiguous-' );
+		const home = entry( dir, 'home.html', 'https://example.com/', '<h1>Home</h1>' );
+		const anchored = entry( dir, 'anchored.html', 'https://example.com/#top', '<h1>Home</h1>' );
+		expect( () => allocateCaptureRoutes( [ home, anchored ], 'https://example.com/', [], [
+			{ code: 'route_capture_failed', url: 'https://example.com/', reason: 'desktop/goto: HTTP 403' },
+		] ) ).toThrow( 'Capture does not identify one rendered homepage for the source URL: https://example.com/' );
+	} );
+} );
