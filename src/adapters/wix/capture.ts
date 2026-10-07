@@ -103,7 +103,7 @@ export function wixMediaVariant( url: string ): { id: string; url: string } | nu
 }
 
 export const WIX_CAPTURE_CHROME_SELECTOR =
-	'[id="WIX_ADS"], [id$="-hiddenA11ySubMenuIndication"], [id$="__more__"]';
+	'[id="WIX_ADS"], [id$="-hiddenA11ySubMenuIndication"]';
 
 const WIX_SLIDESHOW_SELECTOR = '.wixui-slideshow';
 const WIX_SLIDESHOW_LIMIT = 4;
@@ -328,88 +328,6 @@ async function closeOpenedMenu( page: Page ): Promise< void > {
 	).catch( () => undefined );
 }
 
-/**
- * Wix creates an overflow item and a mobile drawer only after its client
- * runtime starts. A portable capture cannot retain that runtime, so settle the
- * live menu into a static list of its authored destinations instead.
- */
-export async function settleWixNavigation( viewport: string ): Promise< void > {
-	const waitForFrame = () =>
-		new Promise< void >( ( resolve ) =>
-			requestAnimationFrame( () => requestAnimationFrame( () => resolve() ) )
-		);
-	const visible = ( element: Element ) => {
-		const rect = element.getBoundingClientRect();
-		const style = getComputedStyle( element );
-		return (
-			rect.width > 0 &&
-			rect.height > 0 &&
-			style.display !== 'none' &&
-			style.visibility !== 'hidden'
-		);
-	};
-	const reveal = ( list: Element ) => {
-		for ( const item of list.querySelectorAll< HTMLElement >( ':scope > li' ) ) {
-			if ( ! item.querySelector( 'a[href]' ) ) continue;
-			item.removeAttribute( 'aria-hidden' );
-			for ( const property of [
-				'display',
-				'visibility',
-				'opacity',
-				'height',
-				'max-height',
-				'overflow',
-				'position',
-			] ) {
-				item.style.removeProperty( property );
-			}
-			for ( const descendant of item.querySelectorAll< HTMLElement >( '[tabindex="-1"]' ) )
-				descendant.removeAttribute( 'tabindex' );
-		}
-	};
-
-	if ( viewport === 'mobile' ) {
-		const toggle = document.querySelector< HTMLElement >( '#MENU_AS_CONTAINER_TOGGLE' );
-		const drawer = document.getElementById( 'MENU_AS_CONTAINER' );
-		const opened = Boolean( toggle && visible( toggle ) && ! ( drawer && visible( drawer ) ) );
-		const settle = async ( open: boolean ) => {
-			const deadline = Date.now() + 2000;
-			while ( drawer && visible( drawer ) !== open && Date.now() < deadline ) await waitForFrame();
-		};
-		if ( opened ) {
-			toggle!.click();
-			// A busy page can open the drawer several frames after the click; wait
-			// for it so the close below is not skipped as unnecessary.
-			await settle( true );
-			// Retain the authored trigger so conversion can emit responsive navigation.
-		}
-		const lists = Array.from( document.querySelectorAll( 'header ul' ) );
-		lists.sort(
-			( left, right ) =>
-				right.querySelectorAll( 'a[href]' ).length - left.querySelectorAll( 'a[href]' ).length
-		);
-		if ( lists[ 0 ] ) reveal( lists[ 0 ] );
-		// The drawer keeps its rendered links once closed. Close it again so the
-		// capture records the closed state visitors first see, not an open overlay.
-		if ( opened && drawer && visible( drawer ) ) {
-			toggle!.click();
-			await settle( false );
-		}
-		return;
-	}
-
-	const more = Array.from( document.querySelectorAll< HTMLElement >( 'li[id$="__more__"]' ) ).find(
-		visible
-	);
-	if ( ! more ) return;
-	const list = more.parentElement;
-	const trigger = more.querySelector< HTMLElement >( '[data-testid="linkElement"]' ) ?? more;
-	trigger.click();
-	await waitForFrame();
-	if ( list ) reveal( list );
-	more.remove();
-}
-
 async function revealAndCollectWixSlideshows( page: Page ): Promise< void > {
 	for ( let pass = 0; pass < 3; pass++ ) {
 		await page
@@ -503,7 +421,19 @@ export const capture: LiberationHooks = {
 	 * fragment and leave a real target behind.
 	 */
 	prepare: async ( page, ctx ) => {
-		await page.evaluate( settleWixNavigation, ctx.viewport );
+		// Keep the runtime-owned overflow control and resting link visibility.
+		// Generic interaction capture observes its panel after baseline artifacts
+		// are complete and portable dialog wiring replays that observed state.
+		await page.evaluate( () => {
+			// Classic Wix's keyboard-focusable More control declares a popup but
+			// omits its button role and uses the legacy "true" menu alias. Expose
+			// that platform contract to the generic interaction observer without
+			// opening the panel or inventing an expanded/readiness state.
+			for ( const trigger of document.querySelectorAll( 'li[id$="__more__"] [data-testid="linkElement"][aria-haspopup="true"][tabindex]' ) ) {
+				if ( ! trigger.hasAttribute( 'role' ) ) trigger.setAttribute( 'role', 'button' );
+				trigger.setAttribute( 'aria-haspopup', 'menu' );
+			}
+		} );
 		// Wix only wires some section navigation after its scroll-reactive layout
 		// has visited the page. This bounded sweep makes anchor readiness explicit
 		// instead of relying on whichever lazy-load phase happened to run first.

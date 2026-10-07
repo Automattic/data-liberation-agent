@@ -6,7 +6,6 @@ import {
 	collectWixSlideshowSlides,
 	preserveWixSlideshowSlides,
 	settleScrollReactiveChrome,
-	settleWixNavigation,
 	stripShowcaseMarkup,
 	wixMediaVariant,
 	wixMemberPaths,
@@ -97,7 +96,7 @@ describe( 'stripShowcaseMarkup', () => {
 } );
 
 describe( 'WIX_CAPTURE_CHROME_SELECTOR', () => {
-	it( 'removes Wix overflow and accessibility helpers while preserving authored More controls', () => {
+	it( 'removes attribution and accessibility helpers while preserving runtime-owned overflow controls', () => {
 		const $ = load( `
 			<nav>
 				<button id="authored-more">More</button>
@@ -109,7 +108,7 @@ describe( 'WIX_CAPTURE_CHROME_SELECTOR', () => {
 
 		$( WIX_CAPTURE_CHROME_SELECTOR ).remove();
 
-		expect( $( '#menu__more__' ) ).toHaveLength( 0 );
+		expect( $( '#menu__more__' ) ).toHaveLength( 1 );
 		expect( $( '#menu-hiddenA11ySubMenuIndication' ) ).toHaveLength( 0 );
 		expect( $( '#WIX_ADS' ) ).toHaveLength( 0 );
 		expect( $( '#authored-more' ).text() ).toBe( 'More' );
@@ -277,113 +276,6 @@ describe( 'wix capture', () => {
 			'[id="WIX_ADS"]',
 			'[id$="-hiddenA11ySubMenuIndication"]',
 		] );
-	} );
-
-	it( 'settles generated desktop overflow into reachable navigation links', async () => {
-		const dom = new JSDOM( `
-			<header><ul>
-				<li><a href="/">Home</a></li>
-				<li id="menu__more__"><div data-testid="linkElement">More</div></li>
-				<li aria-hidden="true" style="height:0;overflow:hidden;position:absolute"><a href="/contact/"><span tabindex="-1">Contact</span></a></li>
-			</ul></header>
-		` );
-		vi.stubGlobal( 'document', dom.window.document );
-		vi.stubGlobal( 'getComputedStyle', dom.window.getComputedStyle.bind( dom.window ) );
-		vi.stubGlobal( 'requestAnimationFrame', ( callback: FrameRequestCallback ) => setTimeout( callback, 0 ) as unknown as number );
-		vi.spyOn( dom.window.HTMLElement.prototype, 'getBoundingClientRect' ).mockReturnValue(
-			{ width: 10, height: 10 } as DOMRect
-		);
-		await settleWixNavigation( 'desktop' );
-
-		const contact = dom.window.document.querySelector( 'a[href="/contact/"]' )!;
-		expect( dom.window.document.querySelector( '#menu__more__' ) ).toBeNull();
-		expect( contact.closest( 'li' )?.getAttribute( 'aria-hidden' ) ).toBeNull();
-		expect( contact.closest( 'li' )?.getAttribute( 'style' ) ).toBe( '' );
-		expect( contact.querySelector( '[tabindex]' ) ).toBeNull();
-	} );
-
-	it( 'settles the mobile drawer into reachable navigation links', async () => {
-		const dom = new JSDOM( `
-			<header>
-				<button id="MENU_AS_CONTAINER_TOGGLE">Menu</button>
-				<ul><li aria-hidden="true" style="display:none"><a href="/contact/"><span tabindex="-1">Contact</span></a></li></ul>
-			</header>
-		` );
-		const toggle = dom.window.document.querySelector< HTMLButtonElement >( '#MENU_AS_CONTAINER_TOGGLE' )!;
-		const click = vi.spyOn( toggle, 'click' );
-		vi.stubGlobal( 'document', dom.window.document );
-		vi.stubGlobal( 'getComputedStyle', dom.window.getComputedStyle.bind( dom.window ) );
-		vi.stubGlobal( 'requestAnimationFrame', ( callback: FrameRequestCallback ) => setTimeout( callback, 0 ) as unknown as number );
-		vi.spyOn( dom.window.HTMLElement.prototype, 'getBoundingClientRect' ).mockReturnValue(
-			{ width: 10, height: 10 } as DOMRect
-		);
-		await settleWixNavigation( 'mobile' );
-
-		const contact = dom.window.document.querySelector( 'a[href="/contact/"]' )!;
-		expect( click ).toHaveBeenCalledOnce();
-		expect( dom.window.document.querySelector( '#MENU_AS_CONTAINER_TOGGLE' ) ).toBe( toggle );
-		expect( contact.closest( 'li' )?.getAttribute( 'aria-hidden' ) ).toBeNull();
-		expect( contact.closest( 'li' )?.getAttribute( 'style' ) ).toBe( '' );
-		expect( contact.querySelector( '[tabindex]' ) ).toBeNull();
-	} );
-
-	it( 'closes the mobile drawer it opened once its links are revealed', async () => {
-		const dom = new JSDOM( `
-			<header>
-				<button id="MENU_AS_CONTAINER_TOGGLE">Menu</button>
-				<div id="MENU_AS_CONTAINER" style="display:none">
-					<ul><li aria-hidden="true" style="display:none"><a href="/contact/">Contact</a></li></ul>
-				</div>
-			</header>
-		` );
-		const document = dom.window.document;
-		const toggle = document.querySelector< HTMLButtonElement >( '#MENU_AS_CONTAINER_TOGGLE' )!;
-		const drawer = document.getElementById( 'MENU_AS_CONTAINER' )!;
-		// Like Wix, the drawer opens at once and hides only after its exit animation.
-		toggle.addEventListener( 'click', () => {
-			if ( drawer.style.display === 'none' ) drawer.style.display = 'block';
-			else setTimeout( () => { drawer.style.display = 'none'; }, 20 );
-		} );
-		const click = vi.spyOn( toggle, 'click' );
-		vi.stubGlobal( 'document', document );
-		vi.stubGlobal( 'getComputedStyle', dom.window.getComputedStyle.bind( dom.window ) );
-		vi.stubGlobal( 'requestAnimationFrame', ( callback: FrameRequestCallback ) => setTimeout( callback, 0 ) as unknown as number );
-		vi.spyOn( dom.window.HTMLElement.prototype, 'getBoundingClientRect' ).mockReturnValue(
-			{ width: 10, height: 10 } as DOMRect
-		);
-		await settleWixNavigation( 'mobile' );
-
-		expect( click ).toHaveBeenCalledTimes( 2 );
-		expect( drawer.style.display ).toBe( 'none' );
-		expect( document.querySelector( 'a[href="/contact/"]' )!.closest( 'li' )?.getAttribute( 'style' ) ).toBe( '' );
-	} );
-
-	it( 'waits for a drawer that opens late before closing it', async () => {
-		const dom = new JSDOM( `
-			<header>
-				<button id="MENU_AS_CONTAINER_TOGGLE">Menu</button>
-				<div id="MENU_AS_CONTAINER" style="display:none"><ul><li><a href="/contact/">Contact</a></li></ul></div>
-			</header>
-		` );
-		const document = dom.window.document;
-		const toggle = document.querySelector< HTMLButtonElement >( '#MENU_AS_CONTAINER_TOGGLE' )!;
-		const drawer = document.getElementById( 'MENU_AS_CONTAINER' )!;
-		// A busy page: the drawer shows several frames after the click that opens it.
-		toggle.addEventListener( 'click', () => {
-			const next = drawer.style.display === 'none' ? 'block' : 'none';
-			setTimeout( () => { drawer.style.display = next; }, 40 );
-		} );
-		vi.stubGlobal( 'document', document );
-		vi.stubGlobal( 'getComputedStyle', dom.window.getComputedStyle.bind( dom.window ) );
-		vi.stubGlobal( 'requestAnimationFrame', ( callback: FrameRequestCallback ) => setTimeout( callback, 0 ) as unknown as number );
-		vi.spyOn( dom.window.HTMLElement.prototype, 'getBoundingClientRect' ).mockReturnValue(
-			{ width: 10, height: 10 } as DOMRect
-		);
-		await settleWixNavigation( 'mobile' );
-		// Let any open still in flight land before judging the captured state.
-		await new Promise( ( resolve ) => setTimeout( resolve, 100 ) );
-
-		expect( drawer.style.display ).toBe( 'none' );
 	} );
 
 	it( 'is attached to the adapter', () => {

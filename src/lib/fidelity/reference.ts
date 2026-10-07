@@ -100,6 +100,8 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 					entries.push( entry );
 					let referencePage: Page | undefined;
 					let referenceContext: import('playwright').BrowserContext | undefined;
+					const runtimeError = ( error: Error ) => entry.readiness.reasons.push( `source runtime error: ${ error.message }` );
+					const rendererCrash = () => entry.readiness.reasons.push( 'source renderer crashed' );
 					let navigationUrl = url;
 					try {
 						const sourceContext = page.context();
@@ -131,6 +133,8 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 							}
 							await referencePage.setViewportSize( { width: viewport, height: 900 } );
 						}
+						referencePage.on( 'pageerror', runtimeError );
+						referencePage.on( 'crash', rendererCrash );
 						if ( url !== 'about:blank' ) {
 							const response = await referencePage.goto( url, { waitUntil: 'load', timeout: 60_000 } );
 							if ( response && ! response.ok() ) throw new Error( `Reference navigation HTTP ${ response.status() }` );
@@ -167,6 +171,8 @@ export function createReferenceCollector( directory: string, sourceUrl: string, 
 					} catch ( error ) {
 						entry.readiness.reasons.push( String( error ) );
 					} finally {
+						referencePage?.off( 'pageerror', runtimeError );
+						referencePage?.off( 'crash', rendererCrash );
 						if ( referencePage && referencePage !== page ) await referencePage.close().catch( () => {} );
 						await referenceContext?.close().catch( () => {} );
 					}

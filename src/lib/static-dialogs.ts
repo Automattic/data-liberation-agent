@@ -58,16 +58,20 @@ function apply(trigger){
   var target=panel(trigger);if(!target)return;
   var inactive=concealed(trigger),open=trigger.getAttribute('aria-expanded')==='true'&&!inactive;
   applyAncestors(trigger,open);
+  if(!open&&Array.prototype.some.call(triggers(),function(other){return other!==trigger&&panel(other)===target&&!concealed(other)&&other.getAttribute('aria-expanded')==='true';}))return;
+  var captured=trigger.getAttribute('data-dla-dialog-panel-state');
+  var opened=captured?JSON.parse(captured):null;
+  if(open&&opened&&target.__dlaDialogState!==captured){target.innerHTML=opened.html;target.__dlaDialogState=captured;}
   var existing=target.getAttribute('data-dla-existing-panel');
   if(existing){
-    var states=JSON.parse(existing),state=inactive?states.resting:states.opened;
+    var states=JSON.parse(existing),state=inactive?states.resting:(opened||states.opened);
     ['style','class'].forEach(function(name){if(state[name]===null)target.removeAttribute(name);else target.setAttribute(name,state[name]);});
     target.toggleAttribute('data-dla-resting-panel',inactive);
     target.hidden=inactive?states.resting.hidden:!open;
   }else target.hidden=!open;
   var close=closeFor(trigger);if(close)close.hidden=!open;
 }
-function set(trigger,open){if(open&&concealed(trigger))open=false;trigger.setAttribute('aria-expanded',open?'true':'false');var label=trigger.getAttribute('data-dla-disclosure-label');if(label)trigger.setAttribute('aria-label',open?'Close '+label:label);apply(trigger);}
+function set(trigger,open){if(open&&concealed(trigger))open=false;if(open)triggers().forEach(function(other){if(other!==trigger&&panel(other)===panel(trigger)&&other.getAttribute('aria-expanded')==='true')set(other,false);});trigger.setAttribute('aria-expanded',open?'true':'false');var label=trigger.getAttribute('data-dla-disclosure-label');if(label)trigger.setAttribute('aria-label',open?'Close '+label:label);apply(trigger);}
 function toggle(trigger){set(trigger,trigger.getAttribute('aria-expanded')!=='true');}
 function onClick(event){var close=event.target.closest&&event.target.closest('[data-dla-dialog-close]');if(close){event.preventDefault();var id=close.getAttribute('data-dla-dialog-close');var owner=id&&document.querySelector('[data-dla-dialog-trigger][aria-controls="'+id+'"]');if(owner){set(owner,false);owner.focus();}return;}var trigger=event.target.closest&&event.target.closest('[data-dla-dialog-trigger]');if(!trigger||!panel(trigger))return;var nested=event.target.closest('a,button');if(nested&&nested!==trigger)return;event.preventDefault();var was=trigger.getAttribute('aria-expanded')==='true';toggle(trigger);if(was)trigger.focus();}
 function onKey(event){if(event.key==='Escape'){var open=Array.prototype.slice.call(triggers()).filter(function(item){var target=panel(item);return !concealed(item)&&item.getAttribute('aria-expanded')==='true'&&target&&!target.hidden;}).pop();if(open){event.preventDefault();set(open,false);open.focus();return;}var details=Array.prototype.slice.call(document.querySelectorAll('details.dla-initial-dialog[open]')).pop();if(!details)return;event.preventDefault();details.open=false;var summary=details.querySelector(':scope > summary');if(summary)summary.focus();return;}if(event.key!=='Enter'&&event.key!==' ')return;var trigger=event.target.closest&&event.target.closest('[data-dla-dialog-trigger]');if(!trigger||!panel(trigger))return;if(trigger.tagName==='BUTTON'||(trigger.tagName==='A'&&event.key==='Enter'))return;event.preventDefault();toggle(trigger);}
@@ -212,6 +216,17 @@ export function wireCapturedDialogs(
 			if ( state.dialog?.ancestorState && !observed ) trigger.attr( 'data-dla-dialog-ancestor-unverified', state.dialog.ancestorState.reason ?? 'portable-owner-mismatch' );
 			if ( observed ) trigger.attr( 'data-dla-dialog-ancestor-state', JSON.stringify( observed.state.ancestors ) );
 			const reusedPanelId = reusedPanels.get( state.dialog!.selector );
+			// A source can reuse one dropdown root for different trigger contents.
+			// Retain its single DOM identity while replaying each observed state,
+			// rather than binding every trigger to the first captured contents.
+			if ( dropdown && ( reusePanel || reusedPanelId ) ) {
+				const snapshot = $( state.dialog!.html ).first();
+				trigger.attr( 'data-dla-dialog-panel-state', JSON.stringify( {
+					html: snapshot.html() ?? '',
+					style: ( snapshot.attr( 'style' ) ?? '' ).replace( /(display\s*:[^;!]+)\s*!important/gi, '$1' ),
+					class: `${ snapshot.attr( 'class' ) ?? '' } dla-dropdown`.trim(),
+				} ) );
+			}
 			if ( reusedPanelId ) {
 				trigger.attr( 'data-dla-dialog-trigger', reusedPanelId ).attr( 'aria-controls', reusedPanelId ).attr( 'aria-expanded', 'false' );
 				if ( label ) trigger.attr( 'data-dla-disclosure-label', label );
