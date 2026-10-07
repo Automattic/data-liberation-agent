@@ -89,6 +89,7 @@ Naming an unknown target lists the registered ones.
 | HubSpot | Ready |
 | Next.js | Generic discovery + framework route-announcer cleanup |
 | Shopify | Ready |
+| Soloist | Tenant-scoped authored links + Next page metadata discovery |
 | Squarespace | Ready |
 | Substack | Ready |
 | Webflow | Ready |
@@ -97,6 +98,13 @@ Naming an unknown target lists the registered ones.
 | Any other website | Best-effort generic fallback |
 
 Adapters contribute platform knowledge to discovery and capture — how a platform lists its routes, what its CDN URLs look like, how its runtime resolves anchors. Sites matching none of them fall back to a generic adapter that renders each page in a headless browser.
+
+Soloist customer URLs (`https://soloist.ai/<handle>/`) are scoped to that handle,
+including when starting at a child route. Discovery reads one tenant homepage's
+authored links and `__NEXT_DATA__.props.pageProps.data.websiteSettings.pages`.
+The tenant root is the homepage; section anchors are not extra routes. Platform
+footer links, other tenants, and the global sitemap are excluded. Routes absent
+from both homepage links and published page metadata remain undiscovered.
 
 Registered HTTP profiles can acquire route response evidence and shared dependencies through the [HTTP acquisition API](/docs/http-acquisition.md). Portable preparation and rendered acceptance remain separate from acquisition coverage.
 
