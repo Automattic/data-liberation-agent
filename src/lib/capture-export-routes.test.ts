@@ -11,7 +11,7 @@ afterEach( () => {
 function entry( dir: string, filename: string, url: string, html: string ): RouteEntry {
 	const htmlPath = join( dir, filename );
 	writeFileSync( htmlPath, html );
-	return { url, htmlPath, jsonLd: [] };
+	return { url, htmlPath, sourceData: [] };
 }
 
 describe( 'capture export route stage', () => {
@@ -62,9 +62,14 @@ describe( 'capture export route stage', () => {
 		const base = entry( dir, 'base.html', 'https://example.com/catalog/', '<h1>All</h1>' );
 		const red = entry( dir, 'red.html', 'https://example.com/catalog/?tag=red', '<h1>Red</h1>' );
 		const alias = { ...entry( dir, 'alias.html', `${ red.url }&ref=nav`, '<h1>Red</h1>' ), canonicalUrl: red.url };
+		alias.sourceData = [
+			{ type: 'application/ld+json', json: '{"@type":"WebPage"}' },
+			{ type: 'application/json', key: 'collections', json: '{"schema":"source/collections/v1","collections":[]}' },
+		];
 		const routes = allocateCaptureRoutes( [ home, base, red, alias ], home.url, [] );
 		expect( routes.routePathOf( alias.url ) ).toBe( routes.routePathOf( red.url ) );
 		expect( routes.retainedEntries ).toEqual( [ home, base, red ] );
+		expect( routes.duplicateSourceData ).toEqual( [ { claimed: red, sourceData: alias.sourceData } ] );
 		expect( routes.duplicateRoutes ).toEqual( [ { url: alias.url, canonicalUrl: red.url, path: `website/${ routes.routePathOf( red.url ) }` } ] );
 	} );
 

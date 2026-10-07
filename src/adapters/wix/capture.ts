@@ -8,6 +8,7 @@ import { resolveEventFormRedirect } from './event-forms.js';
 import { providerCreditRules } from '../../lib/source-cleanup.js';
 import type { Locator, Page } from 'playwright';
 import { canonicalizeWixCapturedHtml } from './instance-ids.js';
+import { preserveWixCollections } from './collections.js';
 import { markMemberLoginControls, MEMBER_LOGIN_ATTRIBUTE, MEMBER_LOGIN_CLASS_PREFIX } from '../../lib/member-login.js';
 import { portWixRuntimeEmbeds } from './embeds.js';
 
@@ -467,7 +468,7 @@ export async function settleScrollReactiveChrome( page: Page ): Promise< void > 
 
 export const capture: LiberationHooks = {
   resolveClientRedirect: resolveEventFormRedirect,
-  canonicalizeHtml: canonicalizeWixCapturedHtml,
+  canonicalizeHtml: ( html ) => canonicalizeWixCapturedHtml( preserveWixCollections( html ) ),
   cleanupRules: [
     // Wix publishes the measured height of its own banner into these, and its
     // layout reads them from the sticky header, the page root and the pinned
