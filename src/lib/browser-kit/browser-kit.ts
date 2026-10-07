@@ -70,21 +70,24 @@ type CdpCapableBrowser = {
   }>;
 };
 
-const desktopContexts = new WeakMap<object, Promise<{ userAgent?: string }>>();
+type SourceBrowserIdentity = { locale: string; userAgent?: string };
+const desktopContexts = new WeakMap<object, Promise<SourceBrowserIdentity>>();
 
 /**
  * Context options that give a desktop page a real desktop-browser identity.
  * Spread into every `newContext`/`newPage` that loads the source site, so
  * discovery, capture and comparison all present the same browser. Resolved
- * once per browser and never throws.
+ * once per browser and never throws. An explicit locale keeps Accept-Language
+ * and navigator.language consistent even when the user agent is overridden.
  */
-export function desktopContextOptions(browser: object): Promise<{ userAgent?: string }> {
+export function desktopContextOptions(browser: object): Promise<SourceBrowserIdentity> {
   let pending = desktopContexts.get(browser);
   if (!pending) {
     pending = (async () => {
+      const defaults = { locale: 'en-US' };
       try {
         const cdp = browser as CdpCapableBrowser;
-        if (typeof cdp.newBrowserCDPSession !== 'function') return {};
+        if (typeof cdp.newBrowserCDPSession !== 'function') return defaults;
         const session = await withTimeout(
           cdp.newBrowserCDPSession(),
           IDENTITY_TIMEOUT_MS,
@@ -98,12 +101,12 @@ export function desktopContextOptions(browser: object): Promise<{ userAgent?: st
             'browser version'
           );
           const desktop = desktopUserAgent(userAgent);
-          return desktop ? { userAgent: desktop } : {};
+          return desktop ? { ...defaults, userAgent: desktop } : defaults;
         } finally {
           await session.detach().catch(() => {});
         }
       } catch {
-        return {};
+        return defaults;
       }
     })();
     desktopContexts.set(browser, pending);
@@ -204,7 +207,7 @@ function harvestSourceSession(
 export async function sourceContextOptions(
   browser: object,
   entryUrl: string
-): Promise<{ userAgent?: string; storageState?: SourceStorageState }> {
+): Promise<SourceBrowserIdentity & { storageState?: SourceStorageState }> {
   const origin = originOf(entryUrl);
   const [identity, session] = await Promise.all([
     desktopContextOptions(browser),
