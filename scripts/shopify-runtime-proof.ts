@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, existsSync, cpSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { captureWebsite } from '../src/lib/capture.js';
 import { shopifyAdapter } from '../src/adapters/shopify/index.js';
@@ -6,6 +6,12 @@ import { startStaticServer } from '../src/lib/replicate/local-site/static-server
 import { chromium, type Page } from 'playwright';
 import { waitForFonts, waitForDomQuiescence } from '../src/lib/screenshot/page-helpers.js';
 import { assertPublicHttpUrl } from '../src/lib/media-fetch/safe-fetch.js';
+import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
+import { observeHttpCaptureRegions } from '../src/lib/http-runtime-observation.js';
+import { materializeHttpDocuments } from '../src/lib/http-materialization.js';
+import type { acquireHttpDocuments } from '../src/lib/http-acquisition.js';
+import { settleProofAnimationPose } from './proof-animation-pose.js';
 
 const root = resolve(process.env.PROOF_OUTPUT ?? '.tmp-test/shopify-http-projected');
 const source = 'https://moroccaninterior.com/';
@@ -13,6 +19,10 @@ const paths = ['/', '/collections/all', '/products/pom-pom-blanket-white', '/pag
 if (existsSync(join(root, 'capture-receipt.json')))
 	throw new Error('Use a fresh PROOF_OUTPUT; retained evidence is immutable.');
 mkdirSync(root, { recursive: true });
+writeFileSync(join(root, 'proof-source.json'), JSON.stringify({
+	revision: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
+	source: ['src/platform/acquisition.ts', 'src/lib/http-runtime-observation.ts', 'src/lib/embedded-documents.ts', 'src/lib/screenshot/fluid-capture.ts', 'src/lib/screenshot/fluid-baseline.ts', 'src/adapters/shopify/acquisition.ts', 'scripts/shopify-runtime-proof.ts', 'scripts/proof-animation-pose.ts'].map(path => ({ path, sha256: createHash('sha256').update(readFileSync(path)).digest('hex') })),
+}, null, 2));
 const observations: unknown[] = [];
 async function record(page: Page, path: string, width: number, mode: string, pose: string) {
 	const started = performance.now();
@@ -32,6 +42,7 @@ async function record(page: Page, path: string, width: number, mode: string, pos
 	});
 	await waitForFonts(page);
 	await waitForDomQuiescence(page, 300, 1500);
+	await settleProofAnimationPose(page);
 	const snapshot = await page.evaluate(() => {
 		const box = (element: Element) => {
 			const r = element.getBoundingClientRect();
@@ -69,6 +80,12 @@ async function record(page: Page, path: string, width: number, mode: string, pos
 				...box(image),
 			})),
 			forms: [...document.forms].map((form) => ({ action: form.getAttribute('action'), ...box(form) })),
+			cards: [...document.querySelectorAll('.grid-product__image-wrapper')].map(element => ({ ...box(element), style: element.getAttribute('style') })),
+			slides: [...document.querySelectorAll('.hero-slideshow')].map(element => ({
+				id: element.id, phase: (element as Element & { slick?: { currentSlide: number; paused: boolean } }).slick?.currentSlide,
+				paused: (element as Element & { slick?: { paused: boolean } }).slick?.paused,
+				declaredPhase: element.getAttribute('data-slide-index'),
+			})),
 			sort: (document.querySelector('#sort-by') as HTMLSelectElement | null)?.value,
 			videos: [...document.querySelectorAll('video')].map((video) => ({
 				readyState: video.readyState,
@@ -133,19 +150,40 @@ const adapter = {
 	},
 };
 const started = performance.now();
-const result = await captureWebsite(
-	{ url: source, outputDir: root, acquisition: 'http', http: { routeLimit: 4, runtimeRouteLimit: 4 } },
-	{ findAdapter: () => adapter }
-);
+const reused = process.env.PROOF_ACQUISITION;
+let result;
+if (reused) {
+	const acquisition = JSON.parse(readFileSync(join(reused, 'http-acquisition.json'), 'utf8')) as Awaited<ReturnType<typeof acquireHttpDocuments>>;
+	if (acquisition.documents.length !== 8 || acquisition.documents.some(document => document.status !== 'acquired'))
+		throw new Error('Retained proof requires all eight acquired route/variant documents');
+	for (const document of acquisition.documents) {
+		for (const [path, hash] of [[document.rawPath!, document.rawSha256!], [document.documentPath!, document.documentSha256!]])
+			if (createHash('sha256').update(readFileSync(join(reused, path))).digest('hex') !== hash) throw new Error('Retained acquisition identity mismatch');
+	}
+	for (const directory of ['source-documents', 'resources']) cpSync(join(reused, directory), join(root, directory), { recursive: true });
+	writeFileSync(join(root, 'http-acquisition.json'), JSON.stringify(acquisition, null, 2));
+	const runtime = await observeHttpCaptureRegions({ outputDir: root, acquisition, profile: adapter.acquisition,
+		roles: profile.exportVariants!, routeLimit: 4, progress: () => undefined });
+	if (runtime.failures.length) throw new Error(`Retained runtime observation failed: ${JSON.stringify(runtime.failures)}`);
+	const captureReceiptPath = materializeHttpDocuments({ outputDir: root, sourceUrl: source, platform: 'shopify', desktopVariant: 'desktop', mobileVariant: 'mobile', embeddedDocuments: true });
+	result = { captureReceiptPath, summary: { complete: false }, failures: runtime.failures };
+} else {
+	result = await captureWebsite(
+		{ url: source, outputDir: root, acquisition: 'http', http: { routeLimit: 4, runtimeRouteLimit: 4 } },
+		{ findAdapter: () => adapter }
+	);
+}
 const captureMs = performance.now() - started;
-writeFileSync(join(root, 'capture-result.json'), JSON.stringify({ captureMs, result }, null, 2));
+writeFileSync(join(root, 'capture-result.json'), JSON.stringify({ captureMs, execution: reused ? 'retained-acquisition-reprojection' : 'captureWebsite', ...(reused ? { retainedAcquisitionSha256: createHash('sha256').update(readFileSync(join(reused, 'http-acquisition.json'))).digest('hex') } : {}), result }, null, 2));
 const receipt = JSON.parse(readFileSync(result.captureReceiptPath, 'utf8'));
 const acquired = JSON.parse(readFileSync(join(root, 'http-acquisition.json'), 'utf8'));
+if (acquired.documents.some((document: { status: string }) => document.status !== 'acquired'))
+	throw new Error('Independent proof is incomplete: inspect capture-result.json and acquisition failures before replay');
 const server = await startStaticServer(join(root, 'website'));
 const browser = await chromium.launch();
 try {
 	for (const path of paths)
-		for (const width of [390, 768, 1440]) {
+		for (const width of (['/', '/collections/all'].includes(path) ? [390, 601, 768, 1024, 1440] : [390, 768, 1440])) {
 			const variant = profile.variants.find((variant) => variant.id === (width === 390 ? 'mobile' : 'desktop'))!;
 			const context = await browser.newContext({
 				viewport: { width, height: 900 },
@@ -174,15 +212,19 @@ try {
 			Object.assign(observation, { failures });
 			await context.close();
 		}
-	// A separate context and fresh navigation at tablet width detects state or
-	// geometry left behind by resizing the selected desktop observation.
+	// Independent visitors are separate from selected-session resize evidence.
+	// Extra intermediate widths are bounded to the two routes owning this slice.
 	for (const path of paths) {
+		for (const width of (['/', '/collections/all'].includes(path) ? [390, 601, 768, 1024, 1440] : [390, 768, 1440])) {
+		const role = width === 390 ? 'mobile' : 'desktop';
 		const document = acquired.documents.find(
-			(entry: { url: string; variant: string }) => new URL(entry.url).pathname === path && entry.variant === 'desktop'
+			(entry: { url: string; variant: string }) => new URL(entry.url).pathname === path && entry.variant === role
 		);
-		const variant = profile.variants.find((variant) => variant.id === 'desktop')!;
+		const variant = profile.variants.find((variant) => variant.id === role)!;
+		const body = readFileSync(join(root, document.rawPath));
+		if (createHash('sha256').update(body).digest('hex') !== document.rawSha256) throw new Error('Fresh visitor source response hash mismatch');
 		const context = await browser.newContext({
-			viewport: { width: 768, height: 900 },
+			viewport: { width, height: 900 },
 			deviceScaleFactor: 1,
 			userAgent: variant.headers!['User-Agent'],
 			serviceWorkers: 'block',
@@ -200,19 +242,20 @@ try {
 					await route.abort();
 					return;
 				}
-				await route.fulfill({ contentType: document.rawContentType, body: readFileSync(join(root, document.rawPath)) });
+				await route.fulfill({ contentType: document.rawContentType, body });
 			} else await route.continue();
 		});
 		await page.goto(document.url, { waitUntil: 'domcontentloaded', timeout: 20000 });
-		await profile.prepareRuntimeRegions!(page, { url: document.url, finalUrl: document.finalUrl, variant: 'desktop' });
+		await profile.prepareRuntimeRegions!(page, { url: document.url, finalUrl: document.finalUrl, variant: role });
 		await record(
 			page,
 			path,
-			768,
-			'source-fresh-tablet',
-			'Independent fresh tablet context replaying the exact acquired response; app-content drift from the selected session is reported separately.'
+			width,
+			width === 768 ? 'source-fresh-tablet' : width === 390 ? 'source-fresh-phone' : width === 1440 ? 'source-fresh-desktop' : 'source-fresh-intermediate',
+			'Independent fresh visitor replaying the hash-verified acquired response; source-session/app drift remains separate from selected evidence.'
 		);
 		await context.close();
+		}
 	}
 } finally {
 	await browser.close();

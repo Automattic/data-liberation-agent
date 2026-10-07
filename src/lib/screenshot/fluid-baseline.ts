@@ -33,7 +33,7 @@ export function captureFluidBaseline( page: Page, attribute: string ) {
 		const root = snapshot( document.documentElement );
 		const scratch = document.createElement( 'span' );
 		const geometry = [ 'width', 'height', 'font-size', 'padding-top', 'inset', 'top', 'left' ];
-		const walk = ( role: Role, element: Element | undefined, restore: boolean, matched: Set<Element> ) => {
+		const walk = ( role: Role, element: Element | undefined, restore: boolean, matched: Set<Element>, unlearnedOnly = false ) => {
 			if ( ! element ) return;
 			// Surviving objects prove their identity. A replacement must occupy the
 			// same parent/child role and retain its source signature. In particular,
@@ -46,7 +46,7 @@ export function captureFluidBaseline( page: Page, attribute: string ) {
 			if ( ! marking || role.identity === null ) element.removeAttribute( attribute );
 			else element.setAttribute( attribute, role.identity );
 			const style = ( element as HTMLElement ).style;
-			if ( restore && style ) {
+			if ( restore && style && ( ! unlearnedOnly || role.identity === null ) ) {
 				// Keep the final transform matrix for the learner's translation checks.
 				scratch.style.cssText = role.style ?? '';
 				const properties = new Set( [ ...geometry,
@@ -59,7 +59,10 @@ export function captureFluidBaseline( page: Page, attribute: string ) {
 					if ( value ) style.setProperty( property, value, priority );
 					else style.removeProperty( property );
 				}
-				if ( role.style === null && style.cssText === '' ) element.removeAttribute( 'style' );
+				if ( role.style === null && style.cssText === '' ) {
+					element.getAttribute( 'style' );
+					element.removeAttribute( 'style' );
+				}
 			}
 			// Main-world libraries can replace or delete Array.prototype.entries.
 			for ( let index = 0; index < role.children.length; index++ ) {
@@ -67,13 +70,13 @@ export function captureFluidBaseline( page: Page, attribute: string ) {
 				const current = child.element.isConnected
 					? child.element.parentElement === element ? child.element : undefined
 					: element.children[ index ];
-				walk( child, current, restore, matched );
+				walk( child, current, restore, matched, unlearnedOnly );
 			}
 		};
-		const project = ( restore: boolean ) => {
+		const project = ( restore: boolean, unlearnedOnly = false ) => {
 			const matched = new Set<Element>();
 			for ( const role of roles ) role.current = undefined;
-			walk( root, document.documentElement, restore, matched );
+			walk( root, document.documentElement, restore, matched, unlearnedOnly );
 			// An unproven new role cannot participate under an identity it copied.
 			for ( const element of document.querySelectorAll( `[${ attribute }]` ) ) {
 				if ( ! matched.has( element ) ) element.removeAttribute( attribute );
@@ -87,7 +90,7 @@ export function captureFluidBaseline( page: Page, attribute: string ) {
 		return {
 			bind: () => { for ( const role of roles ) role.identity = role.element.getAttribute( attribute ); },
 			reconcile: () => project( false ),
-			restore: () => project( true ),
+			restore: ( unlearnedOnly = false ) => project( true, unlearnedOnly ),
 			activate: ( entries: Array<{ id: string; property: string; css: string; segmented: boolean }>, segmentAttribute: string, captureWidth: number | undefined ) => {
 				project( false );
 				for ( const role of roles ) {

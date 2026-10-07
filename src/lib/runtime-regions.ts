@@ -37,6 +37,8 @@ export interface RuntimeRegionObservation {
 	>;
 	verification: { rendering: 'unverified'; interactions: 'unverified'; projection: 'not_materialized' };
 	document?: { baseUrl: string; styles: string; stylesSha256: string; userAgent: string; deviceScaleFactor: number };
+	/** Export-only learning provenance; rendering and interactions remain unverified. */
+	projection?: Record<string, unknown>;
 }
 
 const hash = (html: string) => createHash('sha256').update(html).digest('hex');

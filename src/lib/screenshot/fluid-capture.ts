@@ -51,7 +51,7 @@ function pureXTranslation( transform: string ): number | null {
 	return translate ? Number( translate[ 1 ] ) : null;
 }
 
-export type LearnableProperty = ( typeof LEARNABLE_PROPERTIES )[ number ];
+export type LearnableProperty = ( typeof LEARNABLE_PROPERTIES )[ number ] | 'left';
 
 export interface FluidSweepOptions {
 	/** Distinguishes rule identities when responsive documents share a stylesheet. */
@@ -60,6 +60,10 @@ export interface FluidSweepOptions {
 	widths?: number[];
 	/** Settle time after each resize, for the runtime to react. */
 	settleMs?: number;
+	/** Source-owned motion/readiness before each geometry sample, after rest settling. */
+	prepareViewport?: ( page: Page ) => Promise< void >;
+	/** Opt in when the source positions relative slides with width-derived left offsets. */
+	learnRelativeOffsets?: boolean;
 	onProgress?: ( ( width: number, elements: number ) => void ) | undefined;
 }
 
@@ -113,7 +117,7 @@ export async function learnAndApplyFluidGeometry(
 					await baseline.evaluate( state => state.restore() );
 					if ( original ) await page.setViewportSize( original );
 					await waitForRestGeometry( page, ID_ATTRIBUTE );
-					await baseline.evaluate( state => state.reconcile() );
+					await baseline.evaluate( state => state.restore() );
 				}
 				await baseline.evaluate( state => state.cleanup() );
 			} )(), 8000 );
@@ -131,6 +135,7 @@ async function learnFluidGeometry(
 	const widths = options.widths ?? DEFAULT_SWEEP_WIDTHS;
 	const settleMs = options.settleMs ?? 1200;
 	const original = page.viewportSize();
+	const properties = options.learnRelativeOffsets ? [ ...LEARNABLE_PROPERTIES, 'left' ] : [ ...LEARNABLE_PROPERTIES ];
 
 	const tagged = await page.evaluate(
 		( { attribute, properties, prefix } ) => {
@@ -156,6 +161,7 @@ async function learnFluidGeometry(
 					// have no text/glyph to size. Retain that native CSS unchanged; explicit
 					// spacer dimensions, real text and generated glyphs still qualify.
 					!( property === 'font-size' && blankParagraph ) &&
+					( property !== 'left' || getComputedStyle( element ).position === 'relative' ) &&
 					/^-?\d+(?:\.\d+)?px$/.test( element.style.getPropertyValue( property ).trim() )
 				);
 				const carriesPixelCustomProperty = /(?:^|;)\s*--[-a-zA-Z0-9_]+\s*:\s*-?\d+(?:\.\d+)?px\s*(?:;|$)/.test( style );
@@ -169,7 +175,7 @@ async function learnFluidGeometry(
 			}
 			return index;
 		},
-		{ attribute: ID_ATTRIBUTE, properties: LEARNABLE_PROPERTIES, prefix: options.document ? `${ options.document }-` : '' }
+		{ attribute: ID_ATTRIBUTE, properties, prefix: options.document ? `${ options.document }-` : '' }
 	);
 
 	if ( tagged === 0 ) {
@@ -179,6 +185,10 @@ async function learnFluidGeometry(
 
 	// key: `${id}:${property}` -> observations across widths
 	const observations = new Map< string, GeometrySample[] >();
+	const nonRelative = new Set( options.learnRelativeOffsets ? await page.evaluate( attribute =>
+		[ ...document.querySelectorAll( `[${ attribute }]` ) ]
+			.filter( element => getComputedStyle( element ).position !== 'relative' )
+			.map( element => element.getAttribute( attribute )! ), ID_ATTRIBUTE ) : [] );
 
 	for ( const width of widths ) {
 		await page.setViewportSize( { width, height: original?.height ?? 900 } );
@@ -203,6 +213,7 @@ async function learnFluidGeometry(
 		// races it or wastes time. Wait for the geometry actually being
 		// measured to go quiet instead.
 		await waitForRestGeometry( page, ID_ATTRIBUTE );
+		await options.prepareViewport?.( page );
 		await baseline.evaluate( state => state.reconcile() );
 
 		const measured = await page.evaluate(
@@ -214,6 +225,7 @@ async function learnFluidGeometry(
 					const customProperties = [ ...style.matchAll( /(?:^|;)\s*(--[-a-zA-Z0-9_]+)\s*:\s*[^;]+/g ) ].map( ( match ) => match[ 1 ]! );
 					const elementProperties = [ ...new Set( [ ...properties, ...customProperties ] ) ];
 					const parent = element.parentElement;
+					const relative = getComputedStyle( element ).position === 'relative';
 					for ( const property of elementProperties ) {
 						if ( property === 'inset-top' || property === 'inset-left' ) {
 							const inset = /(?:^|;)\s*inset\s*:\s*(-?\d+(?:\.\d+)?)px\s+auto\s+auto\s+(-?\d+(?:\.\d+)?)px\s*(?:;|$)/.exec( style );
@@ -248,13 +260,17 @@ async function learnFluidGeometry(
 							property !== 'font-size' &&
 							property !== 'padding-top' &&
 							property !== 'transform-x'
-								? property === 'width'
+								? property === 'width' || property === 'left'
 									? parent.clientWidth
 									: parent.clientHeight
 								: null;
 					}
 					for ( const property of elementProperties ) {
 						if ( property === 'transform-x' || property === 'inset-top' || property === 'inset-left' ) continue;
+						if ( property === 'left' && ! relative ) {
+							values[ property ] = null;
+							continue;
+						}
 						const match = new RegExp( `(?:^|;)\\s*${ property }\\s*:\\s*(-?\\d+(?:\\.\\d+)?)px` ).exec( style );
 						values[ property ] = match ? Number( match[ 1 ] ) : null;
 						if ( property.startsWith( '--' ) && ! match ) {
@@ -262,11 +278,12 @@ async function learnFluidGeometry(
 							if ( computed ) values[ property ] = null;
 						}
 					}
-					return { id: element.getAttribute( attribute )!, values, containers };
+					return { id: element.getAttribute( attribute )!, values, containers, relative };
 				} ),
-			{ attribute: ID_ATTRIBUTE, properties: LEARNABLE_PROPERTIES as unknown as string[] }
+			{ attribute: ID_ATTRIBUTE, properties }
 		);
 		for ( const entry of measured ) {
+			if ( ! entry.relative ) nonRelative.add( entry.id );
 			for ( const property of Object.keys( entry.values ) as LearnableProperty[] ) {
 				const value = entry.values[ property ];
 				const key = `${ entry.id }:${ property }`;
@@ -306,6 +323,9 @@ async function learnFluidGeometry(
 
 	for ( const [ key, samples ] of observations ) {
 		const [ id, property ] = key.split( ':' ) as [ string, LearnableProperty ];
+		// Any non-relative sample invalidates the entire offset relationship.
+		// Fitting the remaining relative samples would erase authored positioning.
+		if ( property === 'left' && nonRelative.has( id ) ) continue;
 		const transformX = property === 'transform-x';
 		const insetAxis = property === 'inset-top' || property === 'inset-left';
 		const customProperty = property.startsWith( '--' );
@@ -323,7 +343,8 @@ async function learnFluidGeometry(
 		// instead of freezing.
 		const segmented =
 			wholeRangeModel.kind === 'breakpoint'
-				? learnSegmentedFluidModel( modelSamples, customProperty || insetAxis
+				? learnSegmentedFluidModel( property === 'left'
+					? modelSamples.map( ( { viewport, value } ) => ( { viewport, value } ) ) : modelSamples, customProperty || insetAxis
 					? { holdUnfitted: true, holdNarrowForBoundedAffine: true }
 					: { holdUnfitted: transformX, holdNarrowForBoundedAffine: true } )
 				: null;
@@ -484,11 +505,23 @@ async function learnFluidGeometry(
 	await page.waitForTimeout( settleMs );
 	await waitForRestGeometry( page, ID_ATTRIBUTE );
 	await baseline.evaluate( state => state.reconcile() );
+	// A final resize may write geometry onto roles that never qualified for
+	// learning. Restore those roles without replacing the sampled role state.
+	await baseline.evaluate( state => state.restore( true ) );
 	// The resize back to the capture viewport can switch a transform to another
 	// matrix after the sweep. Validate that final state before removing inline
 	// transform; otherwise translateX would discard its new components.
 	for ( let index = learned.length - 1; index >= 0; index-- ) {
 		const entry = learned[ index ]!;
+		if ( entry.property === 'left' && options.learnRelativeOffsets &&
+			! await page.evaluate( ( { attribute, id } ) => {
+				const element = document.querySelector( `[${ attribute }="${ id }"]` );
+				return element !== null && getComputedStyle( element ).position === 'relative';
+			}, { attribute: ID_ATTRIBUTE, id: entry.id } ) ) {
+			learned.splice( index, 1 );
+			unmodelled++;
+			continue;
+		}
 		if ( entry.property !== 'transform' ) continue;
 		const style = await page.evaluate(
 			( { attribute, id } ) => document.querySelector( `[${ attribute }="${ id }"]` )?.getAttribute( 'style' ) ?? null,
@@ -524,7 +557,7 @@ async function learnFluidGeometry(
 					element.style.removeProperty( entry.property );
 					continue;
 				}
-				const axis = entry.property === 'height' ? 'height' : 'width';
+				const axis = entry.property === 'left' ? 'x' : entry.property === 'height' ? 'height' : 'width';
 				const before = element.getBoundingClientRect()[ axis ];
 				const runtimeValue = element.style.getPropertyValue( entry.property );
 				const runtimePriority = element.style.getPropertyPriority( entry.property );
