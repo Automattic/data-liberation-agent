@@ -21,10 +21,11 @@ export interface CleanupRule {
    *  it reserved is reclaimed with it rather than frozen at the captured value. */
   reclaimVariables?: string[];
   hosts?: string[];
-  /** The provider withholds this route's content behind this element (a
-   *  members-only page). Removing it leaves nothing of the page, so its
-   *  removal marks the route as gated; see `access-gate.ts`. Names the
-   *  provider for the owner-facing note. */
+  /** The provider may withhold this route's content behind this element (a
+   *  members-only page). Its removal marks the route as gated only when the
+   *  page kept no content root; the same element can also wrap a login opened
+   *  over a public page. See `access-gate.ts`. Names the provider for the
+   *  owner-facing note. */
   accessGate?: { provider: string };
 }
 export interface CleanupPolicy {

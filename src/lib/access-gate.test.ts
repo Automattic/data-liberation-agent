@@ -6,6 +6,7 @@ import { cleanupPolicy } from './source-cleanup.js';
 import { capture as wixCapture } from '../adapters/wix/capture.js';
 import { captureScreenshots } from './screenshot/screenshotter.js';
 import { exportWebsiteCapture } from './capture-export.js';
+import { checkFidelity } from './fidelity/check.js';
 
 let server: Server | undefined;
 let directory: string | undefined;
@@ -24,14 +25,17 @@ const membersDialog = `<div role="dialog" aria-modal="true" data-testid="siteMem
 <h2>Log In</h2><form data-testid="emailAuth"><input type="email" placeholder="Email"><input type="password" placeholder="Password"><button data-testid="submit">Log In</button></form></div>`;
 
 const shell = ( title: string, main: string, script = '' ) => `<!doctype html><html><head><meta charset="utf-8"><title>${ title }</title>
-<link rel="canonical" href="/"><style>body{margin:0;font:16px Arial}header,main,footer{padding:20px}h1{font-family:Georgia}</style></head>
+<link rel="canonical" href="/"><meta name="description" content="Welcome to the home page"><meta property="og:title" content="${ title }"><meta property="og:description" content="Home page summary"><meta property="og:image" content="/home.jpg"><meta name="twitter:title" content="${ title }"><meta name="twitter:description" content="Home page summary"><meta name="twitter:image" content="/home.jpg"><style>body{margin:0;font:16px Arial}header,main,footer{padding:20px}h1{font-family:Georgia}</style></head>
 <body><div id="SITE_CONTAINER"><header id="SITE_HEADER"><nav><a href="/">Home</a> <a href="/dues">Dues</a></nav>
 <button type="button" aria-haspopup="dialog" id="sign-in">Sign In</button></header>
-<main id="PAGES_CONTAINER">${ main }</main><footer id="SITE_FOOTER">© Owner HOA</footer></div>
+<main id="PAGES_CONTAINER">${ main }</main><footer id="SITE_FOOTER">© Owner HOA <a href="/dues">Pay online</a></footer></div>
 <script>document.getElementById('sign-in').addEventListener('click',()=>{const layer=document.createElement('div');layer.innerHTML=${ JSON.stringify( membersDialog ) };document.body.append(layer.firstElementChild)});${ script }</script>
 </body></html>`;
 
 const pages: Record< string, string > = {
+	// A public page whose runtime opens the members login, blocking layer
+	// included, as soon as it loads: it keeps its content, so it is not gated.
+	'/news': shell( 'News | Owner HOA', `<h1>News</h1><p>${ 'Real public news content. '.repeat( 20 ) }</p>`, `setTimeout(()=>{const l=document.createElement('div');l.setAttribute('data-testid','siteMembersDialogBlockingLayer');l.innerHTML=${ JSON.stringify( membersDialog ) };document.body.append(l);},50);` ),
 	'/': shell( 'Home | Owner HOA', `<h1>Welcome neighbours</h1><p>${ 'Owner home content. '.repeat( 20 ) }</p>` ),
 	// The server answers the members-only route with the site shell; the
 	// runtime then swaps everything for the blocking members gate.
@@ -55,10 +59,11 @@ async function source(): Promise< string > {
 it( 'captures a members-only route as an editable placeholder over the public site shell, and never the provider login', async () => {
 	const home = await source();
 	const dues = new URL( '/dues', home ).href;
+	const news = new URL( '/news', home ).href;
 	mkdirSync( join( process.cwd(), '.tmp-test' ), { recursive: true } );
 	directory = mkdtempSync( join( process.cwd(), '.tmp-test', 'access-gate-' ) );
 	const result = await captureScreenshots( {
-		urls: [ home, dues ], primaryUrl: home, outputDir: directory,
+		urls: [ home, dues, news ], primaryUrl: home, outputDir: directory,
 		cleanupPolicy: cleanupPolicy( wixCapture.cleanupRules ), captureImages: true, learnFluid: false, settleMs: 200,
 	} );
 	expect( result.failed ).toBe( 0 );
@@ -81,6 +86,20 @@ it( 'captures a members-only route as an editable placeholder over the public si
 	// Named by its menu label, not by the gate's site-wide title.
 	expect( gated ).toMatch( /<title>Dues \| Owner HOA<\/title>/ );
 	expect( gated ).toMatch( /<h1[^>]*>Dues<\/h1>/ );
+	// The page's own menu entry is current; the footer link does not name it.
+	expect( gated ).toMatch( /<nav>.*<a href="\/dues"[^>]*aria-current="page"/s );
+	// Share metadata names this page, and the root page's summary and image are not reused.
+	expect( gated ).toContain( '<meta name="twitter:title" content="Dues | Owner HOA">' );
+	expect( gated ).toContain( '<meta property="og:title" content="Dues | Owner HOA">' );
+	for ( const leaked of [ 'Welcome to the home page', 'Home page summary', '/home.jpg' ] ) expect( gated ).not.toContain( leaked );
+
+	// A public page with the login opened over it keeps its content and title.
+	expect( manifest.entries[ news ].accessGate ).toBeUndefined();
+	const newsHtml = markup( readFileSync( join( directory, manifest.entries[ news ].html ), 'utf8' ) );
+	expect( newsHtml ).toContain( 'Real public news content.' );
+	expect( newsHtml ).not.toContain( 'members-only on your Wix site' );
+	expect( newsHtml ).toMatch( /<title>News \| Owner HOA<\/title>/ );
+	expect( newsHtml ).not.toContain( 'emailAuth' );
 
 	// The header pop-up is dropped on public pages too.
 	const homeHtml = markup( readFileSync( join( directory, manifest.entries[ home ].html ), 'utf8' ) );
@@ -93,4 +112,15 @@ it( 'captures a members-only route as an editable placeholder over the public si
 	expect( existsSync( exported ) ).toBe( true );
 	expect( readFileSync( exported, 'utf8' ) ).toContain( 'members-only on your Wix site' );
 	expect( markup( readFileSync( exported, 'utf8' ) ) ).not.toContain( 'emailAuth' );
-}, 120_000 );
+	const receipt = JSON.parse( readFileSync( join( directory, 'capture-receipt.json' ), 'utf8' ) );
+	expect( receipt.routes.find( ( route: { url: string } ) => route.url === dues ).accessGate ).toMatchObject( { provider: 'Wix' } );
+
+	// Drift replays the live source, which only ever shows the login on the
+	// gated route: the placeholder is set aside, not reported as drift.
+	const log: string[] = [];
+	const drift = await checkFidelity( { directory, widths: [ 1440 ], settleMs: 200, stage: 'drift', log: ( line ) => log.push( line ) } );
+	expect( drift.routes ).not.toContain( '/dues' );
+	expect( drift.routes ).toContain( '/' );
+	expect( log.join( '\n' ) ).toContain( 'captured as placeholders and are not compared against the live source: /dues' );
+	await expect( checkFidelity( { directory, widths: [ 1440 ], settleMs: 200, stage: 'drift', routes: [ '/dues' ] } ) ).rejects.toThrow( 'access-gate placeholder' );
+}, 240_000 );

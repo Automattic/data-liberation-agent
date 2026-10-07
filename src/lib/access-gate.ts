@@ -35,6 +35,14 @@ export function accessGateNote( provider: string ): string {
  * when the gated route is the root itself or the root cannot be loaded; the
  * placeholder then goes into the gated document as it is.
  */
+/**
+ * A provider can also open its login over a public page (a members pop-up
+ * shown on load). Only a page the gate left without any content root is gated.
+ */
+export async function routeKeptContent( page: Page ): Promise< boolean > {
+	return page.evaluate( () => Boolean( document.querySelector( 'main,[role="main"]' ) ) );
+}
+
 export async function openAccessGateShell( page: Page, route: string ): Promise< string | undefined > {
 	const shell = new URL( '/', route ).href;
 	if ( shell === new URL( route ).href ) return undefined;
@@ -50,16 +58,21 @@ export function installAccessGatePlaceholder( args: { route: string; gateTitle: 
 
 	const route = new URL( args.route );
 	const normalize = ( pathname: string ) => pathname.replace( /\/+$/, '' ) || '/';
-	// The menu names the page; the gate's own title is the site-wide one.
-	let label = '';
-	for ( const link of document.querySelectorAll< HTMLAnchorElement >( 'a[href]' ) ) {
-		let target: URL;
+	// The menu names the page; the gate's own title is the site-wide one. Only
+	// navigation links count: a same-path link elsewhere (a footer, a card) is
+	// not the page's name. Every navigation link to the route (desktop and
+	// mobile menus) is marked current, as the source marks an ordinary route.
+	const navigation = 'nav a[href],[role="navigation"] a[href],header a[href]';
+	const routeLinks = [ ...document.querySelectorAll< HTMLAnchorElement >( navigation ) ].filter( ( link ) => {
 		try {
-			target = new URL( link.href, location.href );
+			const target = new URL( link.href, location.href );
+			return target.origin === route.origin && normalize( target.pathname ) === normalize( route.pathname );
 		} catch {
-			continue;
+			return false;
 		}
-		if ( target.origin !== route.origin || normalize( target.pathname ) !== normalize( route.pathname ) ) continue;
+	} );
+	let label = '';
+	for ( const link of routeLinks ) {
 		const text = ( link.textContent ?? '' ).replace( /\s+/g, ' ' ).trim();
 		if ( text && text.length <= 80 ) {
 			label = text;
@@ -70,7 +83,11 @@ export function installAccessGatePlaceholder( args: { route: string; gateTitle: 
 		const segment = decodeURIComponent( normalize( route.pathname ).split( '/' ).pop() ?? '' );
 		label = segment.replace( /[-_]+/g, ' ' ).replace( /\b\w/g, ( letter ) => letter.toUpperCase() ).trim() || args.gateTitle;
 	}
-	const title = args.gateTitle && args.gateTitle !== label ? `${ label } | ${ args.gateTitle }` : label;
+	for ( const link of document.querySelectorAll( `${ navigation.split( ',' ).map( ( scope ) => `${ scope }[aria-current]` ).join( ',' ) }` ) ) link.removeAttribute( 'aria-current' );
+	for ( const link of routeLinks ) link.setAttribute( 'aria-current', 'page' );
+	// A gate titled with the page name already ("News | Site") is not prefixed again.
+	const title = ! args.gateTitle || args.gateTitle === label ? label
+		: args.gateTitle.startsWith( label ) ? args.gateTitle : `${ label } | ${ args.gateTitle }`;
 
 	const main = document.querySelector( 'main' ) ?? document.body;
 	// Speak in the site's own type rather than the browser default.
@@ -99,8 +116,12 @@ export function installAccessGatePlaceholder( args: { route: string; gateTitle: 
 
 	document.title = title;
 	document.querySelector( 'link[rel="canonical"]' )?.setAttribute( 'href', route.href );
-	document.querySelector( 'meta[property="og:url"]' )?.setAttribute( 'content', route.href );
-	document.querySelector( 'meta[property="og:title"]' )?.setAttribute( 'content', title );
+	for ( const meta of document.querySelectorAll( 'meta[property="og:url"],meta[name="og:url"]' ) ) meta.setAttribute( 'content', route.href );
+	for ( const meta of document.querySelectorAll( 'meta[property="og:title"],meta[name="og:title"],meta[name="twitter:title"],meta[property="twitter:title"]' ) ) meta.setAttribute( 'content', title );
+	// The shell's description and share image describe the root page, not this one.
+	for ( const meta of document.querySelectorAll( [ 'meta[name="description"]', 'meta[property="og:description"]', 'meta[name="og:description"]',
+		'meta[property^="og:image"]', 'meta[name^="og:image"]', 'meta[name="twitter:description"]', 'meta[property="twitter:description"]',
+		'meta[name^="twitter:image"]', 'meta[property^="twitter:image"]' ].join( ',' ) ) ) meta.remove();
 	if ( location.href !== route.href ) history.replaceState( history.state, '', route.href );
 	return { label, title };
 }

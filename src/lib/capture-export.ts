@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import type { AccessGateEvidence } from './access-gate.js';
 import {
 	existsSync,
 	mkdirSync,
@@ -81,6 +82,7 @@ interface CaptureManifestEntry {
 	documents?: import('./screenshot/manifest-queue.js').ManifestEntry['documents'];
 	nativeViewTimelines?: import('./screenshot/manifest-queue.js').ManifestEntry['nativeViewTimelines'];
 	cleanup?: import('./screenshot/manifest-queue.js').ManifestEntry['cleanup'];
+	accessGate?: AccessGateEvidence;
 	slug?: string;
 	html?: string;
 	mobileHtml?: string;
@@ -131,6 +133,8 @@ interface CaptureEntry {
 	/** Receipt evidence for how many responsive variants this route ships and why. */
 	responsiveVariants?: ResponsiveVariantEvidence;
 	fluidGeometry?: CaptureDocumentFluidEvidence;
+	/** Captured as a placeholder for a provider-gated route (see access-gate.ts). */
+	accessGate?: AccessGateEvidence;
 	identityHtmlPath?: string;
 	sections?: string;
 	canonicalUrl?: string;
@@ -1245,6 +1249,7 @@ function buildExportCapture(
 			hasMobileDocument: assembly.hasMobileDocument,
 			responsiveVariants: assembly.evidence,
 			...( entry.fluid || entry.fluidMobile ? { fluidGeometry: { desktop: entry.fluid, mobile: entry.fluidMobile } } : {} ),
+			...( entry.accessGate ? { accessGate: entry.accessGate } : {} ),
 			sections: entry.sections,
 			canonicalUrl: canonicalMetadataUrl(
 				entry.metadata?.openGraph?.[ 'og:url' ] ?? openGraphUrl( html ),
@@ -1405,7 +1410,7 @@ function buildExportCapture(
 	const replaceResources = preparePortableReplacements( resourceReplacements, rejectedReplacementKeys );
 	const portableMediaReplacements = omitDegenerateReplacements( mediaReplacements, rejectedReplacementKeys );
 
-	const routes: Array< { url: string; path: string } > = [];
+	const routes: Array< { url: string; path: string; accessGate?: AccessGateEvidence } > = [];
 	const portableRouteLinks = new Map< string, string >();
 	for ( const entry of retainedEntries ) {
 		const { url } = entry;
@@ -1417,6 +1422,7 @@ function buildExportCapture(
 			path: `website/${ routePath }`,
 			...( entry.responsiveVariants ? { responsiveVariants: entry.responsiveVariants } : {} ),
 			...( entry.fluidGeometry ? { fluidGeometry: entry.fluidGeometry } : {} ),
+			...( entry.accessGate ? { accessGate: entry.accessGate } : {} ),
 		} );
 	}
 	for ( const [ aliasKey, routePath ] of canonicalRouteAliases ) {

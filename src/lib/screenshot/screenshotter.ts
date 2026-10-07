@@ -11,7 +11,7 @@ import { slugify } from '../url/index.js';
 import { SiteAnalysisAggregator } from './aggregator.js';
 import { applyCaptureRemovals } from './apply-removals.js';
 import { accessGateRemoval, applySourceCleanup, readSourceCleanup, sweepSourceCleanup, cleanupPolicy, type CleanupPolicy } from '../source-cleanup.js';
-import { accessGateNote, installAccessGatePlaceholder, openAccessGateShell, type AccessGateEvidence } from '../access-gate.js';
+import { accessGateNote, installAccessGatePlaceholder, openAccessGateShell, routeKeptContent, type AccessGateEvidence } from '../access-gate.js';
 import { captureChromeFidelity } from './capture-chrome-fidelity.js';
 import { CssAggregator } from './css-aggregator.js';
 import { CSS_SHORTHAND_REPAIR_FACTORY_SOURCE } from './css-shorthand-repair.js';
@@ -872,7 +872,8 @@ async function capturePerViewport( args: CapturePerViewportArgs ): Promise< void
 	// Read before any probe clicks, so a login pop-up a control opens later is
 	// never mistaken for a gated route.
 	let accessGate: AccessGateEvidence | undefined;
-	const gate = accessGateRemoval( await readSourceCleanup( page, sourcePolicy ), sourcePolicy );
+	const gateRemoval = accessGateRemoval( await readSourceCleanup( page, sourcePolicy ), sourcePolicy );
+	const gate = gateRemoval && ! ( await routeKeptContent( page ) ) ? gateRemoval : undefined;
 	if ( gate ) {
 		const gateTitle = ( await page.title().catch( () => '' ) ).trim();
 		const shell = await openAccessGateShell( page, url );
