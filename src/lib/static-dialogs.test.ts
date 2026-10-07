@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { chromium } from 'playwright';
 import { wireCapturedDialogs } from './static-dialogs.js';
 import type { CapturedDialogInteraction } from './screenshot/interaction-capture.js';
+import { captureTriggeredDialogs } from './screenshot/interaction-capture.js';
 
 const captured: CapturedDialogInteraction = {
 	status: 'captured',
@@ -24,6 +25,47 @@ const captured: CapturedDialogInteraction = {
 };
 
 describe( 'wireCapturedDialogs', () => {
+	it( 'wires observed source controls rather than matching IDs copied into earlier popup snapshots', async () => {
+		const controls = '<button id="first" aria-haspopup="dialog">First gallery</button><button id="second" aria-haspopup="dialog">Second gallery</button>';
+		let nested = controls;
+		for ( let depth = 0; depth < 16; ++depth ) nested = `<div>${ nested }</div>`;
+		const source = `<!doctype html><html><head><style>body{margin:0}.panel{position:absolute;top:50px;left:0;width:260px;height:180px;background:white;z-index:100}button{min-height:30px}</style></head><body><main><h1>Unrelated heading</h1>${ nested }</main><footer>Unrelated footer</footer><script>
+		for(const id of ['first','second'])document.getElementById(id).addEventListener('click',()=>{
+			const old=document.getElementById('panel-'+id);if(old){old.remove();return;}
+			const panel=document.createElement('div');panel.id='panel-'+id;panel.className='panel';panel.setAttribute('role','dialog');
+			panel.innerHTML='<h2>'+id+' snapshot</h2>'+(id==='first'?'<div id="second" role="img" aria-label="Copied presentation"></div>':'')+'<button aria-label="Close">Close</button>';
+			document.getElementById(id).parentElement.append(panel);panel.querySelector('button').onclick=()=>panel.remove();
+		});</script></body></html>`;
+		const browser = await chromium.launch( { headless: true } );
+		try {
+			const page = await browser.newPage();
+			await page.setContent( source );
+			const report = await captureTriggeredDialogs( page, 'https://fixture.test/gallery' );
+			const states = report.states.filter( state => state.status === 'captured' );
+			expect( states ).toHaveLength( 2 );
+			expect( states[ 0 ]!.dialog!.html ).toContain( 'id="second"' );
+			expect( states[ 1 ]!.dialog!.ancestorState ).toMatchObject( { status: 'unverified', reason: 'ancestor-limit' } );
+			const baseline = ( await page.content() ).replace( /<script>[\s\S]*?<\/script>/g, '' );
+			const portable = wireCapturedDialogs( baseline, states );
+			await page.setContent( portable );
+			expect( await page.locator( '[data-dla-dialog-panel] [data-dla-dialog-trigger]' ).count() ).toBe( 0 );
+			expect( await page.locator( 'main [data-dla-dialog-trigger]' ).count() ).toBe( 2 );
+			expect( await page.locator( 'main button#second' ).getAttribute( 'data-dla-dialog-ancestor-unverified' ) ).toBe( 'ancestor-limit' );
+			for ( const id of [ 'first', 'second' ] ) {
+				const trigger = page.locator( `main button#${ id }` );
+				await trigger.click();
+				const key = await trigger.getAttribute( 'aria-controls' );
+				const panel = page.locator( `[data-dla-dialog-panel="${ key }"]` );
+				expect( await panel.evaluate( node => ( node as HTMLElement ).hidden ) ).toBe( false );
+				expect( await panel.textContent() ).toContain( `${ id } snapshot` );
+				await page.keyboard.press( 'Escape' );
+				expect( await panel.evaluate( node => ( node as HTMLElement ).hidden ) ).toBe( true );
+			}
+			expect( await page.locator( 'main h1' ).textContent() ).toBe( 'Unrelated heading' );
+			expect( await page.locator( 'footer' ).textContent() ).toBe( 'Unrelated footer' );
+		} finally { await browser.close(); }
+	}, 30_000 );
+
 	it.each( [ 'button', 'div' ] )( 'preserves direct-child grid ownership for a %s trigger through resize', async ( tag ) => {
 		const trigger = tag === 'button'
 			? '<button id="toggle" class="menu" aria-label="Open Menu">Menu</button>'

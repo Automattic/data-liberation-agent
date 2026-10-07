@@ -172,7 +172,10 @@ export function wireCapturedDialogs(
 			.not( '[data-dla-dialog-panel], [data-dla-dialog-panel] *' );
 		const reusePanel = state.dialog?.presentation === 'dropdown' && existingPanel.length === 1;
 		if ( !reusePanel && !sharedPanelId ) removeCapturedDialog( $, state.dialog?.selector );
-		const triggers = findTriggers( $, state.trigger );
+		// An earlier exported panel contains a captured snapshot, not another
+		// instance of the observed source control whose ID it happens to copy.
+		const triggers = findTriggers( $, state.trigger )
+			.not( '[data-dla-dialog-panel], [data-dla-dialog-panel] *' );
 		triggers.each( ( _, element ) => {
 			const trigger = $( element );
 			if (state.gallery) {
