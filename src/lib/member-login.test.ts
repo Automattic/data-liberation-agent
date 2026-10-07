@@ -9,6 +9,8 @@ import { captureScreenshots } from './screenshot/screenshotter.js';
 import { exportWebsiteCapture } from './capture-export.js';
 import { MEMBER_LOGIN_ATTRIBUTE } from './member-login.js';
 
+const MARK = 'dla-member-login-wix';
+
 let server: Server | undefined;
 let directory: string | undefined;
 afterEach( async () => {
@@ -45,7 +47,7 @@ async function source(): Promise< string > {
 	return `http://localtest.me:${ ( server.address() as { port: number } ).port }/`;
 }
 
-it( 'keeps Wix sign-in controls as marked member-login links instead of a dead button', async () => {
+it( 'marks Wix sign-in controls for the destination login without changing the elements', async () => {
 	const url = await source();
 	mkdirSync( join( process.cwd(), '.tmp-test' ), { recursive: true } );
 	directory = mkdtempSync( join( process.cwd(), '.tmp-test', 'member-login-' ) );
@@ -58,24 +60,27 @@ it( 'keeps Wix sign-in controls as marked member-login links instead of a dead b
 	exportWebsiteCapture( { outputDir: directory, sourceUrl: url, platform: 'wix', summary: {}, failures: [] } );
 	const $ = load( readFileSync( join( directory, 'website', 'index.html' ), 'utf8' ) );
 
-	// The header control keeps its place, classes and label, but is a link the
-	// destination can point at its own login, not a button with nothing behind it.
+	// The header control stays the runtime's own button (focusable, with its
+	// classes, icon and label) and only gains the marker, as a class that
+	// block conversion keeps and as a data attribute.
 	const header = $( '.wixui-login-social-bar [data-testid="handle-button"]' );
 	expect( header ).toHaveLength( 1 );
-	expect( header.prop( 'tagName' ) ).toBe( 'A' );
-	expect( header.attr( MEMBER_LOGIN_ATTRIBUTE ) ).toBe( 'wix' );
+	expect( header.prop( 'tagName' ) ).toBe( 'BUTTON' );
+	expect( header.hasClass( MARK ) ).toBe( true );
 	expect( header.hasClass( 'O4eQsz' ) ).toBe( true );
+	expect( header.attr( MEMBER_LOGIN_ATTRIBUTE ) ).toBe( 'wix' );
+	expect( header.attr( 'type' ) ).toBe( 'button' );
 	expect( header.text() ).toContain( 'Sign In' );
 	expect( header.find( 'svg' ) ).toHaveLength( 1 );
-	for ( const attribute of [ 'type', 'aria-haspopup' ] ) expect( header.attr( attribute ) ).toBeUndefined();
-	expect( $( '.wixui-login-social-bar button' ) ).toHaveLength( 0 );
 
-	// A link into the members area is the same entry point.
+	// A link into the members area is the same entry point and keeps its href.
+	expect( $( '#hero-sign-in' ).hasClass( MARK ) ).toBe( true );
 	expect( $( '#hero-sign-in' ).attr( MEMBER_LOGIN_ATTRIBUTE ) ).toBe( 'wix' );
+	expect( $( '#hero-sign-in' ).attr( 'href' ) ).toContain( '/account/my-account' );
 	// Ordinary links and other sites' account pages are left alone.
-	expect( $( '#contact' ).attr( MEMBER_LOGIN_ATTRIBUTE ) ).toBeUndefined();
-	expect( $( '#elsewhere' ).attr( MEMBER_LOGIN_ATTRIBUTE ) ).toBeUndefined();
-	expect( $( `[${ MEMBER_LOGIN_ATTRIBUTE }]` ) ).toHaveLength( 2 );
+	expect( $( '#contact' ).hasClass( MARK ) ).toBe( false );
+	expect( $( '#elsewhere' ).hasClass( MARK ) ).toBe( false );
+	expect( $( `.${ MARK }` ) ).toHaveLength( 2 );
 	// The provider's login itself stays out.
 	expect( $.html() ).not.toContain( 'emailAuth' );
 }, 240_000 );

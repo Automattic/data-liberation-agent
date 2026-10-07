@@ -8,18 +8,33 @@ import { resolveEventFormRedirect } from './event-forms.js';
 import { providerCreditRules } from '../../lib/source-cleanup.js';
 import type { Locator, Page } from 'playwright';
 import { canonicalizeWixCapturedHtml } from './instance-ids.js';
-import { markMemberLoginControls, MEMBER_LOGIN_ATTRIBUTE } from '../../lib/member-login.js';
+import { markMemberLoginControls, MEMBER_LOGIN_ATTRIBUTE, MEMBER_LOGIN_CLASS_PREFIX } from '../../lib/member-login.js';
 
 /**
  * Wix Members sign-in entry points: the login bar's button, which opens the
  * members dialog removed by `wix-members-dialog`, and links into the members
- * area (`/account/...`), which a visitor only reaches through that login.
+ * area, which a visitor only reaches through that login.
  */
 export const WIX_MEMBER_LOGIN = {
 	provider: 'wix',
 	controls: '.wixui-login-social-bar [data-testid="handle-button"]',
-	memberPaths: [ '/account/' ],
 };
+
+/**
+ * Where the Wix members area lives for a captured route. A connected domain
+ * serves it at `/account/`; a free `<user>.wixsite.com/<site>/` serves the
+ * whole site under its first path segment, members area included.
+ */
+export function wixMemberPaths( url: string ): string[] {
+	try {
+		const parsed = new URL( url );
+		const site = parsed.pathname.split( '/' ).filter( Boolean )[ 0 ];
+		if ( /(?:^|\.)wixsite\.com$/i.test( parsed.hostname ) && site ) return [ `/${ site }/account/` ];
+	} catch {
+		/* fall through to the connected-domain layout */
+	}
+	return [ '/account/' ];
+}
 
 /** Wix media ids look like `8e80e7_a1b2…`, stable across crops of one asset. */
 const WIX_MEDIA_ID = /([a-z0-9]{4,12}_[a-z0-9]{24,48})/i;
@@ -812,14 +827,18 @@ export const capture: LiberationHooks = {
 	 * Fluid learning resizes the page after prepare. Collect slideshows on the
 	 * DOM that is about to be frozen so a late-hydrated widget is not lost.
 	 */
-	beforeSerialize: async ( page ) => {
+	beforeSerialize: async ( page, ctx ) => {
 		await revealAndCollectWixSlideshows( page );
 		// Revealing a slideshow scrolls, so the chrome is settled after it.
 		await settleScrollReactiveChrome( page );
-		// The members dialog is gone, so the controls that opened it become
-		// marked links (see member-login.ts). Last of all, so a scroll-driven
-		// rerender cannot put the runtime's button back before the freeze.
-		await page.evaluate( markMemberLoginControls, { ...WIX_MEMBER_LOGIN, attribute: MEMBER_LOGIN_ATTRIBUTE } ).catch( () => 0 );
+		// The members dialog is gone, so the controls that opened it are marked
+		// for the destination to point at its own login (see member-login.ts).
+		// Last of all, so a scroll-driven rerender cannot drop the marker
+		// before the freeze.
+		await page.evaluate( markMemberLoginControls, {
+			...WIX_MEMBER_LOGIN, memberPaths: wixMemberPaths( ctx.url ),
+			attribute: MEMBER_LOGIN_ATTRIBUTE, classPrefix: MEMBER_LOGIN_CLASS_PREFIX,
+		} ).catch( () => 0 );
 	},
 
 	/**

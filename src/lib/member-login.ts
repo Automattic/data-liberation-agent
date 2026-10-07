@@ -10,16 +10,20 @@
  *
  * Where a reader should sign in is the destination's decision, not capture's:
  * a static host has no accounts at all, and a CMS has its own login route.
- * So capture does not invent a target. It records which controls are member
- * sign-in entry points, as links, with the `data-dla-member-login` marker
- * naming the provider. A destination that has a login (WordPress:
- * `wp_login_url()`) points every marked link at it; one that has none can
- * hide them. A button becomes a link because signing in is navigation once
- * the provider's dialog is gone, and a destination then only sets `href`.
+ * So capture does not invent a target, and does not change the element: a
+ * button stays a button (focusable, styled, with its icon and label). It only
+ * records which controls are member sign-in entry points, as a class
+ * (`dla-member-login-<provider>`) plus a `data-dla-member-login="<provider>"`
+ * attribute. The class is the durable marker: block conversion keeps classes
+ * on buttons and links where it drops data attributes. A destination that has
+ * a login (WordPress: `wp_login_url()`) points every marked control at it; one
+ * that has none can hide them.
  */
 
 /** Marks a member sign-in entry point; the value names the provider. */
 export const MEMBER_LOGIN_ATTRIBUTE = 'data-dla-member-login';
+/** Class prefix for the same marker; the provider id is appended. */
+export const MEMBER_LOGIN_CLASS_PREFIX = 'dla-member-login-';
 
 export interface MemberLoginControls {
 	/** Lower-case provider id written into the marker, such as `wix`. */
@@ -31,35 +35,18 @@ export interface MemberLoginControls {
 }
 
 /**
- * Serialized into the page. Turns the provider's sign-in controls into
- * marked links and marks same-origin links into its members area. Returns how
- * many controls were marked.
+ * Serialized into the page. Marks the provider's sign-in controls and
+ * same-origin links into its members area, leaving each element as it is.
+ * Returns how many elements were marked.
  */
-export function markMemberLoginControls( args: MemberLoginControls & { attribute: string } ): number {
+export function markMemberLoginControls( args: MemberLoginControls & { attribute: string; classPrefix: string } ): number {
 	// tsx instruments nested functions with __name(); the built bundle does not.
 	const globalWithName = globalThis as typeof globalThis & { __name?: ( fn: unknown ) => unknown };
 	if ( typeof globalWithName.__name === 'undefined' ) globalWithName.__name = ( fn ) => fn;
 
-	let marked = 0;
-	// Attributes that only mean something on a form control or a dialog opener.
-	const controlOnly = new Set( [ 'type', 'name', 'value', 'disabled', 'form', 'formaction', 'formmethod',
-		'formenctype', 'formtarget', 'formnovalidate', 'aria-haspopup', 'aria-expanded', 'aria-controls', 'aria-pressed' ] );
-	for ( const control of document.querySelectorAll( args.controls ) ) {
-		if ( control.hasAttribute( args.attribute ) ) continue;
-		let link: Element = control;
-		if ( control.tagName !== 'A' ) {
-			link = document.createElement( 'a' );
-			for ( const attribute of control.attributes ) {
-				if ( ! controlOnly.has( attribute.name ) ) link.setAttribute( attribute.name, attribute.value );
-			}
-			link.append( ...control.childNodes );
-			control.replaceWith( link );
-		}
-		link.setAttribute( args.attribute, args.provider );
-		marked++;
-	}
+	const className = args.classPrefix + args.provider;
+	const targets = new Set< Element >( document.querySelectorAll( args.controls ) );
 	for ( const link of document.querySelectorAll< HTMLAnchorElement >( 'a[href]' ) ) {
-		if ( link.hasAttribute( args.attribute ) ) continue;
 		let target: URL;
 		try {
 			target = new URL( link.getAttribute( 'href' ) ?? '', location.href );
@@ -67,8 +54,13 @@ export function markMemberLoginControls( args: MemberLoginControls & { attribute
 			continue;
 		}
 		if ( target.origin !== location.origin ) continue;
-		if ( ! ( args.memberPaths ?? [] ).some( ( prefix ) => target.pathname.startsWith( prefix ) ) ) continue;
-		link.setAttribute( args.attribute, args.provider );
+		if ( ( args.memberPaths ?? [] ).some( ( prefix ) => target.pathname.startsWith( prefix ) ) ) targets.add( link );
+	}
+	let marked = 0;
+	for ( const element of targets ) {
+		if ( element.classList.contains( className ) ) continue;
+		element.classList.add( className );
+		element.setAttribute( args.attribute, args.provider );
 		marked++;
 	}
 	return marked;
