@@ -14,6 +14,71 @@ import { waitForFonts } from '../screenshot/page-helpers.js';
 import { squareFont } from './font-fixture.js';
 
 describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chromium.executablePath() ) )( 'capture-session reference replay', () => {
+	it( 'accepts candidate-local canonical redirects using frozen evidence with the source stopped', async () => {
+		const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
+		const directory = mkdtempSync( join( parent, 'frozen-canonical-redirects-' ) );
+		const html = '<meta name="viewport" content="width=device-width,initial-scale=1"><title>Canonical navigation</title><h1>Canonical navigation</h1><a href="/category">Category</a>';
+		let sourceRequests = 0;
+		const source = createServer( ( _request, response ) => { sourceRequests++; response.setHeader( 'content-type', 'text/html' ); response.end( html ); } );
+		await new Promise<void>( resolve => source.listen( 0, '127.0.0.1', resolve ) );
+		const url = `http://127.0.0.1:${ ( source.address() as { port: number } ).port }/`;
+		let terminalStatus = 200;
+		let terminalLocation: string | undefined;
+		const candidate = createServer( ( request, response ) => {
+			if ( request.url === '/category' ) { response.writeHead( 301, { location: '/category/' } ); response.end(); return; }
+			if ( request.url === '/category/' && terminalLocation ) { response.writeHead( 302, { location: terminalLocation } ); response.end(); return; }
+			response.writeHead( request.url === '/category/' ? terminalStatus : 200, { 'content-type': 'text/html' } ); response.end( html );
+		} );
+		await new Promise<void>( resolve => candidate.listen( 0, '127.0.0.1', resolve ) );
+		const candidateUrl = `http://127.0.0.1:${ ( candidate.address() as { port: number } ).port }`;
+		const browser = await chromium.launch();
+		try {
+			mkdirSync( join( directory, 'website', 'category' ), { recursive: true } );
+			writeFileSync( join( directory, 'website', 'index.html' ), html );
+			writeFileSync( join( directory, 'website', 'category', 'index.html' ), html );
+			const page = await browser.newPage();
+			const collector = createReferenceCollector( directory, url, [ url ] );
+			await collector.observe( page, url, 'desktop', [], { isMobile: false, hasTouch: false } );
+			await collector.observe( page, url, 'mobile', [], { isMobile: false, hasTouch: false } );
+			const receipt = join( directory, 'capture-receipt.json' );
+			writeFileSync( receipt, JSON.stringify( { source: { url }, websiteRoot: 'website', routes: [ { url, path: 'website/index.html' } ] } ) );
+			collector.finalize( receipt );
+			source.closeAllConnections(); await new Promise<void>( resolve => source.close( () => resolve() ) );
+			const report = await checkFidelity( { directory, candidateUrl, settleMs: 0 } );
+			expect( report.pending ).toEqual( [] );
+			expect( report.scores ).toHaveLength( 3 );
+			expect( report.scores.flatMap( score => score.failures.filter( failure => failure.startsWith( 'nav ' ) ) ) ).toEqual( [] );
+			expect( report.pass ).toBe( true );
+			for ( const score of report.scores ) expect( score.liberated.internalRoutes ).toEqual( [ { path: '/category', status: 200, redirects: 1, outcome: 'reachable' } ] );
+			// Resume the original origin with changed content. A local hop back to
+			// it must fail without a single API request bypassing the browser guard.
+			source.removeAllListeners( 'request' );
+			source.on( 'request', ( _request, response ) => { sourceRequests++; response.end( '<h1>Changed source</h1>' ); } );
+			await new Promise<void>( resolve => source.listen( Number( new URL( url ).port ), '127.0.0.1', resolve ) );
+			const before = sourceRequests;
+			terminalLocation = url;
+			const blocked = await checkFidelity( { directory, candidateUrl, settleMs: 0, widths: [ 390 ] } );
+			expect( blocked.pending ).toEqual( [] );
+			expect( blocked.pass ).toBe( false );
+			expect( blocked.scores[ 0 ]!.liberated.internalRoutes ).toEqual( [ { path: '/category', status: 302, redirects: 1, outcome: 'blocked-redirect' } ] );
+			expect( sourceRequests ).toBe( before );
+			terminalLocation = undefined;
+			terminalStatus = 404;
+			const missing = await checkFidelity( { directory, candidateUrl, settleMs: 0, widths: [ 390 ] } );
+			expect( missing.scores[ 0 ]!.liberated.internalRoutes ).toEqual( [ { path: '/category', status: 404, redirects: 1, outcome: 'http-error' } ] );
+			expect( missing.scores[ 0 ]!.failures.join( ' ' ) ).toContain( 'HTTP 404' );
+			terminalStatus = 500;
+			const failed = await checkFidelity( { directory, candidateUrl, settleMs: 0, widths: [ 390 ] } );
+			expect( failed.pass ).toBe( false );
+			for ( const score of failed.scores ) {
+				expect( score.failures.filter( failure => failure.startsWith( 'nav ' ) ).join( ' ' ) ).toContain( 'HTTP 500' );
+				expect( score.failures.join( ' ' ) ).not.toContain( '404' );
+			}
+		} finally {
+			await browser.close(); source.closeAllConnections(); source.close(); candidate.closeAllConnections();
+			await new Promise<void>( resolve => candidate.close( () => resolve() ) ); rmSync( directory, { recursive: true, force: true } );
+		}
+	}, 90_000 );
 	it( 'counts painted text through boxless wrappers while honoring real ancestor clipping', async () => {
 		const browser = await chromium.launch();
 		try {
@@ -104,6 +169,38 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 				await page.unroute( 'http://fixture.invalid/**' );
 			}
 		} finally { await browser.close(); rmSync( directory, { recursive: true, force: true } ); }
+	}, 30_000 );
+	it( 'freezes a protocol-changing server redirect while rejecting subsequent client drift', async () => {
+		const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
+		const directory = mkdtempSync( join( parent, 'reference-protocol-redirect-' ) );
+		const browser = await chromium.launch();
+		const context = await browser.newContext();
+		const page = await context.newPage();
+		let drift = false;
+		const server = createServer( ( _request, response ) => {
+			response.writeHead( 200, { 'Content-Type': 'text/html' } );
+			response.end( `<main><h1>Article</h1></main>${ drift ? '<script>history.replaceState(null,"","/different/")</script>' : '' }` );
+		} );
+		await new Promise<void>( resolve => server.listen( 0, '127.0.0.1', resolve ) );
+		const host = `127.0.0.1:${ ( server.address() as { port: number } ).port }`;
+		const url = `https://${ host }/article`;
+		const destination = `http://${ host }/article/`;
+		try {
+			await context.route( url, route => route.fulfill( { status: 308, headers: { location: destination } } ) );
+			for ( const shouldDrift of [ false, true ] ) {
+				drift = shouldDrift;
+				const collector = createReferenceCollector( directory, url, [ url ] );
+				await collector.observe( page, url, 'desktop', [], { isMobile: false, hasTouch: false } );
+				await collector.observe( page, url, 'mobile', [], { isMobile: false, hasTouch: false } );
+				const receipt = join( directory, 'receipt.json' ); writeFileSync( receipt, JSON.stringify( { routes: [] } ) );
+				const manifest = JSON.parse( readFileSync( collector.finalize( receipt ), 'utf8' ) ) as FidelityReference;
+				expect( manifest.entries.map( entry => entry.viewport ) ).toEqual( [ 768, 1440, 390 ] );
+				for ( const entry of manifest.entries ) {
+					expect( entry.readiness.reasons.includes( 'source route drift' ) ).toBe( drift );
+					if ( ! drift ) expect( entry.readiness.ready, entry.readiness.reasons.join( ', ' ) ).toBe( true );
+				}
+			}
+		} finally { await browser.close(); await new Promise<void>( resolve => server.close( () => resolve() ) ); rmSync( directory, { recursive: true, force: true } ); }
 	}, 30_000 );
 	it( 'settles unused local fallback stacks at each frozen viewport', async () => {
 		const parent = join(process.cwd(), '.tmp-test'); mkdirSync(parent, { recursive: true });
@@ -414,6 +511,7 @@ describe.skipIf( Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chro
 		const browser = await chromium.launch(); const context = await browser.newContext( { viewport: { width: 1440, height: 900 } } );
 		try {
 			const page = await context.newPage(); await page.goto( url ); await page.setViewportSize( { width: 768, height: 900 } );
+			await page.waitForFunction( () => document.documentElement.dataset.pose === 'resized' );
 			expect( await page.locator( 'h1' ).evaluate( element => getComputedStyle( element ).fontSize ) ).toBe( '29px' );
 			const collector = createReferenceCollector( directory, url, [ url ], { cleanupPolicy: cleanupPolicy() } );
 			await collector.observe( page, url, 'desktop', [], { isMobile: false, hasTouch: false } );

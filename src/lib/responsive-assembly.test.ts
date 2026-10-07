@@ -11,10 +11,51 @@ import {
 	DESKTOP_DOCUMENT_CLASS,
 	documentsDiffer,
 	MOBILE_DOCUMENT_CLASS,
+	projectResponsiveIdentityCss,
 	type ResponsiveAssembly,
 } from './responsive-assembly.js';
+import { scopeCss } from './replicate/css-scope.js';
 
 const dirs: string[] = [];
+
+describe( 'responsive identity CSS recovery', () => {
+	it( 'preserves browser-recovered declarations and priorities through projection and scoping', async () => {
+		const css = '#target { display: none; !important } #next { color: red; !important; opacity: .5; color: green !important; content: "!important" } #next { color: blue }';
+		const browser = await chromium.launch();
+		try {
+			const source = await browser.newPage();
+			await source.setContent( page( '<div id="target"></div><div id="next"></div>', `<style>${ css }</style>` ) );
+			const styles = async ( browserPage: typeof source, ids: string[] ) => browserPage.evaluate( ( targets ) => targets.map( id => {
+				const style = getComputedStyle( document.getElementById( id )! );
+				return { display: style.display, color: style.color, opacity: style.opacity, content: style.content };
+			} ), ids );
+			const expected = await styles( source, [ 'target', 'next' ] );
+			expect( expected[ 0 ].display ).toBe( 'none' );
+			expect( expected[ 1 ] ).toMatchObject( { color: 'rgb(0, 128, 0)', opacity: '0.5', content: '"!important"' } );
+			const projected = projectResponsiveIdentityCss( css, new Map( [ [ 'target', 'phone-target' ], [ 'next', 'phone-next' ] ] ), false );
+			const scoped = scopeCss( projected, { scope: '.copy' } );
+			const copy = await browser.newPage();
+			await copy.setContent( page( '<div class="copy"><div id="phone-target"></div><div id="phone-next"></div></div><div id="next"></div>', `<style>${ scoped }</style>` ) );
+			expect( await styles( copy, [ 'phone-target', 'phone-next' ] ) ).toEqual( expected );
+			expect( ( await styles( copy, [ 'next' ] ) )[ 0 ].opacity ).toBe( '1' );
+		} finally {
+			await browser.close();
+		}
+	} );
+
+	it( 'uses the shared stray delimiter recovery during identity projection', () => {
+		const projected = projectResponsiveIdentityCss( '#target { --shadow: 0px;); --width: 1px; ]; color: red }', new Map( [ [ 'target', 'phone-target' ] ] ), false );
+		expect( projected ).toContain( ':is(#target,#phone-target)' );
+		expect( projected ).toContain( '--width: 1px' );
+		expect( projected ).toContain( 'color: red' );
+	} );
+
+	it( 'preserves valid CSS exactly and rejects unsupported syntax', () => {
+		const css = '.x { color: red !important; content: "!important" }';
+		expect( projectResponsiveIdentityCss( css, new Map(), false ) ).toBe( css );
+		expect( () => projectResponsiveIdentityCss( '.x { color: red; broken; opacity: .5 }', new Map(), false ) ).toThrow();
+	} );
+} );
 
 afterEach( () => {
 	for ( const dir of dirs.splice( 0 ) ) rmSync( dir, { recursive: true, force: true } );

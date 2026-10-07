@@ -46,7 +46,8 @@ describe('discoverDefault', () => {
         document.querySelector('#root').innerHTML = '<header><nav>' +
           '<a href="/">Home</a><a href="/platform">Platform</a>' +
           '<a href="/solutions">Solutions</a><a href="/ai">AI</a>' +
-          '</nav><a href="/resources">Resources</a><a href="/contact">Contact</a></header>';
+          '<a href="/resume.PDF?download=1">Resume</a>' +
+          '</nav><a href="/resources">Resources</a><a href="/contact">Contact</a><a href="/guide.pdf">Guide</a></header>';
       </script>`);
     });
     await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve));
@@ -76,7 +77,7 @@ describe('discoverDefault', () => {
       }
       response.setHeader('content-type', 'text/html');
       response.end(`<!doctype html><title>Example</title>
-        <nav><a href="/one">One</a><a href="/two">Two</a></nav>
+        <nav><a href="/one">One</a><a href="/two">Two</a><a href="/resume.pdf">Resume</a></nav>
         <div class="dmFooter"><a href="/aviso-legal">Aviso legal</a><a href="/three?ref=footer">Three</a></div>`);
     });
     await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve));
@@ -95,5 +96,6 @@ describe('discoverDefault', () => {
       `${origin}/five`,
       `${origin}/aviso-legal`,
     ]);
+    expect(inventory.navigation).toContainEqual({ text: 'Resume', href: `${origin}/resume.pdf` });
   });
 });

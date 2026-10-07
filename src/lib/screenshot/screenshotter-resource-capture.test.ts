@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { connectBrowser } from '../browser-kit/index.js';
@@ -27,14 +27,20 @@ vi.mock( './resource-capture.js', () => ( {
 
 function makePage( mobile: boolean, routedRequest?: object ) {
 	let routeHandler: ( route: object ) => Promise< void >;
+	let currentUrl = '';
 	return {
+		once: vi.fn(),
+		unroute: vi.fn().mockResolvedValue( undefined ),
 		route: vi.fn().mockImplementation( async ( _pattern, handler ) => {
 			routeHandler = handler;
 		} ),
-		goto: vi.fn().mockImplementation( async () => {
+		goto: vi.fn().mockImplementation( async ( url: string ) => {
+			currentUrl = url;
 			if ( routedRequest ) await routeHandler( routedRequest );
 			return { status: () => 200 };
 		} ),
+		url: () => currentUrl,
+		viewportSize: () => null,
 		content: vi
 			.fn()
 			.mockResolvedValue(
@@ -46,11 +52,14 @@ function makePage( mobile: boolean, routedRequest?: object ) {
 		waitForLoadState: vi.fn().mockResolvedValue( undefined ),
 		evaluate: vi.fn().mockImplementation( async ( callback: unknown ) => {
 			const source = String( callback );
+			if ( source.includes( 'ViewTimeline' ) ) return [];
+			if ( source.includes( '__dlaCleanup' ) ) return { url: currentUrl, viewport: mobile ? 402 : 1440, removed: 0, records: [], truncated: false, failures: [], residual: 0 };
 			if ( source.includes( 'DOCTYPE' ) ) {
 				return mobile
 					? '<html><head><style>.hero{background:url("mobile-only.jpg")}</style></head><body>mobile</body></html>'
 					: '<html><body>desktop</body></html>';
 			}
+			if ( source.includes( 'document.baseURI' ) ) return { url: 'https://example.com/', baseUrl: 'https://example.com/' };
 			if ( source.includes( 'motionAnimatedElements' ) ) return { rows: [], landmarks: [] };
 			if ( source.includes( 'scrollHeight' ) ) return 0;
 			if ( source.includes( 'querySelectorAll' ) && source.includes( "'img'" ) ) return {};
@@ -104,14 +113,15 @@ describe( 'screenshot resource capture', () => {
 		} );
 
 		try {
-			await captureScreenshots( {
+			const result = await captureScreenshots( {
 				urls: [ 'https://example.com/' ],
 				outputDir,
 				concurrency: 1,
 				settleMs: 0,
 				publicUrlsOnly: true,
 			} );
-
+			const failuresPath = join( outputDir, 'screenshots', 'failures.json' );
+			expect( result.failed, existsSync( failuresPath ) ? readFileSync( failuresPath, 'utf8' ) : '' ).toBe( 0 );
 			expect( mocks.captureDomDependencies ).toHaveBeenCalledTimes( 2 );
 			expect( mocks.captureDomDependencies ).toHaveBeenCalledWith(
 				expect.stringContaining( 'mobile-only.jpg' ),

@@ -16,7 +16,7 @@ const observation = ( extra: Partial< LayoutObservation > = {} ): LayoutObservat
 	overflow: false,
 	externalHosts: [],
 	hashTargets: [],
-	internalMissing: [],
+	internalRoutes: [],
 	dialogs: [],
 	...extra,
 } );

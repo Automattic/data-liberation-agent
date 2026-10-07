@@ -30,6 +30,17 @@ export function canonicalizeHost(url: string | URL): string {
   return parsed.host.replace(/^www\./i, '');
 }
 
+/** Site boundary for an observed HTTP redirect, including HTTP/HTTPS aliases. */
+export function sameHttpSite(left: string, right: string): boolean {
+  try {
+    const urls = [new URL(left), new URL(right)];
+    return urls.every((url) => /^https?:$/.test(url.protocol) && !url.username && !url.password)
+      && canonicalizeHost(urls[0]) === canonicalizeHost(urls[1]);
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Throws SameOriginViolation if any URL in `urls` has a different origin than
  * `primaryUrl`. If primaryUrl is null, the first URL in `urls` is used as the

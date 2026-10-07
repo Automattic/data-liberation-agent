@@ -23,6 +23,7 @@ import { readPortableMotion } from '../portable-motion.js';
 import { observeViewportEntrances } from '../viewport-entrances.js';
 import { validateMotionContract, verifyCandidateMotion, type MotionContract, type MotionEvidence } from './candidate-motion.js';
 import { probeDialogs } from './dialog-probe.js';
+import { checkInternalRoute, type InternalRouteOutcome } from './internal-route.js';
 import { writePixelEvidence } from './evidence.js';
 import { captureViewportScreenshot } from './viewport-screenshot.js';
 import { checkSelfConsistency, type SelfConsistencyReport } from './self-consistency.js';
@@ -180,7 +181,7 @@ interface CaptureReceipt {
 	sourceInteractivity?: { schema: string; path: string; unreproduced_route_count: number };
 	source?: { url?: string };
 	websiteRoot?: string;
-	routes?: Array< { url?: string; path?: string } >;
+	routes?: Array< { url?: string; path?: string; accessGate?: unknown } >;
 	duplicateRoutes?: Array< { url?: string; canonicalUrl?: string; path?: string } >;
 }
 
@@ -792,13 +793,10 @@ export async function observePage(
 			};
 		}, { clickUnresolved: ! localOrigin && ! captureSession, skipScrollProbe } );
 
-		const internalMissing: string[] = [];
+		const internalRoutes: InternalRouteOutcome[] = [];
 		if ( localOrigin ) {
 			for ( const path of measured.internalPaths.slice( 0, MAX_ROUTE_CHECKS ) ) {
-				// API requests do not pass through browser routing. Frozen replay must
-				// not follow a candidate's redirect back to the live origin.
-				const response = await page.request.get( `${ localOrigin }${ path }`, { timeout: 10_000, maxRedirects: captureSession ? 0 : 20 } );
-				if ( ! response.ok() ) internalMissing.push( path );
+				internalRoutes.push( await checkInternalRoute( page.request, localOrigin, path ) );
 			}
 		}
 
@@ -835,7 +833,7 @@ export async function observePage(
 			overflow: measured.overflow,
 			externalHosts: [ ...external ].sort(),
 			hashTargets: measured.hashTargets as HashTarget[],
-			internalMissing,
+			internalRoutes,
 			dialogs,
 			dismissedOverlays,
 		};
@@ -1016,12 +1014,23 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 		log( `[compare] cleanup unproven for ${ unproven.size } route(s), excluded from source comparison: ${ [ ...unproven ].sort().join( ', ' ) }` );
 	}
 
+	// A provider-gated route was captured as a placeholder over the site shell
+	// (see access-gate.ts). The live source only ever shows its login there, so
+	// replaying it would report the placeholder itself as drift.
+	const gatedUrls = new Set( ( receipt.routes ?? [] ).filter( ( route ) => route?.accessGate && route.url ).map( ( route ) => route.url! ) );
+	const gated = [ ...sources ].filter( ( [ , url ] ) => gatedUrls.has( url ) ).map( ( [ route ] ) => route );
+	for ( const route of gated ) sources.delete( route );
+	if ( gated.length > 0 ) {
+		log( `[compare] ${ gated.length } access-gated route(s) were captured as placeholders and are not compared against the live source: ${ gated.sort().join( ', ' ) }` );
+	}
+
 	const captured = [ ...sources.keys() ].sort( ( left, right ) =>
 		left === '/' ? -1 : right === '/' ? 1 : left.localeCompare( right )
 	);
 	const requested = options.routes?.map( canonicalRoutePath );
 	for ( const route of requested ?? [] ) {
 		if ( sources.has( route ) ) continue;
+		if ( gated.includes( route ) ) throw new Error( `Route ${ route } was captured as an access-gate placeholder; the live source cannot be compared` );
 		throw new Error(
 			`Route ${ route } was not captured. Captured routes: ${ captured.join( ', ' ) }`
 		);
@@ -1229,7 +1238,7 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 					docWidth: 390,
 					externalHosts: [],
 					hashTargets: [],
-					internalMissing: [],
+					internalRoutes: [],
 				} );
 				const score = {
 					stage: 'drift' as const,

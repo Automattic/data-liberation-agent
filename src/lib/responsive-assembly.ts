@@ -5,7 +5,7 @@ import selectorParser from 'postcss-selector-parser';
 import type { AnyNode, Element } from 'domhandler';
 import { escapeHtmlAttr } from './html-escape.js';
 import { appendScrollDrivenAnimations } from './scroll-driven-animations.js';
-import { scopeCss } from './replicate/css-scope.js';
+import { parseCss, scopeCss } from './replicate/css-scope.js';
 import { FLUID_RULES_STYLE_ATTRIBUTE } from './screenshot/fluid-capture.js';
 import { isElementNode, isYuiRuntimeId } from './html-nodes.js';
 
@@ -1166,7 +1166,7 @@ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',
 export function projectResponsiveIdentityCss( source: string, renamed: ReadonlyMap<string,string>, namedAliases: boolean ): string {
 	// CSS accepts legacy HTML-comment wrappers; PostCSS rejects the closing CDC.
 	// Strip only outer tokens, preserving quoted content inside the stylesheet.
-	const css = postcss.parse( source.replace( /^\s*<!--/, '' ).replace( /-->\s*$/, '' ) );
+	const css = parseCss( source.replace( /^\s*<!--/, '' ).replace( /-->\s*$/, '' ) );
 	css.walkRules( rule => {
 		const selectors = selectorParser().astSync( rule.selector );
 		const replacements: Array<{ node: selectorParser.Identifier | selectorParser.Attribute; alias: selectorParser.Identifier | selectorParser.Attribute }> = [];
@@ -1437,10 +1437,10 @@ function assembleResponsiveHtml(
 	const responsiveBody = `<div ${ wrapperAttributes(
 		DESKTOP_DOCUMENT_CLASS,
 		desktopBodyMatch?.[ 1 ] ?? ''
-	) }>${ desktopBody }</div><div ${ wrapperAttributes(
+	) } data-dla-document-scope>${ desktopBody }</div><div ${ wrapperAttributes(
 		MOBILE_DOCUMENT_CLASS,
 		mobileBodyMatch?.[ 1 ] ?? ''
-	) }>${ mobileBody }</div>`;
+	) } data-dla-document-scope>${ mobileBody }</div>`;
 	const sharedStyles = styleBlocks( desktopHtml );
 	const evidence = dualStructuralEvidence( gatedByMobileClass );
 	if (
@@ -1576,6 +1576,11 @@ function resolveResponsivePair(
 	if ( desktopBody === undefined || mobileBody === undefined ) {
 		return { role, missingBody: true, dual: false, evidence: missingBodyEvidence() };
 	}
+	// Native effects bind target and subject within one source document. A tree
+	// collapse must not discard one profile's effects or redirect its subjects.
+	if ( /data-dla-native-effects=/.test( desktopHtml + mobileHtml ) ) {
+		return { role, missingBody: false, dual: true, evidence: { ...dualStructuralEvidence( undefined ), reason: 'Native view timelines retain profile-scoped target and subject identities.' } };
+	}
 	if ( responsiveBodySignature( desktopBody ) === responsiveBodySignature( mobileBody ) ) {
 		const projection = equivalentInlineProjection( desktopHtml, mobileHtml, switchWidth );
 		return {
@@ -1639,7 +1644,13 @@ function responsiveMobileStyles(
 	)
 		.split( /\s+/ )
 		.filter( Boolean );
-	return styleBlocks( mobileHtml )
+	// Learned rules already carry their width conditions and document-specific
+	// identities. Keep them intact alongside the scoped source styles.
+	const fluidRules = [ ...mobileHtml.matchAll( /<style\b([^>]*)>([\s\S]*?)<\/style\s*>/gi ) ]
+		.filter( match => FLUID_RULES_STYLE_ATTRIBUTE.test( match[ 1 ] ?? '' ) )
+		.map( match => match[ 0 ] )
+		.join( '' );
+	return fluidRules + styleBlocks( mobileHtml )
 		.filter( ( style ) => style !== '' && ( ! skip.has( style ) || classAliases.size > 0 ) )
 		.map(
 			( original ) => {

@@ -97,6 +97,33 @@ describe('scopeCss — combined-root + edge selectors', () => {
   });
 });
 
+describe('scopeCss — orphan priority recovery', () => {
+  it.each(['}', '; color: red }', '; !important; color: red }'])('recovers a standalone priority fragment before %s', (ending) => {
+    const out = scopeCss(`.hidden { display: none; !important ${ending} .following { opacity: .5 }`, { scope: '.copy' });
+    expect(out).toContain(':where(.copy) .hidden { display: none;');
+    expect(out).not.toContain('!important');
+    expect(out).toContain(':where(.copy) .following { opacity: .5 }');
+    if (ending.includes('color')) expect(out).toContain('color: red');
+  });
+
+  it('preserves valid priorities and quoted priority text byte-for-byte', () => {
+    const css = '.hidden { display: none !important; color: red !IMPORTANT; content: "!important"; --label: "!important" }';
+    expect(scopeCss(css, { scope: '.copy' })).toBe(`:where(.copy) ${css}`);
+  });
+
+  it('recovers multiline uppercase orphans while preserving valid priorities in the same rule', () => {
+    const out = scopeCss('.hidden {\n display: none;\n !IMPORTANT;\n color: red !important; --label: "!important"\n}', { scope: '.copy' });
+    expect(out).toContain('display: none;');
+    expect(out).not.toContain('!IMPORTANT');
+    expect(out).toContain('color: red !important');
+    expect(out).toContain('--label: "!important"');
+  });
+
+  it.each(['.x { color: red; !important extra; opacity: .5 }', '.x { color: red; broken; opacity: .5 }', '.x { color: red; !important: blue; broken }'])('keeps unsupported malformed syntax explicit: %s', (css) => {
+    expect(() => scopeCss(css, { scope: '.copy' })).toThrow();
+  });
+});
+
 describe('scopeCss rem-base preservation', () => {
   it('keeps a root font-size anchored to :root, not the body wrapper', () => {
     const out = scopeCss('html{font-size:62.5%;background:#fff}', { scope: 'body.lib-carry-site' });
