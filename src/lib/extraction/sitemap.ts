@@ -151,7 +151,14 @@ export async function fetchSitemapWithDiagnostics(baseUrl: string): Promise<Site
       diagnostics.push({ code: 'sitemap_url_rejected', url: entry, reason: 'origin differs from the entry URL' });
       return null;
     }
-    return new URL(`${entryUrl.pathname}${entryUrl.search}`, baseOrigin);
+    // Change only the scheme and host; keep the listed path and query as they
+    // are. The setters cannot move the URL to another host, whereas re-parsing
+    // `pathname` as a relative reference reads a path such as `//alt` as
+    // scheme-relative and yields `https://alt/`.
+    const accepted = new URL(baseOrigin);
+    accepted.pathname = entryUrl.pathname;
+    accepted.search = entryUrl.search;
+    return accepted;
   }
 
   function noteMiss(diagnostic: SitemapDiagnostic, bucket?: SitemapDiagnostic[]): void {

@@ -129,6 +129,38 @@ describe('fetchSitemap', () => {
     }
   });
 
+  it('keeps a sitemap path that starts with repeated slashes on the entry host', async () => {
+    // `//alt` is a path here, not a scheme-relative reference: moving the entry
+    // onto the entry origin must not turn it into `https://alt/`.
+    const sitemap = `<urlset>
+      <url><loc>http://example.test//alt</loc></url>
+      <url><loc>http://www.example.test//alt/about?lang=alt</loc></url>
+      <url><loc>http://example.test///deep</loc></url>
+      <url><loc>http://example.test/one</loc></url>
+      <url><loc>http://example.test/two</loc></url>
+      <url><loc>http://example.test/three</loc></url>
+    </urlset>`;
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => url === 'https://example.test/sitemap.xml'
+      ? new Response(sitemap, { status: 200 })
+      : new Response(null, { status: 404 })));
+
+    try {
+      const { urls, diagnostics } = await fetchSitemapWithDiagnostics('https://example.test/');
+      expect(urls).toEqual([
+        'https://example.test//alt',
+        'https://example.test//alt/about?lang=alt',
+        'https://example.test///deep',
+        'https://example.test/one',
+        'https://example.test/two',
+        'https://example.test/three',
+      ]);
+      expect(diagnostics).toEqual([]);
+      for (const url of urls) expect(new URL(url).host).toBe('example.test');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('follows an http sitemap index from an https site and reports what it rejects', async () => {
     // tallersherrera.com: served over https, but its sitemap index and every
     // page it lists are http:// URLs, which used to be skipped without a word.
