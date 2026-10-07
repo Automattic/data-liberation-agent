@@ -1,6 +1,6 @@
 import { createServer } from 'node:http';
 import { describe, it, expect, vi } from 'vitest';
-import { classifyUrl, extractSameOriginLinks, fetchSitemap, fetchSitemapWithDiagnostics } from './sitemap.js';
+import { classifyUrl, extractSameOriginLinks, fetchSitemap, fetchSitemapWithDiagnostics, resolvePageLink } from './sitemap.js';
 
 describe('classifyUrl', () => {
   it('classifies the homepage', () => {
@@ -129,9 +129,10 @@ describe('fetchSitemap', () => {
     }
   });
 
-  it('keeps a sitemap path that starts with repeated slashes on the entry host', async () => {
+  it('keeps a sitemap path that starts with repeated slashes on the entry host, as one path', async () => {
     // `//alt` is a path here, not a scheme-relative reference: moving the entry
-    // onto the entry origin must not turn it into `https://alt/`.
+    // onto the entry origin must not turn it into `https://alt/`. The repeated
+    // slashes collapse because export maps `//alt` and `/alt` to one file.
     const sitemap = `<urlset>
       <url><loc>http://example.test//alt</loc></url>
       <url><loc>http://www.example.test//alt/about?lang=alt</loc></url>
@@ -147,9 +148,9 @@ describe('fetchSitemap', () => {
     try {
       const { urls, diagnostics } = await fetchSitemapWithDiagnostics('https://example.test/');
       expect(urls).toEqual([
-        'https://example.test//alt',
-        'https://example.test//alt/about?lang=alt',
-        'https://example.test///deep',
+        'https://example.test/alt',
+        'https://example.test/alt/about?lang=alt',
+        'https://example.test/deep',
         'https://example.test/one',
         'https://example.test/two',
         'https://example.test/three',
@@ -614,5 +615,22 @@ describe('extractSameOriginLinks', () => {
     } finally {
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     }
+  });
+});
+
+describe('resolvePageLink', () => {
+  it('collapses repeated slashes in a same-origin page path and still drops scheme-relative hosts', () => {
+    const base = 'https://example.test/';
+    const origin = 'https://example.test';
+    expect(resolvePageLink('/a//b', base, origin)).toBe('https://example.test/a/b');
+    expect(resolvePageLink('https://example.test///alt/', base, origin)).toBe('https://example.test/alt/');
+    expect(resolvePageLink('//other.test/x', base, origin)).toBeNull();
+    // Platform UI and assets are still recognised after the collapse.
+    expect(resolvePageLink('//cart', base, origin)).toBeNull();
+    expect(resolvePageLink('/img//logo.png', base, origin)).toBeNull();
+    expect(extractSameOriginLinks('<a href="/a//b">b</a><a href="//other.test/x">x</a><a href="/c/">c</a>', base)).toEqual([
+      'https://example.test/a/b',
+      'https://example.test/c/',
+    ]);
   });
 });
