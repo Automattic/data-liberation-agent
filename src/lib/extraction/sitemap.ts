@@ -157,7 +157,7 @@ export async function fetchSitemapWithDiagnostics(baseUrl: string): Promise<Site
     // `pathname` as a relative reference reads a path such as `//alt` as
     // scheme-relative and yields `https://alt/`.
     const accepted = new URL(baseOrigin);
-    accepted.pathname = collapseRepeatedSlashes(entryUrl.pathname);
+    accepted.pathname = entryUrl.pathname;
     accepted.search = entryUrl.search;
     return accepted;
   }
@@ -387,24 +387,11 @@ async function crawlRenderedNavLinks(baseUrl: string, baseOrigin: string): Promi
   }
 }
 
-/**
- * Collapse runs of `/` in a path to one. The portable tree cannot hold `//x`
- * apart from `/x` (export trims and joins path segments, so both become
- * `x/index.html` and the run fails there), and relative links on a page
- * fetched at `//x` resolve to `//…` and multiply the problem. Such paths come
- * from a generator joining a base and a path that both carry a slash; the
- * single-slash route is the page it meant.
- */
-export function collapseRepeatedSlashes(pathname: string): string {
-  return pathname.replace(/\/{2,}/g, '/');
-}
-
 export function resolvePageLink(href: string, baseUrl: string, baseOrigin: string): string | null {
   try {
     const resolved = new URL(href, baseUrl);
     if (resolved.protocol !== 'http:' && resolved.protocol !== 'https:') return null;
     if (resolved.origin !== baseOrigin) return null;
-    resolved.pathname = collapseRepeatedSlashes(resolved.pathname);
     if (/\.(css|js|png|jpg|jpeg|gif|svg|ico|woff|woff2|ttf|eot|pdf|docx?|zip|xml|json)$/i.test(resolved.pathname)) return null;
     if (SKIP_PATHS.test(resolved.pathname)) return null;
     resolved.hash = '';

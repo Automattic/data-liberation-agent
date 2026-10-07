@@ -15,6 +15,25 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.19.10] - 2026-10-07
+
+### Changed
+- regenerate plugin bundles
+- Add Ghost platform detection and capture cleanup
+
+### Fixed
+- retain challenge evidence in HTTP rejection diagnostics
+- preserve bounded image gallery and lightbox cycles
+- preserve distinct repeated-slash source documents
+- port Wix maps to Google Maps embeds and mark Wix app widgets
+- mark Wix sign-in controls for the destination's login
+- stop a `//path` sitemap entry from aborting the capture
+- report why the source homepage was not captured
+- store text/css responses under a .css name
+- keep in-page helpers working when a page library patches Array
+- scope Soloist routes to the customer tenant
+- keep source browser locale consistent
+
 ## [0.19.9] - 2026-10-07
 
 ### Changed
