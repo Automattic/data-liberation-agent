@@ -24,8 +24,11 @@ The same settled-page capture and shared resource store acquire each profile, wi
 isolated HTML/geometry/image paths and per-profile interaction metadata. Legacy
 desktop/mobile section and design sidecars are not overwritten by an additional
 profile. The screenshot manifest records actual browser flags, UA, pixel density,
-recipe and artifacts in `profiles`, and additional document paths in
-`documents: { tablet: 'html-tablet/page.html' }`. Paths are confined
+recipe and artifacts in `profiles`. Additional HTML paths are owned by
+`profiles[id].html`, for example `profiles.tablet.html: 'html-tablet/page.html'`.
+`documents[id]` records only the browser document URL and effective base as
+`{ url, baseUrl }`, for baseline and additional profiles alike; the profile's
+`documentUrl` retains the same URL/base context. HTML paths are confined
 to the capture directory. A declared but absent document is recorded in the
 receipt and source profile, makes capture incomplete, and displays an unavailable
 identity message instead of rendering another device's tree.

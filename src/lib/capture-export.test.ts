@@ -6,7 +6,9 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as cheerio from 'cheerio';
 import { chromium } from 'playwright';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import * as sharedChrome from './shared-chrome.js';
+import { includeReferences, readResolvedPage } from './site-includes.js';
 import {
 	CAPTURED_INTERACTIONS_SCHEMA,
 	CAPTURE_RECEIPT_SCHEMA,
@@ -31,6 +33,52 @@ afterEach( () => {
 } );
 
 describe( 'exportWebsiteCapture', () => {
+	it( 'compacts both landmarks after evidence projection within the published website tree', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-canonical-parts-' ) );
+		dirs.push( outputDir );
+		for ( const directory of [ 'html', 'screenshots', 'layout-geometry' ] ) mkdirSync( join( outputDir, directory ), { recursive: true } );
+		const header = `<header id="brand"><nav><a href="https://external.test/">External</a></nav><div>${ 'Brand content '.repeat( 100 ) }</div></header>`;
+		const footer = `<footer id="copyright">${ 'Copyright content '.repeat( 100 ) }</footer>`;
+		const entries = Object.fromEntries( [ 'home', 'about' ].map( ( slug, i ) => {
+			const html = `html/${ slug }.html`;
+			writeFileSync( join( outputDir, html ), `<html><body><div>${ header }<main><div data-dla-geometry-id="wrapper"><section data-dla-geometry-id="target"><h1>Route ${ i }</h1><a href="#copyright">Copyright</a></section></div></main>${ footer }</div></body></html>` );
+			writeFileSync( join( outputDir, 'layout-geometry', `${ slug }.desktop.json` ), JSON.stringify( {
+				schema: 'data-liberation/layout-geometry-capture/v1', omissions: {}, observations: [ {
+					wrapperIdentity: 'wrapper', targetIdentity: 'target', viewport: 1440, state: 'default',
+					wrapper: { x: 0, y: 0, width: 100, height: 24 }, target: { x: 0, y: 0, width: 100, height: 24 }, simulated: { x: 0, y: 0, width: 100, height: 24 },
+					facts: { display: 'block', position: 'static', visibility: 'visible', childCount: 1 }, invariants: { runtime: true, semantics: true },
+				} ],
+			} ) );
+			return [ i ? 'https://example.test/about' : 'https://example.test/', { html, slug } ];
+		} ) );
+		writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( { version: 1, entries } ) );
+		const options = { outputDir, sourceUrl: 'https://example.test/', platform: 'generic', summary: {}, failures: [] };
+		// Record the existing exporter bytes/evidence immediately before its new final step.
+		const baseline = vi.spyOn( sharedChrome, 'extractSharedChrome' ).mockImplementation( () => {} );
+		let receipt: { routes: Array< { path: string } > };
+		let before: string[];
+		let geometry: string;
+		try {
+			receipt = JSON.parse( readFileSync( exportWebsiteCapture( options ), 'utf8' ) );
+			before = receipt.routes.map( route => readFileSync( join( outputDir, route.path ), 'utf8' ) );
+			geometry = readFileSync( join( outputDir, 'layout-geometry-report.json' ), 'utf8' );
+		} finally { baseline.mockRestore(); }
+		const compactReceipt = JSON.parse( readFileSync( exportWebsiteCapture( options ), 'utf8' ) );
+		const proof = JSON.parse( readFileSync( join( outputDir, 'layout-geometry-proof.json' ), 'utf8' ) );
+		expect( proof.nodes.length ).toBeGreaterThan( 0 );
+		expect( compactReceipt.routes ).toEqual( receipt!.routes );
+		expect( compactReceipt.routes ).toHaveLength( 2 );
+		expect( readFileSync( join( outputDir, 'layout-geometry-report.json' ), 'utf8' ) ).toBe( geometry! );
+		for ( const [ i, route ] of receipt!.routes.entries() ) {
+			const compact = readFileSync( join( outputDir, route.path ), 'utf8' );
+			const includes = includeReferences( compact );
+			expect( includes.map( item => item.path.split( '/' ).pop()!.split( '-' )[ 0 ] ) ).toEqual( [ 'header', 'footer' ] );
+			const expanded = readResolvedPage( join( outputDir, 'website' ), join( outputDir, route.path ) );
+			expect( expanded ).toBe( before![ i ] );
+			expect( proof.nodes.filter( ( node: { source_path: string } ) => node.source_path === route.path ).map( ( node: { source_hash: string } ) => node.source_hash ) ).toEqual( expect.arrayContaining( [ createHash( 'sha256' ).update( expanded ).digest( 'hex' ) ] ) );
+		}
+		expect( checkSelfConsistency( join( outputDir, 'website' ), new Map( receipt!.routes.map( route => [ route.path, route.path.replace( /^website\//, '' ) ] ) ) ).pass ).toBe( true );
+	} );
 	it( 'keeps uncaptured query-only navigation pointing at the source when no base route was captured', () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-query-only-home-' ) );
 		dirs.push( outputDir );
@@ -887,6 +935,14 @@ describe( 'exportWebsiteCapture', () => {
 							canvasFloor: 980,
 							byKind: { floored: 12, breakpoint: 3 },
 						},
+						// A separate document's floor cannot select the desktop document.
+						fluidMobile: {
+							applied: 4,
+							unmodelled: 1,
+							breakpoints: [ 600 ],
+							canvasFloor: 402,
+							byKind: { floored: 4, breakpoint: 1 },
+						},
 					},
 				},
 			} )
@@ -919,7 +975,13 @@ describe( 'exportWebsiteCapture', () => {
 			geometry: 'mixed',
 			switchWidth: 980,
 			switchWidthSource: 'detected',
-			breakpoints: [ 1024 ],
+			breakpoints: [ 600, 1024 ],
+			learned: { applied: 16, frozen: 4, routes: 1, documents: 2 },
+		} );
+		const receipt = JSON.parse( readFileSync( join( outputDir, 'capture-receipt.json' ), 'utf8' ) );
+		expect( receipt.routes[ 0 ].fluidGeometry ).toMatchObject( {
+			desktop: { applied: 12, canvasFloor: 980 },
+			mobile: { applied: 4, canvasFloor: 402 },
 		} );
 	} );
 
@@ -3272,6 +3334,7 @@ describe( 'exportWebsiteCapture', () => {
 			excludedRoutes: [],
 		} );
 		expect( receipt.interactions ).toEqual( {
+			ancestor_state_unverified_count: 0,
 			candidate_count: 1,
 			captured_count: 1,
 			no_dialog_count: 0,
@@ -5617,14 +5680,15 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		expect( evidence.assets[ 0 ].references[ 0 ].path ).toBe( `website/${ documentPath }` );
 	} );
 
-	it( 'resolves a server-redirected URL to its captured target instead of failing it', () => {
+	it.each( [ 'https:', 'http:' ] )( 'resolves a server redirect to a captured %s target instead of failing it', ( protocol ) => {
+		const target = `${ protocol }//example.com/new`;
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-redirect-alias-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ), { recursive: true } );
 		mkdirSync( join( outputDir, 'screenshots' ), { recursive: true } );
 		writeFileSync(
 			join( outputDir, 'html', 'homepage.html' ),
-			'<h1>Home</h1><a href="/old">Old</a><a href="https://example.com/new">New</a>'
+			`<h1>Home</h1><a href="/old">Old</a><a href="${ target }">New</a>`
 		);
 		writeFileSync( join( outputDir, 'html', 'new.html' ), '<h1>New</h1>' );
 		writeFileSync(
@@ -5633,8 +5697,8 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 				version: 1,
 				entries: {
 					'https://example.com/': { html: 'html/homepage.html' },
-					'https://example.com/old': { redirectedTo: 'https://example.com/new' },
-					'https://example.com/new': { html: 'html/new.html' },
+					'https://example.com/old': { redirectedTo: target },
+					[ target ]: { html: 'html/new.html' },
 					'https://example.com/gone': { redirectedTo: 'https://example.com/missing' },
 				},
 			} )
@@ -5650,11 +5714,11 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 
 		expect( receipt.routes.map( ( route: { url: string } ) => route.url ) ).toEqual( [
 			'https://example.com/',
-			'https://example.com/new',
+			target,
 		] );
 		expect( receipt.duplicateRoutes ).toEqual( [ {
 			url: 'https://example.com/old',
-			canonicalUrl: 'https://example.com/new',
+			canonicalUrl: target,
 			path: 'website/new/index.html',
 		} ] );
 		expect( receipt.discoveryDiagnostics ).toEqual( [ {
@@ -5889,6 +5953,49 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 		expect( about ).toContain( 'rel="canonical" href="/about/index.html"' );
 		expect( homepage ).not.toContain( 'example.com' );
 		expect( about ).not.toContain( 'example.com' );
+	} );
+
+	it( 'preserves captured and uncaptured document relations when their documents move', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-document-relations-' ) );
+		dirs.push( outputDir );
+		for ( const directory of [ 'html', 'screenshots', 'resources' ] )
+			mkdirSync( join( outputDir, directory ), { recursive: true } );
+		writeFileSync( join( outputDir, 'html/homepage.html' ),
+			'<html><head><link rel="NEXT" href="page-2.html#photos"><link rel="prev" href="../older/index.html"><link rel="alternate search" href="feed.xml"><link rel="canonical" href="index.html"><link rel="alternate stylesheet" href="theme.css"><link rel="icon" href="favicon.ico"></head><body><h1>Gallery</h1></body></html>' );
+		writeFileSync( join( outputDir, 'html/next.html' ), '<h1 id="photos">More photos</h1>' );
+		writeFileSync( join( outputDir, 'resources/theme.css' ), 'body{color:navy}' );
+		writeFileSync( join( outputDir, 'resources/favicon.ico' ), 'icon' );
+		writeFileSync( join( outputDir, 'resources/manifest.json' ), JSON.stringify( {
+			version: 1,
+			resources: {
+				'https://example.com/archive/gallery/theme.css': { path: 'resources/theme.css', contentType: 'text/css' },
+				'https://example.com/archive/gallery/favicon.ico': { path: 'resources/favicon.ico', contentType: 'image/x-icon' },
+			},
+			failures: [],
+		} ) );
+		writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( {
+			version: 1,
+			entries: {
+				'https://example.com/archive/gallery/index.html': { html: 'html/homepage.html' },
+				'https://example.com/archive/gallery/page-2.html': { html: 'html/next.html' },
+			},
+		} ) );
+		const receipt = JSON.parse( readFileSync( exportWebsiteCapture( {
+			outputDir,
+			sourceUrl: 'https://example.com/archive/gallery/index.html',
+			platform: 'generic', summary: {}, failures: [],
+		} ), 'utf8' ) );
+		const document = cheerio.load( readFileSync( join( outputDir, receipt.entrypoint ), 'utf8' ) );
+		const nextRoute = receipt.routes.find( ( route: { url: string } ) => route.url.endsWith( '/page-2.html' ) );
+		expect( document( 'link[rel="NEXT"]' ).attr( 'href' ) ).toBe( `/${ nextRoute.path.replace( /^website\//, '' ) }#photos` );
+		expect( document( 'link[rel="prev"]' ).attr( 'href' ) ).toBe( 'https://example.com/archive/older/index.html' );
+		expect( document( 'link[rel="alternate search"]' ).attr( 'href' ) ).toBe( 'https://example.com/archive/gallery/feed.xml' );
+		expect( document( 'link[rel="canonical"]' ).attr( 'href' ) ).toBe( `/${ receipt.entrypoint.replace( /^website\//, '' ) }` );
+		for ( const relation of [ 'alternate stylesheet', 'icon' ] ) {
+			const href = document( `link[rel="${ relation }"]` ).attr( 'href' )!;
+			expect( href ).toMatch( /^\// );
+			expect( existsSync( join( outputDir, 'website', href.slice( 1 ) ) ) ).toBe( true );
+		}
 	} );
 
 	it( 'fails when routes claim the same website path without declaring a canonical route', () => {
@@ -6919,5 +7026,24 @@ if ( existsSync( ${ JSON.stringify( join( outputDir, '.capture-export-html' ) ) 
 				error: 'removed because the aggregate portable media limit was reached',
 			} );
 		}
+	} );
+} );
+
+describe( 'exportWebsiteCapture entrypoint failures', () => {
+	it( 'reports why the source URL produced no page instead of a missing homepage', () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-entrypoint-failure-' ) );
+		dirs.push( outputDir );
+		for ( const directory of [ 'html', 'screenshots' ] ) mkdirSync( join( outputDir, directory ), { recursive: true } );
+		writeFileSync( join( outputDir, 'html/about.html' ), '<html><body><main><h1>About</h1></main></body></html>' );
+		writeFileSync( join( outputDir, 'screenshots/manifest.json' ), JSON.stringify( { version: 1, entries: {
+			'https://example.test/': { slug: 'homepage' },
+			'https://example.test/about/': { html: 'html/about.html', slug: 'about' },
+		} } ) );
+		const failures = [
+			{ url: 'https://example.test/', viewport: 'desktop', stage: 'goto', error: 'HTTP 403' },
+			{ url: 'https://example.test/', viewport: 'mobile', stage: 'goto', error: 'HTTP 403' },
+		];
+		expect( () => exportWebsiteCapture( { outputDir, sourceUrl: 'https://example.test/', platform: 'generic', summary: {}, failures } ) )
+			.toThrow( 'Source homepage https://example.test/ was not captured: desktop/goto: HTTP 403; mobile/goto: HTTP 403' );
 	} );
 } );

@@ -6,6 +6,8 @@ import type { ScrollStatesReport } from './scroll-state-capture.js';
 
 export interface ManifestEntry {
   cleanup?: { policy: import('../source-cleanup.js').CleanupPolicy; reports: import('../source-cleanup.js').CleanupReport[] };
+  /** The provider withheld this route behind its login; it was captured as a placeholder (see access-gate.ts). */
+  accessGate?: import('../access-gate.js').AccessGateEvidence;
   slug: string;
   desktop?: string;          // path to screenshots/desktop/<slug>.png
   desktopScrolled?: string;  // path to scrolled variant
@@ -22,12 +24,14 @@ export interface ManifestEntry {
     browserProfile: { isMobile: boolean; hasTouch: boolean };
     deviceScaleFactor: number;
     html?: string;
+    documentUrl?: import('../document-resource-base.js').RenderedDocumentUrl;
     fluid?: ManifestEntry['fluid'];
+    nativeViewTimelines?: ManifestEntry['nativeViewTimelines'];
     interactions?: InteractionStatesReport;
     scrollStates?: ScrollStatesReport;
   }>;
-  /** Additional captured device documents, keyed by the platform selection contract. */
-  documents?: Record<string, string>;
+  /** Browser URL and effective base per named profile; the manifest key remains the requested route. */
+  documents?: Partial<Record<string, import('../document-resource-base.js').RenderedDocumentUrl>>;
   /** path to sections/<slug>.json (captured section specs) when present */
   sections?: string;
   /** Overlays/banners dismissed before this URL was captured (observability). */
@@ -36,6 +40,8 @@ export interface ManifestEntry {
   interactions?: InteractionStatesReport;
   /** Scroll-position-driven class/style toggles (e.g. a shrinking sticky header). */
   scrollStates?: ScrollStatesReport;
+  /** Public-API native motion evidence, keyed by source capture profile identity. */
+  nativeViewTimelines?: Record<string, { path: string; preserved: number; losses: Array<{ target: string; reason: string }>; status?: 'observed' | 'unproven'; failures?: string[] }>;
   /**
    * Outcome of learning the source's sizing across viewport widths: how much
    * runtime-frozen geometry became fluid CSS, and what stayed frozen.
@@ -48,6 +54,8 @@ export interface ManifestEntry {
     canvasFloor?: number | null;
     byKind: Record<string, number>;
   };
+  /** Phone-document learning, whose canvas floor does not select the desktop document. */
+  fluidMobile?: ManifestEntry['fluid'];
   capturedAt: string;
   /**
    * The same-origin route the server redirected this URL to. The URL is an

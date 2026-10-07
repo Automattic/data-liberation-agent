@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 /**
  * Portable media selection plan. One pass records which known reference strings
  * occur in retained pages, then each family resolves eligibility, homepage
- * priority, byte budget, and content-hash dedupe once. The exporter localizes
+ * priority, byte budget, and content-hash dedupe once. The media stage localizes
  * those decisions in original family order and does not reread staged HTML.
  */
 

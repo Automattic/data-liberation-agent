@@ -68,15 +68,18 @@ describe( 'CapturedResourceStore', () => {
 		expect( manifest.icons[ 0 ].src ).toBe( identity.logo.url );
 	} );
 
-	it( 'exports a linked DOCX as portable bytes beside a missing HTML route', async () => {
+	it.each( [
+		[ 'docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'PK\x03\x04word document fixture' ],
+		[ 'PDF', 'application/pdf', '%PDF-1.7\npdf document fixture' ],
+	] )( 'exports a linked %s as portable bytes beside a missing HTML route', async ( extension, contentType, content ) => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-linked-docx-' ) );
 		dirs.push( outputDir );
 		mkdirSync( join( outputDir, 'html' ) );
 		mkdirSync( join( outputDir, 'screenshots' ) );
 		const sourceUrl = 'https://example.com/';
-		const download = 'https://example.com/_files/ugd/flyer.docx?dn=Fly%20fishing.docx';
+		const download = `https://example.com/_files/ugd/flyer.${ extension }?dn=Fly%20fishing.${ extension }`;
 		const missing = 'https://example.com/missing-page';
-		const bytes = Buffer.from( 'PK\x03\x04word document fixture' );
+		const bytes = Buffer.from( content );
 		const html = `<html><body><a id="flyer" href="${ download }">Flyer</a><a id="missing" href="/missing-page">Missing</a></body></html>`;
 		writeFileSync( join( outputDir, 'html', 'home.html' ), html );
 		writeFileSync( join( outputDir, 'screenshots', 'manifest.json' ), JSON.stringify( {
@@ -84,7 +87,7 @@ describe( 'CapturedResourceStore', () => {
 		} ) );
 		const fetchMedia = vi.fn( async ( url: string ) => ( {
 			finalUrl: url, status: 200,
-			headers: new Headers( { 'content-type': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' } ),
+			headers: new Headers( { 'content-type': contentType } ),
 			body: bytes,
 		} ) );
 		const store = new CapturedResourceStore( outputDir, sourceUrl, fetchMedia );
@@ -616,6 +619,90 @@ describe( 'CapturedResourceStore', () => {
 		expect( readFileSync( join( outputDir, resource.path ) ) ).toEqual( Buffer.from( 'webp' ) );
 	} );
 
+	it( 'stores a text/css response under a .css name when its URL extension is not .css and rewrites every reference', async () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-resources-' ) );
+		dirs.push( outputDir );
+		mkdirSync( join( outputDir, 'html' ) );
+		mkdirSync( join( outputDir, 'screenshots' ) );
+		const sourceUrl = 'https://example.com/';
+		// A build pipeline that serves compiled CSS from its source file name. The
+		// response is text/css, so the browser applied it on the live site; a plain
+		// static host serves `.scss` with a non-CSS MIME type and standards-mode
+		// browsers then ignore the stylesheet.
+		const mainSheet = 'https://cdn.example/theme/2/scss/main.0123456789abcdef.scss';
+		const partSheet = 'https://cdn.example/theme/2/scss/parts/base.scss';
+		const bodies: Record< string, [ string, string ] > = {
+			[ mainSheet ]: [ 'text/css; charset=utf-8', '@import "parts/base.scss";body{color:red}' ],
+			[ partSheet ]: [ 'text/css', 'h1{color:blue}' ],
+		};
+		const html = `<html><head><link rel="stylesheet" href="${ mainSheet }"></head><body><h1>Home</h1></body></html>`;
+		writeFileSync( join( outputDir, 'html', 'homepage.html' ), html );
+		writeFileSync(
+			join( outputDir, 'screenshots', 'manifest.json' ),
+			JSON.stringify( { version: 1, entries: { [ sourceUrl ]: { html: 'html/homepage.html' } } } )
+		);
+		const fetchMedia = vi.fn( async ( url: string ) => ( {
+			finalUrl: url,
+			status: bodies[ url ] ? 200 : 404,
+			headers: new Headers( { 'content-type': bodies[ url ]?.[ 0 ] ?? 'text/html' } ),
+			body: Buffer.from( bodies[ url ]?.[ 1 ] ?? '' ),
+		} ) );
+		const store = new CapturedResourceStore( outputDir, sourceUrl, fetchMedia );
+		await store.captureDomDependencies( html, sourceUrl );
+		await store.flush();
+		const manifest = JSON.parse(
+			readFileSync( join( outputDir, 'resources', 'manifest.json' ), 'utf8' )
+		);
+		expect( manifest.resources[ mainSheet ].path ).toMatch( /\/main\.0123456789abcdef\.css$/ );
+		expect( manifest.resources[ partSheet ].path ).toMatch( /\/parts\/base\.css$/ );
+
+		exportWebsiteCapture( { outputDir, sourceUrl, platform: 'generic', summary: {}, failures: [] } );
+		const website = join( outputDir, 'website' );
+		const $ = cheerio.load( readFileSync( join( website, 'index.html' ), 'utf8' ) );
+		const href = $( 'link[rel="stylesheet"]' ).attr( 'href' )!;
+		expect( href ).toMatch( /^\/.*\/main\.0123456789abcdef\.css$/ );
+		const mainCss = readFileSync( join( website, decodeURIComponent( href ) ), 'utf8' );
+		expect( mainCss ).toContain( 'body{color:red}' );
+		const imported = /@import\s*"([^"]+)"/.exec( mainCss )?.[ 1 ] ?? '';
+		expect( imported ).toMatch( /^\/.*\/parts\/base\.css$/ );
+		expect( readFileSync( join( website, decodeURIComponent( imported ) ), 'utf8' ) ).toBe( 'h1{color:blue}' );
+		const portableFiles = readdirSync( website, { recursive: true } ).map( String );
+		expect( portableFiles.filter( ( path ) => /\.scss$/i.test( path ) ) ).toEqual( [] );
+	} );
+
+	it( 'keeps distinct responses apart when the declared format gives them the same file name', async () => {
+		const outputDir = mkdtempSync( join( tmpdir(), 'dla-resources-' ) );
+		dirs.push( outputDir );
+		const page = new EventEmitter();
+		const store = new CapturedResourceStore( outputDir, 'https://example.com/' );
+		store.observe( page as never );
+		const bodies: Record< string, string > = {
+			'https://cdn.example/theme/main.scss': 'body{color:red}',
+			'https://cdn.example/theme/main.css': 'body{color:blue}',
+		};
+		for ( const [ url, body ] of Object.entries( bodies ) ) {
+			page.emit( 'response', {
+				url: () => url,
+				status: () => 200,
+				headers: () => ( { 'content-type': 'text/css' } ),
+				body: vi.fn().mockResolvedValue( Buffer.from( body ) ),
+				request: () => ( { resourceType: () => 'stylesheet', method: () => 'GET' } ),
+			} );
+		}
+		await store.settle( page as never );
+		await store.flush();
+
+		const manifest = JSON.parse(
+			readFileSync( join( outputDir, 'resources', 'manifest.json' ), 'utf8' )
+		);
+		const paths = Object.keys( bodies ).map( ( url ) => manifest.resources[ url ].path as string );
+		expect( new Set( paths ).size ).toBe( 2 );
+		for ( const path of paths ) expect( path ).toMatch( /\/theme\/main(?:-[a-f0-9]{12})?\.css$/ );
+		for ( const [ url, body ] of Object.entries( bodies ) ) {
+			expect( readFileSync( join( outputDir, manifest.resources[ url ].path ), 'utf8' ) ).toBe( body );
+		}
+	} );
+
 	it( 'fetches lazy DOM dependencies and compact cross-origin nested CSS font imports missed by responses', async () => {
 		const outputDir = mkdtempSync( join( tmpdir(), 'dla-resources-' ) );
 		dirs.push( outputDir );
@@ -833,6 +920,7 @@ describe( 'CapturedResourceStore', () => {
 			const html = `<html><body>
 				<video id="attr" src="clip.mp4" poster="clip.jpg" preload="none"></video>
 				<video id="child"><source src="clip.webm" type="video/webm"></video>
+				<img id="image" src="clip.jpg" alt="Failed image">
 			</body></html>`;
 			writeFileSync( join( outputDir, 'html', 'homepage.html' ), html );
 			writeFileSync(
@@ -862,9 +950,11 @@ describe( 'CapturedResourceStore', () => {
 			// url survives as external evidence instead.
 			expect( $( '#attr' ).attr( 'src' ) ).toBe( mp4 );
 			expect( $( '#child source' ).attr( 'src' ) ).toBe( webm );
-			// The poster is an ordinary image: it degrades to the same stub a
-			// failed <img> gets, not an external reference.
-			expect( $( '#attr' ).attr( 'poster' ) ).toMatch( /^data:image\/gif;base64,/ );
+			// A square image stub would redefine the video's intrinsic geometry.
+			// Keep its failed poster in diagnostics, and retain the ordinary image
+			// fallback contract for the same missing resource.
+			expect( $( '#attr' ).attr( 'poster' ) ).toBeUndefined();
+			expect( $( '#image' ).attr( 'src' ) ).toMatch( /^data:image\/gif;base64,/ );
 		}
 	);
 

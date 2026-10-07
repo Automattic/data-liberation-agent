@@ -538,7 +538,10 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		const heights: Record< number, number > = {};
 		for ( const width of [ 390, 600, 768, 1024, 1280, 1440, 1536, 1680, 1792, 1920 ] ) {
 			await source.setViewportSize( { width, height: 900 } );
-			await source.waitForTimeout( 10 );
+			await source.waitForFunction( () => {
+				const expected = innerWidth < 768 ? innerWidth === 390 ? '208px' : '100%' : `${ innerWidth * 0.23 }px`;
+				return document.querySelector< HTMLElement >( '#frame' )!.style.getPropertyValue( '--image-height' ) === expected;
+			} );
 			heights[ width ] = ( await source.locator( '#image' ).boundingBox() )!.height;
 		}
 		await learnAndApplyFluidGeometry( source, { settleMs: 30 } );
@@ -800,4 +803,30 @@ describe( 'learnAndApplyFluidGeometry', () => {
 		expect( Number.parseFloat( await page.locator( '#hero' ).evaluate( element => getComputedStyle( element ).paddingTop ) ) ).toBeCloseTo( 242.156, 0 );
 		await page.close();
 	}, 40_000 );
+
+	// Prototype.js (still served by many 2006–2012 sites) mixes its own methods
+	// into Array.prototype: 1.6 turns `entries()` into a plain copy of the array,
+	// 1.7 deletes it. Learning runs in the page's main world, so its in-page code
+	// must not depend on the page keeping the native Array methods.
+	it.each( [
+		[ 'returns a copy of the array (Prototype 1.6)', 'Array.prototype.entries = function () { return this.slice(); };' ],
+		[ 'is deleted (Prototype 1.7)', 'delete Array.prototype.entries;' ],
+	] )( 'learns on a page whose library replaced Array.prototype.entries: %s', async ( _case, patch ) => {
+		const page = await browser.newPage( { viewport: { width: 1440, height: 900 } } );
+		try {
+			await page.setContent( `<script>${ patch }</script>
+				<p id="text" style="font-size:18px">Text<br></p>
+				<p id="spacer" style="width:720px"><br></p>
+				<script>function update(){
+					document.getElementById('text').style.fontSize = innerWidth / 80 + 'px';
+					document.getElementById('spacer').style.width = innerWidth / 2 + 'px';
+				} addEventListener('resize',update);update();</script>` );
+			const result = await learnAndApplyFluidGeometry( page, { widths: [ 390, 768, 1440 ], settleMs: 50 } );
+			expect( result.applied ).toBeGreaterThanOrEqual( 2 );
+			expect( await page.locator( '#text' ).getAttribute( 'style' ) ).toContain( 'vw' );
+			expect( await page.locator( '#spacer' ).getAttribute( 'style' ) ).toMatch( /(?:50vw|100%)/ );
+		} finally {
+			await page.close();
+		}
+	} );
 } );

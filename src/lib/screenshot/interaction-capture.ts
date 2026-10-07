@@ -1,4 +1,7 @@
 import type { Page } from 'playwright';
+import type { CapturedGallery } from './gallery-capture.js';
+import { sweepSourceCleanup } from '../source-cleanup.js';
+import { rememberDropdownAncestors, observeDropdownAncestors, verifyDropdownRestoration, type CapturedDropdownAncestorState } from './dropdown-ancestor-state.js';
 
 export const INTERACTION_STATES_SCHEMA = 'data-liberation/interaction-states/v2';
 export const LEGACY_INTERACTION_STATES_SCHEMA = 'data-liberation/interaction-states/v1';
@@ -82,10 +85,13 @@ export interface CapturedDialogInteraction {
 	 * runtime-created popup/menu dialog (wired post-hoc by `wireCapturedDialogs`
 	 * onto the authored trigger), from a selectable set whose
 	 * members drive one shared region (`selectable-set`), and from a choice group
-	 * whose members change their own attributes or styles (`choice-group`). Omitted/`'dialog'`
+	 * whose members change their own attributes or styles (`choice-group`), and
+	 * a finite image cycle with an observed image-opened lightbox (`gallery`). Omitted/`'dialog'`
 	 * preserves the pre-existing shape for callers that predate this field.
 	 */
-	kind?: 'dialog' | 'disclosure' | 'selectable-set' | 'choice-group' | 'typed-search';
+	kind?: 'dialog' | 'disclosure' | 'selectable-set' | 'choice-group' | 'typed-search' | 'gallery';
+	/** Directional replay requires a complete cycle, inverse edges and source restoration. */
+	gallery?: { inline: CapturedGallery; lightbox?: CapturedGallery; closed?: boolean; selection?: number[] };
 	collectionFilter?: import('./typed-search-capture.js').CapturedCollectionFilter;
 	trigger: {
 		selector: string;
@@ -114,6 +120,8 @@ export interface CapturedDialogInteraction {
 		 * serialized styles predate the panel, so without these it renders unstyled.
 		 */
 		css?: string;
+		/** Observed local ancestor transitions and panel placement, verified by source restoration. */
+		ancestorState?: CapturedDropdownAncestorState;
 	};
 	/**
 	 * Present on `kind: 'selectable-set'` states. `size` is how many members
@@ -226,6 +234,7 @@ export async function captureTriggeredDialogs(
 	sourceUrl: string
 ): Promise< InteractionStatesReport > {
 	const viewport = page.viewportSize() ?? { width: 0, height: 0 };
+	await rememberBaselinePanels( page );
 	const initialDialogs = await captureInitiallyVisibleDialogs( page );
 	const triggers = ( await page.evaluate( ( { limit, popupTypes, plainLimit, navLimit }: { limit: number; popupTypes: string[]; plainLimit: number; navLimit: number } ) => {
 		const visible = ( element: Element ): boolean => {
@@ -384,10 +393,25 @@ export async function captureTriggeredDialogs(
 
 	const states: CapturedDialogInteraction[] = [];
 	for ( const trigger of triggers ) {
-		const before = await visibleDialogSelectors( page );
-		await markVisibleBeforeActivation( page );
+		// Probe an opening transition even when the source rests expanded. Restore
+		// that resting state afterwards; closing a tall in-flow menu reveals body
+		// content by displacement, which is not popup evidence.
+		const initiallyExpanded = await page.locator( trigger.probeSelector ).first().getAttribute( 'aria-expanded' ).catch( () => null ) === 'true';
+		if ( initiallyExpanded ) {
+			await activateTrigger( page, trigger.probeSelector ).catch( () => undefined );
+			await page.waitForTimeout( 100 );
+			if ( await page.locator( trigger.probeSelector ).first().getAttribute( 'aria-expanded' ).catch( () => null ) === 'true' ) {
+				states.push( { status: 'no-dialog', trigger: triggerRecord( trigger ) } );
+				continue;
+			}
+		}
+		let before: string[] = [];
 		try {
-			await activateTrigger( page, trigger.probeSelector );
+			await activateTrigger( page, trigger.probeSelector, async () => {
+				before = await visibleDialogSelectors( page );
+				await markVisibleBeforeActivation( page );
+				await rememberDropdownAncestors( page, trigger.probeSelector );
+			} );
 		} catch ( error ) {
 			const intercepting = await describeInterceptingElement( page, trigger.probeSelector );
 			states.push( {
@@ -395,13 +419,18 @@ export async function captureTriggeredDialogs(
 				trigger: triggerRecord( trigger ),
 				error: formatClickFailure( error, intercepting ),
 			} );
+			if ( initiallyExpanded ) await restoreExpandedTrigger( page, trigger.probeSelector );
 			continue;
 		}
 
 		let dialog: DialogDescriptor | undefined;
 		const deadline = Date.now() + DIALOG_WAIT_MS;
 		do {
-			dialog = await firstNewVisibleDialog( page, before );
+			// Source cleanup removes provider dialogs as they open, but its
+			// observer has a budget a busy page can spend before the probes run.
+			// Sweep explicitly so a policy-removed dialog is never recorded.
+			await sweepSourceCleanup( page ).catch( () => undefined );
+			dialog = await firstNewVisibleDialog( page, before, trigger.probeSelector );
 			if ( dialog ) break;
 			await page.waitForTimeout( 100 );
 		} while ( Date.now() < deadline );
@@ -409,20 +438,27 @@ export async function captureTriggeredDialogs(
 		if ( ! dialog ) {
 			states.push( { status: 'no-dialog', trigger: triggerRecord( trigger ) } );
 			await page.keyboard.press( 'Escape' ).catch( () => undefined );
+			if ( initiallyExpanded ) await restoreExpandedTrigger( page, trigger.probeSelector );
 			continue;
 		}
 		await waitForDialogContentStable( page, dialog.selector );
 		const presentation = dialog.presentation;
+		const baselineSelector = await page.locator( dialog.selector ).first().evaluate( element =>
+			( globalThis as unknown as { __dlaPanelSelectors?: WeakMap< Element, string > } ).__dlaPanelSelectors?.get( element )
+		);
 		dialog = ( await snapshotDialog( page, dialog.selector ) ) ?? dialog;
 		if ( presentation && ! dialog.presentation ) dialog = { ...dialog, presentation };
 
 		const bounded = boundHtml( dialog.html );
 		const addedCss = await rulesAddedSinceActivation( page );
+		const ancestorState = dialog.presentation === 'dropdown' ? await observeDropdownAncestors( page, dialog.selector ) : undefined;
+		await closeCapturedDialog( page, dialog.selector, trigger.probeSelector );
+		const restoredAncestorState = ancestorState ? await verifyDropdownRestoration( page, ancestorState, dialog.selector ) : undefined;
 		states.push( {
 			status: 'captured',
 			trigger: triggerRecord( trigger ),
 			dialog: {
-				selector: dialog.selector,
+				selector: baselineSelector ?? dialog.selector,
 				tag: dialog.tag,
 				...( dialog.id ? { id: dialog.id } : {} ),
 				...( dialog.role ? { role: dialog.role } : {} ),
@@ -433,13 +469,16 @@ export async function captureTriggeredDialogs(
 				htmlBytes: bounded.bytes,
 				htmlTruncated: bounded.truncated,
 				...( addedCss ? { css: addedCss } : {} ),
+				...( restoredAncestorState ? { ancestorState: restoredAncestorState } : {} ),
 			},
 		} );
 
-		await closeCapturedDialog( page, dialog.selector, trigger.probeSelector );
+		if ( initiallyExpanded ) await restoreExpandedTrigger( page, trigger.probeSelector );
 	}
 
 	await page.evaluate( () => {
+		delete ( globalThis as unknown as { __dlaPanelSelectors?: WeakMap< Element, string > } ).__dlaPanelSelectors;
+		delete ( globalThis as unknown as { __dlaDropdownAncestors?: unknown } ).__dlaDropdownAncestors;
 		for ( const element of document.querySelectorAll( '[data-lib-interaction-trigger]' ) ) {
 			element.removeAttribute( 'data-lib-interaction-trigger' );
 		}
@@ -467,7 +506,14 @@ export async function captureTriggeredDialogs(
 	};
 }
 
+async function restoreExpandedTrigger( page: Page, selector: string ): Promise< void > {
+	if ( await page.locator( selector ).first().getAttribute( 'aria-expanded' ).catch( () => null ) !== 'true' ) {
+		await activateTrigger( page, selector ).catch( () => undefined );
+	}
+}
+
 async function captureInitiallyVisibleDialogs( page: Page ): Promise< CapturedInitialDialog[] > {
+	await sweepSourceCleanup( page ).catch( () => undefined );
 	const dialogs = await visibleSemanticDialogs( page );
 	const states: CapturedInitialDialog[] = [];
 	for ( const dialog of dialogs.slice( 0, MAX_INITIAL_DIALOGS ) ) {
@@ -655,15 +701,25 @@ async function rulesAddedSinceActivation( page: Page ): Promise< string > {
 	return Buffer.byteLength( css ) <= MAX_DIALOG_HTML_BYTES ? css : '';
 }
 
+async function rememberBaselinePanels( page: Page ): Promise< void > {
+	await page.evaluate( () => {
+		// Record authored identities before activation can mount or reorder nodes.
+		// Temporary probe attributes are absent from the serialized baseline.
+		const selectors = new WeakMap< Element, string >();
+		selectors.set( document.body, 'body' );
+		for ( const element of document.body.querySelectorAll( '*' ) ) {
+			const siblings = Array.from( element.parentElement!.children ).filter( sibling => sibling.tagName === element.tagName );
+			const tag = element.tagName.toLowerCase();
+			selectors.set( element, element.id ? `#${ CSS.escape( element.id ) }` :
+				`${ selectors.get( element.parentElement! ) } > ${ tag }:nth-of-type(${ siblings.indexOf( element ) + 1 })` );
+		}
+		( globalThis as unknown as { __dlaPanelSelectors?: WeakMap< Element, string > } ).__dlaPanelSelectors = selectors;
+	} );
+}
+
 /**
- * Mark every element visible before a trigger is activated, so the element the
- * activation reveals is identified by what changed, not by its tag. A menu that
- * opens as a plain in-flow <div> would otherwise be missed, and an unrelated
- * large <nav> elsewhere on the page taken instead.
- *
- * Shown elements outside the viewport also get their document position. A
- * drawer translated off-screen still has a box, so visibility alone cannot
- * tell that a click slid it into view.
+ * Mark visibility and offscreen document positions before activation. Newly
+ * shown content and positioned drawers are distinct from flow displacement.
  */
 async function markVisibleBeforeActivation( page: Page ): Promise< void > {
 	await page.evaluate( () => {
@@ -714,9 +770,10 @@ async function markVisibleBeforeActivation( page: Page ): Promise< void > {
 
 async function firstNewVisibleDialog(
 	page: Page,
-	before: string[]
+	before: string[],
+	triggerSelector: string
 ): Promise< DialogDescriptor | undefined > {
-	return page.evaluate( ( { existing, surfaceSelector, semanticSelector }: { existing: string[]; surfaceSelector: string; semanticSelector: string } ) => {
+	return page.evaluate( ( { existing, surfaceSelector, semanticSelector, triggerSelector }: { existing: string[]; surfaceSelector: string; semanticSelector: string; triggerSelector: string } ) => {
 		const visible = ( element: Element ): boolean => {
 			const rect = element.getBoundingClientRect();
 			const style = getComputedStyle( element );
@@ -743,10 +800,15 @@ async function firstNewVisibleDialog(
 			return `dialog-candidate:${ index }`;
 		};
 		const candidates = Array.from( document.querySelectorAll( surfaceSelector ) );
+		const trigger = document.querySelector( triggerSelector );
+		if ( trigger?.getAttribute( 'aria-expanded' ) === 'false' ) return undefined;
+		const controlled = ( trigger?.getAttribute( 'aria-controls' ) ?? '' ).split( /\s+/ ).map( id => document.getElementById( id ) );
 		const marked = document.querySelector( '[data-lib-visible-before]' ) !== null;
 		const wasVisible = ( element: Element, index: number ): boolean =>
 			marked ? element.hasAttribute( 'data-lib-visible-before' ) : existing.includes( selector( element, index ) );
-		const surface = candidates.find( ( element, index ) => {
+		let owned = controlled.find( ( element ) => element && visible( element ) && !element.hasAttribute( 'data-lib-visible-before' ) );
+		while ( owned?.parentElement && owned.parentElement !== document.body && !owned.parentElement.hasAttribute( 'data-lib-visible-before' ) ) owned = owned.parentElement;
+		const surface = owned ?? candidates.find( ( element, index ) => {
 			if ( ! visible( element ) || wasVisible( element, index ) ) return false;
 			if ( element.matches( semanticSelector ) ) return true;
 			const rect = element.getBoundingClientRect();
@@ -771,6 +833,11 @@ async function firstNewVisibleDialog(
 			if ( ! visible( element ) ) return false;
 			const rect = element.getBoundingClientRect();
 			if ( intersectionArea( rect ) < 10_000 ) return false;
+			// Flow displacement is not a drawer animation. A movement-only fallback
+			// needs an owned target, popup semantics, or its own positioned/transform box.
+			const style = getComputedStyle( element );
+			if ( !controlled.includes( element as HTMLElement ) && !element.matches( semanticSelector ) &&
+				style.position !== 'fixed' && style.position !== 'absolute' && style.transform === 'none' ) return false;
 			const [ left, top ] = pos.split( ',' ).map( ( value ) => Number.parseFloat( value ) );
 			const moved =
 				Math.abs( rect.left + window.scrollX - left ) > 48 ||
@@ -842,6 +909,7 @@ async function firstNewVisibleDialog(
 		};
 	}, {
 		existing: before,
+		triggerSelector,
 		surfaceSelector: POPUP_SURFACE_SELECTOR,
 		semanticSelector: SEMANTIC_POPUP_SELECTOR,
 	} ) as Promise< DialogDescriptor | undefined >;
@@ -1002,9 +1070,12 @@ async function describeInterceptingElement(
 		.catch( () => undefined );
 }
 
-async function activateTrigger( page: Page, probeSelector: string ): Promise< void > {
+export async function activateTrigger( page: Page, probeSelector: string, baseline?: () => Promise< void > ): Promise< void > {
 	const locator = page.locator( probeSelector ).first();
 	await locator.scrollIntoViewIfNeeded( { timeout: DIALOG_WAIT_MS } ).catch( () => undefined );
+	// Native activation scrolls nested containers as well as the window. Those
+	// layout movements precede the action; they are not revealed popup evidence.
+	await baseline?.();
 	await page.evaluate( () => {
 		const preventSubmit = ( event: Event ) => event.preventDefault();
 		document.addEventListener( 'submit', preventSubmit, true );
@@ -1013,7 +1084,8 @@ async function activateTrigger( page: Page, probeSelector: string ): Promise< vo
 	try {
 		if ( ! ( await describeInterceptingElement( page, probeSelector ) ) ) {
 			try {
-				await locator.click( { timeout: DIALOG_WAIT_MS } );
+				if (await page.evaluate(() => navigator.maxTouchPoints > 0)) await locator.tap({timeout:DIALOG_WAIT_MS});
+				else await locator.click( { timeout: DIALOG_WAIT_MS } );
 				return;
 			} catch {
 				/* Coordinate click failed; fall through to a node-targeted click. */

@@ -25,6 +25,7 @@ import { readPortableMotion } from '../portable-motion.js';
 import { observeViewportEntrances } from '../viewport-entrances.js';
 import { validateMotionContract, verifyCandidateMotion, type MotionContract, type MotionEvidence } from './candidate-motion.js';
 import { probeDialogs } from './dialog-probe.js';
+import { checkInternalRoute, type InternalRouteOutcome } from './internal-route.js';
 import { writePixelEvidence } from './evidence.js';
 import { captureViewportScreenshot } from './viewport-screenshot.js';
 import { checkSelfConsistency, type SelfConsistencyReport } from './self-consistency.js';
@@ -185,7 +186,7 @@ interface CaptureReceipt {
 	sourceInteractivity?: { schema: string; path: string; unreproduced_route_count: number };
 	source?: { url?: string };
 	websiteRoot?: string;
-	routes?: Array< { url?: string; path?: string; documentSelection?: { kind: string } } >;
+	routes?: Array< { url?: string; path?: string; documentSelection?: { kind: string }; accessGate?: unknown } >;
 	duplicateRoutes?: Array< { url?: string; canonicalUrl?: string; path?: string } >;
 }
 
@@ -502,40 +503,21 @@ export async function observePage(
 			} > = [];
 			const canvas = document.createElement( 'canvas' );
 			const context = canvas.getContext( '2d' );
-			const walker = document.createTreeWalker( document.body, NodeFilter.SHOW_TEXT );
-			const measuredParents = new Set< Element >();
-			let textNode: Node | null;
-			while ( typography.length < 120 && ( textNode = walker.nextNode() ) ) {
-				const parent = textNode.parentElement;
-				if (
-					parent &&
-					parent.childNodes.length > 1 &&
-					[ ...parent.childNodes ].every( ( node ) => node.nodeType === Node.TEXT_NODE )
-				) {
-					if ( measuredParents.has( parent ) ) continue;
-					measuredParents.add( parent );
-				}
-				const text = ( parent && measuredParents.has( parent ) ? parent.textContent : textNode.textContent ?? '' )
-					.replace( /\s+/g, ' ' )
-					.trim();
-				if ( ! parent || ! text || parent.closest( 'script,style,noscript,template' ) ) continue;
-				const range = document.createRange();
-				range.selectNodeContents( parent && measuredParents.has( parent ) ? parent : textNode );
-				const rect = range.getBoundingClientRect();
-				const style = getComputedStyle( parent );
-				const parentRect = parent.getBoundingClientRect();
-				const clippedLabel = parentRect.width <= 1.5 && parentRect.height <= 1.5 &&
-					( style.position === 'absolute' || style.position === 'fixed' ) &&
-					( style.overflow === 'hidden' || style.clip !== 'auto' || style.clipPath !== 'none' );
-				if (
-					rect.width <= 0 ||
-					rect.height <= 0 ||
-					clippedLabel ||
-					style.display === 'none' ||
-					style.visibility === 'hidden'
-				) {
-					continue;
-				}
+			// Canonicalize painted inline flow, not DOM serialization boundaries.
+			// Keep raw whitespace until the complete run is assembled; comments and
+			// equivalent inline wrappers add no glyphs, while blocks/replaced boxes,
+			// positioning and style changes must remain separate observations.
+			const styleProperties = [ 'fontFamily', 'fontStyle', 'fontWeight', 'fontSize', 'lineHeight', 'letterSpacing',
+				'fontStretch', 'fontVariant', 'fontFeatureSettings', 'fontVariationSettings', 'fontKerning',
+				'whiteSpace', 'textTransform', 'wordSpacing', 'direction', 'writingMode', 'verticalAlign',
+				'color', 'textDecorationLine', 'textDecorationStyle', 'textDecorationColor' ] as const;
+			let run: { text: string; style: CSSStyleDeclaration; signature: string; last: DOMRect; width: number } | undefined;
+			const flush = () => {
+				if ( ! run ) return;
+				const { style, width } = run;
+				const text = run.text.replace( /\s+/g, ' ' ).trim();
+				run = undefined;
+				if ( ! text || typography.length >= 120 ) return;
 				const fontSize = Number.parseFloat( style.fontSize ) || 0;
 				const font = `${ style.fontStyle } ${ style.fontWeight } ${ style.fontSize } ${ style.fontFamily }`;
 				if ( context ) context.font = font;
@@ -546,10 +528,70 @@ export async function observePage(
 					fontSize,
 					lineHeight: Number.parseFloat( style.lineHeight ) || fontSize * 1.2,
 					letterSpacing: Number.parseFloat( style.letterSpacing ) || 0,
-					advance: Math.round( ( context?.measureText( text ).width ?? rect.width ) * 100 ) / 100,
+					advance: Math.round( ( context?.measureText( text ).width ?? width ) * 100 ) / 100,
 					loaded: document.fonts.check( font, text ),
 				} );
-			}
+			};
+			const visit = ( node: Node ) => {
+				if ( typography.length >= 120 ) return;
+				if ( node.nodeType === Node.COMMENT_NODE ) return;
+				if ( node instanceof Element ) {
+					const style = getComputedStyle( node );
+					if ( node.matches( 'script,style,noscript,template' ) || style.display === 'none' || style.visibility === 'hidden' ) {
+						flush();
+						return;
+					}
+					const inline = ( style.display === 'inline' || style.display === 'contents' ) &&
+						style.position === 'static' && style.cssFloat === 'none' && style.transform === 'none' &&
+						style.translate === 'none' && style.rotate === 'none' && style.scale === 'none' &&
+						[ style.marginLeft, style.marginRight, style.paddingLeft, style.paddingRight, style.borderLeftWidth, style.borderRightWidth ]
+							.every( value => Number.parseFloat( value ) === 0 );
+					const boundary = ! inline || ! node.childNodes.length;
+					if ( boundary ) flush();
+					for ( const child of node.childNodes ) visit( child );
+					if ( boundary ) flush();
+					return;
+				}
+				const parent = node.parentElement;
+				if ( node.nodeType !== Node.TEXT_NODE || ! parent || ! node.textContent ) return;
+				const range = document.createRange();
+				range.selectNodeContents( node );
+				const rect = range.getBoundingClientRect();
+				const style = getComputedStyle( parent );
+				const signature = JSON.stringify( styleProperties.map( property => style[ property ] ) );
+				const parentRect = parent.getBoundingClientRect();
+				const clippedLabel = parentRect.width <= 1.5 && parentRect.height <= 1.5 &&
+					( style.position === 'absolute' || style.position === 'fixed' ) &&
+					( style.overflow === 'hidden' || style.clip !== 'auto' || style.clipPath !== 'none' );
+				// A collapsed inter-word space at a soft wrap has no painted width,
+				// but still separates words in the canonical text of this flow.
+				if ( rect.width === 0 && /^\s+$/.test( node.textContent ) && ! clippedLabel ) {
+					if ( run?.signature === signature ) run.text += node.textContent;
+					else flush();
+					return;
+				}
+				if (
+					rect.width <= 0 ||
+					rect.height <= 0 ||
+					clippedLabel ||
+					style.display === 'none' ||
+					style.visibility === 'hidden'
+				) {
+					flush();
+					return;
+				}
+				const rects = [ ...range.getClientRects() ].filter( part => part.width > 0 && part.height > 0 );
+				const first = rects[ 0 ] ?? rect;
+				const last = rects.at( -1 ) ?? rect;
+				const adjacent = ! run || ( style.writingMode === 'horizontal-tb' && style.direction === 'ltr' &&
+					( Math.abs( first.y - run.last.y ) < 1 ? Math.abs( first.left - run.last.right ) <= 2 :
+						first.y > run.last.y && first.y - run.last.y <= ( Number.parseFloat( style.lineHeight ) || rect.height * 1.2 ) + 2 ) );
+				if ( run && ( run.signature !== signature || ! adjacent ) ) flush();
+				if ( run ) { run.text += node.textContent; run.last = last; run.width += rect.width; }
+				else run = { text: node.textContent, style, signature, last, width: rect.width };
+			};
+			visit( document.body );
+			flush();
 
 			const occurrencesBefore = new Map< string, number >();
 			const animationsBefore = document
@@ -797,13 +839,10 @@ export async function observePage(
 			};
 		}, { clickUnresolved: ! localOrigin && ! captureSession, skipScrollProbe } );
 
-		const internalMissing: string[] = [];
+		const internalRoutes: InternalRouteOutcome[] = [];
 		if ( localOrigin ) {
 			for ( const path of measured.internalPaths.slice( 0, MAX_ROUTE_CHECKS ) ) {
-				// API requests do not pass through browser routing. Frozen replay must
-				// not follow a candidate's redirect back to the live origin.
-				const response = await page.request.get( `${ localOrigin }${ path }`, { timeout: 10_000, maxRedirects: captureSession ? 0 : 20 } );
-				if ( ! response.ok() ) internalMissing.push( path );
+				internalRoutes.push( await checkInternalRoute( page.request, localOrigin, path ) );
 			}
 		}
 
@@ -840,7 +879,7 @@ export async function observePage(
 			overflow: measured.overflow,
 			externalHosts: [ ...external ].sort(),
 			hashTargets: measured.hashTargets as HashTarget[],
-			internalMissing,
+			internalRoutes,
 			dialogs,
 			dismissedOverlays,
 		};
@@ -1023,12 +1062,23 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 		log( `[compare] cleanup unproven for ${ unproven.size } route(s), excluded from source comparison: ${ [ ...unproven ].sort().join( ', ' ) }` );
 	}
 
+	// A provider-gated route was captured as a placeholder over the site shell
+	// (see access-gate.ts). The live source only ever shows its login there, so
+	// replaying it would report the placeholder itself as drift.
+	const gatedUrls = new Set( ( receipt.routes ?? [] ).filter( ( route ) => route?.accessGate && route.url ).map( ( route ) => route.url! ) );
+	const gated = [ ...sources ].filter( ( [ , url ] ) => gatedUrls.has( url ) ).map( ( [ route ] ) => route );
+	for ( const route of gated ) sources.delete( route );
+	if ( gated.length > 0 ) {
+		log( `[compare] ${ gated.length } access-gated route(s) were captured as placeholders and are not compared against the live source: ${ gated.sort().join( ', ' ) }` );
+	}
+
 	const captured = [ ...sources.keys() ].sort( ( left, right ) =>
 		left === '/' ? -1 : right === '/' ? 1 : left.localeCompare( right )
 	);
 	const requested = options.routes?.map( canonicalRoutePath );
 	for ( const route of requested ?? [] ) {
 		if ( sources.has( route ) ) continue;
+		if ( gated.includes( route ) ) throw new Error( `Route ${ route } was captured as an access-gate placeholder; the live source cannot be compared` );
 		throw new Error(
 			`Route ${ route } was not captured. Captured routes: ${ captured.join( ', ' ) }`
 		);
@@ -1236,7 +1286,7 @@ export async function checkFidelity( options: FidelityCheckOptions ): Promise< F
 					docWidth: 390,
 					externalHosts: [],
 					hashTargets: [],
-					internalMissing: [],
+					internalRoutes: [],
 				} );
 				const score = {
 					stage: 'drift' as const,

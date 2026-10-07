@@ -8,6 +8,52 @@ import { wireCapturedDialogs, wireCapturedRouteNavigation } from '../static-dial
 // Chromium (`npm install` does not download it; `npm run setup:browser` does).
 const skipBrowserTests = Boolean( process.env.SKIP_BROWSER_TESTS ) || ! existsSync( chromium.executablePath() );
 
+it.skipIf( skipBrowserTests )( 'replays a dropdown in its observed flow slot with verified ancestor paint and closed restoration', async () => {
+	const browser = await chromium.launch( { headless: true } );
+	const page = await browser.newPage( { viewport: { width: 390, height: 844 } } );
+	try {
+		await page.setContent( `<!doctype html><style>
+		body{margin:0}header{position:fixed;top:0;width:390px;box-sizing:border-box}
+		.closed{background:transparent}.opened{background:rgba(2,6,23,.85)}
+		nav{height:64px}.panel{height:200px;display:flex;flex-direction:column}
+		</style><header id="header" class="closed" style="padding: 0px;"><nav><button id="toggle" aria-label="Toggle menu">Menu</button></nav><span id="tail"></span></header><main>Body</main>
+		<script>document.getElementById('toggle').addEventListener('click',()=>{
+		const header=document.getElementById('header'),existing=document.getElementById('menu');
+		if(existing){existing.remove();header.className='closed';header.style.padding='0px';return;}
+		const panel=document.createElement('div');panel.id='menu';panel.className='panel';
+		panel.innerHTML='<a href="#one">One</a><a href="#two">Two</a>';
+		header.insertBefore(panel,document.getElementById('tail'));header.className='opened';header.style.padding='4px';
+		});</script>` );
+		const measure = () => page.locator( '#header' ).evaluate( element => ( {
+			height: element.getBoundingClientRect().height,
+			background: getComputedStyle( element ).backgroundColor,
+			className: element.getAttribute( 'class' ),
+			style: element.getAttribute( 'style' ),
+		} ) );
+		const closed = await measure();
+		await page.locator( '#toggle' ).click();
+		const opened = await measure();
+		await page.locator( '#toggle' ).click();
+		const report = await captureTriggeredDialogs( page, 'https://example.test/' );
+		const state = report.states.find( item => item.trigger.id === 'toggle' );
+		expect( state?.dialog ).toMatchObject( {
+			presentation: 'dropdown',
+			ancestorState: { status: 'verified', placement: { parentSelector: '#header', beforeSelector: '#tail', position: 'static' } },
+		} );
+		expect( await measure() ).toEqual( closed );
+		const baseline = ( await page.content() ).replace( /<script>[\s\S]*?<\/script>/g, '' );
+		await page.setContent( wireCapturedDialogs( baseline, report.states ) );
+		await page.locator( '#toggle' ).click();
+		expect( await measure() ).toEqual( opened );
+		expect( await page.locator( '#header > [data-dla-dialog-panel] + #tail' ).count() ).toBe( 1 );
+		await page.keyboard.press( 'Escape' );
+		expect( await measure() ).toEqual( closed );
+		expect( await page.locator( '#toggle' ).evaluate( element => element === document.activeElement ) ).toBe( true );
+	} finally {
+		await browser.close();
+	}
+}, 30_000 );
+
 it.skipIf( skipBrowserTests )( 'turns observed mobile client-routed tabs into native, keyboard-accessible routes without converting actions', async () => {
 	const browser = await chromium.launch( { headless: true } );
 	const origin = 'https://route-tabs.test';
@@ -621,7 +667,10 @@ describe( 'captureTriggeredDialogs', () => {
 				expect( wired ).toContain( 'class="dla-dialog dla-dropdown"' );
 				expect( wired ).toContain( '<button aria-label="Toggle menu"' );
 				expect( wired ).toContain( '<style data-dla-dialog-css="true">.mobile-panel > * + * { margin-top: 16px; }</style>' );
-				expect( wired ).toContain( '[data-dla-dialog-panel].dla-dropdown:not([hidden]){display:block;position:absolute;top:100%' );
+				expect( report.states[ 0 ].dialog?.ancestorState?.status ).toBe( 'unverified' );
+				await page.setContent( wired );
+				await page.getByRole( 'button', { name: 'Toggle menu', exact: true } ).click();
+				expect( await page.locator( '[data-dla-dialog-panel]' ).evaluate( element => getComputedStyle( element ).position ) ).toBe( 'absolute' );
 			} finally {
 				await browser.close();
 			}

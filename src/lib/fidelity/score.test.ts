@@ -23,7 +23,7 @@ const at = ( viewport: number, extra: Partial< LayoutObservation > = {} ): Layou
 	overflow: false,
 	externalHosts: [],
 	hashTargets: [],
-	internalMissing: [],
+	internalRoutes: [],
 	dialogs: [],
 	...extra,
 } );
@@ -103,7 +103,7 @@ describe( 'scoreViewport', () => {
 	} );
 
 	it( 'fails when an internal path 404s in the copy', () => {
-		const score = scoreViewport( at( 1440 ), at( 1440, { internalMissing: [ '/about/' ] } ) );
+		const score = scoreViewport( at( 1440 ), at( 1440, { internalRoutes: [ { path: '/about/', status: 404, redirects: 0, outcome: 'http-error' } ] } ) );
 		expect( score.pass ).toBe( false );
 		expect( score.failures[ 0 ] ).toMatch( /\/about\// );
 	} );

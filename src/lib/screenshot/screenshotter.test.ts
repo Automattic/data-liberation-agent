@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, existsSync, rmSync, mkdirSync, writeFileSync
 import { join } from 'node:path';
 
 const { learnAndApplyFluidGeometryMock } = vi.hoisted( () => ( {
-	learnAndApplyFluidGeometryMock: vi.fn( async () => ( {
+	learnAndApplyFluidGeometryMock: vi.fn( async ( _page: unknown, _options: unknown ) => ( {
 		applied: 0,
 		unmodelled: 0,
 		breakpoints: [],
@@ -49,16 +49,21 @@ function makeGoodPage(gotoStatus: number | ((url: string) => number) = 200) {
   let currentUrl = '';
   const statusOf = (url: string) => typeof gotoStatus === 'function' ? gotoStatus(url) : gotoStatus;
   return {
+    once: vi.fn(),
     goto: vi.fn().mockImplementation(async (url: string) => {
       currentUrl = url;
       return { status: () => statusOf(currentUrl) };
     }),
     url: vi.fn().mockImplementation(() => currentUrl),
+    viewportSize: vi.fn().mockReturnValue({ width: 1440, height: 900 }),
     content: vi.fn().mockResolvedValue('<html><body>hello</body></html>'),
     screenshot: vi.fn().mockResolvedValue(Buffer.from('fakepng')),
     waitForLoadState: vi.fn().mockResolvedValue(undefined),
     evaluate: vi.fn().mockImplementation(async (fn: unknown) => {
       const s = String(fn);
+      // This transport fixture has no native animations; browser behavior is
+      // exercised by native-view-timelines.test.ts with real Chromium.
+      if (typeof fn === 'string' && s.includes('document.getAnimations')) return [];
       // capturePageHtml serializes in-renderer rather than via page.content().
       if (s.includes('DOCTYPE')) return '<html><body>hello</body></html>';
       if (s.includes('__dlaCleanup')) return { url: currentUrl, viewport: 1440, removed: 0, records: [], truncated: false, failures: [], residual: 0 };
@@ -118,6 +123,46 @@ function makeCrashingBrowser(crashAt: string): MockBrowser {
 }
 
 describe('captureScreenshots', () => {
+	it.each( [ 'server', 'client', 'late-control' ] )( 'validates %s protocol navigation against the observed server document', async ( navigation ) => {
+		const requested = 'https://example.com/author';
+		const landed = 'http://example.com/author/';
+		let late = false;
+		const browser = makeMockBrowser( () => {
+			const page = makeGoodPage();
+			const goto = page.goto.getMockImplementation()!;
+			page.goto.mockImplementation( async ( url: string ) => {
+				await goto( url );
+				return {
+					status: () => 200,
+					url: () => navigation === 'client' ? requested : landed,
+					request: () => ( { redirectedFrom: () => navigation === 'client' ? null : {} } ),
+				};
+			} );
+			page.url.mockImplementation( () => late ? 'http://example.com/other' : landed );
+			return page;
+		} );
+		vi.mocked( connectBrowser ).mockResolvedValue( browser as never );
+		const outputDir = mkdtempSync( join( tmpdir(), 'protocol-redirect-' ) );
+		try {
+			await captureScreenshots( {
+				urls: [ requested ], outputDir, concurrency: 1, settleMs: 0,
+				viewports: [ { id: 'desktop', width: 1440, height: 900 } ],
+				beforeSerialize: async () => { late = navigation === 'late-control'; },
+			} );
+			const manifest = JSON.parse( readFileSync( join( outputDir, 'screenshots', 'manifest.json' ), 'utf8' ) );
+			const failurePath = join( outputDir, 'screenshots', 'failures.json' );
+			const failures = existsSync( failurePath ) ? JSON.parse( readFileSync( failurePath, 'utf8' ) ) : [];
+			if ( navigation === 'server' ) {
+				expect( manifest.entries[ requested ].html ).toBe( 'html/author.html' );
+				expect( failures ).toEqual( [] );
+			} else {
+				expect( manifest.entries[ requested ].html ).toBeUndefined();
+				expect( failures ).toEqual( expect.arrayContaining( [ expect.objectContaining( { error: expect.stringContaining( 'route drift' ) } ) ] ) );
+			}
+		} finally {
+			rmSync( outputDir, { recursive: true, force: true } );
+		}
+	} );
 	it( 'rejects wrappers that the proof consumer cannot coalesce', () => {
 		expect( geometryCandidateIsSafe( {
 			tag: 'div',
@@ -261,7 +306,9 @@ describe('captureScreenshots', () => {
 		learnFluid: true,
       });
       expect(pages).toHaveLength(2);
-	  expect(learnAndApplyFluidGeometryMock).toHaveBeenCalledTimes(1);
+	  expect(learnAndApplyFluidGeometryMock).toHaveBeenCalledTimes(2);
+	  expect(learnAndApplyFluidGeometryMock.mock.calls[0]?.[1]).toMatchObject({ document: 'desktop' });
+	  expect(learnAndApplyFluidGeometryMock.mock.calls[1]?.[1]).toMatchObject({ document: 'mobile' });
 	  expect(learnAndApplyFluidGeometryMock.mock.invocationCallOrder[0]).toBeLessThan(
 		pages[0].screenshot.mock.invocationCallOrder[0],
 	  );

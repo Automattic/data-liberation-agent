@@ -17,10 +17,12 @@ import { nextjsAdapter } from '../adapters/nextjs/index.js';
 import { bloggerAdapter } from '../adapters/blogger/index.js';
 import { defaultAdapter } from '../adapters/default/index.js';
 import { emdashAdapter } from '../adapters/emdash/index.js';
+import { ghostAdapter } from '../adapters/ghost/index.js';
 import { godaddyWmAdapter } from '../adapters/godaddy-wm/index.js';
 import { hostingerAdapter } from '../adapters/hostinger/index.js';
 import { hubspotAdapter } from '../adapters/hubspot/index.js';
 import { shopifyAdapter } from '../adapters/shopify/index.js';
+import { soloistAdapter } from '../adapters/soloist/index.js';
 import { squarespaceAdapter } from '../adapters/squarespace/index.js';
 import { substackAdapter } from '../adapters/substack/index.js';
 import { lovableAdapter } from '../adapters/lovable/index.js';
@@ -41,11 +43,13 @@ const builtins: Platform[] = [
 	nextjsAdapter,
 	bloggerAdapter,
 	emdashAdapter,
+	ghostAdapter,
 	godaddyWmAdapter,
 	hostingerAdapter,
 	hubspotAdapter,
 	lovableAdapter,
 	shopifyAdapter,
+	soloistAdapter,
 	squarespaceAdapter,
 	substackAdapter,
 	webflowAdapter,

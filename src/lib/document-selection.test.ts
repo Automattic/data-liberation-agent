@@ -38,7 +38,7 @@ function exported( dir: string, tablet = true, decorate?: (html: string, key: st
 	if ( tablet ) writeFileSync( join( dir, 'html-tablet/home.html' ), documentFor( 'tablet' ) );
 	writeFileSync( join( dir, 'breakpoints.json' ), JSON.stringify( { maxWidth: [ 980 ], minWidth: [ 981 ] } ) );
 	writeFileSync( join( dir, 'screenshots/manifest.json' ), JSON.stringify( { version: 1, entries: { 'https://fixture.test/': {
-		html: 'html/home.html', documents: tablet ? { tablet: 'html-tablet/home.html' } : {},
+		html: 'html/home.html', profiles: tablet ? { tablet: { html: 'html-tablet/home.html' } } : {},
 		fluid: { applied: 1, unmodelled: 0, canvasFloor: 980, breakpoints: [ 981 ], byKind: { floored: 1 } },
 	} } } ) );
 	exportWebsiteCapture( { outputDir: dir, sourceUrl: 'https://fixture.test/', platform: 'neutral', summary: {}, failures: [], resolveDocumentSelection: () => selection } );
@@ -60,6 +60,35 @@ async function observation( page: Page ) {
 }
 
 describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'portable source-owned document selection', () => {
+	it( 'preserves class-only body box styling on the real selected body', async () => {
+		const decorate = ( html: string, key: string ) => {
+			const $ = cheerio.load( html );
+			const index = [ 'desktop', 'mobile', 'tablet' ].indexOf( key );
+			$( 'body' ).addClass( `body-identity-${ key }` );
+			$( 'head' ).append( `<style>@media screen{.body-identity-${ key }{margin:${ 11 + index * 7 }px;background:rgb(${ 20 + index * 30 },40,60);padding:3px;overflow-x:hidden}.body-identity-${ key } .canvas{color:rgb(70,80,90)}}</style>` );
+			return $.html();
+		};
+		const dir = directory(); exported( dir, true, decorate );
+		const site = await startStaticServer( join( dir, 'website' ) );
+		const browser = await chromium.launch();
+		try {
+			for ( const [ key, userAgent ] of [ [ 'desktop', 'NeutralDesktop' ], [ 'mobile', 'Neutral iPhone' ], [ 'tablet', 'Neutral iPad' ] ] ) {
+				const page = await browser.newPage( { userAgent, viewport: { width: 1440, height: 900 } } );
+				const read = () => page.evaluate( () => {
+					const style = getComputedStyle( document.body );
+					const canvas = Array.from( document.querySelectorAll<HTMLElement>( '.canvas' ) ).find( node => node.getClientRects().length )!;
+					return { margin: style.margin, padding: style.padding, background: style.backgroundColor, overflowX: style.overflowX,
+						x: canvas.getBoundingClientRect().x, y: canvas.getBoundingClientRect().y, color: getComputedStyle( canvas ).color };
+				} );
+				await page.setContent( decorate( fixture( key ), key ) );
+				const expected = await read();
+				await page.goto( site.url );
+				expect.soft( await read(), key ).toEqual( expected );
+				await page.context().close();
+			}
+		} finally { await browser.close(); await site.close(); }
+	}, 60_000 );
+
 	it( 'selects three request identities on static hosting before paint and keeps identity through resize', async () => {
 		const dir = directory(); const html = exported( dir );
 		const serialized = cheerio.load( html );

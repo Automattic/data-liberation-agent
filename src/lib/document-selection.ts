@@ -1,6 +1,7 @@
 import * as cheerio from 'cheerio';
 import type { Element } from 'domhandler';
 import postcss from 'postcss';
+import selectorParser from 'postcss-selector-parser';
 import { scopeCss } from './replicate/css-scope.js';
 
 /** Platform-owned, ordered request-identity rules. No viewport/capability inference. */
@@ -49,11 +50,22 @@ export interface DeviceAssembly {
 /** display:contents wrappers cannot carry the real body margin or viewport overflow.
  * Keep authored root-only rules on the real roots, under the same device gate.
  */
-function rootCss( css: string ): string {
+function rootCss( css: string, bodyClasses: readonly string[] ): string {
 	const root = postcss.parse( css );
 	root.walkAtRules( rule => { if ( ! [ 'media', 'supports', 'layer', 'container' ].includes( rule.name ) ) rule.remove(); } );
 	root.walkRules( rule => {
-		const selectors = rule.selectors.filter( selector => /^(?:html|body|:root)(?![\w-])/.test( selector ) && ! /[>+~\s]/.test( selector ) );
+		const selectors = rule.selectors.flatMap( selector => {
+			if ( /^(?:html|body|:root)(?![\w-])/.test( selector ) && ! /[>+~\s]/.test( selector ) ) return [ selector ];
+			// Class-only body rules already match the scoped display:contents
+			// wrapper, but its box cannot carry margins, padding or viewport paint.
+			// Copy only the compound onto the real body, retaining specificity and
+			// conditional/cascade order without making descendants into roots.
+			const parsed = selectorParser().astSync( selector );
+			const compound = parsed.first;
+			return compound?.nodes.length && compound.nodes.every( node => node.type === 'class' ) &&
+				compound.nodes.some( node => node.type === 'class' && bodyClasses.includes( node.value ) )
+				? [ `:where(body)${ selector }` ] : [];
+		} );
 		if ( selectors.length ) rule.selectors = selectors; else rule.remove();
 	} );
 	return root.toString();
@@ -93,7 +105,7 @@ export function assembleDeviceDocuments( documents: Record<string, string>, sele
 		for ( const node of source( 'style,link[rel~="stylesheet"]' ).toArray() ) {
 			const original = source( node );
 			const copy = $( source.html( node ) );
-			if ( original.is( 'style' ) ) copy.text( scopeCss( original.text(), { scope, rootClasses } ) + rootCss( original.text() ) );
+			if ( original.is( 'style' ) ) copy.text( scopeCss( original.text(), { scope, rootClasses } ) + rootCss( original.text(), rootClasses ) );
 			copy.attr( 'data-dla-device-style', key ).attr( 'data-dla-source-media', original.attr( 'media' ) ?? 'all' ).attr( 'media', 'not all' );
 			$( 'head' ).append( copy );
 		}

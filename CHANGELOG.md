@@ -15,6 +15,101 @@ Homeboy does not backfill history: the `0.2.1` and `0.2.2` entries below
 predate Homeboy adoption and were written by hand from their tag messages.
 Everything from the next release onward is Homeboy-generated.
 
+## [0.19.10] - 2026-10-07
+
+### Changed
+- regenerate plugin bundles
+- Add Ghost platform detection and capture cleanup
+
+### Fixed
+- retain challenge evidence in HTTP rejection diagnostics
+- preserve bounded image gallery and lightbox cycles
+- preserve distinct repeated-slash source documents
+- port Wix maps to Google Maps embeds and mark Wix app widgets
+- mark Wix sign-in controls for the destination's login
+- stop a `//path` sitemap entry from aborting the capture
+- report why the source homepage was not captured
+- store text/css responses under a .css name
+- keep in-page helpers working when a page library patches Array
+- scope Soloist routes to the customer tenant
+- keep source browser locale consistent
+
+## [0.19.9] - 2026-10-07
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- drop the Wix members login and keep members-only pages as placeholders
+
+## [0.19.8] - 2026-10-06
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- retry crashed renderers in fresh contexts
+
+## [0.19.7] - 2026-10-06
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- recover orphan CSS priority fragments
+
+## [0.19.6] - 2026-10-06
+
+### Changed
+- regenerate plugin bundles
+- isolate shared stylesheet materialization
+
+### Fixed
+- preserve linked PDFs as portable assets
+- preserve dropdown ancestor state and source flow placement
+- follow bounded candidate-local redirects
+
+## [0.19.5] - 2026-10-06
+
+### Changed
+- regenerate plugin bundles
+- Store shared chrome once in the canonical site tree
+- isolate portable media materialization
+
+## [0.19.4] - 2026-10-06
+
+### Changed
+- await source resize fixture transitions
+
+## [0.19.3] - 2026-10-06
+
+### Changed
+- regenerate plugin bundles
+
+### Fixed
+- learn and preserve mobile fluid geometry
+- resolve resources against rendered document base
+
+## [0.19.2] - 2026-10-06
+
+### Changed
+- regenerate plugin bundles
+- isolate capture evidence projection
+
+## [0.19.1] - 2026-10-06
+
+### Changed
+- regenerate plugin bundles
+- complete browser doubles for native timeline probes
+- isolate portable resource materialization
+
+### Fixed
+- preserve resting navigation and existing panel identity
+- normalize portable document relation links
+- preserve native view timeline motion and responsive ranges
+- recognize same-site protocol redirects
+- follow extensionless sitemap index children
+
 ## [0.19.0] - 2026-10-06
 
 ### Added

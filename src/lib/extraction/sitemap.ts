@@ -34,6 +34,7 @@ export function parseSitemapDocument(xml: string): SitemapDocument {
 }
 
 import { canonicalizeHost } from '../screenshot/same-origin.js';
+import { normalizedUrl } from '../url/route-key.js';
 
 export function parseSitemapXml(xml: string): string[] {
   return parseSitemapDocument(xml).locs;
@@ -109,8 +110,9 @@ export async function fetchSitemap(baseUrl: string): Promise<string[]> {
  *
  * Candidates are probed in preference order: `Sitemap:` directives in
  * `/robots.txt`, then `/sitemap-index.xml`, then `/sitemap.xml`. The first
- * document that parses as a sitemap wins; index-document following is
- * unchanged.
+ * document that parses as a sitemap wins; a `sitemapindex`'s children are
+ * followed by document kind whatever their filename, while a urlset entry
+ * recurses only when its path ends in `.xml`.
  */
 export async function fetchSitemapWithDiagnostics(baseUrl: string): Promise<SitemapFetchResult> {
   const normalizedBase = baseUrl.includes('://') ? baseUrl : `https://${baseUrl}`;
@@ -150,7 +152,14 @@ export async function fetchSitemapWithDiagnostics(baseUrl: string): Promise<Site
       diagnostics.push({ code: 'sitemap_url_rejected', url: entry, reason: 'origin differs from the entry URL' });
       return null;
     }
-    return new URL(`${entryUrl.pathname}${entryUrl.search}`, baseOrigin);
+    // Change only the scheme and host; keep the listed path and query. The
+    // setters cannot move the URL to another host, whereas re-parsing
+    // `pathname` as a relative reference reads a path such as `//alt` as
+    // scheme-relative and yields `https://alt/`.
+    const accepted = new URL(baseOrigin);
+    accepted.pathname = entryUrl.pathname;
+    accepted.search = entryUrl.search;
+    return accepted;
   }
 
   function noteMiss(diagnostic: SitemapDiagnostic, bucket?: SitemapDiagnostic[]): void {
@@ -191,12 +200,17 @@ export async function fetchSitemapWithDiagnostics(baseUrl: string): Promise<Site
         const pathPart = u.includes('?') ? u.slice(0, u.indexOf('?')) : u;
         const entryUrl = acceptEntry(u);
         if (!entryUrl) continue;
-        if (pathPart.endsWith('.xml')) {
+        // Index entries are child sitemaps regardless of filename. Preserve
+        // the existing .xml recursion signal for urlset entries.
+        if (document.kind === 'index' || pathPart.endsWith('.xml')) {
           await fetchAndParse(entryUrl.href, depth + 1);
         } else {
-          if (!seenUrls.has(entryUrl.href)) {
+          // Capture and export treat `/x` and `/x/` as one route. Keep the
+          // first form the sitemap lists so the two cannot collide at export.
+          const route = normalizedUrl(entryUrl.href);
+          if (!seenUrls.has(route)) {
             allUrls.push(entryUrl.href);
-            seenUrls.add(entryUrl.href);
+            seenUrls.add(route);
           }
         }
       }
@@ -268,11 +282,11 @@ export async function fetchSitemapWithDiagnostics(baseUrl: string): Promise<Site
   // Supplement with the homepage's links if sitemap was thin
   if (allUrls.length < 5) {
     const navUrls = await crawlHomepageLinks(normalizedBase, baseOrigin);
-    const seen = new Set(allUrls);
+    const seen = new Set(allUrls.map(normalizedUrl));
     for (const u of navUrls) {
-      if (!seen.has(u) && allUrls.length < MAX_URLS) {
+      if (!seen.has(normalizedUrl(u)) && allUrls.length < MAX_URLS) {
         allUrls.push(u);
-        seen.add(u);
+        seen.add(normalizedUrl(u));
       }
     }
 
@@ -281,11 +295,11 @@ export async function fetchSitemapWithDiagnostics(baseUrl: string): Promise<Site
     // routes to retain the inexpensive fetch path for ordinary sites.
     if (navUrls.length === 0) {
       const renderedNavUrls = await crawlRenderedNavLinks(normalizedBase, baseOrigin);
-      const seen = new Set(allUrls);
+      const seen = new Set(allUrls.map(normalizedUrl));
       for (const u of renderedNavUrls) {
-        if (!seen.has(u) && allUrls.length < MAX_URLS) {
+        if (!seen.has(normalizedUrl(u)) && allUrls.length < MAX_URLS) {
           allUrls.push(u);
-          seen.add(u);
+          seen.add(normalizedUrl(u));
         }
       }
     }
@@ -325,7 +339,7 @@ export function extractSameOriginLinks(html: string, baseUrl: string, baseOrigin
   $('a[href]').each((_, el) => {
     const href = $(el).attr('href')?.trim();
     if (!href || href.startsWith('#')) return;
-    const resolved = resolveAndFilter(href, baseUrl, baseOrigin);
+    const resolved = resolvePageLink(href, baseUrl, baseOrigin);
     if (resolved && !seen.has(resolved)) {
       seen.add(resolved);
       urls.push(resolved);
@@ -360,7 +374,7 @@ async function crawlRenderedNavLinks(baseUrl: string, baseOrigin: string): Promi
     );
     const seen = new Set<string>();
     return hrefs.flatMap((href) => {
-      const resolved = resolveAndFilter(href, baseUrl, baseOrigin);
+      const resolved = resolvePageLink(href, baseUrl, baseOrigin);
       if (!resolved || seen.has(resolved)) return [];
       seen.add(resolved);
       return [resolved];
@@ -373,7 +387,7 @@ async function crawlRenderedNavLinks(baseUrl: string, baseOrigin: string): Promi
   }
 }
 
-function resolveAndFilter(href: string, baseUrl: string, baseOrigin: string): string | null {
+export function resolvePageLink(href: string, baseUrl: string, baseOrigin: string): string | null {
   try {
     const resolved = new URL(href, baseUrl);
     if (resolved.protocol !== 'http:' && resolved.protocol !== 'https:') return null;

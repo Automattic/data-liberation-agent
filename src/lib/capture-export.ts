@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { assembleDeviceDocuments, installDeviceSelection, type DocumentSelection } from './document-selection.js';
+import type { AccessGateEvidence } from './access-gate.js';
 import {
-	copyFileSync,
 	existsSync,
 	mkdirSync,
 	readFileSync,
@@ -9,11 +9,13 @@ import {
 	statSync,
 	writeFileSync,
 } from 'node:fs';
-import { basename, dirname, extname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import * as cheerio from 'cheerio';
 import type { Element } from 'domhandler';
-import { escapeHtmlAttr } from './html-escape.js';
+import { capturedStyleHoistContext, materializeSharedStylesheets, type StyleHoistContext } from './shared-stylesheets.js';
+export { portableInlineStyle } from './shared-stylesheets.js';
 import { allocateCaptureRoutes } from './capture-export-routes.js';
+import { sameHttpSite } from './screenshot/same-origin.js';
 import { normalizedUrl } from './url/route-key.js';
 import {
 	indexPortableMediaReferences,
@@ -34,16 +36,13 @@ import {
 import { SectionSpecsStore } from './replicate/section-specs-store.js';
 import { MediaStubStore } from './resume-state/index.js';
 import {
-	buildLayoutGeometryProof,
-	type GeometryCapture,
-} from './screenshot/layout-geometry-proof.js';
-import {
 	failuresAreAbsentDocument,
 	isAbsentDocumentRender,
 	isSourceCaptureUrl,
 } from './screenshot/absent-document.js';
 import { selfContainWebsite } from './self-contain.js';
 import { wireCapturedDialogs, wireCapturedRouteNavigation } from './static-dialogs.js';
+import { wireNativeViewTimelines } from './native-view-timelines.js';
 import { rewriteMediaUrls } from './streaming/media-url-rewrite.js';
 import {
 	INTERACTION_STATES_SCHEMA,
@@ -58,102 +57,37 @@ import {
 import { isSourcePromotion } from './source-cleanup.js';
 import { sameOriginPageAnchors } from './screenshot/unscheduled-anchors.js';
 import { srcsetCandidates, srcsetReferences } from './srcset.js';
-import { pathWithin, portableAssetUrl, uniqueAssetPath, TRANSPARENT_IMAGE_DATA_URL } from './portable-assets.js';
-import { isSrcsetShaped, elementSrcReferences, dependencyReferences, omitDegenerateReplacements, preparePortableReplacements, type PortableDependency } from './portable-references.js';
+import { resolveDocumentReferences } from './document-resource-base.js';
+import { pathWithin } from './portable-assets.js';
+import { materializePortableMedia, type FailedPortableMedia } from './portable-media.js';
+import { isSrcsetShaped, elementSrcReferences, omitDegenerateReplacements, preparePortableReplacements } from './portable-references.js';
 import { materializePortableResources } from './portable-resources.js';
-import { inspectSourceInteractivity, SOURCE_INTERACTIVITY_SCHEMA, type SourceInteractivityPage } from './source-interactivity.js';
+import { collectAssetEvidenceReferences, buildSemanticEvidenceArtifacts, writeCaptureEvidence, UNCAPTURED_ROUTE_REASON, type CaptureFluidEvidence, type CaptureDocumentFluidEvidence, type SemanticEvidencePage } from './capture-export-evidence.js';
+export { CAPTURE_RECEIPT_SCHEMA, SOURCE_PROFILE_SCHEMA, ASSET_EVIDENCE_SCHEMA, CAPTURED_INTERACTIONS_SCHEMA, CAPTURED_SCROLL_STATES_SCHEMA, INDEXED_SEMANTIC_EVIDENCE_SCHEMA } from './capture-export-evidence.js';
+import { inspectSourceInteractivity, type SourceInteractivityPage } from './source-interactivity.js';
 import { loadHttpExportInput, type HttpExportInput } from './http-export-input.js';
-import { loadEmbeddedDocuments, projectEmbeddedRegions, mergeResponsiveEmbeddedRegions } from './embedded-documents.js';
+import { loadEmbeddedDocuments, projectEmbeddedRegions, projectRuntimePresentation, mergeResponsiveEmbeddedRegions } from './embedded-documents.js';
 import {
 	EXPORT_PUBLICATION_BOUNDARIES,
 	exportPublicationBoundary,
 	publishExportGeneration,
 } from './export-publication.js';
 
-export const CAPTURE_RECEIPT_SCHEMA = 'data-liberation/capture-receipt/v1';
-export const SOURCE_PROFILE_SCHEMA = 'data-liberation/source-profile/v1';
-export const ASSET_EVIDENCE_SCHEMA = 'data-liberation/asset-evidence/v1';
-const MAX_ASSET_EVIDENCE_ASSETS = 10_000;
-const MAX_ASSET_EVIDENCE_REFERENCES = 100;
-const MAX_ASSET_EVIDENCE_CSS_RESOURCES_PER_ROUTE = 10_000;
-
-type ManifestEntryFluid =
-	| {
-			applied: number;
-			unmodelled: number;
-			breakpoints: number[];
-			canvasFloor?: number | null;
-			byKind: Record< string, number >;
-	  }
-	| undefined;
-export const CAPTURED_INTERACTIONS_SCHEMA = 'data-liberation/captured-interactions/v1';
-export const CAPTURED_SCROLL_STATES_SCHEMA = 'data-liberation/captured-scroll-states/v1';
-/** Indexed semantic evidence sidecar schema. */
-export const INDEXED_SEMANTIC_EVIDENCE_SCHEMA = 'data-liberation/captured-semantic-evidence/v2';
-const MAX_SEMANTIC_EVIDENCE_FILE_BYTES = 10 * 1024 * 1024;
-
-type SemanticEvidencePage = {
-	path: string;
-	url: string;
-	viewports: Record< string, Record< string, unknown >[] >;
-};
-
-interface SemanticEvidenceArtifacts {
-	index: { path: string; content: string };
-	shards: Array< { path: string; content: string; pageCount: number }>;
-}
-
-function semanticEvidenceArtifacts( pages: SemanticEvidencePage[] ): SemanticEvidenceArtifacts {
-	const shards: SemanticEvidenceArtifacts[ 'shards' ] = [];
-	let shardPages: SemanticEvidencePage[] = [];
-	const shardContent = ( candidates: SemanticEvidencePage[] ) =>
-		`${ JSON.stringify( { schema: INDEXED_SEMANTIC_EVIDENCE_SCHEMA, pages: candidates } ) }\n`;
-	for ( const page of pages ) {
-		const single = shardContent( [ page ] );
-		if ( Buffer.byteLength( single ) > MAX_SEMANTIC_EVIDENCE_FILE_BYTES )
-			throw new Error(
-				`Semantic evidence page "${ page.path }" exceeds sidecar file limit: ${ Buffer.byteLength( single ) } bytes.`
-			);
-		const candidate = shardContent( [ ...shardPages, page ] );
-		if ( shardPages.length > 0 && Buffer.byteLength( candidate ) > MAX_SEMANTIC_EVIDENCE_FILE_BYTES ) {
-			shards.push( {
-				path: `semantic-evidence/shard-${ String( shards.length + 1 ).padStart( 4, '0' ) }.json`,
-				content: shardContent( shardPages ),
-				pageCount: shardPages.length,
-			} );
-			shardPages = [ page ];
-		} else shardPages.push( page );
-	}
-	if ( shardPages.length > 0 )
-		shards.push( {
-			path: `semantic-evidence/shard-${ String( shards.length + 1 ).padStart( 4, '0' ) }.json`,
-			content: shardContent( shardPages ),
-			pageCount: shardPages.length,
-		} );
-	const index = {
-		path: 'semantic-evidence.index.json',
-		content: `${ JSON.stringify( {
-			schema: INDEXED_SEMANTIC_EVIDENCE_SCHEMA,
-			page_count: pages.length,
-			shards: shards.map( ( shard ) => ( { path: shard.path, page_count: shard.pageCount } ) ),
-		} ) }\n`,
-	};
-	if ( Buffer.byteLength( index.content ) > MAX_SEMANTIC_EVIDENCE_FILE_BYTES )
-		throw new Error( `Semantic evidence index exceeds sidecar file limit: ${ Buffer.byteLength( index.content ) } bytes.` );
-	return { index, shards };
-}
+import { extractSharedChrome } from './shared-chrome.js';
 
 function withoutGeometryIdentities( html: string ): string {
 	return html.replace( /\sdata-dla-geometry-id=(?:"[^"]*"|'[^']*')/g, '' );
 }
 
 interface CaptureManifestEntry {
+	documents?: import('./screenshot/manifest-queue.js').ManifestEntry['documents'];
+	profiles?: import('./screenshot/manifest-queue.js').ManifestEntry['profiles'];
+	nativeViewTimelines?: import('./screenshot/manifest-queue.js').ManifestEntry['nativeViewTimelines'];
 	cleanup?: import('./screenshot/manifest-queue.js').ManifestEntry['cleanup'];
+	accessGate?: AccessGateEvidence;
 	slug?: string;
 	html?: string;
 	mobileHtml?: string;
-	/** Additional source device identities; never inferred from a CSS width. */
-	documents?: Record<string, string>;
 	/** Same-origin route the server redirected this URL to; see ManifestEntry. */
 	redirectedTo?: string;
 	/** Bounded source inspection of a linked route absent from the capture schedule. */
@@ -163,7 +97,8 @@ interface CaptureManifestEntry {
 	interactions?: InteractionStatesReport;
 	scrollStates?: ScrollStatesReport;
 	/** Responsive learning outcome recorded during capture. */
-	fluid?: ManifestEntryFluid;
+	fluid?: CaptureFluidEvidence;
+	fluidMobile?: CaptureFluidEvidence;
 	metadata?: {
 		openGraph?: Record< string, string >;
 	};
@@ -189,27 +124,6 @@ interface ExportCaptureOptions {
 	limits?: { portableMediaTotalBytes?: number };
 }
 
-interface AssetEvidenceReference {
-	route: string;
-	path: string;
-	document: 'desktop' | 'mobile' | 'css';
-	reference: string;
-}
-
-interface AssetEvidenceRecord {
-	id: string;
-	sourceUrl: string;
-	outcome: 'successful' | 'failed' | 'unknown';
-	retrieval: 'retrieved' | 'failed' | 'unknown';
-	portable: 'included' | 'excluded' | 'not-included';
-	path?: string;
-	portableAssetId?: string;
-	error?: string;
-	referenceCount: number;
-	referencesTruncated: boolean;
-	references: AssetEvidenceReference[];
-}
-
 type MediaCandidate = PortableMediaCandidate;
 
 interface CaptureEntry {
@@ -222,6 +136,9 @@ interface CaptureEntry {
 	/** Receipt evidence for how many responsive variants this route ships and why. */
 	responsiveVariants?: ResponsiveVariantEvidence;
 	documentSelection?: { kind: 'device'; id: string; documents: string[]; missing: string[]; evidence: string } | { kind: 'width'; switchWidth: number; evidence: string };
+	fluidGeometry?: CaptureDocumentFluidEvidence;
+	/** Captured as a placeholder for a provider-gated route (see access-gate.ts). */
+	accessGate?: AccessGateEvidence;
 	identityHtmlPath?: string;
 	sections?: string;
 	canonicalUrl?: string;
@@ -260,7 +177,6 @@ function semanticSectionEvidence(
 }
 
 const MAX_PORTABLE_MEDIA_TOTAL_BYTES = 160 * 1024 * 1024;
-const STYLE_HOIST_DIAGNOSTIC_SAMPLE_BYTES = 31 * 1024;
 const MAX_DECLARATIVE_FORM_EMBEDS = 32;
 const MAX_JSON_LD_SCRIPTS = 16;
 const MAX_JSON_LD_SCRIPT_BYTES = 64 * 1024;
@@ -317,6 +233,8 @@ interface PortableLinkContext {
 }
 
 const PORTABLE_LINK_BASE = 'https://portable.invalid';
+const DOCUMENT_LINK_RELATIONS = new Set( [ 'canonical', 'next', 'prev', 'alternate', 'author', 'help', 'license', 'search' ] );
+const RESOURCE_LINK_RELATIONS = new Set( [ 'stylesheet', 'icon', 'manifest', 'preload', 'modulepreload', 'prefetch', 'preconnect', 'dns-prefetch' ] );
 
 function rewriteCapturedRouteLinks(
 	html: string,
@@ -325,11 +243,15 @@ function rewriteCapturedRouteLinks(
 	portable?: PortableLinkContext
 ): string {
 	const $ = cheerio.load( html );
-	// `rel="canonical"` naming a URL this capture actually produced is source
-	// provenance, not an SEO signal the copy should keep declaring — a reader
-	// (or a search engine) following it lands back on the source.
-	$( 'a[href],area[href],link[rel="canonical"][href]' ).each( ( _index, element ) => {
+	// Document relations share navigation's route/source resolution. Resource
+	// relations keep their asset localization, including alternate stylesheets.
+	$( 'a[href],area[href],link[href]' ).each( ( _index, element ) => {
 		const link = $( element );
+		if ( element.tagName === 'link' ) {
+			const relations = ( link.attr( 'rel' ) ?? '' ).toLowerCase().split( /\s+/ );
+			if ( relations.some( relation => RESOURCE_LINK_RELATIONS.has( relation ) ) ||
+				! relations.some( relation => DOCUMENT_LINK_RELATIONS.has( relation ) ) ) return;
+		}
 		const href = link.attr( 'href' ) ?? '';
 		const absolute = /^(?:https?:)?\/\//i.test( href );
 		// Same-document fragments, and schemes such as `mailto:` or `tel:`, mean
@@ -625,169 +547,6 @@ function fallbackResponsiveSwitchWidth( outputDir: string ): number | undefined 
 
 
 
-export function portableInlineStyle(
-	attributes: string,
-	css: string
-): { key: string; media: string } | undefined {
-	// Exported documents carry no executable script, so identifying attributes a
-	// source runtime used to track its own style tags (Wix `id`/`data-href`, for
-	// example) cannot affect rendering once the style moves to a link. DLA's own
-	// `data-dla-*` markers are selected by later export passes and stay inline.
-	const significant = attributes.replace(
-		/(^|\s)(?:id|class|rel|data-(?!dla-)[\w.:-]+)\s*=\s*(["'])[\s\S]*?\2/gi,
-		'$1'
-	);
-	const mediaMatch = /\bmedia\s*=\s*(["'])(.*?)\1/i.exec( significant );
-	const typeCount = ( significant.match( /\btype\s*=/gi ) ?? [] ).length;
-	const mediaCount = ( significant.match( /\bmedia\s*=/gi ) ?? [] ).length;
-	const unsupportedAttributes = significant
-		// Only inert stylesheet attributes may be represented by a link.
-		.replace( /\btype\s*=\s*(["'])text\/css\1/gi, '' )
-		.replace( /\bmedia\s*=\s*(["']).*?\1/gi, '' )
-		.trim();
-	return portableInlineStyleValues(
-		mediaMatch?.[ 2 ] ?? '',
-		typeCount > 1 || mediaCount > 1 || unsupportedAttributes !== '',
-		css
-	);
-}
-
-function portableInlineStyleValues(
-	media: string,
-	hasUnsupportedAttributes: boolean,
-	css: string
-): { key: string; media: string } | undefined {
-	if ( hasUnsupportedAttributes || css.trim() === '' )
-		return undefined;
-	// eslint-disable-next-line no-control-regex -- reject unprintable media attributes.
-	if ( /[\u0000-\u001f\u007f<>&]/.test( media ) ) return undefined;
-	return { key: `${ media }\n${ css }`, media };
-}
-
-type StyleHoistReason =
-	| 'unsafe_attributes'
-	| 'invalid_media'
-	| 'empty_style'
-	| 'relative_css_url'
-	| 'fragment_css_url'
-	| 'empty_css_url'
-	| 'invalid_css_url'
-	| 'css_import'
-	| 'document_base'
-	| 'content_security_policy';
-
-interface StyleHoistDiagnostic {
-	sourceUrl: string;
-	reason: StyleHoistReason;
-}
-
-interface BoundedStyleHoistDiagnostics {
-	diagnostics: StyleHoistDiagnostic[];
-	diagnosticCounts: Partial< Record< StyleHoistReason, number > >;
-	diagnosticsTruncated: boolean;
-}
-
-interface StyleHoistDiagnosticCollector extends BoundedStyleHoistDiagnostics {
-	diagnosticBytes: number;
-}
-
-interface StyleHoistContext {
-	hasBase: boolean;
-	hasContentSecurityPolicy: boolean;
-	styleReasons: Array< StyleHoistReason | undefined >;
-}
-
-function cssReferenceReason( css: string ): StyleHoistReason | undefined {
-	// Current limitation: @import remains inline because it has stylesheet-relative
-	// semantics even when its first URL is absolute.
-	if ( /@import\b/i.test( css ) ) return 'css_import';
-	const urlPattern = /url\(\s*([^)]*?)\s*\)/gi;
-	let foundUrl = false;
-	let match: RegExpExecArray | null;
-	while ( ( match = urlPattern.exec( css ) ) !== null ) {
-		foundUrl = true;
-		const reference = match[ 1 ].trim().replace( /^(?:["'])|(?:["'])$/g, '' );
-		if ( reference === '' ) return 'empty_css_url';
-		// Root, data, and absolute URLs retain their meaning at the new CSS path.
-		// A fragment resolves against the stylesheet itself, not the document, after a move.
-		if ( reference.startsWith( '#' ) ) return 'fragment_css_url';
-		if ( reference.startsWith( '/' ) && ! reference.startsWith( '//' ) ) continue;
-		// `about:blank` is the unavailable-asset sentinel this export writes for a
-		// dependency it could not capture. Like data: and absolute URLs it resolves
-		// identically from any base, so it must not disable hoisting for every
-		// document that lost an asset.
-		if ( /^(?:data:|https?:|about:blank\b)/i.test( reference ) ) continue;
-		if ( /^[a-z][a-z0-9+.-]*:/i.test( reference ) ) return 'invalid_css_url';
-		return 'relative_css_url';
-	}
-	if ( ! foundUrl && /url\s*\(/i.test( css ) ) return 'invalid_css_url';
-}
-
-function hasEffectiveBase( html: string ): boolean {
-	for ( const match of html.matchAll( /<base\b[^>]*>/gi ) ) {
-		const attributes = /\s+([^\s=/>]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]*)))?/g;
-		let attribute: RegExpExecArray | null;
-		while ( ( attribute = attributes.exec( match[ 0 ] ) ) !== null ) {
-			if ( attribute[ 1 ].toLowerCase() === 'href' && ( attribute[ 2 ] ?? attribute[ 3 ] ?? attribute[ 4 ] ?? '' ).trim() !== '' ) return true;
-		}
-	}
-	return false;
-}
-
-function capturedStyleHoistContext( html: string ): StyleHoistContext {
-	const styleReasons: Array< StyleHoistReason | undefined > = [];
-	for ( const match of html.matchAll( /<style\b[^>]*>([\s\S]*?)<\/style\s*>/gi ) )
-		styleReasons.push( cssReferenceReason( match[ 1 ] ) );
-	return {
-		// These deliberately broad scans only disable hoisting. Avoid building a second
-		// DOM for every captured document, which exceeds the constrained export heap.
-		hasBase: hasEffectiveBase( html ),
-		hasContentSecurityPolicy:
-			/<meta\b(?=[^>]*\bhttp-equiv\b)[^>]*\bcontent-security-policy\b/i.test( html ),
-		styleReasons,
-	};
-}
-
-function styleHoistReason(
-	entry: CaptureEntry,
-	styleIndex: number,
-	attributes: string,
-	css: string
-): StyleHoistReason | undefined {
-	if ( entry.styleHoistContext.hasBase ) return 'document_base';
-	if ( entry.styleHoistContext.hasContentSecurityPolicy ) return 'content_security_policy';
-	const sourceReason = entry.styleHoistContext.styleReasons[ styleIndex ];
-	if ( sourceReason ) return sourceReason;
-	if ( css.trim() === '' ) return 'empty_style';
-	const style = portableInlineStyle( attributes, css );
-	if ( style ) return cssReferenceReason( css );
-	const media = /\bmedia\s*=\s*(["'])(.*?)\1/i.exec( attributes )?.[ 2 ] ?? '';
-	// eslint-disable-next-line no-control-regex -- reject unprintable media attributes.
-	return /[\u0000-\u001f\u007f<>&]/.test( media ) ? 'invalid_media' : 'unsafe_attributes';
-}
-
-function createStyleHoistDiagnosticCollector(): StyleHoistDiagnosticCollector {
-	return { diagnostics: [], diagnosticCounts: {}, diagnosticsTruncated: false, diagnosticBytes: 0 };
-}
-
-function recordStyleHoistDiagnostic(
-	collector: StyleHoistDiagnosticCollector,
-	diagnostic: StyleHoistDiagnostic
-): void {
-	collector.diagnosticCounts[ diagnostic.reason ] =
-		( collector.diagnosticCounts[ diagnostic.reason ] ?? 0 ) + 1;
-	const bytes = Buffer.byteLength( JSON.stringify( diagnostic ) );
-	const separator = collector.diagnostics.length === 0 ? 0 : 1;
-	// Leave room for the aggregate counts and object syntax without repeatedly serializing samples.
-	if ( collector.diagnosticBytes + separator + bytes > STYLE_HOIST_DIAGNOSTIC_SAMPLE_BYTES ) {
-		collector.diagnosticsTruncated = true;
-		return;
-	}
-	collector.diagnostics.push( diagnostic );
-	collector.diagnosticBytes += separator + bytes;
-}
-
-
 function mediaReferences( sourceUrl: string, siteUrl: string ): string[] {
 	const media = new URL( sourceUrl );
 	const site = new URL( siteUrl );
@@ -986,35 +745,8 @@ function mediaDimension( sourceUrl: string ): number {
 	);
 }
 
-function portableMediaBasename( candidate: MediaCandidate ): string {
-	const localName = basename( candidate.localPath );
-	if (
-		/^\.(?:avif|gif|jpe?g|png|svg|webp|mp4|webm|mp3|ogg|wav|woff2?|ttf|otf)$/i.test(
-			extname( localName )
-		)
-	) {
-		return localName;
-	}
-
-	const cleanedUrl = candidate.sourceUrl.replace( /&(?:quot|apos|amp);?$/i, '' );
-	const sourceExtension = extname( basename( new URL( cleanedUrl ).pathname ) );
-	if (
-		! /^\.(?:avif|gif|jpe?g|png|svg|webp|mp4|webm|mp3|ogg|wav|woff2?|ttf|otf)$/i.test(
-			sourceExtension
-		)
-	) {
-		return localName;
-	}
-	return `${ localName.slice(
-		0,
-		localName.length - extname( localName ).length
-	) }${ sourceExtension.toLowerCase() }`;
-}
-
 function routeMatchesSourceOrigin( url: string, sourceUrl: string ): boolean {
-	const route = new URL( url );
-	const source = new URL( sourceUrl );
-	return route.origin === source.origin;
+	return sameHttpSite( url, sourceUrl );
 }
 
 function capturedResources( outputDir: string ): CapturedResourceManifest {
@@ -1032,143 +764,6 @@ function capturedResources( outputDir: string ): CapturedResourceManifest {
 			failures: [ { url: manifestPath, error: 'captured resource manifest is invalid' } ],
 		};
 	}
-}
-
-interface AssetEvidenceReferences {
-	locations: Map< string, { count: number; references: AssetEvidenceReference[] } >;
-	assetCount: number;
-	assetCountExact: boolean;
-	totalReferenceCount: number;
-	documentCount: number;
-	cssResourcesTruncated: boolean;
-}
-
-function assetReferences(
-	entries: CaptureEntry[],
-	routePathOf: ( url: string ) => string,
-	resourceManifest: CapturedResourceManifest,
-	outputDir: string
-): AssetEvidenceReferences {
-	const locations = new Map< string, { count: number; references: AssetEvidenceReference[] } >();
-	let assetCount = 0;
-	let assetCountExact = true;
-	let totalReferenceCount = 0;
-	let documentCount = 0;
-	let cssResourcesTruncated = false;
-	const add = ( dependency: PortableDependency, location: AssetEvidenceReference ) => {
-		totalReferenceCount++;
-		let indexed = locations.get( dependency.url );
-		if ( !indexed ) {
-			if ( locations.size >= MAX_ASSET_EVIDENCE_ASSETS ) {
-				// Further URLs are deliberately not indexed: their identity would require an unbounded set.
-				assetCountExact = false;
-				assetCount = MAX_ASSET_EVIDENCE_ASSETS + 1;
-				return;
-			}
-			indexed = { count: 0, references: [] };
-			locations.set( dependency.url, indexed );
-			assetCount++;
-		}
-		indexed.count++;
-		if ( indexed.references.length < MAX_ASSET_EVIDENCE_REFERENCES ) indexed.references.push( location );
-	};
-	for ( const entry of entries ) {
-		const path = `website/${ routePathOf( entry.url ) }`;
-		const visitedCss = new Set< string >();
-		const visit = ( dependency: PortableDependency, document: AssetEvidenceReference[ 'document' ] ) => {
-			add( dependency, { route: entry.url, path, document, reference: dependency.reference } );
-			if ( visitedCss.size >= MAX_ASSET_EVIDENCE_CSS_RESOURCES_PER_ROUTE ) {
-				cssResourcesTruncated = true;
-				return;
-			}
-			if ( visitedCss.has( dependency.url ) ) return;
-			const resource = resourceManifest.resources[ dependency.url ];
-			if ( !resource || !/text\/css/i.test( resource.contentType ) ) return;
-			const resourcePath = resolve( outputDir, resource.path );
-			if ( !pathWithin( outputDir, resourcePath ) || !existsSync( resourcePath ) ) return;
-			visitedCss.add( dependency.url );
-			for ( const nested of dependencyReferences( readFileSync( resourcePath, 'utf8' ), dependency.url, true ) )
-				visit( nested, 'css' );
-		};
-		for ( const source of entry.evidenceDocuments ) {
-			documentCount++;
-			for ( const dependency of dependencyReferences( source.html, entry.url ) ) visit( dependency, source.state );
-		}
-	}
-	return { locations, assetCount, assetCountExact, totalReferenceCount, documentCount, cssResourcesTruncated };
-}
-
-function assetEvidence(
-	references: AssetEvidenceReferences,
-	mediaStubs: MediaStubStore,
-	resourceManifest: CapturedResourceManifest,
-	portablePaths: Map< string, string >,
-	outputDir: string,
-	portableRoot: string = outputDir,
-): {
-	assetCount: number;
-	assetCountExact: boolean;
-	totalReferenceCount: number;
-	assetsTruncated: boolean;
-	assets: AssetEvidenceRecord[];
-} {
-	const sortedUrls = [ ...references.locations.keys() ].sort( ( left, right ) => left.localeCompare( right ) );
-	const records = sortedUrls.map( ( url ) => {
-		const stub = mediaStubs.get( url );
-		const resource = resourceManifest.resources[ url ];
-		const path = portablePaths.get( url );
-		const included = path !== undefined && existsSync( resolve( portableRoot, path ) );
-		const resourcePath = resource ? resolve( outputDir, resource.path ) : undefined;
-		const retrieved = resourcePath
-			? pathWithin( outputDir, resourcePath ) && existsSync( resourcePath )
-			: stub?.status === 'success' && stub.localPath !== undefined && existsSync( stub.localPath );
-		const reportedSuccess = resource !== undefined || stub?.status === 'success';
-		const failure =
-			resourceManifest.failures.find( ( candidate ) => candidate.url === url )?.error ??
-			( stub?.status === 'error' ? stub.error : undefined ) ??
-			( reportedSuccess && !retrieved
-				? 'captured asset file is unavailable'
-				: retrieved && !included
-				? 'retrieved asset was not included in the portable website'
-				: undefined );
-		const retrieval: AssetEvidenceRecord[ 'retrieval' ] = retrieved
-			? 'retrieved'
-			: resourceManifest.failures.some( ( candidate ) => candidate.url === url ) || stub?.status === 'error'
-			? 'failed'
-			: 'unknown';
-		const outcome: AssetEvidenceRecord[ 'outcome' ] = included ? 'successful' : failure ? 'failed' : 'unknown';
-		const portable: AssetEvidenceRecord[ 'portable' ] = included
-			? 'included'
-			: retrieval === 'retrieved'
-			? 'excluded'
-			: 'not-included';
-		const indexed = references.locations.get( url )!;
-		const locations = indexed.references.sort(
-			( left, right ) =>
-				left.route.localeCompare( right.route ) ||
-				left.document.localeCompare( right.document ) ||
-				left.reference.localeCompare( right.reference )
-		);
-		return {
-			id: url,
-			sourceUrl: url,
-			outcome,
-			retrieval,
-			portable,
-			...( included && path ? { path, portableAssetId: path } : {} ),
-			...( outcome === 'failed' ? { error: failure } : {} ),
-			referenceCount: indexed.count,
-			referencesTruncated: indexed.count > MAX_ASSET_EVIDENCE_REFERENCES,
-			references: locations,
-		};
-	} );
-	return {
-		assetCount: references.assetCount,
-		assetCountExact: references.assetCountExact,
-		totalReferenceCount: references.totalReferenceCount,
-		assetsTruncated: !references.assetCountExact,
-		assets: records,
-	};
 }
 
 function safeCapturedPageHtml( html: string, embeddedSources: ReadonlySet<string> = new Set() ): { html: string; jsonLd: string[] } {
@@ -1415,8 +1010,6 @@ function unresolvedCapturedAnchors(
 	} ) );
 }
 
-const UNCAPTURED_ROUTE_REASON = 'target route was not captured';
-
 /**
  * Same-origin page links in captured HTML whose target was never captured.
  *
@@ -1474,6 +1067,22 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 	if ( embedded && ! httpInput ) throw new Error( 'Runtime attachments require explicit HTTP input' );
 	const embeddedSources = new Set( Object.keys( embedded?.resources ?? {} ) );
 	if ( embedded && httpInput && options.input ) {
+		httpInput.diagnostics = httpInput.diagnostics.filter( diagnostic => {
+			if ( diagnostic.code !== 'http_browser_region_unobserved' ) return true;
+			return ! embedded.receipt.coverage?.some( coverage =>
+				coverage.url === diagnostic.url &&
+				diagnostic.reason.startsWith( `${ coverage.variant }: ${ coverage.selector }:` ) &&
+				coverage.expectedNodes > 0 &&
+				coverage.projectedIndices.length === coverage.expectedNodes
+			);
+		} );
+		const projected = new Set<string>();
+		for (const region of embedded.receipt.regions) {
+			const key = JSON.stringify([region.url, region.variant, region.selector]);
+			if (!projected.has(key)) httpInput.diagnostics.push({ code: 'http_runtime_region_projected', url: region.url, reason: `${region.variant}: ${region.selector}: observed at ${region.viewport?.width}px; rendering and interactions remain unverified` });
+			projected.add(key);
+		}
+		for (const unresolved of embedded.receipt.unresolved ?? []) httpInput.diagnostics.push({ code: 'http_runtime_projection_unresolved', url: unresolved.url, reason: `${unresolved.variant}: ${unresolved.reason}` });
 		const checked = new Set<string>();
 		for ( const region of embedded.receipt.regions ) {
 			const key = JSON.stringify( [ region.url, region.variant ] );
@@ -1519,7 +1128,7 @@ function buildExportCapture(
 	const switchWidths: number[] = [];
 	const deviceSelections: Array<{ url: string; id: string; documents: string[]; missing: string[]; evidence: string }> = [];
 	const widthSelections: Array<{ url: string; kind: 'width'; switchWidth: number; evidence: string }> = [];
-	const fluidReports: Array< NonNullable< ManifestEntryFluid > > = [];
+	const fluidReports: CaptureFluidEvidence[] = [];
 	const websiteDir = join( stageDir, 'website' );
 	const stagedHtmlDir = join( stageDir, '.capture-export-html' );
 	mkdirSync( websiteDir, { recursive: true } );
@@ -1589,8 +1198,10 @@ function buildExportCapture(
 			} );
 			continue;
 		}
-		const acquiredDesktopHtml = readFileSync( capturedHtmlPath, 'utf8' );
-		let rawDesktopHtml = embedded && options.input ? projectEmbeddedRegions( acquiredDesktopHtml, url, options.input.desktopVariant, createHash( 'sha256' ).update( acquiredDesktopHtml ).digest( 'hex' ), embedded.receipt.regions ) : acquiredDesktopHtml;
+		const acquiredDesktopHtml = readFileSync(capturedHtmlPath, 'utf8');
+		const desktopHash = createHash('sha256').update(acquiredDesktopHtml).digest('hex');
+		let rawDesktopHtml = embedded && options.input ? projectRuntimePresentation(projectEmbeddedRegions(acquiredDesktopHtml, url, options.input.desktopVariant, desktopHash, embedded.receipt.regions), url, options.input.desktopVariant, desktopHash, embedded.receipt) : acquiredDesktopHtml;
+		rawDesktopHtml = resolveDocumentReferences(rawDesktopHtml, entry.documents?.desktop?.url ?? url, entry.documents?.desktop?.baseUrl);
 		const sourceInteractivity = inspectSourceInteractivity( rawDesktopHtml, url, outputDir, resourceManifest );
 		// A client-routed SPA answers every route with HTTP 200 and renders its
 		// own not-found screen in JavaScript, so the HTTP-status check above
@@ -1615,13 +1226,16 @@ function buildExportCapture(
 			( ! httpInput || entry.mobileHtml ) && pathWithin( outputDir, mobileHtmlPath ) && existsSync( mobileHtmlPath )
 				? readFileSync( mobileHtmlPath, 'utf8' )
 				: undefined;
-		let rawMobileHtml = embedded && options.input?.mobileVariant && acquiredMobileHtml !== undefined ? projectEmbeddedRegions( acquiredMobileHtml, url, options.input.mobileVariant, createHash( 'sha256' ).update( acquiredMobileHtml ).digest( 'hex' ), embedded.receipt.regions ) : acquiredMobileHtml;
+		const mobileHash = acquiredMobileHtml === undefined ? undefined : createHash('sha256').update(acquiredMobileHtml).digest('hex');
+		let rawMobileHtml = embedded && options.input?.mobileVariant && acquiredMobileHtml !== undefined ? projectRuntimePresentation(projectEmbeddedRegions(acquiredMobileHtml, url, options.input.mobileVariant, mobileHash!, embedded.receipt.regions), url, options.input.mobileVariant, mobileHash!, embedded.receipt) : acquiredMobileHtml;
+		if (rawMobileHtml !== undefined) rawMobileHtml = resolveDocumentReferences(rawMobileHtml, entry.documents?.mobile?.url ?? url, entry.documents?.mobile?.baseUrl);
 		const sourceDocuments: Record<string, string> = { desktop: rawDesktopHtml, ...( rawMobileHtml === undefined ? {} : { mobile: rawMobileHtml } ) };
-		for ( const [ key, local ] of Object.entries( entry.documents ?? {} ) ) {
-			if ( key in sourceDocuments ) throw new Error( `Duplicate captured document identity: ${ key }` );
-			const path = resolve( outputDir, local );
+		for ( const [ key, profile ] of Object.entries( entry.profiles ?? {} ) ) {
+			if ( key === 'desktop' || key === 'mobile' || ! profile.html ) continue;
+			const path = resolve( outputDir, profile.html );
 			if ( ! pathWithin( outputDir, path ) || ! existsSync( path ) ) throw new Error( `Device document is missing or outside capture: ${ key }` );
-			sourceDocuments[ key ] = readFileSync( path, 'utf8' );
+			const documentUrl = entry.documents?.[ key ];
+			sourceDocuments[ key ] = resolveDocumentReferences( readFileSync( path, 'utf8' ), documentUrl?.url ?? url, documentUrl?.baseUrl );
 		}
 		const selection = options.resolveDocumentSelection?.( sourceDocuments );
 		if ( selection?.kind === 'width' ) {
@@ -1634,6 +1248,7 @@ function buildExportCapture(
 				: siteSwitchWidth;
 		if ( detectedFloor ) switchWidths.push( detectedFloor );
 		if ( entry.fluid ) fluidReports.push( entry.fluid );
+		if ( entry.fluidMobile ) fluidReports.push( entry.fluidMobile );
 		if ( selection?.kind !== 'device' && embedded && options.input?.mobileVariant && rawMobileHtml !== undefined ) {
 			const pair = mergeResponsiveEmbeddedRegions( { desktop: rawDesktopHtml, mobile: rawMobileHtml, url, desktopVariant: options.input.desktopVariant, mobileVariant: options.input.mobileVariant, receipt: embedded.receipt, switchWidth: detectedFloor ?? DEFAULT_SWITCH_WIDTH, scopeClasses: { desktop: DESKTOP_DOCUMENT_CLASS, mobile: MOBILE_DOCUMENT_CLASS } } );
 			rawDesktopHtml = pair.desktop; rawMobileHtml = pair.mobile;
@@ -1680,6 +1295,8 @@ function buildExportCapture(
 			hasMobileDocument: assembly.hasMobileDocument,
 			responsiveVariants: assembly.evidence,
 			documentSelection: deviceAssembly ? { kind: 'device', id: deviceAssembly.selection.id, documents: deviceAssembly.selection.documents, missing: deviceAssembly.missing, evidence: deviceAssembly.selection.evidence } : selection?.kind === 'width' ? selection : undefined,
+			...( entry.fluid || entry.fluidMobile ? { fluidGeometry: { desktop: entry.fluid, mobile: entry.fluidMobile } } : {} ),
+			...( entry.accessGate ? { accessGate: entry.accessGate } : {} ),
 			sections: entry.sections,
 			canonicalUrl: canonicalMetadataUrl(
 				entry.metadata?.openGraph?.[ 'og:url' ] ?? openGraphUrl( html ),
@@ -1705,7 +1322,7 @@ function buildExportCapture(
 	const {
 		entrypointUrl, entrypointEntry, routePathOf, retainedEntries, duplicateRoutes,
 		canonicalRouteAliases, portableRedirects, missingRedirectTargets, duplicateJsonLd,
-	} = allocateCaptureRoutes( capturedEntries, options.sourceUrl, redirectAliases );
+	} = allocateCaptureRoutes( capturedEntries, options.sourceUrl, redirectAliases, routeCaptureDiagnostics );
 	for ( const { claimed, jsonLd } of duplicateJsonLd ) {
 		writeFileSync( claimed.htmlPath, appendJsonLd( readFileSync( claimed.htmlPath, 'utf8' ), jsonLd ) );
 	}
@@ -1728,12 +1345,9 @@ function buildExportCapture(
 		} ];
 	} );
 	const semanticEvidence =
-		semanticPages.length > 0 ? semanticEvidenceArtifacts( semanticPages ) : undefined;
-	let mediaReplacements = new Map< string, string >();
-	const unresolvedMedia: Array< { url: string; error: string } > = [];
-	const assets: Array< { sourceUrl: string; path: string } > = [];
+		semanticPages.length > 0 ? buildSemanticEvidenceArtifacts( semanticPages ) : undefined;
 	const mediaStubs = MediaStubStore.load( outputDir );
-	const assetReferenceLocations = assetReferences(
+	const assetReferenceLocations = collectAssetEvidenceReferences(
 		retainedEntries,
 		routePathOf,
 		resourceManifest,
@@ -1742,7 +1356,7 @@ function buildExportCapture(
 	const { rendered: renderedMediaReferences, retained: retainedMediaFamilies } =
 		retainedMediaReferenceInventory( retainedEntries );
 	const mediaFamilies = new Map< string, MediaCandidate[] >();
-	const failedMedia: Array< { sourceUrl: string; error: string; references: string[] } > = [];
+	const failedMedia: FailedPortableMedia[] = [];
 	const capturedPages = new Set(
 		[ options.sourceUrl, ...retainedEntries.map( ( entry ) => entry.url ) ].flatMap( ( url ) => {
 			try {
@@ -1783,7 +1397,7 @@ function buildExportCapture(
 		);
 		const isReferenced = retainedMediaFamilies.has( family ) || exactReferences.length > 0;
 		if ( stub.status === 'error' && isReferenced ) {
-			failedMedia.push( { sourceUrl, error: stub.error ?? 'media download failed', references } );
+			failedMedia.push( { family, sourceUrl, error: stub.error ?? 'media download failed', references } );
 			continue;
 		}
 		if (
@@ -1811,93 +1425,12 @@ function buildExportCapture(
 		portableMediaBudget,
 		entrypointEntry.htmlPath,
 	);
-	let retainedExternalMediaCount = 0;
-	const localizedMediaFamilies = new Set< string >();
-	const portableUrlByFamily = new Map< string, string >();
-	const assetPathsByHash = new Map< string, string >();
-	const assetHashesByPath = new Map< string, string >();
-	let portablePathsBySource = new Map< string, string >();
-	for ( const decision of portableMediaPlan.families ) {
-		const { family, candidates, eligible, admitted } = decision;
-		if ( decision.outcome === 'limit-excluded' ) {
-			for ( const reference of retainedMediaFamilies.get( family ) ?? [] )
-				mediaReplacements.set( reference, TRANSPARENT_IMAGE_DATA_URL );
-			for ( const candidate of candidates ) {
-				for ( const reference of candidate.references ) {
-					mediaReplacements.set( reference, candidate.sourceUrl );
-				}
-				unresolvedMedia.push( {
-					url: candidate.sourceUrl,
-					error: 'removed because media exceeds portable size or dimension limits',
-				} );
-				retainedExternalMediaCount++;
-			}
-			continue;
-		}
-		if ( decision.outcome === 'budget-excluded' ) {
-			for ( const candidate of candidates ) {
-				for ( const reference of candidate.references ) {
-					mediaReplacements.set( reference, TRANSPARENT_IMAGE_DATA_URL );
-				}
-			}
-			unresolvedMedia.push( {
-				url: eligible[ 0 ].sourceUrl,
-				error: 'removed because the aggregate portable media limit was reached',
-			} );
-			retainedExternalMediaCount++;
-			continue;
-		}
-		localizedMediaFamilies.add( family );
-		let fallbackAssetPath = '';
-		for ( const { candidate, contentHash } of admitted ) {
-			let assetPath = assetPathsByHash.get( contentHash );
-			if ( assetPath === undefined ) {
-				assetPath = uniqueAssetPath(
-					join( 'media', portableMediaBasename( candidate ) ),
-					contentHash,
-					assetHashesByPath
-				);
-				const destination = join( websiteDir, assetPath );
-				mkdirSync( dirname( destination ), { recursive: true } );
-				copyFileSync( candidate.localPath, destination );
-				assetPathsByHash.set( contentHash, assetPath );
-				assetHashesByPath.set( assetPath, contentHash );
-				assets.push( {
-					sourceUrl: candidate.sourceUrl,
-					path: join( 'website', assetPath ).replace( /\\/g, '/' ),
-				} );
-			}
-			portablePathsBySource.set(
-				candidate.sourceUrl,
-				`website/${ assetPath.replace( /\\/g, '/' ) }`
-			);
-			fallbackAssetPath ||= assetPath;
-			for ( const reference of candidate.exactReferences ) {
-				mediaReplacements.set( reference, portableAssetUrl( assetPath ) );
-			}
-		}
-		for ( const reference of retainedMediaFamilies.get( family ) ?? [] ) {
-			if ( ! mediaReplacements.has( reference ) )
-				mediaReplacements.set( reference, portableAssetUrl( fallbackAssetPath ) );
-		}
-		if ( fallbackAssetPath ) portableUrlByFamily.set( family, portableAssetUrl( fallbackAssetPath ) );
-	}
-	const portableMedia = {
-		selected_count: assets.length,
-		selected_bytes: portableMediaPlan.selectedBytes,
-		retained_external_count: retainedExternalMediaCount,
-		max_bytes: portableMediaBudget,
-		reserved_bytes: 0,
-	};
-	for ( const { sourceUrl, error, references } of failedMedia ) {
-		const family = mediaFamily( sourceUrl );
-		if ( localizedMediaFamilies.has( family ) ) continue;
-		for ( const reference of retainedMediaFamilies.get( family ) ?? [] )
-			mediaReplacements.set( reference, TRANSPARENT_IMAGE_DATA_URL );
-		for ( const reference of references )
-			mediaReplacements.set( reference, TRANSPARENT_IMAGE_DATA_URL );
-		unresolvedMedia.push( { url: sourceUrl, error } );
-	}
+	const mediaStage = materializePortableMedia( {
+		websiteDir, plan: portableMediaPlan, maxBytes: portableMediaBudget,
+		retainedReferences: retainedMediaFamilies, failedMedia,
+	} );
+	let { mediaReplacements, portablePathsBySource } = mediaStage;
+	const { portableUrlByFamily, assetPathsByHash, assetHashesByPath, assets, unresolvedMedia, portableMedia } = mediaStage;
 
 	const resourceStage = materializePortableResources( {
 		sourceRoot: outputDir,
@@ -1915,82 +1448,16 @@ function buildExportCapture(
 	portablePathsBySource = resourceStage.portablePathsBySource;
 	assets.push( ...resourceStage.assets );
 	const { resourceReplacements, unresolvedDependencies, rejectedReplacementKeys } = resourceStage;
-	const inlineStyles = new Map< string, Array< { entry: CaptureEntry; css: string; media: string } > >();
-	const styleHoistDiagnostics = createStyleHoistDiagnosticCollector();
-	for ( const entry of retainedEntries ) {
-		const html = readFileSync( entry.htmlPath, 'utf8' );
-		let styleIndex = 0;
-		for ( const match of html.matchAll( /<style\b([^>]*)>([\s\S]*?)<\/style\s*>/gi ) ) {
-			const reason = styleHoistReason( entry, styleIndex++, match[ 1 ], match[ 2 ] );
-			const style = portableInlineStyle( match[ 1 ], match[ 2 ] );
-			if ( reason || !style ) {
-				recordStyleHoistDiagnostic( styleHoistDiagnostics, {
-					sourceUrl: entry.url,
-					reason: reason ?? 'unsafe_attributes',
-				} );
-				continue;
-			}
-			const occurrences = inlineStyles.get( style.key ) ?? [];
-			occurrences.push( {
-				entry,
-				css: match[ 2 ],
-				media: style.media,
-			} );
-			inlineStyles.set( style.key, occurrences );
-		}
-	}
-	const sharedStyles = new Map< string, { path: string; media: string } >();
-	const stylesheetPaths = new Map< string, string >();
-	const styleReplacements = new Map( [ ...mediaReplacements, ...resourceReplacements ] );
-	// Resource discovery and fallback promotion are complete; these maps are
-	// stable for the remaining styles, interaction strings and page projection.
-	const replaceStyleResources = preparePortableReplacements( styleReplacements, rejectedReplacementKeys );
+	const stylesheetStage = materializeSharedStylesheets( {
+		entries: retainedEntries, websiteDir, sourceUrl: options.sourceUrl,
+		mediaReplacements, resourceReplacements, rejectedReplacementKeys,
+	} );
+	assets.push( ...stylesheetStage.assets );
 	const replaceMedia = preparePortableReplacements( mediaReplacements, rejectedReplacementKeys );
 	const replaceResources = preparePortableReplacements( resourceReplacements, rejectedReplacementKeys );
 	const portableMediaReplacements = omitDegenerateReplacements( mediaReplacements, rejectedReplacementKeys );
-	for ( const [ key, occurrences ] of [ ...inlineStyles ].sort( ( left, right ) =>
-		left[ 0 ].localeCompare( right[ 0 ] )
-	) ) {
-		if ( new Set( occurrences.map( ( occurrence ) => occurrence.entry.htmlPath ) ).size < 2 ) continue;
-		const style = occurrences[ 0 ];
-		// Hoisted styles leave the HTML rewrite path, so localize them before writing.
-		const css = replaceStyleResources( style.css );
-		const contentHash = createHash( 'sha256' ).update( css ).digest( 'hex' );
-		const relativePath = stylesheetPaths.get( contentHash ) ?? `assets/css/capture-${ contentHash }.css`;
-		const destination = join( websiteDir, relativePath );
-		if ( ! stylesheetPaths.has( contentHash ) ) {
-			mkdirSync( dirname( destination ), { recursive: true } );
-			writeFileSync( destination, css );
-			assets.push( {
-				sourceUrl: `${ options.sourceUrl }#inline-style-${ contentHash }`,
-				path: `website/${ relativePath }`,
-			} );
-			stylesheetPaths.set( contentHash, relativePath );
-		}
-		sharedStyles.set( key, { path: `/${ relativePath }`, media: style.media } );
-	}
-	if ( sharedStyles.size > 0 ) {
-		for ( const entry of retainedEntries ) {
-			const $ = cheerio.load( readFileSync( entry.htmlPath, 'utf8' ) );
-			$( 'style' ).each( ( _index, element ) => {
-				const attributes = 'attribs' in element ? element.attribs : {};
-				const style = portableInlineStyle(
-					Object.entries( attributes )
-						.map( ( [ name, value ] ) => ` ${ name }="${ escapeHtmlAttr( value ?? '' ) }"` )
-						.join( '' ),
-					$( element ).html() ?? ''
-				);
-				const shared = style ? sharedStyles.get( style.key ) : undefined;
-				if ( ! style || ! shared ) return;
-				const link = $( '<link>' ).attr( { rel: 'stylesheet', href: shared.path } );
-				if ( shared.media ) link.attr( 'media', shared.media );
-				$( element ).replaceWith( link );
-			} );
-			writeFileSync( entry.htmlPath, $.html() );
-		}
-	}
 
-	const routes: Array< { url: string; path: string } > = [];
+	const routes: Array< { url: string; path: string; accessGate?: AccessGateEvidence } > = [];
 	const portableRouteLinks = new Map< string, string >();
 	for ( const entry of retainedEntries ) {
 		const { url } = entry;
@@ -2002,6 +1469,8 @@ function buildExportCapture(
 			path: `website/${ routePath }`,
 			...( entry.responsiveVariants ? { responsiveVariants: entry.responsiveVariants } : {} ),
 			...( entry.documentSelection ? { documentSelection: entry.documentSelection } : {} ),
+			...( entry.fluidGeometry ? { fluidGeometry: entry.fluidGeometry } : {} ),
+			...( entry.accessGate ? { accessGate: entry.accessGate } : {} ),
 		} );
 	}
 	for ( const [ aliasKey, routePath ] of canonicalRouteAliases ) {
@@ -2021,7 +1490,7 @@ function buildExportCapture(
 		...portableRouteLinks.values(),
 		...mediaReplacements.values(),
 		...resourceReplacements.values(),
-		...[ ...sharedStyles.values() ].map( ( style ) => style.path ),
+		...stylesheetStage.servedPaths,
 	] ) {
 		if ( ! path.startsWith( '/' ) ) continue;
 		try {
@@ -2139,7 +1608,7 @@ function buildExportCapture(
 		unresolvedAnchors.push(
 			...unresolvedCapturedAnchors( normalizedHtml, url, `/${ routePath }` )
 		);
-		writeFileSync( destination, withViewportEntrances( normalizedHtml ) );
+		writeFileSync( destination, wireNativeViewTimelines( withViewportEntrances( normalizedHtml ) ) );
 		entry.identityHtmlPath = `${ htmlPath }.identity`;
 		writeFileSync( entry.identityHtmlPath, identityHtml );
 	}
@@ -2172,300 +1641,32 @@ function buildExportCapture(
 	if ( redirectsFile ) writeFileSync( join( websiteDir, '_redirects' ), redirectsFile );
 	exportPublicationBoundary( EXPORT_PUBLICATION_BOUNDARIES.afterHtml );
 
-	const geometryCaptureOmissions: Record< string, number > = {};
-	const geometryInputs = function* () {
-		for ( const entry of [ ...retainedEntries ].sort( ( left, right ) =>
-			left.url.localeCompare( right.url )
-		) ) {
-			const observations: GeometryCapture[ 'observations' ] = [];
-			for ( const viewport of [ 'desktop', 'mobile' ] ) {
-				const path = join( outputDir, 'layout-geometry', `${ entry.slug }.${ viewport }.json` );
-				if ( httpInput || ! existsSync( path ) ) {
-					geometryCaptureOmissions[ 'capture_missing' ] =
-						( geometryCaptureOmissions[ 'capture_missing' ] ?? 0 ) + 1;
-					continue;
-				}
-				try {
-					const capture = JSON.parse( readFileSync( path, 'utf8' ) ) as GeometryCapture;
-					if (
-						capture.schema !== 'data-liberation/layout-geometry-capture/v1' ||
-						! Array.isArray( capture.observations )
-					) {
-						throw new Error( 'schema_invalid' );
-					}
-					observations.push( ...capture.observations );
-					for ( const [ code, count ] of Object.entries( capture.omissions ?? {} ) )
-						geometryCaptureOmissions[ code ] = ( geometryCaptureOmissions[ code ] ?? 0 ) + count;
-				} catch {
-					geometryCaptureOmissions[ 'capture_invalid' ] =
-						( geometryCaptureOmissions[ 'capture_invalid' ] ?? 0 ) + 1;
-				}
-			}
-			const routePath = routePathOf( entry.url );
-			const html = readFileSync( join( websiteDir, routePath ), 'utf8' );
-			yield {
-				sourcePath: `website/${ routePath }`,
-				html,
-				identityHtml: readFileSync( entry.identityHtmlPath!, 'utf8' ),
-				observations,
-			};
-		}
-	};
-	const geometry = buildLayoutGeometryProof( geometryInputs );
-	const geometryReport = {
-		...geometry.report,
-		capture_omissions: geometryCaptureOmissions,
-	};
-	writeFileSync(
-		join( stageDir, 'layout-geometry-report.json' ),
-		`${ JSON.stringify( geometryReport, null, 2 ) }\n`
-	);
-	exportPublicationBoundary( EXPORT_PUBLICATION_BOUNDARIES.sidecarWrite );
-	if ( geometry.proof )
-		writeFileSync(
-			join( stageDir, 'layout-geometry-proof.json' ),
-			`${ JSON.stringify( geometry.proof, null, 2 ) }\n`
-		);
-
-	const interactionStates = interactionPages.flatMap( ( page ) => page.states );
-	const initialDialogs = interactionPages.flatMap( ( page ) => page.initialDialogs ?? [] );
-	const interactionSummary = {
-		candidate_count: interactionStates.length,
-		captured_count: interactionStates.filter( ( state ) => state.status === 'captured' ).length,
-		no_dialog_count: interactionStates.filter( ( state ) => state.status === 'no-dialog' ).length,
-		click_failed_count: interactionStates.filter( ( state ) => state.status === 'click-failed' )
-			.length,
-		truncated_count: interactionStates.filter(
-			( state ) =>
-				state.status === 'captured' &&
-				( state.dialog?.htmlTruncated || state.choiceGroup?.transition.htmlTruncated )
-		).length,
-		initial_dialog_count: initialDialogs.length,
-		initial_captured_count: initialDialogs.filter( ( state ) => state.status === 'captured' ).length,
-		initial_dismissal_verified_count: initialDialogs.filter(
-			( state ) => state.dismissal?.verified
-		).length,
-	};
-	const unreproducedMotion = capturedEntries.map( ( entry ) => entry.sourceInteractivity )
-		.filter( ( page ) => page.status === 'unreproduced' );
-	const sourceInteractivity = unreproducedMotion.length ? {
-		schema: SOURCE_INTERACTIVITY_SCHEMA,
-		path: 'source-interactivity.json',
-		unreproduced_route_count: unreproducedMotion.length,
-	} : undefined;
-	if ( sourceInteractivity ) writeFileSync(
-		join( stageDir, sourceInteractivity.path ),
-		`${ JSON.stringify( { schema: SOURCE_INTERACTIVITY_SCHEMA, pages: unreproducedMotion }, null, 2 ) }\n`
-	);
-	if ( semanticEvidence ) {
-		writeFileSync( join( stageDir, semanticEvidence.index.path ), semanticEvidence.index.content );
-		for ( const shard of semanticEvidence.shards ) {
-			const path = join( stageDir, shard.path );
-			mkdirSync( dirname( path ), { recursive: true } );
-			writeFileSync( path, shard.content );
-		}
-	}
-	if ( interactionPages.length > 0 ) {
-		writeFileSync(
-			join( stageDir, 'interaction-states.json' ),
-			`${ JSON.stringify(
-				{
-					schema: CAPTURED_INTERACTIONS_SCHEMA,
-					pages: interactionPages,
-					totals: interactionSummary,
-				},
-				null,
-				2
-			) }\n`
-		);
-	}
-	const scrollStatesSummary = {
-		page_count: scrollStatesPages.length,
-		toggle_count: scrollStatesPages.reduce( ( total, page ) => total + page.toggles.length, 0 ),
-	};
-	if ( scrollStatesPages.length > 0 ) {
-		writeFileSync(
-			join( stageDir, 'scroll-states.json' ),
-			`${ JSON.stringify(
-				{
-					schema: CAPTURED_SCROLL_STATES_SCHEMA,
-					pages: scrollStatesPages,
-					totals: scrollStatesSummary,
-				},
-				null,
-				2
-			) }\n`
-		);
-	}
-
-	// --- source profile -------------------------------------------------------
-	// What the source actually does, measured rather than assumed: whether it
-	// serves one document or one per device, whether its geometry is authored or
-	// written by a runtime, and where it changes behavior. Downstream stages
-	// consume this instead of hardcoding viewports and breakpoints.
-	const routesWithMobile = retainedEntries.filter( ( entry ) => entry.hasMobileDocument ).length;
-	const learnedApplied = fluidReports.reduce( ( total, report ) => total + report.applied, 0 );
-	const learnedFrozen = fluidReports.reduce( ( total, report ) => total + report.unmodelled, 0 );
-	const observedBreakpoints = [
-		...new Set( fluidReports.flatMap( ( report ) => report.breakpoints ) ),
-	].sort( ( a, b ) => a - b );
-	const sourceProfile = {
-		schema: SOURCE_PROFILE_SCHEMA,
-		variants: routesWithMobile > 0 ? 'per-device' : 'single',
-		documentsPerRoute: Math.max( routesWithMobile > 0 ? 2 : 1, ...deviceSelections.map( row => row.documents.length - row.missing.length ) ),
-		documentSelection: deviceSelections.length || widthSelections.length ? {
-			kind: deviceSelections.length ? widthSelections.length ? 'mixed' : 'device' : 'width',
-			routes: [ ...deviceSelections.map( row => ( { kind: 'device', ...row } ) ), ...widthSelections ],
-		} : undefined,
-		geometry:
-			httpInput ? 'unverified' : learnedApplied > 0 && learnedFrozen > 0
-				? 'mixed'
-				: learnedApplied > 0
-				? 'runtime-written'
-				: 'declarative',
-		switchWidth: switchWidths.length > 0 ? Math.max( ...switchWidths ) : null,
-		switchWidthSource: deviceSelections.length && ! switchWidths.length ? 'not-applicable' : widthSelections.length === switchWidths.length && widthSelections.length > 0 ? 'observed' : switchWidths.length > 0 ? 'detected' : 'default',
-		breakpoints: observedBreakpoints,
-		learned: { applied: learnedApplied, frozen: learnedFrozen, routes: fluidReports.length },
-	};
-	writeFileSync(
-		join( stageDir, 'source-profile.json' ),
-		`${ JSON.stringify( sourceProfile, null, 2 ) }\n`
-	);
-	const assetEvidenceReport = assetEvidence(
-		assetReferenceLocations,
-		mediaStubs,
-		resourceManifest,
-		portablePathsBySource,
-		outputDir,
-		stageDir,
-	);
-	writeFileSync(
-		join( stageDir, 'asset-evidence.json' ),
-		`${ JSON.stringify(
-			{
-				schema: ASSET_EVIDENCE_SCHEMA,
-				assetCount: assetEvidenceReport.assetCount,
-				assetCountExact: assetEvidenceReport.assetCountExact,
-				totalReferenceCount: assetEvidenceReport.totalReferenceCount,
-				assetsTruncated: assetEvidenceReport.assetsTruncated,
-				referenceLimit: MAX_ASSET_EVIDENCE_REFERENCES,
-				coverage: {
-					retainedRouteCount: retainedEntries.length,
-					documentCount: assetReferenceLocations.documentCount,
-					assetLimit: MAX_ASSET_EVIDENCE_ASSETS,
-					assetSelection: 'first reachable source URLs in retained route traversal',
-					cssTraversal: 'reachable captured CSS resources only',
-					cssResourcesPerRouteLimit: MAX_ASSET_EVIDENCE_CSS_RESOURCES_PER_ROUTE,
-					cssResourcesTruncated: assetReferenceLocations.cssResourcesTruncated,
-				},
-				assets: assetEvidenceReport.assets,
-			},
-			null,
-			2
-		) }\n`
-	);
-
-	// Merge capture-time route diagnostics (this route never produced HTML) with
-	// discovery-time diagnostics (this route was rejected before capture even
-	// started, e.g. a same-origin sitemap leaf) into one reported list — every
-	// route the source advertised is now either in `routes` or named here with
-	// a reason, never just missing.
-	const discoveryDiagnostics = [
-		...( options.discoveryDiagnostics ?? [] ),
-		...( httpInput?.diagnostics ?? [] ),
-		...routeCaptureDiagnostics,
-	];
-
-	const receiptPath = join( stageDir, 'capture-receipt.json' );
-	// Only proven source-absent routes lack a document requiring cleanup.
-	// Keep every other attempted route in the audit, even if it lost its HTML.
-	const cleanupPages = Object.entries(capture.entries)
-		.filter(([url, entry]) => !absentRoutes.has(url) && !entry.redirectedTo && !entry.externalRedirect)
-		.map(([url, entry]) => ({ url, ...entry.cleanup }));
-	const recordedPolicy = cleanupPages.find((page) => page.policy)?.policy;
-	const cleanup = recordedPolicy ? {
-		policy: recordedPolicy,
-		evidencePath: 'cleanup-evidence.json',
-		complete: cleanupPages.every((page) => page.policy && JSON.stringify(page.policy) === JSON.stringify(recordedPolicy) &&
-			page.reports?.length && page.reports.every((report) => report.failures.length === 0 && report.residual === 0)),
-	} : undefined;
-	if (cleanup) writeFileSync(join(stageDir, 'cleanup-evidence.json'), JSON.stringify({ schema: recordedPolicy!.schema, pages: cleanupPages }, null, 2));
-	const complete =
-		! httpInput && Number( options.summary.routesFailed ?? 0 ) === 0 &&
-		! unresolvedAnchors.some( ( anchor ) => anchor.reason === UNCAPTURED_ROUTE_REASON );
-
-	writeFileSync(
-		receiptPath,
-		`${ JSON.stringify(
-			{
-				schema: CAPTURE_RECEIPT_SCHEMA,
-				...( httpInput ? { acquisition: httpInput.acquisition } : {} ),
-				...( embedded ? { embeddedDocuments: embedded.evidence } : {} ),
-				...(cleanup ? { cleanup } : {}),
-				websiteRoot: 'website',
-				entrypoint: 'website/index.html',
-				source: { url: options.sourceUrl, platform: options.platform },
-				...( options.title ? { title: options.title } : {} ),
-				// Declares the class tokens this capture tool uses to mark one side
-				// of a desktop/mobile document pair inside one exported page, so a
-				// generic consumer can recognize them as a document-scope boundary
-				// without hardcoding this tool's naming convention.
-				document_scope_classes: [ ...new Set( [ DESKTOP_DOCUMENT_CLASS, MOBILE_DOCUMENT_CLASS,
-					...deviceSelections.flatMap( row => row.documents.filter( key => ! row.missing.includes( key ) ).map( key => `data-liberation-${ key }-document` ) ),
-				] ) ],
-				routes,
-				assets,
-				assetEvidence: { path: 'asset-evidence.json', schema: ASSET_EVIDENCE_SCHEMA },
-				portableMedia,
-				interactions: interactionSummary,
-				...(sourceInteractivity ? { sourceInteractivity } : {}),
-				scrollStates: scrollStatesSummary,
-				layoutGeometry: geometryReport,
-				sourceProfile,
-				excludedRoutes,
-				duplicateRoutes,
-				discoveryDiagnostics,
-				summary: { ...options.summary, complete },
-			},
-			null,
-			2
-		) }\n`
-	);
-	writeFileSync(
-		join( stageDir, 'diagnostics.json' ),
-		`${ JSON.stringify(
-			{
-				schema: 'data-liberation/capture-diagnostics/v1',
-				complete,
-				failures: options.failures,
-				discoveryDiagnostics,
-				resourceFailures: resourceManifest.failures,
-				unresolvedDependencies,
-				unresolvedMedia: [
-					...unresolvedMedia,
-					...[ ...rejectedReplacementKeys ].map( ( source ) => ( {
-						url: source,
-						error: 'skipped degenerate replacement key',
-					} ) ),
-				],
-				unresolvedAnchors,
-				portableMedia,
-				interactions: interactionSummary,
-				...(sourceInteractivity ? { sourceInteractivity } : {}),
-				scrollStates: scrollStatesSummary,
-				interactionFailures: interactionStates.filter( ( state ) => state.status !== 'captured' ),
-				excludedRoutes,
-				duplicateRoutes,
-				styleHoist: {
-					hoistedStylesheets: stylesheetPaths.size,
-					diagnostics: styleHoistDiagnostics.diagnostics,
-					diagnosticCounts: styleHoistDiagnostics.diagnosticCounts,
-					diagnosticsTruncated: styleHoistDiagnostics.diagnosticsTruncated,
-				},
-			},
-			null,
-			2
-		) }\n`
-	);
+	writeCaptureEvidence( {
+		locations: { captureRoot: outputDir, stageRoot: stageDir },
+		source: options,
+		capture: {
+			entries: capture.entries, absentRoutes,
+			interactivity: capturedEntries.map( ( entry ) => entry.sourceInteractivity ),
+			http: httpInput, embedded,
+		},
+		pages: retainedEntries.map( ( entry ) => ( {
+			slug: entry.slug, url: entry.url, routePath: routePathOf( entry.url ),
+			identityHtmlPath: entry.identityHtmlPath!, hasMobileDocument: entry.hasMobileDocument,
+		} ) ),
+		routes: { retained: routes, excluded: excludedRoutes, duplicates: duplicateRoutes },
+		states: { interactions: interactionPages, scroll: scrollStatesPages },
+		layout: { fluidReports, switchWidths, deviceSelections, widthSelections },
+		assets: {
+			references: assetReferenceLocations, stubs: mediaStubs, manifest: resourceManifest,
+			portablePaths: portablePathsBySource, files: assets, media: portableMedia,
+		},
+		semantic: semanticEvidence,
+		diagnostics: {
+			capture: routeCaptureDiagnostics, dependencies: unresolvedDependencies,
+			media: unresolvedMedia, anchors: unresolvedAnchors, rejectedKeys: rejectedReplacementKeys,
+			styles: stylesheetStage.diagnostics,
+		},
+	} );
+	// Evidence describes expanded bytes. Compact afterwards in the same publication.
+	extractSharedChrome( websiteDir, routes.map( route => route.path.replace( /^website\//, '' ) ) );
 }

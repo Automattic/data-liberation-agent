@@ -19,7 +19,7 @@ const selection: DeviceDocumentSelection = {
 	evidence: 'Fixture request selects its actual desktop, phone or tablet document, not a viewport breakpoint.',
 };
 
-async function captureFixture( failTablet = false ) {
+async function captureFixture( failTablet = false, captureProfileArtifacts = false ) {
 	const parent = join( process.cwd(), '.tmp-test' ); mkdirSync( parent, { recursive: true } );
 	const directory = mkdtempSync( join( parent, 'profile-capture-' ) ); directories.push( directory );
 	const source = createServer( ( request, response ) => {
@@ -32,13 +32,19 @@ async function captureFixture( failTablet = false ) {
 		response.setHeader( 'content-type', 'text/html' );
 		const meta = identity === 'mobile' ? 'width=320,user-scalable=yes' : identity === 'tablet' ? 'width=980,user-scalable=yes' : 'width=device-width,initial-scale=1';
 		const width = identity === 'mobile' ? '320px' : identity === 'tablet' ? '980px' : 'max(980px,100vw)';
-		response.end( `<!doctype html><html><head><meta charset="utf-8"><meta id="${ identity }-viewport" name="viewport" content="${ meta }"><title>Neutral capture source</title><style>body{margin:0;font:16px Arial}main{width:${ width };height:400px}h1{margin:0;font:24px Arial}img{width:80px;height:60px}@media(max-width:980px){main{border:0}}@media(device-width:402px){body.mobile h1{font-size:29px}body.mobile img{width:96px;height:72px}}</style></head><body class="${ identity }"><main data-source-document="${ identity }"><h1>${ identity } source document</h1><p>Authored baseline content.</p><img src="/${ identity }.svg" alt="${ identity } source image"></main></body></html>` );
+		const artifacts = captureProfileArtifacts ? `<div id="motion-${ identity }" style="height:80px;width:100px"></div><div style="height:1600px"></div><script>
+const target=document.getElementById('motion-${ identity }');
+const animation=new Animation(new KeyframeEffect(target,[{opacity:'0.25'},{opacity:'1'}],{duration:'auto',fill:'both'}),new ViewTimeline({subject:target}));animation.play();
+function geometry(){target.style.width=innerWidth*${ identity === 'desktop' ? 0.5 : identity === 'mobile' ? 0.4 : 0.3 }+'px';}addEventListener('resize',geometry);geometry();
+</script>` : '';
+		response.end( `<!doctype html><html><head><meta charset="utf-8"><base href="/assets/${ identity }/"><meta id="${ identity }-viewport" name="viewport" content="${ meta }"><title>Neutral capture source</title><style>body{margin:0;font:16px Arial}main{width:${ width };height:400px}h1{margin:0;font:24px Arial}img{width:80px;height:60px}@media(max-width:980px){main{border:0}}@media(device-width:402px){body.mobile h1{font-size:29px}body.mobile img{width:96px;height:72px}}</style></head><body class="${ identity }"><main data-source-document="${ identity }"><h1>${ identity } source document</h1><p>Authored baseline content.</p><img src="${ identity }.svg" alt="${ identity } source image"></main>${ artifacts }</body></html>` );
 	} );
 	await new Promise<void>( resolve => source.listen( 0, '127.0.0.1', resolve ) );
 	const url = `http://127.0.0.1:${ ( source.address() as { port: number } ).port }/`;
 	const collector = createReferenceCollector( directory, url, [ url ] );
 	try {
-		const captured = await captureScreenshots( { urls: [ url ], primaryUrl: url, outputDir: directory, concurrency: 1, settleMs: 50, learnFluid: false,
+		const captured = await captureScreenshots( { urls: [ url ], primaryUrl: url, outputDir: directory, concurrency: 1, settleMs: 50, learnFluid: captureProfileArtifacts,
+			...( captureProfileArtifacts ? { fluidWidths: [ 768, 1024, 1440 ] } : {} ),
 			referenceWidths: widths, observeSource: collector.observe, declareSourceProfile: collector.declare,
 			additionalProfiles: () => [ { id: 'tablet', ...( failTablet ? { context: { userAgent: 'Neutral iPad', isMobile: true, hasTouch: true } } : { device: 'iPad (gen 7)' } ), width: 768, height: 900, referenceWidths: widths } ],
 		} );
@@ -50,13 +56,40 @@ async function captureFixture( failTablet = false ) {
 }
 
 describe.skipIf( ! existsSync( chromium.executablePath() ) )( 'profile acquisition → static hosting → frozen comparison', () => {
+	it( 'keeps baseline timeline and fluid custody while retaining tablet artifacts in its own profile', async () => {
+		const directory = await captureFixture( false, true );
+		const capture = JSON.parse( readFileSync( join( directory, 'screenshots/manifest.json' ), 'utf8' ) );
+		const route = Object.values( capture.entries )[ 0 ] as import('../screenshot/manifest-queue.js').ManifestEntry;
+		expect.soft( Object.keys( route.nativeViewTimelines ?? {} ).sort() ).toEqual( [ 'desktop', 'mobile' ] );
+		for ( const key of [ 'desktop', 'mobile', 'tablet' ] ) {
+			const profile = route.profiles![ key ]!;
+			expect.soft( profile.fluid?.applied, key ).toBeGreaterThan( 0 );
+			const timelines = profile.nativeViewTimelines;
+			expect.soft( Object.keys( timelines ?? {} ), key ).toEqual( [ key ] );
+			const evidence = timelines?.[ key ];
+			if ( ! evidence ) continue;
+			expect( evidence.preserved ).toBe( 1 );
+			const report = JSON.parse( readFileSync( join( directory, evidence.path ), 'utf8' ) );
+			expect( JSON.stringify( report ) ).toContain( `motion-${ key }` );
+			expect( readFileSync( join( directory, profile.html! ), 'utf8' ) ).toContain( `data-dla-native-profile="${ key }"` );
+			if ( key !== 'tablet' ) expect( route.nativeViewTimelines![ key ] ).toEqual( evidence );
+		}
+		expect( route.profiles!.desktop!.fluid ).toEqual( route.fluid );
+		expect( route.profiles!.mobile!.fluid ).toEqual( route.fluidMobile );
+	}, 180_000 );
+
 	it( 'acquires a real third document and independently freezes each same-width identity', async () => {
 		const directory = await captureFixture();
 		const capture = JSON.parse( readFileSync( join( directory, 'screenshots/manifest.json' ), 'utf8' ) );
-		const route = Object.values( capture.entries )[ 0 ] as { documents: Record<string,string>; profiles: Record<string,{html: string}> };
-		expect( route.documents.tablet ).toMatch( /^html-tablet\// );
-		expect( Object.keys( route.profiles ).sort() ).toEqual( [ 'desktop', 'mobile', 'tablet' ] );
-		expect( readFileSync( join( directory, route.documents.tablet ), 'utf8' ) ).toContain( 'tablet source document' );
+		const route = Object.values( capture.entries )[ 0 ] as import('../screenshot/manifest-queue.js').ManifestEntry;
+		expect( route.profiles!.tablet!.html ).toMatch( /^html-tablet\// );
+		expect( Object.keys( route.profiles! ).sort() ).toEqual( [ 'desktop', 'mobile', 'tablet' ] );
+		expect( readFileSync( join( directory, route.profiles!.tablet!.html! ), 'utf8' ) ).toContain( 'tablet source document' );
+		for ( const key of [ 'desktop', 'mobile', 'tablet' ] ) {
+			const url = Object.keys( capture.entries )[ 0 ];
+			expect( route.documents![ key ] ).toEqual( { url, baseUrl: `${ url }assets/${ key }/` } );
+			expect( route.documents![ key ] ).toEqual( route.profiles![ key ]!.documentUrl );
+		}
 		const reference = JSON.parse( readFileSync( join( directory, 'fidelity-reference.json' ), 'utf8' ) ) as FidelityReference;
 		expect( reference.scope.cells ).toHaveLength( 6 ); expect( reference.entries ).toHaveLength( 6 );
 		expect( reference.entries.every( entry => entry.readiness.ready ) ).toBe( true );

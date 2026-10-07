@@ -175,6 +175,9 @@ export function stripRemoteAssetRequests( html: string ): string {
 		const tag = ( 'tagName' in element ? element.tagName : '' ).toLowerCase();
 		for ( const attribute of [ 'src', 'poster' ] ) {
 			const value = node.attr( attribute );
+			// A successful 1x1 poster suppresses the video frame and introduces a
+			// square intrinsic ratio. A failed source poster has neither behavior.
+			if (tag === 'video' && attribute === 'poster' && value === TRANSPARENT_IMAGE) { node.removeAttr(attribute); continue; }
 			if ( ! value || ! isRemoteAssetUrl( value ) ) continue;
 			if ( tag === 'img' && attribute === 'src' ) {
 				node.attr( 'src', TRANSPARENT_IMAGE );

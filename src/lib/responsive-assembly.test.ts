@@ -11,10 +11,54 @@ import {
 	DESKTOP_DOCUMENT_CLASS,
 	documentsDiffer,
 	MOBILE_DOCUMENT_CLASS,
+	projectResponsiveIdentityCss,
 	type ResponsiveAssembly,
+	routePhoneDocumentFragments,
 } from './responsive-assembly.js';
+import { scopeCss } from './replicate/css-scope.js';
 
 const dirs: string[] = [];
+
+describe( 'responsive identity CSS recovery', () => {
+	it( 'preserves browser-recovered declarations and priorities through projection and scoping', async () => {
+		const css = '#target { display: none; !important } #next { color: red; !important; opacity: .5; color: green !important; content: "!important" } #next { color: blue }';
+		const browser = await chromium.launch();
+		try {
+			const source = await browser.newPage();
+			await source.setContent( page( '<div id="target"></div><div id="next"></div>', `<style>${ css }</style>` ) );
+			const styles = async ( browserPage: typeof source, ids: string[] ) => browserPage.evaluate( ( targets ) => targets.map( id => {
+				const style = getComputedStyle( document.getElementById( id )! );
+				return { display: style.display, color: style.color, opacity: style.opacity, content: style.content };
+			} ), ids );
+			const expected = await styles( source, [ 'target', 'next' ] );
+			expect( expected[ 0 ].display ).toBe( 'none' );
+			expect( expected[ 1 ] ).toMatchObject( { color: 'rgb(0, 128, 0)', opacity: '0.5', content: '"!important"' } );
+			const projected = projectResponsiveIdentityCss( css, new Map( [ [ 'target', 'phone-target' ], [ 'next', 'phone-next' ] ] ), false );
+			const scoped = scopeCss( projected, { scope: '.copy' } );
+			const copy = await browser.newPage();
+			await copy.setContent( page( '<div class="copy"><div id="phone-target"></div><div id="phone-next"></div></div><div id="next"></div>', `<style>${ scoped }</style>` ) );
+			expect( await styles( copy, [ 'phone-target', 'phone-next' ] ) ).toEqual( expected );
+			expect( ( await styles( copy, [ 'next' ] ) )[ 0 ].opacity ).toBe( '1' );
+		} finally {
+			await browser.close();
+		}
+	} );
+
+	it( 'uses the shared stray delimiter recovery during identity projection', () => {
+		const projected = projectResponsiveIdentityCss( '#target { --shadow: 0px;); --width: 1px; ]; color: red }', new Map( [ [ 'target', 'phone-target' ] ] ), false );
+		expect( projected ).toContain( ':is(#target,#phone-target)' );
+		expect( projected ).toContain( '--width: 1px' );
+		expect( projected ).toContain( 'color: red' );
+	} );
+
+	it( 'preserves identity-free CSS and rejects unsupported syntax requiring identity projection', () => {
+		const css = '.x { color: red !important; content: "!important" }';
+		expect( projectResponsiveIdentityCss( css, new Map(), false ) ).toBe( css );
+		const unrelated = '.x { color: red; broken; opacity: .5 }';
+		expect( projectResponsiveIdentityCss( unrelated, new Map(), false ) ).toBe( unrelated );
+		expect( () => projectResponsiveIdentityCss( '#target { color: red; broken; opacity: .5 }', new Map( [ [ 'target', 'phone-target' ] ] ), false ) ).toThrow();
+	} );
+} );
 
 afterEach( () => {
 	for ( const dir of dirs.splice( 0 ) ) rmSync( dir, { recursive: true, force: true } );
@@ -51,6 +95,56 @@ function evidenceMatchesTree( assembly: ResponsiveAssembly ): void {
 }
 
 describe( 'assembleResponsiveCapture', () => {
+	it.each( [
+		{ name: 'padding shorthand', important: 'padding:6px!important', desktop: 'padding-top:40px', mobile: 'padding-top:80px', padding: '6px', display: 'block' },
+		{ name: 'all reset', important: 'all:initial!important', desktop: 'display:block;width:220px;padding:40px', mobile: 'display:block;width:160px;padding:80px', padding: '0px', display: 'inline' },
+	] )( 'preserves source layout when $name overrides normal inline state', async fixture => {
+		const css = `<style>body{margin:0}main{font:16px/20px Arial}#box{${ fixture.important }}</style>`;
+		const desktop = page( `<main id="owner"><div id="box" style="${ fixture.desktop }">Source-owned caption</div></main>`, css );
+		const mobile = page( `<main id="owner"><div id="box" style="${ fixture.mobile }">Source-owned caption</div></main>`, css );
+		const assembled = assembleResponsiveCapture( { rawDesktopHtml: desktop, rawMobileHtml: mobile, portableDesktopHtml: desktop, portableMobileHtml: mobile } );
+		const html = routePhoneDocumentFragments( assembled.html, '/index.html' );
+		const browser = await chromium.launch();
+		try {
+			const source = await browser.newPage();
+			const copy = await browser.newPage();
+			const measure = ( browserPage: typeof source ) => browserPage.locator( 'main:visible' ).evaluate( main => {
+				const node = main.querySelector( 'div' )!, box = node.getBoundingClientRect(), style = getComputedStyle( node );
+				return { x: box.x, y: box.y, width: box.width, height: box.height, mainHeight: main.getBoundingClientRect().height, padding: style.padding, display: style.display };
+			} );
+			for ( const width of [ 390, 768, 1440 ] ) {
+				await source.setViewportSize( { width, height: 900 } );
+				await copy.setViewportSize( { width, height: 900 } );
+				await source.setContent( width < 768 ? mobile : desktop );
+				const expected = await measure( source );
+				expect( expected ).toMatchObject( { padding: fixture.padding, display: fixture.display } );
+				await copy.setContent( html );
+				expect( await measure( copy ), `native cascade at ${ width }px` ).toEqual( expected );
+			}
+			expect( assembled.hasMobileDocument ).toBe( true );
+		} finally { await browser.close(); }
+	} );
+	it.each( [ false, true ] )( 'preserves authored important visibility over normal inline state (%s structural subset)', async subset => {
+		const css = '<style>body{margin:0}h1,p{margin:0}#stage{height:80px}.adapt{display:none!important}@media(max-width:767px){.adapt{display:block!important}}</style>';
+		const unrelatedCss = '<style>/* license: https://example.test/#license */@font-face{font-family:unused;src:url(data:font/woff2;base64,AA==);url(data:font/woff;base64,AA==)}.icon{font-style:normal;color:#fff;border:solid #f1f1f1}</style>';
+		const desktop = page( '<main id="owner"><div id="stage"><h1>Actual active slide</h1></div><div class="adapt" style="display:block;padding:20px"><p>Responsive caption</p></div></main>', css + unrelatedCss );
+		const mobile = page( `<main id="owner"><div id="stage"><h1>Actual active slide</h1></div><div class="adapt" style="padding:10px"><p>Responsive caption</p></div>${ subset ? '<aside id="phone">Phone content</aside>' : '' }</main>`, css + unrelatedCss );
+		const result = assembleResponsiveCapture( { rawDesktopHtml: desktop, rawMobileHtml: mobile, portableDesktopHtml: desktop, portableMobileHtml: mobile } );
+		const reconciled = routePhoneDocumentFragments( result.html, '/index.html' );
+		const browser = await chromium.launch();
+		try {
+			const source = await browser.newPage();
+			const copy = await browser.newPage();
+			for ( const width of [ 390, 768, 1440 ] ) {
+				await source.setViewportSize( { width, height: 900 } );
+				await copy.setViewportSize( { width, height: 900 } );
+				await source.setContent( width < 768 ? mobile : desktop );
+				await copy.setContent( reconciled );
+				expect( await copy.locator( 'main:visible' ).innerText() ).toBe( await source.locator( 'main' ).innerText() );
+				expect( ( await copy.locator( 'main:visible' ).boundingBox() )!.height ).toBe( ( await source.locator( 'main' ).boundingBox() )!.height );
+			}
+		} finally { await browser.close(); }
+	} );
 	it( 'keeps the learned runtime slide phase authoritative over mobile counterpart projection', async () => {
 		const body = '<main><div id="track" style="position:relative;width:calc(100vw - 31px);height:180px;overflow:hidden"><div id="active" style="position:absolute;width:320px;height:150px">Active</div><div id="inactive" style="position:absolute;width:320px;height:150px;transform:translate3d(0px,0px,0px)">Inactive testimonial</div></div></main>';
 		const runtime = `<script>const update=()=>{const w=innerWidth,x=w<768?w-16:w<800?w-11:w-38;document.querySelector('#inactive').style.transform='translate3d('+x+'px,0px,0px)'};addEventListener('resize',update);update()</script>`;

@@ -5,7 +5,7 @@ import selectorParser from 'postcss-selector-parser';
 import type { AnyNode, Element } from 'domhandler';
 import { escapeHtmlAttr } from './html-escape.js';
 import { appendScrollDrivenAnimations } from './scroll-driven-animations.js';
-import { scopeCss } from './replicate/css-scope.js';
+import { parseCss, scopeCss } from './replicate/css-scope.js';
 import { FLUID_RULES_STYLE_ATTRIBUTE } from './screenshot/fluid-capture.js';
 import { isElementNode, isYuiRuntimeId } from './html-nodes.js';
 
@@ -253,6 +253,54 @@ function importantRule( selector: string, style: string ): string {
 		/!\s*important\s*$/i.test( declaration ) ? declaration : `${ declaration }!important`
 	);
 	return declarations.length > 0 ? `${ selector }{${ declarations.join( ';' ) }}` : '';
+}
+
+/** Inline normal declarations cannot be promoted above matching author-important
+ * rules without changing the source cascade. Keep both native documents when
+ * responsive reconciliation would need to relocate those declarations.
+ */
+function requiresNativeInlineCascade( desktopHtml: string, mobileHtml: string ): boolean {
+	const desktop = cheerio.load( desktopHtml );
+	const mobile = cheerio.load( mobileHtml );
+	const inlineStyles = ( $: cheerio.CheerioAPI ) => $( 'body [style],body[style]' )
+		.map( ( _, element ) => $( element ).attr( 'style' ) ?? '' ).get();
+	if ( JSON.stringify( inlineStyles( desktop ) ) === JSON.stringify( inlineStyles( mobile ) ) ) return false;
+	for ( const [ html, $ ] of [ [ desktopHtml, desktop ], [ mobileHtml, mobile ] ] as const ) {
+		const rules: Array<{ selector: string; properties: Set<string> }> = [];
+		for ( const block of styleBlocks( html ) ) {
+			try {
+				parseCss( block ).walkRules( rule => {
+					const properties = new Set<string>();
+					rule.walkDecls( declaration => { if ( declaration.important ) properties.add( declaration.prop.toLowerCase() ); } );
+					if ( properties.size ) rules.push( { selector: rule.selector, properties } );
+				} );
+			} catch { /* Invalid CSS cannot establish a matching cascade rule. */ }
+		}
+		for ( const element of $( 'body [style],body[style]' ).toArray() ) {
+			const node = $( element );
+			const normalProperties = inlineDeclarations( node.attr( 'style' ) ?? '' )
+				.filter( declaration => ! /!\s*important\s*$/i.test( declaration ) )
+				.map( declaration => declaration.slice( 0, declaration.indexOf( ':' ) ).trim().toLowerCase() );
+			for ( const rule of rules ) {
+				if ( ! normalProperties.some( property => [ ...rule.properties ].some( important => cascadePropertiesOverlap( property, important ) ) ) ) continue;
+				try { if ( node.is( rule.selector ) ) return true; } catch { /* Pseudo-elements do not style the element's inline box. */ }
+			}
+		}
+	}
+	return false;
+}
+
+/** Retain native priority when shorthand overlap cannot safely be promoted. */
+function cascadePropertiesOverlap( normal: string, important: string ): boolean {
+	if ( normal === important ) return true;
+	if ( normal.startsWith( '--' ) || important.startsWith( '--' ) ) return false;
+	if ( important === 'all' ) return true;
+	const families = [ 'margin', 'padding', 'border', 'background', 'font', 'outline', 'animation', 'transition', 'flex', 'grid', 'columns', 'list-style', 'overflow', 'text-decoration' ];
+	return families.some( family =>
+		( normal === family || normal.startsWith( `${ family }-` ) ) &&
+		( important === family || important.startsWith( `${ family }-` ) )
+	) || ( important === 'inset' && [ 'top', 'right', 'bottom', 'left' ].includes( normal ) ) ||
+		( important === 'gap' && [ 'row-gap', 'column-gap' ].includes( normal ) );
 }
 
 /**
@@ -1159,9 +1207,15 @@ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',
 })();`;
 
 export function projectResponsiveIdentityCss( source: string, renamed: ReadonlyMap<string,string>, namedAliases: boolean ): string {
+	// Do not parse unrelated source CSS just because another stylesheet owns
+	// a responsive anchor. Browsers may accept useful rules around a malformed
+	// declaration; identity-free styles need no rewriting or recovery here.
+	const preludes = source.replace( /\/\*[\s\S]*?\*\/|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g, '' )
+		.match( /[^{};]+\{/g )?.join( '\n' ) ?? '';
+	if ( ! preludes.includes( '#' ) && ( ! namedAliases || ! /\[\s*name\b/i.test( preludes ) ) ) return source;
 	// CSS accepts legacy HTML-comment wrappers; PostCSS rejects the closing CDC.
 	// Strip only outer tokens, preserving quoted content inside the stylesheet.
-	const css = postcss.parse( source.replace( /^\s*<!--/, '' ).replace( /-->\s*$/, '' ) );
+	const css = parseCss( source.replace( /^\s*<!--/, '' ).replace( /-->\s*$/, '' ) );
 	css.walkRules( rule => {
 		const selectors = selectorParser().astSync( rule.selector );
 		const replacements: Array<{ node: selectorParser.Identifier | selectorParser.Attribute; alias: selectorParser.Identifier | selectorParser.Attribute }> = [];
@@ -1432,10 +1486,10 @@ function assembleResponsiveHtml(
 	const responsiveBody = `<div ${ wrapperAttributes(
 		DESKTOP_DOCUMENT_CLASS,
 		desktopBodyMatch?.[ 1 ] ?? ''
-	) }>${ desktopBody }</div><div ${ wrapperAttributes(
+	) } data-dla-document-scope>${ desktopBody }</div><div ${ wrapperAttributes(
 		MOBILE_DOCUMENT_CLASS,
 		mobileBodyMatch?.[ 1 ] ?? ''
-	) }>${ mobileBody }</div>`;
+	) } data-dla-document-scope>${ mobileBody }</div>`;
 	const sharedStyles = styleBlocks( desktopHtml );
 	const evidence = dualStructuralEvidence( gatedByMobileClass );
 	if (
@@ -1571,6 +1625,22 @@ function resolveResponsivePair(
 	if ( desktopBody === undefined || mobileBody === undefined ) {
 		return { role, missingBody: true, dual: false, evidence: missingBodyEvidence() };
 	}
+	// Native effects bind target and subject within one source document. A tree
+	// collapse must not discard one profile's effects or redirect its subjects.
+	if ( /data-dla-native-effects=/.test( desktopHtml + mobileHtml ) ) {
+		return { role, missingBody: false, dual: true, evidence: { ...dualStructuralEvidence( undefined ), reason: 'Native view timelines retain profile-scoped target and subject identities.' } };
+	}
+	if ( requiresNativeInlineCascade( desktopHtml, mobileHtml ) ) {
+		return {
+			role,
+			missingBody: false,
+			dual: true,
+			evidence: {
+				...dualStructuralEvidence( undefined ),
+				reason: 'Normal inline state conflicts with authored important CSS; both variants retain their native cascade without priority promotion.',
+			},
+		};
+	}
 	if ( responsiveBodySignature( desktopBody ) === responsiveBodySignature( mobileBody ) ) {
 		const projection = equivalentInlineProjection( desktopHtml, mobileHtml, switchWidth );
 		return {
@@ -1634,7 +1704,13 @@ function responsiveMobileStyles(
 	)
 		.split( /\s+/ )
 		.filter( Boolean );
-	return styleBlocks( mobileHtml )
+	// Learned rules already carry their width conditions and document-specific
+	// identities. Keep them intact alongside the scoped source styles.
+	const fluidRules = [ ...mobileHtml.matchAll( /<style\b([^>]*)>([\s\S]*?)<\/style\s*>/gi ) ]
+		.filter( match => FLUID_RULES_STYLE_ATTRIBUTE.test( match[ 1 ] ?? '' ) )
+		.map( match => match[ 0 ] )
+		.join( '' );
+	return fluidRules + styleBlocks( mobileHtml )
 		.filter( ( style ) => style !== '' && ( ! skip.has( style ) || classAliases.size > 0 ) )
 		.map(
 			( original ) => {
