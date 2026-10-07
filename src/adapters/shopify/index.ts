@@ -2,6 +2,7 @@ import type { PlatformAdapter } from '../../types.js';
 import { capture } from './capture.js';
 import { detection } from './detection.js';
 import { discover } from './discover.js';
+import { shopifyAcquisition } from './acquisition.js';
 
 // ---------------------------------------------------------------------------
 // Re-exports — public API surface (importers use shopify/index.js by name)
@@ -21,6 +22,7 @@ export const shopifyAdapter: PlatformAdapter = {
   detection,
   liberation: capture,
   discover,
+  acquisition: shopifyAcquisition,
   inspection: [
     { capability: 'commerce', selector: 'shopify-payment-terms,shopify-buy-it-now-button,form[action*="/cart/add"]', evidence: 'Shopify purchasing surface; checkout backend requires migration' },
   ],

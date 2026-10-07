@@ -65,7 +65,7 @@ import { collectAssetEvidenceReferences, buildSemanticEvidenceArtifacts, writeCa
 export { CAPTURE_RECEIPT_SCHEMA, SOURCE_PROFILE_SCHEMA, ASSET_EVIDENCE_SCHEMA, CAPTURED_INTERACTIONS_SCHEMA, CAPTURED_SCROLL_STATES_SCHEMA, INDEXED_SEMANTIC_EVIDENCE_SCHEMA } from './capture-export-evidence.js';
 import { inspectSourceInteractivity, type SourceInteractivityPage } from './source-interactivity.js';
 import { loadHttpExportInput, type HttpExportInput } from './http-export-input.js';
-import { loadEmbeddedDocuments, projectEmbeddedRegions, mergeResponsiveEmbeddedRegions } from './embedded-documents.js';
+import { loadEmbeddedDocuments, projectEmbeddedRegions, projectRuntimePresentation, mergeResponsiveEmbeddedRegions } from './embedded-documents.js';
 import {
 	EXPORT_PUBLICATION_BOUNDARIES,
 	exportPublicationBoundary,
@@ -1064,6 +1064,22 @@ export function exportWebsiteCapture( options: ExportCaptureOptions ): string {
 	if ( embedded && ! httpInput ) throw new Error( 'Runtime attachments require explicit HTTP input' );
 	const embeddedSources = new Set( Object.keys( embedded?.resources ?? {} ) );
 	if ( embedded && httpInput && options.input ) {
+		httpInput.diagnostics = httpInput.diagnostics.filter( diagnostic => {
+			if ( diagnostic.code !== 'http_browser_region_unobserved' ) return true;
+			return ! embedded.receipt.coverage?.some( coverage =>
+				coverage.url === diagnostic.url &&
+				diagnostic.reason.startsWith( `${ coverage.variant }: ${ coverage.selector }:` ) &&
+				coverage.expectedNodes > 0 &&
+				coverage.projectedIndices.length === coverage.expectedNodes
+			);
+		} );
+		const projected = new Set<string>();
+		for (const region of embedded.receipt.regions) {
+			const key = JSON.stringify([region.url, region.variant, region.selector]);
+			if (!projected.has(key)) httpInput.diagnostics.push({ code: 'http_runtime_region_projected', url: region.url, reason: `${region.variant}: ${region.selector}: observed at ${region.viewport?.width}px; rendering and interactions remain unverified` });
+			projected.add(key);
+		}
+		for (const unresolved of embedded.receipt.unresolved ?? []) httpInput.diagnostics.push({ code: 'http_runtime_projection_unresolved', url: unresolved.url, reason: `${unresolved.variant}: ${unresolved.reason}` });
 		const checked = new Set<string>();
 		for ( const region of embedded.receipt.regions ) {
 			const key = JSON.stringify( [ region.url, region.variant ] );
@@ -1177,10 +1193,10 @@ function buildExportCapture(
 			} );
 			continue;
 		}
-		const acquiredDesktopHtml = resolveDocumentReferences(
-			readFileSync( capturedHtmlPath, 'utf8' ), entry.documents?.desktop?.url ?? url, entry.documents?.desktop?.baseUrl
-		);
-		let rawDesktopHtml = embedded && options.input ? projectEmbeddedRegions( acquiredDesktopHtml, url, options.input.desktopVariant, createHash( 'sha256' ).update( acquiredDesktopHtml ).digest( 'hex' ), embedded.receipt.regions ) : acquiredDesktopHtml;
+		const acquiredDesktopHtml = readFileSync(capturedHtmlPath, 'utf8');
+		const desktopHash = createHash('sha256').update(acquiredDesktopHtml).digest('hex');
+		let rawDesktopHtml = embedded && options.input ? projectRuntimePresentation(projectEmbeddedRegions(acquiredDesktopHtml, url, options.input.desktopVariant, desktopHash, embedded.receipt.regions), url, options.input.desktopVariant, desktopHash, embedded.receipt) : acquiredDesktopHtml;
+		rawDesktopHtml = resolveDocumentReferences(rawDesktopHtml, entry.documents?.desktop?.url ?? url, entry.documents?.desktop?.baseUrl);
 		const sourceInteractivity = inspectSourceInteractivity( rawDesktopHtml, url, outputDir, resourceManifest );
 		// A client-routed SPA answers every route with HTTP 200 and renders its
 		// own not-found screen in JavaScript, so the HTTP-status check above
@@ -1203,9 +1219,11 @@ function buildExportCapture(
 		const mobileHtmlPath = resolve( outputDir, entry.mobileHtml ?? entry.html.replace( /^html[\\/]/, 'html-mobile/' ) );
 		const acquiredMobileHtml =
 			( ! httpInput || entry.mobileHtml ) && pathWithin( outputDir, mobileHtmlPath ) && existsSync( mobileHtmlPath )
-				? resolveDocumentReferences( readFileSync( mobileHtmlPath, 'utf8' ), entry.documents?.mobile?.url ?? url, entry.documents?.mobile?.baseUrl )
+				? readFileSync( mobileHtmlPath, 'utf8' )
 				: undefined;
-		let rawMobileHtml = embedded && options.input?.mobileVariant && acquiredMobileHtml !== undefined ? projectEmbeddedRegions( acquiredMobileHtml, url, options.input.mobileVariant, createHash( 'sha256' ).update( acquiredMobileHtml ).digest( 'hex' ), embedded.receipt.regions ) : acquiredMobileHtml;
+		const mobileHash = acquiredMobileHtml === undefined ? undefined : createHash('sha256').update(acquiredMobileHtml).digest('hex');
+		let rawMobileHtml = embedded && options.input?.mobileVariant && acquiredMobileHtml !== undefined ? projectRuntimePresentation(projectEmbeddedRegions(acquiredMobileHtml, url, options.input.mobileVariant, mobileHash!, embedded.receipt.regions), url, options.input.mobileVariant, mobileHash!, embedded.receipt) : acquiredMobileHtml;
+		if (rawMobileHtml !== undefined) rawMobileHtml = resolveDocumentReferences(rawMobileHtml, entry.documents?.mobile?.url ?? url, entry.documents?.mobile?.baseUrl);
 		const detectedFloor =
 			typeof entry.fluid?.canvasFloor === 'number' && entry.fluid.canvasFloor > 0
 				? Math.round( entry.fluid.canvasFloor )
